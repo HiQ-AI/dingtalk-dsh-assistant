@@ -93,9 +93,9 @@ test('Agent工作区统一写入各群Session cwd，变更时保留历史并重�
   const runtime = await openResidentRuntime(ctx, store, 'D:\\baibu-agent')
   await runtime.subscribe({ groupId: 'workspace-group' })
   creates.length = 0
-  await runtime.updateAgentConfig({ workspaceDir: 'D:\\baibu-agent\\dsh-resident-runtime' })
-  assert.equal(store.workspaceDir, 'D:\\baibu-agent\\dsh-resident-runtime')
-  assert.equal(creates[0].meta.cwd, 'D:\\baibu-agent\\dsh-resident-runtime')
+  await runtime.updateAgentConfig({ workspaceDir: 'D:\\project\\dingtalk-dsh-assistant' })
+  assert.equal(store.workspaceDir, 'D:\\project\\dingtalk-dsh-assistant')
+  assert.equal(creates[0].meta.cwd, 'D:\\project\\dingtalk-dsh-assistant')
   assert.equal(creates[0].seed.length, 2)
   assert.notEqual(groups.get('workspace-group').residentSessionId, residentSessionId('workspace-group'))
   await runtime.close()
