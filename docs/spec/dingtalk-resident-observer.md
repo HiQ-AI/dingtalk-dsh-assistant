@@ -19,6 +19,7 @@
 - Agent 投递状态来自 Runtime 持久化事实：`delivered`、`failed`、`pending`、`skipped` 分别展示为已投递、投递失败、投递中、历史补拉未投递；旧数据没有状态字段时展示“历史状态未知”。
 - 历史状态只允许通过显式确认调用群级回填接口补齐，默认仅更新缺少状态的消息，不覆盖 Runtime 已记录的失败、投递中或未投递状态。
 - 历史补拉按稳定 messageId 去重；重复消息允许只补齐缺失的 `senderName` / `senderOpenDingTalkId`，不得覆盖已有发送人，也不得重新触发主会话判断。
+- Agent 使用本人账号发送群消息后，将回读得到的真实 messageId 持久化到 outbox；后续历史补拉按同群 messageId 在附件处理和 Agent 判断前过滤，仅过滤 Agent 已确认发送的消息，不过滤本人手工消息。
 - 任务看板：固定展示 `queued`、`running`、`waiting`、`completed` 四个状态桶，即使为空也保留；状态桶使用统一的 720px 实际外框高度和更宽列宽，卡片区独立纵向滚动，避免任务增多时持续撑高整个页面。每个 Task 是一张卡片，展示目标、来源群、Task ID、叶子 Session、更新时间和当前状态摘要。Supervisor 告警随任务看板展示。
 - 归档任务：只展示 `completed` Task，按更新时间倒序排列。
 - 任务看板复用 ScrumWS 的状态浅底列、实心状态胶囊、白底数量和任务卡片信息层级，只复用展示范式，不复用其状态与操作逻辑。

@@ -171,12 +171,13 @@ test('重开 store 后复用同一 resident Session 和 outbox 状态', async ()
   const accepted = await firstStore.ingest({ groupId: 'group-a', messageId: 'm-1', text: 'one', occurredAt: 'now' })
   const withReply = await firstStore.appendOutbox({ groupId: 'group-a', sourceMessageId: 'm-1', text: 'reply' })
   const outboundId = withReply.outbox[0].outboundId
-  await firstStore.acknowledge({ groupId: 'group-a', outboundId })
+  await firstStore.acknowledge({ groupId: 'group-a', outboundId, deliveredMessageId: 'm-agent-reply' })
 
   const reopened = await openResidentStore(memoryFacility(seed).facility)
   const restored = reopened.getGroup('group-a')
   assert.equal(restored.residentSessionId, created.group.residentSessionId)
   assert.equal(restored.outbox[0].status, 'sent')
+  assert.equal(restored.outbox[0].deliveredMessageId, 'm-agent-reply')
 })
 
 test('Task流程证据配置与引用回复投递元数据持久化', async () => {

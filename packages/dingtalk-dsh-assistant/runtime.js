@@ -402,7 +402,6 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
     if (source === 'dingtalk' && blocker.messageId !== quotedMessageId) throw new Error(`human_blocker_reply_mismatch:${task.taskId}:${requestId}`)
     const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
     const goal = ctx.goals.get(handle.agent)
-    if (goal?.phase === 'blocked' || goal?.phase === 'paused' || (goal?.phase === 'active' && goal.activation === 'disarmed')) ctx.goals.resume(handle.agent, goalRef(goal))
     const reply = comment?.trim() || (decision === 'approved' ? '批准' : '拒绝')
     const answered = {
       ...blocker, fingerprint: blocker.fingerprint ?? humanBlockerFingerprint(blocker.category, blocker.requestedAction), status: 'answered', decision, reply,
@@ -414,6 +413,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
       humanBlocker: answered, humanBlockerHistory: withHumanBlockerHistory(current, answered),
     }))
     await followupTaskInternal(running, `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\nSource: ${source}\n\nContinue the same task only within the approved scope. For a rejected decision, do not perform the controlled action. Re-check current state before acting.`)
+    if (goal?.phase === 'blocked' || goal?.phase === 'paused' || (goal?.phase === 'active' && goal.activation === 'disarmed')) ctx.goals.resume(handle.agent, goalRef(goal))
     const authorization = getAuthorizationRequest(requestId)
     for (const listener of authorizationDecisionListeners) await listener({ authorization, task: running })
     return authorization

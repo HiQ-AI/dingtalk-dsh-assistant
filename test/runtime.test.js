@@ -146,13 +146,14 @@ test('单个 resident Session 恢复超时被隔离且不阻塞其他群启动',
 test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 排队', async () => {
   const groups = new Map([['group-a', { groupId: 'group-a', responsibility: 'coordinate', residentSessionId: 'session-parent', outbox: [] }]])
   const tasks = []
-  const creates = [], createMetas = [], followups = [], disposed = [], activities = [], alerts = [], goals = new Map(), agents = new Map()
+  const creates = [], createMetas = [], followups = [], approvalResumeOrder = [], disposed = [], activities = [], alerts = [], goals = new Map(), agents = new Map()
   let sessionObserver
   const makeHandle = (sessionId) => {
     const session = { id: sessionId, events: [], seq: 0, meta: {}, append(type, data) { const event = { seq: session.seq++, type, data }; session.events.push(event); return event } }
     const agent = { session, status: 'idle', followup(message) {
       followups.push([sessionId, message])
       const text = message.content[0]?.text ?? ''
+      if (text.startsWith('[HUMAN_INTERVENTION_REPLY]')) approvalResumeOrder.push('批复入队')
       if (sessionId === 'session-parent' && text.startsWith('[TASK_COORDINATION]')) {
         session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `coordinated:${text.match(/Task ID: (.*)/)?.[1]}` }] } } })
       }
@@ -173,7 +174,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
       get(agent) { return goals.get(agent.session.id) },
       create(agent, request) { const goal = { id: `goal-${agent.session.id}`, revision: 1, phase: 'active', activation: 'armed', ...request }; goals.set(agent.session.id, goal); return goal },
       block(agent, ref, reason) { const goal = { ...goals.get(agent.session.id), revision: ref.revision + 1, phase: 'blocked', activation: 'disarmed', blockedReason: reason }; goals.set(agent.session.id, goal); return goal },
-      resume(agent, ref) { const goal = { ...goals.get(agent.session.id), revision: ref.revision + 1, phase: 'active', activation: 'armed', blockedReason: undefined }; goals.set(agent.session.id, goal); return goal },
+      resume(agent, ref) { approvalResumeOrder.push('Goal恢复'); const goal = { ...goals.get(agent.session.id), revision: ref.revision + 1, phase: 'active', activation: 'armed', blockedReason: undefined }; goals.set(agent.session.id, goal); return goal },
       complete(agent, ref) { const goal = { ...goals.get(agent.session.id), revision: ref.revision + 1, phase: 'complete', activation: 'disarmed' }; goals.set(agent.session.id, goal); return goal },
     },
     on(name, listener) { if (name === 'session/event') sessionObserver = listener; return () => { sessionObserver = undefined } },
@@ -244,7 +245,9 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(blockerRequests.length, 3, '重提申请必须只新增一次外发')
   await runtime.recordAuthorizationRecall({ requestId: changedScope.humanBlocker.requestId, status: 'recalled' })
   assert.equal(runtime.getAuthorizationRequest(changedScope.humanBlocker.requestId).recallStatus, 'recalled')
+  approvalResumeOrder.length = 0
   const webDecision = await runtime.decideAuthorization({ requestId: reissued.request.requestId, decision: 'approved', comment: '页面批准', source: 'web' })
+  assert.deepEqual(approvalResumeOrder, ['批复入队', 'Goal恢复'], '必须先让叶子会话收到批复原文，再恢复自动 Goal 轮次')
   assert.equal(webDecision.decisionSource, 'web')
   assert.equal(runtime.getTask(one.task.taskId).state, 'running', 'Web批准必须恢复同一Task')
   assert.equal(runtime.getTask(one.task.taskId).humanBlockerHistory.length, 3)
