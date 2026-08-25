@@ -1,5 +1,5 @@
 {
-  "name": "@baibu-agent/dingtalk-group-assistant",
+  "name": "@zzusp/dingtalk-dsh-assistant",
   "version": "0.1.86",
   "private": true,
   "type": "module",

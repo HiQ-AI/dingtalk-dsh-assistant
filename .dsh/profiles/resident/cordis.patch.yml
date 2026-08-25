@@ -35,7 +35,7 @@
         backend: json
 
     - id: dingtalk-group-assistant
-      name: '@baibu-agent/dingtalk-group-assistant/resident'
+      name: '@zzusp/dingtalk-dsh-assistant/resident'
       config:
         host: 127.0.0.1
         port: 18998

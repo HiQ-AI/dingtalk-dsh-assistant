@@ -70,8 +70,8 @@ pnpm test
 ```json
 {
   "dependencies": {
-    "@baibu-agent/dingtalk-group-assistant": "file:D:/path/to/dingtalk-dsh-assistant/packages/dingtalk-group-assistant",
-    "@baibu-agent/dingtalk-group-observer": "file:D:/path/to/dingtalk-dsh-assistant/packages/dingtalk-group-observer"
+    "@zzusp/dingtalk-dsh-assistant": "file:D:/path/to/dingtalk-dsh-assistant/packages/dingtalk-group-assistant",
+    "@zzusp/dingtalk-dsh-observer": "file:D:/path/to/dingtalk-dsh-assistant/packages/dingtalk-group-observer"
   },
   "dsh": {
     "profile": {
@@ -79,8 +79,8 @@ pnpm test
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
         "dsh-codex-connect",
-        "@baibu-agent/dingtalk-group-assistant",
-        "@baibu-agent/dingtalk-group-observer"
+        "@zzusp/dingtalk-dsh-assistant",
+        "@zzusp/dingtalk-dsh-observer"
       ]
     }
   }

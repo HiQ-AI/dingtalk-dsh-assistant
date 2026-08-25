@@ -24,6 +24,6 @@ test('Web bundle patch只挂载无副作用host face，不启动第二份residen
   assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(manifest.exports['./client'], './web-client.js')
   assert.match(patch, /id: dingtalk-group-assistant-web/)
-  assert.match(patch, /name: '@baibu-agent\/dingtalk-group-assistant'/)
+  assert.match(patch, /name: '@zzusp\/dingtalk-dsh-assistant'/)
   assert.match(bundle, /const inject = \['slots'\]/)
 })

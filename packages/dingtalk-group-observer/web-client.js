@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@baibu-agent/dingtalk-group-observer',
+  id: '@zzusp/dingtalk-dsh-observer',
   factory: (require) => {
     const module = { exports: {} }
     const React = require('react')

@@ -1,5 +1,5 @@
 {
-  "name": "@baibu-agent/dingtalk-group-observer",
+  "name": "@zzusp/dingtalk-dsh-observer",
   "version": "0.3.25",
   "private": true,
   "type": "module",

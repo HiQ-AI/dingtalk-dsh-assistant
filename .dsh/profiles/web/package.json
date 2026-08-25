@@ -2,8 +2,8 @@
   "name": "dsh-profile-web",
   "private": true,
   "dependencies": {
-    "@baibu-agent/dingtalk-group-assistant": "file:../../../packages/dingtalk-group-assistant",
-    "@baibu-agent/dingtalk-group-observer": "file:../../../packages/dingtalk-group-observer",
+    "@zzusp/dingtalk-dsh-assistant": "file:../../../packages/dingtalk-group-assistant",
+    "@zzusp/dingtalk-dsh-observer": "file:../../../packages/dingtalk-group-observer",
     "@deepseek-ai/dsh-storage": "0.1.1-rc.2",
     "@deepseek-ai/dsh-storage-domain": "0.1.1-rc.2",
     "@deepseek-ai/dsh-storage-json": "0.1.1-rc.2",
@@ -15,8 +15,8 @@
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
         "dsh-codex-connect",
-        "@baibu-agent/dingtalk-group-assistant",
-        "@baibu-agent/dingtalk-group-observer"
+        "@zzusp/dingtalk-dsh-assistant",
+        "@zzusp/dingtalk-dsh-observer"
       ]
     }
   }

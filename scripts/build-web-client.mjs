@@ -9,7 +9,7 @@ source = source
   .replaceAll('export async function ', 'async function ')
   .replaceAll('export function ', 'function ')
 const bundle = `window.__ModuleLoader__.load({
-  id: '@baibu-agent/dingtalk-group-assistant',
+  id: '@zzusp/dingtalk-dsh-assistant',
   factory: (require) => {
     const module = { exports: {} }
     const React = require('react')
