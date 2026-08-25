@@ -1,0 +1,37 @@
+{
+  "name": "@baibu-agent/dingtalk-group-assistant",
+  "version": "0.1.86",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "*.js",
+    "cordis.patch.yml"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./resident": "./resident.js",
+    "./client": "./web-client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ],
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-subagent": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-storage-domain": "0.1.1-rc.2",
+    "react": "^18.2.0",
+    "undici": "7.16.0",
+    "zod": "^4.0.0"
+  }
+}

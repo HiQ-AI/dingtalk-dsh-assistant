@@ -1,0 +1,50 @@
+- id: hmr
+  disabled: true
+
+- id: session-telemetry-otel
+  disabled: true
+
+- id: agent-instructions
+  config:
+    maxBytes: 65536
+    projectRootMarkers: ['.dsh-project-root']
+
+- id: agent-default-model
+  config:
+    provider: openai-codex
+    model: gpt-5.6-sol
+
+- id: session-persistence-jsonl
+  config:
+    root: !!js dshHomePath('resident-sessions')
+    compression: none
+    packChunks: false
+
+- insert:
+    - id: storage
+      name: '@deepseek-ai/dsh-storage'
+
+    - id: storage-json
+      name: '@deepseek-ai/dsh-storage-json'
+      config:
+        root: !!js dshHomePath(process.env.DSH_RESIDENT_DATA_ROOT ?? 'resident-data-gray-v1')
+
+    - id: storage-domain
+      name: '@deepseek-ai/dsh-storage-domain'
+      config:
+        backend: json
+
+    - id: dingtalk-group-assistant
+      name: '@baibu-agent/dingtalk-group-assistant/resident'
+      config:
+        host: 127.0.0.1
+        port: 18998
+        fakeModel: false
+        resumeTimeoutMs: 10000
+        maxConcurrentTasks: 5
+        maxGoalRounds: 24
+        testApiEnabled: !!js process.env.DSH_TEST_API === '1'
+        groups: []
+        dws:
+          enabled: false
+          writesAuthorized: false

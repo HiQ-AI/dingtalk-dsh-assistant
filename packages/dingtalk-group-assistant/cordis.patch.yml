@@ -1,0 +1,3 @@
+- insert:
+    - id: dingtalk-group-assistant-web
+      name: '@baibu-agent/dingtalk-group-assistant'

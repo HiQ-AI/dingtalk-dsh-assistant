@@ -1,0 +1,3 @@
+- insert:
+    - id: dingtalk-group-observer
+      name: '@baibu-agent/dingtalk-group-observer'

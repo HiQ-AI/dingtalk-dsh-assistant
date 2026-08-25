@@ -1,0 +1,12 @@
+node_modules/
+.dsh/profiles/node_modules/
+.dsh/profiles/resident/node_modules/
+.dsh/profiles/*/pnpm-lock.yaml
+.dsh/resident-data*/
+.dsh/resident-sessions/
+.dsh/sessions/
+.dsh/settings.yaml
+scratch/
+packages/*/scratch/
+*.tgz
+package-lock.json
