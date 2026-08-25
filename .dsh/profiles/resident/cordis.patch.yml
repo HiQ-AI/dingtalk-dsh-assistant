@@ -34,7 +34,7 @@
       config:
         backend: json
 
-    - id: dingtalk-group-assistant
+    - id: dingtalk-dsh-assistant
       name: '@zzusp/dingtalk-dsh-assistant/resident'
       config:
         host: 127.0.0.1

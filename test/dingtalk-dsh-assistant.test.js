@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { apply, name } from '../packages/dingtalk-group-assistant/resident.js'
+import { apply, name } from '../packages/dingtalk-dsh-assistant/resident.js'
 
 test('单一业务插件使用通用命名且 health 明示 fake transport', async () => {
   const effects = []
@@ -36,7 +36,7 @@ test('单一业务插件使用通用命名且 health 明示 fake transport', asy
   }
 
   await apply(ctx, { host: '127.0.0.1', port: 0 })
-  assert.equal(name, 'dingtalk-group-assistant')
+  assert.equal(name, 'dingtalk-dsh-assistant')
   assert.equal(effects.length, 1)
 
   const dispose = effects[0]()
@@ -45,14 +45,14 @@ test('单一业务插件使用通用命名且 health 明示 fake transport', asy
 })
 
 test('完成通知签名由 Agent 工作区规则决定且插件不写死身份', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-group-assistant/runtime.js', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /签名、口吻和身份声明由 Agent 自身工作区规则决定/)
   assert.doesNotMatch(source, /小小鹏|孙鹏/u)
 })
 
 test('resident重启后按群内顺序恢复遗留pending消息', async () => {
-  const runtimeSource = await readFile(new URL('../packages/dingtalk-group-assistant/runtime.js', import.meta.url), 'utf8')
-  const residentSource = await readFile(new URL('../packages/dingtalk-group-assistant/resident.js', import.meta.url), 'utf8')
+  const runtimeSource = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
+  const residentSource = await readFile(new URL('../packages/dingtalk-dsh-assistant/resident.js', import.meta.url), 'utf8')
   assert.match(runtimeSource, /async recoverPendingMessages\(\)/)
   assert.match(runtimeSource, /agentDeliveryStatus === 'pending'/)
   assert.match(runtimeSource, /left\.groupId\.localeCompare\(right\.groupId\) \|\| left\.sequence - right\.sequence/)
@@ -61,20 +61,20 @@ test('resident重启后按群内顺序恢复遗留pending消息', async () => {
 })
 
 test('任务上下文允许静默追加且失败消息可由重复事件重试', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-group-assistant/runtime.js', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /decision\.reply\.trim\(\) === ''/)
   assert.match(source, /\? store\.getGroup\(message\.groupId\)/)
   assert.match(source, /\['delivered', 'skipped'\]\.includes\(persisted\?\.agentDeliveryStatus\)/)
 })
 
 test('生产HTTP提供精确的单消息重试入口', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-group-assistant/http.js', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/http.js', import.meta.url), 'utf8')
   assert.match(source, /\/messages\\\/\(\[\^\/\]\+\)\\\/retry/)
   assert.match(source, /await store\.ingest\(\{ \.\.\.message, groupId \}\)/)
 })
 
 test('叶子会话使用DSH原生descriptor且恢复旧会话时补齐', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-group-assistant/runtime.js', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /import \{ snapshotSubagentDescriptor \} from '@deepseek-ai\/dsh-subagent'/)
   assert.match(source, /handle\.agent\.session\.append\('subagent\/descriptor', snapshotSubagentDescriptor\(/)
   assert.match(source, /mode: 'continuable'/)

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createDwsAdapter, dispatchOutbox } from '../packages/dingtalk-group-assistant/dws-adapter.js'
+import { createDwsAdapter, dispatchOutbox } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
 
 test('DWS adapter 默认禁用且不会调用 runner', async () => {
   let calls = 0

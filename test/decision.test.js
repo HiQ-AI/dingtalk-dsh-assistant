@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { buildDecisionPrompt, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from '../packages/dingtalk-group-assistant/decision.js'
+import { buildDecisionPrompt, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from '../packages/dingtalk-dsh-assistant/decision.js'
 
 test('群决策严格接受五类结构化结果', () => {
   assert.equal(parseGroupDecision('{"kind":"answer","reply":"ok"}').kind, 'answer')
@@ -47,14 +47,14 @@ test('任务发起必须明确指名配置名称、别名、DWS登录人或使�
 })
 
 test('诊断请求不得被主会话或叶子会话扩大为修复授权', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-group-assistant/runtime.js', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /不得把“看看、查一下、排查、分析、核对、监控”等诊断或观察请求扩写成“修复、修改、实施、合并、发布、执行”等变更任务/)
   assert.match(source, /Task objective 是本任务的动作授权上限/)
   assert.match(source, /不得修改代码或数据、提交 PR、合并、构建、部署、执行修复方案/)
 })
 
 test('任务关联索引覆盖当前群全部状态并允许历史任务记录关联上下文', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-group-assistant/runtime.js', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /本群全部任务关联索引/)
   assert.match(source, /queued、running、waiting、completed 以及产品展示中的归档任务都必须参与关联判断/)
   assert.match(source, /relatedContexts/)

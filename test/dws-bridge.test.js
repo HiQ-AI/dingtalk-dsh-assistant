@@ -2,10 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EventEmitter } from 'node:events'
 import { readFile } from 'node:fs/promises'
-import { normalizeHistoryMessage, parseRedlineDecision, startDwsBridge } from '../packages/dingtalk-group-assistant/dws-bridge.js'
+import { normalizeHistoryMessage, parseRedlineDecision, startDwsBridge } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
 
 test('本人消息增量补拉默认每10秒执行并使用30秒重叠窗口', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-group-assistant/dws-bridge.js', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/dws-bridge.js', import.meta.url), 'utf8')
   assert.match(source, /groupBackfillIntervalMs = 10_000/)
   assert.match(source, /groupBackfillOverlapMs = 30_000/)
 })

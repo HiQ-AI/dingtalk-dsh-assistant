@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { openResidentStore } from '../packages/dingtalk-group-assistant/store.js'
+import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 
 function memoryFacility(seed = new Map()) {
   const table = (name) => ({

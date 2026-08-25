@@ -2,11 +2,11 @@
 
 ## 目标
 
-在 DSH Web 中提供独立于插件配置页的只读运行看板，展示常驻群、resident 主会话、Task、叶子执行活动和 Supervisor 告警。看板只消费 `dingtalk-group-assistant` 已有的只读状态接口，不持有运行状态，也不提供配置或任务操作。
+在 DSH Web 中提供独立于插件配置页的只读运行看板，展示常驻群、resident 主会话、Task、叶子执行活动和 Supervisor 告警。看板只消费 `dingtalk-dsh-assistant` 已有的只读状态接口，不持有运行状态，也不提供配置或任务操作。
 
 ## 边界
 
-- `dingtalk-group-assistant` 仍是群订阅、会话绑定、Task 和告警状态的唯一所有者。
+- `dingtalk-dsh-assistant` 仍是群订阅、会话绑定、Task 和告警状态的唯一所有者。
 - 展示扩展只发起 GET 请求；不调用 `/config/*`，不复制 Task 状态机或 Supervisor 判断。
 - 使用 DSH 原生 `sidebar.footer.action` 提供入口，使用 `shell.overlay` 呈现独立页面；不替换会话区和侧栏。
 - resident 不可达时明确显示连接失败，不以缓存数据伪装当前状态。

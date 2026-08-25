@@ -1,3 +1,3 @@
 - insert:
-    - id: dingtalk-group-assistant-web
+    - id: dingtalk-dsh-assistant-web
       name: '@zzusp/dingtalk-dsh-assistant'

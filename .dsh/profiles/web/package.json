@@ -2,8 +2,8 @@
   "name": "dsh-profile-web",
   "private": true,
   "dependencies": {
-    "@zzusp/dingtalk-dsh-assistant": "file:../../../packages/dingtalk-group-assistant",
-    "@zzusp/dingtalk-dsh-observer": "file:../../../packages/dingtalk-group-observer",
+    "@zzusp/dingtalk-dsh-assistant": "file:../../../packages/dingtalk-dsh-assistant",
+    "@zzusp/dingtalk-dsh-observer": "file:../../../packages/dingtalk-dsh-observer",
     "@deepseek-ai/dsh-storage": "0.1.1-rc.2",
     "@deepseek-ai/dsh-storage-domain": "0.1.1-rc.2",
     "@deepseek-ai/dsh-storage-json": "0.1.1-rc.2",

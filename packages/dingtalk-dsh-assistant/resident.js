@@ -10,7 +10,7 @@ import { inspectEnvironment } from './environment.js'
 import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
 import { tmpdir } from 'node:os'
 
-export const name = 'dingtalk-group-assistant'
+export const name = 'dingtalk-dsh-assistant'
 export const inject = ['storageDomain', 'agents', 'agentDefaultModel', 'agentPresets', 'sessionPersistence', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments']
 
 function applyProxyEnvironment(proxyUrl) {

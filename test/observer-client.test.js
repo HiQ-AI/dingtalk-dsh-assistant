@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 test('运行看板使用DSH原生入口并提供任务交互', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-group-observer/web-client.js', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /sidebar\.footer\.action/)
   assert.match(source, /shell\.overlay/)
   assert.match(source, /运行看板/)
@@ -90,7 +90,7 @@ test('运行看板使用DSH原生入口并提供任务交互', async () => {
 })
 
 test('Agent配置页面提供叶子任务并行上限且默认值为5', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-group-assistant/web-client.js', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /叶子任务并行上限/)
   assert.match(source, /useState\(5\)/)
   assert.match(source, /maxConcurrentTasks/)
