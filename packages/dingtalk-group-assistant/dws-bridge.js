@@ -245,7 +245,9 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, humanPol
     try { await processOutbound(event) } catch (error) { logger.warn(error) }
   })
   processPendingCompletedOutbox()
-  const detachHumanBlockerListener = (runtime.onHumanBlockerRequested ?? (() => () => undefined))(() => processHumanBlockers())
+  const detachHumanBlockerListener = (runtime.onHumanBlockerRequested ?? (() => () => undefined))(() => {
+    processHumanBlockers().catch((error) => logger.warn(error))
+  })
   const detachAuthorizationDecisionListener = (runtime.onAuthorizationDecided ?? (() => () => undefined))(({ authorization }) => {
     humanPollTail = humanPollTail.then(() => recallInactiveAuthorization(authorization)).catch((error) => logger.warn(error))
   })
