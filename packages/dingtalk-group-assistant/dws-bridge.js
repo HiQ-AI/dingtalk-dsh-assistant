@@ -60,7 +60,9 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, humanPol
   let outboxRetryTimer
   let outboxRetryTail = Promise.resolve()
   const processMessage = async (message) => {
-    if (runtime.getGroup?.(message.groupId)?.messages?.some((item) => item.messageId === message.messageId)) return
+    const group = runtime.getGroup?.(message.groupId)
+    if (group?.messages?.some((item) => item.messageId === message.messageId)) return
+    if (group?.outbox?.some((item) => item.deliveredMessageId === message.messageId)) return
     const media = typeof adapter.loadMessageImages === 'function' ? await adapter.loadMessageImages(message) : { images: [], mediaUnavailable: [] }
     const accepted = await runtime.ingest({
       ...message,
@@ -71,7 +73,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, humanPol
   }
   const processOutbound = async ({ groupId, outbound }) => {
     const delivery = await dispatchOutbox({ adapter, groupId, outbound })
-    if (delivery.status === 'sent') await runtime.acknowledge({ groupId, outboundId: outbound.outboundId })
+    if (delivery.status === 'sent') await runtime.acknowledge({ groupId, outboundId: outbound.outboundId, deliveredMessageId: delivery.messageId })
   }
   const processPendingCompletedOutbox = () => {
     outboxRetryTail = outboxRetryTail.then(async () => {

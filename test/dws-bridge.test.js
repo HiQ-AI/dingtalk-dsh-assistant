@@ -76,7 +76,7 @@ test('DWS bridge 将稳定事件交给 resident 并在真实回读后确认 outb
   onEvent({ conversation_id: 'cid-a', message_id: 'm1', content: 'hello', event_time: '2026-08-24T13:00:00+08:00', sender: '张三', sender_open_dingtalk_id: 'od-user-1' })
   await new Promise((resolve) => setImmediate(resolve))
 
-  assert.deepEqual(acknowledged, [{ groupId: 'cid-a', outboundId: 'out-1' }])
+  assert.deepEqual(acknowledged, [{ groupId: 'cid-a', outboundId: 'out-1', deliveredMessageId: 'sent-id' }])
   assert.equal(warnings.length, 0)
   assert.equal(typeof subscribedListener, 'function')
   await stop()
@@ -105,7 +105,7 @@ test('完成通知首次无法确认时会持续重试并在历史回读命中�
   const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 5 })
   await new Promise((resolve) => setTimeout(resolve, 40))
   await stop()
-  assert.deepEqual(acknowledged, [{ groupId: 'cid-a', outboundId: 'out-completed' }])
+  assert.deepEqual(acknowledged, [{ groupId: 'cid-a', outboundId: 'out-completed', deliveredMessageId: 'sent-id' }])
   assert.equal(sends, 1, '重试前的历史回读命中后不得重复发送')
 })
 
@@ -160,6 +160,40 @@ test('定时增量补拉可接收本人消息并在附件处理前按持久 mess
   assert.ok(rangeReads >= 2)
   assert.deepEqual(ingested, ['m-self'])
   assert.equal(mediaLoads, 1)
+})
+
+test('定时增量补拉按已持久化发送消息ID过滤Agent本人账号消息', async () => {
+  const group = { groupId: 'cid-a', messages: [], outbox: [{ outboundId: 'out-1', sourceMessageId: 'source-1', text: 'Agent回复', status: 'sent', deliveredMessageId: 'm-agent' }] }
+  const ingested = []
+  let imageLoads = 0
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group, listTasks: () => [],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined }, onHumanBlockerRequested() { return () => undefined },
+    async ingest(message) { ingested.push(message.messageId); return { duplicate: false } },
+  }
+  let backfill
+  const adapter = {
+    startGroupSubscription() { const lifecycle = new EventEmitter(); return { lifecycle, ready: Promise.resolve(), done: Promise.resolve(), stop() {} } },
+    async readGroup() { return { complete: true, messages: [] } },
+    async readGroupRange() {
+      return { complete: true, messages: [
+        { conversationId: 'cid-a', messageId: 'm-agent', text: 'Agent回复', createTime: '2026-08-25T05:01:00Z', sender: '当前登录人' },
+        { conversationId: 'cid-a', messageId: 'm-human', text: '本人手工消息', createTime: '2026-08-25T05:01:01Z', sender: '当前登录人' },
+      ] }
+    },
+    async loadMessageImages() { imageLoads += 1; return { images: [], mediaUnavailable: [] } },
+  }
+  const originalSetInterval = globalThis.setInterval
+  globalThis.setInterval = (callback) => { backfill = callback; return { unref() {} } }
+  try {
+    const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 1, outboxRetryIntervalMs: 0 })
+    await backfill()
+    assert.deepEqual(ingested, ['m-human'])
+    assert.equal(imageLoads, 1, 'Agent发送消息应在附件下载前过滤')
+    await stop()
+  } finally {
+    globalThis.setInterval = originalSetInterval
+  }
 })
 
 test('DWS consumer 异常退出只记录活动 Task 告警', async () => {
