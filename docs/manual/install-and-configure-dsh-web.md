@@ -100,7 +100,17 @@ D:/project/dingtalk-dsh-assistant
 
 使用其他模型来源时不要安装 `dsh-codex-connect`，改为保留对应 provider 的依赖、bundle 和认证配置。
 
-![DSH Web 插件入口](images/dsh-web-plugin-entry.png)
+启动 DSH Web 后，首页左下角可进入“运行看板”和“设置”；开始会话前还需要在中间区域选择实际工作区。红框为需要关注的入口：
+
+![DSH Web 首页入口](images/dsh-web-home-annotated.png)
+
+进入“设置 → 插件 → 插件列表”，搜索 `dingtalk-dsh`，确认 `dingtalk-dsh-assistant`、`dingtalk-dsh-observer` 和 resident 子插件均为“已启用”：
+
+![DSH Web 插件安装状态](images/dsh-web-plugin-list-annotated.png)
+
+然后切回“插件配置”。红框只标出“钉钉个人助理”配置页入口：
+
+![DSH Web 插件入口](images/dsh-web-plugin-entry-annotated.png)
 
 然后安装该 profile 的依赖：
 
@@ -220,7 +230,9 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:18998/health' | ConvertTo-Json -Depth 1
 
 “任务流程引导”和“完成证据要求”只注入叶子 Session，不会注入群常驻主 Session。填写完成后点击“保存配置”，再刷新页面确认字段仍为刚保存的值。
 
-![Agent 配置](images/dsh-web-assistant-config.png)
+红框依次标出工作目录、模型与推理深度、并行上限和网络代理：
+
+![Agent 配置](images/dsh-web-assistant-config-annotated.png)
 
 ### 3. 添加常驻群
 
@@ -231,7 +243,9 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:18998/health' | ConvertTo-Json -Depth 1
 3. 填写该群的会话职责，包括职责范围、参与条件和需要升级给真人的边界。
 4. 点击“添加并开始常驻”。
 
-![常驻群与会话职责配置](images/dsh-web-group-config.png)
+红框标出完成证据、保存按钮、群搜索和会话职责。群搜索结果属于真实钉钉数据，因此示例图停留在输入前：
+
+![常驻群与会话职责配置](images/dsh-web-group-config-annotated.png)
 
 添加后会为该群建立唯一的 resident Session。已有群的职责可单独编辑并点击“保存职责”。删除常驻群会移除插件中的群配置；存在活动 Task 时删除会被拒绝。
 
@@ -255,6 +269,10 @@ dws:
 - 自动回复群聊：未启用。
 
 在已添加的测试群发送一条消息，然后从左侧插件看板打开“群聊会话”，确认消息进入该群固定的 resident Session。不要用启动成功或健康接口代替这一步真实消息验证。
+
+任务进入 Runtime 后，可在“运行看板 → 任务看板”按待执行、执行中、等待中和已完成四列检查状态。红框标出任务看板入口和完整任务区域：
+
+![DSH Web 任务看板](images/dsh-web-task-board-annotated.png)
 
 ### 阶段 2：开放回复
 

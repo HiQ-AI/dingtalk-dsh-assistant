@@ -141,6 +141,8 @@ pwsh -NoProfile -File .\scripts\start-web.ps1
 
 启动后，在 DSH Web 的“设置 → 插件 → 钉钉个人助理”中完成配置：
 
+![钉钉个人助理插件配置](docs/manual/images/dsh-web-assistant-config-annotated.png)
+
 1. 设置 Agent 名称和别名，多个名称使用英文逗号分隔。
 2. 设置 Agent 工作区绝对目录。DSH 会从该目录原生发现 `AGENTS.md`。
 3. 设置默认模型、推理深度和叶子任务并行上限，默认并行上限为 5。
@@ -184,6 +186,8 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不�
 ## Web 运行看板
 
 `dingtalk-dsh-observer` 在 DSH Web header 中提供：
+
+![钉钉个人助理任务看板](docs/manual/images/dsh-web-task-board-annotated.png)
 
 - 群聊会话：查看不同 resident Session 的分页消息和 Agent 投递状态。
 - 任务看板：按待执行、执行中、等待中、已完成展示 Task，并打开 DSH 原生叶子对话和轨迹。
