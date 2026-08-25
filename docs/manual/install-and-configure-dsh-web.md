@@ -16,7 +16,7 @@
 - Node.js 24 或更高版本。
 - pnpm。
 - DSH，并确保 `dsh web` 可以启动。
-- `dsh-codex-connect`，并已完成模型登录或配置。
+- 已安装并配置所选模型对应的 DSH provider。只有使用 ChatGPT/Codex 订阅调用模型时，才需要安装 `dsh-codex-connect`。
 - DWS，并已登录当前需要监听群聊的钉钉账号。
 
 先检查本机命令：
@@ -57,7 +57,7 @@ D:/project/dingtalk-dsh-assistant
 %USERPROFILE%\.dsh\profiles\web\package.json
 ```
 
-编辑该文件，在现有内容中合并两个本地依赖和两个 bundle。不要覆盖原有的 DSH 依赖、模型连接器或 bundle。
+编辑该文件，在现有内容中合并两个本地依赖和两个 bundle。不要覆盖原有的 DSH 依赖、模型 provider 或 bundle。
 
 ```json
 {
@@ -73,7 +73,6 @@ D:/project/dingtalk-dsh-assistant
       "bundles": [
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
-        "dsh-codex-connect",
         "@zzusp/dingtalk-dsh-assistant",
         "@zzusp/dingtalk-dsh-observer"
       ]
@@ -81,6 +80,27 @@ D:/project/dingtalk-dsh-assistant
   }
 }
 ```
+
+如果使用 ChatGPT/Codex 订阅，再额外加入：
+
+```json
+{
+  "dependencies": {
+    "dsh-codex-connect": "当前兼容版本"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "dsh-codex-connect"
+      ]
+    }
+  }
+}
+```
+
+使用其他模型来源时不要安装 `dsh-codex-connect`，改为保留对应 provider 的依赖、bundle 和认证配置。
+
+![DSH Web 插件入口](images/dsh-web-plugin-entry.png)
 
 然后安装该 profile 的依赖：
 
@@ -99,28 +119,14 @@ pnpm install
 %USERPROFILE%\.dsh\profiles\web\cordis.patch.yml
 ```
 
-必须保留实际 Web profile 已有的 patch。以下是插件当前需要的核心结构；如果已有同名 `id`，应合并配置，不能重复插入：
+必须保留实际 Web profile 已有的 patch。DSH Web 基础 bundle 已经提供 storage、storage-json 和 storage-domain，不能再次 `insert` 同名项；这里只覆盖 storage-json 数据目录并插入 resident 插件。如果已有同名 `id`，应合并配置，不能重复插入：
 
 ```yaml
-- id: agent-default-model
+- id: storage-json
   config:
-    provider: openai-codex
-    model: gpt-5.6-sol
+    root: !!js dshHomePath('storages/dingtalk-dsh-assistant')
 
 - insert:
-    - id: storage
-      name: '@deepseek-ai/dsh-storage'
-
-    - id: storage-json
-      name: '@deepseek-ai/dsh-storage-json'
-      config:
-        root: !!js dshHomePath(process.env.DSH_RESIDENT_DATA_ROOT ?? 'resident-data-gray-v1')
-
-    - id: storage-domain
-      name: '@deepseek-ai/dsh-storage-domain'
-      config:
-        backend: json
-
     - id: dingtalk-dsh-assistant
       name: '@zzusp/dingtalk-dsh-assistant/resident'
       config:
@@ -134,6 +140,15 @@ pnpm install
         dws:
           enabled: false
           writesAuthorized: false
+```
+
+默认模型通过实际安装的 provider 配置。例如仅在使用 Codex 订阅时配置：
+
+```yaml
+- id: agent-default-model
+  config:
+    provider: openai-codex
+    model: gpt-5.6-sol
 ```
 
 仓库模板还包含 Session 持久化、指令发现和 telemetry 等当前参考配置。以仓库文件为准整体审阅后再合并，不要只复制上面的核心片段覆盖现有 profile。
@@ -205,6 +220,8 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:18998/health' | ConvertTo-Json -Depth 1
 
 “任务流程引导”和“完成证据要求”只注入叶子 Session，不会注入群常驻主 Session。填写完成后点击“保存配置”，再刷新页面确认字段仍为刚保存的值。
 
+![Agent 配置](images/dsh-web-assistant-config.png)
+
 ### 3. 添加常驻群
 
 在“常驻群与会话职责 → 添加常驻群”中：
@@ -213,6 +230,8 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:18998/health' | ConvertTo-Json -Depth 1
 2. 从结果中选择目标群，核对群名、成员数和群 ID。
 3. 填写该群的会话职责，包括职责范围、参与条件和需要升级给真人的边界。
 4. 点击“添加并开始常驻”。
+
+![常驻群与会话职责配置](images/dsh-web-group-config.png)
 
 添加后会为该群建立唯一的 resident Session。已有群的职责可单独编辑并点击“保存职责”。删除常驻群会移除插件中的群配置；存在活动 Task 时删除会被拒绝。
 
@@ -278,7 +297,7 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 ### 模型请求失败
 
-先确认 `dsh-codex-connect` 的模型登录有效，再检查页面中的模型名和代理。代理环境下应确保 `localhost`、`127.0.0.1` 不走代理；仓库启动脚本已经设置该规则。
+先确认当前所选模型 provider 的认证有效，再检查页面中的模型名和代理。只有使用 Codex 订阅时才检查 `dsh-codex-connect` 登录。代理环境下应确保 `localhost`、`127.0.0.1` 不走代理；仓库启动脚本已经设置该规则。
 
 ## 九、安装完成判定
 

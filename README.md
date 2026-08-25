@@ -45,7 +45,7 @@ DWS 群消息
 - Windows 11 与 PowerShell 7。
 - Node.js 24 或更高版本。较低版本缺少 DSH Session JSONL 持久化所需的 zstd API。
 - 已安装 DSH，并能正常启动 `dsh web`。
-- 已安装 `dsh-codex-connect`，并完成可用模型的登录或配置。
+- 已安装并配置所选模型对应的 DSH provider。只有使用 ChatGPT/Codex 订阅时才需要 `dsh-codex-connect`。
 - 已安装并登录 DWS。只有启用真实钉钉订阅时才需要。
 
 网络环境需要代理时，可在插件的 Agent 配置中填写代理地址，也可以在启动前设置 `HTTP_PROXY` / `HTTPS_PROXY`。
@@ -92,7 +92,6 @@ pnpm test
       "bundles": [
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
-        "dsh-codex-connect",
         "@zzusp/dingtalk-dsh-assistant",
         "@zzusp/dingtalk-dsh-observer"
       ]
@@ -103,9 +102,11 @@ pnpm test
 
 保留 profile 中原有的 DSH 依赖和 bundle，不要用上面的片段覆盖完整文件。
 
+若使用 ChatGPT/Codex 订阅，再把 `dsh-codex-connect` 同时加入 `dependencies` 和 `bundles`；使用其他模型来源时保留对应 provider，不需要安装 `dsh-codex-connect`。
+
 ### 3. 装配 resident Runtime
 
-把 [`.dsh/profiles/resident/cordis.patch.yml`](.dsh/profiles/resident/cordis.patch.yml) 中的 storage、storage-domain 和 `dingtalk-dsh-assistant/resident` 插件项合并到实际使用的 Web profile patch。
+把 [`.dsh/profiles/resident/cordis.patch.yml`](.dsh/profiles/resident/cordis.patch.yml) 中的 resident 配置按需合并到实际使用的 Web profile patch。Web 基础 bundle 已包含 storage 相关插件，只覆盖 `storage-json` 配置并插入 `dingtalk-dsh-assistant/resident`，不要重复插入同名 storage 项。
 
 仓库模板有意保持以下安全默认值：
 
