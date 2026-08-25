@@ -141,7 +141,7 @@ pwsh -NoProfile -File .\scripts\start-web.ps1
 
 启动后，在 DSH Web 的“设置 → 插件 → 钉钉个人助理”中完成配置：
 
-![钉钉个人助理插件配置](docs/manual/images/dsh-web-assistant-config-annotated.png)
+![钉钉个人助理插件配置入口](docs/manual/images/dsh-web-plugin-entry-annotated.png)
 
 1. 设置 Agent 名称和别名，多个名称使用英文逗号分隔。
 2. 设置 Agent 工作区绝对目录。DSH 会从该目录原生发现 `AGENTS.md`。
