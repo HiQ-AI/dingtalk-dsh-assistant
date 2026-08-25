@@ -4,8 +4,8 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const React = require('react')
     const { useCallback, useEffect, useState } = React
-
-    const name = 'dingtalk-group-assistant-client'
+    
+    const name = 'dingtalk-dsh-assistant-client'
     const inject = ['slots']
     const ENDPOINT = 'http://127.0.0.1:18998'
     const colors = { border: 'var(--dsw-alias-stroke-border-2, rgba(127,127,127,.28))', muted: 'var(--dsw-alias-label-secondary, #737373)', accent: 'var(--dsw-alias-brand-primary, #4d6bfe)', danger: 'var(--dsw-alias-status-error, #c33)' }
@@ -13,7 +13,7 @@ window.__ModuleLoader__.load({
     const row = { display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 13 }
     const input = { width: '100%', boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 8, padding: '8px 10px', background: 'transparent', color: 'inherit', font: 'inherit' }
     const button = { border: `1px solid ${colors.border}`, borderRadius: 8, padding: '7px 12px', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit' }
-
+    
     async function request(path, options) {
       const response = await fetch(`${ENDPOINT}${path}`, { headers: { accept: 'application/json', 'content-type': 'application/json' }, ...options })
       const value = await response.json()
@@ -24,7 +24,7 @@ window.__ModuleLoader__.load({
       const [health, groups, tasks, alerts, environment, agentConfig] = await Promise.all(['/health', '/state/groups', '/state/tasks', '/state/supervisor/alerts', '/state/environment', '/state/agent-config'].map((path) => request(path)))
       return { health, groups, tasks, alerts, environment, agentConfig }
     }
-
+    
     function Environment({ value }) {
       return React.createElement('section', { style: panel },
         React.createElement('strong', null, '环境检查'),
@@ -33,16 +33,16 @@ window.__ModuleLoader__.load({
         value?.dws?.executable ? React.createElement('code', { style: { fontSize: 12, color: colors.muted, overflowWrap: 'anywhere' } }, value.dws.executable) : null
       )
     }
-
-    function DingTalkGroupAssistantCard() {
+    
+    function DingTalkDshAssistantCard() {
       const [overview, setOverview] = useState()
       const [drafts, setDrafts] = useState({})
       const [agentWorkspace, setAgentWorkspace] = useState('')
       const [agentNames, setAgentNames] = useState('')
       const [agentModel, setAgentModel] = useState({ model: '', reasoningEffort: 'low' })
-      const [proxyUrl, setProxyUrl] = useState('')
-      const [taskGuidance, setTaskGuidance] = useState({ taskExecutionGuidance: '', taskEvidenceGuidance: '' })
-      const [maxConcurrentTasks, setMaxConcurrentTasks] = useState(5)
+          const [proxyUrl, setProxyUrl] = useState('')
+          const [taskGuidance, setTaskGuidance] = useState({ taskExecutionGuidance: '', taskEvidenceGuidance: '' })
+          const [maxConcurrentTasks, setMaxConcurrentTasks] = useState(5)
       const [newGroup, setNewGroup] = useState({ groupId: '', name: '', responsibility: '' })
       const [query, setQuery] = useState('')
       const [searchResults, setSearchResults] = useState([])
@@ -56,7 +56,7 @@ window.__ModuleLoader__.load({
       const activeTasks = overview?.tasks?.filter((task) => task.state === 'running' || task.state === 'waiting').length ?? 0
       return React.createElement('div', { style: { display: 'grid', gap: 16 } },
         React.createElement('section', { style: panel },
-          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, React.createElement('div', null, React.createElement('strong', null, '钉钉群聊个人助理'), React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, 'resident runtime')), React.createElement('button', { type: 'button', style: button, onClick: refresh }, '刷新')),
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, React.createElement('div', null, React.createElement('strong', null, '钉钉个人助理'), React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, 'resident runtime')), React.createElement('button', { type: 'button', style: button, onClick: refresh }, '刷新')),
           error ? React.createElement('div', { style: { color: colors.danger, fontSize: 13 } }, error) : null,
           React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '运行状态'), React.createElement('span', null, overview?.health?.status ?? '连接中')),
           React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '渠道 / 活动 Task / 告警'), React.createElement('span', null, `${overview?.health?.transport ?? '-'} / ${activeTasks} / ${overview?.alerts?.length ?? 0}`)),
@@ -105,12 +105,12 @@ window.__ModuleLoader__.load({
             React.createElement('textarea', { 'aria-label': '新群会话职责', placeholder: '描述该群中个人助理的职责、参与条件和升级边界', rows: 4, style: { ...input, resize: 'vertical' }, value: newGroup.responsibility, onChange: (event) => setNewGroup((current) => ({ ...current, responsibility: event.target.value })) }),
             React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !newGroup.groupId.trim() || !newGroup.responsibility.trim(), onClick: () => mutate(async () => { await request('/config/groups', { method: 'POST', body: JSON.stringify(newGroup) }); setNewGroup({ groupId: '', name: '', responsibility: '' }); setSearchResults([]); setQuery('') }) }, '添加并开始常驻'))))
     }
-
+    
     function apply(ctx) {
-      ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({ name: 'settings.plugins.tab', id: 'dingtalk-group-assistant', order: 10, label: () => '钉钉群聊个人助理', inject: () => ({}) }, DingTalkGroupAssistantCard))
+      ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({ name: 'settings.plugins.tab', id: 'dingtalk-dsh-assistant', order: 10, label: () => '钉钉个人助理', inject: () => ({}) }, DingTalkDshAssistantCard))
     }
-
-    module.exports = { apply, inject, name, readResidentOverview, DingTalkGroupAssistantCard }
+    
+    module.exports = { apply, inject, name, readResidentOverview, DingTalkDshAssistantCard }
     return module.exports
   },
 })

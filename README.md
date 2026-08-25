@@ -1,6 +1,6 @@
 # DingTalk DSH Assistant
 
-`dingtalk-dsh-assistant` 是一组运行在 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 中的钉钉群聊个人助理插件，不是独立 Agent 平台，也不自行实现第二套 Session、Agent 或任务执行引擎。
+`dingtalk-dsh-assistant` 是一组运行在 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 中的钉钉个人助理插件，不是独立 Agent 平台，也不自行实现第二套 Session、Agent 或任务执行引擎。
 
 插件负责把钉钉群消息接入 DSH，并将群聊协作映射到 DSH 原生能力：每个常驻群绑定一个固定主 Session，主 Session 负责沟通与协调；实际任务由独立叶子 Session 和 Goal 执行。Agent 身份、工作规则与可用工具由配置的工作区及其 `AGENTS.md` 决定，插件本身不包含个人姓名或数字分身设定。
 
@@ -21,7 +21,7 @@
 
 ```text
 DWS 群消息
-  → dingtalk-group-assistant
+  → dingtalk-dsh-assistant
   → DSH resident 主 Session（判断、沟通、协调）
   → DSH leaf Session + Goal（独立执行）
   → 主 Session（组织结果）
@@ -33,8 +33,8 @@ DWS 群消息
 
 ## 包结构
 
-- `packages/dingtalk-group-assistant`：核心业务插件。负责 DWS 接入、群与 Session 绑定、消息处理、Task 调度、授权审批、可靠回复和配置页面。
-- `packages/dingtalk-group-observer`：DSH Web 展示扩展。提供群聊会话、任务看板、归档任务、授权审批和告警页面。
+- `packages/dingtalk-dsh-assistant`：核心业务插件。负责 DWS 接入、群与 Session 绑定、消息处理、Task 调度、授权审批、可靠回复和配置页面。
+- `packages/dingtalk-dsh-observer`：DSH Web 展示扩展。提供群聊会话、任务看板、归档任务、授权审批和告警页面。
 - `.dsh/profiles/resident`：resident Runtime 的参考 profile 与 Cordis patch。
 - `.dsh/profiles/web`：Web contribution 的参考 profile。
 - `docs/spec`：关键状态机和工作流设计说明。
@@ -70,8 +70,8 @@ pnpm test
 ```json
 {
   "dependencies": {
-    "@zzusp/dingtalk-dsh-assistant": "file:D:/path/to/dingtalk-dsh-assistant/packages/dingtalk-group-assistant",
-    "@zzusp/dingtalk-dsh-observer": "file:D:/path/to/dingtalk-dsh-assistant/packages/dingtalk-group-observer"
+    "@zzusp/dingtalk-dsh-assistant": "file:D:/path/to/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant",
+    "@zzusp/dingtalk-dsh-observer": "file:D:/path/to/dingtalk-dsh-assistant/packages/dingtalk-dsh-observer"
   },
   "dsh": {
     "profile": {
@@ -91,7 +91,7 @@ pnpm test
 
 ### 3. 装配 resident Runtime
 
-把 [`.dsh/profiles/resident/cordis.patch.yml`](.dsh/profiles/resident/cordis.patch.yml) 中的 storage、storage-domain 和 `dingtalk-group-assistant/resident` 插件项合并到实际使用的 Web profile patch。
+把 [`.dsh/profiles/resident/cordis.patch.yml`](.dsh/profiles/resident/cordis.patch.yml) 中的 storage、storage-domain 和 `dingtalk-dsh-assistant/resident` 插件项合并到实际使用的 Web profile patch。
 
 仓库模板有意保持以下安全默认值：
 
@@ -124,7 +124,7 @@ pwsh -NoProfile -File .\scripts\start-web.ps1
 
 ## 首次配置
 
-启动后，在 DSH Web 的“设置 → 插件 → 钉钉群聊个人助理”中完成配置：
+启动后，在 DSH Web 的“设置 → 插件 → 钉钉个人助理”中完成配置：
 
 1. 设置 Agent 名称和别名，多个名称使用英文逗号分隔。
 2. 设置 Agent 工作区绝对目录。DSH 会从该目录原生发现 `AGENTS.md`。
@@ -142,6 +142,8 @@ dws:
 ```
 
 先验证真实消息能够进入固定 resident Session，再将 `writesAuthorized` 改为 `true` 开放群聊回复。修改 profile 后需要重启 DSH Web。
+
+完整的逐步安装、页面字段说明和“先收后发”验收流程见[安装插件并在 DSH Web 中完成配置](docs/manual/install-and-configure-dsh-web.md)。
 
 ## 群聊工作流
 
@@ -166,7 +168,7 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不�
 
 ## Web 运行看板
 
-`dingtalk-group-observer` 在 DSH Web header 中提供：
+`dingtalk-dsh-observer` 在 DSH Web header 中提供：
 
 - 群聊会话：查看不同 resident Session 的分页消息和 Agent 投递状态。
 - 任务看板：按待执行、执行中、等待中、已完成展示 Task，并打开 DSH 原生叶子对话和轨迹。
@@ -180,7 +182,7 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不�
 
 正式运行使用标准用户级 `DSH_HOME`：
 
-- 插件状态：`%USERPROFILE%\.dsh\storages\dingtalk-group-assistant\`
+- 插件状态：`%USERPROFILE%\.dsh\storages\dingtalk-dsh-assistant\`
 - DSH Session：`%USERPROFILE%\.dsh\sessions\`
 - profile：`%USERPROFILE%\.dsh\profiles\`
 

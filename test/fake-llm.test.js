@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { installFakeLlm } from '../packages/dingtalk-group-assistant/fake-llm.js'
+import { installFakeLlm } from '../packages/dingtalk-dsh-assistant/fake-llm.js'
 
 test('fake adapter 产出完整 dsh 流式 chunk 协议', async () => {
   let adapter

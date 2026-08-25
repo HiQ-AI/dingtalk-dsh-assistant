@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 
-export const name = 'dingtalk-group-assistant-client'
+export const name = 'dingtalk-dsh-assistant-client'
 export const inject = ['slots']
 const ENDPOINT = 'http://127.0.0.1:18998'
 const colors = { border: 'var(--dsw-alias-stroke-border-2, rgba(127,127,127,.28))', muted: 'var(--dsw-alias-label-secondary, #737373)', accent: 'var(--dsw-alias-brand-primary, #4d6bfe)', danger: 'var(--dsw-alias-status-error, #c33)' }
@@ -29,7 +29,7 @@ function Environment({ value }) {
   )
 }
 
-export function DingTalkGroupAssistantCard() {
+export function DingTalkDshAssistantCard() {
   const [overview, setOverview] = useState()
   const [drafts, setDrafts] = useState({})
   const [agentWorkspace, setAgentWorkspace] = useState('')
@@ -51,7 +51,7 @@ export function DingTalkGroupAssistantCard() {
   const activeTasks = overview?.tasks?.filter((task) => task.state === 'running' || task.state === 'waiting').length ?? 0
   return React.createElement('div', { style: { display: 'grid', gap: 16 } },
     React.createElement('section', { style: panel },
-      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, React.createElement('div', null, React.createElement('strong', null, '钉钉群聊个人助理'), React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, 'resident runtime')), React.createElement('button', { type: 'button', style: button, onClick: refresh }, '刷新')),
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, React.createElement('div', null, React.createElement('strong', null, '钉钉个人助理'), React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, 'resident runtime')), React.createElement('button', { type: 'button', style: button, onClick: refresh }, '刷新')),
       error ? React.createElement('div', { style: { color: colors.danger, fontSize: 13 } }, error) : null,
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '运行状态'), React.createElement('span', null, overview?.health?.status ?? '连接中')),
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '渠道 / 活动 Task / 告警'), React.createElement('span', null, `${overview?.health?.transport ?? '-'} / ${activeTasks} / ${overview?.alerts?.length ?? 0}`)),
@@ -102,5 +102,5 @@ export function DingTalkGroupAssistantCard() {
 }
 
 export function apply(ctx) {
-  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({ name: 'settings.plugins.tab', id: 'dingtalk-group-assistant', order: 10, label: () => '钉钉群聊个人助理', inject: () => ({}) }, DingTalkGroupAssistantCard))
+  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({ name: 'settings.plugins.tab', id: 'dingtalk-dsh-assistant', order: 10, label: () => '钉钉个人助理', inject: () => ({}) }, DingTalkDshAssistantCard))
 }

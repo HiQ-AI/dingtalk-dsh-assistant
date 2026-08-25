@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import test from 'node:test'
-import { handleRequest } from '../packages/dingtalk-group-assistant/http.js'
+import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 
 async function withServer(testApiEnabled, run) {
   const runtime = {

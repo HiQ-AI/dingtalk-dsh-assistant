@@ -74,7 +74,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
     if (ownEvents.some((event) => event.type === 'subagent/descriptor')) return
     handle.agent.session.append('subagent/descriptor', snapshotSubagentDescriptor({
       mode: 'continuable',
-      provider: 'dingtalk-group-assistant',
+      provider: 'dingtalk-dsh-assistant',
       label: leafDisplayName(task.objective),
       agentProvider: agentOptions.provider,
       agentModel: agentOptions.model,

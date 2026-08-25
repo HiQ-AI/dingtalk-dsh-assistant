@@ -315,8 +315,8 @@ window.__ModuleLoader__.load({
       return React.createElement('div', { style: { pointerEvents: 'auto', position: 'fixed', inset: 0, zIndex: 1000, background: colors.surface, color: 'inherit', overflow: 'auto' } }, header, main)
     }
     function apply(ctx) {
-      ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'dingtalk-group-observer-entry', order: 5, inject: () => ({}) }, FooterAction))
-      ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dingtalk-group-observer-panel', order: 20, inject: () => ({ openSession: async (sessionId, parentSessionId) => {
+      ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'dingtalk-dsh-observer-entry', order: 5, inject: () => ({}) }, FooterAction))
+      ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dingtalk-dsh-observer-panel', order: 20, inject: () => ({ openSession: async (sessionId, parentSessionId) => {
         if (parentSessionId) {
           let address = ctx.sessions.subagentAddress(sessionId)
           if (!address) { await ctx.sessions.refreshSubagents(parentSessionId); address = ctx.sessions.subagentAddress(sessionId) }
@@ -326,7 +326,7 @@ window.__ModuleLoader__.load({
         ctx.sessions.open(sessionId)
       } }) }, ObserverOverlay))
     }
-    module.exports = { name: 'dingtalk-group-observer-client', inject: ['slots', 'sessions'], apply }
+    module.exports = { name: 'dingtalk-dsh-observer-client', inject: ['slots', 'sessions'], apply }
     return module.exports
   }
 })

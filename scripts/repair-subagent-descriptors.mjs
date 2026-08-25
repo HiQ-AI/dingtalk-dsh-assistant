@@ -39,9 +39,9 @@ for (const entry of entries) {
   const descriptorIndex = events.findIndex((event) => event.type === 'subagent/descriptor')
   if (descriptorIndex >= 0) {
     const descriptor = events[descriptorIndex]
-    if (descriptor.data?.provider !== 'dingtalk-group-assistant' || descriptor.data?.label === label) continue
+    if (descriptor.data?.provider !== 'dingtalk-dsh-assistant' || descriptor.data?.label === label) continue
     const updated = [...records]
-    updated[descriptorIndex + 1] = { ...descriptor, data: snapshotSubagentDescriptor({ mode: 'continuable', provider: 'dingtalk-group-assistant', label }) }
+    updated[descriptorIndex + 1] = { ...descriptor, data: snapshotSubagentDescriptor({ mode: 'continuable', provider: 'dingtalk-dsh-assistant', label }) }
     plans.push({ kind: 'update', file, content: `${updated.map((record) => JSON.stringify(record)).join('\n')}\n` })
     continue
   }
@@ -49,7 +49,7 @@ for (const entry of entries) {
     type: 'subagent/descriptor',
     seq: events.length,
     time: Date.now(),
-    data: snapshotSubagentDescriptor({ mode: 'continuable', provider: 'dingtalk-group-assistant', label }),
+    data: snapshotSubagentDescriptor({ mode: 'continuable', provider: 'dingtalk-dsh-assistant', label }),
   }
   plans.push({ kind: 'append', file, event })
 }

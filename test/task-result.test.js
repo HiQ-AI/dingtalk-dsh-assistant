@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseTaskResult } from '../packages/dingtalk-group-assistant/task-result.js'
+import { parseTaskResult } from '../packages/dingtalk-dsh-assistant/task-result.js'
 
 test('Task completed结果要求非空summary与至少一条evidence', () => {
   assert.throws(() => parseTaskResult({ status: 'completed', workType: 'non-development', summary: 'done', evidence: [], artifacts: [] }))

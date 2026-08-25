@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { openResidentRuntime, residentSessionId } from '../packages/dingtalk-group-assistant/runtime.js'
-import { taskSessionId } from '../packages/dingtalk-group-assistant/store.js'
+import { openResidentRuntime, residentSessionId } from '../packages/dingtalk-dsh-assistant/runtime.js'
+import { taskSessionId } from '../packages/dingtalk-dsh-assistant/store.js'
 import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 
 test('已有群恢复原 Session，新群先创建 dsh Session 再持久绑定', async () => {
