@@ -196,6 +196,38 @@ test('定时增量补拉按已持久化发送消息ID过滤Agent本人账号消�
   }
 })
 
+test('补拉命中当前账号的pending outbox时先确认发送并修正历史失败状态', async () => {
+  const outbound = { outboundId: 'out-pending', sourceMessageId: 'source-1', text: 'Agent回复\n\n- 小小鹏代回', status: 'pending' }
+  const message = { messageId: 'm-agent', text: 'Agent回复  - 小小鹏代回', senderName: '孙鹏', agentDeliveryStatus: 'failed' }
+  const group = { groupId: 'cid-a', messages: [message], outbox: [outbound] }
+  const acknowledged = [], marked = [], ingested = []
+  let backfill
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group, listTasks: () => [],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined }, onHumanBlockerRequested() { return () => undefined },
+    async acknowledge(value) { acknowledged.push(value); Object.assign(outbound, { status: 'sent', deliveredMessageId: value.deliveredMessageId }) },
+    async markMessageAgentDelivery(value) { marked.push(value); message.agentDeliveryStatus = value.status },
+    async ingest(value) { ingested.push(value.messageId); return { duplicate: false } },
+  }
+  const adapter = {
+    startGroupSubscription() { return { lifecycle: new EventEmitter(), ready: Promise.resolve(), done: Promise.resolve(), stop() {} } },
+    async readGroup() { return { complete: true, messages: [] } },
+    async readGroupRange() { return { complete: true, messages: [{ conversationId: 'cid-a', messageId: 'm-agent', text: 'Agent回复  - 小小鹏代回', createTime: '2026-08-26T03:28:22Z', sender: '孙鹏' }] } },
+  }
+  const originalSetInterval = globalThis.setInterval
+  globalThis.setInterval = (callback) => { backfill = callback; return { unref() {} } }
+  try {
+    const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, currentDwsUserName: '孙鹏', humanPollIntervalMs: 0, groupBackfillIntervalMs: 1, outboxRetryIntervalMs: 0 })
+    await backfill()
+    assert.deepEqual(acknowledged, [{ groupId: 'cid-a', outboundId: 'out-pending', deliveredMessageId: 'm-agent' }])
+    assert.deepEqual(marked, [{ groupId: 'cid-a', messageId: 'm-agent', status: 'skipped' }])
+    assert.deepEqual(ingested, [])
+    await stop()
+  } finally {
+    globalThis.setInterval = originalSetInterval
+  }
+})
+
 test('DWS consumer 异常退出只记录活动 Task 告警', async () => {
   let resolveDone
   const done = new Promise((resolve) => { resolveDone = resolve })

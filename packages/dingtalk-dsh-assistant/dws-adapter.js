@@ -20,7 +20,7 @@ function comparableMessageText(value) {
   return String(value ?? '').replace(/[\p{P}\p{S}\s]/gu, '')
 }
 
-function matchesOutbound(message, outbound) {
+export function matchesOutbound(message, outbound) {
   const actual = comparableMessageText(message.text), expected = comparableMessageText(outbound.text)
   if (actual === expected) return true
   if (expected.length < 24 || !actual.includes(expected)) return false

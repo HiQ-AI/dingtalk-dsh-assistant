@@ -64,6 +64,13 @@ test('同群消息按稳定 messageId 去重并递增排序', async () => {
   assert.equal(marked.group.messages[1].agentDeliveryStatus, 'delivered')
   assert.equal(replied.outbox.length, 1)
   assert.equal(replied.outbox[0].text, 'reply-one')
+
+  await store.markMessageAgentDelivery({ groupId: 'group-a', messageId: 'm-1', status: 'failed', error: 'schema failure' })
+  const exact = await store.markMessagesAgentDelivery({ groupId: 'group-a', status: 'delivered', onlyMissing: false, messageIds: ['m-1'] })
+  assert.equal(exact.updated, 1)
+  assert.equal(exact.group.messages[0].agentDeliveryStatus, 'delivered')
+  assert.equal(exact.group.messages[0].agentDeliveryError, undefined)
+  assert.equal(exact.group.messages[1].agentDeliveryStatus, 'delivered')
 })
 
 test('显式确认可只回填缺少Agent投递状态的历史消息', async () => {
