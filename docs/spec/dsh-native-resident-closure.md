@@ -16,6 +16,7 @@
 - Task 完成不等于群通知完成；outbox 必须经 DWS 回读确认后才是 `sent`。
 - 群图片通过 DWS 下载后进入 DSH 原生 attachment/image block；transport 不做 OCR 或业务判断。
 - 活动 Task 使用动态系统提示词投影，不在每条群消息中重复写入快照。
+- `task-context` 指向已完成或已归档 Task 时，Runtime 必须重新打开原 Task、恢复原叶子 Session 和 Goal；不得只落盘上下文后发送执行承诺。
 - 任务流程与证据要求属于 Agent 业务配置，只注入叶子系统提示词，不固化在通用插件门禁中。
 
 ## 持久化

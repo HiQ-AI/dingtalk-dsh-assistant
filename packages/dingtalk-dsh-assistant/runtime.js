@@ -178,14 +178,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
         return serializeTasks(async () => {
           let task = store.getTask(args.taskId)
           if (task === undefined || task.groupId !== groupId) throw new Error(`task_context_target_invalid:${args.taskId}`)
-          if (task.state === 'waiting' && task.waitingKind === 'information') {
-            const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
-            const goal = ctx.goals.get(handle.agent)
-            if (goal?.phase === 'blocked' || goal?.phase === 'paused') ctx.goals.resume(handle.agent, goalRef(goal))
-            task = await store.updateTask(task.taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined }))
-          }
-          task = await store.updateTask(task.taskId, (current) => ({ ...current, relatedContexts: [...(current.relatedContexts ?? []), context], updatedAt: new Date().toISOString() }))
-          if (task.state === 'running' || task.state === 'waiting') await followupTaskInternal(task, context)
+          task = await appendTaskContextInternal(task, context)
           return { accepted: true, taskId: task.taskId, state: task.state }
         })
       },
@@ -649,6 +642,18 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     await pumpTasks()
     return store.getTask(queued.taskId)
   }
+  async function appendTaskContextInternal(task, context) {
+    if (task.state === 'completed') return reopenCompletedTaskInternal(task, context)
+    if (task.state === 'waiting' && task.waitingKind === 'information') {
+      const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
+      const goal = ctx.goals.get(handle.agent)
+      if (goal?.phase === 'blocked' || goal?.phase === 'paused') ctx.goals.resume(handle.agent, goalRef(goal))
+      task = await store.updateTask(task.taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined }))
+    }
+    task = await store.updateTask(task.taskId, (current) => ({ ...current, relatedContexts: [...(current.relatedContexts ?? []), context], updatedAt: new Date().toISOString() }))
+    if (task.state === 'running' || task.state === 'waiting') await followupTaskInternal(task, context)
+    return task
+  }
   async function followupTaskInternal(task, text) {
     const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
     handle.agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'coordinator' } }))
@@ -767,8 +772,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         else if (decision.kind === 'task-context') {
           task = store.getTask(decision.taskId)
           if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${decision.taskId}`)
-          task = await store.updateTask(task.taskId, (current) => ({ ...current, relatedContexts: [...(current.relatedContexts ?? []), decision.context], updatedAt: new Date().toISOString() }))
-          if (task.state === 'running' || task.state === 'waiting') await followupTaskInternal(task, decision.context)
+          task = await serializeTasks(() => appendTaskContextInternal(task, decision.context))
         }
         else if (decision.kind === 'task-reopen') {
           task = store.getTask(decision.taskId)
@@ -878,6 +882,11 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       return running
     }),
     createTask: (request) => serializeTasks(async () => { const result = await store.createTask(request); await pumpTasks(); return { ...result, task: store.getTask(result.task.taskId) } }),
+    appendTaskContext: ({ taskId, context }) => serializeTasks(async () => {
+      const task = store.getTask(taskId)
+      if (task === undefined) throw new Error(`task_not_found:${taskId}`)
+      return appendTaskContextInternal(task, context)
+    }),
     reopenTask: ({ taskId, context }) => serializeTasks(async () => {
       const task = store.getTask(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)

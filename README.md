@@ -170,7 +170,7 @@ dws:
 
 ### 叶子任务
 
-Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不执行具体工作。Task 正式执行状态为 `running`、`waiting`、`completed`，超过并行上限时进入产品层 `queued`。归档只影响看板展示，不删除 Task、Session、Goal 或历史上下文，后续消息仍能重新打开原 Task。
+Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不执行具体工作。Task 正式执行状态为 `running`、`waiting`、`completed`，超过并行上限时进入产品层 `queued`。归档只影响看板展示，不删除 Task、Session、Goal 或历史上下文；已完成或已归档 Task 收到关联上下文时会重新打开原 Task，并恢复原叶子 Session 和 Goal 继续执行。
 
 ### 阻塞与授权
 
