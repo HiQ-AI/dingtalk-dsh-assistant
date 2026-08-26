@@ -182,11 +182,11 @@ dws:
 
 ### 常驻主会话
 
-每个群唯一绑定一个 resident Session。群名称、群 ID、职责和稳定决策协议通过 DSH `systemPrompt.section` 注入。主会话可以按职责主动补充事实、纠错或解除讨论阻塞，但只有消息明确指向已配置的 Agent 名称、别名、DWS 登录人或使用 `cc:`，并形成职责范围内的可验证目标时，才创建或续接 Task。
+每个群唯一绑定一个 resident Session。群名称、群 ID、职责和稳定决策协议通过 DSH `systemPrompt.section` 注入。主会话可以按职责主动补充事实、纠错或解除讨论阻塞，但只有消息明确指向已配置的 Agent 名称、别名、DWS 登录人或使用 `cc:`，并形成职责范围内的可验证目标时，才创建或续接 Task。主会话只负责选择 Task 路由；Runtime 使用原始群消息生成来源证据信封交给叶子，主会话生成的根因、完成度、方案优劣或排除性判断不作为叶子事实。
 
 ### 叶子任务
 
-Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不执行具体工作。Task 正式执行状态为 `running`、`waiting`、`completed`，超过并行上限时进入产品层 `queued`。归档只影响看板展示，不删除 Task、Session、Goal 或历史上下文；已完成或已归档 Task 收到关联上下文时会重新打开原 Task，并恢复原叶子 Session 和 Goal 继续执行。每轮重开会把新的群消息与发送人记录为当前触发来源，同时保留历次触发历史；该轮完成通知引用并 @当前触发人。
+Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不执行具体工作。叶子收到的群聊来源信封包含消息 ID、发送者、时间、引用 ID、原始正文和附件异常，并明确要求结合当前代码、运行态和工具证据独立核验。Task 正式执行状态为 `running`、`waiting`、`completed`，超过并行上限时进入产品层 `queued`。归档只影响看板展示，不删除 Task、Session、Goal 或历史上下文；已完成或已归档 Task 收到关联上下文时会重新打开原 Task，并恢复原叶子 Session 和 Goal 继续执行。每轮重开会把新的群消息与发送人记录为当前触发来源，同时保留历次触发历史；该轮完成通知引用并 @当前触发人。
 
 ### 阻塞与授权
 

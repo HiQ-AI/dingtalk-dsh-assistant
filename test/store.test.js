@@ -64,6 +64,13 @@ test('同群消息按稳定 messageId 去重并递增排序', async () => {
   assert.equal(marked.group.messages[1].agentDeliveryStatus, 'delivered')
   assert.equal(replied.outbox.length, 1)
   assert.equal(replied.outbox[0].text, 'reply-one')
+
+  await store.markMessageAgentDelivery({ groupId: 'group-a', messageId: 'm-1', status: 'failed', error: 'schema failure' })
+  const exact = await store.markMessagesAgentDelivery({ groupId: 'group-a', status: 'delivered', onlyMissing: false, messageIds: ['m-1'] })
+  assert.equal(exact.updated, 1)
+  assert.equal(exact.group.messages[0].agentDeliveryStatus, 'delivered')
+  assert.equal(exact.group.messages[0].agentDeliveryError, undefined)
+  assert.equal(exact.group.messages[1].agentDeliveryStatus, 'delivered')
 })
 
 test('显式确认可只回填缺少Agent投递状态的历史消息', async () => {
@@ -120,6 +127,7 @@ test('历史 Web Task 可从已持久化群消息恢复提出人并修正完成�
 
   const migrated = await store.migrateTaskProvenance({ taskId: created.task.taskId, sourceMessageId: 'm-source', completionDelivered: true })
   const outbound = store.getGroup('group-a').outbox[0]
+  assert.equal(outbound.readbackRequired, true)
   assert.equal(migrated.sourceMessageId, 'm-source')
   assert.equal(migrated.requesterName, '李辰')
   assert.equal(migrated.requesterOpenDingTalkId, 'od-requester')

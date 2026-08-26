@@ -1,4 +1,4 @@
-import { dispatchOutbox } from './dws-adapter.js'
+import { dispatchOutbox, matchesOutbound } from './dws-adapter.js'
 
 const meaningful = (value) => typeof value === 'string' && value.trim() !== '' && value.trim().toLowerCase() !== 'null'
 
@@ -50,7 +50,7 @@ export function parseRedlineDecision(text) {
   return undefined
 }
 
-export function startDwsBridge({ runtime, adapter, logger, humanUserId, humanPollIntervalMs = 30_000, groupBackfillIntervalMs = 10_000, groupBackfillOverlapMs = 30_000, outboxRetryIntervalMs = 10_000 }) {
+export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentDwsUserName, humanPollIntervalMs = 30_000, groupBackfillIntervalMs = 10_000, groupBackfillOverlapMs = 30_000, outboxRetryIntervalMs = 10_000 }) {
   const subscriptions = new Map()
   let stopping = false
   let humanPollTimer
@@ -61,8 +61,18 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, humanPol
   let outboxRetryTail = Promise.resolve()
   const processMessage = async (message) => {
     const group = runtime.getGroup?.(message.groupId)
-    if (group?.messages?.some((item) => item.messageId === message.messageId)) return
-    if (group?.outbox?.some((item) => item.deliveredMessageId === message.messageId)) return
+    const persisted = group?.messages?.find((item) => item.messageId === message.messageId)
+    const deliveredOutbound = group?.outbox?.find((item) => item.deliveredMessageId === message.messageId)
+    const pendingOutbound = typeof currentDwsUserName === 'string' && currentDwsUserName.trim() !== '' && message.senderName === currentDwsUserName
+      ? group?.outbox?.find((item) => item.status === 'pending' && matchesOutbound(message, item))
+      : undefined
+    const outbound = deliveredOutbound ?? pendingOutbound
+    if (outbound !== undefined) {
+      if (pendingOutbound !== undefined) await runtime.acknowledge({ groupId: message.groupId, outboundId: outbound.outboundId, deliveredMessageId: message.messageId })
+      if (persisted?.agentDeliveryStatus === 'failed') await runtime.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'skipped' })
+      return
+    }
+    if (persisted !== undefined) return
     const media = typeof adapter.loadMessageImages === 'function' ? await adapter.loadMessageImages(message) : { images: [], mediaUnavailable: [] }
     const accepted = await runtime.ingest({
       ...message,
@@ -81,7 +91,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, humanPol
       const jobs = []
       for (const group of runtime.listGroups()) {
         const pending = (runtime.getGroup?.(group.groupId) ?? group).outbox ?? []
-        for (const outbound of pending.filter((item) => item.status === 'pending' && /^task-result:task-.*:completed(?::\d+)?$/.test(item.sourceMessageId))) {
+        for (const outbound of pending.filter((item) => item.status === 'pending' && (item.readbackRequired === true || /^task-result:task-.*:completed(?::\d+)?$/.test(item.sourceMessageId)))) {
           jobs.push(processOutbound({ groupId: group.groupId, outbound }))
         }
       }

@@ -83,8 +83,8 @@ test('DWS bridge 将稳定事件交给 resident 并在真实回读后确认 outb
   assert.equal(stopped, true)
 })
 
-test('完成通知首次无法确认时会持续重试并在历史回读命中后确认', async () => {
-  const outbound = { outboundId: 'out-completed', sourceMessageId: 'task-result:task-1:completed', text: '任务已完成', status: 'pending' }
+test('主会话回复首次无法确认时会绑定同一outbox持续回读并避免重复发送', async () => {
+  const outbound = { outboundId: 'out-reply', sourceMessageId: 'msg-source', text: '主会话回复', status: 'pending', readbackRequired: true }
   const group = { groupId: 'cid-a', messages: [], outbox: [outbound] }
   const acknowledged = []
   const runtime = {
@@ -105,7 +105,7 @@ test('完成通知首次无法确认时会持续重试并在历史回读命中�
   const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 5 })
   await new Promise((resolve) => setTimeout(resolve, 40))
   await stop()
-  assert.deepEqual(acknowledged, [{ groupId: 'cid-a', outboundId: 'out-completed', deliveredMessageId: 'sent-id' }])
+  assert.deepEqual(acknowledged, [{ groupId: 'cid-a', outboundId: 'out-reply', deliveredMessageId: 'sent-id' }])
   assert.equal(sends, 1, '重试前的历史回读命中后不得重复发送')
 })
 
@@ -190,6 +190,38 @@ test('定时增量补拉按已持久化发送消息ID过滤Agent本人账号消�
     await backfill()
     assert.deepEqual(ingested, ['m-human'])
     assert.equal(imageLoads, 1, 'Agent发送消息应在附件下载前过滤')
+    await stop()
+  } finally {
+    globalThis.setInterval = originalSetInterval
+  }
+})
+
+test('补拉命中当前账号的pending outbox时先确认发送并修正历史失败状态', async () => {
+  const outbound = { outboundId: 'out-pending', sourceMessageId: 'source-1', text: 'Agent回复\n\n- 小小鹏代回', status: 'pending' }
+  const message = { messageId: 'm-agent', text: 'Agent回复  - 小小鹏代回', senderName: '孙鹏', agentDeliveryStatus: 'failed' }
+  const group = { groupId: 'cid-a', messages: [message], outbox: [outbound] }
+  const acknowledged = [], marked = [], ingested = []
+  let backfill
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group, listTasks: () => [],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined }, onHumanBlockerRequested() { return () => undefined },
+    async acknowledge(value) { acknowledged.push(value); Object.assign(outbound, { status: 'sent', deliveredMessageId: value.deliveredMessageId }) },
+    async markMessageAgentDelivery(value) { marked.push(value); message.agentDeliveryStatus = value.status },
+    async ingest(value) { ingested.push(value.messageId); return { duplicate: false } },
+  }
+  const adapter = {
+    startGroupSubscription() { return { lifecycle: new EventEmitter(), ready: Promise.resolve(), done: Promise.resolve(), stop() {} } },
+    async readGroup() { return { complete: true, messages: [] } },
+    async readGroupRange() { return { complete: true, messages: [{ conversationId: 'cid-a', messageId: 'm-agent', text: 'Agent回复  - 小小鹏代回', createTime: '2026-08-26T03:28:22Z', sender: '孙鹏' }] } },
+  }
+  const originalSetInterval = globalThis.setInterval
+  globalThis.setInterval = (callback) => { backfill = callback; return { unref() {} } }
+  try {
+    const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, currentDwsUserName: '孙鹏', humanPollIntervalMs: 0, groupBackfillIntervalMs: 1, outboxRetryIntervalMs: 0 })
+    await backfill()
+    assert.deepEqual(acknowledged, [{ groupId: 'cid-a', outboundId: 'out-pending', deliveredMessageId: 'm-agent' }])
+    assert.deepEqual(marked, [{ groupId: 'cid-a', messageId: 'm-agent', status: 'skipped' }])
+    assert.deepEqual(ingested, [])
     await stop()
   } finally {
     globalThis.setInterval = originalSetInterval

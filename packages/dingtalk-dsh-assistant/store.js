@@ -9,6 +9,7 @@ const quotedMessageSchema = z.object({ messageId: z.string().min(1).optional(), 
 const inboundSchema = z.object({ messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]), senderName: z.string().min(1).optional(), senderOpenDingTalkId: z.string().min(1).optional(), quotedMessage: quotedMessageSchema.optional(), agentDeliveryStatus: z.enum(['pending', 'delivered', 'failed', 'skipped']).optional(), agentDeliveryAt: z.string().min(1).optional(), agentDeliveryError: z.string().min(1).optional() })
 const outboundSchema = z.object({
   outboundId: z.string().min(1), sourceMessageId: z.string().min(1), text: z.string(), status: z.enum(['pending', 'sent']),
+  readbackRequired: z.boolean().optional(),
   deliveredMessageId: z.string().min(1).optional(),
   replyToMessageId: z.string().min(1).optional(), replyToSenderOpenDingTalkId: z.string().min(1).optional(),
   atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
@@ -253,8 +254,9 @@ export async function openResidentStore(storageDomain) {
         }),
       }))
     }),
-    markMessagesAgentDelivery: ({ groupId, status = 'delivered', onlyMissing = true }) => serialize(groupId, async () => {
+    markMessagesAgentDelivery: ({ groupId, status = 'delivered', onlyMissing = true, messageIds }) => serialize(groupId, async () => {
       if (!['delivered', 'failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)
+      if (messageIds !== undefined && (!Array.isArray(messageIds) || messageIds.length === 0 || messageIds.some((messageId) => typeof messageId !== 'string' || messageId.trim() === ''))) throw new Error('message_ids_invalid')
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       let updated = 0
@@ -262,12 +264,14 @@ export async function openResidentStore(storageDomain) {
       const group = await groups.update(entry[0], (latest) => ({
         ...latest,
         messages: latest.messages.map((message) => {
+          if (messageIds !== undefined && !messageIds.includes(message.messageId)) return message
           if (onlyMissing && message.agentDeliveryStatus) return message
           updated += 1
-          return { ...message, agentDeliveryStatus: status, agentDeliveryAt: at }
+          const { agentDeliveryError: _previousError, ...current } = message
+          return { ...current, agentDeliveryStatus: status, agentDeliveryAt: at }
         }),
       }))
-      return { groupId, status, onlyMissing, updated, total: group.messages.length, group }
+      return { groupId, status, onlyMissing, ...(messageIds !== undefined ? { messageIds } : {}), updated, total: group.messages.length, group }
     }),
     appendOutbox: ({ groupId, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
@@ -278,7 +282,7 @@ export async function openResidentStore(storageDomain) {
       return groups.update(storageKey, (latest) => ({
         ...latest,
         outbox: [...latest.outbox, {
-          outboundId: `outbound-${randomUUID()}`, sourceMessageId, text, status: 'pending',
+          outboundId: `outbound-${randomUUID()}`, sourceMessageId, text, status: 'pending', readbackRequired: true,
           ...(replyToMessageId ? { replyToMessageId } : {}),
           ...(replyToSenderOpenDingTalkId ? { replyToSenderOpenDingTalkId } : {}),
           ...(Array.isArray(atOpenDingTalkIds) && atOpenDingTalkIds.length > 0 ? { atOpenDingTalkIds } : {}),

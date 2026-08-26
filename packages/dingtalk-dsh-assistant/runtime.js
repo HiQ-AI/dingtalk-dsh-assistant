@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import { buildDecisionPrompt, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from './decision.js'
+import { buildDecisionPrompt, buildLeafSourceEnvelope, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from './decision.js'
 import { parseTaskResult } from './task-result.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
@@ -109,8 +109,10 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
 - 回答：\`{"kind":"answer","reply":"..."}\`
 - 新任务：\`{"kind":"new-task","objective":"...","reply":"..."}\`
 - 补充任务：\`{"kind":"task-context","taskId":"...","context":"...","reply":"..."}\`；只需静默补充上下文、不需要回复群聊时，\`reply\` 使用空字符串
-- 重开任务：\`{"kind":"task-reopen","taskId":"...","context":"...","reply":"..."}\`
+- 重开任务：\`{"kind":"task-reopen","taskId":"...","context":"...","reply":"..."}\`；只需静默重开任务、不需要回复群聊时，\`reply\` 使用空字符串
 - 忽略：\`{"kind":"ignore","reason":"..."}\`
+
+\`objective/context\` 只用于主会话选路和可观测记录，不会作为事实传给叶子。不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子将收到 Runtime 从原始群消息生成的来源证据信封并独立核验。
 
 只有当前消息明确指名或提及已配置的 Agent 名称/别名${currentDwsUserName ? `，或明确指名当前 DWS 登录人“${currentDwsUserName}”` : ''}，或以 \`cc:\` 开头，并且事项属于本群职责且形成可验证的执行或持续跟踪目标时，才允许选择新任务。职责相关但未明确指名时可以回答，不得创建任务。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。
 
@@ -165,7 +167,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
     })
     agentCtx.tools.register({
       name: 'group_task_context_append',
-      description: 'Append new context to an active task belonging to this resident group Session.',
+      description: 'Append raw user wording or a stable verified fact to an active task. Do not add coordinator conclusions about cause, completion, or solution.',
       parameters: { type: 'object', additionalProperties: false, properties: { taskId: { type: 'string' }, context: { type: 'string' } }, required: ['taskId', 'context'] },
       output: {
         schema: { type: 'object', additionalProperties: false, properties: { accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, state: { type: 'string' } }, required: ['accepted', 'taskId', 'state'] },
@@ -185,7 +187,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
     })
     agentCtx.tools.register({
       name: 'group_task_reopen',
-      description: 'Reopen a completed task in this resident group, restore its original leaf Session and Goal, and append a correction, rollback, or follow-up execution instruction.',
+      description: 'Reopen a completed task with raw user wording or a stable verified fact. Do not add coordinator conclusions about cause, completion, or solution.',
       parameters: { type: 'object', additionalProperties: false, properties: { taskId: { type: 'string' }, context: { type: 'string' } }, required: ['taskId', 'context'] },
       output: {
         schema: { type: 'object', additionalProperties: false, properties: { accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, state: { type: 'string' } }, required: ['accepted', 'taskId', 'state'] },
@@ -616,7 +618,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         if (goal?.phase === 'complete') ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds })
         else if (goal?.phase === 'blocked' || goal?.phase === 'paused' || (goal?.phase === 'active' && goal.activation === 'disarmed')) ctx.goals.resume(handle.agent, goalRef(goal))
         const running = await store.updateTask(task.taskId, (current) => ({ ...current, state: 'running', reopenContext: undefined }))
-        await followupTaskInternal(running, `[TASK_REOPEN]\n${task.reopenContext}\n\n这是对同一任务已完成结果的纠正、回滚或补做要求。继续使用原 Task 和原叶子会话，严格按本次补充范围处理并重新提交可核验结果。`)
+        await followupTaskInternal(running, `[TASK_REOPEN]\n${task.reopenContext}\n\nRuntime 仅确认该来源消息被关联到同一 Task。关联本身不证明消息中的判断成立；请独立核验当前事实，并在原始消息授权范围内重新提交可核验结果。`)
       } else {
         await createLeaf(task)
         await store.updateTask(task.taskId, (current) => ({ ...current, state: 'running' }))
@@ -777,16 +779,17 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         if (decision.kind === 'ignore') return { ...accepted, decision, group: store.getGroup(message.groupId) }
         let task
         const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
-        if (decision.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, objective: decision.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt }); await pumpTasks(); return store.getTask(result.task.taskId) })
+        const sourceEnvelope = buildLeafSourceEnvelope({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable })
+        if (decision.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, objective: sourceEnvelope, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt }); await pumpTasks(); return store.getTask(result.task.taskId) })
         else if (decision.kind === 'task-context') {
           task = store.getTask(decision.taskId)
           if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${decision.taskId}`)
-          task = await serializeTasks(() => appendTaskContextInternal(task, decision.context, trigger))
+          task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger))
         }
         else if (decision.kind === 'task-reopen') {
           task = store.getTask(decision.taskId)
           if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${decision.taskId}`)
-          task = await serializeTasks(() => reopenCompletedTaskInternal(task, decision.context, trigger))
+          task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger))
         }
         const group = decision.reply.trim() === ''
           ? store.getGroup(message.groupId)
@@ -845,7 +848,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (goal?.phase === 'blocked' || goal?.phase === 'paused' || (goal?.phase === 'active' && goal.activation === 'disarmed')) ctx.goals.resume(handle.agent, goalRef(goal))
       else if (goal?.phase === 'complete') ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds })
       const running = await store.updateTask(taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined, humanBlocker: current.humanBlocker ? { ...current.humanBlocker, status: 'answered', reply: 'Runtime判定无需真人介入，已转为持续执行。' } : undefined }))
-      await followupTaskInternal(running, `[TASK_CONTEXT]\n${context}\n\n这是群聊对当前任务补充的高价值线索。先按当前现场核验，不要重复进行已被该线索排除的宽泛根因搜索。外部流水线仍在正常运行时持续监控；Goal轮数由Host续接，不得因此提交human-intervention。`)
+      await followupTaskInternal(running, `[TASK_CONTEXT]\n${context}\n\n以上内容是恢复任务所需的来源事实，不代表任何根因或排除性判断已经成立。请按当前现场独立核验；外部流水线仍在正常运行时持续监控，Goal轮数由Host续接，不得因此提交human-intervention。`)
       return running
     }),
     recordHumanBlockerDelivery: ({ taskId, requestId, openTaskId, conversationId, messageId, sentAt, formatVersion }) => serializeTasks(async () => {
