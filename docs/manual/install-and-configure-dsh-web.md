@@ -121,6 +121,8 @@ pnpm install
 
 每次更新插件仓库代码后，都应在这里重新执行一次 `pnpm install`，确保 profile 使用当前本地包。
 
+如果 profile 使用本地 `.tgz`，同一版本重新打包时必须使用新的包文件名并同步修改 `package.json`；只覆盖原同名 tgz 后执行 `pnpm install --force`，仍可能命中锁文件中的旧包完整性记录，导致运行时没有更新。安装后应在 `node_modules` 中独立检查本轮新增实现，再重启 DSH Web。
+
 ## 四、装配 resident Runtime
 
 打开仓库中的 `.dsh/profiles/resident/cordis.patch.yml`，把其中配置合并到实际使用的：

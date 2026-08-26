@@ -84,6 +84,9 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
     if (agentPresets === undefined) throw new Error('agent_presets_required')
     const preset = await agentPresets.mount(agentCtx, 'standard')
     if (preset?.id !== undefined && preset.id !== 'standard') throw new Error(`resident_agent_preset_invalid:${preset.id}`)
+    configureResident(agentCtx, groupId)
+  }
+  function configureResident(agentCtx, groupId) {
     installSelection(agentCtx)
     registerResidentTaskTools(agentCtx, groupId)
     agentCtx.systemPrompt.section({
@@ -107,18 +110,24 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
 
 收到以 \`[GROUP_DECISION]\` 开头的群消息信封时，只输出一个严格 JSON 对象：
 - 回答：\`{"kind":"answer","reply":"..."}\`
-- 新任务：\`{"kind":"new-task","objective":"...","reply":"..."}\`
-- 补充任务：\`{"kind":"task-context","taskId":"...","context":"...","reply":"..."}\`；只需静默补充上下文、不需要回复群聊时，\`reply\` 使用空字符串
-- 重开任务：\`{"kind":"task-reopen","taskId":"...","context":"...","reply":"..."}\`；只需静默重开任务、不需要回复群聊时，\`reply\` 使用空字符串
+- 新任务：\`{"kind":"new-task","title":"简洁任务名","objective":"完整任务目标","reply":"..."}\`
+- 补充任务：\`{"kind":"task-context","taskId":"...","context":"...","objective":"可选，修订后的完整目标","reply":"..."}\`；只需静默补充上下文、不需要回复群聊时，\`reply\` 使用空字符串
+- 重开任务：\`{"kind":"task-reopen","taskId":"...","context":"...","objective":"可选，修订后的完整目标","reply":"..."}\`；只需静默重开任务、不需要回复群聊时，\`reply\` 使用空字符串
 - 忽略：\`{"kind":"ignore","reason":"..."}\`
 
-\`objective/context\` 只用于主会话选路和可观测记录，不会作为事实传给叶子。不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子将收到 Runtime 从原始群消息生成的来源证据信封并独立核验。
+\`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从原始群消息生成的独立来源证据信封并自行核验。
+
+新建任务或修订目标时，可同时提供 \`acceptanceCriteria\`（本轮可逐项核验的验收标准）和 \`stageTasks\`（本轮阶段任务）字符串数组。两者只能拆解消息已授权的目标，不得扩大动作范围。
 
 只有当前消息明确指名或提及已配置的 Agent 名称/别名${currentDwsUserName ? `，或明确指名当前 DWS 登录人“${currentDwsUserName}”` : ''}，或以 \`cc:\` 开头，并且事项属于本群职责且形成可验证的执行或持续跟踪目标时，才允许选择新任务。职责相关但未明确指名时可以回答，不得创建任务。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。
 
-任务目标必须忠实保留消息中的动作范围，不得把“看看、查一下、排查、分析、核对、监控”等诊断或观察请求扩写成“修复、修改、实施、合并、发布、执行”等变更任务。诊断任务的完成条件只能是核验现状、定位根因、给出证据与建议；只有消息明确要求修复、修改、处理问题或实施方案时，new-task 的 objective 才能包含变更动作。是否明确指名只决定能否建 Task，不构成扩大任务授权。
+任务目标必须忠实保留消息中的动作范围，不得把“看看、查一下、排查、分析、核对、监控”等诊断或观察请求扩写成“修复、修改、实施、合并、发布、执行”等变更任务。诊断任务的完成条件只能是核验现状、定位根因、给出证据与建议；只有消息明确要求修复、修改、处理问题或实施方案时，new-task 的 objective 才能包含变更动作。后续消息可能明确扩大或收窄同一任务的动作范围；此时仍关联原 Task，并在 task-context 或 task-reopen 中填写修订后的累计完整 objective。普通事实补充不得填写 objective。是否明确指名只决定能否建 Task，不构成扩大任务授权。
 
 消息附带的图片属于当前消息正文，必须先阅读图片，再结合固定主会话中的前后消息和“本群全部任务关联索引”判断关联性。queued、running、waiting、completed 以及产品展示中的归档任务都必须参与关联判断；任务状态只决定关联后的动作，不得成为忽略关联的理由。不得仅因文字部分没有指名、图片没有文字摘要或后续消息较短就选择忽略；紧邻图片的补充说明应优先与该图片共同理解。群友对根因、状态或外部因素的未经核验判断，只要与已有任务相关，就是需要核验的新增线索，不得以“尚未核验”为由忽略。已存在任务的新增事实应优先关联已有任务，而不是创建重复任务。对已完成任务的结果提出回滚、撤回、还原、纠正或补做，属于原任务的结果纠正，必须返回 task-reopen 唤起原 Task，不得只做自然语言承诺，也不得创建新 Task；只有与原目标不同的独立可执行目标才创建新任务并保留历史关联。
+
+状态边界必须严格遵守：running 或 waiting（包括阻塞中）的 Task 收到新增信息时只能返回 task-context，继续同一执行轮次；不得返回 task-reopen，不得清空 blocker 或增加轮次。只有 completed Task（包括已归档展示）才允许 task-reopen 并初始化下一执行轮次。
+
+同事或其 AI 助理发送的回复、任务回执和状态通知都是正常群消息，必须进入本协议由你结合引用消息、上下文和任务索引判断，不得按固定文案或发送者在模型外预先过滤。若消息只是对已完成通知的自动回执，没有提出新事实、问题、纠正或执行要求，应选择 ignore；只有确实需要向群里补充新信息时才选择 answer，不要回复“无需重复创建任务”之类没有新增价值的确认。
 
 上述 JSON 协议仅用于 \`[GROUP_DECISION]\` 群消息信封，此时不得调用任务工具。用户在 Web 主会话中直接要求创建、续接或查询任务时，使用本会话提供的 DSH 原生任务工具；主会话只负责沟通协调，实际执行由 Runtime 创建的独立叶子会话完成。`,
     })
@@ -168,7 +177,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
     agentCtx.tools.register({
       name: 'group_task_context_append',
       description: 'Append raw user wording or a stable verified fact to an active task. Do not add coordinator conclusions about cause, completion, or solution.',
-      parameters: { type: 'object', additionalProperties: false, properties: { taskId: { type: 'string' }, context: { type: 'string' } }, required: ['taskId', 'context'] },
+      parameters: { type: 'object', additionalProperties: false, properties: { taskId: { type: 'string' }, context: { type: 'string' }, objective: { type: 'string' }, acceptanceCriteria: { type: 'array', items: { type: 'string' } }, stageTasks: { type: 'array', items: { type: 'string' } } }, required: ['taskId', 'context'] },
       output: {
         schema: { type: 'object', additionalProperties: false, properties: { accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, state: { type: 'string' } }, required: ['accepted', 'taskId', 'state'] },
         render: (_args, out) => [{ type: 'text', text: `任务上下文已补充：${out.taskId}` }],
@@ -180,7 +189,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
         return serializeTasks(async () => {
           let task = store.getTask(args.taskId)
           if (task === undefined || task.groupId !== groupId) throw new Error(`task_context_target_invalid:${args.taskId}`)
-          task = await appendTaskContextInternal(task, context)
+          task = await appendTaskContextInternal(task, context, undefined, args.objective, args.acceptanceCriteria, args.stageTasks)
           return { accepted: true, taskId: task.taskId, state: task.state }
         })
       },
@@ -188,7 +197,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
     agentCtx.tools.register({
       name: 'group_task_reopen',
       description: 'Reopen a completed task with raw user wording or a stable verified fact. Do not add coordinator conclusions about cause, completion, or solution.',
-      parameters: { type: 'object', additionalProperties: false, properties: { taskId: { type: 'string' }, context: { type: 'string' } }, required: ['taskId', 'context'] },
+      parameters: { type: 'object', additionalProperties: false, properties: { taskId: { type: 'string' }, context: { type: 'string' }, objective: { type: 'string' }, acceptanceCriteria: { type: 'array', items: { type: 'string' } }, stageTasks: { type: 'array', items: { type: 'string' } } }, required: ['taskId', 'context'] },
       output: {
         schema: { type: 'object', additionalProperties: false, properties: { accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, state: { type: 'string' } }, required: ['accepted', 'taskId', 'state'] },
         render: (_args, out) => [{ type: 'text', text: `已重新打开原任务：${out.taskId}（${out.state}）` }],
@@ -200,7 +209,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
         return serializeTasks(async () => {
           const task = store.getTask(args.taskId)
           if (task === undefined || task.groupId !== groupId) throw new Error(`task_reopen_target_invalid:${args.taskId}`)
-          const reopened = await reopenCompletedTaskInternal(task, context)
+          const reopened = await reopenCompletedTaskInternal(task, context, undefined, args.objective, args.acceptanceCriteria, args.stageTasks)
           return { accepted: true, taskId: reopened.taskId, state: reopened.state }
         })
       },
@@ -249,6 +258,35 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
     else for (const listener of outboxListeners) await listener(event)
     return group
   }
+  async function reviewCompletedTaskResult(task, result) {
+    const handle = residentHandles.get(task.groupId)
+    if (handle === undefined) throw new Error(`resident_not_active:${task.groupId}`)
+    await handle.agent.whenIdle()
+    const firstSeq = handle.agent.session.seq
+    handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: `[TASK_COMPLETION_REVIEW]\nTask ID: ${task.taskId}\n执行轮次：${task.runSequence ?? 1}\n当前有效目标：${task.objective}\n本轮验收标准：${JSON.stringify(task.acceptanceCriteria ?? [task.objective])}\n本轮阶段任务：${JSON.stringify(task.stageTasks ?? [])}\n本轮完成结果：${JSON.stringify({ summary: result.summary, evidence: result.evidence, artifacts: result.artifacts, delivery: result.delivery })}\n\n判断本轮证据是否覆盖当前有效目标和全部验收标准，尤其是最近新增或修订的范围。历史目标已经完成不代表新增范围完成；结果明确承认某项目未完成、缺少证据或尚未验证时必须拒绝。只输出严格 JSON：通过 {"accepted":true,"reason":"..."}；拒绝 {"accepted":false,"reason":"具体缺口"}。` }],
+      source: { kind: 'user' },
+    }))
+    await handle.agent.whenIdle()
+    const reply = handle.agent.session.events.filter((event) => event.seq >= firstSeq && event.type === 'assistant/message')
+      .flatMap((event) => event.data.message.content).filter((block) => block.type === 'text').map((block) => block.text).join('').trim()
+    let review
+    try { review = JSON.parse(reply) } catch (error) { throw new Error(`task_completion_review_invalid_json:${task.taskId}`, { cause: error }) }
+    if (typeof review !== 'object' || review === null || typeof review.accepted !== 'boolean' || typeof review.reason !== 'string' || review.reason.trim() === '' || Object.keys(review).some((key) => key !== 'accepted' && key !== 'reason')) throw new Error(`task_completion_review_invalid_schema:${task.taskId}`)
+    return review
+  }
+  const createResident = async (_groupId, options) => ({ handle: await ctx.agents.create(options) })
+
+  const isSyntheticTaskSource = (sourceMessageId) => typeof sourceMessageId === 'string' && /^(?:web(?:-reopen)?:|recovery:)/u.test(sourceMessageId)
+
+  function resolveTaskNotificationTrigger(task) {
+    const current = { sourceMessageId: task.sourceMessageId, requesterName: task.requesterName, requesterOpenDingTalkId: task.requesterOpenDingTalkId }
+    const candidates = [current, ...[...(task.triggerHistory ?? [])].reverse()]
+    return candidates.find((item) => typeof item?.sourceMessageId === 'string'
+      && !isSyntheticTaskSource(item.sourceMessageId)
+      && typeof item.requesterOpenDingTalkId === 'string')
+  }
+
   async function coordinateTaskResult(task, result) {
     const completionSequence = task.completionSequence ?? 0
     const resultKey = result.status === 'completed'
@@ -263,26 +301,27 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
       if (handle === undefined) throw new Error(`resident_not_active:${task.groupId}`)
       await handle.agent.whenIdle()
       const firstSeq = handle.agent.session.seq
-      const requester = task.requesterName === undefined ? '未记录' : `${task.requesterName}${task.requesterOpenDingTalkId ? `（${task.requesterOpenDingTalkId}）` : ''}`
+      const notificationTrigger = resolveTaskNotificationTrigger(task)
+      const requester = notificationTrigger?.requesterName === undefined ? '未记录' : `${notificationTrigger.requesterName}（${notificationTrigger.requesterOpenDingTalkId}）`
       const resultProjection = result.status === 'completed'
-        ? { status: result.status, summary: result.summary, delivery: result.delivery }
-        : { status: result.status, summary: result.summary, waitingKind: result.waitingKind, waitingReason: result.waitingReason, questions: result.questions }
+        ? { status: result.status, workType: result.workType, summary: result.summary, evidence: result.evidence, artifacts: result.artifacts, delivery: result.delivery }
+        : { status: result.status, summary: result.summary, evidence: result.evidence, artifacts: result.artifacts, waitingKind: result.waitingKind, waitingReason: result.waitingReason, questions: result.questions }
       handle.agent.followup(createUserMessage({
-        content: [{ type: 'text', text: `[TASK_COORDINATION]\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n提出人：${requester}\n核验结果：${JSON.stringify(resultProjection)}\n\n只输出一条简洁的群聊通知。完成时说明关键结论和已核验的必要证据；缺信息时只向提出人询问列出的具体问题。正文不要手写 @ 提出人，Runtime 会传结构化 @。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
+        content: [{ type: 'text', text: `[TASK_COORDINATION]\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n当前目标：${task.objective}\n提出人：${requester}\n核验结果：${JSON.stringify(resultProjection)}\n\n只输出一条可直接发送到群聊的通知。完成通知必须忠实保留叶子结果中影响同事判断和后续行动的信息，不能为了简短只复述 summary。至少覆盖：实际完成或修改的内容、关键核验与证据、部署或交付状态、尚未覆盖的边界与遗留事项；result 中存在 artifacts 或 delivery 时也要说明其关键内容。允许合并重复表述，但不得省略不同关注点、限定条件、失败项或“未验证/未部署”等边界。缺信息时只向提出人询问列出的具体问题。正文不要手写 @ 提出人，Runtime 会传结构化 @。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
         source: { kind: 'user' },
       }))
       await handle.agent.whenIdle()
       let reply = handle.agent.session.events.filter((event) => event.seq >= firstSeq && event.type === 'assistant/message')
         .flatMap((event) => event.data.message.content).filter((block) => block.type === 'text').map((block) => block.text).join('').trim()
       if (reply === '') throw new Error(`task_coordination_reply_missing:${task.taskId}`)
-      const canReplyToSource = !task.sourceMessageId.startsWith('web:') && typeof task.requesterOpenDingTalkId === 'string'
-      if (canReplyToSource && task.requesterName) reply = reply.replace(new RegExp(`^@${task.requesterName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'u'), '')
+      const canReplyToSource = notificationTrigger !== undefined
+      if (canReplyToSource && notificationTrigger.requesterName) reply = reply.replace(new RegExp(`^@${notificationTrigger.requesterName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'u'), '')
       const group = await appendReliableOutbox({
         groupId: task.groupId, sourceMessageId: resultKey, text: reply,
         ...(canReplyToSource ? {
-          replyToMessageId: task.sourceMessageId,
-          replyToSenderOpenDingTalkId: task.requesterOpenDingTalkId,
-          atOpenDingTalkIds: [task.requesterOpenDingTalkId],
+          replyToMessageId: notificationTrigger.sourceMessageId,
+          replyToSenderOpenDingTalkId: notificationTrigger.requesterOpenDingTalkId,
+          atOpenDingTalkIds: [notificationTrigger.requesterOpenDingTalkId],
         } : {}),
       })
       return group.outbox.find((item) => item.sourceMessageId === resultKey)
@@ -333,6 +372,11 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
       }))
       for (const listener of humanBlockerListeners) await listener({ task: waiting, result })
       return store.getTask(taskId)
+    }
+    const review = await withoutInitiator(() => reviewCompletedTaskResult(task, result))
+    if (!review.accepted) {
+      await followupTaskInternal(task, `[TASK_RESULT_REJECTED]\n当前完成结果未通过最新目标验收：${review.reason}\n\n继续执行当前有效目标，补齐缺失实现与证据后再提交 completed。不得重复提交上一轮结论。`)
+      throw new Error(`task_result_objective_not_covered:${taskId}:${review.reason}`)
     }
     if (goal.phase !== 'complete') ctx.goals.complete(handle.agent, goalRef(goal))
     await withoutInitiator(() => coordinateTaskResult(task, result))
@@ -439,6 +483,14 @@ ${store.getTaskExecutionGuidance?.() || '未配置额外流程引导；按任务
 
 ${store.getTaskEvidenceGuidance?.() || '提交能够独立核验目标已完成的当前证据；不得只用自然语言声称完成。'}
 
+### 当前执行轮次验收标准
+
+${task.acceptanceCriteria?.length ? task.acceptanceCriteria.map((item) => `- ${item}`).join('\n') : `- ${task.objective}`}
+
+### 当前执行轮次阶段任务
+
+${task.stageTasks?.length ? task.stageTasks.map((item) => `- ${item}`).join('\n') : '- 完成并验证当前轮目标。'}
+
 ### 群聊后续关联上下文
 
 ${task.relatedContexts?.length ? task.relatedContexts.map((item) => `- ${item}`).join('\n') : '暂无。'}
@@ -449,7 +501,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   ? (task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').map((item) => `- ${item.decision ?? 'answered'}｜${item.category}｜${item.requestedAction}｜答复：${item.reply ?? '未记录'}`).join('\n')
   : '暂无。'}
 
-完成结果提交后由 Runtime 交给 resident 主会话，再由主会话通知原群任务负责人。
+完成结果提交后由 Runtime 交给 resident 主会话，再由主会话通知原群任务负责人。群聊通知只有 Runtime 这一个出口：叶子会话不得调用 DWS 或其他消息工具向来源群发送、回复、编辑或撤回任务进度、阻塞或完成通知，也不得把自行发送群通知作为完成证据；叶子只允许读取群消息用于核验，并通过 submit_task_result 提交结构化结果。
 
 ### 阻塞规则
 
@@ -614,11 +666,9 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (!residentHandles.has(task.groupId)) throw new Error(`resident_not_active:${task.groupId}`)
       if (task.reopenContext) {
         const handle = await resumeLeaf(task)
-        const goal = ctx.goals.get(handle.agent)
-        if (goal?.phase === 'complete') ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds })
-        else if (goal?.phase === 'blocked' || goal?.phase === 'paused' || (goal?.phase === 'active' && goal.activation === 'disarmed')) ctx.goals.resume(handle.agent, goalRef(goal))
+        replaceTaskGoalObjective(task, handle)
         const running = await store.updateTask(task.taskId, (current) => ({ ...current, state: 'running', reopenContext: undefined }))
-        await followupTaskInternal(running, `[TASK_REOPEN]\n${task.reopenContext}\n\nRuntime 仅确认该来源消息被关联到同一 Task。关联本身不证明消息中的判断成立；请独立核验当前事实，并在原始消息授权范围内重新提交可核验结果。`)
+        await followupTaskInternal(running, `[TASK_REOPEN]\n执行轮次：${task.runSequence}\n当前有效目标：${task.objective}\n本轮验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n\n${task.reopenContext}\n\n这是独立的新执行轮次。历史轮次只供参考，不得把旧结果当成本轮完成证据；请独立核验当前事实，并在当前有效目标与原始来源消息的授权范围内重新提交可核验结果。`)
       } else {
         await createLeaf(task)
         await store.updateTask(task.taskId, (current) => ({ ...current, state: 'running' }))
@@ -626,42 +676,101 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       available -= 1
     }
   }
-  async function reopenCompletedTaskInternal(task, context, trigger) {
+  function withRevisedObjective(current, objective, trigger) {
+    const revised = typeof objective === 'string' ? objective.trim() : ''
+    if (revised === '' || revised === current.objective) return current
+    return {
+      ...current,
+      objective: revised,
+      objectiveHistory: [...(current.objectiveHistory ?? []), {
+        objective: current.objective,
+        revisedAt: new Date().toISOString(),
+        ...(trigger?.sourceMessageId ? { sourceMessageId: trigger.sourceMessageId } : {}),
+      }],
+    }
+  }
+
+  function normalizeRunPlan(objective, acceptanceCriteria, stageTasks) {
+    const clean = (values) => Array.isArray(values) ? values.map((item) => String(item).trim()).filter(Boolean) : []
+    const criteria = clean(acceptanceCriteria)
+    const stages = clean(stageTasks)
+    return { acceptanceCriteria: criteria.length > 0 ? criteria : [objective], stageTasks: stages.length > 0 ? stages : ['完成并验证当前轮目标'] }
+  }
+
+  function replaceTaskGoalObjective(task, handle) {
+    const goal = ctx.goals.get(handle.agent)
+    if (goal !== undefined && goal.phase !== 'complete') ctx.goals.complete(handle.agent, goalRef(goal))
+    ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds })
+  }
+
+  async function reopenCompletedTaskInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks) {
     if (task.state !== 'completed') throw new Error(`task_not_completed:${task.taskId}`)
+    const effectiveObjective = typeof objective === 'string' && objective.trim() !== '' ? objective.trim() : task.objective
+    const nextRunSequence = (task.runSequence ?? 1) + 1
+    const nextRunPlan = normalizeRunPlan(effectiveObjective, acceptanceCriteria, stageTasks)
     const queued = await store.updateTask(task.taskId, (current) => {
       const initialTrigger = { sourceMessageId: current.sourceMessageId, ...(current.requesterName ? { requesterName: current.requesterName } : {}), ...(current.requesterOpenDingTalkId ? { requesterOpenDingTalkId: current.requesterOpenDingTalkId } : {}) }
-      const triggerHistory = current.triggerHistory ?? [initialTrigger]
-      const nextHistory = trigger && !triggerHistory.some((item) => item.sourceMessageId === trigger.sourceMessageId) ? [...triggerHistory, trigger] : triggerHistory
+      const messageTrigger = trigger && !isSyntheticTaskSource(trigger.sourceMessageId) ? trigger : undefined
+      const triggerHistory = (current.triggerHistory ?? [initialTrigger]).filter((item) => !isSyntheticTaskSource(item.sourceMessageId))
+      const nextHistory = messageTrigger && !triggerHistory.some((item) => item.sourceMessageId === messageTrigger.sourceMessageId) ? [...triggerHistory, messageTrigger] : triggerHistory
+      const retainedTrigger = messageTrigger ?? [...triggerHistory].reverse().find((item) => typeof item.requesterOpenDingTalkId === 'string')
       const { requesterName: _requesterName, requesterOpenDingTalkId: _requesterOpenDingTalkId, ...withoutCurrentRequester } = current
-      return {
+      return withRevisedObjective({
         ...withoutCurrentRequester,
-        ...(trigger ? { sourceMessageId: trigger.sourceMessageId, ...(trigger.requesterName ? { requesterName: trigger.requesterName } : {}), ...(trigger.requesterOpenDingTalkId ? { requesterOpenDingTalkId: trigger.requesterOpenDingTalkId } : {}) } : {}),
+        ...(retainedTrigger ? { sourceMessageId: retainedTrigger.sourceMessageId, ...(retainedTrigger.requesterName ? { requesterName: retainedTrigger.requesterName } : {}), ...(retainedTrigger.requesterOpenDingTalkId ? { requesterOpenDingTalkId: retainedTrigger.requesterOpenDingTalkId } : {}) } : {}),
         triggerHistory: nextHistory,
         state: 'queued',
+        runSequence: nextRunSequence,
+        runStartedAt: new Date().toISOString(),
+        acceptanceCriteria: nextRunPlan.acceptanceCriteria,
+        stageTasks: nextRunPlan.stageTasks,
+        runHistory: [...(current.runHistory ?? []), {
+          runSequence: current.runSequence ?? 1, startedAt: current.runStartedAt ?? current.createdAt, endedAt: new Date().toISOString(),
+          sourceMessageId: current.sourceMessageId, objective: current.objective, childSessionId: current.childSessionId,
+          ...(current.requesterName ? { requesterName: current.requesterName } : {}), ...(current.requesterOpenDingTalkId ? { requesterOpenDingTalkId: current.requesterOpenDingTalkId } : {}),
+          acceptanceCriteria: current.acceptanceCriteria ?? [current.objective], stageTasks: current.stageTasks ?? ['完成并验证当前轮目标'], ...(current.result ? { result: current.result } : {}),
+        }],
         relatedContexts: [...(current.relatedContexts ?? []), context],
         lastCompletedResult: current.result,
         completion: undefined,
         result: undefined,
         waitingKind: undefined,
         waitingReason: undefined,
+        lastWaitingResult: undefined,
+        humanBlocker: undefined,
         reopenContext: context,
         archivedAt: undefined,
         completionSequence: (current.completionSequence ?? 0) + 1,
-      }
+      }, effectiveObjective, messageTrigger)
     })
     await pumpTasks()
     return store.getTask(queued.taskId)
   }
-  async function appendTaskContextInternal(task, context, trigger) {
-    if (task.state === 'completed') return reopenCompletedTaskInternal(task, context, trigger)
+  async function appendTaskContextInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks) {
+    if (task.state === 'completed') return reopenCompletedTaskInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks)
+    const previousObjective = task.objective
+    const previousAcceptance = JSON.stringify(task.acceptanceCriteria ?? [task.objective])
+    const previousStages = JSON.stringify(task.stageTasks ?? ['完成并验证当前轮目标'])
     if (task.state === 'waiting' && task.waitingKind === 'information') {
       const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
       const goal = ctx.goals.get(handle.agent)
       if (goal?.phase === 'blocked' || goal?.phase === 'paused') ctx.goals.resume(handle.agent, goalRef(goal))
       task = await store.updateTask(task.taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined }))
     }
-    task = await store.updateTask(task.taskId, (current) => ({ ...current, relatedContexts: [...(current.relatedContexts ?? []), context], updatedAt: new Date().toISOString() }))
-    if (task.state === 'running' || task.state === 'waiting') await followupTaskInternal(task, context)
+    task = await store.updateTask(task.taskId, (current) => {
+      const revised = withRevisedObjective({ ...current, relatedContexts: [...(current.relatedContexts ?? []), context], updatedAt: new Date().toISOString() }, objective, trigger)
+      if (acceptanceCriteria === undefined && stageTasks === undefined && revised.objective === current.objective) return revised
+      return { ...revised, ...normalizeRunPlan(revised.objective, acceptanceCriteria ?? revised.acceptanceCriteria, stageTasks ?? revised.stageTasks) }
+    })
+    const runPlanChanged = JSON.stringify(task.acceptanceCriteria) !== previousAcceptance || JSON.stringify(task.stageTasks) !== previousStages
+    if ((task.objective !== previousObjective || runPlanChanged) && task.state === 'running') {
+      const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
+      replaceTaskGoalObjective(task, handle)
+    }
+    if (task.state === 'running' || task.state === 'waiting') {
+      const scope = task.objective !== previousObjective || runPlanChanged ? `[TASK_OBJECTIVE_REVISED]\n当前有效目标：${task.objective}\n原目标：${previousObjective}\n本轮验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n\n` : ''
+      await followupTaskInternal(task, `${scope}${context}`)
+    }
     return task
   }
   async function followupTaskInternal(task, text) {
@@ -681,7 +790,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       const detail = error instanceof Error ? error.message : String(error)
       if (detail.includes('corrupt session log') || detail.includes('history unavailable')) {
         const replacementSessionId = `${residentSessionId(group.groupId)}-${randomUUID().slice(0, 8)}`
-        const handle = await ctx.agents.create({ sessionId: SessionId(replacementSessionId), meta: { cwd: agentWorkspace, replacedCorruptSessionId: group.residentSessionId }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+        const { handle } = await createResident(group.groupId, { sessionId: SessionId(replacementSessionId), meta: { cwd: agentWorkspace, agentPreset: 'standard', replacedCorruptSessionId: group.residentSessionId }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
         applyFullAccess(handle)
         await store.updateGroup({ groupId: group.groupId, residentSessionId: replacementSessionId })
         residentHandles.set(group.groupId, handle)
@@ -780,16 +889,16 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         let task
         const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
         const sourceEnvelope = buildLeafSourceEnvelope({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable })
-        if (decision.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, title: decision.objective, objective: sourceEnvelope, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt }); await pumpTasks(); return store.getTask(result.task.taskId) })
+        if (decision.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, title: decision.title, objective: decision.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, acceptanceCriteria: decision.acceptanceCriteria, stageTasks: decision.stageTasks, relatedContexts: [sourceEnvelope] }); await pumpTasks(); return store.getTask(result.task.taskId) })
         else if (decision.kind === 'task-context') {
           task = store.getTask(decision.taskId)
           if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${decision.taskId}`)
-          task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger))
+          task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger, decision.objective, decision.acceptanceCriteria, decision.stageTasks))
         }
         else if (decision.kind === 'task-reopen') {
           task = store.getTask(decision.taskId)
           if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${decision.taskId}`)
-          task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger))
+          task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, decision.objective, decision.acceptanceCriteria, decision.stageTasks))
         }
         const group = decision.reply.trim() === ''
           ? store.getGroup(message.groupId)
@@ -894,17 +1003,18 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       return running
     }),
     createTask: (request) => serializeTasks(async () => { const result = await store.createTask(request); await pumpTasks(); return { ...result, task: store.getTask(result.task.taskId) } }),
-    appendTaskContext: ({ taskId, context, sourceMessageId, requesterName, requesterOpenDingTalkId, occurredAt }) => serializeTasks(async () => {
+    appendTaskContext: ({ taskId, context, objective, acceptanceCriteria, stageTasks, sourceMessageId, requesterName, requesterOpenDingTalkId, occurredAt }) => serializeTasks(async () => {
       const task = store.getTask(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
       const trigger = sourceMessageId ? { sourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) } : undefined
-      return appendTaskContextInternal(task, context, trigger)
+      return appendTaskContextInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks)
     }),
-    reopenTask: ({ taskId, context, sourceMessageId, requesterName, requesterOpenDingTalkId, occurredAt }) => serializeTasks(async () => {
+    reopenTask: ({ taskId, context, objective, acceptanceCriteria, stageTasks, sourceMessageId, requesterName, requesterOpenDingTalkId, occurredAt }) => serializeTasks(async () => {
       const task = store.getTask(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
-      const trigger = sourceMessageId ? { sourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) } : undefined
-      return reopenCompletedTaskInternal(task, context, trigger)
+      const effectiveSourceMessageId = sourceMessageId ?? `web-reopen:${createHash('sha256').update(`${taskId}\n${context}\n${objective ?? task.objective}`).digest('hex')}`
+      const trigger = { sourceMessageId: effectiveSourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) }
+      return reopenCompletedTaskInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks)
     }),
     reconcileCompletedNotifications: () => serializeTasks(async () => {
       const repaired = []
@@ -925,6 +1035,13 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (task.archivedAt) return task
       return store.updateTask(taskId, (current) => ({ ...current, archivedAt: new Date().toISOString() }))
     }),
+    renameTask: ({ taskId, title }) => serializeTasks(async () => {
+      const task = store.getTask(taskId)
+      if (task === undefined) throw new Error(`task_not_found:${taskId}`)
+      const normalized = typeof title === 'string' ? title.trim() : ''
+      if (normalized === '') throw new Error('task_title_required')
+      return store.updateTask(taskId, (current) => ({ ...current, title: normalized, updatedAt: new Date().toISOString() }))
+    }),
     waitTask: ({ taskId, reason }) => serializeTasks(async () => {
       const task = store.getTask(taskId); if (task?.state !== 'running') throw new Error(`task_not_running:${taskId}`)
       const handle = leafHandles.get(taskId) ?? await resumeLeaf(task), goal = ctx.goals.get(handle.agent)
@@ -944,7 +1061,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     submitTaskResult: ({ taskId, result }) => serializeTasks(() => submitTaskResultInternal(taskId, result)),
     subscribe: ({ groupId, name, responsibility = '' }) => serialize(groupId, async () => {
       const existing = store.getGroup(groupId); if (existing !== undefined) return { created: false, group: existing }
-      const sessionId = residentSessionId(groupId), handle = await ctx.agents.create({ sessionId: SessionId(sessionId), meta: { cwd: agentWorkspace }, agentOptions, setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+      const sessionId = residentSessionId(groupId), { handle } = await createResident(groupId, { sessionId: SessionId(sessionId), meta: { cwd: agentWorkspace, agentPreset: 'standard' }, agentOptions, setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
       applyFullAccess(handle)
       try {
         const result = await store.subscribe({ groupId, name, responsibility, residentSessionId: sessionId }); residentHandles.set(groupId, handle)
@@ -991,7 +1108,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             await previous.agent.whenIdle()
             const seed = [...previous.agent.session.events]
             const sessionId = `${residentSessionId(group.groupId)}-${randomUUID().slice(0, 8)}`
-            const handle = await ctx.agents.create({ sessionId: SessionId(sessionId), seed, meta: { cwd: nextWorkspace, seedLength: seed.length }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+            const { handle } = await createResident(group.groupId, { sessionId: SessionId(sessionId), seed, meta: { cwd: nextWorkspace, agentPreset: 'standard', seedLength: seed.length }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
             applyFullAccess(handle)
             replacements.push({ group, previous, handle, sessionId })
           }

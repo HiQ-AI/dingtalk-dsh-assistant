@@ -21,7 +21,7 @@ class FakeResidentAdapter extends LlmAdapter {
       const activeTasks = JSON.parse(input.match(/^Active tasks: (.*)$/m)?.[1] ?? '[]')
       let decision
       if (message.startsWith('忽略：')) decision = { kind: 'ignore', reason: message.slice(3) || 'not addressed' }
-      else if (message.startsWith('任务：')) decision = { kind: 'new-task', objective: message.slice(3), reply: '已识别为正式任务。' }
+      else if (message.startsWith('任务：')) decision = { kind: 'new-task', title: message.slice(3), objective: message.slice(3), reply: '已识别为正式任务。' }
       else if (message.startsWith('补充：')) {
         const task = activeTasks[0]
         decision = task === undefined ? { kind: 'answer', reply: '没有可补充的进行中任务。' } : { kind: 'task-context', taskId: task.taskId, context: message.slice(3), reply: '已补充到现有任务。' }

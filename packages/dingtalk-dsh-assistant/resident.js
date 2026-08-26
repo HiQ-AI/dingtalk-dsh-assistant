@@ -104,7 +104,12 @@ export async function apply(ctx, config = {}) {
       modelMode: config.fakeModel === true ? 'fake' : 'real',
     }).catch((error) => {
       ctx.logger.warn(error instanceof Error ? error.stack : String(error))
-      if (!response.headersSent) response.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+      if (!response.headersSent) response.writeHead(400, {
+        'content-type': 'application/json; charset=utf-8',
+        'access-control-allow-origin': 'http://127.0.0.1:3080',
+        'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
+        'access-control-allow-headers': 'content-type',
+      })
       response.end(JSON.stringify({
         error: error instanceof Error ? error.message : String(error),
         ...(config.testApiEnabled === true && error instanceof Error ? { stack: error.stack } : {}),

@@ -41,6 +41,8 @@ export function DingTalkDshAssistantCard() {
   const [newGroup, setNewGroup] = useState({ groupId: '', name: '', responsibility: '' })
   const [query, setQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
+  const [groupFeedback, setGroupFeedback] = useState({ kind: 'hint', message: '先搜索并选择一个群聊，再填写会话职责。' })
+  const [addingGroup, setAddingGroup] = useState(false)
   const [error, setError] = useState()
   const refresh = useCallback(async () => {
     try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setTaskGuidance({ taskExecutionGuidance: next.agentConfig.taskExecutionGuidance ?? '', taskEvidenceGuidance: next.agentConfig.taskEvidenceGuidance ?? '' }); setMaxConcurrentTasks(next.agentConfig.maxConcurrentTasks ?? 5); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
@@ -48,6 +50,25 @@ export function DingTalkDshAssistantCard() {
   }, [])
   useEffect(() => { refresh() }, [refresh])
   const mutate = async (operation) => { try { await operation(); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } }
+  const addGroup = async () => {
+    if (!newGroup.groupId.trim()) return setGroupFeedback({ kind: 'error', message: '请先从搜索结果中选择要常驻的群聊。' })
+    if (!newGroup.responsibility.trim()) return setGroupFeedback({ kind: 'error', message: '请填写该群的会话职责后再添加。' })
+    setAddingGroup(true)
+    setGroupFeedback({ kind: 'hint', message: '正在创建常驻会话…' })
+    try {
+      const result = await request('/config/groups', { method: 'POST', body: JSON.stringify(newGroup) })
+      if (!result.created) return setGroupFeedback({ kind: 'error', message: '该群已经是常驻群，无需重复添加。' })
+      await refresh()
+      setNewGroup({ groupId: '', name: '', responsibility: '' })
+      setSearchResults([])
+      setQuery('')
+      setGroupFeedback({ kind: 'success', message: '常驻群已添加，会话已开始运行。' })
+    } catch (cause) {
+      setGroupFeedback({ kind: 'error', message: `添加失败：${cause instanceof Error ? cause.message : String(cause)}` })
+    } finally {
+      setAddingGroup(false)
+    }
+  }
   const activeTasks = overview?.tasks?.filter((task) => task.state === 'running' || task.state === 'waiting').length ?? 0
   return React.createElement('div', { style: { display: 'grid', gap: 16 } },
     React.createElement('section', { style: panel },
@@ -103,10 +124,11 @@ export function DingTalkDshAssistantCard() {
         React.createElement('div', { style: { display: 'flex', gap: 8 } },
           React.createElement('input', { 'aria-label': '按群名称搜索', placeholder: '输入至少两个字搜索群聊', style: input, value: query, onChange: (event) => setQuery(event.target.value) }),
           React.createElement('button', { type: 'button', style: button, disabled: query.trim().length < 2, onClick: () => mutate(async () => { const result = await request(`/config/groups/search?q=${encodeURIComponent(query.trim())}`); setSearchResults(result.groups) }) }, '搜索')),
-        ...searchResults.map((group) => React.createElement('button', { key: group.groupId, type: 'button', style: { ...button, textAlign: 'left', background: newGroup.groupId === group.groupId ? 'color-mix(in srgb, var(--dsw-alias-brand-primary, #4d6bfe) 12%, transparent)' : 'transparent' }, onClick: () => setNewGroup((current) => ({ ...current, groupId: group.groupId, name: group.name })) }, `${group.name} · ${group.memberCount ?? '-'}人\n${group.groupId}`)),
+        ...searchResults.map((group) => React.createElement('button', { key: group.groupId, type: 'button', style: { ...button, textAlign: 'left', background: newGroup.groupId === group.groupId ? 'color-mix(in srgb, var(--dsw-alias-brand-primary, #4d6bfe) 12%, transparent)' : 'transparent' }, onClick: () => { setNewGroup((current) => ({ ...current, groupId: group.groupId, name: group.name })); setGroupFeedback({ kind: 'hint', message: `已选择“${group.name}”，填写会话职责后即可开始常驻。` }) } }, `${group.name} · ${group.memberCount ?? '-'}人\n${group.groupId}`)),
         newGroup.groupId ? React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, `已选择：${newGroup.name}（${newGroup.groupId}）`) : null,
         React.createElement('textarea', { 'aria-label': '新群会话职责', placeholder: '描述该群中个人助理的职责、参与条件和升级边界', rows: 4, style: { ...input, resize: 'vertical' }, value: newGroup.responsibility, onChange: (event) => setNewGroup((current) => ({ ...current, responsibility: event.target.value })) }),
-        React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !newGroup.groupId.trim() || !newGroup.responsibility.trim(), onClick: () => mutate(async () => { await request('/config/groups', { method: 'POST', body: JSON.stringify(newGroup) }); setNewGroup({ groupId: '', name: '', responsibility: '' }); setSearchResults([]); setQuery('') }) }, '添加并开始常驻'))))
+        React.createElement('div', { role: groupFeedback.kind === 'error' ? 'alert' : 'status', style: { fontSize: 12, color: groupFeedback.kind === 'error' ? colors.danger : groupFeedback.kind === 'success' ? 'var(--dsw-alias-status-success, #168544)' : colors.muted } }, groupFeedback.message),
+        React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: addingGroup ? colors.border : colors.accent, color: '#fff', borderColor: addingGroup ? colors.border : colors.accent, cursor: addingGroup ? 'wait' : 'pointer' }, disabled: addingGroup, onClick: addGroup }, addingGroup ? '正在添加…' : '添加并开始常驻'))))
 }
 
 export function apply(ctx) {

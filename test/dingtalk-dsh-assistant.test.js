@@ -85,5 +85,6 @@ test('叶子会话使用DSH原生descriptor且恢复旧会话时补齐', async (
 
 test('群消息任务名与来源证据分别持久化', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
-  assert.match(source, /title: decision\.objective, objective: sourceEnvelope/)
+  assert.match(source, /title: decision\.title, objective: decision\.objective/)
+  assert.match(source, /relatedContexts: \[sourceEnvelope\]/)
 })
