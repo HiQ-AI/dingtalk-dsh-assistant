@@ -9,7 +9,10 @@ test('CI 在 Node 24 下测试、打包并上传三个发行包', async () => {
   assert.match(workflow, /pnpm install --frozen-lockfile/u)
   assert.match(workflow, /git diff --exit-code -- packages\/dingtalk-dsh-assistant\/web-client\.js/u)
   assert.match(workflow, /if \(\$packages\.Count -ne 3\)/u)
-  assert.match(workflow, /actions\/upload-artifact@v4/u)
+  assert.match(workflow, /actions\/checkout@v7/u)
+  assert.match(workflow, /pnpm\/action-setup@v6/u)
+  assert.match(workflow, /actions\/setup-node@v7/u)
+  assert.match(workflow, /actions\/upload-artifact@v7/u)
 })
 
 test('Release 绑定受控环境并按依赖顺序发布，npm 回读后才创建 Release', async () => {

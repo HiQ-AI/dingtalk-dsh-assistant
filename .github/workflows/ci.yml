@@ -12,11 +12,11 @@ jobs:
   test-and-pack:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.13.1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24.19.0
           cache: pnpm
@@ -36,7 +36,7 @@ jobs:
           pnpm --dir packages/dingtalk-dsh-observer pack --pack-destination ../../docs/tmp/packages
           $packages = Get-ChildItem -LiteralPath docs/tmp/packages -Filter '*.tgz'
           if ($packages.Count -ne 3) { throw "expected_3_packages_actual_$($packages.Count)" }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: npm-packages-${{ github.sha }}
           path: docs/tmp/packages/*.tgz
