@@ -38,7 +38,7 @@ const taskTriggerSchema = z.object({
   occurredAt: z.union([z.string().min(1), z.number().finite()]).optional(),
 })
 const taskSchema = z.object({
-  taskId: z.string().min(1), groupId: z.string().min(1), sourceMessageId: z.string().min(1), objective: z.string().min(1),
+  taskId: z.string().min(1), groupId: z.string().min(1), sourceMessageId: z.string().min(1), title: z.string().min(1).optional(), objective: z.string().min(1),
   state: z.enum(['queued', 'running', 'waiting', 'completed']), childSessionId: z.string().min(1),
   waitingReason: z.string().optional(), waitingKind: z.enum(['information', 'human-intervention']).optional(),
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
@@ -296,14 +296,14 @@ export async function openResidentStore(storageDomain) {
       if (!current.outbox.some((item) => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
       return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: 'sent', ...(deliveredMessageId ? { deliveredMessageId } : {}) } : item) }))
     }),
-    createTask: async ({ groupId, sourceMessageId, objective, requesterName, requesterOpenDingTalkId, occurredAt }) => {
+    createTask: async ({ groupId, sourceMessageId, title, objective, requesterName, requesterOpenDingTalkId, occurredAt }) => {
       if (findGroupEntry(groupId) === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const duplicate = [...tasks.entries()].map(([, task]) => task).find((task) => task.groupId === groupId && task.sourceMessageId === sourceMessageId)
       if (duplicate !== undefined) return { created: false, task: duplicate }
       const now = new Date().toISOString()
       const taskId = `task-${randomUUID()}`
       const trigger = { sourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) }
-      const task = { taskId, groupId, sourceMessageId, objective, state: 'queued', childSessionId: taskSessionId(taskId), ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), triggerHistory: [trigger], createdAt: now, updatedAt: now }
+      const task = { taskId, groupId, sourceMessageId, ...(title ? { title } : {}), objective, state: 'queued', childSessionId: taskSessionId(taskId), ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), triggerHistory: [trigger], createdAt: now, updatedAt: now }
       await tasks.put(taskId, task)
       return { created: true, task }
     },

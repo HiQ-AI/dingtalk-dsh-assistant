@@ -75,7 +75,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
     handle.agent.session.append('subagent/descriptor', snapshotSubagentDescriptor({
       mode: 'continuable',
       provider: 'dingtalk-dsh-assistant',
-      label: leafDisplayName(task.objective),
+      label: leafDisplayName(task.title ?? task.objective),
       agentProvider: agentOptions.provider,
       agentModel: agentOptions.model,
     }))
@@ -97,7 +97,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
       name: 'dingtalk-group-task-index', order: 42,
       text: () => {
         const active = store.listTasks().filter((task) => task.groupId === groupId)
-          .map((task) => ({ taskId: task.taskId, objective: task.objective, state: task.state, archived: Boolean(task.archivedAt) }))
+          .map((task) => ({ taskId: task.taskId, objective: task.title ?? task.objective, state: task.state, archived: Boolean(task.archivedAt) }))
         return `## 本群全部任务关联索引\n\n${active.length === 0 ? '无。' : JSON.stringify(active)}`
       },
     })
@@ -218,8 +218,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
       },
       execute: async (_args, exec) => {
         assertResidentToolSession(exec, groupId)
-        return { tasks: store.listTasks().filter((task) => task.groupId === groupId).map(({ taskId, objective, state, childSessionId, waitingReason, completion }) => ({
-          taskId, objective, state, childSessionId,
+        return { tasks: store.listTasks().filter((task) => task.groupId === groupId).map(({ taskId, title, objective, state, childSessionId, waitingReason, completion }) => ({
+          taskId, objective: title ?? objective, state, childSessionId,
           ...(waitingReason === undefined ? {} : { waitingReason }),
           ...(completion === undefined ? {} : { completion }),
         })) }
@@ -268,7 +268,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
         ? { status: result.status, summary: result.summary, delivery: result.delivery }
         : { status: result.status, summary: result.summary, waitingKind: result.waitingKind, waitingReason: result.waitingReason, questions: result.questions }
       handle.agent.followup(createUserMessage({
-        content: [{ type: 'text', text: `[TASK_COORDINATION]\nTask ID: ${task.taskId}\n任务：${task.objective}\n提出人：${requester}\n核验结果：${JSON.stringify(resultProjection)}\n\n只输出一条简洁的群聊通知。完成时说明关键结论和已核验的必要证据；缺信息时只向提出人询问列出的具体问题。正文不要手写 @ 提出人，Runtime 会传结构化 @。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
+        content: [{ type: 'text', text: `[TASK_COORDINATION]\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n提出人：${requester}\n核验结果：${JSON.stringify(resultProjection)}\n\n只输出一条简洁的群聊通知。完成时说明关键结论和已核验的必要证据；缺信息时只向提出人询问列出的具体问题。正文不要手写 @ 提出人，Runtime 会传结构化 @。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
         source: { kind: 'user' },
       }))
       await handle.agent.whenIdle()
@@ -348,7 +348,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
     const requests = new Map()
     for (const blocker of [...(task.humanBlockerHistory ?? []), ...(task.humanBlocker ? [task.humanBlocker] : [])]) requests.set(blocker.requestId, blocker)
     return [...requests.values()].map((blocker) => ({
-      ...blocker, taskId: task.taskId, groupId: task.groupId, objective: task.objective,
+      ...blocker, taskId: task.taskId, groupId: task.groupId, objective: task.title ?? task.objective,
       waitingReason: blocker.waitingReason ?? task.waitingReason, risk: blocker.risk ?? task.result?.risk, evidence: blocker.evidence ?? task.result?.evidence ?? [], attemptedActions: blocker.attemptedActions ?? task.result?.attemptedActions ?? [],
       createdAt: blocker.createdAt ?? blocker.sentAt ?? task.updatedAt ?? task.createdAt, taskState: task.state,
     }))
@@ -780,7 +780,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         let task
         const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
         const sourceEnvelope = buildLeafSourceEnvelope({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable })
-        if (decision.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, objective: sourceEnvelope, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt }); await pumpTasks(); return store.getTask(result.task.taskId) })
+        if (decision.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, title: decision.objective, objective: sourceEnvelope, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt }); await pumpTasks(); return store.getTask(result.task.taskId) })
         else if (decision.kind === 'task-context') {
           task = store.getTask(decision.taskId)
           if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${decision.taskId}`)
