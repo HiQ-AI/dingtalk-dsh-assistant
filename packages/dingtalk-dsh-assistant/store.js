@@ -37,12 +37,24 @@ const taskTriggerSchema = z.object({
   sourceMessageId: z.string().min(1), requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
   occurredAt: z.union([z.string().min(1), z.number().finite()]).optional(),
 })
+const taskObjectiveRevisionSchema = z.object({
+  objective: z.string().min(1), revisedAt: z.string().min(1), sourceMessageId: z.string().min(1).optional(),
+})
+const taskRunSchema = z.object({
+  runSequence: z.number().int().positive(), startedAt: z.string().min(1), endedAt: z.string().min(1).optional(),
+  sourceMessageId: z.string().min(1), objective: z.string().min(1), childSessionId: z.string().min(1),
+  requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
+  acceptanceCriteria: z.array(z.string().min(1)), stageTasks: z.array(z.string().min(1)), result: persistedTaskResultSchema.optional(),
+})
 const taskSchema = z.object({
   taskId: z.string().min(1), groupId: z.string().min(1), sourceMessageId: z.string().min(1), title: z.string().min(1).optional(), objective: z.string().min(1),
   state: z.enum(['queued', 'running', 'waiting', 'completed']), childSessionId: z.string().min(1),
   waitingReason: z.string().optional(), waitingKind: z.enum(['information', 'human-intervention']).optional(),
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
   triggerHistory: z.array(taskTriggerSchema).optional(),
+  objectiveHistory: z.array(taskObjectiveRevisionSchema).optional(),
+  runSequence: z.number().int().positive().optional(), runStartedAt: z.string().min(1).optional(),
+  acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional(), runHistory: z.array(taskRunSchema).optional(),
   relatedContexts: z.array(z.string().min(1)).optional(),
   humanBlocker: humanBlockerSchema.optional(), humanBlockerHistory: z.array(humanBlockerSchema).optional(),
   completion: z.string().optional(), result: persistedTaskResultSchema.optional(), lastWaitingResult: persistedTaskResultSchema.optional(), lastCompletedResult: persistedTaskResultSchema.optional(),
@@ -100,14 +112,34 @@ export async function openResidentStore(storageDomain) {
     }
     let changed = false
     const migratedTasks = [...tasks.entries()].map(([, task]) => {
-      if (task.state !== 'waiting' && task.result?.status === 'waiting') {
+      const withRun = task.runSequence === undefined ? {
+        ...task,
+        runSequence: (task.completionSequence ?? 0) + 1,
+        runStartedAt: task.updatedAt ?? task.createdAt,
+        acceptanceCriteria: task.acceptanceCriteria?.length ? task.acceptanceCriteria : [task.objective],
+        stageTasks: task.stageTasks?.length ? task.stageTasks : ['完成并验证当前轮目标'],
+        runHistory: task.runHistory ?? [],
+      } : task
+      if (withRun !== task) changed = true
+      const realTriggers = (withRun.triggerHistory ?? []).filter((item) => !/^(?:web(?:-reopen)?:|recovery:)/u.test(item.sourceMessageId))
+      const latestRealTrigger = [...realTriggers].reverse().find((item) => typeof item.requesterOpenDingTalkId === 'string')
+      const withRealTrigger = latestRealTrigger && /^(?:web(?:-reopen)?:|recovery:)/u.test(withRun.sourceMessageId) ? {
+        ...withRun,
+        sourceMessageId: latestRealTrigger.sourceMessageId,
+        ...(latestRealTrigger.requesterName ? { requesterName: latestRealTrigger.requesterName } : {}),
+        requesterOpenDingTalkId: latestRealTrigger.requesterOpenDingTalkId,
+        triggerHistory: realTriggers,
+        updatedAt: new Date().toISOString(),
+      } : withRun
+      if (withRealTrigger !== withRun) changed = true
+      if (withRealTrigger.state !== 'waiting' && withRealTrigger.result?.status === 'waiting') {
         changed = true
-        return { ...task, lastWaitingResult: task.result, result: undefined, updatedAt: new Date().toISOString() }
+        return { ...withRealTrigger, lastWaitingResult: withRealTrigger.result, result: undefined, updatedAt: new Date().toISOString() }
       }
-      if (task.result?.status !== 'waiting' || task.result.waitingKind !== undefined) return task
+      if (withRealTrigger.result?.status !== 'waiting' || withRealTrigger.result.waitingKind !== undefined) return withRealTrigger
       changed = true
       return {
-        ...task,
+        ...withRealTrigger,
         state: 'running',
         waitingKind: undefined,
         waitingReason: undefined,
@@ -296,14 +328,14 @@ export async function openResidentStore(storageDomain) {
       if (!current.outbox.some((item) => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
       return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: 'sent', ...(deliveredMessageId ? { deliveredMessageId } : {}) } : item) }))
     }),
-    createTask: async ({ groupId, sourceMessageId, title, objective, requesterName, requesterOpenDingTalkId, occurredAt }) => {
+    createTask: async ({ groupId, sourceMessageId, title, objective, requesterName, requesterOpenDingTalkId, occurredAt, acceptanceCriteria = [], stageTasks = [], relatedContexts = [] }) => {
       if (findGroupEntry(groupId) === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const duplicate = [...tasks.entries()].map(([, task]) => task).find((task) => task.groupId === groupId && task.sourceMessageId === sourceMessageId)
       if (duplicate !== undefined) return { created: false, task: duplicate }
       const now = new Date().toISOString()
       const taskId = `task-${randomUUID()}`
       const trigger = { sourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) }
-      const task = { taskId, groupId, sourceMessageId, ...(title ? { title } : {}), objective, state: 'queued', childSessionId: taskSessionId(taskId), ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), triggerHistory: [trigger], createdAt: now, updatedAt: now }
+      const task = { taskId, groupId, sourceMessageId, ...(title ? { title } : {}), objective, state: 'queued', childSessionId: taskSessionId(taskId), ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), triggerHistory: [trigger], runSequence: 1, runStartedAt: now, acceptanceCriteria: acceptanceCriteria.length > 0 ? acceptanceCriteria : [objective], stageTasks: stageTasks.length > 0 ? stageTasks : ['完成并验证当前轮目标'], runHistory: [], ...(relatedContexts.length > 0 ? { relatedContexts } : {}), createdAt: now, updatedAt: now }
       await tasks.put(taskId, task)
       return { created: true, task }
     },

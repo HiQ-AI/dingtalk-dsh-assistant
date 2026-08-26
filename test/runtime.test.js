@@ -9,6 +9,7 @@ import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 
 const agentWorkspace = mkdtempSync(join(tmpdir(), 'dsh-agent-workspace-'))
 const replacementWorkspace = mkdtempSync(join(tmpdir(), 'dsh-replacement-workspace-'))
+const runtimeOptions = (options = {}) => options
 after(() => {
   rmSync(agentWorkspace, { recursive: true, force: true })
   rmSync(replacementWorkspace, { recursive: true, force: true })
@@ -27,7 +28,7 @@ test('已有群恢复原 Session，新群先创建 dsh Session 再持久绑定',
     agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
     agents: {
       async resume(options) { calls.push(['resume', options.resumeSessionId]); return handle(options.resumeSessionId) },
-      async create(options) { calls.push(['create', options.sessionId, options.meta.cwd]); setupReturns.push(await options.setup({ on: () => () => undefined, tools: { register: (tool) => registeredTools.push(tool) }, systemPrompt: { section: (value) => promptSections.push(value) } })); return handle(options.sessionId) },
+      async create(options) { calls.push(['create', options.sessionId, options.meta.cwd, options.meta.agentPreset]); setupReturns.push(await options.setup({ on: () => () => undefined, tools: { register: (tool) => registeredTools.push(tool) }, systemPrompt: { section: (value) => promptSections.push(value) } })); return handle(options.sessionId) },
     },
     subagents: {
       drainContinuableDescendants: async () => undefined,
@@ -56,12 +57,13 @@ test('已有群恢复原 Session，新群先创建 dsh Session 再持久绑定',
     close: async () => undefined,
   }
 
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: 0 })
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0 }))
   const created = await runtime.subscribe({ groupId: 'new-group', name: '新群名称' })
   assert.deepEqual(calls[0], ['resume', 'session-existing'])
   assert.deepEqual(calls[1].slice(0, 2), ['create', created.group.residentSessionId])
   assert.deepEqual(permissionSets, [['session-existing', 'danger-full-access'], [created.group.residentSessionId, 'danger-full-access']])
   assert.equal(calls[1][2], agentWorkspace)
+  assert.equal(calls[1][3], 'standard')
   assert.deepEqual(setupReturns, [undefined], 'Agent setup不能意外返回非事务对象')
   assert.equal(created.group.residentSessionId, residentSessionId('new-group'))
   assert.equal(promptSections[0].name, 'dingtalk-group-responsibility')
@@ -100,7 +102,7 @@ test('Agent工作区统一写入各群Session cwd，变更时保留历史并重�
     async updateGroup(value) { const group = { ...groups.get(value.groupId), ...value }; groups.set(value.groupId, group); return group },
     close: async () => undefined,
   }
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace)
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions())
   await runtime.subscribe({ groupId: 'workspace-group' })
   creates.length = 0
   await runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
@@ -121,7 +123,7 @@ test('Agent默认模型与推理深度通过dsh原生默认模型服务保存', 
     agents: {}, subagents: { drainContinuableDescendants: async () => undefined },
   }
   const store = { listGroups: () => [], listTasks: () => [], getProxyUrl: () => '', setProxyUrl: async () => undefined, close: async () => undefined }
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace)
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions())
   const updated = await runtime.updateAgentConfig({ model: 'gpt-5.6-sol', reasoningEffort: 'low' })
   assert.deepEqual(saved, [{ provider: 'openai-codex', model: 'gpt-5.6-sol', reasoningEffort: 'low' }])
   assert.equal(updated.model, 'gpt-5.6-sol')
@@ -145,7 +147,7 @@ test('单个 resident Session 恢复超时被隔离且不阻塞其他群启动',
     listGroups: () => groups, listTasks: () => [], getGroup: () => undefined,
     close: async () => undefined,
   }
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, { resumeTimeoutMs: 10 })
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ resumeTimeoutMs: 10 }))
   const issues = runtime.listRecoveryIssues()
   assert.equal(issues[0].groupId, 'bad-group')
   assert.equal(issues[0].residentSessionId, 'session-bad')
@@ -164,6 +166,10 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
       followups.push([sessionId, message])
       const text = message.content[0]?.text ?? ''
       if (text.startsWith('[HUMAN_INTERVENTION_REPLY]')) approvalResumeOrder.push('批复入队')
+      if (sessionId === 'session-parent' && text.startsWith('[TASK_COMPLETION_REVIEW]')) {
+        const accepted = !text.includes('旧结论')
+        session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ accepted, reason: accepted ? '当前目标均有证据覆盖' : '新增点击跳转目标没有实现和验证证据' }) }] } } })
+      }
       if (sessionId === 'session-parent' && text.startsWith('[TASK_COORDINATION]')) {
         session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `coordinated:${text.match(/Task ID: (.*)/)?.[1]}` }] } } })
       }
@@ -200,7 +206,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     getGroup: (id) => groups.get(id), listGroups: () => [...groups.values()], listTasks: () => tasks, getTask: (id) => tasks.find((task) => task.taskId === id),
     getMaxConcurrentTasks: () => store.maxConcurrentTasks,
     async setMaxConcurrentTasks(value) { store.maxConcurrentTasks = value; return { maxConcurrentTasks: value } },
-    async createTask(value) { const duplicate = tasks.find((task) => task.groupId === value.groupId && task.sourceMessageId === value.sourceMessageId); if (duplicate) return { created: false, task: duplicate }; const taskId = `task-${tasks.length + 1}`; const trigger = { sourceMessageId: value.sourceMessageId, ...(value.requesterName ? { requesterName: value.requesterName } : {}), ...(value.requesterOpenDingTalkId ? { requesterOpenDingTalkId: value.requesterOpenDingTalkId } : {}), ...(value.occurredAt !== undefined ? { occurredAt: value.occurredAt } : {}) }; const task = { ...value, taskId, childSessionId: taskSessionId(taskId), state: 'queued', triggerHistory: [trigger] }; tasks.push(task); return { created: true, task } },
+    async createTask(value) { const duplicate = tasks.find((task) => task.groupId === value.groupId && task.sourceMessageId === value.sourceMessageId); if (duplicate) return { created: false, task: duplicate }; const taskId = `task-${tasks.length + 1}`; const trigger = { sourceMessageId: value.sourceMessageId, ...(value.requesterName ? { requesterName: value.requesterName } : {}), ...(value.requesterOpenDingTalkId ? { requesterOpenDingTalkId: value.requesterOpenDingTalkId } : {}), ...(value.occurredAt !== undefined ? { occurredAt: value.occurredAt } : {}) }; const task = { ...value, taskId, childSessionId: taskSessionId(taskId), state: 'queued', triggerHistory: [trigger], runSequence: 1, runStartedAt: '2026-08-25T00:00:00Z', acceptanceCriteria: value.acceptanceCriteria ?? [value.objective], stageTasks: value.stageTasks ?? ['完成并验证当前轮目标'], runHistory: [], createdAt: '2026-08-25T00:00:00Z' }; tasks.push(task); return { created: true, task } },
     async updateTask(id, transform) { const index = tasks.findIndex((task) => task.taskId === id); tasks[index] = transform(tasks[index]); return tasks[index] },
     async appendOutbox({ groupId, ...outbound }) { const group = groups.get(groupId); if (!group.outbox.some((item) => item.sourceMessageId === outbound.sourceMessageId)) group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...outbound, status: 'pending' }); return group },
     async recordActivity(value) { const existing = activities.find((item) => item.eventKey === value.eventKey); if (existing) return { created: false, activity: existing }; activities.push(value); return { created: true, activity: value } },
@@ -208,7 +214,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     listActivities: () => activities,
     close: async () => undefined,
   }
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: 2, supervisorIntervalMs: 0 })
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 2, supervisorIntervalMs: 0 }))
   const one = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm1', objective: 'one', requesterName: '初始提出人', requesterOpenDingTalkId: 'od-initial', occurredAt: '2026-08-25T01:00:00Z' })
   const two = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm2', objective: 'two' })
   const three = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm3', objective: 'three' })
@@ -217,6 +223,8 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.deepEqual(creates, ['session-task-1', 'session-task-2'])
   assert.deepEqual(createMetas[0], { cwd: agentWorkspace, parentSession: 'session-parent', origin: 'subagent', delegationDepth: 1 })
   assert.equal(goals.get('session-task-1').phase, 'active')
+  assert.equal(one.task.runSequence, 1)
+  assert.deepEqual(one.task.acceptanceCriteria, ['one'])
   assert.equal(runtime.getTask(one.task.taskId).state, 'running', 'Goal active 不等于 Task 完成')
   sessionObserver({ id: 'session-task-1' }, { seq: 7, type: 'turn/end', data: { status: 'success' } })
   sessionObserver({ id: 'session-task-1' }, { seq: 7, type: 'turn/end', data: { status: 'success' } })
@@ -234,6 +242,11 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   const releaseWaiting = { status: 'waiting', waitingKind: 'human-intervention', summary: '等待发布批准', evidence: ['发布范围已核验'], artifacts: [], waitingReason: '生产发布需要批准', blockerCategory: 'redline', risk: '错误发布会影响生产环境', attemptedActions: ['已完成只读核验'], requestedAction: '发布 dataset v1 和 dataset-web v2；不执行回滚' }
   const firstBlocker = await runtime.submitTaskResult({ taskId: one.task.taskId, result: releaseWaiting })
   const firstRequestId = firstBlocker.humanBlocker.requestId
+  const supplementedBlocker = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '补充阻塞背景，不解除审批' })
+  assert.equal(supplementedBlocker.state, 'waiting')
+  assert.equal(supplementedBlocker.runSequence, firstBlocker.runSequence, '阻塞中补充不得增加执行轮次')
+  assert.equal(supplementedBlocker.childSessionId, firstBlocker.childSessionId, '阻塞中补充必须保持同一叶子 Session')
+  assert.equal(supplementedBlocker.humanBlocker.requestId, firstRequestId, '阻塞中补充不得清空 blocker')
   const duplicateBlocker = await runtime.submitTaskResult({ taskId: one.task.taskId, result: { ...releaseWaiting, requestedAction: ' 发布 dataset v1 和 dataset-web v2；不执行回滚 ' } })
   assert.equal(duplicateBlocker.humanBlocker.requestId, firstRequestId, '同一待批范围重复上报必须复用阻塞请求')
   assert.equal(blockerRequests.length, 1, '同一待批范围只能触发一次外发')
@@ -263,9 +276,24 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(runtime.getTask(one.task.taskId).humanBlockerHistory.length, 3)
   await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: [], artifacts: [] } }))
   assert.equal(runtime.getTask(one.task.taskId).state, 'running')
-  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified'], artifacts: [] } })
+  await store.updateTask(one.task.taskId, (current) => ({
+    ...current,
+    sourceMessageId: 'recovery:completion-review-gate',
+    requesterName: '内部恢复操作人',
+    requesterOpenDingTalkId: undefined,
+    triggerHistory: [...current.triggerHistory, { sourceMessageId: 'recovery:completion-review-gate', requesterName: '内部恢复操作人' }],
+  }))
+  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified', 'uat2 页面回归通过'], artifacts: ['docs/acceptance/report.md'], delivery: { environment: 'UAT2', pipeline: 186 } } })
   assert.equal(groups.get('group-a').outbox[1].sourceMessageId, `task-result:${one.task.taskId}:completed`)
   assert.equal(groups.get('group-a').outbox[1].text, `coordinated:${one.task.taskId}`)
+  assert.equal(groups.get('group-a').outbox[1].replyToMessageId, 'm1', '内部恢复来源不得覆盖最后一条真实群消息引用')
+  assert.equal(groups.get('group-a').outbox[1].replyToSenderOpenDingTalkId, 'od-initial')
+  assert.deepEqual(groups.get('group-a').outbox[1].atOpenDingTalkIds, ['od-initial'])
+  const coordinationPrompt = followups.find(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith(`[TASK_COORDINATION]\nTask ID: ${one.task.taskId}\n`))?.[1].content[0].text
+  assert.match(coordinationPrompt, /"evidence":\["verified","uat2 页面回归通过"\]/u, '主会话必须收到完整证据而非只有摘要')
+  assert.match(coordinationPrompt, /"artifacts":\["docs\/acceptance\/report\.md"\]/u, '主会话必须收到交付物')
+  assert.match(coordinationPrompt, /"delivery":\{"environment":"UAT2","pipeline":186\}/u, '主会话必须收到部署与交付状态')
+  assert.match(coordinationPrompt, /不得省略不同关注点、限定条件、失败项或“未验证\/未部署”等边界/u)
   const replayed = []
   runtime.onOutboxAppended((event) => { replayed.push(event) })
   await new Promise((resolve) => setImmediate(resolve))
@@ -308,6 +336,12 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(reopened.relatedContexts.at(-1), '补做已归档任务')
   assert.equal(reopened.sourceMessageId, 'm-reopen-1')
   assert.equal(reopened.requesterOpenDingTalkId, 'od-reopen-1')
+  assert.equal(reopened.childSessionId, one.task.childSessionId, 'reopen 必须复用同一叶子 Session')
+  assert.equal(reopened.runSequence, 2)
+  assert.equal(reopened.runHistory.length, 1)
+  assert.equal(reopened.runHistory[0].childSessionId, one.task.childSessionId)
+  assert.deepEqual(reopened.acceptanceCriteria, ['one'])
+  assert.deepEqual(reopened.stageTasks, ['完成并验证当前轮目标'])
   assert.deepEqual(reopened.triggerHistory, [
     { sourceMessageId: 'm1', requesterName: '初始提出人', requesterOpenDingTalkId: 'od-initial', occurredAt: '2026-08-25T01:00:00Z' },
     { sourceMessageId: 'm-reopen-1', requesterName: '重开提出人', requesterOpenDingTalkId: 'od-reopen-1', occurredAt: '2026-08-26T01:00:00Z' },
@@ -320,8 +354,25 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(groups.get('group-a').outbox.at(-1).replyToMessageId, 'm-reopen-1')
   assert.equal(groups.get('group-a').outbox.at(-1).replyToSenderOpenDingTalkId, 'od-reopen-1')
   assert.deepEqual(groups.get('group-a').outbox.at(-1).atOpenDingTalkIds, ['od-reopen-1'])
+
   const reopenedCompleted = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '继续核验已完成任务', sourceMessageId: 'm-reopen-2', requesterName: '再次提出人', requesterOpenDingTalkId: 'od-reopen-2' })
   assert.equal(reopenedCompleted.state, 'running', '已完成任务收到task-context时必须恢复原Task')
+  const runningUpgraded = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '调查清楚后请直接修复', objective: '调查并修复问题', sourceMessageId: 'm-running-upgrade', requesterName: '升级提出人', requesterOpenDingTalkId: 'od-upgrade' })
+  assert.equal(runningUpgraded.objective, '调查并修复问题')
+  assert.equal(runningUpgraded.objectiveHistory.at(-1).objective, 'one')
+  assert.equal(goals.get(runningUpgraded.childSessionId).objective, runningUpgraded.objective, '运行中授权升级必须替换当前Goal目标')
+
+  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'investigated', evidence: ['checked'], artifacts: [] } })
+  const internalReopen = await runtime.reopenTask({ taskId: one.task.taskId, context: '内部恢复完成验收', sourceMessageId: 'recovery:completion-review-gate', requesterName: '内部恢复操作人' })
+  assert.equal(internalReopen.sourceMessageId, 'm-reopen-2', '内部恢复不得覆盖当前真实群消息')
+  assert.equal(internalReopen.requesterOpenDingTalkId, 'od-reopen-2')
+  assert.equal(internalReopen.triggerHistory.some((item) => item.sourceMessageId.startsWith('recovery:')), false, '内部恢复不得写入消息触发历史')
+  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'internal recovery done', evidence: ['checked again'], artifacts: [] } })
+  const upgraded = await runtime.reopenTask({ taskId: one.task.taskId, context: '请修复并部署 UAT2', objective: '修复问题、部署 UAT2 并完成业务验证', sourceMessageId: 'm-upgrade', requesterName: '升级提出人', requesterOpenDingTalkId: 'od-upgrade' })
+  assert.equal(upgraded.objective, '修复问题、部署 UAT2 并完成业务验证')
+  assert.equal(upgraded.objectiveHistory.at(-1).objective, '调查并修复问题')
+  assert.equal(upgraded.objectiveHistory.at(-1).sourceMessageId, 'm-upgrade')
+  assert.equal(goals.get(upgraded.childSessionId).objective, upgraded.objective)
   assert.equal(reopenedCompleted.relatedContexts.at(-1), '继续核验已完成任务')
   assert.equal(reopenedCompleted.completionSequence, 2)
   assert.equal(reopenedCompleted.sourceMessageId, 'm-reopen-2')
@@ -329,10 +380,15 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(reopenedCompleted.triggerHistory[0].sourceMessageId, 'm1')
   assert.equal(reopenedCompleted.triggerHistory[1].sourceMessageId, 'm-reopen-1')
   assert.equal(reopenedCompleted.triggerHistory[2].sourceMessageId, 'm-reopen-2')
+  const beforeRejectedCompletion = groups.get('group-a').outbox.length
+  await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'development', summary: '重复上一轮旧结论', evidence: ['只有旧结论证据'], artifacts: [] } }), /task_result_objective_not_covered/)
+  assert.equal(runtime.getTask(one.task.taskId).state, 'running')
+  assert.equal(groups.get('group-a').outbox.length, beforeRejectedCompletion, '验收拒绝不得生成完成通知')
+  assert.match(followups.at(-1)[1].content[0].text, /^\[TASK_RESULT_REJECTED\]/u)
   await runtime.close()
   const persistedChildSessionId = runtime.getTask(three.task.taskId).childSessionId
   goals.set(persistedChildSessionId, { ...goals.get(persistedChildSessionId), revision: 4, phase: 'paused', activation: 'disarmed' })
-  const recoveredRuntime = await openResidentRuntime(ctx, store, agentWorkspace, { supervisorIntervalMs: 0 })
+  const recoveredRuntime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ supervisorIntervalMs: 0 }))
   assert.equal(goals.get(persistedChildSessionId).phase, 'active', '进程重启恢复时仍应续接Task当前叶子')
   assert.equal(recoveredRuntime.getTask(three.task.taskId).state, 'running')
   assert.equal(goals.get('session-task-2').phase, 'blocked', '业务 waiting Task 不应被启动恢复误唤醒')

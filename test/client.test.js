@@ -36,3 +36,13 @@ test('设置页异步展示版本状态且版本检查不阻塞核心配置加�
   assert.match(source, /发现新版本/u)
   assert.match(source, /查看 CHANGELOG/u)
 })
+
+test('添加常驻群在操作位置反馈前置条件、进度和请求结果', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/client.js', import.meta.url), 'utf8')
+  assert.match(source, /请先从搜索结果中选择要常驻的群聊/u)
+  assert.match(source, /请填写该群的会话职责后再添加/u)
+  assert.match(source, /正在创建常驻会话/u)
+  assert.match(source, /添加失败：/u)
+  assert.match(source, /常驻群已添加，会话已开始运行/u)
+  assert.doesNotMatch(source, /disabled: !newGroup\.groupId\.trim\(\) \|\| !newGroup\.responsibility\.trim\(\)/u)
+})

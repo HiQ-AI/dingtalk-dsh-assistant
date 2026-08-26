@@ -98,6 +98,25 @@ test('旧版工具装配失败结果恢复为运行态且不升级真人阻塞',
   assert.equal(migrated.result, undefined)
 })
 
+test('启动迁移清理覆盖真实来源的内部恢复伪触发', async () => {
+  const task = {
+    taskId: 'task-recovery-source', groupId: 'group-a', sourceMessageId: 'recovery:completion-review-gate', objective: '完成任务', state: 'completed', childSessionId: 'session-task-recovery-source', requesterName: '内部操作人',
+    triggerHistory: [
+      { sourceMessageId: 'm-real', requesterName: '真实提出人', requesterOpenDingTalkId: 'od-real' },
+      { sourceMessageId: 'recovery:completion-review-gate', requesterName: '内部操作人' },
+    ],
+    result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified'], artifacts: [] },
+    createdAt: '2026-08-24T10:00:00.000Z', updatedAt: '2026-08-24T11:00:00.000Z',
+  }
+  const { facility } = memoryFacility(new Map([['scheduler:runtime', { tasks: [task] }]]))
+  const store = await openResidentStore(facility)
+  const migrated = store.getTask(task.taskId)
+  assert.equal(migrated.sourceMessageId, 'm-real')
+  assert.equal(migrated.requesterName, '真实提出人')
+  assert.equal(migrated.requesterOpenDingTalkId, 'od-real')
+  assert.deepEqual(migrated.triggerHistory, [{ sourceMessageId: 'm-real', requesterName: '真实提出人', requesterOpenDingTalkId: 'od-real' }])
+})
+
 test('Task 按来源去重并持久化四桶状态', async () => {
   const { facility } = memoryFacility()
   const store = await openResidentStore(facility)

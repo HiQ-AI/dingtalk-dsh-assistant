@@ -48,6 +48,14 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/archive'.length))
     return send(response, 200, await store.archiveTask({ taskId }))
   }
+  if (request.method === 'PUT' && /^\/tasks\/[^/]+\/title$/u.test(url.pathname)) {
+    const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/title'.length))
+    return send(response, 200, await store.renameTask({ taskId, ...(await readJson(request)) }))
+  }
+  if (request.method === 'POST' && /^\/tasks\/[^/]+\/reopen$/u.test(url.pathname)) {
+    const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/reopen'.length))
+    return send(response, 200, await store.reopenTask({ taskId, ...(await readJson(request)) }))
+  }
   if (request.method === 'POST' && /^\/authorizations\/[^/]+\/decision$/u.test(url.pathname)) {
     const requestId = decodeURIComponent(url.pathname.slice('/authorizations/'.length, -'/decision'.length))
     return send(response, 200, await store.decideAuthorization({ requestId, ...(await readJson(request)), source: 'web' }))

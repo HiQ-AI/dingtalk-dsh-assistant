@@ -1,9 +1,10 @@
 import { z } from 'zod'
 
 const answer = z.strictObject({ kind: z.literal('answer'), reply: z.string().min(1) })
-const newTask = z.strictObject({ kind: z.literal('new-task'), objective: z.string().min(1), reply: z.string().min(1) })
-const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), context: z.string().min(1), reply: z.string() })
-const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), context: z.string().min(1), reply: z.string() })
+const runPlan = { acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional() }
+const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), ...runPlan, reply: z.string().min(1) })
+const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan, reply: z.string() })
+const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan, reply: z.string() })
 const ignore = z.strictObject({ kind: z.literal('ignore'), reason: z.string().min(1) })
 export const groupDecisionSchema = z.discriminatedUnion('kind', [answer, newTask, taskContext, taskReopen, ignore])
 

@@ -5,10 +5,12 @@ import { buildDecisionPrompt, buildLeafSourceEnvelope, isExplicitAgentDirection,
 
 test('群决策严格接受五类结构化结果', () => {
   assert.equal(parseGroupDecision('{"kind":"answer","reply":"ok"}').kind, 'answer')
-  assert.equal(parseGroupDecision('{"kind":"new-task","objective":"fix","reply":"accepted"}').kind, 'new-task')
+  assert.equal(parseGroupDecision('{"kind":"new-task","title":"修复问题","objective":"fix","reply":"accepted"}').kind, 'new-task')
   assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"more","reply":"added"}').kind, 'task-context')
+  assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"fix it","objective":"修复并部署","reply":"added"}').objective, '修复并部署')
   assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"more","reply":""}').reply, '')
   assert.equal(parseGroupDecision('{"kind":"task-reopen","taskId":"task-1","context":"rollback","reply":"reopened"}').kind, 'task-reopen')
+  assert.equal(parseGroupDecision('{"kind":"task-reopen","taskId":"task-1","context":"deploy","objective":"修复并部署 UAT2","reply":"reopened"}').objective, '修复并部署 UAT2')
   assert.equal(parseGroupDecision('{"kind":"task-reopen","taskId":"task-1","context":"rollback","reply":""}').reply, '')
   assert.equal(parseGroupDecision('{"kind":"ignore","reason":"not addressed"}').kind, 'ignore')
 })
@@ -17,6 +19,7 @@ test('群决策拒绝无效 JSON、多余字段和缺失目标', () => {
   assert.throws(() => parseGroupDecision('answer'), /group_decision_invalid_json/)
   assert.throws(() => parseGroupDecision('{"kind":"answer","reply":"ok","objective":"hidden"}'), /group_decision_invalid_schema/)
   assert.throws(() => parseGroupDecision('{"kind":"new-task","reply":"accepted"}'), /group_decision_invalid_schema/)
+  assert.throws(() => parseGroupDecision('{"kind":"new-task","objective":"fix","reply":"accepted"}'), /group_decision_invalid_schema/)
 })
 
 test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () => {
@@ -56,19 +59,36 @@ test('任务发起必须明确指名配置名称、别名、DWS登录人或使�
   assert.equal(isExplicitAgentDirection('这个编辑器问题需要有人排查', names), false)
 })
 
+test('叶子任务不得绕过Runtime直接发送群通知', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
+  assert.match(source, /群聊通知只有 Runtime 这一个出口/u)
+  assert.match(source, /不得调用 DWS 或其他消息工具向来源群发送、回复、编辑或撤回/u)
+  assert.match(source, /不得把自行发送群通知作为完成证据/u)
+})
+
+test('同事AI回复必须进入模型并由群决策协议判断', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
+  assert.match(source, /同事或其 AI 助理发送的回复、任务回执和状态通知都是正常群消息/u)
+  assert.match(source, /不得按固定文案或发送者在模型外预先过滤/u)
+  assert.doesNotMatch(source, /isAutomatedTaskReceipt|automated_task_receipt/u)
+})
+
 test('诊断请求不得被主会话或叶子会话扩大为修复授权', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /不得把“看看、查一下、排查、分析、核对、监控”等诊断或观察请求扩写成“修复、修改、实施、合并、发布、执行”等变更任务/)
   assert.match(source, /Task objective 是本任务的动作授权上限/)
   assert.match(source, /不得修改代码或数据、提交 PR、合并、构建、部署、执行修复方案/)
+  assert.match(source, /后续消息可能明确扩大或收窄同一任务的动作范围/)
 })
 
 test('群消息到叶子只使用Runtime原始证据信封', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /const sourceEnvelope = buildLeafSourceEnvelope/u)
-  assert.match(source, /objective: sourceEnvelope/u)
-  assert.match(source, /appendTaskContextInternal\(task, sourceEnvelope, trigger\)/u)
-  assert.match(source, /reopenCompletedTaskInternal\(task, sourceEnvelope, trigger\)/u)
+  assert.match(source, /title: decision\.title, objective: decision\.objective/u)
+  assert.match(source, /relatedContexts: \[sourceEnvelope\]/u)
+  assert.doesNotMatch(source, /objective: sourceEnvelope/u)
+  assert.match(source, /appendTaskContextInternal\(task, sourceEnvelope, trigger, decision\.objective, decision\.acceptanceCriteria, decision\.stageTasks\)/u)
+  assert.match(source, /reopenCompletedTaskInternal\(task, sourceEnvelope, trigger, decision\.objective, decision\.acceptanceCriteria, decision\.stageTasks\)/u)
   assert.doesNotMatch(source, /appendTaskContextInternal\(task, decision\.context/u)
 })
 
