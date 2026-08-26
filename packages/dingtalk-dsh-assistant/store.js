@@ -32,11 +32,16 @@ const groupSchema = z.object({
   groupId: z.string().min(1), name: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), nextSequence: z.number().int().positive(),
   messages: z.array(inboundSchema), outbox: z.array(outboundSchema),
 })
+const taskTriggerSchema = z.object({
+  sourceMessageId: z.string().min(1), requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
+  occurredAt: z.union([z.string().min(1), z.number().finite()]).optional(),
+})
 const taskSchema = z.object({
   taskId: z.string().min(1), groupId: z.string().min(1), sourceMessageId: z.string().min(1), objective: z.string().min(1),
   state: z.enum(['queued', 'running', 'waiting', 'completed']), childSessionId: z.string().min(1),
   waitingReason: z.string().optional(), waitingKind: z.enum(['information', 'human-intervention']).optional(),
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
+  triggerHistory: z.array(taskTriggerSchema).optional(),
   relatedContexts: z.array(z.string().min(1)).optional(),
   humanBlocker: humanBlockerSchema.optional(), humanBlockerHistory: z.array(humanBlockerSchema).optional(),
   completion: z.string().optional(), result: persistedTaskResultSchema.optional(), lastWaitingResult: persistedTaskResultSchema.optional(), lastCompletedResult: persistedTaskResultSchema.optional(),
@@ -287,13 +292,14 @@ export async function openResidentStore(storageDomain) {
       if (!current.outbox.some((item) => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
       return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: 'sent', ...(deliveredMessageId ? { deliveredMessageId } : {}) } : item) }))
     }),
-    createTask: async ({ groupId, sourceMessageId, objective, requesterName, requesterOpenDingTalkId }) => {
+    createTask: async ({ groupId, sourceMessageId, objective, requesterName, requesterOpenDingTalkId, occurredAt }) => {
       if (findGroupEntry(groupId) === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const duplicate = [...tasks.entries()].map(([, task]) => task).find((task) => task.groupId === groupId && task.sourceMessageId === sourceMessageId)
       if (duplicate !== undefined) return { created: false, task: duplicate }
       const now = new Date().toISOString()
       const taskId = `task-${randomUUID()}`
-      const task = { taskId, groupId, sourceMessageId, objective, state: 'queued', childSessionId: taskSessionId(taskId), ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), createdAt: now, updatedAt: now }
+      const trigger = { sourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) }
+      const task = { taskId, groupId, sourceMessageId, objective, state: 'queued', childSessionId: taskSessionId(taskId), ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), triggerHistory: [trigger], createdAt: now, updatedAt: now }
       await tasks.put(taskId, task)
       return { created: true, task }
     },
