@@ -9,6 +9,7 @@ test('群决策严格接受五类结构化结果', () => {
   assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"more","reply":"added"}').kind, 'task-context')
   assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"more","reply":""}').reply, '')
   assert.equal(parseGroupDecision('{"kind":"task-reopen","taskId":"task-1","context":"rollback","reply":"reopened"}').kind, 'task-reopen')
+  assert.equal(parseGroupDecision('{"kind":"task-reopen","taskId":"task-1","context":"rollback","reply":""}').reply, '')
   assert.equal(parseGroupDecision('{"kind":"ignore","reason":"not addressed"}').kind, 'ignore')
 })
 

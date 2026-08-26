@@ -109,7 +109,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
 - 回答：\`{"kind":"answer","reply":"..."}\`
 - 新任务：\`{"kind":"new-task","objective":"...","reply":"..."}\`
 - 补充任务：\`{"kind":"task-context","taskId":"...","context":"...","reply":"..."}\`；只需静默补充上下文、不需要回复群聊时，\`reply\` 使用空字符串
-- 重开任务：\`{"kind":"task-reopen","taskId":"...","context":"...","reply":"..."}\`
+- 重开任务：\`{"kind":"task-reopen","taskId":"...","context":"...","reply":"..."}\`；只需静默重开任务、不需要回复群聊时，\`reply\` 使用空字符串
 - 忽略：\`{"kind":"ignore","reason":"..."}\`
 
 只有当前消息明确指名或提及已配置的 Agent 名称/别名${currentDwsUserName ? `，或明确指名当前 DWS 登录人“${currentDwsUserName}”` : ''}，或以 \`cc:\` 开头，并且事项属于本群职责且形成可验证的执行或持续跟踪目标时，才允许选择新任务。职责相关但未明确指名时可以回答，不得创建任务。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。
