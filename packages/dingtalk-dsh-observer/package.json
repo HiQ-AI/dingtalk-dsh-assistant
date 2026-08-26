@@ -1,9 +1,16 @@
 {
   "name": "@zzusp/dingtalk-dsh-observer",
-  "version": "0.3.25",
-  "private": true,
+  "version": "0.4.0",
+  "description": "DingTalk task board client for DeepSeek Harness",
+  "license": "UNLICENSED",
   "type": "module",
   "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HiQ-AI/dingtalk-dsh-assistant.git",
+    "directory": "packages/dingtalk-dsh-observer"
+  },
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
   "exports": {
     ".": "./index.js",
     "./client": "./web-client.js",
