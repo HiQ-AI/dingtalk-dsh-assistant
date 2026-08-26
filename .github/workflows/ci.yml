@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: 构建并确认 Web Client 已同步提交
+        shell: pwsh
+        run: |
+          node scripts/build-web-client.mjs
+          git diff --exit-code -- packages/dingtalk-dsh-assistant/web-client.js
+      - run: pnpm test
+      - name: 打包三个发行包
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path docs/tmp/packages | Out-Null
+          pnpm pack --pack-destination docs/tmp/packages
+          pnpm --dir packages/dingtalk-dsh-assistant pack --pack-destination ../../docs/tmp/packages
+          pnpm --dir packages/dingtalk-dsh-observer pack --pack-destination ../../docs/tmp/packages
+          $packages = Get-ChildItem -LiteralPath docs/tmp/packages -Filter '*.tgz'
+          if ($packages.Count -ne 3) { throw "expected_3_packages_actual_$($packages.Count)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages-${{ github.sha }}
+          path: docs/tmp/packages/*.tgz
+          if-no-files-found: error
+          retention-days: 7
