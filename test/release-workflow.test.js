@@ -18,6 +18,10 @@ test('CI 在 Node 24 下测试、打包并上传三个发行包', async () => {
 test('Release 绑定受控环境并按依赖顺序发布，npm 回读后才创建 Release', async () => {
   const workflow = await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
   assert.match(workflow, /workflow_dispatch:/u)
+  assert.match(workflow, /release_tag:/u)
+  assert.match(workflow, /RELEASE_TAG:.*inputs\.release_tag.*github\.ref_name/u)
+  assert.match(workflow, /ref: \$\{\{ env\.RELEASE_TAG \}\}/u)
+  assert.doesNotMatch(workflow, /GITHUB_REF_NAME/u)
   assert.match(workflow, /runs-on: windows-latest/u)
   assert.match(workflow, /environment: NPM_PUBLISH/u)
   assert.match(workflow, /secrets\.NPM_PUBLISH_TOKEN \|\| secrets\.NPM_TOKEN/u)
