@@ -91,7 +91,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       const jobs = []
       for (const group of runtime.listGroups()) {
         const pending = (runtime.getGroup?.(group.groupId) ?? group).outbox ?? []
-        for (const outbound of pending.filter((item) => item.status === 'pending' && /^task-result:task-.*:completed(?::\d+)?$/.test(item.sourceMessageId))) {
+        for (const outbound of pending.filter((item) => item.status === 'pending' && (item.readbackRequired === true || /^task-result:task-.*:completed(?::\d+)?$/.test(item.sourceMessageId)))) {
           jobs.push(processOutbound({ groupId: group.groupId, outbound }))
         }
       }

@@ -9,6 +9,7 @@ const quotedMessageSchema = z.object({ messageId: z.string().min(1).optional(), 
 const inboundSchema = z.object({ messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]), senderName: z.string().min(1).optional(), senderOpenDingTalkId: z.string().min(1).optional(), quotedMessage: quotedMessageSchema.optional(), agentDeliveryStatus: z.enum(['pending', 'delivered', 'failed', 'skipped']).optional(), agentDeliveryAt: z.string().min(1).optional(), agentDeliveryError: z.string().min(1).optional() })
 const outboundSchema = z.object({
   outboundId: z.string().min(1), sourceMessageId: z.string().min(1), text: z.string(), status: z.enum(['pending', 'sent']),
+  readbackRequired: z.boolean().optional(),
   deliveredMessageId: z.string().min(1).optional(),
   replyToMessageId: z.string().min(1).optional(), replyToSenderOpenDingTalkId: z.string().min(1).optional(),
   atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
@@ -281,7 +282,7 @@ export async function openResidentStore(storageDomain) {
       return groups.update(storageKey, (latest) => ({
         ...latest,
         outbox: [...latest.outbox, {
-          outboundId: `outbound-${randomUUID()}`, sourceMessageId, text, status: 'pending',
+          outboundId: `outbound-${randomUUID()}`, sourceMessageId, text, status: 'pending', readbackRequired: true,
           ...(replyToMessageId ? { replyToMessageId } : {}),
           ...(replyToSenderOpenDingTalkId ? { replyToSenderOpenDingTalkId } : {}),
           ...(Array.isArray(atOpenDingTalkIds) && atOpenDingTalkIds.length > 0 ? { atOpenDingTalkIds } : {}),

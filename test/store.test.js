@@ -127,6 +127,7 @@ test('历史 Web Task 可从已持久化群消息恢复提出人并修正完成�
 
   const migrated = await store.migrateTaskProvenance({ taskId: created.task.taskId, sourceMessageId: 'm-source', completionDelivered: true })
   const outbound = store.getGroup('group-a').outbox[0]
+  assert.equal(outbound.readbackRequired, true)
   assert.equal(migrated.sourceMessageId, 'm-source')
   assert.equal(migrated.requesterName, '李辰')
   assert.equal(migrated.requesterOpenDingTalkId, 'od-requester')

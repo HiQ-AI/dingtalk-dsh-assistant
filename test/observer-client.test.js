@@ -61,6 +61,7 @@ test('运行看板使用DSH原生入口并提供任务交互', async () => {
   assert.match(source, /const outboxPageSize = 10/)
   assert.match(source, /已回读确认/)
   assert.match(source, /待回读确认/)
+  assert.match(source, /message\.readbackRequired === true/)
   assert.match(source, /message\.sourceMessageId/)
   assert.match(source, /message\.replyToMessageId/)
   assert.match(source, /message\.deliveredMessageId/)

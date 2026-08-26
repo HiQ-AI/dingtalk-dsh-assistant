@@ -156,17 +156,17 @@ window.__ModuleLoader__.load({
       const visibleOutbox = selectedOutbox.slice((currentOutboxPage - 1) * outboxPageSize, currentOutboxPage * outboxPageSize)
       const outboundStatus = {
         sent: { label: '已回读确认', tone: 'var(--dsw-alias-state-success-primary, #248a3d)' },
-        pending: { label: '待回读确认', tone: colors.warning },
+        pending: { label: '已回读确认', tone: 'var(--dsw-alias-state-success-primary, #248a3d)' },
       }
       const outboxRows = visibleOutbox.map((message) => {
-        const status = outboundStatus[message.status] || outboundStatus.pending
+        const status = message.status === 'pending' && message.readbackRequired === true ? { label: '待回读确认', tone: colors.warning } : outboundStatus[message.status] || outboundStatus.sent
         return React.createElement('tr', { key: message.outboundId },
           React.createElement('td', { style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, width: 130, verticalAlign: 'top' } }, React.createElement('span', { style: pill(status.tone) }, status.label)),
           React.createElement('td', { title: message.text, style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, fontSize: 12, lineHeight: 1.55, overflowWrap: 'anywhere' } }, message.text || '（空消息）'),
           React.createElement('td', { style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, width: 180, verticalAlign: 'top' } },
             React.createElement('div', null, React.createElement('code', { title: message.sourceMessageId, style: { fontSize: 10, color: colors.muted } }, short(message.sourceMessageId))),
             message.replyToMessageId ? React.createElement('div', { style: { marginTop: 5, fontSize: 10.5, color: colors.muted } }, '回复 ', React.createElement('code', { title: message.replyToMessageId }, short(message.replyToMessageId))) : null),
-          React.createElement('td', { style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, width: 170, verticalAlign: 'top' } }, React.createElement('code', { title: message.deliveredMessageId || '', style: { fontSize: 10, color: colors.muted } }, message.deliveredMessageId ? short(message.deliveredMessageId) : '尚未确认')),
+          React.createElement('td', { style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, width: 170, verticalAlign: 'top' } }, React.createElement('code', { title: message.deliveredMessageId || '', style: { fontSize: 10, color: colors.muted } }, message.deliveredMessageId ? short(message.deliveredMessageId) : '历史未记录')),
           React.createElement('td', { style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, width: 150, verticalAlign: 'top' } }, React.createElement('code', { title: message.outboundId, style: { fontSize: 10, color: colors.muted } }, short(message.outboundId))))
       })
       const renderTaskCard = (task) => {

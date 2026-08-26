@@ -83,8 +83,8 @@ test('DWS bridge 将稳定事件交给 resident 并在真实回读后确认 outb
   assert.equal(stopped, true)
 })
 
-test('完成通知首次无法确认时会持续重试并在历史回读命中后确认', async () => {
-  const outbound = { outboundId: 'out-completed', sourceMessageId: 'task-result:task-1:completed', text: '任务已完成', status: 'pending' }
+test('主会话回复首次无法确认时会绑定同一outbox持续回读并避免重复发送', async () => {
+  const outbound = { outboundId: 'out-reply', sourceMessageId: 'msg-source', text: '主会话回复', status: 'pending', readbackRequired: true }
   const group = { groupId: 'cid-a', messages: [], outbox: [outbound] }
   const acknowledged = []
   const runtime = {
@@ -105,7 +105,7 @@ test('完成通知首次无法确认时会持续重试并在历史回读命中�
   const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 5 })
   await new Promise((resolve) => setTimeout(resolve, 40))
   await stop()
-  assert.deepEqual(acknowledged, [{ groupId: 'cid-a', outboundId: 'out-completed', deliveredMessageId: 'sent-id' }])
+  assert.deepEqual(acknowledged, [{ groupId: 'cid-a', outboundId: 'out-reply', deliveredMessageId: 'sent-id' }])
   assert.equal(sends, 1, '重试前的历史回读命中后不得重复发送')
 })
 
