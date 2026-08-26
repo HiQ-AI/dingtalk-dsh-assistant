@@ -43,7 +43,7 @@ export function DingTalkDshAssistantCard() {
   const [searchResults, setSearchResults] = useState([])
   const [error, setError] = useState()
   const refresh = useCallback(async () => {
-    try { const next = await readResidentOverview(); setOverview(next); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setTaskGuidance({ taskExecutionGuidance: next.agentConfig.taskExecutionGuidance ?? '', taskEvidenceGuidance: next.agentConfig.taskEvidenceGuidance ?? '' }); setMaxConcurrentTasks(next.agentConfig.maxConcurrentTasks ?? 5); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
+    try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setTaskGuidance({ taskExecutionGuidance: next.agentConfig.taskExecutionGuidance ?? '', taskEvidenceGuidance: next.agentConfig.taskEvidenceGuidance ?? '' }); setMaxConcurrentTasks(next.agentConfig.maxConcurrentTasks ?? 5); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }, [])
   useEffect(() => { refresh() }, [refresh])
@@ -58,6 +58,14 @@ export function DingTalkDshAssistantCard() {
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '群消息接收与处理'), React.createElement('span', null, overview?.health?.inboundProcessing ? '已启用' : '未启用')),
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '自动回复群聊'), React.createElement('span', null, overview?.health?.outboundAuthorized ? '已启用' : '未启用')),
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '处理模型'), React.createElement('span', null, overview?.health?.modelMode === 'real' ? '真实模型' : '测试模型'))),
+    React.createElement('section', { style: panel },
+      React.createElement('strong', null, '版本与更新'),
+      React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '当前版本'), React.createElement('span', null, overview?.version?.currentVersion ?? '读取中')),
+      overview?.version?.error
+        ? React.createElement('div', { style: { color: colors.danger, fontSize: 13 } }, `新版本检查失败：${overview.version.error}`)
+        : React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '最新版本'), React.createElement('span', null, overview?.version?.latestVersion === null ? '尚无正式 Release' : (overview?.version?.latestVersion ?? '检查中'))),
+      overview?.version?.updateAvailable ? React.createElement('a', { href: overview.version.releaseUrl, target: '_blank', rel: 'noreferrer', style: { color: colors.accent } }, `发现新版本 ${overview.version.latestVersion}`) : null,
+      overview?.version?.changelogUrl ? React.createElement('a', { href: overview.version.changelogUrl, target: '_blank', rel: 'noreferrer', style: { color: colors.accent } }, '查看 CHANGELOG') : null),
     React.createElement(Environment, { value: overview?.environment }),
     React.createElement('section', { style: panel }, React.createElement('strong', null, 'Agent 配置'),
       React.createElement('strong', { style: { fontSize: 13 } }, 'Agent 名称 / 别名'),

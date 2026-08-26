@@ -68,6 +68,22 @@ DSH 根据 Session 的 Agent 工作目录发现项目级 Skill，同时加载用
 
 推荐让 Web、resident Runtime 和看板运行在同一个 DSH Web 进程中，避免两个进程同时写同一份 Session JSONL 和 storage domain。
 
+正式版本发布后，可用 DSH 原生插件命令一次安装发行包：
+
+```powershell
+dsh plugin --profile web add dingtalk-dsh-assistant
+```
+
+版本历史见 [CHANGELOG](CHANGELOG.md)。设置页会通过 GitHub Release 检查新版本；检查失败会明确显示错误，不会误报为最新版本。升级使用：
+
+```powershell
+dsh plugin --profile web update dingtalk-dsh-assistant
+```
+
+尚未发布到 npm 时，继续使用下面的源码安装方式。
+
+维护者发布新版本时，先将根包、assistant 和 observer 的版本号及 `CHANGELOG.md` 更新为同一版本并合并到 `main`，再推送对应的 `v<version>` Tag。GitHub Actions 会在 Node.js 24.19.0 下重新构建、测试和打包，按 observer → assistant → 根发行包的顺序发布 npm；三个包回读一致后才创建 GitHub Release。发布 job 绑定 GitHub Environment `NPM_PUBLISH`，优先使用其中的 `NPM_PUBLISH_TOKEN`，未配置时回退到 `NPM_TOKEN`。
+
 ### 1. 获取源码并验证
 
 ```powershell

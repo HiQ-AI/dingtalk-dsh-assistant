@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    environment: NPM_PUBLISH
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN || secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          registry-url: https://registry.npmjs.org/
+      - name: 校验 Tag、main 与三个包版本
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:NODE_AUTH_TOKEN)) { throw 'npm_publish_token_required' }
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'release_tag_must_point_to_main_history' }
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($tagVersion -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "invalid_release_tag_$($env:GITHUB_REF_NAME)" }
+          $manifests = @('package.json', 'packages/dingtalk-dsh-assistant/package.json', 'packages/dingtalk-dsh-observer/package.json')
+          $versions = $manifests | ForEach-Object { (Get-Content -LiteralPath $_ -Raw | ConvertFrom-Json).version }
+          if (($versions | Select-Object -Unique).Count -ne 1 -or $versions[0] -ne $tagVersion) {
+            throw "version_mismatch_tag_$tagVersion`_packages_$($versions -join ',')"
+          }
+      - run: pnpm install --frozen-lockfile
+      - name: 构建并测试
+        shell: pwsh
+        run: |
+          node scripts/build-web-client.mjs
+          git diff --exit-code -- packages/dingtalk-dsh-assistant/web-client.js
+          if ($LASTEXITCODE -ne 0) { throw 'web_client_bundle_not_committed' }
+          pnpm test
+      - name: 生成固定发行包
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path docs/tmp/packages | Out-Null
+          pnpm pack --pack-destination docs/tmp/packages
+          pnpm --dir packages/dingtalk-dsh-assistant pack --pack-destination ../../docs/tmp/packages
+          pnpm --dir packages/dingtalk-dsh-observer pack --pack-destination ../../docs/tmp/packages
+          $packages = Get-ChildItem -LiteralPath docs/tmp/packages -Filter '*.tgz'
+          if ($packages.Count -ne 3) { throw "expected_3_packages_actual_$($packages.Count)" }
+          $packages | ForEach-Object { Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256 }
+      - name: 按依赖顺序发布 npm
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-observer-$version.tgz" --access public --provenance
+          npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-assistant-$version.tgz" --access public --provenance
+          npm publish "docs/tmp/packages/dingtalk-dsh-assistant-$version.tgz" --access public --provenance
+      - name: 回读 npm 后创建 GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $expected = @(
+            "@zzusp/dingtalk-dsh-observer@$version",
+            "@zzusp/dingtalk-dsh-assistant@$version",
+            "dingtalk-dsh-assistant@$version"
+          )
+          foreach ($package in $expected) {
+            $published = npm view $package version --registry https://registry.npmjs.org/
+            if ($LASTEXITCODE -ne 0 -or $published.Trim() -ne $version) { throw "npm_readback_failed_$package" }
+          }
+          gh release create $env:GITHUB_REF_NAME docs/tmp/packages/*.tgz --verify-tag --title $env:GITHUB_REF_NAME --generate-notes

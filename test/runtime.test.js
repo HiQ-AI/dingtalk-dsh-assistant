@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import test, { after } from 'node:test'
 import { openResidentRuntime, residentSessionId } from '../packages/dingtalk-dsh-assistant/runtime.js'
 import { taskSessionId } from '../packages/dingtalk-dsh-assistant/store.js'
 import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
+
+const agentWorkspace = mkdtempSync(join(tmpdir(), 'dsh-agent-workspace-'))
+const replacementWorkspace = mkdtempSync(join(tmpdir(), 'dsh-replacement-workspace-'))
+after(() => {
+  rmSync(agentWorkspace, { recursive: true, force: true })
+  rmSync(replacementWorkspace, { recursive: true, force: true })
+})
 
 test('已有群恢复原 Session，新群先创建 dsh Session 再持久绑定', async () => {
   const groups = new Map([['existing', { groupId: 'existing', residentSessionId: 'session-existing' }]])
@@ -46,12 +56,12 @@ test('已有群恢复原 Session，新群先创建 dsh Session 再持久绑定',
     close: async () => undefined,
   }
 
-  const runtime = await openResidentRuntime(ctx, store, 'D:\\baibu-agent', { maxConcurrentTasks: 0 })
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: 0 })
   const created = await runtime.subscribe({ groupId: 'new-group', name: '新群名称' })
   assert.deepEqual(calls[0], ['resume', 'session-existing'])
   assert.deepEqual(calls[1].slice(0, 2), ['create', created.group.residentSessionId])
   assert.deepEqual(permissionSets, [['session-existing', 'danger-full-access'], [created.group.residentSessionId, 'danger-full-access']])
-  assert.equal(calls[1][2], 'D:\\baibu-agent')
+  assert.equal(calls[1][2], agentWorkspace)
   assert.deepEqual(setupReturns, [undefined], 'Agent setup不能意外返回非事务对象')
   assert.equal(created.group.residentSessionId, residentSessionId('new-group'))
   assert.equal(promptSections[0].name, 'dingtalk-group-responsibility')
@@ -90,12 +100,12 @@ test('Agent工作区统一写入各群Session cwd，变更时保留历史并重�
     async updateGroup(value) { const group = { ...groups.get(value.groupId), ...value }; groups.set(value.groupId, group); return group },
     close: async () => undefined,
   }
-  const runtime = await openResidentRuntime(ctx, store, 'D:\\baibu-agent')
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace)
   await runtime.subscribe({ groupId: 'workspace-group' })
   creates.length = 0
-  await runtime.updateAgentConfig({ workspaceDir: 'D:\\project\\dingtalk-dsh-assistant' })
-  assert.equal(store.workspaceDir, 'D:\\project\\dingtalk-dsh-assistant')
-  assert.equal(creates[0].meta.cwd, 'D:\\project\\dingtalk-dsh-assistant')
+  await runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
+  assert.equal(store.workspaceDir, replacementWorkspace)
+  assert.equal(creates[0].meta.cwd, replacementWorkspace)
   assert.equal(creates[0].seed.length, 2)
   assert.notEqual(groups.get('workspace-group').residentSessionId, residentSessionId('workspace-group'))
   await runtime.close()
@@ -111,12 +121,12 @@ test('Agent默认模型与推理深度通过dsh原生默认模型服务保存', 
     agents: {}, subagents: { drainContinuableDescendants: async () => undefined },
   }
   const store = { listGroups: () => [], listTasks: () => [], getProxyUrl: () => '', setProxyUrl: async () => undefined, close: async () => undefined }
-  const runtime = await openResidentRuntime(ctx, store, 'D:\\baibu-agent')
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace)
   const updated = await runtime.updateAgentConfig({ model: 'gpt-5.6-sol', reasoningEffort: 'low' })
   assert.deepEqual(saved, [{ provider: 'openai-codex', model: 'gpt-5.6-sol', reasoningEffort: 'low' }])
   assert.equal(updated.model, 'gpt-5.6-sol')
   assert.equal(updated.reasoningEffort, 'low')
-  assert.deepEqual(runtime.getAgentConfig(), { agentNames: [], workspaceDir: 'D:\\baibu-agent', provider: 'openai-codex', model: 'gpt-5.6-sol', reasoningEffort: 'low', proxyUrl: '', taskExecutionGuidance: '', taskEvidenceGuidance: '', maxConcurrentTasks: 5 })
+  assert.deepEqual(runtime.getAgentConfig(), { agentNames: [], workspaceDir: agentWorkspace, provider: 'openai-codex', model: 'gpt-5.6-sol', reasoningEffort: 'low', proxyUrl: '', taskExecutionGuidance: '', taskEvidenceGuidance: '', maxConcurrentTasks: 5 })
   await runtime.close()
 })
 
@@ -135,7 +145,7 @@ test('单个 resident Session 恢复超时被隔离且不阻塞其他群启动',
     listGroups: () => groups, listTasks: () => [], getGroup: () => undefined,
     close: async () => undefined,
   }
-  const runtime = await openResidentRuntime(ctx, store, 'D:\\baibu-agent', { resumeTimeoutMs: 10 })
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, { resumeTimeoutMs: 10 })
   const issues = runtime.listRecoveryIssues()
   assert.equal(issues[0].groupId, 'bad-group')
   assert.equal(issues[0].residentSessionId, 'session-bad')
@@ -198,14 +208,14 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     listActivities: () => activities,
     close: async () => undefined,
   }
-  const runtime = await openResidentRuntime(ctx, store, 'D:\\baibu-agent', { maxConcurrentTasks: 2, supervisorIntervalMs: 0 })
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: 2, supervisorIntervalMs: 0 })
   const one = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm1', objective: 'one', requesterName: '初始提出人', requesterOpenDingTalkId: 'od-initial', occurredAt: '2026-08-25T01:00:00Z' })
   const two = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm2', objective: 'two' })
   const three = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm3', objective: 'three' })
 
   assert.deepEqual([one.task.state, two.task.state, three.task.state], ['running', 'running', 'queued'])
   assert.deepEqual(creates, ['session-task-1', 'session-task-2'])
-  assert.deepEqual(createMetas[0], { cwd: 'D:\\baibu-agent', parentSession: 'session-parent', origin: 'subagent', delegationDepth: 1 })
+  assert.deepEqual(createMetas[0], { cwd: agentWorkspace, parentSession: 'session-parent', origin: 'subagent', delegationDepth: 1 })
   assert.equal(goals.get('session-task-1').phase, 'active')
   assert.equal(runtime.getTask(one.task.taskId).state, 'running', 'Goal active 不等于 Task 完成')
   sessionObserver({ id: 'session-task-1' }, { seq: 7, type: 'turn/end', data: { status: 'success' } })
@@ -322,7 +332,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   await runtime.close()
   const persistedChildSessionId = runtime.getTask(three.task.taskId).childSessionId
   goals.set(persistedChildSessionId, { ...goals.get(persistedChildSessionId), revision: 4, phase: 'paused', activation: 'disarmed' })
-  const recoveredRuntime = await openResidentRuntime(ctx, store, 'D:\\baibu-agent', { supervisorIntervalMs: 0 })
+  const recoveredRuntime = await openResidentRuntime(ctx, store, agentWorkspace, { supervisorIntervalMs: 0 })
   assert.equal(goals.get(persistedChildSessionId).phase, 'active', '进程重启恢复时仍应续接Task当前叶子')
   assert.equal(recoveredRuntime.getTask(three.task.taskId).state, 'running')
   assert.equal(goals.get('session-task-2').phase, 'blocked', '业务 waiting Task 不应被启动恢复误唤醒')

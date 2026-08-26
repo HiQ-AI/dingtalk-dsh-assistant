@@ -27,3 +27,12 @@ test('Web bundle patch只挂载无副作用host face，不启动第二份residen
   assert.match(patch, /name: '@zzusp\/dingtalk-dsh-assistant'/)
   assert.match(bundle, /const inject = \['slots'\]/)
 })
+
+test('设置页异步展示版本状态且版本检查不阻塞核心配置加载', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/client.js', import.meta.url), 'utf8')
+  assert.match(source, /setOverview\(next\); request\('\/state\/version'\)\.then/u)
+  assert.match(source, /版本与更新/u)
+  assert.match(source, /新版本检查失败/u)
+  assert.match(source, /发现新版本/u)
+  assert.match(source, /查看 CHANGELOG/u)
+})

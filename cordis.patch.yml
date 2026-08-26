@@ -1,0 +1,5 @@
+- insert:
+    - id: dingtalk-dsh-assistant-web
+      name: '@zzusp/dingtalk-dsh-assistant'
+    - id: dingtalk-dsh-observer
+      name: '@zzusp/dingtalk-dsh-observer'

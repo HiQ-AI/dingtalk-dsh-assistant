@@ -1,3 +1,5 @@
+import { checkForUpdates } from './version-check.js'
+
 async function readJson(request) {
   const chunks = []
   let size = 0
@@ -19,7 +21,7 @@ function send(response, status, value) {
   response.end(JSON.stringify(value))
 }
 
-export async function handleRequest(request, response, store, { testApiEnabled = false, transport = 'fake-dws', outboundAuthorized = false, modelMode = 'fake' } = {}) {
+export async function handleRequest(request, response, store, { testApiEnabled = false, transport = 'fake-dws', outboundAuthorized = false, modelMode = 'fake', checkForUpdatesImpl = checkForUpdates } = {}) {
   const url = new URL(request.url ?? '/', 'http://localhost')
   if (request.method === 'OPTIONS') return send(response, 204, null)
   if (request.method === 'GET' && url.pathname === '/health') {
@@ -41,6 +43,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/supervisor/alerts') return send(response, 200, store.listAlerts())
   if (request.method === 'GET' && url.pathname === '/state/environment') return send(response, 200, await store.inspectEnvironment())
   if (request.method === 'GET' && url.pathname === '/state/agent-config') return send(response, 200, store.getAgentConfig())
+  if (request.method === 'GET' && url.pathname === '/state/version') return send(response, 200, await checkForUpdatesImpl({ force: url.searchParams.get('refresh') === 'true' }))
   if (request.method === 'POST' && /^\/tasks\/[^/]+\/archive$/u.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/archive'.length))
     return send(response, 200, await store.archiveTask({ taskId }))

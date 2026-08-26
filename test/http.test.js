@@ -17,7 +17,10 @@ async function withServer(testApiEnabled, run) {
     decideAuthorization: async (value) => value,
     reissueAuthorization: async (value) => value,
   }
-  const server = createServer((request, response) => handleRequest(request, response, runtime, { testApiEnabled }))
+  const server = createServer((request, response) => handleRequest(request, response, runtime, {
+    testApiEnabled,
+    checkForUpdatesImpl: async () => ({ currentVersion: '0.4.0', latestVersion: null, updateAvailable: false }),
+  }))
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   try { await run(`http://127.0.0.1:${server.address().port}`) } finally { await new Promise((resolve) => server.close(resolve)) }
 }
@@ -30,6 +33,7 @@ test('生产HTTP开放只读状态与明确的本机群配置接口，测试控�
   assert.equal((await fetch(`${baseUrl}/state/authorizations`)).status, 200)
   assert.equal((await fetch(`${baseUrl}/config/groups/search?q=产品`)).status, 200)
   assert.equal((await fetch(`${baseUrl}/state/agent-config`)).status, 200)
+  assert.deepEqual(await (await fetch(`${baseUrl}/state/version`)).json(), { currentVersion: '0.4.0', latestVersion: null, updateAvailable: false })
   assert.equal((await fetch(`${baseUrl}/config/agent`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceDir: 'D:\\baibu-agent' }) })).status, 200)
   assert.equal((await fetch(`${baseUrl}/config/agent`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ proxyUrl: 'http://127.0.0.1:10808' }) })).status, 200)
   assert.equal((await fetch(`${baseUrl}/config/groups`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ groupId: 'g', responsibility: 'r' }) })).status, 200)
