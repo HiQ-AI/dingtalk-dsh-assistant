@@ -624,26 +624,34 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       available -= 1
     }
   }
-  async function reopenCompletedTaskInternal(task, context) {
+  async function reopenCompletedTaskInternal(task, context, trigger) {
     if (task.state !== 'completed') throw new Error(`task_not_completed:${task.taskId}`)
-    const queued = await store.updateTask(task.taskId, (current) => ({
-      ...current,
-      state: 'queued',
-      relatedContexts: [...(current.relatedContexts ?? []), context],
-      lastCompletedResult: current.result,
-      completion: undefined,
-      result: undefined,
-      waitingKind: undefined,
-      waitingReason: undefined,
-      reopenContext: context,
-      archivedAt: undefined,
-      completionSequence: (current.completionSequence ?? 0) + 1,
-    }))
+    const queued = await store.updateTask(task.taskId, (current) => {
+      const initialTrigger = { sourceMessageId: current.sourceMessageId, ...(current.requesterName ? { requesterName: current.requesterName } : {}), ...(current.requesterOpenDingTalkId ? { requesterOpenDingTalkId: current.requesterOpenDingTalkId } : {}) }
+      const triggerHistory = current.triggerHistory ?? [initialTrigger]
+      const nextHistory = trigger && !triggerHistory.some((item) => item.sourceMessageId === trigger.sourceMessageId) ? [...triggerHistory, trigger] : triggerHistory
+      const { requesterName: _requesterName, requesterOpenDingTalkId: _requesterOpenDingTalkId, ...withoutCurrentRequester } = current
+      return {
+        ...withoutCurrentRequester,
+        ...(trigger ? { sourceMessageId: trigger.sourceMessageId, ...(trigger.requesterName ? { requesterName: trigger.requesterName } : {}), ...(trigger.requesterOpenDingTalkId ? { requesterOpenDingTalkId: trigger.requesterOpenDingTalkId } : {}) } : {}),
+        triggerHistory: nextHistory,
+        state: 'queued',
+        relatedContexts: [...(current.relatedContexts ?? []), context],
+        lastCompletedResult: current.result,
+        completion: undefined,
+        result: undefined,
+        waitingKind: undefined,
+        waitingReason: undefined,
+        reopenContext: context,
+        archivedAt: undefined,
+        completionSequence: (current.completionSequence ?? 0) + 1,
+      }
+    })
     await pumpTasks()
     return store.getTask(queued.taskId)
   }
-  async function appendTaskContextInternal(task, context) {
-    if (task.state === 'completed') return reopenCompletedTaskInternal(task, context)
+  async function appendTaskContextInternal(task, context, trigger) {
+    if (task.state === 'completed') return reopenCompletedTaskInternal(task, context, trigger)
     if (task.state === 'waiting' && task.waitingKind === 'information') {
       const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
       const goal = ctx.goals.get(handle.agent)
@@ -768,16 +776,17 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         if (decision.kind === 'new-task' && !isExplicitAgentDirection(message.text, [...(store.getAgentNames?.() ?? []), currentDwsUserName]) && imageRefs.length === 0) decision = { kind: 'answer', reply: decision.reply }
         if (decision.kind === 'ignore') return { ...accepted, decision, group: store.getGroup(message.groupId) }
         let task
-        if (decision.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, objective: decision.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId }); await pumpTasks(); return store.getTask(result.task.taskId) })
+        const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
+        if (decision.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, objective: decision.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt }); await pumpTasks(); return store.getTask(result.task.taskId) })
         else if (decision.kind === 'task-context') {
           task = store.getTask(decision.taskId)
           if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${decision.taskId}`)
-          task = await serializeTasks(() => appendTaskContextInternal(task, decision.context))
+          task = await serializeTasks(() => appendTaskContextInternal(task, decision.context, trigger))
         }
         else if (decision.kind === 'task-reopen') {
           task = store.getTask(decision.taskId)
           if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${decision.taskId}`)
-          task = await serializeTasks(() => reopenCompletedTaskInternal(task, decision.context))
+          task = await serializeTasks(() => reopenCompletedTaskInternal(task, decision.context, trigger))
         }
         const group = decision.reply.trim() === ''
           ? store.getGroup(message.groupId)
@@ -882,15 +891,17 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       return running
     }),
     createTask: (request) => serializeTasks(async () => { const result = await store.createTask(request); await pumpTasks(); return { ...result, task: store.getTask(result.task.taskId) } }),
-    appendTaskContext: ({ taskId, context }) => serializeTasks(async () => {
+    appendTaskContext: ({ taskId, context, sourceMessageId, requesterName, requesterOpenDingTalkId, occurredAt }) => serializeTasks(async () => {
       const task = store.getTask(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
-      return appendTaskContextInternal(task, context)
+      const trigger = sourceMessageId ? { sourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) } : undefined
+      return appendTaskContextInternal(task, context, trigger)
     }),
-    reopenTask: ({ taskId, context }) => serializeTasks(async () => {
+    reopenTask: ({ taskId, context, sourceMessageId, requesterName, requesterOpenDingTalkId, occurredAt }) => serializeTasks(async () => {
       const task = store.getTask(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
-      return reopenCompletedTaskInternal(task, context)
+      const trigger = sourceMessageId ? { sourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) } : undefined
+      return reopenCompletedTaskInternal(task, context, trigger)
     }),
     reconcileCompletedNotifications: () => serializeTasks(async () => {
       const repaired = []

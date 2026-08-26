@@ -200,16 +200,16 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     getGroup: (id) => groups.get(id), listGroups: () => [...groups.values()], listTasks: () => tasks, getTask: (id) => tasks.find((task) => task.taskId === id),
     getMaxConcurrentTasks: () => store.maxConcurrentTasks,
     async setMaxConcurrentTasks(value) { store.maxConcurrentTasks = value; return { maxConcurrentTasks: value } },
-    async createTask(value) { const duplicate = tasks.find((task) => task.groupId === value.groupId && task.sourceMessageId === value.sourceMessageId); if (duplicate) return { created: false, task: duplicate }; const taskId = `task-${tasks.length + 1}`; const task = { ...value, taskId, childSessionId: taskSessionId(taskId), state: 'queued' }; tasks.push(task); return { created: true, task } },
+    async createTask(value) { const duplicate = tasks.find((task) => task.groupId === value.groupId && task.sourceMessageId === value.sourceMessageId); if (duplicate) return { created: false, task: duplicate }; const taskId = `task-${tasks.length + 1}`; const trigger = { sourceMessageId: value.sourceMessageId, ...(value.requesterName ? { requesterName: value.requesterName } : {}), ...(value.requesterOpenDingTalkId ? { requesterOpenDingTalkId: value.requesterOpenDingTalkId } : {}), ...(value.occurredAt !== undefined ? { occurredAt: value.occurredAt } : {}) }; const task = { ...value, taskId, childSessionId: taskSessionId(taskId), state: 'queued', triggerHistory: [trigger] }; tasks.push(task); return { created: true, task } },
     async updateTask(id, transform) { const index = tasks.findIndex((task) => task.taskId === id); tasks[index] = transform(tasks[index]); return tasks[index] },
-    async appendOutbox({ groupId, sourceMessageId, text }) { const group = groups.get(groupId); if (!group.outbox.some((item) => item.sourceMessageId === sourceMessageId)) group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, sourceMessageId, text, status: 'pending' }); return group },
+    async appendOutbox({ groupId, ...outbound }) { const group = groups.get(groupId); if (!group.outbox.some((item) => item.sourceMessageId === outbound.sourceMessageId)) group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...outbound, status: 'pending' }); return group },
     async recordActivity(value) { const existing = activities.find((item) => item.eventKey === value.eventKey); if (existing) return { created: false, activity: existing }; activities.push(value); return { created: true, activity: value } },
     async recordAlert(value) { const existing = alerts.find((item) => item.taskId === value.taskId && item.fingerprint === value.fingerprint); if (existing) { existing.count += 1; return { created: false, alert: existing } } const alert = { ...value, count: 1 }; alerts.push(alert); return { created: true, alert } },
     listActivities: () => activities,
     close: async () => undefined,
   }
   const runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: 2, supervisorIntervalMs: 0 })
-  const one = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm1', objective: 'one' })
+  const one = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm1', objective: 'one', requesterName: '初始提出人', requesterOpenDingTalkId: 'od-initial', occurredAt: '2026-08-25T01:00:00Z' })
   const two = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm2', objective: 'two' })
   const three = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm3', objective: 'three' })
 
@@ -302,19 +302,33 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(alerts.some((alert) => alert.fingerprint === 'leaf-session-recovered'), true)
   const archived = await runtime.archiveTask({ taskId: one.task.taskId })
   assert.ok(archived.archivedAt)
-  const reopened = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '补做已归档任务' })
+  const reopened = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '补做已归档任务', sourceMessageId: 'm-reopen-1', requesterName: '重开提出人', requesterOpenDingTalkId: 'od-reopen-1', occurredAt: '2026-08-26T01:00:00Z' })
   assert.equal(reopened.state, 'queued', '并发名额已满时重开的归档任务进入原生FIFO队列')
   assert.equal(reopened.archivedAt, undefined)
   assert.equal(reopened.relatedContexts.at(-1), '补做已归档任务')
+  assert.equal(reopened.sourceMessageId, 'm-reopen-1')
+  assert.equal(reopened.requesterOpenDingTalkId, 'od-reopen-1')
+  assert.deepEqual(reopened.triggerHistory, [
+    { sourceMessageId: 'm1', requesterName: '初始提出人', requesterOpenDingTalkId: 'od-initial', occurredAt: '2026-08-25T01:00:00Z' },
+    { sourceMessageId: 'm-reopen-1', requesterName: '重开提出人', requesterOpenDingTalkId: 'od-reopen-1', occurredAt: '2026-08-26T01:00:00Z' },
+  ])
   const raisedConcurrency = await runtime.updateAgentConfig({ maxConcurrentTasks: 3 })
   assert.equal(raisedConcurrency.maxConcurrentTasks, 3)
   assert.equal(runtime.getTask(one.task.taskId).state, 'running', '提高并行上限后按FIFO立即启动待执行任务')
   await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'second done', evidence: ['second verified'], artifacts: [] } })
   assert.equal(groups.get('group-a').outbox.at(-1).sourceMessageId, `task-result:${one.task.taskId}:completed:1`, '重开任务再次完成必须生成独立通知')
-  const reopenedCompleted = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '继续核验已完成任务' })
+  assert.equal(groups.get('group-a').outbox.at(-1).replyToMessageId, 'm-reopen-1')
+  assert.equal(groups.get('group-a').outbox.at(-1).replyToSenderOpenDingTalkId, 'od-reopen-1')
+  assert.deepEqual(groups.get('group-a').outbox.at(-1).atOpenDingTalkIds, ['od-reopen-1'])
+  const reopenedCompleted = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '继续核验已完成任务', sourceMessageId: 'm-reopen-2', requesterName: '再次提出人', requesterOpenDingTalkId: 'od-reopen-2' })
   assert.equal(reopenedCompleted.state, 'running', '已完成任务收到task-context时必须恢复原Task')
   assert.equal(reopenedCompleted.relatedContexts.at(-1), '继续核验已完成任务')
   assert.equal(reopenedCompleted.completionSequence, 2)
+  assert.equal(reopenedCompleted.sourceMessageId, 'm-reopen-2')
+  assert.equal(reopenedCompleted.triggerHistory.length, 3)
+  assert.equal(reopenedCompleted.triggerHistory[0].sourceMessageId, 'm1')
+  assert.equal(reopenedCompleted.triggerHistory[1].sourceMessageId, 'm-reopen-1')
+  assert.equal(reopenedCompleted.triggerHistory[2].sourceMessageId, 'm-reopen-2')
   await runtime.close()
   const persistedChildSessionId = runtime.getTask(three.task.taskId).childSessionId
   goals.set(persistedChildSessionId, { ...goals.get(persistedChildSessionId), revision: 4, phase: 'paused', activation: 'disarmed' })

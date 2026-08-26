@@ -96,7 +96,7 @@ test('Task 按来源去重并持久化四桶状态', async () => {
   const store = await openResidentStore(facility)
   await store.subscribe({ groupId: 'group-a' })
   await store.setAgentNames(['数字助理', '小助手'])
-  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', objective: 'investigate' })
+  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', objective: 'investigate', requesterName: '张三', requesterOpenDingTalkId: 'od-zhang', occurredAt: '2026-08-25T01:00:00Z' })
   const duplicate = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', objective: 'ignored' })
   const running = await store.updateTask(created.task.taskId, (task) => ({ ...task, state: 'running' }))
   const waiting = await store.updateTask(created.task.taskId, (task) => ({ ...task, state: 'waiting', waitingReason: 'need input' }))
@@ -104,6 +104,7 @@ test('Task 按来源去重并持久化四桶状态', async () => {
 
   assert.equal(duplicate.created, false)
   assert.equal(duplicate.task.taskId, created.task.taskId)
+  assert.deepEqual(created.task.triggerHistory, [{ sourceMessageId: 'm-task', requesterName: '张三', requesterOpenDingTalkId: 'od-zhang', occurredAt: '2026-08-25T01:00:00Z' }])
   assert.equal(running.state, 'running')
   assert.equal(waiting.state, 'waiting')
   assert.equal(completed.state, 'completed')
