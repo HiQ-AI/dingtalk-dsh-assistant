@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { discoverBaselineInstructionFiles } from '../.dsh/profiles/resident/node_modules/@deepseek-ai/dsh-agent-instructions/lib/index.js'
+import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instructions'
 
 test('worktree 子目录只用唯一标记回溯到 baibu-agent 根 AGENTS.md', async () => {
   const cwd = 'D:\\baibu-agent\\dsh-resident-runtime\\test\\fixtures\\worktree\\repo'
