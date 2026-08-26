@@ -74,6 +74,7 @@ window.__ModuleLoader__.load({
       const [updatedAt, setUpdatedAt] = useState()
       const [selectedGroupId, setSelectedGroupId] = useState('')
       const [messagePage, setMessagePage] = useState(1)
+      const [outboxPage, setOutboxPage] = useState(1)
       const [hoveredTaskId, setHoveredTaskId] = useState('')
       const [copiedId, setCopiedId] = useState('')
       const [navigatingSessionId, setNavigatingSessionId] = useState('')
@@ -148,6 +149,26 @@ window.__ModuleLoader__.load({
           React.createElement('td', { style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, width: 150, verticalAlign: 'top' } }, React.createElement('span', { title: message.agentDeliveryError || '', style: pill(status.tone) }, status.label)),
           React.createElement('td', { style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, width: 150, verticalAlign: 'top' } }, React.createElement('code', { title: message.messageId, style: { fontSize: 10, color: colors.muted } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)))
       })
+      const selectedOutbox = [...(selectedGroup?.outbox || [])].reverse()
+      const outboxPageSize = 10
+      const outboxPageCount = Math.max(1, Math.ceil(selectedOutbox.length / outboxPageSize))
+      const currentOutboxPage = Math.min(outboxPage, outboxPageCount)
+      const visibleOutbox = selectedOutbox.slice((currentOutboxPage - 1) * outboxPageSize, currentOutboxPage * outboxPageSize)
+      const outboundStatus = {
+        sent: { label: '已回读确认', tone: 'var(--dsw-alias-state-success-primary, #248a3d)' },
+        pending: { label: '待回读确认', tone: colors.warning },
+      }
+      const outboxRows = visibleOutbox.map((message) => {
+        const status = outboundStatus[message.status] || outboundStatus.pending
+        return React.createElement('tr', { key: message.outboundId },
+          React.createElement('td', { style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, width: 130, verticalAlign: 'top' } }, React.createElement('span', { style: pill(status.tone) }, status.label)),
+          React.createElement('td', { title: message.text, style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, fontSize: 12, lineHeight: 1.55, overflowWrap: 'anywhere' } }, message.text || '（空消息）'),
+          React.createElement('td', { style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, width: 180, verticalAlign: 'top' } },
+            React.createElement('div', null, React.createElement('code', { title: message.sourceMessageId, style: { fontSize: 10, color: colors.muted } }, short(message.sourceMessageId))),
+            message.replyToMessageId ? React.createElement('div', { style: { marginTop: 5, fontSize: 10.5, color: colors.muted } }, '回复 ', React.createElement('code', { title: message.replyToMessageId }, short(message.replyToMessageId))) : null),
+          React.createElement('td', { style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, width: 170, verticalAlign: 'top' } }, React.createElement('code', { title: message.deliveredMessageId || '', style: { fontSize: 10, color: colors.muted } }, message.deliveredMessageId ? short(message.deliveredMessageId) : '尚未确认')),
+          React.createElement('td', { style: { padding: '11px 12px', borderTop: `1px solid ${colors.border}`, width: 150, verticalAlign: 'top' } }, React.createElement('code', { title: message.outboundId, style: { fontSize: 10, color: colors.muted } }, short(message.outboundId))))
+      })
       const renderTaskCard = (task) => {
         const group = groupsById.get(task.groupId)
         const activity = activities.get(task.taskId)
@@ -215,7 +236,7 @@ window.__ModuleLoader__.load({
         React.createElement('section', null,
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 } },
             React.createElement('h2', { style: { margin: 0, fontSize: 16 } }, '群聊消息'),
-            React.createElement('select', { 'aria-label': '选择群聊会话', value: selectedGroup?.groupId || '', onChange: (event) => { setSelectedGroupId(event.target.value); setMessagePage(1) }, style: { minWidth: 240, border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.cardSurface, color: 'inherit', padding: '7px 10px', fontFamily: 'inherit', fontSize: 12 } }, ...(data?.groups || []).map((group) => React.createElement('option', { key: group.groupId, value: group.groupId }, group.name || group.groupId))),
+            React.createElement('select', { 'aria-label': '选择群聊会话', value: selectedGroup?.groupId || '', onChange: (event) => { setSelectedGroupId(event.target.value); setMessagePage(1); setOutboxPage(1) }, style: { minWidth: 240, border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.cardSurface, color: 'inherit', padding: '7px 10px', fontFamily: 'inherit', fontSize: 12 } }, ...(data?.groups || []).map((group) => React.createElement('option', { key: group.groupId, value: group.groupId }, group.name || group.groupId))),
             React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${selectedMessages.length} 条 · 每页 ${pageSize} 条`)),
           React.createElement('div', { style: { ...card, padding: 0, overflow: 'hidden', boxShadow: '0 4px 16px rgba(15,23,42,.07)' } },
             React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 820, borderCollapse: 'collapse', tableLayout: 'fixed' } },
@@ -224,7 +245,19 @@ window.__ModuleLoader__.load({
             React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, padding: '10px 12px' } },
               React.createElement('button', { type: 'button', disabled: currentMessagePage <= 1, onClick: () => setMessagePage((page) => Math.max(1, page - 1)), style: { border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.cardSurface, color: 'inherit', padding: '5px 10px', cursor: currentMessagePage <= 1 ? 'default' : 'pointer', opacity: currentMessagePage <= 1 ? 0.45 : 1 } }, '上一页'),
               React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentMessagePage} / ${pageCount}`),
-              React.createElement('button', { type: 'button', disabled: currentMessagePage >= pageCount, onClick: () => setMessagePage((page) => Math.min(pageCount, page + 1)), style: { border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.cardSurface, color: 'inherit', padding: '5px 10px', cursor: currentMessagePage >= pageCount ? 'default' : 'pointer', opacity: currentMessagePage >= pageCount ? 0.45 : 1 } }, '下一页')))))
+              React.createElement('button', { type: 'button', disabled: currentMessagePage >= pageCount, onClick: () => setMessagePage((page) => Math.min(pageCount, page + 1)), style: { border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.cardSurface, color: 'inherit', padding: '5px 10px', cursor: currentMessagePage >= pageCount ? 'default' : 'pointer', opacity: currentMessagePage >= pageCount ? 0.45 : 1 } }, '下一页')))),
+        React.createElement('section', null,
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 } },
+            React.createElement('h2', { style: { margin: 0, fontSize: 16 } }, '发件箱（Outbox）'),
+            React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${selectedOutbox.length} 条 · 每页 ${outboxPageSize} 条`)),
+          React.createElement('div', { style: { ...card, padding: 0, overflow: 'hidden', boxShadow: '0 4px 16px rgba(15,23,42,.07)' } },
+            React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 900, borderCollapse: 'collapse', tableLayout: 'fixed' } },
+              React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left', fontSize: 11, color: colors.muted } }, React.createElement('th', { style: { padding: '14px 12px', width: 130 } }, '发送状态'), React.createElement('th', { style: { padding: '14px 12px' } }, '消息内容'), React.createElement('th', { style: { padding: '14px 12px', width: 180 } }, '来源 / 回复目标'), React.createElement('th', { style: { padding: '14px 12px', width: 170 } }, '投递消息 ID'), React.createElement('th', { style: { padding: '14px 12px', width: 150 } }, 'Outbox ID'))),
+              React.createElement('tbody', null, ...(outboxRows.length ? outboxRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 5, style: { padding: 36, textAlign: 'center', color: colors.muted, fontSize: 12 } }, '暂无 Agent 发件记录'))])))),
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, padding: '10px 12px' } },
+              React.createElement('button', { type: 'button', disabled: currentOutboxPage <= 1, onClick: () => setOutboxPage((page) => Math.max(1, page - 1)), style: { border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.cardSurface, color: 'inherit', padding: '5px 10px', cursor: currentOutboxPage <= 1 ? 'default' : 'pointer', opacity: currentOutboxPage <= 1 ? 0.45 : 1 } }, '上一页'),
+              React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentOutboxPage} / ${outboxPageCount}`),
+              React.createElement('button', { type: 'button', disabled: currentOutboxPage >= outboxPageCount, onClick: () => setOutboxPage((page) => Math.min(outboxPageCount, page + 1)), style: { border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.cardSurface, color: 'inherit', padding: '5px 10px', cursor: currentOutboxPage >= outboxPageCount ? 'default' : 'pointer', opacity: currentOutboxPage >= outboxPageCount ? 0.45 : 1 } }, '下一页')))))
       const tasksPage = React.createElement('section', null, React.createElement('h2', { style: { margin: '0 0 12px', fontSize: 16 } }, '任务'), React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(320px, 1fr))', gap: 16, overflowX: 'auto', alignItems: 'start', paddingBottom: 8 } }, ...bucketColumns))
       const authorizationStatus = {
         'pending-send': { label: '待审批', tone: colors.warning },
