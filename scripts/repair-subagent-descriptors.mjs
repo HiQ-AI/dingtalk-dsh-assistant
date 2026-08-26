@@ -15,7 +15,7 @@ const leafDisplayName = (objective) => {
 const taskLabels = new Map()
 if (statePath) {
   const state = JSON.parse(await readFile(statePath, 'utf8'))
-  for (const task of Object.values(state.tables?.tasks ?? {})) taskLabels.set(task.taskId, leafDisplayName(task.objective))
+  for (const task of Object.values(state.tables?.tasks ?? {})) taskLabels.set(task.taskId, leafDisplayName(task.title ?? task.objective))
 }
 
 const entries = await readdir(root, { withFileTypes: true })

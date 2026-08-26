@@ -86,6 +86,7 @@ test('运行看板使用DSH原生入口并提供任务交互', async () => {
   assert.match(source, /navigator\.clipboard\.writeText/)
   assert.match(source, /document\.execCommand\('copy'\)/)
   assert.match(source, /copyButton\(task\.taskId, ' Task'\)/)
+  assert.match(source, /task\.title \|\| task\.objective/)
   assert.doesNotMatch(source, /copyButton\(task\.childSessionId/)
   assert.match(source, /overflowWrap: 'anywhere'/)
   assert.match(source, /WebkitLineClamp: 4/)
