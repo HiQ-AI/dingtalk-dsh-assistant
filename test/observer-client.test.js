@@ -72,6 +72,7 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /data-task-card-action.*toggle-checkpoints/)
   assert.match(source, /maxWidth: 1320.*margin: '0 auto'/)
   assert.match(source, /repeat\(4, minmax\(300px, 1fr\)\)/)
+  assert.doesNotMatch(source, /background: bucket\.background, boxShadow:/)
   assert.match(source, /color-mix\(in srgb, \$\{colors\.muted\} 22%, transparent\)/)
   assert.match(source, /startsWith\('\[TASK_SOURCE_EVIDENCE\]'\) \? \(task\.title \|\| task\.objective\) : task\.objective/)
   assert.match(source, /completedCheckpointCount.*checkpoints\.length/su)
