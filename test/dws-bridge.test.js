@@ -196,6 +196,40 @@ test('定时增量补拉按已持久化发送消息ID过滤Agent本人账号消�
   }
 })
 
+test('增量补拉逐条过滤已投递消息并只重试失败项和投递新项', async () => {
+  const group = { groupId: 'cid-a', messages: [
+    { messageId: 'm-delivered', occurredAt: '2026-08-27T04:00:00Z', agentDeliveryStatus: 'delivered' },
+    { messageId: 'm-failed', occurredAt: '2026-08-27T04:00:01Z', agentDeliveryStatus: 'failed' },
+  ], outbox: [] }
+  const ingested = []
+  let rangeReads = 0
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group,
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async ingest(message) { ingested.push(message.messageId); return { duplicate: message.messageId === 'm-failed' } },
+  }
+  const adapter = {
+    startGroupSubscription() { return { lifecycle: new EventEmitter(), done: Promise.resolve(undefined), stop() {} } },
+    async readGroup() { return { complete: true, messages: [] } },
+    async readGroupRange() {
+      rangeReads += 1
+      return { complete: true, messages: [
+        { conversationId: 'cid-a', messageId: 'm-delivered', text: '已投递', createTime: '2026-08-27T04:00:00Z', sender: '甲' },
+        { conversationId: 'cid-a', messageId: 'm-failed', text: '失败重试', createTime: '2026-08-27T04:00:01Z', sender: '乙' },
+        { conversationId: 'cid-a', messageId: 'm-new', text: '新消息', createTime: '2026-08-27T04:00:02Z', sender: '丙' },
+      ] }
+    },
+    async loadMessageImages() { return { images: [], mediaUnavailable: [] } },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 5 })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  await stop()
+  assert.ok(rangeReads > 0)
+  assert.ok(!ingested.includes('m-delivered'))
+  assert.ok(ingested.includes('m-failed'))
+  assert.ok(ingested.includes('m-new'))
+})
+
 test('补拉命中当前账号的pending outbox时先确认发送并修正历史失败状态', async () => {
   const outbound = { outboundId: 'out-pending', sourceMessageId: 'source-1', text: 'Agent回复\n\n- 小小鹏代回', status: 'pending' }
   const message = { messageId: 'm-agent', text: 'Agent回复  - 小小鹏代回', senderName: '孙鹏', agentDeliveryStatus: 'failed' }

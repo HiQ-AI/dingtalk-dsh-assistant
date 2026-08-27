@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import { buildDecisionPrompt, buildLeafSourceEnvelope, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from './decision.js'
-import { parseTaskResult } from './task-result.js'
+import { buildDecisionPrompt, buildLeafSourceEnvelope, parseGroupDecision, shouldRecheckTaskAssociation } from './decision.js'
+import { parseTaskCheckpoint, parseTaskResult } from './task-result.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
 const SessionId = (id) => id
@@ -49,12 +49,13 @@ const activityDetail = (event) => {
   return { contentBlocks: event.data?.message?.content?.length ?? 0 }
 }
 
-export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000 } = {}) {
+export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, inboxDeliveryDelayMs = 5_000 } = {}) {
   const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
   let taskTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, currentDwsUserName = ''
+  let groupMessageRecaller
   let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks
   if (store.getMaxConcurrentTasks?.() === undefined) await store.setMaxConcurrentTasks?.(taskConcurrencyLimit)
   const selection = ctx.agentDefaultModel.currentSelection()
@@ -110,24 +111,37 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
 
 收到以 \`[GROUP_DECISION]\` 开头的群消息信封时，只输出一个严格 JSON 对象：
 - 回答：\`{"kind":"answer","reply":"..."}\`
+- 建议处理：\`{"kind":"task-proposal","title":"简洁任务名","objective":"完整任务目标","reply":"这个事项是否需要我处理？"}\`
 - 新任务：\`{"kind":"new-task","title":"简洁任务名","objective":"完整任务目标","reply":"..."}\`
 - 补充任务：\`{"kind":"task-context","taskId":"...","context":"...","objective":"可选，修订后的完整目标","reply":"..."}\`；只需静默补充上下文、不需要回复群聊时，\`reply\` 使用空字符串
 - 重开任务：\`{"kind":"task-reopen","taskId":"...","context":"...","objective":"可选，修订后的完整目标","reply":"..."}\`；只需静默重开任务、不需要回复群聊时，\`reply\` 使用空字符串
 - 忽略：\`{"kind":"ignore","reason":"..."}\`
 
+每次收到新消息时，检查其内容是否与当前 Session 上下文中的近期回复冲突；如有冲突，及时撤回本主会话发送的错误消息并订正。不得撤回真人或其他系统消息。
+
 \`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从原始群消息生成的独立来源证据信封并自行核验。
 
 新建任务或修订目标时，可同时提供 \`acceptanceCriteria\`（本轮可逐项核验的验收标准）和 \`stageTasks\`（本轮阶段任务）字符串数组。两者只能拆解消息已授权的目标，不得扩大动作范围。
 
-只有当前消息明确指名或提及已配置的 Agent 名称/别名${currentDwsUserName ? `，或明确指名当前 DWS 登录人“${currentDwsUserName}”` : ''}，或以 \`cc:\` 开头，并且事项属于本群职责且形成可验证的执行或持续跟踪目标时，才允许选择新任务。职责相关但未明确指名时可以回答，不得创建任务。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。
+当前消息明确指名或提及已配置的 Agent 名称/别名、以 \`cc:\` 开头，或者明确确认了主会话此前提出的“是否需要我处理”询问，并且事项属于本群职责且形成可验证目标时，才允许选择 new-task。未明确指名、但你判断事项应形成任务时，必须选择 task-proposal，并在群里询问“这个事项是否需要我处理？”，暂不创建 Task；收到肯定答复后再结合原消息及其后补充选择 new-task。${currentDwsUserName ? `仅提及当前 DWS 登录人“${currentDwsUserName}”不能单独构成 Agent 的建任务、回复或执行授权。` : ''}同事间讨论、事实陈述或未形成可验证目标的内容不得创建任务；与现有任务相关时只做任务关联或静默补充上下文，不得回复。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。
 
-任务目标必须忠实保留消息中的动作范围，不得把“看看、查一下、排查、分析、核对、监控”等诊断或观察请求扩写成“修复、修改、实施、合并、发布、执行”等变更任务。诊断任务的完成条件只能是核验现状、定位根因、给出证据与建议；只有消息明确要求修复、修改、处理问题或实施方案时，new-task 的 objective 才能包含变更动作。后续消息可能明确扩大或收窄同一任务的动作范围；此时仍关联原 Task，并在 task-context 或 task-reopen 中填写修订后的累计完整 objective。普通事实补充不得填写 objective。是否明确指名只决定能否建 Task，不构成扩大任务授权。
+任务目标必须忠实保留消息中的动作范围，不得把“看看、查一下、排查、分析、核对、监控”等诊断或观察请求扩写成“修复、修改、实施、合并、发布、执行”等变更任务。诊断任务的完成条件只能是核验现状、定位根因、给出证据与建议；只有消息明确要求修复、修改、处理问题或实施方案时，new-task 或 task-proposal 的 objective 才能包含变更动作。后续消息可能明确扩大或收窄同一任务的动作范围；此时仍关联原 Task，并在 task-context 或 task-reopen 中填写修订后的累计完整 objective。普通事实补充不得填写 objective。是否明确指名只决定直接处理还是先询问，不构成扩大任务授权。
 
 消息附带的图片属于当前消息正文，必须先阅读图片，再结合固定主会话中的前后消息和“本群全部任务关联索引”判断关联性。queued、running、waiting、completed 以及产品展示中的归档任务都必须参与关联判断；任务状态只决定关联后的动作，不得成为忽略关联的理由。不得仅因文字部分没有指名、图片没有文字摘要或后续消息较短就选择忽略；紧邻图片的补充说明应优先与该图片共同理解。群友对根因、状态或外部因素的未经核验判断，只要与已有任务相关，就是需要核验的新增线索，不得以“尚未核验”为由忽略。已存在任务的新增事实应优先关联已有任务，而不是创建重复任务。对已完成任务的结果提出回滚、撤回、还原、纠正或补做，属于原任务的结果纠正，必须返回 task-reopen 唤起原 Task，不得只做自然语言承诺，也不得创建新 Task；只有与原目标不同的独立可执行目标才创建新任务并保留历史关联。
 
 状态边界必须严格遵守：running 或 waiting（包括阻塞中）的 Task 收到新增信息时只能返回 task-context，继续同一执行轮次；不得返回 task-reopen，不得清空 blocker 或增加轮次。只有 completed Task（包括已归档展示）才允许 task-reopen 并初始化下一执行轮次。
 
 同事或其 AI 助理发送的回复、任务回执和状态通知都是正常群消息，必须进入本协议由你结合引用消息、上下文和任务索引判断，不得按固定文案或发送者在模型外预先过滤。若消息只是对已完成通知的自动回执，没有提出新事实、问题、纠正或执行要求，应选择 ignore；只有确实需要向群里补充新信息时才选择 answer，不要回复“无需重复创建任务”之类没有新增价值的确认。
+
+### 群聊回复节制原则
+
+理解消息、关联任务和回复群聊是三个独立决定。每条消息都必须完成任务关联和近期消息冲突检查，但默认保持静默。只有以下情况允许 reply 非空：消息明确要求 Agent 立即回答且当前已有可核验答案；必须询问一个只有原提出人才能补充且确实阻塞任务的信息；Task 产生新的最终结果、明确失败结果或需要真人行动的结论；需要订正或撤回本主会话此前发送的错误消息。
+
+以下情况必须 reply 为空或选择 ignore：仅想表达“收到、我来查、我先确认、正在处理、稍后反馈”等过程性确认；给活动 Task 补充 IP、库名、schema、文件、截图、字段范围或其他执行线索；同事之间的讨论、确认、纠正或短句接龙且未明确要求 Agent 回答；叶子已在执行且当前消息只需作为 task-context 转交；没有新增事实，只是复述已有结论或确认任务仍在进行；仅因消息提及当前 DWS 登录人姓名。
+
+同一事项短时间内连续出现的文本、文件、图片和补充说明属于一个信息组。文件或图片前后的短句不得分别追问；信息仍可能继续补充时先静默关联，只有信息组稳定后仍存在真正阻塞，才能一次性询问。同一 Task 在上一条群通知之后没有产生新结果、真实阻塞或必要订正时，不得再次发状态通知。
+
+发送前必须执行回复价值门禁：“如果删除这条回复，同事是否会缺少一个必须知道的新事实、必须回答的问题或明确行动？”答案为否时，reply 必须为空。不得发送纯过程承诺。
 
 上述 JSON 协议仅用于 \`[GROUP_DECISION]\` 群消息信封，此时不得调用任务工具。用户在 Web 主会话中直接要求创建、续接或查询任务时，使用本会话提供的 DSH 原生任务工具；主会话只负责沟通协调，实际执行由 Runtime 创建的独立叶子会话完成。`,
     })
@@ -327,6 +341,25 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
       return group.outbox.find((item) => item.sourceMessageId === resultKey)
     })
   }
+  async function reviewTaskCheckpoint(task, checkpoint) {
+    const handle = residentHandles.get(task.groupId)
+    if (handle === undefined) throw new Error(`resident_not_active:${task.groupId}`)
+    await handle.agent.whenIdle()
+    const firstSeq = handle.agent.session.seq
+    handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: `[TASK_CHECKPOINT_REVIEW]\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n当前有效目标：${task.objective}\n本轮验收标准：${JSON.stringify(task.acceptanceCriteria ?? [task.objective])}\n本轮阶段任务：${JSON.stringify(task.stageTasks ?? [])}\n叶子检查点：${JSON.stringify(checkpoint)}\n\n这是主会话与叶子会话的内部协调，不得回复群聊、不得写入发信箱，也不代表任务完成。检查叶子的目标理解、范围、证据方向和下一步是否与当前群聊上下文及验收标准一致。无需纠偏时输出 {"decision":"acknowledge","reason":"判断依据"}；需要纠偏时输出 {"decision":"guidance","reason":"发现的偏差","guidance":"给叶子的具体调整要求"}。只输出严格 JSON。` }],
+      source: { kind: 'coordinator' },
+    }))
+    await handle.agent.whenIdle()
+    const reply = handle.agent.session.events.filter((event) => event.seq >= firstSeq && event.type === 'assistant/message')
+      .flatMap((event) => event.data.message.content).filter((block) => block.type === 'text').map((block) => block.text).join('').trim()
+    let review
+    try { review = JSON.parse(reply) } catch (error) { throw new Error(`task_checkpoint_review_invalid_json:${task.taskId}`, { cause: error }) }
+    if (typeof review !== 'object' || review === null || !['acknowledge', 'guidance'].includes(review.decision) || typeof review.reason !== 'string' || review.reason.trim() === '' || Object.keys(review).some((key) => !['decision', 'reason', 'guidance'].includes(key))) throw new Error(`task_checkpoint_review_invalid_schema:${task.taskId}`)
+    if (review.decision === 'guidance' && (typeof review.guidance !== 'string' || review.guidance.trim() === '')) throw new Error(`task_checkpoint_guidance_missing:${task.taskId}`)
+    if (review.decision === 'acknowledge' && review.guidance !== undefined) throw new Error(`task_checkpoint_guidance_unexpected:${task.taskId}`)
+    return { decision: review.decision, reason: review.reason.trim(), ...(review.guidance ? { guidance: review.guidance.trim() } : {}) }
+  }
   async function resumeResident(group) {
     if (residentHandles.has(group.groupId)) return residentHandles.get(group.groupId)
     const handle = await ctx.agents.resume({ resumeSessionId: SessionId(group.residentSessionId), agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
@@ -373,6 +406,9 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
       for (const listener of humanBlockerListeners) await listener({ task: waiting, result })
       return store.getTask(taskId)
     }
+    const checkpoints = task.checkpoints ?? []
+    if (checkpoints[0]?.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
+    if (checkpoints.length < 2) throw new Error(`task_checkpoints_insufficient:${taskId}`)
     const review = await withoutInitiator(() => reviewCompletedTaskResult(task, result))
     if (!review.accepted) {
       await followupTaskInternal(task, `[TASK_RESULT_REJECTED]\n当前完成结果未通过最新目标验收：${review.reason}\n\n继续执行当前有效目标，补齐缺失实现与证据后再提交 completed。不得重复提交上一轮结论。`)
@@ -387,6 +423,24 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
     }).catch(() => undefined)
     await withoutInitiator(() => pumpTasks())
     return completed
+  }
+  async function submitTaskCheckpointInternal(taskId, value) {
+    const checkpoint = parseTaskCheckpoint(value)
+    const task = store.getTask(taskId)
+    if (task === undefined || task.state !== 'running') throw new Error(`task_not_running:${taskId}`)
+    if (!leafHandles.has(taskId)) throw new Error(`task_leaf_not_active:${taskId}`)
+    if ((task.checkpoints?.length ?? 0) === 0 && checkpoint.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
+    if (checkpoint.kind === 'plan-confirmed' && checkpoint.remainingItems.length < 2) throw new Error(`task_checkpoint_plan_insufficient:${taskId}`)
+    if (checkpoint.kind === 'stage-completed' && (!checkpoint.stageTask || !(task.stageTasks ?? []).includes(checkpoint.stageTask))) throw new Error(`task_checkpoint_stage_invalid:${taskId}`)
+    const submitted = { ...checkpoint, checkpointId: `checkpoint-${randomUUID()}`, submittedAt: new Date().toISOString() }
+    await store.updateTask(taskId, (current) => ({ ...current, checkpoints: [...(current.checkpoints ?? []), submitted], updatedAt: new Date().toISOString() }))
+    const review = await withoutInitiator(() => reviewTaskCheckpoint(store.getTask(taskId), checkpoint))
+    await store.updateTask(taskId, (current) => ({
+      ...current,
+      checkpoints: (current.checkpoints ?? []).map((item) => item.checkpointId === submitted.checkpointId ? { ...item, coordinatorDecision: review.decision, coordinatorReason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}), reviewedAt: new Date().toISOString() } : item),
+      updatedAt: new Date().toISOString(),
+    }))
+    return { accepted: true, taskId, checkpointId: submitted.checkpointId, coordinatorDecision: review.decision, reason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}) }
   }
   const listAuthorizationRequests = () => store.listTasks().flatMap((task) => {
     const requests = new Map()
@@ -471,6 +525,10 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
 
 你必须通过 submit_task_result 结束任务；自然语言总结、Goal complete 或 turn end 都不构成 Task 完成。
 
+### 与主会话的内部检查点
+
+开始执行后必须先把当前目标拆成至少 2 个可核验检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed；remainingItems 逐项写入这些检查点。收到 TASK_OBJECTIVE_REVISED 后，必须根据修订后的完整目标重新提交 plan-confirmed，新的 remainingItems 是当前执行轮次的最新有效检查点清单。后续每完成一个有验收意义的检查点、发现目标或范围冲突、证据缺口会影响验收、风险发生实质变化时继续提交 checkpoint。完成任务前至少应有 plan-confirmed 和一个后续事实检查点，不能从计划直接跳到 completed。提交 stage-completed 时，stageTask 必须逐字填写当前执行轮次阶段任务中的对应项，供 Host 计算业务进度。不要按时间周期汇报，不要提交普通命令进度、工具日志、等待流水线、重试或无新事实的状态。checkpoint 只用于内部协调，不会发送到群聊，也不代替 submit_task_result。主会话返回 guidance 时必须据此调整；若 guidance 与 Task objective 的授权边界冲突，提交 scope-conflict checkpoint，不得自行扩大授权。
+
 ### 任务授权边界
 
 Task objective 是本任务的动作授权上限，必须逐字尊重其中的动作范围。若 objective 只要求“看看、查一下、排查、分析、核对、监控”或其他诊断/观察工作，你只能读取、核验、定位根因并提交证据和建议，不得修改代码或数据、提交 PR、合并、构建、部署、执行修复方案，也不得因为发现了明确根因就自行扩大为修复。只有 objective 明确包含修复、修改、实施、合并、发布或执行等变更动作时，才能进行对应变更；配置的任务流程引导和完成证据要求也不得扩大该授权。
@@ -501,7 +559,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   ? (task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').map((item) => `- ${item.decision ?? 'answered'}｜${item.category}｜${item.requestedAction}｜答复：${item.reply ?? '未记录'}`).join('\n')
   : '暂无。'}
 
-完成结果提交后由 Runtime 交给 resident 主会话，再由主会话通知原群任务负责人。群聊通知只有 Runtime 这一个出口：叶子会话不得调用 DWS 或其他消息工具向来源群发送、回复、编辑或撤回任务进度、阻塞或完成通知，也不得把自行发送群通知作为完成证据；叶子只允许读取群消息用于核验，并通过 submit_task_result 提交结构化结果。
+完成结果提交后由 Runtime 完整交给 resident 主会话，再由主会话判断如何通知原群任务负责人。群聊消息的发送、回复、编辑、更正和撤回均由 resident 主会话判断；叶子只提交业务结果、结论、证据、未验证项和置信边界，不得判断、建议或申请撤回/编辑/更正任何群消息，不得提供消息处置目标或 messageId。群聊通知只有 Runtime 这一个出口：叶子会话不得调用 DWS 或其他消息工具向来源群发送、回复、编辑或撤回任务进度、阻塞或完成通知，也不得把自行发送群通知作为完成证据；叶子只允许读取群消息用于业务核验，并通过 submit_task_result 提交结构化结果。
 
 ### 阻塞规则
 
@@ -510,6 +568,25 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
 2. \`waitingKind=human-intervention\`：已经取得证据且自身无法解决的操作红线、网络中断、磁盘不足、资源不足、意外事件或必须真人确认的处置方案；必须提供 blockerCategory、risk、evidence、attemptedActions 和 requestedAction。risk 单独说明执行该操作可能造成的具体影响；操作红线使用 blockerCategory=redline，并把完整操作范围和不在授权内的事项写入 requestedAction；Runtime 只发送这一条阻塞审批消息。
 
 代码错误、命令失败、可重试波动、普通不确定性、实现困难、正在正常运行但耗时较长的外部流水线，或 Goal 轮数即将/已经耗尽时，继续诊断、监控或由 Host 续接 Goal，不得 waiting。Goal 轮数是 Host 的执行预算，不是需要真人处理的业务阻塞。不要直接使用 Goal 工具标记 blocked；合法等待统一通过 submit_task_result 交给 Host 路由。`,
+      })
+      agentCtx.tools.register({
+        name: 'submit_task_checkpoint',
+        description: 'Submit an event-driven internal checkpoint to the resident coordinator and receive acknowledgement or corrective guidance. This never sends a group message.',
+        parameters: { type: 'object', additionalProperties: false, properties: {
+          kind: { type: 'string', enum: ['plan-confirmed', 'stage-completed', 'scope-conflict', 'evidence-gap', 'risk-changed'] }, stageTask: { type: 'string' }, summary: { type: 'string' },
+          completedItems: { type: 'array', items: { type: 'string' } }, evidence: { type: 'array', items: { type: 'string' } }, remainingItems: { type: 'array', items: { type: 'string' } },
+          nextStep: { type: 'string' }, needsCoordinatorDecision: { type: 'boolean' },
+        }, required: ['kind', 'summary', 'completedItems', 'evidence', 'remainingItems', 'nextStep', 'needsCoordinatorDecision'] },
+        output: {
+          schema: { type: 'object', additionalProperties: false, properties: {
+            accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, checkpointId: { type: 'string' }, coordinatorDecision: { type: 'string', enum: ['acknowledge', 'guidance'] }, reason: { type: 'string' }, guidance: { type: 'string' },
+          }, required: ['accepted', 'taskId', 'checkpointId', 'coordinatorDecision', 'reason'] },
+          render: (_args, out) => [{ type: 'text', text: out.coordinatorDecision === 'guidance' ? `Coordinator guidance: ${out.guidance}` : `Checkpoint acknowledged: ${out.reason}` }],
+        },
+        execute: async (args, exec) => {
+          if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_checkpoint_wrong_session:${task.taskId}`)
+          return serializeTasks(() => submitTaskCheckpointInternal(task.taskId, args))
+        },
       })
       agentCtx.tools.register({
         name: 'submit_task_result',
@@ -728,7 +805,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           runSequence: current.runSequence ?? 1, startedAt: current.runStartedAt ?? current.createdAt, endedAt: new Date().toISOString(),
           sourceMessageId: current.sourceMessageId, objective: current.objective, childSessionId: current.childSessionId,
           ...(current.requesterName ? { requesterName: current.requesterName } : {}), ...(current.requesterOpenDingTalkId ? { requesterOpenDingTalkId: current.requesterOpenDingTalkId } : {}),
-          acceptanceCriteria: current.acceptanceCriteria ?? [current.objective], stageTasks: current.stageTasks ?? ['完成并验证当前轮目标'], ...(current.result ? { result: current.result } : {}),
+          acceptanceCriteria: current.acceptanceCriteria ?? [current.objective], stageTasks: current.stageTasks ?? ['完成并验证当前轮目标'], checkpoints: current.checkpoints ?? [], ...(current.result ? { result: current.result } : {}),
         }],
         relatedContexts: [...(current.relatedContexts ?? []), context],
         lastCompletedResult: current.result,
@@ -737,6 +814,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         waitingKind: undefined,
         waitingReason: undefined,
         lastWaitingResult: undefined,
+        checkpoints: [],
         humanBlocker: undefined,
         reopenContext: context,
         archivedAt: undefined,
@@ -775,7 +853,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   }
   async function followupTaskInternal(task, text) {
     const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
-    handle.agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'coordinator' } }))
+    handle.agent.steer(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'coordinator' } }))
     return { task, accepted: true }
   }
   const disposeObserver = typeof ctx.on === 'function' ? ctx.on('session/event', (session, event) => {
@@ -850,41 +928,58 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     },
     onHumanBlockerRequested(listener) { humanBlockerListeners.add(listener); return () => humanBlockerListeners.delete(listener) },
     onAuthorizationDecided(listener) { authorizationDecisionListeners.add(listener); return () => authorizationDecisionListeners.delete(listener) },
+    registerGroupMessageRecaller(recaller) {
+      if (typeof recaller !== 'function') throw new Error('group_message_recaller_invalid')
+      groupMessageRecaller = recaller
+      return () => { if (groupMessageRecaller === recaller) groupMessageRecaller = undefined }
+    },
     listAuthorizationRequests,
     getAuthorizationRequest,
     ingest: (message) => serialize(message.groupId, async () => {
       const ingested = await store.ingest(message)
       const persisted = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
       if (ingested.duplicate && ['delivered', 'skipped'].includes(persisted?.agentDeliveryStatus)) return ingested
+      const deliveryRetry = ingested.duplicate
       const accepted = ingested.duplicate ? { ...ingested, duplicate: false, recovered: true, sequence: persisted.sequence } : ingested
       const handle = residentHandles.get(message.groupId)
       try {
         if (handle === undefined) throw new Error(`resident_not_active:${message.groupId}`)
-        await handle.agent.whenIdle(); const firstSeq = handle.agent.session.seq
+        if (inboxDeliveryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, inboxDeliveryDelayMs))
+        const firstSeq = handle.agent.session.seq
         const images = Array.isArray(message.images) ? message.images : []
         if (images.length > 0 && attachments === undefined) throw new Error('dsh_attachments_required')
         const imageRefs = images.length === 0 ? [] : await attachments.saveImages(images.map((image) => ({ data: image.data, mediaType: image.mediaType, ...(image.name ? { name: image.name } : {}) })))
         const content = [
-          { type: 'text', text: buildDecisionPrompt({ sequence: accepted.sequence, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }) },
+          { type: 'text', text: buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, deliveryRetry }) },
           ...imageRefs.map((attachment) => ({ type: 'image', attachment })),
         ]
-        handle.agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
+        handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } }))
         await handle.agent.whenIdle()
         const reply = handle.agent.session.events.filter((event) => event.seq >= firstSeq && event.type === 'assistant/message').flatMap((event) => event.data.message.content).filter((block) => block.type === 'text').map((block) => block.text).join('')
         if (reply === '') throw new Error(`resident_reply_missing:${message.groupId}:${message.messageId}`)
-        let decision = parseGroupDecision(reply)
+        let decision
+        try {
+          decision = parseGroupDecision(reply)
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.startsWith('group_decision_invalid_')) throw error
+          const correctionSeq = handle.agent.session.seq
+          handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_SCHEMA_CORRECTION]\n你刚才的判断结果未通过结构校验：${error.message}。保持原来的业务判断不变，只删除该 kind 不允许的字段或补齐必填字段，重新输出一份严格符合主会话决策契约的 JSON；不要解释，不要扩大或改变任务目标。` }], source: { kind: 'coordinator' } }))
+          await handle.agent.whenIdle()
+          const correctedReply = handle.agent.session.events.filter((event) => event.seq >= correctionSeq && event.type === 'assistant/message').flatMap((event) => event.data.message.content).filter((block) => block.type === 'text').map((block) => block.text).join('')
+          if (correctedReply === '') throw error
+          decision = parseGroupDecision(correctedReply)
+        }
         await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'delivered' })
         const groupBeforeDecision = store.getGroup(message.groupId)
         const previousMessage = groupBeforeDecision?.messages.find((item) => item.sequence === accepted.sequence - 1)
         const activeTaskCount = store.listTasks().filter((task) => task.groupId === message.groupId).length
         if (decision.kind === 'ignore' && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: imageRefs.length > 0, previousMessage, occurredAt: message.occurredAt })) {
           const recheckSeq = handle.agent.session.seq
-          handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION]\n\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context，只有确认与全部历史及当前任务无关时才能 ignore。\n\n${buildDecisionPrompt({ sequence: accepted.sequence, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
+          handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION]\n\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, deliveryRetry }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
           await handle.agent.whenIdle()
           const rechecked = handle.agent.session.events.filter((event) => event.seq >= recheckSeq && event.type === 'assistant/message').flatMap((event) => event.data.message.content).filter((block) => block.type === 'text').map((block) => block.text).join('')
           if (rechecked !== '') decision = parseGroupDecision(rechecked)
         }
-        if (decision.kind === 'new-task' && !isExplicitAgentDirection(message.text, [...(store.getAgentNames?.() ?? []), currentDwsUserName]) && imageRefs.length === 0) decision = { kind: 'answer', reply: decision.reply }
         if (decision.kind === 'ignore') return { ...accepted, decision, group: store.getGroup(message.groupId) }
         let task
         const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { after } from 'node:test'
@@ -9,10 +9,22 @@ import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 
 const agentWorkspace = mkdtempSync(join(tmpdir(), 'dsh-agent-workspace-'))
 const replacementWorkspace = mkdtempSync(join(tmpdir(), 'dsh-replacement-workspace-'))
-const runtimeOptions = (options = {}) => options
+const runtimeOptions = (options = {}) => ({ inboxDeliveryDelayMs: 0, ...options })
 after(() => {
   rmSync(agentWorkspace, { recursive: true, force: true })
   rmSync(replacementWorkspace, { recursive: true, force: true })
+})
+
+test('Inbox 延迟五秒插话投递，主会话向叶子会话同样使用插话', () => {
+  const source = readFileSync(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
+  assert.match(source, /inboxDeliveryDelayMs = 5_000/)
+  assert.match(source, /setTimeout\(resolve, inboxDeliveryDelayMs\)/)
+  assert.match(source, /handle\.agent\.steer\(createUserMessage\(\{ content, source: \{ kind: 'user' \} \}\)\)/)
+  assert.match(source, /async function followupTaskInternal[\s\S]*?handle\.agent\.steer\(createUserMessage/)
+  assert.match(source, /\[GROUP_DECISION_SCHEMA_CORRECTION\]/)
+  assert.match(source, /收到 TASK_OBJECTIVE_REVISED 后，必须根据修订后的完整目标重新提交 plan-confirmed/)
+  assert.match(source, /保持原来的业务判断不变，只删除该 kind 不允许的字段或补齐必填字段/)
+  assert.match(source, /decision = parseGroupDecision\(correctedReply\)/)
 })
 
 test('已有群恢复原 Session，新群先创建 dsh Session 再持久绑定', async () => {
@@ -158,7 +170,7 @@ test('单个 resident Session 恢复超时被隔离且不阻塞其他群启动',
 test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 排队', async () => {
   const groups = new Map([['group-a', { groupId: 'group-a', responsibility: 'coordinate', residentSessionId: 'session-parent', outbox: [] }]])
   const tasks = []
-  const creates = [], createMetas = [], followups = [], approvalResumeOrder = [], disposed = [], activities = [], alerts = [], goals = new Map(), agents = new Map()
+  const creates = [], createMetas = [], followups = [], approvalResumeOrder = [], disposed = [], activities = [], alerts = [], goals = new Map(), agents = new Map(), leafTools = []
   let sessionObserver
   const makeHandle = (sessionId) => {
     const session = { id: sessionId, events: [], seq: 0, meta: {}, append(type, data) { const event = { seq: session.seq++, type, data }; session.events.push(event); return event } }
@@ -170,10 +182,14 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
         const accepted = !text.includes('旧结论')
         session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ accepted, reason: accepted ? '当前目标均有证据覆盖' : '新增点击跳转目标没有实现和验证证据' }) }] } } })
       }
+      if (sessionId === 'session-parent' && text.startsWith('[TASK_CHECKPOINT_REVIEW]')) {
+        session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ decision: 'guidance', reason: '还缺少异常路径证据', guidance: '补充异常路径回归后再提交完成结果' }) }] } } })
+      }
       if (sessionId === 'session-parent' && text.startsWith('[TASK_COORDINATION]')) {
         session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `coordinated:${text.match(/Task ID: (.*)/)?.[1]}` }] } } })
       }
     }, whenIdle: async () => undefined }
+    agent.steer = agent.followup
     return { agent, dispose: async () => { disposed.push(sessionId); if (agents.get(sessionId) === agent) agents.delete(sessionId) } }
   }
   const parentHandle = makeHandle('session-parent')
@@ -184,7 +200,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
       get(sessionId) { return agents.get(sessionId) },
       withoutInitiator(operation) { return operation() },
       async resume({ resumeSessionId }) { const handle = resumeSessionId === 'session-parent' ? parentHandle : makeHandle(resumeSessionId); agents.set(resumeSessionId, handle.agent); return handle },
-      async create({ sessionId, meta, setup }) { creates.push(sessionId); createMetas.push(meta); setup({ on: () => () => undefined, tools: { register: () => undefined }, systemPrompt: { section: () => undefined } }); const handle = makeHandle(sessionId); agents.set(sessionId, handle.agent); return handle },
+      async create({ sessionId, meta, setup }) { creates.push(sessionId); createMetas.push(meta); setup({ on: () => () => undefined, tools: { register: (tool) => leafTools.push([sessionId, tool]) }, systemPrompt: { section: () => undefined } }); const handle = makeHandle(sessionId); agents.set(sessionId, handle.agent); return handle },
     },
     goals: {
       get(agent) { return goals.get(agent.session.id) },
@@ -209,6 +225,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     async createTask(value) { const duplicate = tasks.find((task) => task.groupId === value.groupId && task.sourceMessageId === value.sourceMessageId); if (duplicate) return { created: false, task: duplicate }; const taskId = `task-${tasks.length + 1}`; const trigger = { sourceMessageId: value.sourceMessageId, ...(value.requesterName ? { requesterName: value.requesterName } : {}), ...(value.requesterOpenDingTalkId ? { requesterOpenDingTalkId: value.requesterOpenDingTalkId } : {}), ...(value.occurredAt !== undefined ? { occurredAt: value.occurredAt } : {}) }; const task = { ...value, taskId, childSessionId: taskSessionId(taskId), state: 'queued', triggerHistory: [trigger], runSequence: 1, runStartedAt: '2026-08-25T00:00:00Z', acceptanceCriteria: value.acceptanceCriteria ?? [value.objective], stageTasks: value.stageTasks ?? ['完成并验证当前轮目标'], runHistory: [], createdAt: '2026-08-25T00:00:00Z' }; tasks.push(task); return { created: true, task } },
     async updateTask(id, transform) { const index = tasks.findIndex((task) => task.taskId === id); tasks[index] = transform(tasks[index]); return tasks[index] },
     async appendOutbox({ groupId, ...outbound }) { const group = groups.get(groupId); if (!group.outbox.some((item) => item.sourceMessageId === outbound.sourceMessageId)) group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...outbound, status: 'pending' }); return group },
+    async updateOutboundRecall({ groupId, outboundId, status, reason, error }) { const item = groups.get(groupId).outbox.find((entry) => entry.outboundId === outboundId); Object.assign(item, { recallStatus: status, recallReason: reason }, status === 'recalled' ? { recalledAt: '2026-08-27T00:00:00Z', recallError: undefined } : {}, status === 'failed' ? { recallError: error } : {}); return groups.get(groupId) },
     async recordActivity(value) { const existing = activities.find((item) => item.eventKey === value.eventKey); if (existing) return { created: false, activity: existing }; activities.push(value); return { created: true, activity: value } },
     async recordAlert(value) { const existing = alerts.find((item) => item.taskId === value.taskId && item.fingerprint === value.fingerprint); if (existing) { existing.count += 1; return { created: false, alert: existing } } const alert = { ...value, count: 1 }; alerts.push(alert); return { created: true, alert } },
     listActivities: () => activities,
@@ -226,6 +243,25 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(one.task.runSequence, 1)
   assert.deepEqual(one.task.acceptanceCriteria, ['one'])
   assert.equal(runtime.getTask(one.task.taskId).state, 'running', 'Goal active 不等于 Task 完成')
+  const checkpointTool = leafTools.find(([sessionId, tool]) => sessionId === one.task.childSessionId && tool.name === 'submit_task_checkpoint')?.[1]
+  assert.ok(checkpointTool)
+  const submitCheckpointPair = async (taskId, label) => {
+    const current = runtime.getTask(taskId)
+    const tool = leafTools.filter(([sessionId, candidate]) => sessionId === current.childSessionId && candidate.name === 'submit_task_checkpoint').at(-1)?.[1]
+    await tool.execute({ kind: 'plan-confirmed', summary: `${label}计划`, completedItems: [], evidence: ['已读取当前目标'], remainingItems: [`${label}检查点一`, `${label}检查点二`], nextStep: `${label}检查点一`, needsCoordinatorDecision: false }, { agent: { session: { id: current.childSessionId } } })
+    await tool.execute({ kind: 'stage-completed', stageTask: current.stageTasks[0], summary: `${label}阶段完成`, completedItems: [`${label}检查点一`], evidence: ['阶段证据'], remainingItems: [`${label}检查点二`], nextStep: `${label}检查点二`, needsCoordinatorDecision: false }, { agent: { session: { id: current.childSessionId } } })
+  }
+  assertSupportedJsonSchema(checkpointTool.parameters)
+  assertSupportedJsonSchema(checkpointTool.output.schema)
+  await assert.rejects(checkpointTool.execute({ kind: 'stage-completed', stageTask: '完成并验证当前轮目标', summary: '跳过计划', completedItems: [], evidence: [], remainingItems: [], nextStep: '完成', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } }), /task_checkpoint_plan_required/)
+  await assert.rejects(checkpointTool.execute({ kind: 'plan-confirmed', summary: '计划不足', completedItems: [], evidence: [], remainingItems: ['只有一项'], nextStep: '执行', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } }), /task_checkpoint_plan_insufficient/)
+  await checkpointTool.execute({ kind: 'plan-confirmed', summary: '已拆分执行检查点', completedItems: [], evidence: ['已读取任务目标'], remainingItems: ['核验正常路径', '核验异常路径'], nextStep: '核验正常路径', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } })
+  const checkpointReply = await checkpointTool.execute({ kind: 'stage-completed', stageTask: '完成并验证当前轮目标', summary: '接口核验完成', completedItems: ['读取实现'], evidence: ['runtime.js:303'], remainingItems: ['异常路径'], nextStep: '运行异常路径回归', needsCoordinatorDecision: true }, { agent: { session: { id: one.task.childSessionId } } })
+  assert.equal(checkpointReply.coordinatorDecision, 'guidance')
+  assert.equal(checkpointReply.guidance, '补充异常路径回归后再提交完成结果')
+  assert.equal(runtime.getTask(one.task.taskId).checkpoints[1].coordinatorDecision, 'guidance')
+  await assert.rejects(checkpointTool.execute({ kind: 'stage-completed', stageTask: '不存在的阶段', summary: '错误阶段', completedItems: [], evidence: [], remainingItems: [], nextStep: '停止', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } }), /task_checkpoint_stage_invalid/)
+  assert.equal(groups.get('group-a').outbox.length, 0, '内部检查点不得进入群聊发信箱')
   sessionObserver({ id: 'session-task-1' }, { seq: 7, type: 'turn/end', data: { status: 'success' } })
   sessionObserver({ id: 'session-task-1' }, { seq: 7, type: 'turn/end', data: { status: 'success' } })
   await runtime.flushActivities()
@@ -233,7 +269,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(runtime.getTask(one.task.taskId).state, 'running', 'turn/end投影不能完成Task')
   const followup = await runtime.followupTask({ taskId: one.task.taskId, text: 'more evidence' })
   assert.equal(followup.accepted, true)
-  assert.equal(followups[0][0], 'session-task-1')
+  assert.equal(followups.some(([sessionId, message]) => sessionId === 'session-task-1' && message.content[0]?.text === 'more evidence'), true)
   await runtime.submitTaskResult({ taskId: two.task.taskId, result: { status: 'waiting', waitingKind: 'information', summary: 'need input', evidence: [], artifacts: [], waitingReason: 'provide fixture', questions: ['Which fixture?'] } })
   assert.equal(runtime.getTask(two.task.taskId).state, 'waiting')
   assert.equal(groups.get('group-a').outbox[0].sourceMessageId.startsWith(`task-result:${two.task.taskId}:waiting:`), true)
@@ -283,6 +319,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     requesterOpenDingTalkId: undefined,
     triggerHistory: [...current.triggerHistory, { sourceMessageId: 'recovery:completion-review-gate', requesterName: '内部恢复操作人' }],
   }))
+  Object.assign(groups.get('group-a').outbox[0], { status: 'sent', deliveredMessageId: 'ding-old-1' })
   await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified', 'uat2 页面回归通过'], artifacts: ['docs/acceptance/report.md'], delivery: { environment: 'UAT2', pipeline: 186 } } })
   assert.equal(groups.get('group-a').outbox[1].sourceMessageId, `task-result:${one.task.taskId}:completed`)
   assert.equal(groups.get('group-a').outbox[1].text, `coordinated:${one.task.taskId}`)
@@ -349,6 +386,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   const raisedConcurrency = await runtime.updateAgentConfig({ maxConcurrentTasks: 3 })
   assert.equal(raisedConcurrency.maxConcurrentTasks, 3)
   assert.equal(runtime.getTask(one.task.taskId).state, 'running', '提高并行上限后按FIFO立即启动待执行任务')
+  await submitCheckpointPair(one.task.taskId, '第二轮')
   await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'second done', evidence: ['second verified'], artifacts: [] } })
   assert.equal(groups.get('group-a').outbox.at(-1).sourceMessageId, `task-result:${one.task.taskId}:completed:1`, '重开任务再次完成必须生成独立通知')
   assert.equal(groups.get('group-a').outbox.at(-1).replyToMessageId, 'm-reopen-1')
@@ -362,11 +400,13 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(runningUpgraded.objectiveHistory.at(-1).objective, 'one')
   assert.equal(goals.get(runningUpgraded.childSessionId).objective, runningUpgraded.objective, '运行中授权升级必须替换当前Goal目标')
 
+  await submitCheckpointPair(one.task.taskId, '第三轮')
   await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'investigated', evidence: ['checked'], artifacts: [] } })
   const internalReopen = await runtime.reopenTask({ taskId: one.task.taskId, context: '内部恢复完成验收', sourceMessageId: 'recovery:completion-review-gate', requesterName: '内部恢复操作人' })
   assert.equal(internalReopen.sourceMessageId, 'm-reopen-2', '内部恢复不得覆盖当前真实群消息')
   assert.equal(internalReopen.requesterOpenDingTalkId, 'od-reopen-2')
   assert.equal(internalReopen.triggerHistory.some((item) => item.sourceMessageId.startsWith('recovery:')), false, '内部恢复不得写入消息触发历史')
+  await submitCheckpointPair(one.task.taskId, '内部恢复轮')
   await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'internal recovery done', evidence: ['checked again'], artifacts: [] } })
   const upgraded = await runtime.reopenTask({ taskId: one.task.taskId, context: '请修复并部署 UAT2', objective: '修复问题、部署 UAT2 并完成业务验证', sourceMessageId: 'm-upgrade', requesterName: '升级提出人', requesterOpenDingTalkId: 'od-upgrade' })
   assert.equal(upgraded.objective, '修复问题、部署 UAT2 并完成业务验证')
@@ -381,6 +421,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(reopenedCompleted.triggerHistory[1].sourceMessageId, 'm-reopen-1')
   assert.equal(reopenedCompleted.triggerHistory[2].sourceMessageId, 'm-reopen-2')
   const beforeRejectedCompletion = groups.get('group-a').outbox.length
+  await submitCheckpointPair(one.task.taskId, '升级轮')
   await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'development', summary: '重复上一轮旧结论', evidence: ['只有旧结论证据'], artifacts: [] } }), /task_result_objective_not_covered/)
   assert.equal(runtime.getTask(one.task.taskId).state, 'running')
   assert.equal(groups.get('group-a').outbox.length, beforeRejectedCompletion, '验收拒绝不得生成完成通知')

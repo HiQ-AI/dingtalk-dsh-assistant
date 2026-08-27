@@ -59,6 +59,13 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
   let groupBackfillTail = Promise.resolve()
   let outboxRetryTimer
   let outboxRetryTail = Promise.resolve()
+  const detachGroupMessageRecaller = (runtime.registerGroupMessageRecaller ?? (() => () => undefined))(async ({ groupId, messageId, outbound }) => {
+    await adapter.recallMessage(messageId)
+    if (typeof adapter.findOutboundMessage === 'function') {
+      const found = await adapter.findOutboundMessage(groupId, outbound)
+      if (found !== undefined) throw new Error(`dws_recall_readback_message_present:${messageId}`)
+    }
+  })
   const processMessage = async (message) => {
     const group = runtime.getGroup?.(message.groupId)
     const persisted = group?.messages?.find((item) => item.messageId === message.messageId)
@@ -72,7 +79,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       if (persisted?.agentDeliveryStatus === 'failed') await runtime.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'skipped' })
       return
     }
-    if (persisted !== undefined) return
+    if (persisted !== undefined && persisted.agentDeliveryStatus !== 'failed') return
     const media = typeof adapter.loadMessageImages === 'function' ? await adapter.loadMessageImages(message) : { images: [], mediaUnavailable: [] }
     const accepted = await runtime.ingest({
       ...message,
@@ -286,6 +293,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     detachOutboxListener()
     detachHumanBlockerListener()
     detachAuthorizationDecisionListener()
+    detachGroupMessageRecaller()
     for (const subscription of subscriptions.values()) subscription.stop()
     await Promise.allSettled([...subscriptions.values()].map((subscription) => subscription.done))
     await humanPollTail

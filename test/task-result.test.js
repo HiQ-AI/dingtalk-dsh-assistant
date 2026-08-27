@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseTaskResult } from '../packages/dingtalk-dsh-assistant/task-result.js'
+import { parseTaskCheckpoint, parseTaskResult } from '../packages/dingtalk-dsh-assistant/task-result.js'
+
+test('Task checkpoint只接受事件驱动的结构化内部同步', () => {
+  const checkpoint = { kind: 'stage-completed', stageTask: '核验接口', summary: '已完成接口核验', completedItems: ['读取实现'], evidence: ['runtime.js:303'], remainingItems: ['验证异常路径'], nextStep: '运行回归测试', needsCoordinatorDecision: false }
+  assert.deepEqual(parseTaskCheckpoint(checkpoint), checkpoint)
+  assert.throws(() => parseTaskCheckpoint({ ...checkpoint, kind: 'heartbeat' }))
+  assert.throws(() => parseTaskCheckpoint({ ...checkpoint, extra: true }))
+})
 
 test('Task completed结果要求非空summary与至少一条evidence', () => {
   assert.throws(() => parseTaskResult({ status: 'completed', workType: 'non-development', summary: 'done', evidence: [], artifacts: [] }))

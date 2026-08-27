@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
-test('CI 在 Node 24 下测试、打包并上传三个发行包', async () => {
+test('CI 只允许手工触发并在 Node 24 下测试、打包三个发行包', async () => {
   const workflow = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  assert.match(workflow, /on:\s*\n\s*workflow_dispatch:/u)
+  assert.doesNotMatch(workflow, /pull_request:/u)
+  assert.doesNotMatch(workflow, /\n\s*push:/u)
   assert.match(workflow, /runs-on: windows-latest/u)
   assert.match(workflow, /node-version: 24\.19\.0/u)
   assert.match(workflow, /pnpm install --frozen-lockfile/u)
