@@ -64,6 +64,7 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /'aria-label': '任务目标'/)
   assert.match(source, /IconGoalOutline16/)
   assert.match(source, /IconChecklistOutline14/)
+  assert.match(source, /'aria-label': '任务' \}\), '任务'/)
   assert.match(source, /role: 'progressbar', 'aria-label': '检查点进度'/)
   assert.match(source, /flex: '1 1 auto', minWidth: 24, height: 4/)
   assert.match(source, /IconChevronDownOutline14/)
