@@ -1,6 +1,6 @@
 {
   "name": "@zzusp/dingtalk-dsh-assistant",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "DingTalk resident runtime and settings client for DeepSeek Harness",
   "license": "UNLICENSED",
   "type": "module",
