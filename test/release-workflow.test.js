@@ -30,6 +30,8 @@ test('Release 绑定受控环境并按依赖顺序发布，npm 回读后才创�
   assert.match(workflow, /secrets\.NPM_PUBLISH_TOKEN \|\| secrets\.NPM_TOKEN/u)
   assert.match(workflow, /release_tag_must_point_to_main_history/u)
   assert.match(workflow, /version_mismatch_tag_/u)
+  assert.match(workflow, /changelog_entry_missing_/u)
+  assert.match(workflow, /changelog_release_link_missing_/u)
   const observer = workflow.indexOf('npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-observer-')
   const assistant = workflow.indexOf('npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-assistant-')
   const distribution = workflow.indexOf('npm publish "docs/tmp/packages/dingtalk-dsh-assistant-')
@@ -37,4 +39,20 @@ test('Release 绑定受控环境并按依赖顺序发布，npm 回读后才创�
   const release = workflow.indexOf('gh release create')
   assert.ok(observer >= 0 && observer < assistant && assistant < distribution)
   assert.ok(distribution < readback && readback < release)
+  assert.match(workflow, /\$maxAttempts = 12/u)
+  assert.match(workflow, /\$retryDelaySeconds = 10/u)
+  assert.match(workflow, /for \(\$attempt = 1; \$attempt -le \$maxAttempts; \$attempt\+\+\)/u)
+  assert.match(workflow, /Start-Sleep -Seconds \$retryDelaySeconds/u)
+  assert.match(workflow, /npm_readback_failed_\$package`_after_\$maxAttempts`_attempts/u)
+})
+
+test('当前正式版本在 CHANGELOG 中有对应章节和 Release 链接', async () => {
+  const [manifestSource, changelog] = await Promise.all([
+    readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    readFile(new URL('../CHANGELOG.md', import.meta.url), 'utf8'),
+  ])
+  const { version } = JSON.parse(manifestSource)
+  const escapedVersion = version.replaceAll('.', '\\.')
+  assert.match(changelog, new RegExp(`^## \\[${escapedVersion}\\] - \\d{4}-\\d{2}-\\d{2}$`, 'mu'))
+  assert.match(changelog, new RegExp(`^\\[${escapedVersion}\\]: https://github\\.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v${escapedVersion}$`, 'mu'))
 })
