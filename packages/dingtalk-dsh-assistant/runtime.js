@@ -49,7 +49,7 @@ const activityDetail = (event) => {
   return { contentBlocks: event.data?.message?.content?.length ?? 0 }
 }
 
-export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, inboxDeliveryDelayMs = 5_000 } = {}) {
+export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, inboxDeliveryDelayMs = 5_000 } = {}) {
   const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
@@ -83,8 +83,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
   }
   const residentSetup = (groupId) => async (agentCtx) => {
     if (agentPresets === undefined) throw new Error('agent_presets_required')
-    const preset = await agentPresets.mount(agentCtx, 'standard')
-    if (preset?.id !== undefined && preset.id !== 'standard') throw new Error(`resident_agent_preset_invalid:${preset.id}`)
+    const preset = await agentPresets.mount(agentCtx, agentPreset)
+    if (preset?.id !== undefined && preset.id !== agentPreset) throw new Error(`resident_agent_preset_invalid:${preset.id}`)
     configureResident(agentCtx, groupId)
   }
   function configureResident(agentCtx, groupId) {
@@ -363,6 +363,9 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
   async function resumeResident(group) {
     if (residentHandles.has(group.groupId)) return residentHandles.get(group.groupId)
     const handle = await ctx.agents.resume({ resumeSessionId: SessionId(group.residentSessionId), agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+    if (group.residentAgentPreset !== agentPreset) {
+      await store.updateGroup({ groupId: group.groupId, residentAgentPreset: agentPreset })
+    }
     applyFullAccess(handle)
     residentHandles.set(group.groupId, handle)
     return handle
@@ -517,7 +520,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, 
       if (parent === undefined) throw new Error(`resident_not_active:${task.groupId}`)
       if (agentPresets === undefined) throw new Error('agent_presets_required')
       const inheritedPreset = agentPresets.composeFrom(agentCtx, parent.ctx)
-      if (inheritedPreset !== 'standard') throw new Error(`leaf_agent_preset_invalid:${inheritedPreset ?? 'none'}`)
+      if (inheritedPreset !== agentPreset) throw new Error(`leaf_agent_preset_invalid:${inheritedPreset ?? 'none'}`)
       installSelection(agentCtx)
       agentCtx.systemPrompt.section({
         name: 'group-task-blocking-policy', order: 45,
@@ -868,7 +871,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       const detail = error instanceof Error ? error.message : String(error)
       if (detail.includes('corrupt session log') || detail.includes('history unavailable')) {
         const replacementSessionId = `${residentSessionId(group.groupId)}-${randomUUID().slice(0, 8)}`
-        const { handle } = await createResident(group.groupId, { sessionId: SessionId(replacementSessionId), meta: { cwd: agentWorkspace, agentPreset: 'standard', replacedCorruptSessionId: group.residentSessionId }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+        const { handle } = await createResident(group.groupId, { sessionId: SessionId(replacementSessionId), meta: { cwd: agentWorkspace, agentPreset, replacedCorruptSessionId: group.residentSessionId }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
         applyFullAccess(handle)
         await store.updateGroup({ groupId: group.groupId, residentSessionId: replacementSessionId })
         residentHandles.set(group.groupId, handle)
@@ -1156,10 +1159,10 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     submitTaskResult: ({ taskId, result }) => serializeTasks(() => submitTaskResultInternal(taskId, result)),
     subscribe: ({ groupId, name, responsibility = '' }) => serialize(groupId, async () => {
       const existing = store.getGroup(groupId); if (existing !== undefined) return { created: false, group: existing }
-      const sessionId = residentSessionId(groupId), { handle } = await createResident(groupId, { sessionId: SessionId(sessionId), meta: { cwd: agentWorkspace, agentPreset: 'standard' }, agentOptions, setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+      const sessionId = residentSessionId(groupId), { handle } = await createResident(groupId, { sessionId: SessionId(sessionId), meta: { cwd: agentWorkspace, agentPreset }, agentOptions, setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
       applyFullAccess(handle)
       try {
-        const result = await store.subscribe({ groupId, name, responsibility, residentSessionId: sessionId }); residentHandles.set(groupId, handle)
+        const result = await store.subscribe({ groupId, name, responsibility, residentSessionId: sessionId, residentAgentPreset: agentPreset }); residentHandles.set(groupId, handle)
         for (const listener of subscriptionListeners) listener(result.group)
         return result
       } catch (error) { await handle.dispose(); throw error }
@@ -1203,7 +1206,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             await previous.agent.whenIdle()
             const seed = [...previous.agent.session.events]
             const sessionId = `${residentSessionId(group.groupId)}-${randomUUID().slice(0, 8)}`
-            const { handle } = await createResident(group.groupId, { sessionId: SessionId(sessionId), seed, meta: { cwd: nextWorkspace, agentPreset: 'standard', seedLength: seed.length }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+            const { handle } = await createResident(group.groupId, { sessionId: SessionId(sessionId), seed, meta: { cwd: nextWorkspace, agentPreset, seedLength: seed.length }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
             applyFullAccess(handle)
             replacements.push({ group, previous, handle, sessionId })
           }

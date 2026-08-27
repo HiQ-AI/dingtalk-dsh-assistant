@@ -27,15 +27,15 @@ test('Inbox 延迟五秒插话投递，主会话向叶子会话同样使用插�
   assert.match(source, /decision = parseGroupDecision\(correctedReply\)/)
 })
 
-test('已有群恢复原 Session，新群先创建 dsh Session 再持久绑定', async () => {
-  const groups = new Map([['existing', { groupId: 'existing', residentSessionId: 'session-existing' }]])
+test('已有群切换预设时沿用原 Session，新群先创建 dsh Session 再持久绑定', async () => {
+  const groups = new Map([['existing', { groupId: 'existing', residentSessionId: 'session-existing', residentAgentPreset: 'standard' }]])
   const calls = []
   const setupReturns = []
   const permissionSets = []
   const promptSections = []
   const registeredTools = []
   const tasks = []
-  const handle = (sessionId) => ({ agent: { session: { id: sessionId } }, dispose: async () => undefined })
+  const handle = (sessionId) => ({ agent: { session: { id: sessionId, meta: { agentPreset: 'standard-convergent' } } }, dispose: async () => undefined })
   const ctx = {
     agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
     agents: {
@@ -46,7 +46,7 @@ test('已有群恢复原 Session，新群先创建 dsh Session 再持久绑定',
       drainContinuableDescendants: async () => undefined,
     },
     agentPresets: {
-      mount: async () => ({ id: 'standard' }), composeFrom: () => 'standard',
+      mount: async (_ctx, id) => ({ id }), composeFrom: () => 'standard',
       serviceFor: () => ({ set: (session, preset) => permissionSets.push([session.id, preset]) }),
     },
   }
@@ -66,16 +66,19 @@ test('已有群恢复原 Session，新群先创建 dsh Session 再持久绑定',
     ingest: async () => undefined,
     acknowledge: async () => undefined,
     async subscribe(value) { const group = { ...value, nextSequence: 1, messages: [], outbox: [] }; groups.set(value.groupId, group); return { created: true, group } },
+    async updateGroup(value) { const group = { ...groups.get(value.groupId), ...value }; groups.set(value.groupId, group); return group },
     close: async () => undefined,
   }
 
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0 }))
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ agentPreset: 'standard-convergent', maxConcurrentTasks: 0 }))
   const created = await runtime.subscribe({ groupId: 'new-group', name: '新群名称' })
   assert.deepEqual(calls[0], ['resume', 'session-existing'])
   assert.deepEqual(calls[1].slice(0, 2), ['create', created.group.residentSessionId])
+  assert.equal(groups.get('existing').residentSessionId, 'session-existing')
+  assert.equal(groups.get('existing').residentAgentPreset, 'standard-convergent')
   assert.deepEqual(permissionSets, [['session-existing', 'danger-full-access'], [created.group.residentSessionId, 'danger-full-access']])
   assert.equal(calls[1][2], agentWorkspace)
-  assert.equal(calls[1][3], 'standard')
+  assert.equal(calls[1][3], 'standard-convergent')
   assert.deepEqual(setupReturns, [undefined], 'Agent setup不能意外返回非事务对象')
   assert.equal(created.group.residentSessionId, residentSessionId('new-group'))
   assert.equal(promptSections[0].name, 'dingtalk-group-responsibility')
@@ -168,7 +171,7 @@ test('单个 resident Session 恢复超时被隔离且不阻塞其他群启动',
 })
 
 test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 排队', async () => {
-  const groups = new Map([['group-a', { groupId: 'group-a', responsibility: 'coordinate', residentSessionId: 'session-parent', outbox: [] }]])
+  const groups = new Map([['group-a', { groupId: 'group-a', responsibility: 'coordinate', residentSessionId: 'session-parent', residentAgentPreset: 'standard-convergent', outbox: [] }]])
   const tasks = []
   const creates = [], createMetas = [], followups = [], approvalResumeOrder = [], disposed = [], activities = [], alerts = [], goals = new Map(), agents = new Map(), leafTools = []
   let sessionObserver
@@ -214,7 +217,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
       async drainContinuableDescendants() {},
     },
     agentPresets: {
-      mount: async () => ({ id: 'standard' }), composeFrom: () => 'standard',
+      mount: async () => ({ id: 'standard-convergent' }), composeFrom: () => 'standard-convergent',
       serviceFor: () => ({ set: () => undefined }),
     },
   }
@@ -231,7 +234,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     listActivities: () => activities,
     close: async () => undefined,
   }
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 2, supervisorIntervalMs: 0 }))
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ agentPreset: 'standard-convergent', maxConcurrentTasks: 2, supervisorIntervalMs: 0 }))
   const one = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm1', objective: 'one', requesterName: '初始提出人', requesterOpenDingTalkId: 'od-initial', occurredAt: '2026-08-25T01:00:00Z' })
   const two = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm2', objective: 'two' })
   const three = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm3', objective: 'three' })
@@ -429,7 +432,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   await runtime.close()
   const persistedChildSessionId = runtime.getTask(three.task.taskId).childSessionId
   goals.set(persistedChildSessionId, { ...goals.get(persistedChildSessionId), revision: 4, phase: 'paused', activation: 'disarmed' })
-  const recoveredRuntime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ supervisorIntervalMs: 0 }))
+  const recoveredRuntime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ agentPreset: 'standard-convergent', supervisorIntervalMs: 0 }))
   assert.equal(goals.get(persistedChildSessionId).phase, 'active', '进程重启恢复时仍应续接Task当前叶子')
   assert.equal(recoveredRuntime.getTask(three.task.taskId).state, 'running')
   assert.equal(goals.get('session-task-2').phase, 'blocked', '业务 waiting Task 不应被启动恢复误唤醒')
