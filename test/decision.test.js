@@ -3,8 +3,9 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { buildDecisionPrompt, buildLeafSourceEnvelope, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from '../packages/dingtalk-dsh-assistant/decision.js'
 
-test('群决策严格接受五类结构化结果', () => {
+test('群决策严格接受六类结构化结果', () => {
   assert.equal(parseGroupDecision('{"kind":"answer","reply":"ok"}').kind, 'answer')
+  assert.equal(parseGroupDecision('{"kind":"task-proposal","title":"导出数据","objective":"导出 1.0.1 数据","reply":"这个事项是否需要我处理？"}').kind, 'task-proposal')
   assert.equal(parseGroupDecision('{"kind":"new-task","title":"修复问题","objective":"fix","reply":"accepted"}').kind, 'new-task')
   assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"more","reply":"added"}').kind, 'task-context')
   assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"fix it","objective":"修复并部署","reply":"added"}').objective, '修复并部署')
@@ -23,14 +24,21 @@ test('群决策拒绝无效 JSON、多余字段和缺失目标', () => {
 })
 
 test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () => {
-  const prompt = buildDecisionPrompt({ sequence: 7, message: 'hello', senderName: '张三', senderOpenDingTalkId: 'od-user-1', occurredAt: '2026-08-24T13:00:00+08:00', quotedMessage: { messageId: 'm-quoted', senderName: '李四', occurredAt: '2026-08-24 12:59:00', content: 'quoted' }, mediaUnavailable: ['media-1: download failed'] })
+  const prompt = buildDecisionPrompt({ messageId: 'm-unique', message: 'hello', senderName: '张三', senderOpenDingTalkId: 'od-user-1', occurredAt: '2026-08-24T13:00:00+08:00', quotedMessage: { messageId: 'm-quoted', senderName: '李四', occurredAt: '2026-08-24 12:59:00', content: 'quoted' }, mediaUnavailable: ['media-1: download failed'] })
   assert.doesNotMatch(prompt, /当前活动任务|taskId/)
   assert.doesNotMatch(prompt, /Use new-task|Return one strict JSON/)
-  assert.match(prompt, /消息 7\n发送者：张三\n发送者OpenDingTalkId：od-user-1/)
+  assert.match(prompt, /消息唯一标识：m-unique\n发送者：张三\n发送者OpenDingTalkId：od-user-1/)
+  assert.doesNotMatch(prompt, /消息 \d+/)
   assert.match(prompt, /时间：2026-08-24T05:00:00\.000Z/)
   assert.match(prompt, /引用消息ID：m-quoted/)
   assert.doesNotMatch(prompt, /发送者：李四|时间：2026-08-24 12:59:00|内容：quoted/)
   assert.match(prompt, /不得仅因附件暂不可读而断言消息与职责或活动任务无关/)
+})
+
+test('失败消息重试明确要求重新完成业务判断', () => {
+  const prompt = buildDecisionPrompt({ message: '需要排查', occurredAt: '2026-08-27T04:00:00Z', deliveryRetry: true })
+  assert.match(prompt, /这是一次失败消息重试/)
+  assert.match(prompt, /不得仅因消息 ID 已在会话中出现[\s\S]*判定 ignore/)
 })
 
 test('引用消息信封只保留引用消息 ID', () => {
@@ -50,7 +58,7 @@ test('叶子来源信封只传原始事实并要求独立核验', () => {
   assert.match(envelope, /不是已经核验的根因、完成状态或实施方案/u)
 })
 
-test('任务发起必须明确指名配置名称、别名、DWS登录人或使用cc指令', () => {
+test('显式任务指向识别配置名称、别名、DWS登录人或cc指令', () => {
   const names = ['数字助理', '小助手', '当前登录人']
   assert.equal(isExplicitAgentDirection('数字助理，帮忙排查这个问题', names), true)
   assert.equal(isExplicitAgentDirection('@小助手 请处理', names), true)
@@ -71,6 +79,24 @@ test('同事AI回复必须进入模型并由群决策协议判断', async () => 
   assert.match(source, /同事或其 AI 助理发送的回复、任务回执和状态通知都是正常群消息/u)
   assert.match(source, /不得按固定文案或发送者在模型外预先过滤/u)
   assert.doesNotMatch(source, /isAutomatedTaskReceipt|automated_task_receipt/u)
+})
+
+test('未点名但应处理时先询问且不得由 Runtime 静默降级', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
+  assert.match(source, /未明确指名、但你判断事项应形成任务时，必须选择 task-proposal/u)
+  assert.match(source, /询问“这个事项是否需要我处理？”/u)
+  assert.match(source, /收到肯定答复后再结合原消息及其后补充选择 new-task/u)
+  assert.doesNotMatch(source, /decision\.kind === 'new-task'[\s\S]{0,200}isExplicitAgentDirection/u)
+})
+
+test('主会话默认静默并禁止对任务补充发送过程承诺', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
+  assert.match(source, /理解消息、关联任务和回复群聊是三个独立决定/u)
+  assert.match(source, /默认保持静默/u)
+  assert.match(source, /只做任务关联或静默补充上下文，不得回复/u)
+  assert.match(source, /仅因消息提及当前 DWS 登录人姓名/u)
+  assert.match(source, /文件或图片前后的短句不得分别追问/u)
+  assert.match(source, /不得发送纯过程承诺/u)
 })
 
 test('诊断请求不得被主会话或叶子会话扩大为修复授权', async () => {

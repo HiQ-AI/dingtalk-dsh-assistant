@@ -34,6 +34,17 @@ const humanInterventionWaitingResultSchema = z.object({
 
 export const taskResultSchema = z.union([completedResultSchema, informationWaitingResultSchema, humanInterventionWaitingResultSchema])
 
+export const taskCheckpointSchema = z.object({
+  kind: z.enum(['plan-confirmed', 'stage-completed', 'scope-conflict', 'evidence-gap', 'risk-changed']),
+  stageTask: z.string().trim().min(1).optional(),
+  summary: z.string().trim().min(1),
+  completedItems: z.array(z.string().trim().min(1)).default([]),
+  evidence: z.array(z.string().trim().min(1)).default([]),
+  remainingItems: z.array(z.string().trim().min(1)).default([]),
+  nextStep: z.string().trim().min(1),
+  needsCoordinatorDecision: z.boolean().default(false),
+}).strict()
+
 export function parseTaskResult(value) {
   const result = taskResultSchema.parse(value)
   if (result.status === 'waiting' && result.waitingKind === 'human-intervention' && ['network', 'resource'].includes(result.blockerCategory)) {
@@ -43,4 +54,8 @@ export function parseTaskResult(value) {
     }
   }
   return result
+}
+
+export function parseTaskCheckpoint(value) {
+  return taskCheckpointSchema.parse(value)
 }

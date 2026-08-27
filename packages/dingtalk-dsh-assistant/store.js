@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
-import { taskResultSchema } from './task-result.js'
+import { taskCheckpointSchema, taskResultSchema } from './task-result.js'
 
 const missingText = (value) => typeof value !== 'string' || value.trim() === '' || value.trim().toLowerCase() === 'null'
 
@@ -13,6 +13,8 @@ const outboundSchema = z.object({
   deliveredMessageId: z.string().min(1).optional(),
   replyToMessageId: z.string().min(1).optional(), replyToSenderOpenDingTalkId: z.string().min(1).optional(),
   atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
+  recallStatus: z.enum(['requested', 'recalled', 'failed']).optional(), recallReason: z.string().min(1).optional(),
+  recalledAt: z.string().min(1).optional(), recallError: z.string().min(1).optional(),
 })
 const legacyWaitingResultSchema = z.object({
   status: z.literal('waiting'), summary: z.string().min(1), evidence: z.array(z.string()), artifacts: z.array(z.string()), waitingReason: z.string().min(1),
@@ -40,11 +42,15 @@ const taskTriggerSchema = z.object({
 const taskObjectiveRevisionSchema = z.object({
   objective: z.string().min(1), revisedAt: z.string().min(1), sourceMessageId: z.string().min(1).optional(),
 })
+const persistedTaskCheckpointSchema = taskCheckpointSchema.extend({
+  checkpointId: z.string().min(1), submittedAt: z.string().min(1),
+  coordinatorDecision: z.enum(['acknowledge', 'guidance']).optional(), coordinatorReason: z.string().min(1).optional(), guidance: z.string().min(1).optional(), reviewedAt: z.string().min(1).optional(),
+})
 const taskRunSchema = z.object({
   runSequence: z.number().int().positive(), startedAt: z.string().min(1), endedAt: z.string().min(1).optional(),
   sourceMessageId: z.string().min(1), objective: z.string().min(1), childSessionId: z.string().min(1),
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
-  acceptanceCriteria: z.array(z.string().min(1)), stageTasks: z.array(z.string().min(1)), result: persistedTaskResultSchema.optional(),
+  acceptanceCriteria: z.array(z.string().min(1)), stageTasks: z.array(z.string().min(1)), checkpoints: z.array(persistedTaskCheckpointSchema).optional(), result: persistedTaskResultSchema.optional(),
 })
 const taskSchema = z.object({
   taskId: z.string().min(1), groupId: z.string().min(1), sourceMessageId: z.string().min(1), title: z.string().min(1).optional(), objective: z.string().min(1),
@@ -56,6 +62,7 @@ const taskSchema = z.object({
   runSequence: z.number().int().positive().optional(), runStartedAt: z.string().min(1).optional(),
   acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional(), runHistory: z.array(taskRunSchema).optional(),
   relatedContexts: z.array(z.string().min(1)).optional(),
+  checkpoints: z.array(persistedTaskCheckpointSchema).optional(),
   humanBlocker: humanBlockerSchema.optional(), humanBlockerHistory: z.array(humanBlockerSchema).optional(),
   completion: z.string().optional(), result: persistedTaskResultSchema.optional(), lastWaitingResult: persistedTaskResultSchema.optional(), lastCompletedResult: persistedTaskResultSchema.optional(),
   completionSequence: z.number().int().nonnegative().optional(),
@@ -77,7 +84,7 @@ const alertSchema = z.object({
 const ACTIVITY_PROJECTION_LIMIT_PER_TASK = 500
 
 export const residentDomainSpec = defineDomain({
-  name: 'dingtalk_dsh_assistant', version: 5, tables: {
+  name: 'dingtalk_dsh_assistant', version: 6, tables: {
     groups: domainTable(groupSchema), scheduler: domainTable(schedulerSchema), tasks: domainTable(taskSchema), alerts: domainTable(alertSchema), activities: domainTable(activitySchema),
   },
 })
@@ -328,6 +335,18 @@ export async function openResidentStore(storageDomain) {
       if (!current.outbox.some((item) => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
       return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: 'sent', ...(deliveredMessageId ? { deliveredMessageId } : {}) } : item) }))
     }),
+    updateOutboundRecall: async ({ groupId, outboundId, status, reason, error }) => {
+      const entry = findGroupEntry(groupId)
+      if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
+      const [storageKey, current] = entry
+      if (!current.outbox.some((item) => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
+      const now = new Date().toISOString()
+      return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? {
+        ...item, recallStatus: status, ...(reason ? { recallReason: reason } : {}),
+        ...(status === 'recalled' ? { recalledAt: now, recallError: undefined } : {}),
+        ...(status === 'failed' ? { recallError: error || 'unknown' } : {}),
+      } : item) }))
+    },
     createTask: async ({ groupId, sourceMessageId, title, objective, requesterName, requesterOpenDingTalkId, occurredAt, acceptanceCriteria = [], stageTasks = [], relatedContexts = [] }) => {
       if (findGroupEntry(groupId) === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const duplicate = [...tasks.entries()].map(([, task]) => task).find((task) => task.groupId === groupId && task.sourceMessageId === sourceMessageId)
