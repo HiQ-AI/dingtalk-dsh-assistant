@@ -51,6 +51,7 @@ export async function apply(ctx, config = {}) {
   if (store.getProxyUrl?.() === undefined && configuredProxyUrl) await store.setProxyUrl(configuredProxyUrl)
   applyProxyEnvironment(configuredProxyUrl)
   const runtime = await openResidentRuntime(ctx, store, process.cwd(), {
+    agentPreset: config.agentPreset ?? 'standard',
     agentWorkspaceDir: config.agentWorkspaceDir,
     resumeTimeoutMs: config.resumeTimeoutMs ?? 10_000,
     maxConcurrentTasks: config.maxConcurrentTasks ?? 5,

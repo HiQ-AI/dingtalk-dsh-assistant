@@ -144,6 +144,7 @@ pnpm install
       config:
         host: 127.0.0.1
         port: 18998
+        agentPreset: standard
         fakeModel: false
         resumeTimeoutMs: 10000
         maxConcurrentTasks: 5
@@ -153,6 +154,10 @@ pnpm install
           enabled: false
           writesAuthorized: false
 ```
+
+`agentPreset` 指定 Resident 主会话挂载的 Agent 预设，默认值为 `standard`。使用自定义预设时，应先通过 DSH 的 Agent 预设管理复制并验证预设，再把这里改成对应标识符；不要直接修改 DSH 内置预设文件。
+
+已有 Resident 切换 `agentPreset` 时会沿用原 Session ID 和事件表层，并在成功挂载后回写当前预设标识。不要把历史事件作为新 Session 的 `seed` 重建；`session/end-seed` 会把既有历史划入种子边界，使依赖当前 surface 的自动压缩只能看到边界后的新消息。
 
 默认模型通过实际安装的 provider 配置。例如仅在使用 Codex 订阅时配置：
 
