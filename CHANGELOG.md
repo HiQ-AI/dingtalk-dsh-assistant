@@ -2,6 +2,42 @@
 
 本文件记录 `dingtalk-dsh-assistant` 每个正式版本的用户可见变化。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，日期使用 `YYYY-MM-DD`。
 
+## [0.5.3] - 2026-08-27
+
+### 修复
+
+- Resident、叶会话和故障替换 Session 统一使用配置的 Agent 预设，修复自定义预设下叶会话无法启动的问题。
+- 切换预设时沿用既有 Resident Session，保留原 Session 的事件上下文。
+
+### 变更
+
+- 运行看板 Header 的高度、内边距和字体规格与 Session 页面保持一致。
+- 移除四个任务状态桶的容器阴影；检查点改为默认收起的带边框浅灰面板，完成态使用圆圈对勾图标。
+
+## [0.5.2] - 2026-08-27
+
+### 新增
+
+- 叶会话支持提交结构化任务检查点，运行看板展示检查点进度、执行状态和耗时。
+- 群决策支持 `task-proposal`；未明确指名但可能需要处理的事项会先询问是否需要处理。
+- 主会话可根据持久化检查点确认或纠偏叶会话，并负责消息撤回决策和回读确认。
+
+### 变更
+
+- Resident Inbox 与主会话向叶会话补充上下文改为及时插话，减少长步骤中的排队等待。
+- 运行看板统一群聊、审批、归档和告警页面布局，任务卡片支持展开或折叠检查点。
+
+## [0.5.1] - 2026-08-27
+
+### 修复
+
+- 修复运行看板在侧栏折叠动画期间短暂露出底层 Session 页面的问题。
+- 优化授权审批状态标签，并为刷新按钮补充图标提示。
+
+### 变更
+
+- 正式版本发布支持对已存在且指向 `main` 历史的 Tag 进行手工重试。
+
 ## [0.5.0] - 2026-08-27
 
 ### 新增
@@ -34,5 +70,8 @@
 - assistant、observer 与发行包统一使用同一个产品版本号。
 - Node.js 最低版本与实际 zstd Runtime 要求一致，调整为 24。
 
+[0.5.3]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.3
+[0.5.2]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.2
+[0.5.1]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.1
 [0.5.0]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.0
 [0.4.0]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.4.0
