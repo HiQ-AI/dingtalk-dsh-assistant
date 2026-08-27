@@ -102,7 +102,7 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /task\.state === 'completed'/)
   assert.match(source, /群聊会话/)
   assert.match(source, /任务看板/)
-  assert.match(source, /height: 'calc\(100dvh - 238px\)', minHeight: 420, maxHeight: 'calc\(100dvh - 238px\)'/)
+  assert.match(source, /height: 'calc\(100dvh - 198px\)', minHeight: 420, maxHeight: 'calc\(100dvh - 198px\)'/)
   assert.match(source, /minHeight: 'calc\(100dvh - 138px\)'/)
   assert.match(source, /minHeight: 'calc\(100dvh - 90px\)'/)
   assert.doesNotMatch(source, /max\(1000px/)
