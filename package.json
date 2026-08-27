@@ -1,6 +1,6 @@
 {
   "name": "dingtalk-dsh-assistant",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "在 DeepSeek Harness 中运行的钉钉群聊个人助理与任务看板",
   "license": "UNLICENSED",
   "type": "module",
