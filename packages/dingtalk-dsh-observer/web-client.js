@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const React = require('react')
     const { Button, Menu, Pill, StateDot } = require('@deepseek-ai/dsh-client-ui-primitives')
-    const { useCallback, useEffect, useState } = React
+    const { useCallback, useEffect, useLayoutEffect, useRef, useState } = React
     const ENDPOINT = 'http://127.0.0.1:18998'
     const colors = {
       surface: 'var(--dsw-alias-bg-base, #fff)',
@@ -69,7 +69,7 @@ window.__ModuleLoader__.load({
     }
     const authorizationTag = (label, state) => {
       const tone = statusTone[state] || colors.muted
-      return React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, minWidth: 68, minHeight: 26, boxSizing: 'border-box', border: `1px solid color-mix(in srgb, ${tone} 24%, transparent)`, borderRadius: 999, background: `color-mix(in srgb, ${tone} 9%, transparent)`, color: tone, padding: '3px 9px', fontSize: 11, fontWeight: 550, lineHeight: 1.4, whiteSpace: 'nowrap' } }, React.createElement(StateDot, { state, size: 7 }), label)
+      return React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5, minWidth: 58, minHeight: 22, boxSizing: 'border-box', border: `1px solid color-mix(in srgb, ${tone} 18%, transparent)`, borderRadius: 6, background: `color-mix(in srgb, ${tone} 7%, transparent)`, color: tone, padding: '2px 7px', fontSize: 11, fontWeight: 500, lineHeight: 1.35, whiteSpace: 'nowrap' } }, React.createElement(StateDot, { state, size: 6 }), label)
     }
     function SelectMenu({ label, value, options, onChange, minWidth = 150 }) {
       const [open, setOpen] = useState(false)
@@ -144,11 +144,12 @@ window.__ModuleLoader__.load({
       const [authorizationFilter, setAuthorizationFilter] = useState('all')
       const [selectedAuthorizationId, setSelectedAuthorizationId] = useState('')
       const [sidebarWidth, setSidebarWidth] = useState(280)
+      const overlayRef = useRef()
       const refresh = useCallback(async () => {
         try { setData(await load()); setUpdatedAt(new Date()); setError(undefined) }
         catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
       }, [])
-      useEffect(() => {
+      useLayoutEffect(() => {
         if (!isOpen) return undefined
         refresh()
         const timer = window.setInterval(refresh, 5000)
@@ -164,14 +165,38 @@ window.__ModuleLoader__.load({
           sidebar = sidebar.parentElement
         }
         const update = () => {
-          const width = sidebar?.getBoundingClientRect().width
-          if (Number.isFinite(width) && width >= 40 && width <= 400) setSidebarWidth(Math.round(width))
+          const right = sidebar?.getBoundingClientRect().right
+          if (Number.isFinite(right) && right >= 40 && right <= 400) {
+            const roundedRight = Math.round(right)
+            if (overlayRef.current) overlayRef.current.style.paddingLeft = `${roundedRight}px`
+            setSidebarWidth((current) => current === roundedRight ? current : roundedRight)
+          }
+        }
+        let animationFrame
+        let trackingUntil = 0
+        const trackTransition = () => {
+          trackingUntil = performance.now() + 700
+          if (animationFrame) return
+          const track = () => {
+            update()
+            if (performance.now() < trackingUntil) animationFrame = window.requestAnimationFrame(track)
+            else animationFrame = undefined
+          }
+          animationFrame = window.requestAnimationFrame(track)
         }
         update()
         const observer = sidebar && typeof ResizeObserver === 'function' ? new ResizeObserver(update) : undefined
         if (sidebar && observer) observer.observe(sidebar)
+        sidebar?.addEventListener('transitionrun', trackTransition)
+        document.addEventListener('click', trackTransition, true)
         window.addEventListener('resize', update)
-        return () => { observer?.disconnect(); window.removeEventListener('resize', update) }
+        return () => {
+          observer?.disconnect()
+          sidebar?.removeEventListener('transitionrun', trackTransition)
+          document.removeEventListener('click', trackTransition, true)
+          window.removeEventListener('resize', update)
+          if (animationFrame) window.cancelAnimationFrame(animationFrame)
+        }
       }, [isOpen])
       useEffect(() => {
         const closeForSession = (event) => {
@@ -313,7 +338,8 @@ window.__ModuleLoader__.load({
       })
       const menu = React.createElement('nav', { 'aria-label': '运行看板视图', style: { minWidth: 0, height: 38, display: 'flex', alignItems: 'stretch', gap: 28, overflowX: 'auto', padding: '0 24px' } },
         ...pages.map((page) => React.createElement('button', { key: page.id, type: 'button', onClick: () => setActivePage(page.id), 'aria-current': activePage === page.id ? 'page' : undefined, style: { position: 'relative', border: 0, borderBottom: activePage === page.id ? '2px solid #4d6bfe' : '2px solid transparent', borderRadius: 0, padding: '0 0 8px', cursor: 'pointer', font: 'inherit', fontSize: 13, fontWeight: 400, color: activePage === page.id ? '#4d6bfe' : colors.muted, background: 'transparent', outline: 'none', whiteSpace: 'nowrap' } }, page.label)))
-      const header = React.createElement('header', { style: { position: 'sticky', top: 0, zIndex: 2, borderBottom: `1px solid ${colors.border}`, background: colors.surface } },
+      const refreshIcon = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, React.createElement('path', { d: 'M20 11a8 8 0 1 0-2.34 5.66' }), React.createElement('path', { d: 'M20 4v7h-7' }))
+      const header = React.createElement('header', { style: { position: 'sticky', top: 0, zIndex: 2, borderBottom: `1px solid ${colors.border}`, background: colors.surface, pointerEvents: 'auto' } },
         React.createElement('div', { style: { height: 52, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24, padding: '0 24px' } },
           React.createElement('div', { style: { minWidth: 0, display: 'flex', alignItems: 'center', gap: 14 } },
             React.createElement('span', { style: { fontSize: 15, fontWeight: 400, whiteSpace: 'nowrap' } }, '运行看板'),
@@ -322,7 +348,7 @@ window.__ModuleLoader__.load({
               React.createElement('span', { style: { color: updatedAt ? statusTone.done : colors.muted } }, updatedAt ? '运行正常' : '正在连接'),
               updatedAt ? React.createElement('span', { 'aria-hidden': true, style: { width: 1, height: 12, background: colors.border } }) : null,
               updatedAt ? React.createElement('span', { title: fmt(updatedAt) }, `更新于 ${fmtTime(updatedAt)}`) : null)),
-          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: refresh }, '刷新')),
+          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: refresh, style: { gap: 6 } }, '刷新', refreshIcon)),
         menu)
       const dataViewTabs = React.createElement('div', { role: 'tablist', 'aria-label': '群聊数据视图', style: { display: 'flex', alignSelf: 'stretch', gap: 20 } },
         ...[{ id: 'messages', label: `群消息 ${selectedMessages.length}` }, { id: 'outbox', label: `Outbox ${selectedOutbox.length}` }].map((item) => React.createElement('button', { key: item.id, role: 'tab', 'aria-selected': groupTableView === item.id, type: 'button', onClick: () => setGroupTableView(item.id), style: { border: 0, borderBottom: groupTableView === item.id ? `2px solid ${colors.accent}` : '2px solid transparent', background: 'transparent', color: groupTableView === item.id ? colors.accent : colors.muted, padding: '0 2px', fontFamily: 'inherit', fontSize: 12, cursor: 'pointer' } }, item.label)))
@@ -429,12 +455,12 @@ window.__ModuleLoader__.load({
       )
       const pageContent = activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
       const pageViewport = React.createElement('div', { style: { minHeight: 'calc(100dvh - 138px)', boxSizing: 'border-box' } }, pageContent)
-      const main = React.createElement('main', { style: { maxWidth: activePage === 'tasks' ? 1480 : 1240, minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', margin: '0 auto', padding: '24px 24px 32px', display: 'grid', alignContent: 'start', gap: 20 } },
+      const main = React.createElement('main', { style: { maxWidth: activePage === 'tasks' ? 1480 : 1240, minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', margin: '0 auto', padding: '24px 24px 32px', display: 'grid', alignContent: 'start', gap: 20, pointerEvents: 'auto' } },
         error ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法连接 resident 插件：${error}`) : null,
         navigationError ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法打开 DSH Session：${navigationError}`) : null,
         pageViewport
       )
-      return React.createElement('div', { style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: sidebarWidth, zIndex: 900, minWidth: 0, background: colors.surface, color: 'inherit', overflow: 'auto' } }, header, main)
+      return React.createElement('div', { ref: overlayRef, style: { position: 'fixed', inset: 0, paddingLeft: sidebarWidth, boxSizing: 'border-box', zIndex: 900, minWidth: 0, background: colors.surface, color: 'inherit', overflow: 'auto', pointerEvents: 'none' } }, header, main)
     }
     function apply(ctx) {
       ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'dingtalk-dsh-observer-entry', order: 5, inject: () => ({}) }, SidebarAction))
