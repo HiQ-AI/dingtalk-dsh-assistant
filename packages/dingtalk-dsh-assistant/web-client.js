@@ -5,7 +5,7 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const { useCallback, useEffect, useState } = React
     const { IconRefreshOutline16 } = require('@deepseek-ai/dsh-client-ui-primitives')
-    
+
     const name = 'dingtalk-dsh-assistant-client'
     const inject = ['slots']
     const ENDPOINT = 'http://127.0.0.1:18998'
@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
       const [health, groups, tasks, alerts, environment, agentConfig] = await Promise.all(['/health', '/state/groups', '/state/tasks', '/state/supervisor/alerts', '/state/environment', '/state/agent-config'].map((path) => request(path)))
       return { health, groups, tasks, alerts, environment, agentConfig }
     }
-    
+
     function Environment({ value }) {
       return React.createElement('section', { style: panel },
         React.createElement('strong', null, '环境检查'),
@@ -39,7 +39,7 @@ window.__ModuleLoader__.load({
         value?.dws?.executable ? React.createElement('code', { style: { fontSize: 12, color: colors.muted, overflowWrap: 'anywhere' } }, value.dws.executable) : null
       )
     }
-    
+
     function DingTalkDshAssistantCard() {
       const [overview, setOverview] = useState()
       const [drafts, setDrafts] = useState({})
@@ -165,7 +165,7 @@ window.__ModuleLoader__.load({
             React.createElement('div', { role: groupFeedback.kind === 'error' ? 'alert' : 'status', style: { fontSize: 12, color: groupFeedback.kind === 'error' ? colors.danger : groupFeedback.kind === 'success' ? 'var(--dsw-alias-status-success, #168544)' : colors.muted } }, groupFeedback.message),
             React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: addingGroup ? colors.border : colors.accent, color: '#fff', borderColor: addingGroup ? colors.border : colors.accent, cursor: addingGroup ? 'wait' : 'pointer' }, disabled: addingGroup, onClick: addGroup }, addingGroup ? '正在添加…' : '添加并开始常驻'))))
     }
-    
+
     function apply(ctx) {
       ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({ name: 'settings.plugins.tab', id: 'dingtalk-dsh-assistant', order: 10, label: () => '钉钉个人助理', inject: () => ({}) }, DingTalkDshAssistantCard))
     }

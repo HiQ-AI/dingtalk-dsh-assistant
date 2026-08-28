@@ -2,7 +2,12 @@
 
 本文件记录 `dingtalk-dsh-assistant` 每个正式版本的用户可见变化。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，日期使用 `YYYY-MM-DD`。
 
-## [未发布]
+## [0.5.4] - 2026-08-28
+
+### 修复
+
+- 修复 Windows CRLF 源文件导致 Web client 构建后产生空行尾随空格、发布工作流误判 bundle 未提交的问题。
+- 修复根发行包仍固定依赖 0.5.0 内部 Runtime/Observer、安装新版本时可能带入旧实现的问题；根包现与两个内部包保持同版本。
 
 ### 变更
 
@@ -79,6 +84,7 @@
 - assistant、observer 与发行包统一使用同一个产品版本号。
 - Node.js 最低版本与实际 zstd Runtime 要求一致，调整为 24。
 
+[0.5.4]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.4
 [0.5.3]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.3
 [0.5.2]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.2
 [0.5.1]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.1
