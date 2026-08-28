@@ -32,7 +32,7 @@ const humanBlockerSchema = z.object({
   supersededAt: z.string().min(1).optional(), supersededBy: z.string().min(1).optional(), supersedeReason: z.string().min(1).optional(),
 })
 const groupSchema = z.object({
-  groupId: z.string().min(1), name: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), nextSequence: z.number().int().positive(),
+  groupId: z.string().min(1), name: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), residentAgentPreset: z.string().min(1).optional(), nextSequence: z.number().int().positive(),
   messages: z.array(inboundSchema), outbox: z.array(outboundSchema),
 })
 const taskTriggerSchema = z.object({
@@ -214,18 +214,19 @@ export async function openResidentStore(storageDomain) {
       .filter((activity) => taskId === undefined || activity.taskId === taskId)
       .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt))
       .slice(-ACTIVITY_PROJECTION_LIMIT_PER_TASK),
-    subscribe: ({ groupId, name, responsibility = '', residentSessionId }) => serialize(groupId, async () => {
+    subscribe: ({ groupId, name, responsibility = '', residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
       const existing = findGroupEntry(groupId)?.[1]
       if (existing !== undefined) return { created: false, group: existing }
-      const group = { groupId, ...(name ? { name } : {}), responsibility, residentSessionId: residentSessionId ?? `session-${randomUUID()}`, nextSequence: 1, messages: [], outbox: [] }
+      const group = { groupId, ...(name ? { name } : {}), responsibility, residentSessionId: residentSessionId ?? `session-${randomUUID()}`, ...(residentAgentPreset ? { residentAgentPreset } : {}), nextSequence: 1, messages: [], outbox: [] }
       await groups.put(groupId, group)
       return { created: true, group }
     }),
-    updateGroup: ({ groupId, name, responsibility, residentSessionId }) => serialize(groupId, async () => {
-      if (name === undefined && responsibility === undefined && residentSessionId === undefined) throw new Error('group_update_empty')
+    updateGroup: ({ groupId, name, responsibility, residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
+      if (name === undefined && responsibility === undefined && residentSessionId === undefined && residentAgentPreset === undefined) throw new Error('group_update_empty')
       if (name !== undefined && typeof name !== 'string') throw new Error('group_name_invalid')
       if (responsibility !== undefined && typeof responsibility !== 'string') throw new Error('group_responsibility_invalid')
       if (residentSessionId !== undefined && typeof residentSessionId !== 'string') throw new Error('group_resident_session_invalid')
+      if (residentAgentPreset !== undefined && (typeof residentAgentPreset !== 'string' || residentAgentPreset.trim() === '')) throw new Error('group_resident_agent_preset_invalid')
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       return groups.update(entry[0], (group) => ({
@@ -233,6 +234,7 @@ export async function openResidentStore(storageDomain) {
         ...(name !== undefined ? { name } : {}),
         ...(responsibility !== undefined ? { responsibility } : {}),
         ...(residentSessionId !== undefined ? { residentSessionId } : {}),
+        ...(residentAgentPreset !== undefined ? { residentAgentPreset } : {}),
       }))
     }),
     removeGroup: ({ groupId }) => serialize(groupId, async () => {

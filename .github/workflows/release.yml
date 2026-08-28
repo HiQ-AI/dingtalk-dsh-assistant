@@ -52,6 +52,15 @@ jobs:
           if (($versions | Select-Object -Unique).Count -ne 1 -or $versions[0] -ne $tagVersion) {
             throw "version_mismatch_tag_$tagVersion`_packages_$($versions -join ',')"
           }
+          $changelog = Get-Content -LiteralPath 'CHANGELOG.md' -Raw
+          $escapedVersion = [regex]::Escape($tagVersion)
+          if ($changelog -notmatch "(?m)^## \[$escapedVersion\] - \d{4}-\d{2}-\d{2}$") {
+            throw "changelog_entry_missing_$tagVersion"
+          }
+          $releaseUrl = "https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v$tagVersion"
+          if ($changelog -notmatch "(?m)^\[$escapedVersion\]: $([regex]::Escape($releaseUrl))$") {
+            throw "changelog_release_link_missing_$tagVersion"
+          }
       - run: pnpm install --frozen-lockfile
       - name: 构建并测试
         shell: pwsh
@@ -88,8 +97,19 @@ jobs:
             "@zzusp/dingtalk-dsh-assistant@$version",
             "dingtalk-dsh-assistant@$version"
           )
+          $maxAttempts = 12
+          $retryDelaySeconds = 10
           foreach ($package in $expected) {
-            $published = npm view $package version --registry https://registry.npmjs.org/
-            if ($LASTEXITCODE -ne 0 -or $published.Trim() -ne $version) { throw "npm_readback_failed_$package" }
+            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+              $published = npm view $package version --registry https://registry.npmjs.org/ 2>$null
+              $viewExitCode = $LASTEXITCODE
+              if ($viewExitCode -eq 0 -and ($published | Out-String).Trim() -eq $version) {
+                Write-Host "npm_readback_succeeded_$package`_attempt_$attempt"
+                break
+              }
+              if ($attempt -eq $maxAttempts) { throw "npm_readback_failed_$package`_after_$maxAttempts`_attempts" }
+              Write-Warning "npm_readback_pending_$package`_attempt_$attempt"
+              Start-Sleep -Seconds $retryDelaySeconds
+            }
           }
           gh release create $env:RELEASE_TAG docs/tmp/packages/*.tgz --verify-tag --title $env:RELEASE_TAG --generate-notes
