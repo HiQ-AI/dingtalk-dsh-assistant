@@ -14,10 +14,10 @@ test('版本检查返回当前版本、最新 Release 与升级判断', async ()
   const result = await checkForUpdates({
     force: true,
     now: Date.parse('2026-08-26T00:00:00.000Z'),
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ tag_name: 'v0.5.8', html_url: 'https://example.test/release' }) }),
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ tag_name: 'v0.5.9', html_url: 'https://example.test/release' }) }),
   })
   assert.equal(result.currentVersion, await readCurrentVersion())
-  assert.equal(result.latestVersion, '0.5.8')
+  assert.equal(result.latestVersion, '0.5.9')
   assert.equal(result.updateAvailable, true)
   assert.equal(result.releaseUrl, 'https://example.test/release')
 })
