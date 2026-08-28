@@ -204,6 +204,66 @@ pnpm install
 
 仓库模板还包含 Session 持久化、指令发现和 telemetry 等当前参考配置。以仓库文件为准整体审阅后再合并，不要只复制上面的核心片段覆盖现有 profile。
 
+### 可选：接入收敛式上下文压缩插件
+
+DSH 官方 `@deepseek-ai/dsh-compaction-basic` 在摘要没有充分缩小时，可能反复选择过小范围而无法把上下文压回阈值。遇到这类不收敛问题时，可用自实现的 [`@zzusp/dsh-compaction-convergent`](https://github.com/zzusp/dsh-compaction-convergent) 替换官方 compaction provider。它保持 `ctx.compaction`、Session 事务和工具配对契约，只调整压力下的范围扩张与重试收敛行为；这不是 `dingtalk-dsh-assistant` 发行包的内置依赖，需要单独安装。
+
+一个 profile 只能启用一个 compaction provider。必须先禁用官方 `compaction-basic`，再插入收敛式实现；只执行插件安装命令不会自动替换 provider。
+
+以下示例固定使用已发布的 `v0.1.1-rc.2-convergent.5`，下载并核对 Release 产物：
+
+```powershell
+$compactionReleaseDir = Join-Path $env:TEMP 'dsh-compaction-convergent-5'
+New-Item -ItemType Directory -Force -Path $compactionReleaseDir | Out-Null
+gh release download v0.1.1-rc.2-convergent.5 `
+  --repo zzusp/dsh-compaction-convergent `
+  --pattern '*.tgz' `
+  --pattern '*.sha256' `
+  --pattern 'provenance.json' `
+  --dir $compactionReleaseDir
+
+$package = Get-ChildItem -LiteralPath $compactionReleaseDir -Filter '*.tgz' | Select-Object -First 1
+$expectedHash = ((Get-Content -LiteralPath "$($package.FullName).sha256" -Raw) -split '\s+')[0].ToUpperInvariant()
+$actualHash = (Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256).Hash
+if ($actualHash -ne $expectedHash) { throw 'compaction 插件 SHA-256 校验失败' }
+
+dsh plugin --profile web add $package.FullName
+```
+
+同时检查 `provenance.json` 中的 tag、commit 和包名确实属于本次 Release。然后修改 `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml`。如果文件已有 `- insert:`，把 `compaction-convergent` 合并到现有子项，不要创建重复 `id`：
+
+```yaml
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  disabled: true
+
+- insert:
+    - id: compaction-convergent
+      name: '@zzusp/dsh-compaction-convergent'
+      config:
+        thresholdRatio: 0.8
+        retainRatio: 0.16
+        maxTokens: 8192
+        compactionRetries: 1
+        maxOverflowRetries: 1
+```
+
+不要把官方 entry 的 `name` 直接改成自实现包名；Cordis Include 的 `name` 是匹配保护条件，不是覆盖字段。`token-meter`、`command-compact` 和 `tool-result-pruner` 继续使用 DSH 官方配置，不要重复注册。
+
+启动前先回读最终配置和实际安装版本：
+
+```powershell
+dsh --profile web --dump-config
+
+Push-Location "$env:USERPROFILE\.dsh\profiles\web"
+node --input-type=module -e "import meta from '@zzusp/dsh-compaction-convergent/package.json' with { type: 'json' }; console.log(meta.name, meta.version)"
+Pop-Location
+```
+
+`dump-config` 必须同时显示官方 `compaction-basic` 为 `disabled: true`、`compaction-convergent` 指向自实现包，并且不存在第二个启用的 compaction provider。安装回执和配置展开都不能代替运行态验证；重启后仍需检查 Node 24、Web/Resident listener、health/API，并在可控 Session 中确认压缩发生后 token 下降、Session 可重载且后续消息能继续。
+
+回滚时先停止 Web，删除 `compaction-convergent` 插入项，并把官方 entry 恢复为 `disabled: false`；确认 `dump-config` 只启用官方 provider 后再启动。普通 provider 替换不会自动修复已经被 `session/end-seed` 划到恢复边界前的病理历史 Session；此类一次性修复必须严格按上游的[历史 Session 修复流程](https://github.com/zzusp/dsh-compaction-convergent/blob/main/docs/manual/replace-official-plugin.md#6-历史-session-一次性修复)在副本上执行，不得直接覆盖原 Session。
+
 两个 DWS 开关的含义：
 
 - `enabled: false`：不启动真实群消息监听。
