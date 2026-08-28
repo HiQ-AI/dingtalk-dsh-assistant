@@ -89,14 +89,16 @@ test('未点名但应处理时先询问且不得由 Runtime 静默降级', async
   assert.doesNotMatch(source, /decision\.kind === 'new-task'[\s\S]{0,200}isExplicitAgentDirection/u)
 })
 
-test('主会话默认静默并禁止对任务补充发送过程承诺', async () => {
+test('主会话对任务补充发送简短且不复述信息的确认', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /理解消息、关联任务和回复群聊是三个独立决定/u)
-  assert.match(source, /默认保持静默/u)
-  assert.match(source, /只做任务关联或静默补充上下文，不得回复/u)
+  assert.match(source, /新的执行线索、补充信息或处理要求时，简短确认已收到并会继续处理/u)
+  assert.match(source, /过程确认和信息确认必须简短/u)
+  assert.match(source, /不得复述、改写或逐项罗列对方提供的信息/u)
+  assert.match(source, /给活动 Task 补充 IP、库名、schema、文件、截图、字段范围或其他执行线索时，应返回简短确认/u)
   assert.match(source, /仅因消息提及当前 DWS 登录人姓名/u)
   assert.match(source, /文件或图片前后的短句不得分别追问/u)
-  assert.match(source, /不得发送纯过程承诺/u)
+  assert.match(source, /确认回复只表达“已收到并会继续处理”这一必要状态，使用一句短句/u)
 })
 
 test('诊断请求不得被主会话或叶子会话扩大为修复授权', async () => {
