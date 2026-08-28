@@ -79,7 +79,7 @@ dsh plugin --profile web add dingtalk-dsh-assistant@0.5.5
 版本历史见 [CHANGELOG](CHANGELOG.md)，发行资产见 [GitHub Releases](https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases)。设置页会通过 GitHub Release 检查新版本；“设置 → 插件 → 钉钉个人助理”的“版本与更新”卡片显示版本状态，并提供手动检查与更新命令复制入口。检查失败会明确显示错误，不会误报为最新版本。升级使用：
 
 ```powershell
-dsh plugin --profile web update dingtalk-dsh-assistant
+dsh plugin --profile web update --latest @zzusp/dingtalk-dsh-assistant @zzusp/dingtalk-dsh-observer
 ```
 
 升级后重启 DSH Web，并依次确认：profile 中的包版本、`GET http://127.0.0.1:18998/health`、设置页/运行看板、真实群消息收发。四层证据不能互相替代。

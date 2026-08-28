@@ -50,7 +50,7 @@ dsh plugin --profile web add dingtalk-dsh-assistant
 升级已安装版本：
 
 ```powershell
-dsh plugin --profile web update dingtalk-dsh-assistant
+dsh plugin --profile web update --latest @zzusp/dingtalk-dsh-assistant @zzusp/dingtalk-dsh-observer
 ```
 
 DSH Web 会对比 GitHub 最新 Release。“设置 → 插件 → 钉钉个人助理”的“版本与更新”卡片显示版本状态，支持手动检查更新，并可直接查看、复制完整更新命令。该入口只复制上述 DSH 原生命令，不会在运行中覆盖宿主依赖；执行命令后仍需完全重启 DSH Web。
