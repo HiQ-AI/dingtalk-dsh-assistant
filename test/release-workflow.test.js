@@ -32,6 +32,7 @@ test('Release 绑定受控环境并按依赖顺序发布，npm 回读后才创�
   assert.match(workflow, /version_mismatch_tag_/u)
   assert.match(workflow, /changelog_entry_missing_/u)
   assert.match(workflow, /changelog_release_link_missing_/u)
+  assert.equal(workflow.match(/\\r\?\$/gu)?.length, 2)
   const observer = workflow.indexOf('npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-observer-')
   const assistant = workflow.indexOf('npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-assistant-')
   const distribution = workflow.indexOf('npm publish "docs/tmp/packages/dingtalk-dsh-assistant-')

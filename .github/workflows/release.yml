@@ -54,11 +54,11 @@ jobs:
           }
           $changelog = Get-Content -LiteralPath 'CHANGELOG.md' -Raw
           $escapedVersion = [regex]::Escape($tagVersion)
-          if ($changelog -notmatch "(?m)^## \[$escapedVersion\] - \d{4}-\d{2}-\d{2}$") {
+          if ($changelog -notmatch "(?m)^## \[$escapedVersion\] - \d{4}-\d{2}-\d{2}\r?$") {
             throw "changelog_entry_missing_$tagVersion"
           }
           $releaseUrl = "https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v$tagVersion"
-          if ($changelog -notmatch "(?m)^\[$escapedVersion\]: $([regex]::Escape($releaseUrl))$") {
+          if ($changelog -notmatch "(?m)^\[$escapedVersion\]: $([regex]::Escape($releaseUrl))\r?$") {
             throw "changelog_release_link_missing_$tagVersion"
           }
       - run: pnpm install --frozen-lockfile
