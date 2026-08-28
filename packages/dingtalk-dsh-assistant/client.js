@@ -8,7 +8,7 @@ const panel = { border: `1px solid ${colors.border}`, borderRadius: 12, padding:
 const row = { display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 13 }
 const input = { width: '100%', boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 8, padding: '8px 10px', background: 'transparent', color: 'inherit', font: 'inherit' }
 const button = { border: `1px solid ${colors.border}`, borderRadius: 8, padding: '7px 12px', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit' }
-const UPDATE_COMMAND = 'dsh plugin --profile web update --latest @zzusp/dingtalk-dsh-assistant @zzusp/dingtalk-dsh-observer'
+const UPDATE_COMMAND = 'dsh plugin --profile web add @zzusp/dingtalk-dsh-assistant@latest @zzusp/dingtalk-dsh-observer@latest --save-exact'
 
 function UpdateDot() {
   return React.createElement('span', { 'aria-hidden': true, style: { width: 7, height: 7, borderRadius: '50%', background: colors.danger, flex: 'none' } })

@@ -35,7 +35,7 @@ test('设置页异步展示版本状态且版本检查不阻塞核心配置加�
   assert.match(source, /版本与更新/u)
   assert.match(source, /新版本检查失败/u)
   assert.match(source, /可更新/u)
-  assert.match(source, /dsh plugin --profile web update --latest @zzusp\/dingtalk-dsh-assistant @zzusp\/dingtalk-dsh-observer/u)
+  assert.match(source, /dsh plugin --profile web add @zzusp\/dingtalk-dsh-assistant@latest @zzusp\/dingtalk-dsh-observer@latest --save-exact/u)
   assert.match(source, /更新命令/u)
   assert.match(source, /'复制'/u)
   assert.doesNotMatch(source, /dingtalkPluginUpdate/u)
