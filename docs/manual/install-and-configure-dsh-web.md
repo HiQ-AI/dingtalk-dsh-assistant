@@ -36,7 +36,7 @@ Node.js 必须为 `v24` 或更高版本。仅能执行 `dsh --help` 不代表 We
 固定安装当前版本：
 
 ```powershell
-dsh plugin --profile web add dingtalk-dsh-assistant@0.5.3
+dsh plugin --profile web add dingtalk-dsh-assistant@0.5.4
 ```
 
 如需安装 npm 上的最新版本，可省略版本号：

@@ -4,6 +4,7 @@ const sourceUrl = new URL('../packages/dingtalk-dsh-assistant/client.js', import
 const targetUrl = new URL('../packages/dingtalk-dsh-assistant/web-client.js', import.meta.url)
 let source = await readFile(sourceUrl, 'utf8')
 source = source
+  .replaceAll('\r\n', '\n')
   .replace(/^import React, \{ useCallback, useEffect, useState \} from 'react'\r?\n/, '')
   .replaceAll('export const ', 'const ')
   .replaceAll('export async function ', 'async function ')
