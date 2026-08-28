@@ -2,6 +2,20 @@
 
 本文件记录 `dingtalk-dsh-assistant` 每个正式版本的用户可见变化。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，日期使用 `YYYY-MM-DD`。
 
+## [0.5.6] - 2026-08-28
+
+### 修复
+
+- 群聊新消息写入 Inbox 后会立即插话当前主会话；主会话向叶会话补充上下文也使用同一插话通道，避免长步骤期间持续排队。
+- 任务依赖的图片或附件缺少可读取引用时会阻止启动任务，并明确反馈缺失信息；同时加强消息与活动任务的语义关联判断。
+- 检查点后续更新改写事项文案时，运行看板按剩余数量和顺序计算进度，避免把未完成事项误判为全部完成。
+
+### 变更
+
+- 运行看板统一收发信箱、授权审批和告警列表的字号、表头、无边框状态标签、分页信息与筛选框宽度。
+- 任务卡片精简目标、检查点和状态桶布局，移除冗余 ID 操作及装饰容器，并收紧卡片纵向间距。
+- 群聊会话区移除重复标题和 Session 信息，单群场景仍显示紧凑的群聊选择器；页内 Tab 与顶部导航统一使用蓝色选中样式。
+
 ## [0.5.5] - 2026-08-28
 
 ### 变更
@@ -90,6 +104,7 @@
 - assistant、observer 与发行包统一使用同一个产品版本号。
 - Node.js 最低版本与实际 zstd Runtime 要求一致，调整为 24。
 
+[0.5.6]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.6
 [0.5.5]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.5
 [0.5.4]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.4
 [0.5.3]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.3
