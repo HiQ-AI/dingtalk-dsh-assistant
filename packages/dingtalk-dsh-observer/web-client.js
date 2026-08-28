@@ -54,9 +54,11 @@ window.__ModuleLoader__.load({
     const short = (value) => value ? String(value).replace(/^session-/, '').slice(0, 14) : '—'
     const pill = (tone) => ({ display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: '3px 8px', fontSize: 12, color: tone, background: `color-mix(in srgb, ${tone} 12%, transparent)` })
     const card = { border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, padding: 16, boxShadow: '0 4px 16px rgba(15,23,42,.07)' }
-    const tableFrame = { border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, overflow: 'hidden', boxShadow: 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.06))' }
-    const tableHeadCell = { height: 40, boxSizing: 'border-box', padding: '0 12px', color: colors.muted, fontSize: 11, fontWeight: 500, verticalAlign: 'middle' }
-    const tableBodyCell = { padding: '12px', borderTop: `1px solid ${colors.border}`, fontSize: 12, lineHeight: 1.55, verticalAlign: 'top' }
+    const tableFrame = { border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, overflow: 'hidden' }
+    const tableHeadCell = { height: 42, boxSizing: 'border-box', padding: '0 16px', color: colors.muted, fontSize: 11, fontWeight: 500, verticalAlign: 'middle' }
+    const tableBodyCell = { padding: '12px 16px', borderTop: `1px solid ${colors.border}`, fontSize: 12, lineHeight: 1.55, verticalAlign: 'middle' }
+    const tableBodyContent = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }
+    const clampTableContent = (...children) => React.createElement('div', { style: tableBodyContent }, ...children)
     const tableFooter = { minHeight: 48, boxSizing: 'border-box', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, padding: '8px 12px', borderTop: `1px solid ${colors.border}`, background: colors.surface2 }
     const toolbar = { minHeight: 48, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', borderBottom: `1px solid ${colors.border}`, background: colors.cardSurface }
     const statusTone = {
@@ -76,9 +78,6 @@ window.__ModuleLoader__.load({
       const anchor = React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', 'aria-label': label, 'aria-expanded': open, onClick: () => setOpen((current) => !current), style: { minWidth, justifyContent: 'space-between', gap: 16, fontWeight: 400 } }, React.createElement('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, selected?.label || value), React.createElement('span', { 'aria-hidden': true, style: { color: colors.muted, fontSize: 9, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s ease' } }, '▼'))
       return React.createElement(Menu, { open, anchor, items: options, selectedId: value, onSelect: (id) => { onChange(id); setOpen(false) }, onClose: () => setOpen(false), align: 'end', portal: true, dense: true, compact: true })
     }
-    const pageHeader = (title, description) => React.createElement('div', { style: { minHeight: 44, marginBottom: 16 } },
-      React.createElement('h1', { style: { margin: 0, fontSize: 18, lineHeight: 1.45, fontWeight: 600 } }, title), React.createElement('p', { style: { margin: '4px 0 0', color: colors.muted, fontSize: 12, lineHeight: 1.5 } }, description))
-    const sectionHeader = (title, meta) => React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 12 } }, React.createElement('h2', { style: { margin: 0, fontSize: 15, lineHeight: 1.45, fontWeight: 600 } }, title), meta ? React.createElement('span', { style: { color: colors.muted, fontSize: 11 } }, meta) : null)
     const emptyState = (text) => React.createElement('div', { style: { minHeight: 112, display: 'grid', placeItems: 'center', color: colors.muted, fontSize: 12, border: `1px dashed ${colors.border}`, borderRadius: 10, background: colors.surface2 } }, text)
     async function get(path) {
       const response = await fetch(`${ENDPOINT}${path}`, { method: 'GET', headers: { accept: 'application/json' } })
@@ -209,13 +208,13 @@ window.__ModuleLoader__.load({
         skipped: { label: '历史补拉·未投递', state: 'warning' },
         unknown: { label: '历史状态未知', state: 'warning' },
       }
-      const messageRows = visibleMessages.map((message) => {
+      const messageRows = visibleMessages.map((message, rowIndex) => {
         const status = delivery[message.agentDeliveryStatus] || delivery.unknown
-        return React.createElement('tr', { key: message.messageId },
-          React.createElement('td', { style: { ...tableBodyCell, width: 150 } }, React.createElement('strong', { style: { fontSize: 12 } }, message.senderName || message.senderOpenDingTalkId || '发送人未记录'), React.createElement('div', { style: { marginTop: 4, fontSize: 10.5, color: colors.muted } }, fmt(message.occurredAt))),
-          React.createElement('td', { title: message.text, style: { ...tableBodyCell, overflowWrap: 'anywhere' } }, message.text || '（空消息）'),
-          React.createElement('td', { style: { ...tableBodyCell, width: 150 }, title: message.agentDeliveryError || '' }, statusTag(status.label, status.state)),
-          React.createElement('td', { style: { ...tableBodyCell, width: 150 } }, React.createElement('code', { title: message.messageId, style: { fontSize: 10, color: colors.muted } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)))
+        return React.createElement('tr', { key: message.messageId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
+          React.createElement('td', { style: { ...tableBodyCell, width: 104 }, title: message.agentDeliveryError || '' }, clampTableContent(statusTag(status.label, status.state))),
+          React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, clampTableContent(React.createElement('strong', { style: { fontSize: 12 } }, message.senderName || message.senderOpenDingTalkId || '发送人未记录'), React.createElement('div', { style: { marginTop: 3, fontSize: 10.5, color: colors.muted } }, fmt(message.occurredAt)))),
+          React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）')),
+          React.createElement('td', { style: { ...tableBodyCell, width: 150 } }, clampTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 10, color: colors.muted } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`))))
       })
       const selectedOutbox = [...(selectedGroup?.outbox || [])].reverse()
       const outboxState = (message) => message.recallStatus === 'recalled' ? 'recalled' : message.status === 'pending' && message.readbackRequired === true ? 'waiting' : 'confirmed'
@@ -229,16 +228,15 @@ window.__ModuleLoader__.load({
         pending: { label: '已回读', state: 'done' },
         recalled: { label: '已撤回', state: 'neutral' },
       }
-      const outboxRows = visibleOutbox.map((message) => {
+      const outboxRows = visibleOutbox.map((message, rowIndex) => {
         const status = message.recallStatus === 'recalled' ? outboundStatus.recalled : message.status === 'pending' && message.readbackRequired === true ? { label: '待回读', state: 'warning' } : outboundStatus[message.status] || outboundStatus.sent
-        return React.createElement('tr', { key: message.outboundId },
-          React.createElement('td', { style: { ...tableBodyCell, width: 130 } }, statusTag(status.label, status.state)),
-          React.createElement('td', { title: message.text, style: { ...tableBodyCell, overflowWrap: 'anywhere' } }, message.text || '（空消息）'),
+        return React.createElement('tr', { key: message.outboundId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
+          React.createElement('td', { style: { ...tableBodyCell, width: 104 } }, clampTableContent(statusTag(status.label, status.state))),
+          React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）')),
           React.createElement('td', { style: { ...tableBodyCell, width: 180 } },
-            React.createElement('div', null, React.createElement('code', { title: message.sourceMessageId, style: { fontSize: 10, color: colors.muted } }, short(message.sourceMessageId))),
-            message.replyToMessageId ? React.createElement('div', { style: { marginTop: 5, fontSize: 10.5, color: colors.muted } }, '回复 ', React.createElement('code', { title: message.replyToMessageId }, short(message.replyToMessageId))) : null),
-          React.createElement('td', { style: { ...tableBodyCell, width: 170 } }, React.createElement('code', { title: message.deliveredMessageId || '', style: { fontSize: 10, color: colors.muted } }, message.deliveredMessageId ? short(message.deliveredMessageId) : '历史未记录')),
-          React.createElement('td', { style: { ...tableBodyCell, width: 150 } }, React.createElement('code', { title: message.outboundId, style: { fontSize: 10, color: colors.muted } }, short(message.outboundId))))
+            clampTableContent(React.createElement('div', null, React.createElement('code', { title: message.sourceMessageId, style: { fontSize: 10, color: colors.muted } }, short(message.sourceMessageId))), message.replyToMessageId ? React.createElement('div', { style: { marginTop: 5, fontSize: 10.5, color: colors.muted } }, '回复 ', React.createElement('code', { title: message.replyToMessageId }, short(message.replyToMessageId))) : null)),
+          React.createElement('td', { style: { ...tableBodyCell, width: 170 } }, clampTableContent(React.createElement('code', { title: message.deliveredMessageId || '', style: { fontSize: 10, color: colors.muted } }, message.deliveredMessageId ? short(message.deliveredMessageId) : '历史未记录'))),
+          React.createElement('td', { style: { ...tableBodyCell, width: 150 } }, clampTableContent(React.createElement('code', { title: message.outboundId, style: { fontSize: 10, color: colors.muted } }, short(message.outboundId)))))
       })
       const renderTaskCard = (task) => {
         const group = groupsById.get(task.groupId)
@@ -309,7 +307,7 @@ window.__ModuleLoader__.load({
       const bucketColumns = taskBuckets.map((bucket) => {
         const tasks = (data?.tasks || []).filter((task) => task.state === bucket.state && !task.archivedAt).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
         const taskCards = tasks.length ? tasks.map(renderTaskCard) : [React.createElement('div', { key: 'empty', style: { border: `1px dashed ${colors.border}`, borderRadius: 10, minHeight: 90, display: 'grid', placeItems: 'center', color: colors.muted, fontSize: 12 } }, '暂无任务')]
-        return React.createElement('div', { key: bucket.state, style: { boxSizing: 'border-box', borderRadius: 14, background: bucket.background, padding: 10, display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 198px)', minHeight: 420, maxHeight: 'calc(100dvh - 198px)', overflow: 'hidden' } },
+        return React.createElement('div', { key: bucket.state, style: { boxSizing: 'border-box', borderRadius: 14, background: bucket.background, padding: 10, display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 116px)', minHeight: 420, maxHeight: 'calc(100dvh - 116px)', overflow: 'hidden' } },
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px 10px' } }, React.createElement('strong', { style: { display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, fontWeight: 650, lineHeight: 1.4, color: 'var(--dsw-alias-label-primary-inverted, #fff)', background: bucket.tone } }, bucket.label), React.createElement('span', { style: { borderRadius: 999, background: colors.cardSurface, padding: '2px 7px', fontSize: 10.5, color: colors.muted } }, tasks.length)),
           React.createElement('div', { style: { flex: 1, minHeight: 0, padding: '8px 12px 16px 8px', display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'scroll', scrollbarGutter: 'stable' } }, ...taskCards))
       })
@@ -339,18 +337,16 @@ window.__ModuleLoader__.load({
             : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'confirmed', label: '已回读' }, { id: 'waiting', label: '待回读' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 820, borderCollapse: 'collapse', tableLayout: 'fixed' } },
-          React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 150 } }, '发送人 / 时间'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 150 } }, 'Agent 投递'), React.createElement('th', { style: { ...tableHeadCell, width: 150 } }, '消息'))),
+          React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 104 } }, 'Agent 投递'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '发送人 / 时间'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 150 } }, '消息'))),
           React.createElement('tbody', null, ...(messageRows.length ? messageRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 4, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, '暂无符合条件的群聊消息'))])))),
         React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredMessages.length} 条 · 每页 ${pageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentMessagePage <= 1, onClick: () => setMessagePage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentMessagePage} / ${pageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentMessagePage >= pageCount, onClick: () => setMessagePage((page) => Math.min(pageCount, page + 1)) }, '下一页')))
       const outboxTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 900, borderCollapse: 'collapse', tableLayout: 'fixed' } },
-          React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 130 } }, '发送状态'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 180 } }, '来源 / 回复目标'), React.createElement('th', { style: { ...tableHeadCell, width: 170 } }, '投递消息 ID'), React.createElement('th', { style: { ...tableHeadCell, width: 150 } }, '发信箱 ID'))),
+          React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 104 } }, '发送状态'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 180 } }, '来源 / 回复目标'), React.createElement('th', { style: { ...tableHeadCell, width: 170 } }, '投递消息 ID'), React.createElement('th', { style: { ...tableHeadCell, width: 150 } }, '发信箱 ID'))),
           React.createElement('tbody', null, ...(outboxRows.length ? outboxRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 5, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, '暂无符合条件的 Agent 发件记录'))])))),
         React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredOutbox.length} 条 · 每页 ${outboxPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage <= 1, onClick: () => setOutboxPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentOutboxPage} / ${outboxPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage >= outboxPageCount, onClick: () => setOutboxPage((page) => Math.min(outboxPageCount, page + 1)) }, '下一页')))
-      const groupsPage = React.createElement(React.Fragment, null,
-        pageHeader('群聊会话', '查看常驻会话、收信箱状态与发信箱记录。'),
-        React.createElement('section', null, sectionHeader('消息记录', '收信箱与发信箱记录'), React.createElement('div', { style: tableFrame }, selectedGroupSummary, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable)))
-      const tasksPage = React.createElement(React.Fragment, null, pageHeader('任务看板', '按执行阶段查看任务、叶子会话和目标进展。'), React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: 16, overflowX: 'auto', alignItems: 'start', paddingBottom: 8 } }, ...bucketColumns))
+      const groupsPage = React.createElement('section', null, React.createElement('div', { style: tableFrame }, selectedGroupSummary, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
+      const tasksPage = React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: 16, overflowX: 'auto', alignItems: 'start', paddingBottom: 8 } }, ...bucketColumns)
       const authorizationStatus = {
         'pending-send': { label: '待发送', state: 'warning' },
         'waiting-reply': { label: '待批复', state: 'warning' },
@@ -378,14 +374,14 @@ window.__ModuleLoader__.load({
       const authorizationDetailField = (label, value) => React.createElement('div', { style: { display: 'grid', gap: 5 } },
         React.createElement('strong', { style: { fontSize: 11, color: colors.muted } }, label),
         React.createElement('div', { style: { fontSize: 13, lineHeight: 1.65, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, value || '—'))
-      const authorizationRows = visibleAuthorizationItems.map((item) => {
+      const authorizationRows = visibleAuthorizationItems.map((item, rowIndex) => {
         const pending = item.status !== 'answered'
         const status = pending ? authorizationStatus[item.status] : authorizationDecision[item.decision] || authorizationStatus.answered
         const group = groupsById.get(item.groupId)
-        return React.createElement('div', { key: item.requestId, style: { width: '100%', minWidth: 0, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: 'max-content minmax(260px, 1.1fr) minmax(300px, 1.5fr) 130px 44px', alignItems: 'center', gap: 18, borderTop: `1px solid ${colors.border}`, background: 'transparent', color: 'inherit', padding: '15px 18px' } },
+        return React.createElement('div', { key: item.requestId, style: { width: '100%', minWidth: 0, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: '104px minmax(220px, 1.1fr) minmax(280px, 1.5fr) 126px 52px', alignItems: 'center', gap: 16, borderTop: `1px solid ${colors.border}`, background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface, color: 'inherit', padding: '12px 16px' } },
           React.createElement('div', { style: { justifySelf: 'start' } }, statusTag(status.label, status.state)),
-          React.createElement('span', { style: { minWidth: 0 } }, React.createElement('strong', { title: item.objective, style: { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', fontSize: 12.5, lineHeight: 1.5 } }, item.objective), React.createElement('span', { style: { display: 'block', marginTop: 5, color: colors.muted, fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, group?.name || item.groupId)),
-          React.createElement('span', { style: { minWidth: 0 } }, React.createElement('span', { title: item.requestedAction, style: { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', fontSize: 11.5, lineHeight: 1.55, color: colors.muted } }, item.requestedAction), item.risk && item.risk !== '未单独说明' ? React.createElement('span', { style: { display: 'block', marginTop: 6, color: colors.danger, fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, `风险 · ${item.risk}`) : null),
+          React.createElement('span', { style: { minWidth: 0 } }, React.createElement('strong', { title: item.objective, style: { display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5, lineHeight: 1.5 } }, item.objective), React.createElement('span', { style: { display: 'block', marginTop: 3, color: colors.muted, fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, group?.name || item.groupId)),
+          React.createElement('span', { style: { minWidth: 0 } }, React.createElement('span', { title: item.requestedAction, style: { display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5, lineHeight: 1.55, color: colors.muted } }, item.requestedAction), item.risk && item.risk !== '未单独说明' ? React.createElement('span', { style: { display: 'block', marginTop: 3, color: colors.danger, fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, `风险 · ${item.risk}`) : null),
           React.createElement('span', { style: { color: colors.muted, fontSize: 10.5, lineHeight: 1.5 } }, fmt(item.createdAt)),
           React.createElement(Button, { variant: 'ghost', size: 'sm', type: 'button', onClick: () => setSelectedAuthorizationId(item.requestId) }, '查看'))
       })
@@ -406,11 +402,10 @@ window.__ModuleLoader__.load({
             React.createElement('input', { 'aria-label': `审批意见 ${selectedAuthorization.requestId}`, value: authorizationComments[selectedAuthorization.requestId] || '', onChange: (event) => setAuthorizationComments((current) => ({ ...current, [selectedAuthorization.requestId]: event.target.value })), placeholder: '审批意见（可选）', style: { minWidth: 0, border: `1px solid ${colors.border}`, borderRadius: 9, background: colors.surface2, color: 'inherit', padding: '9px 11px', fontFamily: 'inherit', fontSize: 12 } }),
             React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: decidingAuthorizationId === selectedAuthorization.requestId, onClick: () => decideAuthorization(selectedAuthorization.requestId, 'rejected'), style: { color: colors.danger } }, '拒绝'),
             React.createElement(Button, { variant: 'primary', size: 'sm', type: 'button', disabled: decidingAuthorizationId === selectedAuthorization.requestId, onClick: () => decideAuthorization(selectedAuthorization.requestId, 'approved') }, decidingAuthorizationId === selectedAuthorization.requestId ? '处理中…' : '批准')) : null)) : null
-      const authorizationsPage = React.createElement(React.Fragment, null, pageHeader('授权审批', '处理需要人工确认的操作范围，并保留风险、证据和批复记录。'), React.createElement('section', null,
-        sectionHeader('审批记录', `${authorizationItems.length} 条 · 每页 ${authorizationPageSize} 条`),
+      const authorizationsPage = React.createElement(React.Fragment, null, React.createElement('section', null,
         React.createElement('div', { style: tableFrame },
-          React.createElement('div', { style: toolbar }, React.createElement('span', { style: { fontSize: 12, color: colors.muted } }, `当前显示 ${filteredAuthorizationItems.length} 条`), React.createElement(SelectMenu, { label: '筛选审批状态', value: authorizationFilter, options: [{ id: 'all', label: '全部审批状态' }, { id: 'pending', label: '待批复' }, { id: 'approved', label: '已批准' }, { id: 'rejected', label: '已拒绝' }], onChange: (value) => { setAuthorizationFilter(value); setAuthorizationPage(1) } })),
-          React.createElement('div', { style: { height: 40, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: '88px minmax(260px, 1.1fr) minmax(300px, 1.5fr) 130px 44px', alignItems: 'center', gap: 18, padding: '0 18px', background: colors.surface2, color: colors.muted, fontSize: 11, fontWeight: 500 } }, React.createElement('span', null, '状态'), React.createElement('span', null, '任务'), React.createElement('span', null, '申请摘要'), React.createElement('span', null, '申请时间'), React.createElement('span', null, '操作')),
+          React.createElement('div', { style: toolbar }, React.createElement('span', { style: { fontSize: 12, color: colors.muted } }, `当前显示 ${filteredAuthorizationItems.length} 条 · 每页 ${authorizationPageSize} 条`), React.createElement(SelectMenu, { label: '筛选审批状态', value: authorizationFilter, options: [{ id: 'all', label: '全部审批状态' }, { id: 'pending', label: '待批复' }, { id: 'approved', label: '已批准' }, { id: 'rejected', label: '已拒绝' }], onChange: (value) => { setAuthorizationFilter(value); setAuthorizationPage(1) } })),
+          React.createElement('div', { style: { height: 42, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: '104px minmax(220px, 1.1fr) minmax(280px, 1.5fr) 126px 52px', alignItems: 'center', gap: 16, padding: '0 16px', background: colors.surface2, color: colors.muted, fontSize: 11, fontWeight: 500 } }, React.createElement('span', null, '状态'), React.createElement('span', null, '任务'), React.createElement('span', null, '申请摘要'), React.createElement('span', null, '申请时间'), React.createElement('span', null, '操作')),
           React.createElement('div', null, ...(authorizationRows.length ? authorizationRows : [React.createElement('div', { key: 'empty', style: { padding: 36, textAlign: 'center', color: colors.muted, fontSize: 12 } }, '暂无授权申请')])),
           React.createElement('div', { style: tableFooter },
             React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentAuthorizationPage <= 1, onClick: () => setAuthorizationPage((page) => Math.max(1, page - 1)) }, '上一页'),
@@ -418,13 +413,9 @@ window.__ModuleLoader__.load({
             React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentAuthorizationPage >= authorizationPageCount, onClick: () => setAuthorizationPage((page) => Math.min(authorizationPageCount, page + 1)) }, '下一页')))
       ), authorizationDetail)
       const archivedTasks = (data?.tasks || []).filter((task) => task.state === 'completed' && task.archivedAt).sort((left, right) => String(right.archivedAt).localeCompare(String(left.archivedAt)))
-      const archivePage = React.createElement('section', null,
-        pageHeader('归档任务', '归档只影响看板展示，Task、Session、Goal 与历史证据仍完整保留。'),
-        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 } }, ...(archivedTasks.length ? archivedTasks.map(renderTaskCard) : [React.createElement(React.Fragment, { key: 'empty' }, emptyState('暂无归档任务'))]))
-      )
+      const archivePage = React.createElement('section', null, React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 } }, ...(archivedTasks.length ? archivedTasks.map(renderTaskCard) : [React.createElement(React.Fragment, { key: 'empty' }, emptyState('暂无归档任务'))])))
       const alertsPage = React.createElement(React.Fragment, null,
-        pageHeader('告警', '集中查看消息通道、叶子会话、任务目标和 Runtime 的当前异常与恢复历史。'),
-        React.createElement('section', null, sectionHeader('告警记录', '按状态和类型筛选'), React.createElement('div', { style: tableFrame },
+        React.createElement('section', null, React.createElement('div', { style: tableFrame },
           React.createElement('div', { style: toolbar },
             React.createElement('div', { role: 'tablist', 'aria-label': '告警状态视图', style: { display: 'flex', alignSelf: 'stretch', gap: 20 } }, ...[{ id: 'active', label: `当前异常 ${filteredActiveAlerts.length}` }, { id: 'resolved', label: `恢复历史 ${filteredResolvedAlerts.length}` }].map((item) => React.createElement('button', { key: item.id, role: 'tab', 'aria-selected': alertView === item.id, type: 'button', onClick: () => setAlertView(item.id), style: { border: 0, borderBottom: alertView === item.id ? `2px solid ${colors.accent}` : '2px solid transparent', background: 'transparent', color: alertView === item.id ? colors.accent : colors.muted, padding: '0 2px', fontFamily: 'inherit', fontSize: 12, cursor: 'pointer' } }, item.label))),
             React.createElement(SelectMenu, { label: '筛选告警类型', value: alertType, options: alertCategories.map((category) => ({ id: category.id, label: category.label })), onChange: (value) => { setAlertType(value); setResolvedAlertPage(1) } })),
@@ -433,7 +424,7 @@ window.__ModuleLoader__.load({
       )
       const pageContent = activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
       const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, minHeight: 'calc(100dvh - 138px)', boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
-      const main = React.createElement('main', { style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: '24px 24px 32px', display: 'grid', alignContent: 'start', gap: 20, pointerEvents: 'auto' } },
+      const main = React.createElement('main', { style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? '24px 24px 0' : '24px 24px 32px', display: 'grid', alignContent: 'start', gap: 20, pointerEvents: 'auto' } },
         error ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法连接 resident 插件：${error}`) : null,
         navigationError ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法打开 DSH Session：${navigationError}`) : null,
         pageViewport
