@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import { buildDecisionPrompt, buildLeafSourceEnvelope, parseGroupDecision, shouldRecheckTaskAssociation } from './decision.js'
+import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, parseGroupDecision, shouldRecheckTaskAssociation } from './decision.js'
 import { parseTaskCheckpoint, parseTaskResult } from './task-result.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
@@ -130,6 +130,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 消息附带的图片属于当前消息正文，必须先阅读图片，再结合固定主会话中的前后消息和“本群全部任务关联索引”判断关联性。queued、running、waiting、completed 以及产品展示中的归档任务都必须参与关联判断；任务状态只决定关联后的动作，不得成为忽略关联的理由。不得仅因文字部分没有指名、图片没有文字摘要或后续消息较短就选择忽略；紧邻图片的补充说明应优先与该图片共同理解。群友对根因、状态或外部因素的未经核验判断，只要与已有任务相关，就是需要核验的新增线索，不得以“尚未核验”为由忽略。已存在任务的新增事实应优先关联已有任务，而不是创建重复任务。对已完成任务的结果提出回滚、撤回、还原、纠正或补做，属于原任务的结果纠正，必须返回 task-reopen 唤起原 Task，不得只做自然语言承诺，也不得创建新 Task；只有与原目标不同的独立可执行目标才创建新任务并保留历史关联。
 
 判断使用已有任务还是新建任务时，必须进行整体语义判断：结合当前消息的前后文、引用关系、连续消息构成的信息组、当时讨论与执行场景，以及候选任务的目标、动作范围、状态、历史触发和已记录上下文，判断新消息是在补充、修订、纠正或延续原目标，还是提出了不同的独立目标。不得根据某几个关键词、词面重合、标题相似或单一字段直接决定复用已有任务或新建任务；关键词只能作为查找候选任务的线索，不能代替关联结论。无法从现有上下文可靠区分时，不得猜测创建重复任务，应先结合近期消息继续核对，确有阻塞再向原提出人询问必要信息。
+
+图片、文档、文件、链接或其他外部资源如果承载任务目标、范围、对象、输入数据或验收要求，必须先通过当前可用工具完整读取。任何任务所需资源无法访问、下载、解析或读取不完整时，必须选择 answer，明确告诉对方未获取到的具体信息以及需要重新提供的内容；此时不得选择 new-task、task-context 或 task-reopen，也不得先创建或推进 Task。只有确认缺失资源与任务无关，或对方补齐必要信息后，才继续任务关联与准入判断。不得假设资源内容、不得用文件名、链接标题、缩略图或消息中的零散文字替代未读取的正文。
 
 状态边界必须严格遵守：running 或 waiting（包括阻塞中）的 Task 收到新增信息时只能返回 task-context，继续同一执行轮次；不得返回 task-reopen，不得清空 blocker 或增加轮次。只有 completed Task（包括已归档展示）才允许 task-reopen 并初始化下一执行轮次。
 
@@ -977,6 +979,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           decision = parseGroupDecision(correctedReply)
         }
         await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'delivered' })
+        decision = blockTaskDecisionForUnavailableMedia(decision, message.mediaUnavailable)
         const groupBeforeDecision = store.getGroup(message.groupId)
         const previousMessage = groupBeforeDecision?.messages.find((item) => item.sequence === accepted.sequence - 1)
         const activeTaskCount = store.listTasks().filter((task) => task.groupId === message.groupId).length

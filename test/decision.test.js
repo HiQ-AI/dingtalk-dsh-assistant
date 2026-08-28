@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { buildDecisionPrompt, buildLeafSourceEnvelope, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from '../packages/dingtalk-dsh-assistant/decision.js'
+import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from '../packages/dingtalk-dsh-assistant/decision.js'
 
 test('群决策严格接受六类结构化结果', () => {
   assert.equal(parseGroupDecision('{"kind":"answer","reply":"ok"}').kind, 'answer')
@@ -33,6 +33,7 @@ test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () 
   assert.match(prompt, /引用消息ID：m-quoted/)
   assert.doesNotMatch(prompt, /发送者：李四|时间：2026-08-24 12:59:00|内容：quoted/)
   assert.match(prompt, /不得仅因附件暂不可读而断言消息与职责或活动任务无关/)
+  assert.match(prompt, /必须先回答并明确告知对方哪些信息未获取到，不得创建、续接或重开任务/u)
 })
 
 test('失败消息重试明确要求重新完成业务判断', () => {
@@ -128,6 +129,9 @@ test('任务关联索引覆盖当前群全部状态并允许历史任务记录�
   assert.match(source, /候选任务的目标、动作范围、状态、历史触发和已记录上下文/u)
   assert.match(source, /不得根据某几个关键词、词面重合、标题相似或单一字段直接决定复用已有任务或新建任务/u)
   assert.match(source, /关键词只能作为查找候选任务的线索，不能代替关联结论/u)
+  assert.match(source, /图片、文档、文件、链接或其他外部资源如果承载任务目标、范围、对象、输入数据或验收要求/u)
+  assert.match(source, /任何任务所需资源无法访问、下载、解析或读取不完整时，必须选择 answer/u)
+  assert.match(source, /不得假设资源内容、不得用文件名、链接标题、缩略图或消息中的零散文字替代未读取的正文/u)
   assert.match(source, /relatedContexts/)
 })
 
@@ -136,4 +140,22 @@ test('图片及紧邻图片的短消息在存在活动Task时触发关联复核'
   assert.equal(shouldRecheckTaskAssociation({ activeTaskCount: 1, hasImage: false, occurredAt: '2026-08-25T01:41:27Z', previousMessage: { text: '[图片消息](mediaId=1)', occurredAt: '2026-08-25T01:41:05Z' } }), true)
   assert.equal(shouldRecheckTaskAssociation({ activeTaskCount: 1, hasImage: false, occurredAt: '2026-08-25T01:45:27Z', previousMessage: { text: '[图片消息](mediaId=1)', occurredAt: '2026-08-25T01:41:05Z' } }), false)
   assert.equal(shouldRecheckTaskAssociation({ activeTaskCount: 0, hasImage: true }), false)
+})
+
+test('任务所需附件读取失败时硬拦截任务动作并反馈缺失信息', () => {
+  const failures = ['图片 media-1 下载失败', '文档 spec.docx 无法解析']
+  for (const decision of [
+    { kind: 'new-task', title: '修复问题', objective: '按附件修复', reply: '开始处理' },
+    { kind: 'task-context', taskId: 'task-1', context: '附件补充', reply: '继续处理' },
+    { kind: 'task-reopen', taskId: 'task-1', context: '附件要求返工', reply: '重新处理' },
+  ]) {
+    const blocked = blockTaskDecisionForUnavailableMedia(decision, failures)
+    assert.equal(blocked.kind, 'answer')
+    assert.match(blocked.reply, /图片 media-1 下载失败；文档 spec\.docx 无法解析/u)
+    assert.match(blocked.reply, /信息补齐后我再开始处理/u)
+  }
+  const answer = { kind: 'answer', reply: '我没有获取到文档正文，请重新发送。' }
+  assert.equal(blockTaskDecisionForUnavailableMedia(answer, failures), answer)
+  const complete = { kind: 'new-task', title: '文本任务', objective: '执行文本任务', reply: '开始处理' }
+  assert.equal(blockTaskDecisionForUnavailableMedia(complete, []), complete)
 })
