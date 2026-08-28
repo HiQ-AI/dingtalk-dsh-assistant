@@ -9,47 +9,9 @@ const row = { display: 'flex', justifyContent: 'space-between', gap: 16, fontSiz
 const input = { width: '100%', boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 8, padding: '8px 10px', background: 'transparent', color: 'inherit', font: 'inherit' }
 const button = { border: `1px solid ${colors.border}`, borderRadius: 8, padding: '7px 12px', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit' }
 const UPDATE_COMMAND = 'dsh plugin --profile web update dingtalk-dsh-assistant'
-const UPDATE_STYLE_ID = 'dingtalk-dsh-assistant-update-style'
-
-function ensureUpdateStyles() {
-  if (typeof document === 'undefined') return
-  if (document.getElementById(UPDATE_STYLE_ID)) return
-  const style = document.createElement('style')
-  style.id = UPDATE_STYLE_ID
-  style.textContent = `[data-dingtalk-plugin-update="true"] [role="tab"][id$="-tab-dingtalk-dsh-assistant"]{position:relative;padding-right:18px}[data-dingtalk-plugin-update="true"] [role="tab"][id$="-tab-dingtalk-dsh-assistant"]::after{content:"";position:absolute;top:7px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-status-error,#c33)}`
-  document.head.appendChild(style)
-}
 
 function UpdateDot() {
   return React.createElement('span', { 'aria-hidden': true, style: { width: 7, height: 7, borderRadius: '50%', background: colors.danger, flex: 'none' } })
-}
-
-function useVersion() {
-  const [version, setVersion] = useState()
-  useEffect(() => {
-    let active = true
-    request('/state/version').then((value) => { if (active) setVersion(value) }).catch(() => undefined)
-    return () => { active = false }
-  }, [])
-  return version
-}
-
-function GlobalUpdateNotice({ wide }) {
-  const version = useVersion()
-  useEffect(() => {
-    document.documentElement.dataset.dingtalkPluginUpdate = version?.updateAvailable ? 'true' : 'false'
-  }, [version?.updateAvailable])
-  if (!version?.updateAvailable) return null
-  return React.createElement('button', {
-    type: 'button',
-    title: `钉钉个人助理有新版本 ${version.latestVersion}`,
-    'aria-label': `钉钉个人助理有新版本 ${version.latestVersion}，打开更新说明`,
-    onClick: () => window.open(version.releaseUrl, '_blank', 'noopener,noreferrer'),
-    style: { position: 'relative', minWidth: wide ? 0 : 40, height: 40, border: 0, borderRadius: 8, padding: wide ? '0 10px' : 0, background: 'transparent', color: 'inherit', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, font: 'inherit', fontSize: 13 },
-  },
-  React.createElement('span', { 'aria-hidden': true, style: { fontSize: 18, lineHeight: 1 } }, '↑'),
-  wide ? React.createElement('span', null, '插件更新') : null,
-  React.createElement('span', { style: { position: 'absolute', top: 6, right: wide ? 5 : 6 } }, React.createElement(UpdateDot)))
 }
 
 async function request(path, options) {
@@ -88,11 +50,23 @@ export function DingTalkDshAssistantCard() {
   const [addingGroup, setAddingGroup] = useState(false)
   const [error, setError] = useState()
   const [updateFeedback, setUpdateFeedback] = useState()
+  const [checkingVersion, setCheckingVersion] = useState(false)
   const refresh = useCallback(async () => {
     try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setTaskGuidance({ taskExecutionGuidance: next.agentConfig.taskExecutionGuidance ?? '', taskEvidenceGuidance: next.agentConfig.taskEvidenceGuidance ?? '' }); setMaxConcurrentTasks(next.agentConfig.maxConcurrentTasks ?? 5); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }, [])
   useEffect(() => { refresh() }, [refresh])
+  const checkVersion = async () => {
+    setCheckingVersion(true)
+    try {
+      const version = await request('/state/version')
+      setOverview((current) => ({ ...current, version }))
+    } catch (cause) {
+      setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))
+    } finally {
+      setCheckingVersion(false)
+    }
+  }
   const mutate = async (operation) => { try { await operation(); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } }
   const addGroup = async () => {
     if (!newGroup.groupId.trim()) return setGroupFeedback({ kind: 'error', message: '请先从搜索结果中选择要常驻的群聊。' })
@@ -124,18 +98,22 @@ export function DingTalkDshAssistantCard() {
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '自动回复群聊'), React.createElement('span', null, overview?.health?.outboundAuthorized ? '已启用' : '未启用')),
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '处理模型'), React.createElement('span', null, overview?.health?.modelMode === 'real' ? '真实模型' : '测试模型'))),
     React.createElement('section', { style: panel },
-      React.createElement('strong', null, '版本与更新'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
+        React.createElement('strong', null, '版本与更新'),
+        React.createElement('button', { type: 'button', style: { ...button, display: 'inline-flex', alignItems: 'center', gap: 6 }, disabled: checkingVersion, onClick: checkVersion }, checkingVersion ? '检查中…' : '检查更新', React.createElement(IconRefreshOutline16, { size: 16 }))),
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '当前版本'), React.createElement('span', null, overview?.version?.currentVersion ?? '读取中')),
       overview?.version?.error
         ? React.createElement('div', { style: { color: colors.danger, fontSize: 13 } }, `新版本检查失败：${overview.version.error}`)
-        : React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '最新版本'), React.createElement('span', null, overview?.version?.latestVersion === null ? '尚无正式 Release' : (overview?.version?.latestVersion ?? '检查中'))),
-      React.createElement('div', { style: { display: 'grid', gap: 10, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } },
-        overview?.version?.updateAvailable ? React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 7, color: colors.danger, fontSize: 13 } }, React.createElement(UpdateDot), `发现新版本 ${overview.version.latestVersion}`) : null,
-        React.createElement('strong', { style: { fontSize: 13 } }, '如何升级'),
-        React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, '在 PowerShell 中执行下面的 DSH 原生更新命令，完成后重启 DSH Web。'),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 8px 8px 10px', border: `1px solid ${colors.border}`, borderRadius: 8, background: 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,.06))' } },
-          React.createElement('code', { style: { minWidth: 0, flex: 1, fontSize: 12, overflowWrap: 'anywhere', userSelect: 'all' } }, UPDATE_COMMAND),
-          React.createElement('button', { type: 'button', style: button, onClick: async () => { try { await navigator.clipboard.writeText(UPDATE_COMMAND); setUpdateFeedback('更新命令已复制，执行后重启 DSH。') } catch { setUpdateFeedback(`请在终端执行：${UPDATE_COMMAND}`) } } }, '复制命令'))),
+        : React.createElement('div', { style: row },
+          React.createElement('span', { style: { color: colors.muted } }, '最新版本'),
+          React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
+            overview?.version?.updateAvailable ? React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 22, boxSizing: 'border-box', padding: '2px 8px', border: `1px solid color-mix(in srgb, ${colors.danger} 28%, transparent)`, borderRadius: 999, color: colors.danger, background: `color-mix(in srgb, ${colors.danger} 10%, transparent)`, fontSize: 11, fontWeight: 500, lineHeight: 1.4, whiteSpace: 'nowrap' } }, React.createElement(UpdateDot), '可更新') : null,
+            overview?.version?.latestVersion === null ? '尚无正式 Release' : (overview?.version?.latestVersion ?? '检查中'))),
+      React.createElement('div', { style: { display: 'grid', gap: 8, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } },
+        React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, '更新命令 · 执行后重启 DSH Web'),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minHeight: 34, padding: '4px 4px 4px 10px', border: `1px solid ${colors.border}`, borderRadius: 8, background: 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,.06))' } },
+          React.createElement('code', { style: { minWidth: 0, flex: 1, fontSize: 11, lineHeight: 1.5, overflowWrap: 'anywhere', userSelect: 'all' } }, UPDATE_COMMAND),
+          React.createElement('button', { type: 'button', style: { ...button, padding: '5px 10px', whiteSpace: 'nowrap' }, onClick: async () => { try { await navigator.clipboard.writeText(UPDATE_COMMAND); setUpdateFeedback('更新命令已复制，执行后重启 DSH。') } catch { setUpdateFeedback(`请在终端执行：${UPDATE_COMMAND}`) } } }, '复制'))),
       updateFeedback ? React.createElement('div', { role: 'status', style: { color: colors.muted, fontSize: 12, overflowWrap: 'anywhere' } }, updateFeedback) : null,
       overview?.version?.changelogUrl ? React.createElement('a', { href: overview.version.changelogUrl, target: '_blank', rel: 'noreferrer', style: { color: colors.accent } }, '查看 CHANGELOG') : null),
     React.createElement(Environment, { value: overview?.environment }),
@@ -183,7 +161,5 @@ export function DingTalkDshAssistantCard() {
 }
 
 export function apply(ctx) {
-  ensureUpdateStyles()
   ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({ name: 'settings.plugins.tab', id: 'dingtalk-dsh-assistant', order: 10, label: () => '钉钉个人助理', inject: () => ({}) }, DingTalkDshAssistantCard))
-  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'dingtalk-dsh-assistant-update', order: 10, inject: () => ({}) }, GlobalUpdateNotice))
 }

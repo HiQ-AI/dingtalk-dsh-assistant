@@ -76,7 +76,7 @@ dsh plugin --profile web add dingtalk-dsh-assistant@0.5.2
 
 需要跟随 npm 最新版本时可省略 `@0.5.2`。安装完成后必须重启 `dsh web`，仅看到依赖安装成功不代表插件 Runtime 已加载。
 
-版本历史见 [CHANGELOG](CHANGELOG.md)，发行资产见 [GitHub Releases](https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases)。设置页会通过 GitHub Release 检查新版本；有新版本时，左侧全局插件更新入口和“钉钉个人助理”页签显示红点，“版本与更新”卡片提供更新命令复制入口。检查失败会明确显示错误，不会误报为最新版本。升级使用：
+版本历史见 [CHANGELOG](CHANGELOG.md)，发行资产见 [GitHub Releases](https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases)。设置页会通过 GitHub Release 检查新版本；“设置 → 插件 → 钉钉个人助理”的“版本与更新”卡片显示版本状态，并提供手动检查与更新命令复制入口。检查失败会明确显示错误，不会误报为最新版本。升级使用：
 
 ```powershell
 dsh plugin --profile web update dingtalk-dsh-assistant

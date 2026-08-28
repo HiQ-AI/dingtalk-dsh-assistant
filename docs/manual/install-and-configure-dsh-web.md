@@ -53,7 +53,7 @@ dsh plugin --profile web add dingtalk-dsh-assistant
 dsh plugin --profile web update dingtalk-dsh-assistant
 ```
 
-DSH Web 会定时对比 GitHub 最新 Release。有新版本时，左侧全局“插件更新”入口和“设置 → 插件 → 钉钉个人助理”页签会显示红点；进入“版本与更新”卡片后，可直接查看完整更新命令并点击“复制命令”。该入口只复制上述 DSH 原生命令，不会在运行中覆盖宿主依赖；执行命令后仍需完全重启 DSH Web。
+DSH Web 会对比 GitHub 最新 Release。“设置 → 插件 → 钉钉个人助理”的“版本与更新”卡片显示版本状态，支持手动检查更新，并可直接查看、复制完整更新命令。该入口只复制上述 DSH 原生命令，不会在运行中覆盖宿主依赖；执行命令后仍需完全重启 DSH Web。
 
 安装或升级后，先在 profile 中确认实际版本，再完全重启 DSH Web：
 
