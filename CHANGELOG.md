@@ -2,6 +2,12 @@
 
 本文件记录 `dingtalk-dsh-assistant` 每个正式版本的用户可见变化。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，日期使用 `YYYY-MM-DD`。
 
+## [0.5.5] - 2026-08-28
+
+### 变更
+
+- 活动任务收到新的执行线索、补充信息或处理要求时，主会话改为发送一句简短确认；确认不复述对方信息，也不虚构进度、结果或完成时间。
+
 ## [0.5.4] - 2026-08-28
 
 ### 修复
@@ -84,6 +90,7 @@
 - assistant、observer 与发行包统一使用同一个产品版本号。
 - Node.js 最低版本与实际 zstd Runtime 要求一致，调整为 24。
 
+[0.5.5]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.5
 [0.5.4]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.4
 [0.5.3]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.3
 [0.5.2]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.2
