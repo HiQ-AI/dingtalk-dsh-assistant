@@ -1,9 +1,10 @@
 # 安装插件并在 DSH Web 中完成配置
 
-本文面向 Windows 11 与 PowerShell 7，说明如何把当前仓库中的钉钉个人助理插件安装到本机 DSH `web` profile，并在 DSH Web 页面完成首次配置。
+本文面向 Windows 11 与 PowerShell 7，说明如何把正式发布的钉钉个人助理插件安装到本机 DSH `web` profile，并在 DSH Web 页面完成首次配置。源码安装只用于开发未发布代码。
 
-插件由两个包组成，安装时缺一不可：
+发行包由一个入口包和两个内部包组成：
 
+- `dingtalk-dsh-assistant`：对外安装入口，负责把下列两个包加入 DSH Web profile。
 - `@zzusp/dingtalk-dsh-assistant`：resident Runtime、钉钉接入和设置页。
 - `@zzusp/dingtalk-dsh-observer`：群聊会话、任务、授权和告警看板。
 
@@ -30,7 +31,40 @@ dws --version
 
 Node.js 必须为 `v24` 或更高版本。仅能执行 `dsh --help` 不代表 Web Runtime 可用，安装完成后仍需实际启动并检查页面和健康接口。
 
-## 二、获取并验证插件源码
+## 二、安装或升级正式版本
+
+固定安装当前版本：
+
+```powershell
+dsh plugin --profile web add dingtalk-dsh-assistant@0.5.2
+```
+
+如需安装 npm 上的最新版本，可省略版本号：
+
+```powershell
+dsh plugin --profile web add dingtalk-dsh-assistant
+```
+
+该命令直接修改 `%USERPROFILE%\.dsh\profiles\web`，入口包会带入 Assistant、Observer 及其 Web bundle patch。普通安装不需要再手工编辑 `web/package.json` 添加两个内部包。
+
+升级已安装版本：
+
+```powershell
+dsh plugin --profile web update dingtalk-dsh-assistant
+```
+
+DSH Web 会对比 GitHub 最新 Release。“设置 → 插件 → 钉钉个人助理”的“版本与更新”卡片显示版本状态，支持手动检查更新，并可直接查看、复制完整更新命令。该入口只复制上述 DSH 原生命令，不会在运行中覆盖宿主依赖；执行命令后仍需完全重启 DSH Web。
+
+安装或升级后，先在 profile 中确认实际版本，再完全重启 DSH Web：
+
+```powershell
+$profilePackage = Get-Content -Raw "$env:USERPROFILE\.dsh\profiles\web\package.json" | ConvertFrom-Json
+$profilePackage.dependencies.'dingtalk-dsh-assistant'
+```
+
+正式版本与三个 tgz 也可从 [GitHub Releases](https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases) 获取。只下载 tgz 不会自动修改 profile；优先使用 `dsh plugin`，避免手工依赖和 bundle 不一致。
+
+## 三、源码开发安装（可选）
 
 ```powershell
 git clone https://github.com/HiQ-AI/dingtalk-dsh-assistant.git
@@ -39,7 +73,7 @@ pnpm install
 pnpm test
 ```
 
-如果仓库已经存在，直接进入仓库目录，更新代码后重新执行 `pnpm install` 和 `pnpm test`。
+如果仓库已经存在，直接进入仓库目录，更新代码后重新执行 `pnpm install` 和 `pnpm test`。普通用户已通过上一节安装正式版时，跳过本节和下一节。
 
 后续示例假设仓库绝对路径为：
 
@@ -49,7 +83,7 @@ D:/project/dingtalk-dsh-assistant
 
 请替换成自己的真实路径。JSON 中推荐使用 `/`，避免额外转义 Windows 反斜杠。
 
-## 三、把插件加入 DSH Web profile
+## 四、把源码包加入 DSH Web profile（可选）
 
 默认 profile 文件位于：
 
@@ -123,7 +157,7 @@ pnpm install
 
 如果 profile 使用本地 `.tgz`，同一版本重新打包时必须使用新的包文件名并同步修改 `package.json`；只覆盖原同名 tgz 后执行 `pnpm install --force`，仍可能命中锁文件中的旧包完整性记录，导致运行时没有更新。安装后应在 `node_modules` 中独立检查本轮新增实现，再重启 DSH Web。
 
-## 四、装配 resident Runtime
+## 五、装配 resident Runtime
 
 打开仓库中的 `.dsh/profiles/resident/cordis.patch.yml`，把其中配置合并到实际使用的：
 
@@ -184,7 +218,7 @@ profile: your-profile-name
 
 不要把个人群 ID、账号信息、工作目录或代理地址提交到仓库模板。
 
-## 五、启动并确认插件已加载
+## 六、启动并确认插件已加载
 
 从插件仓库启动：
 
@@ -205,9 +239,9 @@ pwsh -NoProfile -File .\scripts\start-web.ps1 -ProxyUrl 'http://127.0.0.1:10808'
 Invoke-RestMethod -Uri 'http://127.0.0.1:18998/health' | ConvertTo-Json -Depth 10
 ```
 
-预期至少能看到 `status`。如果端口无法访问，先查看 DSH 启动日志，不要继续配置页面。
+预期至少看到 `status: "ok"`；真实钉钉模式还应核对 `transport: "dws"`、`modelMode: "real"`、`inboundProcessing`、`outboundAuthorized` 和 `recoveryIssueCount`。如果端口无法访问，先查看 DSH 启动日志，不要继续配置页面。健康接口只证明 Runtime 存活，不能替代页面、群消息或回复回读验证。
 
-## 六、在 DSH Web 页面配置
+## 七、在 DSH Web 页面配置
 
 打开 DSH Web，进入“设置 → 插件 → 钉钉个人助理”。页面分为运行状态、环境检查、Agent 配置和常驻群配置。
 
@@ -327,7 +361,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:18998/health' | ConvertTo-Json -Depth 1
 
 添加后会为该群建立唯一的 resident Session。已有群的职责可单独编辑并点击“保存职责”。删除常驻群会移除插件中的群配置；存在活动 Task 时删除会被拒绝。
 
-## 七、按“先收后发”启用真实群聊
+## 八、按“先收后发”启用真实群聊
 
 首次上线不要直接开放自动回复。
 
@@ -348,7 +382,7 @@ dws:
 
 在已添加的测试群发送一条消息，然后从左侧插件看板打开“群聊会话”，确认消息进入该群固定的 resident Session。不要用启动成功或健康接口代替这一步真实消息验证。
 
-任务进入 Runtime 后，可在“运行看板 → 任务看板”按待执行、执行中、等待中和已完成四列检查状态。红框标出任务看板入口和完整任务区域：
+任务进入 Runtime 后，可从左侧菜单打开“运行看板”，再进入“任务看板”，按待执行、执行中、等待中和已完成四列检查状态。运行看板会替换右侧内容区域，左侧菜单和 Session 页面保持独立。执行中/等待中的卡片展示当前有效检查点、完成进度和单项执行时长；已完成、已归档任务不再重复展示检查点。红框标出任务看板入口和完整任务区域：
 
 ![DSH Web 任务看板](images/dsh-web-task-board-annotated.png)
 
@@ -369,7 +403,7 @@ dws:
 - Task 完成后，原群收到引用回复并正确 @任务提出人。
 - 回读到钉钉真实消息后，投递状态才显示完成。
 
-## 八、常见问题
+## 九、常见问题
 
 ### 设置页没有“钉钉个人助理”
 
@@ -395,7 +429,7 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 先确认当前所选模型 provider 的认证有效，再检查页面中的模型名和代理。只有使用 Codex 订阅时才检查 `dsh-codex-connect` 登录。代理环境下应确保 `localhost`、`127.0.0.1` 不走代理；仓库启动脚本已经设置该规则。
 
-## 九、安装完成判定
+## 十、安装完成判定
 
 只有以下各层都通过，才算完成：
 
@@ -406,5 +440,6 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 5. 目标群成功绑定唯一 resident Session。
 6. 真实群消息进入该 Session。
 7. 开放写入后，最小任务完成回复并经钉钉回读确认。
+8. 运行看板中的收信箱、发信箱、任务检查点和状态与实际 Session/钉钉回读一致。
 
 前一层的成功不能替代后一层的验证。

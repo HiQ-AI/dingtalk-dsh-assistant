@@ -4,6 +4,7 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const React = require('react')
     const { useCallback, useEffect, useState } = React
+    const { IconRefreshOutline16 } = require('@deepseek-ai/dsh-client-ui-primitives')
     
     const name = 'dingtalk-dsh-assistant-client'
     const inject = ['slots']
@@ -13,7 +14,12 @@ window.__ModuleLoader__.load({
     const row = { display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 13 }
     const input = { width: '100%', boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 8, padding: '8px 10px', background: 'transparent', color: 'inherit', font: 'inherit' }
     const button = { border: `1px solid ${colors.border}`, borderRadius: 8, padding: '7px 12px', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit' }
-    
+    const UPDATE_COMMAND = 'dsh plugin --profile web update dingtalk-dsh-assistant'
+
+    function UpdateDot() {
+      return React.createElement('span', { 'aria-hidden': true, style: { width: 7, height: 7, borderRadius: '50%', background: colors.danger, flex: 'none' } })
+    }
+
     async function request(path, options) {
       const response = await fetch(`${ENDPOINT}${path}`, { headers: { accept: 'application/json', 'content-type': 'application/json' }, ...options })
       const value = await response.json()
@@ -49,11 +55,24 @@ window.__ModuleLoader__.load({
       const [groupFeedback, setGroupFeedback] = useState({ kind: 'hint', message: '先搜索并选择一个群聊，再填写会话职责。' })
       const [addingGroup, setAddingGroup] = useState(false)
       const [error, setError] = useState()
+      const [updateFeedback, setUpdateFeedback] = useState()
+      const [checkingVersion, setCheckingVersion] = useState(false)
       const refresh = useCallback(async () => {
         try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setTaskGuidance({ taskExecutionGuidance: next.agentConfig.taskExecutionGuidance ?? '', taskEvidenceGuidance: next.agentConfig.taskEvidenceGuidance ?? '' }); setMaxConcurrentTasks(next.agentConfig.maxConcurrentTasks ?? 5); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
         catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
       }, [])
       useEffect(() => { refresh() }, [refresh])
+      const checkVersion = async () => {
+        setCheckingVersion(true)
+        try {
+          const version = await request('/state/version')
+          setOverview((current) => ({ ...current, version }))
+        } catch (cause) {
+          setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))
+        } finally {
+          setCheckingVersion(false)
+        }
+      }
       const mutate = async (operation) => { try { await operation(); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } }
       const addGroup = async () => {
         if (!newGroup.groupId.trim()) return setGroupFeedback({ kind: 'error', message: '请先从搜索结果中选择要常驻的群聊。' })
@@ -85,12 +104,23 @@ window.__ModuleLoader__.load({
           React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '自动回复群聊'), React.createElement('span', null, overview?.health?.outboundAuthorized ? '已启用' : '未启用')),
           React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '处理模型'), React.createElement('span', null, overview?.health?.modelMode === 'real' ? '真实模型' : '测试模型'))),
         React.createElement('section', { style: panel },
-          React.createElement('strong', null, '版本与更新'),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
+            React.createElement('strong', null, '版本与更新'),
+            React.createElement('button', { type: 'button', style: { ...button, display: 'inline-flex', alignItems: 'center', gap: 6 }, disabled: checkingVersion, onClick: checkVersion }, checkingVersion ? '检查中…' : '检查更新', React.createElement(IconRefreshOutline16, { size: 16 }))),
           React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '当前版本'), React.createElement('span', null, overview?.version?.currentVersion ?? '读取中')),
           overview?.version?.error
             ? React.createElement('div', { style: { color: colors.danger, fontSize: 13 } }, `新版本检查失败：${overview.version.error}`)
-            : React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '最新版本'), React.createElement('span', null, overview?.version?.latestVersion === null ? '尚无正式 Release' : (overview?.version?.latestVersion ?? '检查中'))),
-          overview?.version?.updateAvailable ? React.createElement('a', { href: overview.version.releaseUrl, target: '_blank', rel: 'noreferrer', style: { color: colors.accent } }, `发现新版本 ${overview.version.latestVersion}`) : null,
+            : React.createElement('div', { style: row },
+              React.createElement('span', { style: { color: colors.muted } }, '最新版本'),
+              React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
+                overview?.version?.updateAvailable ? React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 22, boxSizing: 'border-box', padding: '2px 8px', border: `1px solid color-mix(in srgb, ${colors.danger} 28%, transparent)`, borderRadius: 999, color: colors.danger, background: `color-mix(in srgb, ${colors.danger} 10%, transparent)`, fontSize: 11, fontWeight: 500, lineHeight: 1.4, whiteSpace: 'nowrap' } }, React.createElement(UpdateDot), '可更新') : null,
+                overview?.version?.latestVersion === null ? '尚无正式 Release' : (overview?.version?.latestVersion ?? '检查中'))),
+          React.createElement('div', { style: { display: 'grid', gap: 8, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } },
+            React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, '更新命令 · 执行后重启 DSH Web'),
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minHeight: 34, padding: '4px 4px 4px 10px', border: `1px solid ${colors.border}`, borderRadius: 8, background: 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,.06))' } },
+              React.createElement('code', { style: { minWidth: 0, flex: 1, fontSize: 11, lineHeight: 1.5, overflowWrap: 'anywhere', userSelect: 'all' } }, UPDATE_COMMAND),
+              React.createElement('button', { type: 'button', style: { ...button, padding: '5px 10px', whiteSpace: 'nowrap' }, onClick: async () => { try { await navigator.clipboard.writeText(UPDATE_COMMAND); setUpdateFeedback('更新命令已复制，执行后重启 DSH。') } catch { setUpdateFeedback(`请在终端执行：${UPDATE_COMMAND}`) } } }, '复制'))),
+          updateFeedback ? React.createElement('div', { role: 'status', style: { color: colors.muted, fontSize: 12, overflowWrap: 'anywhere' } }, updateFeedback) : null,
           overview?.version?.changelogUrl ? React.createElement('a', { href: overview.version.changelogUrl, target: '_blank', rel: 'noreferrer', style: { color: colors.accent } }, '查看 CHANGELOG') : null),
         React.createElement(Environment, { value: overview?.environment }),
         React.createElement('section', { style: panel }, React.createElement('strong', null, 'Agent 配置'),
@@ -139,7 +169,7 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({ name: 'settings.plugins.tab', id: 'dingtalk-dsh-assistant', order: 10, label: () => '钉钉个人助理', inject: () => ({}) }, DingTalkDshAssistantCard))
     }
-    
+
     module.exports = { apply, inject, name, readResidentOverview, DingTalkDshAssistantCard }
     return module.exports
   },
