@@ -68,23 +68,29 @@ DSH 根据 Session 的 Agent 工作目录发现项目级 Skill，同时加载用
 
 推荐让 Web、resident Runtime 和看板运行在同一个 DSH Web 进程中，避免两个进程同时写同一份 Session JSONL 和 storage domain。
 
-正式版本发布后，可用 DSH 原生插件命令一次安装发行包：
+正式版本发布后，使用 DSH 原生插件命令安装根发行包；它会把 Assistant Runtime、Observer 看板和对应 bundle patch 一并装入 `web` profile。生产或验收环境建议固定版本：
 
 ```powershell
-dsh plugin --profile web add dingtalk-dsh-assistant
+dsh plugin --profile web add dingtalk-dsh-assistant@0.5.2
 ```
 
-版本历史见 [CHANGELOG](CHANGELOG.md)。设置页会通过 GitHub Release 检查新版本；检查失败会明确显示错误，不会误报为最新版本。升级使用：
+需要跟随 npm 最新版本时可省略 `@0.5.2`。安装完成后必须重启 `dsh web`，仅看到依赖安装成功不代表插件 Runtime 已加载。
+
+版本历史见 [CHANGELOG](CHANGELOG.md)，发行资产见 [GitHub Releases](https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases)。设置页会通过 GitHub Release 检查新版本；有新版本时，左侧全局插件更新入口和“钉钉个人助理”页签显示红点，“版本与更新”卡片提供更新命令复制入口。检查失败会明确显示错误，不会误报为最新版本。升级使用：
 
 ```powershell
 dsh plugin --profile web update dingtalk-dsh-assistant
 ```
 
-尚未发布到 npm 时，继续使用下面的源码安装方式。
+升级后重启 DSH Web，并依次确认：profile 中的包版本、`GET http://127.0.0.1:18998/health`、设置页/运行看板、真实群消息收发。四层证据不能互相替代。
+
+以下源码安装方式只用于开发未发布代码；普通安装和升级不需要克隆仓库，也不需要手工添加两个内部包。
 
 维护者发布新版本时，先将根包、assistant 和 observer 的版本号及 `CHANGELOG.md` 更新为同一版本并合并到 `main`，再推送对应的 `v<version>` Tag。GitHub Actions 会在 Node.js 24.19.0 下重新构建、测试和打包，按 observer → assistant → 根发行包的顺序发布 npm；三个包回读一致后才创建 GitHub Release。发布 job 绑定 GitHub Environment `NPM_PUBLISH`，优先使用其中的 `NPM_PUBLISH_TOKEN`，未配置时回退到 `NPM_TOKEN`。
 
-### 1. 获取源码并验证
+### 源码开发安装
+
+#### 1. 获取源码并验证
 
 ```powershell
 git clone https://github.com/HiQ-AI/dingtalk-dsh-assistant.git
@@ -93,7 +99,7 @@ pnpm install
 pnpm test
 ```
 
-### 2. 将插件加入 DSH Web profile
+#### 2. 将插件加入 DSH Web profile
 
 在 `%USERPROFILE%\.dsh\profiles\web\package.json` 中加入两个本地依赖。路径应替换为仓库的真实绝对目录：
 
@@ -120,7 +126,7 @@ pnpm test
 
 若使用 ChatGPT/Codex 订阅，再把 `dsh-codex-connect` 同时加入 `dependencies` 和 `bundles`；使用其他模型来源时保留对应 provider，不需要安装 `dsh-codex-connect`。
 
-### 3. 装配 resident Runtime
+#### 3. 装配 resident Runtime
 
 把 [`.dsh/profiles/resident/cordis.patch.yml`](.dsh/profiles/resident/cordis.patch.yml) 中的 resident 配置按需合并到实际使用的 Web profile patch。Web 基础 bundle 已包含 storage 相关插件，只覆盖 `storage-json` 配置并插入 `dingtalk-dsh-assistant/resident`，不要重复插入同名 storage 项。
 
@@ -135,14 +141,14 @@ dws:
 
 不要把个人群 ID、DWS profile、Agent 名称、工作目录或职责写入仓库模板；这些内容应保存在本机 DSH 配置和插件 storage 中。
 
-### 4. 安装 profile 依赖
+#### 4. 安装 profile 依赖
 
 ```powershell
 Set-Location "$env:USERPROFILE\.dsh\profiles\web"
 pnpm install
 ```
 
-### 5. 启动 DSH Web
+#### 5. 启动 DSH Web
 
 ```powershell
 Set-Location D:\path\to\dingtalk-dsh-assistant

@@ -4,17 +4,20 @@ import test from 'node:test'
 import { apply, name } from '../packages/dingtalk-dsh-assistant/client.js'
 
 test('Web client使用dsh原生插件页签slot注册唯一状态卡', () => {
-  let slotName, registration, component
+  const registrations = []
   const ctx = { slots: {
-    inject(name, callback) { slotName = name; callback() },
-    register(value, view) { registration = value; component = view; return () => undefined },
+    inject(name, callback) { callback() },
+    register(value, view) { registrations.push({ value, view }); return () => undefined },
   } }
   apply(ctx)
+  const tab = registrations.find(({ value }) => value.name === 'settings.plugins.tab')
+  const globalNotice = registrations.find(({ value }) => value.name === 'sidebar.footer.action')
   assert.equal(name, 'dingtalk-dsh-assistant-client')
-  assert.equal(slotName, 'settings.plugins.tab')
-  assert.equal(registration.id, 'dingtalk-dsh-assistant')
-  assert.equal(registration.label(), '钉钉个人助理')
-  assert.equal(typeof component, 'function')
+  assert.equal(tab.value.id, 'dingtalk-dsh-assistant')
+  assert.equal(tab.value.label(), '钉钉个人助理')
+  assert.equal(typeof tab.view, 'function')
+  assert.equal(globalNotice.value.id, 'dingtalk-dsh-assistant-update')
+  assert.equal(typeof globalNotice.view, 'function')
 })
 
 test('Web bundle patch只挂载无副作用host face，不启动第二份resident Runtime', async () => {
@@ -34,6 +37,10 @@ test('设置页异步展示版本状态且版本检查不阻塞核心配置加�
   assert.match(source, /版本与更新/u)
   assert.match(source, /新版本检查失败/u)
   assert.match(source, /发现新版本/u)
+  assert.match(source, /dsh plugin --profile web update dingtalk-dsh-assistant/u)
+  assert.match(source, /复制命令/u)
+  assert.match(source, /position:absolute;top:7px;right:5px/u)
+  assert.match(source, /sidebar\.footer\.action/u)
   assert.match(source, /查看 CHANGELOG/u)
 })
 

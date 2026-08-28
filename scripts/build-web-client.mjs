@@ -14,7 +14,7 @@ const bundle = `window.__ModuleLoader__.load({
     const module = { exports: {} }
     const React = require('react')
     const { useCallback, useEffect, useState } = React
-${source.split('\n').map((line) => `    ${line}`).join('\n')}
+${source.split('\n').map((line) => line === '' ? '' : `    ${line}`).join('\n')}
     module.exports = { apply, inject, name, readResidentOverview, DingTalkDshAssistantCard }
     return module.exports
   },
