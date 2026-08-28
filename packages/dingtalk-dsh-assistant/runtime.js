@@ -50,7 +50,7 @@ const activityDetail = (event) => {
 }
 
 export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, inboxDeliveryDelayMs = 5_000 } = {}) {
-  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map()
+  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), inflightMessages = new Map()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
@@ -164,6 +164,11 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     taskTail = current.catch(() => undefined)
     return current
   }
+  const latestAssistantTextSince = (agent, seq) => agent.session.events
+    .filter((event) => event.seq >= seq && event.type === 'assistant/message')
+    .map((event) => event.data.message.content.filter((block) => block.type === 'text').map((block) => block.text).join(''))
+    .filter((text) => text !== '')
+    .at(-1) ?? ''
   function assertResidentToolSession(exec, groupId) {
     const expected = residentHandles.get(groupId)?.agent?.session?.id
     if (expected === undefined || String(exec.agent?.session?.id) !== String(expected)) throw new Error(`resident_tool_wrong_session:${groupId}`)
@@ -944,27 +949,34 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     },
     listAuthorizationRequests,
     getAuthorizationRequest,
-    ingest: (message) => serialize(message.groupId, async () => {
-      const ingested = await store.ingest(message)
-      const persisted = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
-      if (ingested.duplicate && ['delivered', 'skipped'].includes(persisted?.agentDeliveryStatus)) return ingested
-      const deliveryRetry = ingested.duplicate
-      const accepted = ingested.duplicate ? { ...ingested, duplicate: false, recovered: true, sequence: persisted.sequence } : ingested
-      const handle = residentHandles.get(message.groupId)
-      try {
-        if (handle === undefined) throw new Error(`resident_not_active:${message.groupId}`)
-        if (inboxDeliveryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, inboxDeliveryDelayMs))
-        const firstSeq = handle.agent.session.seq
-        const images = Array.isArray(message.images) ? message.images : []
-        if (images.length > 0 && attachments === undefined) throw new Error('dsh_attachments_required')
-        const imageRefs = images.length === 0 ? [] : await attachments.saveImages(images.map((image) => ({ data: image.data, mediaType: image.mediaType, ...(image.name ? { name: image.name } : {}) })))
-        const content = [
-          { type: 'text', text: buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, deliveryRetry }) },
-          ...imageRefs.map((attachment) => ({ type: 'image', attachment })),
-        ]
-        handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } }))
-        await handle.agent.whenIdle()
-        const reply = handle.agent.session.events.filter((event) => event.seq >= firstSeq && event.type === 'assistant/message').flatMap((event) => event.data.message.content).filter((block) => block.type === 'text').map((block) => block.text).join('')
+    ingest: (message) => {
+      const inflightKey = `${message.groupId}\u0000${message.messageId}`
+      const existing = inflightMessages.get(inflightKey)
+      if (existing !== undefined) return existing
+      const operation = (async () => {
+        const ingested = await store.ingest(message)
+        const persisted = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
+        if (ingested.duplicate && ['delivered', 'skipped'].includes(persisted?.agentDeliveryStatus)) return ingested
+        const deliveryRetry = ingested.duplicate
+        const accepted = ingested.duplicate ? { ...ingested, duplicate: false, recovered: true, sequence: persisted.sequence } : ingested
+        const handle = residentHandles.get(message.groupId)
+        try {
+          if (handle === undefined) throw new Error(`resident_not_active:${message.groupId}`)
+          if (inboxDeliveryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, inboxDeliveryDelayMs))
+          const images = Array.isArray(message.images) ? message.images : []
+          if (images.length > 0 && attachments === undefined) throw new Error('dsh_attachments_required')
+          const imageRefs = images.length === 0 ? [] : await attachments.saveImages(images.map((image) => ({ data: image.data, mediaType: image.mediaType, ...(image.name ? { name: image.name } : {}) })))
+          const decisionPrompt = buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, deliveryRetry })
+          const content = [
+            { type: 'text', text: `[GROUP_MESSAGE_STEER]\n这是刚收到的群聊即时插话。立即结合它更新你对当前讨论和任务的理解；不要在本步骤输出群决策 JSON、调用任务工具或回复群聊，Runtime 随后会单独请求该消息的结构化落地判断。\n\n${decisionPrompt.replace(/^\[GROUP_DECISION\]\n\n/u, '')}` },
+            ...imageRefs.map((attachment) => ({ type: 'image', attachment })),
+          ]
+          handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } }))
+          return await serialize(message.groupId, async () => {
+            const firstSeq = handle.agent.session.seq
+            handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: decisionPrompt }], source: { kind: 'coordinator' } }))
+            await handle.agent.whenIdle()
+            const reply = latestAssistantTextSince(handle.agent, firstSeq)
         if (reply === '') throw new Error(`resident_reply_missing:${message.groupId}:${message.messageId}`)
         let decision
         try {
@@ -974,7 +986,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           const correctionSeq = handle.agent.session.seq
           handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_SCHEMA_CORRECTION]\n你刚才的判断结果未通过结构校验：${error.message}。保持原来的业务判断不变，只删除该 kind 不允许的字段或补齐必填字段，重新输出一份严格符合主会话决策契约的 JSON；不要解释，不要扩大或改变任务目标。` }], source: { kind: 'coordinator' } }))
           await handle.agent.whenIdle()
-          const correctedReply = handle.agent.session.events.filter((event) => event.seq >= correctionSeq && event.type === 'assistant/message').flatMap((event) => event.data.message.content).filter((block) => block.type === 'text').map((block) => block.text).join('')
+          const correctedReply = latestAssistantTextSince(handle.agent, correctionSeq)
           if (correctedReply === '') throw error
           decision = parseGroupDecision(correctedReply)
         }
@@ -987,7 +999,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           const recheckSeq = handle.agent.session.seq
           handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION]\n\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, deliveryRetry }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
           await handle.agent.whenIdle()
-          const rechecked = handle.agent.session.events.filter((event) => event.seq >= recheckSeq && event.type === 'assistant/message').flatMap((event) => event.data.message.content).filter((block) => block.type === 'text').map((block) => block.text).join('')
+          const rechecked = latestAssistantTextSince(handle.agent, recheckSeq)
           if (rechecked !== '') decision = parseGroupDecision(rechecked)
         }
         if (decision.kind === 'ignore') return { ...accepted, decision, group: store.getGroup(message.groupId) }
@@ -1009,12 +1021,17 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           ? store.getGroup(message.groupId)
           : await appendReliableOutbox({ groupId: message.groupId, sourceMessageId: message.messageId, text: decision.reply })
         return { ...accepted, decision, group, task }
-      } catch (error) {
-        const current = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
-        if (current?.agentDeliveryStatus === 'pending') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'failed', error: error instanceof Error ? error.message : String(error) })
-        throw error
-      }
-    }),
+          })
+        } catch (error) {
+          const current = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
+          if (current?.agentDeliveryStatus === 'pending') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'failed', error: error instanceof Error ? error.message : String(error) })
+          throw error
+        }
+      })()
+      inflightMessages.set(inflightKey, operation)
+      operation.finally(() => { if (inflightMessages.get(inflightKey) === operation) inflightMessages.delete(inflightKey) }).catch(() => undefined)
+      return operation
+    },
     async recoverPendingMessages() {
       const pending = store.listGroups().flatMap((group) => (group.messages ?? [])
         .filter((message) => message.agentDeliveryStatus === 'pending')

@@ -27,6 +27,58 @@ test('Inbox 延迟五秒插话投递，主会话向叶子会话同样使用插�
   assert.match(source, /decision = parseGroupDecision\(correctedReply\)/)
 })
 
+test('同群新消息立即进入Inbox并在前一条决策未完成时插话', async () => {
+  const group = { groupId: 'steer-group', residentSessionId: 'session-steer', residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }
+  const steered = [], followups = []
+  let releaseFirstIdle
+  const firstIdle = new Promise((resolve) => { releaseFirstIdle = resolve })
+  let idleCalls = 0, resolveBothSteered
+  const bothSteered = new Promise((resolve) => { resolveBothSteered = resolve })
+  const session = { id: 'session-steer', seq: 0, events: [] }
+  const agent = {
+    session, status: 'running',
+    steer(message) { steered.push(message); if (steered.length === 2) resolveBothSteered() },
+    followup(message) {
+      followups.push(message)
+      session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ kind: 'answer', reply: `已处理${followups.length}` }) }] } } })
+    },
+    async whenIdle() { idleCalls += 1; if (idleCalls === 1) await firstIdle },
+  }
+  const handle = { agent, dispose: async () => undefined }
+  const ctx = {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
+    agents: { async resume() { return handle } },
+    subagents: { drainContinuableDescendants: async () => undefined },
+    agentPresets: { serviceFor: () => ({ set: () => undefined }) },
+  }
+  const store = {
+    getGroup: (groupId) => groupId === group.groupId ? group : undefined,
+    listGroups: () => [group], listTasks: () => [],
+    async ingest(message) {
+      const duplicate = group.messages.find((item) => item.messageId === message.messageId)
+      if (duplicate) return { duplicate: true, sequence: duplicate.sequence, group }
+      const accepted = { ...message, sequence: group.nextSequence++, agentDeliveryStatus: 'pending' }
+      group.messages.push(accepted)
+      return { duplicate: false, sequence: accepted.sequence, group }
+    },
+    async markMessageAgentDelivery({ messageId, status }) { Object.assign(group.messages.find((item) => item.messageId === messageId), { agentDeliveryStatus: status }); return group },
+    async appendOutbox(value) { group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
+    close: async () => undefined,
+  }
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ inboxDeliveryDelayMs: 0, supervisorIntervalMs: 0 }))
+  const first = runtime.ingest({ groupId: group.groupId, messageId: 'm1', text: '第一条', occurredAt: '2026-08-28T01:00:00Z' })
+  const second = runtime.ingest({ groupId: group.groupId, messageId: 'm2', text: '第二条', occurredAt: '2026-08-28T01:00:01Z' })
+  await bothSteered
+  assert.deepEqual(group.messages.map((item) => item.messageId), ['m1', 'm2'], '第二条必须在第一条决策完成前持久化进Inbox')
+  assert.equal(steered.length, 2, '第二条必须在第一条whenIdle结束前调用steer')
+  assert.equal(followups.length, 1, '结构化决策仍应按群串行，避免两条消息的JSON串线')
+  releaseFirstIdle()
+  await Promise.all([first, second])
+  assert.equal(followups.length, 2)
+  assert.deepEqual(group.messages.map((item) => item.agentDeliveryStatus), ['delivered', 'delivered'])
+  await runtime.close()
+})
+
 test('已有群切换预设时沿用原 Session，新群先创建 dsh Session 再持久绑定', async () => {
   const groups = new Map([['existing', { groupId: 'existing', residentSessionId: 'session-existing', residentAgentPreset: 'standard' }]])
   const calls = []
@@ -173,12 +225,11 @@ test('单个 resident Session 恢复超时被隔离且不阻塞其他群启动',
 test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 排队', async () => {
   const groups = new Map([['group-a', { groupId: 'group-a', responsibility: 'coordinate', residentSessionId: 'session-parent', residentAgentPreset: 'standard-convergent', outbox: [] }]])
   const tasks = []
-  const creates = [], createMetas = [], followups = [], approvalResumeOrder = [], disposed = [], activities = [], alerts = [], goals = new Map(), agents = new Map(), leafTools = []
+  const creates = [], createMetas = [], followups = [], steers = [], approvalResumeOrder = [], disposed = [], activities = [], alerts = [], goals = new Map(), agents = new Map(), leafTools = []
   let sessionObserver
   const makeHandle = (sessionId) => {
     const session = { id: sessionId, events: [], seq: 0, meta: {}, append(type, data) { const event = { seq: session.seq++, type, data }; session.events.push(event); return event } }
-    const agent = { session, status: 'idle', followup(message) {
-      followups.push([sessionId, message])
+    const recordMessage = (message) => {
       const text = message.content[0]?.text ?? ''
       if (text.startsWith('[HUMAN_INTERVENTION_REPLY]')) approvalResumeOrder.push('批复入队')
       if (sessionId === 'session-parent' && text.startsWith('[TASK_COMPLETION_REVIEW]')) {
@@ -191,8 +242,13 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
       if (sessionId === 'session-parent' && text.startsWith('[TASK_COORDINATION]')) {
         session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `coordinated:${text.match(/Task ID: (.*)/)?.[1]}` }] } } })
       }
-    }, whenIdle: async () => undefined }
-    agent.steer = agent.followup
+    }
+    const agent = {
+      session, status: 'idle',
+      followup(message) { followups.push([sessionId, message]); recordMessage(message) },
+      steer(message) { steers.push([sessionId, message]); recordMessage(message) },
+      whenIdle: async () => undefined,
+    }
     return { agent, dispose: async () => { disposed.push(sessionId); if (agents.get(sessionId) === agent) agents.delete(sessionId) } }
   }
   const parentHandle = makeHandle('session-parent')
@@ -272,7 +328,8 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(runtime.getTask(one.task.taskId).state, 'running', 'turn/end投影不能完成Task')
   const followup = await runtime.followupTask({ taskId: one.task.taskId, text: 'more evidence' })
   assert.equal(followup.accepted, true)
-  assert.equal(followups.some(([sessionId, message]) => sessionId === 'session-task-1' && message.content[0]?.text === 'more evidence'), true)
+  assert.equal(steers.some(([sessionId, message]) => sessionId === 'session-task-1' && message.content[0]?.text === 'more evidence'), true)
+  assert.equal(followups.some(([sessionId, message]) => sessionId === 'session-task-1' && message.content[0]?.text === 'more evidence'), false, '主会话向叶子补充上下文不得排队发送')
   await runtime.submitTaskResult({ taskId: two.task.taskId, result: { status: 'waiting', waitingKind: 'information', summary: 'need input', evidence: [], artifacts: [], waitingReason: 'provide fixture', questions: ['Which fixture?'] } })
   assert.equal(runtime.getTask(two.task.taskId).state, 'waiting')
   assert.equal(groups.get('group-a').outbox[0].sourceMessageId.startsWith(`task-result:${two.task.taskId}:waiting:`), true)
@@ -428,7 +485,8 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'development', summary: '重复上一轮旧结论', evidence: ['只有旧结论证据'], artifacts: [] } }), /task_result_objective_not_covered/)
   assert.equal(runtime.getTask(one.task.taskId).state, 'running')
   assert.equal(groups.get('group-a').outbox.length, beforeRejectedCompletion, '验收拒绝不得生成完成通知')
-  assert.match(followups.at(-1)[1].content[0].text, /^\[TASK_RESULT_REJECTED\]/u)
+  assert.match(steers.at(-1)[1].content[0].text, /^\[TASK_RESULT_REJECTED\]/u)
+  assert.equal(followups.some(([sessionId, message]) => sessionId === one.task.childSessionId && message.content[0]?.text?.startsWith('[TASK_RESULT_REJECTED]')), false, '结果驳回必须插话给叶子')
   await runtime.close()
   const persistedChildSessionId = runtime.getTask(three.task.taskId).childSessionId
   goals.set(persistedChildSessionId, { ...goals.get(persistedChildSessionId), revision: 4, phase: 'paused', activation: 'disarmed' })
