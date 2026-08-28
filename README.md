@@ -71,10 +71,10 @@ DSH 根据 Session 的 Agent 工作目录发现项目级 Skill，同时加载用
 正式版本发布后，使用 DSH 原生插件命令安装根发行包；它会把 Assistant Runtime、Observer 看板和对应 bundle patch 一并装入 `web` profile。生产或验收环境建议固定版本：
 
 ```powershell
-dsh plugin --profile web add dingtalk-dsh-assistant@0.5.2
+dsh plugin --profile web add dingtalk-dsh-assistant@0.5.3
 ```
 
-需要跟随 npm 最新版本时可省略 `@0.5.2`。安装完成后必须重启 `dsh web`，仅看到依赖安装成功不代表插件 Runtime 已加载。
+需要跟随 npm 最新版本时可省略 `@0.5.3`。安装完成后必须重启 `dsh web`，仅看到依赖安装成功不代表插件 Runtime 已加载。
 
 版本历史见 [CHANGELOG](CHANGELOG.md)，发行资产见 [GitHub Releases](https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases)。设置页会通过 GitHub Release 检查新版本；“设置 → 插件 → 钉钉个人助理”的“版本与更新”卡片显示版本状态，并提供手动检查与更新命令复制入口。检查失败会明确显示错误，不会误报为最新版本。升级使用：
 
@@ -194,7 +194,7 @@ dws:
 
 Task 可设置独立的简短标题用于看板展示；标题与 objective 分离，重命名不会改变任务授权范围、Goal 或验收标准。运行看板通过 DSH 官方 `sidebar.footer.action` 提供左侧菜单入口，并由 `shell.overlay` 承载右侧完整内容区域；点击运行看板时切换到看板并清除 Session 选中状态，点击任意 Session 时关闭看板、恢复该 Session 的选中状态与对话/轨迹。运行看板复用 Session 的实际选中背景色，不额外显示焦点边框。
 
-运行看板顶部固定为 76px；各页按剩余视口高度计算内容区，任务列扣除顶部、主内容内边距和标题后使用可视高度，卡片在列内独立滚动，不再强制至少 1000px 高。
+运行看板 Header 的高度和字体规格与 Session 页面一致。各页不再重复显示页面标题和子标题；任务列按 Header 与主内容实际占用计算剩余视口高度，卡片在列内独立滚动，页面本身不会因状态桶高度产生额外补白或纵向滚动。
 
 Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不执行具体工作。Task 将简短任务名、当前有效目标和叶子执行用的来源证据信封分开持久化；任务看板和原生子会话展示任务名，叶子 Goal 同时接收当前目标与完整来源证据。来源信封包含消息 ID、发送者、时间、引用 ID、原始正文和附件异常，并明确要求结合当前代码、运行态和工具证据独立核验。Task 正式执行状态为 `running`、`waiting`、`completed`，超过并行上限时进入产品层 `queued`。归档只影响看板展示，不删除 Task、Session、Goal 或历史上下文；已完成或已归档 Task 收到关联上下文时会重新打开原 Task，并复用同一个叶子 Session，但创建独立的新执行轮次和全新 Goal。新轮次会覆盖当前目标、来源消息与发送人、验收标准、阶段任务、开始时间、阻塞和结果；上一轮的 Session、目标、来源、验收、阶段和结果快照进入 `runHistory`，只作为历史参考。后续消息明确扩大或收窄动作范围时，Runtime 在同一 Task 中修订当前有效目标并保留旧目标历史；普通事实补充不会修改目标。每轮重开会把新的群消息与发送人记录为当前触发来源，同时保留历次触发历史；该轮完成通知引用并 @当前触发人。
 
@@ -221,10 +221,10 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不�
 
 ![钉钉个人助理任务看板](docs/manual/images/dsh-web-task-board-annotated.png)
 
-- 群聊会话：查看不同 resident Session 的分页消息和 Agent 投递状态。
-- 任务看板：按待执行、执行中、等待中、已完成展示 Task，并打开 DSH 原生叶子对话和轨迹。
+- 群聊会话：查看不同 resident Session 的分页收信箱和发信箱；状态固定在最左列，长内容最多显示两行，完整内容可通过悬停标题或详情查看。
+- 任务看板：按待执行、执行中、等待中、已完成展示 Task，并打开 DSH 原生叶子对话和轨迹。活动任务卡片中的“任务”面板默认收起，只显示完成数/总数和进度；展开后显示各阶段任务、状态和耗时。
 - 归档任务：查看已归档 Task，相关群消息仍可重新打开原任务。
-- 授权审批：分页查看完整申请单，并在页面批准或拒绝。
+- 授权审批：以与消息表格一致的状态列、行高和内容密度分页查看申请单，并在页面批准或拒绝。
 - 告警：按类型查看当前异常和分页的已恢复历史。
 
 看板不读取或重建 DSH Session JSONL，只通过插件状态接口展示业务投影；对话与轨迹仍由 DSH 原生页面负责。
