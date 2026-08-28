@@ -2,6 +2,13 @@
 
 本文件记录 `dingtalk-dsh-assistant` 每个正式版本的用户可见变化。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，日期使用 `YYYY-MM-DD`。
 
+## [0.5.7] - 2026-08-28
+
+### 修复
+
+- 设置页复制的升级命令改为同时更新 Assistant 与 Observer 的完整 scoped 包名，并使用 `--latest` 跳过 profile 中固定版本或本地 tgz 的限制。
+- README 与安装手册同步使用同一条可执行升级命令，避免文档提示与 Web 设置页不一致。
+
 ## [0.5.6] - 2026-08-28
 
 ### 修复
@@ -104,6 +111,7 @@
 - assistant、observer 与发行包统一使用同一个产品版本号。
 - Node.js 最低版本与实际 zstd Runtime 要求一致，调整为 24。
 
+[0.5.7]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.7
 [0.5.6]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.6
 [0.5.5]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.5
 [0.5.4]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.4

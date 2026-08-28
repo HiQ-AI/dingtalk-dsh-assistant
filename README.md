@@ -71,10 +71,10 @@ DSH 根据 Session 的 Agent 工作目录发现项目级 Skill，同时加载用
 正式版本发布后，使用 DSH 原生插件命令安装根发行包；它会把 Assistant Runtime、Observer 看板和对应 bundle patch 一并装入 `web` profile。生产或验收环境建议固定版本：
 
 ```powershell
-dsh plugin --profile web add dingtalk-dsh-assistant@0.5.5
+dsh plugin --profile web add dingtalk-dsh-assistant@0.5.7
 ```
 
-需要跟随 npm 最新版本时可省略 `@0.5.5`。安装完成后必须重启 `dsh web`，仅看到依赖安装成功不代表插件 Runtime 已加载。
+需要跟随 npm 最新版本时可省略 `@0.5.7`。安装完成后必须重启 `dsh web`，仅看到依赖安装成功不代表插件 Runtime 已加载。
 
 版本历史见 [CHANGELOG](CHANGELOG.md)，发行资产见 [GitHub Releases](https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases)。设置页会通过 GitHub Release 检查新版本；“设置 → 插件 → 钉钉个人助理”的“版本与更新”卡片显示版本状态，并提供手动检查与更新命令复制入口。检查失败会明确显示错误，不会误报为最新版本。升级使用：
 
