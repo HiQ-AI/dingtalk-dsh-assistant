@@ -124,6 +124,10 @@ test('任务关联索引覆盖当前群全部状态并允许历史任务记录�
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /本群全部任务关联索引/)
   assert.match(source, /queued、running、waiting、completed 以及产品展示中的归档任务都必须参与关联判断/)
+  assert.match(source, /结合当前消息的前后文、引用关系、连续消息构成的信息组、当时讨论与执行场景/u)
+  assert.match(source, /候选任务的目标、动作范围、状态、历史触发和已记录上下文/u)
+  assert.match(source, /不得根据某几个关键词、词面重合、标题相似或单一字段直接决定复用已有任务或新建任务/u)
+  assert.match(source, /关键词只能作为查找候选任务的线索，不能代替关联结论/u)
   assert.match(source, /relatedContexts/)
 })
 
