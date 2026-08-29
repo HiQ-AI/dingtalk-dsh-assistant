@@ -36,6 +36,10 @@ const normalizeApprovalScope = (value) => value.trim().replace(/\s+/gu, ' ')
 const humanBlockerFingerprint = (category, requestedAction) => createHash('sha256')
   .update(JSON.stringify({ category, requestedAction: normalizeApprovalScope(requestedAction) }))
   .digest('hex')
+const isGoalRoundLimitExhausted = (goal) => Number.isInteger(goal?.roundsStarted)
+  && Number.isInteger(goal?.maxGoalRounds)
+  && goal.roundsStarted >= goal.maxGoalRounds
+  && (goal.phase === 'blocked' || goal.phase === 'paused' || (goal.phase === 'active' && goal.activation === 'disarmed'))
 const withHumanBlockerHistory = (task, blocker) => {
   const history = task.humanBlockerHistory ?? []
   const index = history.findIndex((item) => item.requestId === blocker.requestId)
@@ -631,7 +635,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (!creating) throw new Error(`task_goal_missing:${task.taskId}`)
       ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds }); return
     }
-    if (task.state === 'running' && (
+    if (task.state === 'running' && !isGoalRoundLimitExhausted(existing) && (
       existing.phase === 'paused'
       || existing.phase === 'blocked'
       || (existing.phase === 'active' && existing.activation === 'disarmed')
@@ -695,6 +699,16 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             await store.recordAlert({ taskId: task.taskId, fingerprint: 'leaf-session-recovered', detail: `Recovered DSH leaf Session ${task.childSessionId}`, status: 'resolved' })
           }
           const before = ctx.goals.get(handle.agent)
+          if (isGoalRoundLimitExhausted(before)) {
+            const reason = `DSH leaf Goal已耗尽执行轮数（${before.roundsStarted}/${before.maxGoalRounds}），但Task仍为running，已停止自动续接。`
+            await submitTaskResultInternal(task.taskId, {
+              status: 'waiting', waitingKind: 'human-intervention', summary: reason,
+              evidence: [`Task ${task.taskId}`, `Session ${task.childSessionId}`, `Goal ${before.id} ${before.phase}/${before.activation ?? 'none'}`, `Goal rounds ${before.roundsStarted}/${before.maxGoalRounds}`, `Agent status ${handle.agent.status}`], artifacts: [], waitingReason: reason,
+              blockerCategory: 'unexpected', risk: '任务执行已经中断，但若继续保留running状态会造成看板误报并占用并发名额。', attemptedActions: ['等待Goal Driver在既定轮数内完成任务'], requestedAction: '请检查叶子会话最后一次失败原因，处理外部依赖后引用本阻塞消息回复是否恢复任务。',
+            })
+            results.push({ taskId: task.taskId, ok: false, waiting: true, exhausted: true, agentStatus: handle.agent.status })
+            continue
+          }
           if (before?.phase === 'paused' || before?.phase === 'blocked' || before?.phase === 'complete') {
             if (handle.agent.status !== 'idle') {
               results.push({ taskId: task.taskId, ok: true, deferred: true, sessionRecovered, goalRecovered: false, agentStatus: handle.agent.status })

@@ -494,5 +494,11 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(goals.get(persistedChildSessionId).phase, 'active', '进程重启恢复时仍应续接Task当前叶子')
   assert.equal(recoveredRuntime.getTask(three.task.taskId).state, 'running')
   assert.equal(goals.get('session-task-2').phase, 'blocked', '业务 waiting Task 不应被启动恢复误唤醒')
+  agents.get(persistedChildSessionId).status = 'running'
+  goals.set(persistedChildSessionId, { ...goals.get(persistedChildSessionId), revision: 5, phase: 'blocked', activation: 'disarmed', roundsStarted: 24, maxGoalRounds: 24 })
+  const exhaustedInspection = await recoveredRuntime.inspectRunningTasks()
+  assert.equal(exhaustedInspection.find((item) => item.taskId === three.task.taskId).exhausted, true)
+  assert.equal(recoveredRuntime.getTask(three.task.taskId).state, 'waiting', '轮数耗尽后即使Agent残留running也不得继续显示运行中')
+  assert.match(recoveredRuntime.getTask(three.task.taskId).waitingReason, /24\/24/u)
   await recoveredRuntime.close()
 })
