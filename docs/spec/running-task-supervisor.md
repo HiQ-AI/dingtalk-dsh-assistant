@@ -14,6 +14,7 @@ Task 只有两类合法等待：向原群任务提出人补充目标信息，或
 - Goal 为 `paused`、`blocked` 或 `active + disarmed` 时，通过 `ctx.goals.resume()` 恢复；Goal 缺失时在原 Session 创建同一 Task 目标。
 - Goal 异常发生时若 Agent 仍为 `running`，等待其进入 DSH 原生 idle 检查点后再恢复，避免在 blocked closing step 中途改 revision 或打断当前 turn。
 - Goal 的 `roundsStarted >= maxGoalRounds` 且已进入 `blocked`、`paused` 或 `active + disarmed` 时，执行预算已经确定耗尽，不再依赖可能残留的 Agent `running` 状态，也不自动重建新 Goal；Runtime 立即把 Task 转为 `waiting/human-intervention`，附带 Goal 轮数、阶段、Session 和 Agent 状态，避免看板假运行并释放并发名额。
+- 真人处理阻断问题并明确恢复后，Runtime 若发现原 Goal 轮数已经耗尽，先把 `maxGoalRounds` 增加一组默认预算，再使用编辑后的 Goal revision 执行 resume，确保同一 Task 和 Session 能实际继续运行。
 - 恢复后必须重新读取并断言 Session 已注册、Goal 为 `active + armed`。
 - 每次异常及恢复失败写入现有 Supervisor 去重告警；除 Goal 轮数已确定耗尽外，Supervisor 不修改 Task 的业务状态。
 - `waiting` Task 表示真实缺信息或缺授权，不参与自动恢复。
@@ -58,5 +59,6 @@ Task 只有两类合法等待：向原群任务提出人补充目标信息，或
 3. `waiting` Task 的 blocked Goal 保持不变。
 4. 恢复行为产生去重 Supervisor 告警，Task 状态始终不被巡检推进。
 5. Goal 轮数耗尽时，即使 Agent 状态持续为 `running`，Task 也必须转为 `waiting/human-intervention`，不得继续显示运行中或自动获得新一组轮数。
-6. information 只能经原群提出人答复恢复；human-intervention 只能经真人引用对应私聊阻塞消息恢复。
-7. 本人私聊发送后取得真实会话和消息 ID；只有引用该消息的新回复能恢复对应 Task，重复轮询不重复投递。
+6. Goal 轮数耗尽产生的阻塞经真人处理并恢复后，Goal 必须增加一组轮数预算并进入 `active + armed`。
+7. information 只能经原群提出人答复恢复；human-intervention 只能经真人引用对应私聊阻塞消息恢复。
+8. 本人私聊发送后取得真实会话和消息 ID；只有引用该消息的新回复能恢复对应 Task，重复轮询不重复投递。

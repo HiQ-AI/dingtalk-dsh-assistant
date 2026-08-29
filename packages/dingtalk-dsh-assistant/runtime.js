@@ -74,6 +74,16 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     if (permissionPresets === undefined) throw new Error('permission_presets_required')
     permissionPresets.set(handle.agent.session, 'danger-full-access')
   }
+  const resumeGoalAfterResolution = (handle, goal) => {
+    let resumable = goal
+    if (isGoalRoundLimitExhausted(resumable)) {
+      resumable = ctx.goals.edit(handle.agent, goalRef(resumable), { maxGoalRounds: resumable.maxGoalRounds + maxGoalRounds })
+    }
+    if (resumable?.phase === 'blocked' || resumable?.phase === 'paused' || (resumable?.phase === 'active' && resumable.activation === 'disarmed')) {
+      return ctx.goals.resume(handle.agent, goalRef(resumable))
+    }
+    return resumable
+  }
   const ensureLeafDescriptor = (handle, task) => {
     const ownEvents = handle.agent.session.events.slice(handle.agent.session.meta?.seedLength ?? 0)
     if (ownEvents.some((event) => event.type === 'subagent/descriptor')) return
@@ -404,7 +414,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       const approved = [...(task.humanBlockerHistory ?? []), ...(currentBlocker ? [currentBlocker] : [])]
         .find((item) => (item.fingerprint ?? humanBlockerFingerprint(item.category, item.requestedAction)) === fingerprint && item.status === 'answered' && item.decision === 'approved')
       if (approved !== undefined) {
-        if (goal.phase === 'blocked' || goal.phase === 'paused' || (goal.phase === 'active' && goal.activation === 'disarmed')) ctx.goals.resume(handle.agent, goalRef(ctx.goals.get(handle.agent)))
+        resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
         const running = await store.updateTask(taskId, (current) => ({
           ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: result, result: undefined,
           humanBlocker: approved, humanBlockerHistory: withHumanBlockerHistory(current, approved), updatedAt: new Date().toISOString(),
@@ -524,7 +534,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       humanBlocker: answered, humanBlockerHistory: withHumanBlockerHistory(current, answered),
     }))
     await followupTaskInternal(running, `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\nSource: ${source}\n\nContinue the same task only within the approved scope. For a rejected decision, do not perform the controlled action. Re-check current state before acting.`)
-    if (goal?.phase === 'blocked' || goal?.phase === 'paused' || (goal?.phase === 'active' && goal.activation === 'disarmed')) ctx.goals.resume(handle.agent, goalRef(goal))
+    resumeGoalAfterResolution(handle, goal)
     const authorization = getAuthorizationRequest(requestId)
     for (const listener of authorizationDecisionListeners) await listener({ authorization, task: running })
     return authorization
@@ -860,7 +870,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     if (task.state === 'waiting' && task.waitingKind === 'information') {
       const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
       const goal = ctx.goals.get(handle.agent)
-      if (goal?.phase === 'blocked' || goal?.phase === 'paused') ctx.goals.resume(handle.agent, goalRef(goal))
+      resumeGoalAfterResolution(handle, goal)
       task = await store.updateTask(task.taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined }))
     }
     task = await store.updateTask(task.taskId, (current) => {
@@ -1086,12 +1096,9 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (task?.state === 'running') return task
       if (task?.state !== 'waiting') throw new Error(`task_continuation_migration_invalid:${taskId}`)
       const handle = leafHandles.get(taskId) ?? await resumeLeaf(task)
-      let goal = ctx.goals.get(handle.agent)
-      if (goal && goal.roundsStarted >= goal.maxGoalRounds && (goal.phase === 'blocked' || goal.phase === 'paused' || (goal.phase === 'active' && goal.activation === 'disarmed'))) {
-        goal = ctx.goals.edit(handle.agent, goalRef(goal), { maxGoalRounds: goal.maxGoalRounds + maxGoalRounds })
-      }
-      if (goal?.phase === 'blocked' || goal?.phase === 'paused' || (goal?.phase === 'active' && goal.activation === 'disarmed')) ctx.goals.resume(handle.agent, goalRef(goal))
-      else if (goal?.phase === 'complete') ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds })
+      const goal = ctx.goals.get(handle.agent)
+      if (goal?.phase === 'complete') ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds })
+      else resumeGoalAfterResolution(handle, goal)
       const running = await store.updateTask(taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined, humanBlocker: current.humanBlocker ? { ...current.humanBlocker, status: 'answered', reply: 'Runtime判定无需真人介入，已转为持续执行。' } : undefined }))
       await followupTaskInternal(running, `[TASK_CONTEXT]\n${context}\n\n以上内容是恢复任务所需的来源事实，不代表任何根因或排除性判断已经成立。请按当前现场独立核验；外部流水线仍在正常运行时持续监控，Goal轮数由Host续接，不得因此提交human-intervention。`)
       return running
@@ -1132,7 +1139,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (task?.state !== 'waiting' || task.waitingKind !== 'human-intervention' || task.humanBlocker?.requestId !== requestId) throw new Error(`human_blocker_migration_mismatch:${taskId}:${requestId}`)
       if (task.humanBlocker.category === 'redline' && decision !== 'approved' && decision !== 'rejected') throw new Error(`redline_decision_required:${taskId}:${requestId}`)
       const handle = leafHandles.get(taskId) ?? await resumeLeaf(task), goal = ctx.goals.get(handle.agent)
-      if (goal?.phase === 'blocked' || goal?.phase === 'paused' || (goal?.phase === 'active' && goal.activation === 'disarmed')) ctx.goals.resume(handle.agent, goalRef(goal))
+      resumeGoalAfterResolution(handle, goal)
       const answered = { ...task.humanBlocker, fingerprint: task.humanBlocker.fingerprint ?? humanBlockerFingerprint(task.humanBlocker.category, task.humanBlocker.requestedAction), status: 'answered', reply, decision }
       const running = await store.updateTask(taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined, humanBlocker: answered, humanBlockerHistory: withHumanBlockerHistory(current, answered) }))
       await followupTaskInternal(running, `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\n\nContinue the same task only within the approved scope. Re-check current state before acting.`)
@@ -1187,7 +1194,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     resumeTask: ({ taskId }) => serializeTasks(async () => {
       const task = store.getTask(taskId); if (task?.state !== 'waiting') throw new Error(`task_not_waiting:${taskId}`)
       const handle = leafHandles.get(taskId) ?? await resumeLeaf(task), goal = ctx.goals.get(handle.agent)
-      if (goal?.phase === 'blocked' || goal?.phase === 'paused') ctx.goals.resume(handle.agent, goalRef(goal))
+      resumeGoalAfterResolution(handle, goal)
       return store.updateTask(taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined }))
     }),
     followupTask: ({ taskId, text }) => serializeTasks(async () => {
