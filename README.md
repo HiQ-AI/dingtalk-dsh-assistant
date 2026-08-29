@@ -1,8 +1,25 @@
+![钉钉群聊中的 DeepSeek Harness 数字员工](docs/manual/images/dingtalk-dsh-digital-employee.png)
+
 # DingTalk DSH Assistant
 
-`dingtalk-dsh-assistant` 是一组运行在 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 中的钉钉个人助理插件，不是独立 Agent 平台，也不自行实现第二套 Session、Agent 或任务执行引擎。
+`dingtalk-dsh-assistant` 是一组运行在 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 中的钉钉数字员工插件。它把钉钉群聊直接接入 DSH，让 Agent 不再只是等待 `@` 后回答问题的机器人，而是一个能够理解完整群聊上下文、主动参与协作并持续推进任务的团队成员。
 
-插件负责把钉钉群消息接入 DSH，并将群聊协作映射到 DSH 原生能力：每个常驻群绑定一个固定主 Session，主 Session 负责沟通与协调；实际任务由独立叶子 Session 和 Goal 执行。Agent 身份、工作规则与可用工具由配置的工作区及其 `AGENTS.md` 决定，插件本身不包含个人姓名或数字分身设定。
+在 DSH 与 DWS 已完成安装和登录的前提下，插件安装与基础接入可在约三分钟内完成。接入后，每个常驻群绑定一个固定主 Session，持续理解群聊中的讨论、决策和任务状态；需要实际执行的工作则交给独立叶子 Session 与 Goal。多个叶子任务可以并行推进，因此数字员工既能参与讨论和编写方案，也能排查问题、执行工具，甚至完成代码与功能开发。
+
+插件不是独立 Agent 平台，也不自行实现第二套 Session、Agent 或任务执行引擎。Agent 身份、工作规则与可用工具由配置的工作区及其 `AGENTS.md` 决定，插件本身不包含个人姓名或数字分身设定。
+
+## 从群聊机器人到数字员工
+
+常见的群聊机器人或 Agent 接入方式通常需要被 `@` 才会唤醒，只能获得当前消息附近的片段上下文，更适合问答、检索等单次工作。`dingtalk-dsh-assistant` 通过 DSH 原生 Session、subagent 与 Goal，把群聊协作变成可持续、可并行、可追踪的任务闭环。
+
+| 能力 | 普通机器人 / Agent | DingTalk DSH 数字员工 |
+| --- | --- | --- |
+| 参与方式 | 被 `@` 后响应 | 常驻群聊，主动判断并参与 |
+| 上下文 | 当前消息或片段上下文 | 持续维护完整群聊上下文 |
+| 工作范围 | 问答、检索等单次任务 | 讨论、方案、排障、工具执行、功能开发 |
+| 任务处理 | 一次处理一件事 | 多个独立叶子任务并行推进 |
+| 持续执行 | 回复结束后停止 | 通过 Goal 持续执行、等待、恢复和完成 |
+| 结果交付 | 返回一次性答案 | 回到原群引用回复，保留证据与任务状态 |
 
 ## 与 DSH 的关系
 
