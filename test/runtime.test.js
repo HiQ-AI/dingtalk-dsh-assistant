@@ -265,6 +265,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
       get(agent) { return goals.get(agent.session.id) },
       create(agent, request) { const goal = { id: `goal-${agent.session.id}`, revision: 1, phase: 'active', activation: 'armed', ...request }; goals.set(agent.session.id, goal); return goal },
       block(agent, ref, reason) { const goal = { ...goals.get(agent.session.id), revision: ref.revision + 1, phase: 'blocked', activation: 'disarmed', blockedReason: reason }; goals.set(agent.session.id, goal); return goal },
+      edit(agent, ref, patch) { const goal = { ...goals.get(agent.session.id), ...patch, revision: ref.revision + 1 }; goals.set(agent.session.id, goal); return goal },
       resume(agent, ref) { approvalResumeOrder.push('Goal恢复'); const goal = { ...goals.get(agent.session.id), revision: ref.revision + 1, phase: 'active', activation: 'armed', blockedReason: undefined }; goals.set(agent.session.id, goal); return goal },
       complete(agent, ref) { const goal = { ...goals.get(agent.session.id), revision: ref.revision + 1, phase: 'complete', activation: 'disarmed' }; goals.set(agent.session.id, goal); return goal },
     },
@@ -347,7 +348,11 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(duplicateBlocker.humanBlocker.requestId, firstRequestId, '同一待批范围重复上报必须复用阻塞请求')
   assert.equal(blockerRequests.length, 1, '同一待批范围只能触发一次外发')
   await runtime.recordHumanBlockerDelivery({ taskId: one.task.taskId, requestId: firstRequestId, openTaskId: 'open-1', conversationId: 'self-1', messageId: 'approval-1' })
+  goals.set('session-task-1', { ...goals.get('session-task-1'), roundsStarted: 24, maxGoalRounds: 24 })
   await runtime.resolveHumanBlocker({ taskId: one.task.taskId, requestId: firstRequestId, quotedMessageId: 'approval-1', replyMessageId: 'reply-1', reply: '批准', decision: 'approved' })
+  assert.equal(goals.get('session-task-1').maxGoalRounds, 48, '真人解决阻塞后必须先补充一组Goal轮数预算')
+  assert.equal(goals.get('session-task-1').phase, 'active')
+  assert.equal(goals.get('session-task-1').activation, 'armed')
   assert.equal(runtime.getTask(one.task.taskId).humanBlockerHistory.length, 1, '真人批复必须持久化到Task历史')
   const approvedReplay = await runtime.submitTaskResult({ taskId: one.task.taskId, result: releaseWaiting })
   assert.equal(approvedReplay.state, 'running', '已批准的完全相同范围不得再次进入等待')
@@ -494,5 +499,11 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(goals.get(persistedChildSessionId).phase, 'active', '进程重启恢复时仍应续接Task当前叶子')
   assert.equal(recoveredRuntime.getTask(three.task.taskId).state, 'running')
   assert.equal(goals.get('session-task-2').phase, 'blocked', '业务 waiting Task 不应被启动恢复误唤醒')
+  agents.get(persistedChildSessionId).status = 'running'
+  goals.set(persistedChildSessionId, { ...goals.get(persistedChildSessionId), revision: 5, phase: 'blocked', activation: 'disarmed', roundsStarted: 24, maxGoalRounds: 24 })
+  const exhaustedInspection = await recoveredRuntime.inspectRunningTasks()
+  assert.equal(exhaustedInspection.find((item) => item.taskId === three.task.taskId).exhausted, true)
+  assert.equal(recoveredRuntime.getTask(three.task.taskId).state, 'waiting', '轮数耗尽后即使Agent残留running也不得继续显示运行中')
+  assert.match(recoveredRuntime.getTask(three.task.taskId).waitingReason, /24\/24/u)
   await recoveredRuntime.close()
 })
