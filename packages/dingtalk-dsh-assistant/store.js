@@ -86,7 +86,7 @@ const alertSchema = z.object({
 const ACTIVITY_PROJECTION_LIMIT_PER_TASK = 500
 
 export const residentDomainSpec = defineDomain({
-  name: 'dingtalk_dsh_assistant', version: 7, tables: {
+  name: 'dingtalk_dsh_assistant', version: 6, tables: {
     groups: domainTable(groupSchema), scheduler: domainTable(schedulerSchema), tasks: domainTable(taskSchema), alerts: domainTable(alertSchema), activities: domainTable(activitySchema),
   },
 })

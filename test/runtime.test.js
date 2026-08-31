@@ -29,7 +29,7 @@ test('Inbox 延迟五秒插话投递，主会话向叶子会话同样使用插�
 
 test('同群新消息立即进入Inbox并在前一条决策未完成时插话', async () => {
   const group = { groupId: 'steer-group', residentSessionId: 'session-steer', residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }
-  const steered = [], followups = []
+  const steered = [], decisionSteers = [], followups = []
   let releaseFirstIdle
   const firstIdle = new Promise((resolve) => { releaseFirstIdle = resolve })
   let idleCalls = 0, resolveBothSteered
@@ -37,7 +37,16 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
   const session = { id: 'session-steer', seq: 0, events: [] }
   const agent = {
     session, status: 'running',
-    steer(message) { steered.push(message); if (steered.length === 2) resolveBothSteered() },
+    steer(message) {
+      const text = message.content[0].text
+      if (text.startsWith('[GROUP_MESSAGE_STEER]')) {
+        steered.push(message)
+        if (steered.length === 2) resolveBothSteered()
+        return
+      }
+      decisionSteers.push(message)
+      session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ kind: 'answer', reply: `已处理${decisionSteers.length}` }) }] } } })
+    },
     followup(message) {
       followups.push(message)
       session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ kind: 'answer', reply: `已处理${followups.length}` }) }] } } })
@@ -71,10 +80,12 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
   await bothSteered
   assert.deepEqual(group.messages.map((item) => item.messageId), ['m1', 'm2'], '第二条必须在第一条决策完成前持久化进Inbox')
   assert.equal(steered.length, 2, '第二条必须在第一条whenIdle结束前调用steer')
-  assert.equal(followups.length, 0, 'steer 回合结束前不得排入结构化决策，避免把普通回复误当 JSON')
+  assert.equal(decisionSteers.length, 1, '第一条结构化决策必须用 steer 插入当前回合而不是等待空闲')
+  assert.equal(followups.length, 0, '群消息上下文和结构化决策都不得退化为 followup 排队')
   releaseFirstIdle()
   await Promise.all([first, second])
-  assert.equal(followups.length, 2)
+  assert.equal(decisionSteers.length, 2)
+  assert.equal(followups.length, 0)
   assert.deepEqual(group.messages.map((item) => item.agentDeliveryStatus), ['delivered', 'delivered'])
   await runtime.close()
 })
