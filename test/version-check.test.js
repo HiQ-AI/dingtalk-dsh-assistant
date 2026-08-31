@@ -11,13 +11,16 @@ test('语义版本比较覆盖正式版与预发布版', () => {
 })
 
 test('版本检查返回当前版本、最新 Release 与升级判断', async () => {
+  const currentVersion = await readCurrentVersion()
+  const [major, minor, patch] = currentVersion.split('.').map(Number)
+  const latestVersion = `${major}.${minor}.${patch + 1}`
   const result = await checkForUpdates({
     force: true,
     now: Date.parse('2026-08-26T00:00:00.000Z'),
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ tag_name: 'v0.5.11', html_url: 'https://example.test/release' }) }),
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ tag_name: `v${latestVersion}`, html_url: 'https://example.test/release' }) }),
   })
-  assert.equal(result.currentVersion, await readCurrentVersion())
-  assert.equal(result.latestVersion, '0.5.11')
+  assert.equal(result.currentVersion, currentVersion)
+  assert.equal(result.latestVersion, latestVersion)
   assert.equal(result.updateAvailable, true)
   assert.equal(result.releaseUrl, 'https://example.test/release')
 })
