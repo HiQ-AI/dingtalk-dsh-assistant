@@ -414,11 +414,11 @@ export async function openResidentStore(storageDomain) {
     createTask: async ({ groupId, sourceMessageId, title, objective, requesterName, requesterOpenDingTalkId, occurredAt, acceptanceCriteria = [], stageTasks = [], relatedContexts = [] }) => {
       const group = findGroupEntry(groupId)?.[1]
       if (group === undefined) throw new Error(`group_not_subscribed:${groupId}`)
-      const duplicate = [...tasks.entries()].map(([, task]) => task).find((task) => task.groupId === groupId && task.sourceMessageId === sourceMessageId)
+      const metadata = validateTaskMetadata({ group, sourceMessageId, title, objective, requesterName, requesterOpenDingTalkId, acceptanceCriteria })
+      const duplicate = [...tasks.entries()].map(([, task]) => task).find((task) => task.groupId === groupId && task.sourceMessageId === sourceMessageId && task.objective === metadata.objective)
       if (duplicate !== undefined) return { created: false, task: duplicate }
       const now = new Date().toISOString()
       const taskId = `task-${randomUUID()}`
-      const metadata = validateTaskMetadata({ group, sourceMessageId, title, objective, requesterName, requesterOpenDingTalkId, acceptanceCriteria })
       const trigger = { sourceMessageId, requesterName: metadata.requesterName, requesterOpenDingTalkId: metadata.requesterOpenDingTalkId, ...(occurredAt !== undefined ? { occurredAt } : {}) }
       const task = { taskId, groupId, sourceMessageId, title: metadata.title, objective: metadata.objective, state: 'queued', childSessionId: taskSessionId(taskId), requesterName: metadata.requesterName, requesterOpenDingTalkId: metadata.requesterOpenDingTalkId, triggerHistory: [trigger], runSequence: 1, runStartedAt: now, acceptanceCriteria: metadata.acceptanceCriteria, stageTasks: stageTasks.length > 0 ? stageTasks : ['完成并验证当前轮目标'], runHistory: [], stateHistory: [{ state: 'queued', at: now, runSequence: 1 }], ...(relatedContexts.length > 0 ? { relatedContexts } : {}), createdAt: now, updatedAt: now }
       await tasks.put(taskId, task)

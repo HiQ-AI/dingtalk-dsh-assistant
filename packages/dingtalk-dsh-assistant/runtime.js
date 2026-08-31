@@ -53,7 +53,7 @@ const activityDetail = (event) => {
   return { contentBlocks: event.data?.message?.content?.length ?? 0 }
 }
 
-export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, inboxDeliveryDelayMs = 5_000 } = {}) {
+export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000 } = {}) {
   const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), inflightMessages = new Map()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
@@ -123,13 +123,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       name: 'dingtalk-group-decision-protocol', order: 41,
       text: () => `## 群消息决策协议
 
-收到以 \`[GROUP_DECISION]\` 开头的群消息信封时，只输出一个严格 JSON 对象：
-- 回答：\`{"kind":"answer","reply":"..."}\`
-- 建议处理：\`{"kind":"task-proposal","title":"简洁任务名","objective":"完整任务目标","reply":"这个事项是否需要我处理？"}\`
-- 新任务：\`{"kind":"new-task","title":"简洁任务名","objective":"完整任务目标","acceptanceCriteria":["与任务类型无关的可核验完成条件"],"reply":"..."}\`
-- 补充任务：\`{"kind":"task-context","taskId":"...","context":"...","objective":"可选，修订后的完整目标","reply":"..."}\`；只需静默补充上下文、不需要回复群聊时，\`reply\` 使用空字符串
-- 重开任务：\`{"kind":"task-reopen","taskId":"...","context":"...","objective":"可选，修订后的完整目标","reply":"..."}\`；只需静默重开任务、不需要回复群聊时，\`reply\` 使用空字符串
-- 忽略：\`{"kind":"ignore","reason":"..."}\`
+收到以 \`[GROUP_DECISION]\` 开头的群消息信封时，只输出一个严格 JSON 对象：仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略使用 \`{"actions":[],"reason":"..."}\`，涉及任务时使用 \`{"actions":[...],"reply":"最多一条群回复，可为空"}\`。一个 JSON 可以同时对应多个 Task，\`actions\` 中每项可为 task-proposal、new-task、task-context 或 task-reopen；不得为了只返回一个动作而遗漏其他相关 Task。群回复统一放在顶层 \`reply\`，不得给每个动作分别回复。
 
 每次收到新消息时，检查其内容是否与当前 Session 上下文中的近期回复冲突；如有冲突，及时撤回本主会话发送的错误消息并订正。不得撤回真人或其他系统消息。
 
@@ -1002,18 +996,16 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         const ingested = await store.ingest(message)
         const persisted = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
         if (ingested.duplicate && ['delivered', 'skipped'].includes(persisted?.agentDeliveryStatus)) return ingested
-        const deliveryRetry = ingested.duplicate
         const accepted = ingested.duplicate ? { ...ingested, duplicate: false, recovered: true, sequence: persisted.sequence } : ingested
         const handle = residentHandles.get(message.groupId)
         try {
           if (handle === undefined) throw new Error(`resident_not_active:${message.groupId}`)
-          if (inboxDeliveryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, inboxDeliveryDelayMs))
           const images = Array.isArray(message.images) ? message.images : []
           if (images.length > 0 && attachments === undefined) throw new Error('dsh_attachments_required')
           const imageRefs = images.length === 0 ? [] : await attachments.saveImages(images.map((image) => ({ data: image.data, mediaType: image.mediaType, ...(image.name ? { name: image.name } : {}) })))
-          const decisionPrompt = buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, deliveryRetry })
+          const decisionPrompt = buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable })
           const content = [
-            { type: 'text', text: `[GROUP_MESSAGE_STEER]\n这是刚收到的群聊即时插话。立即结合它更新你对当前讨论和任务的理解；不要在本步骤输出群决策 JSON、调用任务工具或回复群聊，Runtime 随后会单独请求该消息的结构化落地判断。\n\n${decisionPrompt.replace(/^\[GROUP_DECISION\]\n\n/u, '')}` },
+            { type: 'text', text: `[GROUP_MESSAGE_STEER]\n${decisionPrompt.replace(/^\[GROUP_DECISION\]\n\n/u, '')}` },
             ...imageRefs.map((attachment) => ({ type: 'image', attachment })),
           ]
           handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } }))
@@ -1034,29 +1026,32 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         const groupBeforeDecision = store.getGroup(message.groupId)
         const previousMessage = groupBeforeDecision?.messages.find((item) => item.sequence === accepted.sequence - 1)
         const activeTaskCount = store.listTasks().filter((task) => task.groupId === message.groupId).length
-        if (decision.kind === 'ignore' && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: imageRefs.length > 0, previousMessage, occurredAt: message.occurredAt })) {
-          const rechecked = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION]\n\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, deliveryRetry }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
+        if ('reason' in decision && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: imageRefs.length > 0, previousMessage, occurredAt: message.occurredAt })) {
+          const rechecked = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION]\n\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
           if (rechecked !== '') decision = parseGroupDecision(rechecked)
         }
-        if (decision.kind === 'ignore') return { ...accepted, decision, group: store.getGroup(message.groupId) }
-        let task
+        if ('reason' in decision) return { ...accepted, decision, group: store.getGroup(message.groupId) }
+        const tasks = []
         const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
         const sourceEnvelope = buildLeafSourceEnvelope({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable })
-        if (decision.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, title: decision.title, objective: decision.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, acceptanceCriteria: decision.acceptanceCriteria, stageTasks: decision.stageTasks, relatedContexts: [sourceEnvelope] }); await pumpTasks(); return store.getTask(result.task.taskId) })
-        else if (decision.kind === 'task-context') {
-          task = store.getTask(decision.taskId)
-          if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${decision.taskId}`)
-          task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger, decision.objective, decision.acceptanceCriteria, decision.stageTasks))
+        for (const action of decision.actions) {
+          let task
+          if (action.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, title: action.title, objective: action.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, acceptanceCriteria: action.acceptanceCriteria, stageTasks: action.stageTasks, relatedContexts: [sourceEnvelope] }); await pumpTasks(); return store.getTask(result.task.taskId) })
+          else if (action.kind === 'task-context') {
+            task = store.getTask(action.taskId)
+            if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${action.taskId}`)
+            task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
+          } else if (action.kind === 'task-reopen') {
+            task = store.getTask(action.taskId)
+            if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${action.taskId}`)
+            task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
+          }
+          if (task !== undefined) tasks.push(task)
         }
-        else if (decision.kind === 'task-reopen') {
-          task = store.getTask(decision.taskId)
-          if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${decision.taskId}`)
-          task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, decision.objective, decision.acceptanceCriteria, decision.stageTasks))
-        }
-        const group = decision.reply.trim() === ''
+        const group = !('reply' in decision) || decision.reply.trim() === ''
           ? store.getGroup(message.groupId)
           : await appendReliableOutbox({ groupId: message.groupId, sourceMessageId: message.messageId, text: decision.reply })
-        return { ...accepted, decision, group, task }
+        return { ...accepted, decision, group, tasks, ...(tasks.length === 1 ? { task: tasks[0] } : {}) }
           })
         } catch (error) {
           const current = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)

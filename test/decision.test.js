@@ -3,25 +3,17 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from '../packages/dingtalk-dsh-assistant/decision.js'
 
-test('群决策严格接受六类结构化结果', () => {
-  assert.equal(parseGroupDecision('{"kind":"answer","reply":"ok"}').kind, 'answer')
-  assert.equal(parseGroupDecision('{"kind":"task-proposal","title":"导出数据","objective":"导出 1.0.1 数据","reply":"这个事项是否需要我处理？"}').kind, 'task-proposal')
-  assert.equal(parseGroupDecision('{"kind":"new-task","title":"修复问题","objective":"fix","acceptanceCriteria":["问题已按授权目标处理并有可核验证据"],"reply":"accepted"}').kind, 'new-task')
-  assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"more","reply":"added"}').kind, 'task-context')
-  assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"fix it","objective":"修复并部署","reply":"added"}').objective, '修复并部署')
-  assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"more","reply":""}').reply, '')
-  assert.equal(parseGroupDecision('{"kind":"task-reopen","taskId":"task-1","context":"rollback","reply":"reopened"}').kind, 'task-reopen')
-  assert.equal(parseGroupDecision('{"kind":"task-reopen","taskId":"task-1","context":"deploy","objective":"修复并部署 UAT2","reply":"reopened"}').objective, '修复并部署 UAT2')
-  assert.equal(parseGroupDecision('{"kind":"task-reopen","taskId":"task-1","context":"rollback","reply":""}').reply, '')
-  assert.equal(parseGroupDecision('{"kind":"ignore","reason":"not addressed"}').kind, 'ignore')
+test('群决策一次结构化输出可包含多个任务动作', () => {
+  assert.deepEqual(parseGroupDecision('{"actions":[],"reply":"ok"}').actions, [])
+  const decision = parseGroupDecision('{"actions":[{"kind":"task-context","taskId":"task-1","context":"more"},{"kind":"task-reopen","taskId":"task-2","context":"rollback"},{"kind":"new-task","title":"修复问题","objective":"fix","acceptanceCriteria":["有可核验证据"]}],"reply":"已统一处理"}')
+  assert.deepEqual(decision.actions.map((action) => action.kind), ['task-context', 'task-reopen', 'new-task'])
+  assert.equal(parseGroupDecision('{"actions":[],"reason":"not addressed"}').reason, 'not addressed')
 })
 
 test('群决策拒绝无效 JSON、多余字段和缺失目标', () => {
   assert.throws(() => parseGroupDecision('answer'), /group_decision_invalid_json/)
-  assert.throws(() => parseGroupDecision('{"kind":"answer","reply":"ok","objective":"hidden"}'), /group_decision_invalid_schema/)
-  assert.throws(() => parseGroupDecision('{"kind":"new-task","reply":"accepted"}'), /group_decision_invalid_schema/)
-  assert.throws(() => parseGroupDecision('{"kind":"new-task","objective":"fix","reply":"accepted"}'), /group_decision_invalid_schema/)
-  assert.throws(() => parseGroupDecision('{"kind":"new-task","title":"修复问题","objective":"fix","reply":"accepted"}'), /group_decision_invalid_schema/)
+  assert.throws(() => parseGroupDecision('{"actions":[],"reply":"ok","objective":"hidden"}'), /group_decision_invalid_schema/)
+  assert.throws(() => parseGroupDecision('{"actions":[{"kind":"new-task","title":"修复问题","objective":"fix"}],"reply":"accepted"}'), /group_decision_invalid_schema/)
 })
 
 test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () => {
@@ -37,10 +29,9 @@ test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () 
   assert.match(prompt, /必须先回答并明确告知对方哪些信息未获取到，不得创建、续接或重开任务/u)
 })
 
-test('失败消息重试明确要求重新完成业务判断', () => {
-  const prompt = buildDecisionPrompt({ message: '需要排查', occurredAt: '2026-08-27T04:00:00Z', deliveryRetry: true })
-  assert.match(prompt, /这是一次失败消息重试/)
-  assert.match(prompt, /不得仅因消息 ID 已在会话中出现[\s\S]*判定 ignore/)
+test('群消息判断不注入失败重试行为说明', () => {
+  const prompt = buildDecisionPrompt({ message: '需要排查', occurredAt: '2026-08-27T04:00:00Z' })
+  assert.doesNotMatch(prompt, /失败消息重试|重新完成原业务判断/)
 })
 
 test('引用消息信封只保留引用消息 ID', () => {
@@ -114,11 +105,11 @@ test('诊断请求不得被主会话或叶子会话扩大为修复授权', async
 test('群消息到叶子只使用Runtime原始证据信封', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /const sourceEnvelope = buildLeafSourceEnvelope/u)
-  assert.match(source, /title: decision\.title, objective: decision\.objective/u)
+  assert.match(source, /title: action\.title, objective: action\.objective/u)
   assert.match(source, /relatedContexts: \[sourceEnvelope\]/u)
   assert.doesNotMatch(source, /objective: sourceEnvelope/u)
-  assert.match(source, /appendTaskContextInternal\(task, sourceEnvelope, trigger, decision\.objective, decision\.acceptanceCriteria, decision\.stageTasks\)/u)
-  assert.match(source, /reopenCompletedTaskInternal\(task, sourceEnvelope, trigger, decision\.objective, decision\.acceptanceCriteria, decision\.stageTasks\)/u)
+  assert.match(source, /appendTaskContextInternal\(task, sourceEnvelope, trigger, action\.objective, action\.acceptanceCriteria, action\.stageTasks\)/u)
+  assert.match(source, /reopenCompletedTaskInternal\(task, sourceEnvelope, trigger, action\.objective, action\.acceptanceCriteria, action\.stageTasks\)/u)
   assert.doesNotMatch(source, /appendTaskContextInternal\(task, decision\.context/u)
 })
 
@@ -146,17 +137,17 @@ test('图片及紧邻图片的短消息在存在活动Task时触发关联复核'
 test('任务所需附件读取失败时硬拦截任务动作并反馈缺失信息', () => {
   const failures = ['图片 media-1 下载失败', '文档 spec.docx 无法解析']
   for (const decision of [
-    { kind: 'new-task', title: '修复问题', objective: '按附件修复', reply: '开始处理' },
-    { kind: 'task-context', taskId: 'task-1', context: '附件补充', reply: '继续处理' },
-    { kind: 'task-reopen', taskId: 'task-1', context: '附件要求返工', reply: '重新处理' },
+    { actions: [{ kind: 'new-task', title: '修复问题', objective: '按附件修复', acceptanceCriteria: ['修复有证据'] }], reply: '开始处理' },
+    { actions: [{ kind: 'task-context', taskId: 'task-1', context: '附件补充' }], reply: '继续处理' },
+    { actions: [{ kind: 'task-reopen', taskId: 'task-1', context: '附件要求返工' }], reply: '重新处理' },
   ]) {
     const blocked = blockTaskDecisionForUnavailableMedia(decision, failures)
-    assert.equal(blocked.kind, 'answer')
+    assert.deepEqual(blocked.actions, [])
     assert.match(blocked.reply, /图片 media-1 下载失败；文档 spec\.docx 无法解析/u)
     assert.match(blocked.reply, /信息补齐后我再开始处理/u)
   }
-  const answer = { kind: 'answer', reply: '我没有获取到文档正文，请重新发送。' }
+  const answer = { actions: [], reply: '我没有获取到文档正文，请重新发送。' }
   assert.equal(blockTaskDecisionForUnavailableMedia(answer, failures), answer)
-  const complete = { kind: 'new-task', title: '文本任务', objective: '执行文本任务', reply: '开始处理' }
+  const complete = { actions: [{ kind: 'new-task', title: '文本任务', objective: '执行文本任务', acceptanceCriteria: ['完成'] }], reply: '开始处理' }
   assert.equal(blockTaskDecisionForUnavailableMedia(complete, []), complete)
 })

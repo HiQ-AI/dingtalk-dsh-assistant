@@ -15,10 +15,9 @@ after(() => {
   rmSync(replacementWorkspace, { recursive: true, force: true })
 })
 
-test('Inbox 延迟五秒插话投递，主会话向叶子会话同样使用插话', () => {
+test('Inbox 每条消息零延迟 steer，主会话向叶子会话同样使用插话', () => {
   const source = readFileSync(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
-  assert.match(source, /inboxDeliveryDelayMs = 5_000/)
-  assert.match(source, /setTimeout\(resolve, inboxDeliveryDelayMs\)/)
+  assert.doesNotMatch(source, /inboxDeliveryDelayMs|setTimeout\(resolve, inboxDeliveryDelayMs\)/)
   assert.match(source, /handle\.agent\.steer\(createUserMessage\(\{ content, source: \{ kind: 'user' \} \}\)\)/)
   assert.match(source, /async function followupTaskInternal[\s\S]*?handle\.agent\.steer\(createUserMessage/)
   assert.match(source, /\[GROUP_DECISION_SCHEMA_CORRECTION\]/)
@@ -68,7 +67,7 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
         { seq: session.seq++, type: 'turn/start', data: { turn } },
         { seq: session.seq++, type: 'step/start', data: { turn, step: 1 } },
         { seq: session.seq++, type: 'user/message', data: message },
-        { seq: session.seq++, type: 'assistant/message', data: { turn, step: 1, message: { content: [{ type: 'text', text: JSON.stringify({ kind: 'answer', reply: `已处理${deliveredFollowups}` }) }] } } },
+        { seq: session.seq++, type: 'assistant/message', data: { turn, step: 1, message: { content: [{ type: 'text', text: JSON.stringify({ actions: [], reply: `已处理${deliveredFollowups}` }) }] } } },
         { seq: session.seq++, type: 'turn/end', data: { turn, reason: { kind: 'completed' } } },
       )
     },
@@ -100,6 +99,7 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
   await bothSteered
   assert.deepEqual(group.messages.map((item) => item.messageId), ['m1', 'm2'], '第二条必须在第一条决策完成前持久化进Inbox')
   assert.equal(steered.length, 2, '第二条必须在第一条whenIdle结束前调用steer')
+  assert.doesNotMatch(steered[0].content[0].text, /立即结合|不要在本步骤|Runtime 随后|失败消息重试/, '逐条 steer 只携带事实，不重复系统协议')
   assert.equal(followups.length, 1, '多条群消息可以进入同一 steer 批次，结构化收口仍应按群串行')
   releaseFirstIdle()
   await Promise.all([first, second])
