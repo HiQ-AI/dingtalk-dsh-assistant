@@ -54,7 +54,7 @@ const activityDetail = (event) => {
 }
 
 export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, inboxDeliveryDelayMs = 5_000 } = {}) {
-  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), inflightMessages = new Map()
+  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), inflightMessages = new Map(), pendingMessageBatches = new Map()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
@@ -201,6 +201,95 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       }
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
+  }
+  const batchDecisionPrompt = (entries) => [
+    '[GROUP_DECISION]', '',
+    `以下 ${entries.length} 条消息属于同一批群聊信息。必须结合整批消息、当前讨论上下文和任务索引做一次整体判断；只输出一个决策 JSON，不得逐条回复或逐条创建任务。`,
+    ...entries.flatMap(({ message }, index) => [
+      '', `--- 批次消息 ${index + 1}/${entries.length} ---`,
+      buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }).replace(/^\[GROUP_DECISION\]\n\n/u, ''),
+    ]),
+  ].join('\n')
+  const batchSourceEnvelope = (entries) => [
+    '[TASK_SOURCE_EVIDENCE_BATCH]',
+    `本轮来源包含同一信息组的 ${entries.length} 条群消息。必须结合整批原文核验，不得把其中任意一条孤立解释。`, '',
+    ...entries.map(({ message }, index) => `--- 来源消息 ${index + 1}/${entries.length} ---\n${buildLeafSourceEnvelope({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }).replace(/^\[TASK_SOURCE_EVIDENCE\]\n/u, '')}`),
+  ].join('\n\n')
+  const flushMessageBatch = (batch) => {
+    if (pendingMessageBatches.get(batch.groupId) === batch) pendingMessageBatches.delete(batch.groupId)
+    if (batch.timer !== undefined) clearTimeout(batch.timer)
+    batch.entries.sort((left, right) => left.accepted.sequence - right.accepted.sequence)
+    for (const waiter of batch.waiters) waiter(batch)
+  }
+  const enqueueMessageBatch = (groupId, entry) => new Promise((resolve) => {
+    let batch = pendingMessageBatches.get(groupId)
+    if (batch === undefined) {
+      batch = { groupId, entries: [], waiters: [], timer: undefined, processing: undefined }
+      pendingMessageBatches.set(groupId, batch)
+    }
+    batch.entries.push(entry)
+    batch.waiters.push(resolve)
+    if (batch.timer !== undefined) clearTimeout(batch.timer)
+    batch.timer = setTimeout(() => flushMessageBatch(batch), Math.max(0, inboxDeliveryDelayMs))
+    batch.timer.unref?.()
+  })
+  const processMessageBatch = async (batch) => {
+    const entries = batch.entries
+    const primary = entries.at(-1)
+    const first = entries[0]
+    const groupId = primary.message.groupId
+    const handle = residentHandles.get(groupId)
+    if (handle === undefined) throw new Error(`resident_not_active:${groupId}`)
+    const decisionPrompt = batchDecisionPrompt(entries)
+    const content = [
+      { type: 'text', text: `[GROUP_MESSAGE_STEER]\n这是刚收到的一批群聊即时插话。立即结合整批消息更新你对当前讨论和任务的理解；不要在本步骤输出群决策 JSON、调用任务工具或回复群聊，Runtime 随后会单独请求这一批消息的结构化落地判断。\n\n${decisionPrompt.replace(/^\[GROUP_DECISION\]\n\n/u, '')}` },
+      ...entries.flatMap((entry) => entry.imageRefs.map((attachment) => ({ type: 'image', attachment }))),
+    ]
+    handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } }))
+    return serialize(groupId, async () => {
+      const reply = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: decisionPrompt }], source: { kind: 'coordinator' } }))
+      if (reply === '') throw new Error(`resident_reply_missing:${groupId}:${entries.map((entry) => entry.message.messageId).join(',')}`)
+      let decision
+      try {
+        decision = parseGroupDecision(reply)
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.startsWith('group_decision_invalid_')) throw error
+        const correctedReply = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_SCHEMA_CORRECTION]\n你刚才对这一批消息的整体判断未通过结构校验：${error.message}。保持原来的整体业务判断不变，只删除该 kind 不允许的字段或补齐必填字段，重新输出一份严格符合主会话决策契约的 JSON；不要解释，不要拆成逐条判断，也不要扩大或改变任务目标。` }], source: { kind: 'coordinator' } }))
+        if (correctedReply === '') throw error
+        decision = parseGroupDecision(correctedReply)
+      }
+      const mediaUnavailable = entries.flatMap((entry) => entry.message.mediaUnavailable ?? [])
+      decision = blockTaskDecisionForUnavailableMedia(decision, mediaUnavailable)
+      const groupBeforeDecision = store.getGroup(groupId)
+      const previousMessage = groupBeforeDecision?.messages.find((item) => item.sequence === first.accepted.sequence - 1)
+      const activeTaskCount = store.listTasks().filter((task) => task.groupId === groupId).length
+      if (decision.kind === 'ignore' && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: entries.some((entry) => entry.imageRefs.length > 0), previousMessage, occurredAt: primary.message.occurredAt })) {
+        const rechecked = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION]\n\n关联复核：你刚才对整批消息选择了 ignore。请重新对照“本群全部任务关联索引”、批次内消息关系和紧邻消息判断。只有确认整批消息与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${decisionPrompt.replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
+        if (rechecked !== '') decision = parseGroupDecision(rechecked)
+      }
+      const batchMessageIds = entries.map((entry) => entry.message.messageId)
+      if (decision.kind === 'ignore') {
+        for (const entry of entries) await store.markMessageAgentDelivery({ groupId, messageId: entry.message.messageId, status: 'delivered' })
+        return { decision, batchMessageIds, group: store.getGroup(groupId) }
+      }
+      let task
+      const message = primary.message
+      const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
+      const sourceEnvelope = batchSourceEnvelope(entries)
+      if (decision.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId, sourceMessageId: message.messageId, title: decision.title, objective: decision.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, acceptanceCriteria: decision.acceptanceCriteria, stageTasks: decision.stageTasks, relatedContexts: [sourceEnvelope] }); await pumpTasks(); return store.getTask(result.task.taskId) })
+      else if (decision.kind === 'task-context') {
+        task = store.getTask(decision.taskId)
+        if (task === undefined || task.groupId !== groupId) throw new Error(`task_context_target_invalid:${decision.taskId}`)
+        task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger, decision.objective, decision.acceptanceCriteria, decision.stageTasks))
+      } else if (decision.kind === 'task-reopen') {
+        task = store.getTask(decision.taskId)
+        if (task === undefined || task.groupId !== groupId) throw new Error(`task_reopen_target_invalid:${decision.taskId}`)
+        task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, decision.objective, decision.acceptanceCriteria, decision.stageTasks))
+      }
+      const group = decision.reply.trim() === '' ? store.getGroup(groupId) : await appendReliableOutbox({ groupId, sourceMessageId: message.messageId, text: decision.reply })
+      for (const entry of entries) await store.markMessageAgentDelivery({ groupId, messageId: entry.message.messageId, status: 'delivered' })
+      return { decision, batchMessageIds, group, task }
+    })
   }
   function assertResidentToolSession(exec, groupId) {
     const expected = residentHandles.get(groupId)?.agent?.session?.id
@@ -1002,62 +1091,14 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         const ingested = await store.ingest(message)
         const persisted = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
         if (ingested.duplicate && ['delivered', 'skipped'].includes(persisted?.agentDeliveryStatus)) return ingested
-        const deliveryRetry = ingested.duplicate
         const accepted = ingested.duplicate ? { ...ingested, duplicate: false, recovered: true, sequence: persisted.sequence } : ingested
-        const handle = residentHandles.get(message.groupId)
         try {
-          if (handle === undefined) throw new Error(`resident_not_active:${message.groupId}`)
-          if (inboxDeliveryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, inboxDeliveryDelayMs))
           const images = Array.isArray(message.images) ? message.images : []
           if (images.length > 0 && attachments === undefined) throw new Error('dsh_attachments_required')
           const imageRefs = images.length === 0 ? [] : await attachments.saveImages(images.map((image) => ({ data: image.data, mediaType: image.mediaType, ...(image.name ? { name: image.name } : {}) })))
-          const decisionPrompt = buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, deliveryRetry })
-          const content = [
-            { type: 'text', text: `[GROUP_MESSAGE_STEER]\n这是刚收到的群聊即时插话。立即结合它更新你对当前讨论和任务的理解；不要在本步骤输出群决策 JSON、调用任务工具或回复群聊，Runtime 随后会单独请求该消息的结构化落地判断。\n\n${decisionPrompt.replace(/^\[GROUP_DECISION\]\n\n/u, '')}` },
-            ...imageRefs.map((attachment) => ({ type: 'image', attachment })),
-          ]
-          handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } }))
-          return await serialize(message.groupId, async () => {
-            const reply = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: decisionPrompt }], source: { kind: 'coordinator' } }))
-        if (reply === '') throw new Error(`resident_reply_missing:${message.groupId}:${message.messageId}`)
-        let decision
-        try {
-          decision = parseGroupDecision(reply)
-        } catch (error) {
-          if (!(error instanceof Error) || !error.message.startsWith('group_decision_invalid_')) throw error
-          const correctedReply = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_SCHEMA_CORRECTION]\n你刚才的判断结果未通过结构校验：${error.message}。保持原来的业务判断不变，只删除该 kind 不允许的字段或补齐必填字段，重新输出一份严格符合主会话决策契约的 JSON；不要解释，不要扩大或改变任务目标。` }], source: { kind: 'coordinator' } }))
-          if (correctedReply === '') throw error
-          decision = parseGroupDecision(correctedReply)
-        }
-        await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'delivered' })
-        decision = blockTaskDecisionForUnavailableMedia(decision, message.mediaUnavailable)
-        const groupBeforeDecision = store.getGroup(message.groupId)
-        const previousMessage = groupBeforeDecision?.messages.find((item) => item.sequence === accepted.sequence - 1)
-        const activeTaskCount = store.listTasks().filter((task) => task.groupId === message.groupId).length
-        if (decision.kind === 'ignore' && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: imageRefs.length > 0, previousMessage, occurredAt: message.occurredAt })) {
-          const rechecked = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION]\n\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, deliveryRetry }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
-          if (rechecked !== '') decision = parseGroupDecision(rechecked)
-        }
-        if (decision.kind === 'ignore') return { ...accepted, decision, group: store.getGroup(message.groupId) }
-        let task
-        const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
-        const sourceEnvelope = buildLeafSourceEnvelope({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable })
-        if (decision.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, title: decision.title, objective: decision.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, acceptanceCriteria: decision.acceptanceCriteria, stageTasks: decision.stageTasks, relatedContexts: [sourceEnvelope] }); await pumpTasks(); return store.getTask(result.task.taskId) })
-        else if (decision.kind === 'task-context') {
-          task = store.getTask(decision.taskId)
-          if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${decision.taskId}`)
-          task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger, decision.objective, decision.acceptanceCriteria, decision.stageTasks))
-        }
-        else if (decision.kind === 'task-reopen') {
-          task = store.getTask(decision.taskId)
-          if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${decision.taskId}`)
-          task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, decision.objective, decision.acceptanceCriteria, decision.stageTasks))
-        }
-        const group = decision.reply.trim() === ''
-          ? store.getGroup(message.groupId)
-          : await appendReliableOutbox({ groupId: message.groupId, sourceMessageId: message.messageId, text: decision.reply })
-        return { ...accepted, decision, group, task }
-          })
+          const batch = await enqueueMessageBatch(message.groupId, { message, accepted, imageRefs })
+          const result = await (batch.processing ??= processMessageBatch(batch))
+          return { ...accepted, ...result }
         } catch (error) {
           const current = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
           if (current?.agentDeliveryStatus === 'pending') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'failed', error: error instanceof Error ? error.message : String(error) })
@@ -1073,12 +1114,10 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         .filter((message) => message.agentDeliveryStatus === 'pending')
         .map((message) => ({ ...message, groupId: group.groupId })))
         .sort((left, right) => left.groupId.localeCompare(right.groupId) || left.sequence - right.sequence)
-      const results = []
-      for (const message of pending) {
-        try { results.push({ messageId: message.messageId, status: 'recovered', result: await this.ingest(message) }) }
-        catch (error) { results.push({ messageId: message.messageId, status: 'failed', error: error instanceof Error ? error.message : String(error) }) }
-      }
-      return results
+      return Promise.all(pending.map(async (message) => {
+        try { return { messageId: message.messageId, status: 'recovered', result: await this.ingest(message) } }
+        catch (error) { return { messageId: message.messageId, status: 'failed', error: error instanceof Error ? error.message : String(error) } }
+      }))
     },
     backfill: (messages) => {
       if (!Array.isArray(messages)) throw new Error('backfill_messages_required')
@@ -1301,6 +1340,9 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     async close() {
       if (supervisorTimer !== undefined) clearInterval(supervisorTimer)
       if (typeof disposeObserver === 'function') disposeObserver()
+      const pendingBatches = [...pendingMessageBatches.values()]
+      for (const batch of pendingBatches) flushMessageBatch(batch)
+      await Promise.allSettled(pendingBatches.map((batch) => (batch.processing ??= processMessageBatch(batch))))
       const all = [...leafHandles.values(), ...residentHandles.values()]
       await ctx.subagents.drainContinuableDescendants(all.map((handle) => handle.agent))
       await Promise.all(all.map((handle) => handle.dispose()))
