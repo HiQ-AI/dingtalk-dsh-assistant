@@ -6,7 +6,7 @@ import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSou
 test('群决策严格接受六类结构化结果', () => {
   assert.equal(parseGroupDecision('{"kind":"answer","reply":"ok"}').kind, 'answer')
   assert.equal(parseGroupDecision('{"kind":"task-proposal","title":"导出数据","objective":"导出 1.0.1 数据","reply":"这个事项是否需要我处理？"}').kind, 'task-proposal')
-  assert.equal(parseGroupDecision('{"kind":"new-task","title":"修复问题","objective":"fix","reply":"accepted"}').kind, 'new-task')
+  assert.equal(parseGroupDecision('{"kind":"new-task","title":"修复问题","objective":"fix","acceptanceCriteria":["问题已按授权目标处理并有可核验证据"],"reply":"accepted"}').kind, 'new-task')
   assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"more","reply":"added"}').kind, 'task-context')
   assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"fix it","objective":"修复并部署","reply":"added"}').objective, '修复并部署')
   assert.equal(parseGroupDecision('{"kind":"task-context","taskId":"task-1","context":"more","reply":""}').reply, '')
@@ -21,6 +21,7 @@ test('群决策拒绝无效 JSON、多余字段和缺失目标', () => {
   assert.throws(() => parseGroupDecision('{"kind":"answer","reply":"ok","objective":"hidden"}'), /group_decision_invalid_schema/)
   assert.throws(() => parseGroupDecision('{"kind":"new-task","reply":"accepted"}'), /group_decision_invalid_schema/)
   assert.throws(() => parseGroupDecision('{"kind":"new-task","objective":"fix","reply":"accepted"}'), /group_decision_invalid_schema/)
+  assert.throws(() => parseGroupDecision('{"kind":"new-task","title":"修复问题","objective":"fix","reply":"accepted"}'), /group_decision_invalid_schema/)
 })
 
 test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () => {

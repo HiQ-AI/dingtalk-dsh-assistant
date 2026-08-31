@@ -95,10 +95,10 @@ window.__ModuleLoader__.load({
       return value
     }
     async function load() {
-      const [health, groups, tasks, alerts, authorizations] = await Promise.all([
-        get('/health'), get('/state/groups'), get('/state/tasks'), get('/state/supervisor/alerts'), get('/state/authorizations')
+      const [health, groups, tasks, taskTimings, alerts, authorizations] = await Promise.all([
+        get('/health'), get('/state/groups'), get('/state/tasks'), get('/state/task-timings'), get('/state/supervisor/alerts'), get('/state/authorizations')
       ])
-      return { health, groups, tasks, alerts, authorizations }
+      return { health, groups, tasks, taskTimings, alerts, authorizations }
     }
     function SidebarAction({ wide }) {
       const isOpen = useOpen()
@@ -168,6 +168,7 @@ window.__ModuleLoader__.load({
         return () => document.removeEventListener('click', closeForSession, true)
       }, [])
       const groupsById = new Map((data?.groups || []).map((group) => [group.groupId, group]))
+      const timingsByTaskId = new Map((data?.taskTimings || []).map((timing) => [timing.taskId, timing]))
       const navigate = async (sessionId, parentSessionId) => {
         try { setNavigationError(undefined); setNavigatingSessionId(sessionId); await openSession(sessionId, parentSessionId); setOpen(false) }
         catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) }
@@ -240,6 +241,7 @@ window.__ModuleLoader__.load({
       })
       const renderTaskCard = (task) => {
         const group = groupsById.get(task.groupId)
+        const timing = timingsByTaskId.get(task.taskId)
         const queued = task.state === 'queued'
         const checkpointEvents = task.checkpoints || []
         const planCheckpointIndex = checkpointEvents.findLastIndex((checkpoint) => checkpoint.kind === 'plan-confirmed')
@@ -270,6 +272,7 @@ window.__ModuleLoader__.load({
               React.createElement('div', { role: 'button', tabIndex: 0, 'aria-expanded': checkpointsExpanded, 'aria-label': checkpointsExpanded ? '收起检查点' : `展开全部 ${checkpoints.length} 个检查点`, 'data-task-card-action': 'toggle-checkpoints', onClick: (event) => { event.stopPropagation(); setExpandedCheckpointTaskId(checkpointsExpanded ? '' : task.taskId) }, onKeyDown: (event) => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); event.stopPropagation(); setExpandedCheckpointTaskId(checkpointsExpanded ? '' : task.taskId) }, style: { minHeight: 24, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 8, fontSize: 10.5, cursor: 'pointer' } }, React.createElement('span', { style: { flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: 4, color: colors.muted } }, React.createElement(IconChecklistOutline14, { size: 12, 'aria-label': '任务' }), '任务'), React.createElement('div', { role: 'progressbar', 'aria-label': '检查点进度', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': progress, style: { flex: '1 1 auto', minWidth: 24, height: 4, borderRadius: 999, overflow: 'hidden', background: `color-mix(in srgb, ${colors.muted} 22%, transparent)` } }, React.createElement('div', { style: { width: `${progress}%`, height: '100%', borderRadius: 'inherit', background: completedCheckpointCount === checkpoints.length ? statusTone.done : colors.accent, transition: 'width 180ms ease' } })), React.createElement('span', { style: { flex: '0 0 auto', color: completedCheckpointCount === checkpoints.length ? statusTone.done : colors.muted } }, `${completedCheckpointCount} / ${checkpoints.length}`), React.createElement(checkpointsExpanded ? IconChevronUpOutline14 : IconChevronDownOutline14, { size: 14, 'aria-hidden': true, style: { flex: '0 0 auto', color: colors.muted } })),
               checkpointsExpanded ? React.createElement('div', { style: { display: 'grid', gap: 4, padding: '2px 9px 9px' } }, ...checkpoints.map((checkpoint, index) => { const completed = completedCheckpointNames.has(checkpoint); const current = !completed && currentCheckpoint === checkpoint; const tone = completed ? statusTone.done : current ? colors.accent : colors.muted; const duration = checkpointDuration(checkpoint, currentCheckpointEvents, Date.now()); return React.createElement('div', { key: `${index}:${checkpoint}`, title: checkpoint, style: { minWidth: 0, display: 'grid', gridTemplateColumns: '12px minmax(0,1fr) 64px', gap: 5, alignItems: 'start', fontSize: 10.5, lineHeight: 1.4 } }, React.createElement('span', { 'aria-hidden': true, style: { width: 12, height: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: tone } }, completed ? React.createElement(CheckpointDoneIcon, { size: 12 }) : current ? React.createElement(StateDot, { state: 'ongoing', size: 10 }) : '○'), React.createElement('span', { style: { color: 'inherit', display: '-webkit-box', WebkitLineClamp: 'unset', WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, checkpoint), React.createElement('span', { title: `执行时长 ${duration}`, style: { width: 64, color: colors.muted, textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } }, duration)) })) : null) : null,
           task.waitingReason ? React.createElement('div', { title: task.waitingReason, style: { fontSize: 10.5, lineHeight: 1.45, color: colors.warning } }, `等待：${task.waitingReason}`) : null),
+          timing ? React.createElement('div', { title: timing.complete ? '当前执行轮次精确统计' : `当前执行轮次统计不完整：${(timing.missing || []).join('、') || '历史数据不足'}`, style: { fontSize: 10.5, lineHeight: 1.45, color: timing.complete ? colors.muted : colors.warning } }, `${timing.complete ? '' : '约 '}总计 ${fmtDuration(timing.wallMs)} · 排队 ${fmtDuration(timing.queuedMs)} · 运行 ${fmtDuration(timing.runningMs)} · 等待 ${fmtDuration(timing.waitingMs)} · 工具 ${fmtDuration(timing.toolMs)} · 其他运行 ${fmtDuration(timing.unclassifiedRunningMs)}`) : null,
           React.createElement('div', { style: { minWidth: 0, marginTop: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
             React.createElement('span', { title: `最后活动 ${fmt(task.updatedAt)}`, style: { minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt)),
             task.state === 'completed' && !task.archivedAt ? React.createElement('button', { type: 'button', onClick: async (event) => { event.stopPropagation(); try { await post(`/tasks/${encodeURIComponent(task.taskId)}/archive`); await refresh() } catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) } }, style: { flex: '0 0 auto', border: `1px solid ${colors.border}`, borderRadius: 7, background: colors.surface2, color: colors.muted, padding: '3px 7px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10.5 } }, '归档') : null),

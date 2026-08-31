@@ -38,6 +38,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     return send(response, 200, groupId ? store.getGroup(groupId) ?? null : store.listGroups())
   }
   if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, store.listTasks())
+  if (request.method === 'GET' && url.pathname === '/state/task-timings') return send(response, 200, store.listTaskTimings())
   if (request.method === 'GET' && url.pathname === '/state/authorizations') return send(response, 200, store.listAuthorizationRequests())
   if (request.method === 'GET' && url.pathname === '/state/activities') return send(response, 200, store.listActivities(url.searchParams.get('taskId') ?? undefined))
   if (request.method === 'GET' && url.pathname === '/state/supervisor/alerts') return send(response, 200, store.listAlerts())

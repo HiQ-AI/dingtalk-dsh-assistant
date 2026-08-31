@@ -46,8 +46,8 @@ const withHumanBlockerHistory = (task, blocker) => {
   return index < 0 ? [...history, blocker] : history.map((item, current) => current === index ? blocker : item)
 }
 const activityDetail = (event) => {
-  if (event.type === 'tool/call') return { tool: event.data?.name ?? 'unknown' }
-  if (event.type === 'tool/result') return { tool: event.data?.name ?? 'unknown', isError: event.data?.isError === true }
+  if (event.type === 'tool/call') return { tool: event.data?.name ?? 'unknown', ...(event.data?.callId ? { callId: event.data.callId } : {}) }
+  if (event.type === 'tool/result') return { tool: event.data?.name ?? 'unknown', isError: event.data?.isError === true, ...(event.data?.message?.source?.callId ? { callId: event.data.message.source.callId } : {}) }
   if (event.type === 'turn/end') return { status: event.data?.status ?? 'unknown' }
   if (event.type === 'goal/change') return { phase: event.data?.goal?.phase ?? event.data?.phase ?? 'unknown' }
   return { contentBlocks: event.data?.message?.content?.length ?? 0 }
@@ -126,7 +126,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 收到以 \`[GROUP_DECISION]\` 开头的群消息信封时，只输出一个严格 JSON 对象：
 - 回答：\`{"kind":"answer","reply":"..."}\`
 - 建议处理：\`{"kind":"task-proposal","title":"简洁任务名","objective":"完整任务目标","reply":"这个事项是否需要我处理？"}\`
-- 新任务：\`{"kind":"new-task","title":"简洁任务名","objective":"完整任务目标","reply":"..."}\`
+- 新任务：\`{"kind":"new-task","title":"简洁任务名","objective":"完整任务目标","acceptanceCriteria":["与任务类型无关的可核验完成条件"],"reply":"..."}\`
 - 补充任务：\`{"kind":"task-context","taskId":"...","context":"...","objective":"可选，修订后的完整目标","reply":"..."}\`；只需静默补充上下文、不需要回复群聊时，\`reply\` 使用空字符串
 - 重开任务：\`{"kind":"task-reopen","taskId":"...","context":"...","objective":"可选，修订后的完整目标","reply":"..."}\`；只需静默重开任务、不需要回复群聊时，\`reply\` 使用空字符串
 - 忽略：\`{"kind":"ignore","reason":"..."}\`
@@ -135,7 +135,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 
 \`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从原始群消息生成的独立来源证据信封并自行核验。
 
-新建任务或修订目标时，可同时提供 \`acceptanceCriteria\`（本轮可逐项核验的验收标准）和 \`stageTasks\`（本轮阶段任务）字符串数组。两者只能拆解消息已授权的目标，不得扩大动作范围。
+新建任务必须提供至少一条 \`acceptanceCriteria\`；修订目标时也可更新 \`acceptanceCriteria\` 和 \`stageTasks\`。验收标准只描述当前目标可核验的完成条件，不得按开发、分析、部署等任务类型绑定固定模板，也不得扩大消息授权范围。
 
 当前消息明确指名或提及已配置的 Agent 名称/别名、以 \`cc:\` 开头，或者明确确认了主会话此前提出的“是否需要我处理”询问，并且事项属于本群职责且形成可验证目标时，才允许选择 new-task。未明确指名、但你判断事项应形成任务时，必须选择 task-proposal，并在群里询问“这个事项是否需要我处理？”，暂不创建 Task；收到肯定答复后再结合原消息及其后补充选择 new-task。${currentDwsUserName ? `仅提及当前 DWS 登录人“${currentDwsUserName}”不能单独构成 Agent 的建任务、回复或执行授权。` : ''}同事间讨论、事实陈述或未形成可验证目标的内容不得创建任务；与现有任务相关时只做任务关联或补充上下文，并按下方节制原则简短确认。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。
 
@@ -191,7 +191,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     agentCtx.tools.register({
       name: 'group_task_create',
       description: 'Create a durable group task and let the DSH Runtime start an independent leaf Session. Use only for an explicit Web-user direction within this group responsibility.',
-      parameters: { type: 'object', additionalProperties: false, properties: { objective: { type: 'string' }, sourceMessageId: { type: 'string' } }, required: ['objective'] },
+      parameters: { type: 'object', additionalProperties: false, properties: { title: { type: 'string' }, objective: { type: 'string' }, sourceMessageId: { type: 'string' }, acceptanceCriteria: { type: 'array', items: { type: 'string' } } }, required: ['title', 'objective', 'sourceMessageId', 'acceptanceCriteria'] },
       output: {
         schema: { type: 'object', additionalProperties: false, properties: {
           created: { type: 'boolean' }, taskId: { type: 'string' }, state: { type: 'string' }, childSessionId: { type: 'string' },
@@ -206,7 +206,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
         if (args.sourceMessageId !== undefined && source === undefined) throw new Error(`task_source_message_not_found:${args.sourceMessageId}`)
         const sourceMessageId = source?.messageId ?? `web:${createHash('sha256').update(`${groupId}\n${objective}`).digest('hex')}`
         const result = await serializeTasks(async () => {
-          const created = await store.createTask({ groupId, sourceMessageId, objective, requesterName: source?.senderName, requesterOpenDingTalkId: source?.senderOpenDingTalkId })
+          const created = await store.createTask({ groupId, sourceMessageId, title: args.title, objective, requesterName: source?.senderName, requesterOpenDingTalkId: source?.senderOpenDingTalkId, occurredAt: source?.occurredAt, acceptanceCriteria: args.acceptanceCriteria })
           await pumpTasks()
           return { created: created.created, task: store.getTask(created.task.taskId) }
         })
@@ -897,7 +897,8 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   const disposeObserver = typeof ctx.on === 'function' ? ctx.on('session/event', (session, event) => {
     const taskId = leafTaskBySession.get(String(session.id))
     if (taskId === undefined || !PROJECTED_EVENTS.has(event.type) || typeof store.recordActivity !== 'function') return
-    activityTail = activityTail.then(() => store.recordActivity({ taskId, sessionId: String(session.id), eventKey: `${String(session.id)}:${event.seq}`, type: event.type, detail: activityDetail(event) })).catch(() => undefined)
+    const occurredAt = typeof event.time === 'number' ? new Date(event.time).toISOString() : typeof event.time === 'string' ? event.time : undefined
+    activityTail = activityTail.then(() => store.recordActivity({ taskId, sessionId: String(session.id), eventKey: `${String(session.id)}:${event.seq}`, type: event.type, detail: activityDetail(event), occurredAt })).catch(() => undefined)
   }) : undefined
   for (const group of store.listGroups()) {
     try {
@@ -927,6 +928,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   }
   return {
     getGroup: store.getGroup, listGroups: store.listGroups, getTask: store.getTask, listTasks: store.listTasks, listAlerts: store.listAlerts,
+    listTaskTimings: store.listTaskTimings ?? (() => []),
     markMessageAgentDelivery: store.markMessageAgentDelivery, markMessagesAgentDelivery: store.markMessagesAgentDelivery,
     hydrateGroupHistory: ({ groupId }) => serialize(groupId, async () => {
       const group = store.getGroup(groupId)

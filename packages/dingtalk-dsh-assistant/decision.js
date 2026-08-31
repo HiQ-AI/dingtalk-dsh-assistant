@@ -3,7 +3,7 @@ import { z } from 'zod'
 const answer = z.strictObject({ kind: z.literal('answer'), reply: z.string().min(1) })
 const runPlan = { acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional() }
 const taskProposal = z.strictObject({ kind: z.literal('task-proposal'), title: z.string().min(1).max(120), objective: z.string().min(1), reply: z.string().min(1) })
-const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), ...runPlan, reply: z.string().min(1) })
+const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: z.array(z.string().min(1)).min(1), stageTasks: z.array(z.string().min(1)).optional(), reply: z.string().min(1) })
 const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan, reply: z.string() })
 const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan, reply: z.string() })
 const ignore = z.strictObject({ kind: z.literal('ignore'), reason: z.string().min(1) })
