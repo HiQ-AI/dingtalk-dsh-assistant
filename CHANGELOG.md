@@ -4,11 +4,20 @@
 
 ## [未发布]
 
+## [0.5.10] - 2026-08-31
+
 ### 变更
 
 - Task 创建统一校验简短标题、明确目标、可核验验收标准、来源消息和提出人；验收门禁保持任务类型无关。
 - 任务卡片按当前执行轮次拆分展示总墙钟、排队、运行、等待、可配对工具时间和其他运行时间；历史数据不足时明确标记为估算。
 - 群消息取消静默聚合窗口，改为持久化后逐条、零延迟 `steer`：上一条尚未处理完成时，新消息直接插入当前 Turn 的下一 step 共同处理，不排队到下一 Turn。每条输入只携带事实，稳定协议仅保留在 Resident 系统提示词；单次结构化 JSON 通过 `actions` 支持多个 Task。结构化判断按 coordinator 消息 ID 读取对应回合结果，避免把普通插话回复误判为 JSON 后重复判断。
+- 常驻群聊主会话不再暴露 Goal 工具及其提示；叶子任务仍使用 DSH Goal 管理执行、阻塞、恢复和完成。
+
+### 修复
+
+- 区分插话前投递失败与已插话后的结构化判断失败；DWS 重复事件不再把同一群消息再次送入 Agent。
+- 结构化判断纠错明确使用 `actions` 顶层契约，避免模型重复输出旧的 `kind` 结构。
+- 本地 profile 安装强制刷新当前源码的 `file:` 依赖，并隔离根 workspace，避免部署继续使用旧 pnpm 缓存副本。
 
 ## [0.5.9] - 2026-08-31
 
@@ -135,6 +144,7 @@
 - assistant、observer 与发行包统一使用同一个产品版本号。
 - Node.js 最低版本与实际 zstd Runtime 要求一致，调整为 24。
 
+[0.5.10]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.10
 [0.5.9]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.9
 [0.5.8]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.8
 [0.5.7]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.7
