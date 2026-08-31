@@ -103,6 +103,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
   }
   function configureResident(agentCtx, groupId) {
     installSelection(agentCtx)
+    agentCtx.tools.restrict({ deny: ['get_goal', 'create_goal', 'update_goal'] })
+    agentCtx.systemPrompt.section({ name: 'tool:goal', order: 114, text: '' })
     registerResidentTaskTools(agentCtx, groupId)
     agentCtx.systemPrompt.section({
       name: 'dingtalk-group-responsibility', order: 40,

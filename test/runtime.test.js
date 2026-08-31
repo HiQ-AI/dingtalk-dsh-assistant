@@ -25,6 +25,8 @@ test('Inbox 每条消息零延迟 steer，主会话向叶子会话同样使用�
   assert.match(source, /顶层不允许 kind 字段/)
   assert.match(source, /忽略为 \{\"actions\":\[\],\"reason\":\"原因\"\}/)
   assert.match(source, /decision = parseGroupDecision\(correctedReply\)/)
+  assert.match(source, /agentCtx\.tools\.restrict\(\{ deny: \['get_goal', 'create_goal', 'update_goal'\] \}\)/)
+  assert.match(source, /name: 'tool:goal', order: 114, text: ''/)
 })
 
 test('同群新消息立即进入Inbox并在前一条决策未完成时插话', async () => {
@@ -123,13 +125,14 @@ test('已有群切换预设时沿用原 Session，新群先创建 dsh Session �
   const permissionSets = []
   const promptSections = []
   const registeredTools = []
+  const toolRestrictions = []
   const tasks = []
   const handle = (sessionId) => ({ agent: { session: { id: sessionId, meta: { agentPreset: 'standard-convergent' } } }, dispose: async () => undefined })
   const ctx = {
     agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
     agents: {
       async resume(options) { calls.push(['resume', options.resumeSessionId]); return handle(options.resumeSessionId) },
-      async create(options) { calls.push(['create', options.sessionId, options.meta.cwd, options.meta.agentPreset]); setupReturns.push(await options.setup({ on: () => () => undefined, tools: { register: (tool) => registeredTools.push(tool) }, systemPrompt: { section: (value) => promptSections.push(value) } })); return handle(options.sessionId) },
+      async create(options) { calls.push(['create', options.sessionId, options.meta.cwd, options.meta.agentPreset]); setupReturns.push(await options.setup({ on: () => () => undefined, tools: { register: (tool) => registeredTools.push(tool), restrict: (filter) => toolRestrictions.push(filter) }, systemPrompt: { section: (value) => promptSections.push(value) } })); return handle(options.sessionId) },
     },
     subagents: {
       drainContinuableDescendants: async () => undefined,
@@ -170,10 +173,12 @@ test('已有群切换预设时沿用原 Session，新群先创建 dsh Session �
   assert.equal(calls[1][3], 'standard-convergent')
   assert.deepEqual(setupReturns, [undefined], 'Agent setup不能意外返回非事务对象')
   assert.equal(created.group.residentSessionId, residentSessionId('new-group'))
-  assert.equal(promptSections[0].name, 'dingtalk-group-responsibility')
-  assert.match(promptSections[0].text(), /群名称：新群名称/)
-  assert.match(promptSections[0].text(), /群 ID：new-group/)
-  assert.match(promptSections[0].text(), /未设置职责/)
+  const responsibility = promptSections.find((section) => section.name === 'dingtalk-group-responsibility')
+  assert.match(responsibility.text(), /群名称：新群名称/)
+  assert.match(responsibility.text(), /群 ID：new-group/)
+  assert.match(responsibility.text(), /未设置职责/)
+  assert.deepEqual(toolRestrictions, [{ deny: ['get_goal', 'create_goal', 'update_goal'] }])
+  assert.deepEqual(promptSections.find((section) => section.name === 'tool:goal'), { name: 'tool:goal', order: 114, text: '' })
   assert.deepEqual(registeredTools.map((tool) => tool.name), ['group_task_create', 'group_task_context_append', 'group_task_reopen', 'group_task_list'])
   for (const tool of registeredTools) {
     assertSupportedJsonSchema(tool.parameters)

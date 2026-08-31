@@ -221,6 +221,8 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不�
 
 群消息进入常驻会话后立即记录为 `steered`，结构化判断成功后转为 `delivered`。如果消息已经插话但结构化判断失败，则记录为 `decision-failed` 并保留错误供排查，DWS 重复事件和增量补拉都不会再次投递该消息；只有插话前失败的 `failed` 消息允许自动重试，避免同一消息重复进入 Agent。
 
+常驻群聊主会话只负责上下文理解和结构化选路，不暴露 `get_goal`、`create_goal`、`update_goal`，也不注入 Goal 工具说明。Task 叶子会话仍由 Runtime 使用 DSH Goal 管理执行、阻塞、恢复与完成。
+
 主会话向运行中或等待中的叶子传递任务上下文、目标修订、真人批复、恢复提示和结果驳回时统一使用 DSH `steer`，在叶子的下一个 step 边界插入，不使用 `followup` 排队到下一 Turn。
 
 ### 阻塞与授权
