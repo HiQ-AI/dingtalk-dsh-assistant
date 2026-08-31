@@ -995,7 +995,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       const operation = (async () => {
         const ingested = await store.ingest(message)
         const persisted = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
-        if (ingested.duplicate && ['delivered', 'skipped'].includes(persisted?.agentDeliveryStatus)) return ingested
+        if (ingested.duplicate && ['steered', 'delivered', 'decision-failed', 'skipped'].includes(persisted?.agentDeliveryStatus)) return ingested
         const accepted = ingested.duplicate ? { ...ingested, duplicate: false, recovered: true, sequence: persisted.sequence } : ingested
         const handle = residentHandles.get(message.groupId)
         try {
@@ -1010,14 +1010,17 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           ]
           handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } }))
           return await serialize(message.groupId, async () => {
-            const reply = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: decisionPrompt }], source: { kind: 'coordinator' } }))
+            const steered = store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'steered' })
+            const replyPending = coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: decisionPrompt }], source: { kind: 'coordinator' } }))
+            await steered
+            const reply = await replyPending
         if (reply === '') throw new Error(`resident_reply_missing:${message.groupId}:${message.messageId}`)
         let decision
         try {
           decision = parseGroupDecision(reply)
         } catch (error) {
           if (!(error instanceof Error) || !error.message.startsWith('group_decision_invalid_')) throw error
-          const correctedReply = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_SCHEMA_CORRECTION]\n你刚才的判断结果未通过结构校验：${error.message}。保持原来的业务判断不变，只删除该 kind 不允许的字段或补齐必填字段，重新输出一份严格符合主会话决策契约的 JSON；不要解释，不要扩大或改变任务目标。` }], source: { kind: 'coordinator' } }))
+          const correctedReply = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_SCHEMA_CORRECTION]\n你刚才的判断结果未通过结构校验：${error.message}。保持原来的业务判断不变，按当前契约重新输出一个 JSON 对象：忽略为 {"actions":[],"reason":"原因"}；仅回复为 {"actions":[],"reply":"回复"}；需要处理任务为 {"actions":[一个或多个任务动作],"reply":"可为空字符串"}。顶层不允许 kind 字段；不要解释，不要扩大或改变任务目标。` }], source: { kind: 'coordinator' } }))
           if (correctedReply === '') throw error
           decision = parseGroupDecision(correctedReply)
         }
@@ -1056,6 +1059,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         } catch (error) {
           const current = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
           if (current?.agentDeliveryStatus === 'pending') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'failed', error: error instanceof Error ? error.message : String(error) })
+          else if (current?.agentDeliveryStatus === 'steered') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'decision-failed', error: error instanceof Error ? error.message : String(error) })
           throw error
         }
       })()

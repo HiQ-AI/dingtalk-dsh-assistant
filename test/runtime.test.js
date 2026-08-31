@@ -22,7 +22,8 @@ test('Inbox 每条消息零延迟 steer，主会话向叶子会话同样使用�
   assert.match(source, /async function followupTaskInternal[\s\S]*?handle\.agent\.steer\(createUserMessage/)
   assert.match(source, /\[GROUP_DECISION_SCHEMA_CORRECTION\]/)
   assert.match(source, /收到 TASK_OBJECTIVE_REVISED 后，必须根据修订后的完整目标重新提交 plan-confirmed/)
-  assert.match(source, /保持原来的业务判断不变，只删除该 kind 不允许的字段或补齐必填字段/)
+  assert.match(source, /顶层不允许 kind 字段/)
+  assert.match(source, /忽略为 \{\"actions\":\[\],\"reason\":\"原因\"\}/)
   assert.match(source, /decision = parseGroupDecision\(correctedReply\)/)
 })
 
@@ -106,6 +107,13 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
   assert.equal(followups.length, 2)
   assert.deepEqual(group.messages.map((item) => item.agentDeliveryStatus), ['delivered', 'delivered'])
   await runtime.close()
+})
+
+test('消息插话后的判断失败不会把同一消息再次 steer', async () => {
+  const source = readFileSync(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
+  assert.match(source, /status: 'steered'/)
+  assert.match(source, /status: 'decision-failed'/)
+  assert.match(source, /\['steered', 'delivered', 'decision-failed', 'skipped'\]\.includes\(persisted\?\.agentDeliveryStatus\)/)
 })
 
 test('已有群切换预设时沿用原 Session，新群先创建 dsh Session 再持久绑定', async () => {

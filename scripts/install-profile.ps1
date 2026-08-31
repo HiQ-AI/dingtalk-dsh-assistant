@@ -9,7 +9,7 @@ if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
 
 Push-Location $profileRoot
 try {
-    pnpm install --prefer-offline
+    pnpm install --prefer-offline --force --ignore-workspace
     if ($LASTEXITCODE -ne 0) {
         throw "pnpm install 失败，退出码：$LASTEXITCODE"
     }

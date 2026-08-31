@@ -196,9 +196,10 @@ test('定时增量补拉按已持久化发送消息ID过滤Agent本人账号消�
   }
 })
 
-test('增量补拉逐条过滤已投递消息并只重试失败项和投递新项', async () => {
+test('增量补拉过滤已投递及判断失败消息，只重试插话前失败项和投递新项', async () => {
   const group = { groupId: 'cid-a', messages: [
     { messageId: 'm-delivered', occurredAt: '2026-08-27T04:00:00Z', agentDeliveryStatus: 'delivered' },
+    { messageId: 'm-decision-failed', occurredAt: '2026-08-27T04:00:00Z', agentDeliveryStatus: 'decision-failed' },
     { messageId: 'm-failed', occurredAt: '2026-08-27T04:00:01Z', agentDeliveryStatus: 'failed' },
   ], outbox: [] }
   const ingested = []
@@ -215,6 +216,7 @@ test('增量补拉逐条过滤已投递消息并只重试失败项和投递新�
       rangeReads += 1
       return { complete: true, messages: [
         { conversationId: 'cid-a', messageId: 'm-delivered', text: '已投递', createTime: '2026-08-27T04:00:00Z', sender: '甲' },
+        { conversationId: 'cid-a', messageId: 'm-decision-failed', text: '判断失败', createTime: '2026-08-27T04:00:00Z', sender: '甲' },
         { conversationId: 'cid-a', messageId: 'm-failed', text: '失败重试', createTime: '2026-08-27T04:00:01Z', sender: '乙' },
         { conversationId: 'cid-a', messageId: 'm-new', text: '新消息', createTime: '2026-08-27T04:00:02Z', sender: '丙' },
       ] }
@@ -226,6 +228,7 @@ test('增量补拉逐条过滤已投递消息并只重试失败项和投递新�
   await stop()
   assert.ok(rangeReads > 0)
   assert.ok(!ingested.includes('m-delivered'))
+  assert.ok(!ingested.includes('m-decision-failed'))
   assert.ok(ingested.includes('m-failed'))
   assert.ok(ingested.includes('m-new'))
 })
