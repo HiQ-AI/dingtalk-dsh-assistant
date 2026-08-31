@@ -29,10 +29,11 @@ test('Inbox 延迟五秒插话投递，主会话向叶子会话同样使用插�
 
 test('同群新消息立即进入Inbox并在前一条决策未完成时插话', async () => {
   const group = { groupId: 'steer-group', residentSessionId: 'session-steer', residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }
-  const steered = [], decisionSteers = [], followups = []
+  const steered = [], followups = []
   let releaseFirstIdle
   const firstIdle = new Promise((resolve) => { releaseFirstIdle = resolve })
   let idleCalls = 0, resolveBothSteered
+  let deliveredFollowups = 0
   const bothSteered = new Promise((resolve) => { resolveBothSteered = resolve })
   const session = { id: 'session-steer', seq: 0, events: [] }
   const agent = {
@@ -44,14 +45,33 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
         if (steered.length === 2) resolveBothSteered()
         return
       }
-      decisionSteers.push(message)
-      session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ kind: 'answer', reply: `已处理${decisionSteers.length}` }) }] } } })
+      throw new Error('结构化判断不得通过 steer 插入群消息批次')
     },
-    followup(message) {
-      followups.push(message)
-      session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ kind: 'answer', reply: `已处理${followups.length}` }) }] } } })
+    followup(message) { followups.push(message) },
+    async whenIdle() {
+      idleCalls += 1
+      if (idleCalls === 1) {
+        await firstIdle
+        session.events.push(
+          { seq: session.seq++, type: 'turn/start', data: { turn: 100 } },
+          { seq: session.seq++, type: 'step/start', data: { turn: 100, step: 1 } },
+          { seq: session.seq++, type: 'assistant/message', data: { turn: 100, step: 1, message: { content: [{ type: 'text', text: '已更新上下文。' }] } } },
+          { seq: session.seq++, type: 'turn/end', data: { turn: 100, reason: { kind: 'completed' } } },
+        )
+        return
+      }
+      if (deliveredFollowups >= followups.length) return
+      const message = followups[deliveredFollowups]
+      deliveredFollowups += 1
+      const turn = deliveredFollowups
+      session.events.push(
+        { seq: session.seq++, type: 'turn/start', data: { turn } },
+        { seq: session.seq++, type: 'step/start', data: { turn, step: 1 } },
+        { seq: session.seq++, type: 'user/message', data: message },
+        { seq: session.seq++, type: 'assistant/message', data: { turn, step: 1, message: { content: [{ type: 'text', text: JSON.stringify({ kind: 'answer', reply: `已处理${deliveredFollowups}` }) }] } } },
+        { seq: session.seq++, type: 'turn/end', data: { turn, reason: { kind: 'completed' } } },
+      )
     },
-    async whenIdle() { idleCalls += 1; if (idleCalls === 1) await firstIdle },
   }
   const handle = { agent, dispose: async () => undefined }
   const ctx = {
@@ -80,12 +100,10 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
   await bothSteered
   assert.deepEqual(group.messages.map((item) => item.messageId), ['m1', 'm2'], '第二条必须在第一条决策完成前持久化进Inbox')
   assert.equal(steered.length, 2, '第二条必须在第一条whenIdle结束前调用steer')
-  assert.equal(decisionSteers.length, 1, '第一条结构化决策必须用 steer 插入当前回合而不是等待空闲')
-  assert.equal(followups.length, 0, '群消息上下文和结构化决策都不得退化为 followup 排队')
+  assert.equal(followups.length, 1, '多条群消息可以进入同一 steer 批次，结构化收口仍应按群串行')
   releaseFirstIdle()
   await Promise.all([first, second])
-  assert.equal(decisionSteers.length, 2)
-  assert.equal(followups.length, 0)
+  assert.equal(followups.length, 2)
   assert.deepEqual(group.messages.map((item) => item.agentDeliveryStatus), ['delivered', 'delivered'])
   await runtime.close()
 })

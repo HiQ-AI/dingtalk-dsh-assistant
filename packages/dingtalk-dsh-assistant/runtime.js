@@ -183,6 +183,25 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     .map((event) => event.data.message.content.filter((block) => block.type === 'text').map((block) => block.text).join(''))
     .filter((text) => text !== '')
     .at(-1) ?? ''
+  const coordinatorReply = async (agent, message) => {
+    agent.followup(message)
+    for (;;) {
+      await agent.whenIdle()
+      const events = agent.session.events
+      const userIndex = events.findIndex((event) => event.type === 'user/message' && event.data?.id === message.id)
+      if (userIndex >= 0) {
+        const step = events.slice(0, userIndex + 1).findLast((event) => event.type === 'step/start')
+        const turn = step?.data?.turn
+        const ended = turn !== undefined && events.slice(userIndex + 1).some((event) => event.type === 'turn/end' && event.data?.turn === turn)
+        if (ended) return events.slice(userIndex + 1)
+          .filter((event) => event.type === 'assistant/message' && event.data?.turn === turn)
+          .map((event) => event.data.message.content.filter((block) => block.type === 'text').map((block) => block.text).join(''))
+          .filter(Boolean)
+          .at(-1) ?? ''
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+  }
   function assertResidentToolSession(exec, groupId) {
     const expected = residentHandles.get(groupId)?.agent?.session?.id
     if (expected === undefined || String(exec.agent?.session?.id) !== String(expected)) throw new Error(`resident_tool_wrong_session:${groupId}`)
@@ -999,20 +1018,14 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           ]
           handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } }))
           return await serialize(message.groupId, async () => {
-            const firstSeq = handle.agent.session.seq
-            handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: decisionPrompt }], source: { kind: 'coordinator' } }))
-            await handle.agent.whenIdle()
-            const reply = latestAssistantTextSince(handle.agent, firstSeq)
+            const reply = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: decisionPrompt }], source: { kind: 'coordinator' } }))
         if (reply === '') throw new Error(`resident_reply_missing:${message.groupId}:${message.messageId}`)
         let decision
         try {
           decision = parseGroupDecision(reply)
         } catch (error) {
           if (!(error instanceof Error) || !error.message.startsWith('group_decision_invalid_')) throw error
-          const correctionSeq = handle.agent.session.seq
-          handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_SCHEMA_CORRECTION]\n你刚才的判断结果未通过结构校验：${error.message}。保持原来的业务判断不变，只删除该 kind 不允许的字段或补齐必填字段，重新输出一份严格符合主会话决策契约的 JSON；不要解释，不要扩大或改变任务目标。` }], source: { kind: 'coordinator' } }))
-          await handle.agent.whenIdle()
-          const correctedReply = latestAssistantTextSince(handle.agent, correctionSeq)
+          const correctedReply = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_SCHEMA_CORRECTION]\n你刚才的判断结果未通过结构校验：${error.message}。保持原来的业务判断不变，只删除该 kind 不允许的字段或补齐必填字段，重新输出一份严格符合主会话决策契约的 JSON；不要解释，不要扩大或改变任务目标。` }], source: { kind: 'coordinator' } }))
           if (correctedReply === '') throw error
           decision = parseGroupDecision(correctedReply)
         }
@@ -1022,10 +1035,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         const previousMessage = groupBeforeDecision?.messages.find((item) => item.sequence === accepted.sequence - 1)
         const activeTaskCount = store.listTasks().filter((task) => task.groupId === message.groupId).length
         if (decision.kind === 'ignore' && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: imageRefs.length > 0, previousMessage, occurredAt: message.occurredAt })) {
-          const recheckSeq = handle.agent.session.seq
-          handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION]\n\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, deliveryRetry }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
-          await handle.agent.whenIdle()
-          const rechecked = latestAssistantTextSince(handle.agent, recheckSeq)
+          const rechecked = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION]\n\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, deliveryRetry }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
           if (rechecked !== '') decision = parseGroupDecision(rechecked)
         }
         if (decision.kind === 'ignore') return { ...accepted, decision, group: store.getGroup(message.groupId) }
