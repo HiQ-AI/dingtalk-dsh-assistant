@@ -10,15 +10,24 @@ test('Task checkpoint只接受事件驱动的结构化内部同步', () => {
 })
 
 test('Task completed结果要求非空summary与至少一条evidence', () => {
-  assert.throws(() => parseTaskResult({ status: 'completed', workType: 'non-development', summary: 'done', evidence: [], artifacts: [] }))
-  assert.throws(() => parseTaskResult({ status: 'completed', workType: 'non-development', summary: ' ', evidence: ['ok'], artifacts: [] }))
+  const internal = { learningSignals: [] }
+  assert.throws(() => parseTaskResult({ status: 'completed', workType: 'non-development', summary: 'done', evidence: [], artifacts: [], internal }))
+  assert.throws(() => parseTaskResult({ status: 'completed', workType: 'non-development', summary: ' ', evidence: ['ok'], artifacts: [], internal }))
   assert.deepEqual(parseTaskResult({ status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified'], artifacts: [] }), { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified'], artifacts: [] })
+  assert.deepEqual(parseTaskResult({ status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified'], artifacts: [], internal }), { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified'], artifacts: [], internal })
 })
 
 test('开发任务证据由配置引导而非插件固化具体平台字段', () => {
-  const base = { status: 'completed', workType: 'development', summary: 'released', evidence: ['verified'], artifacts: [] }
+  const base = { status: 'completed', workType: 'development', summary: 'released', evidence: ['verified'], artifacts: [], internal: { learningSignals: [] } }
   assert.equal(parseTaskResult(base).summary, 'released')
   assert.equal(parseTaskResult({ ...base, delivery: { pipeline: 'success #1', runtime: ['pod Ready'] } }).delivery.pipeline, 'success #1')
+})
+
+test('Task completed结果接受结构化内部学习信号并拒绝不完整候选', () => {
+  const base = { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified'], artifacts: [] }
+  const signal = { type: 'error', observation: '真实入口与初始判断不一致', resolution: '通过真实接口回读定位实际链路', reusableLesson: '修改前先用真实入口确认运行链路', scope: 'dataset merge', evidence: ['POST /do-merge 回读结果'] }
+  assert.deepEqual(parseTaskResult({ ...base, internal: { learningSignals: [signal] } }).internal.learningSignals, [signal])
+  assert.throws(() => parseTaskResult({ ...base, internal: { learningSignals: [{ ...signal, evidence: [] }] } }))
 })
 
 test('Task waiting结果要求明确waitingReason且拒绝多余字段', () => {
