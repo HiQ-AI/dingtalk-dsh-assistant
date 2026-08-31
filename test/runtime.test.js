@@ -15,16 +15,18 @@ after(() => {
   rmSync(replacementWorkspace, { recursive: true, force: true })
 })
 
-test('Inbox 延迟五秒插话投递，主会话向叶子会话同样使用插话', () => {
+test('Inbox 每条消息零延迟 steer，主会话向叶子会话同样使用插话', () => {
   const source = readFileSync(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
-  assert.match(source, /inboxDeliveryDelayMs = 5_000/)
-  assert.match(source, /setTimeout\(resolve, inboxDeliveryDelayMs\)/)
+  assert.doesNotMatch(source, /inboxDeliveryDelayMs|setTimeout\(resolve, inboxDeliveryDelayMs\)/)
   assert.match(source, /handle\.agent\.steer\(createUserMessage\(\{ content, source: \{ kind: 'user' \} \}\)\)/)
   assert.match(source, /async function followupTaskInternal[\s\S]*?handle\.agent\.steer\(createUserMessage/)
   assert.match(source, /\[GROUP_DECISION_SCHEMA_CORRECTION\]/)
   assert.match(source, /收到 TASK_OBJECTIVE_REVISED 后，必须根据修订后的完整目标重新提交 plan-confirmed/)
-  assert.match(source, /保持原来的业务判断不变，只删除该 kind 不允许的字段或补齐必填字段/)
+  assert.match(source, /顶层不允许 kind 字段/)
+  assert.match(source, /忽略为 \{\"actions\":\[\],\"reason\":\"原因\"\}/)
   assert.match(source, /decision = parseGroupDecision\(correctedReply\)/)
+  assert.match(source, /agentCtx\.tools\.restrict\(\{ deny: \['get_goal', 'create_goal', 'update_goal'\] \}\)/)
+  assert.match(source, /name: 'tool:goal', order: 114, text: ''/)
 })
 
 test('同群新消息立即进入Inbox并在前一条决策未完成时插话', async () => {
@@ -33,16 +35,45 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
   let releaseFirstIdle
   const firstIdle = new Promise((resolve) => { releaseFirstIdle = resolve })
   let idleCalls = 0, resolveBothSteered
+  let deliveredFollowups = 0
   const bothSteered = new Promise((resolve) => { resolveBothSteered = resolve })
   const session = { id: 'session-steer', seq: 0, events: [] }
   const agent = {
     session, status: 'running',
-    steer(message) { steered.push(message); if (steered.length === 2) resolveBothSteered() },
-    followup(message) {
-      followups.push(message)
-      session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ kind: 'answer', reply: `已处理${followups.length}` }) }] } } })
+    steer(message) {
+      const text = message.content[0].text
+      if (text.startsWith('[GROUP_MESSAGE_STEER]')) {
+        steered.push(message)
+        if (steered.length === 2) resolveBothSteered()
+        return
+      }
+      throw new Error('结构化判断不得通过 steer 插入群消息批次')
     },
-    async whenIdle() { idleCalls += 1; if (idleCalls === 1) await firstIdle },
+    followup(message) { followups.push(message) },
+    async whenIdle() {
+      idleCalls += 1
+      if (idleCalls === 1) {
+        await firstIdle
+        session.events.push(
+          { seq: session.seq++, type: 'turn/start', data: { turn: 100 } },
+          { seq: session.seq++, type: 'step/start', data: { turn: 100, step: 1 } },
+          { seq: session.seq++, type: 'assistant/message', data: { turn: 100, step: 1, message: { content: [{ type: 'text', text: '已更新上下文。' }] } } },
+          { seq: session.seq++, type: 'turn/end', data: { turn: 100, reason: { kind: 'completed' } } },
+        )
+        return
+      }
+      if (deliveredFollowups >= followups.length) return
+      const message = followups[deliveredFollowups]
+      deliveredFollowups += 1
+      const turn = deliveredFollowups
+      session.events.push(
+        { seq: session.seq++, type: 'turn/start', data: { turn } },
+        { seq: session.seq++, type: 'step/start', data: { turn, step: 1 } },
+        { seq: session.seq++, type: 'user/message', data: message },
+        { seq: session.seq++, type: 'assistant/message', data: { turn, step: 1, message: { content: [{ type: 'text', text: JSON.stringify({ actions: [], reply: `已处理${deliveredFollowups}` }) }] } } },
+        { seq: session.seq++, type: 'turn/end', data: { turn, reason: { kind: 'completed' } } },
+      )
+    },
   }
   const handle = { agent, dispose: async () => undefined }
   const ctx = {
@@ -71,12 +102,20 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
   await bothSteered
   assert.deepEqual(group.messages.map((item) => item.messageId), ['m1', 'm2'], '第二条必须在第一条决策完成前持久化进Inbox')
   assert.equal(steered.length, 2, '第二条必须在第一条whenIdle结束前调用steer')
-  assert.equal(followups.length, 1, '结构化决策仍应按群串行，避免两条消息的JSON串线')
+  assert.doesNotMatch(steered[0].content[0].text, /立即结合|不要在本步骤|Runtime 随后|失败消息重试/, '逐条 steer 只携带事实，不重复系统协议')
+  assert.equal(followups.length, 1, '多条群消息可以进入同一 steer 批次，结构化收口仍应按群串行')
   releaseFirstIdle()
   await Promise.all([first, second])
   assert.equal(followups.length, 2)
   assert.deepEqual(group.messages.map((item) => item.agentDeliveryStatus), ['delivered', 'delivered'])
   await runtime.close()
+})
+
+test('消息插话后的判断失败不会把同一消息再次 steer', async () => {
+  const source = readFileSync(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
+  assert.match(source, /status: 'steered'/)
+  assert.match(source, /status: 'decision-failed'/)
+  assert.match(source, /\['steered', 'delivered', 'decision-failed', 'skipped'\]\.includes\(persisted\?\.agentDeliveryStatus\)/)
 })
 
 test('已有群切换预设时沿用原 Session，新群先创建 dsh Session 再持久绑定', async () => {
@@ -86,13 +125,14 @@ test('已有群切换预设时沿用原 Session，新群先创建 dsh Session �
   const permissionSets = []
   const promptSections = []
   const registeredTools = []
+  const toolRestrictions = []
   const tasks = []
   const handle = (sessionId) => ({ agent: { session: { id: sessionId, meta: { agentPreset: 'standard-convergent' } } }, dispose: async () => undefined })
   const ctx = {
     agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
     agents: {
       async resume(options) { calls.push(['resume', options.resumeSessionId]); return handle(options.resumeSessionId) },
-      async create(options) { calls.push(['create', options.sessionId, options.meta.cwd, options.meta.agentPreset]); setupReturns.push(await options.setup({ on: () => () => undefined, tools: { register: (tool) => registeredTools.push(tool) }, systemPrompt: { section: (value) => promptSections.push(value) } })); return handle(options.sessionId) },
+      async create(options) { calls.push(['create', options.sessionId, options.meta.cwd, options.meta.agentPreset]); setupReturns.push(await options.setup({ on: () => () => undefined, tools: { register: (tool) => registeredTools.push(tool), restrict: (filter) => toolRestrictions.push(filter) }, systemPrompt: { section: (value) => promptSections.push(value) } })); return handle(options.sessionId) },
     },
     subagents: {
       drainContinuableDescendants: async () => undefined,
@@ -133,10 +173,12 @@ test('已有群切换预设时沿用原 Session，新群先创建 dsh Session �
   assert.equal(calls[1][3], 'standard-convergent')
   assert.deepEqual(setupReturns, [undefined], 'Agent setup不能意外返回非事务对象')
   assert.equal(created.group.residentSessionId, residentSessionId('new-group'))
-  assert.equal(promptSections[0].name, 'dingtalk-group-responsibility')
-  assert.match(promptSections[0].text(), /群名称：新群名称/)
-  assert.match(promptSections[0].text(), /群 ID：new-group/)
-  assert.match(promptSections[0].text(), /未设置职责/)
+  const responsibility = promptSections.find((section) => section.name === 'dingtalk-group-responsibility')
+  assert.match(responsibility.text(), /群名称：新群名称/)
+  assert.match(responsibility.text(), /群 ID：new-group/)
+  assert.match(responsibility.text(), /未设置职责/)
+  assert.deepEqual(toolRestrictions, [{ deny: ['get_goal', 'create_goal', 'update_goal'] }])
+  assert.deepEqual(promptSections.find((section) => section.name === 'tool:goal'), { name: 'tool:goal', order: 114, text: '' })
   assert.deepEqual(registeredTools.map((tool) => tool.name), ['group_task_create', 'group_task_context_append', 'group_task_reopen', 'group_task_list'])
   for (const tool of registeredTools) {
     assertSupportedJsonSchema(tool.parameters)

@@ -122,19 +122,55 @@ test('Task 按来源去重并持久化四桶状态', async () => {
   const store = await openResidentStore(facility)
   await store.subscribe({ groupId: 'group-a' })
   await store.setAgentNames(['数字助理', '小助手'])
-  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', title: '调查任务', objective: 'investigate', requesterName: '张三', requesterOpenDingTalkId: 'od-zhang', occurredAt: '2026-08-25T01:00:00Z' })
-  const duplicate = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', objective: 'ignored' })
+  await store.ingest({ groupId: 'group-a', messageId: 'm-task', text: '请调查', occurredAt: '2026-08-25T01:00:00Z', senderName: '张三', senderOpenDingTalkId: 'od-zhang' })
+  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', title: '调查任务', objective: 'investigate', requesterName: '张三', requesterOpenDingTalkId: 'od-zhang', occurredAt: '2026-08-25T01:00:00Z', acceptanceCriteria: ['调查结论有可核验证据'] })
+  const duplicate = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', title: '调查任务', objective: 'investigate', acceptanceCriteria: ['调查结论有可核验证据'] })
+  const secondFromSameMessage = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', title: '修复任务', objective: 'fix', acceptanceCriteria: ['修复结果有可核验证据'] })
   const running = await store.updateTask(created.task.taskId, (task) => ({ ...task, state: 'running' }))
   const waiting = await store.updateTask(created.task.taskId, (task) => ({ ...task, state: 'waiting', waitingReason: 'need input' }))
   const completed = await store.updateTask(created.task.taskId, (task) => ({ ...task, state: 'completed', completion: 'done' }))
 
   assert.equal(duplicate.created, false)
+  assert.equal(secondFromSameMessage.created, true)
   assert.equal(created.task.title, '调查任务')
   assert.equal(duplicate.task.taskId, created.task.taskId)
+  assert.notEqual(secondFromSameMessage.task.taskId, created.task.taskId)
   assert.deepEqual(created.task.triggerHistory, [{ sourceMessageId: 'm-task', requesterName: '张三', requesterOpenDingTalkId: 'od-zhang', occurredAt: '2026-08-25T01:00:00Z' }])
   assert.equal(running.state, 'running')
   assert.equal(waiting.state, 'waiting')
   assert.equal(completed.state, 'completed')
+  assert.deepEqual(completed.stateHistory.map((event) => event.state), ['queued', 'running', 'waiting', 'completed'])
+})
+
+test('Task 创建门禁只校验通用可追溯字段和可核验验收标准', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'group-a' })
+  await store.ingest({ groupId: 'group-a', messageId: 'm-task', text: '请处理', occurredAt: '2026-08-25T01:00:00Z', senderName: '张三', senderOpenDingTalkId: 'od-zhang' })
+  await assert.rejects(store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', objective: '处理事项', acceptanceCriteria: ['结果可核验'] }), /task_title_invalid/)
+  await assert.rejects(store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', title: '处理事项', objective: '处理事项', acceptanceCriteria: [] }), /task_acceptance_criteria_required/)
+  await assert.rejects(store.createTask({ groupId: 'group-a', sourceMessageId: 'web:manual', title: '人工任务', objective: '处理人工任务', acceptanceCriteria: ['结果可核验'] }), /task_synthetic_source_requester_required/)
+  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', title: '处理事项', objective: '处理事项', acceptanceCriteria: ['结果可核验'] })
+  assert.equal(created.task.requesterName, '张三')
+  assert.deepEqual(created.task.acceptanceCriteria, ['结果可核验'])
+})
+
+test('Task 当前轮耗时拆分状态时间和可配对工具时间', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'group-a' })
+  await store.ingest({ groupId: 'group-a', messageId: 'm-timing', text: '统计耗时', occurredAt: '2026-08-25T01:00:00Z', senderName: '张三', senderOpenDingTalkId: 'od-zhang' })
+  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-timing', title: '统计耗时', objective: '统计任务耗时', acceptanceCriteria: ['耗时分类可查询'] })
+  await store.updateTask(created.task.taskId, (task) => ({ ...task, state: 'running' }))
+  const start = Date.parse(created.task.runStartedAt)
+  await store.recordActivity({ taskId: created.task.taskId, sessionId: created.task.childSessionId, eventKey: 'call', type: 'tool/call', detail: { tool: 'test', callId: 'call-1' }, occurredAt: new Date(start + 1).toISOString() })
+  await store.recordActivity({ taskId: created.task.taskId, sessionId: created.task.childSessionId, eventKey: 'result', type: 'tool/result', detail: { tool: 'test', callId: 'call-1' }, occurredAt: new Date(start + 3).toISOString() })
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  const timing = store.listTaskTimings().find((item) => item.taskId === created.task.taskId)
+  assert.equal(timing.complete, true)
+  assert.equal(timing.toolMs, 2)
+  assert.equal(timing.wallMs >= timing.queuedMs + timing.runningMs, true)
+  assert.equal(timing.unclassifiedRunningMs, Math.max(0, timing.runningMs - timing.toolMs))
 })
 
 test('历史 Web Task 可从已持久化群消息恢复提出人并修正完成通知路由', async () => {
@@ -142,7 +178,7 @@ test('历史 Web Task 可从已持久化群消息恢复提出人并修正完成�
   const store = await openResidentStore(facility)
   await store.subscribe({ groupId: 'group-a' })
   await store.ingest({ groupId: 'group-a', messageId: 'm-source', text: '请处理', occurredAt: 'now', senderName: '李辰', senderOpenDingTalkId: 'od-requester' })
-  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'web:legacy', objective: '处理任务' })
+  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'web:legacy', title: '处理历史任务', objective: '处理任务', requesterName: '历史操作人', requesterOpenDingTalkId: 'od-legacy', acceptanceCriteria: ['处理结果可核验'] })
   await store.appendOutbox({ groupId: 'group-a', sourceMessageId: `task-result:${created.task.taskId}:completed`, text: '已完成' })
 
   const migrated = await store.migrateTaskProvenance({ taskId: created.task.taskId, sourceMessageId: 'm-source', completionDelivered: true })
@@ -161,10 +197,12 @@ test('并发创建不同 Task 不会用旧 scheduler 快照互相覆盖', async 
   const { facility } = memoryFacility()
   const store = await openResidentStore(facility)
   await store.subscribe({ groupId: 'group-a' })
+  await store.ingest({ groupId: 'group-a', messageId: 'm-1', text: 'one', occurredAt: '2026-08-25T01:00:00Z', senderName: '张三', senderOpenDingTalkId: 'od-zhang' })
+  await store.ingest({ groupId: 'group-a', messageId: 'm-2', text: 'two', occurredAt: '2026-08-25T01:01:00Z', senderName: '李四', senderOpenDingTalkId: 'od-li' })
 
   const [first, second] = await Promise.all([
-    store.createTask({ groupId: 'group-a', sourceMessageId: 'm-1', objective: 'one' }),
-    store.createTask({ groupId: 'group-a', sourceMessageId: 'm-2', objective: 'two' }),
+    store.createTask({ groupId: 'group-a', sourceMessageId: 'm-1', title: '任务一', objective: 'one', acceptanceCriteria: ['one 完成可核验'] }),
+    store.createTask({ groupId: 'group-a', sourceMessageId: 'm-2', title: '任务二', objective: 'two', acceptanceCriteria: ['two 完成可核验'] }),
   ])
 
   assert.equal(first.created, true)
@@ -176,7 +214,8 @@ test('Supervisor 告警按 Task 和指纹去重且不推进业务状态', async 
   const { facility } = memoryFacility()
   const store = await openResidentStore(facility)
   await store.subscribe({ groupId: 'group-a' })
-  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', objective: 'investigate' })
+  await store.ingest({ groupId: 'group-a', messageId: 'm-task', text: 'investigate', occurredAt: '2026-08-25T01:00:00Z', senderName: '张三', senderOpenDingTalkId: 'od-zhang' })
+  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', title: '调查异常', objective: 'investigate', acceptanceCriteria: ['调查结果可核验'] })
   await store.updateTask(created.task.taskId, (task) => ({ ...task, state: 'running' }))
   const first = await store.recordAlert({ taskId: created.task.taskId, fingerprint: 'carrier-missing', detail: 'child carrier missing' })
   const repeated = await store.recordAlert({ taskId: created.task.taskId, fingerprint: 'carrier-missing', detail: 'child carrier missing' })

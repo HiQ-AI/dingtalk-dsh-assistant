@@ -6,7 +6,7 @@ import { taskCheckpointSchema, taskResultSchema } from './task-result.js'
 const missingText = (value) => typeof value !== 'string' || value.trim() === '' || value.trim().toLowerCase() === 'null'
 
 const quotedMessageSchema = z.object({ messageId: z.string().min(1).optional(), senderName: z.string().min(1).optional(), occurredAt: z.union([z.string().min(1), z.number().finite()]).optional(), content: z.string() })
-const inboundSchema = z.object({ messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]), senderName: z.string().min(1).optional(), senderOpenDingTalkId: z.string().min(1).optional(), quotedMessage: quotedMessageSchema.optional(), agentDeliveryStatus: z.enum(['pending', 'delivered', 'failed', 'skipped']).optional(), agentDeliveryAt: z.string().min(1).optional(), agentDeliveryError: z.string().min(1).optional() })
+const inboundSchema = z.object({ messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]), senderName: z.string().min(1).optional(), senderOpenDingTalkId: z.string().min(1).optional(), quotedMessage: quotedMessageSchema.optional(), agentDeliveryStatus: z.enum(['pending', 'steered', 'delivered', 'failed', 'decision-failed', 'skipped']).optional(), agentDeliveryAt: z.string().min(1).optional(), agentDeliveryError: z.string().min(1).optional() })
 const outboundSchema = z.object({
   outboundId: z.string().min(1), sourceMessageId: z.string().min(1), text: z.string(), status: z.enum(['pending', 'sent']),
   readbackRequired: z.boolean().optional(),
@@ -52,6 +52,7 @@ const taskRunSchema = z.object({
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
   acceptanceCriteria: z.array(z.string().min(1)), stageTasks: z.array(z.string().min(1)), checkpoints: z.array(persistedTaskCheckpointSchema).optional(), result: persistedTaskResultSchema.optional(),
 })
+const taskStateEventSchema = z.object({ state: z.enum(['queued', 'running', 'waiting', 'completed']), at: z.string().min(1), runSequence: z.number().int().positive() })
 const taskSchema = z.object({
   taskId: z.string().min(1), groupId: z.string().min(1), sourceMessageId: z.string().min(1), title: z.string().min(1).optional(), objective: z.string().min(1),
   state: z.enum(['queued', 'running', 'waiting', 'completed']), childSessionId: z.string().min(1),
@@ -66,6 +67,7 @@ const taskSchema = z.object({
   humanBlocker: humanBlockerSchema.optional(), humanBlockerHistory: z.array(humanBlockerSchema).optional(),
   completion: z.string().optional(), result: persistedTaskResultSchema.optional(), lastWaitingResult: persistedTaskResultSchema.optional(), lastCompletedResult: persistedTaskResultSchema.optional(),
   completionSequence: z.number().int().nonnegative().optional(),
+  stateHistory: z.array(taskStateEventSchema).optional(),
   reopenContext: z.string().min(1).optional(), archivedAt: z.string().min(1).optional(), createdAt: z.string().min(1), updatedAt: z.string().min(1),
 })
 const schedulerSchema = z.object({
@@ -92,6 +94,62 @@ export const residentDomainSpec = defineDomain({
 export function taskSessionId(taskId) {
   if (typeof taskId !== 'string' || !taskId.startsWith('task-')) throw new Error(`task_id_invalid:${taskId}`)
   return `session-${taskId}`
+}
+
+const syntheticTaskSource = (value) => typeof value === 'string' && value.startsWith('web:')
+const cleanRequiredList = (value, error) => {
+  if (!Array.isArray(value) || value.length === 0) throw new Error(error)
+  const cleaned = value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean)
+  if (cleaned.length !== value.length) throw new Error(error)
+  return cleaned
+}
+const validateTaskMetadata = ({ group, sourceMessageId, title, objective, requesterName, requesterOpenDingTalkId, acceptanceCriteria }) => {
+  const cleanTitle = typeof title === 'string' ? title.trim() : ''
+  const cleanObjective = typeof objective === 'string' ? objective.trim() : ''
+  if (cleanTitle === '' || cleanTitle.length > 120 || cleanTitle.startsWith('[TASK_SOURCE_EVIDENCE]')) throw new Error('task_title_invalid')
+  if (cleanObjective === '' || cleanObjective.startsWith('[TASK_SOURCE_EVIDENCE]')) throw new Error('task_objective_invalid')
+  if (typeof sourceMessageId !== 'string' || sourceMessageId.trim() === '') throw new Error('task_source_message_required')
+  const source = group.messages.find((message) => message.messageId === sourceMessageId)
+  if (!syntheticTaskSource(sourceMessageId) && source === undefined) throw new Error(`task_source_message_not_found:${sourceMessageId}`)
+  if (syntheticTaskSource(sourceMessageId) && (typeof requesterName !== 'string' || requesterName.trim() === '' || typeof requesterOpenDingTalkId !== 'string' || requesterOpenDingTalkId.trim() === '')) throw new Error('task_synthetic_source_requester_required')
+  const effectiveRequesterName = source?.senderName ?? requesterName
+  const effectiveRequesterId = source?.senderOpenDingTalkId ?? requesterOpenDingTalkId
+  if (typeof effectiveRequesterName !== 'string' || effectiveRequesterName.trim() === '' || typeof effectiveRequesterId !== 'string' || effectiveRequesterId.trim() === '') throw new Error('task_requester_required')
+  return { title: cleanTitle, objective: cleanObjective, requesterName: effectiveRequesterName.trim(), requesterOpenDingTalkId: effectiveRequesterId.trim(), acceptanceCriteria: cleanRequiredList(acceptanceCriteria, 'task_acceptance_criteria_required') }
+}
+
+function taskTiming(task, activities, now = Date.now()) {
+  const runSequence = task.runSequence ?? 1
+  const startedAt = Date.parse(task.runStartedAt ?? task.createdAt)
+  const stateEvents = (task.stateHistory ?? []).filter((event) => event.runSequence === runSequence).sort((left, right) => Date.parse(left.at) - Date.parse(right.at))
+  const completedAt = [...stateEvents].reverse().find((event) => event.state === 'completed')?.at
+  const endedAt = completedAt ? Date.parse(completedAt) : task.state === 'completed' ? Date.parse(task.updatedAt) : now
+  const totals = { queuedMs: 0, runningMs: 0, waitingMs: 0 }
+  let complete = Number.isFinite(startedAt) && stateEvents.length > 0 && Date.parse(stateEvents[0].at) <= startedAt
+  for (let index = 0; index < stateEvents.length; index += 1) {
+    const event = stateEvents[index]
+    const from = Math.max(startedAt, Date.parse(event.at))
+    const to = Math.min(endedAt, index + 1 < stateEvents.length ? Date.parse(stateEvents[index + 1].at) : endedAt)
+    const key = `${event.state}Ms`
+    if (key in totals && Number.isFinite(from) && Number.isFinite(to) && to >= from) totals[key] += to - from
+  }
+  const calls = new Map()
+  let toolMs = 0
+  let toolIdentityMissing = false
+  for (const activity of activities.filter((item) => item.taskId === task.taskId && item.sessionId === task.childSessionId)) {
+    const at = Date.parse(activity.occurredAt)
+    if (!Number.isFinite(at) || at < startedAt || at > endedAt) continue
+    const callId = activity.detail?.callId
+    if ((activity.type === 'tool/call' || activity.type === 'tool/result') && !callId) toolIdentityMissing = true
+    if (activity.type === 'tool/call' && callId) calls.set(callId, at)
+    if (activity.type === 'tool/result' && callId && calls.has(callId)) { toolMs += Math.max(0, at - calls.get(callId)); calls.delete(callId) }
+  }
+  if (calls.size > 0 || toolIdentityMissing) complete = false
+  return {
+    runSequence, complete, wallMs: Number.isFinite(startedAt) ? Math.max(0, endedAt - startedAt) : 0,
+    ...totals, toolMs, unclassifiedRunningMs: Math.max(0, totals.runningMs - toolMs),
+    missing: [...(!stateEvents.length ? ['state-history'] : []), ...(calls.size || toolIdentityMissing ? ['unpaired-tool-events'] : [])],
+  }
 }
 
 export async function openResidentStore(storageDomain) {
@@ -209,6 +267,10 @@ export async function openResidentStore(storageDomain) {
     },
     getTask: (taskId) => tasks.get(taskId),
     listTasks: () => [...tasks.entries()].map(([, task]) => task),
+    listTaskTimings: () => {
+      const projected = [...activities.entries()].map(([, value]) => value)
+      return [...tasks.entries()].map(([, task]) => ({ taskId: task.taskId, ...taskTiming(task, projected) }))
+    },
     listAlerts: () => [...alerts.entries()].map(([, value]) => value),
     listActivities: (taskId) => [...activities.entries()].map(([, value]) => value)
       .filter((activity) => taskId === undefined || activity.taskId === taskId)
@@ -277,7 +339,7 @@ export async function openResidentStore(storageDomain) {
       return { duplicate: false, sequence: accepted.sequence, group: next }
     }),
     markMessageAgentDelivery: ({ groupId, messageId, status, error }) => serialize(groupId, async () => {
-      if (!['delivered', 'failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)
+      if (!['steered', 'delivered', 'failed', 'decision-failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       if (!entry[1].messages.some((message) => message.messageId === messageId)) throw new Error(`message_not_found:${messageId}`)
@@ -296,7 +358,7 @@ export async function openResidentStore(storageDomain) {
       }))
     }),
     markMessagesAgentDelivery: ({ groupId, status = 'delivered', onlyMissing = true, messageIds }) => serialize(groupId, async () => {
-      if (!['delivered', 'failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)
+      if (!['steered', 'delivered', 'failed', 'decision-failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)
       if (messageIds !== undefined && (!Array.isArray(messageIds) || messageIds.length === 0 || messageIds.some((messageId) => typeof messageId !== 'string' || messageId.trim() === ''))) throw new Error('message_ids_invalid')
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
@@ -350,19 +412,27 @@ export async function openResidentStore(storageDomain) {
       } : item) }))
     },
     createTask: async ({ groupId, sourceMessageId, title, objective, requesterName, requesterOpenDingTalkId, occurredAt, acceptanceCriteria = [], stageTasks = [], relatedContexts = [] }) => {
-      if (findGroupEntry(groupId) === undefined) throw new Error(`group_not_subscribed:${groupId}`)
-      const duplicate = [...tasks.entries()].map(([, task]) => task).find((task) => task.groupId === groupId && task.sourceMessageId === sourceMessageId)
+      const group = findGroupEntry(groupId)?.[1]
+      if (group === undefined) throw new Error(`group_not_subscribed:${groupId}`)
+      const metadata = validateTaskMetadata({ group, sourceMessageId, title, objective, requesterName, requesterOpenDingTalkId, acceptanceCriteria })
+      const duplicate = [...tasks.entries()].map(([, task]) => task).find((task) => task.groupId === groupId && task.sourceMessageId === sourceMessageId && task.objective === metadata.objective)
       if (duplicate !== undefined) return { created: false, task: duplicate }
       const now = new Date().toISOString()
       const taskId = `task-${randomUUID()}`
-      const trigger = { sourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) }
-      const task = { taskId, groupId, sourceMessageId, ...(title ? { title } : {}), objective, state: 'queued', childSessionId: taskSessionId(taskId), ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), triggerHistory: [trigger], runSequence: 1, runStartedAt: now, acceptanceCriteria: acceptanceCriteria.length > 0 ? acceptanceCriteria : [objective], stageTasks: stageTasks.length > 0 ? stageTasks : ['完成并验证当前轮目标'], runHistory: [], ...(relatedContexts.length > 0 ? { relatedContexts } : {}), createdAt: now, updatedAt: now }
+      const trigger = { sourceMessageId, requesterName: metadata.requesterName, requesterOpenDingTalkId: metadata.requesterOpenDingTalkId, ...(occurredAt !== undefined ? { occurredAt } : {}) }
+      const task = { taskId, groupId, sourceMessageId, title: metadata.title, objective: metadata.objective, state: 'queued', childSessionId: taskSessionId(taskId), requesterName: metadata.requesterName, requesterOpenDingTalkId: metadata.requesterOpenDingTalkId, triggerHistory: [trigger], runSequence: 1, runStartedAt: now, acceptanceCriteria: metadata.acceptanceCriteria, stageTasks: stageTasks.length > 0 ? stageTasks : ['完成并验证当前轮目标'], runHistory: [], stateHistory: [{ state: 'queued', at: now, runSequence: 1 }], ...(relatedContexts.length > 0 ? { relatedContexts } : {}), createdAt: now, updatedAt: now }
       await tasks.put(taskId, task)
       return { created: true, task }
     },
     updateTask: async (taskId, transform) => {
       if (tasks.get(taskId) === undefined) throw new Error(`task_not_found:${taskId}`)
-      return tasks.update(taskId, (task) => ({ ...transform(task), updatedAt: new Date().toISOString() }))
+      return tasks.update(taskId, (task) => {
+        const at = new Date().toISOString()
+        const next = transform(task)
+        const stateChangedAt = next.runSequence !== task.runSequence && next.runStartedAt ? next.runStartedAt : at
+        const stateHistory = next.state !== task.state ? [...(task.stateHistory ?? []), { state: next.state, at: stateChangedAt, runSequence: next.runSequence ?? task.runSequence ?? 1 }] : task.stateHistory
+        return { ...next, ...(stateHistory ? { stateHistory } : {}), updatedAt: at }
+      })
     },
     migrateTaskProvenance: async ({ taskId, sourceMessageId, completionDelivered = false }) => {
       const task = tasks.get(taskId)
@@ -413,7 +483,7 @@ export async function openResidentStore(storageDomain) {
       }
       return { taskId, fingerprintPrefix, resolved }
     },
-    recordActivity: async ({ taskId, sessionId, eventKey, type, detail = {} }) => {
+    recordActivity: async ({ taskId, sessionId, eventKey, type, detail = {}, occurredAt }) => {
       const task = tasks.get(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
       const key = `${taskId}:${eventKey}`
@@ -421,7 +491,7 @@ export async function openResidentStore(storageDomain) {
       if (existing !== undefined) return { created: false, activity: existing }
       const projectedCount = [...activities.entries()].filter(([, activity]) => activity.taskId === taskId).length
       if (projectedCount >= ACTIVITY_PROJECTION_LIMIT_PER_TASK) return { created: false, capped: true }
-      const activity = { activityId: `activity-${randomUUID()}`, taskId, sessionId, eventKey, type, detail, occurredAt: new Date().toISOString() }
+      const activity = { activityId: `activity-${randomUUID()}`, taskId, sessionId, eventKey, type, detail, occurredAt: occurredAt ?? new Date().toISOString() }
       await activities.put(key, activity)
       return { created: true, activity }
     },

@@ -20,12 +20,12 @@ class FakeResidentAdapter extends LlmAdapter {
       const message = input.match(/^Message: (.*)$/m)?.[1] ?? ''
       const activeTasks = JSON.parse(input.match(/^Active tasks: (.*)$/m)?.[1] ?? '[]')
       let decision
-      if (message.startsWith('忽略：')) decision = { kind: 'ignore', reason: message.slice(3) || 'not addressed' }
-      else if (message.startsWith('任务：')) decision = { kind: 'new-task', title: message.slice(3), objective: message.slice(3), reply: '已识别为正式任务。' }
+      if (message.startsWith('忽略：')) decision = { actions: [], reason: message.slice(3) || 'not addressed' }
+      else if (message.startsWith('任务：')) decision = { actions: [{ kind: 'new-task', title: message.slice(3), objective: message.slice(3), acceptanceCriteria: ['任务目标已完成并有可核验证据'] }], reply: '已识别为正式任务。' }
       else if (message.startsWith('补充：')) {
         const task = activeTasks[0]
-        decision = task === undefined ? { kind: 'answer', reply: '没有可补充的进行中任务。' } : { kind: 'task-context', taskId: task.taskId, context: message.slice(3), reply: '已补充到现有任务。' }
-      } else decision = { kind: 'answer', reply: `fake-answer:${message}` }
+        decision = task === undefined ? { actions: [], reply: '没有可补充的进行中任务。' } : { actions: [{ kind: 'task-context', taskId: task.taskId, context: message.slice(3) }], reply: '已补充到现有任务。' }
+      } else decision = { actions: [], reply: `fake-answer:${message}` }
       const text = JSON.stringify(decision)
       yield { type: 'block-start', index: 0, blockType: 'text' }
       yield { type: 'text-delta', index: 0, text }

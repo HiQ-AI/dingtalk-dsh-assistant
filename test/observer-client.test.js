@@ -261,6 +261,13 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /method: 'POST'/)
 })
 
+test('任务卡展示当前轮总计、排队、运行、等待、工具和其他运行耗时', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  assert.match(source, /get\('\/state\/task-timings'\)/)
+  assert.match(source, /总计 \$\{fmtDuration\(timing\.wallMs\)\} · 排队/)
+  assert.match(source, /工具 \$\{fmtDuration\(timing\.toolMs\)\} · 其他运行/)
+})
+
 test('Agent配置页面提供叶子任务并行上限且默认值为5', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /叶子任务并行上限/)

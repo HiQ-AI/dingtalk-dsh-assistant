@@ -1,13 +1,16 @@
 import { z } from 'zod'
 
-const answer = z.strictObject({ kind: z.literal('answer'), reply: z.string().min(1) })
 const runPlan = { acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional() }
-const taskProposal = z.strictObject({ kind: z.literal('task-proposal'), title: z.string().min(1).max(120), objective: z.string().min(1), reply: z.string().min(1) })
-const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), ...runPlan, reply: z.string().min(1) })
-const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan, reply: z.string() })
-const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan, reply: z.string() })
-const ignore = z.strictObject({ kind: z.literal('ignore'), reason: z.string().min(1) })
-export const groupDecisionSchema = z.discriminatedUnion('kind', [answer, taskProposal, newTask, taskContext, taskReopen, ignore])
+const taskProposal = z.strictObject({ kind: z.literal('task-proposal'), title: z.string().min(1).max(120), objective: z.string().min(1) })
+const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: z.array(z.string().min(1)).min(1), stageTasks: z.array(z.string().min(1)).optional() })
+const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan })
+const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan })
+const taskAction = z.discriminatedUnion('kind', [taskProposal, newTask, taskContext, taskReopen])
+export const groupDecisionSchema = z.union([
+  z.strictObject({ actions: z.tuple([]), reply: z.string().min(1) }),
+  z.strictObject({ actions: z.tuple([]), reason: z.string().min(1) }),
+  z.strictObject({ actions: z.array(taskAction).min(1), reply: z.string() }),
+])
 
 function mainMessageTime(value) {
   if (typeof value === 'number') return new Date(value).toISOString()
@@ -16,7 +19,7 @@ function mainMessageTime(value) {
   return Number.isNaN(parsed.valueOf()) ? value : parsed.toISOString()
 }
 
-export function buildDecisionPrompt({ messageId, message, senderName, senderOpenDingTalkId, occurredAt, quotedMessage, mediaUnavailable, deliveryRetry = false }) {
+export function buildDecisionPrompt({ messageId, message, senderName, senderOpenDingTalkId, occurredAt, quotedMessage, mediaUnavailable }) {
   const messageBlock = [
     `消息唯一标识：${messageId ?? '未知'}`,
     `发送者：${senderName ?? '未知'}`,
@@ -26,7 +29,6 @@ export function buildDecisionPrompt({ messageId, message, senderName, senderOpen
   ]
   if (quotedMessage?.messageId) messageBlock.push(`引用消息ID：${quotedMessage.messageId}`)
   if (Array.isArray(mediaUnavailable) && mediaUnavailable.length > 0) messageBlock.push(`附件读取异常：${mediaUnavailable.join('；')}。不得仅因附件暂不可读而断言消息与职责或活动任务无关；如果这些附件承载任务所需信息，必须先回答并明确告知对方哪些信息未获取到，不得创建、续接或重开任务。`)
-  if (deliveryRetry) messageBlock.push('投递说明：这是一次失败消息重试，前次决策未完成业务落地。不得仅因消息 ID 已在会话中出现、看过相同内容或曾输出过决策而判定 ignore；必须按当前任务索引重新完成原业务判断。')
   return [
     '[GROUP_DECISION]',
     '',
@@ -68,8 +70,8 @@ export function shouldRecheckTaskAssociation({ activeTaskCount, hasImage, previo
 
 export function blockTaskDecisionForUnavailableMedia(decision, mediaUnavailable) {
   const unavailable = Array.isArray(mediaUnavailable) ? mediaUnavailable.map((item) => String(item).trim()).filter(Boolean) : []
-  if (unavailable.length === 0 || !['new-task', 'task-context', 'task-reopen'].includes(decision.kind)) return decision
-  return { kind: 'answer', reply: `我没能获取到以下任务信息：${unavailable.join('；')}。请重新发送可访问的内容，信息补齐后我再开始处理。` }
+  if (unavailable.length === 0 || !decision.actions.some((action) => ['new-task', 'task-context', 'task-reopen'].includes(action.kind))) return decision
+  return { actions: [], reply: `我没能获取到以下任务信息：${unavailable.join('；')}。请重新发送可访问的内容，信息补齐后我再开始处理。` }
 }
 
 export function parseGroupDecision(text) {

@@ -5,7 +5,7 @@ import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 
 async function withServer(testApiEnabled, run) {
   const runtime = {
-    listRecoveryIssues: () => [], listGroups: () => [], getGroup: () => undefined, listTasks: () => [], listActivities: () => [], listAlerts: () => [], listAuthorizationRequests: () => [{ requestId: 'blocker-1', status: 'pending-send' }],
+    listRecoveryIssues: () => [], listGroups: () => [], getGroup: () => undefined, listTasks: () => [], listTaskTimings: () => [{ taskId: 'task-1', wallMs: 1000 }], listActivities: () => [], listAlerts: () => [], listAuthorizationRequests: () => [{ requestId: 'blocker-1', status: 'pending-send' }],
     subscribe: async () => ({ created: true }),
     updateGroup: async (value) => value,
     unsubscribe: async (value) => ({ removed: true, ...value }),
@@ -31,6 +31,7 @@ test('生产HTTP开放只读状态与明确的本机群配置接口，测试控�
   assert.equal(health.status, 200)
   assert.equal((await health.json()).transport, 'fake-dws')
   assert.equal((await fetch(`${baseUrl}/state/tasks`)).status, 200)
+  assert.deepEqual(await (await fetch(`${baseUrl}/state/task-timings`)).json(), [{ taskId: 'task-1', wallMs: 1000 }])
   assert.equal((await fetch(`${baseUrl}/state/authorizations`)).status, 200)
   assert.equal((await fetch(`${baseUrl}/config/groups/search?q=产品`)).status, 200)
   assert.equal((await fetch(`${baseUrl}/state/agent-config`)).status, 200)
