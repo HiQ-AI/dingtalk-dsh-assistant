@@ -16,7 +16,7 @@ function mainMessageTime(value) {
   return Number.isNaN(parsed.valueOf()) ? value : parsed.toISOString()
 }
 
-export function buildDecisionPrompt({ messageId, message, senderName, senderOpenDingTalkId, occurredAt, quotedMessage, mediaUnavailable }) {
+export function buildDecisionPrompt({ messageId, message, senderName, senderOpenDingTalkId, occurredAt, quotedMessage, mediaUnavailable, deliveryRetry = false }) {
   const messageBlock = [
     `消息唯一标识：${messageId ?? '未知'}`,
     `发送者：${senderName ?? '未知'}`,
@@ -26,6 +26,7 @@ export function buildDecisionPrompt({ messageId, message, senderName, senderOpen
   ]
   if (quotedMessage?.messageId) messageBlock.push(`引用消息ID：${quotedMessage.messageId}`)
   if (Array.isArray(mediaUnavailable) && mediaUnavailable.length > 0) messageBlock.push(`附件读取异常：${mediaUnavailable.join('；')}。不得仅因附件暂不可读而断言消息与职责或活动任务无关；如果这些附件承载任务所需信息，必须先回答并明确告知对方哪些信息未获取到，不得创建、续接或重开任务。`)
+  if (deliveryRetry) messageBlock.push('投递说明：这是一次失败消息重试，前次决策未完成业务落地。不得仅因消息 ID 已在会话中出现、看过相同内容或曾输出过决策而判定 ignore；必须按当前任务索引重新完成原业务判断。')
   return [
     '[GROUP_DECISION]',
     '',

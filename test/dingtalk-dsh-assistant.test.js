@@ -60,11 +60,10 @@ test('resident重启后按群内顺序恢复遗留pending消息', async () => {
   assert.match(residentSource, /runtime\.recoverPendingMessages\(\)/)
 })
 
-test('任务上下文允许静默追加且失败消息重试重新参与批次', async () => {
+test('任务上下文允许静默追加且失败消息可由重复事件重试', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /decision\.reply\.trim\(\) === ''/)
-  assert.match(source, /return Promise\.all\(pending\.map\(async \(message\)/)
-  assert.match(source, /batch\.processing \?\?= processMessageBatch\(batch\)/)
+  assert.match(source, /\? store\.getGroup\(message\.groupId\)/)
   assert.match(source, /\['delivered', 'skipped'\]\.includes\(persisted\?\.agentDeliveryStatus\)/)
 })
 

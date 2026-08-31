@@ -15,23 +15,26 @@ after(() => {
   rmSync(replacementWorkspace, { recursive: true, force: true })
 })
 
-test('Inbox 使用五秒静默聚合窗口，主会话向叶子会话仍使用插话', () => {
+test('Inbox 延迟五秒插话投递，主会话向叶子会话同样使用插话', () => {
   const source = readFileSync(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /inboxDeliveryDelayMs = 5_000/)
-  assert.match(source, /setTimeout\(\(\) => flushMessageBatch\(batch\), Math\.max\(0, inboxDeliveryDelayMs\)\)/)
+  assert.match(source, /setTimeout\(resolve, inboxDeliveryDelayMs\)/)
   assert.match(source, /handle\.agent\.steer\(createUserMessage\(\{ content, source: \{ kind: 'user' \} \}\)\)/)
   assert.match(source, /async function followupTaskInternal[\s\S]*?handle\.agent\.steer\(createUserMessage/)
   assert.match(source, /\[GROUP_DECISION_SCHEMA_CORRECTION\]/)
   assert.match(source, /收到 TASK_OBJECTIVE_REVISED 后，必须根据修订后的完整目标重新提交 plan-confirmed/)
-  assert.match(source, /保持原来的整体业务判断不变，只删除该 kind 不允许的字段或补齐必填字段/)
+  assert.match(source, /保持原来的业务判断不变，只删除该 kind 不允许的字段或补齐必填字段/)
   assert.match(source, /decision = parseGroupDecision\(correctedReply\)/)
 })
 
-test('同群连续消息聚合为一次 steer 和一次整体决策', async () => {
+test('同群新消息立即进入Inbox并在前一条决策未完成时插话', async () => {
   const group = { groupId: 'steer-group', residentSessionId: 'session-steer', residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }
   const steered = [], followups = []
-  let idleCalls = 0
+  let releaseFirstIdle
+  const firstIdle = new Promise((resolve) => { releaseFirstIdle = resolve })
+  let idleCalls = 0, resolveBothSteered
   let deliveredFollowups = 0
+  const bothSteered = new Promise((resolve) => { resolveBothSteered = resolve })
   const session = { id: 'session-steer', seq: 0, events: [] }
   const agent = {
     session, status: 'running',
@@ -39,6 +42,7 @@ test('同群连续消息聚合为一次 steer 和一次整体决策', async () =
       const text = message.content[0].text
       if (text.startsWith('[GROUP_MESSAGE_STEER]')) {
         steered.push(message)
+        if (steered.length === 2) resolveBothSteered()
         return
       }
       throw new Error('结构化判断不得通过 steer 插入群消息批次')
@@ -47,6 +51,7 @@ test('同群连续消息聚合为一次 steer 和一次整体决策', async () =
     async whenIdle() {
       idleCalls += 1
       if (idleCalls === 1) {
+        await firstIdle
         session.events.push(
           { seq: session.seq++, type: 'turn/start', data: { turn: 100 } },
           { seq: session.seq++, type: 'step/start', data: { turn: 100, step: 1 } },
@@ -89,16 +94,16 @@ test('同群连续消息聚合为一次 steer 和一次整体决策', async () =
     async appendOutbox(value) { group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
     close: async () => undefined,
   }
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ inboxDeliveryDelayMs: 5, supervisorIntervalMs: 0 }))
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ inboxDeliveryDelayMs: 0, supervisorIntervalMs: 0 }))
   const first = runtime.ingest({ groupId: group.groupId, messageId: 'm1', text: '第一条', occurredAt: '2026-08-28T01:00:00Z' })
   const second = runtime.ingest({ groupId: group.groupId, messageId: 'm2', text: '第二条', occurredAt: '2026-08-28T01:00:01Z' })
-  const results = await Promise.all([first, second])
-  assert.deepEqual(group.messages.map((item) => item.messageId), ['m1', 'm2'], '两条消息必须在批次决策前分别持久化进 Inbox')
-  assert.equal(steered.length, 1, '同一静默窗口内的消息只能整体 steer 一次')
-  assert.match(steered[0].content[0].text, /m1[\s\S]*m2/)
-  assert.equal(followups.length, 1, '整批消息只能请求一次结构化决策')
-  assert.match(followups[0].content[0].text, /m1[\s\S]*m2/)
-  assert.deepEqual(results.map((result) => result.batchMessageIds), [['m1', 'm2'], ['m1', 'm2']])
+  await bothSteered
+  assert.deepEqual(group.messages.map((item) => item.messageId), ['m1', 'm2'], '第二条必须在第一条决策完成前持久化进Inbox')
+  assert.equal(steered.length, 2, '第二条必须在第一条whenIdle结束前调用steer')
+  assert.equal(followups.length, 1, '多条群消息可以进入同一 steer 批次，结构化收口仍应按群串行')
+  releaseFirstIdle()
+  await Promise.all([first, second])
+  assert.equal(followups.length, 2)
   assert.deepEqual(group.messages.map((item) => item.agentDeliveryStatus), ['delivered', 'delivered'])
   await runtime.close()
 })

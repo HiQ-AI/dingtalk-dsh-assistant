@@ -37,9 +37,10 @@ test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () 
   assert.match(prompt, /必须先回答并明确告知对方哪些信息未获取到，不得创建、续接或重开任务/u)
 })
 
-test('群消息判断不按单个 messageId 注入失败重试特例', () => {
-  const prompt = buildDecisionPrompt({ message: '需要排查', occurredAt: '2026-08-27T04:00:00Z' })
-  assert.doesNotMatch(prompt, /失败消息重试|重新完成原业务判断/)
+test('失败消息重试明确要求重新完成业务判断', () => {
+  const prompt = buildDecisionPrompt({ message: '需要排查', occurredAt: '2026-08-27T04:00:00Z', deliveryRetry: true })
+  assert.match(prompt, /这是一次失败消息重试/)
+  assert.match(prompt, /不得仅因消息 ID 已在会话中出现[\s\S]*判定 ignore/)
 })
 
 test('引用消息信封只保留引用消息 ID', () => {
@@ -110,9 +111,9 @@ test('诊断请求不得被主会话或叶子会话扩大为修复授权', async
   assert.match(source, /后续消息可能明确扩大或收窄同一任务的动作范围/)
 })
 
-test('群消息批次到叶子只使用Runtime原始证据信封', async () => {
+test('群消息到叶子只使用Runtime原始证据信封', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
-  assert.match(source, /const sourceEnvelope = batchSourceEnvelope\(entries\)/u)
+  assert.match(source, /const sourceEnvelope = buildLeafSourceEnvelope/u)
   assert.match(source, /title: decision\.title, objective: decision\.objective/u)
   assert.match(source, /relatedContexts: \[sourceEnvelope\]/u)
   assert.doesNotMatch(source, /objective: sourceEnvelope/u)
