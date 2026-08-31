@@ -1,6 +1,6 @@
 {
   "name": "@zzusp/dingtalk-dsh-observer",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "description": "DingTalk task board client for DeepSeek Harness",
   "license": "UNLICENSED",
   "type": "module",

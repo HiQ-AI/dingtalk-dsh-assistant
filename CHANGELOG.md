@@ -2,6 +2,16 @@
 
 本文件记录 `dingtalk-dsh-assistant` 每个正式版本的用户可见变化。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，日期使用 `YYYY-MM-DD`。
 
+## [0.5.9] - 2026-08-31
+
+### 修复
+
+- 任务达到最大执行轮数后不再保持假运行状态；恢复耗尽任务时会补充轮数预算，使后续处理能够继续推进。
+
+### 文档
+
+- 更新 README 的数字员工项目介绍与展示图片。
+
 ## [0.5.8] - 2026-08-28
 
 ### 修复
@@ -117,6 +127,7 @@
 - assistant、observer 与发行包统一使用同一个产品版本号。
 - Node.js 最低版本与实际 zstd Runtime 要求一致，调整为 24。
 
+[0.5.9]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.9
 [0.5.8]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.8
 [0.5.7]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.7
 [0.5.6]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.6
