@@ -366,6 +366,17 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       return group.outbox.find((item) => item.sourceMessageId === resultKey)
     })
   }
+  async function forwardTaskLearningSignals(task, result) {
+    if (result.status !== 'completed' || !result.internal?.learningSignals.length) return
+    const handle = residentHandles.get(task.groupId)
+    if (handle === undefined) throw new Error(`resident_not_active:${task.groupId}`)
+    await handle.agent.whenIdle()
+    handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: `[TASK_INTERNAL_LEARNING_SIGNALS]\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n叶子会话在任务处理中归纳的内部学习信号：${JSON.stringify(result.internal.learningSignals)}\n\n这是叶子会话返回给主会话的内部上下文，不属于业务结果或群聊通知内容。` }],
+      source: { kind: 'coordinator' },
+    }))
+    await handle.agent.whenIdle()
+  }
   async function reviewTaskCheckpoint(task, checkpoint) {
     const handle = residentHandles.get(task.groupId)
     if (handle === undefined) throw new Error(`resident_not_active:${task.groupId}`)
@@ -443,6 +454,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       throw new Error(`task_result_objective_not_covered:${taskId}:${review.reason}`)
     }
     if (goal.phase !== 'complete') ctx.goals.complete(handle.agent, goalRef(goal))
+    await withoutInitiator(() => forwardTaskLearningSignals(task, result))
     await withoutInitiator(() => coordinateTaskResult(task, result))
     const completed = await store.updateTask(taskId, (current) => ({ ...current, state: 'completed', completion: result.summary, result, waitingKind: undefined, waitingReason: undefined }))
     handle.agent.whenIdle().then(async () => {
@@ -551,7 +563,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
         name: 'group-task-blocking-policy', order: 45,
         text: () => `## 群任务执行与完成规则
 
-你必须通过 submit_task_result 结束任务；自然语言总结、Goal complete 或 turn end 都不构成 Task 完成。
+你必须通过 submit_task_result 结束任务；自然语言总结、Goal complete 或 turn end 都不构成 Task 完成。任务处理中只有形成了有证据、跨会话仍有意义且在相同条件下可复用的学习结论时，才在 completed 结果的 internal.learningSignals 中提交；普通顺利完成、猜测、原始报错、未定位事件或临时状态不得硬凑学习信号。没有符合项时省略 internal。internal 只供主会话内部处理，不属于群聊通知内容。
 
 ### 与主会话的内部检查点
 
@@ -625,6 +637,11 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           questions: { type: 'array', items: { type: 'string' } }, blockerCategory: { type: 'string', enum: ['redline', 'network', 'disk', 'resource', 'unexpected', 'human-decision'] },
           risk: { type: 'string' }, attemptedActions: { type: 'array', items: { type: 'string' } }, requestedAction: { type: 'string' },
           delivery: { type: 'object', additionalProperties: true },
+          internal: { type: 'object', additionalProperties: false, properties: {
+            learningSignals: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+              type: { type: 'string', enum: ['correction', 'feature-request', 'knowledge-gap', 'error'] }, observation: { type: 'string' }, resolution: { type: 'string' }, reusableLesson: { type: 'string' }, scope: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } },
+            }, required: ['type', 'observation', 'resolution', 'reusableLesson', 'scope', 'evidence'] } },
+          }, required: ['learningSignals'] },
         }, required: ['status', 'summary', 'evidence', 'artifacts'] },
         output: {
           schema: { type: 'object', additionalProperties: false, properties: { accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, state: { type: 'string' } }, required: ['accepted', 'taskId', 'state'] },

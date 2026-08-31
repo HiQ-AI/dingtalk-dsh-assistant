@@ -223,6 +223,7 @@ test('单个 resident Session 恢复超时被隔离且不阻塞其他群启动',
 })
 
 test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 排队', async () => {
+  const emptyInternal = { learningSignals: [] }
   const groups = new Map([['group-a', { groupId: 'group-a', responsibility: 'coordinate', residentSessionId: 'session-parent', residentAgentPreset: 'standard-convergent', outbox: [] }]])
   const tasks = []
   const creates = [], createMetas = [], followups = [], steers = [], approvalResumeOrder = [], disposed = [], activities = [], alerts = [], goals = new Map(), agents = new Map(), leafTools = []
@@ -375,7 +376,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(webDecision.decisionSource, 'web')
   assert.equal(runtime.getTask(one.task.taskId).state, 'running', 'Web批准必须恢复同一Task')
   assert.equal(runtime.getTask(one.task.taskId).humanBlockerHistory.length, 3)
-  await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: [], artifacts: [] } }))
+  await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: [], artifacts: [], internal: emptyInternal } }))
   assert.equal(runtime.getTask(one.task.taskId).state, 'running')
   await store.updateTask(one.task.taskId, (current) => ({
     ...current,
@@ -385,7 +386,8 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     triggerHistory: [...current.triggerHistory, { sourceMessageId: 'recovery:completion-review-gate', requesterName: '内部恢复操作人' }],
   }))
   Object.assign(groups.get('group-a').outbox[0], { status: 'sent', deliveredMessageId: 'ding-old-1' })
-  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified', 'uat2 页面回归通过'], artifacts: ['docs/acceptance/report.md'], delivery: { environment: 'UAT2', pipeline: 186 } } })
+  const learningSignal = { type: 'error', observation: '初始检查未覆盖真实入口', resolution: '通过页面回读补齐真实链路验证', reusableLesson: '完成前必须核验真实入口', scope: 'UAT2 页面回归', evidence: ['uat2 页面回归通过'] }
+  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified', 'uat2 页面回归通过'], artifacts: ['docs/acceptance/report.md'], delivery: { environment: 'UAT2', pipeline: 186 }, internal: { learningSignals: [learningSignal] } } })
   assert.equal(groups.get('group-a').outbox[1].sourceMessageId, `task-result:${one.task.taskId}:completed`)
   assert.equal(groups.get('group-a').outbox[1].text, `coordinated:${one.task.taskId}`)
   assert.equal(groups.get('group-a').outbox[1].replyToMessageId, 'm1', '内部恢复来源不得覆盖最后一条真实群消息引用')
@@ -396,11 +398,16 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.match(coordinationPrompt, /"artifacts":\["docs\/acceptance\/report\.md"\]/u, '主会话必须收到交付物')
   assert.match(coordinationPrompt, /"delivery":\{"environment":"UAT2","pipeline":186\}/u, '主会话必须收到部署与交付状态')
   assert.match(coordinationPrompt, /不得省略不同关注点、限定条件、失败项或“未验证\/未部署”等边界/u)
+  assert.doesNotMatch(coordinationPrompt, /learningSignals|初始检查未覆盖真实入口/u, '群聊通知提示不得包含内部学习信号')
+  const learningPrompt = followups.find(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith(`[TASK_INTERNAL_LEARNING_SIGNALS]\nTask ID: ${one.task.taskId}\n`))?.[1].content[0].text
+  assert.match(learningPrompt, /初始检查未覆盖真实入口/u, '内部学习信号必须单独交给主会话')
+  assert.match(learningPrompt, /不属于业务结果或群聊通知内容/u)
+  assert.doesNotMatch(groups.get('group-a').outbox[1].text, /初始检查未覆盖真实入口/u, '内部学习信号不得进入发信箱')
   const replayed = []
   runtime.onOutboxAppended((event) => { replayed.push(event) })
   await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(replayed.map((event) => event.outbound.sourceMessageId), groups.get('group-a').outbox.map((item) => item.sourceMessageId))
-  await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified'], artifacts: [] } }))
+  await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified'], artifacts: [], internal: emptyInternal } }))
   assert.equal(groups.get('group-a').outbox.length, 2)
   assert.equal(runtime.getTask(three.task.taskId).state, 'running')
   assert.equal(creates[2], 'session-task-3')
@@ -452,7 +459,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(raisedConcurrency.maxConcurrentTasks, 3)
   assert.equal(runtime.getTask(one.task.taskId).state, 'running', '提高并行上限后按FIFO立即启动待执行任务')
   await submitCheckpointPair(one.task.taskId, '第二轮')
-  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'second done', evidence: ['second verified'], artifacts: [] } })
+  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'second done', evidence: ['second verified'], artifacts: [], internal: emptyInternal } })
   assert.equal(groups.get('group-a').outbox.at(-1).sourceMessageId, `task-result:${one.task.taskId}:completed:1`, '重开任务再次完成必须生成独立通知')
   assert.equal(groups.get('group-a').outbox.at(-1).replyToMessageId, 'm-reopen-1')
   assert.equal(groups.get('group-a').outbox.at(-1).replyToSenderOpenDingTalkId, 'od-reopen-1')
@@ -466,13 +473,13 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(goals.get(runningUpgraded.childSessionId).objective, runningUpgraded.objective, '运行中授权升级必须替换当前Goal目标')
 
   await submitCheckpointPair(one.task.taskId, '第三轮')
-  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'investigated', evidence: ['checked'], artifacts: [] } })
+  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'investigated', evidence: ['checked'], artifacts: [], internal: emptyInternal } })
   const internalReopen = await runtime.reopenTask({ taskId: one.task.taskId, context: '内部恢复完成验收', sourceMessageId: 'recovery:completion-review-gate', requesterName: '内部恢复操作人' })
   assert.equal(internalReopen.sourceMessageId, 'm-reopen-2', '内部恢复不得覆盖当前真实群消息')
   assert.equal(internalReopen.requesterOpenDingTalkId, 'od-reopen-2')
   assert.equal(internalReopen.triggerHistory.some((item) => item.sourceMessageId.startsWith('recovery:')), false, '内部恢复不得写入消息触发历史')
   await submitCheckpointPair(one.task.taskId, '内部恢复轮')
-  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'internal recovery done', evidence: ['checked again'], artifacts: [] } })
+  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'internal recovery done', evidence: ['checked again'], artifacts: [], internal: emptyInternal } })
   const upgraded = await runtime.reopenTask({ taskId: one.task.taskId, context: '请修复并部署 UAT2', objective: '修复问题、部署 UAT2 并完成业务验证', sourceMessageId: 'm-upgrade', requesterName: '升级提出人', requesterOpenDingTalkId: 'od-upgrade' })
   assert.equal(upgraded.objective, '修复问题、部署 UAT2 并完成业务验证')
   assert.equal(upgraded.objectiveHistory.at(-1).objective, '调查并修复问题')
@@ -487,7 +494,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(reopenedCompleted.triggerHistory[2].sourceMessageId, 'm-reopen-2')
   const beforeRejectedCompletion = groups.get('group-a').outbox.length
   await submitCheckpointPair(one.task.taskId, '升级轮')
-  await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'development', summary: '重复上一轮旧结论', evidence: ['只有旧结论证据'], artifacts: [] } }), /task_result_objective_not_covered/)
+  await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'development', summary: '重复上一轮旧结论', evidence: ['只有旧结论证据'], artifacts: [], internal: emptyInternal } }), /task_result_objective_not_covered/)
   assert.equal(runtime.getTask(one.task.taskId).state, 'running')
   assert.equal(groups.get('group-a').outbox.length, beforeRejectedCompletion, '验收拒绝不得生成完成通知')
   assert.match(steers.at(-1)[1].content[0].text, /^\[TASK_RESULT_REJECTED\]/u)
