@@ -999,6 +999,9 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           ]
           handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } }))
           return await serialize(message.groupId, async () => {
+            // steer 的 assistant 回复也会写入同一 Session。先等它真正结束，再建立结构化决策的事件边界，
+            // 避免 whenIdle 在两轮之间返回时把“已更新上下文”误当成 GROUP_DECISION JSON。
+            await handle.agent.whenIdle()
             const firstSeq = handle.agent.session.seq
             handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: decisionPrompt }], source: { kind: 'coordinator' } }))
             await handle.agent.whenIdle()

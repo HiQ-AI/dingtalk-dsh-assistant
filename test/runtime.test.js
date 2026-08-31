@@ -71,7 +71,7 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
   await bothSteered
   assert.deepEqual(group.messages.map((item) => item.messageId), ['m1', 'm2'], '第二条必须在第一条决策完成前持久化进Inbox')
   assert.equal(steered.length, 2, '第二条必须在第一条whenIdle结束前调用steer')
-  assert.equal(followups.length, 1, '结构化决策仍应按群串行，避免两条消息的JSON串线')
+  assert.equal(followups.length, 0, 'steer 回合结束前不得排入结构化决策，避免把普通回复误当 JSON')
   releaseFirstIdle()
   await Promise.all([first, second])
   assert.equal(followups.length, 2)
