@@ -1,0 +1,12 @@
+case_id,case,round_1,status
+GD-01,单请求在step工具调用时立即提交,PASS,PASS
+GD-02,同turn多step无关请求分别提交,PASS,PASS
+GD-03,相关请求合并且副作用只执行一次,PASS,PASS
+GD-04,来源证据覆盖合并请求全部原始消息,PASS,PASS
+GD-05,连续Steer不覆盖已提交Decision,PASS,PASS
+GD-06,未知重复跨群request原子拒绝,PASS,PASS
+GD-07,普通文本和turn结束不能冒充Decision,PASS,PASS
+GD-08,未提交请求明确失败并记录状态,PASS,PASS
+GD-09,现有任务动作与回复路径回归,PASS,PASS
+GD-10,全量测试与打包通过,PASS,PASS
+GD-11,本地安装源码绑定与运行健康,PENDING,PENDING

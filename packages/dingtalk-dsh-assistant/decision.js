@@ -12,6 +12,27 @@ export const groupDecisionSchema = z.union([
   z.strictObject({ actions: z.array(taskAction).min(1), reply: z.string() }),
 ])
 
+const stringJsonSchema = { type: 'string' }
+const runPlanJsonProperties = {
+  acceptanceCriteria: { type: 'array', items: stringJsonSchema },
+  stageTasks: { type: 'array', items: stringJsonSchema },
+}
+const taskActionJsonSchema = {
+  oneOf: [
+    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-proposal' }, title: stringJsonSchema, objective: stringJsonSchema }, required: ['kind', 'title', 'objective'] },
+    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'new-task' }, title: stringJsonSchema, objective: stringJsonSchema, acceptanceCriteria: { type: 'array', items: stringJsonSchema }, stageTasks: runPlanJsonProperties.stageTasks }, required: ['kind', 'title', 'objective', 'acceptanceCriteria'] },
+    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-context' }, taskId: stringJsonSchema, context: stringJsonSchema, objective: stringJsonSchema, ...runPlanJsonProperties }, required: ['kind', 'taskId', 'context'] },
+    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-reopen' }, taskId: stringJsonSchema, context: stringJsonSchema, objective: stringJsonSchema, ...runPlanJsonProperties }, required: ['kind', 'taskId', 'context'] },
+  ],
+}
+export const groupDecisionJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description: '群消息结构化判断。空 actions 时必须二选一提供非空 reply 或 reason；非空 actions 时必须提供 reply。完整约束由工具执行时校验。',
+  properties: { actions: { type: 'array', items: taskActionJsonSchema }, reply: stringJsonSchema, reason: stringJsonSchema },
+  required: ['actions'],
+}
+
 function mainMessageTime(value) {
   if (typeof value === 'number') return new Date(value).toISOString()
   if (typeof value !== 'string' || value.trim() === '') return '未知'
@@ -81,6 +102,10 @@ export function parseGroupDecision(text) {
   } catch (error) {
     throw new Error('group_decision_invalid_json', { cause: error })
   }
+  return validateGroupDecision(value)
+}
+
+export function validateGroupDecision(value) {
   const result = groupDecisionSchema.safeParse(value)
   if (!result.success) throw new Error(`group_decision_invalid_schema:${result.error.issues.map((issue) => issue.path.join('.')).join(',')}`)
   return result.data

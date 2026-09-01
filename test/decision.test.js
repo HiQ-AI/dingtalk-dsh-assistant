@@ -104,7 +104,7 @@ test('诊断请求不得被主会话或叶子会话扩大为修复授权', async
 
 test('群消息到叶子只使用Runtime原始证据信封', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
-  assert.match(source, /const sourceEnvelope = buildLeafSourceEnvelope/u)
+  assert.match(source, /const sourceEnvelope = decisionMessages\.map\(\(source\) => buildLeafSourceEnvelope/u)
   assert.match(source, /title: action\.title, objective: action\.objective/u)
   assert.match(source, /relatedContexts: \[sourceEnvelope\]/u)
   assert.doesNotMatch(source, /objective: sourceEnvelope/u)

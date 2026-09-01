@@ -20,23 +20,28 @@ test('Inbox 每条消息零延迟 steer，主会话向叶子会话同样使用�
   assert.doesNotMatch(source, /inboxDeliveryDelayMs|setTimeout\(resolve, inboxDeliveryDelayMs\)/)
   assert.match(source, /handle\.agent\.steer\(createUserMessage\(\{ content, source: \{ kind: 'user' \} \}\)\)/)
   assert.match(source, /async function followupTaskInternal[\s\S]*?handle\.agent\.steer\(createUserMessage/)
-  assert.match(source, /\[GROUP_DECISION_SCHEMA_CORRECTION\]/)
+  assert.match(source, /name: 'group_decision_submit'/)
+  assert.doesNotMatch(source, /GROUP_DECISION_SCHEMA_CORRECTION|GROUP_DECISION_FINALIZE|parseGroupDecision\(/)
   assert.match(source, /收到 TASK_OBJECTIVE_REVISED 后，必须根据修订后的完整目标重新提交 plan-confirmed/)
   assert.match(source, /顶层不允许 kind 字段/)
-  assert.match(source, /忽略为 \{\"actions\":\[\],\"reason\":\"原因\"\}/)
-  assert.match(source, /decision = parseGroupDecision\(correctedReply\)/)
+  assert.match(source, /忽略为 [^\r\n]*\{\"actions\":\[\],\"reason\":\"原因\"\}/)
+  assert.match(source, /const submitted = await pending\.promise/)
   assert.match(source, /agentCtx\.tools\.restrict\(\{ deny: \['get_goal', 'create_goal', 'update_goal'\] \}\)/)
   assert.match(source, /name: 'tool:goal', order: 114, text: ''/)
 })
 
-test('同群新消息立即进入Inbox并在前一条决策未完成时插话', async () => {
+function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false } = {}) {
   const group = { groupId: 'steer-group', residentSessionId: 'session-steer', residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }
-  const steered = [], followups = []
-  let releaseFirstIdle
-  const firstIdle = new Promise((resolve) => { releaseFirstIdle = resolve })
-  let idleCalls = 0, resolveBothSteered
-  let deliveredFollowups = 0
-  const bothSteered = new Promise((resolve) => { resolveBothSteered = resolve })
+  group.groupId = groupId
+  const steered = [], followups = [], registeredTools = [], tasks = []
+  let releaseIdle, resolveSteerCount
+  let targetSteerCount = 0
+  const idle = new Promise((resolve) => { releaseIdle = resolve })
+  const waitForSteers = (count) => {
+    targetSteerCount = count
+    if (steered.length >= count) return Promise.resolve()
+    return new Promise((resolve) => { resolveSteerCount = resolve })
+  }
   const session = { id: 'session-steer', seq: 0, events: [] }
   const agent = {
     session, status: 'running',
@@ -44,58 +49,25 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
       const text = message.content[0].text
       if (text.startsWith('[GROUP_MESSAGE_STEER]')) {
         steered.push(message)
-        if (steered.length === 2) resolveBothSteered()
+        if (steered.length >= targetSteerCount) resolveSteerCount?.()
         return
       }
-      throw new Error('结构化判断不得通过 steer 插入群消息批次')
+      throw new Error('仅群消息允许通过 steer 插入')
     },
     followup(message) { followups.push(message) },
-    async whenIdle() {
-      idleCalls += 1
-      if (idleCalls === 1) {
-        await firstIdle
-        session.events.push(
-          { seq: session.seq++, type: 'turn/start', data: { turn: 100 } },
-          { seq: session.seq++, type: 'step/start', data: { turn: 100, step: 1 } },
-          { seq: session.seq++, type: 'assistant/message', data: { turn: 100, step: 1, message: { content: [{ type: 'text', text: '已更新上下文。' }] } } },
-          { seq: session.seq++, type: 'turn/end', data: { turn: 100, reason: { kind: 'completed' } } },
-        )
-        return
-      }
-      if (deliveredFollowups >= followups.length) return
-      const message = followups[deliveredFollowups]
-      deliveredFollowups += 1
-      const turn = deliveredFollowups
-      const events = [
-        { seq: session.seq++, type: 'turn/start', data: { turn } },
-        { seq: session.seq++, type: 'step/start', data: { turn, step: 1 } },
-        { seq: session.seq++, type: 'user/message', data: message },
-        { seq: session.seq++, type: 'assistant/message', data: { turn, step: 1, message: { content: [{ type: 'text', text: JSON.stringify({ actions: [], reply: `已处理${deliveredFollowups}` }) }] } } },
-        { seq: session.seq++, type: 'step/end', data: { turn, step: 1 } },
-      ]
-      if (deliveredFollowups <= 2) events.push(
-        { seq: session.seq++, type: 'step/start', data: { turn, step: 2 } },
-        { seq: session.seq++, type: 'user/message', data: { id: `later-steer-${deliveredFollowups}`, content: [{ type: 'text', text: `[GROUP_MESSAGE_STEER]\n后续消息${deliveredFollowups}` }], source: { kind: 'user' } } },
-        { seq: session.seq++, type: 'assistant/message', data: { turn, step: 2, message: { content: [{ type: 'text', text: '已更新上下文。' }] } } },
-        { seq: session.seq++, type: 'step/end', data: { turn, step: 2 } },
-      )
-      if (message.content[0].text.startsWith('[GROUP_DECISION_FINALIZE]')) {
-        events[3].data.message.content[0].text = JSON.stringify({ actions: [], reply: '已结合当前完整上下文处理' })
-      }
-      events.push({ seq: session.seq++, type: 'turn/end', data: { turn, reason: { kind: 'completed' } } })
-      session.events.push(...events)
-    },
+    async whenIdle() { await idle },
   }
   const handle = { agent, dispose: async () => undefined }
+  const agentCtx = { on: () => () => undefined, tools: { register: (tool) => registeredTools.push(tool), restrict: () => undefined }, systemPrompt: { section: () => undefined } }
   const ctx = {
     agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
-    agents: { async resume() { return handle } },
+    agents: { async resume(options) { await options.setup(agentCtx); return handle } },
     subagents: { drainContinuableDescendants: async () => undefined },
-    agentPresets: { serviceFor: () => ({ set: () => undefined }) },
+    agentPresets: { mount: async (_ctx, id) => ({ id }), serviceFor: () => ({ set: () => undefined }) },
   }
   const store = {
     getGroup: (groupId) => groupId === group.groupId ? group : undefined,
-    listGroups: () => [group], listTasks: () => [],
+    listGroups: () => [group], listTasks: () => tasks, getTask: (taskId) => tasks.find((task) => task.taskId === taskId),
     async ingest(message) {
       const duplicate = group.messages.find((item) => item.messageId === message.messageId)
       if (duplicate) return { duplicate: true, sequence: duplicate.sequence, group }
@@ -103,26 +75,194 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
       group.messages.push(accepted)
       return { duplicate: false, sequence: accepted.sequence, group }
     },
-    async markMessageAgentDelivery({ messageId, status }) { Object.assign(group.messages.find((item) => item.messageId === messageId), { agentDeliveryStatus: status }); return group },
+    async markMessageAgentDelivery({ messageId, status, error }) { Object.assign(group.messages.find((item) => item.messageId === messageId), { agentDeliveryStatus: status, ...(error === undefined ? {} : { error }) }); return group },
     async appendOutbox(value) { group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
+    async createTask(value) { const task = { ...value, taskId: `task-${tasks.length + 1}`, childSessionId: `session-task-${tasks.length + 1}`, state: 'queued' }; tasks.push(task); return { created: true, task } },
     close: async () => undefined,
   }
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ inboxDeliveryDelayMs: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: group.groupId, messageId: 'm1', text: '第一条', occurredAt: '2026-08-28T01:00:00Z' })
-  const second = runtime.ingest({ groupId: group.groupId, messageId: 'm2', text: '第二条', occurredAt: '2026-08-28T01:00:01Z' })
-  await bothSteered
-  assert.deepEqual(group.messages.map((item) => item.messageId), ['m1', 'm2'], '第二条必须在第一条决策完成前持久化进Inbox')
-  assert.equal(steered.length, 2, '第二条必须在第一条whenIdle结束前调用steer')
-  assert.doesNotMatch(steered[0].content[0].text, /立即结合|不要在本步骤|Runtime 随后|失败消息重试/, '逐条 steer 只携带事实，不重复系统协议')
-  assert.equal(followups.length, 1, '多条群消息可以进入同一 steer 批次，结构化收口仍应按群串行')
-  releaseFirstIdle()
-  const [firstResult] = await Promise.all([first, second])
-  assert.equal(followups.length, 4)
-  assert.match(followups[1].content[0].text, /^\[GROUP_DECISION_FINALIZE\]/u, 'Decision 被 Steer 打断后必须交给模型基于完整上下文重新收口')
-  assert.match(followups[2].content[0].text, /^\[GROUP_DECISION_FINALIZE\]/u, '连续多个 Steer 打断时必须持续基于最新完整上下文收口')
-  assert.doesNotMatch(followups[1].content[0].text, /上一条消息|相关消息ID|固定窗口/u, 'Runtime 不得用代码限制模型处理消息的数量或关系')
-  assert.equal(firstResult.decision.reply, '已结合当前完整上下文处理')
-  assert.deepEqual(group.messages.map((item) => item.agentDeliveryStatus), ['delivered', 'delivered'])
+  return { group, steered, followups, registeredTools, tasks, releaseIdle, waitForSteers, ctx, store, handle, taskCapacity }
+}
+
+const decisionRequestId = (message) => message.content[0].text.match(/^判断请求 ID：([^\r\n]+)$/mu)?.[1]
+
+function twoGroupDecisionFixture() {
+  const groups = new Map(['group-a', 'group-b'].map((groupId) => [groupId, { groupId, residentSessionId: `session-${groupId}`, residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }]))
+  const handles = new Map(), registeredTools = new Map(), steered = new Map()
+  const neverIdle = new Promise(() => undefined)
+  const ctx = {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
+    agents: { async resume(options) {
+      const group = [...groups.values()].find((item) => item.residentSessionId === options.resumeSessionId)
+      const messages = [], tools = []
+      const agent = { session: { id: group.residentSessionId, seq: 0, events: [] }, status: 'running', steer: (message) => messages.push(message), async whenIdle() { await neverIdle } }
+      const handle = { agent, dispose: async () => undefined }
+      await options.setup({ on: () => () => undefined, tools: { register: (tool) => tools.push(tool), restrict: () => undefined }, systemPrompt: { section: () => undefined } })
+      handles.set(group.groupId, handle); registeredTools.set(group.groupId, tools); steered.set(group.groupId, messages)
+      return handle
+    } },
+    subagents: { drainContinuableDescendants: async () => undefined },
+    agentPresets: { mount: async (_ctx, id) => ({ id }), serviceFor: () => ({ set: () => undefined }) },
+  }
+  const store = {
+    getGroup: (groupId) => groups.get(groupId), listGroups: () => [...groups.values()], listTasks: () => [], getTask: () => undefined,
+    async ingest(message) { const group = groups.get(message.groupId); const accepted = { ...message, sequence: group.nextSequence++, agentDeliveryStatus: 'pending' }; group.messages.push(accepted); return { duplicate: false, sequence: accepted.sequence, group } },
+    async markMessageAgentDelivery({ groupId, messageId, status, error }) { Object.assign(groups.get(groupId).messages.find((item) => item.messageId === messageId), { agentDeliveryStatus: status, ...(error === undefined ? {} : { error }) }); return groups.get(groupId) },
+    async appendOutbox(value) { const group = groups.get(value.groupId); group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
+    close: async () => undefined,
+  }
+  const waitForSteers = async () => { while ([...steered.values()].reduce((total, items) => total + items.length, 0) < 2) await new Promise((resolve) => setImmediate(resolve)) }
+  return { groups, handles, registeredTools, steered, waitForSteers, ctx, store }
+}
+
+test('同一turn的多条消息按step工具提交独立Decision且不等待turn结束', async () => {
+  const fixture = decisionRuntimeFixture()
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '第一条', occurredAt: '2026-08-28T01:00:00Z' })
+  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '第二条', occurredAt: '2026-08-28T01:00:01Z' })
+  await fixture.waitForSteers(2)
+  const requestIds = fixture.steered.map(decisionRequestId)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  const submitted = await tool.execute({ submissions: [
+    { requestIds: [requestIds[0]], decision: { actions: [], reply: '第一项结果' } },
+    { requestIds: [requestIds[1]], decision: { actions: [], reason: '第二项独立忽略' } },
+  ] }, { agent: fixture.handle.agent })
+  assert.deepEqual(submitted.acceptedRequestIds, requestIds)
+  const [firstResult, secondResult] = await Promise.all([first, second])
+  assert.equal(firstResult.decision.reply, '第一项结果')
+  assert.equal(secondResult.decision.reason, '第二项独立忽略')
+  assert.equal(fixture.followups.length, 0, '普通群判断不再排队 coordinator followup')
+  assert.equal(fixture.handle.agent.session.events.length, 0, 'Decision 在工具执行时结算，不依赖 turn/end 日志')
+  assert.deepEqual(fixture.group.messages.map((item) => item.agentDeliveryStatus), ['delivered', 'delivered'])
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('模型可合并相关请求且Runtime只提交一次副作用并保留全部来源', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'combined-group' })
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '任务主体', occurredAt: '2026-08-28T01:00:00Z', senderName: '甲' })
+  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '补充范围', occurredAt: '2026-08-28T01:00:01Z', senderName: '乙' })
+  await fixture.waitForSteers(2)
+  const requestIds = fixture.steered.map(decisionRequestId)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  await tool.execute({ submissions: [{ requestIds, decision: { actions: [{ kind: 'new-task', title: '合并处理', objective: '处理主体与补充范围', acceptanceCriteria: ['范围均已核验'] }], reply: '已开始处理。' } }] }, { agent: fixture.handle.agent })
+  const [firstResult, secondResult] = await Promise.all([first, second])
+  assert.equal(fixture.tasks.length, 1, '共享Decision的业务副作用只能由最早请求执行一次')
+  assert.equal(fixture.group.outbox.length, 1)
+  assert.match(fixture.tasks[0].relatedContexts[0], /消息ID：m1[\s\S]*原始消息：\s*任务主体/u)
+  assert.match(fixture.tasks[0].relatedContexts[0], /消息ID：m2[\s\S]*原始消息：\s*补充范围/u)
+  assert.equal(firstResult.decisionOwnerRequestId, undefined)
+  assert.equal(secondResult.decisionOwnerRequestId, requestIds[0])
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('后完成的独立Decision不会被前一条pending请求串行阻塞', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'out-of-order-group' })
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '仍在分析的事项', occurredAt: '2026-08-28T01:00:00Z' })
+  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '已经判断完成的独立事项', occurredAt: '2026-08-28T01:00:01Z' })
+  let firstSettled = false
+  first.then(() => { firstSettled = true }, () => { firstSettled = true })
+  await fixture.waitForSteers(2)
+  const requestIds = fixture.steered.map(decisionRequestId)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  await tool.execute({ submissions: [{ requestIds: [requestIds[1]], decision: { actions: [], reply: '第二项先完成' } }] }, { agent: fixture.handle.agent })
+  const secondResult = await second
+  assert.equal(secondResult.decision.reply, '第二项先完成')
+  assert.equal(firstSettled, false, '未提交的第一项不能阻塞已提交的独立第二项')
+  await tool.execute({ submissions: [{ requestIds: [requestIds[0]], decision: { actions: [], reason: '第一项随后完成' } }] }, { agent: fixture.handle.agent })
+  const firstResult = await first
+  assert.equal(firstResult.decision.reason, '第一项随后完成')
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('Decision工具对重复未知和非法结构执行全量预检且不部分提交', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'atomic-group' })
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '原子校验一', occurredAt: '2026-08-28T01:00:00Z' })
+  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '原子校验二', occurredAt: '2026-08-28T01:00:01Z' })
+  await fixture.waitForSteers(2)
+  const requestIds = fixture.steered.map(decisionRequestId)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  await assert.rejects(tool.execute({ submissions: [{ requestIds: [requestIds[0], requestIds[0]], decision: { actions: [], reason: '重复' } }] }, { agent: fixture.handle.agent }), /group_decision_request_duplicate/)
+  await assert.rejects(tool.execute({ submissions: [
+    { requestIds: [requestIds[0]], decision: { actions: [], reply: '不应部分提交' } },
+    { requestIds: ['unknown-request'], decision: { actions: [], reason: '未知' } },
+  ] }, { agent: fixture.handle.agent }), /group_decision_request_unknown/)
+  await assert.rejects(tool.execute({ submissions: [
+    { requestIds: [requestIds[0]], decision: { actions: [], reply: '仍不应部分提交' } },
+    { requestIds: [requestIds[1]], decision: { actions: [], reason: '' } },
+  ] }, { agent: fixture.handle.agent }), /group_decision_invalid_schema/)
+  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['steered', 'steered'])
+  await tool.execute({ submissions: [
+    { requestIds: [requestIds[0]], decision: { actions: [], reply: '合法一' } },
+    { requestIds: [requestIds[1]], decision: { actions: [], reason: '合法二' } },
+  ] }, { agent: fixture.handle.agent })
+  const [firstResult, secondResult] = await Promise.all([first, second])
+  assert.equal(firstResult.decision.reply, '合法一')
+  assert.equal(secondResult.decision.reason, '合法二')
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('Decision请求ID不能跨群提交且失败不会消耗任一群pending', async () => {
+  const fixture = twoGroupDecisionFixture()
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const first = runtime.ingest({ groupId: 'group-a', messageId: 'm-a', text: '群A事项', occurredAt: '2026-08-28T01:00:00Z' })
+  const second = runtime.ingest({ groupId: 'group-b', messageId: 'm-b', text: '群B事项', occurredAt: '2026-08-28T01:00:01Z' })
+  await fixture.waitForSteers()
+  const requestA = decisionRequestId(fixture.steered.get('group-a')[0])
+  const requestB = decisionRequestId(fixture.steered.get('group-b')[0])
+  const toolA = fixture.registeredTools.get('group-a').find((item) => item.name === 'group_decision_submit')
+  const toolB = fixture.registeredTools.get('group-b').find((item) => item.name === 'group_decision_submit')
+  await assert.rejects(toolA.execute({ submissions: [{ requestIds: [requestA, requestB], decision: { actions: [], reason: '不得跨群合并' } }] }, { agent: fixture.handles.get('group-a').agent }), /group_decision_request_wrong_group/)
+  assert.equal(fixture.groups.get('group-a').messages[0].agentDeliveryStatus, 'steered')
+  assert.equal(fixture.groups.get('group-b').messages[0].agentDeliveryStatus, 'steered')
+  await toolA.execute({ submissions: [{ requestIds: [requestA], decision: { actions: [], reply: '群A完成' } }] }, { agent: fixture.handles.get('group-a').agent })
+  await toolB.execute({ submissions: [{ requestIds: [requestB], decision: { actions: [], reason: '群B完成' } }] }, { agent: fixture.handles.get('group-b').agent })
+  const [resultA, resultB] = await Promise.all([first, second])
+  assert.equal(resultA.decision.reply, '群A完成')
+  assert.equal(resultB.decision.reason, '群B完成')
+  await runtime.close()
+})
+
+test('普通assistant文本和turn结束不能冒充Decision，停稳未提交会明确失败', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'missing-submit-group' })
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '不要解析最终文本', occurredAt: '2026-08-28T01:00:00Z' })
+  await fixture.waitForSteers(1)
+  fixture.handle.agent.session.events.push(
+    { seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '{"actions":[],"reply":"伪Decision"}' }] } } },
+    { seq: 2, type: 'turn/end', data: { status: 'success', reason: { kind: 'completed' } } },
+  )
+  fixture.releaseIdle()
+  await assert.rejects(ingest, /group_decision_not_submitted:missing-submit-group:m1/)
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-failed')
+  assert.match(fixture.group.messages[0].error, /group_decision_not_submitted/)
+  assert.equal(fixture.group.outbox.length, 0)
+  await runtime.close()
+})
+
+test('关联复核也使用独立Decision请求且不回退读取assistant文本', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'recheck-group' })
+  fixture.tasks.push({ taskId: 'task-existing', groupId: fixture.group.groupId, state: 'completed' })
+  fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'image-message', text: '[图片消息]', occurredAt: '2026-08-28T01:00:00Z', sequence: 1, agentDeliveryStatus: 'delivered' })
+  fixture.group.nextSequence = 2
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '图片补充说明', occurredAt: '2026-08-28T01:01:00Z' })
+  await fixture.waitForSteers(1)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [], reason: '初次忽略' } }] }, { agent: fixture.handle.agent })
+  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
+  assert.match(fixture.followups[0].content[0].text, /^\[GROUP_DECISION_RECHECK\]/u)
+  const recheckRequestId = decisionRequestId(fixture.followups[0])
+  await tool.execute({ submissions: [{ requestIds: [recheckRequestId], decision: { actions: [], reason: '复核后仍无关' } }] }, { agent: fixture.handle.agent })
+  const result = await ingest
+  assert.equal(result.decision.reason, '复核后仍无关')
+  assert.equal(fixture.group.messages.find((message) => message.messageId === 'm1').agentDeliveryStatus, 'delivered')
+  fixture.releaseIdle()
   await runtime.close()
 })
 
@@ -194,7 +334,7 @@ test('已有群切换预设时沿用原 Session，新群先创建 dsh Session �
   assert.match(responsibility.text(), /未设置职责/)
   assert.deepEqual(toolRestrictions, [{ deny: ['get_goal', 'create_goal', 'update_goal'] }])
   assert.deepEqual(promptSections.find((section) => section.name === 'tool:goal'), { name: 'tool:goal', order: 114, text: '' })
-  assert.deepEqual(registeredTools.map((tool) => tool.name), ['group_task_create', 'group_task_context_append', 'group_task_reopen', 'group_task_list'])
+  assert.deepEqual(registeredTools.map((tool) => tool.name), ['group_decision_submit', 'group_task_create', 'group_task_context_append', 'group_task_reopen', 'group_task_list'])
   for (const tool of registeredTools) {
     assertSupportedJsonSchema(tool.parameters)
     assertSupportedJsonSchema(tool.output.schema)
