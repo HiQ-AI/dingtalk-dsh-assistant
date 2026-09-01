@@ -318,8 +318,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     await handle.agent.whenIdle()
     const firstSeq = handle.agent.session.seq
     handle.agent.followup(createUserMessage({
-      content: [{ type: 'text', text: `[TASK_COMPLETION_REVIEW]\nTask ID: ${task.taskId}\n执行轮次：${task.runSequence ?? 1}\n当前有效目标：${task.objective}\n本轮验收标准：${JSON.stringify(task.acceptanceCriteria ?? [task.objective])}\n本轮阶段任务：${JSON.stringify(task.stageTasks ?? [])}\n本轮完成结果：${JSON.stringify({ summary: result.summary, evidence: result.evidence, artifacts: result.artifacts, delivery: result.delivery })}\n\n判断本轮证据是否覆盖当前有效目标和全部验收标准，尤其是最近新增或修订的范围。历史目标已经完成不代表新增范围完成；结果明确承认某项目未完成、缺少证据或尚未验证时必须拒绝。只输出严格 JSON：通过 {"accepted":true,"reason":"..."}；拒绝 {"accepted":false,"reason":"具体缺口"}。` }],
-      source: { kind: 'user' },
+      content: [{ type: 'text', text: `[TASK_COMPLETION_REVIEW]\nTask ID: ${task.taskId}\n执行轮次：${task.runSequence ?? 1}\n当前有效目标：${task.objective}\n本轮验收标准：${JSON.stringify(task.acceptanceCriteria ?? [task.objective])}\n本轮阶段任务：${JSON.stringify(task.stageTasks ?? [])}\n本轮完成结果：${JSON.stringify({ summary: result.summary, evidence: result.evidence, artifacts: result.artifacts, delivery: result.delivery })}\n\n这是 Host 发给主会话的内部完成验收，不得回复群聊、不得写入发信箱。判断本轮证据是否覆盖当前有效目标和全部验收标准，尤其是最近新增或修订的范围。历史目标已经完成不代表新增范围完成；结果明确承认某项目未完成、缺少证据或尚未验证时必须拒绝。只输出严格 JSON：通过 {"accepted":true,"reason":"..."}；拒绝 {"accepted":false,"reason":"具体缺口"}。` }],
+      source: { kind: 'coordinator' },
     }))
     await handle.agent.whenIdle()
     const reply = handle.agent.session.events.filter((event) => event.seq >= firstSeq && event.type === 'assistant/message')

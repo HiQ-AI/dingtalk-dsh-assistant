@@ -369,6 +369,8 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(checkpointReply.coordinatorDecision, 'guidance')
   assert.equal(checkpointReply.guidance, '补充异常路径回归后再提交完成结果')
   assert.equal(runtime.getTask(one.task.taskId).checkpoints[1].coordinatorDecision, 'guidance')
+  const checkpointReviewMessage = followups.find(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith('[TASK_CHECKPOINT_REVIEW]'))?.[1]
+  assert.equal(checkpointReviewMessage.source.kind, 'coordinator', '检查点验收必须作为内部上下文注入')
   await assert.rejects(checkpointTool.execute({ kind: 'stage-completed', stageTask: '不存在的阶段', summary: '错误阶段', completedItems: [], evidence: [], remainingItems: [], nextStep: '停止', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } }), /task_checkpoint_stage_invalid/)
   await assert.rejects(checkpointTool.execute({ kind: 'evidence-gap', summary: '证据不足', completedItems: [], evidence: [], remainingItems: [], nextStep: '补证', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } }), /task_checkpoint_progress_requires_stage_completed/)
   await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: '检查点未清空', evidence: ['verified'], artifacts: [] } }), /task_checkpoints_remaining/)
@@ -438,12 +440,17 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   }))
   Object.assign(groups.get('group-a').outbox[0], { status: 'sent', deliveredMessageId: 'ding-old-1' })
   await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified', 'uat2 页面回归通过'], artifacts: ['docs/acceptance/report.md'], delivery: { environment: 'UAT2', pipeline: 186 } } })
+  const completionReviewMessage = followups.find(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith('[TASK_COMPLETION_REVIEW]'))?.[1]
+  assert.equal(completionReviewMessage.source.kind, 'coordinator', '完成验收必须作为内部上下文注入')
+  assert.match(completionReviewMessage.content[0].text, /不得回复群聊、不得写入发信箱/u)
   assert.equal(groups.get('group-a').outbox[1].sourceMessageId, `task-result:${one.task.taskId}:completed`)
   assert.equal(groups.get('group-a').outbox[1].text, `coordinated:${one.task.taskId}`)
   assert.equal(groups.get('group-a').outbox[1].replyToMessageId, 'm1', '内部恢复来源不得覆盖最后一条真实群消息引用')
   assert.equal(groups.get('group-a').outbox[1].replyToSenderOpenDingTalkId, 'od-initial')
   assert.deepEqual(groups.get('group-a').outbox[1].atOpenDingTalkIds, ['od-initial'])
   const coordinationPrompt = followups.find(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith(`[TASK_COORDINATION]\nTask ID: ${one.task.taskId}\n`))?.[1].content[0].text
+  const coordinationMessage = followups.find(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith(`[TASK_COORDINATION]\nTask ID: ${one.task.taskId}\n`))?.[1]
+  assert.equal(coordinationMessage.source.kind, 'user', '对外通知生成路径保持现状')
   assert.match(coordinationPrompt, /"evidence":\["verified","uat2 页面回归通过"\]/u, '主会话必须收到完整证据而非只有摘要')
   assert.match(coordinationPrompt, /"artifacts":\["docs\/acceptance\/report\.md"\]/u, '主会话必须收到交付物')
   assert.match(coordinationPrompt, /"delivery":\{"environment":"UAT2","pipeline":186\}/u, '主会话必须收到部署与交付状态')
