@@ -261,14 +261,15 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /method: 'POST'/)
 })
 
-test('任务卡突出本轮用时并只展示非零耗时明细', async () => {
+test('任务卡突出本轮用时并隐藏不足一秒的耗时明细', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /get\('\/state\/task-timings'\)/)
   assert.match(source, /'本轮用时'/)
-  assert.match(source, /timing\.queuedMs > 0 \? `排队/)
-  assert.match(source, /timing\.waitingMs > 0 \? `等待/)
-  assert.match(source, /timing\.toolMs > 0 \? `工具/)
-  assert.match(source, /timing\.unclassifiedRunningMs > 0 \? `未细分/)
+  assert.match(source, /value >= 1000 \? `\$\{label\} \$\{fmtDuration\(value\)\}`/)
+  assert.match(source, /timingPart\('排队', timing\.queuedMs\)/)
+  assert.match(source, /timingPart\('等待', timing\.waitingMs\)/)
+  assert.match(source, /timingPart\('工具', timing\.toolMs\)/)
+  assert.match(source, /timingPart\('未细分', timing\.unclassifiedRunningMs\)/)
   assert.match(source, /未细分为运行状态中尚未按工具调用单独计量的时间/)
   assert.doesNotMatch(source, /其他运行/)
 })

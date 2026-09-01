@@ -50,11 +50,12 @@ window.__ModuleLoader__.load({
     const fmt = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
     const fmtTime = (value) => value ? new Date(value).toLocaleTimeString('zh-CN', { hour12: false }) : '—'
     const fmtDuration = (value) => { const seconds = Math.max(0, Math.floor(value / 1000)); if (seconds < 60) return `${seconds}秒`; const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes}分${seconds % 60}秒`; const hours = Math.floor(minutes / 60); return `${hours}小时${minutes % 60}分` }
+    const timingPart = (label, value) => value >= 1000 ? `${label} ${fmtDuration(value)}` : ''
     const timingBreakdown = (timing) => [
-      timing.queuedMs > 0 ? `排队 ${fmtDuration(timing.queuedMs)}` : '',
-      timing.waitingMs > 0 ? `等待 ${fmtDuration(timing.waitingMs)}` : '',
-      timing.toolMs > 0 ? `工具 ${fmtDuration(timing.toolMs)}` : '',
-      timing.unclassifiedRunningMs > 0 ? `未细分 ${fmtDuration(timing.unclassifiedRunningMs)}` : '',
+      timingPart('排队', timing.queuedMs),
+      timingPart('等待', timing.waitingMs),
+      timingPart('工具', timing.toolMs),
+      timingPart('未细分', timing.unclassifiedRunningMs),
     ].filter(Boolean).join(' · ')
     const checkpointDuration = (checkpoint, events, now) => { let startedAt; for (const event of events) { const submittedAt = Date.parse(event.submittedAt); const remainingItems = event.remainingItems || []; if (startedAt === undefined && remainingItems[0] === checkpoint && Number.isFinite(submittedAt)) startedAt = submittedAt; if (startedAt !== undefined && !remainingItems.includes(checkpoint) && Number.isFinite(submittedAt)) return fmtDuration(submittedAt - startedAt) } return startedAt === undefined ? '—' : fmtDuration(now - startedAt) }
     const short = (value) => value ? String(value).replace(/^session-/, '').slice(0, 14) : '—'
