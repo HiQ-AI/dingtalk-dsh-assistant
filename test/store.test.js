@@ -173,6 +173,42 @@ test('Task 当前轮耗时拆分状态时间和可配对工具时间', async () 
   assert.equal(timing.unclassifiedRunningMs, Math.max(0, timing.runningMs - timing.toolMs))
 })
 
+test('Task 完成结果事件晚于完成状态时仍按调用ID配对', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'group-a' })
+  await store.ingest({ groupId: 'group-a', messageId: 'm-terminal-timing', text: '统计终结调用', occurredAt: '2026-08-25T01:00:00Z', senderName: '张三', senderOpenDingTalkId: 'od-zhang' })
+  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-terminal-timing', title: '统计终结调用', objective: '统计终结调用耗时', acceptanceCriteria: ['终结调用可配对'] })
+  const running = await store.updateTask(created.task.taskId, (task) => ({ ...task, state: 'running' }))
+  const callAt = running.stateHistory.at(-1).at
+  await store.recordActivity({ taskId: created.task.taskId, sessionId: created.task.childSessionId, eventKey: 'terminal-call', type: 'tool/call', detail: { tool: 'submit_task_result', callId: 'call-terminal' }, occurredAt: callAt })
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  const completed = await store.updateTask(created.task.taskId, (task) => ({ ...task, state: 'completed' }))
+  const completedAt = completed.stateHistory.at(-1).at
+  await store.recordActivity({ taskId: created.task.taskId, sessionId: created.task.childSessionId, eventKey: 'terminal-result', type: 'tool/result', detail: { tool: 'submit_task_result', callId: 'call-terminal' }, occurredAt: new Date(Date.parse(completedAt) + 211).toISOString() })
+
+  const timing = store.listTaskTimings().find((item) => item.taskId === created.task.taskId)
+  assert.equal(timing.complete, true)
+  assert.deepEqual(timing.missing, [])
+  assert.equal(timing.toolMs, Date.parse(completedAt) - Date.parse(callAt))
+})
+
+test('Task 确实缺少工具结果时保持未配对标记', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'group-a' })
+  await store.ingest({ groupId: 'group-a', messageId: 'm-unpaired-timing', text: '统计缺失结果', occurredAt: '2026-08-25T01:00:00Z', senderName: '张三', senderOpenDingTalkId: 'od-zhang' })
+  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-unpaired-timing', title: '统计缺失结果', objective: '识别缺失的工具结果', acceptanceCriteria: ['缺失结果可识别'] })
+  const running = await store.updateTask(created.task.taskId, (task) => ({ ...task, state: 'running' }))
+  await store.recordActivity({ taskId: created.task.taskId, sessionId: created.task.childSessionId, eventKey: 'unpaired-call', type: 'tool/call', detail: { tool: 'job_output', callId: 'call-unpaired' }, occurredAt: running.stateHistory.at(-1).at })
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  await store.updateTask(created.task.taskId, (task) => ({ ...task, state: 'completed' }))
+
+  const timing = store.listTaskTimings().find((item) => item.taskId === created.task.taskId)
+  assert.equal(timing.complete, false)
+  assert.deepEqual(timing.missing, ['unpaired-tool-events'])
+})
+
 test('历史 Web Task 可从已持久化群消息恢复提出人并修正完成通知路由', async () => {
   const { facility } = memoryFacility()
   const store = await openResidentStore(facility)

@@ -136,13 +136,22 @@ function taskTiming(task, activities, now = Date.now()) {
   const calls = new Map()
   let toolMs = 0
   let toolIdentityMissing = false
-  for (const activity of activities.filter((item) => item.taskId === task.taskId && item.sessionId === task.childSessionId)) {
+  const runActivities = activities
+    .filter((item) => item.taskId === task.taskId && item.sessionId === task.childSessionId)
+    .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt))
+  for (const activity of runActivities) {
     const at = Date.parse(activity.occurredAt)
-    if (!Number.isFinite(at) || at < startedAt || at > endedAt) continue
+    if (!Number.isFinite(at) || at < startedAt) continue
     const callId = activity.detail?.callId
-    if ((activity.type === 'tool/call' || activity.type === 'tool/result') && !callId) toolIdentityMissing = true
-    if (activity.type === 'tool/call' && callId) calls.set(callId, at)
-    if (activity.type === 'tool/result' && callId && calls.has(callId)) { toolMs += Math.max(0, at - calls.get(callId)); calls.delete(callId) }
+    if (activity.type === 'tool/call') {
+      if (at > endedAt) continue
+      if (!callId) toolIdentityMissing = true
+      else calls.set(callId, at)
+    }
+    if (activity.type === 'tool/result') {
+      if (at <= endedAt && !callId) toolIdentityMissing = true
+      if (callId && calls.has(callId)) { toolMs += Math.max(0, Math.min(at, endedAt) - calls.get(callId)); calls.delete(callId) }
+    }
   }
   if (calls.size > 0 || toolIdentityMissing) complete = false
   return {
