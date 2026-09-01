@@ -35,10 +35,12 @@ Task 持久化状态变更时间线，记录 `queued/running/waiting/completed`�
 
 - `wallMs`：本轮开始到完成或当前时刻；
 - `queuedMs`、`runningMs`、`waitingMs`：按状态时间线积分；
-- `toolMs`：按同一 call ID 的 `tool/call` 与 `tool/result` 配对计算；
+- `toolMs`：按同一 call ID 的 `tool/call` 与 `tool/result` 配对计算；终结工具可能先把 Task 置为完成、再写入结果事件，因此允许已开始的调用由完成状态之后到达的结果闭合，但耗时只累计到 Task 完成边界；
 - `unclassifiedRunningMs`：`runningMs - toolMs`，包括模型思考、编辑、验证组织和其他不可单独测量时间。
 
 旧 Task 没有完整状态时间线或活动 call ID 时返回 `complete=false` 和缺失原因，展示层不得伪装成精确统计。
+
+任务卡不展示执行轮次耗时拆分，避免诊断信息挤占任务浏览空间。`/state/task-timings` 继续保留给诊断消费者；使用 `unclassifiedRunningMs` 时，应将它解释为运行状态中尚未按工具调用单独计量的时间，不能将它表述为模型持续工作时长。
 
 ## 验证
 
