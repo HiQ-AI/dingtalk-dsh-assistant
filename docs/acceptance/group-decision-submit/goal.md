@@ -10,7 +10,7 @@
 | SG2 Runtime pending/提交/幂等 | 已完成 | `round-1.md` |
 | SG3 模型提示词与假 LLM | 已完成 | `round-1.md` |
 | SG4 多形态回归与全量验证 | 已完成 | `matrix.csv`、`round-1.md` |
-| SG5 PR 与本地部署验证 | 进行中 | 本地部署见 `round-1.md`；PR 待读回 |
+| SG5 PR 与本地部署验证 | 已完成 | 本地部署见 `round-1.md`；PR #46 已回读为 OPEN |
 
 ## 重大决策
 
