@@ -188,9 +188,10 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       if (userIndex >= 0) {
         const step = events.slice(0, userIndex + 1).findLast((event) => event.type === 'step/start')
         const turn = step?.data?.turn
+        const stepNumber = step?.data?.step
         const ended = turn !== undefined && events.slice(userIndex + 1).some((event) => event.type === 'turn/end' && event.data?.turn === turn)
         if (ended) return events.slice(userIndex + 1)
-          .filter((event) => event.type === 'assistant/message' && event.data?.turn === turn)
+          .filter((event) => event.type === 'assistant/message' && event.data?.turn === turn && (stepNumber === undefined || event.data?.step === stepNumber))
           .map((event) => event.data.message.content.filter((block) => block.type === 'text').map((block) => block.text).join(''))
           .filter(Boolean)
           .at(-1) ?? ''

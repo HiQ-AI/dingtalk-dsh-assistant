@@ -66,13 +66,21 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
       const message = followups[deliveredFollowups]
       deliveredFollowups += 1
       const turn = deliveredFollowups
-      session.events.push(
+      const events = [
         { seq: session.seq++, type: 'turn/start', data: { turn } },
         { seq: session.seq++, type: 'step/start', data: { turn, step: 1 } },
         { seq: session.seq++, type: 'user/message', data: message },
         { seq: session.seq++, type: 'assistant/message', data: { turn, step: 1, message: { content: [{ type: 'text', text: JSON.stringify({ actions: [], reply: `已处理${deliveredFollowups}` }) }] } } },
-        { seq: session.seq++, type: 'turn/end', data: { turn, reason: { kind: 'completed' } } },
+        { seq: session.seq++, type: 'step/end', data: { turn, step: 1 } },
+      ]
+      if (deliveredFollowups === 1) events.push(
+        { seq: session.seq++, type: 'step/start', data: { turn, step: 2 } },
+        { seq: session.seq++, type: 'user/message', data: { id: 'later-steer', content: [{ type: 'text', text: '[GROUP_MESSAGE_STEER]\n后续消息' }], source: { kind: 'user' } } },
+        { seq: session.seq++, type: 'assistant/message', data: { turn, step: 2, message: { content: [{ type: 'text', text: '已更新上下文。' }] } } },
+        { seq: session.seq++, type: 'step/end', data: { turn, step: 2 } },
       )
+      events.push({ seq: session.seq++, type: 'turn/end', data: { turn, reason: { kind: 'completed' } } })
+      session.events.push(...events)
     },
   }
   const handle = { agent, dispose: async () => undefined }
@@ -105,8 +113,9 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
   assert.doesNotMatch(steered[0].content[0].text, /立即结合|不要在本步骤|Runtime 随后|失败消息重试/, '逐条 steer 只携带事实，不重复系统协议')
   assert.equal(followups.length, 1, '多条群消息可以进入同一 steer 批次，结构化收口仍应按群串行')
   releaseFirstIdle()
-  await Promise.all([first, second])
+  const [firstResult] = await Promise.all([first, second])
   assert.equal(followups.length, 2)
+  assert.equal(firstResult.decision.reply, '已处理1', 'Decision 必须绑定自身 step，不能被同 turn 后续 Steer 的普通文本覆盖')
   assert.deepEqual(group.messages.map((item) => item.agentDeliveryStatus), ['delivered', 'delivered'])
   await runtime.close()
 })
