@@ -268,6 +268,8 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   const groups = new Map([['group-a', { groupId: 'group-a', responsibility: 'coordinate', residentSessionId: 'session-parent', residentAgentPreset: 'standard-convergent', outbox: [] }]])
   const tasks = []
   const creates = [], createMetas = [], followups = [], steers = [], approvalResumeOrder = [], disposed = [], activities = [], alerts = [], goals = new Map(), agents = new Map(), leafTools = [], leafPromptSections = []
+  let blockCheckpointReview = false, checkpointReviewPending = false, releaseCheckpointReview, markCheckpointReviewStarted
+  let blockCompletionReview = false, completionReviewPending = false, releaseCompletionReview, markCompletionReviewStarted
   let sessionObserver
   const makeHandle = (sessionId) => {
     const session = { id: sessionId, events: [], seq: 0, meta: {}, append(type, data) { const event = { seq: session.seq++, type, data }; session.events.push(event); return event } }
@@ -275,10 +277,14 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
       const text = message.content[0]?.text ?? ''
       if (text.startsWith('[HUMAN_INTERVENTION_REPLY]')) approvalResumeOrder.push('批复入队')
       if (sessionId === 'session-parent' && text.startsWith('[TASK_COMPLETION_REVIEW]')) {
+        completionReviewPending = blockCompletionReview
+        markCompletionReviewStarted?.()
         const accepted = !text.includes('旧结论')
         session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ accepted, reason: accepted ? '当前目标均有证据覆盖' : '新增点击跳转目标没有实现和验证证据' }) }] } } })
       }
       if (sessionId === 'session-parent' && text.startsWith('[TASK_CHECKPOINT_REVIEW]')) {
+        checkpointReviewPending = blockCheckpointReview
+        markCheckpointReviewStarted?.()
         session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ decision: 'guidance', reason: '还缺少异常路径证据', guidance: '补充异常路径回归后再提交完成结果' }) }] } } })
       }
       if (sessionId === 'session-parent' && text.startsWith('[TASK_COORDINATION]')) {
@@ -289,7 +295,16 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
       session, status: 'idle',
       followup(message) { followups.push([sessionId, message]); recordMessage(message) },
       steer(message) { steers.push([sessionId, message]); recordMessage(message) },
-      whenIdle: async () => undefined,
+      async whenIdle() {
+        if (sessionId === 'session-parent' && checkpointReviewPending) {
+          await new Promise((resolve) => { releaseCheckpointReview = resolve })
+          checkpointReviewPending = false
+        }
+        if (sessionId === 'session-parent' && completionReviewPending) {
+          await new Promise((resolve) => { releaseCompletionReview = resolve })
+          completionReviewPending = false
+        }
+      },
     }
     return { agent, dispose: async () => { disposed.push(sessionId); if (agents.get(sessionId) === agent) agents.delete(sessionId) } }
   }
@@ -340,6 +355,17 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
 
   assert.deepEqual([one.task.state, two.task.state, three.task.state], ['running', 'running', 'queued'])
   assert.deepEqual(creates, ['session-task-1', 'session-task-2'])
+  const secondCheckpointTool = leafTools.find(([sessionId, tool]) => sessionId === two.task.childSessionId && tool.name === 'submit_task_checkpoint')?.[1]
+  blockCheckpointReview = true
+  const checkpointReviewStarted = new Promise((resolve) => { markCheckpointReviewStarted = resolve })
+  const pendingCheckpoint = secondCheckpointTool.execute({ kind: 'plan-confirmed', summary: '并发检查计划', completedItems: [], evidence: ['已读取目标'], remainingItems: ['检查一', '检查二'], nextStep: '检查一', needsCoordinatorDecision: false }, { agent: { session: { id: two.task.childSessionId } } })
+  await checkpointReviewStarted
+  const concurrentUpdate = runtime.appendTaskContext({ taskId: one.task.taskId, context: '评审期间补充另一个 Task 的上下文' })
+  assert.equal(await Promise.race([concurrentUpdate.then(() => 'updated'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 50))]), 'updated', '主会话评审不得持有全局 Task 串行锁并阻塞其他 Task')
+  releaseCheckpointReview()
+  await pendingCheckpoint
+  blockCheckpointReview = false
+  markCheckpointReviewStarted = undefined
   assert.deepEqual(createMetas[0], { cwd: agentWorkspace, parentSession: 'session-parent', origin: 'subagent', delegationDepth: 1 })
   const leafPolicyPrompt = leafPromptSections.find(([sessionId, section]) => sessionId === one.task.childSessionId && section.name === 'group-task-blocking-policy')?.[1].text()
   assert.match(leafPolicyPrompt, /命中任何适用 Skill 时，必须加载并遵循其完整说明/u)
@@ -439,7 +465,16 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     triggerHistory: [...current.triggerHistory, { sourceMessageId: 'recovery:completion-review-gate', requesterName: '内部恢复操作人' }],
   }))
   Object.assign(groups.get('group-a').outbox[0], { status: 'sent', deliveredMessageId: 'ding-old-1' })
-  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified', 'uat2 页面回归通过'], artifacts: ['docs/acceptance/report.md'], delivery: { environment: 'UAT2', pipeline: 186 } } })
+  blockCompletionReview = true
+  const completionReviewStarted = new Promise((resolve) => { markCompletionReviewStarted = resolve })
+  const pendingCompletion = runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified', 'uat2 页面回归通过'], artifacts: ['docs/acceptance/report.md'], delivery: { environment: 'UAT2', pipeline: 186 } } })
+  await completionReviewStarted
+  const concurrentRename = runtime.renameTask({ taskId: three.task.taskId, title: '评审期间更新另一个 Task' })
+  assert.equal(await Promise.race([concurrentRename.then(() => 'updated'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 50))]), 'updated', '完成结果评审不得持有全局 Task 串行锁并阻塞其他 Task')
+  releaseCompletionReview()
+  await pendingCompletion
+  blockCompletionReview = false
+  markCompletionReviewStarted = undefined
   const completionReviewMessage = followups.find(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith('[TASK_COMPLETION_REVIEW]'))?.[1]
   assert.equal(completionReviewMessage.source.kind, 'coordinator', '完成验收必须作为内部上下文注入')
   assert.match(completionReviewMessage.content[0].text, /不得回复群聊、不得写入发信箱/u)
