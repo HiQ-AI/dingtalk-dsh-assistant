@@ -9,4 +9,4 @@ GD-07,普通文本和turn结束不能冒充Decision,PASS,PASS
 GD-08,未提交请求明确失败并记录状态,PASS,PASS
 GD-09,现有任务动作与回复路径回归,PASS,PASS
 GD-10,全量测试与打包通过,PASS,PASS
-GD-11,本地安装源码绑定与运行健康,PENDING,PENDING
+GD-11,本地安装源码绑定与运行健康,PASS,PASS

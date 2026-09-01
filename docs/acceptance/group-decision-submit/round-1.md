@@ -2,7 +2,7 @@
 
 ## 结果
 
-GD-01 至 GD-10 全部通过；本地安装与运行健康留到 GD-11 单独回读。
+GD-01 至 GD-11 全部通过。
 
 ## 协议与并发用例
 
@@ -24,6 +24,16 @@ GD-01 至 GD-10 全部通过；本地安装与运行健康留到 GD-11 单独回
   - `zzusp-dingtalk-dsh-observer-0.5.10.tgz`：14693 bytes。
 - `git diff --check`：通过。
 
-## 尚未覆盖
+## 本地部署与运行态
 
-- GD-11 尚未执行；本轮不声称本地 DSH Web 已运行本分支代码。
+- 将 `@zzusp/dingtalk-dsh-assistant` profile 依赖切换到 `docs/tmp/deploy-assistant-58d9af3/zzusp-dingtalk-dsh-assistant-0.5.10.tgz` 并强制重装。
+- 独立计算源码与安装目录 `runtime.js` 的 SHA-256，均为 `5C3F7CF577041E6780DBE05B66274A89521E339A9B08A13E89AA93E0F5AF9E85`。
+- 安装目录回读到 `group_decision_submit` 注册和 `await pending.promise` step 提交路径。
+- `DSH Web Local` 计划任务为 `Running`；只有一个 DSH Web 主进程，3080 与 18998 均由同一 PID 监听。
+- Web 返回 HTTP 200；Runtime health 返回 `status=ok`、`transport=dws`、`inboundProcessing=true`、`outboundAuthorized=true`、`modelMode=real`、`recoveryIssueCount=0`。
+- `/state/version` 返回当前版本 `0.5.10`，`/state/groups` 返回 HTTP 200 且可读取 1 个群状态。
+
+## 边界
+
+- 未向真实钉钉群注入测试消息，避免产生群通知、Task 或外部副作用；多消息组合与副作用行为由隔离 Runtime 用例覆盖。
+- 版本号仍为 `0.5.10`，因此运行源码绑定以 tgz 路径、安装文件哈希和代码标记为证据，不以版本号单独推断。
