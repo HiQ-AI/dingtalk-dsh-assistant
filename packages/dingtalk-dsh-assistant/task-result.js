@@ -1,18 +1,5 @@
 import { z } from 'zod'
 
-const learningSignalSchema = z.object({
-  type: z.enum(['correction', 'feature-request', 'knowledge-gap', 'error']),
-  observation: z.string().trim().min(1),
-  resolution: z.string().trim().min(1),
-  reusableLesson: z.string().trim().min(1),
-  scope: z.string().trim().min(1),
-  evidence: z.array(z.string().trim().min(1)).min(1),
-}).strict()
-
-const internalResultSchema = z.object({
-  learningSignals: z.array(learningSignalSchema),
-}).strict()
-
 const completedResultSchema = z.object({
   status: z.literal('completed'),
   workType: z.enum(['development', 'non-development']).optional(),
@@ -20,7 +7,6 @@ const completedResultSchema = z.object({
   evidence: z.array(z.string().trim().min(1)).min(1),
   artifacts: z.array(z.string().trim().min(1)).default([]),
   delivery: z.record(z.string(), z.unknown()).optional(),
-  internal: internalResultSchema.optional(),
 }).strict()
 
 const informationWaitingResultSchema = z.object({
