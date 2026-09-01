@@ -452,6 +452,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     const checkpoints = task.checkpoints ?? []
     if (checkpoints[0]?.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
     if (checkpoints.length < 2) throw new Error(`task_checkpoints_insufficient:${taskId}`)
+    if ((checkpoints.at(-1)?.remainingItems?.length ?? 0) > 0) throw new Error(`task_checkpoints_remaining:${taskId}`)
     const review = await withoutInitiator(() => reviewCompletedTaskResult(task, result))
     if (!review.accepted) {
       await followupTaskInternal(task, `[TASK_RESULT_REJECTED]\n当前完成结果未通过最新目标验收：${review.reason}\n\n继续执行当前有效目标，补齐缺失实现与证据后再提交 completed。不得重复提交上一轮结论。`)
@@ -475,6 +476,14 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     if ((task.checkpoints?.length ?? 0) === 0 && checkpoint.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
     if (checkpoint.kind === 'plan-confirmed' && checkpoint.remainingItems.length < 2) throw new Error(`task_checkpoint_plan_insufficient:${taskId}`)
     if (checkpoint.kind === 'stage-completed' && (!checkpoint.stageTask || !(task.stageTasks ?? []).includes(checkpoint.stageTask))) throw new Error(`task_checkpoint_stage_invalid:${taskId}`)
+    const previousRemainingItems = task.checkpoints?.at(-1)?.remainingItems ?? []
+    if (checkpoint.kind === 'stage-completed') {
+      const completesCurrentItem = checkpoint.completedItems.length === 1 && checkpoint.completedItems[0] === previousRemainingItems[0]
+      const keepsRemainingOrder = checkpoint.remainingItems.length === Math.max(0, previousRemainingItems.length - 1) && checkpoint.remainingItems.every((item, index) => item === previousRemainingItems[index + 1])
+      if (!completesCurrentItem || !keepsRemainingOrder) throw new Error(`task_checkpoint_must_advance_one:${taskId}:${previousRemainingItems[0] ?? 'none'}`)
+    } else if (checkpoint.kind !== 'plan-confirmed' && (checkpoint.remainingItems.length !== previousRemainingItems.length || checkpoint.remainingItems.some((item, index) => item !== previousRemainingItems[index]))) {
+      throw new Error(`task_checkpoint_progress_requires_stage_completed:${taskId}`)
+    }
     const submitted = { ...checkpoint, checkpointId: `checkpoint-${randomUUID()}`, submittedAt: new Date().toISOString() }
     await store.updateTask(taskId, (current) => ({ ...current, checkpoints: [...(current.checkpoints ?? []), submitted], updatedAt: new Date().toISOString() }))
     const review = await withoutInitiator(() => reviewTaskCheckpoint(store.getTask(taskId), checkpoint))
@@ -576,7 +585,7 @@ Task objective 限制的是业务动作范围，包括业务代码、业务数�
 
 ### 与主会话的内部检查点
 
-开始执行后必须先把当前目标拆成至少 2 个可核验检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed；remainingItems 逐项写入这些检查点。收到 TASK_OBJECTIVE_REVISED 后，必须根据修订后的完整目标重新提交 plan-confirmed，新的 remainingItems 是当前执行轮次的最新有效检查点清单。后续每完成一个有验收意义的检查点、发现目标或范围冲突、证据缺口会影响验收、风险发生实质变化时继续提交 checkpoint。完成任务前至少应有 plan-confirmed 和一个后续事实检查点，不能从计划直接跳到 completed。提交 stage-completed 时，stageTask 必须逐字填写当前执行轮次阶段任务中的对应项，供 Host 计算业务进度。不要按时间周期汇报，不要提交普通命令进度、工具日志、等待流水线、重试或无新事实的状态。checkpoint 只用于内部协调，不会发送到群聊，也不代替 submit_task_result。主会话返回 guidance 时必须据此调整；若 guidance 与 Task objective 的授权边界冲突，提交 scope-conflict checkpoint，不得自行扩大授权。
+开始执行后必须先把当前目标拆成至少 2 个可核验检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed；remainingItems 逐项写入这些检查点。收到 TASK_OBJECTIVE_REVISED 后，必须根据修订后的完整目标重新提交 plan-confirmed，新的 remainingItems 是当前执行轮次的最新有效检查点清单。后续每完成一个有验收意义的检查点时单独提交一次 stage-completed：completedItems 必须且只能填写当前 remainingItems 的第一项，新 remainingItems 必须仅移除该第一项，不得一次批量完成多项。发现目标或范围冲突、证据缺口会影响验收、风险发生实质变化时继续提交对应 checkpoint，但不得在非 stage-completed 事件中改变 remainingItems。完成任务前必须逐项提交至 remainingItems 为空，不能从计划或未完成的检查点直接跳到 completed。提交 stage-completed 时，stageTask 必须逐字填写当前执行轮次阶段任务中的对应项，供 Host 计算业务进度。不要按时间周期汇报，不要提交普通命令进度、工具日志、等待流水线、重试或无新事实的状态。checkpoint 只用于内部协调，不会发送到群聊，也不代替 submit_task_result。主会话返回 guidance 时必须据此调整；若 guidance 与 Task objective 的授权边界冲突，提交 scope-conflict checkpoint，不得自行扩大授权。
 
 ### 任务授权边界
 
