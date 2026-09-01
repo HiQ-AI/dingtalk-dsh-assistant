@@ -73,12 +73,15 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
         { seq: session.seq++, type: 'assistant/message', data: { turn, step: 1, message: { content: [{ type: 'text', text: JSON.stringify({ actions: [], reply: `已处理${deliveredFollowups}` }) }] } } },
         { seq: session.seq++, type: 'step/end', data: { turn, step: 1 } },
       ]
-      if (deliveredFollowups === 1) events.push(
+      if (deliveredFollowups <= 2) events.push(
         { seq: session.seq++, type: 'step/start', data: { turn, step: 2 } },
-        { seq: session.seq++, type: 'user/message', data: { id: 'later-steer', content: [{ type: 'text', text: '[GROUP_MESSAGE_STEER]\n后续消息' }], source: { kind: 'user' } } },
+        { seq: session.seq++, type: 'user/message', data: { id: `later-steer-${deliveredFollowups}`, content: [{ type: 'text', text: `[GROUP_MESSAGE_STEER]\n后续消息${deliveredFollowups}` }], source: { kind: 'user' } } },
         { seq: session.seq++, type: 'assistant/message', data: { turn, step: 2, message: { content: [{ type: 'text', text: '已更新上下文。' }] } } },
         { seq: session.seq++, type: 'step/end', data: { turn, step: 2 } },
       )
+      if (message.content[0].text.startsWith('[GROUP_DECISION_FINALIZE]')) {
+        events[3].data.message.content[0].text = JSON.stringify({ actions: [], reply: '已结合当前完整上下文处理' })
+      }
       events.push({ seq: session.seq++, type: 'turn/end', data: { turn, reason: { kind: 'completed' } } })
       session.events.push(...events)
     },
@@ -114,8 +117,11 @@ test('同群新消息立即进入Inbox并在前一条决策未完成时插话', 
   assert.equal(followups.length, 1, '多条群消息可以进入同一 steer 批次，结构化收口仍应按群串行')
   releaseFirstIdle()
   const [firstResult] = await Promise.all([first, second])
-  assert.equal(followups.length, 2)
-  assert.equal(firstResult.decision.reply, '已处理1', 'Decision 必须绑定自身 step，不能被同 turn 后续 Steer 的普通文本覆盖')
+  assert.equal(followups.length, 4)
+  assert.match(followups[1].content[0].text, /^\[GROUP_DECISION_FINALIZE\]/u, 'Decision 被 Steer 打断后必须交给模型基于完整上下文重新收口')
+  assert.match(followups[2].content[0].text, /^\[GROUP_DECISION_FINALIZE\]/u, '连续多个 Steer 打断时必须持续基于最新完整上下文收口')
+  assert.doesNotMatch(followups[1].content[0].text, /上一条消息|相关消息ID|固定窗口/u, 'Runtime 不得用代码限制模型处理消息的数量或关系')
+  assert.equal(firstResult.decision.reply, '已结合当前完整上下文处理')
   assert.deepEqual(group.messages.map((item) => item.agentDeliveryStatus), ['delivered', 'delivered'])
   await runtime.close()
 })
