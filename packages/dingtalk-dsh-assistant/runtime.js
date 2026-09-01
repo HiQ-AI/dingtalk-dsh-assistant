@@ -470,28 +470,35 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
   }
   async function submitTaskCheckpointInternal(taskId, value) {
     const checkpoint = parseTaskCheckpoint(value)
-    const task = store.getTask(taskId)
-    if (task === undefined || task.state !== 'running') throw new Error(`task_not_running:${taskId}`)
-    if (!leafHandles.has(taskId)) throw new Error(`task_leaf_not_active:${taskId}`)
-    if ((task.checkpoints?.length ?? 0) === 0 && checkpoint.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
-    if (checkpoint.kind === 'plan-confirmed' && checkpoint.remainingItems.length < 2) throw new Error(`task_checkpoint_plan_insufficient:${taskId}`)
-    if (checkpoint.kind === 'stage-completed' && (!checkpoint.stageTask || !(task.stageTasks ?? []).includes(checkpoint.stageTask))) throw new Error(`task_checkpoint_stage_invalid:${taskId}`)
-    const previousRemainingItems = task.checkpoints?.at(-1)?.remainingItems ?? []
-    if (checkpoint.kind === 'stage-completed') {
-      const completesCurrentItem = checkpoint.completedItems.length === 1 && checkpoint.completedItems[0] === previousRemainingItems[0]
-      const keepsRemainingOrder = checkpoint.remainingItems.length === Math.max(0, previousRemainingItems.length - 1) && checkpoint.remainingItems.every((item, index) => item === previousRemainingItems[index + 1])
-      if (!completesCurrentItem || !keepsRemainingOrder) throw new Error(`task_checkpoint_must_advance_one:${taskId}:${previousRemainingItems[0] ?? 'none'}`)
-    } else if (checkpoint.kind !== 'plan-confirmed' && (checkpoint.remainingItems.length !== previousRemainingItems.length || checkpoint.remainingItems.some((item, index) => item !== previousRemainingItems[index]))) {
-      throw new Error(`task_checkpoint_progress_requires_stage_completed:${taskId}`)
-    }
-    const submitted = { ...checkpoint, checkpointId: `checkpoint-${randomUUID()}`, submittedAt: new Date().toISOString() }
-    await store.updateTask(taskId, (current) => ({ ...current, checkpoints: [...(current.checkpoints ?? []), submitted], updatedAt: new Date().toISOString() }))
-    const review = await withoutInitiator(() => reviewTaskCheckpoint(store.getTask(taskId), checkpoint))
-    await store.updateTask(taskId, (current) => ({
-      ...current,
-      checkpoints: (current.checkpoints ?? []).map((item) => item.checkpointId === submitted.checkpointId ? { ...item, coordinatorDecision: review.decision, coordinatorReason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}), reviewedAt: new Date().toISOString() } : item),
-      updatedAt: new Date().toISOString(),
-    }))
+    const { submitted, reviewTask } = await serializeTasks(async () => {
+      const task = store.getTask(taskId)
+      if (task === undefined || task.state !== 'running') throw new Error(`task_not_running:${taskId}`)
+      if (!leafHandles.has(taskId)) throw new Error(`task_leaf_not_active:${taskId}`)
+      if ((task.checkpoints?.length ?? 0) === 0 && checkpoint.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
+      if (checkpoint.kind === 'plan-confirmed' && checkpoint.remainingItems.length < 2) throw new Error(`task_checkpoint_plan_insufficient:${taskId}`)
+      if (checkpoint.kind === 'stage-completed' && (!checkpoint.stageTask || !(task.stageTasks ?? []).includes(checkpoint.stageTask))) throw new Error(`task_checkpoint_stage_invalid:${taskId}`)
+      const previousRemainingItems = task.checkpoints?.at(-1)?.remainingItems ?? []
+      if (checkpoint.kind === 'stage-completed') {
+        const completesCurrentItem = checkpoint.completedItems.length === 1 && checkpoint.completedItems[0] === previousRemainingItems[0]
+        const keepsRemainingOrder = checkpoint.remainingItems.length === Math.max(0, previousRemainingItems.length - 1) && checkpoint.remainingItems.every((item, index) => item === previousRemainingItems[index + 1])
+        if (!completesCurrentItem || !keepsRemainingOrder) throw new Error(`task_checkpoint_must_advance_one:${taskId}:${previousRemainingItems[0] ?? 'none'}`)
+      } else if (checkpoint.kind !== 'plan-confirmed' && (checkpoint.remainingItems.length !== previousRemainingItems.length || checkpoint.remainingItems.some((item, index) => item !== previousRemainingItems[index]))) {
+        throw new Error(`task_checkpoint_progress_requires_stage_completed:${taskId}`)
+      }
+      const submitted = { ...checkpoint, checkpointId: `checkpoint-${randomUUID()}`, submittedAt: new Date().toISOString() }
+      const reviewTask = await store.updateTask(taskId, (current) => ({ ...current, checkpoints: [...(current.checkpoints ?? []), submitted], updatedAt: new Date().toISOString() }))
+      return { submitted, reviewTask }
+    })
+    const review = await withoutInitiator(() => reviewTaskCheckpoint(reviewTask, checkpoint))
+    await serializeTasks(async () => {
+      const current = store.getTask(taskId)
+      if (current?.runSequence !== reviewTask.runSequence) throw new Error(`task_checkpoint_run_changed:${taskId}`)
+      await store.updateTask(taskId, (task) => ({
+        ...task,
+        checkpoints: (task.checkpoints ?? []).map((item) => item.checkpointId === submitted.checkpointId ? { ...item, coordinatorDecision: review.decision, coordinatorReason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}), reviewedAt: new Date().toISOString() } : item),
+        updatedAt: new Date().toISOString(),
+      }))
+    })
     return { accepted: true, taskId, checkpointId: submitted.checkpointId, coordinatorDecision: review.decision, reason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}) }
   }
   const listAuthorizationRequests = () => store.listTasks().flatMap((task) => {
@@ -643,7 +650,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         },
         execute: async (args, exec) => {
           if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_checkpoint_wrong_session:${task.taskId}`)
-          return serializeTasks(() => submitTaskCheckpointInternal(task.taskId, args))
+          return submitTaskCheckpointInternal(task.taskId, args)
         },
       })
       agentCtx.tools.register({
