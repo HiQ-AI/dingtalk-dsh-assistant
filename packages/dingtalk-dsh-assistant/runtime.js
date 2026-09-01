@@ -180,20 +180,36 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     .filter((text) => text !== '')
     .at(-1) ?? ''
   const coordinatorReply = async (agent, message) => {
-    agent.followup(message)
+    let sentMessageId
     for (;;) {
+      if (sentMessageId !== message.id) {
+        agent.followup(message)
+        sentMessageId = message.id
+      }
       await agent.whenIdle()
       const events = agent.session.events
       const userIndex = events.findIndex((event) => event.type === 'user/message' && event.data?.id === message.id)
       if (userIndex >= 0) {
         const step = events.slice(0, userIndex + 1).findLast((event) => event.type === 'step/start')
         const turn = step?.data?.turn
-        const ended = turn !== undefined && events.slice(userIndex + 1).some((event) => event.type === 'turn/end' && event.data?.turn === turn)
-        if (ended) return events.slice(userIndex + 1)
+        const turnEndOffset = turn === undefined ? -1 : events.slice(userIndex + 1).findIndex((event) => event.type === 'turn/end' && event.data?.turn === turn)
+        if (turnEndOffset >= 0) {
+          const turnEvents = events.slice(userIndex + 1, userIndex + 1 + turnEndOffset)
+          const interleavedSteer = turnEvents.some((event) => event.type === 'user/message'
+            && event.data.content?.some((block) => block.type === 'text' && block.text.startsWith('[GROUP_MESSAGE_STEER]')))
+          if (interleavedSteer) {
+            message = createUserMessage({
+              content: [{ type: 'text', text: '[GROUP_DECISION_FINALIZE]\n在你处理上一项 [GROUP_DECISION] 请求期间，又有群消息通过 [GROUP_MESSAGE_STEER] 进入上下文。请基于当前完整群聊上下文重新完成该 [GROUP_DECISION]；由你自行判断多条消息之间相关、部分相关或无关，并决定是否更新此前候选。只输出原 [GROUP_DECISION] 契约要求的严格 JSON，不要解释。' }],
+              source: { kind: 'coordinator' },
+            })
+            continue
+          }
+          return turnEvents
           .filter((event) => event.type === 'assistant/message' && event.data?.turn === turn)
           .map((event) => event.data.message.content.filter((block) => block.type === 'text').map((block) => block.text).join(''))
           .filter(Boolean)
           .at(-1) ?? ''
+        }
       }
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
