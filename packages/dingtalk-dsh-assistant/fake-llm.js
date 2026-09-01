@@ -2,7 +2,7 @@ import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 
 class FakeResidentAdapter extends LlmAdapter {
   async * stream(options) {
-    const lastUser = options.messages.findLast((message) => message.role === 'user' && message.source.kind === 'user')
+    const lastUser = options.messages.findLast((message) => message.role === 'user' && (message.source.kind === 'user' || message.source.kind === 'coordinator'))
     const input = lastUser?.content.filter((block) => block.type === 'text').map((block) => block.text).join('') ?? ''
     const hasToolResultAfterInput = options.messages.slice(options.messages.lastIndexOf(lastUser) + 1)
       .some((message) => message.content.some((block) => block.type === 'tool-result'))
@@ -16,22 +16,27 @@ class FakeResidentAdapter extends LlmAdapter {
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
       return
     }
-    if (input.startsWith('[GROUP_DECISION]')) {
-      const message = input.match(/^Message: (.*)$/m)?.[1] ?? ''
-      const activeTasks = JSON.parse(input.match(/^Active tasks: (.*)$/m)?.[1] ?? '[]')
+    if ((input.startsWith('[GROUP_MESSAGE_STEER]') || input.startsWith('[GROUP_DECISION_RECHECK]')) && !hasToolResultAfterInput) {
+      const requestId = input.match(/^判断请求 ID：([^\r\n]+)$/mu)?.[1]
+      const message = input.match(/^内容：(.*)$/mu)?.[1] ?? ''
+      const activeTasksText = options.system?.match(/## 本群全部任务关联索引\n\n([^\n]+)/u)?.[1]
+      const activeTasks = activeTasksText?.startsWith('[') ? JSON.parse(activeTasksText) : []
       let decision
       if (message.startsWith('忽略：')) decision = { actions: [], reason: message.slice(3) || 'not addressed' }
       else if (message.startsWith('任务：')) decision = { actions: [{ kind: 'new-task', title: message.slice(3), objective: message.slice(3), acceptanceCriteria: ['任务目标已完成并有可核验证据'] }], reply: '已识别为正式任务。' }
       else if (message.startsWith('补充：')) {
         const task = activeTasks[0]
-        decision = task === undefined ? { actions: [], reply: '没有可补充的进行中任务。' } : { actions: [{ kind: 'task-context', taskId: task.taskId, context: message.slice(3) }], reply: '已补充到现有任务。' }
-      } else decision = { actions: [], reply: `fake-answer:${message}` }
-      const text = JSON.stringify(decision)
-      yield { type: 'block-start', index: 0, blockType: 'text' }
-      yield { type: 'text-delta', index: 0, text }
-      yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+        decision = task === undefined ? { actions: [], reply: '没有可补充的任务。' } : { actions: [{ kind: 'task-context', taskId: task.taskId, context: message.slice(3) }], reply: '已补充到现有任务。' }
+      }
+      else decision = { actions: [], reply: `fake-answer:${message}` }
+      if (requestId === undefined) throw new Error('fake_group_decision_request_id_missing')
+      const id = `fake-decision-${Date.now()}`
+      const args = JSON.stringify({ submissions: [{ requestIds: [requestId], decision }] })
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+      yield { type: 'tool-call-delta', index: 0, id, name: 'group_decision_submit', argumentsDelta: args }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'group_decision_submit', arguments: args } }
       yield { type: 'usage', usage: { inputTokens: 1, outputTokens: 1 } }
-      yield { type: 'finish', reason: { kind: 'stop' } }
+      yield { type: 'finish', reason: { kind: 'tool-calls' } }
       return
     }
     const text = `fake-main-reply:${input}`

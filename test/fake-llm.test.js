@@ -15,3 +15,18 @@ test('fake adapter 产出完整 dsh 流式 chunk 协议', async () => {
   assert.equal(chunks[1].text, 'fake-main-reply:hello')
   assert.deepEqual(chunks.at(-1).reason, { kind: 'stop' })
 })
+
+test('fake adapter 对群消息使用step Decision工具而不是assistant JSON文本', async () => {
+  let adapter
+  const ctx = { llm: { registerAdapter(_providers, value) { adapter = value } } }
+  installFakeLlm(ctx)
+  const request = createUserMessage({ content: [{ type: 'text', text: '[GROUP_MESSAGE_STEER]\n判断请求 ID：request-1\n消息唯一标识：m1\n内容：任务：核验提交协议' }], source: { kind: 'user' } })
+  const chunks = []
+  for await (const chunk of adapter.stream({ messages: [request] })) chunks.push(chunk)
+  assert.deepEqual(chunks.map((chunk) => chunk.type), ['block-start', 'tool-call-delta', 'block-end', 'usage', 'finish'])
+  assert.equal(chunks[1].name, 'group_decision_submit')
+  const args = JSON.parse(chunks[1].argumentsDelta)
+  assert.deepEqual(args.submissions[0].requestIds, ['request-1'])
+  assert.equal(args.submissions[0].decision.actions[0].kind, 'new-task')
+  assert.deepEqual(chunks.at(-1).reason, { kind: 'tool-calls' })
+})

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, parseGroupDecision, shouldRecheckTaskAssociation } from './decision.js'
+import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, groupDecisionJsonSchema, shouldRecheckTaskAssociation, validateGroupDecision } from './decision.js'
 import { parseTaskCheckpoint, parseTaskResult } from './task-result.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
@@ -54,7 +54,7 @@ const activityDetail = (event) => {
 }
 
 export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000 } = {}) {
-  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), inflightMessages = new Map()
+  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), inflightMessages = new Map(), pendingGroupDecisions = new Map()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
@@ -105,6 +105,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     installSelection(agentCtx)
     agentCtx.tools.restrict({ deny: ['get_goal', 'create_goal', 'update_goal'] })
     agentCtx.systemPrompt.section({ name: 'tool:goal', order: 114, text: '' })
+    registerResidentDecisionTool(agentCtx, groupId)
     registerResidentTaskTools(agentCtx, groupId)
     agentCtx.systemPrompt.section({
       name: 'dingtalk-group-responsibility', order: 40,
@@ -125,7 +126,9 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       name: 'dingtalk-group-decision-protocol', order: 41,
       text: () => `## 群消息决策协议
 
-收到以 \`[GROUP_DECISION]\` 开头的群消息信封时，只输出一个严格 JSON 对象：仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略使用 \`{"actions":[],"reason":"..."}\`，涉及任务时使用 \`{"actions":[...],"reply":"最多一条群回复，可为空"}\`。一个 JSON 可以同时对应多个 Task，\`actions\` 中每项可为 task-proposal、new-task、task-context 或 task-reopen；不得为了只返回一个动作而遗漏其他相关 Task。群回复统一放在顶层 \`reply\`，不得给每个动作分别回复。
+收到以 \`[GROUP_MESSAGE_STEER]\` 开头的群消息信封或 \`[GROUP_DECISION_RECHECK]\` 复核请求时，必须通过 \`group_decision_submit\` 提交结构化判断，不得用 assistant 文本输出 JSON。每个信封携带一个判断请求 ID；处理完成一个或多个请求后即可调用工具，不需要等待 turn 结束。你可以在一次工具调用中提交多个 submission，也可以让一个 submission 覆盖多个 requestIds。由你结合完整上下文判断消息相关、部分相关或无关：共享一个业务判断的请求放在同一 submission，独立事项分别提交；Runtime 不替你按顺序、关键词或固定窗口分组。每个 pending request ID 必须且只能成功提交一次。\`[GROUP_DECISION_RECHECK]\` 是已有判断的内部复核，只提交它自己的请求 ID，不与新群消息请求合并。
+
+Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"actions":[],"reason":"原因"}\`，涉及任务时使用 \`{"actions":[...],"reply":"最多一条群回复，可为空"}\`。Decision 顶层不允许 kind 字段。一个 Decision 可以同时对应多个 Task，\`actions\` 中每项可为 task-proposal、new-task、task-context 或 task-reopen；不得为了只返回一个动作而遗漏其他相关 Task。群回复统一放在顶层 \`reply\`，不得给每个动作分别回复。
 
 每次收到新消息时，检查其内容是否与当前 Session 上下文中的近期回复冲突；如有冲突，及时撤回本主会话发送的错误消息并订正。不得撤回真人或其他系统消息。
 
@@ -159,7 +162,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 
 发送前必须执行回复节制门禁：确认回复只表达“已收到并会继续处理”这一必要状态，使用一句短句，不得重复对方提供的信息；结果、阻塞、提问或订正回复只保留同事必须知道的新事实、必须回答的问题或明确行动。
 
-上述 JSON 协议仅用于 \`[GROUP_DECISION]\` 群消息信封，此时不得调用任务工具。用户在 Web 主会话中直接要求创建、续接或查询任务时，使用本会话提供的 DSH 原生任务工具；主会话只负责沟通协调，实际执行由 Runtime 创建的独立叶子会话完成。`,
+上述提交协议仅用于 \`[GROUP_MESSAGE_STEER]\` 群消息信封，此时除 \`group_decision_submit\` 外不得调用任务工具。用户在 Web 主会话中直接要求创建、续接或查询任务时，使用本会话提供的 DSH 原生任务工具；主会话只负责沟通协调，实际执行由 Runtime 创建的独立叶子会话完成。`,
     })
   }
   const serialize = (key, operation) => {
@@ -174,49 +177,75 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     taskTail = current.catch(() => undefined)
     return current
   }
-  const latestAssistantTextSince = (agent, seq) => agent.session.events
-    .filter((event) => event.seq >= seq && event.type === 'assistant/message')
-    .map((event) => event.data.message.content.filter((block) => block.type === 'text').map((block) => block.text).join(''))
-    .filter((text) => text !== '')
-    .at(-1) ?? ''
-  const coordinatorReply = async (agent, message) => {
-    let sentMessageId
-    for (;;) {
-      if (sentMessageId !== message.id) {
-        agent.followup(message)
-        sentMessageId = message.id
-      }
-      await agent.whenIdle()
-      const events = agent.session.events
-      const userIndex = events.findIndex((event) => event.type === 'user/message' && event.data?.id === message.id)
-      if (userIndex >= 0) {
-        const step = events.slice(0, userIndex + 1).findLast((event) => event.type === 'step/start')
-        const turn = step?.data?.turn
-        const turnEndOffset = turn === undefined ? -1 : events.slice(userIndex + 1).findIndex((event) => event.type === 'turn/end' && event.data?.turn === turn)
-        if (turnEndOffset >= 0) {
-          const turnEvents = events.slice(userIndex + 1, userIndex + 1 + turnEndOffset)
-          const interleavedSteer = turnEvents.some((event) => event.type === 'user/message'
-            && event.data.content?.some((block) => block.type === 'text' && block.text.startsWith('[GROUP_MESSAGE_STEER]')))
-          if (interleavedSteer) {
-            message = createUserMessage({
-              content: [{ type: 'text', text: '[GROUP_DECISION_FINALIZE]\n在你处理上一项 [GROUP_DECISION] 请求期间，又有群消息通过 [GROUP_MESSAGE_STEER] 进入上下文。请基于当前完整群聊上下文重新完成该 [GROUP_DECISION]；由你自行判断多条消息之间相关、部分相关或无关，并决定是否更新此前候选。只输出原 [GROUP_DECISION] 契约要求的严格 JSON，不要解释。' }],
-              source: { kind: 'coordinator' },
-            })
-            continue
-          }
-          return turnEvents
-          .filter((event) => event.type === 'assistant/message' && event.data?.turn === turn)
-          .map((event) => event.data.message.content.filter((block) => block.type === 'text').map((block) => block.text).join(''))
-          .filter(Boolean)
-          .at(-1) ?? ''
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    }
+  function createPendingGroupDecision({ groupId, messageId, sequence, message, imageRefs, kind = 'message' }) {
+    const requestId = randomUUID()
+    let resolve, reject
+    const promise = new Promise((resolvePending, rejectPending) => { resolve = resolvePending; reject = rejectPending })
+    promise.catch(() => undefined)
+    pendingGroupDecisions.set(requestId, { requestId, groupId, messageId, sequence, message, imageRefs, kind, resolve, reject })
+    return { requestId, promise }
+  }
+  function rejectPendingGroupDecision(requestId, error) {
+    const pending = pendingGroupDecisions.get(requestId)
+    if (pending === undefined) return
+    pendingGroupDecisions.delete(requestId)
+    pending.reject(error)
+  }
+  function rejectUnsubmittedGroupDecisionWhenIdle(agent, requestId, groupId, messageId) {
+    agent.whenIdle().then(() => rejectPendingGroupDecision(requestId, new Error(`group_decision_not_submitted:${groupId}:${messageId}`)))
+      .catch((error) => rejectPendingGroupDecision(requestId, error))
   }
   function assertResidentToolSession(exec, groupId) {
     const expected = residentHandles.get(groupId)?.agent?.session?.id
     if (expected === undefined || String(exec.agent?.session?.id) !== String(expected)) throw new Error(`resident_tool_wrong_session:${groupId}`)
+  }
+  function registerResidentDecisionTool(agentCtx, groupId) {
+    agentCtx.tools.register({
+      name: 'group_decision_submit',
+      description: 'Submit one or more completed group-message decisions at the current step. The model decides which pending request IDs share one decision; the Runtime validates ownership and commits each shared decision once.',
+      parameters: {
+        type: 'object', additionalProperties: false, required: ['submissions'], properties: {
+          submissions: { type: 'array', items: {
+            type: 'object', additionalProperties: false, required: ['requestIds', 'decision'], properties: {
+              requestIds: { type: 'array', items: { type: 'string' } },
+              decision: groupDecisionJsonSchema,
+            },
+          } },
+        },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: false, required: ['acceptedRequestIds'], properties: { acceptedRequestIds: { type: 'array', items: { type: 'string' } } } },
+        render: (_args, out) => [{ type: 'text', text: `已接收 ${out.acceptedRequestIds.length} 个群消息判断请求。` }],
+      },
+      execute: async (args, exec) => {
+        assertResidentToolSession(exec, groupId)
+        if (args.submissions.length === 0 || args.submissions.some((submission) => submission.requestIds.length === 0)) throw new Error('group_decision_submission_empty')
+        if (args.submissions.some((submission) => submission.requestIds.some((requestId) => requestId.trim() === ''))) throw new Error('group_decision_request_invalid')
+        const requestIds = args.submissions.flatMap((submission) => submission.requestIds)
+        if (new Set(requestIds).size !== requestIds.length) throw new Error('group_decision_request_duplicate')
+        const pendings = requestIds.map((requestId) => pendingGroupDecisions.get(requestId))
+        if (pendings.some((pending) => pending === undefined)) throw new Error('group_decision_request_unknown')
+        if (pendings.some((pending) => pending.groupId !== groupId)) throw new Error('group_decision_request_wrong_group')
+        if (args.submissions.some((submission) => submission.requestIds.some((requestId) => pendingGroupDecisions.get(requestId).kind === 'recheck') && submission.requestIds.length !== 1)) throw new Error('group_decision_recheck_must_submit_alone')
+        const validated = args.submissions.map((submission) => ({
+          requestIds: [...submission.requestIds],
+          decision: validateGroupDecision(submission.decision),
+          requests: submission.requestIds.map((requestId) => pendingGroupDecisions.get(requestId)).sort((left, right) => left.sequence - right.sequence),
+        }))
+        for (const submission of validated) {
+          let resolveCommitted, rejectCommitted
+          const committed = new Promise((resolve, reject) => { resolveCommitted = resolve; rejectCommitted = reject })
+          committed.catch(() => undefined)
+          const ownerRequestId = submission.requests[0].requestId
+          const result = { decision: submission.decision, requestIds: submission.requestIds, ownerRequestId, requests: submission.requests, committed, resolveCommitted, rejectCommitted }
+          for (const pending of submission.requests) {
+            pendingGroupDecisions.delete(pending.requestId)
+            pending.resolve(result)
+          }
+        }
+        return { acceptedRequestIds: requestIds }
+      },
+    })
   }
   function registerResidentTaskTools(agentCtx, groupId) {
     agentCtx.tools.register({
@@ -1082,58 +1111,71 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           if (images.length > 0 && attachments === undefined) throw new Error('dsh_attachments_required')
           const imageRefs = images.length === 0 ? [] : await attachments.saveImages(images.map((image) => ({ data: image.data, mediaType: image.mediaType, ...(image.name ? { name: image.name } : {}) })))
           const decisionPrompt = buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable })
+          const pending = createPendingGroupDecision({ groupId: message.groupId, messageId: message.messageId, sequence: accepted.sequence, message, imageRefs })
           const content = [
-            { type: 'text', text: `[GROUP_MESSAGE_STEER]\n${decisionPrompt.replace(/^\[GROUP_DECISION\]\n\n/u, '')}` },
+            { type: 'text', text: `[GROUP_MESSAGE_STEER]\n判断请求 ID：${pending.requestId}\n${decisionPrompt.replace(/^\[GROUP_DECISION\]\n\n/u, '')}` },
             ...imageRefs.map((attachment) => ({ type: 'image', attachment })),
           ]
-          handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } }))
-          return await serialize(message.groupId, async () => {
-            const steered = store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'steered' })
-            const replyPending = coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: decisionPrompt }], source: { kind: 'coordinator' } }))
-            await steered
-            const reply = await replyPending
-        if (reply === '') throw new Error(`resident_reply_missing:${message.groupId}:${message.messageId}`)
-        let decision
-        try {
-          decision = parseGroupDecision(reply)
-        } catch (error) {
-          if (!(error instanceof Error) || !error.message.startsWith('group_decision_invalid_')) throw error
-          const correctedReply = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_SCHEMA_CORRECTION]\n你刚才的判断结果未通过结构校验：${error.message}。保持原来的业务判断不变，按当前契约重新输出一个 JSON 对象：忽略为 {"actions":[],"reason":"原因"}；仅回复为 {"actions":[],"reply":"回复"}；需要处理任务为 {"actions":[一个或多个任务动作],"reply":"可为空字符串"}。顶层不允许 kind 字段；不要解释，不要扩大或改变任务目标。` }], source: { kind: 'coordinator' } }))
-          if (correctedReply === '') throw error
-          decision = parseGroupDecision(correctedReply)
-        }
-        await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'delivered' })
-        decision = blockTaskDecisionForUnavailableMedia(decision, message.mediaUnavailable)
-        const groupBeforeDecision = store.getGroup(message.groupId)
-        const previousMessage = groupBeforeDecision?.messages.find((item) => item.sequence === accepted.sequence - 1)
-        const activeTaskCount = store.listTasks().filter((task) => task.groupId === message.groupId).length
-        if ('reason' in decision && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: imageRefs.length > 0, previousMessage, occurredAt: message.occurredAt })) {
-          const rechecked = await coordinatorReply(handle.agent, createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION]\n\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
-          if (rechecked !== '') decision = parseGroupDecision(rechecked)
-        }
-        if ('reason' in decision) return { ...accepted, decision, group: store.getGroup(message.groupId) }
-        const tasks = []
-        const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
-        const sourceEnvelope = buildLeafSourceEnvelope({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable })
-        for (const action of decision.actions) {
-          let task
-          if (action.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, title: action.title, objective: action.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, acceptanceCriteria: action.acceptanceCriteria, stageTasks: action.stageTasks, relatedContexts: [sourceEnvelope] }); await pumpTasks(); return store.getTask(result.task.taskId) })
-          else if (action.kind === 'task-context') {
-            task = store.getTask(action.taskId)
-            if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${action.taskId}`)
-            task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
-          } else if (action.kind === 'task-reopen') {
-            task = store.getTask(action.taskId)
-            if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${action.taskId}`)
-            task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
+          try { handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } })) }
+          catch (error) { rejectPendingGroupDecision(pending.requestId, error); throw error }
+          rejectUnsubmittedGroupDecisionWhenIdle(handle.agent, pending.requestId, message.groupId, message.messageId)
+          await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'steered' })
+          const submitted = await pending.promise
+          if (submitted.ownerRequestId !== pending.requestId) {
+            await submitted.committed
+            return { ...accepted, decision: submitted.decision, decisionRequestIds: submitted.requestIds, decisionOwnerRequestId: submitted.ownerRequestId, group: store.getGroup(message.groupId) }
           }
-          if (task !== undefined) tasks.push(task)
-        }
-        const group = !('reply' in decision) || decision.reply.trim() === ''
-          ? store.getGroup(message.groupId)
-          : await appendReliableOutbox({ groupId: message.groupId, sourceMessageId: message.messageId, text: decision.reply })
-        return { ...accepted, decision, group, tasks, ...(tasks.length === 1 ? { task: tasks[0] } : {}) }
-          })
+          try {
+            let decision = submitted.decision
+            const decisionMessages = submitted.requests.map((request) => request.message)
+            const unavailableMedia = decisionMessages.flatMap((item) => Array.isArray(item.mediaUnavailable) ? item.mediaUnavailable : [])
+            decision = blockTaskDecisionForUnavailableMedia(decision, unavailableMedia)
+            const groupBeforeDecision = store.getGroup(message.groupId)
+            const previousMessage = groupBeforeDecision?.messages.find((item) => item.sequence === accepted.sequence - 1)
+            const activeTaskCount = store.listTasks().filter((task) => task.groupId === message.groupId).length
+            if ('reason' in decision && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: submitted.requests.some((request) => request.imageRefs.length > 0), previousMessage, occurredAt: message.occurredAt })) {
+              const recheck = createPendingGroupDecision({ groupId: message.groupId, messageId: message.messageId, sequence: accepted.sequence, message, imageRefs, kind: 'recheck' })
+              handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_RECHECK]\n判断请求 ID：${recheck.requestId}\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
+              rejectUnsubmittedGroupDecisionWhenIdle(handle.agent, recheck.requestId, message.groupId, message.messageId)
+              const rechecked = await recheck.promise
+              decision = rechecked.decision
+              rechecked.resolveCommitted()
+            }
+            decision = blockTaskDecisionForUnavailableMedia(decision, unavailableMedia)
+            const result = await serialize(message.groupId, async () => {
+              if ('reason' in decision) {
+                await Promise.all(submitted.requests.map((request) => store.markMessageAgentDelivery({ groupId: message.groupId, messageId: request.messageId, status: 'delivered' })))
+                return { ...accepted, decision, group: store.getGroup(message.groupId) }
+              }
+              const tasks = []
+              const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
+              const sourceEnvelope = decisionMessages.map((source) => buildLeafSourceEnvelope({ messageId: source.messageId, message: source.text, senderName: source.senderName, senderOpenDingTalkId: source.senderOpenDingTalkId, occurredAt: source.occurredAt, quotedMessage: source.quotedMessage, mediaUnavailable: source.mediaUnavailable })).join('\n\n')
+              for (const action of decision.actions) {
+                let task
+                if (action.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, title: action.title, objective: action.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, acceptanceCriteria: action.acceptanceCriteria, stageTasks: action.stageTasks, relatedContexts: [sourceEnvelope] }); await pumpTasks(); return store.getTask(result.task.taskId) })
+                else if (action.kind === 'task-context') {
+                  task = store.getTask(action.taskId)
+                  if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${action.taskId}`)
+                  task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
+                } else if (action.kind === 'task-reopen') {
+                  task = store.getTask(action.taskId)
+                  if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${action.taskId}`)
+                  task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
+                }
+                if (task !== undefined) tasks.push(task)
+              }
+              const group = !('reply' in decision) || decision.reply.trim() === ''
+                ? store.getGroup(message.groupId)
+                : await appendReliableOutbox({ groupId: message.groupId, sourceMessageId: message.messageId, text: decision.reply })
+              await Promise.all(submitted.requests.map((request) => store.markMessageAgentDelivery({ groupId: message.groupId, messageId: request.messageId, status: 'delivered' })))
+              return { ...accepted, decision, group, tasks, ...(tasks.length === 1 ? { task: tasks[0] } : {}) }
+            })
+            submitted.resolveCommitted()
+            return result
+          } catch (error) {
+            submitted.rejectCommitted(error)
+            throw error
+          }
         } catch (error) {
           const current = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
           if (current?.agentDeliveryStatus === 'pending') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'failed', error: error instanceof Error ? error.message : String(error) })
@@ -1378,6 +1420,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     async close() {
       if (supervisorTimer !== undefined) clearInterval(supervisorTimer)
       if (typeof disposeObserver === 'function') disposeObserver()
+      for (const requestId of [...pendingGroupDecisions.keys()]) rejectPendingGroupDecision(requestId, new Error('resident_runtime_closed'))
       const all = [...leafHandles.values(), ...residentHandles.values()]
       await ctx.subagents.drainContinuableDescendants(all.map((handle) => handle.agent))
       await Promise.all(all.map((handle) => handle.dispose()))
