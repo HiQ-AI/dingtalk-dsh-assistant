@@ -7,5 +7,5 @@ TC05,个人IM监听退出后自动重连并恢复健康,PASS
 TC06,关键审批用例连续20轮无失败,PASS
 TC07,全量自动化测试151项,PASS
 TC08,发行包包含本次修复并绑定源码,PASS
-TC09,本地运行态个人和群监听均ready,PENDING
+TC09,本地运行态个人和群监听均ready,PASS
 TC10,真实钉钉引用回复恢复可控Task,PENDING
