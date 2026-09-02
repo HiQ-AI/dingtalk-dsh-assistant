@@ -26,7 +26,7 @@ test('fake adapter 对群消息使用step Decision工具而不是assistant JSON�
   assert.deepEqual(chunks.map((chunk) => chunk.type), ['block-start', 'tool-call-delta', 'block-end', 'usage', 'finish'])
   assert.equal(chunks[1].name, 'group_decision_submit')
   const args = JSON.parse(chunks[1].argumentsDelta)
-  assert.deepEqual(args.observedRequestIds, ['request-1'])
+  assert.equal(args.observedRequestIds, undefined, 'submission 自身的请求不需要在 observedRequestIds 重复声明')
   assert.deepEqual(args.submissions[0].requestIds, ['request-1'])
   assert.equal(args.submissions[0].decision.actions[0].kind, 'new-task')
   assert.deepEqual(chunks.at(-1).reason, { kind: 'tool-calls' })

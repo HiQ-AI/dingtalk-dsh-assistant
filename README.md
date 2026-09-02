@@ -211,9 +211,11 @@ dws:
 
 每条新消息先立即持久化到 Inbox，正常情况下随后零延迟、逐条调用 DSH `steer`；不设置聚合窗口，也不等待上一条消息完成推理。唯一例外是同群已有回复正在从结构化 Decision 提交到可靠 Outbox：新消息会停在 `steer` admission 前，等该回复可靠落库后立即进入下一 step。这个门禁只排序同群的“当前回复提交”和“下一条 Steer”，不阻塞其他群，也不是全局 Task 串行锁。Resident 正在运行时，获准进入的消息会插入当前 Turn 的下一个 step，与本轮已经收到的消息和会话上下文共同处理，而不是排队到下一 Turn。每条 `steer` 只携带消息事实，判断规则和 JSON 契约只存在于 Resident 系统提示词。
 
-`group_decision_submit` 的顶层 `observedRequestIds` 表示模型在生成本批非空回复前实际审阅的全部普通 pending 请求。影响回复的消息必须与原请求放进同一 submission 并重新生成 Decision；独立且已经完成的事项使用独立 submission；已审阅但不影响当前回复、准备稍后处理的请求不提交，Runtime 会保留其 pending 状态，供当前回复可靠写入 Outbox 后的下一 step 处理。若提交瞬间存在未观察的新 Steer，整批原子拒绝，不执行 Task 动作或发送旧回复。附件缺失拦截形成的提示和关联复核回复使用同一门禁。结构化业务落地仍按群串行收口；单次 Decision 的 `actions` 可同时关联、重开或新建多个 Task，顶层最多生成一条群回复。
+`group_decision_submit` 的 submission 中已提交的普通请求天然计入模型的观察集合；顶层 `observedRequestIds` 只需补充模型已经审阅、但本批不提交并准备稍后处理的其他普通 pending 请求，重复列出已提交 ID 仍兼容。影响回复的消息必须与原请求放进同一 submission 并重新生成 Decision；独立且已经完成的事项使用独立 submission。若提交瞬间存在未观察的新 Steer，工具返回无副作用的结构化 `stale` 结果，模型在下一 step 结合 `missingRequestIds` 重生成，不再把预期并发控制显示为工具 Failed。附件缺失拦截形成的提示和关联复核回复使用同一门禁。结构化业务落地仍按群串行收口；单次 Decision 的 `actions` 可同时关联、重开或新建多个 Task，顶层最多生成一条群回复。
 
-Task 完成和信息阻塞通知也不再从 turn 的最后一段 assistant 文本取值。Runtime 为每次 `[TASK_COORDINATION]` 创建独立回复请求，Resident 必须调用 `group_reply_submit`，并用 `observedRequestIds` 声明生成通知前已审阅的全部普通 pending 请求；漏观察时旧候选被拒绝并在下一 step 结合新消息重生成，已观察的普通消息仍保留给自己的 Decision。工具只在通知可靠写入 Outbox 后返回。通知生成和提交不占用全局 Task 串行尾链，避免新消息的任务动作与通知相互等待。首次及后续完成通知使用与正常提交一致的稳定结果键，Outbox 写入失败后可由完成通知补偿流程重新发起；Outbox 已落库后的发送监听器异常不会反向否定 Decision。上述门禁保证当前进程内同群事件顺序，不是跨进程事务，也不承诺进程崩溃窗口的 exactly-once。
+Task 完成和信息阻塞通知也不再从 turn 的最后一段 assistant 文本取值。Runtime 为每次 `[TASK_COORDINATION]` 创建独立回复请求，Resident 必须调用 `group_reply_submit`，并用 `observedRequestIds` 声明生成通知前已审阅的全部普通 pending 请求；漏观察时返回结构化 `stale`，旧候选不提交，并在下一 step 结合新消息重生成，已观察的普通消息仍保留给自己的 Decision。工具只在通知可靠写入 Outbox 后返回。通知生成和提交不占用全局 Task 串行尾链，避免新消息的任务动作与通知相互等待。首次及后续完成通知使用与正常提交一致的稳定结果键，Outbox 写入失败后可由完成通知补偿流程重新发起；Outbox 已落库后的发送监听器异常不会反向否定 Decision。上述门禁保证当前进程内同群事件顺序，不是跨进程事务，也不承诺进程崩溃窗口的 exactly-once。
+
+普通群消息 Decision 产生非空回复时，Runtime 也使用 DWS 原生引用回复：单消息回复引用当前入站消息；多消息合并回复引用本 submission 中最新且具备稳定发送人 ID 的入站消息，并结构化 @ 该发送人。入站消息本身引用的历史消息只作为语义上下文，不会被错误地再次用作出站引用目标。发送人 ID 缺失时安全降级为普通群消息，不猜测引用参数。Outbox 写入只证明可靠待发送；实际投递仍必须通过 DWS 回读正文和引用消息 ID 后才标记为 `sent`。
 
 ### 叶子任务
 

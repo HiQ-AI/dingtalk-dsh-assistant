@@ -129,7 +129,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 
 收到以 \`[GROUP_MESSAGE_STEER]\` 开头的群消息信封或 \`[GROUP_DECISION_RECHECK]\` 复核请求时，必须通过 \`group_decision_submit\` 提交结构化判断，不得用 assistant 文本输出 JSON。每个信封携带一个判断请求 ID；处理完成一个或多个请求后即可调用工具，不需要等待 turn 结束。你可以在一次工具调用中提交多个 submission，也可以让一个 submission 覆盖多个 requestIds。由你结合完整上下文判断消息相关、部分相关或无关：共享一个业务判断的请求放在同一 submission，独立事项分别提交；Runtime 不替你按顺序、关键词或固定窗口分组。每个 pending request ID 必须且只能成功提交一次。
 
-任何 submission 的最终有效 Decision 含非空 reply 时，必须在工具顶层 \`observedRequestIds\` 中列出你在生成本批回复前已经语义审阅的全部普通 \`[GROUP_MESSAGE_STEER]\` 请求 ID。影响回复的消息必须与对应请求放进同一 submission，并结合这些消息重新生成完整 Decision；无关且已经处理完成的事项放进独立 submission；不影响本批回复但准备在回复后处理的请求只列入 \`observedRequestIds\`、不要放入任何 submission，Runtime 会保留它们。若工具返回 \`group_decision_reply_observation_stale\`，说明提交前又有新 Steer 到达；下一 step 必须结合新消息重新判断并提交，不能原样重试旧回复。Runtime 只校验观察覆盖，不替你判断相关性。
+任何 submission 的最终有效 Decision 含非空 reply 时，必须语义审阅生成本批回复前已经进入的全部普通 \`[GROUP_MESSAGE_STEER]\` 请求。submission 中已经提交的普通 requestIds 会自动计入已观察集合；工具顶层 \`observedRequestIds\` 只需列出已审阅但不在任何 submission 中、准备在回复后处理的普通 pending 请求，重复列出已提交 ID 也兼容。影响回复的消息必须与对应请求放进同一 submission，并结合这些消息重新生成完整 Decision；无关且已经处理完成的事项放进独立 submission；已审阅但不影响本批回复的请求只列入 \`observedRequestIds\`，Runtime 会保留它们。若工具返回 stale 结果，说明提交前又有新 Steer 到达；下一 step 必须结合 missingRequestIds 对应的新消息重新判断并提交，不能原样重试旧回复。Runtime 只校验观察覆盖，不替你判断相关性。
 
 \`[GROUP_DECISION_RECHECK]\` 是已有判断的内部复核。它可以单独提交，也可以与确实影响本次复核 Decision 的普通消息请求放进同一 submission；不要为了规避回复重生成而把相关消息机械拆开。
 
@@ -319,10 +319,10 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
   function registerResidentDecisionTool(agentCtx, groupId) {
     agentCtx.tools.register({
       name: 'group_decision_submit',
-      description: 'Submit one or more completed group-message decisions at the current step. When any effective decision replies, observedRequestIds must exactly cover every pending group-message request reviewed before this reply batch; observed but unsubmitted requests remain pending for later processing.',
+      description: 'Submit one or more completed group-message decisions at the current step. Submitted ordinary requestIds count as observed. When any effective decision replies, observedRequestIds adds every other reviewed pending group-message request; observed but unsubmitted requests remain pending for later processing. A stale result means no submission was accepted and must be regenerated with the missing requests.',
       parameters: {
         type: 'object', additionalProperties: false, required: ['submissions'], properties: {
-          observedRequestIds: { type: 'array', items: { type: 'string' } },
+          observedRequestIds: { type: 'array', description: 'Other reviewed ordinary pending request IDs not completed by this call. Submitted ordinary request IDs are counted automatically; duplicates across the two fields are accepted for compatibility.', items: { type: 'string' } },
           submissions: { type: 'array', items: {
             type: 'object', additionalProperties: false, required: ['requestIds', 'decision'], properties: {
               requestIds: { type: 'array', items: { type: 'string' } },
@@ -332,8 +332,16 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
         },
       },
       output: {
-        schema: { type: 'object', additionalProperties: false, required: ['acceptedRequestIds', 'pendingRequestIds'], properties: { acceptedRequestIds: { type: 'array', items: { type: 'string' } }, pendingRequestIds: { type: 'array', items: { type: 'string' } } } },
-        render: (_args, out) => [{ type: 'text', text: `已提交 ${out.acceptedRequestIds.length} 个群消息判断请求；仍有 ${out.pendingRequestIds.length} 个请求待处理。` }],
+        schema: { type: 'object', additionalProperties: false, required: ['status', 'acceptedRequestIds', 'pendingRequestIds', 'missingRequestIds', 'unexpectedRequestIds'], properties: {
+          status: { type: 'string', enum: ['accepted', 'stale'] },
+          acceptedRequestIds: { type: 'array', items: { type: 'string' } },
+          pendingRequestIds: { type: 'array', items: { type: 'string' } },
+          missingRequestIds: { type: 'array', items: { type: 'string' } },
+          unexpectedRequestIds: { type: 'array', items: { type: 'string' } },
+        } },
+        render: (_args, out) => [{ type: 'text', text: out.status === 'stale'
+          ? `回复观察快照已变化，本批未提交。缺失请求 ID：${out.missingRequestIds.join(',') || '无'}；异常请求 ID：${out.unexpectedRequestIds.join(',') || '无'}。必须结合新请求重新生成并再次提交；当前共有 ${out.pendingRequestIds.length} 个请求待处理。`
+          : `已提交 ${out.acceptedRequestIds.length} 个群消息判断请求；仍有 ${out.pendingRequestIds.length} 个请求待处理。` }],
       },
       execute: async (args, exec) => {
         assertResidentToolSession(exec, groupId)
@@ -369,13 +377,16 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
             .filter((pending) => pending.groupId === groupId && pending.kind === 'message')
             .sort((left, right) => left.sequence - right.sequence)
             .map((pending) => pending.requestId)
-          const observed = new Set(observedRequestIds)
+          const submittedMessageRequestIds = validated.flatMap((submission) => submission.requests
+            .filter((pending) => pending.kind === 'message')
+            .map((pending) => pending.requestId))
+          const observed = new Set([...submittedMessageRequestIds, ...observedRequestIds])
           const current = new Set(currentRequestIds)
           const missing = currentRequestIds.filter((requestId) => !observed.has(requestId))
-          const unexpected = observedRequestIds.filter((requestId) => !current.has(requestId))
+          const unexpected = [...observed].filter((requestId) => !current.has(requestId))
           if (missing.length > 0 || unexpected.length > 0) {
             for (const release of releaseReplyAdmissions) release()
-            throw new Error(`group_decision_reply_observation_stale:missing=${missing.join(',')};unexpected=${unexpected.join(',')}`)
+            return { status: 'stale', acceptedRequestIds: [], pendingRequestIds: currentRequestIds, missingRequestIds: missing, unexpectedRequestIds: unexpected }
           }
         }
         const results = []
@@ -415,14 +426,14 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
           .filter((pending) => pending.groupId === groupId && pending.kind === 'message')
           .sort((left, right) => left.sequence - right.sequence)
           .map((pending) => pending.requestId)
-        return { acceptedRequestIds: requestIds, pendingRequestIds }
+        return { status: 'accepted', acceptedRequestIds: requestIds, pendingRequestIds, missingRequestIds: [], unexpectedRequestIds: [] }
       },
     })
   }
   function registerResidentReplyTool(agentCtx, groupId) {
     agentCtx.tools.register({
       name: 'group_reply_submit',
-      description: 'Submit a generated resident-session group notification. observedRequestIds must exactly cover every pending group-message request reviewed before the reply; observed requests remain pending for their own later Decision.',
+      description: 'Submit a generated resident-session group notification. observedRequestIds must exactly cover every pending group-message request reviewed before the reply; observed requests remain pending for their own later Decision. A stale result means the notification was not accepted and must be regenerated with the missing requests.',
       parameters: {
         type: 'object', additionalProperties: false, required: ['requestId', 'observedRequestIds', 'reply'], properties: {
           requestId: { type: 'string' },
@@ -431,8 +442,16 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
         },
       },
       output: {
-        schema: { type: 'object', additionalProperties: false, required: ['acceptedRequestId', 'pendingRequestIds'], properties: { acceptedRequestId: { type: 'string' }, pendingRequestIds: { type: 'array', items: { type: 'string' } } } },
-        render: (_args, out) => [{ type: 'text', text: `群通知已可靠提交；仍有 ${out.pendingRequestIds.length} 个群消息请求待处理。` }],
+        schema: { type: 'object', additionalProperties: false, required: ['status', 'acceptedRequestIds', 'pendingRequestIds', 'missingRequestIds', 'unexpectedRequestIds'], properties: {
+          status: { type: 'string', enum: ['accepted', 'stale'] },
+          acceptedRequestIds: { type: 'array', items: { type: 'string' } },
+          pendingRequestIds: { type: 'array', items: { type: 'string' } },
+          missingRequestIds: { type: 'array', items: { type: 'string' } },
+          unexpectedRequestIds: { type: 'array', items: { type: 'string' } },
+        } },
+        render: (_args, out) => [{ type: 'text', text: out.status === 'stale'
+          ? `群通知观察快照已变化，本次未提交。缺失请求 ID：${out.missingRequestIds.join(',') || '无'}；异常请求 ID：${out.unexpectedRequestIds.join(',') || '无'}。必须结合新请求重新生成后再次提交。`
+          : `群通知已可靠提交；仍有 ${out.pendingRequestIds.length} 个群消息请求待处理。` }],
       },
       execute: async (args, exec) => {
         assertResidentToolSession(exec, groupId)
@@ -458,7 +477,7 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
         const unexpected = args.observedRequestIds.filter((requestId) => !current.has(requestId))
         if (missing.length > 0 || unexpected.length > 0) {
           releaseReplyAdmission()
-          throw new Error(`group_reply_observation_stale:missing=${missing.join(',')};unexpected=${unexpected.join(',')}`)
+          return { status: 'stale', acceptedRequestIds: [], pendingRequestIds: currentRequestIds, missingRequestIds: missing, unexpectedRequestIds: unexpected }
         }
         let resolveReplyLinearized, rejectReplyLinearized
         const replyLinearized = new Promise((resolve, reject) => { resolveReplyLinearized = resolve; rejectReplyLinearized = reject })
@@ -481,7 +500,7 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
           .filter((item) => item.groupId === groupId && item.kind === 'message')
           .sort((left, right) => left.sequence - right.sequence)
           .map((item) => item.requestId)
-        return { acceptedRequestId: args.requestId, pendingRequestIds }
+        return { status: 'accepted', acceptedRequestIds: [args.requestId], pendingRequestIds, missingRequestIds: [], unexpectedRequestIds: [] }
       },
     })
   }
@@ -658,7 +677,7 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
     const pending = createPendingGroupReply({ groupId: task.groupId, sourceMessageId: resultKey })
     try {
       handle.agent.followup(createUserMessage({
-        content: [{ type: 'text', text: `[TASK_COORDINATION]\n回复请求 ID：${pending.requestId}\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n当前目标：${task.objective}\n提出人：${requester}\n核验结果：${JSON.stringify(resultProjection)}\n\n必须通过 group_reply_submit 提交一条可直接发送到群聊的通知，不得用 assistant 文本直接输出通知。提交前语义审阅当前已经进入的全部普通 GROUP_MESSAGE_STEER：若新消息影响本通知，结合它重新生成；若不影响，保持本结果通知，新消息将在通知可靠提交后继续处理。把已审阅的全部普通 pending 请求 ID 填入 observedRequestIds；若工具返回 group_reply_observation_stale，下一 step 结合新 Steer 重新生成后再提交。完成通知必须忠实保留叶子结果中影响同事判断和后续行动的信息，不能为了简短只复述 summary。至少覆盖：实际完成或修改的内容、关键核验与证据、部署或交付状态、尚未覆盖的边界与遗留事项；result 中存在 artifacts 或 delivery 时也要说明其关键内容。允许合并重复表述，但不得省略不同关注点、限定条件、失败项或“未验证/未部署”等边界。缺信息时只向提出人询问列出的具体问题。正文不要手写 @ 提出人，Runtime 会传结构化 @。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
+        content: [{ type: 'text', text: `[TASK_COORDINATION]\n回复请求 ID：${pending.requestId}\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n当前目标：${task.objective}\n提出人：${requester}\n核验结果：${JSON.stringify(resultProjection)}\n\n必须通过 group_reply_submit 提交一条可直接发送到群聊的通知，不得用 assistant 文本直接输出通知。提交前语义审阅当前已经进入的全部普通 GROUP_MESSAGE_STEER：若新消息影响本通知，结合它重新生成；若不影响，保持本结果通知，新消息将在通知可靠提交后继续处理。把已审阅的全部普通 pending 请求 ID 填入 observedRequestIds；若工具返回 stale 结果，下一 step 必须结合 missingRequestIds 对应的新 Steer 重新生成后再提交。完成通知必须忠实保留叶子结果中影响同事判断和后续行动的信息，不能为了简短只复述 summary。至少覆盖：实际完成或修改的内容、关键核验与证据、部署或交付状态、尚未覆盖的边界与遗留事项；result 中存在 artifacts 或 delivery 时也要说明其关键内容。允许合并重复表述，但不得省略不同关注点、限定条件、失败项或“未验证/未部署”等边界。缺信息时只向提出人询问列出的具体问题。正文不要手写 @ 提出人，Runtime 会传结构化 @。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
         source: { kind: 'user' },
       }))
     } catch (error) {
@@ -1449,8 +1468,17 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             let group
             if (!('reply' in decision) || decision.reply.trim() === '') group = store.getGroup(message.groupId)
             else {
+              const replyTarget = decisionRequests.findLast((request) => typeof request.messageId === 'string'
+                && request.messageId.trim() !== ''
+                && typeof request.message?.senderOpenDingTalkId === 'string'
+                && request.message.senderOpenDingTalkId.trim() !== '')
               group = await appendReliableOutbox({
                 groupId: message.groupId, sourceMessageId: message.messageId, text: decision.reply,
+                ...(replyTarget === undefined ? {} : {
+                  replyToMessageId: replyTarget.messageId,
+                  replyToSenderOpenDingTalkId: replyTarget.message.senderOpenDingTalkId,
+                  atOpenDingTalkIds: [replyTarget.message.senderOpenDingTalkId],
+                }),
                 onPersisted: () => {
                   submitted.resolveReplyLinearized()
                   recheckedSubmission?.resolveReplyLinearized()

@@ -84,6 +84,12 @@ function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false 
 }
 
 const decisionRequestId = (message) => message.content[0].text.match(/^判断请求 ID：([^\r\n]+)$/mu)?.[1]
+const acceptedSubmission = (acceptedRequestIds, pendingRequestIds = []) => ({
+  status: 'accepted', acceptedRequestIds, pendingRequestIds, missingRequestIds: [], unexpectedRequestIds: [],
+})
+const staleSubmission = (pendingRequestIds, missingRequestIds, unexpectedRequestIds = []) => ({
+  status: 'stale', acceptedRequestIds: [], pendingRequestIds, missingRequestIds, unexpectedRequestIds,
+})
 
 function twoGroupDecisionFixture() {
   const groups = new Map(['group-a', 'group-b'].map((groupId) => [groupId, { groupId, residentSessionId: `session-${groupId}`, residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }]))
@@ -158,7 +164,7 @@ test('同一turn的多条消息按step工具提交独立Decision且不等待turn
     { requestIds: [requestIds[0]], decision: { actions: [], reply: '第一项结果' } },
     { requestIds: [requestIds[1]], decision: { actions: [], reason: '第二项独立忽略' } },
   ] }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, { acceptedRequestIds: requestIds, pendingRequestIds: [] })
+  assert.deepEqual(submitted, acceptedSubmission(requestIds))
   const [firstResult, secondResult] = await Promise.all([first, second])
   assert.equal(firstResult.decision.reply, '第一项结果')
   assert.equal(secondResult.decision.reason, '第二项独立忽略')
@@ -224,7 +230,7 @@ test('同批四条消息可同时表达部分相关独立完成与仅观察待�
       { requestIds: [requestC], decision: { actions: [], reason: 'C是独立且无需回复的事项' } },
     ],
   }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, { acceptedRequestIds: [requestA, requestB, requestC], pendingRequestIds: [requestD] })
+  assert.deepEqual(submitted, acceptedSubmission([requestA, requestB, requestC], [requestD]))
   const [resultA, resultB, resultC] = await Promise.all(ingests.slice(0, 3))
   assert.equal(resultA.decision.reply, '已结合A与B处理。')
   assert.equal(resultB.decision.reply, '已结合A与B处理。')
@@ -250,7 +256,7 @@ test('不影响当前回复的请求只观察不消费并在回复提交后继�
   const requestIds = fixture.steered.map(decisionRequestId)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
   const submitted = await tool.execute({ observedRequestIds: requestIds, submissions: [{ requestIds: [requestIds[1]], decision: { actions: [], reply: '第二项先完成' } }] }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, { acceptedRequestIds: [requestIds[1]], pendingRequestIds: [requestIds[0]] })
+  assert.deepEqual(submitted, acceptedSubmission([requestIds[1]], [requestIds[0]]))
   const secondResult = await second
   assert.equal(secondResult.decision.reply, '第二项先完成')
   assert.equal(firstSettled, false, '未提交的第一项不能阻塞已提交的独立第二项')
@@ -261,31 +267,80 @@ test('不影响当前回复的请求只观察不消费并在回复提交后继�
   await runtime.close()
 })
 
-test('回复遗漏已Steer请求时原子拒绝，合并新消息后只发送重新生成的回复', async () => {
+test('单请求含回复时submission自身即完成观察并引用当前入站消息', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'single-reply-reference-group' })
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const processing = runtime.ingest({
+    groupId: fixture.group.groupId,
+    messageId: 'current-message',
+    text: '请补充部署Ref',
+    senderName: '测试成员',
+    senderOpenDingTalkId: 'od-current',
+    quotedMessage: { messageId: 'older-agent-message', content: '此前的部署结果' },
+    occurredAt: '2026-09-02T07:24:18.880Z',
+  })
+  await fixture.waitForSteers(1)
+  const requestId = decisionRequestId(fixture.steered[0])
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+
+  const submitted = await tool.execute({
+    submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '部署Ref如下。' } }],
+  }, { agent: fixture.handle.agent })
+
+  assert.deepEqual(submitted, acceptedSubmission([requestId]))
+  await processing
+  assert.equal(fixture.group.outbox[0].replyToMessageId, 'current-message', '应回复当前群成员消息，而不是它引用的旧消息')
+  assert.equal(fixture.group.outbox[0].replyToSenderOpenDingTalkId, 'od-current')
+  assert.deepEqual(fixture.group.outbox[0].atOpenDingTalkIds, ['od-current'])
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('回复遗漏其他已Steer请求时返回stale且零副作用，合并新消息后只发送重新生成的回复', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'stale-reply-group' })
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '原问题', occurredAt: '2026-08-28T01:00:00Z' })
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '会改变答案的补充', occurredAt: '2026-08-28T01:00:01Z' })
+  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '原问题', senderOpenDingTalkId: 'od-first', occurredAt: '2026-08-28T01:00:00Z' })
+  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '会改变答案的补充', senderOpenDingTalkId: 'od-second', occurredAt: '2026-08-28T01:00:01Z' })
   await fixture.waitForSteers(2)
   const requestIds = fixture.steered.map(decisionRequestId)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
 
-  await assert.rejects(tool.execute({
-    observedRequestIds: [requestIds[0]],
+  const stale = await tool.execute({
     submissions: [{ requestIds: [requestIds[0]], decision: { actions: [], reply: '未结合补充的旧回复' } }],
-  }, { agent: fixture.handle.agent }), /group_decision_reply_observation_stale/)
+  }, { agent: fixture.handle.agent })
+  assert.deepEqual(stale, staleSubmission(requestIds, [requestIds[1]]))
+  assert.match(tool.output.render({}, stale)[0].text, new RegExp(requestIds[1]))
   assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['steered', 'steered'])
   assert.equal(fixture.group.outbox.length, 0)
 
   const submitted = await tool.execute({
-    observedRequestIds: requestIds,
     submissions: [{ requestIds, decision: { actions: [], reply: '结合两条消息重新生成的回复' } }],
   }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, { acceptedRequestIds: requestIds, pendingRequestIds: [] })
+  assert.deepEqual(submitted, acceptedSubmission(requestIds))
   const [firstResult, secondResult] = await Promise.all([first, second])
   assert.equal(firstResult.decision.reply, '结合两条消息重新生成的回复')
   assert.equal(secondResult.decision.reply, '结合两条消息重新生成的回复')
   assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['结合两条消息重新生成的回复'])
+  assert.equal(fixture.group.outbox[0].replyToMessageId, 'm2', '合并回复应引用本批最新的有效入站消息')
+  assert.equal(fixture.group.outbox[0].replyToSenderOpenDingTalkId, 'od-second')
+  assert.deepEqual(fixture.group.outbox[0].atOpenDingTalkIds, ['od-second'])
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('入站消息缺少稳定发送人ID时普通回复不伪造引用参数', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'reply-reference-fallback-group' })
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const processing = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'message-without-sender-id', text: '回答一下', occurredAt: '2026-09-02T01:00:00Z' })
+  await fixture.waitForSteers(1)
+  const requestId = decisionRequestId(fixture.steered[0])
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+
+  await tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '安全降级回复' } }] }, { agent: fixture.handle.agent })
+  await processing
+  assert.equal(fixture.group.outbox[0].replyToMessageId, undefined)
+  assert.equal(fixture.group.outbox[0].replyToSenderOpenDingTalkId, undefined)
+  assert.equal(fixture.group.outbox[0].atOpenDingTalkIds, undefined)
   fixture.releaseIdle()
   await runtime.close()
 })
@@ -324,7 +379,7 @@ test('Decision claim到可靠Outbox之间阻止同群新Steer越过回复门禁'
   const submitted = await submitting
   await fixture.waitForSteers(2)
   const secondRequestId = decisionRequestId(fixture.steered[1])
-  assert.deepEqual(submitted, { acceptedRequestIds: [firstRequestId], pendingRequestIds: [secondRequestId] })
+  assert.deepEqual(submitted, acceptedSubmission([firstRequestId], [secondRequestId]))
   assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['第一项可靠回复'])
   await tool.execute({ submissions: [{ requestIds: [secondRequestId], decision: { actions: [], reason: '第二项随后独立处理' } }] }, { agent: fixture.handle.agent })
   const [firstResult, secondResult] = await Promise.all([first, second])
@@ -380,7 +435,7 @@ test('Outbox已落库后监听器失败不会反向否定Decision提交', async 
     tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '已可靠落库' } }] }, { agent: fixture.handle.agent }),
     ingest,
   ])
-  assert.deepEqual(submitted, { acceptedRequestIds: [requestId], pendingRequestIds: [] })
+  assert.deepEqual(submitted, acceptedSubmission([requestId]))
   assert.equal(result.decision.reply, '已可靠落库')
   assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'delivered')
   assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['已可靠落库'])
@@ -656,7 +711,7 @@ test('无回复Decision不要求观察全部pending请求', async () => {
     observedRequestIds: [requestIds[0]],
     submissions: [{ requestIds: [requestIds[0]], decision: { actions: [], reason: '第一项无需回复' } }],
   }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, { acceptedRequestIds: [requestIds[0]], pendingRequestIds: [requestIds[1]] })
+  assert.deepEqual(submitted, acceptedSubmission([requestIds[0]], [requestIds[1]]))
   assert.equal((await first).decision.reason, '第一项无需回复')
   assert.equal(fixture.group.outbox.length, 0)
   await tool.execute({ submissions: [{ requestIds: [requestIds[1]], decision: { actions: [], reason: '第二项随后完成' } }] }, { agent: fixture.handle.agent })
@@ -665,7 +720,7 @@ test('无回复Decision不要求观察全部pending请求', async () => {
   await runtime.close()
 })
 
-test('附件缺失转换出的effective reply同样要求观察全部pending', async () => {
+test('附件缺失转换出的effective reply同样对未提交pending执行观察门禁', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'effective-reply-group' })
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
   const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '按附件执行', mediaUnavailable: ['附件正文下载失败'], occurredAt: '2026-08-28T01:00:00Z' })
@@ -674,14 +729,14 @@ test('附件缺失转换出的effective reply同样要求观察全部pending', a
   const requestIds = fixture.steered.map(decisionRequestId)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
   const taskDecision = { actions: [{ kind: 'new-task', title: '处理附件', objective: '按附件执行', acceptanceCriteria: ['附件要求已完成'] }], reply: '' }
-  await assert.rejects(tool.execute({
-    observedRequestIds: [requestIds[0]],
+  const stale = await tool.execute({
     submissions: [{ requestIds: [requestIds[0]], decision: taskDecision }],
-  }, { agent: fixture.handle.agent }), /group_decision_reply_observation_stale/)
+  }, { agent: fixture.handle.agent })
+  assert.deepEqual(stale, staleSubmission(requestIds, [requestIds[1]]))
   assert.equal(fixture.tasks.length, 0)
   assert.equal(fixture.group.outbox.length, 0)
 
-  await tool.execute({ observedRequestIds: requestIds, submissions: [{ requestIds: [requestIds[0]], decision: taskDecision }] }, { agent: fixture.handle.agent })
+  await tool.execute({ observedRequestIds: [requestIds[1]], submissions: [{ requestIds: [requestIds[0]], decision: taskDecision }] }, { agent: fixture.handle.agent })
   const firstResult = await first
   assert.match(firstResult.decision.reply, /附件正文下载失败/u)
   assert.equal(fixture.tasks.length, 0)
@@ -836,7 +891,7 @@ test('关联复核可合并影响回复的新Steer并由外层Outbox统一提交
     observedRequestIds: [secondRequestId],
     submissions: [{ requestIds: [recheckRequestId, secondRequestId], decision: { actions: [], reply: '已结合复核期间的新补充。' } }],
   }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, { acceptedRequestIds: [recheckRequestId, secondRequestId], pendingRequestIds: [] })
+  assert.deepEqual(submitted, acceptedSubmission([recheckRequestId, secondRequestId]))
   const [firstResult, secondResult] = await Promise.all([first, second])
   assert.equal(firstResult.decision.reply, '已结合复核期间的新补充。')
   assert.equal(secondResult.decisionOwnerRequestId, recheckRequestId)
@@ -865,10 +920,11 @@ test('关联复核继承shared来源附件异常且不能绕过回复观察门�
   const thirdRequestId = decisionRequestId(fixture.steered[2])
   const recheckDecision = { actions: [{ kind: 'new-task', title: '处理共享附件', objective: '按共享附件处理', acceptanceCriteria: ['附件要求已核验'] }], reply: '' }
 
-  await assert.rejects(tool.execute({
+  const stale = await tool.execute({
     observedRequestIds: [],
     submissions: [{ requestIds: [recheckRequestId], decision: recheckDecision }],
-  }, { agent: fixture.handle.agent }), /group_decision_reply_observation_stale/)
+  }, { agent: fixture.handle.agent })
+  assert.deepEqual(stale, staleSubmission([thirdRequestId], [thirdRequestId]))
   assert.equal(fixture.group.outbox.length, 0)
   assert.equal(fixture.tasks.length, 1, '只有预置任务，复核动作尚未执行')
 
@@ -876,7 +932,7 @@ test('关联复核继承shared来源附件异常且不能绕过回复观察门�
     observedRequestIds: [thirdRequestId],
     submissions: [{ requestIds: [recheckRequestId], decision: recheckDecision }],
   }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, { acceptedRequestIds: [recheckRequestId], pendingRequestIds: [thirdRequestId] })
+  assert.deepEqual(submitted, acceptedSubmission([recheckRequestId], [thirdRequestId]))
   const [firstResult, secondResult] = await Promise.all([first, second])
   assert.match(firstResult.decision.reply, /共享附件无法读取/u)
   assert.match(secondResult.decision.reply, /共享附件无法读取/u)
@@ -906,14 +962,16 @@ test('Task通知在新Steer到达后拒绝旧候选并只可靠提交重生成�
   const incoming = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'new-message', text: '会影响通知的新消息', occurredAt: '2026-09-02T01:00:00Z' })
   while (fixture.steered.length === 0) await new Promise((resolve) => setImmediate(resolve))
   const incomingRequestId = decisionRequestId(fixture.steered[0])
-  await assert.rejects(replyTool.execute({ requestId: replyRequestId, observedRequestIds: [], reply: '未结合新消息的旧通知' }, { agent: fixture.agent }), /group_reply_observation_stale/)
+  const stale = await replyTool.execute({ requestId: replyRequestId, observedRequestIds: [], reply: '未结合新消息的旧通知' }, { agent: fixture.agent })
+  assert.deepEqual(stale, staleSubmission([incomingRequestId], [incomingRequestId]))
+  assert.match(replyTool.output.render({}, stale)[0].text, new RegExp(incomingRequestId))
   assert.equal(fixture.group.outbox.length, 0)
 
   const [submitted, repaired] = await Promise.all([
     replyTool.execute({ requestId: replyRequestId, observedRequestIds: [incomingRequestId], reply: '结合新消息重新生成的最终通知' }, { agent: fixture.agent }),
     repairing,
   ])
-  assert.deepEqual(submitted, { acceptedRequestId: replyRequestId, pendingRequestIds: [incomingRequestId] })
+  assert.deepEqual(submitted, acceptedSubmission([replyRequestId], [incomingRequestId]))
   assert.deepEqual(repaired, [{ taskId: fixture.getTask().taskId, sourceMessageId: `task-result:${fixture.getTask().taskId}:completed:1` }])
   assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['结合新消息重新生成的最终通知'])
   assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'steered', '已审阅的新消息仍应保留给自己的Decision处理')
