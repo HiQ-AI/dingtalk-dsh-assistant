@@ -4,6 +4,25 @@
 
 ## [未发布]
 
+## [0.5.11] - 2026-09-02
+
+### 新增
+
+- Task 持久化完整来源消息与参与人历史；后续通知按当前目标、消息上下文和参与人语义选择接收者，不再只依赖最初提出人。
+
+### 变更
+
+- 叶子会话在第一现场自主闭环适用 Skill，移除专用学习信号转发；常驻主会话不再承担重复判断或沉淀。
+- 任务卡移除执行轮次耗时区块，诊断数据继续由 `/state/task-timings` 提供。
+- 完成验收与检查点评审统一作为主会话内部上下文，并缩短 Task 串行锁持有时间，避免模型评审阻塞其他任务。
+
+### 修复
+
+- 检查点只允许逐项推进，任务仍有剩余项时禁止完成；终结工具结果晚到时可按调用 ID 正确闭合，真实缺失结果仍会报警。
+- 群消息 Decision 改为按 DSH step 结构化提交；实时 Steer 打断收口时基于最新上下文重新判断，常驻回复提交前也会再次处理新 Steer。
+- 恢复 DWS 入站 bridge 的断线重连、全量回补、慢回补调度和恢复水位，避免长时间运行后漏收消息或重复扫描。
+- 修复群消息回复提交与引用消息回读链路；非空引用回复可实时处理人工授权，等待人工介入的任务保持阻塞语义一致。
+
 ## [0.5.10] - 2026-08-31
 
 ### 变更
@@ -144,6 +163,7 @@
 - assistant、observer 与发行包统一使用同一个产品版本号。
 - Node.js 最低版本与实际 zstd Runtime 要求一致，调整为 24。
 
+[0.5.11]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.11
 [0.5.10]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.10
 [0.5.9]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.9
 [0.5.8]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.8
