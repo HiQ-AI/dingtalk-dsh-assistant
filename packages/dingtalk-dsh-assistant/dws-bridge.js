@@ -97,8 +97,28 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     operation.finally(() => { if (inflightMessages.get(key) === operation) inflightMessages.delete(key) }).catch(() => undefined)
     return operation
   }
+  const currentGroup = (groupId) => runtime.getGroup?.(groupId) ?? runtime.listGroups().find((group) => group.groupId === groupId)
   const describeError = (error) => error instanceof Error ? error.message : String(error)
   const now = () => new Date().toISOString()
+  const asTimestamp = (value) => new Date(value).valueOf()
+  const earlierIso = (left, right) => {
+    const leftAt = asTimestamp(left), rightAt = asTimestamp(right)
+    if (!Number.isFinite(leftAt)) return Number.isFinite(rightAt) ? new Date(rightAt).toISOString() : undefined
+    if (!Number.isFinite(rightAt)) return new Date(leftAt).toISOString()
+    return new Date(Math.min(leftAt, rightAt)).toISOString()
+  }
+  const defaultBackfillStart = (groupId) => {
+    const persisted = currentGroup(groupId)
+    const latest = [...(persisted?.messages ?? [])]
+      .map((message) => asTimestamp(message.occurredAt))
+      .filter(Number.isFinite)
+      .sort((left, right) => right - left)[0]
+    return new Date(Number.isFinite(latest) ? Math.max(0, latest - groupBackfillOverlapMs) : new Date().setHours(0, 0, 0, 0)).toISOString()
+  }
+  const beforeOverlap = (value) => {
+    const timestamp = asTimestamp(value)
+    return Number.isFinite(timestamp) ? new Date(Math.max(0, timestamp - groupBackfillOverlapMs)).toISOString() : undefined
+  }
   const entryFor = (groupId) => {
     let entry = bridgeEntries.get(groupId)
     if (entry !== undefined) return entry
@@ -109,14 +129,15 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       backfillState: 'never',
       reconnectAttempt: 0,
       backfillRunning: false,
-      backfillQueued: false,
+      recoveryQueued: false,
+      recoveryEpoch: 0,
+      recoveryRequired: false,
       backfillPromise: Promise.resolve(),
       carrierIssueTail: Promise.resolve(),
     }
     bridgeEntries.set(groupId, entry)
     return entry
   }
-  const currentGroup = (groupId) => runtime.getGroup?.(groupId) ?? runtime.listGroups().find((group) => group.groupId === groupId)
   const clearReadyTimer = (entry) => {
     if (entry.readyTimer !== undefined) clearTimeout(entry.readyTimer)
     entry.readyTimer = undefined
@@ -143,6 +164,8 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         },
         backfill: {
           state: entry?.backfillState ?? 'never',
+          ...(entry?.backfillRunning ? { inProgress: true } : {}),
+          ...(entry?.recoveryRequired ? { recoveryRequired: true, ...(entry.recoveryFromAt ? { recoveryFromAt: entry.recoveryFromAt } : {}) } : {}),
           ...(entry?.lastBackfillStartedAt ? { startedAt: entry.lastBackfillStartedAt } : {}),
           ...(entry?.lastBackfillAt ? { succeededAt: entry.lastBackfillAt } : {}),
           ...(entry?.lastBackfillErrorAt ? { failedAt: entry.lastBackfillErrorAt } : {}),
@@ -155,7 +178,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       }
     })
     return {
-      healthy: groups.length === 0 || groups.every((group) => group.listener.state === 'ready' && group.backfill.state === 'ok'),
+      healthy: groups.length === 0 || groups.every((group) => group.listener.state === 'ready' && group.backfill.state === 'ok' && group.backfill.recoveryRequired !== true),
       groups,
     }
   }
@@ -163,7 +186,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     if (typeof onHealthChange !== 'function') return
     try { onHealthChange(healthSnapshot()) } catch (error) { logger.warn(error) }
   }
-  const queueGroupBackfill = (groupId) => {
+  const queueGroupBackfill = (groupId, { queueAfterActive = false, recovery = false } = {}) => {
     const entry = entryFor(groupId)
     if (typeof adapter.readGroupRange !== 'function') {
       entry.backfillState = 'unavailable'
@@ -171,47 +194,62 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       return entry.backfillPromise
     }
     if (entry.backfillRunning) {
-      entry.backfillQueued = true
+      if (queueAfterActive) entry.recoveryQueued = true
       return entry.backfillPromise
     }
+    const isRecovery = recovery || entry.recoveryRequired
+    const recoveryEpoch = entry.recoveryEpoch
+    const hadSuccessfulBackfill = entry.lastBackfillAt !== undefined
     entry.backfillRunning = true
-    entry.backfillState = 'running'
+    if (isRecovery || (entry.lastBackfillAt === undefined && entry.backfillState !== 'failed')) entry.backfillState = 'running'
     publishHealth()
     entry.backfillPromise = (async () => {
-      do {
-        entry.backfillQueued = false
-        if (stopping || currentGroup(groupId) === undefined) return
-        entry.backfillState = 'running'
-        entry.lastBackfillStartedAt = now()
-        publishHealth()
-        try {
-          const persisted = currentGroup(groupId)
-          const latest = [...(persisted?.messages ?? [])]
-            .map((message) => new Date(message.occurredAt).valueOf())
-            .filter(Number.isFinite)
-            .sort((left, right) => right - left)[0]
-          const end = new Date().toISOString()
-          const start = new Date(Number.isFinite(latest) ? Math.max(0, latest - groupBackfillOverlapMs) : new Date().setHours(0, 0, 0, 0)).toISOString()
-          const history = await adapter.readGroupRange(groupId, { start, end })
-          if (!Array.isArray(history.messages) || history.complete !== true || history.hasMore === true || (history.failedCount ?? 0) !== 0) throw new Error(`dws_backfill_partial:${groupId}`)
-          const ordered = [...history.messages].sort((left, right) => String(left.createTime ?? '').localeCompare(String(right.createTime ?? '')))
-          for (const message of ordered) await processMessage(normalizeHistoryMessage(message, groupId))
-          entry.backfillState = 'ok'
-          entry.lastBackfillAt = now()
-          delete entry.lastBackfillError
-          delete entry.lastBackfillErrorAt
-          publishHealth()
-        } catch (error) {
-          entry.backfillState = 'failed'
-          entry.lastBackfillError = describeError(error)
-          entry.lastBackfillErrorAt = now()
-          publishHealth()
-          logger.warn(error)
+      if (stopping || currentGroup(groupId) === undefined) return
+      entry.lastBackfillStartedAt = now()
+      publishHealth()
+      try {
+        const end = new Date().toISOString()
+        const start = earlierIso(defaultBackfillStart(groupId), isRecovery ? entry.recoveryFromAt : undefined)
+        entry.activeBackfillStartAt = start
+        const history = await adapter.readGroupRange(groupId, { start, end })
+        if (!Array.isArray(history.messages) || history.complete !== true || history.hasMore === true || (history.failedCount ?? 0) !== 0) throw new Error(`dws_backfill_partial:${groupId}`)
+        const ordered = [...history.messages].sort((left, right) => String(left.createTime ?? '').localeCompare(String(right.createTime ?? '')))
+        for (const message of ordered) await processMessage(normalizeHistoryMessage(message, groupId))
+        entry.backfillState = 'ok'
+        entry.lastBackfillAt = now()
+        entry.lastSuccessfulBackfillEndAt = end
+        let recoveryCompleted = false
+        if (isRecovery && entry.recoveryEpoch === recoveryEpoch && entry.listenerState === 'ready') {
+          entry.recoveryRequired = false
+          delete entry.recoveryFromAt
+          recoveryCompleted = true
         }
-      } while (!stopping && entry.backfillQueued)
+        delete entry.lastBackfillError
+        delete entry.lastBackfillErrorAt
+        publishHealth()
+        if (!entry.recoveryRequired && (!hadSuccessfulBackfill || recoveryCompleted)) {
+          const completedRecoveryEpoch = entry.recoveryEpoch
+          entry.carrierIssueTail = entry.carrierIssueTail
+            .then(async () => {
+              if (stopping || bridgeEntries.get(groupId) !== entry || entry.listenerState !== 'ready' || entry.recoveryRequired || entry.recoveryEpoch !== completedRecoveryEpoch) return
+              await runtime.resolveGroupCarrierIssues?.({ groupId })
+            })
+            .catch((error) => logger.warn(error))
+        }
+      } catch (error) {
+        entry.backfillState = 'failed'
+        entry.lastBackfillError = describeError(error)
+        entry.lastBackfillErrorAt = now()
+        publishHealth()
+        logger.warn(error)
+      }
     })().finally(() => {
+      delete entry.activeBackfillStartAt
       entry.backfillRunning = false
-      entry.backfillQueued = false
+      const rerunAfterActive = entry.recoveryQueued
+      entry.recoveryQueued = false
+      publishHealth()
+      if (rerunAfterActive && !stopping && currentGroup(groupId) !== undefined) queueGroupBackfill(groupId)
     })
     return entry.backfillPromise
   }
@@ -368,6 +406,9 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     entry.listenerState = 'reconnecting'
     entry.lastListenerExitAt = now()
     entry.lastListenerError = error ? describeError(error) : `dws_consumer_exit:${result?.exitCode ?? 'null'}:${result?.signal ?? 'none'}`
+    entry.recoveryRequired = true
+    entry.recoveryEpoch += 1
+    entry.recoveryFromAt = earlierIso(entry.recoveryFromAt, entry.activeBackfillStartAt ?? beforeOverlap(entry.lastSuccessfulBackfillEndAt) ?? defaultBackfillStart(entry.groupId))
     entry.reconnectAttempt += 1
     publishHealth()
     entry.carrierIssueTail = entry.carrierIssueTail
@@ -383,13 +424,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     entry.reconnectAttempt = 0
     delete entry.lastListenerError
     publishHealth()
-    queueGroupBackfill(entry.groupId)
-    entry.carrierIssueTail = entry.carrierIssueTail
-      .then(async () => {
-        if (stopping || bridgeEntries.get(entry.groupId) !== entry || entry.generation !== generation || entry.subscription !== subscription || entry.listenerState !== 'ready') return
-        await runtime.resolveGroupCarrierIssues?.({ groupId: entry.groupId })
-      })
-      .catch((error) => logger.warn(error))
+    queueGroupBackfill(entry.groupId, { queueAfterActive: true, recovery: entry.recoveryRequired })
   }
   attach = (group) => {
     const entry = entryFor(group.groupId)
