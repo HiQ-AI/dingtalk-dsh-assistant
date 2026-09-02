@@ -233,7 +233,7 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不�
 
 - 缺少任务信息：叶子进入 information waiting，由主会话回群向任务提出人询问。
 - 受控操作或必须真人确认：叶子创建授权申请，页面“授权审批”和 DWS 登录人本人私聊共享同一申请状态机。
-- 钉钉批复必须引用申请消息并明确回复“批准”或“拒绝”；等待不设超时。
+- 钉钉受控操作审批必须引用申请消息并明确回复“批准”或“拒绝”；普通人工处置申请引用回复具体处理结果即可。Runtime 使用独立的个人 IM 实时订阅按被引用的申请 `messageId` 精确关联并恢复 Task，历史查询仅用于离线恢复；等待不设超时。
 - 相同操作范围复用原申请，已批准范围不会重复申请；范围变化才创建新申请。
 
 ### 完成通知
@@ -286,4 +286,5 @@ pnpm test
 - [DSH 原生常驻闭环](docs/spec/dsh-native-resident-closure.md)
 - [任务 Supervisor](docs/spec/running-task-supervisor.md)
 - [授权审批中心](docs/spec/authorization-approval-center.md)
+- [钉钉授权回复实时生效](docs/spec/approval-reply-live-events.md)
 - [运行看板](docs/spec/dingtalk-resident-observer.md)

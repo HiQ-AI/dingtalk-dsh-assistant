@@ -40,6 +40,9 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     compileGroupListen(groupId) {
       return withProfile(['event', '+listen-im', '--kind', 'group', '--events', 'message', '--chat-id', assertStableId(groupId, 'group_id'), '--format', 'ndjson'])
     },
+    compileHumanReplyListen() {
+      return withProfile(['event', '+listen-im', '--kind', 'all-direct', '--events', 'message', '--format', 'ndjson'])
+    },
     compileGroupRead(groupId) {
       return withProfile(['chat', '+chat-messages', '--group', assertStableId(groupId, 'group_id'), '--format', 'json'])
     },
@@ -196,6 +199,32 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       let resolveReady
       const readyPromise = new Promise((resolve) => { resolveReady = resolve })
       const child = runner.spawn(this.compileGroupListen(groupId), {
+        onStdoutLine(line) {
+          try {
+            const event = JSON.parse(line)
+            if (!ready) throw new Error('dws_event_before_ready')
+            onEvent(event)
+          } catch (error) {
+            lifecycle.emit('line-error', error, line)
+          }
+        },
+        onStderrLine(line) {
+          if (/^\[event\] ready\b/.test(line)) {
+            ready = true
+            resolveReady()
+            lifecycle.emit('ready', line)
+          }
+        },
+      })
+      return { lifecycle, ready: readyPromise, done: child.done, stop: () => child.terminate('SIGTERM') }
+    },
+    startHumanReplySubscription(onEvent) {
+      requireEnabled()
+      const lifecycle = new EventEmitter()
+      let ready = false
+      let resolveReady
+      const readyPromise = new Promise((resolve) => { resolveReady = resolve })
+      const child = runner.spawn(this.compileHumanReplyListen(), {
         onStdoutLine(line) {
           try {
             const event = JSON.parse(line)

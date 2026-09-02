@@ -486,7 +486,7 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 `backfill.state: "ok"` 同时出现 `inProgress: true` 且没有 `recoveryRequired` 时，仅表示已有成功结果后的新一轮读取，不是单独的故障信号；仍以顶层 `healthy`、`lastError` 与 listener 状态共同判断。
 
-先读取 `/health` 和 `/state/dws-bridge`。若任一已配置群的 `listener.state` 不是 `ready`，或出现 `lastError`、`reconnect.nextRetryAt`，先查看 DSH 启动日志中的对应错误，并确认该 DWS profile 的登录仍然有效；bridge 会自动重连。`lastExitAt` 只说明曾经退出，仍需结合当前 `state` 和 `healthy` 判断。若 `backfill.state` 不是 `ok`，根据其 `lastError` 排查 DWS 范围读取。随后读取 `/state/groups`，确认目标群仍已订阅。待 listener 恢复为 `ready` 且 backfill 恢复为 `ok` 后，在可控群发送一条新消息，并回读收信箱或 resident Session；诊断接口的恢复不能代替这一步业务验证。
+先读取 `/health` 和 `/state/dws-bridge`。若任一已配置群的 `listener.state` 不是 `ready`，个人审批回复入口 `humanReplies.state` 不是 `ready`，或出现 `lastError`、`reconnect.nextRetryAt`，先查看 DSH 启动日志中的对应错误，并确认该 DWS profile 的登录仍然有效；bridge 会自动重连。`lastExitAt` 只说明曾经退出，仍需结合当前 `state` 和 `healthy` 判断。若 `backfill.state` 不是 `ok`，根据其 `lastError` 排查 DWS 范围读取。随后读取 `/state/groups`，确认目标群仍已订阅。待群 listener、个人审批回复 listener 和 backfill 全部恢复后，在可控群发送一条新消息，并回读收信箱或 resident Session；审批链路还需创建可控申请并在本人单聊引用回复。诊断接口的恢复不能代替业务验证。
 
 ### 群搜索失败
 

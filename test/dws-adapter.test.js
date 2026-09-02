@@ -8,6 +8,7 @@ test('DWS adapter 默认禁用且不会调用 runner', async () => {
   const adapter = createDwsAdapter({ runner })
   await assert.rejects(() => adapter.readGroup('cid-a'), /dws_adapter_disabled/)
   assert.throws(() => adapter.startGroupSubscription('cid-a', () => {}), /dws_adapter_disabled/)
+  assert.throws(() => adapter.startHumanReplySubscription(() => {}), /dws_adapter_disabled/)
   assert.equal(calls, 0)
 })
 
@@ -29,9 +30,27 @@ test('群监听等待 ready 后逐行交付且坏行不吞后续事件', async (
   assert.equal(subscription.stop(), 'SIGTERM')
 })
 
+test('个人IM监听等待ready后交付引用回复', async () => {
+  let hooks
+  const runner = { run: async () => undefined, spawn(args, value) { hooks = value; assert.deepEqual(args, ['event', '+listen-im', '--kind', 'all-direct', '--events', 'message', '--format', 'ndjson']); return { done: Promise.resolve(), terminate: (signal) => signal } } }
+  const adapter = createDwsAdapter({ enabled: true, runner })
+  const events = []
+  const errors = []
+  const subscription = adapter.startHumanReplySubscription((event) => events.push(event))
+  subscription.lifecycle.on('line-error', (error) => errors.push(error.message))
+  hooks.onStdoutLine('{"message_id":"early"}')
+  hooks.onStderrLine('[event] ready event_key=user_im_message_receive_o2o_all bus_pid=1 subscribe_id=s1')
+  hooks.onStdoutLine('{"message_id":"reply-1","conversation_id":"self-cid","quotedMessage":{"messageId":"request-1"}}')
+
+  assert.deepEqual(events.map((event) => event.message_id), ['reply-1'])
+  assert.deepEqual(errors, ['dws_event_before_ready'])
+  assert.equal(subscription.stop(), 'SIGTERM')
+})
+
 test('DWS profile固定附加到订阅、回读和发送命令', () => {
   const adapter = createDwsAdapter({ enabled: true, profile: 'corp:user', runner: { run: async () => undefined, spawn: () => undefined } })
   assert.deepEqual(adapter.compileGroupListen('cid-a').slice(-2), ['--profile', 'corp:user'])
+  assert.deepEqual(adapter.compileHumanReplyListen().slice(-2), ['--profile', 'corp:user'])
   assert.deepEqual(adapter.compileGroupRead('cid-a').slice(-2), ['--profile', 'corp:user'])
   assert.deepEqual(adapter.compileGroupSend({ groupId: 'cid-a', text: 'reply', idempotencyKey: 'out-1' }).slice(-2), ['--profile', 'corp:user'])
   assert.deepEqual(adapter.compileSelfSend({ userId: 'self-user', text: 'blocked', idempotencyKey: 'blocker-1' }).slice(-2), ['--profile', 'corp:user'])
