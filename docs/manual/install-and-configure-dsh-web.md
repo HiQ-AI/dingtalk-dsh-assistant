@@ -6,7 +6,7 @@
 
 - `dingtalk-dsh-assistant`：对外安装入口，负责把下列两个包加入 DSH Web profile。
 - `@zzusp/dingtalk-dsh-assistant`：resident Runtime、钉钉接入和设置页。
-- `@zzusp/dingtalk-dsh-observer`：群聊会话、任务、授权和告警看板。
+- `@zzusp/dingtalk-dsh-observer`：群聊会话、任务、人工介入和告警看板。
 
 推荐让 Web、resident Runtime 和看板运行在同一个 `dsh web` 进程中，避免多个进程同时写 Session 和插件状态。
 
@@ -486,7 +486,7 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 `backfill.state: "ok"` 同时出现 `inProgress: true` 且没有 `recoveryRequired` 时，仅表示已有成功结果后的新一轮读取，不是单独的故障信号；仍以顶层 `healthy`、`lastError` 与 listener 状态共同判断。
 
-先读取 `/health` 和 `/state/dws-bridge`。若任一已配置群的 `listener.state` 不是 `ready`，或出现 `lastError`、`reconnect.nextRetryAt`，先查看 DSH 启动日志中的对应错误，并确认该 DWS profile 的登录仍然有效；bridge 会自动重连。`lastExitAt` 只说明曾经退出，仍需结合当前 `state` 和 `healthy` 判断。若 `backfill.state` 不是 `ok`，根据其 `lastError` 排查 DWS 范围读取。随后读取 `/state/groups`，确认目标群仍已订阅。待 listener 恢复为 `ready` 且 backfill 恢复为 `ok` 后，在可控群发送一条新消息，并回读收信箱或 resident Session；诊断接口的恢复不能代替这一步业务验证。
+先读取 `/health` 和 `/state/dws-bridge`。若任一已配置群的 `listener.state` 不是 `ready`，个人介入回复入口 `humanReplies.state` 不是 `ready`，或出现 `lastError`、`reconnect.nextRetryAt`，先查看 DSH 启动日志中的对应错误，并确认该 DWS profile 的登录仍然有效；bridge 会自动重连。`lastExitAt` 只说明曾经退出，仍需结合当前 `state` 和 `healthy` 判断。若 `backfill.state` 不是 `ok`，根据其 `lastError` 排查 DWS 范围读取。随后读取 `/state/groups`，确认目标群仍已订阅。待群 listener、个人介入回复 listener 和 backfill 全部恢复后，在可控群发送一条新消息，并回读收信箱或 resident Session；人工介入链路还需创建可控阻塞事项并在本人单聊引用回复。诊断接口的恢复不能代替业务验证。
 
 ### 群搜索失败
 
@@ -507,6 +507,6 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 5. 目标群成功绑定唯一 resident Session。
 6. 真实群消息进入该 Session。
 7. 开放写入后，最小任务完成回复并经钉钉回读确认。
-8. 运行看板中的收信箱、发信箱、阶段任务和状态与实际 Session/钉钉回读一致；消息与审批表格的状态列位于最左侧，长内容最多显示两行，任务状态桶不产生页面级纵向滚动。
+8. 运行看板中的收信箱、发信箱、阶段任务和状态与实际 Session/钉钉回读一致；消息与人工介入表格的状态列位于最左侧，长内容最多显示两行，任务状态桶不产生页面级纵向滚动。
 
 前一层的成功不能替代后一层的验证。

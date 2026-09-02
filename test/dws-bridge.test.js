@@ -299,7 +299,7 @@ test('没有订阅群时 bridge 也会发布初始健康状态', async () => {
     onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
   }
   const stop = startDwsBridge({ runtime, adapter: {}, logger: { warn() {} }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, onHealthChange: (value) => { health = value } })
-  assert.deepEqual(health, { healthy: true, groups: [] })
+  assert.deepEqual(health, { healthy: true, groups: [], humanReplies: { state: 'unavailable', generation: 0, reconnect: { attempt: 0 } } })
   await stop()
 })
 
@@ -624,8 +624,87 @@ test('本人私聊阻塞不设超时并只用引用消息恢复原Task', async (
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(resolutions.length, 1)
   assert.equal(resolutions[0].quotedMessageId, 'blocker-message')
+  assert.equal(resolutions[0].decision, 'approved')
   assert.equal(warnings.length, 0)
   await stop()
+})
+
+test('个人IM实时引用回复精确恢复redline审批且重复事件幂等', async () => {
+  const task = { taskId: 'task-live-redline', state: 'waiting', waitingKind: 'human-intervention', humanBlocker: { requestId: 'blocker-live', category: 'redline', status: 'waiting-reply', conversationId: 'self-cid', messageId: 'request-msg', sentAt: '2026-09-02T07:00:00Z', formatVersion: 3 } }
+  const resolutions = []
+  let onHumanReply, resolveDone, stopped = false, health
+  const done = new Promise((resolve) => { resolveDone = resolve })
+  const runtime = {
+    listGroups: () => [], listTasks: () => [task],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined }, onHumanBlockerRequested() { return () => undefined },
+    async resolveHumanBlocker(value) { resolutions.push(value); task.state = 'running' },
+  }
+  const adapter = {
+    startHumanReplySubscription(callback) { onHumanReply = callback; return { lifecycle: new EventEmitter(), done, stop() { stopped = true; resolveDone(undefined) } } },
+    async findHumanBlockerExchange() { return undefined }, async readConversation() { return [] },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, onHealthChange: (value) => { health = value } })
+  assert.equal(health.humanReplies.state, 'ready')
+  await onHumanReply({ conversation_id: 'self-cid', message_id: 'reply-wrong', content: '批准', quotedMessage: { messageId: 'another-request' } })
+  await onHumanReply({ conversation_id: 'self-cid', message_id: 'reply-approved', content: '按限定范围执行', quotedMessage: { messageId: 'request-msg' } })
+  await onHumanReply({ conversation_id: 'self-cid', message_id: 'reply-approved', content: '按限定范围执行', quotedMessage: { messageId: 'request-msg' } })
+
+  assert.deepEqual(resolutions, [{ taskId: 'task-live-redline', requestId: 'blocker-live', quotedMessageId: 'request-msg', replyMessageId: 'reply-approved', reply: '按限定范围执行', decision: 'approved' }])
+  await stop()
+  assert.equal(stopped, true)
+})
+
+test('非redline个人引用回复按处置意见恢复并补齐approved decision', async () => {
+  const task = { taskId: 'task-live-help', state: 'waiting', waitingKind: 'human-intervention', humanBlocker: { requestId: 'blocker-help', category: 'network', status: 'waiting-reply', conversationId: 'self-cid', messageId: 'request-help', sentAt: '2026-09-02T07:00:00Z', formatVersion: 3 } }
+  const resolutions = []
+  let onHumanReply, resolveDone
+  const done = new Promise((resolve) => { resolveDone = resolve })
+  const runtime = {
+    listGroups: () => [], listTasks: () => [task],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined }, onHumanBlockerRequested() { return () => undefined },
+    async resolveHumanBlocker(value) { resolutions.push(value); task.state = 'running' },
+  }
+  const adapter = {
+    startHumanReplySubscription(callback) { onHumanReply = callback; return { lifecycle: new EventEmitter(), done, stop() { resolveDone(undefined) } } },
+    async findHumanBlockerExchange() { return undefined }, async readConversation() { return [] },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0 })
+  await onHumanReply({ conversation_id: 'self-cid', message_id: 'reply-help', content: '网络已经恢复，请继续', quotedMessage: { messageId: 'request-help' } })
+
+  assert.equal(resolutions[0].decision, 'approved')
+  assert.equal(resolutions[0].reply, '网络已经恢复，请继续')
+  await stop()
+})
+
+test('个人IM审批监听异常退出后重连并恢复健康', async () => {
+  const listeners = []
+  let health
+  const runtime = {
+    listGroups: () => [], listTasks: () => [],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined }, onHumanBlockerRequested() { return () => undefined },
+  }
+  const adapter = {
+    startHumanReplySubscription(callback) {
+      let resolveDone
+      const done = new Promise((resolve) => { resolveDone = resolve })
+      const listener = { callback, resolveDone, stopped: false }
+      listener.subscription = { lifecycle: new EventEmitter(), done, stop() { listener.stopped = true; resolveDone(undefined) } }
+      listeners.push(listener)
+      return listener.subscription
+    },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, listenerReconnectBaseMs: 0, listenerReconnectMaxMs: 0, listenerReadyTimeoutMs: 0, onHealthChange: (value) => { health = value } })
+  assert.equal(health.healthy, true)
+  listeners[0].resolveDone({ exitCode: 9, signal: null })
+  for (let attempts = 0; attempts < 20 && listeners.length < 2; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+
+  assert.equal(listeners.length, 2)
+  assert.equal(health.healthy, true)
+  assert.equal(health.humanReplies.state, 'ready')
+  assert.equal(health.humanReplies.generation, 2)
+  assert.equal(health.humanReplies.reconnect.attempt, 0)
+  await stop()
+  assert.equal(listeners[1].stopped, true)
 })
 
 test('阻塞单已真实发送并获引用批准时自动补记投递并恢复原Task', async () => {
@@ -674,11 +753,13 @@ test('已补记错误恢复时间的阻塞单会改用原申请时间回读批�
   assert.equal(task.state, 'running')
 })
 
-test('redline 阻塞只接受引用消息中的明确批准或拒绝', () => {
+test('redline 阻塞将非空引用回复视为批复并保留明确拒绝语义', () => {
   assert.equal(parseRedlineDecision('批准'), 'approved')
   assert.equal(parseRedlineDecision('批准：做好回滚机制'), 'approved')
   assert.equal(parseRedlineDecision('拒绝，风险过高'), 'rejected')
-  assert.equal(parseRedlineDecision('先等等'), undefined)
+  assert.equal(parseRedlineDecision('不批准：风险过高'), 'rejected')
+  assert.equal(parseRedlineDecision('按限定范围执行'), 'approved')
+  assert.equal(parseRedlineDecision(''), undefined)
 })
 
 test('Web在DWS发送过程中批复时撤回已落地申请并停止等待', async () => {

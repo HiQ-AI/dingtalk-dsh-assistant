@@ -45,15 +45,21 @@ export function normalizeHistoryMessage(message, fallbackGroupId) {
 
 export function parseRedlineDecision(text) {
   const normalized = String(text ?? '').trim()
-  if (/^(批准|同意)(?:$|[：:，,。\s])/u.test(normalized)) return 'approved'
-  if (/^(拒绝|不同意)(?:$|[：:，,。\s])/u.test(normalized)) return 'rejected'
-  return undefined
+  if (normalized === '') return undefined
+  if (/^(拒绝|不同意|不批准)(?:$|[：:，,。\s])/u.test(normalized)) return 'rejected'
+  return 'approved'
 }
 
 export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentDwsUserName, humanPollIntervalMs = 30_000, groupBackfillIntervalMs = 10_000, groupBackfillOverlapMs = 30_000, outboxRetryIntervalMs = 10_000, listenerReconnectBaseMs = 1_000, listenerReconnectMaxMs = 30_000, listenerReadyTimeoutMs = 15_000, onHealthChange }) {
   const subscriptions = new Map()
   const bridgeEntries = new Map()
   const inflightMessages = new Map()
+  const inflightHumanReplies = new Map()
+  const humanReplyEntry = {
+    generation: 0,
+    listenerState: typeof adapter.startHumanReplySubscription === 'function' ? 'starting' : 'unavailable',
+    reconnectAttempt: 0,
+  }
   let stopping = false
   let humanPollTimer
   let humanPollTail = Promise.resolve()
@@ -177,9 +183,25 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         },
       }
     })
+    const humanReplies = {
+      state: humanReplyEntry.listenerState,
+      generation: humanReplyEntry.generation,
+      ...(humanReplyEntry.listenerStartedAt ? { startedAt: humanReplyEntry.listenerStartedAt } : {}),
+      ...(humanReplyEntry.listenerReadyAt ? { readyAt: humanReplyEntry.listenerReadyAt } : {}),
+      ...(humanReplyEntry.lastEventAt ? { lastEventAt: humanReplyEntry.lastEventAt } : {}),
+      ...(humanReplyEntry.lastEventError ? { lastEventError: humanReplyEntry.lastEventError } : {}),
+      ...(humanReplyEntry.lastListenerExitAt ? { lastExitAt: humanReplyEntry.lastListenerExitAt } : {}),
+      ...(humanReplyEntry.lastListenerError ? { lastError: humanReplyEntry.lastListenerError } : {}),
+      reconnect: {
+        attempt: humanReplyEntry.reconnectAttempt,
+        ...(humanReplyEntry.nextRetryAt ? { nextRetryAt: humanReplyEntry.nextRetryAt } : {}),
+      },
+    }
+    const groupsHealthy = groups.length === 0 || groups.every((group) => group.listener.state === 'ready' && group.backfill.state === 'ok' && group.backfill.recoveryRequired !== true)
     return {
-      healthy: groups.length === 0 || groups.every((group) => group.listener.state === 'ready' && group.backfill.state === 'ok' && group.backfill.recoveryRequired !== true),
+      healthy: groupsHealthy && (humanReplies.state === 'ready' || humanReplies.state === 'unavailable'),
       groups,
+      humanReplies,
     }
   }
   const publishHealth = () => {
@@ -278,11 +300,9 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     const currentItems = (items = []) => items.filter((item) => !/AP-\d|Approval Server|SSE|审批申请消息|完整审批号/u.test(item))
     const evidence = currentItems(result?.evidence)
     const attemptedActions = currentItems(result?.attemptedActions)
-    const requestedAction = redline
-      ? task.humanBlocker.requestedAction.replace(/^请[^，。\n]+引用.*?明确批准\/拒绝/u, '请明确回复“批准”或“拒绝”：')
-      : task.humanBlocker.requestedAction
+    const requestedAction = task.humanBlocker.requestedAction
     return [
-      redline ? '【群聊个人助理受控操作阻塞，等待真人审批】' : '【群聊个人助理任务阻塞，等待真人处理】',
+      redline ? '【群聊个人助理受控操作阻塞，等待人工介入】' : '【群聊个人助理任务阻塞，等待人工介入】',
       '',
       `Task ID：${task.taskId}`,
       `阻塞请求 ID：${task.humanBlocker.requestId}`,
@@ -295,7 +315,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       `阻塞原因：${task.waitingReason}`,
       '',
       '【风险】',
-      result?.risk ?? '未单独说明；以阻塞原因、现场证据和申请范围为准。',
+      result?.risk ?? '未单独说明；以阻塞原因、现场证据和处理范围为准。',
       '',
       '【现场证据】',
       ...(evidence.length > 0 ? evidence.map((item) => `- ${item}`) : ['- 暂无']),
@@ -303,15 +323,43 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       '【已尝试】',
       ...(attemptedActions.length > 0 ? attemptedActions.map((item) => `- ${item}`) : ['- 无可安全执行的尝试']),
       '',
-      redline ? '【审批范围】' : '【需要真人答复】',
+      '【需要人工处理】',
       requestedAction,
       '',
       redline
-        ? '请直接引用本消息回复“批准”或“拒绝”，可在其后补充条件；只有引用回复且决定明确时才会恢复对应任务。该等待不设超时。'
+        ? '请直接引用本消息回复处理意见；明确回复“拒绝”“不同意”或“不批准”时不执行该操作，其余非空引用回复使任务继续，并将完整原文交给任务重新核验。该等待不设超时。'
         : '请直接引用本消息回复处理方案；只有引用回复会恢复对应任务。该等待不设超时。',
     ].join('\n')
   }
   const quotedMessageId = (message) => message.quotedMessage?.messageId ?? message.quotedMessage?.message_id ?? message.quoted_message?.messageId ?? message.quoted_message?.message_id
+  const processHumanReplyEvent = (event) => {
+    const message = normalizeEvent(event)
+    const quotedId = quotedMessageId(message)
+    const reply = typeof message.text === 'string' ? message.text.trim() : ''
+    if (!quotedId || !reply) return Promise.resolve()
+    const existing = inflightHumanReplies.get(message.messageId)
+    if (existing !== undefined) return existing
+    const operation = (async () => {
+      const task = (runtime.listTasks?.() ?? []).find((item) => item.state === 'waiting'
+        && item.waitingKind === 'human-intervention'
+        && item.humanBlocker?.status === 'waiting-reply'
+        && item.humanBlocker.messageId === quotedId)
+      if (task === undefined) return
+      const decision = task.humanBlocker.category === 'redline' ? parseRedlineDecision(reply) : 'approved'
+      if (decision === undefined) return
+      await runtime.resolveHumanBlocker({
+        taskId: task.taskId,
+        requestId: task.humanBlocker.requestId,
+        quotedMessageId: quotedId,
+        replyMessageId: message.messageId,
+        reply,
+        decision,
+      })
+    })()
+    inflightHumanReplies.set(message.messageId, operation)
+    operation.finally(() => { if (inflightHumanReplies.get(message.messageId) === operation) inflightHumanReplies.delete(message.messageId) }).catch(() => undefined)
+    return operation
+  }
   const recallInactiveAuthorization = async (authorization) => {
     const shouldRecall = (authorization?.status === 'answered' && authorization.decisionSource === 'web') || authorization?.status === 'superseded'
     if (!shouldRecall || !authorization.messageId || authorization.recallStatus === 'recalled') return
@@ -342,7 +390,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
             const current = runtime.getAuthorizationRequest?.(blocker.requestId)
             if (current?.status === 'answered') { await recallInactiveAuthorization(current); continue }
             if (recovered.replyMessageId && recovered.reply) {
-              const decision = blocker.category === 'redline' ? parseRedlineDecision(recovered.reply) : undefined
+              const decision = blocker.category === 'redline' ? parseRedlineDecision(recovered.reply) : 'approved'
               if (blocker.category !== 'redline' || decision !== undefined) await runtime.resolveHumanBlocker({ taskId: task.taskId, requestId: blocker.requestId, quotedMessageId: recovered.messageId, replyMessageId: recovered.replyMessageId, reply: recovered.reply, decision })
             }
             continue
@@ -362,7 +410,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         if (reply === undefined) continue
         const text = typeof reply.text === 'string' ? reply.text.trim() : typeof reply.content === 'string' ? reply.content.trim() : ''
         if (text === '') continue
-        const decision = blocker.category === 'redline' ? parseRedlineDecision(text) : undefined
+        const decision = blocker.category === 'redline' ? parseRedlineDecision(text) : 'approved'
         if (blocker.category === 'redline' && decision === undefined) continue
         await runtime.resolveHumanBlocker({ taskId: task.taskId, requestId: blocker.requestId, quotedMessageId: blocker.messageId, replyMessageId: reply.messageId, reply: text, decision })
       }
@@ -479,6 +527,100 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       if (result !== undefined) listenerFailed(entry, generation, subscription, { result })
     }, (error) => listenerFailed(entry, generation, subscription, { error })).catch((error) => logger.warn(error))
   }
+  const clearHumanReplyReadyTimer = () => {
+    if (humanReplyEntry.readyTimer !== undefined) clearTimeout(humanReplyEntry.readyTimer)
+    humanReplyEntry.readyTimer = undefined
+  }
+  const clearHumanReplyRetryTimer = () => {
+    if (humanReplyEntry.retryTimer !== undefined) clearTimeout(humanReplyEntry.retryTimer)
+    humanReplyEntry.retryTimer = undefined
+    delete humanReplyEntry.nextRetryAt
+  }
+  let attachHumanReplies
+  const scheduleHumanReplyReconnect = () => {
+    if (stopping || humanReplyEntry.retryTimer !== undefined || humanReplyEntry.subscription !== undefined || typeof attachHumanReplies !== 'function') return
+    const base = Math.max(0, listenerReconnectBaseMs)
+    const maximum = Math.max(base, listenerReconnectMaxMs)
+    const delay = Math.min(maximum, base * (2 ** Math.max(0, humanReplyEntry.reconnectAttempt - 1)))
+    humanReplyEntry.nextRetryAt = new Date(Date.now() + delay).toISOString()
+    humanReplyEntry.retryTimer = setTimeout(() => {
+      humanReplyEntry.retryTimer = undefined
+      delete humanReplyEntry.nextRetryAt
+      attachHumanReplies()
+    }, delay)
+    humanReplyEntry.retryTimer.unref?.()
+    publishHealth()
+  }
+  const humanReplyListenerFailed = (generation, subscription, { result, error } = {}) => {
+    if (stopping || humanReplyEntry.generation !== generation) return
+    if (subscription !== undefined && humanReplyEntry.subscription !== subscription) return
+    clearHumanReplyReadyTimer()
+    humanReplyEntry.subscription = undefined
+    humanReplyEntry.listenerState = 'reconnecting'
+    humanReplyEntry.lastListenerExitAt = now()
+    humanReplyEntry.lastListenerError = error ? describeError(error) : `dws_human_reply_consumer_exit:${result?.exitCode ?? 'null'}:${result?.signal ?? 'none'}`
+    humanReplyEntry.reconnectAttempt += 1
+    publishHealth()
+    scheduleHumanReplyReconnect()
+  }
+  attachHumanReplies = () => {
+    if (stopping || typeof adapter.startHumanReplySubscription !== 'function' || humanReplyEntry.subscription !== undefined || humanReplyEntry.retryTimer !== undefined) return
+    const generation = humanReplyEntry.generation + 1
+    humanReplyEntry.generation = generation
+    humanReplyEntry.listenerState = 'starting'
+    humanReplyEntry.listenerStartedAt = now()
+    delete humanReplyEntry.lastListenerError
+    publishHealth()
+    let subscription
+    try {
+      subscription = adapter.startHumanReplySubscription(async (event) => {
+        if (stopping || humanReplyEntry.generation !== generation || humanReplyEntry.subscription !== subscription) return
+        try {
+          humanReplyEntry.lastEventAt = now()
+          delete humanReplyEntry.lastEventError
+          publishHealth()
+          await processHumanReplyEvent(event)
+        } catch (error) {
+          humanReplyEntry.lastEventError = describeError(error)
+          publishHealth()
+          logger.warn(error)
+        }
+      })
+    } catch (error) {
+      humanReplyListenerFailed(generation, undefined, { error })
+      return
+    }
+    humanReplyEntry.subscription = subscription
+    const ready = () => {
+      if (stopping || humanReplyEntry.generation !== generation || humanReplyEntry.subscription !== subscription) return
+      clearHumanReplyReadyTimer()
+      humanReplyEntry.listenerState = 'ready'
+      humanReplyEntry.listenerReadyAt = now()
+      humanReplyEntry.reconnectAttempt = 0
+      delete humanReplyEntry.lastListenerError
+      publishHealth()
+    }
+    subscription.lifecycle?.on?.('ready', ready)
+    subscription.lifecycle?.on?.('line-error', (error) => {
+      if (humanReplyEntry.generation !== generation || humanReplyEntry.subscription !== subscription) return
+      humanReplyEntry.lastEventError = describeError(error)
+      publishHealth()
+      logger.warn(error)
+    })
+    if (subscription.ready === undefined) ready()
+    else Promise.resolve(subscription.ready).then(ready, (error) => humanReplyListenerFailed(generation, subscription, { error })).catch((error) => logger.warn(error))
+    if (listenerReadyTimeoutMs > 0 && humanReplyEntry.listenerState === 'starting') {
+      humanReplyEntry.readyTimer = setTimeout(() => {
+        if (humanReplyEntry.listenerState !== 'starting' || humanReplyEntry.generation !== generation || humanReplyEntry.subscription !== subscription) return
+        humanReplyListenerFailed(generation, subscription, { error: new Error('dws_human_reply_listener_ready_timeout') })
+        try { subscription.stop() } catch (error) { logger.warn(error) }
+      }, listenerReadyTimeoutMs)
+      humanReplyEntry.readyTimer.unref?.()
+    }
+    Promise.resolve(subscription.done).then((result) => {
+      if (result !== undefined) humanReplyListenerFailed(generation, subscription, { result })
+    }, (error) => humanReplyListenerFailed(generation, subscription, { error })).catch((error) => logger.warn(error))
+  }
   const stopEntry = (groupId, { remove = false } = {}) => {
     const entry = bridgeEntries.get(groupId)
     if (entry === undefined) return undefined
@@ -495,6 +637,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
   }
 
   for (const group of runtime.listGroups()) attach(group)
+  attachHumanReplies()
   const detachListener = runtime.onGroupSubscribed(attach)
   const detachUnsubscribeListener = (runtime.onGroupUnsubscribed ?? (() => () => undefined))(({ groupId }) => {
     stopEntry(groupId, { remove: true })
@@ -537,14 +680,23 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     detachGroupMessageRecaller()
     const entries = [...bridgeEntries.values()]
     const closingSubscriptions = entries.map((entry) => entry.subscription).filter(Boolean)
+    const closingHumanReplySubscription = humanReplyEntry.subscription
+    humanReplyEntry.generation += 1
+    clearHumanReplyReadyTimer()
+    clearHumanReplyRetryTimer()
+    humanReplyEntry.subscription = undefined
+    humanReplyEntry.listenerState = 'stopped'
+    try { closingHumanReplySubscription?.stop() } catch (error) { logger.warn(error) }
     for (const entry of entries) stopEntry(entry.groupId)
     publishHealth()
     await Promise.allSettled(closingSubscriptions.map((subscription) => subscription.done))
+    if (closingHumanReplySubscription !== undefined) await Promise.allSettled([closingHumanReplySubscription.done])
     await humanPollTail
     await Promise.allSettled(entries.map((entry) => entry.backfillPromise))
     await outboxRetryTail
     subscriptions.clear()
     bridgeEntries.clear()
     inflightMessages.clear()
+    inflightHumanReplies.clear()
   }
 }

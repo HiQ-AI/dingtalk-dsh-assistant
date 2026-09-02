@@ -1,0 +1,11 @@
+case_id,case,round_1
+TC01,个人IM监听命令与ready门禁,PASS
+TC02,redline按精确引用接受无关键词批复且重复事件幂等,PASS
+TC03,普通人工处置实时回复补齐approved决定,PASS
+TC04,历史轮询普通人工处置补齐approved决定,PASS
+TC05,个人IM监听退出后自动重连并恢复健康,PASS
+TC06,关键审批用例连续20轮无失败,PASS
+TC07,全量自动化测试151项,PASS
+TC08,发行包包含本次修复并绑定源码,PASS
+TC09,本地运行态个人和群监听均ready,PASS
+TC10,真实钉钉无批准拒绝关键词的引用回复恢复可控Task,PASS
