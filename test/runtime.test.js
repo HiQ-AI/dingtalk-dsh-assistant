@@ -77,7 +77,24 @@ function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false 
     },
     async markMessageAgentDelivery({ messageId, status, error }) { Object.assign(group.messages.find((item) => item.messageId === messageId), { agentDeliveryStatus: status, ...(error === undefined ? {} : { error }) }); return group },
     async appendOutbox(value) { group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
-    async createTask(value) { const task = { ...value, taskId: `task-${tasks.length + 1}`, childSessionId: `session-task-${tasks.length + 1}`, state: 'queued' }; tasks.push(task); return { created: true, task } },
+    async createTask(value) {
+      const { sourceMessageIds, ...taskValue } = value
+      const messageHistory = (sourceMessageIds ?? [value.sourceMessageId]).flatMap((messageId) => {
+        const message = group.messages.find((item) => item.messageId === messageId)
+        if (message === undefined) return []
+        return [{
+          messageId: message.messageId, text: message.text,
+          ...(message.senderName ? { senderName: message.senderName } : {}),
+          ...(message.senderOpenDingTalkId ? { senderOpenDingTalkId: message.senderOpenDingTalkId } : {}),
+          ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}),
+          ...(message.quotedMessage?.messageId ? { quotedMessageId: message.quotedMessage.messageId } : {}),
+          runSequence: 1, associatedAt: '2026-09-02T00:00:00.000Z',
+        }]
+      })
+      const task = { ...taskValue, ...(messageHistory.length > 0 ? { messageHistory } : {}), taskId: `task-${tasks.length + 1}`, childSessionId: `session-task-${tasks.length + 1}`, state: 'queued' }
+      tasks.push(task)
+      return { created: true, task }
+    },
     close: async () => undefined,
   }
   return { group, steered, followups, registeredTools, tasks, releaseIdle, waitForSteers, ctx, store, handle, taskCapacity }
@@ -120,10 +137,10 @@ function twoGroupDecisionFixture() {
   return { groups, handles, registeredTools, steered, waitForSteers, ctx, store }
 }
 
-function taskReplyRuntimeFixture() {
+function taskReplyRuntimeFixture({ messageHistory, groupMessages = [] } = {}) {
   const result = { status: 'completed', workType: 'non-development', summary: '原完成结果', evidence: ['已核验'], artifacts: [] }
-  const group = { groupId: 'task-reply-group', residentSessionId: 'session-task-reply', residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }
-  let task = { taskId: 'task-reply', groupId: group.groupId, state: 'completed', objective: '完成既定事项', sourceMessageId: 'source-message', requesterName: '提出人', requesterOpenDingTalkId: 'od-requester', completionSequence: 1, result, lastCompletedResult: result }
+  const group = { groupId: 'task-reply-group', residentSessionId: 'session-task-reply', residentAgentPreset: 'standard', nextSequence: groupMessages.length + 1, messages: groupMessages, outbox: [] }
+  let task = { taskId: 'task-reply', groupId: group.groupId, state: 'completed', objective: '完成既定事项', sourceMessageId: 'source-message', requesterName: '提出人', requesterOpenDingTalkId: 'od-requester', ...(messageHistory ? { messageHistory } : {}), completionSequence: 1, result, lastCompletedResult: result }
   const registeredTools = [], followups = [], steered = []
   const neverIdle = new Promise(() => undefined)
   let idleCalls = 0
@@ -199,7 +216,7 @@ test('模型可合并相关请求且Runtime只提交一次副作用并保留全�
   await fixture.waitForSteers(2)
   const requestIds = fixture.steered.map(decisionRequestId)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await tool.execute({ observedRequestIds: requestIds, submissions: [{ requestIds, decision: { actions: [{ kind: 'new-task', title: '合并处理', objective: '处理主体与补充范围', acceptanceCriteria: ['范围均已核验'] }], reply: '已开始处理。' } }] }, { agent: fixture.handle.agent })
+  await tool.execute({ observedRequestIds: requestIds, submissions: [{ requestIds, decision: { actions: [{ kind: 'new-task', title: '合并处理', objective: '处理主体与补充范围', acceptanceCriteria: ['范围均已核验'], sourceMessageIds: ['m1', 'm2'] }], reply: '已开始处理。' } }] }, { agent: fixture.handle.agent })
   const [firstResult, secondResult] = await Promise.all([first, second])
   assert.equal(fixture.tasks.length, 1, '共享Decision的业务副作用只能由最早请求执行一次')
   assert.equal(fixture.group.outbox.length, 1)
@@ -226,7 +243,7 @@ test('同批四条消息可同时表达部分相关独立完成与仅观察待�
   const submitted = await tool.execute({
     observedRequestIds: [requestA, requestB, requestC, requestD],
     submissions: [
-      { requestIds: [requestA, requestB], decision: { actions: [{ kind: 'new-task', title: '合并AB', objective: '结合A与B完成同一事项', acceptanceCriteria: ['A与B均已覆盖'] }], reply: '已结合A与B处理。' } },
+      { requestIds: [requestA, requestB], decision: { actions: [{ kind: 'new-task', title: '合并AB', objective: '结合A与B完成同一事项', acceptanceCriteria: ['A与B均已覆盖'], sourceMessageIds: ['m-a', 'm-b'] }], reply: '已结合A与B处理。' } },
       { requestIds: [requestC], decision: { actions: [], reason: 'C是独立且无需回复的事项' } },
     ],
   }, { agent: fixture.handle.agent })
@@ -241,6 +258,47 @@ test('同批四条消息可同时表达部分相关独立完成与仅观察待�
 
   await tool.execute({ submissions: [{ requestIds: [requestD], decision: { actions: [], reason: 'D在回复后继续处理' } }] }, { agent: fixture.handle.agent })
   assert.equal((await ingests[3]).decision.reason, 'D在回复后继续处理')
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('一个Decision可把历史与当前消息多对多关联到不同Task', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'many-to-many-history-group' })
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  await runtime.backfill([{
+    groupId: fixture.group.groupId, messageId: 'm-history', text: '最初提出两个事项', occurredAt: '2026-09-02T00:59:59Z', senderName: '最初提出人', senderOpenDingTalkId: 'od-history',
+  }])
+  const ingests = [
+    runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-a', text: '事项A的执行要求', occurredAt: '2026-09-02T01:00:00Z', senderName: '甲', senderOpenDingTalkId: 'od-a' }),
+    runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-b', text: 'A与B共用的约束', occurredAt: '2026-09-02T01:00:01Z', senderName: '乙', senderOpenDingTalkId: 'od-b' }),
+    runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-c', text: '事项B的验收要求', occurredAt: '2026-09-02T01:00:02Z', senderName: '丙', senderOpenDingTalkId: 'od-c' }),
+  ]
+  await fixture.waitForSteers(3)
+  const requestIds = fixture.steered.map(decisionRequestId)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  const submission = (actions) => ({ observedRequestIds: requestIds, submissions: [{ requestIds, decision: { actions, reply: '' } }] })
+
+  await assert.rejects(tool.execute(submission([{ kind: 'new-task', title: '缺少来源', objective: '不得创建', acceptanceCriteria: ['不得创建'] }]), { agent: fixture.handle.agent }), /group_decision_invalid_schema/)
+  await assert.rejects(tool.execute(submission([{ kind: 'new-task', title: '重复来源', objective: '不得创建', acceptanceCriteria: ['不得创建'], sourceMessageIds: ['m-a', 'm-a'] }]), { agent: fixture.handle.agent }), /task_action_source_message_duplicate/)
+  await assert.rejects(tool.execute(submission([{ kind: 'new-task', title: '未知来源', objective: '不得创建', acceptanceCriteria: ['不得创建'], sourceMessageIds: ['m-a', 'm-missing'] }]), { agent: fixture.handle.agent }), /task_action_source_message_invalid/)
+  await assert.rejects(tool.execute(submission([{ kind: 'new-task', title: '只有旧来源', objective: '不得创建', acceptanceCriteria: ['不得创建'], sourceMessageIds: ['m-history'] }]), { agent: fixture.handle.agent }), /task_action_current_source_message_required/)
+  assert.equal(fixture.tasks.length, 0, '来源映射全量预检失败时不得产生部分副作用')
+
+  await tool.execute(submission([
+    { kind: 'new-task', title: '事项A', objective: '完成事项A', acceptanceCriteria: ['A完成'], sourceMessageIds: ['m-history', 'm-a', 'm-b'] },
+    { kind: 'new-task', title: '事项B', objective: '完成事项B', acceptanceCriteria: ['B完成'], sourceMessageIds: ['m-history', 'm-b', 'm-c'] },
+  ]), { agent: fixture.handle.agent })
+  await Promise.all(ingests)
+
+  assert.deepEqual(fixture.tasks.map((task) => task.messageHistory.map((message) => message.messageId)), [
+    ['m-history', 'm-a', 'm-b'],
+    ['m-history', 'm-b', 'm-c'],
+  ])
+  assert.deepEqual(fixture.tasks[0].messageHistory.map((message) => message.senderOpenDingTalkId), ['od-history', 'od-a', 'od-b'])
+  assert.deepEqual(fixture.tasks[1].messageHistory.map((message) => message.senderOpenDingTalkId), ['od-history', 'od-b', 'od-c'])
+  assert.doesNotMatch(fixture.tasks[0].relatedContexts[0], /事项B的验收要求/u)
+  assert.doesNotMatch(fixture.tasks[1].relatedContexts[0], /事项A的执行要求/u)
+  assert.equal(fixture.tasks.filter((task) => task.messageHistory.some((message) => message.messageId === 'm-b')).length, 2, '同一消息可以关联多个Task')
   fixture.releaseIdle()
   await runtime.close()
 })
@@ -404,7 +462,7 @@ test('Decision可靠Outbox失败会明确失败并释放门禁且不重放Task�
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
   const submission = tool.execute({
     observedRequestIds: [firstRequestId],
-    submissions: [{ requestIds: [firstRequestId], decision: { actions: [{ kind: 'new-task', title: '只执行一次', objective: '验证Outbox失败边界', acceptanceCriteria: ['任务动作只执行一次'] }], reply: '不得假成功' } }],
+    submissions: [{ requestIds: [firstRequestId], decision: { actions: [{ kind: 'new-task', title: '只执行一次', objective: '验证Outbox失败边界', acceptanceCriteria: ['任务动作只执行一次'], sourceMessageIds: ['m1'] }], reply: '不得假成功' } }],
   }, { agent: fixture.handle.agent })
 
   await assert.rejects(submission, /outbox_append_failed/)
@@ -661,7 +719,7 @@ test('无回复Decision返回后退订仍等待其动作提交并在同一Task�
   await fixture.waitForSteers(1)
   const requestId = decisionRequestId(fixture.steered[0])
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions: [{ kind: 'new-task', title: '并发任务', objective: '验证无回复提交', acceptanceCriteria: ['动作提交完成'] }], reply: '' } }] }, { agent: fixture.handle.agent })
+  await tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions: [{ kind: 'new-task', title: '并发任务', objective: '验证无回复提交', acceptanceCriteria: ['动作提交完成'], sourceMessageIds: ['m1'] }], reply: '' } }] }, { agent: fixture.handle.agent })
   await createEntered
   const unsubscribing = runtime.unsubscribe({ groupId: fixture.group.groupId })
   fixture.releaseIdle()
@@ -728,7 +786,7 @@ test('附件缺失转换出的effective reply同样对未提交pending执行观�
   await fixture.waitForSteers(2)
   const requestIds = fixture.steered.map(decisionRequestId)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const taskDecision = { actions: [{ kind: 'new-task', title: '处理附件', objective: '按附件执行', acceptanceCriteria: ['附件要求已完成'] }], reply: '' }
+  const taskDecision = { actions: [{ kind: 'new-task', title: '处理附件', objective: '按附件执行', acceptanceCriteria: ['附件要求已完成'], sourceMessageIds: ['m1'] }], reply: '' }
   const stale = await tool.execute({
     submissions: [{ requestIds: [requestIds[0]], decision: taskDecision }],
   }, { agent: fixture.handle.agent })
@@ -918,7 +976,7 @@ test('关联复核继承shared来源附件异常且不能绕过回复观察门�
   const third = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm3', text: '无关后续', occurredAt: '2026-08-28T01:01:02Z' })
   await fixture.waitForSteers(3)
   const thirdRequestId = decisionRequestId(fixture.steered[2])
-  const recheckDecision = { actions: [{ kind: 'new-task', title: '处理共享附件', objective: '按共享附件处理', acceptanceCriteria: ['附件要求已核验'] }], reply: '' }
+  const recheckDecision = { actions: [{ kind: 'new-task', title: '处理共享附件', objective: '按共享附件处理', acceptanceCriteria: ['附件要求已核验'], sourceMessageIds: ['m1', 'm2'] }], reply: '' }
 
   const stale = await tool.execute({
     observedRequestIds: [],
@@ -940,6 +998,36 @@ test('关联复核继承shared来源附件异常且不能绕过回复观察门�
   await tool.execute({ submissions: [{ requestIds: [thirdRequestId], decision: { actions: [], reason: '无关消息随后处理' } }] }, { agent: fixture.handle.agent })
   await third
   fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('Task通知由模型从完整历史选择承接消息与多位参与人', async () => {
+  const messageHistory = [
+    { messageId: 'm-origin', text: '请排查草稿提交失败', senderName: '提出人', senderOpenDingTalkId: 'od-owner', occurredAt: '2026-09-02T01:00:00Z', runSequence: 1, associatedAt: '2026-09-02T01:00:00Z' },
+    { messageId: 'm-domain', text: '数据集关联由我确认', senderName: '业务确认人', senderOpenDingTalkId: 'od-domain', occurredAt: '2026-09-02T01:00:01Z', runSequence: 1, associatedAt: '2026-09-02T01:00:01Z' },
+    { messageId: 'm-latest', text: '我只补充了日志位置', senderName: '最新补充人', senderOpenDingTalkId: 'od-latest', occurredAt: '2026-09-02T01:00:02Z', runSequence: 1, associatedAt: '2026-09-02T01:00:02Z' },
+  ]
+  const fixture = taskReplyRuntimeFixture({ messageHistory })
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const repairing = runtime.reconcileCompletedNotifications()
+  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
+  const coordinationPrompt = fixture.followups[0].content[0].text
+  const requestId = coordinationPrompt.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
+  const replyTool = fixture.registeredTools.find((item) => item.name === 'group_reply_submit')
+
+  assert.match(coordinationPrompt, /任务消息时间线：\[\{"messageId":"m-origin"[\s\S]*"messageId":"m-domain"[\s\S]*"messageId":"m-latest"/u)
+  assert.match(coordinationPrompt, /不得机械选择最后一条消息或只通知最后触发人/u)
+  await assert.rejects(replyTool.execute({ requestId, observedRequestIds: [], reply: '错误目标', replyToMessageId: 'm-outside', atOpenDingTalkIds: ['od-owner'] }, { agent: fixture.agent }), /group_reply_target_not_in_task_history/)
+  await assert.rejects(replyTool.execute({ requestId, observedRequestIds: [], reply: '错误参与人', replyToMessageId: 'm-origin', atOpenDingTalkIds: ['od-outside'] }, { agent: fixture.agent }), /group_reply_recipient_not_in_task_history/)
+
+  await Promise.all([
+    replyTool.execute({ requestId, observedRequestIds: [], reply: '@提出人 @业务确认人 已完成并核验。', replyToMessageId: 'm-origin', atOpenDingTalkIds: ['od-owner', 'od-domain'] }, { agent: fixture.agent }),
+    repairing,
+  ])
+  assert.equal(fixture.group.outbox[0].replyToMessageId, 'm-origin', '模型可选择历史承接消息，不强制最新消息')
+  assert.equal(fixture.group.outbox[0].replyToSenderOpenDingTalkId, 'od-owner')
+  assert.deepEqual(fixture.group.outbox[0].atOpenDingTalkIds, ['od-owner', 'od-domain'])
+  assert.equal(fixture.group.outbox[0].text, '已完成并核验。', '正文中的手写@由结构化通知替代')
   await runtime.close()
 })
 
@@ -995,7 +1083,7 @@ test('Task通知生成不占用Task尾链且新Steer可先完成任务动作', a
   const incomingRequestId = decisionRequestId(fixture.steered[0])
   const decisionSubmission = decisionTool.execute({
     observedRequestIds: [incomingRequestId],
-    submissions: [{ requestIds: [incomingRequestId], decision: { actions: [{ kind: 'task-reopen', taskId: fixture.getTask().taskId, context: '结合补充继续处理' }], reply: '已结合补充继续处理。' } }],
+    submissions: [{ requestIds: [incomingRequestId], decision: { actions: [{ kind: 'task-reopen', taskId: fixture.getTask().taskId, context: '结合补充继续处理', sourceMessageIds: ['reopen-message'] }], reply: '已结合补充继续处理。' } }],
   }, { agent: fixture.agent })
   const outcome = await Promise.race([decisionSubmission.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 500))])
   if (outcome === 'blocked') {
@@ -1310,7 +1398,7 @@ test('Agent工作区切换等待resident时不占Task尾链并在提交前复核
 
   const requestId = decisionRequestId(fixture.steered[0])
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [{ kind: 'new-task', title: '配置并发任务', objective: '验证配置切换并发', acceptanceCriteria: ['并发路径已验证'] }], reply: '已创建并发任务。' } }] }, { agent: fixture.handle.agent })
+  const submission = tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [{ kind: 'new-task', title: '配置并发任务', objective: '验证配置切换并发', acceptanceCriteria: ['并发路径已验证'], sourceMessageIds: ['m1'] }], reply: '已创建并发任务。' } }] }, { agent: fixture.handle.agent })
   const outcome = await Promise.race([submission.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 500))])
   releaseResidentIdle()
   await Promise.all([submission, ingest])
@@ -1562,7 +1650,14 @@ test('单个 resident Session 恢复超时被隔离且不阻塞其他群启动',
 })
 
 test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 排队', async () => {
-  const groups = new Map([['group-a', { groupId: 'group-a', responsibility: 'coordinate', residentSessionId: 'session-parent', residentAgentPreset: 'standard-convergent', outbox: [] }]])
+  const groups = new Map([['group-a', {
+    groupId: 'group-a', responsibility: 'coordinate', residentSessionId: 'session-parent', residentAgentPreset: 'standard-convergent', nextSequence: 4, outbox: [],
+    messages: [
+      { messageId: 'm1', sequence: 1, text: '初始任务消息', occurredAt: '2026-08-25T01:00:00Z', senderName: '初始提出人', senderOpenDingTalkId: 'od-initial' },
+      { messageId: 'm2', sequence: 2, text: '第二个任务消息', occurredAt: '2026-08-25T01:00:01Z', senderName: '第二提出人', senderOpenDingTalkId: 'od-second' },
+      { messageId: 'm3', sequence: 3, text: '第三个任务消息', occurredAt: '2026-08-25T01:00:02Z', senderName: '第三提出人', senderOpenDingTalkId: 'od-third' },
+    ],
+  }]])
   const tasks = []
   const creates = [], createMetas = [], followups = [], steers = [], approvalResumeOrder = [], disposed = [], activities = [], alerts = [], goals = new Map(), agents = new Map(), leafTools = [], leafPromptSections = [], residentTools = [], coordinationSubmissions = []
   let blockCheckpointReview = false, checkpointReviewPending = false, releaseCheckpointReview, markCheckpointReviewStarted
@@ -1587,8 +1682,15 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
       if (sessionId === 'session-parent' && text.startsWith('[TASK_COORDINATION]')) {
         const requestId = text.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
         const taskId = text.match(/^Task ID: ([^\r\n]+)$/mu)?.[1]
+        const timeline = JSON.parse(text.match(/^任务消息时间线：(\[[^\r\n]*\])$/mu)?.[1] ?? '[]')
+        const routingCandidates = timeline.filter((item) => typeof item.messageId === 'string' && typeof item.senderOpenDingTalkId === 'string')
+        const replyTarget = routingCandidates.at(-1)
+        const recipients = [...new Set(routingCandidates.map((item) => item.senderOpenDingTalkId))]
         const tool = residentTools.find((candidate) => candidate.name === 'group_reply_submit')
-        const submission = tool.execute({ requestId, observedRequestIds: [], reply: `coordinated:${taskId}` }, { agent })
+        const submission = tool.execute({
+          requestId, observedRequestIds: [], reply: `coordinated:${taskId}`,
+          ...(replyTarget === undefined ? {} : { replyToMessageId: replyTarget.messageId, atOpenDingTalkIds: recipients }),
+        }, { agent })
         submission.catch(() => undefined)
         coordinationSubmissions.push(submission)
       }
@@ -1650,7 +1752,26 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     getGroup: (id) => groups.get(id), listGroups: () => [...groups.values()], listTasks: () => tasks, getTask: (id) => tasks.find((task) => task.taskId === id),
     getMaxConcurrentTasks: () => store.maxConcurrentTasks,
     async setMaxConcurrentTasks(value) { store.maxConcurrentTasks = value; return { maxConcurrentTasks: value } },
-    async createTask(value) { const duplicate = tasks.find((task) => task.groupId === value.groupId && task.sourceMessageId === value.sourceMessageId); if (duplicate) return { created: false, task: duplicate }; const taskId = `task-${tasks.length + 1}`; const trigger = { sourceMessageId: value.sourceMessageId, ...(value.requesterName ? { requesterName: value.requesterName } : {}), ...(value.requesterOpenDingTalkId ? { requesterOpenDingTalkId: value.requesterOpenDingTalkId } : {}), ...(value.occurredAt !== undefined ? { occurredAt: value.occurredAt } : {}) }; const task = { ...value, taskId, childSessionId: taskSessionId(taskId), state: 'queued', triggerHistory: [trigger], runSequence: 1, runStartedAt: '2026-08-25T00:00:00Z', acceptanceCriteria: value.acceptanceCriteria ?? [value.objective], stageTasks: value.stageTasks ?? ['完成并验证当前轮目标'], runHistory: [], createdAt: '2026-08-25T00:00:00Z' }; tasks.push(task); return { created: true, task } },
+    async createTask(value) {
+      const duplicate = tasks.find((task) => task.groupId === value.groupId && task.sourceMessageId === value.sourceMessageId)
+      if (duplicate) return { created: false, task: duplicate }
+      const group = groups.get(value.groupId)
+      const sourceIds = new Set(value.sourceMessageIds ?? [value.sourceMessageId])
+      const sourceMessages = (group.messages ?? []).filter((message) => sourceIds.has(message.messageId))
+      const currentSource = sourceMessages.findLast((message) => message.messageId === value.sourceMessageId)
+      const requesterName = value.requesterName ?? currentSource?.senderName
+      const requesterOpenDingTalkId = value.requesterOpenDingTalkId ?? currentSource?.senderOpenDingTalkId
+      const occurredAt = value.occurredAt ?? currentSource?.occurredAt
+      const messageHistory = sourceMessages.map((message) => ({
+        messageId: message.messageId, text: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId,
+        occurredAt: message.occurredAt, runSequence: 1, associatedAt: '2026-08-25T00:00:00Z',
+      }))
+      const taskId = `task-${tasks.length + 1}`
+      const trigger = { sourceMessageId: value.sourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) }
+      const task = { ...value, requesterName, requesterOpenDingTalkId, occurredAt, ...(messageHistory.length > 0 ? { messageHistory } : {}), taskId, childSessionId: taskSessionId(taskId), state: 'queued', triggerHistory: [trigger], runSequence: 1, runStartedAt: '2026-08-25T00:00:00Z', acceptanceCriteria: value.acceptanceCriteria ?? [value.objective], stageTasks: value.stageTasks ?? ['完成并验证当前轮目标'], runHistory: [], createdAt: '2026-08-25T00:00:00Z' }
+      tasks.push(task)
+      return { created: true, task }
+    },
     async updateTask(id, transform) { const index = tasks.findIndex((task) => task.taskId === id); tasks[index] = transform(tasks[index]); return tasks[index] },
     async appendOutbox({ groupId, ...outbound }) { const group = groups.get(groupId); if (!group.outbox.some((item) => item.sourceMessageId === outbound.sourceMessageId)) group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...outbound, status: 'pending' }); return group },
     async updateOutboundRecall({ groupId, outboundId, status, reason, error }) { const item = groups.get(groupId).outbox.find((entry) => entry.outboundId === outboundId); Object.assign(item, { recallStatus: status, recallReason: reason }, status === 'recalled' ? { recalledAt: '2026-08-27T00:00:00Z', recallError: undefined } : {}, status === 'failed' ? { recallError: error } : {}); return groups.get(groupId) },
@@ -1682,6 +1803,8 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.match(leafPolicyPrompt, /命中任何适用 Skill 时，必须加载并遵循其完整说明/u)
   assert.match(leafPolicyPrompt, /内部维护动作不视为扩大 Task objective/u)
   assert.match(leafPolicyPrompt, /Runtime 不指定或绑定任何具体 Skill/u)
+  assert.match(leafPolicyPrompt, /Task 完整消息与参与人时间线/u)
+  assert.match(leafPolicyPrompt, /"messageId":"m1"[\s\S]*"text":"初始任务消息"[\s\S]*"senderOpenDingTalkId":"od-initial"/u)
   assert.doesNotMatch(leafPolicyPrompt, /evolve-self-improving|learningSignals|TASK_INTERNAL_LEARNING_SIGNALS/u, 'Runtime 提示词不得绑定具体 Skill 或专用学习协议')
   assert.equal(goals.get('session-task-1').phase, 'active')
   assert.equal(one.task.runSequence, 1)
@@ -1863,7 +1986,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.equal(groups.get('group-a').outbox.at(-1).sourceMessageId, `task-result:${one.task.taskId}:completed:1`, '重开任务再次完成必须生成独立通知')
   assert.equal(groups.get('group-a').outbox.at(-1).replyToMessageId, 'm-reopen-1')
   assert.equal(groups.get('group-a').outbox.at(-1).replyToSenderOpenDingTalkId, 'od-reopen-1')
-  assert.deepEqual(groups.get('group-a').outbox.at(-1).atOpenDingTalkIds, ['od-reopen-1'])
+  assert.deepEqual(groups.get('group-a').outbox.at(-1).atOpenDingTalkIds, ['od-initial', 'od-reopen-1'])
 
   const reopenedCompleted = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '继续核验已完成任务', sourceMessageId: 'm-reopen-2', requesterName: '再次提出人', requesterOpenDingTalkId: 'od-reopen-2' })
   assert.equal(reopenedCompleted.state, 'running', '已完成任务收到task-context时必须恢复原Task')

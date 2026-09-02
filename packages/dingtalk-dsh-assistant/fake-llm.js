@@ -18,15 +18,16 @@ class FakeResidentAdapter extends LlmAdapter {
     }
     if ((input.startsWith('[GROUP_MESSAGE_STEER]') || input.startsWith('[GROUP_DECISION_RECHECK]')) && !hasToolResultAfterInput) {
       const requestId = input.match(/^判断请求 ID：([^\r\n]+)$/mu)?.[1]
+      const sourceMessageId = input.match(/^消息唯一标识：([^\r\n]+)$/mu)?.[1]
       const message = input.match(/^内容：(.*)$/mu)?.[1] ?? ''
       const activeTasksText = options.system?.match(/## 本群全部任务关联索引\n\n([^\n]+)/u)?.[1]
       const activeTasks = activeTasksText?.startsWith('[') ? JSON.parse(activeTasksText) : []
       let decision
       if (message.startsWith('忽略：')) decision = { actions: [], reason: message.slice(3) || 'not addressed' }
-      else if (message.startsWith('任务：')) decision = { actions: [{ kind: 'new-task', title: message.slice(3), objective: message.slice(3), acceptanceCriteria: ['任务目标已完成并有可核验证据'] }], reply: '已识别为正式任务。' }
+      else if (message.startsWith('任务：')) decision = { actions: [{ kind: 'new-task', title: message.slice(3), objective: message.slice(3), acceptanceCriteria: ['任务目标已完成并有可核验证据'], sourceMessageIds: [sourceMessageId] }], reply: '已识别为正式任务。' }
       else if (message.startsWith('补充：')) {
         const task = activeTasks[0]
-        decision = task === undefined ? { actions: [], reply: '没有可补充的任务。' } : { actions: [{ kind: 'task-context', taskId: task.taskId, context: message.slice(3) }], reply: '已补充到现有任务。' }
+        decision = task === undefined ? { actions: [], reply: '没有可补充的任务。' } : { actions: [{ kind: 'task-context', taskId: task.taskId, context: message.slice(3), sourceMessageIds: [sourceMessageId] }], reply: '已补充到现有任务。' }
       }
       else decision = { actions: [], reply: `fake-answer:${message}` }
       if (requestId === undefined) throw new Error('fake_group_decision_request_id_missing')
@@ -44,8 +45,11 @@ class FakeResidentAdapter extends LlmAdapter {
       const taskId = input.match(/^Task ID: ([^\r\n]+)$/mu)?.[1]
       if (requestId === undefined) throw new Error('fake_group_reply_request_id_missing')
       if (taskId === undefined) throw new Error('fake_group_reply_task_id_missing')
+      const timeline = JSON.parse(input.match(/^任务消息时间线：(.*)$/mu)?.[1] ?? '[]')
+      const replyTarget = timeline.findLast((item) => typeof item.senderOpenDingTalkId === 'string')
+      const recipients = [...new Set(timeline.map((item) => item.senderOpenDingTalkId).filter(Boolean))]
       const id = `fake-reply-${Date.now()}`
-      const args = JSON.stringify({ requestId, observedRequestIds: [], reply: `coordinated:${taskId}` })
+      const args = JSON.stringify({ requestId, observedRequestIds: [], reply: `coordinated:${taskId}`, ...(replyTarget ? { replyToMessageId: replyTarget.messageId, atOpenDingTalkIds: recipients } : {}) })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name: 'group_reply_submit', argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'group_reply_submit', arguments: args } }
