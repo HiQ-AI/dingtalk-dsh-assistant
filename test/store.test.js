@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
+import { openResidentStore, residentDomainSpec } from '../packages/dingtalk-dsh-assistant/store.js'
 
 function memoryFacility(seed = new Map()) {
   const table = (name) => ({
@@ -12,6 +12,10 @@ function memoryFacility(seed = new Map()) {
   })
   return { seed, facility: { async open() { return { table, close: async () => undefined } } } }
 }
+
+test('Task消息时间线作为可选字段保持现有storage domain版本兼容', () => {
+  assert.equal(residentDomainSpec.version, 6)
+})
 
 test('群配置初始化、职责修改和删除均持久化', async () => {
   const { facility } = memoryFacility()
@@ -142,6 +146,58 @@ test('Task 按来源去重并持久化四桶状态', async () => {
   assert.deepEqual(completed.stateHistory.map((event) => event.state), ['queued', 'running', 'waiting', 'completed'])
 })
 
+test('Task 按消息时序持久化全部关联消息与发送人', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'group-history' })
+  await store.ingest({ groupId: 'group-history', messageId: 'm-origin', text: '请排查导入失败', occurredAt: '2026-09-02T01:00:00Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
+  await store.ingest({ groupId: 'group-history', messageId: 'm-detail', text: '补充：失败文件是 a.xlsx', occurredAt: '2026-09-02T01:00:01Z', senderName: '补充人', senderOpenDingTalkId: 'od-detail', quotedMessage: { messageId: 'm-origin', content: '请排查导入失败' } })
+
+  const created = await store.createTask({
+    groupId: 'group-history', sourceMessageId: 'm-detail', sourceMessageIds: ['m-detail', 'm-origin'],
+    title: '排查导入失败', objective: '排查 a.xlsx 导入失败', acceptanceCriteria: ['给出可核验根因'],
+  })
+  const projection = created.task.messageHistory.map(({ associatedAt, ...message }) => message)
+  assert.deepEqual(projection, [
+    { messageId: 'm-origin', text: '请排查导入失败', senderName: '提出人', senderOpenDingTalkId: 'od-owner', occurredAt: '2026-09-02T01:00:00Z', runSequence: 1 },
+    { messageId: 'm-detail', text: '补充：失败文件是 a.xlsx', senderName: '补充人', senderOpenDingTalkId: 'od-detail', occurredAt: '2026-09-02T01:00:01Z', quotedMessageId: 'm-origin', runSequence: 1 },
+  ])
+  assert.equal(created.task.messageHistory.every((message) => typeof message.associatedAt === 'string'), true)
+
+  await store.close()
+  const reopened = await openResidentStore(facility)
+  assert.deepEqual(reopened.getTask(created.task.taskId).messageHistory, created.task.messageHistory)
+  await reopened.close()
+})
+
+test('旧 Task 只从可靠触发ID回填仍存在的历史消息', async () => {
+  const legacyTask = {
+    taskId: 'task-legacy-message-history', groupId: 'group-legacy-history', sourceMessageId: 'm-latest', objective: '排查历史问题', state: 'completed', childSessionId: 'session-task-legacy-message-history',
+    triggerHistory: [
+      { sourceMessageId: 'm-origin', requesterName: '提出人', requesterOpenDingTalkId: 'od-owner' },
+      { sourceMessageId: 'm-missing', requesterName: '缺失消息发送人', requesterOpenDingTalkId: 'od-missing' },
+      { sourceMessageId: 'recovery:internal', requesterName: '内部恢复' },
+      { sourceMessageId: 'm-latest', requesterName: '补充人', requesterOpenDingTalkId: 'od-detail' },
+    ],
+    createdAt: '2026-09-01T01:00:00.000Z', updatedAt: '2026-09-01T02:00:00.000Z',
+  }
+  const group = {
+    groupId: 'group-legacy-history', responsibility: '', residentSessionId: 'session-legacy-history', nextSequence: 3, outbox: [],
+    messages: [
+      { messageId: 'm-origin', sequence: 1, text: '最初需求', occurredAt: '2026-09-01T01:00:00Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' },
+      { messageId: 'm-latest', sequence: 2, text: '后续补充', occurredAt: '2026-09-01T01:30:00Z', senderName: '补充人', senderOpenDingTalkId: 'od-detail' },
+    ],
+  }
+  const { facility } = memoryFacility(new Map([
+    ['groups:group-legacy-history', group],
+    ['scheduler:runtime', { tasks: [legacyTask] }],
+  ]))
+  const store = await openResidentStore(facility)
+  assert.deepEqual(store.getTask(legacyTask.taskId).messageHistory.map((message) => message.messageId), ['m-origin', 'm-latest'])
+  assert.equal(store.getTask(legacyTask.taskId).messageHistory.some((message) => message.messageId === 'm-missing'), false)
+  await store.close()
+})
+
 test('Task 创建门禁只校验通用可追溯字段和可核验验收标准', async () => {
   const { facility } = memoryFacility()
   const store = await openResidentStore(facility)
@@ -150,6 +206,8 @@ test('Task 创建门禁只校验通用可追溯字段和可核验验收标准', 
   await assert.rejects(store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', objective: '处理事项', acceptanceCriteria: ['结果可核验'] }), /task_title_invalid/)
   await assert.rejects(store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', title: '处理事项', objective: '处理事项', acceptanceCriteria: [] }), /task_acceptance_criteria_required/)
   await assert.rejects(store.createTask({ groupId: 'group-a', sourceMessageId: 'web:manual', title: '人工任务', objective: '处理人工任务', acceptanceCriteria: ['结果可核验'] }), /task_synthetic_source_requester_required/)
+  await assert.rejects(store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', sourceMessageIds: [], title: '处理事项', objective: '处理事项', acceptanceCriteria: ['结果可核验'] }), /task_source_messages_invalid/)
+  await assert.rejects(store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', sourceMessageIds: ['m-task', 'm-task'], title: '处理事项', objective: '处理事项', acceptanceCriteria: ['结果可核验'] }), /task_source_message_duplicate/)
   const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', title: '处理事项', objective: '处理事项', acceptanceCriteria: ['结果可核验'] })
   assert.equal(created.task.requesterName, '张三')
   assert.deepEqual(created.task.acceptanceCriteria, ['结果可核验'])

@@ -1,0 +1,12 @@
+case,round-1,round-2
+创建Task记录全部关联消息及发送人,PASS,PASS
+活动Task追加消息不覆盖历史,PASS,PASS
+重开Task跨轮保留消息时间线,PASS,PASS
+同批不相关消息映射到不同Task,PASS,PASS
+一条消息可同时关联多个Task,PASS,PASS
+通知模型收到完整消息和参与人,PASS,PASS
+通知可引用历史任意相关消息并@多人,PASS,PASS
+非法消息或人员路由被拒绝,PASS,PASS
+旧Task只按可靠来源补齐且不伪造,PASS,PASS
+现有storage版本兼容,FAIL,PASS
+全量测试与本地部署,FAIL,PASS

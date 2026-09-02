@@ -119,7 +119,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       name: 'dingtalk-group-task-index', order: 42,
       text: () => {
         const active = store.listTasks().filter((task) => task.groupId === groupId)
-          .map((task) => ({ taskId: task.taskId, objective: task.title ?? task.objective, state: task.state, archived: Boolean(task.archivedAt) }))
+          .map((task) => ({ taskId: task.taskId, ...(task.title ? { title: task.title } : {}), objective: task.objective, state: task.state, archived: Boolean(task.archivedAt), messageHistory: task.messageHistory ?? [] }))
         return `## 本群全部任务关联索引\n\n${active.length === 0 ? '无。' : JSON.stringify(active)}`
       },
     })
@@ -133,7 +133,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 
 \`[GROUP_DECISION_RECHECK]\` 是已有判断的内部复核。它可以单独提交，也可以与确实影响本次复核 Decision 的普通消息请求放进同一 submission；不要为了规避回复重生成而把相关消息机械拆开。
 
-Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"actions":[],"reason":"原因"}\`，涉及任务时使用 \`{"actions":[...],"reply":"最多一条群回复，可为空"}\`。Decision 顶层不允许 kind 字段。一个 Decision 可以同时对应多个 Task，\`actions\` 中每项可为 task-proposal、new-task、task-context 或 task-reopen；不得为了只返回一个动作而遗漏其他相关 Task。群回复统一放在顶层 \`reply\`，不得给每个动作分别回复。
+Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"actions":[],"reason":"原因"}\`，涉及任务时使用 \`{"actions":[...],"reply":"最多一条群回复，可为空"}\`。Decision 顶层不允许 kind 字段。一个 Decision 可以同时对应多个 Task，\`actions\` 中每项可为 task-proposal、new-task、task-context 或 task-reopen；不得为了只返回一个动作而遗漏其他相关 Task。每个任务动作必须通过 \`sourceMessageIds\` 列出本动作实际关联的全部消息 ID：既可引用本次正在处理的消息，也可引用本群会话中此前已收到的历史消息；必须包含形成当前动作的全部相关消息，且至少一条来自本次正在处理的消息。同一消息可关联多个 Task，不同 Task 也可选择不同消息集合，不得遗漏此前相关消息，也不得把无关消息机械塞入每个 Task。群回复统一放在顶层 \`reply\`，不得给每个动作分别回复。
 
 每次收到新消息时，检查其内容是否与当前 Session 上下文中的近期回复冲突；如有冲突，及时撤回本主会话发送的错误消息并订正。不得撤回真人或其他系统消息。
 
@@ -147,7 +147,7 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
 
 消息附带的图片属于当前消息正文，必须先阅读图片，再结合固定主会话中的前后消息和“本群全部任务关联索引”判断关联性。queued、running、waiting、completed 以及产品展示中的归档任务都必须参与关联判断；任务状态只决定关联后的动作，不得成为忽略关联的理由。不得仅因文字部分没有指名、图片没有文字摘要或后续消息较短就选择忽略；紧邻图片的补充说明应优先与该图片共同理解。群友对根因、状态或外部因素的未经核验判断，只要与已有任务相关，就是需要核验的新增线索，不得以“尚未核验”为由忽略。已存在任务的新增事实应优先关联已有任务，而不是创建重复任务。对已完成任务的结果提出回滚、撤回、还原、纠正或补做，属于原任务的结果纠正，必须返回 task-reopen 唤起原 Task，不得只做自然语言承诺，也不得创建新 Task；只有与原目标不同的独立可执行目标才创建新任务并保留历史关联。
 
-判断使用已有任务还是新建任务时，必须进行整体语义判断：结合当前消息的前后文、引用关系、连续消息构成的信息组、当时讨论与执行场景，以及候选任务的目标、动作范围、状态、历史触发和已记录上下文，判断新消息是在补充、修订、纠正或延续原目标，还是提出了不同的独立目标。不得根据某几个关键词、词面重合、标题相似或单一字段直接决定复用已有任务或新建任务；关键词只能作为查找候选任务的线索，不能代替关联结论。无法从现有上下文可靠区分时，不得猜测创建重复任务，应先结合近期消息继续核对，确有阻塞再向原提出人询问必要信息。
+判断使用已有任务还是新建任务时，必须进行整体语义判断：结合当前消息的前后文、引用关系、连续消息构成的信息组、当时讨论与执行场景，以及候选任务的标题、完整目标、动作范围、状态、消息与参与人时间线和已记录上下文，判断新消息是在补充、修订、纠正或延续原目标，还是提出了不同的独立目标。不得根据某几个关键词、词面重合、标题相似或单一字段直接决定复用已有任务或新建任务；关键词只能作为查找候选任务的线索，不能代替关联结论。无法从现有上下文可靠区分时，不得猜测创建重复任务，应先结合近期消息继续核对，确有阻塞再向真正掌握必要信息的相关参与人询问。
 
 图片、文档、文件、链接或其他外部资源如果承载任务目标、范围、对象、输入数据或验收要求，必须先通过当前可用工具完整读取。任何任务所需资源无法访问、下载、解析或读取不完整时，必须选择 answer，明确告诉对方未获取到的具体信息以及需要重新提供的内容；此时不得选择 new-task、task-context 或 task-reopen，也不得先创建或推进 Task。只有确认缺失资源与任务无关，或对方补齐必要信息后，才继续任务关联与准入判断。不得假设资源内容、不得用文件名、链接标题、缩略图或消息中的零散文字替代未读取的正文。
 
@@ -157,7 +157,7 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
 
 ### 群聊回复节制原则
 
-理解消息、关联任务和回复群聊是三个独立决定。每条消息都必须完成任务关联和近期消息冲突检查。以下情况允许 reply 非空：消息明确要求 Agent 立即回答且当前已有可核验答案；必须询问一个只有原提出人才能补充且确实阻塞任务的信息；Task 产生新的最终结果、明确失败结果或需要真人行动的结论；需要订正或撤回本主会话此前发送的错误消息；已创建或正在处理的 Task 收到新的执行线索、补充信息或处理要求时，简短确认已收到并会继续处理。
+理解消息、关联任务和回复群聊是三个独立决定。每条消息都必须完成任务关联和近期消息冲突检查。以下情况允许 reply 非空：消息明确要求 Agent 立即回答且当前已有可核验答案；必须询问一个只有相关参与人才能补充且确实阻塞任务的信息；Task 产生新的最终结果、明确失败结果或需要真人行动的结论；需要订正或撤回本主会话此前发送的错误消息；已创建或正在处理的 Task 收到新的执行线索、补充信息或处理要求时，简短确认已收到并会继续处理。
 
 过程确认和信息确认必须简短，只确认已收到、已关联 Task 或将继续处理，不得复述、改写或逐项罗列对方提供的信息，不得虚构进度、结果或完成时间。给活动 Task 补充 IP、库名、schema、文件、截图、字段范围或其他执行线索时，应返回简短确认；叶子已在执行且当前消息作为 task-context 转交时，也应简短确认会结合补充信息继续处理。
 
@@ -287,12 +287,12 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
     agent.whenIdle().then(() => rejectPendingGroupDecision(requestId, new Error(`group_decision_not_submitted:${groupId}:${messageId}`)))
       .catch((error) => rejectPendingGroupDecision(requestId, error))
   }
-  function createPendingGroupReply({ groupId, sourceMessageId }) {
+  function createPendingGroupReply({ groupId, sourceMessageId, routingCandidates = [], routingRequired = false }) {
     const requestId = randomUUID()
     let resolve, reject
     const promise = new Promise((resolvePending, rejectPending) => { resolve = resolvePending; reject = rejectPending })
     promise.catch(() => undefined)
-    pendingGroupReplies.set(requestId, { requestId, groupId, sourceMessageId, resolve, reject })
+    pendingGroupReplies.set(requestId, { requestId, groupId, sourceMessageId, routingCandidates, routingRequired, resolve, reject })
     return { requestId, promise }
   }
   function rejectPendingGroupReply(requestId, error) {
@@ -369,7 +369,19 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
           decision: blockTaskDecisionForUnavailableMedia(submission.decision, [...new Set(submission.requests
             .flatMap((request) => [...request.baseRequests, request])
             .flatMap((request) => Array.isArray(request.message.mediaUnavailable) ? request.message.mediaUnavailable : []))]),
-        }))
+        })).map((submission) => {
+          const currentMessageIds = new Set(submission.requests
+            .flatMap((request) => request.kind === 'recheck' ? request.baseRequests : [request])
+            .filter((request) => request.kind === 'message')
+            .map((request) => request.messageId))
+          const persistedMessageIds = new Set((store.getGroup(groupId)?.messages ?? []).map((message) => message.messageId))
+          for (const action of submission.decision.actions) {
+            if (new Set(action.sourceMessageIds).size !== action.sourceMessageIds.length) throw new Error('task_action_source_message_duplicate')
+            if (action.sourceMessageIds.some((messageId) => !persistedMessageIds.has(messageId))) throw new Error('task_action_source_message_invalid')
+            if (!action.sourceMessageIds.some((messageId) => currentMessageIds.has(messageId))) throw new Error('task_action_current_source_message_required')
+          }
+          return submission
+        })
         const replying = validated.filter((submission) => 'reply' in submission.decision && submission.decision.reply.trim() !== '')
         const releaseReplyAdmissions = holdGroupReplyAdmission(groupId, replying.length)
         if (replying.length > 0) {
@@ -439,6 +451,8 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
           requestId: { type: 'string' },
           observedRequestIds: { type: 'array', items: { type: 'string' } },
           reply: { type: 'string' },
+          replyToMessageId: { type: 'string', description: 'Task通知要引用的消息ID，必须来自该Task完整消息时间线。' },
+          atOpenDingTalkIds: { type: 'array', items: { type: 'string' }, description: '需要收到本次Task通知的参与人稳定ID，可选择多人，必须来自该Task消息时间线。' },
         },
       },
       output: {
@@ -462,6 +476,16 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
         const pending = pendingGroupReplies.get(args.requestId)
         if (pending === undefined) throw new Error('group_reply_request_unknown')
         if (pending.groupId !== groupId) throw new Error('group_reply_request_wrong_group')
+        const routingCandidates = pending.routingCandidates.filter((item) => typeof item.messageId === 'string' && typeof item.senderOpenDingTalkId === 'string')
+        const participantIds = new Set(routingCandidates.map((item) => item.senderOpenDingTalkId))
+        if (pending.routingRequired && (typeof args.replyToMessageId !== 'string' || args.replyToMessageId.trim() === '')) throw new Error('group_reply_target_required')
+        if (pending.routingRequired && (!Array.isArray(args.atOpenDingTalkIds) || args.atOpenDingTalkIds.length === 0)) throw new Error('group_reply_recipients_required')
+        if (args.atOpenDingTalkIds !== undefined && !Array.isArray(args.atOpenDingTalkIds)) throw new Error('group_reply_recipient_invalid')
+        if (args.atOpenDingTalkIds?.some((id) => typeof id !== 'string' || id.trim() === '')) throw new Error('group_reply_recipient_invalid')
+        if (args.atOpenDingTalkIds && new Set(args.atOpenDingTalkIds).size !== args.atOpenDingTalkIds.length) throw new Error('group_reply_recipient_duplicate')
+        const replyTarget = typeof args.replyToMessageId === 'string' ? routingCandidates.find((item) => item.messageId === args.replyToMessageId) : routingCandidates.at(-1)
+        if (args.replyToMessageId !== undefined && replyTarget === undefined) throw new Error('group_reply_target_not_in_task_history')
+        if (args.atOpenDingTalkIds?.some((id) => !participantIds.has(id))) throw new Error('group_reply_recipient_not_in_task_history')
         const observedPendings = args.observedRequestIds.map((requestId) => pendingGroupDecisions.get(requestId))
         if (observedPendings.some((item) => item === undefined)) throw new Error('group_reply_observed_request_unknown')
         if (observedPendings.some((item) => item.groupId !== groupId)) throw new Error('group_reply_observed_request_wrong_group')
@@ -491,7 +515,13 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
           if (error === undefined) resolveReplyLinearized()
           else rejectReplyLinearized(error)
         }
-        const submitted = { reply: args.reply.trim(), replyLinearized, resolveReplyLinearized: () => settle(), rejectReplyLinearized: (error) => settle(error) }
+        const selectedRecipients = args.atOpenDingTalkIds ?? (replyTarget ? [replyTarget.senderOpenDingTalkId] : [])
+        const submitted = {
+          reply: args.reply.trim(),
+          ...(replyTarget ? { replyToMessageId: replyTarget.messageId, replyToSenderOpenDingTalkId: replyTarget.senderOpenDingTalkId } : {}),
+          ...(selectedRecipients.length > 0 ? { atOpenDingTalkIds: selectedRecipients } : {}),
+          replyLinearized, resolveReplyLinearized: () => settle(), rejectReplyLinearized: (error) => settle(error),
+        }
         activeGroupReplies.add(submitted)
         pendingGroupReplies.delete(args.requestId)
         pending.resolve(submitted)
@@ -645,12 +675,46 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
 
   const isSyntheticTaskSource = (sourceMessageId) => typeof sourceMessageId === 'string' && /^(?:web(?:-reopen)?:|recovery:)/u.test(sourceMessageId)
 
-  function resolveTaskNotificationTrigger(task) {
-    const current = { sourceMessageId: task.sourceMessageId, requesterName: task.requesterName, requesterOpenDingTalkId: task.requesterOpenDingTalkId }
-    const candidates = [current, ...[...(task.triggerHistory ?? [])].reverse()]
-    return candidates.find((item) => typeof item?.sourceMessageId === 'string'
-      && !isSyntheticTaskSource(item.sourceMessageId)
-      && typeof item.requesterOpenDingTalkId === 'string')
+  function taskMessageSnapshot(message, runSequence) {
+    return {
+      messageId: message.messageId,
+      text: message.text,
+      ...(message.senderName ? { senderName: message.senderName } : {}),
+      ...(message.senderOpenDingTalkId ? { senderOpenDingTalkId: message.senderOpenDingTalkId } : {}),
+      ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}),
+      ...(message.quotedMessage?.messageId ? { quotedMessageId: message.quotedMessage.messageId } : {}),
+      ...(runSequence !== undefined ? { runSequence } : {}),
+      associatedAt: new Date().toISOString(),
+    }
+  }
+
+  function mergeTaskMessageHistory(current, messages, runSequence) {
+    const known = new Set((current.messageHistory ?? []).map((item) => item.messageId))
+    const appended = messages.filter((message) => !known.has(message.messageId)).map((message) => taskMessageSnapshot(message, runSequence))
+    return appended.length === 0 ? current.messageHistory : [...(current.messageHistory ?? []), ...appended]
+  }
+
+  function taskNotificationMessages(task) {
+    if ((task.messageHistory ?? []).length > 0) return task.messageHistory
+    const group = store.getGroup(task.groupId)
+    const triggers = [...(task.triggerHistory ?? []), {
+      sourceMessageId: task.sourceMessageId,
+      ...(task.requesterName ? { requesterName: task.requesterName } : {}),
+      ...(task.requesterOpenDingTalkId ? { requesterOpenDingTalkId: task.requesterOpenDingTalkId } : {}),
+    }]
+    const seen = new Set()
+    return triggers.flatMap((trigger) => {
+      if (isSyntheticTaskSource(trigger.sourceMessageId) || seen.has(trigger.sourceMessageId)) return []
+      seen.add(trigger.sourceMessageId)
+      const message = group?.messages?.find((item) => item.messageId === trigger.sourceMessageId)
+      if (message !== undefined) return [taskMessageSnapshot(message)]
+      return [{
+        messageId: trigger.sourceMessageId, text: '',
+        ...(trigger.requesterName ? { senderName: trigger.requesterName } : {}),
+        ...(trigger.requesterOpenDingTalkId ? { senderOpenDingTalkId: trigger.requesterOpenDingTalkId } : {}),
+        ...(trigger.occurredAt !== undefined ? { occurredAt: trigger.occurredAt } : {}),
+      }]
+    })
   }
 
   function taskResultOutboxKey(task, result) {
@@ -669,15 +733,15 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
     if (handle === undefined) throw new Error(`resident_not_active:${task.groupId}`)
     await handle.agent.whenIdle()
     if (runtimeClosing) throw new Error('resident_runtime_closed')
-    const notificationTrigger = resolveTaskNotificationTrigger(task)
-    const requester = notificationTrigger?.requesterName === undefined ? '未记录' : `${notificationTrigger.requesterName}（${notificationTrigger.requesterOpenDingTalkId}）`
+    const notificationMessages = taskNotificationMessages(task)
+    const routingCandidates = notificationMessages.filter((item) => typeof item.senderOpenDingTalkId === 'string')
     const resultProjection = result.status === 'completed'
       ? { status: result.status, workType: result.workType, summary: result.summary, evidence: result.evidence, artifacts: result.artifacts, delivery: result.delivery }
       : { status: result.status, summary: result.summary, evidence: result.evidence, artifacts: result.artifacts, waitingKind: result.waitingKind, waitingReason: result.waitingReason, questions: result.questions }
-    const pending = createPendingGroupReply({ groupId: task.groupId, sourceMessageId: resultKey })
+    const pending = createPendingGroupReply({ groupId: task.groupId, sourceMessageId: resultKey, routingCandidates, routingRequired: (task.messageHistory ?? []).some((item) => typeof item.senderOpenDingTalkId === 'string') })
     try {
       handle.agent.followup(createUserMessage({
-        content: [{ type: 'text', text: `[TASK_COORDINATION]\n回复请求 ID：${pending.requestId}\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n当前目标：${task.objective}\n提出人：${requester}\n核验结果：${JSON.stringify(resultProjection)}\n\n必须通过 group_reply_submit 提交一条可直接发送到群聊的通知，不得用 assistant 文本直接输出通知。提交前语义审阅当前已经进入的全部普通 GROUP_MESSAGE_STEER：若新消息影响本通知，结合它重新生成；若不影响，保持本结果通知，新消息将在通知可靠提交后继续处理。把已审阅的全部普通 pending 请求 ID 填入 observedRequestIds；若工具返回 stale 结果，下一 step 必须结合 missingRequestIds 对应的新 Steer 重新生成后再提交。完成通知必须忠实保留叶子结果中影响同事判断和后续行动的信息，不能为了简短只复述 summary。至少覆盖：实际完成或修改的内容、关键核验与证据、部署或交付状态、尚未覆盖的边界与遗留事项；result 中存在 artifacts 或 delivery 时也要说明其关键内容。允许合并重复表述，但不得省略不同关注点、限定条件、失败项或“未验证/未部署”等边界。缺信息时只向提出人询问列出的具体问题。正文不要手写 @ 提出人，Runtime 会传结构化 @。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
+        content: [{ type: 'text', text: `[TASK_COORDINATION]\n回复请求 ID：${pending.requestId}\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n当前目标：${task.objective}\n任务消息时间线：${JSON.stringify(notificationMessages)}\n核验结果：${JSON.stringify(resultProjection)}\n\n必须通过 group_reply_submit 提交一条可直接发送到群聊的通知，不得用 assistant 文本直接输出通知。提交前语义审阅当前已经进入的全部普通 GROUP_MESSAGE_STEER：若新消息影响本通知，结合它重新生成；若不影响，保持本结果通知，新消息将在通知可靠提交后继续处理。把已审阅的全部普通 pending 请求 ID 填入 observedRequestIds；若工具返回 stale 结果，下一 step 必须结合 missingRequestIds 对应的新 Steer 重新生成后再提交。完成通知必须忠实保留叶子结果中影响同事判断和后续行动的信息，不能为了简短只复述 summary。至少覆盖：实际完成或修改的内容、关键核验与证据、部署或交付状态、尚未覆盖的边界与遗留事项；result 中存在 artifacts 或 delivery 时也要说明其关键内容。允许合并重复表述，但不得省略不同关注点、限定条件、失败项或“未验证/未部署”等边界。\n\n结合完整任务消息时间线判断本次通知对象：通过 replyToMessageId 选择一条最适合承接本结果的相关消息，通过 atOpenDingTalkIds 选择所有确实需要获知结果、回答问题或采取后续行动的参与人，可以有多人；不得机械选择最后一条消息或只通知最后触发人，也不得选择时间线之外的消息和人员。正文不要手写 @，Runtime 会使用结构化引用与 @。缺信息时只向真正能够补充该信息的参与人询问。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
         source: { kind: 'user' },
       }))
     } catch (error) {
@@ -687,18 +751,18 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
     rejectUnsubmittedGroupReplyWhenIdle(handle.agent, pending.requestId, task.groupId, resultKey)
     const submitted = await pending.promise
     let reply = submitted.reply
-    const canReplyToSource = notificationTrigger !== undefined
-    if (canReplyToSource && notificationTrigger.requesterName) reply = reply.replace(new RegExp(`^@${notificationTrigger.requesterName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'u'), '')
+    const selectedNames = notificationMessages.filter((item) => submitted.atOpenDingTalkIds?.includes(item.senderOpenDingTalkId)).map((item) => item.senderName).filter(Boolean)
+    for (const name of [...new Set(selectedNames)]) reply = reply.replace(new RegExp(`^@${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'u'), '')
     try {
       return await serialize(task.groupId, async () => {
         const current = store.getGroup(task.groupId)?.outbox.find((item) => item.sourceMessageId === resultKey)
         if (current !== undefined) { submitted.resolveReplyLinearized(); return current }
         const group = await appendReliableOutbox({
           groupId: task.groupId, sourceMessageId: resultKey, text: reply,
-          ...(canReplyToSource ? {
-            replyToMessageId: notificationTrigger.sourceMessageId,
-            replyToSenderOpenDingTalkId: notificationTrigger.requesterOpenDingTalkId,
-            atOpenDingTalkIds: [notificationTrigger.requesterOpenDingTalkId],
+          ...(submitted.replyToMessageId ? {
+            replyToMessageId: submitted.replyToMessageId,
+            replyToSenderOpenDingTalkId: submitted.replyToSenderOpenDingTalkId,
+            atOpenDingTalkIds: submitted.atOpenDingTalkIds,
           } : {}),
           onPersisted: submitted.resolveReplyLinearized,
         })
@@ -990,18 +1054,22 @@ ${task.stageTasks?.length ? task.stageTasks.map((item) => `- ${item}`).join('\n'
 
 ${task.relatedContexts?.length ? task.relatedContexts.map((item) => `- ${item}`).join('\n') : '暂无。'}
 
+### Task 完整消息与参与人时间线
+
+${task.messageHistory?.length ? JSON.stringify(task.messageHistory) : '暂无结构化消息时间线；仅可使用上方已持久化的来源事实，不得猜测缺失参与人。'}
+
 ### 已持久化的人工处理意见
 
 ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').length
   ? (task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').map((item) => `- ${item.decision ?? 'answered'}｜${item.category}｜${item.requestedAction}｜答复：${item.reply ?? '未记录'}`).join('\n')
   : '暂无。'}
 
-完成结果提交后由 Runtime 完整交给 resident 主会话，再由主会话判断如何通知原群任务负责人。群聊消息的发送、回复、编辑、更正和撤回均由 resident 主会话判断；叶子只提交业务结果、结论、证据、未验证项和置信边界，不得判断、建议或申请撤回/编辑/更正任何群消息，不得提供消息处置目标或 messageId。群聊通知只有 Runtime 这一个出口：叶子会话不得调用 DWS 或其他消息工具向来源群发送、回复、编辑或撤回任务进度、阻塞或完成通知，也不得把自行发送群通知作为完成证据；叶子只允许读取群消息用于业务核验，并通过 submit_task_result 提交结构化结果。
+完成结果提交后由 Runtime 完整交给 resident 主会话，再由主会话结合 Task 完整时间线判断如何通知原群相关参与人。群聊消息的发送、回复、编辑、更正和撤回均由 resident 主会话判断；叶子只提交业务结果、结论、证据、未验证项和置信边界，不得判断、建议或申请撤回/编辑/更正任何群消息，不得提供消息处置目标或 messageId。群聊通知只有 Runtime 这一个出口：叶子会话不得调用 DWS 或其他消息工具向来源群发送、回复、编辑或撤回任务进度、阻塞或完成通知，也不得把自行发送群通知作为完成证据；叶子只允许读取群消息用于业务核验，并通过 submit_task_result 提交结构化结果。
 
 ### 阻塞规则
 
 除以下两类情况外，不得暂停或阻塞 Goal，也不得提交 waiting：
-1. \`waitingKind=information\`：只有原任务提出人才能补充的目标、完成条件或必要业务信息不明确；必须提供具体 questions。
+1. \`waitingKind=information\`：只有 Task 相关参与人才能补充的目标、完成条件或必要业务信息不明确；必须提供具体 questions，Runtime 将由主会话根据完整消息时间线选择实际询问对象。
 2. \`waitingKind=human-intervention\`：已经取得证据且自身无法解决的操作红线、网络中断、磁盘不足、资源不足、意外事件或必须真人确认的处置方案；必须提供 blockerCategory、risk、evidence、attemptedActions 和 requestedAction。risk 单独说明执行该操作可能造成的具体影响；操作红线使用 blockerCategory=redline，并把完整操作范围和不在授权内的事项写入 requestedAction；Runtime 只发送这一条人工介入消息。
 
 代码错误、命令失败、可重试波动、普通不确定性、实现困难、正在正常运行但耗时较长的外部流水线，或 Goal 轮数即将/已经耗尽时，继续诊断、监控或由 Host 续接 Goal，不得 waiting。Goal 轮数是 Host 的执行预算，不是需要真人处理的业务阻塞。不要直接使用 Goal 工具标记 blocked；合法等待统一通过 submit_task_result 交给 Host 路由。`,
@@ -1227,7 +1295,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds })
   }
 
-  async function reopenCompletedTaskInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks) {
+  async function reopenCompletedTaskInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks, sourceMessages = []) {
     if (task.state !== 'completed') throw new Error(`task_not_completed:${task.taskId}`)
     const effectiveObjective = typeof objective === 'string' && objective.trim() !== '' ? objective.trim() : task.objective
     const nextRunSequence = (task.runSequence ?? 1) + 1
@@ -1238,11 +1306,13 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       const triggerHistory = (current.triggerHistory ?? [initialTrigger]).filter((item) => !isSyntheticTaskSource(item.sourceMessageId))
       const nextHistory = messageTrigger && !triggerHistory.some((item) => item.sourceMessageId === messageTrigger.sourceMessageId) ? [...triggerHistory, messageTrigger] : triggerHistory
       const retainedTrigger = messageTrigger ?? [...triggerHistory].reverse().find((item) => typeof item.requesterOpenDingTalkId === 'string')
+      const messageHistory = mergeTaskMessageHistory(current, sourceMessages, nextRunSequence)
       const { requesterName: _requesterName, requesterOpenDingTalkId: _requesterOpenDingTalkId, ...withoutCurrentRequester } = current
       return withRevisedObjective({
         ...withoutCurrentRequester,
         ...(retainedTrigger ? { sourceMessageId: retainedTrigger.sourceMessageId, ...(retainedTrigger.requesterName ? { requesterName: retainedTrigger.requesterName } : {}), ...(retainedTrigger.requesterOpenDingTalkId ? { requesterOpenDingTalkId: retainedTrigger.requesterOpenDingTalkId } : {}) } : {}),
         triggerHistory: nextHistory,
+        ...(messageHistory ? { messageHistory } : {}),
         state: 'queued',
         runSequence: nextRunSequence,
         runStartedAt: new Date().toISOString(),
@@ -1271,8 +1341,8 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     await pumpTasks()
     return store.getTask(queued.taskId)
   }
-  async function appendTaskContextInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks) {
-    if (task.state === 'completed') return reopenCompletedTaskInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks)
+  async function appendTaskContextInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks, sourceMessages = []) {
+    if (task.state === 'completed') return reopenCompletedTaskInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks, sourceMessages)
     const previousObjective = task.objective
     const previousAcceptance = JSON.stringify(task.acceptanceCriteria ?? [task.objective])
     const previousStages = JSON.stringify(task.stageTasks ?? ['完成并验证当前轮目标'])
@@ -1283,7 +1353,8 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       task = await store.updateTask(task.taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined }))
     }
     task = await store.updateTask(task.taskId, (current) => {
-      const revised = withRevisedObjective({ ...current, relatedContexts: [...(current.relatedContexts ?? []), context], updatedAt: new Date().toISOString() }, objective, trigger)
+      const messageHistory = mergeTaskMessageHistory(current, sourceMessages, current.runSequence ?? 1)
+      const revised = withRevisedObjective({ ...current, ...(messageHistory ? { messageHistory } : {}), relatedContexts: [...(current.relatedContexts ?? []), context], updatedAt: new Date().toISOString() }, objective, trigger)
       if (acceptanceCriteria === undefined && stageTasks === undefined && revised.objective === current.objective) return revised
       return { ...revised, ...normalizeRunPlan(revised.objective, acceptanceCriteria ?? revised.acceptanceCriteria, stageTasks ?? revised.stageTasks) }
     })
@@ -1449,19 +1520,25 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
               return { ...accepted, decision, group: store.getGroup(message.groupId) }
             }
             const tasks = []
-            const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
-            const sourceEnvelope = decisionMessages.map((source) => buildLeafSourceEnvelope({ messageId: source.messageId, message: source.text, senderName: source.senderName, senderOpenDingTalkId: source.senderOpenDingTalkId, occurredAt: source.occurredAt, quotedMessage: source.quotedMessage, mediaUnavailable: source.mediaUnavailable })).join('\n\n')
             for (const action of decision.actions) {
+              const sourceMessageIds = action.sourceMessageIds
+              if (new Set(sourceMessageIds).size !== sourceMessageIds.length) throw new Error('task_action_source_message_duplicate')
+              const sourceMessageIdSet = new Set(sourceMessageIds)
+              const sourceMessages = (groupBeforeDecision?.messages ?? []).filter((source) => sourceMessageIdSet.has(source.messageId))
+              if (sourceMessages.length !== sourceMessageIds.length) throw new Error('task_action_source_message_invalid')
+              const currentSource = [...sourceMessages].reverse().find((source) => source.senderName && source.senderOpenDingTalkId) ?? sourceMessages.at(-1)
+              const trigger = { sourceMessageId: currentSource.messageId, ...(currentSource.senderName ? { requesterName: currentSource.senderName } : {}), ...(currentSource.senderOpenDingTalkId ? { requesterOpenDingTalkId: currentSource.senderOpenDingTalkId } : {}), ...(currentSource.occurredAt !== undefined ? { occurredAt: currentSource.occurredAt } : {}) }
+              const sourceEnvelope = sourceMessages.map((source) => buildLeafSourceEnvelope({ messageId: source.messageId, message: source.text, senderName: source.senderName, senderOpenDingTalkId: source.senderOpenDingTalkId, occurredAt: source.occurredAt, quotedMessage: source.quotedMessage, mediaUnavailable: source.mediaUnavailable })).join('\n\n')
               let task
-              if (action.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, title: action.title, objective: action.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, acceptanceCriteria: action.acceptanceCriteria, stageTasks: action.stageTasks, relatedContexts: [sourceEnvelope] }); await pumpTasks(); return store.getTask(result.task.taskId) })
+              if (action.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: currentSource.messageId, sourceMessageIds: sourceMessages.map((source) => source.messageId), title: action.title, objective: action.objective, requesterName: currentSource.senderName, requesterOpenDingTalkId: currentSource.senderOpenDingTalkId, occurredAt: currentSource.occurredAt, acceptanceCriteria: action.acceptanceCriteria, stageTasks: action.stageTasks, relatedContexts: [sourceEnvelope] }); await pumpTasks(); return store.getTask(result.task.taskId) })
               else if (action.kind === 'task-context') {
                 task = store.getTask(action.taskId)
                 if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${action.taskId}`)
-                task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
+                task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks, sourceMessages))
               } else if (action.kind === 'task-reopen') {
                 task = store.getTask(action.taskId)
                 if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${action.taskId}`)
-                task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
+                task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks, sourceMessages))
               }
               if (task !== undefined) tasks.push(task)
             }
@@ -1607,14 +1684,18 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       const task = store.getTask(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
       const trigger = sourceMessageId ? { sourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) } : undefined
-      return appendTaskContextInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks)
+      const persistedSource = sourceMessageId ? store.getGroup(task.groupId)?.messages?.find((message) => message.messageId === sourceMessageId) : undefined
+      const sourceMessages = !sourceMessageId || isSyntheticTaskSource(sourceMessageId) ? [] : [persistedSource ?? { messageId: sourceMessageId, text: context, ...(requesterName ? { senderName: requesterName } : {}), ...(requesterOpenDingTalkId ? { senderOpenDingTalkId: requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) }]
+      return appendTaskContextInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks, sourceMessages)
     }),
     reopenTask: ({ taskId, context, objective, acceptanceCriteria, stageTasks, sourceMessageId, requesterName, requesterOpenDingTalkId, occurredAt }) => serializeTasks(async () => {
       const task = store.getTask(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
       const effectiveSourceMessageId = sourceMessageId ?? `web-reopen:${createHash('sha256').update(`${taskId}\n${context}\n${objective ?? task.objective}`).digest('hex')}`
       const trigger = { sourceMessageId: effectiveSourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) }
-      return reopenCompletedTaskInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks)
+      const persistedSource = sourceMessageId ? store.getGroup(task.groupId)?.messages?.find((message) => message.messageId === sourceMessageId) : undefined
+      const sourceMessages = !sourceMessageId || isSyntheticTaskSource(sourceMessageId) ? [] : [persistedSource ?? { messageId: sourceMessageId, text: context, ...(requesterName ? { senderName: requesterName } : {}), ...(requesterOpenDingTalkId ? { senderOpenDingTalkId: requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) }]
+      return reopenCompletedTaskInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks, sourceMessages)
     }),
     reconcileCompletedNotifications: async () => {
       const pending = await serializeTasks(async () => {

@@ -1,10 +1,11 @@
 import { z } from 'zod'
 
 const runPlan = { acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional() }
-const taskProposal = z.strictObject({ kind: z.literal('task-proposal'), title: z.string().min(1).max(120), objective: z.string().min(1) })
-const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: z.array(z.string().min(1)).min(1), stageTasks: z.array(z.string().min(1)).optional() })
-const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan })
-const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan })
+const taskSources = { sourceMessageIds: z.array(z.string().min(1)).min(1) }
+const taskProposal = z.strictObject({ kind: z.literal('task-proposal'), title: z.string().min(1).max(120), objective: z.string().min(1), ...taskSources })
+const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: z.array(z.string().min(1)).min(1), stageTasks: z.array(z.string().min(1)).optional(), ...taskSources })
+const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
+const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
 const taskAction = z.discriminatedUnion('kind', [taskProposal, newTask, taskContext, taskReopen])
 export const groupDecisionSchema = z.union([
   z.strictObject({ actions: z.tuple([]), reply: z.string().min(1) }),
@@ -17,12 +18,13 @@ const runPlanJsonProperties = {
   acceptanceCriteria: { type: 'array', items: stringJsonSchema },
   stageTasks: { type: 'array', items: stringJsonSchema },
 }
+const sourceMessageIdsJsonProperty = { type: 'array', items: stringJsonSchema }
 const taskActionJsonSchema = {
   oneOf: [
-    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-proposal' }, title: stringJsonSchema, objective: stringJsonSchema }, required: ['kind', 'title', 'objective'] },
-    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'new-task' }, title: stringJsonSchema, objective: stringJsonSchema, acceptanceCriteria: { type: 'array', items: stringJsonSchema }, stageTasks: runPlanJsonProperties.stageTasks }, required: ['kind', 'title', 'objective', 'acceptanceCriteria'] },
-    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-context' }, taskId: stringJsonSchema, context: stringJsonSchema, objective: stringJsonSchema, ...runPlanJsonProperties }, required: ['kind', 'taskId', 'context'] },
-    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-reopen' }, taskId: stringJsonSchema, context: stringJsonSchema, objective: stringJsonSchema, ...runPlanJsonProperties }, required: ['kind', 'taskId', 'context'] },
+    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-proposal' }, title: stringJsonSchema, objective: stringJsonSchema, sourceMessageIds: sourceMessageIdsJsonProperty }, required: ['kind', 'title', 'objective', 'sourceMessageIds'] },
+    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'new-task' }, title: stringJsonSchema, objective: stringJsonSchema, acceptanceCriteria: { type: 'array', items: stringJsonSchema }, stageTasks: runPlanJsonProperties.stageTasks, sourceMessageIds: sourceMessageIdsJsonProperty }, required: ['kind', 'title', 'objective', 'acceptanceCriteria', 'sourceMessageIds'] },
+    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-context' }, taskId: stringJsonSchema, context: stringJsonSchema, objective: stringJsonSchema, ...runPlanJsonProperties, sourceMessageIds: sourceMessageIdsJsonProperty }, required: ['kind', 'taskId', 'context', 'sourceMessageIds'] },
+    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-reopen' }, taskId: stringJsonSchema, context: stringJsonSchema, objective: stringJsonSchema, ...runPlanJsonProperties, sourceMessageIds: sourceMessageIdsJsonProperty }, required: ['kind', 'taskId', 'context', 'sourceMessageIds'] },
   ],
 }
 export const groupDecisionJsonSchema = {

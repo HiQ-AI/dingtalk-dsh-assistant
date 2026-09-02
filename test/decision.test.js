@@ -5,7 +5,7 @@ import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSou
 
 test('群决策一次结构化输出可包含多个任务动作', () => {
   assert.deepEqual(parseGroupDecision('{"actions":[],"reply":"ok"}').actions, [])
-  const decision = parseGroupDecision('{"actions":[{"kind":"task-context","taskId":"task-1","context":"more"},{"kind":"task-reopen","taskId":"task-2","context":"rollback"},{"kind":"new-task","title":"修复问题","objective":"fix","acceptanceCriteria":["有可核验证据"]}],"reply":"已统一处理"}')
+  const decision = parseGroupDecision('{"actions":[{"kind":"task-context","taskId":"task-1","context":"more","sourceMessageIds":["m-1"]},{"kind":"task-reopen","taskId":"task-2","context":"rollback","sourceMessageIds":["m-2"]},{"kind":"new-task","title":"修复问题","objective":"fix","acceptanceCriteria":["有可核验证据"],"sourceMessageIds":["m-3"]}],"reply":"已统一处理"}')
   assert.deepEqual(decision.actions.map((action) => action.kind), ['task-context', 'task-reopen', 'new-task'])
   assert.equal(parseGroupDecision('{"actions":[],"reason":"not addressed"}').reason, 'not addressed')
 })
@@ -14,6 +14,7 @@ test('群决策拒绝无效 JSON、多余字段和缺失目标', () => {
   assert.throws(() => parseGroupDecision('answer'), /group_decision_invalid_json/)
   assert.throws(() => parseGroupDecision('{"actions":[],"reply":"ok","objective":"hidden"}'), /group_decision_invalid_schema/)
   assert.throws(() => parseGroupDecision('{"actions":[{"kind":"new-task","title":"修复问题","objective":"fix"}],"reply":"accepted"}'), /group_decision_invalid_schema/)
+  assert.throws(() => parseGroupDecision('{"actions":[{"kind":"new-task","title":"修复问题","objective":"fix","acceptanceCriteria":["完成"],"sourceMessageIds":[]}],"reply":"accepted"}'), /group_decision_invalid_schema/)
 })
 
 test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () => {
@@ -104,12 +105,12 @@ test('诊断请求不得被主会话或叶子会话扩大为修复授权', async
 
 test('群消息到叶子只使用Runtime原始证据信封', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
-  assert.match(source, /const sourceEnvelope = decisionMessages\.map\(\(source\) => buildLeafSourceEnvelope/u)
+  assert.match(source, /const sourceEnvelope = sourceMessages\.map\(\(source\) => buildLeafSourceEnvelope/u)
   assert.match(source, /title: action\.title, objective: action\.objective/u)
   assert.match(source, /relatedContexts: \[sourceEnvelope\]/u)
   assert.doesNotMatch(source, /objective: sourceEnvelope/u)
-  assert.match(source, /appendTaskContextInternal\(task, sourceEnvelope, trigger, action\.objective, action\.acceptanceCriteria, action\.stageTasks\)/u)
-  assert.match(source, /reopenCompletedTaskInternal\(task, sourceEnvelope, trigger, action\.objective, action\.acceptanceCriteria, action\.stageTasks\)/u)
+  assert.match(source, /appendTaskContextInternal\(task, sourceEnvelope, trigger, action\.objective, action\.acceptanceCriteria, action\.stageTasks, sourceMessages\)/u)
+  assert.match(source, /reopenCompletedTaskInternal\(task, sourceEnvelope, trigger, action\.objective, action\.acceptanceCriteria, action\.stageTasks, sourceMessages\)/u)
   assert.doesNotMatch(source, /appendTaskContextInternal\(task, decision\.context/u)
 })
 
@@ -118,7 +119,7 @@ test('任务关联索引覆盖当前群全部状态并允许历史任务记录�
   assert.match(source, /本群全部任务关联索引/)
   assert.match(source, /queued、running、waiting、completed 以及产品展示中的归档任务都必须参与关联判断/)
   assert.match(source, /结合当前消息的前后文、引用关系、连续消息构成的信息组、当时讨论与执行场景/u)
-  assert.match(source, /候选任务的目标、动作范围、状态、历史触发和已记录上下文/u)
+  assert.match(source, /候选任务的标题、完整目标、动作范围、状态、消息与参与人时间线和已记录上下文/u)
   assert.match(source, /不得根据某几个关键词、词面重合、标题相似或单一字段直接决定复用已有任务或新建任务/u)
   assert.match(source, /关键词只能作为查找候选任务的线索，不能代替关联结论/u)
   assert.match(source, /图片、文档、文件、链接或其他外部资源如果承载任务目标、范围、对象、输入数据或验收要求/u)
@@ -137,9 +138,9 @@ test('图片及紧邻图片的短消息在存在活动Task时触发关联复核'
 test('任务所需附件读取失败时硬拦截任务动作并反馈缺失信息', () => {
   const failures = ['图片 media-1 下载失败', '文档 spec.docx 无法解析']
   for (const decision of [
-    { actions: [{ kind: 'new-task', title: '修复问题', objective: '按附件修复', acceptanceCriteria: ['修复有证据'] }], reply: '开始处理' },
-    { actions: [{ kind: 'task-context', taskId: 'task-1', context: '附件补充' }], reply: '继续处理' },
-    { actions: [{ kind: 'task-reopen', taskId: 'task-1', context: '附件要求返工' }], reply: '重新处理' },
+    { actions: [{ kind: 'new-task', title: '修复问题', objective: '按附件修复', acceptanceCriteria: ['修复有证据'], sourceMessageIds: ['m-1'] }], reply: '开始处理' },
+    { actions: [{ kind: 'task-context', taskId: 'task-1', context: '附件补充', sourceMessageIds: ['m-1'] }], reply: '继续处理' },
+    { actions: [{ kind: 'task-reopen', taskId: 'task-1', context: '附件要求返工', sourceMessageIds: ['m-1'] }], reply: '重新处理' },
   ]) {
     const blocked = blockTaskDecisionForUnavailableMedia(decision, failures)
     assert.deepEqual(blocked.actions, [])
@@ -148,6 +149,6 @@ test('任务所需附件读取失败时硬拦截任务动作并反馈缺失信�
   }
   const answer = { actions: [], reply: '我没有获取到文档正文，请重新发送。' }
   assert.equal(blockTaskDecisionForUnavailableMedia(answer, failures), answer)
-  const complete = { actions: [{ kind: 'new-task', title: '文本任务', objective: '执行文本任务', acceptanceCriteria: ['完成'] }], reply: '开始处理' }
+  const complete = { actions: [{ kind: 'new-task', title: '文本任务', objective: '执行文本任务', acceptanceCriteria: ['完成'], sourceMessageIds: ['m-1'] }], reply: '开始处理' }
   assert.equal(blockTaskDecisionForUnavailableMedia(complete, []), complete)
 })

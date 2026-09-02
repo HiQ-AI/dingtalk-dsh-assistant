@@ -17,7 +17,7 @@
 - Task 增加 `runSequence`、`runStartedAt`、`acceptanceCriteria`、`stageTasks` 和 `runHistory`。
 - 新建任务初始化第 1 轮；reopen 将当前轮快照写入 `runHistory`，然后初始化下一轮。
 - reopen 保持原 `childSessionId` 以延续同一任务上下文，但必须创建全新 Goal，并把当前轮目标、验收标准和阶段任务明确注入同一叶子 Session。
-- 当前轮来源消息、发送人、目标、验收标准和阶段任务全部覆盖更新；历史信息仅保存在 `triggerHistory`、`objectiveHistory`、`relatedContexts` 和 `runHistory`。
+- 当前轮目标、兼容来源字段、验收标准和阶段任务按新轮更新；`messageHistory` 跨轮按消息 ID 追加全部相关消息与发送人，其他历史继续保存在 `triggerHistory`、`objectiveHistory`、`relatedContexts` 和 `runHistory`。
 - 清理当前阻塞、等待结果、完成结果和归档状态；历史审批仍保留在 `humanBlockerHistory`，但不继续作为当前 blocker。
 - 完成通知继续按 `completionSequence` 幂等区分，完成门禁只审查当前轮目标与验收标准。
 

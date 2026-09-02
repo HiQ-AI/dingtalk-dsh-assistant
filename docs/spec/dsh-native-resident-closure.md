@@ -17,7 +17,7 @@
 - 群图片通过 DWS 下载后进入 DSH 原生 attachment/image block；transport 不做 OCR 或业务判断。
 - 活动 Task 使用动态系统提示词投影，不在每条群消息中重复写入快照。
 - `task-context` 指向已完成或已归档 Task 时，Runtime 必须重新打开原 Task、恢复原叶子 Session 和 Goal；不得只落盘上下文后发送执行承诺。
-- Task 重开必须记录本轮群消息 ID、发送人及稳定 ID，完成通知引用本轮消息并 @本轮发送人；初次和历次触发来源保存在 `triggerHistory`，不得被当前来源覆盖丢失。
+- Task 创建、补充和重开必须把全部相关群消息及发送人追加到结构化 `messageHistory`；完成通知由 resident 基于完整时间线选择承接消息和相关参与人，Runtime 不固定使用本轮最后发送人。
 - 任务流程与证据要求属于 Agent 业务配置，只注入叶子系统提示词，不固化在通用插件门禁中。
 
 ## 持久化
@@ -26,11 +26,11 @@ Task 使用 storage-domain 的独立 KV 表，每个 Task 一个稳定记录。s
 
 ## 结果协调与发送
 
-- 叶子结果给主会话只投影摘要、提出人和完成交付或缺信息字段，不传完整 evidence/artifacts。
+- 叶子结果给主会话投影摘要、完整 evidence/artifacts、交付状态以及 Task 消息与参与人时间线，用于形成不丢边界且路由准确的通知。
 - Runtime 启动恢复期间产生的本进程 outbox 事件，在 DWS listener 挂载后补交。
 - 跨进程只重试已完成 Task 的 pending 通知；普通历史回复和旧阻塞不自动重放。
 - DWS 最近消息窗口在 `partial=false`、无 failures 时可用于发送前后去重；`complete=false` 只表示更早历史尚未全部翻页，不能永久阻塞最新消息发送。
-- Task 保存真实发起消息与提出人稳定 ID；完成通知引用回复发起消息并 @ 提出人。
+- Task 保存全部已关联真实消息与参与人稳定 ID；完成通知只能引用其中一条消息，并可结构化 @其中一位或多位相关参与人。
 
 ## 诊断顺序
 
