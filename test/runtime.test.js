@@ -137,6 +137,22 @@ test('同一turn的多条消息按step工具提交独立Decision且不等待turn
   await runtime.close()
 })
 
+test('DWS listener 恢复会关闭退出和启动异常两类 carrier 告警', async () => {
+  const fixture = decisionRuntimeFixture()
+  fixture.tasks.push(
+    { taskId: 'task-running', groupId: fixture.group.groupId, state: 'running' },
+    { taskId: 'task-completed', groupId: fixture.group.groupId, state: 'completed' },
+  )
+  const resolutions = []
+  fixture.store.resolveAlerts = async (value) => { resolutions.push(value); return { resolved: 1 } }
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+
+  await runtime.resolveGroupCarrierIssues({ groupId: fixture.group.groupId })
+
+  assert.deepEqual(resolutions, [{ taskId: 'task-running', fingerprintPrefix: 'dws-consumer-' }, { taskId: 'task-completed', fingerprintPrefix: 'dws-consumer-' }])
+  await runtime.close()
+})
+
 test('模型可合并相关请求且Runtime只提交一次副作用并保留全部来源', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'combined-group' })
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))

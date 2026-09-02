@@ -1218,7 +1218,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     acknowledge: store.acknowledge, reportCarrierIssue: store.recordAlert,
     resolveGroupCarrierIssues: async ({ groupId }) => {
       const tasks = store.listTasks().filter((task) => task.groupId === groupId)
-      for (const task of tasks) await store.resolveAlerts?.({ taskId: task.taskId, fingerprintPrefix: 'dws-consumer-exit:' })
+      for (const task of tasks) await store.resolveAlerts?.({ taskId: task.taskId, fingerprintPrefix: 'dws-consumer-' })
     },
     inspectRunningTasks,
     migrateTaskProvenance: store.migrateTaskProvenance,
