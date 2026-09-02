@@ -1,21 +1,21 @@
-case_id,case,round_1,status
-GRC-01,现场单请求含回复且省略observed一次提交成功,PASS,PASS
-GRC-02,另有未观察pending时返回结构化stale且零副作用,PASS,PASS
-GRC-03,stale后结合新增消息重提成功且只发送新回复,PASS,PASS
-GRC-04,显式重复提交请求ID保持兼容,PASS,PASS
-GRC-05,observed但未提交请求保持pending,PASS,PASS
-GRC-06,附件拦截形成的effective reply沿用观察门禁,PASS,PASS
-GRC-07,recheck与普通请求合并仍正确计算观察集合,PASS,PASS
-GRC-08,Task通知stale返回结构化结果并可重提,PASS,PASS
-GRC-09,普通单消息回复携带当前消息引用与结构化at,PASS,PASS
-GRC-10,入站本身引用旧消息时出站引用当前入站而非旧消息,PASS,PASS
-GRC-11,多消息合并选择最新有效消息作为引用目标,PASS,PASS
-GRC-12,发送人ID缺失时安全降级为普通发送,PASS,PASS
-GRC-13,Store持久化与DWS dispatch保留引用路由字段,PASS,PASS
-GRC-14,DWS回读同时校验正文和quoted message ID,PASS,PASS
-GRC-15,不同群及reply admission并发语义不回退,PASS,PASS
-GRC-16,全量测试和diff检查通过,PASS,PASS
-GRC-17,三个npm包打包并核对内容与hash,PASS,PASS
-GRC-18,本地profile安装源码与包路径回读通过,TODO,TODO
-GRC-19,重启后进程端口Web health bridge和状态API通过,TODO,TODO
-GRC-20,真实群引用回复完成DWS发送和引用回读,TODO,TODO
+case_id,case,round_1,round_2,status
+GRC-01,现场单请求含回复且省略observed一次提交成功,PASS,PASS,PASS
+GRC-02,另有未观察pending时返回结构化stale且零副作用,PASS,PASS,PASS
+GRC-03,stale后结合新增消息重提成功且只发送新回复,PASS,PASS,PASS
+GRC-04,显式重复提交请求ID保持兼容,PASS,PASS,PASS
+GRC-05,observed但未提交请求保持pending,PASS,PASS,PASS
+GRC-06,附件拦截形成的effective reply沿用观察门禁,PASS,PASS,PASS
+GRC-07,recheck与普通请求合并仍正确计算观察集合,PASS,PASS,PASS
+GRC-08,Task通知stale返回结构化结果并可重提,PASS,PASS,PASS
+GRC-09,普通单消息回复携带当前消息引用与结构化at,PASS,PASS,PASS
+GRC-10,入站本身引用旧消息时出站引用当前入站而非旧消息,PASS,PASS,PASS
+GRC-11,多消息合并选择最新有效消息作为引用目标,PASS,PASS,PASS
+GRC-12,发送人ID缺失时安全降级为普通发送,PASS,PASS,PASS
+GRC-13,Store持久化与DWS dispatch保留引用路由字段,PASS,PASS,PASS
+GRC-14,DWS回读同时校验正文和quoted message ID,PASS,PASS,PASS
+GRC-15,不同群及reply admission并发语义不回退,PASS,PASS,PASS
+GRC-16,全量测试和diff检查通过,PASS,NOT_RUN,PASS
+GRC-17,三个npm包打包并核对内容与hash,PASS,NOT_RUN,PASS
+GRC-18,本地profile安装源码与包路径回读通过,TODO,PASS,PASS
+GRC-19,重启后进程端口Web health bridge和状态API通过,TODO,PASS,PASS
+GRC-20,真实群引用回复完成DWS发送和引用回读,TODO,TODO,TODO
