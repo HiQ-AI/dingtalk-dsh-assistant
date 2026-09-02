@@ -274,7 +274,7 @@ test('单请求含回复时submission自身即完成观察并引用当前入站�
     groupId: fixture.group.groupId,
     messageId: 'current-message',
     text: '请补充部署Ref',
-    senderName: '向春梅',
+    senderName: '测试成员',
     senderOpenDingTalkId: 'od-current',
     quotedMessage: { messageId: 'older-agent-message', content: '此前的部署结果' },
     occurredAt: '2026-09-02T07:24:18.880Z',

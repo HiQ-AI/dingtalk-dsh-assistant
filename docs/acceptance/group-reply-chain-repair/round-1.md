@@ -2,13 +2,14 @@
 
 ## 结论
 
-GRC-01 至 GRC-17 通过。现场的冗余观察失败已由同形参数回归覆盖；真正漏观察仍返回零副作用 stale。普通 Decision 的引用元数据已贯穿 Runtime → Store/Outbox → DWS reply → 回读匹配，且回读不再用“正文相同”绕过引用 ID 校验。
+GRC-01 至 GRC-17 通过。两类现场观察失败均已由同形参数回归覆盖：提交请求自身不再要求重复声明，通知发送期间真正出现的新消息仍执行零副作用 stale。普通 Decision 的引用元数据已贯穿 Runtime → Store/Outbox → DWS reply → 回读匹配，且回读不再用“正文相同”绕过引用 ID 校验。
 
 ## 现场证据
 
-- Resident Session JSONL 显示首个 `group_decision_submit` 已在 submission 中提交请求 `1b476e00-c6fd-4690-9a76-49b6c2540467`，但未重复提供顶层 `observedRequestIds`，12 ms 后返回 `missing`。
+- Resident Session JSONL 显示首个 `group_decision_submit` 已在 submission 中提交现场请求（ID 已脱敏），但未重复提供顶层 `observedRequestIds`，12 ms 后返回 `missing`。
 - 同 turn 下一 step 补齐相同 ID 后工具成功；持久状态显示入站消息最终为 `delivered`，Outbox 为 `sent` 并具有真实 `deliveredMessageId`。
 - 该 Outbox 没有 `replyToMessageId/replyToSenderOpenDingTalkId/atOpenDingTalkIds`，证明最终发送成功与引用路由成功是两个不同层次，旧实现只完成前者。
+- 另一现场 `group_reply_submit` 在通知生成后遇到新进入的普通消息，第一次以空 `observedRequestIds` 提交时返回 `missing`；同 turn 先处理该普通消息，再次提交通知成功，最终显示仍有 0 个待处理请求。该流程证明 stale 拦截本身必要，但不应以工具失败卡片呈现。
 
 ## 实现与回归证据
 
