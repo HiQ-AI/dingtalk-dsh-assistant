@@ -22,10 +22,11 @@ function comparableMessageText(value) {
 
 export function matchesOutbound(message, outbound) {
   const actual = comparableMessageText(message.text), expected = comparableMessageText(outbound.text)
+  const quotedId = message.quotedMessage?.messageId ?? message.quotedMessage?.message_id
+  if (outbound.replyToMessageId && quotedId !== outbound.replyToMessageId) return false
   if (actual === expected) return true
   if (expected.length < 24 || !actual.includes(expected)) return false
-  const quotedId = message.quotedMessage?.messageId ?? message.quotedMessage?.message_id
-  return !outbound.replyToMessageId || quotedId === outbound.replyToMessageId
+  return true
 }
 
 export function createDwsAdapter({ enabled = false, writesAuthorized = false, profile, runner }) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createDwsAdapter, dispatchOutbox } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { createDwsAdapter, dispatchOutbox, matchesOutbound } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
 
 test('DWS adapter 默认禁用且不会调用 runner', async () => {
   let calls = 0
@@ -45,13 +45,20 @@ test('Task完成通知使用DWS原生引用回复并@提出人', async () => {
   let reads = 0
   let request
   const adapter = {
-    async readGroup() { reads += 1; return { complete: true, messages: reads === 1 ? [] : [{ messageId: 'done-id', text: 'done' }] } },
+    async readGroup() { reads += 1; return { complete: true, messages: reads === 1 ? [] : [{ messageId: 'done-id', text: 'done', quotedMessage: { messageId: 'm-source' } }] } },
     async sendGroupReply(value) { request = value; return { deliveryStatus: 'success' } },
   }
   const result = await dispatchOutbox({ adapter, groupId: 'cid-a', outbound: { outboundId: 'out-done', text: 'done', replyToMessageId: 'm-source', replyToSenderOpenDingTalkId: 'od-requester', atOpenDingTalkIds: ['od-requester'] } })
   assert.equal(result.status, 'sent')
   assert.deepEqual(request.atOpenDingTalkIds, ['od-requester'])
   assert.equal(request.replyToMessageId, 'm-source')
+})
+
+test('引用回复回读即使正文完全相同也必须匹配quoted message ID', () => {
+  const outbound = { text: '完全相同的回复正文', replyToMessageId: 'expected-source' }
+  assert.equal(matchesOutbound({ text: outbound.text }, outbound), false)
+  assert.equal(matchesOutbound({ text: outbound.text, quotedMessage: { messageId: 'other-source' } }, outbound), false)
+  assert.equal(matchesOutbound({ text: outbound.text, quotedMessage: { messageId: 'expected-source' } }, outbound), true)
 })
 
 test('本人私聊发送通过openTaskId回查真实会话与消息ID', async () => {

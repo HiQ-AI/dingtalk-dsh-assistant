@@ -17,7 +17,7 @@
 
 ## Decision 工具协议
 
-`group_decision_submit` 使用顶层 `observedRequestIds`：
+`group_decision_submit` 使用 submission 请求与顶层 `observedRequestIds` 的并集表达观察集合：
 
 ```json
 {
@@ -33,10 +33,10 @@
 
 当任一 effective Decision 含非空 `reply` 时：
 
-1. `observedRequestIds` 必须与该群当前全部普通 pending 请求完全一致。
+1. submission 中提交的普通请求自动计入已观察；`observedRequestIds` 补充已审阅但本批不提交的其他普通 pending。两者并集必须与该群当前全部普通 pending 请求完全一致。
 2. 出现在 submission `requestIds` 中的请求在本次调用内完成；相关请求共享一个 submission，独立请求使用不同 submission。
 3. 已观察但未提交的请求表示模型判断它不影响本批回复且决定稍后处理；Runtime 不消费它，也不会再次 Steer，而是保留 pending 供当前 turn 的下一 step 处理。
-4. 若已有新 Steer 进入 pending、但模型没有观察到，整批以 `group_decision_reply_observation_stale` 原子拒绝，不执行 Task 动作，也不写旧回复。
+4. 若已有新 Steer 进入 pending、但模型没有观察到，工具返回结构化 `stale` 结果；整批不领取、不执行 Task 动作，也不写旧回复。模型在下一 step 结合 `missingRequestIds` 重生成。
 5. 门禁基于附件缺失拦截后的 effective Decision；原始 `reply` 为空但被转换成附件缺失提示时，同样必须完成全量审阅。
 
 没有非空回复的 Decision 不要求观察全部 pending，请求可以独立完成，不被其他未处理事项阻塞。

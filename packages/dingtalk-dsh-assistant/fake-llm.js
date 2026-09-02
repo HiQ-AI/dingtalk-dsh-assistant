@@ -31,7 +31,7 @@ class FakeResidentAdapter extends LlmAdapter {
       else decision = { actions: [], reply: `fake-answer:${message}` }
       if (requestId === undefined) throw new Error('fake_group_decision_request_id_missing')
       const id = `fake-decision-${Date.now()}`
-      const args = JSON.stringify({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision }] })
+      const args = JSON.stringify({ submissions: [{ requestIds: [requestId], decision }] })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name: 'group_decision_submit', argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'group_decision_submit', arguments: args } }
