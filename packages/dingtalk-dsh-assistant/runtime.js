@@ -54,11 +54,11 @@ const activityDetail = (event) => {
 }
 
 export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000 } = {}) {
-  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), inflightMessages = new Map(), pendingGroupDecisions = new Map()
+  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), pendingGroupDecisions = new Map(), pendingGroupReplies = new Map(), activeGroupSubmissions = new Set(), activeGroupReplies = new Set(), activeGroupResidentOperations = new Set(), groupReplyAdmissionBarriers = new Map(), groupResidentTransitionBarriers = new Map()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
-  let taskTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, currentDwsUserName = ''
+  let taskTail = Promise.resolve(), configTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, currentDwsUserName = '', runtimeClosing = false, closePromise
   let groupMessageRecaller
   let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks
   if (store.getMaxConcurrentTasks?.() === undefined) await store.setMaxConcurrentTasks?.(taskConcurrencyLimit)
@@ -106,6 +106,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     agentCtx.tools.restrict({ deny: ['get_goal', 'create_goal', 'update_goal'] })
     agentCtx.systemPrompt.section({ name: 'tool:goal', order: 114, text: '' })
     registerResidentDecisionTool(agentCtx, groupId)
+    registerResidentReplyTool(agentCtx, groupId)
     registerResidentTaskTools(agentCtx, groupId)
     agentCtx.systemPrompt.section({
       name: 'dingtalk-group-responsibility', order: 40,
@@ -126,7 +127,11 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       name: 'dingtalk-group-decision-protocol', order: 41,
       text: () => `## 群消息决策协议
 
-收到以 \`[GROUP_MESSAGE_STEER]\` 开头的群消息信封或 \`[GROUP_DECISION_RECHECK]\` 复核请求时，必须通过 \`group_decision_submit\` 提交结构化判断，不得用 assistant 文本输出 JSON。每个信封携带一个判断请求 ID；处理完成一个或多个请求后即可调用工具，不需要等待 turn 结束。你可以在一次工具调用中提交多个 submission，也可以让一个 submission 覆盖多个 requestIds。由你结合完整上下文判断消息相关、部分相关或无关：共享一个业务判断的请求放在同一 submission，独立事项分别提交；Runtime 不替你按顺序、关键词或固定窗口分组。每个 pending request ID 必须且只能成功提交一次。\`[GROUP_DECISION_RECHECK]\` 是已有判断的内部复核，只提交它自己的请求 ID，不与新群消息请求合并。
+收到以 \`[GROUP_MESSAGE_STEER]\` 开头的群消息信封或 \`[GROUP_DECISION_RECHECK]\` 复核请求时，必须通过 \`group_decision_submit\` 提交结构化判断，不得用 assistant 文本输出 JSON。每个信封携带一个判断请求 ID；处理完成一个或多个请求后即可调用工具，不需要等待 turn 结束。你可以在一次工具调用中提交多个 submission，也可以让一个 submission 覆盖多个 requestIds。由你结合完整上下文判断消息相关、部分相关或无关：共享一个业务判断的请求放在同一 submission，独立事项分别提交；Runtime 不替你按顺序、关键词或固定窗口分组。每个 pending request ID 必须且只能成功提交一次。
+
+任何 submission 的最终有效 Decision 含非空 reply 时，必须在工具顶层 \`observedRequestIds\` 中列出你在生成本批回复前已经语义审阅的全部普通 \`[GROUP_MESSAGE_STEER]\` 请求 ID。影响回复的消息必须与对应请求放进同一 submission，并结合这些消息重新生成完整 Decision；无关且已经处理完成的事项放进独立 submission；不影响本批回复但准备在回复后处理的请求只列入 \`observedRequestIds\`、不要放入任何 submission，Runtime 会保留它们。若工具返回 \`group_decision_reply_observation_stale\`，说明提交前又有新 Steer 到达；下一 step 必须结合新消息重新判断并提交，不能原样重试旧回复。Runtime 只校验观察覆盖，不替你判断相关性。
+
+\`[GROUP_DECISION_RECHECK]\` 是已有判断的内部复核。它可以单独提交，也可以与确实影响本次复核 Decision 的普通消息请求放进同一 submission；不要为了规避回复重生成而把相关消息机械拆开。
 
 Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"actions":[],"reason":"原因"}\`，涉及任务时使用 \`{"actions":[...],"reply":"最多一条群回复，可为空"}\`。Decision 顶层不允许 kind 字段。一个 Decision 可以同时对应多个 Task，\`actions\` 中每项可为 task-proposal、new-task、task-context 或 task-reopen；不得为了只返回一个动作而遗漏其他相关 Task。群回复统一放在顶层 \`reply\`，不得给每个动作分别回复。
 
@@ -177,13 +182,100 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
     taskTail = current.catch(() => undefined)
     return current
   }
-  function createPendingGroupDecision({ groupId, messageId, sequence, message, imageRefs, kind = 'message' }) {
+  const serializeHydration = (groupId, operation) => {
+    const current = (hydrationTails.get(groupId) ?? Promise.resolve()).then(operation, operation)
+    hydrationTails.set(groupId, current)
+    current.finally(() => { if (hydrationTails.get(groupId) === current) hydrationTails.delete(groupId) }).catch(() => undefined)
+    return current
+  }
+  const serializeConfig = (operation) => {
+    const current = configTail.then(operation, operation)
+    configTail = current.catch(() => undefined)
+    return current
+  }
+  function holdGroupResidentTransition(groupId) {
+    let barrier = groupResidentTransitionBarriers.get(groupId)
+    if (barrier === undefined) {
+      let resolve
+      const promise = new Promise((resolveBarrier) => { resolve = resolveBarrier })
+      barrier = { count: 0, promise, resolve }
+      groupResidentTransitionBarriers.set(groupId, barrier)
+    }
+    barrier.count += 1
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      barrier.count -= 1
+      if (barrier.count !== 0) return
+      if (groupResidentTransitionBarriers.get(groupId) === barrier) groupResidentTransitionBarriers.delete(groupId)
+      barrier.resolve()
+    }
+  }
+  function runGroupResidentOperation(groupId, operation) {
+    if (runtimeClosing) return Promise.reject(new Error('resident_runtime_closed'))
+    const transition = groupResidentTransitionBarriers.get(groupId)
+    if (transition !== undefined) return transition.promise.then(() => runGroupResidentOperation(groupId, operation))
+    const promise = Promise.resolve().then(() => {
+      if (runtimeClosing) throw new Error('resident_runtime_closed')
+      return operation()
+    })
+    const active = { groupId, promise }
+    activeGroupResidentOperations.add(active)
+    promise.finally(() => activeGroupResidentOperations.delete(active)).catch(() => undefined)
+    return promise
+  }
+  async function waitForActiveGroupResidentOperations(groupId) {
+    while (true) {
+      const active = [...activeGroupResidentOperations].filter((operation) => operation.groupId === groupId)
+      if (active.length === 0) return
+      await Promise.allSettled(active.map((operation) => operation.promise))
+    }
+  }
+  async function waitForAllResidentOperations() {
+    while (activeGroupResidentOperations.size > 0) await Promise.allSettled([...activeGroupResidentOperations].map((operation) => operation.promise))
+  }
+  function holdGroupReplyAdmission(groupId, count) {
+    if (count === 0) return []
+    let barrier = groupReplyAdmissionBarriers.get(groupId)
+    if (barrier === undefined) {
+      let resolve
+      const promise = new Promise((resolveBarrier) => { resolve = resolveBarrier })
+      barrier = { count: 0, promise, resolve }
+      groupReplyAdmissionBarriers.set(groupId, barrier)
+    }
+    barrier.count += count
+    return Array.from({ length: count }, () => {
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        barrier.count -= 1
+        if (barrier.count !== 0) return
+        if (groupReplyAdmissionBarriers.get(groupId) === barrier) groupReplyAdmissionBarriers.delete(groupId)
+        barrier.resolve()
+      }
+    })
+  }
+  function admitGroupSteer(groupId, operation) {
+    if (runtimeClosing) throw new Error('resident_runtime_closed')
+    const barrier = groupReplyAdmissionBarriers.get(groupId)
+    if (barrier === undefined) return operation()
+    return barrier.promise.then(() => admitGroupSteer(groupId, operation))
+  }
+  function createPendingGroupDecision({ groupId, messageId, sequence, message, imageRefs, kind = 'message', baseRequests = [] }) {
     const requestId = randomUUID()
     let resolve, reject
     const promise = new Promise((resolvePending, rejectPending) => { resolve = resolvePending; reject = rejectPending })
     promise.catch(() => undefined)
-    pendingGroupDecisions.set(requestId, { requestId, groupId, messageId, sequence, message, imageRefs, kind, resolve, reject })
-    return { requestId, promise }
+    let resolveDeliveryRecorded, rejectDeliveryRecorded
+    const deliveryRecorded = kind === 'message'
+      ? new Promise((resolveDelivery, rejectDelivery) => { resolveDeliveryRecorded = resolveDelivery; rejectDeliveryRecorded = rejectDelivery })
+      : Promise.resolve()
+    deliveryRecorded.catch(() => undefined)
+    const pending = { requestId, groupId, messageId, sequence, message, imageRefs, kind, baseRequests, resolve, reject, deliveryRecorded, resolveDeliveryRecorded: resolveDeliveryRecorded ?? (() => undefined), rejectDeliveryRecorded: rejectDeliveryRecorded ?? (() => undefined) }
+    pendingGroupDecisions.set(requestId, pending)
+    return { requestId, promise, deliveryRecorded, resolveDeliveryRecorded: pending.resolveDeliveryRecorded, rejectDeliveryRecorded: pending.rejectDeliveryRecorded }
   }
   function rejectPendingGroupDecision(requestId, error) {
     const pending = pendingGroupDecisions.get(requestId)
@@ -195,6 +287,31 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
     agent.whenIdle().then(() => rejectPendingGroupDecision(requestId, new Error(`group_decision_not_submitted:${groupId}:${messageId}`)))
       .catch((error) => rejectPendingGroupDecision(requestId, error))
   }
+  function createPendingGroupReply({ groupId, sourceMessageId }) {
+    const requestId = randomUUID()
+    let resolve, reject
+    const promise = new Promise((resolvePending, rejectPending) => { resolve = resolvePending; reject = rejectPending })
+    promise.catch(() => undefined)
+    pendingGroupReplies.set(requestId, { requestId, groupId, sourceMessageId, resolve, reject })
+    return { requestId, promise }
+  }
+  function rejectPendingGroupReply(requestId, error) {
+    const pending = pendingGroupReplies.get(requestId)
+    if (pending === undefined) return
+    pendingGroupReplies.delete(requestId)
+    pending.reject(error)
+  }
+  function rejectUnsubmittedGroupReplyWhenIdle(agent, requestId, groupId, sourceMessageId) {
+    agent.whenIdle().then(() => rejectPendingGroupReply(requestId, new Error(`group_reply_not_submitted:${groupId}:${sourceMessageId}`)))
+      .catch((error) => rejectPendingGroupReply(requestId, error))
+  }
+  async function waitForActiveGroupSubmissions(groupId) {
+    while (true) {
+      const active = [...activeGroupSubmissions].filter((submission) => submission.requests.some((request) => request.groupId === groupId))
+      if (active.length === 0) return
+      await Promise.allSettled(active.map((submission) => submission.committed))
+    }
+  }
   function assertResidentToolSession(exec, groupId) {
     const expected = residentHandles.get(groupId)?.agent?.session?.id
     if (expected === undefined || String(exec.agent?.session?.id) !== String(expected)) throw new Error(`resident_tool_wrong_session:${groupId}`)
@@ -202,9 +319,10 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
   function registerResidentDecisionTool(agentCtx, groupId) {
     agentCtx.tools.register({
       name: 'group_decision_submit',
-      description: 'Submit one or more completed group-message decisions at the current step. The model decides which pending request IDs share one decision; the Runtime validates ownership and commits each shared decision once.',
+      description: 'Submit one or more completed group-message decisions at the current step. When any effective decision replies, observedRequestIds must exactly cover every pending group-message request reviewed before this reply batch; observed but unsubmitted requests remain pending for later processing.',
       parameters: {
         type: 'object', additionalProperties: false, required: ['submissions'], properties: {
+          observedRequestIds: { type: 'array', items: { type: 'string' } },
           submissions: { type: 'array', items: {
             type: 'object', additionalProperties: false, required: ['requestIds', 'decision'], properties: {
               requestIds: { type: 'array', items: { type: 'string' } },
@@ -214,36 +332,156 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
         },
       },
       output: {
-        schema: { type: 'object', additionalProperties: false, required: ['acceptedRequestIds'], properties: { acceptedRequestIds: { type: 'array', items: { type: 'string' } } } },
-        render: (_args, out) => [{ type: 'text', text: `已接收 ${out.acceptedRequestIds.length} 个群消息判断请求。` }],
+        schema: { type: 'object', additionalProperties: false, required: ['acceptedRequestIds', 'pendingRequestIds'], properties: { acceptedRequestIds: { type: 'array', items: { type: 'string' } }, pendingRequestIds: { type: 'array', items: { type: 'string' } } } },
+        render: (_args, out) => [{ type: 'text', text: `已提交 ${out.acceptedRequestIds.length} 个群消息判断请求；仍有 ${out.pendingRequestIds.length} 个请求待处理。` }],
       },
       execute: async (args, exec) => {
         assertResidentToolSession(exec, groupId)
         if (args.submissions.length === 0 || args.submissions.some((submission) => submission.requestIds.length === 0)) throw new Error('group_decision_submission_empty')
         if (args.submissions.some((submission) => submission.requestIds.some((requestId) => requestId.trim() === ''))) throw new Error('group_decision_request_invalid')
+        const observedRequestIds = args.observedRequestIds ?? []
+        if (observedRequestIds.some((requestId) => requestId.trim() === '')) throw new Error('group_decision_observed_request_invalid')
+        if (new Set(observedRequestIds).size !== observedRequestIds.length) throw new Error('group_decision_observed_request_duplicate')
         const requestIds = args.submissions.flatMap((submission) => submission.requestIds)
         if (new Set(requestIds).size !== requestIds.length) throw new Error('group_decision_request_duplicate')
         const pendings = requestIds.map((requestId) => pendingGroupDecisions.get(requestId))
         if (pendings.some((pending) => pending === undefined)) throw new Error('group_decision_request_unknown')
         if (pendings.some((pending) => pending.groupId !== groupId)) throw new Error('group_decision_request_wrong_group')
-        if (args.submissions.some((submission) => submission.requestIds.some((requestId) => pendingGroupDecisions.get(requestId).kind === 'recheck') && submission.requestIds.length !== 1)) throw new Error('group_decision_recheck_must_submit_alone')
+        const observedPendings = observedRequestIds.map((requestId) => pendingGroupDecisions.get(requestId))
+        if (observedPendings.some((pending) => pending === undefined)) throw new Error('group_decision_observed_request_unknown')
+        if (observedPendings.some((pending) => pending.groupId !== groupId)) throw new Error('group_decision_observed_request_wrong_group')
+        if (observedPendings.some((pending) => pending.kind !== 'message')) throw new Error('group_decision_observed_request_not_message')
+        if (args.submissions.some((submission) => submission.requestIds.filter((requestId) => pendingGroupDecisions.get(requestId).kind === 'recheck').length > 1)) throw new Error('group_decision_recheck_duplicate')
         const validated = args.submissions.map((submission) => ({
           requestIds: [...submission.requestIds],
-          decision: validateGroupDecision(submission.decision),
           requests: submission.requestIds.map((requestId) => pendingGroupDecisions.get(requestId)).sort((left, right) => left.sequence - right.sequence),
+          decision: validateGroupDecision(submission.decision),
+        })).map((submission) => ({
+          ...submission,
+          decision: blockTaskDecisionForUnavailableMedia(submission.decision, [...new Set(submission.requests
+            .flatMap((request) => [...request.baseRequests, request])
+            .flatMap((request) => Array.isArray(request.message.mediaUnavailable) ? request.message.mediaUnavailable : []))]),
         }))
+        const replying = validated.filter((submission) => 'reply' in submission.decision && submission.decision.reply.trim() !== '')
+        const releaseReplyAdmissions = holdGroupReplyAdmission(groupId, replying.length)
+        if (replying.length > 0) {
+          const currentRequestIds = [...pendingGroupDecisions.values()]
+            .filter((pending) => pending.groupId === groupId && pending.kind === 'message')
+            .sort((left, right) => left.sequence - right.sequence)
+            .map((pending) => pending.requestId)
+          const observed = new Set(observedRequestIds)
+          const current = new Set(currentRequestIds)
+          const missing = currentRequestIds.filter((requestId) => !observed.has(requestId))
+          const unexpected = observedRequestIds.filter((requestId) => !current.has(requestId))
+          if (missing.length > 0 || unexpected.length > 0) {
+            for (const release of releaseReplyAdmissions) release()
+            throw new Error(`group_decision_reply_observation_stale:missing=${missing.join(',')};unexpected=${unexpected.join(',')}`)
+          }
+        }
+        const results = []
+        let replyIndex = 0
         for (const submission of validated) {
           let resolveCommitted, rejectCommitted
           const committed = new Promise((resolve, reject) => { resolveCommitted = resolve; rejectCommitted = reject })
           committed.catch(() => undefined)
-          const ownerRequestId = submission.requests[0].requestId
-          const result = { decision: submission.decision, requestIds: submission.requestIds, ownerRequestId, requests: submission.requests, committed, resolveCommitted, rejectCommitted }
+          const hasReply = 'reply' in submission.decision && submission.decision.reply.trim() !== ''
+          let resolveReplyLinearized, rejectReplyLinearized
+          const replyLinearized = hasReply ? new Promise((resolve, reject) => { resolveReplyLinearized = resolve; rejectReplyLinearized = reject }) : undefined
+          replyLinearized?.catch(() => undefined)
+          const releaseReplyAdmission = hasReply ? releaseReplyAdmissions[replyIndex++] : undefined
+          let replySettled = false
+          const settleReply = (error) => {
+            if (!hasReply || replySettled) return
+            replySettled = true
+            releaseReplyAdmission()
+            if (error === undefined) resolveReplyLinearized()
+            else rejectReplyLinearized(error)
+          }
+          const recheckOwner = submission.requests.find((request) => request.kind === 'recheck')
+          const ownerRequestId = recheckOwner?.requestId ?? submission.requests[0].requestId
+          const result = { decision: submission.decision, requestIds: submission.requestIds, ownerRequestId, requests: submission.requests, committed, resolveCommitted, rejectCommitted, replyLinearized, resolveReplyLinearized: () => settleReply(), rejectReplyLinearized: (error) => settleReply(error) }
+          activeGroupSubmissions.add(result)
+          committed.finally(() => activeGroupSubmissions.delete(result)).catch(() => undefined)
+          results.push(result)
           for (const pending of submission.requests) {
             pendingGroupDecisions.delete(pending.requestId)
             pending.resolve(result)
           }
         }
-        return { acceptedRequestIds: requestIds }
+        const replyOutcomes = await Promise.allSettled(results.flatMap((result) => result.replyLinearized === undefined ? [] : [result.replyLinearized]))
+        const failedReply = replyOutcomes.find((outcome) => outcome.status === 'rejected')
+        if (failedReply !== undefined) throw failedReply.reason
+        const pendingRequestIds = [...pendingGroupDecisions.values()]
+          .filter((pending) => pending.groupId === groupId && pending.kind === 'message')
+          .sort((left, right) => left.sequence - right.sequence)
+          .map((pending) => pending.requestId)
+        return { acceptedRequestIds: requestIds, pendingRequestIds }
+      },
+    })
+  }
+  function registerResidentReplyTool(agentCtx, groupId) {
+    agentCtx.tools.register({
+      name: 'group_reply_submit',
+      description: 'Submit a generated resident-session group notification. observedRequestIds must exactly cover every pending group-message request reviewed before the reply; observed requests remain pending for their own later Decision.',
+      parameters: {
+        type: 'object', additionalProperties: false, required: ['requestId', 'observedRequestIds', 'reply'], properties: {
+          requestId: { type: 'string' },
+          observedRequestIds: { type: 'array', items: { type: 'string' } },
+          reply: { type: 'string' },
+        },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: false, required: ['acceptedRequestId', 'pendingRequestIds'], properties: { acceptedRequestId: { type: 'string' }, pendingRequestIds: { type: 'array', items: { type: 'string' } } } },
+        render: (_args, out) => [{ type: 'text', text: `群通知已可靠提交；仍有 ${out.pendingRequestIds.length} 个群消息请求待处理。` }],
+      },
+      execute: async (args, exec) => {
+        assertResidentToolSession(exec, groupId)
+        if (args.requestId.trim() === '') throw new Error('group_reply_request_invalid')
+        if (args.reply.trim() === '') throw new Error('group_reply_text_required')
+        if (args.observedRequestIds.some((requestId) => requestId.trim() === '')) throw new Error('group_reply_observed_request_invalid')
+        if (new Set(args.observedRequestIds).size !== args.observedRequestIds.length) throw new Error('group_reply_observed_request_duplicate')
+        const pending = pendingGroupReplies.get(args.requestId)
+        if (pending === undefined) throw new Error('group_reply_request_unknown')
+        if (pending.groupId !== groupId) throw new Error('group_reply_request_wrong_group')
+        const observedPendings = args.observedRequestIds.map((requestId) => pendingGroupDecisions.get(requestId))
+        if (observedPendings.some((item) => item === undefined)) throw new Error('group_reply_observed_request_unknown')
+        if (observedPendings.some((item) => item.groupId !== groupId)) throw new Error('group_reply_observed_request_wrong_group')
+        if (observedPendings.some((item) => item.kind !== 'message')) throw new Error('group_reply_observed_request_not_message')
+        const [releaseReplyAdmission] = holdGroupReplyAdmission(groupId, 1)
+        const currentRequestIds = [...pendingGroupDecisions.values()]
+          .filter((item) => item.groupId === groupId && item.kind === 'message')
+          .sort((left, right) => left.sequence - right.sequence)
+          .map((item) => item.requestId)
+        const observed = new Set(args.observedRequestIds)
+        const current = new Set(currentRequestIds)
+        const missing = currentRequestIds.filter((requestId) => !observed.has(requestId))
+        const unexpected = args.observedRequestIds.filter((requestId) => !current.has(requestId))
+        if (missing.length > 0 || unexpected.length > 0) {
+          releaseReplyAdmission()
+          throw new Error(`group_reply_observation_stale:missing=${missing.join(',')};unexpected=${unexpected.join(',')}`)
+        }
+        let resolveReplyLinearized, rejectReplyLinearized
+        const replyLinearized = new Promise((resolve, reject) => { resolveReplyLinearized = resolve; rejectReplyLinearized = reject })
+        replyLinearized.catch(() => undefined)
+        let settled = false
+        const settle = (error) => {
+          if (settled) return
+          settled = true
+          releaseReplyAdmission()
+          activeGroupReplies.delete(submitted)
+          if (error === undefined) resolveReplyLinearized()
+          else rejectReplyLinearized(error)
+        }
+        const submitted = { reply: args.reply.trim(), replyLinearized, resolveReplyLinearized: () => settle(), rejectReplyLinearized: (error) => settle(error) }
+        activeGroupReplies.add(submitted)
+        pendingGroupReplies.delete(args.requestId)
+        pending.resolve(submitted)
+        await replyLinearized
+        const pendingRequestIds = [...pendingGroupDecisions.values()]
+          .filter((item) => item.groupId === groupId && item.kind === 'message')
+          .sort((left, right) => left.sequence - right.sequence)
+          .map((item) => item.requestId)
+        return { acceptedRequestId: args.requestId, pendingRequestIds }
       },
     })
   }
@@ -344,17 +582,27 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
   }
   let agentWorkspace = await resolveAgentWorkspace(store.getAgentWorkspaceDir?.() ?? agentWorkspaceDir ?? '')
   if (store.getAgentWorkspaceDir?.() !== agentWorkspace) await store.setAgentWorkspaceDir?.(agentWorkspace)
-  async function appendReliableOutbox({ groupId, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds }) {
+  async function notifyOutboxListener(listener, event) {
+    try { await listener(event) }
+    catch (error) {
+      recoveryIssues.push({
+        groupId: event.groupId, sourceMessageId: event.outbound.sourceMessageId, kind: 'outbox-listener',
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  async function appendReliableOutbox({ groupId, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, onPersisted }) {
     const before = store.getGroup(groupId)
     if (before === undefined) throw new Error(`group_not_subscribed:${groupId}`)
     const existing = before.outbox.find((item) => item.sourceMessageId === sourceMessageId)
-    if (existing !== undefined) return before
+    if (existing !== undefined) { onPersisted?.(); return before }
     const group = await store.appendOutbox({ groupId, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds })
     const outbound = group.outbox.find((item) => item.sourceMessageId === sourceMessageId)
     if (outbound === undefined) throw new Error(`outbox_append_missing:${groupId}:${sourceMessageId}`)
+    onPersisted?.()
     const event = { groupId, outbound }
     if (outboxListeners.size === 0) bufferedOutboxEvents.push(event)
-    else for (const listener of outboxListeners) await listener(event)
+    else for (const listener of outboxListeners) await notifyOutboxListener(listener, event)
     return group
   }
   async function reviewCompletedTaskResult(task, result) {
@@ -386,45 +634,64 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
       && typeof item.requesterOpenDingTalkId === 'string')
   }
 
-  async function coordinateTaskResult(task, result) {
-    const completionSequence = task.completionSequence ?? 0
-    const resultKey = result.status === 'completed'
-      ? `task-result:${task.taskId}:completed${completionSequence > 0 ? `:${completionSequence}` : ''}`
-      : `task-result:${task.taskId}:waiting:${createHash('sha256').update(result.waitingReason).digest('hex').slice(0, 16)}`
+  function taskResultOutboxKey(task, result) {
+    if (result.status === 'completed') {
+      const completionSequence = task.completionSequence ?? 0
+      return `task-result:${task.taskId}:completed${completionSequence > 0 ? `:${completionSequence}` : ''}`
+    }
+    return `task-result:${task.taskId}:waiting:${createHash('sha256').update(result.waitingReason).digest('hex').slice(0, 16)}`
+  }
+
+  async function coordinateTaskResultInternal(task, result) {
+    const resultKey = taskResultOutboxKey(task, result)
     const existing = store.getGroup(task.groupId)?.outbox.find((item) => item.sourceMessageId === resultKey)
     if (existing !== undefined) return existing
-    return serialize(task.groupId, async () => {
-      const current = store.getGroup(task.groupId)?.outbox.find((item) => item.sourceMessageId === resultKey)
-      if (current !== undefined) return current
-      const handle = residentHandles.get(task.groupId)
-      if (handle === undefined) throw new Error(`resident_not_active:${task.groupId}`)
-      await handle.agent.whenIdle()
-      const firstSeq = handle.agent.session.seq
-      const notificationTrigger = resolveTaskNotificationTrigger(task)
-      const requester = notificationTrigger?.requesterName === undefined ? '未记录' : `${notificationTrigger.requesterName}（${notificationTrigger.requesterOpenDingTalkId}）`
-      const resultProjection = result.status === 'completed'
-        ? { status: result.status, workType: result.workType, summary: result.summary, evidence: result.evidence, artifacts: result.artifacts, delivery: result.delivery }
-        : { status: result.status, summary: result.summary, evidence: result.evidence, artifacts: result.artifacts, waitingKind: result.waitingKind, waitingReason: result.waitingReason, questions: result.questions }
+    const handle = residentHandles.get(task.groupId)
+    if (handle === undefined) throw new Error(`resident_not_active:${task.groupId}`)
+    await handle.agent.whenIdle()
+    if (runtimeClosing) throw new Error('resident_runtime_closed')
+    const notificationTrigger = resolveTaskNotificationTrigger(task)
+    const requester = notificationTrigger?.requesterName === undefined ? '未记录' : `${notificationTrigger.requesterName}（${notificationTrigger.requesterOpenDingTalkId}）`
+    const resultProjection = result.status === 'completed'
+      ? { status: result.status, workType: result.workType, summary: result.summary, evidence: result.evidence, artifacts: result.artifacts, delivery: result.delivery }
+      : { status: result.status, summary: result.summary, evidence: result.evidence, artifacts: result.artifacts, waitingKind: result.waitingKind, waitingReason: result.waitingReason, questions: result.questions }
+    const pending = createPendingGroupReply({ groupId: task.groupId, sourceMessageId: resultKey })
+    try {
       handle.agent.followup(createUserMessage({
-        content: [{ type: 'text', text: `[TASK_COORDINATION]\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n当前目标：${task.objective}\n提出人：${requester}\n核验结果：${JSON.stringify(resultProjection)}\n\n只输出一条可直接发送到群聊的通知。完成通知必须忠实保留叶子结果中影响同事判断和后续行动的信息，不能为了简短只复述 summary。至少覆盖：实际完成或修改的内容、关键核验与证据、部署或交付状态、尚未覆盖的边界与遗留事项；result 中存在 artifacts 或 delivery 时也要说明其关键内容。允许合并重复表述，但不得省略不同关注点、限定条件、失败项或“未验证/未部署”等边界。缺信息时只向提出人询问列出的具体问题。正文不要手写 @ 提出人，Runtime 会传结构化 @。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
+        content: [{ type: 'text', text: `[TASK_COORDINATION]\n回复请求 ID：${pending.requestId}\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n当前目标：${task.objective}\n提出人：${requester}\n核验结果：${JSON.stringify(resultProjection)}\n\n必须通过 group_reply_submit 提交一条可直接发送到群聊的通知，不得用 assistant 文本直接输出通知。提交前语义审阅当前已经进入的全部普通 GROUP_MESSAGE_STEER：若新消息影响本通知，结合它重新生成；若不影响，保持本结果通知，新消息将在通知可靠提交后继续处理。把已审阅的全部普通 pending 请求 ID 填入 observedRequestIds；若工具返回 group_reply_observation_stale，下一 step 结合新 Steer 重新生成后再提交。完成通知必须忠实保留叶子结果中影响同事判断和后续行动的信息，不能为了简短只复述 summary。至少覆盖：实际完成或修改的内容、关键核验与证据、部署或交付状态、尚未覆盖的边界与遗留事项；result 中存在 artifacts 或 delivery 时也要说明其关键内容。允许合并重复表述，但不得省略不同关注点、限定条件、失败项或“未验证/未部署”等边界。缺信息时只向提出人询问列出的具体问题。正文不要手写 @ 提出人，Runtime 会传结构化 @。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
         source: { kind: 'user' },
       }))
-      await handle.agent.whenIdle()
-      let reply = handle.agent.session.events.filter((event) => event.seq >= firstSeq && event.type === 'assistant/message')
-        .flatMap((event) => event.data.message.content).filter((block) => block.type === 'text').map((block) => block.text).join('').trim()
-      if (reply === '') throw new Error(`task_coordination_reply_missing:${task.taskId}`)
-      const canReplyToSource = notificationTrigger !== undefined
-      if (canReplyToSource && notificationTrigger.requesterName) reply = reply.replace(new RegExp(`^@${notificationTrigger.requesterName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'u'), '')
-      const group = await appendReliableOutbox({
-        groupId: task.groupId, sourceMessageId: resultKey, text: reply,
-        ...(canReplyToSource ? {
-          replyToMessageId: notificationTrigger.sourceMessageId,
-          replyToSenderOpenDingTalkId: notificationTrigger.requesterOpenDingTalkId,
-          atOpenDingTalkIds: [notificationTrigger.requesterOpenDingTalkId],
-        } : {}),
+    } catch (error) {
+      rejectPendingGroupReply(pending.requestId, error)
+      throw error
+    }
+    rejectUnsubmittedGroupReplyWhenIdle(handle.agent, pending.requestId, task.groupId, resultKey)
+    const submitted = await pending.promise
+    let reply = submitted.reply
+    const canReplyToSource = notificationTrigger !== undefined
+    if (canReplyToSource && notificationTrigger.requesterName) reply = reply.replace(new RegExp(`^@${notificationTrigger.requesterName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'u'), '')
+    try {
+      return await serialize(task.groupId, async () => {
+        const current = store.getGroup(task.groupId)?.outbox.find((item) => item.sourceMessageId === resultKey)
+        if (current !== undefined) { submitted.resolveReplyLinearized(); return current }
+        const group = await appendReliableOutbox({
+          groupId: task.groupId, sourceMessageId: resultKey, text: reply,
+          ...(canReplyToSource ? {
+            replyToMessageId: notificationTrigger.sourceMessageId,
+            replyToSenderOpenDingTalkId: notificationTrigger.requesterOpenDingTalkId,
+            atOpenDingTalkIds: [notificationTrigger.requesterOpenDingTalkId],
+          } : {}),
+          onPersisted: submitted.resolveReplyLinearized,
+        })
+        return group.outbox.find((item) => item.sourceMessageId === resultKey)
       })
-      return group.outbox.find((item) => item.sourceMessageId === resultKey)
-    })
+    } catch (error) {
+      submitted.rejectReplyLinearized(error)
+      throw error
+    }
+  }
+  function coordinateTaskResult(task, result) {
+    return runGroupResidentOperation(task.groupId, () => coordinateTaskResultInternal(task, result))
   }
   async function reviewTaskCheckpoint(task, checkpoint) {
     const handle = residentHandles.get(task.groupId)
@@ -466,7 +733,6 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
     if (result.status === 'waiting') {
       if (goal.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: result.waitingKind === 'information' ? 'task-input-required' : 'task-human-intervention-required', message: result.waitingReason })
       if (result.waitingKind === 'information') {
-        await withoutInitiator(() => coordinateTaskResult(task, result))
         return store.updateTask(taskId, (current) => ({ ...current, state: 'waiting', waitingKind: 'information', waitingReason: result.waitingReason, result }))
       }
       const fingerprint = humanBlockerFingerprint(result.blockerCategory, result.requestedAction)
@@ -515,7 +781,11 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
   }
   async function submitTaskResult(taskId, value) {
     const result = parseTaskResult(value)
-    if (result.status !== 'completed') return serializeTasks(() => submitTaskResultInternal(taskId, result))
+    if (result.status !== 'completed') {
+      const waiting = await serializeTasks(() => submitTaskResultInternal(taskId, result))
+      if (result.waitingKind === 'information') await withoutInitiator(() => coordinateTaskResult(waiting, result))
+      return waiting
+    }
     const prepared = await serializeTasks(async () => {
       const task = store.getTask(taskId)
       if (task === undefined || task.state === 'queued' || task.state === 'completed') throw new Error(`task_not_active:${taskId}`)
@@ -1050,7 +1320,8 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     getGroup: store.getGroup, listGroups: store.listGroups, getTask: store.getTask, listTasks: store.listTasks, listAlerts: store.listAlerts,
     listTaskTimings: store.listTaskTimings ?? (() => []),
     markMessageAgentDelivery: store.markMessageAgentDelivery, markMessagesAgentDelivery: store.markMessagesAgentDelivery,
-    hydrateGroupHistory: ({ groupId }) => serialize(groupId, async () => {
+    hydrateGroupHistory: ({ groupId }) => serializeHydration(groupId, () => runGroupResidentOperation(groupId, async () => {
+      if (runtimeClosing) throw new Error('resident_runtime_closed')
       const group = store.getGroup(groupId)
       if (group === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const handle = residentHandles.get(groupId)
@@ -1068,13 +1339,14 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         return lines.join('\n')
       })
       await handle.agent.whenIdle()
+      if (runtimeClosing) throw new Error('resident_runtime_closed')
       const firstSeq = handle.agent.session.seq
       handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: `[GROUP_HISTORY_IMPORT]\n以下是当前群聊今天已接收的历史消息，仅用于恢复新常驻会话的群聊上下文。不要回复群聊、不要创建或续接任务，也不要重新执行历史请求。\n\n${blocks.join('\n\n')}` }], source: { kind: 'user' } }))
       await handle.agent.whenIdle()
       const completed = handle.agent.session.events.some((event) => event.seq >= firstSeq && event.type === 'turn/end' && event.data?.reason?.kind === 'completed')
       if (!completed) throw new Error(`group_history_import_failed:${groupId}`)
       return { groupId, residentSessionId: group.residentSessionId, imported: messages.length }
-    }),
+    })),
     hasGroupConfiguration: store.hasGroupConfiguration, initializeGroupConfiguration: store.initializeGroupConfiguration,
     listActivities: store.listActivities ?? (() => []), flushActivities: () => activityTail,
     listRecoveryIssues: () => recoveryIssues.map((issue) => ({ ...issue })),
@@ -1083,7 +1355,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     onOutboxAppended(listener) {
       outboxListeners.add(listener)
       const buffered = bufferedOutboxEvents.splice(0)
-      for (const event of buffered) Promise.resolve(listener(event)).catch(() => undefined)
+      for (const event of buffered) void notifyOutboxListener(listener, event)
       return () => outboxListeners.delete(listener)
     },
     onHumanBlockerRequested(listener) { humanBlockerListeners.add(listener); return () => humanBlockerListeners.delete(listener) },
@@ -1096,6 +1368,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     listAuthorizationRequests,
     getAuthorizationRequest,
     ingest: (message) => {
+      if (runtimeClosing) return Promise.reject(new Error('resident_runtime_closed'))
       const inflightKey = `${message.groupId}\u0000${message.messageId}`
       const existing = inflightMessages.get(inflightKey)
       if (existing !== undefined) return existing
@@ -1104,79 +1377,104 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         const persisted = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
         if (ingested.duplicate && ['steered', 'delivered', 'decision-failed', 'skipped'].includes(persisted?.agentDeliveryStatus)) return ingested
         const accepted = ingested.duplicate ? { ...ingested, duplicate: false, recovered: true, sequence: persisted.sequence } : ingested
-        const handle = residentHandles.get(message.groupId)
+        let handle
+        let pending, submitted, recheckedSubmission
         try {
-          if (handle === undefined) throw new Error(`resident_not_active:${message.groupId}`)
           const images = Array.isArray(message.images) ? message.images : []
           if (images.length > 0 && attachments === undefined) throw new Error('dsh_attachments_required')
           const imageRefs = images.length === 0 ? [] : await attachments.saveImages(images.map((image) => ({ data: image.data, mediaType: image.mediaType, ...(image.name ? { name: image.name } : {}) })))
           const decisionPrompt = buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable })
-          const pending = createPendingGroupDecision({ groupId: message.groupId, messageId: message.messageId, sequence: accepted.sequence, message, imageRefs })
-          const content = [
-            { type: 'text', text: `[GROUP_MESSAGE_STEER]\n判断请求 ID：${pending.requestId}\n${decisionPrompt.replace(/^\[GROUP_DECISION\]\n\n/u, '')}` },
-            ...imageRefs.map((attachment) => ({ type: 'image', attachment })),
-          ]
-          try { handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } })) }
-          catch (error) { rejectPendingGroupDecision(pending.requestId, error); throw error }
+          pending = await admitGroupSteer(message.groupId, () => {
+            handle = residentHandles.get(message.groupId)
+            if (handle === undefined) throw new Error(`resident_not_active:${message.groupId}`)
+            const admitted = createPendingGroupDecision({ groupId: message.groupId, messageId: message.messageId, sequence: accepted.sequence, message, imageRefs })
+            const content = [
+              { type: 'text', text: `[GROUP_MESSAGE_STEER]\n判断请求 ID：${admitted.requestId}\n${decisionPrompt.replace(/^\[GROUP_DECISION\]\n\n/u, '')}` },
+              ...imageRefs.map((attachment) => ({ type: 'image', attachment })),
+            ]
+            try { handle.agent.steer(createUserMessage({ content, source: { kind: 'user' } })) }
+            catch (error) { rejectPendingGroupDecision(admitted.requestId, error); throw error }
+            return admitted
+          })
           rejectUnsubmittedGroupDecisionWhenIdle(handle.agent, pending.requestId, message.groupId, message.messageId)
           await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'steered' })
-          const submitted = await pending.promise
+          pending.resolveDeliveryRecorded()
+          submitted = await pending.promise
           if (submitted.ownerRequestId !== pending.requestId) {
             await submitted.committed
             return { ...accepted, decision: submitted.decision, decisionRequestIds: submitted.requestIds, decisionOwnerRequestId: submitted.ownerRequestId, group: store.getGroup(message.groupId) }
           }
-          try {
-            let decision = submitted.decision
-            const decisionMessages = submitted.requests.map((request) => request.message)
-            const unavailableMedia = decisionMessages.flatMap((item) => Array.isArray(item.mediaUnavailable) ? item.mediaUnavailable : [])
-            decision = blockTaskDecisionForUnavailableMedia(decision, unavailableMedia)
-            const groupBeforeDecision = store.getGroup(message.groupId)
-            const previousMessage = groupBeforeDecision?.messages.find((item) => item.sequence === accepted.sequence - 1)
-            const activeTaskCount = store.listTasks().filter((task) => task.groupId === message.groupId).length
-            if ('reason' in decision && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: submitted.requests.some((request) => request.imageRefs.length > 0), previousMessage, occurredAt: message.occurredAt })) {
-              const recheck = createPendingGroupDecision({ groupId: message.groupId, messageId: message.messageId, sequence: accepted.sequence, message, imageRefs, kind: 'recheck' })
-              handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_RECHECK]\n判断请求 ID：${recheck.requestId}\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
-              rejectUnsubmittedGroupDecisionWhenIdle(handle.agent, recheck.requestId, message.groupId, message.messageId)
-              const rechecked = await recheck.promise
-              decision = rechecked.decision
-              rechecked.resolveCommitted()
-            }
-            decision = blockTaskDecisionForUnavailableMedia(decision, unavailableMedia)
-            const result = await serialize(message.groupId, async () => {
-              if ('reason' in decision) {
-                await Promise.all(submitted.requests.map((request) => store.markMessageAgentDelivery({ groupId: message.groupId, messageId: request.messageId, status: 'delivered' })))
-                return { ...accepted, decision, group: store.getGroup(message.groupId) }
-              }
-              const tasks = []
-              const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
-              const sourceEnvelope = decisionMessages.map((source) => buildLeafSourceEnvelope({ messageId: source.messageId, message: source.text, senderName: source.senderName, senderOpenDingTalkId: source.senderOpenDingTalkId, occurredAt: source.occurredAt, quotedMessage: source.quotedMessage, mediaUnavailable: source.mediaUnavailable })).join('\n\n')
-              for (const action of decision.actions) {
-                let task
-                if (action.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, title: action.title, objective: action.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, acceptanceCriteria: action.acceptanceCriteria, stageTasks: action.stageTasks, relatedContexts: [sourceEnvelope] }); await pumpTasks(); return store.getTask(result.task.taskId) })
-                else if (action.kind === 'task-context') {
-                  task = store.getTask(action.taskId)
-                  if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${action.taskId}`)
-                  task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
-                } else if (action.kind === 'task-reopen') {
-                  task = store.getTask(action.taskId)
-                  if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${action.taskId}`)
-                  task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
-                }
-                if (task !== undefined) tasks.push(task)
-              }
-              const group = !('reply' in decision) || decision.reply.trim() === ''
-                ? store.getGroup(message.groupId)
-                : await appendReliableOutbox({ groupId: message.groupId, sourceMessageId: message.messageId, text: decision.reply })
-              await Promise.all(submitted.requests.map((request) => store.markMessageAgentDelivery({ groupId: message.groupId, messageId: request.messageId, status: 'delivered' })))
-              return { ...accepted, decision, group, tasks, ...(tasks.length === 1 ? { task: tasks[0] } : {}) }
-            })
-            submitted.resolveCommitted()
-            return result
-          } catch (error) {
-            submitted.rejectCommitted(error)
-            throw error
+          await Promise.all(submitted.requests.map((request) => request.deliveryRecorded))
+          let decision = submitted.decision
+          let decisionRequests = submitted.requests.filter((request) => request.kind === 'message')
+          const groupBeforeDecision = store.getGroup(message.groupId)
+          const previousMessage = groupBeforeDecision?.messages.find((item) => item.sequence === accepted.sequence - 1)
+          const activeTaskCount = store.listTasks().filter((task) => task.groupId === message.groupId).length
+          if ('reason' in decision && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: submitted.requests.some((request) => request.imageRefs.length > 0), previousMessage, occurredAt: message.occurredAt })) {
+            const recheck = createPendingGroupDecision({ groupId: message.groupId, messageId: message.messageId, sequence: accepted.sequence, message, imageRefs, kind: 'recheck', baseRequests: decisionRequests })
+            handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_RECHECK]\n判断请求 ID：${recheck.requestId}\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
+            rejectUnsubmittedGroupDecisionWhenIdle(handle.agent, recheck.requestId, message.groupId, message.messageId)
+            recheckedSubmission = await recheck.promise
+            await Promise.all(recheckedSubmission.requests.map((request) => request.deliveryRecorded))
+            decision = recheckedSubmission.decision
+            decisionRequests = [...new Map([...decisionRequests, ...recheckedSubmission.requests.filter((request) => request.kind === 'message')]
+              .map((request) => [request.messageId, request])).values()].sort((left, right) => left.sequence - right.sequence)
           }
+          const decisionMessages = decisionRequests.map((request) => request.message)
+          const unavailableMedia = decisionMessages.flatMap((item) => Array.isArray(item.mediaUnavailable) ? item.mediaUnavailable : [])
+          decision = blockTaskDecisionForUnavailableMedia(decision, unavailableMedia)
+          if (recheckedSubmission !== undefined) submitted.decision = decision
+          const result = await serialize(message.groupId, async () => {
+            if ('reason' in decision) {
+              await Promise.all(decisionRequests.map((request) => store.markMessageAgentDelivery({ groupId: message.groupId, messageId: request.messageId, status: 'delivered' })))
+              return { ...accepted, decision, group: store.getGroup(message.groupId) }
+            }
+            const tasks = []
+            const trigger = { sourceMessageId: message.messageId, ...(message.senderName ? { requesterName: message.senderName } : {}), ...(message.senderOpenDingTalkId ? { requesterOpenDingTalkId: message.senderOpenDingTalkId } : {}), ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}) }
+            const sourceEnvelope = decisionMessages.map((source) => buildLeafSourceEnvelope({ messageId: source.messageId, message: source.text, senderName: source.senderName, senderOpenDingTalkId: source.senderOpenDingTalkId, occurredAt: source.occurredAt, quotedMessage: source.quotedMessage, mediaUnavailable: source.mediaUnavailable })).join('\n\n')
+            for (const action of decision.actions) {
+              let task
+              if (action.kind === 'new-task') task = await serializeTasks(async () => { const result = await store.createTask({ groupId: message.groupId, sourceMessageId: message.messageId, title: action.title, objective: action.objective, requesterName: message.senderName, requesterOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, acceptanceCriteria: action.acceptanceCriteria, stageTasks: action.stageTasks, relatedContexts: [sourceEnvelope] }); await pumpTasks(); return store.getTask(result.task.taskId) })
+              else if (action.kind === 'task-context') {
+                task = store.getTask(action.taskId)
+                if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_context_target_invalid:${action.taskId}`)
+                task = await serializeTasks(() => appendTaskContextInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
+              } else if (action.kind === 'task-reopen') {
+                task = store.getTask(action.taskId)
+                if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${action.taskId}`)
+                task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks))
+              }
+              if (task !== undefined) tasks.push(task)
+            }
+            let group
+            if (!('reply' in decision) || decision.reply.trim() === '') group = store.getGroup(message.groupId)
+            else {
+              group = await appendReliableOutbox({
+                groupId: message.groupId, sourceMessageId: message.messageId, text: decision.reply,
+                onPersisted: () => {
+                  submitted.resolveReplyLinearized()
+                  recheckedSubmission?.resolveReplyLinearized()
+                },
+              })
+            }
+            await Promise.all(decisionRequests.map((request) => store.markMessageAgentDelivery({ groupId: message.groupId, messageId: request.messageId, status: 'delivered' })))
+            return { ...accepted, decision, group, tasks, ...(tasks.length === 1 ? { task: tasks[0] } : {}) }
+          })
+          submitted.resolveCommitted()
+          recheckedSubmission?.resolveCommitted()
+          return result
         } catch (error) {
+          pending?.rejectDeliveryRecorded(error)
+          if (pending !== undefined && submitted === undefined) {
+            if (pendingGroupDecisions.has(pending.requestId)) rejectPendingGroupDecision(pending.requestId, error)
+            else {
+              try { submitted = await pending.promise } catch {}
+            }
+          }
+          submitted?.rejectReplyLinearized(error)
+          recheckedSubmission?.rejectReplyLinearized(error)
+          submitted?.rejectCommitted(error)
+          recheckedSubmission?.rejectCommitted(error)
           const current = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
           if (current?.agentDeliveryStatus === 'pending') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'failed', error: error instanceof Error ? error.message : String(error) })
           else if (current?.agentDeliveryStatus === 'steered') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'decision-failed', error: error instanceof Error ? error.message : String(error) })
@@ -1290,18 +1588,34 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       const trigger = { sourceMessageId: effectiveSourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) }
       return reopenCompletedTaskInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks)
     }),
-    reconcileCompletedNotifications: () => serializeTasks(async () => {
-      const repaired = []
-      for (const task of store.listTasks().filter((item) => item.state === 'completed' && item.result?.status === 'completed' && item.lastCompletedResult?.status === 'completed')) {
-        let current = task
-        if ((current.completionSequence ?? 0) === 0) current = await store.updateTask(current.taskId, (item) => ({ ...item, completionSequence: 1 }))
-        const resultKey = `task-result:${current.taskId}:completed:${current.completionSequence}`
-        if (store.getGroup(current.groupId)?.outbox.some((item) => item.sourceMessageId === resultKey)) continue
-        await coordinateTaskResult(current, current.result)
-        repaired.push({ taskId: current.taskId, sourceMessageId: resultKey })
+    reconcileCompletedNotifications: async () => {
+      const pending = await serializeTasks(async () => {
+        const items = []
+        for (const task of store.listTasks().filter((item) => item.state === 'completed' && item.result?.status === 'completed')) {
+          let current = task
+          if ((current.completionSequence ?? 0) === 0 && current.lastCompletedResult?.status === 'completed') current = await store.updateTask(current.taskId, (item) => ({ ...item, completionSequence: 1 }))
+          const resultKey = taskResultOutboxKey(current, current.result)
+          const group = store.getGroup(current.groupId)
+          if (group !== undefined && !group.outbox.some((item) => item.sourceMessageId === resultKey)) items.push({ task: current, resultKey })
+        }
+        return items
+      })
+      const repaired = [], failures = []
+      for (const item of pending) {
+        try {
+          await coordinateTaskResult(item.task, item.task.result)
+          repaired.push({ taskId: item.task.taskId, sourceMessageId: item.resultKey })
+        } catch (error) {
+          failures.push(error)
+          recoveryIssues.push({
+            groupId: item.task.groupId, taskId: item.task.taskId, sourceMessageId: item.resultKey, kind: 'task-notification-reconcile',
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
       }
+      if (failures.length > 0) throw new AggregateError(failures, `task_notification_reconcile_failed:${failures.map((error) => error instanceof Error ? error.message : String(error)).join('|')}`)
       return repaired
-    }),
+    },
     archiveTask: ({ taskId }) => serializeTasks(async () => {
       const task = store.getTask(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
@@ -1333,22 +1647,27 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       return followupTaskInternal(task, text)
     }),
     submitTaskResult: ({ taskId, result }) => submitTaskResult(taskId, result),
-    subscribe: ({ groupId, name, responsibility = '' }) => serialize(groupId, async () => {
-      const existing = store.getGroup(groupId); if (existing !== undefined) return { created: false, group: existing }
-      const sessionId = residentSessionId(groupId), { handle } = await createResident(groupId, { sessionId: SessionId(sessionId), meta: { cwd: agentWorkspace, agentPreset }, agentOptions, setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
-      applyFullAccess(handle)
-      try {
-        const result = await store.subscribe({ groupId, name, responsibility, residentSessionId: sessionId, residentAgentPreset: agentPreset }); residentHandles.set(groupId, handle)
-        for (const listener of subscriptionListeners) listener(result.group)
-        return result
-      } catch (error) { await handle.dispose(); throw error }
+    subscribe: ({ groupId, name, responsibility = '' }) => serializeConfig(() => {
+      if (runtimeClosing) throw new Error('resident_runtime_closed')
+      return serialize(groupId, async () => {
+        const existing = store.getGroup(groupId); if (existing !== undefined) return { created: false, group: existing }
+        const sessionId = residentSessionId(groupId), { handle } = await createResident(groupId, { sessionId: SessionId(sessionId), meta: { cwd: agentWorkspace, agentPreset }, agentOptions, setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+        applyFullAccess(handle)
+        try {
+          if (runtimeClosing) throw new Error('resident_runtime_closed')
+          const result = await store.subscribe({ groupId, name, responsibility, residentSessionId: sessionId, residentAgentPreset: agentPreset }); residentHandles.set(groupId, handle)
+          for (const listener of subscriptionListeners) listener(result.group)
+          return result
+        } catch (error) { await handle.dispose(); throw error }
+      })
     }),
     updateGroup: (request) => serialize(request.groupId, () => store.updateGroup(request)),
     getAgentConfig: () => ({
       agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, provider: selection.provider, model: selection.model, reasoningEffort: selection.reasoningEffort, proxyUrl: store.getProxyUrl?.() ?? '',
       taskExecutionGuidance: store.getTaskExecutionGuidance?.() ?? '', taskEvidenceGuidance: store.getTaskEvidenceGuidance?.() ?? '', maxConcurrentTasks: taskConcurrencyLimit,
     }),
-    updateAgentConfig: ({ agentNames, workspaceDir, model, reasoningEffort, proxyUrl, taskExecutionGuidance, taskEvidenceGuidance, maxConcurrentTasks: nextMaxConcurrentTasksInput }) => serializeTasks(async () => {
+    updateAgentConfig: ({ agentNames, workspaceDir, model, reasoningEffort, proxyUrl, taskExecutionGuidance, taskEvidenceGuidance, maxConcurrentTasks: nextMaxConcurrentTasksInput }) => serializeConfig(async () => {
+      if (runtimeClosing) throw new Error('resident_runtime_closed')
       if (agentNames !== undefined && !Array.isArray(agentNames)) throw new Error('agent_names_must_be_array')
       const nextAgentNames = agentNames === undefined ? (store.getAgentNames?.() ?? []) : [...new Set(agentNames.map((name) => name.trim()).filter(Boolean))]
       const namesChanged = JSON.stringify(nextAgentNames) !== JSON.stringify(store.getAgentNames?.() ?? [])
@@ -1372,59 +1691,110 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       const concurrencyChanged = nextMaxConcurrentTasks !== taskConcurrencyLimit
       const resultConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, ...selection, proxyUrl: nextProxyUrl, taskExecutionGuidance: store.getTaskExecutionGuidance?.() ?? '', taskEvidenceGuidance: store.getTaskEvidenceGuidance?.() ?? '', maxConcurrentTasks: taskConcurrencyLimit })
       if (!workspaceChanged && !selectionChanged && !proxyChanged && !guidanceChanged && !namesChanged && !concurrencyChanged) return resultConfig()
-      if ((workspaceChanged || selectionChanged) && store.listTasks().some((task) => task.state === 'running' || task.state === 'waiting' || task.state === 'queued')) throw new Error('agent_config_has_active_tasks')
+      if (workspaceChanged || selectionChanged) await serializeTasks(() => {
+        if (store.listTasks().some((task) => task.state === 'running' || task.state === 'waiting' || task.state === 'queued')) throw new Error('agent_config_has_active_tasks')
+      })
+      const groups = workspaceChanged ? store.listGroups() : []
+      const releaseResidentTransitions = groups.map((group) => holdGroupResidentTransition(group.groupId))
+      const releaseAdmissions = groups.flatMap((group) => holdGroupReplyAdmission(group.groupId, 1))
       const replacements = []
       try {
         if (workspaceChanged) {
-          for (const group of store.listGroups()) {
+          for (const group of groups) {
+            await waitForActiveGroupResidentOperations(group.groupId)
             const previous = residentHandles.get(group.groupId)
             if (previous === undefined) throw new Error(`resident_not_active:${group.groupId}`)
             await previous.agent.whenIdle()
+            await waitForActiveGroupSubmissions(group.groupId)
             const seed = [...previous.agent.session.events]
             const sessionId = `${residentSessionId(group.groupId)}-${randomUUID().slice(0, 8)}`
             const { handle } = await createResident(group.groupId, { sessionId: SessionId(sessionId), seed, meta: { cwd: nextWorkspace, agentPreset, seedLength: seed.length }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
             applyFullAccess(handle)
             replacements.push({ group, previous, handle, sessionId })
           }
-          await store.setAgentWorkspaceDir(nextWorkspace)
-          for (const item of replacements) await store.updateGroup({ groupId: item.group.groupId, residentSessionId: item.sessionId })
-          agentWorkspace = nextWorkspace
-          for (const item of replacements) { residentHandles.set(item.group.groupId, item.handle); await item.previous.dispose() }
         }
-        if (selectionChanged) {
-          await ctx.agentDefaultModel.saveSelection(nextSelection)
-          selection.provider = nextSelection.provider; selection.model = nextSelection.model
-          if (nextSelection.reasoningEffort === undefined) delete selection.reasoningEffort
-          else selection.reasoningEffort = nextSelection.reasoningEffort
-        }
-        if (proxyChanged) await store.setProxyUrl(nextProxyUrl)
-        if (namesChanged) await store.setAgentNames(nextAgentNames)
-        if (guidanceChanged) await store.setTaskGuidance({ taskExecutionGuidance: nextTaskExecutionGuidance, taskEvidenceGuidance: nextTaskEvidenceGuidance })
-        if (concurrencyChanged) {
-          await store.setMaxConcurrentTasks(nextMaxConcurrentTasks)
-          taskConcurrencyLimit = nextMaxConcurrentTasks
-          await pumpTasks()
-        }
-        return resultConfig()
-      } catch (error) { await Promise.all(replacements.map((item) => item.handle.dispose())); throw error }
+        const result = await serializeTasks(async () => {
+          if ((workspaceChanged || selectionChanged) && store.listTasks().some((task) => task.state === 'running' || task.state === 'waiting' || task.state === 'queued')) throw new Error('agent_config_has_active_tasks')
+          if (selectionChanged) await ctx.agentDefaultModel.saveSelection(nextSelection)
+          if (proxyChanged) await store.setProxyUrl(nextProxyUrl)
+          if (namesChanged) await store.setAgentNames(nextAgentNames)
+          if (guidanceChanged) await store.setTaskGuidance({ taskExecutionGuidance: nextTaskExecutionGuidance, taskEvidenceGuidance: nextTaskEvidenceGuidance })
+          if (concurrencyChanged) await store.setMaxConcurrentTasks(nextMaxConcurrentTasks)
+          if (workspaceChanged) {
+            await store.setAgentWorkspaceDir(nextWorkspace)
+            for (const item of replacements) await store.updateGroup({ groupId: item.group.groupId, residentSessionId: item.sessionId })
+          }
+          if (selectionChanged) {
+            selection.provider = nextSelection.provider; selection.model = nextSelection.model
+            if (nextSelection.reasoningEffort === undefined) delete selection.reasoningEffort
+            else selection.reasoningEffort = nextSelection.reasoningEffort
+          }
+          if (concurrencyChanged) taskConcurrencyLimit = nextMaxConcurrentTasks
+          if (workspaceChanged) {
+            agentWorkspace = nextWorkspace
+            for (const item of replacements) residentHandles.set(item.group.groupId, item.handle)
+          }
+          if (concurrencyChanged) await pumpTasks()
+          return resultConfig()
+        })
+        for (const item of replacements) await item.previous.dispose()
+        return result
+      } catch (error) {
+        if (!workspaceChanged || agentWorkspace !== nextWorkspace) await Promise.all(replacements.map((item) => item.handle.dispose()))
+        throw error
+      } finally {
+        for (const release of releaseAdmissions) release()
+        for (const release of releaseResidentTransitions) release()
+      }
     }),
-    unsubscribe: ({ groupId }) => serialize(groupId, async () => {
+    unsubscribe: ({ groupId }) => serializeConfig(async () => {
+      if (runtimeClosing) throw new Error('resident_runtime_closed')
       if (store.listTasks().some((task) => task.groupId === groupId && (task.state === 'running' || task.state === 'waiting' || task.state === 'queued'))) throw new Error(`group_has_active_tasks:${groupId}`)
       const handle = residentHandles.get(groupId)
-      if (handle !== undefined) { await handle.dispose(); residentHandles.delete(groupId) }
-      const result = await store.removeGroup({ groupId })
-      for (const listener of unsubscriptionListeners) listener({ groupId })
-      return result
+      const releaseResidentTransition = holdGroupResidentTransition(groupId)
+      const [releaseAdmission] = holdGroupReplyAdmission(groupId, 1)
+      try {
+        await waitForActiveGroupResidentOperations(groupId)
+        if (handle !== undefined) await handle.agent.whenIdle()
+        await waitForActiveGroupSubmissions(groupId)
+        const result = await serialize(groupId, () => serializeTasks(async () => {
+          if (store.listTasks().some((task) => task.groupId === groupId && (task.state === 'running' || task.state === 'waiting' || task.state === 'queued'))) throw new Error(`group_has_active_tasks:${groupId}`)
+          const removed = await store.removeGroup({ groupId })
+          if (residentHandles.get(groupId) === handle) residentHandles.delete(groupId)
+          return removed
+        }))
+        if (handle !== undefined) await handle.dispose()
+        for (const listener of unsubscriptionListeners) listener({ groupId })
+        return result
+      } finally {
+        releaseAdmission()
+        releaseResidentTransition()
+      }
     }),
     setCurrentDwsUserName: (value) => { currentDwsUserName = typeof value === 'string' ? value.trim() : '' },
     async close() {
+      if (closePromise !== undefined) return closePromise
+      runtimeClosing = true
       if (supervisorTimer !== undefined) clearInterval(supervisorTimer)
       if (typeof disposeObserver === 'function') disposeObserver()
-      for (const requestId of [...pendingGroupDecisions.keys()]) rejectPendingGroupDecision(requestId, new Error('resident_runtime_closed'))
-      const all = [...leafHandles.values(), ...residentHandles.values()]
-      await ctx.subagents.drainContinuableDescendants(all.map((handle) => handle.agent))
-      await Promise.all(all.map((handle) => handle.dispose()))
-      leafHandles.clear(); residentHandles.clear(); leafTaskBySession.clear(); await activityTail; await store.close()
+      const closingError = new Error('resident_runtime_closed')
+      for (const requestId of [...pendingGroupDecisions.keys()]) rejectPendingGroupDecision(requestId, closingError)
+      for (const requestId of [...pendingGroupReplies.keys()]) rejectPendingGroupReply(requestId, closingError)
+      for (const barrier of groupReplyAdmissionBarriers.values()) barrier.resolve()
+      groupReplyAdmissionBarriers.clear()
+      for (const submission of activeGroupSubmissions) {
+        for (const request of submission.requests) request.rejectDeliveryRecorded(closingError)
+      }
+      closePromise = serializeConfig(async () => {
+        await waitForAllResidentOperations()
+        await Promise.allSettled([...inflightMessages.values()])
+        await Promise.allSettled([...activeGroupReplies].map((reply) => reply.replyLinearized))
+        const all = [...leafHandles.values(), ...residentHandles.values()]
+        await ctx.subagents.drainContinuableDescendants(all.map((handle) => handle.agent))
+        await Promise.all(all.map((handle) => handle.dispose()))
+        leafHandles.clear(); residentHandles.clear(); leafTaskBySession.clear(); await activityTail; await store.close()
+      })
+      return closePromise
     },
   }
 }

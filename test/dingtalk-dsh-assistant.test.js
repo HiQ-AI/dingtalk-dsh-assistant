@@ -63,7 +63,7 @@ test('resident重启后按群内顺序恢复遗留pending消息', async () => {
 test('任务上下文允许静默追加且已插话消息不会由重复事件重试', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /decision\.reply\.trim\(\) === ''/)
-  assert.match(source, /\? store\.getGroup\(message\.groupId\)/)
+  assert.match(source, /group = store\.getGroup\(message\.groupId\)/)
   assert.match(source, /\['steered', 'delivered', 'decision-failed', 'skipped'\]\.includes\(persisted\?\.agentDeliveryStatus\)/)
 })
 
