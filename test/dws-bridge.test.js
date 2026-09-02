@@ -112,6 +112,7 @@ test('主会话回复首次无法确认时会绑定同一outbox持续回读并�
 test('启动时先建立 live consumer 再补拉，重叠消息由持久 ingress 去重', async () => {
   const order = []
   const ingested = []
+  let lifecycle
   const runtime = {
     listGroups: () => [{ groupId: 'cid-a', messages: [{ messageId: 'old' }] }],
     onGroupSubscribed() { return () => undefined },
@@ -120,11 +121,14 @@ test('启动时先建立 live consumer 再补拉，重叠消息由持久 ingress
     async acknowledge() {},
   }
   const adapter = {
-    startGroupSubscription() { order.push('live'); return { lifecycle: new EventEmitter(), done: Promise.resolve(), stop() {} } },
-    async readGroup() { order.push('backfill'); return { complete: true, messages: [{ messageId: 'overlap', conversationId: 'cid-a', text: 'same', createTime: '2026-08-24T13:00:00+08:00', sender: '李四', senderOpenDingTalkId: 'od-user-2' }] } },
+    startGroupSubscription() { lifecycle = new EventEmitter(); order.push('live'); return { lifecycle, ready: new Promise(() => undefined), done: Promise.resolve(), stop() {} } },
+    async readGroupRange() { order.push('backfill'); return { complete: true, hasMore: false, failedCount: 0, messages: [{ messageId: 'overlap', conversationId: 'cid-a', text: 'same', createTime: '2026-08-24T13:00:00+08:00', sender: '李四', senderOpenDingTalkId: 'od-user-2' }] } },
   }
   const warnings = []
   const stop = startDwsBridge({ runtime, adapter, logger: { warn: (error) => warnings.push(error) } })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(order, ['live'])
+  lifecycle.emit('ready')
   await new Promise((resolve) => setImmediate(resolve))
 
   assert.deepEqual(order, ['live', 'backfill'])
@@ -172,10 +176,13 @@ test('定时增量补拉按已持久化发送消息ID过滤Agent本人账号消�
     async ingest(message) { ingested.push(message.messageId); return { duplicate: false } },
   }
   let backfill
+  let rangeReads = 0
   const adapter = {
     startGroupSubscription() { const lifecycle = new EventEmitter(); return { lifecycle, ready: Promise.resolve(), done: Promise.resolve(), stop() {} } },
     async readGroup() { return { complete: true, messages: [] } },
     async readGroupRange() {
+      rangeReads += 1
+      if (rangeReads === 1) return { complete: true, hasMore: false, failedCount: 0, messages: [] }
       return { complete: true, messages: [
         { conversationId: 'cid-a', messageId: 'm-agent', text: 'Agent回复', createTime: '2026-08-25T05:01:00Z', sender: '当前登录人' },
         { conversationId: 'cid-a', messageId: 'm-human', text: '本人手工消息', createTime: '2026-08-25T05:01:01Z', sender: '当前登录人' },
@@ -283,6 +290,226 @@ test('DWS consumer 异常退出只记录活动 Task 告警', async () => {
 
   assert.deepEqual(alerts, [{ taskId: 'task-running', fingerprint: 'dws-consumer-exit:7:none', detail: 'DWS consumer exited for group cid-a' }])
   await stop()
+})
+
+test('没有订阅群时 bridge 也会发布初始健康状态', async () => {
+  let health
+  const runtime = {
+    listGroups: () => [], listTasks: () => [],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+  }
+  const stop = startDwsBridge({ runtime, adapter: {}, logger: { warn() {} }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, onHealthChange: (value) => { health = value } })
+  assert.deepEqual(health, { healthy: true, groups: [] })
+  await stop()
+})
+
+test('无活动Task时 DWS listener 退出也会重连并恢复入站健康', async () => {
+  const group = { groupId: 'cid-a', messages: [], outbox: [] }
+  const listeners = []
+  const received = []
+  const warnings = []
+  let health
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group, listTasks: () => [],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async ingest(message) { received.push(message.messageId); group.messages.push(message); return { duplicate: false } },
+  }
+  const adapter = {
+    startGroupSubscription(_groupId, callback) {
+      const lifecycle = new EventEmitter()
+      let resolveDone
+      const done = new Promise((resolve) => { resolveDone = resolve })
+      const listener = { callback, lifecycle, resolveDone, stopped: false }
+      listener.subscription = { lifecycle, ready: new Promise(() => undefined), done, stop() { listener.stopped = true; resolveDone(undefined) } }
+      listeners.push(listener)
+      return listener.subscription
+    },
+    async readGroupRange() { return { complete: true, hasMore: false, failedCount: 0, messages: [] } },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn: (error) => warnings.push(error) }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, listenerReconnectBaseMs: 0, listenerReconnectMaxMs: 0, listenerReadyTimeoutMs: 0, onHealthChange: (value) => { health = value } })
+  await new Promise((resolve) => setImmediate(resolve))
+  listeners[0].lifecycle.emit('ready')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(health.healthy, true)
+
+  listeners[0].resolveDone({ exitCode: 7, signal: null })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(listeners.length, 2)
+  assert.equal(health.healthy, false)
+  assert.equal(health.groups[0].listener.state, 'starting')
+
+  listeners[1].lifecycle.emit('ready')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(health.healthy, true)
+  await listeners[1].callback({ conversation_id: 'cid-a', message_id: 'm-after-reconnect', content: '恢复后消息', event_time: '2026-09-02T10:00:00Z', sender: '李四', sender_open_dingtalk_id: 'od-user-2' })
+  assert.deepEqual(received, ['m-after-reconnect'])
+
+  await stop()
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.equal(listeners.length, 2, 'stop 后不得复活新的 listener')
+  assert.equal(warnings.length, 0)
+})
+
+test('DWS listener 的 done 拒绝会重连，并在告警落盘后关闭 carrier 告警', async () => {
+  const group = { groupId: 'cid-a', messages: [] }
+  const listeners = []
+  const reports = []
+  const resolutions = []
+  let releaseReport
+  let health
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group, listTasks: () => [{ taskId: 'task-running', groupId: 'cid-a', state: 'running' }],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async reportCarrierIssue(value) { reports.push(value); await new Promise((resolve) => { releaseReport = resolve }) },
+    async resolveGroupCarrierIssues(value) { resolutions.push(value) },
+  }
+  const adapter = {
+    startGroupSubscription() {
+      const lifecycle = new EventEmitter()
+      let resolveDone
+      let rejectDone
+      const done = new Promise((resolve, reject) => { resolveDone = resolve; rejectDone = reject })
+      const listener = { lifecycle, rejectDone, stopped: false }
+      listener.subscription = { lifecycle, ready: new Promise(() => undefined), done, stop() { listener.stopped = true; resolveDone(undefined) } }
+      listeners.push(listener)
+      return listener.subscription
+    },
+    async readGroupRange() { return { complete: true, hasMore: false, failedCount: 0, messages: [] } },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn() {} }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, listenerReconnectBaseMs: 0, listenerReconnectMaxMs: 0, listenerReadyTimeoutMs: 0, onHealthChange: (value) => { health = value } })
+  await new Promise((resolve) => setImmediate(resolve))
+  listeners[0].lifecycle.emit('ready')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(health.healthy, true)
+  resolutions.length = 0
+
+  listeners[0].rejectDone(new Error('dws_spawn_pipe_closed'))
+  for (let attempts = 0; attempts < 20 && listeners.length < 2; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+  assert.equal(listeners.length, 2)
+  for (let attempts = 0; attempts < 20 && reports.length === 0; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+  assert.equal(reports.length, 1)
+  listeners[1].lifecycle.emit('ready')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(resolutions.length, 0, '恢复必须等待失败告警落盘，避免先恢复后记录告警')
+  releaseReport()
+  for (let attempts = 0; attempts < 20 && resolutions.length === 0; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+  assert.deepEqual(resolutions, [{ groupId: 'cid-a' }])
+  assert.equal(health.healthy, true)
+  await stop()
+})
+
+test('listener 在旧恢复执行中再次失败时，新 carrier 告警保持活动', async () => {
+  const group = { groupId: 'cid-a', messages: [] }
+  const listeners = []
+  const events = []
+  let alertStatus = 'active'
+  let releaseResolution
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group, listTasks: () => [{ taskId: 'task-running', groupId: 'cid-a', state: 'running' }],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async resolveGroupCarrierIssues() { events.push('resolve'); await new Promise((resolve) => { releaseResolution = resolve }); alertStatus = 'resolved' },
+    async reportCarrierIssue() { events.push('report'); alertStatus = 'active' },
+  }
+  const adapter = {
+    startGroupSubscription() {
+      const lifecycle = new EventEmitter()
+      let resolveDone
+      const done = new Promise((resolve) => { resolveDone = resolve })
+      const listener = { lifecycle, resolveDone, stopped: false }
+      listener.subscription = { lifecycle, ready: new Promise(() => undefined), done, stop() { listener.stopped = true; resolveDone(undefined) } }
+      listeners.push(listener)
+      return listener.subscription
+    },
+    async readGroupRange() { return { complete: true, hasMore: false, failedCount: 0, messages: [] } },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn() {} }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, listenerReconnectBaseMs: 0, listenerReconnectMaxMs: 0, listenerReadyTimeoutMs: 0 })
+  listeners[0].lifecycle.emit('ready')
+  for (let attempts = 0; attempts < 20 && events.length === 0; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+  assert.deepEqual(events, ['resolve'])
+
+  listeners[0].resolveDone({ exitCode: 7, signal: null })
+  for (let attempts = 0; attempts < 20 && listeners.length < 2; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+  assert.equal(events.includes('report'), false)
+  releaseResolution()
+  for (let attempts = 0; attempts < 20 && events.length < 2; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+  assert.deepEqual(events, ['resolve', 'report'])
+  assert.equal(alertStatus, 'active')
+  await stop()
+})
+
+test('listener 未收到 ready 时超时重连，旧 generation 不得阻塞新订阅', async () => {
+  const group = { groupId: 'cid-a', messages: [] }
+  const listeners = []
+  const received = []
+  let health
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group, listTasks: () => [],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async ingest(message) { received.push(message.messageId); return { duplicate: false } },
+  }
+  const adapter = {
+    startGroupSubscription(_groupId, callback) {
+      const lifecycle = new EventEmitter()
+      let resolveDone
+      const done = new Promise((resolve) => { resolveDone = resolve })
+      const listener = { callback, lifecycle, resolveDone, stopped: false }
+      listener.subscription = { lifecycle, ready: new Promise(() => undefined), done, stop() { listener.stopped = true; resolveDone(undefined) } }
+      listeners.push(listener)
+      return listener.subscription
+    },
+    async readGroupRange() { return { complete: true, hasMore: false, failedCount: 0, messages: [] } },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn() {} }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, listenerReconnectBaseMs: 0, listenerReconnectMaxMs: 0, listenerReadyTimeoutMs: 30, onHealthChange: (value) => { health = value } })
+  for (let attempts = 0; attempts < 40 && listeners.length < 2; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+  assert.equal(listeners.length, 2)
+  assert.equal(listeners[0].stopped, true)
+  listeners[0].lifecycle.emit('ready')
+  await listeners[0].callback({ conversation_id: 'cid-a', message_id: 'm-old-generation', content: '旧订阅事件', event_time: '2026-09-02T10:00:00Z', sender: '甲' })
+  assert.equal(health.healthy, false)
+  assert.deepEqual(received, [])
+  listeners[1].lifecycle.emit('ready')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(health.healthy, true)
+  await stop()
+})
+
+test('单群补拉失败不会饿死其他群，下一轮成功后恢复健康', async () => {
+  const groups = [{ groupId: 'cid-a', messages: [] }, { groupId: 'cid-b', messages: [] }]
+  let aFails = true
+  let backfill
+  let health
+  const ingested = []
+  const runtime = {
+    listGroups: () => groups,
+    getGroup: (groupId) => groups.find((group) => group.groupId === groupId),
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async ingest(message) { ingested.push(message.messageId); this.getGroup(message.groupId).messages.push(message); return { duplicate: false } },
+  }
+  const adapter = {
+    startGroupSubscription() { return { lifecycle: new EventEmitter(), done: Promise.resolve(undefined), stop() {} } },
+    async readGroupRange(groupId) {
+      if (groupId === 'cid-a' && aFails) throw new Error('dws_backfill_partial:cid-a')
+      if (groupId === 'cid-a') return { complete: true, hasMore: false, failedCount: 0, messages: [{ conversationId: 'cid-a', messageId: 'm-a', text: 'A恢复', createTime: '2026-09-02T10:01:00Z', sender: '甲' }] }
+      return { complete: true, hasMore: false, failedCount: 0, messages: groups[1].messages.length === 0 ? [{ conversationId: 'cid-b', messageId: 'm-b', text: 'B正常', createTime: '2026-09-02T10:01:01Z', sender: '乙' }] : [] }
+    },
+  }
+  const originalSetInterval = globalThis.setInterval
+  globalThis.setInterval = (callback) => { backfill = callback; return { unref() {} } }
+  try {
+    const stop = startDwsBridge({ runtime, adapter, logger: { warn() {} }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 1, outboxRetryIntervalMs: 0, onHealthChange: (value) => { health = value } })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.ok(ingested.includes('m-b'))
+    assert.equal(health.healthy, false)
+    assert.equal(health.groups.find((item) => item.groupId === 'cid-a').backfill.state, 'failed')
+
+    aFails = false
+    await backfill()
+    assert.ok(ingested.includes('m-a'))
+    assert.equal(health.healthy, true)
+    await stop()
+  } finally {
+    globalThis.setInterval = originalSetInterval
+  }
 })
 
 test('本人私聊阻塞不设超时并只用引用消息恢复原Task', async () => {

@@ -86,6 +86,14 @@ test('本人私聊回读限定起止时间但不设置消息条数上限', () =>
   assert.equal(args.includes('--page-limit'), false)
 })
 
+test('群范围回补自动翻页但不设人为消息条数上限', () => {
+  const adapter = createDwsAdapter({ enabled: true, runner: { run: async () => undefined, spawn: () => undefined } })
+  const args = adapter.compileGroupReadRange('group-a', { start: '2026-09-02T00:00:00.000Z', end: '2026-09-02T01:00:00.000Z' })
+  assert.equal(args.includes('--page-all'), true)
+  assert.equal(args.includes('--page-limit'), true)
+  assert.equal(args.includes('--max-items'), false)
+})
+
 test('outbox 回读命中跳过发送，未命中则只发一次并回读真实消息 ID', async () => {
   const existing = { readGroup: async () => ({ complete: true, messages: [{ messageId: 'existing-id', text: 'reply' }] }), sendGroup: async () => { throw new Error('must not send') } }
   assert.deepEqual(await dispatchOutbox({ adapter: existing, groupId: 'cid-a', outbound: { outboundId: 'out-1', text: 'reply' } }), { status: 'sent', messageId: 'existing-id', deduplicated: true })

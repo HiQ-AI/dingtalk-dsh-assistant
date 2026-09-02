@@ -297,9 +297,10 @@ pwsh -NoProfile -File .\scripts\start-web.ps1 -ProxyUrl 'http://127.0.0.1:10808'
 
 ```powershell
 Invoke-RestMethod -Uri 'http://127.0.0.1:18998/health' | ConvertTo-Json -Depth 10
+Invoke-RestMethod -Uri 'http://127.0.0.1:18998/state/dws-bridge' | ConvertTo-Json -Depth 10
 ```
 
-预期至少看到 `status: "ok"`；真实钉钉模式还应核对 `transport: "dws"`、`modelMode: "real"`、`inboundProcessing`、`outboundAuthorized` 和 `recoveryIssueCount`。如果端口无法访问，先查看 DSH 启动日志，不要继续配置页面。健康接口只证明 Runtime 存活，不能替代页面、群消息或回复回读验证。
+预期至少看到 `status: "ok"`；真实钉钉模式还应核对 `/health` 的 `transport: "dws"`、`inboundConfigured: true`、`inboundProcessing: true`、`modelMode: "real"`、`outboundAuthorized` 和 `recoveryIssueCount`。`/state/dws-bridge` 必须是 `healthy: true`，且每个已配置群均为 `listener.state: "ready"` 和 `backfill.state: "ok"`。如果端口无法访问，先查看 DSH 启动日志，不要继续配置页面。`lastError` 或 `reconnect.nextRetryAt` 表示 bridge 正在失败或恢复；`lastExitAt` 仅记录最近一次历史退出，应结合当前 `state` 和 `healthy` 判断。端口可访问和静态 `transport: "dws"` 都不能证明新消息正在入站。两项健康接口也不能替代页面、群消息或回复回读验证。
 
 ## 七、在 DSH Web 页面配置
 
@@ -481,6 +482,10 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 在同一 Windows 用户和同一 DWS profile 下重新完成登录，再点击设置页“刷新”。不要复制或保存 OAuth 回调地址、授权码或 token 到文档和仓库。
 
+### 健康接口可读，但新群消息未进入
+
+先读取 `/health` 和 `/state/dws-bridge`。若任一已配置群的 `listener.state` 不是 `ready`，或出现 `lastError`、`reconnect.nextRetryAt`，先查看 DSH 启动日志中的对应错误，并确认该 DWS profile 的登录仍然有效；bridge 会自动重连。`lastExitAt` 只说明曾经退出，仍需结合当前 `state` 和 `healthy` 判断。若 `backfill.state` 不是 `ok`，根据其 `lastError` 排查 DWS 范围读取。随后读取 `/state/groups`，确认目标群仍已订阅。待 listener 恢复为 `ready` 且 backfill 恢复为 `ok` 后，在可控群发送一条新消息，并回读收信箱或 resident Session；诊断接口的恢复不能代替这一步业务验证。
+
 ### 群搜索失败
 
 确认 DWS 登录有效，搜索词不少于两个字；如果配置了 `dws.profile`，确认登录的是同一个 profile。
@@ -495,7 +500,7 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 1. `pnpm test` 通过。
 2. DSH Web profile 依赖安装成功，两个插件 bundle 均被加载。
-3. `GET http://127.0.0.1:18998/health` 可读。
+3. `GET http://127.0.0.1:18998/health` 与 `GET http://127.0.0.1:18998/state/dws-bridge` 可读；真实 DWS 模式满足上述 listener 与 backfill 健康条件。
 4. 设置页能读回 Agent 配置，DWS 环境检查正确。
 5. 目标群成功绑定唯一 resident Session。
 6. 真实群消息进入该 Session。

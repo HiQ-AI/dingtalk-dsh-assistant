@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import test from 'node:test'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 
-async function withServer(testApiEnabled, run) {
+async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsBridgeHealth } = {}) {
   const runtime = {
     listRecoveryIssues: () => [], listGroups: () => [], getGroup: () => undefined, listTasks: () => [], listTaskTimings: () => [{ taskId: 'task-1', wallMs: 1000 }], listActivities: () => [], listAlerts: () => [], listAuthorizationRequests: () => [{ requestId: 'blocker-1', status: 'pending-send' }],
     subscribe: async () => ({ created: true }),
@@ -17,9 +17,11 @@ async function withServer(testApiEnabled, run) {
     reopenTask: async ({ taskId, context, objective }) => ({ taskId, state: 'running', context, objective }),
     decideAuthorization: async (value) => value,
     reissueAuthorization: async (value) => value,
+    getDwsBridgeHealth: getDwsBridgeHealth ?? (() => ({ healthy: true, groups: [] })),
   }
   const server = createServer((request, response) => handleRequest(request, response, runtime, {
     testApiEnabled,
+    transport,
     checkForUpdatesImpl: async () => ({ currentVersion: '0.4.0', latestVersion: null, updateAvailable: false }),
   }))
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -56,3 +58,26 @@ test('显式testApiEnabled才开放测试写入口', async () => withServer(true
   assert.equal(response.status, 200)
   assert.deepEqual(await response.json(), { created: true })
 }))
+
+test('DWS健康状态以实际 bridge 存活和补拉状态为准', async () => {
+  let bridgeHealth = {
+    healthy: false,
+    groups: [{ groupId: 'cid-a', listener: { state: 'reconnecting' }, backfill: { state: 'failed', lastError: 'dws_backfill_partial:cid-a' }, reconnect: { attempt: 1 } }],
+  }
+  await withServer(false, async (baseUrl) => {
+    const degraded = await (await fetch(`${baseUrl}/health`)).json()
+    assert.equal(degraded.status, 'degraded')
+    assert.equal(degraded.inboundConfigured, true)
+    assert.equal(degraded.inboundProcessing, false)
+    assert.deepEqual(degraded.dwsBridge, bridgeHealth)
+    assert.deepEqual(await (await fetch(`${baseUrl}/state/dws-bridge`)).json(), bridgeHealth)
+
+    bridgeHealth = {
+      healthy: true,
+      groups: [{ groupId: 'cid-a', listener: { state: 'ready' }, backfill: { state: 'ok' }, reconnect: { attempt: 0 } }],
+    }
+    const healthy = await (await fetch(`${baseUrl}/health`)).json()
+    assert.equal(healthy.status, 'ok')
+    assert.equal(healthy.inboundProcessing, true)
+  }, { transport: 'dws', getDwsBridgeHealth: () => bridgeHealth })
+})

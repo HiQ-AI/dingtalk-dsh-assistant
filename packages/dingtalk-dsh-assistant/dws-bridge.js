@@ -50,13 +50,14 @@ export function parseRedlineDecision(text) {
   return undefined
 }
 
-export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentDwsUserName, humanPollIntervalMs = 30_000, groupBackfillIntervalMs = 10_000, groupBackfillOverlapMs = 30_000, outboxRetryIntervalMs = 10_000 }) {
+export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentDwsUserName, humanPollIntervalMs = 30_000, groupBackfillIntervalMs = 10_000, groupBackfillOverlapMs = 30_000, outboxRetryIntervalMs = 10_000, listenerReconnectBaseMs = 1_000, listenerReconnectMaxMs = 30_000, listenerReadyTimeoutMs = 15_000, onHealthChange }) {
   const subscriptions = new Map()
+  const bridgeEntries = new Map()
+  const inflightMessages = new Map()
   let stopping = false
   let humanPollTimer
   let humanPollTail = Promise.resolve()
   let groupBackfillTimer
-  let groupBackfillTail = Promise.resolve()
   let outboxRetryTimer
   let outboxRetryTail = Promise.resolve()
   const detachGroupMessageRecaller = (runtime.registerGroupMessageRecaller ?? (() => () => undefined))(async ({ groupId, messageId, outbound }) => {
@@ -66,27 +67,153 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       if (found !== undefined) throw new Error(`dws_recall_readback_message_present:${messageId}`)
     }
   })
-  const processMessage = async (message) => {
-    const group = runtime.getGroup?.(message.groupId)
-    const persisted = group?.messages?.find((item) => item.messageId === message.messageId)
-    const deliveredOutbound = group?.outbox?.find((item) => item.deliveredMessageId === message.messageId)
-    const pendingOutbound = typeof currentDwsUserName === 'string' && currentDwsUserName.trim() !== '' && message.senderName === currentDwsUserName
-      ? group?.outbox?.find((item) => item.status === 'pending' && matchesOutbound(message, item))
-      : undefined
-    const outbound = deliveredOutbound ?? pendingOutbound
-    if (outbound !== undefined) {
-      if (pendingOutbound !== undefined) await runtime.acknowledge({ groupId: message.groupId, outboundId: outbound.outboundId, deliveredMessageId: message.messageId })
-      if (persisted?.agentDeliveryStatus === 'failed') await runtime.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'skipped' })
-      return
+  const processMessage = (message) => {
+    const key = `${message.groupId}\u0000${message.messageId}`
+    const existing = inflightMessages.get(key)
+    if (existing !== undefined) return existing
+    const operation = (async () => {
+      const group = runtime.getGroup?.(message.groupId)
+      const persisted = group?.messages?.find((item) => item.messageId === message.messageId)
+      const deliveredOutbound = group?.outbox?.find((item) => item.deliveredMessageId === message.messageId)
+      const pendingOutbound = typeof currentDwsUserName === 'string' && currentDwsUserName.trim() !== '' && message.senderName === currentDwsUserName
+        ? group?.outbox?.find((item) => item.status === 'pending' && matchesOutbound(message, item))
+        : undefined
+      const outbound = deliveredOutbound ?? pendingOutbound
+      if (outbound !== undefined) {
+        if (pendingOutbound !== undefined) await runtime.acknowledge({ groupId: message.groupId, outboundId: outbound.outboundId, deliveredMessageId: message.messageId })
+        if (persisted?.agentDeliveryStatus === 'failed') await runtime.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'skipped' })
+        return
+      }
+      if (persisted !== undefined && persisted.agentDeliveryStatus !== 'failed') return
+      const media = typeof adapter.loadMessageImages === 'function' ? await adapter.loadMessageImages(message) : { images: [], mediaUnavailable: [] }
+      const accepted = await runtime.ingest({
+        ...message,
+        ...(media.images.length > 0 ? { images: media.images } : {}),
+        ...(media.mediaUnavailable.length > 0 ? { mediaUnavailable: media.mediaUnavailable } : {}),
+      })
+      if (accepted.duplicate) return
+    })()
+    inflightMessages.set(key, operation)
+    operation.finally(() => { if (inflightMessages.get(key) === operation) inflightMessages.delete(key) }).catch(() => undefined)
+    return operation
+  }
+  const describeError = (error) => error instanceof Error ? error.message : String(error)
+  const now = () => new Date().toISOString()
+  const entryFor = (groupId) => {
+    let entry = bridgeEntries.get(groupId)
+    if (entry !== undefined) return entry
+    entry = {
+      groupId,
+      generation: 0,
+      listenerState: 'starting',
+      backfillState: 'never',
+      reconnectAttempt: 0,
+      backfillRunning: false,
+      backfillQueued: false,
+      backfillPromise: Promise.resolve(),
+      carrierIssueTail: Promise.resolve(),
     }
-    if (persisted !== undefined && persisted.agentDeliveryStatus !== 'failed') return
-    const media = typeof adapter.loadMessageImages === 'function' ? await adapter.loadMessageImages(message) : { images: [], mediaUnavailable: [] }
-    const accepted = await runtime.ingest({
-      ...message,
-      ...(media.images.length > 0 ? { images: media.images } : {}),
-      ...(media.mediaUnavailable.length > 0 ? { mediaUnavailable: media.mediaUnavailable } : {}),
+    bridgeEntries.set(groupId, entry)
+    return entry
+  }
+  const currentGroup = (groupId) => runtime.getGroup?.(groupId) ?? runtime.listGroups().find((group) => group.groupId === groupId)
+  const clearReadyTimer = (entry) => {
+    if (entry.readyTimer !== undefined) clearTimeout(entry.readyTimer)
+    entry.readyTimer = undefined
+  }
+  const clearRetryTimer = (entry) => {
+    if (entry.retryTimer !== undefined) clearTimeout(entry.retryTimer)
+    entry.retryTimer = undefined
+    delete entry.nextRetryAt
+  }
+  const healthSnapshot = () => {
+    const groups = runtime.listGroups().map((group) => {
+      const entry = bridgeEntries.get(group.groupId)
+      return {
+        groupId: group.groupId,
+        listener: {
+          state: entry?.listenerState ?? 'starting',
+          generation: entry?.generation ?? 0,
+          ...(entry?.listenerStartedAt ? { startedAt: entry.listenerStartedAt } : {}),
+          ...(entry?.listenerReadyAt ? { readyAt: entry.listenerReadyAt } : {}),
+          ...(entry?.lastEventAt ? { lastEventAt: entry.lastEventAt } : {}),
+          ...(entry?.lastEventError ? { lastEventError: entry.lastEventError } : {}),
+          ...(entry?.lastListenerExitAt ? { lastExitAt: entry.lastListenerExitAt } : {}),
+          ...(entry?.lastListenerError ? { lastError: entry.lastListenerError } : {}),
+        },
+        backfill: {
+          state: entry?.backfillState ?? 'never',
+          ...(entry?.lastBackfillStartedAt ? { startedAt: entry.lastBackfillStartedAt } : {}),
+          ...(entry?.lastBackfillAt ? { succeededAt: entry.lastBackfillAt } : {}),
+          ...(entry?.lastBackfillErrorAt ? { failedAt: entry.lastBackfillErrorAt } : {}),
+          ...(entry?.lastBackfillError ? { lastError: entry.lastBackfillError } : {}),
+        },
+        reconnect: {
+          attempt: entry?.reconnectAttempt ?? 0,
+          ...(entry?.nextRetryAt ? { nextRetryAt: entry.nextRetryAt } : {}),
+        },
+      }
     })
-    if (accepted.duplicate) return
+    return {
+      healthy: groups.length === 0 || groups.every((group) => group.listener.state === 'ready' && group.backfill.state === 'ok'),
+      groups,
+    }
+  }
+  const publishHealth = () => {
+    if (typeof onHealthChange !== 'function') return
+    try { onHealthChange(healthSnapshot()) } catch (error) { logger.warn(error) }
+  }
+  const queueGroupBackfill = (groupId) => {
+    const entry = entryFor(groupId)
+    if (typeof adapter.readGroupRange !== 'function') {
+      entry.backfillState = 'unavailable'
+      publishHealth()
+      return entry.backfillPromise
+    }
+    if (entry.backfillRunning) {
+      entry.backfillQueued = true
+      return entry.backfillPromise
+    }
+    entry.backfillRunning = true
+    entry.backfillState = 'running'
+    publishHealth()
+    entry.backfillPromise = (async () => {
+      do {
+        entry.backfillQueued = false
+        if (stopping || currentGroup(groupId) === undefined) return
+        entry.backfillState = 'running'
+        entry.lastBackfillStartedAt = now()
+        publishHealth()
+        try {
+          const persisted = currentGroup(groupId)
+          const latest = [...(persisted?.messages ?? [])]
+            .map((message) => new Date(message.occurredAt).valueOf())
+            .filter(Number.isFinite)
+            .sort((left, right) => right - left)[0]
+          const end = new Date().toISOString()
+          const start = new Date(Number.isFinite(latest) ? Math.max(0, latest - groupBackfillOverlapMs) : new Date().setHours(0, 0, 0, 0)).toISOString()
+          const history = await adapter.readGroupRange(groupId, { start, end })
+          if (!Array.isArray(history.messages) || history.complete !== true || history.hasMore === true || (history.failedCount ?? 0) !== 0) throw new Error(`dws_backfill_partial:${groupId}`)
+          const ordered = [...history.messages].sort((left, right) => String(left.createTime ?? '').localeCompare(String(right.createTime ?? '')))
+          for (const message of ordered) await processMessage(normalizeHistoryMessage(message, groupId))
+          entry.backfillState = 'ok'
+          entry.lastBackfillAt = now()
+          delete entry.lastBackfillError
+          delete entry.lastBackfillErrorAt
+          publishHealth()
+        } catch (error) {
+          entry.backfillState = 'failed'
+          entry.lastBackfillError = describeError(error)
+          entry.lastBackfillErrorAt = now()
+          publishHealth()
+          logger.warn(error)
+        }
+      } while (!stopping && entry.backfillQueued)
+    })().finally(() => {
+      entry.backfillRunning = false
+      entry.backfillQueued = false
+    })
+    return entry.backfillPromise
   }
   const processOutbound = async ({ groupId, outbound }) => {
     const delivery = await dispatchOutbox({ adapter, groupId, outbound })
@@ -205,60 +332,138 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     return humanPollTail
   }
   const processIncrementalGroupBackfill = () => {
-    groupBackfillTail = groupBackfillTail.then(async () => {
-      if (stopping) return
-      for (const group of runtime.listGroups()) {
-        const persisted = runtime.getGroup?.(group.groupId) ?? group
-        const latest = [...(persisted.messages ?? [])]
-          .map((message) => new Date(message.occurredAt).valueOf())
-          .filter(Number.isFinite)
-          .sort((left, right) => right - left)[0]
-        const end = new Date().toISOString()
-        const start = new Date(Number.isFinite(latest) ? Math.max(0, latest - groupBackfillOverlapMs) : new Date().setHours(0, 0, 0, 0)).toISOString()
-        const history = await adapter.readGroupRange(group.groupId, { start, end })
-        const ordered = [...history.messages].sort((left, right) => String(left.createTime ?? '').localeCompare(String(right.createTime ?? '')))
-        for (const message of ordered) await processMessage(normalizeHistoryMessage(message, group.groupId))
-      }
-    }).catch((error) => logger.warn(error))
-    return groupBackfillTail
+    if (stopping) return Promise.resolve([])
+    return Promise.allSettled(runtime.listGroups().map((group) => queueGroupBackfill(group.groupId)))
   }
-  const attach = (group, { backfill = false } = {}) => {
-    if (subscriptions.has(group.groupId)) return
-    const subscription = adapter.startGroupSubscription(group.groupId, async (event) => {
-      try {
-        await processMessage(normalizeEvent(event))
-      } catch (error) {
-        logger.warn(error)
-      }
-    })
-    subscription.lifecycle.on('ready', () => {
-      runtime.resolveGroupCarrierIssues?.({ groupId: group.groupId }).catch((error) => logger.warn(error))
-    })
-    subscription.ready?.then(() => runtime.resolveGroupCarrierIssues?.({ groupId: group.groupId })).catch((error) => logger.warn(error))
-    subscription.lifecycle.on('line-error', (error) => logger.warn(error))
-    subscription.done.then(async (result) => {
-      if (stopping || result === undefined) return
-      const fingerprint = `dws-consumer-exit:${result.exitCode ?? 'null'}:${result.signal ?? 'none'}`
-      const tasks = runtime.listTasks().filter((task) => task.groupId === group.groupId && (task.state === 'running' || task.state === 'waiting'))
-      for (const task of tasks) await runtime.reportCarrierIssue({ taskId: task.taskId, fingerprint, detail: `DWS consumer exited for group ${group.groupId}` })
-    }).catch((error) => logger.warn(error))
-    subscriptions.set(group.groupId, subscription)
-    if (backfill && (group.messages?.length ?? 0) > 0) {
-      adapter.readGroup(group.groupId).then(async (history) => {
-        if (history.complete !== true) throw new Error(`dws_backfill_partial:${group.groupId}`)
-        const ordered = [...history.messages].sort((left, right) => String(left.createTime ?? '').localeCompare(String(right.createTime ?? '')))
-        for (const message of ordered) await processMessage(normalizeHistoryMessage(message, group.groupId))
-      }).catch((error) => logger.warn(error))
+  const reportConsumerExit = async (groupId, result, error) => {
+    const fingerprint = result === undefined
+      ? 'dws-consumer-error'
+      : `dws-consumer-exit:${result.exitCode ?? 'null'}:${result.signal ?? 'none'}`
+    const tasks = (runtime.listTasks?.() ?? []).filter((task) => task.groupId === groupId && (task.state === 'running' || task.state === 'waiting'))
+    for (const task of tasks) await runtime.reportCarrierIssue?.({ taskId: task.taskId, fingerprint, detail: error ? `DWS consumer failed for group ${groupId}: ${describeError(error)}` : `DWS consumer exited for group ${groupId}` })
+  }
+  let attach
+  const scheduleReconnect = (entry) => {
+    if (stopping || entry.retryTimer !== undefined || entry.subscription !== undefined || bridgeEntries.get(entry.groupId) !== entry) return
+    const base = Math.max(0, listenerReconnectBaseMs)
+    const maximum = Math.max(base, listenerReconnectMaxMs)
+    const delay = Math.min(maximum, base * (2 ** Math.max(0, entry.reconnectAttempt - 1)))
+    entry.nextRetryAt = new Date(Date.now() + delay).toISOString()
+    entry.retryTimer = setTimeout(() => {
+      entry.retryTimer = undefined
+      delete entry.nextRetryAt
+      if (stopping || bridgeEntries.get(entry.groupId) !== entry) return
+      const group = currentGroup(entry.groupId)
+      if (group !== undefined) attach(group)
+    }, delay)
+    entry.retryTimer.unref?.()
+    publishHealth()
+  }
+  const listenerFailed = (entry, generation, subscription, { result, error } = {}) => {
+    if (stopping || bridgeEntries.get(entry.groupId) !== entry || entry.generation !== generation) return
+    if (subscription !== undefined && entry.subscription !== subscription) return
+    clearReadyTimer(entry)
+    if (subscription !== undefined) subscriptions.delete(entry.groupId)
+    entry.subscription = undefined
+    entry.listenerState = 'reconnecting'
+    entry.lastListenerExitAt = now()
+    entry.lastListenerError = error ? describeError(error) : `dws_consumer_exit:${result?.exitCode ?? 'null'}:${result?.signal ?? 'none'}`
+    entry.reconnectAttempt += 1
+    publishHealth()
+    entry.carrierIssueTail = entry.carrierIssueTail
+      .then(() => reportConsumerExit(entry.groupId, result, error))
+      .catch((reportError) => logger.warn(reportError))
+    scheduleReconnect(entry)
+  }
+  const markListenerReady = (entry, generation, subscription) => {
+    if (stopping || bridgeEntries.get(entry.groupId) !== entry || entry.generation !== generation || entry.subscription !== subscription || entry.listenerState === 'ready') return
+    clearReadyTimer(entry)
+    entry.listenerState = 'ready'
+    entry.listenerReadyAt = now()
+    entry.reconnectAttempt = 0
+    delete entry.lastListenerError
+    publishHealth()
+    queueGroupBackfill(entry.groupId)
+    entry.carrierIssueTail = entry.carrierIssueTail
+      .then(async () => {
+        if (stopping || bridgeEntries.get(entry.groupId) !== entry || entry.generation !== generation || entry.subscription !== subscription || entry.listenerState !== 'ready') return
+        await runtime.resolveGroupCarrierIssues?.({ groupId: entry.groupId })
+      })
+      .catch((error) => logger.warn(error))
+  }
+  attach = (group) => {
+    const entry = entryFor(group.groupId)
+    if (stopping || entry.subscription !== undefined || entry.retryTimer !== undefined) return
+    const generation = entry.generation + 1
+    entry.generation = generation
+    entry.listenerState = 'starting'
+    entry.listenerStartedAt = now()
+    delete entry.lastListenerError
+    publishHealth()
+    let subscription
+    try {
+      subscription = adapter.startGroupSubscription(group.groupId, async (event) => {
+        if (stopping || bridgeEntries.get(group.groupId) !== entry || entry.generation !== generation || entry.subscription !== subscription) return
+        try {
+          const message = normalizeEvent(event)
+          entry.lastEventAt = now()
+          delete entry.lastEventError
+          publishHealth()
+          await processMessage(message)
+        } catch (error) {
+          entry.lastEventError = describeError(error)
+          publishHealth()
+          logger.warn(error)
+        }
+      })
+    } catch (error) {
+      listenerFailed(entry, generation, undefined, { error })
+      return
     }
+    entry.subscription = subscription
+    subscriptions.set(group.groupId, subscription)
+    const ready = () => markListenerReady(entry, generation, subscription)
+    subscription.lifecycle?.on?.('ready', ready)
+    subscription.lifecycle?.on?.('line-error', (error) => {
+      if (bridgeEntries.get(group.groupId) !== entry || entry.generation !== generation || entry.subscription !== subscription) return
+      entry.lastEventError = describeError(error)
+      publishHealth()
+      logger.warn(error)
+    })
+    if (subscription.ready === undefined) ready()
+    else Promise.resolve(subscription.ready).then(ready, (error) => listenerFailed(entry, generation, subscription, { error })).catch((error) => logger.warn(error))
+    if (listenerReadyTimeoutMs > 0 && entry.listenerState === 'starting') {
+      entry.readyTimer = setTimeout(() => {
+        if (entry.listenerState !== 'starting' || bridgeEntries.get(group.groupId) !== entry || entry.generation !== generation || entry.subscription !== subscription) return
+        listenerFailed(entry, generation, subscription, { error: new Error('dws_listener_ready_timeout') })
+        try { subscription.stop() } catch (error) { logger.warn(error) }
+      }, listenerReadyTimeoutMs)
+      entry.readyTimer.unref?.()
+    }
+    Promise.resolve(subscription.done).then((result) => {
+      if (result !== undefined) listenerFailed(entry, generation, subscription, { result })
+    }, (error) => listenerFailed(entry, generation, subscription, { error })).catch((error) => logger.warn(error))
+  }
+  const stopEntry = (groupId, { remove = false } = {}) => {
+    const entry = bridgeEntries.get(groupId)
+    if (entry === undefined) return undefined
+    entry.generation += 1
+    clearReadyTimer(entry)
+    clearRetryTimer(entry)
+    const subscription = entry.subscription
+    entry.subscription = undefined
+    entry.listenerState = 'stopped'
+    subscriptions.delete(groupId)
+    if (remove) bridgeEntries.delete(groupId)
+    try { subscription?.stop() } catch (error) { logger.warn(error) }
+    return entry
   }
 
-  for (const group of runtime.listGroups()) attach(group, { backfill: true })
+  for (const group of runtime.listGroups()) attach(group)
   const detachListener = runtime.onGroupSubscribed(attach)
   const detachUnsubscribeListener = (runtime.onGroupUnsubscribed ?? (() => () => undefined))(({ groupId }) => {
-    const subscription = subscriptions.get(groupId)
-    if (subscription === undefined) return
-    subscription.stop()
-    subscriptions.delete(groupId)
+    stopEntry(groupId, { remove: true })
+    publishHealth()
   })
   const detachOutboxListener = runtime.onOutboxAppended(async (event) => {
     try { await processOutbound(event) } catch (error) { logger.warn(error) }
@@ -283,6 +488,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     outboxRetryTimer = setInterval(processPendingCompletedOutbox, outboxRetryIntervalMs)
     outboxRetryTimer.unref?.()
   }
+  publishHealth()
   return async () => {
     stopping = true
     if (humanPollTimer !== undefined) clearInterval(humanPollTimer)
@@ -294,11 +500,16 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     detachHumanBlockerListener()
     detachAuthorizationDecisionListener()
     detachGroupMessageRecaller()
-    for (const subscription of subscriptions.values()) subscription.stop()
-    await Promise.allSettled([...subscriptions.values()].map((subscription) => subscription.done))
+    const entries = [...bridgeEntries.values()]
+    const closingSubscriptions = entries.map((entry) => entry.subscription).filter(Boolean)
+    for (const entry of entries) stopEntry(entry.groupId)
+    publishHealth()
+    await Promise.allSettled(closingSubscriptions.map((subscription) => subscription.done))
     await humanPollTail
-    await groupBackfillTail
+    await Promise.allSettled(entries.map((entry) => entry.backfillPromise))
     await outboxRetryTail
     subscriptions.clear()
+    bridgeEntries.clear()
+    inflightMessages.clear()
   }
 }

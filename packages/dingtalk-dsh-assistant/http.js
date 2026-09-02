@@ -26,10 +26,14 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'OPTIONS') return send(response, 204, null)
   if (request.method === 'GET' && url.pathname === '/health') {
     const recoveryIssues = store.listRecoveryIssues()
+    const inboundConfigured = transport === 'dws'
+    const dwsBridge = inboundConfigured ? store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] } : undefined
+    const inboundProcessing = inboundConfigured && dwsBridge.healthy === true
     return send(response, 200, {
-      status: recoveryIssues.length === 0 ? 'ok' : 'degraded', transport,
-      inboundProcessing: transport === 'dws', outboundAuthorized, modelMode,
+      status: recoveryIssues.length === 0 && (!inboundConfigured || inboundProcessing) ? 'ok' : 'degraded', transport,
+      inboundConfigured, inboundProcessing, outboundAuthorized, modelMode,
       recoveryIssueCount: recoveryIssues.length,
+      ...(dwsBridge !== undefined ? { dwsBridge } : {}),
     })
   }
   if (request.method === 'GET' && url.pathname === '/state/recovery-issues') return send(response, 200, store.listRecoveryIssues())
@@ -42,6 +46,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/authorizations') return send(response, 200, store.listAuthorizationRequests())
   if (request.method === 'GET' && url.pathname === '/state/activities') return send(response, 200, store.listActivities(url.searchParams.get('taskId') ?? undefined))
   if (request.method === 'GET' && url.pathname === '/state/supervisor/alerts') return send(response, 200, store.listAlerts())
+  if (request.method === 'GET' && url.pathname === '/state/dws-bridge') return send(response, 200, store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] })
   if (request.method === 'GET' && url.pathname === '/state/environment') return send(response, 200, await store.inspectEnvironment())
   if (request.method === 'GET' && url.pathname === '/state/agent-config') return send(response, 200, store.getAgentConfig())
   if (request.method === 'GET' && url.pathname === '/state/version') return send(response, 200, await checkForUpdatesImpl({ force: url.searchParams.get('refresh') === 'true' }))
