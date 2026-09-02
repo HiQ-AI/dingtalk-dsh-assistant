@@ -15,4 +15,12 @@
 
 ## 尚待验证
 
-- 真实钉钉可控申请引用回复 E2E；该项需要一条实际等待中的申请，不能以模拟事件替代。
+无。本轮代码、产物、本地运行态和真实钉钉引用回复业务链均已验证。
+
+## 真实钉钉 E2E
+
+- 创建独立测试群和常驻会话 `DSH授权回复E2E-20260902`，resident Session 为 `session-group-795cdb78e7ad8ec3d3e615a3`。
+- 群消息创建 Task `task-fdbaf11f-2ed6-457e-9a93-db7170f1c2f3`；Task 在删除测试标记文件前进入 `waiting/human-intervention`，申请 `blocker-8024bc0f-faef-4533-8f81-da3184de0b48` 为 `waiting-reply`，此时文件仍存在。
+- 对申请消息发送引用回复“按申请限定范围执行，仅处理这个测试文件。”，正文不含“批准”“拒绝”；DWS 发送状态回读为 `SUCCESS`，回复消息 ID 为 `msgNxSyc9SSqsQ2HOaXrnatqA==`。
+- Runtime 回读申请为 `answered/approved`、`decisionSource=dingtalk`，保存完整批复原文；`humanReplies.lastEventAt` 同步推进且 listener 保持 `ready`。
+- 原 Task 从 `waiting` 恢复并最终 `completed`；独立文件回读为不存在。完成通知 outbox 为 `sent`，并取得真实投递消息 ID。
