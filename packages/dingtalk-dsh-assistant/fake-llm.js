@@ -31,10 +31,24 @@ class FakeResidentAdapter extends LlmAdapter {
       else decision = { actions: [], reply: `fake-answer:${message}` }
       if (requestId === undefined) throw new Error('fake_group_decision_request_id_missing')
       const id = `fake-decision-${Date.now()}`
-      const args = JSON.stringify({ submissions: [{ requestIds: [requestId], decision }] })
+      const args = JSON.stringify({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision }] })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name: 'group_decision_submit', argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'group_decision_submit', arguments: args } }
+      yield { type: 'usage', usage: { inputTokens: 1, outputTokens: 1 } }
+      yield { type: 'finish', reason: { kind: 'tool-calls' } }
+      return
+    }
+    if (input.startsWith('[TASK_COORDINATION]') && !hasToolResultAfterInput) {
+      const requestId = input.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
+      const taskId = input.match(/^Task ID: ([^\r\n]+)$/mu)?.[1]
+      if (requestId === undefined) throw new Error('fake_group_reply_request_id_missing')
+      if (taskId === undefined) throw new Error('fake_group_reply_task_id_missing')
+      const id = `fake-reply-${Date.now()}`
+      const args = JSON.stringify({ requestId, observedRequestIds: [], reply: `coordinated:${taskId}` })
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+      yield { type: 'tool-call-delta', index: 0, id, name: 'group_reply_submit', argumentsDelta: args }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'group_reply_submit', arguments: args } }
       yield { type: 'usage', usage: { inputTokens: 1, outputTokens: 1 } }
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
       return

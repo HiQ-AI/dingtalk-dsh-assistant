@@ -1,0 +1,31 @@
+case_id,case,round_1,status
+RSB-01,漏观察新Steer时旧回复原子拒绝且无Outbox,PASS,PASS
+RSB-02,相关消息合并后重新生成单一回复,PASS,PASS
+RSB-03,不相关消息只观察不消费并在旧回复后继续处理,PASS,PASS
+RSB-04,四消息同批支持部分相关独立完成和仅观察待处理,PASS,PASS
+RSB-05,Decision到Outbox窗口内同群新Steer不能越过门禁,PASS,PASS
+RSB-06,无回复Decision不受全量观察约束,PASS,PASS
+RSB-07,附件缺失形成的effective reply应用同一门禁,PASS,PASS
+RSB-08,recheck回复等待外层Outbox并可合并普通请求,PASS,PASS
+RSB-09,不同群的Steer和回复互不阻塞,PASS,PASS
+RSB-10,Task通知漏观察新Steer时拒绝旧候选并重生成,PASS,PASS
+RSB-11,普通assistant文本不能冒充Task通知提交,PASS,PASS
+RSB-12,Task通知生成不占Task尾链且消息动作不会死锁,PASS,PASS
+RSB-13,关闭Runtime会拒绝未提交Task通知而不悬挂,PASS,PASS
+RSB-14,普通与recheck合并路径在steered状态失败时均无Outbox,PASS,PASS
+RSB-15,关闭释放admission等待消息且保全已开始的可靠提交,PASS,PASS
+RSB-16,历史导入和退订等待Resident时不占群提交尾链,PASS,PASS
+RSB-17,无回复Decision返回后生命周期仍等待动作committed并最终复核Task,PASS,PASS
+RSB-18,配置切换等待Resident时不占Task尾链且最终复核新Task,PASS,PASS
+RSB-19,退订持久化失败时保留Resident并可再次清理,PASS,PASS
+RSB-20,Decision Outbox写入失败明确失败释放门禁且不重放Task动作,PASS,PASS
+RSB-21,Outbox落库后live和缓冲监听器失败不反向否定Decision提交,PASS,PASS
+RSB-22,Task通知到Outbox窗口内同群新Steer不能越过门禁,PASS,PASS
+RSB-23,首次完成通知Outbox失败后按稳定结果键补发,PASS,PASS
+RSB-24,Task通知在首次idle未建pending时关闭不会晚到创建请求,PASS,PASS
+RSB-25,工作区切换等待pre-pending Task通知和历史导入完成,PASS,PASS
+RSB-26,transition后到达的Task通知改用新Resident,PASS,PASS
+RSB-27,退订transition后到达的历史导入不操作旧Resident,PASS,PASS
+RSB-28,关闭Runtime与工作区切换按生命周期串行收口,PASS,PASS
+RSB-29,完成通知补发跳过退订群并隔离异常Resident不饿死有效群,PASS,PASS
+RSB-30,全量测试打包与diff检查通过,PASS,PASS

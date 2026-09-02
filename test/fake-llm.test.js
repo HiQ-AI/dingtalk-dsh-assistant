@@ -26,7 +26,20 @@ test('fake adapter 对群消息使用step Decision工具而不是assistant JSON�
   assert.deepEqual(chunks.map((chunk) => chunk.type), ['block-start', 'tool-call-delta', 'block-end', 'usage', 'finish'])
   assert.equal(chunks[1].name, 'group_decision_submit')
   const args = JSON.parse(chunks[1].argumentsDelta)
+  assert.deepEqual(args.observedRequestIds, ['request-1'])
   assert.deepEqual(args.submissions[0].requestIds, ['request-1'])
   assert.equal(args.submissions[0].decision.actions[0].kind, 'new-task')
   assert.deepEqual(chunks.at(-1).reason, { kind: 'tool-calls' })
+})
+
+test('fake adapter 对 Task 协调通知使用可靠回复工具提交', async () => {
+  let adapter
+  const ctx = { llm: { registerAdapter(_providers, value) { adapter = value } } }
+  installFakeLlm(ctx)
+  const request = createUserMessage({ content: [{ type: 'text', text: '[TASK_COORDINATION]\n回复请求 ID：reply-1\nTask ID: task-1\n任务：核验回复门禁' }], source: { kind: 'user' } })
+  const chunks = []
+  for await (const chunk of adapter.stream({ messages: [request] })) chunks.push(chunk)
+  assert.deepEqual(chunks.map((chunk) => chunk.type), ['block-start', 'tool-call-delta', 'block-end', 'usage', 'finish'])
+  assert.equal(chunks[1].name, 'group_reply_submit')
+  assert.deepEqual(JSON.parse(chunks[1].argumentsDelta), { requestId: 'reply-1', observedRequestIds: [], reply: 'coordinated:task-1' })
 })
