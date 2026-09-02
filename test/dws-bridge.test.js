@@ -512,6 +512,91 @@ test('单群补拉失败不会饿死其他群，下一轮成功后恢复健康',
   }
 })
 
+test('慢回补不被周期 tick 连环排队，重连补偿保留断线范围且完成前降级', async () => {
+  const group = { groupId: 'cid-a', messages: [{ messageId: 'before-gap', occurredAt: '2026-09-02T08:00:00Z', agentDeliveryStatus: 'delivered' }], outbox: [] }
+  const listeners = []
+  let backfill
+  let health
+  let rangeReads = 0
+  let resolveInitial
+  let resolveRecovery
+  const ranges = []
+  const carrierResolutions = []
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group, listTasks: () => [],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async ingest(message) { group.messages.push(message); return { duplicate: false } },
+    async resolveGroupCarrierIssues({ groupId }) { carrierResolutions.push(groupId) },
+  }
+  const adapter = {
+    startGroupSubscription(_groupId, callback) {
+      const lifecycle = new EventEmitter()
+      let resolveDone
+      const done = new Promise((resolve) => { resolveDone = resolve })
+      const listener = { lifecycle, resolveDone, callback }
+      listener.subscription = { lifecycle, ready: new Promise(() => undefined), done, stop() { resolveDone(undefined) } }
+      listeners.push(listener)
+      return listener.subscription
+    },
+    async readGroupRange(_groupId, range) {
+      rangeReads += 1
+      ranges.push(range)
+      if (rangeReads === 1) return new Promise((resolve) => { resolveInitial = resolve })
+      if (rangeReads === 2) return new Promise((resolve) => { resolveRecovery = resolve })
+      return { complete: true, hasMore: false, failedCount: 0, messages: [] }
+    },
+  }
+  const originalSetInterval = globalThis.setInterval
+  globalThis.setInterval = (callback) => { backfill = callback; return { unref() {} } }
+  let stop
+  try {
+    stop = startDwsBridge({ runtime, adapter, logger: { warn() {} }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 1, outboxRetryIntervalMs: 0, listenerReconnectBaseMs: 0, listenerReconnectMaxMs: 0, listenerReadyTimeoutMs: 0, onHealthChange: (value) => { health = value } })
+    listeners[0].lifecycle.emit('ready')
+    for (let attempts = 0; attempts < 20 && rangeReads < 1; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.equal(rangeReads, 1)
+
+    const overlappingTicks = [backfill(), backfill()]
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(rangeReads, 1, '周期 tick 复用慢回补，不得持续追加整轮读取')
+
+    listeners[0].resolveDone({ exitCode: 7, signal: null })
+    for (let attempts = 0; attempts < 20 && listeners.length < 2; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.equal(listeners.length, 2)
+    listeners[1].lifecycle.emit('ready')
+    await listeners[1].callback({ conversation_id: 'cid-a', message_id: 'after-gap', content: '重连后的实时消息', event_time: '2026-09-02T10:10:00Z', sender: '甲' })
+    resolveInitial({ complete: true, hasMore: false, failedCount: 0, messages: [] })
+    await Promise.all(overlappingTicks)
+    for (let attempts = 0; attempts < 20 && rangeReads < 2; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.equal(rangeReads, 2, '重连 ready 只追加一次补偿读取')
+    assert.ok(new Date(ranges[1].start).valueOf() <= new Date(ranges[0].start).valueOf(), '恢复读取不得被重连后的实时水位推进而跨过断线窗口')
+    assert.equal(health.healthy, false)
+    assert.equal(health.groups[0].backfill.state, 'running')
+    assert.equal(health.groups[0].backfill.inProgress, true)
+    assert.equal(health.groups[0].backfill.recoveryRequired, true)
+    assert.deepEqual(carrierResolutions, [], '恢复补偿未完成时不得提前关闭 DWS carrier 告警')
+
+    const recoveryTicks = [backfill(), backfill(), backfill()]
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(rangeReads, 2, '恢复补偿缓慢时周期 tick 仍不得续排新的完整读取')
+    resolveRecovery({ complete: true, hasMore: false, failedCount: 0, messages: [] })
+    await Promise.all(recoveryTicks)
+    for (let attempts = 0; attempts < 20 && health.groups[0].backfill.inProgress !== undefined; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.equal(health.healthy, true)
+    assert.equal(health.groups[0].backfill.inProgress, undefined)
+    assert.equal(health.groups[0].backfill.recoveryRequired, undefined)
+    for (let attempts = 0; attempts < 20 && carrierResolutions.length === 0; attempts += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.deepEqual(carrierResolutions, ['cid-a'], '恢复补偿成功后才关闭 DWS carrier 告警')
+
+    await backfill()
+    assert.equal(rangeReads, 3, '空闲后下一次周期回补仍会正常执行')
+  } finally {
+    resolveInitial?.({ complete: true, hasMore: false, failedCount: 0, messages: [] })
+    resolveRecovery?.({ complete: true, hasMore: false, failedCount: 0, messages: [] })
+    if (stop !== undefined) await stop()
+    globalThis.setInterval = originalSetInterval
+  }
+})
+
 test('本人私聊阻塞不设超时并只用引用消息恢复原Task', async () => {
   const task = { taskId: 'task-human', state: 'waiting', waitingKind: 'human-intervention', objective: 'fix issue', waitingReason: 'disk full', result: { risk: '写入可能失败并遗留不完整产物', evidence: ['0 bytes free'], attemptedActions: ['removed task temp'] }, humanBlocker: { requestId: 'blocker-1', category: 'disk', requestedAction: 'confirm cleanup plan', status: 'pending-send' } }
   let blockerListener
