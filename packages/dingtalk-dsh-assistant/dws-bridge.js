@@ -302,7 +302,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     const attemptedActions = currentItems(result?.attemptedActions)
     const requestedAction = task.humanBlocker.requestedAction
     return [
-      redline ? '【群聊个人助理受控操作阻塞，等待真人审批】' : '【群聊个人助理任务阻塞，等待真人处理】',
+      redline ? '【群聊个人助理受控操作阻塞，等待人工介入】' : '【群聊个人助理任务阻塞，等待人工介入】',
       '',
       `Task ID：${task.taskId}`,
       `阻塞请求 ID：${task.humanBlocker.requestId}`,
@@ -315,7 +315,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       `阻塞原因：${task.waitingReason}`,
       '',
       '【风险】',
-      result?.risk ?? '未单独说明；以阻塞原因、现场证据和申请范围为准。',
+      result?.risk ?? '未单独说明；以阻塞原因、现场证据和处理范围为准。',
       '',
       '【现场证据】',
       ...(evidence.length > 0 ? evidence.map((item) => `- ${item}`) : ['- 暂无']),
@@ -323,11 +323,11 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       '【已尝试】',
       ...(attemptedActions.length > 0 ? attemptedActions.map((item) => `- ${item}`) : ['- 无可安全执行的尝试']),
       '',
-      redline ? '【审批范围】' : '【需要真人答复】',
+      '【需要人工处理】',
       requestedAction,
       '',
       redline
-        ? '请直接引用本消息回复批复意见；明确回复“拒绝”“不同意”或“不批准”时记为拒绝，其余非空引用回复记为批准，并将完整原文交给任务重新核验。该等待不设超时。'
+        ? '请直接引用本消息回复处理意见；明确回复“拒绝”“不同意”或“不批准”时不执行该操作，其余非空引用回复使任务继续，并将完整原文交给任务重新核验。该等待不设超时。'
         : '请直接引用本消息回复处理方案；只有引用回复会恢复对应任务。该等待不设超时。',
     ].join('\n')
   }

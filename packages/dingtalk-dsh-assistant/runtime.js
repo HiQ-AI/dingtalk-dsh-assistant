@@ -745,7 +745,7 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
           ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: result, result: undefined,
           humanBlocker: approved, humanBlockerHistory: withHumanBlockerHistory(current, approved), updatedAt: new Date().toISOString(),
         }))
-        await followupTaskInternal(running, `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${approved.requestId}\nDecision: approved\nReply: ${approved.reply ?? '已批准'}\n\nThis exact controlled-action scope was already approved. Continue the same task only within that approved scope; do not request approval again.`)
+        await followupTaskInternal(running, `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${approved.requestId}\nDecision: approved\nReply: ${approved.reply ?? '已人工确认继续'}\n\nA human already confirmed continuation within this exact controlled-action scope. Continue the same task only within that scope; do not request human intervention again.`)
         return running
       }
       if (currentBlocker !== undefined
@@ -872,7 +872,7 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
     const now = new Date().toISOString(), nextRequestId = `blocker-${randomUUID()}`
     const superseded = {
       ...blocker, status: 'superseded', supersededAt: now, supersededBy: nextRequestId,
-      supersedeReason: reason?.trim() || '按当前统一授权审批逻辑重新提交',
+      supersedeReason: reason?.trim() || '按当前统一人工介入逻辑重新提交',
       recallStatus: blocker.messageId ? 'pending' : 'not-required',
     }
     const replacement = {
@@ -971,7 +971,7 @@ ${task.stageTasks?.length ? task.stageTasks.map((item) => `- ${item}`).join('\n'
 
 ${task.relatedContexts?.length ? task.relatedContexts.map((item) => `- ${item}`).join('\n') : '暂无。'}
 
-### 已持久化的真人批复
+### 已持久化的人工处理意见
 
 ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').length
   ? (task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').map((item) => `- ${item.decision ?? 'answered'}｜${item.category}｜${item.requestedAction}｜答复：${item.reply ?? '未记录'}`).join('\n')
@@ -983,7 +983,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
 
 除以下两类情况外，不得暂停或阻塞 Goal，也不得提交 waiting：
 1. \`waitingKind=information\`：只有原任务提出人才能补充的目标、完成条件或必要业务信息不明确；必须提供具体 questions。
-2. \`waitingKind=human-intervention\`：已经取得证据且自身无法解决的操作红线、网络中断、磁盘不足、资源不足、意外事件或必须真人确认的处置方案；必须提供 blockerCategory、risk、evidence、attemptedActions 和 requestedAction。risk 单独说明执行该操作可能造成的具体影响；操作红线使用 blockerCategory=redline，并把完整操作范围和不在授权内的事项写入 requestedAction；Runtime 只发送这一条阻塞审批消息。
+2. \`waitingKind=human-intervention\`：已经取得证据且自身无法解决的操作红线、网络中断、磁盘不足、资源不足、意外事件或必须真人确认的处置方案；必须提供 blockerCategory、risk、evidence、attemptedActions 和 requestedAction。risk 单独说明执行该操作可能造成的具体影响；操作红线使用 blockerCategory=redline，并把完整操作范围和不在授权内的事项写入 requestedAction；Runtime 只发送这一条人工介入消息。
 
 代码错误、命令失败、可重试波动、普通不确定性、实现困难、正在正常运行但耗时较长的外部流水线，或 Goal 轮数即将/已经耗尽时，继续诊断、监控或由 Host 续接 Goal，不得 waiting。Goal 轮数是 Host 的执行预算，不是需要真人处理的业务阻塞。不要直接使用 Goal 工具标记 blocked；合法等待统一通过 submit_task_result 交给 Host 路由。`,
       })

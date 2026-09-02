@@ -31,10 +31,10 @@
 - `systemPrompt.section`：向主会话注入群名称、群 ID、群职责与决策协议；向叶子会话注入任务流程和证据要求。
 - Agent Registry 与原生 descriptor：在 DSH Web 中展示并打开常驻会话、叶子对话和轨迹。
 - 默认模型、推理深度与权限 preset：由 DSH 原生服务保存和应用。
-- storage domain：持久化群订阅、消息、Task、可靠投递、授权申请和告警。
+- storage domain：持久化群订阅、消息、Task、可靠投递、人工介入事项和告警。
 - attachment service：将钉钉图片作为 DSH 原生多模态附件传入会话。
 
-插件只补充钉钉渠道和群聊工作流特有的能力：DWS 订阅与补拉、消息去重排序、任务准入与关联、可靠 outbox、授权审批、任务看板和运行告警。
+插件只补充钉钉渠道和群聊工作流特有的能力：DWS 订阅与补拉、消息去重排序、任务准入与关联、可靠 outbox、人工介入、任务看板和运行告警。
 
 ```text
 DWS 群消息
@@ -50,8 +50,8 @@ DWS 群消息
 
 ## 包结构
 
-- `packages/dingtalk-dsh-assistant`：核心业务插件。负责 DWS 接入、群与 Session 绑定、消息处理、Task 调度、授权审批、可靠回复和配置页面。
-- `packages/dingtalk-dsh-observer`：DSH Web 展示扩展。提供群聊会话、任务看板、归档任务、授权审批和告警页面。
+- `packages/dingtalk-dsh-assistant`：核心业务插件。负责 DWS 接入、群与 Session 绑定、消息处理、Task 调度、阻塞时的人工介入、可靠回复和配置页面。
+- `packages/dingtalk-dsh-observer`：DSH Web 展示扩展。提供群聊会话、任务看板、归档任务、人工介入和告警页面。
 - `.dsh/profiles/resident`：resident Runtime 的参考 profile 与 Cordis patch。
 - `.dsh/profiles/web`：Web contribution 的参考 profile。
 - `docs/spec`：关键状态机和工作流设计说明。
@@ -229,12 +229,12 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不�
 
 主会话向运行中或等待中的叶子传递任务上下文、目标修订、真人批复、恢复提示和结果驳回时统一使用 DSH `steer`，在叶子的下一个 step 边界插入，不使用 `followup` 排队到下一 Turn。
 
-### 阻塞与授权
+### 阻塞与人工介入
 
 - 缺少任务信息：叶子进入 information waiting，由主会话回群向任务提出人询问。
-- 受控操作或必须真人确认：叶子创建授权申请，页面“授权审批”和 DWS 登录人本人私聊共享同一申请状态机。
-- 钉钉审批必须引用申请消息并提供非空批复；明确回复“拒绝”“不同意”或“不批准”时记为拒绝，其余回复记为批准并保留完整原文。普通人工处置申请引用回复具体处理结果即可。Runtime 使用独立的个人 IM 实时订阅按被引用的申请 `messageId` 精确关联并恢复 Task，历史查询仅用于离线恢复；等待不设超时。
-- 相同操作范围复用原申请，已批准范围不会重复申请；范围变化才创建新申请。
+- Task 遇到操作红线、环境异常或需要真人判断时进入 `human-intervention`，页面“人工介入”和 DWS 登录人本人私聊共享同一阻塞状态机。
+- 钉钉人工处理必须引用阻塞消息并提供非空意见；明确回复“拒绝”“不同意”或“不批准”时记为不执行，其余回复使 Task 继续，并保留完整原文。Runtime 使用独立的个人 IM 实时订阅按被引用消息的 `messageId` 精确关联并恢复 Task，历史查询仅用于离线恢复；等待不设超时。
+- 相同阻塞范围复用原记录，已经人工确认可继续的范围不会重复请求；范围变化才创建新的人工介入事项。
 
 ### 完成通知
 
@@ -257,7 +257,7 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。主会话不�
 - 群聊会话：查看不同 resident Session 的分页收信箱和发信箱；状态固定在最左列，长内容最多显示两行，完整内容可通过悬停标题或详情查看。
 - 任务看板：按待执行、执行中、等待中、已完成展示 Task，并打开 DSH 原生叶子对话和轨迹。活动任务卡片中的“任务”面板默认收起，只显示完成数/总数和进度；展开后显示各阶段任务、状态和耗时。执行轮次耗时统计不占用任务卡片空间，仍可通过 `/state/task-timings` 接口用于诊断。
 - 归档任务：查看已归档 Task，相关群消息仍可重新打开原任务。
-- 授权审批：以与消息表格一致的状态列、行高和内容密度分页查看申请单，并在页面批准或拒绝。
+- 人工介入：以与消息表格一致的状态列、行高和内容密度分页查看阻塞事项，并在页面选择继续任务或不执行。
 - 告警：按类型查看当前异常和分页的已恢复历史。
 
 看板不读取或重建 DSH Session JSONL，只通过插件状态接口展示业务投影；对话与轨迹仍由 DSH 原生页面负责。
@@ -285,6 +285,6 @@ pnpm test
 
 - [DSH 原生常驻闭环](docs/spec/dsh-native-resident-closure.md)
 - [任务 Supervisor](docs/spec/running-task-supervisor.md)
-- [授权审批中心](docs/spec/authorization-approval-center.md)
-- [钉钉授权回复实时生效](docs/spec/approval-reply-live-events.md)
+- [人工介入中心](docs/spec/authorization-approval-center.md)
+- [钉钉人工介入回复实时生效](docs/spec/approval-reply-live-events.md)
 - [运行看板](docs/spec/dingtalk-resident-observer.md)
