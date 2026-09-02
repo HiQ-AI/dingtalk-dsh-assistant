@@ -645,12 +645,11 @@ test('个人IM实时引用回复精确恢复redline审批且重复事件幂等',
   }
   const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, onHealthChange: (value) => { health = value } })
   assert.equal(health.humanReplies.state, 'ready')
-  await onHumanReply({ conversation_id: 'self-cid', message_id: 'reply-ambiguous', content: '先等等', quotedMessage: { messageId: 'request-msg' } })
   await onHumanReply({ conversation_id: 'self-cid', message_id: 'reply-wrong', content: '批准', quotedMessage: { messageId: 'another-request' } })
-  await onHumanReply({ conversation_id: 'self-cid', message_id: 'reply-approved', content: '批准，按限定范围执行', quotedMessage: { messageId: 'request-msg' } })
-  await onHumanReply({ conversation_id: 'self-cid', message_id: 'reply-approved', content: '批准，按限定范围执行', quotedMessage: { messageId: 'request-msg' } })
+  await onHumanReply({ conversation_id: 'self-cid', message_id: 'reply-approved', content: '按限定范围执行', quotedMessage: { messageId: 'request-msg' } })
+  await onHumanReply({ conversation_id: 'self-cid', message_id: 'reply-approved', content: '按限定范围执行', quotedMessage: { messageId: 'request-msg' } })
 
-  assert.deepEqual(resolutions, [{ taskId: 'task-live-redline', requestId: 'blocker-live', quotedMessageId: 'request-msg', replyMessageId: 'reply-approved', reply: '批准，按限定范围执行', decision: 'approved' }])
+  assert.deepEqual(resolutions, [{ taskId: 'task-live-redline', requestId: 'blocker-live', quotedMessageId: 'request-msg', replyMessageId: 'reply-approved', reply: '按限定范围执行', decision: 'approved' }])
   await stop()
   assert.equal(stopped, true)
 })
@@ -754,11 +753,13 @@ test('已补记错误恢复时间的阻塞单会改用原申请时间回读批�
   assert.equal(task.state, 'running')
 })
 
-test('redline 阻塞只接受引用消息中的明确批准或拒绝', () => {
+test('redline 阻塞将非空引用回复视为批复并保留明确拒绝语义', () => {
   assert.equal(parseRedlineDecision('批准'), 'approved')
   assert.equal(parseRedlineDecision('批准：做好回滚机制'), 'approved')
   assert.equal(parseRedlineDecision('拒绝，风险过高'), 'rejected')
-  assert.equal(parseRedlineDecision('先等等'), undefined)
+  assert.equal(parseRedlineDecision('不批准：风险过高'), 'rejected')
+  assert.equal(parseRedlineDecision('按限定范围执行'), 'approved')
+  assert.equal(parseRedlineDecision(''), undefined)
 })
 
 test('Web在DWS发送过程中批复时撤回已落地申请并停止等待', async () => {

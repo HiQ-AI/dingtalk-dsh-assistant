@@ -45,9 +45,9 @@ export function normalizeHistoryMessage(message, fallbackGroupId) {
 
 export function parseRedlineDecision(text) {
   const normalized = String(text ?? '').trim()
-  if (/^(批准|同意)(?:$|[：:，,。\s])/u.test(normalized)) return 'approved'
-  if (/^(拒绝|不同意)(?:$|[：:，,。\s])/u.test(normalized)) return 'rejected'
-  return undefined
+  if (normalized === '') return undefined
+  if (/^(拒绝|不同意|不批准)(?:$|[：:，,。\s])/u.test(normalized)) return 'rejected'
+  return 'approved'
 }
 
 export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentDwsUserName, humanPollIntervalMs = 30_000, groupBackfillIntervalMs = 10_000, groupBackfillOverlapMs = 30_000, outboxRetryIntervalMs = 10_000, listenerReconnectBaseMs = 1_000, listenerReconnectMaxMs = 30_000, listenerReadyTimeoutMs = 15_000, onHealthChange }) {
@@ -300,9 +300,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     const currentItems = (items = []) => items.filter((item) => !/AP-\d|Approval Server|SSE|审批申请消息|完整审批号/u.test(item))
     const evidence = currentItems(result?.evidence)
     const attemptedActions = currentItems(result?.attemptedActions)
-    const requestedAction = redline
-      ? task.humanBlocker.requestedAction.replace(/^请[^，。\n]+引用.*?明确批准\/拒绝/u, '请明确回复“批准”或“拒绝”：')
-      : task.humanBlocker.requestedAction
+    const requestedAction = task.humanBlocker.requestedAction
     return [
       redline ? '【群聊个人助理受控操作阻塞，等待真人审批】' : '【群聊个人助理任务阻塞，等待真人处理】',
       '',
@@ -329,7 +327,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       requestedAction,
       '',
       redline
-        ? '请直接引用本消息回复“批准”或“拒绝”，可在其后补充条件；只有引用回复且决定明确时才会恢复对应任务。该等待不设超时。'
+        ? '请直接引用本消息回复批复意见；明确回复“拒绝”“不同意”或“不批准”时记为拒绝，其余非空引用回复记为批准，并将完整原文交给任务重新核验。该等待不设超时。'
         : '请直接引用本消息回复处理方案；只有引用回复会恢复对应任务。该等待不设超时。',
     ].join('\n')
   }

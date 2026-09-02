@@ -1,6 +1,6 @@
 case_id,case,round_1
 TC01,个人IM监听命令与ready门禁,PASS
-TC02,redline按精确引用和明确决定恢复且重复事件幂等,PASS
+TC02,redline按精确引用接受无关键词批复且重复事件幂等,PASS
 TC03,普通人工处置实时回复补齐approved决定,PASS
 TC04,历史轮询普通人工处置补齐approved决定,PASS
 TC05,个人IM监听退出后自动重连并恢复健康,PASS

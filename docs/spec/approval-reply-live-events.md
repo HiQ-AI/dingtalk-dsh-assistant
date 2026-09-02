@@ -21,7 +21,7 @@ Runtime 只为来源群建立 `event +listen-im --kind group` 实时订阅。本
 
 - 只消费 message 事件，要求存在非空正文、回复消息 ID和 `quotedMessage.messageId`。
 - 使用引用的申请消息 ID在当前 `waiting/human-intervention` Task 中精确匹配 blocker；不按文案、发送人展示名或时间窗猜测。
-- `redline` 仍只接受明确的“批准/同意”或“拒绝/不同意”；其他文本保持等待。
+- `redline` 的任意非空引用回复均视为已经批复；明确以“拒绝”“不同意”或“不批准”开头时记为拒绝，其余回复记为批准，并保留完整原文供任务重新核验。
 - 非 `redline` 的引用回复代表真人已经提供处置意见，统一以 `approved` 恢复任务，并把完整原文交给叶子重新核验。
 - Runtime 现有幂等和状态检查仍是最终门禁，重复事件不会重复恢复任务。
 - 历史轮询保留作为进程离线窗口的恢复路径，并同步修正非 `redline` decision。
@@ -32,12 +32,12 @@ Runtime 只为来源群建立 `event +listen-im --kind group` 实时订阅。本
 
 - 不扩大关键词搜索：无法知道真人回复正文，也不能证明搜索结果包含引用关系。
 - 不把群 listener 改成 `all-direct`：群业务消息与审批单聊是不同路由，混合会把私人消息误送入群 Decision。
-- 不放宽为任意单聊文本批准：只接受精确引用当前 blocker 消息的回复，授权边界保持 fail-closed。
+- 不放宽为任意单聊文本批准：仍只接受精确引用当前 blocker 消息的非空回复；无引用、错误引用和空回复不会改变授权状态。
 
 ## 验证范围
 
 - Adapter 参数编译和 ready/NDJSON 生命周期。
-- 实时个人引用回复：redline 批准、redline 非明确决定、非 redline 处置、无引用/错误引用忽略、重复事件幂等。
+- 实时个人引用回复：redline 明确拒绝、redline 无关键词批复、非 redline 处置、无引用/错误引用忽略、重复事件幂等。
 - 个人 listener 启动、退出重连、健康快照与关闭。
 - 历史轮询非 redline decision 修复。
 - 全量测试、打包内容、安装文件哈希与本地 Runtime health。
