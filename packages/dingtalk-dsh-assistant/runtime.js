@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, groupDecisionJsonSchema, shouldRecheckTaskAssociation, validateGroupDecision } from './decision.js'
+import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, groupDecisionJsonSchema, isDirectedToOtherParticipants, isExplicitAgentDirection, shouldRecheckTaskAssociation, validateGroupDecision } from './decision.js'
 import { parseTaskCheckpoint, parseTaskResult } from './task-result.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
@@ -141,7 +141,7 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
 
 新建任务必须提供至少一条 \`acceptanceCriteria\`；修订目标时也可更新 \`acceptanceCriteria\` 和 \`stageTasks\`。验收标准只描述当前目标可核验的完成条件，不得按开发、分析、部署等任务类型绑定固定模板，也不得扩大消息授权范围。
 
-当前消息明确指名或提及已配置的 Agent 名称/别名、以 \`cc:\` 开头，或者明确确认了主会话此前提出的“是否需要我处理”询问，并且事项属于本群职责且形成可验证目标时，才允许选择 new-task。未明确指名、但你判断事项应形成任务时，必须选择 task-proposal，并在群里询问“这个事项是否需要我处理？”，暂不创建 Task；收到肯定答复后再结合原消息及其后补充选择 new-task。${currentDwsUserName ? `仅提及当前 DWS 登录人“${currentDwsUserName}”不能单独构成 Agent 的建任务、回复或执行授权。` : ''}同事间讨论、事实陈述或未形成可验证目标的内容不得创建任务；与现有任务相关时只做任务关联或补充上下文，并按下方节制原则简短确认。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。
+当前消息明确指名或提及已配置的 Agent 名称/别名、以 \`cc:\` 开头，或者明确确认了主会话此前提出的“是否需要我处理”询问，并且事项属于本群职责且形成可验证目标时，才允许选择 new-task。未明确指名、但你判断事项应形成任务时，必须选择 task-proposal，并在群里询问“这个事项是否需要我处理？”，暂不创建 Task；收到肯定答复后再结合原消息及其后补充选择 new-task。消息明确 @其他同事且未指向 Agent 时，说明问题正在询问这些同事，必须忽略，既不得创建 task-proposal 或 new-task，也不得主动回答；只有后续明确指向 Agent 且直接引用该消息，才视为可验证的转交。${currentDwsUserName ? `仅提及当前 DWS 登录人“${currentDwsUserName}”不能单独构成 Agent 的建任务、回复或执行授权。` : ''}同事间讨论、事实陈述或未形成可验证目标的内容不得创建任务；与现有任务相关时只做任务关联或补充上下文，并按下方节制原则简短确认。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。
 
 任务目标必须忠实保留消息中的动作范围，不得把“看看、查一下、排查、分析、核对、监控”等诊断或观察请求扩写成“修复、修改、实施、合并、发布、执行”等变更任务。诊断任务的完成条件只能是核验现状、定位根因、给出证据与建议；只有消息明确要求修复、修改、处理问题或实施方案时，new-task 或 task-proposal 的 objective 才能包含变更动作。后续消息可能明确扩大或收窄同一任务的动作范围；此时仍关联原 Task，并在 task-context 或 task-reopen 中填写修订后的累计完整 objective。普通事实补充不得填写 objective。是否明确指名只决定直接处理还是先询问，不构成扩大任务授权。
 
@@ -379,6 +379,13 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
             if (new Set(action.sourceMessageIds).size !== action.sourceMessageIds.length) throw new Error('task_action_source_message_duplicate')
             if (action.sourceMessageIds.some((messageId) => !persistedMessageIds.has(messageId))) throw new Error('task_action_source_message_invalid')
             if (!action.sourceMessageIds.some((messageId) => currentMessageIds.has(messageId))) throw new Error('task_action_current_source_message_required')
+            if (action.kind === 'new-task' || action.kind === 'task-proposal') {
+              const sourceMessages = (store.getGroup(groupId)?.messages ?? []).filter((message) => action.sourceMessageIds.includes(message.messageId))
+              const directedAway = sourceMessages.filter((message) => isDirectedToOtherParticipants(message.text, store.getAgentNames?.() ?? []))
+              const currentRequests = submission.requests.flatMap((request) => request.kind === 'recheck' ? request.baseRequests : [request]).filter((request) => request.kind === 'message')
+              const hasQuotedTransfer = (sourceMessageId) => currentRequests.some((request) => isExplicitAgentDirection(request.message.text, store.getAgentNames?.() ?? []) && request.message.quotedMessage?.messageId === sourceMessageId)
+              if (directedAway.some((message) => !hasQuotedTransfer(message.messageId))) throw new Error('task_action_directed_to_other_participants')
+            }
           }
           return submission
         })
@@ -1457,7 +1464,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     },
     listAuthorizationRequests,
     getAuthorizationRequest,
-    ingest: (message) => {
+    ingest: (message, { retryDecisionFailed = false } = {}) => {
       if (runtimeClosing) return Promise.reject(new Error('resident_runtime_closed'))
       const inflightKey = `${message.groupId}\u0000${message.messageId}`
       const existing = inflightMessages.get(inflightKey)
@@ -1465,7 +1472,8 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       const operation = (async () => {
         const ingested = await store.ingest(message)
         const persisted = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
-        if (ingested.duplicate && ['steered', 'delivered', 'decision-failed', 'skipped'].includes(persisted?.agentDeliveryStatus)) return ingested
+        if (retryDecisionFailed && persisted?.agentDeliveryStatus !== 'decision-failed') throw new Error(`message_not_retryable:${message.messageId}`)
+        if (ingested.duplicate && ['steered', 'delivered', 'decision-failed', 'skipped'].includes(persisted?.agentDeliveryStatus) && !(retryDecisionFailed && persisted.agentDeliveryStatus === 'decision-failed')) return ingested
         const accepted = ingested.duplicate ? { ...ingested, duplicate: false, recovered: true, sequence: persisted.sequence } : ingested
         let handle
         let pending, submitted, recheckedSubmission
@@ -1515,6 +1523,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           decision = blockTaskDecisionForUnavailableMedia(decision, unavailableMedia)
           if (recheckedSubmission !== undefined) submitted.decision = decision
           const result = await serialize(message.groupId, async () => {
+            const groupAtCommit = store.getGroup(message.groupId)
             if ('reason' in decision) {
               await Promise.all(decisionRequests.map((request) => store.markMessageAgentDelivery({ groupId: message.groupId, messageId: request.messageId, status: 'delivered' })))
               return { ...accepted, decision, group: store.getGroup(message.groupId) }
@@ -1524,7 +1533,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
               const sourceMessageIds = action.sourceMessageIds
               if (new Set(sourceMessageIds).size !== sourceMessageIds.length) throw new Error('task_action_source_message_duplicate')
               const sourceMessageIdSet = new Set(sourceMessageIds)
-              const sourceMessages = (groupBeforeDecision?.messages ?? []).filter((source) => sourceMessageIdSet.has(source.messageId))
+              const sourceMessages = (groupAtCommit?.messages ?? []).filter((source) => sourceMessageIdSet.has(source.messageId))
               if (sourceMessages.length !== sourceMessageIds.length) throw new Error('task_action_source_message_invalid')
               const currentSource = [...sourceMessages].reverse().find((source) => source.senderName && source.senderOpenDingTalkId) ?? sourceMessages.at(-1)
               const trigger = { sourceMessageId: currentSource.messageId, ...(currentSource.senderName ? { requesterName: currentSource.senderName } : {}), ...(currentSource.senderOpenDingTalkId ? { requesterOpenDingTalkId: currentSource.senderOpenDingTalkId } : {}), ...(currentSource.occurredAt !== undefined ? { occurredAt: currentSource.occurredAt } : {}) }
@@ -1589,6 +1598,11 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       inflightMessages.set(inflightKey, operation)
       operation.finally(() => { if (inflightMessages.get(inflightKey) === operation) inflightMessages.delete(inflightKey) }).catch(() => undefined)
       return operation
+    },
+    retryDecisionFailedMessage({ groupId, messageId }) {
+      const message = store.getGroup(groupId)?.messages.find((item) => item.messageId === messageId)
+      if (message === undefined) throw new Error(`message_not_found:${messageId}`)
+      return this.ingest({ ...message, groupId }, { retryDecisionFailed: true })
     },
     async recoverPendingMessages() {
       const pending = store.listGroups().flatMap((group) => (group.messages ?? [])
@@ -1731,6 +1745,32 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (task.state !== 'completed') throw new Error(`task_not_completed:${taskId}`)
       if (task.archivedAt) return task
       return store.updateTask(taskId, (current) => ({ ...current, archivedAt: new Date().toISOString() }))
+    }),
+    cancelTask: ({ taskId, reason }) => serializeTasks(async () => {
+      const task = store.getTask(taskId)
+      if (task === undefined) throw new Error(`task_not_found:${taskId}`)
+      if (task.state === 'completed') throw new Error(`task_not_active:${taskId}`)
+      const normalizedReason = typeof reason === 'string' ? reason.trim() : ''
+      if (normalizedReason === '') throw new Error('task_cancel_reason_required')
+      const handle = leafHandles.get(taskId)
+      if (handle !== undefined) {
+        const goal = ctx.goals.get(handle.agent)
+        if (goal !== undefined && goal.phase !== 'complete') ctx.goals.complete(handle.agent, goalRef(goal))
+        await handle.dispose()
+        leafHandles.delete(taskId)
+        leafTaskBySession.delete(String(handle.agent.session.id))
+      }
+      const cancelled = await store.updateTask(taskId, (current) => ({
+        ...current,
+        state: 'completed',
+        completion: `已取消：${normalizedReason}`,
+        result: undefined,
+        waitingKind: undefined,
+        waitingReason: undefined,
+        archivedAt: new Date().toISOString(),
+      }))
+      await pumpTasks()
+      return cancelled
     }),
     renameTask: ({ taskId, title }) => serializeTasks(async () => {
       const task = store.getTask(taskId)

@@ -14,9 +14,11 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
     inspectEnvironment: async () => ({ dws: { installed: true }, skills: [] }),
     searchGroups: async (query) => ({ complete: true, groups: [{ groupId: 'g', name: query }] }),
     archiveTask: async ({ taskId }) => ({ taskId, state: 'completed', archivedAt: '2026-08-25T00:00:00.000Z' }),
+    cancelTask: async ({ taskId, reason }) => ({ taskId, state: 'completed', completion: `已取消：${reason}` }),
     reopenTask: async ({ taskId, context, objective }) => ({ taskId, state: 'running', context, objective }),
     decideAuthorization: async (value) => value,
     reissueAuthorization: async (value) => value,
+    retryDecisionFailedMessage: async (value) => ({ retried: true, ...value }),
     getDwsBridgeHealth: getDwsBridgeHealth ?? (() => ({ healthy: true, groups: [] })),
   }
   const server = createServer((request, response) => handleRequest(request, response, runtime, {
@@ -44,12 +46,16 @@ test('生产HTTP开放只读状态与明确的本机群配置接口，测试控�
   const archived = await fetch(`${baseUrl}/tasks/task-1/archive`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
   assert.equal(archived.status, 200)
   assert.equal((await archived.json()).archivedAt, '2026-08-25T00:00:00.000Z')
+  const cancelled = await fetch(`${baseUrl}/tasks/task-2/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason: '误建任务' }) })
+  assert.deepEqual(await cancelled.json(), { taskId: 'task-2', state: 'completed', completion: '已取消：误建任务' })
   const reopened = await fetch(`${baseUrl}/tasks/task-1/reopen`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ context: '继续修复', objective: '修复并部署 UAT2' }) })
   assert.deepEqual(await reopened.json(), { taskId: 'task-1', state: 'running', context: '继续修复', objective: '修复并部署 UAT2' })
   const approval = await fetch(`${baseUrl}/authorizations/blocker-1/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'approved', comment: '页面批准' }) })
   assert.deepEqual(await approval.json(), { requestId: 'blocker-1', decision: 'approved', comment: '页面批准', source: 'web' })
   const reissued = await fetch(`${baseUrl}/authorizations/blocker-1/reissue`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason: '迁移到统一授权审批' }) })
   assert.deepEqual(await reissued.json(), { requestId: 'blocker-1', reason: '迁移到统一授权审批' })
+  const retried = await fetch(`${baseUrl}/config/groups/${encodeURIComponent('cid/a')}/messages/${encodeURIComponent('msg+b')}/retry`, { method: 'POST' })
+  assert.deepEqual(await retried.json(), { retried: true, groupId: 'cid/a', messageId: 'msg+b' })
   assert.equal((await fetch(`${baseUrl}/test/tasks`, { method: 'POST', body: '{}' })).status, 404)
 }))
 

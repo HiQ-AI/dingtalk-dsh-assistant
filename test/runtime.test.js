@@ -95,6 +95,12 @@ function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false 
       tasks.push(task)
       return { created: true, task }
     },
+    async updateTask(taskId, transform) {
+      const index = tasks.findIndex((task) => task.taskId === taskId)
+      if (index < 0) throw new Error(`task_not_found:${taskId}`)
+      tasks[index] = transform(tasks[index])
+      return tasks[index]
+    },
     close: async () => undefined,
   }
   return { group, steered, followups, registeredTools, tasks, releaseIdle, waitForSteers, ctx, store, handle, taskCapacity }
@@ -303,6 +309,50 @@ test('一个Decision可把历史与当前消息多对多关联到不同Task', as
   await runtime.close()
 })
 
+test('明确@其他同事的消息不能建Task，后续引用并指向Agent后才允许转交', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'directed-other-participants-group' })
+  fixture.store.getAgentNames = () => ['小小鹏']
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const original = runtime.ingest({
+    groupId: fixture.group.groupId,
+    messageId: 'msg624ca5N0Mq3+36twQq+b7A==',
+    text: '[图片消息](mediaId=@lQLPJyFx1LlkTRfNBWjNC3qwS5c44-MgXl8Kat4grwTGAA)@李辰 @郑耀彬 只是计算了，没有改信息，为啥要提示这个呢？',
+    occurredAt: '2026-09-03T02:01:01.000Z',
+    senderName: '向春梅',
+  })
+  await fixture.waitForSteers(1)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  const originalRequestId = decisionRequestId(fixture.steered[0])
+  await assert.rejects(tool.execute({ submissions: [{ requestIds: [originalRequestId], decision: {
+    actions: [{ kind: 'new-task', title: '误建任务', objective: '排查计算提示', acceptanceCriteria: ['定位原因'], sourceMessageIds: ['msg624ca5N0Mq3+36twQq+b7A=='] }], reply: '',
+  } }] }, { agent: fixture.handle.agent }), /task_action_directed_to_other_participants/)
+  assert.equal(fixture.tasks.length, 0)
+
+  const transfer = runtime.ingest({
+    groupId: fixture.group.groupId,
+    messageId: 'm-transfer',
+    text: '@小小鹏 看下这个',
+    quotedMessage: { messageId: 'msg624ca5N0Mq3+36twQq+b7A==' },
+    occurredAt: '2026-09-03T02:02:01.000Z',
+    senderName: '向春梅',
+  })
+  await fixture.waitForSteers(2)
+  const transferRequestId = decisionRequestId(fixture.steered[1])
+  await tool.execute({ observedRequestIds: [originalRequestId, transferRequestId], submissions: [{ requestIds: [originalRequestId, transferRequestId], decision: {
+    actions: [{ kind: 'new-task', title: '排查计算提示', objective: '排查仅计算后出现未保存提示的原因', acceptanceCriteria: ['定位原因'], sourceMessageIds: ['msg624ca5N0Mq3+36twQq+b7A==', 'm-transfer'] }], reply: '',
+  } }] }, { agent: fixture.handle.agent })
+  await Promise.all([original, transfer])
+  assert.equal(fixture.tasks.length, 1)
+  assert.deepEqual(fixture.tasks[0].messageHistory.map((message) => message.messageId), ['msg624ca5N0Mq3+36twQq+b7A==', 'm-transfer'])
+  const cancelled = await runtime.cancelTask({ taskId: fixture.tasks[0].taskId, reason: '回归用误建任务' })
+  assert.equal(cancelled.state, 'completed')
+  assert.equal(cancelled.completion, '已取消：回归用误建任务')
+  assert.ok(cancelled.archivedAt)
+  assert.equal(cancelled.result, undefined)
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
 test('不影响当前回复的请求只观察不消费并在回复提交后继续处理', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'out-of-order-group' })
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
@@ -477,6 +527,40 @@ test('Decision可靠Outbox失败会明确失败并释放门禁且不重放Task�
   await tool.execute({ submissions: [{ requestIds: [secondRequestId], decision: { actions: [], reason: '后续消息正常处理' } }] }, { agent: fixture.handle.agent })
   await second
   assert.equal(fixture.tasks.length, 1)
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('显式重试会让无副作用的decision-failed消息重新进入判断且拒绝重试已完成消息', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'decision-retry-group' })
+  const createTask = fixture.store.createTask
+  let failCreate = true
+  fixture.store.createTask = async (value) => {
+    if (failCreate) { failCreate = false; throw new Error('task_create_failed') }
+    return createTask(value)
+  }
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '重新判断这条消息', occurredAt: '2026-09-02T01:00:00Z' })
+  await fixture.waitForSteers(1)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  const firstRequestId = decisionRequestId(fixture.steered[0])
+  const firstSubmission = tool.execute({
+    submissions: [{ requestIds: [firstRequestId], decision: { actions: [{ kind: 'new-task', title: '首次创建失败', objective: '触发无副作用的提交失败', acceptanceCriteria: ['不得残留任务'], sourceMessageIds: ['m1'] }], reply: '' } }],
+  }, { agent: fixture.handle.agent })
+  assert.equal((await firstSubmission).status, 'accepted')
+  await assert.rejects(first, /task_create_failed/)
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-failed')
+  assert.equal(fixture.tasks.length, 0)
+
+  await new Promise((resolve) => setImmediate(resolve))
+  const retried = runtime.retryDecisionFailedMessage({ groupId: fixture.group.groupId, messageId: 'm1' })
+  await fixture.waitForSteers(2)
+  const retryRequestId = decisionRequestId(fixture.steered[1])
+  await tool.execute({ submissions: [{ requestIds: [retryRequestId], decision: { actions: [], reason: '复核后无需执行' } }] }, { agent: fixture.handle.agent })
+  const result = await retried
+  assert.equal(result.recovered, true)
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'delivered')
+  await assert.rejects(runtime.retryDecisionFailedMessage({ groupId: fixture.group.groupId, messageId: 'm1' }), /message_not_retryable:m1/)
   fixture.releaseIdle()
   await runtime.close()
 })
@@ -931,6 +1015,8 @@ test('同群回复门禁不会阻塞其他群的Steer与Decision', async () => {
 
 test('关联复核可合并影响回复的新Steer并由外层Outbox统一提交', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'recheck-combined-group' })
+  // 真实持久 Store 返回新快照；可变测试对象会掩盖跨复核等待的过期读取。
+  fixture.store.getGroup = () => structuredClone(fixture.group)
   fixture.tasks.push({ taskId: 'task-existing', groupId: fixture.group.groupId, state: 'completed' })
   fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'image-message', text: '[图片消息]', occurredAt: '2026-08-28T01:00:00Z', sequence: 1, agentDeliveryStatus: 'delivered' })
   fixture.group.nextSequence = 2
@@ -947,7 +1033,7 @@ test('关联复核可合并影响回复的新Steer并由外层Outbox统一提交
   const secondRequestId = decisionRequestId(fixture.steered[1])
   const submitted = await tool.execute({
     observedRequestIds: [secondRequestId],
-    submissions: [{ requestIds: [recheckRequestId, secondRequestId], decision: { actions: [], reply: '已结合复核期间的新补充。' } }],
+    submissions: [{ requestIds: [recheckRequestId, secondRequestId], decision: { actions: [{ kind: 'new-task', title: '复核合并任务', objective: '结合图片说明及新补充', acceptanceCriteria: ['包含两条来源'], sourceMessageIds: ['m1', 'm2'] }], reply: '已结合复核期间的新补充。' } }],
   }, { agent: fixture.handle.agent })
   assert.deepEqual(submitted, acceptedSubmission([recheckRequestId, secondRequestId]))
   const [firstResult, secondResult] = await Promise.all([first, second])
@@ -955,6 +1041,8 @@ test('关联复核可合并影响回复的新Steer并由外层Outbox统一提交
   assert.equal(secondResult.decisionOwnerRequestId, recheckRequestId)
   assert.deepEqual(fixture.group.messages.slice(1).map((message) => message.agentDeliveryStatus), ['delivered', 'delivered'])
   assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['已结合复核期间的新补充。'])
+  assert.equal(fixture.tasks.length, 2)
+  assert.deepEqual(fixture.tasks[1].messageHistory.map((item) => item.messageId), ['m1', 'm2'])
   fixture.releaseIdle()
   await runtime.close()
 })

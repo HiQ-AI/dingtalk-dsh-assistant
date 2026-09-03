@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from '../packages/dingtalk-dsh-assistant/decision.js'
+import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, isDirectedToOtherParticipants, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from '../packages/dingtalk-dsh-assistant/decision.js'
 
 test('群决策一次结构化输出可包含多个任务动作', () => {
   assert.deepEqual(parseGroupDecision('{"actions":[],"reply":"ok"}').actions, [])
@@ -59,6 +59,13 @@ test('显式任务指向识别配置名称、别名、DWS登录人或cc指令', 
   assert.equal(isExplicitAgentDirection('@当前登录人(当前登录人) 帮忙看看', names), true)
   assert.equal(isExplicitAgentDirection('cc: 请处理', []), true)
   assert.equal(isExplicitAgentDirection('这个编辑器问题需要有人排查', names), false)
+})
+
+test('图片mediaId不算@对象且明确询问其他同事不算Agent授权', () => {
+  const message = '[图片消息](mediaId=@lQLPJyFx1LlkTRfNBWjNC3qwS5c44-MgXl8Kat4grwTGAA)@李辰 @郑耀彬 只是计算了，没有改信息，为啥要提示这个呢？'
+  assert.equal(isDirectedToOtherParticipants(message, ['小小鹏']), true)
+  assert.equal(isDirectedToOtherParticipants('@小小鹏 看下这个', ['小小鹏']), false)
+  assert.equal(isDirectedToOtherParticipants('[图片消息](mediaId=@asset-id) 这是截图', ['小小鹏']), false)
 })
 
 test('叶子任务不得绕过Runtime直接发送群通知', async () => {

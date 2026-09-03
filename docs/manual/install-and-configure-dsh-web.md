@@ -388,6 +388,10 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:18998/state/dws-bridge' | ConvertTo-Jso
 - 对方明确确认了此前“这个事项是否需要我处理？”的询问；
 - 已有对应任务，当前消息是在补充信息、调整目标或要求继续处理。
 
+消息明确 `@` 其他同事且未指向 Agent 时，视为正在询问这些同事，不得创建任务或任务提议。只有后续消息明确指向 Agent、并直接引用该原消息时，才构成可验证的转交授权；Runtime 会在结构化判断提交时执行这项硬门禁，不能仅依赖模型提示词。
+
+若历史误判已经创建运行中 Task，可调用 `POST /tasks/{taskId}/cancel` 并提交非空 `reason`。Runtime 会先停止对应叶子 Agent，再把 Task 标记为已取消并归档；取消不会生成完成通知，避免继续干扰原群。
+
 未明确要求处理，但判断事项有必要形成任务时，先在群里询问：
 
 > 这个事项是否需要我处理？
@@ -489,6 +493,8 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 先读取 `/health` 和 `/state/dws-bridge`。若任一已配置群的 `listener.state` 不是 `ready`，个人介入回复入口 `humanReplies.state` 不是 `ready`，或出现 `lastError`、`reconnect.nextRetryAt`，先查看 DSH 启动日志中的对应错误，并确认该 DWS profile 的登录仍然有效；bridge 会自动重连。`lastExitAt` 只说明曾经退出，仍需结合当前 `state` 和 `healthy` 判断。若 `backfill.state` 不是 `ok`，根据其 `lastError` 排查 DWS 范围读取。随后读取 `/state/groups`，确认目标群仍已订阅。待群 listener、个人介入回复 listener 和 backfill 全部恢复后，在可控群发送一条新消息，并回读收信箱或 resident Session；人工介入链路还需创建可控阻塞事项并在本人单聊引用回复。诊断接口的恢复不能代替业务验证。
 
 ### 群搜索失败
+
+关联复核期间可继续接收新消息。Task 动作提交时会在群串行区内重新读取当前持久消息快照，避免将复核期间进入的真实来源误判为不存在。`decision-failed` 仍不自动重放：历史失败须先核对 Task 与 Outbox 是否已有副作用，再调用 `POST /config/groups/{groupId}/messages/{messageId}/retry` 精确重试；该接口只接受当前仍为 `decision-failed` 的消息，并重新进入 Runtime 判断，不能直接改为 `delivered`。
 
 确认 DWS 登录有效，搜索词不少于两个字；如果配置了 `dws.profile`，确认登录的是同一个 profile。
 
