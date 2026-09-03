@@ -85,14 +85,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (messageRetry) {
     const groupId = decodeURIComponent(messageRetry[1])
     const messageId = decodeURIComponent(messageRetry[2])
-    const message = store.getGroup(groupId)?.messages.find((item) => item.messageId === messageId)
-    if (message === undefined) return send(response, 404, { error: `message_not_found:${messageId}` })
-    const result = await store.ingest({ ...message, groupId })
-    const current = store.getGroup(groupId)?.messages.find((item) => item.messageId === messageId)
-    if (current?.agentDeliveryStatus === 'delivered' && current.agentDeliveryError) {
-      await store.markMessageAgentDelivery({ groupId, messageId, status: 'delivered' })
-    }
-    return send(response, 200, result)
+    return send(response, 200, await store.retryDecisionFailedMessage({ groupId, messageId }))
   }
   if (request.method === 'POST' && url.pathname.startsWith('/config/groups/') && url.pathname.endsWith('/history/hydrate')) {
     const groupId = decodeURIComponent(url.pathname.slice('/config/groups/'.length, -'/history/hydrate'.length))

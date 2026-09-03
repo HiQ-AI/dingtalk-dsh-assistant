@@ -481,6 +481,40 @@ test('Decision可靠Outbox失败会明确失败并释放门禁且不重放Task�
   await runtime.close()
 })
 
+test('显式重试会让无副作用的decision-failed消息重新进入判断且拒绝重试已完成消息', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'decision-retry-group' })
+  const createTask = fixture.store.createTask
+  let failCreate = true
+  fixture.store.createTask = async (value) => {
+    if (failCreate) { failCreate = false; throw new Error('task_create_failed') }
+    return createTask(value)
+  }
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '重新判断这条消息', occurredAt: '2026-09-02T01:00:00Z' })
+  await fixture.waitForSteers(1)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  const firstRequestId = decisionRequestId(fixture.steered[0])
+  const firstSubmission = tool.execute({
+    submissions: [{ requestIds: [firstRequestId], decision: { actions: [{ kind: 'new-task', title: '首次创建失败', objective: '触发无副作用的提交失败', acceptanceCriteria: ['不得残留任务'], sourceMessageIds: ['m1'] }], reply: '' } }],
+  }, { agent: fixture.handle.agent })
+  assert.equal((await firstSubmission).status, 'accepted')
+  await assert.rejects(first, /task_create_failed/)
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-failed')
+  assert.equal(fixture.tasks.length, 0)
+
+  await new Promise((resolve) => setImmediate(resolve))
+  const retried = runtime.retryDecisionFailedMessage({ groupId: fixture.group.groupId, messageId: 'm1' })
+  await fixture.waitForSteers(2)
+  const retryRequestId = decisionRequestId(fixture.steered[1])
+  await tool.execute({ submissions: [{ requestIds: [retryRequestId], decision: { actions: [], reason: '复核后无需执行' } }] }, { agent: fixture.handle.agent })
+  const result = await retried
+  assert.equal(result.recovered, true)
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'delivered')
+  await assert.rejects(runtime.retryDecisionFailedMessage({ groupId: fixture.group.groupId, messageId: 'm1' }), /message_not_retryable:m1/)
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
 test('Outbox已落库后监听器失败不会反向否定Decision提交', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'outbox-listener-failure-group' })
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))

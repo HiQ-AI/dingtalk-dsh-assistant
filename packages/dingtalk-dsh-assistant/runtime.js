@@ -1457,7 +1457,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     },
     listAuthorizationRequests,
     getAuthorizationRequest,
-    ingest: (message) => {
+    ingest: (message, { retryDecisionFailed = false } = {}) => {
       if (runtimeClosing) return Promise.reject(new Error('resident_runtime_closed'))
       const inflightKey = `${message.groupId}\u0000${message.messageId}`
       const existing = inflightMessages.get(inflightKey)
@@ -1465,7 +1465,8 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       const operation = (async () => {
         const ingested = await store.ingest(message)
         const persisted = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
-        if (ingested.duplicate && ['steered', 'delivered', 'decision-failed', 'skipped'].includes(persisted?.agentDeliveryStatus)) return ingested
+        if (retryDecisionFailed && persisted?.agentDeliveryStatus !== 'decision-failed') throw new Error(`message_not_retryable:${message.messageId}`)
+        if (ingested.duplicate && ['steered', 'delivered', 'decision-failed', 'skipped'].includes(persisted?.agentDeliveryStatus) && !(retryDecisionFailed && persisted.agentDeliveryStatus === 'decision-failed')) return ingested
         const accepted = ingested.duplicate ? { ...ingested, duplicate: false, recovered: true, sequence: persisted.sequence } : ingested
         let handle
         let pending, submitted, recheckedSubmission
@@ -1590,6 +1591,11 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       inflightMessages.set(inflightKey, operation)
       operation.finally(() => { if (inflightMessages.get(inflightKey) === operation) inflightMessages.delete(inflightKey) }).catch(() => undefined)
       return operation
+    },
+    retryDecisionFailedMessage({ groupId, messageId }) {
+      const message = store.getGroup(groupId)?.messages.find((item) => item.messageId === messageId)
+      if (message === undefined) throw new Error(`message_not_found:${messageId}`)
+      return this.ingest({ ...message, groupId }, { retryDecisionFailed: true })
     },
     async recoverPendingMessages() {
       const pending = store.listGroups().flatMap((group) => (group.messages ?? [])

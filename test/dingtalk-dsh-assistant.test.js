@@ -70,7 +70,7 @@ test('任务上下文允许静默追加且已插话消息不会由重复事件�
 test('生产HTTP提供精确的单消息重试入口', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/http.js', import.meta.url), 'utf8')
   assert.match(source, /\/messages\\\/\(\[\^\/\]\+\)\\\/retry/)
-  assert.match(source, /await store\.ingest\(\{ \.\.\.message, groupId \}\)/)
+  assert.match(source, /await store\.retryDecisionFailedMessage\(\{ groupId, messageId \}\)/)
 })
 
 test('叶子会话使用DSH原生descriptor且恢复旧会话时补齐', async () => {
