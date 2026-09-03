@@ -54,7 +54,7 @@ const activityDetail = (event) => {
 }
 
 export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000 } = {}) {
-  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), pendingGroupDecisions = new Map(), pendingGroupReplies = new Map(), activeGroupSubmissions = new Set(), activeGroupReplies = new Set(), activeGroupResidentOperations = new Set(), groupReplyAdmissionBarriers = new Map(), groupResidentTransitionBarriers = new Map()
+  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), pendingGroupDecisions = new Map(), pendingGroupReplies = new Map(), activeGroupSubmissions = new Set(), activeGroupReplies = new Set(), activeGroupResidentOperations = new Set(), groupReplyAdmissionBarriers = new Map(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), pendingLeafDisposals = new Set()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
@@ -143,7 +143,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 
 \`[GROUP_DECISION_RECHECK]\` 是已有判断的内部复核。它可以单独提交，也可以与确实影响本次复核 Decision 的普通消息请求放进同一 submission；不要为了规避回复重生成而把相关消息机械拆开。
 
-Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"actions":[],"reason":"原因"}\`，涉及任务时使用 \`{"actions":[...],"reply":"最多一条群回复，可为空"}\`。Decision 顶层不允许 kind 字段。一个 Decision 可以同时对应多个 Task，\`actions\` 中每项可为 task-proposal、new-task、task-context 或 task-reopen；不得为了只返回一个动作而遗漏其他相关 Task。每个任务动作必须通过 \`sourceMessageIds\` 列出本动作实际关联的全部消息 ID：既可引用本次正在处理的消息，也可引用本群会话中此前已收到的历史消息；必须包含形成当前动作的全部相关消息，且至少一条来自本次正在处理的消息。同一消息可关联多个 Task，不同 Task 也可选择不同消息集合，不得遗漏此前相关消息，也不得把无关消息机械塞入每个 Task。群回复统一放在顶层 \`reply\`，不得给每个动作分别回复。
+Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"actions":[],"reason":"原因"}\`，涉及任务时使用 \`{"actions":[...],"reply":"最多一条群回复，可为空"}\`。Decision 顶层不允许 kind 字段。一个 Decision 可以同时对应多个 Task，\`actions\` 中每项可为 task-proposal、new-task、task-context、task-reopen 或 task-cancel；不得为了只返回一个动作而遗漏其他相关 Task。每个任务动作必须通过 \`sourceMessageIds\` 列出本动作实际关联的全部消息 ID：既可引用本次正在处理的消息，也可引用本群会话中此前已收到的历史消息；必须包含形成当前动作的全部相关消息，且至少一条来自本次正在处理的消息。同一消息可关联多个 Task，不同 Task 也可选择不同消息集合，不得遗漏此前相关消息，也不得把无关消息机械塞入每个 Task。群回复统一放在顶层 \`reply\`，不得给每个动作分别回复。
 
 每次收到新消息时，检查其内容是否与当前 Session 上下文中的近期回复冲突；如有冲突，及时撤回本主会话发送的错误消息并订正。不得撤回真人或其他系统消息。
 
@@ -163,7 +163,9 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
 
 ${quotedMessageRecoveryPolicy('resident')}
 
-状态边界必须严格遵守：running 或 waiting（包括阻塞中）的 Task 收到新增信息时只能返回 task-context，继续同一执行轮次；不得返回 task-reopen，不得清空 blocker 或增加轮次。只有 completed Task（包括已归档展示）才允许 task-reopen 并初始化下一执行轮次。
+明确拥有任务授权的群成员说“不要处理、不用做、停止、取消、忽略刚才”等，且结合上下文可以唯一关联到本群 queued、running 或 waiting Task 时，必须返回 task-cancel，reason 忠实保留撤销含义；不得把撤销消息作为 task-context 继续发送给叶子。task-cancel 是撤销执行授权并终止整个 Task，只能用于明确停止原任务，不能从模糊讨论、普通目标收窄或暂缓某一步推断。无法唯一确认目标 Task 时先核对上下文，不得批量取消。
+
+状态边界必须严格遵守：除上述明确撤销使用 task-cancel 外，running 或 waiting（包括阻塞中）的 Task 收到新增信息时只能返回 task-context，继续同一执行轮次；不得返回 task-reopen，不得清空 blocker 或增加轮次。只有 completed Task（包括已归档展示）才允许 task-reopen 并初始化下一执行轮次。
 
 同事或其 AI 助理发送的回复、任务回执和状态通知都是正常群消息，必须进入本协议由你结合引用消息、上下文和任务索引判断，不得按固定文案或发送者在模型外预先过滤。若消息只是对已完成通知的自动回执，没有提出新事实、问题、纠正或执行要求，应选择 ignore；只有确实需要向群里补充新信息时才选择 answer，不要回复“无需重复创建任务”之类没有新增价值的确认。
 
@@ -173,7 +175,7 @@ ${quotedMessageRecoveryPolicy('resident')}
 
 过程确认和信息确认必须简短，只确认已收到、已关联 Task 或将继续处理，不得复述、改写或逐项罗列对方提供的信息，不得虚构进度、结果或完成时间。给活动 Task 补充 IP、库名、schema、文件、截图、字段范围或其他执行线索时，应返回简短确认；叶子已在执行且当前消息作为 task-context 转交时，也应简短确认会结合补充信息继续处理。
 
-以下情况必须 reply 为空或选择 ignore：同事之间的讨论、确认、纠正或短句接龙且未明确要求 Agent 回答，也与本 Agent 的 Task 无关；没有新增信息，只是复述已有结论或重复确认任务仍在进行；仅因消息提及当前 DWS 登录人姓名。
+task-cancel 成功时只需用一句短句确认任务已停止，不得继续承诺处理。以下情况必须 reply 为空或选择 ignore：同事之间的讨论、确认、纠正或短句接龙且未明确要求 Agent 回答，也与本 Agent 的 Task 无关；没有新增信息，只是复述已有结论或重复确认任务仍在进行；仅因消息提及当前 DWS 登录人姓名。
 
 同一事项短时间内连续出现的文本、文件、图片和补充说明属于一个信息组。文件或图片前后的短句不得分别追问；信息仍可能继续补充时先静默关联，只有信息组稳定后仍存在真正阻塞，才能一次性询问。同一 Task 在上一条群通知之后没有产生新结果、真实阻塞或必要订正时，不得再次发状态通知。
 
@@ -391,6 +393,12 @@ ${quotedMessageRecoveryPolicy('resident')}
             if (new Set(action.sourceMessageIds).size !== action.sourceMessageIds.length) throw new Error('task_action_source_message_duplicate')
             if (action.sourceMessageIds.some((messageId) => !persistedMessageIds.has(messageId))) throw new Error('task_action_source_message_invalid')
             if (!action.sourceMessageIds.some((messageId) => currentMessageIds.has(messageId))) throw new Error('task_action_current_source_message_required')
+            if (action.kind === 'task-cancel') {
+              if (action.reason.trim() === '') throw new Error('task_cancel_reason_required')
+              const target = store.getTask(action.taskId)
+              if (target === undefined || target.groupId !== groupId) throw new Error(`task_cancel_target_invalid:${action.taskId}`)
+              if (target.state === 'completed') throw new Error(`task_not_active:${action.taskId}`)
+            }
             if (action.kind === 'new-task' || action.kind === 'task-proposal') {
               const sourceMessages = (store.getGroup(groupId)?.messages ?? []).filter((message) => action.sourceMessageIds.includes(message.messageId))
               const directedAway = sourceMessages.filter((message) => isDirectedToOtherParticipants(message.text, store.getAgentNames?.() ?? []))
@@ -713,6 +721,59 @@ ${quotedMessageRecoveryPolicy('resident')}
     return appended.length === 0 ? current.messageHistory : [...(current.messageHistory ?? []), ...appended]
   }
 
+  function signalTaskCancellation(taskId) {
+    cancellingTasks.add(taskId)
+    const handle = leafHandles.get(taskId)
+    handle?.agent.cancel({ kind: 'user' })
+    return handle
+  }
+
+  function disposeCancelledLeaf(task, handle) {
+    const disposal = Promise.resolve().then(() => handle.dispose()).catch((error) => {
+      recoveryIssues.push({
+        groupId: task.groupId, taskId: task.taskId, kind: 'task-cancel-dispose',
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+    pendingLeafDisposals.add(disposal)
+    void disposal.finally(() => pendingLeafDisposals.delete(disposal))
+  }
+
+  async function cancelTaskInternal(taskId, normalizedReason, sourceMessages = []) {
+    try {
+      const task = store.getTask(taskId)
+      if (task === undefined) throw new Error(`task_not_found:${taskId}`)
+      if (task.state === 'completed') throw new Error(`task_not_active:${taskId}`)
+      const handle = signalTaskCancellation(taskId)
+      if (handle !== undefined) {
+        const goal = ctx.goals.get(handle.agent)
+        if (goal !== undefined && goal.phase !== 'complete') ctx.goals.complete(handle.agent, goalRef(goal))
+      }
+      const cancelled = await store.updateTask(taskId, (current) => {
+        const messageHistory = mergeTaskMessageHistory(current, sourceMessages, current.runSequence ?? 1)
+        return {
+          ...current,
+          ...(messageHistory ? { messageHistory } : {}),
+          state: 'completed',
+          completion: `已取消：${normalizedReason}`,
+          result: undefined,
+          waitingKind: undefined,
+          waitingReason: undefined,
+          archivedAt: new Date().toISOString(),
+        }
+      })
+      if (handle !== undefined) {
+        if (leafHandles.get(taskId) === handle) leafHandles.delete(taskId)
+        leafTaskBySession.delete(String(handle.agent.session.id))
+        disposeCancelledLeaf(cancelled, handle)
+      }
+      await pumpTasks()
+      return cancelled
+    } finally {
+      cancellingTasks.delete(taskId)
+    }
+  }
+
   function taskNotificationMessages(task) {
     if ((task.messageHistory ?? []).length > 0) return task.messageHistory
     const group = store.getGroup(task.groupId)
@@ -826,6 +887,7 @@ ${quotedMessageRecoveryPolicy('resident')}
   }
   async function submitTaskResultInternal(taskId, value) {
     const result = parseTaskResult(value)
+    if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
     const task = store.getTask(taskId)
     if (task === undefined || task.state === 'queued' || task.state === 'completed') throw new Error(`task_not_active:${taskId}`)
     const handle = leafHandles.get(taskId)
@@ -883,12 +945,14 @@ ${quotedMessageRecoveryPolicy('resident')}
   }
   async function submitTaskResult(taskId, value) {
     const result = parseTaskResult(value)
+    if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
     if (result.status !== 'completed') {
       const waiting = await serializeTasks(() => submitTaskResultInternal(taskId, result))
       if (result.waitingKind === 'information') await withoutInitiator(() => coordinateTaskResult(waiting, result))
       return waiting
     }
     const prepared = await serializeTasks(async () => {
+      if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
       const task = store.getTask(taskId)
       if (task === undefined || task.state === 'queued' || task.state === 'completed') throw new Error(`task_not_active:${taskId}`)
       const handle = leafHandles.get(taskId)
@@ -907,6 +971,7 @@ ${quotedMessageRecoveryPolicy('resident')}
       throw new Error(`task_result_objective_not_covered:${taskId}:${review.reason}`)
     }
     const completed = await serializeTasks(async () => {
+      if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
       const current = store.getTask(taskId)
       if (current === undefined || current.state === 'queued' || current.state === 'completed') throw new Error(`task_not_active:${taskId}`)
       if (current.runSequence !== prepared.task.runSequence || current.objective !== prepared.task.objective || current.checkpoints?.at(-1)?.checkpointId !== prepared.lastCheckpointId) throw new Error(`task_result_context_changed:${taskId}`)
@@ -925,7 +990,9 @@ ${quotedMessageRecoveryPolicy('resident')}
   }
   async function submitTaskCheckpointInternal(taskId, value) {
     const checkpoint = parseTaskCheckpoint(value)
+    if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
     const { submitted, reviewTask } = await serializeTasks(async () => {
+      if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
       const task = store.getTask(taskId)
       if (task === undefined || task.state !== 'running') throw new Error(`task_not_running:${taskId}`)
       if (!leafHandles.has(taskId)) throw new Error(`task_leaf_not_active:${taskId}`)
@@ -946,6 +1013,7 @@ ${quotedMessageRecoveryPolicy('resident')}
     })
     const review = await withoutInitiator(() => reviewTaskCheckpoint(reviewTask, checkpoint))
     await serializeTasks(async () => {
+      if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
       const current = store.getTask(taskId)
       if (current?.runSequence !== reviewTask.runSequence) throw new Error(`task_checkpoint_run_changed:${taskId}`)
       await store.updateTask(taskId, (task) => ({
@@ -1363,6 +1431,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     return store.getTask(queued.taskId)
   }
   async function appendTaskContextInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks, sourceMessages = []) {
+    if (cancellingTasks.has(task.taskId)) throw new Error(`task_cancel_pending:${task.taskId}`)
     if (task.state === 'completed') return reopenCompletedTaskInternal(task, context, trigger, objective, acceptanceCriteria, stageTasks, sourceMessages)
     const previousObjective = task.objective
     const previousAcceptance = JSON.stringify(task.acceptanceCriteria ?? [task.objective])
@@ -1391,6 +1460,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     return task
   }
   async function followupTaskInternal(task, text) {
+    if (cancellingTasks.has(task.taskId)) throw new Error(`task_cancel_pending:${task.taskId}`)
     const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
     handle.agent.steer(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'coordinator' } }))
     return { task, accepted: true }
@@ -1562,6 +1632,14 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
                 task = store.getTask(action.taskId)
                 if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_reopen_target_invalid:${action.taskId}`)
                 task = await serializeTasks(() => reopenCompletedTaskInternal(task, sourceEnvelope, trigger, action.objective, action.acceptanceCriteria, action.stageTasks, sourceMessages))
+              } else if (action.kind === 'task-cancel') {
+                task = store.getTask(action.taskId)
+                if (task === undefined || task.groupId !== message.groupId) throw new Error(`task_cancel_target_invalid:${action.taskId}`)
+                if (task.state === 'completed') throw new Error(`task_not_active:${action.taskId}`)
+                const reason = action.reason.trim()
+                if (reason === '') throw new Error('task_cancel_reason_required')
+                signalTaskCancellation(task.taskId)
+                task = await serializeTasks(() => cancelTaskInternal(task.taskId, reason, sourceMessages))
               }
               if (task !== undefined) tasks.push(task)
             }
@@ -1771,32 +1849,15 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (task.archivedAt) return task
       return store.updateTask(taskId, (current) => ({ ...current, archivedAt: new Date().toISOString() }))
     }),
-    cancelTask: ({ taskId, reason }) => serializeTasks(async () => {
+    cancelTask: async ({ taskId, reason }) => {
       const task = store.getTask(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
       if (task.state === 'completed') throw new Error(`task_not_active:${taskId}`)
       const normalizedReason = typeof reason === 'string' ? reason.trim() : ''
       if (normalizedReason === '') throw new Error('task_cancel_reason_required')
-      const handle = leafHandles.get(taskId)
-      if (handle !== undefined) {
-        const goal = ctx.goals.get(handle.agent)
-        if (goal !== undefined && goal.phase !== 'complete') ctx.goals.complete(handle.agent, goalRef(goal))
-        await handle.dispose()
-        leafHandles.delete(taskId)
-        leafTaskBySession.delete(String(handle.agent.session.id))
-      }
-      const cancelled = await store.updateTask(taskId, (current) => ({
-        ...current,
-        state: 'completed',
-        completion: `已取消：${normalizedReason}`,
-        result: undefined,
-        waitingKind: undefined,
-        waitingReason: undefined,
-        archivedAt: new Date().toISOString(),
-      }))
-      await pumpTasks()
-      return cancelled
-    }),
+      signalTaskCancellation(taskId)
+      return serializeTasks(() => cancelTaskInternal(taskId, normalizedReason))
+    },
     renameTask: ({ taskId, title }) => serializeTasks(async () => {
       const task = store.getTask(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
@@ -1967,6 +2028,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         const all = [...leafHandles.values(), ...residentHandles.values()]
         await ctx.subagents.drainContinuableDescendants(all.map((handle) => handle.agent))
         await Promise.all(all.map((handle) => handle.dispose()))
+        await Promise.allSettled([...pendingLeafDisposals])
         leafHandles.clear(); residentHandles.clear(); leafTaskBySession.clear(); await activityTail; await store.close()
       })
       return closePromise

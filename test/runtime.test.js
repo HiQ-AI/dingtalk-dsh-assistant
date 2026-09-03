@@ -25,6 +25,9 @@ test('Inbox 默认零延迟 steer，回复提交门禁不退化为定时聚合',
   assert.match(source, /收到 TASK_OBJECTIVE_REVISED 后，必须根据修订后的完整目标重新提交 plan-confirmed/)
   assert.match(source, /顶层不允许 kind 字段/)
   assert.match(source, /忽略为 [^\r\n]*\{\"actions\":\[\],\"reason\":\"原因\"\}/)
+  assert.match(source, /task-proposal、new-task、task-context、task-reopen 或 task-cancel/u)
+  assert.match(source, /必须返回 task-cancel[\s\S]*不得把撤销消息作为 task-context 继续发送给叶子/u)
+  assert.match(source, /handle\?\.agent\.cancel\(\{ kind: 'user' \}\)/u)
   assert.match(source, /const submitted = await pending\.promise/)
   assert.match(source, /agentCtx\.tools\.restrict\(\{ deny: \['get_goal', 'create_goal', 'update_goal'\] \}\)/)
   assert.match(source, /name: 'tool:goal', order: 114, text: ''/)
@@ -33,10 +36,13 @@ test('Inbox 默认零延迟 steer，回复提交门禁不退化为定时聚合',
 function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false } = {}) {
   const group = { groupId: 'steer-group', residentSessionId: 'session-steer', residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }
   group.groupId = groupId
-  const steered = [], rechecks = [], followups = [], registeredTools = [], tasks = []
+  const steered = [], rechecks = [], followups = [], registeredTools = [], leafTools = [], leafCancelCalls = [], tasks = [], goals = new Map()
   let releaseIdle, resolveSteerCount
+  let leafHandle, releaseLeafDispose, markLeafDisposeStarted
   let targetSteerCount = 0
   const idle = new Promise((resolve) => { releaseIdle = resolve })
+  const leafDisposeGate = new Promise((resolve) => { releaseLeafDispose = resolve })
+  const leafDisposeStarted = new Promise((resolve) => { markLeafDisposeStarted = resolve })
   const waitForSteers = (count) => {
     targetSteerCount = count
     if (steered.length >= count) return Promise.resolve()
@@ -65,9 +71,30 @@ function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false 
   const agentCtx = { on: () => () => undefined, tools: { register: (tool) => registeredTools.push(tool), restrict: () => undefined }, systemPrompt: { section: () => undefined } }
   const ctx = {
     agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
-    agents: { async resume(options) { await options.setup(agentCtx); return handle } },
+    agents: {
+      async resume(options) { await options.setup(agentCtx); return handle },
+      async create(options) {
+        if (!taskCapacity) throw new Error('fixture_task_capacity_disabled')
+        const leafSession = { id: String(options.sessionId), events: [{ type: 'subagent/descriptor' }], meta: { seedLength: 0 }, append() {} }
+        const leafAgent = {
+          session: leafSession, status: 'running',
+          cancel(cause, cancelOptions) { leafCancelCalls.push({ cause, options: cancelOptions }) },
+          steer() {},
+          async whenIdle() {},
+        }
+        leafHandle = { agent: leafAgent, async dispose() { markLeafDisposeStarted(); await leafDisposeGate } }
+        const leafCtx = { on: () => () => undefined, tools: { register: (tool) => leafTools.push(tool), restrict: () => undefined }, systemPrompt: { section: () => undefined } }
+        await options.setup(leafCtx)
+        return leafHandle
+      },
+    },
     subagents: { drainContinuableDescendants: async () => undefined },
-    agentPresets: { mount: async (_ctx, id) => ({ id }), serviceFor: () => ({ set: () => undefined }) },
+    goals: {
+      get: (target) => goals.get(target),
+      create(target, options) { goals.set(target, { id: `goal-${target.session.id}`, revision: 1, phase: 'active', activation: 'armed', roundsStarted: 0, maxGoalRounds: options.maxGoalRounds }) },
+      complete(target) { const goal = goals.get(target); goals.set(target, { ...goal, revision: goal.revision + 1, phase: 'complete', activation: 'disarmed' }) },
+    },
+    agentPresets: { mount: async (_ctx, id) => ({ id }), composeFrom: () => 'standard', serviceFor: () => ({ set: () => undefined }) },
   }
   const store = {
     getGroup: (groupId) => groupId === group.groupId ? group : undefined,
@@ -107,7 +134,10 @@ function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false 
     },
     close: async () => undefined,
   }
-  return { group, steered, rechecks, followups, registeredTools, tasks, releaseIdle, waitForSteers, ctx, store, handle, taskCapacity }
+  return {
+    group, steered, rechecks, followups, registeredTools, leafTools, leafCancelCalls, tasks, releaseIdle, waitForSteers, ctx, store, handle,
+    getLeafHandle: () => leafHandle, releaseLeafDispose, waitForLeafDisposeStarted: () => leafDisposeStarted,
+  }
 }
 
 const decisionRequestId = (message) => message.content[0].text.match(/^判断请求 ID：([^\r\n]+)$/mu)?.[1]
@@ -353,6 +383,58 @@ test('明确@其他同事的消息不能建Task，后续引用并指向Agent后�
   assert.equal(cancelled.completion, '已取消：回归用误建任务')
   assert.ok(cancelled.archivedAt)
   assert.equal(cancelled.result, undefined)
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('群消息撤销立即中断误建叶子且不等待Task串行队列或dispose', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'fast-cancel-group', taskCapacity: true })
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 1, supervisorIntervalMs: 0 }))
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+
+  const createIngest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-create', text: 'cc: 帮忙处理这个', occurredAt: '2026-09-03T09:00:00Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
+  await fixture.waitForSteers(1)
+  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [{ kind: 'new-task', title: '误建任务', objective: '处理不应执行的事项', acceptanceCriteria: ['完成处理'], sourceMessageIds: ['m-create'] }], reply: '' } }] }, { agent: fixture.handle.agent })
+  await createIngest
+  const task = fixture.tasks[0]
+  assert.equal(task.state, 'running')
+  const leafResultTool = fixture.leafTools.find((item) => item.name === 'submit_task_result')
+  assert.ok(leafResultTool)
+
+  const originalUpdateTask = fixture.store.updateTask
+  let releaseRename, markRenameStarted
+  const renameGate = new Promise((resolve) => { releaseRename = resolve })
+  const renameStarted = new Promise((resolve) => { markRenameStarted = resolve })
+  fixture.store.updateTask = async (taskId, transform) => {
+    const index = fixture.tasks.findIndex((item) => item.taskId === taskId)
+    const next = transform(fixture.tasks[index])
+    if (next.title === '占用Task串行队列') { markRenameStarted(); await renameGate }
+    fixture.tasks[index] = next
+    return next
+  }
+  const rename = runtime.renameTask({ taskId: task.taskId, title: '占用Task串行队列' })
+  await renameStarted
+
+  const cancelIngest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-cancel', text: '不用处理了，停下来', occurredAt: '2026-09-03T09:00:01Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
+  await fixture.waitForSteers(2)
+  const cancelSubmission = tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[1])], decision: { actions: [{ kind: 'task-cancel', taskId: task.taskId, reason: '提出人明确要求不用处理', sourceMessageIds: ['m-cancel'] }], reply: '已停止处理。' } }] }, { agent: fixture.handle.agent })
+  for (let attempt = 0; attempt < 100 && fixture.leafCancelCalls.length === 0; attempt += 1) await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(fixture.leafCancelCalls[0], { cause: { kind: 'user' }, options: undefined }, '取消信号必须在Task串行队列释放前同步发出')
+  assert.equal(await Promise.race([cancelSubmission.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('pending'), 25))]), 'pending')
+  await assert.rejects(leafResultTool.execute({ status: 'completed', workType: 'non-development', summary: '迟到结果', evidence: ['取消后不得接收'], artifacts: [] }, { agent: fixture.getLeafHandle().agent }), /task_cancel_pending/)
+
+  releaseRename()
+  await rename
+  const [submitted, cancelledResult] = await Promise.all([cancelSubmission, cancelIngest])
+  assert.deepEqual(submitted, acceptedSubmission([decisionRequestId(fixture.steered[1])]))
+  assert.equal(cancelledResult.task.state, 'completed')
+  assert.equal(cancelledResult.task.completion, '已取消：提出人明确要求不用处理')
+  assert.ok(cancelledResult.task.archivedAt)
+  assert.deepEqual(cancelledResult.task.messageHistory.map((message) => message.messageId), ['m-create', 'm-cancel'])
+  await fixture.waitForLeafDisposeStarted()
+  assert.equal(fixture.group.messages.find((message) => message.messageId === 'm-cancel').agentDeliveryStatus, 'delivered')
+  fixture.store.updateTask = originalUpdateTask
+  fixture.releaseLeafDispose()
   fixture.releaseIdle()
   await runtime.close()
 })
