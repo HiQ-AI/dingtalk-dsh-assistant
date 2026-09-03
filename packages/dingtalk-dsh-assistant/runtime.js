@@ -1604,6 +1604,21 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (message === undefined) throw new Error(`message_not_found:${messageId}`)
       return this.ingest({ ...message, groupId }, { retryDecisionFailed: true })
     },
+    async recoverInterruptedDecisions() {
+      const interrupted = store.listGroups().flatMap((group) => (group.messages ?? [])
+        .filter((message) => message.agentDeliveryStatus === 'steered')
+        .map((message) => ({ groupId: group.groupId, messageId: message.messageId })))
+      const results = []
+      for (const message of interrupted) {
+        try {
+          await store.markMessageAgentDelivery({ ...message, status: 'decision-failed', error: 'resident_restarted_before_decision_settled' })
+          results.push({ ...message, status: 'recovered' })
+        } catch (error) {
+          results.push({ ...message, status: 'failed', error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+      return results
+    },
     async recoverPendingMessages() {
       const pending = store.listGroups().flatMap((group) => (group.messages ?? [])
         .filter((message) => message.agentDeliveryStatus === 'pending')

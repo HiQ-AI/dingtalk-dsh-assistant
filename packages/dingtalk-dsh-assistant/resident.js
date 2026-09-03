@@ -138,6 +138,7 @@ export async function apply(ctx, config = {}) {
       resolve()
     })
   })
+  runtime.recoverInterruptedDecisions().catch((error) => ctx.logger.warn(error instanceof Error ? error.stack : String(error)))
   runtime.reconcileCompletedNotifications().catch((error) => ctx.logger.warn(error instanceof Error ? error.stack : String(error)))
   runtime.recoverPendingMessages().catch((error) => ctx.logger.warn(error instanceof Error ? error.stack : String(error)))
 

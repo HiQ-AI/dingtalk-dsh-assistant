@@ -496,6 +496,8 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 关联复核期间可继续接收新消息。Task 动作提交时会在群串行区内重新读取当前持久消息快照，避免将复核期间进入的真实来源误判为不存在。`decision-failed` 仍不自动重放：历史失败须先核对 Task 与 Outbox 是否已有副作用，再调用 `POST /config/groups/{groupId}/messages/{messageId}/retry` 精确重试；该接口只接受当前仍为 `decision-failed` 的消息，并重新进入 Runtime 判断，不能直接改为 `delivered`。
 
+若进程重启发生在消息已标记 `steered`、但结构化判断尚未提交期间，新 Runtime 会把这类已无活跃请求的遗留消息收敛为 `decision-failed`，错误为 `resident_restarted_before_decision_settled`。它不会自动重放；仍须先核对 Task 与 Outbox 副作用，再使用上述精确重试接口。
+
 确认 DWS 登录有效，搜索词不少于两个字；如果配置了 `dws.profile`，确认登录的是同一个 profile。
 
 ### 模型请求失败

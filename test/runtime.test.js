@@ -565,6 +565,24 @@ test('显式重试会让无副作用的decision-failed消息重新进入判断�
   await runtime.close()
 })
 
+test('Runtime重启后把孤立steered收敛为可诊断失败且不自动重放', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'interrupted-decision-group' })
+  fixture.group.messages.push(
+    { messageId: 'm-interrupted', sequence: 1, text: '重启时正在判断', occurredAt: '2026-09-03T03:23:28.063Z', agentDeliveryStatus: 'steered' },
+    { messageId: 'm-delivered', sequence: 2, text: '已经完成', occurredAt: '2026-09-03T03:23:29.063Z', agentDeliveryStatus: 'delivered' },
+  )
+  fixture.group.nextSequence = 3
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const recovered = await runtime.recoverInterruptedDecisions()
+  assert.deepEqual(recovered, [{ groupId: fixture.group.groupId, messageId: 'm-interrupted', status: 'recovered' }])
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-failed')
+  assert.equal(fixture.group.messages[0].error, 'resident_restarted_before_decision_settled')
+  assert.equal(fixture.group.messages[1].agentDeliveryStatus, 'delivered')
+  assert.equal(fixture.steered.length, 0, '启动恢复不得自动重放判断')
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
 test('Outbox已落库后监听器失败不会反向否定Decision提交', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'outbox-listener-failure-group' })
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))

@@ -58,6 +58,10 @@ test('resident重启后按群内顺序恢复遗留pending消息', async () => {
   assert.match(runtimeSource, /left\.groupId\.localeCompare\(right\.groupId\) \|\| left\.sequence - right\.sequence/)
   assert.match(runtimeSource, /\['steered', 'delivered', 'decision-failed', 'skipped'\]\.includes\(persisted\?\.agentDeliveryStatus\)/)
   assert.match(residentSource, /runtime\.recoverPendingMessages\(\)/)
+  assert.match(runtimeSource, /async recoverInterruptedDecisions\(\)/)
+  assert.match(runtimeSource, /agentDeliveryStatus === 'steered'/)
+  assert.match(runtimeSource, /resident_restarted_before_decision_settled/)
+  assert.match(residentSource, /runtime\.recoverInterruptedDecisions\(\)/)
 })
 
 test('任务上下文允许静默追加且已插话消息不会由重复事件重试', async () => {
