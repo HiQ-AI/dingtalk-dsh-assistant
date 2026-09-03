@@ -390,6 +390,8 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:18998/state/dws-bridge' | ConvertTo-Jso
 
 消息明确 `@` 其他同事且未指向 Agent 时，视为正在询问这些同事，不得创建任务或任务提议。只有后续消息明确指向 Agent、并直接引用该原消息时，才构成可验证的转交授权；Runtime 会在结构化判断提交时执行这项硬门禁，不能仅依赖模型提示词。
 
+若历史误判已经创建运行中 Task，可调用 `POST /tasks/{taskId}/cancel` 并提交非空 `reason`。Runtime 会先停止对应叶子 Agent，再把 Task 标记为已取消并归档；取消不会生成完成通知，避免继续干扰原群。
+
 未明确要求处理，但判断事项有必要形成任务时，先在群里询问：
 
 > 这个事项是否需要我处理？

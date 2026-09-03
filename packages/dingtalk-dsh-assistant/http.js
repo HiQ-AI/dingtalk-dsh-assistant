@@ -87,6 +87,10 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     const messageId = decodeURIComponent(messageRetry[2])
     return send(response, 200, await store.retryDecisionFailedMessage({ groupId, messageId }))
   }
+  if (request.method === 'POST' && /^\/tasks\/[^/]+\/cancel$/u.test(url.pathname)) {
+    const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/cancel'.length))
+    return send(response, 200, await store.cancelTask({ taskId, ...(await readJson(request)) }))
+  }
   if (request.method === 'POST' && url.pathname.startsWith('/config/groups/') && url.pathname.endsWith('/history/hydrate')) {
     const groupId = decodeURIComponent(url.pathname.slice('/config/groups/'.length, -'/history/hydrate'.length))
     return send(response, 200, await store.hydrateGroupHistory({ groupId }))

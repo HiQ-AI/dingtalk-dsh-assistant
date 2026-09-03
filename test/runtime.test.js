@@ -95,6 +95,12 @@ function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false 
       tasks.push(task)
       return { created: true, task }
     },
+    async updateTask(taskId, transform) {
+      const index = tasks.findIndex((task) => task.taskId === taskId)
+      if (index < 0) throw new Error(`task_not_found:${taskId}`)
+      tasks[index] = transform(tasks[index])
+      return tasks[index]
+    },
     close: async () => undefined,
   }
   return { group, steered, followups, registeredTools, tasks, releaseIdle, waitForSteers, ctx, store, handle, taskCapacity }
@@ -338,6 +344,11 @@ test('明确@其他同事的消息不能建Task，后续引用并指向Agent后�
   await Promise.all([original, transfer])
   assert.equal(fixture.tasks.length, 1)
   assert.deepEqual(fixture.tasks[0].messageHistory.map((message) => message.messageId), ['msg624ca5N0Mq3+36twQq+b7A==', 'm-transfer'])
+  const cancelled = await runtime.cancelTask({ taskId: fixture.tasks[0].taskId, reason: '回归用误建任务' })
+  assert.equal(cancelled.state, 'completed')
+  assert.equal(cancelled.completion, '已取消：回归用误建任务')
+  assert.ok(cancelled.archivedAt)
+  assert.equal(cancelled.result, undefined)
   fixture.releaseIdle()
   await runtime.close()
 })

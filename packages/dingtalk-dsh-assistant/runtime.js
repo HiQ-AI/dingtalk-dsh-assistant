@@ -1746,6 +1746,32 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (task.archivedAt) return task
       return store.updateTask(taskId, (current) => ({ ...current, archivedAt: new Date().toISOString() }))
     }),
+    cancelTask: ({ taskId, reason }) => serializeTasks(async () => {
+      const task = store.getTask(taskId)
+      if (task === undefined) throw new Error(`task_not_found:${taskId}`)
+      if (task.state === 'completed') throw new Error(`task_not_active:${taskId}`)
+      const normalizedReason = typeof reason === 'string' ? reason.trim() : ''
+      if (normalizedReason === '') throw new Error('task_cancel_reason_required')
+      const handle = leafHandles.get(taskId)
+      if (handle !== undefined) {
+        const goal = ctx.goals.get(handle.agent)
+        if (goal !== undefined && goal.phase !== 'complete') ctx.goals.complete(handle.agent, goalRef(goal))
+        await handle.dispose()
+        leafHandles.delete(taskId)
+        leafTaskBySession.delete(String(handle.agent.session.id))
+      }
+      const cancelled = await store.updateTask(taskId, (current) => ({
+        ...current,
+        state: 'completed',
+        completion: `已取消：${normalizedReason}`,
+        result: undefined,
+        waitingKind: undefined,
+        waitingReason: undefined,
+        archivedAt: new Date().toISOString(),
+      }))
+      await pumpTasks()
+      return cancelled
+    }),
     renameTask: ({ taskId, title }) => serializeTasks(async () => {
       const task = store.getTask(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
