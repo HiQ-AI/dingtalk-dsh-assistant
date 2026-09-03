@@ -65,6 +65,11 @@ test('resident重启后按群内顺序恢复遗留pending消息', async () => {
   assert.ok(residentSource.indexOf('await runtime.recoverInterruptedDecisions()') < residentSource.indexOf('startDwsBridge({'), '中断收敛必须先于DWS入站启动')
 })
 
+test('DWS profile在恢复遗留判断前注入引用消息查询协议', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/resident.js', import.meta.url), 'utf8')
+  assert.match(source, /const dwsConfig = config\.dws \?\? \{\}[\s\S]*runtime\.setCurrentDwsProfile\(dwsConfig\.profile\)[\s\S]*await runtime\.recoverInterruptedDecisions\(\)/u)
+})
+
 test('任务上下文允许静默追加且已插话消息不会由重复事件重试', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /decision\.reply\.trim\(\) === ''/)

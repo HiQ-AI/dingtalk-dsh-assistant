@@ -50,6 +50,7 @@ export async function apply(ctx, config = {}) {
   const configuredProxyUrl = store.getProxyUrl?.() ?? config.proxyUrl ?? process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? ''
   if (store.getProxyUrl?.() === undefined && configuredProxyUrl) await store.setProxyUrl(configuredProxyUrl)
   applyProxyEnvironment(configuredProxyUrl)
+  const dwsConfig = config.dws ?? {}
   const runtime = await openResidentRuntime(ctx, store, process.cwd(), {
     agentPreset: config.agentPreset ?? 'standard',
     agentWorkspaceDir: config.agentWorkspaceDir,
@@ -58,6 +59,7 @@ export async function apply(ctx, config = {}) {
     maxGoalRounds: config.maxGoalRounds ?? 24,
     supervisorIntervalMs: config.supervisorIntervalMs ?? 5_000,
   })
+  runtime.setCurrentDwsProfile(dwsConfig.profile)
   await runtime.recoverInterruptedDecisions()
   const updateAgentConfig = runtime.updateAgentConfig
   runtime.updateAgentConfig = async (next) => {
@@ -69,7 +71,6 @@ export async function apply(ctx, config = {}) {
   for (const migration of config.humanBlockerReplyMigrations ?? []) await runtime.migrateHumanBlockerReply(migration)
   for (const migration of config.taskProvenanceMigrations ?? []) await runtime.migrateTaskProvenance(migration)
   for (const migration of config.taskContinuationMigrations ?? []) await runtime.migrateTaskContinuation(migration)
-  const dwsConfig = config.dws ?? {}
   const dwsRunner = createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws', cwd: tmpdir() })
   const dwsAdapter = createDwsAdapter({
     enabled: dwsConfig.enabled === true,
