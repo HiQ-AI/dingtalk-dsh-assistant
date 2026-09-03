@@ -62,6 +62,7 @@ test('resident重启后按群内顺序恢复遗留pending消息', async () => {
   assert.match(runtimeSource, /agentDeliveryStatus === 'steered'/)
   assert.match(runtimeSource, /resident_restarted_before_decision_settled/)
   assert.match(residentSource, /runtime\.recoverInterruptedDecisions\(\)/)
+  assert.ok(residentSource.indexOf('await runtime.recoverInterruptedDecisions()') < residentSource.indexOf('startDwsBridge({'), '中断收敛必须先于DWS入站启动')
 })
 
 test('任务上下文允许静默追加且已插话消息不会由重复事件重试', async () => {

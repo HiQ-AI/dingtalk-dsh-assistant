@@ -1610,12 +1610,8 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         .map((message) => ({ groupId: group.groupId, messageId: message.messageId })))
       const results = []
       for (const message of interrupted) {
-        try {
-          await store.markMessageAgentDelivery({ ...message, status: 'decision-failed', error: 'resident_restarted_before_decision_settled' })
-          results.push({ ...message, status: 'recovered' })
-        } catch (error) {
-          results.push({ ...message, status: 'failed', error: error instanceof Error ? error.message : String(error) })
-        }
+        await store.markMessageAgentDelivery({ ...message, status: 'decision-failed', error: 'resident_restarted_before_decision_settled' })
+        results.push({ ...message, status: 'recovered' })
       }
       return results
     },
