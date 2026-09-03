@@ -5,8 +5,8 @@ import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSou
 
 test('群决策一次结构化输出可包含多个任务动作', () => {
   assert.deepEqual(parseGroupDecision('{"actions":[],"reply":"ok"}').actions, [])
-  const decision = parseGroupDecision('{"actions":[{"kind":"task-context","taskId":"task-1","context":"more","sourceMessageIds":["m-1"]},{"kind":"task-reopen","taskId":"task-2","context":"rollback","sourceMessageIds":["m-2"]},{"kind":"new-task","title":"修复问题","objective":"fix","acceptanceCriteria":["有可核验证据"],"sourceMessageIds":["m-3"]}],"reply":"已统一处理"}')
-  assert.deepEqual(decision.actions.map((action) => action.kind), ['task-context', 'task-reopen', 'new-task'])
+  const decision = parseGroupDecision('{"actions":[{"kind":"task-context","taskId":"task-1","context":"more","sourceMessageIds":["m-1"]},{"kind":"task-reopen","taskId":"task-2","context":"rollback","sourceMessageIds":["m-2"]},{"kind":"new-task","title":"修复问题","objective":"fix","acceptanceCriteria":["有可核验证据"],"sourceMessageIds":["m-3"]},{"kind":"task-cancel","taskId":"task-3","reason":"群里明确说不用处理","sourceMessageIds":["m-4"]}],"reply":"已统一处理"}')
+  assert.deepEqual(decision.actions.map((action) => action.kind), ['task-context', 'task-reopen', 'new-task', 'task-cancel'])
   assert.equal(parseGroupDecision('{"actions":[],"reason":"not addressed"}').reason, 'not addressed')
 })
 
@@ -15,6 +15,8 @@ test('群决策拒绝无效 JSON、多余字段和缺失目标', () => {
   assert.throws(() => parseGroupDecision('{"actions":[],"reply":"ok","objective":"hidden"}'), /group_decision_invalid_schema/)
   assert.throws(() => parseGroupDecision('{"actions":[{"kind":"new-task","title":"修复问题","objective":"fix"}],"reply":"accepted"}'), /group_decision_invalid_schema/)
   assert.throws(() => parseGroupDecision('{"actions":[{"kind":"new-task","title":"修复问题","objective":"fix","acceptanceCriteria":["完成"],"sourceMessageIds":[]}],"reply":"accepted"}'), /group_decision_invalid_schema/)
+  assert.throws(() => parseGroupDecision('{"actions":[{"kind":"task-cancel","reason":"不用处理","sourceMessageIds":["m-1"]}],"reply":"已停止"}'), /group_decision_invalid_schema/)
+  assert.throws(() => parseGroupDecision('{"actions":[{"kind":"task-cancel","taskId":"task-1","sourceMessageIds":["m-1"]}],"reply":"已停止"}'), /group_decision_invalid_schema/)
 })
 
 test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () => {
