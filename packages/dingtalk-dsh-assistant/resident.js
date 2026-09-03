@@ -58,6 +58,7 @@ export async function apply(ctx, config = {}) {
     maxGoalRounds: config.maxGoalRounds ?? 24,
     supervisorIntervalMs: config.supervisorIntervalMs ?? 5_000,
   })
+  await runtime.recoverInterruptedDecisions()
   const updateAgentConfig = runtime.updateAgentConfig
   runtime.updateAgentConfig = async (next) => {
     const result = await updateAgentConfig(next)
