@@ -490,6 +490,8 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 ### 群搜索失败
 
+关联复核期间可继续接收新消息。Task 动作提交时会在群串行区内重新读取当前持久消息快照，避免将复核期间进入的真实来源误判为不存在。`decision-failed` 仍不自动重放：历史失败须先核对 Task 与 Outbox 是否已有副作用，再通过精确消息恢复流程处理，不能直接改为 `delivered`。
+
 确认 DWS 登录有效，搜索词不少于两个字；如果配置了 `dws.profile`，确认登录的是同一个 profile。
 
 ### 模型请求失败

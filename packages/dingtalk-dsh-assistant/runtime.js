@@ -1515,6 +1515,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           decision = blockTaskDecisionForUnavailableMedia(decision, unavailableMedia)
           if (recheckedSubmission !== undefined) submitted.decision = decision
           const result = await serialize(message.groupId, async () => {
+            const groupAtCommit = store.getGroup(message.groupId)
             if ('reason' in decision) {
               await Promise.all(decisionRequests.map((request) => store.markMessageAgentDelivery({ groupId: message.groupId, messageId: request.messageId, status: 'delivered' })))
               return { ...accepted, decision, group: store.getGroup(message.groupId) }
@@ -1524,7 +1525,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
               const sourceMessageIds = action.sourceMessageIds
               if (new Set(sourceMessageIds).size !== sourceMessageIds.length) throw new Error('task_action_source_message_duplicate')
               const sourceMessageIdSet = new Set(sourceMessageIds)
-              const sourceMessages = (groupBeforeDecision?.messages ?? []).filter((source) => sourceMessageIdSet.has(source.messageId))
+              const sourceMessages = (groupAtCommit?.messages ?? []).filter((source) => sourceMessageIdSet.has(source.messageId))
               if (sourceMessages.length !== sourceMessageIds.length) throw new Error('task_action_source_message_invalid')
               const currentSource = [...sourceMessages].reverse().find((source) => source.senderName && source.senderOpenDingTalkId) ?? sourceMessages.at(-1)
               const trigger = { sourceMessageId: currentSource.messageId, ...(currentSource.senderName ? { requesterName: currentSource.senderName } : {}), ...(currentSource.senderOpenDingTalkId ? { requesterOpenDingTalkId: currentSource.senderOpenDingTalkId } : {}), ...(currentSource.occurredAt !== undefined ? { occurredAt: currentSource.occurredAt } : {}) }

@@ -931,6 +931,8 @@ test('同群回复门禁不会阻塞其他群的Steer与Decision', async () => {
 
 test('关联复核可合并影响回复的新Steer并由外层Outbox统一提交', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'recheck-combined-group' })
+  // 真实持久 Store 返回新快照；可变测试对象会掩盖跨复核等待的过期读取。
+  fixture.store.getGroup = () => structuredClone(fixture.group)
   fixture.tasks.push({ taskId: 'task-existing', groupId: fixture.group.groupId, state: 'completed' })
   fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'image-message', text: '[图片消息]', occurredAt: '2026-08-28T01:00:00Z', sequence: 1, agentDeliveryStatus: 'delivered' })
   fixture.group.nextSequence = 2
@@ -947,7 +949,7 @@ test('关联复核可合并影响回复的新Steer并由外层Outbox统一提交
   const secondRequestId = decisionRequestId(fixture.steered[1])
   const submitted = await tool.execute({
     observedRequestIds: [secondRequestId],
-    submissions: [{ requestIds: [recheckRequestId, secondRequestId], decision: { actions: [], reply: '已结合复核期间的新补充。' } }],
+    submissions: [{ requestIds: [recheckRequestId, secondRequestId], decision: { actions: [{ kind: 'new-task', title: '复核合并任务', objective: '结合图片说明及新补充', acceptanceCriteria: ['包含两条来源'], sourceMessageIds: ['m1', 'm2'] }], reply: '已结合复核期间的新补充。' } }],
   }, { agent: fixture.handle.agent })
   assert.deepEqual(submitted, acceptedSubmission([recheckRequestId, secondRequestId]))
   const [firstResult, secondResult] = await Promise.all([first, second])
@@ -955,6 +957,8 @@ test('关联复核可合并影响回复的新Steer并由外层Outbox统一提交
   assert.equal(secondResult.decisionOwnerRequestId, recheckRequestId)
   assert.deepEqual(fixture.group.messages.slice(1).map((message) => message.agentDeliveryStatus), ['delivered', 'delivered'])
   assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['已结合复核期间的新补充。'])
+  assert.equal(fixture.tasks.length, 2)
+  assert.deepEqual(fixture.tasks[1].messageHistory.map((item) => item.messageId), ['m1', 'm2'])
   fixture.releaseIdle()
   await runtime.close()
 })
