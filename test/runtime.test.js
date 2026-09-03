@@ -33,7 +33,7 @@ test('Inbox 默认零延迟 steer，回复提交门禁不退化为定时聚合',
 function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false } = {}) {
   const group = { groupId: 'steer-group', residentSessionId: 'session-steer', residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }
   group.groupId = groupId
-  const steered = [], followups = [], registeredTools = [], tasks = []
+  const steered = [], rechecks = [], followups = [], registeredTools = [], tasks = []
   let releaseIdle, resolveSteerCount
   let targetSteerCount = 0
   const idle = new Promise((resolve) => { releaseIdle = resolve })
@@ -50,6 +50,10 @@ function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false 
       if (text.startsWith('[GROUP_MESSAGE_STEER]')) {
         steered.push(message)
         if (steered.length >= targetSteerCount) resolveSteerCount?.()
+        return
+      }
+      if (text.startsWith('[GROUP_DECISION_RECHECK]')) {
+        rechecks.push(message)
         return
       }
       throw new Error('仅群消息允许通过 steer 插入')
@@ -103,7 +107,7 @@ function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false 
     },
     close: async () => undefined,
   }
-  return { group, steered, followups, registeredTools, tasks, releaseIdle, waitForSteers, ctx, store, handle, taskCapacity }
+  return { group, steered, rechecks, followups, registeredTools, tasks, releaseIdle, waitForSteers, ctx, store, handle, taskCapacity }
 }
 
 const decisionRequestId = (message) => message.content[0].text.match(/^判断请求 ID：([^\r\n]+)$/mu)?.[1]
@@ -672,7 +676,7 @@ test('关联复核合并的新消息标记steered失败时不会发送候选回�
   await fixture.waitForSteers(1)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
   await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [], reason: '初次忽略' } }] }, { agent: fixture.handle.agent })
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
+  while (fixture.rechecks.length === 0) await new Promise((resolve) => setImmediate(resolve))
 
   let markSteeredEntered, rejectMarkSteered
   const markEntered = new Promise((resolve) => { markSteeredEntered = resolve })
@@ -690,7 +694,7 @@ test('关联复核合并的新消息标记steered失败时不会发送候选回�
   const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '影响复核回复的新补充', occurredAt: '2026-09-02T01:01:01Z' })
   await fixture.waitForSteers(2)
   await markEntered
-  const recheckRequestId = decisionRequestId(fixture.followups[0])
+  const recheckRequestId = decisionRequestId(fixture.rechecks[0])
   const secondRequestId = decisionRequestId(fixture.steered[1])
   const submission = tool.execute({
     observedRequestIds: [secondRequestId],
@@ -984,13 +988,40 @@ test('关联复核也使用独立Decision请求且不回退读取assistant文本
   await fixture.waitForSteers(1)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
   await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [], reason: '初次忽略' } }] }, { agent: fixture.handle.agent })
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  assert.match(fixture.followups[0].content[0].text, /^\[GROUP_DECISION_RECHECK\]/u)
-  const recheckRequestId = decisionRequestId(fixture.followups[0])
+  while (fixture.rechecks.length === 0) await new Promise((resolve) => setImmediate(resolve))
+  assert.match(fixture.rechecks[0].content[0].text, /^\[GROUP_DECISION_RECHECK\]/u)
+  assert.equal(fixture.followups.length, 0, '关联复核必须插入当前Turn，不能排队到后续Turn')
+  const recheckRequestId = decisionRequestId(fixture.rechecks[0])
   await tool.execute({ submissions: [{ requestIds: [recheckRequestId], decision: { actions: [], reason: '复核后仍无关' } }] }, { agent: fixture.handle.agent })
   const result = await ingest
   assert.equal(result.decision.reason, '复核后仍无关')
   assert.equal(fixture.group.messages.find((message) => message.messageId === 'm1').agentDeliveryStatus, 'delivered')
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('同一Turn的多个关联复核都通过steer获得执行机会后再结算', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'concurrent-recheck-group' })
+  fixture.tasks.push({ taskId: 'task-existing', groupId: fixture.group.groupId, state: 'completed' })
+  fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'image-message', text: '[图片消息]', occurredAt: '2026-09-03T07:26:00Z', sequence: 1, agentDeliveryStatus: 'delivered' })
+  fixture.group.nextSequence = 2
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '[图片消息]构建失败', occurredAt: '2026-09-03T07:26:52Z' })
+  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '没有接入新代码包上传', occurredAt: '2026-09-03T07:27:11Z' })
+  await fixture.waitForSteers(2)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  const initialRequestIds = fixture.steered.map(decisionRequestId)
+  await tool.execute({ submissions: initialRequestIds.map((requestId) => ({ requestIds: [requestId], decision: { actions: [], reason: '初次忽略' } })) }, { agent: fixture.handle.agent })
+
+  for (let attempt = 0; attempt < 20 && fixture.rechecks.length < 2; attempt += 1) await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(fixture.rechecks.length, 2)
+  assert.equal(fixture.followups.length, 0, '复核不能排入尚未开始的后续Turn')
+  const recheckRequestIds = fixture.rechecks.map(decisionRequestId)
+  await tool.execute({ submissions: recheckRequestIds.map((requestId) => ({ requestIds: [requestId], decision: { actions: [], reason: '复核后仍无关' } })) }, { agent: fixture.handle.agent })
+
+  const results = await Promise.all([first, second])
+  assert.deepEqual(results.map((result) => result.decision.reason), ['复核后仍无关', '复核后仍无关'])
+  assert.deepEqual(fixture.group.messages.slice(1).map((message) => message.agentDeliveryStatus), ['delivered', 'delivered'])
   fixture.releaseIdle()
   await runtime.close()
 })
@@ -1043,8 +1074,8 @@ test('关联复核可合并影响回复的新Steer并由外层Outbox统一提交
   await fixture.waitForSteers(1)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
   await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [], reason: '先进入关联复核' } }] }, { agent: fixture.handle.agent })
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const recheckRequestId = decisionRequestId(fixture.followups[0])
+  while (fixture.rechecks.length === 0) await new Promise((resolve) => setImmediate(resolve))
+  const recheckRequestId = decisionRequestId(fixture.rechecks[0])
 
   const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '这条补充会改变复核回复', occurredAt: '2026-08-28T01:01:01Z' })
   await fixture.waitForSteers(2)
@@ -1077,8 +1108,8 @@ test('关联复核继承shared来源附件异常且不能绕过回复观察门�
   const initialRequestIds = fixture.steered.map(decisionRequestId)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
   await tool.execute({ submissions: [{ requestIds: initialRequestIds, decision: { actions: [], reason: '先复核共享消息' } }] }, { agent: fixture.handle.agent })
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const recheckRequestId = decisionRequestId(fixture.followups[0])
+  while (fixture.rechecks.length === 0) await new Promise((resolve) => setImmediate(resolve))
+  const recheckRequestId = decisionRequestId(fixture.rechecks[0])
   const third = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm3', text: '无关后续', occurredAt: '2026-08-28T01:01:02Z' })
   await fixture.waitForSteers(3)
   const thirdRequestId = decisionRequestId(fixture.steered[2])
@@ -1421,6 +1452,14 @@ test('已有群切换预设时沿用原 Session，新群先创建 dsh Session �
   assert.match(responsibility.text(), /群名称：新群名称/)
   assert.match(responsibility.text(), /群 ID：new-group/)
   assert.match(responsibility.text(), /未设置职责/)
+  runtime.setCurrentDwsProfile("corp'user")
+  const decisionProtocol = promptSections.find((section) => section.name === 'dingtalk-group-decision-protocol')?.text()
+  assert.match(decisionProtocol, /加载 `dingtalk-chat` Skill/u)
+  assert.match(decisionProtocol, /dws chat \+messages-mget --msg-ids '<消息ID>' --profile 'corp''user' --format json/u)
+  assert.match(decisionProtocol, /`complete`、`failedCount`、`failures`、`foundCount` 和 `notFoundMessageIds`/u)
+  assert.match(decisionProtocol, /仍含 `quotedMessage\.messageId`，继续按该 ID 查询/u)
+  assert.match(decisionProtocol, /不得向群成员回复“请补原问题、正文或截图”/u)
+  assert.match(decisionProtocol, /不得调用 group_decision_submit[\s\S]*decision-failed/u)
   assert.deepEqual(toolRestrictions, [{ deny: ['get_goal', 'create_goal', 'update_goal'] }])
   assert.deepEqual(promptSections.find((section) => section.name === 'tool:goal'), { name: 'tool:goal', order: 114, text: '' })
   assert.deepEqual(registeredTools.map((tool) => tool.name), ['group_decision_submit', 'group_reply_submit', 'group_task_create', 'group_task_context_append', 'group_task_reopen', 'group_task_list'])
@@ -1887,6 +1926,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     close: async () => undefined,
   }
   const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ agentPreset: 'standard-convergent', maxConcurrentTasks: 2, supervisorIntervalMs: 0 }))
+  runtime.setCurrentDwsProfile('corp:user')
   const one = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm1', objective: 'one', requesterName: '初始提出人', requesterOpenDingTalkId: 'od-initial', occurredAt: '2026-08-25T01:00:00Z' })
   const two = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm2', objective: 'two' })
   const three = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm3', objective: 'three' })
@@ -1909,6 +1949,11 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
   assert.match(leafPolicyPrompt, /命中任何适用 Skill 时，必须加载并遵循其完整说明/u)
   assert.match(leafPolicyPrompt, /内部维护动作不视为扩大 Task objective/u)
   assert.match(leafPolicyPrompt, /Runtime 不指定或绑定任何具体 Skill/u)
+  assert.match(leafPolicyPrompt, /加载 `dingtalk-chat` Skill/u)
+  assert.match(leafPolicyPrompt, /dws chat \+messages-mget --msg-ids '<消息ID>' --profile 'corp:user' --format json/u)
+  assert.match(leafPolicyPrompt, /仍含 `quotedMessage\.messageId`，继续按该 ID 查询/u)
+  assert.match(leafPolicyPrompt, /submit_task_result 如实提交 waiting 状态和 DWS 读取证据/u)
+  assert.match(leafPolicyPrompt, /不得要求群成员重新提供已经存在于钉钉中的消息/u)
   assert.match(leafPolicyPrompt, /Task 完整消息与参与人时间线/u)
   assert.match(leafPolicyPrompt, /"messageId":"m1"[\s\S]*"text":"初始任务消息"[\s\S]*"senderOpenDingTalkId":"od-initial"/u)
   assert.doesNotMatch(leafPolicyPrompt, /evolve-self-improving|learningSignals|TASK_INTERNAL_LEARNING_SIGNALS/u, 'Runtime 提示词不得绑定具体 Skill 或专用学习协议')

@@ -58,7 +58,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
-  let taskTail = Promise.resolve(), configTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, currentDwsUserName = '', runtimeClosing = false, closePromise
+  let taskTail = Promise.resolve(), configTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, currentDwsUserName = '', currentDwsProfile = '', runtimeClosing = false, closePromise
   let groupMessageRecaller
   let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks
   if (store.getMaxConcurrentTasks?.() === undefined) await store.setMaxConcurrentTasks?.(taskConcurrencyLimit)
@@ -100,6 +100,16 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     const preset = await agentPresets.mount(agentCtx, agentPreset)
     if (preset?.id !== undefined && preset.id !== agentPreset) throw new Error(`resident_agent_preset_invalid:${preset.id}`)
     configureResident(agentCtx, groupId)
+  }
+  const quotedMessageRecoveryPolicy = (owner) => {
+    const profileArgument = currentDwsProfile === '' ? '' : ` --profile '${currentDwsProfile.replaceAll("'", "''")}'`
+    return `### 引用消息上下文恢复
+
+群消息信封只提供引用消息 ID，因为正常情况下被引用消息已经进入当前会话上下文。收到引用消息 ID 后，先按 ID 在当前可见上下文和本群任务索引中定位；如果不能准确还原正文，说明可能发生消息传递异常、会话恢复或上下文压缩，必须先加载 \`dingtalk-chat\` Skill，再通过 \`pwsh\` 执行 \`dws chat +messages-mget --msg-ids '<消息ID>'${profileArgument} --format json\` 主动读取。必须检查 \`complete\`、\`failedCount\`、\`failures\`、\`foundCount\` 和 \`notFoundMessageIds\`，不能只看命令退出码。
+
+取回的消息如果仍含 \`quotedMessage.messageId\`，继续按该 ID 查询，直到不存在更上游引用；维护已访问 ID 集合，ID 重复代表异常循环，必须停止而不能无限查询。引用链中的图片、文件或其他资源承载目标、范围、对象或验收信息时，按照 \`dingtalk-chat\` Skill 的资源读取流程取得并阅读。完整引用链仅用于恢复当前消息的语义，不自动创建 Task、扩大 objective 或产生修改/发布授权。
+
+本节是“钉钉中已存在、可按消息 ID 恢复的引用消息”的专用规则，优先于通用外部资源缺失规则。任何引用 ID 尚未查询、查询结果不完整、查询失败、未命中或出现循环时，都不得猜测上下文，也不得向群成员回复“请补原问题、正文或截图”。${owner === 'resident' ? '不得调用 group_decision_submit 提交这类群回复；保留工具错误并结束当前 step，让 Runtime 将消息收敛为可重试的 decision-failed。' : '不得用主会话摘要替代原文；通过 submit_task_result 如实提交 waiting 状态和 DWS 读取证据，不得要求群成员重新提供已经存在于钉钉中的消息。'}`
   }
   function configureResident(agentCtx, groupId) {
     installSelection(agentCtx)
@@ -150,6 +160,8 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
 判断使用已有任务还是新建任务时，必须进行整体语义判断：结合当前消息的前后文、引用关系、连续消息构成的信息组、当时讨论与执行场景，以及候选任务的标题、完整目标、动作范围、状态、消息与参与人时间线和已记录上下文，判断新消息是在补充、修订、纠正或延续原目标，还是提出了不同的独立目标。不得根据某几个关键词、词面重合、标题相似或单一字段直接决定复用已有任务或新建任务；关键词只能作为查找候选任务的线索，不能代替关联结论。无法从现有上下文可靠区分时，不得猜测创建重复任务，应先结合近期消息继续核对，确有阻塞再向真正掌握必要信息的相关参与人询问。
 
 图片、文档、文件、链接或其他外部资源如果承载任务目标、范围、对象、输入数据或验收要求，必须先通过当前可用工具完整读取。任何任务所需资源无法访问、下载、解析或读取不完整时，必须选择 answer，明确告诉对方未获取到的具体信息以及需要重新提供的内容；此时不得选择 new-task、task-context 或 task-reopen，也不得先创建或推进 Task。只有确认缺失资源与任务无关，或对方补齐必要信息后，才继续任务关联与准入判断。不得假设资源内容、不得用文件名、链接标题、缩略图或消息中的零散文字替代未读取的正文。
+
+${quotedMessageRecoveryPolicy('resident')}
 
 状态边界必须严格遵守：running 或 waiting（包括阻塞中）的 Task 收到新增信息时只能返回 task-context，继续同一执行轮次；不得返回 task-reopen，不得清空 blocker 或增加轮次。只有 completed Task（包括已归档展示）才允许 task-reopen 并初始化下一执行轮次。
 
@@ -1031,6 +1043,8 @@ Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"action
 
 根据当前任务现场与已注入描述命中任何适用 Skill 时，必须加载并遵循其完整说明。一旦加载 Skill，不得在尚未完成其资格判断、必要操作、验证与读回，或依据 Skill 说明明确判定本次无需操作之前，静默返回业务主线。没有满足执行条件时不得为了完成 Task 硬凑 Skill 产物。
 
+${quotedMessageRecoveryPolicy('leaf')}
+
 Task objective 限制的是业务动作范围，包括业务代码、业务数据、部署环境、外部系统和对外操作。适用的工作区规则，或由工作区规则授权且由 Skill 明确要求的内部维护动作不视为扩大 Task objective，但必须严格限制在该规则和 Skill 声明的内部目录、数据类型和操作边界内，不得借此修改未获授权的业务代码、业务数据、环境或外部系统。Runtime 不指定或绑定任何具体 Skill，是否适用及如何执行以当前注入的 Skill 描述和完整说明为准。
 
 ### 与主会话的内部检查点
@@ -1510,7 +1524,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           const activeTaskCount = store.listTasks().filter((task) => task.groupId === message.groupId).length
           if ('reason' in decision && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: submitted.requests.some((request) => request.imageRefs.length > 0), previousMessage, occurredAt: message.occurredAt })) {
             const recheck = createPendingGroupDecision({ groupId: message.groupId, messageId: message.messageId, sequence: accepted.sequence, message, imageRefs, kind: 'recheck', baseRequests: decisionRequests })
-            handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_RECHECK]\n判断请求 ID：${recheck.requestId}\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
+            handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_RECHECK]\n判断请求 ID：${recheck.requestId}\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
             rejectUnsubmittedGroupDecisionWhenIdle(handle.agent, recheck.requestId, message.groupId, message.messageId)
             recheckedSubmission = await recheck.promise
             await Promise.all(recheckedSubmission.requests.map((request) => request.deliveryRecorded))
@@ -1932,6 +1946,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       }
     }),
     setCurrentDwsUserName: (value) => { currentDwsUserName = typeof value === 'string' ? value.trim() : '' },
+    setCurrentDwsProfile: (value) => { currentDwsProfile = typeof value === 'string' ? value.trim() : '' },
     async close() {
       if (closePromise !== undefined) return closePromise
       runtimeClosing = true
