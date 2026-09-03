@@ -303,6 +303,45 @@ test('一个Decision可把历史与当前消息多对多关联到不同Task', as
   await runtime.close()
 })
 
+test('明确@其他同事的消息不能建Task，后续引用并指向Agent后才允许转交', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'directed-other-participants-group' })
+  fixture.store.getAgentNames = () => ['小小鹏']
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const original = runtime.ingest({
+    groupId: fixture.group.groupId,
+    messageId: 'msg624ca5N0Mq3+36twQq+b7A==',
+    text: '[图片消息](mediaId=@lQLPJyFx1LlkTRfNBWjNC3qwS5c44-MgXl8Kat4grwTGAA)@李辰 @郑耀彬 只是计算了，没有改信息，为啥要提示这个呢？',
+    occurredAt: '2026-09-03T02:01:01.000Z',
+    senderName: '向春梅',
+  })
+  await fixture.waitForSteers(1)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  const originalRequestId = decisionRequestId(fixture.steered[0])
+  await assert.rejects(tool.execute({ submissions: [{ requestIds: [originalRequestId], decision: {
+    actions: [{ kind: 'new-task', title: '误建任务', objective: '排查计算提示', acceptanceCriteria: ['定位原因'], sourceMessageIds: ['msg624ca5N0Mq3+36twQq+b7A=='] }], reply: '',
+  } }] }, { agent: fixture.handle.agent }), /task_action_directed_to_other_participants/)
+  assert.equal(fixture.tasks.length, 0)
+
+  const transfer = runtime.ingest({
+    groupId: fixture.group.groupId,
+    messageId: 'm-transfer',
+    text: '@小小鹏 看下这个',
+    quotedMessage: { messageId: 'msg624ca5N0Mq3+36twQq+b7A==' },
+    occurredAt: '2026-09-03T02:02:01.000Z',
+    senderName: '向春梅',
+  })
+  await fixture.waitForSteers(2)
+  const transferRequestId = decisionRequestId(fixture.steered[1])
+  await tool.execute({ observedRequestIds: [originalRequestId, transferRequestId], submissions: [{ requestIds: [originalRequestId, transferRequestId], decision: {
+    actions: [{ kind: 'new-task', title: '排查计算提示', objective: '排查仅计算后出现未保存提示的原因', acceptanceCriteria: ['定位原因'], sourceMessageIds: ['msg624ca5N0Mq3+36twQq+b7A==', 'm-transfer'] }], reply: '',
+  } }] }, { agent: fixture.handle.agent })
+  await Promise.all([original, transfer])
+  assert.equal(fixture.tasks.length, 1)
+  assert.deepEqual(fixture.tasks[0].messageHistory.map((message) => message.messageId), ['msg624ca5N0Mq3+36twQq+b7A==', 'm-transfer'])
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
 test('不影响当前回复的请求只观察不消费并在回复提交后继续处理', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'out-of-order-group' })
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))

@@ -82,6 +82,13 @@ export function isExplicitAgentDirection(message, names = []) {
   })
 }
 
+export function isDirectedToOtherParticipants(message, agentNames = []) {
+  const withoutMediaIds = String(message ?? '').replace(/mediaId=@[^)\s]+/giu, '')
+  const mentions = [...withoutMediaIds.matchAll(/@([^\s@，,：:；;。！？!?（）()]+)/gu)].map((match) => match[1])
+  if (mentions.length === 0) return false
+  return !isExplicitAgentDirection(withoutMediaIds, agentNames)
+}
+
 export function shouldRecheckTaskAssociation({ activeTaskCount, hasImage, previousMessage, occurredAt }) {
   if (activeTaskCount < 1) return false
   if (hasImage) return true
