@@ -1046,10 +1046,12 @@ test('Decision工具对重复未知和非法结构执行全量预检且不部分
   const requestIds = fixture.steered.map(decisionRequestId)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
   await assert.rejects(tool.execute({ submissions: [{ requestIds: [requestIds[0], requestIds[0]], decision: { actions: [], reason: '重复' } }] }, { agent: fixture.handle.agent }), /group_decision_request_duplicate/)
-  await assert.rejects(tool.execute({ submissions: [
+  const stale = await tool.execute({ submissions: [
     { requestIds: [requestIds[0]], decision: { actions: [], reply: '不应部分提交' } },
     { requestIds: ['unknown-request'], decision: { actions: [], reason: '未知' } },
-  ] }, { agent: fixture.handle.agent }), /group_decision_request_unknown/)
+  ] }, { agent: fixture.handle.agent })
+  assert.deepEqual(stale, staleSubmission(requestIds, requestIds, ['unknown-request']))
+  assert.match(tool.output.render({}, stale)[0].text, /unknown-request/u)
   await assert.rejects(tool.execute({ submissions: [
     { requestIds: [requestIds[0]], decision: { actions: [], reply: '仍不应部分提交' } },
     { requestIds: [requestIds[1]], decision: { actions: [], reason: '' } },

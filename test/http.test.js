@@ -65,6 +65,20 @@ test('显式testApiEnabled才开放测试写入口', async () => withServer(true
   assert.deepEqual(await response.json(), { created: true })
 }))
 
+test('本机Web的127.0.0.1与localhost来源均可读取resident，其他来源不开放CORS', async () => withServer(false, async (baseUrl) => {
+  for (const origin of ['http://127.0.0.1:3080', 'http://localhost:3080']) {
+    const response = await fetch(`${baseUrl}/health`, { headers: { origin } })
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('access-control-allow-origin'), origin)
+    assert.equal(response.headers.get('vary'), 'Origin')
+  }
+  const preflight = await fetch(`${baseUrl}/health`, { method: 'OPTIONS', headers: { origin: 'http://localhost:3080' } })
+  assert.equal(preflight.status, 204)
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://localhost:3080')
+  const foreign = await fetch(`${baseUrl}/health`, { headers: { origin: 'https://example.com' } })
+  assert.equal(foreign.headers.get('access-control-allow-origin'), null)
+}))
+
 test('DWS健康状态以实际 bridge 存活和补拉状态为准', async () => {
   let bridgeHealth = {
     healthy: false,

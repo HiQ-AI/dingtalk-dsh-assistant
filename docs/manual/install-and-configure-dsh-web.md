@@ -478,7 +478,7 @@ dws:
 
 ### 页面提示无法连接 resident 插件
 
-检查 DSH 日志中是否加载了 `@zzusp/dingtalk-dsh-assistant/resident`，并确认 `127.0.0.1:18998` 未被其他进程占用：
+`http://127.0.0.1:3080` 与 `http://localhost:3080` 都应能连接 resident。检查 DSH 日志中是否加载了 `@zzusp/dingtalk-dsh-assistant/resident`，并确认 `127.0.0.1:18998` 未被其他进程占用：
 
 ```powershell
 Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue

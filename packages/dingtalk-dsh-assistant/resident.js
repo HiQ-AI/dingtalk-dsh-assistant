@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { handleRequest } from './http.js'
+import { applyResidentCorsHeaders, handleRequest } from './http.js'
 import { openResidentStore } from './store.js'
 import { openResidentRuntime } from './runtime.js'
 import { installFakeLlm } from './fake-llm.js'
@@ -119,11 +119,9 @@ export async function apply(ctx, config = {}) {
       modelMode: config.fakeModel === true ? 'fake' : 'real',
     }).catch((error) => {
       ctx.logger.warn(error instanceof Error ? error.stack : String(error))
+      applyResidentCorsHeaders(request, response)
       if (!response.headersSent) response.writeHead(400, {
         'content-type': 'application/json; charset=utf-8',
-        'access-control-allow-origin': 'http://127.0.0.1:3080',
-        'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
-        'access-control-allow-headers': 'content-type',
       })
       response.end(JSON.stringify({
         error: error instanceof Error ? error.message : String(error),

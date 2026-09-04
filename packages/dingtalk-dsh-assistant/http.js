@@ -1,5 +1,15 @@
 import { checkForUpdates } from './version-check.js'
 
+const WEB_ORIGINS = new Set(['http://127.0.0.1:3080', 'http://localhost:3080'])
+
+export function applyResidentCorsHeaders(request, response) {
+  const origin = request.headers.origin
+  if (WEB_ORIGINS.has(origin)) response.setHeader('access-control-allow-origin', origin)
+  response.setHeader('vary', 'Origin')
+  response.setHeader('access-control-allow-methods', 'GET,POST,PUT,DELETE,OPTIONS')
+  response.setHeader('access-control-allow-headers', 'content-type')
+}
+
 async function readJson(request) {
   const chunks = []
   let size = 0
@@ -14,14 +24,12 @@ async function readJson(request) {
 function send(response, status, value) {
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
-    'access-control-allow-origin': 'http://127.0.0.1:3080',
-    'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
-    'access-control-allow-headers': 'content-type',
   })
   response.end(JSON.stringify(value))
 }
 
 export async function handleRequest(request, response, store, { testApiEnabled = false, transport = 'fake-dws', outboundAuthorized = false, modelMode = 'fake', checkForUpdatesImpl = checkForUpdates } = {}) {
+  applyResidentCorsHeaders(request, response)
   const url = new URL(request.url ?? '/', 'http://localhost')
   if (request.method === 'OPTIONS') return send(response, 204, null)
   if (request.method === 'GET' && url.pathname === '/health') {
