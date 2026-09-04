@@ -498,7 +498,7 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 若进程重启发生在消息已标记 `steered`、但结构化判断尚未提交期间，新 Runtime 会把遗留消息转为立即到期的 `decision-retrying`。Resident、群配置和 DWS bridge 就绪后自动按群消息 `sequence` 恢复，恢复成功前该群的后续消息只入 Inbox；其他群不受影响。若状态为 `decision-commit-failed`，说明 Task 或 Outbox 提交已经开始，为避免重复副作用不会自动重放，必须先核对持久化 Task 与 Outbox 后再人工处理。
 
-若 Resident 连续出现上下文压缩且消息长期停在 `steered`，先检查 Session 事件中 `agent/inbox/spliced` 的单条体积。回复审阅候选正常最多 8 条、序列化内容最多 16 KB；明显超过该范围说明仍在运行旧插件。升级并重启后，Runtime 会清除依赖旧 requestId 的遗留协议信封，并从持久化消息状态按群内顺序恢复。不要通过提高上下文窗口掩盖无界候选注入。
+若 Resident 连续出现上下文压缩且消息长期停在 `steered`，先检查 Session 事件中 `agent/inbox/spliced` 的单条体积。回复审阅候选正常最多 8 条、序列化内容最多 16 KB；明显超过该范围说明仍在运行旧插件。若事件已经连续出现 `CONTEXT_WINDOW_EXCEEDED`，说明旧 Session 无法再靠重试恢复。升级并重启后，Runtime 会保留旧 Session 文件、自动为该群绑定全新的 Resident Session，清除依赖旧 requestId 的遗留协议信封，并从持久化消息状态按群内顺序恢复；运行期的持久化重试也会执行同样检测和换代。不要手工删除旧 Session，也不要通过提高上下文窗口掩盖无界候选注入。
 
 确认 DWS 登录有效，搜索词不少于两个字；如果配置了 `dws.profile`，确认登录的是同一个 profile。
 
