@@ -7,7 +7,7 @@ Task可按ID读取完整关联上下文,PASS
 无效或跨群Task请求失败关闭,PASS
 最近30条真实状态重放满足上下文预算,PASS
 全量测试,PASS
-安装包与源码一致,TODO
-收敛压缩插件更新到convergent.6,TODO
-本地服务重启与原Resident恢复,TODO
-最近消息真实处理复核,TODO
+安装包与源码一致,PASS
+收敛压缩插件更新到convergent.6,PASS
+本地服务重启与原Resident恢复,PASS
+最近消息真实处理复核,PASS
