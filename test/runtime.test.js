@@ -1801,6 +1801,40 @@ test('已有群切换预设时沿用原 Session，新群先创建 dsh Session �
   await runtime.close()
 })
 
+test('Resident 恢复失败时保留原 Session 绑定并进入降级状态', async () => {
+  const group = { groupId: 'failed-resident', residentSessionId: 'session-original', residentAgentPreset: 'standard-convergent', nextSequence: 1, messages: [], outbox: [] }
+  let createCalls = 0
+  let updateCalls = 0
+  const ctx = {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
+    agents: {
+      async resume() { throw new Error('corrupt session log: synthetic failure') },
+      async create() { createCalls += 1; throw new Error('Resident 恢复失败时不得创建替代 Session') },
+    },
+    subagents: { drainContinuableDescendants: async () => undefined },
+    agentPresets: { mount: async (_ctx, id) => ({ id }), serviceFor: () => ({ set: () => undefined }) },
+  }
+  const store = {
+    getGroup: (groupId) => groupId === group.groupId ? group : undefined,
+    listGroups: () => [group],
+    listTasks: () => [],
+    async updateGroup() { updateCalls += 1 },
+    close: async () => undefined,
+  }
+
+  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+
+  assert.equal(group.residentSessionId, 'session-original')
+  assert.equal(createCalls, 0)
+  assert.equal(updateCalls, 0)
+  assert.deepEqual(runtime.listRecoveryIssues(), [{
+    groupId: group.groupId,
+    residentSessionId: 'session-original',
+    error: 'corrupt session log: synthetic failure',
+  }])
+  await runtime.close()
+})
+
 test('Agent工作区统一写入各群Session cwd，变更时保留历史并重建resident', async () => {
   const groups = new Map()
   const creates = [], disposed = []

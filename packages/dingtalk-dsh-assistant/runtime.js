@@ -1630,16 +1630,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       await resumeResident(group)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
-      if (detail.includes('corrupt session log') || detail.includes('history unavailable')) {
-        const replacementSessionId = `${residentSessionId(group.groupId)}-${randomUUID().slice(0, 8)}`
-        const { handle } = await createResident(group.groupId, { sessionId: SessionId(replacementSessionId), meta: { cwd: agentWorkspace, agentPreset, replacedCorruptSessionId: group.residentSessionId }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
-        applyFullAccess(handle)
-        await store.updateGroup({ groupId: group.groupId, residentSessionId: replacementSessionId })
-        residentHandles.set(group.groupId, handle)
-        recoveryIssues.push({ groupId: group.groupId, residentSessionId: replacementSessionId, replacedSessionId: group.residentSessionId, error: detail, recovered: true })
-      } else {
-        recoveryIssues.push({ groupId: group.groupId, residentSessionId: group.residentSessionId, error: detail })
-      }
+      recoveryIssues.push({ groupId: group.groupId, residentSessionId: group.residentSessionId, error: detail })
     }
   }
   for (const task of store.listTasks().filter((item) => item.state === 'running' || item.state === 'waiting')) {

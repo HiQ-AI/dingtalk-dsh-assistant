@@ -262,6 +262,8 @@ Pop-Location
 
 `dump-config` 必须同时显示官方 `compaction-basic` 为 `disabled: true`、`compaction-convergent` 指向自实现包，并且不存在第二个启用的 compaction provider。安装回执和配置展开都不能代替运行态验证；重启后仍需检查 Node 24、Web/Resident listener、health/API，并在可控 Session 中确认压缩发生后 token 下降、Session 可重载且后续消息能继续。
 
+Resident Session 恢复失败时，Runtime 会保留原 `residentSessionId` 并把 `/health` 标记为 `degraded`，不会自动创建替代 Session 或改写群绑定。应先读取恢复问题并在副本上完成修复与校验；不要用新 Session 绕过损坏、超窗或历史不可用问题。
+
 回滚时先停止 Web，删除 `compaction-convergent` 插入项，并把官方 entry 恢复为 `disabled: false`；确认 `dump-config` 只启用官方 provider 后再启动。普通 provider 替换不会自动修复已经被 `session/end-seed` 划到恢复边界前的病理历史 Session；此类一次性修复必须严格按上游的[历史 Session 修复流程](https://github.com/zzusp/dsh-compaction-convergent/blob/main/docs/manual/replace-official-plugin.md#6-历史-session-一次性修复)在副本上执行，不得直接覆盖原 Session。
 
 两个 DWS 开关的含义：
