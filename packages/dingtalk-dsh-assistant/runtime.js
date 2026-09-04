@@ -54,7 +54,7 @@ const activityDetail = (event) => {
 }
 
 export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000 } = {}) {
-  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), pendingGroupDecisions = new Map(), pendingGroupReplies = new Map(), activeGroupSubmissions = new Set(), activeGroupReplies = new Set(), activeGroupResidentOperations = new Set(), groupReplyAdmissionBarriers = new Map(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), pendingLeafDisposals = new Set()
+  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), pendingGroupDecisions = new Map(), pendingGroupDecisionMonitors = new Map(), pendingGroupReplies = new Map(), activeGroupSubmissions = new Set(), activeGroupReplies = new Set(), activeGroupResidentOperations = new Set(), groupReplyAdmissionBarriers = new Map(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), pendingLeafDisposals = new Set()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
@@ -144,6 +144,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 \`[GROUP_DECISION_RECHECK]\` 是已有判断的内部复核。它可以单独提交，也可以与确实影响本次复核 Decision 的普通消息请求放进同一 submission；不要为了规避回复重生成而把相关消息机械拆开。
 
 Decision 仅回答使用 \`{"actions":[],"reply":"..."}\`，忽略为 \`{"actions":[],"reason":"原因"}\`，涉及任务时使用 \`{"actions":[...],"reply":"最多一条群回复，可为空"}\`。Decision 顶层不允许 kind 字段。一个 Decision 可以同时对应多个 Task，\`actions\` 中每项可为 task-proposal、new-task、task-context、task-reopen 或 task-cancel；不得为了只返回一个动作而遗漏其他相关 Task。每个任务动作必须通过 \`sourceMessageIds\` 列出本动作实际关联的全部消息 ID：既可引用本次正在处理的消息，也可引用本群会话中此前已收到的历史消息；必须包含形成当前动作的全部相关消息，且至少一条来自本次正在处理的消息。同一消息可关联多个 Task，不同 Task 也可选择不同消息集合，不得遗漏此前相关消息，也不得把无关消息机械塞入每个 Task。群回复统一放在顶层 \`reply\`，不得给每个动作分别回复。
+
+[GROUP_DECISION_RESUME] 表示上一段 Agent 活动结束后仍有已进入 Inbox、但尚未提交的判断请求。它不是新的群消息；必须立即结合当前上下文及同一 step 中保留的全部 [GROUP_MESSAGE_STEER] / [GROUP_DECISION_RECHECK]，通过 group_decision_submit 结算其中列出的 pending 请求。
 
 每次收到新消息时，检查其内容是否与当前 Session 上下文中的近期回复冲突；如有冲突，及时撤回本主会话发送的错误消息并订正。不得撤回真人或其他系统消息。
 
@@ -297,9 +299,29 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     pendingGroupDecisions.delete(requestId)
     pending.reject(error)
   }
-  function rejectUnsubmittedGroupDecisionWhenIdle(agent, requestId, groupId, messageId) {
-    agent.whenIdle().then(() => rejectPendingGroupDecision(requestId, new Error(`group_decision_not_submitted:${groupId}:${messageId}`)))
-      .catch((error) => rejectPendingGroupDecision(requestId, error))
+  function pendingDecisionsForGroup(groupId) {
+    return [...pendingGroupDecisions.values()].filter((pending) => pending.groupId === groupId)
+  }
+  function ensurePendingGroupDecisionSettlement(agent, groupId) {
+    if (pendingGroupDecisionMonitors.has(groupId)) return
+    const monitor = (async () => {
+      await agent.whenIdle()
+      if (runtimeClosing) return
+      let remaining = pendingDecisionsForGroup(groupId)
+      if (remaining.length === 0) return
+      agent.followup(createUserMessage({
+        content: [{ type: 'text', text: `[GROUP_DECISION_RESUME]\n上一段 Agent 活动已经结束，但以下判断请求仍未提交：${remaining.map((pending) => pending.requestId).join(', ')}。原始群消息或复核信封仍保留在当前 Session 上下文或原生 Inbox；立即结合全部 pending 请求调用 group_decision_submit。本恢复信封不是新的群消息，不得据此创建动作或群回复。` }],
+        source: { kind: 'coordinator' },
+      }))
+      await agent.whenIdle()
+      remaining = pendingDecisionsForGroup(groupId)
+      for (const pending of remaining) rejectPendingGroupDecision(pending.requestId, new Error(`group_decision_not_submitted:${groupId}:${pending.messageId}`))
+    })().catch((error) => {
+      for (const pending of pendingDecisionsForGroup(groupId)) rejectPendingGroupDecision(pending.requestId, error)
+    }).finally(() => {
+      if (pendingGroupDecisionMonitors.get(groupId) === monitor) pendingGroupDecisionMonitors.delete(groupId)
+    })
+    pendingGroupDecisionMonitors.set(groupId, monitor)
   }
   function createPendingGroupReply({ groupId, sourceMessageId, routingCandidates = [], routingRequired = false }) {
     const requestId = randomUUID()
@@ -1578,7 +1600,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             catch (error) { rejectPendingGroupDecision(admitted.requestId, error); throw error }
             return admitted
           })
-          rejectUnsubmittedGroupDecisionWhenIdle(handle.agent, pending.requestId, message.groupId, message.messageId)
+          ensurePendingGroupDecisionSettlement(handle.agent, message.groupId)
           await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'steered' })
           pending.resolveDeliveryRecorded()
           submitted = await pending.promise
@@ -1595,7 +1617,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           if ('reason' in decision && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: submitted.requests.some((request) => request.imageRefs.length > 0), previousMessage, occurredAt: message.occurredAt })) {
             const recheck = createPendingGroupDecision({ groupId: message.groupId, messageId: message.messageId, sequence: accepted.sequence, message, imageRefs, kind: 'recheck', baseRequests: decisionRequests })
             handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_RECHECK]\n判断请求 ID：${recheck.requestId}\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
-            rejectUnsubmittedGroupDecisionWhenIdle(handle.agent, recheck.requestId, message.groupId, message.messageId)
+            ensurePendingGroupDecisionSettlement(handle.agent, message.groupId)
             recheckedSubmission = await recheck.promise
             await Promise.all(recheckedSubmission.requests.map((request) => request.deliveryRecorded))
             decision = recheckedSubmission.decision
