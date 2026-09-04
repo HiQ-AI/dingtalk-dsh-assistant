@@ -455,11 +455,13 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         const requestIds = args.submissions.flatMap((submission) => submission.requestIds)
         if (new Set(requestIds).size !== requestIds.length) throw new Error('group_decision_request_duplicate')
         const pendings = requestIds.map((requestId) => pendingGroupDecisions.get(requestId))
-        if (pendings.some((pending) => pending === undefined)) throw new Error('group_decision_request_unknown')
-        if (pendings.some((pending) => pending.groupId !== groupId)) throw new Error('group_decision_request_wrong_group')
+        if (pendings.some((pending) => pending !== undefined && pending.groupId !== groupId)) throw new Error('group_decision_request_wrong_group')
         const observedPendings = observedRequestIds.map((requestId) => pendingGroupDecisions.get(requestId))
-        if (observedPendings.some((pending) => pending === undefined)) throw new Error('group_decision_observed_request_unknown')
-        if (observedPendings.some((pending) => pending.groupId !== groupId)) throw new Error('group_decision_observed_request_wrong_group')
+        if (observedPendings.some((pending) => pending !== undefined && pending.groupId !== groupId)) throw new Error('group_decision_observed_request_wrong_group')
+        const currentRequestIds = pendingDecisionsForGroup(groupId).sort((left, right) => left.sequence - right.sequence).map((pending) => pending.requestId)
+        const currentRequestIdSet = new Set(currentRequestIds)
+        const unexpectedRequestIds = [...new Set([...requestIds, ...observedRequestIds])].filter((requestId) => !currentRequestIdSet.has(requestId))
+        if (unexpectedRequestIds.length > 0) return { status: 'stale', acceptedRequestIds: [], pendingRequestIds: currentRequestIds, missingRequestIds: currentRequestIds, unexpectedRequestIds }
         if (observedPendings.some((pending) => pending.kind !== 'message')) throw new Error('group_decision_observed_request_not_message')
         if (args.submissions.some((submission) => submission.requestIds.filter((requestId) => pendingGroupDecisions.get(requestId).kind === 'recheck').length > 1)) throw new Error('group_decision_recheck_duplicate')
         let validated
