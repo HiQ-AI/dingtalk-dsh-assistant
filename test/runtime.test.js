@@ -667,6 +667,33 @@ test('Runtime重启后自动恢复孤立steered并严格按群消息顺序放行
   await runtime.close()
 })
 
+test('Runtime恢复Resident时清理已失效的内存请求信封并保留普通待办', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'stale-resident-inbox-group' })
+  const nextStep = [
+    { id: 'stale-message', content: [{ type: 'text', text: '[GROUP_MESSAGE_STEER]\n判断请求 ID：old-message' }] },
+    { id: 'normal-message', content: [{ type: 'text', text: '普通待处理内容' }] },
+    { id: 'stale-recheck', content: [{ type: 'text', text: '[GROUP_DECISION_RECHECK]\n判断请求 ID：old-recheck' }] },
+  ]
+  const nextTurn = [
+    { id: 'stale-resume', content: [{ type: 'text', text: '[GROUP_DECISION_RESUME]\n旧请求' }] },
+    { id: 'stale-coordination', content: [{ type: 'text', text: '[TASK_COORDINATION]\n回复请求 ID：old-reply' }] },
+  ]
+  fixture.handle.agent.inbox = {
+    nextStep, nextTurn,
+    remove(messageId) {
+      for (const messages of [nextStep, nextTurn]) {
+        const index = messages.findIndex((message) => message.id === messageId)
+        if (index >= 0) { messages.splice(index, 1); return true }
+      }
+      return false
+    },
+  }
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  assert.deepEqual(nextStep.map((message) => message.id), ['normal-message'])
+  assert.deepEqual(nextTurn, [])
+  await runtime.close()
+})
+
 test('Outbox已落库后监听器失败不会反向否定Decision提交', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'outbox-listener-failure-group' })
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))

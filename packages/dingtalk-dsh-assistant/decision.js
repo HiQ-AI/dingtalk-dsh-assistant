@@ -58,6 +58,13 @@ const compactText = (value, limit = 800) => {
   return text.length <= limit ? text : `${text.slice(0, limit)}…`
 }
 
+export const REPLY_REVIEW_CANDIDATE_LIMIT = 8
+export const REPLY_REVIEW_MAX_CHARS = 16_000
+const REPLY_REVIEW_CONFIRMATION_LIMIT = 6
+const REPLY_REVIEW_SOURCE_MESSAGE_LIMIT = 4
+const REPLY_REVIEW_TASK_LIMIT = 3
+const uniqueValues = (values) => [...new Set(values.filter(Boolean))]
+
 const comparableText = (value) => String(value ?? '').toLowerCase().replace(/@[\p{L}\p{N}_()（）-]+/gu, '').replace(/[^\p{L}\p{N}]+/gu, '')
 
 const textFragments = (value) => {
@@ -76,53 +83,79 @@ const contentSimilarity = (left, right) => {
 
 const taskMessageIds = (task) => new Set([task.sourceMessageId, ...(task.messageHistory ?? []).map((message) => message.messageId)].filter(Boolean))
 
-export function buildReplyReviewCandidates({ group, tasks = [], currentMessages = [], focusTaskIds = [], recentLimit = 30, similarityLimit = 20 }) {
+export function buildReplyReviewCandidates({ group, tasks = [], currentMessages = [], focusTaskIds = [], recentLimit = 6, similarityLimit = 6, candidateLimit = REPLY_REVIEW_CANDIDATE_LIMIT, maxChars = REPLY_REVIEW_MAX_CHARS }) {
   if (group === undefined) return []
   const messages = new Map((group.messages ?? []).map((message) => [message.messageId, message]))
   for (const task of tasks) for (const message of task.messageHistory ?? []) if (!messages.has(message.messageId)) messages.set(message.messageId, message)
   const taskIdsByMessage = new Map()
   for (const task of tasks) for (const messageId of taskMessageIds(task)) taskIdsByMessage.set(messageId, [...new Set([...(taskIdsByMessage.get(messageId) ?? []), task.taskId])])
   const focus = new Set(focusTaskIds)
+  const currentReferences = new Set(currentMessages.flatMap((message) => [message.messageId, message.quotedMessage?.messageId, message.quotedMessageId]).filter(Boolean))
+  const contextualTaskIds = new Set(focusTaskIds)
+  for (const messageId of currentReferences) for (const taskId of taskIdsByMessage.get(messageId) ?? []) contextualTaskIds.add(taskId)
   const currentText = currentMessages.map((message) => `${message.text ?? ''}\n${message.quotedMessage?.content ?? ''}`).join('\n')
   const active = (group.outbox ?? []).filter((outbound) => ['pending', 'sent'].includes(outbound.status) && outbound.recallStatus !== 'recalled')
   const decorated = active.map((outbound, index) => {
-    const sourceIds = [...new Set([...(outbound.matterSourceMessageIds ?? []), outbound.sourceMessageId, outbound.replyToMessageId].filter((messageId) => messages.has(messageId)))]
+    const sourceIds = uniqueValues([...(outbound.matterSourceMessageIds ?? []), outbound.sourceMessageId, outbound.replyToMessageId]).filter((messageId) => messages.has(messageId))
     const derivedTaskIds = new Set(outbound.taskIds ?? [])
     const taskResult = /^task-result:(task-[^:]+):/u.exec(outbound.sourceMessageId)
     if (taskResult) derivedTaskIds.add(taskResult[1])
     for (const messageId of sourceIds) for (const taskId of taskIdsByMessage.get(messageId) ?? []) derivedTaskIds.add(taskId)
-    const relatedTasks = tasks.filter((task) => derivedTaskIds.has(task.taskId))
-    for (const task of relatedTasks) {
+    const allRelatedTasks = tasks.filter((task) => derivedTaskIds.has(task.taskId))
+    for (const task of allRelatedTasks) {
       for (const message of (task.messageHistory ?? []).slice(-8)) if (!sourceIds.includes(message.messageId)) sourceIds.push(message.messageId)
     }
-    const sourceMessages = sourceIds.flatMap((messageId) => {
+    const projectedSourceIds = uniqueValues([
+      ...sourceIds.filter((messageId) => currentReferences.has(messageId)),
+      outbound.sourceMessageId,
+      outbound.replyToMessageId,
+      ...[...sourceIds].reverse(),
+    ]).filter((messageId) => messages.has(messageId)).slice(0, REPLY_REVIEW_SOURCE_MESSAGE_LIMIT)
+    const sourceMessages = projectedSourceIds.flatMap((messageId) => {
       const message = messages.get(messageId)
       return message === undefined ? [] : [{
-        messageId, text: compactText(message.text),
+        messageId, text: compactText(message.text, 480),
         ...(message.senderName ? { senderName: message.senderName } : {}),
         ...(message.senderOpenDingTalkId ? { senderOpenDingTalkId: message.senderOpenDingTalkId } : {}),
         ...(message.occurredAt !== undefined ? { occurredAt: mainMessageTime(message.occurredAt) } : {}),
         ...(message.quotedMessage?.messageId || message.quotedMessageId ? { quotedMessageId: message.quotedMessage?.messageId ?? message.quotedMessageId } : {}),
-        ...(message.quotedMessage?.content ? { quotedContent: compactText(message.quotedMessage.content, 400) } : {}),
+        ...(message.quotedMessage?.content ? { quotedContent: compactText(message.quotedMessage.content, 240) } : {}),
       }]
     })
-    const candidateText = [outbound.text, ...sourceMessages.flatMap((message) => [message.text, message.quotedContent]), ...relatedTasks.map((task) => task.objective)].join('\n')
+    const projectedTaskIds = uniqueValues([
+      ...[...derivedTaskIds].filter((taskId) => contextualTaskIds.has(taskId)),
+      ...[...derivedTaskIds].reverse(),
+    ]).slice(0, REPLY_REVIEW_TASK_LIMIT)
+    const relatedTasks = allRelatedTasks.filter((task) => projectedTaskIds.includes(task.taskId))
+    const candidateText = [compactText(outbound.text, 800), ...sourceMessages.flatMap((message) => [message.text, message.quotedContent]), ...relatedTasks.map((task) => task.objective)].join('\n')
     return {
       index, score: contentSimilarity(currentText, candidateText),
+      directlyLinked: sourceIds.some((messageId) => currentReferences.has(messageId)) || [...derivedTaskIds].some((taskId) => contextualTaskIds.has(taskId)),
+      focused: [...derivedTaskIds].some((taskId) => focus.has(taskId)),
+      confirmation: outbound.replyKind === 'confirmation',
       candidate: {
         outboundId: outbound.outboundId, sourceMessageId: outbound.sourceMessageId, status: outbound.status,
         ...(outbound.deliveredMessageId ? { deliveredMessageId: outbound.deliveredMessageId } : {}),
         ...(outbound.replyKind ? { replyKind: outbound.replyKind } : {}),
-        reply: compactText(outbound.text, 500), taskIds: [...derivedTaskIds], sourceMessages,
-        tasks: relatedTasks.map(({ taskId, title, objective, state }) => ({ taskId, ...(title ? { title } : {}), objective: compactText(objective, 500), state })),
+        reply: compactText(outbound.text, 360), taskIds: projectedTaskIds, sourceMessages,
+        tasks: relatedTasks.map(({ taskId, title, objective, state }) => ({ taskId, ...(title ? { title: compactText(title, 120) } : {}), objective: compactText(objective, 360), state })),
       },
     }
   })
-  const selected = new Set(decorated.slice(-Math.max(0, recentLimit)).map(({ index }) => index))
-  for (const item of decorated) if (item.candidate.replyKind === 'confirmation') selected.add(item.index)
-  for (const item of decorated) if (item.candidate.taskIds.some((taskId) => focus.has(taskId))) selected.add(item.index)
-  for (const item of [...decorated].sort((left, right) => right.score - left.score).slice(0, Math.max(0, similarityLimit))) if (item.score > 0) selected.add(item.index)
-  return decorated.filter(({ index }) => selected.has(index)).sort((left, right) => right.index - left.index).map(({ candidate }) => candidate)
+  const newest = [...decorated].sort((left, right) => right.index - left.index)
+  const prioritized = uniqueValues([
+    ...newest.filter((item) => item.focused || item.directlyLinked),
+    ...newest.filter((item) => item.confirmation).slice(0, REPLY_REVIEW_CONFIRMATION_LIMIT),
+    ...[...decorated].filter((item) => item.score > 0).sort((left, right) => right.score - left.score || right.index - left.index).slice(0, Math.max(0, similarityLimit)),
+    ...newest.slice(0, Math.max(0, recentLimit)),
+  ])
+  const bounded = []
+  for (const item of prioritized) {
+    if (bounded.length >= Math.max(0, candidateLimit)) break
+    const next = [...bounded, item]
+    if (JSON.stringify(next.map(({ candidate }) => candidate)).length <= Math.max(0, maxChars)) bounded.push(item)
+  }
+  return bounded.sort((left, right) => right.index - left.index).map(({ candidate }) => candidate)
 }
 
 function mainMessageTime(value) {

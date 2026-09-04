@@ -215,6 +215,8 @@ dws:
 
 `group_decision_submit` 的 submission 中已提交的普通请求天然计入模型的观察集合；顶层 `observedRequestIds` 只需补充模型已经审阅、但本批不提交并准备稍后处理的其他普通 pending 请求，重复列出已提交 ID 仍兼容。影响回复的消息必须与原请求放进同一 submission 并重新生成 Decision；独立且已经完成的事项使用独立 submission。若提交瞬间存在未观察的新 Steer，工具返回无副作用的结构化 `stale` 结果，模型在下一 step 结合 `missingRequestIds` 重生成，不再把预期并发控制显示为工具 Failed。附件缺失拦截形成的提示和关联复核回复使用同一门禁。结构化业务落地仍按群串行收口；单次 Decision 的 `actions` 可同时关联、重开、新建或取消多个 Task，顶层最多生成一条群回复。每个 Task 动作必须用 `sourceMessageIds` 明确列出完整相关消息：可以包含本群已持久化的历史消息，但至少包含一条当前正在处理的消息；同一消息可关联多个 Task，不同 Task 也可选择不同消息集合。
 
+历史主会话回复候选只用于避免重复确认，不得随群历史无限增长。每次判断最多携带 8 条候选且候选 JSON 不超过 16 KB；当前消息/引用和聚焦 Task 的直接关联优先，其次才是近期确认、正文相似项和最近回复。每个候选仍保留有界的真实来源正文、引用正文和 Task 目标供语义判断，引用 ID 或词面相似度本身不能决定是否同一事项。Runtime 重启后会移除 Resident 原生 Inbox 中依赖旧内存 requestId 的协议信封，再从插件持久化 Inbox 生成新 requestId 按序恢复，避免继续消费失效的超大 Steer。
+
 图片及其紧邻短消息被初次判断为无关时，Runtime 会发起一次结构化关联复核。复核使用 `steer` 插入当前 Turn 的下一 step，使 `whenIdle()` 只在复核真正获得执行机会后结算；不得用 `followup` 把复核排到后续 Turn，否则当前 Turn 的空闲边界会提前把尚未开始的复核误判为未提交。
 
 Task 完成和信息阻塞通知也不再从 turn 的最后一段 assistant 文本取值。Runtime 为每次 `[TASK_COORDINATION]` 创建独立回复请求，Resident 必须调用 `group_reply_submit`，并用 `observedRequestIds` 声明生成通知前已审阅的全部普通 pending 请求；漏观察时返回结构化 `stale`，旧候选不提交，并在下一 step 结合新消息重生成，已观察的普通消息仍保留给自己的 Decision。Task 通知还必须从完整消息时间线中结构化提交 `replyToMessageId` 和 `atOpenDingTalkIds`：Resident 按语义选择承接消息和一位或多位相关参与人，Runtime 校验二者都真实属于该 Task，不再固定使用最后触发人。工具只在通知可靠写入 Outbox 后返回。通知生成和提交不占用全局 Task 串行尾链，避免新消息的任务动作与通知相互等待。首次及后续完成通知使用与正常提交一致的稳定结果键，Outbox 写入失败后可由完成通知补偿流程重新发起；Outbox 已落库后的发送监听器异常不会反向否定 Decision。上述门禁保证当前进程内同群事件顺序，不是跨进程事务，也不承诺进程崩溃窗口的 exactly-once。

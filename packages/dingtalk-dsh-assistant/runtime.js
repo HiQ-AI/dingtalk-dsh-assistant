@@ -6,8 +6,21 @@ import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSou
 import { parseTaskCheckpoint, parseTaskResult } from './task-result.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
+const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_MESSAGE_STEER]', '[GROUP_DECISION_RECHECK]', '[GROUP_DECISION_RESUME]', '[TASK_COORDINATION]']
 const SessionId = (id) => id
 const createUserMessage = (input) => Object.freeze({ ...structuredClone(input), id: randomUUID(), role: 'user' })
+const discardStaleResidentRequests = (agent) => {
+  const inbox = agent?.inbox
+  if (inbox === undefined || typeof inbox.remove !== 'function') return 0
+  const pending = [...(inbox.nextStep ?? []), ...(inbox.nextTurn ?? [])]
+  let removed = 0
+  for (const message of pending) {
+    const text = (message.content ?? []).filter((block) => block.type === 'text').map((block) => block.text).join('\n').trimStart()
+    if (!STALE_RESIDENT_REQUEST_PREFIXES.some((prefix) => text.startsWith(prefix))) continue
+    if (inbox.remove(message.id)) removed += 1
+  }
+  return removed
+}
 const leafDisplayName = (objective) => {
   const normalized = objective.trim().replace(/\s+/gu, ' ')
   const heading = normalized.split(/[：:；;]/u, 1)[0] || normalized
@@ -1013,6 +1026,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
   async function resumeResident(group) {
     if (residentHandles.has(group.groupId)) return residentHandles.get(group.groupId)
     const handle = await ctx.agents.resume({ resumeSessionId: SessionId(group.residentSessionId), agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+    discardStaleResidentRequests(handle.agent)
     if (group.residentAgentPreset !== agentPreset) {
       await store.updateGroup({ groupId: group.groupId, residentAgentPreset: agentPreset })
     }
