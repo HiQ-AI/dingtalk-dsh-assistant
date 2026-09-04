@@ -21,7 +21,7 @@
 - 重试信封携带上次错误和尝试次数，要求 Resident 根据当前完整 Task 索引重新生成 Decision，禁止机械复用上次参数。
 - 在 `group_decision_submit` 接受 Decision 前统一校验 `task-context`、`task-reopen` 和 `task-cancel` 的真实当前目标，使失效 ID 留在可纠正、可自动重试的无副作用阶段。
 - 判断已经接受且 Task/Outbox 提交开始后的异常改记为 `decision-commit-failed`，页面展示“处理提交失败”。该状态不自动重放，避免重复任务或重复回复。
-- 保留历史 `decision-failed` 的精确人工重试入口；新产生的可恢复判断错误不再进入该终态。
+- 历史 `decision-failed` 中能证明未发生业务副作用的重启中断、未提交 Decision 和无效 JSON 会在启动时自动迁移到 `decision-retrying`；其他旧失败保留精确人工重试入口。新产生的可恢复判断错误不再进入旧终态。
 
 ## 验证
 

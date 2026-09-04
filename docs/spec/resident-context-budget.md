@@ -11,7 +11,7 @@
 - 回复候选最多 8 条、序列化 JSON 最多 16 KB；每个候选最多保留 4 条真实来源消息和 3 个 Task 摘要。
 - 选择顺序优先当前消息或引用链直接关联、当前聚焦 Task，再选近期结构化确认、正文相似项和最近回复。引用 ID 与词面相似度只负责召回，最终同一事项判断仍由 Resident 阅读真实正文后完成。
 - 候选的回复、来源正文、引用正文和 Task 目标分别截断到固定长度。预算应用在结构化候选数组边界，不截断当前群消息本身。
-- Runtime 恢复既有 Resident 时，清理带旧内存 requestId 的 `GROUP_MESSAGE_STEER`、复核、恢复提醒和 `TASK_COORDINATION` 待处理信封；持久化 Inbox 再生成新 requestId 重放，避免重启后继续消费失效的大信封。
+- Runtime 恢复既有 Resident 时，清理带旧内存 requestId 的 `GROUP_MESSAGE_STEER`、复核、恢复提醒和 `TASK_COORDINATION` 待处理信封；持久化 Inbox 再生成新 requestId 重放，避免重启后继续消费失效的大信封。旧版本退出时形成的重启中断、未提交 Decision 和无效 JSON 也会自动迁移到顺序恢复；无法排除 Task/Outbox 副作用的旧错误仍需人工核对。
 
 ## 验证
 

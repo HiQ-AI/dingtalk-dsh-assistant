@@ -694,6 +694,23 @@ test('Runtime恢复Resident时清理已失效的内存请求信封并保留普�
   await runtime.close()
 })
 
+test('启动只迁移可证明尚无业务副作用的历史判断失败', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'legacy-safe-recovery-group' })
+  fixture.group.messages.push(
+    { messageId: 'm-restart', sequence: 1, text: '重启中断', occurredAt: '2026-09-04T01:00:00Z', agentDeliveryStatus: 'decision-failed', agentDeliveryError: 'resident_restarted_before_decision_settled' },
+    { messageId: 'm-unsubmitted', sequence: 2, text: '未提交', occurredAt: '2026-09-04T01:01:00Z', agentDeliveryStatus: 'decision-failed', agentDeliveryError: 'group_decision_not_submitted:legacy-safe-recovery-group:m-unsubmitted' },
+    { messageId: 'm-invalid-json', sequence: 3, text: '无效JSON', occurredAt: '2026-09-04T01:02:00Z', agentDeliveryStatus: 'decision-failed', agentDeliveryError: 'group_decision_invalid_json' },
+    { messageId: 'm-unknown-side-effect', sequence: 4, text: '提交阶段失败', occurredAt: '2026-09-04T01:03:00Z', agentDeliveryStatus: 'decision-failed', agentDeliveryError: 'task_context_target_invalid:task-stale' },
+  )
+  fixture.group.nextSequence = 5
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const scheduled = await runtime.recoverInterruptedDecisions()
+  assert.deepEqual(scheduled.map((item) => item.messageId), ['m-restart', 'm-unsubmitted', 'm-invalid-json'])
+  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['decision-retrying', 'decision-retrying', 'decision-retrying', 'decision-failed'])
+  assert.equal(fixture.group.messages[3].agentDeliveryError, 'task_context_target_invalid:task-stale')
+  await runtime.close()
+})
+
 test('Outbox已落库后监听器失败不会反向否定Decision提交', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'outbox-listener-failure-group' })
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))

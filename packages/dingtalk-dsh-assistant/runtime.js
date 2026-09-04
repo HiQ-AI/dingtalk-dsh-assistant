@@ -7,6 +7,11 @@ import { parseTaskCheckpoint, parseTaskResult } from './task-result.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
 const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_MESSAGE_STEER]', '[GROUP_DECISION_RECHECK]', '[GROUP_DECISION_RESUME]', '[TASK_COORDINATION]']
+const isLegacyPreDecisionFailure = (message) => message.agentDeliveryStatus === 'decision-failed' && (
+  message.agentDeliveryError === 'resident_restarted_before_decision_settled'
+  || message.agentDeliveryError === 'group_decision_invalid_json'
+  || message.agentDeliveryError?.startsWith('group_decision_not_submitted:')
+)
 const SessionId = (id) => id
 const createUserMessage = (input) => Object.freeze({ ...structuredClone(input), id: randomUUID(), role: 'user' })
 const discardStaleResidentRequests = (agent) => {
@@ -1912,12 +1917,12 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     },
     async recoverInterruptedDecisions() {
       const interrupted = store.listGroups().flatMap((group) => (group.messages ?? [])
-        .filter((message) => message.agentDeliveryStatus === 'steered')
-        .map((message) => ({ groupId: group.groupId, messageId: message.messageId })))
+        .filter((message) => message.agentDeliveryStatus === 'steered' || isLegacyPreDecisionFailure(message))
+        .map((message) => ({ groupId: group.groupId, messageId: message.messageId, error: message.agentDeliveryStatus === 'steered' ? 'resident_restarted_before_decision_settled' : message.agentDeliveryError })))
       const results = []
       for (const message of interrupted) {
-        await store.markMessageAgentDelivery({ ...message, status: 'decision-retrying', error: 'resident_restarted_before_decision_settled', retryAt: new Date().toISOString() })
-        results.push({ ...message, status: 'scheduled' })
+        await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'decision-retrying', error: message.error, retryAt: new Date().toISOString() })
+        results.push({ groupId: message.groupId, messageId: message.messageId, status: 'scheduled' })
       }
       return results
     },
