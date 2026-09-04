@@ -132,7 +132,7 @@ function mainMessageTime(value) {
   return Number.isNaN(parsed.valueOf()) ? value : parsed.toISOString()
 }
 
-export function buildDecisionPrompt({ messageId, message, senderName, senderOpenDingTalkId, occurredAt, quotedMessage, mediaUnavailable, replyReviewCandidates }) {
+export function buildDecisionPrompt({ messageId, message, senderName, senderOpenDingTalkId, occurredAt, quotedMessage, mediaUnavailable, replyReviewCandidates, recoveryError, decisionAttemptCount }) {
   const messageBlock = [
     `消息唯一标识：${messageId ?? '未知'}`,
     `发送者：${senderName ?? '未知'}`,
@@ -141,6 +141,7 @@ export function buildDecisionPrompt({ messageId, message, senderName, senderOpen
     `内容：${message}`,
   ]
   if (quotedMessage?.messageId) messageBlock.push(`引用消息ID：${quotedMessage.messageId}`)
+  if (recoveryError) messageBlock.push(`自动恢复：此前第 ${decisionAttemptCount ?? 1} 次判断未完成，错误为 ${recoveryError}。必须根据当前消息、当前任务索引和现行工具 Schema 重新生成，不得机械复用上次的参数或失效 Task ID。`)
   if (Array.isArray(mediaUnavailable) && mediaUnavailable.length > 0) messageBlock.push(`附件读取异常：${mediaUnavailable.join('；')}。不得仅因附件暂不可读而断言消息与职责或活动任务无关；如果这些附件承载任务所需信息，必须先回答并明确告知对方哪些信息未获取到，不得创建、续接或重开任务。`)
   if (Array.isArray(replyReviewCandidates)) messageBlock.push(`历史主会话回复候选（必须阅读来源正文后判断同一事项，引用ID只能作为线索）：${JSON.stringify(replyReviewCandidates)}`)
   return [

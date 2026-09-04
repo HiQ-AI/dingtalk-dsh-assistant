@@ -110,7 +110,7 @@ function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false 
       group.messages.push(accepted)
       return { duplicate: false, sequence: accepted.sequence, group }
     },
-    async markMessageAgentDelivery({ messageId, status, error }) { Object.assign(group.messages.find((item) => item.messageId === messageId), { agentDeliveryStatus: status, ...(error === undefined ? {} : { error }) }); return group },
+    async markMessageAgentDelivery({ messageId, status, error, retryAt }) { const item = group.messages.find((message) => message.messageId === messageId); const next = { agentDeliveryStatus: status, ...(status === 'steered' ? { agentDecisionAttemptCount: (item.agentDecisionAttemptCount ?? 0) + 1 } : {}), ...(error === undefined ? {} : { error, agentDeliveryError: error }), ...(retryAt === undefined ? {} : { agentDecisionRetryAt: retryAt }) }; if (!error) { delete item.error; delete item.agentDeliveryError } if (!retryAt) delete item.agentDecisionRetryAt; Object.assign(item, next); return group },
     async appendOutbox(value) { group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
     async updateOutboundRecall({ outboundId, status, reason, error }) { const item = group.outbox.find((entry) => entry.outboundId === outboundId); Object.assign(item, { recallStatus: status, recallReason: reason }, status === 'recalled' ? { recalledAt: '2026-09-04T00:00:00Z', recallError: undefined } : {}, status === 'failed' ? { recallError: error } : {}); return group },
     async createTask(value) {
@@ -174,7 +174,7 @@ function twoGroupDecisionFixture() {
   const store = {
     getGroup: (groupId) => groups.get(groupId), listGroups: () => [...groups.values()], listTasks: () => [], getTask: () => undefined,
     async ingest(message) { const group = groups.get(message.groupId); const accepted = { ...message, sequence: group.nextSequence++, agentDeliveryStatus: 'pending' }; group.messages.push(accepted); return { duplicate: false, sequence: accepted.sequence, group } },
-    async markMessageAgentDelivery({ groupId, messageId, status, error }) { Object.assign(groups.get(groupId).messages.find((item) => item.messageId === messageId), { agentDeliveryStatus: status, ...(error === undefined ? {} : { error }) }); return groups.get(groupId) },
+    async markMessageAgentDelivery({ groupId, messageId, status, error, retryAt }) { const item = groups.get(groupId).messages.find((message) => message.messageId === messageId); const next = { agentDeliveryStatus: status, ...(status === 'steered' ? { agentDecisionAttemptCount: (item.agentDecisionAttemptCount ?? 0) + 1 } : {}), ...(error === undefined ? {} : { error, agentDeliveryError: error }), ...(retryAt === undefined ? {} : { agentDecisionRetryAt: retryAt }) }; if (!error) { delete item.error; delete item.agentDeliveryError } if (!retryAt) delete item.agentDecisionRetryAt; Object.assign(item, next); return groups.get(groupId) },
     async appendOutbox(value) { const group = groups.get(value.groupId); group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
     close: async () => undefined,
   }
@@ -207,7 +207,7 @@ function taskReplyRuntimeFixture({ messageHistory, groupMessages = [] } = {}) {
     listGroups: () => [group], listTasks: () => [task], getTask: (taskId) => taskId === task.taskId ? task : undefined,
     async updateTask(taskId, transform) { if (taskId !== task.taskId) throw new Error(`task_not_found:${taskId}`); task = transform(task); return task },
     async ingest(message) { const accepted = { ...message, sequence: group.nextSequence++, agentDeliveryStatus: 'pending' }; group.messages.push(accepted); return { duplicate: false, sequence: accepted.sequence, group } },
-    async markMessageAgentDelivery({ messageId, status, error }) { Object.assign(group.messages.find((item) => item.messageId === messageId), { agentDeliveryStatus: status, ...(error === undefined ? {} : { error }) }); return group },
+    async markMessageAgentDelivery({ messageId, status, error, retryAt }) { const item = group.messages.find((message) => message.messageId === messageId); const next = { agentDeliveryStatus: status, ...(status === 'steered' ? { agentDecisionAttemptCount: (item.agentDecisionAttemptCount ?? 0) + 1 } : {}), ...(error === undefined ? {} : { error, agentDeliveryError: error }), ...(retryAt === undefined ? {} : { agentDecisionRetryAt: retryAt }) }; if (!error) { delete item.error; delete item.agentDeliveryError } if (!retryAt) delete item.agentDecisionRetryAt; Object.assign(item, next); return group },
     async appendOutbox(value) { if (!group.outbox.some((item) => item.sourceMessageId === value.sourceMessageId)) group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
     async updateOutboundRecall({ outboundId, status, reason, error }) { const item = group.outbox.find((entry) => entry.outboundId === outboundId); Object.assign(item, { recallStatus: status, recallReason: reason }, status === 'recalled' ? { recalledAt: '2026-09-04T00:00:00Z', recallError: undefined } : {}, status === 'failed' ? { recallError: error } : {}); return group },
     close: async () => undefined,
@@ -589,7 +589,7 @@ test('Decision claim到可靠Outbox之间阻止同群新Steer越过回复门禁'
   await runtime.close()
 })
 
-test('Decision可靠Outbox失败会明确失败并释放门禁且不重放Task动作', async () => {
+test('Decision可靠Outbox失败会隔离为提交失败并阻止同群后续消息越过', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'reply-append-failure-group' })
   const appendOutbox = fixture.store.appendOutbox
   let failAppend = true
@@ -610,44 +610,28 @@ test('Decision可靠Outbox失败会明确失败并释放门禁且不重放Task�
   await assert.rejects(submission, /outbox_append_failed/)
   await assert.rejects(first, /outbox_append_failed/)
   assert.equal(fixture.group.outbox.length, 0)
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-failed')
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-commit-failed')
   assert.equal(fixture.tasks.length, 1, 'Outbox失败不得自动重放已提交的Task动作')
 
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '失败后进入的新消息', occurredAt: '2026-09-02T01:00:01Z' })
-  await fixture.waitForSteers(2)
-  const secondRequestId = decisionRequestId(fixture.steered[1])
-  await tool.execute({ submissions: [{ requestIds: [secondRequestId], decision: { actions: [], reason: '后续消息正常处理' } }] }, { agent: fixture.handle.agent })
-  await second
+  const second = await runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '失败后进入的新消息', occurredAt: '2026-09-02T01:00:01Z' })
+  assert.equal(second.blocked, true)
+  assert.equal(second.blockedByMessageId, 'm1')
+  assert.equal(fixture.steered.length, 1)
+  assert.equal(fixture.group.messages[1].agentDeliveryStatus, 'pending')
   assert.equal(fixture.tasks.length, 1)
   fixture.releaseIdle()
   await runtime.close()
 })
 
-test('显式重试会让无副作用的decision-failed消息重新进入判断且拒绝重试已完成消息', async () => {
+test('历史decision-failed仍可精确重试且已完成消息拒绝重复重试', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'decision-retry-group' })
-  const createTask = fixture.store.createTask
-  let failCreate = true
-  fixture.store.createTask = async (value) => {
-    if (failCreate) { failCreate = false; throw new Error('task_create_failed') }
-    return createTask(value)
-  }
+  fixture.group.messages.push({ messageId: 'm1', sequence: 1, text: '重新判断这条消息', occurredAt: '2026-09-02T01:00:00Z', agentDeliveryStatus: 'decision-failed', error: 'historical_failure' })
+  fixture.group.nextSequence = 2
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '重新判断这条消息', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const firstRequestId = decisionRequestId(fixture.steered[0])
-  const firstSubmission = tool.execute({
-    submissions: [{ requestIds: [firstRequestId], decision: { actions: [{ kind: 'new-task', title: '首次创建失败', objective: '触发无副作用的提交失败', acceptanceCriteria: ['不得残留任务'], sourceMessageIds: ['m1'] }], reply: '' } }],
-  }, { agent: fixture.handle.agent })
-  assert.equal((await firstSubmission).status, 'accepted')
-  await assert.rejects(first, /task_create_failed/)
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-failed')
-  assert.equal(fixture.tasks.length, 0)
-
-  await new Promise((resolve) => setImmediate(resolve))
   const retried = runtime.retryDecisionFailedMessage({ groupId: fixture.group.groupId, messageId: 'm1' })
-  await fixture.waitForSteers(2)
-  const retryRequestId = decisionRequestId(fixture.steered[1])
+  await fixture.waitForSteers(1)
+  const retryRequestId = decisionRequestId(fixture.steered[0])
   await tool.execute({ submissions: [{ requestIds: [retryRequestId], decision: { actions: [], reason: '复核后无需执行' } }] }, { agent: fixture.handle.agent })
   const result = await retried
   assert.equal(result.recovered, true)
@@ -657,20 +641,28 @@ test('显式重试会让无副作用的decision-failed消息重新进入判断�
   await runtime.close()
 })
 
-test('Runtime重启后把孤立steered收敛为可诊断失败且不自动重放', async () => {
+test('Runtime重启后自动恢复孤立steered并严格按群消息顺序放行', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'interrupted-decision-group' })
   fixture.group.messages.push(
     { messageId: 'm-interrupted', sequence: 1, text: '重启时正在判断', occurredAt: '2026-09-03T03:23:28.063Z', agentDeliveryStatus: 'steered' },
-    { messageId: 'm-delivered', sequence: 2, text: '已经完成', occurredAt: '2026-09-03T03:23:29.063Z', agentDeliveryStatus: 'delivered' },
+    { messageId: 'm-after', sequence: 2, text: '后续消息', occurredAt: '2026-09-03T03:23:29.063Z', agentDeliveryStatus: 'pending' },
   )
   fixture.group.nextSequence = 3
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
   const recovered = await runtime.recoverInterruptedDecisions()
-  assert.deepEqual(recovered, [{ groupId: fixture.group.groupId, messageId: 'm-interrupted', status: 'recovered' }])
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-failed')
+  assert.deepEqual(recovered, [{ groupId: fixture.group.groupId, messageId: 'm-interrupted', status: 'scheduled' }])
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-retrying')
   assert.equal(fixture.group.messages[0].error, 'resident_restarted_before_decision_settled')
-  assert.equal(fixture.group.messages[1].agentDeliveryStatus, 'delivered')
-  assert.equal(fixture.steered.length, 0, '启动恢复不得自动重放判断')
+  const recovery = runtime.recoverPendingMessages()
+  await fixture.waitForSteers(1)
+  assert.equal(fixture.group.messages[1].agentDeliveryStatus, 'pending', '后一条消息不能越过恢复中的前一条消息')
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [], reason: '中断消息恢复完成' } }] }, { agent: fixture.handle.agent })
+  await fixture.waitForSteers(2)
+  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[1])], decision: { actions: [], reason: '后续消息按序完成' } }] }, { agent: fixture.handle.agent })
+  const results = await recovery
+  assert.deepEqual(results.map((item) => item.status), ['recovered', 'recovered'])
+  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['delivered', 'delivered'])
   fixture.releaseIdle()
   await runtime.close()
 })
@@ -791,10 +783,12 @@ test('关联复核合并的新消息标记steered失败时不会发送候选回�
   rejectMarkSteered(new Error('recheck_mark_steered_failed'))
 
   await assert.rejects(submission, /recheck_mark_steered_failed/)
-  await assert.rejects(first, /recheck_mark_steered_failed/)
+  const firstResult = await first
+  assert.equal(firstResult.deferred, true)
+  assert.equal(firstResult.decisionError, 'recheck_mark_steered_failed')
   await assert.rejects(second, /recheck_mark_steered_failed/)
   assert.equal(fixture.group.outbox.length, 0)
-  assert.deepEqual(fixture.group.messages.slice(1).map((message) => message.agentDeliveryStatus), ['decision-failed', 'failed'])
+  assert.deepEqual(fixture.group.messages.slice(1).map((message) => message.agentDeliveryStatus), ['decision-retrying', 'failed'])
   fixture.releaseIdle()
   await runtime.close()
 })
@@ -1016,7 +1010,15 @@ test('Decision工具对重复未知和非法结构执行全量预检且不部分
     { requestIds: [requestIds[0]], decision: { actions: [], reply: '仍不应部分提交' } },
     { requestIds: [requestIds[1]], decision: { actions: [], reason: '' } },
   ] }, { agent: fixture.handle.agent }), /group_decision_invalid_schema/)
+  await assert.rejects(tool.execute({ submissions: [{ requestIds: [requestIds[0]], decision: {
+    actions: [{ kind: 'task-context', taskId: 'task-stale', context: '不得提交', sourceMessageIds: ['m1'] }], reply: '',
+  } }] }, { agent: fixture.handle.agent }), /task_context_target_invalid:task-stale/)
+  await assert.rejects(tool.execute({ submissions: [{ requestIds: [requestIds[0]], decision: {
+    actions: [{ kind: 'task-reopen', taskId: 'task-stale', context: '不得提交', sourceMessageIds: ['m1'] }], reply: '',
+  } }] }, { agent: fixture.handle.agent }), /task_reopen_target_invalid:task-stale/)
   assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['steered', 'steered'])
+  assert.equal(fixture.tasks.length, 0)
+  assert.equal(fixture.group.outbox.length, 0)
   await tool.execute({ observedRequestIds: requestIds, submissions: [
     { requestIds: [requestIds[0]], decision: { actions: [], reply: '合法一' } },
     { requestIds: [requestIds[1]], decision: { actions: [], reason: '合法二' } },
@@ -1167,12 +1169,12 @@ test('旧确认尚未回读时替换请求失败关闭且不追加新回复', as
   await assert.rejects(submission, /group_reply_replacement_not_delivered:out-old/)
   await assert.rejects(ingest, /group_reply_replacement_not_delivered:out-old/)
   assert.equal(fixture.group.outbox.length, 1)
-  assert.equal(fixture.group.messages.at(-1).agentDeliveryStatus, 'decision-failed')
+  assert.equal(fixture.group.messages.at(-1).agentDeliveryStatus, 'decision-commit-failed')
   fixture.releaseIdle()
   await runtime.close()
 })
 
-test('普通assistant文本和turn结束不能冒充Decision，停稳未提交会明确失败', async () => {
+test('普通assistant文本和turn结束不能冒充Decision，停稳未提交会进入自动恢复', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'missing-submit-group' })
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
   const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '不要解析最终文本', occurredAt: '2026-08-28T01:00:00Z' })
@@ -1182,12 +1184,48 @@ test('普通assistant文本和turn结束不能冒充Decision，停稳未提交�
     { seq: 2, type: 'turn/end', data: { status: 'success', reason: { kind: 'completed' } } },
   )
   fixture.releaseIdle()
-  await assert.rejects(ingest, /group_decision_not_submitted:missing-submit-group:m1/)
-  assert.equal(fixture.followups.length, 1, '只恢复一次，第二个空闲边界仍未提交时必须失败')
+  const deferred = await ingest
+  assert.equal(deferred.deferred, true)
+  assert.match(deferred.decisionError, /group_decision_not_submitted:missing-submit-group:m1/)
+  assert.equal(fixture.followups.length, 1, '单次判断活动只追加一次恢复提醒，后续由持久重试接管')
   assert.match(fixture.followups[0].content[0].text, /^\[GROUP_DECISION_RESUME\]/u)
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-failed')
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-retrying')
   assert.match(fixture.group.messages[0].error, /group_decision_not_submitted/)
   assert.equal(fixture.group.outbox.length, 0)
+  await runtime.close()
+})
+
+test('未提交判断自动重试期间阻塞后续消息并在成功后按序放行', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'automatic-decision-recovery-group' })
+  let idleCalls = 0, releaseRetryIdle
+  const retryIdle = new Promise((resolve) => { releaseRetryIdle = resolve })
+  fixture.handle.agent.whenIdle = async () => {
+    idleCalls += 1
+    if (idleCalls > 2) await retryIdle
+  }
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 2, decisionRetryBaseMs: 0, decisionRetryMaxMs: 0 }))
+  const firstResult = await runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '首次未提交', occurredAt: '2026-09-04T05:34:06Z' })
+  assert.equal(firstResult.deferred, true)
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-retrying')
+
+  const secondResult = await runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '不能越过前序', occurredAt: '2026-09-04T05:37:04Z' })
+  assert.equal(secondResult.blocked, true)
+  assert.equal(secondResult.blockedByMessageId, 'm1')
+  assert.equal(fixture.group.messages[1].agentDeliveryStatus, 'pending')
+
+  await fixture.waitForSteers(2)
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  const retryText = fixture.steered[1].content[0].text
+  assert.match(retryText, /自动恢复：此前第 1 次判断未完成/u)
+  assert.match(retryText, /group_decision_not_submitted/u)
+  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[1])], decision: { actions: [], reason: '前序恢复成功' } }] }, { agent: fixture.handle.agent })
+
+  await fixture.waitForSteers(3)
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'delivered')
+  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[2])], decision: { actions: [], reason: '后续按序处理' } }] }, { agent: fixture.handle.agent })
+  while (fixture.group.messages[1].agentDeliveryStatus !== 'delivered') await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['delivered', 'delivered'])
+  releaseRetryIdle()
   await runtime.close()
 })
 
@@ -1627,11 +1665,13 @@ test('Task通知尚在等待resident空闲时关闭Runtime不会在关闭后创�
   assert.equal(fixture.group.outbox.length, 0)
 })
 
-test('消息插话后的判断失败不会把同一消息再次 steer', async () => {
+test('消息判断自动恢复状态会过滤重复事件并阻止后续消息越过', async () => {
   const source = readFileSync(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /status: 'steered'/)
-  assert.match(source, /status: 'decision-failed'/)
-  assert.match(source, /\['steered', 'delivered', 'decision-failed', 'skipped'\]\.includes\(persisted\?\.agentDeliveryStatus\)/)
+  assert.match(source, /status: 'decision-retrying'/)
+  assert.match(source, /'decision-retrying', 'decision-failed', 'decision-commit-failed'/)
+  assert.match(source, /!inflightMessages\.has\(`/)
+  assert.match(source, /blockedByMessageId/)
 })
 
 test('已有群切换预设时沿用原 Session，新群先创建 dsh Session 再持久绑定', async () => {
@@ -1700,7 +1740,7 @@ test('已有群切换预设时沿用原 Session，新群先创建 dsh Session �
   assert.match(decisionProtocol, /`complete`、`failedCount`、`failures`、`foundCount` 和 `notFoundMessageIds`/u)
   assert.match(decisionProtocol, /仍含 `quotedMessage\.messageId`，继续按该 ID 查询/u)
   assert.match(decisionProtocol, /不得向群成员回复“请补原问题、正文或截图”/u)
-  assert.match(decisionProtocol, /不得调用 group_decision_submit[\s\S]*decision-failed/u)
+  assert.match(decisionProtocol, /不得调用 group_decision_submit[\s\S]*自动重新判断/u)
   assert.deepEqual(toolRestrictions, [{ deny: ['get_goal', 'create_goal', 'update_goal'] }])
   assert.deepEqual(promptSections.find((section) => section.name === 'tool:goal'), { name: 'tool:goal', order: 114, text: '' })
   assert.deepEqual(registeredTools.map((tool) => tool.name), ['group_decision_submit', 'group_reply_submit', 'group_task_create', 'group_task_context_append', 'group_task_reopen', 'group_task_list'])

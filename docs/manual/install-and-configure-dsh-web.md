@@ -494,9 +494,9 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 ### 群搜索失败
 
-关联复核期间可继续接收新消息。Task 动作提交时会在群串行区内重新读取当前持久消息快照，避免将复核期间进入的真实来源误判为不存在。`decision-failed` 仍不自动重放：历史失败须先核对 Task 与 Outbox 是否已有副作用，再调用 `POST /config/groups/{groupId}/messages/{messageId}/retry` 精确重试；该接口只接受当前仍为 `decision-failed` 的消息，并重新进入 Runtime 判断，不能直接改为 `delivered`。
+关联复核期间可继续接收新消息。Task 动作提交时会在群串行区内重新读取当前持久消息快照，避免将复核期间进入的真实来源误判为不存在。新发生且尚未开始业务副作用的判断异常会进入 `decision-retrying`，Runtime 按持久化的下一重试时间自动恢复；同群后续消息保持 `pending`，不得越过失败消息。历史 `decision-failed` 仍须先核对 Task 与 Outbox 是否已有副作用，再调用 `POST /config/groups/{groupId}/messages/{messageId}/retry` 精确重试；该接口不能直接把消息改成 `delivered`。
 
-若进程重启发生在消息已标记 `steered`、但结构化判断尚未提交期间，新 Runtime 会把这类已无活跃请求的遗留消息收敛为 `decision-failed`，错误为 `resident_restarted_before_decision_settled`。它不会自动重放；仍须先核对 Task 与 Outbox 副作用，再使用上述精确重试接口。
+若进程重启发生在消息已标记 `steered`、但结构化判断尚未提交期间，新 Runtime 会把遗留消息转为立即到期的 `decision-retrying`。Resident、群配置和 DWS bridge 就绪后自动按群消息 `sequence` 恢复，恢复成功前该群的后续消息只入 Inbox；其他群不受影响。若状态为 `decision-commit-failed`，说明 Task 或 Outbox 提交已经开始，为避免重复副作用不会自动重放，必须先核对持久化 Task 与 Outbox 后再人工处理。
 
 确认 DWS 登录有效，搜索词不少于两个字；如果配置了 `dws.profile`，确认登录的是同一个 profile。
 

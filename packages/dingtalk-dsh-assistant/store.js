@@ -6,7 +6,13 @@ import { taskCheckpointSchema, taskResultSchema } from './task-result.js'
 const missingText = (value) => typeof value !== 'string' || value.trim() === '' || value.trim().toLowerCase() === 'null'
 
 const quotedMessageSchema = z.object({ messageId: z.string().min(1).optional(), senderName: z.string().min(1).optional(), occurredAt: z.union([z.string().min(1), z.number().finite()]).optional(), content: z.string() })
-const inboundSchema = z.object({ messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]), senderName: z.string().min(1).optional(), senderOpenDingTalkId: z.string().min(1).optional(), quotedMessage: quotedMessageSchema.optional(), agentDeliveryStatus: z.enum(['pending', 'steered', 'delivered', 'failed', 'decision-failed', 'skipped']).optional(), agentDeliveryAt: z.string().min(1).optional(), agentDeliveryError: z.string().min(1).optional() })
+const inboundSchema = z.object({
+  messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]),
+  senderName: z.string().min(1).optional(), senderOpenDingTalkId: z.string().min(1).optional(), quotedMessage: quotedMessageSchema.optional(),
+  agentDeliveryStatus: z.enum(['pending', 'steered', 'delivered', 'failed', 'decision-retrying', 'decision-failed', 'decision-commit-failed', 'skipped']).optional(),
+  agentDeliveryAt: z.string().min(1).optional(), agentDeliveryError: z.string().min(1).optional(),
+  agentDecisionAttemptCount: z.number().int().nonnegative().optional(), agentDecisionRetryAt: z.string().min(1).optional(),
+})
 const outboundSchema = z.object({
   outboundId: z.string().min(1), sourceMessageId: z.string().min(1), text: z.string(), status: z.enum(['pending', 'sent']),
   readbackRequired: z.boolean().optional(),
@@ -383,8 +389,9 @@ export async function openResidentStore(storageDomain) {
       }))
       return { duplicate: false, sequence: accepted.sequence, group: next }
     }),
-    markMessageAgentDelivery: ({ groupId, messageId, status, error }) => serialize(groupId, async () => {
-      if (!['steered', 'delivered', 'failed', 'decision-failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)
+    markMessageAgentDelivery: ({ groupId, messageId, status, error, retryAt }) => serialize(groupId, async () => {
+      if (!['pending', 'steered', 'delivered', 'failed', 'decision-retrying', 'decision-failed', 'decision-commit-failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)
+      if (retryAt !== undefined && (status !== 'decision-retrying' || Number.isNaN(new Date(retryAt).valueOf()))) throw new Error('message_agent_decision_retry_at_invalid')
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       if (!entry[1].messages.some((message) => message.messageId === messageId)) throw new Error(`message_not_found:${messageId}`)
@@ -392,18 +399,20 @@ export async function openResidentStore(storageDomain) {
         ...latest,
         messages: latest.messages.map((message) => {
           if (message.messageId !== messageId) return message
-          const { agentDeliveryError: _previousError, ...current } = message
+          const { agentDeliveryError: _previousError, agentDecisionRetryAt: _previousRetryAt, ...current } = message
           return {
             ...current,
             agentDeliveryStatus: status,
             agentDeliveryAt: new Date().toISOString(),
+            ...(status === 'steered' ? { agentDecisionAttemptCount: (message.agentDecisionAttemptCount ?? 0) + 1 } : {}),
             ...(error ? { agentDeliveryError: error } : {}),
+            ...(retryAt ? { agentDecisionRetryAt: retryAt } : {}),
           }
         }),
       }))
     }),
     markMessagesAgentDelivery: ({ groupId, status = 'delivered', onlyMissing = true, messageIds }) => serialize(groupId, async () => {
-      if (!['steered', 'delivered', 'failed', 'decision-failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)
+      if (!['steered', 'delivered', 'failed', 'decision-retrying', 'decision-failed', 'decision-commit-failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)
       if (messageIds !== undefined && (!Array.isArray(messageIds) || messageIds.length === 0 || messageIds.some((messageId) => typeof messageId !== 'string' || messageId.trim() === ''))) throw new Error('message_ids_invalid')
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
@@ -415,7 +424,7 @@ export async function openResidentStore(storageDomain) {
           if (messageIds !== undefined && !messageIds.includes(message.messageId)) return message
           if (onlyMissing && message.agentDeliveryStatus) return message
           updated += 1
-          const { agentDeliveryError: _previousError, ...current } = message
+          const { agentDeliveryError: _previousError, agentDecisionRetryAt: _previousRetryAt, ...current } = message
           return { ...current, agentDeliveryStatus: status, agentDeliveryAt: at }
         }),
       }))

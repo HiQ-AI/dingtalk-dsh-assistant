@@ -87,7 +87,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       const outbound = deliveredOutbound ?? pendingOutbound
       if (outbound !== undefined) {
         if (pendingOutbound !== undefined) await runtime.acknowledge({ groupId: message.groupId, outboundId: outbound.outboundId, deliveredMessageId: message.messageId })
-        if (['failed', 'decision-failed'].includes(persisted?.agentDeliveryStatus)) await runtime.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'skipped' })
+        if (['failed', 'decision-failed', 'decision-commit-failed'].includes(persisted?.agentDeliveryStatus)) await runtime.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'skipped' })
         return
       }
       if (persisted !== undefined && persisted.agentDeliveryStatus !== 'failed') return

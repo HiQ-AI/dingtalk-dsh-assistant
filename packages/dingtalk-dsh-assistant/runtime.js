@@ -53,15 +53,18 @@ const activityDetail = (event) => {
   return { contentBlocks: event.data?.message?.content?.length ?? 0 }
 }
 
-export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000 } = {}) {
-  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), pendingGroupDecisions = new Map(), pendingGroupDecisionMonitors = new Map(), pendingGroupReplies = new Map(), activeGroupSubmissions = new Set(), activeGroupReplies = new Set(), activeGroupResidentOperations = new Set(), groupReplyAdmissionBarriers = new Map(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), pendingLeafDisposals = new Set()
+export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 1_000, decisionRetryMaxMs = 60_000 } = {}) {
+  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), pendingGroupDecisions = new Map(), pendingGroupDecisionMonitors = new Map(), pendingGroupReplies = new Map(), activeGroupSubmissions = new Set(), activeGroupReplies = new Set(), activeGroupResidentOperations = new Set(), groupReplyAdmissionBarriers = new Map(), groupResidentTransitionBarriers = new Map(), recoveringDecisionGroups = new Set(), cancellingTasks = new Set(), pendingLeafDisposals = new Set()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
-  let taskTail = Promise.resolve(), configTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, currentDwsUserName = '', currentDwsProfile = '', runtimeClosing = false, closePromise
+  let taskTail = Promise.resolve(), configTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, decisionRecoveryPromise, runtimeApi, currentDwsUserName = '', currentDwsProfile = '', runtimeClosing = false, closePromise
   let groupMessageRecaller
   let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks
   if (store.getMaxConcurrentTasks?.() === undefined) await store.setMaxConcurrentTasks?.(taskConcurrencyLimit)
+  if (!Number.isFinite(decisionRetryBaseMs) || decisionRetryBaseMs < 0) throw new Error('decision_retry_base_invalid')
+  if (!Number.isFinite(decisionRetryMaxMs) || decisionRetryMaxMs < decisionRetryBaseMs) throw new Error('decision_retry_max_invalid')
+  const decisionRetryDelay = (attemptCount) => Math.min(decisionRetryMaxMs, decisionRetryBaseMs * (2 ** Math.max(0, Math.min(16, (attemptCount ?? 1) - 1))))
   const selection = ctx.agentDefaultModel.currentSelection()
   const agentOptions = { provider: selection.provider, model: selection.model }
   const installSelection = (agentCtx) => {
@@ -109,7 +112,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 
 取回的消息如果仍含 \`quotedMessage.messageId\`，继续按该 ID 查询，直到不存在更上游引用；维护已访问 ID 集合，ID 重复代表异常循环，必须停止而不能无限查询。引用链中的图片、文件或其他资源承载目标、范围、对象或验收信息时，按照 \`dingtalk-chat\` Skill 的资源读取流程取得并阅读。完整引用链仅用于恢复当前消息的语义，不自动创建 Task、扩大 objective 或产生修改/发布授权。
 
-本节是“钉钉中已存在、可按消息 ID 恢复的引用消息”的专用规则，优先于通用外部资源缺失规则。任何引用 ID 尚未查询、查询结果不完整、查询失败、未命中或出现循环时，都不得猜测上下文，也不得向群成员回复“请补原问题、正文或截图”。${owner === 'resident' ? '不得调用 group_decision_submit 提交这类群回复；保留工具错误并结束当前 step，让 Runtime 将消息收敛为可重试的 decision-failed。' : '不得用主会话摘要替代原文；通过 submit_task_result 如实提交 waiting 状态和 DWS 读取证据，不得要求群成员重新提供已经存在于钉钉中的消息。'}`
+本节是“钉钉中已存在、可按消息 ID 恢复的引用消息”的专用规则，优先于通用外部资源缺失规则。任何引用 ID 尚未查询、查询结果不完整、查询失败、未命中或出现循环时，都不得猜测上下文，也不得向群成员回复“请补原问题、正文或截图”。${owner === 'resident' ? '不得调用 group_decision_submit 提交这类群回复；保留工具错误并结束当前 step，Runtime 会持久化原消息并自动重新判断。' : '不得用主会话摘要替代原文；通过 submit_task_result 如实提交 waiting 状态和 DWS 读取证据，不得要求群成员重新提供已经存在于钉钉中的消息。'}`
   }
   function configureResident(agentCtx, groupId) {
     installSelection(agentCtx)
@@ -463,10 +466,14 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
             if (new Set(action.sourceMessageIds).size !== action.sourceMessageIds.length) throw new Error('task_action_source_message_duplicate')
             if (action.sourceMessageIds.some((messageId) => !persistedMessageIds.has(messageId))) throw new Error('task_action_source_message_invalid')
             if (!action.sourceMessageIds.some((messageId) => currentMessageIds.has(messageId))) throw new Error('task_action_current_source_message_required')
+            if (action.kind === 'task-context' || action.kind === 'task-reopen' || action.kind === 'task-cancel') {
+              const target = store.getTask(action.taskId)
+              if (target === undefined || target.groupId !== groupId) throw new Error(`${action.kind.replaceAll('-', '_')}_target_invalid:${action.taskId}`)
+              if (action.kind === 'task-reopen' && target.state !== 'completed') throw new Error(`task_not_completed:${action.taskId}`)
+            }
             if (action.kind === 'task-cancel') {
               if (action.reason.trim() === '') throw new Error('task_cancel_reason_required')
               const target = store.getTask(action.taskId)
-              if (target === undefined || target.groupId !== groupId) throw new Error(`task_cancel_target_invalid:${action.taskId}`)
               if (target.state === 'completed') throw new Error(`task_not_active:${action.taskId}`)
             }
             if (action.kind === 'new-task' || action.kind === 'task-proposal') {
@@ -1621,11 +1628,56 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     try { await resumeLeaf(task) } catch (error) { recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, childSessionId: task.childSessionId, error: error instanceof Error ? error.message : String(error) }) }
   }
   await serializeTasks(pumpTasks)
+  function recoverDecisionMessages() {
+    if (runtimeClosing) return Promise.resolve([])
+    if (decisionRecoveryPromise !== undefined) return decisionRecoveryPromise
+    const operation = (async () => {
+      const currentTime = Date.now()
+      const candidates = store.listGroups().flatMap((group) => (group.messages ?? [])
+        .filter((message) => message.agentDeliveryStatus === 'pending' || (message.agentDeliveryStatus === 'decision-retrying' && new Date(message.agentDecisionRetryAt ?? 0).valueOf() <= currentTime))
+        .filter((message) => !inflightMessages.has(`${group.groupId}\u0000${message.messageId}`))
+        .map((message) => ({ ...message, groupId: group.groupId })))
+        .sort((left, right) => left.groupId.localeCompare(right.groupId) || left.sequence - right.sequence)
+      const byGroup = new Map()
+      for (const message of candidates) byGroup.set(message.groupId, [...(byGroup.get(message.groupId) ?? []), message])
+      const grouped = await Promise.all([...byGroup.entries()].map(async ([groupId, messages]) => {
+        const results = []
+        recoveringDecisionGroups.add(groupId)
+        try {
+          for (const message of messages) {
+            const currentGroup = store.getGroup(groupId)
+            const current = currentGroup?.messages.find((item) => item.messageId === message.messageId)
+            if (current === undefined || !['pending', 'decision-retrying'].includes(current.agentDeliveryStatus)) continue
+            const blocker = currentGroup.messages.find((item) => item.sequence < current.sequence && ['decision-retrying', 'decision-commit-failed'].includes(item.agentDeliveryStatus))
+            if (blocker !== undefined) { results.push({ messageId: current.messageId, status: 'blocked', blockedByMessageId: blocker.messageId }); break }
+            try {
+              const result = await runtimeApi.ingest({ ...current, groupId }, { retryDecisionPending: current.agentDeliveryStatus === 'decision-retrying', decisionRecovery: true })
+              results.push({ messageId: current.messageId, status: result.deferred ? 'deferred' : 'recovered', result })
+              if (result.deferred) break
+            } catch (error) {
+              results.push({ messageId: current.messageId, status: 'failed', error: error instanceof Error ? error.message : String(error) })
+              break
+            }
+          }
+        } finally {
+          recoveringDecisionGroups.delete(groupId)
+        }
+        return results
+      }))
+      return grouped.flat()
+    })()
+    const recovery = operation.finally(() => { if (decisionRecoveryPromise === recovery) decisionRecoveryPromise = undefined })
+    decisionRecoveryPromise = recovery
+    return recovery
+  }
   if (supervisorIntervalMs > 0) {
-    supervisorTimer = setInterval(() => { inspectRunningTasks().catch(() => undefined) }, supervisorIntervalMs)
+    supervisorTimer = setInterval(() => {
+      inspectRunningTasks().catch(() => undefined)
+      recoverDecisionMessages().catch(() => undefined)
+    }, supervisorIntervalMs)
     supervisorTimer.unref?.()
   }
-  return {
+  runtimeApi = {
     getGroup: store.getGroup, listGroups: store.listGroups, getTask: store.getTask, listTasks: store.listTasks, listAlerts: store.listAlerts,
     listTaskTimings: store.listTaskTimings ?? (() => []),
     markMessageAgentDelivery: store.markMessageAgentDelivery, markMessagesAgentDelivery: store.markMessagesAgentDelivery,
@@ -1676,7 +1728,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     },
     listAuthorizationRequests,
     getAuthorizationRequest,
-    ingest: (message, { retryDecisionFailed = false } = {}) => {
+    ingest: (message, { retryDecisionFailed = false, retryDecisionPending = false, decisionRecovery = false } = {}) => {
       if (runtimeClosing) return Promise.reject(new Error('resident_runtime_closed'))
       const inflightKey = `${message.groupId}\u0000${message.messageId}`
       const existing = inflightMessages.get(inflightKey)
@@ -1685,16 +1737,22 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         const ingested = await store.ingest(message)
         const persisted = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
         if (retryDecisionFailed && persisted?.agentDeliveryStatus !== 'decision-failed') throw new Error(`message_not_retryable:${message.messageId}`)
-        if (ingested.duplicate && ['steered', 'delivered', 'decision-failed', 'skipped'].includes(persisted?.agentDeliveryStatus) && !(retryDecisionFailed && persisted.agentDeliveryStatus === 'decision-failed')) return ingested
+        if (retryDecisionPending && persisted?.agentDeliveryStatus !== 'decision-retrying') throw new Error(`message_not_pending_retry:${message.messageId}`)
+        const retryRequested = (retryDecisionFailed && persisted?.agentDeliveryStatus === 'decision-failed') || (retryDecisionPending && persisted?.agentDeliveryStatus === 'decision-retrying')
+        const recoveryBlocker = store.getGroup(message.groupId)?.messages.find((item) => item.sequence < persisted.sequence && ['decision-retrying', 'decision-commit-failed'].includes(item.agentDeliveryStatus))
+        if (!retryRequested && persisted?.agentDeliveryStatus === 'pending' && (recoveryBlocker !== undefined || (recoveringDecisionGroups.has(message.groupId) && !decisionRecovery))) {
+          return { ...ingested, blocked: true, ...(recoveryBlocker === undefined ? {} : { blockedByMessageId: recoveryBlocker.messageId }), group: store.getGroup(message.groupId) }
+        }
+        if (ingested.duplicate && ['steered', 'delivered', 'decision-retrying', 'decision-failed', 'decision-commit-failed', 'skipped'].includes(persisted?.agentDeliveryStatus) && !retryRequested) return ingested
         const accepted = ingested.duplicate ? { ...ingested, duplicate: false, recovered: true, sequence: persisted.sequence } : ingested
         let handle
-        let pending, submitted, recheckedSubmission
+        let pending, submitted, recheckedSubmission, mutationStarted = false
         try {
           const images = Array.isArray(message.images) ? message.images : []
           if (images.length > 0 && attachments === undefined) throw new Error('dsh_attachments_required')
           const imageRefs = images.length === 0 ? [] : await attachments.saveImages(images.map((image) => ({ data: image.data, mediaType: image.mediaType, ...(image.name ? { name: image.name } : {}) })))
           const replyReviewCandidates = replyReviewCandidatesFor(message.groupId, [message])
-          const decisionPrompt = buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, replyReviewCandidates })
+          const decisionPrompt = buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, replyReviewCandidates, recoveryError: message.agentDeliveryError, decisionAttemptCount: message.agentDecisionAttemptCount })
           pending = await admitGroupSteer(message.groupId, () => {
             handle = residentHandles.get(message.groupId)
             if (handle === undefined) throw new Error(`resident_not_active:${message.groupId}`)
@@ -1724,7 +1782,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           if ('reason' in decision && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: submitted.requests.some((request) => request.imageRefs.length > 0), previousMessage, occurredAt: message.occurredAt })) {
             const recheckReplyReviewCandidates = replyReviewCandidatesFor(message.groupId, decisionRequests.map((request) => request.message))
             const recheck = createPendingGroupDecision({ groupId: message.groupId, messageId: message.messageId, sequence: accepted.sequence, message, imageRefs, replyReviewCandidates: recheckReplyReviewCandidates, kind: 'recheck', baseRequests: decisionRequests })
-            handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_RECHECK]\n判断请求 ID：${recheck.requestId}\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, replyReviewCandidates: recheckReplyReviewCandidates }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
+            handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_RECHECK]\n判断请求 ID：${recheck.requestId}\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, replyReviewCandidates: recheckReplyReviewCandidates, recoveryError: message.agentDeliveryError, decisionAttemptCount: message.agentDecisionAttemptCount }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
             ensurePendingGroupDecisionSettlement(handle.agent, message.groupId)
             recheckedSubmission = await recheck.promise
             await Promise.all(recheckedSubmission.requests.map((request) => request.deliveryRecorded))
@@ -1739,10 +1797,12 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           const result = await serialize(message.groupId, async () => {
             const groupAtCommit = store.getGroup(message.groupId)
             if ('reason' in decision) {
+              mutationStarted = true
               await Promise.all(decisionRequests.map((request) => store.markMessageAgentDelivery({ groupId: message.groupId, messageId: request.messageId, status: 'delivered' })))
               return { ...accepted, decision, group: store.getGroup(message.groupId) }
             }
             const tasks = []
+            if (decision.actions.length > 0) mutationStarted = true
             for (const action of decision.actions) {
               const sourceMessageIds = action.sourceMessageIds
               if (new Set(sourceMessageIds).size !== sourceMessageIds.length) throw new Error('task_action_source_message_duplicate')
@@ -1776,6 +1836,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             let group
             if (!('reply' in decision) || decision.reply.trim() === '') group = store.getGroup(message.groupId)
             else {
+              mutationStarted = true
               const replyTarget = decisionRequests.findLast((request) => typeof request.messageId === 'string'
                 && request.messageId.trim() !== ''
                 && typeof request.message?.senderOpenDingTalkId === 'string'
@@ -1816,8 +1877,13 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           submitted?.rejectCommitted(error)
           recheckedSubmission?.rejectCommitted(error)
           const current = store.getGroup(message.groupId)?.messages.find((item) => item.messageId === message.messageId)
-          if (current?.agentDeliveryStatus === 'pending') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'failed', error: error instanceof Error ? error.message : String(error) })
-          else if (current?.agentDeliveryStatus === 'steered') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'decision-failed', error: error instanceof Error ? error.message : String(error) })
+          const detail = error instanceof Error ? error.message : String(error)
+          if (current?.agentDeliveryStatus === 'pending') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'failed', error: detail })
+          else if (current?.agentDeliveryStatus === 'steered' && !mutationStarted) {
+            const retryAt = new Date(Date.now() + (runtimeClosing ? 0 : decisionRetryDelay(current.agentDecisionAttemptCount))).toISOString()
+            await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'decision-retrying', error: detail, retryAt })
+            return { ...accepted, deferred: true, decisionError: detail, retryAt, group: store.getGroup(message.groupId) }
+          } else if (current?.agentDeliveryStatus === 'steered') await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'decision-commit-failed', error: detail })
           throw error
         }
       })()
@@ -1836,23 +1902,12 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         .map((message) => ({ groupId: group.groupId, messageId: message.messageId })))
       const results = []
       for (const message of interrupted) {
-        await store.markMessageAgentDelivery({ ...message, status: 'decision-failed', error: 'resident_restarted_before_decision_settled' })
-        results.push({ ...message, status: 'recovered' })
+        await store.markMessageAgentDelivery({ ...message, status: 'decision-retrying', error: 'resident_restarted_before_decision_settled', retryAt: new Date().toISOString() })
+        results.push({ ...message, status: 'scheduled' })
       }
       return results
     },
-    async recoverPendingMessages() {
-      const pending = store.listGroups().flatMap((group) => (group.messages ?? [])
-        .filter((message) => message.agentDeliveryStatus === 'pending')
-        .map((message) => ({ ...message, groupId: group.groupId })))
-        .sort((left, right) => left.groupId.localeCompare(right.groupId) || left.sequence - right.sequence)
-      const results = []
-      for (const message of pending) {
-        try { results.push({ messageId: message.messageId, status: 'recovered', result: await this.ingest(message) }) }
-        catch (error) { results.push({ messageId: message.messageId, status: 'failed', error: error instanceof Error ? error.message : String(error) }) }
-      }
-      return results
-    },
+    recoverPendingMessages: recoverDecisionMessages,
     backfill: (messages) => {
       if (!Array.isArray(messages)) throw new Error('backfill_messages_required')
       const groupIds = new Set(messages.map((message) => message.groupId))
@@ -2157,6 +2212,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       }
       closePromise = serializeConfig(async () => {
         await waitForAllResidentOperations()
+        if (decisionRecoveryPromise !== undefined) await Promise.allSettled([decisionRecoveryPromise])
         await Promise.allSettled([...inflightMessages.values()])
         await Promise.allSettled([...activeGroupReplies].map((reply) => reply.replyLinearized))
         const all = [...leafHandles.values(), ...residentHandles.values()]
@@ -2168,4 +2224,5 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       return closePromise
     },
   }
+  return runtimeApi
 }
