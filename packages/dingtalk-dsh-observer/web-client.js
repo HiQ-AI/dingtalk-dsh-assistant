@@ -204,7 +204,9 @@ window.__ModuleLoader__.load({
       const delivery = {
         delivered: { label: '已投递', state: 'done' },
         failed: { label: '投递失败', state: 'error' },
+        'decision-retrying': { label: '判断自动恢复中', state: 'ongoing' },
         'decision-failed': { label: '判断失败', state: 'error' },
+        'decision-commit-failed': { label: '处理提交失败', state: 'error' },
         steered: { label: '已插话·判断中', state: 'ongoing' },
         pending: { label: '投递中', state: 'ongoing' },
         skipped: { label: '历史补拉·未投递', state: 'warning' },

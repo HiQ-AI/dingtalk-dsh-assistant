@@ -209,17 +209,21 @@ dws:
 
 每个群唯一绑定一个 resident Session。群名称、群 ID、职责和稳定决策协议通过 DSH `systemPrompt.section` 注入。消息明确指向已配置的 Agent 名称/别名、使用 `cc:`，或明确确认此前“是否需要我处理”的询问，并形成职责范围内的可验证目标时，主会话可以创建 Task；未明确指名但判断事项应形成任务时，主会话先在群里询问“这个事项是否需要我处理？”，收到肯定答复后再结合原消息和后续补充创建。主会话只负责选择 Task 路由；Runtime 使用原始群消息生成来源证据信封交给叶子，主会话生成的根因、完成度、方案优劣或排除性判断不作为叶子事实。
 
-每条新消息先立即持久化到 Inbox，正常情况下随后零延迟、逐条调用 DSH `steer`；不设置聚合窗口，也不等待上一条消息完成推理。唯一例外是同群已有回复正在从结构化 Decision 提交到可靠 Outbox：新消息会停在 `steer` admission 前，等该回复可靠落库后立即进入下一 step。这个门禁只排序同群的“当前回复提交”和“下一条 Steer”，不阻塞其他群，也不是全局 Task 串行锁。Resident 正在运行时，获准进入的消息会插入当前 Turn 的下一个 step，与本轮已经收到的消息和会话上下文共同处理，而不是排队到下一 Turn；若承载这些 Steer 的 Agent 活动异常结束且仍有 pending Decision，Runtime 会为该群追加一次内部恢复 Turn，重新唤醒原生 Inbox 后再判定是否真的未提交。每条 `steer` 只携带消息事实，判断规则和 JSON 契约只存在于 Resident 系统提示词。
+每条新消息先立即持久化到 Inbox，正常情况下随后零延迟、逐条调用 DSH `steer`；不设置聚合窗口，也不等待上一条消息完成推理。例外一是同群已有回复正在从结构化 Decision 提交到可靠 Outbox：新消息会停在 `steer` admission 前，等该回复可靠落库后立即进入下一 step。例外二是同群前序消息处于 `decision-retrying` 或 `decision-commit-failed`：后续消息只持久化为 `pending`，在前序消息成功恢复或人工处理前不得越序 Steer。两个门禁都只作用于当前群，不阻塞其他群，也不是全局 Task 串行锁。Resident 正在运行时，获准进入的消息会插入当前 Turn 的下一个 step，与本轮已经收到的消息和会话上下文共同处理，而不是排队到下一 Turn；若承载这些 Steer 的 Agent 活动异常结束且仍有 pending Decision，Runtime 会为该群追加一次内部恢复 Turn。第二次仍未提交时不会终结为“判断失败”，而是保存原错误、尝试次数和下一重试时间，由监督器按指数退避重新判断。每条 `steer` 只携带消息事实，判断规则和 JSON 契约只存在于 Resident 系统提示词。
 
-入站消息引用其他钉钉消息时，Steer 信封只携带稳定的引用消息 ID；正常情况下 Resident 直接使用同一会话已经收到的正文。如果该正文因消息传递异常、会话恢复或上下文压缩而不在当前可见上下文，Resident 必须加载 `dingtalk-chat` Skill，并使用插件配置的同一 DWS profile 执行 `chat +messages-mget` 主动读取；取回的消息仍有 `quotedMessage.messageId` 时继续向上查询，直至整条引用链结束。查询结果必须校验完整性，必要时读取链上的图片或文件。查询失败、结果不完整、未命中或检测到循环时，不得要求群成员补发原问题、正文或截图，也不得猜测并回复；本次判断保留为 `decision-failed`，等待故障恢复后显式重试。
+入站消息引用其他钉钉消息时，Steer 信封只携带稳定的引用消息 ID；正常情况下 Resident 直接使用同一会话已经收到的正文。如果该正文因消息传递异常、会话恢复或上下文压缩而不在当前可见上下文，Resident 必须加载 `dingtalk-chat` Skill，并使用插件配置的同一 DWS profile 执行 `chat +messages-mget` 主动读取；取回的消息仍有 `quotedMessage.messageId` 时继续向上查询，直至整条引用链结束。查询结果必须校验完整性，必要时读取链上的图片或文件。查询失败、结果不完整、未命中或检测到循环时，不得要求群成员补发原问题、正文或截图，也不得猜测并回复；本次判断进入 `decision-retrying`，由 Runtime 在故障恢复后自动重试。
 
 `group_decision_submit` 的 submission 中已提交的普通请求天然计入模型的观察集合；顶层 `observedRequestIds` 只需补充模型已经审阅、但本批不提交并准备稍后处理的其他普通 pending 请求，重复列出已提交 ID 仍兼容。影响回复的消息必须与原请求放进同一 submission 并重新生成 Decision；独立且已经完成的事项使用独立 submission。若提交瞬间存在未观察的新 Steer，工具返回无副作用的结构化 `stale` 结果，模型在下一 step 结合 `missingRequestIds` 重生成，不再把预期并发控制显示为工具 Failed。附件缺失拦截形成的提示和关联复核回复使用同一门禁。结构化业务落地仍按群串行收口；单次 Decision 的 `actions` 可同时关联、重开、新建或取消多个 Task，顶层最多生成一条群回复。每个 Task 动作必须用 `sourceMessageIds` 明确列出完整相关消息：可以包含本群已持久化的历史消息，但至少包含一条当前正在处理的消息；同一消息可关联多个 Task，不同 Task 也可选择不同消息集合。
+
+历史主会话回复候选只用于避免重复确认，不得随群历史无限增长。每次判断最多携带 8 条候选且候选 JSON 不超过 16 KB；当前消息/引用和聚焦 Task 的直接关联优先，其次才是近期确认、正文相似项和最近回复。每个候选仍保留有界的真实来源正文、引用正文和 Task 目标供语义判断，引用 ID 或词面相似度本身不能决定是否同一事项。Runtime 重启后会移除 Resident 原生 Inbox 中依赖旧内存 requestId 的协议信封，再从插件持久化 Inbox 生成新 requestId 按序恢复，避免继续消费失效的超大 Steer。历史 `decision-failed` 中错误明确为重启中断、Decision 未提交或无效 JSON 的消息会一并自动迁移；可能已开始 Task/Outbox 副作用的其他旧错误仍保持失败，等待人工核对。
 
 图片及其紧邻短消息被初次判断为无关时，Runtime 会发起一次结构化关联复核。复核使用 `steer` 插入当前 Turn 的下一 step，使 `whenIdle()` 只在复核真正获得执行机会后结算；不得用 `followup` 把复核排到后续 Turn，否则当前 Turn 的空闲边界会提前把尚未开始的复核误判为未提交。
 
 Task 完成和信息阻塞通知也不再从 turn 的最后一段 assistant 文本取值。Runtime 为每次 `[TASK_COORDINATION]` 创建独立回复请求，Resident 必须调用 `group_reply_submit`，并用 `observedRequestIds` 声明生成通知前已审阅的全部普通 pending 请求；漏观察时返回结构化 `stale`，旧候选不提交，并在下一 step 结合新消息重生成，已观察的普通消息仍保留给自己的 Decision。Task 通知还必须从完整消息时间线中结构化提交 `replyToMessageId` 和 `atOpenDingTalkIds`：Resident 按语义选择承接消息和一位或多位相关参与人，Runtime 校验二者都真实属于该 Task，不再固定使用最后触发人。工具只在通知可靠写入 Outbox 后返回。通知生成和提交不占用全局 Task 串行尾链，避免新消息的任务动作与通知相互等待。首次及后续完成通知使用与正常提交一致的稳定结果键，Outbox 写入失败后可由完成通知补偿流程重新发起；Outbox 已落库后的发送监听器异常不会反向否定 Decision。上述门禁保证当前进程内同群事件顺序，不是跨进程事务，也不承诺进程崩溃窗口的 exactly-once。
 
 普通群消息 Decision 产生非空回复时，Runtime 也使用 DWS 原生引用回复：单消息回复引用当前入站消息；多消息合并回复引用本 submission 中最新且具备稳定发送人 ID 的入站消息，并结构化 @ 该发送人。入站消息本身引用的历史消息只作为语义上下文，不会被错误地再次用作出站引用目标。发送人 ID 缺失时安全降级为普通群消息，不猜测引用参数。Outbox 写入只证明可靠待发送；实际投递仍必须通过 DWS 回读正文和引用消息 ID 后才标记为 `sent`。引用消息 ID 精确一致时，回读允许钉钉在短回复前补充 @ 文本；由此确认的当前账号自身消息不会再次进入 Resident 判断，历史伪 `decision-failed` 会修正为 `skipped`。
+
+任何非空回复提交前，Runtime 会把未撤回的历史确认、近期回复、内容相关回复和当前 Task 关联回复连同真实来源正文交给 Resident 审阅。Resident 必须根据消息正文、任务目标、动作范围和时间线判断是否属于同一事项；引用消息 ID 和词面相似度只用于定位候选。若同一事项已有等价确认且没有新信息，本次保持静默；若确认内容必须补全，则只允许选择本插件已发送且已经 DWS 回读的旧 Outbox，先经 DWS 撤回并验证不存在，再发送一条合并后的最新确认。候选未完整审阅、旧消息尚未回读或撤回失败时，新回复不会进入 Outbox。
 
 ### 叶子任务
 

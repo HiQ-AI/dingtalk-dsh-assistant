@@ -50,17 +50,20 @@ test('完成通知签名由 Agent 工作区规则决定且插件不写死身份'
   assert.doesNotMatch(source, /小小鹏|孙鹏/u)
 })
 
-test('resident重启后按群内顺序恢复遗留pending消息', async () => {
+test('resident重启后按群内顺序恢复pending和中断判断消息', async () => {
   const runtimeSource = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   const residentSource = await readFile(new URL('../packages/dingtalk-dsh-assistant/resident.js', import.meta.url), 'utf8')
-  assert.match(runtimeSource, /async recoverPendingMessages\(\)/)
-  assert.match(runtimeSource, /agentDeliveryStatus === 'pending'/)
+  assert.match(runtimeSource, /function recoverDecisionMessages\(\)/)
+  assert.match(runtimeSource, /recoverPendingMessages: recoverDecisionMessages/)
+  assert.match(runtimeSource, /agentDeliveryStatus === 'pending' \|\| \(message\.agentDeliveryStatus === 'decision-retrying'/)
   assert.match(runtimeSource, /left\.groupId\.localeCompare\(right\.groupId\) \|\| left\.sequence - right\.sequence/)
-  assert.match(runtimeSource, /\['steered', 'delivered', 'decision-failed', 'skipped'\]\.includes\(persisted\?\.agentDeliveryStatus\)/)
+  assert.match(runtimeSource, /'decision-retrying', 'decision-failed', 'decision-commit-failed'/)
   assert.match(residentSource, /runtime\.recoverPendingMessages\(\)/)
   assert.match(runtimeSource, /async recoverInterruptedDecisions\(\)/)
   assert.match(runtimeSource, /agentDeliveryStatus === 'steered'/)
   assert.match(runtimeSource, /resident_restarted_before_decision_settled/)
+  assert.match(runtimeSource, /status: 'decision-retrying'/)
+  assert.match(runtimeSource, /recoveringDecisionGroups/)
   assert.match(residentSource, /runtime\.recoverInterruptedDecisions\(\)/)
   assert.ok(residentSource.indexOf('await runtime.recoverInterruptedDecisions()') < residentSource.indexOf('startDwsBridge({'), '中断收敛必须先于DWS入站启动')
 })
@@ -74,7 +77,7 @@ test('任务上下文允许静默追加且已插话消息不会由重复事件�
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /decision\.reply\.trim\(\) === ''/)
   assert.match(source, /group = store\.getGroup\(message\.groupId\)/)
-  assert.match(source, /\['steered', 'delivered', 'decision-failed', 'skipped'\]\.includes\(persisted\?\.agentDeliveryStatus\)/)
+  assert.match(source, /'decision-retrying', 'decision-failed', 'decision-commit-failed'/)
 })
 
 test('生产HTTP提供精确的单消息重试入口', async () => {

@@ -8,10 +8,16 @@ const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.
 const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), context: z.string().min(1), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
 const taskCancel = z.strictObject({ kind: z.literal('task-cancel'), taskId: z.string().min(1), reason: z.string().min(1), ...taskSources })
 const taskAction = z.discriminatedUnion('kind', [taskProposal, newTask, taskContext, taskReopen, taskCancel])
+const replyReviewSchema = z.strictObject({
+  kind: z.enum(['confirmation', 'substantive', 'correction']),
+  reviewedOutboundIds: z.array(z.string().min(1)).default([]),
+  sameMatterOutboundIds: z.array(z.string().min(1)).default([]),
+  replaceOutboundIds: z.array(z.string().min(1)).default([]),
+})
 export const groupDecisionSchema = z.union([
-  z.strictObject({ actions: z.tuple([]), reply: z.string().min(1) }),
+  z.strictObject({ actions: z.tuple([]), reply: z.string().min(1), replyReview: replyReviewSchema.optional() }),
   z.strictObject({ actions: z.tuple([]), reason: z.string().min(1) }),
-  z.strictObject({ actions: z.array(taskAction).min(1), reply: z.string() }),
+  z.strictObject({ actions: z.array(taskAction).min(1), reply: z.string(), replyReview: replyReviewSchema.optional() }),
 ])
 
 const stringJsonSchema = { type: 'string' }
@@ -20,6 +26,16 @@ const runPlanJsonProperties = {
   stageTasks: { type: 'array', items: stringJsonSchema },
 }
 const sourceMessageIdsJsonProperty = { type: 'array', items: stringJsonSchema }
+export const replyReviewJsonSchema = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    kind: { type: 'string', enum: ['confirmation', 'substantive', 'correction'] },
+    reviewedOutboundIds: { type: 'array', items: stringJsonSchema },
+    sameMatterOutboundIds: { type: 'array', items: stringJsonSchema },
+    replaceOutboundIds: { type: 'array', items: stringJsonSchema },
+  },
+  required: ['kind'],
+}
 const taskActionJsonSchema = {
   oneOf: [
     { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-proposal' }, title: stringJsonSchema, objective: stringJsonSchema, sourceMessageIds: sourceMessageIdsJsonProperty }, required: ['kind', 'title', 'objective', 'sourceMessageIds'] },
@@ -32,9 +48,114 @@ const taskActionJsonSchema = {
 export const groupDecisionJsonSchema = {
   type: 'object',
   additionalProperties: false,
-  description: '群消息结构化判断。空 actions 时必须二选一提供非空 reply 或 reason；非空 actions 时必须提供 reply。完整约束由工具执行时校验。',
-  properties: { actions: { type: 'array', items: taskActionJsonSchema }, reply: stringJsonSchema, reason: stringJsonSchema },
+  description: '群消息结构化判断。空 actions 时必须二选一提供非空 reply 或 reason；非空 actions 时必须提供 reply。存在历史回复候选且 reply 非空时必须提交 replyReview。完整约束由工具执行时校验。',
+  properties: { actions: { type: 'array', items: taskActionJsonSchema }, reply: stringJsonSchema, reason: stringJsonSchema, replyReview: replyReviewJsonSchema },
   required: ['actions'],
+}
+
+const compactText = (value, limit = 800) => {
+  const text = String(value ?? '').trim()
+  return text.length <= limit ? text : `${text.slice(0, limit)}…`
+}
+
+export const REPLY_REVIEW_CANDIDATE_LIMIT = 8
+export const REPLY_REVIEW_MAX_CHARS = 16_000
+const REPLY_REVIEW_CONFIRMATION_LIMIT = 6
+const REPLY_REVIEW_SOURCE_MESSAGE_LIMIT = 4
+const REPLY_REVIEW_TASK_LIMIT = 3
+const uniqueValues = (values) => [...new Set(values.filter(Boolean))]
+
+const comparableText = (value) => String(value ?? '').toLowerCase().replace(/@[\p{L}\p{N}_()（）-]+/gu, '').replace(/[^\p{L}\p{N}]+/gu, '')
+
+const textFragments = (value) => {
+  const text = comparableText(value)
+  if (text.length < 2) return new Set(text ? [text] : [])
+  return new Set(Array.from({ length: text.length - 1 }, (_, index) => text.slice(index, index + 2)))
+}
+
+const contentSimilarity = (left, right) => {
+  const leftFragments = textFragments(left), rightFragments = textFragments(right)
+  if (leftFragments.size === 0 || rightFragments.size === 0) return 0
+  let matches = 0
+  for (const fragment of leftFragments) if (rightFragments.has(fragment)) matches += 1
+  return matches / Math.max(1, Math.min(leftFragments.size, rightFragments.size))
+}
+
+const taskMessageIds = (task) => new Set([task.sourceMessageId, ...(task.messageHistory ?? []).map((message) => message.messageId)].filter(Boolean))
+
+export function buildReplyReviewCandidates({ group, tasks = [], currentMessages = [], focusTaskIds = [], recentLimit = 6, similarityLimit = 6, candidateLimit = REPLY_REVIEW_CANDIDATE_LIMIT, maxChars = REPLY_REVIEW_MAX_CHARS }) {
+  if (group === undefined) return []
+  const messages = new Map((group.messages ?? []).map((message) => [message.messageId, message]))
+  for (const task of tasks) for (const message of task.messageHistory ?? []) if (!messages.has(message.messageId)) messages.set(message.messageId, message)
+  const taskIdsByMessage = new Map()
+  for (const task of tasks) for (const messageId of taskMessageIds(task)) taskIdsByMessage.set(messageId, [...new Set([...(taskIdsByMessage.get(messageId) ?? []), task.taskId])])
+  const focus = new Set(focusTaskIds)
+  const currentReferences = new Set(currentMessages.flatMap((message) => [message.messageId, message.quotedMessage?.messageId, message.quotedMessageId]).filter(Boolean))
+  const contextualTaskIds = new Set(focusTaskIds)
+  for (const messageId of currentReferences) for (const taskId of taskIdsByMessage.get(messageId) ?? []) contextualTaskIds.add(taskId)
+  const currentText = currentMessages.map((message) => `${message.text ?? ''}\n${message.quotedMessage?.content ?? ''}`).join('\n')
+  const active = (group.outbox ?? []).filter((outbound) => ['pending', 'sent'].includes(outbound.status) && outbound.recallStatus !== 'recalled')
+  const decorated = active.map((outbound, index) => {
+    const sourceIds = uniqueValues([...(outbound.matterSourceMessageIds ?? []), outbound.sourceMessageId, outbound.replyToMessageId]).filter((messageId) => messages.has(messageId))
+    const derivedTaskIds = new Set(outbound.taskIds ?? [])
+    const taskResult = /^task-result:(task-[^:]+):/u.exec(outbound.sourceMessageId)
+    if (taskResult) derivedTaskIds.add(taskResult[1])
+    for (const messageId of sourceIds) for (const taskId of taskIdsByMessage.get(messageId) ?? []) derivedTaskIds.add(taskId)
+    const allRelatedTasks = tasks.filter((task) => derivedTaskIds.has(task.taskId))
+    for (const task of allRelatedTasks) {
+      for (const message of (task.messageHistory ?? []).slice(-8)) if (!sourceIds.includes(message.messageId)) sourceIds.push(message.messageId)
+    }
+    const projectedSourceIds = uniqueValues([
+      ...sourceIds.filter((messageId) => currentReferences.has(messageId)),
+      outbound.sourceMessageId,
+      outbound.replyToMessageId,
+      ...[...sourceIds].reverse(),
+    ]).filter((messageId) => messages.has(messageId)).slice(0, REPLY_REVIEW_SOURCE_MESSAGE_LIMIT)
+    const sourceMessages = projectedSourceIds.flatMap((messageId) => {
+      const message = messages.get(messageId)
+      return message === undefined ? [] : [{
+        messageId, text: compactText(message.text, 480),
+        ...(message.senderName ? { senderName: message.senderName } : {}),
+        ...(message.senderOpenDingTalkId ? { senderOpenDingTalkId: message.senderOpenDingTalkId } : {}),
+        ...(message.occurredAt !== undefined ? { occurredAt: mainMessageTime(message.occurredAt) } : {}),
+        ...(message.quotedMessage?.messageId || message.quotedMessageId ? { quotedMessageId: message.quotedMessage?.messageId ?? message.quotedMessageId } : {}),
+        ...(message.quotedMessage?.content ? { quotedContent: compactText(message.quotedMessage.content, 240) } : {}),
+      }]
+    })
+    const projectedTaskIds = uniqueValues([
+      ...[...derivedTaskIds].filter((taskId) => contextualTaskIds.has(taskId)),
+      ...[...derivedTaskIds].reverse(),
+    ]).slice(0, REPLY_REVIEW_TASK_LIMIT)
+    const relatedTasks = allRelatedTasks.filter((task) => projectedTaskIds.includes(task.taskId))
+    const candidateText = [compactText(outbound.text, 800), ...sourceMessages.flatMap((message) => [message.text, message.quotedContent]), ...relatedTasks.map((task) => task.objective)].join('\n')
+    return {
+      index, score: contentSimilarity(currentText, candidateText),
+      directlyLinked: sourceIds.some((messageId) => currentReferences.has(messageId)) || [...derivedTaskIds].some((taskId) => contextualTaskIds.has(taskId)),
+      focused: [...derivedTaskIds].some((taskId) => focus.has(taskId)),
+      confirmation: outbound.replyKind === 'confirmation',
+      candidate: {
+        outboundId: outbound.outboundId, sourceMessageId: outbound.sourceMessageId, status: outbound.status,
+        ...(outbound.deliveredMessageId ? { deliveredMessageId: outbound.deliveredMessageId } : {}),
+        ...(outbound.replyKind ? { replyKind: outbound.replyKind } : {}),
+        reply: compactText(outbound.text, 360), taskIds: projectedTaskIds, sourceMessages,
+        tasks: relatedTasks.map(({ taskId, title, objective, state }) => ({ taskId, ...(title ? { title: compactText(title, 120) } : {}), objective: compactText(objective, 360), state })),
+      },
+    }
+  })
+  const newest = [...decorated].sort((left, right) => right.index - left.index)
+  const prioritized = uniqueValues([
+    ...newest.filter((item) => item.focused || item.directlyLinked),
+    ...newest.filter((item) => item.confirmation).slice(0, REPLY_REVIEW_CONFIRMATION_LIMIT),
+    ...[...decorated].filter((item) => item.score > 0).sort((left, right) => right.score - left.score || right.index - left.index).slice(0, Math.max(0, similarityLimit)),
+    ...newest.slice(0, Math.max(0, recentLimit)),
+  ])
+  const bounded = []
+  for (const item of prioritized) {
+    if (bounded.length >= Math.max(0, candidateLimit)) break
+    const next = [...bounded, item]
+    if (JSON.stringify(next.map(({ candidate }) => candidate)).length <= Math.max(0, maxChars)) bounded.push(item)
+  }
+  return bounded.sort((left, right) => right.index - left.index).map(({ candidate }) => candidate)
 }
 
 function mainMessageTime(value) {
@@ -44,7 +165,7 @@ function mainMessageTime(value) {
   return Number.isNaN(parsed.valueOf()) ? value : parsed.toISOString()
 }
 
-export function buildDecisionPrompt({ messageId, message, senderName, senderOpenDingTalkId, occurredAt, quotedMessage, mediaUnavailable }) {
+export function buildDecisionPrompt({ messageId, message, senderName, senderOpenDingTalkId, occurredAt, quotedMessage, mediaUnavailable, replyReviewCandidates, recoveryError, decisionAttemptCount }) {
   const messageBlock = [
     `消息唯一标识：${messageId ?? '未知'}`,
     `发送者：${senderName ?? '未知'}`,
@@ -53,7 +174,9 @@ export function buildDecisionPrompt({ messageId, message, senderName, senderOpen
     `内容：${message}`,
   ]
   if (quotedMessage?.messageId) messageBlock.push(`引用消息ID：${quotedMessage.messageId}`)
+  if (recoveryError) messageBlock.push(`自动恢复：此前第 ${decisionAttemptCount ?? 1} 次判断未完成，错误为 ${recoveryError}。必须根据当前消息、当前任务索引和现行工具 Schema 重新生成，不得机械复用上次的参数或失效 Task ID。`)
   if (Array.isArray(mediaUnavailable) && mediaUnavailable.length > 0) messageBlock.push(`附件读取异常：${mediaUnavailable.join('；')}。不得仅因附件暂不可读而断言消息与职责或活动任务无关；如果这些附件承载任务所需信息，必须先回答并明确告知对方哪些信息未获取到，不得创建、续接或重开任务。`)
+  if (Array.isArray(replyReviewCandidates)) messageBlock.push(`历史主会话回复候选（必须阅读来源正文后判断同一事项，引用ID只能作为线索）：${JSON.stringify(replyReviewCandidates)}`)
   return [
     '[GROUP_DECISION]',
     '',
@@ -103,7 +226,7 @@ export function shouldRecheckTaskAssociation({ activeTaskCount, hasImage, previo
 export function blockTaskDecisionForUnavailableMedia(decision, mediaUnavailable) {
   const unavailable = Array.isArray(mediaUnavailable) ? mediaUnavailable.map((item) => String(item).trim()).filter(Boolean) : []
   if (unavailable.length === 0 || !decision.actions.some((action) => ['new-task', 'task-context', 'task-reopen'].includes(action.kind))) return decision
-  return { actions: [], reply: `我没能获取到以下任务信息：${unavailable.join('；')}。请重新发送可访问的内容，信息补齐后我再开始处理。` }
+  return { actions: [], reply: `我没能获取到以下任务信息：${unavailable.join('；')}。请重新发送可访问的内容，信息补齐后我再开始处理。`, ...(decision.replyReview ? { replyReview: decision.replyReview } : {}) }
 }
 
 export function parseGroupDecision(text) {

@@ -262,6 +262,8 @@ Pop-Location
 
 `dump-config` 必须同时显示官方 `compaction-basic` 为 `disabled: true`、`compaction-convergent` 指向自实现包，并且不存在第二个启用的 compaction provider。安装回执和配置展开都不能代替运行态验证；重启后仍需检查 Node 24、Web/Resident listener、health/API，并在可控 Session 中确认压缩发生后 token 下降、Session 可重载且后续消息能继续。
 
+Resident Session 恢复失败时，Runtime 会保留原 `residentSessionId` 并把 `/health` 标记为 `degraded`，不会自动创建替代 Session 或改写群绑定。应先读取恢复问题并在副本上完成修复与校验；不要用新 Session 绕过损坏、超窗或历史不可用问题。
+
 回滚时先停止 Web，删除 `compaction-convergent` 插入项，并把官方 entry 恢复为 `disabled: false`；确认 `dump-config` 只启用官方 provider 后再启动。普通 provider 替换不会自动修复已经被 `session/end-seed` 划到恢复边界前的病理历史 Session；此类一次性修复必须严格按上游的[历史 Session 修复流程](https://github.com/zzusp/dsh-compaction-convergent/blob/main/docs/manual/replace-official-plugin.md#6-历史-session-一次性修复)在副本上执行，不得直接覆盖原 Session。
 
 两个 DWS 开关的含义：
@@ -494,9 +496,11 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 ### 群搜索失败
 
-关联复核期间可继续接收新消息。Task 动作提交时会在群串行区内重新读取当前持久消息快照，避免将复核期间进入的真实来源误判为不存在。`decision-failed` 仍不自动重放：历史失败须先核对 Task 与 Outbox 是否已有副作用，再调用 `POST /config/groups/{groupId}/messages/{messageId}/retry` 精确重试；该接口只接受当前仍为 `decision-failed` 的消息，并重新进入 Runtime 判断，不能直接改为 `delivered`。
+关联复核期间可继续接收新消息。Task 动作提交时会在群串行区内重新读取当前持久消息快照，避免将复核期间进入的真实来源误判为不存在。新发生且尚未开始业务副作用的判断异常会进入 `decision-retrying`，Runtime 按持久化的下一重试时间自动恢复；同群后续消息保持 `pending`，不得越过失败消息。历史 `decision-failed` 中错误明确为重启中断、Decision 未提交或无效 JSON 的消息会在启动时自动迁移；其他旧失败仍须先核对 Task 与 Outbox 是否已有副作用，再调用 `POST /config/groups/{groupId}/messages/{messageId}/retry` 精确重试。该接口不能直接把消息改成 `delivered`。
 
-若进程重启发生在消息已标记 `steered`、但结构化判断尚未提交期间，新 Runtime 会把这类已无活跃请求的遗留消息收敛为 `decision-failed`，错误为 `resident_restarted_before_decision_settled`。它不会自动重放；仍须先核对 Task 与 Outbox 副作用，再使用上述精确重试接口。
+若进程重启发生在消息已标记 `steered`、但结构化判断尚未提交期间，新 Runtime 会把遗留消息转为立即到期的 `decision-retrying`。Resident、群配置和 DWS bridge 就绪后自动按群消息 `sequence` 恢复，恢复成功前该群的后续消息只入 Inbox；其他群不受影响。若状态为 `decision-commit-failed`，说明 Task 或 Outbox 提交已经开始，为避免重复副作用不会自动重放，必须先核对持久化 Task 与 Outbox 后再人工处理。
+
+若 Resident 连续出现上下文压缩且消息长期停在 `steered`，先检查 Session 事件中 `agent/inbox/spliced` 的单条体积。回复审阅候选正常最多 8 条、序列化内容最多 16 KB；明显超过该范围说明仍在运行旧插件。升级并重启后，Runtime 会清除依赖旧 requestId 的遗留协议信封，并从持久化消息状态按群内顺序恢复。不要通过提高上下文窗口掩盖无界候选注入。
 
 确认 DWS 登录有效，搜索词不少于两个字；如果配置了 `dws.profile`，确认登录的是同一个 profile。
 
