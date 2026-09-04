@@ -2,7 +2,7 @@
 
 ## 当前结论
 
-现场根因和代码修复已收敛，自动化验证通过；本地安装和运行态验证待完成。
+现场根因、代码修复、自动化测试和本地部署均已收敛。
 
 ## 现场证据
 
@@ -22,3 +22,17 @@
 - `node --test test/runtime.test.js test/store.test.js`：89/89 通过。
 - `npm test`：186/186 通过。
 - `git diff --check`：通过；仅有仓库既有的 Windows 行尾提示。
+
+## 本地部署结果
+
+- 从提交 `95e3958` 打包根包、`@zzusp/dingtalk-dsh-assistant` 和 `@zzusp/dingtalk-dsh-observer`，安装到 `C:\Users\64554\.dsh\profiles\web`。
+- 安装后的 `runtime.js`、`store.js` 和 observer `web-client.js` 与源码 SHA-256 均一致。
+- `@zzusp/dsh-compaction-convergent` 保持 `0.1.1-rc.2-convergent.6`。
+- 重启后主进程 PID 69184 同时监听 `127.0.0.1:3080` 和 `127.0.0.1:18998`，Web 返回 HTTP 200。
+- `/health` 返回 `status=ok`、`transport=dws`、`inboundProcessing=true`、`recoveryIssueCount=0`。
+- DWS 群 listener 与个人回复 listener 均为 `ready`，backfill 为 `ok`；最近消息 647—658 均为 `delivered`，没有 pending 或 `decision-commit-failed`。
+- 群仍绑定原 Resident Session：`session-group-00fb7328cc47085feddbf03e-87f62c1b`。
+
+## 未冒充的验证边界
+
+- 本轮没有向真实群发送专用测试消息，也没有追补历史确认；真实钉钉新消息 E2E 留给下一条自然群消息验证，避免在业务群制造额外噪声。
