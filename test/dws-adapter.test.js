@@ -80,6 +80,12 @@ test('引用回复回读即使正文完全相同也必须匹配quoted message ID
   assert.equal(matchesOutbound({ text: outbound.text, quotedMessage: { messageId: 'expected-source' } }, outbound), true)
 })
 
+test('短引用回复允许钉钉补充前导@但仍要求精确quoted message ID', () => {
+  const outbound = { text: '这个事项是否需要我处理？\n\n- 小小鹏代回', replyToMessageId: 'expected-source' }
+  assert.equal(matchesOutbound({ text: '@孙鹏  这个事项是否需要我处理？\n- 小小鹏代回', quotedMessage: { messageId: 'expected-source' } }, outbound), true)
+  assert.equal(matchesOutbound({ text: '@孙鹏  这个事项是否需要我处理？\n- 小小鹏代回', quotedMessage: { messageId: 'other-source' } }, outbound), false)
+})
+
 test('本人私聊发送通过openTaskId回查真实会话与消息ID', async () => {
   const calls = []
   const runner = { async run(args) { calls.push(args); return calls.length === 1

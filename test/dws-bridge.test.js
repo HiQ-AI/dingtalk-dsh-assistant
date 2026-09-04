@@ -240,9 +240,9 @@ test('增量补拉过滤已投递及判断失败消息，只重试插话前失�
   assert.ok(ingested.includes('m-new'))
 })
 
-test('补拉命中当前账号的pending outbox时先确认发送并修正历史失败状态', async () => {
-  const outbound = { outboundId: 'out-pending', sourceMessageId: 'source-1', text: 'Agent回复\n\n- 小小鹏代回', status: 'pending' }
-  const message = { messageId: 'm-agent', text: 'Agent回复  - 小小鹏代回', senderName: '孙鹏', agentDeliveryStatus: 'failed' }
+test('补拉命中当前账号的短引用pending outbox时确认发送并修正历史判断失败', async () => {
+  const outbound = { outboundId: 'out-pending', sourceMessageId: 'source-1', text: '这个事项是否需要我处理？\n\n- 小小鹏代回', status: 'pending', replyToMessageId: 'quoted-source' }
+  const message = { messageId: 'm-agent', text: '@孙鹏  这个事项是否需要我处理？\n- 小小鹏代回', senderName: '孙鹏', quotedMessage: { messageId: 'quoted-source' }, agentDeliveryStatus: 'decision-failed' }
   const group = { groupId: 'cid-a', messages: [message], outbox: [outbound] }
   const acknowledged = [], marked = [], ingested = []
   let backfill
@@ -256,7 +256,7 @@ test('补拉命中当前账号的pending outbox时先确认发送并修正历史
   const adapter = {
     startGroupSubscription() { return { lifecycle: new EventEmitter(), ready: Promise.resolve(), done: Promise.resolve(), stop() {} } },
     async readGroup() { return { complete: true, messages: [] } },
-    async readGroupRange() { return { complete: true, messages: [{ conversationId: 'cid-a', messageId: 'm-agent', text: 'Agent回复  - 小小鹏代回', createTime: '2026-08-26T03:28:22Z', sender: '孙鹏' }] } },
+    async readGroupRange() { return { complete: true, messages: [{ conversationId: 'cid-a', messageId: 'm-agent', text: '@孙鹏  这个事项是否需要我处理？\n- 小小鹏代回', quotedMessage: { messageId: 'quoted-source' }, createTime: '2026-08-26T03:28:22Z', sender: '孙鹏' }] } },
   }
   const originalSetInterval = globalThis.setInterval
   globalThis.setInterval = (callback) => { backfill = callback; return { unref() {} } }

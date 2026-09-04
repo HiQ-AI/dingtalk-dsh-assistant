@@ -1043,6 +1043,43 @@ test('Decision请求ID不能跨群提交且失败不会消耗任一群pending', 
   await runtime.close()
 })
 
+test('Agent活动异常结束后用单次恢复Turn结算同群全部pending Decision', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'decision-resume-group' })
+  let releaseFirstIdle, releaseRecoveryIdle
+  const firstIdle = new Promise((resolve) => { releaseFirstIdle = resolve })
+  const recoveryIdle = new Promise((resolve) => { releaseRecoveryIdle = resolve })
+  let idleCalls = 0
+  fixture.handle.agent.whenIdle = async () => {
+    idleCalls += 1
+    if (idleCalls === 1) await firstIdle
+    else if (idleCalls === 2) await recoveryIdle
+  }
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '第一条待判断消息', occurredAt: '2026-09-04T01:29:11Z' })
+  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '第二条待判断消息', occurredAt: '2026-09-04T01:29:17Z' })
+  await fixture.waitForSteers(2)
+  const requestIds = fixture.steered.map(decisionRequestId)
+
+  releaseFirstIdle()
+  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(fixture.followups.length, 1, '同群多个pending请求只允许一个恢复唤醒')
+  assert.match(fixture.followups[0].content[0].text, /^\[GROUP_DECISION_RESUME\]/u)
+  for (const requestId of requestIds) assert.match(fixture.followups[0].content[0].text, new RegExp(requestId))
+
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  await tool.execute({ submissions: [
+    { requestIds: [requestIds[0]], decision: { actions: [], reason: '第一项已结算' } },
+    { requestIds: [requestIds[1]], decision: { actions: [], reason: '第二项已结算' } },
+  ] }, { agent: fixture.handle.agent })
+  const results = await Promise.all([first, second])
+  assert.deepEqual(results.map((result) => result.decision.reason), ['第一项已结算', '第二项已结算'])
+  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['delivered', 'delivered'])
+
+  releaseRecoveryIdle()
+  await new Promise((resolve) => setImmediate(resolve))
+  await runtime.close()
+})
+
 test('普通assistant文本和turn结束不能冒充Decision，停稳未提交会明确失败', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'missing-submit-group' })
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
@@ -1054,6 +1091,8 @@ test('普通assistant文本和turn结束不能冒充Decision，停稳未提交�
   )
   fixture.releaseIdle()
   await assert.rejects(ingest, /group_decision_not_submitted:missing-submit-group:m1/)
+  assert.equal(fixture.followups.length, 1, '只恢复一次，第二个空闲边界仍未提交时必须失败')
+  assert.match(fixture.followups[0].content[0].text, /^\[GROUP_DECISION_RESUME\]/u)
   assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-failed')
   assert.match(fixture.group.messages[0].error, /group_decision_not_submitted/)
   assert.equal(fixture.group.outbox.length, 0)
