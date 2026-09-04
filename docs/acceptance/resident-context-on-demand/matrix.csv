@@ -1,0 +1,13 @@
+case,round-1
+普通Steer不注入历史回复正文,PASS
+非空回复可按请求读取完整候选,PASS
+无效或跨群候选请求失败关闭,PASS
+系统提示Task索引不展开消息历史,PASS
+Task可按ID读取完整关联上下文,PASS
+无效或跨群Task请求失败关闭,PASS
+最近30条真实状态重放满足上下文预算,PASS
+全量测试,PASS
+安装包与源码一致,PASS
+收敛压缩插件更新到convergent.6,PASS
+本地服务重启与原Resident恢复,PASS
+最近消息真实处理复核,PASS
