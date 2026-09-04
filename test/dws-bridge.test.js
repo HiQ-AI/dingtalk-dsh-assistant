@@ -242,7 +242,7 @@ test('增量补拉过滤已投递及判断失败消息，只重试插话前失�
 
 test('补拉命中当前账号的短引用pending outbox时确认发送并修正历史判断失败', async () => {
   const outbound = { outboundId: 'out-pending', sourceMessageId: 'source-1', text: '这个事项是否需要我处理？\n\n- 小小鹏代回', status: 'pending', replyToMessageId: 'quoted-source' }
-  const message = { messageId: 'm-agent', text: '@孙鹏  这个事项是否需要我处理？\n- 小小鹏代回', senderName: '孙鹏', quotedMessage: { messageId: 'quoted-source' }, agentDeliveryStatus: 'decision-failed' }
+  const message = { messageId: 'm-agent', text: '@当前用户  这个事项是否需要我处理？\n- 小小鹏代回', senderName: '当前登录人', quotedMessage: { messageId: 'quoted-source' }, agentDeliveryStatus: 'decision-failed' }
   const group = { groupId: 'cid-a', messages: [message], outbox: [outbound] }
   const acknowledged = [], marked = [], ingested = []
   let backfill
@@ -256,12 +256,12 @@ test('补拉命中当前账号的短引用pending outbox时确认发送并修正
   const adapter = {
     startGroupSubscription() { return { lifecycle: new EventEmitter(), ready: Promise.resolve(), done: Promise.resolve(), stop() {} } },
     async readGroup() { return { complete: true, messages: [] } },
-    async readGroupRange() { return { complete: true, messages: [{ conversationId: 'cid-a', messageId: 'm-agent', text: '@孙鹏  这个事项是否需要我处理？\n- 小小鹏代回', quotedMessage: { messageId: 'quoted-source' }, createTime: '2026-08-26T03:28:22Z', sender: '孙鹏' }] } },
+    async readGroupRange() { return { complete: true, messages: [{ conversationId: 'cid-a', messageId: 'm-agent', text: '@当前用户  这个事项是否需要我处理？\n- 小小鹏代回', quotedMessage: { messageId: 'quoted-source' }, createTime: '2026-08-26T03:28:22Z', sender: '当前登录人' }] } },
   }
   const originalSetInterval = globalThis.setInterval
   globalThis.setInterval = (callback) => { backfill = callback; return { unref() {} } }
   try {
-    const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, currentDwsUserName: '孙鹏', humanPollIntervalMs: 0, groupBackfillIntervalMs: 1, outboxRetryIntervalMs: 0 })
+    const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, currentDwsUserName: '当前登录人', humanPollIntervalMs: 0, groupBackfillIntervalMs: 1, outboxRetryIntervalMs: 0 })
     await backfill()
     assert.deepEqual(acknowledged, [{ groupId: 'cid-a', outboundId: 'out-pending', deliveredMessageId: 'm-agent' }])
     assert.deepEqual(marked, [{ groupId: 'cid-a', messageId: 'm-agent', status: 'skipped' }])
