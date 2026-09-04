@@ -191,13 +191,13 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 
 \`[GROUP_DECISION_RECHECK]\` 是已有判断的内部复核。它可以单独提交，也可以与确实影响本次复核 Decision 的普通消息请求放进同一 submission；不要为了规避回复重生成而把相关消息机械拆开。
 
-Decision 仅回答使用 \`{"actions":[],"reply":"...","replyReview":{...}}\`，忽略为 \`{"actions":[],"reason":"原因"}\`，涉及任务时使用 \`{"actions":[...],"reply":"最多一条群回复，可为空","replyReview":{...}}\`。Decision 顶层不允许 kind 字段；\`replyReview.kind\` 是回复审阅的嵌套字段。一个 Decision 可以同时对应多个 Task，\`actions\` 中每项可为 task-proposal、new-task、task-context、task-reopen 或 task-cancel；不得为了只返回一个动作而遗漏其他相关 Task。每个任务动作必须通过 \`sourceMessageIds\` 列出本动作实际关联的全部消息 ID：既可引用本次正在处理的消息，也可引用本群会话中此前已收到的历史消息；必须包含形成当前动作的全部相关消息，且至少一条来自本次正在处理的消息。同一消息可关联多个 Task，不同 Task 也可选择不同消息集合，不得遗漏此前相关消息，也不得把无关消息机械塞入每个 Task。群回复统一放在顶层 \`reply\`，不得给每个动作分别回复。
+Decision 仅回答使用 \`{"actions":[],"reply":"...","replyReview":{...}}\`，忽略为 \`{"actions":[],"reason":"原因"}\`，涉及任务时使用 \`{"actions":[...],"reply":"一条简短且非空的群确认","replyReview":{...}}\`。Decision 顶层不允许 kind 字段；\`replyReview.kind\` 是回复审阅的嵌套字段。任何 task-proposal、new-task、task-context、task-reopen 或 task-cancel 动作都必须有非空 reply；Runtime 会先可靠提交回复，再开始非取消类任务动作，不能通过清空 reply 绕过回复审阅或执行顺序。一个 Decision 可以同时对应多个 Task，不得为了只返回一个动作而遗漏其他相关 Task。每个任务动作必须通过 \`sourceMessageIds\` 列出本动作实际关联的全部消息 ID：既可引用本次正在处理的消息，也可引用本群会话中此前已收到的历史消息；必须包含形成当前动作的全部相关消息，且至少一条来自本次正在处理的消息。同一消息可关联多个 Task，不同 Task 也可选择不同消息集合，不得遗漏此前相关消息，也不得把无关消息机械塞入每个 Task。群回复统一放在顶层 \`reply\`，不得给每个动作分别回复。
 
 [GROUP_DECISION_RESUME] 表示上一段 Agent 活动结束后仍有已进入 Inbox、但尚未提交的判断请求。它不是新的群消息；必须立即结合当前上下文及同一 step 中保留的全部 [GROUP_MESSAGE_STEER] / [GROUP_DECISION_RECHECK]，通过 group_decision_submit 结算其中列出的 pending 请求。
 
 每次收到新消息时，检查其内容是否与当前 Session 上下文中的近期回复冲突；如有冲突，及时撤回本主会话发送的错误消息并订正。不得撤回真人或其他系统消息。
 
-任何非空群回复都必须先调用 \`group_reply_review_get\`，使用本次 submission 涉及的判断请求 ID 或 TASK_COORDINATION 的回复请求 ID 按需读取 Runtime 绑定的完整历史回复候选，并填写 \`replyReview\`：\`reviewedOutboundIds\` 必须完整列出全部候选；\`sameMatterOutboundIds\` 只列出经语义判断确属同一事项的候选；\`replaceOutboundIds\` 只列出本次发送前应撤回的旧回复。判断是否同一事项必须综合当前消息与候选来源消息的真实正文、引用正文、任务目标、动作范围、状态、参与人和时间线；引用消息 ID、关键词或词面相似度都只能帮助定位，不能单独作为结论。同一事项已经有等价确认且没有必须补充的新信息时，当前 reply 必须为空或选择 ignore；需要补全确认时，\`kind\` 使用 confirmation，并把同一事项的旧确认全部列入 sameMatterOutboundIds 和 replaceOutboundIds，由 Runtime 先撤回旧消息再发送合并后的最新确认。结果、阻塞或问题答复使用 substantive，replaceOutboundIds 必须为空；订正旧回复使用 correction，并列出要撤回的同事项旧回复。不得填写读取结果之外的 ID。无需非空群回复时不要读取候选，也不要填写 replyReview。
+任何非空群回复都必须先调用 \`group_reply_review_get\`，使用本次 submission 涉及的判断请求 ID 或 TASK_COORDINATION 的回复请求 ID 按需读取 Runtime 绑定的完整历史回复候选，并填写 \`replyReview\`：\`reviewedOutboundIds\` 必须完整列出全部候选；\`sameMatterOutboundIds\` 只列出经语义判断确属同一事项的候选；\`replaceOutboundIds\` 只列出本次发送前应撤回的旧回复。判断是否同一事项必须综合当前消息与候选来源消息的真实正文、引用正文、任务目标、动作范围、状态、参与人和时间线；引用消息 ID、关键词或词面相似度都只能帮助定位，不能单独作为结论。同一事项已经有等价确认且没有新信息时，应使用 actions 为空的 ignore，而不是保留任务动作并清空 reply；存在任务动作就说明有新的处理、关联、纠正、提议或取消，必须提交一条简短回复。需要补全确认时，\`kind\` 使用 confirmation，并把同一事项的旧确认全部列入 sameMatterOutboundIds 和 replaceOutboundIds，由 Runtime 先撤回旧消息再发送合并后的最新确认。结果、阻塞或问题答复使用 substantive，replaceOutboundIds 必须为空；订正旧回复使用 correction，并列出要撤回的同事项旧回复。不得填写读取结果之外的 ID。无需非空群回复且无需任务动作时不要读取候选，也不要填写 replyReview。
 
 \`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从原始群消息生成的独立来源证据信封并自行核验。
 
@@ -227,7 +227,7 @@ ${quotedMessageRecoveryPolicy('resident')}
 
 过程确认和信息确认必须简短，只确认已收到、已关联 Task 或将继续处理，不得复述、改写或逐项罗列对方提供的信息，不得虚构进度、结果或完成时间。给活动 Task 补充 IP、库名、schema、文件、截图、字段范围或其他执行线索时，应返回简短确认；叶子已在执行且当前消息作为 task-context 转交时，也应简短确认会结合补充信息继续处理。
 
-task-cancel 成功时只需用一句短句确认任务已停止，不得继续承诺处理。以下情况必须 reply 为空或选择 ignore：同事之间的讨论、确认、纠正或短句接龙且未明确要求 Agent 回答，也与本 Agent 的 Task 无关；没有新增信息，只是复述已有结论或重复确认任务仍在进行；仅因消息提及当前 DWS 登录人姓名。
+task-cancel 成功时只需用一句短句确认任务已停止，不得继续承诺处理。以下情况必须使用 actions 为空且带 reason 的 ignore，不得保留任务动作或提交 reply：同事之间的讨论、确认、纠正或短句接龙且未明确要求 Agent 回答，也与本 Agent 的 Task 无关；没有新增信息，只是复述已有结论或重复确认任务仍在进行；仅因消息提及当前 DWS 登录人姓名。
 
 同一事项短时间内连续出现的文本、文件、图片和补充说明属于一个信息组。文件或图片前后的短句不得分别追问；信息仍可能继续补充时先静默关联，只有信息组稳定后仍存在真正阻塞，才能一次性询问。同一 Task 在上一条群通知之后没有产生新结果、真实阻塞或必要订正时，不得再次发状态通知。
 
@@ -523,7 +523,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       },
       output: {
         schema: { type: 'object', additionalProperties: false, required: ['status', 'acceptedRequestIds', 'pendingRequestIds', 'missingRequestIds', 'unexpectedRequestIds'], properties: {
-          status: { type: 'string', enum: ['accepted', 'stale', 'review-required'] },
+          status: { type: 'string', enum: ['accepted', 'stale', 'review-required', 'reply-required'] },
           acceptedRequestIds: { type: 'array', items: { type: 'string' } },
           pendingRequestIds: { type: 'array', items: { type: 'string' } },
           missingRequestIds: { type: 'array', items: { type: 'string' } },
@@ -534,6 +534,8 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
           ? `回复观察快照已变化，本批未提交。缺失请求 ID：${out.missingRequestIds.join(',') || '无'}；异常请求 ID：${out.unexpectedRequestIds.join(',') || '无'}。必须结合新请求重新生成并再次提交；当前共有 ${out.pendingRequestIds.length} 个请求待处理。`
           : out.status === 'review-required'
             ? `历史回复审阅不完整，本批未提交（${out.reviewError}）。请调用 group_reply_review_get 读取当前请求绑定的完整候选，补全 replyReview 后重新提交。`
+            : out.status === 'reply-required'
+              ? '任务动作缺少群确认，本批未提交且未产生任务或回复副作用。请保留完整任务动作，补充一条简短非空回复并完成历史回复审阅后重新提交。'
             : `已提交 ${out.acceptedRequestIds.length} 个群消息判断请求；仍有 ${out.pendingRequestIds.length} 个请求待处理。` }],
       },
       execute: async (args, exec) => {
@@ -595,6 +597,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
               if (directedAway.some((message) => !hasQuotedTransfer(message.messageId))) throw new Error('task_action_directed_to_other_participants')
             }
           }
+          if (submission.decision.actions.length > 0 && (!('reply' in submission.decision) || submission.decision.reply.trim() === '')) throw new Error('group_task_reply_required')
           if ('reply' in submission.decision && submission.decision.reply.trim() !== '') {
             submission.decision.replyReview = validateReplyReview(submission.decision.replyReview, submission.replyReviewCandidates, {
               confirmationTaskIds: submission.decision.actions.flatMap((action) => ['task-context', 'task-reopen', 'task-cancel'].includes(action.kind) ? [action.taskId] : []),
@@ -603,8 +606,9 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
           return submission
         })
         } catch (error) {
-          if (!(error instanceof Error) || !error.message.startsWith('group_reply_review_')) throw error
           const pendingRequestIds = [...pendingGroupDecisions.values()].filter((pending) => pending.groupId === groupId && pending.kind === 'message').sort((left, right) => left.sequence - right.sequence).map((pending) => pending.requestId)
+          if (error instanceof Error && error.message === 'group_task_reply_required') return { status: 'reply-required', acceptedRequestIds: [], pendingRequestIds, missingRequestIds: [], unexpectedRequestIds: [] }
+          if (!(error instanceof Error) || !error.message.startsWith('group_reply_review_')) throw error
           return { status: 'review-required', acceptedRequestIds: [], pendingRequestIds, missingRequestIds: [], unexpectedRequestIds: [], reviewError: error.message }
         }
         const replying = validated.filter((submission) => 'reply' in submission.decision && submission.decision.reply.trim() !== '')
@@ -1905,7 +1909,33 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
               return { ...accepted, decision, group: store.getGroup(message.groupId) }
             }
             const tasks = []
+            const hasReply = 'reply' in decision && decision.reply.trim() !== ''
             if (decision.actions.length > 0) mutationStarted = true
+            for (const action of decision.actions) if (action.kind === 'task-cancel') signalTaskCancellation(action.taskId)
+            let group
+            if (hasReply) {
+              mutationStarted = true
+              const replyTarget = decisionRequests.findLast((request) => typeof request.messageId === 'string'
+                && request.messageId.trim() !== ''
+                && typeof request.message?.senderOpenDingTalkId === 'string'
+                && request.message.senderOpenDingTalkId.trim() !== '')
+              group = await appendReliableOutbox({
+                groupId: message.groupId, sourceMessageId: message.messageId, text: decision.reply,
+                replyKind: decision.replyReview?.kind,
+                matterSourceMessageIds: decisionRequests.map((request) => request.messageId),
+                taskIds: [...new Set(decision.actions.flatMap((action) => typeof action.taskId === 'string' ? [action.taskId] : []))],
+                replacesOutboundIds: decision.replyReview?.replaceOutboundIds,
+                ...(replyTarget === undefined ? {} : {
+                  replyToMessageId: replyTarget.messageId,
+                  replyToSenderOpenDingTalkId: replyTarget.message.senderOpenDingTalkId,
+                  atOpenDingTalkIds: [replyTarget.message.senderOpenDingTalkId],
+                }),
+                onPersisted: () => {
+                  submitted.resolveReplyLinearized()
+                  recheckedSubmission?.resolveReplyLinearized()
+                },
+              })
+            }
             for (const action of decision.actions) {
               const sourceMessageIds = action.sourceMessageIds
               if (new Set(sourceMessageIds).size !== sourceMessageIds.length) throw new Error('task_action_source_message_duplicate')
@@ -1931,36 +1961,12 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
                 if (task.state === 'completed') throw new Error(`task_not_active:${action.taskId}`)
                 const reason = action.reason.trim()
                 if (reason === '') throw new Error('task_cancel_reason_required')
-                signalTaskCancellation(task.taskId)
                 task = await serializeTasks(() => cancelTaskInternal(task.taskId, reason, sourceMessages))
               }
               if (task !== undefined) tasks.push(task)
             }
-            let group
-            if (!('reply' in decision) || decision.reply.trim() === '') group = store.getGroup(message.groupId)
-            else {
-              mutationStarted = true
-              const replyTarget = decisionRequests.findLast((request) => typeof request.messageId === 'string'
-                && request.messageId.trim() !== ''
-                && typeof request.message?.senderOpenDingTalkId === 'string'
-                && request.message.senderOpenDingTalkId.trim() !== '')
-              group = await appendReliableOutbox({
-                groupId: message.groupId, sourceMessageId: message.messageId, text: decision.reply,
-                replyKind: decision.replyReview?.kind,
-                matterSourceMessageIds: decisionRequests.map((request) => request.messageId),
-                taskIds: [...new Set(tasks.map((task) => task.taskId))],
-                replacesOutboundIds: decision.replyReview?.replaceOutboundIds,
-                ...(replyTarget === undefined ? {} : {
-                  replyToMessageId: replyTarget.messageId,
-                  replyToSenderOpenDingTalkId: replyTarget.message.senderOpenDingTalkId,
-                  atOpenDingTalkIds: [replyTarget.message.senderOpenDingTalkId],
-                }),
-                onPersisted: () => {
-                  submitted.resolveReplyLinearized()
-                  recheckedSubmission?.resolveReplyLinearized()
-                },
-              })
-            }
+            if (hasReply && tasks.length > 0) group = await store.attachOutboxTasks({ groupId: message.groupId, sourceMessageId: message.messageId, taskIds: [...new Set(tasks.map((task) => task.taskId))] })
+            else if (!hasReply) group = store.getGroup(message.groupId)
             await Promise.all(decisionRequests.map((request) => store.markMessageAgentDelivery({ groupId: message.groupId, messageId: request.messageId, status: 'delivered' })))
             return { ...accepted, decision, group, tasks, ...(tasks.length === 1 ? { task: tasks[0] } : {}) }
           })

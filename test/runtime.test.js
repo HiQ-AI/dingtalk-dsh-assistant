@@ -30,7 +30,8 @@ test('Inbox 默认零延迟 steer，回复提交门禁不退化为定时聚合',
   assert.match(source, /handle\?\.agent\.cancel\(\{ kind: 'user' \}\)/u)
   assert.match(source, /判断是否同一事项必须综合当前消息与候选来源消息的真实正文/u)
   assert.match(source, /引用消息 ID、关键词或词面相似度都只能帮助定位，不能单独作为结论/u)
-  assert.match(source, /同一事项已经有等价确认且没有必须补充的新信息时，当前 reply 必须为空或选择 ignore/u)
+  assert.match(source, /同一事项已经有等价确认且没有新信息时，应使用 actions 为空的 ignore/u)
+  assert.match(source, /存在任务动作就说明有新的处理、关联、纠正、提议或取消，必须提交一条简短回复/u)
   assert.match(source, /由 Runtime 先撤回旧消息再发送合并后的最新确认/u)
   assert.match(source, /const submitted = await pending\.promise/)
   assert.match(source, /agentCtx\.tools\.restrict\(\{ deny: \['get_goal', 'create_goal', 'update_goal'\] \}\)/)
@@ -112,6 +113,7 @@ function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false 
     },
     async markMessageAgentDelivery({ messageId, status, error, retryAt }) { const item = group.messages.find((message) => message.messageId === messageId); const next = { agentDeliveryStatus: status, ...(status === 'steered' ? { agentDecisionAttemptCount: (item.agentDecisionAttemptCount ?? 0) + 1 } : {}), ...(error === undefined ? {} : { error, agentDeliveryError: error }), ...(retryAt === undefined ? {} : { agentDecisionRetryAt: retryAt }) }; if (!error) { delete item.error; delete item.agentDeliveryError } if (!retryAt) delete item.agentDecisionRetryAt; Object.assign(item, next); return group },
     async appendOutbox(value) { group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
+    async attachOutboxTasks({ sourceMessageId, taskIds }) { const item = group.outbox.find((outbound) => outbound.sourceMessageId === sourceMessageId); item.taskIds = [...new Set([...(item.taskIds ?? []), ...taskIds])]; return group },
     async updateOutboundRecall({ outboundId, status, reason, error }) { const item = group.outbox.find((entry) => entry.outboundId === outboundId); Object.assign(item, { recallStatus: status, recallReason: reason }, status === 'recalled' ? { recalledAt: '2026-09-04T00:00:00Z', recallError: undefined } : {}, status === 'failed' ? { recallError: error } : {}); return group },
     async createTask(value) {
       const { sourceMessageIds, ...taskValue } = value
@@ -266,6 +268,7 @@ function taskReplyRuntimeFixture({ messageHistory, groupMessages = [] } = {}) {
     async ingest(message) { const accepted = { ...message, sequence: group.nextSequence++, agentDeliveryStatus: 'pending' }; group.messages.push(accepted); return { duplicate: false, sequence: accepted.sequence, group } },
     async markMessageAgentDelivery({ messageId, status, error, retryAt }) { const item = group.messages.find((message) => message.messageId === messageId); const next = { agentDeliveryStatus: status, ...(status === 'steered' ? { agentDecisionAttemptCount: (item.agentDecisionAttemptCount ?? 0) + 1 } : {}), ...(error === undefined ? {} : { error, agentDeliveryError: error }), ...(retryAt === undefined ? {} : { agentDecisionRetryAt: retryAt }) }; if (!error) { delete item.error; delete item.agentDeliveryError } if (!retryAt) delete item.agentDecisionRetryAt; Object.assign(item, next); return group },
     async appendOutbox(value) { if (!group.outbox.some((item) => item.sourceMessageId === value.sourceMessageId)) group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
+    async attachOutboxTasks({ sourceMessageId, taskIds }) { const item = group.outbox.find((outbound) => outbound.sourceMessageId === sourceMessageId); item.taskIds = [...new Set([...(item.taskIds ?? []), ...taskIds])]; return group },
     async updateOutboundRecall({ outboundId, status, reason, error }) { const item = group.outbox.find((entry) => entry.outboundId === outboundId); Object.assign(item, { recallStatus: status, recallReason: reason }, status === 'recalled' ? { recalledAt: '2026-09-04T00:00:00Z', recallError: undefined } : {}, status === 'failed' ? { recallError: error } : {}); return group },
     close: async () => undefined,
   }
@@ -379,7 +382,7 @@ test('一个Decision可把历史与当前消息多对多关联到不同Task', as
   await fixture.waitForSteers(3)
   const requestIds = fixture.steered.map(decisionRequestId)
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = (actions) => ({ observedRequestIds: requestIds, submissions: [{ requestIds, decision: { actions, reply: '' } }] })
+  const submission = (actions) => ({ observedRequestIds: requestIds, submissions: [{ requestIds, decision: { actions, reply: '已确认并开始处理。' } }] })
 
   await assert.rejects(tool.execute(submission([{ kind: 'new-task', title: '缺少来源', objective: '不得创建', acceptanceCriteria: ['不得创建'] }]), { agent: fixture.handle.agent }), /group_decision_invalid_schema/)
   await assert.rejects(tool.execute(submission([{ kind: 'new-task', title: '重复来源', objective: '不得创建', acceptanceCriteria: ['不得创建'], sourceMessageIds: ['m-a', 'm-a'] }]), { agent: fixture.handle.agent }), /task_action_source_message_duplicate/)
@@ -436,7 +439,7 @@ test('明确@其他同事的消息不能建Task，后续引用并指向Agent后�
   await fixture.waitForSteers(2)
   const transferRequestId = decisionRequestId(fixture.steered[1])
   await tool.execute({ observedRequestIds: [originalRequestId, transferRequestId], submissions: [{ requestIds: [originalRequestId, transferRequestId], decision: {
-    actions: [{ kind: 'new-task', title: '排查计算提示', objective: '排查仅计算后出现未保存提示的原因', acceptanceCriteria: ['定位原因'], sourceMessageIds: ['msg624ca5N0Mq3+36twQq+b7A==', 'm-transfer'] }], reply: '',
+    actions: [{ kind: 'new-task', title: '排查计算提示', objective: '排查仅计算后出现未保存提示的原因', acceptanceCriteria: ['定位原因'], sourceMessageIds: ['msg624ca5N0Mq3+36twQq+b7A==', 'm-transfer'] }], reply: '收到，我来排查这个提示。',
   } }] }, { agent: fixture.handle.agent })
   await Promise.all([original, transfer])
   assert.equal(fixture.tasks.length, 1)
@@ -457,7 +460,7 @@ test('群消息撤销立即中断误建叶子且不等待Task串行队列或disp
 
   const createIngest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-create', text: 'cc: 帮忙处理这个', occurredAt: '2026-09-03T09:00:00Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
   await fixture.waitForSteers(1)
-  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [{ kind: 'new-task', title: '误建任务', objective: '处理不应执行的事项', acceptanceCriteria: ['完成处理'], sourceMessageIds: ['m-create'] }], reply: '' } }] }, { agent: fixture.handle.agent })
+  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [{ kind: 'new-task', title: '误建任务', objective: '处理不应执行的事项', acceptanceCriteria: ['完成处理'], sourceMessageIds: ['m-create'] }], reply: '收到，我来处理。' } }] }, { agent: fixture.handle.agent })
   await createIngest
   const task = fixture.tasks[0]
   assert.equal(task.state, 'running')
@@ -480,10 +483,18 @@ test('群消息撤销立即中断误建叶子且不等待Task串行队列或disp
 
   const cancelIngest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-cancel', text: '不用处理了，停下来', occurredAt: '2026-09-03T09:00:01Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
   await fixture.waitForSteers(2)
-  const cancelSubmission = tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[1])], decision: { actions: [{ kind: 'task-cancel', taskId: task.taskId, reason: '提出人明确要求不用处理', sourceMessageIds: ['m-cancel'] }], reply: '已停止处理。' } }] }, { agent: fixture.handle.agent })
+  const cancelRequestId = decisionRequestId(fixture.steered[1])
+  const reviewTool = fixture.registeredTools.find((item) => item.name === 'group_reply_review_get')
+  const review = await reviewTool.execute({ requestIds: [cancelRequestId] }, { agent: fixture.handle.agent })
+  const cancelSubmission = tool.execute({ submissions: [{ requestIds: [cancelRequestId], decision: {
+    actions: [{ kind: 'task-cancel', taskId: task.taskId, reason: '提出人明确要求不用处理', sourceMessageIds: ['m-cancel'] }],
+    reply: '已停止处理。',
+    replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((candidate) => candidate.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] },
+  } }] }, { agent: fixture.handle.agent })
   for (let attempt = 0; attempt < 100 && fixture.leafCancelCalls.length === 0; attempt += 1) await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(fixture.leafCancelCalls[0], { cause: { kind: 'user' }, options: undefined }, '取消信号必须在Task串行队列释放前同步发出')
-  assert.equal(await Promise.race([cancelSubmission.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('pending'), 25))]), 'pending')
+  assert.equal(await Promise.race([cancelSubmission.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('pending'), 25))]), 'settled', '确认Outbox可靠落库后工具可以返回')
+  assert.equal(await Promise.race([cancelIngest.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('pending'), 25))]), 'pending', 'Task取消状态仍须等待串行队列提交')
   await assert.rejects(leafResultTool.execute({ status: 'completed', workType: 'non-development', summary: '迟到结果', evidence: ['取消后不得接收'], artifacts: [] }, { agent: fixture.getLeafHandle().agent }), /task_cancel_pending/)
 
   releaseRename()
@@ -646,6 +657,77 @@ test('Decision claim到可靠Outbox之间阻止同群新Steer越过回复门禁'
   await runtime.close()
 })
 
+test('Task动作缺少确认时保持pending且补回复后先写Outbox再创建Task', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'task-confirmation-required-group' })
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const observed = []
+  runtime.onOutboxAppended(({ outbound }) => { observed.push({ taskCount: fixture.tasks.length, taskIds: outbound.taskIds ?? [] }) })
+  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '请处理这项任务', occurredAt: '2026-09-04T13:00:00Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
+  await fixture.waitForSteers(1)
+  const requestId = decisionRequestId(fixture.steered[0])
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  const actions = [{ kind: 'new-task', title: '处理任务', objective: '完成指定任务', acceptanceCriteria: ['结果可核验'], sourceMessageIds: ['m1'] }]
+
+  const rejected = await tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions, reply: '' } }] }, { agent: fixture.handle.agent })
+  assert.deepEqual(rejected, { status: 'reply-required', acceptedRequestIds: [], pendingRequestIds: [requestId], missingRequestIds: [], unexpectedRequestIds: [] })
+  assert.match(tool.output.render({}, rejected)[0].text, /未产生任务或回复副作用/u)
+  assert.equal(fixture.tasks.length, 0)
+  assert.equal(fixture.group.outbox.length, 0)
+  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'steered')
+
+  const [submitted, result] = await Promise.all([
+    tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions, reply: '收到，我开始处理。' } }] }, { agent: fixture.handle.agent }),
+    ingest,
+  ])
+  assert.deepEqual(submitted, acceptedSubmission([requestId]))
+  assert.equal(result.task.taskId, 'task-1')
+  assert.deepEqual(observed, [{ taskCount: 0, taskIds: [] }], 'Outbox监听发生时Task必须尚未创建')
+  assert.equal(fixture.tasks.length, 1)
+  assert.deepEqual(fixture.group.outbox[0].taskIds, ['task-1'])
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('已有Task重开和追加上下文都在确认Outbox之后执行', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'task-confirmation-order-group' })
+  const completedResult = { status: 'completed', workType: 'non-development', summary: '原轮已完成', evidence: ['原轮证据'], artifacts: [] }
+  fixture.tasks.push(
+    {
+      taskId: 'task-completed', groupId: fixture.group.groupId, sourceMessageId: 'old-completed', childSessionId: 'session-task-completed', title: '已完成事项', objective: '完成原事项', state: 'completed',
+      runSequence: 1, runStartedAt: '2026-09-04T10:00:00Z', acceptanceCriteria: ['原事项完成'], stageTasks: ['原阶段'], runHistory: [], relatedContexts: [], result: completedResult, completion: '已完成', completionSequence: 1,
+    },
+    {
+      taskId: 'task-queued', groupId: fixture.group.groupId, sourceMessageId: 'old-queued', childSessionId: 'session-task-queued', title: '待处理事项', objective: '继续原事项', state: 'queued',
+      runSequence: 1, runStartedAt: '2026-09-04T11:00:00Z', acceptanceCriteria: ['原事项继续'], stageTasks: ['继续阶段'], runHistory: [], relatedContexts: [],
+    },
+  )
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const order = []
+  runtime.onOutboxAppended(() => { order.push('outbox') })
+  const updateTask = fixture.store.updateTask
+  fixture.store.updateTask = async (...args) => { order.push(`task-update:${args[0]}`); return updateTask(...args) }
+  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-current', text: '补充并重开这两个事项', occurredAt: '2026-09-04T13:01:00Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
+  await fixture.waitForSteers(1)
+  const requestId = decisionRequestId(fixture.steered[0])
+  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  const actions = [
+    { kind: 'task-reopen', taskId: 'task-completed', context: '按新要求重开', sourceMessageIds: ['m-current'] },
+    { kind: 'task-context', taskId: 'task-queued', context: '补充新的执行信息', sourceMessageIds: ['m-current'] },
+  ]
+  await Promise.all([
+    tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions, reply: '收到，已更新这两个事项。' } }] }, { agent: fixture.handle.agent }),
+    ingest,
+  ])
+
+  assert.equal(order[0], 'outbox')
+  assert.deepEqual(order.slice(1), ['task-update:task-completed', 'task-update:task-queued'])
+  assert.deepEqual(fixture.group.outbox[0].taskIds, ['task-completed', 'task-queued'])
+  assert.equal(fixture.tasks.find((task) => task.taskId === 'task-completed').state, 'queued')
+  assert.equal(fixture.tasks.find((task) => task.taskId === 'task-queued').relatedContexts.length, 1)
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
 test('Decision可靠Outbox失败会隔离为提交失败并阻止同群后续消息越过', async () => {
   const fixture = decisionRuntimeFixture({ groupId: 'reply-append-failure-group' })
   const appendOutbox = fixture.store.appendOutbox
@@ -668,14 +750,14 @@ test('Decision可靠Outbox失败会隔离为提交失败并阻止同群后续消
   await assert.rejects(first, /outbox_append_failed/)
   assert.equal(fixture.group.outbox.length, 0)
   assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-commit-failed')
-  assert.equal(fixture.tasks.length, 1, 'Outbox失败不得自动重放已提交的Task动作')
+  assert.equal(fixture.tasks.length, 0, '确认回复未可靠落库时不得执行Task动作')
 
   const second = await runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '失败后进入的新消息', occurredAt: '2026-09-02T01:00:01Z' })
   assert.equal(second.blocked, true)
   assert.equal(second.blockedByMessageId, 'm1')
   assert.equal(fixture.steered.length, 1)
   assert.equal(fixture.group.messages[1].agentDeliveryStatus, 'pending')
-  assert.equal(fixture.tasks.length, 1)
+  assert.equal(fixture.tasks.length, 0)
   fixture.releaseIdle()
   await runtime.close()
 })
@@ -994,8 +1076,8 @@ test('退订等待resident停稳时不占群提交尾链', async () => {
   assert.equal(outcome, 'settled', '等待resident停稳不能占住回复所需的同群Outbox尾链')
 })
 
-test('无回复Decision返回后退订仍等待其动作提交并在同一Task临界区复核', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'unsubscribe-no-reply-group' })
+test('确认回复落库后退订仍等待其动作提交并在同一Task临界区复核', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'unsubscribe-task-action-group' })
   let markCreateEntered, releaseCreate
   const createEntered = new Promise((resolve) => { markCreateEntered = resolve })
   const createGate = new Promise((resolve) => { releaseCreate = resolve })
@@ -1004,11 +1086,11 @@ test('无回复Decision返回后退订仍等待其动作提交并在同一Task�
   let removeCalls = 0
   fixture.store.removeGroup = async ({ groupId }) => { removeCalls += 1; return { removed: true, groupId } }
   const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '创建任务但无需群回复', occurredAt: '2026-09-02T01:00:00Z' })
+  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '确认后创建任务', occurredAt: '2026-09-02T01:00:00Z' })
   await fixture.waitForSteers(1)
   const requestId = decisionRequestId(fixture.steered[0])
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions: [{ kind: 'new-task', title: '并发任务', objective: '验证无回复提交', acceptanceCriteria: ['动作提交完成'], sourceMessageIds: ['m1'] }], reply: '' } }] }, { agent: fixture.handle.agent })
+  await tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions: [{ kind: 'new-task', title: '并发任务', objective: '验证确认后提交', acceptanceCriteria: ['动作提交完成'], sourceMessageIds: ['m1'] }], reply: '收到，开始处理。' } }] }, { agent: fixture.handle.agent })
   await createEntered
   const unsubscribing = runtime.unsubscribe({ groupId: fixture.group.groupId })
   fixture.releaseIdle()
@@ -1016,12 +1098,12 @@ test('无回复Decision返回后退订仍等待其动作提交并在同一Task�
   let unsubscribeSettled = false
   unsubscribing.finally(() => { unsubscribeSettled = true }).catch(() => undefined)
   await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(unsubscribeSettled, false, '退订不能只等待无回复工具返回，必须等待动作提交')
+  assert.equal(unsubscribeSettled, false, '退订不能只等待确认回复落库，必须等待动作提交')
   assert.equal(removeCalls, 0)
 
   releaseCreate()
   await ingest
-  await assert.rejects(unsubscribing, /group_has_active_tasks:unsubscribe-no-reply-group/)
+  await assert.rejects(unsubscribing, /group_has_active_tasks:unsubscribe-task-action-group/)
   assert.equal(removeCalls, 0, '最终复核发现新Task后不得移除群')
   await runtime.close()
 })
@@ -2347,6 +2429,7 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
     },
     async updateTask(id, transform) { const index = tasks.findIndex((task) => task.taskId === id); tasks[index] = transform(tasks[index]); return tasks[index] },
     async appendOutbox({ groupId, ...outbound }) { const group = groups.get(groupId); if (!group.outbox.some((item) => item.sourceMessageId === outbound.sourceMessageId)) group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...outbound, status: 'pending' }); return group },
+    async attachOutboxTasks({ groupId, sourceMessageId, taskIds }) { const group = groups.get(groupId); const item = group.outbox.find((outbound) => outbound.sourceMessageId === sourceMessageId); item.taskIds = [...new Set([...(item.taskIds ?? []), ...taskIds])]; return group },
     async updateOutboundRecall({ groupId, outboundId, status, reason, error }) { const item = groups.get(groupId).outbox.find((entry) => entry.outboundId === outboundId); Object.assign(item, { recallStatus: status, recallReason: reason }, status === 'recalled' ? { recalledAt: '2026-08-27T00:00:00Z', recallError: undefined } : {}, status === 'failed' ? { recallError: error } : {}); return groups.get(groupId) },
     async recordActivity(value) { const existing = activities.find((item) => item.eventKey === value.eventKey); if (existing) return { created: false, activity: existing }; activities.push(value); return { created: true, activity: value } },
     async recordAlert(value) { const existing = alerts.find((item) => item.taskId === value.taskId && item.fingerprint === value.fingerprint); if (existing) { existing.count += 1; return { created: false, alert: existing } } const alert = { ...value, count: 1 }; alerts.push(alert); return { created: true, alert } },
