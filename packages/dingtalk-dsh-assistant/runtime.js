@@ -14,6 +14,33 @@ const isLegacyPreDecisionFailure = (message) => message.agentDeliveryStatus === 
 )
 const SessionId = (id) => id
 const createUserMessage = (input) => Object.freeze({ ...structuredClone(input), id: randomUUID(), role: 'user' })
+const TASK_CONTEXT_REQUEST_LIMIT = 8
+const compactText = (value, limit) => {
+  const text = String(value ?? '').trim()
+  return text.length <= limit ? text : `${text.slice(0, limit)}…`
+}
+export const buildTaskAssociationIndex = (tasks) => tasks.map((task) => ({
+  taskId: task.taskId,
+  ...(task.title ? { title: compactText(task.title, 120) } : {}),
+  objectiveExcerpt: compactText(task.objective, 120),
+  state: task.state,
+  archived: Boolean(task.archivedAt),
+  messageCount: (task.messageHistory ?? []).length,
+}))
+const taskAssociationContext = (task) => ({
+  taskId: task.taskId,
+  ...(task.title ? { title: task.title } : {}),
+  objective: task.objective,
+  state: task.state,
+  archived: Boolean(task.archivedAt),
+  ...(task.acceptanceCriteria ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
+  ...(task.stageTasks ? { stageTasks: task.stageTasks } : {}),
+  ...(task.messageHistory ? { messageHistory: task.messageHistory } : {}),
+  ...(task.relatedContexts ? { relatedContexts: task.relatedContexts } : {}),
+  ...(task.objectiveHistory ? { objectiveHistory: task.objectiveHistory } : {}),
+  ...(task.waitingReason ? { waitingReason: task.waitingReason } : {}),
+  ...(task.completion ? { completion: task.completion } : {}),
+})
 const discardStaleResidentRequests = (agent) => {
   const inbox = agent?.inbox
   if (inbox === undefined || typeof inbox.remove !== 'function') return 0
@@ -136,6 +163,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     installSelection(agentCtx)
     agentCtx.tools.restrict({ deny: ['get_goal', 'create_goal', 'update_goal'] })
     agentCtx.systemPrompt.section({ name: 'tool:goal', order: 114, text: '' })
+    registerResidentContextTools(agentCtx, groupId)
     registerResidentDecisionTool(agentCtx, groupId)
     registerResidentReplyTool(agentCtx, groupId)
     registerResidentTaskTools(agentCtx, groupId)
@@ -149,9 +177,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     agentCtx.systemPrompt.section({
       name: 'dingtalk-group-task-index', order: 42,
       text: () => {
-        const active = store.listTasks().filter((task) => task.groupId === groupId)
-          .map((task) => ({ taskId: task.taskId, ...(task.title ? { title: task.title } : {}), objective: task.objective, state: task.state, archived: Boolean(task.archivedAt), messageHistory: task.messageHistory ?? [] }))
-        return `## 本群全部任务关联索引\n\n${active.length === 0 ? '无。' : JSON.stringify(active)}`
+        const taskIndex = buildTaskAssociationIndex(store.listTasks().filter((task) => task.groupId === groupId))
+        return `## 本群全部任务关联索引\n\n${taskIndex.length === 0 ? '无。' : JSON.stringify(taskIndex)}\n\n索引中的标题和目标片段只用于召回，不能作为关联结论。当前消息可能关联某个 Task 时，必须先调用 group_task_context_get 按 Task ID 读取完整目标、验收标准、消息与参与人时间线和已记录上下文，再决定 task-context、task-reopen、task-cancel 或 new-task。`
       },
     })
     agentCtx.systemPrompt.section({
@@ -170,7 +197,7 @@ Decision 仅回答使用 \`{"actions":[],"reply":"...","replyReview":{...}}\`，
 
 每次收到新消息时，检查其内容是否与当前 Session 上下文中的近期回复冲突；如有冲突，及时撤回本主会话发送的错误消息并订正。不得撤回真人或其他系统消息。
 
-任何非空群回复都必须先审阅消息信封或 TASK_COORDINATION 提供的“历史主会话回复候选”，并填写 \`replyReview\`：\`reviewedOutboundIds\` 必须完整列出全部候选；\`sameMatterOutboundIds\` 只列出经语义判断确属同一事项的候选；\`replaceOutboundIds\` 只列出本次发送前应撤回的旧回复。判断是否同一事项必须综合当前消息与候选来源消息的真实正文、引用正文、任务目标、动作范围、状态、参与人和时间线；引用消息 ID、关键词或词面相似度都只能帮助定位，不能单独作为结论。同一事项已经有等价确认且没有必须补充的新信息时，当前 reply 必须为空或选择 ignore；需要补全确认时，\`kind\` 使用 confirmation，并把同一事项的旧确认全部列入 sameMatterOutboundIds 和 replaceOutboundIds，由 Runtime 先撤回旧消息再发送合并后的最新确认。结果、阻塞或问题答复使用 substantive，replaceOutboundIds 必须为空；订正旧回复使用 correction，并列出要撤回的同事项旧回复。不得填写候选列表之外的 ID。
+任何非空群回复都必须先调用 \`group_reply_review_get\`，使用本次 submission 涉及的判断请求 ID 或 TASK_COORDINATION 的回复请求 ID 按需读取 Runtime 绑定的完整历史回复候选，并填写 \`replyReview\`：\`reviewedOutboundIds\` 必须完整列出全部候选；\`sameMatterOutboundIds\` 只列出经语义判断确属同一事项的候选；\`replaceOutboundIds\` 只列出本次发送前应撤回的旧回复。判断是否同一事项必须综合当前消息与候选来源消息的真实正文、引用正文、任务目标、动作范围、状态、参与人和时间线；引用消息 ID、关键词或词面相似度都只能帮助定位，不能单独作为结论。同一事项已经有等价确认且没有必须补充的新信息时，当前 reply 必须为空或选择 ignore；需要补全确认时，\`kind\` 使用 confirmation，并把同一事项的旧确认全部列入 sameMatterOutboundIds 和 replaceOutboundIds，由 Runtime 先撤回旧消息再发送合并后的最新确认。结果、阻塞或问题答复使用 substantive，replaceOutboundIds 必须为空；订正旧回复使用 correction，并列出要撤回的同事项旧回复。不得填写读取结果之外的 ID。无需非空群回复时不要读取候选，也不要填写 replyReview。
 
 \`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从原始群消息生成的独立来源证据信封并自行核验。
 
@@ -206,7 +233,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
 
 发送前必须执行回复节制门禁：确认回复只表达“已收到并会继续处理”这一必要状态，使用一句短句，不得重复对方提供的信息；结果、阻塞、提问或订正回复只保留同事必须知道的新事实、必须回答的问题或明确行动。
 
-上述提交协议仅用于 \`[GROUP_MESSAGE_STEER]\` 群消息信封，此时除 \`group_decision_submit\` 外不得调用任务工具。用户在 Web 主会话中直接要求创建、续接或查询任务时，使用本会话提供的 DSH 原生任务工具；主会话只负责沟通协调，实际执行由 Runtime 创建的独立叶子会话完成。`,
+上述提交协议仅用于 \`[GROUP_MESSAGE_STEER]\` 群消息信封，此时除 \`group_decision_submit\`、\`group_reply_review_get\` 和 \`group_task_context_get\` 外不得调用任务工具。后两个工具只读，不产生 Task、Outbox 或撤回副作用。用户在 Web 主会话中直接要求创建、续接或查询任务时，使用本会话提供的 DSH 原生任务工具；主会话只负责沟通协调，实际执行由 Runtime 创建的独立叶子会话完成。`,
     })
   }
   const serialize = (key, operation) => {
@@ -415,6 +442,70 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     const expected = residentHandles.get(groupId)?.agent?.session?.id
     if (expected === undefined || String(exec.agent?.session?.id) !== String(expected)) throw new Error(`resident_tool_wrong_session:${groupId}`)
   }
+  function registerResidentContextTools(agentCtx, groupId) {
+    agentCtx.tools.register({
+      name: 'group_reply_review_get',
+      description: 'Read the immutable full prior-reply candidate snapshot bound to one or more current group decision requests, or to one current TASK_COORDINATION reply request. Call only before a non-empty group reply.',
+      parameters: {
+        type: 'object', additionalProperties: false, required: ['requestIds'], properties: {
+          requestIds: { type: 'array', items: { type: 'string' } },
+        },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: false, required: ['requestIds', 'candidateCount', 'candidates'], properties: {
+          requestIds: { type: 'array', items: { type: 'string' } },
+          candidateCount: { type: 'number' },
+          candidates: { type: 'array', items: { type: 'object' } },
+        } },
+        render: (_args, out) => [{ type: 'text', text: `历史主会话回复候选（必须依据完整正文进行语义审阅）：${JSON.stringify(out.candidates)}` }],
+      },
+      execute: async (args, exec) => {
+        assertResidentToolSession(exec, groupId)
+        if (args.requestIds.length === 0) throw new Error('group_reply_review_request_empty')
+        if (args.requestIds.some((requestId) => requestId.trim() === '')) throw new Error('group_reply_review_request_invalid')
+        if (new Set(args.requestIds).size !== args.requestIds.length) throw new Error('group_reply_review_request_duplicate')
+        const requests = args.requestIds.map((requestId) => {
+          const decision = pendingGroupDecisions.get(requestId)
+          if (decision !== undefined) return { kind: 'decision', groupId: decision.groupId, candidates: mergeReplyReviewCandidates([...decision.baseRequests, decision]) }
+          const reply = pendingGroupReplies.get(requestId)
+          if (reply !== undefined) return { kind: 'reply', groupId: reply.groupId, candidates: reply.replyReviewCandidates }
+          throw new Error(`group_reply_review_request_unknown:${requestId}`)
+        })
+        if (requests.some((request) => request.groupId !== groupId)) throw new Error('group_reply_review_request_wrong_group')
+        if (new Set(requests.map((request) => request.kind)).size > 1) throw new Error('group_reply_review_request_kind_mixed')
+        const candidates = [...new Map(requests.flatMap((request) => request.candidates).map((candidate) => [candidate.outboundId, candidate])).values()]
+        return { requestIds: [...args.requestIds], candidateCount: candidates.length, candidates }
+      },
+    })
+    agentCtx.tools.register({
+      name: 'group_task_context_get',
+      description: 'Read complete association context for selected task IDs from this resident group. The compact system-prompt task index is recall-only; use this result for final task association decisions.',
+      parameters: {
+        type: 'object', additionalProperties: false, required: ['taskIds'], properties: {
+          taskIds: { type: 'array', items: { type: 'string' } },
+        },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: false, required: ['tasks'], properties: {
+          tasks: { type: 'array', items: { type: 'object' } },
+        } },
+        render: (_args, out) => [{ type: 'text', text: `Task 完整关联上下文：${JSON.stringify(out.tasks)}` }],
+      },
+      execute: async (args, exec) => {
+        assertResidentToolSession(exec, groupId)
+        if (args.taskIds.length === 0 || args.taskIds.length > TASK_CONTEXT_REQUEST_LIMIT) throw new Error('group_task_context_request_limit')
+        if (args.taskIds.some((taskId) => taskId.trim() === '')) throw new Error('group_task_context_request_invalid')
+        if (new Set(args.taskIds).size !== args.taskIds.length) throw new Error('group_task_context_request_duplicate')
+        const tasks = args.taskIds.map((taskId) => {
+          const task = store.getTask(taskId)
+          if (task === undefined) throw new Error(`group_task_context_not_found:${taskId}`)
+          if (task.groupId !== groupId) throw new Error(`group_task_context_wrong_group:${taskId}`)
+          return taskAssociationContext(task)
+        })
+        return { tasks }
+      },
+    })
+  }
   function registerResidentDecisionTool(agentCtx, groupId) {
     agentCtx.tools.register({
       name: 'group_decision_submit',
@@ -442,7 +533,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         render: (_args, out) => [{ type: 'text', text: out.status === 'stale'
           ? `回复观察快照已变化，本批未提交。缺失请求 ID：${out.missingRequestIds.join(',') || '无'}；异常请求 ID：${out.unexpectedRequestIds.join(',') || '无'}。必须结合新请求重新生成并再次提交；当前共有 ${out.pendingRequestIds.length} 个请求待处理。`
           : out.status === 'review-required'
-            ? `历史回复审阅不完整，本批未提交（${out.reviewError}）。请按信封中的历史主会话回复候选补全 replyReview 后重新提交。`
+            ? `历史回复审阅不完整，本批未提交（${out.reviewError}）。请调用 group_reply_review_get 读取当前请求绑定的完整候选，补全 replyReview 后重新提交。`
             : `已提交 ${out.acceptedRequestIds.length} 个群消息判断请求；仍有 ${out.pendingRequestIds.length} 个请求待处理。` }],
       },
       execute: async (args, exec) => {
@@ -602,7 +693,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         render: (_args, out) => [{ type: 'text', text: out.status === 'stale'
           ? `群通知观察快照已变化，本次未提交。缺失请求 ID：${out.missingRequestIds.join(',') || '无'}；异常请求 ID：${out.unexpectedRequestIds.join(',') || '无'}。必须结合新请求重新生成后再次提交。`
           : out.status === 'review-required'
-            ? `历史回复审阅不完整，本次通知未提交（${out.reviewError}）。请按 TASK_COORDINATION 中的候选补全 replyReview 后重新提交。`
+            ? `历史回复审阅不完整，本次通知未提交（${out.reviewError}）。请调用 group_reply_review_get 读取当前回复请求绑定的完整候选，补全 replyReview 后重新提交。`
             : `群通知已可靠提交；仍有 ${out.pendingRequestIds.length} 个群消息请求待处理。` }],
       },
       execute: async (args, exec) => {
@@ -972,7 +1063,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     })
     try {
       handle.agent.followup(createUserMessage({
-        content: [{ type: 'text', text: `[TASK_COORDINATION]\n回复请求 ID：${pending.requestId}\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n当前目标：${task.objective}\n任务消息时间线：${JSON.stringify(notificationMessages)}\n核验结果：${JSON.stringify(resultProjection)}\n历史主会话回复候选（必须阅读来源正文后判断同一事项，引用ID只能作为线索）：${JSON.stringify(replyReviewCandidates)}\n\n必须通过 group_reply_submit 提交一条可直接发送到群聊的通知，不得用 assistant 文本直接输出通知。提交前语义审阅当前已经进入的全部普通 GROUP_MESSAGE_STEER：若新消息影响本通知，结合它重新生成；若不影响，保持本结果通知，新消息将在通知可靠提交后继续处理。把已审阅的全部普通 pending 请求 ID 填入 observedRequestIds；若工具返回 stale 结果，下一 step 必须结合 missingRequestIds 对应的新 Steer 重新生成后再提交。还必须填写 replyReview，reviewedOutboundIds 完整覆盖上方全部候选；本通知属于结果、阻塞或问题答复，kind 使用 substantive，replaceOutboundIds 为空。是否同一事项必须依据消息真实正文和 Task 时间线，不能只看引用消息 ID。完成通知必须忠实保留叶子结果中影响同事判断和后续行动的信息，不能为了简短只复述 summary。至少覆盖：实际完成或修改的内容、关键核验与证据、部署或交付状态、尚未覆盖的边界与遗留事项；result 中存在 artifacts 或 delivery 时也要说明其关键内容。允许合并重复表述，但不得省略不同关注点、限定条件、失败项或“未验证/未部署”等边界。\n\n结合完整任务消息时间线判断本次通知对象：通过 replyToMessageId 选择一条最适合承接本结果的相关消息，通过 atOpenDingTalkIds 选择所有确实需要获知结果、回答问题或采取后续行动的参与人，可以有多人；不得机械选择最后一条消息或只通知最后触发人，也不得选择时间线之外的消息和人员。正文不要手写 @，Runtime 会使用结构化引用与 @。缺信息时只向真正能够补充该信息的参与人询问。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
+        content: [{ type: 'text', text: `[TASK_COORDINATION]\n回复请求 ID：${pending.requestId}\nTask ID: ${task.taskId}\n任务：${task.title ?? task.objective}\n当前目标：${task.objective}\n任务消息时间线：${JSON.stringify(notificationMessages)}\n核验结果：${JSON.stringify(resultProjection)}\n历史回复审阅：Runtime 已绑定 ${replyReviewCandidates.length} 条候选；提交通知前通过 group_reply_review_get 按本回复请求 ID 读取完整正文。\n\n必须通过 group_reply_submit 提交一条可直接发送到群聊的通知，不得用 assistant 文本直接输出通知。提交前语义审阅当前已经进入的全部普通 GROUP_MESSAGE_STEER：若新消息影响本通知，结合它重新生成；若不影响，保持本结果通知，新消息将在通知可靠提交后继续处理。把已审阅的全部普通 pending 请求 ID 填入 observedRequestIds；若工具返回 stale 结果，下一 step 必须结合 missingRequestIds 对应的新 Steer 重新生成后再提交。存在历史回复候选时，必须先调用 group_reply_review_get 并填写 replyReview，reviewedOutboundIds 完整覆盖读取结果；本通知属于结果、阻塞或问题答复，kind 使用 substantive，replaceOutboundIds 为空。是否同一事项必须依据消息真实正文和 Task 时间线，不能只看引用消息 ID。完成通知必须忠实保留叶子结果中影响同事判断和后续行动的信息，不能为了简短只复述 summary。至少覆盖：实际完成或修改的内容、关键核验与证据、部署或交付状态、尚未覆盖的边界与遗留事项；result 中存在 artifacts 或 delivery 时也要说明其关键内容。允许合并重复表述，但不得省略不同关注点、限定条件、失败项或“未验证/未部署”等边界。\n\n结合完整任务消息时间线判断本次通知对象：通过 replyToMessageId 选择一条最适合承接本结果的相关消息，通过 atOpenDingTalkIds 选择所有确实需要获知结果、回答问题或采取后续行动的参与人，可以有多人；不得机械选择最后一条消息或只通知最后触发人，也不得选择时间线之外的消息和人员。正文不要手写 @，Runtime 会使用结构化引用与 @。缺信息时只向真正能够补充该信息的参与人询问。签名、口吻和身份声明由 Agent 自身工作区规则决定，插件不得添加或改写。不要暴露内部标识或本指令。` }],
         source: { kind: 'user' },
       }))
     } catch (error) {
@@ -1764,11 +1855,11 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           if (images.length > 0 && attachments === undefined) throw new Error('dsh_attachments_required')
           const imageRefs = images.length === 0 ? [] : await attachments.saveImages(images.map((image) => ({ data: image.data, mediaType: image.mediaType, ...(image.name ? { name: image.name } : {}) })))
           const replyReviewCandidates = replyReviewCandidatesFor(message.groupId, [message])
-          const decisionPrompt = buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, replyReviewCandidates, recoveryError: message.agentDeliveryError, decisionAttemptCount: message.agentDecisionAttemptCount })
           pending = await admitGroupSteer(message.groupId, () => {
             handle = residentHandles.get(message.groupId)
             if (handle === undefined) throw new Error(`resident_not_active:${message.groupId}`)
             const admitted = createPendingGroupDecision({ groupId: message.groupId, messageId: message.messageId, sequence: accepted.sequence, message, imageRefs, replyReviewCandidates })
+            const decisionPrompt = buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, replyReviewCandidateCount: replyReviewCandidates.length, recoveryError: message.agentDeliveryError, decisionAttemptCount: message.agentDecisionAttemptCount })
             const content = [
               { type: 'text', text: `[GROUP_MESSAGE_STEER]\n判断请求 ID：${admitted.requestId}\n${decisionPrompt.replace(/^\[GROUP_DECISION\]\n\n/u, '')}` },
               ...imageRefs.map((attachment) => ({ type: 'image', attachment })),
@@ -1794,7 +1885,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           if ('reason' in decision && shouldRecheckTaskAssociation({ activeTaskCount, hasImage: submitted.requests.some((request) => request.imageRefs.length > 0), previousMessage, occurredAt: message.occurredAt })) {
             const recheckReplyReviewCandidates = replyReviewCandidatesFor(message.groupId, decisionRequests.map((request) => request.message))
             const recheck = createPendingGroupDecision({ groupId: message.groupId, messageId: message.messageId, sequence: accepted.sequence, message, imageRefs, replyReviewCandidates: recheckReplyReviewCandidates, kind: 'recheck', baseRequests: decisionRequests })
-            handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_RECHECK]\n判断请求 ID：${recheck.requestId}\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, replyReviewCandidates: recheckReplyReviewCandidates, recoveryError: message.agentDeliveryError, decisionAttemptCount: message.agentDecisionAttemptCount }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
+            handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[GROUP_DECISION_RECHECK]\n判断请求 ID：${recheck.requestId}\n关联复核：你刚才选择了 ignore。请重新对照“本群全部任务关联索引”和紧邻消息判断。图片、图片后的短说明，以及群友提出的未经核验根因/状态判断，都可能是已有任务需要核验的新增线索；相关时必须返回 task-context。只有确认与全部历史及当前任务无关且不存在消息冲突时才能 ignore。\n\n${buildDecisionPrompt({ messageId: message.messageId, message: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId, occurredAt: message.occurredAt, quotedMessage: message.quotedMessage, mediaUnavailable: message.mediaUnavailable, replyReviewCandidateCount: recheckReplyReviewCandidates.length, recoveryError: message.agentDeliveryError, decisionAttemptCount: message.agentDecisionAttemptCount }).replace(/^\[GROUP_DECISION\]\n\n/u, '')}` }], source: { kind: 'coordinator' } }))
             ensurePendingGroupDecisionSettlement(handle.agent, message.groupId)
             recheckedSubmission = await recheck.promise
             await Promise.all(recheckedSubmission.requests.map((request) => request.deliveryRecorded))

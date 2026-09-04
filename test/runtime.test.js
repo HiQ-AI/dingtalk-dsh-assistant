@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { after } from 'node:test'
-import { openResidentRuntime, residentSessionId } from '../packages/dingtalk-dsh-assistant/runtime.js'
+import { buildTaskAssociationIndex, openResidentRuntime, residentSessionId } from '../packages/dingtalk-dsh-assistant/runtime.js'
 import { taskSessionId } from '../packages/dingtalk-dsh-assistant/store.js'
 import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 
@@ -151,6 +151,63 @@ const acceptedSubmission = (acceptedRequestIds, pendingRequestIds = []) => ({
 })
 const staleSubmission = (pendingRequestIds, missingRequestIds, unexpectedRequestIds = []) => ({
   status: 'stale', acceptedRequestIds: [], pendingRequestIds, missingRequestIds, unexpectedRequestIds,
+})
+
+test('普通群消息只携带历史回复候选计数并可按请求读取完整快照', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'on-demand-review-group' })
+  for (let index = 0; index < 20; index += 1) {
+    fixture.group.messages.push({ messageId: `old-${index}`, sequence: index + 1, text: `历史事项 ${index} ${'来源'.repeat(300)}`, occurredAt: `2026-09-04T01:${String(index).padStart(2, '0')}:00Z` })
+    fixture.group.outbox.push({ outboundId: `out-${index}`, sourceMessageId: `old-${index}`, text: `历史回复 ${index} ${'结果'.repeat(300)}`, status: 'sent', deliveredMessageId: `sent-${index}` })
+  }
+  fixture.group.nextSequence = 21
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'current', text: '短消息', occurredAt: '2026-09-04T02:00:00Z' })
+  await fixture.waitForSteers(1)
+  const steerText = fixture.steered[0].content[0].text
+  const requestId = decisionRequestId(fixture.steered[0])
+  assert.ok(steerText.length < 600)
+  assert.match(steerText, /Runtime 已绑定 \d+ 条候选/u)
+  assert.doesNotMatch(steerText, /历史回复 19|来源来源/u)
+
+  const reviewTool = fixture.registeredTools.find((item) => item.name === 'group_reply_review_get')
+  const review = await reviewTool.execute({ requestIds: [requestId] }, { agent: fixture.handle.agent })
+  assert.ok(review.candidateCount > 0)
+  assert.equal(review.candidateCount, review.candidates.length)
+  assert.match(review.candidates.at(-1).reply, /历史回复/u)
+  await assert.rejects(reviewTool.execute({ requestIds: ['unknown'] }, { agent: fixture.handle.agent }), /group_reply_review_request_unknown/)
+
+  const decisionTool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
+  await decisionTool.execute({ submissions: [{ requestIds: [requestId], decision: { actions: [], reason: '无需回复' } }] }, { agent: fixture.handle.agent })
+  await ingest
+  fixture.releaseIdle()
+  await runtime.close()
+})
+
+test('任务摘要索引不展开历史且只读工具按需返回完整关联上下文', async () => {
+  const fixture = decisionRuntimeFixture({ groupId: 'on-demand-task-context-group' })
+  const task = {
+    taskId: 'task-history', groupId: fixture.group.groupId, title: '编辑器缓存问题', objective: `核对并修复缓存提示 ${'完整范围'.repeat(80)}`,
+    state: 'completed', archivedAt: '2026-09-04T03:00:00Z', acceptanceCriteria: ['计算不产生假脏提示'], stageTasks: ['核对', '修复'],
+    messageHistory: [{ messageId: 'source-1', text: '只计算没有修改却提示保存', senderName: '向春梅', senderOpenDingTalkId: 'od-xcm', occurredAt: '2026-09-04T01:00:00Z' }],
+    relatedContexts: ['审核回复也需要独立核对'], completion: '本地修改完成，尚未部署 UAT',
+  }
+  fixture.tasks.push(task)
+  const index = buildTaskAssociationIndex(fixture.tasks)
+  assert.equal(index.length, 1)
+  assert.equal(index[0].messageCount, 1)
+  assert.ok(index[0].objectiveExcerpt.length <= 121)
+  assert.doesNotMatch(JSON.stringify(index), /只计算没有修改却提示保存|messageHistory/u)
+
+  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
+  const contextTool = fixture.registeredTools.find((item) => item.name === 'group_task_context_get')
+  const context = await contextTool.execute({ taskIds: [task.taskId] }, { agent: fixture.handle.agent })
+  assert.equal(context.tasks[0].objective, task.objective)
+  assert.deepEqual(context.tasks[0].messageHistory, task.messageHistory)
+  assert.deepEqual(context.tasks[0].relatedContexts, task.relatedContexts)
+  await assert.rejects(contextTool.execute({ taskIds: [task.taskId, task.taskId] }, { agent: fixture.handle.agent }), /group_task_context_request_duplicate/)
+  await assert.rejects(contextTool.execute({ taskIds: ['task-missing'] }, { agent: fixture.handle.agent }), /group_task_context_not_found/)
+  fixture.releaseIdle()
+  await runtime.close()
 })
 
 function twoGroupDecisionFixture() {
@@ -1145,9 +1202,13 @@ test('同一事项的新确认会先精确撤回旧确认再发送合并回复',
   const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-new', text: '数据源清单也一起挂上，还是这个刷数事项', occurredAt: '2026-09-04T01:01:00Z', senderName: '李辰', senderOpenDingTalkId: 'od-li' })
   await fixture.waitForSteers(1)
   const steerText = fixture.steered[0].content[0].text
-  assert.match(steerText, /历史主会话回复候选/u)
-  assert.match(steerText, /编辑器数据源字段需要刷数/u)
+  assert.match(steerText, /Runtime 已绑定 1 条候选/u)
+  assert.doesNotMatch(steerText, /编辑器数据源字段需要刷数/u)
   const requestId = decisionRequestId(fixture.steered[0])
+  const reviewTool = fixture.registeredTools.find((item) => item.name === 'group_reply_review_get')
+  const reviewSnapshot = await reviewTool.execute({ requestIds: [requestId] }, { agent: fixture.handle.agent })
+  assert.equal(reviewSnapshot.candidateCount, 1)
+  assert.equal(reviewSnapshot.candidates[0].sourceMessages[0].text, '编辑器数据源字段需要刷数')
   const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
   const missingReview = await tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '遗漏历史审阅的候选' } }] }, { agent: fixture.handle.agent })
   assert.equal(missingReview.status, 'review-required')
@@ -1473,8 +1534,12 @@ test('Task通知存在历史回复候选时审阅缺失返回可重试结果', a
   const repairing = runtime.reconcileCompletedNotifications()
   while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
   const coordinationPrompt = fixture.followups[0].content[0].text
-  assert.match(coordinationPrompt, /"outboundId":"out-confirmation"/u)
+  assert.match(coordinationPrompt, /Runtime 已绑定 1 条候选/u)
+  assert.doesNotMatch(coordinationPrompt, /"outboundId":"out-confirmation"/u)
   const requestId = coordinationPrompt.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
+  const reviewTool = fixture.registeredTools.find((item) => item.name === 'group_reply_review_get')
+  const reviewSnapshot = await reviewTool.execute({ requestIds: [requestId] }, { agent: fixture.agent })
+  assert.deepEqual(reviewSnapshot.candidates.map((candidate) => candidate.outboundId), ['out-confirmation'])
   const replyTool = fixture.registeredTools.find((item) => item.name === 'group_reply_submit')
   const missingReview = await replyTool.execute({ requestId, observedRequestIds: [], reply: '任务已完成。', replyToMessageId: 'm-origin', atOpenDingTalkIds: ['od-owner'] }, { agent: fixture.agent })
   assert.equal(missingReview.status, 'review-required')
@@ -1789,7 +1854,7 @@ test('已有群切换预设时沿用原 Session，新群先创建 dsh Session �
   assert.match(decisionProtocol, /不得调用 group_decision_submit[\s\S]*自动重新判断/u)
   assert.deepEqual(toolRestrictions, [{ deny: ['get_goal', 'create_goal', 'update_goal'] }])
   assert.deepEqual(promptSections.find((section) => section.name === 'tool:goal'), { name: 'tool:goal', order: 114, text: '' })
-  assert.deepEqual(registeredTools.map((tool) => tool.name), ['group_decision_submit', 'group_reply_submit', 'group_task_create', 'group_task_context_append', 'group_task_reopen', 'group_task_list'])
+  assert.deepEqual(registeredTools.map((tool) => tool.name), ['group_reply_review_get', 'group_task_context_get', 'group_decision_submit', 'group_reply_submit', 'group_task_create', 'group_task_context_append', 'group_task_reopen', 'group_task_list'])
   for (const tool of registeredTools) {
     assertSupportedJsonSchema(tool.parameters)
     assertSupportedJsonSchema(tool.output.schema)
@@ -2189,16 +2254,16 @@ test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 
         const requestId = text.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
         const taskId = text.match(/^Task ID: ([^\r\n]+)$/mu)?.[1]
         const timeline = JSON.parse(text.match(/^任务消息时间线：(\[[^\r\n]*\])$/mu)?.[1] ?? '[]')
-        const replyReviewCandidates = JSON.parse(text.match(/^历史主会话回复候选（必须阅读来源正文后判断同一事项，引用ID只能作为线索）：(\[[^\r\n]*\])$/mu)?.[1] ?? '[]')
         const routingCandidates = timeline.filter((item) => typeof item.messageId === 'string' && typeof item.senderOpenDingTalkId === 'string')
         const replyTarget = routingCandidates.at(-1)
         const recipients = [...new Set(routingCandidates.map((item) => item.senderOpenDingTalkId))]
         const tool = residentTools.find((candidate) => candidate.name === 'group_reply_submit')
-        const submission = tool.execute({
+        const reviewTool = residentTools.find((candidate) => candidate.name === 'group_reply_review_get')
+        const submission = reviewTool.execute({ requestIds: [requestId] }, { agent }).then((review) => tool.execute({
           requestId, observedRequestIds: [], reply: `coordinated:${taskId}`,
-          replyReview: { kind: 'substantive', reviewedOutboundIds: replyReviewCandidates.map((candidate) => candidate.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] },
+          replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((candidate) => candidate.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] },
           ...(replyTarget === undefined ? {} : { replyToMessageId: replyTarget.messageId, atOpenDingTalkIds: recipients }),
-        }, { agent })
+        }, { agent }))
         submission.catch(() => undefined)
         coordinationSubmissions.push(submission)
       }
