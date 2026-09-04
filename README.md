@@ -215,7 +215,7 @@ dws:
 
 `group_decision_submit` 的 submission 中已提交的普通请求天然计入模型的观察集合；顶层 `observedRequestIds` 只需补充模型已经审阅、但本批不提交并准备稍后处理的其他普通 pending 请求，重复列出已提交 ID 仍兼容。影响回复的消息必须与原请求放进同一 submission 并重新生成 Decision；独立且已经完成的事项使用独立 submission。若提交瞬间存在未观察的新 Steer，工具返回无副作用的结构化 `stale` 结果，模型在下一 step 结合 `missingRequestIds` 重生成，不再把预期并发控制显示为工具 Failed。附件缺失拦截形成的提示和关联复核回复使用同一门禁。结构化业务落地仍按群串行收口；单次 Decision 的 `actions` 可同时关联、重开、新建或取消多个 Task，顶层最多生成一条群回复。每个 Task 动作必须用 `sourceMessageIds` 明确列出完整相关消息：可以包含本群已持久化的历史消息，但至少包含一条当前正在处理的消息；同一消息可关联多个 Task，不同 Task 也可选择不同消息集合。
 
-历史主会话回复候选只用于避免重复确认，不得随群历史无限增长。每次判断最多携带 8 条候选且候选 JSON 不超过 16 KB；当前消息/引用和聚焦 Task 的直接关联优先，其次才是近期确认、正文相似项和最近回复。每个候选仍保留有界的真实来源正文、引用正文和 Task 目标供语义判断，引用 ID 或词面相似度本身不能决定是否同一事项。Runtime 重启后会移除 Resident 原生 Inbox 中依赖旧内存 requestId 的协议信封，再从插件持久化 Inbox 生成新 requestId 按序恢复，避免继续消费失效的超大 Steer。恢复或自动重试前若发现同一 Resident 已连续得到 `CONTEXT_WINDOW_EXCEEDED`，Runtime 会保留旧 Session 日志用于审计，将群绑定切换到不带旧事件 seed 的新 Session，再重放持久化消息；不会继续向已耗尽上下文的 Session 追加重试。历史 `decision-failed` 中错误明确为重启中断、Decision 未提交或无效 JSON 的消息会一并自动迁移；可能已开始 Task/Outbox 副作用的其他旧错误仍保持失败，等待人工核对。
+历史主会话回复候选只用于避免重复确认，不得随群历史无限增长。每次判断最多携带 8 条候选且候选 JSON 不超过 16 KB；当前消息/引用和聚焦 Task 的直接关联优先，其次才是近期确认、正文相似项和最近回复。每个候选仍保留有界的真实来源正文、引用正文和 Task 目标供语义判断，引用 ID 或词面相似度本身不能决定是否同一事项。Runtime 重启后会移除 Resident 原生 Inbox 中依赖旧内存 requestId 的协议信封，再从插件持久化 Inbox 生成新 requestId 按序恢复，避免继续消费失效的超大 Steer。历史 `decision-failed` 中错误明确为重启中断、Decision 未提交或无效 JSON 的消息会一并自动迁移；可能已开始 Task/Outbox 副作用的其他旧错误仍保持失败，等待人工核对。
 
 图片及其紧邻短消息被初次判断为无关时，Runtime 会发起一次结构化关联复核。复核使用 `steer` 插入当前 Turn 的下一 step，使 `whenIdle()` 只在复核真正获得执行机会后结算；不得用 `followup` 把复核排到后续 Turn，否则当前 Turn 的空闲边界会提前把尚未开始的复核误判为未提交。
 

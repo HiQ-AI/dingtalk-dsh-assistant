@@ -12,14 +12,6 @@ const isLegacyPreDecisionFailure = (message) => message.agentDeliveryStatus === 
   || message.agentDeliveryError === 'group_decision_invalid_json'
   || message.agentDeliveryError?.startsWith('group_decision_not_submitted:')
 )
-const residentContextIsExhausted = (session) => {
-  const recent = (session?.events ?? []).slice(-64)
-  const compactionFailures = recent.filter((event) => event.type === 'compaction/end' && /context window/i.test(event.data?.error ?? '')).length
-  const requestFailures = recent.filter((event) => event.type === 'assistant/chunk'
-    && event.data?.chunk?.type === 'finish'
-    && event.data.chunk.reason?.failure?.code === 'CONTEXT_WINDOW_EXCEEDED').length
-  return compactionFailures >= 2 || requestFailures >= 2
-}
 const SessionId = (id) => id
 const createUserMessage = (input) => Object.freeze({ ...structuredClone(input), id: randomUUID(), role: 'user' })
 const discardStaleResidentRequests = (agent) => {
@@ -1038,23 +1030,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
   }
   async function resumeResident(group) {
     if (residentHandles.has(group.groupId)) return residentHandles.get(group.groupId)
-    let handle = await ctx.agents.resume({ resumeSessionId: SessionId(group.residentSessionId), agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
-    if (residentContextIsExhausted(handle.agent.session)) {
-      const previous = handle
-      const replacementSessionId = `${residentSessionId(group.groupId)}-${randomUUID().slice(0, 8)}`
-      const replacement = await createResident(group.groupId, { sessionId: SessionId(replacementSessionId), meta: { cwd: agentWorkspace, agentPreset, replacedExhaustedSessionId: group.residentSessionId }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
-      try {
-        applyFullAccess(replacement.handle)
-        await store.updateGroup({ groupId: group.groupId, residentSessionId: replacementSessionId, residentAgentPreset: agentPreset })
-        handle = replacement.handle
-      } catch (error) {
-        await replacement.handle.dispose()
-        throw error
-      }
-      try { await previous.dispose() } catch (error) {
-        recoveryIssues.push({ groupId: group.groupId, residentSessionId: replacementSessionId, replacedSessionId: group.residentSessionId, kind: 'resident-replacement-dispose', error: error instanceof Error ? error.message : String(error), recovered: true })
-      }
-    }
+    const handle = await ctx.agents.resume({ resumeSessionId: SessionId(group.residentSessionId), agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
     discardStaleResidentRequests(handle.agent)
     if (group.residentAgentPreset !== agentPreset) {
       await store.updateGroup({ groupId: group.groupId, residentAgentPreset: agentPreset })
@@ -1062,36 +1038,6 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     applyFullAccess(handle)
     residentHandles.set(group.groupId, handle)
     return handle
-  }
-  async function replaceExhaustedResident(groupId) {
-    const current = residentHandles.get(groupId)
-    if (current === undefined || !residentContextIsExhausted(current.agent.session)) return current
-    const releaseTransition = holdGroupResidentTransition(groupId)
-    const [releaseAdmission] = holdGroupReplyAdmission(groupId, 1)
-    let replacement
-    try {
-      await waitForActiveGroupResidentOperations(groupId)
-      await waitForActiveGroupSubmissions(groupId)
-      const previous = residentHandles.get(groupId)
-      if (previous === undefined || !residentContextIsExhausted(previous.agent.session)) return previous
-      const group = store.getGroup(groupId)
-      if (group === undefined) throw new Error(`group_not_subscribed:${groupId}`)
-      const replacementSessionId = `${residentSessionId(groupId)}-${randomUUID().slice(0, 8)}`
-      replacement = await createResident(groupId, { sessionId: SessionId(replacementSessionId), meta: { cwd: agentWorkspace, agentPreset, replacedExhaustedSessionId: group.residentSessionId }, agentOptions, setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
-      applyFullAccess(replacement.handle)
-      await store.updateGroup({ groupId, residentSessionId: replacementSessionId, residentAgentPreset: agentPreset })
-      residentHandles.set(groupId, replacement.handle)
-      try { await previous.dispose() } catch (error) {
-        recoveryIssues.push({ groupId, residentSessionId: replacementSessionId, replacedSessionId: group.residentSessionId, kind: 'resident-replacement-dispose', error: error instanceof Error ? error.message : String(error), recovered: true })
-      }
-      return replacement.handle
-    } catch (error) {
-      await replacement?.handle.dispose()
-      throw error
-    } finally {
-      releaseAdmission()
-      releaseTransition()
-    }
   }
   async function submitTaskResultInternal(taskId, value) {
     const result = parseTaskResult(value)
@@ -1717,7 +1663,6 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         const results = []
         recoveringDecisionGroups.add(groupId)
         try {
-          await replaceExhaustedResident(groupId)
           for (const message of messages) {
             const currentGroup = store.getGroup(groupId)
             const current = currentGroup?.messages.find((item) => item.messageId === message.messageId)

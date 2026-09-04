@@ -2119,66 +2119,6 @@ test('单个 resident Session 恢复超时被隔离且不阻塞其他群启动',
   await runtime.close()
 })
 
-test('连续超出上下文窗口时换新 resident Session 并在重试前再次自愈', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'exhausted-context-group' })
-  fixture.group.residentSessionId = 'session-exhausted'
-  fixture.handle.agent.session.id = fixture.group.residentSessionId
-  fixture.handle.agent.session.events.push(
-    { type: 'assistant/chunk', data: { chunk: { type: 'finish', reason: { failure: { code: 'CONTEXT_WINDOW_EXCEEDED' } } } } },
-    { type: 'assistant/chunk', data: { chunk: { type: 'finish', reason: { failure: { code: 'CONTEXT_WINDOW_EXCEEDED' } } } } },
-  )
-  let oldDisposeCalls = 0
-  fixture.handle.dispose = async () => { oldDisposeCalls += 1 }
-  const created = []
-  fixture.ctx.agents.create = async (options) => {
-    const tools = []
-    const session = { id: String(options.sessionId), seq: 0, events: [] }
-    let agent
-    agent = {
-      session, status: 'idle',
-      steer(message) {
-        const requestId = decisionRequestId(message)
-        if (requestId === undefined) return
-        queueMicrotask(() => tools.find((tool) => tool.name === 'group_decision_submit')?.execute({
-          submissions: [{ requestIds: [requestId], decision: { actions: [], reason: '换新会话后按序恢复' } }],
-        }, { agent }).catch(() => undefined))
-      },
-      followup() {},
-      async whenIdle() {},
-    }
-    let disposeCalls = 0
-    const handle = { agent, dispose: async () => { disposeCalls += 1 } }
-    await options.setup({ on: () => () => undefined, tools: { register: (tool) => tools.push(tool), restrict: () => undefined }, systemPrompt: { section: () => undefined } })
-    created.push({ options, handle, getDisposeCalls: () => disposeCalls })
-    return handle
-  }
-  fixture.store.updateGroup = async (value) => { Object.assign(fixture.group, value); return fixture.group }
-
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  assert.equal(oldDisposeCalls, 1)
-  assert.equal(created.length, 1)
-  assert.match(fixture.group.residentSessionId, new RegExp(`^${residentSessionId(fixture.group.groupId)}-[0-9a-f]{8}$`, 'u'))
-  assert.equal(created[0].options.meta.replacedExhaustedSessionId, 'session-exhausted')
-  assert.equal(runtime.listRecoveryIssues().length, 0)
-
-  created[0].handle.agent.session.events.push(
-    { type: 'compaction/end', data: { error: 'Your input exceeds the context window of this model.' } },
-    { type: 'compaction/end', data: { error: 'Your input exceeds the context window of this model.' } },
-  )
-  const previousReplacementSessionId = fixture.group.residentSessionId
-  await fixture.store.ingest({ groupId: fixture.group.groupId, messageId: 'm-retry', text: '恢复这条消息', occurredAt: '2026-09-04T08:00:00Z' })
-  await fixture.store.markMessageAgentDelivery({ groupId: fixture.group.groupId, messageId: 'm-retry', status: 'decision-retrying', error: 'context exhausted', retryAt: new Date(0).toISOString() })
-  const recovered = await runtime.recoverPendingMessages()
-
-  assert.equal(created.length, 2)
-  assert.equal(created[0].getDisposeCalls(), 1)
-  assert.equal(created[1].options.meta.replacedExhaustedSessionId, previousReplacementSessionId)
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'delivered')
-  assert.equal(recovered[0].status, 'recovered')
-  await runtime.close()
-  assert.equal(created[1].getDisposeCalls(), 1)
-})
-
 test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 排队', async () => {
   const groups = new Map([['group-a', {
     groupId: 'group-a', responsibility: 'coordinate', residentSessionId: 'session-parent', residentAgentPreset: 'standard-convergent', nextSequence: 4, outbox: [],
