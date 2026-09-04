@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, isDirectedToOtherParticipants, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from '../packages/dingtalk-dsh-assistant/decision.js'
+import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, buildReplyReviewCandidates, isDirectedToOtherParticipants, isExplicitAgentDirection, parseGroupDecision, shouldRecheckTaskAssociation } from '../packages/dingtalk-dsh-assistant/decision.js'
 
 test('群决策一次结构化输出可包含多个任务动作', () => {
   assert.deepEqual(parseGroupDecision('{"actions":[],"reply":"ok"}').actions, [])
@@ -61,6 +61,44 @@ test('显式任务指向识别配置名称、别名、DWS登录人或cc指令', 
   assert.equal(isExplicitAgentDirection('@当前登录人(当前登录人) 帮忙看看', names), true)
   assert.equal(isExplicitAgentDirection('cc: 请处理', []), true)
   assert.equal(isExplicitAgentDirection('这个编辑器问题需要有人排查', names), false)
+})
+
+test('回复审阅结构严格区分确认、结果与订正', () => {
+  const decision = parseGroupDecision(JSON.stringify({
+    actions: [], reply: '已收到，我会结合补充继续处理。',
+    replyReview: { kind: 'confirmation', reviewedOutboundIds: ['out-1'], sameMatterOutboundIds: ['out-1'], replaceOutboundIds: ['out-1'] },
+  }))
+  assert.equal(decision.replyReview.kind, 'confirmation')
+  assert.deepEqual(parseGroupDecision(JSON.stringify({
+    actions: [], reply: '收到',
+    replyReview: { kind: 'confirmation' },
+  })).replyReview, { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] })
+})
+
+test('历史回复候选保留真实消息内容且引用ID不参与同一事项定论', () => {
+  const group = {
+    messages: [
+      { messageId: 'm-old', text: '优先处理编辑器数据源字段刷数', occurredAt: '2026-09-04T01:00:00Z', senderName: '李辰', quotedMessage: { messageId: 'quote-a', content: '旧的编辑器需求' } },
+      { messageId: 'm-unrelated', text: '构建失败需要上传新的代码包', occurredAt: '2026-09-04T01:01:00Z', senderName: '孙鹏', quotedMessage: { messageId: 'quote-shared', content: '构建问题' } },
+    ],
+    outbox: [
+      { outboundId: 'out-same', sourceMessageId: 'm-old', text: '收到，我会处理编辑器数据源字段。', status: 'sent', deliveredMessageId: 'sent-1', replyKind: 'confirmation', matterSourceMessageIds: ['m-old'], taskIds: ['task-editor'] },
+      { outboundId: 'out-quote-only', sourceMessageId: 'm-unrelated', text: '收到，我会检查构建包。', status: 'sent', deliveredMessageId: 'sent-2', replyKind: 'confirmation', matterSourceMessageIds: ['m-unrelated'] },
+    ],
+  }
+  const tasks = [{ taskId: 'task-editor', sourceMessageId: 'm-old', title: '编辑器刷数', objective: '给编辑器数据集关联已有 source', state: 'running', messageHistory: [group.messages[0]] }]
+  const candidates = buildReplyReviewCandidates({
+    group, tasks,
+    currentMessages: [{ messageId: 'm-current', text: '这个数据源关联不用重复确认，继续原任务', occurredAt: '2026-09-04T01:02:00Z', quotedMessage: { messageId: 'quote-shared', content: '与构建无关的引用' } }],
+    focusTaskIds: ['task-editor'], recentLimit: 10,
+  })
+  assert.deepEqual(candidates.map((candidate) => candidate.outboundId), ['out-quote-only', 'out-same'])
+  assert.deepEqual(candidates.find((candidate) => candidate.outboundId === 'out-same').sourceMessages[0], {
+    messageId: 'm-old', text: '优先处理编辑器数据源字段刷数', senderName: '李辰', occurredAt: '2026-09-04T01:00:00.000Z', quotedMessageId: 'quote-a', quotedContent: '旧的编辑器需求',
+  })
+  assert.equal(candidates.find((candidate) => candidate.outboundId === 'out-same').tasks[0].objective, '给编辑器数据集关联已有 source')
+  assert.equal(candidates.find((candidate) => candidate.outboundId === 'out-quote-only').sourceMessages[0].quotedMessageId, 'quote-shared')
+  assert.deepEqual(buildReplyReviewCandidates({ group, recentLimit: 0, similarityLimit: 0 }).map((candidate) => candidate.outboundId), ['out-quote-only', 'out-same'], '结构化历史确认不能因窗口或词面召回而遗漏')
 })
 
 test('图片mediaId不算@对象且明确询问其他同事不算Agent授权', () => {

@@ -13,6 +13,9 @@ const outboundSchema = z.object({
   deliveredMessageId: z.string().min(1).optional(),
   replyToMessageId: z.string().min(1).optional(), replyToSenderOpenDingTalkId: z.string().min(1).optional(),
   atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
+  replyKind: z.enum(['confirmation', 'substantive', 'correction']).optional(),
+  matterSourceMessageIds: z.array(z.string().min(1)).optional(), taskIds: z.array(z.string().min(1)).optional(),
+  replacesOutboundIds: z.array(z.string().min(1)).optional(),
   recallStatus: z.enum(['requested', 'recalled', 'failed']).optional(), recallReason: z.string().min(1).optional(),
   recalledAt: z.string().min(1).optional(), recallError: z.string().min(1).optional(),
 })
@@ -418,7 +421,7 @@ export async function openResidentStore(storageDomain) {
       }))
       return { groupId, status, onlyMissing, ...(messageIds !== undefined ? { messageIds } : {}), updated, total: group.messages.length, group }
     }),
-    appendOutbox: ({ groupId, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds }) => serialize(groupId, async () => {
+    appendOutbox: ({ groupId, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, replyKind, matterSourceMessageIds, taskIds, replacesOutboundIds }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const [storageKey, current] = entry
@@ -431,6 +434,10 @@ export async function openResidentStore(storageDomain) {
           ...(replyToMessageId ? { replyToMessageId } : {}),
           ...(replyToSenderOpenDingTalkId ? { replyToSenderOpenDingTalkId } : {}),
           ...(Array.isArray(atOpenDingTalkIds) && atOpenDingTalkIds.length > 0 ? { atOpenDingTalkIds } : {}),
+          ...(replyKind ? { replyKind } : {}),
+          ...(Array.isArray(matterSourceMessageIds) && matterSourceMessageIds.length > 0 ? { matterSourceMessageIds: [...new Set(matterSourceMessageIds)] } : {}),
+          ...(Array.isArray(taskIds) && taskIds.length > 0 ? { taskIds: [...new Set(taskIds)] } : {}),
+          ...(Array.isArray(replacesOutboundIds) && replacesOutboundIds.length > 0 ? { replacesOutboundIds: [...new Set(replacesOutboundIds)] } : {}),
         }],
       }))
     }),

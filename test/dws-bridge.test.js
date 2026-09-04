@@ -44,6 +44,28 @@ test('DWS历史图片消息保留可下载资源引用', () => {
   assert.deepEqual(normalized.resourceRefs, [{ type: 'mediaId', resourceId: 'media-1' }])
 })
 
+test('普通Outbox替换通过DWS精确撤回并确认消息已不存在', async () => {
+  let recaller
+  const recalled = []
+  let present = false
+  const runtime = {
+    listGroups: () => [],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    registerGroupMessageRecaller(handler) { recaller = handler; return () => { recaller = undefined } },
+  }
+  const adapter = {
+    async recallMessage(messageId) { recalled.push(messageId) },
+    async findOutboundMessage(_groupId, outbound) { return present ? { messageId: outbound.deliveredMessageId } : undefined },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn() {} }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0 })
+  const outbound = { outboundId: 'out-old', deliveredMessageId: 'sent-old', text: '旧确认' }
+  await recaller({ groupId: 'cid-a', messageId: 'sent-old', outbound })
+  present = true
+  await assert.rejects(recaller({ groupId: 'cid-a', messageId: 'sent-old', outbound }), /dws_recall_readback_message_present:sent-old/)
+  assert.deepEqual(recalled, ['sent-old', 'sent-old'])
+  await stop()
+})
+
 test('DWS bridge 将稳定事件交给 resident 并在真实回读后确认 outbox', async () => {
   let onEvent
   let stopped = false
