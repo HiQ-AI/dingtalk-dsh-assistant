@@ -1,4 +1,4 @@
-import { readFile, realpath, stat } from 'node:fs/promises'
+import { mkdir, open, readFile, realpath, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { basename, dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -143,15 +143,17 @@ export async function migrateTopicStorage({ source, target, check = false }) {
   }
   if (check) return plan.report
   if (!plan.report.ready) throw new Error(`migration_check_failed:${JSON.stringify(plan.report.issues)}`)
+  await mkdir(dirname(targetPath), { recursive: true })
+  const targetHandle = await open(targetPath, 'wx', 0o600)
+  try {
+    await targetHandle.writeFile(`${JSON.stringify(plan.document, null, 2)}\n`, 'utf8')
+    await targetHandle.sync()
+  } finally {
+    await targetHandle.close()
+  }
   const backend = new JsonStorageBackend(dirname(targetPath))
   const facility = new DomainFacility({ emit() {}, storage: { backend: { get: () => backend } } }, { backend: 'json' })
   try {
-    const domain = await facility.open(residentDomainSpec)
-    for (const [table, records] of Object.entries(plan.document.tables)) {
-      if (!(table in residentDomainSpec.tables)) throw new Error(`migration_unknown_table:${table}`)
-      for (const [key, value] of Object.entries(records)) await domain.table(table).put(key, value)
-    }
-    await domain.close()
     const reopened = await facility.open(residentDomainSpec)
     for (const [table, records] of Object.entries(plan.document.tables)) {
       if (fingerprint(Object.fromEntries(reopened.table(table).entries())) !== fingerprint(records)) throw new Error(`migration_readback_mismatch:${table}`)

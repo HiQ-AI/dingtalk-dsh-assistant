@@ -22,7 +22,7 @@ node scripts/migrate-topic-storage.js --source 'D:/migration/v6/dingtalk_dsh_ass
 
 `--check` 只读取文件并在内存中验证，不创建目标目录。报告包含群、消息、Task、Topic、Outbox 数量、Task→Topic 映射和问题类型，不包含原始聊天正文。缺失消息、快照正文冲突、跨群缺失、未知表、无法验证的新记录以及旧 `decision-commit-failed` 都阻止生成；必须先核对原始事实和实际副作用，不得把它们直接标成可重试。
 
-生成通过真实 SDK 写入、关闭、重新打开目标，逐表比较读回结果，并检查源文件字节未改变。成功返回 `verified: true`。对完全相同的目标再次运行返回 `written: false`，不会产生第二批 Topic；不同目标内容会明确拒绝。
+生成先以排他方式一次写入完整目标文件并同步到磁盘，再通过真实 SDK 重新打开目标，逐表比较读回结果，并检查源文件字节未改变。目标必须不存在；这样避免 JSON SDK 逐记录 `put` 反复重写整个 domain，并规避 Windows 大文件连续原子替换的失败窗口。成功返回 `verified: true`。对完全相同的目标再次运行返回 `written: false`，不会产生第二批 Topic；不同目标内容会明确拒绝。
 
 ## 数据转换
 
