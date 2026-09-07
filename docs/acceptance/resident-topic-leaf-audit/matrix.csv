@@ -22,3 +22,12 @@ A09,2,PASS,取消信号不等待无关Session生命周期操作,round-2.md
 A10,2,PASS,Observer按Topic工作流投影消息状态,round-2.md
 REGRESSION,2,PASS,现有236项测试全部通过,round-2.md
 PACK,2,PASS,根包与两个子包均成功生成tgz,round-2.md
+DEPLOY,3,PASS,当前提交tgz安装到本机web profile且新进程加载,round-3.md
+RUNTIME,3,PASS,版本健康端口DWS listener与backfill分层回读通过,round-3.md
+E2E-INBOUND,3,PASS,真实群消息发送并由DWS与Runtime回读,round-3.md
+E2E-TASK,3,PASS,消息形成独立叶子Task并完成四个checkpoint,round-3.md
+E2E-OUTBOUND,3,PASS,完成通知引用原消息发送并由DWS完整回读,round-3.md
+TOPIC-TOOL,3,FAIL,叶子固定Topic读取返回非lossless JSON但未阻塞本次单消息任务,round-3.md
+TOPIC-TOOL,4,PASS,真实Resident和叶子均成功读取固定Topic revision 2且完成引用回复,round-4.md
+REGRESSION,4,PASS,新增无损JSON回归后237项测试全部通过,round-4.md
+REDEPLOY,4,PASS,提交d1d035e的唯一tgz已安装且新进程健康,round-4.md
