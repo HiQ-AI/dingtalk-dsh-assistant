@@ -67,3 +67,12 @@ test('resident profile 只解析到最新版 DSH 依赖边界', async () => {
     if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.1.2-rc.1', name)
   }
 })
+
+test('常驻启动优先读取用户代理，避免为启动解析完整 resident 状态', async () => {
+  for (const script of ['start-web.ps1', 'start-resident.ps1']) {
+    const source = await readFile(new URL(`../scripts/${script}`, import.meta.url), 'utf8')
+    const registry = source.indexOf("Get-ItemPropertyValue -Path 'HKCU:\\Environment'")
+    const residentState = source.indexOf('Get-Content -LiteralPath $residentState')
+    assert.ok(registry >= 0 && registry < residentState, script)
+  }
+})

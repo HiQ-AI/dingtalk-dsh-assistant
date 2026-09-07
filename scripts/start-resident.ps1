@@ -11,12 +11,12 @@ $dshCommand = Get-Command dsh.cmd -ErrorAction Stop
 $dshEntry = Join-Path (Split-Path -Parent $dshCommand.Source) 'node_modules\@deepseek-ai\dsh\lib\bin.js'
 $residentState = Join-Path $dshHome 'storages\dingtalk-dsh-assistant\dingtalk_dsh_assistant.json'
 
+if ([string]::IsNullOrWhiteSpace($ProxyUrl)) {
+    $ProxyUrl = Get-ItemPropertyValue -Path 'HKCU:\Environment' -Name 'HTTP_PROXY' -ErrorAction SilentlyContinue
+}
 if ([string]::IsNullOrWhiteSpace($ProxyUrl) -and (Test-Path -LiteralPath $residentState)) {
     $state = Get-Content -LiteralPath $residentState -Raw | ConvertFrom-Json
     $ProxyUrl = $state.data.scheduler.runtime.proxyUrl
-}
-if ([string]::IsNullOrWhiteSpace($ProxyUrl)) {
-    $ProxyUrl = Get-ItemPropertyValue -Path 'HKCU:\Environment' -Name 'HTTP_PROXY' -ErrorAction SilentlyContinue
 }
 
 if ($nodeMajor -lt 24) { throw "dsh 需要 Node.js 24 或更高版本，当前为 $(& $nodeExe --version)。" }
