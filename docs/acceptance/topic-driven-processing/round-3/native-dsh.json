@@ -1,0 +1,74 @@
+{
+  "status": "PASS",
+  "dshVersion": "0.1.1-rc.2",
+  "health": {
+    "status": "ok",
+    "transport": "fake-dws",
+    "inboundConfigured": false,
+    "inboundProcessing": false,
+    "outboundAuthorized": false,
+    "modelMode": "fake",
+    "recoveryIssueCount": 0
+  },
+  "topics": 3,
+  "outbox": 3,
+  "toolCounts": {
+    "submit_task_checkpoint": 3,
+    "submit_task_result": 1,
+    "group_topic_route_submit": 2,
+    "group_decision_submit": 2,
+    "group_task_review_submit": 4,
+    "group_reply_submit": 1
+  },
+  "task": {
+    "state": "completed",
+    "inputVersion": 1,
+    "runSequence": 1,
+    "checkpoints": [
+      {
+        "kind": "plan-confirmed",
+        "remainingItems": 2,
+        "coordinatorDecision": "acknowledge"
+      },
+      {
+        "kind": "stage-completed",
+        "remainingItems": 1,
+        "coordinatorDecision": "acknowledge"
+      },
+      {
+        "kind": "stage-completed",
+        "remainingItems": 0,
+        "coordinatorDecision": "acknowledge"
+      }
+    ],
+    "duplicateRequestTaskCount": 1,
+    "resultStatus": "completed"
+  },
+  "durableDecisions": [
+    {
+      "topicId": "topic-9a852e00252985271fea0fc01879365e",
+      "revision": 1,
+      "processedRevision": 1,
+      "status": "completed"
+    },
+    {
+      "topicId": "topic-eadc0d2380ad94e258a99bc268396463",
+      "revision": 1,
+      "processedRevision": 1,
+      "status": "completed"
+    },
+    {
+      "topicId": "topic-4b6f1ecf6d47c472f50f3881eb791337",
+      "revision": 1,
+      "processedRevision": 1,
+      "status": "completed"
+    }
+  ],
+  "sourceHashes": {
+    "runtime.js": "5A2549425DFF76AE75A06D2373E432EDE8258E9F9266C1BD3FB40DE364AA121E",
+    "fake-llm.js": "9F28EDAD9579F9BD6FAB496112014110A0A26EFB81505403EE7E727E8EC7BC8F",
+    "topic-model.js": "6C7BA3D4E0F7F2AAA858EA30444FE8369187DC9A7176476D2F923F0F69527BB9",
+    "store.js": "2DB7EC2EA6A96294DD064CAA5064104648EABB81BD63938D027735C0930FBFC4",
+    "topic-runtime.js": "02432D2EBE2C10C32206E9CCBB9D13F3BE489F01E1B9D44F6BE3DFFB479B72D7"
+  }
+}

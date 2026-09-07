@@ -1,0 +1,17 @@
+[
+  {
+    "Name": "dingtalk-dsh-assistant-0.5.12.tgz",
+    "Bytes": 18485,
+    "SHA256": "7BF89DA95DF714C326AC0B7F61548AE9D49ABCFFE361F4FB1E3FA019BAD83CAF"
+  },
+  {
+    "Name": "zzusp-dingtalk-dsh-assistant-0.5.12.tgz",
+    "Bytes": 92660,
+    "SHA256": "3D568D9DDA2381E930990D222466185341212808F0A8102FDC765CE1704631F1"
+  },
+  {
+    "Name": "zzusp-dingtalk-dsh-observer-0.5.12.tgz",
+    "Bytes": 17166,
+    "SHA256": "58BB78CBB34CF0C4757C8809F1E123CECF37FD0CEEAEE7D37FD660AC0F19290E"
+  }
+]

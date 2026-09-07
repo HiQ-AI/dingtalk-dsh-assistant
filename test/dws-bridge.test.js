@@ -44,6 +44,64 @@ test('DWS历史图片消息保留可下载资源引用', () => {
   assert.deepEqual(normalized.resourceRefs, [{ type: 'mediaId', resourceId: 'media-1' }])
 })
 
+test('补拉完成只证明可靠接收，未完成的 Topic 不阻塞同批后续消息', async () => {
+  const group = { groupId: 'g', messages: [], topics: [{ topicId: 't', revision: 2, processedRevision: 0 }] }
+  const received = [], snapshots = []
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group,
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async ingest(message) { received.push(message.messageId); group.messages.push({ ...message, routingStatus: 'pending' }); return { duplicate: false, accepted: true } },
+  }
+  const adapter = {
+    startGroupSubscription() { return { done: Promise.resolve(), stop() {} } },
+    async readGroupRange() { return { complete: true, messages: [{ messageId: 'a', text: '慢话题' }, { messageId: 'b', text: '独立话题' }] } },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, onHealthChange: (value) => snapshots.push(value) })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(received, ['a', 'b'])
+  assert.equal(group.topics[0].processedRevision, 0)
+  assert.equal(snapshots.at(-1).groups[0].backfill.state, 'ok')
+  assert.equal(snapshots.at(-1).groups[0].backfill.completionScope, 'durable-receipt')
+  await stop()
+})
+
+test('已接收消息补齐发送人和引用时仍交给 Runtime 生成事实版本', async () => {
+  let callback
+  const received = []
+  const group = { groupId: 'g', messages: [{ messageId: 'm', text: '原文', agentDeliveryStatus: 'delivered' }], outbox: [] }
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group,
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async ingest(message) { received.push(message); return { duplicate: true, enriched: true } },
+  }
+  const adapter = { startGroupSubscription(_id, handler) { callback = handler; return { done: Promise.resolve(), stop() {} } } }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0 })
+  await callback({ conversation_id: 'g', message_id: 'm', content: '原文', sender: '张三', sender_open_dingtalk_id: 'sender', quotedMessage: { messageId: 'source', content: '问题' } })
+  assert.equal(received.length, 1)
+  assert.equal(received[0].senderOpenDingTalkId, 'sender')
+  assert.equal(received[0].quotedMessage.messageId, 'source')
+  await stop()
+})
+
+test('已归类图片恢复可读取后清除不可读原因并重新交给 Runtime', async () => {
+  let callback, accepted
+  const group = { groupId: 'g', messages: [{ messageId: 'm', text: '[图片消息](mediaId=r)', imageRefs: [], mediaUnavailable: ['下载失败'], agentDeliveryStatus: 'delivered' }], outbox: [] }
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group,
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async ingest(message) { accepted = message; return { duplicate: true, enriched: true } },
+  }
+  const adapter = {
+    startGroupSubscription(_id, handler) { callback = handler; return { done: Promise.resolve(), stop() {} } },
+    async loadMessageImages() { return { images: [{ type: 'image', image: 'fixture-image' }], mediaUnavailable: [] } },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { throw error } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0 })
+  await callback({ conversation_id: 'g', message_id: 'm', content: '[图片消息](mediaId=r)' })
+  assert.deepEqual(accepted.mediaUnavailable, [])
+  assert.equal(accepted.images.length, 1)
+  await stop()
+})
+
 test('普通Outbox替换通过DWS精确撤回并确认消息已不存在', async () => {
   let recaller
   const recalled = []
@@ -63,6 +121,34 @@ test('普通Outbox替换通过DWS精确撤回并确认消息已不存在', async
   present = true
   await assert.rejects(recaller({ groupId: 'cid-a', messageId: 'sent-old', outbound }), /dws_recall_readback_message_present:sent-old/)
   assert.deepEqual(recalled, ['sent-old', 'sent-old'])
+  await stop()
+})
+
+test('已落盘Outbox先完成prepare，撤回失败时不发送，重试成功后再投递', async () => {
+  let listener, ready = false, sent = false
+  const sequence = [], warnings = []
+  const outbound = { outboundId: 'out-replacement', sourceMessageId: 'topic-decision:d1', text: '合并后的确认', status: 'pending', readbackRequired: true, replacesOutboundIds: ['out-old'] }
+  const group = { groupId: 'g', messages: [], outbox: [outbound] }
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group,
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended(handler) { listener = handler; return () => undefined },
+    async prepareOutbound({ outbound: value }) { assert.equal(value.outboundId, 'out-replacement'); sequence.push('prepare'); if (!ready) throw new Error('recall_not_verified') },
+    async acknowledge() { sequence.push('ack'); outbound.status = 'sent' },
+  }
+  const adapter = {
+    startGroupSubscription() { return { done: Promise.resolve(), stop() {} } },
+    async readGroup() { sequence.push('read'); return { complete: true, messages: sent ? [{ messageId: 'delivered', text: outbound.text }] : [] } },
+    async sendGroup() { sequence.push('send'); sent = true; return { deliveryStatus: 'success' } },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { warnings.push(error.message) } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0 })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(sequence, ['prepare'])
+  assert.equal(outbound.status, 'pending')
+  ready = true
+  await listener({ groupId: 'g', outbound })
+  assert.deepEqual(sequence, ['prepare', 'prepare', 'read', 'send', 'read', 'ack'])
+  assert.equal(outbound.status, 'sent')
+  assert.deepEqual(warnings, ['recall_not_verified'])
   await stop()
 })
 
@@ -227,8 +313,8 @@ test('定时增量补拉按已持久化发送消息ID过滤Agent本人账号消�
 
 test('增量补拉过滤已投递及判断失败消息，只重试插话前失败项和投递新项', async () => {
   const group = { groupId: 'cid-a', messages: [
-    { messageId: 'm-delivered', occurredAt: '2026-08-27T04:00:00Z', agentDeliveryStatus: 'delivered' },
-    { messageId: 'm-decision-failed', occurredAt: '2026-08-27T04:00:00Z', agentDeliveryStatus: 'decision-failed' },
+    { messageId: 'm-delivered', occurredAt: '2026-08-27T04:00:00Z', senderName: '甲', agentDeliveryStatus: 'delivered' },
+    { messageId: 'm-decision-failed', occurredAt: '2026-08-27T04:00:00Z', senderName: '甲', agentDeliveryStatus: 'decision-failed' },
     { messageId: 'm-failed', occurredAt: '2026-08-27T04:00:01Z', agentDeliveryStatus: 'failed' },
   ], outbox: [] }
   const ingested = []

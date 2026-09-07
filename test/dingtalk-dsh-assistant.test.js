@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { apply, name } from '../packages/dingtalk-dsh-assistant/resident.js'
+import { buildTaskAssociationIndex } from '../packages/dingtalk-dsh-assistant/runtime.js'
 
 test('单一业务插件使用通用命名且 health 明示 fake transport', async () => {
   const effects = []
@@ -50,21 +51,14 @@ test('完成通知签名由 Agent 工作区规则决定且插件不写死身份'
   assert.doesNotMatch(source, /小小鹏|孙鹏/u)
 })
 
-test('resident重启后按群内顺序恢复pending和中断判断消息', async () => {
+test('resident重启通过Topic协调器恢复归类和已接受决策', async () => {
   const runtimeSource = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   const residentSource = await readFile(new URL('../packages/dingtalk-dsh-assistant/resident.js', import.meta.url), 'utf8')
-  assert.match(runtimeSource, /function recoverDecisionMessages\(\)/)
-  assert.match(runtimeSource, /recoverPendingMessages: recoverDecisionMessages/)
-  assert.match(runtimeSource, /agentDeliveryStatus === 'pending' \|\| \(message\.agentDeliveryStatus === 'decision-retrying'/)
-  assert.match(runtimeSource, /left\.groupId\.localeCompare\(right\.groupId\) \|\| left\.sequence - right\.sequence/)
-  assert.match(runtimeSource, /'decision-retrying', 'decision-failed', 'decision-commit-failed'/)
-  assert.match(residentSource, /runtime\.recoverPendingMessages\(\)/)
-  assert.match(runtimeSource, /async recoverInterruptedDecisions\(\)/)
-  assert.match(runtimeSource, /agentDeliveryStatus === 'steered'/)
-  assert.match(runtimeSource, /resident_restarted_before_decision_settled/)
-  assert.match(runtimeSource, /status: 'decision-retrying'/)
-  assert.match(runtimeSource, /recoveringDecisionGroups/)
-  assert.match(residentSource, /runtime\.recoverInterruptedDecisions\(\)/)
+  const topicSource = await readFile(new URL('../packages/dingtalk-dsh-assistant/topic-runtime.js', import.meta.url), 'utf8')
+  assert.match(runtimeSource, /recoverInterruptedDecisions: \(\) => topics\.recover\(\)/)
+  assert.match(topicSource, /routingStatus !== 'routed'/)
+  assert.match(topicSource, /const commit = unfinished\(topic\)/)
+  assert.doesNotMatch(residentSource, /runtime\.recoverPendingMessages\(\)/)
   assert.ok(residentSource.indexOf('await runtime.recoverInterruptedDecisions()') < residentSource.indexOf('startDwsBridge({'), '中断收敛必须先于DWS入站启动')
 })
 
@@ -73,11 +67,12 @@ test('DWS profile在恢复遗留判断前注入引用消息查询协议', async 
   assert.match(source, /const dwsConfig = config\.dws \?\? \{\}[\s\S]*runtime\.setCurrentDwsProfile\(dwsConfig\.profile\)[\s\S]*await runtime\.recoverInterruptedDecisions\(\)/u)
 })
 
-test('任务上下文允许静默追加且已插话消息不会由重复事件重试', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
-  assert.match(source, /decision\.reply\.trim\(\) === ''/)
-  assert.match(source, /group = store\.getGroup\(message\.groupId\)/)
-  assert.match(source, /'decision-retrying', 'decision-failed', 'decision-commit-failed'/)
+test('旧任务来源和续接迁移配置在打开存储前明确拒绝', async () => {
+  for (const field of ['taskProvenanceMigrations', 'taskContinuationMigrations']) {
+    let opened = false
+    await assert.rejects(apply({ storageDomain: { async open() { opened = true; throw new Error('not expected') } } }, { [field]: [{}] }), /legacy_task_migrations_removed:use_offline_topic_storage_migration/)
+    assert.equal(opened, false)
+  }
 })
 
 test('生产HTTP提供精确的单消息重试入口', async () => {
@@ -96,8 +91,11 @@ test('叶子会话使用DSH原生descriptor且恢复旧会话时补齐', async (
   assert.match(source, /ensureLeafDescriptor\(handle, task\); applyFullAccess\(handle\)/)
 })
 
-test('群消息任务名与来源证据分别持久化', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
-  assert.match(source, /title: action\.title, objective: action\.objective/)
-  assert.match(source, /relatedContexts: \[sourceEnvelope\]/)
+test('Task上下文只引用固定Topic版本，不再构造消息正文持久副本', async () => {
+  const refs = [{ topicId: 'topic-1', revision: 2 }]
+  const [item] = buildTaskAssociationIndex([{ taskId: 'task-1', title: '执行任务', objective: '导出数据', state: 'running', topicRefs: refs, inputVersion: 3, runSequence: 1, messageHistory: [{ text: '历史原文不得重复注入' }] }])
+  assert.deepEqual(item.topicRefs, refs)
+  assert.equal(item.inputVersion, 3)
+  assert.equal(item.messageHistory, undefined)
+  assert.equal(item.sourceMessageId, undefined)
 })

@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import test from 'node:test'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 
-async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsBridgeHealth } = {}) {
+async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsBridgeHealth, overrides = {} } = {}) {
   const runtime = {
     listRecoveryIssues: () => [], listGroups: () => [], getGroup: () => undefined, listTasks: () => [], listTaskTimings: () => [{ taskId: 'task-1', wallMs: 1000 }], listActivities: () => [], listAlerts: () => [], listAuthorizationRequests: () => [{ requestId: 'blocker-1', status: 'pending-send' }],
     subscribe: async () => ({ created: true }),
@@ -20,6 +20,8 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
     reissueAuthorization: async (value) => value,
     retryDecisionFailedMessage: async (value) => ({ retried: true, ...value }),
     getDwsBridgeHealth: getDwsBridgeHealth ?? (() => ({ healthy: true, groups: [] })),
+    listTopics: () => [],
+    ...overrides,
   }
   const server = createServer((request, response) => handleRequest(request, response, runtime, {
     testApiEnabled,
@@ -46,9 +48,9 @@ test('生产HTTP开放只读状态与明确的本机群配置接口，测试控�
   const archived = await fetch(`${baseUrl}/tasks/task-1/archive`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
   assert.equal(archived.status, 200)
   assert.equal((await archived.json()).archivedAt, '2026-08-25T00:00:00.000Z')
-  const cancelled = await fetch(`${baseUrl}/tasks/task-2/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason: '误建任务' }) })
+  const cancelled = await fetch(`${baseUrl}/tasks/task-2/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'cancel-1', reason: '误建任务', inputVersion: 1, runSequence: 1, topicRefs: [{ topicId: 'topic-1', revision: 1 }] }) })
   assert.deepEqual(await cancelled.json(), { taskId: 'task-2', state: 'completed', completion: '已取消：误建任务' })
-  const reopened = await fetch(`${baseUrl}/tasks/task-1/reopen`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ context: '继续修复', objective: '修复并部署 UAT2' }) })
+  const reopened = await fetch(`${baseUrl}/tasks/task-1/reopen`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'web-reopen-1', context: '继续修复', objective: '修复并部署 UAT2', topicRefs: [{ topicId: 'topic-1', revision: 2 }], inputVersion: 1, runSequence: 1 }) })
   assert.deepEqual(await reopened.json(), { taskId: 'task-1', state: 'running', context: '继续修复', objective: '修复并部署 UAT2' })
   const approval = await fetch(`${baseUrl}/authorizations/blocker-1/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'approved', comment: '页面批准' }) })
   assert.deepEqual(await approval.json(), { requestId: 'blocker-1', decision: 'approved', comment: '页面批准', source: 'web' })
@@ -64,6 +66,87 @@ test('显式testApiEnabled才开放测试写入口', async () => withServer(true
   assert.equal(response.status, 200)
   assert.deepEqual(await response.json(), { created: true })
 }))
+
+test('Web Task 入口强制稳定请求与执行版本且拒绝伪造来源和Session', async () => {
+  const calls = []
+  const update = { requestId: 'web-1', context: '只处理本月', topicRefs: [{ topicId: 'topic-1', revision: 2 }], inputVersion: 1, runSequence: 1 }
+  await withServer(false, async (baseUrl) => {
+    const post = (path, body) => fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    assert.equal((await post('/tasks', { requestId: 'create-1', groupId: 'g', title: '数据导出', objective: '导出本月', context: '请导出本月数据', acceptanceCriteria: ['文件可读'] })).status, 200)
+    assert.equal(calls[0].topicRefs, undefined)
+    assert.equal((await post('/tasks/task-1/context', update)).status, 200)
+    assert.equal(calls[1].taskId, 'task-1')
+    assert.equal(calls[1].inputVersion, 1)
+    assert.equal((await post('/tasks/task-1/reopen', update)).status, 200)
+    for (const extra of [{ childSessionId: 'other-session' }, { taskId: 'other-task' }, { sourceKind: 'dingtalk' }, { sourceMessageId: 'fake-message' }]) assert.equal((await post('/tasks/task-1/context', { ...update, ...extra })).status, 400)
+    for (const field of ['requestId', 'context', 'topicRefs', 'inputVersion', 'runSequence']) {
+      const invalid = { ...update }; delete invalid[field]
+      assert.equal((await post('/tasks/task-1/reopen', invalid)).status, 400)
+    }
+    assert.equal(calls.length, 3)
+  }, { overrides: {
+    createTask: async (value) => { calls.push(value); return { taskId: 'created' } },
+    appendTaskContext: async (value) => { calls.push(value); return value },
+    reopenTask: async (value) => { calls.push(value); return value },
+  } })
+})
+
+test('移除群遇到Topic引用或未完成决策返回409而非普通参数错误', async () => {
+  for (const reason of ['group_has_referenced_topics', 'group_has_pending_decisions', 'group_has_pending_outbox', 'group_has_active_tasks:g']) {
+    await withServer(false, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/config/groups/g`, { method: 'DELETE' })
+      assert.equal(response.status, 409)
+      assert.equal((await response.json()).error, reason)
+    }, { overrides: { unsubscribe: async () => { throw new Error(reason) } } })
+  }
+})
+
+test('Web输入版本与幂等身份冲突返回409，可靠接收尚未完成返回202', async () => {
+  let result = new Error('task_input_version_stale')
+  await withServer(false, async (baseUrl) => {
+    const post = () => fetch(`${baseUrl}/tasks/task-1/context`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'r1', context: '补充', topicRefs: [{ topicId: 't1', revision: 1 }], inputVersion: 1, runSequence: 1 }) })
+    assert.equal((await post()).status, 409)
+    result = new Error('task_request_identity_conflict')
+    assert.equal((await post()).status, 409)
+    result = { status: 'accepted', decisionId: 'd1', topicId: 't1' }
+    assert.equal((await post()).status, 202)
+  }, { overrides: { appendTaskContext: async () => { if (result instanceof Error) throw result; return result } } })
+})
+
+test('Topic 查询有界分页且群摘要不泄漏内部决策、归类和预约记录', async () => {
+  const topics = Array.from({ length: 102 }, (_, index) => ({ groupId: 'g', topicId: `topic-${index}`, title: `话题 ${index}`, revision: 3, processedRevision: 1, status: 'active', summary: '摘'.repeat(1100), openQuestions: ['待确认'], entries: [{ messageId: 'm1' }], decisions: [{ decisionId: 'old', status: 'failed', operations: [] }, { decisionId: 'current', status: 'failed', error: '失败'.repeat(600), operations: [{ status: 'applied', action: { secretInternal: true } }, { status: 'pending' }] }, { decisionId: 'done', status: 'completed', operations: [] }] }))
+  const group = { groupId: 'g', topics, routeHistory: [{ request: 'internal' }], taskReservations: [{ taskId: 't' }], messages: [{ messageId: 'm1', routingStatus: 'pending' }], outbox: [] }
+  let request
+  await withServer(false, async (baseUrl) => {
+    const listing = await (await fetch(`${baseUrl}/state/topics?groupId=g&offset=100&limit=2`)).json()
+    assert.equal(listing.total, 102)
+    assert.deepEqual(listing.topics.map((topic) => topic.topicId), ['topic-100', 'topic-101'])
+    assert.equal(listing.topics[0].summary.length, 1000)
+    assert.equal(listing.topics[0].decisions, undefined)
+    assert.equal(listing.topics[0].entries, undefined)
+    assert.deepEqual(listing.topics[0].processing, { decisionId: 'current', status: 'failed', appliedOperations: 1, totalOperations: 2, error: '失败'.repeat(500) })
+    const projected = await (await fetch(`${baseUrl}/state/groups?groupId=g`)).json()
+    assert.equal(projected.topics, undefined)
+    assert.equal(projected.routeHistory, undefined)
+    assert.equal(projected.taskReservations, undefined)
+    assert.deepEqual(projected.messages, group.messages)
+    assert.deepEqual(projected.topicProgress, { total: 102, pending: 102, pendingRevisions: 204, unroutedMessages: 1 })
+    const detail = await (await fetch(`${baseUrl}/state/topics/topic-0?groupId=g&revision=2&offset=1&limit=3`)).json()
+    assert.deepEqual(request, { groupId: 'g', topicId: 'topic-0', revision: 2, offset: 1, limit: 3 })
+    assert.equal(detail.topic.decisions, undefined)
+    assert.equal(detail.topic.entries, undefined)
+    assert.deepEqual(detail.topic.processing, listing.topics[0].processing)
+    assert.deepEqual(detail.messages, [{ messageId: 'm1', text: '原始消息' }])
+    assert.equal((await fetch(`${baseUrl}/state/topics/topic-0?groupId=other`)).status, 404)
+    assert.equal((await fetch(`${baseUrl}/state/topics/topic-0`)).status, 400)
+    for (const query of ['limit=101', 'limit=0', 'offset=-1', 'offset=1.5', 'offset=9999999999999999999999']) assert.equal((await fetch(`${baseUrl}/state/topics?${query}`)).status, 400)
+    assert.equal((await fetch(`${baseUrl}/state/topics/topic-0?groupId=g&revision=NaN`)).status, 400)
+  }, { overrides: {
+    listGroups: () => [group], getGroup: (groupId) => groupId === 'g' ? group : undefined,
+    listTopics: (groupId) => !groupId || groupId === 'g' ? topics : [], getTopic: (groupId, topicId) => groupId === 'g' ? topics.find((topic) => topic.topicId === topicId) : undefined,
+    getTopicContext: async (value) => { request = value; return { ...value, topic: topics[0], messages: [{ messageId: 'm1', text: '原始消息' }], total: 4, taskRefs: [] } },
+  } })
+})
 
 test('本机Web的127.0.0.1与localhost来源均可读取resident，其他来源不开放CORS', async () => withServer(false, async (baseUrl) => {
   for (const origin of ['http://127.0.0.1:3080', 'http://localhost:3080']) {

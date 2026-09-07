@@ -90,12 +90,19 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         if (['failed', 'decision-failed', 'decision-commit-failed'].includes(persisted?.agentDeliveryStatus)) await runtime.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'skipped' })
         return
       }
-      if (persisted !== undefined && persisted.agentDeliveryStatus !== 'failed') return
+      const factsChanged = persisted !== undefined && (
+        (message.senderName !== undefined && message.senderName !== persisted.senderName) ||
+        (message.senderOpenDingTalkId !== undefined && message.senderOpenDingTalkId !== persisted.senderOpenDingTalkId) ||
+        (message.quotedMessage !== undefined && Object.entries(message.quotedMessage).some(([key, value]) => value !== undefined && value !== persisted.quotedMessage?.[key])) ||
+        (message.resourceRefs?.length > 0 && ((Array.isArray(persisted.mediaUnavailable) && persisted.mediaUnavailable.length > 0) || !persisted.imageRefs?.length))
+      )
+      if (persisted !== undefined && persisted.agentDeliveryStatus !== 'failed' && !factsChanged) return
       const media = typeof adapter.loadMessageImages === 'function' ? await adapter.loadMessageImages(message) : { images: [], mediaUnavailable: [] }
+      // ingest 只等待可靠接收；归类和 Topic 业务进度由 Runtime 独立推进。
       const accepted = await runtime.ingest({
         ...message,
         ...(media.images.length > 0 ? { images: media.images } : {}),
-        ...(media.mediaUnavailable.length > 0 ? { mediaUnavailable: media.mediaUnavailable } : {}),
+        ...(media.mediaUnavailable.length > 0 || persisted?.mediaUnavailable?.length > 0 ? { mediaUnavailable: media.mediaUnavailable } : {}),
       })
       if (accepted.duplicate) return
     })()
@@ -170,6 +177,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         },
         backfill: {
           state: entry?.backfillState ?? 'never',
+          completionScope: 'durable-receipt',
           ...(entry?.backfillRunning ? { inProgress: true } : {}),
           ...(entry?.recoveryRequired ? { recoveryRequired: true, ...(entry.recoveryFromAt ? { recoveryFromAt: entry.recoveryFromAt } : {}) } : {}),
           ...(entry?.lastBackfillStartedAt ? { startedAt: entry.lastBackfillStartedAt } : {}),
@@ -276,6 +284,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     return entry.backfillPromise
   }
   const processOutbound = async ({ groupId, outbound }) => {
+    await runtime.prepareOutbound?.({ groupId, outbound })
     const delivery = await dispatchOutbox({ adapter, groupId, outbound })
     if (delivery.status === 'sent') await runtime.acknowledge({ groupId, outboundId: outbound.outboundId, deliveredMessageId: delivery.messageId })
   }

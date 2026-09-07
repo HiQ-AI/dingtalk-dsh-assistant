@@ -80,6 +80,22 @@ test('引用回复回读即使正文完全相同也必须匹配quoted message ID
   assert.equal(matchesOutbound({ text: outbound.text, quotedMessage: { messageId: 'expected-source' } }, outbound), true)
 })
 
+test('无引用回复不能认领其他话题的同文引用回复', () => {
+  assert.equal(matchesOutbound({ text: '收到，开始处理', quotedMessage: { messageId: 'topic-b-source' } }, { text: '收到，开始处理' }), false)
+  assert.equal(matchesOutbound({ text: '收到，开始处理' }, { text: '收到，开始处理' }), true)
+})
+
+test('话题 A 的同文回复不阻止话题 B 的发送和精确回读', async () => {
+  let reads = 0, sends = 0
+  const adapter = {
+    async readGroup() { reads += 1; return { complete: true, messages: [{ messageId: 'sent-a', text: '开始处理', quotedMessage: { messageId: 'source-a' } }, ...(reads > 1 ? [{ messageId: 'sent-b', text: '开始处理', quotedMessage: { messageId: 'source-b' } }] : [])] } },
+    async sendGroupReply() { sends += 1; return { deliveryStatus: 'success' } },
+  }
+  const result = await dispatchOutbox({ adapter, groupId: 'g', outbound: { outboundId: 'out-b', text: '开始处理', replyToMessageId: 'source-b', replyToSenderOpenDingTalkId: 'sender-b' } })
+  assert.equal(sends, 1)
+  assert.equal(result.messageId, 'sent-b')
+})
+
 test('短引用回复允许钉钉补充前导@但仍要求精确quoted message ID', () => {
   const outbound = { text: '这个事项是否需要我处理？\n\n- 小小鹏代回', replyToMessageId: 'expected-source' }
   assert.equal(matchesOutbound({ text: '@当前用户  这个事项是否需要我处理？\n- 小小鹏代回', quotedMessage: { messageId: 'expected-source' } }, outbound), true)

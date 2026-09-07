@@ -1,0 +1,81 @@
+{
+  "status": "PASS",
+  "dshVersion": "0.1.1-rc.2",
+  "health": {
+    "status": "ok",
+    "transport": "fake-dws",
+    "inboundConfigured": false,
+    "inboundProcessing": false,
+    "outboundAuthorized": false,
+    "modelMode": "fake",
+    "recoveryIssueCount": 0
+  },
+  "topics": 3,
+  "outbox": 3,
+  "toolCounts": {
+    "submit_task_checkpoint": 3,
+    "submit_task_result": 1,
+    "group_topic_route_submit": 2,
+    "group_decision_submit": 2,
+    "group_task_review_submit": 4,
+    "group_reply_submit": 1
+  },
+  "task": {
+    "state": "completed",
+    "inputVersion": 1,
+    "runSequence": 1,
+    "checkpoints": [
+      {
+        "kind": "plan-confirmed",
+        "remainingItems": 2,
+        "coordinatorDecision": "acknowledge"
+      },
+      {
+        "kind": "stage-completed",
+        "remainingItems": 1,
+        "coordinatorDecision": "acknowledge"
+      },
+      {
+        "kind": "stage-completed",
+        "remainingItems": 0,
+        "coordinatorDecision": "acknowledge"
+      }
+    ],
+    "duplicateRequestTaskCount": 1,
+    "resultStatus": "completed"
+  },
+  "durableDecisions": [
+    {
+      "topicId": "topic-b13e142b05aa4f08618be0f2dbd77f71",
+      "revision": 1,
+      "processedRevision": 1,
+      "status": "completed"
+    },
+    {
+      "topicId": "topic-b7c002f37a442a8d5b67ab6272516eb9",
+      "revision": 1,
+      "processedRevision": 1,
+      "status": "completed"
+    },
+    {
+      "topicId": "topic-4b6f1ecf6d47c472f50f3881eb791337",
+      "revision": 1,
+      "processedRevision": 1,
+      "status": "completed"
+    }
+  ],
+  "boundaries": [
+    "真实 DSH 引擎和 Session 工具协议；fake LLM",
+    "独立 DSH_HOME/profile/JSON 存储，未修改现有 profile",
+    "DWS bridge 禁用，writesAuthorized=false，Outbox 仅 pending，未向真实群发送",
+    "不证明真实模型归类质量或生产部署"
+  ],
+  "command": "node docs/acceptance/topic-driven-processing/scripts/verify-topic-dsh.mjs D:/soft/node-v16.20.2/node_global/node_modules/@deepseek-ai/dsh",
+  "sourceHashes": {
+    "packages/dingtalk-dsh-assistant/runtime.js": "5a2549425dff76ae75a06d2373e432ede8258e9f9266c1bd3fb40de364aa121e",
+    "packages/dingtalk-dsh-assistant/topic-runtime.js": "8239db84ed91f09c513e4acb2fbcbde870f192ab3a88947e4b5e551a867e9511",
+    "packages/dingtalk-dsh-assistant/topic-model.js": "6c7ba3d4e0f7f2aaa858ea30444fe8369187dc9a7176476d2f923f0f69527bb9",
+    "packages/dingtalk-dsh-assistant/store.js": "c5e57831f5890eb37a16ca486bb82d4e820cc203364ceba0c404ddacd38b3b68",
+    "packages/dingtalk-dsh-assistant/fake-llm.js": "9f28edad9579f9bd6fab496112014110a0a26efb81505403ee7e727e8ec7bc8f"
+  }
+}
