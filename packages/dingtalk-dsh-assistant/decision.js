@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { resolveTopicMessages, topicRefSchema } from './topic-model.js'
 
-export const TOPIC_TITLE_MAX_CHARS = 60
+export const TOPIC_TITLE_MAX_CHARS = 30
 
 const runPlan = { acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional() }
 export { topicRefSchema }
@@ -82,7 +82,7 @@ export const topicRouteSubmissionJsonSchema = {
         messageId: stringJsonSchema, messageVersion: { type: 'integer' },
         topics: { type: 'array', items: { oneOf: [
           { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema }, required: ['topicId'] },
-          { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema, title: { ...stringJsonSchema, description: '不超过 60 字的简洁话题名称，只概括共同讨论对象，不复述消息详情。' } }, required: ['newTopicKey', 'title'] },
+          { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema, title: { ...stringJsonSchema, description: '建议 8–20 字且不超过 30 字的简洁话题名称，只概括共同讨论对象，不复述消息详情。' } }, required: ['newTopicKey', 'title'] },
         ] } }, reason: stringJsonSchema,
       }, required: ['messageId', 'messageVersion', 'topics'],
     } },

@@ -91,7 +91,7 @@ class FakeResidentAdapter extends LlmAdapter {
           const relatedTask = text.startsWith('补充：') ? tasks[0] : undefined
           const topic = request.topics?.find((item) => item.entries?.some((entry) => entry.messageId === quotedId))
           const topicId = relatedTask?.topicRefs?.[0]?.topicId ?? topic?.topicId
-          return { messageId: message.messageId, messageVersion: message.messageVersion, topics: topicId ? [{ topicId }] : [{ newTopicKey: `fake-${message.messageId}`, title: text.slice(0, 60) || '附件讨论' }] }
+          return { messageId: message.messageId, messageVersion: message.messageVersion, topics: topicId ? [{ topicId }] : [{ newTopicKey: `fake-${message.messageId}`, title: text.slice(0, 30) || '附件讨论' }] }
         })
         yield* call('group_topic_route_submit', { requestId: request.requestId, routes })
         return
