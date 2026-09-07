@@ -34,7 +34,7 @@ async function until(condition) {
 async function setup(t, options = {}) {
   const snapshot = options.snapshot ?? { tables: {}, global: null }
   const store = await openResidentStore(memoryFacility(snapshot))
-  for (const groupId of options.groups ?? ['g']) if (!store.getGroup(groupId)) await store.subscribe({ groupId, residentSessionId: residentSessionId(groupId), residentAgentPreset: 'standard' })
+  for (const groupId of options.groups ?? ['g']) if (!store.getGroup(groupId)) await store.subscribe({ groupId, responsibility: '处理测试任务', residentSessionId: residentSessionId(groupId), residentAgentPreset: 'standard' })
   await store.setAgentNames(['助理'])
   const h = { store, snapshot, handles: new Map(), calls: [], cancelled: [], disposed: [], permissions: [], goals: options.goals ?? new Map(), events: new Map(), idle: new Map(), idleCalls: new Map(), onSteer: undefined }
   const never = new Promise(() => {})
@@ -262,7 +262,7 @@ test('新群创建原生 Session 后绑定，工具不能访问其他 Session', 
   assert.equal(result.group.residentSessionId, residentSessionId('g'))
   assert.equal(h.calls[0].resumed, false)
   assert.equal(h.calls[0].input.meta.cwd, agentWorkspace)
-  assert.deepEqual(h.permissions, [[residentSessionId('g'), 'danger-full-access']])
+  assert.deepEqual(h.permissions, [[residentSessionId('g'), 'read-only']])
   assert.equal((await h.runtime.subscribe({ groupId: 'g' })).created, false)
   assert.equal(h.calls.length, 1)
 })
@@ -321,6 +321,7 @@ async function checkpoint(h, task, patch) {
   const previous = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')?.requestId
   const args = { ...inputVersion(task), summary: '核验检查点', evidence: ['执行证据'], completedItems: [], remainingItems: [], nextStep: '继续', needsCoordinatorDecision: false, ...patch }
   const pending = leafCall(h, task, 'submit_task_checkpoint', args)
+  if (args.kind === 'stage-completed' && args.needsCoordinatorDecision === false && args.evidence.length > 0) return pending
   const outcome = pending.then((value) => ({ value }), (error) => ({ error }))
   await until(() => h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')?.requestId !== previous)
   const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')

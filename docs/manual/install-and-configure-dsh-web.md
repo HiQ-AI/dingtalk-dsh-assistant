@@ -449,7 +449,7 @@ dws:
 
 在已添加的测试群发送一条消息，然后从左侧插件看板打开“群聊会话”，确认消息进入该群固定的 resident Session。不要用启动成功或健康接口代替这一步真实消息验证。
 
-任务进入 Runtime 后，可从左侧菜单打开“运行看板”，再进入“任务看板”，按待执行、执行中、等待中和已完成四列检查状态。运行看板会替换右侧内容区域，左侧菜单和 Session 页面保持独立；页面不重复显示标题和子标题，状态桶使用剩余视口高度，卡片在桶内滚动，不会把页面撑高。执行中/等待中卡片内的“任务”面板默认收起，只保留完成数/总数和进度；点击后展开各阶段任务、完成状态和单项执行时长。Runtime 会强制叶子按当前顺序逐项提交完成事件，禁止批量跳过检查点，并在 remainingItems 清空前拒绝完成 Task，确保后续任务的每个检查点都有可计算的独立时间边界。已完成、已归档任务不再重复展示该面板。红框标出任务看板入口和完整任务区域：
+任务进入 Runtime 后，可从左侧菜单打开“运行看板”，再进入“任务看板”，按待执行、执行中、等待中和已完成四列检查状态。运行看板会替换右侧内容区域，左侧菜单和 Session 页面保持独立；页面不重复显示标题和子标题，状态桶使用剩余视口高度，卡片在桶内滚动，不会把页面撑高。执行中/等待中卡片内的“任务”面板默认收起，只保留完成数/总数和进度；点击后展开各阶段任务、完成状态和单项执行时长。Runtime 会强制叶子按当前顺序逐项提交完成事件，禁止批量跳过检查点，并在 remainingItems 清空前拒绝完成 Task。普通阶段由 Host 校验后确认，计划、冲突、范围或风险变化再由 Resident 语义审阅；未完成审阅可由同一 checkpoint 重试或 Supervisor 恢复。已完成、已归档任务不再重复展示该面板。红框标出任务看板入口和完整任务区域：
 
 ![DSH Web 任务看板](images/dsh-web-task-board-annotated.png)
 
@@ -504,9 +504,9 @@ Topic 版本使用 domain v7。升级已有 v6 profile 前，按[Topic 存储离
 
 若 Resident 连续出现上下文压缩，检查普通输入是否重复包含完整群历史或 Task 消息副本。Topic 列表应只含摘要，详情由 `GET /state/topics/{topicId}?groupId=...&revision=...&offset=0&limit=50` 或 `group_topic_context_get` 按固定版本分页读取；API 每页最多 100 条。Topic 详情返回 `{topicId, groupId, revision, topic, messages, total, offset, limit, taskRefs}`，不会公开内部决策动作日志。Task 只保存 Topic 引用，不应再出现 messageHistory、triggerHistory 和 sourceMessageId。
 
-人工 Web 新建 Task 使用 `POST /tasks`，调用方必须提供稳定 requestId、原始 context、groupId、title、objective、acceptanceCriteria；不指定 topicRefs 时建立 Web 来源 Topic。已有 Task 的 context、reopen、cancel 操作还必须提供 topicRefs、inputVersion、runSequence；前两者使用 context，取消使用 reason。版本和请求身份冲突返回 409，已持久接受但未完成返回 202。Web 来源不能伪造钉钉引用、@ 或 childSessionId。Resident 不再提供 group_task_create / group_task_context_append / group_task_reopen 直写工具，业务动作统一走 group_decision_submit；误归类修订使用 group_topic_route_review。所有非空回复必须提供 replyReview.kind。Task 输入变更会归档旧 checkpoints，新版输入需要重新提交 plan-confirmed。
+人工 Web 新建 Task 使用 `POST /tasks`，调用方必须提供稳定 requestId、原始 context、groupId、title、objective、acceptanceCriteria；不指定 topicRefs 时建立 Web 来源 Topic。已有 Task 的 context、reopen、cancel 操作还必须提供 topicRefs、inputVersion、runSequence；前两者使用 context，取消使用 reason。版本和请求身份冲突返回 409，已持久接受但未完成返回 202。Web 来源不能伪造钉钉引用、@ 或 childSessionId。Resident 不再提供 group_task_create / group_task_context_append / group_task_reopen 直写工具，业务动作统一走 group_decision_submit；误归类修订使用 group_topic_route_review。所有非空回复必须提供 replyReview.kind。Task 补充输入以 progressImpact 区分 preserve 和 replan；只有范围及既有证据有效性均未变化时保留 checkpoints，否则归档旧进度并重新提交 plan-confirmed。跨 Topic 补充会合并旧引用。
 
-查询 Topic 的 processing 可读取最新未完成决策标识、状态、已完成/总动作数及有界错误；Observer 显示处理失败或处理中。此摘要不暴露内部动作正文，processedRevision 与 Outbox 投递状态仍需分别核对。
+查询 Topic 的 processing 可读取最新未完成决策标识、状态、已完成/总动作数及有界错误；Observer 依据 routingStatus、Topic revision 与 processedRevision 显示待归类、话题处理中、已处理或归类失败。此摘要不暴露内部动作正文，processedRevision 与 Outbox 投递状态仍需分别核对。
 
 确认 DWS 登录有效，搜索词不少于两个字；如果配置了 `dws.profile`，确认登录的是同一个 profile。
 
