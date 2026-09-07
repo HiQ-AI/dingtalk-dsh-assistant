@@ -44,7 +44,10 @@ async function setup(t, options = {}) {
     else await options.beforeCreate?.(input)
     if (options.resumeFailure && resumed && options.resumeFailure(sessionId)) throw new Error('corrupt session log: synthetic failure')
     const events = [...(input.seed ?? options.sessionEvents?.get(sessionId) ?? [])]
-    const session = { id: sessionId, seq: events.length, events, meta: input.meta ?? {}, append(type, data) { events.push({ seq: this.seq++, type, data }) } }
+    const inheritedEventCount = input.inheritedEventCount ?? 0
+    const session = { id: sessionId, seq: events.length, header: input.meta ?? {}, inheritedEventCount,
+      snapshotEvents() { return [...events] }, ownEvents() { return events.slice(inheritedEventCount) },
+      append(type, data) { events.push({ seq: this.seq++, type, data }) } }
     const tools = new Map(), sections = [], restrictions = [], sent = []
     const agent = { session, status: 'running', inbox: options.inbox ?? { nextStep: [], nextTurn: [], remove() { return false } },
       steer(message) { sent.push(message); session.append('user/message', message); h.onSteer?.(sessionId, message) },
@@ -546,7 +549,7 @@ test('恢复清理旧协议与旧 Topic 请求 Inbox，但保留普通待办', a
 
 test('重启恢复 Running 叶子沿用 Goal 与已接纳输入，不重复 steer 同版本', async (t) => {
   const h = await setup(t), task = await createTask(h)
-  const sessionEvents = new Map([...h.handles].map(([id, handle]) => [id, [...handle.agent.session.events]]))
+  const sessionEvents = new Map([...h.handles].map(([id, handle]) => [id, handle.agent.session.snapshotEvents()]))
   await h.runtime.close()
   const recovered = await setup(t, { snapshot: h.snapshot, goals: h.goals, sessionEvents })
   assert.equal(recovered.store.getTask(task.taskId).state, 'running')

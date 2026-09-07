@@ -57,3 +57,13 @@ test('当前正式版本在 CHANGELOG 中有对应章节和 Release 链接', asy
   assert.match(changelog, new RegExp(`^## \\[${escapedVersion}\\] - \\d{4}-\\d{2}-\\d{2}$`, 'mu'))
   assert.match(changelog, new RegExp(`^\\[${escapedVersion}\\]: https://github\\.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v${escapedVersion}$`, 'mu'))
 })
+
+test('resident profile 只解析到最新版 DSH 依赖边界', async () => {
+  const manifest = JSON.parse(await readFile(new URL('../.dsh/profiles/resident/package.json', import.meta.url), 'utf8'))
+  assert.equal(manifest.dependencies['@deepseek-ai/dsh'], '0.1.2-rc.1')
+  assert.equal(manifest.dependencies['@deepseek-ai/cordis'], '4.0.2')
+  assert.equal(manifest.dependencies['dsh-codex-connect'], '0.1.0-alpha.4.30')
+  for (const [name, version] of Object.entries(manifest.dependencies)) {
+    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.1.2-rc.1', name)
+  }
+})

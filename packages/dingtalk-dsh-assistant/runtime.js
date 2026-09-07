@@ -127,7 +127,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     return resumable
   }
   const ensureLeafDescriptor = (handle, task) => {
-    const ownEvents = handle.agent.session.events.slice(handle.agent.session.meta?.seedLength ?? 0)
+    const ownEvents = handle.agent.session.ownEvents()
     if (ownEvents.some((event) => event.type === 'subagent/descriptor')) return
     handle.agent.session.append('subagent/descriptor', snapshotSubagentDescriptor({
       mode: 'continuable',
@@ -1066,7 +1066,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
     const id = stableId('message', `task-input:${task.taskId}:${task.runSequence}:${task.inputVersion}`)
     const pending = [...(handle.agent.inbox?.nextStep ?? []), ...(handle.agent.inbox?.nextTurn ?? [])]
-    const recorded = pending.some((message) => message.id === id) || (handle.agent.session.events ?? []).some((event) =>
+    const recorded = pending.some((message) => message.id === id) || handle.agent.session.snapshotEvents().some((event) =>
       event.type === 'user/message' && event.data?.id === id)
     if (!recorded) handle.agent.steer(Object.freeze({ ...createUserMessage({ content: [{ type: 'text', text: topicInputText(task) }, ...topics.taskMessages(task).slice(-50).flatMap((message) => message.imageRefs ?? []).map((attachment) => ({ type: 'image', attachment }))], source: { kind: 'coordinator' } }), id }))
     const sessions = ctx.get?.('sessions') ?? ctx.sessions
@@ -1446,9 +1446,9 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             if (previous === undefined) throw new Error(`resident_not_active:${group.groupId}`)
             await previous.agent.whenIdle()
             await waitForActiveGroupSubmissions(group.groupId)
-            const seed = [...previous.agent.session.events]
+            const seed = previous.agent.session.snapshotEvents()
             const sessionId = `${residentSessionId(group.groupId)}-${randomUUID().slice(0, 8)}`
-            const { handle } = await createResident(group.groupId, { sessionId: SessionId(sessionId), seed, meta: { cwd: nextWorkspace, agentPreset, seedLength: seed.length }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+            const { handle } = await createResident(group.groupId, { sessionId: SessionId(sessionId), seed, inheritedEventCount: seed.length, meta: { cwd: nextWorkspace, parentSession: previous.agent.session.id, isSeeded: true, agentPreset }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
             applyFullAccess(handle)
             replacements.push({ group, previous, handle, sessionId })
           }
