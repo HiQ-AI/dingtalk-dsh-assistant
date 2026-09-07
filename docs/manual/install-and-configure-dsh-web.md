@@ -496,11 +496,11 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 ### 群搜索失败
 
-关联复核期间可继续接收新消息。Task 动作提交时会在群串行区内重新读取当前持久消息快照，避免将复核期间进入的真实来源误判为不存在。新发生且尚未开始业务副作用的判断异常会进入 `decision-retrying`，Runtime 按持久化的下一重试时间自动恢复；同群后续消息保持 `pending`，不得越过失败消息。历史 `decision-failed` 中错误明确为重启中断、Decision 未提交或无效 JSON 的消息会在启动时自动迁移；其他旧失败仍须先核对 Task 与 Outbox 是否已有副作用，再调用 `POST /config/groups/{groupId}/messages/{messageId}/retry` 精确重试。该接口不能直接把消息改成 `delivered`。
+关联复核期间可继续接收新消息。Task 动作提交时会在群串行区内重新读取当前持久消息快照，避免将复核期间进入的真实来源误判为不存在。所有 Task 动作都必须附带非空群确认；缺少确认时 `group_decision_submit` 返回 `reply-required`，不领取请求、不创建 Task、也不写 Outbox。补全回复后，Runtime 先把确认可靠写入 Outbox，再创建、续接或重开 Task，并回填实际 Task ID；取消动作会先向活动叶子发送止损信号，再提交停止确认和持久化状态。新发生且尚未开始业务副作用的判断异常会进入 `decision-retrying`，Runtime 按持久化的下一重试时间自动恢复；同群后续消息保持 `pending`，不得越过失败消息。历史 `decision-failed` 中错误明确为重启中断、Decision 未提交或无效 JSON 的消息会在启动时自动迁移；其他旧失败仍须先核对 Task 与 Outbox 是否已有副作用，再调用 `POST /config/groups/{groupId}/messages/{messageId}/retry` 精确重试。该接口不能直接把消息改成 `delivered`。
 
 若进程重启发生在消息已标记 `steered`、但结构化判断尚未提交期间，新 Runtime 会把遗留消息转为立即到期的 `decision-retrying`。Resident、群配置和 DWS bridge 就绪后自动按群消息 `sequence` 恢复，恢复成功前该群的后续消息只入 Inbox；其他群不受影响。若状态为 `decision-commit-failed`，说明 Task 或 Outbox 提交已经开始，为避免重复副作用不会自动重放，必须先核对持久化 Task 与 Outbox 后再人工处理。
 
-若 Resident 连续出现上下文压缩且消息长期停在 `steered`，先检查 Session 事件中 `agent/inbox/spliced` 的单条体积。回复审阅候选正常最多 8 条、序列化内容最多 16 KB；明显超过该范围说明仍在运行旧插件。升级并重启后，Runtime 会清除依赖旧 requestId 的遗留协议信封，并从持久化消息状态按群内顺序恢复。不要通过提高上下文窗口掩盖无界候选注入。
+若 Resident 连续出现上下文压缩且消息长期停在 `steered`，先检查 Session 事件中 `agent/inbox/spliced` 的单条体积。新版普通 `[GROUP_MESSAGE_STEER]` 只应出现历史回复候选数量和 `group_reply_review_get` 指引，不应出现候选 JSON、历史回复正文或 Task `messageHistory`；只有 Resident 准备发送非空群回复时，读取工具才会返回不超过 8 条、16 KB 的候选快照。常驻系统提示中的本群 Task 索引也只包含摘要，完整上下文由 `group_task_context_get` 按需读取。若普通 Steer 仍有约 16 KB 或更大的重复历史正文，说明仍在运行旧插件。升级并重启后，Runtime 会清除依赖旧 requestId 的遗留协议信封，并从持久化消息状态按群内顺序恢复。不要通过提高上下文窗口掩盖重复历史注入。
 
 确认 DWS 登录有效，搜索词不少于两个字；如果配置了 `dws.profile`，确认登录的是同一个 profile。
 

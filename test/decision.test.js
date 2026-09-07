@@ -20,7 +20,7 @@ test('群决策拒绝无效 JSON、多余字段和缺失目标', () => {
 })
 
 test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () => {
-  const prompt = buildDecisionPrompt({ messageId: 'm-unique', message: 'hello', senderName: '张三', senderOpenDingTalkId: 'od-user-1', occurredAt: '2026-08-24T13:00:00+08:00', quotedMessage: { messageId: 'm-quoted', senderName: '李四', occurredAt: '2026-08-24 12:59:00', content: 'quoted' }, mediaUnavailable: ['media-1: download failed'] })
+  const prompt = buildDecisionPrompt({ messageId: 'm-unique', message: 'hello', senderName: '张三', senderOpenDingTalkId: 'od-user-1', occurredAt: '2026-08-24T13:00:00+08:00', quotedMessage: { messageId: 'm-quoted', senderName: '李四', occurredAt: '2026-08-24 12:59:00', content: 'quoted' }, mediaUnavailable: ['media-1: download failed'], replyReviewCandidateCount: 8 })
   assert.doesNotMatch(prompt, /当前活动任务|taskId/)
   assert.doesNotMatch(prompt, /Use new-task|Return one strict JSON/)
   assert.match(prompt, /消息唯一标识：m-unique\n发送者：张三\n发送者OpenDingTalkId：od-user-1/)
@@ -30,6 +30,9 @@ test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () 
   assert.doesNotMatch(prompt, /发送者：李四|时间：2026-08-24 12:59:00|内容：quoted/)
   assert.match(prompt, /不得仅因附件暂不可读而断言消息与职责或活动任务无关/)
   assert.match(prompt, /必须先回答并明确告知对方哪些信息未获取到，不得创建、续接或重开任务/u)
+  assert.match(prompt, /Runtime 已绑定 8 条候选/u)
+  assert.match(prompt, /group_reply_review_get/u)
+  assert.ok(prompt.length < 800, '候选正文不得重新进入普通消息信封')
 })
 
 test('群消息判断不注入失败重试行为说明', () => {

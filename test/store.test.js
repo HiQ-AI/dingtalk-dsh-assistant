@@ -375,3 +375,18 @@ test('Task流程证据配置、回复审阅与撤回元数据持久化', async (
   assert.equal(store.getGroup('group-a').outbox[0].recallStatus, 'recalled')
   assert.equal(store.getGroup('group-a').outbox[0].recallReason, 'superseded-by:m-new')
 })
+
+test('确认Outbox可在Task动作完成后原子补充关联Task', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'group-a' })
+  await store.ingest({ groupId: 'group-a', messageId: 'm-task', text: '请处理', occurredAt: '2026-09-04T13:00:00Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
+  await store.appendOutbox({ groupId: 'group-a', sourceMessageId: 'm-task', text: '收到，开始处理。' })
+  const created = await store.createTask({ groupId: 'group-a', sourceMessageId: 'm-task', title: '处理事项', objective: '完成处理', acceptanceCriteria: ['结果可核验'] })
+
+  const attached = await store.attachOutboxTasks({ groupId: 'group-a', sourceMessageId: 'm-task', taskIds: [created.task.taskId] })
+  assert.deepEqual(attached.outbox[0].taskIds, [created.task.taskId])
+  const repeated = await store.attachOutboxTasks({ groupId: 'group-a', sourceMessageId: 'm-task', taskIds: [created.task.taskId] })
+  assert.deepEqual(repeated.outbox[0].taskIds, [created.task.taskId])
+  await assert.rejects(store.attachOutboxTasks({ groupId: 'group-a', sourceMessageId: 'm-task', taskIds: ['task-missing'] }), /outbox_task_invalid/)
+})

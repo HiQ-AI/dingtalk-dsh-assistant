@@ -450,6 +450,22 @@ export async function openResidentStore(storageDomain) {
         }],
       }))
     }),
+    attachOutboxTasks: ({ groupId, sourceMessageId, taskIds }) => serialize(groupId, async () => {
+      if (!Array.isArray(taskIds) || taskIds.length === 0 || taskIds.some((taskId) => typeof taskId !== 'string' || taskId.trim() === '')) throw new Error('outbox_task_ids_invalid')
+      const uniqueTaskIds = [...new Set(taskIds)]
+      if (uniqueTaskIds.length !== taskIds.length) throw new Error('outbox_task_ids_duplicate')
+      if (uniqueTaskIds.some((taskId) => tasks.get(taskId)?.groupId !== groupId)) throw new Error('outbox_task_invalid')
+      const entry = findGroupEntry(groupId)
+      if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
+      const [storageKey, current] = entry
+      if (!current.outbox.some((item) => item.sourceMessageId === sourceMessageId)) throw new Error(`outbox_source_not_found:${sourceMessageId}`)
+      return groups.update(storageKey, (latest) => ({
+        ...latest,
+        outbox: latest.outbox.map((item) => item.sourceMessageId === sourceMessageId
+          ? { ...item, taskIds: [...new Set([...(item.taskIds ?? []), ...uniqueTaskIds])] }
+          : item),
+      }))
+    }),
     acknowledge: ({ groupId, outboundId, deliveredMessageId }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)

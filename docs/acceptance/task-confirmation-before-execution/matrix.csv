@@ -1,0 +1,12 @@
+case,round-1
+Task动作空回复结构化拒绝,PASS
+空回复拒绝不产生Task或Outbox,PASS
+补全回复后原请求可提交,PASS
+Outbox先于新Task执行,PASS
+Outbox先于Task重开与上下文推进,PASS
+Outbox补齐实际Task关联,PASS
+快速取消信号不等待回复或Task串行队列,PASS
+stale与回复审阅门禁不回归,PASS
+全量测试,PASS
+安装包与源码一致,PASS
+本地服务与原Resident正常,PASS
