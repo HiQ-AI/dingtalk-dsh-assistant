@@ -500,7 +500,7 @@ Topic 版本使用 domain v7。升级已有 v6 profile 前，按[Topic 存储离
 
 接收接口在原始消息可靠落盘后返回，归类与业务执行继续由 Runtime 推进。`/state/groups` 的 `topicProgress.unroutedMessages` 是待归类消息数，`pending` 是有未处理增量的话题数；`/state/topics?groupId=...&offset=0&limit=50` 返回有界话题摘要。话题 A 失败不阻挡已经归类且无关的 B；未归类消息影响范围尚未知，需要先归类。
 
-重启后分别恢复尚未归类消息、Topic 未处理增量和已接受决策的未完成动作。不要手工把消息改成 delivered 或抹掉决策进度：应核对 Topic revision / processedRevision、相关 Task inputVersion 和 Outbox 的真实投递记录。
+重启后分别恢复尚未归类消息、Topic 未处理增量和已接受决策的未完成动作，并自动把 Topic 已全部处理完成但仍遗留为 pending 的消息收口为 delivered。不要手工修改投递状态或抹掉决策进度：应核对 Topic revision / processedRevision、相关 Task inputVersion 和 Outbox 的真实投递记录。
 
 若 Resident 连续出现上下文压缩，检查普通输入是否重复包含完整群历史或 Task 消息副本。Topic 列表应只含摘要，详情由 `GET /state/topics/{topicId}?groupId=...&revision=...&offset=0&limit=50` 或 `group_topic_context_get` 按固定版本分页读取；API 每页最多 100 条。Topic 详情返回 `{topicId, groupId, revision, topic, messages, total, offset, limit, taskRefs}`，不会公开内部决策动作日志。Task 只保存 Topic 引用，不应再出现 messageHistory、triggerHistory 和 sourceMessageId。
 

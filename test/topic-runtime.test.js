@@ -54,6 +54,31 @@ async function complete(h, request) {
   assert.equal((await h.call('group_decision_submit', submission(request))).status, 'accepted')
   await h.coordinator.drain('g')
 }
+
+test('消息仅在全部关联 Topic 完成后收口为已投递', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'shared')
+  await h.coordinator.schedule('g')
+  const routeRequest = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const routed = await h.call('group_topic_route_submit', { requestId: routeRequest.requestId, routes: [{
+    messageId: 'shared', messageVersion: 1, topics: [{ newTopicKey: 'a', title: 'A' }, { newTopicKey: 'b', title: 'B' }],
+  }] })
+  const [a, b] = routed.pendingDecisions
+  assert.equal(h.store.getGroup('g').messages[0].agentDeliveryStatus, 'pending')
+  await complete(h, a)
+  assert.equal(h.store.getGroup('g').messages[0].agentDeliveryStatus, 'pending')
+  await complete(h, b)
+  assert.equal(h.store.getGroup('g').messages[0].agentDeliveryStatus, 'delivered')
+})
+
+test('明确无需进入 Topic 的消息在归类完成后直接收口', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'ignored')
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.equal((await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'ignored', messageVersion: 1, topics: [], reason: '无需处理' }] })).status, 'accepted')
+  assert.equal(h.store.getGroup('g').messages[0].agentDeliveryStatus, 'delivered')
+})
 async function taskFixture(h) {
   await ingest(h, 'a1')
   const result = await route(h)
@@ -176,17 +201,24 @@ test('Topic 按需搜索分页及固定版本读回，跨群与越界拒绝', as
   await assert.rejects(h.call('group_topic_list', { offset: -1 }), /topic_page_invalid/)
 })
 
-test('历史长标题由 resident 根据 summary 重新概括，拒绝直接截断摘要', async (t) => {
+test('历史 Topic 先根据引用消息补 summary，再据此重生成 title', async (t) => {
   const h = await setup(t)
   await ingest(h, 'legacy')
   const request = (await route(h, { legacy: { newTopicKey: 'legacy', title: '历史话题' } })).pendingDecisions[0]
+  await complete(h, request)
   const summary = '统一编辑器草稿和工作区的地理位置字段，并完成导入、复制、保存及历史数据兼容验证。'
-  assert.equal((await h.call('group_decision_submit', submission(request, { topicUpdate: { summary } }))).status, 'accepted')
-  await h.coordinator.drain('g')
   const topic = h.store.getTopic('g', request.topicId)
+  // 模拟 v6 迁移形成的空摘要 Topic；迁移标记只来自历史数据。
+  topic.migrationBaseline = true
   await h.store.updateTopicTitle({ groupId: 'g', topicId: topic.topicId, expectedTitle: topic.title, expectedSummary: topic.summary, title: '修复编辑器草稿详情页地理位置字段命名并完成所有相关场景兼容验证' })
 
   await h.coordinator.schedule('g')
+  const summaryMigration = h.envelope('[GROUP_TOPIC_SUMMARY_MIGRATION]')
+  assert.deepEqual(Object.keys(summaryMigration).sort(), ['messages', 'requestId', 'revision', 'topicId', 'totalMessages'])
+  assert.equal(summaryMigration.messages[0].messageId, 'legacy')
+  assert.equal((await h.call('group_topic_summary_submit', { requestId: summaryMigration.requestId, topicId: topic.topicId, summary })).status, 'accepted')
+  assert.equal(h.store.getTopic('g', topic.topicId).summary, summary)
+
   const migration = h.envelope('[GROUP_TOPIC_TITLE_MIGRATION]')
   const legacy = h.store.getTopic('g', topic.topicId)
   assert.deepEqual(Object.keys(migration).sort(), ['requestId', 'summary', 'topicId'])

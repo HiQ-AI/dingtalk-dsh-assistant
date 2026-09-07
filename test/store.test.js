@@ -97,6 +97,22 @@ test('显式确认可只回填缺少Agent投递状态的历史消息', async () 
   assert.equal(marked.group.messages[0].agentDeliveryStatus, 'delivered')
 })
 
+test('启动恢复会收口已经完成 Topic 决策的遗留投递状态', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'group-a' })
+  await store.ingest({ groupId: 'group-a', messageId: 'done', text: '已处理', occurredAt: '2026-09-07T06:01:05Z' })
+  const routed = await store.routeMessages({ groupId: 'group-a', routeId: 'route-done', routingRevision: 0, routes: [{ messageId: 'done', messageVersion: 1, topics: [{ newTopicKey: 'done', title: '完成事项' }] }] })
+  const topicId = routed.topicIdsByKey.done
+  const decisionId = 'decision-done'
+  await store.acceptTopicDecision({ groupId: 'group-a', topicId, revision: 1, decisionId, decision: { basisMessageIds: ['done'], actions: [], reason: '已完成' } })
+  await store.completeTopicDecision({ groupId: 'group-a', topicId, decisionId })
+  await store.markMessageAgentDelivery({ groupId: 'group-a', messageId: 'done', status: 'pending' })
+  await store.reconcileMessageDeliveries({ groupId: 'group-a' })
+  assert.equal(store.getGroup('group-a').messages[0].agentDeliveryStatus, 'delivered')
+  await store.close()
+})
+
 test('Task 当前轮耗时拆分状态时间和可配对工具时间', async () => {
   const { facility } = memoryFacility()
   const store = await openResidentStore(facility)

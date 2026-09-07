@@ -56,6 +56,13 @@ function groupSummary(group, runtime) {
   if (!group) return null
   const { topics: _topics, routeHistory: _routeHistory, taskReservations: _taskReservations, ...summary } = group
   const topics = runtime.listTopics(group.groupId)
+  summary.messages = (summary.messages ?? []).map((message) => ({
+    ...message,
+    topicRefs: topics.flatMap((topic) => {
+      const current = topic.entries?.findLast((entry) => entry.messageId === message.messageId)
+      return current?.action === 'add' ? [{ topicId: topic.topicId, revision: topic.revision, title: topic.title }] : []
+    }),
+  }))
   summary.topicProgress = {
     total: topics.length,
     pending: topics.filter((topic) => topic.revision > topic.processedRevision).length,
