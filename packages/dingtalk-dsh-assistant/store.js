@@ -97,6 +97,41 @@ const activitySchema = z.object({
   activityId: z.string().min(1), taskId: z.string().min(1), sessionId: z.string().min(1), eventKey: z.string().min(1),
   type: z.string().min(1), detail: z.record(z.string(), z.unknown()), occurredAt: z.string().min(1),
 })
+const selfImprovingScopeSchema = z.strictObject({
+  kind: z.string().min(1).max(80), project: z.string().min(1).max(120).optional(),
+  sourceTypes: z.array(z.string().min(1).max(80)).max(8).optional(), tags: z.array(z.string().min(1).max(80)).max(8).optional(),
+})
+const selfImprovingIndexHitSchema = z.strictObject({
+  entryId: z.string().min(1).max(160), scope: z.string().min(1).max(160), learnedAt: z.string().min(1).max(40), rank: z.number().nonnegative().optional(),
+})
+const selfImprovingTopicReadSchema = z.strictObject({
+  entryId: z.string().min(1).max(160), readStatus: z.enum(['success', 'error']),
+})
+const selfImprovingAdoptionSchema = z.strictObject({
+  status: z.enum(['adopted', 'rejected', 'unknown']), actionRef: z.string().min(1).max(160).optional(),
+})
+const selfImprovingLiveVerifySchema = z.strictObject({
+  status: z.enum(['passed', 'failed', 'not-run', 'not-applicable']), targetRef: z.string().min(1).max(160).optional(), evidenceRef: z.string().min(1).max(160).optional(),
+})
+const selfImprovingOutcomeSchema = z.strictObject({
+  effect: z.enum(['positive', 'neutral', 'negative', 'unknown']),
+  evidenceLevel: z.enum(['live-verified', 'task-result', 'self-reported', 'none']),
+})
+const selfImprovingObservationSchema = z.object({
+  observationId: z.string().min(1), taskId: z.string().min(1), sessionId: z.string().min(1), skill: z.literal('use-self-improving'),
+  inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), eventKeys: z.array(z.string().min(1)), queryTerms: z.array(z.string().min(1).max(80)).min(1).max(4).optional(), scope: selfImprovingScopeSchema.optional(),
+  indexHits: z.array(selfImprovingIndexHitSchema).optional(), topicReads: z.array(selfImprovingTopicReadSchema).optional(),
+  adoption: selfImprovingAdoptionSchema.optional(), liveVerify: selfImprovingLiveVerifySchema.optional(), outcome: selfImprovingOutcomeSchema.optional(),
+  startedAt: z.string().min(1), updatedAt: z.string().min(1),
+})
+const selfImprovingObservationEventSchema = z.discriminatedUnion('stage', [
+  z.strictObject({ stage: z.literal('query'), detail: z.strictObject({ queryTerms: z.array(z.string().min(1).max(80)).min(1).max(4), scope: selfImprovingScopeSchema }) }),
+  z.strictObject({ stage: z.literal('index'), detail: z.strictObject({ hits: z.array(selfImprovingIndexHitSchema) }) }),
+  z.strictObject({ stage: z.literal('topic-read'), detail: selfImprovingTopicReadSchema }),
+  z.strictObject({ stage: z.literal('adoption'), detail: selfImprovingAdoptionSchema }),
+  z.strictObject({ stage: z.literal('live-verify'), detail: selfImprovingLiveVerifySchema }),
+  z.strictObject({ stage: z.literal('outcome'), detail: selfImprovingOutcomeSchema }),
+])
 const alertSchema = z.object({
   alertId: z.string().min(1), taskId: z.string().min(1), fingerprint: z.string().min(1), detail: z.string().min(1),
   count: z.number().int().positive(), firstSeenAt: z.string().min(1), lastSeenAt: z.string().min(1),
@@ -105,8 +140,9 @@ const alertSchema = z.object({
 const ACTIVITY_PROJECTION_LIMIT_PER_TASK = 500
 
 export const residentDomainSpec = defineDomain({
-  name: 'dingtalk_dsh_assistant', version: 7, tables: {
+  name: 'dingtalk_dsh_assistant', version: 8, tables: {
     groups: domainTable(groupSchema), scheduler: domainTable(schedulerSchema), tasks: domainTable(taskSchema), alerts: domainTable(alertSchema), activities: domainTable(activitySchema),
+    self_improving_observations: domainTable(selfImprovingObservationSchema),
   },
 })
 
@@ -175,6 +211,7 @@ export async function openResidentStore(storageDomain) {
   const tasks = domain.table('tasks')
   const alerts = domain.table('alerts')
   const activities = domain.table('activities')
+  const selfImprovingObservations = domain.table('self_improving_observations')
   for (const [key, alert] of alerts.entries()) {
     if (alert.status !== undefined) continue
     const recovered = alert.fingerprint.startsWith('leaf-goal-recovered:')
@@ -247,6 +284,9 @@ export async function openResidentStore(storageDomain) {
       .filter((activity) => taskId === undefined || activity.taskId === taskId)
       .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt))
       .slice(-ACTIVITY_PROJECTION_LIMIT_PER_TASK),
+    listSelfImprovingObservations: (taskId) => [...selfImprovingObservations.entries()].map(([, value]) => value)
+      .filter((observation) => taskId === undefined || observation.taskId === taskId)
+      .sort((left, right) => left.startedAt.localeCompare(right.startedAt)),
     subscribe: ({ groupId, name, responsibility = '', residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
       const existing = findGroupEntry(groupId)?.[1]
       if (existing !== undefined) return { created: false, group: existing }
@@ -697,6 +737,39 @@ export async function openResidentStore(storageDomain) {
       await activities.put(key, activity)
       return { created: true, activity }
     },
+    recordSelfImprovingObservation: async ({ taskId, sessionId, inputVersion, runSequence, eventKey, observationId, stage, detail, occurredAt }) => serialize(taskId, async () => {
+      if (tasks.get(taskId) === undefined) throw new Error(`task_not_found:${taskId}`)
+      if (typeof sessionId !== 'string' || !sessionId) throw new Error('self_improving_session_id_invalid')
+      if (typeof eventKey !== 'string' || !eventKey) throw new Error('self_improving_event_key_invalid')
+      if (typeof observationId !== 'string' || !observationId) throw new Error('self_improving_observation_id_invalid')
+      const parsed = selfImprovingObservationEventSchema.safeParse({ stage, detail })
+      if (!parsed.success) throw new Error('self_improving_observation_event_invalid')
+      const key = `${taskId}:${observationId}`
+      const existing = selfImprovingObservations.get(key)
+      if (existing?.eventKeys.includes(eventKey)) return { created: false, observation: existing }
+      if (existing !== undefined && existing.sessionId !== sessionId) throw new Error('self_improving_observation_session_conflict')
+      if (existing !== undefined && (existing.inputVersion !== inputVersion || existing.runSequence !== runSequence)) throw new Error('self_improving_observation_run_conflict')
+      if (existing === undefined && stage !== 'query') throw new Error('self_improving_observation_query_required')
+      if (existing !== undefined && stage === 'query') throw new Error('self_improving_observation_query_duplicate')
+      if (stage === 'topic-read' && existing?.indexHits === undefined) throw new Error('self_improving_observation_index_required')
+      if (stage === 'adoption' && existing?.indexHits === undefined) throw new Error('self_improving_observation_index_required')
+      if (stage === 'live-verify' && existing?.adoption === undefined) throw new Error('self_improving_observation_adoption_required')
+      if (stage === 'outcome' && (existing?.adoption === undefined || existing?.liveVerify === undefined)) throw new Error('self_improving_observation_verification_required')
+      const now = occurredAt ?? new Date().toISOString()
+      let observation = existing ?? { observationId, taskId, sessionId, inputVersion, runSequence, skill: 'use-self-improving', eventKeys: [], startedAt: now, updatedAt: now }
+      const event = parsed.data
+      if (event.stage === 'query') observation = { ...observation, queryTerms: event.detail.queryTerms, scope: event.detail.scope }
+      if (event.stage === 'index') observation = { ...observation, indexHits: event.detail.hits }
+      if (event.stage === 'topic-read') observation = { ...observation, topicReads: [...(observation.topicReads ?? []), event.detail] }
+      if (event.stage === 'adoption') observation = { ...observation, adoption: event.detail }
+      if (event.stage === 'live-verify') observation = { ...observation, liveVerify: event.detail }
+      if (event.stage === 'outcome') observation = { ...observation, outcome: event.detail }
+      observation = { ...observation, eventKeys: [...observation.eventKeys, eventKey], updatedAt: now }
+      if (observation.outcome?.effect === 'positive' && (observation.outcome.evidenceLevel !== 'live-verified' || observation.liveVerify?.status !== 'passed')) throw new Error('self_improving_positive_evidence_required')
+      selfImprovingObservationSchema.parse(observation)
+      await selfImprovingObservations.put(key, observation)
+      return { created: existing === undefined, observation }
+    }),
     close: () => domain.close(),
   }
 }

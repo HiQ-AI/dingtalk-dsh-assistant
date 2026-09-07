@@ -1,0 +1,13 @@
+case,round-1,round-2,round-3
+store-stage-merge,PASS,PASS,PASS
+store-idempotency-and-isolation,PASS,PASS,PASS
+store-version-and-order-guards,PASS,PASS,PASS
+positive-live-evidence-gate,PASS,PASS,PASS
+privacy-whitelist,PASS,PASS,PASS
+runtime-leaf-binding,PASS,FAIL,PASS
+runtime-false-trigger-guard,PASS,FAIL,PASS
+http-task-filter,PASS,PASS,PASS
+observer-lazy-load,PASS,PASS,PASS
+topic-storage-v8-migration,PASS,PASS,PASS
+full-test-suite,PASS,FAIL,PASS
+package-dry-run,,FAIL,PASS

@@ -194,6 +194,10 @@ window.__ModuleLoader__.load({
       const [outboxStatusFilter, setOutboxStatusFilter] = useState('all')
       const [hoveredTaskId, setHoveredTaskId] = useState('')
       const [expandedCheckpointTaskId, setExpandedCheckpointTaskId] = useState('')
+      const [expandedSkillTaskId, setExpandedSkillTaskId] = useState('')
+      const [skillObservationsByTaskId, setSkillObservationsByTaskId] = useState({})
+      const [skillObservationLoadingTaskId, setSkillObservationLoadingTaskId] = useState('')
+      const [skillObservationErrors, setSkillObservationErrors] = useState({})
       const [copiedId, setCopiedId] = useState('')
       const [navigatingSessionId, setNavigatingSessionId] = useState('')
       const [alertType, setAlertType] = useState('all')
@@ -228,6 +232,27 @@ window.__ModuleLoader__.load({
         return () => document.removeEventListener('click', closeForSession, true)
       }, [])
       const groupsById = new Map((data?.groups || []).map((group) => [group.groupId, group]))
+      const toggleSkillObservations = async (taskId) => {
+        if (expandedSkillTaskId === taskId) { setExpandedSkillTaskId(''); return }
+        setExpandedSkillTaskId(taskId)
+        if (Object.prototype.hasOwnProperty.call(skillObservationsByTaskId, taskId) || skillObservationLoadingTaskId === taskId) return
+        setSkillObservationLoadingTaskId(taskId)
+        setSkillObservationErrors((current) => ({ ...current, [taskId]: undefined }))
+        try {
+          const observations = await get(`/state/self-improving-observations?taskId=${encodeURIComponent(taskId)}`)
+          setSkillObservationsByTaskId((current) => ({ ...current, [taskId]: Array.isArray(observations) ? observations : observations?.observations || [] }))
+        } catch (cause) {
+          setSkillObservationErrors((current) => ({ ...current, [taskId]: cause instanceof Error ? cause.message : String(cause) }))
+        } finally { setSkillObservationLoadingTaskId((current) => current === taskId ? '' : current) }
+      }
+      const observationStageValue = (value) => {
+        if (value === undefined || value === null || value === false || value === '') return '未观测'
+        if (value === true) return '已记录'
+        const labels = { adopted: '已采用', rejected: '未采用', unknown: '未知', passed: '通过', failed: '失败', 'not-run': '未执行', 'not-applicable': '不适用', positive: '正向', neutral: '中性', negative: '负向' }
+        if (typeof value === 'string') return labels[value] || value
+        if (Array.isArray(value)) return value.length ? `${value.length} 项` : '未观测'
+        return labels[value.status] || labels[value.effect] || value.status || value.effect || value.summary || value.result || '已记录'
+      }
       const navigate = async (sessionId, parentSessionId) => {
         try { setNavigationError(undefined); setNavigatingSessionId(sessionId); await openSession(sessionId, parentSessionId); setOpen(false) }
         catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) }
@@ -322,6 +347,23 @@ window.__ModuleLoader__.load({
         const progress = Math.round((completedCheckpointCount / checkpoints.length) * 100)
         const showCheckpoints = task.state !== 'completed' && !task.archivedAt
         const checkpointsExpanded = expandedCheckpointTaskId === task.taskId
+        const skillObservationsExpanded = expandedSkillTaskId === task.taskId
+        const skillObservations = skillObservationsByTaskId[task.taskId]
+        const skillObservationLoading = skillObservationLoadingTaskId === task.taskId
+        const skillObservationError = skillObservationErrors[task.taskId]
+        const skillObservationBody = !skillObservationsExpanded ? null : React.createElement('div', { style: { display: 'grid', gap: 7, padding: '6px 0 4px' } },
+          skillObservationLoading ? React.createElement('div', { role: 'status', style: { color: colors.muted, fontSize: 10.5 } }, '正在读取结构化观测…')
+            : skillObservationError ? React.createElement('div', { role: 'alert', style: { color: colors.danger, fontSize: 10.5 } }, `观测读取失败：${skillObservationError}`)
+              : !skillObservations?.length ? React.createElement('div', { style: { color: colors.muted, fontSize: 10.5 } }, '旧数据未观测')
+                : skillObservations.map((observation, index) => React.createElement('article', { key: observation.observationId || `${task.taskId}:${index}`, style: { minWidth: 0, display: 'grid', gap: 5, padding: '7px 8px', borderRadius: 8, background: colors.surface2, fontSize: 10.5, lineHeight: 1.45 } },
+                  React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8 } }, React.createElement('strong', { title: observation.skill, style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, observation.skill || '未知 Skill'), React.createElement('time', { dateTime: observation.updatedAt || observation.createdAt, style: { flex: '0 0 auto', color: colors.muted } }, fmt(observation.updatedAt || observation.createdAt))),
+                  observation.queryTerms?.length ? React.createElement('div', { title: observation.queryTerms.join(' / '), style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: colors.muted } }, observation.queryTerms.join(' / ')) : null,
+                  React.createElement('div', { 'aria-label': '触发、深读、采用、验证和效果摘要', style: { display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0,1fr))', gap: 4 } },
+                    React.createElement('span', null, '触发：已记录'),
+                    React.createElement('span', null, `深读：${observationStageValue(observation.topicReads)}`),
+                    React.createElement('span', null, `采用：${observationStageValue(observation.adoption)}`),
+                    React.createElement('span', null, `验证：${observationStageValue(observation.liveVerify ?? observation.liveVerification)}`),
+                    React.createElement('span', null, `效果：${observationStageValue(observation.outcome)}`)))))
         const hovered = hoveredTaskId === task.taskId
         const navigating = navigatingSessionId === task.childSessionId
         return React.createElement('div', { key: task.taskId, onMouseEnter: () => setHoveredTaskId(task.taskId), onMouseLeave: () => setHoveredTaskId(''), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, boxShadow: hovered ? '0 8px 20px rgba(15,23,42,.08), 0 2px 6px rgba(15,23,42,.05)' : 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.08))', padding: '11px 13px', color: 'inherit', display: 'grid', gap: 6, opacity: queued ? 0.72 : 1, transition: 'box-shadow 180ms ease' } },
@@ -333,6 +375,9 @@ window.__ModuleLoader__.load({
             showCheckpoints ? React.createElement('section', null,
               React.createElement('div', { role: 'button', tabIndex: 0, 'aria-expanded': checkpointsExpanded, 'aria-label': checkpointsExpanded ? '收起检查点' : `展开全部 ${checkpoints.length} 个检查点`, 'data-task-card-action': 'toggle-checkpoints', onClick: (event) => { event.stopPropagation(); setExpandedCheckpointTaskId(checkpointsExpanded ? '' : task.taskId) }, onKeyDown: (event) => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); event.stopPropagation(); setExpandedCheckpointTaskId(checkpointsExpanded ? '' : task.taskId) }, style: { minHeight: 24, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 8, fontSize: 10.5, cursor: 'pointer' } }, React.createElement('span', { style: { flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: 4, color: colors.muted } }, React.createElement(IconChecklistOutline14, { size: 12, 'aria-label': '任务' }), '任务'), React.createElement('div', { role: 'progressbar', 'aria-label': '检查点进度', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': progress, style: { flex: '1 1 auto', minWidth: 24, height: 4, borderRadius: 999, overflow: 'hidden', background: `color-mix(in srgb, ${colors.muted} 22%, transparent)` } }, React.createElement('div', { style: { width: `${progress}%`, height: '100%', borderRadius: 'inherit', background: completedCheckpointCount === checkpoints.length ? statusTone.done : colors.accent, transition: 'width 180ms ease' } })), React.createElement('span', { style: { flex: '0 0 auto', color: completedCheckpointCount === checkpoints.length ? statusTone.done : colors.muted } }, `${completedCheckpointCount} / ${checkpoints.length}`), React.createElement(checkpointsExpanded ? IconChevronUpOutline14 : IconChevronDownOutline14, { size: 14, 'aria-hidden': true, style: { flex: '0 0 auto', color: colors.muted } })),
               checkpointsExpanded ? React.createElement('div', { style: { display: 'grid', gap: 4, padding: '2px 9px 9px' } }, ...checkpoints.map((checkpoint, index) => { const completed = completedCheckpointNames.has(checkpoint); const current = !completed && currentCheckpoint === checkpoint; const tone = completed ? statusTone.done : current ? colors.accent : colors.muted; const duration = checkpointDuration(checkpoint, currentCheckpointEvents, Date.now()); return React.createElement('div', { key: `${index}:${checkpoint}`, title: checkpoint, style: { minWidth: 0, display: 'grid', gridTemplateColumns: '12px minmax(0,1fr) 64px', gap: 5, alignItems: 'start', fontSize: 10.5, lineHeight: 1.4 } }, React.createElement('span', { 'aria-hidden': true, style: { width: 12, height: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: tone } }, completed ? React.createElement(CheckpointDoneIcon, { size: 12 }) : current ? React.createElement(StateDot, { state: 'ongoing', size: 10 }) : '○'), React.createElement('span', { style: { color: 'inherit', display: '-webkit-box', WebkitLineClamp: 'unset', WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, checkpoint), React.createElement('span', { title: `执行时长 ${duration}`, style: { width: 64, color: colors.muted, textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } }, duration)) })) : null) : null,
+            React.createElement('section', { 'aria-label': 'Self-improving 结构化观测' },
+              React.createElement('div', { role: 'button', tabIndex: 0, 'aria-expanded': skillObservationsExpanded, 'data-task-card-action': 'toggle-skill-observations', onClick: (event) => { event.stopPropagation(); void toggleSkillObservations(task.taskId) }, onKeyDown: (event) => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); event.stopPropagation(); void toggleSkillObservations(task.taskId) }, style: { width: '100%', minHeight: 24, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, color: colors.muted, cursor: 'pointer', fontSize: 10.5, textAlign: 'left' } }, React.createElement('span', null, 'Self-improving 观测'), React.createElement(skillObservationsExpanded ? IconChevronUpOutline14 : IconChevronDownOutline14, { size: 14, 'aria-hidden': true })),
+              skillObservationBody),
           task.waitingReason ? React.createElement('div', { title: task.waitingReason, style: { fontSize: 10.5, lineHeight: 1.45, color: colors.warning } }, `等待：${task.waitingReason}`) : null),
           React.createElement('div', { style: { minWidth: 0, marginTop: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
             React.createElement('span', { title: `最后活动 ${fmt(task.updatedAt)}`, style: { minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt)),

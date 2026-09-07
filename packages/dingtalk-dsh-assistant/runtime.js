@@ -749,9 +749,11 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
 
 根据当前任务现场与已注入描述命中任何适用 Skill 时，必须加载并遵循其完整说明。一旦加载 Skill，不得在尚未完成其资格判断、必要操作、验证与读回，或依据 Skill 说明明确判定本次无需操作之前，静默返回业务主线。没有满足执行条件时不得为了完成 Task 硬凑 Skill 产物。
 
+实际使用 \`use-self-improving\` 时，必须通过 submit_self_improving_observation 按真实进展提交 query、index、topic-read、adoption、live-verify、outcome 阶段。目录曝光、系统提示、普通文本提及或仅看到 Skill catalog 不算使用，不得提交；读取索引不等于采用，工具成功不等于现场验证，证据不足时 outcome 必须保持 unknown。
+
 ${quotedMessageRecoveryPolicy('leaf')}
 
-Task objective 限制的是业务动作范围，包括业务代码、业务数据、部署环境、外部系统和对外操作。适用的工作区规则，或由工作区规则授权且由 Skill 明确要求的内部维护动作不视为扩大 Task objective，但必须严格限制在该规则和 Skill 声明的内部目录、数据类型和操作边界内，不得借此修改未获授权的业务代码、业务数据、环境或外部系统。Runtime 不指定或绑定任何具体 Skill，是否适用及如何执行以当前注入的 Skill 描述和完整说明为准。
+Task objective 限制的是业务动作范围，包括业务代码、业务数据、部署环境、外部系统和对外操作。适用的工作区规则，或由工作区规则授权且由 Skill 明确要求的内部维护动作不视为扩大 Task objective，但必须严格限制在该规则和 Skill 声明的内部目录、数据类型和操作边界内，不得借此修改未获授权的业务代码、业务数据、环境或外部系统。除为 \`use-self-improving\` 提供结构化观测提交能力外，Runtime 不指定 Skill 的适用性或执行步骤，是否适用及如何执行以当前注入的 Skill 描述和完整说明为准。
 
 ### 与主会话的内部检查点
 
@@ -828,6 +830,37 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         execute: async (args, exec) => {
           if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_checkpoint_wrong_session:${task.taskId}`)
           return submitTaskCheckpointInternal(task.taskId, args)
+        },
+      })
+      agentCtx.tools.register({
+        name: 'submit_self_improving_observation',
+        description: 'Record one truthful stage of the current Task use-self-improving evidence chain. Never include prompts, source content, raw tool results, credentials, personal data, or message text.',
+        parameters: { type: 'object', additionalProperties: false, properties: {
+          observationId: { type: 'string' }, inputVersion: { type: 'integer' }, runSequence: { type: 'integer' },
+          stage: { type: 'string', enum: ['query', 'index', 'topic-read', 'adoption', 'live-verify', 'outcome'] },
+          queryTerms: { type: 'array', items: { type: 'string' } }, scope: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string' }, project: { type: 'string' }, sourceTypes: { type: 'array', items: { type: 'string' } }, tags: { type: 'array', items: { type: 'string' } } }, required: ['kind'] },
+          hits: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { entryId: { type: 'string' }, scope: { type: 'string' }, learnedAt: { type: 'string' }, rank: { type: 'number' } }, required: ['entryId', 'scope', 'learnedAt'] } },
+          entryId: { type: 'string' }, readStatus: { type: 'string', enum: ['success', 'error'] },
+          status: { type: 'string', enum: ['adopted', 'rejected', 'unknown', 'passed', 'failed', 'not-run', 'not-applicable'] }, actionRef: { type: 'string' }, targetRef: { type: 'string' }, evidenceRef: { type: 'string' },
+          effect: { type: 'string', enum: ['positive', 'neutral', 'negative', 'unknown'] }, evidenceLevel: { type: 'string', enum: ['live-verified', 'task-result', 'self-reported', 'none'] },
+        }, required: ['observationId', 'inputVersion', 'runSequence', 'stage'] },
+        output: {
+          schema: { type: 'object', additionalProperties: false, properties: {
+            accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, observationId: { type: 'string' }, stage: { type: 'string' },
+          }, required: ['accepted', 'taskId', 'observationId', 'stage'] },
+          render: (_args, out) => [{ type: 'text', text: `Self-improving observation accepted: ${out.observationId} -> ${out.stage}` }],
+        },
+        execute: async (args, exec) => {
+          if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`self_improving_observation_wrong_session:${task.taskId}`)
+          if (typeof store.recordSelfImprovingObservation !== 'function') throw new Error('self_improving_observation_store_unavailable')
+          const current = store.getTask(task.taskId)
+          if (current?.inputVersion !== args.inputVersion) throw new Error(`task_input_version_stale:${task.taskId}`)
+          if (current?.runSequence !== args.runSequence) throw new Error(`task_run_sequence_stale:${task.taskId}`)
+          const { observationId, inputVersion, runSequence, stage, ...detail } = args
+          const eventKey = `self-improving:${observationId}:${stage}:${createHash('sha256').update(JSON.stringify(detail)).digest('hex').slice(0, 16)}`
+          const recorded = await store.recordSelfImprovingObservation({ taskId: task.taskId, sessionId: task.childSessionId, eventKey, observationId, inputVersion, runSequence, stage, detail })
+          const observation = recorded.observation ?? recorded
+          return { accepted: true, taskId: task.taskId, observationId: observation.observationId, stage: args.stage }
         },
       })
       agentCtx.tools.register({

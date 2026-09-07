@@ -18,7 +18,7 @@ const stripSource = ({ sourceMessageId, sourceMessageIds, triggerHistory, messag
 export function planTopicMigration(document) {
   if (document?.unit?.name !== DOMAIN || document.unit.version !== 6 || !document.tables || Array.isArray(document.tables)) throw new Error('migration_source_must_be_v6_json_unit')
   const output = structuredClone(document)
-  output.unit.version = 7
+  output.unit.version = residentDomainSpec.version
   output.global ??= null
   const issues = [], mappings = []
   for (const table of Object.keys(document.tables)) if (!(table in residentDomainSpec.tables)) issues.push({ type: 'unknown-table', table })
@@ -120,7 +120,7 @@ export function planTopicMigration(document) {
     for (const task of Object.values(output.tables.tasks)) validateTopicRefs(groupById.get(task.groupId), task.topicRefs)
   }
   const counts = { groups: Object.keys(output.tables.groups ?? {}).length, messages: [...groupById.values()].reduce((count, group) => count + group.messages.length, 0), tasks: sourceTasks.size, topics: mappings.length, outbox: [...groupById.values()].reduce((count, group) => count + group.outbox.length, 0) }
-  return { document: output, report: { ready: issues.length === 0, sourceVersion: 6, targetVersion: 7, counts, mappings, issues } }
+  return { document: output, report: { ready: issues.length === 0, sourceVersion: 6, targetVersion: residentDomainSpec.version, counts, mappings, issues } }
 }
 
 export async function migrateTopicStorage({ source, target, check = false }) {

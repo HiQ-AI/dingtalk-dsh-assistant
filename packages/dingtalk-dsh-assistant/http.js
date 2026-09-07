@@ -133,6 +133,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/task-timings') return send(response, 200, store.listTaskTimings())
   if (request.method === 'GET' && url.pathname === '/state/authorizations') return send(response, 200, store.listAuthorizationRequests())
   if (request.method === 'GET' && url.pathname === '/state/activities') return send(response, 200, store.listActivities(url.searchParams.get('taskId') ?? undefined))
+  if (request.method === 'GET' && url.pathname === '/state/self-improving-observations') return send(response, 200, store.listSelfImprovingObservations(url.searchParams.get('taskId') ?? undefined))
   if (request.method === 'GET' && url.pathname === '/state/supervisor/alerts') return send(response, 200, store.listAlerts())
   if (request.method === 'GET' && url.pathname === '/state/dws-bridge') return send(response, 200, store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] })
   if (request.method === 'GET' && url.pathname === '/state/environment') return send(response, 200, await store.inspectEnvironment())

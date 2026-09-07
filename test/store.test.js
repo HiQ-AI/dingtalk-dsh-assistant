@@ -13,8 +13,8 @@ function memoryFacility(seed = new Map()) {
   return { seed, facility: { async open() { return { table, close: async () => undefined } } } }
 }
 
-test('Topic破坏性模型使用独立domain版本7', () => {
-  assert.equal(residentDomainSpec.version, 7)
+test('Topic破坏性模型与结构化观测使用独立domain版本8', () => {
+  assert.equal(residentDomainSpec.version, 8)
 })
 
 test('群配置初始化、职责修改和删除均持久化', async () => {
@@ -149,6 +149,52 @@ test('Task 确实缺少工具结果时保持未配对标记', async () => {
   const timing = store.listTaskTimings().find((item) => item.taskId === created.task.taskId)
   assert.equal(timing.complete, false)
   assert.deepEqual(timing.missing, ['unpaired-tool-events'])
+})
+
+test('use-self-improving 观测按 Task 与 observation 增量合并且事件幂等', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'group-a' })
+  await store.ingest({ groupId: 'group-a', messageId: 'm-observation', text: '查询历史经验', occurredAt: '2026-09-07T01:00:00Z', senderName: '张三', senderOpenDingTalkId: 'od-zhang' })
+  const created = await createRoutedTask(store, { groupId: 'group-a', sourceMessageId: 'm-observation', title: '查询经验', objective: '查询并应用经验', acceptanceCriteria: ['效果可观测'] })
+  const base = { taskId: created.task.taskId, sessionId: created.task.childSessionId, inputVersion: created.task.inputVersion, runSequence: created.task.runSequence, observationId: 'observation-1' }
+  const query = await store.recordSelfImprovingObservation({ ...base, eventKey: 'event-1', stage: 'query', detail: { queryTerms: ['授权边界'], scope: { kind: 'project', project: 'baibu-agent', tags: ['authorization'] } }, occurredAt: '2026-09-07T01:00:01Z' })
+  assert.equal(query.created, true)
+  const duplicate = await store.recordSelfImprovingObservation({ ...base, eventKey: 'event-1', stage: 'query', detail: { queryTerms: ['不会覆盖'], scope: { kind: 'project' } } })
+  assert.equal(duplicate.created, false)
+  assert.deepEqual(duplicate.observation.queryTerms, ['授权边界'])
+  await store.recordSelfImprovingObservation({ ...base, eventKey: 'event-2', stage: 'index', detail: { hits: [{ entryId: 'entry-1', scope: 'project', learnedAt: '2026-09-01', rank: 1 }] } })
+  await store.recordSelfImprovingObservation({ ...base, eventKey: 'event-3', stage: 'topic-read', detail: { entryId: 'entry-1', readStatus: 'success' } })
+  await store.recordSelfImprovingObservation({ ...base, eventKey: 'event-4', stage: 'adoption', detail: { status: 'adopted', actionRef: 'unauthorized-403-test' } })
+  await store.recordSelfImprovingObservation({ ...base, eventKey: 'event-5', stage: 'live-verify', detail: { status: 'passed', targetRef: 'uat', evidenceRef: 'round-1.md' } })
+  await store.recordSelfImprovingObservation({ ...base, eventKey: 'event-6', stage: 'outcome', detail: { effect: 'positive', evidenceLevel: 'live-verified' } })
+  const observations = store.listSelfImprovingObservations(created.task.taskId)
+  assert.equal(observations.length, 1)
+  assert.equal(observations[0].eventKeys.length, 6)
+  assert.equal(observations[0].topicReads[0].readStatus, 'success')
+  assert.equal(observations[0].outcome.effect, 'positive')
+  assert.deepEqual(store.listSelfImprovingObservations('task-other'), [])
+})
+
+test('use-self-improving 拒绝未知阶段、跨 Session 合并和无现场证据的正向效果', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'group-a' })
+  await store.ingest({ groupId: 'group-a', messageId: 'm-evidence', text: '验证效果', occurredAt: '2026-09-07T01:00:00Z', senderName: '李四', senderOpenDingTalkId: 'od-li' })
+  const created = await createRoutedTask(store, { groupId: 'group-a', sourceMessageId: 'm-evidence', title: '验证效果', objective: '验证经验效果', acceptanceCriteria: ['拒绝伪正向'] })
+  const base = { taskId: created.task.taskId, sessionId: created.task.childSessionId, inputVersion: created.task.inputVersion, runSequence: created.task.runSequence, observationId: 'observation-guard' }
+  await assert.rejects(store.recordSelfImprovingObservation({ ...base, eventKey: 'raw-query', stage: 'query', detail: { query: '可能包含敏感正文', scope: { kind: 'project' } } }), /self_improving_observation_event_invalid/)
+  await assert.rejects(store.recordSelfImprovingObservation({ ...base, eventKey: 'premature-index', stage: 'index', detail: { hits: [] } }), /self_improving_observation_query_required/)
+  await store.recordSelfImprovingObservation({ ...base, eventKey: 'query', stage: 'query', detail: { queryTerms: ['发布证据'], scope: { kind: 'project' } } })
+  await assert.rejects(store.recordSelfImprovingObservation({ ...base, eventKey: 'unknown', stage: 'finished', detail: {} }), /self_improving_observation_event_invalid/)
+  await assert.rejects(store.recordSelfImprovingObservation({ ...base, sessionId: 'session-other', eventKey: 'other-session', stage: 'adoption', detail: { status: 'unknown' } }), /self_improving_observation_session_conflict/)
+  await assert.rejects(store.recordSelfImprovingObservation({ ...base, inputVersion: base.inputVersion + 1, eventKey: 'other-run', stage: 'index', detail: { hits: [] } }), /self_improving_observation_run_conflict/)
+  await assert.rejects(store.recordSelfImprovingObservation({ ...base, eventKey: 'raw-source', stage: 'index', detail: { hits: [{ entryId: 'entry-1', source: 'C:\\secret.txt', scope: 'project', learnedAt: '2026-09-01' }] } }), /self_improving_observation_event_invalid/)
+  await store.recordSelfImprovingObservation({ ...base, eventKey: 'index', stage: 'index', detail: { hits: [] } })
+  await store.recordSelfImprovingObservation({ ...base, eventKey: 'adoption', stage: 'adoption', detail: { status: 'unknown' } })
+  await store.recordSelfImprovingObservation({ ...base, eventKey: 'verify', stage: 'live-verify', detail: { status: 'not-run' } })
+  await assert.rejects(store.recordSelfImprovingObservation({ ...base, eventKey: 'unsupported-positive', stage: 'outcome', detail: { effect: 'positive', evidenceLevel: 'task-result' } }), /self_improving_positive_evidence_required/)
+  assert.equal(store.listSelfImprovingObservations(created.task.taskId)[0].outcome, undefined)
 })
 
 test('并发创建不同 Task 不会用旧 scheduler 快照互相覆盖', async () => {

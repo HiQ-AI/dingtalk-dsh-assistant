@@ -274,6 +274,22 @@ test('任务卡不请求或展示执行轮次耗时统计', async () => {
   assert.doesNotMatch(source, /本轮用时|当前执行轮次统计不完整|未细分为运行状态中/)
 })
 
+test('任务卡仅在展开时按需读取并展示Self-improving结构化观测', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const globalLoad = source.slice(source.indexOf('async function load()'), source.indexOf('function SidebarAction'))
+  assert.doesNotMatch(globalLoad, /self-improving-observations/)
+  assert.match(source, /data-task-card-action': 'toggle-skill-observations'/)
+  assert.match(source, /get\(`\/state\/self-improving-observations\?taskId=\$\{encodeURIComponent\(taskId\)\}`\)/)
+  assert.match(source, /Object\.prototype\.hasOwnProperty\.call\(skillObservationsByTaskId, taskId\)/)
+  assert.match(source, /Array\.isArray\(observations\) \? observations : observations\?\.observations \|\| \[\]/)
+  assert.match(source, /触发：已记录/)
+  assert.match(source, /observationStageValue\(observation\.topicReads\)/)
+  assert.match(source, /observationStageValue\(observation\.adoption\)/)
+  assert.match(source, /observationStageValue\(observation\.liveVerify \?\? observation\.liveVerification\)/)
+  assert.match(source, /observationStageValue\(observation\.outcome\)/)
+  assert.match(source, /旧数据未观测/)
+})
+
 test('Agent配置页面提供叶子任务并行上限且默认值为5', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /叶子任务并行上限/)

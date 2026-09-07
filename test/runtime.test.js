@@ -356,6 +356,41 @@ test('叶子结果与检查点拒绝缺失或过期 inputVersion/runSequence', a
   assert.equal((h.store.getTask(task.taskId).checkpoints ?? []).length, 0)
 })
 
+test('self-improving 观测只由正确 Task 叶子按当前执行版本提交', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const leaf = h.handles.get(task.childSessionId)
+  const tool = leaf.tools.get('submit_self_improving_observation')
+  assert.ok(tool)
+  assert.equal(h.store.listSelfImprovingObservations(task.taskId).length, 0, '仅注入规则和工具目录不得产生假触发')
+  assert.ok(leaf.sections.some((section) => String(typeof section.text === 'function' ? section.text() : section.text).includes('目录曝光、系统提示、普通文本提及或仅看到 Skill catalog 不算使用')))
+
+  const args = { observationId: 'obs-1', ...inputVersion(task), stage: 'query', queryTerms: ['项目', '发布约束'], scope: { kind: 'project', project: 'dingtalk-dsh-assistant', tags: ['release'] } }
+  const accepted = await tool.execute(args, { agent: leaf.agent })
+  assert.deepEqual(accepted, { accepted: true, taskId: task.taskId, observationId: 'obs-1', stage: 'query' })
+  await tool.execute(args, { agent: leaf.agent })
+  const observations = h.store.listSelfImprovingObservations(task.taskId)
+  assert.equal(observations.length, 1)
+  assert.equal(observations[0].eventKeys.length, 1, '相同阶段与内容重试必须幂等')
+  assert.equal(observations[0].sessionId, task.childSessionId)
+
+  await tool.execute({ observationId: 'obs-1', ...inputVersion(task), stage: 'index', hits: [{ entryId: 'entry-1', scope: 'project', learnedAt: '2026-09-01' }] }, { agent: leaf.agent })
+  await tool.execute({ observationId: 'obs-1', ...inputVersion(task), stage: 'topic-read', entryId: 'entry-1', readStatus: 'success' }, { agent: leaf.agent })
+  await tool.execute({ observationId: 'obs-1', ...inputVersion(task), stage: 'adoption', status: 'adopted', actionRef: 'check-current-release' }, { agent: leaf.agent })
+  await tool.execute({ observationId: 'obs-1', ...inputVersion(task), stage: 'live-verify', status: 'passed', targetRef: 'package-version', evidenceRef: 'test:version-check' }, { agent: leaf.agent })
+  await tool.execute({ observationId: 'obs-1', ...inputVersion(task), stage: 'outcome', effect: 'positive', evidenceLevel: 'live-verified' }, { agent: leaf.agent })
+  const completed = h.store.listSelfImprovingObservations(task.taskId)[0]
+  assert.deepEqual(completed.indexHits.map((hit) => hit.entryId), ['entry-1'])
+  assert.equal(completed.topicReads[0].readStatus, 'success')
+  assert.equal(completed.adoption.status, 'adopted')
+  assert.equal(completed.liveVerify.status, 'passed')
+  assert.equal(completed.outcome.effect, 'positive')
+
+  await assert.rejects(tool.execute({ ...args, observationId: 'obs-foreign' }, { agent: h.resident().agent }), /self_improving_observation_wrong_session/)
+  await assert.rejects(tool.execute({ ...args, observationId: 'obs-stale', inputVersion: task.inputVersion + 1 }, { agent: leaf.agent }), /task_input_version_stale/)
+  await assert.rejects(tool.execute({ ...args, observationId: 'obs-stale-run', runSequence: task.runSequence + 1 }, { agent: leaf.agent }), /task_run_sequence_stale/)
+  assert.equal(h.store.listSelfImprovingObservations(task.taskId).length, 1)
+})
+
 test('检查点逐项推进并由结构化内部审阅确认，不能跳项完成', async (t) => {
   const h = await setup(t), task = await createTask(h)
   await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['一', '二'] })
