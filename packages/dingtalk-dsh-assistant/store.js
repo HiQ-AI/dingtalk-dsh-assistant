@@ -110,6 +110,20 @@ export const residentDomainSpec = defineDomain({
   },
 })
 
+function settleCompletedMessageDeliveries(messages, topics) {
+  const deliveredAt = new Date().toISOString()
+  return messages.map((message) => {
+    if (message.routingStatus !== 'routed' || ['delivered', 'skipped'].includes(message.agentDeliveryStatus)) return message
+    const activeEntries = topics.flatMap((topic) => {
+      const entry = [...topic.entries].reverse().find((item) => item.messageId === message.messageId)
+      return entry?.action === 'add' && entry.messageVersion === message.messageVersion ? [{ topic, entry }] : []
+    })
+    if (activeEntries.some(({ topic, entry }) => topic.processedRevision < entry.revision)) return message
+    const { agentDeliveryError: _error, agentDecisionRetryAt: _retryAt, ...current } = message
+    return { ...current, agentDeliveryStatus: 'delivered', agentDeliveryAt: deliveredAt }
+  })
+}
+
 export function taskSessionId(taskId) {
   if (typeof taskId !== 'string' || !taskId.startsWith('task-')) throw new Error(`task_id_invalid:${taskId}`)
   return `session-${taskId}`
@@ -382,8 +396,9 @@ export async function openResidentStore(storageDomain) {
           })
         }
         receipt = { routeId, fingerprint: requestFingerprint, routingRevision: latest.routingRevision + 1, topicIdsByKey, createdAt: new Date().toISOString() }
+        const routedMessages = latest.messages.map((message) => routes.some((route) => route.messageId === message.messageId) ? { ...message, routingStatus: 'routed', routingError: undefined } : message)
         return { ...latest, topics, routingRevision: latest.routingRevision + 1, routeHistory: [...latest.routeHistory, receipt],
-          messages: latest.messages.map((message) => routes.some((route) => route.messageId === message.messageId) ? { ...message, routingStatus: 'routed', routingError: undefined } : message) }
+          messages: settleCompletedMessageDeliveries(routedMessages, topics) }
       })
       return { status: 'routed', group, topics: group.topics, ...receipt }
     }),
@@ -497,11 +512,18 @@ export async function openResidentStore(storageDomain) {
         if (record.operations.some((operation) => operation.status !== 'applied')) throw new Error('topic_decision_operations_pending')
         result = { ...record, status: 'completed', updatedAt: new Date().toISOString() }
         const update = record.decision.topicUpdate ?? {}
-        return { ...latest, taskReservations: latest.taskReservations.filter((item) => item.decisionId !== decisionId), topics: latest.topics.map((item) => item.topicId !== topicId ? item : {
+        const topics = latest.topics.map((item) => item.topicId !== topicId ? item : {
           ...item, ...(update.summary !== undefined ? { summary: update.summary, summaryRevision: record.revision } : {}), ...(update.status && item.revision === record.revision ? { status: update.status } : {}), ...(update.openQuestions ? { openQuestions: update.openQuestions } : {}),
-          processedRevision: Math.max(item.processedRevision, record.revision), decisions: item.decisions.map((previous) => previous.decisionId === decisionId ? result : previous), updatedAt: result.updatedAt }) }
+          processedRevision: Math.max(item.processedRevision, record.revision), decisions: item.decisions.map((previous) => previous.decisionId === decisionId ? result : previous), updatedAt: result.updatedAt })
+        return { ...latest, taskReservations: latest.taskReservations.filter((item) => item.decisionId !== decisionId), topics,
+          messages: settleCompletedMessageDeliveries(latest.messages, topics) }
       })
       return result
+    }),
+    reconcileMessageDeliveries: ({ groupId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      return groups.update(entry[0], (latest) => ({ ...latest, messages: settleCompletedMessageDeliveries(latest.messages, latest.topics) }))
     }),
     updateTopicTitle: ({ groupId, topicId, expectedTitle, expectedSummary, title }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
@@ -511,6 +533,18 @@ export async function openResidentStore(storageDomain) {
         if (topic.topicId !== topicId) return topic
         if (topic.title !== expectedTitle || topic.summary !== expectedSummary) return topic
         result = { status: 'accepted', topic: { ...topic, title, updatedAt: new Date().toISOString() } }
+        return result.topic
+      }) }))
+      return result
+    }),
+    updateTopicSummary: ({ groupId, topicId, expectedRevision, expectedSummary, summary }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let result = { status: 'topic-stale' }
+      await groups.update(entry[0], (latest) => ({ ...latest, topics: latest.topics.map((topic) => {
+        if (topic.topicId !== topicId) return topic
+        if (topic.revision !== expectedRevision || topic.summary !== expectedSummary) return topic
+        result = { status: 'accepted', topic: { ...topic, summary, summaryRevision: topic.revision, updatedAt: new Date().toISOString() } }
         return result.topic
       }) }))
       return result

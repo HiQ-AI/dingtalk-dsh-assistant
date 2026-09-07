@@ -213,7 +213,7 @@ Topic 处理模型使用存储 domain v7。已有 v6 数据必须先按[离线�
 
 每条新消息先可靠持久化到 Inbox，接收接口随后返回；Resident 使用 `group_topic_route_submit` 对冻结的消息批次归类，再以 Topic 为单位处理增量。Topic 跨 turn 存在，一个消息可以关联多个 Topic；已归类的无关话题不会使当前话题决策失效。同群仍有未归类输入时，应先完成归类再判断其影响。归类、Topic 决策与 Task 执行分别维护进度，DWS 补拉完成只证明可靠接收。
 
-Topic 的 `title` 是对齐 Task 名称的 8–20 字短语，最多 30 字，细节保存在 `summary`。Runtime 发现历史 Topic 标题超过 30 字且已有摘要时，会向 Resident 发出独立的标题迁移请求，由模型根据摘要重新概括后通过 `group_topic_title_submit` 原子写回；禁止直接截断摘要。请求期间标题或摘要发生变化会返回过期状态并按新快照重试；没有摘要的历史 Topic 保留原标题。
+Topic 的 `title` 是对齐 Task 名称的 8–20 字短语，最多 30 字，细节保存在 `summary`。v6 迁移形成的历史 Topic 如果摘要为空，Runtime 会先让 Resident 根据其固定版本引用消息生成独立摘要；随后再根据摘要重新概括标题并通过 `group_topic_title_submit` 原子写回，禁止直接截断摘要。摘要和标题分两步提交，每步都校验 Topic 快照，过期结果不会覆盖新内容。
 
 入站消息引用其他钉钉消息时，Steer 信封只携带稳定的引用消息 ID；正常情况下 Resident 直接使用同一会话已经收到的正文。如果该正文因消息传递异常、会话恢复或上下文压缩而不在当前可见上下文，Resident 必须加载 `dingtalk-chat` Skill，并使用插件配置的同一 DWS profile 执行 `chat +messages-mget` 主动读取；取回的消息仍有 `quotedMessage.messageId` 时继续向上查询，直至整条引用链结束。查询结果必须校验完整性，必要时读取链上的图片或文件。查询失败、结果不完整、未命中或检测到循环时，不得要求群成员补发原问题、正文或截图，也不得猜测并回复；本次判断进入 `decision-retrying`，由 Runtime 在故障恢复后自动重试。
 
@@ -237,7 +237,7 @@ Task 可设置独立的简短标题用于看板展示；标题与 objective 分�
 
 Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存标题、目标、验收标准、执行状态、结果，以及 `topicRefs: [{topicId, revision}]` 和 `inputVersion`；不保存 sourceMessageId、triggerHistory、messageHistory 或群消息正文副本。`group_task_context_get` 返回执行约定与 Topic 引用，原始上下文由 `group_topic_context_get` 按固定 revision 分页读取。只有确实影响任务的新增信息才推进 inputVersion，不向每个关联 Task 广播全部讨论。运行中和等待中的 Task 接纳上下文时继续原轮次；完成或归档 Task 只有被明确重开才开启新轮次。runHistory 和 objectiveHistory 保留 Topic 版本与执行版本，归档不删除历史。
 
-消息的 `routingStatus` 表示待归类、已归类或归类失败；Topic 的 `processedRevision` 表示决策及所需动作已可靠落地；Task 的输入下发、输入确认与任务完成另行记录。任何一项均不能替代另一项。运行看板的“话题”页在左侧只展示名称与摘要，右侧分开展示完整标题、话题摘要、待解决问题和关联任务；固定版本引用消息默认折叠，展开后可分页读取。Task 卡片上的话题链接仍打开该任务接纳的版本。
+消息的 `routingStatus` 表示待归类、已归类或归类失败；Topic 的 `processedRevision` 表示决策及所需动作已可靠落地；Task 的输入下发、输入确认与任务完成另行记录。任何一项均不能替代另一项。运行看板的“话题”页在左侧只展示名称与摘要，右侧分开展示完整标题、话题摘要、待解决问题和关联任务；固定版本消息列表直接展示并支持分页，每条消息所引用的上一条消息默认折叠。Task 卡片上的话题链接仍打开该任务接纳的版本。
 
 常驻群聊主会话只负责上下文理解和结构化选路，不暴露 `get_goal`、`create_goal`、`update_goal`，也不注入 Goal 工具说明。Task 叶子会话仍由 Runtime 使用 DSH Goal 管理执行、阻塞、恢复与完成。
 
