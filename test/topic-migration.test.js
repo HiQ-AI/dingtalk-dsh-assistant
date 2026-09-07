@@ -83,6 +83,7 @@ test('真实SDK JSON迁移check零写、独立目标读回、重复运行与旧�
   await assert.rejects(stat(targetRoot), { code: 'ENOENT' })
   const migrated = await migrateTopicStorage({ source, target })
   assert.equal(migrated.verified, true)
+  assert.equal(JSON.parse(await readFile(target, 'utf8')).unit.version, 7)
   assert.equal((await migrateTopicStorage({ source, target })).written, false)
   assert.equal(await readFile(source, 'utf8'), original)
   const backend = new JsonStorageBackend(targetRoot)
