@@ -1,0 +1,4 @@
+test-and-pack	Run pnpm test	2026-09-07T04:44:24.1930730Z ℹ tests 233
+test-and-pack	Run pnpm test	2026-09-07T04:44:24.1931451Z ℹ pass 233
+test-and-pack	Run pnpm test	2026-09-07T04:44:24.1931790Z ℹ fail 0
+test-and-pack	Run pnpm test	2026-09-07T04:44:24.1932500Z ℹ skipped 0

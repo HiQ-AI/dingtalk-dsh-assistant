@@ -1,0 +1,17 @@
+[
+  {
+    "file": "dingtalk-dsh-assistant-0.5.12.tgz",
+    "bytes": 18593,
+    "sha256": "79963C8C8E301760FCB7B4CB592BD4ADE44AE39C0451E9A3C25269322A8FDE31"
+  },
+  {
+    "file": "zzusp-dingtalk-dsh-assistant-0.5.12.tgz",
+    "bytes": 92720,
+    "sha256": "258E2B59E3AA0DCA54DD055B50AE5D3BB4F899D84FE5B65DC08A0AA157B0ADC5"
+  },
+  {
+    "file": "zzusp-dingtalk-dsh-observer-0.5.12.tgz",
+    "bytes": 17166,
+    "sha256": "58BB78CBB34CF0C4757C8809F1E123CECF37FD0CEEAEE7D37FD660AC0F19290E"
+  }
+]

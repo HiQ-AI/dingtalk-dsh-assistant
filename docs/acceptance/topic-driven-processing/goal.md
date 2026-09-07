@@ -1,6 +1,6 @@
 # Topic 驱动处理实施
 
-> 状态：ACTIVE
+> 状态：COMPLETE（本地实现与 PR 交付）
 > Goal ID：topic-driven-processing
 > 最近维护：2026-09-07T12:39:47+08:00
 > 权威目标：goal.md
@@ -33,13 +33,13 @@
 | SG2 | Runtime 独立决策与恢复 | Topic 门禁、入站接收解耦、结构化内部审阅 | 完成 | round-1.md；round-2/full-tests.log；round-2/native-dsh.json |
 | SG3 | Task 及通知输入迁移 | 版本校验、来源读取、回复回执与所有入口 | 完成 | round-1.md；round-2/full-tests.log；round-2/native-dsh.json |
 | SG4 | API、Observer、假模型、文档 | 可查询/浏览 Topic，完整新协议运行 | 完成 | round-1.md；round-2/full-tests.log；round-2/native-dsh.json |
-| SG5 | 回归、故障验证及 PR | 本地证据矩阵、完整回归、PR 回读 | 进行中 | 最终233/233；round-4.md；待PR及CI |
+| SG5 | 回归、故障验证及 PR | 本地证据矩阵、完整回归、PR 回读 | 完成 | 233/233；PR #63 OPEN；CI 34084158313 success；round-4.md |
 
 ## 当前检查点
 
 - 当前子目标：SG5
-- 唯一下一步：提交最终源码和证据，创建PR并核对CI。
-- 未闭环项：PR及CI；真实模型语义质量、真实DWS、实际profile迁移属于部署验收边界。
+- 唯一下一步：本轮实现与 PR 交付完成；后续按迁移 runbook 独立安排部署验收。
+- 未闭环项：真实模型语义质量、真实DWS、实际profile迁移及持续负载/全强杀点验证仍在矩阵中单列，不属于本轮已完成的本地交付证据。
 
 ## 进展
 
@@ -61,3 +61,5 @@
 
 - 第二轮：全量 `pnpm test` 215/215通过、0跳过；真实DSH 0.1.1-rc.2 + fake模型完成route/decision/3次checkpoint/result/4次内部审阅/通知，未外发。
 - 全局Task提交队列不再等待Leaf创建；Task激活独立排队，可控慢A创建时B Topic仍完成。启动期间取消由持久状态拦截迟到Session，避免复活。
+
+- 最终交付：PR #63 OPEN（https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/63）；CI 34084158313 对实现提交 522a269 全绿，233/233 tests，artifact 已下载核对。后续仅归档文档与证据，不变更源码。

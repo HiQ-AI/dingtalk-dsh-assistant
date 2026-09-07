@@ -21,3 +21,10 @@
 - domain 7 为破坏性存储升级。必须按 docs/ops/topic-storage-migration.md 停写、保留原存储及匹配 Session、迁到独立目标后再切换。已有外部动作不能用恢复旧文件撤销，回退前需对账。
 
 本轮交付是实现、隔离验证与 PR；没有部署、版本发布或向真实群发送测试消息。
+
+## PR 与 CI 回读
+
+- PR #63：<https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/63>，OPEN，base main，head worktree-topic-driven-processing；正文回读与本地文件逐字比较一致。
+- CI：<https://github.com/HiQ-AI/dingtalk-dsh-assistant/actions/runs/34084158313>，源码提交 522a2695d484d16709e0d28a681107a9ee9a277d，completed/success。Windows runner 构建后 git diff 为零，233/233 tests，0 fail/0 skipped，三个包打包并上传成功；记录见 ci-run.json、ci-test-summary.log。
+- API 独立读回 artifact 10004650414，129047 字节，digest `sha256:a7d84c2d7f76c09d84708fce8d294b540c28cd33f9470555c5c22bfc1c5a5fc1`，见 ci-artifacts.json。下载并解包三个 tgz，文件集合与本地包一致，逐文件统一 CRLF/LF 后内容全部一致；CI 包单独记录原始哈希于 ci-packages.json，不混用本地哈希。
+- CI 之后仅提交本段、goal 和 CI 证据，没有改变生产源码、依赖、测试或构建配置，因此没有把文档收尾提交声称为另一次 CI 执行。
