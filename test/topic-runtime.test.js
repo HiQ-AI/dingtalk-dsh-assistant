@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
-import { createTopicCoordinator } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
+import { createTopicCoordinator, projectTopicContext } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
 
 function memoryFacility(snapshot) {
   return new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
@@ -44,6 +44,17 @@ async function setup(t, options = {}) {
 async function ingest(h, messageId, extra = {}) {
   await h.store.ingest({ groupId: 'g', messageId, text: `@助理 ${messageId}`, senderOpenDingTalkId: 'od-a', occurredAt: '2026-09-07T00:00:00Z', ...extra })
 }
+
+test('Topic 固定版本投影在摘要缺失时仍是无损 JSON', () => {
+  const projected = projectTopicContext({
+    groupId: 'g', topicId: 'topic-a', revision: 1, messages: [{ messageId: 'm', quotedMessage: undefined, imageRefs: [{ id: 'a', optional: undefined }] }], total: 1, offset: 0, limit: 50, taskRefs: [],
+    topic: { topicId: 'topic-a', title: 'A', revision: 1, processedRevision: 0, status: 'active', summary: undefined, summaryRevision: 0, openQuestions: [], decisions: [] },
+  })
+  assert.equal('summary' in projected.topic, false)
+  assert.equal('quotedMessage' in projected.messages[0], false)
+  assert.equal('optional' in projected.messages[0].imageRefs[0], false)
+  assert.deepEqual(JSON.parse(JSON.stringify(projected)), projected)
+})
 async function route(h, choices = {}) {
   await h.coordinator.schedule('g')
   const request = h.envelope('[GROUP_TOPIC_ROUTE]')

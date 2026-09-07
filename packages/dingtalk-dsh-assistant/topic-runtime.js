@@ -26,7 +26,7 @@ export function projectTopicContext(context) {
   const { topicId, title, revision, processedRevision, status, summary, summaryRevision, openQuestions } = context.topic
   const pending = context.topic.decisions?.findLast((decision) => decision.status !== 'completed')
   const processing = pending ? { decisionId: pending.decisionId, status: pending.status, appliedOperations: pending.operations.filter((operation) => operation.status === 'applied').length, totalOperations: pending.operations.length, ...(pending.error ? { error: pending.error.slice(0, 1000) } : {}) } : undefined
-  return { ...context, topic: { topicId, title, revision, processedRevision, status, summary, summaryRevision, openQuestions, ...(processing ? { processing } : {}) } }
+  return JSON.parse(JSON.stringify({ ...context, topic: { topicId, title, revision, processedRevision, status, ...(summary === undefined ? {} : { summary }), summaryRevision, openQuestions, ...(processing ? { processing } : {}) } }))
 }
 
 // 请求是可丢弃的模型输入；已经接受的业务意图只以 Store 中的 decision 为准。
