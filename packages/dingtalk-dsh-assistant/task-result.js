@@ -1,6 +1,9 @@
 import { z } from 'zod'
 
+const executionVersion = { inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() }
+
 const completedResultSchema = z.object({
+  ...executionVersion,
   status: z.literal('completed'),
   workType: z.enum(['development', 'non-development']).optional(),
   summary: z.string().trim().min(1),
@@ -10,6 +13,7 @@ const completedResultSchema = z.object({
 }).strict()
 
 const informationWaitingResultSchema = z.object({
+  ...executionVersion,
   status: z.literal('waiting'),
   waitingKind: z.literal('information'),
   summary: z.string().trim().min(1),
@@ -20,6 +24,7 @@ const informationWaitingResultSchema = z.object({
 }).strict()
 
 const humanInterventionWaitingResultSchema = z.object({
+  ...executionVersion,
   status: z.literal('waiting'),
   waitingKind: z.literal('human-intervention'),
   summary: z.string().trim().min(1),
@@ -35,6 +40,7 @@ const humanInterventionWaitingResultSchema = z.object({
 export const taskResultSchema = z.union([completedResultSchema, informationWaitingResultSchema, humanInterventionWaitingResultSchema])
 
 export const taskCheckpointSchema = z.object({
+  ...executionVersion,
   kind: z.enum(['plan-confirmed', 'stage-completed', 'scope-conflict', 'evidence-gap', 'risk-changed']),
   stageTask: z.string().trim().min(1).optional(),
   summary: z.string().trim().min(1),

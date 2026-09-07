@@ -1,0 +1,72 @@
+{
+  "measuredAt": "2026-09-07T04:07:58.456Z",
+  "baseCommit": "0925f0d4ed4f49072454f563477f433b10ebb61d",
+  "backend": "@deepseek-ai/dsh-storage-json@0.1.1-rc.2",
+  "synthetic": true,
+  "input": {
+    "historyMessages": 120,
+    "samples": 40,
+    "totalMessages": 160,
+    "topics": 160
+  },
+  "ingest": {
+    "v6": {
+      "samples": 40,
+      "p50Ms": 2.969300000000203,
+      "p95Ms": 4.367399999999861,
+      "maxMs": 4.462600000000066
+    },
+    "v7": {
+      "samples": 40,
+      "p50Ms": 4.845000000000027,
+      "p95Ms": 6.272500000000036,
+      "maxMs": 7.665100000000166
+    }
+  },
+  "route": {
+    "samples": 40,
+    "p50Ms": 4.7840000000001055,
+    "p95Ms": 7.831299999999828,
+    "maxMs": 8.457200000000057
+  },
+  "acceptDecision": {
+    "samples": 40,
+    "p50Ms": 5.104800000000068,
+    "p95Ms": 6.950900000000047,
+    "maxMs": 8.439499999999953
+  },
+  "groupBytes": {
+    "before": {
+      "v6": 99072,
+      "v7": 162360
+    },
+    "after": {
+      "v6": 132152,
+      "v7": 241211
+    },
+    "growth": {
+      "v6": 33080,
+      "v7": 78851
+    }
+  },
+  "mediumBytes": {
+    "v6": 151718,
+    "v7": 342352
+  },
+  "query": {
+    "topicIndexAllBytes": 22772,
+    "topicIndexPage50Bytes": 7092,
+    "fullContextBytes": 40353,
+    "page10ContextBytes": 12607,
+    "fixedRevision1ContextBytes": 1437,
+    "fullMessages": 41,
+    "pageMessages": 10,
+    "fixedRevisionMessages": 1
+  },
+  "limitations": [
+    "单机顺序合成存储基准，不代表真实模型或网络延迟",
+    "两版只对比相同ingest操作；v7另外保存Topic与决策，大小和写放大有额外成本",
+    "没有已批准的性能SLO，报告实测分位数但不宣称性能验收通过",
+    "SDK JSON每次重写整个domain文件；当前样本不证明无限历史规模"
+  ]
+}

@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { applyResidentCorsHeaders, handleRequest } from './http.js'
+import { applyResidentCorsHeaders, handleRequest, residentErrorStatus } from './http.js'
 import { openResidentStore } from './store.js'
 import { openResidentRuntime } from './runtime.js'
 import { installFakeLlm } from './fake-llm.js'
@@ -43,6 +43,7 @@ export async function configureResidentGroups(runtime, groups = []) {
 }
 
 export async function apply(ctx, config = {}) {
+  if ((config.taskProvenanceMigrations?.length ?? 0) > 0 || (config.taskContinuationMigrations?.length ?? 0) > 0) throw new Error('legacy_task_migrations_removed:use_offline_topic_storage_migration')
   const host = config.host ?? '127.0.0.1'
   const port = config.port ?? 18998
   if (config.fakeModel === true) installFakeLlm(ctx)
@@ -69,8 +70,6 @@ export async function apply(ctx, config = {}) {
   }
   await configureResidentGroups(runtime, config.groups)
   for (const migration of config.humanBlockerReplyMigrations ?? []) await runtime.migrateHumanBlockerReply(migration)
-  for (const migration of config.taskProvenanceMigrations ?? []) await runtime.migrateTaskProvenance(migration)
-  for (const migration of config.taskContinuationMigrations ?? []) await runtime.migrateTaskContinuation(migration)
   const dwsRunner = createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws', cwd: tmpdir() })
   const dwsAdapter = createDwsAdapter({
     enabled: dwsConfig.enabled === true,
@@ -120,7 +119,7 @@ export async function apply(ctx, config = {}) {
     }).catch((error) => {
       ctx.logger.warn(error instanceof Error ? error.stack : String(error))
       applyResidentCorsHeaders(request, response)
-      if (!response.headersSent) response.writeHead(400, {
+      if (!response.headersSent) response.writeHead(residentErrorStatus(error), {
         'content-type': 'application/json; charset=utf-8',
       })
       response.end(JSON.stringify({
@@ -139,7 +138,7 @@ export async function apply(ctx, config = {}) {
     })
   })
   runtime.reconcileCompletedNotifications().catch((error) => ctx.logger.warn(error instanceof Error ? error.stack : String(error)))
-  runtime.recoverPendingMessages().catch((error) => ctx.logger.warn(error instanceof Error ? error.stack : String(error)))
+  runtime.recoverInterruptedDecisions().catch((error) => ctx.logger.warn(error instanceof Error ? error.stack : String(error)))
 
   ctx.effect(() => {
     return async () => {

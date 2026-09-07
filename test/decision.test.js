@@ -1,60 +1,40 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { blockTaskDecisionForUnavailableMedia, buildDecisionPrompt, buildLeafSourceEnvelope, buildReplyReviewCandidates, isDirectedToOtherParticipants, isExplicitAgentDirection, parseGroupDecision, REPLY_REVIEW_CANDIDATE_LIMIT, REPLY_REVIEW_MAX_CHARS, shouldRecheckTaskAssociation } from '../packages/dingtalk-dsh-assistant/decision.js'
+import { blockTaskDecisionForUnavailableMedia, buildReplyReviewCandidates, isDirectedToOtherParticipants, isExplicitAgentDirection, groupDecisionSchema, REPLY_REVIEW_CANDIDATE_LIMIT, REPLY_REVIEW_MAX_CHARS, groupDecisionSubmissionSchema, topicRouteSubmissionSchema } from '../packages/dingtalk-dsh-assistant/decision.js'
 
-test('群决策一次结构化输出可包含多个任务动作', () => {
-  assert.deepEqual(parseGroupDecision('{"actions":[],"reply":"ok"}').actions, [])
-  const decision = parseGroupDecision('{"actions":[{"kind":"task-context","taskId":"task-1","context":"more","sourceMessageIds":["m-1"]},{"kind":"task-reopen","taskId":"task-2","context":"rollback","sourceMessageIds":["m-2"]},{"kind":"new-task","title":"修复问题","objective":"fix","acceptanceCriteria":["有可核验证据"],"sourceMessageIds":["m-3"]},{"kind":"task-cancel","taskId":"task-3","reason":"群里明确说不用处理","sourceMessageIds":["m-4"]}],"reply":"已统一处理"}')
-  assert.deepEqual(decision.actions.map((action) => action.kind), ['task-context', 'task-reopen', 'new-task', 'task-cancel'])
-  assert.equal(parseGroupDecision('{"actions":[],"reason":"not addressed"}').reason, 'not addressed')
+const topicRefs = [{ topicId: 'topic-a', revision: 2 }]
+const executionVersion = { inputVersion: 1, runSequence: 1 }
+
+test('Topic 决策独立提交并以固定 Topic 版本关联任务', () => {
+  const decision = { basisMessageIds: ['m-1'], actions: [
+    { kind: 'task-context', taskId: 'task-1', context: 'more', topicRefs, ...executionVersion },
+    { kind: 'task-reopen', taskId: 'task-2', context: 'rollback', topicRefs, ...executionVersion },
+    { kind: 'new-task', title: '修复问题', objective: 'fix', acceptanceCriteria: ['有可核验证据'], topicRefs },
+    { kind: 'task-cancel', taskId: 'task-3', reason: '群里明确说不用处理', topicRefs, ...executionVersion },
+  ], reply: '已统一处理', topicUpdate: { summary: '已明确执行范围', openQuestions: [], status: 'active' } }
+  assert.deepEqual(groupDecisionSchema.parse(decision), decision)
+  assert.deepEqual(groupDecisionSubmissionSchema.parse({ requestId: 'request-a', topicId: 'topic-a', revision: 2, decision }).decision, decision)
+  assert.equal(groupDecisionSchema.parse({ basisMessageIds: ['m-1'], actions: [], reason: 'not addressed' }).reason, 'not addressed')
 })
 
-test('群决策拒绝无效 JSON、多余字段和缺失目标', () => {
-  assert.throws(() => parseGroupDecision('answer'), /group_decision_invalid_json/)
-  assert.throws(() => parseGroupDecision('{"actions":[],"reply":"ok","objective":"hidden"}'), /group_decision_invalid_schema/)
-  assert.throws(() => parseGroupDecision('{"actions":[{"kind":"new-task","title":"修复问题","objective":"fix"}],"reply":"accepted"}'), /group_decision_invalid_schema/)
-  assert.throws(() => parseGroupDecision('{"actions":[{"kind":"new-task","title":"修复问题","objective":"fix","acceptanceCriteria":["完成"],"sourceMessageIds":[]}],"reply":"accepted"}'), /group_decision_invalid_schema/)
-  assert.throws(() => parseGroupDecision('{"actions":[{"kind":"task-cancel","reason":"不用处理","sourceMessageIds":["m-1"]}],"reply":"已停止"}'), /group_decision_invalid_schema/)
-  assert.throws(() => parseGroupDecision('{"actions":[{"kind":"task-cancel","taskId":"task-1","sourceMessageIds":["m-1"]}],"reply":"已停止"}'), /group_decision_invalid_schema/)
+test('Topic 决策拒绝缺失来源依据、消息副本和缺失执行版本', () => {
+  assert.throws(() => groupDecisionSchema.parse('answer'))
+  assert.throws(() => groupDecisionSchema.parse({ actions: [], reply: 'ok' }))
+  const action = { kind: 'new-task', title: '修复问题', objective: 'fix', acceptanceCriteria: ['完成'], topicRefs }
+  const parseAction = (value) => groupDecisionSchema.parse({ basisMessageIds: ['m-1'], actions: [value], reply: '已接受' })
+  assert.throws(() => parseAction({ ...action, sourceMessageIds: ['m-1'] }))
+  assert.throws(() => parseAction({ ...action, topicRefs: [] }))
+  assert.throws(() => parseAction({ ...action, topicRefs: [{ topicId: 'topic-a', revision: 0 }] }))
+  assert.throws(() => parseAction({ kind: 'task-context', taskId: 'task-1', context: '继续', topicRefs }))
 })
 
-test('决策 prompt 不重复写入活动 Task 快照并保留消息信封', () => {
-  const prompt = buildDecisionPrompt({ messageId: 'm-unique', message: 'hello', senderName: '张三', senderOpenDingTalkId: 'od-user-1', occurredAt: '2026-08-24T13:00:00+08:00', quotedMessage: { messageId: 'm-quoted', senderName: '李四', occurredAt: '2026-08-24 12:59:00', content: 'quoted' }, mediaUnavailable: ['media-1: download failed'], replyReviewCandidateCount: 8 })
-  assert.doesNotMatch(prompt, /当前活动任务|taskId/)
-  assert.doesNotMatch(prompt, /Use new-task|Return one strict JSON/)
-  assert.match(prompt, /消息唯一标识：m-unique\n发送者：张三\n发送者OpenDingTalkId：od-user-1/)
-  assert.doesNotMatch(prompt, /消息 \d+/)
-  assert.match(prompt, /时间：2026-08-24T05:00:00\.000Z/)
-  assert.match(prompt, /引用消息ID：m-quoted/)
-  assert.doesNotMatch(prompt, /发送者：李四|时间：2026-08-24 12:59:00|内容：quoted/)
-  assert.match(prompt, /不得仅因附件暂不可读而断言消息与职责或活动任务无关/)
-  assert.match(prompt, /必须先回答并明确告知对方哪些信息未获取到，不得创建、续接或重开任务/u)
-  assert.match(prompt, /Runtime 已绑定 8 条候选/u)
-  assert.match(prompt, /group_reply_review_get/u)
-  assert.ok(prompt.length < 800, '候选正文不得重新进入普通消息信封')
-})
-
-test('群消息判断不注入失败重试行为说明', () => {
-  const prompt = buildDecisionPrompt({ message: '需要排查', occurredAt: '2026-08-27T04:00:00Z' })
-  assert.doesNotMatch(prompt, /失败消息重试|重新完成原业务判断/)
-})
-
-test('引用消息信封只保留引用消息 ID', () => {
-  const prompt = buildDecisionPrompt({ message: 'reply', occurredAt: '2026-08-25T05:32:10Z', quotedMessage: { messageId: 'm-source', senderName: '向春梅', occurredAt: '2026-08-24 10:42:37', content: '提示用户需要保存 @485388732' } })
-  assert.match(prompt, /引用消息ID：m-source/u)
-  assert.doesNotMatch(prompt, /向春梅|2026-08-24 10:42:37|@485388732/u)
-  const withoutId = buildDecisionPrompt({ message: 'reply', occurredAt: '2026-08-25T05:32:10Z', quotedMessage: { content: '无 ID 引用' } })
-  assert.doesNotMatch(withoutId, /引用消息/u)
-})
-
-test('叶子来源信封只传原始事实并要求独立核验', () => {
-  const envelope = buildLeafSourceEnvelope({ messageId: 'm-source', message: '看一下是不是缓存导致的', senderName: '张三', senderOpenDingTalkId: 'od-1', occurredAt: '2026-08-26T04:00:00Z', quotedMessage: { messageId: 'm-quoted' }, mediaUnavailable: ['media-1: timeout'] })
-  assert.match(envelope, /^\[TASK_SOURCE_EVIDENCE\]/u)
-  assert.match(envelope, /消息ID：m-source[\s\S]*原始消息：\n看一下是不是缓存导致的/u)
-  assert.match(envelope, /引用消息ID：m-quoted/u)
-  assert.match(envelope, /附件读取异常：media-1: timeout/u)
-  assert.match(envelope, /不是已经核验的根因、完成状态或实施方案/u)
+test('归类可新建、追加或多归属，空归属必须有原因', () => {
+  const route = { messageId: 'm-1', messageVersion: 1, topics: [{ topicId: 'topic-a' }, { newTopicKey: 'local-b', title: '第二个话题' }] }
+  assert.deepEqual(topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [route] }).routes, [route])
+  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [] }] }))
+  assert.equal(topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [], reason: '无可延续讨论的噪声' }] }).routes[0].topics.length, 0)
+  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [{ topicId: 'topic-a', newTopicKey: 'invalid', title: '冲突' }] }] }))
 })
 
 test('显式任务指向识别配置名称、别名、DWS登录人或cc指令', () => {
@@ -67,21 +47,21 @@ test('显式任务指向识别配置名称、别名、DWS登录人或cc指令', 
 })
 
 test('回复审阅结构严格区分确认、结果与订正', () => {
-  const decision = parseGroupDecision(JSON.stringify({
-    actions: [], reply: '已收到，我会结合补充继续处理。',
+  const decision = groupDecisionSchema.parse({
+    basisMessageIds: ['m-1'], actions: [], reply: '已收到，我会结合补充继续处理。',
     replyReview: { kind: 'confirmation', reviewedOutboundIds: ['out-1'], sameMatterOutboundIds: ['out-1'], replaceOutboundIds: ['out-1'] },
-  }))
+  })
   assert.equal(decision.replyReview.kind, 'confirmation')
-  assert.deepEqual(parseGroupDecision(JSON.stringify({
-    actions: [], reply: '收到',
+  assert.deepEqual(groupDecisionSchema.parse({
+    basisMessageIds: ['m-1'], actions: [], reply: '收到',
     replyReview: { kind: 'confirmation' },
-  })).replyReview, { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] })
+  }).replyReview, { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] })
 })
 
 test('历史回复候选保留真实消息内容且引用ID不参与同一事项定论', () => {
   const group = {
     messages: [
-      { messageId: 'm-old', text: '优先处理编辑器数据源字段刷数', occurredAt: '2026-09-04T01:00:00Z', senderName: '李辰', quotedMessage: { messageId: 'quote-a', content: '旧的编辑器需求' } },
+      { messageId: 'm-old', messageVersion: 1, text: '优先处理编辑器数据源字段刷数', occurredAt: '2026-09-04T01:00:00Z', senderName: '李辰', quotedMessage: { messageId: 'quote-a', content: '旧的编辑器需求' } },
       { messageId: 'm-unrelated', text: '构建失败需要上传新的代码包', occurredAt: '2026-09-04T01:01:00Z', senderName: '孙鹏', quotedMessage: { messageId: 'quote-shared', content: '构建问题' } },
     ],
     outbox: [
@@ -89,7 +69,8 @@ test('历史回复候选保留真实消息内容且引用ID不参与同一事项
       { outboundId: 'out-quote-only', sourceMessageId: 'm-unrelated', text: '收到，我会检查构建包。', status: 'sent', deliveredMessageId: 'sent-2', replyKind: 'confirmation', matterSourceMessageIds: ['m-unrelated'] },
     ],
   }
-  const tasks = [{ taskId: 'task-editor', sourceMessageId: 'm-old', title: '编辑器刷数', objective: '给编辑器数据集关联已有 source', state: 'running', messageHistory: [group.messages[0]] }]
+  group.topics = [{ topicId: 'topic-old', revision: 1, entries: [{ revision: 1, messageId: 'm-old', messageVersion: 1, action: 'add' }] }]
+  const tasks = [{ taskId: 'task-editor', topicRefs: [{ topicId: 'topic-old', revision: 1 }], title: '编辑器刷数', objective: '给编辑器数据集关联已有 source', state: 'running' }]
   const candidates = buildReplyReviewCandidates({
     group, tasks,
     currentMessages: [{ messageId: 'm-current', text: '这个数据源关联不用重复确认，继续原任务', occurredAt: '2026-09-04T01:02:00Z', quotedMessage: { messageId: 'quote-shared', content: '与构建无关的引用' } }],
@@ -106,7 +87,7 @@ test('历史回复候选保留真实消息内容且引用ID不参与同一事项
 
 test('历史回复候选按真实关联优先且严格限制数量和序列化体积', () => {
   const messages = Array.from({ length: 40 }, (_, index) => ({
-    messageId: `m-${index}`, text: `事项 ${index} 的真实来源正文 ${'细节'.repeat(500)}`,
+    messageId: `m-${index}`, messageVersion: 1, text: `事项 ${index} 的真实来源正文 ${'细节'.repeat(500)}`,
     senderName: `成员 ${index}`, occurredAt: `2026-09-04T01:${String(index).padStart(2, '0')}:00Z`,
     quotedMessage: { messageId: `quote-${index}`, content: `引用 ${index} ${'依据'.repeat(300)}` },
   }))
@@ -118,7 +99,8 @@ test('历史回复候选按真实关联优先且严格限制数量和序列化�
       ...(index === 20 ? { taskIds: ['task-focus'] } : {}),
     })),
   }
-  const tasks = [{ taskId: 'task-focus', sourceMessageId: 'm-20', objective: `聚焦任务 ${'范围'.repeat(500)}`, state: 'running', messageHistory: [messages[20]] }]
+  group.topics = [{ topicId: 'topic-focus', revision: 1, entries: [{ revision: 1, messageId: 'm-20', messageVersion: 1, action: 'add' }] }]
+  const tasks = [{ taskId: 'task-focus', topicRefs: [{ topicId: 'topic-focus', revision: 1 }], objective: `聚焦任务 ${'范围'.repeat(500)}`, state: 'running' }]
   const candidates = buildReplyReviewCandidates({
     group, tasks, focusTaskIds: ['task-focus'],
     currentMessages: [{ messageId: 'm-current', text: '继续聚焦任务，同时核对最早引用', quotedMessage: { messageId: 'm-0' } }],
@@ -180,17 +162,6 @@ test('诊断请求不得被主会话或叶子会话扩大为修复授权', async
   assert.match(source, /后续消息可能明确扩大或收窄同一任务的动作范围/)
 })
 
-test('群消息到叶子只使用Runtime原始证据信封', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
-  assert.match(source, /const sourceEnvelope = sourceMessages\.map\(\(source\) => buildLeafSourceEnvelope/u)
-  assert.match(source, /title: action\.title, objective: action\.objective/u)
-  assert.match(source, /relatedContexts: \[sourceEnvelope\]/u)
-  assert.doesNotMatch(source, /objective: sourceEnvelope/u)
-  assert.match(source, /appendTaskContextInternal\(task, sourceEnvelope, trigger, action\.objective, action\.acceptanceCriteria, action\.stageTasks, sourceMessages\)/u)
-  assert.match(source, /reopenCompletedTaskInternal\(task, sourceEnvelope, trigger, action\.objective, action\.acceptanceCriteria, action\.stageTasks, sourceMessages\)/u)
-  assert.doesNotMatch(source, /appendTaskContextInternal\(task, decision\.context/u)
-})
-
 test('任务关联索引覆盖当前群全部状态并允许历史任务记录关联上下文', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /本群全部任务关联索引/)
@@ -200,24 +171,17 @@ test('任务关联索引覆盖当前群全部状态并允许历史任务记录�
   assert.match(source, /不得根据某几个关键词、词面重合、标题相似或单一字段直接决定复用已有任务或新建任务/u)
   assert.match(source, /关键词只能作为查找候选任务的线索，不能代替关联结论/u)
   assert.match(source, /图片、文档、文件、链接或其他外部资源如果承载任务目标、范围、对象、输入数据或验收要求/u)
-  assert.match(source, /任何任务所需资源无法访问、下载、解析或读取不完整时，必须选择 answer/u)
+  assert.match(source, /任何任务所需资源无法访问、下载、解析或读取不完整时，必须提交 actions:\[\] 和非空 reply/u)
   assert.match(source, /不得假设资源内容、不得用文件名、链接标题、缩略图或消息中的零散文字替代未读取的正文/u)
-  assert.match(source, /relatedContexts/)
-})
-
-test('图片及紧邻图片的短消息在存在活动Task时触发关联复核', () => {
-  assert.equal(shouldRecheckTaskAssociation({ activeTaskCount: 1, hasImage: true }), true)
-  assert.equal(shouldRecheckTaskAssociation({ activeTaskCount: 1, hasImage: false, occurredAt: '2026-08-25T01:41:27Z', previousMessage: { text: '[图片消息](mediaId=1)', occurredAt: '2026-08-25T01:41:05Z' } }), true)
-  assert.equal(shouldRecheckTaskAssociation({ activeTaskCount: 1, hasImage: false, occurredAt: '2026-08-25T01:45:27Z', previousMessage: { text: '[图片消息](mediaId=1)', occurredAt: '2026-08-25T01:41:05Z' } }), false)
-  assert.equal(shouldRecheckTaskAssociation({ activeTaskCount: 0, hasImage: true }), false)
+  assert.match(source, /topicRefs/)
 })
 
 test('任务所需附件读取失败时硬拦截任务动作并反馈缺失信息', () => {
   const failures = ['图片 media-1 下载失败', '文档 spec.docx 无法解析']
   for (const decision of [
-    { actions: [{ kind: 'new-task', title: '修复问题', objective: '按附件修复', acceptanceCriteria: ['修复有证据'], sourceMessageIds: ['m-1'] }], reply: '开始处理' },
-    { actions: [{ kind: 'task-context', taskId: 'task-1', context: '附件补充', sourceMessageIds: ['m-1'] }], reply: '继续处理' },
-    { actions: [{ kind: 'task-reopen', taskId: 'task-1', context: '附件要求返工', sourceMessageIds: ['m-1'] }], reply: '重新处理' },
+    { actions: [{ kind: 'new-task', title: '修复问题', objective: '按附件修复', acceptanceCriteria: ['修复有证据'], topicRefs }], reply: '开始处理' },
+    { actions: [{ kind: 'task-context', taskId: 'task-1', context: '附件补充', topicRefs }], reply: '继续处理' },
+    { actions: [{ kind: 'task-reopen', taskId: 'task-1', context: '附件要求返工', topicRefs }], reply: '重新处理' },
   ]) {
     const blocked = blockTaskDecisionForUnavailableMedia(decision, failures)
     assert.deepEqual(blocked.actions, [])
@@ -226,6 +190,19 @@ test('任务所需附件读取失败时硬拦截任务动作并反馈缺失信�
   }
   const answer = { actions: [], reply: '我没有获取到文档正文，请重新发送。' }
   assert.equal(blockTaskDecisionForUnavailableMedia(answer, failures), answer)
-  const complete = { actions: [{ kind: 'new-task', title: '文本任务', objective: '执行文本任务', acceptanceCriteria: ['完成'], sourceMessageIds: ['m-1'] }], reply: '开始处理' }
+  const complete = { actions: [{ kind: 'new-task', title: '文本任务', objective: '执行文本任务', acceptanceCriteria: ['完成'], topicRefs }], reply: '开始处理' }
   assert.equal(blockTaskDecisionForUnavailableMedia(complete, []), complete)
+})
+
+test('历史回复审阅从 Task 固定 Topic 版本读取事实，不偷换为最新消息', () => {
+  const group = {
+    messages: [{ messageId: 'm1', messageVersion: 2, text: '只导出本月', occurredAt: '2026-09-07T02:00:00Z', facts: [{ messageId: 'm1', messageVersion: 1, text: '导出全部数据', occurredAt: '2026-09-07T01:00:00Z' }] }],
+    topics: [{ topicId: 't1', revision: 2, entries: [{ revision: 1, messageId: 'm1', messageVersion: 1, action: 'add' }, { revision: 2, messageId: 'm1', messageVersion: 2, action: 'add' }] }],
+    outbox: [{ outboundId: 'out1', sourceMessageId: 'task-result:task-1:1', text: '已完成全部数据导出', status: 'sent', taskIds: ['task-1'], topicRefs: [{ topicId: 't1', revision: 1 }] }],
+  }
+  const tasks = [{ taskId: 'task-1', objective: '导出数据', state: 'completed', topicRefs: [{ topicId: 't1', revision: 2 }] }]
+  const [candidate] = buildReplyReviewCandidates({ group, tasks, focusTaskIds: ['task-1'] })
+  assert.equal(candidate.sourceMessages[0].text, '导出全部数据')
+  assert.equal(candidate.sourceMessages[0].occurredAt, '2026-09-07T01:00:00.000Z')
+  assert.equal(group.messages[0].text, '只导出本月')
 })

@@ -1,0 +1,676 @@
+Initial full-suite diagnostic; isolated per-file native node test runs, external 25s watchdog, no real profile.
+
+FILE client.test.js code=0 timeout=false
+✔ Web client使用dsh原生插件页签slot注册唯一状态卡 (1.0492ms)
+✔ Web bundle patch只挂载无副作用host face，不启动第二份resident Runtime (5.9972ms)
+✔ 设置页异步展示版本状态且版本检查不阻塞核心配置加载 (0.7414ms)
+✔ 添加常驻群在操作位置反馈前置条件、进度和请求结果 (0.8419ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 30.5863
+
+FILE decision.test.js code=0 timeout=false
+✔ Topic 决策独立提交并以固定 Topic 版本关联任务 (6.6196ms)
+✔ Topic 决策拒绝缺失来源依据、消息副本和缺失执行版本 (1.8749ms)
+✔ 归类可新建、追加或多归属，空归属必须有原因 (1.0421ms)
+✔ 决策 prompt 不重复写入活动 Task 快照并保留消息信封 (1.8707ms)
+✔ 群消息判断不注入失败重试行为说明 (0.22ms)
+✔ 引用消息信封只保留引用消息 ID (0.1779ms)
+✔ 叶子来源信封只传原始事实并要求独立核验 (0.2243ms)
+✔ 显式任务指向识别配置名称、别名、DWS登录人或cc指令 (0.3918ms)
+✔ 回复审阅结构严格区分确认、结果与订正 (0.5606ms)
+✔ 历史回复候选保留真实消息内容且引用ID不参与同一事项定论 (2.5858ms)
+✔ 历史回复候选按真实关联优先且严格限制数量和序列化体积 (8.1394ms)
+✔ 图片mediaId不算@对象且明确询问其他同事不算Agent授权 (0.3597ms)
+✔ 叶子任务不得绕过Runtime直接发送群通知 (2.9056ms)
+✔ 同事AI回复必须进入模型并由群决策协议判断 (0.6975ms)
+✔ 未点名但应处理时先询问且不得由 Runtime 静默降级 (0.8037ms)
+✔ 主会话对任务补充发送简短且不复述信息的确认 (0.9168ms)
+✔ 诊断请求不得被主会话或叶子会话扩大为修复授权 (0.5545ms)
+✔ 任务关联索引覆盖当前群全部状态并允许历史任务记录关联上下文 (0.6069ms)
+✔ 图片及紧邻图片的短消息在存在活动Task时触发关联复核 (0.1775ms)
+✔ 任务所需附件读取失败时硬拦截任务动作并反馈缺失信息 (0.2208ms)
+✔ 历史回复审阅从 Task 固定 Topic 版本读取事实，不偷换为最新消息 (0.2893ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 21
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 181.8872
+
+FILE dingtalk-dsh-assistant.test.js code=1 timeout=false
+✖ 单一业务插件使用通用命名且 health 明示 fake transport (998.7387ms)
+✔ 完成通知签名由 Agent 工作区规则决定且插件不写死身份 (1.8045ms)
+✖ resident重启通过Topic协调器恢复归类和已接受决策 (2.5692ms)
+✔ DWS profile在恢复遗留判断前注入引用消息查询协议 (1.1292ms)
+✔ 旧任务来源和续接迁移配置在打开存储前明确拒绝 (0.7877ms)
+✔ 生产HTTP提供精确的单消息重试入口 (0.8371ms)
+✔ 叶子会话使用DSH原生descriptor且恢复旧会话时补齐 (0.7456ms)
+✖ Task上下文只引用固定Topic版本，不再构造消息正文持久副本 (1.0525ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 5
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1385.8374
+
+✖ failing tests:
+
+test at test\dingtalk-dsh-assistant.test.js:6:1
+✖ 单一业务插件使用通用命名且 health 明示 fake transport (998.7387ms)
+  TypeError: runtime.recoverPendingMessages is not a function
+      at apply (file:///D:/project/dingtalk-dsh-assistant-topic-processing/packages/dingtalk-dsh-assistant/resident.js:141:11)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-topic-processing/test/dingtalk-dsh-assistant.test.js:38:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at test\dingtalk-dsh-assistant.test.js:53:1
+✖ resident重启通过Topic协调器恢复归类和已接受决策 (2.5692ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /recoverPendingMessages: recoverDecisionMessages/. Input:
+
+  "import { createHash, randomUUID } from 'node:crypto'\r\n" +
+    "import { stat } from 'node:fs/promises'\r\n" +
+    "import path from 'node:path'\r\n" +
+    "import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'\r\n" +
+    "import { buildReplyReviewCandidates, groupDecisionSchema } from './decision.js'\r\n" +
+    "import { createTopicCoordinator } from './topic-runtime.js'\r\n" +
+    "import { resolveTopicMessages, stableId } from './topic-model.js'\r\n" +
+    "import { parseTaskCheckpoint, parseTaskResult } from './task-result.js'\r\n" +
+    '\r\n' +
+    "const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])\r\n" +
+    "const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_TOPIC_ROUTE]', '[GROUP_TOPIC_DECISION]', '[TASK_COORDINATION]', '[TASK_COMPLETION_REVIEW]', '[TASK_CHECKPOINT_REVIEW]', '[GROUP_MESSAGE_STEER]', '[GROUP_DECISION_RECHECK]', '[GROUP_DECISION_RESUME]']\r\n" +
+    'const SessionId = (id) => id\r\n' +
+    "const createUserMessage = (input) => Object.freeze({ ...structuredClone(input), id: randomUUID(), role: 'user' })\r\n" +
+    'const TASK_CONTEXT_REQUEST_LIMIT = 8\r\n' +
+    'const compactText = (value, limit) => {\r\n' +
+    "  const text = String(value ?? '').trim()\r\n" +
+    '  return text.length <= limit ? text : `${text.slice(0, limit)}…`\r\n' +
+    '}\r\n' +
+    'export const buildTaskAssociationIndex = (tasks) => tasks.map((task) => ({\r\n' +
+    '  taskId: task.taskId,\r\n' +
+    '  ...(task.title ? { title: compactText(task.title, 120) } : {}),\r\n' +
+    '  objectiveExcerpt: compactText(task.objective, 120),\r\n' +
+    '  state: task.state,\r\n' +
+    '  archived: Boolean(task.archivedAt),\r\n' +
+    '  topicRefs: task.topicRefs, inputVersion: task.inputVersion, runSequence: task.runSequence,\r\n' +
+    '}))\r\n' +
+    'const taskAssociationContext = (task) => ({\r\n' +
+    '  taskId: task.taskId,\r\n' +
+    '  ...(task.title ? { title: task.title } : {}),\r\n' +
+    '  objective: task.objective,\r\n' +
+    '  state: task.state,\r\n' +
+    '  archived: Boolean(task.archivedAt),\r\n' +
+    '  ...(task.acceptanceCriteria ? { acceptanceCriteria: task.acceptanceCriteria } : {}),\r\n' +
+    '  ...(task.stageTasks ? { stageTasks: task.stageTasks } : {}),\r\n' +
+    '  topicRefs: task.topicRefs, inputVersion: task.inputVersion, runSequence: task.runSequence,\r\n' +
+    '  ...(task.objectiveHistory ? { objectiveHistory: task.objectiveHistory } : {}),\r\n' +
+    '  ...(task.waitingReason ? { waitingReason: task.waitingReason } : {}),\r\n' +
+    '  ...(task.completion ? { completion: task.completion } : {}),\r\n' +
+    '})\r\n' +
+    'const discardStaleResidentRequests = (agent) => {\r\n' +
+    '  const inbox = agent?.inbox\r\n' +
+    "  if (inbox === undefined || typeof inbox.remove !== 'function') return 0\r\n" +
+    '  const pending = [...(inbox.nextStep ?? []), ...(inbox.nextTurn ?? [])]\r\n' +
+    '  let removed = 0\r\n' +
+    '  for (const message of pending) {\r\n' +
+    "    const text = (message.content ?? []).filter((block) => block.type === 'text').map((block) => block.text).join('\\n').trimStart()\r\n" +
+    '    if (!STALE_RESIDENT_REQUEST_PREFIXES.some((prefix) => text.startsWith(prefix))) continue\r\n' +
+    '    if (inbox.remove(message.id)) removed += 1\r\n' +
+    '  }\r\n' +
+    '  return removed\r\n' +
+    '}\r\n' +
+    'const leafDisplayName = (objective) => {\r\n' +
+    "  const normalized = objective.trim().replace(/\\s+/gu, ' ')\r\n" +
+    '  const heading = normalized.split(/[：:；;]/u, 1)[0] || normalized\r\n' +
+    '  return heading.length <= 20 ? heading : `${heading.slice(0, 19)}…`\r\n' +
+    '}\r\n' +
+    'const installModelSelection = (agentCtx, selection) => {\r\n' +
+    "  const disposeAssembly = agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => {\r\n" +
+    '    const selected = selection.current\r\n' +
+    '    const assembled = await next()\r\n' +
+    '    selection.assembled = selected\r\n' +
+    '    if (selected === undefined) return assembled\r\n' +
+    '    return { ...assembled, variables: { ...assembled.variables, provider: selected.provider, model: selected.model } }\r\n' +
+    '  })\r\n' +
+    "  const disposeRequest = agentCtx.on('agent/request', async (_payload, next) => {\r\n" +
+    '    const resolved = await next()\r\n' +
+    '    const selected = selection.assembled\r\n' +
+    '    if (selected === undefined) return resolved\r\n' +
+    '    const { reasoningEffort: _inheritedEffort, ...withoutInheritedEffort } = resolved\r\n' +
+    '    return { ...withoutInheritedEffort, provider: selected.provider, model: selected.model, ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }) }\r\n' +
+    '  })\r\n' +
+    '  return () => { disposeAssembly(); disposeRequest() }\r\n' +
+    '}\r\n' +
+    "export const residentSessionId = (groupId) => `session-group-${createHash('sha256').update(groupId).digest('hex').slice(0, 24)}`\r\n" +
+    'const goalRef = (goal) => ({ id: goal.id, revision: goal.revision })\r\n' +
+    "const normalizeApprovalScope = (value) => value.trim().replace(/\\s+/gu, ' ')\r\n" +
+    "const humanBlockerFingerprint = (category, requestedAction) => createHash('sha256')\r\n" +
+    '  .update(JSON.stringify({ category, requestedAction: normalizeApprovalScope(requestedAction) }))\r\n' +
+    "  .digest('hex')\r\n" +
+    'const isGoalRoundLimitExhausted = (goal) => Number.isInteger(goal?.roundsStarted)\r\n' +
+    '  && Number.isInteger(goal?.maxGoalRounds)\r\n' +
+    '  && goal.roundsStarted >= goal.maxGoalRounds\r\n' +
+    "  && (goal.phase === 'blocked' || goal.phase === 'paused' || (goal.phase === 'active' && goal.activation === 'disarmed'))\r\n" +
+    'const withHumanBlockerHistory = (task, blocker) => {\r\n' +
+    '  const history = task.humanBlockerHistory ?? []\r\n' +
+    '  const index = history.findIndex((item) => item.requestId === blocker.requestId)\r\n' +
+    '  return index < 0 ? [...history, blocker] : history.map((item, current) => current === index ? blocker : item)\r\n' +
+    '}\r\n' +
+    'const activityDetail = (event) => {\r\n' +
+    "  if (event.type === 'tool/call') return { tool: event.data?.name ?? 'unknown', ...(event.data?.callId ? { callId: event.data.callId } : {}) }\r\n" +
+    "  if (event.type === 'tool/result') return { tool: event.data?.name ?? 'unknown', isError: event.data?.isError === true, ...(event.data?.message?.source?.callId ? { callId: event.data.message.source.callId } : {}) }\r\n" +
+    "  if (event.type === 'turn/end') return { status: event.data?.status ?? 'unknown' }\r\n" +
+    "  if (event.type === 'goal/change') return { phase: event.data?.goal?.phase ?? event.data?.phase ?? 'unknown' }\r\n" +
+    '  return { contentBlocks: event.data?.message?.content?.length ?? 0 }\r\n' +
+    '}\r\n' +
+    '\r\n' +
+    "export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 1_000, decisionRetryMaxMs = 60_000 } = {}) {\r\n" +
+    '  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), activeGroupResidentOperations = new Set(), groupReplyAdmissionBarriers = new Map(), groupResidentTransitionBarriers = new Map(), recoveringDecisionGroups = new Set(), cancellingTasks = new Set(), pendingLeafDisposals = new Set()\r\n' +
+    "  const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets\r\n" +
+    "  const attachments = ctx.get?.('attachments') ?? ctx.attachments\r\n" +
+    '  const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []\r\n' +
+    "  let taskTail = Promise.resolve(), configTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, decisionRecoveryPromise, runtimeApi, currentDwsUserName = '', currentDwsProfile = '', runtimeClosing = false, closePromise\r\n" +
+    '  let groupMessageRecaller\r\n' +
+    '  let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks\r\n' +
+    '  if (store.getMaxConcurrentTasks?.() === undefined) await store.setMaxConcurrentTasks?.(taskConcurrencyLimit)\r\n' +
+    "  if (!Number.isFinite(decisionRetryBaseMs) || decisionRetryBaseMs < 0) throw new Error('decision_retry_base_invalid')\r\n" +
+    "  if (!Number.isFinite(decisionRetryMaxMs) || decisionRetryMaxMs < decisionRetryBaseMs) throw new Error('decision_retry_max_invalid')\r\n" +
+    '  const decisionRetryDelay = (attemptCount) => Math.min(decisionRetryMaxMs, decisionRetryBaseMs * (2 ** Math.max(0, Math.min(16, (attemptCount ?? 1) - 1))))\r\n' +
+    '  const selection = ctx.agentDefaultModel.currentSelection()\r\n' +
+    '  const agentOptions = { provider: selection.provider, model: selection.model }\r\n' +
+    '  const installSelection = (agentCtx) => {\r\n' +
+    '    installModelSelection(agentCtx, { current: selection, assembled: undefined })\r\n' +
+    '  }\r\n' +
+    '  const applyFullAccess = (handle) => {\r\n' +
+    "    const permissionPresets = agentPresets?.serviceFor?.(handle.agent, 'permissionPresets')\r\n" +
+    "      ?? handle.agent.ctx?.get?.('permissionPresets')\r\n" +
+    '      ?? handle.agent.ctx?.permissionPresets\r\n' +
+    "    if (permissionPresets === undefined) throw new Error('permission_presets_required')\r\n" +
+    "    permissionPresets.set(handle.agent.session, 'danger-full-access')\r\n" +
+    '  }\r\n' +
+    '  const resumeGoalAfterResolution = (handle, goal) => {\r\n' +
+    '    let resumable = goal\r\n' +
+    '    if (isGoalRoundLimitExhausted(resumable)) {\r\n' +
+    '      resumable = ctx.goals.edit(handle.agent, goalRef(resumable), { maxGoalRounds: resumable.maxGoalRounds + maxGoalRounds })\r\n' +
+    '    }\r\n' +
+    "    if (resumable?.phase === 'blocked' || resumable?.phase === 'paused' || (resumable?.phase === 'active' && resumable.activation === 'disarmed')) {\r\n" +
+    '      return ctx.goals.resume(handle.agent, goalRef(resumable))\r\n' +
+    '    }\r\n' +
+    '    return resumable\r\n' +
+    '  }\r\n' +
+    '  const ensureLeafDescriptor = (handle, task) => {\r\n' +
+    '    const ownEvents = handle.agent.session.events.slice(handle.agent.session.meta?.seedLength ?? 0)\r\n' +
+    "    if (ownEvents.some((event) => event.type === 'subagent/descriptor')) return\r\n" +
+    "    handle.agent.session.append('subagent/descriptor', snapshotSubagentDescriptor({\r\n" +
+    "      mode: 'continuable',\r\n" +
+    "      provider: 'dingtalk-dsh-assistant',\r\n" +
+    '      label: leafDisplayName(task.title ?? task.objective),\r\n' +
+    '      agentProvider: agentOptions.provider,\r\n' +
+    '      agentModel: agentOptions.model,\r\n' +
+    '    }))\r\n' +
+    '  }\r\n' +
+    '  const residentSetup = (groupId) => async (agentCtx) => {\r\n' +
+    "    if (agentPresets === undefined) throw new Error('agent_presets_required')\r\n" +
+    '    const preset = await agentPresets.mount(agentCtx, agentPreset)\r\n' +
+    '    if (preset?.id !== undefined && preset.id !== agentPreset) throw new Error(`resident_agent_preset_invalid:${preset.id}`)\r\n' +
+    '    configureResident(agentCtx, groupId)\r\n' +
+    '  }\r\n' +
+    '  const quotedMessageRecoveryPolicy = (owner) => {\r\n' +
+    '    const'... 104575 more characters
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-topic-processing/test/dingtalk-dsh-assistant.test.js:57:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "import { createHash, randomUUID } from 'node:crypto'\r\nimport { stat } from 'node:fs/promises'\r\nimport path from 'node:path'\r\nimport { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'\r\nimport { buildReplyReviewCandidates, groupDecisionSchema } from './decision.js'\r\nimport { createTopicCoordinator } from './topic-runtime.js'\r\nimport { resolveTopicMessages, stableId } from './topic-model.js'\r\nimport { parseTaskCheckpoint, parseTaskResult } from './task-result.js'\r\n\r\nconst PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])\r\n...",
+    expected: /recoverPendingMessages: recoverDecisionMessages/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test\dingtalk-dsh-assistant.test.js:94:1
+✖ Task上下文只引用固定Topic版本，不再构造消息正文持久副本 (1.0525ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /topicRefs: action\.topicRefs/. Input:
+
+  "import { createHash, randomUUID } from 'node:crypto'\r\n" +
+    "import { stat } from 'node:fs/promises'\r\n" +
+    "import path from 'node:path'\r\n" +
+    "import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'\r\n" +
+    "import { buildReplyReviewCandidates, groupDecisionSchema } from './decision.js'\r\n" +
+    "import { createTopicCoordinator } from './topic-runtime.js'\r\n" +
+    "import { resolveTopicMessages, stableId } from './topic-model.js'\r\n" +
+    "import { parseTaskCheckpoint, parseTaskResult } from './task-result.js'\r\n" +
+    '\r\n' +
+    "const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])\r\n" +
+    "const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_TOPIC_ROUTE]', '[GROUP_TOPIC_DECISION]', '[TASK_COORDINATION]', '[TASK_COMPLETION_REVIEW]', '[TASK_CHECKPOINT_REVIEW]', '[GROUP_MESSAGE_STEER]', '[GROUP_DECISION_RECHECK]', '[GROUP_DECISION_RESUME]']\r\n" +
+    'const SessionId = (id) => id\r\n' +
+    "const createUserMessage = (input) => Object.freeze({ ...structuredClone(input), id: randomUUID(), role: 'user' })\r\n" +
+    'const TASK_CONTEXT_REQUEST_LIMIT = 8\r\n' +
+    'const compactText = (value, limit) => {\r\n' +
+    "  const text = String(value ?? '').trim()\r\n" +
+    '  return text.length <= limit ? text : `${text.slice(0, limit)}…`\r\n' +
+    '}\r\n' +
+    'export const buildTaskAssociationIndex = (tasks) => tasks.map((task) => ({\r\n' +
+    '  taskId: task.taskId,\r\n' +
+    '  ...(task.title ? { title: compactText(task.title, 120) } : {}),\r\n' +
+    '  objectiveExcerpt: compactText(task.objective, 120),\r\n' +
+    '  state: task.state,\r\n' +
+    '  archived: Boolean(task.archivedAt),\r\n' +
+    '  topicRefs: task.topicRefs, inputVersion: task.inputVersion, runSequence: task.runSequence,\r\n' +
+    '}))\r\n' +
+    'const taskAssociationContext = (task) => ({\r\n' +
+    '  taskId: task.taskId,\r\n' +
+    '  ...(task.title ? { title: task.title } : {}),\r\n' +
+    '  objective: task.objective,\r\n' +
+    '  state: task.state,\r\n' +
+    '  archived: Boolean(task.archivedAt),\r\n' +
+    '  ...(task.acceptanceCriteria ? { acceptanceCriteria: task.acceptanceCriteria } : {}),\r\n' +
+    '  ...(task.stageTasks ? { stageTasks: task.stageTasks } : {}),\r\n' +
+    '  topicRefs: task.topicRefs, inputVersion: task.inputVersion, runSequence: task.runSequence,\r\n' +
+    '  ...(task.objectiveHistory ? { objectiveHistory: task.objectiveHistory } : {}),\r\n' +
+    '  ...(task.waitingReason ? { waitingReason: task.waitingReason } : {}),\r\n' +
+    '  ...(task.completion ? { completion: task.completion } : {}),\r\n' +
+    '})\r\n' +
+    'const discardStaleResidentRequests = (agent) => {\r\n' +
+    '  const inbox = agent?.inbox\r\n' +
+    "  if (inbox === undefined || typeof inbox.remove !== 'function') return 0\r\n" +
+    '  const pending = [...(inbox.nextStep ?? []), ...(inbox.nextTurn ?? [])]\r\n' +
+    '  let removed = 0\r\n' +
+    '  for (const message of pending) {\r\n' +
+    "    const text = (message.content ?? []).filter((block) => block.type === 'text').map((block) => block.text).join('\\n').trimStart()\r\n" +
+    '    if (!STALE_RESIDENT_REQUEST_PREFIXES.some((prefix) => text.startsWith(prefix))) continue\r\n' +
+    '    if (inbox.remove(message.id)) removed += 1\r\n' +
+    '  }\r\n' +
+    '  return removed\r\n' +
+    '}\r\n' +
+    'const leafDisplayName = (objective) => {\r\n' +
+    "  const normalized = objective.trim().replace(/\\s+/gu, ' ')\r\n" +
+    '  const heading = normalized.split(/[：:；;]/u, 1)[0] || normalized\r\n' +
+    '  return heading.length <= 20 ? heading : `${heading.slice(0, 19)}…`\r\n' +
+    '}\r\n' +
+    'const installModelSelection = (agentCtx, selection) => {\r\n' +
+    "  const disposeAssembly = agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => {\r\n" +
+    '    const selected = selection.current\r\n' +
+    '    const assembled = await next()\r\n' +
+    '    selection.assembled = selected\r\n' +
+    '    if (selected === undefined) return assembled\r\n' +
+    '    return { ...assembled, variables: { ...assembled.variables, provider: selected.provider, model: selected.model } }\r\n' +
+    '  })\r\n' +
+    "  const disposeRequest = agentCtx.on('agent/request', async (_payload, next) => {\r\n" +
+    '    const resolved = await next()\r\n' +
+    '    const selected = selection.assembled\r\n' +
+    '    if (selected === undefined) return resolved\r\n' +
+    '    const { reasoningEffort: _inheritedEffort, ...withoutInheritedEffort } = resolved\r\n' +
+    '    return { ...withoutInheritedEffort, provider: selected.provider, model: selected.model, ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }) }\r\n' +
+    '  })\r\n' +
+    '  return () => { disposeAssembly(); disposeRequest() }\r\n' +
+    '}\r\n' +
+    "export const residentSessionId = (groupId) => `session-group-${createHash('sha256').update(groupId).digest('hex').slice(0, 24)}`\r\n" +
+    'const goalRef = (goal) => ({ id: goal.id, revision: goal.revision })\r\n' +
+    "const normalizeApprovalScope = (value) => value.trim().replace(/\\s+/gu, ' ')\r\n" +
+    "const humanBlockerFingerprint = (category, requestedAction) => createHash('sha256')\r\n" +
+    '  .update(JSON.stringify({ category, requestedAction: normalizeApprovalScope(requestedAction) }))\r\n' +
+    "  .digest('hex')\r\n" +
+    'const isGoalRoundLimitExhausted = (goal) => Number.isInteger(goal?.roundsStarted)\r\n' +
+    '  && Number.isInteger(goal?.maxGoalRounds)\r\n' +
+    '  && goal.roundsStarted >= goal.maxGoalRounds\r\n' +
+    "  && (goal.phase === 'blocked' || goal.phase === 'paused' || (goal.phase === 'active' && goal.activation === 'disarmed'))\r\n" +
+    'const withHumanBlockerHistory = (task, blocker) => {\r\n' +
+    '  const history = task.humanBlockerHistory ?? []\r\n' +
+    '  const index = history.findIndex((item) => item.requestId === blocker.requestId)\r\n' +
+    '  return index < 0 ? [...history, blocker] : history.map((item, current) => current === index ? blocker : item)\r\n' +
+    '}\r\n' +
+    'const activityDetail = (event) => {\r\n' +
+    "  if (event.type === 'tool/call') return { tool: event.data?.name ?? 'unknown', ...(event.data?.callId ? { callId: event.data.callId } : {}) }\r\n" +
+    "  if (event.type === 'tool/result') return { tool: event.data?.name ?? 'unknown', isError: event.data?.isError === true, ...(event.data?.message?.source?.callId ? { callId: event.data.message.source.callId } : {}) }\r\n" +
+    "  if (event.type === 'turn/end') return { status: event.data?.status ?? 'unknown' }\r\n" +
+    "  if (event.type === 'goal/change') return { phase: event.data?.goal?.phase ?? event.data?.phase ?? 'unknown' }\r\n" +
+    '  return { contentBlocks: event.data?.message?.content?.length ?? 0 }\r\n' +
+    '}\r\n' +
+    '\r\n' +
+    "export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 1_000, decisionRetryMaxMs = 60_000 } = {}) {\r\n" +
+    '  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), activeGroupResidentOperations = new Set(), groupReplyAdmissionBarriers = new Map(), groupResidentTransitionBarriers = new Map(), recoveringDecisionGroups = new Set(), cancellingTasks = new Set(), pendingLeafDisposals = new Set()\r\n' +
+    "  const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets\r\n" +
+    "  const attachments = ctx.get?.('attachments') ?? ctx.attachments\r\n" +
+    '  const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []\r\n' +
+    "  let taskTail = Promise.resolve(), configTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, decisionRecoveryPromise, runtimeApi, currentDwsUserName = '', currentDwsProfile = '', runtimeClosing = false, closePromise\r\n" +
+    '  let groupMessageRecaller\r\n' +
+    '  let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks\r\n' +
+    '  if (store.getMaxConcurrentTasks?.() === undefined) await store.setMaxConcurrentTasks?.(taskConcurrencyLimit)\r\n' +
+    "  if (!Number.isFinite(decisionRetryBaseMs) || decisionRetryBaseMs < 0) throw new Error('decision_retry_base_invalid')\r\n" +
+    "  if (!Number.isFinite(decisionRetryMaxMs) || decisionRetryMaxMs < decisionRetryBaseMs) throw new Error('decision_retry_max_invalid')\r\n" +
+    '  const decisionRetryDelay = (attemptCount) => Math.min(decisionRetryMaxMs, decisionRetryBaseMs * (2 ** Math.max(0, Math.min(16, (attemptCount ?? 1) - 1))))\r\n' +
+    '  const selection = ctx.agentDefaultModel.currentSelection()\r\n' +
+    '  const agentOptions = { provider: selection.provider, model: selection.model }\r\n' +
+    '  const installSelection = (agentCtx) => {\r\n' +
+    '    installModelSelection(agentCtx, { current: selection, assembled: undefined })\r\n' +
+    '  }\r\n' +
+    '  const applyFullAccess = (handle) => {\r\n' +
+    "    const permissionPresets = agentPresets?.serviceFor?.(handle.agent, 'permissionPresets')\r\n" +
+    "      ?? handle.agent.ctx?.get?.('permissionPresets')\r\n" +
+    '      ?? handle.agent.ctx?.permissionPresets\r\n' +
+    "    if (permissionPresets === undefined) throw new Error('permission_presets_required')\r\n" +
+    "    permissionPresets.set(handle.agent.session, 'danger-full-access')\r\n" +
+    '  }\r\n' +
+    '  const resumeGoalAfterResolution = (handle, goal) => {\r\n' +
+    '    let resumable = goal\r\n' +
+    '    if (isGoalRoundLimitExhausted(resumable)) {\r\n' +
+    '      resumable = ctx.goals.edit(handle.agent, goalRef(resumable), { maxGoalRounds: resumable.maxGoalRounds + maxGoalRounds })\r\n' +
+    '    }\r\n' +
+    "    if (resumable?.phase === 'blocked' || resumable?.phase === 'paused' || (resumable?.phase === 'active' && resumable.activation === 'disarmed')) {\r\n" +
+    '      return ctx.goals.resume(handle.agent, goalRef(resumable))\r\n' +
+    '    }\r\n' +
+    '    return resumable\r\n' +
+    '  }\r\n' +
+    '  const ensureLeafDescriptor = (handle, task) => {\r\n' +
+    '    const ownEvents = handle.agent.session.events.slice(handle.agent.session.meta?.seedLength ?? 0)\r\n' +
+    "    if (ownEvents.some((event) => event.type === 'subagent/descriptor')) return\r\n" +
+    "    handle.agent.session.append('subagent/descriptor', snapshotSubagentDescriptor({\r\n" +
+    "      mode: 'continuable',\r\n" +
+    "      provider: 'dingtalk-dsh-assistant',\r\n" +
+    '      label: leafDisplayName(task.title ?? task.objective),\r\n' +
+    '      agentProvider: agentOptions.provider,\r\n' +
+    '      agentModel: agentOptions.model,\r\n' +
+    '    }))\r\n' +
+    '  }\r\n' +
+    '  const residentSetup = (groupId) => async (agentCtx) => {\r\n' +
+    "    if (agentPresets === undefined) throw new Error('agent_presets_required')\r\n" +
+    '    const preset = await agentPresets.mount(agentCtx, agentPreset)\r\n' +
+    '    if (preset?.id !== undefined && preset.id !== agentPreset) throw new Error(`resident_agent_preset_invalid:${preset.id}`)\r\n' +
+    '    configureResident(agentCtx, groupId)\r\n' +
+    '  }\r\n' +
+    '  const quotedMessageRecoveryPolicy = (owner) => {\r\n' +
+    '    const'... 104575 more characters
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-topic-processing/test/dingtalk-dsh-assistant.test.js:96:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "import { createHash, randomUUID } from 'node:crypto'\r\nimport { stat } from 'node:fs/promises'\r\nimport path from 'node:path'\r\nimport { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'\r\nimport { buildReplyReviewCandidates, groupDecisionSchema } from './decision.js'\r\nimport { createTopicCoordinator } from './topic-runtime.js'\r\nimport { resolveTopicMessages, stableId } from './topic-model.js'\r\nimport { parseTaskCheckpoint, parseTaskResult } from './task-result.js'\r\n\r\nconst PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])\r\n...",
+    expected: /topicRefs: action\.topicRefs/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+FILE dws-adapter.test.js code=0 timeout=false
+✔ DWS adapter 默认禁用且不会调用 runner (2.7687ms)
+✔ 群监听等待 ready 后逐行交付且坏行不吞后续事件 (1.7443ms)
+✔ 个人IM监听等待ready后交付引用回复 (0.705ms)
+✔ DWS profile固定附加到订阅、回读和发送命令 (0.4091ms)
+✔ Task完成通知使用DWS原生引用回复并@提出人 (0.6517ms)
+✔ 引用回复回读即使正文完全相同也必须匹配quoted message ID (0.2852ms)
+✔ 无引用回复不能认领其他话题的同文引用回复 (0.145ms)
+✔ 话题 A 的同文回复不阻止话题 B 的发送和精确回读 (0.2127ms)
+✔ 短引用回复允许钉钉补充前导@但仍要求精确quoted message ID (0.1785ms)
+✔ 本人私聊发送通过openTaskId回查真实会话与消息ID (0.8508ms)
+✔ 本人私聊发送等待DWS异步投递完成后再记录消息ID (514.3576ms)
+✔ 本人私聊回读限定起止时间但不设置消息条数上限 (0.4168ms)
+✔ 群范围回补自动翻页但不设人为消息条数上限 (0.314ms)
+✔ outbox 回读命中跳过发送，未命中则只发一次并回读真实消息 ID (0.4553ms)
+✔ outbox 历史不完整或投递未知时保持 pending 不盲重发 (0.3214ms)
+✔ outbox 可使用无失败的最近消息窗口完成去重与投递确认 (0.3318ms)
+✔ outbox 可识别钉钉补充@、移除Markdown并附加Agent签名后的已发送消息 (0.2755ms)
+ℹ tests 17
+ℹ suites 0
+ℹ pass 17
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 544.7313
+
+FILE dws-bridge.test.js code=0 timeout=false
+✔ 本人消息增量补拉默认每10秒执行并使用30秒重叠窗口 (3.9523ms)
+✔ DWS历史消息senderId映射为持久化发送人ID (0.2937ms)
+✔ DWS历史消息保留引用消息上下文 (0.6151ms)
+✔ DWS bridge 不额外查询引用详情并只保留事件已有的引用 ID (4.3973ms)
+✔ DWS历史图片消息保留可下载资源引用 (0.3086ms)
+✔ 补拉完成只证明可靠接收，未完成的 Topic 不阻塞同批后续消息 (7.6725ms)
+✔ 已接收消息补齐发送人和引用时仍交给 Runtime 生成事实版本 (0.3636ms)
+✔ 已归类图片恢复可读取后清除不可读原因并重新交给 Runtime (0.3168ms)
+✔ 普通Outbox替换通过DWS精确撤回并确认消息已不存在 (0.5266ms)
+✔ DWS bridge 将稳定事件交给 resident 并在真实回读后确认 outbox (1.4068ms)
+✔ 主会话回复首次无法确认时会绑定同一outbox持续回读并避免重复发送 (43.8893ms)
+✔ 启动时先建立 live consumer 再补拉，重叠消息由持久 ingress 去重 (1.6552ms)
+✔ 定时增量补拉可接收本人消息并在附件处理前按持久 messageId 去重 (67.9723ms)
+✔ 定时增量补拉按已持久化发送消息ID过滤Agent本人账号消息 (1.5109ms)
+✔ 增量补拉过滤已投递及判断失败消息，只重试插话前失败项和投递新项 (41.9102ms)
+✔ 补拉命中当前账号的短引用pending outbox时确认发送并修正历史判断失败 (0.9349ms)
+✔ DWS consumer 异常退出只记录活动 Task 告警 (0.6545ms)
+✔ 没有订阅群时 bridge 也会发布初始健康状态 (0.2995ms)
+✔ 无活动Task时 DWS listener 退出也会重连并恢复入站健康 (40.5649ms)
+✔ DWS listener 的 done 拒绝会重连，并在告警落盘后关闭 carrier 告警 (29.7901ms)
+✔ listener 在旧恢复执行中再次失败时，新 carrier 告警保持活动 (40.693ms)
+✔ listener 未收到 ready 时超时重连，旧 generation 不得阻塞新订阅 (61.5327ms)
+✔ 单群补拉失败不会饿死其他群，下一轮成功后恢复健康 (13.0504ms)
+✔ 慢回补不被周期 tick 连环排队，重连补偿保留断线范围且完成前降级 (15.1087ms)
+✔ 本人私聊阻塞不设超时并只用引用消息恢复原Task (1.5553ms)
+✔ 个人IM实时引用回复精确恢复redline审批且重复事件幂等 (1.2245ms)
+✔ 非redline个人引用回复按处置意见恢复并补齐approved decision (0.4031ms)
+✔ 个人IM审批监听异常退出后重连并恢复健康 (9.7992ms)
+✔ 阻塞单已真实发送并获引用批准时自动补记投递并恢复原Task (0.792ms)
+✔ 已补记错误恢复时间的阻塞单会改用原申请时间回读批准 (0.6147ms)
+✔ redline 阻塞将非空引用回复视为批复并保留明确拒绝语义 (0.2391ms)
+✔ Web在DWS发送过程中批复时撤回已落地申请并停止等待 (1.2935ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 417.8883
+
+FILE fake-llm.test.js code=0 timeout=false
+✔ fake adapter 产出完整 dsh 流式 chunk 协议 (3.2221ms)
+✔ fake adapter 先归类，再读取工具正式 Topic 标识独立提交 (9.3373ms)
+✔ fake adapter 一批多个话题处理完一个提交一个 (1.8051ms)
+✔ fake adapter 补充任务携带当前 Task 版本与新 Topic 版本 (1.3224ms)
+✔ fake adapter 内部审阅必须使用结构化工具回执 (0.491ms)
+✔ fake adapter 对 Task 协调通知引用 Topic 消息且不提交全群观察集合 (0.5098ms)
+✔ fake adapter 读取候选后提交完整 replyReview (0.4716ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 159.3169
+
+FILE http.test.js code=0 timeout=false
+✔ 生产HTTP开放只读状态与明确的本机群配置接口，测试控制面仍关闭 (232.1048ms)
+✔ 显式testApiEnabled才开放测试写入口 (12.2122ms)
+✔ Web Task 入口强制稳定请求与执行版本且拒绝伪造来源和Session (134.2235ms)
+✔ 移除群遇到Topic引用或未完成决策返回409而非普通参数错误 (10.915ms)
+✔ Topic 查询有界分页且群摘要不泄漏内部决策、归类和预约记录 (79.3714ms)
+✔ 本机Web的127.0.0.1与localhost来源均可读取resident，其他来源不开放CORS (15.975ms)
+✔ DWS健康状态以实际 bridge 存活和补拉状态为准 (14.914ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 643.0388
+
+FILE observer-client.test.js code=0 timeout=false
+✔ 运行看板保留左侧菜单并替换右侧整体内容 (10.0814ms)
+✔ 任务卡不请求或展示执行轮次耗时统计 (1.4197ms)
+✔ Agent配置页面提供叶子任务并行上限且默认值为5 (1.1463ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 28.5586
+
+FILE project-root.test.js code=0 timeout=false
+✔ worktree 子目录只用唯一标记回溯到 baibu-agent 根 AGENTS.md (25.4697ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 90.2767
+
+FILE release-workflow.test.js code=0 timeout=false
+✔ CI 只允许手工触发并在 Node 24 下测试、打包三个发行包 (5.143ms)
+✔ Release 绑定受控环境并按依赖顺序发布，npm 回读后才创建 Release (1.2681ms)
+✔ 当前正式版本在 CHANGELOG 中有对应章节和 Release 链接 (1.5752ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 24.092
+
+FILE runtime.test.js code=null timeout=true
+✖ Inbox 默认零延迟 steer，回复提交门禁不退化为定时聚合 (4.4518ms)
+✖ 普通群消息只携带历史回复候选计数并可按请求读取完整快照 (20004.5207ms)
+✖ 任务摘要索引不展开历史且只读工具按需返回完整关联上下文 (4.8405ms)
+
+FILE store.test.js code=0 timeout=false
+✔ Topic破坏性模型使用独立domain版本7 (1.8793ms)
+✔ 群配置初始化、职责修改和删除均持久化 (2.5261ms)
+✔ 同群消息按稳定 messageId 去重并递增排序 (4.9487ms)
+✔ 显式确认可只回填缺少Agent投递状态的历史消息 (0.2982ms)
+✔ Task 当前轮耗时拆分状态时间和可配对工具时间 (10.652ms)
+✔ Task 完成结果事件晚于完成状态时仍按调用ID配对 (8.5ms)
+✔ Task 确实缺少工具结果时保持未配对标记 (15.6626ms)
+✔ 并发创建不同 Task 不会用旧 scheduler 快照互相覆盖 (1.5005ms)
+✔ Supervisor 告警按 Task 和指纹去重且不推进业务状态 (1.1468ms)
+✔ 重开 store 后复用同一 resident Session 和 outbox 状态 (0.9502ms)
+✔ Task流程证据配置、回复审阅与撤回元数据持久化 (0.8025ms)
+✔ 确认Outbox可在Task动作完成后原子补充关联Task (1.3695ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 231.9745
+
+FILE task-result.test.js code=0 timeout=false
+✔ Task checkpoint只接受事件驱动的结构化内部同步 (3.3646ms)
+✔ Task completed结果要求非空summary与至少一条evidence (4.1666ms)
+✔ 开发任务证据由配置引导而非插件固化具体平台字段 (0.9732ms)
+✔ Task waiting结果要求明确waitingReason且拒绝多余字段 (3.0881ms)
+✔ 叶子回执必须声明执行输入版本和轮次，不能由 Runtime 猜测 (1.5263ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 118.7909
+
+FILE topic-migration.test.js code=0 timeout=false
+✔ v6迁移保留执行状态和渠道回执、Topic基线确定且移除所有Task消息副本 (11.6033ms)
+✔ 来源缺失、正文冲突和未对账提交失败明确阻止迁移 (0.8194ms)
+✔ 仅Task快照存在的历史原文迁回Message，Web输入没有伪造钉钉身份 (1.1865ms)
+✔ 真实SDK JSON迁移check零写、独立目标读回、重复运行与旧版本回退可读 (54.4002ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 231.4519
+
+FILE topic-native-inbox.test.js code=0 timeout=false
+✔ 原生Inbox插入稳定ID后跨文件重开恢复pending，重试不重复入队 (22.0761ms)
+✔ 原生Inbox已进入user/message后跨重开无pending，但稳定ID仍可确认曾下发 (34.1228ms)
+✔ 原生Inbox取消保留历史inserted，不能凭此认定输入已消费或仍待执行 (33.2093ms)
+✔ 原生Inbox仅claim未进入surface时重开可见差异，不声称叶子已阅读 (20.9169ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 274.2072
+
+FILE topic-runtime.test.js code=0 timeout=false
+✔ 归类 exact batch 零副作用拒绝漏项，新增消息进入下一批 (11.5151ms)
+✔ A/B 独立提交不要求覆盖其他 Topic，先完成 B 不消费 A (4.174ms)
+✔ 未知输入返回 routing-required，归到 B 后原 A 请求继续有效 (1.9185ms)
+✔ 同 Topic 新增输入使旧决策失效且新依据必须覆盖本次增量 (3.5377ms)
+✔ Topic 关联不能替代原消息授权，明确给他人的请求不得擅自接单 (2.4268ms)
+✔ 已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox (7.5681ms)
+✔ 内部审阅按请求绑定 Task 版本，拒绝错种类和版本变更 (2.4103ms)
+✔ 内部检查点必须结构化确认，不能携带相互矛盾的 guidance (1.2536ms)
+✔ Topic 按需搜索分页及固定版本读回，跨群与越界拒绝 (1.0788ms)
+✔ Task 通知要求真实 Topic 引用及参与人，并拒绝旧 Task 输入 (1.819ms)
+✔ 审阅后历史候选变化必须重新读取，不能用旧快照发新回复 (7.6899ms)
+✔ 无关 B 的新历史回复不使 A 的候选审阅失效 (1.3586ms)
+✔ 决策进入 Store 队列后候选变化仍在原子提交点拦截 (0.8843ms)
+✔ Task 通知在 Outbox 落盘前再次核对输入版本 (1.5494ms)
+✔ Task 通知读取最新相关候选后可提交，重试不产生第二条 Outbox (1.3369ms)
+✔ 已接受决策失败后到期自动恢复，无需新消息或重启 (13.9182ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 220.3349
+
+FILE topic-store.test.js code=0 timeout=false
+✔ A/B交错归类跨turn延续、固定快照及Task不复制消息 (9.6266ms)
+✔ 归类整批预检拒绝跨群/重复/过时事实且幂等重试不重复Topic (1.1254ms)
+✔ 未知输入阻止提交，已归类无关B允许A提交，同A补充使旧版本失效 (1.8123ms)
+✔ 附件与身份补齐产生新事实版本，重开仍可读取旧Topic快照 (4.4838ms)
+✔ 错误归属追加remove/add保留原版本 (0.7005ms)
+✔ 决策固定动作身份、失败后重开恢复、Task变更恰好一次 (2.6328ms)
+✔ 共享Task版本和保留项阻止其他Topic覆盖 (1.35ms)
+✔ 一条共享消息只存一份并更新两个Topic，归类与决策排队按最新状态检查 (1.22ms)
+✔ 回复快照preflight在Group原子更新内拒绝，决策和Outbox均零副作用 (0.9099ms)
+✔ 重复引用补齐保留已知正文，改变引用ID不串用旧正文和身份 (0.7939ms)
+✔ 固定版本不暴露后来摘要，旧决策完成不关闭已收到新输入的话题 (0.8103ms)
+✔ 不同Topic不能同时接受撤回同一Outbox的意图 (1.2182ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 166.6324
+
+FILE version-check.test.js code=0 timeout=false
+✔ 语义版本比较覆盖正式版与预发布版 (1.4504ms)
+✔ 版本检查返回当前版本、最新 Release 与升级判断 (4.1537ms)
+✔ 没有 Release 与上游失败都返回明确状态 (0.3246ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 17.4369

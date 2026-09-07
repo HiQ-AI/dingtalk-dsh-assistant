@@ -23,7 +23,7 @@ function comparableMessageText(value) {
 export function matchesOutbound(message, outbound) {
   const actual = comparableMessageText(message.text), expected = comparableMessageText(outbound.text)
   const quotedId = message.quotedMessage?.messageId ?? message.quotedMessage?.message_id
-  if (outbound.replyToMessageId && quotedId !== outbound.replyToMessageId) return false
+  if ((quotedId ?? undefined) !== (outbound.replyToMessageId ?? undefined)) return false
   if (actual === expected) return true
   if (outbound.replyToMessageId) return expected.length > 0 && actual.includes(expected)
   if (expected.length < 24 || !actual.includes(expected)) return false

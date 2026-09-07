@@ -1,2701 +1,948 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { after } from 'node:test'
-import { buildTaskAssociationIndex, openResidentRuntime, residentSessionId } from '../packages/dingtalk-dsh-assistant/runtime.js'
-import { taskSessionId } from '../packages/dingtalk-dsh-assistant/store.js'
+import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
+import { buildTaskAssociationIndex, openResidentRuntime, residentSessionId } from '../packages/dingtalk-dsh-assistant/runtime.js'
+import { openResidentStore, taskSessionId } from '../packages/dingtalk-dsh-assistant/store.js'
 
 const agentWorkspace = mkdtempSync(join(tmpdir(), 'dsh-agent-workspace-'))
 const replacementWorkspace = mkdtempSync(join(tmpdir(), 'dsh-replacement-workspace-'))
-const runtimeOptions = (options = {}) => ({ inboxDeliveryDelayMs: 0, ...options })
-after(() => {
-  rmSync(agentWorkspace, { recursive: true, force: true })
-  rmSync(replacementWorkspace, { recursive: true, force: true })
-})
+after(() => { rmSync(agentWorkspace, { recursive: true, force: true }); rmSync(replacementWorkspace, { recursive: true, force: true }) })
 
-test('Inbox 默认零延迟 steer，回复提交门禁不退化为定时聚合', () => {
-  const source = readFileSync(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
-  assert.doesNotMatch(source, /inboxDeliveryDelayMs|setTimeout\(resolve, inboxDeliveryDelayMs\)/)
-  assert.match(source, /handle\.agent\.steer\(createUserMessage\(\{ content, source: \{ kind: 'user' \} \}\)\)/)
-  assert.match(source, /async function followupTaskInternal[\s\S]*?handle\.agent\.steer\(createUserMessage/)
-  assert.match(source, /name: 'group_decision_submit'/)
-  assert.doesNotMatch(source, /GROUP_DECISION_SCHEMA_CORRECTION|GROUP_DECISION_FINALIZE|parseGroupDecision\(/)
-  assert.match(source, /收到 TASK_OBJECTIVE_REVISED 后，必须根据修订后的完整目标重新提交 plan-confirmed/)
-  assert.match(source, /顶层不允许 kind 字段/)
-  assert.match(source, /忽略为 [^\r\n]*\{\"actions\":\[\],\"reason\":\"原因\"\}/)
-  assert.match(source, /task-proposal、new-task、task-context、task-reopen 或 task-cancel/u)
-  assert.match(source, /必须返回 task-cancel[\s\S]*不得把撤销消息作为 task-context 继续发送给叶子/u)
-  assert.match(source, /handle\?\.agent\.cancel\(\{ kind: 'user' \}\)/u)
-  assert.match(source, /判断是否同一事项必须综合当前消息与候选来源消息的真实正文/u)
-  assert.match(source, /引用消息 ID、关键词或词面相似度都只能帮助定位，不能单独作为结论/u)
-  assert.match(source, /同一事项已经有等价确认且没有新信息时，应使用 actions 为空的 ignore/u)
-  assert.match(source, /存在任务动作就说明有新的处理、关联、纠正、提议或取消，必须提交一条简短回复/u)
-  assert.match(source, /由 Runtime 先撤回旧消息再发送合并后的最新确认/u)
-  assert.match(source, /const submitted = await pending\.promise/)
-  assert.match(source, /agentCtx\.tools\.restrict\(\{ deny: \['get_goal', 'create_goal', 'update_goal'\] \}\)/)
-  assert.match(source, /name: 'tool:goal', order: 114, text: ''/)
-})
-
-function decisionRuntimeFixture({ groupId = 'steer-group', taskCapacity = false } = {}) {
-  const group = { groupId: 'steer-group', residentSessionId: 'session-steer', residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }
-  group.groupId = groupId
-  const steered = [], rechecks = [], followups = [], registeredTools = [], leafTools = [], leafCancelCalls = [], tasks = [], goals = new Map()
-  let releaseIdle, resolveSteerCount
-  let leafHandle, releaseLeafDispose, markLeafDisposeStarted
-  let targetSteerCount = 0
-  const idle = new Promise((resolve) => { releaseIdle = resolve })
-  const leafDisposeGate = new Promise((resolve) => { releaseLeafDispose = resolve })
-  const leafDisposeStarted = new Promise((resolve) => { markLeafDisposeStarted = resolve })
-  const waitForSteers = (count) => {
-    targetSteerCount = count
-    if (steered.length >= count) return Promise.resolve()
-    return new Promise((resolve) => { resolveSteerCount = resolve })
+// 旧群级观察/消息副本 fixture 已替换为真实 Store：exact batch、独立 Topic、
+// stale、basis、版本审阅、恢复提交等边界由 topic-runtime.test.js 直接覆盖。
+// 此文件核验 Runtime 集成、实际叶子协议、外部投递和 Resident 生命周期。
+function memoryFacility(snapshot) {
+  return new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
+    loadAll: async () => structuredClone(snapshot), close: async () => {},
+    async putRecord(table, key, value) { (snapshot.tables[table] ??= {})[key] = structuredClone(value) },
+    async deleteRecord(table, key) { delete snapshot.tables[table][key] },
+  } } } }) } } }, { backend: 'runtime-test' })
+}
+const immediate = () => new Promise((resolve) => setImmediate(resolve))
+async function until(condition) {
+  const deadline = performance.now() + 3000
+  while (performance.now() < deadline) {
+    if (condition()) return
+    await new Promise((resolve) => setTimeout(resolve, 5))
   }
-  const session = { id: 'session-steer', seq: 0, events: [] }
-  const agent = {
-    session, status: 'running',
-    steer(message) {
-      const text = message.content[0].text
-      if (text.startsWith('[GROUP_MESSAGE_STEER]')) {
-        steered.push(message)
-        if (steered.length >= targetSteerCount) resolveSteerCount?.()
-        return
-      }
-      if (text.startsWith('[GROUP_DECISION_RECHECK]')) {
-        rechecks.push(message)
-        return
-      }
-      throw new Error('仅群消息允许通过 steer 插入')
-    },
-    followup(message) { followups.push(message) },
-    async whenIdle() { await idle },
+  assert.fail('fixture 条件未在 3 秒内成立')
+}
+async function setup(t, options = {}) {
+  const snapshot = options.snapshot ?? { tables: {}, global: null }
+  const store = await openResidentStore(memoryFacility(snapshot))
+  for (const groupId of options.groups ?? ['g']) if (!store.getGroup(groupId)) await store.subscribe({ groupId, residentSessionId: residentSessionId(groupId), residentAgentPreset: 'standard' })
+  await store.setAgentNames(['助理'])
+  const h = { store, snapshot, handles: new Map(), calls: [], cancelled: [], disposed: [], permissions: [], goals: options.goals ?? new Map(), events: new Map(), idle: new Map(), idleCalls: new Map(), onSteer: undefined }
+  const never = new Promise(() => {})
+  const makeHandle = async (input, resumed) => {
+    const sessionId = String(input.sessionId ?? input.resumeSessionId)
+    if (resumed) await options.beforeResume?.(input)
+    else await options.beforeCreate?.(input)
+    if (options.resumeFailure && resumed && options.resumeFailure(sessionId)) throw new Error('corrupt session log: synthetic failure')
+    const events = [...(input.seed ?? options.sessionEvents?.get(sessionId) ?? [])]
+    const session = { id: sessionId, seq: events.length, events, meta: input.meta ?? {}, append(type, data) { events.push({ seq: this.seq++, type, data }) } }
+    const tools = new Map(), sections = [], restrictions = [], sent = []
+    const agent = { session, status: 'running', inbox: options.inbox ?? { nextStep: [], nextTurn: [], remove() { return false } },
+      steer(message) { sent.push(message); session.append('user/message', message); h.onSteer?.(sessionId, message) },
+      followup(message) { sent.push(message); h.onSteer?.(sessionId, message) },
+      whenIdle: () => { h.idleCalls.set(sessionId, (h.idleCalls.get(sessionId) ?? 0) + 1); return h.idle.get(sessionId) ?? never },
+      cancel(cause) { h.cancelled.push({ sessionId, cause }) },
+    }
+    const handle = { agent, tools, sections, restrictions, sent, async dispose() { await options.disposeGate?.(sessionId); h.disposed.push(sessionId) } }
+    h.handles.set(sessionId, handle)
+    const agentCtx = { on: () => () => {}, tools: { register(tool) { tools.set(tool.name, tool) }, restrict(rule) { restrictions.push(rule) } }, systemPrompt: { section(value) { sections.push(value) } } }
+    const setupResult = await input.setup?.(agentCtx)
+    assert.equal(setupResult, undefined)
+    h.calls.push({ resumed, sessionId, input })
+    return handle
   }
-  const handle = { agent, dispose: async () => undefined }
-  const agentCtx = { on: () => () => undefined, tools: { register: (tool) => registeredTools.push(tool), restrict: () => undefined }, systemPrompt: { section: () => undefined } }
+  const selection = { provider: 'fake', model: 'fake' }
   const ctx = {
-    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
-    agents: {
-      async resume(options) { await options.setup(agentCtx); return handle },
-      async create(options) {
-        if (!taskCapacity) throw new Error('fixture_task_capacity_disabled')
-        const leafSession = { id: String(options.sessionId), events: [{ type: 'subagent/descriptor' }], meta: { seedLength: 0 }, append() {} }
-        const leafAgent = {
-          session: leafSession, status: 'running',
-          cancel(cause, cancelOptions) { leafCancelCalls.push({ cause, options: cancelOptions }) },
-          steer() {},
-          async whenIdle() {},
-        }
-        leafHandle = { agent: leafAgent, async dispose() { markLeafDisposeStarted(); await leafDisposeGate } }
-        const leafCtx = { on: () => () => undefined, tools: { register: (tool) => leafTools.push(tool), restrict: () => undefined }, systemPrompt: { section: () => undefined } }
-        await options.setup(leafCtx)
-        return leafHandle
-      },
-    },
-    subagents: { drainContinuableDescendants: async () => undefined },
+    agentDefaultModel: { currentSelection: () => ({ ...selection }), async saveSelection(value) { Object.assign(selection, value); h.savedSelection = value } },
+    agents: { create: (input) => makeHandle(input, false), resume: (input) => makeHandle(input, true), get: (id) => h.handles.get(String(id))?.agent },
+    subagents: { drainContinuableDescendants: async () => {} },
+    agentPresets: { mount: async (_ctx, id) => ({ id }), composeFrom: () => 'standard', serviceFor: () => ({ set(session, preset) { h.permissions.push([session.id, preset]) } }) },
     goals: {
-      get: (target) => goals.get(target),
-      create(target, options) { goals.set(target, { id: `goal-${target.session.id}`, revision: 1, phase: 'active', activation: 'armed', roundsStarted: 0, maxGoalRounds: options.maxGoalRounds }) },
-      complete(target) { const goal = goals.get(target); goals.set(target, { ...goal, revision: goal.revision + 1, phase: 'complete', activation: 'disarmed' }) },
+      get: (agent) => h.goals.get(agent.session.id),
+      create(agent, value) { const goal = { id: `goal-${agent.session.id}`, revision: 1, phase: 'active', activation: 'armed', roundsStarted: 0, ...value }; h.goals.set(agent.session.id, goal); return goal },
+      complete(agent, ref) { const goal = { ...h.goals.get(agent.session.id), revision: (ref?.revision ?? 1) + 1, phase: 'complete', activation: 'disarmed' }; h.goals.set(agent.session.id, goal); return goal },
+      block(agent, ref, reason) { const goal = { ...h.goals.get(agent.session.id), revision: ref.revision + 1, phase: 'blocked', activation: 'disarmed', blockedReason: reason }; h.goals.set(agent.session.id, goal); return goal },
+      edit(agent, ref, patch) { const goal = { ...h.goals.get(agent.session.id), ...patch, revision: ref.revision + 1 }; h.goals.set(agent.session.id, goal); return goal },
+      resume(agent, ref) { const goal = { ...h.goals.get(agent.session.id), revision: ref.revision + 1, phase: 'active', activation: 'armed' }; h.goals.set(agent.session.id, goal); return goal },
     },
-    agentPresets: { mount: async (_ctx, id) => ({ id }), composeFrom: () => 'standard', serviceFor: () => ({ set: () => undefined }) },
+    on(name, fn) { h.events.set(name, fn); return () => h.events.delete(name) },
+    ...(options.attachments ? { attachments: options.attachments } : {}),
   }
-  const store = {
-    getGroup: (groupId) => groupId === group.groupId ? group : undefined,
-    listGroups: () => [group], listTasks: () => tasks, getTask: (taskId) => tasks.find((task) => task.taskId === taskId),
-    async ingest(message) {
-      const duplicate = group.messages.find((item) => item.messageId === message.messageId)
-      if (duplicate) return { duplicate: true, sequence: duplicate.sequence, group }
-      const accepted = { ...message, sequence: group.nextSequence++, agentDeliveryStatus: 'pending' }
-      group.messages.push(accepted)
-      return { duplicate: false, sequence: accepted.sequence, group }
-    },
-    async markMessageAgentDelivery({ messageId, status, error, retryAt }) { const item = group.messages.find((message) => message.messageId === messageId); const next = { agentDeliveryStatus: status, ...(status === 'steered' ? { agentDecisionAttemptCount: (item.agentDecisionAttemptCount ?? 0) + 1 } : {}), ...(error === undefined ? {} : { error, agentDeliveryError: error }), ...(retryAt === undefined ? {} : { agentDecisionRetryAt: retryAt }) }; if (!error) { delete item.error; delete item.agentDeliveryError } if (!retryAt) delete item.agentDecisionRetryAt; Object.assign(item, next); return group },
-    async appendOutbox(value) { group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
-    async attachOutboxTasks({ sourceMessageId, taskIds }) { const item = group.outbox.find((outbound) => outbound.sourceMessageId === sourceMessageId); item.taskIds = [...new Set([...(item.taskIds ?? []), ...taskIds])]; return group },
-    async updateOutboundRecall({ outboundId, status, reason, error }) { const item = group.outbox.find((entry) => entry.outboundId === outboundId); Object.assign(item, { recallStatus: status, recallReason: reason }, status === 'recalled' ? { recalledAt: '2026-09-04T00:00:00Z', recallError: undefined } : {}, status === 'failed' ? { recallError: error } : {}); return group },
-    async createTask(value) {
-      const { sourceMessageIds, ...taskValue } = value
-      const messageHistory = (sourceMessageIds ?? [value.sourceMessageId]).flatMap((messageId) => {
-        const message = group.messages.find((item) => item.messageId === messageId)
-        if (message === undefined) return []
-        return [{
-          messageId: message.messageId, text: message.text,
-          ...(message.senderName ? { senderName: message.senderName } : {}),
-          ...(message.senderOpenDingTalkId ? { senderOpenDingTalkId: message.senderOpenDingTalkId } : {}),
-          ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}),
-          ...(message.quotedMessage?.messageId ? { quotedMessageId: message.quotedMessage.messageId } : {}),
-          runSequence: 1, associatedAt: '2026-09-02T00:00:00.000Z',
-        }]
-      })
-      const task = { ...taskValue, ...(messageHistory.length > 0 ? { messageHistory } : {}), taskId: `task-${tasks.length + 1}`, childSessionId: `session-task-${tasks.length + 1}`, state: 'queued' }
-      tasks.push(task)
-      return { created: true, task }
-    },
-    async updateTask(taskId, transform) {
-      const index = tasks.findIndex((task) => task.taskId === taskId)
-      if (index < 0) throw new Error(`task_not_found:${taskId}`)
-      tasks[index] = transform(tasks[index])
-      return tasks[index]
-    },
-    close: async () => undefined,
+  h.ctx = ctx
+  h.runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: options.maxConcurrentTasks ?? 1, supervisorIntervalMs: 0, resumeTimeoutMs: options.resumeTimeoutMs ?? 10_000, decisionRetryBaseMs: options.retryDelayMs ?? 60_000 })
+  h.resident = (groupId = 'g') => h.handles.get(store.getGroup(groupId)?.residentSessionId)
+  h.call = (name, args, groupId = 'g', agent) => h.resident(groupId).tools.get(name).execute(args, { agent: agent ?? h.resident(groupId).agent })
+  h.envelope = (prefix, groupId = 'g', label = 'Topic 请求') => {
+    const text = h.resident(groupId).sent.findLast((message) => message.content[0]?.text.startsWith(prefix))?.content[0].text
+    return text ? JSON.parse(text.split('\n').find((line) => line.startsWith(`${label}：`)).slice(label.length + 1)) : undefined
   }
-  return {
-    group, steered, rechecks, followups, registeredTools, leafTools, leafCancelCalls, tasks, releaseIdle, waitForSteers, ctx, store, handle,
-    getLeafHandle: () => leafHandle, releaseLeafDispose, waitForLeafDisposeStarted: () => leafDisposeStarted,
-  }
+  t.after(async () => { h.onSteer = undefined; for (const id of h.handles.keys()) h.idle.set(id, Promise.resolve()); await h.runtime.close() })
+  return h
+}
+async function ingest(h, id, extra = {}) {
+  return h.runtime.ingest({ groupId: 'g', messageId: id, text: `@助理 ${id}`, occurredAt: '2026-09-07T00:00:00Z', senderName: '甲', senderOpenDingTalkId: 'od-a', ...extra })
+}
+async function route(h, topicByMessage = {}, groupId = 'g') {
+  await h.runtime.recoverInterruptedDecisions()
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]', groupId)
+  assert.ok(request, 'Runtime 必须先建立归类请求')
+  return h.call('group_topic_route_submit', { requestId: request.requestId, routes: request.messages.map((message) => ({ messageId: message.messageId, messageVersion: message.messageVersion, topics: [topicByMessage[message.messageId] ? { topicId: topicByMessage[message.messageId] } : { newTopicKey: message.messageId, title: message.messageId }] })) }, groupId)
+}
+async function decide(h, request, decision = {}, groupId = 'g') {
+  const value = { basisMessageIds: [request.messages.at(-1).messageId], actions: [], ...(decision.reply ? { replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } : {}), ...(decision.reply === undefined ? { reason: '无需回复' } : {}), ...decision }
+  const result = await h.call('group_decision_submit', { requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision: value }, groupId)
+  await h.runtime.drainTopicOperations(groupId)
+  return result
+}
+async function createTask(h, id = 'task-input', extra = {}) {
+  await ingest(h, id)
+  const request = (await route(h)).pendingDecisions.find((item) => item.messages.some((message) => message.messageId === id))
+  const action = { kind: 'new-task', title: id, objective: `核验 ${id}`, acceptanceCriteria: ['结果可查'], stageTasks: ['核验阶段'], topicRefs: [{ topicId: request.topicId, revision: request.revision }], ...extra }
+  assert.equal((await decide(h, request, { actions: [action], reply: '已收到，会继续处理。' })).status, 'accepted')
+  assert.equal(h.store.getTopic('g', request.topicId).decisions.at(-1).status, 'completed', JSON.stringify(h.runtime.listRecoveryIssues()))
+  return h.store.listTasks().find((task) => task.topicRefs.some((ref) => ref.topicId === request.topicId))
 }
 
-const decisionRequestId = (message) => message.content[0].text.match(/^判断请求 ID：([^\r\n]+)$/mu)?.[1]
-const acceptedSubmission = (acceptedRequestIds, pendingRequestIds = []) => ({
-  status: 'accepted', acceptedRequestIds, pendingRequestIds, missingRequestIds: [], unexpectedRequestIds: [],
-})
-const staleSubmission = (pendingRequestIds, missingRequestIds, unexpectedRequestIds = []) => ({
-  status: 'stale', acceptedRequestIds: [], pendingRequestIds, missingRequestIds, unexpectedRequestIds,
-})
-
-test('普通群消息只携带历史回复候选计数并可按请求读取完整快照', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'on-demand-review-group' })
-  for (let index = 0; index < 20; index += 1) {
-    fixture.group.messages.push({ messageId: `old-${index}`, sequence: index + 1, text: `历史事项 ${index} ${'来源'.repeat(300)}`, occurredAt: `2026-09-04T01:${String(index).padStart(2, '0')}:00Z` })
-    fixture.group.outbox.push({ outboundId: `out-${index}`, sourceMessageId: `old-${index}`, text: `历史回复 ${index} ${'结果'.repeat(300)}`, status: 'sent', deliveredMessageId: `sent-${index}` })
-  }
-  fixture.group.nextSequence = 21
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'current', text: '短消息', occurredAt: '2026-09-04T02:00:00Z' })
-  await fixture.waitForSteers(1)
-  const steerText = fixture.steered[0].content[0].text
-  const requestId = decisionRequestId(fixture.steered[0])
-  assert.ok(steerText.length < 600)
-  assert.match(steerText, /Runtime 已绑定 \d+ 条候选/u)
-  assert.doesNotMatch(steerText, /历史回复 19|来源来源/u)
-
-  const reviewTool = fixture.registeredTools.find((item) => item.name === 'group_reply_review_get')
-  const review = await reviewTool.execute({ requestIds: [requestId] }, { agent: fixture.handle.agent })
-  assert.ok(review.candidateCount > 0)
-  assert.equal(review.candidateCount, review.candidates.length)
-  assert.match(review.candidates.at(-1).reply, /历史回复/u)
-  await assert.rejects(reviewTool.execute({ requestIds: ['unknown'] }, { agent: fixture.handle.agent }), /group_reply_review_request_unknown/)
-
-  const decisionTool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await decisionTool.execute({ submissions: [{ requestIds: [requestId], decision: { actions: [], reason: '无需回复' } }] }, { agent: fixture.handle.agent })
-  await ingest
-  fixture.releaseIdle()
-  await runtime.close()
+test('入站持久接收立即返回，模型尚未提交时也能接收后续消息', async (t) => {
+  const h = await setup(t)
+  const first = await ingest(h, 'a'), second = await ingest(h, 'b')
+  assert.equal(first.accepted, true); assert.equal(second.accepted, true)
+  assert.equal(h.store.getGroup('g').messages.length, 2)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  assert.ok(h.envelope('[GROUP_TOPIC_ROUTE]'))
 })
 
-test('任务摘要索引不展开历史且只读工具按需返回完整关联上下文', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'on-demand-task-context-group' })
-  const task = {
-    taskId: 'task-history', groupId: fixture.group.groupId, title: '编辑器缓存问题', objective: `核对并修复缓存提示 ${'完整范围'.repeat(80)}`,
-    state: 'completed', archivedAt: '2026-09-04T03:00:00Z', acceptanceCriteria: ['计算不产生假脏提示'], stageTasks: ['核对', '修复'],
-    messageHistory: [{ messageId: 'source-1', text: '只计算没有修改却提示保存', senderName: '向春梅', senderOpenDingTalkId: 'od-xcm', occurredAt: '2026-09-04T01:00:00Z' }],
-    relatedContexts: ['审核回复也需要独立核对'], completion: '本地修改完成，尚未部署 UAT',
-  }
-  fixture.tasks.push(task)
-  const index = buildTaskAssociationIndex(fixture.tasks)
-  assert.equal(index.length, 1)
-  assert.equal(index[0].messageCount, 1)
-  assert.ok(index[0].objectiveExcerpt.length <= 121)
-  assert.doesNotMatch(JSON.stringify(index), /只计算没有修改却提示保存|messageHistory/u)
-
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const contextTool = fixture.registeredTools.find((item) => item.name === 'group_task_context_get')
-  const context = await contextTool.execute({ taskIds: [task.taskId] }, { agent: fixture.handle.agent })
-  assert.equal(context.tasks[0].objective, task.objective)
-  assert.deepEqual(context.tasks[0].messageHistory, task.messageHistory)
-  assert.deepEqual(context.tasks[0].relatedContexts, task.relatedContexts)
-  await assert.rejects(contextTool.execute({ taskIds: [task.taskId, task.taskId] }, { agent: fixture.handle.agent }), /group_task_context_request_duplicate/)
-  await assert.rejects(contextTool.execute({ taskIds: ['task-missing'] }, { agent: fixture.handle.agent }), /group_task_context_not_found/)
-  fixture.releaseIdle()
-  await runtime.close()
+test('重复入站幂等，Topic 提交成功后只生成一条可靠回复', async (t) => {
+  const h = await setup(t); await ingest(h, 'a'); assert.equal((await ingest(h, 'a')).duplicate, true)
+  const request = (await route(h)).pendingDecisions[0]
+  assert.equal((await decide(h, request, { reply: '已核验。' })).status, 'accepted')
+  assert.equal(h.store.getGroup('g').messages.length, 1)
+  assert.deepEqual(h.store.getGroup('g').outbox.map((item) => item.text), ['已核验。'])
+  assert.equal((await decide(h, request, { reply: '重复。' })).status, 'topic-stale')
+  assert.equal(h.store.getGroup('g').outbox.length, 1)
 })
 
-function twoGroupDecisionFixture() {
-  const groups = new Map(['group-a', 'group-b'].map((groupId) => [groupId, { groupId, residentSessionId: `session-${groupId}`, residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }]))
-  const handles = new Map(), registeredTools = new Map(), steered = new Map()
-  const neverIdle = new Promise(() => undefined)
-  const ctx = {
-    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
-    agents: { async resume(options) {
-      const group = [...groups.values()].find((item) => item.residentSessionId === options.resumeSessionId)
-      const messages = [], tools = []
-      const agent = { session: { id: group.residentSessionId, seq: 0, events: [] }, status: 'running', steer: (message) => messages.push(message), async whenIdle() { await neverIdle } }
-      const handle = { agent, dispose: async () => undefined }
-      await options.setup({ on: () => () => undefined, tools: { register: (tool) => tools.push(tool), restrict: () => undefined }, systemPrompt: { section: () => undefined } })
-      handles.set(group.groupId, handle); registeredTools.set(group.groupId, tools); steered.set(group.groupId, messages)
-      return handle
-    } },
-    subagents: { drainContinuableDescendants: async () => undefined },
-    agentPresets: { mount: async (_ctx, id) => ({ id }), serviceFor: () => ({ set: () => undefined }) },
-  }
-  const store = {
-    getGroup: (groupId) => groups.get(groupId), listGroups: () => [...groups.values()], listTasks: () => [], getTask: () => undefined,
-    async ingest(message) { const group = groups.get(message.groupId); const accepted = { ...message, sequence: group.nextSequence++, agentDeliveryStatus: 'pending' }; group.messages.push(accepted); return { duplicate: false, sequence: accepted.sequence, group } },
-    async markMessageAgentDelivery({ groupId, messageId, status, error, retryAt }) { const item = groups.get(groupId).messages.find((message) => message.messageId === messageId); const next = { agentDeliveryStatus: status, ...(status === 'steered' ? { agentDecisionAttemptCount: (item.agentDecisionAttemptCount ?? 0) + 1 } : {}), ...(error === undefined ? {} : { error, agentDeliveryError: error }), ...(retryAt === undefined ? {} : { agentDecisionRetryAt: retryAt }) }; if (!error) { delete item.error; delete item.agentDeliveryError } if (!retryAt) delete item.agentDecisionRetryAt; Object.assign(item, next); return groups.get(groupId) },
-    async appendOutbox(value) { const group = groups.get(value.groupId); group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
-    close: async () => undefined,
-  }
-  const waitForSteers = async () => { while ([...steered.values()].reduce((total, items) => total + items.length, 0) < 2) await new Promise((resolve) => setImmediate(resolve)) }
-  return { groups, handles, registeredTools, steered, waitForSteers, ctx, store }
-}
-
-function taskReplyRuntimeFixture({ messageHistory, groupMessages = [] } = {}) {
-  const result = { status: 'completed', workType: 'non-development', summary: '原完成结果', evidence: ['已核验'], artifacts: [] }
-  const group = { groupId: 'task-reply-group', residentSessionId: 'session-task-reply', residentAgentPreset: 'standard', nextSequence: groupMessages.length + 1, messages: groupMessages, outbox: [] }
-  let task = { taskId: 'task-reply', groupId: group.groupId, state: 'completed', objective: '完成既定事项', sourceMessageId: 'source-message', requesterName: '提出人', requesterOpenDingTalkId: 'od-requester', ...(messageHistory ? { messageHistory } : {}), completionSequence: 1, result, lastCompletedResult: result }
-  const registeredTools = [], followups = [], steered = []
-  const neverIdle = new Promise(() => undefined)
-  let idleCalls = 0
-  const agent = {
-    session: { id: group.residentSessionId, seq: 0, events: [] }, status: 'running',
-    followup(message) { followups.push(message) },
-    steer(message) { steered.push(message) },
-    async whenIdle() { idleCalls += 1; if (idleCalls > 1) await neverIdle },
-  }
-  const handle = { agent, dispose: async () => undefined }
-  const ctx = {
-    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
-    agents: { async resume(options) { await options.setup({ on: () => () => undefined, tools: { register: (tool) => registeredTools.push(tool), restrict: () => undefined }, systemPrompt: { section: () => undefined } }); return handle } },
-    subagents: { drainContinuableDescendants: async () => undefined },
-    agentPresets: { mount: async (_ctx, id) => ({ id }), serviceFor: () => ({ set: () => undefined }) },
-  }
-  const store = {
-    getGroup: (groupId) => groupId === group.groupId ? group : undefined,
-    listGroups: () => [group], listTasks: () => [task], getTask: (taskId) => taskId === task.taskId ? task : undefined,
-    async updateTask(taskId, transform) { if (taskId !== task.taskId) throw new Error(`task_not_found:${taskId}`); task = transform(task); return task },
-    async ingest(message) { const accepted = { ...message, sequence: group.nextSequence++, agentDeliveryStatus: 'pending' }; group.messages.push(accepted); return { duplicate: false, sequence: accepted.sequence, group } },
-    async markMessageAgentDelivery({ messageId, status, error, retryAt }) { const item = group.messages.find((message) => message.messageId === messageId); const next = { agentDeliveryStatus: status, ...(status === 'steered' ? { agentDecisionAttemptCount: (item.agentDecisionAttemptCount ?? 0) + 1 } : {}), ...(error === undefined ? {} : { error, agentDeliveryError: error }), ...(retryAt === undefined ? {} : { agentDecisionRetryAt: retryAt }) }; if (!error) { delete item.error; delete item.agentDeliveryError } if (!retryAt) delete item.agentDecisionRetryAt; Object.assign(item, next); return group },
-    async appendOutbox(value) { if (!group.outbox.some((item) => item.sourceMessageId === value.sourceMessageId)) group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...value, status: 'pending' }); return group },
-    async attachOutboxTasks({ sourceMessageId, taskIds }) { const item = group.outbox.find((outbound) => outbound.sourceMessageId === sourceMessageId); item.taskIds = [...new Set([...(item.taskIds ?? []), ...taskIds])]; return group },
-    async updateOutboundRecall({ outboundId, status, reason, error }) { const item = group.outbox.find((entry) => entry.outboundId === outboundId); Object.assign(item, { recallStatus: status, recallReason: reason }, status === 'recalled' ? { recalledAt: '2026-09-04T00:00:00Z', recallError: undefined } : {}, status === 'failed' ? { recallError: error } : {}); return group },
-    close: async () => undefined,
-  }
-  return { result, group, getTask: () => task, registeredTools, followups, steered, agent, ctx, store }
-}
-
-test('同一turn的多条消息按step工具提交独立Decision且不等待turn结束', async () => {
-  const fixture = decisionRuntimeFixture()
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '第一条', occurredAt: '2026-08-28T01:00:00Z' })
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '第二条', occurredAt: '2026-08-28T01:00:01Z' })
-  await fixture.waitForSteers(2)
-  const requestIds = fixture.steered.map(decisionRequestId)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submitted = await tool.execute({ observedRequestIds: requestIds, submissions: [
-    { requestIds: [requestIds[0]], decision: { actions: [], reply: '第一项结果' } },
-    { requestIds: [requestIds[1]], decision: { actions: [], reason: '第二项独立忽略' } },
-  ] }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, acceptedSubmission(requestIds))
-  const [firstResult, secondResult] = await Promise.all([first, second])
-  assert.equal(firstResult.decision.reply, '第一项结果')
-  assert.equal(secondResult.decision.reason, '第二项独立忽略')
-  assert.equal(fixture.followups.length, 0, '普通群判断不再排队 coordinator followup')
-  assert.equal(fixture.handle.agent.session.events.length, 0, 'Decision 在工具执行时结算，不依赖 turn/end 日志')
-  assert.deepEqual(fixture.group.messages.map((item) => item.agentDeliveryStatus), ['delivered', 'delivered'])
-  fixture.releaseIdle()
-  await runtime.close()
+test('普通 assistant 文本或 turn 结束不能替代 Topic 结构化提交', async (t) => {
+  const h = await setup(t); await ingest(h, 'a')
+  const request = (await route(h)).pendingDecisions[0]
+  h.resident().agent.session.append('assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: '我处理好了' }] } })
+  h.resident().agent.session.append('turn/end', { status: 'success' })
+  await h.runtime.drainTopicOperations('g')
+  assert.equal(h.store.getTopic('g', request.topicId).processedRevision, 0)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
 })
 
-test('DWS listener 恢复会关闭退出和启动异常两类 carrier 告警', async () => {
-  const fixture = decisionRuntimeFixture()
-  fixture.tasks.push(
-    { taskId: 'task-running', groupId: fixture.group.groupId, state: 'running' },
-    { taskId: 'task-completed', groupId: fixture.group.groupId, state: 'completed' },
-  )
-  const resolutions = []
-  fixture.store.resolveAlerts = async (value) => { resolutions.push(value); return { resolved: 1 } }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-
-  await runtime.resolveGroupCarrierIssues({ groupId: fixture.group.groupId })
-
-  assert.deepEqual(resolutions, [{ taskId: 'task-running', fingerprintPrefix: 'dws-consumer-' }, { taskId: 'task-completed', fingerprintPrefix: 'dws-consumer-' }])
-  await runtime.close()
+test('注册工具符合 DSH JSON Schema，Resident 只能通过 Topic 决策建任务', async (t) => {
+  const h = await setup(t)
+  const names = [...h.resident().tools.keys()]
+  for (const name of ['group_topic_route_submit', 'group_topic_context_get', 'group_topic_list', 'group_decision_submit', 'group_task_review_submit', 'group_task_context_get']) assert.ok(names.includes(name), name)
+  for (const name of ['group_task_create', 'group_task_context_append', 'group_task_reopen']) assert.equal(names.includes(name), false, '模型不能伪装 Web 输入绕过归属和授权')
+  for (const tool of h.resident().tools.values()) { assertSupportedJsonSchema(tool.parameters); assertSupportedJsonSchema(tool.output.schema) }
+  assert.deepEqual(h.resident().restrictions, [{ deny: ['get_goal', 'create_goal', 'update_goal'] }])
+  await assert.rejects(h.call('group_topic_list', {}, 'g', { session: { id: 'foreign' } }), /resident_tool_wrong_session/)
 })
 
-test('模型可合并相关请求且Runtime只提交一次副作用并保留全部来源', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'combined-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '任务主体', occurredAt: '2026-08-28T01:00:00Z', senderName: '甲' })
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '补充范围', occurredAt: '2026-08-28T01:00:01Z', senderName: '乙' })
-  await fixture.waitForSteers(2)
-  const requestIds = fixture.steered.map(decisionRequestId)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await tool.execute({ observedRequestIds: requestIds, submissions: [{ requestIds, decision: { actions: [{ kind: 'new-task', title: '合并处理', objective: '处理主体与补充范围', acceptanceCriteria: ['范围均已核验'], sourceMessageIds: ['m1', 'm2'] }], reply: '已开始处理。' } }] }, { agent: fixture.handle.agent })
-  const [firstResult, secondResult] = await Promise.all([first, second])
-  assert.equal(fixture.tasks.length, 1, '共享Decision的业务副作用只能由最早请求执行一次')
-  assert.equal(fixture.group.outbox.length, 1)
-  assert.match(fixture.tasks[0].relatedContexts[0], /消息ID：m1[\s\S]*原始消息：\s*任务主体/u)
-  assert.match(fixture.tasks[0].relatedContexts[0], /消息ID：m2[\s\S]*原始消息：\s*补充范围/u)
-  assert.equal(firstResult.decisionOwnerRequestId, undefined)
-  assert.equal(secondResult.decisionOwnerRequestId, requestIds[0])
-  fixture.releaseIdle()
-  await runtime.close()
+test('来源附件先持久保存，归类输入可恢复相同 imageRefs', async (t) => {
+  let saved
+  const h = await setup(t, { attachments: { async saveImages(images) { saved = images; return [{ id: 'image-a', mediaType: 'image/png' }] } } })
+  await ingest(h, 'a', { images: [{ data: 'base64', mediaType: 'image/png', name: '说明图' }] })
+  assert.equal(saved[0].name, '说明图')
+  assert.equal(h.store.getGroup('g').messages[0].imageRefs[0].id, 'image-a')
+  await route(h)
+  assert.equal(h.envelope('[GROUP_TOPIC_DECISION]').messages[0].imageRefs[0].id, 'image-a')
 })
 
-test('同批四条消息可同时表达部分相关独立完成与仅观察待处理', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'complex-batch-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const ingests = [
-    runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-a', text: '事项A主体', occurredAt: '2026-09-02T01:00:00Z' }),
-    runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-b', text: '事项A的补充B', occurredAt: '2026-09-02T01:00:01Z' }),
-    runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-c', text: '独立事项C', occurredAt: '2026-09-02T01:00:02Z' }),
-    runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-d', text: '已观察但稍后处理D', occurredAt: '2026-09-02T01:00:03Z' }),
-  ]
-  await fixture.waitForSteers(4)
-  const [requestA, requestB, requestC, requestD] = fixture.steered.map(decisionRequestId)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submitted = await tool.execute({
-    observedRequestIds: [requestA, requestB, requestC, requestD],
-    submissions: [
-      { requestIds: [requestA, requestB], decision: { actions: [{ kind: 'new-task', title: '合并AB', objective: '结合A与B完成同一事项', acceptanceCriteria: ['A与B均已覆盖'], sourceMessageIds: ['m-a', 'm-b'] }], reply: '已结合A与B处理。' } },
-      { requestIds: [requestC], decision: { actions: [], reason: 'C是独立且无需回复的事项' } },
-    ],
-  }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, acceptedSubmission([requestA, requestB, requestC], [requestD]))
-  const [resultA, resultB, resultC] = await Promise.all(ingests.slice(0, 3))
-  assert.equal(resultA.decision.reply, '已结合A与B处理。')
-  assert.equal(resultB.decision.reply, '已结合A与B处理。')
-  assert.equal(resultC.decision.reason, 'C是独立且无需回复的事项')
-  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['delivered', 'delivered', 'delivered', 'steered'])
-  assert.equal(fixture.tasks.length, 1)
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['已结合A与B处理。'])
-
-  await tool.execute({ submissions: [{ requestIds: [requestD], decision: { actions: [], reason: 'D在回复后继续处理' } }] }, { agent: fixture.handle.agent })
-  assert.equal((await ingests[3]).decision.reason, 'D在回复后继续处理')
-  fixture.releaseIdle()
-  await runtime.close()
+test('附件缺失硬拦截任务，仍发送明确缺失反馈', async (t) => {
+  const h = await setup(t); await ingest(h, 'a', { mediaUnavailable: ['图片获取失败'] })
+  const request = (await route(h)).pendingDecisions[0]
+  const action = { kind: 'new-task', title: '核验', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: request.topicId, revision: 1 }] }
+  assert.equal((await decide(h, request, { actions: [action], reply: '开始' })).status, 'accepted')
+  assert.equal(h.store.listTasks().length, 0)
+  assert.match(h.store.getGroup('g').outbox[0].text, /图片获取失败/)
 })
 
-test('一个Decision可把历史与当前消息多对多关联到不同Task', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'many-to-many-history-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  await runtime.backfill([{
-    groupId: fixture.group.groupId, messageId: 'm-history', text: '最初提出两个事项', occurredAt: '2026-09-02T00:59:59Z', senderName: '最初提出人', senderOpenDingTalkId: 'od-history',
-  }])
-  const ingests = [
-    runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-a', text: '事项A的执行要求', occurredAt: '2026-09-02T01:00:00Z', senderName: '甲', senderOpenDingTalkId: 'od-a' }),
-    runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-b', text: 'A与B共用的约束', occurredAt: '2026-09-02T01:00:01Z', senderName: '乙', senderOpenDingTalkId: 'od-b' }),
-    runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-c', text: '事项B的验收要求', occurredAt: '2026-09-02T01:00:02Z', senderName: '丙', senderOpenDingTalkId: 'od-c' }),
-  ]
-  await fixture.waitForSteers(3)
-  const requestIds = fixture.steered.map(decisionRequestId)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = (actions) => ({ observedRequestIds: requestIds, submissions: [{ requestIds, decision: { actions, reply: '已确认并开始处理。' } }] })
-
-  await assert.rejects(tool.execute(submission([{ kind: 'new-task', title: '缺少来源', objective: '不得创建', acceptanceCriteria: ['不得创建'] }]), { agent: fixture.handle.agent }), /group_decision_invalid_schema/)
-  await assert.rejects(tool.execute(submission([{ kind: 'new-task', title: '重复来源', objective: '不得创建', acceptanceCriteria: ['不得创建'], sourceMessageIds: ['m-a', 'm-a'] }]), { agent: fixture.handle.agent }), /task_action_source_message_duplicate/)
-  await assert.rejects(tool.execute(submission([{ kind: 'new-task', title: '未知来源', objective: '不得创建', acceptanceCriteria: ['不得创建'], sourceMessageIds: ['m-a', 'm-missing'] }]), { agent: fixture.handle.agent }), /task_action_source_message_invalid/)
-  await assert.rejects(tool.execute(submission([{ kind: 'new-task', title: '只有旧来源', objective: '不得创建', acceptanceCriteria: ['不得创建'], sourceMessageIds: ['m-history'] }]), { agent: fixture.handle.agent }), /task_action_current_source_message_required/)
-  assert.equal(fixture.tasks.length, 0, '来源映射全量预检失败时不得产生部分副作用')
-
-  await tool.execute(submission([
-    { kind: 'new-task', title: '事项A', objective: '完成事项A', acceptanceCriteria: ['A完成'], sourceMessageIds: ['m-history', 'm-a', 'm-b'] },
-    { kind: 'new-task', title: '事项B', objective: '完成事项B', acceptanceCriteria: ['B完成'], sourceMessageIds: ['m-history', 'm-b', 'm-c'] },
-  ]), { agent: fixture.handle.agent })
-  await Promise.all(ingests)
-
-  assert.deepEqual(fixture.tasks.map((task) => task.messageHistory.map((message) => message.messageId)), [
-    ['m-history', 'm-a', 'm-b'],
-    ['m-history', 'm-b', 'm-c'],
-  ])
-  assert.deepEqual(fixture.tasks[0].messageHistory.map((message) => message.senderOpenDingTalkId), ['od-history', 'od-a', 'od-b'])
-  assert.deepEqual(fixture.tasks[1].messageHistory.map((message) => message.senderOpenDingTalkId), ['od-history', 'od-b', 'od-c'])
-  assert.doesNotMatch(fixture.tasks[0].relatedContexts[0], /事项B的验收要求/u)
-  assert.doesNotMatch(fixture.tasks[1].relatedContexts[0], /事项A的执行要求/u)
-  assert.equal(fixture.tasks.filter((task) => task.messageHistory.some((message) => message.messageId === 'm-b')).length, 2, '同一消息可以关联多个Task')
-  fixture.releaseIdle()
-  await runtime.close()
+test('多群请求隔离，A 等待归类不阻止 B 完成', async (t) => {
+  const h = await setup(t, { groups: ['g', 'b'] })
+  await ingest(h, 'a'); await ingest(h, 'b', { groupId: 'b' })
+  const b = (await route(h, {}, 'b')).pendingDecisions[0]
+  assert.equal((await decide(h, b, { reply: 'B 完成' }, 'b')).status, 'accepted')
+  assert.equal(h.store.getGroup('b').outbox.length, 1)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  assert.equal(h.store.getGroup('g').messages[0].routingStatus, 'pending')
 })
 
-test('明确@其他同事的消息不能建Task，后续引用并指向Agent后才允许转交', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'directed-other-participants-group' })
-  fixture.store.getAgentNames = () => ['小小鹏']
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const original = runtime.ingest({
-    groupId: fixture.group.groupId,
-    messageId: 'msg624ca5N0Mq3+36twQq+b7A==',
-    text: '[图片消息](mediaId=@lQLPJyFx1LlkTRfNBWjNC3qwS5c44-MgXl8Kat4grwTGAA)@李辰 @郑耀彬 只是计算了，没有改信息，为啥要提示这个呢？',
-    occurredAt: '2026-09-03T02:01:01.000Z',
-    senderName: '向春梅',
-  })
-  await fixture.waitForSteers(1)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const originalRequestId = decisionRequestId(fixture.steered[0])
-  await assert.rejects(tool.execute({ submissions: [{ requestIds: [originalRequestId], decision: {
-    actions: [{ kind: 'new-task', title: '误建任务', objective: '排查计算提示', acceptanceCriteria: ['定位原因'], sourceMessageIds: ['msg624ca5N0Mq3+36twQq+b7A=='] }], reply: '',
-  } }] }, { agent: fixture.handle.agent }), /task_action_directed_to_other_participants/)
-  assert.equal(fixture.tasks.length, 0)
-
-  const transfer = runtime.ingest({
-    groupId: fixture.group.groupId,
-    messageId: 'm-transfer',
-    text: '@小小鹏 看下这个',
-    quotedMessage: { messageId: 'msg624ca5N0Mq3+36twQq+b7A==' },
-    occurredAt: '2026-09-03T02:02:01.000Z',
-    senderName: '向春梅',
-  })
-  await fixture.waitForSteers(2)
-  const transferRequestId = decisionRequestId(fixture.steered[1])
-  await tool.execute({ observedRequestIds: [originalRequestId, transferRequestId], submissions: [{ requestIds: [originalRequestId, transferRequestId], decision: {
-    actions: [{ kind: 'new-task', title: '排查计算提示', objective: '排查仅计算后出现未保存提示的原因', acceptanceCriteria: ['定位原因'], sourceMessageIds: ['msg624ca5N0Mq3+36twQq+b7A==', 'm-transfer'] }], reply: '收到，我来排查这个提示。',
-  } }] }, { agent: fixture.handle.agent })
-  await Promise.all([original, transfer])
-  assert.equal(fixture.tasks.length, 1)
-  assert.deepEqual(fixture.tasks[0].messageHistory.map((message) => message.messageId), ['msg624ca5N0Mq3+36twQq+b7A==', 'm-transfer'])
-  const cancelled = await runtime.cancelTask({ taskId: fixture.tasks[0].taskId, reason: '回归用误建任务' })
-  assert.equal(cancelled.state, 'completed')
-  assert.equal(cancelled.completion, '已取消：回归用误建任务')
-  assert.ok(cancelled.archivedAt)
-  assert.equal(cancelled.result, undefined)
-  fixture.releaseIdle()
-  await runtime.close()
-})
-
-test('群消息撤销立即中断误建叶子且不等待Task串行队列或dispose', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'fast-cancel-group', taskCapacity: true })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 1, supervisorIntervalMs: 0 }))
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-
-  const createIngest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-create', text: 'cc: 帮忙处理这个', occurredAt: '2026-09-03T09:00:00Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
-  await fixture.waitForSteers(1)
-  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [{ kind: 'new-task', title: '误建任务', objective: '处理不应执行的事项', acceptanceCriteria: ['完成处理'], sourceMessageIds: ['m-create'] }], reply: '收到，我来处理。' } }] }, { agent: fixture.handle.agent })
-  await createIngest
-  const task = fixture.tasks[0]
+test('Task 只保存固定 Topic 引用，叶子收到版本化原始上下文', async (t) => {
+  const h = await setup(t), task = await createTask(h)
   assert.equal(task.state, 'running')
-  const leafResultTool = fixture.leafTools.find((item) => item.name === 'submit_task_result')
-  assert.ok(leafResultTool)
-
-  const originalUpdateTask = fixture.store.updateTask
-  let releaseRename, markRenameStarted
-  const renameGate = new Promise((resolve) => { releaseRename = resolve })
-  const renameStarted = new Promise((resolve) => { markRenameStarted = resolve })
-  fixture.store.updateTask = async (taskId, transform) => {
-    const index = fixture.tasks.findIndex((item) => item.taskId === taskId)
-    const next = transform(fixture.tasks[index])
-    if (next.title === '占用Task串行队列') { markRenameStarted(); await renameGate }
-    fixture.tasks[index] = next
-    return next
-  }
-  const rename = runtime.renameTask({ taskId: task.taskId, title: '占用Task串行队列' })
-  await renameStarted
-
-  const cancelIngest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-cancel', text: '不用处理了，停下来', occurredAt: '2026-09-03T09:00:01Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
-  await fixture.waitForSteers(2)
-  const cancelRequestId = decisionRequestId(fixture.steered[1])
-  const reviewTool = fixture.registeredTools.find((item) => item.name === 'group_reply_review_get')
-  const review = await reviewTool.execute({ requestIds: [cancelRequestId] }, { agent: fixture.handle.agent })
-  const cancelSubmission = tool.execute({ submissions: [{ requestIds: [cancelRequestId], decision: {
-    actions: [{ kind: 'task-cancel', taskId: task.taskId, reason: '提出人明确要求不用处理', sourceMessageIds: ['m-cancel'] }],
-    reply: '已停止处理。',
-    replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((candidate) => candidate.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] },
-  } }] }, { agent: fixture.handle.agent })
-  for (let attempt = 0; attempt < 100 && fixture.leafCancelCalls.length === 0; attempt += 1) await new Promise((resolve) => setImmediate(resolve))
-  assert.deepEqual(fixture.leafCancelCalls[0], { cause: { kind: 'user' }, options: undefined }, '取消信号必须在Task串行队列释放前同步发出')
-  assert.equal(await Promise.race([cancelSubmission.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('pending'), 25))]), 'settled', '确认Outbox可靠落库后工具可以返回')
-  assert.equal(await Promise.race([cancelIngest.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('pending'), 25))]), 'pending', 'Task取消状态仍须等待串行队列提交')
-  await assert.rejects(leafResultTool.execute({ status: 'completed', workType: 'non-development', summary: '迟到结果', evidence: ['取消后不得接收'], artifacts: [] }, { agent: fixture.getLeafHandle().agent }), /task_cancel_pending/)
-
-  releaseRename()
-  await rename
-  const [submitted, cancelledResult] = await Promise.all([cancelSubmission, cancelIngest])
-  assert.deepEqual(submitted, acceptedSubmission([decisionRequestId(fixture.steered[1])]))
-  assert.equal(cancelledResult.task.state, 'completed')
-  assert.equal(cancelledResult.task.completion, '已取消：提出人明确要求不用处理')
-  assert.ok(cancelledResult.task.archivedAt)
-  assert.deepEqual(cancelledResult.task.messageHistory.map((message) => message.messageId), ['m-create', 'm-cancel'])
-  await fixture.waitForLeafDisposeStarted()
-  assert.equal(fixture.group.messages.find((message) => message.messageId === 'm-cancel').agentDeliveryStatus, 'delivered')
-  fixture.store.updateTask = originalUpdateTask
-  fixture.releaseLeafDispose()
-  fixture.releaseIdle()
-  await runtime.close()
+  for (const name of ['sourceMessageId', 'sourceMessageIds', 'triggerHistory', 'messageHistory', 'relatedContexts']) assert.equal(name in task, false)
+  assert.equal(task.inputVersion, 1); assert.equal(task.runSequence, 1)
+  assert.equal(task.childSessionId, taskSessionId(task.taskId))
+  const leaf = h.handles.get(task.childSessionId)
+  assert.ok(leaf)
+  assert.equal(h.goals.get(task.childSessionId).objective, task.objective)
+  const call = h.calls.find((item) => item.sessionId === task.childSessionId)
+  assert.equal(call.input.meta.cwd, agentWorkspace)
+  assert.equal(call.input.meta.parentSession, h.store.getGroup('g').residentSessionId)
+  assert.equal(call.input.meta.origin, 'subagent')
+  assert.ok(leaf.sent.some((message) => message.content[0].text.includes('[TASK_TOPIC_CONTEXT]')))
+  assert.ok(leaf.sent.some((message) => message.content[0].text.includes('"inputVersion":1')))
+  for (const tool of leaf.tools.values()) { assertSupportedJsonSchema(tool.parameters); assertSupportedJsonSchema(tool.output.schema) }
 })
 
-test('不影响当前回复的请求只观察不消费并在回复提交后继续处理', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'out-of-order-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '仍在分析的事项', occurredAt: '2026-08-28T01:00:00Z' })
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '已经判断完成的独立事项', occurredAt: '2026-08-28T01:00:01Z' })
-  let firstSettled = false
-  first.then(() => { firstSettled = true }, () => { firstSettled = true })
-  await fixture.waitForSteers(2)
-  const requestIds = fixture.steered.map(decisionRequestId)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submitted = await tool.execute({ observedRequestIds: requestIds, submissions: [{ requestIds: [requestIds[1]], decision: { actions: [], reply: '第二项先完成' } }] }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, acceptedSubmission([requestIds[1]], [requestIds[0]]))
-  const secondResult = await second
-  assert.equal(secondResult.decision.reply, '第二项先完成')
-  assert.equal(firstSettled, false, '未提交的第一项不能阻塞已提交的独立第二项')
-  await tool.execute({ submissions: [{ requestIds: [requestIds[0]], decision: { actions: [], reason: '第一项随后完成' } }] }, { agent: fixture.handle.agent })
-  const firstResult = await first
-  assert.equal(firstResult.decision.reason, '第一项随后完成')
-  fixture.releaseIdle()
-  await runtime.close()
+test('任务关联摘要不复制原文，按需读取返回 Topic refs 与执行约定', async (t) => {
+  const h = await setup(t), task = await createTask(h, '任务范围')
+  const index = buildTaskAssociationIndex([task])
+  assert.deepEqual(index[0].topicRefs, task.topicRefs)
+  assert.doesNotMatch(JSON.stringify(index), /messageHistory|senderOpenDingTalkId/)
+  const detail = await h.call('group_task_context_get', { taskIds: [task.taskId] })
+  assert.equal(detail.tasks[0].objective, task.objective)
+  assert.deepEqual(detail.tasks[0].topicRefs, task.topicRefs)
+  assert.equal('messageHistory' in detail.tasks[0], false)
+  await assert.rejects(h.call('group_task_context_get', { taskIds: [task.taskId, task.taskId] }), /group_task_context_request_duplicate/)
+  await assert.rejects(h.call('group_task_context_get', { taskIds: ['missing'] }), /group_task_context_not_found/)
 })
 
-test('单请求含回复时submission自身即完成观察并引用当前入站消息', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'single-reply-reference-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const processing = runtime.ingest({
-    groupId: fixture.group.groupId,
-    messageId: 'current-message',
-    text: '请补充部署Ref',
-    senderName: '测试成员',
-    senderOpenDingTalkId: 'od-current',
-    quotedMessage: { messageId: 'older-agent-message', content: '此前的部署结果' },
-    occurredAt: '2026-09-02T07:24:18.880Z',
-  })
-  await fixture.waitForSteers(1)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-
-  const submitted = await tool.execute({
-    submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '部署Ref如下。' } }],
-  }, { agent: fixture.handle.agent })
-
-  assert.deepEqual(submitted, acceptedSubmission([requestId]))
-  await processing
-  assert.equal(fixture.group.outbox[0].replyToMessageId, 'current-message', '应回复当前群成员消息，而不是它引用的旧消息')
-  assert.equal(fixture.group.outbox[0].replyToSenderOpenDingTalkId, 'od-current')
-  assert.deepEqual(fixture.group.outbox[0].atOpenDingTalkIds, ['od-current'])
-  fixture.releaseIdle()
-  await runtime.close()
+test('任务并发容量满时 FIFO 排队，取消释放名额并保留取消事实', async (t) => {
+  const h = await setup(t, { maxConcurrentTasks: 2 })
+  const one = await createTask(h, 'one'), two = await createTask(h, 'two'), three = await createTask(h, 'three')
+  assert.deepEqual([h.store.getTask(one.taskId).state, h.store.getTask(two.taskId).state, h.store.getTask(three.taskId).state], ['running', 'running', 'queued'])
+  await h.runtime.cancelTask({ taskId: one.taskId, requestId: 'cancel-one', topicRefs: one.topicRefs, ...inputVersion(h.store.getTask(one.taskId)), reason: '用户取消' })
+  assert.equal(h.store.getTask(one.taskId).state, 'completed')
+  assert.equal(h.store.getTask(three.taskId).state, 'running')
+  assert.equal(h.cancelled[0].sessionId, one.childSessionId)
 })
 
-test('回复遗漏其他已Steer请求时返回stale且零副作用，合并新消息后只发送重新生成的回复', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'stale-reply-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '原问题', senderOpenDingTalkId: 'od-first', occurredAt: '2026-08-28T01:00:00Z' })
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '会改变答案的补充', senderOpenDingTalkId: 'od-second', occurredAt: '2026-08-28T01:00:01Z' })
-  await fixture.waitForSteers(2)
-  const requestIds = fixture.steered.map(decisionRequestId)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-
-  const stale = await tool.execute({
-    submissions: [{ requestIds: [requestIds[0]], decision: { actions: [], reply: '未结合补充的旧回复' } }],
-  }, { agent: fixture.handle.agent })
-  assert.deepEqual(stale, staleSubmission(requestIds, [requestIds[1]]))
-  assert.match(tool.output.render({}, stale)[0].text, new RegExp(requestIds[1]))
-  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['steered', 'steered'])
-  assert.equal(fixture.group.outbox.length, 0)
-
-  const submitted = await tool.execute({
-    submissions: [{ requestIds, decision: { actions: [], reply: '结合两条消息重新生成的回复' } }],
-  }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, acceptedSubmission(requestIds))
-  const [firstResult, secondResult] = await Promise.all([first, second])
-  assert.equal(firstResult.decision.reply, '结合两条消息重新生成的回复')
-  assert.equal(secondResult.decision.reply, '结合两条消息重新生成的回复')
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['结合两条消息重新生成的回复'])
-  assert.equal(fixture.group.outbox[0].replyToMessageId, 'm2', '合并回复应引用本批最新的有效入站消息')
-  assert.equal(fixture.group.outbox[0].replyToSenderOpenDingTalkId, 'od-second')
-  assert.deepEqual(fixture.group.outbox[0].atOpenDingTalkIds, ['od-second'])
-  fixture.releaseIdle()
-  await runtime.close()
+test('Outbox 已落盘时监听器失败不会回滚已接受 Topic 决策', async (t) => {
+  const h = await setup(t)
+  h.runtime.onOutboxAppended(() => { throw new Error('listener_failure') })
+  await ingest(h, 'a'); const request = (await route(h)).pendingDecisions[0]
+  assert.equal((await decide(h, request, { reply: '回复已可靠保存' })).status, 'accepted')
+  await immediate()
+  assert.equal(h.store.getGroup('g').outbox.length, 1)
+  assert.equal(h.store.getTopic('g', request.topicId).processedRevision, 1)
+  assert.ok(h.runtime.listRecoveryIssues().some((issue) => issue.error.includes('listener_failure')))
 })
 
-test('入站消息缺少稳定发送人ID时普通回复不伪造引用参数', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'reply-reference-fallback-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const processing = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'message-without-sender-id', text: '回答一下', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-
-  await tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '安全降级回复' } }] }, { agent: fixture.handle.agent })
-  await processing
-  assert.equal(fixture.group.outbox[0].replyToMessageId, undefined)
-  assert.equal(fixture.group.outbox[0].replyToSenderOpenDingTalkId, undefined)
-  assert.equal(fixture.group.outbox[0].atOpenDingTalkIds, undefined)
-  fixture.releaseIdle()
-  await runtime.close()
+test('历史导入只发送 Topic 索引，不重放历史消息正文或指令', async (t) => {
+  const h = await setup(t); await ingest(h, 'a')
+  const request = (await route(h)).pendingDecisions[0]; await decide(h, request)
+  const result = await h.runtime.hydrateGroupHistory({ groupId: 'g' })
+  assert.equal(result.imported, 1)
+  const text = h.resident().sent.at(-1).content[0].text
+  assert.match(text, /历史 Topic 索引/)
+  assert.doesNotMatch(text, /@助理 a/)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
 })
 
-test('Decision claim到可靠Outbox之间阻止同群新Steer越过回复门禁', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'reply-linearization-group' })
-  let markAppendEntered, releaseAppend
-  const appendEntered = new Promise((resolve) => { markAppendEntered = resolve })
-  const appendGate = new Promise((resolve) => { releaseAppend = resolve })
-  const appendOutbox = fixture.store.appendOutbox
-  fixture.store.appendOutbox = async (value) => {
-    markAppendEntered()
-    await appendGate
-    return appendOutbox(value)
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '先回复这一项', occurredAt: '2026-08-28T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  const firstRequestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  let toolSettled = false
-  const submitting = tool.execute({
-    observedRequestIds: [firstRequestId],
-    submissions: [{ requestIds: [firstRequestId], decision: { actions: [], reply: '第一项可靠回复' } }],
-  }, { agent: fixture.handle.agent }).finally(() => { toolSettled = true })
-  await appendEntered
-
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '回复提交窗口内到达', occurredAt: '2026-08-28T01:00:01Z' })
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(fixture.group.messages.length, 2, '新消息应先持久化')
-  assert.equal(fixture.steered.length, 1, '可靠Outbox完成前不得把新消息Steer给模型')
-  assert.equal(fixture.group.outbox.length, 0)
-  assert.equal(toolSettled, false, '工具成功不得早于可靠Outbox')
-
-  releaseAppend()
-  const submitted = await submitting
-  await fixture.waitForSteers(2)
-  const secondRequestId = decisionRequestId(fixture.steered[1])
-  assert.deepEqual(submitted, acceptedSubmission([firstRequestId], [secondRequestId]))
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['第一项可靠回复'])
-  await tool.execute({ submissions: [{ requestIds: [secondRequestId], decision: { actions: [], reason: '第二项随后独立处理' } }] }, { agent: fixture.handle.agent })
-  const [firstResult, secondResult] = await Promise.all([first, second])
-  assert.equal(firstResult.decision.reply, '第一项可靠回复')
-  assert.equal(secondResult.decision.reason, '第二项随后独立处理')
-  fixture.releaseIdle()
-  await runtime.close()
+test('恢复失败保留原 Resident Session，其他群仍能工作', async (t) => {
+  const h = await setup(t, { groups: ['g', 'b'], resumeFailure: (id) => id === residentSessionId('g') })
+  assert.equal(h.store.getGroup('g').residentSessionId, residentSessionId('g'))
+  assert.equal(h.calls.some((item) => !item.resumed && item.sessionId === residentSessionId('g')), false)
+  assert.ok(h.runtime.listRecoveryIssues().some((issue) => issue.groupId === 'g' && issue.error.includes('corrupt session')))
+  await ingest(h, 'b', { groupId: 'b' }); const request = (await route(h, {}, 'b')).pendingDecisions[0]
+  assert.equal((await decide(h, request, { reply: '正常' }, 'b')).status, 'accepted')
 })
 
-test('Task动作缺少确认时保持pending且补回复后先写Outbox再创建Task', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'task-confirmation-required-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const observed = []
-  runtime.onOutboxAppended(({ outbound }) => { observed.push({ taskCount: fixture.tasks.length, taskIds: outbound.taskIds ?? [] }) })
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '请处理这项任务', occurredAt: '2026-09-04T13:00:00Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
-  await fixture.waitForSteers(1)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const actions = [{ kind: 'new-task', title: '处理任务', objective: '完成指定任务', acceptanceCriteria: ['结果可核验'], sourceMessageIds: ['m1'] }]
-
-  const rejected = await tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions, reply: '' } }] }, { agent: fixture.handle.agent })
-  assert.deepEqual(rejected, { status: 'reply-required', acceptedRequestIds: [], pendingRequestIds: [requestId], missingRequestIds: [], unexpectedRequestIds: [] })
-  assert.match(tool.output.render({}, rejected)[0].text, /未产生任务或回复副作用/u)
-  assert.equal(fixture.tasks.length, 0)
-  assert.equal(fixture.group.outbox.length, 0)
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'steered')
-
-  const [submitted, result] = await Promise.all([
-    tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions, reply: '收到，我开始处理。' } }] }, { agent: fixture.handle.agent }),
-    ingest,
-  ])
-  assert.deepEqual(submitted, acceptedSubmission([requestId]))
-  assert.equal(result.task.taskId, 'task-1')
-  assert.deepEqual(observed, [{ taskCount: 0, taskIds: [] }], 'Outbox监听发生时Task必须尚未创建')
-  assert.equal(fixture.tasks.length, 1)
-  assert.deepEqual(fixture.group.outbox[0].taskIds, ['task-1'])
-  fixture.releaseIdle()
-  await runtime.close()
+test('新群创建原生 Session 后绑定，工具不能访问其他 Session', async (t) => {
+  const h = await setup(t, { groups: [] })
+  const result = await h.runtime.subscribe({ groupId: 'g', name: '新群' })
+  assert.equal(result.created, true)
+  assert.equal(result.group.residentSessionId, residentSessionId('g'))
+  assert.equal(h.calls[0].resumed, false)
+  assert.equal(h.calls[0].input.meta.cwd, agentWorkspace)
+  assert.deepEqual(h.permissions, [[residentSessionId('g'), 'danger-full-access']])
+  assert.equal((await h.runtime.subscribe({ groupId: 'g' })).created, false)
+  assert.equal(h.calls.length, 1)
 })
 
-test('已有Task重开和追加上下文都在确认Outbox之后执行', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'task-confirmation-order-group' })
-  const completedResult = { status: 'completed', workType: 'non-development', summary: '原轮已完成', evidence: ['原轮证据'], artifacts: [] }
-  fixture.tasks.push(
-    {
-      taskId: 'task-completed', groupId: fixture.group.groupId, sourceMessageId: 'old-completed', childSessionId: 'session-task-completed', title: '已完成事项', objective: '完成原事项', state: 'completed',
-      runSequence: 1, runStartedAt: '2026-09-04T10:00:00Z', acceptanceCriteria: ['原事项完成'], stageTasks: ['原阶段'], runHistory: [], relatedContexts: [], result: completedResult, completion: '已完成', completionSequence: 1,
-    },
-    {
-      taskId: 'task-queued', groupId: fixture.group.groupId, sourceMessageId: 'old-queued', childSessionId: 'session-task-queued', title: '待处理事项', objective: '继续原事项', state: 'queued',
-      runSequence: 1, runStartedAt: '2026-09-04T11:00:00Z', acceptanceCriteria: ['原事项继续'], stageTasks: ['继续阶段'], runHistory: [], relatedContexts: [],
-    },
-  )
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const order = []
-  runtime.onOutboxAppended(() => { order.push('outbox') })
-  const updateTask = fixture.store.updateTask
-  fixture.store.updateTask = async (...args) => { order.push(`task-update:${args[0]}`); return updateTask(...args) }
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-current', text: '补充并重开这两个事项', occurredAt: '2026-09-04T13:01:00Z', senderName: '提出人', senderOpenDingTalkId: 'od-owner' })
-  await fixture.waitForSteers(1)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const actions = [
-    { kind: 'task-reopen', taskId: 'task-completed', context: '按新要求重开', sourceMessageIds: ['m-current'] },
-    { kind: 'task-context', taskId: 'task-queued', context: '补充新的执行信息', sourceMessageIds: ['m-current'] },
-  ]
-  await Promise.all([
-    tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions, reply: '收到，已更新这两个事项。' } }] }, { agent: fixture.handle.agent }),
-    ingest,
-  ])
-
-  assert.equal(order[0], 'outbox')
-  assert.deepEqual(order.slice(1), ['task-update:task-completed', 'task-update:task-queued'])
-  assert.deepEqual(fixture.group.outbox[0].taskIds, ['task-completed', 'task-queued'])
-  assert.equal(fixture.tasks.find((task) => task.taskId === 'task-completed').state, 'queued')
-  assert.equal(fixture.tasks.find((task) => task.taskId === 'task-queued').relatedContexts.length, 1)
-  fixture.releaseIdle()
-  await runtime.close()
+test('工作区切换保留事件历史并重建 Resident，旧 Session 释放', async (t) => {
+  const h = await setup(t), oldId = h.store.getGroup('g').residentSessionId
+  h.resident().agent.session.append('turn/end', { status: 'success' })
+  h.idle.set(oldId, Promise.resolve())
+  const result = await h.runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
+  assert.equal(result.workspaceDir, replacementWorkspace)
+  assert.notEqual(h.store.getGroup('g').residentSessionId, oldId)
+  const replacement = h.calls.at(-1)
+  assert.equal(replacement.input.meta.cwd, replacementWorkspace)
+  assert.ok(replacement.input.seed.some((event) => event.type === 'turn/end'))
+  assert.ok(h.disposed.includes(oldId))
 })
 
-test('Decision可靠Outbox失败会隔离为提交失败并阻止同群后续消息越过', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'reply-append-failure-group' })
-  const appendOutbox = fixture.store.appendOutbox
-  let failAppend = true
-  fixture.store.appendOutbox = async (value) => {
-    if (failAppend) { failAppend = false; throw new Error('outbox_append_failed') }
-    return appendOutbox(value)
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '创建任务并回复', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  const firstRequestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = tool.execute({
-    observedRequestIds: [firstRequestId],
-    submissions: [{ requestIds: [firstRequestId], decision: { actions: [{ kind: 'new-task', title: '只执行一次', objective: '验证Outbox失败边界', acceptanceCriteria: ['任务动作只执行一次'], sourceMessageIds: ['m1'] }], reply: '不得假成功' } }],
-  }, { agent: fixture.handle.agent })
-
-  await assert.rejects(submission, /outbox_append_failed/)
-  await assert.rejects(first, /outbox_append_failed/)
-  assert.equal(fixture.group.outbox.length, 0)
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-commit-failed')
-  assert.equal(fixture.tasks.length, 0, '确认回复未可靠落库时不得执行Task动作')
-
-  const second = await runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '失败后进入的新消息', occurredAt: '2026-09-02T01:00:01Z' })
-  assert.equal(second.blocked, true)
-  assert.equal(second.blockedByMessageId, 'm1')
-  assert.equal(fixture.steered.length, 1)
-  assert.equal(fixture.group.messages[1].agentDeliveryStatus, 'pending')
-  assert.equal(fixture.tasks.length, 0)
-  fixture.releaseIdle()
-  await runtime.close()
+test('存在活动 Task 时拒绝工作区或模型切换，不修改已保存配置', async (t) => {
+  const h = await setup(t); await createTask(h)
+  await assert.rejects(h.runtime.updateAgentConfig({ workspaceDir: replacementWorkspace }), /agent_config_has_active_tasks/)
+  await assert.rejects(h.runtime.updateAgentConfig({ model: 'other' }), /agent_config_has_active_tasks/)
+  assert.equal(h.runtime.getAgentConfig().workspaceDir, agentWorkspace)
+  assert.equal(h.runtime.getAgentConfig().model, 'fake')
 })
 
-test('历史decision-failed仍可精确重试且已完成消息拒绝重复重试', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'decision-retry-group' })
-  fixture.group.messages.push({ messageId: 'm1', sequence: 1, text: '重新判断这条消息', occurredAt: '2026-09-02T01:00:00Z', agentDeliveryStatus: 'decision-failed', error: 'historical_failure' })
-  fixture.group.nextSequence = 2
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const retried = runtime.retryDecisionFailedMessage({ groupId: fixture.group.groupId, messageId: 'm1' })
-  await fixture.waitForSteers(1)
-  const retryRequestId = decisionRequestId(fixture.steered[0])
-  await tool.execute({ submissions: [{ requestIds: [retryRequestId], decision: { actions: [], reason: '复核后无需执行' } }] }, { agent: fixture.handle.agent })
-  const result = await retried
-  assert.equal(result.recovered, true)
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'delivered')
-  await assert.rejects(runtime.retryDecisionFailedMessage({ groupId: fixture.group.groupId, messageId: 'm1' }), /message_not_retryable:m1/)
-  fixture.releaseIdle()
-  await runtime.close()
+test('模型与推理深度使用原生配置服务保存', async (t) => {
+  const h = await setup(t)
+  const saved = await h.runtime.updateAgentConfig({ model: 'next-model', reasoningEffort: 'high' })
+  assert.equal(saved.model, 'next-model')
+  assert.deepEqual(h.savedSelection, { provider: 'fake', model: 'next-model', reasoningEffort: 'high' })
 })
 
-test('Runtime重启后自动恢复孤立steered并严格按群消息顺序放行', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'interrupted-decision-group' })
-  fixture.group.messages.push(
-    { messageId: 'm-interrupted', sequence: 1, text: '重启时正在判断', occurredAt: '2026-09-03T03:23:28.063Z', agentDeliveryStatus: 'steered' },
-    { messageId: 'm-after', sequence: 2, text: '后续消息', occurredAt: '2026-09-03T03:23:29.063Z', agentDeliveryStatus: 'pending' },
-  )
-  fixture.group.nextSequence = 3
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const recovered = await runtime.recoverInterruptedDecisions()
-  assert.deepEqual(recovered, [{ groupId: fixture.group.groupId, messageId: 'm-interrupted', status: 'scheduled' }])
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-retrying')
-  assert.equal(fixture.group.messages[0].error, 'resident_restarted_before_decision_settled')
-  const recovery = runtime.recoverPendingMessages()
-  await fixture.waitForSteers(1)
-  assert.equal(fixture.group.messages[1].agentDeliveryStatus, 'pending', '后一条消息不能越过恢复中的前一条消息')
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [], reason: '中断消息恢复完成' } }] }, { agent: fixture.handle.agent })
-  await fixture.waitForSteers(2)
-  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[1])], decision: { actions: [], reason: '后续消息按序完成' } }] }, { agent: fixture.handle.agent })
-  const results = await recovery
-  assert.deepEqual(results.map((item) => item.status), ['recovered', 'recovered'])
-  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['delivered', 'delivered'])
-  fixture.releaseIdle()
-  await runtime.close()
+test('退订存储失败时保留 Resident，修复后可再次退订', async (t) => {
+  const h = await setup(t), id = h.store.getGroup('g').residentSessionId
+  h.idle.set(id, Promise.resolve())
+  const original = h.store.removeGroup; let fail = true
+  h.store.removeGroup = async (args) => { if (fail) throw new Error('remove_failure'); return original(args) }
+  await assert.rejects(h.runtime.unsubscribe({ groupId: 'g' }), /remove_failure/)
+  assert.ok(h.store.getGroup('g')); assert.equal(h.disposed.includes(id), false)
+  fail = false
+  await h.runtime.unsubscribe({ groupId: 'g' })
+  assert.equal(h.store.getGroup('g'), undefined)
+  assert.ok(h.disposed.includes(id))
 })
 
-test('Runtime恢复Resident时清理已失效的内存请求信封并保留普通待办', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'stale-resident-inbox-group' })
-  const nextStep = [
-    { id: 'stale-message', content: [{ type: 'text', text: '[GROUP_MESSAGE_STEER]\n判断请求 ID：old-message' }] },
-    { id: 'normal-message', content: [{ type: 'text', text: '普通待处理内容' }] },
-    { id: 'stale-recheck', content: [{ type: 'text', text: '[GROUP_DECISION_RECHECK]\n判断请求 ID：old-recheck' }] },
-  ]
-  const nextTurn = [
-    { id: 'stale-resume', content: [{ type: 'text', text: '[GROUP_DECISION_RESUME]\n旧请求' }] },
-    { id: 'stale-coordination', content: [{ type: 'text', text: '[TASK_COORDINATION]\n回复请求 ID：old-reply' }] },
-  ]
-  fixture.handle.agent.inbox = {
-    nextStep, nextTurn,
-    remove(messageId) {
-      for (const messages of [nextStep, nextTurn]) {
-        const index = messages.findIndex((message) => message.id === messageId)
-        if (index >= 0) { messages.splice(index, 1); return true }
-      }
-      return false
-    },
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  assert.deepEqual(nextStep.map((message) => message.id), ['normal-message'])
-  assert.deepEqual(nextTurn, [])
-  await runtime.close()
+test('关闭后拒绝新消息，关闭两次只释放每个 Session 一次', async (t) => {
+  const h = await setup(t), id = h.store.getGroup('g').residentSessionId
+  await h.runtime.close(); await h.runtime.close()
+  await assert.rejects(ingest(h, 'late'), /resident_runtime_closed/)
+  assert.equal(h.disposed.filter((value) => value === id).length, 1)
 })
 
-test('启动只迁移可证明尚无业务副作用的历史判断失败', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'legacy-safe-recovery-group' })
-  fixture.group.messages.push(
-    { messageId: 'm-restart', sequence: 1, text: '重启中断', occurredAt: '2026-09-04T01:00:00Z', agentDeliveryStatus: 'decision-failed', agentDeliveryError: 'resident_restarted_before_decision_settled' },
-    { messageId: 'm-unsubmitted', sequence: 2, text: '未提交', occurredAt: '2026-09-04T01:01:00Z', agentDeliveryStatus: 'decision-failed', agentDeliveryError: 'group_decision_not_submitted:legacy-safe-recovery-group:m-unsubmitted' },
-    { messageId: 'm-invalid-json', sequence: 3, text: '无效JSON', occurredAt: '2026-09-04T01:02:00Z', agentDeliveryStatus: 'decision-failed', agentDeliveryError: 'group_decision_invalid_json' },
-    { messageId: 'm-unknown-side-effect', sequence: 4, text: '提交阶段失败', occurredAt: '2026-09-04T01:03:00Z', agentDeliveryStatus: 'decision-failed', agentDeliveryError: 'task_context_target_invalid:task-stale' },
-  )
-  fixture.group.nextSequence = 5
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const scheduled = await runtime.recoverInterruptedDecisions()
-  assert.deepEqual(scheduled.map((item) => item.messageId), ['m-restart', 'm-unsubmitted', 'm-invalid-json'])
-  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['decision-retrying', 'decision-retrying', 'decision-retrying', 'decision-failed'])
-  assert.equal(fixture.group.messages[3].agentDeliveryError, 'task_context_target_invalid:task-stale')
-  await runtime.close()
+const inputVersion = (task) => ({ inputVersion: task.inputVersion, runSequence: task.runSequence })
+const leafCall = (h, task, name, args) => h.handles.get(task.childSessionId).tools.get(name).execute(args, { agent: h.handles.get(task.childSessionId).agent })
+async function checkpoint(h, task, patch) {
+  const previous = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')?.requestId
+  const args = { ...inputVersion(task), summary: '核验检查点', evidence: ['执行证据'], completedItems: [], remainingItems: [], nextStep: '继续', needsCoordinatorDecision: false, ...patch }
+  const pending = leafCall(h, task, 'submit_task_checkpoint', args)
+  const outcome = pending.then((value) => ({ value }), (error) => ({ error }))
+  await until(() => h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')?.requestId !== previous)
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '检查点证据与目标一致' } })).status, 'accepted')
+  const result = await outcome
+  if (result.error) throw result.error
+  return result.value
+}
+async function fullCheckpoints(h, task) {
+  await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['核验正常分支', '核验异常分支'] })
+  await checkpoint(h, task, { kind: 'stage-completed', stageTask: task.stageTasks[0], completedItems: ['核验正常分支'], remainingItems: ['核验异常分支'] })
+  await checkpoint(h, task, { kind: 'stage-completed', stageTask: task.stageTasks[0], completedItems: ['核验异常分支'], remainingItems: [] })
+}
+async function completeResult(h, task, accepted = true) {
+  const previous = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')?.requestId
+  const result = { ...inputVersion(task), status: 'completed', summary: '已核验全部范围', evidence: ['正常与异常测试通过'], artifacts: [] }
+  const submitted = leafCall(h, task, 'submit_task_result', result)
+  const outcome = submitted.then((value) => ({ value }), (error) => ({ error }))
+  await until(() => h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')?.requestId !== previous)
+  const request = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted, reason: accepted ? '全部证据齐全' : '缺少部署后的核验' } })
+  return outcome
+}
+
+test('叶子结果与检查点拒绝缺失或过期 inputVersion/runSequence', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const result = { status: 'waiting', waitingKind: 'information', summary: '缺少输入', waitingReason: '缺少范围', questions: ['范围是什么？'], evidence: [], artifacts: [] }
+  await assert.rejects(leafCall(h, task, 'submit_task_result', result))
+  await assert.rejects(leafCall(h, task, 'submit_task_result', { ...result, inputVersion: task.inputVersion + 1, runSequence: task.runSequence }), /task_input_version_stale/)
+  const value = { inputVersion: 9, runSequence: 1, kind: 'plan-confirmed', summary: '旧计划', remainingItems: ['一', '二'], nextStep: '核验' }
+  await assert.rejects(leafCall(h, task, 'submit_task_checkpoint', value), /task_input_version_stale/)
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  assert.equal((h.store.getTask(task.taskId).checkpoints ?? []).length, 0)
 })
 
-test('Outbox已落库后监听器失败不会反向否定Decision提交', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'outbox-listener-failure-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  runtime.onOutboxAppended(async () => { throw new Error('outbox_listener_failed') })
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '监听器失败不影响持久提交', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const [submitted, result] = await Promise.all([
-    tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '已可靠落库' } }] }, { agent: fixture.handle.agent }),
-    ingest,
-  ])
-  assert.deepEqual(submitted, acceptedSubmission([requestId]))
-  assert.equal(result.decision.reply, '已可靠落库')
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'delivered')
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['已可靠落库'])
-  assert.equal(runtime.listRecoveryIssues().some((issue) => issue.kind === 'outbox-listener' && issue.error === 'outbox_listener_failed'), true)
-  fixture.releaseIdle()
-  await runtime.close()
+test('检查点逐项推进并由结构化内部审阅确认，不能跳项完成', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['一', '二'] })
+  await assert.rejects(leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'stage-completed', stageTask: task.stageTasks[0], summary: '跳项', completedItems: ['一', '二'], remainingItems: [], nextStep: '结束' }), /task_checkpoint_must_advance_one/)
+  await assert.rejects(leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'completed', summary: '完成', evidence: ['证据'], artifacts: [] }), /task_checkpoints_insufficient|task_checkpoints_remaining/)
+  assert.equal(h.store.getTask(task.taskId).checkpoints.length, 1)
+  assert.equal(h.store.getGroup('g').outbox.length, 1, '内部审阅不能发群消息')
 })
 
-test('缓冲Outbox监听器同步失败会被隔离并记录', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'buffered-outbox-listener-failure-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '先落库后注册监听', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await Promise.all([
-    tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '已进入缓冲Outbox' } }] }, { agent: fixture.handle.agent }),
-    ingest,
-  ])
-  assert.doesNotThrow(() => runtime.onOutboxAppended(() => { throw new Error('buffered_listener_failed') }))
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'delivered')
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['已进入缓冲Outbox'])
-  assert.equal(runtime.listRecoveryIssues().some((issue) => issue.kind === 'outbox-listener' && issue.error === 'buffered_listener_failed'), true)
-  fixture.releaseIdle()
-  await runtime.close()
+test('完成验收拒绝后保持 running 并向叶子发送具体纠偏', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  await fullCheckpoints(h, task)
+  const outcome = await completeResult(h, task, false)
+  assert.match(outcome.error.message, /task_result_objective_not_covered/)
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  assert.ok(h.handles.get(task.childSessionId).sent.some((message) => message.content[0].text.includes('[TASK_RESULT_REJECTED]')))
+  assert.equal(h.store.getGroup('g').outbox.length, 1)
 })
 
-test('消息已被Decision领取后标记steered失败会结算工具并释放门禁', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'steered-write-failure-group' })
-  let markSteeredEntered, rejectMarkSteered
-  const markEntered = new Promise((resolve) => { markSteeredEntered = resolve })
-  const markGate = new Promise((_, reject) => { rejectMarkSteered = reject })
-  const markMessageAgentDelivery = fixture.store.markMessageAgentDelivery
-  let failSteered = true
-  fixture.store.markMessageAgentDelivery = async (value) => {
-    if (value.status === 'steered' && failSteered) {
-      failSteered = false
-      markSteeredEntered()
-      await markGate
-    }
-    return markMessageAgentDelivery(value)
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '标记状态失败', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  await markEntered
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '不得发送' } }] }, { agent: fixture.handle.agent })
-  rejectMarkSteered(new Error('mark_steered_failed'))
-
-  await assert.rejects(submission, /mark_steered_failed/)
-  await assert.rejects(ingest, /mark_steered_failed/)
-  assert.equal(fixture.group.outbox.length, 0)
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'failed')
-
-  const next = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '门禁释放后的消息', occurredAt: '2026-09-02T01:00:01Z' })
-  await fixture.waitForSteers(2)
-  const nextRequestId = decisionRequestId(fixture.steered[1])
-  await tool.execute({ submissions: [{ requestIds: [nextRequestId], decision: { actions: [], reason: '后续请求可正常处理' } }] }, { agent: fixture.handle.agent })
-  await next
-  fixture.releaseIdle()
-  await runtime.close()
+test('完成落盘与通知解耦，Resident 未回复时 FIFO 下个任务仍启动', async (t) => {
+  const h = await setup(t), task = await createTask(h, 'first'), queued = await createTask(h, 'second')
+  assert.equal(queued.state, 'queued')
+  await fullCheckpoints(h, task)
+  const outcome = await completeResult(h, task)
+  assert.equal(outcome.value.state, 'completed')
+  assert.equal(h.store.getTask(queued.taskId).state, 'running')
+  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 0)
+  const notification = h.envelope('[TASK_COORDINATION]')
+  const review = await h.call('group_reply_review_get', { requestIds: [notification.requestId] })
+  const accepted = await h.call('group_reply_submit', { requestId: notification.requestId, reply: '已完成核验，正常与异常测试通过。', replyToMessageId: 'first', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } })
+  assert.equal(accepted.status, 'accepted')
+  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
+  await h.runtime.reconcileCompletedNotifications()
+  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
 })
 
-test('关联复核合并的新消息标记steered失败时不会发送候选回复', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'recheck-steered-write-failure-group' })
-  fixture.tasks.push({ taskId: 'task-existing', groupId: fixture.group.groupId, state: 'completed' })
-  fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'image-message', text: '[图片消息]', occurredAt: '2026-09-02T01:00:00Z', sequence: 1, agentDeliveryStatus: 'delivered' })
-  fixture.group.nextSequence = 2
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '先进入关联复核', occurredAt: '2026-09-02T01:01:00Z' })
-  await fixture.waitForSteers(1)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [], reason: '初次忽略' } }] }, { agent: fixture.handle.agent })
-  while (fixture.rechecks.length === 0) await new Promise((resolve) => setImmediate(resolve))
-
-  let markSteeredEntered, rejectMarkSteered
-  const markEntered = new Promise((resolve) => { markSteeredEntered = resolve })
-  const markGate = new Promise((_, reject) => { rejectMarkSteered = reject })
-  const markMessageAgentDelivery = fixture.store.markMessageAgentDelivery
-  let failSteered = true
-  fixture.store.markMessageAgentDelivery = async (value) => {
-    if (value.status === 'steered' && failSteered) {
-      failSteered = false
-      markSteeredEntered()
-      await markGate
-    }
-    return markMessageAgentDelivery(value)
-  }
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '影响复核回复的新补充', occurredAt: '2026-09-02T01:01:01Z' })
-  await fixture.waitForSteers(2)
-  await markEntered
-  const recheckRequestId = decisionRequestId(fixture.rechecks[0])
-  const secondRequestId = decisionRequestId(fixture.steered[1])
-  const submission = tool.execute({
-    observedRequestIds: [secondRequestId],
-    submissions: [{ requestIds: [recheckRequestId, secondRequestId], decision: { actions: [], reply: '不得发送的复核候选' } }],
-  }, { agent: fixture.handle.agent })
-  rejectMarkSteered(new Error('recheck_mark_steered_failed'))
-
-  await assert.rejects(submission, /recheck_mark_steered_failed/)
-  const firstResult = await first
-  assert.equal(firstResult.deferred, true)
-  assert.equal(firstResult.decisionError, 'recheck_mark_steered_failed')
-  await assert.rejects(second, /recheck_mark_steered_failed/)
-  assert.equal(fixture.group.outbox.length, 0)
-  assert.deepEqual(fixture.group.messages.slice(1).map((message) => message.agentDeliveryStatus), ['decision-retrying', 'failed'])
-  fixture.releaseIdle()
-  await runtime.close()
+test('尚未归类的新消息阻止叶子提交等待或完成结果', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  await ingest(h, 'new-info')
+  await assert.rejects(leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'waiting', waitingKind: 'information', summary: '需要输入', waitingReason: '范围未明', questions: ['范围？'], evidence: [], artifacts: [] }), /task_input_pending/)
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
 })
 
-test('关闭Runtime会等待已领取的Decision可靠写入Outbox', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'claimed-close-group' })
-  let markAppendEntered, releaseAppend
-  const appendEntered = new Promise((resolve) => { markAppendEntered = resolve })
-  const appendGate = new Promise((resolve) => { releaseAppend = resolve })
-  const appendOutbox = fixture.store.appendOutbox
-  fixture.store.appendOutbox = async (value) => { markAppendEntered(); await appendGate; return appendOutbox(value) }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '关闭窗口', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '尚未落库' } }] }, { agent: fixture.handle.agent })
-  await appendEntered
-
-  let closeSettled = false
-  const closing = runtime.close().finally(() => { closeSettled = true })
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(closeSettled, false, '关闭过程必须等待已开始的可靠Outbox提交')
-  releaseAppend()
-  await Promise.all([submission, ingest, closing])
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['尚未落库'])
+test('Web 创建按 requestId 幂等，原始输入只落 Topic，参数变更不能复用身份', async (t) => {
+  const h = await setup(t)
+  const request = { groupId: 'g', requestId: 'web-create-1', title: 'Web 核验', objective: '核验 Web 流程', context: '请核验保存与读取', acceptanceCriteria: ['保存和读取都可验证'], stageTasks: ['核验'] }
+  const task = await h.runtime.createTask(request), repeated = await h.runtime.createTask(request)
+  assert.equal(task.taskId, repeated.taskId)
+  assert.equal(h.store.listTasks().length, 1)
+  assert.equal(h.store.getGroup('g').messages.length, 1)
+  const message = h.runtime.getTopicContext({ groupId: 'g', ...task.topicRefs[0] }).messages[0]
+  assert.equal(message.sourceKind, 'web')
+  assert.match(message.text, /请核验保存与读取/)
+  assert.equal('sourceMessageId' in task, false)
+  await assert.rejects(h.runtime.createTask({ ...request, context: '不同输入' }), /identity_conflict/)
 })
 
-test('关闭Runtime会释放回复门禁中的新消息并等待已开始的可靠提交', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'close-admission-group' })
-  let markAppendEntered, releaseAppend
-  const appendEntered = new Promise((resolve) => { markAppendEntered = resolve })
-  const appendGate = new Promise((resolve) => { releaseAppend = resolve })
-  const appendOutbox = fixture.store.appendOutbox
-  fixture.store.appendOutbox = async (value) => { markAppendEntered(); await appendGate; return appendOutbox(value) }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '先开始回复', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '关闭前已开始提交' } }] }, { agent: fixture.handle.agent })
-  await appendEntered
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '等待门禁的新消息', occurredAt: '2026-09-02T01:00:01Z' })
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(fixture.steered.length, 1)
-
-  let closeSettled = false
-  const closing = runtime.close().finally(() => { closeSettled = true })
-  await assert.rejects(second, /resident_runtime_closed/)
-  assert.equal(closeSettled, false, '关闭仍须等待已经进入可靠Outbox的提交')
-  releaseAppend()
-  await Promise.all([submission, first, closing])
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['关闭前已开始提交'])
+test('Web 补充提升输入版本并重置当前检查点，同请求重试不重复补充', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['一', '二'] })
+  const request = { taskId: task.taskId, requestId: 'web-append-1', topicRefs: task.topicRefs, context: '新增异常分支范围', ...inputVersion(task) }
+  const updated = await h.runtime.appendTaskContext(request)
+  assert.equal(updated.inputVersion, task.inputVersion + 1)
+  assert.equal(updated.runSequence, task.runSequence)
+  assert.deepEqual(updated.checkpoints, [])
+  assert.ok(updated.executionEvents.some((event) => event.checkpoints?.length === 1))
+  const repeated = await h.runtime.appendTaskContext(request)
+  assert.equal(repeated.inputVersion, updated.inputVersion)
+  assert.equal(h.store.getGroup('g').messages.length, 2)
+  await assert.rejects(h.runtime.appendTaskContext({ ...request, requestId: 'stale-append' }), /task_web_task-stale|task_input_version_stale/)
+  const leaf = h.handles.get(task.childSessionId)
+  assert.ok(leaf.sent.some((message) => message.content[0].text.includes('"inputVersion":2')))
 })
 
-test('群历史导入等待resident时不占群提交尾链', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'history-reply-group' })
-  let releaseResidentIdle
-  const residentIdle = new Promise((resolve) => { releaseResidentIdle = resolve })
-  let idleWaits = 0
-  fixture.handle.agent.whenIdle = async () => { idleWaits += 1; await residentIdle }
-  fixture.handle.agent.followup = (message) => {
-    fixture.followups.push(message)
-    if (message.content[0]?.text?.startsWith('[GROUP_HISTORY_IMPORT]')) fixture.handle.agent.session.events.push({ seq: fixture.handle.agent.session.seq++, type: 'turn/end', data: { reason: { kind: 'completed' } } })
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '历史导入并发回复', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  const hydrating = runtime.hydrateGroupHistory({ groupId: fixture.group.groupId })
-  while (idleWaits < 2) await new Promise((resolve) => setImmediate(resolve))
-
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '历史导入期间的可靠回复' } }] }, { agent: fixture.handle.agent })
-  const outcome = await Promise.race([submission.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 500))])
-  releaseResidentIdle()
-  await Promise.all([submission, ingest, hydrating])
-  await runtime.close()
-  assert.equal(outcome, 'settled', '等待resident完成历史导入不能占住回复所需的同群Outbox尾链')
-})
-
-test('退订等待resident停稳时不占群提交尾链', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'unsubscribe-reply-group' })
-  let releaseResidentIdle
-  const residentIdle = new Promise((resolve) => { releaseResidentIdle = resolve })
-  let idleWaits = 0
-  fixture.handle.agent.whenIdle = async () => { idleWaits += 1; await residentIdle }
-  fixture.store.removeGroup = async ({ groupId }) => ({ removed: true, groupId })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '退订并发回复', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  const unsubscribing = runtime.unsubscribe({ groupId: fixture.group.groupId })
-  while (idleWaits < 2) await new Promise((resolve) => setImmediate(resolve))
-
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '退订前可靠提交' } }] }, { agent: fixture.handle.agent })
-  const outcome = await Promise.race([submission.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 500))])
-  releaseResidentIdle()
-  await Promise.all([submission, ingest, unsubscribing])
-  await runtime.close()
-  assert.equal(outcome, 'settled', '等待resident停稳不能占住回复所需的同群Outbox尾链')
-})
-
-test('确认回复落库后退订仍等待其动作提交并在同一Task临界区复核', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'unsubscribe-task-action-group' })
-  let markCreateEntered, releaseCreate
-  const createEntered = new Promise((resolve) => { markCreateEntered = resolve })
-  const createGate = new Promise((resolve) => { releaseCreate = resolve })
-  const createTask = fixture.store.createTask
-  fixture.store.createTask = async (value) => { markCreateEntered(); await createGate; return createTask(value) }
-  let removeCalls = 0
-  fixture.store.removeGroup = async ({ groupId }) => { removeCalls += 1; return { removed: true, groupId } }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '确认后创建任务', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await tool.execute({ submissions: [{ requestIds: [requestId], decision: { actions: [{ kind: 'new-task', title: '并发任务', objective: '验证确认后提交', acceptanceCriteria: ['动作提交完成'], sourceMessageIds: ['m1'] }], reply: '收到，开始处理。' } }] }, { agent: fixture.handle.agent })
-  await createEntered
-  const unsubscribing = runtime.unsubscribe({ groupId: fixture.group.groupId })
-  fixture.releaseIdle()
-  await new Promise((resolve) => setImmediate(resolve))
-  let unsubscribeSettled = false
-  unsubscribing.finally(() => { unsubscribeSettled = true }).catch(() => undefined)
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(unsubscribeSettled, false, '退订不能只等待确认回复落库，必须等待动作提交')
-  assert.equal(removeCalls, 0)
-
-  releaseCreate()
-  await ingest
-  await assert.rejects(unsubscribing, /group_has_active_tasks:unsubscribe-task-action-group/)
-  assert.equal(removeCalls, 0, '最终复核发现新Task后不得移除群')
-  await runtime.close()
-})
-
-test('退订持久化失败时保留resident并允许再次退订清理', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'unsubscribe-remove-failure-group' })
-  fixture.handle.agent.whenIdle = async () => undefined
-  let disposeCalls = 0
-  fixture.handle.dispose = async () => { disposeCalls += 1 }
-  let failRemove = true
-  fixture.store.removeGroup = async ({ groupId }) => {
-    if (failRemove) throw new Error('remove_group_failed')
-    return { removed: true, groupId }
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  await assert.rejects(runtime.unsubscribe({ groupId: fixture.group.groupId }), /remove_group_failed/)
-  assert.equal(disposeCalls, 0, '群仍在存储中时不得先销毁resident')
-
-  failRemove = false
-  await runtime.unsubscribe({ groupId: fixture.group.groupId })
-  assert.equal(disposeCalls, 1, '持久化移除成功后应销毁同一resident')
-  await runtime.close()
-})
-
-test('无回复Decision不要求观察全部pending请求', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'no-reply-observation-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '可忽略事项', occurredAt: '2026-08-28T01:00:00Z' })
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '仍在处理的事项', occurredAt: '2026-08-28T01:00:01Z' })
-  await fixture.waitForSteers(2)
-  const requestIds = fixture.steered.map(decisionRequestId)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submitted = await tool.execute({
-    observedRequestIds: [requestIds[0]],
-    submissions: [{ requestIds: [requestIds[0]], decision: { actions: [], reason: '第一项无需回复' } }],
-  }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, acceptedSubmission([requestIds[0]], [requestIds[1]]))
-  assert.equal((await first).decision.reason, '第一项无需回复')
-  assert.equal(fixture.group.outbox.length, 0)
-  await tool.execute({ submissions: [{ requestIds: [requestIds[1]], decision: { actions: [], reason: '第二项随后完成' } }] }, { agent: fixture.handle.agent })
-  assert.equal((await second).decision.reason, '第二项随后完成')
-  fixture.releaseIdle()
-  await runtime.close()
-})
-
-test('附件缺失转换出的effective reply同样对未提交pending执行观察门禁', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'effective-reply-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '按附件执行', mediaUnavailable: ['附件正文下载失败'], occurredAt: '2026-08-28T01:00:00Z' })
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '另一项', occurredAt: '2026-08-28T01:00:01Z' })
-  await fixture.waitForSteers(2)
-  const requestIds = fixture.steered.map(decisionRequestId)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const taskDecision = { actions: [{ kind: 'new-task', title: '处理附件', objective: '按附件执行', acceptanceCriteria: ['附件要求已完成'], sourceMessageIds: ['m1'] }], reply: '' }
-  const stale = await tool.execute({
-    submissions: [{ requestIds: [requestIds[0]], decision: taskDecision }],
-  }, { agent: fixture.handle.agent })
-  assert.deepEqual(stale, staleSubmission(requestIds, [requestIds[1]]))
-  assert.equal(fixture.tasks.length, 0)
-  assert.equal(fixture.group.outbox.length, 0)
-
-  await tool.execute({ observedRequestIds: [requestIds[1]], submissions: [{ requestIds: [requestIds[0]], decision: taskDecision }] }, { agent: fixture.handle.agent })
-  const firstResult = await first
-  assert.match(firstResult.decision.reply, /附件正文下载失败/u)
-  assert.equal(fixture.tasks.length, 0)
-  assert.equal(fixture.group.messages[1].agentDeliveryStatus, 'steered')
-  await tool.execute({ submissions: [{ requestIds: [requestIds[1]], decision: { actions: [], reason: '另一项随后处理' } }] }, { agent: fixture.handle.agent })
-  await second
-  fixture.releaseIdle()
-  await runtime.close()
-})
-
-test('Decision工具对重复未知和非法结构执行全量预检且不部分提交', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'atomic-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '原子校验一', occurredAt: '2026-08-28T01:00:00Z' })
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '原子校验二', occurredAt: '2026-08-28T01:00:01Z' })
-  await fixture.waitForSteers(2)
-  const requestIds = fixture.steered.map(decisionRequestId)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await assert.rejects(tool.execute({ submissions: [{ requestIds: [requestIds[0], requestIds[0]], decision: { actions: [], reason: '重复' } }] }, { agent: fixture.handle.agent }), /group_decision_request_duplicate/)
-  const stale = await tool.execute({ submissions: [
-    { requestIds: [requestIds[0]], decision: { actions: [], reply: '不应部分提交' } },
-    { requestIds: ['unknown-request'], decision: { actions: [], reason: '未知' } },
-  ] }, { agent: fixture.handle.agent })
-  assert.deepEqual(stale, staleSubmission(requestIds, requestIds, ['unknown-request']))
-  assert.match(tool.output.render({}, stale)[0].text, /unknown-request/u)
-  await assert.rejects(tool.execute({ submissions: [
-    { requestIds: [requestIds[0]], decision: { actions: [], reply: '仍不应部分提交' } },
-    { requestIds: [requestIds[1]], decision: { actions: [], reason: '' } },
-  ] }, { agent: fixture.handle.agent }), /group_decision_invalid_schema/)
-  await assert.rejects(tool.execute({ submissions: [{ requestIds: [requestIds[0]], decision: {
-    actions: [{ kind: 'task-context', taskId: 'task-stale', context: '不得提交', sourceMessageIds: ['m1'] }], reply: '',
-  } }] }, { agent: fixture.handle.agent }), /task_context_target_invalid:task-stale/)
-  await assert.rejects(tool.execute({ submissions: [{ requestIds: [requestIds[0]], decision: {
-    actions: [{ kind: 'task-reopen', taskId: 'task-stale', context: '不得提交', sourceMessageIds: ['m1'] }], reply: '',
-  } }] }, { agent: fixture.handle.agent }), /task_reopen_target_invalid:task-stale/)
-  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['steered', 'steered'])
-  assert.equal(fixture.tasks.length, 0)
-  assert.equal(fixture.group.outbox.length, 0)
-  await tool.execute({ observedRequestIds: requestIds, submissions: [
-    { requestIds: [requestIds[0]], decision: { actions: [], reply: '合法一' } },
-    { requestIds: [requestIds[1]], decision: { actions: [], reason: '合法二' } },
-  ] }, { agent: fixture.handle.agent })
-  const [firstResult, secondResult] = await Promise.all([first, second])
-  assert.equal(firstResult.decision.reply, '合法一')
-  assert.equal(secondResult.decision.reason, '合法二')
-  fixture.releaseIdle()
-  await runtime.close()
-})
-
-test('Decision请求ID不能跨群提交且失败不会消耗任一群pending', async () => {
-  const fixture = twoGroupDecisionFixture()
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: 'group-a', messageId: 'm-a', text: '群A事项', occurredAt: '2026-08-28T01:00:00Z' })
-  const second = runtime.ingest({ groupId: 'group-b', messageId: 'm-b', text: '群B事项', occurredAt: '2026-08-28T01:00:01Z' })
-  await fixture.waitForSteers()
-  const requestA = decisionRequestId(fixture.steered.get('group-a')[0])
-  const requestB = decisionRequestId(fixture.steered.get('group-b')[0])
-  const toolA = fixture.registeredTools.get('group-a').find((item) => item.name === 'group_decision_submit')
-  const toolB = fixture.registeredTools.get('group-b').find((item) => item.name === 'group_decision_submit')
-  await assert.rejects(toolA.execute({ submissions: [{ requestIds: [requestA, requestB], decision: { actions: [], reason: '不得跨群合并' } }] }, { agent: fixture.handles.get('group-a').agent }), /group_decision_request_wrong_group/)
-  assert.equal(fixture.groups.get('group-a').messages[0].agentDeliveryStatus, 'steered')
-  assert.equal(fixture.groups.get('group-b').messages[0].agentDeliveryStatus, 'steered')
-  await toolA.execute({ observedRequestIds: [requestA], submissions: [{ requestIds: [requestA], decision: { actions: [], reply: '群A完成' } }] }, { agent: fixture.handles.get('group-a').agent })
-  await toolB.execute({ submissions: [{ requestIds: [requestB], decision: { actions: [], reason: '群B完成' } }] }, { agent: fixture.handles.get('group-b').agent })
-  const [resultA, resultB] = await Promise.all([first, second])
-  assert.equal(resultA.decision.reply, '群A完成')
-  assert.equal(resultB.decision.reason, '群B完成')
-  await runtime.close()
-})
-
-test('Agent活动异常结束后用单次恢复Turn结算同群全部pending Decision', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'decision-resume-group' })
-  let releaseFirstIdle, releaseRecoveryIdle
-  const firstIdle = new Promise((resolve) => { releaseFirstIdle = resolve })
-  const recoveryIdle = new Promise((resolve) => { releaseRecoveryIdle = resolve })
-  let idleCalls = 0
-  fixture.handle.agent.whenIdle = async () => {
-    idleCalls += 1
-    if (idleCalls === 1) await firstIdle
-    else if (idleCalls === 2) await recoveryIdle
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '第一条待判断消息', occurredAt: '2026-09-04T01:29:11Z' })
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '第二条待判断消息', occurredAt: '2026-09-04T01:29:17Z' })
-  await fixture.waitForSteers(2)
-  const requestIds = fixture.steered.map(decisionRequestId)
-
-  releaseFirstIdle()
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(fixture.followups.length, 1, '同群多个pending请求只允许一个恢复唤醒')
-  assert.match(fixture.followups[0].content[0].text, /^\[GROUP_DECISION_RESUME\]/u)
-  for (const requestId of requestIds) assert.match(fixture.followups[0].content[0].text, new RegExp(requestId))
-
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await tool.execute({ submissions: [
-    { requestIds: [requestIds[0]], decision: { actions: [], reason: '第一项已结算' } },
-    { requestIds: [requestIds[1]], decision: { actions: [], reason: '第二项已结算' } },
-  ] }, { agent: fixture.handle.agent })
-  const results = await Promise.all([first, second])
-  assert.deepEqual(results.map((result) => result.decision.reason), ['第一项已结算', '第二项已结算'])
-  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['delivered', 'delivered'])
-
-  releaseRecoveryIdle()
-  await new Promise((resolve) => setImmediate(resolve))
-  await runtime.close()
-})
-
-test('同一事项的新确认会先精确撤回旧确认再发送合并回复', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'confirmation-replacement-group' })
-  fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'm-old', sequence: 1, text: '编辑器数据源字段需要刷数', occurredAt: '2026-09-04T01:00:00Z', senderName: '李辰', senderOpenDingTalkId: 'od-li' })
-  fixture.group.nextSequence = 2
-  fixture.group.outbox.push({ outboundId: 'out-old', sourceMessageId: 'm-old', text: '收到，我先处理这个字段。', status: 'sent', deliveredMessageId: 'sent-old', readbackRequired: true, replyKind: 'confirmation', matterSourceMessageIds: ['m-old'] })
-  const recalled = []
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  runtime.registerGroupMessageRecaller(async (request) => { recalled.push(request) })
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-new', text: '数据源清单也一起挂上，还是这个刷数事项', occurredAt: '2026-09-04T01:01:00Z', senderName: '李辰', senderOpenDingTalkId: 'od-li' })
-  await fixture.waitForSteers(1)
-  const steerText = fixture.steered[0].content[0].text
-  assert.match(steerText, /Runtime 已绑定 1 条候选/u)
-  assert.doesNotMatch(steerText, /编辑器数据源字段需要刷数/u)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const reviewTool = fixture.registeredTools.find((item) => item.name === 'group_reply_review_get')
-  const reviewSnapshot = await reviewTool.execute({ requestIds: [requestId] }, { agent: fixture.handle.agent })
-  assert.equal(reviewSnapshot.candidateCount, 1)
-  assert.equal(reviewSnapshot.candidates[0].sourceMessages[0].text, '编辑器数据源字段需要刷数')
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const missingReview = await tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [], reply: '遗漏历史审阅的候选' } }] }, { agent: fixture.handle.agent })
-  assert.equal(missingReview.status, 'review-required')
-  assert.equal(missingReview.reviewError, 'group_reply_review_required')
-  assert.equal(fixture.group.outbox.length, 1, '审阅缺失时不得产生副作用')
-  const submission = tool.execute({
-    observedRequestIds: [requestId],
-    submissions: [{ requestIds: [requestId], decision: {
-      actions: [], reply: '收到，我会把数据源清单一并纳入这个刷数事项。',
-      replyReview: { kind: 'confirmation', reviewedOutboundIds: ['out-old'], sameMatterOutboundIds: ['out-old'], replaceOutboundIds: ['out-old'] },
-    } }],
-  }, { agent: fixture.handle.agent })
-  await Promise.all([submission, ingest])
-  assert.deepEqual(recalled.map(({ groupId, messageId }) => ({ groupId, messageId })), [{ groupId: fixture.group.groupId, messageId: 'sent-old' }])
-  assert.equal(fixture.group.outbox[0].recallStatus, 'recalled')
-  assert.equal(fixture.group.outbox[1].replyKind, 'confirmation')
-  assert.deepEqual(fixture.group.outbox[1].matterSourceMessageIds, ['m-new'])
-  assert.deepEqual(fixture.group.outbox[1].replacesOutboundIds, ['out-old'])
-  assert.deepEqual(fixture.group.outbox.filter((outbound) => outbound.recallStatus !== 'recalled').map((outbound) => outbound.text), ['收到，我会把数据源清单一并纳入这个刷数事项。'])
-  fixture.releaseIdle()
-  await runtime.close()
-})
-
-test('相同引用消息ID但事项内容不同不会自动撤回历史确认', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'quote-is-not-matter-group' })
-  fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'm-old', sequence: 1, text: '检查后端构建失败', occurredAt: '2026-09-04T01:00:00Z', quotedMessage: { messageId: 'quote-shared', content: '公共讨论串' } })
-  fixture.group.nextSequence = 2
-  fixture.group.outbox.push({ outboundId: 'out-old', sourceMessageId: 'm-old', text: '收到，我检查构建。', status: 'sent', deliveredMessageId: 'sent-old', replyKind: 'confirmation' })
-  const recalled = []
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  runtime.registerGroupMessageRecaller(async (request) => { recalled.push(request) })
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-new', text: '编辑器字段要隐藏', occurredAt: '2026-09-04T01:01:00Z', quotedMessage: { messageId: 'quote-shared', content: '公共讨论串' } })
-  await fixture.waitForSteers(1)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await Promise.all([
-    tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: {
-      actions: [], reply: '收到，我会处理编辑器字段。',
-      replyReview: { kind: 'confirmation', reviewedOutboundIds: ['out-old'], sameMatterOutboundIds: [], replaceOutboundIds: [] },
-    } }] }, { agent: fixture.handle.agent }),
-    ingest,
-  ])
-  assert.deepEqual(recalled, [])
-  assert.equal(fixture.group.outbox[0].recallStatus, undefined)
-  assert.equal(fixture.group.outbox.length, 2)
-  fixture.releaseIdle()
-  await runtime.close()
-})
-
-test('旧确认尚未回读时替换请求失败关闭且不追加新回复', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'pending-confirmation-replacement-group' })
-  fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'm-old', sequence: 1, text: '同一事项的首条补充', occurredAt: '2026-09-04T01:00:00Z' })
-  fixture.group.nextSequence = 2
-  fixture.group.outbox.push({ outboundId: 'out-old', sourceMessageId: 'm-old', text: '收到。', status: 'pending', replyKind: 'confirmation' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  runtime.registerGroupMessageRecaller(async () => undefined)
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm-new', text: '同一事项的第二条补充', occurredAt: '2026-09-04T01:01:00Z' })
-  await fixture.waitForSteers(1)
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: {
-    actions: [], reply: '收到两条补充。',
-    replyReview: { kind: 'confirmation', reviewedOutboundIds: ['out-old'], sameMatterOutboundIds: ['out-old'], replaceOutboundIds: ['out-old'] },
-  } }] }, { agent: fixture.handle.agent })
-  await assert.rejects(submission, /group_reply_replacement_not_delivered:out-old/)
-  await assert.rejects(ingest, /group_reply_replacement_not_delivered:out-old/)
-  assert.equal(fixture.group.outbox.length, 1)
-  assert.equal(fixture.group.messages.at(-1).agentDeliveryStatus, 'decision-commit-failed')
-  fixture.releaseIdle()
-  await runtime.close()
-})
-
-test('普通assistant文本和turn结束不能冒充Decision，停稳未提交会进入自动恢复', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'missing-submit-group' })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '不要解析最终文本', occurredAt: '2026-08-28T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  fixture.handle.agent.session.events.push(
-    { seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '{"actions":[],"reply":"伪Decision"}' }] } } },
-    { seq: 2, type: 'turn/end', data: { status: 'success', reason: { kind: 'completed' } } },
-  )
-  fixture.releaseIdle()
-  const deferred = await ingest
-  assert.equal(deferred.deferred, true)
-  assert.match(deferred.decisionError, /group_decision_not_submitted:missing-submit-group:m1/)
-  assert.equal(fixture.followups.length, 1, '单次判断活动只追加一次恢复提醒，后续由持久重试接管')
-  assert.match(fixture.followups[0].content[0].text, /^\[GROUP_DECISION_RESUME\]/u)
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-retrying')
-  assert.match(fixture.group.messages[0].error, /group_decision_not_submitted/)
-  assert.equal(fixture.group.outbox.length, 0)
-  await runtime.close()
-})
-
-test('未提交判断自动重试期间阻塞后续消息并在成功后按序放行', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'automatic-decision-recovery-group' })
-  let idleCalls = 0, releaseRetryIdle
-  const retryIdle = new Promise((resolve) => { releaseRetryIdle = resolve })
-  fixture.handle.agent.whenIdle = async () => {
-    idleCalls += 1
-    if (idleCalls > 2) await retryIdle
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 2, decisionRetryBaseMs: 0, decisionRetryMaxMs: 0 }))
-  const firstResult = await runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '首次未提交', occurredAt: '2026-09-04T05:34:06Z' })
-  assert.equal(firstResult.deferred, true)
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'decision-retrying')
-
-  const secondResult = await runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '不能越过前序', occurredAt: '2026-09-04T05:37:04Z' })
-  assert.equal(secondResult.blocked, true)
-  assert.equal(secondResult.blockedByMessageId, 'm1')
-  assert.equal(fixture.group.messages[1].agentDeliveryStatus, 'pending')
-
-  await fixture.waitForSteers(2)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const retryText = fixture.steered[1].content[0].text
-  assert.match(retryText, /自动恢复：此前第 1 次判断未完成/u)
-  assert.match(retryText, /group_decision_not_submitted/u)
-  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[1])], decision: { actions: [], reason: '前序恢复成功' } }] }, { agent: fixture.handle.agent })
-
-  await fixture.waitForSteers(3)
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'delivered')
-  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[2])], decision: { actions: [], reason: '后续按序处理' } }] }, { agent: fixture.handle.agent })
-  while (fixture.group.messages[1].agentDeliveryStatus !== 'delivered') await new Promise((resolve) => setImmediate(resolve))
-  assert.deepEqual(fixture.group.messages.map((message) => message.agentDeliveryStatus), ['delivered', 'delivered'])
-  releaseRetryIdle()
-  await runtime.close()
-})
-
-test('关联复核也使用独立Decision请求且不回退读取assistant文本', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'recheck-group' })
-  fixture.tasks.push({ taskId: 'task-existing', groupId: fixture.group.groupId, state: 'completed' })
-  fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'image-message', text: '[图片消息]', occurredAt: '2026-08-28T01:00:00Z', sequence: 1, agentDeliveryStatus: 'delivered' })
-  fixture.group.nextSequence = 2
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '图片补充说明', occurredAt: '2026-08-28T01:01:00Z' })
-  await fixture.waitForSteers(1)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [], reason: '初次忽略' } }] }, { agent: fixture.handle.agent })
-  while (fixture.rechecks.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  assert.match(fixture.rechecks[0].content[0].text, /^\[GROUP_DECISION_RECHECK\]/u)
-  assert.equal(fixture.followups.length, 0, '关联复核必须插入当前Turn，不能排队到后续Turn')
-  const recheckRequestId = decisionRequestId(fixture.rechecks[0])
-  await tool.execute({ submissions: [{ requestIds: [recheckRequestId], decision: { actions: [], reason: '复核后仍无关' } }] }, { agent: fixture.handle.agent })
-  const result = await ingest
-  assert.equal(result.decision.reason, '复核后仍无关')
-  assert.equal(fixture.group.messages.find((message) => message.messageId === 'm1').agentDeliveryStatus, 'delivered')
-  fixture.releaseIdle()
-  await runtime.close()
-})
-
-test('同一Turn的多个关联复核都通过steer获得执行机会后再结算', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'concurrent-recheck-group' })
-  fixture.tasks.push({ taskId: 'task-existing', groupId: fixture.group.groupId, state: 'completed' })
-  fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'image-message', text: '[图片消息]', occurredAt: '2026-09-03T07:26:00Z', sequence: 1, agentDeliveryStatus: 'delivered' })
-  fixture.group.nextSequence = 2
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '[图片消息]构建失败', occurredAt: '2026-09-03T07:26:52Z' })
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '没有接入新代码包上传', occurredAt: '2026-09-03T07:27:11Z' })
-  await fixture.waitForSteers(2)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const initialRequestIds = fixture.steered.map(decisionRequestId)
-  await tool.execute({ submissions: initialRequestIds.map((requestId) => ({ requestIds: [requestId], decision: { actions: [], reason: '初次忽略' } })) }, { agent: fixture.handle.agent })
-
-  for (let attempt = 0; attempt < 20 && fixture.rechecks.length < 2; attempt += 1) await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(fixture.rechecks.length, 2)
-  assert.equal(fixture.followups.length, 0, '复核不能排入尚未开始的后续Turn')
-  const recheckRequestIds = fixture.rechecks.map(decisionRequestId)
-  await tool.execute({ submissions: recheckRequestIds.map((requestId) => ({ requestIds: [requestId], decision: { actions: [], reason: '复核后仍无关' } })) }, { agent: fixture.handle.agent })
-
-  const results = await Promise.all([first, second])
-  assert.deepEqual(results.map((result) => result.decision.reason), ['复核后仍无关', '复核后仍无关'])
-  assert.deepEqual(fixture.group.messages.slice(1).map((message) => message.agentDeliveryStatus), ['delivered', 'delivered'])
-  fixture.releaseIdle()
-  await runtime.close()
-})
-
-test('同群回复门禁不会阻塞其他群的Steer与Decision', async () => {
-  const fixture = twoGroupDecisionFixture()
-  let markGroupAAppendEntered, releaseGroupAAppend
-  const groupAAppendEntered = new Promise((resolve) => { markGroupAAppendEntered = resolve })
-  const groupAAppendGate = new Promise((resolve) => { releaseGroupAAppend = resolve })
-  const appendOutbox = fixture.store.appendOutbox
-  fixture.store.appendOutbox = async (value) => {
-    if (value.groupId === 'group-a') {
-      markGroupAAppendEntered()
-      await groupAAppendGate
-    }
-    return appendOutbox(value)
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: 'group-a', messageId: 'm-a', text: '群A回复', occurredAt: '2026-08-28T01:00:00Z' })
-  while (fixture.steered.get('group-a').length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const requestA = decisionRequestId(fixture.steered.get('group-a')[0])
-  const toolA = fixture.registeredTools.get('group-a').find((item) => item.name === 'group_decision_submit')
-  const submittingA = toolA.execute({ observedRequestIds: [requestA], submissions: [{ requestIds: [requestA], decision: { actions: [], reply: '群A可靠回复' } }] }, { agent: fixture.handles.get('group-a').agent })
-  await groupAAppendEntered
-
-  const second = runtime.ingest({ groupId: 'group-b', messageId: 'm-b', text: '群B独立事项', occurredAt: '2026-08-28T01:00:01Z' })
-  while (fixture.steered.get('group-b').length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const requestB = decisionRequestId(fixture.steered.get('group-b')[0])
-  const toolB = fixture.registeredTools.get('group-b').find((item) => item.name === 'group_decision_submit')
-  await toolB.execute({ submissions: [{ requestIds: [requestB], decision: { actions: [], reason: '群B不受群A门禁影响' } }] }, { agent: fixture.handles.get('group-b').agent })
-  assert.equal((await second).decision.reason, '群B不受群A门禁影响')
-  assert.equal(fixture.groups.get('group-a').outbox.length, 0)
-
-  releaseGroupAAppend()
-  await submittingA
-  assert.equal((await first).decision.reply, '群A可靠回复')
-  assert.deepEqual(fixture.groups.get('group-a').outbox.map((item) => item.text), ['群A可靠回复'])
-  await runtime.close()
-})
-
-test('关联复核可合并影响回复的新Steer并由外层Outbox统一提交', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'recheck-combined-group' })
-  // 真实持久 Store 返回新快照；可变测试对象会掩盖跨复核等待的过期读取。
-  fixture.store.getGroup = () => structuredClone(fixture.group)
-  fixture.tasks.push({ taskId: 'task-existing', groupId: fixture.group.groupId, state: 'completed' })
-  fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'image-message', text: '[图片消息]', occurredAt: '2026-08-28T01:00:00Z', sequence: 1, agentDeliveryStatus: 'delivered' })
-  fixture.group.nextSequence = 2
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '图片补充说明', occurredAt: '2026-08-28T01:01:00Z' })
-  await fixture.waitForSteers(1)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await tool.execute({ submissions: [{ requestIds: [decisionRequestId(fixture.steered[0])], decision: { actions: [], reason: '先进入关联复核' } }] }, { agent: fixture.handle.agent })
-  while (fixture.rechecks.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const recheckRequestId = decisionRequestId(fixture.rechecks[0])
-
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '这条补充会改变复核回复', occurredAt: '2026-08-28T01:01:01Z' })
-  await fixture.waitForSteers(2)
-  const secondRequestId = decisionRequestId(fixture.steered[1])
-  const submitted = await tool.execute({
-    observedRequestIds: [secondRequestId],
-    submissions: [{ requestIds: [recheckRequestId, secondRequestId], decision: { actions: [{ kind: 'new-task', title: '复核合并任务', objective: '结合图片说明及新补充', acceptanceCriteria: ['包含两条来源'], sourceMessageIds: ['m1', 'm2'] }], reply: '已结合复核期间的新补充。' } }],
-  }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, acceptedSubmission([recheckRequestId, secondRequestId]))
-  const [firstResult, secondResult] = await Promise.all([first, second])
-  assert.equal(firstResult.decision.reply, '已结合复核期间的新补充。')
-  assert.equal(secondResult.decisionOwnerRequestId, recheckRequestId)
-  assert.deepEqual(fixture.group.messages.slice(1).map((message) => message.agentDeliveryStatus), ['delivered', 'delivered'])
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['已结合复核期间的新补充。'])
-  assert.equal(fixture.tasks.length, 2)
-  assert.deepEqual(fixture.tasks[1].messageHistory.map((item) => item.messageId), ['m1', 'm2'])
-  fixture.releaseIdle()
-  await runtime.close()
-})
-
-test('关联复核继承shared来源附件异常且不能绕过回复观察门禁', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'recheck-effective-reply-group' })
-  fixture.tasks.push({ taskId: 'task-existing', groupId: fixture.group.groupId, state: 'completed' })
-  fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'image-message', text: '[图片消息]', occurredAt: '2026-08-28T01:00:00Z', sequence: 1, agentDeliveryStatus: 'delivered' })
-  fixture.group.nextSequence = 2
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const first = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '主体说明', occurredAt: '2026-08-28T01:01:00Z' })
-  const second = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm2', text: '附件补充', mediaUnavailable: ['共享附件无法读取'], occurredAt: '2026-08-28T01:01:01Z' })
-  await fixture.waitForSteers(2)
-  const initialRequestIds = fixture.steered.map(decisionRequestId)
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  await tool.execute({ submissions: [{ requestIds: initialRequestIds, decision: { actions: [], reason: '先复核共享消息' } }] }, { agent: fixture.handle.agent })
-  while (fixture.rechecks.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const recheckRequestId = decisionRequestId(fixture.rechecks[0])
-  const third = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm3', text: '无关后续', occurredAt: '2026-08-28T01:01:02Z' })
-  await fixture.waitForSteers(3)
-  const thirdRequestId = decisionRequestId(fixture.steered[2])
-  const recheckDecision = { actions: [{ kind: 'new-task', title: '处理共享附件', objective: '按共享附件处理', acceptanceCriteria: ['附件要求已核验'], sourceMessageIds: ['m1', 'm2'] }], reply: '' }
-
-  const stale = await tool.execute({
-    observedRequestIds: [],
-    submissions: [{ requestIds: [recheckRequestId], decision: recheckDecision }],
-  }, { agent: fixture.handle.agent })
-  assert.deepEqual(stale, staleSubmission([thirdRequestId], [thirdRequestId]))
-  assert.equal(fixture.group.outbox.length, 0)
-  assert.equal(fixture.tasks.length, 1, '只有预置任务，复核动作尚未执行')
-
-  const submitted = await tool.execute({
-    observedRequestIds: [thirdRequestId],
-    submissions: [{ requestIds: [recheckRequestId], decision: recheckDecision }],
-  }, { agent: fixture.handle.agent })
-  assert.deepEqual(submitted, acceptedSubmission([recheckRequestId], [thirdRequestId]))
-  const [firstResult, secondResult] = await Promise.all([first, second])
-  assert.match(firstResult.decision.reply, /共享附件无法读取/u)
-  assert.match(secondResult.decision.reply, /共享附件无法读取/u)
-  assert.equal(fixture.tasks.length, 1, '附件拦截不得创建新任务')
-  await tool.execute({ submissions: [{ requestIds: [thirdRequestId], decision: { actions: [], reason: '无关消息随后处理' } }] }, { agent: fixture.handle.agent })
-  await third
-  fixture.releaseIdle()
-  await runtime.close()
-})
-
-test('Task通知由模型从完整历史选择承接消息与多位参与人', async () => {
-  const messageHistory = [
-    { messageId: 'm-origin', text: '请排查草稿提交失败', senderName: '提出人', senderOpenDingTalkId: 'od-owner', occurredAt: '2026-09-02T01:00:00Z', runSequence: 1, associatedAt: '2026-09-02T01:00:00Z' },
-    { messageId: 'm-domain', text: '数据集关联由我确认', senderName: '业务确认人', senderOpenDingTalkId: 'od-domain', occurredAt: '2026-09-02T01:00:01Z', runSequence: 1, associatedAt: '2026-09-02T01:00:01Z' },
-    { messageId: 'm-latest', text: '我只补充了日志位置', senderName: '最新补充人', senderOpenDingTalkId: 'od-latest', occurredAt: '2026-09-02T01:00:02Z', runSequence: 1, associatedAt: '2026-09-02T01:00:02Z' },
-  ]
-  const fixture = taskReplyRuntimeFixture({ messageHistory })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const repairing = runtime.reconcileCompletedNotifications()
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const coordinationPrompt = fixture.followups[0].content[0].text
-  const requestId = coordinationPrompt.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-  const replyTool = fixture.registeredTools.find((item) => item.name === 'group_reply_submit')
-
-  assert.match(coordinationPrompt, /任务消息时间线：\[\{"messageId":"m-origin"[\s\S]*"messageId":"m-domain"[\s\S]*"messageId":"m-latest"/u)
-  assert.match(coordinationPrompt, /不得机械选择最后一条消息或只通知最后触发人/u)
-  await assert.rejects(replyTool.execute({ requestId, observedRequestIds: [], reply: '错误目标', replyToMessageId: 'm-outside', atOpenDingTalkIds: ['od-owner'] }, { agent: fixture.agent }), /group_reply_target_not_in_task_history/)
-  await assert.rejects(replyTool.execute({ requestId, observedRequestIds: [], reply: '错误参与人', replyToMessageId: 'm-origin', atOpenDingTalkIds: ['od-outside'] }, { agent: fixture.agent }), /group_reply_recipient_not_in_task_history/)
-
-  await Promise.all([
-    replyTool.execute({ requestId, observedRequestIds: [], reply: '@提出人 @业务确认人 已完成并核验。', replyToMessageId: 'm-origin', atOpenDingTalkIds: ['od-owner', 'od-domain'] }, { agent: fixture.agent }),
-    repairing,
-  ])
-  assert.equal(fixture.group.outbox[0].replyToMessageId, 'm-origin', '模型可选择历史承接消息，不强制最新消息')
-  assert.equal(fixture.group.outbox[0].replyToSenderOpenDingTalkId, 'od-owner')
-  assert.deepEqual(fixture.group.outbox[0].atOpenDingTalkIds, ['od-owner', 'od-domain'])
-  assert.equal(fixture.group.outbox[0].text, '已完成并核验。', '正文中的手写@由结构化通知替代')
-  await runtime.close()
-})
-
-test('Task通知存在历史回复候选时审阅缺失返回可重试结果', async () => {
-  const messageHistory = [{ messageId: 'm-origin', text: '处理编辑器字段', senderName: '提出人', senderOpenDingTalkId: 'od-owner', occurredAt: '2026-09-04T01:00:00Z' }]
-  const fixture = taskReplyRuntimeFixture({ messageHistory })
-  fixture.group.outbox.push({ outboundId: 'out-confirmation', sourceMessageId: 'm-origin', text: '收到，我会处理。', status: 'sent', deliveredMessageId: 'sent-confirmation', replyKind: 'confirmation', matterSourceMessageIds: ['m-origin'], taskIds: [fixture.getTask().taskId] })
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const repairing = runtime.reconcileCompletedNotifications()
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const coordinationPrompt = fixture.followups[0].content[0].text
-  assert.match(coordinationPrompt, /Runtime 已绑定 1 条候选/u)
-  assert.doesNotMatch(coordinationPrompt, /"outboundId":"out-confirmation"/u)
-  const requestId = coordinationPrompt.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-  const reviewTool = fixture.registeredTools.find((item) => item.name === 'group_reply_review_get')
-  const reviewSnapshot = await reviewTool.execute({ requestIds: [requestId] }, { agent: fixture.agent })
-  assert.deepEqual(reviewSnapshot.candidates.map((candidate) => candidate.outboundId), ['out-confirmation'])
-  const replyTool = fixture.registeredTools.find((item) => item.name === 'group_reply_submit')
-  const missingReview = await replyTool.execute({ requestId, observedRequestIds: [], reply: '任务已完成。', replyToMessageId: 'm-origin', atOpenDingTalkIds: ['od-owner'] }, { agent: fixture.agent })
-  assert.equal(missingReview.status, 'review-required')
-  assert.equal(missingReview.reviewError, 'group_reply_review_required')
-  assert.equal(fixture.group.outbox.length, 1)
-  await Promise.all([
-    replyTool.execute({
-      requestId, observedRequestIds: [], reply: '任务已完成。', replyToMessageId: 'm-origin', atOpenDingTalkIds: ['od-owner'],
-      replyReview: { kind: 'substantive', reviewedOutboundIds: ['out-confirmation'], sameMatterOutboundIds: ['out-confirmation'], replaceOutboundIds: [] },
-    }, { agent: fixture.agent }),
-    repairing,
-  ])
-  assert.equal(fixture.group.outbox.length, 2)
-  assert.equal(fixture.group.outbox[1].replyKind, 'substantive')
-  assert.deepEqual(fixture.group.outbox[1].taskIds, [fixture.getTask().taskId])
-  await runtime.close()
-})
-
-test('Task通知在新Steer到达后拒绝旧候选并只可靠提交重生成回复', async () => {
-  const fixture = taskReplyRuntimeFixture()
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  let repairSettled = false
-  const repairing = runtime.reconcileCompletedNotifications().finally(() => { repairSettled = true })
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const coordinationPrompt = fixture.followups[0].content[0].text
-  const replyRequestId = coordinationPrompt.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-  const replyTool = fixture.registeredTools.find((item) => item.name === 'group_reply_submit')
-  const decisionTool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-
-  fixture.agent.session.events.push({ seq: 0, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '旧普通文本候选' }] } } })
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(repairSettled, false, '普通assistant文本不能提交Task通知')
-  assert.equal(fixture.group.outbox.length, 0)
-
-  const incoming = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'new-message', text: '会影响通知的新消息', occurredAt: '2026-09-02T01:00:00Z' })
-  while (fixture.steered.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const incomingRequestId = decisionRequestId(fixture.steered[0])
-  const stale = await replyTool.execute({ requestId: replyRequestId, observedRequestIds: [], reply: '未结合新消息的旧通知' }, { agent: fixture.agent })
-  assert.deepEqual(stale, staleSubmission([incomingRequestId], [incomingRequestId]))
-  assert.match(replyTool.output.render({}, stale)[0].text, new RegExp(incomingRequestId))
-  assert.equal(fixture.group.outbox.length, 0)
-
-  const [submitted, repaired] = await Promise.all([
-    replyTool.execute({ requestId: replyRequestId, observedRequestIds: [incomingRequestId], reply: '结合新消息重新生成的最终通知' }, { agent: fixture.agent }),
-    repairing,
-  ])
-  assert.deepEqual(submitted, acceptedSubmission([replyRequestId], [incomingRequestId]))
-  assert.deepEqual(repaired, [{ taskId: fixture.getTask().taskId, sourceMessageId: `task-result:${fixture.getTask().taskId}:completed:1` }])
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['结合新消息重新生成的最终通知'])
-  assert.equal(fixture.group.messages[0].agentDeliveryStatus, 'steered', '已审阅的新消息仍应保留给自己的Decision处理')
-
-  await decisionTool.execute({ submissions: [{ requestIds: [incomingRequestId], decision: { actions: [], reason: '通知发出后单独处理' } }] }, { agent: fixture.agent })
-  assert.equal((await incoming).decision.reason, '通知发出后单独处理')
-  await runtime.close()
-})
-
-test('Task通知生成不占用Task尾链且新Steer可先完成任务动作', async () => {
-  const fixture = taskReplyRuntimeFixture()
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const repairing = runtime.reconcileCompletedNotifications()
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const replyRequestId = fixture.followups[0].content[0].text.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-  const replyTool = fixture.registeredTools.find((item) => item.name === 'group_reply_submit')
-  const decisionTool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-
-  const incoming = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'reopen-message', text: '补充后继续处理', occurredAt: '2026-09-02T01:00:00Z' })
-  while (fixture.steered.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const incomingRequestId = decisionRequestId(fixture.steered[0])
-  const decisionSubmission = decisionTool.execute({
-    observedRequestIds: [incomingRequestId],
-    submissions: [{ requestIds: [incomingRequestId], decision: { actions: [{ kind: 'task-reopen', taskId: fixture.getTask().taskId, context: '结合补充继续处理', sourceMessageIds: ['reopen-message'] }], reply: '已结合补充继续处理。' } }],
-  }, { agent: fixture.agent })
-  const outcome = await Promise.race([decisionSubmission.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 500))])
-  if (outcome === 'blocked') {
-    await replyTool.execute({ requestId: replyRequestId, observedRequestIds: [], reply: '用于解除失败用例资源的通知' }, { agent: fixture.agent })
-    await Promise.all([decisionSubmission, repairing, incoming])
-    await runtime.close()
-  }
-  assert.equal(outcome, 'settled', '通知生成期间不得持有Task尾链阻塞消息动作，否则resident会等待Decision工具而无法提交通知')
-
-  assert.equal((await incoming).task.state, 'queued')
-  await replyTool.execute({ requestId: replyRequestId, observedRequestIds: [], reply: '结合已处理补充生成的任务通知' }, { agent: fixture.agent })
-  await repairing
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['已结合补充继续处理。', '结合已处理补充生成的任务通知'])
-  await runtime.close()
-})
-
-test('Task通知到可靠Outbox之间同样阻止新Steer越过门禁', async () => {
-  const fixture = taskReplyRuntimeFixture()
-  let markAppendEntered, releaseAppend
-  const appendEntered = new Promise((resolve) => { markAppendEntered = resolve })
-  const appendGate = new Promise((resolve) => { releaseAppend = resolve })
-  const appendOutbox = fixture.store.appendOutbox
-  fixture.store.appendOutbox = async (value) => { markAppendEntered(); await appendGate; return appendOutbox(value) }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const repairing = runtime.reconcileCompletedNotifications()
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const replyRequestId = fixture.followups[0].content[0].text.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-  const replyTool = fixture.registeredTools.find((item) => item.name === 'group_reply_submit')
-  const decisionTool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = replyTool.execute({ requestId: replyRequestId, observedRequestIds: [], reply: '任务可靠通知' }, { agent: fixture.agent })
-  await appendEntered
-
-  const incoming = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'during-task-reply', text: '通知提交窗口的新消息', occurredAt: '2026-09-02T01:00:00Z' })
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(fixture.group.messages.length, 1, '新消息应先持久化')
-  assert.equal(fixture.steered.length, 0, 'Task通知可靠落库前不得插入新Steer')
-
-  releaseAppend()
-  await Promise.all([submission, repairing])
-  while (fixture.steered.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const incomingRequestId = decisionRequestId(fixture.steered[0])
-  await decisionTool.execute({ submissions: [{ requestIds: [incomingRequestId], decision: { actions: [], reason: '通知后处理' } }] }, { agent: fixture.agent })
-  await incoming
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['任务可靠通知'])
-  await runtime.close()
-})
-
-test('首次完成通知Outbox失败后可按稳定结果键补发', async () => {
-  const fixture = taskReplyRuntimeFixture()
-  delete fixture.getTask().lastCompletedResult
-  delete fixture.getTask().completionSequence
-  const neverIdle = new Promise(() => undefined)
-  let idleCalls = 0
-  fixture.agent.whenIdle = async () => { idleCalls += 1; if (idleCalls % 2 === 0) await neverIdle }
-  const appendOutbox = fixture.store.appendOutbox
-  let failAppend = true
-  fixture.store.appendOutbox = async (value) => {
-    if (failAppend) { failAppend = false; throw new Error('task_outbox_append_failed') }
-    return appendOutbox(value)
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const firstRepair = runtime.reconcileCompletedNotifications()
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const replyTool = fixture.registeredTools.find((item) => item.name === 'group_reply_submit')
-  const firstRequestId = fixture.followups[0].content[0].text.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-  const firstSubmission = replyTool.execute({ requestId: firstRequestId, observedRequestIds: [], reply: '首次失败通知' }, { agent: fixture.agent })
-  await assert.rejects(firstSubmission, /task_outbox_append_failed/)
-  await assert.rejects(firstRepair, /task_outbox_append_failed/)
-  assert.equal(fixture.group.outbox.length, 0)
-
-  const secondRepair = runtime.reconcileCompletedNotifications()
-  while (fixture.followups.length < 2) await new Promise((resolve) => setImmediate(resolve))
-  const secondRequestId = fixture.followups[1].content[0].text.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-  await Promise.all([
-    replyTool.execute({ requestId: secondRequestId, observedRequestIds: [], reply: '首次完成补发成功' }, { agent: fixture.agent }),
-    secondRepair,
-  ])
-  assert.equal(fixture.group.outbox.length, 1)
-  assert.equal(fixture.group.outbox[0].sourceMessageId, `task-result:${fixture.getTask().taskId}:completed`)
-  assert.equal(fixture.group.outbox[0].text, '首次完成补发成功')
-  await runtime.close()
-})
-
-test('完成通知补发跳过退订群并隔离异常resident且不饿死有效群', async () => {
-  const fixture = taskReplyRuntimeFixture()
-  const validTask = fixture.getTask()
-  const orphanTask = { ...validTask, taskId: 'task-orphan', groupId: 'removed-group', completionSequence: 1 }
-  const brokenGroup = { groupId: 'broken-group', residentSessionId: 'session-broken', residentAgentPreset: 'standard', nextSequence: 1, messages: [], outbox: [] }
-  const brokenTask = { ...validTask, taskId: 'task-broken', groupId: brokenGroup.groupId, completionSequence: 1 }
-  fixture.store.listGroups = () => [brokenGroup, fixture.group]
-  fixture.store.getGroup = (groupId) => groupId === brokenGroup.groupId ? brokenGroup : groupId === fixture.group.groupId ? fixture.group : undefined
-  fixture.store.listTasks = () => [orphanTask, brokenTask, validTask]
-  const resumeResident = fixture.ctx.agents.resume
-  fixture.ctx.agents.resume = async (options) => {
-    if (options.resumeSessionId === brokenGroup.residentSessionId) throw new Error('broken_resident_resume')
-    return resumeResident(options)
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const repairing = runtime.reconcileCompletedNotifications()
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const replyRequestId = fixture.followups[0].content[0].text.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-  const replyTool = fixture.registeredTools.find((item) => item.name === 'group_reply_submit')
-  await replyTool.execute({ requestId: replyRequestId, observedRequestIds: [], reply: '有效群仍完成补发' }, { agent: fixture.agent })
-  await assert.rejects(repairing, /resident_not_active:broken-group/)
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['有效群仍完成补发'])
-  assert.equal(brokenGroup.outbox.length, 0)
-  assert.equal(runtime.listRecoveryIssues().some((issue) => issue.kind === 'task-notification-reconcile' && issue.taskId === brokenTask.taskId), true)
-  await runtime.close()
-})
-
-test('关闭Runtime会拒绝尚未提交的Task通知请求而不悬挂', async () => {
-  const fixture = taskReplyRuntimeFixture()
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const repairing = runtime.reconcileCompletedNotifications()
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-
-  await runtime.close()
-  await assert.rejects(repairing, /resident_runtime_closed/)
-})
-
-test('关闭Runtime会等待已领取的Task通知可靠写入Outbox', async () => {
-  const fixture = taskReplyRuntimeFixture()
-  let markAppendEntered, releaseAppend
-  const appendEntered = new Promise((resolve) => { markAppendEntered = resolve })
-  const appendGate = new Promise((resolve) => { releaseAppend = resolve })
-  const appendOutbox = fixture.store.appendOutbox
-  fixture.store.appendOutbox = async (value) => { markAppendEntered(); await appendGate; return appendOutbox(value) }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const repairing = runtime.reconcileCompletedNotifications()
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const replyRequestId = fixture.followups[0].content[0].text.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-  const replyTool = fixture.registeredTools.find((item) => item.name === 'group_reply_submit')
-  const submission = replyTool.execute({ requestId: replyRequestId, observedRequestIds: [], reply: '关闭前已领取的任务通知' }, { agent: fixture.agent })
-  await appendEntered
-
-  let closeSettled = false
-  const closing = runtime.close().finally(() => { closeSettled = true })
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(closeSettled, false, '关闭过程必须等待已领取Task通知的可靠Outbox提交')
-  releaseAppend()
-  await Promise.all([submission, repairing, closing])
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['关闭前已领取的任务通知'])
-})
-
-test('Task通知尚在等待resident空闲时关闭Runtime不会在关闭后创建回复请求', async () => {
-  const fixture = taskReplyRuntimeFixture()
-  let markIdleEntered, releaseIdle
-  const idleEntered = new Promise((resolve) => { markIdleEntered = resolve })
-  const idleGate = new Promise((resolve) => { releaseIdle = resolve })
-  fixture.agent.whenIdle = async () => { markIdleEntered(); await idleGate }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-  const repairing = runtime.reconcileCompletedNotifications()
-  await idleEntered
-  let closeSettled = false
-  const closing = runtime.close().finally(() => { closeSettled = true })
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(closeSettled, false, '关闭必须等待已登记的Resident操作退出')
-
-  releaseIdle()
-  await assert.rejects(repairing, /resident_runtime_closed/)
-  await closing
-  assert.equal(fixture.followups.length, 0)
-  assert.equal(fixture.group.outbox.length, 0)
-})
-
-test('消息判断自动恢复状态会过滤重复事件并阻止后续消息越过', async () => {
-  const source = readFileSync(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
-  assert.match(source, /status: 'steered'/)
-  assert.match(source, /status: 'decision-retrying'/)
-  assert.match(source, /'decision-retrying', 'decision-failed', 'decision-commit-failed'/)
-  assert.match(source, /!inflightMessages\.has\(`/)
-  assert.match(source, /blockedByMessageId/)
-})
-
-test('已有群切换预设时沿用原 Session，新群先创建 dsh Session 再持久绑定', async () => {
-  const groups = new Map([['existing', { groupId: 'existing', residentSessionId: 'session-existing', residentAgentPreset: 'standard' }]])
-  const calls = []
-  const setupReturns = []
-  const permissionSets = []
-  const promptSections = []
-  const registeredTools = []
-  const toolRestrictions = []
-  const tasks = []
-  const handle = (sessionId) => ({ agent: { session: { id: sessionId, meta: { agentPreset: 'standard-convergent' } } }, dispose: async () => undefined })
-  const ctx = {
-    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
-    agents: {
-      async resume(options) { calls.push(['resume', options.resumeSessionId]); return handle(options.resumeSessionId) },
-      async create(options) { calls.push(['create', options.sessionId, options.meta.cwd, options.meta.agentPreset]); setupReturns.push(await options.setup({ on: () => () => undefined, tools: { register: (tool) => registeredTools.push(tool), restrict: (filter) => toolRestrictions.push(filter) }, systemPrompt: { section: (value) => promptSections.push(value) } })); return handle(options.sessionId) },
-    },
-    subagents: {
-      drainContinuableDescendants: async () => undefined,
-    },
-    agentPresets: {
-      mount: async (_ctx, id) => ({ id }), composeFrom: () => 'standard',
-      serviceFor: () => ({ set: (session, preset) => permissionSets.push([session.id, preset]) }),
-    },
-  }
-  const store = {
-    getGroup: (id) => groups.get(id),
-    listGroups: () => [...groups.values()],
-    listTasks: () => tasks,
-    getTask: (id) => tasks.find((task) => task.taskId === id),
-    async createTask(value) {
-      const duplicate = tasks.find((task) => task.groupId === value.groupId && task.sourceMessageId === value.sourceMessageId)
-      if (duplicate) return { created: false, task: duplicate }
-      const taskId = `task-${tasks.length + 1}`
-      const task = { ...value, taskId, childSessionId: taskSessionId(taskId), state: 'queued' }
-      tasks.push(task)
-      return { created: true, task }
-    },
-    ingest: async () => undefined,
-    acknowledge: async () => undefined,
-    async subscribe(value) { const group = { ...value, nextSequence: 1, messages: [], outbox: [] }; groups.set(value.groupId, group); return { created: true, group } },
-    async updateGroup(value) { const group = { ...groups.get(value.groupId), ...value }; groups.set(value.groupId, group); return group },
-    close: async () => undefined,
-  }
-
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ agentPreset: 'standard-convergent', maxConcurrentTasks: 0 }))
-  const created = await runtime.subscribe({ groupId: 'new-group', name: '新群名称' })
-  assert.deepEqual(calls[0], ['resume', 'session-existing'])
-  assert.deepEqual(calls[1].slice(0, 2), ['create', created.group.residentSessionId])
-  assert.equal(groups.get('existing').residentSessionId, 'session-existing')
-  assert.equal(groups.get('existing').residentAgentPreset, 'standard-convergent')
-  assert.deepEqual(permissionSets, [['session-existing', 'danger-full-access'], [created.group.residentSessionId, 'danger-full-access']])
-  assert.equal(calls[1][2], agentWorkspace)
-  assert.equal(calls[1][3], 'standard-convergent')
-  assert.deepEqual(setupReturns, [undefined], 'Agent setup不能意外返回非事务对象')
-  assert.equal(created.group.residentSessionId, residentSessionId('new-group'))
-  const responsibility = promptSections.find((section) => section.name === 'dingtalk-group-responsibility')
-  assert.match(responsibility.text(), /群名称：新群名称/)
-  assert.match(responsibility.text(), /群 ID：new-group/)
-  assert.match(responsibility.text(), /未设置职责/)
-  runtime.setCurrentDwsProfile("corp'user")
-  const decisionProtocol = promptSections.find((section) => section.name === 'dingtalk-group-decision-protocol')?.text()
-  assert.match(decisionProtocol, /加载 `dingtalk-chat` Skill/u)
-  assert.match(decisionProtocol, /dws chat \+messages-mget --msg-ids '<消息ID>' --profile 'corp''user' --format json/u)
-  assert.match(decisionProtocol, /`complete`、`failedCount`、`failures`、`foundCount` 和 `notFoundMessageIds`/u)
-  assert.match(decisionProtocol, /仍含 `quotedMessage\.messageId`，继续按该 ID 查询/u)
-  assert.match(decisionProtocol, /不得向群成员回复“请补原问题、正文或截图”/u)
-  assert.match(decisionProtocol, /不得调用 group_decision_submit[\s\S]*自动重新判断/u)
-  assert.deepEqual(toolRestrictions, [{ deny: ['get_goal', 'create_goal', 'update_goal'] }])
-  assert.deepEqual(promptSections.find((section) => section.name === 'tool:goal'), { name: 'tool:goal', order: 114, text: '' })
-  assert.deepEqual(registeredTools.map((tool) => tool.name), ['group_reply_review_get', 'group_task_context_get', 'group_decision_submit', 'group_reply_submit', 'group_task_create', 'group_task_context_append', 'group_task_reopen', 'group_task_list'])
-  for (const tool of registeredTools) {
-    assertSupportedJsonSchema(tool.parameters)
-    assertSupportedJsonSchema(tool.output.schema)
-  }
-  const taskTool = registeredTools.find((tool) => tool.name === 'group_task_create')
-  const toolResult = await taskTool.execute({ objective: '从 Web 主会话创建任务' }, { agent: { session: { id: created.group.residentSessionId } } })
-  assert.deepEqual(toolResult, { created: true, taskId: 'task-1', state: 'queued', childSessionId: 'session-task-1' })
-  const duplicate = await taskTool.execute({ objective: '从 Web 主会话创建任务' }, { agent: { session: { id: created.group.residentSessionId } } })
-  assert.equal(duplicate.created, false)
-  await assert.rejects(taskTool.execute({ objective: '越权' }, { agent: { session: { id: 'another-session' } } }), /resident_tool_wrong_session/)
-  await runtime.close()
-})
-
-test('Resident 恢复失败时保留原 Session 绑定并进入降级状态', async () => {
-  const group = { groupId: 'failed-resident', residentSessionId: 'session-original', residentAgentPreset: 'standard-convergent', nextSequence: 1, messages: [], outbox: [] }
-  let createCalls = 0
-  let updateCalls = 0
-  const ctx = {
-    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
-    agents: {
-      async resume() { throw new Error('corrupt session log: synthetic failure') },
-      async create() { createCalls += 1; throw new Error('Resident 恢复失败时不得创建替代 Session') },
-    },
-    subagents: { drainContinuableDescendants: async () => undefined },
-    agentPresets: { mount: async (_ctx, id) => ({ id }), serviceFor: () => ({ set: () => undefined }) },
-  }
-  const store = {
-    getGroup: (groupId) => groupId === group.groupId ? group : undefined,
-    listGroups: () => [group],
-    listTasks: () => [],
-    async updateGroup() { updateCalls += 1 },
-    close: async () => undefined,
-  }
-
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 0, supervisorIntervalMs: 0 }))
-
-  assert.equal(group.residentSessionId, 'session-original')
-  assert.equal(createCalls, 0)
-  assert.equal(updateCalls, 0)
-  assert.deepEqual(runtime.listRecoveryIssues(), [{
-    groupId: group.groupId,
-    residentSessionId: 'session-original',
-    error: 'corrupt session log: synthetic failure',
-  }])
-  await runtime.close()
-})
-
-test('Agent工作区统一写入各群Session cwd，变更时保留历史并重建resident', async () => {
-  const groups = new Map()
-  const creates = [], disposed = []
-  const makeHandle = (sessionId, events = []) => ({ agent: { session: { id: sessionId, events }, whenIdle: async () => undefined }, dispose: async () => { disposed.push(sessionId) } })
-  const ctx = {
-    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
-    agents: { async create(options) { creates.push(options); const events = options.seed ? [...options.seed] : [{ seq: 0, type: 'turn/start', data: {} }, { seq: 1, type: 'turn/end', data: { status: 'success' } }]; return makeHandle(options.sessionId, events) } },
-    subagents: { drainContinuableDescendants: async () => undefined },
-    agentPresets: { serviceFor: () => ({ set: () => undefined }) },
-  }
-  const store = {
-    getGroup: (id) => groups.get(id), listGroups: () => [...groups.values()], listTasks: () => [],
-    getAgentWorkspaceDir: () => store.workspaceDir,
-    async setAgentWorkspaceDir(value) { store.workspaceDir = value; return { workspaceDir: value } },
-    async subscribe(value) { const group = { ...value, nextSequence: 1, messages: [], outbox: [] }; groups.set(value.groupId, group); return { created: true, group } },
-    async updateGroup(value) { const group = { ...groups.get(value.groupId), ...value }; groups.set(value.groupId, group); return group },
-    close: async () => undefined,
-  }
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions())
-  await runtime.subscribe({ groupId: 'workspace-group' })
-  creates.length = 0
-  await runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
-  assert.equal(store.workspaceDir, replacementWorkspace)
-  assert.equal(creates[0].meta.cwd, replacementWorkspace)
-  assert.equal(creates[0].seed.length, 2)
-  assert.notEqual(groups.get('workspace-group').residentSessionId, residentSessionId('workspace-group'))
-  await runtime.close()
-})
-
-test('Agent工作区切换等待resident时不占Task尾链并在提交前复核新任务', { timeout: 3_000 }, async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'config-reply-group' })
-  let releaseResidentIdle
-  const residentIdle = new Promise((resolve) => { releaseResidentIdle = resolve })
-  let idleWaits = 0
-  fixture.handle.agent.whenIdle = async () => { idleWaits += 1; await residentIdle }
-  fixture.ctx.agents.create = async (options) => {
-    const session = { id: options.sessionId, seq: 0, events: [...(options.seed ?? [])] }
-    const agent = { session, status: 'idle', whenIdle: async () => undefined, steer: () => undefined, followup: () => undefined }
-    await options.setup({ on: () => () => undefined, tools: { register: () => undefined, restrict: () => undefined }, systemPrompt: { section: () => undefined } })
-    return { agent, dispose: async () => undefined }
-  }
-  fixture.store.getAgentWorkspaceDir = () => fixture.store.workspaceDir
-  fixture.store.setAgentWorkspaceDir = async (value) => { fixture.store.workspaceDir = value }
-  fixture.store.updateGroup = async (value) => { Object.assign(fixture.group, value); return fixture.group }
-  fixture.store.createTask = async (value) => {
-    const task = { ...value, taskId: `task-${fixture.tasks.length + 1}`, childSessionId: `session-task-${fixture.tasks.length + 1}`, state: 'running' }
-    fixture.tasks.push(task)
-    return { created: true, task }
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 1, supervisorIntervalMs: 0 }))
-  const ingest = runtime.ingest({ groupId: fixture.group.groupId, messageId: 'm1', text: '配置切换期间创建任务', occurredAt: '2026-09-02T01:00:00Z' })
-  await fixture.waitForSteers(1)
-  const configuring = runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
-  const idleOutcome = await Promise.race([
-    (async () => { while (idleWaits < 2) await new Promise((resolve) => setImmediate(resolve)); return 'ready' })(),
-    new Promise((resolve) => setTimeout(() => resolve('timed-out'), 500)),
-  ])
-  if (idleOutcome === 'timed-out') {
-    releaseResidentIdle()
-    await configuring
-    await ingest.catch(() => undefined)
-    await runtime.close()
-  }
-  assert.equal(idleOutcome, 'ready', `预期两个 resident 空闲等待，实际 ${idleWaits}`)
-
-  const requestId = decisionRequestId(fixture.steered[0])
-  const tool = fixture.registeredTools.find((item) => item.name === 'group_decision_submit')
-  const submission = tool.execute({ observedRequestIds: [requestId], submissions: [{ requestIds: [requestId], decision: { actions: [{ kind: 'new-task', title: '配置并发任务', objective: '验证配置切换并发', acceptanceCriteria: ['并发路径已验证'], sourceMessageIds: ['m1'] }], reply: '已创建并发任务。' } }] }, { agent: fixture.handle.agent })
-  const outcome = await Promise.race([submission.then(() => 'settled'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 500))])
-  releaseResidentIdle()
-  await Promise.all([submission, ingest])
-  await assert.rejects(configuring, /agent_config_has_active_tasks/)
-  await runtime.close()
-  assert.equal(outcome, 'settled', '配置切换等待resident期间不得持有新消息任务动作所需的Task尾链')
-  assert.equal(fixture.store.workspaceDir, agentWorkspace, '提交阶段发现新任务后不得切换工作区')
-})
-
-test('工作区切换等待尚未登记pending的Task通知完成后再替换resident', async () => {
-  const fixture = taskReplyRuntimeFixture()
-  let markFirstIdleEntered, releaseFirstIdle
-  const firstIdleEntered = new Promise((resolve) => { markFirstIdleEntered = resolve })
-  const firstIdleGate = new Promise((resolve) => { releaseFirstIdle = resolve })
-  const notificationTurn = new Promise(() => undefined)
-  let idleCalls = 0
-  fixture.agent.whenIdle = async () => {
-    idleCalls += 1
-    if (idleCalls === 1) { markFirstIdleEntered(); await firstIdleGate }
-    else if (idleCalls === 2) await notificationTurn
-  }
-  let replacementCreates = 0
-  fixture.ctx.agents.create = async (options) => {
-    replacementCreates += 1
-    const session = { id: options.sessionId, seq: 0, events: [...(options.seed ?? [])] }
-    const agent = { session, status: 'idle', whenIdle: async () => undefined, steer: () => undefined, followup: () => undefined }
-    await options.setup({ on: () => () => undefined, tools: { register: () => undefined, restrict: () => undefined }, systemPrompt: { section: () => undefined } })
-    return { agent, dispose: async () => undefined }
-  }
-  fixture.store.getAgentWorkspaceDir = () => fixture.store.workspaceDir
-  fixture.store.setAgentWorkspaceDir = async (value) => { fixture.store.workspaceDir = value }
-  fixture.store.updateGroup = async (value) => { Object.assign(fixture.group, value); return fixture.group }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 1, supervisorIntervalMs: 0 }))
-  const repairing = runtime.reconcileCompletedNotifications()
-  await firstIdleEntered
-  const configuring = runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(replacementCreates, 0, '通知进入pending之前也必须计入Resident生命周期')
-
-  releaseFirstIdle()
-  while (fixture.followups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const replyRequestId = fixture.followups[0].content[0].text.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-  const replyTool = fixture.registeredTools.find((item) => item.name === 'group_reply_submit')
-  await Promise.all([
-    replyTool.execute({ requestId: replyRequestId, observedRequestIds: [], reply: '切换前可靠完成通知' }, { agent: fixture.agent }),
-    repairing,
-  ])
-  await configuring
-  assert.equal(replacementCreates, 1)
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['切换前可靠完成通知'])
-  assert.equal(fixture.store.workspaceDir, replacementWorkspace)
-  await runtime.close()
-})
-
-test('工作区切换等待历史导入完成并把完整事件作为新resident seed', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'history-config-group' })
-  fixture.group.messages.push({ groupId: fixture.group.groupId, messageId: 'history-message', text: '历史事实', occurredAt: '2026-09-02T01:00:00Z', sequence: 1, agentDeliveryStatus: 'delivered' })
-  fixture.group.nextSequence = 2
-  let markIdleEntered, releaseIdle
-  const idleEntered = new Promise((resolve) => { markIdleEntered = resolve })
-  const idleGate = new Promise((resolve) => { releaseIdle = resolve })
-  let idleCalls = 0
-  fixture.handle.agent.whenIdle = async () => {
-    idleCalls += 1
-    if (idleCalls === 1) { markIdleEntered(); await idleGate }
-  }
-  fixture.handle.agent.followup = (message) => {
-    fixture.followups.push(message)
-    if (message.content[0]?.text?.startsWith('[GROUP_HISTORY_IMPORT]')) fixture.handle.agent.session.events.push({ seq: fixture.handle.agent.session.seq++, type: 'turn/end', data: { reason: { kind: 'completed' } } })
-  }
-  let replacementSeed
-  fixture.ctx.agents.create = async (options) => {
-    replacementSeed = [...(options.seed ?? [])]
-    const session = { id: options.sessionId, seq: replacementSeed.length, events: [...replacementSeed] }
-    const agent = { session, status: 'idle', whenIdle: async () => undefined, steer: () => undefined, followup: () => undefined }
-    await options.setup({ on: () => () => undefined, tools: { register: () => undefined, restrict: () => undefined }, systemPrompt: { section: () => undefined } })
-    return { agent, dispose: async () => undefined }
-  }
-  fixture.store.getAgentWorkspaceDir = () => fixture.store.workspaceDir
-  fixture.store.setAgentWorkspaceDir = async (value) => { fixture.store.workspaceDir = value }
-  fixture.store.updateGroup = async (value) => { Object.assign(fixture.group, value); return fixture.group }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 1, supervisorIntervalMs: 0 }))
-  const hydrating = runtime.hydrateGroupHistory({ groupId: fixture.group.groupId })
-  await idleEntered
-  const configuring = runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(replacementSeed, undefined, '历史导入完成前不得截取旧Resident seed')
-
-  releaseIdle()
-  await Promise.all([hydrating, configuring])
-  assert.equal(fixture.followups.length, 1)
-  assert.equal(replacementSeed.some((event) => event.type === 'turn/end' && event.data?.reason?.kind === 'completed'), true)
-  await runtime.close()
-})
-
-test('工作区切换屏障建立后到达的Task通知改用新resident', async () => {
-  const fixture = taskReplyRuntimeFixture()
-  let markOldIdleEntered, releaseOldIdle
-  const oldIdleEntered = new Promise((resolve) => { markOldIdleEntered = resolve })
-  const oldIdleGate = new Promise((resolve) => { releaseOldIdle = resolve })
-  fixture.agent.whenIdle = async () => { markOldIdleEntered(); await oldIdleGate }
-  const replacementTools = [], replacementFollowups = []
-  const replacementNeverIdle = new Promise(() => undefined)
-  let replacementAgent, replacementIdleCalls = 0
-  fixture.ctx.agents.create = async (options) => {
-    const session = { id: options.sessionId, seq: 0, events: [...(options.seed ?? [])] }
-    replacementAgent = {
-      session, status: 'running', steer: () => undefined,
-      followup: (message) => replacementFollowups.push(message),
-      async whenIdle() { replacementIdleCalls += 1; if (replacementIdleCalls > 1) await replacementNeverIdle },
-    }
-    await options.setup({ on: () => () => undefined, tools: { register: (tool) => replacementTools.push(tool), restrict: () => undefined }, systemPrompt: { section: () => undefined } })
-    return { agent: replacementAgent, dispose: async () => undefined }
-  }
-  fixture.store.getAgentWorkspaceDir = () => fixture.store.workspaceDir
-  fixture.store.setAgentWorkspaceDir = async (value) => { fixture.store.workspaceDir = value }
-  fixture.store.updateGroup = async (value) => { Object.assign(fixture.group, value); return fixture.group }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 1, supervisorIntervalMs: 0 }))
-  const configuring = runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
-  await oldIdleEntered
-
-  const repairing = runtime.reconcileCompletedNotifications()
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(fixture.followups.length, 0, 'transition期间到达的通知不得继续投递旧Resident')
-  assert.equal(replacementFollowups.length, 0)
-
-  releaseOldIdle()
-  await configuring
-  while (replacementFollowups.length === 0) await new Promise((resolve) => setImmediate(resolve))
-  const requestId = replacementFollowups[0].content[0].text.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-  const replyTool = replacementTools.find((item) => item.name === 'group_reply_submit')
-  await Promise.all([
-    replyTool.execute({ requestId, observedRequestIds: [], reply: '由新Resident生成的完成通知' }, { agent: replacementAgent }),
-    repairing,
-  ])
-  assert.deepEqual(fixture.group.outbox.map((item) => item.text), ['由新Resident生成的完成通知'])
-  await runtime.close()
-})
-
-test('退订屏障建立后到达的历史导入不会继续操作旧resident', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'unsubscribe-history-group' })
-  let subscribed = true
-  fixture.store.getGroup = (groupId) => subscribed && groupId === fixture.group.groupId ? fixture.group : undefined
-  fixture.store.listGroups = () => subscribed ? [fixture.group] : []
-  fixture.store.removeGroup = async ({ groupId }) => {
-    assert.equal(groupId, fixture.group.groupId)
-    subscribed = false
-    return fixture.group
-  }
-  let markUnsubscribeIdleEntered, releaseUnsubscribeIdle
-  const unsubscribeIdleEntered = new Promise((resolve) => { markUnsubscribeIdleEntered = resolve })
-  const unsubscribeIdleGate = new Promise((resolve) => { releaseUnsubscribeIdle = resolve })
-  let idleCalls = 0
-  fixture.handle.agent.whenIdle = async () => {
-    idleCalls += 1
-    if (idleCalls === 1) { markUnsubscribeIdleEntered(); await unsubscribeIdleGate }
-  }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ supervisorIntervalMs: 0 }))
-  const unsubscribing = runtime.unsubscribe({ groupId: fixture.group.groupId })
-  await unsubscribeIdleEntered
-
-  const hydrating = runtime.hydrateGroupHistory({ groupId: fixture.group.groupId })
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(idleCalls, 1, 'transition期间到达的历史导入不得进入旧Resident')
-  assert.equal(fixture.followups.length, 0)
-
-  releaseUnsubscribeIdle()
-  await unsubscribing
-  await assert.rejects(hydrating, /group_not_subscribed/)
-  assert.equal(fixture.followups.length, 0)
-  await runtime.close()
-})
-
-test('关闭Runtime与进行中的工作区切换按生命周期串行收口', async () => {
-  const fixture = decisionRuntimeFixture({ groupId: 'config-close-group' })
-  fixture.handle.agent.whenIdle = async () => undefined
-  let oldDisposeCalls = 0
-  fixture.handle.dispose = async () => { oldDisposeCalls += 1 }
-  let markCreateEntered, releaseCreate
-  const createEntered = new Promise((resolve) => { markCreateEntered = resolve })
-  const createGate = new Promise((resolve) => { releaseCreate = resolve })
-  let replacementDisposeCalls = 0
-  fixture.ctx.agents.create = async (options) => {
-    markCreateEntered()
-    await createGate
-    const session = { id: options.sessionId, seq: 0, events: [...(options.seed ?? [])] }
-    const agent = { session, status: 'idle', whenIdle: async () => undefined, steer: () => undefined, followup: () => undefined }
-    await options.setup({ on: () => () => undefined, tools: { register: () => undefined, restrict: () => undefined }, systemPrompt: { section: () => undefined } })
-    return { agent, dispose: async () => { replacementDisposeCalls += 1 } }
-  }
-  fixture.store.getAgentWorkspaceDir = () => fixture.store.workspaceDir
-  fixture.store.setAgentWorkspaceDir = async (value) => { fixture.store.workspaceDir = value }
-  fixture.store.updateGroup = async (value) => { Object.assign(fixture.group, value); return fixture.group }
-  let storeClosed = false
-  fixture.store.close = async () => { storeClosed = true }
-  const runtime = await openResidentRuntime(fixture.ctx, fixture.store, agentWorkspace, runtimeOptions({ maxConcurrentTasks: 1, supervisorIntervalMs: 0 }))
-  const configuring = runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
-  await createEntered
-  const closing = runtime.close()
-  releaseCreate()
-  await Promise.all([configuring, closing])
-
-  assert.equal(storeClosed, true)
-  assert.equal(oldDisposeCalls, 1, '配置提交后应释放旧Resident')
-  assert.equal(replacementDisposeCalls, 1, '关闭应等待配置提交并释放新Resident')
-  await assert.rejects(runtime.updateAgentConfig({ workspaceDir: agentWorkspace }), /resident_runtime_closed/)
-})
-
-test('Agent默认模型与推理深度通过dsh原生默认模型服务保存', async () => {
-  const saved = []
-  const ctx = {
-    agentDefaultModel: {
-      currentSelection: () => ({ provider: 'openai-codex', model: 'gpt-old', reasoningEffort: 'medium' }),
-      async saveSelection(value) { saved.push(value) },
-    },
-    agents: {}, subagents: { drainContinuableDescendants: async () => undefined },
-  }
-  const store = { listGroups: () => [], listTasks: () => [], getProxyUrl: () => '', setProxyUrl: async () => undefined, close: async () => undefined }
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions())
-  const updated = await runtime.updateAgentConfig({ model: 'gpt-5.6-sol', reasoningEffort: 'low' })
-  assert.deepEqual(saved, [{ provider: 'openai-codex', model: 'gpt-5.6-sol', reasoningEffort: 'low' }])
-  assert.equal(updated.model, 'gpt-5.6-sol')
-  assert.equal(updated.reasoningEffort, 'low')
-  assert.deepEqual(runtime.getAgentConfig(), { agentNames: [], workspaceDir: agentWorkspace, provider: 'openai-codex', model: 'gpt-5.6-sol', reasoningEffort: 'low', proxyUrl: '', taskExecutionGuidance: '', taskEvidenceGuidance: '', maxConcurrentTasks: 5 })
-  await runtime.close()
-})
-
-test('单个 resident Session 恢复超时被隔离且不阻塞其他群启动', async () => {
-  const groups = [
-    { groupId: 'bad-group', residentSessionId: 'session-bad' },
-    { groupId: 'good-group', residentSessionId: 'session-good' },
-  ]
-  const handle = { agent: { session: {} }, dispose: async () => undefined }
-  const ctx = {
-    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
-    agents: { async resume({ resumeSessionId, signal }) { if (resumeSessionId !== 'session-bad') return handle; return new Promise((_, reject) => { const keepAlive = setTimeout(() => reject(new Error('native signal did not abort')), 50); signal.addEventListener('abort', () => { clearTimeout(keepAlive); reject(signal.reason) }, { once: true }) }) } },
-    subagents: { drainContinuableDescendants: async () => undefined },
-  }
-  const store = {
-    listGroups: () => groups, listTasks: () => [], getGroup: () => undefined,
-    close: async () => undefined,
-  }
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ resumeTimeoutMs: 10 }))
-  const issues = runtime.listRecoveryIssues()
-  assert.equal(issues[0].groupId, 'bad-group')
-  assert.equal(issues[0].residentSessionId, 'session-bad')
-  assert.match(issues[0].error, /timeout/i)
-  await runtime.close()
-})
-
-test('Task 使用确定性独立 Agent 与原生 Goal，两个名额满后 FIFO 排队', async () => {
-  const groups = new Map([['group-a', {
-    groupId: 'group-a', responsibility: 'coordinate', residentSessionId: 'session-parent', residentAgentPreset: 'standard-convergent', nextSequence: 4, outbox: [],
-    messages: [
-      { messageId: 'm1', sequence: 1, text: '初始任务消息', occurredAt: '2026-08-25T01:00:00Z', senderName: '初始提出人', senderOpenDingTalkId: 'od-initial' },
-      { messageId: 'm2', sequence: 2, text: '第二个任务消息', occurredAt: '2026-08-25T01:00:01Z', senderName: '第二提出人', senderOpenDingTalkId: 'od-second' },
-      { messageId: 'm3', sequence: 3, text: '第三个任务消息', occurredAt: '2026-08-25T01:00:02Z', senderName: '第三提出人', senderOpenDingTalkId: 'od-third' },
-    ],
-  }]])
-  const tasks = []
-  const creates = [], createMetas = [], followups = [], steers = [], approvalResumeOrder = [], disposed = [], activities = [], alerts = [], goals = new Map(), agents = new Map(), leafTools = [], leafPromptSections = [], residentTools = [], coordinationSubmissions = []
-  let blockCheckpointReview = false, checkpointReviewPending = false, releaseCheckpointReview, markCheckpointReviewStarted
-  let blockCompletionReview = false, completionReviewPending = false, releaseCompletionReview, markCompletionReviewStarted
-  let sessionObserver
-  const makeHandle = (sessionId) => {
-    const session = { id: sessionId, events: [], seq: 0, meta: {}, append(type, data) { const event = { seq: session.seq++, type, data }; session.events.push(event); return event } }
-    const recordMessage = (message) => {
-      const text = message.content[0]?.text ?? ''
-      if (text.startsWith('[HUMAN_INTERVENTION_REPLY]')) approvalResumeOrder.push('批复入队')
-      if (sessionId === 'session-parent' && text.startsWith('[TASK_COMPLETION_REVIEW]')) {
-        completionReviewPending = blockCompletionReview
-        markCompletionReviewStarted?.()
-        const accepted = !text.includes('旧结论')
-        session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ accepted, reason: accepted ? '当前目标均有证据覆盖' : '新增点击跳转目标没有实现和验证证据' }) }] } } })
-      }
-      if (sessionId === 'session-parent' && text.startsWith('[TASK_CHECKPOINT_REVIEW]')) {
-        checkpointReviewPending = blockCheckpointReview
-        markCheckpointReviewStarted?.()
-        session.events.push({ seq: session.seq++, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: JSON.stringify({ decision: 'guidance', reason: '还缺少异常路径证据', guidance: '补充异常路径回归后再提交完成结果' }) }] } } })
-      }
-      if (sessionId === 'session-parent' && text.startsWith('[TASK_COORDINATION]')) {
-        const requestId = text.match(/^回复请求 ID：([^\r\n]+)$/mu)?.[1]
-        const taskId = text.match(/^Task ID: ([^\r\n]+)$/mu)?.[1]
-        const timeline = JSON.parse(text.match(/^任务消息时间线：(\[[^\r\n]*\])$/mu)?.[1] ?? '[]')
-        const routingCandidates = timeline.filter((item) => typeof item.messageId === 'string' && typeof item.senderOpenDingTalkId === 'string')
-        const replyTarget = routingCandidates.at(-1)
-        const recipients = [...new Set(routingCandidates.map((item) => item.senderOpenDingTalkId))]
-        const tool = residentTools.find((candidate) => candidate.name === 'group_reply_submit')
-        const reviewTool = residentTools.find((candidate) => candidate.name === 'group_reply_review_get')
-        const submission = reviewTool.execute({ requestIds: [requestId] }, { agent }).then((review) => tool.execute({
-          requestId, observedRequestIds: [], reply: `coordinated:${taskId}`,
-          replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((candidate) => candidate.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] },
-          ...(replyTarget === undefined ? {} : { replyToMessageId: replyTarget.messageId, atOpenDingTalkIds: recipients }),
-        }, { agent }))
-        submission.catch(() => undefined)
-        coordinationSubmissions.push(submission)
-      }
-    }
-    const agent = {
-      session, status: 'idle',
-      followup(message) { followups.push([sessionId, message]); recordMessage(message) },
-      steer(message) { steers.push([sessionId, message]); recordMessage(message) },
-      async whenIdle() {
-        if (sessionId === 'session-parent' && checkpointReviewPending) {
-          await new Promise((resolve) => { releaseCheckpointReview = resolve })
-          checkpointReviewPending = false
-        }
-        if (sessionId === 'session-parent' && completionReviewPending) {
-          await new Promise((resolve) => { releaseCompletionReview = resolve })
-          completionReviewPending = false
-        }
-      },
-    }
-    return { agent, dispose: async () => { disposed.push(sessionId); if (agents.get(sessionId) === agent) agents.delete(sessionId) } }
-  }
-  const parentHandle = makeHandle('session-parent')
-  agents.set('session-parent', parentHandle.agent)
-  const ctx = {
-    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
-    agents: {
-      get(sessionId) { return agents.get(sessionId) },
-      withoutInitiator(operation) { return operation() },
-      async resume({ resumeSessionId, setup }) {
-        const handle = resumeSessionId === 'session-parent' ? parentHandle : makeHandle(resumeSessionId)
-        if (resumeSessionId === 'session-parent') await setup({
-          on: () => () => undefined,
-          tools: { register: (tool) => residentTools.push(tool), restrict: () => undefined },
-          systemPrompt: { section: () => undefined },
-        })
-        agents.set(resumeSessionId, handle.agent)
-        return handle
-      },
-      async create({ sessionId, meta, setup }) { creates.push(sessionId); createMetas.push(meta); setup({ on: () => () => undefined, tools: { register: (tool) => leafTools.push([sessionId, tool]) }, systemPrompt: { section: (section) => leafPromptSections.push([sessionId, section]) } }); const handle = makeHandle(sessionId); agents.set(sessionId, handle.agent); return handle },
-    },
-    goals: {
-      get(agent) { return goals.get(agent.session.id) },
-      create(agent, request) { const goal = { id: `goal-${agent.session.id}`, revision: 1, phase: 'active', activation: 'armed', ...request }; goals.set(agent.session.id, goal); return goal },
-      block(agent, ref, reason) { const goal = { ...goals.get(agent.session.id), revision: ref.revision + 1, phase: 'blocked', activation: 'disarmed', blockedReason: reason }; goals.set(agent.session.id, goal); return goal },
-      edit(agent, ref, patch) { const goal = { ...goals.get(agent.session.id), ...patch, revision: ref.revision + 1 }; goals.set(agent.session.id, goal); return goal },
-      resume(agent, ref) { approvalResumeOrder.push('Goal恢复'); const goal = { ...goals.get(agent.session.id), revision: ref.revision + 1, phase: 'active', activation: 'armed', blockedReason: undefined }; goals.set(agent.session.id, goal); return goal },
-      complete(agent, ref) { const goal = { ...goals.get(agent.session.id), revision: ref.revision + 1, phase: 'complete', activation: 'disarmed' }; goals.set(agent.session.id, goal); return goal },
-    },
-    on(name, listener) { if (name === 'session/event') sessionObserver = listener; return () => { sessionObserver = undefined } },
-    subagents: {
-      async drainContinuableDescendants() {},
-    },
-    agentPresets: {
-      mount: async () => ({ id: 'standard-convergent' }), composeFrom: () => 'standard-convergent',
-      serviceFor: () => ({ set: () => undefined }),
-    },
-  }
-  const store = {
-    getGroup: (id) => groups.get(id), listGroups: () => [...groups.values()], listTasks: () => tasks, getTask: (id) => tasks.find((task) => task.taskId === id),
-    getMaxConcurrentTasks: () => store.maxConcurrentTasks,
-    async setMaxConcurrentTasks(value) { store.maxConcurrentTasks = value; return { maxConcurrentTasks: value } },
-    async createTask(value) {
-      const duplicate = tasks.find((task) => task.groupId === value.groupId && task.sourceMessageId === value.sourceMessageId)
-      if (duplicate) return { created: false, task: duplicate }
-      const group = groups.get(value.groupId)
-      const sourceIds = new Set(value.sourceMessageIds ?? [value.sourceMessageId])
-      const sourceMessages = (group.messages ?? []).filter((message) => sourceIds.has(message.messageId))
-      const currentSource = sourceMessages.findLast((message) => message.messageId === value.sourceMessageId)
-      const requesterName = value.requesterName ?? currentSource?.senderName
-      const requesterOpenDingTalkId = value.requesterOpenDingTalkId ?? currentSource?.senderOpenDingTalkId
-      const occurredAt = value.occurredAt ?? currentSource?.occurredAt
-      const messageHistory = sourceMessages.map((message) => ({
-        messageId: message.messageId, text: message.text, senderName: message.senderName, senderOpenDingTalkId: message.senderOpenDingTalkId,
-        occurredAt: message.occurredAt, runSequence: 1, associatedAt: '2026-08-25T00:00:00Z',
-      }))
-      const taskId = `task-${tasks.length + 1}`
-      const trigger = { sourceMessageId: value.sourceMessageId, ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), ...(occurredAt !== undefined ? { occurredAt } : {}) }
-      const task = { ...value, requesterName, requesterOpenDingTalkId, occurredAt, ...(messageHistory.length > 0 ? { messageHistory } : {}), taskId, childSessionId: taskSessionId(taskId), state: 'queued', triggerHistory: [trigger], runSequence: 1, runStartedAt: '2026-08-25T00:00:00Z', acceptanceCriteria: value.acceptanceCriteria ?? [value.objective], stageTasks: value.stageTasks ?? ['完成并验证当前轮目标'], runHistory: [], createdAt: '2026-08-25T00:00:00Z' }
-      tasks.push(task)
-      return { created: true, task }
-    },
-    async updateTask(id, transform) { const index = tasks.findIndex((task) => task.taskId === id); tasks[index] = transform(tasks[index]); return tasks[index] },
-    async appendOutbox({ groupId, ...outbound }) { const group = groups.get(groupId); if (!group.outbox.some((item) => item.sourceMessageId === outbound.sourceMessageId)) group.outbox.push({ outboundId: `out-${group.outbox.length + 1}`, ...outbound, status: 'pending' }); return group },
-    async attachOutboxTasks({ groupId, sourceMessageId, taskIds }) { const group = groups.get(groupId); const item = group.outbox.find((outbound) => outbound.sourceMessageId === sourceMessageId); item.taskIds = [...new Set([...(item.taskIds ?? []), ...taskIds])]; return group },
-    async updateOutboundRecall({ groupId, outboundId, status, reason, error }) { const item = groups.get(groupId).outbox.find((entry) => entry.outboundId === outboundId); Object.assign(item, { recallStatus: status, recallReason: reason }, status === 'recalled' ? { recalledAt: '2026-08-27T00:00:00Z', recallError: undefined } : {}, status === 'failed' ? { recallError: error } : {}); return groups.get(groupId) },
-    async recordActivity(value) { const existing = activities.find((item) => item.eventKey === value.eventKey); if (existing) return { created: false, activity: existing }; activities.push(value); return { created: true, activity: value } },
-    async recordAlert(value) { const existing = alerts.find((item) => item.taskId === value.taskId && item.fingerprint === value.fingerprint); if (existing) { existing.count += 1; return { created: false, alert: existing } } const alert = { ...value, count: 1 }; alerts.push(alert); return { created: true, alert } },
-    listActivities: () => activities,
-    close: async () => undefined,
-  }
-  const runtime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ agentPreset: 'standard-convergent', maxConcurrentTasks: 2, supervisorIntervalMs: 0 }))
-  runtime.setCurrentDwsProfile('corp:user')
-  const one = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm1', objective: 'one', requesterName: '初始提出人', requesterOpenDingTalkId: 'od-initial', occurredAt: '2026-08-25T01:00:00Z' })
-  const two = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm2', objective: 'two' })
-  const three = await runtime.createTask({ groupId: 'group-a', sourceMessageId: 'm3', objective: 'three' })
-
-  assert.deepEqual([one.task.state, two.task.state, three.task.state], ['running', 'running', 'queued'])
-  assert.deepEqual(creates, ['session-task-1', 'session-task-2'])
-  const secondCheckpointTool = leafTools.find(([sessionId, tool]) => sessionId === two.task.childSessionId && tool.name === 'submit_task_checkpoint')?.[1]
-  blockCheckpointReview = true
-  const checkpointReviewStarted = new Promise((resolve) => { markCheckpointReviewStarted = resolve })
-  const pendingCheckpoint = secondCheckpointTool.execute({ kind: 'plan-confirmed', summary: '并发检查计划', completedItems: [], evidence: ['已读取目标'], remainingItems: ['检查一', '检查二'], nextStep: '检查一', needsCoordinatorDecision: false }, { agent: { session: { id: two.task.childSessionId } } })
-  await checkpointReviewStarted
-  const concurrentUpdate = runtime.appendTaskContext({ taskId: one.task.taskId, context: '评审期间补充另一个 Task 的上下文' })
-  assert.equal(await Promise.race([concurrentUpdate.then(() => 'updated'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 50))]), 'updated', '主会话评审不得持有全局 Task 串行锁并阻塞其他 Task')
-  releaseCheckpointReview()
-  await pendingCheckpoint
-  blockCheckpointReview = false
-  markCheckpointReviewStarted = undefined
-  assert.deepEqual(createMetas[0], { cwd: agentWorkspace, parentSession: 'session-parent', origin: 'subagent', delegationDepth: 1 })
-  const leafPolicyPrompt = leafPromptSections.find(([sessionId, section]) => sessionId === one.task.childSessionId && section.name === 'group-task-blocking-policy')?.[1].text()
-  assert.match(leafPolicyPrompt, /命中任何适用 Skill 时，必须加载并遵循其完整说明/u)
-  assert.match(leafPolicyPrompt, /内部维护动作不视为扩大 Task objective/u)
-  assert.match(leafPolicyPrompt, /Runtime 不指定或绑定任何具体 Skill/u)
-  assert.match(leafPolicyPrompt, /加载 `dingtalk-chat` Skill/u)
-  assert.match(leafPolicyPrompt, /dws chat \+messages-mget --msg-ids '<消息ID>' --profile 'corp:user' --format json/u)
-  assert.match(leafPolicyPrompt, /仍含 `quotedMessage\.messageId`，继续按该 ID 查询/u)
-  assert.match(leafPolicyPrompt, /submit_task_result 如实提交 waiting 状态和 DWS 读取证据/u)
-  assert.match(leafPolicyPrompt, /不得要求群成员重新提供已经存在于钉钉中的消息/u)
-  assert.match(leafPolicyPrompt, /Task 完整消息与参与人时间线/u)
-  assert.match(leafPolicyPrompt, /"messageId":"m1"[\s\S]*"text":"初始任务消息"[\s\S]*"senderOpenDingTalkId":"od-initial"/u)
-  assert.doesNotMatch(leafPolicyPrompt, /evolve-self-improving|learningSignals|TASK_INTERNAL_LEARNING_SIGNALS/u, 'Runtime 提示词不得绑定具体 Skill 或专用学习协议')
-  assert.equal(goals.get('session-task-1').phase, 'active')
-  assert.equal(one.task.runSequence, 1)
-  assert.deepEqual(one.task.acceptanceCriteria, ['one'])
-  assert.equal(runtime.getTask(one.task.taskId).state, 'running', 'Goal active 不等于 Task 完成')
-  const checkpointTool = leafTools.find(([sessionId, tool]) => sessionId === one.task.childSessionId && tool.name === 'submit_task_checkpoint')?.[1]
-  assert.ok(checkpointTool)
-  const submitCheckpointPair = async (taskId, label) => {
-    const current = runtime.getTask(taskId)
-    const tool = leafTools.filter(([sessionId, candidate]) => sessionId === current.childSessionId && candidate.name === 'submit_task_checkpoint').at(-1)?.[1]
-    await tool.execute({ kind: 'plan-confirmed', summary: `${label}计划`, completedItems: [], evidence: ['已读取当前目标'], remainingItems: [`${label}检查点一`, `${label}检查点二`], nextStep: `${label}检查点一`, needsCoordinatorDecision: false }, { agent: { session: { id: current.childSessionId } } })
-    await tool.execute({ kind: 'stage-completed', stageTask: current.stageTasks[0], summary: `${label}阶段完成`, completedItems: [`${label}检查点一`], evidence: ['阶段证据'], remainingItems: [`${label}检查点二`], nextStep: `${label}检查点二`, needsCoordinatorDecision: false }, { agent: { session: { id: current.childSessionId } } })
-    await tool.execute({ kind: 'stage-completed', stageTask: current.stageTasks[0], summary: `${label}验证完成`, completedItems: [`${label}检查点二`], evidence: ['验证证据'], remainingItems: [], nextStep: '提交完成结果', needsCoordinatorDecision: false }, { agent: { session: { id: current.childSessionId } } })
-  }
-  assertSupportedJsonSchema(checkpointTool.parameters)
-  assertSupportedJsonSchema(checkpointTool.output.schema)
-  await assert.rejects(checkpointTool.execute({ kind: 'stage-completed', stageTask: '完成并验证当前轮目标', summary: '跳过计划', completedItems: [], evidence: [], remainingItems: [], nextStep: '完成', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } }), /task_checkpoint_plan_required/)
-  await assert.rejects(checkpointTool.execute({ kind: 'plan-confirmed', summary: '计划不足', completedItems: [], evidence: [], remainingItems: ['只有一项'], nextStep: '执行', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } }), /task_checkpoint_plan_insufficient/)
-  await checkpointTool.execute({ kind: 'plan-confirmed', summary: '已拆分执行检查点', completedItems: [], evidence: ['已读取任务目标'], remainingItems: ['核验正常路径', '核验异常路径'], nextStep: '核验正常路径', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } })
-  await assert.rejects(checkpointTool.execute({ kind: 'stage-completed', stageTask: '完成并验证当前轮目标', summary: '批量核验完成', completedItems: ['核验正常路径', '核验异常路径'], evidence: ['runtime.js:303'], remainingItems: [], nextStep: '提交结果', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } }), /task_checkpoint_must_advance_one/)
-  const checkpointReply = await checkpointTool.execute({ kind: 'stage-completed', stageTask: '完成并验证当前轮目标', summary: '接口核验完成', completedItems: ['核验正常路径'], evidence: ['runtime.js:303'], remainingItems: ['核验异常路径'], nextStep: '运行异常路径回归', needsCoordinatorDecision: true }, { agent: { session: { id: one.task.childSessionId } } })
-  assert.equal(checkpointReply.coordinatorDecision, 'guidance')
-  assert.equal(checkpointReply.guidance, '补充异常路径回归后再提交完成结果')
-  assert.equal(runtime.getTask(one.task.taskId).checkpoints[1].coordinatorDecision, 'guidance')
-  const checkpointReviewMessage = followups.find(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith('[TASK_CHECKPOINT_REVIEW]'))?.[1]
-  assert.equal(checkpointReviewMessage.source.kind, 'coordinator', '检查点验收必须作为内部上下文注入')
-  await assert.rejects(checkpointTool.execute({ kind: 'stage-completed', stageTask: '不存在的阶段', summary: '错误阶段', completedItems: [], evidence: [], remainingItems: [], nextStep: '停止', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } }), /task_checkpoint_stage_invalid/)
-  await assert.rejects(checkpointTool.execute({ kind: 'evidence-gap', summary: '证据不足', completedItems: [], evidence: [], remainingItems: [], nextStep: '补证', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } }), /task_checkpoint_progress_requires_stage_completed/)
-  await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: '检查点未清空', evidence: ['verified'], artifacts: [] } }), /task_checkpoints_remaining/)
-  await checkpointTool.execute({ kind: 'stage-completed', stageTask: '完成并验证当前轮目标', summary: '异常路径回归完成', completedItems: ['核验异常路径'], evidence: ['异常路径回归通过'], remainingItems: [], nextStep: '提交完成结果', needsCoordinatorDecision: false }, { agent: { session: { id: one.task.childSessionId } } })
-  assert.equal(groups.get('group-a').outbox.length, 0, '内部检查点不得进入群聊发信箱')
-  sessionObserver({ id: 'session-task-1' }, { seq: 7, type: 'turn/end', data: { status: 'success' } })
-  sessionObserver({ id: 'session-task-1' }, { seq: 7, type: 'turn/end', data: { status: 'success' } })
-  await runtime.flushActivities()
-  assert.equal(runtime.listActivities().length, 1)
-  assert.equal(runtime.getTask(one.task.taskId).state, 'running', 'turn/end投影不能完成Task')
-  const followup = await runtime.followupTask({ taskId: one.task.taskId, text: 'more evidence' })
-  assert.equal(followup.accepted, true)
-  assert.equal(steers.some(([sessionId, message]) => sessionId === 'session-task-1' && message.content[0]?.text === 'more evidence'), true)
-  assert.equal(followups.some(([sessionId, message]) => sessionId === 'session-task-1' && message.content[0]?.text === 'more evidence'), false, '主会话向叶子补充上下文不得排队发送')
-  await runtime.submitTaskResult({ taskId: two.task.taskId, result: { status: 'waiting', waitingKind: 'information', summary: 'need input', evidence: [], artifacts: [], waitingReason: 'provide fixture', questions: ['Which fixture?'] } })
-  assert.equal(runtime.getTask(two.task.taskId).state, 'waiting')
-  assert.equal(groups.get('group-a').outbox[0].sourceMessageId.startsWith(`task-result:${two.task.taskId}:waiting:`), true)
-  const blockerRequests = []
-  runtime.onHumanBlockerRequested((event) => { blockerRequests.push(event) })
-  const releaseWaiting = { status: 'waiting', waitingKind: 'human-intervention', summary: '等待发布批准', evidence: ['发布范围已核验'], artifacts: [], waitingReason: '生产发布需要批准', blockerCategory: 'redline', risk: '错误发布会影响生产环境', attemptedActions: ['已完成只读核验'], requestedAction: '发布 dataset v1 和 dataset-web v2；不执行回滚' }
-  const firstBlocker = await runtime.submitTaskResult({ taskId: one.task.taskId, result: releaseWaiting })
-  const firstRequestId = firstBlocker.humanBlocker.requestId
-  const supplementedBlocker = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '补充阻塞背景，不解除审批' })
-  assert.equal(supplementedBlocker.state, 'waiting')
-  assert.equal(supplementedBlocker.runSequence, firstBlocker.runSequence, '阻塞中补充不得增加执行轮次')
-  assert.equal(supplementedBlocker.childSessionId, firstBlocker.childSessionId, '阻塞中补充必须保持同一叶子 Session')
-  assert.equal(supplementedBlocker.humanBlocker.requestId, firstRequestId, '阻塞中补充不得清空 blocker')
-  const duplicateBlocker = await runtime.submitTaskResult({ taskId: one.task.taskId, result: { ...releaseWaiting, requestedAction: ' 发布 dataset v1 和 dataset-web v2；不执行回滚 ' } })
-  assert.equal(duplicateBlocker.humanBlocker.requestId, firstRequestId, '同一待批范围重复上报必须复用阻塞请求')
-  assert.equal(blockerRequests.length, 1, '同一待批范围只能触发一次外发')
-  await runtime.recordHumanBlockerDelivery({ taskId: one.task.taskId, requestId: firstRequestId, openTaskId: 'open-1', conversationId: 'self-1', messageId: 'approval-1' })
-  goals.set('session-task-1', { ...goals.get('session-task-1'), roundsStarted: 24, maxGoalRounds: 24 })
-  await runtime.resolveHumanBlocker({ taskId: one.task.taskId, requestId: firstRequestId, quotedMessageId: 'approval-1', replyMessageId: 'reply-1', reply: '批准', decision: 'approved' })
-  assert.equal(goals.get('session-task-1').maxGoalRounds, 48, '真人解决阻塞后必须先补充一组Goal轮数预算')
-  assert.equal(goals.get('session-task-1').phase, 'active')
-  assert.equal(goals.get('session-task-1').activation, 'armed')
-  assert.equal(runtime.getTask(one.task.taskId).humanBlockerHistory.length, 1, '真人批复必须持久化到Task历史')
-  const approvedReplay = await runtime.submitTaskResult({ taskId: one.task.taskId, result: releaseWaiting })
-  assert.equal(approvedReplay.state, 'running', '已批准的完全相同范围不得再次进入等待')
-  assert.equal(approvedReplay.humanBlocker.requestId, firstRequestId)
-  assert.equal(blockerRequests.length, 1, '已批准范围重试不得再次外发申请')
-  const changedScope = await runtime.submitTaskResult({ taskId: one.task.taskId, result: { ...releaseWaiting, requestedAction: '发布 dataset v2 和 dataset-web v2；不执行回滚' } })
-  assert.notEqual(changedScope.humanBlocker.requestId, firstRequestId, '受控操作范围实质变化时必须创建新申请')
-  await runtime.recordHumanBlockerDelivery({ taskId: one.task.taskId, requestId: changedScope.humanBlocker.requestId, openTaskId: 'open-2', conversationId: 'self-1', messageId: 'approval-2' })
-  const reissued = await runtime.reissueAuthorization({ requestId: changedScope.humanBlocker.requestId, reason: '迁移到统一授权审批' })
-  assert.notEqual(reissued.request.requestId, changedScope.humanBlocker.requestId)
-  assert.equal(runtime.getAuthorizationRequest(changedScope.humanBlocker.requestId).status, 'superseded')
-  assert.equal(runtime.getAuthorizationRequest(changedScope.humanBlocker.requestId).supersededBy, reissued.request.requestId)
-  assert.equal(runtime.getTask(one.task.taskId).humanBlocker.status, 'pending-send')
-  assert.equal(blockerRequests.length, 3, '重提申请必须只新增一次外发')
-  await runtime.recordAuthorizationRecall({ requestId: changedScope.humanBlocker.requestId, status: 'recalled' })
-  assert.equal(runtime.getAuthorizationRequest(changedScope.humanBlocker.requestId).recallStatus, 'recalled')
-  approvalResumeOrder.length = 0
-  const webDecision = await runtime.decideAuthorization({ requestId: reissued.request.requestId, decision: 'approved', comment: '页面批准', source: 'web' })
-  assert.deepEqual(approvalResumeOrder, ['批复入队', 'Goal恢复'], '必须先让叶子会话收到批复原文，再恢复自动 Goal 轮次')
-  assert.equal(webDecision.decisionSource, 'web')
-  assert.equal(runtime.getTask(one.task.taskId).state, 'running', 'Web批准必须恢复同一Task')
-  assert.equal(runtime.getTask(one.task.taskId).humanBlockerHistory.length, 3)
-  await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: [], artifacts: [] } }))
-  assert.equal(runtime.getTask(one.task.taskId).state, 'running')
-  await store.updateTask(one.task.taskId, (current) => ({
-    ...current,
-    sourceMessageId: 'recovery:completion-review-gate',
-    requesterName: '内部恢复操作人',
-    requesterOpenDingTalkId: undefined,
-    triggerHistory: [...current.triggerHistory, { sourceMessageId: 'recovery:completion-review-gate', requesterName: '内部恢复操作人' }],
-  }))
-  Object.assign(groups.get('group-a').outbox[0], { status: 'sent', deliveredMessageId: 'ding-old-1' })
-  blockCompletionReview = true
-  const completionReviewStarted = new Promise((resolve) => { markCompletionReviewStarted = resolve })
-  const pendingCompletion = runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified', 'uat2 页面回归通过'], artifacts: ['docs/acceptance/report.md'], delivery: { environment: 'UAT2', pipeline: 186 } } })
-  await completionReviewStarted
-  const concurrentRename = runtime.renameTask({ taskId: three.task.taskId, title: '评审期间更新另一个 Task' })
-  assert.equal(await Promise.race([concurrentRename.then(() => 'updated'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 50))]), 'updated', '完成结果评审不得持有全局 Task 串行锁并阻塞其他 Task')
-  releaseCompletionReview()
-  await pendingCompletion
-  blockCompletionReview = false
-  markCompletionReviewStarted = undefined
-  const completionReviewMessage = followups.find(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith('[TASK_COMPLETION_REVIEW]'))?.[1]
-  assert.equal(completionReviewMessage.source.kind, 'coordinator', '完成验收必须作为内部上下文注入')
-  assert.match(completionReviewMessage.content[0].text, /不得回复群聊、不得写入发信箱/u)
-  assert.equal(groups.get('group-a').outbox[1].sourceMessageId, `task-result:${one.task.taskId}:completed`)
-  assert.equal(groups.get('group-a').outbox[1].text, `coordinated:${one.task.taskId}`)
-  assert.equal(groups.get('group-a').outbox[1].replyToMessageId, 'm1', '内部恢复来源不得覆盖最后一条真实群消息引用')
-  assert.equal(groups.get('group-a').outbox[1].replyToSenderOpenDingTalkId, 'od-initial')
-  assert.deepEqual(groups.get('group-a').outbox[1].atOpenDingTalkIds, ['od-initial'])
-  const coordinationPrompt = followups.find(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith('[TASK_COORDINATION]') && message.content[0].text.includes(`\nTask ID: ${one.task.taskId}\n`))?.[1].content[0].text
-  const coordinationMessage = followups.find(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith('[TASK_COORDINATION]') && message.content[0].text.includes(`\nTask ID: ${one.task.taskId}\n`))?.[1]
-  assert.equal(coordinationMessage.source.kind, 'user', '对外通知生成路径保持现状')
-  assert.equal(coordinationSubmissions.length >= 2, true, 'Task waiting/completed 通知必须经 group_reply_submit 提交')
-  assert.match(coordinationPrompt, /"evidence":\["verified","uat2 页面回归通过"\]/u, '主会话必须收到完整证据而非只有摘要')
-  assert.match(coordinationPrompt, /"artifacts":\["docs\/acceptance\/report\.md"\]/u, '主会话必须收到交付物')
-  assert.match(coordinationPrompt, /"delivery":\{"environment":"UAT2","pipeline":186\}/u, '主会话必须收到部署与交付状态')
-  assert.match(coordinationPrompt, /不得省略不同关注点、限定条件、失败项或“未验证\/未部署”等边界/u)
-  assert.equal(followups.some(([sessionId, message]) => sessionId === 'session-parent' && message.content[0]?.text?.startsWith('[TASK_INTERNAL_LEARNING_SIGNALS]')), false, 'Runtime 不得向主会话转发专用学习信号')
-  const replayed = []
-  runtime.onOutboxAppended((event) => { replayed.push(event) })
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.deepEqual(replayed.map((event) => event.outbound.sourceMessageId), groups.get('group-a').outbox.map((item) => item.sourceMessageId))
-  await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'done', evidence: ['verified'], artifacts: [] } }))
-  assert.equal(groups.get('group-a').outbox.length, 2)
-  assert.equal(runtime.getTask(three.task.taskId).state, 'running')
-  assert.equal(creates[2], 'session-task-3')
-  assert.equal(goals.get('session-task-1').phase, 'complete')
-  assert.ok(disposed.includes('session-task-1'))
-  goals.set('session-task-3', { ...goals.get('session-task-3'), revision: 2, phase: 'paused', activation: 'disarmed' })
-  agents.get('session-task-3').status = 'running'
-  const deferredInspection = await runtime.inspectRunningTasks()
-  assert.equal(deferredInspection[0].deferred, true, 'Goal 当前轮尚未停稳时不得中途 resume')
-  assert.equal(goals.get('session-task-3').phase, 'paused')
-  agents.get('session-task-3').status = 'idle'
-  goals.set('session-task-3', { ...goals.get('session-task-3'), revision: 3, phase: 'complete', activation: 'disarmed' })
-  const resultRequestInspection = await runtime.inspectRunningTasks()
-  assert.equal(resultRequestInspection.find((item) => item.taskId === three.task.taskId).resultRequested, true)
-  assert.equal(goals.get('session-task-3').phase, 'active')
-  goals.set('session-task-3', { ...goals.get('session-task-3'), revision: 4, phase: 'complete', activation: 'disarmed' })
-  const goalInspection = await runtime.inspectRunningTasks()
-  const recoveredTask = runtime.getTask(three.task.taskId)
-  assert.equal(goalInspection.find((item) => item.taskId === three.task.taskId).goalRecovered, true)
-  assert.notEqual(recoveredTask.childSessionId, 'session-task-3')
-  assert.equal(goals.get(recoveredTask.childSessionId).phase, 'active')
-  assert.equal(goals.get(recoveredTask.childSessionId).activation, 'armed')
-  agents.delete(recoveredTask.childSessionId)
-  const sessionInspection = await runtime.inspectRunningTasks()
-  assert.equal(sessionInspection.find((item) => item.taskId === three.task.taskId).sessionRecovered, true)
-  assert.equal(agents.get(recoveredTask.childSessionId)?.session.id, recoveredTask.childSessionId)
-  assert.equal(runtime.getTask(three.task.taskId).state, 'running')
-  assert.equal(goals.get('session-task-2').phase, 'blocked', '业务 waiting Task 不应被常驻巡检误唤醒')
-  assert.equal(alerts.some((alert) => alert.fingerprint === 'leaf-session-recovered'), true)
-  const archived = await runtime.archiveTask({ taskId: one.task.taskId })
-  assert.ok(archived.archivedAt)
-  const reopened = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '补做已归档任务', sourceMessageId: 'm-reopen-1', requesterName: '重开提出人', requesterOpenDingTalkId: 'od-reopen-1', occurredAt: '2026-08-26T01:00:00Z' })
-  assert.equal(reopened.state, 'queued', '并发名额已满时重开的归档任务进入原生FIFO队列')
-  assert.equal(reopened.archivedAt, undefined)
-  assert.equal(reopened.relatedContexts.at(-1), '补做已归档任务')
-  assert.equal(reopened.sourceMessageId, 'm-reopen-1')
-  assert.equal(reopened.requesterOpenDingTalkId, 'od-reopen-1')
-  assert.equal(reopened.childSessionId, one.task.childSessionId, 'reopen 必须复用同一叶子 Session')
-  assert.equal(reopened.runSequence, 2)
+test('Web 重开完成任务建立新轮次，固定保留旧输入版本与历史', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  await h.runtime.cancelTask({ taskId: task.taskId, requestId: 'cancel-before-reopen', topicRefs: task.topicRefs, ...inputVersion(h.store.getTask(task.taskId)), reason: '先停止' })
+  const completed = h.store.getTask(task.taskId)
+  const reopened = await h.runtime.reopenTask({ taskId: task.taskId, requestId: 'web-reopen-1', topicRefs: completed.topicRefs, context: '继续核验剩余范围', ...inputVersion(completed) })
+  assert.equal(reopened.state, 'running')
+  assert.equal(reopened.runSequence, completed.runSequence + 1)
+  assert.equal(reopened.inputVersion, completed.inputVersion + 1)
   assert.equal(reopened.runHistory.length, 1)
-  assert.equal(reopened.runHistory[0].childSessionId, one.task.childSessionId)
-  assert.deepEqual(reopened.acceptanceCriteria, ['one'])
-  assert.deepEqual(reopened.stageTasks, ['完成并验证当前轮目标'])
-  assert.deepEqual(reopened.triggerHistory, [
-    { sourceMessageId: 'm1', requesterName: '初始提出人', requesterOpenDingTalkId: 'od-initial', occurredAt: '2026-08-25T01:00:00Z' },
-    { sourceMessageId: 'm-reopen-1', requesterName: '重开提出人', requesterOpenDingTalkId: 'od-reopen-1', occurredAt: '2026-08-26T01:00:00Z' },
+  assert.deepEqual(reopened.runHistory[0].topicRefs, completed.topicRefs)
+  assert.equal(h.store.listTasks().length, 1)
+  for (const field of ['messageHistory', 'sourceMessageId', 'triggerHistory', 'relatedContexts']) assert.equal(field in reopened.runHistory[0], false)
+})
+
+test('叶子 Topic 读取仅允许已接纳版本，拒绝未来版本及其他话题', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  await ingest(h, 'later')
+  const later = (await route(h, { later: task.topicRefs[0].topicId })).pendingDecisions[0]
+  const leaf = h.handles.get(task.childSessionId)
+  const reader = leaf.tools.get('group_topic_context_get')
+  const initial = await reader.execute({ topicId: task.topicRefs[0].topicId, revision: task.topicRefs[0].revision }, { agent: leaf.agent })
+  assert.equal(initial.messages.length, 1)
+  assert.throws(() => reader.execute({ topicId: task.topicRefs[0].topicId, revision: later.revision }, { agent: leaf.agent }), /topic.*version|topic.*revision|task_topic/)
+  assert.throws(() => reader.execute({ topicId: 'foreign', revision: 1 }, { agent: leaf.agent }), /topic.*not|task_topic/)
+})
+
+test('同一消息并发补齐身份与附件不会丢失任一事实', async (t) => {
+  const h = await setup(t)
+  await Promise.all([
+    ingest(h, 'same', { senderName: '甲', senderOpenDingTalkId: 'od-a' }),
+    ingest(h, 'same', { senderName: '甲', senderOpenDingTalkId: 'od-a', imageRefs: [{ id: 'image-1', mediaType: 'image/png' }] }),
   ])
-  const raisedConcurrency = await runtime.updateAgentConfig({ maxConcurrentTasks: 3 })
-  assert.equal(raisedConcurrency.maxConcurrentTasks, 3)
-  assert.equal(runtime.getTask(one.task.taskId).state, 'running', '提高并行上限后按FIFO立即启动待执行任务')
-  await submitCheckpointPair(one.task.taskId, '第二轮')
-  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'second done', evidence: ['second verified'], artifacts: [] } })
-  assert.equal(groups.get('group-a').outbox.at(-1).sourceMessageId, `task-result:${one.task.taskId}:completed:1`, '重开任务再次完成必须生成独立通知')
-  assert.equal(groups.get('group-a').outbox.at(-1).replyToMessageId, 'm-reopen-1')
-  assert.equal(groups.get('group-a').outbox.at(-1).replyToSenderOpenDingTalkId, 'od-reopen-1')
-  assert.deepEqual(groups.get('group-a').outbox.at(-1).atOpenDingTalkIds, ['od-initial', 'od-reopen-1'])
+  const messages = h.store.getGroup('g').messages
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].senderOpenDingTalkId, 'od-a')
+  assert.equal(messages[0].imageRefs[0].id, 'image-1')
+  assert.equal(messages[0].messageVersion, 2)
+})
 
-  const reopenedCompleted = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '继续核验已完成任务', sourceMessageId: 'm-reopen-2', requesterName: '再次提出人', requesterOpenDingTalkId: 'od-reopen-2' })
-  assert.equal(reopenedCompleted.state, 'running', '已完成任务收到task-context时必须恢复原Task')
-  const runningUpgraded = await runtime.appendTaskContext({ taskId: one.task.taskId, context: '调查清楚后请直接修复', objective: '调查并修复问题', sourceMessageId: 'm-running-upgrade', requesterName: '升级提出人', requesterOpenDingTalkId: 'od-upgrade' })
-  assert.equal(runningUpgraded.objective, '调查并修复问题')
-  assert.equal(runningUpgraded.objectiveHistory.at(-1).objective, 'one')
-  assert.equal(goals.get(runningUpgraded.childSessionId).objective, runningUpgraded.objective, '运行中授权升级必须替换当前Goal目标')
+test('人工授权重发、引用校验、批准幂等及已批准范围复用', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const requested = []
+  h.runtime.onHumanBlockerRequested((value) => { requested.push(value) })
+  const result = { ...inputVersion(task), status: 'waiting', waitingKind: 'human-intervention', summary: '等待批准', evidence: ['范围已核验'], artifacts: [], waitingReason: '需要批准发布', blockerCategory: 'redline', risk: '影响服务', attemptedActions: ['完成预检'], requestedAction: '批准发布本次补丁' }
+  await leafCall(h, task, 'submit_task_result', result)
+  await until(() => requested.length === 1)
+  const original = h.store.getTask(task.taskId).humanBlocker
+  assert.equal(h.goals.get(task.childSessionId).phase, 'blocked')
+  await h.runtime.recordHumanBlockerDelivery({ taskId: task.taskId, requestId: original.requestId, openTaskId: 'approval-1', conversationId: 'approval-chat', messageId: 'approval-msg-1', sentAt: '2026-09-07T01:00:00Z', formatVersion: 3 })
+  const reissued = await h.runtime.reissueAuthorization({ requestId: original.requestId, reason: '重发结构化审批' })
+  assert.equal(h.runtime.getAuthorizationRequest(original.requestId).status, 'superseded')
+  assert.equal(h.runtime.getAuthorizationRequest(original.requestId).recallStatus, 'pending')
+  await assert.rejects(h.runtime.decideAuthorization({ requestId: original.requestId, decision: 'approved' }), /authorization_request_not_pending/)
+  await h.runtime.recordHumanBlockerDelivery({ taskId: task.taskId, requestId: reissued.request.requestId, conversationId: 'approval-chat', messageId: 'approval-msg-2', sentAt: '2026-09-07T01:01:00Z', formatVersion: 3 })
+  await assert.rejects(h.runtime.resolveHumanBlocker({ taskId: task.taskId, requestId: reissued.request.requestId, quotedMessageId: 'wrong', replyMessageId: 'reply1', reply: '批准', decision: 'approved' }), /human_blocker_reply_mismatch/)
+  const approved = await h.runtime.decideAuthorization({ requestId: reissued.request.requestId, decision: 'approved', comment: '范围内批准' })
+  const repeated = await h.runtime.decideAuthorization({ requestId: reissued.request.requestId, decision: 'approved' })
+  assert.equal(approved.requestId, repeated.requestId)
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  assert.equal(h.goals.get(task.childSessionId).phase, 'active')
+  const before = requested.length
+  await leafCall(h, task, 'submit_task_result', result)
+  await immediate()
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  assert.equal(requested.length, before, '相同已批准范围不得重复发起审批')
+  await assert.rejects(h.runtime.decideAuthorization({ requestId: reissued.request.requestId, decision: 'rejected' }), /authorization_decision_conflict/)
+})
 
-  await submitCheckpointPair(one.task.taskId, '第三轮')
-  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'investigated', evidence: ['checked'], artifacts: [] } })
-  const internalReopen = await runtime.reopenTask({ taskId: one.task.taskId, context: '内部恢复完成验收', sourceMessageId: 'recovery:completion-review-gate', requesterName: '内部恢复操作人' })
-  assert.equal(internalReopen.sourceMessageId, 'm-reopen-2', '内部恢复不得覆盖当前真实群消息')
-  assert.equal(internalReopen.requesterOpenDingTalkId, 'od-reopen-2')
-  assert.equal(internalReopen.triggerHistory.some((item) => item.sourceMessageId.startsWith('recovery:')), false, '内部恢复不得写入消息触发历史')
-  await submitCheckpointPair(one.task.taskId, '内部恢复轮')
-  await runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'non-development', summary: 'internal recovery done', evidence: ['checked again'], artifacts: [] } })
-  const upgraded = await runtime.reopenTask({ taskId: one.task.taskId, context: '请修复并部署 UAT2', objective: '修复问题、部署 UAT2 并完成业务验证', sourceMessageId: 'm-upgrade', requesterName: '升级提出人', requesterOpenDingTalkId: 'od-upgrade' })
-  assert.equal(upgraded.objective, '修复问题、部署 UAT2 并完成业务验证')
-  assert.equal(upgraded.objectiveHistory.at(-1).objective, '调查并修复问题')
-  assert.equal(upgraded.objectiveHistory.at(-1).sourceMessageId, 'm-upgrade')
-  assert.equal(goals.get(upgraded.childSessionId).objective, upgraded.objective)
-  assert.equal(reopenedCompleted.relatedContexts.at(-1), '继续核验已完成任务')
-  assert.equal(reopenedCompleted.completionSequence, 2)
-  assert.equal(reopenedCompleted.sourceMessageId, 'm-reopen-2')
-  assert.equal(reopenedCompleted.triggerHistory.length, 3)
-  assert.equal(reopenedCompleted.triggerHistory[0].sourceMessageId, 'm1')
-  assert.equal(reopenedCompleted.triggerHistory[1].sourceMessageId, 'm-reopen-1')
-  assert.equal(reopenedCompleted.triggerHistory[2].sourceMessageId, 'm-reopen-2')
-  const beforeRejectedCompletion = groups.get('group-a').outbox.length
-  await submitCheckpointPair(one.task.taskId, '升级轮')
-  await assert.rejects(runtime.submitTaskResult({ taskId: one.task.taskId, result: { status: 'completed', workType: 'development', summary: '重复上一轮旧结论', evidence: ['只有旧结论证据'], artifacts: [] } }), /task_result_objective_not_covered/)
-  assert.equal(runtime.getTask(one.task.taskId).state, 'running')
-  assert.equal(groups.get('group-a').outbox.length, beforeRejectedCompletion, '验收拒绝不得生成完成通知')
-  assert.match(steers.at(-1)[1].content[0].text, /^\[TASK_RESULT_REJECTED\]/u)
-  assert.equal(followups.some(([sessionId, message]) => sessionId === one.task.childSessionId && message.content[0]?.text?.startsWith('[TASK_RESULT_REJECTED]')), false, '结果驳回必须插话给叶子')
-  await runtime.close()
-  const persistedChildSessionId = runtime.getTask(three.task.taskId).childSessionId
-  goals.set(persistedChildSessionId, { ...goals.get(persistedChildSessionId), revision: 4, phase: 'paused', activation: 'disarmed' })
-  const recoveredRuntime = await openResidentRuntime(ctx, store, agentWorkspace, runtimeOptions({ agentPreset: 'standard-convergent', supervisorIntervalMs: 0 }))
-  assert.equal(goals.get(persistedChildSessionId).phase, 'active', '进程重启恢复时仍应续接Task当前叶子')
-  assert.equal(recoveredRuntime.getTask(three.task.taskId).state, 'running')
-  assert.equal(goals.get('session-task-2').phase, 'blocked', '业务 waiting Task 不应被启动恢复误唤醒')
-  agents.get(persistedChildSessionId).status = 'running'
-  goals.set(persistedChildSessionId, { ...goals.get(persistedChildSessionId), revision: 5, phase: 'blocked', activation: 'disarmed', roundsStarted: 24, maxGoalRounds: 24 })
-  const exhaustedInspection = await recoveredRuntime.inspectRunningTasks()
-  assert.equal(exhaustedInspection.find((item) => item.taskId === three.task.taskId).exhausted, true)
-  assert.equal(recoveredRuntime.getTask(three.task.taskId).state, 'waiting', '轮数耗尽后即使Agent残留running也不得继续显示运行中')
-  assert.match(recoveredRuntime.getTask(three.task.taskId).waitingReason, /24\/24/u)
-  await recoveredRuntime.close()
+test('Goal 耗尽转真实 waiting，正常 turn 结束只记录活动不完成 Task', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const event = { seq: 999, type: 'turn/end', data: { status: 'success' } }
+  h.events.get('session/event')({ id: task.childSessionId }, event); h.events.get('session/event')({ id: task.childSessionId }, event)
+  await h.runtime.flushActivities()
+  assert.equal(h.runtime.listActivities().length, 1)
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  h.goals.set(task.childSessionId, { ...h.goals.get(task.childSessionId), phase: 'blocked', activation: 'disarmed', roundsStarted: 24, maxGoalRounds: 24 })
+  const inspected = await h.runtime.inspectRunningTasks()
+  assert.equal(inspected.find((item) => item.taskId === task.taskId).exhausted, true)
+  assert.equal(h.store.getTask(task.taskId).state, 'waiting')
+  assert.equal(h.store.getTask(task.taskId).result.inputVersion, task.inputVersion)
+})
+
+test('叶子异常暂停最多重建两次，继续失败升级为人工阻塞', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const current = h.store.getTask(task.taskId), handle = h.handles.get(current.childSessionId)
+    handle.agent.status = 'idle'
+    h.goals.set(current.childSessionId, { ...h.goals.get(current.childSessionId), phase: 'paused', activation: 'disarmed' })
+    const inspected = await h.runtime.inspectRunningTasks()
+    if (attempt < 2) {
+      assert.equal(inspected[0].sessionRecovered, true)
+      assert.notEqual(h.store.getTask(task.taskId).childSessionId, current.childSessionId)
+      assert.ok(h.handles.get(h.store.getTask(task.taskId).childSessionId).sent.some((message) => message.content[0].text.includes('[TASK_TOPIC_CONTEXT]')))
+    }
+  }
+  assert.equal(h.store.getTask(task.taskId).state, 'waiting')
+  assert.equal(h.store.getTask(task.taskId).humanBlocker.category, 'unexpected')
+})
+
+test('Resident 恢复超时由原生 AbortSignal 隔离，不阻止下一群恢复', { timeout: 2_000 }, async (t) => {
+  const h = await setup(t, { groups: ['g', 'b'], resumeTimeoutMs: 10, beforeResume: (input) => {
+    if (input.resumeSessionId !== residentSessionId('g')) return
+    return new Promise((resolve, reject) => { const timer = setTimeout(resolve, 1000); input.signal.addEventListener('abort', () => { clearTimeout(timer); reject(input.signal.reason) }, { once: true }) })
+  } })
+  assert.ok(h.runtime.listRecoveryIssues().some((item) => item.groupId === 'g' && /timeout|timed out/i.test(item.error)))
+  assert.ok(h.resident('b'))
+})
+
+test('恢复清理旧协议与旧 Topic 请求 Inbox，但保留普通待办', async (t) => {
+  const messages = ['[GROUP_MESSAGE_STEER]', '[GROUP_TOPIC_ROUTE]', '[GROUP_TOPIC_DECISION]', '普通待办'].map((text, index) => ({ id: `m${index}`, content: [{ type: 'text', text }] }))
+  const removed = []
+  const h = await setup(t, { inbox: { nextStep: messages, nextTurn: [], remove(id) { removed.push(id); return true } } })
+  assert.deepEqual(removed, ['m0', 'm1', 'm2'])
+  assert.ok(h.resident())
+})
+
+test('重启恢复 Running 叶子沿用 Goal 与已接纳输入，不重复 steer 同版本', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const sessionEvents = new Map([...h.handles].map(([id, handle]) => [id, [...handle.agent.session.events]]))
+  await h.runtime.close()
+  const recovered = await setup(t, { snapshot: h.snapshot, goals: h.goals, sessionEvents })
+  assert.equal(recovered.store.getTask(task.taskId).state, 'running')
+  assert.equal(recovered.handles.get(task.childSessionId).sent.length, 0)
+  assert.equal(recovered.goals.get(task.childSessionId).phase, 'active')
+})
+
+test('关闭等待已接受的可靠 Outbox 写入，期间新消息被拒绝', async (t) => {
+  const h = await setup(t); await ingest(h, 'a'); const request = (await route(h)).pendingDecisions[0]
+  let release, entered
+  const gate = new Promise((resolve) => { release = resolve }), started = new Promise((resolve) => { entered = resolve })
+  const original = h.store.appendOutbox
+  h.store.appendOutbox = async (args) => { entered(); await gate; return original(args) }
+  const accepted = await h.call('group_decision_submit', { requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision: { basisMessageIds: ['a'], actions: [], reply: '可靠回复', replyReview: { kind: 'substantive' } } })
+  assert.equal(accepted.status, 'accepted'); await started
+  let closed = false
+  const closing = h.runtime.close().then(() => { closed = true })
+  await immediate(); assert.equal(closed, false)
+  await assert.rejects(ingest(h, 'late'), /resident_runtime_closed/)
+  release(); await closing
+  const records = h.snapshot.tables.groups
+  assert.equal(Object.values(records)[0].outbox.length, 1)
+})
+
+test('替换确认先持久化意图，渠道准备时精确撤回已回读的旧消息', async (t) => {
+  const h = await setup(t); await ingest(h, 'a'); const request = (await route(h)).pendingDecisions[0]
+  await decide(h, request, { reply: '旧确认', replyReview: { kind: 'confirmation' } })
+  const old = h.store.getGroup('g').outbox[0]
+  await h.store.acknowledge({ groupId: 'g', outboundId: old.outboundId, deliveredMessageId: 'actual-old-message' })
+  await ingest(h, 'a2'); const revised = (await route(h, { a2: request.topicId })).pendingDecisions[0]
+  const candidates = await h.call('group_reply_review_get', { requestIds: [revised.requestId] })
+  await decide(h, revised, { reply: '合并后的确认', replyReview: { kind: 'confirmation', reviewedOutboundIds: candidates.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [old.outboundId], replaceOutboundIds: [old.outboundId] } })
+  const next = h.store.getGroup('g').outbox[1], recalls = []
+  h.runtime.registerGroupMessageRecaller(async (value) => { recalls.push(value.messageId) })
+  await h.runtime.prepareOutbound({ groupId: 'g', outbound: next })
+  await h.runtime.prepareOutbound({ groupId: 'g', outbound: next })
+  assert.deepEqual(recalls, ['actual-old-message'])
+  assert.equal(h.store.getGroup('g').outbox[0].recallStatus, 'recalled')
+})
+
+test('未回读的旧确认不允许渠道发送替换消息，持久意图保留可恢复', async (t) => {
+  const h = await setup(t); await ingest(h, 'a'); const request = (await route(h)).pendingDecisions[0]
+  await decide(h, request, { reply: '旧确认', replyReview: { kind: 'confirmation' } })
+  const old = h.store.getGroup('g').outbox[0]
+  await ingest(h, 'a2'); const revised = (await route(h, { a2: request.topicId })).pendingDecisions[0]
+  const candidates = await h.call('group_reply_review_get', { requestIds: [revised.requestId] })
+  await decide(h, revised, { reply: '新的确认', replyReview: { kind: 'confirmation', reviewedOutboundIds: candidates.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [old.outboundId], replaceOutboundIds: [old.outboundId] } })
+  h.runtime.registerGroupMessageRecaller(async () => { assert.fail('缺真实投递ID不得调用撤回') })
+  await assert.rejects(h.runtime.prepareOutbound({ groupId: 'g', outbound: h.store.getGroup('g').outbox[1] }), /readback|delivered|pending/)
+  assert.equal(h.store.getGroup('g').outbox.length, 2)
+})
+
+test('等待通知在同版本 resume 清除 result 后失效，不发送旧问题', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  await leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'waiting', waitingKind: 'information', summary: '等问题一', evidence: [], artifacts: [], waitingReason: '缺少输入一', questions: ['输入一是什么？'] })
+  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  const old = h.envelope('[TASK_COORDINATION]')
+  await h.runtime.resumeTask({ taskId: task.taskId })
+  assert.equal(h.store.getTask(task.taskId).inputVersion, task.inputVersion)
+  const reply = await h.call('group_reply_submit', { requestId: old.requestId, reply: '输入一是什么？', replyReview: { kind: 'substantive' }, replyToMessageId: 'task-input', atOpenDingTalkIds: ['od-a'] })
+  assert.equal(reply.status, 'task-stale')
+  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 0)
+})
+
+test('同版本重新 waiting 新问题不能被旧问题的通知快照覆盖', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const result = (id) => ({ ...inputVersion(task), status: 'waiting', waitingKind: 'information', summary: `问题${id}`, evidence: [], artifacts: [], waitingReason: `缺少输入${id}`, questions: [`输入${id}是什么？`] })
+  await leafCall(h, task, 'submit_task_result', result(1)); await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  const old = h.envelope('[TASK_COORDINATION]')
+  await h.runtime.resumeTask({ taskId: task.taskId })
+  await leafCall(h, task, 'submit_task_result', result(2)); await until(() => h.envelope('[TASK_COORDINATION]')?.requestId !== old.requestId)
+  assert.equal(h.store.getTask(task.taskId).inputVersion, task.inputVersion)
+  assert.equal((await h.call('group_reply_submit', { requestId: old.requestId, reply: '旧问题', replyReview: { kind: 'substantive' }, replyToMessageId: 'task-input', atOpenDingTalkIds: ['od-a'] })).status, 'task-stale')
+  assert.equal(h.store.getTask(task.taskId).result.waitingReason, '缺少输入2')
+})
+
+test('等待结果原子落盘时发现新输入，Task 与 Goal 都保持 running', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const original = h.store.updateTask; let injected = false
+  h.store.updateTask = async (...args) => { if (!injected) { injected = true; await ingest(h, 'arrived-at-commit') } return original(...args) }
+  await assert.rejects(leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'waiting', waitingKind: 'information', summary: '缺少输入', evidence: [], artifacts: [], waitingReason: '缺范围', questions: ['范围？'] }), /task_input_pending/)
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  assert.equal(h.goals.get(task.childSessionId).phase, 'active')
+})
+
+test('完成审阅通过后原子落盘遇新输入，不能提前 complete Goal', async (t) => {
+  const h = await setup(t), task = await createTask(h); await fullCheckpoints(h, task)
+  const result = { ...inputVersion(task), status: 'completed', summary: '完成', evidence: ['证据'], artifacts: [] }
+  const pending = leafCall(h, task, 'submit_task_result', result)
+  const outcome = pending.then((value) => ({ value }), (error) => ({ error }))
+  await until(() => Boolean(h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')))
+  const original = h.store.updateTask; let injected = false
+  h.store.updateTask = async (...args) => { if (!injected) { injected = true; await ingest(h, 'arrived-after-review') } return original(...args) }
+  const review = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
+  await h.call('group_task_review_submit', { requestId: review.requestId, review: { accepted: true, reason: '通过' } })
+  assert.match((await outcome).error.message, /task_input_pending/)
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  assert.equal(h.goals.get(task.childSessionId).phase, 'active')
+})
+
+test('通知 Outbox 首次失败后相同请求重试使用稳定结果键且只落一次', async (t) => {
+  const h = await setup(t), task = await createTask(h); await fullCheckpoints(h, task); await completeResult(h, task)
+  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  const request = h.envelope('[TASK_COORDINATION]'), review = await h.call('group_reply_review_get', { requestIds: [request.requestId] })
+  const original = h.store.appendOutbox; let fail = true
+  h.store.appendOutbox = async (args) => { if (fail) throw new Error('outbox_storage_failure'); return original(args) }
+  const args = { requestId: request.requestId, reply: '完成核验', replyToMessageId: 'task-input', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } }
+  await assert.rejects(h.call('group_reply_submit', args), /outbox_storage_failure/)
+  assert.equal(h.store.getTask(task.taskId).state, 'completed')
+  fail = false
+  assert.equal((await h.call('group_reply_submit', args)).status, 'accepted')
+  await h.runtime.reconcileCompletedNotifications()
+  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
+})
+
+test('慢叶子创建期间同群其他 Topic 仍可完成', async (t) => {
+  let release, entered = false
+  const gate = new Promise((resolve) => { release = resolve })
+  const h = await setup(t, { beforeCreate: async (input) => { if (input.meta?.origin === 'subagent') { entered = true; await gate } } })
+  t.after(() => release())
+  await ingest(h, 'slow-a')
+  const a = (await route(h)).pendingDecisions[0]
+  const result = await h.call('group_decision_submit', { requestId: a.requestId, topicId: a.topicId, revision: a.revision, decision: { basisMessageIds: ['slow-a'], actions: [{ kind: 'new-task', title: 'A', objective: '核验 A', acceptanceCriteria: ['可查'], topicRefs: [{ topicId: a.topicId, revision: a.revision }] }], reply: '开始核验。', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } })
+  assert.equal(result.status, 'accepted')
+  await until(() => entered)
+  try {
+    await ingest(h, 'fast-b')
+    const b = (await route(h)).pendingDecisions.find((item) => item.messages.some((message) => message.messageId === 'fast-b'))
+    assert.equal((await h.call('group_decision_submit', { requestId: b.requestId, topicId: b.topicId, revision: b.revision, decision: { basisMessageIds: ['fast-b'], actions: [], reason: '独立讨论无需回复' } })).status, 'accepted')
+    await until(() => h.store.getTopic('g', b.topicId).processedRevision === b.revision)
+    assert.equal(h.store.listTasks()[0].state, 'queued')
+  } finally { release() }
+  await h.runtime.drainTopicOperations('g')
+  assert.equal(h.store.listTasks()[0].state, 'running')
+})
+
+test('排队叶子启动中取消立即落盘，迟到的 Session 创建不能复活任务', async (t) => {
+  let release, entered = false, blockedId
+  const gate = new Promise((resolve) => { release = resolve })
+  const h = await setup(t, { beforeCreate: async (input) => { if (String(input.sessionId) === blockedId) { entered = true; await gate } } })
+  t.after(() => release())
+  const one = await createTask(h, 'first'), two = await createTask(h, 'second')
+  blockedId = two.childSessionId
+  try {
+    await h.runtime.cancelTask({ taskId: one.taskId, requestId: 'cancel-first-start-second', topicRefs: one.topicRefs, ...inputVersion(one), reason: '取消第一个' })
+    await until(() => entered)
+    await h.runtime.cancelTask({ taskId: two.taskId, requestId: 'cancel-second-during-create', topicRefs: two.topicRefs, ...inputVersion(two), reason: '取消第二个' })
+    assert.equal(h.store.getTask(two.taskId).state, 'completed')
+  } finally { release() }
+  await until(() => h.disposed.includes(two.childSessionId))
+  assert.equal(h.store.getTask(two.taskId).state, 'completed')
+  assert.equal(h.goals.has(two.childSessionId), false)
+  assert.equal(h.handles.get(two.childSessionId).sent.length, 0)
+})
+
+test('缺少稳定发送人 ID 不伪造引用，缓冲回复监听异常不损失已存意图', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'anonymous', { senderOpenDingTalkId: undefined })
+  await decide(h, (await route(h)).pendingDecisions[0], { reply: '已答复' })
+  const outbound = h.store.getGroup('g').outbox[0]
+  assert.equal(outbound.replyToMessageId, undefined)
+  assert.equal(outbound.atOpenDingTalkIds, undefined)
+  h.runtime.onOutboxAppended(() => { throw new Error('buffered_listener_failure') })
+  await until(() => h.runtime.listRecoveryIssues().some((item) => item.error.includes('buffered_listener_failure')))
+  assert.equal(h.store.getGroup('g').outbox.length, 1)
+})
+
+test('DWS 恢复关闭同群 carrier 告警且不误清其他异常', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  for (const fingerprint of ['dws-consumer-exit:1', 'dws-consumer-start-failed:1', 'leaf-paused']) await h.store.recordAlert({ taskId: task.taskId, fingerprint, detail: fingerprint })
+  await h.runtime.resolveGroupCarrierIssues({ groupId: 'g' })
+  for (const alert of h.store.listAlerts()) assert.equal(alert.status, alert.fingerprint.startsWith('dws-consumer-') ? 'resolved' : 'active')
+})
+
+// 恢复测试从已持久完成的 Task 开始，避免通过叶子结果通路预先生成通知请求。
+async function persistedCompletedTask(h, groupId = 'g') {
+  const messageId = `recovered-${groupId}`
+  await h.store.ingest({ groupId, messageId, text: '@助理 核验', senderOpenDingTalkId: 'od-a', occurredAt: '2026-09-07T00:00:00Z' })
+  await h.store.routeMessages({ groupId, routeId: `route-${groupId}`, routingRevision: h.store.getGroup(groupId).routingRevision, routes: [{ messageId, messageVersion: 1, topics: [{ newTopicKey: messageId, title: '历史核验' }] }] })
+  const topic = h.store.listTopics(groupId).at(-1), decisionId = `decision-${groupId}`
+  await h.store.acceptTopicDecision({ groupId, topicId: topic.topicId, revision: 1, decisionId, decision: { basisMessageIds: [messageId], actions: [], reason: '恢复夹具' } })
+  await h.store.completeTopicDecision({ groupId, topicId: topic.topicId, decisionId })
+  const { task } = await h.store.createTask({ groupId, title: '历史核验', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: topic.topicId, revision: 1 }] })
+  return h.store.updateTask(task.taskId, (current) => ({ ...current, state: 'completed', completionSequence: 1, result: { ...inputVersion(current), status: 'completed', summary: '核验通过', evidence: ['结果日志'], artifacts: [] } }))
+}
+async function submitNotification(h, groupId = 'g') {
+  const request = h.envelope('[TASK_COORDINATION]', groupId)
+  const review = await h.call('group_reply_review_get', { requestIds: [request.requestId] }, groupId)
+  return h.call('group_reply_submit', { requestId: request.requestId, reply: '核验已完成，结果日志可查。', replyToMessageId: request.messages[0].messageId, atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } }, groupId)
+}
+
+test('通知补发同批跳过退订群、隔离损坏 Resident，正常群仍独立完成', async (t) => {
+  const h = await setup(t, { groups: ['g', 'bad', 'gone'], resumeFailure: (id) => id === residentSessionId('bad') })
+  for (const id of ['g', 'bad']) await persistedCompletedTask(h, id)
+  await h.store.removeGroup({ groupId: 'gone' })
+  const reconciliation = h.runtime.reconcileCompletedNotifications().then((value) => ({ value }), (error) => ({ error }))
+  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  assert.equal((await submitNotification(h)).status, 'accepted')
+  const outcome = await reconciliation
+  assert.match(outcome.error.message, /task_notification_reconcile_failed:resident_not_active:bad/)
+  assert.equal(h.store.getGroup('g').outbox.length, 1)
+  assert.equal(h.store.getGroup('bad').outbox.length, 0)
+  assert.equal(h.handles.get(residentSessionId('gone')).sent.length, 0)
+  assert.ok(h.runtime.listRecoveryIssues().some((issue) => issue.groupId === 'bad' && issue.kind === 'task-notification-reconcile'))
+  assert.equal(h.runtime.listRecoveryIssues().some((issue) => issue.groupId === 'gone' && issue.kind === 'task-notification-reconcile'), false)
+})
+
+test('工作区屏障内到达的历史导入与通知等待新 Resident，导入先前事件进入新 seed', async (t) => {
+  const h = await setup(t), task = await persistedCompletedTask(h), old = h.resident(), oldId = old.agent.session.id
+  await h.runtime.hydrateGroupHistory({ groupId: 'g' })
+  const priorHistory = old.sent.at(-1).id
+  let releaseIdle
+  const idle = new Promise((resolve) => { releaseIdle = resolve })
+  h.idle.set(oldId, idle)
+  const beforeIdle = h.idleCalls.get(oldId) ?? 0
+  const changing = h.runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
+  await until(() => (h.idleCalls.get(oldId) ?? 0) > beforeIdle)
+  const importing = h.runtime.hydrateGroupHistory({ groupId: 'g' })
+  const notifying = h.runtime.reconcileCompletedNotifications()
+  try {
+    await immediate()
+    assert.equal(old.sent.filter((message) => message.content[0].text.startsWith('[GROUP_HISTORY_IMPORT]')).length, 1)
+    assert.equal(h.envelope('[TASK_COORDINATION]'), undefined)
+  } finally { releaseIdle() }
+  await changing
+  const imported = await importing
+  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  const current = h.resident()
+  assert.notEqual(current.agent.session.id, oldId)
+  assert.equal(imported.residentSessionId, current.agent.session.id)
+  assert.ok(h.calls.at(-1).input.seed.some((event) => event.type === 'user/message' && event.data.id === priorHistory))
+  assert.equal(old.sent.some((message) => message.content[0].text.startsWith('[TASK_COORDINATION]')), false)
+  assert.equal(h.envelope('[TASK_COORDINATION]').taskId, task.taskId)
+  await submitNotification(h)
+  await notifying
+})
+
+test('切换工作区等待已经开始的结果通知，通知落盘前不释放旧 Resident', async (t) => {
+  const h = await setup(t); await persistedCompletedTask(h)
+  const old = h.resident(), oldId = old.agent.session.id
+  const notifying = h.runtime.reconcileCompletedNotifications()
+  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  h.idle.set(oldId, Promise.resolve())
+  const changing = h.runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
+  await immediate()
+  assert.equal(h.resident(), old)
+  assert.equal(h.calls.filter((call) => !call.resumed).length, 0)
+  assert.equal((await submitNotification(h)).status, 'accepted')
+  await notifying; await changing
+  assert.equal(h.store.getGroup('g').outbox.length, 1)
+  assert.ok(h.disposed.includes(oldId))
+})
+
+test('退订屏障之后的历史导入拒绝旧 Resident，等待期间其他群仍可提交', async (t) => {
+  const h = await setup(t, { groups: ['g', 'b'] }), old = h.resident(), oldId = old.agent.session.id
+  let releaseIdle
+  h.idle.set(oldId, new Promise((resolve) => { releaseIdle = resolve }))
+  const beforeIdle = h.idleCalls.get(oldId) ?? 0
+  const removing = h.runtime.unsubscribe({ groupId: 'g' })
+  await until(() => (h.idleCalls.get(oldId) ?? 0) > beforeIdle)
+  const importing = h.runtime.hydrateGroupHistory({ groupId: 'g' }).then((value) => ({ value }), (error) => ({ error }))
+  try {
+    await ingest(h, 'b-live', { groupId: 'b' })
+    assert.equal((await decide(h, (await route(h, {}, 'b')).pendingDecisions[0], { reply: 'B 完成' }, 'b')).status, 'accepted')
+    assert.equal(old.sent.length, 0)
+  } finally { releaseIdle() }
+  await removing
+  assert.match((await importing).error.message, /group_not_subscribed:g/)
+  assert.ok(h.disposed.includes(oldId))
+  assert.equal(old.sent.length, 0)
+})
+
+test('关闭与进行中工作区切换串行收口，旧和替换 Resident 均释放一次', async (t) => {
+  const h = await setup(t), oldId = h.resident().agent.session.id
+  let releaseIdle
+  h.idle.set(oldId, new Promise((resolve) => { releaseIdle = resolve }))
+  const beforeIdle = h.idleCalls.get(oldId) ?? 0
+  const changing = h.runtime.updateAgentConfig({ workspaceDir: replacementWorkspace }).then((value) => ({ value }), (error) => ({ error }))
+  await until(() => (h.idleCalls.get(oldId) ?? 0) > beforeIdle)
+  const closing = h.runtime.close()
+  releaseIdle()
+  const result = await changing
+  await closing
+  assert.equal(result.error, undefined)
+  assert.equal(h.disposed.filter((id) => id === oldId).length, 1)
+  const replacementId = h.calls.at(-1).sessionId
+  assert.notEqual(replacementId, oldId)
+  assert.equal(h.disposed.filter((id) => id === replacementId).length, 1)
+})
+
+test('同 Topic 一次决策不能重复改变同一 Task，共享主 Topic 可取消两个不同 Task 各一次', async (t) => {
+  const h = await setup(t), one = await createTask(h, 'task-one'), two = await createTask(h, 'task-two')
+  await ingest(h, 'cancel-both', { text: '@助理 两个任务都取消' })
+  await h.runtime.recoverInterruptedDecisions()
+  const routing = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const routed = await h.call('group_topic_route_submit', { requestId: routing.requestId, routes: routing.messages.map((message) => ({ messageId: message.messageId, messageVersion: message.messageVersion, topics: [{ topicId: one.topicRefs[0].topicId }, { topicId: two.topicRefs[0].topicId }] })) })
+  const owner = routed.pendingDecisions.find((item) => item.topicId === one.topicRefs[0].topicId)
+  const actions = [one, two].map((task) => ({ kind: 'task-cancel', taskId: task.taskId, ...inputVersion(task), reason: '用户明确取消两个任务', topicRefs: [{ topicId: owner.topicId, revision: owner.revision }] }))
+  const submission = { requestId: owner.requestId, topicId: owner.topicId, revision: owner.revision, decision: { basisMessageIds: ['cancel-both'], actions: [actions[0], actions[0]], reply: '已取消这两个任务。', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } }
+  await assert.rejects(h.call('group_decision_submit', submission), /topic_decision_task_target_duplicate/)
+  assert.equal(h.store.getTask(one.taskId).state, 'running')
+  assert.equal(h.store.getTask(two.taskId).state, 'queued')
+  await h.call('group_reply_review_get', { requestIds: [owner.requestId] }).then((review) => { submission.decision.replyReview.reviewedOutboundIds = review.candidates.map((item) => item.outboundId) })
+  submission.decision.actions = actions
+  assert.equal((await h.call('group_decision_submit', submission)).status, 'accepted')
+  await h.runtime.drainTopicOperations('g')
+  for (const task of [one, two]) {
+    const current = h.store.getTask(task.taskId)
+    assert.equal(current.state, 'completed')
+    assert.equal(current.inputVersion, task.inputVersion + 1)
+    assert.equal(current.appliedOperations.length, 2)
+  }
+  const record = h.store.getTopic('g', owner.topicId).decisions.at(-1)
+  assert.equal(record.status, 'completed')
+  assert.equal(record.operations.length, 2)
+  assert.ok(record.operations.every((operation) => operation.status === 'applied'))
+})
+
+test('已执行来源改归属不会重新授予效果权限，新授权消息可以创建新任务', async (t) => {
+  const h = await setup(t), original = await createTask(h, 'executed-source')
+  const a = original.topicRefs[0]
+  const review = await h.call('group_topic_route_review', { messageIds: ['executed-source'], reason: '原归类错误，移到 B' })
+  const moved = await h.call('group_topic_route_submit', { requestId: review.requestId, routes: [{ messageId: 'executed-source', messageVersion: 1, topics: [{ newTopicKey: 'correct-b', title: 'B' }] }] })
+  const b = moved.pendingDecisions.find((request) => request.topicId !== a.topicId)
+  assert.equal(b.effectOwnerTopicIds['executed-source'], a.topicId)
+  assert.deepEqual(b.ownedDeltaMessageIds, [])
+  const newAction = { kind: 'new-task', title: '重复原指令', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: b.topicId, revision: b.revision }] }
+  await assert.rejects(h.call('group_decision_submit', { requestId: b.requestId, topicId: b.topicId, revision: b.revision, decision: { basisMessageIds: ['executed-source'], actions: [newAction], reply: '再建任务', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } }), /topic_effect_owner_required/)
+  assert.equal(h.store.listTasks().length, 1)
+  await ingest(h, 'fresh-authorization', { text: '@助理 请另建一个独立任务，重新核验 B' })
+  const fresh = (await route(h, { 'fresh-authorization': b.topicId })).pendingDecisions.find((request) => request.topicId === b.topicId)
+  assert.deepEqual(fresh.ownedDeltaMessageIds, ['fresh-authorization'])
+  const candidates = await h.call('group_reply_review_get', { requestIds: [fresh.requestId] })
+  assert.equal((await decide(h, fresh, { basisMessageIds: ['fresh-authorization'], actions: [{ ...newAction, title: '新授权任务', topicRefs: [{ topicId: fresh.topicId, revision: fresh.revision }] }], reply: '按新授权创建独立核验任务。', replyReview: { kind: 'substantive', reviewedOutboundIds: candidates.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } })).status, 'accepted')
+  assert.equal(h.store.listTasks().length, 2)
+  assert.deepEqual(h.store.getTask(original.taskId).topicRefs, [a])
+})
+
+test('工作区切换等待期间不占任务提交队列，提交前复核新出现的活动任务', async (t) => {
+  const h = await setup(t), old = h.resident(), oldId = old.agent.session.id
+  let releaseIdle
+  h.idle.set(oldId, new Promise((resolve) => { releaseIdle = resolve }))
+  const beforeIdle = h.idleCalls.get(oldId) ?? 0
+  const changing = h.runtime.updateAgentConfig({ workspaceDir: replacementWorkspace }).then((value) => ({ value }), (error) => ({ error }))
+  await until(() => (h.idleCalls.get(oldId) ?? 0) > beforeIdle)
+  try {
+    const task = await h.runtime.createTask({ groupId: 'g', requestId: 'created-during-config', context: '配置等待时用户独立下达任务', title: '即时任务', objective: '核验', acceptanceCriteria: ['证据'] })
+    assert.equal(task.state, 'running')
+  } finally { releaseIdle() }
+  assert.match((await changing).error.message, /agent_config_has_active_tasks/)
+  assert.equal(h.resident(), old)
+  assert.equal(h.runtime.getAgentConfig().workspaceDir, agentWorkspace)
+  assert.equal(h.disposed.includes(oldId), false)
+  assert.ok(h.disposed.some((id) => id !== oldId))
+})
+
+test('关闭拒绝尚未提交的结果通知且不悬挂', async (t) => {
+  const h = await setup(t); await persistedCompletedTask(h)
+  const notifying = h.runtime.reconcileCompletedNotifications().then((value) => ({ value }), (error) => ({ error }))
+  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  await h.runtime.close()
+  assert.match((await notifying).error.message, /resident_runtime_closed/)
+  assert.equal(Object.values(h.snapshot.tables.groups)[0].outbox.length, 0)
+})
+
+test('关闭等待已开始提交的结果通知 Outbox，不能提前关闭存储', async (t) => {
+  const h = await setup(t); await persistedCompletedTask(h)
+  const notifying = h.runtime.reconcileCompletedNotifications().then((value) => ({ value }), (error) => ({ error }))
+  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  let release, entered = false
+  const gate = new Promise((resolve) => { release = resolve }), original = h.store.appendOutbox
+  h.store.appendOutbox = async (args) => { entered = true; await gate; return original(args) }
+  const submitting = submitNotification(h).then((value) => ({ value }), (error) => ({ error }))
+  await until(() => entered)
+  let closed = false
+  const closing = h.runtime.close().then(() => { closed = true })
+  try { await immediate(); assert.equal(closed, false) } finally { release() }
+  const result = await submitting
+  await notifying; await closing
+  assert.equal(result.error, undefined)
+  assert.equal(result.value.status, 'accepted')
+  assert.equal(Object.values(h.snapshot.tables.groups)[0].outbox.length, 1)
+})
+
+test('相同引用 ID 下的不同事项不自动撤回，只有显式 replacement 才能产生撤回意图', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'quote-one', { text: '@助理 记录 A 事项', quotedMessage: { messageId: 'shared-anchor', content: '群内讨论' } })
+  const one = (await route(h)).pendingDecisions[0]
+  await decide(h, one, { reply: 'A 已记录', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } })
+  await ingest(h, 'quote-two', { text: '@助理 另一个 B 事项', quotedMessage: { messageId: 'shared-anchor', content: '群内讨论' } })
+  const two = (await route(h, { 'quote-two': one.topicId })).pendingDecisions[0]
+  const review = await h.call('group_reply_review_get', { requestIds: [two.requestId] })
+  assert.equal(review.candidates.length, 1)
+  await decide(h, two, { reply: 'B 已记录', replyReview: { kind: 'confirmation', reviewedOutboundIds: review.candidates.map((candidate) => candidate.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } })
+  const outbox = h.store.getGroup('g').outbox
+  assert.equal(outbox.length, 2)
+  assert.deepEqual(outbox[1].replacesOutboundIds ?? [], [])
+  assert.equal(outbox[0].recallStatus, undefined)
 })

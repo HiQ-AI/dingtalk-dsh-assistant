@@ -490,17 +490,23 @@ Get-NetTCPConnection -LocalPort 18998 -ErrorAction SilentlyContinue
 
 ### 健康接口可读，但新群消息未进入
 
-`backfill.state: "ok"` 同时出现 `inProgress: true` 且没有 `recoveryRequired` 时，仅表示已有成功结果后的新一轮读取，不是单独的故障信号；仍以顶层 `healthy`、`lastError` 与 listener 状态共同判断。
+Topic 版本使用 domain v7。升级已有 v6 profile 前，按[Topic 存储离线迁移](../ops/topic-storage-migration.md)检查并转换独立存储副本，验证通过再按部署 runbook 切换；不要删除旧数据或让新 Runtime 原地重写。文档中的升级流程不表示当前 profile 已经部署。旧配置中的 taskProvenanceMigrations / taskContinuationMigrations 入口已移除；存在非空迁移配置时启动会在打开存储前明确拒绝，请按离线迁移流程处理后移除这些旧配置。
+
+`backfill.completionScope: "durable-receipt"` 表示补拉只确认可靠接收，不证明 Topic 已处理或 Task 已完成。`backfill.state: "ok"` 同时出现 `inProgress: true` 且没有 `recoveryRequired` 时，仅表示已有成功结果后的新一轮读取，不是单独的故障信号；仍以顶层 `healthy`、`lastError` 与 listener 状态共同判断。
 
 先读取 `/health` 和 `/state/dws-bridge`。若任一已配置群的 `listener.state` 不是 `ready`，个人介入回复入口 `humanReplies.state` 不是 `ready`，或出现 `lastError`、`reconnect.nextRetryAt`，先查看 DSH 启动日志中的对应错误，并确认该 DWS profile 的登录仍然有效；bridge 会自动重连。`lastExitAt` 只说明曾经退出，仍需结合当前 `state` 和 `healthy` 判断。若 `backfill.state` 不是 `ok`，根据其 `lastError` 排查 DWS 范围读取。随后读取 `/state/groups`，确认目标群仍已订阅。待群 listener、个人介入回复 listener 和 backfill 全部恢复后，在可控群发送一条新消息，并回读收信箱或 resident Session；人工介入链路还需创建可控阻塞事项并在本人单聊引用回复。诊断接口的恢复不能代替业务验证。
 
 ### 群搜索失败
 
-关联复核期间可继续接收新消息。Task 动作提交时会在群串行区内重新读取当前持久消息快照，避免将复核期间进入的真实来源误判为不存在。所有 Task 动作都必须附带非空群确认；缺少确认时 `group_decision_submit` 返回 `reply-required`，不领取请求、不创建 Task、也不写 Outbox。补全回复后，Runtime 先把确认可靠写入 Outbox，再创建、续接或重开 Task，并回填实际 Task ID；取消动作会先向活动叶子发送止损信号，再提交停止确认和持久化状态。新发生且尚未开始业务副作用的判断异常会进入 `decision-retrying`，Runtime 按持久化的下一重试时间自动恢复；同群后续消息保持 `pending`，不得越过失败消息。历史 `decision-failed` 中错误明确为重启中断、Decision 未提交或无效 JSON 的消息会在启动时自动迁移；其他旧失败仍须先核对 Task 与 Outbox 是否已有副作用，再调用 `POST /config/groups/{groupId}/messages/{messageId}/retry` 精确重试。该接口不能直接把消息改成 `delivered`。
+接收接口在原始消息可靠落盘后返回，归类与业务执行继续由 Runtime 推进。`/state/groups` 的 `topicProgress.unroutedMessages` 是待归类消息数，`pending` 是有未处理增量的话题数；`/state/topics?groupId=...&offset=0&limit=50` 返回有界话题摘要。话题 A 失败不阻挡已经归类且无关的 B；未归类消息影响范围尚未知，需要先归类。
 
-若进程重启发生在消息已标记 `steered`、但结构化判断尚未提交期间，新 Runtime 会把遗留消息转为立即到期的 `decision-retrying`。Resident、群配置和 DWS bridge 就绪后自动按群消息 `sequence` 恢复，恢复成功前该群的后续消息只入 Inbox；其他群不受影响。若状态为 `decision-commit-failed`，说明 Task 或 Outbox 提交已经开始，为避免重复副作用不会自动重放，必须先核对持久化 Task 与 Outbox 后再人工处理。
+重启后分别恢复尚未归类消息、Topic 未处理增量和已接受决策的未完成动作。不要手工把消息改成 delivered 或抹掉决策进度：应核对 Topic revision / processedRevision、相关 Task inputVersion 和 Outbox 的真实投递记录。
 
-若 Resident 连续出现上下文压缩且消息长期停在 `steered`，先检查 Session 事件中 `agent/inbox/spliced` 的单条体积。新版普通 `[GROUP_MESSAGE_STEER]` 只应出现历史回复候选数量和 `group_reply_review_get` 指引，不应出现候选 JSON、历史回复正文或 Task `messageHistory`；只有 Resident 准备发送非空群回复时，读取工具才会返回不超过 8 条、16 KB 的候选快照。常驻系统提示中的本群 Task 索引也只包含摘要，完整上下文由 `group_task_context_get` 按需读取。若普通 Steer 仍有约 16 KB 或更大的重复历史正文，说明仍在运行旧插件。升级并重启后，Runtime 会清除依赖旧 requestId 的遗留协议信封，并从持久化消息状态按群内顺序恢复。不要通过提高上下文窗口掩盖重复历史注入。
+若 Resident 连续出现上下文压缩，检查普通输入是否重复包含完整群历史或 Task 消息副本。Topic 列表应只含摘要，详情由 `GET /state/topics/{topicId}?groupId=...&revision=...&offset=0&limit=50` 或 `group_topic_context_get` 按固定版本分页读取；API 每页最多 100 条。Topic 详情返回 `{topicId, groupId, revision, topic, messages, total, offset, limit, taskRefs}`，不会公开内部决策动作日志。Task 只保存 Topic 引用，不应再出现 messageHistory、triggerHistory 和 sourceMessageId。
+
+人工 Web 新建 Task 使用 `POST /tasks`，调用方必须提供稳定 requestId、原始 context、groupId、title、objective、acceptanceCriteria；不指定 topicRefs 时建立 Web 来源 Topic。已有 Task 的 context、reopen、cancel 操作还必须提供 topicRefs、inputVersion、runSequence；前两者使用 context，取消使用 reason。版本和请求身份冲突返回 409，已持久接受但未完成返回 202。Web 来源不能伪造钉钉引用、@ 或 childSessionId。Resident 不再提供 group_task_create / group_task_context_append / group_task_reopen 直写工具，业务动作统一走 group_decision_submit；误归类修订使用 group_topic_route_review。所有非空回复必须提供 replyReview.kind。Task 输入变更会归档旧 checkpoints，新版输入需要重新提交 plan-confirmed。
+
+查询 Topic 的 processing 可读取最新未完成决策标识、状态、已完成/总动作数及有界错误；Observer 显示处理失败或处理中。此摘要不暴露内部动作正文，processedRevision 与 Outbox 投递状态仍需分别核对。
 
 确认 DWS 登录有效，搜索词不少于两个字；如果配置了 `dws.profile`，确认登录的是同一个 profile。
 

@@ -118,9 +118,62 @@ window.__ModuleLoader__.load({
       { state: 'waiting', label: '等待中', tone: colors.warning, background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary, #a56500) 8%, var(--dsw-alias-bg-layer-1, #fff))' },
       { state: 'completed', label: '已完成', tone: 'var(--dsw-alias-state-success-primary, #248a3d)', background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary, #248a3d) 8%, var(--dsw-alias-bg-layer-1, #fff))' }
     ]
-    const pages = [{ id: 'groups', label: '群聊会话' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '归档任务' }, { id: 'alerts', label: '告警' }]
+    const pages = [{ id: 'groups', label: '群聊会话' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '归档任务' }, { id: 'alerts', label: '告警' }]
+    function TopicBrowser({ groups, tasks, target, updatedAt, onOpenTask }) {
+      const [groupId, setGroupId] = useState(target?.groupId || '')
+      const [offset, setOffset] = useState(0)
+      const [selection, setSelection] = useState(target)
+      const [messageOffset, setMessageOffset] = useState(0)
+      const [listing, setListing] = useState()
+      const [context, setContext] = useState()
+      const [listError, setListError] = useState('')
+      const [detailError, setDetailError] = useState('')
+      const [loading, setLoading] = useState(true)
+      const [detailLoading, setDetailLoading] = useState(false)
+      const [retry, setRetry] = useState(0)
+      const pageSize = 25
+      useEffect(() => {
+        let active = true
+        setLoading(true); setListError('')
+        const params = new URLSearchParams({ offset: String(offset), limit: String(pageSize) })
+        if (groupId) params.set('groupId', groupId)
+        get(`/state/topics?${params}`).then((value) => { if (active) { setListing(value); if (value.total > 0 && offset >= value.total) setOffset(Math.floor((value.total - 1) / pageSize) * pageSize) } }, (error) => { if (active) setListError(error.message) }).finally(() => { if (active) setLoading(false) })
+        return () => { active = false }
+      }, [groupId, offset, retry, updatedAt])
+      useEffect(() => {
+        if (!selection) { setContext(undefined); return }
+        let active = true
+        setDetailLoading(true); setDetailError(''); setContext(undefined)
+        const params = new URLSearchParams({ groupId: selection.groupId, revision: String(selection.revision), offset: String(messageOffset), limit: String(pageSize) })
+        get(`/state/topics/${encodeURIComponent(selection.topicId)}?${params}`).then((value) => { if (active) setContext(value) }, (error) => { if (active) setDetailError(error.message) }).finally(() => { if (active) setDetailLoading(false) })
+        return () => { active = false }
+      }, [selection, messageOffset, retry])
+      const selectTopic = (topic) => { setSelection({ groupId: topic.groupId, topicId: topic.topicId, revision: topic.revision }); setMessageOffset(0) }
+      const topic = context?.topic
+      const group = groups.find((item) => item.groupId === groupId)
+      const relatedTasks = tasks.filter((task) => task.groupId === selection?.groupId && task.topicRefs?.some((ref) => ref.topicId === selection?.topicId))
+      const failure = (message) => React.createElement('div', { role: 'alert', style: { padding: 16, color: colors.danger } }, message, ' ', React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setRetry((value) => value + 1) }, '重试'))
+      const pager = (pageOffset, total, onChange, busy) => React.createElement('div', { style: { ...tableFooter, flexWrap: 'wrap' } }, React.createElement('span', { style: { marginRight: 'auto', color: colors.muted, fontSize: 12 } }, `${total} 条 · 第 ${Math.floor(pageOffset / pageSize) + 1} 页`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: busy || pageOffset === 0, onClick: () => onChange(Math.max(0, pageOffset - pageSize)) }, '上一页'), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: busy || pageOffset + pageSize >= total, onClick: () => onChange(pageOffset + pageSize) }, '下一页'))
+      return React.createElement('section', { 'aria-label': '话题与上下文', style: { display: 'grid', gap: 16 } },
+        React.createElement('div', { style: { ...toolbar, flexWrap: 'wrap' } }, React.createElement(SelectMenu, { label: '筛选话题群聊', value: groupId, options: [{ id: '', label: '全部群聊' }, ...groups.map((item) => ({ id: item.groupId, label: item.name || item.groupId }))], onChange: (value) => { setGroupId(value); setOffset(0); setListing(undefined); setSelection(undefined) } }), React.createElement('span', { style: { fontSize: 12, color: colors.muted } }, group?.topicProgress ? `待归类 ${group.topicProgress.unroutedMessages} 条 · 待处理 ${group.topicProgress.pending} 个话题` : '接收、话题处理与任务完成分别计量')),
+        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))', alignItems: 'start', gap: 16 } },
+          React.createElement('section', { 'aria-label': '话题列表', 'aria-busy': loading, style: { ...tableFrame, minHeight: 200 } },
+            React.createElement('div', { role: 'status', style: { ...toolbar, minHeight: 48 } }, loading ? '正在刷新话题…' : '话题列表'),
+            listError ? failure(`话题加载失败：${listError}`) : !listing ? emptyState('正在读取话题…') : listing.topics.length === 0 ? emptyState('暂无话题，消息归类后会显示在这里') : React.createElement('ul', { style: { listStyle: 'none', margin: 0, padding: 0 } }, ...listing.topics.map((item) => React.createElement('li', { key: `${item.groupId}:${item.topicId}`, style: { padding: 12, borderBottom: `1px solid ${colors.border}` } }, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', 'aria-pressed': selection?.topicId === item.topicId && selection?.groupId === item.groupId, onClick: () => selectTopic(item), style: { maxWidth: '100%', whiteSpace: 'normal', overflowWrap: 'anywhere', textAlign: 'left' } }, item.title || item.topicId), React.createElement('div', { style: { marginTop: 6, fontSize: 12, color: colors.muted } }, `${item.processing ? item.processing.status === 'failed' ? '处理失败' : '处理中' : item.status === 'closed' ? '已结束' : item.status === 'waiting' ? '等待中' : '进行中'} · 已处理 ${item.processedRevision} / ${item.revision}${item.processing ? ` · 动作 ${item.processing.appliedOperations} / ${item.processing.totalOperations}` : ''}`), item.summary ? React.createElement('p', { style: { margin: '6px 0 0', fontSize: 12, overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' } }, item.summary) : null))),
+            listing ? pager(offset, listing.total, setOffset, loading) : null),
+          React.createElement('section', { 'aria-label': '话题详情', 'aria-busy': detailLoading, style: { ...tableFrame, minHeight: 200 } },
+            React.createElement('div', { style: toolbar }, React.createElement('strong', null, topic?.title || '话题详情'), selection ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, `版本 ${selection.revision}`) : null),
+            detailError ? failure(`上下文加载失败：${detailError}`) : detailLoading ? React.createElement('div', { role: 'status' }, emptyState('正在读取固定版本上下文…')) : !context ? emptyState('选择一个话题查看消息和关联任务') : React.createElement('div', { style: { padding: 16, display: 'grid', gap: 12, overflowWrap: 'anywhere' } },
+              topic?.summary ? React.createElement('div', null, React.createElement('small', { style: { color: colors.muted } }, `当前摘要 · 覆盖版本 ${topic.summaryRevision ?? topic.revision}`), React.createElement('p', { style: { margin: '6px 0 0', whiteSpace: 'pre-wrap' } }, topic.summary)) : null,
+              topic?.openQuestions?.length ? React.createElement('div', null, React.createElement('strong', null, '当前待解决问题'), React.createElement('ul', null, ...topic.openQuestions.map((question, index) => React.createElement('li', { key: index }, question)))) : null,
+              React.createElement('div', { 'aria-label': '关联任务', style: { display: 'flex', flexWrap: 'wrap', gap: 8 } }, ...relatedTasks.map((task) => React.createElement(Button, { key: task.taskId, variant: 'outline', size: 'sm', type: 'button', disabled: !task.childSessionId || task.state === 'queued', onClick: () => onOpenTask(task) }, task.title || task.objective)), relatedTasks.length === 0 ? React.createElement('span', { style: { color: colors.muted } }, '暂无关联任务') : null),
+              React.createElement('strong', null, `版本 ${context.revision} 的原始输入`),
+              ...(context.messages?.length ? context.messages.map((message, index) => React.createElement('article', { key: `${message.messageId}:${index}`, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, `${message.senderName || message.sourceKind || '未知发送人'} · ${fmt(message.occurredAt)}`), React.createElement('p', { style: { margin: '6px 0 0', whiteSpace: 'pre-wrap' } }, message.text), message.quotedMessage?.content ? React.createElement('blockquote', { style: { color: colors.muted, margin: '8px 0 0', paddingLeft: 12, borderLeft: `2px solid ${colors.border}`, whiteSpace: 'pre-wrap' } }, message.quotedMessage.content) : null)) : [emptyState('此版本没有消息')])
+            ), context ? pager(messageOffset, context.total, setMessageOffset, detailLoading) : null)))
+    }
     function ObserverContent({ openSession }) {
       const [activePage, setActivePage] = useState('groups')
+      const [topicTarget, setTopicTarget] = useState()
       const [data, setData] = useState()
       const [error, setError] = useState()
       const [navigationError, setNavigationError] = useState()
@@ -278,7 +331,7 @@ window.__ModuleLoader__.load({
             React.createElement('span', { title: `最后活动 ${fmt(task.updatedAt)}`, style: { minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt)),
             task.state === 'completed' && !task.archivedAt ? React.createElement('button', { type: 'button', onClick: async (event) => { event.stopPropagation(); try { await post(`/tasks/${encodeURIComponent(task.taskId)}/archive`); await refresh() } catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) } }, style: { flex: '0 0 auto', border: `1px solid ${colors.border}`, borderRadius: 7, background: colors.surface2, color: colors.muted, padding: '3px 7px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10.5 } }, '归档') : null),
           navigating ? React.createElement('div', { role: 'status', style: { fontSize: 11.5, color: colors.accent } }, '正在打开会话…') : queued ? React.createElement('div', { style: { fontSize: 11.5, color: colors.muted } }, '等待执行，尚无对话和轨迹') : null),
-          null)
+          task.topicRefs?.length ? React.createElement('div', { 'aria-label': '任务关联话题', style: { display: 'flex', flexWrap: 'wrap', gap: 6 } }, ...task.topicRefs.map((ref) => React.createElement(Button, { key: ref.topicId, variant: 'outline', size: 'sm', type: 'button', onClick: () => { setTopicTarget({ groupId: task.groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') } }, `话题 ${short(ref.topicId)} · v${ref.revision}`))) : null)
       }
       const alertCategories = [
         { id: 'all', label: '全部类型' },
@@ -430,7 +483,8 @@ window.__ModuleLoader__.load({
           React.createElement('div', { style: { padding: '0 16px' } }, ...(alertView === 'active' ? (filteredActiveAlerts.length ? filteredActiveAlerts.map(renderAlert) : [React.createElement('div', { key: 'empty', style: { padding: '36px 0', textAlign: 'center', color: colors.muted, fontSize: 12 } }, '当前没有此类型异常')]) : (visibleResolvedAlerts.length ? visibleResolvedAlerts.map(renderAlert) : [React.createElement('div', { key: 'empty', style: { padding: '36px 0', textAlign: 'center', color: colors.muted, fontSize: 12 } }, '暂无此类型恢复记录')]))),
           alertView === 'resolved' ? React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredResolvedAlerts.length} 条 · 每页 ${resolvedAlertPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage <= 1, onClick: () => setResolvedAlertPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentResolvedAlertPage} / ${resolvedAlertPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage >= resolvedAlertPageCount, onClick: () => setResolvedAlertPage((page) => Math.min(resolvedAlertPageCount, page + 1)) }, '下一页')) : null))
       )
-      const pageContent = activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
+      const topicsPage = React.createElement(TopicBrowser, { groups: data?.groups || [], tasks: data?.tasks || [], target: topicTarget, updatedAt, onOpenTask: (task) => navigate(task.childSessionId, groupsById.get(task.groupId)?.residentSessionId) })
+      const pageContent = activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
       const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, minHeight: 'calc(100dvh - 138px)', boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
       const main = React.createElement('main', { style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? '24px 24px 0' : '24px 24px 32px', display: 'grid', alignContent: 'start', gap: 20, pointerEvents: 'auto' } },
         error ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法连接 resident 插件：${error}`) : null,
