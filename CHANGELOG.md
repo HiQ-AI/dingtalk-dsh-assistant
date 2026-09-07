@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [0.5.12] - 2026-09-07
+
 ### 修复
 
 - 群消息只要包含 Task 创建、续接、重开、提议或取消动作就强制要求非空确认；缺失时返回无副作用的 `reply-required` 并保留待处理请求。非取消类动作改为在确认可靠写入 Outbox 后执行，避免叶子已经开始处理但群里没有任何确认。
@@ -175,6 +177,7 @@
 - assistant、observer 与发行包统一使用同一个产品版本号。
 - Node.js 最低版本与实际 zstd Runtime 要求一致，调整为 24。
 
+[0.5.12]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.12
 [0.5.11]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.11
 [0.5.10]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.10
 [0.5.9]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.9
