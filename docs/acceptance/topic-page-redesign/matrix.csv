@@ -1,0 +1,13 @@
+case,round-1
+desktop-layout,PASS
+long-content-no-overlap,PASS
+fixed-revision-and-pagination,PASS
+task-topic-navigation,PASS
+keyboard-and-narrow-layout,PASS
+empty-loading-error-retry,PASS
+stale-response-suppressed,PASS
+observer-regression,PASS
+full-regression,PASS
+premium-static-audit,PASS
+concise-topic-title-contract,PASS
+ai-historical-title-migration,PASS

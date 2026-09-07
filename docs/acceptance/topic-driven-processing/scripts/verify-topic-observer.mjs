@@ -19,7 +19,8 @@ const errors = [], requests = []
 page.on('pageerror', (error) => errors.push(error.message))
 let scene = 'normal'
 const delayedReplies = []
-const topic = { topicId: 'topic-a', groupId: 'g', title: '月度数据导出', revision: 3, processedRevision: 2, status: 'active', summary: '确认导出范围与交付格式', openQuestions: ['是否包含历史记录？'], processing: { decisionId: 'failed-a', status: 'failed', appliedOperations: 1, totalOperations: 2 } }
+const topicTitle = '修复统一 HiQ 编辑器草稿地理位置字段并检查历史数据兼容边界'
+const topic = { topicId: 'topic-a', groupId: 'g', title: topicTitle, revision: 3, processedRevision: 2, status: 'active', summary: '确认导出范围与交付格式，并保留一段足够长的摘要，用于验证列表截断和详情完整换行不会互相覆盖。', openQuestions: ['是否包含历史记录？'], processing: { decisionId: 'failed-a', status: 'failed', appliedOperations: 1, totalOperations: 2 } }
 const group = { groupId: 'g', name: '验收群', messages: [], outbox: [], topicProgress: { total: 1, pending: 1, unroutedMessages: 2 } }
 const task = { taskId: 'task-a', groupId: 'g', title: '导出数据', objective: '导出本月数据', state: 'running', topicRefs: [{ topicId: 'topic-a', revision: 2 }], inputVersion: 1, childSessionId: 'session-a', updatedAt: '2026-09-07T00:00:00Z' }
 await page.route('http://127.0.0.1:18998/**', async (route) => {
@@ -37,7 +38,7 @@ await page.route('http://127.0.0.1:18998/**', async (route) => {
     if (scene === 'race') await new Promise((resolve) => delayedReplies.push(resolve))
     if (scene === 'detail-error') return route.fulfill({ status: 503, json: { error: 'fixture_context_unavailable' } })
     const offset = Number(url.searchParams.get('offset'))
-    body = { topic, revision: Number(url.searchParams.get('revision')), groupId: 'g', topicId: 'topic-a', messages: [{ messageId: `m-${offset}`, text: offset ? '第二页原始输入' : '请导出本月数据，保留原始列名。', senderName: '测试成员', occurredAt: '2026-09-07T00:00:00Z' }], total: 26, offset, limit: 25, taskRefs: [] }
+    body = { topic, revision: Number(url.searchParams.get('revision')), groupId: 'g', topicId: 'topic-a', messages: [{ messageId: `m-${offset}`, text: offset ? '第二页原始输入' : '请导出本月数据，保留原始列名。连续标识：locationUuid-locationUuid-locationUuid-locationUuid-locationUuid-locationUuid', senderName: '测试成员', occurredAt: '2026-09-07T00:00:00Z' }], total: 26, offset, limit: 25, taskRefs: [] }
   }
   if (url.pathname === '/state/topics/topic-b') body = { topic: { ...topic, topicId: 'topic-b', title: '独立话题 B' }, revision: 3, messages: [{ messageId: 'b1', text: 'B 的固定版本输入' }], total: 1, offset: 0, limit: 25 }
   await route.fulfill({ status: 200, json: body })
@@ -62,24 +63,28 @@ try {
   await page.addScriptTag({ content: await readFile(path.join(root, 'packages/dingtalk-dsh-observer/web-client.js'), 'utf8') })
   await page.getByRole('button', { name: '钉钉群聊运行看板', exact: true }).click()
   await page.getByRole('button', { name: '话题', exact: true }).click()
-  await page.getByText('处理失败 · 已处理 2 / 3 · 动作 1 / 2', { exact: true }).waitFor()
-  await page.getByRole('button', { name: '月度数据导出', exact: true }).click()
-  await page.getByText('请导出本月数据，保留原始列名。', { exact: true }).waitFor()
+  await page.getByText('版本 2 / 3 · 动作 1 / 2', { exact: true }).waitFor()
+  await page.getByRole('button', { name: topicTitle, exact: true }).click()
+  await page.getByText(/请导出本月数据，保留原始列名。连续标识/).waitFor()
+  const desktopTopicRegion = page.getByRole('region', { name: '话题与上下文', exact: true })
+  assert.equal(await desktopTopicRegion.evaluate((element) => element.scrollWidth > element.clientWidth), false)
+  assert.equal(await page.getByRole('heading', { name: topicTitle, exact: true }).evaluate((element) => element.scrollWidth > element.clientWidth), false)
+  await mkdir(path.join(root, 'docs/tmp/topic-observer'), { recursive: true })
+  await page.screenshot({ path: path.join(root, 'docs/tmp/topic-observer/desktop.png'), fullPage: true })
   assert.ok(requests.includes('/state/topics/topic-a?groupId=g&revision=3&offset=0&limit=25'))
   await page.getByRole('region', { name: '话题详情', exact: true }).getByRole('button', { name: '下一页', exact: true }).click()
   await page.getByText('第二页原始输入', { exact: true }).waitFor()
   assert.ok(requests.includes('/state/topics/topic-a?groupId=g&revision=3&offset=25&limit=25'))
   await page.getByRole('button', { name: '任务看板', exact: true }).click()
   await page.getByRole('button', { name: '话题 topic-a · v2', exact: true }).click()
-  await page.getByText('请导出本月数据，保留原始列名。', { exact: true }).waitFor()
+  await page.getByText(/请导出本月数据，保留原始列名。连续标识/).waitFor()
   assert.ok(requests.includes('/state/topics/topic-a?groupId=g&revision=2&offset=0&limit=25'))
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.getByRole('button', { name: '月度数据导出', exact: true }).focus()
+  await page.getByRole('button', { name: topicTitle, exact: true }).focus()
   await page.keyboard.press('Enter')
-  await page.getByText('版本 3', { exact: true }).waitFor()
+  await page.getByText('固定版本 3', { exact: true }).waitFor()
   const overflow = await page.getByRole('region', { name: '话题与上下文', exact: true }).evaluate((element) => element.scrollWidth > element.clientWidth)
   assert.equal(overflow, false)
-  await mkdir(path.join(root, 'docs/tmp/topic-observer'), { recursive: true })
   await page.screenshot({ path: path.join(root, 'docs/tmp/topic-observer/narrow.png'), fullPage: true })
   scene = 'detail-error'
   await page.getByRole('region', { name: '话题详情', exact: true }).getByRole('button', { name: '下一页', exact: true }).click()
@@ -97,7 +102,7 @@ try {
   await page.getByRole('alert').filter({ hasText: '话题加载失败' }).waitFor()
   scene = 'normal'
   await page.getByRole('button', { name: '重试', exact: true }).click()
-  await page.getByRole('button', { name: '月度数据导出', exact: true }).waitFor()
+  await page.getByRole('button', { name: topicTitle, exact: true }).waitFor()
   scene = 'race'
   await page.getByRole('button', { name: '群聊会话', exact: true }).click()
   await page.getByRole('button', { name: '话题', exact: true }).click()
@@ -108,7 +113,7 @@ try {
   delayedReplies.forEach((resolve) => resolve())
   await oldResponse
   assert.equal(await page.getByText('B 的固定版本输入', { exact: true }).count(), 1)
-  assert.equal(await page.getByText('请导出本月数据，保留原始列名。', { exact: true }).count(), 0)
+  assert.equal(await page.getByText(/请导出本月数据，保留原始列名。连续标识/).count(), 0)
   assert.deepEqual(errors, [])
-  console.log(JSON.stringify({ status: 'PASS', checks: ['list', 'fixed-revision-detail', 'pagination', 'task-topic-version-link', 'keyboard', 'narrow-no-overflow', 'empty', 'list-error-retry', 'detail-error-retry', 'loading', 'stale-response-suppressed'], pageErrors: errors, host: 'DSH mock container and primitive stubs; no real service or DWS writes' }))
+  console.log(JSON.stringify({ status: 'PASS', checks: ['list', 'long-title-detail-layout', 'desktop-no-overflow', 'fixed-revision-detail', 'pagination', 'task-topic-version-link', 'keyboard', 'narrow-no-overflow', 'empty', 'list-error-retry', 'detail-error-retry', 'loading', 'stale-response-suppressed'], pageErrors: errors, host: 'DSH mock container and primitive stubs; no real service or DWS writes' }))
 } finally { await browser.close() }

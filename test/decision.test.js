@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { blockTaskDecisionForUnavailableMedia, buildReplyReviewCandidates, isDirectedToOtherParticipants, isExplicitAgentDirection, groupDecisionSchema, REPLY_REVIEW_CANDIDATE_LIMIT, REPLY_REVIEW_MAX_CHARS, groupDecisionSubmissionSchema, topicRouteSubmissionSchema } from '../packages/dingtalk-dsh-assistant/decision.js'
+import { blockTaskDecisionForUnavailableMedia, buildReplyReviewCandidates, isDirectedToOtherParticipants, isExplicitAgentDirection, groupDecisionSchema, REPLY_REVIEW_CANDIDATE_LIMIT, REPLY_REVIEW_MAX_CHARS, TOPIC_TITLE_MAX_CHARS, groupDecisionSubmissionSchema, topicRouteSubmissionSchema } from '../packages/dingtalk-dsh-assistant/decision.js'
 
 const topicRefs = [{ topicId: 'topic-a', revision: 2 }]
 const executionVersion = { inputVersion: 1, runSequence: 1 }
@@ -35,6 +35,7 @@ test('归类可新建、追加或多归属，空归属必须有原因', () => {
   assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [] }] }))
   assert.equal(topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [], reason: '无可延续讨论的噪声' }] }).routes[0].topics.length, 0)
   assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [{ topicId: 'topic-a', newTopicKey: 'invalid', title: '冲突' }] }] }))
+  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [{ newTopicKey: 'too-long', title: '长'.repeat(TOPIC_TITLE_MAX_CHARS + 1) }] }] }))
 })
 
 test('显式任务指向识别配置名称、别名、DWS登录人或cc指令', () => {

@@ -213,6 +213,8 @@ Topic 处理模型使用存储 domain v7。已有 v6 数据必须先按[离线�
 
 每条新消息先可靠持久化到 Inbox，接收接口随后返回；Resident 使用 `group_topic_route_submit` 对冻结的消息批次归类，再以 Topic 为单位处理增量。Topic 跨 turn 存在，一个消息可以关联多个 Topic；已归类的无关话题不会使当前话题决策失效。同群仍有未归类输入时，应先完成归类再判断其影响。归类、Topic 决策与 Task 执行分别维护进度，DWS 补拉完成只证明可靠接收。
 
+Topic 的 `title` 是对齐 Task 名称的 8–20 字短语，最多 30 字，细节保存在 `summary`。Runtime 发现历史 Topic 标题超过 30 字且已有摘要时，会向 Resident 发出独立的标题迁移请求，由模型根据摘要重新概括后通过 `group_topic_title_submit` 原子写回；禁止直接截断摘要。请求期间标题或摘要发生变化会返回过期状态并按新快照重试；没有摘要的历史 Topic 保留原标题。
+
 入站消息引用其他钉钉消息时，Steer 信封只携带稳定的引用消息 ID；正常情况下 Resident 直接使用同一会话已经收到的正文。如果该正文因消息传递异常、会话恢复或上下文压缩而不在当前可见上下文，Resident 必须加载 `dingtalk-chat` Skill，并使用插件配置的同一 DWS profile 执行 `chat +messages-mget` 主动读取；取回的消息仍有 `quotedMessage.messageId` 时继续向上查询，直至整条引用链结束。查询结果必须校验完整性，必要时读取链上的图片或文件。查询失败、结果不完整、未命中或检测到循环时，不得要求群成员补发原问题、正文或截图，也不得猜测并回复；本次判断进入 `decision-retrying`，由 Runtime 在故障恢复后自动重试。
 
 `group_decision_submit` 每次提交一个 Topic 的决策，绑定 topicId、revision 和持久 decisionId。提交时复核未归类输入、相关 Topic 版本、Task inputVersion 以及历史回复快照；发生冲突时零副作用拒绝。Task 动作用 topicRefs 引用固定版本，具体消息授权证据仍在 Topic 决策中校验，加入 Topic 本身不会扩大授权。任何 Task 动作都必须带非空确认；确认先可靠写入 Outbox，再创建、续接或重开 Task。取消仍优先发送止损信号。决策接受后保留动作回执，按固定操作身份恢复，不通过重建 ID 重复执行。
