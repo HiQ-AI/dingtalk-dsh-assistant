@@ -46,6 +46,7 @@ const legacyWaitingResultSchema = z.object({
 const persistedTaskResultSchema = z.union([taskResultSchema, legacyWaitingResultSchema])
 const humanBlockerSchema = z.object({
   requestId: z.string().min(1), fingerprint: z.string().min(1).optional(), category: z.enum(['redline', 'network', 'disk', 'resource', 'unexpected', 'human-decision']),
+  runSequence: z.number().int().positive().optional(),
   requestedAction: z.string().min(1), status: z.enum(['pending-send', 'waiting-reply', 'answered', 'superseded']),
   waitingReason: z.string().min(1).optional(), risk: z.string().min(1).optional(), evidence: z.array(z.string().min(1)).optional(), attemptedActions: z.array(z.string().min(1)).optional(), createdAt: z.string().min(1).optional(),
   formatVersion: z.number().int().positive().optional(),
@@ -87,7 +88,7 @@ const taskSchema = z.object({
   completion: z.string().optional(), result: persistedTaskResultSchema.optional(), lastWaitingResult: persistedTaskResultSchema.optional(), lastCompletedResult: persistedTaskResultSchema.optional(),
   completionSequence: z.number().int().nonnegative().optional(),
   stateHistory: z.array(taskStateEventSchema).optional(),
-  reopenContext: z.string().min(1).optional(), archivedAt: z.string().min(1).optional(), createdAt: z.string().min(1), updatedAt: z.string().min(1),
+  reopenContext: z.string().min(1).optional(), resumeContext: z.string().min(1).optional(), archivedAt: z.string().min(1).optional(), createdAt: z.string().min(1), updatedAt: z.string().min(1),
 })
 const schedulerSchema = z.object({
   tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), agentWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),

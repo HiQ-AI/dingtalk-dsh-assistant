@@ -8,6 +8,15 @@ const textMessage = (text, images = []) => Object.freeze({ id: randomUUID(), rol
 const objectOutput = { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] }
 const sameVersions = (left, right) => left.length === right.length && left.every((item) => right.some((other) => other.messageId === item.messageId && other.messageVersion === item.messageVersion))
 const topicIndex = (topics) => topics.map(({ topicId, title, revision, processedRevision, status, summary }) => ({ topicId, title, revision, processedRevision, status, summary: summary?.slice(0, 240) }))
+const boundedItems = (items, maxChars, maxCount, required = () => false) => {
+  const selected = items.filter(required)
+  for (const item of items) {
+    if (selected.includes(item) || selected.length >= maxCount) continue
+    if (selected.length > 0 && JSON.stringify([...selected, item]).length > maxChars) break
+    selected.push(item)
+  }
+  return selected
+}
 const reviewSchema = z.union([
   z.strictObject({ accepted: z.boolean(), reason: z.string().trim().min(1) }),
   z.strictObject({ decision: z.enum(['acknowledge', 'guidance']), reason: z.string().trim().min(1), guidance: z.string().trim().min(1).optional() }),
@@ -120,9 +129,11 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     const request = { requestId: randomUUID(), groupId, topicId: topic.topicId, revision: topic.revision, messages, removedMessageIds,
       topicRefs: [{ topicId: topic.topicId, revision: topic.revision }], candidates: scopedCandidates(groupId, messages, [{ topicId: topic.topicId, revision: topic.revision }]), readReview: false }
     decisions.set(request.requestId, request)
+    const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= topic.revision).map((entry) => entry.messageId))
+    const visibleMessages = boundedItems([...messages].reverse(), 40_000, 50, (message) => deltaIds.has(message.messageId)).reverse()
     const envelope = { requestId: request.requestId, topicId: topic.topicId, revision: topic.revision,
-      removedMessageIds, ...effectOwnership(groupId, topic.topicId, topic.revision, messages), replyReviewCandidateCount: request.candidates.length, messages: messages.slice(-50), totalMessages: messages.length, processedRevision: topic.processedRevision, summary: topic.summary, openQuestions: topic.openQuestions }
-    const agent = send(groupId, `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n按此 Topic 固定版本处理本次增量。共享消息由 effectOwnerTopicIds 指定唯一动作主归属；只有 ownedDeltaMessageIds 中的本次依据允许创建或更新 Task、发送确认，其他 Topic 只关联已有 Task 或分别作实质回答。removedMessageIds 是本次已移出输入，可作为无动作静默决策的依据；不得从移出消息派生任务。非空 reply 必须声明 replyReview.kind。通过 group_decision_submit 独立提交。必要时 group_topic_context_get 分页取原文。历史回复候选 ${request.candidates.length} 条，回复前读取 group_reply_review_get。`, messages.slice(-50).flatMap((message) => message.imageRefs ?? []))
+      removedMessageIds, ...effectOwnership(groupId, topic.topicId, topic.revision, messages), replyReviewCandidateCount: request.candidates.length, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length, processedRevision: topic.processedRevision, summary: topic.summary, openQuestions: topic.openQuestions }
+    const agent = send(groupId, `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n按此 Topic 固定版本处理本次增量。共享消息由 effectOwnerTopicIds 指定唯一动作主归属；只有 ownedDeltaMessageIds 中的本次依据允许创建或更新 Task、发送确认，其他 Topic 只关联已有 Task 或分别作实质回答。removedMessageIds 是本次已移出输入，可作为无动作静默决策的依据；不得从移出消息派生任务。非空 reply 必须声明 replyReview.kind。通过 group_decision_submit 独立提交。必要时 group_topic_context_get 分页取原文。历史回复候选 ${request.candidates.length} 条，回复前读取 group_reply_review_get。`, visibleMessages.flatMap((message) => message.imageRefs ?? []))
     monitor(agent, request, decisions)
     return request
   }
@@ -131,7 +142,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     messages = structuredClone(messages.map(({ facts, ...message }) => message))
     const request = { requestId: randomUUID(), groupId, routingRevision: group.routingRevision, messages, ...(reason ? { reason } : {}) }
     routes.set(request.requestId, request)
-    const envelope = { requestId: request.requestId, messages, topics: topicIndex(store.listTopics(groupId)).slice(-100), ...(reason ? { reason } : {}) }
+    const topics = boundedItems(topicIndex(store.listTopics(groupId)).reverse(), 16_000, 100).reverse()
+    const envelope = { requestId: request.requestId, messages, topics, totalTopics: store.listTopics(groupId).length, hasMoreTopics: topics.length < store.listTopics(groupId).length, ...(reason ? { reason } : {}) }
     const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\nTopic 请求：${JSON.stringify(envelope)}\n先结合本批全部消息、已有 Topic 和任务目标归类。通过 group_topic_route_submit 一次覆盖本批消息；需要历史话题时先 group_topic_list / group_topic_context_get。此阶段不执行任务、不回复群聊。${reason ? `本次是显式归属复核，原因：${reason}；提交后保留原关系历史。` : ''}`, messages.flatMap((message) => message.imageRefs ?? []))
     monitor(agent, request, routes)
     return envelope
@@ -149,7 +161,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     if (!group) return []
     const pending = pendingInput(groupId)
     if (pending.length && ![...routes.values()].some((request) => request.groupId === groupId)) {
-      createRouteRequest(groupId, pending.slice(0, 50))
+      createRouteRequest(groupId, boundedItems(pending, 40_000, 50))
     }
     if (![...titleMigrations.values()].some((request) => request.groupId === groupId)) {
       const legacy = store.listTopics(groupId).find((topic) => topic.title.length > TOPIC_TITLE_MAX_CHARS && topic.summary?.trim())
@@ -162,7 +174,10 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         if ((retries.get(commit.decisionId) ?? 0) <= Date.now()) resume(groupId, topic.topicId, commit.decisionId)
       } else if (topic.processedRevision < topic.revision) result.push(createDecisionRequest(groupId, topic))
     }
-    return result.map(({ requestId, topicId, revision, messages, candidates, removedMessageIds }) => ({ requestId, topicId, revision, removedMessageIds, ...effectOwnership(groupId, topicId, revision, messages), replyReviewCandidateCount: candidates.length, messages: messages.slice(-50) }))
+    return result.map(({ requestId, topicId, revision, messages, candidates, removedMessageIds }) => {
+      const visibleMessages = boundedItems([...messages].reverse(), 40_000, 50).reverse()
+      return { requestId, topicId, revision, removedMessageIds, ...effectOwnership(groupId, topicId, revision, messages), replyReviewCandidateCount: candidates.length, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length }
+    })
   }
   function schedule(groupId) {
     if (!live()) return Promise.resolve([])
@@ -247,6 +262,18 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         const directedAway = request.messages.filter((message) => basis.has(message.messageId) && isDirectedToOtherParticipants(message.text, store.getAgentNames()))
         for (const other of directedAway) if (!request.messages.some((message) => basis.has(message.messageId) && message.quotedMessage?.messageId === other.messageId && isExplicitAgentDirection(message.text, store.getAgentNames()))) throw new Error('task_action_directed_to_other_participants')
       }
+      if (action.kind === 'new-task') {
+        const group = store.getGroup(request.groupId)
+        if (!group.responsibility?.trim()) throw new Error('task_group_responsibility_required')
+        const directed = request.messages.some((message) => basis.has(message.messageId) && isExplicitAgentDirection(message.text, store.getAgentNames()))
+        const confirmsProposal = request.messages.some((message) => {
+          if (!basis.has(message.messageId) || !message.quotedMessage?.messageId) return false
+          const outbound = group.outbox.find((item) => item.deliveredMessageId === message.quotedMessage.messageId && item.status === 'sent')
+          if (!outbound?.decisionId) return false
+          return group.topics.some((topic) => topic.decisions.some((record) => record.decisionId === outbound.decisionId && record.decision.actions.some((candidate) => candidate.kind === 'task-proposal')))
+        })
+        if (!directed && !confirmsProposal) throw new Error('task_explicit_authorization_required')
+      }
     }
   }
   function register(agentCtx, groupId) {
@@ -301,7 +328,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const args = groupDecisionSubmissionSchema.parse(input)
       const request = decisions.get(args.requestId)
       if (!request || request.groupId !== groupId || request.topicId !== args.topicId || request.revision !== args.revision) return { status: 'topic-stale', pendingDecisions: await schedule(groupId) }
-      let decision = blockTaskDecisionForUnavailableMedia(args.decision, request.messages.flatMap((message) => message.mediaUnavailable ?? []))
+      const basis = new Set(args.decision.basisMessageIds)
+      let decision = blockTaskDecisionForUnavailableMedia(args.decision, request.messages.filter((message) => basis.has(message.messageId)).flatMap((message) => message.mediaUnavailable ?? []))
       validateBasis(request, decision)
       if (decision.actions.length && !decision.reply?.trim()) return { status: 'reply-required' }
       if (decision.reply?.trim()) {
@@ -311,7 +339,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         try { decision = { ...decision, replyReview: validateReplyReview(decision.replyReview, request.candidates, { confirmationTaskIds: decision.actions.map((action) => action.taskId).filter(Boolean) }) } }
         catch (error) { return { status: 'review-required', error: error.message } }
       }
-      const result = await serializeTasks(() => {
+      const result = await Promise.resolve().then(() => {
         if (decision.reply?.trim() && refreshReview(request)) return { status: 'review-required' }
         return store.acceptTopicDecision({ groupId, topicId: args.topicId, revision: args.revision, decisionId: args.requestId, decision,
         expectedTaskVersions: decision.actions.filter((action) => action.taskId).map((action) => ({ taskId: action.taskId, inputVersion: action.inputVersion, runSequence: action.runSequence })),
@@ -392,16 +420,21 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     })
   }
   function requestReview(kind, task, value) {
-    return new Promise((resolve, reject) => {
-      const request = { requestId: randomUUID(), groupId: task.groupId, task, kind, resolve, reject }
+    const existing = [...reviews.values()].find((request) => request.kind === kind && request.task.taskId === task.taskId
+      && request.task.inputVersion === task.inputVersion && request.task.runSequence === task.runSequence
+      && JSON.stringify(request.value) === JSON.stringify(value))
+    if (existing) return existing.promise
+    let resolve, reject
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no })
+    const request = { requestId: randomUUID(), groupId: task.groupId, task, kind, value, resolve, reject, promise }
+    try {
       reviews.set(request.requestId, request)
-      try {
-        const label = kind === 'completion' ? '[TASK_COMPLETION_REVIEW]' : '[TASK_CHECKPOINT_REVIEW]'
-        const reviewInfo = { requestId: request.requestId, kind, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence }
-        const agent = send(task.groupId, `${label}\n审阅请求：${JSON.stringify(reviewInfo)}\nTask ID: ${task.taskId}\n当前有效目标：${task.objective}\n验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n待审阅内容：${JSON.stringify(value)}\n通过 group_task_review_submit 提交内部判断。完成审阅：{accepted:boolean,reason:string}；检查点审阅：{decision:'acknowledge'|'guidance',reason:string,guidance?:string}。核对全部当前范围和证据，不发群消息，不用自然语言结束请求。`)
-        monitor(agent, request, reviews)
-      } catch (error) { reviews.delete(request.requestId); reject(error) }
-    })
+      const label = kind === 'completion' ? '[TASK_COMPLETION_REVIEW]' : '[TASK_CHECKPOINT_REVIEW]'
+      const reviewInfo = { requestId: request.requestId, kind, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence }
+      const agent = send(task.groupId, `${label}\n审阅请求：${JSON.stringify(reviewInfo)}\nTask ID: ${task.taskId}\n当前有效目标：${task.objective}\n验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n待审阅内容：${JSON.stringify(value)}\n通过 group_task_review_submit 提交内部判断。完成审阅：{accepted:boolean,reason:string}；检查点审阅：{decision:'acknowledge'|'guidance',reason:string,guidance?:string}。核对全部当前范围和证据，不发群消息，不用自然语言结束请求。`)
+      monitor(agent, request, reviews)
+    } catch (error) { reviews.delete(request.requestId); reject(error) }
+    return promise
   }
   function requestReply(task, result, resultKey) {
     const existing = [...replies.values()].find((request) => request.resultKey === resultKey && request.groupId === task.groupId)
@@ -410,12 +443,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     const promise = new Promise((yes, no) => { resolve = yes; reject = no })
     promise.catch(() => undefined)
     const messages = taskMessages(task)
+    const visibleMessages = boundedItems([...messages].reverse(), 40_000, 50).reverse()
     const request = { requestId: randomUUID(), groupId: task.groupId, task, resultKey, resultState: result.status === 'completed' ? 'completed' : 'waiting', resultFingerprint: JSON.stringify(result), messages, resolve, reject, promise,
       candidates: scopedCandidates(task.groupId, messages, task.topicRefs, [task.taskId]), readReview: false,
       observedTopics: task.topicRefs.map((ref) => ({ topicId: ref.topicId, revision: store.getTopic(task.groupId, ref.topicId).revision })) }
     replies.set(request.requestId, request)
     try {
-      const agent = send(task.groupId, `[TASK_COORDINATION]\n回复请求 ID：${request.requestId}\nTask ID: ${task.taskId}\nTopic 请求：${JSON.stringify({ requestId: request.requestId, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: task.topicRefs, messages, replyReviewCandidateCount: request.candidates.length })}\n当前目标：${task.objective}\n核验结果：${JSON.stringify(result)}\n通过 group_reply_submit 提交结果或阻塞通知；先按 requestId 读取 ${request.candidates.length} 条历史回复候选。保留实际完成内容、证据、交付状态和未验证边界，从固定 Topic 原文选择引用和需要获知结果的参与人，不能只通知最后发言人。`)
+      const agent = send(task.groupId, `[TASK_COORDINATION]\n回复请求 ID：${request.requestId}\nTask ID: ${task.taskId}\nTopic 请求：${JSON.stringify({ requestId: request.requestId, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: task.topicRefs, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length, replyReviewCandidateCount: request.candidates.length })}\n当前目标：${task.objective}\n核验结果：${JSON.stringify(result)}\n通过 group_reply_submit 提交结果或阻塞通知；先按 requestId 读取 ${request.candidates.length} 条历史回复候选。需要更多原文时按固定 Topic 版本分页读取。保留实际完成内容、证据、交付状态和未验证边界。`)
       monitor(agent, request, replies)
     } catch (error) { replies.delete(request.requestId); reject(error) }
     return promise

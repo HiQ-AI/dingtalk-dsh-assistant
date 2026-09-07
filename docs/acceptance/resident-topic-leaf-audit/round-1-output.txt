@@ -1,0 +1,28 @@
+A01 observed: accepted; taskCount=1; responsibility=empty; resident deny= [{"deny":["get_goal","create_goal","update_goal"]}]
+✔ A01 无明确点名且职责为空时，Host 仍接受模型提交的 new-task (36.9351ms)
+A02 observed: first=waiting, second=queued, capacity=1
+✔ A02 waiting 占满容量后，无关 queued Task 不启动 (17.8773ms)
+A03 observed: timeout -> persisted unreviewed stage -> retry rejected; topic recovery creates no review
+✔ A03 stage checkpoint 审阅失败后，同一提交无法幂等重试 (32.4723ms)
+A04 observed: old Topic persisted but removed from Task refs; leaf old-topic read rejected
+✔ A04 跨 Topic 追加只带新引用会覆盖 Task 原有证据入口 (10.6968ms)
+A05 observed: unchanged objective and criteria; checkpoints=0; old plan archived
+✔ A05 普通事实补充也清空检查点并强制重新规划 (24.8491ms)
+A06 observed: run=2, changed risk, same request text -> old approval reused, state=running
+✔ A06 人工批准按类别与文本跨执行轮次复用，不检查风险变化 (15.7187ms)
+A07 observed: taskCount=0; unrelated historical media failure replaces decision
+✔ A07 Topic 的历史失败附件会拦截明确无需附件的新任务 (3.517ms)
+A08 metrics (characters and UTF-8 bytes, NOT tokens): {"resident":{"tool:goal":{"chars":0,"utf8Bytes":0},"dingtalk-group-responsibility":{"chars":64,"utf8Bytes":148},"dingtalk-group-task-index":{"chars":466,"utf8Bytes":644},"dingtalk-group-decision-protocol":{"chars":5685,"utf8Bytes":13233}},"leaf":{"group-task-blocking-policy":{"chars":3669,"utf8Bytes":7827}},"index":[{"count":10,"chars":3761,"utf8Bytes":6641},{"count":100,"chars":37601,"utf8Bytes":66401},{"count":1000,"chars":376001,"utf8Bytes":664001}],"oneMessageChars":12000,"routeChars":12606,"decisionChars":12942,"fixture":"D:\\project\\dingtalk-dsh-assistant\\test\\runtime.test.js"}
+✔ A08 实测协议字符数、动态索引及重复消息载荷 (14.9936ms)
+A09 observed: unrelated resume holds taskTail; second Task has no cancel signal until queue released
+✔ A09 Supervisor 在全局任务队列等待 Session 恢复时，其他 Task 取消也要等待 (57.4953ms)
+A10 observed: Topic processed, routing=routed, legacy delivery=pending (Observer labels 投递中)
+✔ A10 Topic 已处理后旧 agentDeliveryStatus 仍为 pending (3.6406ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 731.2869

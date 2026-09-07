@@ -209,7 +209,7 @@ Topic 处理模型使用存储 domain v7。已有 v6 数据必须先按[离线�
 
 ### 常驻主会话
 
-每个群唯一绑定一个 resident Session。群名称、群 ID、职责和稳定决策协议通过 DSH `systemPrompt.section` 注入。消息明确指向已配置的 Agent 名称/别名、使用 `cc:`，或明确确认此前“是否需要我处理”的询问，并形成职责范围内的可验证目标时，主会话可以创建 Task；未明确指名但判断事项应形成任务时，主会话先在群里询问“这个事项是否需要我处理？”，收到肯定答复后再结合原消息和后续补充创建。主会话只负责选择 Task 路由；Runtime 使用原始群消息生成来源证据信封交给叶子，主会话生成的根因、完成度、方案优劣或排除性判断不作为叶子事实。
+每个群唯一绑定一个 resident Session。群名称、群 ID、职责和稳定决策协议通过 DSH `systemPrompt.section` 注入。消息明确指向已配置的 Agent 名称/别名、使用 `cc:`，或明确确认此前“是否需要我处理”的询问，并形成职责范围内的可验证目标时，主会话可以创建 Task；未明确指名但判断事项应形成任务时，主会话先在群里询问“这个事项是否需要我处理？”，收到肯定答复后再结合原消息和后续补充创建。Host 在接受 `new-task` 时再次校验群职责非空，并要求依据消息明确指向 Agent，或引用本插件此前持久化的 `task-proposal` 询问，不能只信任模型结论。主会话只负责选择 Task 路由；Runtime 使用原始群消息生成来源证据信封交给叶子，主会话生成的根因、完成度、方案优劣或排除性判断不作为叶子事实。
 
 每条新消息先可靠持久化到 Inbox，接收接口随后返回；Resident 使用 `group_topic_route_submit` 对冻结的消息批次归类，再以 Topic 为单位处理增量。Topic 跨 turn 存在，一个消息可以关联多个 Topic；已归类的无关话题不会使当前话题决策失效。同群仍有未归类输入时，应先完成归类再判断其影响。归类、Topic 决策与 Task 执行分别维护进度，DWS 补拉完成只证明可靠接收。
 
@@ -237,9 +237,9 @@ Task 可设置独立的简短标题用于看板展示；标题与 objective 分�
 
 Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存标题、目标、验收标准、执行状态、结果，以及 `topicRefs: [{topicId, revision}]` 和 `inputVersion`；不保存 sourceMessageId、triggerHistory、messageHistory 或群消息正文副本。`group_task_context_get` 返回执行约定与 Topic 引用，原始上下文由 `group_topic_context_get` 按固定 revision 分页读取。只有确实影响任务的新增信息才推进 inputVersion，不向每个关联 Task 广播全部讨论。运行中和等待中的 Task 接纳上下文时继续原轮次；完成或归档 Task 只有被明确重开才开启新轮次。runHistory 和 objectiveHistory 保留 Topic 版本与执行版本，归档不删除历史。
 
-消息的 `routingStatus` 表示待归类、已归类或归类失败；Topic 的 `processedRevision` 表示决策及所需动作已可靠落地；Task 的输入下发、输入确认与任务完成另行记录。任何一项均不能替代另一项。运行看板的“话题”页展示群级归类积压和待处理话题，可分页读取固定版本消息；Task 卡片上的话题链接打开该任务接纳的版本。
+消息的 `routingStatus` 表示待归类、已归类或归类失败；Topic 的 `processedRevision` 表示决策及所需动作已可靠落地；Task 的输入下发、输入确认与任务完成另行记录。任何一项均不能替代另一项。运行看板的“话题”页展示群级归类积压和待处理话题，可分页读取固定版本消息；群消息状态由 `routingStatus`、Topic revision 与 `processedRevision` 投影为“待归类、话题处理中、已处理、归类失败”，不再把旧 `agentDeliveryStatus` 当成业务处理完成度。Task 卡片上的话题链接打开该任务接纳的版本。
 
-常驻群聊主会话只负责上下文理解和结构化选路，不暴露 `get_goal`、`create_goal`、`update_goal`，也不注入 Goal 工具说明。Task 叶子会话仍由 Runtime 使用 DSH Goal 管理执行、阻塞、恢复与完成。
+常驻群聊主会话只负责上下文理解和结构化选路，不暴露 `get_goal`、`create_goal`、`update_goal`，也不注入 Goal 工具说明；其 DSH 文件权限 preset 固定为 `read-only`。Task 叶子会话由 Runtime 使用 DSH Goal 管理执行、阻塞、恢复与完成，文件权限 preset 为 `workspace-write`。这两个 preset 约束文件效果；DWS 或其他网络工具仍须由 Host 的来源授权门禁和工具自身权限共同约束。
 
 主会话向运行中或等待中的叶子传递任务上下文、目标修订、真人批复、恢复提示和结果驳回时统一使用 DSH `steer`，在叶子的下一个 step 边界插入，不使用 `followup` 排队到下一 Turn。
 
@@ -247,7 +247,7 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存�
 
 人工 Web Task 输入通过 `POST /tasks`、`POST /tasks/{taskId}/context` 和 `POST /tasks/{taskId}/reopen` 提交。三者均需由调用方提供稳定 `requestId` 与原始 `context`；新建还需 groupId、title、objective、acceptanceCriteria，可不提供 topicRefs，由 Runtime 建立 Web 来源 Topic。追加和重开需提供 topicRefs、inputVersion、runSequence，均从当前 Task/Topic 查询获得。相同 requestId 只可重试同一内容；版本或身份冲突返回 HTTP 409，持久接受但动作未完成返回 202。body 不接受 taskId、childSessionId 或伪造渠道来源。Resident 不持有这三个 Web 写入口，只通过带原始依据的 `group_decision_submit` 发起业务动作。
 
-取消入口 `POST /tasks/{taskId}/cancel` 同样要求 requestId、topicRefs、inputVersion、runSequence，以 reason 保存人工原文。Web 来源不伪造钉钉引用或 @。Resident 已移除 `group_task_create`、`group_task_context_append`、`group_task_reopen` 直写工具；误归类通过 `group_topic_route_review` 提交修订，所有非空回复必须带 `replyReview.kind`。Task 输入版本变化后旧 checkpoints 归入执行事件，新输入必须重新提交 plan-confirmed，不能继承旧轮检查点直接完成。
+取消入口 `POST /tasks/{taskId}/cancel` 同样要求 requestId、topicRefs、inputVersion、runSequence，以 reason 保存人工原文。Web 来源不伪造钉钉引用或 @。Resident 已移除 `group_task_create`、`group_task_context_append`、`group_task_reopen` 直写工具；误归类通过 `group_topic_route_review` 提交修订，所有非空回复必须带 `replyReview.kind`。Task 补充输入必须声明 `progressImpact`。仅当目标、验收、阶段和既有证据有效性均未变化时，`preserve` 才保留 checkpoints；其他情况按 `replan` 把旧 checkpoints 归入执行事件，并要求重新提交 plan-confirmed。跨 Topic 补充会合并固定版本引用，不覆盖此前执行依据。
 
 Topic 查询的 `processing` 提供最新未完成意图的 decisionId、status、appliedOperations、totalOperations 和有界 error，不返回动作正文。Observer 对应显示处理失败或处理中及动作进度，便于区分消息已接收、Topic 已决策与动作实际完成。
 
@@ -257,8 +257,9 @@ Topic 查询的 `processing` 提供最新未完成意图的 decisionId、status�
 
 - 缺少任务信息：叶子进入 information waiting，由主会话结合 Task 所引用 Topic 固定版本的消息时间线，向真正能够补充该信息的一位或多位参与人询问。
 - Task 遇到操作红线、环境异常或需要真人判断时进入 `human-intervention`，页面“人工介入”和 DWS 登录人本人私聊共享同一阻塞状态机。
+- waiting 不占 `maxConcurrentTasks` 执行名额；信息或人工回复到达时先复核容量，容量不足则进入 FIFO queued，保留待恢复上下文，获得名额后续接原叶子 Session 和 Goal。
 - 钉钉人工处理必须引用阻塞消息并提供非空意见；明确回复“拒绝”“不同意”或“不批准”时记为不执行，其余回复使 Task 继续，并保留完整原文。Runtime 使用独立的个人 IM 实时订阅按被引用消息的 `messageId` 精确关联并恢复 Task，历史查询仅用于离线恢复；等待不设超时。
-- 相同阻塞范围复用原记录，已经人工确认可继续的范围不会重复请求；范围变化才创建新的人工介入事项。
+- 批准复用指纹绑定 taskId、runSequence、阻塞类别、规范化动作和风险；旧版本没有这些字段的记录不会自动授权当前轮次。
 
 ### 完成通知
 
@@ -270,7 +271,7 @@ Topic 查询的 `processing` 提供最新未完成意图的 decisionId、status�
 
 叶子提交 `completed` 后，Runtime 会先以 coordinator 内部上下文注入的方式，让常驻模型对照当前目标、runSequence、inputVersion 和 Topic 输入版本审查本轮结果和证据，并通过 `group_task_review_submit` 返回独立审阅回执；该验收不是群成员消息，不得回复群聊或写入发信箱。若新增或修订范围未完成、缺少验证，Task 保持 `running`，缺口反馈给原叶子继续执行，不生成完成通知。
 
-除群成员明确撤销整个任务并提交 `task-cancel` 外，`running` 和 `waiting`（包括阻塞中）任务收到新增信息时只追加 `task-context`，继续同一执行轮次；只有 `completed` 任务（包括已归档展示）才允许 reopen 并初始化下一轮。
+除群成员明确撤销整个任务并提交 `task-cancel` 外，`running` 和 `waiting`（包括阻塞中）任务收到新增信息时只追加 `task-context`，继续同一执行轮次；只有 `completed` 任务（包括已归档展示）才允许 reopen 并初始化下一轮。普通阶段 checkpoint 由 Host 校验版本、顺序和证据后直接确认；计划、冲突、范围或风险变化等需要语义判断的 checkpoint 才交给 Resident。相同未审阅 checkpoint 重试复用同一持久记录，Supervisor 也会恢复遗留审阅，不重复追加。
 
 ## Web 运行看板
 

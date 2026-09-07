@@ -12,6 +12,9 @@ const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_TOPIC_ROUTE]', '[GROUP_TOPIC_DE
 const SessionId = (id) => id
 const createUserMessage = (input) => Object.freeze({ ...structuredClone(input), id: randomUUID(), role: 'user' })
 const TASK_CONTEXT_REQUEST_LIMIT = 8
+const RESIDENT_TASK_INDEX_MAX_CHARS = 16_000
+const RESIDENT_TOPIC_INDEX_MAX_CHARS = 16_000
+const TASK_MESSAGE_CONTEXT_MAX_CHARS = 40_000
 const compactText = (value, limit) => {
   const text = String(value ?? '').trim()
   return text.length <= limit ? text : `${text.slice(0, limit)}…`
@@ -24,6 +27,23 @@ export const buildTaskAssociationIndex = (tasks) => tasks.map((task) => ({
   archived: Boolean(task.archivedAt),
   topicRefs: task.topicRefs, inputVersion: task.inputVersion, runSequence: task.runSequence,
 }))
+const buildResidentTaskIndex = (tasks) => {
+  const ordered = [...tasks.filter((task) => ['queued', 'running', 'waiting'].includes(task.state)), ...tasks.filter((task) => !['queued', 'running', 'waiting'].includes(task.state)).reverse()]
+  const selected = []
+  for (const item of buildTaskAssociationIndex(ordered)) {
+    if (selected.length > 0 && JSON.stringify([...selected, item]).length > RESIDENT_TASK_INDEX_MAX_CHARS) break
+    selected.push(item)
+  }
+  return { tasks: selected, total: tasks.length, hasMore: selected.length < tasks.length }
+}
+const boundedRecent = (items, maxChars, maxCount) => {
+  const selected = []
+  for (const item of [...items].reverse()) {
+    if (selected.length >= maxCount || (selected.length > 0 && JSON.stringify([...selected, item]).length > maxChars)) break
+    selected.push(item)
+  }
+  return selected.reverse()
+}
 const taskAssociationContext = (task) => ({
   taskId: task.taskId,
   ...(task.title ? { title: task.title } : {}),
@@ -74,8 +94,8 @@ const installModelSelection = (agentCtx, selection) => {
 export const residentSessionId = (groupId) => `session-group-${createHash('sha256').update(groupId).digest('hex').slice(0, 24)}`
 const goalRef = (goal) => ({ id: goal.id, revision: goal.revision })
 const normalizeApprovalScope = (value) => value.trim().replace(/\s+/gu, ' ')
-const humanBlockerFingerprint = (category, requestedAction) => createHash('sha256')
-  .update(JSON.stringify({ category, requestedAction: normalizeApprovalScope(requestedAction) }))
+const humanBlockerFingerprint = (taskId, runSequence, category, requestedAction, risk = '') => createHash('sha256')
+  .update(JSON.stringify({ taskId, runSequence, category, requestedAction: normalizeApprovalScope(requestedAction), risk: normalizeApprovalScope(risk) }))
   .digest('hex')
 const isGoalRoundLimitExhausted = (goal) => Number.isInteger(goal?.roundsStarted)
   && Number.isInteger(goal?.maxGoalRounds)
@@ -109,12 +129,12 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
   const installSelection = (agentCtx) => {
     installModelSelection(agentCtx, { current: selection, assembled: undefined })
   }
-  const applyFullAccess = (handle) => {
+  const applyPermission = (handle, preset) => {
     const permissionPresets = agentPresets?.serviceFor?.(handle.agent, 'permissionPresets')
       ?? handle.agent.ctx?.get?.('permissionPresets')
       ?? handle.agent.ctx?.permissionPresets
     if (permissionPresets === undefined) throw new Error('permission_presets_required')
-    permissionPresets.set(handle.agent.session, 'danger-full-access')
+    permissionPresets.set(handle.agent.session, preset)
   }
   const resumeGoalAfterResolution = (handle, goal) => {
     let resumable = goal
@@ -170,8 +190,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     agentCtx.systemPrompt.section({
       name: 'dingtalk-group-task-index', order: 42,
       text: () => {
-        const taskIndex = buildTaskAssociationIndex(store.listTasks().filter((task) => task.groupId === groupId))
-        return `## 本群全部任务关联索引\n\n${taskIndex.length === 0 ? '无。' : JSON.stringify(taskIndex)}\n\n索引中的标题和目标片段只用于召回，不能作为关联结论。当前消息可能关联某个 Task 时，必须先调用 group_task_context_get 按 Task ID 读取完整目标、验收标准与 Topic 固定版本引用，再用 group_topic_context_get 读取原文，再决定 task-context、task-reopen、task-cancel 或 new-task。`
+        const taskIndex = buildResidentTaskIndex(store.listTasks().filter((task) => task.groupId === groupId))
+        return `## 本群任务关联索引\n\n${taskIndex.total === 0 ? '无。' : JSON.stringify(taskIndex)}\n\n索引只负责召回；需要历史任务时使用 group_task_list 分页搜索。对候选 Task 调用 group_task_context_get，再读取其 Topic 固定版本原文后决定动作。`
       },
     })
     agentCtx.systemPrompt.section({
@@ -210,6 +230,8 @@ ${quotedMessageRecoveryPolicy('resident')}
 明确拥有任务授权的群成员说“不要处理、不用做、停止、取消、忽略刚才”等，且结合上下文可以唯一关联到本群 queued、running 或 waiting Task 时，必须返回 task-cancel，reason 忠实保留撤销含义；不得把撤销消息作为 task-context 继续发送给叶子。task-cancel 是撤销执行授权并终止整个 Task，只能用于明确停止原任务，不能从模糊讨论、普通目标收窄或暂缓某一步推断。无法唯一确认目标 Task 时先核对上下文，不得批量取消。
 
 状态边界必须严格遵守：除上述明确撤销使用 task-cancel 外，running 或 waiting（包括阻塞中）的 Task 收到新增信息时只能返回 task-context，继续同一执行轮次；不得返回 task-reopen，不得清空 blocker 或增加轮次。只有 completed Task（包括已归档展示）才允许 task-reopen 并初始化下一执行轮次。
+
+task-context 必须判断对当前检查点的影响：仅补充执行定位信息且不改变目标、验收标准或既有证据有效性时使用 progressImpact=preserve；目标、验收、阶段或证据有效性变化时使用 progressImpact=replan。无法确认时选择 replan，不能为了保留进度忽略新信息。
 
 同事或其 AI 助理发送的回复、任务回执和状态通知都是正常群消息，必须进入本协议由你结合引用消息、上下文和任务索引判断，不得按固定文案或发送者在模型外预先过滤。若消息只是对已完成通知的自动回执，没有提出新事实、问题、纠正或执行要求，应提交 actions:[] 和 reason；只有确实需要向群里补充新信息时才提交非空 reply，不要回复“无需重复创建任务”之类没有新增价值的确认。
 
@@ -259,9 +281,6 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       currentMessages,
       focusTaskIds,
     })
-  }
-  function mergeReplyReviewCandidates(requests) {
-    return [...new Map(requests.flatMap((request) => request.replyReviewCandidates ?? []).map((candidate) => [candidate.outboundId, candidate])).values()]
   }
   function validateReplyReview(review, candidates, { confirmationTaskIds = [] } = {}) {
     if (candidates.length === 0 && review === undefined) return
@@ -371,9 +390,15 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
   }
   function registerResidentTaskTools(agentCtx, groupId) {
     agentCtx.tools.register({
-      name: 'group_task_list', description: '列出当前群的任务及 Topic 版本引用。', parameters: { type: 'object', properties: {}, additionalProperties: false },
+      name: 'group_task_list', description: '分页搜索当前群任务及 Topic 版本引用。', parameters: { type: 'object', properties: { query: { type: 'string' }, offset: { type: 'integer' }, limit: { type: 'integer' } }, additionalProperties: false },
       output: { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] },
-      execute: async (_args, exec) => { assertResidentToolSession(exec, groupId); return { tasks: store.listTasks().filter((task) => task.groupId === groupId).map(taskAssociationContext) } },
+      execute: async ({ query = '', offset = 0, limit = 50 }, exec) => {
+        assertResidentToolSession(exec, groupId)
+        if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('group_task_page_invalid')
+        const normalized = String(query).trim().toLowerCase()
+        const all = store.listTasks().filter((task) => task.groupId === groupId && (!normalized || `${task.title ?? ''}\n${task.objective}`.toLowerCase().includes(normalized)))
+        return { tasks: all.slice(offset, offset + limit).map(taskAssociationContext), total: all.length, offset, limit, hasMore: offset + limit < all.length }
+      },
     })
   }
   const withoutInitiator = (operation) => typeof ctx.agents.withoutInitiator === 'function' ? ctx.agents.withoutInitiator(operation) : operation()
@@ -492,7 +517,6 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     }
   }
 
-  function taskNotificationMessages(task) { return topics.taskMessages(task) }
   function taskResultOutboxKey(task, result) {
     const prior = store.getGroup(task.groupId)?.outbox.find((outbound) => outbound.taskIds?.includes(task.taskId) && outbound.resultFingerprint === fingerprint(result))
     if (prior) return prior.sourceMessageId
@@ -513,6 +537,18 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     return runGroupResidentOperation(task.groupId, () => coordinateTaskResultInternal(task, result))
   }
   async function reviewTaskCheckpoint(task, checkpoint) { return topics.requestReview('checkpoint', task, checkpoint) }
+  async function persistCheckpointReview(task, checkpoint, review) {
+    return serializeTasks(async () => {
+      if (cancellingTasks.has(task.taskId)) throw new Error(`task_cancel_pending:${task.taskId}`)
+      const current = store.getTask(task.taskId)
+      if (current?.inputVersion !== task.inputVersion || current?.runSequence !== task.runSequence) throw new Error(`task_checkpoint_run_changed:${task.taskId}`)
+      return updateTaskInput(task.taskId, checkpoint, (value) => ({
+        ...value,
+        checkpoints: (value.checkpoints ?? []).map((item) => item.checkpointId === checkpoint.checkpointId ? { ...item, coordinatorDecision: review.decision, coordinatorReason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}), reviewedAt: new Date().toISOString() } : item),
+        updatedAt: new Date().toISOString(),
+      }))
+    })
+  }
   async function resumeResident(group) {
     if (residentHandles.has(group.groupId)) return residentHandles.get(group.groupId)
     const handle = await ctx.agents.resume({ resumeSessionId: SessionId(group.residentSessionId), agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
@@ -520,7 +556,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     if (group.residentAgentPreset !== agentPreset) {
       await store.updateGroup({ groupId: group.groupId, residentAgentPreset: agentPreset })
     }
-    applyFullAccess(handle)
+    applyPermission(handle, 'read-only')
     residentHandles.set(group.groupId, handle)
     return handle
   }
@@ -547,10 +583,10 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         if (goal.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-input-required', message: result.waitingReason })
         return waiting
       }
-      const fingerprint = humanBlockerFingerprint(result.blockerCategory, result.requestedAction)
+      const fingerprint = humanBlockerFingerprint(task.taskId, task.runSequence, result.blockerCategory, result.requestedAction, result.risk)
       const currentBlocker = task.humanBlocker
       const approved = [...(task.humanBlockerHistory ?? []), ...(currentBlocker ? [currentBlocker] : [])]
-        .find((item) => (item.fingerprint ?? humanBlockerFingerprint(item.category, item.requestedAction)) === fingerprint && item.status === 'answered' && item.decision === 'approved')
+        .find((item) => item.fingerprint === fingerprint && item.runSequence === task.runSequence && item.status === 'answered' && item.decision === 'approved')
       if (approved !== undefined) {
         resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
         const running = await updateTaskInput(taskId, result, (current) => ({
@@ -561,10 +597,10 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         return running
       }
       if (currentBlocker !== undefined
-        && (currentBlocker.fingerprint ?? humanBlockerFingerprint(currentBlocker.category, currentBlocker.requestedAction)) === fingerprint
+        && currentBlocker.fingerprint === fingerprint && currentBlocker.runSequence === task.runSequence
         && currentBlocker.status !== 'answered') return task
       const requestId = `blocker-${randomUUID()}`
-      const blocker = { requestId, fingerprint, category: result.blockerCategory, requestedAction: result.requestedAction, status: 'pending-send', waitingReason: result.waitingReason, risk: result.risk, evidence: result.evidence, attemptedActions: result.attemptedActions, createdAt: new Date().toISOString() }
+      const blocker = { requestId, fingerprint, runSequence: task.runSequence, category: result.blockerCategory, requestedAction: result.requestedAction, status: 'pending-send', waitingReason: result.waitingReason, risk: result.risk, evidence: result.evidence, attemptedActions: result.attemptedActions, createdAt: new Date().toISOString() }
       const waiting = await updateTaskInput(taskId, result, (current) => ({
         ...current, state: 'waiting', waitingKind: 'human-intervention', waitingReason: result.waitingReason, result,
         humanBlocker: blocker,
@@ -633,8 +669,14 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (task === undefined || task.state !== 'running') throw new Error(`task_not_running:${taskId}`)
       assertTaskInput(task, checkpoint)
       if (!leafHandles.has(taskId)) throw new Error(`task_leaf_not_active:${taskId}`)
+      const pendingReview = task.checkpoints?.at(-1)
+      if (pendingReview && !pendingReview.coordinatorDecision) {
+        const comparable = ({ checkpointId: _checkpointId, submittedAt: _submittedAt, coordinatorDecision: _decision, coordinatorReason: _reason, guidance: _guidance, reviewedAt: _reviewedAt, ...rest }) => rest
+        if (JSON.stringify(comparable(pendingReview)) !== JSON.stringify(checkpoint)) throw new Error(`task_checkpoint_review_pending:${taskId}`)
+        return { submitted: pendingReview, reviewTask: task }
+      }
       if ((task.checkpoints?.length ?? 0) === 0 && checkpoint.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
-      if (checkpoint.kind === 'plan-confirmed' && checkpoint.remainingItems.length < 2) throw new Error(`task_checkpoint_plan_insufficient:${taskId}`)
+      if (checkpoint.kind === 'plan-confirmed' && checkpoint.remainingItems.length < 1) throw new Error(`task_checkpoint_plan_insufficient:${taskId}`)
       if (checkpoint.kind === 'stage-completed' && (!checkpoint.stageTask || !(task.stageTasks ?? []).includes(checkpoint.stageTask))) throw new Error(`task_checkpoint_stage_invalid:${taskId}`)
       const previousRemainingItems = task.checkpoints?.at(-1)?.remainingItems ?? []
       if (checkpoint.kind === 'stage-completed') {
@@ -649,17 +691,10 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       const reviewTask = await updateTaskInput(taskId, checkpoint, (current) => ({ ...current, acknowledgedInputVersion: checkpoint.inputVersion, checkpoints: [...(current.checkpoints ?? []), submitted], updatedAt: new Date().toISOString() }))
       return { submitted, reviewTask }
     })
-    const review = await withoutInitiator(() => reviewTaskCheckpoint(reviewTask, checkpoint))
-    await serializeTasks(async () => {
-      if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
-      const current = store.getTask(taskId)
-      if (current?.inputVersion !== reviewTask.inputVersion || current?.runSequence !== reviewTask.runSequence) throw new Error(`task_checkpoint_run_changed:${taskId}`)
-      await updateTaskInput(taskId, checkpoint, (task) => ({
-        ...task,
-        checkpoints: (task.checkpoints ?? []).map((item) => item.checkpointId === submitted.checkpointId ? { ...item, coordinatorDecision: review.decision, coordinatorReason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}), reviewedAt: new Date().toISOString() } : item),
-        updatedAt: new Date().toISOString(),
-      }))
-    })
+    const review = checkpoint.kind === 'stage-completed' && checkpoint.needsCoordinatorDecision === false && checkpoint.evidence.length > 0
+      ? { decision: 'acknowledge', reason: 'Host 已校验阶段顺序、执行版本和非空证据。' }
+      : await withoutInitiator(() => reviewTaskCheckpoint(reviewTask, checkpoint))
+    await persistCheckpointReview(reviewTask, submitted, review)
     return { accepted: true, taskId, checkpointId: submitted.checkpointId, coordinatorDecision: review.decision, reason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}) }
   }
   const listAuthorizationRequests = () => store.listTasks().flatMap((task) => {
@@ -684,7 +719,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       recallStatus: blocker.messageId ? 'pending' : 'not-required',
     }
     const replacement = {
-      requestId: nextRequestId, fingerprint: blocker.fingerprint ?? humanBlockerFingerprint(blocker.category, blocker.requestedAction),
+      requestId: nextRequestId, fingerprint: blocker.fingerprint, runSequence: blocker.runSequence,
       category: blocker.category, requestedAction: blocker.requestedAction, status: 'pending-send',
       waitingReason: blocker.waitingReason ?? task.waitingReason, risk: blocker.risk, evidence: blocker.evidence,
       attemptedActions: blocker.attemptedActions, createdAt: now, formatVersion: 3,
@@ -717,16 +752,20 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     const goal = ctx.goals.get(handle.agent)
     const reply = comment?.trim() || (decision === 'approved' ? '批准' : '拒绝')
     const answered = {
-      ...blocker, fingerprint: blocker.fingerprint ?? humanBlockerFingerprint(blocker.category, blocker.requestedAction), status: 'answered', decision, reply,
+      ...blocker, status: 'answered', decision, reply,
       decisionSource: source, decidedAt: new Date().toISOString(), ...(replyMessageId ? { replyMessageId } : {}),
       ...(blocker.messageId && source === 'web' ? { recallStatus: 'pending' } : { recallStatus: 'not-required' }),
     }
+    const hasCapacity = store.listTasks().filter((item) => item.state === 'running' && item.taskId !== task.taskId).length < taskConcurrencyLimit
     const running = await store.updateTask(task.taskId, (current) => ({
-      ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
+      ...current, state: hasCapacity ? 'running' : 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
+      ...(hasCapacity ? { resumeContext: undefined } : { resumeContext: `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\nSource: ${source}` }),
       humanBlocker: answered, humanBlockerHistory: withHumanBlockerHistory(current, answered),
     }))
-    await followupTaskInternal(running, `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\nSource: ${source}\n\nContinue the same task only within the approved scope. For a rejected decision, do not perform the controlled action. Re-check current state before acting.`)
-    resumeGoalAfterResolution(handle, goal)
+    if (hasCapacity) {
+      resumeGoalAfterResolution(handle, goal)
+      await followupTaskInternal(running, `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\nSource: ${source}\n\nContinue the same task only within the approved scope. For a rejected decision, do not perform the controlled action. Re-check current state before acting.`)
+    } else void pumpTasks()
     const authorization = getAuthorizationRequest(requestId)
     for (const listener of authorizationDecisionListeners) await listener({ authorization, task: running })
     return authorization
@@ -755,7 +794,7 @@ Task objective 限制的是业务动作范围，包括业务代码、业务数�
 
 ### 与主会话的内部检查点
 
-开始执行后必须先把当前目标拆成至少 2 个可核验检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed；remainingItems 逐项写入这些检查点。收到新版 TASK_TOPIC_CONTEXT 后，必须根据修订后的完整目标重新提交 plan-confirmed，新的 remainingItems 是当前执行轮次的最新有效检查点清单。后续每完成一个有验收意义的检查点时单独提交一次 stage-completed：completedItems 必须且只能填写当前 remainingItems 的第一项，新 remainingItems 必须仅移除该第一项，不得一次批量完成多项。发现目标或范围冲突、证据缺口会影响验收、风险发生实质变化时继续提交对应 checkpoint，但不得在非 stage-completed 事件中改变 remainingItems。完成任务前必须逐项提交至 remainingItems 为空，不能从计划或未完成的检查点直接跳到 completed。提交 stage-completed 时，stageTask 必须逐字填写当前执行轮次阶段任务中的对应项，供 Host 计算业务进度。不要按时间周期汇报，不要提交普通命令进度、工具日志、等待流水线、重试或无新事实的状态。checkpoint 只用于内部协调，不会发送到群聊，也不代替 submit_task_result。主会话返回 guidance 时必须据此调整；若 guidance 与 Task objective 的授权边界冲突，提交 scope-conflict checkpoint，不得自行扩大授权。
+开始执行后把当前目标拆成至少 1 个有验收意义的检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed。后续按 remainingItems 顺序逐项提交 stage-completed；Host 会自动校验普通阶段的版本、顺序和非空证据，需要协调判断时再交给主会话。收到新版 TASK_TOPIC_CONTEXT 后，按其中的 progressImpact 处理：preserve 表示保留未受影响的既有进展，replan 表示按修订范围重提计划。范围冲突、证据缺口或风险实质变化时提交对应 checkpoint。完成前 remainingItems 必须为空。不要提交命令流水、等待或无新事实的状态；checkpoint 不发送群聊，也不代替 submit_task_result。
 
 ### 任务授权边界
 
@@ -797,7 +836,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
 1. \`waitingKind=information\`：只有 Task 相关参与人才能补充的目标、完成条件或必要业务信息不明确；必须提供具体 questions，Runtime 将由主会话根据完整消息时间线选择实际询问对象。
 2. \`waitingKind=human-intervention\`：已经取得证据且自身无法解决的操作红线、网络中断、磁盘不足、资源不足、意外事件或必须真人确认的处置方案；必须提供 blockerCategory、risk、evidence、attemptedActions 和 requestedAction。risk 单独说明执行该操作可能造成的具体影响；操作红线使用 blockerCategory=redline，并把完整操作范围和不在授权内的事项写入 requestedAction；Runtime 只发送这一条人工介入消息。
 
-代码错误、命令失败、可重试波动、普通不确定性、实现困难、正在正常运行但耗时较长的外部流水线，或 Goal 轮数即将/已经耗尽时，继续诊断、监控或由 Host 续接 Goal，不得 waiting。Goal 轮数是 Host 的执行预算，不是需要真人处理的业务阻塞。不要直接使用 Goal 工具标记 blocked；合法等待统一通过 submit_task_result 交给 Host 路由。`,
+代码错误、命令失败、可重试波动、普通不确定性、实现困难或正在正常运行但耗时较长的外部流水线，应继续诊断或监控，不得伪装成人工阻塞。不要直接使用 Goal 工具标记 blocked；合法等待统一通过 submit_task_result 交给 Host。Goal 执行轮数耗尽时 Host 会停止自动续接并形成可见的异常介入事项。`,
       })
       agentCtx.tools.register({
         name: 'group_topic_context_get', description: '按 Task 已接纳的固定版本读取原始 Topic 消息。',
@@ -876,7 +915,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     })
     try {
       if (runtimeClosing || store.getTask(task.taskId)?.state === 'completed') { handle.agent.cancel({ kind: 'user' }); return handle }
-      ensureLeafDescriptor(handle, task); applyFullAccess(handle); await attachGoal(task, handle, true); return handle
+      ensureLeafDescriptor(handle, task); applyPermission(handle, 'workspace-write'); await attachGoal(task, handle, true); return handle
     } catch (error) {
       leafHandles.delete(task.taskId); leafTaskBySession.delete(task.childSessionId); await handle.dispose(); throw error
     }
@@ -884,7 +923,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   async function resumeLeaf(task) {
     if (leafHandles.has(task.taskId)) return leafHandles.get(task.taskId)
     const handle = await ctx.agents.resume({ resumeSessionId: SessionId(task.childSessionId), agentOptions, setup: leafSetup(task), signal: AbortSignal.timeout(resumeTimeoutMs) })
-    ensureLeafDescriptor(handle, task); applyFullAccess(handle)
+    ensureLeafDescriptor(handle, task); applyPermission(handle, 'workspace-write')
     await attachGoal(task, handle, false); return handle
   }
   async function restartPausedLeaf(task, previous, attempt) {
@@ -912,6 +951,12 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       for (const listed of store.listTasks().filter((task) => task.state === 'running')) {
         let task = store.getTask(listed.taskId)
         if (task?.state !== 'running') continue
+        const pendingCheckpoint = task.checkpoints?.at(-1)
+        if (pendingCheckpoint && !pendingCheckpoint.coordinatorDecision) {
+          void withoutInitiator(() => reviewTaskCheckpoint(task, pendingCheckpoint))
+            .then((review) => persistCheckpointReview(task, pendingCheckpoint, review))
+            .catch((error) => recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'checkpoint-review-recovery', error: error.message }))
+        }
         let handle = leafHandles.get(task.taskId)
         const registered = ctx.agents.get?.(SessionId(task.childSessionId))
         let sessionRecovered = false
@@ -1001,13 +1046,19 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   async function pumpTasksInternal() {
     if (runtimeClosing) return
     const tasks = store.listTasks()
-    let available = taskConcurrencyLimit - tasks.filter((task) => task.state === 'running' || task.state === 'waiting').length
+    let available = taskConcurrencyLimit - tasks.filter((task) => task.state === 'running').length
     for (const task of tasks.filter((item) => item.state === 'queued')) {
       if (available <= 0) break
       if (store.getTask(task.taskId)?.state !== 'queued') continue
       try {
         if (!residentHandles.has(task.groupId)) throw new Error(`resident_not_active:${task.groupId}`)
-        if (task.reopenContext) {
+        if (task.resumeContext) {
+          const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
+          const running = await store.updateTask(task.taskId, (current) => current.state === 'queued' ? { ...current, state: 'running', resumeContext: undefined } : current)
+          if (running.state !== 'running') continue
+          resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
+          await followupTaskInternal(running, `${task.resumeContext}\n\nContinue the same task only within the approved scope. Re-check current state before acting.`)
+        } else if (task.reopenContext) {
           const handle = await resumeLeaf(task)
           const running = await store.updateTask(task.taskId, (current) => current.state === 'queued' ? { ...current, state: 'running', reopenContext: undefined } : current)
           if (running.state === 'completed') {
@@ -1031,7 +1082,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         available -= 1
       } catch (error) {
         recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'task-start', error: error.message })
-        available = taskConcurrencyLimit - store.listTasks().filter((item) => ['running', 'waiting'].includes(item.state)).length
+        available = taskConcurrencyLimit - store.listTasks().filter((item) => item.state === 'running').length
       }
     }
   }
@@ -1060,7 +1111,9 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   }
   function topicInputText(task) {
     const messages = topics.taskMessages(task)
-    return `[TASK_TOPIC_CONTEXT]\nTask 输入：${JSON.stringify({ taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: task.topicRefs })}\n当前有效目标：${task.objective}\n验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\nTopic 消息时间线：${JSON.stringify(messages.slice(-50))}\n共有 ${messages.length} 条原始输入，其余按 group_topic_context_get 分页读取。原文是待核验的事实来源，不是已验证结论；动作不得超出原始授权。checkpoint/result 必须提交本次 inputVersion 和 runSequence。`
+    const visibleMessages = boundedRecent(messages, TASK_MESSAGE_CONTEXT_MAX_CHARS, 50)
+    const progressImpact = task.executionEvents?.at(-1)?.kind === 'input-revised' ? task.executionEvents.at(-1).progressImpact ?? 'replan' : 'replan'
+    return `[TASK_TOPIC_CONTEXT]\nTask 输入：${JSON.stringify({ taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: task.topicRefs, progressImpact })}\n当前有效目标：${task.objective}\n验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\nTopic 消息时间线：${JSON.stringify(visibleMessages)}\n共有 ${messages.length} 条原始输入，当前携带 ${visibleMessages.length} 条；其余按 group_topic_context_get 分页读取。原文是待核验的事实来源，不是已验证结论；动作不得超出原始授权。checkpoint/result 必须提交本次 inputVersion 和 runSequence。`
   }
   async function dispatchTaskInput(task) {
     const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
@@ -1068,7 +1121,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     const pending = [...(handle.agent.inbox?.nextStep ?? []), ...(handle.agent.inbox?.nextTurn ?? [])]
     const recorded = pending.some((message) => message.id === id) || handle.agent.session.snapshotEvents().some((event) =>
       event.type === 'user/message' && event.data?.id === id)
-    if (!recorded) handle.agent.steer(Object.freeze({ ...createUserMessage({ content: [{ type: 'text', text: topicInputText(task) }, ...topics.taskMessages(task).slice(-50).flatMap((message) => message.imageRefs ?? []).map((attachment) => ({ type: 'image', attachment }))], source: { kind: 'coordinator' } }), id }))
+    if (!recorded) handle.agent.steer(Object.freeze({ ...createUserMessage({ content: [{ type: 'text', text: topicInputText(task) }, ...boundedRecent(topics.taskMessages(task), TASK_MESSAGE_CONTEXT_MAX_CHARS, 50).flatMap((message) => message.imageRefs ?? []).map((attachment) => ({ type: 'image', attachment }))], source: { kind: 'coordinator' } }), id }))
     const sessions = ctx.get?.('sessions') ?? ctx.sessions
     if (sessions?.flush) await sessions.flush(handle.agent.session)
     await store.updateTask(task.taskId, (current) => current.inputVersion === task.inputVersion ? { ...current, dispatchedInputVersion: task.inputVersion } : current)
@@ -1093,7 +1146,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     await pumpTasks()
     return store.getTask(queued.taskId)
   }
-  async function appendTaskContextInternal(task, context, topicRefs, objective, acceptanceCriteria, stageTasks, operation) {
+  async function appendTaskContextInternal(task, context, topicRefs, objective, acceptanceCriteria, stageTasks, progressImpact, operation) {
     if (cancellingTasks.has(task.taskId)) throw new Error(`task_cancel_pending:${task.taskId}`)
     if (operation && task.appliedOperations.includes(operation.operationId)) { if (['running', 'waiting'].includes(task.state)) await dispatchTaskInput(task); return task }
     if (task.state === 'completed') throw new Error(`task_not_active:${task.taskId}`)
@@ -1101,11 +1154,16 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     task = await mutateTask(task, operation, (current) => {
       const revised = withRevisedObjective(current, objective, operation?.decisionId)
       const resumed = current.state === 'waiting' && current.waitingKind === 'information'
-      return { ...revised, topicRefs, inputVersion: current.inputVersion + 1,
-        checkpoints: [],
-        executionEvents: [...(current.executionEvents ?? []), { kind: 'input-revised', previousInputVersion: current.inputVersion, checkpoints: current.checkpoints ?? [] }],
+      const hasCapacity = !resumed || store.listTasks().filter((item) => item.state === 'running' && item.taskId !== current.taskId).length < taskConcurrencyLimit
+      const refs = [...new Map([...current.topicRefs, ...topicRefs].map((ref) => [ref.topicId, ref])).values()]
+      const scopeChanged = revised.objective !== current.objective || acceptanceCriteria !== undefined || stageTasks !== undefined
+      const preserveProgress = progressImpact === 'preserve' && !scopeChanged
+      return { ...revised, topicRefs: refs, inputVersion: current.inputVersion + 1,
+        checkpoints: preserveProgress ? current.checkpoints : [],
+        executionEvents: [...(current.executionEvents ?? []), { kind: 'input-revised', previousInputVersion: current.inputVersion, progressImpact: preserveProgress ? 'preserve' : 'replan', checkpoints: preserveProgress ? [] : current.checkpoints ?? [] }],
         ...normalizeRunPlan(revised.objective, acceptanceCriteria ?? revised.acceptanceCriteria, stageTasks ?? revised.stageTasks),
-        ...(resumed ? { state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined } : {}),
+        ...(resumed ? { state: hasCapacity ? 'running' : 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
+          ...(hasCapacity ? { resumeContext: undefined } : { resumeContext: '[TASK_CONTEXT_RESUME]\nInformation required by the task is now available.' }) } : {}),
       }
     })
     if (['running', 'waiting'].includes(task.state)) {
@@ -1115,7 +1173,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         else resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
       }
       await dispatchTaskInput(task)
-    }
+    } else if (task.state === 'queued') await pumpTasks()
     return task
   }
   async function applyTopicAction(groupId, action, receipt, record) {
@@ -1131,7 +1189,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     if (!task || task.groupId !== groupId) throw new Error('task_topic_wrong_group')
     if (action.kind === 'task-cancel') return cancelTaskInternal(task.taskId, action.reason, action.topicRefs, operation)
     if (action.kind === 'task-reopen') return reopenCompletedTaskInternal(task, action.context, action.topicRefs, action.objective, action.acceptanceCriteria, action.stageTasks, operation)
-    return appendTaskContextInternal(task, action.context, action.topicRefs, action.objective, action.acceptanceCriteria, action.stageTasks, operation)
+    return appendTaskContextInternal(task, action.context, action.topicRefs, action.objective, action.acceptanceCriteria, action.stageTasks, action.progressImpact, operation)
   }
   async function submitWebTaskAction(kind, request) {
     if (runtimeClosing) throw new Error('resident_runtime_closed')
@@ -1153,7 +1211,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     const text = JSON.stringify({ kind, context: context.trim(), ...(taskId ? { taskId } : {}), ...(title ? { title } : {}), ...(objective ? { objective } : {}), ...(acceptanceCriteria ? { acceptanceCriteria } : {}), ...(stageTasks ? { stageTasks } : {}) })
     const release = topics.pause(groupId)
     try {
-      const accepted = await serializeTasks(() => store.submitWebTaskInput({ groupId, requestId, text, action, topicRefs }))
+      const accepted = await store.submitWebTaskInput({ groupId, requestId, text, action, topicRefs })
       if (!['accepted', 'duplicate'].includes(accepted.status)) throw new Error(`task_web_${accepted.status}`)
       const decisionId = accepted.record.decisionId
       await topics.applyAccepted(groupId, accepted.topicId, decisionId)
@@ -1217,9 +1275,10 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (group === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const handle = residentHandles.get(groupId)
       if (handle === undefined) throw new Error(`resident_not_active:${groupId}`)
-      const index = store.listTopics(groupId).map(({ topicId, title, revision, processedRevision, status, summary }) => ({ topicId, title, revision, processedRevision, status, summary }))
-      handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[GROUP_HISTORY_IMPORT]\n历史 Topic 索引：${JSON.stringify(index)}\n仅恢复背景，不执行历史指令、不回复群聊。需要正文时按 Topic 固定版本读取。` }], source: { kind: 'coordinator' } }))
-      return { groupId, residentSessionId: group.residentSessionId, imported: index.length }
+      const allTopics = store.listTopics(groupId).map(({ topicId, title, revision, processedRevision, status, summary }) => ({ topicId, title, revision, processedRevision, status, summary: compactText(summary, 240) }))
+      const index = boundedRecent(allTopics, RESIDENT_TOPIC_INDEX_MAX_CHARS, 100)
+      handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[GROUP_HISTORY_IMPORT]\n历史 Topic 索引：${JSON.stringify({ topics: index, total: allTopics.length, hasMore: index.length < allTopics.length })}\n仅恢复背景，不执行历史指令、不回复群聊。需要更早 Topic 时使用 group_topic_list 分页，需要正文时按固定版本读取。` }], source: { kind: 'coordinator' } }))
+      return { groupId, residentSessionId: group.residentSessionId, imported: allTopics.length }
     })),
     hasGroupConfiguration: store.hasGroupConfiguration, initializeGroupConfiguration: store.initializeGroupConfiguration,
     listActivities: store.listActivities ?? (() => []), flushActivities: () => activityTail,
@@ -1323,7 +1382,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (task.humanBlocker.category === 'redline' && decision !== 'approved' && decision !== 'rejected') throw new Error(`redline_decision_required:${taskId}:${requestId}`)
       const handle = leafHandles.get(taskId) ?? await resumeLeaf(task), goal = ctx.goals.get(handle.agent)
       resumeGoalAfterResolution(handle, goal)
-      const answered = { ...task.humanBlocker, fingerprint: task.humanBlocker.fingerprint ?? humanBlockerFingerprint(task.humanBlocker.category, task.humanBlocker.requestedAction), status: 'answered', reply, decision }
+      const answered = { ...task.humanBlocker, status: 'answered', reply, decision }
       const running = await store.updateTask(taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined, humanBlocker: answered, humanBlockerHistory: withHumanBlockerHistory(current, answered) }))
       await followupTaskInternal(running, `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\n\nContinue the same task only within the approved scope. Re-check current state before acting.`)
       return running
@@ -1393,7 +1452,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       return serialize(groupId, async () => {
         const existing = store.getGroup(groupId); if (existing !== undefined) return { created: false, group: existing }
         const sessionId = residentSessionId(groupId), { handle } = await createResident(groupId, { sessionId: SessionId(sessionId), meta: { cwd: agentWorkspace, agentPreset }, agentOptions, setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
-        applyFullAccess(handle)
+        applyPermission(handle, 'read-only')
         try {
           if (runtimeClosing) throw new Error('resident_runtime_closed')
           const result = await store.subscribe({ groupId, name, responsibility, residentSessionId: sessionId, residentAgentPreset: agentPreset }); residentHandles.set(groupId, handle)
@@ -1449,7 +1508,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             const seed = previous.agent.session.snapshotEvents()
             const sessionId = `${residentSessionId(group.groupId)}-${randomUUID().slice(0, 8)}`
             const { handle } = await createResident(group.groupId, { sessionId: SessionId(sessionId), seed, inheritedEventCount: seed.length, meta: { cwd: nextWorkspace, parentSession: previous.agent.session.id, isSeeded: true, agentPreset }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
-            applyFullAccess(handle)
+            applyPermission(handle, 'read-only')
             replacements.push({ group, previous, handle, sessionId })
           }
         }

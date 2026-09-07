@@ -256,24 +256,29 @@ window.__ModuleLoader__.load({
       const copyButton = (value, label) => React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: !value, onClick: (event) => { event.stopPropagation(); copyId(value).catch((cause) => setNavigationError(cause instanceof Error ? cause.message : String(cause))) }, style: { color: copiedId === value ? 'var(--dsw-alias-state-success-primary, #248a3d)' : undefined, cursor: value ? 'pointer' : 'default', fontSize: 10.5 } }, copiedId === value ? '已复制' : `复制${label}`)
       const selectedGroup = groupsById.get(selectedGroupId) || (data?.groups || [])[0]
       const selectedMessages = [...(selectedGroup?.messages || [])].sort((left, right) => Number(right.sequence || 0) - Number(left.sequence || 0))
-      const filteredMessages = selectedMessages.filter((message) => messageDeliveryFilter === 'all' || (message.agentDeliveryStatus || 'unknown') === messageDeliveryFilter)
+      const messageWorkflowState = (message) => {
+        if (message.routingStatus === 'failed') return 'failed'
+        if (message.routingStatus !== 'routed') return 'routing'
+        const related = (selectedGroup?.topics || []).flatMap((topic) => {
+          const entry = [...(topic.entries || [])].reverse().find((item) => item.messageId === message.messageId)
+          return entry?.action === 'add' && entry.messageVersion === message.messageVersion ? [{ topic, entry }] : []
+        })
+        if (related.some(({ topic, entry }) => (topic.processedRevision || 0) < entry.revision)) return 'processing'
+        return 'processed'
+      }
+      const filteredMessages = selectedMessages.filter((message) => messageDeliveryFilter === 'all' || messageWorkflowState(message) === messageDeliveryFilter)
       const pageSize = 10
       const pageCount = Math.max(1, Math.ceil(filteredMessages.length / pageSize))
       const currentMessagePage = Math.min(messagePage, pageCount)
       const visibleMessages = filteredMessages.slice((currentMessagePage - 1) * pageSize, currentMessagePage * pageSize)
       const delivery = {
-        delivered: { label: '已投递', state: 'done' },
-        failed: { label: '投递失败', state: 'error' },
-        'decision-retrying': { label: '判断自动恢复中', state: 'ongoing' },
-        'decision-failed': { label: '判断失败', state: 'error' },
-        'decision-commit-failed': { label: '处理提交失败', state: 'error' },
-        steered: { label: '已插话·判断中', state: 'ongoing' },
-        pending: { label: '投递中', state: 'ongoing' },
-        skipped: { label: '历史补拉·未投递', state: 'warning' },
-        unknown: { label: '历史状态未知', state: 'warning' },
+        routing: { label: '待归类', state: 'ongoing' },
+        processing: { label: '话题处理中', state: 'ongoing' },
+        processed: { label: '已处理', state: 'done' },
+        failed: { label: '归类失败', state: 'error' },
       }
       const messageRows = visibleMessages.map((message, rowIndex) => {
-        const status = delivery[message.agentDeliveryStatus] || delivery.unknown
+        const status = delivery[messageWorkflowState(message)]
         return React.createElement('tr', { key: message.messageId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
           React.createElement('td', { style: { ...tableBodyCell, width: 104 }, title: message.agentDeliveryError || '' }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
           React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, clampTableContent(React.createElement('strong', { style: { fontSize: 14, fontWeight: 600 } }, message.senderName || message.senderOpenDingTalkId || '发送人未记录'), React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, fmt(message.occurredAt)))),
@@ -400,11 +405,11 @@ window.__ModuleLoader__.load({
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' } },
           (data?.groups || []).length ? React.createElement(SelectMenu, { label: '选择群聊会话', value: selectedGroup?.groupId || '', options: (data?.groups || []).map((group) => ({ id: group.groupId, label: group.name || group.groupId })), onChange: (value) => { setSelectedGroupId(value); setMessagePage(1); setOutboxPage(1) }, fitContent: true }) : null,
           groupTableView === 'messages'
-            ? React.createElement(SelectMenu, { label: '筛选投递状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部投递状态' }, { id: 'delivered', label: '已投递' }, { id: 'failed', label: '投递失败' }, { id: 'pending', label: '投递中' }, { id: 'skipped', label: '历史未投递' }, { id: 'unknown', label: '状态未知' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
+            ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
             : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'confirmed', label: '已回读' }, { id: 'waiting', label: '待回读' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 910, borderCollapse: 'collapse', tableLayout: 'fixed' } },
-          React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 104 } }, 'Agent 投递'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '发送人 / 时间'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 240 } }, '消息'))),
+          React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 104 } }, '话题处理'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '发送人 / 时间'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 240 } }, '消息'))),
           React.createElement('tbody', null, ...(messageRows.length ? messageRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 4, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, '暂无符合条件的群聊消息'))])))),
         React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredMessages.length} 条 · 每页 ${pageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentMessagePage <= 1, onClick: () => setMessagePage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentMessagePage} / ${pageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentMessagePage >= pageCount, onClick: () => setMessagePage((page) => Math.min(pageCount, page + 1)) }, '下一页')))
       const outboxTable = React.createElement(React.Fragment, null,

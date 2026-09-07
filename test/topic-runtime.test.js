@@ -14,7 +14,7 @@ function memoryFacility(snapshot) {
 async function setup(t, options = {}) {
   const snapshot = options.snapshot ?? { tables: {}, global: null }
   const store = await openResidentStore(memoryFacility(snapshot))
-  if (!store.getGroup('g')) await store.subscribe({ groupId: 'g' })
+  if (!store.getGroup('g')) await store.subscribe({ groupId: 'g', responsibility: '处理测试任务' })
   await store.setAgentNames(['助理'])
   const sent = [], errors = [], tools = new Map(), applications = []
   const agent = { steer(message) { sent.push(message.content[0].text) }, whenIdle: options.whenIdle ?? (() => new Promise(() => {})) }
@@ -42,7 +42,7 @@ async function setup(t, options = {}) {
   }
 }
 async function ingest(h, messageId, extra = {}) {
-  await h.store.ingest({ groupId: 'g', messageId, text: messageId, senderOpenDingTalkId: 'od-a', occurredAt: '2026-09-07T00:00:00Z', ...extra })
+  await h.store.ingest({ groupId: 'g', messageId, text: `@助理 ${messageId}`, senderOpenDingTalkId: 'od-a', occurredAt: '2026-09-07T00:00:00Z', ...extra })
 }
 async function route(h, choices = {}) {
   await h.coordinator.schedule('g')
