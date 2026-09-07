@@ -1240,6 +1240,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   })
   for (const group of store.listGroups()) {
     try {
+      await store.reconcileMessageDeliveries({ groupId: group.groupId })
       await resumeResident(group)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)

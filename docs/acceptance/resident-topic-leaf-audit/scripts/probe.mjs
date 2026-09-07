@@ -199,9 +199,9 @@ test('A10 看板使用 Topic 工作流状态而非旧 agentDeliveryStatus', asyn
   const message = h.store.getGroup('g').messages[0]
   assert.equal(topic.processedRevision, topic.revision)
   assert.equal(message.routingStatus, 'routed')
-  assert.equal(message.agentDeliveryStatus, 'pending')
+  assert.equal(message.agentDeliveryStatus, 'delivered')
   const observer = await readFile(new URL('../../../../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(observer, /messageWorkflowState/)
   assert.doesNotMatch(observer, /delivery\[message\.agentDeliveryStatus\]/)
-  console.log('A10 fixed: legacy field remains for migration, Observer derives Topic workflow state')
+  console.log('A10 fixed: legacy field is reconciled, Observer still derives Topic workflow state')
 })

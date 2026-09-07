@@ -89,7 +89,7 @@ Topic
   createdAt, updatedAt
 ```
 
-`title` 是稳定、简短的话题名称，语义对齐 Task 名称：只概括可持续归类的共同讨论对象，优先使用 8–20 字的“对象 + 事项”短语，不复述动作清单、背景、进展、结论或消息原文。新建时最多 30 字，细节由 `summary` 承载。历史长标题不做字符截断；已有 `summary` 时由 Resident 通过独立请求重新理解和概括，提交时原子校验标题与摘要快照，过期则按最新摘要重试。没有摘要的历史 Topic 保留原标题，等待形成可用摘要后再处理。
+`title` 是稳定、简短的话题名称，语义对齐 Task 名称：只概括可持续归类的共同讨论对象，优先使用 8–20 字的“对象 + 事项”短语，不复述动作清单、背景、进展、结论或消息原文。新建时最多 30 字，细节由 `summary` 承载。历史长标题不做字符截断；v6 迁移形成的空摘要 Topic 先由 Resident 根据固定版本引用消息生成摘要，再基于该摘要重新理解和概括标题。两步提交分别原子校验 Topic revision、摘要和标题快照，过期则按最新数据重试。
 
 - entries 引用消息及其事实版本，保留加入、移出等变更记录，保证历史版本可还原。
 - 一个消息可属于多个 Topic，例如“上面两个问题都暂停”；正文只存一次。
@@ -162,6 +162,7 @@ Resident 每次先处理当前已进入的未归类消息集合，结合近期�
 | --- | --- |
 | `group_topic_route_submit`（新增） | 对一个冻结的消息批次提交全量归属；可以在同一批次创建多个 Topic，以本批 localKey 引用新 Topic，持久成功后返回正式 ID |
 | `group_topic_title_submit`（新增） | 提交 Resident 根据历史 Topic `summary` 重新概括的简短标题；拒绝超长标题、明显的摘要定长截取及过期快照，不产生业务动作或群回复 |
+| `group_topic_summary_submit`（新增） | 提交 Resident 根据历史 Topic 固定版本引用消息生成的独立摘要；只处理带 v6 迁移基线且已完成当前 revision 的空摘要 Topic |
 | `group_topic_context_get`（新增） | 按 topicId 和固定 revision 分页读取摘要、原始输入、未决问题、关联 Task 和历史回复；只读、同群校验 |
 | `group_decision_submit`（改造） | 每次提交一个 Topic decision：topicId、基准 revision、decision 请求 ID、actions、reply 或无回复原因、replyReview |
 | `group_reply_review_get`（复用改造） | 读取该 Topic 决策/结果通知绑定的历史回复候选及版本 |

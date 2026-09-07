@@ -31,7 +31,7 @@ export function projectTopicContext(context) {
 
 // 请求是可丢弃的模型输入；已经接受的业务意图只以 Store 中的 decision 为准。
 export function createTopicCoordinator({ store, getAgent, assertSession, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, retryDelayMs = 1000 }) {
-  const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map()
+  const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map(), summaryMigrations = new Map()
   const activeToolCalls = new Set()
   const scheduled = new Map(), applying = new Map(), timers = new Set(), retries = new Map(), retryTimers = new Map(), groupsBeingChanged = new Map()
   let closed = false
@@ -155,6 +155,15 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     monitor(agent, request, titleMigrations)
     return request
   }
+  function createSummaryMigrationRequest(groupId, topic) {
+    const messages = topicMessages(groupId, topic.topicId, topic.revision)
+    const request = { requestId: randomUUID(), groupId, topicId: topic.topicId, expectedRevision: topic.revision, expectedSummary: topic.summary }
+    summaryMigrations.set(request.requestId, request)
+    const envelope = { requestId: request.requestId, topicId: topic.topicId, revision: topic.revision, messages: messages.slice(-50), totalMessages: messages.length }
+    const agent = send(groupId, `[GROUP_TOPIC_SUMMARY_MIGRATION]\nTopic 请求：${JSON.stringify(envelope)}\n根据这个 Topic 的引用消息生成独立 summary，概括讨论对象、当前结论、范围和仍需处理的事项，不复制长段原文，不生成标题。通过 group_topic_summary_submit 提交；消息超过 50 条时先用 group_topic_context_get 分页读取完整固定版本。不执行任务、不回复群聊。`)
+    monitor(agent, request, summaryMigrations)
+    return request
+  }
   async function wake(groupId) {
     if (!live() || groupsBeingChanged.has(groupId) || !getAgent(groupId)) return []
     const group = store.getGroup(groupId)
@@ -163,9 +172,15 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     if (pending.length && ![...routes.values()].some((request) => request.groupId === groupId)) {
       createRouteRequest(groupId, boundedItems(pending, 40_000, 50))
     }
-    if (![...titleMigrations.values()].some((request) => request.groupId === groupId)) {
-      const legacy = store.listTopics(groupId).find((topic) => topic.title.length > TOPIC_TITLE_MAX_CHARS && topic.summary?.trim())
-      if (legacy) createTitleMigrationRequest(groupId, legacy)
+    const metadataMigrationPending = [...summaryMigrations.values(), ...titleMigrations.values()].some((request) => request.groupId === groupId)
+    if (!metadataMigrationPending) {
+      const topics = store.listTopics(groupId)
+      const longTitle = topics.find((topic) => topic.title.length > TOPIC_TITLE_MAX_CHARS && topic.summary?.trim())
+      if (longTitle) createTitleMigrationRequest(groupId, longTitle)
+      else {
+        const missingSummary = topics.find((topic) => topic.migrationBaseline && topic.processedRevision >= topic.revision && !topic.summary.trim() && topic.revision > 0)
+        if (missingSummary) createSummaryMigrationRequest(groupId, missingSummary)
+      }
     }
     const result = []
     for (const topic of store.listTopics(groupId)) {
@@ -321,6 +336,19 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if (summary.length > TOPIC_TITLE_MAX_CHARS && title.length === TOPIC_TITLE_MAX_CHARS && summary.startsWith(title)) throw new Error('topic_title_truncation_rejected')
       const result = await store.updateTopicTitle({ groupId, topicId: args.topicId, expectedTitle: request.expectedTitle, expectedSummary: request.expectedSummary, title })
       titleMigrations.delete(args.requestId)
+      await schedule(groupId)
+      return result
+    })
+    tool('group_topic_summary_submit', '提交根据历史 Topic 固定版本引用消息生成的摘要；不执行任务、不发送回复。', {
+      type: 'object', additionalProperties: false,
+      properties: { requestId: { type: 'string' }, topicId: { type: 'string' }, summary: { type: 'string', description: '概括讨论对象、当前结论、范围和仍需处理事项的独立话题摘要。' } },
+      required: ['requestId', 'topicId', 'summary'],
+    }, async (input) => {
+      const args = z.strictObject({ requestId: z.string().min(1), topicId: z.string().min(1), summary: z.string().trim().min(1).max(4000) }).parse(input)
+      const request = summaryMigrations.get(args.requestId)
+      if (!request || request.groupId !== groupId || request.topicId !== args.topicId) throw new Error('topic_summary_request_unknown')
+      const result = await store.updateTopicSummary({ groupId, topicId: args.topicId, expectedRevision: request.expectedRevision, expectedSummary: request.expectedSummary, summary: args.summary.trim() })
+      summaryMigrations.delete(args.requestId)
       await schedule(groupId)
       return result
     })
@@ -496,7 +524,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       timers.clear(); retryTimers.clear(); retries.clear()
       await Promise.allSettled([...activeToolCalls])
       for (const request of [...reviews.values(), ...replies.values()]) request.reject(new Error('resident_runtime_closed'))
-      routes.clear(); decisions.clear(); reviews.clear(); replies.clear(); titleMigrations.clear()
+      routes.clear(); decisions.clear(); reviews.clear(); replies.clear(); titleMigrations.clear(); summaryMigrations.clear()
       await Promise.allSettled([...applying.values()].map((item) => item.promise))
     },
   }
