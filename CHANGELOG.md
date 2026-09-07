@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+## [0.5.13] - 2026-09-07
+
+### 变更
+
+- 将 Assistant、Observer、resident profile 与开发依赖树整体迁移到 DSH `0.1.2-rc.1` / Cordis `4.0.2`，Codex Connect 升级到 `0.1.0-alpha.4.30`，并改用 Session 的 `snapshotEvents()`、`ownEvents()` 和原生 fork lineage 元数据，避免混装旧 subagent 后在 Web loader 阶段导入已移除的 `snapshotJsonValue`。
+
 ## [0.5.12] - 2026-09-07
 
 ### 修复
@@ -177,6 +183,7 @@
 - assistant、observer 与发行包统一使用同一个产品版本号。
 - Node.js 最低版本与实际 zstd Runtime 要求一致，调整为 24。
 
+[0.5.13]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.13
 [0.5.12]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.12
 [0.5.11]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.11
 [0.5.10]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.10

@@ -9,8 +9,8 @@ import { stableId } from '../packages/dingtalk-dsh-assistant/topic-model.js'
 
 const notifications = { inserted() {}, discarded() {}, claimed() {} }
 const input = (version = 1) => ({ id: stableId('message', `task-input:task-fixture:1:${version}`), role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text: `fixture input version ${version}` }] })
-const wasInserted = (session, id) => session.events.some((event) => event.type === 'agent/inbox/spliced' && event.data.inserted.some((message) => message.id === id))
-const enteredSurface = (session, id) => session.events.some((event) => event.type === 'user/message' && event.data.id === id)
+const wasInserted = (session, id) => session.snapshotEvents().some((event) => event.type === 'agent/inbox/spliced' && event.data.inserted.some((message) => message.id === id))
+const enteredSurface = (session, id) => session.snapshotEvents().some((event) => event.type === 'user/message' && event.data.id === id)
 
 // 使用原生 Session 和 Inbox。只用隔离文件保存原生 header/events 并 fsync，
 // 不冒充真实 profile 的异步 persistence plugin 或真实模型消费。
@@ -19,7 +19,7 @@ async function reopen(t, session) {
   t.after(() => rm(root, { recursive: true, force: true }))
   const file = join(root, 'session-snapshot.json')
   const handle = await open(file, 'wx')
-  try { await handle.writeFile(JSON.stringify({ header: session.header, events: session.events })); await handle.sync() } finally { await handle.close() }
+  try { await handle.writeFile(JSON.stringify({ header: session.header, events: session.snapshotEvents() })); await handle.sync() } finally { await handle.close() }
   const snapshot = JSON.parse(await readFile(file, 'utf8'))
   const restored = Session.fromRestore(session.id, snapshot.events, snapshot.header)
   return { session: restored, inbox: new Inbox(restored, notifications) }
@@ -47,7 +47,7 @@ test('原生Inbox已进入user/message后跨重开无pending，但稳定ID仍可
   assert.equal(restored.inbox.hasPending, false)
   assert.equal(wasInserted(restored.session, message.id), true)
   assert.equal(enteredSurface(restored.session, message.id), true)
-  const event = restored.session.events.find((item) => item.type === 'user/message')
+  const event = restored.session.snapshotEvents().find((item) => item.type === 'user/message')
   assert.equal(event.data.id, message.id)
   assert.equal(event.data.message, undefined)
 })
@@ -60,7 +60,7 @@ test('原生Inbox取消保留历史inserted，不能凭此认定输入已消费�
   assert.equal(restored.inbox.hasPending, false)
   assert.equal(wasInserted(restored.session, message.id), true)
   assert.equal(enteredSurface(restored.session, message.id), false)
-  const cancellation = restored.session.events.find((event) => event.type === 'agent/inbox/spliced' && event.data.outcome === 'canceled')
+  const cancellation = restored.session.snapshotEvents().find((event) => event.type === 'agent/inbox/spliced' && event.data.outcome === 'canceled')
   assert.equal(cancellation.data.removedCount, 1)
   // Native Inbox允许相同ID在取消后再投递；是否重投必须由Task生命周期决定。
   restored.inbox.append('next-step', message)
@@ -76,5 +76,5 @@ test('原生Inbox仅claim未进入surface时重开可见差异，不声称叶子
   assert.equal(restored.inbox.hasPending, false)
   assert.equal(wasInserted(restored.session, message.id), true)
   assert.equal(enteredSurface(restored.session, message.id), false)
-  assert.equal(restored.session.events.some((event) => event.type === 'agent/inbox/spliced' && event.data.outcome === 'canceled'), false)
+  assert.equal(restored.session.snapshotEvents().some((event) => event.type === 'agent/inbox/spliced' && event.data.outcome === 'canceled'), false)
 })
