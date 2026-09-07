@@ -223,16 +223,15 @@ test('重开 store 后复用同一 resident Session 和 outbox 状态', async ()
   assert.equal(restored.outbox[0].deliveredMessageId, 'm-agent-reply')
 })
 
-test('Task流程证据配置、回复审阅与撤回元数据持久化', async () => {
+test('叶子会话提示词、回复审阅与撤回元数据持久化', async () => {
   const { facility } = memoryFacility()
   const store = await openResidentStore(facility)
   await store.subscribe({ groupId: 'group-a' })
   await store.setAgentNames(['数字助理', '小助手'])
-  await store.setTaskGuidance({ taskExecutionGuidance: '开发类按发布流程', taskEvidenceGuidance: '提交当前证据' })
+  await store.setLeafSessionPrompt('开发类按发布流程，并提交当前证据')
   const group = await store.appendOutbox({ groupId: 'group-a', sourceMessageId: 'task-result:1', text: 'done', replyToMessageId: 'm-source', replyToSenderOpenDingTalkId: 'od-requester', atOpenDingTalkIds: ['od-requester'], replyKind: 'confirmation', matterSourceMessageIds: ['m-source', 'm-source'], taskIds: ['task-1', 'task-1'], replacesOutboundIds: ['out-old', 'out-old'] })
-  assert.equal(store.getTaskExecutionGuidance(), '开发类按发布流程')
+  assert.equal(store.getLeafSessionPrompt(), '开发类按发布流程，并提交当前证据')
   assert.deepEqual(store.getAgentNames(), ['数字助理', '小助手'])
-  assert.equal(store.getTaskEvidenceGuidance(), '提交当前证据')
   assert.equal(group.outbox[0].replyToMessageId, 'm-source')
   assert.deepEqual(group.outbox[0].atOpenDingTalkIds, ['od-requester'])
   assert.equal(group.outbox[0].replyKind, 'confirmation')
@@ -244,6 +243,15 @@ test('Task流程证据配置、回复审阅与撤回元数据持久化', async (
   await store.updateOutboundRecall({ groupId: 'group-a', outboundId: group.outbox[0].outboundId, status: 'recalled', reason: 'superseded-by:m-new' })
   assert.equal(store.getGroup('group-a').outbox[0].recallStatus, 'recalled')
   assert.equal(store.getGroup('group-a').outbox[0].recallReason, 'superseded-by:m-new')
+})
+
+test('旧版流程与证据配置合并为叶子会话提示词并在保存后移除旧字段', async () => {
+  const seed = new Map([['scheduler:runtime', { tasks: [], taskExecutionGuidance: '先执行完整流程', taskEvidenceGuidance: '再提交当前证据' }]])
+  const store = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal(store.getLeafSessionPrompt(), '先执行完整流程\n\n再提交当前证据')
+  await store.setLeafSessionPrompt('统一提示词')
+  assert.equal(store.getLeafSessionPrompt(), '统一提示词')
+  assert.deepEqual(seed.get('scheduler:runtime'), { tasks: [], leafSessionPrompt: '统一提示词' })
 })
 
 test('确认Outbox可在Task动作完成后原子补充关联Task', async () => {
