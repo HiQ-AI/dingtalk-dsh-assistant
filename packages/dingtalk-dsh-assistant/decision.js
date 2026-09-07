@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { resolveTopicMessages, topicRefSchema } from './topic-model.js'
 
+export const TOPIC_TITLE_MAX_CHARS = 60
+
 const runPlan = { acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional() }
 export { topicRefSchema }
 const taskSources = { topicRefs: z.array(topicRefSchema).min(1) }
@@ -65,7 +67,7 @@ export const topicRouteSubmissionSchema = z.strictObject({
     messageId: z.string().min(1), messageVersion: z.number().int().positive(),
     topics: z.array(z.union([
       z.strictObject({ topicId: z.string().min(1) }),
-      z.strictObject({ newTopicKey: z.string().min(1), title: z.string().trim().min(1).max(120) }),
+      z.strictObject({ newTopicKey: z.string().min(1), title: z.string().trim().min(1).max(TOPIC_TITLE_MAX_CHARS) }),
     ])),
     reason: z.string().trim().min(1).optional(),
   }).refine((route) => route.topics.length > 0 || Boolean(route.reason), { message: '无 Topic 归属必须说明原因', path: ['reason'] })).min(1),
@@ -80,7 +82,7 @@ export const topicRouteSubmissionJsonSchema = {
         messageId: stringJsonSchema, messageVersion: { type: 'integer' },
         topics: { type: 'array', items: { oneOf: [
           { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema }, required: ['topicId'] },
-          { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema, title: stringJsonSchema }, required: ['newTopicKey', 'title'] },
+          { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema, title: { ...stringJsonSchema, description: '不超过 60 字的简洁话题名称，只概括共同讨论对象，不复述消息详情。' } }, required: ['newTopicKey', 'title'] },
         ] } }, reason: stringJsonSchema,
       }, required: ['messageId', 'messageVersion', 'topics'],
     } },

@@ -178,7 +178,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       name: 'dingtalk-group-decision-protocol', order: 41,
       text: () => `## Topic 处理协议
 
-收到 [GROUP_TOPIC_ROUTE] 时先结合该批所有消息和已有 Topic 归类，通过 group_topic_route_submit 提交完整归属；引用、关键词只是候选，必须结合讨论目标、上下文、原始授权和任务状态判断。新消息可创建 Topic 或追加已有 Topic，一条消息可以影响多个话题。无关噪声可无归属，但必须说明原因。
+收到 [GROUP_TOPIC_ROUTE] 时先结合该批所有消息和已有 Topic 归类，通过 group_topic_route_submit 提交完整归属；引用、关键词只是候选，必须结合讨论目标、上下文、原始授权和任务状态判断。新消息可创建 Topic 或追加已有 Topic，一条消息可以影响多个话题。无关噪声可无归属，但必须说明原因。新 Topic 的 title 应像任务名称一样简短，只概括可持续归类的共同讨论对象，优先使用“对象 + 事项”的短语，不复述动作清单、背景、进展、结论或消息原文；细节写入后续 summary。title 不得超过 60 字。
 
 签名、口吻和身份声明由 Agent 自身工作区规则决定。
 收到 [GROUP_TOPIC_DECISION] 后读取该 Topic 固定版本与本次增量，用 group_decision_submit 独立提交，不等待 turn 结束。每个提交包含 requestId、topicId、revision 和 decision；decision 必须有 basisMessageIds，至少包含一条当前增量的原始消息。Task 动作使用 topicRefs；已有 Task 动作还需提供当前 inputVersion/runSequence。Task 不保存消息列表，来源统一从 Topic 读取。
