@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { resolveTopicMessages } from './store.js'
 import { fingerprint } from './topic-model.js'
-import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, isDirectedToOtherParticipants, isExplicitAgentDirection, replyReviewJsonSchema } from './decision.js'
+import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, isDirectedToOtherParticipants, isExplicitAgentDirection, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS } from './decision.js'
 
 const textMessage = (text, images = []) => Object.freeze({ id: randomUUID(), role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text }, ...images.map((attachment) => ({ type: 'image', attachment }))] })
 const objectOutput = { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] }
@@ -22,7 +22,7 @@ export function projectTopicContext(context) {
 
 // 请求是可丢弃的模型输入；已经接受的业务意图只以 Store 中的 decision 为准。
 export function createTopicCoordinator({ store, getAgent, assertSession, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, retryDelayMs = 1000 }) {
-  const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map()
+  const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map()
   const activeToolCalls = new Set()
   const scheduled = new Map(), applying = new Map(), timers = new Set(), retries = new Map(), retryTimers = new Map(), groupsBeingChanged = new Map()
   let closed = false
@@ -136,6 +136,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     monitor(agent, request, routes)
     return envelope
   }
+  function createTitleMigrationRequest(groupId, topic) {
+    const request = { requestId: randomUUID(), groupId, topicId: topic.topicId, expectedTitle: topic.title, expectedSummary: topic.summary }
+    titleMigrations.set(request.requestId, request)
+    const agent = send(groupId, `[GROUP_TOPIC_TITLE_MIGRATION]\nTopic 请求：${JSON.stringify({ requestId: request.requestId, topicId: topic.topicId, summary: topic.summary })}\n仅根据 summary 理解话题核心，生成一个像任务名称的简短标题：采用“对象 + 事项”，建议 8–20 个字符，最多 ${TOPIC_TITLE_MAX_CHARS} 个字符。必须重新概括，不能截取 summary 前缀或省略号截断。通过 group_topic_title_submit 提交；不执行任务、不回复群聊。`)
+    monitor(agent, request, titleMigrations)
+    return request
+  }
   async function wake(groupId) {
     if (!live() || groupsBeingChanged.has(groupId) || !getAgent(groupId)) return []
     const group = store.getGroup(groupId)
@@ -143,6 +150,10 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     const pending = pendingInput(groupId)
     if (pending.length && ![...routes.values()].some((request) => request.groupId === groupId)) {
       createRouteRequest(groupId, pending.slice(0, 50))
+    }
+    if (![...titleMigrations.values()].some((request) => request.groupId === groupId)) {
+      const legacy = store.listTopics(groupId).find((topic) => topic.title.length > TOPIC_TITLE_MAX_CHARS && topic.summary?.trim())
+      if (legacy) createTitleMigrationRequest(groupId, legacy)
     }
     const result = []
     for (const topic of store.listTopics(groupId)) {
@@ -269,6 +280,22 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if (result.status !== 'routed' && result.status !== 'duplicate') { routes.delete(args.requestId); await schedule(groupId); return result }
       routes.delete(args.requestId)
       return { status: 'accepted', topicIdsByKey: result.topicIdsByKey, pendingDecisions: await schedule(groupId) }
+    })
+    tool('group_topic_title_submit', '提交基于历史 Topic summary 重新概括的简短标题；不执行任务、不发送回复。', {
+      type: 'object', additionalProperties: false,
+      properties: { requestId: { type: 'string' }, topicId: { type: 'string' }, title: { type: 'string', description: `基于 summary 重新概括的 8–20 字标题，最多 ${TOPIC_TITLE_MAX_CHARS} 字；禁止直接截断摘要。` } },
+      required: ['requestId', 'topicId', 'title'],
+    }, async (input) => {
+      const args = z.strictObject({ requestId: z.string().min(1), topicId: z.string().min(1), title: z.string().trim().min(1).max(TOPIC_TITLE_MAX_CHARS) }).parse(input)
+      const request = titleMigrations.get(args.requestId)
+      if (!request || request.groupId !== groupId || request.topicId !== args.topicId) throw new Error('topic_title_request_unknown')
+      const title = args.title.trim()
+      const summary = request.expectedSummary.trim()
+      if (summary.length > TOPIC_TITLE_MAX_CHARS && title.length === TOPIC_TITLE_MAX_CHARS && summary.startsWith(title)) throw new Error('topic_title_truncation_rejected')
+      const result = await store.updateTopicTitle({ groupId, topicId: args.topicId, expectedTitle: request.expectedTitle, expectedSummary: request.expectedSummary, title })
+      titleMigrations.delete(args.requestId)
+      await schedule(groupId)
+      return result
     })
     tool('group_decision_submit', '提交一个 Topic 固定版本的独立业务决策；accepted 表示意图已持久化，动作进度可查询。', groupDecisionSubmissionJsonSchema, async (input) => {
       const args = groupDecisionSubmissionSchema.parse(input)
@@ -435,7 +462,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       timers.clear(); retryTimers.clear(); retries.clear()
       await Promise.allSettled([...activeToolCalls])
       for (const request of [...reviews.values(), ...replies.values()]) request.reject(new Error('resident_runtime_closed'))
-      routes.clear(); decisions.clear(); reviews.clear(); replies.clear()
+      routes.clear(); decisions.clear(); reviews.clear(); replies.clear(); titleMigrations.clear()
       await Promise.allSettled([...applying.values()].map((item) => item.promise))
     },
   }

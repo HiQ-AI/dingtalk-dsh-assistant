@@ -176,6 +176,28 @@ test('Topic 按需搜索分页及固定版本读回，跨群与越界拒绝', as
   await assert.rejects(h.call('group_topic_list', { offset: -1 }), /topic_page_invalid/)
 })
 
+test('历史长标题由 resident 根据 summary 重新概括，拒绝直接截断摘要', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'legacy')
+  const request = (await route(h, { legacy: { newTopicKey: 'legacy', title: '历史话题' } })).pendingDecisions[0]
+  const summary = '统一编辑器草稿和工作区的地理位置字段，并完成导入、复制、保存及历史数据兼容验证。'
+  assert.equal((await h.call('group_decision_submit', submission(request, { topicUpdate: { summary } }))).status, 'accepted')
+  await h.coordinator.drain('g')
+  const topic = h.store.getTopic('g', request.topicId)
+  await h.store.updateTopicTitle({ groupId: 'g', topicId: topic.topicId, expectedTitle: topic.title, expectedSummary: topic.summary, title: '修复编辑器草稿详情页地理位置字段命名并完成所有相关场景兼容验证' })
+
+  await h.coordinator.schedule('g')
+  const migration = h.envelope('[GROUP_TOPIC_TITLE_MIGRATION]')
+  const legacy = h.store.getTopic('g', topic.topicId)
+  assert.deepEqual(Object.keys(migration).sort(), ['requestId', 'summary', 'topicId'])
+  assert.equal(migration.summary, summary)
+  assert.equal((await h.store.updateTopicTitle({ groupId: 'g', topicId: topic.topicId, expectedTitle: legacy.title, expectedSummary: `${summary}已更新`, title: '错误的过期标题' })).status, 'topic-stale')
+  assert.equal(h.store.getTopic('g', topic.topicId).title, legacy.title)
+  await assert.rejects(h.call('group_topic_title_submit', { requestId: migration.requestId, topicId: topic.topicId, title: summary.slice(0, 30) }), /topic_title_truncation_rejected/)
+  assert.equal((await h.call('group_topic_title_submit', { requestId: migration.requestId, topicId: topic.topicId, title: '编辑器地理位置字段统一' })).status, 'accepted')
+  assert.equal(h.store.getTopic('g', topic.topicId).title, '编辑器地理位置字段统一')
+})
+
 test('Task 通知要求真实 Topic 引用及参与人，并拒绝旧 Task 输入', async (t) => {
   const h = await setup(t), { task } = await taskFixture(h)
   const replyTask = await h.store.updateTask(task.taskId, (current) => ({ ...current, state: 'completed', result: { inputVersion: current.inputVersion, runSequence: current.runSequence, status: 'completed', summary: '已核验', evidence: ['核验通过'], artifacts: [] } }))

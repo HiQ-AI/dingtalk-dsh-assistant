@@ -503,6 +503,18 @@ export async function openResidentStore(storageDomain) {
       })
       return result
     }),
+    updateTopicTitle: ({ groupId, topicId, expectedTitle, expectedSummary, title }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let result = { status: 'topic-stale' }
+      await groups.update(entry[0], (latest) => ({ ...latest, topics: latest.topics.map((topic) => {
+        if (topic.topicId !== topicId) return topic
+        if (topic.title !== expectedTitle || topic.summary !== expectedSummary) return topic
+        result = { status: 'accepted', topic: { ...topic, title, updatedAt: new Date().toISOString() } }
+        return result.topic
+      }) }))
+      return result
+    }),
     markMessageAgentDelivery: ({ groupId, messageId, status, error, retryAt }) => serialize(groupId, async () => {
       if (!['pending', 'steered', 'delivered', 'failed', 'decision-retrying', 'decision-failed', 'decision-commit-failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)
       if (retryAt !== undefined && (status !== 'decision-retrying' || Number.isNaN(new Date(retryAt).valueOf()))) throw new Error('message_agent_decision_retry_at_invalid')
