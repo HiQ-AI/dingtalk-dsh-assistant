@@ -39,6 +39,21 @@ const humanInterventionWaitingResultSchema = z.object({
 
 export const taskResultSchema = z.union([completedResultSchema, informationWaitingResultSchema, humanInterventionWaitingResultSchema])
 
+function parseResultShape(value) {
+  const schema = value?.status === 'completed'
+    ? completedResultSchema
+    : value?.status === 'waiting' && value?.waitingKind === 'information'
+      ? informationWaitingResultSchema
+      : value?.status === 'waiting' && value?.waitingKind === 'human-intervention'
+        ? humanInterventionWaitingResultSchema
+        : null
+  if (!schema) throw new Error(`task_result_invalid:${JSON.stringify({ issues: [{ path: value?.status === 'waiting' ? 'waitingKind' : 'status', message: 'unsupported discriminator' }] })}`)
+  const parsed = schema.safeParse(value)
+  if (parsed.success) return parsed.data
+  const issues = parsed.error.issues.slice(0, 8).map((issue) => ({ path: issue.path.join('.') || '$', message: issue.message }))
+  throw new Error(`task_result_invalid:${JSON.stringify({ issues })}`)
+}
+
 export const taskCheckpointSchema = z.object({
   ...executionVersion,
   kind: z.enum(['plan-confirmed', 'stage-completed', 'scope-conflict', 'evidence-gap', 'risk-changed']),
@@ -52,7 +67,7 @@ export const taskCheckpointSchema = z.object({
 }).strict()
 
 export function parseTaskResult(value) {
-  const result = taskResultSchema.parse(value)
+  const result = parseResultShape(value)
   if (result.status === 'waiting' && result.waitingKind === 'human-intervention' && ['network', 'resource'].includes(result.blockerCategory)) {
     const detail = `${result.summary}\n${result.waitingReason}\n${result.requestedAction}`
     if (/goal.{0,20}(轮|round).{0,20}(耗尽|用尽|exhaust)|继续.{0,12}(等待|监控|轮询|重试)|continue.{0,12}(waiting|monitoring|polling|retrying)|仍在.{0,8}(正常)?运行|still running/iu.test(detail)) {

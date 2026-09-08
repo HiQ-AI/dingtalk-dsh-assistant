@@ -65,8 +65,39 @@ test('Topic 工具统一返回 lossless JSON', async (t) => {
     messageId: 'lossless', messageVersion: 1, topics: [{ newTopicKey: 'lossless', title: '无损输出' }],
   }] })
   assert.deepEqual(JSON.parse(JSON.stringify(routed)), routed)
+  const recovered = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{
+    messageId: 'lossless', messageVersion: 1, topics: [{ newTopicKey: 'lossless', title: '无损输出' }],
+  }] })
+  assert.equal(recovered.status, 'accepted')
+  assert.equal(recovered.recovered, true)
+  assert.deepEqual(recovered.topicIdsByKey, routed.topicIdsByKey)
   const reviewed = await h.call('group_topic_route_review', { messageIds: ['lossless'], reason: '核验输出投影' })
   assert.deepEqual(JSON.parse(JSON.stringify(reviewed)), reviewed)
+})
+
+test('工具参数错误返回精简字段问题且不产生副作用', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'invalid')
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const result = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [], extra: 'unexpected' })
+  assert.equal(result.status, 'invalid-arguments')
+  assert.equal(result.nextAction, 'correct-arguments')
+  assert.ok(result.issues.length > 0 && result.issues.length <= 8)
+  assert.equal(h.store.listTopics('g').length, 0)
+})
+
+test('归类期间消息版本变化返回刷新后的当前请求', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'edited', { text: '@助理 初始内容' })
+  await h.coordinator.schedule('g')
+  const original = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await ingest(h, 'edited', { text: '@助理 初始内容', senderName: '发送人' })
+  const result = await h.call('group_topic_route_submit', { requestId: original.requestId, routes: [{ messageId: 'edited', messageVersion: 1, topics: [{ newTopicKey: 'edited', title: '消息修改' }] }] })
+  assert.equal(result.status, 'stale')
+  assert.equal(result.reason, 'message-version-changed')
+  assert.equal(result.currentRequest.messages[0].messageVersion, 2)
+  assert.equal(h.store.listTopics('g').length, 0)
 })
 async function route(h, choices = {}) {
   await h.coordinator.schedule('g')
@@ -396,8 +427,18 @@ test('Task 通知读取最新相关候选后可提交，重试不产生第二条
   assert.equal(accepted.status, 'accepted')
   assert.equal((await promise).text, '核验结果')
   assert.equal(h.store.getGroup('g').outbox.length, 1)
-  await assert.rejects(h.call('group_reply_submit', args), /topic_reply_request_unknown/)
+  const recovered = await h.call('group_reply_submit', args)
+  assert.equal(recovered.status, 'accepted')
+  assert.equal(recovered.recovered, true)
+  assert.equal(recovered.outboundId, accepted.outboundId)
   assert.equal(h.store.getGroup('g').outbox.length, 1)
+})
+
+test('未知回复请求不可用且不产生 Outbox', async (t) => {
+  const h = await setup(t)
+  const result = await h.call('group_reply_submit', { requestId: 'missing', reply: '不应发送' })
+  assert.deepEqual(result, { status: 'request-unavailable', nextAction: 'wait-for-current-request' })
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
 })
 
 
@@ -485,7 +526,7 @@ test('明确给他人的补充或取消同样不能改变已有 Task，引用转
 
 test('显式归属复核冻结已处理消息，修订后原 Task 仍可读取旧 Topic 版本', async (t) => {
   const h = await setup(t), { task, request: original } = await taskFixture(h)
-  await assert.rejects(h.call('group_topic_route_review', { messageIds: ['a1'], reason: '' }))
+  assert.equal((await h.call('group_topic_route_review', { messageIds: ['a1'], reason: '' })).status, 'invalid-arguments')
   await assert.rejects(h.call('group_topic_route_review', { messageIds: ['foreign'], reason: '修正误归类' }), /message_not_found/)
   await assert.rejects(h.call('group_topic_route_review', { messageIds: ['a1', 'a1'], reason: '修正误归类' }), /topic_route_review_duplicate/)
   const review = await h.call('group_topic_route_review', { messageIds: ['a1'], reason: '该消息实际属于 B' })
@@ -561,7 +602,7 @@ test('归类快照只携带当前事实，失败决策按需查询可见精简�
 test('动作必须先有确认且可靠 Outbox 拒绝时零 Task 副作用', async (t) => {
   const h = await setup(t), request = await (async () => { await ingest(h, 'a'); return (await route(h)).pendingDecisions[0] })()
   const actions = [{ kind: 'new-task', title: 'A', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: request.topicId, revision: request.revision }] }]
-  await assert.rejects(h.call('group_decision_submit', submission(request, { actions })))
+  assert.equal((await h.call('group_decision_submit', submission(request, { actions }))).status, 'invalid-arguments')
   assert.equal(h.store.getTopic('g', request.topicId).decisions.length, 0)
   h.store.appendOutbox = async () => ({ status: 'reply-busy' })
   assert.equal((await h.call('group_decision_submit', submission(request, { actions, reply: '确认核验' }))).status, 'accepted')
@@ -586,7 +627,9 @@ test('模型停稳但未提交归类会定时生成新请求，旧请求不能�
   const current = h.envelope('[GROUP_TOPIC_ROUTE]')
   assert.notEqual(current.requestId, original.requestId)
   const routes = [{ messageId: 'unsubmitted', messageVersion: 1, topics: [{ newTopicKey: 'retry', title: '重试话题' }] }]
-  await assert.rejects(h.call('group_topic_route_submit', { requestId: original.requestId, routes }), /topic_route_request_unknown/)
+  const superseded = await h.call('group_topic_route_submit', { requestId: original.requestId, routes })
+  assert.equal(superseded.status, 'superseded')
+  assert.equal(superseded.currentRequest.requestId, current.requestId)
   assert.equal((await h.call('group_topic_route_submit', { requestId: current.requestId, routes })).status, 'accepted')
   assert.equal(h.store.listTopics('g').length, 1)
 })

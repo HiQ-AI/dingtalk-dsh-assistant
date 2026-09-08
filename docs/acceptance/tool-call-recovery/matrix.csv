@@ -1,0 +1,11 @@
+case,round-1
+invalid-arguments,PASS
+route-duplicate-receipt,PASS
+route-superseded,PASS
+route-message-stale,PASS
+reply-duplicate-receipt,PASS
+reply-restart-receipt,PASS
+reply-unknown-no-side-effect,PASS
+lossless-json,PASS
+task-result-error,PASS
+local-runtime-e2e,TODO

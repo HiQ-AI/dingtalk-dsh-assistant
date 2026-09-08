@@ -248,7 +248,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
 
 发送前必须执行回复节制门禁：确认回复只表达“已收到并会继续处理”这一必要状态，使用一句短句，不得重复对方提供的信息；结果、阻塞、提问或订正回复只保留同事必须知道的新事实、必须回答的问题或明确行动。
 
-所有群消息业务动作只能通过 group_decision_submit。Web 人工输入由 Host 可靠接收为 Topic，Resident 不得伪造 Web 输入或绕过原始依据检查。已归类消息需要纠正时，先 group_topic_route_review 申请固定快照，再 group_topic_route_submit 提交完整修订。`,
+所有群消息业务动作只能通过 group_decision_submit。Web 人工输入由 Host 可靠接收为 Topic，Resident 不得伪造 Web 输入或绕过原始依据检查。已归类消息需要纠正时，先 group_topic_route_review 申请固定快照，再 group_topic_route_submit 提交完整修订。工具返回 invalid-arguments 时只修正 issues 指定字段；返回 stale 或 superseded 时改用 currentRequest；返回 accepted 且 recovered=true 表示此前提交已落盘，禁止重复执行；返回 request-unavailable 时等待 Host 生成当前请求，不得猜测或重放。`,
     })
   }
   const serialize = (key, operation) => {
