@@ -52,6 +52,7 @@ const taskAssociationContext = (task) => ({
   archived: Boolean(task.archivedAt),
   ...(task.acceptanceCriteria ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
   ...(task.stageTasks ? { stageTasks: task.stageTasks } : {}),
+  ...(task.taskPromptRefs ? { taskPromptRefs: task.taskPromptRefs } : {}),
   topicRefs: task.topicRefs, inputVersion: task.inputVersion, runSequence: task.runSequence,
   ...(task.objectiveHistory ? { objectiveHistory: task.objectiveHistory } : {}),
   ...(task.waitingReason ? { waitingReason: task.waitingReason } : {}),
@@ -628,6 +629,8 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (handle === undefined) throw new Error(`task_leaf_not_active:${taskId}`)
       const goal = ctx.goals.get(handle.agent)
       if (goal === undefined) throw new Error(`task_goal_missing:${taskId}`)
+      const prompts = new Map((store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map((item) => [item.id, item]))
+      for (const ref of task.taskPromptRefs ?? []) if (prompts.get(ref.id)?.revision !== ref.revision) throw new Error(`task_prompt_selection_stale:${ref.id}`)
       const checkpoints = task.checkpoints ?? []
       if (checkpoints[0]?.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
       if (checkpoints.length < 2) throw new Error(`task_checkpoints_insufficient:${taskId}`)
@@ -804,9 +807,28 @@ Task objective 限制的是业务动作范围，包括业务代码、业务数�
 
 Task objective 是本任务的动作授权上限，必须逐字尊重其中的动作范围。若 objective 只要求“看看、查一下、排查、分析、核对、监控”或其他诊断/观察工作，你只能读取、核验、定位根因并提交证据和建议，不得修改代码或数据、提交 PR、合并、构建、部署、执行修复方案，也不得因为发现了明确根因就自行扩大为修复。只有 objective 明确包含修复、修改、实施、合并、发布或执行等变更动作时，才能进行对应变更；配置的叶子会话提示词也不得扩大该授权。
 
-### 配置的叶子会话提示词
+### 配置的叶子会话通用提示词
 
 ${store.getLeafSessionPrompt?.() || '按任务目标、工作区规则和当前现场自主推进，并提交能够独立核验目标已完成的当前证据；不得只用自然语言声称完成。'}
+
+### 可用任务流程索引
+
+${(store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map((item) => `- ${item.id}｜${item.name}｜${item.description}`).join('\n') || '暂无已配置的任务流程；按通用提示词执行。'}
+
+需要使用某个流程时先调用 load_task_prompt 读取正文，再调用 select_task_prompts 记录本轮当前流程。可以选择多个互补流程；不要为了保险加载全部流程。任务目标或授权变化时重新判断。现有 workType 不能代替具体流程选择。
+
+### 当前任务流程
+
+${(() => {
+  const current = store.getTask(task.taskId) ?? task
+  const prompts = new Map((store.getTaskPrompts?.() ?? []).map((item) => [item.id, item]))
+  if (!(current.taskPromptRefs?.length > 0)) return '尚未选择任务流程。'
+  return current.taskPromptRefs.map((ref) => {
+    const item = prompts.get(ref.id)
+    if (!item || !item.enabled) return `- ${ref.id}：流程已停用或删除，请重新选择。`
+    return `## ${item.name}（${item.id}｜r${item.revision}）\n\n${item.prompt}`
+  }).join('\n\n')
+})()}
 
 ### 当前执行轮次验收标准
 
@@ -847,6 +869,43 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           const current = store.getTask(task.taskId)
           if (!current.topicRefs.some((ref) => ref.topicId === args.topicId && ref.revision === args.revision)) throw new Error('task_topic_not_admitted')
           return boundedTopicContext(store.getTopicContext({ ...args, groupId: current.groupId, limit: args.limit ?? 10 }), { textOffset: args.textOffset ?? 0 })
+        },
+      })
+      agentCtx.tools.register({
+        name: 'load_task_prompt', description: '按索引 ID 读取一个已启用任务流程的完整提示词；读取不会自动选中该流程。',
+        parameters: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' } }, required: ['id'] },
+        output: { schema: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, prompt: { type: 'string' }, revision: { type: 'integer' } }, required: ['id', 'name', 'description', 'prompt', 'revision'] }, render: (_args, out) => [{ type: 'text', text: `# ${out.name}\n\n${out.prompt}\n\n流程引用：${out.id}@${out.revision}` }] },
+        execute: async ({ id }, exec) => {
+          if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_prompt_wrong_session:${task.taskId}`)
+          const item = (store.getTaskPrompts?.() ?? []).find((value) => value.id === id && value.enabled)
+          if (!item) throw new Error(`task_prompt_not_found:${id}`)
+          await store.updateTask(task.taskId, (value) => {
+            if (!['running', 'waiting'].includes(value.state)) throw new Error(`task_prompt_selection_stale:${task.taskId}`)
+            return { ...value, executionEvents: [...(value.executionEvents ?? []), { kind: 'task-prompt-loaded', inputVersion: value.inputVersion, id: item.id, revision: item.revision, at: new Date().toISOString() }], updatedAt: new Date().toISOString() }
+          })
+          return item
+        },
+      })
+      agentCtx.tools.register({
+        name: 'select_task_prompts', description: '记录当前任务采用的任务流程。先读取每个流程正文；目标或授权变化时可替换选择。',
+        parameters: { type: 'object', additionalProperties: false, properties: { inputVersion: { type: 'integer' }, ids: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } }, required: ['inputVersion', 'ids', 'reason'] },
+        output: { schema: { type: 'object', additionalProperties: false, properties: { taskId: { type: 'string' }, taskPromptRefs: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, revision: { type: 'integer' } }, required: ['id', 'revision'] } } }, required: ['taskId', 'taskPromptRefs'] }, render: (_args, out) => [{ type: 'text', text: `当前任务流程已更新：${out.taskPromptRefs.map((ref) => `${ref.id}@${ref.revision}`).join(', ') || '未选择专用流程'}` }] },
+        execute: async ({ inputVersion, ids, reason }, exec) => {
+          if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_prompt_wrong_session:${task.taskId}`)
+          if (!reason.trim()) throw new Error('task_prompt_selection_reason_required')
+          if (ids.length > 5) throw new Error('task_prompt_selection_too_many')
+          if (new Set(ids).size !== ids.length) throw new Error('task_prompt_selection_duplicate')
+          const current = store.getTask(task.taskId)
+          if (!current || current.inputVersion !== inputVersion || !['running', 'waiting'].includes(current.state)) throw new Error(`task_prompt_selection_stale:${task.taskId}`)
+          const prompts = new Map((store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map((item) => [item.id, item]))
+          const refs = ids.map((id) => {
+            const item = prompts.get(id)
+            if (!item) throw new Error(`task_prompt_not_found:${id}`)
+            if (!(current.executionEvents ?? []).some((event) => event.kind === 'task-prompt-loaded' && event.inputVersion === inputVersion && event.id === id && event.revision === item.revision)) throw new Error(`task_prompt_not_loaded:${id}`)
+            return { id, revision: item.revision }
+          })
+          await store.updateTask(task.taskId, (value) => value.inputVersion === inputVersion ? { ...value, taskPromptRefs: refs, executionEvents: [...(value.executionEvents ?? []), { kind: 'task-prompts-selected', inputVersion, taskPromptRefs: refs, reason: reason.trim(), at: new Date().toISOString() }], updatedAt: new Date().toISOString() } : value)
+          return { taskId: task.taskId, taskPromptRefs: refs }
         },
       })
       agentCtx.tools.register({
@@ -1140,10 +1199,10 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       runHistory: [...(current.runHistory ?? []), {
         runSequence: current.runSequence, startedAt: current.runStartedAt ?? current.createdAt, endedAt: new Date().toISOString(),
         topicRefs: current.topicRefs, inputVersion: current.inputVersion, objective: current.objective, childSessionId: current.childSessionId,
-        acceptanceCriteria: current.acceptanceCriteria, stageTasks: current.stageTasks, checkpoints: current.checkpoints ?? [], ...(current.result ? { result: current.result } : {}),
+        acceptanceCriteria: current.acceptanceCriteria, stageTasks: current.stageTasks, taskPromptRefs: current.taskPromptRefs ?? [], checkpoints: current.checkpoints ?? [], ...(current.result ? { result: current.result } : {}),
       }],
       lastCompletedResult: current.result, completion: undefined, result: undefined, waitingKind: undefined, waitingReason: undefined,
-      lastWaitingResult: undefined, checkpoints: [], humanBlocker: undefined, reopenContext: 'Topic 输入已更新，独立核验新执行轮次', archivedAt: undefined,
+      lastWaitingResult: undefined, checkpoints: [], taskPromptRefs: [], humanBlocker: undefined, reopenContext: 'Topic 输入已更新，独立核验新执行轮次并重新选择适用任务流程', archivedAt: undefined,
       completionSequence: (current.completionSequence ?? 0) + 1,
     }))
     await pumpTasks()
@@ -1166,7 +1225,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         ? priorCheckpoints.filter((checkpoint) => checkpoint.coordinatorDecision).map((checkpoint) => ({ ...checkpoint, inputVersion: current.inputVersion + 1 }))
         : []
       return { ...revised, topicRefs: refs, inputVersion: current.inputVersion + 1,
-        checkpoints,
+        checkpoints, taskPromptRefs: scopeChanged ? [] : current.taskPromptRefs,
         executionEvents: [...(current.executionEvents ?? []), { kind: 'input-revised', previousInputVersion: current.inputVersion, progressImpact: preserveProgress ? 'preserve' : 'replan', checkpoints: invalidatedCheckpoints }],
         ...normalizeRunPlan(revised.objective, acceptanceCriteria ?? revised.acceptanceCriteria, stageTasks ?? revised.stageTasks),
         ...(resumed ? { state: 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
@@ -1475,9 +1534,9 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     updateGroup: (request) => serialize(request.groupId, () => store.updateGroup(request)),
     getAgentConfig: () => ({
       agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, provider: selection.provider, model: selection.model, reasoningEffort: selection.reasoningEffort, proxyUrl: store.getProxyUrl?.() ?? '',
-      leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', maxConcurrentTasks: taskConcurrencyLimit,
+      leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', taskPrompts: store.getTaskPrompts?.() ?? [], taskPromptsVersion: store.getTaskPromptsVersion?.() ?? 0, maxConcurrentTasks: taskConcurrencyLimit,
     }),
-    updateAgentConfig: ({ agentNames, workspaceDir, model, reasoningEffort, proxyUrl, leafSessionPrompt, maxConcurrentTasks: nextMaxConcurrentTasksInput }) => serializeConfig(async () => {
+    updateAgentConfig: ({ agentNames, workspaceDir, model, reasoningEffort, proxyUrl, leafSessionPrompt, taskPrompts, taskPromptsVersion, maxConcurrentTasks: nextMaxConcurrentTasksInput }) => serializeConfig(async () => {
       if (runtimeClosing) throw new Error('resident_runtime_closed')
       if (agentNames !== undefined && !Array.isArray(agentNames)) throw new Error('agent_names_must_be_array')
       const nextAgentNames = agentNames === undefined ? (store.getAgentNames?.() ?? []) : [...new Set(agentNames.map((name) => name.trim()).filter(Boolean))]
@@ -1496,11 +1555,12 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       const proxyChanged = nextProxyUrl !== (store.getProxyUrl?.() ?? '')
       const nextLeafSessionPrompt = leafSessionPrompt === undefined ? (store.getLeafSessionPrompt?.() ?? '') : leafSessionPrompt.trim()
       const guidanceChanged = nextLeafSessionPrompt !== (store.getLeafSessionPrompt?.() ?? '')
+      const taskPromptsChanged = taskPrompts !== undefined && JSON.stringify(taskPrompts) !== JSON.stringify(store.getTaskPrompts?.() ?? [])
       const nextMaxConcurrentTasks = nextMaxConcurrentTasksInput === undefined ? taskConcurrencyLimit : nextMaxConcurrentTasksInput
       if (!Number.isInteger(nextMaxConcurrentTasks) || nextMaxConcurrentTasks < 1 || nextMaxConcurrentTasks > 50) throw new Error('agent_max_concurrent_tasks_invalid')
       const concurrencyChanged = nextMaxConcurrentTasks !== taskConcurrencyLimit
-      const resultConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, ...selection, proxyUrl: nextProxyUrl, leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', maxConcurrentTasks: taskConcurrencyLimit })
-      if (!workspaceChanged && !selectionChanged && !proxyChanged && !guidanceChanged && !namesChanged && !concurrencyChanged) return resultConfig()
+      const resultConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, ...selection, proxyUrl: nextProxyUrl, leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', taskPrompts: store.getTaskPrompts?.() ?? [], taskPromptsVersion: store.getTaskPromptsVersion?.() ?? 0, maxConcurrentTasks: taskConcurrencyLimit })
+      if (!workspaceChanged && !selectionChanged && !proxyChanged && !guidanceChanged && !taskPromptsChanged && !namesChanged && !concurrencyChanged) return resultConfig()
       if (workspaceChanged || selectionChanged) await serializeTasks(() => {
         if (store.listTasks().some((task) => task.state === 'running' || task.state === 'waiting' || task.state === 'queued')) throw new Error('agent_config_has_active_tasks')
       })
@@ -1528,6 +1588,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           if (proxyChanged) await store.setProxyUrl(nextProxyUrl)
           if (namesChanged) await store.setAgentNames(nextAgentNames)
           if (guidanceChanged) await store.setLeafSessionPrompt(nextLeafSessionPrompt)
+          if (taskPromptsChanged) await store.setTaskPrompts(taskPrompts, taskPromptsVersion)
           if (concurrencyChanged) await store.setMaxConcurrentTasks(nextMaxConcurrentTasks)
           if (workspaceChanged) {
             await store.setAgentWorkspaceDir(nextWorkspace)
@@ -1547,6 +1608,13 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           return resultConfig()
         })
         for (const item of replacements) await item.previous.dispose()
+        if (guidanceChanged || taskPromptsChanged) {
+          for (const task of store.listTasks().filter((item) => item.state === 'running')) {
+            const handle = leafHandles.get(task.taskId)
+            if (!handle) continue
+            handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: '[TASK_PROMPT_CONFIG_UPDATED]\n叶子通用提示或任务流程索引已更新。下一次请求会注入最新配置；请重新判断当前流程和剩余计划，必要时重新加载并选择流程。不得用旧配置直接提交完成。' }], source: { kind: 'coordinator' } }))
+          }
+        }
         return result
       } catch (error) {
         if (!workspaceChanged || agentWorkspace !== nextWorkspace) await Promise.all(replacements.map((item) => item.handle.dispose()))

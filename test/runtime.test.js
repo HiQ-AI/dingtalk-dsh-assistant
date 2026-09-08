@@ -305,6 +305,48 @@ test('叶子会话提示词通过统一配置字段保存和读取', async (t) =
   assert.equal('taskEvidenceGuidance' in saved, false)
 })
 
+test('叶子只常驻流程索引，按需加载并选择后动态注入当前正文', async (t) => {
+  const h = await setup(t)
+  const saved = await h.runtime.updateAgentConfig({ taskPrompts: [
+    { name: '问题排查', description: '只定位原因时使用', prompt: '排查正文唯一标识', enabled: true },
+    { name: '实施修复', description: '已授权修复时使用', prompt: '修复正文唯一标识', enabled: true },
+  ], taskPromptsVersion: 0 })
+  const task = await createTask(h, 'prompt-task')
+  const leaf = h.handles.get(task.childSessionId)
+  const systemText = leaf.sections.map((section) => section.text()).join('\n')
+  assert.match(systemText, /问题排查/)
+  assert.doesNotMatch(systemText, /排查正文唯一标识|修复正文唯一标识/)
+  const prompt = saved.taskPrompts[0]
+  const loaded = await leafCall(h, task, 'load_task_prompt', { id: prompt.id })
+  assert.equal(loaded.prompt, '排查正文唯一标识')
+  await leafCall(h, task, 'select_task_prompts', { inputVersion: task.inputVersion, ids: [prompt.id], reason: '当前目标只要求排查' })
+  assert.deepEqual(h.store.getTask(task.taskId).taskPromptRefs, [{ id: prompt.id, revision: 1 }])
+  assert.match(leaf.sections.map((section) => section.text()).join('\n'), /排查正文唯一标识/)
+  assert.doesNotMatch(leaf.sections.map((section) => section.text()).join('\n'), /修复正文唯一标识/)
+})
+
+test('流程修订后旧选择失效，拒绝叶子用旧流程完成任务', async (t) => {
+  const h = await setup(t)
+  const first = await h.runtime.updateAgentConfig({ taskPrompts: [{ name: '问题排查', description: '定位原因', prompt: '第一版流程', enabled: true }], taskPromptsVersion: 0 })
+  const task = await createTask(h, 'prompt-revision')
+  await leafCall(h, task, 'load_task_prompt', { id: first.taskPrompts[0].id })
+  await leafCall(h, task, 'select_task_prompts', { inputVersion: 1, ids: [first.taskPrompts[0].id], reason: '按排查流程执行' })
+  await h.runtime.updateAgentConfig({ taskPrompts: [{ ...first.taskPrompts[0], prompt: '第二版流程' }], taskPromptsVersion: first.taskPromptsVersion })
+  await assert.rejects(leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'completed', summary: '完成', evidence: ['证据'], artifacts: [] }), /task_prompt_selection_stale/)
+})
+
+test('任务目标变化清空旧流程选择并拒绝未加载流程', async (t) => {
+  const h = await setup(t)
+  const saved = await h.runtime.updateAgentConfig({ taskPrompts: [{ name: '问题排查', description: '定位原因', prompt: '排查流程', enabled: true }], taskPromptsVersion: 0 })
+  const task = await createTask(h, 'prompt-switch')
+  await assert.rejects(leafCall(h, task, 'select_task_prompts', { inputVersion: 1, ids: [saved.taskPrompts[0].id], reason: '排查' }), /task_prompt_not_loaded/)
+  await leafCall(h, task, 'load_task_prompt', { id: saved.taskPrompts[0].id })
+  await leafCall(h, task, 'select_task_prompts', { inputVersion: 1, ids: [saved.taskPrompts[0].id], reason: '排查' })
+  const revised = await h.runtime.followupTask({ taskId: task.taskId, requestId: 'switch-to-fix', topicRefs: task.topicRefs, ...inputVersion(h.store.getTask(task.taskId)), text: '用户明确要求修复', objective: '修复已定位的问题', acceptanceCriteria: ['修复可验证'], stageTasks: ['完成修复'] })
+  assert.equal(revised.inputVersion, 2)
+  assert.deepEqual(revised.taskPromptRefs, [])
+})
+
 test('退订存储失败时保留 Resident，修复后可再次退订', async (t) => {
   const h = await setup(t), id = h.store.getGroup('g').residentSessionId
   h.idle.set(id, Promise.resolve())
@@ -615,14 +657,19 @@ test('恢复清理旧协议与旧 Topic 请求 Inbox，但保留普通待办', a
   assert.ok(h.resident())
 })
 
-test('重启恢复 Running 叶子沿用 Goal 与已接纳输入，不重复 steer 同版本', async (t) => {
-  const h = await setup(t), task = await createTask(h)
+test('重启恢复 Running 叶子沿用 Goal 与已接纳输入，并重新注入已选流程正文', async (t) => {
+  const h = await setup(t)
+  const config = await h.runtime.updateAgentConfig({ taskPrompts: [{ name: '恢复流程', description: '恢复验证', prompt: '恢复后必须重新出现的正文', enabled: true }], taskPromptsVersion: 0 })
+  const task = await createTask(h)
+  await leafCall(h, task, 'load_task_prompt', { id: config.taskPrompts[0].id })
+  await leafCall(h, task, 'select_task_prompts', { inputVersion: task.inputVersion, ids: [config.taskPrompts[0].id], reason: '验证恢复注入' })
   const sessionEvents = new Map([...h.handles].map(([id, handle]) => [id, handle.agent.session.snapshotEvents()]))
   await h.runtime.close()
   const recovered = await setup(t, { snapshot: h.snapshot, goals: h.goals, sessionEvents })
   assert.equal(recovered.store.getTask(task.taskId).state, 'running')
   assert.equal(recovered.handles.get(task.childSessionId).sent.length, 0)
   assert.equal(recovered.goals.get(task.childSessionId).phase, 'active')
+  assert.match(recovered.handles.get(task.childSessionId).sections.map((section) => section.text()).join('\n'), /恢复后必须重新出现的正文/)
 })
 
 test('关闭等待已接受的可靠 Outbox 写入，期间新消息被拒绝', async (t) => {
