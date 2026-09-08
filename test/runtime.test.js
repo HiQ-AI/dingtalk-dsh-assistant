@@ -305,7 +305,7 @@ test('叶子会话提示词通过统一配置字段保存和读取', async (t) =
   assert.equal('taskEvidenceGuidance' in saved, false)
 })
 
-test('叶子只常驻流程索引，按需加载并选择后动态注入当前正文', async (t) => {
+test('叶子只常驻流程索引，按需加载后直接动态注入当前正文', async (t) => {
   const h = await setup(t)
   const saved = await h.runtime.updateAgentConfig({ taskPrompts: [
     { name: '问题排查', description: '只定位原因时使用', prompt: '排查正文唯一标识', enabled: true },
@@ -319,10 +319,46 @@ test('叶子只常驻流程索引，按需加载并选择后动态注入当前�
   const prompt = saved.taskPrompts[0]
   const loaded = await leafCall(h, task, 'load_task_prompt', { id: prompt.id })
   assert.equal(loaded.prompt, '排查正文唯一标识')
-  await leafCall(h, task, 'select_task_prompts', { inputVersion: task.inputVersion, ids: [prompt.id], reason: '当前目标只要求排查' })
+  assert.deepEqual(Object.keys(loaded).sort(), ['description', 'id', 'name', 'prompt', 'revision'])
   assert.deepEqual(h.store.getTask(task.taskId).taskPromptRefs, [{ id: prompt.id, revision: 1 }])
   assert.match(leaf.sections.map((section) => section.text()).join('\n'), /排查正文唯一标识/)
   assert.doesNotMatch(leaf.sections.map((section) => section.text()).join('\n'), /修复正文唯一标识/)
+})
+
+test('长任务可组合超过五个流程，重复加载去重，恢复后保留组合并按阶段裁减', async (t) => {
+  const h = await setup(t)
+  const config = await h.runtime.updateAgentConfig({ taskPrompts: Array.from({ length: 7 }, (_, index) => ({ name: `流程${index}`, description: `阶段${index}`, prompt: `组合正文-${index}-结束`, enabled: true })), taskPromptsVersion: 0 })
+  const task = await createTask(h, 'composed-workflow')
+  const loaded = config.taskPrompts.slice(0, 6)
+  for (const prompt of [...loaded, loaded[0]]) await leafCall(h, task, 'load_task_prompt', { id: prompt.id })
+  assert.deepEqual(h.store.getTask(task.taskId).taskPromptRefs, loaded.map(({ id, revision }) => ({ id, revision })))
+  await leafCall(h, task, 'select_task_prompts', { inputVersion: 1, ids: loaded.map(({ id }) => id), reason: '当前长流程由六项规则组合' })
+  // 无历史工具结果也能重建当前流程组合，覆盖压缩后不依赖工具历史的恢复路径。
+  await h.runtime.close()
+  const recovered = await setup(t, { snapshot: h.snapshot, goals: h.goals, sessionEvents: new Map() })
+  const text = () => recovered.handles.get(task.childSessionId).sections.map((section) => section.text()).join('\n')
+  for (const prompt of loaded) assert.ok(text().includes(prompt.prompt))
+  assert.ok(!text().includes(config.taskPrompts[6].prompt))
+  await leafCall(recovered, task, 'select_task_prompts', { inputVersion: 1, ids: [loaded[5].id], reason: '前面阶段已完成，只需最后阶段规则' })
+  assert.ok(text().includes(loaded[5].prompt))
+  assert.ok(!text().includes(loaded[0].prompt))
+  await leafCall(recovered, task, 'load_task_prompt', { id: config.taskPrompts[6].id })
+  assert.ok(text().includes(config.taskPrompts[6].prompt))
+})
+
+test('流程加载与组合调整排队期间目标变化时拒绝迟到写入', async (t) => {
+  const h = await setup(t)
+  const config = await h.runtime.updateAgentConfig({ taskPrompts: [{ name: '排查', description: '排查目标', prompt: '排查正文', enabled: true }], taskPromptsVersion: 0 })
+  const task = await createTask(h, 'prompt-stale-update')
+  await leafCall(h, task, 'load_task_prompt', { id: config.taskPrompts[0].id })
+  const original = h.store.updateTask
+  h.store.updateTask = async (id, transform) => {
+    await original(id, (value) => ({ ...value, inputVersion: value.inputVersion + 1, taskPromptRefs: [] }))
+    return original(id, transform)
+  }
+  await assert.rejects(leafCall(h, task, 'load_task_prompt', { id: config.taskPrompts[0].id }), /task_prompt_selection_stale/)
+  await assert.rejects(leafCall(h, task, 'select_task_prompts', { inputVersion: 2, ids: [], reason: '当前无适用规则' }), /task_prompt_selection_stale/)
+  assert.deepEqual(h.store.getTask(task.taskId).taskPromptRefs, [])
 })
 
 test('流程修订后旧选择失效，拒绝叶子用旧流程完成任务', async (t) => {
