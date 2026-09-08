@@ -815,14 +815,16 @@ ${store.getLeafSessionPrompt?.() || '按任务目标、工作区规则和当前�
 
 ${(store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map((item) => `- ${item.id}｜${item.name}｜${item.description}`).join('\n') || '暂无已配置的任务流程；按通用提示词执行。'}
 
-需要使用某个流程时先调用 load_task_prompt 读取正文，再调用 select_task_prompts 记录本轮当前流程。可以选择多个互补流程；不要为了保险加载全部流程。任务目标或授权变化时重新判断。现有 workType 不能代替具体流程选择。
+像使用 Skill 一样，根据当前任务、目标、有效授权和剩余阶段语义匹配索引，调用 load_task_prompt 加载匹配流程的正文。一次任务可以组合多个流程，数量不固定；随着工作推进按需补充，重复步骤只执行一次，不预先加载全部流程。加载成功即记入当前组合，无需额外确认选择。流程正文引用其他流程时，仍须判断其是否适用于当前目标，再按索引 ID 加载；引用不扩大授权。
+
+压缩或恢复后，下方会重新注入当前已加载的流程组合；这不是固定任务类型映射。继续根据当前目标和剩余工作核对适用性，缺少的流程按需加载，不再适用的流程通过 select_task_prompts 调整保留集合（允许空集合）。任务目标或授权变化后重新匹配。没有匹配项时按通用规范和任务目标执行，不强套流程。workType 不用于定位具体流程。
 
 ### 当前任务流程
 
 ${(() => {
   const current = store.getTask(task.taskId) ?? task
   const prompts = new Map((store.getTaskPrompts?.() ?? []).map((item) => [item.id, item]))
-  if (!(current.taskPromptRefs?.length > 0)) return '尚未选择任务流程。'
+  if (!(current.taskPromptRefs?.length > 0)) return '尚未加载适用的任务流程，请根据当前目标和索引按需匹配。'
   return current.taskPromptRefs.map((ref) => {
     const item = prompts.get(ref.id)
     if (!item || !item.enabled) return `- ${ref.id}：流程已停用或删除，请重新选择。`
@@ -872,28 +874,30 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         },
       })
       agentCtx.tools.register({
-        name: 'load_task_prompt', description: '按索引 ID 读取一个已启用任务流程的完整提示词；读取不会自动选中该流程。',
+        name: 'load_task_prompt', description: '根据任务和目标匹配索引后，按 ID 加载一个流程正文并加入当前组合；可多次加载互补流程，压缩和恢复后按组合重新注入。',
         parameters: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' } }, required: ['id'] },
         output: { schema: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, prompt: { type: 'string' }, revision: { type: 'integer' } }, required: ['id', 'name', 'description', 'prompt', 'revision'] }, render: (_args, out) => [{ type: 'text', text: `# ${out.name}\n\n${out.prompt}\n\n流程引用：${out.id}@${out.revision}` }] },
         execute: async ({ id }, exec) => {
           if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_prompt_wrong_session:${task.taskId}`)
           const item = (store.getTaskPrompts?.() ?? []).find((value) => value.id === id && value.enabled)
           if (!item) throw new Error(`task_prompt_not_found:${id}`)
+          const inputVersion = store.getTask(task.taskId)?.inputVersion
           await store.updateTask(task.taskId, (value) => {
-            if (!['running', 'waiting'].includes(value.state)) throw new Error(`task_prompt_selection_stale:${task.taskId}`)
-            return { ...value, executionEvents: [...(value.executionEvents ?? []), { kind: 'task-prompt-loaded', inputVersion: value.inputVersion, id: item.id, revision: item.revision, at: new Date().toISOString() }], updatedAt: new Date().toISOString() }
+            if (value.inputVersion !== inputVersion || !['running', 'waiting'].includes(value.state)) throw new Error(`task_prompt_selection_stale:${task.taskId}`)
+            const refs = new Map((value.taskPromptRefs ?? []).map((ref) => [ref.id, ref]))
+            refs.set(item.id, { id: item.id, revision: item.revision })
+            return { ...value, taskPromptRefs: [...refs.values()], executionEvents: [...(value.executionEvents ?? []), { kind: 'task-prompt-loaded', inputVersion, id: item.id, revision: item.revision, at: new Date().toISOString() }], updatedAt: new Date().toISOString() }
           })
-          return item
+          return { id: item.id, name: item.name, description: item.description, prompt: item.prompt, revision: item.revision }
         },
       })
       agentCtx.tools.register({
-        name: 'select_task_prompts', description: '记录当前任务采用的任务流程。先读取每个流程正文；目标或授权变化时可替换选择。',
+        name: 'select_task_prompts', description: '可选：根据当前目标和剩余阶段调整已加载流程的保留集合，移除不再适用项；ids 是完整保留列表，空列表清空。加载流程无需调用本工具。',
         parameters: { type: 'object', additionalProperties: false, properties: { inputVersion: { type: 'integer' }, ids: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } }, required: ['inputVersion', 'ids', 'reason'] },
         output: { schema: { type: 'object', additionalProperties: false, properties: { taskId: { type: 'string' }, taskPromptRefs: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, revision: { type: 'integer' } }, required: ['id', 'revision'] } } }, required: ['taskId', 'taskPromptRefs'] }, render: (_args, out) => [{ type: 'text', text: `当前任务流程已更新：${out.taskPromptRefs.map((ref) => `${ref.id}@${ref.revision}`).join(', ') || '未选择专用流程'}` }] },
         execute: async ({ inputVersion, ids, reason }, exec) => {
           if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_prompt_wrong_session:${task.taskId}`)
           if (!reason.trim()) throw new Error('task_prompt_selection_reason_required')
-          if (ids.length > 5) throw new Error('task_prompt_selection_too_many')
           if (new Set(ids).size !== ids.length) throw new Error('task_prompt_selection_duplicate')
           const current = store.getTask(task.taskId)
           if (!current || current.inputVersion !== inputVersion || !['running', 'waiting'].includes(current.state)) throw new Error(`task_prompt_selection_stale:${task.taskId}`)
@@ -904,7 +908,10 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             if (!(current.executionEvents ?? []).some((event) => event.kind === 'task-prompt-loaded' && event.inputVersion === inputVersion && event.id === id && event.revision === item.revision)) throw new Error(`task_prompt_not_loaded:${id}`)
             return { id, revision: item.revision }
           })
-          await store.updateTask(task.taskId, (value) => value.inputVersion === inputVersion ? { ...value, taskPromptRefs: refs, executionEvents: [...(value.executionEvents ?? []), { kind: 'task-prompts-selected', inputVersion, taskPromptRefs: refs, reason: reason.trim(), at: new Date().toISOString() }], updatedAt: new Date().toISOString() } : value)
+          await store.updateTask(task.taskId, (value) => {
+            if (value.inputVersion !== inputVersion || !['running', 'waiting'].includes(value.state)) throw new Error(`task_prompt_selection_stale:${task.taskId}`)
+            return { ...value, taskPromptRefs: refs, executionEvents: [...(value.executionEvents ?? []), { kind: 'task-prompts-selected', inputVersion, taskPromptRefs: refs, reason: reason.trim(), at: new Date().toISOString() }], updatedAt: new Date().toISOString() }
+          })
           return { taskId: task.taskId, taskPromptRefs: refs }
         },
       })
