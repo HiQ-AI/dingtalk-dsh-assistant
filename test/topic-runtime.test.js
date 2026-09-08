@@ -92,10 +92,43 @@ test('Topic 决策信封受字符预算约束，缺失增量读完后才可提�
   assert.ok(request.omittedDeltaMessageIds.length > 0)
   assert.equal(request.ownedDeltaMessageIds.every((id) => request.messages.some((message) => message.messageId === id)), true)
   await assert.rejects(h.call('group_decision_submit', submission(request)), /topic_decision_delta_unread/)
-  for (let offset = 0; offset < request.totalMessages; offset += 5) {
-    await h.call('group_topic_context_get', { topicId: request.topicId, revision: request.revision, offset, limit: 5 })
+  let offset = 0, textOffset = 0
+  while (offset < request.totalMessages) {
+    const page = await h.call('group_topic_context_get', { topicId: request.topicId, revision: request.revision, offset, limit: 5, ...(textOffset ? { textOffset } : {}) })
+    assert.ok(JSON.stringify(page).length <= 40_000)
+    offset = page.nextOffset; textOffset = page.nextTextOffset ?? 0
   }
   assert.equal((await h.call('group_decision_submit', submission(request))).status, 'accepted')
+})
+
+test('超长单消息必须按连续文本片段读完后才允许决策', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'long-message', { text: '长'.repeat(90_000) })
+  const request = (await route(h)).pendingDecisions[0]
+  const args = { requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision: { basisMessageIds: ['long-message'], actions: [], reason: '完整读取后静默处理' } }
+  await assert.rejects(h.call('group_decision_submit', args), /topic_decision_delta_unread/)
+  const first = await h.call('group_topic_context_get', { topicId: request.topicId, revision: request.revision, offset: 0 })
+  assert.ok(JSON.stringify(first).length <= 40_000)
+  await h.call('group_topic_context_get', { topicId: request.topicId, revision: request.revision, offset: 0, textOffset: first.nextTextOffset + 10 })
+  await assert.rejects(h.call('group_decision_submit', args), /topic_decision_delta_unread/)
+  let offset = first.nextOffset, textOffset = first.nextTextOffset, calls = 1
+  do {
+    const page = await h.call('group_topic_context_get', { topicId: request.topicId, revision: request.revision, offset, ...(textOffset ? { textOffset } : {}) })
+    assert.ok(JSON.stringify(page).length <= 40_000)
+    assert.equal(page.messages[0].textOffset ?? 0, textOffset)
+    offset = page.nextOffset; textOffset = page.nextTextOffset ?? 0; calls += 1
+  } while (offset < request.totalMessages)
+  assert.ok(calls >= 3)
+  assert.equal((await h.call('group_decision_submit', args)).status, 'accepted')
+})
+
+test('归类协议区分 Topic 归属与历史资料查询', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'branch-question', { text: '你做的草稿箱前端在哪个分支，我自己调整后合入' })
+  await h.coordinator.schedule('g')
+  const prompt = h.sent.findLast((item) => item.startsWith('[GROUP_TOPIC_ROUTE]'))
+  assert.match(prompt, /历史资料时.*不得把资料来源 Topic 加入归属/u)
+  assert.match(prompt, /effectOwner 指定唯一动作主归属/u)
 })
 
 test('消息仅在全部关联 Topic 完成后收口为已投递', async (t) => {
@@ -104,7 +137,10 @@ test('消息仅在全部关联 Topic 完成后收口为已投递', async (t) => 
   await h.coordinator.schedule('g')
   const routeRequest = h.envelope('[GROUP_TOPIC_ROUTE]')
   const routed = await h.call('group_topic_route_submit', { requestId: routeRequest.requestId, routes: [{
-    messageId: 'shared', messageVersion: 1, topics: [{ newTopicKey: 'a', title: 'A' }, { newTopicKey: 'b', title: 'B' }],
+    messageId: 'shared', messageVersion: 1, topics: [
+      { newTopicKey: 'a', title: 'A', relationship: 'continuation', reason: '继续事项 A' },
+      { newTopicKey: 'b', title: 'B', relationship: 'affected', reason: '同时改变事项 B' },
+    ], effectOwner: { newTopicKey: 'b' },
   }] })
   const [a, b] = routed.pendingDecisions
   assert.equal(h.store.getGroup('g').messages[0].agentDeliveryStatus, 'pending')
@@ -387,16 +423,19 @@ test('已接受决策失败后到期自动恢复，无需新消息或重启', { 
 test('共享消息只有主 Topic 能创建 Task 或确认，其他 Topic 可独立实质回答', async (t) => {
   const h = await setup(t); await ingest(h, 'shared', { text: '@助理 同时核对两个事项' }); await h.coordinator.schedule('g')
   const routeRequest = h.envelope('[GROUP_TOPIC_ROUTE]')
-  const routed = await h.call('group_topic_route_submit', { requestId: routeRequest.requestId, routes: [{ messageId: 'shared', messageVersion: 1, topics: [{ newTopicKey: 'a', title: 'A' }, { newTopicKey: 'b', title: 'B' }] }] })
+  const routed = await h.call('group_topic_route_submit', { requestId: routeRequest.requestId, routes: [{ messageId: 'shared', messageVersion: 1, topics: [
+    { newTopicKey: 'a', title: 'A', relationship: 'continuation', reason: '继续事项 A' },
+    { newTopicKey: 'b', title: 'B', relationship: 'affected', reason: '同时改变事项 B' },
+  ], effectOwner: { newTopicKey: 'b' } }] })
   const [a, b] = routed.pendingDecisions
-  assert.equal(a.effectOwnerTopicIds.shared, a.topicId)
-  assert.deepEqual(a.ownedDeltaMessageIds, ['shared'])
-  assert.deepEqual(b.ownedDeltaMessageIds, [])
+  assert.equal(a.effectOwnerTopicIds.shared, b.topicId)
+  assert.deepEqual(a.ownedDeltaMessageIds, [])
+  assert.deepEqual(b.ownedDeltaMessageIds, ['shared'])
   const action = (request) => ({ kind: 'new-task', title: '核验', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: request.topicId, revision: 1 }] })
-  await assert.rejects(h.call('group_decision_submit', submission(b, { actions: [action(b)], reply: '收到' })), /topic_effect_owner_required/)
-  await assert.rejects(h.call('group_decision_submit', submission(b, { reply: '收到', replyReview: { kind: 'confirmation' } })), /topic_effect_owner_required/)
-  assert.equal((await h.call('group_decision_submit', submission(b, { reply: 'B 的独立分析结果', replyReview: { kind: 'substantive' } }))).status, 'accepted')
-  assert.equal((await h.call('group_decision_submit', submission(a, { actions: [action(a)], reply: '收到', replyReview: { kind: 'confirmation' } }))).status, 'accepted')
+  await assert.rejects(h.call('group_decision_submit', submission(a, { actions: [action(a)], reply: '收到' })), /topic_effect_owner_required/)
+  await assert.rejects(h.call('group_decision_submit', submission(a, { reply: '收到', replyReview: { kind: 'confirmation' } })), /topic_effect_owner_required/)
+  assert.equal((await h.call('group_decision_submit', submission(a, { reply: 'A 的独立分析结果', replyReview: { kind: 'substantive' } }))).status, 'accepted')
+  assert.equal((await h.call('group_decision_submit', submission(b, { actions: [action(b)], reply: '收到', replyReview: { kind: 'confirmation' } }))).status, 'accepted')
   await h.coordinator.drain('g')
   assert.equal(h.store.listTasks().length, 1)
 })

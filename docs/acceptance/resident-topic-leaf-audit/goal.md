@@ -1,6 +1,6 @@
 # 常驻会话、Topic 与叶子 Task 协作改造
 
-> 状态：COMPLETE
+> 状态：IN_PROGRESS
 > Goal ID：resident-topic-leaf-audit
 > 最近维护：2026-09-07T17:00:00+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant/docs/acceptance/resident-topic-leaf-audit/goal.md
@@ -38,11 +38,13 @@
 | SG7 | Topic 工具真实回归 | 修复无损 JSON 输出并由真实 Resident、叶子 Task 与 DWS 回读验证 | 完成 | round-4.md |
 | SG8 | 第二轮可靠性修复 | 最新 main 上 R1–R5 均有失败复现、实现修复和通过回归 | 完成 | round-5.md |
 | SG9 | 合并与本地部署 | PR 合并后拉取最新 main，安装精确产物并完成运行态与简单 E2E | 完成 | round-5.md |
+| SG10 | Topic 归属与读取边界 | 区分归属和资料查询，显式主归属，Topic 分页与长消息读取受总预算约束 | 完成 | round-6.md |
+| SG11 | 叶子完全权限 | 新建和恢复叶子均使用 danger-full-access，Resident 权限不变 | 完成 | round-6.md |
 
 ## 当前检查点
 
-- 当前子目标：全部完成
-- 唯一下一步：无。
+- 当前子目标：交付收口
+- 唯一下一步：创建 PR、合并并从最新 main 部署本地。
 - 未闭环项：网络工具级隔离仍取决于 DSH 能力。
 
 ## 进展
@@ -55,6 +57,9 @@
 - 2026-09-08：合并所有开放 PR 后在最新 main `24a8c64` 复现 R1–R5；用户要求修复，建立第二轮实施快照并进入 SG8。
 - 2026-09-08：R1–R5 新增回归全绿，全量 248/248、原 A01–A10、打包与 diff 检查通过；SG8 完成，进入 SG9。
 - 2026-09-08：PR #73 合并为 `be3314a`；本地 main 与 origin/main 对齐，精确 tgz 安装到 Web profile。新进程完成健康、DWS listener/backfill、未认证边界及浏览器运行看板 E2E 回读，SG9 完成。
+- 2026-09-08：复核 #886 的真实归类记录，确认“资料查询即归属”、隐式动作主归属和分页读取无字符预算三个问题，进入 SG10。
+- 2026-09-08：用户要求叶子会话开放完全权限，新增 SG11；新建与恢复路径统一改用 DSH `danger-full-access` preset。
+- 2026-09-08：R6–R9 通过，全量 250/250、原 A01–A10、三个发行包与 diff 检查均通过；SG10、SG11 完成。
 
 ## 重大决策
 

@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { buildReplyReviewCandidates, groupDecisionSchema } from './decision.js'
-import { createTopicCoordinator, projectTopicContext } from './topic-runtime.js'
+import { boundedTopicContext, createTopicCoordinator } from './topic-runtime.js'
 import { resolveTopicMessages, stableId, fingerprint } from './topic-model.js'
 import { parseTaskCheckpoint, parseTaskResult } from './task-result.js'
 
@@ -198,7 +198,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       name: 'dingtalk-group-decision-protocol', order: 41,
       text: () => `## Topic 处理协议
 
-收到 [GROUP_TOPIC_ROUTE] 时先结合该批所有消息和已有 Topic 归类，通过 group_topic_route_submit 提交完整归属；引用、关键词只是候选，必须结合讨论目标、上下文、原始授权和任务状态判断。新消息可创建 Topic 或追加已有 Topic，一条消息可以影响多个话题。无关噪声可无归属，但必须说明原因。新 Topic 的 title 应像任务名称一样简短，只概括可持续归类的共同讨论对象，优先使用“对象 + 事项”的短语并控制在 8–20 字，不复述动作清单、背景、进展、结论或消息原文；细节写入后续 summary。title 不得超过 30 字。
+收到 [GROUP_TOPIC_ROUTE] 时先结合该批所有消息和已有 Topic 归类，通过 group_topic_route_submit 提交完整归属；引用、关键词只是候选，必须结合讨论目标、上下文、原始授权和任务状态判断。Topic 归属表示消息延续同一讨论目标（continuation），或实质改变该 Topic 的事实、范围、结论或动作（affected）。为了回答而读取旧分支、PR、任务或其他历史资料不构成归属，应使用 Topic/Task 查询工具获取资料。新消息可创建 Topic 或追加已有 Topic，一条消息确实影响多个话题时，逐项声明 relationship 和 reason，并通过 effectOwner 指定唯一动作主归属；主归属是消息当前直接推动的事项，不是资料来源。无关噪声可无归属，但必须说明原因。新 Topic 的 title 应像任务名称一样简短，只概括可持续归类的共同讨论对象，优先使用“对象 + 事项”的短语并控制在 8–20 字，不复述动作清单、背景、进展、结论或消息原文；细节写入后续 summary。title 不得超过 30 字。
 
 签名、口吻和身份声明由 Agent 自身工作区规则决定。
 收到 [GROUP_TOPIC_DECISION] 后读取该 Topic 固定版本与本次增量，用 group_decision_submit 独立提交，不等待 turn 结束。每个提交包含 requestId、topicId、revision 和 decision；decision 必须有 basisMessageIds，至少包含一条当前增量的原始消息。Task 动作使用 topicRefs；已有 Task 动作还需提供当前 inputVersion/runSequence。Task 不保存消息列表，来源统一从 Topic 读取。
@@ -820,7 +820,7 @@ ${(store.getTask(task.taskId) ?? task).stageTasks.map((item) => `- ${item}`).joi
 
 ${JSON.stringify({ taskId: task.taskId, topicRefs: store.getTask(task.taskId)?.topicRefs ?? task.topicRefs, inputVersion: store.getTask(task.taskId)?.inputVersion ?? task.inputVersion, runSequence: store.getTask(task.taskId)?.runSequence ?? task.runSequence })}
 
-原始消息通过 group_topic_context_get 按 Topic 固定版本分页读取，不得猜测未读取的上下文。每个 checkpoint/result 必须带实际使用的 inputVersion/runSequence。Task objective 与验收标准仍是执行边界。
+原始消息通过 group_topic_context_get 按 Topic 固定版本读取；返回 nextOffset 或 nextTextOffset 时必须按该游标连续读取，不得猜测未读取的上下文。每个 checkpoint/result 必须带实际使用的 inputVersion/runSequence。Task objective 与验收标准仍是执行边界。
 
 ### 已持久化的人工处理意见
 
@@ -840,13 +840,13 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       })
       agentCtx.tools.register({
         name: 'group_topic_context_get', description: '按 Task 已接纳的固定版本读取原始 Topic 消息。',
-        parameters: { type: 'object', additionalProperties: false, properties: { topicId: { type: 'string' }, revision: { type: 'integer' }, offset: { type: 'integer' }, limit: { type: 'integer' } }, required: ['topicId', 'revision'] },
+        parameters: { type: 'object', additionalProperties: false, properties: { topicId: { type: 'string' }, revision: { type: 'integer' }, offset: { type: 'integer' }, limit: { type: 'integer' }, textOffset: { type: 'integer' } }, required: ['topicId', 'revision'] },
         output: { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] },
         execute: (args, exec) => {
           if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error('task_topic_wrong_session')
           const current = store.getTask(task.taskId)
           if (!current.topicRefs.some((ref) => ref.topicId === args.topicId && ref.revision === args.revision)) throw new Error('task_topic_not_admitted')
-          return projectTopicContext(store.getTopicContext({ ...args, groupId: current.groupId }))
+          return boundedTopicContext(store.getTopicContext({ ...args, groupId: current.groupId, limit: args.limit ?? 10 }), { textOffset: args.textOffset ?? 0 })
         },
       })
       agentCtx.tools.register({
@@ -915,7 +915,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     })
     try {
       if (runtimeClosing || store.getTask(task.taskId)?.state === 'completed') { handle.agent.cancel({ kind: 'user' }); return handle }
-      ensureLeafDescriptor(handle, task); applyPermission(handle, 'workspace-write'); await attachGoal(task, handle, true); return handle
+      ensureLeafDescriptor(handle, task); applyPermission(handle, 'danger-full-access'); await attachGoal(task, handle, true); return handle
     } catch (error) {
       leafHandles.delete(task.taskId); leafTaskBySession.delete(task.childSessionId); await handle.dispose(); throw error
     }
@@ -923,7 +923,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   async function resumeLeaf(task) {
     if (leafHandles.has(task.taskId)) return leafHandles.get(task.taskId)
     const handle = await ctx.agents.resume({ resumeSessionId: SessionId(task.childSessionId), agentOptions, setup: leafSetup(task), signal: AbortSignal.timeout(resumeTimeoutMs) })
-    ensureLeafDescriptor(handle, task); applyPermission(handle, 'workspace-write')
+    ensureLeafDescriptor(handle, task); applyPermission(handle, 'danger-full-access')
     await attachGoal(task, handle, false); return handle
   }
   async function restartPausedLeaf(task, previous, attempt) {

@@ -196,6 +196,7 @@ test('Task 只保存固定 Topic 引用，叶子收到版本化原始上下文',
   assert.equal(call.input.meta.cwd, agentWorkspace)
   assert.equal(call.input.meta.parentSession, h.store.getGroup('g').residentSessionId)
   assert.equal(call.input.meta.origin, 'subagent')
+  assert.ok(h.permissions.some(([sessionId, preset]) => sessionId === task.childSessionId && preset === 'danger-full-access'))
   assert.ok(leaf.sent.some((message) => message.content[0].text.includes('[TASK_TOPIC_CONTEXT]')))
   assert.ok(leaf.sent.some((message) => message.content[0].text.includes('"inputVersion":1')))
   for (const tool of leaf.tools.values()) { assertSupportedJsonSchema(tool.parameters); assertSupportedJsonSchema(tool.output.schema) }
@@ -912,7 +913,10 @@ test('同 Topic 一次决策不能重复改变同一 Task，共享主 Topic 可�
   await ingest(h, 'cancel-both', { text: '@助理 两个任务都取消' })
   await h.runtime.recoverInterruptedDecisions()
   const routing = h.envelope('[GROUP_TOPIC_ROUTE]')
-  const routed = await h.call('group_topic_route_submit', { requestId: routing.requestId, routes: routing.messages.map((message) => ({ messageId: message.messageId, messageVersion: message.messageVersion, topics: [{ topicId: one.topicRefs[0].topicId }, { topicId: two.topicRefs[0].topicId }] })) })
+  const routed = await h.call('group_topic_route_submit', { requestId: routing.requestId, routes: routing.messages.map((message) => ({ messageId: message.messageId, messageVersion: message.messageVersion, topics: [
+    { topicId: one.topicRefs[0].topicId, relationship: 'affected', reason: '明确取消任务一' },
+    { topicId: two.topicRefs[0].topicId, relationship: 'affected', reason: '明确取消任务二' },
+  ], effectOwner: { topicId: one.topicRefs[0].topicId } })) })
   const owner = routed.pendingDecisions.find((item) => item.topicId === one.topicRefs[0].topicId)
   const actions = [one, two].map((task) => ({ kind: 'task-cancel', taskId: task.taskId, ...inputVersion(task), reason: '用户明确取消两个任务', topicRefs: [{ topicId: owner.topicId, revision: owner.revision }] }))
   const submission = { requestId: owner.requestId, topicId: owner.topicId, revision: owner.revision, decision: { basisMessageIds: ['cancel-both'], actions: [actions[0], actions[0]], reply: '已取消这两个任务。', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } }
