@@ -305,6 +305,33 @@ test('叶子会话提示词通过统一配置字段保存和读取', async (t) =
   assert.equal('taskEvidenceGuidance' in saved, false)
 })
 
+test('内置通用规范不依赖用户补充，动态清空及恢复后仍只注入叶子', async (t) => {
+  const h = await setup(t)
+  const task = await createTask(h, 'builtin-leaf-prompt')
+  const text = (handle) => handle.sections.map((section) => typeof section.text === 'function' ? section.text() : section.text).join('\n')
+  const leaf = h.handles.get(task.childSessionId)
+  const builtin = '### 叶子会话内置通用规范'
+  const custom = '用户定制唯一标识：交付报告使用表格。'
+  assert.equal(h.runtime.getAgentConfig().leafSessionPrompt, '')
+  assert.ok(text(leaf).includes(builtin))
+  assert.match(text(leaf), /主动检验反例/)
+  assert.doesNotMatch(text(leaf), /### 用户补充的叶子会话提示词/)
+  await h.runtime.updateAgentConfig({ leafSessionPrompt: custom })
+  assert.equal(text(leaf).split(builtin).length, 2)
+  assert.equal(text(leaf).split(custom).length, 2)
+  assert.ok(!text(h.resident()).includes(builtin))
+  assert.ok(!text(h.resident()).includes(custom))
+  await h.runtime.close()
+  const recovered = await setup(t, { snapshot: h.snapshot, goals: h.goals, sessionEvents: new Map() })
+  const restored = recovered.handles.get(task.childSessionId)
+  assert.equal(text(restored).split(builtin).length, 2)
+  assert.equal(text(restored).split(custom).length, 2)
+  await recovered.runtime.updateAgentConfig({ leafSessionPrompt: '' })
+  assert.ok(text(restored).includes(builtin))
+  assert.ok(!text(restored).includes(custom))
+  assert.doesNotMatch(text(restored), /### 用户补充的叶子会话提示词/)
+})
+
 test('叶子只常驻流程索引，按需加载后直接动态注入当前正文', async (t) => {
   const h = await setup(t)
   const saved = await h.runtime.updateAgentConfig({ taskPrompts: [
