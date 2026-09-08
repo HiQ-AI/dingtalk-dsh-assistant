@@ -441,6 +441,63 @@ test('Web 补充提升输入版本并重置当前检查点，同请求重试不�
   assert.ok(leaf.sent.some((message) => message.content[0].text.includes('"inputVersion":2')))
 })
 
+test('preserve 新输入作废待审 checkpoint，并按新版本重新审阅', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const value = { ...inputVersion(task), kind: 'plan-confirmed', summary: '初始计划', completedItems: [], evidence: [], remainingItems: ['核验'], nextStep: '核验', needsCoordinatorDecision: false }
+  const pending = leafCall(h, task, 'submit_task_checkpoint', value)
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  await h.runtime.inspectRunningTasks()
+  assert.equal(h.resident().sent.filter((message) => message.content[0].text.startsWith('[TASK_CHECKPOINT_REVIEW]')).length, 1)
+  const request = { taskId: task.taskId, requestId: 'preserve-pending', topicRefs: task.topicRefs, context: '补充核验地址，不改变范围', progressImpact: 'preserve', ...inputVersion(task) }
+  const updated = await h.runtime.appendTaskContext(request)
+  assert.equal(updated.inputVersion, 2)
+  assert.deepEqual(updated.checkpoints, [])
+  assert.equal(updated.executionEvents.at(-1).checkpoints.length, 1)
+  const oldReview = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  assert.equal((await h.call('group_task_review_submit', { requestId: oldReview.requestId, review: { decision: 'acknowledge', reason: '旧审阅' } })).status, 'task-stale')
+  await assert.rejects(pending, /task_review_context_changed/)
+  await checkpoint(h, updated, { kind: 'plan-confirmed', remainingItems: ['核验'] })
+  assert.equal(h.store.getTask(task.taskId).checkpoints[0].inputVersion, 2)
+})
+
+test('旧执行轮次的 idle 回收不释放已重开的叶子', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['核验'] })
+  await checkpoint(h, task, { kind: 'stage-completed', stageTask: task.stageTasks[0], completedItems: ['核验'], remainingItems: [] })
+  let release
+  h.idle.set(task.childSessionId, new Promise((resolve) => { release = resolve }))
+  const completion = completeResult(h, task)
+  const review = await completion
+  assert.equal(review.value.state, 'completed')
+  const completed = h.store.getTask(task.taskId)
+  const reopened = await h.runtime.reopenTask({ taskId: task.taskId, requestId: 'reopen-before-old-idle', topicRefs: completed.topicRefs, context: '重新核验', ...inputVersion(completed) })
+  release()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(h.disposed.includes(task.childSessionId), false)
+  await checkpoint(h, reopened, { kind: 'plan-confirmed', remainingItems: ['重新核验'] })
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+})
+
+test('人工批准与排队启动竞争时不突破并发上限', async (t) => {
+  let release, entered = false, blockedId
+  const gate = new Promise((resolve) => { release = resolve })
+  const h = await setup(t, { maxConcurrentTasks: 1, beforeCreate: async (input) => { if (String(input.sessionId) === blockedId) { entered = true; await gate } } })
+  t.after(() => release())
+  const waiting = await createTask(h, 'waiting')
+  await leafCall(h, waiting, 'submit_task_result', { ...inputVersion(waiting), status: 'waiting', waitingKind: 'human-intervention', summary: '需要许可', evidence: ['隔离证据'], artifacts: [], waitingReason: '需要许可', blockerCategory: 'redline', requestedAction: '执行隔离测试', risk: '测试环境' })
+  const running = await createTask(h, 'running')
+  const queued = await createTask(h, 'queued')
+  blockedId = queued.childSessionId
+  await h.runtime.cancelTask({ taskId: running.taskId, requestId: 'release-capacity', topicRefs: running.topicRefs, ...inputVersion(running), reason: '释放容量' })
+  await until(() => entered)
+  await h.runtime.decideAuthorization({ requestId: h.store.getTask(waiting.taskId).humanBlocker.requestId, decision: 'approved', comment: '批准测试' })
+  assert.equal(h.store.getTask(waiting.taskId).state, 'queued')
+  assert.equal(h.store.listTasks().filter((task) => task.state === 'running').length, 0)
+  release()
+  await until(() => h.store.getTask(queued.taskId).state === 'running')
+  assert.equal(h.store.listTasks().filter((task) => task.state === 'running').length, 1)
+})
+
 test('Web 重开完成任务建立新轮次，固定保留旧输入版本与历史', async (t) => {
   const h = await setup(t), task = await createTask(h)
   await h.runtime.cancelTask({ taskId: task.taskId, requestId: 'cancel-before-reopen', topicRefs: task.topicRefs, ...inputVersion(h.store.getTask(task.taskId)), reason: '先停止' })

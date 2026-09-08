@@ -55,6 +55,19 @@ test('Topic 固定版本投影在摘要缺失时仍是无损 JSON', () => {
   assert.equal('optional' in projected.messages[0].imageRefs[0], false)
   assert.deepEqual(JSON.parse(JSON.stringify(projected)), projected)
 })
+
+test('Topic 工具统一返回 lossless JSON', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'lossless')
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const routed = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{
+    messageId: 'lossless', messageVersion: 1, topics: [{ newTopicKey: 'lossless', title: '无损输出' }],
+  }] })
+  assert.deepEqual(JSON.parse(JSON.stringify(routed)), routed)
+  const reviewed = await h.call('group_topic_route_review', { messageIds: ['lossless'], reason: '核验输出投影' })
+  assert.deepEqual(JSON.parse(JSON.stringify(reviewed)), reviewed)
+})
 async function route(h, choices = {}) {
   await h.coordinator.schedule('g')
   const request = h.envelope('[GROUP_TOPIC_ROUTE]')
@@ -65,6 +78,25 @@ async function complete(h, request) {
   assert.equal((await h.call('group_decision_submit', submission(request))).status, 'accepted')
   await h.coordinator.drain('g')
 }
+
+test('Topic 决策信封受字符预算约束，缺失增量读完后才可提交', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'large-0', { text: '测'.repeat(12_000) })
+  const first = (await route(h)).pendingDecisions[0]
+  for (let index = 1; index < 10; index++) {
+    await ingest(h, `large-${index}`, { text: '测'.repeat(12_000) })
+    await route(h, { [`large-${index}`]: first.topicId })
+  }
+  const request = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.ok(JSON.stringify(request.messages).length <= 40_000)
+  assert.ok(request.omittedDeltaMessageIds.length > 0)
+  assert.equal(request.ownedDeltaMessageIds.every((id) => request.messages.some((message) => message.messageId === id)), true)
+  await assert.rejects(h.call('group_decision_submit', submission(request)), /topic_decision_delta_unread/)
+  for (let offset = 0; offset < request.totalMessages; offset += 5) {
+    await h.call('group_topic_context_get', { topicId: request.topicId, revision: request.revision, offset, limit: 5 })
+  }
+  assert.equal((await h.call('group_decision_submit', submission(request))).status, 'accepted')
+})
 
 test('消息仅在全部关联 Topic 完成后收口为已投递', async (t) => {
   const h = await setup(t)

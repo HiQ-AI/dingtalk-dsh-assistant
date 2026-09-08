@@ -36,11 +36,13 @@
 | SG5 | 全量交付验证 | matrix 全绿，全量测试、构建/打包、diff 检查和文档一致性通过 | 完成 | report.md |
 | SG6 | 本地部署与真实 E2E | 当前提交安装并重启，真实消息完成收信、Task、回复和 DWS 回读 | 完成 | round-3.md |
 | SG7 | Topic 工具真实回归 | 修复无损 JSON 输出并由真实 Resident、叶子 Task 与 DWS 回读验证 | 完成 | round-4.md |
+| SG8 | 第二轮可靠性修复 | 最新 main 上 R1–R5 均有失败复现、实现修复和通过回归 | 完成 | round-5.md |
+| SG9 | 合并与本地部署 | PR 合并后拉取最新 main，安装精确产物并完成运行态与简单 E2E | 进行中 | 待补充 |
 
 ## 当前检查点
 
-- 当前子目标：SG7
-- 唯一下一步：无。
+- 当前子目标：SG9
+- 唯一下一步：提交 PR，合并后从最新 main 部署本机 profile 并验证。
 - 未闭环项：网络工具级隔离仍取决于 DSH 能力。
 
 ## 进展
@@ -50,6 +52,8 @@
 - 2026-09-07：A01–A10 修复探针全绿，既有测试 236/236 通过，三个发行包打包成功；SG1–SG5 完成。
 - 2026-09-07：当前提交 tgz 已部署本地 Web profile；真实 DWS 最小任务完成收信、Task、四个 checkpoint、引用回复与回读，SG6 完成。同时记录 Topic 读取工具输出错误为未闭环项。
 - 2026-09-07：确认工具错误由对外投影中的嵌套 `undefined` 引起；边界归一化后 237 项测试通过，提交 `d1d035e` 重新部署，真实 Topic revision 2 读取、叶子 Task 和引用回复完整回读，SG7 完成。
+- 2026-09-08：合并所有开放 PR 后在最新 main `24a8c64` 复现 R1–R5；用户要求修复，建立第二轮实施快照并进入 SG8。
+- 2026-09-08：R1–R5 新增回归全绿，全量 248/248、原 A01–A10、打包与 diff 检查通过；SG8 完成，进入 SG9。
 
 ## 重大决策
 
@@ -61,3 +65,4 @@
 - 源码起点：本地 main `9cf0687c69ff2332a0e778b8b72f59c1131d4bde`，package version `0.5.13`；未 fetch，不能据此声称远端最新。
 - 审计方案：docs/spec/resident-topic-leaf-audit.md。
 - 隔离探针：docs/acceptance/resident-topic-leaf-audit/scripts/probe.mjs。
+- 第二轮实施快照：docs/spec/resident-runtime-followup.md。
