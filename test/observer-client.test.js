@@ -104,6 +104,7 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /completed \? React\.createElement\(CheckpointDoneIcon, \{ size: 12 \}\)/)
   assert.match(source, /width: 64, color: colors\.muted, textAlign: 'right'/)
   assert.match(source, /'aria-label': '最后活动时间'/)
+  assert.match(source, /最后活动 \$\{fmt\(item\.updatedAt\)\}/)
   assert.match(source, /marginTop: 0, paddingTop: 6, borderTop:/)
   assert.match(source, /'aria-label': '任务目标'/)
   assert.doesNotMatch(source, /`最后活动 \$\{fmt\(task\.updatedAt\)\}`\),/)

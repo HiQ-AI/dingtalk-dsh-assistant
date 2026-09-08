@@ -122,6 +122,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     try {
       const offset = pageNumber(url, 'offset', 0), limit = pageNumber(url, 'limit', 50, 100)
       const topics = store.listTopics(url.searchParams.get('groupId') ?? undefined)
+        .toSorted((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
       return send(response, 200, { topics: topics.slice(offset, offset + limit).map(topicSummary), total: topics.length, offset, limit })
     } catch (error) { return send(response, 400, { error: error.message }) }
   }

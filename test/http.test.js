@@ -113,14 +113,14 @@ test('Web输入版本与幂等身份冲突返回409，可靠接收尚未完成�
   }, { overrides: { appendTaskContext: async () => { if (result instanceof Error) throw result; return result } } })
 })
 
-test('Topic 查询有界分页且群摘要不泄漏内部决策、归类和预约记录', async () => {
-  const topics = Array.from({ length: 102 }, (_, index) => ({ groupId: 'g', topicId: `topic-${index}`, title: `话题 ${index}`, revision: 3, processedRevision: 1, status: 'active', summary: '摘'.repeat(1100), openQuestions: ['待确认'], entries: [{ revision: 1, messageId: 'm1', action: index === 0 ? 'add' : 'remove' }], decisions: [{ decisionId: 'old', status: 'failed', operations: [] }, { decisionId: 'current', status: 'failed', error: '失败'.repeat(600), operations: [{ status: 'applied', action: { secretInternal: true } }, { status: 'pending' }] }, { decisionId: 'done', status: 'completed', operations: [] }] }))
+test('Topic 查询按最后活动时间降序分页且群摘要不泄漏内部决策、归类和预约记录', async () => {
+  const topics = Array.from({ length: 102 }, (_, index) => ({ groupId: 'g', topicId: `topic-${index}`, title: `话题 ${index}`, revision: 3, processedRevision: 1, status: 'active', summary: '摘'.repeat(1100), openQuestions: ['待确认'], entries: [{ revision: 1, messageId: 'm1', action: index === 0 ? 'add' : 'remove' }], decisions: [{ decisionId: 'old', status: 'failed', operations: [] }, { decisionId: 'current', status: 'failed', error: '失败'.repeat(600), operations: [{ status: 'applied', action: { secretInternal: true } }, { status: 'pending' }] }, { decisionId: 'done', status: 'completed', operations: [] }], createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(), updatedAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString() }))
   const group = { groupId: 'g', topics, routeHistory: [{ request: 'internal' }], taskReservations: [{ taskId: 't' }], messages: [{ messageId: 'm1', routingStatus: 'pending' }], outbox: [] }
   let request
   await withServer(false, async (baseUrl) => {
     const listing = await (await fetch(`${baseUrl}/state/topics?groupId=g&offset=100&limit=2`)).json()
     assert.equal(listing.total, 102)
-    assert.deepEqual(listing.topics.map((topic) => topic.topicId), ['topic-100', 'topic-101'])
+    assert.deepEqual(listing.topics.map((topic) => topic.topicId), ['topic-1', 'topic-0'])
     assert.equal(listing.topics[0].summary.length, 1000)
     assert.equal(listing.topics[0].decisions, undefined)
     assert.equal(listing.topics[0].entries, undefined)
