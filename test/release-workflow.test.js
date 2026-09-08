@@ -76,3 +76,11 @@ test('常驻启动优先读取用户代理，避免为启动解析完整 residen
     assert.ok(registry >= 0 && registry < residentState, script)
   }
 })
+
+test('Web 启动优先使用当前 profile 的 DSH 入口', async () => {
+  const source = await readFile(new URL('../scripts/start-web.ps1', import.meta.url), 'utf8')
+  const profileEntry = source.indexOf("profiles\\web\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js")
+  const globalCommand = source.indexOf('Get-Command dsh.cmd')
+  assert.ok(profileEntry >= 0 && globalCommand > profileEntry)
+  assert.match(source, /if \(Test-Path -LiteralPath \$profileDshEntry\)/u)
+})
