@@ -115,7 +115,7 @@ const activityDetail = (event) => {
 }
 
 export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 1_000 } = {}) {
-  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), activeGroupResidentOperations = new Set(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), pendingLeafDisposals = new Set()
+  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), activeGroupResidentOperations = new Set(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), startingTasks = new Set(), pendingLeafDisposals = new Set()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
@@ -653,9 +653,16 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       return completed
     })
     void withoutInitiator(() => coordinateTaskResult(completed, result)).catch((error) => recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification', error: error.message }))
+    const completedRunSequence = completed.runSequence
     prepared.handle.agent.whenIdle().then(async () => {
-      if (leafHandles.get(taskId) !== prepared.handle) return
-      leafHandles.delete(taskId); leafTaskBySession.delete(String(prepared.handle.agent.session.id)); await prepared.handle.dispose()
+      const dispose = await serializeTasks(() => {
+        const current = store.getTask(taskId)
+        if (leafHandles.get(taskId) !== prepared.handle || current?.state !== 'completed' || current.runSequence !== completedRunSequence) return false
+        leafHandles.delete(taskId)
+        leafTaskBySession.delete(String(prepared.handle.agent.session.id))
+        return true
+      })
+      if (dispose) await prepared.handle.dispose()
     }).catch(() => undefined)
     await withoutInitiator(() => pumpTasks())
     return completed
@@ -693,7 +700,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     })
     const review = checkpoint.kind === 'stage-completed' && checkpoint.needsCoordinatorDecision === false && checkpoint.evidence.length > 0
       ? { decision: 'acknowledge', reason: 'Host 已校验阶段顺序、执行版本和非空证据。' }
-      : await withoutInitiator(() => reviewTaskCheckpoint(reviewTask, checkpoint))
+      : await withoutInitiator(() => reviewTaskCheckpoint(reviewTask, submitted))
     await persistCheckpointReview(reviewTask, submitted, review)
     return { accepted: true, taskId, checkpointId: submitted.checkpointId, coordinatorDecision: review.decision, reason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}) }
   }
@@ -748,24 +755,21 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       throw new Error(`authorization_decision_conflict:${requestId}:${blocker.decision}`)
     }
     if (source === 'dingtalk' && blocker.messageId !== quotedMessageId) throw new Error(`human_blocker_reply_mismatch:${task.taskId}:${requestId}`)
-    const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
-    const goal = ctx.goals.get(handle.agent)
     const reply = comment?.trim() || (decision === 'approved' ? '批准' : '拒绝')
     const answered = {
       ...blocker, status: 'answered', decision, reply,
       decisionSource: source, decidedAt: new Date().toISOString(), ...(replyMessageId ? { replyMessageId } : {}),
       ...(blocker.messageId && source === 'web' ? { recallStatus: 'pending' } : { recallStatus: 'not-required' }),
     }
-    const hasCapacity = store.listTasks().filter((item) => item.state === 'running' && item.taskId !== task.taskId).length < taskConcurrencyLimit
-    const running = await store.updateTask(task.taskId, (current) => ({
-      ...current, state: hasCapacity ? 'running' : 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
-      ...(hasCapacity ? { resumeContext: undefined } : { resumeContext: `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\nSource: ${source}` }),
+    const queued = await store.updateTask(task.taskId, (current) => ({
+      ...current, state: 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
+      resumeContext: `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\nSource: ${source}`,
       humanBlocker: answered, humanBlockerHistory: withHumanBlockerHistory(current, answered),
     }))
-    if (hasCapacity) {
-      resumeGoalAfterResolution(handle, goal)
-      await followupTaskInternal(running, `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\nSource: ${source}\n\nContinue the same task only within the approved scope. For a rejected decision, do not perform the controlled action. Re-check current state before acting.`)
-    } else void pumpTasks()
+    const pumping = pumpTasks()
+    if (startingTasks.size === 0) await pumping
+    else void pumping.catch((error) => recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'task-pump', error: error.message }))
+    const running = store.getTask(queued.taskId)
     const authorization = getAuthorizationRequest(requestId)
     for (const listener of authorizationDecisionListeners) await listener({ authorization, task: running })
     return authorization
@@ -1042,10 +1046,12 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   async function pumpTasksInternal() {
     if (runtimeClosing) return
     const tasks = store.listTasks()
-    let available = taskConcurrencyLimit - tasks.filter((task) => task.state === 'running').length
+    let available = taskConcurrencyLimit - tasks.filter((task) => task.state === 'running').length - startingTasks.size
     for (const task of tasks.filter((item) => item.state === 'queued')) {
       if (available <= 0) break
       if (store.getTask(task.taskId)?.state !== 'queued') continue
+      startingTasks.add(task.taskId)
+      available -= 1
       try {
         if (!residentHandles.has(task.groupId)) throw new Error(`resident_not_active:${task.groupId}`)
         if (task.resumeContext) {
@@ -1075,10 +1081,11 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           }
         }
         await dispatchTaskInput(store.getTask(task.taskId))
-        available -= 1
       } catch (error) {
         recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'task-start', error: error.message })
-        available = taskConcurrencyLimit - store.listTasks().filter((item) => item.state === 'running').length
+      } finally {
+        startingTasks.delete(task.taskId)
+        available = taskConcurrencyLimit - store.listTasks().filter((item) => item.state === 'running').length - startingTasks.size
       }
     }
   }
@@ -1150,16 +1157,20 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     task = await mutateTask(task, operation, (current) => {
       const revised = withRevisedObjective(current, objective, operation?.decisionId)
       const resumed = current.state === 'waiting' && current.waitingKind === 'information'
-      const hasCapacity = !resumed || store.listTasks().filter((item) => item.state === 'running' && item.taskId !== current.taskId).length < taskConcurrencyLimit
       const refs = [...new Map([...current.topicRefs, ...topicRefs].map((ref) => [ref.topicId, ref])).values()]
       const scopeChanged = revised.objective !== current.objective || acceptanceCriteria !== undefined || stageTasks !== undefined
       const preserveProgress = progressImpact === 'preserve' && !scopeChanged
+      const priorCheckpoints = current.checkpoints ?? []
+      const invalidatedCheckpoints = preserveProgress ? priorCheckpoints.filter((checkpoint) => !checkpoint.coordinatorDecision) : priorCheckpoints
+      const checkpoints = preserveProgress
+        ? priorCheckpoints.filter((checkpoint) => checkpoint.coordinatorDecision).map((checkpoint) => ({ ...checkpoint, inputVersion: current.inputVersion + 1 }))
+        : []
       return { ...revised, topicRefs: refs, inputVersion: current.inputVersion + 1,
-        checkpoints: preserveProgress ? current.checkpoints : [],
-        executionEvents: [...(current.executionEvents ?? []), { kind: 'input-revised', previousInputVersion: current.inputVersion, progressImpact: preserveProgress ? 'preserve' : 'replan', checkpoints: preserveProgress ? [] : current.checkpoints ?? [] }],
+        checkpoints,
+        executionEvents: [...(current.executionEvents ?? []), { kind: 'input-revised', previousInputVersion: current.inputVersion, progressImpact: preserveProgress ? 'preserve' : 'replan', checkpoints: invalidatedCheckpoints }],
         ...normalizeRunPlan(revised.objective, acceptanceCriteria ?? revised.acceptanceCriteria, stageTasks ?? revised.stageTasks),
-        ...(resumed ? { state: hasCapacity ? 'running' : 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
-          ...(hasCapacity ? { resumeContext: undefined } : { resumeContext: '[TASK_CONTEXT_RESUME]\nInformation required by the task is now available.' }) } : {}),
+        ...(resumed ? { state: 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
+          resumeContext: '[TASK_CONTEXT_RESUME]\nInformation required by the task is now available.' } : {}),
       }
     })
     if (['running', 'waiting'].includes(task.state)) {
@@ -1436,12 +1447,15 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (goal?.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-input-required', message: reason })
       return store.updateTask(taskId, (current) => ({ ...current, state: 'waiting', waitingKind: 'information', waitingReason: reason }))
     }),
-    resumeTask: ({ taskId }) => serializeTasks(async () => {
-      const task = store.getTask(taskId); if (task?.state !== 'waiting') throw new Error(`task_not_waiting:${taskId}`)
-      const handle = leafHandles.get(taskId) ?? await resumeLeaf(task), goal = ctx.goals.get(handle.agent)
-      resumeGoalAfterResolution(handle, goal)
-      return store.updateTask(taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined }))
-    }),
+    resumeTask: async ({ taskId }) => {
+      const queued = await serializeTasks(async () => {
+        const task = store.getTask(taskId)
+        if (task?.state !== 'waiting') throw new Error(`task_not_waiting:${taskId}`)
+        return store.updateTask(taskId, (current) => ({ ...current, state: 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined, resumeContext: '[TASK_CONTEXT_RESUME]\nResume requested by the host.' }))
+      })
+      await pumpTasks()
+      return store.getTask(queued.taskId)
+    },
     followupTask: ({ text, ...request }) => submitWebTaskAction('task-context', { ...request, context: text }),
     submitTaskResult: ({ taskId, result }) => submitTaskResult(taskId, result),
     subscribe: ({ groupId, name, responsibility = '' }) => serializeConfig(() => {

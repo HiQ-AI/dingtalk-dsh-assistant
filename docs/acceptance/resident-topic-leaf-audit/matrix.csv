@@ -31,3 +31,10 @@ TOPIC-TOOL,3,FAIL,叶子固定Topic读取返回非lossless JSON但未阻塞本�
 TOPIC-TOOL,4,PASS,真实Resident和叶子均成功读取固定Topic revision 2且完成引用回复,round-4.md
 REGRESSION,4,PASS,新增无损JSON回归后237项测试全部通过,round-4.md
 REDEPLOY,4,PASS,提交d1d035e的唯一tgz已安装且新进程健康,round-4.md
+R1,5,PASS,Topic工具统一返回lossless JSON,round-5.md
+R2,5,PASS,preserve新输入作废待审项并按新版本重审,round-5.md
+R3,5,PASS,旧轮次idle回收不影响重开叶子,round-5.md
+R4,5,PASS,Session启动保留容量且不突破并发上限,round-5.md
+R5,5,PASS,Topic决策内联消息受预算限制且缺失增量强制分页读取,round-5.md
+REGRESSION,5,PASS,全量248项与原A01-A10全部通过,round-5.md
+PACK,5,PASS,根包与两个子包均成功生成tgz,round-5.md

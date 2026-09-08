@@ -6,6 +6,7 @@ import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, gr
 
 const textMessage = (text, images = []) => Object.freeze({ id: randomUUID(), role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text }, ...images.map((attachment) => ({ type: 'image', attachment }))] })
 const objectOutput = { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] }
+const jsonOutput = (value) => JSON.parse(JSON.stringify(value))
 const sameVersions = (left, right) => left.length === right.length && left.every((item) => right.some((other) => other.messageId === item.messageId && other.messageVersion === item.messageVersion))
 const topicIndex = (topics) => topics.map(({ topicId, title, revision, processedRevision, status, summary }) => ({ topicId, title, revision, processedRevision, status, summary: summary?.slice(0, 240) }))
 const boundedItems = (items, maxChars, maxCount, required = () => false) => {
@@ -13,6 +14,15 @@ const boundedItems = (items, maxChars, maxCount, required = () => false) => {
   for (const item of items) {
     if (selected.includes(item) || selected.length >= maxCount) continue
     if (selected.length > 0 && JSON.stringify([...selected, item]).length > maxChars) break
+    selected.push(item)
+  }
+  return selected
+}
+const strictlyBoundedItems = (items, maxChars, maxCount) => {
+  const selected = []
+  for (const item of items) {
+    if (selected.length >= maxCount) break
+    if (JSON.stringify([...selected, item]).length > maxChars) continue
     selected.push(item)
   }
   return selected
@@ -130,10 +140,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       topicRefs: [{ topicId: topic.topicId, revision: topic.revision }], candidates: scopedCandidates(groupId, messages, [{ topicId: topic.topicId, revision: topic.revision }]), readReview: false }
     decisions.set(request.requestId, request)
     const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= topic.revision).map((entry) => entry.messageId))
-    const visibleMessages = boundedItems([...messages].reverse(), 40_000, 50, (message) => deltaIds.has(message.messageId)).reverse()
+    const visibleMessages = strictlyBoundedItems([...messages].reverse(), 40_000, 50).reverse()
+    request.visibleMessages = visibleMessages
+    request.readMessageIds = new Set(visibleMessages.map((message) => message.messageId))
+    const omittedDeltaMessageIds = messages.filter((message) => deltaIds.has(message.messageId) && !request.readMessageIds.has(message.messageId)).map((message) => message.messageId)
     const envelope = { requestId: request.requestId, topicId: topic.topicId, revision: topic.revision,
-      removedMessageIds, ...effectOwnership(groupId, topic.topicId, topic.revision, messages), replyReviewCandidateCount: request.candidates.length, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length, processedRevision: topic.processedRevision, summary: topic.summary, openQuestions: topic.openQuestions }
-    const agent = send(groupId, `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n按此 Topic 固定版本处理本次增量。共享消息由 effectOwnerTopicIds 指定唯一动作主归属；只有 ownedDeltaMessageIds 中的本次依据允许创建或更新 Task、发送确认，其他 Topic 只关联已有 Task 或分别作实质回答。removedMessageIds 是本次已移出输入，可作为无动作静默决策的依据；不得从移出消息派生任务。非空 reply 必须声明 replyReview.kind。通过 group_decision_submit 独立提交。必要时 group_topic_context_get 分页取原文。历史回复候选 ${request.candidates.length} 条，回复前读取 group_reply_review_get。`, visibleMessages.flatMap((message) => message.imageRefs ?? []))
+      removedMessageIds, omittedDeltaMessageIds, ...effectOwnership(groupId, topic.topicId, topic.revision, visibleMessages), replyReviewCandidateCount: request.candidates.length, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length, processedRevision: topic.processedRevision, summary: topic.summary, openQuestions: topic.openQuestions }
+    const agent = send(groupId, `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n按此 Topic 固定版本处理本次增量。共享消息由 effectOwnerTopicIds 指定唯一动作主归属；只有 ownedDeltaMessageIds 中的本次依据允许创建或更新 Task、发送确认，其他 Topic 只关联已有 Task 或分别作实质回答。omittedDeltaMessageIds 非空时，必须先用 group_topic_context_get 分页读取全部缺失增量，Host 才接受决策。removedMessageIds 是本次已移出输入，可作为无动作静默决策的依据；不得从移出消息派生任务。非空 reply 必须声明 replyReview.kind。通过 group_decision_submit 独立提交。历史回复候选 ${request.candidates.length} 条，回复前读取 group_reply_review_get。`, visibleMessages.flatMap((message) => message.imageRefs ?? []))
     monitor(agent, request, decisions)
     return request
   }
@@ -189,9 +202,11 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         if ((retries.get(commit.decisionId) ?? 0) <= Date.now()) resume(groupId, topic.topicId, commit.decisionId)
       } else if (topic.processedRevision < topic.revision) result.push(createDecisionRequest(groupId, topic))
     }
-    return result.map(({ requestId, topicId, revision, messages, candidates, removedMessageIds }) => {
-      const visibleMessages = boundedItems([...messages].reverse(), 40_000, 50).reverse()
-      return { requestId, topicId, revision, removedMessageIds, ...effectOwnership(groupId, topicId, revision, messages), replyReviewCandidateCount: candidates.length, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length }
+    return result.map(({ requestId, topicId, revision, messages, candidates, removedMessageIds, visibleMessages, readMessageIds }) => {
+      const topic = store.getTopic(groupId, topicId)
+      const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= revision).map((entry) => entry.messageId))
+      const omittedDeltaMessageIds = messages.filter((message) => deltaIds.has(message.messageId) && !readMessageIds.has(message.messageId)).map((message) => message.messageId)
+      return { requestId, topicId, revision, removedMessageIds, omittedDeltaMessageIds, ...effectOwnership(groupId, topicId, revision, visibleMessages), replyReviewCandidateCount: candidates.length, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length }
     })
   }
   function schedule(groupId) {
@@ -255,6 +270,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     if (basis.size !== decision.basisMessageIds.length || decision.basisMessageIds.some((id) => !request.messages.some((message) => message.messageId === id) && !request.removedMessageIds.includes(id))) throw new Error('topic_decision_basis_invalid')
     const topic = store.getTopic(request.groupId, request.topicId)
     const delta = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= request.revision).map((entry) => entry.messageId))
+    const unreadDelta = request.messages.filter((message) => delta.has(message.messageId) && !request.readMessageIds.has(message.messageId))
+    if (unreadDelta.length) throw new Error('topic_decision_delta_unread')
     if (![...basis].some((id) => delta.has(id))) throw new Error('topic_decision_current_basis_required')
     if (decision.actions.length || decision.replyReview?.kind === 'confirmation') {
       const ownership = effectOwnership(request.groupId, request.topicId, request.revision, request.messages)
@@ -297,7 +314,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       assertSession(exec, groupId)
       const pending = Promise.resolve().then(() => execute(args))
       activeToolCalls.add(pending)
-      try { return await pending } finally { activeToolCalls.delete(pending) }
+      try { return jsonOutput(await pending) } finally { activeToolCalls.delete(pending) }
     } })
     tool('group_topic_route_review', '按明确原因复核本群已存在消息的 Topic 归属；先返回冻结请求，再通过 group_topic_route_submit 完整提交。', {
       type: 'object', additionalProperties: false,
@@ -387,7 +404,14 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const all = store.listTopics(groupId).filter((topic) => `${topic.title}\n${topic.summary ?? ''}`.toLowerCase().includes(query.toLowerCase()))
       return { topics: topicIndex(all.slice(offset, offset + limit)), total: all.length, offset, limit }
     })
-    tool('group_topic_context_get', '读取本群 Topic 固定版本及消息原文；分页字段明确表示未返回的历史。', { type: 'object', properties: { topicId: { type: 'string' }, revision: { type: 'integer' }, offset: { type: 'integer' }, limit: { type: 'integer' } }, required: ['topicId'], additionalProperties: false }, (args) => projectTopicContext(store.getTopicContext({ ...args, groupId })))
+    tool('group_topic_context_get', '读取本群 Topic 固定版本及消息原文；分页字段明确表示未返回的历史。', { type: 'object', properties: { topicId: { type: 'string' }, revision: { type: 'integer' }, offset: { type: 'integer' }, limit: { type: 'integer' } }, required: ['topicId'], additionalProperties: false }, (args) => {
+      const context = projectTopicContext(store.getTopicContext({ ...args, groupId }))
+      for (const request of decisions.values()) {
+        if (request.groupId !== groupId || request.topicId !== context.topic.topicId || request.revision !== context.topic.revision) continue
+        for (const message of context.messages) request.readMessageIds.add(message.messageId)
+      }
+      return context
+    })
     tool('group_reply_review_get', '读取 Topic 判断或 Task 通知绑定的完整历史回复候选。', { type: 'object', properties: { requestIds: { type: 'array', items: { type: 'string' } } }, required: ['requestIds'], additionalProperties: false }, ({ requestIds }) => {
       if (!Array.isArray(requestIds) || !requestIds.length || requestIds.length > 8 || new Set(requestIds).size !== requestIds.length) throw new Error('topic_review_request_invalid')
       const requests = requestIds.map((id) => requestFor(groupId, id))
