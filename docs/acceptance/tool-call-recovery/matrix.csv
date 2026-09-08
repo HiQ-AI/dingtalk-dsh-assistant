@@ -8,4 +8,4 @@ reply-restart-receipt,PASS
 reply-unknown-no-side-effect,PASS
 lossless-json,PASS
 task-result-error,PASS
-local-runtime-e2e,TODO
+local-runtime-e2e,PASS
