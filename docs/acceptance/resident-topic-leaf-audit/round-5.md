@@ -38,3 +38,16 @@
 - 根包、assistant 子包、observer 子包共生成 3 个 tgz，分别为 20,063、96,388、18,064 字节。
 
 本轮隔离 E2E 使用真实 Store、Runtime、DSH JSON 输出规则和 Agent 生命周期替身，不连接真实模型与 DWS。合并后的本机 profile 部署和运行态检查单独记录。
+
+## 合并与本地部署
+
+- PR：#73，状态 MERGED；合并提交 `be3314a78751aa47d8de24f0947504f43cdb73b7`。
+- 源码：本地 `main` 与 `origin/main` 均为 `be3314a78751aa47d8de24f0947504f43cdb73b7`。
+- 安装包：从该提交生成 `zzusp-dingtalk-dsh-assistant-0.5.13.tgz`，SHA256 为 `96829DD163D2CD7BD07973A69B4B4021CEAAA97A34B10FDA1746945E04D7E634`；Web profile 使用该精确文件引用安装。
+- 安装读回：版本 `0.5.13`；已安装源码包含 Session 启动容量预留、未读 Topic 增量门禁和统一 JSON 投影。
+- 运行态：旧 PID `1096808` 停止后，新 PID `1196952` 同时监听 `127.0.0.1:3080` 与 `127.0.0.1:18998`；`/health` 为 `ok`，真实模型、入站处理和出站授权均启用，恢复问题数为 0。
+- DWS：群 listener 与本人回复 listener 均为 `ready`，群 backfill 为 `ok`，完成范围为 `durable-receipt`。
+- Web 边界：未认证访问根路径返回 401；受控 Chrome 会话可进入“钉钉群聊运行看板”，群聊、话题和任务看板均成功加载。
+- 合并后回归：在 `main@be3314a` 执行 `pnpm test`，248/248 PASS。
+
+本轮简单 E2E 为只读 UI 与运行态验证，没有发送或重放真实群消息；真实收信、叶子 Task、引用回复及 DWS 回读已由 round-3/round-4 独立覆盖。

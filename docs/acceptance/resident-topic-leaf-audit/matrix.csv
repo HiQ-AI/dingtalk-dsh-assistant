@@ -38,3 +38,7 @@ R4,5,PASS,Session启动保留容量且不突破并发上限,round-5.md
 R5,5,PASS,Topic决策内联消息受预算限制且缺失增量强制分页读取,round-5.md
 REGRESSION,5,PASS,全量248项与原A01-A10全部通过,round-5.md
 PACK,5,PASS,根包与两个子包均成功生成tgz,round-5.md
+MERGE,5,PASS,PR73按精确head合并且main与origin/main对齐,round-5.md
+DEPLOY,5,PASS,合并提交精确tgz安装到本机web profile并由新进程加载,round-5.md
+RUNTIME,5,PASS,健康端口DWS listener与backfill分层回读通过,round-5.md
+E2E-WEB,5,PASS,受控浏览器加载群聊话题与任务看板且未认证边界返回401,round-5.md
