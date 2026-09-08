@@ -33,3 +33,11 @@
 - `git diff --check`：PASS。
 
 本轮不重放或修改 #886/#891 的历史真实归属记录；代码修复约束后续路由，历史数据修订需独立的数据操作与回读。
+
+## 合并与本地部署
+
+- PR #75：`MERGED`，head `5986bdcc3c8c6d826c36d6b392aa8788ddaed889`，merge commit `29b73e268b8932832165747f4f5b50b307f64c93`。
+- 本地主仓 `main` 与 `origin/main` 均为 `29b73e268b8932832165747f4f5b50b307f64c93`。
+- Web profile 指向 `29b73e2` 独立产物目录；安装后 `runtime.js`、`topic-runtime.js` 与 main 源码 SHA256 分别一致。
+- 新进程 `GET /health` 返回 `status=ok`、`transport=dws`、`recoveryIssueCount=0`；群监听和本人私聊监听均为 `ready`，backfill 为 `ok`。
+- 未认证访问 Web 返回 HTTP 401；独立受控 Chrome 成功加载已认证的“钉钉群聊运行看板”，页面显示“运行正常”及群聊、话题、任务、人工介入、归档、告警入口。
