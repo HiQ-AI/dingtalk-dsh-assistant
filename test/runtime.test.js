@@ -295,6 +295,15 @@ test('模型与推理深度使用原生配置服务保存', async (t) => {
   assert.deepEqual(h.savedSelection, { provider: 'fake', model: 'next-model', reasoningEffort: 'high' })
 })
 
+test('叶子会话提示词通过统一配置字段保存和读取', async (t) => {
+  const h = await setup(t)
+  const saved = await h.runtime.updateAgentConfig({ leafSessionPrompt: '先核对范围，再提交可复核证据。' })
+  assert.equal(saved.leafSessionPrompt, '先核对范围，再提交可复核证据。')
+  assert.equal(h.runtime.getAgentConfig().leafSessionPrompt, '先核对范围，再提交可复核证据。')
+  assert.equal('taskExecutionGuidance' in saved, false)
+  assert.equal('taskEvidenceGuidance' in saved, false)
+})
+
 test('退订存储失败时保留 Resident，修复后可再次退订', async (t) => {
   const h = await setup(t), id = h.store.getGroup('g').residentSessionId
   h.idle.set(id, Promise.resolve())

@@ -798,15 +798,11 @@ Task objective 限制的是业务动作范围，包括业务代码、业务数�
 
 ### 任务授权边界
 
-Task objective 是本任务的动作授权上限，必须逐字尊重其中的动作范围。若 objective 只要求“看看、查一下、排查、分析、核对、监控”或其他诊断/观察工作，你只能读取、核验、定位根因并提交证据和建议，不得修改代码或数据、提交 PR、合并、构建、部署、执行修复方案，也不得因为发现了明确根因就自行扩大为修复。只有 objective 明确包含修复、修改、实施、合并、发布或执行等变更动作时，才能进行对应变更；配置的任务流程引导和完成证据要求也不得扩大该授权。
+Task objective 是本任务的动作授权上限，必须逐字尊重其中的动作范围。若 objective 只要求“看看、查一下、排查、分析、核对、监控”或其他诊断/观察工作，你只能读取、核验、定位根因并提交证据和建议，不得修改代码或数据、提交 PR、合并、构建、部署、执行修复方案，也不得因为发现了明确根因就自行扩大为修复。只有 objective 明确包含修复、修改、实施、合并、发布或执行等变更动作时，才能进行对应变更；配置的叶子会话提示词也不得扩大该授权。
 
-### 配置的任务流程引导
+### 配置的叶子会话提示词
 
-${store.getTaskExecutionGuidance?.() || '未配置额外流程引导；按任务目标、工作区规则和当前现场自主推进。'}
-
-### 配置的完成证据要求
-
-${store.getTaskEvidenceGuidance?.() || '提交能够独立核验目标已完成的当前证据；不得只用自然语言声称完成。'}
+${store.getLeafSessionPrompt?.() || '按任务目标、工作区规则和当前现场自主推进，并提交能够独立核验目标已完成的当前证据；不得只用自然语言声称完成。'}
 
 ### 当前执行轮次验收标准
 
@@ -992,7 +988,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             if (before.phase === 'complete' && (resultRecoveryCounts.get(task.taskId) ?? 0) === 0) {
               resultRecoveryCounts.set(task.taskId, 1)
               ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds })
-              await followupTaskInternal(task, `你刚才结束了执行轮次，但尚未调用 submit_task_result，因此 Task 仍未完成。请按照系统提示中的任务流程引导和完成证据要求继续工作，取得可独立核验的结果后调用 submit_task_result；不要只输出自然语言总结。`)
+              await followupTaskInternal(task, `你刚才结束了执行轮次，但尚未调用 submit_task_result，因此 Task 仍未完成。请按照系统提示中的叶子会话提示词继续工作，取得可独立核验的结果后调用 submit_task_result；不要只输出自然语言总结。`)
               await store.recordAlert({ taskId: task.taskId, fingerprint: 'leaf-result-submission-requested', detail: `Requested structured result from completed DSH leaf Session ${task.childSessionId}`, status: 'resolved' })
               results.push({ taskId: task.taskId, ok: true, resultRequested: true, sessionRecovered, goalRecovered: true, agentStatus: handle.agent.status })
               continue
@@ -1465,9 +1461,9 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     updateGroup: (request) => serialize(request.groupId, () => store.updateGroup(request)),
     getAgentConfig: () => ({
       agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, provider: selection.provider, model: selection.model, reasoningEffort: selection.reasoningEffort, proxyUrl: store.getProxyUrl?.() ?? '',
-      taskExecutionGuidance: store.getTaskExecutionGuidance?.() ?? '', taskEvidenceGuidance: store.getTaskEvidenceGuidance?.() ?? '', maxConcurrentTasks: taskConcurrencyLimit,
+      leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', maxConcurrentTasks: taskConcurrencyLimit,
     }),
-    updateAgentConfig: ({ agentNames, workspaceDir, model, reasoningEffort, proxyUrl, taskExecutionGuidance, taskEvidenceGuidance, maxConcurrentTasks: nextMaxConcurrentTasksInput }) => serializeConfig(async () => {
+    updateAgentConfig: ({ agentNames, workspaceDir, model, reasoningEffort, proxyUrl, leafSessionPrompt, maxConcurrentTasks: nextMaxConcurrentTasksInput }) => serializeConfig(async () => {
       if (runtimeClosing) throw new Error('resident_runtime_closed')
       if (agentNames !== undefined && !Array.isArray(agentNames)) throw new Error('agent_names_must_be_array')
       const nextAgentNames = agentNames === undefined ? (store.getAgentNames?.() ?? []) : [...new Set(agentNames.map((name) => name.trim()).filter(Boolean))]
@@ -1484,13 +1480,12 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       const nextProxyUrl = proxyUrl === undefined ? (store.getProxyUrl?.() ?? '') : proxyUrl.trim()
       if (nextProxyUrl !== '' && !/^https?:\/\//i.test(nextProxyUrl)) throw new Error('agent_proxy_url_invalid')
       const proxyChanged = nextProxyUrl !== (store.getProxyUrl?.() ?? '')
-      const nextTaskExecutionGuidance = taskExecutionGuidance === undefined ? (store.getTaskExecutionGuidance?.() ?? '') : taskExecutionGuidance.trim()
-      const nextTaskEvidenceGuidance = taskEvidenceGuidance === undefined ? (store.getTaskEvidenceGuidance?.() ?? '') : taskEvidenceGuidance.trim()
-      const guidanceChanged = nextTaskExecutionGuidance !== (store.getTaskExecutionGuidance?.() ?? '') || nextTaskEvidenceGuidance !== (store.getTaskEvidenceGuidance?.() ?? '')
+      const nextLeafSessionPrompt = leafSessionPrompt === undefined ? (store.getLeafSessionPrompt?.() ?? '') : leafSessionPrompt.trim()
+      const guidanceChanged = nextLeafSessionPrompt !== (store.getLeafSessionPrompt?.() ?? '')
       const nextMaxConcurrentTasks = nextMaxConcurrentTasksInput === undefined ? taskConcurrencyLimit : nextMaxConcurrentTasksInput
       if (!Number.isInteger(nextMaxConcurrentTasks) || nextMaxConcurrentTasks < 1 || nextMaxConcurrentTasks > 50) throw new Error('agent_max_concurrent_tasks_invalid')
       const concurrencyChanged = nextMaxConcurrentTasks !== taskConcurrencyLimit
-      const resultConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, ...selection, proxyUrl: nextProxyUrl, taskExecutionGuidance: store.getTaskExecutionGuidance?.() ?? '', taskEvidenceGuidance: store.getTaskEvidenceGuidance?.() ?? '', maxConcurrentTasks: taskConcurrencyLimit })
+      const resultConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, ...selection, proxyUrl: nextProxyUrl, leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', maxConcurrentTasks: taskConcurrencyLimit })
       if (!workspaceChanged && !selectionChanged && !proxyChanged && !guidanceChanged && !namesChanged && !concurrencyChanged) return resultConfig()
       if (workspaceChanged || selectionChanged) await serializeTasks(() => {
         if (store.listTasks().some((task) => task.state === 'running' || task.state === 'waiting' || task.state === 'queued')) throw new Error('agent_config_has_active_tasks')
@@ -1518,7 +1513,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           if (selectionChanged) await ctx.agentDefaultModel.saveSelection(nextSelection)
           if (proxyChanged) await store.setProxyUrl(nextProxyUrl)
           if (namesChanged) await store.setAgentNames(nextAgentNames)
-          if (guidanceChanged) await store.setTaskGuidance({ taskExecutionGuidance: nextTaskExecutionGuidance, taskEvidenceGuidance: nextTaskEvidenceGuidance })
+          if (guidanceChanged) await store.setLeafSessionPrompt(nextLeafSessionPrompt)
           if (concurrencyChanged) await store.setMaxConcurrentTasks(nextMaxConcurrentTasks)
           if (workspaceChanged) {
             await store.setAgentWorkspaceDir(nextWorkspace)

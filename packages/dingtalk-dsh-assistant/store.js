@@ -92,7 +92,7 @@ const taskSchema = z.object({
 })
 const schedulerSchema = z.object({
   tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), agentWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
-  taskExecutionGuidance: z.string().optional(), taskEvidenceGuidance: z.string().optional(), maxConcurrentTasks: z.number().int().positive().max(50).optional(),
+  leafSessionPrompt: z.string().optional(), taskExecutionGuidance: z.string().optional(), taskEvidenceGuidance: z.string().optional(), maxConcurrentTasks: z.number().int().positive().max(50).optional(),
 })
 const activitySchema = z.object({
   activityId: z.string().min(1), taskId: z.string().min(1), sessionId: z.string().min(1), eventKey: z.string().min(1),
@@ -242,11 +242,17 @@ export async function openResidentStore(storageDomain) {
       await scheduler.update('runtime', (current) => ({ ...current, proxyUrl }))
       return { proxyUrl }
     },
-    getTaskExecutionGuidance: () => scheduler.get('runtime')?.taskExecutionGuidance ?? '',
-    getTaskEvidenceGuidance: () => scheduler.get('runtime')?.taskEvidenceGuidance ?? '',
-    setTaskGuidance: async ({ taskExecutionGuidance, taskEvidenceGuidance }) => {
-      await scheduler.update('runtime', (current) => ({ ...current, taskExecutionGuidance, taskEvidenceGuidance }))
-      return { taskExecutionGuidance, taskEvidenceGuidance }
+    getLeafSessionPrompt: () => {
+      const current = scheduler.get('runtime')
+      if (current?.leafSessionPrompt !== undefined) return current.leafSessionPrompt
+      return [current?.taskExecutionGuidance, current?.taskEvidenceGuidance].filter((value) => value?.trim()).join('\n\n')
+    },
+    setLeafSessionPrompt: async (leafSessionPrompt) => {
+      await scheduler.update('runtime', (current) => {
+        const { taskExecutionGuidance: _execution, taskEvidenceGuidance: _evidence, ...rest } = current
+        return { ...rest, leafSessionPrompt }
+      })
+      return { leafSessionPrompt }
     },
     initializeGroupConfiguration: async () => {
       await scheduler.update('runtime', (current) => ({ ...current, groupConfigurationInitialized: true }))
