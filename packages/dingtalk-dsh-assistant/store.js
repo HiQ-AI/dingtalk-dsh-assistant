@@ -375,6 +375,8 @@ export async function openResidentStore(storageDomain) {
           if (!message) throw new Error(`message_not_found:${route.messageId}`)
           if (message.messageVersion !== route.messageVersion) throw new Error('topic_message_version_stale')
           if (!Array.isArray(route.topics) || (route.topics.length === 0 && !route.reason?.trim())) throw new Error('topic_route_reason_required')
+          if (route.topics.length > 1 && route.topics.some((ref) => !['continuation', 'affected'].includes(ref.relationship) || !ref.reason?.trim())) throw new Error('topic_route_relationship_required')
+          if (route.topics.length > 1 && !route.effectOwner) throw new Error('topic_route_effect_owner_required')
           const selected = new Set()
           for (const ref of route.topics) {
             if (!!ref.topicId === !!ref.newTopicKey) throw new Error('topic_route_target_invalid')
@@ -390,16 +392,26 @@ export async function openResidentStore(storageDomain) {
             if (selected.has(id)) throw new Error('topic_route_target_duplicate')
             selected.add(id)
           }
+          if (route.effectOwner) {
+            const ownerId = route.effectOwner.topicId ?? topicIdsByKey[route.effectOwner.newTopicKey]
+            if (!ownerId || !selected.has(ownerId)) throw new Error('topic_route_effect_owner_invalid')
+          }
         }
         let topics = [...latest.topics, ...newTopics.values()]
         for (const route of routes) {
           const targetIds = route.topics.map((ref) => ref.topicId ?? topicIdsByKey[ref.newTopicKey])
+          const effectOwnerId = route.effectOwner
+            ? route.effectOwner.topicId ?? topicIdsByKey[route.effectOwner.newTopicKey]
+            : targetIds[0]
           topics = topics.map((topic) => {
             const old = [...topic.entries].reverse().find((item) => item.messageId === route.messageId)
             const selected = targetIds.includes(topic.topicId)
-            if ((!selected && (!old || old.action === 'remove')) || (selected && old?.action === 'add' && old.messageVersion === route.messageVersion)) return topic
+            const target = route.topics.find((ref) => (ref.topicId ?? topicIdsByKey[ref.newTopicKey]) === topic.topicId)
+            const owner = selected && topic.topicId === effectOwnerId
+            if ((!selected && (!old || old.action === 'remove')) || (selected && old?.action === 'add' && old.messageVersion === route.messageVersion && Boolean(old.effectOwner) === owner && old.relationship === target?.relationship)) return topic
             const revision = topic.revision + 1
-            return { ...topic, revision, status: 'active', updatedAt: new Date().toISOString(), entries: [...topic.entries, { revision, messageId: route.messageId, messageVersion: route.messageVersion, action: selected ? 'add' : 'remove', ...(route.reason ? { reason: route.reason } : {}) }] }
+            const reason = target?.reason ?? route.reason
+            return { ...topic, revision, status: 'active', updatedAt: new Date().toISOString(), entries: [...topic.entries, { revision, messageId: route.messageId, messageVersion: route.messageVersion, action: selected ? 'add' : 'remove', ...(selected ? { effectOwner: owner, ...(target?.relationship ? { relationship: target.relationship } : {}) } : {}), ...(reason ? { reason } : {}) }] }
           })
         }
         receipt = { routeId, fingerprint: requestFingerprint, routingRevision: latest.routingRevision + 1, topicIdsByKey, createdAt: new Date().toISOString() }

@@ -131,13 +131,18 @@ test('一条共享消息只存一份并更新两个Topic，归类与决策排队
   const inbound = ingest(store, 'shared')
   assert.equal((await accepted).status, 'accepted'); await inbound
   await store.completeTopicDecision({ groupId: 'g', topicId: a, decisionId: 'before' })
-  const pending = store.routeMessages({ groupId: 'g', routeId: 'shared', routingRevision: 1, routes: [{ messageId: 'shared', messageVersion: 1, topics: [{ topicId: a }, { topicId: b }] }] })
+  const pending = store.routeMessages({ groupId: 'g', routeId: 'shared', routingRevision: 1, routes: [{ messageId: 'shared', messageVersion: 1, topics: [
+    { topicId: a, relationship: 'continuation', reason: '继续事项 A' },
+    { topicId: b, relationship: 'affected', reason: '同时改变事项 B' },
+  ], effectOwner: { topicId: b } }] })
   const stale = store.acceptTopicDecision(decision('after', a, 1))
   await pending
   assert.equal((await stale).status, 'topic-stale')
   assert.equal(store.getGroup('g').messages.length, 3)
   assert.equal(store.getTopic('g', a).revision, 2)
   assert.equal(store.getTopic('g', b).revision, 2)
+  assert.equal(store.getTopic('g', a).entries.at(-1).effectOwner, false)
+  assert.equal(store.getTopic('g', b).entries.at(-1).effectOwner, true)
 })
 
 test('回复快照preflight在Group原子更新内拒绝，决策和Outbox均零副作用', async () => {

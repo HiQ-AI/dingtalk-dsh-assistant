@@ -61,16 +61,30 @@ export const groupDecisionJsonSchema = {
   required: ['actions', 'basisMessageIds'],
 }
 
+const topicRouteTargetSchema = z.union([
+  z.strictObject({ topicId: z.string().min(1), relationship: z.enum(['continuation', 'affected']).optional(), reason: z.string().trim().min(1).optional() }),
+  z.strictObject({ newTopicKey: z.string().min(1), title: z.string().trim().min(1).max(TOPIC_TITLE_MAX_CHARS), relationship: z.enum(['continuation', 'affected']).optional(), reason: z.string().trim().min(1).optional() }),
+])
+const topicRouteOwnerSchema = z.union([
+  z.strictObject({ topicId: z.string().min(1) }),
+  z.strictObject({ newTopicKey: z.string().min(1) }),
+])
+const sameRouteTarget = (left, right) => left?.topicId ? left.topicId === right.topicId : left?.newTopicKey === right.newTopicKey
+
 export const topicRouteSubmissionSchema = z.strictObject({
   requestId: z.string().min(1),
   routes: z.array(z.strictObject({
     messageId: z.string().min(1), messageVersion: z.number().int().positive(),
-    topics: z.array(z.union([
-      z.strictObject({ topicId: z.string().min(1) }),
-      z.strictObject({ newTopicKey: z.string().min(1), title: z.string().trim().min(1).max(TOPIC_TITLE_MAX_CHARS) }),
-    ])),
+    topics: z.array(topicRouteTargetSchema), effectOwner: topicRouteOwnerSchema.optional(),
     reason: z.string().trim().min(1).optional(),
-  }).refine((route) => route.topics.length > 0 || Boolean(route.reason), { message: '无 Topic 归属必须说明原因', path: ['reason'] })).min(1),
+  }).superRefine((route, ctx) => {
+    if (route.topics.length === 0 && !route.reason) ctx.addIssue({ code: 'custom', message: '无 Topic 归属必须说明原因', path: ['reason'] })
+    if (route.topics.length > 1) {
+      if (route.topics.some((topic) => !topic.relationship || !topic.reason)) ctx.addIssue({ code: 'custom', message: '多 Topic 归属必须逐项声明关系和理由', path: ['topics'] })
+      if (!route.effectOwner) ctx.addIssue({ code: 'custom', message: '多 Topic 归属必须指定唯一动作主归属', path: ['effectOwner'] })
+    }
+    if (route.effectOwner && !route.topics.some((topic) => sameRouteTarget(route.effectOwner, topic))) ctx.addIssue({ code: 'custom', message: '动作主归属必须属于当前 Topic 集合', path: ['effectOwner'] })
+  })).min(1),
 })
 export const topicRouteSubmissionJsonSchema = {
   type: 'object', additionalProperties: false,
@@ -81,9 +95,12 @@ export const topicRouteSubmissionJsonSchema = {
       properties: {
         messageId: stringJsonSchema, messageVersion: { type: 'integer' },
         topics: { type: 'array', items: { oneOf: [
+          { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema, relationship: { type: 'string', enum: ['continuation', 'affected'] }, reason: stringJsonSchema }, required: ['topicId'] },
+          { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema, title: { ...stringJsonSchema, description: '建议 8–20 字且不超过 30 字的简洁话题名称，只概括共同讨论对象，不复述消息详情。' }, relationship: { type: 'string', enum: ['continuation', 'affected'] }, reason: stringJsonSchema }, required: ['newTopicKey', 'title'] },
+        ] } }, effectOwner: { oneOf: [
           { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema }, required: ['topicId'] },
-          { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema, title: { ...stringJsonSchema, description: '建议 8–20 字且不超过 30 字的简洁话题名称，只概括共同讨论对象，不复述消息详情。' } }, required: ['newTopicKey', 'title'] },
-        ] } }, reason: stringJsonSchema,
+          { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema }, required: ['newTopicKey'] },
+        ] }, reason: stringJsonSchema,
       }, required: ['messageId', 'messageVersion', 'topics'],
     } },
   }, required: ['requestId', 'routes'],

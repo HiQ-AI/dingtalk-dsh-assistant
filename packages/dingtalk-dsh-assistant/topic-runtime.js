@@ -27,6 +27,45 @@ const strictlyBoundedItems = (items, maxChars, maxCount) => {
   }
   return selected
 }
+export const TOPIC_CONTEXT_MAX_CHARS = 40_000
+export function boundedTopicContext(context, { textOffset = 0, maxChars = TOPIC_CONTEXT_MAX_CHARS } = {}) {
+  if (!Number.isInteger(textOffset) || textOffset < 0) throw new Error('topic_text_offset_invalid')
+  const projected = projectTopicContext(context)
+  const taskRefs = strictlyBoundedItems(projected.taskRefs ?? [], 8_000, 50)
+  const base = { ...projected, messages: [], taskRefs, totalTaskRefs: projected.taskRefs?.length ?? 0, hasMoreTaskRefs: taskRefs.length < (projected.taskRefs?.length ?? 0) }
+  const messages = [], completedMessageIds = []
+  let nextOffset = projected.offset, nextTextOffset
+  const output = () => ({ ...base, messages, completedMessageIds, nextOffset, ...(nextTextOffset === undefined ? {} : { nextTextOffset }), hasMoreMessages: nextOffset < projected.total || nextTextOffset !== undefined })
+  if (JSON.stringify(output()).length > maxChars) throw new Error('topic_context_metadata_too_large')
+  for (let index = 0; index < projected.messages.length; index++) {
+    const message = projected.messages[index]
+    const start = index === 0 ? textOffset : 0
+    const text = String(message.text ?? '')
+    if (start > text.length) throw new Error('topic_text_offset_invalid')
+    const complete = { ...message, text: text.slice(start), ...(start > 0 ? { textOffset: start, textTotal: text.length, textHasMore: false } : {}) }
+    messages.push(complete); completedMessageIds.push(message.messageId); nextOffset = projected.offset + index + 1; nextTextOffset = undefined
+    if (JSON.stringify(output()).length <= maxChars) continue
+    messages.pop(); completedMessageIds.pop(); nextOffset = projected.offset + index
+    let low = 0, high = text.length - start
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2)
+      messages.push({ ...message, text: text.slice(start, start + middle), textOffset: start, textTotal: text.length, textHasMore: start + middle < text.length })
+      nextTextOffset = start + middle < text.length ? start + middle : undefined
+      const fits = JSON.stringify(output()).length <= maxChars
+      messages.pop()
+      if (fits) low = middle
+      else high = middle - 1
+    }
+    if (low === 0) break
+    const end = start + low
+    messages.push({ ...message, text: text.slice(start, end), textOffset: start, textTotal: text.length, textHasMore: end < text.length })
+    nextTextOffset = end
+    break
+  }
+  const result = output()
+  if (JSON.stringify(result).length > maxChars) throw new Error('topic_context_budget_exceeded')
+  return result
+}
 const reviewSchema = z.union([
   z.strictObject({ accepted: z.boolean(), reason: z.string().trim().min(1) }),
   z.strictObject({ decision: z.enum(['acknowledge', 'guidance']), reason: z.string().trim().min(1), guidance: z.string().trim().min(1).optional() }),
@@ -80,6 +119,14 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         }
       }
     }
+    for (const topic of group.topics) {
+      for (const message of topicMessages(groupId, topic.topicId, topic.revision)) {
+        const key = `${message.messageId}:${message.messageVersion}`
+        const entry = [...topic.entries].reverse().find((item) => item.revision <= topic.revision && item.messageId === message.messageId)
+        if (!ownerByFact.has(key) && entry?.action === 'add' && entry.messageVersion === message.messageVersion && entry.effectOwner === true) ownerByFact.set(key, topic.topicId)
+      }
+    }
+    // 旧数据没有显式主归属标记时保留原有稳定回退，新的多 Topic 路由必须显式指定。
     for (const topic of group.topics) {
       for (const message of topicMessages(groupId, topic.topicId, topic.revision)) {
         const key = `${message.messageId}:${message.messageVersion}`
@@ -157,7 +204,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     routes.set(request.requestId, request)
     const topics = boundedItems(topicIndex(store.listTopics(groupId)).reverse(), 16_000, 100).reverse()
     const envelope = { requestId: request.requestId, messages, topics, totalTopics: store.listTopics(groupId).length, hasMoreTopics: topics.length < store.listTopics(groupId).length, ...(reason ? { reason } : {}) }
-    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\nTopic 请求：${JSON.stringify(envelope)}\n先结合本批全部消息、已有 Topic 和任务目标归类。通过 group_topic_route_submit 一次覆盖本批消息；需要历史话题时先 group_topic_list / group_topic_context_get。此阶段不执行任务、不回复群聊。${reason ? `本次是显式归属复核，原因：${reason}；提交后保留原关系历史。` : ''}`, messages.flatMap((message) => message.imageRefs ?? []))
+    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\nTopic 请求：${JSON.stringify(envelope)}\n先结合本批全部消息、已有 Topic 和任务目标归类。Topic 归属只表示消息延续同一讨论目标（continuation），或实质改变该 Topic 的事实、范围、结论或动作（affected）；仅为了查询旧分支、PR、任务或其他历史资料时，调用 group_topic_list / group_topic_context_get，不得把资料来源 Topic 加入归属。通过 group_topic_route_submit 一次覆盖本批消息。多 Topic 归属必须逐项填写 relationship 和 reason，并用 effectOwner 指定唯一动作主归属；主归属应是消息当前直接推动的事项，不是资料来源。此阶段不执行任务、不回复群聊。${reason ? `本次是显式归属复核，原因：${reason}；提交后保留原关系历史。` : ''}`, messages.flatMap((message) => message.imageRefs ?? []))
     monitor(agent, request, routes)
     return envelope
   }
@@ -404,11 +451,17 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const all = store.listTopics(groupId).filter((topic) => `${topic.title}\n${topic.summary ?? ''}`.toLowerCase().includes(query.toLowerCase()))
       return { topics: topicIndex(all.slice(offset, offset + limit)), total: all.length, offset, limit }
     })
-    tool('group_topic_context_get', '读取本群 Topic 固定版本及消息原文；分页字段明确表示未返回的历史。', { type: 'object', properties: { topicId: { type: 'string' }, revision: { type: 'integer' }, offset: { type: 'integer' }, limit: { type: 'integer' } }, required: ['topicId'], additionalProperties: false }, (args) => {
-      const context = projectTopicContext(store.getTopicContext({ ...args, groupId }))
+    tool('group_topic_context_get', '读取本群 Topic 固定版本及消息原文；返回不超过字符预算，按 nextOffset/nextTextOffset 连续读取完整历史。', { type: 'object', properties: { topicId: { type: 'string' }, revision: { type: 'integer' }, offset: { type: 'integer' }, limit: { type: 'integer' }, textOffset: { type: 'integer' } }, required: ['topicId'], additionalProperties: false }, (args) => {
+      const context = boundedTopicContext(store.getTopicContext({ ...args, groupId, limit: args.limit ?? 10 }), { textOffset: args.textOffset ?? 0 })
       for (const request of decisions.values()) {
         if (request.groupId !== groupId || request.topicId !== context.topic.topicId || request.revision !== context.topic.revision) continue
-        for (const message of context.messages) request.readMessageIds.add(message.messageId)
+        request.readTextOffsets ??= new Map()
+        for (const message of context.messages) {
+          const expected = request.readTextOffsets.get(message.messageId) ?? 0
+          if ((message.textOffset ?? 0) !== expected) continue
+          if (message.textHasMore) request.readTextOffsets.set(message.messageId, context.nextTextOffset)
+          else request.readMessageIds.add(message.messageId)
+        }
       }
       return context
     })

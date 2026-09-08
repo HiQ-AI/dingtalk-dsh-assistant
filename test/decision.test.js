@@ -30,10 +30,16 @@ test('Topic 决策拒绝缺失来源依据、消息副本和缺失执行版本',
 })
 
 test('归类可新建、追加或多归属，空归属必须有原因', () => {
-  const route = { messageId: 'm-1', messageVersion: 1, topics: [{ topicId: 'topic-a' }, { newTopicKey: 'local-b', title: '第二个话题' }] }
+  const route = { messageId: 'm-1', messageVersion: 1, topics: [
+    { topicId: 'topic-a', relationship: 'continuation', reason: '延续当前讨论目标' },
+    { newTopicKey: 'local-b', title: '第二个话题', relationship: 'affected', reason: '同时改变第二事项范围' },
+  ], effectOwner: { newTopicKey: 'local-b' } }
   assert.deepEqual(topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [route] }).routes, [route])
+  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, effectOwner: undefined }] }))
+  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: route.topics.map(({ relationship: _relationship, reason: _reason, ...topic }) => topic) }] }))
+  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, effectOwner: { topicId: 'topic-other' } }] }))
   assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [] }] }))
-  assert.equal(topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [], reason: '无可延续讨论的噪声' }] }).routes[0].topics.length, 0)
+  assert.equal(topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [], effectOwner: undefined, reason: '无可延续讨论的噪声' }] }).routes[0].topics.length, 0)
   assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [{ topicId: 'topic-a', newTopicKey: 'invalid', title: '冲突' }] }] }))
   assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [{ newTopicKey: 'too-long', title: '长'.repeat(TOPIC_TITLE_MAX_CHARS + 1) }] }] }))
 })
