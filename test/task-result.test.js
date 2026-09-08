@@ -40,3 +40,14 @@ test('叶子回执必须声明执行输入版本和轮次，不能由 Runtime �
   assert.throws(() => parseTaskResult({ ...result, inputVersion: 0, runSequence: 1 }))
   assert.throws(() => parseTaskCheckpoint({ kind: 'plan-confirmed', summary: '确认', nextStep: '执行' }))
 })
+
+test('叶子回执错误只报告匹配类型的字段问题', () => {
+  assert.throws(
+    () => parseTaskResult({ inputVersion: 1, runSequence: 1, status: 'completed', summary: '', evidence: [], artifacts: [] }),
+    (error) => error.message.startsWith('task_result_invalid:') && error.message.includes('summary') && !error.message.includes('invalid_union'),
+  )
+  assert.throws(
+    () => parseTaskResult({ inputVersion: 1, runSequence: 1, status: 'waiting', summary: '等待' }),
+    /"path":"waitingKind"/,
+  )
+})

@@ -217,13 +217,13 @@ Topic 的 `title` 是对齐 Task 名称的 8–20 字短语，最多 30 字，�
 
 入站消息引用其他钉钉消息时，Steer 信封只携带稳定的引用消息 ID；正常情况下 Resident 直接使用同一会话已经收到的正文。如果该正文因消息传递异常、会话恢复或上下文压缩而不在当前可见上下文，Resident 必须加载 `dingtalk-chat` Skill，并使用插件配置的同一 DWS profile 执行 `chat +messages-mget` 主动读取；取回的消息仍有 `quotedMessage.messageId` 时继续向上查询，直至整条引用链结束。查询结果必须校验完整性，必要时读取链上的图片或文件。查询失败、结果不完整、未命中或检测到循环时，不得要求群成员补发原问题、正文或截图，也不得猜测并回复；本次判断进入 `decision-retrying`，由 Runtime 在故障恢复后自动重试。
 
-`group_decision_submit` 每次提交一个 Topic 的决策，绑定 topicId、revision 和持久 decisionId。提交时复核未归类输入、相关 Topic 版本、Task inputVersion 以及历史回复快照；发生冲突时零副作用拒绝。Task 动作用 topicRefs 引用固定版本，具体消息授权证据仍在 Topic 决策中校验，加入 Topic 本身不会扩大授权。任何 Task 动作都必须带非空确认；确认先可靠写入 Outbox，再创建、续接或重开 Task。取消仍优先发送止损信号。决策接受后保留动作回执，按固定操作身份恢复，不通过重建 ID 重复执行。
+`group_decision_submit` 每次提交一个 Topic 的决策，绑定 topicId、revision 和持久 decisionId。提交时复核未归类输入、相关 Topic 版本、Task inputVersion 以及历史回复快照；发生冲突时零副作用拒绝。Task 动作用 topicRefs 引用固定版本，具体消息授权证据仍在 Topic 决策中校验，加入 Topic 本身不会扩大授权。任何 Task 动作都必须带非空确认；确认先可靠写入 Outbox，再创建、续接或重开 Task。取消仍优先发送止损信号。决策接受后保留动作回执，按固定操作身份恢复，不通过重建 ID 重复执行。Topic 工具参数错误返回精简的 `invalid-arguments` 字段问题；归类请求过期时返回当前请求，已落盘的重复提交从 RouteHistory 恢复原回执，Resident 不猜测或盲目重放未知请求。
 
 历史主会话回复候选按 Topic 决策或 Task 通知绑定并有界读取，不随全群历史重复注入。Resident 准备回复时调用 `group_reply_review_get`，完整审阅绑定快照；Topic ID、引用 ID 或关键词不能替代语义判断。重启后从持久的归类进度、Topic 未处理版本和已接受决策恢复；已归类话题的失败只阻塞该话题及共享 Task 的关联操作。
 
 图片及其紧邻短消息在归类阶段共同理解；附件读取失败不能据标题或缩略图猜测正文并启动 Task。原始消息保存附件与事实版本，Topic 固定版本解析相应原始事实，重启后仍能追溯输入。
 
-Task 完成和信息阻塞通知使用 `group_reply_submit` 结构化提交，绑定 Task runSequence、inputVersion、相关 Topic 版本及回复快照。Resident 根据所引用 Topic 的原始消息选择 `replyToMessageId` 和 `atOpenDingTalkIds`；Runtime 核对真实消息与稳定参与人身份。Topic 新增信息影响当前输入或其他路径已修改 Task 时，旧通知不得直接提交。Outbox 已落盘和 DWS 已投递分别计量，稳定通知身份支持失败恢复。
+Task 完成和信息阻塞通知使用 `group_reply_submit` 结构化提交，绑定 Task runSequence、inputVersion、相关 Topic 版本及回复快照。Resident 根据所引用 Topic 的原始消息选择 `replyToMessageId` 和 `atOpenDingTalkIds`；Runtime 核对真实消息与稳定参与人身份。Topic 新增信息影响当前输入或其他路径已修改 Task 时，旧通知不得直接提交。Outbox 已落盘和 DWS 已投递分别计量；通知使用提交 requestId 派生稳定 Outbox 身份，运行层重启或调用方未收到返回值时可读取已接受回执，找不到回执的未知请求不会自动重发。
 
 Topic 决策产生非空回复时，Runtime 使用 DWS 原生引用回复，并验证选定消息属于当前 Topic 快照。原消息的引用链只提供上下文，不自动成为出站引用目标。发送人 ID 缺失时不得猜测引用参数。回读必须匹配正文与精确的引用消息 ID；同文但属于其他话题的引用回复不能认领为本次投递。
 

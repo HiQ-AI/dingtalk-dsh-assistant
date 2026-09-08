@@ -6,7 +6,21 @@ import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, gr
 
 const textMessage = (text, images = []) => Object.freeze({ id: randomUUID(), role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text }, ...images.map((attachment) => ({ type: 'image', attachment }))] })
 const objectOutput = { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] }
-const jsonOutput = (value) => JSON.parse(JSON.stringify(value))
+const jsonOutput = (value) => {
+  if (value === undefined) throw new Error('tool_output_undefined')
+  const json = JSON.stringify(value, (_key, item) => {
+    if (typeof item === 'number' && !Number.isFinite(item)) throw new Error('tool_output_non_finite_number')
+    if (typeof item === 'bigint' || typeof item === 'function' || typeof item === 'symbol') throw new Error(`tool_output_not_json:${typeof item}`)
+    return item
+  })
+  if (json === undefined) throw new Error('tool_output_not_json')
+  return JSON.parse(json)
+}
+const invalidArguments = (error) => ({
+  status: 'invalid-arguments',
+  issues: error.issues.slice(0, 8).map((issue) => ({ path: issue.path.join('.') || '$', message: issue.message })),
+  nextAction: 'correct-arguments',
+})
 const sameVersions = (left, right) => left.length === right.length && left.every((item) => right.some((other) => other.messageId === item.messageId && other.messageVersion === item.messageVersion))
 const topicIndex = (topics) => topics.map(({ topicId, title, revision, processedRevision, status, summary }) => ({ topicId, title, revision, processedRevision, status, summary: summary?.slice(0, 240) }))
 const boundedItems = (items, maxChars, maxCount, required = () => false) => {
@@ -361,7 +375,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       assertSession(exec, groupId)
       const pending = Promise.resolve().then(() => execute(args))
       activeToolCalls.add(pending)
-      try { return jsonOutput(await pending) } finally { activeToolCalls.delete(pending) }
+      try { return jsonOutput(await pending) }
+      catch (error) { if (error instanceof z.ZodError) return invalidArguments(error); throw error }
+      finally { activeToolCalls.delete(pending) }
     } })
     tool('group_topic_route_review', '按明确原因复核本群已存在消息的 Topic 归属；先返回冻结请求，再通过 group_topic_route_submit 完整提交。', {
       type: 'object', additionalProperties: false,
@@ -380,9 +396,26 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     tool('group_topic_route_submit', '先提交完整消息批次的 Topic 归属；不发送回复或执行 Task。', topicRouteSubmissionJsonSchema, async (input) => {
       const args = topicRouteSubmissionSchema.parse(input)
       const request = routes.get(args.requestId)
-      if (!request || request.groupId !== groupId) throw new Error('topic_route_request_unknown')
+      if (!request || request.groupId !== groupId) {
+        const receipt = store.getGroup(groupId)?.routeHistory.find((item) => item.routeId === args.requestId)
+        if (receipt) return { status: 'accepted', recovered: true, topicIdsByKey: receipt.topicIdsByKey ?? {}, pendingDecisions: await schedule(groupId) }
+        await schedule(groupId)
+        const current = [...routes.values()].find((item) => item.groupId === groupId)
+        return current
+          ? { status: 'superseded', currentRequest: { requestId: current.requestId, routingRevision: current.routingRevision, messages: current.messages.map(({ messageId, messageVersion }) => ({ messageId, messageVersion })) }, nextAction: 'use-current-request' }
+          : { status: 'request-unavailable', nextAction: 'wait-for-current-request' }
+      }
       if (!sameVersions(request.messages, args.routes)) throw new Error('topic_route_batch_incomplete')
-      const result = await store.routeMessages({ groupId, routeId: request.requestId, routingRevision: request.routingRevision, routes: args.routes.map((route) => request.reason ? { ...route, reason: `${request.reason}${route.reason ? `；${route.reason}` : ''}` } : route) })
+      let result
+      try {
+        result = await store.routeMessages({ groupId, routeId: request.requestId, routingRevision: request.routingRevision, routes: args.routes.map((route) => request.reason ? { ...route, reason: `${request.reason}${route.reason ? `；${route.reason}` : ''}` } : route) })
+      } catch (error) {
+        if (error.message !== 'topic_message_version_stale') throw error
+        routes.delete(args.requestId)
+        await schedule(groupId)
+        const current = [...routes.values()].find((item) => item.groupId === groupId)
+        return { status: 'stale', reason: 'message-version-changed', ...(current ? { currentRequest: { requestId: current.requestId, routingRevision: current.routingRevision, messages: current.messages.map(({ messageId, messageVersion }) => ({ messageId, messageVersion })) } } : {}), nextAction: 'use-current-request' }
+      }
       if (result.status !== 'routed' && result.status !== 'duplicate') { routes.delete(args.requestId); await schedule(groupId); return result }
       routes.delete(args.requestId)
       return { status: 'accepted', topicIdsByKey: result.topicIdsByKey, pendingDecisions: await schedule(groupId) }
@@ -476,7 +509,12 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       requestId: { type: 'string' }, reply: { type: 'string' }, replyReview: replyReviewJsonSchema, replyToMessageId: { type: 'string' }, atOpenDingTalkIds: { type: 'array', items: { type: 'string' } },
     } }, async (args) => {
       const request = replies.get(args.requestId)
-      if (!request || request.groupId !== groupId) throw new Error('topic_reply_request_unknown')
+      if (!request || request.groupId !== groupId) {
+        const outbound = store.getGroup(groupId)?.outbox.find((item) => item.outboundId === `reply-${args.requestId}`)
+        return outbound
+          ? { status: 'accepted', recovered: true, outboundId: outbound.outboundId, deliveryStatus: outbound.status }
+          : { status: 'request-unavailable', nextAction: 'wait-for-current-request' }
+      }
       if (!args.reply?.trim()) throw new Error('group_reply_text_required')
       if (!args.replyReview) return { status: 'review-required', error: 'reply_kind_required' }
       const preflight = () => {
@@ -503,14 +541,14 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if (candidates.length && (!target || !args.atOpenDingTalkIds?.length)) throw new Error('group_reply_routing_required')
       if (args.replyToMessageId && !target) throw new Error('group_reply_target_not_in_topic')
       if (args.atOpenDingTalkIds && (new Set(args.atOpenDingTalkIds).size !== args.atOpenDingTalkIds.length || args.atOpenDingTalkIds.some((id) => !candidates.some((message) => message.senderOpenDingTalkId === id)))) throw new Error('group_reply_recipient_not_in_topic')
-      const outbound = { groupId, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.task.result), text: args.reply.trim(), taskIds: [task.taskId], topicRefs: task.topicRefs,
+      const outbound = { groupId, outboundId: `reply-${args.requestId}`, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.task.result), text: args.reply.trim(), taskIds: [task.taskId], topicRefs: task.topicRefs,
         replyKind: replyReview?.kind, replacesOutboundIds: replyReview?.replaceOutboundIds,
         ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: args.atOpenDingTalkIds } : {}) }
       // 对外调用在短状态提交之后；独立通知的失败不消费其他 Topic 请求。
       const persisted = await appendOutbox({ ...outbound, preflight })
       if (persisted?.status) { await schedule(groupId); return persisted }
       replies.delete(args.requestId); request.resolve(outbound)
-      return { status: 'accepted' }
+      return { status: 'accepted', outboundId: outbound.outboundId }
     })
     tool('group_task_review_submit', '提交内部完成验收或检查点审阅；请求绑定执行版本，不能产生群消息。', { type: 'object', properties: { requestId: { type: 'string' }, review: { type: 'object' } }, required: ['requestId', 'review'], additionalProperties: false }, ({ requestId, review: input }) => {
       const request = reviews.get(requestId)
