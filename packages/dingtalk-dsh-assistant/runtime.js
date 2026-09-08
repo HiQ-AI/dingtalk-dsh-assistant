@@ -801,7 +801,7 @@ Task objective 限制的是业务动作范围，包括业务代码、业务数�
 
 ### 与主会话的内部检查点
 
-开始执行后把当前目标拆成至少 1 个有验收意义的检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed。后续按 remainingItems 顺序逐项提交 stage-completed；Host 会自动校验普通阶段的版本、顺序和非空证据，需要协调判断时再交给主会话。收到新版 TASK_TOPIC_CONTEXT 后，按其中的 progressImpact 处理：preserve 表示保留未受影响的既有进展，replan 表示按修订范围重提计划。范围冲突、证据缺口或风险实质变化时提交对应 checkpoint。完成前 remainingItems 必须为空。不要提交命令流水、等待或无新事实的状态；checkpoint 不发送群聊，也不代替 submit_task_result。
+开始执行后把当前目标拆成至少 1 个有验收意义的检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed。后续按 remainingItems 顺序逐项提交 stage-completed，每次 completedItems 只填本次完成的第一项，不累计历史；阶段提交被拒绝时先纠正并取得确认，再进入下一阶段。Host 会自动校验普通阶段的版本、顺序和非空证据，需要协调判断时再交给主会话。收到新版 TASK_TOPIC_CONTEXT 后，按其中的 progressImpact 处理：preserve 表示保留未受影响的既有进展，replan 表示按修订范围重提计划。范围冲突、证据缺口或风险实质变化时提交对应 checkpoint。完成前 remainingItems 必须为空。不要提交命令流水、等待或无新事实的状态；checkpoint 不发送群聊，也不代替 submit_task_result。
 
 ### 任务授权边界
 
@@ -813,7 +813,7 @@ Task objective 是本任务的动作授权上限，必须逐字尊重其中的�
 
 先读当前实现、运行态或原始材料，再作判断。历史分支、库表、环境、版本和结论仅供定位，必须现场复核。结论先给结果再附证据，区分观察、推断和未验证项，并主动检验反例。
 
-把选用流程落实为本任务可验证的阶段和验收项，按下述流程索引及检查点协议推进。目标修订时说明哪些证据仍有效、哪些要重验，保留未受影响的工作；独立目标交主会话判断是否拆分任务。
+把选用流程落实为本任务可验证的阶段和验收项，明确适用步骤、沿用的可核验证据和不适用依据，按下述流程索引及检查点协议推进。目标修订时说明哪些证据仍有效、哪些要重验，保留未受影响的工作；独立目标交主会话判断是否拆分任务。
 
 独立回读文件、PR、流水线、部署、数据或其他实际交付结果；一个层级成功不能替代其他必需层级。用户明确停止或转交时如实交接，不能包装成验收通过。完成前提交本次范围、结果、证据与产物路径、未验证项和必要的简短复盘；按当前工作区规则判断是否需要沉淀经验，不复制敏感数据或把临时事实写成长期规则。
 
@@ -929,18 +929,33 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         parameters: { type: 'object', additionalProperties: false, properties: {
           inputVersion: { type: 'integer' }, runSequence: { type: 'integer' },
           kind: { type: 'string', enum: ['plan-confirmed', 'stage-completed', 'scope-conflict', 'evidence-gap', 'risk-changed'] }, stageTask: { type: 'string' }, summary: { type: 'string' },
-          completedItems: { type: 'array', items: { type: 'string' } }, evidence: { type: 'array', items: { type: 'string' } }, remainingItems: { type: 'array', items: { type: 'string' } },
+          completedItems: { type: 'array', description: 'stage-completed 时只包含上次 remainingItems 的第一项，不累计历史完成项。', items: { type: 'string' } }, evidence: { type: 'array', items: { type: 'string' } }, remainingItems: { type: 'array', description: 'stage-completed 时为上次 remainingItems 去掉第一项后的有序列表。', items: { type: 'string' } },
           nextStep: { type: 'string' }, needsCoordinatorDecision: { type: 'boolean' },
         }, required: ['inputVersion', 'runSequence', 'kind', 'summary', 'completedItems', 'evidence', 'remainingItems', 'nextStep', 'needsCoordinatorDecision'] },
         output: {
-          schema: { type: 'object', additionalProperties: false, properties: {
+          schema: { oneOf: [{ type: 'object', additionalProperties: false, properties: {
             accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, checkpointId: { type: 'string' }, coordinatorDecision: { type: 'string', enum: ['acknowledge', 'guidance'] }, reason: { type: 'string' }, guidance: { type: 'string' },
-          }, required: ['accepted', 'taskId', 'checkpointId', 'coordinatorDecision', 'reason'] },
-          render: (_args, out) => [{ type: 'text', text: out.coordinatorDecision === 'guidance' ? `Coordinator guidance: ${out.guidance}` : `Checkpoint acknowledged: ${out.reason}` }],
+          }, required: ['accepted', 'taskId', 'checkpointId', 'coordinatorDecision', 'reason'] }, {
+            type: 'object', additionalProperties: false, properties: {
+              accepted: { type: 'boolean', const: false }, taskId: { type: 'string' }, code: { type: 'string', const: 'task_checkpoint_must_advance_one' },
+              inputVersion: { type: 'integer' }, runSequence: { type: 'integer' },
+              expected: { type: 'object', additionalProperties: false, properties: { completedItems: { type: 'array', items: { type: 'string' } }, remainingItems: { type: 'array', items: { type: 'string' } } }, required: ['completedItems', 'remainingItems'] },
+              instruction: { type: 'string' },
+            }, required: ['accepted', 'taskId', 'code', 'inputVersion', 'runSequence', 'expected', 'instruction'],
+          }] },
+          render: (_args, out) => [{ type: 'text', text: out.accepted === false ? JSON.stringify(out) : out.coordinatorDecision === 'guidance' ? `Coordinator guidance: ${out.guidance}` : `Checkpoint acknowledged: ${out.reason}` }],
         },
         execute: async (args, exec) => {
           if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_checkpoint_wrong_session:${task.taskId}`)
-          return submitTaskCheckpointInternal(task.taskId, args)
+          try { return await submitTaskCheckpointInternal(task.taskId, args) }
+          catch (error) {
+            if (!error.message.startsWith(`task_checkpoint_must_advance_one:${task.taskId}:`)) throw error
+            const current = store.getTask(task.taskId)
+            const remaining = current.checkpoints?.at(-1)?.remainingItems ?? []
+            return { accepted: false, taskId: task.taskId, code: 'task_checkpoint_must_advance_one', inputVersion: current.inputVersion, runSequence: current.runSequence,
+              expected: { completedItems: remaining.slice(0, 1), remainingItems: remaining.slice(1) },
+              instruction: remaining.length ? '本次提交未保存。completedItems 只填本次完成的一项；核对该项证据并修正参数，确认被接受后再推进后续阶段。' : '当前没有剩余阶段，本次提交未保存；核对当前目标后提交结果或重新规划，不重复补报历史阶段。' }
+          }
         },
       })
       agentCtx.tools.register({
