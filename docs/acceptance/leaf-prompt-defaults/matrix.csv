@@ -1,0 +1,9 @@
+case,round-1,round-2
+内置规范与自定义隔离,PASS,PENDING
+恢复与动态清空,PASS,PENDING
+多流程组合回归,PASS,PENDING
+默认折叠与键盘编辑,PASS,PENDING
+保存失败草稿与刷新回显,PASS,PENDING
+新增删除空态及窄屏,PASS,PENDING
+全量测试262项,PASS,PENDING
+合并部署及真实配置回读,NOT_RUN,PENDING
