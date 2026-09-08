@@ -34,6 +34,23 @@ function Environment({ value }) {
   )
 }
 
+function TaskPromptEditor({ prompts, onChange }) {
+  const update = (index, patch) => onChange(prompts.map((item, position) => position === index ? { ...item, ...patch } : item))
+  return React.createElement('div', { style: { display: 'grid', gap: 10 } },
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
+      React.createElement('div', null, React.createElement('strong', { style: { fontSize: 13 } }, '任务流程提示词'), React.createElement('div', { style: { color: colors.muted, fontSize: 12, marginTop: 3 } }, '系统提示仅列名称和适用说明；叶子按需读取正文，选中后持续注入当前任务。')),
+      React.createElement('button', { type: 'button', style: button, onClick: () => onChange([...prompts, { name: '', description: '', prompt: '', enabled: true }]) }, '添加流程')),
+    prompts.length === 0 ? React.createElement('div', { style: { border: `1px dashed ${colors.border}`, borderRadius: 8, padding: 12, color: colors.muted, fontSize: 12 } }, '尚未配置专用流程。叶子按通用提示词执行。') : null,
+    ...prompts.map((item, index) => React.createElement('fieldset', { key: item.id ?? `new-${index}`, style: { margin: 0, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 12, display: 'grid', gap: 8 } },
+      React.createElement('legend', { style: { padding: '0 5px', fontSize: 12, color: colors.muted } }, item.name.trim() || `新流程 ${index + 1}`),
+      React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '名称', React.createElement('input', { style: input, value: item.name, maxLength: 80, onChange: (event) => update(index, { name: event.target.value }) })),
+      React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '适用说明', React.createElement('textarea', { style: { ...input, resize: 'none', minHeight: 64 }, value: item.description, maxLength: 400, onChange: (event) => update(index, { description: event.target.value }) })),
+      React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '流程与验收提示词', React.createElement('textarea', { style: { ...input, resize: 'none', minHeight: 150 }, value: item.prompt, maxLength: 40000, onChange: (event) => update(index, { prompt: event.target.value }) })),
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 } },
+        React.createElement('label', { style: { display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12 } }, React.createElement('input', { type: 'checkbox', checked: item.enabled, onChange: (event) => update(index, { enabled: event.target.checked }) }), '在流程索引中启用'),
+        React.createElement('button', { type: 'button', style: { ...button, color: colors.danger }, onClick: () => onChange(prompts.filter((_, position) => position !== index)) }, '移除')))))
+}
+
 export function DingTalkDshAssistantCard() {
   const [overview, setOverview] = useState()
   const [drafts, setDrafts] = useState({})
@@ -42,6 +59,7 @@ export function DingTalkDshAssistantCard() {
   const [agentModel, setAgentModel] = useState({ model: '', reasoningEffort: 'low' })
       const [proxyUrl, setProxyUrl] = useState('')
       const [leafSessionPrompt, setLeafSessionPrompt] = useState('')
+      const [taskPrompts, setTaskPrompts] = useState([])
       const [maxConcurrentTasks, setMaxConcurrentTasks] = useState(5)
   const [newGroup, setNewGroup] = useState({ groupId: '', name: '', responsibility: '' })
   const [query, setQuery] = useState('')
@@ -52,7 +70,7 @@ export function DingTalkDshAssistantCard() {
   const [updateFeedback, setUpdateFeedback] = useState()
   const [checkingVersion, setCheckingVersion] = useState(false)
   const refresh = useCallback(async () => {
-    try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setLeafSessionPrompt(next.agentConfig.leafSessionPrompt ?? ''); setMaxConcurrentTasks(next.agentConfig.maxConcurrentTasks ?? 5); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
+    try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setLeafSessionPrompt(next.agentConfig.leafSessionPrompt ?? ''); setTaskPrompts(next.agentConfig.taskPrompts ?? []); setMaxConcurrentTasks(next.agentConfig.maxConcurrentTasks ?? 5); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }, [])
   useEffect(() => { refresh() }, [refresh])
@@ -137,8 +155,9 @@ export function DingTalkDshAssistantCard() {
       React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '用于 resident Agent 调用模型；保存后写入插件配置并立即应用，重启后仍保留。'),
       React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '叶子会话提示词'),
       React.createElement('textarea', { 'aria-label': '叶子会话提示词', rows: 10, style: { ...input, resize: 'vertical' }, placeholder: '补充叶子会话执行任务时需要遵循的流程、证据要求和其他约束。', value: leafSessionPrompt, onChange: (event) => setLeafSessionPrompt(event.target.value) }),
-      React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '该提示词仅通过 dsh systemPrompt.section 注入叶子会话；不注入常驻主会话。'),
-      React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !agentModel.model.trim() || !Number.isInteger(maxConcurrentTasks) || maxConcurrentTasks < 1 || maxConcurrentTasks > 50 || (agentNames === (overview?.agentConfig?.agentNames ?? []).join(',') && agentWorkspace === overview?.agentConfig?.workspaceDir && agentModel.model === overview?.agentConfig?.model && agentModel.reasoningEffort === (overview?.agentConfig?.reasoningEffort ?? '') && proxyUrl === (overview?.agentConfig?.proxyUrl ?? '') && leafSessionPrompt === (overview?.agentConfig?.leafSessionPrompt ?? '') && maxConcurrentTasks === (overview?.agentConfig?.maxConcurrentTasks ?? 5)), onClick: () => mutate(() => request('/config/agent', { method: 'PUT', body: JSON.stringify({ agentNames: agentNames.split(',').map((name) => name.trim()).filter(Boolean), workspaceDir: agentWorkspace, ...agentModel, proxyUrl, leafSessionPrompt, maxConcurrentTasks }) })) }, '保存配置')),
+      React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '只填写所有任务都适用的规范；具体流程在下方单独维护。该内容不注入常驻主会话。'),
+      React.createElement(TaskPromptEditor, { prompts: taskPrompts, onChange: setTaskPrompts }),
+      React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !agentModel.model.trim() || !Number.isInteger(maxConcurrentTasks) || maxConcurrentTasks < 1 || maxConcurrentTasks > 50 || taskPrompts.some((item) => !item.name.trim() || !item.description.trim() || !item.prompt.trim()) || (agentNames === (overview?.agentConfig?.agentNames ?? []).join(',') && agentWorkspace === overview?.agentConfig?.workspaceDir && agentModel.model === overview?.agentConfig?.model && agentModel.reasoningEffort === (overview?.agentConfig?.reasoningEffort ?? '') && proxyUrl === (overview?.agentConfig?.proxyUrl ?? '') && leafSessionPrompt === (overview?.agentConfig?.leafSessionPrompt ?? '') && JSON.stringify(taskPrompts) === JSON.stringify(overview?.agentConfig?.taskPrompts ?? []) && maxConcurrentTasks === (overview?.agentConfig?.maxConcurrentTasks ?? 5)), onClick: () => mutate(() => request('/config/agent', { method: 'PUT', body: JSON.stringify({ agentNames: agentNames.split(',').map((name) => name.trim()).filter(Boolean), workspaceDir: agentWorkspace, ...agentModel, proxyUrl, leafSessionPrompt, taskPrompts, taskPromptsVersion: overview?.agentConfig?.taskPromptsVersion ?? 0, maxConcurrentTasks }) })) }, '保存配置')),
     React.createElement('section', { style: panel }, React.createElement('strong', null, '常驻群与会话职责'),
       ...(overview?.groups ?? []).map((group) => React.createElement('div', { key: group.groupId, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12, display: 'grid', gap: 8 } },
         React.createElement('div', null, group.name ? React.createElement('strong', { style: { fontSize: 13 } }, group.name) : null, React.createElement('code', { style: { display: 'block', fontSize: 12, overflowWrap: 'anywhere', color: colors.muted } }, group.groupId)),

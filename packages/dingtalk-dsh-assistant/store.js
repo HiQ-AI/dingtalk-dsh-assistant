@@ -62,6 +62,8 @@ const groupSchema = z.object({
   routingRevision: z.number().int().nonnegative(), topics: z.array(topicSchema), routeHistory: z.array(z.record(z.string(), z.unknown())), taskReservations: z.array(z.record(z.string(), z.unknown())),
 })
 const taskObjectiveRevisionSchema = z.object({ objective: z.string().min(1), revisedAt: z.string().min(1), topicRefs: z.array(topicRefSchema).optional(), inputVersion: z.number().int().positive().optional(), decisionId: z.string().optional() })
+const taskPromptSchema = z.object({ id: z.string().min(1), name: z.string().trim().min(1).max(80), description: z.string().trim().min(1).max(400), prompt: z.string().trim().min(1).max(40000), enabled: z.boolean(), revision: z.number().int().positive() })
+const taskPromptRefSchema = z.object({ id: z.string().min(1), revision: z.number().int().positive() })
 const persistedTaskCheckpointSchema = taskCheckpointSchema.extend({
   checkpointId: z.string().min(1), submittedAt: z.string().min(1),
   coordinatorDecision: z.enum(['acknowledge', 'guidance']).optional(), coordinatorReason: z.string().min(1).optional(), guidance: z.string().min(1).optional(), reviewedAt: z.string().min(1).optional(),
@@ -70,7 +72,7 @@ const taskRunSchema = z.object({
   runSequence: z.number().int().positive(), startedAt: z.string().min(1), endedAt: z.string().min(1).optional(),
   topicRefs: z.array(topicRefSchema), inputVersion: z.number().int().positive(), objective: z.string().min(1), childSessionId: z.string().min(1),
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
-  acceptanceCriteria: z.array(z.string().min(1)), stageTasks: z.array(z.string().min(1)), checkpoints: z.array(persistedTaskCheckpointSchema).optional(), result: persistedTaskResultSchema.optional(),
+  acceptanceCriteria: z.array(z.string().min(1)), stageTasks: z.array(z.string().min(1)), taskPromptRefs: z.array(taskPromptRefSchema).optional(), checkpoints: z.array(persistedTaskCheckpointSchema).optional(), result: persistedTaskResultSchema.optional(),
 })
 const taskStateEventSchema = z.object({ state: z.enum(['queued', 'running', 'waiting', 'completed']), at: z.string().min(1), runSequence: z.number().int().positive() })
 const taskSchema = z.object({
@@ -80,7 +82,7 @@ const taskSchema = z.object({
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
   objectiveHistory: z.array(taskObjectiveRevisionSchema).optional(),
   runSequence: z.number().int().positive().optional(), runStartedAt: z.string().min(1).optional(),
-  acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional(), runHistory: z.array(taskRunSchema).optional(),
+  acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional(), taskPromptRefs: z.array(taskPromptRefSchema).optional(), runHistory: z.array(taskRunSchema).optional(),
   executionEvents: z.array(z.record(z.string(), z.unknown())).optional(),
   dispatchedInputVersion: z.number().int().positive().optional(), acknowledgedInputVersion: z.number().int().positive().optional(),
   checkpoints: z.array(persistedTaskCheckpointSchema).optional(),
@@ -92,7 +94,7 @@ const taskSchema = z.object({
 })
 const schedulerSchema = z.object({
   tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), agentWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
-  leafSessionPrompt: z.string().optional(), taskExecutionGuidance: z.string().optional(), taskEvidenceGuidance: z.string().optional(), maxConcurrentTasks: z.number().int().positive().max(50).optional(),
+  leafSessionPrompt: z.string().optional(), taskPrompts: z.array(taskPromptSchema).optional(), taskPromptsVersion: z.number().int().nonnegative().optional(), taskExecutionGuidance: z.string().optional(), taskEvidenceGuidance: z.string().optional(), maxConcurrentTasks: z.number().int().positive().max(50).optional(),
 })
 const activitySchema = z.object({
   activityId: z.string().min(1), taskId: z.string().min(1), sessionId: z.string().min(1), eventKey: z.string().min(1),
@@ -253,6 +255,32 @@ export async function openResidentStore(storageDomain) {
         return { ...rest, leafSessionPrompt }
       })
       return { leafSessionPrompt }
+    },
+    getTaskPrompts: () => scheduler.get('runtime')?.taskPrompts ?? [],
+    getTaskPromptsVersion: () => scheduler.get('runtime')?.taskPromptsVersion ?? 0,
+    setTaskPrompts: async (taskPrompts, expectedVersion) => {
+      if (!Array.isArray(taskPrompts)) throw new Error('task_prompts_must_be_array')
+      let saved
+      await scheduler.update('runtime', (current) => {
+        const version = current?.taskPromptsVersion ?? 0
+        if (expectedVersion !== undefined && expectedVersion !== version) throw new Error('task_prompts_version_conflict')
+        const previous = new Map((current?.taskPrompts ?? []).map((item) => [item.id, item]))
+        const ids = new Set()
+        const normalized = taskPrompts.map((input) => {
+          const id = typeof input?.id === 'string' && input.id.trim() ? input.id.trim() : `task-prompt-${randomUUID()}`
+          if (ids.has(id)) throw new Error('task_prompt_id_duplicate')
+          ids.add(id)
+          const base = { id, name: input?.name, description: input?.description, prompt: input?.prompt, enabled: input?.enabled !== false }
+          const old = previous.get(id)
+          const revision = old && old.name === base.name?.trim() && old.description === base.description?.trim() && old.prompt === base.prompt?.trim() && old.enabled === base.enabled ? old.revision : (old?.revision ?? 0) + 1
+          return taskPromptSchema.parse({ ...base, revision })
+        })
+        const indexChars = normalized.filter((item) => item.enabled).reduce((sum, item) => sum + item.id.length + item.name.length + item.description.length + 8, 0)
+        if (indexChars > 12000) throw new Error('task_prompt_index_too_large')
+        saved = { taskPrompts: normalized, taskPromptsVersion: version + 1 }
+        return { ...current, ...saved }
+      })
+      return saved
     },
     initializeGroupConfiguration: async () => {
       await scheduler.update('runtime', (current) => ({ ...current, groupConfigurationInitialized: true }))

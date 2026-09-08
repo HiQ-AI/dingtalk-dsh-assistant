@@ -254,6 +254,20 @@ test('旧版流程与证据配置合并为叶子会话提示词并在保存后�
   assert.deepEqual(seed.get('scheduler:runtime'), { tasks: [], leafSessionPrompt: '统一提示词' })
 })
 
+test('任务流程提示词生成稳定ID、递增修订并拒绝陈旧配置覆盖', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  const first = await store.setTaskPrompts([{ name: '问题排查', description: '定位原因时使用', prompt: '核验事实并给出证据', enabled: true }], 0)
+  assert.equal(first.taskPromptsVersion, 1)
+  assert.match(first.taskPrompts[0].id, /^task-prompt-/)
+  assert.equal(first.taskPrompts[0].revision, 1)
+  const same = await store.setTaskPrompts(first.taskPrompts, 1)
+  assert.equal(same.taskPrompts[0].revision, 1)
+  const changed = await store.setTaskPrompts([{ ...same.taskPrompts[0], prompt: '核验事实、定位原因并给出证据' }], 2)
+  assert.equal(changed.taskPrompts[0].revision, 2)
+  await assert.rejects(store.setTaskPrompts(changed.taskPrompts, 1), /task_prompts_version_conflict/)
+})
+
 test('确认Outbox可在Task动作完成后原子补充关联Task', async () => {
   const { facility } = memoryFacility()
   const store = await openResidentStore(facility)

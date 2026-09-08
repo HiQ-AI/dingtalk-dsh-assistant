@@ -47,11 +47,15 @@ test('设置页异步展示版本状态且版本检查不阻塞核心配置加�
   assert.match(source, /查看 CHANGELOG/u)
 })
 
-test('插件配置使用单一叶子会话提示词输入框', async () => {
+test('插件配置区分叶子通用提示词与可增删的任务流程提示词', async () => {
   for (const file of ['client.js', 'web-client.js']) {
     const source = await readFile(new URL(`../packages/dingtalk-dsh-assistant/${file}`, import.meta.url), 'utf8')
     assert.match(source, /'aria-label': '叶子会话提示词'/u)
     assert.match(source, /leafSessionPrompt/u)
+    assert.match(source, /TaskPromptEditor/u)
+    assert.match(source, /任务流程提示词/u)
+    assert.match(source, /适用说明/u)
+    assert.match(source, /taskPromptsVersion/u)
     assert.doesNotMatch(source, /'aria-label': '任务流程引导'/u)
     assert.doesNotMatch(source, /'aria-label': '完成证据要求'/u)
     assert.doesNotMatch(source, /taskGuidance/u)

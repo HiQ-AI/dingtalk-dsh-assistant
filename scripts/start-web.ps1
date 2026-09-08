@@ -7,8 +7,13 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $env:USERPROFILE '.dsh' }
 $nodeExe = (Get-Command node -ErrorAction Stop).Source
 $nodeMajor = [int]((& $nodeExe --version).TrimStart('v').Split('.')[0])
-$dshCommand = Get-Command dsh.cmd -ErrorAction Stop
-$dshEntry = Join-Path (Split-Path -Parent $dshCommand.Source) 'node_modules\@deepseek-ai\dsh\lib\bin.js'
+$profileDshEntry = Join-Path $dshHome 'profiles\web\node_modules\@deepseek-ai\dsh\lib\bin.js'
+$dshEntry = if (Test-Path -LiteralPath $profileDshEntry) {
+    $profileDshEntry
+} else {
+    $dshCommand = Get-Command dsh.cmd -ErrorAction Stop
+    Join-Path (Split-Path -Parent $dshCommand.Source) 'node_modules\@deepseek-ai\dsh\lib\bin.js'
+}
 $residentState = Join-Path $dshHome 'storages\dingtalk-dsh-assistant\dingtalk_dsh_assistant.json'
 
 if ([string]::IsNullOrWhiteSpace($ProxyUrl)) {
