@@ -1,6 +1,6 @@
 # 常驻会话、Topic 与叶子 Task 协作改造
 
-> 状态：IN_PROGRESS
+> 状态：COMPLETE
 > Goal ID：resident-topic-leaf-audit
 > 最近维护：2026-09-07T17:00:00+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant/docs/acceptance/resident-topic-leaf-audit/goal.md
@@ -43,8 +43,8 @@
 
 ## 当前检查点
 
-- 当前子目标：交付收口
-- 唯一下一步：创建 PR、合并并从最新 main 部署本地。
+- 当前子目标：已完成
+- 唯一下一步：无。
 - 未闭环项：网络工具级隔离仍取决于 DSH 能力。
 
 ## 进展
@@ -60,6 +60,7 @@
 - 2026-09-08：复核 #886 的真实归类记录，确认“资料查询即归属”、隐式动作主归属和分页读取无字符预算三个问题，进入 SG10。
 - 2026-09-08：用户要求叶子会话开放完全权限，新增 SG11；新建与恢复路径统一改用 DSH `danger-full-access` preset。
 - 2026-09-08：R6–R9 通过，全量 250/250、原 A01–A10、三个发行包与 diff 检查均通过；SG10、SG11 完成。
+- 2026-09-08：PR #75 合并为 `29b73e2`；本地 main 与 origin/main 对齐，精确 tgz 安装到 Web profile。新进程完成健康、DWS listener/backfill、未认证边界及浏览器运行看板 E2E 回读。
 
 ## 重大决策
 

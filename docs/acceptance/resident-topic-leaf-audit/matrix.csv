@@ -52,3 +52,7 @@ R8,6,PASS,Topic分页与超长消息片段均受40000字符总预算约束,round
 R9,6,PASS,新建和恢复叶子均使用danger-full-access且Resident仍只读,round-6.md
 REGRESSION,6,PASS,全量250项与原A01-A10全部通过,round-6.md
 PACK,6,PASS,根包与两个子包均成功生成tgz,round-6.md
+MERGE,6,PASS,PR75按精确head合并且main与origin/main对齐,round-6.md
+DEPLOY,6,PASS,合并提交精确tgz安装到本机web profile并由新进程加载,round-6.md
+RUNTIME,6,PASS,健康端口DWS listener与backfill分层回读通过,round-6.md
+E2E-WEB,6,PASS,受控浏览器加载群聊运行看板且未认证边界返回401,round-6.md
