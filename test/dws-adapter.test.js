@@ -164,6 +164,38 @@ test('outbox 历史不完整或投递未知时保持 pending 不盲重发', asyn
   assert.deepEqual(await dispatchOutbox({ adapter: unknown, groupId: 'cid-a', outbound: { outboundId: 'out-4', text: 'reply' } }), { status: 'pending', reason: 'delivery_unknown', sendResult: { deliveryStatus: 'unknown' } })
 })
 
+test('组织未开放读取权限时使用稳定幂等键发送并接受确定回执', async () => {
+  let sends = 0
+  const denied = () => { const error = new Error('dws_read_failed:1:CLI_ORG_NOT_AUTHORIZED'); error.serverErrorCode = 'CLI_ORG_NOT_AUTHORIZED'; throw error }
+  const adapter = {
+    readGroup: denied,
+    async sendGroup(request) { sends += 1; assert.equal(request.idempotencyKey, 'out-permission'); return { deliveryStatus: 'success', messageRef: { openMessageId: 'sent-by-receipt' } } },
+  }
+  assert.deepEqual(await dispatchOutbox({ adapter, groupId: 'cid-a', outbound: { outboundId: 'out-permission', text: 'reply' } }), {
+    status: 'sent', messageId: 'sent-by-receipt', deduplicated: false, readbackSkipped: 'CLI_ORG_NOT_AUTHORIZED',
+  })
+  assert.equal(sends, 1)
+})
+
+test('组织未开放读取权限且发送回执未知时继续保持 pending', async () => {
+  const denied = () => { const error = new Error('dws_read_failed:1:CLI_ORG_NOT_AUTHORIZED'); error.serverErrorCode = 'CLI_ORG_NOT_AUTHORIZED'; throw error }
+  const result = await dispatchOutbox({ adapter: { readGroup: denied, sendGroup: async () => ({ deliveryStatus: 'unknown' }) }, groupId: 'cid-a', outbound: { outboundId: 'out-unknown', text: 'reply' } })
+  assert.deepEqual(result, { status: 'pending', reason: 'delivery_unknown', sendResult: { deliveryStatus: 'unknown' } })
+})
+
+test('DWS读取错误保留结构化服务端错误码', async () => {
+  const stderr = JSON.stringify({ error: { server_error_code: 'CLI_ORG_NOT_AUTHORIZED' } })
+  const adapter = createDwsAdapter({ enabled: true, runner: { run: async () => ({ exitCode: 1, stdout: '', stderr }), spawn: () => undefined } })
+  await assert.rejects(adapter.readGroup('cid-a'), (error) => error.message === 'dws_read_failed:1:CLI_ORG_NOT_AUTHORIZED' && error.serverErrorCode === 'CLI_ORG_NOT_AUTHORIZED')
+})
+
+test('DWS引用回复错误保留结构化服务端错误码', async () => {
+  const stderr = JSON.stringify({ error: { server_error_code: 'CLI_ORG_NOT_AUTHORIZED' } })
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => ({ exitCode: 1, stdout: '', stderr }), spawn: () => undefined } })
+  await assert.rejects(adapter.sendGroupReply({ groupId: 'cid-a', text: 'reply', idempotencyKey: 'out-1', replyToMessageId: 'm-1', replyToSenderOpenDingTalkId: 'user-1' }),
+    (error) => error.message === 'dws_reply_failed:1:CLI_ORG_NOT_AUTHORIZED' && error.serverErrorCode === 'CLI_ORG_NOT_AUTHORIZED')
+})
+
 test('outbox 可使用无失败的最近消息窗口完成去重与投递确认', async () => {
   let reads = 0
   const adapter = {

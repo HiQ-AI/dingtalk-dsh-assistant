@@ -30,6 +30,8 @@ const outboundSchema = z.object({
   topicRefs: z.array(topicRefSchema).optional(), decisionId: z.string().optional(), resultFingerprint: z.string().min(1).optional(),
   outboundId: z.string().min(1), sourceMessageId: z.string().min(1), text: z.string(), status: z.enum(['pending', 'sent']),
   readbackRequired: z.boolean().optional(),
+  deliveryAttemptCount: z.number().int().nonnegative().optional(), deliveryAttemptedAt: z.string().min(1).optional(),
+  deliveryPendingReason: z.string().min(1).optional(), deliveryError: z.string().min(1).optional(),
   deliveredMessageId: z.string().min(1).optional(), deliveredAt: z.string().min(1).optional(),
   replyToMessageId: z.string().min(1).optional(), replyToSenderOpenDingTalkId: z.string().min(1).optional(),
   atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
@@ -684,7 +686,19 @@ export async function openResidentStore(storageDomain) {
       const [storageKey, current] = entry
       if (!current.outbox.some((item) => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
       const deliveredAt = new Date().toISOString()
-      return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: 'sent', deliveredAt, ...(deliveredMessageId ? { deliveredMessageId } : {}) } : item) }))
+      return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: 'sent', deliveredAt, ...(deliveredMessageId ? { deliveredMessageId } : {}), deliveryPendingReason: undefined, deliveryError: undefined } : item) }))
+    }),
+    recordOutboundDeliveryAttempt: ({ groupId, outboundId, reason, error }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
+      const [storageKey, current] = entry
+      if (!current.outbox.some((item) => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
+      const attemptedAt = new Date().toISOString()
+      return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? {
+        ...item, deliveryAttemptCount: (item.deliveryAttemptCount ?? 0) + 1, deliveryAttemptedAt: attemptedAt,
+        ...(reason ? { deliveryPendingReason: reason } : { deliveryPendingReason: undefined }),
+        ...(error ? { deliveryError: error } : { deliveryError: undefined }),
+      } : item) }))
     }),
     updateOutboundRecall: async ({ groupId, outboundId, status, reason, error }) => {
       const entry = findGroupEntry(groupId)

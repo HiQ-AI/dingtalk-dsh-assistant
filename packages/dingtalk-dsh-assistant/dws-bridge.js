@@ -284,9 +284,15 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     return entry.backfillPromise
   }
   const processOutbound = async ({ groupId, outbound }) => {
-    await runtime.prepareOutbound?.({ groupId, outbound })
-    const delivery = await dispatchOutbox({ adapter, groupId, outbound })
-    if (delivery.status === 'sent') await runtime.acknowledge({ groupId, outboundId: outbound.outboundId, deliveredMessageId: delivery.messageId })
+    try {
+      await runtime.prepareOutbound?.({ groupId, outbound })
+      const delivery = await dispatchOutbox({ adapter, groupId, outbound })
+      await runtime.recordOutboundDeliveryAttempt?.({ groupId, outboundId: outbound.outboundId, ...(delivery.status === 'pending' ? { reason: delivery.reason } : {}) })
+      if (delivery.status === 'sent') await runtime.acknowledge({ groupId, outboundId: outbound.outboundId, deliveredMessageId: delivery.messageId })
+    } catch (error) {
+      await runtime.recordOutboundDeliveryAttempt?.({ groupId, outboundId: outbound.outboundId, error: error instanceof Error ? error.message : String(error) })
+      throw error
+    }
   }
   const processPendingCompletedOutbox = () => {
     outboxRetryTail = outboxRetryTail.then(async () => {

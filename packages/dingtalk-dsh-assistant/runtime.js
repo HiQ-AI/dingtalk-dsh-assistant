@@ -1499,7 +1499,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         return { accepted, duplicates, enriched, total: messages.length, group: store.getGroup(groupId) }
       })
     },
-    acknowledge: store.acknowledge, reportCarrierIssue: store.recordAlert,
+    acknowledge: store.acknowledge, recordOutboundDeliveryAttempt: store.recordOutboundDeliveryAttempt, reportCarrierIssue: store.recordAlert,
     resolveGroupCarrierIssues: async ({ groupId }) => {
       const tasks = store.listTasks().filter((task) => task.groupId === groupId)
       for (const task of tasks) await store.resolveAlerts?.({ taskId: task.taskId, fingerprintPrefix: 'dws-consumer-' })

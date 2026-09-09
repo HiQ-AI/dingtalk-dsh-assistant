@@ -47,6 +47,16 @@ test('同群消息按稳定 messageId 去重并递增排序', async () => {
   const delivered = await store.markMessageAgentDelivery({ groupId: 'group-a', messageId: 'm-2', status: 'delivered' })
   await store.appendOutbox({ groupId: 'group-a', sourceMessageId: 'm-1', text: 'reply-one' })
   const replied = await store.appendOutbox({ groupId: 'group-a', sourceMessageId: 'm-1', text: 'reply-one-again' })
+  const outboundId = replied.outbox[0].outboundId
+  await store.recordOutboundDeliveryAttempt({ groupId: 'group-a', outboundId, reason: 'delivery_unknown' })
+  const attempted = store.getGroup('group-a').outbox[0]
+  assert.equal(attempted.deliveryAttemptCount, 1)
+  assert.equal(attempted.deliveryPendingReason, 'delivery_unknown')
+  assert.ok(attempted.deliveryAttemptedAt)
+  await store.acknowledge({ groupId: 'group-a', outboundId, deliveredMessageId: 'sent-1' })
+  const acknowledged = store.getGroup('group-a').outbox[0]
+  assert.equal(acknowledged.status, 'sent')
+  assert.equal(acknowledged.deliveryPendingReason, undefined)
 
   assert.equal(subscription.group.residentSessionId, first.group.residentSessionId)
   assert.deepEqual([first.sequence, duplicate.sequence, second.sequence], [1, 1, 2])

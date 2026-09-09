@@ -16,6 +16,14 @@ function parseJson(stdout, operation) {
   }
 }
 
+function commandError(prefix, result) {
+  let serverErrorCode
+  try { serverErrorCode = JSON.parse(result.stderr)?.error?.server_error_code } catch {}
+  const error = new Error(`${prefix}:${result.exitCode}${serverErrorCode ? `:${serverErrorCode}` : ''}`)
+  if (serverErrorCode) error.serverErrorCode = serverErrorCode
+  return error
+}
+
 function comparableMessageText(value) {
   return String(value ?? '').replace(/[\p{P}\p{S}\s]/gu, '')
 }
@@ -87,7 +95,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     async readGroup(groupId) {
       requireEnabled()
       const result = await runner.run(this.compileGroupRead(groupId))
-      if (result.exitCode !== 0) throw new Error(`dws_read_failed:${result.exitCode}`)
+      if (result.exitCode !== 0) throw commandError('dws_read_failed', result)
       const value = parseJson(result.stdout, 'read')
       if (!Array.isArray(value.messages) || typeof value.complete !== 'boolean') throw new Error('dws_read_contract_invalid')
       return value
@@ -104,14 +112,14 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       requireEnabled()
       if (!writesAuthorized) throw new Error('dws_write_not_authorized')
       const result = await runner.run(this.compileGroupSend(request))
-      if (result.exitCode !== 0) throw new Error(`dws_send_failed:${result.exitCode}`)
+      if (result.exitCode !== 0) throw commandError('dws_send_failed', result)
       return parseJson(result.stdout, 'send')
     },
     async sendGroupReply(request) {
       requireEnabled()
       if (!writesAuthorized) throw new Error('dws_write_not_authorized')
       const result = await runner.run(this.compileGroupReply(request))
-      if (result.exitCode !== 0) throw new Error(`dws_reply_failed:${result.exitCode}`)
+      if (result.exitCode !== 0) throw commandError('dws_reply_failed', result)
       return parseJson(result.stdout, 'reply')
     },
     async sendSelf(request) {
@@ -157,7 +165,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       const query = String(outbound.text ?? '').split(/\r?\n/u, 1)[0].replace(/[`*_~>#]/gu, '').trim().slice(0, 32)
       if (query.length < 12) return undefined
       const result = await runner.run(this.compileMessageSearch(query))
-      if (result.exitCode !== 0) throw new Error(`dws_outbound_search_failed:${result.exitCode}`)
+      if (result.exitCode !== 0) throw commandError('dws_outbound_search_failed', result)
       const value = parseJson(result.stdout, 'outbound-search')
       if (!Array.isArray(value.messages) || value.complete !== true || value.hasMore === true || (value.failedCount ?? 0) !== 0) throw new Error('dws_outbound_search_partial')
       return value.messages.find((message) => message.conversationId === groupId && matchesOutbound(message, outbound))
@@ -166,7 +174,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       requireEnabled()
       if (!writesAuthorized) throw new Error('dws_write_not_authorized')
       const result = await runner.run(this.compileMessageRecall(messageId))
-      if (result.exitCode !== 0) throw new Error(`dws_recall_failed:${result.exitCode}`)
+      if (result.exitCode !== 0) throw commandError('dws_recall_failed', result)
       return parseJson(result.stdout, 'recall')
     },
     async loadMessageImages({ groupId, messageId, resourceRefs = [] }) {
@@ -250,20 +258,31 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
 }
 
 export async function dispatchOutbox({ adapter, groupId, outbound }) {
-  const before = await adapter.readGroup(groupId)
+  const readHistory = async () => {
+    try { return await adapter.readGroup(groupId) }
+    catch (error) {
+      if (error?.serverErrorCode === 'CLI_ORG_NOT_AUTHORIZED') return undefined
+      throw error
+    }
+  }
+  const before = await readHistory()
   const usableHistory = (history) => history.complete === true || (history.partial === false && (history.failedCount ?? 0) === 0 && Array.isArray(history.failures) && history.failures.length === 0)
-  if (!usableHistory(before)) return { status: 'pending', reason: 'preflight_history_partial' }
-  const existing = before.messages.find((message) => matchesOutbound(message, outbound))
-  if (existing !== undefined) return { status: 'sent', messageId: existing.messageId, deduplicated: true }
-  const historical = typeof adapter.findOutboundMessage === 'function' ? await adapter.findOutboundMessage(groupId, outbound) : undefined
-  if (historical !== undefined) return { status: 'sent', messageId: historical.messageId, deduplicated: true }
+  if (before !== undefined) {
+    if (!usableHistory(before)) return { status: 'pending', reason: 'preflight_history_partial' }
+    const existing = before.messages.find((message) => matchesOutbound(message, outbound))
+    if (existing !== undefined) return { status: 'sent', messageId: existing.messageId, deduplicated: true }
+    const historical = typeof adapter.findOutboundMessage === 'function' ? await adapter.findOutboundMessage(groupId, outbound) : undefined
+    if (historical !== undefined) return { status: 'sent', messageId: historical.messageId, deduplicated: true }
+  }
 
   const sent = outbound.replyToMessageId && outbound.replyToSenderOpenDingTalkId
     ? await adapter.sendGroupReply({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId, replyToMessageId: outbound.replyToMessageId, replyToSenderOpenDingTalkId: outbound.replyToSenderOpenDingTalkId, atOpenDingTalkIds: outbound.atOpenDingTalkIds ?? [] })
     : await adapter.sendGroup({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId })
   if (sent.deliveryStatus === 'unknown') return { status: 'pending', reason: 'delivery_unknown', sendResult: sent }
 
-  const after = await adapter.readGroup(groupId)
+  const after = await readHistory()
+  const receiptMessageId = sent.messageId ?? sent.messageRef?.openMessageId ?? sent.result?.openMessageId ?? sent.result?.result?.openMessageId
+  if (after === undefined) return { status: 'sent', ...(receiptMessageId ? { messageId: receiptMessageId } : {}), deduplicated: false, readbackSkipped: 'CLI_ORG_NOT_AUTHORIZED' }
   if (!usableHistory(after)) return { status: 'pending', reason: 'postflight_history_partial', sendResult: sent }
   const delivered = after.messages.find((message) => matchesOutbound(message, outbound))
   if (delivered === undefined) return { status: 'pending', reason: 'message_not_observed', sendResult: sent }

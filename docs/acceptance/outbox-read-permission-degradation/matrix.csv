@@ -1,0 +1,8 @@
+case,round-1,status,evidence
+结构化保留DWS服务端错误码,1,PASS,CLI_ORG_NOT_AUTHORIZED进入Error属性
+读取权限缺失且发送成功,1,PASS,稳定幂等键只发送一次并接受确定回执
+读取权限缺失且回执未知,1,PASS,保持pending且不误确认
+普通不完整历史,1,PASS,保持原有发送前拦截
+投递尝试可观测,1,PASS,持久化次数时间及pending或错误原因
+完整自动化测试,1,PASS,275/275 tests passed
+本地真实投递恢复,1,FAIL,DWS发送接口返回CLI_ORG_NOT_AUTHORIZED，需组织管理员开放CLI数据访问权限
