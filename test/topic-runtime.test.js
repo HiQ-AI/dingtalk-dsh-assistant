@@ -464,9 +464,8 @@ test('多流程组合一次批量读取，后续检查点会使原审阅失效',
   const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
   const args = { requestId: request.requestId, review: { decision: 'acknowledge', reason: '通过' } }
   await assert.rejects(h.call('group_task_prompt_get', { requestId: request.requestId, ids: [] }), /task_review_prompt_ids_required/)
-  await assert.rejects(h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['investigate', 'investigate'] }), /task_review_prompt_ids_duplicate/)
   assert.deepEqual((await h.call('group_task_review_submit', args)).missingPromptRefs, [{ id: 'investigate', revision: 1 }, { id: 'repair', revision: 1 }])
-  const promptResult = await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['investigate', 'repair'] })
+  const promptResult = await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['investigate', 'investigate', 'repair'] })
   assert.deepEqual(promptResult.prompts.map((item) => item.id), ['investigate', 'repair'])
   await h.store.updateTask(task.taskId, (current) => ({ ...current, checkpoints: [{ checkpointId: 'later-diagnostic', inputVersion: current.inputVersion, runSequence: current.runSequence, kind: 'scope-conflict', summary: '需要改计划', evidence: [], completedItems: [], remainingItems: [], nextStep: '协调', needsCoordinatorDecision: true, submittedAt: '2026-09-09T01:00:00Z' }] }))
   assert.equal((await h.call('group_task_review_submit', args)).status, 'task-stale')

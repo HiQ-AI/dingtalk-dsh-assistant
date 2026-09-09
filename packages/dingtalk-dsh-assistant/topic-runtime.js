@@ -553,8 +553,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const request = reviews.get(requestId)
       if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
       if (ids.length < 1) throw new Error('task_review_prompt_ids_required')
-      if (new Set(ids).size !== ids.length) throw new Error('task_review_prompt_ids_duplicate')
-      const refs = ids.map((id) => request.promptCatalog.find((item) => item.id === id))
+      const uniqueIds = [...new Set(ids)]
+      const refs = uniqueIds.map((id) => request.promptCatalog.find((item) => item.id === id))
       if (refs.some((ref) => !ref)) throw new Error('task_review_prompt_not_available')
       const currentPrompts = store.getTaskPrompts?.() ?? []
       const prompts = refs.map((ref) => currentPrompts.find((item) => item.id === ref.id && item.enabled && item.revision === ref.revision))
