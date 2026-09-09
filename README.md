@@ -184,7 +184,7 @@ pwsh -NoProfile -File .\scripts\start-web.ps1
 
 ![已选中的钉钉个人助理插件配置](docs/manual/images/dsh-web-plugin-selected-annotated.png)
 
-1. 设置 Agent 名称和别名，多个名称使用英文逗号分隔。
+1. 设置 Agent 名称和别名，多个名称使用英文逗号分隔。群职责定义本群身份关系、负责范围和介入要求；需要作为任务称呼的名字同时加入别名配置。DWS 登录人姓名不享有特殊准入或静默规则。
 2. 设置 Agent 工作区绝对目录。DSH 会从该目录原生发现 `AGENTS.md`。
 3. 设置默认模型、推理深度和叶子任务并行上限，默认并行上限为 5。
 4. 按需设置网络代理。
