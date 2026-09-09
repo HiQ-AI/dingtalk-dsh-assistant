@@ -9,10 +9,10 @@ Outbox 写入失败时回退且不重复处理,PASS,PASS,round-2.md；round-1.md
 重启后补偿缺失通知,PASS,PASS,round-2.md；round-1.md为历史证据
 Outbox 记录实际投递时间,PASS,PASS,round-2.md；round-1.md为历史证据
 完整自动化测试,PASS,PASS,round-2.md；round-1.md为历史证据
-本地安装包与工作区关键源码一致,PASS,PENDING,round-2.md；round-1.md为历史证据
-DSH Web 本地认证访问,PASS,PENDING,round-2.md；round-1.md为历史证据
-原插件流程配置保留,PASS,PENDING,round-2.md；round-1.md为历史证据
-消息实时监听恢复,PASS,PENDING,round-2.md；round-1.md为历史证据
+本地安装包与工作区关键源码一致,PASS,PASS,round-2.md；round-1.md为历史证据
+DSH Web 本地认证访问,PASS,PASS,round-2.md；round-1.md为历史证据
+原插件流程配置保留,PASS,PASS,round-2.md；round-1.md为历史证据
+消息实时监听恢复,PASS,PASS,round-2.md；round-1.md为历史证据
 组织未授权不能绕过发送前回读,NOT_RUN,PASS,round-2.md
 空回执或失败回执不能确认送达,NOT_RUN,PASS,round-2.md
 流程修改停用删除未重载也拒绝旧阶段,NOT_RUN,PASS,round-2.md
