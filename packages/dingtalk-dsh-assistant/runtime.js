@@ -55,6 +55,7 @@ const taskAssociationContext = (task) => ({
   ...(task.taskPromptRefs ? { taskPromptRefs: task.taskPromptRefs } : {}),
   topicRefs: task.topicRefs, inputVersion: task.inputVersion, runSequence: task.runSequence,
   ...(task.objectiveHistory ? { objectiveHistory: task.objectiveHistory } : {}),
+  ...(task.titleHistory ? { titleHistory: task.titleHistory } : {}),
   ...(task.waitingReason ? { waitingReason: task.waitingReason } : {}),
   ...(task.completion ? { completion: task.completion } : {}),
 })
@@ -212,7 +213,7 @@ routing-required 表示还有未归类输入，先归类再重试；已确认无
 
 Task 完成验收和检查点审阅通过 group_task_review_submit 返回，普通文本不构成审阅。完成审阅通过时必须在同一次提交中准备 Task 通知；Runtime 在 Task 原子完成后才写入 Outbox。等待通知、恢复补发或完成通知草稿失效时通过 group_reply_submit 返回。通知根据固定 Topic 原文选择引用消息和真正需要获知的参与人，保留实际变更、证据、交付状态和未验证边界。
 
-\`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从Topic 固定版本生成的独立来源证据并自行核验。
+\`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从Topic 固定版本生成的独立来源证据并自行核验。task-context 或 task-reopen 修订 objective 时必须同时提交概括新完整目标的 title；普通补充、等待恢复和异常唤醒不得提交 title。
 
 新建任务必须提供至少一条 \`acceptanceCriteria\`；修订目标时也可更新 \`acceptanceCriteria\` 和 \`stageTasks\`。验收标准只描述原始消息明确要求的业务结果、目标环境和限制，不得把主会话建议、历史做法或预计验证步骤扩写成用户要求，也不得按开发、分析、部署等任务类型绑定固定模板。具体处理流程由叶子按插件任务流程索引选择并形成计划；你在计划和完成审阅中通过 group_task_prompt_get 一次批量读取本轮需要的流程，结合固定 Topic 原文检查一致性。
 
@@ -1295,11 +1296,18 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       }
     }
   }
-  function withRevisedObjective(current, objective, decisionId) {
+  function withRevisedObjective(current, objective, title, decisionId) {
     const revised = typeof objective === 'string' ? objective.trim() : ''
-    if (!revised || revised === current.objective) return current
-    return { ...current, objective: revised, objectiveHistory: [...(current.objectiveHistory ?? []), {
+    const revisedTitle = typeof title === 'string' ? title.trim() : ''
+    if (!revised || revised === current.objective) {
+      if (revisedTitle) throw new Error('task_title_requires_objective_revision')
+      return current
+    }
+    if (!revisedTitle) throw new Error('task_objective_title_required')
+    return { ...current, title: revisedTitle, objective: revised, objectiveHistory: [...(current.objectiveHistory ?? []), {
       objective: current.objective, revisedAt: new Date().toISOString(), topicRefs: current.topicRefs, inputVersion: current.inputVersion, ...(decisionId ? { decisionId } : {}),
+    }], titleHistory: [...(current.titleHistory ?? []), {
+      title: current.title ?? current.objective, revisedAt: new Date().toISOString(), inputVersion: current.inputVersion, runSequence: current.runSequence, ...(decisionId ? { decisionId } : {}),
     }] }
   }
   function normalizeRunPlan(objective, acceptanceCriteria, stageTasks) {
@@ -1335,17 +1343,17 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     if (sessions?.flush) await sessions.flush(handle.agent.session)
     await store.updateTask(task.taskId, (current) => current.inputVersion === task.inputVersion ? { ...current, dispatchedInputVersion: task.inputVersion } : current)
   }
-  async function reopenCompletedTaskInternal(task, context, topicRefs, objective, acceptanceCriteria, stageTasks, operation) {
+  async function reopenCompletedTaskInternal(task, context, topicRefs, title, objective, acceptanceCriteria, stageTasks, operation) {
     if (operation && task.appliedOperations.includes(operation.operationId)) { await pumpTasks(); return store.getTask(task.taskId) }
     if (task.state !== 'completed') throw new Error(`task_not_completed:${task.taskId}`)
     const nextObjective = typeof objective === 'string' && objective.trim() ? objective.trim() : task.objective
     const queued = await mutateTask(task, operation, (current) => ({
-      ...withRevisedObjective(current, nextObjective, operation?.decisionId),
+      ...withRevisedObjective(current, nextObjective, title, operation?.decisionId),
       topicRefs, inputVersion: current.inputVersion + 1, state: 'queued', runSequence: current.runSequence + 1, runStartedAt: new Date().toISOString(),
       ...normalizeRunPlan(nextObjective, acceptanceCriteria, stageTasks),
       runHistory: [...(current.runHistory ?? []), {
         runSequence: current.runSequence, startedAt: current.runStartedAt ?? current.createdAt, endedAt: new Date().toISOString(),
-        topicRefs: current.topicRefs, inputVersion: current.inputVersion, objective: current.objective, childSessionId: current.childSessionId,
+        topicRefs: current.topicRefs, inputVersion: current.inputVersion, title: current.title, objective: current.objective, childSessionId: current.childSessionId,
         acceptanceCriteria: current.acceptanceCriteria, stageTasks: current.stageTasks, taskPromptRefs: current.taskPromptRefs ?? [], checkpoints: current.checkpoints ?? [], ...(current.result ? { result: current.result } : {}),
       }],
       lastCompletedResult: current.result, completion: undefined, result: undefined, waitingKind: undefined, waitingReason: undefined,
@@ -1355,13 +1363,13 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     await pumpTasks()
     return store.getTask(queued.taskId)
   }
-  async function appendTaskContextInternal(task, context, topicRefs, objective, acceptanceCriteria, stageTasks, progressImpact, operation) {
+  async function appendTaskContextInternal(task, context, topicRefs, title, objective, acceptanceCriteria, stageTasks, progressImpact, operation) {
     if (cancellingTasks.has(task.taskId)) throw new Error(`task_cancel_pending:${task.taskId}`)
     if (operation && task.appliedOperations.includes(operation.operationId)) { if (['running', 'waiting'].includes(task.state)) await dispatchTaskInput(task); return task }
     if (task.state === 'completed') throw new Error(`task_not_active:${task.taskId}`)
     const previousObjective = task.objective
     task = await mutateTask(task, operation, (current) => {
-      const revised = withRevisedObjective(current, objective, operation?.decisionId)
+      const revised = withRevisedObjective(current, objective, title, operation?.decisionId)
       const resumed = current.state === 'waiting' && current.waitingKind === 'information'
       const refs = [...new Map([...current.topicRefs, ...topicRefs].map((ref) => [ref.topicId, ref])).values()]
       const scopeChanged = revised.objective !== current.objective || acceptanceCriteria !== undefined || stageTasks !== undefined
@@ -1401,8 +1409,8 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     const task = store.getTask(action.taskId)
     if (!task || task.groupId !== groupId) throw new Error('task_topic_wrong_group')
     if (action.kind === 'task-cancel') return cancelTaskInternal(task.taskId, action.reason, action.topicRefs, operation)
-    if (action.kind === 'task-reopen') return reopenCompletedTaskInternal(task, action.context, action.topicRefs, action.objective, action.acceptanceCriteria, action.stageTasks, operation)
-    return appendTaskContextInternal(task, action.context, action.topicRefs, action.objective, action.acceptanceCriteria, action.stageTasks, action.progressImpact, operation)
+    if (action.kind === 'task-reopen') return reopenCompletedTaskInternal(task, action.context, action.topicRefs, action.title, action.objective, action.acceptanceCriteria, action.stageTasks, operation)
+    return appendTaskContextInternal(task, action.context, action.topicRefs, action.title, action.objective, action.acceptanceCriteria, action.stageTasks, action.progressImpact, operation)
   }
   async function submitWebTaskAction(kind, request) {
     if (runtimeClosing) throw new Error('resident_runtime_closed')
@@ -1418,7 +1426,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     if (task && (!Array.isArray(request.topicRefs) || !request.topicRefs.length)) throw new Error('task_topic_refs_required')
     const topicRefs = request.topicRefs ?? []
     const action = { kind, ...(task ? { taskId, inputVersion: request.inputVersion, runSequence: request.runSequence, ...(kind === 'task-cancel' ? { reason: context.trim() } : { context: context.trim() }) } : { title, objective, acceptanceCriteria }),
-      ...(objective !== undefined ? { objective } : {}), ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}), ...(stageTasks !== undefined ? { stageTasks } : {}),
+      ...(task && title !== undefined ? { title } : {}), ...(objective !== undefined ? { objective } : {}), ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}), ...(stageTasks !== undefined ? { stageTasks } : {}),
       topicRefs: topicRefs.length ? topicRefs : [{ topicId: 'web-input', revision: 1 }] }
     groupDecisionSchema.parse({ basisMessageIds: ['web-input'], actions: [action], reply: '' })
     const text = JSON.stringify({ kind, context: context.trim(), ...(taskId ? { taskId } : {}), ...(title ? { title } : {}), ...(objective ? { objective } : {}), ...(acceptanceCriteria ? { acceptanceCriteria } : {}), ...(stageTasks ? { stageTasks } : {}) })

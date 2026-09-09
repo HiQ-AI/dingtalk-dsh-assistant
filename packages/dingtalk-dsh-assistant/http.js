@@ -76,7 +76,7 @@ const requiredText = z.string().trim().min(1)
 const topicRefsSchema = z.array(z.strictObject({ topicId: requiredText, revision: z.number().int().positive() })).min(1)
 const taskInputFields = {
   requestId: requiredText, context: requiredText, topicRefs: topicRefsSchema,
-  objective: requiredText.optional(), acceptanceCriteria: z.array(requiredText).min(1).optional(), stageTasks: z.array(requiredText).min(1).optional(),
+  title: requiredText.max(120).optional(), objective: requiredText.optional(), acceptanceCriteria: z.array(requiredText).min(1).optional(), stageTasks: z.array(requiredText).min(1).optional(),
 }
 const createTaskInputSchema = z.strictObject({ ...taskInputFields, groupId: requiredText, title: requiredText, objective: requiredText, acceptanceCriteria: z.array(requiredText).min(1), topicRefs: topicRefsSchema.optional() })
 const updateTaskInputSchema = z.strictObject({ ...taskInputFields, inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() })
