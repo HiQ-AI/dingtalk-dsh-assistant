@@ -10,10 +10,23 @@ window.__ModuleLoader__.load({
     const inject = ['slots']
     const ENDPOINT = 'http://127.0.0.1:18998'
     const colors = { border: 'var(--dsw-alias-stroke-border-2, rgba(127,127,127,.28))', muted: 'var(--dsw-alias-label-secondary, #737373)', accent: 'var(--dsw-alias-brand-primary, #4d6bfe)', danger: 'var(--dsw-alias-status-error, #c33)' }
-    const panel = { border: `1px solid ${colors.border}`, borderRadius: 12, padding: 16, display: 'grid', gap: 12 }
-    const row = { display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 13 }
-    const input = { width: '100%', boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 8, padding: '8px 10px', background: 'transparent', color: 'inherit', font: 'inherit' }
-    const button = { border: `1px solid ${colors.border}`, borderRadius: 8, padding: '7px 12px', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit' }
+    const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }
+    const panel = { border: `1px solid ${colors.border}`, borderRadius: ui.radiusMd, padding: ui.space4, display: 'grid', gap: ui.space3 }
+    const row = { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: ui.space2, fontSize: ui.textMd }
+    const input = { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: ui.radiusSm, padding: `${ui.space2}px ${ui.space3}px`, background: 'transparent', color: 'inherit', font: 'inherit' }
+    const button = { border: `1px solid ${colors.border}`, borderRadius: ui.radiusSm, padding: `${ui.space2}px ${ui.space3}px`, background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit' }
+    const settingsCss = `
+      [data-dingtalk-assistant-settings] :is(button, input, select, textarea, summary, a):focus-visible {
+        outline: 2px solid var(--dsw-alias-brand-primary, #4d6bfe) !important;
+        outline-offset: 2px !important;
+      }
+      @media (max-width: 720px) {
+        [data-dingtalk-assistant-settings] { gap: 12px !important; }
+        [data-dingtalk-assistant-settings] section { padding: 12px !important; }
+        [data-dingtalk-assistant-settings] .assistant-inline-form { align-items: stretch !important; flex-direction: column !important; }
+        [data-dingtalk-assistant-settings] .assistant-inline-form > button { width: 100%; }
+      }
+    `
     const UPDATE_COMMAND = 'dsh plugin --profile web add @zzusp/dingtalk-dsh-assistant@latest @zzusp/dingtalk-dsh-observer@latest --save-exact'
 
     function UpdateDot() {
@@ -113,7 +126,7 @@ window.__ModuleLoader__.load({
         }
       }
       const activeTasks = overview?.tasks?.filter((task) => task.state === 'running' || task.state === 'waiting').length ?? 0
-      return React.createElement('div', { style: { display: 'grid', gap: 16 } },
+      return React.createElement('div', { 'data-dingtalk-assistant-settings': '', style: { display: 'grid', gap: ui.space4 } }, React.createElement('style', null, settingsCss),
         React.createElement('section', { style: panel },
           React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, React.createElement('div', null, React.createElement('strong', null, '钉钉个人助理'), React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, 'resident runtime')), React.createElement('button', { type: 'button', style: button, onClick: refresh }, '刷新')),
           error ? React.createElement('div', { style: { color: colors.danger, fontSize: 13 } }, error) : null,
@@ -174,7 +187,7 @@ window.__ModuleLoader__.load({
               React.createElement('button', { type: 'button', style: { ...button, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: drafts[group.groupId] === group.responsibility, onClick: () => mutate(() => request(`/config/groups/${encodeURIComponent(group.groupId)}`, { method: 'PUT', body: JSON.stringify({ responsibility: drafts[group.groupId] }) })) }, '保存职责')))),
           React.createElement('div', { style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12, display: 'grid', gap: 8 } },
             React.createElement('strong', { style: { fontSize: 13 } }, '添加常驻群'),
-            React.createElement('div', { style: { display: 'flex', gap: 8 } },
+            React.createElement('div', { className: 'assistant-inline-form', style: { display: 'flex', gap: ui.space2 } },
               React.createElement('input', { 'aria-label': '按群名称搜索', placeholder: '输入至少两个字搜索群聊', style: input, value: query, onChange: (event) => setQuery(event.target.value) }),
               React.createElement('button', { type: 'button', style: button, disabled: query.trim().length < 2, onClick: () => mutate(async () => { const result = await request(`/config/groups/search?q=${encodeURIComponent(query.trim())}`); setSearchResults(result.groups) }) }, '搜索')),
             ...searchResults.map((group) => React.createElement('button', { key: group.groupId, type: 'button', style: { ...button, textAlign: 'left', background: newGroup.groupId === group.groupId ? 'color-mix(in srgb, var(--dsw-alias-brand-primary, #4d6bfe) 12%, transparent)' : 'transparent' }, onClick: () => { setNewGroup((current) => ({ ...current, groupId: group.groupId, name: group.name })); setGroupFeedback({ kind: 'hint', message: `已选择“${group.name}”，填写会话职责后即可开始常驻。` }) } }, `${group.name} · ${group.memberCount ?? '-'}人\n${group.groupId}`)),

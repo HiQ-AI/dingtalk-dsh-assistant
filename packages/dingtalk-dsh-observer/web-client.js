@@ -71,17 +71,37 @@ window.__ModuleLoader__.load({
       if (message.deliveryError || reason === 'send_failed') return { id: 'failed', label: '投递异常', state: 'error', detail }
       return { id: 'queued', label: '待发送', state: 'ongoing', detail }
     }
-    const pill = (tone) => ({ display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: '3px 8px', fontSize: 12, color: tone, background: `color-mix(in srgb, ${tone} 12%, transparent)` })
-    const card = { border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, padding: 16, boxShadow: '0 4px 16px rgba(15,23,42,.07)' }
+    const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }
+    const observerCss = `
+      [data-dingtalk-observer] :is(button, input, select, textarea, summary, [tabindex]):focus-visible {
+        outline: 2px solid var(--dsw-alias-brand-primary, #4d6bfe) !important;
+        outline-offset: 2px !important;
+      }
+      @media (max-width: 960px) {
+        [data-dingtalk-observer] .observer-main { padding: 16px !important; }
+        [data-dingtalk-observer] .observer-topics-layout { display: grid !important; grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr); }
+        [data-dingtalk-observer] .observer-topic-list { max-width: none !important; }
+        [data-dingtalk-observer] .observer-task-board { grid-template-columns: repeat(2, minmax(280px, 1fr)) !important; }
+      }
+      @media (max-width: 720px) {
+        [data-dingtalk-observer] .observer-main { padding: 12px !important; }
+        [data-dingtalk-observer] .observer-topics-layout,
+        [data-dingtalk-observer] .observer-task-board { grid-template-columns: minmax(0, 1fr) !important; }
+        [data-dingtalk-observer] .observer-topic-detail { min-height: 320px !important; }
+        [data-dingtalk-observer] .observer-toolbar { align-items: stretch !important; }
+      }
+    `
+    const pill = (tone) => ({ display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: `${ui.space1}px ${ui.space2}px`, fontSize: ui.textSm, color: tone, background: `color-mix(in srgb, ${tone} 12%, transparent)` })
+    const card = { border: `1px solid ${colors.border}`, borderRadius: ui.radiusMd, background: colors.cardSurface, padding: ui.space4 }
     const tableFrame = { border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, overflow: 'hidden' }
-    const tableHeadCell = { height: 42, boxSizing: 'border-box', padding: '0 16px', color: colors.muted, fontSize: 13, fontWeight: 600, verticalAlign: 'middle' }
-    const tableBodyCell = { padding: '12px 16px', borderTop: `1px solid ${colors.border}`, fontSize: 14, lineHeight: 1.55, verticalAlign: 'middle' }
+    const tableHeadCell = { height: 42, boxSizing: 'border-box', padding: `0 ${ui.space4}px`, color: colors.muted, fontSize: ui.textSm, fontWeight: 600, verticalAlign: 'middle' }
+    const tableBodyCell = { padding: `${ui.space3}px ${ui.space4}px`, borderTop: `1px solid ${colors.border}`, fontSize: ui.textMd, lineHeight: 1.55, verticalAlign: 'middle' }
     const tableBodyContent = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }
     const clampTableContent = (...children) => React.createElement('div', { style: tableBodyContent }, ...children)
     const singleLineTableContent = (...children) => React.createElement('div', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, ...children)
     const tableFooter = { minHeight: 48, boxSizing: 'border-box', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, padding: '8px 12px', borderTop: `1px solid ${colors.border}`, background: colors.surface2 }
     const toolbar = { minHeight: 48, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', borderBottom: `1px solid ${colors.border}`, background: colors.cardSurface }
-    const navigationTabStyle = (selected, { paddingBottom = 11 } = {}) => ({ position: 'relative', boxSizing: 'border-box', border: 0, borderBottom: selected ? '2px solid #4d6bfe' : '2px solid transparent', borderRadius: 0, padding: `0 0 ${paddingBottom}px`, cursor: 'pointer', font: 'inherit', fontSize: 13, fontWeight: 500, lineHeight: '16px', color: selected ? '#4d6bfe' : colors.muted, background: 'transparent', outline: 'none', whiteSpace: 'nowrap' })
+    const navigationTabStyle = (selected, { paddingBottom = 12 } = {}) => ({ position: 'relative', boxSizing: 'border-box', border: 0, borderBottom: selected ? `2px solid ${colors.accent}` : '2px solid transparent', borderRadius: 0, padding: `0 0 ${paddingBottom}px`, cursor: 'pointer', font: 'inherit', fontSize: ui.textMd, fontWeight: 500, lineHeight: '20px', color: selected ? colors.accent : colors.muted, background: 'transparent', whiteSpace: 'nowrap' })
     const statusTone = {
       done: 'var(--dsw-alias-state-success-primary, #248a3d)',
       warning: 'var(--dsw-alias-state-warn-primary, #a56500)',
@@ -100,7 +120,11 @@ window.__ModuleLoader__.load({
       const anchor = React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', 'aria-label': label, 'aria-expanded': open, onClick: () => setOpen((current) => !current), style: { minWidth: fitContent ? 0 : minWidth, width: fitContent ? 'fit-content' : undefined, maxWidth: fitContent ? 220 : undefined, justifyContent: fitContent ? 'flex-start' : 'space-between', gap: fitContent ? 8 : 16, fontWeight: 400 } }, React.createElement('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, selected?.label || value), React.createElement('span', { 'aria-hidden': true, style: { flex: '0 0 auto', color: colors.muted, fontSize: 9, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s ease' } }, '▼'))
       return React.createElement(Menu, { open, anchor, items: options, selectedId: value, onSelect: (id) => { onChange(id); setOpen(false) }, onClose: () => setOpen(false), align: 'end', portal: true, dense: true, compact: true })
     }
-    const emptyState = (text) => React.createElement('div', { style: { minHeight: 112, display: 'grid', placeItems: 'center', color: colors.muted, fontSize: 12, border: `1px dashed ${colors.border}`, borderRadius: 10, background: colors.surface2 } }, text)
+    const emptyState = (title, { detail, actionLabel, onAction } = {}) => React.createElement('div', { style: { minHeight: 112, display: 'grid', placeItems: 'center', padding: ui.space4, textAlign: 'center', color: colors.muted, fontSize: ui.textSm, border: `1px dashed ${colors.border}`, borderRadius: ui.radiusSm, background: colors.surface2 } },
+      React.createElement('div', { style: { display: 'grid', justifyItems: 'center', gap: ui.space2 } },
+        React.createElement('strong', { style: { color: 'inherit', fontSize: ui.textMd, fontWeight: 600 } }, title),
+        detail ? React.createElement('span', null, detail) : null,
+        actionLabel && onAction ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: onAction }, actionLabel) : null))
     async function get(path) {
       const response = await fetch(`${ENDPOINT}${path}`, { method: 'GET', headers: { accept: 'application/json' } })
       const value = await response.json()
@@ -174,17 +198,17 @@ window.__ModuleLoader__.load({
       const relatedTasks = tasks.filter((task) => task.groupId === selection?.groupId && task.topicRefs?.some((ref) => ref.topicId === selection?.topicId))
       const failure = (message) => React.createElement('div', { role: 'alert', style: { padding: 16, color: colors.danger } }, message, ' ', React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setRetry((value) => value + 1) }, '重试'))
       const pager = (pageOffset, total, pageSize, onChange, busy) => React.createElement('div', { style: { ...tableFooter, flexWrap: 'wrap' } }, React.createElement('span', { style: { marginRight: 'auto', color: colors.muted, fontSize: 12 } }, `${total} 条 · 第 ${Math.floor(pageOffset / pageSize) + 1} 页`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: busy || pageOffset === 0, onClick: () => onChange(Math.max(0, pageOffset - pageSize)) }, '上一页'), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: busy || pageOffset + pageSize >= total, onClick: () => onChange(pageOffset + pageSize) }, '下一页'))
-      return React.createElement('section', { 'aria-label': '话题与上下文', style: { display: 'grid', gap: 16 } },
-        React.createElement('div', { style: { ...toolbar, flexWrap: 'wrap' } }, React.createElement(SelectMenu, { label: '筛选话题群聊', value: groupId, options: [{ id: '', label: '全部群聊' }, ...groups.map((item) => ({ id: item.groupId, label: item.name || item.groupId }))], onChange: (value) => { setGroupId(value); setOffset(0); setListing(undefined); setSelection(undefined) } }), React.createElement('span', { style: { fontSize: 12, color: colors.muted } }, group?.topicProgress ? `待归类 ${group.topicProgress.unroutedMessages} 条 · 待处理 ${group.topicProgress.pending} 个话题` : '接收、话题处理与任务完成分别计量')),
-        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 16 } },
-          React.createElement('section', { 'aria-label': '话题列表', 'aria-busy': loading, style: { ...tableFrame, flex: '1 1 340px', width: '100%', minWidth: 0, maxWidth: 420, minHeight: 200 } },
+      return React.createElement('section', { 'aria-label': '话题与上下文', style: { display: 'grid', gap: ui.space4 } },
+        React.createElement('div', { className: 'observer-toolbar', style: { ...toolbar, flexWrap: 'wrap' } }, React.createElement(SelectMenu, { label: '筛选话题群聊', value: groupId, options: [{ id: '', label: '全部群聊' }, ...groups.map((item) => ({ id: item.groupId, label: item.name || item.groupId }))], onChange: (value) => { setGroupId(value); setOffset(0); setListing(undefined); setSelection(undefined) } }), React.createElement('span', { style: { fontSize: ui.textSm, color: colors.muted } }, group?.topicProgress ? `待归类 ${group.topicProgress.unroutedMessages} 条 · 待处理 ${group.topicProgress.pending} 个话题` : '接收、话题处理与任务完成分别计量')),
+        React.createElement('div', { className: 'observer-topics-layout', style: { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: ui.space4 } },
+          React.createElement('section', { className: 'observer-topic-list', 'aria-label': '话题列表', 'aria-busy': loading, style: { ...tableFrame, flex: '1 1 340px', width: '100%', minWidth: 0, maxWidth: 420, minHeight: 200 } },
             React.createElement('div', { role: 'status', style: { ...toolbar, minHeight: 52 } }, React.createElement('strong', { style: { fontSize: 14 } }, loading ? '正在刷新话题…' : '话题'), listing ? React.createElement('span', { style: { color: colors.muted, fontSize: 12, fontVariantNumeric: 'tabular-nums' } }, `${listing.total} 个`) : null),
-            listError ? failure(`话题加载失败：${listError}`) : !listing ? emptyState('正在读取话题…') : listing.topics.length === 0 ? emptyState('暂无话题，消息归类后会显示在这里') : React.createElement('ul', { style: { listStyle: 'none', margin: 0, padding: 0 } }, ...listing.topics.map((item) => { const selected = selection?.topicId === item.topicId && selection?.groupId === item.groupId; return React.createElement('li', { key: `${item.groupId}:${item.topicId}`, style: { borderBottom: `1px solid ${colors.border}` } }, React.createElement('button', { type: 'button', 'aria-pressed': selected, 'aria-label': item.title || item.topicId, onClick: () => selectTopic(item), style: { position: 'relative', width: '100%', minWidth: 0, border: 0, borderLeft: `3px solid ${selected ? colors.accent : 'transparent'}`, padding: '15px 16px 14px 13px', background: selected ? `color-mix(in srgb, ${colors.accent} 8%, ${colors.cardSurface})` : colors.cardSurface, color: 'inherit', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', outlineOffset: -2 } },
-              React.createElement('strong', { title: item.title || item.topicId, style: { display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflowWrap: 'anywhere', fontSize: 13, fontWeight: 650, lineHeight: 1.55 } }, item.title || item.topicId),
-              React.createElement('p', { title: item.summary || '暂无摘要', style: { margin: '5px 0 0', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', color: colors.muted, fontSize: 11.5, lineHeight: 1.55 } }, item.summary || '暂无摘要')
+            listError ? failure(`话题加载失败：${listError}`) : !listing ? emptyState('正在读取话题…') : listing.topics.length === 0 ? emptyState('暂无话题', { detail: '新消息完成归类后会显示在这里。', actionLabel: '重新读取', onAction: () => setRetry((value) => value + 1) }) : React.createElement('ul', { style: { listStyle: 'none', margin: 0, padding: 0 } }, ...listing.topics.map((item) => { const selected = selection?.topicId === item.topicId && selection?.groupId === item.groupId; return React.createElement('li', { key: `${item.groupId}:${item.topicId}`, style: { borderBottom: `1px solid ${colors.border}` } }, React.createElement('button', { type: 'button', 'aria-pressed': selected, 'aria-label': item.title || item.topicId, onClick: () => selectTopic(item), style: { position: 'relative', width: '100%', minWidth: 0, border: 0, borderLeft: `3px solid ${selected ? colors.accent : 'transparent'}`, padding: `${ui.space4}px ${ui.space4}px ${ui.space4}px ${ui.space3}px`, background: selected ? `color-mix(in srgb, ${colors.accent} 8%, ${colors.cardSurface})` : colors.cardSurface, color: 'inherit', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', outlineOffset: -2 } },
+              React.createElement('strong', { title: item.title || item.topicId, style: { display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflowWrap: 'anywhere', fontSize: ui.textMd, fontWeight: 650, lineHeight: 1.5 } }, item.title || item.topicId),
+              React.createElement('p', { title: item.summary || '暂无摘要', style: { margin: `${ui.space1}px 0 0`, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', color: colors.muted, fontSize: ui.textSm, lineHeight: 1.6 } }, item.summary || '暂无摘要')
             )) })),
             listing ? pager(offset, listing.total, topicPageSize, setOffset, loading) : null),
-          React.createElement('section', { 'aria-label': '话题详情', 'aria-busy': detailLoading, style: { ...tableFrame, flex: '2 1 560px', width: '100%', minWidth: 0, minHeight: 200 } },
+          React.createElement('section', { className: 'observer-topic-detail', 'aria-label': '话题详情', 'aria-busy': detailLoading, style: { ...tableFrame, flex: '2 1 560px', width: '100%', minWidth: 0, minHeight: 200 } },
             React.createElement('header', { style: { padding: '17px 18px 15px', borderBottom: `1px solid ${colors.border}`, background: colors.cardSurface } }, React.createElement('h2', { title: topic?.title, style: { minWidth: 0, margin: 0, overflowWrap: 'anywhere', fontSize: 18, fontWeight: 650, lineHeight: 1.5, letterSpacing: '-.01em' } }, topic?.title || '话题详情')),
             detailError ? failure(`上下文加载失败：${detailError}`) : detailLoading ? React.createElement('div', { role: 'status' }, emptyState('正在读取固定版本上下文…')) : !context ? emptyState('选择一个话题查看消息和关联任务') : React.createElement('div', { role: 'region', 'aria-label': '话题详情内容', style: { minWidth: 0, maxHeight: 'calc(100vh - 260px)', padding: '0 18px 18px', display: 'grid', gap: 0, overflowY: 'auto', overflowX: 'hidden', overflowWrap: 'anywhere' } },
               React.createElement('section', { 'aria-label': '话题摘要', style: { marginTop: 16, padding: '13px 14px', borderLeft: `3px solid ${colors.accent}`, borderRadius: '0 9px 9px 0', background: `color-mix(in srgb, ${colors.accent} 6%, ${colors.surface2})` } }, React.createElement('strong', { style: { display: 'block', fontSize: 12 } }, '话题摘要'), React.createElement('p', { style: { margin: '6px 0 0', whiteSpace: 'pre-wrap', color: topic?.summary ? 'inherit' : colors.muted, fontSize: 13, lineHeight: 1.65 } }, topic?.summary || '暂无摘要')),
@@ -437,7 +461,7 @@ window.__ModuleLoader__.load({
           React.createElement('tbody', null, ...(outboxRows.length ? outboxRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 5, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, '暂无符合条件的 Agent 发件记录'))])))),
         React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredOutbox.length} 条 · 每页 ${outboxPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage <= 1, onClick: () => setOutboxPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentOutboxPage} / ${outboxPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage >= outboxPageCount, onClick: () => setOutboxPage((page) => Math.min(outboxPageCount, page + 1)) }, '下一页')))
       const groupsPage = React.createElement('section', null, React.createElement('div', { style: tableFrame }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
-      const tasksPage = React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: 10, overflowX: 'auto', alignItems: 'start', paddingBottom: 8 } }, ...bucketColumns)
+      const tasksPage = React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns)
       const authorizationStatus = {
         'pending-send': { label: '待发送', state: 'warning' },
         'waiting-reply': { label: '等待处理', state: 'warning' },
@@ -517,12 +541,12 @@ window.__ModuleLoader__.load({
       const topicsPage = React.createElement(TopicBrowser, { groups: data?.groups || [], tasks: data?.tasks || [], target: topicTarget, updatedAt, onOpenTask: (task) => navigate(task.childSessionId, groupsById.get(task.groupId)?.residentSessionId) })
       const pageContent = activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
       const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, minHeight: 'calc(100dvh - 138px)', boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
-      const main = React.createElement('main', { style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? '24px 24px 0' : '24px 24px 32px', display: 'grid', alignContent: 'start', gap: 20, pointerEvents: 'auto' } },
+      const main = React.createElement('main', { className: 'observer-main', style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? `${ui.space6}px ${ui.space6}px 0` : `${ui.space6}px ${ui.space6}px ${ui.space6 + ui.space2}px`, display: 'grid', alignContent: 'start', gap: ui.space6, pointerEvents: 'auto' } },
         error ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法连接 resident 插件：${error}`) : null,
         navigationError ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法打开 DSH Session：${navigationError}`) : null,
         pageViewport
       )
-      return React.createElement('div', { style: { width: '100%', height: '100%', minWidth: 0, minHeight: 0, background: colors.surface, color: 'inherit', overflow: 'auto' } }, header, main)
+      return React.createElement('div', { 'data-dingtalk-observer': '', style: { width: '100%', height: '100%', minWidth: 0, minHeight: 0, background: colors.surface, color: 'inherit', overflow: 'auto' } }, React.createElement('style', null, observerCss), header, main)
     }
     function apply(ctx) {
       ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'dingtalk-dsh-observer-entry', order: 5, inject: () => ({}) }, SidebarAction))
