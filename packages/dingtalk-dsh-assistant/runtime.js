@@ -210,7 +210,7 @@ routing-required 表示还有未归类输入，先归类再重试；已确认无
 
 通过 topicUpdate 保存 summary/openQuestions/status。摘要不能替代原文，closed Topic 后续可以继续；致谢或无关讨论不能自动重开 Task。共享消息涉及多个 Topic 的同一 Task 动作只在一个 Topic 执行，其他 Topic 关联既有结果，防止重复重开或确认。
 
-Task 完成验收和检查点审阅通过 group_task_review_submit 返回，普通文本不构成审阅。Task 通知通过 group_reply_submit 返回，根据固定 Topic 原文选择引用消息和真正需要获知的参与人，保留实际变更、证据、交付状态和未验证边界。
+Task 完成验收和检查点审阅通过 group_task_review_submit 返回，普通文本不构成审阅。完成审阅通过时必须在同一次提交中准备 Task 通知；Runtime 在 Task 原子完成后才写入 Outbox。等待通知、恢复补发或完成通知草稿失效时通过 group_reply_submit 返回。通知根据固定 Topic 原文选择引用消息和真正需要获知的参与人，保留实际变更、证据、交付状态和未验证边界。
 
 \`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从Topic 固定版本生成的独立来源证据并自行核验。
 
@@ -464,6 +464,9 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     return group
   }
   async function reviewCompletedTaskResult(task, result) { return topics.requestReview('completion', task, result) }
+  async function recordTaskCoordinationEvent(taskId, event) {
+    return serializeTasks(() => store.updateTask(taskId, (current) => ({ ...current, executionEvents: [...(current.executionEvents ?? []), event], updatedAt: new Date().toISOString() })))
+  }
   const createResident = async (_groupId, options) => ({ handle: await ctx.agents.create(options) })
 
   function signalTaskCancellation(taskId) {
@@ -638,7 +641,9 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if ((checkpoints.at(-1)?.remainingItems?.length ?? 0) > 0) throw new Error(`task_checkpoints_remaining:${taskId}`)
       return { task, handle, lastCheckpointId: checkpoints.at(-1).checkpointId }
     })
+    const reviewRequestedAt = new Date().toISOString()
     const review = await withoutInitiator(() => reviewCompletedTaskResult(prepared.task, result))
+    const reviewedAt = new Date().toISOString()
     if (!review.accepted) {
       await followupTaskInternal(prepared.task, `[TASK_RESULT_REJECTED]\n当前完成结果未通过最新目标验收：${review.reason}\n\n继续执行当前有效目标，补齐缺失实现与证据后再提交 completed。不得重复提交上一轮结论。`)
       throw new Error(`task_result_objective_not_covered:${taskId}:${review.reason}`)
@@ -651,11 +656,29 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       assertTaskInput(current, result)
       const goal = ctx.goals.get(prepared.handle.agent)
       if (goal === undefined) throw new Error(`task_goal_missing:${taskId}`)
-      const completed = await updateTaskInput(taskId, result, (task) => ({ ...task, acknowledgedInputVersion: result.inputVersion, state: 'completed', completion: result.summary, result, waitingKind: undefined, waitingReason: undefined }))
+      const completedAt = new Date().toISOString()
+      const completed = await updateTaskInput(taskId, result, (task) => ({ ...task, acknowledgedInputVersion: result.inputVersion, state: 'completed', completion: result.summary, result, waitingKind: undefined, waitingReason: undefined,
+        executionEvents: [...(task.executionEvents ?? []),
+          { kind: 'completion-review-requested', inputVersion: result.inputVersion, runSequence: result.runSequence, at: reviewRequestedAt },
+          { kind: 'completion-reviewed', inputVersion: result.inputVersion, runSequence: result.runSequence, accepted: true, at: reviewedAt },
+          { kind: 'task-completed', inputVersion: result.inputVersion, runSequence: result.runSequence, at: completedAt }],
+      }))
       if (goal.phase !== 'complete') ctx.goals.complete(prepared.handle.agent, goalRef(goal))
       return completed
     })
-    void withoutInitiator(() => coordinateTaskResult(completed, result)).catch((error) => recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification', error: error.message }))
+    void withoutInitiator(async () => {
+      const committed = await runGroupResidentOperation(completed.groupId, () => topics.commitCompletionNotification(review.preparedNotification, completed, result))
+      if (committed?.status) {
+        await recordTaskCoordinationEvent(taskId, { kind: 'completion-notification-fallback', inputVersion: result.inputVersion, runSequence: result.runSequence, status: committed.status, at: new Date().toISOString() })
+        await coordinateTaskResult(completed, result)
+        return
+      }
+      await recordTaskCoordinationEvent(taskId, { kind: 'completion-notification-enqueued', inputVersion: result.inputVersion, runSequence: result.runSequence, outboundId: committed.outboundId, at: new Date().toISOString() })
+        .catch((error) => recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification-telemetry', error: error.message }))
+    }).catch(async (error) => {
+      recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification', error: error.message })
+      await withoutInitiator(() => coordinateTaskResult(completed, result)).catch((fallbackError) => recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification-fallback', error: fallbackError.message }))
+    })
     const completedRunSequence = completed.runSequence
     prepared.handle.agent.whenIdle().then(async () => {
       const dispose = await serializeTasks(() => {

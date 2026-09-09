@@ -289,6 +289,70 @@ test('内部审阅按请求绑定 Task 版本，拒绝错种类和版本变更',
   assert.equal(h.store.getGroup('g').outbox.length, 0)
 })
 
+test('完成审阅一次提交通知草稿，Task 落盘后才写入 Outbox', async (t) => {
+  const h = await setup(t), fixture = await taskFixture(h)
+  const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, state: 'running' }))
+  const result = { inputVersion: task.inputVersion, runSequence: task.runSequence, status: 'completed', summary: '完成', evidence: ['通过'], artifacts: [] }
+  const pending = h.coordinator.requestReview('completion', task, result)
+  const request = h.envelope('[TASK_COMPLETION_REVIEW]', '审阅请求')
+  const context = h.envelope('[TASK_COMPLETION_REVIEW]', '通知上下文')
+  assert.equal(context.messages.length, 1)
+  assert.equal(h.sent.some((item) => item.startsWith('[TASK_COORDINATION]')), false)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted: true, reason: '证据完整', notification: {
+    reply: '核验已完成', replyToMessageId: 'a1', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
+  } } })).status, 'accepted')
+  const review = await pending
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  const completed = await h.store.updateTask(task.taskId, (current) => ({ ...current, state: 'completed', result }))
+  const outbound = await h.coordinator.commitCompletionNotification(review.preparedNotification, completed, result)
+  assert.equal(outbound.text, '核验已完成')
+  assert.equal(h.store.getGroup('g').outbox.length, 1)
+  assert.equal(h.sent.some((item) => item.startsWith('[TASK_COORDINATION]')), false)
+})
+
+test('完成审阅后新增历史候选使通知草稿失效', async (t) => {
+  let candidates = []
+  const h = await setup(t, { reviewCandidates: () => structuredClone(candidates) }), fixture = await taskFixture(h)
+  const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, state: 'running' }))
+  const result = { inputVersion: task.inputVersion, runSequence: task.runSequence, status: 'completed', summary: '完成', evidence: ['通过'], artifacts: [] }
+  const pending = h.coordinator.requestReview('completion', task, result)
+  const request = h.envelope('[TASK_COMPLETION_REVIEW]', '审阅请求')
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted: true, reason: '证据完整', notification: {
+    reply: '核验已完成', replyToMessageId: 'a1', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
+  } } })
+  const review = await pending
+  const completed = await h.store.updateTask(task.taskId, (current) => ({ ...current, state: 'completed', result }))
+  candidates = [{ outboundId: 'new-result', sourceMessageId: 'a1', reply: '刚到达的结果' }]
+  assert.equal((await h.coordinator.commitCompletionNotification(review.preparedNotification, completed, result)).status, 'review-required')
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+})
+
+test('完成审阅只内联受限的近期 Topic 消息', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'history-0', { text: `@助理 ${'长'.repeat(900)}` })
+  const first = (await route(h)).pendingDecisions[0]
+  await complete(h, first)
+  let revision = first.revision
+  for (let index = 1; index < 25; index++) {
+    await ingest(h, `history-${index}`, { text: `@助理 ${index}-${'长'.repeat(900)}` })
+    const request = (await route(h, { [`history-${index}`]: first.topicId })).pendingDecisions[0]
+    revision = request.revision
+    await complete(h, request)
+  }
+  const { task: created } = await h.store.createTask({ groupId: 'g', topicRefs: [{ topicId: first.topicId, revision }], title: '长话题核验', objective: '核验', acceptanceCriteria: ['证据'] })
+  const task = await h.store.updateTask(created.taskId, (current) => ({ ...current, state: 'running' }))
+  const pending = h.coordinator.requestReview('completion', task, { inputVersion: task.inputVersion, runSequence: task.runSequence, status: 'completed', summary: '完成', evidence: ['通过'], artifacts: [] })
+  const request = h.envelope('[TASK_COMPLETION_REVIEW]', '审阅请求')
+  const context = h.envelope('[TASK_COMPLETION_REVIEW]', '通知上下文')
+  assert.equal(context.totalMessages, 25)
+  assert.ok(context.messages.length <= 20)
+  assert.ok(JSON.stringify(context.messages).length <= 12_000)
+  assert.equal(context.hasMoreMessages, true)
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted: false, reason: '仅核验上下文预算' } })
+  assert.equal((await pending).accepted, false)
+})
+
 test('内部检查点必须结构化确认，不能携带相互矛盾的 guidance', async (t) => {
   const h = await setup(t), { task } = await taskFixture(h)
   const promise = h.coordinator.requestReview('checkpoint', task, { summary: '计划完成' })

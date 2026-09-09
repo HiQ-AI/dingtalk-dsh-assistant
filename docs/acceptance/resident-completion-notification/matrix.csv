@@ -1,0 +1,15 @@
+case,round-1,status,evidence
+完成验收与通知合并为一次常驻会话请求,PASS,运行时集成测试断言无 TASK_COORDINATION 且直接生成 Outbox
+任务完成前不允许发送通知,PASS,原子顺序测试
+话题候选变化时拒绝旧草稿并回退,PASS,候选身份 stale 测试
+待处理消息变化时不错误完成任务,PASS,输入竞态测试
+Outbox 写入失败时回退且不重复处理,PASS,写入失败恢复测试
+通知入箱后遥测写入失败不重复协调,PASS,遥测失败注入测试
+完成上下文限制为最近 20 条且不超过 12000 字符,PASS,上下文边界测试
+重启后补偿缺失通知,PASS,启动恢复测试
+Outbox 记录实际投递时间,PASS,store acknowledge 测试
+完整自动化测试,PASS,268/268 tests passed
+本地安装包与工作区关键源码一致,PASS,runtime topic-runtime store fake-llm SHA256 均一致
+DSH Web 本地认证访问,PASS,携带启动 URL 访问 3080 返回 HTTP 200
+原插件流程配置保留,PASS,taskPromptsVersion=3 且共 10 项
+消息实时监听恢复,PASS,群消息监听与人工回复监听均为 ready

@@ -492,7 +492,10 @@ async function completeResult(h, task, accepted = true) {
   const outcome = submitted.then((value) => ({ value }), (error) => ({ error }))
   await until(() => h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')?.requestId !== previous)
   const request = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
-  await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted, reason: accepted ? '全部证据齐全' : '缺少部署后的核验' } })
+  const replyReview = accepted ? await h.call('group_reply_review_get', { requestIds: [request.requestId] }) : { candidates: [] }
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: accepted
+    ? { accepted: true, reason: '全部证据齐全', notification: { reply: '已完成核验，正常与异常测试通过。', replyToMessageId: task.title, atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: replyReview.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } }
+    : { accepted: false, reason: '缺少部署后的核验' } })
   return outcome
 }
 
@@ -540,22 +543,34 @@ test('完成验收拒绝后保持 running 并向叶子发送具体纠偏', async
   assert.equal(h.store.getGroup('g').outbox.length, 1)
 })
 
-test('完成落盘与通知解耦，Resident 未回复时 FIFO 下个任务仍启动', async (t) => {
+test('一次完成审阅同时准备通知，完成落盘后直接入 Outbox 且 FIFO 下个任务启动', async (t) => {
   const h = await setup(t), task = await createTask(h, 'first'), queued = await createTask(h, 'second')
   assert.equal(queued.state, 'queued')
   await fullCheckpoints(h, task)
   const outcome = await completeResult(h, task)
   assert.equal(outcome.value.state, 'completed')
   assert.equal(h.store.getTask(queued.taskId).state, 'running')
-  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
-  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 0)
-  const notification = h.envelope('[TASK_COORDINATION]')
-  const review = await h.call('group_reply_review_get', { requestIds: [notification.requestId] })
-  const accepted = await h.call('group_reply_submit', { requestId: notification.requestId, reply: '已完成核验，正常与异常测试通过。', replyToMessageId: 'first', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } })
-  assert.equal(accepted.status, 'accepted')
+  await until(() => h.store.getGroup('g').outbox.some((item) => item.sourceMessageId.startsWith('task-result:')) || h.runtime.listRecoveryIssues().some((item) => item.kind === 'task-notification') || h.store.getTask(task.taskId).executionEvents.some((event) => event.kind === 'completion-notification-fallback'))
+  assert.ok(h.store.getGroup('g').outbox.some((item) => item.sourceMessageId.startsWith('task-result:')), JSON.stringify({ issues: h.runtime.listRecoveryIssues(), events: h.store.getTask(task.taskId).executionEvents }))
+  assert.equal(h.envelope('[TASK_COORDINATION]'), undefined)
   assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
+  assert.ok(h.store.getTask(task.taskId).executionEvents.some((event) => event.kind === 'completion-notification-enqueued'))
   await h.runtime.reconcileCompletedNotifications()
   assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
+})
+
+test('通知已入 Outbox 后执行事件写入失败不会重复发起通知协调', async (t) => {
+  const h = await setup(t), task = await createTask(h); await fullCheckpoints(h, task)
+  const original = h.store.updateTask
+  h.store.updateTask = async (taskId, updater) => original(taskId, (current) => {
+    const next = updater(current)
+    if ((next.executionEvents ?? []).some((event) => event.kind === 'completion-notification-enqueued')) throw new Error('telemetry_storage_failure')
+    return next
+  })
+  await completeResult(h, task)
+  await until(() => h.runtime.listRecoveryIssues().some((item) => item.kind === 'task-notification-telemetry'))
+  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
+  assert.equal(h.envelope('[TASK_COORDINATION]'), undefined)
 })
 
 test('尚未归类的新消息阻止叶子提交等待或完成结果', async (t) => {
@@ -871,18 +886,20 @@ test('完成审阅通过后原子落盘遇新输入，不能提前 complete Goal
   const original = h.store.updateTask; let injected = false
   h.store.updateTask = async (...args) => { if (!injected) { injected = true; await ingest(h, 'arrived-after-review') } return original(...args) }
   const review = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
-  await h.call('group_task_review_submit', { requestId: review.requestId, review: { accepted: true, reason: '通过' } })
+  const candidates = await h.call('group_reply_review_get', { requestIds: [review.requestId] })
+  await h.call('group_task_review_submit', { requestId: review.requestId, review: { accepted: true, reason: '通过', notification: { reply: '完成核验', replyToMessageId: 'task-input', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: candidates.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } } })
   assert.match((await outcome).error.message, /task_input_pending/)
   assert.equal(h.store.getTask(task.taskId).state, 'running')
   assert.equal(h.goals.get(task.childSessionId).phase, 'active')
 })
 
 test('通知 Outbox 首次失败后相同请求重试使用稳定结果键且只落一次', async (t) => {
-  const h = await setup(t), task = await createTask(h); await fullCheckpoints(h, task); await completeResult(h, task)
-  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
-  const request = h.envelope('[TASK_COORDINATION]'), review = await h.call('group_reply_review_get', { requestIds: [request.requestId] })
+  const h = await setup(t), task = await createTask(h); await fullCheckpoints(h, task)
   const original = h.store.appendOutbox; let fail = true
   h.store.appendOutbox = async (args) => { if (fail) throw new Error('outbox_storage_failure'); return original(args) }
+  await completeResult(h, task)
+  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  const request = h.envelope('[TASK_COORDINATION]'), review = await h.call('group_reply_review_get', { requestIds: [request.requestId] })
   const args = { requestId: request.requestId, reply: '完成核验', replyToMessageId: 'task-input', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } }
   await assert.rejects(h.call('group_reply_submit', args), /outbox_storage_failure/)
   assert.equal(h.store.getTask(task.taskId).state, 'completed')

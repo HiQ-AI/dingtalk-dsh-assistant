@@ -114,7 +114,20 @@ class FakeResidentAdapter extends LlmAdapter {
     if ((input.startsWith('[TASK_COMPLETION_REVIEW]') || input.startsWith('[TASK_CHECKPOINT_REVIEW]')) && !hasToolResultAfterInput) {
       const request = jsonLine(input, '审阅请求')
       if (!request?.requestId) throw new Error('fake_task_review_request_missing')
-      yield* call('group_task_review_submit', { requestId: request.requestId, review: input.startsWith('[TASK_COMPLETION_REVIEW]') ? { accepted: true, reason: 'fake 审阅通过' } : { decision: 'acknowledge', reason: 'fake 检查点已审阅' } })
+      if (input.startsWith('[TASK_COMPLETION_REVIEW]')) {
+        const context = jsonLine(input, '通知上下文')
+        const review = reviewFor(request.requestId)
+        if (context?.replyReviewCandidateCount > 0 && !review) {
+          yield* call('group_reply_review_get', { requestIds: [request.requestId] })
+          return
+        }
+        const replyTarget = context?.messages?.findLast((item) => typeof item.senderOpenDingTalkId === 'string')
+        const recipients = [...new Set((context?.messages ?? []).map((item) => item.senderOpenDingTalkId).filter(Boolean))]
+        yield* call('group_task_review_submit', { requestId: request.requestId, review: { accepted: true, reason: 'fake 审阅通过', notification: {
+          reply: `coordinated:${request.taskId}`, replyReview: { kind: 'substantive', reviewedOutboundIds: review?.candidates.map((item) => item.outboundId) ?? [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
+          ...(replyTarget ? { replyToMessageId: replyTarget.messageId, atOpenDingTalkIds: recipients } : {}),
+        } } })
+      } else yield* call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: 'fake 检查点已审阅' } })
       return
     }
     if (input.startsWith('[TASK_COORDINATION]') && !calls.some((item) => item.name === 'group_reply_submit')) {

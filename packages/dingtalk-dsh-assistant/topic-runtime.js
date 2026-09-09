@@ -80,10 +80,20 @@ export function boundedTopicContext(context, { textOffset = 0, maxChars = TOPIC_
   if (JSON.stringify(result).length > maxChars) throw new Error('topic_context_budget_exceeded')
   return result
 }
-const reviewSchema = z.union([
-  z.strictObject({ accepted: z.boolean(), reason: z.string().trim().min(1) }),
-  z.strictObject({ decision: z.enum(['acknowledge', 'guidance']), reason: z.string().trim().min(1), guidance: z.string().trim().min(1).optional() }),
+const notificationDraftSchema = z.strictObject({
+  reply: z.string().trim().min(1), replyReview: z.strictObject({
+    kind: z.enum(['confirmation', 'substantive', 'correction']),
+    reviewedOutboundIds: z.array(z.string().min(1)).default([]), sameMatterOutboundIds: z.array(z.string().min(1)).default([]), replaceOutboundIds: z.array(z.string().min(1)).default([]),
+  }),
+  replyToMessageId: z.string().min(1).optional(), atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
+})
+const completionReviewSchema = z.union([
+  z.strictObject({ accepted: z.literal(false), reason: z.string().trim().min(1) }),
+  z.strictObject({ accepted: z.literal(true), reason: z.string().trim().min(1), notification: notificationDraftSchema }),
 ])
+const checkpointReviewSchema = z.strictObject({ decision: z.enum(['acknowledge', 'guidance']), reason: z.string().trim().min(1), guidance: z.string().trim().min(1).optional() })
+const COMPLETION_MESSAGE_MAX_CHARS = 12_000
+const COMPLETION_MESSAGE_MAX_COUNT = 20
 
 export function projectTopicContext(context) {
   const { topicId, title, revision, processedRevision, status, summary, summaryRevision, openQuestions } = context.topic
@@ -109,9 +119,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       candidate.topicRefs?.some((ref) => topicIds.has(ref.topicId)) || candidate.taskIds?.some((id) => taskIds.has(id))
       || sourceIds.has(candidate.sourceMessageId) || candidate.sourceMessages?.some((message) => sourceIds.has(message.messageId)))
   }
-  const refreshReview = (request) => {
+  const refreshReview = (request, identityOnly = false) => {
     const candidates = scopedCandidates(request.groupId, request.messages, request.topicRefs ?? request.task.topicRefs, request.task ? [request.task.taskId] : [])
-    const snapshot = (items) => JSON.stringify([...items].sort((left, right) => left.outboundId.localeCompare(right.outboundId)))
+    const snapshot = (items) => JSON.stringify([...items].sort((left, right) => left.outboundId.localeCompare(right.outboundId)).map((item) => identityOnly ? item.outboundId : item))
     if (snapshot(candidates) === snapshot(request.candidates)) return false
     request.candidates = candidates
     request.readReview = false
@@ -157,7 +167,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
   const pendingInput = (groupId) => (store.getGroup(groupId)?.messages ?? []).filter((message) => message.routingStatus !== 'routed')
   const unfinished = (topic) => topic.decisions.find((decision) => decision.status !== 'completed')
   const requestFor = (groupId, requestId) => {
-    const request = decisions.get(requestId) ?? replies.get(requestId)
+    const request = decisions.get(requestId) ?? replies.get(requestId) ?? reviews.get(requestId)
     if (!request || request.groupId !== groupId) throw new Error('topic_request_unknown_or_wrong_group')
     return request
   }
@@ -555,12 +565,48 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
       const task = store.getTask(request.task.taskId)
       if (!task || task.inputVersion !== request.task.inputVersion || task.runSequence !== request.task.runSequence) { reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
-      const review = reviewSchema.parse(input)
-      if ((request.kind === 'completion') !== ('accepted' in review)) throw new Error('task_review_kind_invalid')
+      if ((request.kind === 'completion') !== Object.hasOwn(input ?? {}, 'accepted')) throw new Error('task_review_kind_invalid')
+      const review = request.kind === 'completion' ? completionReviewSchema.parse(input) : checkpointReviewSchema.parse(input)
       if ('decision' in review && ((review.decision === 'guidance' && !review.guidance) || (review.decision === 'acknowledge' && review.guidance))) throw new Error('task_review_guidance_invalid')
+      if (request.kind === 'completion' && review.accepted) {
+        const rejected = completionPreflight(request, task, request.value, 'running')
+        if (rejected) return rejected
+        const outbound = taskOutbound(request, task, review.notification)
+        Object.defineProperty(review, 'preparedNotification', { value: { request, outbound }, enumerable: false })
+      }
       reviews.delete(requestId); request.resolve(review)
       return { status: 'accepted' }
     })
+  }
+  function completionPreflight(request, task, result, expectedState) {
+    if (pendingInput(request.groupId).length) return { status: 'routing-required' }
+    const current = store.getTask(task.taskId)
+    if (!current || current.inputVersion !== request.task.inputVersion || current.runSequence !== request.task.runSequence || current.state !== expectedState
+      || (expectedState === 'completed' && JSON.stringify(current.result) !== JSON.stringify(result))) return { status: 'task-stale' }
+    if (request.observedTopics.some((ref) => store.getTopic(request.groupId, ref.topicId)?.revision !== ref.revision)) return { status: 'topic-stale' }
+    if (current.topicRefs.some((ref) => { const topic = store.getTopic(request.groupId, ref.topicId); return topic.processedRevision < topic.revision })) return { status: 'topic-pending' }
+    if (refreshReview(request, expectedState === 'completed') || (request.candidates.length && !request.readReview)) return { status: 'review-required' }
+  }
+  function taskOutbound(request, task, draft) {
+    const replyReview = validateReplyReview(draft.replyReview, request.candidates, { confirmationTaskIds: [task.taskId] })
+    const participants = request.messages.filter((message) => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
+    const target = participants.find((message) => message.messageId === draft.replyToMessageId)
+    if (participants.length && (!target || !draft.atOpenDingTalkIds?.length)) throw new Error('group_reply_routing_required')
+    if (draft.replyToMessageId && !target) throw new Error('group_reply_target_not_in_topic')
+    if (draft.atOpenDingTalkIds && (new Set(draft.atOpenDingTalkIds).size !== draft.atOpenDingTalkIds.length || draft.atOpenDingTalkIds.some((id) => !participants.some((message) => message.senderOpenDingTalkId === id)))) throw new Error('group_reply_recipient_not_in_topic')
+    return { groupId: task.groupId, outboundId: `reply-${request.requestId}`, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.value), text: draft.reply.trim(), taskIds: [task.taskId], topicRefs: task.topicRefs,
+      replyKind: replyReview.kind, replacesOutboundIds: replyReview.replaceOutboundIds,
+      ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: draft.atOpenDingTalkIds } : {}) }
+  }
+  async function commitCompletionNotification(prepared, task, result) {
+    if (!prepared) return { status: 'notification-missing' }
+    const { request, outbound } = prepared
+    const preflight = () => completionPreflight(request, task, result, 'completed')
+    const rejected = preflight()
+    if (rejected) { await schedule(task.groupId); return rejected }
+    const persisted = await appendOutbox({ ...outbound, preflight })
+    if (persisted?.status) { await schedule(task.groupId); return persisted }
+    return outbound
   }
   function requestReview(kind, task, value) {
     const existing = [...reviews.values()].find((request) => request.kind === kind && request.task.taskId === task.taskId
@@ -569,12 +615,21 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     if (existing) return existing.promise
     let resolve, reject
     const promise = new Promise((yes, no) => { resolve = yes; reject = no })
-    const request = { requestId: randomUUID(), groupId: task.groupId, task, kind, value, resolve, reject, promise }
+    const messages = kind === 'completion' ? taskMessages(task) : []
+    const visibleMessages = kind === 'completion' ? boundedItems([...messages].reverse(), COMPLETION_MESSAGE_MAX_CHARS, COMPLETION_MESSAGE_MAX_COUNT).reverse() : []
+    const request = { requestId: randomUUID(), groupId: task.groupId, task, kind, value, resolve, reject, promise,
+      ...(kind === 'completion' ? { resultKey: `task-result:${task.taskId}:completed${(task.completionSequence ?? 0) > 0 ? `:${task.completionSequence}` : ''}`, messages,
+        candidates: scopedCandidates(task.groupId, messages, task.topicRefs, [task.taskId]), readReview: false,
+        observedTopics: task.topicRefs.map((ref) => ({ topicId: ref.topicId, revision: store.getTopic(task.groupId, ref.topicId).revision })) } : {}) }
     try {
       reviews.set(request.requestId, request)
       const label = kind === 'completion' ? '[TASK_COMPLETION_REVIEW]' : '[TASK_CHECKPOINT_REVIEW]'
       const reviewInfo = { requestId: request.requestId, kind, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence }
-      const agent = send(task.groupId, `${label}\n审阅请求：${JSON.stringify(reviewInfo)}\nTask ID: ${task.taskId}\n当前有效目标：${task.objective}\n验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n待审阅内容：${JSON.stringify(value)}\n通过 group_task_review_submit 提交内部判断。完成审阅：{accepted:boolean,reason:string}；检查点审阅：{decision:'acknowledge'|'guidance',reason:string,guidance?:string}。核对全部当前范围和证据，不发群消息，不用自然语言结束请求。`)
+      const completionContext = kind === 'completion' ? `\n通知上下文：${JSON.stringify({ topicRefs: task.topicRefs, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length, replyReviewCandidateCount: request.candidates.length })}` : ''
+      const instruction = kind === 'completion'
+        ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。通过时同时准备群通知；存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界，并从通知上下文选择引用消息和真正需要获知的参与人。"
+        : `检查点审阅：{decision:'acknowledge'|'guidance',reason:string,guidance?:string}。`
+      const agent = send(task.groupId, `${label}\n审阅请求：${JSON.stringify(reviewInfo)}\nTask ID: ${task.taskId}\n当前有效目标：${task.objective}\n验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n待审阅内容：${JSON.stringify(value)}${completionContext}\n通过 group_task_review_submit 提交内部判断。${instruction}核对全部当前范围和证据，不用自然语言结束请求。`)
       monitor(agent, request, reviews)
     } catch (error) { reviews.delete(request.requestId); reject(error) }
     return promise
@@ -598,7 +653,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     return promise
   }
   return {
-    register, schedule, requestReview, requestReply, taskMessages, applyAccepted: resume,
+    register, schedule, requestReview, requestReply, commitCompletionNotification, taskMessages, applyAccepted: resume,
     hasPendingTaskInput(task) {
       const group = store.getGroup(task.groupId)
       return pendingInput(task.groupId).length > 0 || (group?.taskReservations ?? []).some((item) => item.taskId === task.taskId)

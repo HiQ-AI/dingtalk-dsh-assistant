@@ -221,6 +221,7 @@ test('重开 store 后复用同一 resident Session 和 outbox 状态', async ()
   assert.equal(restored.residentSessionId, created.group.residentSessionId)
   assert.equal(restored.outbox[0].status, 'sent')
   assert.equal(restored.outbox[0].deliveredMessageId, 'm-agent-reply')
+  assert.ok(Date.parse(restored.outbox[0].deliveredAt) > 0)
 })
 
 test('叶子会话提示词、回复审阅与撤回元数据持久化', async () => {
