@@ -1,6 +1,22 @@
 import { z } from 'zod'
 
+export function assertCurrentTaskPrompts(task, prompts) {
+  const current = new Map(prompts.filter((item) => item.enabled).map((item) => [item.id, item.revision]))
+  for (const ref of task.taskPromptRefs ?? []) {
+    if (current.get(ref.id) !== ref.revision) throw new Error(`task_prompt_selection_stale:${ref.id}`)
+  }
+}
+
+export const isDiagnosticCheckpoint = (checkpoint) => ['scope-conflict', 'evidence-gap', 'risk-changed'].includes(checkpoint.kind)
+
 const executionVersion = { inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() }
+const taskPromptRefSchema = z.object({ id: z.string().trim().min(1), revision: z.number().int().positive() }).strict()
+const workflowAssessmentSchema = z.object({
+  promptRefs: z.array(taskPromptRefSchema),
+  reusedEvidence: z.array(z.string().trim().min(1)).default([]),
+  inapplicableSteps: z.array(z.object({ promptId: z.string().trim().min(1), step: z.string().trim().min(1), reason: z.string().trim().min(1) }).strict()).default([]),
+  exceptions: z.array(z.object({ requirement: z.string().trim().min(1), basisMessageIds: z.array(z.string().trim().min(1)).min(1), reason: z.string().trim().min(1) }).strict()).default([]),
+}).strict()
 
 const completedResultSchema = z.object({
   ...executionVersion,
@@ -64,6 +80,7 @@ export const taskCheckpointSchema = z.object({
   remainingItems: z.array(z.string().trim().min(1)).default([]),
   nextStep: z.string().trim().min(1),
   needsCoordinatorDecision: z.boolean().default(false),
+  workflowAssessment: workflowAssessmentSchema.optional(),
 }).strict()
 
 export function parseTaskResult(value) {

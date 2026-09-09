@@ -30,7 +30,9 @@ const outboundSchema = z.object({
   topicRefs: z.array(topicRefSchema).optional(), decisionId: z.string().optional(), resultFingerprint: z.string().min(1).optional(),
   outboundId: z.string().min(1), sourceMessageId: z.string().min(1), text: z.string(), status: z.enum(['pending', 'sent']),
   readbackRequired: z.boolean().optional(),
-  deliveredMessageId: z.string().min(1).optional(),
+  deliveryAttemptCount: z.number().int().nonnegative().optional(), deliveryAttemptedAt: z.string().min(1).optional(),
+  deliveryPendingReason: z.string().min(1).optional(), deliveryError: z.string().min(1).optional(),
+  deliveredMessageId: z.string().min(1).optional(), deliveredAt: z.string().min(1).optional(),
   replyToMessageId: z.string().min(1).optional(), replyToSenderOpenDingTalkId: z.string().min(1).optional(),
   atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
   replyKind: z.enum(['confirmation', 'substantive', 'correction']).optional(),
@@ -66,7 +68,7 @@ const taskPromptSchema = z.object({ id: z.string().min(1), name: z.string().trim
 const taskPromptRefSchema = z.object({ id: z.string().min(1), revision: z.number().int().positive() })
 const persistedTaskCheckpointSchema = taskCheckpointSchema.extend({
   checkpointId: z.string().min(1), submittedAt: z.string().min(1),
-  coordinatorDecision: z.enum(['acknowledge', 'guidance']).optional(), coordinatorReason: z.string().min(1).optional(), guidance: z.string().min(1).optional(), reviewedAt: z.string().min(1).optional(),
+  coordinatorDecision: z.enum(['acknowledge', 'guidance', 'reject']).optional(), coordinatorReason: z.string().min(1).optional(), guidance: z.string().min(1).optional(), reviewedAt: z.string().min(1).optional(),
 })
 const taskRunSchema = z.object({
   runSequence: z.number().int().positive(), startedAt: z.string().min(1), endedAt: z.string().min(1).optional(),
@@ -272,7 +274,7 @@ export async function openResidentStore(storageDomain) {
           ids.add(id)
           const base = { id, name: input?.name, description: input?.description, prompt: input?.prompt, enabled: input?.enabled !== false }
           const old = previous.get(id)
-          const revision = old && old.name === base.name?.trim() && old.description === base.description?.trim() && old.prompt === base.prompt?.trim() && old.enabled === base.enabled ? old.revision : (old?.revision ?? 0) + 1
+          const revision = old && old.name === base.name?.trim() && old.description === base.description?.trim() && old.prompt === base.prompt?.trim() && old.enabled === base.enabled ? old.revision : (old?.revision ?? version) + 1
           return taskPromptSchema.parse({ ...base, revision })
         })
         const indexChars = normalized.filter((item) => item.enabled).reduce((sum, item) => sum + item.id.length + item.name.length + item.description.length + 8, 0)
@@ -683,7 +685,20 @@ export async function openResidentStore(storageDomain) {
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const [storageKey, current] = entry
       if (!current.outbox.some((item) => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
-      return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: 'sent', ...(deliveredMessageId ? { deliveredMessageId } : {}) } : item) }))
+      const deliveredAt = new Date().toISOString()
+      return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: 'sent', deliveredAt, ...(deliveredMessageId ? { deliveredMessageId } : {}), deliveryPendingReason: undefined, deliveryError: undefined } : item) }))
+    }),
+    recordOutboundDeliveryAttempt: ({ groupId, outboundId, reason, error }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
+      const [storageKey, current] = entry
+      if (!current.outbox.some((item) => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
+      const attemptedAt = new Date().toISOString()
+      return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? {
+        ...item, deliveryAttemptCount: (item.deliveryAttemptCount ?? 0) + 1, deliveryAttemptedAt: attemptedAt,
+        ...(reason ? { deliveryPendingReason: reason } : { deliveryPendingReason: undefined }),
+        ...(error ? { deliveryError: error } : { deliveryError: undefined }),
+      } : item) }))
     }),
     updateOutboundRecall: async ({ groupId, outboundId, status, reason, error }) => {
       const entry = findGroupEntry(groupId)

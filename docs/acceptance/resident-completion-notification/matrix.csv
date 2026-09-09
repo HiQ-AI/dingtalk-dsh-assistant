@@ -1,0 +1,28 @@
+case,round-1,round-2,evidence
+完成验收与通知合并为一次常驻会话请求,PASS,PASS,round-2.md；round-1.md为历史证据
+任务完成前不允许发送通知,PASS,PASS,round-2.md；round-1.md为历史证据
+话题候选变化时拒绝旧草稿并回退,PASS,PASS,round-2.md；round-1.md为历史证据
+待处理消息变化时不错误完成任务,PASS,PASS,round-2.md；round-1.md为历史证据
+Outbox 写入失败时回退且不重复处理,PASS,PASS,round-2.md；round-1.md为历史证据
+通知入箱后遥测写入失败不重复协调,PASS,PASS,round-2.md；round-1.md为历史证据
+完成上下文限制为最近 20 条且不超过 12000 字符,PASS,PASS,round-2.md；round-1.md为历史证据
+重启后补偿缺失通知,PASS,PASS,round-2.md；round-1.md为历史证据
+Outbox 记录实际投递时间,PASS,PASS,round-2.md；round-1.md为历史证据
+完整自动化测试,PASS,PASS,round-2.md；round-1.md为历史证据
+本地安装包与工作区关键源码一致,PASS,PASS,round-2.md；round-1.md为历史证据
+DSH Web 本地认证访问,PASS,PASS,round-2.md；round-1.md为历史证据
+原插件流程配置保留,PASS,PASS,round-2.md；round-1.md为历史证据
+消息实时监听恢复,PASS,PASS,round-2.md；round-1.md为历史证据
+组织未授权不能绕过发送前回读,NOT_RUN,PASS,round-2.md
+空回执或失败回执不能确认送达,NOT_RUN,PASS,round-2.md
+流程修改停用删除未重载也拒绝旧阶段,NOT_RUN,PASS,round-2.md
+读后改版及完成CAS阻止旧结果,NOT_RUN,PASS,round-2.md
+无计划拒绝过期时可报告诊断且不能推进,NOT_RUN,PASS,round-2.md
+异常抢占与重启待审恢复归档,NOT_RUN,PASS,round-2.md
+完成审阅后暂停不会被完成覆盖,NOT_RUN,PASS,round-2.md
+单条长消息与JSON转义分页不丢原文,NOT_RUN,PASS,round-2.md
+40k审阅及通知回退信封限制,NOT_RUN,PASS,round-2.md
+候选流程读取与无匹配组合审阅,NOT_RUN,PASS,round-2.md
+审阅发起拒绝失败时间可见,NOT_RUN,PASS,round-2.md
+看板七种状态及窄屏键盘验证,NOT_RUN,PASS,round-2.md
+真实DWS发送与回读,NOT_RUN,DEFERRED,用户明确暂缓组织权限处理

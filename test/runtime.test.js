@@ -128,6 +128,7 @@ async function createTask(h, id = 'task-input', extra = {}) {
   assert.equal(h.store.getTopic('g', request.topicId).decisions.at(-1).status, 'completed', JSON.stringify(h.runtime.listRecoveryIssues()))
   return h.store.listTasks().find((task) => task.topicRefs.some((ref) => ref.topicId === request.topicId))
 }
+const workflowAssessment = (task, patch = {}) => ({ promptRefs: task.taskPromptRefs ?? [], reusedEvidence: [], inapplicableSteps: [], exceptions: [], ...patch })
 
 test('别名修复请求创建任务，后续无称呼的图片补充续接同一叶子', async (t) => {
   const h = await setup(t, { attachments: { async saveImages() { return [{ id: 'database-image', mediaType: 'image/png' }] } } })
@@ -433,6 +434,56 @@ test('流程修订后旧选择失效，拒绝叶子用旧流程完成任务', as
   await assert.rejects(leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'completed', summary: '完成', evidence: ['证据'], artifacts: [] }), /task_prompt_selection_stale/)
 })
 
+test('计划绑定已选流程，主会话读完同一流程正文后才可审阅', async (t) => {
+  const h = await setup(t)
+  const config = await h.runtime.updateAgentConfig({ taskPrompts: [{ id: 'workflow-uat', name: 'UAT 交付', description: '部署后只检查启动和访问', prompt: '部署后不重复业务 E2E。', enabled: true }], taskPromptsVersion: 0 })
+  let task = await createTask(h, 'uat-plan')
+  await leafCall(h, task, 'load_task_prompt', { id: config.taskPrompts[0].id }); task = h.store.getTask(task.taskId)
+  await assert.rejects(leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '缺少流程声明', completedItems: [], evidence: [], remainingItems: ['部署'], nextStep: '部署', needsCoordinatorDecision: false }), /task_workflow_assessment_required/)
+  await assert.rejects(leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '伪造例外来源', completedItems: [], evidence: [], remainingItems: ['部署'], nextStep: '部署', needsCoordinatorDecision: false,
+    workflowAssessment: workflowAssessment(task, { exceptions: [{ requirement: 'UAT 重跑业务 E2E', basisMessageIds: ['not-a-topic-message'], reason: '主会话要求' }] }) }), /task_workflow_exception_basis_invalid/)
+  const pending = leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '按 UAT 流程部署', completedItems: [], evidence: [], remainingItems: ['部署并检查访问'], nextStep: '部署', needsCoordinatorDecision: false, workflowAssessment: workflowAssessment(task) })
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '计划一致' } })).status, 'prompt-review-required')
+  assert.equal((await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'workflow-uat' })).prompt, '部署后不重复业务 E2E。')
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '原始消息与流程一致' } })).status, 'accepted')
+  assert.equal((await pending).accepted, true)
+})
+
+test('主会话可拒绝自行扩写的冲突计划，叶子重新规划前不能推进', async (t) => {
+  const h = await setup(t)
+  const config = await h.runtime.updateAgentConfig({ taskPrompts: [{ id: 'workflow-uat', name: 'UAT 交付', description: '部署提测', prompt: '部署后不重复业务 E2E。', enabled: true }], taskPromptsVersion: 0 })
+  let task = await createTask(h, 'deploy-uat')
+  await leafCall(h, task, 'load_task_prompt', { id: config.taskPrompts[0].id }); task = h.store.getTask(task.taskId)
+  const pending = leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '部署后在 UAT 重跑完整业务 E2E', completedItems: [], evidence: [], remainingItems: ['部署', 'UAT 业务 E2E'], nextStep: '部署', needsCoordinatorDecision: true, workflowAssessment: workflowAssessment(task) })
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'workflow-uat' })
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'reject', reason: '原始消息只要求部署，完整 UAT E2E 是主会话扩写' } })
+  const rejected = await pending
+  assert.equal(rejected.code, 'task_checkpoint_rejected')
+  await assert.rejects(leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'stage-completed', stageTask: task.stageTasks[0], summary: '已部署', completedItems: ['部署'], evidence: ['服务正常'], remainingItems: ['UAT 业务 E2E'], nextStep: 'E2E', needsCoordinatorDecision: false }), /task_workflow_plan_rejected/)
+  assert.ok(h.handles.get(task.childSessionId).sent.some((message) => message.content[0].text.includes('[TASK_PLAN_REJECTED]')))
+})
+
+test('流程修订只使引用任务的旧计划失效，未引用任务不接收更新', async (t) => {
+  const h = await setup(t, { maxConcurrentTasks: 2 })
+  const first = await h.runtime.updateAgentConfig({ taskPrompts: [{ id: 'workflow-uat', name: 'UAT 交付', description: '部署提测', prompt: '第一版', enabled: true }], taskPromptsVersion: 0 })
+  let selected = await createTask(h, 'selected'), unrelated = await createTask(h, 'unrelated')
+  await leafCall(h, selected, 'load_task_prompt', { id: 'workflow-uat' }); selected = h.store.getTask(selected.taskId)
+  const plan = leafCall(h, selected, 'submit_task_checkpoint', { ...inputVersion(selected), kind: 'plan-confirmed', summary: '第一版计划', completedItems: [], evidence: [], remainingItems: ['部署'], nextStep: '部署', needsCoordinatorDecision: false, workflowAssessment: workflowAssessment(selected) })
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求'); await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'workflow-uat' })
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '通过' } }); await plan
+  const selectedMessages = h.handles.get(selected.childSessionId).sent.length, unrelatedMessages = h.handles.get(unrelated.childSessionId).sent.length
+  const second = await h.runtime.updateAgentConfig({ taskPrompts: [{ ...first.taskPrompts[0], prompt: '第二版' }], taskPromptsVersion: first.taskPromptsVersion })
+  assert.ok(h.handles.get(selected.childSessionId).sent.length > selectedMessages)
+  assert.equal(h.handles.get(unrelated.childSessionId).sent.length, unrelatedMessages)
+  await leafCall(h, selected, 'load_task_prompt', { id: second.taskPrompts[0].id }); selected = h.store.getTask(selected.taskId)
+  await assert.rejects(leafCall(h, selected, 'submit_task_checkpoint', { ...inputVersion(selected), kind: 'stage-completed', stageTask: selected.stageTasks[0], summary: '继续旧计划', completedItems: ['部署'], evidence: ['证据'], remainingItems: [], nextStep: '完成', needsCoordinatorDecision: false }), /task_workflow_plan_stale/)
+})
+
 test('任务目标变化清空旧流程选择并拒绝未加载流程', async (t) => {
   const h = await setup(t)
   const saved = await h.runtime.updateAgentConfig({ taskPrompts: [{ name: '问题排查', description: '定位原因', prompt: '排查流程', enabled: true }], taskPromptsVersion: 0 })
@@ -443,6 +494,169 @@ test('任务目标变化清空旧流程选择并拒绝未加载流程', async (t
   const revised = await h.runtime.followupTask({ taskId: task.taskId, requestId: 'switch-to-fix', topicRefs: task.topicRefs, ...inputVersion(h.store.getTask(task.taskId)), text: '用户明确要求修复', objective: '修复已定位的问题', acceptanceCriteria: ['修复可验证'], stageTasks: ['完成修复'] })
   assert.equal(revised.inputVersion, 2)
   assert.deepEqual(revised.taskPromptRefs, [])
+})
+
+async function taskWithWorkflow(t, id) {
+  const h = await setup(t)
+  const config = await h.runtime.updateAgentConfig({ taskPrompts: [{ id: 'audit-flow', name: '核验流程', description: '核验任务', prompt: '第一版核验要求', enabled: true }], taskPromptsVersion: 0 })
+  let task = await createTask(h, id)
+  await leafCall(h, task, 'load_task_prompt', { id: 'audit-flow' })
+  task = h.store.getTask(task.taskId)
+  return { h, task, config }
+}
+
+test('流程修改、禁用和删除后未重新加载也不能推进旧阶段', async (t) => {
+  for (const change of ['modify', 'disable', 'delete']) await t.test(change, async (t) => {
+    const { h, task, config } = await taskWithWorkflow(t, change)
+    await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['核验'], workflowAssessment: workflowAssessment(task) })
+    const taskPrompts = change === 'delete' ? [] : [{ ...config.taskPrompts[0], ...(change === 'disable' ? { enabled: false } : { prompt: '第二版核验要求' }) }]
+    await h.runtime.updateAgentConfig({ taskPrompts, taskPromptsVersion: config.taskPromptsVersion })
+    await assert.rejects(leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'stage-completed', stageTask: task.stageTasks[0], summary: '继续旧计划', completedItems: ['核验'], remainingItems: [], evidence: ['旧证据'], nextStep: '结束' }), /task_prompt_selection_stale/)
+    assert.equal(h.store.getTask(task.taskId).checkpoints.length, 1)
+    assert.equal((await checkpoint(h, task, { kind: 'scope-conflict', remainingItems: ['核验'], summary: '流程变化，需要协调' })).accepted, true)
+  })
+})
+
+test('待审计划遇流程改版会失效并归档，重新加载后可重新规划', async (t) => {
+  const { h, task, config } = await taskWithWorkflow(t, 'review-race')
+  const pending = leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '第一版计划', remainingItems: ['核验'], nextStep: '核验', workflowAssessment: workflowAssessment(task) }).then((value) => ({ value }), (error) => ({ error }))
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'audit-flow' })
+  await h.runtime.updateAgentConfig({ taskPrompts: [{ ...config.taskPrompts[0], prompt: '第二版核验要求' }], taskPromptsVersion: config.taskPromptsVersion })
+  assert.match((await pending).error.message, /task_prompt_selection_stale/)
+  assert.equal(h.store.getTask(task.taskId).checkpoints.length, 0)
+  assert.ok(h.store.getTask(task.taskId).executionEvents.some((event) => event.kind === 'checkpoint-review-invalidated'))
+  await assert.rejects(h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '迟到确认' } }), /task_review_request_unknown/)
+  await leafCall(h, task, 'load_task_prompt', { id: 'audit-flow' })
+  const updated = h.store.getTask(task.taskId)
+  assert.equal((await checkpoint(h, updated, { kind: 'plan-confirmed', remainingItems: ['重新核验'], workflowAssessment: workflowAssessment(updated) })).accepted, true)
+})
+
+test('首次异常可报告但不能改变进度，随后可制定计划并正常完成', async (t) => {
+  const h = await setup(t), task = await createTask(h, 'diagnostic-first')
+  await assert.rejects(leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'scope-conflict', summary: '冲突', completedItems: ['伪造完成'], nextStep: '协调' }), /task_checkpoint_progress_requires_stage_completed/)
+  for (const kind of ['scope-conflict', 'evidence-gap', 'risk-changed']) assert.equal((await checkpoint(h, task, { kind, needsCoordinatorDecision: true })).accepted, true)
+  await assert.rejects(leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'completed', summary: '仍无计划', evidence: ['诊断不等于完成'] }), /task_checkpoint_plan_required/)
+  await fullCheckpoints(h, task)
+  assert.equal((await completeResult(h, task)).value.state, 'completed')
+})
+
+test('异常可抢占待审计划，旧审阅不得回写或阻止新计划', async (t) => {
+  const h = await setup(t), task = await createTask(h, 'diagnostic-preemption')
+  const pending = leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '待审计划', remainingItems: ['核验'], nextStep: '核验' }).then((value) => ({ value }), (error) => ({ error }))
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  const previous = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  assert.equal((await checkpoint(h, task, { kind: 'scope-conflict', remainingItems: [], summary: '计划未获准前发现冲突', needsCoordinatorDecision: true })).accepted, true)
+  assert.match((await pending).error.message, /task_checkpoint_review_superseded/)
+  await assert.rejects(h.call('group_task_review_submit', { requestId: previous.requestId, review: { decision: 'acknowledge', reason: '迟到审阅' } }), /task_review_request_unknown/)
+  assert.equal(h.store.getTask(task.taskId).checkpoints.length, 1)
+  assert.equal((await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['协调后核验'] })).accepted, true)
+})
+
+test('被拒计划仍能报告证据缺口，诊断确认不解除计划拒绝', async (t) => {
+  const h = await setup(t), task = await createTask(h, 'rejected-diagnostic')
+  const pending = leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '错误计划', remainingItems: ['核验'], nextStep: '核验' })
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'reject', reason: '范围冲突' } })
+  assert.equal((await pending).accepted, false)
+  assert.equal((await checkpoint(h, task, { kind: 'evidence-gap', remainingItems: ['核验'] })).accepted, true)
+  await assert.rejects(leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'stage-completed', stageTask: task.stageTasks[0], summary: '不能绕过拒绝', completedItems: ['核验'], remainingItems: [], evidence: ['证据'], nextStep: '结束' }), /task_workflow_plan_rejected/)
+})
+
+test('完成审阅发起即记录事件，拒绝与失败也保留耗时起点', async (t) => {
+  const h = await setup(t), task = await createTask(h, 'review-timing')
+  await fullCheckpoints(h, task)
+  const pending = leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'completed', summary: '等待验收', evidence: ['证据'] }).then((value) => ({ value }), (error) => ({ error }))
+  await until(() => Boolean(h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')))
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  const started = h.store.getTask(task.taskId).executionEvents.findLast((event) => event.kind === 'completion-review-requested')
+  assert.ok(started.at)
+  const request = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted: false, reason: '需补证据' } })
+  assert.match((await pending).error.message, /task_result_objective_not_covered/)
+  const reviewed = h.store.getTask(task.taskId).executionEvents.findLast((event) => event.kind === 'completion-reviewed')
+  assert.equal(reviewed.accepted, false)
+  assert.equal(reviewed.reviewAttemptId, started.reviewAttemptId)
+})
+
+test('完成审阅期间流程更新保持 Task 与 Goal 活动并记录失败', async (t) => {
+  const { h, task, config } = await taskWithWorkflow(t, 'completion-review-race')
+  await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['核验'], workflowAssessment: workflowAssessment(task) })
+  await checkpoint(h, task, { kind: 'stage-completed', stageTask: task.stageTasks[0], completedItems: ['核验'] })
+  const pending = leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'completed', summary: '完成', evidence: ['证据'] }).then((value) => ({ value }), (error) => ({ error }))
+  await until(() => Boolean(h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
+  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'audit-flow' })
+  await h.runtime.updateAgentConfig({ taskPrompts: [{ ...config.taskPrompts[0], prompt: '第二版' }], taskPromptsVersion: config.taskPromptsVersion })
+  assert.match((await pending).error.message, /task_prompt_selection_stale/)
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  assert.equal(h.goals.get(task.childSessionId).phase, 'active')
+  assert.ok(h.store.getTask(task.taskId).executionEvents.some((event) => event.kind === 'completion-review-failed'))
+  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 0)
+})
+
+test('审阅通过后最后落盘前流程改变，不能完成任务或发送通知', async (t) => {
+  const { h, task, config } = await taskWithWorkflow(t, 'completion-commit-race')
+  await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['核验'], workflowAssessment: workflowAssessment(task) })
+  await checkpoint(h, task, { kind: 'stage-completed', stageTask: task.stageTasks[0], completedItems: ['核验'] })
+  const pending = leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'completed', summary: '完成', evidence: ['证据'] }).then((value) => ({ value }), (error) => ({ error }))
+  await until(() => Boolean(h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
+  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'audit-flow' })
+  const candidates = await h.call('group_reply_review_get', { requestIds: [request.requestId] })
+  const original = h.store.updateTask
+  let injected = false
+  h.store.updateTask = async (...args) => {
+    if (!injected) {
+      injected = true
+      await h.store.setTaskPrompts([{ ...config.taskPrompts[0], prompt: '提交瞬间改版' }], config.taskPromptsVersion)
+    }
+    return original(...args)
+  }
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted: true, reason: '已审阅', notification: { reply: '核验完毕', replyToMessageId: task.title, atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: candidates.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } } })
+  assert.match((await pending).error.message, /task_prompt_selection_stale/)
+  assert.equal(injected, true)
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  assert.equal(h.goals.get(task.childSessionId).phase, 'active')
+  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 0)
+})
+
+test('重启恢复过期待审计划时归档失败项，新计划不再被 pending 卡住', async (t) => {
+  const { h, task, config } = await taskWithWorkflow(t, 'recover-stale-plan')
+  await h.store.updateTask(task.taskId, (current) => ({ ...current, checkpoints: [{ ...inputVersion(task), kind: 'plan-confirmed', checkpointId: 'checkpoint-before-crash', submittedAt: new Date().toISOString(), summary: '崩溃前旧计划', completedItems: [], remainingItems: ['旧核验'], evidence: [], nextStep: '核验', needsCoordinatorDecision: false, workflowAssessment: workflowAssessment(task) }] }))
+  await h.store.setTaskPrompts([{ ...config.taskPrompts[0], prompt: '配置已更新但失效清理前崩溃' }], config.taskPromptsVersion)
+  await h.runtime.close()
+  const recovered = await setup(t, { snapshot: h.snapshot, goals: h.goals })
+  await recovered.runtime.inspectRunningTasks()
+  await until(() => recovered.store.getTask(task.taskId).checkpoints.length === 0)
+  assert.ok(recovered.store.getTask(task.taskId).executionEvents.some((event) => event.kind === 'checkpoint-review-failed' && event.checkpoint.checkpointId === 'checkpoint-before-crash'))
+  await leafCall(recovered, task, 'load_task_prompt', { id: 'audit-flow' })
+  const updated = recovered.store.getTask(task.taskId)
+  assert.equal((await checkpoint(recovered, updated, { kind: 'plan-confirmed', remainingItems: ['新核验'], workflowAssessment: workflowAssessment(updated) })).accepted, true)
+})
+
+test('完成审阅通过后的并发暂停不能被完成 CAS 覆盖', async (t) => {
+  const h = await setup(t), task = await createTask(h, 'pause-after-review')
+  await fullCheckpoints(h, task)
+  const pending = leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'completed', summary: '完成', evidence: ['证据'] }).then((value) => ({ value }), (error) => ({ error }))
+  await until(() => Boolean(h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
+  const candidates = await h.call('group_reply_review_get', { requestIds: [request.requestId] })
+  let pause
+  const original = h.store.updateTask
+  h.store.updateTask = async (...args) => {
+    const updated = await original(...args)
+    if (!pause && updated.executionEvents?.at(-1)?.kind === 'completion-reviewed') pause = h.runtime.waitTask({ taskId: task.taskId, reason: '用户暂停核验' })
+    return updated
+  }
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted: true, reason: '证据齐全', notification: { reply: '完成', replyToMessageId: task.title, atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: candidates.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } } })).status, 'accepted')
+  assert.match((await pending).error.message, /task_not_active/)
+  await pause
+  assert.equal(h.store.getTask(task.taskId).state, 'waiting')
+  assert.equal(h.goals.get(task.childSessionId).phase, 'blocked')
+  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 0)
 })
 
 test('退订存储失败时保留 Resident，修复后可再次退订', async (t) => {
@@ -475,6 +689,7 @@ async function checkpoint(h, task, patch) {
   const outcome = pending.then((value) => ({ value }), (error) => ({ error }))
   await until(() => h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')?.requestId !== previous)
   const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  if (args.kind === 'plan-confirmed' || args.kind === 'stage-completed') for (const ref of request.promptRefs ?? []) await h.call('group_task_prompt_get', { requestId: request.requestId, id: ref.id })
   assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '检查点证据与目标一致' } })).status, 'accepted')
   const result = await outcome
   if (result.error) throw result.error
@@ -492,7 +707,11 @@ async function completeResult(h, task, accepted = true) {
   const outcome = submitted.then((value) => ({ value }), (error) => ({ error }))
   await until(() => h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')?.requestId !== previous)
   const request = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
-  await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted, reason: accepted ? '全部证据齐全' : '缺少部署后的核验' } })
+  for (const ref of request.promptRefs ?? []) await h.call('group_task_prompt_get', { requestId: request.requestId, id: ref.id })
+  const replyReview = accepted ? await h.call('group_reply_review_get', { requestIds: [request.requestId] }) : { candidates: [] }
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: accepted
+    ? { accepted: true, reason: '全部证据齐全', notification: { reply: '已完成核验，正常与异常测试通过。', replyToMessageId: task.title, atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: replyReview.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } }
+    : { accepted: false, reason: '缺少部署后的核验' } })
   return outcome
 }
 
@@ -540,22 +759,34 @@ test('完成验收拒绝后保持 running 并向叶子发送具体纠偏', async
   assert.equal(h.store.getGroup('g').outbox.length, 1)
 })
 
-test('完成落盘与通知解耦，Resident 未回复时 FIFO 下个任务仍启动', async (t) => {
+test('一次完成审阅同时准备通知，完成落盘后直接入 Outbox 且 FIFO 下个任务启动', async (t) => {
   const h = await setup(t), task = await createTask(h, 'first'), queued = await createTask(h, 'second')
   assert.equal(queued.state, 'queued')
   await fullCheckpoints(h, task)
   const outcome = await completeResult(h, task)
   assert.equal(outcome.value.state, 'completed')
   assert.equal(h.store.getTask(queued.taskId).state, 'running')
-  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
-  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 0)
-  const notification = h.envelope('[TASK_COORDINATION]')
-  const review = await h.call('group_reply_review_get', { requestIds: [notification.requestId] })
-  const accepted = await h.call('group_reply_submit', { requestId: notification.requestId, reply: '已完成核验，正常与异常测试通过。', replyToMessageId: 'first', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } })
-  assert.equal(accepted.status, 'accepted')
+  await until(() => h.store.getGroup('g').outbox.some((item) => item.sourceMessageId.startsWith('task-result:')) || h.runtime.listRecoveryIssues().some((item) => item.kind === 'task-notification') || h.store.getTask(task.taskId).executionEvents.some((event) => event.kind === 'completion-notification-fallback'))
+  assert.ok(h.store.getGroup('g').outbox.some((item) => item.sourceMessageId.startsWith('task-result:')), JSON.stringify({ issues: h.runtime.listRecoveryIssues(), events: h.store.getTask(task.taskId).executionEvents }))
+  assert.equal(h.envelope('[TASK_COORDINATION]'), undefined)
   assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
+  assert.ok(h.store.getTask(task.taskId).executionEvents.some((event) => event.kind === 'completion-notification-enqueued'))
   await h.runtime.reconcileCompletedNotifications()
   assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
+})
+
+test('通知已入 Outbox 后执行事件写入失败不会重复发起通知协调', async (t) => {
+  const h = await setup(t), task = await createTask(h); await fullCheckpoints(h, task)
+  const original = h.store.updateTask
+  h.store.updateTask = async (taskId, updater) => original(taskId, (current) => {
+    const next = updater(current)
+    if ((next.executionEvents ?? []).some((event) => event.kind === 'completion-notification-enqueued')) throw new Error('telemetry_storage_failure')
+    return next
+  })
+  await completeResult(h, task)
+  await until(() => h.runtime.listRecoveryIssues().some((item) => item.kind === 'task-notification-telemetry'))
+  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
+  assert.equal(h.envelope('[TASK_COORDINATION]'), undefined)
 })
 
 test('尚未归类的新消息阻止叶子提交等待或完成结果', async (t) => {
@@ -871,18 +1102,20 @@ test('完成审阅通过后原子落盘遇新输入，不能提前 complete Goal
   const original = h.store.updateTask; let injected = false
   h.store.updateTask = async (...args) => { if (!injected) { injected = true; await ingest(h, 'arrived-after-review') } return original(...args) }
   const review = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
-  await h.call('group_task_review_submit', { requestId: review.requestId, review: { accepted: true, reason: '通过' } })
+  const candidates = await h.call('group_reply_review_get', { requestIds: [review.requestId] })
+  await h.call('group_task_review_submit', { requestId: review.requestId, review: { accepted: true, reason: '通过', notification: { reply: '完成核验', replyToMessageId: 'task-input', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: candidates.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } } })
   assert.match((await outcome).error.message, /task_input_pending/)
   assert.equal(h.store.getTask(task.taskId).state, 'running')
   assert.equal(h.goals.get(task.childSessionId).phase, 'active')
 })
 
 test('通知 Outbox 首次失败后相同请求重试使用稳定结果键且只落一次', async (t) => {
-  const h = await setup(t), task = await createTask(h); await fullCheckpoints(h, task); await completeResult(h, task)
-  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
-  const request = h.envelope('[TASK_COORDINATION]'), review = await h.call('group_reply_review_get', { requestIds: [request.requestId] })
+  const h = await setup(t), task = await createTask(h); await fullCheckpoints(h, task)
   const original = h.store.appendOutbox; let fail = true
   h.store.appendOutbox = async (args) => { if (fail) throw new Error('outbox_storage_failure'); return original(args) }
+  await completeResult(h, task)
+  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  const request = h.envelope('[TASK_COORDINATION]'), review = await h.call('group_reply_review_get', { requestIds: [request.requestId] })
   const args = { requestId: request.requestId, reply: '完成核验', replyToMessageId: 'task-input', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } }
   await assert.rejects(h.call('group_reply_submit', args), /outbox_storage_failure/)
   assert.equal(h.store.getTask(task.taskId).state, 'completed')

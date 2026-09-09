@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { openResidentStore, residentDomainSpec } from '../packages/dingtalk-dsh-assistant/store.js'
+import { assertCurrentTaskPrompts } from '../packages/dingtalk-dsh-assistant/task-result.js'
 
 function memoryFacility(seed = new Map()) {
   const table = (name) => ({
@@ -15,6 +16,17 @@ function memoryFacility(seed = new Map()) {
 
 test('Topic破坏性模型使用独立domain版本7', () => {
   assert.equal(residentDomainSpec.version, 7)
+})
+
+test('删除后重建同 ID 流程不能复用旧修订号使旧计划恢复有效', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  const first = await store.setTaskPrompts([{ id: 'reused-id', name: '流程', description: '核验', prompt: '旧流程' }], 0)
+  const oldTask = { taskPromptRefs: [{ id: 'reused-id', revision: first.taskPrompts[0].revision }] }
+  await store.setTaskPrompts([], first.taskPromptsVersion)
+  const recreated = await store.setTaskPrompts([{ id: 'reused-id', name: '流程', description: '核验', prompt: '不同要求' }], store.getTaskPromptsVersion())
+  assert.ok(recreated.taskPrompts[0].revision > oldTask.taskPromptRefs[0].revision)
+  assert.throws(() => assertCurrentTaskPrompts(oldTask, store.getTaskPrompts()), /task_prompt_selection_stale/)
 })
 
 test('群配置初始化、职责修改和删除均持久化', async () => {
@@ -47,6 +59,16 @@ test('同群消息按稳定 messageId 去重并递增排序', async () => {
   const delivered = await store.markMessageAgentDelivery({ groupId: 'group-a', messageId: 'm-2', status: 'delivered' })
   await store.appendOutbox({ groupId: 'group-a', sourceMessageId: 'm-1', text: 'reply-one' })
   const replied = await store.appendOutbox({ groupId: 'group-a', sourceMessageId: 'm-1', text: 'reply-one-again' })
+  const outboundId = replied.outbox[0].outboundId
+  await store.recordOutboundDeliveryAttempt({ groupId: 'group-a', outboundId, reason: 'delivery_unknown' })
+  const attempted = store.getGroup('group-a').outbox[0]
+  assert.equal(attempted.deliveryAttemptCount, 1)
+  assert.equal(attempted.deliveryPendingReason, 'delivery_unknown')
+  assert.ok(attempted.deliveryAttemptedAt)
+  await store.acknowledge({ groupId: 'group-a', outboundId, deliveredMessageId: 'sent-1' })
+  const acknowledged = store.getGroup('group-a').outbox[0]
+  assert.equal(acknowledged.status, 'sent')
+  assert.equal(acknowledged.deliveryPendingReason, undefined)
 
   assert.equal(subscription.group.residentSessionId, first.group.residentSessionId)
   assert.deepEqual([first.sequence, duplicate.sequence, second.sequence], [1, 1, 2])
@@ -221,6 +243,7 @@ test('重开 store 后复用同一 resident Session 和 outbox 状态', async ()
   assert.equal(restored.residentSessionId, created.group.residentSessionId)
   assert.equal(restored.outbox[0].status, 'sent')
   assert.equal(restored.outbox[0].deliveredMessageId, 'm-agent-reply')
+  assert.ok(Date.parse(restored.outbox[0].deliveredAt) > 0)
 })
 
 test('叶子会话提示词、回复审阅与撤回元数据持久化', async () => {

@@ -152,6 +152,35 @@ test('已落盘Outbox先完成prepare，撤回失败时不发送，重试成功�
   await stop()
 })
 
+test('DWS bridge 区分发送前、发送中和回读失败，保留 pending 与错误观测', async (t) => {
+  for (const failedPhase of ['preflight', 'send', 'postflight']) await t.test(failedPhase, async () => {
+    let listener, reads = 0, sends = 0, acknowledgements = 0
+    const attempts = [], warnings = []
+    const outbound = { outboundId: 'out-test', text: '测试消息', status: 'pending', readbackRequired: true }
+    const runtime = {
+      listGroups: () => [],
+      onGroupSubscribed() { return () => undefined },
+      onOutboxAppended(handler) { listener = handler; return () => undefined },
+      async recordOutboundDeliveryAttempt(value) { attempts.push(value) },
+      async acknowledge() { acknowledgements += 1; outbound.status = 'sent' },
+    }
+    const denied = () => { const error = new Error('CLI_ORG_NOT_AUTHORIZED'); error.serverErrorCode = 'CLI_ORG_NOT_AUTHORIZED'; throw error }
+    const adapter = {
+      async readGroup() { reads += 1; if (failedPhase === 'preflight' || (failedPhase === 'postflight' && reads > 1)) denied(); return { complete: true, messages: [] } },
+      async sendGroup() { sends += 1; if (failedPhase === 'send') denied(); return {} },
+    }
+    const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { warnings.push(error.message) } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0 })
+    try {
+      await listener({ groupId: 'g', outbound })
+      assert.equal(outbound.status, 'pending')
+      assert.equal(acknowledgements, 0)
+      assert.equal(sends, failedPhase === 'preflight' ? 0 : 1)
+      assert.deepEqual(attempts, [{ groupId: 'g', outboundId: 'out-test', reason: `${failedPhase}_failed`, error: 'CLI_ORG_NOT_AUTHORIZED' }])
+      assert.deepEqual(warnings, ['CLI_ORG_NOT_AUTHORIZED'])
+    } finally { await stop() }
+  })
+})
+
 test('DWS bridge 将稳定事件交给 resident 并在真实回读后确认 outbox', async () => {
   let onEvent
   let stopped = false

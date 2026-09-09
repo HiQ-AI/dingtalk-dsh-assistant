@@ -5,7 +5,7 @@ import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { buildReplyReviewCandidates, groupDecisionSchema } from './decision.js'
 import { boundedTopicContext, createTopicCoordinator } from './topic-runtime.js'
 import { resolveTopicMessages, stableId, fingerprint } from './topic-model.js'
-import { parseTaskCheckpoint, parseTaskResult } from './task-result.js'
+import { assertCurrentTaskPrompts, isDiagnosticCheckpoint, parseTaskCheckpoint, parseTaskResult } from './task-result.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
 const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_TOPIC_ROUTE]', '[GROUP_TOPIC_DECISION]', '[TASK_COORDINATION]', '[TASK_COMPLETION_REVIEW]', '[TASK_CHECKPOINT_REVIEW]', '[GROUP_MESSAGE_STEER]', '[GROUP_DECISION_RECHECK]', '[GROUP_DECISION_RESUME]']
@@ -210,11 +210,11 @@ routing-required 表示还有未归类输入，先归类再重试；已确认无
 
 通过 topicUpdate 保存 summary/openQuestions/status。摘要不能替代原文，closed Topic 后续可以继续；致谢或无关讨论不能自动重开 Task。共享消息涉及多个 Topic 的同一 Task 动作只在一个 Topic 执行，其他 Topic 关联既有结果，防止重复重开或确认。
 
-Task 完成验收和检查点审阅通过 group_task_review_submit 返回，普通文本不构成审阅。Task 通知通过 group_reply_submit 返回，根据固定 Topic 原文选择引用消息和真正需要获知的参与人，保留实际变更、证据、交付状态和未验证边界。
+Task 完成验收和检查点审阅通过 group_task_review_submit 返回，普通文本不构成审阅。完成审阅通过时必须在同一次提交中准备 Task 通知；Runtime 在 Task 原子完成后才写入 Outbox。等待通知、恢复补发或完成通知草稿失效时通过 group_reply_submit 返回。通知根据固定 Topic 原文选择引用消息和真正需要获知的参与人，保留实际变更、证据、交付状态和未验证边界。
 
 \`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从Topic 固定版本生成的独立来源证据并自行核验。
 
-新建任务必须提供至少一条 \`acceptanceCriteria\`；修订目标时也可更新 \`acceptanceCriteria\` 和 \`stageTasks\`。验收标准只描述当前目标可核验的完成条件，不得按开发、分析、部署等任务类型绑定固定模板，也不得扩大消息授权范围。
+新建任务必须提供至少一条 \`acceptanceCriteria\`；修订目标时也可更新 \`acceptanceCriteria\` 和 \`stageTasks\`。验收标准只描述原始消息明确要求的业务结果、目标环境和限制，不得把主会话建议、历史做法或预计验证步骤扩写成用户要求，也不得按开发、分析、部署等任务类型绑定固定模板。具体处理流程由叶子按插件任务流程索引选择并形成计划；你在计划和完成审阅中通过 group_task_prompt_get 按需读取同一份已选流程，结合固定 Topic 原文检查一致性。
 
 当前消息明确指名或提及已配置的 Agent 名称/别名、以 \`cc:\` 开头，或者明确确认了主会话此前提出的“是否需要我处理”询问，并且事项属于本群职责且形成可验证目标时，才允许选择 new-task。未明确指名、但你判断事项应形成任务时，必须选择 task-proposal，并在群里询问“这个事项是否需要我处理？”，暂不创建 Task；收到肯定答复后再结合原消息及其后补充选择 new-task。消息明确 @其他同事且未指向 Agent 时，说明问题正在询问这些同事，必须忽略，既不得创建 task-proposal 或 new-task，也不得主动回答；只有后续明确指向 Agent 且直接引用该消息，才视为可验证的转交。同事间讨论、事实陈述或未形成可验证目标的内容不得创建任务；与现有任务相关时只做任务关联或补充上下文，并按下方节制原则简短确认。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。
 
@@ -464,6 +464,9 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     return group
   }
   async function reviewCompletedTaskResult(task, result) { return topics.requestReview('completion', task, result) }
+  async function recordTaskCoordinationEvent(taskId, event) {
+    return serializeTasks(() => store.updateTask(taskId, (current) => ({ ...current, executionEvents: [...(current.executionEvents ?? []), event], updatedAt: new Date().toISOString() })))
+  }
   const createResident = async (_groupId, options) => ({ handle: await ctx.agents.create(options) })
 
   function signalTaskCancellation(taskId) {
@@ -537,17 +540,33 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
   function coordinateTaskResult(task, result) {
     return runGroupResidentOperation(task.groupId, () => coordinateTaskResultInternal(task, result))
   }
-  async function reviewTaskCheckpoint(task, checkpoint) { return topics.requestReview('checkpoint', task, checkpoint) }
+  async function reviewTaskCheckpoint(task, checkpoint) {
+    if (!isDiagnosticCheckpoint(checkpoint)) {
+      assertCurrentTaskPrompts(task, store.getTaskPrompts())
+      if (checkpoint.kind === 'plan-confirmed' && !samePromptRefs(checkpoint.workflowAssessment?.promptRefs, task.taskPromptRefs)) throw new Error(`task_workflow_plan_stale:${task.taskId}`)
+    }
+    return topics.requestReview('checkpoint', task, checkpoint)
+  }
+  async function discardFailedCheckpoint(taskId, checkpoint, error) {
+    return serializeTasks(() => store.updateTask(taskId, (current) => {
+      const failed = current.checkpoints?.find((item) => item.checkpointId === checkpoint.checkpointId && !item.coordinatorDecision)
+      if (!failed) return current
+      return { ...current, checkpoints: current.checkpoints.filter((item) => item !== failed),
+        executionEvents: [...(current.executionEvents ?? []), { kind: 'checkpoint-review-failed', checkpoint: failed, error: compactText(error.message, 1000), at: new Date().toISOString() }] }
+    }))
+  }
   async function persistCheckpointReview(task, checkpoint, review) {
     return serializeTasks(async () => {
       if (cancellingTasks.has(task.taskId)) throw new Error(`task_cancel_pending:${task.taskId}`)
       const current = store.getTask(task.taskId)
       if (current?.inputVersion !== task.inputVersion || current?.runSequence !== task.runSequence) throw new Error(`task_checkpoint_run_changed:${task.taskId}`)
-      return updateTaskInput(task.taskId, checkpoint, (value) => ({
-        ...value,
-        checkpoints: (value.checkpoints ?? []).map((item) => item.checkpointId === checkpoint.checkpointId ? { ...item, coordinatorDecision: review.decision, coordinatorReason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}), reviewedAt: new Date().toISOString() } : item),
-        updatedAt: new Date().toISOString(),
-      }))
+      return updateTaskInput(task.taskId, checkpoint, (value) => {
+        assertCheckpointCurrent(value, task, checkpoint)
+        return { ...value,
+          checkpoints: (value.checkpoints ?? []).map((item) => item.checkpointId === checkpoint.checkpointId ? { ...item, coordinatorDecision: review.decision, coordinatorReason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}), reviewedAt: new Date().toISOString() } : item),
+          updatedAt: new Date().toISOString(),
+        }
+      })
     })
   }
   async function resumeResident(group) {
@@ -564,6 +583,25 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
   function assertTaskInput(task, value) {
     if (task.inputVersion !== value.inputVersion || task.runSequence !== value.runSequence) throw new Error(`task_input_version_stale:${task.taskId}`)
     if (topics.hasPendingTaskInput(task)) throw new Error(`task_input_pending:${task.taskId}`)
+  }
+  const samePromptRefs = (left = [], right = []) => JSON.stringify(left) === JSON.stringify(right)
+  function assertCheckpointCurrent(current, task, checkpoint) {
+    if (current.state !== 'running') throw new Error(`task_not_running:${task.taskId}`)
+    if (current.checkpoints?.at(-1)?.checkpointId !== checkpoint.checkpointId) throw new Error(`task_checkpoint_context_changed:${task.taskId}`)
+    if (!isDiagnosticCheckpoint(checkpoint)) {
+      assertCurrentTaskPrompts(current, store.getTaskPrompts())
+      if (!samePromptRefs(current.taskPromptRefs, task.taskPromptRefs)) throw new Error(`task_checkpoint_context_changed:${task.taskId}`)
+      if (checkpoint.kind === 'plan-confirmed' && !samePromptRefs(checkpoint.workflowAssessment?.promptRefs, current.taskPromptRefs)) throw new Error(`task_workflow_plan_stale:${task.taskId}`)
+    }
+  }
+  function assertWorkflowPlan(task) {
+    assertCurrentTaskPrompts(task, store.getTaskPrompts())
+    const plan = [...(task.checkpoints ?? [])].reverse().find((item) => item.kind === 'plan-confirmed')
+    if (!plan) throw new Error(`task_checkpoint_plan_required:${task.taskId}`)
+    if (plan.coordinatorDecision === 'reject') throw new Error(`task_workflow_plan_rejected:${task.taskId}`)
+    if (!plan.coordinatorDecision) throw new Error(`task_checkpoint_review_pending:${task.taskId}`)
+    if ((task.taskPromptRefs?.length ?? 0) > 0 && !plan.workflowAssessment) throw new Error(`task_workflow_assessment_required:${task.taskId}`)
+    if (plan.workflowAssessment && !samePromptRefs(plan.workflowAssessment.promptRefs, task.taskPromptRefs ?? [])) throw new Error(`task_workflow_plan_stale:${task.taskId}`)
   }
   function updateTaskInput(taskId, value, transform) {
     return store.updateTask(taskId, (current) => { assertTaskInput(current, value); return { ...transform(current), acknowledgedInputVersion: value.inputVersion } })
@@ -623,22 +661,31 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     const prepared = await serializeTasks(async () => {
       if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
       const task = store.getTask(taskId)
-      if (task === undefined || task.state === 'queued' || task.state === 'completed') throw new Error(`task_not_active:${taskId}`)
+      if (task?.state !== 'running') throw new Error(`task_not_active:${taskId}`)
       assertTaskInput(task, result)
       const handle = leafHandles.get(taskId)
       if (handle === undefined) throw new Error(`task_leaf_not_active:${taskId}`)
       const goal = ctx.goals.get(handle.agent)
       if (goal === undefined) throw new Error(`task_goal_missing:${taskId}`)
-      const prompts = new Map((store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map((item) => [item.id, item]))
-      for (const ref of task.taskPromptRefs ?? []) if (prompts.get(ref.id)?.revision !== ref.revision) throw new Error(`task_prompt_selection_stale:${ref.id}`)
       const checkpoints = task.checkpoints ?? []
-      if (checkpoints[0]?.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
+      assertWorkflowPlan(task)
       if (checkpoints.length < 2) throw new Error(`task_checkpoints_insufficient:${taskId}`)
       if (!checkpoints.at(-1)?.coordinatorDecision) throw new Error(`task_checkpoint_review_pending:${taskId}`)
       if ((checkpoints.at(-1)?.remainingItems?.length ?? 0) > 0) throw new Error(`task_checkpoints_remaining:${taskId}`)
       return { task, handle, lastCheckpointId: checkpoints.at(-1).checkpointId }
     })
-    const review = await withoutInitiator(() => reviewCompletedTaskResult(prepared.task, result))
+    const reviewAttemptId = randomUUID()
+    const reviewEvent = (kind, extra = {}) => recordTaskCoordinationEvent(taskId, { kind, reviewAttemptId, inputVersion: result.inputVersion, runSequence: result.runSequence, at: new Date().toISOString(), ...extra })
+    await reviewEvent('completion-review-requested')
+    let review
+    try {
+      review = await withoutInitiator(() => reviewCompletedTaskResult(prepared.task, result))
+      await reviewEvent('completion-reviewed', { accepted: review.accepted })
+    } catch (error) {
+      await reviewEvent('completion-review-failed', { error: compactText(error.message, 1000) })
+        .catch((eventError) => recoveryIssues.push({ groupId: prepared.task.groupId, taskId, kind: 'task-notification-telemetry', error: eventError.message }))
+      throw error
+    }
     if (!review.accepted) {
       await followupTaskInternal(prepared.task, `[TASK_RESULT_REJECTED]\n当前完成结果未通过最新目标验收：${review.reason}\n\n继续执行当前有效目标，补齐缺失实现与证据后再提交 completed。不得重复提交上一轮结论。`)
       throw new Error(`task_result_objective_not_covered:${taskId}:${review.reason}`)
@@ -646,16 +693,38 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     const completed = await serializeTasks(async () => {
       if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
       const current = store.getTask(taskId)
-      if (current === undefined || current.state === 'queued' || current.state === 'completed') throw new Error(`task_not_active:${taskId}`)
-      if (current.inputVersion !== prepared.task.inputVersion || current.runSequence !== prepared.task.runSequence || current.objective !== prepared.task.objective || current.checkpoints?.at(-1)?.checkpointId !== prepared.lastCheckpointId) throw new Error(`task_result_context_changed:${taskId}`)
+      if (current?.state !== 'running') throw new Error(`task_not_active:${taskId}`)
+      if (current.inputVersion !== prepared.task.inputVersion || current.runSequence !== prepared.task.runSequence || current.objective !== prepared.task.objective || current.checkpoints?.at(-1)?.checkpointId !== prepared.lastCheckpointId || !samePromptRefs(current.taskPromptRefs ?? [], prepared.task.taskPromptRefs ?? [])) throw new Error(`task_result_context_changed:${taskId}`)
+      assertWorkflowPlan(current)
       assertTaskInput(current, result)
       const goal = ctx.goals.get(prepared.handle.agent)
       if (goal === undefined) throw new Error(`task_goal_missing:${taskId}`)
-      const completed = await updateTaskInput(taskId, result, (task) => ({ ...task, acknowledgedInputVersion: result.inputVersion, state: 'completed', completion: result.summary, result, waitingKind: undefined, waitingReason: undefined }))
+      const completedAt = new Date().toISOString()
+      const completed = await updateTaskInput(taskId, result, (task) => {
+        if (task.state !== 'running') throw new Error(`task_not_active:${taskId}`)
+        assertWorkflowPlan(task)
+        if (task.checkpoints?.at(-1)?.checkpointId !== prepared.lastCheckpointId || !samePromptRefs(task.taskPromptRefs, prepared.task.taskPromptRefs)) throw new Error(`task_result_context_changed:${taskId}`)
+        return { ...task, acknowledgedInputVersion: result.inputVersion, state: 'completed', completion: result.summary, result, waitingKind: undefined, waitingReason: undefined,
+          executionEvents: [...(task.executionEvents ?? []),
+            { kind: 'task-completed', inputVersion: result.inputVersion, runSequence: result.runSequence, at: completedAt }],
+        }
+      })
       if (goal.phase !== 'complete') ctx.goals.complete(prepared.handle.agent, goalRef(goal))
       return completed
     })
-    void withoutInitiator(() => coordinateTaskResult(completed, result)).catch((error) => recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification', error: error.message }))
+    void withoutInitiator(async () => {
+      const committed = await runGroupResidentOperation(completed.groupId, () => topics.commitCompletionNotification(review.preparedNotification, completed, result))
+      if (committed?.status) {
+        await recordTaskCoordinationEvent(taskId, { kind: 'completion-notification-fallback', inputVersion: result.inputVersion, runSequence: result.runSequence, status: committed.status, at: new Date().toISOString() })
+        await coordinateTaskResult(completed, result)
+        return
+      }
+      await recordTaskCoordinationEvent(taskId, { kind: 'completion-notification-enqueued', inputVersion: result.inputVersion, runSequence: result.runSequence, outboundId: committed.outboundId, at: new Date().toISOString() })
+        .catch((error) => recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification-telemetry', error: error.message }))
+    }).catch(async (error) => {
+      recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification', error: error.message })
+      await withoutInitiator(() => coordinateTaskResult(completed, result)).catch((fallbackError) => recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification-fallback', error: fallbackError.message }))
+    })
     const completedRunSequence = completed.runSequence
     prepared.handle.agent.whenIdle().then(async () => {
       const dispose = await serializeTasks(() => {
@@ -672,6 +741,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
   }
   async function submitTaskCheckpointInternal(taskId, value) {
     const checkpoint = parseTaskCheckpoint(value)
+    const diagnostic = isDiagnosticCheckpoint(checkpoint)
     if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
     const { submitted, reviewTask } = await serializeTasks(async () => {
       if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
@@ -679,16 +749,34 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (task === undefined || task.state !== 'running') throw new Error(`task_not_running:${taskId}`)
       assertTaskInput(task, checkpoint)
       if (!leafHandles.has(taskId)) throw new Error(`task_leaf_not_active:${taskId}`)
+      if (!diagnostic) assertCurrentTaskPrompts(task, store.getTaskPrompts())
       const pendingReview = task.checkpoints?.at(-1)
+      let superseded
       if (pendingReview && !pendingReview.coordinatorDecision) {
         const comparable = ({ checkpointId: _checkpointId, submittedAt: _submittedAt, coordinatorDecision: _decision, coordinatorReason: _reason, guidance: _guidance, reviewedAt: _reviewedAt, ...rest }) => rest
-        if (JSON.stringify(comparable(pendingReview)) !== JSON.stringify(checkpoint)) throw new Error(`task_checkpoint_review_pending:${taskId}`)
-        return { submitted: pendingReview, reviewTask: task }
+        if (JSON.stringify(comparable(pendingReview)) === JSON.stringify(checkpoint)) return { submitted: pendingReview, reviewTask: task }
+        if (!diagnostic) throw new Error(`task_checkpoint_review_pending:${taskId}`)
+        superseded = pendingReview
       }
-      if ((task.checkpoints?.length ?? 0) === 0 && checkpoint.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
       if (checkpoint.kind === 'plan-confirmed' && checkpoint.remainingItems.length < 1) throw new Error(`task_checkpoint_plan_insufficient:${taskId}`)
+      if (checkpoint.kind === 'plan-confirmed') {
+        const refs = task.taskPromptRefs ?? []
+        if (refs.length > 0 && !checkpoint.workflowAssessment) throw new Error(`task_workflow_assessment_required:${taskId}`)
+        if (checkpoint.workflowAssessment && !samePromptRefs(checkpoint.workflowAssessment.promptRefs, refs)) throw new Error(`task_workflow_assessment_refs_invalid:${taskId}`)
+        const selectedIds = new Set(refs.map((ref) => ref.id))
+        if ((checkpoint.workflowAssessment?.inapplicableSteps ?? []).some((item) => !selectedIds.has(item.promptId))) throw new Error(`task_workflow_inapplicable_prompt_invalid:${taskId}`)
+        const messageIds = new Set(topics.taskMessages(task).map((message) => message.messageId))
+        for (const exception of checkpoint.workflowAssessment?.exceptions ?? []) {
+          if (new Set(exception.basisMessageIds).size !== exception.basisMessageIds.length || exception.basisMessageIds.some((id) => !messageIds.has(id))) throw new Error(`task_workflow_exception_basis_invalid:${taskId}`)
+        }
+      } else {
+        if (checkpoint.workflowAssessment) throw new Error(`task_workflow_assessment_plan_only:${taskId}`)
+        if (!diagnostic) assertWorkflowPlan(task)
+      }
       if (checkpoint.kind === 'stage-completed' && (!checkpoint.stageTask || !(task.stageTasks ?? []).includes(checkpoint.stageTask))) throw new Error(`task_checkpoint_stage_invalid:${taskId}`)
-      const previousRemainingItems = task.checkpoints?.at(-1)?.remainingItems ?? []
+      const retained = (task.checkpoints ?? []).filter((item) => item !== superseded)
+      const previousRemainingItems = retained.at(-1)?.remainingItems ?? []
+      if (diagnostic && (checkpoint.completedItems.length || checkpoint.stageTask)) throw new Error(`task_checkpoint_progress_requires_stage_completed:${taskId}`)
       if (checkpoint.kind === 'stage-completed') {
         if (!task.checkpoints?.at(-1)?.coordinatorDecision) throw new Error(`task_checkpoint_review_pending:${taskId}`)
         const completesCurrentItem = checkpoint.completedItems.length === 1 && checkpoint.completedItems[0] === previousRemainingItems[0]
@@ -698,13 +786,26 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         throw new Error(`task_checkpoint_progress_requires_stage_completed:${taskId}`)
       }
       const submitted = { ...checkpoint, checkpointId: `checkpoint-${randomUUID()}`, submittedAt: new Date().toISOString() }
-      const reviewTask = await updateTaskInput(taskId, checkpoint, (current) => ({ ...current, acknowledgedInputVersion: checkpoint.inputVersion, checkpoints: [...(current.checkpoints ?? []), submitted], updatedAt: new Date().toISOString() }))
+      const reviewTask = await updateTaskInput(taskId, checkpoint, (current) => ({ ...current, acknowledgedInputVersion: checkpoint.inputVersion, checkpoints: [...retained, submitted],
+        ...(superseded ? { executionEvents: [...(current.executionEvents ?? []), { kind: 'checkpoint-review-superseded', checkpoint: superseded, at: new Date().toISOString() }] } : {}),
+        updatedAt: new Date().toISOString() }))
+      if (superseded) topics.invalidateTaskReviews(taskId, 'task_checkpoint_review_superseded')
       return { submitted, reviewTask }
     })
-    const review = checkpoint.kind === 'stage-completed' && checkpoint.needsCoordinatorDecision === false && checkpoint.evidence.length > 0
-      ? { decision: 'acknowledge', reason: 'Host 已校验阶段顺序、执行版本和非空证据。' }
-      : await withoutInitiator(() => reviewTaskCheckpoint(reviewTask, submitted))
-    await persistCheckpointReview(reviewTask, submitted, review)
+    let review
+    try {
+      review = checkpoint.kind === 'stage-completed' && checkpoint.needsCoordinatorDecision === false && checkpoint.evidence.length > 0
+        ? { decision: 'acknowledge', reason: 'Host 已校验阶段顺序、执行版本和非空证据。' }
+        : await withoutInitiator(() => reviewTaskCheckpoint(reviewTask, submitted))
+      await persistCheckpointReview(reviewTask, submitted, review)
+    } catch (error) {
+      await discardFailedCheckpoint(taskId, submitted, error)
+      throw error
+    }
+    if (review.decision === 'reject') {
+      await followupTaskInternal(reviewTask, `[TASK_PLAN_REJECTED]\n当前计划与原始授权或已选任务流程不一致：${review.reason}\n\n重新核对固定 Topic 原文和已选流程；主会话生成的目标或验收标准不能作为流程例外依据。修正后重新提交 plan-confirmed。`)
+      return { accepted: false, taskId, code: 'task_checkpoint_rejected', checkpointId: submitted.checkpointId, reason: review.reason }
+    }
     return { accepted: true, taskId, checkpointId: submitted.checkpointId, coordinatorDecision: review.decision, reason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}) }
   }
   const listAuthorizationRequests = () => store.listTasks().flatMap((task) => {
@@ -801,7 +902,7 @@ Task objective 限制的是业务动作范围，包括业务代码、业务数�
 
 ### 与主会话的内部检查点
 
-开始执行后把当前目标拆成至少 1 个有验收意义的检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed。后续按 remainingItems 顺序逐项提交 stage-completed，每次 completedItems 只填本次完成的第一项，不累计历史；阶段提交被拒绝时先纠正并取得确认，再进入下一阶段。Host 会自动校验普通阶段的版本、顺序和非空证据，需要协调判断时再交给主会话。收到新版 TASK_TOPIC_CONTEXT 后，按其中的 progressImpact 处理：preserve 表示保留未受影响的既有进展，replan 表示按修订范围重提计划。范围冲突、证据缺口或风险实质变化时提交对应 checkpoint。完成前 remainingItems 必须为空。不要提交命令流水、等待或无新事实的状态；checkpoint 不发送群聊，也不代替 submit_task_result。
+开始执行后把当前目标拆成至少 1 个有验收意义的检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed。计划必须携带 workflowAssessment：精确列出当前已选流程引用、可复用证据、不适用步骤，以及任何覆盖流程要求的例外；例外必须引用明确提出该要求的原始 basisMessageIds，主会话生成的目标、验收标准或旧摘要不能充当例外依据。若当前目标与流程冲突且原始消息没有明确例外，提交 scope-conflict 或修正计划，不能按扩写目标继续执行。后续按 remainingItems 顺序逐项提交 stage-completed，每次 completedItems 只填本次完成的第一项，不累计历史；阶段提交被拒绝时先纠正并取得确认，再进入下一阶段。Host 会自动校验普通阶段的版本、顺序和非空证据，需要协调判断时再交给主会话。收到新版 TASK_TOPIC_CONTEXT 后，按其中的 progressImpact 处理：preserve 表示保留未受影响的既有进展，replan 表示按修订范围重提计划。范围冲突、证据缺口或风险实质变化时提交对应 checkpoint；即使尚无计划、计划被拒或流程失效也可上报。异常报告 completedItems 必须为空，remainingItems 保持最近已确认进度；若抢占待审计划，原待审项归档且必须重新规划。完成前 remainingItems 必须为空。不要提交命令流水、等待或无新事实的状态；checkpoint 不发送群聊，也不代替 submit_task_result。
 
 ### 任务授权边界
 
@@ -885,7 +986,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         name: 'load_task_prompt', description: '根据任务和目标匹配索引后，按 ID 加载一个流程正文并加入当前组合；可多次加载互补流程，压缩和恢复后按组合重新注入。',
         parameters: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' } }, required: ['id'] },
         output: { schema: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, prompt: { type: 'string' }, revision: { type: 'integer' } }, required: ['id', 'name', 'description', 'prompt', 'revision'] }, render: (_args, out) => [{ type: 'text', text: `# ${out.name}\n\n${out.prompt}\n\n流程引用：${out.id}@${out.revision}` }] },
-        execute: async ({ id }, exec) => {
+        execute: async ({ id }, exec) => serializeTasks(async () => {
           if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_prompt_wrong_session:${task.taskId}`)
           const item = (store.getTaskPrompts?.() ?? []).find((value) => value.id === id && value.enabled)
           if (!item) throw new Error(`task_prompt_not_found:${id}`)
@@ -897,13 +998,13 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             return { ...value, taskPromptRefs: [...refs.values()], executionEvents: [...(value.executionEvents ?? []), { kind: 'task-prompt-loaded', inputVersion, id: item.id, revision: item.revision, at: new Date().toISOString() }], updatedAt: new Date().toISOString() }
           })
           return { id: item.id, name: item.name, description: item.description, prompt: item.prompt, revision: item.revision }
-        },
+        }),
       })
       agentCtx.tools.register({
         name: 'select_task_prompts', description: '可选：根据当前目标和剩余阶段调整已加载流程的保留集合，移除不再适用项；ids 是完整保留列表，空列表清空。加载流程无需调用本工具。',
         parameters: { type: 'object', additionalProperties: false, properties: { inputVersion: { type: 'integer' }, ids: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } }, required: ['inputVersion', 'ids', 'reason'] },
         output: { schema: { type: 'object', additionalProperties: false, properties: { taskId: { type: 'string' }, taskPromptRefs: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, revision: { type: 'integer' } }, required: ['id', 'revision'] } } }, required: ['taskId', 'taskPromptRefs'] }, render: (_args, out) => [{ type: 'text', text: `当前任务流程已更新：${out.taskPromptRefs.map((ref) => `${ref.id}@${ref.revision}`).join(', ') || '未选择专用流程'}` }] },
-        execute: async ({ inputVersion, ids, reason }, exec) => {
+        execute: async ({ inputVersion, ids, reason }, exec) => serializeTasks(async () => {
           if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_prompt_wrong_session:${task.taskId}`)
           if (!reason.trim()) throw new Error('task_prompt_selection_reason_required')
           if (new Set(ids).size !== ids.length) throw new Error('task_prompt_selection_duplicate')
@@ -921,7 +1022,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
             return { ...value, taskPromptRefs: refs, executionEvents: [...(value.executionEvents ?? []), { kind: 'task-prompts-selected', inputVersion, taskPromptRefs: refs, reason: reason.trim(), at: new Date().toISOString() }], updatedAt: new Date().toISOString() }
           })
           return { taskId: task.taskId, taskPromptRefs: refs }
-        },
+        }),
       })
       agentCtx.tools.register({
         name: 'submit_task_checkpoint',
@@ -931,6 +1032,12 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           kind: { type: 'string', enum: ['plan-confirmed', 'stage-completed', 'scope-conflict', 'evidence-gap', 'risk-changed'] }, stageTask: { type: 'string' }, summary: { type: 'string' },
           completedItems: { type: 'array', description: 'stage-completed 时只包含上次 remainingItems 的第一项，不累计历史完成项。', items: { type: 'string' } }, evidence: { type: 'array', items: { type: 'string' } }, remainingItems: { type: 'array', description: 'stage-completed 时为上次 remainingItems 去掉第一项后的有序列表。', items: { type: 'string' } },
           nextStep: { type: 'string' }, needsCoordinatorDecision: { type: 'boolean' },
+          workflowAssessment: { type: 'object', additionalProperties: false, properties: {
+            promptRefs: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, revision: { type: 'integer' } }, required: ['id', 'revision'] } },
+            reusedEvidence: { type: 'array', items: { type: 'string' } },
+            inapplicableSteps: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { promptId: { type: 'string' }, step: { type: 'string' }, reason: { type: 'string' } }, required: ['promptId', 'step', 'reason'] } },
+            exceptions: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { requirement: { type: 'string' }, basisMessageIds: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } }, required: ['requirement', 'basisMessageIds', 'reason'] } },
+          }, required: ['promptRefs', 'reusedEvidence', 'inapplicableSteps', 'exceptions'] },
         }, required: ['inputVersion', 'runSequence', 'kind', 'summary', 'completedItems', 'evidence', 'remainingItems', 'nextStep', 'needsCoordinatorDecision'] },
         output: {
           schema: { oneOf: [{ type: 'object', additionalProperties: false, properties: {
@@ -942,6 +1049,10 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
               expected: { type: 'object', additionalProperties: false, properties: { completedItems: { type: 'array', items: { type: 'string' } }, remainingItems: { type: 'array', items: { type: 'string' } } }, required: ['completedItems', 'remainingItems'] },
               instruction: { type: 'string' },
             }, required: ['accepted', 'taskId', 'code', 'inputVersion', 'runSequence', 'expected', 'instruction'],
+          }, {
+            type: 'object', additionalProperties: false, properties: {
+              accepted: { type: 'boolean', const: false }, taskId: { type: 'string' }, code: { type: 'string', const: 'task_checkpoint_rejected' }, checkpointId: { type: 'string' }, reason: { type: 'string' },
+            }, required: ['accepted', 'taskId', 'code', 'checkpointId', 'reason'],
           }] },
           render: (_args, out) => [{ type: 'text', text: out.accepted === false ? JSON.stringify(out) : out.coordinatorDecision === 'guidance' ? `Coordinator guidance: ${out.guidance}` : `Checkpoint acknowledged: ${out.reason}` }],
         },
@@ -1043,8 +1154,14 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         const pendingCheckpoint = task.checkpoints?.at(-1)
         if (pendingCheckpoint && !pendingCheckpoint.coordinatorDecision) {
           void withoutInitiator(() => reviewTaskCheckpoint(task, pendingCheckpoint))
-            .then((review) => persistCheckpointReview(task, pendingCheckpoint, review))
-            .catch((error) => recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'checkpoint-review-recovery', error: error.message }))
+            .then(async (review) => {
+              await persistCheckpointReview(task, pendingCheckpoint, review)
+              if (review.decision === 'reject') await followupTaskInternal(task, `[TASK_PLAN_REJECTED]\n当前计划与原始授权或已选任务流程不一致：${review.reason}\n\n重新核对固定 Topic 原文和已选流程后提交新的 plan-confirmed。`)
+            })
+            .catch(async (error) => {
+              recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'checkpoint-review-recovery', error: error.message })
+              await discardFailedCheckpoint(task.taskId, pendingCheckpoint, error)
+            }).catch((error) => recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'checkpoint-review-cleanup', error: error.message }))
         }
         let handle = leafHandles.get(task.taskId)
         const registered = ctx.agents.get?.(SessionId(task.childSessionId))
@@ -1436,7 +1553,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         return { accepted, duplicates, enriched, total: messages.length, group: store.getGroup(groupId) }
       })
     },
-    acknowledge: store.acknowledge, reportCarrierIssue: store.recordAlert,
+    acknowledge: store.acknowledge, recordOutboundDeliveryAttempt: store.recordOutboundDeliveryAttempt, reportCarrierIssue: store.recordAlert,
     resolveGroupCarrierIssues: async ({ groupId }) => {
       const tasks = store.listTasks().filter((task) => task.groupId === groupId)
       for (const task of tasks) await store.resolveAlerts?.({ taskId: task.taskId, fingerprintPrefix: 'dws-consumer-' })
@@ -1618,7 +1735,19 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           if (proxyChanged) await store.setProxyUrl(nextProxyUrl)
           if (namesChanged) await store.setAgentNames(nextAgentNames)
           if (guidanceChanged) await store.setLeafSessionPrompt(nextLeafSessionPrompt)
-          if (taskPromptsChanged) await store.setTaskPrompts(taskPrompts, taskPromptsVersion)
+          if (taskPromptsChanged) {
+            await store.setTaskPrompts(taskPrompts, taskPromptsVersion)
+            for (const task of store.listTasks().filter((item) => ['running', 'waiting'].includes(item.state))) {
+              try { assertCurrentTaskPrompts(task, store.getTaskPrompts()); continue } catch { /* 仅使引用已变化流程的审阅失效。 */ }
+              const pending = task.checkpoints?.at(-1)
+              if (pending && !pending.coordinatorDecision && isDiagnosticCheckpoint(pending)) continue
+              if (pending && !pending.coordinatorDecision) {
+                await store.updateTask(task.taskId, (current) => ({ ...current, checkpoints: current.checkpoints.filter((item) => item.checkpointId !== pending.checkpointId),
+                  executionEvents: [...(current.executionEvents ?? []), { kind: 'checkpoint-review-invalidated', checkpoint: pending, at: new Date().toISOString() }] }))
+              }
+              topics.invalidateTaskReviews(task.taskId, 'task_prompt_selection_stale')
+            }
+          }
           if (concurrencyChanged) await store.setMaxConcurrentTasks(nextMaxConcurrentTasks)
           if (workspaceChanged) {
             await store.setAgentWorkspaceDir(nextWorkspace)
@@ -1639,10 +1768,13 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         })
         for (const item of replacements) await item.previous.dispose()
         if (guidanceChanged || taskPromptsChanged) {
+          const currentPrompts = new Map((store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map((item) => [item.id, item]))
           for (const task of store.listTasks().filter((item) => item.state === 'running')) {
+            const promptSelectionAffected = (task.taskPromptRefs ?? []).some((ref) => currentPrompts.get(ref.id)?.revision !== ref.revision)
+            if (!guidanceChanged && !promptSelectionAffected) continue
             const handle = leafHandles.get(task.taskId)
             if (!handle) continue
-            handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: '[TASK_PROMPT_CONFIG_UPDATED]\n叶子通用提示或任务流程索引已更新。下一次请求会注入最新配置；请重新判断当前流程和剩余计划，必要时重新加载并选择流程。不得用旧配置直接提交完成。' }], source: { kind: 'coordinator' } }))
+            handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[TASK_PROMPT_CONFIG_UPDATED]\n${promptSelectionAffected ? '当前任务已选流程发生修订、停用或删除；旧计划已失效。' : '叶子通用提示词已更新。'}下一次请求会注入最新配置；保留已完成证据，重新判断当前流程和剩余计划，必要时重新加载流程并提交新的 plan-confirmed。不得用旧计划推进或完成。` }], source: { kind: 'coordinator' } }))
           }
         }
         return result
