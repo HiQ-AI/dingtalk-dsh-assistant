@@ -1,0 +1,13 @@
+case,round-1,status,evidence
+已选流程的计划必须提交流程适用性声明,1,PASS,缺少 workflowAssessment 被 Host 拒绝
+计划流程引用必须与 Task 当前组合一致,1,PASS,精确 promptRefs 门禁
+流程例外必须引用固定 Topic 原始消息,1,PASS,伪造 messageId 被拒绝
+主会话必须读取所有已选流程才能审阅,1,PASS,prompt-review-required 后按需读取并通过
+主会话可拒绝与流程冲突的扩写计划,1,PASS,reject 回执且叶子收到 TASK_PLAN_REJECTED
+被拒绝计划不能继续推进阶段,1,PASS,task_workflow_plan_rejected
+已选流程修订后旧计划失效,1,PASS,重新加载后 task_workflow_plan_stale
+未引用变化流程的任务不受影响,1,PASS,未收到配置更新 steer
+完整自动化测试,1,PASS,271/271 tests passed
+本地安装包与源码一致,1,PASS,5 个关键文件 SHA-256 逐一相等
+本地 Web 与 Runtime 可访问,1,PASS,同一 Node 进程监听 3080/18998；Web 认证门禁 401；Runtime API 200
+既有流程配置保持不变,1,PASS,taskPromptsVersion=3 且 taskPrompts=10

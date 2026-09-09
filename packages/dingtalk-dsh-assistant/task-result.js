@@ -1,6 +1,13 @@
 import { z } from 'zod'
 
 const executionVersion = { inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() }
+const taskPromptRefSchema = z.object({ id: z.string().trim().min(1), revision: z.number().int().positive() }).strict()
+const workflowAssessmentSchema = z.object({
+  promptRefs: z.array(taskPromptRefSchema),
+  reusedEvidence: z.array(z.string().trim().min(1)).default([]),
+  inapplicableSteps: z.array(z.object({ promptId: z.string().trim().min(1), step: z.string().trim().min(1), reason: z.string().trim().min(1) }).strict()).default([]),
+  exceptions: z.array(z.object({ requirement: z.string().trim().min(1), basisMessageIds: z.array(z.string().trim().min(1)).min(1), reason: z.string().trim().min(1) }).strict()).default([]),
+}).strict()
 
 const completedResultSchema = z.object({
   ...executionVersion,
@@ -64,6 +71,7 @@ export const taskCheckpointSchema = z.object({
   remainingItems: z.array(z.string().trim().min(1)).default([]),
   nextStep: z.string().trim().min(1),
   needsCoordinatorDecision: z.boolean().default(false),
+  workflowAssessment: workflowAssessmentSchema.optional(),
 }).strict()
 
 export function parseTaskResult(value) {

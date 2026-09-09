@@ -61,10 +61,12 @@ class FakeResidentAdapter extends LlmAdapter {
       const accepted = calls.filter((item) => acknowledgements.some((block) => block.toolCallId === item.id))
       const checkpoints = accepted.filter((item) => item.name === 'submit_task_checkpoint')
       const version = { inputVersion: ref.inputVersion, runSequence: ref.runSequence }
+      const task = tasks.find((item) => item.taskId === ref.taskId)
       // 默认单阶段也拆成两个协议检查点；stageTask 始终引用 Host 给定阶段。
       const items = stages.length >= 2 ? stages : [`读取：${stages[0]}`, `核验：${stages[0]}`]
       if (!checkpoints.length) {
-        yield* call('submit_task_checkpoint', { ...version, kind: 'plan-confirmed', summary: 'fake 模型协议计划', completedItems: [], evidence: ['已读取本轮 Topic 输入'], remainingItems: items, nextStep: items[0], needsCoordinatorDecision: false })
+        yield* call('submit_task_checkpoint', { ...version, kind: 'plan-confirmed', summary: 'fake 模型协议计划', completedItems: [], evidence: ['已读取本轮 Topic 输入'], remainingItems: items, nextStep: items[0], needsCoordinatorDecision: false,
+          workflowAssessment: { promptRefs: task?.taskPromptRefs ?? [], reusedEvidence: [], inapplicableSteps: [], exceptions: [] } })
         return
       }
       const index = checkpoints.length - 1
@@ -111,9 +113,18 @@ class FakeResidentAdapter extends LlmAdapter {
         return
       }
     }
-    if ((input.startsWith('[TASK_COMPLETION_REVIEW]') || input.startsWith('[TASK_CHECKPOINT_REVIEW]')) && !hasToolResultAfterInput) {
+    if (input.startsWith('[TASK_COMPLETION_REVIEW]') || input.startsWith('[TASK_CHECKPOINT_REVIEW]')) {
       const request = jsonLine(input, '审阅请求')
       if (!request?.requestId) throw new Error('fake_task_review_request_missing')
+      const submitted = calls.findLast((item) => item.name === 'group_task_review_submit' && JSON.parse(item.arguments).requestId === request.requestId)
+      if (submitted && results.some((item) => item.toolCallId === submitted.id)) return
+      const readPromptIds = new Set(calls.filter((item) => item.name === 'group_task_prompt_get' && JSON.parse(item.arguments).requestId === request.requestId)
+        .filter((item) => results.some((result) => result.toolCallId === item.id)).map((item) => JSON.parse(item.arguments).id))
+      const missingPrompt = (request.promptRefs ?? []).find((ref) => !readPromptIds.has(ref.id))
+      if (missingPrompt) {
+        yield* call('group_task_prompt_get', { requestId: request.requestId, id: missingPrompt.id })
+        return
+      }
       if (input.startsWith('[TASK_COMPLETION_REVIEW]')) {
         const context = jsonLine(input, '通知上下文')
         const review = reviewFor(request.requestId)

@@ -128,6 +128,7 @@ async function createTask(h, id = 'task-input', extra = {}) {
   assert.equal(h.store.getTopic('g', request.topicId).decisions.at(-1).status, 'completed', JSON.stringify(h.runtime.listRecoveryIssues()))
   return h.store.listTasks().find((task) => task.topicRefs.some((ref) => ref.topicId === request.topicId))
 }
+const workflowAssessment = (task, patch = {}) => ({ promptRefs: task.taskPromptRefs ?? [], reusedEvidence: [], inapplicableSteps: [], exceptions: [], ...patch })
 
 test('别名修复请求创建任务，后续无称呼的图片补充续接同一叶子', async (t) => {
   const h = await setup(t, { attachments: { async saveImages() { return [{ id: 'database-image', mediaType: 'image/png' }] } } })
@@ -433,6 +434,56 @@ test('流程修订后旧选择失效，拒绝叶子用旧流程完成任务', as
   await assert.rejects(leafCall(h, task, 'submit_task_result', { ...inputVersion(task), status: 'completed', summary: '完成', evidence: ['证据'], artifacts: [] }), /task_prompt_selection_stale/)
 })
 
+test('计划绑定已选流程，主会话读完同一流程正文后才可审阅', async (t) => {
+  const h = await setup(t)
+  const config = await h.runtime.updateAgentConfig({ taskPrompts: [{ id: 'workflow-uat', name: 'UAT 交付', description: '部署后只检查启动和访问', prompt: '部署后不重复业务 E2E。', enabled: true }], taskPromptsVersion: 0 })
+  let task = await createTask(h, 'uat-plan')
+  await leafCall(h, task, 'load_task_prompt', { id: config.taskPrompts[0].id }); task = h.store.getTask(task.taskId)
+  await assert.rejects(leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '缺少流程声明', completedItems: [], evidence: [], remainingItems: ['部署'], nextStep: '部署', needsCoordinatorDecision: false }), /task_workflow_assessment_required/)
+  await assert.rejects(leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '伪造例外来源', completedItems: [], evidence: [], remainingItems: ['部署'], nextStep: '部署', needsCoordinatorDecision: false,
+    workflowAssessment: workflowAssessment(task, { exceptions: [{ requirement: 'UAT 重跑业务 E2E', basisMessageIds: ['not-a-topic-message'], reason: '主会话要求' }] }) }), /task_workflow_exception_basis_invalid/)
+  const pending = leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '按 UAT 流程部署', completedItems: [], evidence: [], remainingItems: ['部署并检查访问'], nextStep: '部署', needsCoordinatorDecision: false, workflowAssessment: workflowAssessment(task) })
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '计划一致' } })).status, 'prompt-review-required')
+  assert.equal((await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'workflow-uat' })).prompt, '部署后不重复业务 E2E。')
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '原始消息与流程一致' } })).status, 'accepted')
+  assert.equal((await pending).accepted, true)
+})
+
+test('主会话可拒绝自行扩写的冲突计划，叶子重新规划前不能推进', async (t) => {
+  const h = await setup(t)
+  const config = await h.runtime.updateAgentConfig({ taskPrompts: [{ id: 'workflow-uat', name: 'UAT 交付', description: '部署提测', prompt: '部署后不重复业务 E2E。', enabled: true }], taskPromptsVersion: 0 })
+  let task = await createTask(h, 'deploy-uat')
+  await leafCall(h, task, 'load_task_prompt', { id: config.taskPrompts[0].id }); task = h.store.getTask(task.taskId)
+  const pending = leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '部署后在 UAT 重跑完整业务 E2E', completedItems: [], evidence: [], remainingItems: ['部署', 'UAT 业务 E2E'], nextStep: '部署', needsCoordinatorDecision: true, workflowAssessment: workflowAssessment(task) })
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'workflow-uat' })
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'reject', reason: '原始消息只要求部署，完整 UAT E2E 是主会话扩写' } })
+  const rejected = await pending
+  assert.equal(rejected.code, 'task_checkpoint_rejected')
+  await assert.rejects(leafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'stage-completed', stageTask: task.stageTasks[0], summary: '已部署', completedItems: ['部署'], evidence: ['服务正常'], remainingItems: ['UAT 业务 E2E'], nextStep: 'E2E', needsCoordinatorDecision: false }), /task_workflow_plan_rejected/)
+  assert.ok(h.handles.get(task.childSessionId).sent.some((message) => message.content[0].text.includes('[TASK_PLAN_REJECTED]')))
+})
+
+test('流程修订只使引用任务的旧计划失效，未引用任务不接收更新', async (t) => {
+  const h = await setup(t, { maxConcurrentTasks: 2 })
+  const first = await h.runtime.updateAgentConfig({ taskPrompts: [{ id: 'workflow-uat', name: 'UAT 交付', description: '部署提测', prompt: '第一版', enabled: true }], taskPromptsVersion: 0 })
+  let selected = await createTask(h, 'selected'), unrelated = await createTask(h, 'unrelated')
+  await leafCall(h, selected, 'load_task_prompt', { id: 'workflow-uat' }); selected = h.store.getTask(selected.taskId)
+  const plan = leafCall(h, selected, 'submit_task_checkpoint', { ...inputVersion(selected), kind: 'plan-confirmed', summary: '第一版计划', completedItems: [], evidence: [], remainingItems: ['部署'], nextStep: '部署', needsCoordinatorDecision: false, workflowAssessment: workflowAssessment(selected) })
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求'); await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'workflow-uat' })
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '通过' } }); await plan
+  const selectedMessages = h.handles.get(selected.childSessionId).sent.length, unrelatedMessages = h.handles.get(unrelated.childSessionId).sent.length
+  const second = await h.runtime.updateAgentConfig({ taskPrompts: [{ ...first.taskPrompts[0], prompt: '第二版' }], taskPromptsVersion: first.taskPromptsVersion })
+  assert.ok(h.handles.get(selected.childSessionId).sent.length > selectedMessages)
+  assert.equal(h.handles.get(unrelated.childSessionId).sent.length, unrelatedMessages)
+  await leafCall(h, selected, 'load_task_prompt', { id: second.taskPrompts[0].id }); selected = h.store.getTask(selected.taskId)
+  await assert.rejects(leafCall(h, selected, 'submit_task_checkpoint', { ...inputVersion(selected), kind: 'stage-completed', stageTask: selected.stageTasks[0], summary: '继续旧计划', completedItems: ['部署'], evidence: ['证据'], remainingItems: [], nextStep: '完成', needsCoordinatorDecision: false }), /task_workflow_plan_stale/)
+})
+
 test('任务目标变化清空旧流程选择并拒绝未加载流程', async (t) => {
   const h = await setup(t)
   const saved = await h.runtime.updateAgentConfig({ taskPrompts: [{ name: '问题排查', description: '定位原因', prompt: '排查流程', enabled: true }], taskPromptsVersion: 0 })
@@ -475,6 +526,7 @@ async function checkpoint(h, task, patch) {
   const outcome = pending.then((value) => ({ value }), (error) => ({ error }))
   await until(() => h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')?.requestId !== previous)
   const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  for (const ref of request.promptRefs ?? []) await h.call('group_task_prompt_get', { requestId: request.requestId, id: ref.id })
   assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '检查点证据与目标一致' } })).status, 'accepted')
   const result = await outcome
   if (result.error) throw result.error
@@ -492,6 +544,7 @@ async function completeResult(h, task, accepted = true) {
   const outcome = submitted.then((value) => ({ value }), (error) => ({ error }))
   await until(() => h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')?.requestId !== previous)
   const request = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
+  for (const ref of request.promptRefs ?? []) await h.call('group_task_prompt_get', { requestId: request.requestId, id: ref.id })
   const replyReview = accepted ? await h.call('group_reply_review_get', { requestIds: [request.requestId] }) : { candidates: [] }
   await h.call('group_task_review_submit', { requestId: request.requestId, review: accepted
     ? { accepted: true, reason: '全部证据齐全', notification: { reply: '已完成核验，正常与异常测试通过。', replyToMessageId: task.title, atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: replyReview.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } }

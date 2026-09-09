@@ -66,7 +66,7 @@ const taskPromptSchema = z.object({ id: z.string().min(1), name: z.string().trim
 const taskPromptRefSchema = z.object({ id: z.string().min(1), revision: z.number().int().positive() })
 const persistedTaskCheckpointSchema = taskCheckpointSchema.extend({
   checkpointId: z.string().min(1), submittedAt: z.string().min(1),
-  coordinatorDecision: z.enum(['acknowledge', 'guidance']).optional(), coordinatorReason: z.string().min(1).optional(), guidance: z.string().min(1).optional(), reviewedAt: z.string().min(1).optional(),
+  coordinatorDecision: z.enum(['acknowledge', 'guidance', 'reject']).optional(), coordinatorReason: z.string().min(1).optional(), guidance: z.string().min(1).optional(), reviewedAt: z.string().min(1).optional(),
 })
 const taskRunSchema = z.object({
   runSequence: z.number().int().positive(), startedAt: z.string().min(1), endedAt: z.string().min(1).optional(),

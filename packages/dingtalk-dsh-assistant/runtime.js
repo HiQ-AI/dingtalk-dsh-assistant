@@ -214,7 +214,7 @@ Task 完成验收和检查点审阅通过 group_task_review_submit 返回，普�
 
 \`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从Topic 固定版本生成的独立来源证据并自行核验。
 
-新建任务必须提供至少一条 \`acceptanceCriteria\`；修订目标时也可更新 \`acceptanceCriteria\` 和 \`stageTasks\`。验收标准只描述当前目标可核验的完成条件，不得按开发、分析、部署等任务类型绑定固定模板，也不得扩大消息授权范围。
+新建任务必须提供至少一条 \`acceptanceCriteria\`；修订目标时也可更新 \`acceptanceCriteria\` 和 \`stageTasks\`。验收标准只描述原始消息明确要求的业务结果、目标环境和限制，不得把主会话建议、历史做法或预计验证步骤扩写成用户要求，也不得按开发、分析、部署等任务类型绑定固定模板。具体处理流程由叶子按插件任务流程索引选择并形成计划；你在计划和完成审阅中通过 group_task_prompt_get 按需读取同一份已选流程，结合固定 Topic 原文检查一致性。
 
 当前消息明确指名或提及已配置的 Agent 名称/别名、以 \`cc:\` 开头，或者明确确认了主会话此前提出的“是否需要我处理”询问，并且事项属于本群职责且形成可验证目标时，才允许选择 new-task。未明确指名、但你判断事项应形成任务时，必须选择 task-proposal，并在群里询问“这个事项是否需要我处理？”，暂不创建 Task；收到肯定答复后再结合原消息及其后补充选择 new-task。消息明确 @其他同事且未指向 Agent 时，说明问题正在询问这些同事，必须忽略，既不得创建 task-proposal 或 new-task，也不得主动回答；只有后续明确指向 Agent 且直接引用该消息，才视为可验证的转交。同事间讨论、事实陈述或未形成可验证目标的内容不得创建任务；与现有任务相关时只做任务关联或补充上下文，并按下方节制原则简短确认。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。
 
@@ -568,6 +568,14 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     if (task.inputVersion !== value.inputVersion || task.runSequence !== value.runSequence) throw new Error(`task_input_version_stale:${task.taskId}`)
     if (topics.hasPendingTaskInput(task)) throw new Error(`task_input_pending:${task.taskId}`)
   }
+  const samePromptRefs = (left = [], right = []) => JSON.stringify(left) === JSON.stringify(right)
+  function assertWorkflowPlan(task) {
+    const plan = [...(task.checkpoints ?? [])].reverse().find((item) => item.kind === 'plan-confirmed')
+    if (!plan) throw new Error(`task_checkpoint_plan_required:${task.taskId}`)
+    if (plan.coordinatorDecision === 'reject') throw new Error(`task_workflow_plan_rejected:${task.taskId}`)
+    if ((task.taskPromptRefs?.length ?? 0) > 0 && !plan.workflowAssessment) throw new Error(`task_workflow_assessment_required:${task.taskId}`)
+    if (plan.workflowAssessment && !samePromptRefs(plan.workflowAssessment.promptRefs, task.taskPromptRefs ?? [])) throw new Error(`task_workflow_plan_stale:${task.taskId}`)
+  }
   function updateTaskInput(taskId, value, transform) {
     return store.updateTask(taskId, (current) => { assertTaskInput(current, value); return { ...transform(current), acknowledgedInputVersion: value.inputVersion } })
   }
@@ -636,6 +644,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       for (const ref of task.taskPromptRefs ?? []) if (prompts.get(ref.id)?.revision !== ref.revision) throw new Error(`task_prompt_selection_stale:${ref.id}`)
       const checkpoints = task.checkpoints ?? []
       if (checkpoints[0]?.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
+      assertWorkflowPlan(task)
       if (checkpoints.length < 2) throw new Error(`task_checkpoints_insufficient:${taskId}`)
       if (!checkpoints.at(-1)?.coordinatorDecision) throw new Error(`task_checkpoint_review_pending:${taskId}`)
       if ((checkpoints.at(-1)?.remainingItems?.length ?? 0) > 0) throw new Error(`task_checkpoints_remaining:${taskId}`)
@@ -652,7 +661,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
       const current = store.getTask(taskId)
       if (current === undefined || current.state === 'queued' || current.state === 'completed') throw new Error(`task_not_active:${taskId}`)
-      if (current.inputVersion !== prepared.task.inputVersion || current.runSequence !== prepared.task.runSequence || current.objective !== prepared.task.objective || current.checkpoints?.at(-1)?.checkpointId !== prepared.lastCheckpointId) throw new Error(`task_result_context_changed:${taskId}`)
+      if (current.inputVersion !== prepared.task.inputVersion || current.runSequence !== prepared.task.runSequence || current.objective !== prepared.task.objective || current.checkpoints?.at(-1)?.checkpointId !== prepared.lastCheckpointId || !samePromptRefs(current.taskPromptRefs ?? [], prepared.task.taskPromptRefs ?? [])) throw new Error(`task_result_context_changed:${taskId}`)
       assertTaskInput(current, result)
       const goal = ctx.goals.get(prepared.handle.agent)
       if (goal === undefined) throw new Error(`task_goal_missing:${taskId}`)
@@ -710,6 +719,20 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       }
       if ((task.checkpoints?.length ?? 0) === 0 && checkpoint.kind !== 'plan-confirmed') throw new Error(`task_checkpoint_plan_required:${taskId}`)
       if (checkpoint.kind === 'plan-confirmed' && checkpoint.remainingItems.length < 1) throw new Error(`task_checkpoint_plan_insufficient:${taskId}`)
+      if (checkpoint.kind === 'plan-confirmed') {
+        const refs = task.taskPromptRefs ?? []
+        if (refs.length > 0 && !checkpoint.workflowAssessment) throw new Error(`task_workflow_assessment_required:${taskId}`)
+        if (checkpoint.workflowAssessment && !samePromptRefs(checkpoint.workflowAssessment.promptRefs, refs)) throw new Error(`task_workflow_assessment_refs_invalid:${taskId}`)
+        const selectedIds = new Set(refs.map((ref) => ref.id))
+        if ((checkpoint.workflowAssessment?.inapplicableSteps ?? []).some((item) => !selectedIds.has(item.promptId))) throw new Error(`task_workflow_inapplicable_prompt_invalid:${taskId}`)
+        const messageIds = new Set(topics.taskMessages(task).map((message) => message.messageId))
+        for (const exception of checkpoint.workflowAssessment?.exceptions ?? []) {
+          if (new Set(exception.basisMessageIds).size !== exception.basisMessageIds.length || exception.basisMessageIds.some((id) => !messageIds.has(id))) throw new Error(`task_workflow_exception_basis_invalid:${taskId}`)
+        }
+      } else {
+        if (checkpoint.workflowAssessment) throw new Error(`task_workflow_assessment_plan_only:${taskId}`)
+        assertWorkflowPlan(task)
+      }
       if (checkpoint.kind === 'stage-completed' && (!checkpoint.stageTask || !(task.stageTasks ?? []).includes(checkpoint.stageTask))) throw new Error(`task_checkpoint_stage_invalid:${taskId}`)
       const previousRemainingItems = task.checkpoints?.at(-1)?.remainingItems ?? []
       if (checkpoint.kind === 'stage-completed') {
@@ -728,6 +751,10 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       ? { decision: 'acknowledge', reason: 'Host 已校验阶段顺序、执行版本和非空证据。' }
       : await withoutInitiator(() => reviewTaskCheckpoint(reviewTask, submitted))
     await persistCheckpointReview(reviewTask, submitted, review)
+    if (review.decision === 'reject') {
+      await followupTaskInternal(reviewTask, `[TASK_PLAN_REJECTED]\n当前计划与原始授权或已选任务流程不一致：${review.reason}\n\n重新核对固定 Topic 原文和已选流程；主会话生成的目标或验收标准不能作为流程例外依据。修正后重新提交 plan-confirmed。`)
+      return { accepted: false, taskId, code: 'task_checkpoint_rejected', checkpointId: submitted.checkpointId, reason: review.reason }
+    }
     return { accepted: true, taskId, checkpointId: submitted.checkpointId, coordinatorDecision: review.decision, reason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}) }
   }
   const listAuthorizationRequests = () => store.listTasks().flatMap((task) => {
@@ -824,7 +851,7 @@ Task objective 限制的是业务动作范围，包括业务代码、业务数�
 
 ### 与主会话的内部检查点
 
-开始执行后把当前目标拆成至少 1 个有验收意义的检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed。后续按 remainingItems 顺序逐项提交 stage-completed，每次 completedItems 只填本次完成的第一项，不累计历史；阶段提交被拒绝时先纠正并取得确认，再进入下一阶段。Host 会自动校验普通阶段的版本、顺序和非空证据，需要协调判断时再交给主会话。收到新版 TASK_TOPIC_CONTEXT 后，按其中的 progressImpact 处理：preserve 表示保留未受影响的既有进展，replan 表示按修订范围重提计划。范围冲突、证据缺口或风险实质变化时提交对应 checkpoint。完成前 remainingItems 必须为空。不要提交命令流水、等待或无新事实的状态；checkpoint 不发送群聊，也不代替 submit_task_result。
+开始执行后把当前目标拆成至少 1 个有验收意义的检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed。计划必须携带 workflowAssessment：精确列出当前已选流程引用、可复用证据、不适用步骤，以及任何覆盖流程要求的例外；例外必须引用明确提出该要求的原始 basisMessageIds，主会话生成的目标、验收标准或旧摘要不能充当例外依据。若当前目标与流程冲突且原始消息没有明确例外，提交 scope-conflict 或修正计划，不能按扩写目标继续执行。后续按 remainingItems 顺序逐项提交 stage-completed，每次 completedItems 只填本次完成的第一项，不累计历史；阶段提交被拒绝时先纠正并取得确认，再进入下一阶段。Host 会自动校验普通阶段的版本、顺序和非空证据，需要协调判断时再交给主会话。收到新版 TASK_TOPIC_CONTEXT 后，按其中的 progressImpact 处理：preserve 表示保留未受影响的既有进展，replan 表示按修订范围重提计划。范围冲突、证据缺口或风险实质变化时提交对应 checkpoint。完成前 remainingItems 必须为空。不要提交命令流水、等待或无新事实的状态；checkpoint 不发送群聊，也不代替 submit_task_result。
 
 ### 任务授权边界
 
@@ -954,6 +981,12 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           kind: { type: 'string', enum: ['plan-confirmed', 'stage-completed', 'scope-conflict', 'evidence-gap', 'risk-changed'] }, stageTask: { type: 'string' }, summary: { type: 'string' },
           completedItems: { type: 'array', description: 'stage-completed 时只包含上次 remainingItems 的第一项，不累计历史完成项。', items: { type: 'string' } }, evidence: { type: 'array', items: { type: 'string' } }, remainingItems: { type: 'array', description: 'stage-completed 时为上次 remainingItems 去掉第一项后的有序列表。', items: { type: 'string' } },
           nextStep: { type: 'string' }, needsCoordinatorDecision: { type: 'boolean' },
+          workflowAssessment: { type: 'object', additionalProperties: false, properties: {
+            promptRefs: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, revision: { type: 'integer' } }, required: ['id', 'revision'] } },
+            reusedEvidence: { type: 'array', items: { type: 'string' } },
+            inapplicableSteps: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { promptId: { type: 'string' }, step: { type: 'string' }, reason: { type: 'string' } }, required: ['promptId', 'step', 'reason'] } },
+            exceptions: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { requirement: { type: 'string' }, basisMessageIds: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } }, required: ['requirement', 'basisMessageIds', 'reason'] } },
+          }, required: ['promptRefs', 'reusedEvidence', 'inapplicableSteps', 'exceptions'] },
         }, required: ['inputVersion', 'runSequence', 'kind', 'summary', 'completedItems', 'evidence', 'remainingItems', 'nextStep', 'needsCoordinatorDecision'] },
         output: {
           schema: { oneOf: [{ type: 'object', additionalProperties: false, properties: {
@@ -965,6 +998,10 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
               expected: { type: 'object', additionalProperties: false, properties: { completedItems: { type: 'array', items: { type: 'string' } }, remainingItems: { type: 'array', items: { type: 'string' } } }, required: ['completedItems', 'remainingItems'] },
               instruction: { type: 'string' },
             }, required: ['accepted', 'taskId', 'code', 'inputVersion', 'runSequence', 'expected', 'instruction'],
+          }, {
+            type: 'object', additionalProperties: false, properties: {
+              accepted: { type: 'boolean', const: false }, taskId: { type: 'string' }, code: { type: 'string', const: 'task_checkpoint_rejected' }, checkpointId: { type: 'string' }, reason: { type: 'string' },
+            }, required: ['accepted', 'taskId', 'code', 'checkpointId', 'reason'],
           }] },
           render: (_args, out) => [{ type: 'text', text: out.accepted === false ? JSON.stringify(out) : out.coordinatorDecision === 'guidance' ? `Coordinator guidance: ${out.guidance}` : `Checkpoint acknowledged: ${out.reason}` }],
         },
@@ -1066,7 +1103,10 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         const pendingCheckpoint = task.checkpoints?.at(-1)
         if (pendingCheckpoint && !pendingCheckpoint.coordinatorDecision) {
           void withoutInitiator(() => reviewTaskCheckpoint(task, pendingCheckpoint))
-            .then((review) => persistCheckpointReview(task, pendingCheckpoint, review))
+            .then(async (review) => {
+              await persistCheckpointReview(task, pendingCheckpoint, review)
+              if (review.decision === 'reject') await followupTaskInternal(task, `[TASK_PLAN_REJECTED]\n当前计划与原始授权或已选任务流程不一致：${review.reason}\n\n重新核对固定 Topic 原文和已选流程后提交新的 plan-confirmed。`)
+            })
             .catch((error) => recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'checkpoint-review-recovery', error: error.message }))
         }
         let handle = leafHandles.get(task.taskId)
@@ -1662,10 +1702,13 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         })
         for (const item of replacements) await item.previous.dispose()
         if (guidanceChanged || taskPromptsChanged) {
+          const currentPrompts = new Map((store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map((item) => [item.id, item]))
           for (const task of store.listTasks().filter((item) => item.state === 'running')) {
+            const promptSelectionAffected = (task.taskPromptRefs ?? []).some((ref) => currentPrompts.get(ref.id)?.revision !== ref.revision)
+            if (!guidanceChanged && !promptSelectionAffected) continue
             const handle = leafHandles.get(task.taskId)
             if (!handle) continue
-            handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: '[TASK_PROMPT_CONFIG_UPDATED]\n叶子通用提示或任务流程索引已更新。下一次请求会注入最新配置；请重新判断当前流程和剩余计划，必要时重新加载并选择流程。不得用旧配置直接提交完成。' }], source: { kind: 'coordinator' } }))
+            handle.agent.steer(createUserMessage({ content: [{ type: 'text', text: `[TASK_PROMPT_CONFIG_UPDATED]\n${promptSelectionAffected ? '当前任务已选流程发生修订、停用或删除；旧计划已失效。' : '叶子通用提示词已更新。'}下一次请求会注入最新配置；保留已完成证据，重新判断当前流程和剩余计划，必要时重新加载流程并提交新的 plan-confirmed。不得用旧计划推进或完成。` }], source: { kind: 'coordinator' } }))
           }
         }
         return result

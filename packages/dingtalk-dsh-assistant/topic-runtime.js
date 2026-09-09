@@ -91,7 +91,7 @@ const completionReviewSchema = z.union([
   z.strictObject({ accepted: z.literal(false), reason: z.string().trim().min(1) }),
   z.strictObject({ accepted: z.literal(true), reason: z.string().trim().min(1), notification: notificationDraftSchema }),
 ])
-const checkpointReviewSchema = z.strictObject({ decision: z.enum(['acknowledge', 'guidance']), reason: z.string().trim().min(1), guidance: z.string().trim().min(1).optional() })
+const checkpointReviewSchema = z.strictObject({ decision: z.enum(['acknowledge', 'guidance', 'reject']), reason: z.string().trim().min(1), guidance: z.string().trim().min(1).optional() })
 const COMPLETION_MESSAGE_MAX_CHARS = 12_000
 const COMPLETION_MESSAGE_MAX_COUNT = 20
 
@@ -515,6 +515,18 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const candidates = [...new Map(requests.flatMap((request) => request.candidates).map((candidate) => [candidate.outboundId, candidate])).values()]
       return { requestIds, candidates, candidateCount: candidates.length }
     })
+    tool('group_task_prompt_get', '按审阅请求读取当前 Task 已选任务流程正文；必须读取完全部已选流程后才能提交计划或完成审阅。', { type: 'object', additionalProperties: false, required: ['requestId', 'id'], properties: {
+      requestId: { type: 'string' }, id: { type: 'string' },
+    } }, ({ requestId, id }) => {
+      const request = reviews.get(requestId)
+      if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
+      const ref = request.promptRefs.find((item) => item.id === id)
+      if (!ref) throw new Error('task_review_prompt_not_selected')
+      const prompt = (store.getTaskPrompts?.() ?? []).find((item) => item.id === id && item.enabled && item.revision === ref.revision)
+      if (!prompt) throw new Error('task_review_prompt_stale')
+      request.readPromptIds.add(id)
+      return { id: prompt.id, name: prompt.name, description: prompt.description, prompt: prompt.prompt, revision: prompt.revision }
+    })
     tool('group_reply_submit', '提交绑定 Topic 与 Task 输入版本的结果通知；不依赖全群 observedRequestIds。', { type: 'object', additionalProperties: false, required: ['requestId', 'reply'], properties: {
       requestId: { type: 'string' }, reply: { type: 'string' }, replyReview: replyReviewJsonSchema, replyToMessageId: { type: 'string' }, atOpenDingTalkIds: { type: 'array', items: { type: 'string' } },
     } }, async (args) => {
@@ -564,10 +576,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const request = reviews.get(requestId)
       if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
       const task = store.getTask(request.task.taskId)
-      if (!task || task.inputVersion !== request.task.inputVersion || task.runSequence !== request.task.runSequence) { reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
+      if (!task || task.inputVersion !== request.task.inputVersion || task.runSequence !== request.task.runSequence || JSON.stringify(task.taskPromptRefs ?? []) !== JSON.stringify(request.promptRefs)) { reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
+      const missingPromptRefs = request.promptRefs.filter((ref) => !request.readPromptIds.has(ref.id))
+      if (missingPromptRefs.length) return { status: 'prompt-review-required', missingPromptRefs }
       if ((request.kind === 'completion') !== Object.hasOwn(input ?? {}, 'accepted')) throw new Error('task_review_kind_invalid')
       const review = request.kind === 'completion' ? completionReviewSchema.parse(input) : checkpointReviewSchema.parse(input)
-      if ('decision' in review && ((review.decision === 'guidance' && !review.guidance) || (review.decision === 'acknowledge' && review.guidance))) throw new Error('task_review_guidance_invalid')
+      if ('decision' in review && ((review.decision === 'guidance' && !review.guidance) || (review.decision !== 'guidance' && review.guidance))) throw new Error('task_review_guidance_invalid')
+      if ('decision' in review && review.decision === 'reject' && request.value.kind !== 'plan-confirmed') throw new Error('task_review_reject_plan_only')
       if (request.kind === 'completion' && review.accepted) {
         const rejected = completionPreflight(request, task, request.value, 'running')
         if (rejected) return rejected
@@ -581,7 +596,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
   function completionPreflight(request, task, result, expectedState) {
     if (pendingInput(request.groupId).length) return { status: 'routing-required' }
     const current = store.getTask(task.taskId)
-    if (!current || current.inputVersion !== request.task.inputVersion || current.runSequence !== request.task.runSequence || current.state !== expectedState
+    if (!current || current.inputVersion !== request.task.inputVersion || current.runSequence !== request.task.runSequence || current.state !== expectedState || JSON.stringify(current.taskPromptRefs ?? []) !== JSON.stringify(request.promptRefs)
       || (expectedState === 'completed' && JSON.stringify(current.result) !== JSON.stringify(result))) return { status: 'task-stale' }
     if (request.observedTopics.some((ref) => store.getTopic(request.groupId, ref.topicId)?.revision !== ref.revision)) return { status: 'topic-stale' }
     if (current.topicRefs.some((ref) => { const topic = store.getTopic(request.groupId, ref.topicId); return topic.processedRevision < topic.revision })) return { status: 'topic-pending' }
@@ -615,21 +630,25 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     if (existing) return existing.promise
     let resolve, reject
     const promise = new Promise((yes, no) => { resolve = yes; reject = no })
-    const messages = kind === 'completion' ? taskMessages(task) : []
-    const visibleMessages = kind === 'completion' ? boundedItems([...messages].reverse(), COMPLETION_MESSAGE_MAX_CHARS, COMPLETION_MESSAGE_MAX_COUNT).reverse() : []
+    const messages = taskMessages(task)
+    const visibleMessages = boundedItems([...messages].reverse(), COMPLETION_MESSAGE_MAX_CHARS, COMPLETION_MESSAGE_MAX_COUNT).reverse()
+    const promptRefs = [...(task.taskPromptRefs ?? [])]
     const request = { requestId: randomUUID(), groupId: task.groupId, task, kind, value, resolve, reject, promise,
+      promptRefs, readPromptIds: new Set(),
       ...(kind === 'completion' ? { resultKey: `task-result:${task.taskId}:completed${(task.completionSequence ?? 0) > 0 ? `:${task.completionSequence}` : ''}`, messages,
         candidates: scopedCandidates(task.groupId, messages, task.topicRefs, [task.taskId]), readReview: false,
         observedTopics: task.topicRefs.map((ref) => ({ topicId: ref.topicId, revision: store.getTopic(task.groupId, ref.topicId).revision })) } : {}) }
     try {
       reviews.set(request.requestId, request)
       const label = kind === 'completion' ? '[TASK_COMPLETION_REVIEW]' : '[TASK_CHECKPOINT_REVIEW]'
-      const reviewInfo = { requestId: request.requestId, kind, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence }
+      const reviewInfo = { requestId: request.requestId, kind, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, promptRefs }
       const completionContext = kind === 'completion' ? `\n通知上下文：${JSON.stringify({ topicRefs: task.topicRefs, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length, replyReviewCandidateCount: request.candidates.length })}` : ''
+      const checkpointContext = kind === 'checkpoint' ? `\n任务原始上下文：${JSON.stringify({ topicRefs: task.topicRefs, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length })}` : ''
       const instruction = kind === 'completion'
         ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。通过时同时准备群通知；存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界，并从通知上下文选择引用消息和真正需要获知的参与人。"
-        : `检查点审阅：{decision:'acknowledge'|'guidance',reason:string,guidance?:string}。`
-      const agent = send(task.groupId, `${label}\n审阅请求：${JSON.stringify(reviewInfo)}\nTask ID: ${task.taskId}\n当前有效目标：${task.objective}\n验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n待审阅内容：${JSON.stringify(value)}${completionContext}\n通过 group_task_review_submit 提交内部判断。${instruction}核对全部当前范围和证据，不用自然语言结束请求。`)
+        : `检查点审阅：{decision:'acknowledge'|'guidance'|'reject',reason:string,guidance?:string}。计划与原始消息或任务流程冲突时必须 reject；只有原始消息明确支持的 workflowAssessment.exceptions 才能覆盖流程。`
+      const promptInstruction = promptRefs.length ? `先按 requestId 用 group_task_prompt_get 逐项读取 ${promptRefs.length} 个已选流程正文；未读完不能提交审阅。` : '当前 Task 未选择专用流程，按通用规范审阅。'
+      const agent = send(task.groupId, `${label}\n审阅请求：${JSON.stringify(reviewInfo)}\nTask ID: ${task.taskId}\n当前有效目标：${task.objective}\n验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n待审阅内容：${JSON.stringify(value)}${completionContext}${checkpointContext}\n${promptInstruction}\n通过 group_task_review_submit 提交内部判断。${instruction}核对原始消息、当前授权、已选流程、计划和证据；主会话生成的目标或验收标准不能作为覆盖流程的例外依据。不用自然语言结束请求。`)
       monitor(agent, request, reviews)
     } catch (error) { reviews.delete(request.requestId); reject(error) }
     return promise
