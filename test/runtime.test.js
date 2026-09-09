@@ -94,6 +94,20 @@ async function setup(t, options = {}) {
 async function ingest(h, id, extra = {}) {
   return h.runtime.ingest({ groupId: 'g', messageId: id, text: `@助理 ${id}`, occurredAt: '2026-09-07T00:00:00Z', senderName: '甲', senderOpenDingTalkId: 'od-a', ...extra })
 }
+
+test('Resident 完整提示词保留群职责与动态别名，不叠加登录人特殊禁令', async (t) => {
+  const h = await setup(t)
+  const responsibility = '负责编辑器；明确要求助理或当前登录人处理时承接任务。'
+  await h.store.updateGroup({ groupId: 'g', responsibility })
+  const prompt = () => h.resident().sections.map((section) => typeof section.text === 'function' ? section.text() : section.text).join('\n')
+  await h.store.setAgentNames(['助理', '当前登录人'])
+  assert.ok(prompt().includes(responsibility))
+  assert.ok(prompt().includes('当前 Agent 名称/别名：["助理","当前登录人"]'))
+  assert.doesNotMatch(prompt(), /DWS 登录人/u, '完整协议中不能残留准入或静默的登录人特殊规则')
+  await h.store.setAgentNames(['助理'])
+  assert.ok(prompt().includes('当前 Agent 名称/别名：["助理"]'), '配置变更应在下一次提示词计算中生效')
+})
+
 async function route(h, topicByMessage = {}, groupId = 'g') {
   await h.runtime.recoverInterruptedDecisions()
   const request = h.envelope('[GROUP_TOPIC_ROUTE]', groupId)
@@ -114,6 +128,27 @@ async function createTask(h, id = 'task-input', extra = {}) {
   assert.equal(h.store.getTopic('g', request.topicId).decisions.at(-1).status, 'completed', JSON.stringify(h.runtime.listRecoveryIssues()))
   return h.store.listTasks().find((task) => task.topicRefs.some((ref) => ref.topicId === request.topicId))
 }
+
+test('别名修复请求创建任务，后续无称呼的图片补充续接同一叶子', async (t) => {
+  const h = await setup(t, { attachments: { async saveImages() { return [{ id: 'database-image', mediaType: 'image/png' }] } } })
+  await h.store.setAgentNames(['助理', '当前登录人'])
+  await ingest(h, 'repair-request', { text: '@当前登录人(当前登录人) 选择数据集时切换数据库列表未更新，需要修复；后续步骤禁用数据库切换。' })
+  const first = (await route(h)).pendingDecisions[0]
+  assert.equal((await decide(h, first, { actions: [{ kind: 'new-task', title: '数据库切换修复', objective: '修复首步切库刷新并禁用后续步骤切库', acceptanceCriteria: ['首步切库刷新列表，后续步骤不可切库'], topicRefs: [{ topicId: first.topicId, revision: first.revision }] }], reply: '收到，我来处理。' })).status, 'accepted')
+  const task = h.store.listTasks()[0]
+  assert.equal(task.state, 'running')
+  await ingest(h, 'repair-image', { text: '[图片消息] 问题页面截图', images: [{ data: 'base64', mediaType: 'image/png' }] })
+  const second = (await route(h, { 'repair-image': first.topicId })).pendingDecisions[0]
+  const review = await h.call('group_reply_review_get', { requestIds: [second.requestId] })
+  assert.equal((await decide(h, second, { basisMessageIds: ['repair-image'], actions: [{ kind: 'task-context', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, context: '补充问题页面截图', progressImpact: 'preserve', topicRefs: [{ topicId: second.topicId, revision: second.revision }] }], reply: '收到截图，会结合处理。', replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } })).status, 'accepted')
+  const updated = h.store.getTask(task.taskId)
+  assert.equal(h.store.listTasks().length, 1)
+  assert.equal(updated.childSessionId, task.childSessionId)
+  assert.equal(updated.inputVersion, task.inputVersion + 1)
+  assert.equal(updated.runSequence, task.runSequence)
+  assert.deepEqual(updated.topicRefs, [{ topicId: second.topicId, revision: second.revision }])
+  assert.ok(JSON.stringify(h.handles.get(task.childSessionId).sent).includes('database-image'))
+})
 
 test('入站持久接收立即返回，模型尚未提交时也能接收后续消息', async (t) => {
   const h = await setup(t)

@@ -78,7 +78,6 @@ export async function apply(ctx, config = {}) {
     runner: dwsRunner,
   })
   const initialEnvironment = await inspectEnvironment({ runner: dwsRunner, profile: dwsConfig.profile })
-  runtime.setCurrentDwsUserName(initialEnvironment.dws.user)
   let dwsBridgeHealth = dwsConfig.enabled === true ? { healthy: false, groups: [] } : undefined
   const stopDws = dwsConfig.enabled === true
     ? startDwsBridge({
@@ -94,7 +93,6 @@ export async function apply(ctx, config = {}) {
   runtime.getDwsBridgeHealth = () => dwsBridgeHealth ?? { healthy: false, groups: [] }
   runtime.inspectEnvironment = async () => {
     const environment = await inspectEnvironment({ runner: dwsRunner, profile: dwsConfig.profile })
-    runtime.setCurrentDwsUserName(environment.dws.user)
     return environment
   }
   runtime.searchGroups = async (query) => {
