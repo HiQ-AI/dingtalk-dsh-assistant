@@ -300,7 +300,7 @@ test('完成审阅一次提交通知草稿，Task 落盘后才写入 Outbox', as
   assert.equal(context.messages.length, 1)
   assert.equal(h.sent.some((item) => item.startsWith('[TASK_COORDINATION]')), false)
   assert.equal(h.store.getGroup('g').outbox.length, 0)
-  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'delivery' })
+  await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['delivery'] })
   assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted: true, reason: '证据完整', notification: {
     reply: '核验已完成', replyToMessageId: 'a1', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
   } } })).status, 'accepted')
@@ -427,7 +427,7 @@ test('无专用流程时审阅者仍可见目录和选择依据并读取未选�
   const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
   assert.deepEqual(h.envelope('[TASK_CHECKPOINT_REVIEW]', '可用流程索引').map((item) => item.id), ['investigate', 'repair'])
   assert.equal(h.envelope('[TASK_CHECKPOINT_REVIEW]', '流程选择依据').reason, '暂认为无需专用流程')
-  assert.equal((await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'repair' })).prompt, '按流程核验')
+  assert.equal((await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['repair'] })).prompts[0].prompt, '按流程核验')
   assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'reject', reason: '应补选修复流程' } })).status, 'accepted')
   assert.equal((await pending).decision, 'reject')
 })
@@ -440,7 +440,7 @@ test('审阅读取后已选或未选候选改版、禁用、删除都使旧请�
     const pending = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '计划' })
     const outcome = pending.then((value) => ({ value }), (error) => ({ error }))
     const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
-    await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'flow' })
+    await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['flow'] })
     const updated = change === 'deleted' ? [] : [{ ...reviewPrompt('flow', change === 'revision' ? '新版流程' : '按流程核验'), enabled: change !== 'disabled' }]
     await h.store.setTaskPrompts([...updated, reviewPrompt('other')], 1)
     assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '通过' } })).status, 'task-stale')
@@ -456,16 +456,17 @@ test('审阅读取后已选或未选候选改版、禁用、删除都使旧请�
   await pending
 })
 
-test('多流程组合必须逐项读取，后续检查点会使原审阅失效', async (t) => {
+test('多流程组合一次批量读取，后续检查点会使原审阅失效', async (t) => {
   const h = await setup(t), fixture = await taskFixture(h)
   await h.store.setTaskPrompts([reviewPrompt('investigate'), reviewPrompt('repair')], 0)
   const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, taskPromptRefs: [{ id: 'investigate', revision: 1 }, { id: 'repair', revision: 1 }] }))
   const outcome = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '组合计划' }).then((value) => ({ value }), (error) => ({ error }))
   const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
   const args = { requestId: request.requestId, review: { decision: 'acknowledge', reason: '通过' } }
-  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'investigate' })
-  assert.deepEqual((await h.call('group_task_review_submit', args)).missingPromptRefs, [{ id: 'repair', revision: 1 }])
-  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'repair' })
+  await assert.rejects(h.call('group_task_prompt_get', { requestId: request.requestId, ids: [] }), /task_review_prompt_ids_required/)
+  assert.deepEqual((await h.call('group_task_review_submit', args)).missingPromptRefs, [{ id: 'investigate', revision: 1 }, { id: 'repair', revision: 1 }])
+  const promptResult = await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['investigate', 'investigate', 'repair'] })
+  assert.deepEqual(promptResult.prompts.map((item) => item.id), ['investigate', 'repair'])
   await h.store.updateTask(task.taskId, (current) => ({ ...current, checkpoints: [{ checkpointId: 'later-diagnostic', inputVersion: current.inputVersion, runSequence: current.runSequence, kind: 'scope-conflict', summary: '需要改计划', evidence: [], completedItems: [], remainingItems: [], nextStep: '协调', needsCoordinatorDecision: true, submittedAt: '2026-09-09T01:00:00Z' }] }))
   assert.equal((await h.call('group_task_review_submit', args)).status, 'task-stale')
   assert.match((await outcome).error.message, /task_review_context_changed/)
@@ -477,9 +478,9 @@ test('诊断检查点可在旧流程删除后不读取流程获得协调意见',
   const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, taskPromptRefs: [{ id: 'removed', revision: 1 }] }))
   const pending = h.coordinator.requestReview('checkpoint', task, { kind: 'scope-conflict', summary: '旧流程不可用' })
   const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
-  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'candidate' })
+  await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['candidate'] })
   await h.store.setTaskPrompts([reviewPrompt('candidate', '改版候选')], 1)
-  assert.equal((await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'candidate' })).status, 'prompt-unavailable')
+  assert.equal((await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['candidate'] })).status, 'prompt-unavailable')
   const updatedTask = await h.store.updateTask(task.taskId, (current) => ({ ...current, taskPromptRefs: [] }))
   assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'guidance', reason: '重订计划', guidance: '按当前索引匹配' } })).status, 'accepted')
   assert.equal((await pending).decision, 'guidance')

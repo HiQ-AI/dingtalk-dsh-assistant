@@ -119,10 +119,10 @@ class FakeResidentAdapter extends LlmAdapter {
       const submitted = calls.findLast((item) => item.name === 'group_task_review_submit' && JSON.parse(item.arguments).requestId === request.requestId)
       if (submitted && results.some((item) => item.toolCallId === submitted.id)) return
       const readPromptIds = new Set(calls.filter((item) => item.name === 'group_task_prompt_get' && JSON.parse(item.arguments).requestId === request.requestId)
-        .filter((item) => results.some((result) => result.toolCallId === item.id)).map((item) => JSON.parse(item.arguments).id))
-      const missingPrompt = (request.promptRefs ?? []).find((ref) => !readPromptIds.has(ref.id))
-      if (missingPrompt) {
-        yield* call('group_task_prompt_get', { requestId: request.requestId, id: missingPrompt.id })
+        .filter((item) => results.some((result) => result.toolCallId === item.id)).flatMap((item) => JSON.parse(item.arguments).ids))
+      const missingPromptIds = (request.promptRefs ?? []).filter((ref) => !readPromptIds.has(ref.id)).map((ref) => ref.id)
+      if (missingPromptIds.length) {
+        yield* call('group_task_prompt_get', { requestId: request.requestId, ids: missingPromptIds })
         return
       }
       if (input.startsWith('[TASK_COMPLETION_REVIEW]')) {

@@ -547,22 +547,26 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if ((request.readSectionOffsets.get(section) ?? 0) === offset) request.readSectionOffsets.set(section, page.nextOffset)
       return page
     })
-    tool('group_task_prompt_get', '按审阅请求读取已选或索引中候选任务流程正文；核查是否漏选适用流程，允许多个组合或确无匹配。', { type: 'object', additionalProperties: false, required: ['requestId', 'id'], properties: {
-      requestId: { type: 'string' }, id: { type: 'string' },
-    } }, ({ requestId, id }) => {
+    tool('group_task_prompt_get', '按审阅请求批量读取已选或索引中候选任务流程正文；一次传入本轮需要的全部流程 ID，核查是否漏选适用流程，允许多个组合或确无匹配。', { type: 'object', additionalProperties: false, required: ['requestId', 'ids'], properties: {
+      requestId: { type: 'string' }, ids: { type: 'array', items: { type: 'string' } },
+    } }, ({ requestId, ids }) => {
       const request = reviews.get(requestId)
       if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
-      const ref = request.promptCatalog.find((item) => item.id === id)
-      if (!ref) throw new Error('task_review_prompt_not_available')
-      const prompt = (store.getTaskPrompts?.() ?? []).find((item) => item.id === id && item.enabled && item.revision === ref.revision)
-      if (!prompt) {
-        if (diagnosticCheckpoint(request)) return { status: 'prompt-unavailable', id, nextAction: 'continue-diagnostic-review' }
-        const error = `task_prompt_selection_stale:${id}`
+      if (ids.length < 1) throw new Error('task_review_prompt_ids_required')
+      const uniqueIds = [...new Set(ids)]
+      const refs = uniqueIds.map((id) => request.promptCatalog.find((item) => item.id === id))
+      if (refs.some((ref) => !ref)) throw new Error('task_review_prompt_not_available')
+      const currentPrompts = store.getTaskPrompts?.() ?? []
+      const prompts = refs.map((ref) => currentPrompts.find((item) => item.id === ref.id && item.enabled && item.revision === ref.revision))
+      const unavailable = refs.filter((_ref, index) => !prompts[index]).map((ref) => ref.id)
+      if (unavailable.length) {
+        if (diagnosticCheckpoint(request)) return { status: 'prompt-unavailable', ids: unavailable, nextAction: 'continue-diagnostic-review' }
+        const error = `task_prompt_selection_stale:${unavailable.join(',')}`
         reviews.delete(requestId); request.reject(new Error(error))
         return { status: 'task-stale', error }
       }
-      request.readPromptRefs.set(id, { id, revision: prompt.revision })
-      return { id: prompt.id, name: prompt.name, description: prompt.description, prompt: prompt.prompt, revision: prompt.revision }
+      for (const prompt of prompts) request.readPromptRefs.set(prompt.id, { id: prompt.id, revision: prompt.revision })
+      return { prompts: prompts.map(({ id, name, description, prompt, revision }) => ({ id, name, description, prompt, revision })) }
     })
     tool('group_reply_submit', '提交绑定 Topic 与 Task 输入版本的结果通知；不依赖全群 observedRequestIds。', { type: 'object', additionalProperties: false, required: ['requestId', 'reply'], properties: {
       requestId: { type: 'string' }, reply: { type: 'string' }, replyReview: replyReviewJsonSchema, replyToMessageId: { type: 'string' }, atOpenDingTalkIds: { type: 'array', items: { type: 'string' } },
@@ -700,7 +704,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const instruction = kind === 'completion'
         ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。通过时同时准备群通知；存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界，并从通知上下文选择引用消息和真正需要获知的参与人。"
         : `检查点审阅：{decision:'acknowledge'|'guidance'|'reject',reason:string,guidance?:string}。计划与原始消息或任务流程冲突时必须 reject；只有原始消息明确支持的 workflowAssessment.exceptions 才能覆盖流程。`
-      const promptInstruction = diagnosticCheckpoint(request) ? '这是异常报告，即使未选流程、旧流程过期或未读完也必须保持协调通道可用，不批准阶段推进。' : `${promptRefs.length ? `先按 requestId 用 group_task_prompt_get 逐项读取 ${promptRefs.length} 个已选流程正文；未读完不能提交审阅。` : '当前未选择专用流程，需结合索引核查是否确无匹配。'}核查选择原因和可用流程索引；可按需读取未选候选。若漏选适用流程应要求重新规划，允许多个流程组合，也允许有明确理由的无匹配。`
+      const promptInstruction = diagnosticCheckpoint(request) ? '这是异常报告，即使未选流程、旧流程过期或未读完也必须保持协调通道可用，不批准阶段推进。' : `${promptRefs.length ? `先按 requestId 用 group_task_prompt_get 一次传入全部 ${promptRefs.length} 个已选流程 ID 并批量读取正文；未读完不能提交审阅。` : '当前未选择专用流程，需结合索引核查是否确无匹配。'}核查选择原因和可用流程索引；如需读取未选候选，也应合并到一次批量调用。若漏选适用流程应要求重新规划，允许多个流程组合，也允许有明确理由的无匹配。`
       const contextInstruction = diagnosticCheckpoint(request) ? '异常报告的 section 原文按需续读，不以读完索引或旧流程作为协调前提。' : '通过审阅前必须读完超限的目标、验收、阶段、待审阅内容和流程索引。'
       const text = `${label}\n审阅请求：${JSON.stringify(reviewInfo)}\nTask ID: ${task.taskId}\n当前有效目标：${JSON.stringify(inline('objective', task.objective))}\n验收标准：${JSON.stringify(inline('acceptanceCriteria', task.acceptanceCriteria))}\n本轮阶段任务：${JSON.stringify(inline('stageTasks', task.stageTasks))}\n待审阅内容：${JSON.stringify(inline('value', value))}${originalContext}\n可用流程索引：${JSON.stringify(inline('promptIndex', promptCatalog, 6_000))}\n流程选择依据：${JSON.stringify(inline('promptSelection', { reason: selection?.reason ?? '未记录显式选择原因；请结合目标与索引核实是否漏选', promptRefs: selection?.taskPromptRefs ?? promptRefs }))}\n${promptInstruction}\n遇到 section 指针用 group_task_review_context_get 按 nextOffset 续读完整 JSON；${contextInstruction}更多消息可用 messages section 或固定 Topic 版本原文分页读取。\n通过 group_task_review_submit 提交内部判断。${instruction}核对原始消息、当前授权、已选流程、计划和证据；主会话生成的目标或验收标准不能作为覆盖流程的例外依据。不用自然语言结束请求。`
       if (text.length > TASK_REVIEW_MAX_CHARS) throw new Error('task_review_envelope_too_large')
