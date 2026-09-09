@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { resolveTopicMessages } from './store.js'
 import { fingerprint } from './topic-model.js'
+import { assertCurrentTaskPrompts, isDiagnosticCheckpoint } from './task-result.js'
 import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, isDirectedToOtherParticipants, isExplicitAgentDirection, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS } from './decision.js'
 
 const textMessage = (text, images = []) => Object.freeze({ id: randomUUID(), role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text }, ...images.map((attachment) => ({ type: 'image', attachment }))] })
@@ -94,6 +95,27 @@ const completionReviewSchema = z.union([
 const checkpointReviewSchema = z.strictObject({ decision: z.enum(['acknowledge', 'guidance', 'reject']), reason: z.string().trim().min(1), guidance: z.string().trim().min(1).optional() })
 const COMPLETION_MESSAGE_MAX_CHARS = 12_000
 const COMPLETION_MESSAGE_MAX_COUNT = 20
+export const TASK_REVIEW_MAX_CHARS = 40_000
+const diagnosticCheckpoint = (request) => request.kind === 'checkpoint' && isDiagnosticCheckpoint(request.value)
+const reviewTextPage = (requestId, section, text, offset = 0) => {
+  if (!Number.isInteger(offset) || offset < 0 || offset > text.length) throw new Error('task_review_offset_invalid')
+  const output = (size) => ({ requestId, section, text: text.slice(offset, offset + size), offset, nextOffset: offset + size, totalChars: text.length, hasMore: offset + size < text.length })
+  let low = 0, high = Math.min(text.length - offset, COMPLETION_MESSAGE_MAX_CHARS)
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2)
+    if (JSON.stringify(output(middle)).length <= COMPLETION_MESSAGE_MAX_CHARS) low = middle
+    else high = middle - 1
+  }
+  if (low === 0 && offset < text.length) throw new Error('task_review_metadata_too_large')
+  return output(low)
+}
+const inlineReviewSection = (request, section, original, maxChars = 2_000, required = true) => {
+  const text = JSON.stringify(original ?? null)
+  request.sections[section] = text
+  if (text.length <= maxChars) return original ?? null
+  if (required) request.requiredSections.add(section)
+  return { section, totalChars: text.length, preview: text.slice(0, 500), nextOffset: 0, hasMore: true }
+}
 
 export function projectTopicContext(context) {
   const { topicId, title, revision, processedRevision, status, summary, summaryRevision, openQuestions } = context.topic
@@ -515,16 +537,31 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const candidates = [...new Map(requests.flatMap((request) => request.candidates).map((candidate) => [candidate.outboundId, candidate])).values()]
       return { requestIds, candidates, candidateCount: candidates.length }
     })
-    tool('group_task_prompt_get', '按审阅请求读取当前 Task 已选任务流程正文；必须读取完全部已选流程后才能提交计划或完成审阅。', { type: 'object', additionalProperties: false, required: ['requestId', 'id'], properties: {
+    tool('group_task_review_context_get', '按审阅请求和 section 续读目标、证据、消息或流程索引的完整 JSON 原文；按 nextOffset 连续读取，拼接 text 后解析。', { type: 'object', additionalProperties: false, required: ['requestId', 'section'], properties: {
+      requestId: { type: 'string' }, section: { type: 'string' }, offset: { type: 'integer' },
+    } }, ({ requestId, section, offset = 0 }) => {
+      const request = reviews.get(requestId) ?? replies.get(requestId)
+      if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
+      if (!Object.hasOwn(request.sections, section)) throw new Error('task_review_section_unknown')
+      const page = reviewTextPage(requestId, section, request.sections[section], offset)
+      if ((request.readSectionOffsets.get(section) ?? 0) === offset) request.readSectionOffsets.set(section, page.nextOffset)
+      return page
+    })
+    tool('group_task_prompt_get', '按审阅请求读取已选或索引中候选任务流程正文；核查是否漏选适用流程，允许多个组合或确无匹配。', { type: 'object', additionalProperties: false, required: ['requestId', 'id'], properties: {
       requestId: { type: 'string' }, id: { type: 'string' },
     } }, ({ requestId, id }) => {
       const request = reviews.get(requestId)
       if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
-      const ref = request.promptRefs.find((item) => item.id === id)
-      if (!ref) throw new Error('task_review_prompt_not_selected')
+      const ref = request.promptCatalog.find((item) => item.id === id)
+      if (!ref) throw new Error('task_review_prompt_not_available')
       const prompt = (store.getTaskPrompts?.() ?? []).find((item) => item.id === id && item.enabled && item.revision === ref.revision)
-      if (!prompt) throw new Error('task_review_prompt_stale')
-      request.readPromptIds.add(id)
+      if (!prompt) {
+        if (diagnosticCheckpoint(request)) return { status: 'prompt-unavailable', id, nextAction: 'continue-diagnostic-review' }
+        const error = `task_prompt_selection_stale:${id}`
+        reviews.delete(requestId); request.reject(new Error(error))
+        return { status: 'task-stale', error }
+      }
+      request.readPromptRefs.set(id, { id, revision: prompt.revision })
       return { id: prompt.id, name: prompt.name, description: prompt.description, prompt: prompt.prompt, revision: prompt.revision }
     })
     tool('group_reply_submit', '提交绑定 Topic 与 Task 输入版本的结果通知；不依赖全群 observedRequestIds。', { type: 'object', additionalProperties: false, required: ['requestId', 'reply'], properties: {
@@ -545,6 +582,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         if (!current || current.inputVersion !== request.task.inputVersion || current.runSequence !== request.task.runSequence || current.state !== request.resultState || JSON.stringify(current.result) !== request.resultFingerprint) {
           replies.delete(args.requestId); request.reject(new Error('task_result_context_changed')); return { status: 'task-stale' }
         }
+        const unreadSections = [...request.requiredSections].filter((section) => (request.readSectionOffsets.get(section) ?? 0) < request.sections[section].length)
+        if (unreadSections.length) return { status: 'context-review-required', unreadSections }
         if (request.observedTopics.some((ref) => store.getTopic(groupId, ref.topicId)?.revision !== ref.revision)) {
           request.observedTopics = current.topicRefs.map((ref) => ({ topicId: ref.topicId, revision: store.getTopic(groupId, ref.topicId).revision }))
           refreshReview(request); request.readReview = false
@@ -576,11 +615,20 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const request = reviews.get(requestId)
       if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
       const task = store.getTask(request.task.taskId)
-      if (!task || task.inputVersion !== request.task.inputVersion || task.runSequence !== request.task.runSequence || JSON.stringify(task.taskPromptRefs ?? []) !== JSON.stringify(request.promptRefs)) { reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
-      const missingPromptRefs = request.promptRefs.filter((ref) => !request.readPromptIds.has(ref.id))
+      const diagnostic = diagnosticCheckpoint(request)
+      if (!task || task.inputVersion !== request.task.inputVersion || task.runSequence !== request.task.runSequence || task.checkpoints?.at(-1)?.checkpointId !== request.task.checkpoints?.at(-1)?.checkpointId || (!diagnostic && JSON.stringify(task.taskPromptRefs ?? []) !== JSON.stringify(request.promptRefs))) { reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
+      try {
+        if (!diagnostic) {
+          assertCurrentTaskPrompts(task, store.getTaskPrompts?.() ?? [])
+          assertCurrentTaskPrompts({ taskPromptRefs: [...request.readPromptRefs.values()] }, store.getTaskPrompts?.() ?? [])
+        }
+      } catch (error) { reviews.delete(requestId); request.reject(error); return { status: 'task-stale', error: error.message } }
+      const missingPromptRefs = diagnosticCheckpoint(request) ? [] : request.promptRefs.filter((ref) => !request.readPromptRefs.has(ref.id))
       if (missingPromptRefs.length) return { status: 'prompt-review-required', missingPromptRefs }
       if ((request.kind === 'completion') !== Object.hasOwn(input ?? {}, 'accepted')) throw new Error('task_review_kind_invalid')
       const review = request.kind === 'completion' ? completionReviewSchema.parse(input) : checkpointReviewSchema.parse(input)
+      const unreadSections = [...request.requiredSections].filter((section) => (request.readSectionOffsets.get(section) ?? 0) < request.sections[section].length)
+      if (!diagnostic && unreadSections.length && (review.accepted === true || ['acknowledge', 'guidance'].includes(review.decision))) return { status: 'context-review-required', unreadSections }
       if ('decision' in review && ((review.decision === 'guidance' && !review.guidance) || (review.decision !== 'guidance' && review.guidance))) throw new Error('task_review_guidance_invalid')
       if ('decision' in review && review.decision === 'reject' && request.value.kind !== 'plan-confirmed') throw new Error('task_review_reject_plan_only')
       if (request.kind === 'completion' && review.accepted) {
@@ -631,24 +679,32 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     let resolve, reject
     const promise = new Promise((yes, no) => { resolve = yes; reject = no })
     const messages = taskMessages(task)
-    const visibleMessages = boundedItems([...messages].reverse(), COMPLETION_MESSAGE_MAX_CHARS, COMPLETION_MESSAGE_MAX_COUNT).reverse()
+    const messageContext = boundedTopicContext({ topic: {}, messages: [...messages].reverse().slice(0, COMPLETION_MESSAGE_MAX_COUNT), offset: 0, total: messages.length, taskRefs: [] }, { maxChars: COMPLETION_MESSAGE_MAX_CHARS })
+    const visibleMessages = messageContext.messages.reverse()
     const promptRefs = [...(task.taskPromptRefs ?? [])]
+    const promptCatalog = (store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map(({ id, name, description, revision }) => ({ id, name, description, revision }))
+    const selection = task.executionEvents?.findLast((event) => event.kind === 'task-prompts-selected' && event.inputVersion === task.inputVersion)
     const request = { requestId: randomUUID(), groupId: task.groupId, task, kind, value, resolve, reject, promise,
-      promptRefs, readPromptIds: new Set(),
+      promptRefs, promptCatalog, readPromptRefs: new Map(), sections: {}, readSectionOffsets: new Map(), requiredSections: new Set(),
       ...(kind === 'completion' ? { resultKey: `task-result:${task.taskId}:completed${(task.completionSequence ?? 0) > 0 ? `:${task.completionSequence}` : ''}`, messages,
         candidates: scopedCandidates(task.groupId, messages, task.topicRefs, [task.taskId]), readReview: false,
         observedTopics: task.topicRefs.map((ref) => ({ topicId: ref.topicId, revision: store.getTopic(task.groupId, ref.topicId).revision })) } : {}) }
     try {
       reviews.set(request.requestId, request)
+      const inline = (...args) => inlineReviewSection(request, ...args)
       const label = kind === 'completion' ? '[TASK_COMPLETION_REVIEW]' : '[TASK_CHECKPOINT_REVIEW]'
-      const reviewInfo = { requestId: request.requestId, kind, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, promptRefs }
-      const completionContext = kind === 'completion' ? `\n通知上下文：${JSON.stringify({ topicRefs: task.topicRefs, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length, replyReviewCandidateCount: request.candidates.length })}` : ''
-      const checkpointContext = kind === 'checkpoint' ? `\n任务原始上下文：${JSON.stringify({ topicRefs: task.topicRefs, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length })}` : ''
+      const reviewInfo = { requestId: request.requestId, kind, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, promptRefs: inline('promptRefs', promptRefs, 2_000, !diagnosticCheckpoint(request)) }
+      request.sections.messages = JSON.stringify(messages)
+      const context = { topicRefs: inline('topicRefs', task.topicRefs), messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: messageContext.hasMoreMessages, messagesSection: 'messages', ...(kind === 'completion' ? { replyReviewCandidateCount: request.candidates.length } : {}) }
+      const originalContext = `\n${kind === 'completion' ? '通知上下文' : '任务原始上下文'}：${JSON.stringify(context)}`
       const instruction = kind === 'completion'
         ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。通过时同时准备群通知；存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界，并从通知上下文选择引用消息和真正需要获知的参与人。"
         : `检查点审阅：{decision:'acknowledge'|'guidance'|'reject',reason:string,guidance?:string}。计划与原始消息或任务流程冲突时必须 reject；只有原始消息明确支持的 workflowAssessment.exceptions 才能覆盖流程。`
-      const promptInstruction = promptRefs.length ? `先按 requestId 用 group_task_prompt_get 逐项读取 ${promptRefs.length} 个已选流程正文；未读完不能提交审阅。` : '当前 Task 未选择专用流程，按通用规范审阅。'
-      const agent = send(task.groupId, `${label}\n审阅请求：${JSON.stringify(reviewInfo)}\nTask ID: ${task.taskId}\n当前有效目标：${task.objective}\n验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n待审阅内容：${JSON.stringify(value)}${completionContext}${checkpointContext}\n${promptInstruction}\n通过 group_task_review_submit 提交内部判断。${instruction}核对原始消息、当前授权、已选流程、计划和证据；主会话生成的目标或验收标准不能作为覆盖流程的例外依据。不用自然语言结束请求。`)
+      const promptInstruction = diagnosticCheckpoint(request) ? '这是异常报告，即使未选流程、旧流程过期或未读完也必须保持协调通道可用，不批准阶段推进。' : `${promptRefs.length ? `先按 requestId 用 group_task_prompt_get 逐项读取 ${promptRefs.length} 个已选流程正文；未读完不能提交审阅。` : '当前未选择专用流程，需结合索引核查是否确无匹配。'}核查选择原因和可用流程索引；可按需读取未选候选。若漏选适用流程应要求重新规划，允许多个流程组合，也允许有明确理由的无匹配。`
+      const contextInstruction = diagnosticCheckpoint(request) ? '异常报告的 section 原文按需续读，不以读完索引或旧流程作为协调前提。' : '通过审阅前必须读完超限的目标、验收、阶段、待审阅内容和流程索引。'
+      const text = `${label}\n审阅请求：${JSON.stringify(reviewInfo)}\nTask ID: ${task.taskId}\n当前有效目标：${JSON.stringify(inline('objective', task.objective))}\n验收标准：${JSON.stringify(inline('acceptanceCriteria', task.acceptanceCriteria))}\n本轮阶段任务：${JSON.stringify(inline('stageTasks', task.stageTasks))}\n待审阅内容：${JSON.stringify(inline('value', value))}${originalContext}\n可用流程索引：${JSON.stringify(inline('promptIndex', promptCatalog, 6_000))}\n流程选择依据：${JSON.stringify(inline('promptSelection', { reason: selection?.reason ?? '未记录显式选择原因；请结合目标与索引核实是否漏选', promptRefs: selection?.taskPromptRefs ?? promptRefs }))}\n${promptInstruction}\n遇到 section 指针用 group_task_review_context_get 按 nextOffset 续读完整 JSON；${contextInstruction}更多消息可用 messages section 或固定 Topic 版本原文分页读取。\n通过 group_task_review_submit 提交内部判断。${instruction}核对原始消息、当前授权、已选流程、计划和证据；主会话生成的目标或验收标准不能作为覆盖流程的例外依据。不用自然语言结束请求。`
+      if (text.length > TASK_REVIEW_MAX_CHARS) throw new Error('task_review_envelope_too_large')
+      const agent = send(task.groupId, text)
       monitor(agent, request, reviews)
     } catch (error) { reviews.delete(request.requestId); reject(error) }
     return promise
@@ -660,19 +716,31 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     const promise = new Promise((yes, no) => { resolve = yes; reject = no })
     promise.catch(() => undefined)
     const messages = taskMessages(task)
-    const visibleMessages = boundedItems([...messages].reverse(), 40_000, 50).reverse()
+    const messageContext = boundedTopicContext({ topic: {}, messages: [...messages].reverse().slice(0, COMPLETION_MESSAGE_MAX_COUNT), offset: 0, total: messages.length, taskRefs: [] }, { maxChars: COMPLETION_MESSAGE_MAX_CHARS })
+    const visibleMessages = messageContext.messages.reverse()
     const request = { requestId: randomUUID(), groupId: task.groupId, task, resultKey, resultState: result.status === 'completed' ? 'completed' : 'waiting', resultFingerprint: JSON.stringify(result), messages, resolve, reject, promise,
+      sections: { messages: JSON.stringify(messages) }, readSectionOffsets: new Map(), requiredSections: new Set(),
       candidates: scopedCandidates(task.groupId, messages, task.topicRefs, [task.taskId]), readReview: false,
       observedTopics: task.topicRefs.map((ref) => ({ topicId: ref.topicId, revision: store.getTopic(task.groupId, ref.topicId).revision })) }
     replies.set(request.requestId, request)
     try {
-      const agent = send(task.groupId, `[TASK_COORDINATION]\n回复请求 ID：${request.requestId}\nTask ID: ${task.taskId}\nTopic 请求：${JSON.stringify({ requestId: request.requestId, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: task.topicRefs, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length, replyReviewCandidateCount: request.candidates.length })}\n当前目标：${task.objective}\n核验结果：${JSON.stringify(result)}\n通过 group_reply_submit 提交结果或阻塞通知；先按 requestId 读取 ${request.candidates.length} 条历史回复候选。需要更多原文时按固定 Topic 版本分页读取。保留实际完成内容、证据、交付状态和未验证边界。`)
+      const inline = (...args) => inlineReviewSection(request, ...args)
+      const text = `[TASK_COORDINATION]\n回复请求 ID：${request.requestId}\nTask ID: ${task.taskId}\nTopic 请求：${JSON.stringify({ requestId: request.requestId, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: inline('topicRefs', task.topicRefs), messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: messageContext.hasMoreMessages, messagesSection: 'messages', replyReviewCandidateCount: request.candidates.length })}\n当前目标：${JSON.stringify(inline('objective', task.objective))}\n核验结果：${JSON.stringify(inline('result', result))}\n通过 group_reply_submit 提交结果或阻塞通知；先按 requestId 读取 ${request.candidates.length} 条历史回复候选。遇到 section 指针用 group_task_review_context_get 按 nextOffset 续读完整 JSON；提交前读完超限目标、核验结果和 Topic 引用。更多消息可用 messages section 或固定 Topic 版本原文分页读取。保留实际完成内容、证据、交付状态和未验证边界。`
+      if (text.length > TASK_REVIEW_MAX_CHARS) throw new Error('task_review_envelope_too_large')
+      const agent = send(task.groupId, text)
       monitor(agent, request, replies)
     } catch (error) { replies.delete(request.requestId); reject(error) }
     return promise
   }
   return {
     register, schedule, requestReview, requestReply, commitCompletionNotification, taskMessages, applyAccepted: resume,
+    invalidateTaskReviews(taskId, reason = 'task_review_context_changed') {
+      for (const [requestId, request] of reviews) {
+        if (request.task.taskId !== taskId) continue
+        reviews.delete(requestId)
+        request.reject(new Error(reason))
+      }
+    },
     hasPendingTaskInput(task) {
       const group = store.getGroup(task.groupId)
       return pendingInput(task.groupId).length > 0 || (group?.taskReservations ?? []).some((item) => item.taskId === task.taskId)

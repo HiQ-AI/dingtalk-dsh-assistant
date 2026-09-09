@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
-import { createTopicCoordinator, projectTopicContext } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
+import { createTopicCoordinator, projectTopicContext, TASK_REVIEW_MAX_CHARS } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
 
 function memoryFacility(snapshot) {
   return new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
@@ -189,8 +189,8 @@ test('明确无需进入 Topic 的消息在归类完成后直接收口', async (
   assert.equal((await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'ignored', messageVersion: 1, topics: [], reason: '无需处理' }] })).status, 'accepted')
   assert.equal(h.store.getGroup('g').messages[0].agentDeliveryStatus, 'delivered')
 })
-async function taskFixture(h) {
-  await ingest(h, 'a1')
+async function taskFixture(h, message = {}) {
+  await ingest(h, 'a1', message)
   const result = await route(h)
   const request = result.pendingDecisions[0]
   await complete(h, request)
@@ -291,7 +291,8 @@ test('内部审阅按请求绑定 Task 版本，拒绝错种类和版本变更',
 
 test('完成审阅一次提交通知草稿，Task 落盘后才写入 Outbox', async (t) => {
   const h = await setup(t), fixture = await taskFixture(h)
-  const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, state: 'running' }))
+  await h.store.setTaskPrompts([reviewPrompt('delivery')], 0)
+  const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, state: 'running', taskPromptRefs: [{ id: 'delivery', revision: 1 }] }))
   const result = { inputVersion: task.inputVersion, runSequence: task.runSequence, status: 'completed', summary: '完成', evidence: ['通过'], artifacts: [] }
   const pending = h.coordinator.requestReview('completion', task, result)
   const request = h.envelope('[TASK_COMPLETION_REVIEW]', '审阅请求')
@@ -299,12 +300,14 @@ test('完成审阅一次提交通知草稿，Task 落盘后才写入 Outbox', as
   assert.equal(context.messages.length, 1)
   assert.equal(h.sent.some((item) => item.startsWith('[TASK_COORDINATION]')), false)
   assert.equal(h.store.getGroup('g').outbox.length, 0)
+  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'delivery' })
   assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted: true, reason: '证据完整', notification: {
     reply: '核验已完成', replyToMessageId: 'a1', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
   } } })).status, 'accepted')
   const review = await pending
   assert.equal(h.store.getGroup('g').outbox.length, 0)
   const completed = await h.store.updateTask(task.taskId, (current) => ({ ...current, state: 'completed', result }))
+  await h.store.setTaskPrompts([reviewPrompt('delivery', '完成后变更配置，不撤销历史完成事实')], 1)
   const outbound = await h.coordinator.commitCompletionNotification(review.preparedNotification, completed, result)
   assert.equal(outbound.text, '核验已完成')
   assert.equal(h.store.getGroup('g').outbox.length, 1)
@@ -360,6 +363,158 @@ test('内部检查点必须结构化确认，不能携带相互矛盾的 guidanc
   await assert.rejects(h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: 'ok', guidance: '改计划' } }), /task_review_guidance_invalid/)
   assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'guidance', reason: '范围遗漏', guidance: '补异常分支' } })).status, 'accepted')
   assert.deepEqual(await promise, { decision: 'guidance', reason: '范围遗漏', guidance: '补异常分支' })
+})
+
+async function readReviewSection(h, requestId, section) {
+  let offset = 0, text = ''
+  while (true) {
+    const page = await h.call('group_task_review_context_get', { requestId, section, offset })
+    assert.ok(JSON.stringify(page).length <= 12_000)
+    text += page.text
+    if (!page.hasMore) return JSON.parse(text)
+    assert.ok(page.nextOffset > offset)
+    offset = page.nextOffset
+  }
+}
+const reviewPrompt = (id, prompt = '按流程核验') => ({ id, name: id, description: `${id}适用范围`, prompt, enabled: true })
+
+test('单条超长消息保持 12k 硬预算并可完整续读', async (t) => {
+  const h = await setup(t), original = `@助理 ${'长'.repeat(26_000)}`
+  const { task } = await taskFixture(h, { text: original })
+  const pending = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '计划' })
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  const context = h.envelope('[TASK_CHECKPOINT_REVIEW]', '任务原始上下文')
+  assert.ok(JSON.stringify(context.messages).length <= 12_000)
+  assert.equal(context.hasMoreMessages, true)
+  assert.equal(context.messages[0].messageId, 'a1')
+  assert.equal(context.messages[0].textHasMore, true)
+  const restored = await readReviewSection(h, request.requestId, 'messages')
+  assert.equal(restored[0].text, original)
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '已读原文' } })
+  assert.equal((await pending).decision, 'acknowledge')
+  const reply = h.coordinator.requestReply(task, { status: 'waiting', summary: '等待确认' }, 'fallback-budget').catch((error) => error)
+  const replyContext = h.envelope('[TASK_COORDINATION]')
+  assert.ok(JSON.stringify(replyContext.messages).length <= 12_000)
+  assert.equal(replyContext.hasMoreMessages, true)
+  await h.coordinator.close()
+  await reply
+})
+
+test('超长目标及审阅结果分页保留原文，越序读取不能绕过完整读取门禁', async (t) => {
+  const h = await setup(t), fixture = await taskFixture(h)
+  const objective = '目标"\\\n'.repeat(20_000)
+  const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, objective }))
+  const value = { kind: 'plan-confirmed', summary: '说明'.repeat(20_000), evidence: ['证据'] }
+  const pending = h.coordinator.requestReview('checkpoint', task, value)
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  assert.ok(h.sent.at(-1).length <= TASK_REVIEW_MAX_CHARS)
+  const args = { requestId: request.requestId, review: { decision: 'acknowledge', reason: '通过' } }
+  assert.deepEqual((await h.call('group_task_review_submit', args)).unreadSections.sort(), ['objective', 'value'])
+  assert.equal((await h.call('group_task_review_submit', { ...args, review: { decision: 'guidance', reason: '指引也会使计划生效', guidance: '继续核验' } })).status, 'context-review-required')
+  await h.call('group_task_review_context_get', { requestId: request.requestId, section: 'objective', offset: JSON.stringify(objective).length })
+  assert.equal((await h.call('group_task_review_submit', args)).status, 'context-review-required')
+  assert.equal(await readReviewSection(h, request.requestId, 'objective'), objective)
+  assert.deepEqual(await readReviewSection(h, request.requestId, 'value'), value)
+  assert.equal((await h.call('group_task_review_submit', args)).status, 'accepted')
+  await pending
+})
+
+test('无专用流程时审阅者仍可见目录和选择依据并读取未选候选', async (t) => {
+  const h = await setup(t), fixture = await taskFixture(h)
+  await h.store.setTaskPrompts([reviewPrompt('investigate'), reviewPrompt('repair')], 0)
+  const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, executionEvents: [{ kind: 'task-prompts-selected', inputVersion: current.inputVersion, taskPromptRefs: [], reason: '暂认为无需专用流程' }] }))
+  const pending = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '计划' })
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  assert.deepEqual(h.envelope('[TASK_CHECKPOINT_REVIEW]', '可用流程索引').map((item) => item.id), ['investigate', 'repair'])
+  assert.equal(h.envelope('[TASK_CHECKPOINT_REVIEW]', '流程选择依据').reason, '暂认为无需专用流程')
+  assert.equal((await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'repair' })).prompt, '按流程核验')
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'reject', reason: '应补选修复流程' } })).status, 'accepted')
+  assert.equal((await pending).decision, 'reject')
+})
+
+test('审阅读取后已选或未选候选改版、禁用、删除都使旧请求失效，无关配置不影响', async (t) => {
+  for (const selected of [true, false]) for (const change of ['revision', 'disabled', 'deleted']) {
+    const h = await setup(t), fixture = await taskFixture(h)
+    await h.store.setTaskPrompts([reviewPrompt('flow'), reviewPrompt('other')], 0)
+    const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, taskPromptRefs: selected ? [{ id: 'flow', revision: 1 }] : [] }))
+    const pending = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '计划' })
+    const outcome = pending.then((value) => ({ value }), (error) => ({ error }))
+    const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+    await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'flow' })
+    const updated = change === 'deleted' ? [] : [{ ...reviewPrompt('flow', change === 'revision' ? '新版流程' : '按流程核验'), enabled: change !== 'disabled' }]
+    await h.store.setTaskPrompts([...updated, reviewPrompt('other')], 1)
+    assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '通过' } })).status, 'task-stale')
+    assert.match((await outcome).error.message, /task_prompt_selection_stale:flow/)
+    await assert.rejects(h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '迟到' } }), /task_review_request_unknown/)
+  }
+  const h = await setup(t), { task } = await taskFixture(h)
+  await h.store.setTaskPrompts([reviewPrompt('other')], 0)
+  const pending = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '无匹配流程' })
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  await h.store.setTaskPrompts([reviewPrompt('other', '新内容')], 1)
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '无匹配，通用规范即可' } })).status, 'accepted')
+  await pending
+})
+
+test('多流程组合必须逐项读取，后续检查点会使原审阅失效', async (t) => {
+  const h = await setup(t), fixture = await taskFixture(h)
+  await h.store.setTaskPrompts([reviewPrompt('investigate'), reviewPrompt('repair')], 0)
+  const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, taskPromptRefs: [{ id: 'investigate', revision: 1 }, { id: 'repair', revision: 1 }] }))
+  const outcome = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '组合计划' }).then((value) => ({ value }), (error) => ({ error }))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  const args = { requestId: request.requestId, review: { decision: 'acknowledge', reason: '通过' } }
+  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'investigate' })
+  assert.deepEqual((await h.call('group_task_review_submit', args)).missingPromptRefs, [{ id: 'repair', revision: 1 }])
+  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'repair' })
+  await h.store.updateTask(task.taskId, (current) => ({ ...current, checkpoints: [{ checkpointId: 'later-diagnostic', inputVersion: current.inputVersion, runSequence: current.runSequence, kind: 'scope-conflict', summary: '需要改计划', evidence: [], completedItems: [], remainingItems: [], nextStep: '协调', needsCoordinatorDecision: true, submittedAt: '2026-09-09T01:00:00Z' }] }))
+  assert.equal((await h.call('group_task_review_submit', args)).status, 'task-stale')
+  assert.match((await outcome).error.message, /task_review_context_changed/)
+})
+
+test('诊断检查点可在旧流程删除后不读取流程获得协调意见', async (t) => {
+  const h = await setup(t), fixture = await taskFixture(h)
+  await h.store.setTaskPrompts([reviewPrompt('candidate')], 0)
+  const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, taskPromptRefs: [{ id: 'removed', revision: 1 }] }))
+  const pending = h.coordinator.requestReview('checkpoint', task, { kind: 'scope-conflict', summary: '旧流程不可用' })
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'candidate' })
+  await h.store.setTaskPrompts([reviewPrompt('candidate', '改版候选')], 1)
+  assert.equal((await h.call('group_task_prompt_get', { requestId: request.requestId, id: 'candidate' })).status, 'prompt-unavailable')
+  const updatedTask = await h.store.updateTask(task.taskId, (current) => ({ ...current, taskPromptRefs: [] }))
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'guidance', reason: '重订计划', guidance: '按当前索引匹配' } })).status, 'accepted')
+  assert.equal((await pending).decision, 'guidance')
+  const longReport = h.coordinator.requestReview('checkpoint', updatedTask, { kind: 'evidence-gap', summary: '缺失证据'.repeat(10_000) })
+  const longRequest = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  assert.ok(h.sent.at(-1).length <= TASK_REVIEW_MAX_CHARS)
+  assert.equal((await h.call('group_task_review_submit', { requestId: longRequest.requestId, review: { decision: 'acknowledge', reason: '已知悉缺口，继续协调' } })).status, 'accepted')
+  assert.equal((await longReport).decision, 'acknowledge')
+})
+
+test('通知回退同样限制整体预算并须读完超长目标结果后才允许入队', async (t) => {
+  const h = await setup(t), fixture = await taskFixture(h)
+  const objective = '回退目标'.repeat(20_000)
+  const result = { inputVersion: fixture.task.inputVersion, runSequence: fixture.task.runSequence, status: 'completed', summary: '实际结果'.repeat(20_000), evidence: ['已验证'], artifacts: [] }
+  const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, state: 'completed', objective, result }))
+  const pending = h.coordinator.requestReply(task, result, 'large-result-fallback')
+  const request = h.envelope('[TASK_COORDINATION]')
+  assert.ok(h.sent.at(-1).length <= TASK_REVIEW_MAX_CHARS)
+  const args = { requestId: request.requestId, reply: '已完成', replyToMessageId: 'a1', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } }
+  assert.equal((await h.call('group_reply_submit', args)).status, 'context-review-required')
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  assert.equal(await readReviewSection(h, request.requestId, 'objective'), objective)
+  assert.deepEqual(await readReviewSection(h, request.requestId, 'result'), result)
+  assert.equal((await h.call('group_reply_submit', args)).status, 'accepted')
+  assert.equal((await pending).text, '已完成')
+  assert.equal(h.store.getGroup('g').outbox.length, 1)
+})
+
+test('协调方使指定 Task 审阅失效后拒绝迟到结果', async (t) => {
+  const h = await setup(t), { task } = await taskFixture(h)
+  const outcome = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '旧计划' }).then((value) => ({ value }), (error) => ({ error }))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  h.coordinator.invalidateTaskReviews(task.taskId, 'task_checkpoint_superseded')
+  assert.equal((await outcome).error.message, 'task_checkpoint_superseded')
+  await assert.rejects(h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '迟到' } }), /task_review_request_unknown/)
 })
 
 test('Topic 按需搜索分页及固定版本读回，跨群与越界拒绝', async (t) => {

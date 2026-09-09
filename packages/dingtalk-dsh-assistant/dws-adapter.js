@@ -258,33 +258,31 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
 }
 
 export async function dispatchOutbox({ adapter, groupId, outbound }) {
-  const readHistory = async () => {
-    try { return await adapter.readGroup(groupId) }
-    catch (error) {
-      if (error?.serverErrorCode === 'CLI_ORG_NOT_AUTHORIZED') return undefined
-      throw error
-    }
-  }
-  const before = await readHistory()
-  const usableHistory = (history) => history.complete === true || (history.partial === false && (history.failedCount ?? 0) === 0 && Array.isArray(history.failures) && history.failures.length === 0)
-  if (before !== undefined) {
+  let phase = 'preflight'
+  try {
+    const before = await adapter.readGroup(groupId)
+    const usableHistory = (history) => history.complete === true || (history.partial === false && (history.failedCount ?? 0) === 0 && Array.isArray(history.failures) && history.failures.length === 0)
     if (!usableHistory(before)) return { status: 'pending', reason: 'preflight_history_partial' }
     const existing = before.messages.find((message) => matchesOutbound(message, outbound))
-    if (existing !== undefined) return { status: 'sent', messageId: existing.messageId, deduplicated: true }
+    if (existing !== undefined) return { status: 'sent', messageId: assertStableId(existing.messageId, 'outbox_message_id'), deduplicated: true }
     const historical = typeof adapter.findOutboundMessage === 'function' ? await adapter.findOutboundMessage(groupId, outbound) : undefined
-    if (historical !== undefined) return { status: 'sent', messageId: historical.messageId, deduplicated: true }
+    if (historical !== undefined) return { status: 'sent', messageId: assertStableId(historical.messageId, 'outbox_message_id'), deduplicated: true }
+
+    phase = 'send'
+    const sent = outbound.replyToMessageId && outbound.replyToSenderOpenDingTalkId
+      ? await adapter.sendGroupReply({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId, replyToMessageId: outbound.replyToMessageId, replyToSenderOpenDingTalkId: outbound.replyToSenderOpenDingTalkId, atOpenDingTalkIds: outbound.atOpenDingTalkIds ?? [] })
+      : await adapter.sendGroup({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId })
+    if (sent?.deliveryStatus === 'unknown') return { status: 'pending', reason: 'delivery_unknown', sendResult: sent }
+
+    phase = 'postflight'
+    const after = await adapter.readGroup(groupId)
+    if (!usableHistory(after)) return { status: 'pending', reason: 'postflight_history_partial', sendResult: sent }
+    const delivered = after.messages.find((message) => matchesOutbound(message, outbound))
+    if (delivered === undefined) return { status: 'pending', reason: 'message_not_observed', sendResult: sent }
+    return { status: 'sent', messageId: assertStableId(delivered.messageId, 'outbox_message_id'), deduplicated: false }
+  } catch (cause) {
+    const error = cause instanceof Error ? cause : new Error(String(cause))
+    error.deliveryPendingReason = `${phase}_failed`
+    throw error
   }
-
-  const sent = outbound.replyToMessageId && outbound.replyToSenderOpenDingTalkId
-    ? await adapter.sendGroupReply({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId, replyToMessageId: outbound.replyToMessageId, replyToSenderOpenDingTalkId: outbound.replyToSenderOpenDingTalkId, atOpenDingTalkIds: outbound.atOpenDingTalkIds ?? [] })
-    : await adapter.sendGroup({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId })
-  if (sent.deliveryStatus === 'unknown') return { status: 'pending', reason: 'delivery_unknown', sendResult: sent }
-
-  const after = await readHistory()
-  const receiptMessageId = sent.messageId ?? sent.messageRef?.openMessageId ?? sent.result?.openMessageId ?? sent.result?.result?.openMessageId
-  if (after === undefined) return { status: 'sent', ...(receiptMessageId ? { messageId: receiptMessageId } : {}), deduplicated: false, readbackSkipped: 'CLI_ORG_NOT_AUTHORIZED' }
-  if (!usableHistory(after)) return { status: 'pending', reason: 'postflight_history_partial', sendResult: sent }
-  const delivered = after.messages.find((message) => matchesOutbound(message, outbound))
-  if (delivered === undefined) return { status: 'pending', reason: 'message_not_observed', sendResult: sent }
-  return { status: 'sent', messageId: delivered.messageId, deduplicated: false }
 }

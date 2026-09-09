@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { openResidentStore, residentDomainSpec } from '../packages/dingtalk-dsh-assistant/store.js'
+import { assertCurrentTaskPrompts } from '../packages/dingtalk-dsh-assistant/task-result.js'
 
 function memoryFacility(seed = new Map()) {
   const table = (name) => ({
@@ -15,6 +16,17 @@ function memoryFacility(seed = new Map()) {
 
 test('Topic破坏性模型使用独立domain版本7', () => {
   assert.equal(residentDomainSpec.version, 7)
+})
+
+test('删除后重建同 ID 流程不能复用旧修订号使旧计划恢复有效', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  const first = await store.setTaskPrompts([{ id: 'reused-id', name: '流程', description: '核验', prompt: '旧流程' }], 0)
+  const oldTask = { taskPromptRefs: [{ id: 'reused-id', revision: first.taskPrompts[0].revision }] }
+  await store.setTaskPrompts([], first.taskPromptsVersion)
+  const recreated = await store.setTaskPrompts([{ id: 'reused-id', name: '流程', description: '核验', prompt: '不同要求' }], store.getTaskPromptsVersion())
+  assert.ok(recreated.taskPrompts[0].revision > oldTask.taskPromptRefs[0].revision)
+  assert.throws(() => assertCurrentTaskPrompts(oldTask, store.getTaskPrompts()), /task_prompt_selection_stale/)
 })
 
 test('群配置初始化、职责修改和删除均持久化', async () => {

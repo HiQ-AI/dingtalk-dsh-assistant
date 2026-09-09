@@ -164,23 +164,56 @@ test('outbox 历史不完整或投递未知时保持 pending 不盲重发', asyn
   assert.deepEqual(await dispatchOutbox({ adapter: unknown, groupId: 'cid-a', outbound: { outboundId: 'out-4', text: 'reply' } }), { status: 'pending', reason: 'delivery_unknown', sendResult: { deliveryStatus: 'unknown' } })
 })
 
-test('组织未开放读取权限时使用稳定幂等键发送并接受确定回执', async () => {
+test('组织未授权导致发送前检查失败时不发送，不绕过真实回读', async () => {
   let sends = 0
   const denied = () => { const error = new Error('dws_read_failed:1:CLI_ORG_NOT_AUTHORIZED'); error.serverErrorCode = 'CLI_ORG_NOT_AUTHORIZED'; throw error }
   const adapter = {
     readGroup: denied,
     async sendGroup(request) { sends += 1; assert.equal(request.idempotencyKey, 'out-permission'); return { deliveryStatus: 'success', messageRef: { openMessageId: 'sent-by-receipt' } } },
   }
-  assert.deepEqual(await dispatchOutbox({ adapter, groupId: 'cid-a', outbound: { outboundId: 'out-permission', text: 'reply' } }), {
-    status: 'sent', messageId: 'sent-by-receipt', deduplicated: false, readbackSkipped: 'CLI_ORG_NOT_AUTHORIZED',
-  })
-  assert.equal(sends, 1)
+  await assert.rejects(dispatchOutbox({ adapter, groupId: 'cid-a', outbound: { outboundId: 'out-permission', text: 'reply' } }),
+    (error) => error.serverErrorCode === 'CLI_ORG_NOT_AUTHORIZED' && error.deliveryPendingReason === 'preflight_failed')
+  assert.equal(sends, 0)
 })
 
-test('组织未开放读取权限且发送回执未知时继续保持 pending', async () => {
-  const denied = () => { const error = new Error('dws_read_failed:1:CLI_ORG_NOT_AUTHORIZED'); error.serverErrorCode = 'CLI_ORG_NOT_AUTHORIZED'; throw error }
-  const result = await dispatchOutbox({ adapter: { readGroup: denied, sendGroup: async () => ({ deliveryStatus: 'unknown' }) }, groupId: 'cid-a', outbound: { outboundId: 'out-unknown', text: 'reply' } })
-  assert.deepEqual(result, { status: 'pending', reason: 'delivery_unknown', sendResult: { deliveryStatus: 'unknown' } })
+test('发送后组织未授权，空回执、失败回执、任务受理回执及成功回执均不能确认送达', async () => {
+  for (const receipt of [{}, { deliveryStatus: 'failed' }, { openTaskId: 'accepted' }, { deliveryStatus: 'success', messageId: 'receipt-only' }]) {
+    let reads = 0, sends = 0
+    const adapter = {
+      async readGroup() {
+        if (++reads === 1) return { complete: true, messages: [] }
+        const error = new Error('dws_read_failed:1:CLI_ORG_NOT_AUTHORIZED')
+        error.serverErrorCode = 'CLI_ORG_NOT_AUTHORIZED'
+        throw error
+      },
+      async sendGroup() { sends += 1; return receipt },
+    }
+    await assert.rejects(dispatchOutbox({ adapter, groupId: 'cid-a', outbound: { outboundId: 'out-receipt', text: 'reply' } }),
+      (error) => error.serverErrorCode === 'CLI_ORG_NOT_AUTHORIZED' && error.deliveryPendingReason === 'postflight_failed')
+    assert.equal(sends, 1)
+  }
+})
+
+test('任意回执未在历史中匹配真实消息时保持 pending', async () => {
+  for (const receipt of [null, {}, { deliveryStatus: 'failed' }, { openTaskId: 'accepted' }]) {
+    const adapter = { readGroup: async () => ({ complete: true, messages: [] }), sendGroup: async () => receipt }
+    const result = await dispatchOutbox({ adapter, groupId: 'g', outbound: { outboundId: 'out', text: 'reply' } })
+    assert.equal(result.status, 'pending')
+    assert.equal(result.reason, 'message_not_observed')
+  }
+})
+
+test('历史命中但缺少真实消息ID时不得确认或盲目重发', async () => {
+  for (const hit of ['before', 'history', 'after']) {
+    let reads = 0, sends = 0
+    const adapter = {
+      async readGroup() { reads += 1; return { complete: true, messages: hit === 'before' || (hit === 'after' && reads > 1) ? [{ text: 'reply' }] : [] } },
+      async findOutboundMessage() { return hit === 'history' ? { text: 'reply' } : undefined },
+      async sendGroup() { sends += 1; return {} },
+    }
+    await assert.rejects(dispatchOutbox({ adapter, groupId: 'g', outbound: { outboundId: 'out', text: 'reply' } }), /outbox_message_id_required/)
+    assert.equal(sends, hit === 'after' ? 1 : 0)
+  }
 })
 
 test('DWS读取错误保留结构化服务端错误码', async () => {

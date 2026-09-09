@@ -290,7 +290,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       await runtime.recordOutboundDeliveryAttempt?.({ groupId, outboundId: outbound.outboundId, ...(delivery.status === 'pending' ? { reason: delivery.reason } : {}) })
       if (delivery.status === 'sent') await runtime.acknowledge({ groupId, outboundId: outbound.outboundId, deliveredMessageId: delivery.messageId })
     } catch (error) {
-      await runtime.recordOutboundDeliveryAttempt?.({ groupId, outboundId: outbound.outboundId, error: error instanceof Error ? error.message : String(error) })
+      await runtime.recordOutboundDeliveryAttempt?.({ groupId, outboundId: outbound.outboundId, ...(error?.deliveryPendingReason ? { reason: error.deliveryPendingReason } : {}), error: error instanceof Error ? error.message : String(error) })
       throw error
     }
   }

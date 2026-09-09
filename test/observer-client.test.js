@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { runInNewContext } from 'node:vm'
 
 test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
@@ -190,7 +191,7 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /待回读/)
   assert.match(source, /已撤回/)
   assert.match(source, /message\.recallStatus === 'recalled'/)
-  assert.match(source, /message\.readbackRequired === true/)
+  assert.match(source, /message\.deliveryPendingReason/)
   assert.match(source, /message\.sourceMessageId/)
   assert.match(source, /message\.replyToMessageId/)
   assert.match(source, /message\.deliveredMessageId/)
@@ -280,4 +281,32 @@ test('Agent配置页面提供叶子任务并行上限且默认值为5', async ()
   assert.match(source, /useState\(5\)/)
   assert.match(source, /maxConcurrentTasks/)
   assert.match(source, /min: 1, max: 50/)
+})
+
+test('发件状态按实际投递环节展示，pending不会伪装为已回读', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const expression = source.slice(source.indexOf('const outboxDelivery = ') + 'const outboxDelivery = '.length, source.indexOf('    const pill ='))
+  const classify = runInNewContext(`(${expression})`)
+  const scenarios = [
+    [{ status: 'pending', readbackRequired: true }, 'queued', '待发送'],
+    [{ status: 'pending', readbackRequired: false }, 'queued', '待发送'],
+    [{ status: 'pending', deliveryPendingReason: 'preflight_failed', deliveryError: 'CLI_ORG_NOT_AUTHORIZED' }, 'failed', '发送受阻'],
+    [{ status: 'pending', deliveryPendingReason: 'preflight_history_partial' }, 'failed', '发送受阻'],
+    [{ status: 'pending', deliveryPendingReason: 'send_failed', deliveryError: 'timeout' }, 'failed', '投递异常'],
+    [{ status: 'pending', deliveryError: 'legacy_error' }, 'failed', '投递异常'],
+    [{ status: 'pending', deliveryPendingReason: 'postflight_failed', deliveryError: 'CLI_ORG_NOT_AUTHORIZED' }, 'waiting', '待回读'],
+    [{ status: 'pending', deliveryPendingReason: 'delivery_unknown' }, 'waiting', '待回读'],
+    [{ status: 'pending', deliveryPendingReason: 'message_not_observed' }, 'waiting', '待回读'],
+    [{ status: 'sent', deliveredMessageId: 'actual-message-id' }, 'confirmed', '已回读'],
+    [{ status: 'sent' }, 'confirmed', '已发送'],
+    [{ status: 'sent', recallStatus: 'recalled' }, 'recalled', '已撤回'],
+  ]
+  for (const [message, id, label] of scenarios) {
+    const result = classify(message)
+    assert.equal(result.id, id)
+    assert.equal(result.label, label)
+  }
+  assert.match(source, /message\.deliveryError/)
+  assert.match(source, /最近尝试.*fmt\(message\.deliveryAttemptedAt\)/)
+  assert.match(source, /message\.deliveryAttemptCount/)
 })
