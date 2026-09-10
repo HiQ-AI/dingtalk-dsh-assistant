@@ -62,6 +62,15 @@ test('插件配置区分叶子通用提示词与可增删的任务流程提示�
   }
 })
 
+test('插件设置页提供统一视觉尺度、窄屏表单布局和可见键盘焦点', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/client.js', import.meta.url), 'utf8')
+  assert.match(source, /const ui = \{ textSm: 12, textMd: 14, textLg: 16, textXl: 20/u)
+  assert.match(source, /@media \(max-width: 720px\)/u)
+  assert.match(source, /:focus-visible/u)
+  assert.match(source, /assistant-inline-form/u)
+  assert.match(source, /data-dingtalk-assistant-settings/u)
+})
+
 test('添加常驻群在操作位置反馈前置条件、进度和请求结果', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/client.js', import.meta.url), 'utf8')
   assert.match(source, /请先从搜索结果中选择要常驻的群聊/u)
