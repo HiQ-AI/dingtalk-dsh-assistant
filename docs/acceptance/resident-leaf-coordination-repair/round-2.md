@@ -18,3 +18,8 @@
 - 真实生产 SQL/部署业务 E2E：未重放。
 - 原生重试在真实故障下恢复：新模型测量没有触发重试；分支由确定性错误注入覆盖，前轮技术失败保留。
 - 新版绑定候选编号的合成模型 fixture 仅做 `--check`，已测历史结果使用旧 fixture，身份歧义已披露。
+
+## PR/CI/产物回读
+
+PR #91 OPEN，源码提交 0abe712b72daf07aa661766662fcde189703ce07；GitHub Actions 34461854317 success，测试、Web 构建一致性与三个包构建通过。Assistant 本地包 131871 字节，SHA256 3C24696EAED29C15FFAEC7B3C0C93B9BE8ADC0BD4F129AC7D250B894638A52BA。仅安装 Assistant 的候选，Observer 保持不变。详见 delivery-readback.json。当前两个业务任务运行，已提出切换时机问题；尚未重启。
+

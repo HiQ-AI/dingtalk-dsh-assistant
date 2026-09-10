@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-09-10T09:41:56.2817524Z",
+  "sourceCommit": "0abe712b72daf07aa661766662fcde189703ce07",
+  "pr": {
+    "number": 91,
+    "state": "OPEN",
+    "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/91"
+  },
+  "ci": {
+    "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/actions/runs/34461854317",
+    "conclusion": "success",
+    "runId": 34461854317
+  },
+  "package": {
+    "name": "zzusp-dingtalk-dsh-assistant-0.5.13.tgz",
+    "bytes": 131871,
+    "sha256": "3C24696EAED29C15FFAEC7B3C0C93B9BE8ADC0BD4F129AC7D250B894638A52BA"
+  },
+  "localInstall": "pending-active-business"
+}
