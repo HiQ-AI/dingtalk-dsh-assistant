@@ -1,0 +1,715 @@
+
+> dingtalk-dsh-assistant@0.5.13 test D:\project\dingtalk-dsh-assistant-coordination-repair
+> node --test
+
+✔ Web client使用dsh原生插件页签slot注册唯一状态卡 (1.0795ms)
+✔ Web bundle patch只挂载无副作用host face，不启动第二份resident Runtime (6.5242ms)
+✔ 设置页异步展示版本状态且版本检查不阻塞核心配置加载 (1.5926ms)
+✔ 插件配置区分叶子通用提示词与可增删的任务流程提示词 (2.0553ms)
+✔ 添加常驻群在操作位置反馈前置条件、进度和请求结果 (1.1186ms)
+✔ 定向重规划证据必须给出消息依据、原因及受影响阶段 (10.5657ms)
+✔ Topic 决策独立提交并以固定 Topic 版本关联任务 (3.9391ms)
+✔ Topic 决策拒绝缺失来源依据、消息副本和缺失执行版本 (4.6398ms)
+✔ 任务续接协议允许目标修订同时携带新的任务名称 (1.5854ms)
+✔ 归类可新建、追加或多归属，空归属必须有原因 (4.3465ms)
+✔ 显式任务指向识别配置名称、别名、DWS登录人或cc指令 (1.4315ms)
+✔ 回复审阅结构严格区分确认、结果与订正 (1.0777ms)
+✔ 历史回复候选保留真实消息内容且引用ID不参与同一事项定论 (11.5479ms)
+✔ 历史回复候选按真实关联优先且严格限制数量和序列化体积 (18.0371ms)
+✔ 图片mediaId不算@对象且明确询问其他同事不算Agent授权 (0.6248ms)
+✔ 叶子任务不得绕过Runtime直接发送群通知 (42.4445ms)
+✔ 同事AI回复必须进入模型并由群决策协议判断 (5.7023ms)
+✔ 未点名但应处理时先询问且不得由 Runtime 静默降级 (1.901ms)
+✔ 主会话对任务补充发送简短且不复述信息的确认 (1.7907ms)
+✔ 诊断请求不得被主会话或叶子会话扩大为修复授权 (3.1342ms)
+✔ 任务关联索引覆盖当前群全部状态并允许历史任务记录关联上下文 (2.3237ms)
+✔ 任务所需附件读取失败时硬拦截任务动作并反馈缺失信息 (0.9625ms)
+✔ 历史回复审阅从 Task 固定 Topic 版本读取事实，不偷换为最新消息 (0.6553ms)
+✔ 单一业务插件使用通用命名且 health 明示 fake transport (625.1504ms)
+✔ 完成通知签名由 Agent 工作区规则决定且插件不写死身份 (2.2144ms)
+✔ resident重启通过Topic协调器恢复归类和已接受决策 (4.2544ms)
+✔ DWS profile在恢复遗留判断前注入引用消息查询协议 (0.9412ms)
+✔ 旧任务来源和续接迁移配置在打开存储前明确拒绝 (0.7426ms)
+✔ 生产HTTP提供精确的单消息重试入口 (1.1365ms)
+✔ 叶子会话使用DSH原生descriptor且恢复旧会话时补齐 (1.1565ms)
+✔ Task上下文只引用固定Topic版本，不再构造消息正文持久副本 (0.6153ms)
+✔ DWS adapter 默认禁用且不会调用 runner (1.6218ms)
+✔ 群监听等待 ready 后逐行交付且坏行不吞后续事件 (1.5261ms)
+✔ 个人IM监听等待ready后交付引用回复 (0.5361ms)
+✔ DWS profile固定附加到订阅、回读和发送命令 (0.6473ms)
+✔ Task完成通知使用DWS原生引用回复并@提出人 (0.9643ms)
+✔ 引用回复回读即使正文完全相同也必须匹配quoted message ID (0.343ms)
+✔ 无引用回复不能认领其他话题的同文引用回复 (0.141ms)
+✔ 话题 A 的同文回复不阻止话题 B 的发送和精确回读 (0.3193ms)
+✔ 短引用回复允许钉钉补充前导@但仍要求精确quoted message ID (0.2209ms)
+✔ 本人私聊发送通过openTaskId回查真实会话与消息ID (2.203ms)
+✔ 本人私聊发送等待DWS异步投递完成后再记录消息ID (525.8492ms)
+✔ 本人私聊回读限定起止时间但不设置消息条数上限 (0.6652ms)
+✔ 群范围回补自动翻页但不设人为消息条数上限 (0.2963ms)
+✔ outbox 回读命中跳过发送，未命中则只发一次并回读真实消息 ID (0.5578ms)
+✔ outbox 历史不完整或投递未知时保持 pending 不盲重发 (0.5643ms)
+✔ 组织未授权导致发送前检查失败时不发送，不绕过真实回读 (0.3321ms)
+✔ 发送后组织未授权，空回执、失败回执、任务受理回执及成功回执均不能确认送达 (0.5183ms)
+✔ 任意回执未在历史中匹配真实消息时保持 pending (0.4581ms)
+✔ 历史命中但缺少真实消息ID时不得确认或盲目重发 (0.5517ms)
+✔ DWS读取错误保留结构化服务端错误码 (2.798ms)
+✔ DWS引用回复错误保留结构化服务端错误码 (0.6264ms)
+✔ outbox 可使用无失败的最近消息窗口完成去重与投递确认 (0.3002ms)
+✔ outbox 可识别钉钉补充@、移除Markdown并附加Agent签名后的已发送消息 (0.303ms)
+✔ 本人消息增量补拉默认每10秒执行并使用30秒重叠窗口 (9.407ms)
+✔ DWS历史消息senderId映射为持久化发送人ID (0.5951ms)
+✔ DWS历史消息保留引用消息上下文 (1.0227ms)
+✔ DWS bridge 不额外查询引用详情并只保留事件已有的引用 ID (8.8022ms)
+✔ DWS历史图片消息保留可下载资源引用 (0.4543ms)
+✔ 补拉完成只证明可靠接收，未完成的 Topic 不阻塞同批后续消息 (15.4776ms)
+✔ 已接收消息补齐发送人和引用时仍交给 Runtime 生成事实版本 (0.9758ms)
+✔ 已归类图片恢复可读取后清除不可读原因并重新交给 Runtime (0.6731ms)
+✔ 普通Outbox替换通过DWS精确撤回并确认消息已不存在 (1.1041ms)
+✔ 已落盘Outbox先完成prepare，撤回失败时不发送，重试成功后再投递 (5.5386ms)
+▶ DWS bridge 区分发送前、发送中和回读失败，保留 pending 与错误观测
+  ✔ preflight (0.8033ms)
+  ✔ send (0.4004ms)
+  ✔ postflight (0.2987ms)
+✔ DWS bridge 区分发送前、发送中和回读失败，保留 pending 与错误观测 (2.3173ms)
+✔ DWS bridge 将稳定事件交给 resident 并在真实回读后确认 outbox (3.1585ms)
+✔ 主会话回复首次无法确认时会绑定同一outbox持续回读并避免重复发送 (41.9088ms)
+✔ 启动时先建立 live consumer 再补拉，重叠消息由持久 ingress 去重 (2.1127ms)
+✔ 定时增量补拉可接收本人消息并在附件处理前按持久 messageId 去重 (81.5452ms)
+✔ 定时增量补拉按已持久化发送消息ID过滤Agent本人账号消息 (2.5354ms)
+✔ 增量补拉过滤已投递及判断失败消息，只重试插话前失败项和投递新项 (44.8997ms)
+✔ 补拉命中当前账号的短引用pending outbox时确认发送并修正历史判断失败 (2.392ms)
+✔ DWS consumer 异常退出只记录活动 Task 告警 (4.7451ms)
+✔ 没有订阅群时 bridge 也会发布初始健康状态 (0.6253ms)
+✔ 无活动Task时 DWS listener 退出也会重连并恢复入站健康 (30.0987ms)
+✔ DWS listener 的 done 拒绝会重连，并在告警落盘后关闭 carrier 告警 (31.6576ms)
+✔ listener 在旧恢复执行中再次失败时，新 carrier 告警保持活动 (44.9535ms)
+✔ listener 未收到 ready 时超时重连，旧 generation 不得阻塞新订阅 (60.6931ms)
+✔ 单群补拉失败不会饿死其他群，下一轮成功后恢复健康 (29.5265ms)
+✔ 慢回补不被周期 tick 连环排队，重连补偿保留断线范围且完成前降级 (40.4604ms)
+✔ 本人私聊阻塞不设超时并只用引用消息恢复原Task (7.937ms)
+✔ 个人IM实时引用回复精确恢复redline审批且重复事件幂等 (1.5275ms)
+✔ 非redline个人引用回复按处置意见恢复并补齐approved decision (0.5876ms)
+✔ 个人IM审批监听异常退出后重连并恢复健康 (12.384ms)
+✔ 阻塞单已真实发送并获引用批准时自动补记投递并恢复原Task (2.6279ms)
+✔ 已补记错误恢复时间的阻塞单会改用原申请时间回读批准 (0.9995ms)
+✔ redline 阻塞将非空引用回复视为批复并保留明确拒绝语义 (0.2463ms)
+✔ Web在DWS发送过程中批复时撤回已落地申请并停止等待 (1.4919ms)
+✔ fake 叶子按固定输入版本逐项 checkpoint 再提交 result，工具拒绝立即失败 (46.8238ms)
+✔ fake adapter 产出完整 dsh 流式 chunk 协议 (0.8382ms)
+✔ fake adapter 先归类，再读取工具正式 Topic 标识独立提交 (7.3169ms)
+✔ fake adapter 一批多个话题处理完一个提交一个 (1.9493ms)
+✔ fake adapter 补充任务携带当前 Task 版本与新 Topic 版本 (1.8604ms)
+✔ fake adapter 内部审阅必须使用结构化工具回执 (0.7988ms)
+✔ fake adapter 对 Task 协调通知引用 Topic 消息且不提交全群观察集合 (0.7259ms)
+✔ fake adapter 读取候选后提交完整 replyReview (0.8428ms)
+✔ 生产HTTP开放只读状态与明确的本机群配置接口，测试控制面仍关闭 (395.1043ms)
+✔ 显式testApiEnabled才开放测试写入口 (43.832ms)
+✔ Web Task 入口强制稳定请求与执行版本且拒绝伪造来源和Session (155.243ms)
+✔ 移除群遇到Topic引用或未完成决策返回409而非普通参数错误 (31.8982ms)
+✔ Web输入版本与幂等身份冲突返回409，可靠接收尚未完成返回202 (22.8924ms)
+✔ Topic 查询有界分页且群摘要不泄漏内部决策、归类和预约记录 (114.8448ms)
+✔ 本机Web的127.0.0.1与localhost来源均可读取resident，其他来源不开放CORS (28.7259ms)
+✔ DWS健康状态以实际 bridge 存活和补拉状态为准 (15.308ms)
+✔ 运行看板保留左侧菜单并替换右侧整体内容 (14.5504ms)
+✔ 任务卡不请求或展示执行轮次耗时统计 (1.9721ms)
+✔ Agent配置页面提供叶子任务并行上限且默认值为5 (2.8079ms)
+✔ 发件状态按实际投递环节展示，pending不会伪装为已回读 (3.6626ms)
+✔ worktree 子目录只用唯一标记回溯到 baibu-agent 根 AGENTS.md (242.1601ms)
+✔ CLI --check零写入，--write只创建新候选且拒绝覆盖 (674.9377ms)
+✔ 离线流程修订只更新两个目标版本且重复执行不增版 (0.8177ms)
+✔ 缺基础对象FAIL，依赖集合或基线不完整UNKNOWN，均不得通过 (0.8356ms)
+✔ 未经授权共享UAT和逆序依赖均FAIL，不强制选择Docker (0.3681ms)
+✔ CI 只允许手工触发并在 Node 24 下测试、打包三个发行包 (15.2633ms)
+✔ Release 绑定受控环境并按依赖顺序发布，npm 回读后才创建 Release (5.6328ms)
+✔ 当前正式版本在 CHANGELOG 中有对应章节和 Release 链接 (4.3113ms)
+✔ resident profile 只解析到最新版 DSH 依赖边界 (3.8458ms)
+✔ 常驻启动优先读取用户代理，避免为启动解析完整 resident 状态 (25.998ms)
+✔ Web 启动优先使用当前 profile 的 DSH 入口 (6.2626ms)
+✔ 真实Goal.block在当前step中可调用，idle后driver不启动新轮次 (25.3183ms)
+✔ 真实Goal恢复加一次稳定Inbox通知，不因重复恢复入队两条结果 (14.5275ms)
+✔ 真实Session重建后blocked保持，pending通知按稳定身份恢复 (20.059ms)
+✔ 真实AgentLoop拒绝step并回填Inbox不会空转；结果通知只放行一次模型步骤 (29.3616ms)
+✔ Resident 完整提示词保留群职责与动态别名，不叠加登录人特殊禁令 (29.1864ms)
+✔ 关联状态追问走同模型无工具短路径，事实未变才写入统一 Outbox (93.2503ms)
+✔ 短路径识别执行请求后交还常驻，不创建动作或发送推测回复 (28.7545ms)
+✔ 短答生成期间 Task 事实变化，原子提交拒绝旧快照并交还常驻 (31.0413ms)
+✔ 别名修复请求创建任务，后续无称呼的图片补充续接同一叶子 (16.1665ms)
+✔ 入站持久接收立即返回，模型尚未提交时也能接收后续消息 (2.4131ms)
+✔ 重复入站幂等，Topic 提交成功后只生成一条可靠回复 (4.7779ms)
+✔ 普通 assistant 文本或 turn 结束不能替代 Topic 结构化提交 (2.508ms)
+✔ 注册工具符合 DSH JSON Schema，Resident 只能通过 Topic 决策建任务 (6.066ms)
+✔ 来源附件先持久保存，归类输入可恢复相同 imageRefs (2.8857ms)
+✔ 附件缺失硬拦截任务，仍发送明确缺失反馈 (3.1516ms)
+✔ 多群请求隔离，A 等待归类不阻止 B 完成 (4.3678ms)
+✔ Task 只保存固定 Topic 引用，叶子收到版本化原始上下文 (8.9407ms)
+✔ 任务关联摘要不复制原文，按需读取返回 Topic refs 与执行约定 (10.0887ms)
+✔ 任务并发容量满时 FIFO 排队，取消释放名额并保留取消事实 (14.9745ms)
+✔ Outbox 已落盘时监听器失败不会回滚已接受 Topic 决策 (2.8426ms)
+✔ 历史导入只发送 Topic 索引，不重放历史消息正文或指令 (2.7951ms)
+✔ 恢复失败保留原 Resident Session，其他群仍能工作 (3.4656ms)
+✔ 新群创建原生 Session 后绑定，工具不能访问其他 Session (2.239ms)
+✔ 工作区切换保留事件历史并重建 Resident，旧 Session 释放 (3.695ms)
+✔ 存在活动 Task 时拒绝工作区或模型切换，不修改已保存配置 (6.4309ms)
+✔ 模型与推理深度使用原生配置服务保存 (1.1577ms)
+✔ 叶子会话提示词通过统一配置字段保存和读取 (1.1614ms)
+✔ 内置通用规范不依赖用户补充，动态清空及恢复后仍只注入叶子 (6.5751ms)
+✔ 叶子只常驻流程索引，按需加载后直接动态注入当前正文 (4.9269ms)
+✔ 长任务可组合超过五个流程，重复加载去重，恢复后保留组合并按阶段裁减 (7.9622ms)
+✔ 流程加载与组合调整排队期间目标变化时拒绝迟到写入 (5.2898ms)
+✔ 流程修订后旧选择失效，拒绝叶子用旧流程完成任务 (28.4295ms)
+✖ 计划绑定已选流程，主会话读完同一流程正文后才可审阅 (16.797ms)
+✖ 主会话可拒绝自行扩写的冲突计划，叶子重新规划前不能推进 (14.7515ms)
+✖ 流程修订只使引用任务的旧计划失效，未引用任务不接收更新 (15.9078ms)
+✔ 任务目标变化保留流程引用供重审，并拒绝未加载流程 (6.3723ms)
+▶ 流程修改、禁用和删除后未重新加载也不能推进旧阶段
+  ✖ modify (3005.8272ms)
+  ✖ disable (3012.1069ms)
+  ✖ delete (3007.6599ms)
+✖ 流程修改、禁用和删除后未重新加载也不能推进旧阶段 (9026.7206ms)
+✖ 待审计划遇流程改版会失效并归档，重新加载后可重新规划 (3021.4527ms)
+✔ 首次异常可报告但不能改变进度，随后可制定计划并正常完成 (130.9245ms)
+✖ 异常可抢占待审计划，旧审阅不得回写或阻止新计划 (3013.651ms)
+✖ 被拒计划仍能报告证据缺口，诊断确认不解除计划拒绝 (14.9844ms)
+✖ 完成审阅发起即记录事件，拒绝与失败也保留耗时起点 (3007.3006ms)
+✖ 完成审阅期间流程更新保持 Task 与 Goal 活动并记录失败 (3018.1636ms)
+✖ 审阅通过后最后落盘前流程改变，不能完成任务或发送通知 (3018.3712ms)
+✔ 重启恢复过期待审计划时归档失败项，新计划不再被 pending 卡住 (49.7683ms)
+✖ 完成审阅通过后的并发暂停不能被完成 CAS 覆盖 (3010.2229ms)
+✔ 退订存储失败时保留 Resident，修复后可再次退订 (1.7431ms)
+✔ 关闭后拒绝新消息，关闭两次只释放每个 Session 一次 (0.7216ms)
+✔ 叶子结果与检查点拒绝缺失或过期 inputVersion/runSequence (3.3519ms)
+✖ 检查点逐项推进并由结构化内部审阅确认，不能跳项完成 (3006.9838ms)
+✖ 完成验收拒绝后保持 running 并向叶子发送具体纠偏 (3008.1822ms)
+✖ 一次完成审阅同时准备通知，完成落盘后直接入 Outbox 且 FIFO 下个任务启动 (3017.2253ms)
+✖ 通知已入 Outbox 后执行事件写入失败不会重复发起通知协调 (3014.785ms)
+✔ 尚未归类的新消息阻止叶子提交等待或完成结果 (4.8747ms)
+✔ Web 创建按 requestId 幂等，原始输入只落 Topic，参数变更不能复用身份 (2.5925ms)
+✖ Web 补充提升输入版本并重置当前检查点，同请求重试不重复补充 (3010.5758ms)
+✔ 目标修订原子更新任务名称并保留旧名称，普通补充不得单独改名 (4.9507ms)
+✔ 目标变化缺少新任务名称时拒绝续接 (2.6605ms)
+✖ preserve 新输入作废待审 checkpoint，并按新版本重新审阅 (22.8693ms)
+✖ 相同待审计划的重复提交与Supervisor恢复共用一次审阅和拒绝注入 (14.9476ms)
+✖ 旧执行轮次的 idle 回收不释放已重开的叶子 (3016.3945ms)
+✔ 人工批准与排队启动竞争时不突破并发上限 (30.9544ms)
+✔ Web 重开完成任务建立新轮次，固定保留旧输入版本与历史 (5.8373ms)
+✔ 完成任务按新目标重开时同步更新名称并在轮次历史保留旧名称 (4.2948ms)
+✔ 叶子 Topic 读取仅允许已接纳版本，拒绝未来版本及其他话题 (3.7015ms)
+✔ 同一消息并发补齐身份与附件不会丢失任一事实 (1.435ms)
+✔ 人工授权重发、引用校验、批准幂等及已批准范围复用 (17.9034ms)
+✔ Goal 耗尽转真实 waiting，正常 turn 结束只记录活动不完成 Task (4.3653ms)
+✔ 叶子异常暂停最多重建两次，继续失败升级为人工阻塞 (4.9551ms)
+✔ Resident 恢复超时由原生 AbortSignal 隔离，不阻止下一群恢复 (17.699ms)
+✔ 恢复清理旧协议与旧 Topic 请求 Inbox，但保留普通待办 (1.1346ms)
+✔ 重启恢复 Running 叶子沿用 Goal 与已接纳输入，并重新注入已选流程正文 (6.077ms)
+✔ 关闭等待已接受的可靠 Outbox 写入，期间新消息被拒绝 (2.0991ms)
+✔ 替换确认先持久化意图，渠道准备时精确撤回已回读的旧消息 (3.7044ms)
+✔ 未回读的旧确认不允许渠道发送替换消息，持久意图保留可恢复 (3.6159ms)
+✔ 等待通知在同版本 resume 清除 result 后失效，不发送旧问题 (15.0964ms)
+✔ 同版本重新 waiting 新问题不能被旧问题的通知快照覆盖 (29.6122ms)
+✔ 等待结果原子落盘遇新输入，报告保留且 Goal 停等 (14.2609ms)
+✖ 完成审阅通过后原子落盘遇新输入，不能提前 complete Goal (3005.7528ms)
+✖ 通知 Outbox 首次失败后相同请求重试使用稳定结果键且只落一次 (3005.4752ms)
+✔ 慢叶子创建期间同群其他 Topic 仍可完成 (31.4224ms)
+✔ 排队叶子启动中取消立即落盘，迟到的 Session 创建不能复活任务 (14.1133ms)
+✔ 缺少稳定发送人 ID 不伪造引用，缓冲回复监听异常不损失已存意图 (2.4429ms)
+✔ DWS 恢复关闭同群 carrier 告警且不误清其他异常 (2.9586ms)
+✔ 通知补发同批跳过退订群、隔离损坏 Resident，正常群仍独立完成 (10.4318ms)
+✔ 工作区屏障内到达的历史导入与通知等待新 Resident，导入先前事件进入新 seed (16.1691ms)
+✔ 切换工作区等待已经开始的结果通知，通知落盘前不释放旧 Resident (15.6116ms)
+✔ 退订屏障之后的历史导入拒绝旧 Resident，等待期间其他群仍可提交 (14.7032ms)
+✔ 关闭与进行中工作区切换串行收口，旧和替换 Resident 均释放一次 (12.5018ms)
+✔ 同 Topic 一次决策不能重复改变同一 Task，共享主 Topic 可取消两个不同 Task 各一次 (13.4212ms)
+✔ 已执行来源改归属不会重新授予效果权限，新授权消息可以创建新任务 (10.454ms)
+✔ 工作区切换等待期间不占任务提交队列，提交前复核新出现的活动任务 (16.8806ms)
+✔ 关闭拒绝尚未提交的结果通知且不悬挂 (13.1398ms)
+✔ 关闭等待已开始提交的结果通知 Outbox，不能提前关闭存储 (31.2028ms)
+✔ 相同引用 ID 下的不同事项不自动撤回，只有显式 replacement 才能产生撤回意图 (8.484ms)
+✔ 短问答同模型一次调用，空工具、版本提交和usage均保留 (7.393ms)
+✔ 越界Task动作、额外字段和未知来源均不提交 (3.1929ms)
+✔ 输入预算和关联不明确时不发起模型调用，来源快照不能截掉 (0.3447ms)
+✔ 复杂请求显式转交，过期CAS结果不产生第二出口 (1.5984ms)
+✔ 工具流、Provider失败和超时均转交且不提交 (8.0453ms)
+✔ 同群并发只允许一个模型请求；候选必须完整审阅且不能编造引用 (3.205ms)
+✔ 活动投影滚动500条、并发重复与重启乱序恢复，水位按Session隔离 (241.7302ms)
+✔ 协调重试状态跨重启保留且按群隔离 (3.7424ms)
+✔ 协调仅淘汰completed旧记录，保留pending/exhausted与当前恢复epoch (18.4089ms)
+✔ 投影水位已保存但淘汰删除失败，重启重放补齐裁剪且不复活旧事件 (139.2939ms)
+✔ Topic破坏性模型使用独立domain版本7 (0.214ms)
+✔ 删除后重建同 ID 流程不能复用旧修订号使旧计划恢复有效 (1.5166ms)
+✔ 群配置初始化、职责修改和删除均持久化 (0.7399ms)
+✔ 同群消息按稳定 messageId 去重并递增排序 (2.3503ms)
+✔ 显式确认可只回填缺少Agent投递状态的历史消息 (0.3955ms)
+✔ 启动恢复会收口已经完成 Topic 决策的遗留投递状态 (1.7273ms)
+✔ Task 当前轮耗时拆分状态时间和可配对工具时间 (7.5685ms)
+✔ Task 完成结果事件晚于完成状态时仍按调用ID配对 (14.8759ms)
+✔ Task 确实缺少工具结果时保持未配对标记 (14.9592ms)
+✔ 并发创建不同 Task 不会用旧 scheduler 快照互相覆盖 (1.2017ms)
+✔ Supervisor 告警按 Task 和指纹去重且不推进业务状态 (0.8791ms)
+✔ 重开 store 后复用同一 resident Session 和 outbox 状态 (0.2698ms)
+✔ 叶子会话提示词、回复审阅与撤回元数据持久化 (0.527ms)
+✔ 旧版流程与证据配置合并为叶子会话提示词并在保存后移除旧字段 (0.1479ms)
+✔ 任务流程提示词生成稳定ID、递增修订并拒绝陈旧配置覆盖 (0.4241ms)
+✔ 确认Outbox可在Task动作完成后原子补充关联Task (0.809ms)
+✔ 相同参数和单纯状态询问保留原版本证据，不误触发replan (3.858ms)
+✔ 同目标下证据否定仍触发定向重规划，preserve不能覆盖明确影响 (0.6859ms)
+✔ 真实目标变化优先采用明确影响证据，未限定时保守失效全部 (0.4646ms)
+✔ 重排或替换阶段按最早差异失效，不能以较晚impact掩盖 (0.4897ms)
+✔ 无依据replan、非法来源、未知阶段或空理由均拒绝 (1.0713ms)
+✔ 拒绝记录、其他run以及空completedItems不能冒充有效受影响阶段 (0.5008ms)
+✔ 阶段ID可重复恢复且重排稳定，重复标题或冲突ID明确拒绝 (0.5574ms)
+✔ 快照只确认当前版本事实，批准保留原始引用且不授权新对象 (7.7952ms)
+✔ 等待报告立即可见，settled后移出pending，不把报告当核验 (0.9612ms)
+✔ 大量历史正文保持有界，旧轮批准不进入当前授权摘要 (282.96ms)
+✔ 修订显式保留的已审阶段可见，仍标原inputVersion，不复活未保留证据 (0.5701ms)
+✔ pending报告先落盘，重复提交复用身份，不执行也不通知 (9.4562ms)
+✔ 输入解除后并发recover一次执行一次通知，终态重复提交不执行 (2.7529ms)
+✔ 进程重建读取持久pending，不要求模型再次提交 (1.1719ms)
+✔ 已知旧版本与已完成任务只保留事实，未知run和未来版本拒绝 (1.5178ms)
+✔ pending期间版本更新不会用旧完成报告推进新目标 (1.2591ms)
+✔ 两个并发提交在异步审阅期间复用同一执行 (1.1066ms)
+✔ settled后通知失败再重建，补通知而不重复执行报告 (3.7139ms)
+✔ 同Task不同报告串行执行，drain等待后续报告完成 (1.8475ms)
+✔ 协调失败只通知一次且保持阻塞，Supervisor恢复不自动重试执行 (1.9109ms)
+✔ 真实子进程在settled落文件后、通知前退出，恢复仅补一次通知 (351.3383ms)
+✔ 风险诊断可抢占等待计划，普通阶段仍串行 (1.7834ms)
+✔ failed只允许显式同版本重试，成功后清掉失败通知状态与阻塞 (1.2013ms)
+✔ 旧版本failed不阻塞新目标、不能retry，恢复归档history (0.6449ms)
+✔ 诊断允许受影响阶段但拒绝推进字段与计划评估，历史存储不受影响 (9.0003ms)
+✔ Task checkpoint只接受事件驱动的结构化内部同步 (2.9768ms)
+✔ Task completed结果要求非空summary与至少一条evidence (1.8624ms)
+✔ 开发任务证据由配置引导而非插件固化具体平台字段 (0.8569ms)
+✔ Task waiting结果要求明确waitingReason且拒绝多余字段 (3.3752ms)
+✔ 叶子回执必须声明执行输入版本和轮次，不能由 Runtime 猜测 (1.8617ms)
+✔ 叶子回执错误只报告匹配类型的字段问题 (0.6489ms)
+✔ 真实DSH接受同源生成的工具契约，无Zod元属性或不支持关键字 (5.6404ms)
+✔ DSH wire保留checkpoint kind互斥、错误字段拒绝；长度由Zod精确执行 (9.2147ms)
+✔ DSH wire保留result status/waitingKind区分，群动作仍按kind校验 (5.2462ms)
+✔ v6迁移保留执行状态和渠道回执、Topic基线确定且移除所有Task消息副本 (23.0745ms)
+✔ 来源缺失、正文冲突和未对账提交失败明确阻止迁移 (2.072ms)
+✔ 仅Task快照存在的历史原文迁回Message，Web输入没有伪造钉钉身份 (2.5993ms)
+✔ 真实SDK JSON迁移check零写、独立目标读回、重复运行与旧版本回退可读 (104.943ms)
+✔ 已发v6等待通知匹配当前结果时补指纹并保留原业务键，新问题不会命中旧回执 (4.1783ms)
+✔ 不匹配当前结果的旧通知和不存在通知的任务不生成猜测指纹 (1.376ms)
+✔ 原生Inbox插入稳定ID后跨文件重开恢复pending，重试不重复入队 (36.6288ms)
+✔ 原生Inbox已进入user/message后跨重开无pending，但稳定ID仍可确认曾下发 (25.2021ms)
+✔ 原生Inbox取消保留历史inserted，不能凭此认定输入已消费或仍待执行 (38.331ms)
+✔ 原生Inbox仅claim未进入surface时重开可见差异，不声称叶子已阅读 (26.6797ms)
+✔ Topic 固定版本投影在摘要缺失时仍是无损 JSON (4.5888ms)
+✔ Topic 工具统一返回 lossless JSON (27.1636ms)
+✔ 工具参数错误返回精简字段问题且不产生副作用 (2.7165ms)
+✔ 归类期间消息版本变化返回刷新后的当前请求 (3.169ms)
+✔ Topic 决策信封受字符预算约束，缺失增量读完后才可提交 (64.9663ms)
+✔ 超长单消息必须按连续文本片段读完后才允许决策 (10.1932ms)
+✔ 归类协议区分 Topic 归属与历史资料查询 (1.1616ms)
+✔ 消息仅在全部关联 Topic 完成后收口为已投递 (4.8918ms)
+✔ 明确无需进入 Topic 的消息在归类完成后直接收口 (2.1244ms)
+✔ 归类 exact batch 零副作用拒绝漏项，新增消息进入下一批 (4.4334ms)
+✔ A/B 独立提交不要求覆盖其他 Topic，先完成 B 不消费 A (2.7628ms)
+✔ 未知输入返回 routing-required，归到 B 后原 A 请求继续有效 (4.0824ms)
+✔ 同 Topic 新增输入使旧决策失效且新依据必须覆盖本次增量 (5.9615ms)
+✔ Topic 关联不能替代原消息授权，明确给他人的请求不得擅自接单 (5.1266ms)
+✔ 已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox (11.1933ms)
+✔ 内部审阅按请求绑定 Task 版本，拒绝错种类和版本变更 (6.2448ms)
+✔ 完成审阅一次提交通知草稿，Task 落盘后才写入 Outbox (8.2379ms)
+✔ 完成审阅后新增历史候选使通知草稿失效 (4.3624ms)
+✔ 完成审阅只内联受限的近期 Topic 消息 (89.7658ms)
+✔ 内部检查点必须结构化确认，不能携带相互矛盾的 guidance (2.2483ms)
+✔ 单条超长消息保持 12k 硬预算并可完整续读 (4.8818ms)
+✔ 超长目标及审阅结果分页保留原文，越序读取不能绕过完整读取门禁 (20.2239ms)
+✔ 无专用流程时审阅者仍可见目录和选择依据并读取未选候选 (2.5111ms)
+✔ 审阅读取后已选或未选候选改版、禁用、删除都使旧请求失效，无关配置不影响 (15.9759ms)
+✔ 多流程组合一次批量读取，后续检查点会使原审阅失效 (3.4923ms)
+✔ 诊断检查点可在旧流程删除后不读取流程获得协调意见 (2.5943ms)
+✔ 通知回退同样限制整体预算并须读完超长目标结果后才允许入队 (8.041ms)
+✔ 协调方使指定 Task 审阅失效后拒绝迟到结果 (1.6349ms)
+✔ Topic 按需搜索分页及固定版本读回，跨群与越界拒绝 (1.2054ms)
+✔ 历史 Topic 先根据引用消息补 summary，再据此重生成 title (3.5028ms)
+✔ Task 通知要求真实 Topic 引用及参与人，并拒绝旧 Task 输入 (2.3283ms)
+✔ 审阅后历史候选变化必须重新读取，不能用旧快照发新回复 (0.9922ms)
+✔ 无关 B 的新历史回复不使 A 的候选审阅失效 (1.1269ms)
+✔ 决策进入 Store 队列后候选变化仍在原子提交点拦截 (1.0288ms)
+✔ Task 通知在 Outbox 落盘前再次核对输入版本 (1.9783ms)
+✔ Task 通知读取最新相关候选后可提交，重试不产生第二条 Outbox (1.9215ms)
+✔ 未知回复请求不可用且不产生 Outbox (0.2802ms)
+✔ 已接受决策失败后到期自动恢复，无需新消息或重启 (12.9192ms)
+✔ 共享消息只有主 Topic 能创建 Task 或确认，其他 Topic 可独立实质回答 (2.9835ms)
+✔ 非空回复必须声明 kind，不能用省略审阅绕过共享确认门禁 (1.0193ms)
+✔ 改归属后空 Topic 可以用 removedMessageIds 静默完成，但不能创建任务 (2.1734ms)
+✔ 明确给他人的补充或取消同样不能改变已有 Task，引用转交后才可执行 (6.7504ms)
+✔ 显式归属复核冻结已处理消息，修订后原 Task 仍可读取旧 Topic 版本 (3.8782ms)
+✔ 精确消息重试清除失败等待且不重放已完成动作 (1.8668ms)
+✔ 嵌套暂停需全部释放且 release 幂等，关闭后拒绝所有工具新意图 (0.5673ms)
+✔ 归类快照只携带当前事实，失败决策按需查询可见精简进度 (1.857ms)
+✔ 动作必须先有确认且可靠 Outbox 拒绝时零 Task 副作用 (2.1769ms)
+✔ 模型停稳后仅有限次提醒，同一归类请求仍可提交 (22.0113ms)
+✔ 原生 surface 流程正文与连续页跨请求复用，压缩后历史日志不能冒充可见 (5.3092ms)
+✔ 审阅复用当前流程正文，压缩或禁用后重新门禁而不是沿用已读标记 (6.3797ms)
+✔ 稳定请求跨重启识别已消费消息，原文可见时恢复只发送短提醒 (17.7153ms)
+✔ 协议提醒到上限后持久停住，新增输入仍能形成新请求 (31.9834ms)
+✔ 只读快路径共享决策门禁，成功时不向常驻再注入请求 (1.9241ms)
+✔ 只读快路径拒绝动作和候选变化，Task事实在真实提交临界点变更时零Outbox (1.3902ms)
+✔ 原生 Inbox 仍停放原请求时，恢复提醒不会再排入第二份正文 (12.0386ms)
+✔ 显式恢复递增持久epoch，不会被此前已消费提醒身份吞掉 (46.311ms)
+✔ A/B交错归类跨turn延续、固定快照及Task不复制消息 (24.0422ms)
+✔ 归类整批预检拒绝跨群/重复/过时事实且幂等重试不重复Topic (1.6425ms)
+✔ 未知输入阻止提交，已归类无关B允许A提交，同A补充使旧版本失效 (6.0587ms)
+✔ 附件与身份补齐产生新事实版本，重开仍可读取旧Topic快照 (4.1865ms)
+✔ 错误归属追加remove/add保留原版本 (0.8758ms)
+✔ 决策固定动作身份、失败后重开恢复、Task变更恰好一次 (3.2905ms)
+✔ 共享Task版本和保留项阻止其他Topic覆盖 (1.6592ms)
+✔ 一条共享消息只存一份并更新两个Topic，归类与决策排队按最新状态检查 (1.1076ms)
+✔ 回复快照preflight在Group原子更新内拒绝，决策和Outbox均零副作用 (1.114ms)
+✔ 重复引用补齐保留已知正文，改变引用ID不串用旧正文和身份 (1.4393ms)
+✔ 固定版本不暴露后来摘要，旧决策完成不关闭已收到新输入的话题 (1.5282ms)
+✔ 不同Topic不能同时接受撤回同一Outbox的意图 (0.7237ms)
+✔ Web输入与Topic决策一次写入，持久失败零副作用且重试固定身份 (2.5667ms)
+✔ Web输入原子复核未知消息、Topic版本、Task版本状态与保留项 (1.5585ms)
+✔ Task通知并发替换同一旧回复时只有首个Outbox接受，pending意图也阻止Topic决策 (0.5333ms)
+✔ 已接受Topic意图阻止其他通知抢占回复，但自身Outbox允许落盘 (0.644ms)
+✔ Topic已完成但Outbox未送达时退订拒绝，确认送达后才允许删除 (1.2653ms)
+✔ 新Outbox结果指纹通过真实domain schema保存且重开可查询 (1.4328ms)
+✔ 语义版本比较覆盖正式版与预发布版 (1.5349ms)
+✔ 版本检查返回当前版本、最新 Release 与升级判断 (37.5737ms)
+✔ 没有 Release 与上游失败都返回明确状态 (0.8626ms)
+ℹ tests 367
+ℹ suites 0
+ℹ pass 343
+ℹ fail 24
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 53488.3354
+
+✖ failing tests:
+
+test at test\runtime.test.js:494:1
+✖ 计划绑定已选流程，主会话读完同一流程正文后才可审阅 (16.797ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /task_workflow_assessment_required/. Input:
+  
+  "Error: Cannot read properties of undefined (reading 'filter')"
+  
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:499:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: Cannot read properties of undefined (reading 'filter')
+        at leafCall (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:750:27)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:499:3)
+        at async Test.run (node:internal/test_runner/test:1389:7)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:960:7),
+    expected: /task_workflow_assessment_required/,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:511:1
+✖ 主会话可拒绝自行扩写的冲突计划，叶子重新规划前不能推进 (14.7515ms)
+  Error: Cannot read properties of undefined (reading 'filter')
+      at leafCall (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:750:27)
+
+test at test\runtime.test.js:527:1
+✖ 流程修订只使引用任务的旧计划失效，未引用任务不接收更新 (15.9078ms)
+  Error: Cannot read properties of undefined (reading 'filter')
+      at leafCall (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:750:27)
+
+test at test\runtime.test.js:568:65
+✖ modify (3005.8272ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:570:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:568:57)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:568:65
+✖ disable (3012.1069ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:570:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:568:57)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:568:65
+✖ delete (3007.6599ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:570:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:568:57)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:579:1
+✖ 待审计划遇流程改版会失效并归档，重新加载后可重新规划 (3021.4527ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:582:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:604:1
+✖ 异常可抢占待审计划，旧审阅不得回写或阻止新计划 (3013.651ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:607:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:616:1
+✖ 被拒计划仍能报告证据缺口，诊断确认不解除计划拒绝 (14.9844ms)
+  Error: Cannot read properties of undefined (reading 'filter')
+      at leafCall (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:750:27)
+
+test at test\runtime.test.js:627:1
+✖ 完成审阅发起即记录事件，拒绝与失败也保留耗时起点 (3007.3006ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async fullCheckpoints (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:769:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:629:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:643:1
+✖ 完成审阅期间流程更新保持 Task 与 Goal 活动并记录失败 (3018.1636ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:645:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:659:1
+✖ 审阅通过后最后落盘前流程改变，不能完成任务或发送通知 (3018.3712ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:661:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:699:1
+✖ 完成审阅通过后的并发暂停不能被完成 CAS 覆盖 (3010.2229ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async fullCheckpoints (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:769:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:701:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:799:1
+✖ 检查点逐项推进并由结构化内部审阅确认，不能跳项完成 (3006.9838ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:801:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:814:1
+✖ 完成验收拒绝后保持 running 并向叶子发送具体纠偏 (3008.1822ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async fullCheckpoints (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:769:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:816:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:824:1
+✖ 一次完成审阅同时准备通知，完成落盘后直接入 Outbox 且 FIFO 下个任务启动 (3017.2253ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async fullCheckpoints (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:769:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:827:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:840:1
+✖ 通知已入 Outbox 后执行事件写入失败不会重复发起通知协调 (3014.785ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async fullCheckpoints (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:769:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:841:57)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:875:1
+✖ Web 补充提升输入版本并重置当前检查点，同请求重试不重复补充 (3010.5758ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:877:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:911:1
+✖ preserve 新输入作废待审 checkpoint，并按新版本重新审阅 (22.8693ms)
+  Error: Cannot read properties of undefined (reading 'filter')
+      at leafCall (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:750:27)
+
+test at test\runtime.test.js:930:1
+✖ 相同待审计划的重复提交与Supervisor恢复共用一次审阅和拒绝注入 (14.9476ms)
+  Error: Cannot read properties of undefined (reading 'filter')
+      at leafCall (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:750:27)
+
+test at test\runtime.test.js:948:1
+✖ 旧执行轮次的 idle 回收不释放已重开的叶子 (3016.3945ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:950:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1206:1
+✖ 完成审阅通过后原子落盘遇新输入，不能提前 complete Goal (3005.7528ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async fullCheckpoints (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:769:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:1207:57)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1222:1
+✖ 通知 Outbox 首次失败后相同请求重试使用稳定结果键且只落一次 (3005.4752ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:32:10)
+      at async checkpoint (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:760:3)
+      at async fullCheckpoints (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:769:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-coordination-repair/test/runtime.test.js:1223:57)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+ ELIFECYCLE  Test failed. See above for more details.

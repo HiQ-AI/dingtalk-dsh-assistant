@@ -1,6 +1,6 @@
 {
   "name": "dingtalk-dsh-assistant",
-  "version": "0.5.13",
+  "version": "0.5.14",
   "description": "在 DeepSeek Harness 中运行的钉钉群聊个人助理与任务看板",
   "license": "UNLICENSED",
   "type": "module",
@@ -47,16 +47,19 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@zzusp/dingtalk-dsh-assistant": "workspace:0.5.13",
-    "@zzusp/dingtalk-dsh-observer": "workspace:0.5.13"
+    "@zzusp/dingtalk-dsh-assistant": "workspace:0.5.14",
+    "@zzusp/dingtalk-dsh-observer": "workspace:0.5.14"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/dsh-agent": "0.1.2-rc.1",
     "@deepseek-ai/dsh-agent-instructions": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-agent-loop": "0.1.2-rc.1",
     "@deepseek-ai/dsh-attachment": "0.1.2-rc.1",
     "@deepseek-ai/dsh-code-runtime": "0.1.2-rc.1",
     "@deepseek-ai/dsh-fs": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-goal": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-goal-round-driver": "0.1.2-rc.1",
     "@deepseek-ai/dsh-home-paths": "0.1.2-rc.1",
     "@deepseek-ai/dsh-invariants": "0.1.2-rc.1",
     "@deepseek-ai/dsh-llm": "0.1.2-rc.1",

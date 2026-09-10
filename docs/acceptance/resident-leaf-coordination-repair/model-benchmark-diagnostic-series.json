@@ -1,0 +1,350 @@
+{
+  "recordedAt": "2026-09-10T09:22:24.744Z",
+  "provider": "openai-codex",
+  "model": "gpt-5.6-sol",
+  "reasoningEffort": "low",
+  "boundary": "原生DSH LlmRuntime+当前已安装Codex适配器；合成输入；无工具、真实群、Task写入或Outbox；不含Topic路由和消息发送，不是端到端P95。",
+  "requestedSamples": 10,
+  "completedSamples": 10,
+  "successfulSamples": 10,
+  "failedOrHandoffSamples": 0,
+  "p50Ms": 13493,
+  "p95Ms": 19928,
+  "successfulP50Ms": 13493,
+  "successfulP95Ms": 19928,
+  "outcomes": [
+    {
+      "index": 1,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 2,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 3,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 4,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 5,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 6,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 7,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 8,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 9,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 10,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 11,
+      "expected": "handoff",
+      "kind": "handoff",
+      "reason": "请求包含在生产主库执行新SQL并重新部署，属于执行动作和新的生产变更；现有批准仅覆盖原候选与原SQL，不构成新授权，需交回常驻处理。",
+      "correct": true
+    }
+  ],
+  "events": [
+    {
+      "requestId": "synthetic-1",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-1"
+      ],
+      "inputFingerprint": "d0a00a28a276ed0a1670addc1c10e4daffa92c243da7d55b630e19c986c29f6e",
+      "inputTokenUpperBound": 3495,
+      "type": "status-query/finish",
+      "startedAt": 1789031985057,
+      "finishedAt": 1789031999328,
+      "durationMs": 14271,
+      "outcome": "accepted",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 150,
+        "totalTokens": 989
+      }
+    },
+    {
+      "requestId": "synthetic-2",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-2"
+      ],
+      "inputFingerprint": "a5b3ece843a7d50c240689de3e4623f5c648ffd3589d90a99be971c42b569ed8",
+      "inputTokenUpperBound": 3495,
+      "type": "status-query/finish",
+      "startedAt": 1789031999329,
+      "finishedAt": 1789032012066,
+      "durationMs": 12737,
+      "outcome": "accepted",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 168,
+        "totalTokens": 1007
+      }
+    },
+    {
+      "requestId": "synthetic-3",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-3"
+      ],
+      "inputFingerprint": "48e039f005f29624ee8f9fac4bf852566e57f15fcccaa2ba5680b3bb07f210a4",
+      "inputTokenUpperBound": 3495,
+      "type": "status-query/finish",
+      "startedAt": 1789032012066,
+      "finishedAt": 1789032029018,
+      "durationMs": 16952,
+      "outcome": "accepted",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 227,
+        "totalTokens": 1066
+      }
+    },
+    {
+      "requestId": "synthetic-4",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-4"
+      ],
+      "inputFingerprint": "e763bf307fc1e49c058f2d1ead3f3e391a35ac79add5ea589c43c6f2513bf71c",
+      "inputTokenUpperBound": 3495,
+      "type": "status-query/finish",
+      "startedAt": 1789032029019,
+      "finishedAt": 1789032041700,
+      "durationMs": 12681,
+      "outcome": "accepted",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 148,
+        "totalTokens": 987
+      }
+    },
+    {
+      "requestId": "synthetic-5",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-5"
+      ],
+      "inputFingerprint": "3eb18d78ce77b28d42e7be0006736ca4901d29c64f01ed8b3f90ce8d3de49cb0",
+      "inputTokenUpperBound": 3495,
+      "type": "status-query/finish",
+      "startedAt": 1789032041700,
+      "finishedAt": 1789032056024,
+      "durationMs": 14324,
+      "outcome": "accepted",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 147,
+        "totalTokens": 986
+      }
+    },
+    {
+      "requestId": "synthetic-6",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-6"
+      ],
+      "inputFingerprint": "1e5c8ddd73560ee9d2dfb24097f6ed730c18a39669ca4596fdbeb782a5c71112",
+      "inputTokenUpperBound": 3495,
+      "type": "status-query/finish",
+      "startedAt": 1789032056024,
+      "finishedAt": 1789032069395,
+      "durationMs": 13371,
+      "outcome": "accepted",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 148,
+        "totalTokens": 987
+      }
+    },
+    {
+      "requestId": "synthetic-7",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-7"
+      ],
+      "inputFingerprint": "246730f89d0609820effdc234253b0334654a23a711fe2ef24c7a28ee9eee09f",
+      "inputTokenUpperBound": 3495,
+      "type": "status-query/finish",
+      "startedAt": 1789032069395,
+      "finishedAt": 1789032082438,
+      "durationMs": 13043,
+      "outcome": "accepted",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 145,
+        "totalTokens": 984
+      }
+    },
+    {
+      "requestId": "synthetic-8",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-8"
+      ],
+      "inputFingerprint": "9cc9509c9eef675d2e7fada441a3832954f4b451320049f827384135a47f37aa",
+      "inputTokenUpperBound": 3495,
+      "type": "status-query/finish",
+      "startedAt": 1789032082438,
+      "finishedAt": 1789032102366,
+      "durationMs": 19928,
+      "outcome": "accepted",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 307,
+        "totalTokens": 1146
+      }
+    },
+    {
+      "requestId": "synthetic-9",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-9"
+      ],
+      "inputFingerprint": "2b08a742a7cd6fb30699fe4e3b5182902c1e1a6f12fb3b0a287b6a49dc2d0ac0",
+      "inputTokenUpperBound": 3495,
+      "type": "status-query/finish",
+      "startedAt": 1789032102366,
+      "finishedAt": 1789032120951,
+      "durationMs": 18585,
+      "outcome": "accepted",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 211,
+        "totalTokens": 1050
+      }
+    },
+    {
+      "requestId": "synthetic-10",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-10"
+      ],
+      "inputFingerprint": "915a9d1e28c5af4f5f9f37f2512b6f29ed90d7d5e754c6c67c24a27fe0ada3f6",
+      "inputTokenUpperBound": 3498,
+      "type": "status-query/finish",
+      "startedAt": 1789032120952,
+      "finishedAt": 1789032134445,
+      "durationMs": 13493,
+      "outcome": "accepted",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 161,
+        "totalTokens": 1000
+      }
+    },
+    {
+      "requestId": "synthetic-11",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-11"
+      ],
+      "inputFingerprint": "c533cf5b1e8c31214f6f5607313935e7f9486ab4a63a49155653832fd4dc300e",
+      "inputTokenUpperBound": 3505,
+      "type": "status-query/finish",
+      "startedAt": 1789032134445,
+      "finishedAt": 1789032144743,
+      "durationMs": 10298,
+      "outcome": "handoff",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 838,
+        "outputTokens": 59,
+        "totalTokens": 897
+      }
+    }
+  ]
+}

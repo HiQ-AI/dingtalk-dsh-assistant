@@ -1,0 +1,70 @@
+{
+  "recordedAt": "2026-09-10T09:13:11.926Z",
+  "provider": "openai-codex",
+  "model": "gpt-5.6-sol",
+  "reasoningEffort": "low",
+  "boundary": "原生DSH LlmRuntime+当前已安装Codex适配器；合成输入；无工具、真实群、Task写入或Outbox；不含Topic路由和消息发送，不是端到端P95。",
+  "requestedSamples": 1,
+  "completedSamples": 1,
+  "p50Ms": 15079,
+  "p95Ms": 15079,
+  "outcomes": [
+    {
+      "index": 1,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 2,
+      "expected": "handoff",
+      "kind": "handoff",
+      "reason": "请求包含在生产主库执行新SQL并重新部署，属于执行动作和目标变更；现有批准仅覆盖原候选与原SQL，不构成对此新操作的授权，需交回常驻处理。",
+      "correct": true
+    }
+  ],
+  "events": [
+    {
+      "requestId": "synthetic-1",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-1"
+      ],
+      "inputFingerprint": "d0a00a28a276ed0a1670addc1c10e4daffa92c243da7d55b630e19c986c29f6e",
+      "inputTokenUpperBound": 3495,
+      "type": "status-query/finish",
+      "startedAt": 1789031563904,
+      "finishedAt": 1789031578983,
+      "durationMs": 15079,
+      "outcome": "accepted",
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 144,
+        "totalTokens": 983
+      }
+    },
+    {
+      "requestId": "synthetic-2",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-2"
+      ],
+      "inputFingerprint": "1cb918af269b599795e93d07a1cedc6c16be4baed96fb4b5e3d6fb5a024c16cd",
+      "inputTokenUpperBound": 3503,
+      "type": "status-query/finish",
+      "startedAt": 1789031578983,
+      "finishedAt": 1789031591926,
+      "durationMs": 12943,
+      "outcome": "handoff",
+      "usage": {
+        "inputTokens": 838,
+        "outputTokens": 61,
+        "totalTokens": 899
+      }
+    }
+  ]
+}

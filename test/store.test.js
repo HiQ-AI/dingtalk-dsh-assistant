@@ -14,6 +14,94 @@ function memoryFacility(seed = new Map()) {
   return { seed, facility: { async open() { return { table, close: async () => undefined } } } }
 }
 
+test('活动投影滚动500条、并发重复与重启乱序恢复，水位按Session隔离', async () => {
+  const { facility, seed } = memoryFacility()
+  let store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'projection' })
+  await store.ingest({ groupId: 'projection', messageId: 'p1', text: '工作', occurredAt: '2026-09-10T01:00:00Z' })
+  const { task } = await createRoutedTask(store, { groupId: 'projection', sourceMessageId: 'p1', title: 'projection', objective: '投影', acceptanceCriteria: ['最新事实可见'] })
+  const event = (seq, sessionId = 's1') => ({ taskId: task.taskId, sessionId, seq, eventKey: String(seq), type: 'tool/call', occurredAt: new Date(Date.UTC(2026, 8, 10) + seq * 1000).toISOString() })
+  await Promise.all(Array.from({ length: 501 }, (_, index) => store.recordActivity(event(index))))
+  assert.equal(store.listActivities(task.taskId).length, 500)
+  assert.equal(store.listActivities(task.taskId).at(-1).seq, 500)
+  assert.equal(store.listActivities(task.taskId)[0].seq, 1)
+  const duplicate = await Promise.all([store.recordActivity(event(500)), store.recordActivity(event(500))])
+  assert.ok(duplicate.every((value) => value.created === false))
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal((await store.recordActivity(event(0))).expired, true)
+  await store.recordActivity({ ...event(1, 's2'), occurredAt: new Date(Date.UTC(2026, 8, 10) + 501000).toISOString() })
+  const projection = store.getTask(task.taskId).activityProjection
+  assert.equal(projection.sessions.s1.lastSeq, 500)
+  assert.equal(projection.sessions.s2.lastSeq, 1)
+  assert.equal(projection.truncated, true)
+  assert.deepEqual(residentDomainSpec.tables.tasks.valueSchema.parse(store.getTask(task.taskId)).activityProjection, projection)
+  assert.equal(store.listActivities(task.taskId).at(-1).sessionId, 's2')
+  const newer = await store.recordActivity({ ...event(499), eventKey: 'late-unseen', occurredAt: new Date(Date.UTC(2026, 8, 10) + 499500).toISOString() })
+  assert.equal(newer.created, true)
+  assert.equal(store.listActivities(task.taskId).at(-1).sessionId, 's2')
+  assert.equal(store.getTask(task.taskId).activityProjection.sessions.s1.lastSeq, 500)
+})
+
+test('协调重试状态跨重启保留且按群隔离', async () => {
+  const { facility, seed } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'coord-a' })
+  await store.subscribe({ groupId: 'coord-b' })
+  await store.updateCoordinationRequest('coord-a', 'r1', { status: 'pending', messageId: 'm1' })
+  await store.updateCoordinationRequest('coord-a', 'r1', { attempt: 5, status: 'exhausted', lastError: 'overloaded' })
+  const restored = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal(restored.getCoordinationRequest('coord-a', 'r1').messageId, 'm1')
+  assert.equal(restored.getCoordinationRequest('coord-a', 'r1').status, 'exhausted')
+  assert.equal(restored.getCoordinationRequest('coord-b', 'r1'), undefined)
+  const legacy = { ...restored.getGroup('coord-b') }
+  delete legacy.coordinationRequests
+  assert.deepEqual(residentDomainSpec.tables.groups.valueSchema.parse(legacy).coordinationRequests, {})
+})
+
+test('协调仅淘汰completed旧记录，保留pending/exhausted与当前恢复epoch', async () => {
+  const { facility, seed } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'coord-limit' })
+  const requests = Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`done-${i}`, { status: 'completed', attempt: 1, updatedAt: '2026-09-10T00:00:00Z' }]))
+  requests.wait = { status: 'pending', attempt: 2 }
+  requests.failed = { status: 'exhausted', attempt: 5, resumeEpoch: 1 }
+  seed.set('groups:coord-limit', { ...store.getGroup('coord-limit'), coordinationRequests: requests })
+  await store.updateCoordinationRequest('coord-limit', 'new-complete', { status: 'completed', attempt: 0 })
+  const current = store.getGroup('coord-limit').coordinationRequests
+  assert.equal(Object.values(current).filter(value => value.status === 'completed').length, 500)
+  assert.equal(current['new-complete'].status, 'completed')
+  assert.equal(current.wait.status, 'pending')
+  assert.equal(current.failed.status, 'exhausted')
+  await store.updateCoordinationRequest('coord-limit', 'failed', { status: 'pending', attempt: 0, resumeEpoch: 2 })
+  assert.equal(store.getCoordinationRequest('coord-limit', 'failed').resumeEpoch, 2)
+})
+
+test('投影水位已保存但淘汰删除失败，重启重放补齐裁剪且不复活旧事件', async () => {
+  const { facility, seed } = memoryFacility()
+  let failDelete = false
+  const faultFacility = { async open(...args) {
+    const domain = await facility.open(...args)
+    return { ...domain, table(name) {
+      const table = domain.table(name)
+      return name !== 'activities' ? table : { ...table, async delete(key) { if (failDelete) throw new Error('injected-delete-failure'); return table.delete(key) } }
+    } }
+  } }
+  const store = await openResidentStore(faultFacility)
+  await store.subscribe({ groupId: 'fault' })
+  await store.ingest({ groupId: 'fault', messageId: 'f1', text: '投影', occurredAt: '2026-09-10T01:00:00Z' })
+  const { task } = await createRoutedTask(store, { groupId: 'fault', sourceMessageId: 'f1', title: '投影', objective: '恢复', acceptanceCriteria: ['恢复'] })
+  const event = (seq) => ({ taskId: task.taskId, sessionId: 's1', seq, eventKey: String(seq), type: 'tool/call', occurredAt: new Date(Date.UTC(2026, 8, 10) + seq * 1000).toISOString() })
+  for (let seq = 0; seq < 500; seq += 1) await store.recordActivity(event(seq))
+  failDelete = true
+  await assert.rejects(store.recordActivity(event(500)), /injected-delete-failure/)
+  assert.equal([...seed.keys()].filter((key) => key.startsWith('activities:')).length, 501)
+  const restored = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal((await restored.recordActivity(event(0))).expired, true)
+  assert.equal([...seed.keys()].filter((key) => key.startsWith('activities:')).length, 500)
+  assert.equal(restored.listActivities(task.taskId).at(-1).seq, 500)
+})
+
 test('Topic破坏性模型使用独立domain版本7', () => {
   assert.equal(residentDomainSpec.version, 7)
 })

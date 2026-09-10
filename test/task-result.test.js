@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseTaskCheckpoint, parseTaskResult } from '../packages/dingtalk-dsh-assistant/task-result.js'
+import { parseTaskCheckpoint, parseTaskResult, taskCheckpointJsonSchema, taskResultJsonSchema, storedTaskCheckpointBaseSchema } from '../packages/dingtalk-dsh-assistant/task-result.js'
+
+test('诊断允许受影响阶段但拒绝推进字段与计划评估，历史存储不受影响', () => {
+  const diagnostic = { inputVersion: 1, runSequence: 1, submissionId: 's1', kind: 'risk-changed', stageId: 'stage1', stageTask: '部署', summary: '发现风险', nextStep: '等待核对' }
+  assert.equal(parseTaskCheckpoint(diagnostic).stageTask, '部署')
+  assert.throws(() => parseTaskCheckpoint({ ...diagnostic, completedItems: ['部署'] }), /completedItems/)
+  assert.throws(() => parseTaskCheckpoint({ ...diagnostic, workflowAssessment: { promptRefs: [] } }), /task_checkpoint_invalid/)
+  assert.equal(storedTaskCheckpointBaseSchema.parse({ ...diagnostic, completedItems: ['旧记录'] }).completedItems[0], '旧记录')
+  assert.equal(taskCheckpointJsonSchema.oneOf?.length ?? taskCheckpointJsonSchema.anyOf.length, 5)
+  assert.equal(taskResultJsonSchema.oneOf.length, 3)
+})
 
 test('Task checkpoint只接受事件驱动的结构化内部同步', () => {
   const checkpoint = { inputVersion: 1, runSequence: 1, kind: 'stage-completed', stageTask: '核验接口', summary: '已完成接口核验', completedItems: ['读取实现'], evidence: ['runtime.js:303'], remainingItems: ['验证异常路径'], nextStep: '运行回归测试', needsCoordinatorDecision: false }

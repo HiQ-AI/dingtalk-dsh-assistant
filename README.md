@@ -190,7 +190,7 @@ pwsh -NoProfile -File .\scripts\start-web.ps1
 4. 按需设置网络代理。
 5. 叶子通用执行规范已内置，“叶子会话提示词”可留空，仅用于补充个人或团队的通用偏好与约束；已有自定义内容会保留并追加。任务流程提示词默认逐项折叠，点击名称展开编辑名称、适用说明、流程和验收要求。叶子像使用 Skill 一样根据任务目标匹配索引、按需组合加载，不限制固定类型或流程数量；加载即记录，压缩/恢复后重新注入当前组合，并可随阶段变化增减。常驻主 Session 不常驻加载这些正文，只在计划或完成审阅请求中通过流程引用按需读取同一版本。
 
-叶子的 `plan-confirmed` 必须用 `workflowAssessment` 绑定当前流程组合，说明沿用证据、不适用步骤以及例外依据。流程例外必须引用固定 Topic 中明确提出该要求的原始消息；主会话生成的目标、验收标准或旧摘要不能覆盖流程。常驻主会话结合可用流程索引和选择原因核查是否漏选，按需读取候选流程；允许有明确理由的无匹配和多个流程组合，不固化业务任务类型。读完已选流程后审阅计划，冲突时返回结构化拒绝。计划、阶段、审阅提交及最终落盘都核对当前启用流程的修订号；配置修改、停用或删除立即使受影响旧审阅失效，无需等待叶子重载。失效待审项归档到执行事件，历史证据保留，重新规划后才可推进。`stage-completed` 每次只提交上一检查点 `remainingItems` 的第一项，`completedItems` 不是累计历史。错误推进会返回 `accepted:false`、当前执行版本与 `expected` 参数，原进度不变；核对该项真实证据并按回执修正，确认接受后再推进下一阶段。
+叶子的 `plan-confirmed` 必须用 `workflowAssessment` 绑定当前流程组合，说明沿用证据、不适用步骤以及例外依据。流程例外必须引用固定 Topic 中明确提出该要求的原始消息；主会话生成的目标、验收标准或旧摘要不能覆盖流程。常驻主会话结合可用流程索引和选择原因核查是否漏选，按需读取候选流程；允许有明确理由的无匹配和多个流程组合，不固化业务任务类型。读完已选流程后审阅计划，冲突时返回结构化拒绝。计划、阶段、审阅提交及最终落盘都核对当前启用流程的修订号；配置修改、停用或删除立即使受影响旧审阅失效，无需等待叶子重载。失效待审项归档到执行事件，历史证据保留，重新规划后才可推进。`stage-completed` 每次只提交上一检查点 `remainingItems` 的第一项，`completedItems` 不是累计历史。 checkpoint 按 kind 使用同源契约：plan-confirmed 才允许 workflowAssessment；stage-completed 必须有 stageTask 和非空 evidence；scope-conflict/evidence-gap/risk-changed 可用 stageTask/stageId 标明受影响阶段，但 completedItems 必须为空，不能推进阶段。工具 JSON Schema 由同一 Zod 投影到 DSH 支持的子集，kind/status 分支保留；长度及复杂关联约束由执行时 Zod 精确校验并返回字段路径。错误推进会返回 `accepted:false`、当前执行版本与 `expected` 参数，原进度不变；核对该项真实证据并按回执修正，确认接受后再推进下一阶段。
 6. 通过群名称模糊搜索添加常驻群，并为每个群配置会话职责。
 
 确认页面的环境检查显示 DWS 已安装、已登录后，再在实际 profile 中启用：
@@ -249,7 +249,11 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存�
 
 人工 Web Task 输入通过 `POST /tasks`、`POST /tasks/{taskId}/context` 和 `POST /tasks/{taskId}/reopen` 提交。三者均需由调用方提供稳定 `requestId` 与原始 `context`；新建还需 groupId、title、objective、acceptanceCriteria，可不提供 topicRefs，由 Runtime 建立 Web 来源 Topic。追加和重开需提供 topicRefs、inputVersion、runSequence，均从当前 Task/Topic 查询获得。相同 requestId 只可重试同一内容；版本或身份冲突返回 HTTP 409，持久接受但动作未完成返回 202。body 不接受 taskId、childSessionId 或伪造渠道来源。Resident 不持有这三个 Web 写入口，只通过带原始依据的 `group_decision_submit` 发起业务动作。
 
-取消入口 `POST /tasks/{taskId}/cancel` 同样要求 requestId、topicRefs、inputVersion、runSequence，以 reason 保存人工原文。Web 来源不伪造钉钉引用或 @。Resident 已移除 `group_task_create`、`group_task_context_append`、`group_task_reopen` 直写工具；误归类通过 `group_topic_route_review` 提交修订，所有非空回复必须带 `replyReview.kind`。Task 补充输入必须声明 `progressImpact`。仅当目标、验收、阶段和既有证据有效性均未变化时，`preserve` 才保留已确认 checkpoints，并将其重绑到新 inputVersion；旧版本待审项作废并归入执行事件，要求按新版本重新提交。其他情况按 `replan` 归档全部旧进度，并要求重新提交 plan-confirmed。跨 Topic 补充会合并固定版本引用，不覆盖此前执行依据。
+取消入口 `POST /tasks/{taskId}/cancel` 同样要求 requestId、topicRefs、inputVersion、runSequence，以 reason 保存人工原文。Web 来源不伪造钉钉引用或 @。Resident 已移除 `group_task_create`、`group_task_context_append`、`group_task_reopen` 直写工具；误归类通过 `group_topic_route_review` 提交修订，所有非空回复必须带 `replyReview.kind`。Task 补充输入按实际值判断范围变化，同值目标、验收和阶段数组不触发重规划。`preserve` 保留仍有效的已确认 checkpoints 及其原 inputVersion，不改写成新版本验收。确需否定既有进展时通过 `impactEvidence` 提供原始 basisMessageIds、原因与 affectedStageIds；从最早受影响阶段失效后续进展，保留此前证据，重新确认实际阶段顺序。明确影响证据不能被 preserve 忽略；未提供依据的同范围 replan 会被拒绝。阶段按稳定 stageId 关联，重复标题或冲突 ID 拒绝。跨 Topic 补充会合并固定版本引用，不覆盖此前执行依据。
+
+叶子报告通过可选 submissionId 或规范内容身份持久接纳，同 ID 不同内容拒绝。input-wait/review-wait 代表已保存、尚未批准推进；叶子等待 Runtime 事件，不重复提交探测状态。旧版本合法报告只归历史，不覆盖新目标；输入解除或重启从持久记录恢复，审阅和通知复用稳定身份。最终接受、阶段通过与业务验收仍独立核对。
+
+生产发布与数据变更流程的前置核验、离线 revision 候选和配置 CAS 操作见[发布准备证据与流程修订](docs/ops/release-preflight-evidence.md)。缺基础对象为 FAIL，证据或依赖清单不完整为 UNKNOWN，均不能进入生产执行；检查脚本 PASS 仅表示证据契约完整。
 
 Topic 查询的 `processing` 提供最新未完成意图的 decisionId、status、appliedOperations、totalOperations 和有界 error，不返回动作正文。Observer 对应显示处理失败或处理中及动作进度，便于区分消息已接收、Topic 已决策与动作实际完成。
 
@@ -274,6 +278,14 @@ Topic 查询的 `processing` 提供最新未完成意图的 decisionId、status�
 叶子提交 `completed` 后，Runtime 会以 coordinator 内部上下文注入的方式，让常驻模型对照当前目标、runSequence、inputVersion 和 Topic 输入版本审查本轮结果和证据，并通过一次 `group_task_review_submit` 同时返回审阅回执与群通知草稿。审阅与回退通知最多内联 20 条、12,000 字符的相关 Topic 消息，整个请求限制为 40,000 字符。超长目标、验收、结果和索引保留 section 指针，通过 group_task_review_context_get 按 nextOffset 续读固定快照；长消息可通过同一工具或固定 Topic 原文分页读取。不能把截断片段当作完整证据。Runtime 只有在审阅通过且 Task 按当前版本原子完成后才将草稿写入发信箱；若期间出现新消息、Topic 或历史回复候选变化，则放弃旧草稿并重新协调。若新增或修订范围未完成、缺少验证，Task 保持 `running`，缺口反馈给原叶子继续执行，不生成完成通知。
 
 除群成员明确撤销整个任务并提交 `task-cancel` 外，`running` 和 `waiting`（包括阻塞中）任务收到新增信息时只追加 `task-context`，继续同一执行轮次；只有 `completed` 任务（包括已归档展示）才允许 reopen 并初始化下一轮。完成轮次的 Session 空闲回收同时绑定 handle、Task 状态和 runSequence，不会释放已经重开的新轮次。普通阶段 checkpoint 由 Host 校验版本、顺序和证据后直接确认；计划、冲突、范围或风险变化等需要语义判断的 checkpoint 才交给 Resident。相同未审阅 checkpoint 以持久 checkpointId 复用同一审阅；Supervisor 只恢复该请求，不重复追加。scope-conflict、evidence-gap、risk-changed 在无计划、已拒绝或旧流程失效时仍可报告，不能携带完成项或修改剩余进度；新异常可抢占未确认审阅，旧待审项归档，迟到审阅不得回写。完成审阅发起时即记录 completion-review-requested，拒绝或失败也保留时间与关联尝试标识，Task 完成、通知入队及真实送达分别记录。
+
+### 只读状态问答与模型重试
+
+已明确关联 Task 的简单状态问答可使用独立、无工具的短模型请求，读取当前 Topic 增量、Task 事实快照、审批边界及回复候选；执行动作、授权、复杂冲突或上下文不足时交回常驻处理。短请求沿用当前 Provider、模型和推理设置，提交仍通过 Task 集合、事实版本、策略、Topic 及回复候选校验，并复用原有 Outbox。
+
+直接调用 DSH `LlmRuntime` 不经过 `agent/request-error`，不能假定 AgentLoop 的重试插件会替短请求重试。短问答 handler 是这一条调用链唯一的重试执行者：通过 `prepareCall()` 获取原生 Provider policy，遵守可重试错误码、次数、指数退避、抖动和 Retry-After；所有尝试共享同一请求与输入身份，并受总30秒模型预算限制。失败的部分正文不会提交；耗尽、不可重试或超时才交回常驻。遥测分别记录尝试次数、累计 usage、原生 finish kind/code/status，不记录 Provider 原始错误正文或凭据。
+
+重试规则的确定性测试与真实模型测量见[性能测量记录](docs/acceptance/resident-leaf-coordination-repair/performance-measurement.md)。短模型往返不含路由和钉钉发送，不能代替端到端响应指标。
 
 ## Web 运行看板
 

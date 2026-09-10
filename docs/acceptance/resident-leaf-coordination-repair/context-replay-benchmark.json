@@ -1,0 +1,209 @@
+{
+  "baselineRevision": "b7d0ea1",
+  "baselineSourceHash": "52ce63b0fba61831b91b47d1c912a43609f34decca43d423d7e8aec09b6e396b",
+  "currentSourceHash": "044e5c18f42fcaf695f5d95a6fdcbf356696fc09f008c683e481e58cf201085e",
+  "rounds": 10,
+  "boundary": "真实基线协调器与当前协调器运行同一合成Store和原生Session；每轮五次审阅，不调用模型。测Host重放和实际工具正文字符，不是模型墙钟改进。",
+  "records": [
+    {
+      "label": "baseline",
+      "round": 1,
+      "reviews": 5,
+      "flowCalls": 5,
+      "pageCalls": 5,
+      "flowChars": 42000,
+      "pageChars": 52510,
+      "hostReplayMs": 4.42
+    },
+    {
+      "label": "current",
+      "round": 1,
+      "reviews": 5,
+      "flowCalls": 1,
+      "pageCalls": 1,
+      "flowChars": 8400,
+      "pageChars": 10502,
+      "hostReplayMs": 18.36
+    },
+    {
+      "label": "baseline",
+      "round": 2,
+      "reviews": 5,
+      "flowCalls": 5,
+      "pageCalls": 5,
+      "flowChars": 42000,
+      "pageChars": 52510,
+      "hostReplayMs": 3.27
+    },
+    {
+      "label": "current",
+      "round": 2,
+      "reviews": 5,
+      "flowCalls": 1,
+      "pageCalls": 1,
+      "flowChars": 8400,
+      "pageChars": 10502,
+      "hostReplayMs": 6.1
+    },
+    {
+      "label": "baseline",
+      "round": 3,
+      "reviews": 5,
+      "flowCalls": 5,
+      "pageCalls": 5,
+      "flowChars": 42000,
+      "pageChars": 52510,
+      "hostReplayMs": 2.4
+    },
+    {
+      "label": "current",
+      "round": 3,
+      "reviews": 5,
+      "flowCalls": 1,
+      "pageCalls": 1,
+      "flowChars": 8400,
+      "pageChars": 10502,
+      "hostReplayMs": 5.22
+    },
+    {
+      "label": "baseline",
+      "round": 4,
+      "reviews": 5,
+      "flowCalls": 5,
+      "pageCalls": 5,
+      "flowChars": 42000,
+      "pageChars": 52510,
+      "hostReplayMs": 1.76
+    },
+    {
+      "label": "current",
+      "round": 4,
+      "reviews": 5,
+      "flowCalls": 1,
+      "pageCalls": 1,
+      "flowChars": 8400,
+      "pageChars": 10502,
+      "hostReplayMs": 5.58
+    },
+    {
+      "label": "baseline",
+      "round": 5,
+      "reviews": 5,
+      "flowCalls": 5,
+      "pageCalls": 5,
+      "flowChars": 42000,
+      "pageChars": 52510,
+      "hostReplayMs": 3.2
+    },
+    {
+      "label": "current",
+      "round": 5,
+      "reviews": 5,
+      "flowCalls": 1,
+      "pageCalls": 1,
+      "flowChars": 8400,
+      "pageChars": 10502,
+      "hostReplayMs": 5.38
+    },
+    {
+      "label": "baseline",
+      "round": 6,
+      "reviews": 5,
+      "flowCalls": 5,
+      "pageCalls": 5,
+      "flowChars": 42000,
+      "pageChars": 52510,
+      "hostReplayMs": 3.68
+    },
+    {
+      "label": "current",
+      "round": 6,
+      "reviews": 5,
+      "flowCalls": 1,
+      "pageCalls": 1,
+      "flowChars": 8400,
+      "pageChars": 10502,
+      "hostReplayMs": 5.6
+    },
+    {
+      "label": "baseline",
+      "round": 7,
+      "reviews": 5,
+      "flowCalls": 5,
+      "pageCalls": 5,
+      "flowChars": 42000,
+      "pageChars": 52510,
+      "hostReplayMs": 2.64
+    },
+    {
+      "label": "current",
+      "round": 7,
+      "reviews": 5,
+      "flowCalls": 1,
+      "pageCalls": 1,
+      "flowChars": 8400,
+      "pageChars": 10502,
+      "hostReplayMs": 4.68
+    },
+    {
+      "label": "baseline",
+      "round": 8,
+      "reviews": 5,
+      "flowCalls": 5,
+      "pageCalls": 5,
+      "flowChars": 42000,
+      "pageChars": 52510,
+      "hostReplayMs": 1.84
+    },
+    {
+      "label": "current",
+      "round": 8,
+      "reviews": 5,
+      "flowCalls": 1,
+      "pageCalls": 1,
+      "flowChars": 8400,
+      "pageChars": 10502,
+      "hostReplayMs": 4.88
+    },
+    {
+      "label": "baseline",
+      "round": 9,
+      "reviews": 5,
+      "flowCalls": 5,
+      "pageCalls": 5,
+      "flowChars": 42000,
+      "pageChars": 52510,
+      "hostReplayMs": 1.87
+    },
+    {
+      "label": "current",
+      "round": 9,
+      "reviews": 5,
+      "flowCalls": 1,
+      "pageCalls": 1,
+      "flowChars": 8400,
+      "pageChars": 10502,
+      "hostReplayMs": 4.5
+    },
+    {
+      "label": "baseline",
+      "round": 10,
+      "reviews": 5,
+      "flowCalls": 5,
+      "pageCalls": 5,
+      "flowChars": 42000,
+      "pageChars": 52510,
+      "hostReplayMs": 2.81
+    },
+    {
+      "label": "current",
+      "round": 10,
+      "reviews": 5,
+      "flowCalls": 1,
+      "pageCalls": 1,
+      "flowChars": 8400,
+      "pageChars": 10502,
+      "hostReplayMs": 4.76
+    }
+  ]
+}

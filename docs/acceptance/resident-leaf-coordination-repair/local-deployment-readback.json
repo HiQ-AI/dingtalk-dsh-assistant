@@ -1,0 +1,53 @@
+{
+  "checkedAt": "2026-09-10T09:47:46.4731932Z",
+  "sourceCommit": "0abe712b72daf07aa661766662fcde189703ce07",
+  "userAuthorizedInterruption": true,
+  "pid": 374340,
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 374340
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 374340
+    }
+  ],
+  "storageBackup": {
+    "sha256": "5C54CA90E61217C739F530C6F9B5574949650E8E3ED637611C854B12FA0410B3",
+    "bytes": 7656368,
+    "outsideRepository": true
+  },
+  "installedSourceFiles": 25,
+  "sourceHashesMatch": true,
+  "manifestDifference": "trailing newline only",
+  "unrelatedDependenciesUnchanged": true,
+  "profilePatchUnchanged": true,
+  "agentConfigDeepEqual": true,
+  "health": {
+    "status": "ok",
+    "transport": "dws",
+    "inboundProcessing": true,
+    "recoveryIssueCount": 0
+  },
+  "taskCounts": [
+    {
+      "Name": "completed",
+      "Count": 42
+    },
+    {
+      "Name": "running",
+      "Count": 2
+    }
+  ],
+  "stagePlanReconciledTasks": 2,
+  "web": {
+    "authenticatedStatus": 200,
+    "rootStatus": 200,
+    "bytes": 25883,
+    "title": "DeepSeek Harness",
+    "hasModuleScript": true
+  },
+  "browserVisual": "UNKNOWN: built-in browser ERR_BLOCKED_BY_CLIENT",
+  "businessE2E": "UNKNOWN: no business test messages or replay"
+}

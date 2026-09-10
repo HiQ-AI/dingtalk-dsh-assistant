@@ -1,6 +1,6 @@
 {
   "name": "@zzusp/dingtalk-dsh-assistant",
-  "version": "0.5.13",
+  "version": "0.5.14",
   "description": "DingTalk resident runtime and settings client for DeepSeek Harness",
   "license": "UNLICENSED",
   "type": "module",
@@ -10,7 +10,10 @@
     "url": "git+https://github.com/HiQ-AI/dingtalk-dsh-assistant.git",
     "directory": "packages/dingtalk-dsh-assistant"
   },
-  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "files": [
     "*.js",
     "cordis.patch.yml"
@@ -36,8 +39,9 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-client-ui-primitives": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-subagent": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.1.2-rc.1",
     "@deepseek-ai/dsh-storage-domain": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-subagent": "0.1.2-rc.1",
     "react": "^18.2.0",
     "undici": "7.16.0",
     "zod": "^4.0.0"

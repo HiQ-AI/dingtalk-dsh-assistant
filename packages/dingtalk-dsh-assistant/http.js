@@ -1,5 +1,6 @@
 import { checkForUpdates } from './version-check.js'
 import { z } from 'zod'
+import { taskContextImpactFields } from './decision.js'
 
 const WEB_ORIGINS = new Set(['http://127.0.0.1:3080', 'http://localhost:3080'])
 
@@ -80,6 +81,7 @@ const taskInputFields = {
 }
 const createTaskInputSchema = z.strictObject({ ...taskInputFields, groupId: requiredText, title: requiredText, objective: requiredText, acceptanceCriteria: z.array(requiredText).min(1), topicRefs: topicRefsSchema.optional() })
 const updateTaskInputSchema = z.strictObject({ ...taskInputFields, inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() })
+const contextTaskInputSchema = updateTaskInputSchema.extend(taskContextImpactFields)
 const cancelTaskInputSchema = z.strictObject({ requestId: requiredText, reason: requiredText, inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), topicRefs: topicRefsSchema })
 
 export function residentErrorStatus(error) {
@@ -90,7 +92,7 @@ export function residentErrorStatus(error) {
 async function submitWebTask(request, response, runtime, kind, taskId) {
   try {
     const body = await readJson(request)
-    const parsed = (kind === 'createTask' ? createTaskInputSchema : kind === 'cancelTask' ? cancelTaskInputSchema : updateTaskInputSchema).safeParse(body)
+    const parsed = (kind === 'createTask' ? createTaskInputSchema : kind === 'cancelTask' ? cancelTaskInputSchema : kind === 'appendTaskContext' ? contextTaskInputSchema : updateTaskInputSchema).safeParse(body)
     if (!parsed.success) return send(response, 400, { error: 'web_task_request_invalid', issues: parsed.error.issues.map(({ path, message }) => ({ path, message })) })
     const value = await runtime[kind]({ ...parsed.data, ...(taskId ? { taskId } : {}) })
     return send(response, value?.status === 'task-stale' ? 409 : value?.status === 'accepted' ? 202 : 200, value)
@@ -146,6 +148,25 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/agent-config') return send(response, 200, store.getAgentConfig())
   if (request.method === 'GET' && url.pathname === '/state/version') return send(response, 200, await checkForUpdatesImpl({ force: url.searchParams.get('refresh') === 'true' }))
   if (request.method === 'POST' && url.pathname === '/tasks') return submitWebTask(request, response, store, 'createTask')
+  const reportRoute = /^\/tasks\/([^/]+)\/reports\/([^/]+)(\/retry)?$/u.exec(url.pathname)
+  if (reportRoute && (request.method === 'GET' && !reportRoute[3] || request.method === 'POST' && reportRoute[3])) {
+    try {
+      // 此操作无 body 参数；身份仅由路径确定，禁止 body 覆盖 task/submission。
+      const identity = { taskId: decodeURIComponent(reportRoute[1]), submissionId: decodeURIComponent(reportRoute[2]) }
+      const value = await store[request.method === 'GET' ? 'getTaskReport' : 'retryTaskReport'](identity)
+      return value === undefined ? send(response, 404, { error: 'task_report_not_found' }) : send(response, request.method === 'GET' ? 200 : 202, value)
+    } catch (error) {
+      const status = /^task_report_not_found(:|$)/u.test(error.message) ? 404 : /^task_report_retry_(stale|requires_failed)(:|$)/u.test(error.message) ? 409 : residentErrorStatus(error)
+      return send(response, status, { error: error.message })
+    }
+  }
+  const coordinationRetry = request.method === 'POST' ? /^\/config\/groups\/([^/]+)\/coordination\/([^/]+)\/retry$/u.exec(url.pathname) : null
+  if (coordinationRetry) {
+    try {
+      const value = await store.retryCoordinationRequest({ groupId: decodeURIComponent(coordinationRetry[1]), requestId: decodeURIComponent(coordinationRetry[2]) })
+      return send(response, 202, value)
+    } catch (error) { return send(response, error.message === 'topic_request_unknown_or_wrong_group' ? 404 : residentErrorStatus(error), { error: error.message }) }
+  }
   if (request.method === 'POST' && /^\/tasks\/[^/]+\/context$/u.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/context'.length))
     return submitWebTask(request, response, store, 'appendTaskContext', taskId)
