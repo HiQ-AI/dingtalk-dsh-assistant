@@ -29,6 +29,14 @@ test('Topic 决策拒绝缺失来源依据、消息副本和缺失执行版本',
   assert.throws(() => parseAction({ kind: 'task-context', taskId: 'task-1', context: '继续', topicRefs }))
 })
 
+test('任务续接协议允许目标修订同时携带新的任务名称', () => {
+  for (const kind of ['task-context', 'task-reopen']) {
+    const action = { kind, taskId: 'task-1', context: '目标升级', title: '修复并部署数据库切换', objective: '修复数据库切换并部署 UAT', topicRefs, ...executionVersion }
+    assert.deepEqual(groupDecisionSchema.parse({ basisMessageIds: ['m-1'], actions: [action], reply: '按新目标继续处理' }).actions[0], action)
+    assert.throws(() => groupDecisionSchema.parse({ basisMessageIds: ['m-1'], actions: [{ ...action, title: '长'.repeat(121) }], reply: '继续处理' }))
+  }
+})
+
 test('归类可新建、追加或多归属，空归属必须有原因', () => {
   const route = { messageId: 'm-1', messageVersion: 1, topics: [
     { topicId: 'topic-a', relationship: 'continuation', reason: '延续当前讨论目标' },

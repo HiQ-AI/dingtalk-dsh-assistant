@@ -64,6 +64,7 @@ const groupSchema = z.object({
   routingRevision: z.number().int().nonnegative(), topics: z.array(topicSchema), routeHistory: z.array(z.record(z.string(), z.unknown())), taskReservations: z.array(z.record(z.string(), z.unknown())),
 })
 const taskObjectiveRevisionSchema = z.object({ objective: z.string().min(1), revisedAt: z.string().min(1), topicRefs: z.array(topicRefSchema).optional(), inputVersion: z.number().int().positive().optional(), decisionId: z.string().optional() })
+const taskTitleRevisionSchema = z.object({ title: z.string().min(1), revisedAt: z.string().min(1), inputVersion: z.number().int().positive().optional(), runSequence: z.number().int().positive().optional(), decisionId: z.string().optional() })
 const taskPromptSchema = z.object({ id: z.string().min(1), name: z.string().trim().min(1).max(80), description: z.string().trim().min(1).max(400), prompt: z.string().trim().min(1).max(40000), enabled: z.boolean(), revision: z.number().int().positive() })
 const taskPromptRefSchema = z.object({ id: z.string().min(1), revision: z.number().int().positive() })
 const persistedTaskCheckpointSchema = taskCheckpointSchema.extend({
@@ -72,7 +73,7 @@ const persistedTaskCheckpointSchema = taskCheckpointSchema.extend({
 })
 const taskRunSchema = z.object({
   runSequence: z.number().int().positive(), startedAt: z.string().min(1), endedAt: z.string().min(1).optional(),
-  topicRefs: z.array(topicRefSchema), inputVersion: z.number().int().positive(), objective: z.string().min(1), childSessionId: z.string().min(1),
+  topicRefs: z.array(topicRefSchema), inputVersion: z.number().int().positive(), title: z.string().min(1).optional(), objective: z.string().min(1), childSessionId: z.string().min(1),
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
   acceptanceCriteria: z.array(z.string().min(1)), stageTasks: z.array(z.string().min(1)), taskPromptRefs: z.array(taskPromptRefSchema).optional(), checkpoints: z.array(persistedTaskCheckpointSchema).optional(), result: persistedTaskResultSchema.optional(),
 })
@@ -82,7 +83,7 @@ const taskSchema = z.object({
   state: z.enum(['queued', 'running', 'waiting', 'completed']), childSessionId: z.string().min(1),
   waitingReason: z.string().optional(), waitingKind: z.enum(['information', 'human-intervention']).optional(),
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
-  objectiveHistory: z.array(taskObjectiveRevisionSchema).optional(),
+  objectiveHistory: z.array(taskObjectiveRevisionSchema).optional(), titleHistory: z.array(taskTitleRevisionSchema).optional(),
   runSequence: z.number().int().positive().optional(), runStartedAt: z.string().min(1).optional(),
   acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional(), taskPromptRefs: z.array(taskPromptRefSchema).optional(), runHistory: z.array(taskRunSchema).optional(),
   executionEvents: z.array(z.record(z.string(), z.unknown())).optional(),
@@ -142,6 +143,14 @@ const validateTaskMetadata = ({ title, objective, acceptanceCriteria }) => {
   if (typeof title !== 'string' || !title.trim() || title.length > 120 || title.startsWith('[TASK_SOURCE_EVIDENCE]')) throw new Error('task_title_invalid')
   if (typeof objective !== 'string' || !objective.trim() || objective.startsWith('[TASK_SOURCE_EVIDENCE]')) throw new Error('task_objective_invalid')
   return { title: title.trim(), objective: objective.trim(), acceptanceCriteria: cleanRequiredList(acceptanceCriteria, 'task_acceptance_criteria_required') }
+}
+const assertTaskRevisionMetadata = (task, action) => {
+  if (!['task-context', 'task-reopen'].includes(action.kind)) return
+  const objective = typeof action.objective === 'string' ? action.objective.trim() : ''
+  const title = typeof action.title === 'string' ? action.title.trim() : ''
+  const objectiveChanged = Boolean(objective && objective !== task.objective)
+  if (title && !objectiveChanged) throw new Error('task_title_requires_objective_revision')
+  if (objectiveChanged && !title) throw new Error('task_objective_title_required')
 }
 
 function taskTiming(task, activities, now = Date.now()) {
@@ -481,6 +490,8 @@ export async function openResidentStore(storageDomain) {
         if (new Set(targetTaskIds).size !== targetTaskIds.length) throw new Error('topic_task_action_duplicate')
         for (const action of decision.actions ?? []) {
           if (action.taskId && !expectedTaskVersions.some((item) => item.taskId === action.taskId)) throw new Error('topic_task_version_required')
+          const task = action.taskId ? tasks.get(action.taskId) : undefined
+          if (task) assertTaskRevisionMetadata(task, action)
         }
         for (const expected of expectedTaskVersions) {
           const task = tasks.get(expected.taskId)
@@ -523,6 +534,7 @@ export async function openResidentStore(storageDomain) {
           if (!task || task.groupId !== groupId || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence) { result = { status: 'task-stale', taskId: action.taskId }; return latest }
           if (latest.taskReservations.some((reservation) => reservation.taskId === task.taskId)) { result = { status: 'task-busy', taskId: task.taskId }; return latest }
           if ((action.kind === 'task-reopen' && task.state !== 'completed') || (['task-context', 'task-cancel'].includes(action.kind) && task.state === 'completed')) { result = { status: 'task-state-invalid', taskId: task.taskId }; return latest }
+          assertTaskRevisionMetadata(task, action)
         }
         const now = new Date().toISOString(), refs = [...topicRefs, { topicId, revision: 1 }]
         const decision = { actions: [{ ...action, topicRefs: refs }], reply: '', basisMessageIds: [messageId] }

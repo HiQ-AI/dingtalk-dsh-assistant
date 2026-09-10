@@ -491,7 +491,7 @@ test('任务目标变化清空旧流程选择并拒绝未加载流程', async (t
   await assert.rejects(leafCall(h, task, 'select_task_prompts', { inputVersion: 1, ids: [saved.taskPrompts[0].id], reason: '排查' }), /task_prompt_not_loaded/)
   await leafCall(h, task, 'load_task_prompt', { id: saved.taskPrompts[0].id })
   await leafCall(h, task, 'select_task_prompts', { inputVersion: 1, ids: [saved.taskPrompts[0].id], reason: '排查' })
-  const revised = await h.runtime.followupTask({ taskId: task.taskId, requestId: 'switch-to-fix', topicRefs: task.topicRefs, ...inputVersion(h.store.getTask(task.taskId)), text: '用户明确要求修复', objective: '修复已定位的问题', acceptanceCriteria: ['修复可验证'], stageTasks: ['完成修复'] })
+  const revised = await h.runtime.followupTask({ taskId: task.taskId, requestId: 'switch-to-fix', topicRefs: task.topicRefs, ...inputVersion(h.store.getTask(task.taskId)), text: '用户明确要求修复', title: '修复已定位问题', objective: '修复已定位的问题', acceptanceCriteria: ['修复可验证'], stageTasks: ['完成修复'] })
   assert.equal(revised.inputVersion, 2)
   assert.deepEqual(revised.taskPromptRefs, [])
 })
@@ -827,6 +827,25 @@ test('Web 补充提升输入版本并重置当前检查点，同请求重试不�
   assert.ok(leaf.sent.some((message) => message.content[0].text.includes('"inputVersion":2')))
 })
 
+test('目标修订原子更新任务名称并保留旧名称，普通补充不得单独改名', async (t) => {
+  const h = await setup(t), task = await createTask(h, '数据库切换排查')
+  await assert.rejects(h.runtime.appendTaskContext({ taskId: task.taskId, requestId: 'title-only', topicRefs: task.topicRefs, context: '只补充信息', title: '不应改名', ...inputVersion(task) }), /task_title_requires_objective_revision/)
+  const updated = await h.runtime.appendTaskContext({ taskId: task.taskId, requestId: 'revise-objective', topicRefs: task.topicRefs, context: '明确要求修复并部署', title: '修复并部署数据库切换', objective: '修复数据库切换问题并部署 UAT', ...inputVersion(task) })
+  assert.equal(updated.title, '修复并部署数据库切换')
+  assert.equal(updated.objective, '修复数据库切换问题并部署 UAT')
+  assert.deepEqual(updated.titleHistory.map((item) => item.title), ['数据库切换排查'])
+  assert.deepEqual(updated.objectiveHistory.map((item) => item.objective), ['核验 数据库切换排查'])
+  assert.equal(updated.titleHistory[0].inputVersion, task.inputVersion)
+  assert.equal(updated.titleHistory[0].runSequence, task.runSequence)
+})
+
+test('目标变化缺少新任务名称时拒绝续接', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  await assert.rejects(h.runtime.appendTaskContext({ taskId: task.taskId, requestId: 'objective-without-title', topicRefs: task.topicRefs, context: '扩大范围', objective: '修复并部署', ...inputVersion(task) }), /task_objective_title_required/)
+  assert.equal(h.store.getTask(task.taskId).objective, task.objective)
+  assert.equal(h.store.getTask(task.taskId).title, task.title)
+})
+
 test('preserve 新输入作废待审 checkpoint，并按新版本重新审阅', async (t) => {
   const h = await setup(t), task = await createTask(h)
   const value = { ...inputVersion(task), kind: 'plan-confirmed', summary: '初始计划', completedItems: [], evidence: [], remainingItems: ['核验'], nextStep: '核验', needsCoordinatorDecision: false }
@@ -896,6 +915,17 @@ test('Web 重开完成任务建立新轮次，固定保留旧输入版本与历�
   assert.deepEqual(reopened.runHistory[0].topicRefs, completed.topicRefs)
   assert.equal(h.store.listTasks().length, 1)
   for (const field of ['messageHistory', 'sourceMessageId', 'triggerHistory', 'relatedContexts']) assert.equal(field in reopened.runHistory[0], false)
+})
+
+test('完成任务按新目标重开时同步更新名称并在轮次历史保留旧名称', async (t) => {
+  const h = await setup(t), task = await createTask(h, '排查数据库切换')
+  await h.runtime.cancelTask({ taskId: task.taskId, requestId: 'finish-diagnostic', topicRefs: task.topicRefs, ...inputVersion(task), reason: '排查阶段结束' })
+  const completed = h.store.getTask(task.taskId)
+  const reopened = await h.runtime.reopenTask({ taskId: task.taskId, requestId: 'reopen-as-fix', topicRefs: completed.topicRefs, context: '开始修复', title: '修复数据库切换', objective: '修复数据库切换问题', ...inputVersion(completed) })
+  assert.equal(reopened.title, '修复数据库切换')
+  assert.equal(reopened.objective, '修复数据库切换问题')
+  assert.equal(reopened.titleHistory.at(-1).title, '排查数据库切换')
+  assert.equal(reopened.runHistory.at(-1).title, '排查数据库切换')
 })
 
 test('叶子 Topic 读取仅允许已接纳版本，拒绝未来版本及其他话题', async (t) => {
