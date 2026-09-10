@@ -13,8 +13,9 @@ model-after-retry,3,PASS,model-benchmark-after-retry.json,29答复1合理转交�
 full-suite,3,PASS,all-tests-round-5.txt,391/391
 workflow-config,2,PASS,workflow-config-readback.json,总版本3到4两流程修订无关配置未变
 pr,3,PASS,delivery-readback.json,91 OPEN 源码0abe712独立回读
-local-install,3,PENDING,round-2.md,待活动任务维护窗口
+local-install,3,PASS,local-deployment-readback.json,用户允许中断后安装 25文件哈希匹配健康与配置回读通过
 group-delivery-e2e,3,UNKNOWN,round-1.md,不发送真实群测试消息
 business-production-e2e,3,UNKNOWN,round-1.md,不重放真实业务操作
 ci,3,PASS,delivery-readback.json,34461854317 全部通过
-
+web-auth,3,PASS,local-deployment-readback.json,认证入口与Cookie根页面200
+web-visual,3,UNKNOWN,local-deployment-readback.json,内置浏览器ERR_BLOCKED_BY_CLIENT

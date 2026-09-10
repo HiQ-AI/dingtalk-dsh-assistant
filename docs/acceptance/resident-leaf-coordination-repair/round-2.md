@@ -23,3 +23,10 @@
 
 PR #91 OPEN，源码提交 0abe712b72daf07aa661766662fcde189703ce07；GitHub Actions 34461854317 success，测试、Web 构建一致性与三个包构建通过。Assistant 本地包 131871 字节，SHA256 3C24696EAED29C15FFAEC7B3C0C93B9BE8ADC0BD4F129AC7D250B894638A52BA。仅安装 Assistant 的候选，Observer 保持不变。详见 delivery-readback.json。当前两个业务任务运行，已提出切换时机问题；尚未重启。
 
+## 本地切换完成
+
+用户明确允许现在重启并短暂中断现有任务。停止已核实的旧 PID 408752 及其两个 DWS 子进程，确认两端口释放；稳定 v7 存储 7656368 字节备份在仓库外，独立 SHA256 相同，预检无非法记录/字段剥离。原生 CLI 安装 0abe712 对应 Assistant tgz，25 个源码/patch 文件 SHA256 全匹配；package.json 唯一差异为打包移除末尾换行，已据实修订 runbook。Observer、其他依赖及 profile patch 不变。
+
+新 PID 374340 同时监听 3080/18998；health 为 ok、inboundProcessing=true、recoveryIssueCount=0。配置与切换前修订后内容 deepEqual，通过。44 个任务保留，两个活跃旧任务各补齐一次阶段索引；原 Session 恢复，其中一个已出现新模型工具步骤，另一个恢复后进入 compaction，未将其声明为业务完成。启动后存储预检仍无字段剥离。
+
+认证入口和携带会话 Cookie 的根页面均 HTTP 200，标题 DeepSeek Harness，页面包含模块脚本。内置浏览器访问本地地址报 ERR_BLOCKED_BY_CLIENT，因此视觉交互检查是 UNKNOWN，不将 HTML 返回视作渲染通过。真实业务群投递与生产操作未做测试。脱敏证据 local-deployment-readback.json；原始配置、日志、凭据与业务备份未提交。

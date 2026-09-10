@@ -16,5 +16,5 @@
     "bytes": 131871,
     "sha256": "3C24696EAED29C15FFAEC7B3C0C93B9BE8ADC0BD4F129AC7D250B894638A52BA"
   },
-  "localInstall": "pending-active-business"
+  "localInstall": "PASS: see local-deployment-readback.json"
 }
