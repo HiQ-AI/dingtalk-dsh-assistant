@@ -117,7 +117,7 @@ const activityDetail = (event) => {
 }
 
 export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 1_000 } = {}) {
-  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), activeGroupResidentOperations = new Set(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), startingTasks = new Set(), pendingLeafDisposals = new Set()
+  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), checkpointReviewRuns = new Map(), activeGroupResidentOperations = new Set(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), startingTasks = new Set(), pendingLeafDisposals = new Set()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
@@ -570,6 +570,30 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       })
     })
   }
+  function runCheckpointReview(task, checkpoint) {
+    const existing = checkpointReviewRuns.get(checkpoint.checkpointId)
+    if (existing) return existing
+    const run = (async () => {
+      let review
+      try {
+        review = checkpoint.kind === 'stage-completed' && checkpoint.needsCoordinatorDecision === false && checkpoint.evidence.length > 0
+          ? { decision: 'acknowledge', reason: 'Host 已校验阶段顺序、执行版本和非空证据。' }
+          : await withoutInitiator(() => reviewTaskCheckpoint(task, checkpoint))
+        await persistCheckpointReview(task, checkpoint, review)
+      } catch (error) {
+        await discardFailedCheckpoint(task.taskId, checkpoint, error)
+        throw error
+      }
+      if (review.decision === 'reject') {
+        await followupTaskInternal(task, `[TASK_PLAN_REJECTED]\n当前计划与原始授权或已选任务流程不一致：${review.reason}\n\n重新核对固定 Topic 原文和已选流程；主会话生成的目标或验收标准不能作为流程例外依据。修正后重新提交 plan-confirmed。`)
+        return { accepted: false, taskId: task.taskId, code: 'task_checkpoint_rejected', checkpointId: checkpoint.checkpointId, reason: review.reason }
+      }
+      return { accepted: true, taskId: task.taskId, checkpointId: checkpoint.checkpointId, coordinatorDecision: review.decision, reason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}) }
+    })()
+    checkpointReviewRuns.set(checkpoint.checkpointId, run)
+    run.finally(() => { if (checkpointReviewRuns.get(checkpoint.checkpointId) === run) checkpointReviewRuns.delete(checkpoint.checkpointId) }).catch(() => undefined)
+    return run
+  }
   async function resumeResident(group) {
     if (residentHandles.has(group.groupId)) return residentHandles.get(group.groupId)
     const handle = await ctx.agents.resume({ resumeSessionId: SessionId(group.residentSessionId), agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
@@ -793,21 +817,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (superseded) topics.invalidateTaskReviews(taskId, 'task_checkpoint_review_superseded')
       return { submitted, reviewTask }
     })
-    let review
-    try {
-      review = checkpoint.kind === 'stage-completed' && checkpoint.needsCoordinatorDecision === false && checkpoint.evidence.length > 0
-        ? { decision: 'acknowledge', reason: 'Host 已校验阶段顺序、执行版本和非空证据。' }
-        : await withoutInitiator(() => reviewTaskCheckpoint(reviewTask, submitted))
-      await persistCheckpointReview(reviewTask, submitted, review)
-    } catch (error) {
-      await discardFailedCheckpoint(taskId, submitted, error)
-      throw error
-    }
-    if (review.decision === 'reject') {
-      await followupTaskInternal(reviewTask, `[TASK_PLAN_REJECTED]\n当前计划与原始授权或已选任务流程不一致：${review.reason}\n\n重新核对固定 Topic 原文和已选流程；主会话生成的目标或验收标准不能作为流程例外依据。修正后重新提交 plan-confirmed。`)
-      return { accepted: false, taskId, code: 'task_checkpoint_rejected', checkpointId: submitted.checkpointId, reason: review.reason }
-    }
-    return { accepted: true, taskId, checkpointId: submitted.checkpointId, coordinatorDecision: review.decision, reason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}) }
+    return runCheckpointReview(reviewTask, submitted)
   }
   const listAuthorizationRequests = () => store.listTasks().flatMap((task) => {
     const requests = new Map()
@@ -1153,16 +1163,9 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         let task = store.getTask(listed.taskId)
         if (task?.state !== 'running') continue
         const pendingCheckpoint = task.checkpoints?.at(-1)
-        if (pendingCheckpoint && !pendingCheckpoint.coordinatorDecision) {
-          void withoutInitiator(() => reviewTaskCheckpoint(task, pendingCheckpoint))
-            .then(async (review) => {
-              await persistCheckpointReview(task, pendingCheckpoint, review)
-              if (review.decision === 'reject') await followupTaskInternal(task, `[TASK_PLAN_REJECTED]\n当前计划与原始授权或已选任务流程不一致：${review.reason}\n\n重新核对固定 Topic 原文和已选流程后提交新的 plan-confirmed。`)
-            })
-            .catch(async (error) => {
-              recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'checkpoint-review-recovery', error: error.message })
-              await discardFailedCheckpoint(task.taskId, pendingCheckpoint, error)
-            }).catch((error) => recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'checkpoint-review-cleanup', error: error.message }))
+        if (pendingCheckpoint && !pendingCheckpoint.coordinatorDecision && !checkpointReviewRuns.has(pendingCheckpoint.checkpointId)) {
+          void runCheckpointReview(task, pendingCheckpoint)
+            .catch((error) => recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'checkpoint-review-recovery', error: error.message }))
         }
         let handle = leafHandles.get(task.taskId)
         const registered = ctx.agents.get?.(SessionId(task.childSessionId))

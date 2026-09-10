@@ -865,6 +865,24 @@ test('preserve 新输入作废待审 checkpoint，并按新版本重新审阅', 
   assert.equal(h.store.getTask(task.taskId).checkpoints[0].inputVersion, 2)
 })
 
+test('相同待审计划的重复提交与Supervisor恢复共用一次审阅和拒绝注入', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const value = { ...inputVersion(task), kind: 'plan-confirmed', summary: '待审计划', completedItems: [], evidence: [], remainingItems: ['核验'], nextStep: '核验', needsCoordinatorDecision: false }
+  const first = leafCall(h, task, 'submit_task_checkpoint', value)
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  const second = leafCall(h, task, 'submit_task_checkpoint', value)
+  await Promise.all([h.runtime.inspectRunningTasks(), h.runtime.inspectRunningTasks(), h.runtime.inspectRunningTasks()])
+  const reviewRequests = h.resident().sent.filter((message) => message.content[0].text.startsWith('[TASK_CHECKPOINT_REVIEW]'))
+  assert.equal(reviewRequests.length, 1)
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'reject', reason: '计划扩大授权范围' } })
+  const [firstResult, secondResult] = await Promise.all([first, second])
+  assert.equal(firstResult.code, 'task_checkpoint_rejected')
+  assert.equal(secondResult.checkpointId, firstResult.checkpointId)
+  const rejectedInputs = h.handles.get(task.childSessionId).sent.filter((message) => message.content[0].text.startsWith('[TASK_PLAN_REJECTED]'))
+  assert.equal(rejectedInputs.length, 1)
+})
+
 test('旧执行轮次的 idle 回收不释放已重开的叶子', async (t) => {
   const h = await setup(t), task = await createTask(h)
   await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['核验'] })
