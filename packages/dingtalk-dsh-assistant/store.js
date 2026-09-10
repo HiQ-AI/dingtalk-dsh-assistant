@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
-import { taskCheckpointSchema, taskResultSchema } from './task-result.js'
+import { storedTaskCheckpointBaseSchema, taskResultSchema } from './task-result.js'
 import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint } from './topic-model.js'
 
 export { resolveTopicMessages } from './topic-model.js'
@@ -59,6 +59,7 @@ const humanBlockerSchema = z.object({
   supersededAt: z.string().min(1).optional(), supersededBy: z.string().min(1).optional(), supersedeReason: z.string().min(1).optional(),
 })
 const groupSchema = z.object({
+  coordinationRequests: z.record(z.string(), z.object({ attempt: z.number().int().nonnegative().default(0), resumeEpoch: z.number().int().nonnegative().default(0), updatedAt: z.string().optional(), nextRetryAt: z.string().optional(), status: z.enum(['pending', 'exhausted', 'completed']), messageId: z.string().optional(), lastError: z.string().optional() })).default({}),
   groupId: z.string().min(1), name: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), residentAgentPreset: z.string().min(1).optional(), nextSequence: z.number().int().positive(),
   messages: z.array(inboundSchema), outbox: z.array(outboundSchema),
   routingRevision: z.number().int().nonnegative(), topics: z.array(topicSchema), routeHistory: z.array(z.record(z.string(), z.unknown())), taskReservations: z.array(z.record(z.string(), z.unknown())),
@@ -67,7 +68,7 @@ const taskObjectiveRevisionSchema = z.object({ objective: z.string().min(1), rev
 const taskTitleRevisionSchema = z.object({ title: z.string().min(1), revisedAt: z.string().min(1), inputVersion: z.number().int().positive().optional(), runSequence: z.number().int().positive().optional(), decisionId: z.string().optional() })
 const taskPromptSchema = z.object({ id: z.string().min(1), name: z.string().trim().min(1).max(80), description: z.string().trim().min(1).max(400), prompt: z.string().trim().min(1).max(40000), enabled: z.boolean(), revision: z.number().int().positive() })
 const taskPromptRefSchema = z.object({ id: z.string().min(1), revision: z.number().int().positive() })
-const persistedTaskCheckpointSchema = taskCheckpointSchema.extend({
+const persistedTaskCheckpointSchema = storedTaskCheckpointBaseSchema.extend({
   checkpointId: z.string().min(1), submittedAt: z.string().min(1),
   coordinatorDecision: z.enum(['acknowledge', 'guidance', 'reject']).optional(), coordinatorReason: z.string().min(1).optional(), guidance: z.string().min(1).optional(), reviewedAt: z.string().min(1).optional(),
 })
@@ -78,6 +79,12 @@ const taskRunSchema = z.object({
   acceptanceCriteria: z.array(z.string().min(1)), stageTasks: z.array(z.string().min(1)), taskPromptRefs: z.array(taskPromptRefSchema).optional(), checkpoints: z.array(persistedTaskCheckpointSchema).optional(), result: persistedTaskResultSchema.optional(),
 })
 const taskStateEventSchema = z.object({ state: z.enum(['queued', 'running', 'waiting', 'completed']), at: z.string().min(1), runSequence: z.number().int().positive() })
+const activityProjectionSchema = z.object({
+  lastSyncedAt: z.string(), latestEventKey: z.string().optional(), latestOccurredAt: z.string().optional(),
+  truncated: z.boolean().default(false),
+  sessions: z.record(z.string(), z.object({ lastSeq: z.number().int().nonnegative().optional() })).default({}),
+  retentionFloor: z.object({ occurredAt: z.string(), sessionId: z.string(), eventKey: z.string() }).optional(),
+})
 const taskSchema = z.object({
   taskId: z.string().min(1), groupId: z.string().min(1), topicRefs: z.array(topicRefSchema).min(1), inputVersion: z.number().int().positive(), appliedOperations: z.array(z.string()).default([]), title: z.string().min(1).optional(), objective: z.string().min(1),
   state: z.enum(['queued', 'running', 'waiting', 'completed']), childSessionId: z.string().min(1),
@@ -87,6 +94,8 @@ const taskSchema = z.object({
   runSequence: z.number().int().positive().optional(), runStartedAt: z.string().min(1).optional(),
   acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional(), taskPromptRefs: z.array(taskPromptRefSchema).optional(), runHistory: z.array(taskRunSchema).optional(),
   executionEvents: z.array(z.record(z.string(), z.unknown())).optional(),
+  stagePlan: z.array(z.object({ stageId: z.string().min(1), title: z.string().min(1) })).optional(),
+  activityProjection: activityProjectionSchema.optional(),
   dispatchedInputVersion: z.number().int().positive().optional(), acknowledgedInputVersion: z.number().int().positive().optional(),
   checkpoints: z.array(persistedTaskCheckpointSchema).optional(),
   humanBlocker: humanBlockerSchema.optional(), humanBlockerHistory: z.array(humanBlockerSchema).optional(),
@@ -102,6 +111,7 @@ const schedulerSchema = z.object({
 const activitySchema = z.object({
   activityId: z.string().min(1), taskId: z.string().min(1), sessionId: z.string().min(1), eventKey: z.string().min(1),
   type: z.string().min(1), detail: z.record(z.string(), z.unknown()), occurredAt: z.string().min(1),
+  seq: z.number().int().nonnegative().optional(),
 })
 const alertSchema = z.object({
   alertId: z.string().min(1), taskId: z.string().min(1), fingerprint: z.string().min(1), detail: z.string().min(1),
@@ -109,6 +119,8 @@ const alertSchema = z.object({
   status: z.enum(['active', 'resolved']).optional(), resolvedAt: z.string().min(1).optional(),
 })
 const ACTIVITY_PROJECTION_LIMIT_PER_TASK = 500
+const compareActivity = (a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt)
+  || a.sessionId.localeCompare(b.sessionId) || a.eventKey.localeCompare(b.eventKey)
 
 export const residentDomainSpec = defineDomain({
   name: 'dingtalk_dsh_assistant', version: 7, tables: {
@@ -232,6 +244,18 @@ export async function openResidentStore(storageDomain) {
   }
 
   return {
+    getCoordinationRequest: (groupId, requestId) => findGroupEntry(groupId)?.[1].coordinationRequests?.[requestId],
+    updateCoordinationRequest: (groupId, requestId, patch) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_found:${groupId}`)
+      const [key, group] = entry
+      const requests = { ...group.coordinationRequests, [requestId]: { ...group.coordinationRequests?.[requestId], ...patch, updatedAt: new Date().toISOString() } }
+      const completed = Object.entries(requests).filter(([, value]) => value.status === 'completed').sort((a, b) => a[0] === requestId ? 1 : b[0] === requestId ? -1 : (a[1].updatedAt ?? '').localeCompare(b[1].updatedAt ?? '') || a[0].localeCompare(b[0]))
+      for (const [expired] of completed.slice(0, Math.max(0, completed.length - 500))) delete requests[expired]
+      const updated = groupSchema.parse({ ...group, coordinationRequests: requests })
+      await groups.put(key, updated)
+      return updated.coordinationRequests[requestId]
+    }),
     getGroup: (groupId) => findGroupEntry(groupId)?.[1],
     listGroups: () => [...groups.entries()].map(([, value]) => value),
     hasGroupConfiguration: () => scheduler.get('runtime')?.groupConfigurationInitialized === true,
@@ -305,7 +329,7 @@ export async function openResidentStore(storageDomain) {
     listAlerts: () => [...alerts.entries()].map(([, value]) => value),
     listActivities: (taskId) => [...activities.entries()].map(([, value]) => value)
       .filter((activity) => taskId === undefined || activity.taskId === taskId)
-      .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt))
+      .sort(compareActivity)
       .slice(-ACTIVITY_PROJECTION_LIMIT_PER_TASK),
     subscribe: ({ groupId, name, responsibility = '', residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
       const existing = findGroupEntry(groupId)?.[1]
@@ -793,18 +817,37 @@ export async function openResidentStore(storageDomain) {
       }
       return { taskId, fingerprintPrefix, resolved }
     },
-    recordActivity: async ({ taskId, sessionId, eventKey, type, detail = {}, occurredAt }) => {
+    recordActivity: ({ taskId, sessionId, eventKey, type, detail = {}, occurredAt, seq }) => serialize(tasks.get(taskId)?.groupId ?? taskId, async () => {
       const task = tasks.get(taskId)
       if (task === undefined) throw new Error(`task_not_found:${taskId}`)
-      const key = `${taskId}:${eventKey}`
-      const existing = activities.get(key)
-      if (existing !== undefined) return { created: false, activity: existing }
-      const projectedCount = [...activities.entries()].filter(([, activity]) => activity.taskId === taskId).length
-      if (projectedCount >= ACTIVITY_PROJECTION_LIMIT_PER_TASK) return { created: false, capped: true }
-      const activity = { activityId: `activity-${randomUUID()}`, taskId, sessionId, eventKey, type, detail, occurredAt: occurredAt ?? new Date().toISOString() }
-      await activities.put(key, activity)
-      return { created: true, activity }
-    },
+      const key = JSON.stringify([taskId, sessionId, eventKey])
+      const entries = [...activities.entries()].filter(([, item]) => item.taskId === taskId)
+      const existing = entries.find(([, item]) => item.sessionId === sessionId && item.eventKey === eventKey)?.[1]
+      const activity = activitySchema.parse({ activityId: `activity-${randomUUID()}`, taskId, sessionId, eventKey, type, detail, seq, occurredAt: occurredAt ?? new Date().toISOString() })
+      if (!Number.isFinite(Date.parse(activity.occurredAt))) throw new Error('activity_occurred_at_invalid')
+      const previous = task.activityProjection
+      if (previous?.retentionFloor && compareActivity(activity, previous.retentionFloor) <= 0) {
+        // 水位已落盘而删除尚未完成时，旧事件重放负责补齐删除。
+        for (const [expiredKey, item] of entries) if (compareActivity(item, previous.retentionFloor) <= 0) await activities.delete(expiredKey)
+        return { created: false, expired: true }
+      }
+      // 先落事件再落水位；中途退出后重放已有事件仍会修复裁剪和水位。
+      if (!existing) await activities.put(key, activity)
+      const ordered = (existing ? entries : [...entries, [key, activity]]).sort((a, b) => compareActivity(a[1], b[1]))
+      const removed = ordered.slice(0, Math.max(0, ordered.length - ACTIVITY_PROJECTION_LIMIT_PER_TASK))
+      const latest = ordered.at(-1)?.[1]
+      const floor = removed.at(-1)?.[1] ?? previous?.retentionFloor
+      const session = previous?.sessions?.[sessionId] ?? {}
+      const activityProjection = activityProjectionSchema.parse({
+        ...previous, lastSyncedAt: new Date().toISOString(), latestEventKey: latest?.eventKey, latestOccurredAt: latest?.occurredAt,
+        truncated: previous?.truncated || removed.length > 0,
+        sessions: { ...previous?.sessions, [sessionId]: { ...session, ...(seq === undefined ? {} : { lastSeq: Math.max(session.lastSeq ?? 0, seq) }) } },
+        ...(floor ? { retentionFloor: { occurredAt: floor.occurredAt, sessionId: floor.sessionId, eventKey: floor.eventKey } } : {}),
+      })
+      await tasks.update(taskId, (current) => ({ ...current, activityProjection }))
+      for (const [expiredKey] of removed) await activities.delete(expiredKey)
+      return { created: !existing && !removed.some(([removedKey]) => removedKey === key), ...(existing ? { activity: existing } : { activity }), truncated: activityProjection.truncated }
+    }),
     close: () => domain.close(),
   }
 }

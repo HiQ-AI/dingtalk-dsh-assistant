@@ -579,7 +579,7 @@ Topic 版本使用 domain v7。升级已有 v6 profile 前，按[Topic 存储离
 
 若 Resident 连续出现上下文压缩，检查普通输入是否重复包含完整群历史或 Task 消息副本。Topic 列表应只含摘要，详情由 `GET /state/topics/{topicId}?groupId=...&revision=...&offset=0&limit=50` 或 `group_topic_context_get` 按固定版本分页读取；API 每页最多 100 条。Topic 决策信封的内联消息限制为 40,000 字符；出现 `omittedDeltaMessageIds` 时必须分页读完该固定 revision 的缺失增量，未读完时 Host 会拒绝决策。Topic 详情返回 `{topicId, groupId, revision, topic, messages, total, offset, limit, taskRefs}`，不会公开内部决策动作日志。Task 只保存 Topic 引用，不应再出现 messageHistory、triggerHistory 和 sourceMessageId。
 
-人工 Web 新建 Task 使用 `POST /tasks`，调用方必须提供稳定 requestId、原始 context、groupId、title、objective、acceptanceCriteria；不指定 topicRefs 时建立 Web 来源 Topic。已有 Task 的 context、reopen、cancel 操作还必须提供 topicRefs、inputVersion、runSequence；前两者使用 context，取消使用 reason。版本和请求身份冲突返回 409，已持久接受但未完成返回 202。Web 来源不能伪造钉钉引用、@ 或 childSessionId。Resident 不再提供 group_task_create / group_task_context_append / group_task_reopen 直写工具，业务动作统一走 group_decision_submit；误归类修订使用 group_topic_route_review。所有非空回复必须提供 replyReview.kind。Task 补充输入以 progressImpact 区分 preserve 和 replan；只有范围及既有证据有效性均未变化时保留已确认 checkpoints，并重绑到新 inputVersion；待审项或范围变化归档旧进度并重新提交。跨 Topic 补充会合并旧引用。waiting Task 收到信息或批准后统一进入 FIFO 队列，Session 创建与恢复期间也计入并发容量。
+人工 Web 新建 Task 使用 `POST /tasks`，调用方必须提供稳定 requestId、原始 context、groupId、title、objective、acceptanceCriteria；不指定 topicRefs 时建立 Web 来源 Topic。已有 Task 的 context、reopen、cancel 操作还必须提供 topicRefs、inputVersion、runSequence；前两者使用 context，取消使用 reason。版本和请求身份冲突返回 409，已持久接受但未完成返回 202。Web 来源不能伪造钉钉引用、@ 或 childSessionId。Resident 不再提供 group_task_create / group_task_context_append / group_task_reopen 直写工具，业务动作统一走 group_decision_submit；误归类修订使用 group_topic_route_review。所有非空回复必须提供 replyReview.kind。Task context 补充输入支持 progressImpact 与 impactEvidence（basisMessageIds、reason、affectedStageIds），字段契约与常驻决策同源；create/reopen 不接受这两个字段。相同目标、验收和阶段数组不触发 replan，保留有效 checkpoints 的原 inputVersion；明确变化只失效受影响阶段及后续，历史证据不改写版本。跨 Topic 补充会合并旧引用。waiting Task 收到信息或批准后统一进入 FIFO 队列，Session 创建与恢复期间也计入并发容量。
 
 查询 Topic 的 processing 可读取最新未完成决策标识、状态、已完成/总动作数及有界错误；Observer 依据 routingStatus、Topic revision 与 processedRevision 显示待归类、话题处理中、已处理或归类失败。此摘要不暴露内部动作正文，processedRevision 与 Outbox 投递状态仍需分别核对。
 
@@ -603,3 +603,16 @@ Topic 版本使用 domain v7。升级已有 v6 profile 前，按[Topic 存储离
 8. 运行看板中的收信箱、发信箱、阶段任务和状态与实际 Session/钉钉回读一致；消息与人工介入表格的状态列位于最左侧，长内容最多显示两行，任务状态桶不产生页面级纵向滚动。
 
 前一层的成功不能替代后一层的验证。
+
+
+### 报告状态与显式恢复接口
+
+以下沿用现有本机 Resident API 权限与 CORS 边界，不是对外开放接口。ID 位于路径，包含斜杠或加号时用 URL 编码；恢复操作无请求体参数，body 不能覆盖路径身份。
+
+| 方法与路径 | 结果 |
+| --- | --- |
+| GET /tasks/{taskId}/reports/{submissionId} | 200 返回报告回执；不存在为 404 |
+| POST /tasks/{taskId}/reports/{submissionId}/retry | 202 接受显式恢复；不存在 404，旧版本/非 failed 状态 409 |
+| POST /config/groups/{groupId}/coordination/{requestId}/retry | 202 恢复原协调请求；不存在或群不匹配 404 |
+
+input-wait/review-wait 表示报告已持久保存而未批准业务推进，不应反复重提；Runtime 在输入与审阅事件后恢复。failed 才使用报告 retry，accepted 不重放；history-only 不推进新目标。202 仅代表恢复请求已接纳，之后用 GET 回读最终报告状态，不能把它当作业务完成。协调恢复保持原请求身份；外部动作结果不确定时先独立回查，不能通过这些接口重复生产动作。

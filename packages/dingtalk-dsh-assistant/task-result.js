@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { toToolJsonSchema } from './tool-schema.js'
 
 export function assertCurrentTaskPrompts(task, prompts) {
   const current = new Map(prompts.filter((item) => item.enabled).map((item) => [item.id, item.revision]))
@@ -9,7 +10,7 @@ export function assertCurrentTaskPrompts(task, prompts) {
 
 export const isDiagnosticCheckpoint = (checkpoint) => ['scope-conflict', 'evidence-gap', 'risk-changed'].includes(checkpoint.kind)
 
-const executionVersion = { inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() }
+const executionVersion = { inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), submissionId: z.string().trim().min(1).optional() }
 const taskPromptRefSchema = z.object({ id: z.string().trim().min(1), revision: z.number().int().positive() }).strict()
 const workflowAssessmentSchema = z.object({
   promptRefs: z.array(taskPromptRefSchema),
@@ -70,10 +71,12 @@ function parseResultShape(value) {
   throw new Error(`task_result_invalid:${JSON.stringify({ issues })}`)
 }
 
-export const taskCheckpointSchema = z.object({
+// 历史存储保留旧宽契约；新提交只使用下面按 kind 区分的契约。
+export const storedTaskCheckpointBaseSchema = z.object({
   ...executionVersion,
   kind: z.enum(['plan-confirmed', 'stage-completed', 'scope-conflict', 'evidence-gap', 'risk-changed']),
   stageTask: z.string().trim().min(1).optional(),
+  stageId: z.string().trim().min(1).optional(),
   summary: z.string().trim().min(1),
   completedItems: z.array(z.string().trim().min(1)).default([]),
   evidence: z.array(z.string().trim().min(1)).default([]),
@@ -82,6 +85,16 @@ export const taskCheckpointSchema = z.object({
   needsCoordinatorDecision: z.boolean().default(false),
   workflowAssessment: workflowAssessmentSchema.optional(),
 }).strict()
+
+const checkpointBase = storedTaskCheckpointBaseSchema.omit({ kind: true, workflowAssessment: true })
+const checkpointBranches = [
+  checkpointBase.extend({ kind: z.literal('plan-confirmed'), completedItems: z.array(z.string()).max(0).default([]), workflowAssessment: workflowAssessmentSchema.optional() }),
+  checkpointBase.extend({ kind: z.literal('stage-completed'), stageTask: z.string().trim().min(1), evidence: z.array(z.string().trim().min(1)).min(1) }),
+  ...['scope-conflict', 'evidence-gap', 'risk-changed'].map((kind) => checkpointBase.extend({ kind: z.literal(kind), completedItems: z.array(z.string()).max(0).default([]) })),
+]
+export const taskCheckpointSchema = z.discriminatedUnion('kind', checkpointBranches)
+export const taskCheckpointJsonSchema = toToolJsonSchema(taskCheckpointSchema)
+export const taskResultJsonSchema = toToolJsonSchema(taskResultSchema)
 
 export function parseTaskResult(value) {
   const result = parseResultShape(value)
@@ -95,5 +108,10 @@ export function parseTaskResult(value) {
 }
 
 export function parseTaskCheckpoint(value) {
-  return taskCheckpointSchema.parse(value)
+  const schema = checkpointBranches.find((branch) => branch.shape.kind.value === value?.kind)
+  if (!schema) throw new Error('task_checkpoint_invalid:{"issues":[{"path":"kind","message":"unsupported discriminator"}]}')
+  const result = schema.safeParse(value)
+  if (result.success) return result.data
+  const issues = result.error.issues.slice(0, 8).map((issue) => ({ path: issue.path.join('.') || '$', message: issue.message }))
+  throw new Error(`task_checkpoint_invalid:${JSON.stringify({ issues, allowedFields: Object.keys(schema.shape), inputVersion: value?.inputVersion, runSequence: value?.runSequence })}`)
 }

@@ -1,0 +1,53 @@
+{
+  "measuredAt": "2026-09-10T09:27:24.771Z",
+  "samples": 30,
+  "backend": "DSH DomainFacility + JsonStorageBackend",
+  "scenario": "synthetic-input-wait-reports",
+  "measuredBoundary": "await queue.submit including native JSON atomic publication; setup and independent readback excluded",
+  "p50Ms": 3.776,
+  "p95Ms": 9.119,
+  "maxMs": 10.658,
+  "durationsMs": [
+    4.111,
+    3.316,
+    2.513,
+    3.926,
+    3.162,
+    3.639,
+    3.667,
+    4.471,
+    5.375,
+    3.895,
+    10.658,
+    9.119,
+    9.056,
+    3.36,
+    4.704,
+    5.241,
+    3.066,
+    6.997,
+    3.195,
+    2.871,
+    3.337,
+    2.745,
+    5.308,
+    8.305,
+    3.087,
+    3.776,
+    3.186,
+    3.801,
+    3.817,
+    3.031
+  ],
+  "independentReopen": {
+    "uniqueReports": 30,
+    "allInputWait": true
+  },
+  "modelCalls": 0,
+  "businessActions": 0,
+  "limitations": [
+    "合成小存储，非生产全量历史规模。",
+    "suspend为无操作，不含真实Goal/Session flush成本。",
+    "不包含模型审阅、外部执行、群投递与UI时延。"
+  ]
+}

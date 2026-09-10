@@ -1,0 +1,20 @@
+{
+  "at": "2026-09-10T09:29:17.147Z",
+  "beforeVersion": 3,
+  "afterVersion": 4,
+  "changed": [
+    {
+      "id": "workflow-production-release",
+      "revision": 3,
+      "bodySha256": "91dba5f0ec015fab45792ed902b98e5f9c56f68ee13b4f9dc76676bcb1dc3321"
+    },
+    {
+      "id": "workflow-data-change",
+      "revision": 2,
+      "bodySha256": "3e69e16b84d512d7795ef3376611864f539ff4de274bcc478d1a1841b6763b4d"
+    }
+  ],
+  "unrelatedConfigUnchanged": true,
+  "activeReferencingTasks": 0,
+  "readbackNote": "首次严格比较发现Store去掉正文末尾换行；离线候选现按同样trim生成，仅一次配置写入。"
+}

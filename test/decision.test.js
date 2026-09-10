@@ -6,6 +6,13 @@ import { blockTaskDecisionForUnavailableMedia, buildReplyReviewCandidates, isDir
 const topicRefs = [{ topicId: 'topic-a', revision: 2 }]
 const executionVersion = { inputVersion: 1, runSequence: 1 }
 
+test('定向重规划证据必须给出消息依据、原因及受影响阶段', () => {
+  const action = { kind: 'task-context', taskId: 'task1', context: '修订部署范围', progressImpact: 'replan', impactEvidence: { basisMessageIds: ['m1'], reason: '用户要求调整目标环境', affectedStageIds: ['stage-deploy'] }, topicRefs, ...executionVersion }
+  const value = { basisMessageIds: ['m1'], actions: [action], reply: '' }
+  assert.deepEqual(groupDecisionSchema.parse(value), value)
+  assert.throws(() => groupDecisionSchema.parse({ ...value, actions: [{ ...action, impactEvidence: { ...action.impactEvidence, affectedStageIds: [] } }] }))
+})
+
 test('Topic 决策独立提交并以固定 Topic 版本关联任务', () => {
   const decision = { basisMessageIds: ['m-1'], actions: [
     { kind: 'task-context', taskId: 'task-1', context: 'more', topicRefs, ...executionVersion },

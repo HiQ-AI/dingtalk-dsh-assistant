@@ -67,6 +67,38 @@ test('显式testApiEnabled才开放测试写入口', async () => withServer(true
   assert.deepEqual(await response.json(), { created: true })
 }))
 
+test('报告查询与显式恢复只采用路径身份，缺失返回404、不可恢复状态409', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    const reportPath = '/tasks/task%2Fa/reports/report%2Bb'
+    assert.equal((await fetch(base + reportPath)).status, 200)
+    assert.equal((await fetch(base + reportPath + '/retry', { method: 'POST', body: JSON.stringify({ taskId: 'forged', submissionId: 'forged' }) })).status, 202)
+    assert.equal((await fetch(base + '/config/groups/group%2Fa/coordination/request%2Bb/retry', { method: 'POST', body: JSON.stringify({ groupId: 'forged', requestId: 'forged' }) })).status, 202)
+    assert.deepEqual(calls, [ ['get', { taskId: 'task/a', submissionId: 'report+b' }], ['retry', { taskId: 'task/a', submissionId: 'report+b' }], ['coordination', { groupId: 'group/a', requestId: 'request+b' }] ])
+    assert.equal((await fetch(base + '/tasks/t/reports/missing')).status, 404)
+    assert.equal((await fetch(base + '/tasks/t/reports/missing/retry', { method: 'POST' })).status, 404)
+    assert.equal((await fetch(base + '/tasks/t/reports/stale/retry', { method: 'POST' })).status, 409)
+    assert.equal((await fetch(base + '/config/groups/g/coordination/missing/retry', { method: 'POST' })).status, 404)
+  }, { overrides: {
+    getTaskReport: async value => { if (value.submissionId === 'missing') return undefined; calls.push(['get', value]); return { status: 'failed' } },
+    retryTaskReport: async value => { if (value.submissionId === 'missing') throw new Error('task_report_not_found:missing'); if (value.submissionId === 'stale') throw new Error('task_report_retry_stale:stale'); calls.push(['retry', value]); return { status: 'review-wait' } },
+    retryCoordinationRequest: async value => { if (value.requestId === 'missing') throw new Error('topic_request_unknown_or_wrong_group'); calls.push(['coordination', value]); return { status: 'pending' } },
+  } })
+})
+
+test('context支持同源影响证据，create/reopen拒绝这些字段', async () => {
+  const calls = [], body = { requestId: 'r1', context: '证据修订', topicRefs: [{ topicId: 'topic1', revision: 2 }], inputVersion: 1, runSequence: 1, progressImpact: 'replan', impactEvidence: { basisMessageIds: ['m1'], reason: '该阶段证据失效', affectedStageIds: ['stage1'] } }
+  await withServer(false, async base => {
+    const post = (path, value) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) })
+    assert.equal((await post('/tasks/t/context', body)).status, 200)
+    assert.deepEqual(calls[0].impactEvidence, body.impactEvidence)
+    assert.equal((await post('/tasks/t/reopen', body)).status, 400)
+    assert.equal((await post('/tasks', { ...body, groupId: 'g', title: '任务', objective: '目标', acceptanceCriteria: ['结果'] })).status, 400)
+    assert.equal((await post('/tasks/t/context', { ...body, impactEvidence: { ...body.impactEvidence, affectedStageIds: [] } })).status, 400)
+    assert.equal(calls.length, 1)
+  }, { overrides: { appendTaskContext: async value => { calls.push(value); return value } } })
+})
+
 test('Web Task 入口强制稳定请求与执行版本且拒绝伪造来源和Session', async () => {
   const calls = []
   const update = { requestId: 'web-1', context: '只处理本月', topicRefs: [{ topicId: 'topic-1', revision: 2 }], inputVersion: 1, runSequence: 1 }

@@ -1,0 +1,18 @@
+case_id,round,status,evidence,notes
+baseline-suite,0,PASS,baseline-tests.txt,309/309
+runtime-integration,1,FAIL,runtime-round-1.txt,78/91 首轮暴露协议及兼容缺陷
+runtime-integration,2,PASS,runtime-round-6.txt,98/98 后续新增反例仍需全套覆盖
+full-suite,2,PASS,all-tests-round-4.txt,389/389
+native-lifecycle,2,PASS,test/report-native-lifecycle.test.js,真实原生Loop停等与进程退出恢复
+schema,2,PASS,test/tool-schema.test.js,真实DSH子集校验
+storage-read,2,PASS,scripts/check-resident-storage.mjs,当前v7无非法记录或字段剥离
+disk-receipt,2,PASS,report-latency-benchmark.json,30样本P95 9.119ms 仅磁盘接纳
+context-reuse,2,PASS,context-replay-benchmark.json,10轮正文和读取减少80%
+model-first-round,2,FAIL,model-benchmark.json,21/30答复其余转交
+model-after-retry,3,PASS,model-benchmark-after-retry.json,29答复1合理转交技术失败0 不等于业务语义全通过
+full-suite,3,PASS,all-tests-round-5.txt,391/391
+workflow-config,2,PASS,workflow-config-readback.json,总版本3到4两流程修订无关配置未变
+pr,3,PENDING,round-2.md,待创建及独立回读
+local-install,3,PENDING,round-2.md,待活动任务维护窗口
+group-delivery-e2e,3,UNKNOWN,round-1.md,不发送真实群测试消息
+business-production-e2e,3,UNKNOWN,round-1.md,不重放真实业务操作

@@ -5,7 +5,12 @@ import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { buildReplyReviewCandidates, groupDecisionSchema } from './decision.js'
 import { boundedTopicContext, createTopicCoordinator } from './topic-runtime.js'
 import { resolveTopicMessages, stableId, fingerprint } from './topic-model.js'
-import { assertCurrentTaskPrompts, isDiagnosticCheckpoint, parseTaskCheckpoint, parseTaskResult } from './task-result.js'
+import { assertCurrentTaskPrompts, isDiagnosticCheckpoint, parseTaskCheckpoint, parseTaskResult, taskCheckpointJsonSchema, taskResultJsonSchema } from './task-result.js'
+import { taskProgressSnapshot } from './task-progress.js'
+import { createTaskReportQueue, taskReportReceiptSchema, taskReports } from './task-reports.js'
+import { createTaskReportStepGate } from './task-report-step-gate.js'
+import { createStatusQueryHandler } from './status-query.js'
+import { reviseTaskProgress, stagePlanFor, reconcileLegacyStagePlan } from './task-input-revision.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
 const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_TOPIC_ROUTE]', '[GROUP_TOPIC_DECISION]', '[TASK_COORDINATION]', '[TASK_COMPLETION_REVIEW]', '[TASK_CHECKPOINT_REVIEW]', '[GROUP_MESSAGE_STEER]', '[GROUP_DECISION_RECHECK]', '[GROUP_DECISION_RESUME]']
@@ -52,6 +57,7 @@ const taskAssociationContext = (task) => ({
   archived: Boolean(task.archivedAt),
   ...(task.acceptanceCriteria ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
   ...(task.stageTasks ? { stageTasks: task.stageTasks } : {}),
+  ...(task.stagePlan ? { stagePlan: task.stagePlan } : {}),
   ...(task.taskPromptRefs ? { taskPromptRefs: task.taskPromptRefs } : {}),
   topicRefs: task.topicRefs, inputVersion: task.inputVersion, runSequence: task.runSequence,
   ...(task.objectiveHistory ? { objectiveHistory: task.objectiveHistory } : {}),
@@ -59,6 +65,12 @@ const taskAssociationContext = (task) => ({
   ...(task.waitingReason ? { waitingReason: task.waitingReason } : {}),
   ...(task.completion ? { completion: task.completion } : {}),
 })
+const queryFactsSnapshot = task => {
+  // 短问答只提供业务事实；工具心跳不应使每个生成中的进度答复失效。
+  const { activityProjection: _activity, revision: _revision, ...snapshot } = taskProgressSnapshot(task)
+  const { snapshotAt: _readTime, ...facts } = snapshot
+  return { ...snapshot, revision: fingerprint(facts) }
+}
 const discardStaleResidentRequests = (agent) => {
   const inbox = agent?.inbox
   if (inbox === undefined || typeof inbox.remove !== 'function') return 0
@@ -116,7 +128,7 @@ const activityDetail = (event) => {
   return { contentBlocks: event.data?.message?.content?.length ?? 0 }
 }
 
-export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 1_000 } = {}) {
+export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 30_000 } = {}) {
   const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), checkpointReviewRuns = new Map(), activeGroupResidentOperations = new Set(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), startingTasks = new Set(), pendingLeafDisposals = new Set()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
@@ -216,6 +228,8 @@ Task 完成验收和检查点审阅通过 group_task_review_submit 返回，普�
 \`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从Topic 固定版本生成的独立来源证据并自行核验。task-context 或 task-reopen 修订 objective 时必须同时提交概括新完整目标的 title；普通补充、等待恢复和异常唤醒不得提交 title。
 
 新建任务必须提供至少一条 \`acceptanceCriteria\`；修订目标时也可更新 \`acceptanceCriteria\` 和 \`stageTasks\`。验收标准只描述原始消息明确要求的业务结果、目标环境和限制，不得把主会话建议、历史做法或预计验证步骤扩写成用户要求，也不得按开发、分析、部署等任务类型绑定固定模板。具体处理流程由叶子按插件任务流程索引选择并形成计划；你在计划和完成审阅中通过 group_task_prompt_get 一次批量读取本轮需要的流程，结合固定 Topic 原文检查一致性。
+
+状态追问先读取 group_task_context_get 的 currentFacts，核对报告、批准、证据来源与发生时间；原始报告不等于独立验收。“状态查错了吧”本身不证明实现或数据库有问题，不因此 replan。字段与旧值相同且没有否定证据时保留进展；目标不变但新事实否定阶段时，task-context 必须提供 impactEvidence，填写本次原始 basisMessageIds、具体 reason 和 stagePlan 中真实 affectedStageIds。只使受影响阶段及后续失效，保留原版本有效证据。当前 surface 内仍可见且版本未变的流程与证据正文直接复用，不因 requestId 变化重读。
 
 当前消息明确指名或提及已配置的 Agent 名称/别名、以 \`cc:\` 开头，或者明确确认了主会话此前提出的“是否需要我处理”询问，并且事项属于本群职责且形成可验证目标时，才允许选择 new-task。未明确指名、但你判断事项应形成任务时，必须选择 task-proposal，并在群里询问“这个事项是否需要我处理？”，暂不创建 Task；收到肯定答复后再结合原消息及其后补充选择 new-task。消息明确 @其他同事且未指向 Agent 时，说明问题正在询问这些同事，必须忽略，既不得创建 task-proposal 或 new-task，也不得主动回答；只有后续明确指向 Agent 且直接引用该消息，才视为可验证的转交。同事间讨论、事实陈述或未形成可验证目标的内容不得创建任务；与现有任务相关时只做任务关联或补充上下文，并按下方节制原则简短确认。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。
 
@@ -384,7 +398,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
           const task = store.getTask(taskId)
           if (task === undefined) throw new Error(`group_task_context_not_found:${taskId}`)
           if (task.groupId !== groupId) throw new Error(`group_task_context_wrong_group:${taskId}`)
-          return taskAssociationContext(task)
+          return { ...taskAssociationContext(task), currentFacts: taskProgressSnapshot(task) }
         })
         return { tasks }
       },
@@ -563,7 +577,10 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (current?.inputVersion !== task.inputVersion || current?.runSequence !== task.runSequence) throw new Error(`task_checkpoint_run_changed:${task.taskId}`)
       return updateTaskInput(task.taskId, checkpoint, (value) => {
         assertCheckpointCurrent(value, task, checkpoint)
+        const completedTitles = value.checkpoints.filter(item => item.kind === 'stage-completed' && item.coordinatorDecision && item.coordinatorDecision !== 'reject').flatMap(item => item.completedItems)
+        const planTitles = [...new Set([...completedTitles, ...checkpoint.remainingItems])]
         return { ...value,
+          ...(checkpoint.kind === 'plan-confirmed' && review.decision !== 'reject' ? { stageTasks: planTitles, stagePlan: stagePlanFor(value, planTitles) } : {}),
           checkpoints: (value.checkpoints ?? []).map((item) => item.checkpointId === checkpoint.checkpointId ? { ...item, coordinatorDecision: review.decision, coordinatorReason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}), reviewedAt: new Date().toISOString() } : item),
           updatedAt: new Date().toISOString(),
         }
@@ -571,6 +588,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     })
   }
   function runCheckpointReview(task, checkpoint) {
+    if (checkpoint.coordinatorDecision) return Promise.resolve({ accepted: checkpoint.coordinatorDecision !== 'reject', taskId: task.taskId, checkpointId: checkpoint.checkpointId, coordinatorDecision: checkpoint.coordinatorDecision, reason: checkpoint.coordinatorReason, ...(checkpoint.coordinatorDecision === 'reject' ? { code: 'task_checkpoint_rejected' } : {}) })
     const existing = checkpointReviewRuns.get(checkpoint.checkpointId)
     if (existing) return existing
     const run = (async () => {
@@ -585,7 +603,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         throw error
       }
       if (review.decision === 'reject') {
-        await followupTaskInternal(task, `[TASK_PLAN_REJECTED]\n当前计划与原始授权或已选任务流程不一致：${review.reason}\n\n重新核对固定 Topic 原文和已选流程；主会话生成的目标或验收标准不能作为流程例外依据。修正后重新提交 plan-confirmed。`)
+        await followupTaskInternal(task, `[TASK_PLAN_REJECTED]\n当前计划与原始授权或已选任务流程不一致：${review.reason}\n\n重新核对固定 Topic 原文和已选流程；主会话生成的目标或验收标准不能作为流程例外依据。修正后重新提交 plan-confirmed。`, `checkpoint-rejected:${checkpoint.checkpointId}`)
         return { accepted: false, taskId: task.taskId, code: 'task_checkpoint_rejected', checkpointId: checkpoint.checkpointId, reason: review.reason }
       }
       return { accepted: true, taskId: task.taskId, checkpointId: checkpoint.checkpointId, coordinatorDecision: review.decision, reason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}) }
@@ -607,7 +625,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
   }
   function assertTaskInput(task, value) {
     if (task.inputVersion !== value.inputVersion || task.runSequence !== value.runSequence) throw new Error(`task_input_version_stale:${task.taskId}`)
-    if (topics.hasPendingTaskInput(task)) throw new Error(`task_input_pending:${task.taskId}`)
+    if (!isDiagnosticCheckpoint(value) && topics.hasPendingTaskInput(task)) throw new Error(`task_input_pending:${task.taskId}`)
   }
   const samePromptRefs = (left = [], right = []) => JSON.stringify(left) === JSON.stringify(right)
   function assertCheckpointCurrent(current, task, checkpoint) {
@@ -623,6 +641,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     assertCurrentTaskPrompts(task, store.getTaskPrompts())
     const plan = [...(task.checkpoints ?? [])].reverse().find((item) => item.kind === 'plan-confirmed')
     if (!plan) throw new Error(`task_checkpoint_plan_required:${task.taskId}`)
+    if (plan.runSequence !== task.runSequence || plan.inputVersion !== task.inputVersion && !task.executionEvents?.findLast(event => event.kind === 'input-revised' && event.inputVersion === task.inputVersion)?.retainedCheckpointIds?.includes(plan.checkpointId)) throw new Error(`task_workflow_plan_stale:${task.taskId}`)
     if (plan.coordinatorDecision === 'reject') throw new Error(`task_workflow_plan_rejected:${task.taskId}`)
     if (!plan.coordinatorDecision) throw new Error(`task_checkpoint_review_pending:${task.taskId}`)
     if ((task.taskPromptRefs?.length ?? 0) > 0 && !plan.workflowAssessment) throw new Error(`task_workflow_assessment_required:${task.taskId}`)
@@ -712,7 +731,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       throw error
     }
     if (!review.accepted) {
-      await followupTaskInternal(prepared.task, `[TASK_RESULT_REJECTED]\n当前完成结果未通过最新目标验收：${review.reason}\n\n继续执行当前有效目标，补齐缺失实现与证据后再提交 completed。不得重复提交上一轮结论。`)
+      await followupTaskInternal(prepared.task, `[TASK_RESULT_REJECTED]\n当前完成结果未通过最新目标验收：${review.reason}\n\n继续执行当前有效目标，补齐缺失实现与证据后再提交 completed。不得重复提交上一轮结论。`, `result-rejected:${taskId}:${fingerprint(result)}`)
       throw new Error(`task_result_objective_not_covered:${taskId}:${review.reason}`)
     }
     const completed = await serializeTasks(async () => {
@@ -775,6 +794,8 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       assertTaskInput(task, checkpoint)
       if (!leafHandles.has(taskId)) throw new Error(`task_leaf_not_active:${taskId}`)
       if (!diagnostic) assertCurrentTaskPrompts(task, store.getTaskPrompts())
+      const accepted = task.checkpoints?.find(item => item.checkpointId === stableId('checkpoint', `${taskId}:${fingerprint(checkpoint)}`) && item.coordinatorDecision)
+      if (accepted) return { submitted: accepted, reviewTask: task }
       const pendingReview = task.checkpoints?.at(-1)
       let superseded
       if (pendingReview && !pendingReview.coordinatorDecision) {
@@ -785,6 +806,8 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       }
       if (checkpoint.kind === 'plan-confirmed' && checkpoint.remainingItems.length < 1) throw new Error(`task_checkpoint_plan_insufficient:${taskId}`)
       if (checkpoint.kind === 'plan-confirmed') {
+        const completed = new Set((task.checkpoints ?? []).filter(item => item.kind === 'stage-completed' && ['acknowledge', 'guidance'].includes(item.coordinatorDecision)).flatMap(item => item.completedItems))
+        if (new Set(checkpoint.remainingItems).size !== checkpoint.remainingItems.length || checkpoint.remainingItems.some(item => completed.has(item))) throw new Error(`task_checkpoint_plan_stage_duplicate:${taskId}`)
         const refs = task.taskPromptRefs ?? []
         if (refs.length > 0 && !checkpoint.workflowAssessment) throw new Error(`task_workflow_assessment_required:${taskId}`)
         if (checkpoint.workflowAssessment && !samePromptRefs(checkpoint.workflowAssessment.promptRefs, refs)) throw new Error(`task_workflow_assessment_refs_invalid:${taskId}`)
@@ -801,16 +824,17 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (checkpoint.kind === 'stage-completed' && (!checkpoint.stageTask || !(task.stageTasks ?? []).includes(checkpoint.stageTask))) throw new Error(`task_checkpoint_stage_invalid:${taskId}`)
       const retained = (task.checkpoints ?? []).filter((item) => item !== superseded)
       const previousRemainingItems = retained.at(-1)?.remainingItems ?? []
-      if (diagnostic && (checkpoint.completedItems.length || checkpoint.stageTask)) throw new Error(`task_checkpoint_progress_requires_stage_completed:${taskId}`)
+      if (diagnostic && checkpoint.completedItems.length) throw new Error(`task_checkpoint_progress_requires_stage_completed:${taskId}`)
       if (checkpoint.kind === 'stage-completed') {
         if (!task.checkpoints?.at(-1)?.coordinatorDecision) throw new Error(`task_checkpoint_review_pending:${taskId}`)
         const completesCurrentItem = checkpoint.completedItems.length === 1 && checkpoint.completedItems[0] === previousRemainingItems[0]
+        if (checkpoint.stageTask !== previousRemainingItems[0] || (checkpoint.stageId && checkpoint.stageId !== task.stagePlan?.find(stage => stage.title === previousRemainingItems[0])?.stageId)) throw new Error(`task_checkpoint_stage_invalid:${taskId}`)
         const keepsRemainingOrder = checkpoint.remainingItems.length === Math.max(0, previousRemainingItems.length - 1) && checkpoint.remainingItems.every((item, index) => item === previousRemainingItems[index + 1])
         if (!completesCurrentItem || !keepsRemainingOrder) throw new Error(`task_checkpoint_must_advance_one:${taskId}:${previousRemainingItems[0] ?? 'none'}`)
       } else if (checkpoint.kind !== 'plan-confirmed' && (checkpoint.remainingItems.length !== previousRemainingItems.length || checkpoint.remainingItems.some((item, index) => item !== previousRemainingItems[index]))) {
         throw new Error(`task_checkpoint_progress_requires_stage_completed:${taskId}`)
       }
-      const submitted = { ...checkpoint, checkpointId: `checkpoint-${randomUUID()}`, submittedAt: new Date().toISOString() }
+      const submitted = { ...checkpoint, checkpointId: stableId('checkpoint', `${taskId}:${fingerprint(checkpoint)}`), submittedAt: new Date().toISOString() }
       const reviewTask = await updateTaskInput(taskId, checkpoint, (current) => ({ ...current, acknowledgedInputVersion: checkpoint.inputVersion, checkpoints: [...retained, submitted],
         ...(superseded ? { executionEvents: [...(current.executionEvents ?? []), { kind: 'checkpoint-review-superseded', checkpoint: superseded, at: new Date().toISOString() }] } : {}),
         updatedAt: new Date().toISOString() }))
@@ -897,11 +921,27 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       const inheritedPreset = agentPresets.composeFrom(agentCtx, parent.ctx)
       if (inheritedPreset !== agentPreset) throw new Error(`leaf_agent_preset_invalid:${inheritedPreset ?? 'none'}`)
       installSelection(agentCtx)
+      agentCtx.on('agent/pre-step', createTaskReportStepGate({
+        isBlocked: () => { const current = store.getTask(task.taskId); return current && reports.hasBlocking(current) },
+        isResolutionMessage: (_agent, message) => {
+          if (message.source?.kind !== 'coordinator') return false
+          const current = store.getTask(task.taskId)
+          if (!current) return false
+          if (message.id === stableId('message', `task-input:${current.taskId}:${current.runSequence}:${current.inputVersion}`)) return true
+          return taskReports(current).some(report => {
+            if (report.runSequence !== current.runSequence || report.inputVersion !== current.inputVersion || !['accepted', 'rejected', 'failed'].includes(report.status)) return false
+            const identity = report.receipt?.code === 'task_checkpoint_rejected' ? `checkpoint-rejected:${report.receipt.checkpointId}`
+              : report.error?.startsWith('task_result_objective_not_covered:') ? `result-rejected:${task.taskId}:${fingerprint(report.value)}`
+                : `task-report:${task.taskId}:${report.submissionId}:${report.status}`
+            return message.id === stableId('message', identity)
+          })
+        },
+      }))
       agentCtx.systemPrompt.section({
         name: 'group-task-blocking-policy', order: 45,
         text: () => `## 群任务执行与完成规则
 
-你必须通过 submit_task_result 结束任务；自然语言总结、Goal complete 或 turn end 都不构成 Task 完成。
+你必须通过 submit_task_result 结束任务；自然语言总结、Goal complete 或 turn end 都不构成 Task 完成。checkpoint/result 的 accepted:true 仅表示报告已持久接收；input-wait/review-wait 时结束当前轮并等待 TASK_REPORT_REVIEWED，不重复提交、不继续依赖该批准的动作。submissionId 标识同一份报告，重试保持不变；有新事实时提交新的报告。
 
 ### 工作区 Skill 的通用执行边界
 
@@ -958,7 +998,7 @@ ${(store.getTask(task.taskId) ?? task).acceptanceCriteria.map((item) => `- ${ite
 
 ### 当前执行轮次阶段任务
 
-${(store.getTask(task.taskId) ?? task).stageTasks.map((item) => `- ${item}`).join('\n')}
+${((store.getTask(task.taskId) ?? task).stagePlan ?? (store.getTask(task.taskId) ?? task).stageTasks.map(title => ({ title }))).map(item => `- ${item.title}${item.stageId ? `（stageId: ${item.stageId}）` : ''}`).join('\n')}
 
 ### Topic 固定版本输入
 
@@ -966,11 +1006,9 @@ ${JSON.stringify({ taskId: task.taskId, topicRefs: store.getTask(task.taskId)?.t
 
 原始消息通过 group_topic_context_get 按 Topic 固定版本读取；返回 nextOffset 或 nextTextOffset 时必须按该游标连续读取，不得猜测未读取的上下文。每个 checkpoint/result 必须带实际使用的 inputVersion/runSequence。Task objective 与验收标准仍是执行边界。
 
-### 已持久化的人工处理意见
+### 当前事实与人工处理意见
 
-${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').length
-  ? (task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').map((item) => `- ${item.decision ?? 'answered'}｜${item.category}｜${item.requestedAction}｜答复：${item.reply ?? '未记录'}`).join('\n')
-  : '暂无。'}
+${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVersion, runSequence, ...facts }) => facts)(queryFactsSnapshot(store.getTask(task.taskId) ?? task)))}
 
 完成结果提交后由 Runtime 完整交给 resident 主会话，再由主会话结合 Task 完整时间线判断如何通知原群相关参与人。群聊消息的发送、回复、编辑、更正和撤回均由 resident 主会话判断；叶子只提交业务结果、结论、证据、未验证项和置信边界，不得判断、建议或申请撤回/编辑/更正任何群消息，不得提供消息处置目标或 messageId。群聊通知只有 Runtime 这一个出口：叶子会话不得调用 DWS 或其他消息工具向来源群发送、回复、编辑或撤回任务进度、阻塞或完成通知，也不得把自行发送群通知作为完成证据；叶子只允许读取群消息用于业务核验，并通过 submit_task_result 提交结构化结果。
 
@@ -1035,70 +1073,17 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
           return { taskId: task.taskId, taskPromptRefs: refs }
         }),
       })
-      agentCtx.tools.register({
-        name: 'submit_task_checkpoint',
-        description: 'Submit an event-driven internal checkpoint to the resident coordinator and receive acknowledgement or corrective guidance. This never sends a group message.',
-        parameters: { type: 'object', additionalProperties: false, properties: {
-          inputVersion: { type: 'integer' }, runSequence: { type: 'integer' },
-          kind: { type: 'string', enum: ['plan-confirmed', 'stage-completed', 'scope-conflict', 'evidence-gap', 'risk-changed'] }, stageTask: { type: 'string' }, summary: { type: 'string' },
-          completedItems: { type: 'array', description: 'stage-completed 时只包含上次 remainingItems 的第一项，不累计历史完成项。', items: { type: 'string' } }, evidence: { type: 'array', items: { type: 'string' } }, remainingItems: { type: 'array', description: 'stage-completed 时为上次 remainingItems 去掉第一项后的有序列表。', items: { type: 'string' } },
-          nextStep: { type: 'string' }, needsCoordinatorDecision: { type: 'boolean' },
-          workflowAssessment: { type: 'object', additionalProperties: false, properties: {
-            promptRefs: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, revision: { type: 'integer' } }, required: ['id', 'revision'] } },
-            reusedEvidence: { type: 'array', items: { type: 'string' } },
-            inapplicableSteps: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { promptId: { type: 'string' }, step: { type: 'string' }, reason: { type: 'string' } }, required: ['promptId', 'step', 'reason'] } },
-            exceptions: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { requirement: { type: 'string' }, basisMessageIds: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } }, required: ['requirement', 'basisMessageIds', 'reason'] } },
-          }, required: ['promptRefs', 'reusedEvidence', 'inapplicableSteps', 'exceptions'] },
-        }, required: ['inputVersion', 'runSequence', 'kind', 'summary', 'completedItems', 'evidence', 'remainingItems', 'nextStep', 'needsCoordinatorDecision'] },
-        output: {
-          schema: { oneOf: [{ type: 'object', additionalProperties: false, properties: {
-            accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, checkpointId: { type: 'string' }, coordinatorDecision: { type: 'string', enum: ['acknowledge', 'guidance'] }, reason: { type: 'string' }, guidance: { type: 'string' },
-          }, required: ['accepted', 'taskId', 'checkpointId', 'coordinatorDecision', 'reason'] }, {
-            type: 'object', additionalProperties: false, properties: {
-              accepted: { type: 'boolean', const: false }, taskId: { type: 'string' }, code: { type: 'string', const: 'task_checkpoint_must_advance_one' },
-              inputVersion: { type: 'integer' }, runSequence: { type: 'integer' },
-              expected: { type: 'object', additionalProperties: false, properties: { completedItems: { type: 'array', items: { type: 'string' } }, remainingItems: { type: 'array', items: { type: 'string' } } }, required: ['completedItems', 'remainingItems'] },
-              instruction: { type: 'string' },
-            }, required: ['accepted', 'taskId', 'code', 'inputVersion', 'runSequence', 'expected', 'instruction'],
-          }, {
-            type: 'object', additionalProperties: false, properties: {
-              accepted: { type: 'boolean', const: false }, taskId: { type: 'string' }, code: { type: 'string', const: 'task_checkpoint_rejected' }, checkpointId: { type: 'string' }, reason: { type: 'string' },
-            }, required: ['accepted', 'taskId', 'code', 'checkpointId', 'reason'],
-          }] },
-          render: (_args, out) => [{ type: 'text', text: out.accepted === false ? JSON.stringify(out) : out.coordinatorDecision === 'guidance' ? `Coordinator guidance: ${out.guidance}` : `Checkpoint acknowledged: ${out.reason}` }],
-        },
+      for (const [name, reportType, parse, parameters] of [
+        ['submit_task_checkpoint', 'checkpoint', parseTaskCheckpoint, taskCheckpointJsonSchema],
+        ['submit_task_result', 'result', parseTaskResult, taskResultJsonSchema],
+      ]) agentCtx.tools.register({
+        name, description: '持久接纳执行报告。返回等待收据时尚未批准推进或完成；Runtime 处理后主动通知，不重复提交。',
+        parameters,
+        output: { schema: taskReportReceiptSchema, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] },
         execute: async (args, exec) => {
-          if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_checkpoint_wrong_session:${task.taskId}`)
-          try { return await submitTaskCheckpointInternal(task.taskId, args) }
-          catch (error) {
-            if (!error.message.startsWith(`task_checkpoint_must_advance_one:${task.taskId}:`)) throw error
-            const current = store.getTask(task.taskId)
-            const remaining = current.checkpoints?.at(-1)?.remainingItems ?? []
-            return { accepted: false, taskId: task.taskId, code: 'task_checkpoint_must_advance_one', inputVersion: current.inputVersion, runSequence: current.runSequence,
-              expected: { completedItems: remaining.slice(0, 1), remainingItems: remaining.slice(1) },
-              instruction: remaining.length ? '本次提交未保存。completedItems 只填本次完成的一项；核对该项证据并修正参数，确认被接受后再推进后续阶段。' : '当前没有剩余阶段，本次提交未保存；核对当前目标后提交结果或重新规划，不重复补报历史阶段。' }
-          }
-        },
-      })
-      agentCtx.tools.register({
-        name: 'submit_task_result',
-        description: 'Submit a verified business-task result. Host validation decides Task state.',
-        parameters: { type: 'object', additionalProperties: false, properties: {
-          inputVersion: { type: 'integer' }, runSequence: { type: 'integer' },
-          status: { type: 'string', enum: ['completed', 'waiting'] }, workType: { type: 'string', enum: ['development', 'non-development'] }, waitingKind: { type: 'string', enum: ['information', 'human-intervention'] }, summary: { type: 'string' },
-          evidence: { type: 'array', items: { type: 'string' } }, artifacts: { type: 'array', items: { type: 'string' } }, waitingReason: { type: 'string' },
-          questions: { type: 'array', items: { type: 'string' } }, blockerCategory: { type: 'string', enum: ['redline', 'network', 'disk', 'resource', 'unexpected', 'human-decision'] },
-          risk: { type: 'string' }, attemptedActions: { type: 'array', items: { type: 'string' } }, requestedAction: { type: 'string' },
-          delivery: { type: 'object', additionalProperties: true },
-        }, required: ['inputVersion', 'runSequence', 'status', 'summary', 'evidence', 'artifacts'] },
-        output: {
-          schema: { type: 'object', additionalProperties: false, properties: { accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, state: { type: 'string' } }, required: ['accepted', 'taskId', 'state'] },
-          render: (_args, out) => [{ type: 'text', text: `Task result accepted: ${out.taskId} -> ${out.state}` }],
-        },
-        execute: async (args, exec) => {
-          if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_result_wrong_session:${task.taskId}`)
-          const updated = await submitTaskResult(task.taskId, args)
-          return { accepted: true, taskId: task.taskId, state: updated.state }
+          if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_${reportType}_wrong_session:${task.taskId}`)
+          if (store.getTask(task.taskId)?.childSessionId !== task.childSessionId) throw new Error('leaf_tool_session_mismatch')
+          return reports.submit(task.taskId, reportType, parse(args))
         },
       })
     }
@@ -1110,7 +1095,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       if (!creating) throw new Error(`task_goal_missing:${task.taskId}`)
       ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds }); return
     }
-    if (task.state === 'running' && !isGoalRoundLimitExhausted(existing) && (
+    if (task.state === 'running' && !reports.hasBlocking(task) && !isGoalRoundLimitExhausted(existing) && (
       existing.phase === 'paused'
       || existing.phase === 'blocked'
       || (existing.phase === 'active' && existing.activation === 'disarmed')
@@ -1162,6 +1147,11 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       for (const listed of store.listTasks().filter((task) => task.state === 'running')) {
         let task = store.getTask(listed.taskId)
         if (task?.state !== 'running') continue
+        if (reports.hasBlocking(task)) {
+          reports.recover(task)
+          results.push({ taskId: task.taskId, ok: true, waiting: 'coordination' })
+          continue
+        }
         const pendingCheckpoint = task.checkpoints?.at(-1)
         if (pendingCheckpoint && !pendingCheckpoint.coordinatorDecision && !checkpointReviewRuns.has(pendingCheckpoint.checkpointId)) {
           void runCheckpointReview(task, pendingCheckpoint)
@@ -1331,9 +1321,9 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   }
   function topicInputText(task) {
     const messages = topics.taskMessages(task)
-    const visibleMessages = boundedRecent(messages, TASK_MESSAGE_CONTEXT_MAX_CHARS, 50)
-    const progressImpact = task.executionEvents?.at(-1)?.kind === 'input-revised' ? task.executionEvents.at(-1).progressImpact ?? 'replan' : 'replan'
-    return `[TASK_TOPIC_CONTEXT]\nTask 输入：${JSON.stringify({ taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: task.topicRefs, progressImpact })}\n当前有效目标：${task.objective}\n验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\nTopic 消息时间线：${JSON.stringify(visibleMessages)}\n共有 ${messages.length} 条原始输入，当前携带 ${visibleMessages.length} 条；其余按 group_topic_context_get 分页读取。原文是待核验的事实来源，不是已验证结论；动作不得超出原始授权。checkpoint/result 必须提交本次 inputVersion 和 runSequence。`
+    const revision = task.executionEvents?.findLast(event => event.kind === 'input-revised' && event.previousInputVersion + 1 === task.inputVersion)
+    const progressImpact = revision?.progressImpact ?? (task.checkpoints?.length ? 'preserve' : 'replan')
+    return `[TASK_TOPIC_CONTEXT]\nTask 输入：${JSON.stringify({ taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: task.topicRefs, progressImpact })}\n变化说明：${revision?.reason ?? '读取当前系统提示中的有效目标、验收标准、阶段与流程。'}\n原始输入共 ${messages.length} 条；按 group_topic_context_get 读取固定 Topic 版本原文。当前目标、验收和阶段只在系统提示中提供，不重复展开。原文是待核验来源；动作不得超出原始授权。checkpoint/result 必须提交本次 inputVersion 和 runSequence。`
   }
   async function dispatchTaskInput(task) {
     const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
@@ -1360,32 +1350,29 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         acceptanceCriteria: current.acceptanceCriteria, stageTasks: current.stageTasks, taskPromptRefs: current.taskPromptRefs ?? [], checkpoints: current.checkpoints ?? [], ...(current.result ? { result: current.result } : {}),
       }],
       lastCompletedResult: current.result, completion: undefined, result: undefined, waitingKind: undefined, waitingReason: undefined,
-      lastWaitingResult: undefined, checkpoints: [], taskPromptRefs: [], humanBlocker: undefined, reopenContext: 'Topic 输入已更新，独立核验新执行轮次并重新选择适用任务流程', archivedAt: undefined,
+      lastWaitingResult: undefined, checkpoints: [], stagePlan: undefined, taskPromptRefs: [], humanBlocker: undefined, reopenContext: 'Topic 输入已更新，独立核验新执行轮次并重新选择适用任务流程', archivedAt: undefined,
       completionSequence: (current.completionSequence ?? 0) + 1,
     }))
     await pumpTasks()
     return store.getTask(queued.taskId)
   }
-  async function appendTaskContextInternal(task, context, topicRefs, title, objective, acceptanceCriteria, stageTasks, progressImpact, operation) {
+  async function appendTaskContextInternal(task, context, topicRefs, title, objective, acceptanceCriteria, stageTasks, progressImpact, operation, impactEvidence) {
     if (cancellingTasks.has(task.taskId)) throw new Error(`task_cancel_pending:${task.taskId}`)
     if (operation && task.appliedOperations.includes(operation.operationId)) { if (['running', 'waiting'].includes(task.state)) await dispatchTaskInput(task); return task }
     if (task.state === 'completed') throw new Error(`task_not_active:${task.taskId}`)
-    const previousObjective = task.objective
+    const previousPlan = JSON.stringify([task.objective, task.acceptanceCriteria, task.stageTasks])
     task = await mutateTask(task, operation, (current) => {
       const revised = withRevisedObjective(current, objective, title, operation?.decisionId)
       const resumed = current.state === 'waiting' && current.waitingKind === 'information'
       const refs = [...new Map([...current.topicRefs, ...topicRefs].map((ref) => [ref.topicId, ref])).values()]
-      const scopeChanged = revised.objective !== current.objective || acceptanceCriteria !== undefined || stageTasks !== undefined
-      const preserveProgress = progressImpact === 'preserve' && !scopeChanged
-      const priorCheckpoints = current.checkpoints ?? []
-      const invalidatedCheckpoints = preserveProgress ? priorCheckpoints.filter((checkpoint) => !checkpoint.coordinatorDecision) : priorCheckpoints
-      const checkpoints = preserveProgress
-        ? priorCheckpoints.filter((checkpoint) => checkpoint.coordinatorDecision).map((checkpoint) => ({ ...checkpoint, inputVersion: current.inputVersion + 1 }))
-        : []
+      const plan = normalizeRunPlan(revised.objective, acceptanceCriteria ?? revised.acceptanceCriteria, stageTasks ?? revised.stageTasks)
+      const progress = reviseTaskProgress(current, { objective: revised.objective, ...plan, progressImpact, impactEvidence }, new Set(refs.flatMap(ref => resolveTopicMessages(store.getGroup(task.groupId), ref.topicId, ref.revision)).map(message => message.messageId)))
       return { ...revised, topicRefs: refs, inputVersion: current.inputVersion + 1,
-        checkpoints, taskPromptRefs: scopeChanged ? [] : current.taskPromptRefs,
-        executionEvents: [...(current.executionEvents ?? []), { kind: 'input-revised', previousInputVersion: current.inputVersion, progressImpact: preserveProgress ? 'preserve' : 'replan', checkpoints: invalidatedCheckpoints }],
-        ...normalizeRunPlan(revised.objective, acceptanceCriteria ?? revised.acceptanceCriteria, stageTasks ?? revised.stageTasks),
+        checkpoints: progress.checkpoints, stagePlan: progress.stagePlan, taskPromptRefs: current.taskPromptRefs,
+        executionEvents: [...(current.executionEvents ?? []), { kind: 'input-revised', previousInputVersion: current.inputVersion, inputVersion: current.inputVersion + 1, runSequence: current.runSequence,
+          progressImpact: progress.progressImpact, reason: progress.reason, affectedStageIds: progress.affectedStageIds,
+          retainedCheckpointIds: progress.checkpoints.map(checkpoint => checkpoint.checkpointId), checkpoints: progress.invalidatedCheckpoints, at: new Date().toISOString() }],
+        ...plan,
         ...(resumed ? { state: 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
           resumeContext: '[TASK_CONTEXT_RESUME]\nInformation required by the task is now available.' } : {}),
       }
@@ -1393,11 +1380,12 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     if (['running', 'waiting'].includes(task.state)) {
       const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
       if (task.state === 'running') {
-        if (task.objective !== previousObjective || acceptanceCriteria || stageTasks) replaceTaskGoalObjective(task, handle)
+        if (JSON.stringify([task.objective, task.acceptanceCriteria, task.stageTasks]) !== previousPlan) replaceTaskGoalObjective(task, handle)
         else resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
       }
       await dispatchTaskInput(task)
     } else if (task.state === 'queued') await pumpTasks()
+    reports.recover(store.getTask(task.taskId))
     return task
   }
   async function applyTopicAction(groupId, action, receipt, record) {
@@ -1413,11 +1401,11 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     if (!task || task.groupId !== groupId) throw new Error('task_topic_wrong_group')
     if (action.kind === 'task-cancel') return cancelTaskInternal(task.taskId, action.reason, action.topicRefs, operation)
     if (action.kind === 'task-reopen') return reopenCompletedTaskInternal(task, action.context, action.topicRefs, action.title, action.objective, action.acceptanceCriteria, action.stageTasks, operation)
-    return appendTaskContextInternal(task, action.context, action.topicRefs, action.title, action.objective, action.acceptanceCriteria, action.stageTasks, action.progressImpact, operation)
+    return appendTaskContextInternal(task, action.context, action.topicRefs, action.title, action.objective, action.acceptanceCriteria, action.stageTasks, action.progressImpact, operation, action.impactEvidence)
   }
   async function submitWebTaskAction(kind, request) {
     if (runtimeClosing) throw new Error('resident_runtime_closed')
-    const { requestId, context, taskId, title, objective, acceptanceCriteria, stageTasks } = request
+    const { requestId, context, taskId, title, objective, acceptanceCriteria, stageTasks, progressImpact, impactEvidence } = request
     if (typeof requestId !== 'string' || !requestId.trim()) throw new Error('task_request_id_required')
     if (typeof context !== 'string' || !context.trim()) throw new Error('task_context_required')
     const existingTask = taskId ? store.getTask(taskId) : undefined
@@ -1430,6 +1418,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     const topicRefs = request.topicRefs ?? []
     const action = { kind, ...(task ? { taskId, inputVersion: request.inputVersion, runSequence: request.runSequence, ...(kind === 'task-cancel' ? { reason: context.trim() } : { context: context.trim() }) } : { title, objective, acceptanceCriteria }),
       ...(task && title !== undefined ? { title } : {}), ...(objective !== undefined ? { objective } : {}), ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}), ...(stageTasks !== undefined ? { stageTasks } : {}),
+      ...(kind === 'task-context' && progressImpact !== undefined ? { progressImpact } : {}), ...(kind === 'task-context' && impactEvidence !== undefined ? { impactEvidence } : {}),
       topicRefs: topicRefs.length ? topicRefs : [{ topicId: 'web-input', revision: 1 }] }
     groupDecisionSchema.parse({ basisMessageIds: ['web-input'], actions: [action], reply: '' })
     const text = JSON.stringify({ kind, context: context.trim(), ...(taskId ? { taskId } : {}), ...(title ? { title } : {}), ...(objective ? { objective } : {}), ...(acceptanceCriteria ? { acceptanceCriteria } : {}), ...(stageTasks ? { stageTasks } : {}) })
@@ -1444,23 +1433,117 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
       return store.getTask(record.operations[0].taskId)
     } finally { release() }
   }
-  async function followupTaskInternal(task, text) {
+  async function followupTaskInternal(task, text, identity) {
     if (cancellingTasks.has(task.taskId)) throw new Error(`task_cancel_pending:${task.taskId}`)
     const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
-    handle.agent.steer(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'coordinator' } }))
+    const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'coordinator' } })
+    const id = identity ? stableId('message', identity) : message.id
+    const exists = [...(handle.agent.inbox?.nextStep ?? []), ...(handle.agent.inbox?.nextTurn ?? [])].some(item => item.id === id) || handle.agent.session.snapshotEvents().some(event => event.type === 'user/message' && event.data?.id === id)
+    if (!exists) handle.agent.steer(Object.freeze({ ...message, id }))
+    const sessions = ctx.get?.('sessions') ?? ctx.sessions
+    if (sessions?.flush) await sessions.flush(handle.agent.session)
     return { task, accepted: true }
   }
   const disposeObserver = typeof ctx.on === 'function' ? ctx.on('session/event', (session, event) => {
     const taskId = leafTaskBySession.get(String(session.id))
     if (taskId === undefined || !PROJECTED_EVENTS.has(event.type) || typeof store.recordActivity !== 'function') return
     const occurredAt = typeof event.time === 'number' ? new Date(event.time).toISOString() : typeof event.time === 'string' ? event.time : undefined
-    activityTail = activityTail.then(() => store.recordActivity({ taskId, sessionId: String(session.id), eventKey: `${String(session.id)}:${event.seq}`, type: event.type, detail: activityDetail(event), occurredAt })).catch(() => undefined)
+    activityTail = activityTail.then(() => store.recordActivity({ taskId, sessionId: String(session.id), eventKey: `${String(session.id)}:${event.seq}`, seq: event.seq, type: event.type, detail: activityDetail(event), occurredAt })).catch(error => recoveryIssues.push({ taskId, kind: 'activity-projection', error: error.message }))
   }) : undefined
+  const statusQueryTails = new Map()
+  const statusQueryAttempts = new Set()
+  const llm = ctx.get?.('llm') ?? ctx.llm
+  const statusQueries = llm?.stream ? createStatusQueryHandler({
+    llm,
+    modelConfig: ({ groupId }) => {
+      const config = residentHandles.get(groupId)?.agent.session.requestHeader?.()?.config ?? agentOptions
+      const { reasoningEffort: _oldEffort, ...base } = config
+      return { ...base, ...selection }
+    },
+    recordEvent: async event => {
+      const agent = residentHandles.get(event.groupId)?.agent
+      if (!agent) return
+      agent.session.append(event.type, event)
+      const sessions = ctx.get?.('sessions') ?? ctx.sessions
+      if (sessions?.flush) await sessions.flush(agent.session)
+    },
+    commit: ({ request, decision }) => topics.submitReadOnlyDecision(request.groupId, {
+      requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision,
+    }, request.candidateFingerprint, () => {
+      const group = store.getGroup(request.groupId)
+      if (!group || request.policyFingerprint !== fingerprint({ responsibility: group.responsibility, agentNames: store.getAgentNames() })) return false
+      const currentTasks = store.listTasks().filter(task => task.groupId === request.groupId && task.topicRefs.some(ref => ref.topicId === request.topicId))
+      return currentTasks.length === request.taskSnapshots.length && request.taskSnapshots.every(snapshot => {
+        const current = currentTasks.find(task => task.taskId === snapshot.taskId)
+        return current && queryFactsSnapshot(current).revision === snapshot.revision
+      })
+    }),
+  }) : undefined
+  function tryStatusQuery({ groupId, requestId }) {
+    const previous = statusQueryTails.get(groupId) ?? Promise.resolve()
+    const run = previous.catch(() => undefined).then(async () => {
+      if (runtimeClosing) return false
+      const context = topics.getReadOnlyDecisionContext(groupId, requestId)
+      if (context.hasOmittedMessages || context.messages.some(message => message.imageRefs?.length || message.quotedMessageId || message.quotedMessage)) return false
+      const tasks = store.listTasks().filter(task => task.groupId === groupId && task.topicRefs.some(ref => ref.topicId === context.topicId))
+      if (!tasks.length || tasks.length > 3) return false
+      const messages = context.messages.filter(message => context.deltaMessageIds.includes(message.messageId))
+      if (!messages.length || messages.some(message => ['web', 'internal'].includes(message.sourceKind))) return false
+      if (statusQueryAttempts.has(requestId)) return false
+      statusQueryAttempts.add(requestId)
+      if (statusQueryAttempts.size > 500) statusQueryAttempts.delete(statusQueryAttempts.values().next().value)
+      const group = store.getGroup(groupId)
+      const result = await statusQueries.handle({ ...context,
+        policyFingerprint: fingerprint({ responsibility: group.responsibility, agentNames: store.getAgentNames() }),
+        sourceMessages: messages, sourceMessageIds: messages.map(message => message.messageId),
+        taskSnapshots: tasks.map(queryFactsSnapshot),
+        replyCandidates: context.candidates,
+        compactPolicy: { responsibility: group.responsibility, agentNames: store.getAgentNames(), summary: context.summary,
+          rule: '只回应本群职责范围内明确交给助理的状态问答，或同一事项后续追问。无法确认准入时交还常驻判断。不得从状态质疑推断执行或重新规划授权。' },
+      })
+      return result.kind === 'reply'
+    })
+    statusQueryTails.set(groupId, run)
+    run.finally(() => { if (statusQueryTails.get(groupId) === run) statusQueryTails.delete(groupId) }).catch(() => undefined)
+    return run
+  }
   const topics = createTopicCoordinator({
     store, getAgent: (groupId) => residentHandles.get(groupId)?.agent, assertSession: assertResidentToolSession, serializeTasks,
     applyAction: applyTopicAction, appendOutbox: appendReliableOutbox, reviewCandidates: replyReviewCandidatesFor, validateReplyReview,
     cancelTask: signalTaskCancellation, isClosing: () => runtimeClosing, retryDelayMs: decisionRetryBaseMs,
+    ...(statusQueries ? { onDecisionRequest: tryStatusQuery } : {}),
+    onInputSettled: groupId => { for (const task of store.listTasks().filter(task => task.groupId === groupId)) reports.recover(task) },
     onError: (groupId, error) => recoveryIssues.push({ groupId, kind: 'topic-processing', error: error.message ?? String(error) }),
+  })
+  const reports = createTaskReportQueue({
+    store, serialize: serializeTasks, hasPendingInput: task => topics.hasPendingTaskInput(task), isClosing: () => runtimeClosing,
+    execute: async (taskId, type, value) => {
+      if (type === 'checkpoint') return submitTaskCheckpointInternal(taskId, value)
+      const task = await submitTaskResult(taskId, value)
+      return { accepted: true, taskId, state: task.state }
+    },
+    suspend: async task => {
+      const handle = leafHandles.get(task.taskId)
+      if (!handle) return
+      const goal = ctx.goals.get(handle.agent)
+      if (goal?.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-coordination-pending', message: '报告已保存，等待输入接纳或审阅结果。' })
+    },
+    notify: async (task, report) => {
+      if (task.state !== 'running') return
+      const handle = leafHandles.get(task.taskId)
+      if (!handle) throw new Error('task_report_leaf_unavailable')
+      const identity = report.receipt?.code === 'task_checkpoint_rejected' ? `checkpoint-rejected:${report.receipt.checkpointId}`
+        : report.error?.startsWith('task_result_objective_not_covered:') ? `result-rejected:${task.taskId}:${fingerprint(report.value)}`
+          : `task-report:${task.taskId}:${report.submissionId}:${report.status}`
+      const id = stableId('message', identity)
+      const exists = [...(handle.agent.inbox?.nextStep ?? []), ...(handle.agent.inbox?.nextTurn ?? [])].some(message => message.id === id)
+        || handle.agent.session.snapshotEvents().some(event => event.type === 'user/message' && event.data.id === id)
+      if (!exists) handle.agent.steer({ ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: `[TASK_REPORT_REVIEWED]\n${JSON.stringify({ submissionId: report.submissionId, status: report.status, result: report.receipt, error: report.error })}\n只依据本次结果继续；已接收不代表业务完成。不要重复提交同一报告。` }] }), id })
+      const sessions = ctx.get?.('sessions') ?? ctx.sessions
+      if (sessions?.flush) await sessions.flush(handle.agent.session)
+      if (report.status !== 'failed') resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
+    },
+    onError: error => recoveryIssues.push({ kind: 'task-report-processing', error: error.message }),
   })
   for (const group of store.listGroups()) {
     try {
@@ -1473,7 +1556,13 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
   }
   for (const task of store.listTasks().filter((item) => item.state === 'running' || item.state === 'waiting')) {
     if (!residentHandles.has(task.groupId)) continue
-    try { await resumeLeaf(task); await dispatchTaskInput(task) } catch (error) { recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, childSessionId: task.childSessionId, error: error instanceof Error ? error.message : String(error) }) }
+    try {
+      const plan = reconcileLegacyStagePlan(task)
+      const current = plan ? await store.updateTask(task.taskId, value => ({ ...value, stageTasks: plan.stageTasks, stagePlan: plan.stagePlan,
+        executionEvents: [...(value.executionEvents ?? []), { kind: 'stage-plan-reconciled', planCheckpointId: plan.planCheckpointId, previousStageTasks: value.stageTasks, at: new Date().toISOString() }],
+      })) : task
+      await resumeLeaf(current); await dispatchTaskInput(current); reports.recover(current)
+    } catch (error) { recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, childSessionId: task.childSessionId, error: error instanceof Error ? error.message : String(error) }) }
   }
   await serializeTasks(pumpTasks)
   function recoverDecisionMessages() {
@@ -1675,6 +1764,23 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
     },
     followupTask: ({ text, ...request }) => submitWebTaskAction('task-context', { ...request, context: text }),
     submitTaskResult: ({ taskId, result }) => submitTaskResult(taskId, result),
+    getTaskReport: ({ taskId, submissionId }) => reports.get(taskId, submissionId),
+    retryTaskReport: async ({ taskId, submissionId }) => {
+      const task = store.getTask(taskId)
+      const report = task && taskReports(task).find(item => item.submissionId === submissionId)
+      if (!report) throw new Error(`task_report_not_found:${submissionId}`)
+      if (report.inputVersion !== task.inputVersion || report.runSequence !== task.runSequence || task.state === 'completed') throw new Error(`task_report_retry_stale:${submissionId}`)
+      if (report.status !== 'failed') throw new Error(`task_report_retry_requires_failed:${submissionId}`)
+      if (report.error?.startsWith('topic_request_retry_exhausted:')) await topics.resetReviewRequest(task.groupId, report.error.slice('topic_request_retry_exhausted:'.length))
+      return reports.retry(taskId, submissionId)
+    },
+    retryCoordinationRequest: ({ groupId, requestId }) => {
+      for (const task of store.listTasks().filter(item => item.groupId === groupId)) {
+        const report = taskReports(task).find(item => item.status === 'failed' && item.error === `topic_request_retry_exhausted:${requestId}`)
+        if (report) return runtimeApi.retryTaskReport({ taskId: task.taskId, submissionId: report.submissionId })
+      }
+      return topics.retryRequest(groupId, requestId)
+    },
     subscribe: ({ groupId, name, responsibility = '' }) => serializeConfig(() => {
       if (runtimeClosing) throw new Error('resident_runtime_closed')
       return serialize(groupId, async () => {
@@ -1829,6 +1935,7 @@ ${(task.humanBlockerHistory ?? []).filter((item) => item.status === 'answered').
         await waitForAllResidentOperations()
         await Promise.allSettled([...inflightMessages.values()])
         await topicClosing
+        await reports.drain()
         await pumpTail
         const all = [...leafHandles.values(), ...residentHandles.values()]
         await ctx.subagents.drainContinuableDescendants(all.map((handle) => handle.agent))

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { toToolJsonSchema } from './tool-schema.js'
 import { resolveTopicMessages, topicRefSchema } from './topic-model.js'
 
 export const TOPIC_TITLE_MAX_CHARS = 30
@@ -6,12 +7,14 @@ export const TOPIC_TITLE_MAX_CHARS = 30
 const runPlan = { acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional() }
 export { topicRefSchema }
 const taskSources = { topicRefs: z.array(topicRefSchema).min(1) }
+const impactEvidenceSchema = z.strictObject({ basisMessageIds: z.array(z.string().min(1)).min(1), reason: z.string().trim().min(1), affectedStageIds: z.array(z.string().min(1)).min(1) })
+export const taskContextImpactFields = { progressImpact: z.enum(['preserve', 'replan']).optional(), impactEvidence: impactEvidenceSchema.optional() }
 const taskVersion = { inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() }
 const topicUpdateSchema = z.strictObject({ summary: z.string().optional(), openQuestions: z.array(z.string().min(1)).optional(), status: z.enum(['active', 'waiting', 'closed']).optional() })
 const decisionBasis = { topicUpdate: topicUpdateSchema.optional(), basisMessageIds: z.array(z.string().min(1)).min(1) }
 const taskProposal = z.strictObject({ kind: z.literal('task-proposal'), title: z.string().min(1).max(120), objective: z.string().min(1), ...taskSources })
 const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: z.array(z.string().min(1)).min(1), stageTasks: z.array(z.string().min(1)).optional(), ...taskSources })
-const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), progressImpact: z.enum(['preserve', 'replan']).optional(), ...runPlan, ...taskSources })
+const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...taskContextImpactFields, ...runPlan, ...taskSources })
 const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
 const taskCancel = z.strictObject({ kind: z.literal('task-cancel'), taskId: z.string().min(1), ...taskVersion, reason: z.string().min(1), ...taskSources })
 const taskAction = z.discriminatedUnion('kind', [taskProposal, newTask, taskContext, taskReopen, taskCancel])
@@ -28,38 +31,8 @@ export const groupDecisionSchema = z.union([
 ])
 
 const stringJsonSchema = { type: 'string' }
-const runPlanJsonProperties = {
-  acceptanceCriteria: { type: 'array', items: stringJsonSchema },
-  stageTasks: { type: 'array', items: stringJsonSchema },
-}
-const topicRefsJsonProperty = { type: 'array', items: { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema, revision: { type: 'integer' } }, required: ['topicId', 'revision'] } }
-const taskVersionJsonProperties = { inputVersion: { type: 'integer' }, runSequence: { type: 'integer' } }
-export const replyReviewJsonSchema = {
-  type: 'object', additionalProperties: false,
-  properties: {
-    kind: { type: 'string', enum: ['confirmation', 'substantive', 'correction'] },
-    reviewedOutboundIds: { type: 'array', items: stringJsonSchema },
-    sameMatterOutboundIds: { type: 'array', items: stringJsonSchema },
-    replaceOutboundIds: { type: 'array', items: stringJsonSchema },
-  },
-  required: ['kind'],
-}
-const taskActionJsonSchema = {
-  oneOf: [
-    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-proposal' }, title: stringJsonSchema, objective: stringJsonSchema, topicRefs: topicRefsJsonProperty }, required: ['kind', 'title', 'objective', 'topicRefs'] },
-    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'new-task' }, title: stringJsonSchema, objective: stringJsonSchema, acceptanceCriteria: { type: 'array', items: stringJsonSchema }, stageTasks: runPlanJsonProperties.stageTasks, topicRefs: topicRefsJsonProperty }, required: ['kind', 'title', 'objective', 'acceptanceCriteria', 'topicRefs'] },
-    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-context' }, taskId: stringJsonSchema, ...taskVersionJsonProperties, context: stringJsonSchema, title: stringJsonSchema, objective: stringJsonSchema, progressImpact: { type: 'string', enum: ['preserve', 'replan'] }, ...runPlanJsonProperties, topicRefs: topicRefsJsonProperty }, required: ['kind', 'taskId', 'inputVersion', 'runSequence', 'context', 'topicRefs'] },
-    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-reopen' }, taskId: stringJsonSchema, ...taskVersionJsonProperties, context: stringJsonSchema, title: stringJsonSchema, objective: stringJsonSchema, ...runPlanJsonProperties, topicRefs: topicRefsJsonProperty }, required: ['kind', 'taskId', 'inputVersion', 'runSequence', 'context', 'topicRefs'] },
-    { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'task-cancel' }, taskId: stringJsonSchema, ...taskVersionJsonProperties, reason: stringJsonSchema, topicRefs: topicRefsJsonProperty }, required: ['kind', 'taskId', 'inputVersion', 'runSequence', 'reason', 'topicRefs'] },
-  ],
-}
-export const groupDecisionJsonSchema = {
-  type: 'object',
-  additionalProperties: false,
-  description: '群消息结构化判断。空 actions 时必须二选一提供非空 reply 或 reason；非空 actions 时必须提供 reply。存在历史回复候选且 reply 非空时必须提交 replyReview。完整约束由工具执行时校验。',
-  properties: { topicUpdate: { type: 'object', additionalProperties: false, properties: { summary: stringJsonSchema, openQuestions: { type: 'array', items: stringJsonSchema }, status: { type: 'string', enum: ['active', 'waiting', 'closed'] } } }, basisMessageIds: { type: 'array', items: stringJsonSchema }, actions: { type: 'array', items: taskActionJsonSchema }, reply: stringJsonSchema, reason: stringJsonSchema, replyReview: replyReviewJsonSchema },
-  required: ['actions', 'basisMessageIds'],
-}
+export const replyReviewJsonSchema = toToolJsonSchema(replyReviewSchema)
+export const groupDecisionJsonSchema = toToolJsonSchema(groupDecisionSchema)
 
 const topicRouteTargetSchema = z.union([
   z.strictObject({ topicId: z.string().min(1), relationship: z.enum(['continuation', 'affected']).optional(), reason: z.string().trim().min(1).optional() }),

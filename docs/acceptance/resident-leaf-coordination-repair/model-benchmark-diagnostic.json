@@ -1,0 +1,80 @@
+{
+  "recordedAt": "2026-09-10T09:19:01.369Z",
+  "provider": "openai-codex",
+  "model": "gpt-5.6-sol",
+  "reasoningEffort": "low",
+  "boundary": "原生DSH LlmRuntime+当前已安装Codex适配器；合成输入；无工具、真实群、Task写入或Outbox；不含Topic路由和消息发送，不是端到端P95。",
+  "requestedSamples": 1,
+  "completedSamples": 1,
+  "successfulSamples": 1,
+  "failedOrHandoffSamples": 0,
+  "p50Ms": 11828,
+  "p95Ms": 11828,
+  "successfulP50Ms": 11828,
+  "successfulP95Ms": 11828,
+  "outcomes": [
+    {
+      "index": 1,
+      "expected": "reply",
+      "kind": "reply",
+      "correct": true
+    },
+    {
+      "index": 2,
+      "expected": "handoff",
+      "kind": "handoff",
+      "reason": "请求包含在生产主库执行新SQL并重新部署，属于执行动作和目标变更；现有批准仅覆盖原候选与原SQL，不构成对新操作的授权，需交回常驻处理。",
+      "correct": true
+    }
+  ],
+  "events": [
+    {
+      "requestId": "synthetic-1",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-1"
+      ],
+      "inputFingerprint": "d0a00a28a276ed0a1670addc1c10e4daffa92c243da7d55b630e19c986c29f6e",
+      "inputTokenUpperBound": 3495,
+      "type": "status-query/finish",
+      "startedAt": 1789031918746,
+      "finishedAt": 1789031930574,
+      "durationMs": 11828,
+      "outcome": "accepted",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 839,
+        "outputTokens": 165,
+        "totalTokens": 1004
+      }
+    },
+    {
+      "requestId": "synthetic-2",
+      "groupId": "synthetic-only",
+      "topicId": "release-topic",
+      "revision": 1,
+      "sourceMessageIds": [
+        "msg-2"
+      ],
+      "inputFingerprint": "1cb918af269b599795e93d07a1cedc6c16be4baed96fb4b5e3d6fb5a024c16cd",
+      "inputTokenUpperBound": 3503,
+      "type": "status-query/finish",
+      "startedAt": 1789031930577,
+      "finishedAt": 1789031941368,
+      "durationMs": 10791,
+      "outcome": "handoff",
+      "modelFinish": {
+        "kind": "stop"
+      },
+      "usage": {
+        "inputTokens": 838,
+        "outputTokens": 61,
+        "totalTokens": 899
+      }
+    }
+  ]
+}

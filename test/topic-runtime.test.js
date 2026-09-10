@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
+import { Session } from '@deepseek-ai/dsh-session'
+import { Inbox } from '@deepseek-ai/dsh-agent'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { createTopicCoordinator, projectTopicContext, TASK_REVIEW_MAX_CHARS } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
+import { visiblePromptRefs, visibleSectionLength } from '../packages/dingtalk-dsh-assistant/coordination-context.js'
 
 function memoryFacility(snapshot) {
   return new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
@@ -17,11 +20,11 @@ async function setup(t, options = {}) {
   if (!store.getGroup('g')) await store.subscribe({ groupId: 'g', responsibility: '处理测试任务' })
   await store.setAgentNames(['助理'])
   const sent = [], errors = [], tools = new Map(), applications = []
-  const agent = { steer(message) { sent.push(message.content[0].text) }, whenIdle: options.whenIdle ?? (() => new Promise(() => {})) }
+  const agent = { session: options.session, inbox: options.inbox, steer(message) { sent.push(message.content[0].text); options.onSteer?.(message) }, whenIdle: options.whenIdle ?? (() => new Promise(() => {})) }
   const coordinator = createTopicCoordinator({
     store, getAgent: () => agent, assertSession(exec, groupId) { if (exec?.groupId !== groupId) throw new Error('wrong_session') },
-    serializeTasks: (fn) => fn(), isClosing: options.isClosing ?? (() => false), retryDelayMs: options.retryDelayMs ?? 60_000,
-    reviewCandidates: options.reviewCandidates ?? (() => []),
+    serializeTasks: options.serializeTasks ?? ((fn) => fn()), isClosing: options.isClosing ?? (() => false), retryDelayMs: options.retryDelayMs ?? 60_000,
+    reviewCandidates: options.reviewCandidates ?? (() => []), onDecisionRequest: options.onDecisionRequest, maxRequestAttempts: options.maxRequestAttempts ?? 3,
     validateReplyReview(review, candidates) {
       if (candidates.length && (!review || candidates.some((item) => !review.reviewedOutboundIds?.includes(item.outboundId)))) throw new Error('incomplete_review')
       return review
@@ -832,24 +835,281 @@ test('动作必须先有确认且可靠 Outbox 拒绝时零 Task 副作用', asy
   assert.equal(h.store.getTopic('g', request.topicId).decisions[0].error, 'topic_outbox_reply-busy')
 })
 
-test('模型停稳但未提交归类会定时生成新请求，旧请求不能迟到提交', async (t) => {
-  let idleCalls = 0, timedOut
-  const timeout = new Promise((resolve) => { timedOut = resolve })
-  const h = await setup(t, { retryDelayMs: 5, whenIdle: () => ++idleCalls === 1 ? Promise.resolve() : new Promise(() => {}), onError: timedOut })
+test('模型停稳后仅有限次提醒，同一归类请求仍可提交', async (t) => {
+  let idleCalls = 0, reminded
+  const reminder = new Promise((resolve) => { reminded = resolve })
+  const h = await setup(t, { retryDelayMs: 5, whenIdle: () => ++idleCalls === 1 ? Promise.resolve() : new Promise(() => {}), onSteer: () => { if (idleCalls) reminded() } })
   await ingest(h, 'unsubmitted'); await h.coordinator.schedule('g')
   const original = h.envelope('[GROUP_TOPIC_ROUTE]')
-  // timer.unref 不应由测试进程存活决定，保留一个有界watchdog等待真实超时事件。
+  let watchdog
+  try { await Promise.race([reminder, new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('route_retry_timeout')), 1000) })]) }
+  finally { clearTimeout(watchdog) }
+  const current = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.equal(current.requestId, original.requestId)
+  assert.equal(h.sent.length, 2)
+  const routes = [{ messageId: 'unsubmitted', messageVersion: 1, topics: [{ newTopicKey: 'retry', title: '重试话题' }] }]
+  assert.equal((await h.call('group_topic_route_submit', { requestId: original.requestId, routes })).status, 'accepted')
+  assert.equal(h.store.listTopics('g').length, 1)
+  assert.equal(h.store.getCoordinationRequest('g', original.requestId).status, 'completed')
+})
+
+function visibleTool(session, name, result) {
+  const id = `call-${session.snapshotEvents().length}`
+  session.append('assistant/message', { turn: 1, step: 1, message: { id: `assistant-${id}`, role: 'assistant', source: { kind: 'model', provider: 'fixture', model: 'fixture' }, content: [{ type: 'tool-call', id, name, arguments: '{}' }] } }, { surfaceOp: 'append' })
+  session.append('tool/result', { turn: 1, step: 1, message: { id: `result-${id}`, role: 'user', source: { kind: 'tool', callId: id }, content: [{ type: 'tool-result', toolCallId: id, content: [{ type: 'text', text: JSON.stringify(result) }] }] } }, { surfaceOp: 'append' })
+}
+
+test('审阅先落Task执行事件，重启同报告换提交时间仍恢复原response且不再次注入', async t => {
+  const h = await setup(t), { task } = await taskFixture(h)
+  const value = { kind: 'plan-confirmed', summary: '计划', submittedAt: '2026-09-10T01:00:00Z' }
+  const pending = h.coordinator.requestReview('checkpoint', task, value)
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  const review = { decision: 'acknowledge', reason: '已经核准' }
+  await h.call('group_task_review_submit', { requestId: request.requestId, review })
+  assert.deepEqual(await pending, review)
+  const saved = h.store.getTask(task.taskId).executionEvents.find(event => event.kind === 'coordination-review-accepted')
+  assert.equal(saved.requestId, request.requestId)
+  assert.deepEqual(saved.review, review)
+  await h.coordinator.close(); await h.store.close()
+  const reopened = await setup(t, { snapshot: JSON.parse(JSON.stringify(h.snapshot)) })
+  const restored = await reopened.coordinator.requestReview('checkpoint', reopened.store.getTask(task.taskId), { ...value, submittedAt: '2026-09-10T02:00:00Z' })
+  assert.deepEqual(restored, review)
+  assert.equal(reopened.sent.length, 0)
+  await reopened.coordinator.close(); await reopened.store.close()
+  const twice = await setup(t, { snapshot: JSON.parse(JSON.stringify(reopened.snapshot)) })
+  assert.deepEqual(await twice.coordinator.requestReview('checkpoint', twice.store.getTask(task.taskId), { ...value, submittedAt: '2026-09-10T03:00:00Z' }), review)
+  assert.equal(twice.sent.length, 0)
+})
+
+test('审阅持久化失败不得resolve，重提相同判断后只保存一份', async t => {
+  const h = await setup(t), { task } = await taskFixture(h)
+  let resolved = false
+  const pending = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '计划' }).then(value => { resolved = true; return value })
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  const update = h.store.updateTask
+  h.store.updateTask = async () => { throw new Error('injected-storage-failure') }
+  await assert.rejects(h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '核准' } }), /injected-storage-failure/)
+  assert.equal(resolved, false)
+  h.store.updateTask = update
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '核准' } })
+  await pending
+  assert.equal(h.store.getTask(task.taskId).executionEvents.filter(event => event.kind === 'coordination-review-accepted').length, 1)
+})
+
+test('耗尽审阅不自动reset，显式reset只清账与旧Promise不创建新审阅', async t => {
+  const h = await setup(t), { task } = await taskFixture(h)
+  const value = { kind: 'plan-confirmed', summary: '计划' }
+  h.coordinator.requestReview('checkpoint', task, value).catch(() => {})
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  await h.store.updateCoordinationRequest('g', request.requestId, { status: 'exhausted', attempt: 3 })
+  await h.coordinator.close(); await h.store.close()
+  const reopened = await setup(t, { snapshot: h.snapshot })
+  await assert.rejects(reopened.coordinator.requestReview('checkpoint', reopened.store.getTask(task.taskId), value), /retry_exhausted/)
+  assert.equal(reopened.sent.length, 0)
+  assert.equal((await reopened.coordinator.resetReviewRequest('g', request.requestId)).status, 'reset')
+  assert.equal(reopened.sent.length, 0)
+  assert.equal(reopened.store.getCoordinationRequest('g', request.requestId).resumeEpoch, 1)
+  const pending = reopened.coordinator.requestReview('checkpoint', reopened.store.getTask(task.taskId), value)
+  const next = reopened.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  assert.equal(next.requestId, request.requestId)
+  await reopened.call('group_task_review_submit', { requestId: next.requestId, review: { decision: 'acknowledge', reason: '恢复后核准' } })
+  assert.equal((await pending).decision, 'acknowledge')
+})
+
+test('完成审阅重启恢复时重建preparedNotification，保持原审批且不新增模型请求', async t => {
+  const h = await setup(t), fixture = await taskFixture(h)
+  const task = await h.store.updateTask(fixture.task.taskId, current => ({ ...current, state: 'running' }))
+  const value = { inputVersion: task.inputVersion, runSequence: task.runSequence, status: 'completed', summary: '完成', evidence: ['通过'], artifacts: [] }
+  const pending = h.coordinator.requestReview('completion', task, value)
+  const request = h.envelope('[TASK_COMPLETION_REVIEW]', '审阅请求')
+  await h.call('group_task_review_submit', { requestId: request.requestId, review: { accepted: true, reason: '核准', notification: { reply: '已经完成', replyToMessageId: 'a1', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } } })
+  await pending
+  await h.coordinator.close(); await h.store.close()
+  const reopened = await setup(t, { snapshot: JSON.parse(JSON.stringify(h.snapshot)) })
+  const restored = await reopened.coordinator.requestReview('completion', reopened.store.getTask(task.taskId), value)
+  assert.ok(restored.preparedNotification)
+  assert.equal(reopened.sent.length, 0)
+  const completed = await reopened.store.updateTask(task.taskId, current => ({ ...current, state: 'completed', result: value }))
+  await reopened.coordinator.commitCompletionNotification(restored.preparedNotification, completed, value)
+  assert.equal(reopened.store.getGroup('g').outbox.filter(item => item.outboundId === `reply-${request.requestId}`).length, 1)
+})
+
+test('审阅身份忽略提交时间，但流程引用、最后检查点和Topic修订变化会换身份', async t => {
+  const h = await setup(t), { task } = await taskFixture(h)
+  const value = { kind: 'plan-confirmed', summary: '计划', submittedAt: '2026-09-10T01:00:00Z' }
+  const first = h.coordinator.requestReview('checkpoint', task, value)
+  first.catch(() => {})
+  const firstId = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求').requestId
+  const sentCount = h.sent.length
+  assert.equal(h.coordinator.requestReview('checkpoint', task, { ...value, submittedAt: '2026-09-10T02:00:00Z' }), first)
+  assert.equal(h.sent.length, sentCount)
+  h.coordinator.requestReview('checkpoint', { ...task, taskPromptRefs: [{ id: 'flow', revision: 2 }] }, value).catch(() => {})
+  assert.notEqual(h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求').requestId, firstId)
+  h.coordinator.requestReview('checkpoint', { ...task, checkpoints: [{ checkpointId: 'new-checkpoint' }] }, value).catch(() => {})
+  assert.notEqual(h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求').requestId, firstId)
+  await ingest(h, 'revision-change')
+  await h.store.routeMessages({ groupId: 'g', routeId: 'route-new-revision', routingRevision: h.store.getGroup('g').routingRevision, routes: [{ messageId: 'revision-change', messageVersion: 1, topics: [{ topicId: task.topicRefs[0].topicId }] }] })
+  h.coordinator.requestReview('checkpoint', task, value).catch(() => {})
+  assert.notEqual(h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求').requestId, firstId)
+})
+function compactSurface(session) {
+  const nodes = [...session.surface.nodes]
+  session.append('user/message', { id: `summary-${session.snapshotEvents().length}`, role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text: '之前曾经读取流程和原文；此摘要不保留完整正文。' }] }, { surfaceOp: { op: 'replace', start: nodes[0], end: nodes.at(-1) }, sourceEventSeqs: nodes })
+}
+
+test('原生 surface 流程正文与连续页跨请求复用，压缩后历史日志不能冒充可见', () => {
+  const session = Session.create('session-visible-context'), agent = { session }
+  const prompt = { id: 'release', revision: 1, name: '发布', description: '发布校验', prompt: '核对批准原文' }
+  visibleTool(session, 'pwsh', { prompts: [prompt] })
+  assert.deepEqual(visiblePromptRefs(agent, [prompt]), [])
+  visibleTool(session, 'group_task_prompt_get', { prompts: [prompt] })
+  assert.deepEqual(visiblePromptRefs(agent, [prompt]), [{ id: 'release', revision: 1 }])
+  assert.deepEqual(visiblePromptRefs(agent, [{ ...prompt, revision: 2 }]), [])
+  const text = '当前完整证据原文'
+  visibleTool(session, 'group_task_review_context_get', { requestId: 'old', section: 'messages', offset: 4, nextOffset: text.length, text: text.slice(4) })
+  assert.equal(visibleSectionLength(agent, text), 0)
+  visibleTool(session, 'group_task_review_context_get', { requestId: 'old', section: 'messages', offset: 0, nextOffset: 4, text: text.slice(0, 4) })
+  assert.equal(visibleSectionLength(agent, text), text.length)
+  const reopened = Session.fromRestore(session.id, JSON.parse(JSON.stringify(session.snapshotEvents())), JSON.parse(JSON.stringify(session.header)))
+  assert.equal(visiblePromptRefs({ session: reopened }, [prompt]).length, 1)
+  compactSurface(reopened)
+  assert.ok(reopened.snapshotEvents().some((event) => event.type === 'tool/result'))
+  assert.deepEqual(visiblePromptRefs({ session: reopened }, [prompt]), [])
+  assert.equal(visibleSectionLength({ session: reopened }, text), 0)
+})
+
+test('审阅复用当前流程正文，压缩或禁用后重新门禁而不是沿用已读标记', async (t) => {
+  const session = Session.create('session-review-visible'), h = await setup(t, { session }), fixture = await taskFixture(h)
+  await h.store.setTaskPrompts([reviewPrompt('delivery')], 0)
+  const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, taskPromptRefs: [{ id: 'delivery', revision: 1 }] }))
+  visibleTool(session, 'group_task_prompt_get', { prompts: h.store.getTaskPrompts() })
+  const first = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '第一计划' })
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  assert.deepEqual(request.visiblePromptRefs, [{ id: 'delivery', revision: 1 }])
+  const receipt = await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['delivery'] })
+  assert.equal(receipt.prompts[0].reused, true)
+  assert.equal(receipt.prompts[0].prompt, undefined)
+  compactSurface(session)
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '通过' } })).status, 'prompt-review-required')
+  const restored = await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['delivery'] })
+  assert.equal(restored.prompts[0].prompt, '按流程核验')
+  visibleTool(session, 'group_task_prompt_get', restored)
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '通过' } })).status, 'accepted')
+  await first
+  const second = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '第二计划' }).catch((error) => error)
+  const secondRequest = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+  assert.notEqual(secondRequest.requestId, request.requestId)
+  assert.equal(secondRequest.visiblePromptRefs.length, 1)
+  await h.store.setTaskPrompts([{ ...reviewPrompt('delivery'), enabled: false }], 1)
+  assert.equal((await h.call('group_task_review_submit', { requestId: secondRequest.requestId, review: { decision: 'acknowledge', reason: '通过' } })).status, 'task-stale')
+  assert.match((await second).message, /task_prompt_selection_stale/)
+})
+
+test('稳定请求跨重启识别已消费消息，原文可见时恢复只发送短提醒', async (t) => {
+  const session = Session.create('session-request-restart')
+  const h = await setup(t, { session, onSteer: (message) => session.append('user/message', message, { surfaceOp: 'append' }) })
+  await ingest(h, 'restart'); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await h.coordinator.close(); await h.store.close()
+  const restored = Session.fromRestore(session.id, JSON.parse(JSON.stringify(session.snapshotEvents())), JSON.parse(JSON.stringify(session.header)))
+  let resume, idleCalls = 0
+  const reminder = new Promise((resolve) => { resume = resolve })
+  const reopened = await setup(t, { snapshot: h.snapshot, session: restored, retryDelayMs: 5, whenIdle: () => ++idleCalls === 1 ? Promise.resolve() : new Promise(() => {}), onSteer: resume })
+  await reopened.coordinator.recover()
+  assert.equal(reopened.sent.length, 0)
   let watchdog
   try {
-    await Promise.race([timeout, new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('route_retry_timeout')), 1000) })])
+    const message = await Promise.race([reminder, new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('resume_timeout')), 1000) })])
+    assert.ok(message.content[0].text.startsWith('[COORDINATION_RESUME]'))
+    assert.ok(message.content[0].text.includes(request.requestId))
+    assert.ok(message.content[0].text.length < 300)
   } finally { clearTimeout(watchdog) }
+})
+
+test('协议提醒到上限后持久停住，新增输入仍能形成新请求', async (t) => {
+  let exhausted
+  const stopped = new Promise((resolve) => { exhausted = resolve })
+  const h = await setup(t, { retryDelayMs: 2, maxRequestAttempts: 2, whenIdle: () => Promise.resolve(), onError: exhausted })
+  await ingest(h, 'stalled'); await h.coordinator.schedule('g')
+  const original = h.envelope('[GROUP_TOPIC_ROUTE]')
+  let watchdog
+  try { await Promise.race([stopped, new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('exhaustion_timeout')), 1000) })]) }
+  finally { clearTimeout(watchdog) }
+  assert.equal(h.sent.length, 3)
+  assert.equal(h.store.getCoordinationRequest('g', original.requestId).status, 'exhausted')
   await h.coordinator.schedule('g')
-  const current = h.envelope('[GROUP_TOPIC_ROUTE]')
-  assert.notEqual(current.requestId, original.requestId)
-  const routes = [{ messageId: 'unsubmitted', messageVersion: 1, topics: [{ newTopicKey: 'retry', title: '重试话题' }] }]
-  const superseded = await h.call('group_topic_route_submit', { requestId: original.requestId, routes })
-  assert.equal(superseded.status, 'superseded')
-  assert.equal(superseded.currentRequest.requestId, current.requestId)
-  assert.equal((await h.call('group_topic_route_submit', { requestId: current.requestId, routes })).status, 'accepted')
-  assert.equal(h.store.listTopics('g').length, 1)
+  assert.equal(h.sent.length, 3)
+  await ingest(h, 'new-input'); await h.coordinator.schedule('g')
+  const next = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.notEqual(next.requestId, original.requestId)
+  assert.equal(next.messages.length, 2)
+})
+
+test('只读快路径共享决策门禁，成功时不向常驻再注入请求', async (t) => {
+  let h, finish
+  const completed = new Promise((resolve) => { finish = resolve })
+  h = await setup(t, { onDecisionRequest: async ({ groupId, requestId }) => {
+    const context = h.coordinator.getReadOnlyDecisionContext(groupId, requestId)
+    assert.deepEqual(context.deltaMessageIds, ['progress'])
+    assert.equal(context.policyContext.responsibility, '处理测试任务')
+    const result = await h.coordinator.submitReadOnlyDecision(groupId, submission(context, { reply: '当前暂无执行结果。' }), context.candidateFingerprint, () => true)
+    finish(result)
+    return result.status === 'accepted'
+  } })
+  await ingest(h, 'progress'); await route(h)
+  assert.equal((await completed).status, 'accepted')
+  await h.coordinator.drain('g')
+  assert.equal(h.sent.filter((text) => text.startsWith('[GROUP_TOPIC_DECISION]')).length, 0)
+  assert.equal(h.store.getGroup('g').outbox.length, 1)
+})
+
+test('只读快路径拒绝动作和候选变化，Task事实在真实提交临界点变更时零Outbox', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'atomic-status')
+  const request = (await route(h)).pendingDecisions[0]
+  const context = h.coordinator.getReadOnlyDecisionContext('g', request.requestId)
+  const args = submission(context, { reply: '已完成' })
+  await assert.rejects(h.coordinator.submitReadOnlyDecision('g', args, context.candidateFingerprint), /snapshot_validator_required/)
+  const action = { kind: 'new-task', title: '误操作', objective: '执行', acceptanceCriteria: ['完成'], topicRefs: [{ topicId: request.topicId, revision: request.revision }] }
+  await assert.rejects(h.coordinator.submitReadOnlyDecision('g', submission(context, { reply: '执行', actions: [action] }), context.candidateFingerprint, () => true), /read_only_decision_action_forbidden/)
+  assert.equal((await h.coordinator.submitReadOnlyDecision('g', args, 'old-candidate', () => true)).status, 'review-required')
+  let valid = true, validations = 0
+  const accept = h.store.acceptTopicDecision
+  h.store.acceptTopicDecision = (input) => { valid = false; return accept(input) }
+  const result = await h.coordinator.submitReadOnlyDecision('g', args, context.candidateFingerprint, () => { validations++; return valid })
+  assert.equal(result.status, 'task-stale')
+  assert.equal(validations, 2)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  assert.equal(h.store.listTasks().length, 0)
+})
+
+test('原生 Inbox 仍停放原请求时，恢复提醒不会再排入第二份正文', async (t) => {
+  const session = Session.create('session-pending-body'), inbox = new Inbox(session, { inserted() {}, discarded() {}, claimed() {} })
+  let finish, idleCalls = 0
+  const reminder = new Promise((resolve) => { finish = resolve })
+  const h = await setup(t, { session, inbox, retryDelayMs: 2, whenIdle: () => ++idleCalls === 1 ? Promise.resolve() : new Promise(() => {}), onSteer(message) { inbox.append('next-step', message); if (message.content[0].text.startsWith('[COORDINATION_RESUME]')) finish() } })
+  await ingest(h, 'parked'); await h.coordinator.schedule('g')
+  let watchdog
+  try { await Promise.race([reminder, new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('pending_reminder_timeout')), 1000) })]) }
+  finally { clearTimeout(watchdog) }
+  assert.equal(inbox.nextStep.length, 2)
+  assert.equal(inbox.nextStep.filter((message) => message.content[0].text.startsWith('[GROUP_TOPIC_ROUTE]')).length, 1)
+})
+
+test('显式恢复递增持久epoch，不会被此前已消费提醒身份吞掉', async (t) => {
+  const session = Session.create('session-explicit-retry'), messages = []
+  let exhausted
+  const stopped = new Promise((resolve) => { exhausted = resolve })
+  const h = await setup(t, { session, retryDelayMs: 2, maxRequestAttempts: 1, whenIdle: () => Promise.resolve(), onError: exhausted, onSteer(message) { messages.push(message); session.append('user/message', message, { surfaceOp: 'append' }) } })
+  await ingest(h, 'retry-explicit'); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  let watchdog
+  try { await Promise.race([stopped, new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('exhaustion_timeout')), 1000) })]) }
+  finally { clearTimeout(watchdog) }
+  assert.equal(messages.length, 2)
+  await h.coordinator.retryRequest('g', request.requestId)
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  assert.equal(messages.length, 3)
+  assert.equal(new Set(messages.map((message) => message.id)).size, 3)
+  assert.equal(h.store.getCoordinationRequest('g', request.requestId).resumeEpoch, 1)
 })

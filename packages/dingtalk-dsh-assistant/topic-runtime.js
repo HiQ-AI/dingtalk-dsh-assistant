@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { resolveTopicMessages } from './store.js'
 import { fingerprint } from './topic-model.js'
+import { visiblePromptRefs, visibleSectionLength, promptContent } from './coordination-context.js'
+import { taskProgressSnapshot } from './task-progress.js'
 import { assertCurrentTaskPrompts, isDiagnosticCheckpoint } from './task-result.js'
 import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, isDirectedToOtherParticipants, isExplicitAgentDirection, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS } from './decision.js'
 
@@ -125,9 +127,10 @@ export function projectTopicContext(context) {
 }
 
 // 请求是可丢弃的模型输入；已经接受的业务意图只以 Store 中的 decision 为准。
-export function createTopicCoordinator({ store, getAgent, assertSession, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, retryDelayMs = 1000 }) {
+export function createTopicCoordinator({ store, getAgent, assertSession, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
   const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map(), summaryMigrations = new Map()
   const activeToolCalls = new Set()
+  const decisionSubmitters = new Map()
   const scheduled = new Map(), applying = new Map(), timers = new Set(), retries = new Map(), retryTimers = new Map(), groupsBeingChanged = new Map()
   let closed = false
   const live = () => !closed && !isClosing()
@@ -193,33 +196,102 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     if (!request || request.groupId !== groupId) throw new Error('topic_request_unknown_or_wrong_group')
     return request
   }
-  const send = (groupId, text, images) => {
+  const requestIdentity = (kind, value) => `coord-${kind}-${fingerprint(value)}`
+  function reviewRequestIdentity(kind, task, value) {
+    const { submittedAt: _submittedAt, reviewedAt: _reviewedAt, ...content } = value
+    return requestIdentity(kind, { groupId: task.groupId, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
+      value: content, taskPromptRefs: task.taskPromptRefs ?? [], lastCheckpointId: task.checkpoints?.at(-1)?.checkpointId,
+      observedTopics: task.topicRefs.map(ref => ({ topicId: ref.topicId, revision: store.getTopic(task.groupId, ref.topicId)?.revision })),
+      ...(kind === 'completion' ? { candidates: scopedCandidates(task.groupId, taskMessages(task), task.topicRefs, [task.taskId]) } : {}),
+    })
+  }
+  function refreshVisibleReads(request) {
+    const agent = getAgent(request.groupId)
+    if (!agent?.session?.deriveMessages) return
+    if (request.readPromptRefs) {
+      const prompts = (store.getTaskPrompts?.() ?? []).filter((prompt) => prompt.enabled && request.promptCatalog.some((ref) => ref.id === prompt.id && ref.revision === prompt.revision))
+      request.readPromptRefs = new Map(visiblePromptRefs(agent, prompts).map((ref) => [ref.id, ref]))
+      for (const [id, ref] of request.readPromptRefs) request.readPromptVersions.set(id, ref)
+    }
+    if (request.readSectionOffsets) for (const [section, text] of Object.entries(request.sections)) request.readSectionOffsets.set(section, visibleSectionLength(agent, text))
+  }
+  function inlineCurrentSection(request, ...args) {
+    const result = inlineReviewSection(request, ...args)
+    if (!result?.section) return result
+    const text = request.sections[result.section]
+    if (visibleSectionLength(getAgent(request.groupId), text) < text.length) return result
+    request.readSectionOffsets.set(result.section, text.length)
+    return { section: result.section, totalChars: text.length, contentFingerprint: fingerprint(text), reused: true, hasMore: false }
+  }
+  const send = (groupId, text, images, request) => {
     if (!live()) throw new Error('resident_runtime_closed')
     const agent = getAgent(groupId)
     if (!agent) throw new Error(`resident_not_active:${groupId}`)
-    agent.steer(textMessage(text, images))
+    if (!request) { agent.steer(textMessage(text, images)); return agent }
+    request.text = text; request.images = images
+    const messageId = `message-${request.requestId}`
+    request.messageId = messageId
+    const state = store.getCoordinationRequest?.(groupId, request.requestId)
+    if (state?.status === 'exhausted') { request.exhausted = true; return agent }
+    const pending = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+    const recorded = pending.some((message) => message.id === messageId) || agent.session?.snapshotEvents?.().some((event) => event.type === 'user/message' && event.data?.id === messageId)
+    if (!recorded) agent.steer(Object.freeze({ ...textMessage(text, images), id: messageId }))
     return agent
   }
   function monitor(agent, request, collection) {
-    // whenIdle 只检测未提交请求，绝不用于提取业务结果。
-    agent.whenIdle().then(() => {
-      if (!live() || collection.get(request.requestId) !== request) return
-      const timer = setTimeout(() => {
-        timers.delete(timer)
-        if (!live() || collection.get(request.requestId) !== request) return
-        collection.delete(request.requestId)
-        request.reject?.(new Error(`topic_request_not_submitted:${request.requestId}`))
-        onError(request.groupId, new Error(`topic_request_not_submitted:${request.requestId}`))
-        schedule(request.groupId)
-      }, retryDelayMs)
-      timer.unref?.()
-      timers.add(timer)
-    }).catch((error) => {
-      if (collection.get(request.requestId) !== request) return
-      collection.delete(request.requestId)
+    // Provider 请求重试由 DSH 完成；这里只在整个 agent 真正停稳后补有限次协议提醒。
+    // 保留同一请求和 Promise，绝不每秒删除请求、重建身份及整包原文。
+    const current = () => live() && collection.get(request.requestId) === request
+    const persist = (patch) => store.updateCoordinationRequest?.(request.groupId, request.requestId, patch) ?? Promise.resolve()
+    const exhausted = async () => {
+      request.exhausted = true
+      const error = new Error(`topic_request_retry_exhausted:${request.requestId}`)
+      await persist({ status: 'exhausted', lastError: error.message })
       request.reject?.(error)
       onError(request.groupId, error)
-    })
+    }
+    const wait = async () => {
+      if (!current()) return
+      const state = store.getCoordinationRequest?.(request.groupId, request.requestId)
+      request.attempt = state?.attempt ?? request.attempt ?? 0
+      request.resumeEpoch = state?.resumeEpoch ?? 0
+      if (state?.status === 'exhausted' || request.exhausted) { await exhausted(); return }
+      await persist({ status: 'pending', attempt: request.attempt, messageId: request.messageId })
+      await agent.whenIdle()
+      if (!current()) return
+      if (request.attempt >= maxRequestAttempts) { await exhausted(); return }
+      const delay = Math.max(0, state?.nextRetryAt ? Date.parse(state.nextRetryAt) - Date.now() : Math.min(retryDelayMs * 2 ** request.attempt, 300_000))
+      await persist({ nextRetryAt: new Date(Date.now() + delay).toISOString() })
+      const timer = setTimeout(() => {
+        timers.delete(timer)
+        const retry = async () => {
+          if (!current()) return
+          if (agent.status === 'running') await agent.whenIdle()
+          if (!current()) return
+          request.attempt++
+          await persist({ attempt: request.attempt, nextRetryAt: undefined })
+          if (!current()) return
+          const id = `message-${request.requestId}-resume-${request.resumeEpoch}-${request.attempt}`
+          const pending = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+          const hasBody = (message) => message.id === request.messageId || (message.content ?? []).some((part) => part.type === 'text' && part.text === request.text)
+          const visible = pending.some(hasBody) || agent.session?.deriveMessages?.().some(hasBody)
+          // 原文仍在 surface 时仅发送短提醒；压缩已移出则恢复正文，不能靠历史已消费记录假定可见。
+          const text = visible ? `[COORDINATION_RESUME]\n请求 ${request.requestId} 仍待提交；继续处理当前可见的原请求，不重复执行已完成的外部动作。` : request.text
+          const consumed = agent.session?.snapshotEvents?.().some((event) => event.type === 'user/message' && event.data?.id === id)
+          if (!pending.some((message) => message.id === id) && !consumed) agent.steer(Object.freeze({ ...textMessage(text, visible ? [] : request.images), id }))
+          await wait()
+        }
+        retry().catch(fail)
+      }, delay)
+      timer.unref?.(); timers.add(timer)
+    }
+    const fail = (error) => {
+      if (!current()) return
+      request.exhausted = true
+      persist({ status: 'exhausted', lastError: String(error.message).slice(0, 1000) }).catch((failure) => onError(request.groupId, failure))
+      request.reject?.(error); onError(request.groupId, error)
+    }
+    wait().catch(fail)
   }
   function createDecisionRequest(groupId, topic) {
     for (const [id, request] of decisions) {
@@ -229,7 +301,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     }
     const messages = topicMessages(groupId, topic.topicId, topic.revision)
     const removedMessageIds = [...new Set(topic.entries.filter((entry) => entry.action === 'remove' && entry.revision > topic.processedRevision && entry.revision <= topic.revision).map((entry) => entry.messageId))]
-    const request = { requestId: randomUUID(), groupId, topicId: topic.topicId, revision: topic.revision, messages, removedMessageIds,
+    const request = { requestId: requestIdentity('decision', { groupId, topicId: topic.topicId, revision: topic.revision }), groupId, topicId: topic.topicId, revision: topic.revision, messages, removedMessageIds,
       topicRefs: [{ topicId: topic.topicId, revision: topic.revision }], candidates: scopedCandidates(groupId, messages, [{ topicId: topic.topicId, revision: topic.revision }]), readReview: false }
     decisions.set(request.requestId, request)
     const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= topic.revision).map((entry) => entry.messageId))
@@ -239,34 +311,45 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     const omittedDeltaMessageIds = messages.filter((message) => deltaIds.has(message.messageId) && !request.readMessageIds.has(message.messageId)).map((message) => message.messageId)
     const envelope = { requestId: request.requestId, topicId: topic.topicId, revision: topic.revision,
       removedMessageIds, omittedDeltaMessageIds, ...effectOwnership(groupId, topic.topicId, topic.revision, visibleMessages), replyReviewCandidateCount: request.candidates.length, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length, processedRevision: topic.processedRevision, summary: topic.summary, openQuestions: topic.openQuestions }
-    const agent = send(groupId, `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n按此 Topic 固定版本处理本次增量。共享消息由 effectOwnerTopicIds 指定唯一动作主归属；只有 ownedDeltaMessageIds 中的本次依据允许创建或更新 Task、发送确认，其他 Topic 只关联已有 Task 或分别作实质回答。omittedDeltaMessageIds 非空时，必须先用 group_topic_context_get 分页读取全部缺失增量，Host 才接受决策。removedMessageIds 是本次已移出输入，可作为无动作静默决策的依据；不得从移出消息派生任务。非空 reply 必须声明 replyReview.kind。通过 group_decision_submit 独立提交。历史回复候选 ${request.candidates.length} 条，回复前读取 group_reply_review_get。`, visibleMessages.flatMap((message) => message.imageRefs ?? []))
-    monitor(agent, request, decisions)
+    const dispatch = () => {
+      const agent = send(groupId, `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n按此 Topic 固定版本处理本次增量。共享消息由 effectOwnerTopicIds 指定唯一动作主归属；只有 ownedDeltaMessageIds 中的本次依据允许创建或更新 Task、发送确认，其他 Topic 只关联已有 Task 或分别作实质回答。omittedDeltaMessageIds 非空时，必须先用 group_topic_context_get 分页读取全部缺失增量，Host 才接受决策。removedMessageIds 是本次已移出输入，可作为无动作静默决策的依据；不得从移出消息派生任务。非空 reply 必须声明 replyReview.kind。通过 group_decision_submit 独立提交。历史回复候选 ${request.candidates.length} 条，回复前读取 group_reply_review_get。`, visibleMessages.flatMap((message) => message.imageRefs ?? []), request)
+      monitor(agent, request, decisions)
+    }
+    if (!onDecisionRequest) dispatch()
+    else {
+      const pending = Promise.resolve().then(() => onDecisionRequest({ groupId, requestId: request.requestId })).catch((error) => { onError(groupId, error); return false }).then((handled) => {
+        if (!live() || decisions.get(request.requestId) !== request) return
+        if (handled !== true) dispatch()
+      })
+      activeToolCalls.add(pending)
+      pending.then(() => activeToolCalls.delete(pending), (error) => { activeToolCalls.delete(pending); onError(groupId, error) })
+    }
     return request
   }
   function createRouteRequest(groupId, messages, reason) {
     const group = store.getGroup(groupId)
     messages = structuredClone(messages.map(({ facts, ...message }) => message))
-    const request = { requestId: randomUUID(), groupId, routingRevision: group.routingRevision, messages, ...(reason ? { reason } : {}) }
+    const request = { requestId: requestIdentity('route', { groupId, routingRevision: group.routingRevision, messages: messages.map(({ messageId, messageVersion }) => ({ messageId, messageVersion })), reason }), groupId, routingRevision: group.routingRevision, messages, ...(reason ? { reason } : {}) }
     routes.set(request.requestId, request)
     const topics = boundedItems(topicIndex(store.listTopics(groupId)).reverse(), 16_000, 100).reverse()
     const envelope = { requestId: request.requestId, messages, topics, totalTopics: store.listTopics(groupId).length, hasMoreTopics: topics.length < store.listTopics(groupId).length, ...(reason ? { reason } : {}) }
-    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\nTopic 请求：${JSON.stringify(envelope)}\n先结合本批全部消息、已有 Topic 和任务目标归类。Topic 归属只表示消息延续同一讨论目标（continuation），或实质改变该 Topic 的事实、范围、结论或动作（affected）；仅为了查询旧分支、PR、任务或其他历史资料时，调用 group_topic_list / group_topic_context_get，不得把资料来源 Topic 加入归属。通过 group_topic_route_submit 一次覆盖本批消息。多 Topic 归属必须逐项填写 relationship 和 reason，并用 effectOwner 指定唯一动作主归属；主归属应是消息当前直接推动的事项，不是资料来源。此阶段不执行任务、不回复群聊。${reason ? `本次是显式归属复核，原因：${reason}；提交后保留原关系历史。` : ''}`, messages.flatMap((message) => message.imageRefs ?? []))
+    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\nTopic 请求：${JSON.stringify(envelope)}\n先结合本批全部消息、已有 Topic 和任务目标归类。Topic 归属只表示消息延续同一讨论目标（continuation），或实质改变该 Topic 的事实、范围、结论或动作（affected）；仅为了查询旧分支、PR、任务或其他历史资料时，调用 group_topic_list / group_topic_context_get，不得把资料来源 Topic 加入归属。通过 group_topic_route_submit 一次覆盖本批消息。多 Topic 归属必须逐项填写 relationship 和 reason，并用 effectOwner 指定唯一动作主归属；主归属应是消息当前直接推动的事项，不是资料来源。此阶段不执行任务、不回复群聊。${reason ? `本次是显式归属复核，原因：${reason}；提交后保留原关系历史。` : ''}`, messages.flatMap((message) => message.imageRefs ?? []), request)
     monitor(agent, request, routes)
     return envelope
   }
   function createTitleMigrationRequest(groupId, topic) {
-    const request = { requestId: randomUUID(), groupId, topicId: topic.topicId, expectedTitle: topic.title, expectedSummary: topic.summary }
+    const request = { requestId: requestIdentity('title', { groupId, topicId: topic.topicId, title: topic.title, summary: topic.summary }), groupId, topicId: topic.topicId, expectedTitle: topic.title, expectedSummary: topic.summary }
     titleMigrations.set(request.requestId, request)
-    const agent = send(groupId, `[GROUP_TOPIC_TITLE_MIGRATION]\nTopic 请求：${JSON.stringify({ requestId: request.requestId, topicId: topic.topicId, summary: topic.summary })}\n仅根据 summary 理解话题核心，生成一个像任务名称的简短标题：采用“对象 + 事项”，建议 8–20 个字符，最多 ${TOPIC_TITLE_MAX_CHARS} 个字符。必须重新概括，不能截取 summary 前缀或省略号截断。通过 group_topic_title_submit 提交；不执行任务、不回复群聊。`)
+    const agent = send(groupId, `[GROUP_TOPIC_TITLE_MIGRATION]\nTopic 请求：${JSON.stringify({ requestId: request.requestId, topicId: topic.topicId, summary: topic.summary })}\n仅根据 summary 理解话题核心，生成一个像任务名称的简短标题：采用“对象 + 事项”，建议 8–20 个字符，最多 ${TOPIC_TITLE_MAX_CHARS} 个字符。必须重新概括，不能截取 summary 前缀或省略号截断。通过 group_topic_title_submit 提交；不执行任务、不回复群聊。`, [], request)
     monitor(agent, request, titleMigrations)
     return request
   }
   function createSummaryMigrationRequest(groupId, topic) {
     const messages = topicMessages(groupId, topic.topicId, topic.revision)
-    const request = { requestId: randomUUID(), groupId, topicId: topic.topicId, expectedRevision: topic.revision, expectedSummary: topic.summary }
+    const request = { requestId: requestIdentity('summary', { groupId, topicId: topic.topicId, revision: topic.revision, summary: topic.summary }), groupId, topicId: topic.topicId, expectedRevision: topic.revision, expectedSummary: topic.summary }
     summaryMigrations.set(request.requestId, request)
     const envelope = { requestId: request.requestId, topicId: topic.topicId, revision: topic.revision, messages: messages.slice(-50), totalMessages: messages.length }
-    const agent = send(groupId, `[GROUP_TOPIC_SUMMARY_MIGRATION]\nTopic 请求：${JSON.stringify(envelope)}\n根据这个 Topic 的引用消息生成独立 summary，概括讨论对象、当前结论、范围和仍需处理的事项，不复制长段原文，不生成标题。通过 group_topic_summary_submit 提交；消息超过 50 条时先用 group_topic_context_get 分页读取完整固定版本。不执行任务、不回复群聊。`)
+    const agent = send(groupId, `[GROUP_TOPIC_SUMMARY_MIGRATION]\nTopic 请求：${JSON.stringify(envelope)}\n根据这个 Topic 的引用消息生成独立 summary，概括讨论对象、当前结论、范围和仍需处理的事项，不复制长段原文，不生成标题。通过 group_topic_summary_submit 提交；消息超过 50 条时先用 group_topic_context_get 分页读取完整固定版本。不执行任务、不回复群聊。`, [], request)
     monitor(agent, request, summaryMigrations)
     return request
   }
@@ -275,6 +358,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     const group = store.getGroup(groupId)
     if (!group) return []
     const pending = pendingInput(groupId)
+    for (const [id, request] of routes) {
+      if (request.groupId === groupId && request.exhausted && !sameVersions(request.messages, pending)) routes.delete(id)
+    }
     if (pending.length && ![...routes.values()].some((request) => request.groupId === groupId)) {
       createRouteRequest(groupId, boundedItems(pending, 40_000, 50))
     }
@@ -295,6 +381,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         if ((retries.get(commit.decisionId) ?? 0) <= Date.now()) resume(groupId, topic.topicId, commit.decisionId)
       } else if (topic.processedRevision < topic.revision) result.push(createDecisionRequest(groupId, topic))
     }
+    onInputSettled?.(groupId)
     return result.map(({ requestId, topicId, revision, messages, candidates, removedMessageIds, visibleMessages, readMessageIds }) => {
       const topic = store.getTopic(groupId, topicId)
       const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= revision).map((entry) => entry.messageId))
@@ -336,6 +423,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         } })
       }
       await store.completeTopicDecision({ groupId, topicId, decisionId, ...decision.topicUpdate })
+      onInputSettled?.(groupId)
       retries.delete(decisionId)
       const retryTimer = retryTimers.get(decisionId)
       if (retryTimer) { clearTimeout(retryTimer); timers.delete(retryTimer); retryTimers.delete(decisionId) }
@@ -402,15 +490,24 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     }
   }
   function register(agentCtx, groupId) {
-    const tool = (name, description, parameters, execute) => agentCtx.tools.register({ name, description, parameters, output: objectOutput, execute: async (args, exec) => {
+    const tool = (name, description, parameters, execute) => {
+      if (name === 'group_decision_submit') decisionSubmitters.set(groupId, execute)
+      return agentCtx.tools.register({ name, description, parameters, output: objectOutput, execute: async (args, exec) => {
       if (!live()) throw new Error('resident_runtime_closed')
       assertSession(exec, groupId)
       const pending = Promise.resolve().then(() => execute(args))
       activeToolCalls.add(pending)
-      try { return jsonOutput(await pending) }
+      try {
+        const result = jsonOutput(await pending)
+        if (args.requestId && ![routes, decisions, reviews, replies, titleMigrations, summaryMigrations].some((collection) => collection.has(args.requestId)) && store.getCoordinationRequest?.(groupId, args.requestId)) {
+          await store.updateCoordinationRequest(groupId, args.requestId, { status: 'completed', nextRetryAt: undefined })
+        }
+        return result
+      }
       catch (error) { if (error instanceof z.ZodError) return invalidArguments(error); throw error }
       finally { activeToolCalls.delete(pending) }
     } })
+    }
     tool('group_topic_route_review', '按明确原因复核本群已存在消息的 Topic 归属；先返回冻结请求，再通过 group_topic_route_submit 完整提交。', {
       type: 'object', additionalProperties: false,
       properties: { messageIds: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } }, required: ['messageIds', 'reason'],
@@ -481,7 +578,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       await schedule(groupId)
       return result
     })
-    tool('group_decision_submit', '提交一个 Topic 固定版本的独立业务决策；accepted 表示意图已持久化，动作进度可查询。', groupDecisionSubmissionJsonSchema, async (input) => {
+    tool('group_decision_submit', '提交一个 Topic 固定版本的独立业务决策；accepted 表示意图已持久化，动作进度可查询。', groupDecisionSubmissionJsonSchema, async (input, { validateSnapshot } = {}) => {
       const args = groupDecisionSubmissionSchema.parse(input)
       const request = decisions.get(args.requestId)
       if (!request || request.groupId !== groupId || request.topicId !== args.topicId || request.revision !== args.revision) return { status: 'topic-stale', pendingDecisions: await schedule(groupId) }
@@ -496,11 +593,16 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         try { decision = { ...decision, replyReview: validateReplyReview(decision.replyReview, request.candidates, { confirmationTaskIds: decision.actions.map((action) => action.taskId).filter(Boolean) }) } }
         catch (error) { return { status: 'review-required', error: error.message } }
       }
-      const result = await Promise.resolve().then(() => {
+      const result = await (validateSnapshot ? serializeTasks : (operation) => Promise.resolve().then(operation))(() => {
+        if (validateSnapshot && validateSnapshot() !== true) return { status: 'task-stale' }
         if (decision.reply?.trim() && refreshReview(request)) return { status: 'review-required' }
         return store.acceptTopicDecision({ groupId, topicId: args.topicId, revision: args.revision, decisionId: args.requestId, decision,
         expectedTaskVersions: decision.actions.filter((action) => action.taskId).map((action) => ({ taskId: action.taskId, inputVersion: action.inputVersion, runSequence: action.runSequence })),
-        preflight: () => { validateBasis(request, decision); return decision.reply?.trim() && refreshReview(request) ? { status: 'review-required' } : undefined } })
+        preflight: () => {
+          if (validateSnapshot && validateSnapshot() !== true) return { status: 'task-stale' }
+          validateBasis(request, decision)
+          return decision.reply?.trim() && refreshReview(request) ? { status: 'review-required' } : undefined
+        } })
       })
       if (result.status === 'accepted' || result.status === 'duplicate') {
         decisions.delete(args.requestId)
@@ -544,6 +646,10 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
       if (!Object.hasOwn(request.sections, section)) throw new Error('task_review_section_unknown')
       const page = reviewTextPage(requestId, section, request.sections[section], offset)
+      if (visibleSectionLength(getAgent(groupId), request.sections[section]) >= page.nextOffset && page.nextOffset > offset) {
+        request.readSectionOffsets.set(section, Math.max(request.readSectionOffsets.get(section) ?? 0, page.nextOffset))
+        return { ...page, text: undefined, reused: true, contentFingerprint: fingerprint(page.text) }
+      }
       if ((request.readSectionOffsets.get(section) ?? 0) === offset) request.readSectionOffsets.set(section, page.nextOffset)
       return page
     })
@@ -565,8 +671,12 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         reviews.delete(requestId); request.reject(new Error(error))
         return { status: 'task-stale', error }
       }
-      for (const prompt of prompts) request.readPromptRefs.set(prompt.id, { id: prompt.id, revision: prompt.revision })
-      return { prompts: prompts.map(({ id, name, description, prompt, revision }) => ({ id, name, description, prompt, revision })) }
+      const reused = new Set(visiblePromptRefs(getAgent(groupId), prompts).map((ref) => ref.id))
+      for (const prompt of prompts) {
+        const ref = { id: prompt.id, revision: prompt.revision }
+        request.readPromptRefs.set(prompt.id, ref); request.readPromptVersions.set(prompt.id, ref)
+      }
+      return { prompts: prompts.map((prompt) => reused.has(prompt.id) ? { id: prompt.id, revision: prompt.revision, reused: true, contentFingerprint: fingerprint(promptContent(prompt)) } : promptContent(prompt)) }
     })
     tool('group_reply_submit', '提交绑定 Topic 与 Task 输入版本的结果通知；不依赖全群 observedRequestIds。', { type: 'object', additionalProperties: false, required: ['requestId', 'reply'], properties: {
       requestId: { type: 'string' }, reply: { type: 'string' }, replyReview: replyReviewJsonSchema, replyToMessageId: { type: 'string' }, atOpenDingTalkIds: { type: 'array', items: { type: 'string' } },
@@ -581,6 +691,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if (!args.reply?.trim()) throw new Error('group_reply_text_required')
       if (!args.replyReview) return { status: 'review-required', error: 'reply_kind_required' }
       const preflight = () => {
+        refreshVisibleReads(request)
         if (pendingInput(groupId).length) return { status: 'routing-required' }
         const current = store.getTask(request.task.taskId)
         if (!current || current.inputVersion !== request.task.inputVersion || current.runSequence !== request.task.runSequence || current.state !== request.resultState || JSON.stringify(current.result) !== request.resultFingerprint) {
@@ -615,16 +726,18 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       replies.delete(args.requestId); request.resolve(outbound)
       return { status: 'accepted', outboundId: outbound.outboundId }
     })
-    tool('group_task_review_submit', '提交内部完成验收或检查点审阅；请求绑定执行版本，不能产生群消息。', { type: 'object', properties: { requestId: { type: 'string' }, review: { type: 'object' } }, required: ['requestId', 'review'], additionalProperties: false }, ({ requestId, review: input }) => {
+    tool('group_task_review_submit', '提交内部完成验收或检查点审阅；请求绑定执行版本，不能产生群消息。', { type: 'object', properties: { requestId: { type: 'string' }, review: { type: 'object' } }, required: ['requestId', 'review'], additionalProperties: false }, async ({ requestId, review: input }) => {
       const request = reviews.get(requestId)
       if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
       const task = store.getTask(request.task.taskId)
       const diagnostic = diagnosticCheckpoint(request)
+      refreshVisibleReads(request)
       if (!task || task.inputVersion !== request.task.inputVersion || task.runSequence !== request.task.runSequence || task.checkpoints?.at(-1)?.checkpointId !== request.task.checkpoints?.at(-1)?.checkpointId || (!diagnostic && JSON.stringify(task.taskPromptRefs ?? []) !== JSON.stringify(request.promptRefs))) { reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
       try {
         if (!diagnostic) {
           assertCurrentTaskPrompts(task, store.getTaskPrompts?.() ?? [])
           assertCurrentTaskPrompts({ taskPromptRefs: [...request.readPromptRefs.values()] }, store.getTaskPrompts?.() ?? [])
+          assertCurrentTaskPrompts({ taskPromptRefs: [...request.readPromptVersions.values()] }, store.getTaskPrompts?.() ?? [])
         }
       } catch (error) { reviews.delete(requestId); request.reject(error); return { status: 'task-stale', error: error.message } }
       const missingPromptRefs = diagnosticCheckpoint(request) ? [] : request.promptRefs.filter((ref) => !request.readPromptRefs.has(ref.id))
@@ -635,12 +748,23 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if (!diagnostic && unreadSections.length && (review.accepted === true || ['acknowledge', 'guidance'].includes(review.decision))) return { status: 'context-review-required', unreadSections }
       if ('decision' in review && ((review.decision === 'guidance' && !review.guidance) || (review.decision !== 'guidance' && review.guidance))) throw new Error('task_review_guidance_invalid')
       if ('decision' in review && review.decision === 'reject' && request.value.kind !== 'plan-confirmed') throw new Error('task_review_reject_plan_only')
+      if (reviewRequestIdentity(request.kind, diagnostic ? { ...task, taskPromptRefs: request.promptRefs } : task, request.value) !== requestId) { reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
       if (request.kind === 'completion' && review.accepted) {
         const rejected = completionPreflight(request, task, request.value, 'running')
         if (rejected) return rejected
         const outbound = taskOutbound(request, task, review.notification)
         Object.defineProperty(review, 'preparedNotification', { value: { request, outbound }, enumerable: false })
       }
+      const durableReview = jsonOutput(review)
+      await serializeTasks(() => store.updateTask(task.taskId, current => {
+        if (reviewRequestIdentity(request.kind, diagnostic ? { ...current, taskPromptRefs: request.promptRefs } : current, request.value) !== requestId) throw new Error('task_review_context_changed')
+        const accepted = current.executionEvents?.find(event => event.kind === 'coordination-review-accepted' && event.requestId === requestId)
+        if (accepted) {
+          if (fingerprint(accepted.review) !== fingerprint(durableReview)) throw new Error('task_review_response_conflict')
+          return current
+        }
+        return { ...current, executionEvents: [...(current.executionEvents ?? []), { kind: 'coordination-review-accepted', requestId, review: durableReview, inputVersion: task.inputVersion, runSequence: task.runSequence, at: new Date().toISOString() }] }
+      }))
       reviews.delete(requestId); request.resolve(review)
       return { status: 'accepted' }
     })
@@ -676,9 +800,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     return outbound
   }
   function requestReview(kind, task, value) {
-    const existing = [...reviews.values()].find((request) => request.kind === kind && request.task.taskId === task.taskId
-      && request.task.inputVersion === task.inputVersion && request.task.runSequence === task.runSequence
-      && JSON.stringify(request.value) === JSON.stringify(value))
+    const requestId = reviewRequestIdentity(kind, task, value)
+    const existing = reviews.get(requestId)
     if (existing) return existing.promise
     let resolve, reject
     const promise = new Promise((yes, no) => { resolve = yes; reject = no })
@@ -688,27 +811,42 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     const promptRefs = [...(task.taskPromptRefs ?? [])]
     const promptCatalog = (store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map(({ id, name, description, revision }) => ({ id, name, description, revision }))
     const selection = task.executionEvents?.findLast((event) => event.kind === 'task-prompts-selected' && event.inputVersion === task.inputVersion)
-    const request = { requestId: randomUUID(), groupId: task.groupId, task, kind, value, resolve, reject, promise,
-      promptRefs, promptCatalog, readPromptRefs: new Map(), sections: {}, readSectionOffsets: new Map(), requiredSections: new Set(),
+    const request = { requestId, groupId: task.groupId, task, kind, value, resolve, reject, promise,
+      promptRefs, promptCatalog, readPromptRefs: new Map(), readPromptVersions: new Map(), sections: {}, readSectionOffsets: new Map(), requiredSections: new Set(),
       ...(kind === 'completion' ? { resultKey: `task-result:${task.taskId}:completed${(task.completionSequence ?? 0) > 0 ? `:${task.completionSequence}` : ''}`, messages,
         candidates: scopedCandidates(task.groupId, messages, task.topicRefs, [task.taskId]), readReview: false,
         observedTopics: task.topicRefs.map((ref) => ({ topicId: ref.topicId, revision: store.getTopic(task.groupId, ref.topicId).revision })) } : {}) }
     try {
+      const accepted = store.getTask(task.taskId)?.executionEvents?.find(event => event.kind === 'coordination-review-accepted' && event.requestId === requestId)
+      if (accepted) {
+        const restored = kind === 'completion' ? completionReviewSchema.parse(accepted.review) : checkpointReviewSchema.parse(accepted.review)
+        if (kind === 'completion' && restored.accepted) {
+          // 原审阅与当前候选、Topic、流程身份相同，重新构造非持久的通知准备态。
+          request.readReview = true
+          const rejected = completionPreflight(request, task, value, 'running')
+          if (rejected) throw new Error(`task_review_context_changed:${rejected.status}`)
+          Object.defineProperty(restored, 'preparedNotification', { value: { request, outbound: taskOutbound(request, task, restored.notification) }, enumerable: false })
+        }
+        resolve(restored)
+        return promise
+      }
       reviews.set(request.requestId, request)
-      const inline = (...args) => inlineReviewSection(request, ...args)
+      refreshVisibleReads(request)
+      const inline = (...args) => inlineCurrentSection(request, ...args)
       const label = kind === 'completion' ? '[TASK_COMPLETION_REVIEW]' : '[TASK_CHECKPOINT_REVIEW]'
-      const reviewInfo = { requestId: request.requestId, kind, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, promptRefs: inline('promptRefs', promptRefs, 2_000, !diagnosticCheckpoint(request)) }
+      const reviewInfo = { requestId: request.requestId, kind, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, promptRefs: inline('promptRefs', promptRefs, 2_000, !diagnosticCheckpoint(request)), visiblePromptRefs: [...request.readPromptRefs.values()] }
       request.sections.messages = JSON.stringify(messages)
       const context = { topicRefs: inline('topicRefs', task.topicRefs), messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: messageContext.hasMoreMessages, messagesSection: 'messages', ...(kind === 'completion' ? { replyReviewCandidateCount: request.candidates.length } : {}) }
       const originalContext = `\n${kind === 'completion' ? '通知上下文' : '任务原始上下文'}：${JSON.stringify(context)}`
       const instruction = kind === 'completion'
         ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。通过时同时准备群通知；存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界，并从通知上下文选择引用消息和真正需要获知的参与人。"
         : `检查点审阅：{decision:'acknowledge'|'guidance'|'reject',reason:string,guidance?:string}。计划与原始消息或任务流程冲突时必须 reject；只有原始消息明确支持的 workflowAssessment.exceptions 才能覆盖流程。`
-      const promptInstruction = diagnosticCheckpoint(request) ? '这是异常报告，即使未选流程、旧流程过期或未读完也必须保持协调通道可用，不批准阶段推进。' : `${promptRefs.length ? `先按 requestId 用 group_task_prompt_get 一次传入全部 ${promptRefs.length} 个已选流程 ID 并批量读取正文；未读完不能提交审阅。` : '当前未选择专用流程，需结合索引核查是否确无匹配。'}核查选择原因和可用流程索引；如需读取未选候选，也应合并到一次批量调用。若漏选适用流程应要求重新规划，允许多个流程组合，也允许有明确理由的无匹配。`
+      const unreadPrompts = promptRefs.filter((ref) => !request.readPromptRefs.has(ref.id))
+      const promptInstruction = diagnosticCheckpoint(request) ? '这是异常报告，即使未选流程、旧流程过期或未读完也必须保持协调通道可用，不批准阶段推进。' : `${promptRefs.length ? (unreadPrompts.length ? `按 requestId 用 group_task_prompt_get 批量读取尚不可见的流程 ${JSON.stringify(unreadPrompts)}；visiblePromptRefs 指明当前 surface 中已具备正文的流程，无需重读。` : `全部已选流程正文仍在当前 surface 中，直接复用 visiblePromptRefs，不再调用 group_task_prompt_get。`) : '当前未选择专用流程，需结合索引核查是否确无匹配。'}核查选择原因和可用流程索引；如需读取未选候选，也应合并到一次批量调用。若漏选适用流程应要求重新规划，允许多个流程组合，也允许有明确理由的无匹配。`
       const contextInstruction = diagnosticCheckpoint(request) ? '异常报告的 section 原文按需续读，不以读完索引或旧流程作为协调前提。' : '通过审阅前必须读完超限的目标、验收、阶段、待审阅内容和流程索引。'
-      const text = `${label}\n审阅请求：${JSON.stringify(reviewInfo)}\nTask ID: ${task.taskId}\n当前有效目标：${JSON.stringify(inline('objective', task.objective))}\n验收标准：${JSON.stringify(inline('acceptanceCriteria', task.acceptanceCriteria))}\n本轮阶段任务：${JSON.stringify(inline('stageTasks', task.stageTasks))}\n待审阅内容：${JSON.stringify(inline('value', value))}${originalContext}\n可用流程索引：${JSON.stringify(inline('promptIndex', promptCatalog, 6_000))}\n流程选择依据：${JSON.stringify(inline('promptSelection', { reason: selection?.reason ?? '未记录显式选择原因；请结合目标与索引核实是否漏选', promptRefs: selection?.taskPromptRefs ?? promptRefs }))}\n${promptInstruction}\n遇到 section 指针用 group_task_review_context_get 按 nextOffset 续读完整 JSON；${contextInstruction}更多消息可用 messages section 或固定 Topic 版本原文分页读取。\n通过 group_task_review_submit 提交内部判断。${instruction}核对原始消息、当前授权、已选流程、计划和证据；主会话生成的目标或验收标准不能作为覆盖流程的例外依据。不用自然语言结束请求。`
+      const text = `${label}\n审阅请求：${JSON.stringify(reviewInfo)}\nTask ID: ${task.taskId}\n当前有效目标：${JSON.stringify(inline('objective', task.objective))}\n验收标准：${JSON.stringify(inline('acceptanceCriteria', task.acceptanceCriteria))}\n本轮阶段任务：${JSON.stringify(inline('stageTasks', task.stageTasks))}\n当前事实与审批快照：${JSON.stringify(inline('currentFacts', taskProgressSnapshot(task, { maxItems: 3 }), 6_000))}\n待审阅内容：${JSON.stringify(inline('value', value))}${originalContext}\n可用流程索引：${JSON.stringify(inline('promptIndex', promptCatalog, 6_000))}\n流程选择依据：${JSON.stringify(inline('promptSelection', { reason: selection?.reason ?? '未记录显式选择原因；请结合目标与索引核实是否漏选', promptRefs: selection?.taskPromptRefs ?? promptRefs }))}\n${promptInstruction}\n遇到 section 指针用 group_task_review_context_get 按 nextOffset 续读完整 JSON；${contextInstruction}更多消息可用 messages section 或固定 Topic 版本原文分页读取。\n通过 group_task_review_submit 提交内部判断。${instruction}核对原始消息、当前授权、已选流程、计划和证据；主会话生成的目标或验收标准不能作为覆盖流程的例外依据。不用自然语言结束请求。`
       if (text.length > TASK_REVIEW_MAX_CHARS) throw new Error('task_review_envelope_too_large')
-      const agent = send(task.groupId, text)
+      const agent = send(task.groupId, text, [], request)
       monitor(agent, request, reviews)
     } catch (error) { reviews.delete(request.requestId); reject(error) }
     return promise
@@ -722,22 +860,71 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     const messages = taskMessages(task)
     const messageContext = boundedTopicContext({ topic: {}, messages: [...messages].reverse().slice(0, COMPLETION_MESSAGE_MAX_COUNT), offset: 0, total: messages.length, taskRefs: [] }, { maxChars: COMPLETION_MESSAGE_MAX_CHARS })
     const visibleMessages = messageContext.messages.reverse()
-    const request = { requestId: randomUUID(), groupId: task.groupId, task, resultKey, resultState: result.status === 'completed' ? 'completed' : 'waiting', resultFingerprint: JSON.stringify(result), messages, resolve, reject, promise,
+    const request = { requestId: requestIdentity('reply', { groupId: task.groupId, resultKey, result, inputVersion: task.inputVersion, runSequence: task.runSequence }), groupId: task.groupId, task, resultKey, resultState: result.status === 'completed' ? 'completed' : 'waiting', resultFingerprint: JSON.stringify(result), messages, resolve, reject, promise,
       sections: { messages: JSON.stringify(messages) }, readSectionOffsets: new Map(), requiredSections: new Set(),
       candidates: scopedCandidates(task.groupId, messages, task.topicRefs, [task.taskId]), readReview: false,
       observedTopics: task.topicRefs.map((ref) => ({ topicId: ref.topicId, revision: store.getTopic(task.groupId, ref.topicId).revision })) }
     replies.set(request.requestId, request)
     try {
-      const inline = (...args) => inlineReviewSection(request, ...args)
+      const inline = (...args) => inlineCurrentSection(request, ...args)
       const text = `[TASK_COORDINATION]\n回复请求 ID：${request.requestId}\nTask ID: ${task.taskId}\nTopic 请求：${JSON.stringify({ requestId: request.requestId, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: inline('topicRefs', task.topicRefs), messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: messageContext.hasMoreMessages, messagesSection: 'messages', replyReviewCandidateCount: request.candidates.length })}\n当前目标：${JSON.stringify(inline('objective', task.objective))}\n核验结果：${JSON.stringify(inline('result', result))}\n通过 group_reply_submit 提交结果或阻塞通知；先按 requestId 读取 ${request.candidates.length} 条历史回复候选。遇到 section 指针用 group_task_review_context_get 按 nextOffset 续读完整 JSON；提交前读完超限目标、核验结果和 Topic 引用。更多消息可用 messages section 或固定 Topic 版本原文分页读取。保留实际完成内容、证据、交付状态和未验证边界。`
       if (text.length > TASK_REVIEW_MAX_CHARS) throw new Error('task_review_envelope_too_large')
-      const agent = send(task.groupId, text)
+      const agent = send(task.groupId, text, [], request)
       monitor(agent, request, replies)
     } catch (error) { replies.delete(request.requestId); reject(error) }
     return promise
   }
   return {
     register, schedule, requestReview, requestReply, commitCompletionNotification, taskMessages, applyAccepted: resume,
+    async resetReviewRequest(groupId, requestId) {
+      const state = store.getCoordinationRequest?.(groupId, requestId)
+      const request = reviews.get(requestId)
+      if (!store.getGroup(groupId) || request && request.groupId !== groupId || !state && !request) throw new Error('topic_request_unknown_or_wrong_group')
+      if (state?.status !== 'exhausted' && !request?.exhausted) return { status: 'pending', requestId }
+      await store.updateCoordinationRequest(groupId, requestId, { status: 'pending', attempt: 0, resumeEpoch: (state?.resumeEpoch ?? 0) + 1, nextRetryAt: new Date().toISOString(), lastError: undefined })
+      reviews.delete(requestId)
+      return { status: 'reset', requestId }
+    },
+    getReadOnlyDecisionContext(groupId, requestId) {
+      const request = decisions.get(requestId)
+      if (!request || request.groupId !== groupId) throw new Error('topic_request_unknown_or_wrong_group')
+      refreshReview(request)
+      const topic = store.getTopic(groupId, request.topicId)
+      const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= request.revision).map((entry) => entry.messageId))
+      return structuredClone({ requestId, groupId, topicId: request.topicId, revision: request.revision, messages: request.visibleMessages,
+        deltaMessageIds: request.messages.filter((message) => deltaIds.has(message.messageId)).map((message) => message.messageId),
+        policyContext: { responsibility: store.getGroup(groupId).responsibility, agentNames: store.getAgentNames() },
+        hasOmittedMessages: request.messages.some((message) => !request.readMessageIds.has(message.messageId)),
+        summary: topic.summary, candidates: request.candidates, candidateFingerprint: fingerprint(request.candidates) })
+    },
+    async submitReadOnlyDecision(groupId, input, candidateFingerprint, validateSnapshot) {
+      if (!live()) throw new Error('resident_runtime_closed')
+      const args = groupDecisionSubmissionSchema.parse(input)
+      if (typeof validateSnapshot !== 'function') throw new Error('read_only_snapshot_validator_required')
+      if (args.decision.actions.length || args.decision.replyReview?.kind === 'confirmation') throw new Error('read_only_decision_action_forbidden')
+      const request = decisions.get(args.requestId)
+      if (!request || request.groupId !== groupId) return { status: 'topic-stale' }
+      refreshReview(request)
+      if (candidateFingerprint !== fingerprint(request.candidates)) return { status: 'review-required' }
+      const submit = decisionSubmitters.get(groupId)
+      if (!submit) throw new Error('resident_tools_not_registered')
+      request.readReview = true
+      return jsonOutput(await submit(args, { validateSnapshot }))
+    },
+    async retryRequest(groupId, requestId) {
+      const collection = [routes, decisions, reviews, replies, titleMigrations, summaryMigrations].find((items) => items.get(requestId)?.groupId === groupId)
+      const request = collection?.get(requestId)
+      if (!request) throw new Error('topic_request_unknown_or_wrong_group')
+      if (!request.exhausted) return { status: 'pending', requestId }
+      await store.updateCoordinationRequest(groupId, requestId, { status: 'pending', attempt: 0, resumeEpoch: (store.getCoordinationRequest(groupId, requestId)?.resumeEpoch ?? 0) + 1, nextRetryAt: new Date().toISOString(), lastError: undefined })
+      request.exhausted = false; request.attempt = 0
+      if (request.reject) {
+        collection.delete(requestId)
+        const promise = collection === reviews ? requestReview(request.kind, store.getTask(request.task.taskId), request.value) : requestReply(store.getTask(request.task.taskId), JSON.parse(request.resultFingerprint), request.resultKey)
+        promise.catch((error) => onError(groupId, error))
+      } else monitor(getAgent(groupId), request, collection)
+      return { status: 'pending', requestId }
+    },
     invalidateTaskReviews(taskId, reason = 'task_review_context_changed') {
       for (const [requestId, request] of reviews) {
         if (request.task.taskId !== taskId) continue
@@ -753,7 +940,11 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     async retryMessage(groupId, messageId) {
       const group = store.getGroup(groupId)
       if (!group?.messages.some((message) => message.messageId === messageId)) throw new Error(`message_not_found:${messageId}`)
-      for (const [id, request] of routes) if (request.groupId === groupId && request.messages.some((message) => message.messageId === messageId)) routes.delete(id)
+      for (const collection of [routes, decisions]) for (const [id, request] of collection) {
+        if (request.groupId !== groupId || !request.messages.some((message) => message.messageId === messageId)) continue
+        await store.updateCoordinationRequest(groupId, id, { status: 'pending', attempt: 0, resumeEpoch: (store.getCoordinationRequest(groupId, id)?.resumeEpoch ?? 0) + 1, nextRetryAt: new Date().toISOString(), lastError: undefined })
+        collection.delete(id)
+      }
       for (const topic of group.topics.filter((item) => item.entries.some((entry) => entry.messageId === messageId))) {
         for (const record of topic.decisions.filter((item) => item.status === 'failed')) {
           retries.delete(record.decisionId)
