@@ -49,6 +49,14 @@ test('同目标下证据否定仍触发定向重规划，preserve不能覆盖明
   assert.equal(result.checkpoints[0].inputVersion, 2)
 })
 
+test('已接受的历史决策以阶段标题引用影响范围时归一化为稳定阶段ID', () => {
+  const current = task()
+  const evidence = { ...impact(current), affectedStageIds: ['SQL'] }
+  const result = reviseTaskProgress(current, { progressImpact: 'replan', impactEvidence: evidence }, basis)
+  assert.deepEqual(result.checkpoints.map(cp => cp.checkpointId), ['cp0'])
+  assert.deepEqual(result.affectedStageIds, current.stagePlan.slice(1).map(stage => stage.stageId))
+})
+
 test('真实目标变化优先采用明确影响证据，未限定时保守失效全部', () => {
   const current = task()
   const targeted = reviseTaskProgress(current, { objective: '完成新环境发布', impactEvidence: impact(current, 2) }, basis)

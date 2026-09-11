@@ -24,13 +24,14 @@ export function reconcileLegacyStagePlan(task) {
 
 export function reviseTaskProgress(task, { objective = task.objective, acceptanceCriteria = task.acceptanceCriteria, stageTasks = task.stageTasks, progressImpact, impactEvidence }, basisIds) {
   const stages = stagePlanFor(task, task.stageTasks ?? [])
+  const affectedStageIds = impactEvidence?.affectedStageIds?.map(reference => stages.find(stage => stage.stageId === reference || stage.title === reference)?.stageId)
   const scopeChanged = objective !== task.objective || !same(acceptanceCriteria, task.acceptanceCriteria) || !same(stageTasks, task.stageTasks)
   if (impactEvidence) {
     if (!impactEvidence.basisMessageIds?.length || impactEvidence.basisMessageIds.some(id => !basisIds.has(id))) throw new Error('task_revision_basis_invalid')
     if (typeof impactEvidence.reason !== 'string' || !impactEvidence.reason.trim()) throw new Error('task_revision_reason_required')
-    if (!impactEvidence.affectedStageIds?.length || impactEvidence.affectedStageIds.some(id => !stages.some(stage => stage.stageId === id))) throw new Error('task_revision_stage_invalid')
+    if (!affectedStageIds?.length || affectedStageIds.some(id => id === undefined)) throw new Error('task_revision_stage_invalid')
   }
-  if (progressImpact === 'replan' && !scopeChanged && !impactEvidence?.affectedStageIds.length) throw new Error('task_revision_impact_required')
+  if (progressImpact === 'replan' && !scopeChanged && !affectedStageIds?.length) throw new Error('task_revision_impact_required')
   const replan = scopeChanged || progressImpact === 'replan' || Boolean(impactEvidence)
   let firstAffected = stages.length
   if (replan) {
@@ -39,7 +40,7 @@ export function reviseTaskProgress(task, { objective = task.objective, acceptanc
     const changedStage = stages.findIndex((stage, i) => stageTasks[i] !== stage.title)
     if (changedStage >= 0) firstAffected = Math.min(firstAffected, changedStage)
     if (firstAffected < 0) firstAffected = stages.length
-    for (const id of impactEvidence?.affectedStageIds ?? []) firstAffected = Math.min(firstAffected, stages.findIndex(stage => stage.stageId === id))
+    for (const id of affectedStageIds ?? []) firstAffected = Math.min(firstAffected, stages.findIndex(stage => stage.stageId === id))
   }
   const retainedTitles = new Set(stages.slice(0, firstAffected).map(stage => stage.title))
   const retainedIds = new Set(stages.slice(0, firstAffected).map(stage => stage.stageId))
