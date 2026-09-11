@@ -66,7 +66,15 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
   let groupBackfillTimer
   let outboxRetryTimer
   let outboxRetryTail = Promise.resolve()
+  const outboundTails = new Map()
   const detachGroupMessageRecaller = (runtime.registerGroupMessageRecaller ?? (() => () => undefined))(async ({ groupId, messageId, outbound }) => {
+    if (!messageId) {
+      if (typeof adapter.findOutboundMessage !== 'function') throw new Error('replacement_delivery_lookup_required')
+      const found = await adapter.findOutboundMessage(groupId, outbound)
+      if (!found?.messageId) return { status: 'not-observed' }
+      messageId = found.messageId
+      await runtime.acknowledge({ groupId, outboundId: outbound.outboundId, deliveredMessageId: messageId })
+    }
     await adapter.recallMessage(messageId)
     if (typeof adapter.findOutboundMessage === 'function') {
       const found = await adapter.findOutboundMessage(groupId, outbound)
@@ -82,7 +90,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       const persisted = group?.messages?.find((item) => item.messageId === message.messageId)
       const deliveredOutbound = group?.outbox?.find((item) => item.deliveredMessageId === message.messageId)
       const pendingOutbound = typeof currentDwsUserName === 'string' && currentDwsUserName.trim() !== '' && message.senderName === currentDwsUserName
-        ? group?.outbox?.find((item) => item.status === 'pending' && matchesOutbound(message, item))
+        ? group?.outbox?.find((item) => ['pending', 'superseded'].includes(item.status) && matchesOutbound(message, item))
         : undefined
       const outbound = deliveredOutbound ?? pendingOutbound
       if (outbound !== undefined) {
@@ -283,16 +291,33 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     })
     return entry.backfillPromise
   }
-  const processOutbound = async ({ groupId, outbound }) => {
+  const deliverOutbound = async ({ groupId, outbound }) => {
     try {
-      await runtime.prepareOutbound?.({ groupId, outbound })
-      const delivery = await dispatchOutbox({ adapter, groupId, outbound })
+      const prepared = await runtime.prepareOutbound?.({ groupId, outbound })
+      outbound = prepared ?? runtime.getGroup?.(groupId)?.outbox?.find(item => item.outboundId === outbound.outboundId) ?? outbound
+      if (outbound.status === 'superseded' || outbound.supersededByOutboundId) return
+      if (outbound.status === 'sent') { await runtime.completeOutboundReplacement?.({ groupId, outbound }); return }
+      if (outbound.deliveryBlockedAt) return
+      const delivery = await dispatchOutbox({ adapter, groupId, outbound,
+        ...(runtime.beginOutboundSend ? { beforeSend: () => runtime.beginOutboundSend({ groupId, outboundId: outbound.outboundId }) } : {}) })
+      if (delivery.status === 'superseded') return
       await runtime.recordOutboundDeliveryAttempt?.({ groupId, outboundId: outbound.outboundId, ...(delivery.status === 'pending' ? { reason: delivery.reason } : {}) })
-      if (delivery.status === 'sent') await runtime.acknowledge({ groupId, outboundId: outbound.outboundId, deliveredMessageId: delivery.messageId })
+      if (delivery.status === 'sent') {
+        await runtime.acknowledge({ groupId, outboundId: outbound.outboundId, deliveredMessageId: delivery.messageId })
+        outbound = { ...outbound, status: 'sent' }
+        await runtime.completeOutboundReplacement?.({ groupId, outbound })
+      }
     } catch (error) {
-      await runtime.recordOutboundDeliveryAttempt?.({ groupId, outboundId: outbound.outboundId, ...(error?.deliveryPendingReason ? { reason: error.deliveryPendingReason } : {}), error: error instanceof Error ? error.message : String(error) })
+      if (outbound.status !== 'sent') await runtime.recordOutboundDeliveryAttempt?.({ groupId, outboundId: outbound.outboundId, ...(error?.deliveryPendingReason ? { reason: error.deliveryPendingReason } : {}), ...(error?.serverErrorCode && error.deliveryPendingReason === 'send_failed' ? { blocked: true } : {}), error: error instanceof Error ? error.message : String(error) })
       throw error
     }
+  }
+  const processOutbound = (event) => {
+    const previous = outboundTails.get(event.groupId) ?? Promise.resolve()
+    const operation = previous.catch(() => {}).then(() => stopping ? undefined : deliverOutbound(event))
+    outboundTails.set(event.groupId, operation)
+    operation.finally(() => { if (outboundTails.get(event.groupId) === operation) outboundTails.delete(event.groupId) }).catch(() => {})
+    return operation
   }
   const processPendingCompletedOutbox = () => {
     outboxRetryTail = outboxRetryTail.then(async () => {
@@ -300,7 +325,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       const jobs = []
       for (const group of runtime.listGroups()) {
         const pending = (runtime.getGroup?.(group.groupId) ?? group).outbox ?? []
-        for (const outbound of pending.filter((item) => item.status === 'pending' && (item.readbackRequired === true || /^task-result:task-.*:completed(?::\d+)?$/.test(item.sourceMessageId)))) {
+        for (const outbound of pending.filter((item) => !item.supersededByOutboundId && ((item.status === 'sent' && item.replacesOutboundIds?.length) || (item.status === 'pending' && !item.deliveryBlockedAt && (item.readbackRequired === true || /^task-result:task-.*:completed(?::\d+)?$/.test(item.sourceMessageId)))))) {
           jobs.push(processOutbound({ groupId: group.groupId, outbound }))
         }
       }
@@ -709,6 +734,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     await humanPollTail
     await Promise.allSettled(entries.map((entry) => entry.backfillPromise))
     await outboxRetryTail
+    await Promise.allSettled(outboundTails.values())
     subscriptions.clear()
     bridgeEntries.clear()
     inflightMessages.clear()

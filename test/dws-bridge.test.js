@@ -124,7 +124,7 @@ test('普通Outbox替换通过DWS精确撤回并确认消息已不存在', async
   await stop()
 })
 
-test('已落盘Outbox先完成prepare，撤回失败时不发送，重试成功后再投递', async () => {
+test('已落盘Outbox准备失败不发送，完成准备后先送达再推进独立撤回', async () => {
   let listener, ready = false, sent = false
   const sequence = [], warnings = []
   const outbound = { outboundId: 'out-replacement', sourceMessageId: 'topic-decision:d1', text: '合并后的确认', status: 'pending', readbackRequired: true, replacesOutboundIds: ['out-old'] }
@@ -132,8 +132,9 @@ test('已落盘Outbox先完成prepare，撤回失败时不发送，重试成功�
   const runtime = {
     listGroups: () => [group], getGroup: () => group,
     onGroupSubscribed() { return () => undefined }, onOutboxAppended(handler) { listener = handler; return () => undefined },
-    async prepareOutbound({ outbound: value }) { assert.equal(value.outboundId, 'out-replacement'); sequence.push('prepare'); if (!ready) throw new Error('recall_not_verified') },
+    async prepareOutbound({ outbound: value }) { assert.equal(value.outboundId, 'out-replacement'); sequence.push('prepare'); if (!ready) throw new Error('replacement_storage_failed') },
     async acknowledge() { sequence.push('ack'); outbound.status = 'sent' },
+    async completeOutboundReplacement() { sequence.push('recall'); assert.equal(outbound.status, 'sent') },
   }
   const adapter = {
     startGroupSubscription() { return { done: Promise.resolve(), stop() {} } },
@@ -146,9 +147,9 @@ test('已落盘Outbox先完成prepare，撤回失败时不发送，重试成功�
   assert.equal(outbound.status, 'pending')
   ready = true
   await listener({ groupId: 'g', outbound })
-  assert.deepEqual(sequence, ['prepare', 'prepare', 'read', 'send', 'read', 'ack'])
+  assert.deepEqual(sequence, ['prepare', 'prepare', 'read', 'send', 'read', 'ack', 'recall'])
   assert.equal(outbound.status, 'sent')
-  assert.deepEqual(warnings, ['recall_not_verified'])
+  assert.deepEqual(warnings, ['replacement_storage_failed'])
   await stop()
 })
 
@@ -175,10 +176,33 @@ test('DWS bridge 区分发送前、发送中和回读失败，保留 pending 与
       assert.equal(outbound.status, 'pending')
       assert.equal(acknowledgements, 0)
       assert.equal(sends, failedPhase === 'preflight' ? 0 : 1)
-      assert.deepEqual(attempts, [{ groupId: 'g', outboundId: 'out-test', reason: `${failedPhase}_failed`, error: 'CLI_ORG_NOT_AUTHORIZED' }])
+      assert.deepEqual(attempts, [{ groupId: 'g', outboundId: 'out-test', reason: `${failedPhase}_failed`, ...(failedPhase === 'send' ? { blocked: true } : {}), error: 'CLI_ORG_NOT_AUTHORIZED' }])
       assert.deepEqual(warnings, ['CLI_ORG_NOT_AUTHORIZED'])
     } finally { await stop() }
   })
+})
+
+test('明确服务端拒绝停止同意图发送，不让周期或追加监听重复外发', async () => {
+  const outbound = { outboundId: 'denied', sourceMessageId: 'denied', text: 'denied', status: 'pending', readbackRequired: true }
+  const group = { groupId: 'g', outbox: [outbound] }
+  let listener, sends = 0
+  const runtime = {
+    listGroups: () => [group], getGroup: () => group,
+    onGroupSubscribed: () => () => {}, onOutboxAppended(fn) { listener = fn; return () => {} },
+    async recordOutboundDeliveryAttempt(value) { if (value.blocked) outbound.deliveryBlockedAt = new Date().toISOString() },
+  }
+  const adapter = {
+    startGroupSubscription: () => ({ done: Promise.resolve(), stop() {} }),
+    readGroup: async () => ({ complete: true, messages: [] }),
+    async sendGroup() { sends++; const error = new Error('rejected'); error.serverErrorCode = '1001'; throw error },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn() {} }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 5 })
+  await new Promise(resolve => setTimeout(resolve, 25))
+  await listener({ groupId: 'g', outbound: { ...outbound, deliveryBlockedAt: undefined } })
+  await stop()
+  assert.equal(sends, 1)
+  assert.equal(outbound.status, 'pending')
+  assert.ok(outbound.deliveryBlockedAt)
 })
 
 test('DWS bridge 将稳定事件交给 resident 并在真实回读后确认 outbox', async () => {

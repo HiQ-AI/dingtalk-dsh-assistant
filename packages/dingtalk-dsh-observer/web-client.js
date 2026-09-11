@@ -54,7 +54,10 @@ window.__ModuleLoader__.load({
     const short = (value) => value ? String(value).replace(/^session-/, '').slice(0, 14) : '—'
     const outboxDelivery = (message) => {
       if (message.recallStatus === 'recalled') return { id: 'recalled', label: '已撤回', state: 'neutral' }
+      if (message.recallStatus === 'failed') return { id: 'recall-failed', label: '撤回待处理', state: 'warning', detail: message.recallError === 'replacement_delivery_unknown' ? '已停止旧意图发送；历史是否送达仍未知，等待核验' : `旧消息撤回失败${message.recallRetryAt ? '，将有限重试' : '，需核验后处理'}：${message.recallError || '原因未记录'}` }
+      if (message.supersededByOutboundId || message.status === 'superseded') return { id: 'superseded', label: '已替代', state: 'neutral', detail: message.deliveredMessageId ? '已记录送达，等待替换通知送达后撤回' : '已停止旧意图发送；未声称历史消息未送达' }
       if (message.status === 'sent') return { id: 'confirmed', label: message.deliveredMessageId ? '已回读' : '已发送', state: 'done' }
+      if (message.deliveryBlockedAt) return { id: 'failed', label: '发送待处理', state: 'error', detail: '服务端已拒绝发送，停止自动重试；需核验失败原因' }
       const reason = message.deliveryPendingReason
       const details = {
         preflight_history_partial: '发送前检查：历史消息不完整，本次未发送',
@@ -342,7 +345,7 @@ window.__ModuleLoader__.load({
         return React.createElement('tr', { key: message.outboundId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
           React.createElement('td', { style: { ...tableBodyCell, width: 124 } }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
           React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）'),
-            status.detail ? React.createElement('div', { style: { marginTop: 6, fontSize: 12, color: status.state === 'error' ? colors.danger : colors.warning, overflowWrap: 'anywhere' } }, status.detail, message.deliveryError ? `：${message.deliveryError}` : '') : null,
+            status.detail ? React.createElement('div', { style: { marginTop: 6, fontSize: 12, color: status.state === 'error' ? colors.danger : colors.warning, overflowWrap: 'anywhere' } }, status.detail, !message.supersededByOutboundId && !message.recallStatus && message.deliveryError ? `：${message.deliveryError}` : '') : null,
             message.deliveryAttemptedAt ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, `最近尝试 ${fmt(message.deliveryAttemptedAt)} · 共 ${message.deliveryAttemptCount || 1} 次`) : null),
           React.createElement('td', { style: { ...tableBodyCell, width: 220 } },
             React.createElement('div', { style: { minWidth: 0 } }, singleLineTableContent(React.createElement('code', { title: message.sourceMessageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, short(message.sourceMessageId))), message.replyToMessageId ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, '回复 ', React.createElement('code', { title: message.replyToMessageId }, short(message.replyToMessageId))) : null)),
@@ -449,7 +452,7 @@ window.__ModuleLoader__.load({
           (data?.groups || []).length ? React.createElement(SelectMenu, { label: '选择群聊会话', value: selectedGroup?.groupId || '', options: (data?.groups || []).map((group) => ({ id: group.groupId, label: group.name || group.groupId })), onChange: (value) => { setSelectedGroupId(value); setMessagePage(1); setOutboxPage(1) }, fitContent: true }) : null,
           groupTableView === 'messages'
             ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
-            : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读' }, { id: 'confirmed', label: '已发送' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
+            : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读' }, { id: 'confirmed', label: '已发送' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回待处理' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 910, borderCollapse: 'collapse', tableLayout: 'fixed' } },
           React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 104 } }, '话题处理'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '发送人 / 时间'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '话题'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 240 } }, '消息'))),

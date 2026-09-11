@@ -72,7 +72,9 @@ const group = { groupId: 'g', name: '验收群', messages: [], outbox: [
     "deliveryError": "NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_NETWORK_TIMEOUT_",
     "deliveryAttemptCount": 3,
     "deliveryAttemptedAt": "2026-09-09T03:12:00Z"
-  }
+  },
+  { outboundId: 'superseded', text: '停止旧意图通知', status: 'superseded', supersededByOutboundId: 'confirmed', deliveryError: 'historical_error' },
+  { outboundId: 'recall-failed', text: '撤回失败通知', status: 'sent', deliveredMessageId: 'old-message', supersededByOutboundId: 'confirmed', recallStatus: 'failed', recallError: 'dws_recall_failed:1:1001' }
 ] }
 const fixtures = new Map([
   ['/health', { status: 'ok' }],
@@ -112,7 +114,7 @@ try {
   await page.addScriptTag({ content: await readFile(path.join(root, 'packages/dingtalk-dsh-observer/web-client.js'), 'utf8') })
   await page.getByRole('button', { name: '钉钉群聊运行看板', exact: true }).click()
 
-  await page.getByRole('tab', { name: '发信箱 · 7', exact: true }).click()
+  await page.getByRole('tab', { name: '发信箱 · 9', exact: true }).click()
   const row = (text) => page.getByRole('row').filter({ has: page.getByText(text, { exact: true }) })
   assert.match(await row('尚未尝试发送').innerText(), /待发送/)
   assert.match(await row('发送前受阻通知').innerText(), /发送受阻[\s\S]*发送前检查失败，本次未发送：CLI_ORG_NOT_AUTHORIZED[\s\S]*最近尝试.*共 2 次/)
@@ -120,6 +122,9 @@ try {
   assert.match(await row('成功通知').innerText(), /已回读/)
   assert.match(await row('历史确认通知').innerText(), /已发送/)
   assert.match(await row('撤回通知').innerText(), /已撤回/)
+  assert.match(await row('停止旧意图通知').innerText(), /已替代[\s\S]*未声称历史消息未送达/)
+  assert.doesNotMatch(await row('停止旧意图通知').innerText(), /historical_error/)
+  assert.match(await row('撤回失败通知').innerText(), /撤回待处理[\s\S]*需核验后处理/)
   assert.match(await row('长错误详情通知').innerText(), /投递异常[\s\S]*发送调用失败，尚未确认送达：[\s\S]*最近尝试.*共 3 次/)
   const select = page.getByRole('button', { name: '筛选发件状态', exact: true })
   await select.focus()
@@ -129,6 +134,13 @@ try {
   assert.equal(await row('回读受阻通知').count(), 0)
   await select.click()
   await page.getByRole('menuitem', { name: '待回读', exact: true }).click()
+  assert.equal(await page.getByRole('row').count(), 2)
+  await select.click()
+  await page.getByRole('menuitem', { name: '撤回待处理', exact: true }).click()
+  assert.equal(await page.getByRole('row').count(), 2)
+  assert.equal(await row('撤回失败通知').count(), 1)
+  await select.click()
+  await page.getByRole('menuitem', { name: '已替代', exact: true }).click()
   assert.equal(await page.getByRole('row').count(), 2)
   await select.click()
   await page.getByRole('menuitem', { name: '全部发件状态', exact: true }).click()
@@ -142,5 +154,5 @@ try {
   await page.screenshot({ path: path.join(outputDir, 'outbox-ui-narrow.png'), fullPage: true })
   assert.deepEqual(errors, [])
   assert.deepEqual(unexpectedRequests, [])
-  console.log(JSON.stringify({ status: 'PASS', scenarios: 7, keyboardFilter: true, narrowContentWrap: true, pageErrors: errors.length, interceptedRequests: requests.length, realDwsRequests: 0 }))
+  console.log(JSON.stringify({ status: 'PASS', scenarios: 9, keyboardFilter: true, narrowContentWrap: true, pageErrors: errors.length, interceptedRequests: requests.length, realDwsRequests: 0 }))
 } finally { await browser.close() }

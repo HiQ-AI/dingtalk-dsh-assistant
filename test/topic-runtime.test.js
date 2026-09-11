@@ -6,6 +6,7 @@ import { Inbox } from '@deepseek-ai/dsh-agent'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { createTopicCoordinator, projectTopicContext, TASK_REVIEW_MAX_CHARS } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
 import { visiblePromptRefs, visibleSectionLength } from '../packages/dingtalk-dsh-assistant/coordination-context.js'
+import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
 
 function memoryFacility(snapshot) {
   return new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
@@ -278,6 +279,50 @@ test('已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox', asyn
   assert.equal(reopened.store.getTopic('g', request.topicId).processedRevision, 1)
   assert.equal(reopened.store.getTopic('g', request.topicId).decisions[0].operations[0].status, 'applied')
   assert.deepEqual(reopened.applications, h.applications)
+})
+
+test('同revision拒绝后新请求跨重启稳定，共享消息不转授权且已发回复不重放', async t => {
+  const h = await setup(t), { task, request: initial } = await taskFixture(h)
+  await ingest(h, 'shared-revision')
+  await h.coordinator.schedule('g')
+  const routeRequest = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const routed = await h.call('group_topic_route_submit', { requestId: routeRequest.requestId, routes: [{ messageId: 'shared-revision', messageVersion: 1,
+    topics: [{ topicId: initial.topicId, relationship: 'continuation', reason: '原任务补充' }, { newTopicKey: 'other', title: '另一个受影响话题', relationship: 'affected', reason: '同步影响' }], effectOwner: { topicId: initial.topicId } }] })
+  assert.equal(routed.status, 'accepted', JSON.stringify(routed))
+  const original = routed.pendingDecisions.find(item => item.topicId === initial.topicId)
+  const action = { kind: 'task-context', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, context: '追加依据', progressImpact: 'replan',
+    impactEvidence: { basisMessageIds: ['shared-revision'], reason: '需重验阶段', affectedStageIds: [stagePlanFor(task, task.stageTasks)[0].stageId] }, topicRefs: [{ topicId: original.topicId, revision: original.revision }] }
+  const accepted = await h.store.acceptTopicDecision({ groupId: 'g', topicId: original.topicId, revision: original.revision, decisionId: original.requestId,
+    decision: submission(original, { actions: [action], reply: '原确认' }).decision, expectedTaskVersions: [{ taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence }] })
+  await h.store.appendOutbox({ groupId: 'g', sourceMessageId: `topic-decision:${original.requestId}`, decisionId: original.requestId, outboundId: accepted.record.outboundId, text: '原确认' })
+  await h.store.acknowledge({ groupId: 'g', outboundId: accepted.record.outboundId, deliveredMessageId: 'already-delivered' })
+  await h.coordinator.close(); await h.store.close()
+  const record = h.snapshot.tables.groups.g.topics.find(topic => topic.topicId === original.topicId).decisions.at(-1)
+  record.status = 'failed'; record.decision.actions[0].impactEvidence.affectedStageIds = ['bad-stage']
+  const restored = await setup(t, { snapshot: h.snapshot })
+  await restored.coordinator.recover(); await restored.coordinator.drain('g')
+  const requests = await restored.coordinator.schedule('g')
+  const retry = requests.find(item => item.topicId === original.topicId)
+  assert.notEqual(retry.requestId, original.requestId)
+  assert.deepEqual(retry.ownedDeltaMessageIds, ['shared-revision'])
+  const other = requests.find(item => item.topicId !== original.topicId)
+  assert.deepEqual(other.ownedDeltaMessageIds, [])
+  const foreignAction = { ...action, topicRefs: [{ topicId: other.topicId, revision: other.revision }] }
+  await assert.rejects(restored.call('group_decision_submit', submission(other, { actions: [foreignAction], reply: '不应获权' })), /topic_effect_owner_required/)
+  await restored.coordinator.close(); await restored.store.close()
+  const again = await setup(t, { snapshot: h.snapshot })
+  await again.coordinator.recover(); await again.coordinator.drain('g')
+  const same = (await again.coordinator.schedule('g')).find(item => item.topicId === original.topicId)
+  assert.equal(same.requestId, retry.requestId)
+  assert.equal((await again.call('group_decision_submit', submission(same, { actions: [action], reply: '补充判断已完成' }))).status, 'accepted')
+  await again.coordinator.drain('g')
+  const after = structuredClone(again.store.getGroup('g').outbox)
+  assert.equal(after.filter(item => item.outboundId === accepted.record.outboundId).length, 1)
+  assert.equal(after.find(item => item.outboundId === accepted.record.outboundId).deliveredMessageId, 'already-delivered')
+  assert.equal(again.store.getTask(task.taskId).inputVersion, task.inputVersion + 1)
+  await again.coordinator.recover(); await again.coordinator.drain('g')
+  assert.deepEqual(again.store.getGroup('g').outbox, after)
+  assert.equal(again.applications.length, 1)
 })
 
 test('内部审阅按请求绑定 Task 版本，拒绝错种类和版本变更', async (t) => {

@@ -305,12 +305,17 @@ test('发件状态按实际投递环节展示，pending不会伪装为已回读'
     [{ status: 'pending', deliveryPendingReason: 'preflight_history_partial' }, 'failed', '发送受阻'],
     [{ status: 'pending', deliveryPendingReason: 'send_failed', deliveryError: 'timeout' }, 'failed', '投递异常'],
     [{ status: 'pending', deliveryError: 'legacy_error' }, 'failed', '投递异常'],
+    [{ status: 'pending', deliveryBlockedAt: '2026-09-11T00:00:00Z', deliveryError: 'server_rejected' }, 'failed', '发送待处理'],
     [{ status: 'pending', deliveryPendingReason: 'postflight_failed', deliveryError: 'CLI_ORG_NOT_AUTHORIZED' }, 'waiting', '待回读'],
     [{ status: 'pending', deliveryPendingReason: 'delivery_unknown' }, 'waiting', '待回读'],
     [{ status: 'pending', deliveryPendingReason: 'message_not_observed' }, 'waiting', '待回读'],
     [{ status: 'sent', deliveredMessageId: 'actual-message-id' }, 'confirmed', '已回读'],
     [{ status: 'sent' }, 'confirmed', '已发送'],
     [{ status: 'sent', recallStatus: 'recalled' }, 'recalled', '已撤回'],
+    [{ status: 'superseded', supersededByOutboundId: 'new' }, 'superseded', '已替代'],
+    [{ status: 'sent', supersededByOutboundId: 'new' }, 'superseded', '已替代'],
+    [{ status: 'superseded', recallStatus: 'failed', recallError: 'replacement_delivery_unknown' }, 'recall-failed', '撤回待处理'],
+    [{ status: 'sent', recallStatus: 'failed', recallError: 'dws_recall_failed:1:1001' }, 'recall-failed', '撤回待处理'],
   ]
   for (const [message, id, label] of scenarios) {
     const result = classify(message)

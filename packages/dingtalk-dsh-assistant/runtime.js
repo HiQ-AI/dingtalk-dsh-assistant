@@ -10,7 +10,7 @@ import { taskProgressSnapshot } from './task-progress.js'
 import { createTaskReportQueue, taskReportReceiptSchema, taskReports } from './task-reports.js'
 import { createTaskReportStepGate } from './task-report-step-gate.js'
 import { createStatusQueryHandler } from './status-query.js'
-import { reviseTaskProgress, stagePlanFor, reconcileLegacyStagePlan } from './task-input-revision.js'
+import { reviseTaskProgress, stagePlanFor, reconcileLegacyStagePlan, normalizeRunPlan } from './task-input-revision.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
 const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_TOPIC_ROUTE]', '[GROUP_TOPIC_DECISION]', '[TASK_COORDINATION]', '[TASK_COMPLETION_REVIEW]', '[TASK_CHECKPOINT_REVIEW]', '[GROUP_MESSAGE_STEER]', '[GROUP_DECISION_RECHECK]', '[GROUP_DECISION_RESUME]']
@@ -57,7 +57,7 @@ const taskAssociationContext = (task) => ({
   archived: Boolean(task.archivedAt),
   ...(task.acceptanceCriteria ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
   ...(task.stageTasks ? { stageTasks: task.stageTasks } : {}),
-  ...(task.stagePlan ? { stagePlan: task.stagePlan } : {}),
+  stagePlan: stagePlanFor(task, task.stageTasks ?? []),
   ...(task.taskPromptRefs ? { taskPromptRefs: task.taskPromptRefs } : {}),
   topicRefs: task.topicRefs, inputVersion: task.inputVersion, runSequence: task.runSequence,
   ...(task.objectiveHistory ? { objectiveHistory: task.objectiveHistory } : {}),
@@ -437,28 +437,43 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       })
     }
   }
-  async function recallReplacedOutbounds({ groupId, outboundIds, replacementSourceMessageId }) {
-    if (outboundIds.length === 0) return
-    if (groupMessageRecaller === undefined || store.updateOutboundRecall === undefined) throw new Error('group_message_recaller_required')
+  async function recallReplacedOutbounds({ groupId, outbound }) {
     const group = store.getGroup(groupId)
-    if (group === undefined) throw new Error(`group_not_subscribed:${groupId}`)
-    const replacements = outboundIds.map((outboundId) => {
-      const outbound = group.outbox.find((item) => item.outboundId === outboundId)
-      if (outbound === undefined) throw new Error(`group_reply_replacement_unknown:${outboundId}`)
-      if (outbound.recallStatus === 'recalled' && outbound.recallReason !== `superseded-by:${replacementSourceMessageId}`) throw new Error(`group_reply_replacement_already_recalled:${outboundId}`)
-      if (outbound.status !== 'sent' || !outbound.deliveredMessageId) throw new Error(`group_reply_replacement_not_delivered:${outboundId}`)
-      return outbound
-    })
-    for (const outbound of replacements) {
-      if (outbound.recallStatus === 'recalled') continue
-      const reason = `superseded-by:${replacementSourceMessageId}`
-      await store.updateOutboundRecall({ groupId, outboundId: outbound.outboundId, status: 'requested', reason })
+    const replacement = group?.outbox.find(item => item.outboundId === outbound.outboundId)
+    // 撤回是送达后的独立动作，不能让旧消息阻塞纠正通知。
+    if (!replacement?.deliveredMessageId || replacement.status !== 'sent' || replacement.supersededByOutboundId) return
+    const targets = new Map(), visiting = new Set()
+    const visit = (id) => {
+      if (visiting.has(id)) throw new Error('outbox_replacement_cycle')
+      if (targets.has(id)) return
+      const target = group.outbox.find(item => item.outboundId === id)
+      if (!target) throw new Error(`group_reply_replacement_unknown:${id}`)
+      visiting.add(id)
+      for (const previous of target.replacesOutboundIds ?? []) visit(previous)
+      visiting.delete(id); targets.set(id, target)
+    }
+    for (const id of replacement.replacesOutboundIds ?? []) visit(id)
+    if (!targets.size) return
+    if (groupMessageRecaller === undefined || store.updateOutboundRecall === undefined) throw new Error('group_message_recaller_required')
+    for (const target of targets.values()) {
+      if (target.recallStatus === 'recalled') continue
+      const lateDelivery = target.recallError === 'replacement_delivery_unknown' && target.deliveredMessageId
+      if (target.recallStatus === 'failed' && target.recallAttemptCount && !lateDelivery && !target.recallRetryAt) continue
+      if (target.recallRetryAt && Date.parse(target.recallRetryAt) > Date.now()) continue
+      const reason = `superseded-by:${replacement.sourceMessageId}`
+      if ((target.recallAttemptCount ?? 0) >= 3 && !lateDelivery) {
+        if (target.recallStatus !== 'failed' || target.recallRetryAt) await store.updateOutboundRecall({ groupId, outboundId: target.outboundId, status: 'failed', reason, error: target.recallError ?? 'recall_attempts_exhausted' })
+        continue
+      }
+      await store.updateOutboundRecall({ groupId, outboundId: target.outboundId, status: 'requested', reason })
       try {
-        await groupMessageRecaller({ groupId, messageId: outbound.deliveredMessageId, outbound })
-        await store.updateOutboundRecall({ groupId, outboundId: outbound.outboundId, status: 'recalled', reason })
+        const result = await groupMessageRecaller({ groupId, messageId: target.deliveredMessageId, outbound: target })
+        if (result?.status === 'not-observed') {
+          await store.updateOutboundRecall({ groupId, outboundId: target.outboundId, status: 'failed', reason, error: 'replacement_delivery_unknown' })
+        } else await store.updateOutboundRecall({ groupId, outboundId: target.outboundId, status: 'recalled', reason })
       } catch (error) {
-        await store.updateOutboundRecall({ groupId, outboundId: outbound.outboundId, status: 'failed', reason, error: error instanceof Error ? error.message : String(error) })
-        throw error
+        const retryAt = !error.serverErrorCode && (target.recallAttemptCount ?? 0) + 1 < 3 ? new Date(Date.now() + 30_000).toISOString() : undefined
+        await store.updateOutboundRecall({ groupId, outboundId: target.outboundId, status: 'failed', reason, error: error instanceof Error ? error.message : String(error), retryAt })
       }
     }
   }
@@ -695,8 +710,10 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     }
     throw new Error('task_completed_requires_review')
   }
-  async function submitTaskResult(taskId, value) {
+  async function submitTaskResult(taskId, value, { recoveryError, submissionId } = {}) {
     const result = parseTaskResult(value)
+    const completionRecovery = result.status === 'completed' && recoveryError?.startsWith('topic_request_retry_exhausted:')
+    const recoveredRequestId = completionRecovery ? recoveryError.slice('topic_request_retry_exhausted:'.length) : undefined
     if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
     if (result.status !== 'completed') {
       const waiting = await serializeTasks(() => submitTaskResultInternal(taskId, result))
@@ -706,7 +723,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     const prepared = await serializeTasks(async () => {
       if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
       const task = store.getTask(taskId)
-      if (task?.state !== 'running') throw new Error(`task_not_active:${taskId}`)
+      if (task === undefined || task.state !== 'running' && !(completionRecovery && task.state === 'waiting')) throw new Error(`task_not_active:${taskId}`)
       assertTaskInput(task, result)
       const handle = leafHandles.get(taskId)
       if (handle === undefined) throw new Error(`task_leaf_not_active:${taskId}`)
@@ -717,7 +734,10 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (checkpoints.length < 2) throw new Error(`task_checkpoints_insufficient:${taskId}`)
       if (!checkpoints.at(-1)?.coordinatorDecision) throw new Error(`task_checkpoint_review_pending:${taskId}`)
       if ((checkpoints.at(-1)?.remainingItems?.length ?? 0) > 0) throw new Error(`task_checkpoints_remaining:${taskId}`)
-      return { task, handle, lastCheckpointId: checkpoints.at(-1).checkpointId }
+      const recoveredRequestIds = completionRecovery ? [...new Set((task.executionEvents ?? [])
+        .filter(event => event.kind === 'task-report-settled' && event.submissionId === submissionId && event.status === 'failed' && event.error?.startsWith('topic_request_retry_exhausted:'))
+        .map(event => event.error.slice('topic_request_retry_exhausted:'.length)).concat(recoveredRequestId))] : []
+      return { task, handle, lastCheckpointId: checkpoints.at(-1).checkpointId, recoveredFromWaiting: completionRecovery && task.state === 'waiting', recoveredRequestIds }
     })
     const reviewAttemptId = randomUUID()
     const reviewEvent = (kind, extra = {}) => recordTaskCoordinationEvent(taskId, { kind, reviewAttemptId, inputVersion: result.inputVersion, runSequence: result.runSequence, at: new Date().toISOString(), ...extra })
@@ -738,7 +758,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     const completed = await serializeTasks(async () => {
       if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
       const current = store.getTask(taskId)
-      if (current?.state !== 'running') throw new Error(`task_not_active:${taskId}`)
+      if (current === undefined || current.state !== prepared.task.state || current.state !== 'running' && !prepared.recoveredFromWaiting) throw new Error(`task_not_active:${taskId}`)
       if (current.inputVersion !== prepared.task.inputVersion || current.runSequence !== prepared.task.runSequence || current.objective !== prepared.task.objective || current.checkpoints?.at(-1)?.checkpointId !== prepared.lastCheckpointId || !samePromptRefs(current.taskPromptRefs ?? [], prepared.task.taskPromptRefs ?? [])) throw new Error(`task_result_context_changed:${taskId}`)
       assertWorkflowPlan(current)
       assertTaskInput(current, result)
@@ -746,10 +766,15 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (goal === undefined) throw new Error(`task_goal_missing:${taskId}`)
       const completedAt = new Date().toISOString()
       const completed = await updateTaskInput(taskId, result, (task) => {
-        if (task.state !== 'running') throw new Error(`task_not_active:${taskId}`)
+        if (task.state !== prepared.task.state || task.state !== 'running' && !prepared.recoveredFromWaiting) throw new Error(`task_not_active:${taskId}`)
         assertWorkflowPlan(task)
         if (task.checkpoints?.at(-1)?.checkpointId !== prepared.lastCheckpointId || !samePromptRefs(task.taskPromptRefs, prepared.task.taskPromptRefs)) throw new Error(`task_result_context_changed:${taskId}`)
+        const blocker = prepared.recoveredFromWaiting && task.humanBlocker ? {
+          ...task.humanBlocker, status: 'superseded', supersededAt: completedAt, supersedeReason: '原完成报告协调恢复后已完成任务',
+          recallStatus: task.humanBlocker.messageId ? 'pending' : 'not-required',
+        } : undefined
         return { ...task, acknowledgedInputVersion: result.inputVersion, state: 'completed', completion: result.summary, result, waitingKind: undefined, waitingReason: undefined,
+          ...(blocker ? { humanBlocker: undefined, humanBlockerHistory: withHumanBlockerHistory(task, blocker) } : {}),
           executionEvents: [...(task.executionEvents ?? []),
             { kind: 'task-completed', inputVersion: result.inputVersion, runSequence: result.runSequence, at: completedAt }],
         }
@@ -757,6 +782,11 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (goal.phase !== 'complete') ctx.goals.complete(prepared.handle.agent, goalRef(goal))
       return completed
     })
+    if (prepared.recoveredFromWaiting && prepared.task.humanBlocker) {
+      const authorization = getAuthorizationRequest(prepared.task.humanBlocker.requestId)
+      for (const listener of authorizationDecisionListeners) await listener({ authorization, task: completed })
+    }
+    for (const requestId of prepared.recoveredRequestIds) await store.updateCoordinationRequest(completed.groupId, requestId, { status: 'completed', nextRetryAt: undefined, lastError: undefined })
     void withoutInitiator(async () => {
       const committed = await runGroupResidentOperation(completed.groupId, () => topics.commitCompletionNotification(review.preparedNotification, completed, result))
       if (committed?.status) {
@@ -999,7 +1029,7 @@ ${(store.getTask(task.taskId) ?? task).acceptanceCriteria.map((item) => `- ${ite
 
 ### 当前执行轮次阶段任务
 
-${((store.getTask(task.taskId) ?? task).stagePlan ?? (store.getTask(task.taskId) ?? task).stageTasks.map(title => ({ title }))).map(item => `- ${item.title}${item.stageId ? `（stageId: ${item.stageId}）` : ''}`).join('\n')}
+${stagePlanFor(store.getTask(task.taskId) ?? task, (store.getTask(task.taskId) ?? task).stageTasks).map(item => `- ${item.title}（stageId: ${item.stageId}）`).join('\n')}
 
 ### Topic 固定版本输入
 
@@ -1330,11 +1360,6 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       title: current.title ?? current.objective, revisedAt: new Date().toISOString(), inputVersion: current.inputVersion, runSequence: current.runSequence, ...(decisionId ? { decisionId } : {}),
     }] }
   }
-  function normalizeRunPlan(objective, acceptanceCriteria, stageTasks) {
-    const clean = (values) => Array.isArray(values) ? values.map((item) => String(item).trim()).filter(Boolean) : []
-    const criteria = clean(acceptanceCriteria), stages = clean(stageTasks)
-    return { acceptanceCriteria: criteria.length ? criteria : [objective], stageTasks: stages.length ? stages : ['完成并验证当前轮目标'] }
-  }
   function replaceTaskGoalObjective(task, handle) {
     const goal = ctx.goals.get(handle.agent)
     if (goal && goal.phase !== 'complete') ctx.goals.complete(handle.agent, goalRef(goal))
@@ -1367,17 +1392,19 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     if (operation && task.appliedOperations.includes(operation.operationId)) { await pumpTasks(); return store.getTask(task.taskId) }
     if (task.state !== 'completed') throw new Error(`task_not_completed:${task.taskId}`)
     const nextObjective = typeof objective === 'string' && objective.trim() ? objective.trim() : task.objective
+    const plan = normalizeRunPlan(nextObjective, acceptanceCriteria, stageTasks)
+    const stagePlan = stagePlanFor({ taskId: task.taskId, runSequence: task.runSequence + 1 }, plan.stageTasks)
     const queued = await mutateTask(task, operation, (current) => ({
       ...withRevisedObjective(current, nextObjective, title, operation?.decisionId),
       topicRefs, inputVersion: current.inputVersion + 1, state: 'queued', runSequence: current.runSequence + 1, runStartedAt: new Date().toISOString(),
-      ...normalizeRunPlan(nextObjective, acceptanceCriteria, stageTasks),
+      ...plan,
       runHistory: [...(current.runHistory ?? []), {
         runSequence: current.runSequence, startedAt: current.runStartedAt ?? current.createdAt, endedAt: new Date().toISOString(),
         topicRefs: current.topicRefs, inputVersion: current.inputVersion, title: current.title, objective: current.objective, childSessionId: current.childSessionId,
         acceptanceCriteria: current.acceptanceCriteria, stageTasks: current.stageTasks, taskPromptRefs: current.taskPromptRefs ?? [], checkpoints: current.checkpoints ?? [], ...(current.result ? { result: current.result } : {}),
       }],
       lastCompletedResult: current.result, completion: undefined, result: undefined, waitingKind: undefined, waitingReason: undefined,
-      lastWaitingResult: undefined, checkpoints: [], stagePlan: undefined, taskPromptRefs: [], humanBlocker: undefined, reopenContext: 'Topic 输入已更新，独立核验新执行轮次并重新选择适用任务流程', archivedAt: undefined,
+      lastWaitingResult: undefined, checkpoints: [], stagePlan, taskPromptRefs: [], humanBlocker: undefined, reopenContext: 'Topic 输入已更新，独立核验新执行轮次并重新选择适用任务流程', archivedAt: undefined,
       completionSequence: (current.completionSequence ?? 0) + 1,
     }))
     await pumpTasks()
@@ -1456,6 +1483,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const decisionId = accepted.record.decisionId
       await topics.applyAccepted(groupId, accepted.topicId, decisionId)
       const record = store.getTopic(groupId, accepted.topicId).decisions.find((item) => item.decisionId === decisionId)
+      if (record.status === 'rejected') throw new Error(`task_web_decision_rejected:${record.error}`)
       if (record.status !== 'completed') return { status: 'accepted', decisionId, topicId: accepted.topicId }
       return store.getTask(record.operations[0].taskId)
     } finally { release() }
@@ -1544,9 +1572,9 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
   })
   const reports = createTaskReportQueue({
     store, serialize: serializeTasks, hasPendingInput: task => topics.hasPendingTaskInput(task), isClosing: () => runtimeClosing,
-    execute: async (taskId, type, value) => {
+    execute: async (taskId, type, value, context) => {
       if (type === 'checkpoint') return submitTaskCheckpointInternal(taskId, value)
-      const task = await submitTaskResult(taskId, value)
+      const task = await submitTaskResult(taskId, value, context)
       return { accepted: true, taskId, state: task.state }
     },
     suspend: async task => {
@@ -1634,7 +1662,12 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     },
     onHumanBlockerRequested(listener) { humanBlockerListeners.add(listener); return () => humanBlockerListeners.delete(listener) },
     onAuthorizationDecided(listener) { authorizationDecisionListeners.add(listener); return () => authorizationDecisionListeners.delete(listener) },
-    prepareOutbound: ({ groupId, outbound }) => recallReplacedOutbounds({ groupId, outboundIds: outbound.replacesOutboundIds ?? [], replacementSourceMessageId: outbound.sourceMessageId }),
+    prepareOutbound: async ({ groupId, outbound }) => {
+      const group = await store.reconcileOutboxReplacements({ groupId })
+      return group.outbox.find(item => item.outboundId === outbound.outboundId)
+    },
+    beginOutboundSend: (args) => store.beginOutboundSend(args),
+    completeOutboundReplacement: recallReplacedOutbounds,
     registerGroupMessageRecaller(recaller) {
       if (typeof recaller !== 'function') throw new Error('group_message_recaller_invalid')
       groupMessageRecaller = recaller
@@ -1792,19 +1825,20 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     followupTask: ({ text, ...request }) => submitWebTaskAction('task-context', { ...request, context: text }),
     submitTaskResult: ({ taskId, result }) => submitTaskResult(taskId, result),
     getTaskReport: ({ taskId, submissionId }) => reports.get(taskId, submissionId),
-    retryTaskReport: async ({ taskId, submissionId }) => {
+    retryTaskReport: async ({ taskId, submissionId, coordinationRequestId }) => {
       const task = store.getTask(taskId)
       const report = task && taskReports(task).find(item => item.submissionId === submissionId)
       if (!report) throw new Error(`task_report_not_found:${submissionId}`)
       if (report.inputVersion !== task.inputVersion || report.runSequence !== task.runSequence || task.state === 'completed') throw new Error(`task_report_retry_stale:${submissionId}`)
-      if (report.status !== 'failed') throw new Error(`task_report_retry_requires_failed:${submissionId}`)
-      if (report.error?.startsWith('topic_request_retry_exhausted:')) await topics.resetReviewRequest(task.groupId, report.error.slice('topic_request_retry_exhausted:'.length))
-      return reports.retry(taskId, submissionId)
+      const failedRequestId = coordinationRequestId ?? (report.error?.startsWith('topic_request_retry_exhausted:') ? report.error.slice('topic_request_retry_exhausted:'.length) : undefined)
+      if (failedRequestId) await topics.resetReviewRequest(task.groupId, failedRequestId)
+      return reports.retry(taskId, submissionId, { coordinationRequestId: failedRequestId })
     },
     retryCoordinationRequest: ({ groupId, requestId }) => {
       for (const task of store.listTasks().filter(item => item.groupId === groupId)) {
-        const report = taskReports(task).find(item => item.status === 'failed' && item.error === `topic_request_retry_exhausted:${requestId}`)
-        if (report) return runtimeApi.retryTaskReport({ taskId: task.taskId, submissionId: report.submissionId })
+        const failed = task.executionEvents?.findLast(event => event.kind === 'task-report-settled' && event.status === 'failed' && event.error === `topic_request_retry_exhausted:${requestId}`)
+        const report = failed && taskReports(task).find(item => item.submissionId === failed.submissionId)
+        if (report) return runtimeApi.retryTaskReport({ taskId: task.taskId, submissionId: report.submissionId, coordinationRequestId: requestId })
       }
       return topics.retryRequest(groupId, requestId)
     },

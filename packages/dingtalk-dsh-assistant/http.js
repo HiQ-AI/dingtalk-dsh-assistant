@@ -1,6 +1,7 @@
 import { checkForUpdates } from './version-check.js'
 import { z } from 'zod'
 import { taskContextImpactFields } from './decision.js'
+import { isPendingDecision } from './topic-model.js'
 
 const WEB_ORIGINS = new Set(['http://127.0.0.1:3080', 'http://localhost:3080'])
 
@@ -40,7 +41,7 @@ function pageNumber(url, name, fallback, maximum = Number.MAX_SAFE_INTEGER) {
 }
 
 function topicSummary(topic) {
-  const unfinished = topic.decisions?.findLast((item) => item.status !== 'completed')
+  const unfinished = topic.decisions?.findLast(isPendingDecision)
   return {
     topicId: topic.topicId, groupId: topic.groupId, title: topic.title,
     revision: topic.revision, processedRevision: topic.processedRevision, status: topic.status,

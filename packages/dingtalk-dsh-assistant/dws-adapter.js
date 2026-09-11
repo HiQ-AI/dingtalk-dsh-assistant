@@ -257,7 +257,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
   }
 }
 
-export async function dispatchOutbox({ adapter, groupId, outbound }) {
+export async function dispatchOutbox({ adapter, groupId, outbound, beforeSend }) {
   let phase = 'preflight'
   try {
     const before = await adapter.readGroup(groupId)
@@ -268,6 +268,8 @@ export async function dispatchOutbox({ adapter, groupId, outbound }) {
     const historical = typeof adapter.findOutboundMessage === 'function' ? await adapter.findOutboundMessage(groupId, outbound) : undefined
     if (historical !== undefined) return { status: 'sent', messageId: assertStableId(historical.messageId, 'outbox_message_id'), deduplicated: true }
 
+    // 在完整预检后、实际外发前持久领取；替换提交可能已使旧快照失效。
+    if (beforeSend && !(await beforeSend())) return { status: 'superseded' }
     phase = 'send'
     const sent = outbound.replyToMessageId && outbound.replyToSenderOpenDingTalkId
       ? await adapter.sendGroupReply({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId, replyToMessageId: outbound.replyToMessageId, replyToSenderOpenDingTalkId: outbound.replyToSenderOpenDingTalkId, atOpenDingTalkIds: outbound.atOpenDingTalkIds ?? [] })
