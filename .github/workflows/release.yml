@@ -23,7 +23,6 @@ jobs:
     runs-on: windows-latest
     environment: NPM_PUBLISH
     env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN || secrets.NPM_TOKEN }}
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v7
@@ -36,12 +35,16 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24.19.0
-          cache: pnpm
           registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
+      - name: 使用支持 Trusted Publishing 的 npm
+        shell: pwsh
+        run: |
+          npm install --global npm@12.0.2
+          npm --version
       - name: 校验 Tag、main 与三个包版本
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:NODE_AUTH_TOKEN)) { throw 'npm_publish_token_required' }
           git fetch origin main
           git merge-base --is-ancestor HEAD origin/main
           if ($LASTEXITCODE -ne 0) { throw 'release_tag_must_point_to_main_history' }
@@ -83,9 +86,9 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:RELEASE_TAG -replace '^v', ''
-          npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-observer-$version.tgz" --access public --provenance
-          npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-assistant-$version.tgz" --access public --provenance
-          npm publish "docs/tmp/packages/dingtalk-dsh-assistant-$version.tgz" --access public --provenance
+          npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-observer-$version.tgz" --access public
+          npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-assistant-$version.tgz" --access public
+          npm publish "docs/tmp/packages/dingtalk-dsh-assistant-$version.tgz" --access public
       - name: 回读 npm 后创建 GitHub Release
         shell: pwsh
         env:
