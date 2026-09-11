@@ -9,8 +9,9 @@ Task 只有两类合法等待：向原群任务提出人补充目标信息，或
 ## 设计
 
 - 以持久 Task 状态作为业务事实，只巡检 `running` Task。
-- 以 DSH Agent Registry 判断 Session 是否仍存活；`agent.status === idle` 是正常检查点，不等于 Session 停止。
+- 以 DSH Agent Registry 判断 Session 是否仍存活；`agent.status === idle` 只表示当前没有执行 step，不能单独证明 Session 已停止，也不能在 Task 仍为 `running` 时当作健康运行证据。
 - Session 已离开 Registry 时，通过 `ctx.agents.resume()` 恢复原 `childSessionId`，不新建 Task、不更换逻辑叶子。
+- Session 仍在 Registry、Goal 仍为 `active + armed`，但 Agent 已进入 `idle` 时，Runtime 通过叶子原生 `steer` 投递带稳定身份的续执行请求；Resident 不直接调用通用子代理消息接口。如果底层明确返回 Agent/Session `unavailable`，则沿用异常叶子的受控重建路径，更换物理 Session 并保持同一 Task、当前目标、Topic 固定版本和执行轮次。
 - Goal 为 `paused`、`blocked` 或 `active + disarmed` 时，通过 `ctx.goals.resume()` 恢复；Goal 缺失时在原 Session 创建同一 Task 目标。
 - Goal 异常发生时若 Agent 仍为 `running`，等待其进入 DSH 原生 idle 检查点后再恢复，避免在 blocked closing step 中途改 revision 或打断当前 turn。
 - Goal 的 `roundsStarted >= maxGoalRounds` 且已进入 `blocked`、`paused` 或 `active + disarmed` 时，执行预算已经确定耗尽，不再依赖可能残留的 Agent `running` 状态，也不自动重建新 Goal；Runtime 立即把 Task 转为 `waiting/human-intervention`，附带 Goal 轮数、阶段、Session 和 Agent 状态，避免看板假运行并释放并发名额。
@@ -62,3 +63,4 @@ Task 只有两类合法等待：向原群任务提出人补充目标信息，或
 6. Goal 轮数耗尽产生的阻塞经真人处理并恢复后，Goal 必须增加一组轮数预算并进入 `active + armed`。
 7. information 只能经原群提出人答复恢复；human-intervention 只能经真人引用对应私聊阻塞消息恢复。
 8. 本人私聊发送后取得真实会话和消息 ID；只有引用该消息的新回复能恢复对应 Task，重复轮询不重复投递。
+9. `running + active/armed + idle` 的叶子由 Runtime 投递幂等续执行请求；底层返回 `unavailable` 时重建物理叶子并继续同一 Task，不能只保留看板 running 状态或要求 Resident 自行激活。

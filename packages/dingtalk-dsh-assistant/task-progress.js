@@ -63,5 +63,6 @@ export function taskProgressSnapshot(task, { snapshotAt = new Date().toISOString
   projection.hasMore = Object.values(projection.omitted).some((count) => count > 0)
   const { snapshotAt: _snapshotAt, ...visibleFacts } = projection
   projection.revision = fingerprint(visibleFacts)
-  return projection
+  // DSH 工具输出要求是可无损传输的 JSON；可选事实不能以 undefined 泄漏到结果对象。
+  return JSON.parse(JSON.stringify(projection))
 }

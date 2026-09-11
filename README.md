@@ -259,6 +259,8 @@ Topic 查询的 `processing` 提供最新未完成意图的 decisionId、status�
 
 同一消息版本产生过已接受的 Task 动作或确认后，其执行归属保留在持久决策中；将消息从 Topic A 改归 Topic B 不会重新授予执行权。新的授权消息或新的事实版本需要重新判断，历史动作不会因归类修订而自动撤销。
 
+已接受的历史决策若误用唯一阶段标题填写 `affectedStageIds`，执行时会归一化为对应稳定 stageId；未知标题仍按非法修订拒绝，避免错误扩大失效范围。
+
 ### 阻塞与人工介入
 
 - 缺少任务信息：叶子进入 information waiting，由主会话结合 Task 所引用 Topic 固定版本的消息时间线，向真正能够补充该信息的一位或多位参与人询问。
@@ -277,7 +279,7 @@ Topic 查询的 `processing` 提供最新未完成意图的 decisionId、status�
 
 叶子提交 `completed` 后，Runtime 会以 coordinator 内部上下文注入的方式，让常驻模型对照当前目标、runSequence、inputVersion 和 Topic 输入版本审查本轮结果和证据，并通过一次 `group_task_review_submit` 同时返回审阅回执与群通知草稿。审阅与回退通知最多内联 20 条、12,000 字符的相关 Topic 消息，整个请求限制为 40,000 字符。超长目标、验收、结果和索引保留 section 指针，通过 group_task_review_context_get 按 nextOffset 续读固定快照；长消息可通过同一工具或固定 Topic 原文分页读取。不能把截断片段当作完整证据。Runtime 只有在审阅通过且 Task 按当前版本原子完成后才将草稿写入发信箱；若期间出现新消息、Topic 或历史回复候选变化，则放弃旧草稿并重新协调。若新增或修订范围未完成、缺少验证，Task 保持 `running`，缺口反馈给原叶子继续执行，不生成完成通知。
 
-除群成员明确撤销整个任务并提交 `task-cancel` 外，`running` 和 `waiting`（包括阻塞中）任务收到新增信息时只追加 `task-context`，继续同一执行轮次；只有 `completed` 任务（包括已归档展示）才允许 reopen 并初始化下一轮。完成轮次的 Session 空闲回收同时绑定 handle、Task 状态和 runSequence，不会释放已经重开的新轮次。普通阶段 checkpoint 由 Host 校验版本、顺序和证据后直接确认；计划、冲突、范围或风险变化等需要语义判断的 checkpoint 才交给 Resident。相同未审阅 checkpoint 以持久 checkpointId 复用同一审阅；Supervisor 只恢复该请求，不重复追加。scope-conflict、evidence-gap、risk-changed 在无计划、已拒绝或旧流程失效时仍可报告，不能携带完成项或修改剩余进度；新异常可抢占未确认审阅，旧待审项归档，迟到审阅不得回写。完成审阅发起时即记录 completion-review-requested，拒绝或失败也保留时间与关联尝试标识，Task 完成、通知入队及真实送达分别记录。
+除群成员明确撤销整个任务并提交 `task-cancel` 外，`running` 和 `waiting`（包括阻塞中）任务收到新增信息时只追加 `task-context`，继续同一执行轮次；只有 `completed` 任务（包括已归档展示）才允许 reopen 并初始化下一轮。完成轮次的 Session 空闲回收同时绑定 handle、Task 状态和 runSequence，不会释放已经重开的新轮次。Supervisor 发现 `running` Task 的叶子已 idle 时由 Runtime 幂等投递续执行请求；底层明确返回 Agent/Session unavailable 时，受控重建物理叶子并保留同一 Task、目标、Topic 固定版本和执行轮次，不让 Resident 绕用通用子代理消息接口。普通阶段 checkpoint 由 Host 校验版本、顺序和证据后直接确认；计划、冲突、范围或风险变化等需要语义判断的 checkpoint 才交给 Resident。相同未审阅 checkpoint 以持久 checkpointId 复用同一审阅；Supervisor 只恢复该请求，不重复追加。scope-conflict、evidence-gap、risk-changed 在无计划、已拒绝或旧流程失效时仍可报告，不能携带完成项或修改剩余进度；新异常可抢占未确认审阅，旧待审项归档，迟到审阅不得回写。完成审阅发起时即记录 completion-review-requested，拒绝或失败也保留时间与关联尝试标识，Task 完成、通知入队及真实送达分别记录。
 
 ### 只读状态问答与模型重试
 

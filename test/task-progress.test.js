@@ -19,6 +19,12 @@ test('快照只确认当前版本事实，批准保留原始引用且不授权�
   assert.equal(snapshot.approvals[0].requestedAction, '执行工单891')
   assert.deepEqual(original, task())
   assert.equal(taskProgressSnapshot(original).revision, snapshot.revision)
+  const assertJsonValue = (value) => {
+    assert.notEqual(value, undefined)
+    if (Array.isArray(value)) value.forEach(assertJsonValue)
+    else if (value && typeof value === 'object') Object.values(value).forEach(assertJsonValue)
+  }
+  assertJsonValue(snapshot)
 })
 
 test('等待报告立即可见，settled后移出pending，不把报告当核验', () => {

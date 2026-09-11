@@ -336,6 +336,12 @@ test('任务关联摘要不复制原文，按需读取返回 Topic refs 与执�
   assert.equal(detail.tasks[0].objective, task.objective)
   assert.deepEqual(detail.tasks[0].topicRefs, task.topicRefs)
   assert.equal('messageHistory' in detail.tasks[0], false)
+  const assertJsonValue = (value) => {
+    assert.notEqual(value, undefined)
+    if (Array.isArray(value)) value.forEach(assertJsonValue)
+    else if (value && typeof value === 'object') Object.values(value).forEach(assertJsonValue)
+  }
+  assertJsonValue(detail)
   await assert.rejects(h.call('group_task_context_get', { taskIds: [task.taskId, task.taskId] }), /group_task_context_request_duplicate/)
   await assert.rejects(h.call('group_task_context_get', { taskIds: ['missing'] }), /group_task_context_not_found/)
 })
@@ -1179,6 +1185,37 @@ test('叶子异常暂停最多重建两次，继续失败升级为人工阻塞',
   }
   assert.equal(h.store.getTask(task.taskId).state, 'waiting')
   assert.equal(h.store.getTask(task.taskId).humanBlocker.category, 'unexpected')
+})
+
+test('running 叶子 idle 时由 Runtime 继续，底层 unavailable 时重建同一 Task', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const original = h.handles.get(task.childSessionId)
+  original.agent.status = 'idle'
+  const sentBefore = original.sent.length
+  let inspected = await h.runtime.inspectRunningTasks()
+  assert.equal(inspected[0].continuationRequested, true)
+  assert.equal(h.store.getTask(task.taskId).childSessionId, task.childSessionId)
+  assert.match(original.sent[sentBefore].content[0].text, /继续原任务/)
+
+  original.agent.steer = () => { throw new Error(`subagent "${task.childSessionId}" is unavailable`) }
+  original.agent.session.snapshotEvents = () => original.agent.session.ownEvents().filter((event) => event.data?.id !== original.sent[sentBefore].id)
+  inspected = await h.runtime.inspectRunningTasks()
+  const current = h.store.getTask(task.taskId)
+  assert.equal(inspected[0].sessionRecovered, true)
+  assert.equal(current.state, 'running')
+  assert.notEqual(current.childSessionId, task.childSessionId)
+  assert.ok(h.handles.get(current.childSessionId).sent.some((message) => message.content[0].text.includes('[TASK_TOPIC_CONTEXT]')))
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const active = h.store.getTask(task.taskId)
+    const handle = h.handles.get(active.childSessionId)
+    handle.agent.status = 'idle'
+    handle.agent.steer = () => { throw new Error(`subagent "${active.childSessionId}" is unavailable`) }
+    inspected = await h.runtime.inspectRunningTasks()
+  }
+  assert.equal(inspected[0].waiting, true)
+  assert.equal(h.store.getTask(task.taskId).state, 'waiting')
+  assert.match(h.store.getTask(task.taskId).waitingReason, /连续3次不可用/)
 })
 
 test('Resident 恢复超时由原生 AbortSignal 隔离，不阻止下一群恢复', { timeout: 2_000 }, async (t) => {
