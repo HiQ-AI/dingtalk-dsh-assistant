@@ -32,5 +32,5 @@ blocker-supersession,4,PASS,round-4.md
 coordination-ledger-closure,4,PASS,round-4.md
 completion-outbox-idempotency,4,PASS,round-4.md
 full-regression,4,PASS,round-4.md
-local-installation,4,FAIL,round-4.md
-live-task-closure,4,FAIL,round-4.md
+local-installation,4,PASS,round-4.md
+live-task-closure,4,PASS,round-4.md

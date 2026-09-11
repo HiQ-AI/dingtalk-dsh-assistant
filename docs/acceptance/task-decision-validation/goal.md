@@ -1,8 +1,8 @@
 # Task 修订决策阻塞根因修复
 
-> 状态：ACTIVE
+> 状态：COMPLETED
 > Goal ID：task-decision-validation-20260911
-> 最近维护：2026-09-11T16:04:00+08:00
+> 最近维护：2026-09-11T17:12:00+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant/docs/acceptance/task-decision-validation/goal.md
 
 ## 总目标
@@ -31,15 +31,17 @@
 | SG4 | 回复替换状态机 | 未发送与发送未知不混淆，替换与发送串行，纠正送达后独立撤回 | 完成 | ../../spec/outbox-replacement-lifecycle.md |
 | SG5 | 替换回归与现场 | 并发/崩溃/链式替换通过，原纠正实际送达，错误重试停止 | 完成 | round-2.md |
 | SG6 | 部署流程纠偏 | 仅适用的 UAT/发布流程明确源码包上传的执行顺序、停止条件和证据；不影响未选择部署流程的叶子任务 | 完成 | round-3.md |
-| SG7 | 完成报告原生恢复 | 协调审阅耗尽后，即使 Task 已被后续人工阻塞报告置为 waiting，也只重放原完成报告并完成状态、阻塞记录与结果通知收口；不恢复叶子业务执行 | 进行中 | round-4.md |
+| SG7 | 完成报告原生恢复 | 协调审阅耗尽后，即使 Task 已被后续人工阻塞报告置为 waiting，也只重放原完成报告并完成状态、阻塞记录与结果通知收口；不恢复叶子业务执行 | 完成 | round-4.md |
 
 ## 当前检查点
 
-- 当前子目标：SG7
-- 唯一下一步：修复并验证完成报告恢复状态机，部署本地后用原报告收口 `task-a2695a23ab749ea2dd38ebb95b4d1f2a`。
-- 未闭环项：原协调恢复请求已重置，但原完成报告因 Task 处于 waiting 被 `task_not_active` 拒绝；不得重跑叶子业务代码、构建或部署。PR #93 仍 OPEN。
+- 当前子目标：全部完成
+- 唯一下一步：无。PR #93 仍 OPEN，等待审阅。
+- 未闭环项：无。
 
 ## 进展
+
+- 2026-09-11：SG7 完成。固定包已安装，416/416 回归通过；原 completion coordination 只复用已持久报告完成 Task，同报告协调账全部收口，blocker 已撤回，最终消息经 DWS 独立回读确认送达；未重跑叶子业务。
 
 - 2026-09-11：SG7 启动。原生协调重试复用了 `report-feed6220d97d239a40a31e8292e9fdb6`，但 Task 已被后续人工阻塞报告置为 waiting，完成处理仍要求 running，报告随即以 `task_not_active` 拒绝；确认是 Runtime 恢复状态机缺口，而非业务任务失败。
 

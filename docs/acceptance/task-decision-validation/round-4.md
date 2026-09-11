@@ -15,7 +15,11 @@
 - 现场首次恢复已越过 `task_not_active`，但完成通知因已选择真实引用消息却漏填冗余 @ 列表，被 `group_reply_routing_required` 连续拒绝。修复为引用目标确定后默认只 @ 该发送人；群外 ID 仍 fail closed，并加入恢复集成断言。
 - 同一 submission 在多次人工恢复中可能形成多个耗尽的 completion 请求；成功收口时按该 submission 的持久失败事件关闭全部关联协调账，避免旧请求永远残留 pending/exhausted。
 
-## 待完成
+## 现场结果
 
-- 固定源码包安装及安装目录哈希回读。
-- 对 `task-a2695a23ab749ea2dd38ebb95b4d1f2a` 再次调用原协调恢复入口，并回读 Task、报告、协调账、阻塞记录、Outbox 与钉钉投递。
+- 固定包 `zzusp-dingtalk-dsh-assistant-0.5.14.tgz` SHA-256 为 `1FE87CD9962AFCA1A0DE094F82405610FE2D2F513FA6951C9BCE1C4963E5E100`；Web profile 安装版本 `0.5.14`，除 npm 安装改写的 `package.json` 外 25/25 包内源码哈希一致。
+- 新 Runtime PID `929832` 同时监听 3080/18998；`/health` 为 `ok`、`recoveryIssueCount=0`，DWS 群监听与人工回复监听均 `ready`。
+- 原请求 `coord-completion-42a07f53be96c4156e2949ce39217137d88b092e8c7afa963a4fe32d70d03e4b` 仅复用原 submission `report-feed6220d97d239a40a31e8292e9fdb6`；Task 收口为 `completed`，结果保持原已接收报告。
+- 指定 blocker `blocker-b12df074-2a05-400a-8b99-d619b731aee7` 转历史 `superseded`并已撤回；原 completion 请求及后续 `coord-completion-84dd0752...` 均为 `completed`。
+- 完成 Outbox `task-result:task-a2695a23ab749ea2dd38ebb95b4d1f2a:completed:1` 仅一条且为 `sent`，投递 ID `msg16+yJbFhqudcdI9pBwR12g==`；DWS 独立回读 `complete=true`、`foundCount=1`、`failedCount=0`，确认引用原消息并仅 @ 原发送人。
+- 恢复前后沿用原叶子 `session-task-a2695a23ab749ea2dd38ebb95b4d1f2a`，未重新执行业务代码、构建或部署。旁路生产任务仍为原 Task `task-8a7b15c0c4dc84efbdfa9d15142259fa`/原叶子，重启后继续产生新进展，未创建重复 Task。
