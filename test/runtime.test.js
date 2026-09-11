@@ -914,7 +914,7 @@ test('完成审阅耗尽后出现人工阻塞，协调恢复只重放原报告�
   await until(() => h.store.getTask(task.taskId).executionEvents.filter(event => event.kind === 'completion-review-requested').length === reviewAttemptsBefore + 1)
   const recoveredRequest = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
   const candidates = await h.call('group_reply_review_get', { requestIds: [recoveredRequest.requestId] })
-  assert.equal((await h.call('group_task_review_submit', { requestId: recoveredRequest.requestId, review: { accepted: true, reason: '已接收报告足以收口', notification: { reply: '任务已完成，沿用原交付结果。', replyToMessageId: task.title, atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: candidates.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } } })).status, 'accepted')
+  assert.equal((await h.call('group_task_review_submit', { requestId: recoveredRequest.requestId, review: { accepted: true, reason: '已接收报告足以收口', notification: { reply: '任务已完成，沿用原交付结果。', replyToMessageId: task.title, replyReview: { kind: 'substantive', reviewedOutboundIds: candidates.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } } })).status, 'accepted')
   await until(() => h.store.getTask(task.taskId).state === 'completed')
   await until(() => h.store.getGroup('g').outbox.some(item => item.sourceMessageId.startsWith(`task-result:${task.taskId}:completed`)))
   const current = h.store.getTask(task.taskId)
@@ -925,6 +925,7 @@ test('完成审阅耗尽后出现人工阻塞，协调恢复只重放原报告�
   assert.equal(h.calls.filter(call => call.sessionId === task.childSessionId).length, leafCallsBefore, '恢复不得新建或恢复叶子执行')
   assert.equal(current.executionEvents.filter(event => event.kind === 'task-report-received' && event.submissionId === completedReceipt.submissionId).length, 1)
   assert.equal(h.store.getGroup('g').outbox.filter(item => item.sourceMessageId.startsWith(`task-result:${task.taskId}:completed`)).length, 1)
+  assert.deepEqual(h.store.getGroup('g').outbox.find(item => item.sourceMessageId.startsWith(`task-result:${task.taskId}:completed`)).atOpenDingTalkIds, ['od-a'])
 })
 
 test('旧运行任务恢复时从已批准计划补齐阶段索引，原检查点不改写且只补一次', async t => {

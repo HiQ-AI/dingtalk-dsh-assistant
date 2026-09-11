@@ -12,6 +12,7 @@
 - 恢复权限仅限同输入版本、同运行轮次且存在 `topic_request_retry_exhausted:<requestId>` 持久失败事件的 completed 报告；普通 rejected、旧版本及已完成 Task 仍拒绝。
 - 恢复审阅以当前 waiting 快照做 Topic、流程、检查点和候选一致性校验；通过后原协调账置 completed，当前人工阻塞转历史 superseded。
 - 断言恢复前后叶子 Handle 创建/恢复调用数不变，完成报告接收事件恰好一条，完成 Outbox 恰好一条。
+- 现场首次恢复已越过 `task_not_active`，但完成通知因已选择真实引用消息却漏填冗余 @ 列表，被 `group_reply_routing_required` 连续拒绝。修复为引用目标确定后默认只 @ 该发送人；群外 ID 仍 fail closed，并加入恢复集成断言。
 
 ## 待完成
 

@@ -616,3 +616,5 @@ Topic 版本使用 domain v7。升级已有 v6 profile 前，按[Topic 存储离
 | POST /config/groups/{groupId}/coordination/{requestId}/retry | 202 恢复原协调请求；不存在或群不匹配 404 |
 
 input-wait/review-wait 表示报告已持久保存而未批准业务推进，不应反复重提；Runtime 在输入与审阅事件后恢复。failed 才使用报告 retry，accepted 不重放；history-only 不推进新目标。202 仅代表恢复请求已接纳，之后用 GET 回读最终报告状态，不能把它当作业务完成。协调恢复保持原报告身份；若完成审阅耗尽后 Task 已被人工介入报告置为 waiting，协调 retry 只重放该已持久化完成报告，成功后将对应阻塞转为历史并收口原协调请求，不恢复叶子业务执行。外部动作结果不确定时先独立回查，不能通过这些接口重复生产动作。
+
+完成通知存在真实群参与人时必须引用通知上下文中的真实消息。选择 `replyToMessageId` 后，未显式填写 `atOpenDingTalkIds` 会默认只 @ 该被引用消息的发送人；需要通知其他参与人时必须显式列出，Runtime 仍拒绝群外 ID。

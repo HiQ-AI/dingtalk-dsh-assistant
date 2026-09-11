@@ -793,12 +793,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     const replyReview = validateReplyReview(draft.replyReview, request.candidates, { confirmationTaskIds: [task.taskId] })
     const participants = request.messages.filter((message) => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
     const target = participants.find((message) => message.messageId === draft.replyToMessageId)
-    if (participants.length && (!target || !draft.atOpenDingTalkIds?.length)) throw new Error('group_reply_routing_required')
+    const recipients = draft.atOpenDingTalkIds?.length ? draft.atOpenDingTalkIds : target ? [target.senderOpenDingTalkId] : []
+    if (participants.length && !target) throw new Error('group_reply_routing_required')
     if (draft.replyToMessageId && !target) throw new Error('group_reply_target_not_in_topic')
-    if (draft.atOpenDingTalkIds && (new Set(draft.atOpenDingTalkIds).size !== draft.atOpenDingTalkIds.length || draft.atOpenDingTalkIds.some((id) => !participants.some((message) => message.senderOpenDingTalkId === id)))) throw new Error('group_reply_recipient_not_in_topic')
+    if (new Set(recipients).size !== recipients.length || recipients.some((id) => !participants.some((message) => message.senderOpenDingTalkId === id))) throw new Error('group_reply_recipient_not_in_topic')
     return { groupId: task.groupId, outboundId: `reply-${request.requestId}`, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.value), text: draft.reply.trim(), taskIds: [task.taskId], topicRefs: task.topicRefs,
       replyKind: replyReview.kind, replacesOutboundIds: replyReview.replaceOutboundIds,
-      ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: draft.atOpenDingTalkIds } : {}) }
+      ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: recipients } : {}) }
   }
   async function commitCompletionNotification(prepared, task, result) {
     if (!prepared) return { status: 'notification-missing' }
@@ -850,7 +851,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const context = { topicRefs: inline('topicRefs', task.topicRefs), messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: messageContext.hasMoreMessages, messagesSection: 'messages', ...(kind === 'completion' ? { replyReviewCandidateCount: request.candidates.length } : {}) }
       const originalContext = `\n${kind === 'completion' ? '通知上下文' : '任务原始上下文'}：${JSON.stringify(context)}`
       const instruction = kind === 'completion'
-        ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。通过时同时准备群通知；存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界，并从通知上下文选择引用消息和真正需要获知的参与人。"
+        ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。通过时同时准备群通知；存在真实群参与人时必须从通知上下文选择 replyToMessageId，省略 atOpenDingTalkIds 时默认 @ 被引用消息的发送人；需要通知其他参与人时显式填写。存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界。"
         : `检查点审阅：{decision:'acknowledge'|'guidance'|'reject',reason:string,guidance?:string}。计划与原始消息或任务流程冲突时必须 reject；只有原始消息明确支持的 workflowAssessment.exceptions 才能覆盖流程。`
       const unreadPrompts = promptRefs.filter((ref) => !request.readPromptRefs.has(ref.id))
       const promptInstruction = diagnosticCheckpoint(request) ? '这是异常报告，即使未选流程、旧流程过期或未读完也必须保持协调通道可用，不批准阶段推进。' : `${promptRefs.length ? (unreadPrompts.length ? `按 requestId 用 group_task_prompt_get 批量读取尚不可见的流程 ${JSON.stringify(unreadPrompts)}；visiblePromptRefs 指明当前 surface 中已具备正文的流程，无需重读。` : `全部已选流程正文仍在当前 surface 中，直接复用 visiblePromptRefs，不再调用 group_task_prompt_get。`) : '当前未选择专用流程，需结合索引核查是否确无匹配。'}核查选择原因和可用流程索引；如需读取未选候选，也应合并到一次批量调用。若漏选适用流程应要求重新规划，允许多个流程组合，也允许有明确理由的无匹配。`
