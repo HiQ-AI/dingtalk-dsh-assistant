@@ -32,7 +32,7 @@ GitHub Environment `NPM_PUBLISH` 保留审批/保护规则，但应删除不再�
 4. `release.yml` 在 GitHub 托管的 Windows runner 上安装固定 npm 12.0.2，通过 `id-token: write` 获取 OIDC 身份，按 observer → assistant → 根包发布。Trusted Publishing 会自动生成 provenance，无需 `--provenance`。
 5. workflow 最多等待约两分钟回读三个精确 npm 版本；全部一致后才创建带三个 tgz 的 GitHub Release。
 
-Tag 推送未触发时，可以手工运行 Release workflow，并输入已存在、指向 `main` 历史的 Tag。不要为重试创建新版本或新 Tag；先修正 npm Trusted Publisher 配置，再对原 Tag 使用 `workflow_dispatch`。
+Tag 推送未触发或某个包发布失败时，可以手工运行 Release workflow，并输入已存在、指向 `main` 历史的 Tag。不要为重试创建新版本或新 Tag；先修正 npm Trusted Publisher 配置，再对原 Tag 使用 `workflow_dispatch`。重跑时，workflow 会对已存在的包比较 registry `dist.shasum` 与本次 tgz SHA-1：一致才跳过，不一致立即停止；缺失的包继续按依赖顺序发布。任何 `npm publish` 非零退出都会立即停止，不能被后续命令掩盖。
 
 ## 验证与故障定位
 

@@ -86,9 +86,23 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:RELEASE_TAG -replace '^v', ''
-          npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-observer-$version.tgz" --access public
-          npm publish "docs/tmp/packages/zzusp-dingtalk-dsh-assistant-$version.tgz" --access public
-          npm publish "docs/tmp/packages/dingtalk-dsh-assistant-$version.tgz" --access public
+          function Publish-NpmPackage {
+            param([string]$Tarball, [string]$Package)
+            $publishedShasum = npm view $Package dist.shasum --registry https://registry.npmjs.org/ 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              $localShasum = (Get-FileHash -LiteralPath $Tarball -Algorithm SHA1).Hash.ToLowerInvariant()
+              if (($publishedShasum | Out-String).Trim().ToLowerInvariant() -ne $localShasum) {
+                throw "published_package_shasum_mismatch_$Package"
+              }
+              Write-Host "npm_package_already_published_$Package"
+              return
+            }
+            npm publish $Tarball --access public
+            if ($LASTEXITCODE -ne 0) { throw "npm_publish_failed_$Package" }
+          }
+          Publish-NpmPackage "docs/tmp/packages/zzusp-dingtalk-dsh-observer-$version.tgz" "@zzusp/dingtalk-dsh-observer@$version"
+          Publish-NpmPackage "docs/tmp/packages/zzusp-dingtalk-dsh-assistant-$version.tgz" "@zzusp/dingtalk-dsh-assistant@$version"
+          Publish-NpmPackage "docs/tmp/packages/dingtalk-dsh-assistant-$version.tgz" "dingtalk-dsh-assistant@$version"
       - name: 回读 npm 后创建 GitHub Release
         shell: pwsh
         env:
