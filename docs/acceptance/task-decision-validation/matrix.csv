@@ -8,5 +8,5 @@ partial-execution-and-cancel,1,PASS,round-1.md
 storage-failure,1,PASS,round-1.md
 outbox-idempotency,1,PASS,round-1.md
 full-regression,1,PASS,round-1.md
-local-installation,1,PENDING,round-1.md
-live-task-recovery,1,PENDING,round-1.md
+local-installation,1,PASS,round-1.md
+live-task-recovery,1,PASS,round-1.md

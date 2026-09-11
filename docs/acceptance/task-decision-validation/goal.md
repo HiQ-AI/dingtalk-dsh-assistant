@@ -1,8 +1,8 @@
 # Task 修订决策阻塞根因修复
 
-> 状态：ACTIVE
+> 状态：COMPLETED
 > Goal ID：task-decision-validation-20260911
-> 最近维护：2026-09-11T11:00:00+08:00
+> 最近维护：2026-09-11T13:44:00+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant/docs/acceptance/task-decision-validation/goal.md
 
 ## 总目标
@@ -27,17 +27,18 @@
 | --- | --- | --- | --- | --- |
 | SG1 | 契约与状态修复 | 确定性输入错误提交前拒绝，持久错误可审计退回 | 完成 | docs/spec/task-decision-validation.md |
 | SG2 | 反向验证 | 重启/并发/部分执行/正常路径通过 | 完成 | matrix.csv |
-| SG3 | 交付和现场 | PR/包/服务/业务续跑分层回读 | 进行中 | round-1.md |
+| SG3 | 交付和现场 | PR/包/服务/业务续跑分层回读 | 完成 | round-1.md |
 
 ## 当前检查点
 
 - 当前子目标：SG3
-- 唯一下一步：提交固定源码、安装本地包，回读现场恢复。
-- 未闭环项：PR、部署及真实叶子续跑。
+- 唯一下一步：本轮目标完成；业务修复由原任务继续。
+- 未闭环项：无；PR 尚未合并，不属于本轮恢复完成的前提。
 
 ## 进展
 
 - 2026-09-11：全量 405/405 测试、客户端构建通过；独立审查最后一轮未发现明确阻断，现场部署待验证。
+- 2026-09-11：PR #93 OPEN，本地固定包安装及认证首页验证通过；原 Topic 6/6、Task v5 确认、计划经审阅 accepted；同一叶子实际执行 git fetch/worktree 命令成功，现场恢复完成。
 - 2026-09-11：已确认 runSequence 3、inputVersion 4，plan 报告 input-wait，Topic revision 6/processed 4；坏决策引用不存在 stageId。
 
 ## 重大决策
