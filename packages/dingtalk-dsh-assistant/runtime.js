@@ -710,7 +710,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     }
     throw new Error('task_completed_requires_review')
   }
-  async function submitTaskResult(taskId, value, { recoveryError } = {}) {
+  async function submitTaskResult(taskId, value, { recoveryError, submissionId } = {}) {
     const result = parseTaskResult(value)
     const completionRecovery = result.status === 'completed' && recoveryError?.startsWith('topic_request_retry_exhausted:')
     const recoveredRequestId = completionRecovery ? recoveryError.slice('topic_request_retry_exhausted:'.length) : undefined
@@ -734,7 +734,10 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (checkpoints.length < 2) throw new Error(`task_checkpoints_insufficient:${taskId}`)
       if (!checkpoints.at(-1)?.coordinatorDecision) throw new Error(`task_checkpoint_review_pending:${taskId}`)
       if ((checkpoints.at(-1)?.remainingItems?.length ?? 0) > 0) throw new Error(`task_checkpoints_remaining:${taskId}`)
-      return { task, handle, lastCheckpointId: checkpoints.at(-1).checkpointId, recoveredFromWaiting: completionRecovery && task.state === 'waiting' }
+      const recoveredRequestIds = completionRecovery ? [...new Set((task.executionEvents ?? [])
+        .filter(event => event.kind === 'task-report-settled' && event.submissionId === submissionId && event.status === 'failed' && event.error?.startsWith('topic_request_retry_exhausted:'))
+        .map(event => event.error.slice('topic_request_retry_exhausted:'.length)).concat(recoveredRequestId))] : []
+      return { task, handle, lastCheckpointId: checkpoints.at(-1).checkpointId, recoveredFromWaiting: completionRecovery && task.state === 'waiting', recoveredRequestIds }
     })
     const reviewAttemptId = randomUUID()
     const reviewEvent = (kind, extra = {}) => recordTaskCoordinationEvent(taskId, { kind, reviewAttemptId, inputVersion: result.inputVersion, runSequence: result.runSequence, at: new Date().toISOString(), ...extra })
@@ -783,7 +786,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       const authorization = getAuthorizationRequest(prepared.task.humanBlocker.requestId)
       for (const listener of authorizationDecisionListeners) await listener({ authorization, task: completed })
     }
-    if (recoveredRequestId) await store.updateCoordinationRequest(completed.groupId, recoveredRequestId, { status: 'completed', nextRetryAt: undefined, lastError: undefined })
+    for (const requestId of prepared.recoveredRequestIds) await store.updateCoordinationRequest(completed.groupId, requestId, { status: 'completed', nextRetryAt: undefined, lastError: undefined })
     void withoutInitiator(async () => {
       const committed = await runGroupResidentOperation(completed.groupId, () => topics.commitCompletionNotification(review.preparedNotification, completed, result))
       if (committed?.status) {
@@ -1827,7 +1830,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const report = task && taskReports(task).find(item => item.submissionId === submissionId)
       if (!report) throw new Error(`task_report_not_found:${submissionId}`)
       if (report.inputVersion !== task.inputVersion || report.runSequence !== task.runSequence || task.state === 'completed') throw new Error(`task_report_retry_stale:${submissionId}`)
-      const failedRequestId = report.error?.startsWith('topic_request_retry_exhausted:') ? report.error.slice('topic_request_retry_exhausted:'.length) : coordinationRequestId
+      const failedRequestId = coordinationRequestId ?? (report.error?.startsWith('topic_request_retry_exhausted:') ? report.error.slice('topic_request_retry_exhausted:'.length) : undefined)
       if (failedRequestId) await topics.resetReviewRequest(task.groupId, failedRequestId)
       return reports.retry(taskId, submissionId, { coordinationRequestId: failedRequestId })
     },

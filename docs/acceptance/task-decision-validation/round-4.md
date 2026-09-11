@@ -13,6 +13,7 @@
 - 恢复审阅以当前 waiting 快照做 Topic、流程、检查点和候选一致性校验；通过后原协调账置 completed，当前人工阻塞转历史 superseded。
 - 断言恢复前后叶子 Handle 创建/恢复调用数不变，完成报告接收事件恰好一条，完成 Outbox 恰好一条。
 - 现场首次恢复已越过 `task_not_active`，但完成通知因已选择真实引用消息却漏填冗余 @ 列表，被 `group_reply_routing_required` 连续拒绝。修复为引用目标确定后默认只 @ 该发送人；群外 ID 仍 fail closed，并加入恢复集成断言。
+- 同一 submission 在多次人工恢复中可能形成多个耗尽的 completion 请求；成功收口时按该 submission 的持久失败事件关闭全部关联协调账，避免旧请求永远残留 pending/exhausted。
 
 ## 待完成
 

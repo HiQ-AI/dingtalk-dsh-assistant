@@ -898,6 +898,9 @@ test('完成审阅耗尽后出现人工阻塞，协调恢复只重放原报告�
   await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: completedReceipt.submissionId })?.status === 'failed')
   const completionRequest = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
   assert.equal(h.store.getCoordinationRequest('g', completionRequest.requestId).status, 'exhausted')
+  const laterRequestId = 'coord-completion-later-exhaustion'
+  await h.store.updateTask(task.taskId, current => ({ ...current, executionEvents: [...current.executionEvents, { kind: 'task-report-settled', submissionId: completedReceipt.submissionId, inputVersion: task.inputVersion, runSequence: task.runSequence, status: 'failed', error: `topic_request_retry_exhausted:${laterRequestId}`, at: new Date().toISOString() }] }))
+  await h.store.updateCoordinationRequest('g', laterRequestId, { status: 'exhausted', attempt: 3, resumeEpoch: 0, lastError: `topic_request_retry_exhausted:${laterRequestId}` })
 
   const blockerReceipt = await rawLeafCall(h, task, 'submit_task_result', { ...inputVersion(task), submissionId: 'operator-blocker', status: 'waiting', waitingKind: 'human-intervention', summary: '等待 Runtime 恢复', evidence: ['完成报告已持久化'], artifacts: [], waitingReason: '协调请求耗尽', blockerCategory: 'unexpected', requestedAction: '重放已持久化完成报告', risk: '不得重复业务执行', attemptedActions: ['已确认完成报告存在'] })
   await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: blockerReceipt.submissionId })?.status === 'accepted')
@@ -922,6 +925,7 @@ test('完成审阅耗尽后出现人工阻塞，协调恢复只重放原报告�
   assert.equal(current.humanBlocker, undefined)
   assert.equal(current.humanBlockerHistory.find(item => item.requestId === blockerId).status, 'superseded')
   assert.equal(h.store.getCoordinationRequest('g', completionRequest.requestId).status, 'completed')
+  assert.equal(h.store.getCoordinationRequest('g', laterRequestId).status, 'completed')
   assert.equal(h.calls.filter(call => call.sessionId === task.childSessionId).length, leafCallsBefore, '恢复不得新建或恢复叶子执行')
   assert.equal(current.executionEvents.filter(event => event.kind === 'task-report-received' && event.submissionId === completedReceipt.submissionId).length, 1)
   assert.equal(h.store.getGroup('g').outbox.filter(item => item.sourceMessageId.startsWith(`task-result:${task.taskId}:completed`)).length, 1)
