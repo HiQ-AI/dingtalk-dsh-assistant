@@ -27,6 +27,103 @@ async function route(store, id, items) {
 }
 const decision = (id, topicId, revision, extra = {}) => ({ groupId: 'g', topicId, revision, decisionId: id, decision: { actions: [], reason: '无需回复' }, ...extra })
 
+test('明确发送阻塞重启保留，普通错误不清阻塞，真实晚回执清阻塞但保留替换终态', async () => {
+  const { store, snapshot } = await setup()
+  for (const id of ['blocked', 'replaced']) {
+    await store.appendOutbox({ groupId: 'g', outboundId: id, sourceMessageId: id, text: id })
+    await store.recordOutboundDeliveryAttempt({ groupId: 'g', outboundId: id, blocked: true, reason: 'send_failed', error: 'server rejected' })
+    await store.recordOutboundDeliveryAttempt({ groupId: 'g', outboundId: id, error: 'read failed' })
+    assert.ok(store.getGroup('g').outbox.find(item => item.outboundId === id).deliveryBlockedAt)
+  }
+  await store.appendOutbox({ groupId: 'g', outboundId: 'correction', sourceMessageId: 'correction', text: '纠正', replacesOutboundIds: ['replaced'] })
+  await store.close()
+  const reopened = await openResidentStore(facility(snapshot))
+  for (const id of ['blocked', 'replaced']) {
+    const before = reopened.getGroup('g').outbox.find(item => item.outboundId === id)
+    assert.ok(before.deliveryBlockedAt)
+    assert.equal(before.status, id === 'replaced' ? 'superseded' : 'pending')
+    await reopened.acknowledge({ groupId: 'g', outboundId: id, deliveredMessageId: `late-${id}` })
+    const after = reopened.getGroup('g').outbox.find(item => item.outboundId === id)
+    assert.equal(after.deliveryBlockedAt, undefined)
+    assert.equal(after.status, id === 'replaced' ? 'superseded' : 'sent')
+    assert.equal(after.deliveredMessageId, `late-${id}`)
+  }
+  await reopened.close()
+})
+
+test('替换图在决策接纳前拒绝未知目标，重复协调不产生持久写入', async () => {
+  const snapshot = { tables: {}, global: null }
+  let writes = 0
+  const store = await openResidentStore(facility(snapshot, () => { writes += 1 }))
+  await store.subscribe({ groupId: 'g' }); await ingest(store, 'a')
+  const topicId = (await route(store, 'r', [['a', { newTopicKey: 'a', title: 'A' }]])).topicIdsByKey.a
+  const before = structuredClone(store.getGroup('g'))
+  await assert.rejects(store.acceptTopicDecision(decision('invalid-replacement', topicId, 1, { decision: { actions: [], replyReview: { replaceOutboundIds: ['missing'] } } })), /replacement_unknown/)
+  assert.deepEqual(store.getGroup('g'), before)
+  await store.appendOutbox({ groupId: 'g', outboundId: 'a', sourceMessageId: 'a', text: '旧' })
+  await store.appendOutbox({ groupId: 'g', outboundId: 'b', sourceMessageId: 'b', text: '新', replacesOutboundIds: ['a'] })
+  const beforeWrites = writes
+  await store.reconcileOutboxReplacements({ groupId: 'g' })
+  await store.reconcileOutboxReplacements({ groupId: 'g' })
+  assert.equal(writes, beforeWrites)
+  await store.close()
+})
+
+test('替换pending原子停止旧发送，发送领取与替换串行且晚回执保留终态', async () => {
+  const { store, snapshot } = await setup()
+  const append = (id, replacesOutboundIds = []) => store.appendOutbox({ groupId: 'g', outboundId: id, sourceMessageId: id, text: id, replacesOutboundIds })
+  await append('a')
+  assert.equal(await store.beginOutboundSend({ groupId: 'g', outboundId: 'a' }), true)
+  await append('b', ['a'])
+  await append('c', ['b'])
+  assert.equal(await store.beginOutboundSend({ groupId: 'g', outboundId: 'a' }), false)
+  assert.equal(await store.beginOutboundSend({ groupId: 'g', outboundId: 'b' }), false)
+  await store.acknowledge({ groupId: 'g', outboundId: 'a', deliveredMessageId: 'late-a' })
+  await store.recordOutboundDeliveryAttempt({ groupId: 'g', outboundId: 'a', error: 'late-error' })
+  const a = store.getGroup('g').outbox.find(item => item.outboundId === 'a')
+  assert.equal(a.status, 'superseded'); assert.equal(a.deliveredMessageId, 'late-a'); assert.ok(a.sendStartedAt)
+  assert.equal(a.supersededByOutboundId, 'b')
+  assert.equal(store.getGroup('g').outbox.find(item => item.outboundId === 'b').supersededByOutboundId, 'c')
+  const before = structuredClone(store.getGroup('g'))
+  await assert.rejects(append('unknown', ['missing']), /replacement_unknown/)
+  await assert.rejects(append('self', ['self']), /replacement_cycle/)
+  assert.deepEqual(store.getGroup('g'), before)
+  await store.updateOutboundRecall({ groupId: 'g', outboundId: 'a', status: 'requested' })
+  await store.updateOutboundRecall({ groupId: 'g', outboundId: 'a', status: 'failed', error: '失败', retryAt: '2026-09-12T00:00:00Z' })
+  await store.close()
+  const reopened = await openResidentStore(facility(snapshot))
+  const restored = reopened.getGroup('g').outbox.find(item => item.outboundId === 'a')
+  assert.equal(restored.status, 'superseded'); assert.equal(restored.recallAttemptCount, 1); assert.ok(restored.recallRetryAt)
+  await reopened.updateOutboundRecall({ groupId: 'g', outboundId: 'a', status: 'recalled' })
+  assert.equal(reopened.getGroup('g').outbox.find(item => item.outboundId === 'a').recallRetryAt, undefined)
+  await reopened.close()
+})
+
+test('历史替换图先完整校验，拒绝环与分叉且保留已有有效链', async () => {
+  for (const mode of ['chain', 'cycle', 'fork']) {
+    const { store, snapshot } = await setup()
+    for (const id of ['a', 'b', 'c']) await store.appendOutbox({ groupId: 'g', outboundId: id, sourceMessageId: id, text: id })
+    await store.close()
+    const [a, b, c] = snapshot.tables.groups.g.outbox
+    b.replacesOutboundIds = ['a']; c.replacesOutboundIds = mode === 'fork' ? ['a'] : ['b', 'a']
+    if (mode === 'cycle') a.replacesOutboundIds = ['c']
+    if (mode === 'chain') a.supersededByOutboundId = 'b'
+    const reopened = await openResidentStore(facility(snapshot))
+    const before = structuredClone(reopened.getGroup('g'))
+    if (mode === 'chain') {
+      await reopened.reconcileOutboxReplacements({ groupId: 'g' })
+      assert.deepEqual(reopened.getGroup('g').outbox.map(item => [item.status, item.supersededByOutboundId]), [['superseded', 'b'], ['superseded', 'c'], ['pending', undefined]])
+      const reconciled = structuredClone(reopened.getGroup('g'))
+      await reopened.reconcileOutboxReplacements({ groupId: 'g' })
+      assert.deepEqual(reopened.getGroup('g'), reconciled)
+    } else {
+      await assert.rejects(reopened.reconcileOutboxReplacements({ groupId: 'g' }), new RegExp(`replacement_${mode}`))
+      assert.deepEqual(reopened.getGroup('g'), before)
+    }
+    await reopened.close()
+  }
+})
+
 async function revisionFixture() {
   const fixture = await setup()
   await ingest(fixture.store, 'revision-source')
@@ -332,6 +429,7 @@ test('固定版本不暴露后来摘要，旧决策完成不关闭已收到新�
 
 test('不同Topic不能同时接受撤回同一Outbox的意图', async () => {
   const { store } = await setup(); await ingest(store, 'a'); await ingest(store, 'b')
+  await store.appendOutbox({ groupId: 'g', outboundId: 'outbound-prior', sourceMessageId: 'prior', text: '旧回复' })
   const routed = await route(store, 'r1', [['a', { newTopicKey: 'a', title: 'A' }], ['b', { newTopicKey: 'b', title: 'B' }]])
   const patch = { decision: { actions: [], replyReview: { replaceOutboundIds: ['outbound-prior'] } } }
   assert.equal((await store.acceptTopicDecision(decision('a', routed.topicIdsByKey.a, 1, patch))).status, 'accepted')
@@ -388,26 +486,30 @@ test('Web输入原子复核未知消息、Topic版本、Task版本状态与保�
 
 test('Task通知并发替换同一旧回复时只有首个Outbox接受，pending意图也阻止Topic决策', async () => {
   const { store } = await setup(); await ingest(store, 'a')
+  await store.appendOutbox({ groupId: 'g', outboundId: 'old-reply', sourceMessageId: 'old-reply', text: '旧回复' })
+  await store.acknowledge({ groupId: 'g', outboundId: 'old-reply', deliveredMessageId: 'old-message' })
   const a = (await route(store, 'r1', [['a', { newTopicKey: 'a', title: 'A' }]])).topicIdsByKey.a
   const first = store.appendOutbox({ groupId: 'g', sourceMessageId: 'task-a-result', text: '任务甲订正', replacesOutboundIds: ['old-reply'] })
   const second = store.appendOutbox({ groupId: 'g', sourceMessageId: 'task-b-result', text: '任务乙订正', replacesOutboundIds: ['old-reply'] })
-  assert.equal((await first).outbox.length, 1)
+  assert.equal((await first).outbox.length, 2)
   assert.equal((await second).status, 'reply-busy')
   const candidate = decision('topic-replacement', a, 1, { decision: { actions: [], replyReview: { replaceOutboundIds: ['old-reply'] } } })
   assert.equal((await store.acceptTopicDecision(candidate)).status, 'reply-busy')
-  assert.equal(store.getGroup('g').outbox.length, 1)
+  assert.equal(store.getGroup('g').outbox.length, 2)
   const duplicate = await store.appendOutbox({ groupId: 'g', sourceMessageId: 'task-a-result', text: '任务甲订正', replacesOutboundIds: ['old-reply'] })
-  assert.equal(duplicate.outbox.length, 1)
+  assert.equal(duplicate.outbox.length, 2)
 })
 
 test('已接受Topic意图阻止其他通知抢占回复，但自身Outbox允许落盘', async () => {
   const { store } = await setup(); await ingest(store, 'a')
+  await store.appendOutbox({ groupId: 'g', outboundId: 'old', sourceMessageId: 'old', text: '旧回复' })
+  await store.acknowledge({ groupId: 'g', outboundId: 'old', deliveredMessageId: 'old-message' })
   const a = (await route(store, 'r1', [['a', { newTopicKey: 'a', title: 'A' }]])).topicIdsByKey.a
   await store.acceptTopicDecision(decision('reserved', a, 1, { decision: { actions: [], replyReview: { replaceOutboundIds: ['old'] } } }))
   const other = await store.appendOutbox({ groupId: 'g', sourceMessageId: 'task-result', text: '结果', replacesOutboundIds: ['old'] })
   assert.equal(other.status, 'reply-busy')
   const own = await store.appendOutbox({ groupId: 'g', sourceMessageId: 'topic-decision:reserved', decisionId: 'reserved', text: '订正', replacesOutboundIds: ['old'] })
-  assert.equal(own.outbox.length, 1)
+  assert.equal(own.outbox.length, 2)
 })
 
 test('Topic已完成但Outbox未送达时退订拒绝，确认送达后才允许删除', async () => {

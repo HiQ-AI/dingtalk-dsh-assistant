@@ -32,6 +32,8 @@ pnpm --dir packages/dingtalk-dsh-observer pack --pack-destination ../../docs/tmp
 
 ## 验收与回退
 
+替换链修复需同步安装 Assistant 和 Observer 当前包（仅状态说明变化，不调整页面布局）。停机前后对实际 Outbox 使用 `reconcileReplacementGraph` 做纯函数预检，引用缺失、环或不可比较分叉不允许跳过。安装后核查旧意图 superseded、最新通知真实 deliveredMessageId、撤回失败独立状态及尝试次数不再无限增长；查询未命中不能视为从未发送。新增 superseded 枚举同样禁止旧二进制直接写新存储。不得手工删记录、置 sent 或批量重发来通过验收。
+
 阶段决策修复部署还需回读：失败意图是否转为 `rejected`、新决策是否完成、Topic `processedRevision` 是否追平、原消息是否收口、叶子报告是否从 `input-wait` 经版本归档或审阅得到终态，以及同一 Task 是否产生后续执行事件。不能仅凭 Session 文件增长或端口就绪判定恢复。新阶段身份不会跳过计划审阅；历史坏意图不手工改 stageId。新版本增加 decision 的 `rejected` 终态，旧版本 Schema 不支持该值，不得换回旧包对已更新存储继续写入。
 
 源码测试、安装包一致性、启动、认证访问、看板合成数据验证分别留证。真实 DWS 投递保持未验证，不改 pending 状态来使看板变绿。

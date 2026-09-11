@@ -437,28 +437,43 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       })
     }
   }
-  async function recallReplacedOutbounds({ groupId, outboundIds, replacementSourceMessageId }) {
-    if (outboundIds.length === 0) return
-    if (groupMessageRecaller === undefined || store.updateOutboundRecall === undefined) throw new Error('group_message_recaller_required')
+  async function recallReplacedOutbounds({ groupId, outbound }) {
     const group = store.getGroup(groupId)
-    if (group === undefined) throw new Error(`group_not_subscribed:${groupId}`)
-    const replacements = outboundIds.map((outboundId) => {
-      const outbound = group.outbox.find((item) => item.outboundId === outboundId)
-      if (outbound === undefined) throw new Error(`group_reply_replacement_unknown:${outboundId}`)
-      if (outbound.recallStatus === 'recalled' && outbound.recallReason !== `superseded-by:${replacementSourceMessageId}`) throw new Error(`group_reply_replacement_already_recalled:${outboundId}`)
-      if (outbound.status !== 'sent' || !outbound.deliveredMessageId) throw new Error(`group_reply_replacement_not_delivered:${outboundId}`)
-      return outbound
-    })
-    for (const outbound of replacements) {
-      if (outbound.recallStatus === 'recalled') continue
-      const reason = `superseded-by:${replacementSourceMessageId}`
-      await store.updateOutboundRecall({ groupId, outboundId: outbound.outboundId, status: 'requested', reason })
+    const replacement = group?.outbox.find(item => item.outboundId === outbound.outboundId)
+    // 撤回是送达后的独立动作，不能让旧消息阻塞纠正通知。
+    if (!replacement?.deliveredMessageId || replacement.status !== 'sent' || replacement.supersededByOutboundId) return
+    const targets = new Map(), visiting = new Set()
+    const visit = (id) => {
+      if (visiting.has(id)) throw new Error('outbox_replacement_cycle')
+      if (targets.has(id)) return
+      const target = group.outbox.find(item => item.outboundId === id)
+      if (!target) throw new Error(`group_reply_replacement_unknown:${id}`)
+      visiting.add(id)
+      for (const previous of target.replacesOutboundIds ?? []) visit(previous)
+      visiting.delete(id); targets.set(id, target)
+    }
+    for (const id of replacement.replacesOutboundIds ?? []) visit(id)
+    if (!targets.size) return
+    if (groupMessageRecaller === undefined || store.updateOutboundRecall === undefined) throw new Error('group_message_recaller_required')
+    for (const target of targets.values()) {
+      if (target.recallStatus === 'recalled') continue
+      const lateDelivery = target.recallError === 'replacement_delivery_unknown' && target.deliveredMessageId
+      if (target.recallStatus === 'failed' && target.recallAttemptCount && !lateDelivery && !target.recallRetryAt) continue
+      if (target.recallRetryAt && Date.parse(target.recallRetryAt) > Date.now()) continue
+      const reason = `superseded-by:${replacement.sourceMessageId}`
+      if ((target.recallAttemptCount ?? 0) >= 3 && !lateDelivery) {
+        if (target.recallStatus !== 'failed' || target.recallRetryAt) await store.updateOutboundRecall({ groupId, outboundId: target.outboundId, status: 'failed', reason, error: target.recallError ?? 'recall_attempts_exhausted' })
+        continue
+      }
+      await store.updateOutboundRecall({ groupId, outboundId: target.outboundId, status: 'requested', reason })
       try {
-        await groupMessageRecaller({ groupId, messageId: outbound.deliveredMessageId, outbound })
-        await store.updateOutboundRecall({ groupId, outboundId: outbound.outboundId, status: 'recalled', reason })
+        const result = await groupMessageRecaller({ groupId, messageId: target.deliveredMessageId, outbound: target })
+        if (result?.status === 'not-observed') {
+          await store.updateOutboundRecall({ groupId, outboundId: target.outboundId, status: 'failed', reason, error: 'replacement_delivery_unknown' })
+        } else await store.updateOutboundRecall({ groupId, outboundId: target.outboundId, status: 'recalled', reason })
       } catch (error) {
-        await store.updateOutboundRecall({ groupId, outboundId: outbound.outboundId, status: 'failed', reason, error: error instanceof Error ? error.message : String(error) })
-        throw error
+        const retryAt = !error.serverErrorCode && (target.recallAttemptCount ?? 0) + 1 < 3 ? new Date(Date.now() + 30_000).toISOString() : undefined
+        await store.updateOutboundRecall({ groupId, outboundId: target.outboundId, status: 'failed', reason, error: error instanceof Error ? error.message : String(error), retryAt })
       }
     }
   }
@@ -1632,7 +1647,12 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     },
     onHumanBlockerRequested(listener) { humanBlockerListeners.add(listener); return () => humanBlockerListeners.delete(listener) },
     onAuthorizationDecided(listener) { authorizationDecisionListeners.add(listener); return () => authorizationDecisionListeners.delete(listener) },
-    prepareOutbound: ({ groupId, outbound }) => recallReplacedOutbounds({ groupId, outboundIds: outbound.replacesOutboundIds ?? [], replacementSourceMessageId: outbound.sourceMessageId }),
+    prepareOutbound: async ({ groupId, outbound }) => {
+      const group = await store.reconcileOutboxReplacements({ groupId })
+      return group.outbox.find(item => item.outboundId === outbound.outboundId)
+    },
+    beginOutboundSend: (args) => store.beginOutboundSend(args),
+    completeOutboundReplacement: recallReplacedOutbounds,
     registerGroupMessageRecaller(recaller) {
       if (typeof recaller !== 'function') throw new Error('group_message_recaller_invalid')
       groupMessageRecaller = recaller

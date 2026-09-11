@@ -8,8 +8,39 @@ import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor }
 export { resolveTopicMessages } from './topic-model.js'
 
 const missingText = (value) => typeof value !== 'string' || value.trim() === '' || value.trim().toLowerCase() === 'null'
+// 先验证完整替换图，再派生唯一后继；发送事实与停止旧意图发送分别保存。
+export function reconcileReplacementGraph(outbox) {
+  const byId = new Map(outbox.map(item => [item.outboundId, item]))
+  if (byId.size !== outbox.length) throw new Error('outbox_identity_duplicate')
+  const visiting = new Set(), visited = new Set()
+  const visit = id => {
+    if (visiting.has(id)) throw new Error('outbox_replacement_cycle')
+    if (visited.has(id)) return
+    visiting.add(id)
+    for (const target of byId.get(id).replacesOutboundIds ?? []) {
+      if (!byId.has(target)) throw new Error(`group_reply_replacement_unknown:${target}`)
+      visit(target)
+    }
+    visiting.delete(id); visited.add(id)
+  }
+  for (const id of byId.keys()) visit(id)
+  const reaches = (from, target) => (byId.get(from).replacesOutboundIds ?? []).some(id => id === target || reaches(id, target))
+  const now = new Date().toISOString()
+  return outbox.map(item => {
+    const successors = outbox.filter(candidate => candidate.replacesOutboundIds?.includes(item.outboundId)).map(candidate => candidate.outboundId)
+    if (item.supersededByOutboundId) {
+      if (!byId.has(item.supersededByOutboundId) || !reaches(item.supersededByOutboundId, item.outboundId)) throw new Error('outbox_replacement_successor_invalid')
+      successors.push(item.supersededByOutboundId)
+    }
+    for (const left of successors) for (const right of successors) {
+      if (left !== right && !reaches(left, right) && !reaches(right, left)) throw new Error('outbox_replacement_fork')
+    }
+    const successor = item.supersededByOutboundId ?? successors.find(id => successors.every(other => id === other || reaches(other, id)))
+    return successor ? { ...item, status: item.status === 'pending' ? 'superseded' : item.status, supersededByOutboundId: successor, supersededAt: item.supersededAt ?? now } : item
+  })
+}
 const replacementBusy = (group, replacesOutboundIds, decisionId) => replacesOutboundIds.length > 0 && (
-  group.outbox.some((outbound) => outbound.status === 'pending' && (outbound.replacesOutboundIds ?? []).some((id) => replacesOutboundIds.includes(id)))
+  group.outbox.some((outbound) => outbound.status === 'pending' && !replacesOutboundIds.includes(outbound.outboundId) && (outbound.replacesOutboundIds ?? []).some((id) => replacesOutboundIds.includes(id)))
   || group.topics.some((topic) => topic.decisions.some((record) => isPendingDecision(record) && record.decisionId !== decisionId
     && (record.decision.replyReview?.replaceOutboundIds ?? []).some((id) => replacesOutboundIds.includes(id))))
 )
@@ -29,10 +60,12 @@ const inboundSchema = z.object({
 })
 const outboundSchema = z.object({
   topicRefs: z.array(topicRefSchema).optional(), decisionId: z.string().optional(), resultFingerprint: z.string().min(1).optional(),
-  outboundId: z.string().min(1), sourceMessageId: z.string().min(1), text: z.string(), status: z.enum(['pending', 'sent']),
+  outboundId: z.string().min(1), sourceMessageId: z.string().min(1), text: z.string(), status: z.enum(['pending', 'sent', 'superseded']),
+  supersededByOutboundId: z.string().min(1).optional(), supersededAt: z.string().min(1).optional(), sendStartedAt: z.string().min(1).optional(),
   readbackRequired: z.boolean().optional(),
   deliveryAttemptCount: z.number().int().nonnegative().optional(), deliveryAttemptedAt: z.string().min(1).optional(),
   deliveryPendingReason: z.string().min(1).optional(), deliveryError: z.string().min(1).optional(),
+  deliveryBlockedAt: z.string().min(1).optional(),
   deliveredMessageId: z.string().min(1).optional(), deliveredAt: z.string().min(1).optional(),
   replyToMessageId: z.string().min(1).optional(), replyToSenderOpenDingTalkId: z.string().min(1).optional(),
   atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
@@ -41,6 +74,7 @@ const outboundSchema = z.object({
   replacesOutboundIds: z.array(z.string().min(1)).optional(),
   recallStatus: z.enum(['requested', 'recalled', 'failed']).optional(), recallReason: z.string().min(1).optional(),
   recalledAt: z.string().min(1).optional(), recallError: z.string().min(1).optional(),
+  recallAttemptCount: z.number().int().nonnegative().optional(), recallRetryAt: z.string().min(1).optional(),
 })
 const legacyWaitingResultSchema = z.object({
   inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(),
@@ -529,6 +563,7 @@ export async function openResidentStore(storageDomain) {
         if (replacementBusy(latest, replacing, decisionId)) {
           result = { status: 'reply-busy' }; return latest
         }
+        if (replacing.length) reconcileReplacementGraph([...latest.outbox, { outboundId: stableId('outbound', decisionId), status: 'pending', replacesOutboundIds: replacing }])
         const targetTaskIds = (decision.actions ?? []).map((action) => action.taskId).filter(Boolean)
         if (new Set(targetTaskIds).size !== targetTaskIds.length) throw new Error('topic_task_action_duplicate')
         for (const action of decision.actions ?? []) {
@@ -747,7 +782,7 @@ export async function openResidentStore(storageDomain) {
         if (veto !== undefined) return latest
         if (replacementBusy(latest, replacesOutboundIds ?? [], decisionId)) { veto = { status: 'reply-busy' }; return latest }
         return { ...latest,
-        outbox: [...latest.outbox, {
+        outbox: reconcileReplacementGraph([...latest.outbox, {
           outboundId: outboundId ?? `outbound-${randomUUID()}`, ...(topicRefs ? { topicRefs } : {}), ...(decisionId ? { decisionId } : {}), ...(resultFingerprint ? { resultFingerprint } : {}), sourceMessageId, text, status: 'pending', readbackRequired: true,
           ...(replyToMessageId ? { replyToMessageId } : {}),
           ...(replyToSenderOpenDingTalkId ? { replyToSenderOpenDingTalkId } : {}),
@@ -756,9 +791,29 @@ export async function openResidentStore(storageDomain) {
           ...(Array.isArray(matterSourceMessageIds) && matterSourceMessageIds.length > 0 ? { matterSourceMessageIds: [...new Set(matterSourceMessageIds)] } : {}),
           ...(Array.isArray(taskIds) && taskIds.length > 0 ? { taskIds: [...new Set(taskIds)] } : {}),
           ...(Array.isArray(replacesOutboundIds) && replacesOutboundIds.length > 0 ? { replacesOutboundIds: [...new Set(replacesOutboundIds)] } : {}),
-        }],
+        }]),
       } })
       return veto ?? group
+    }),
+    reconcileOutboxReplacements: ({ groupId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      const outbox = reconcileReplacementGraph(entry[1].outbox)
+      if (outbox.every((item, index) => item.status === entry[1].outbox[index].status && item.supersededByOutboundId === entry[1].outbox[index].supersededByOutboundId && item.supersededAt === entry[1].outbox[index].supersededAt)) return entry[1]
+      return groups.update(entry[0], latest => ({ ...latest, outbox: reconcileReplacementGraph(latest.outbox) }))
+    }),
+    beginOutboundSend: ({ groupId, outboundId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let started = false
+      await groups.update(entry[0], latest => {
+        const outbound = latest.outbox.find(item => item.outboundId === outboundId)
+        if (!outbound) throw new Error(`outbound_not_found:${outboundId}`)
+        if (outbound.status !== 'pending' || outbound.supersededByOutboundId) return latest
+        started = true
+        return { ...latest, outbox: latest.outbox.map(item => item.outboundId === outboundId ? { ...item, sendStartedAt: item.sendStartedAt ?? new Date().toISOString() } : item) }
+      })
+      return started
     }),
     attachOutboxTasks: ({ groupId, sourceMessageId, taskIds }) => serialize(groupId, async () => {
       if (!Array.isArray(taskIds) || taskIds.length === 0 || taskIds.some((taskId) => typeof taskId !== 'string' || taskId.trim() === '')) throw new Error('outbox_task_ids_invalid')
@@ -782,9 +837,9 @@ export async function openResidentStore(storageDomain) {
       const [storageKey, current] = entry
       if (!current.outbox.some((item) => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
       const deliveredAt = new Date().toISOString()
-      return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: 'sent', deliveredAt, ...(deliveredMessageId ? { deliveredMessageId } : {}), deliveryPendingReason: undefined, deliveryError: undefined } : item) }))
+      return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: item.status === 'superseded' ? 'superseded' : 'sent', deliveredAt: item.deliveredAt ?? deliveredAt, ...(deliveredMessageId ? { deliveredMessageId: item.deliveredMessageId ?? deliveredMessageId } : {}), deliveryPendingReason: undefined, deliveryError: undefined, deliveryBlockedAt: undefined } : item) }))
     }),
-    recordOutboundDeliveryAttempt: ({ groupId, outboundId, reason, error }) => serialize(groupId, async () => {
+    recordOutboundDeliveryAttempt: ({ groupId, outboundId, reason, error, blocked }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const [storageKey, current] = entry
@@ -792,11 +847,12 @@ export async function openResidentStore(storageDomain) {
       const attemptedAt = new Date().toISOString()
       return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? {
         ...item, deliveryAttemptCount: (item.deliveryAttemptCount ?? 0) + 1, deliveryAttemptedAt: attemptedAt,
+        ...(blocked === true ? { deliveryBlockedAt: item.deliveryBlockedAt ?? attemptedAt } : {}),
         ...(reason ? { deliveryPendingReason: reason } : { deliveryPendingReason: undefined }),
         ...(error ? { deliveryError: error } : { deliveryError: undefined }),
       } : item) }))
     }),
-    updateOutboundRecall: async ({ groupId, outboundId, status, reason, error }) => {
+    updateOutboundRecall: ({ groupId, outboundId, status, reason, error, retryAt }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const [storageKey, current] = entry
@@ -804,10 +860,11 @@ export async function openResidentStore(storageDomain) {
       const now = new Date().toISOString()
       return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? {
         ...item, recallStatus: status, ...(reason ? { recallReason: reason } : {}),
-        ...(status === 'recalled' ? { recalledAt: now, recallError: undefined } : {}),
-        ...(status === 'failed' ? { recallError: error || 'unknown' } : {}),
+        ...(status === 'requested' ? { recallAttemptCount: (item.recallAttemptCount ?? 0) + 1 } : {}),
+        ...(status === 'recalled' ? { recalledAt: now, recallError: undefined, recallRetryAt: undefined } : {}),
+        ...(status === 'failed' ? { recallError: error || 'unknown', recallRetryAt: retryAt } : {}),
       } : item) }))
-    },
+    }),
     createTask: ({ groupId, taskId = `task-${randomUUID()}`, operationId, topicRefs, inputVersion = 1, title, objective, requesterName, requesterOpenDingTalkId, acceptanceCriteria = [], stageTasks = [] }) => serialize(groupId, async () => {
       const group = findGroupEntry(groupId)?.[1]
       if (!group) throw new Error(`group_not_subscribed:${groupId}`)

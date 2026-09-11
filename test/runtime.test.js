@@ -8,6 +8,7 @@ import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 import { buildTaskAssociationIndex, openResidentRuntime, residentSessionId } from '../packages/dingtalk-dsh-assistant/runtime.js'
 import { openResidentStore, taskSessionId } from '../packages/dingtalk-dsh-assistant/store.js'
 import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
+import { startDwsBridge } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
 
 const agentWorkspace = mkdtempSync(join(tmpdir(), 'dsh-agent-workspace-'))
 const replacementWorkspace = mkdtempSync(join(tmpdir(), 'dsh-replacement-workspace-'))
@@ -1339,7 +1340,7 @@ test('关闭等待已接受的可靠 Outbox 写入，期间新消息被拒绝', 
   assert.equal(Object.values(records)[0].outbox.length, 1)
 })
 
-test('替换确认先持久化意图，渠道准备时精确撤回已回读的旧消息', async (t) => {
+test('替换确认先送达新消息，随后精确撤回旧消息且重复恢复幂等', async (t) => {
   const h = await setup(t); await ingest(h, 'a'); const request = (await route(h)).pendingDecisions[0]
   await decide(h, request, { reply: '旧确认', replyReview: { kind: 'confirmation' } })
   const old = h.store.getGroup('g').outbox[0]
@@ -1351,20 +1352,150 @@ test('替换确认先持久化意图，渠道准备时精确撤回已回读的�
   h.runtime.registerGroupMessageRecaller(async (value) => { recalls.push(value.messageId) })
   await h.runtime.prepareOutbound({ groupId: 'g', outbound: next })
   await h.runtime.prepareOutbound({ groupId: 'g', outbound: next })
+  assert.deepEqual(recalls, [])
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound: next })
+  assert.deepEqual(recalls, [])
+  await h.store.acknowledge({ groupId: 'g', outboundId: next.outboundId, deliveredMessageId: 'actual-new-message' })
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound: next })
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound: next })
   assert.deepEqual(recalls, ['actual-old-message'])
   assert.equal(h.store.getGroup('g').outbox[0].recallStatus, 'recalled')
 })
 
-test('未回读的旧确认不允许渠道发送替换消息，持久意图保留可恢复', async (t) => {
+test('未回读的旧确认停止重发，不阻塞替换，未观察到仍保持送达未知', async (t) => {
   const h = await setup(t); await ingest(h, 'a'); const request = (await route(h)).pendingDecisions[0]
   await decide(h, request, { reply: '旧确认', replyReview: { kind: 'confirmation' } })
   const old = h.store.getGroup('g').outbox[0]
   await ingest(h, 'a2'); const revised = (await route(h, { a2: request.topicId })).pendingDecisions[0]
   const candidates = await h.call('group_reply_review_get', { requestIds: [revised.requestId] })
   await decide(h, revised, { reply: '新的确认', replyReview: { kind: 'confirmation', reviewedOutboundIds: candidates.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [old.outboundId], replaceOutboundIds: [old.outboundId] } })
-  h.runtime.registerGroupMessageRecaller(async () => { assert.fail('缺真实投递ID不得调用撤回') })
-  await assert.rejects(h.runtime.prepareOutbound({ groupId: 'g', outbound: h.store.getGroup('g').outbox[1] }), /readback|delivered|pending/)
+  let lookups = 0
+  h.runtime.registerGroupMessageRecaller(async ({ messageId }) => { assert.equal(messageId, undefined); lookups++; return { status: 'not-observed' } })
+  const next = h.store.getGroup('g').outbox[1]
+  assert.equal((await h.runtime.prepareOutbound({ groupId: 'g', outbound: next })).status, 'pending')
+  assert.equal(h.store.getGroup('g').outbox[0].status, 'superseded')
+  await h.store.acknowledge({ groupId: 'g', outboundId: next.outboundId, deliveredMessageId: 'actual-new-message' })
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound: next })
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound: next })
+  assert.equal(lookups, 1)
+  assert.equal(h.store.getGroup('g').outbox[0].recallError, 'replacement_delivery_unknown')
+  assert.equal(h.store.getGroup('g').outbox[0].deliveredMessageId, undefined)
   assert.equal(h.store.getGroup('g').outbox.length, 2)
+})
+
+test('链式替换先送达最终通知，部分撤回失败不阻塞其他目标且永久拒绝不重试', async (t) => {
+  const h = await setup(t)
+  await h.store.subscribe({ groupId: 'g' })
+  for (const id of ['a', 'b']) {
+    await h.store.appendOutbox({ groupId: 'g', outboundId: id, sourceMessageId: id, text: id })
+    await h.store.acknowledge({ groupId: 'g', outboundId: id, deliveredMessageId: `message-${id}` })
+  }
+  await h.store.appendOutbox({ groupId: 'g', outboundId: 'middle', sourceMessageId: 'middle', text: 'middle', replacesOutboundIds: ['a'] })
+  await h.store.appendOutbox({ groupId: 'g', outboundId: 'final', sourceMessageId: 'final', text: 'correction', replacesOutboundIds: ['middle', 'b'] })
+  const calls = []
+  h.runtime.registerGroupMessageRecaller(async ({ outbound }) => {
+    calls.push(outbound.outboundId)
+    if (outbound.outboundId === 'a') { const error = new Error('dws_recall_failed:1:1001'); error.serverErrorCode = '1001'; throw error }
+    if (outbound.outboundId === 'middle' && !outbound.deliveredMessageId) return { status: 'not-observed' }
+  })
+  const outbound = h.store.getGroup('g').outbox.at(-1)
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound })
+  assert.deepEqual(calls, [])
+  await h.store.acknowledge({ groupId: 'g', outboundId: 'final', deliveredMessageId: 'message-final' })
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound })
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound })
+  assert.deepEqual(calls, ['a', 'middle', 'b'])
+  assert.equal(h.store.getGroup('g').outbox.find(x => x.outboundId === 'final').status, 'sent')
+  assert.equal(h.store.getGroup('g').outbox.find(x => x.outboundId === 'a').recallAttemptCount, 1)
+  // 已替代消息的迟到回执只补事实，不重新发送；继续撤回而不重撤已成功目标。
+  await h.store.acknowledge({ groupId: 'g', outboundId: 'middle', deliveredMessageId: 'late-middle' })
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound })
+  assert.deepEqual(calls, ['a', 'middle', 'b', 'middle'])
+  assert.equal(h.store.getGroup('g').outbox.find(x => x.outboundId === 'middle').status, 'superseded')
+})
+
+test('撤回瞬态异常有限重试，持久次数达到上限后不再调用渠道', async (t) => {
+  const h = await setup(t); await h.store.subscribe({ groupId: 'g' })
+  await h.store.appendOutbox({ groupId: 'g', outboundId: 'old', sourceMessageId: 'old', text: 'old' })
+  await h.store.acknowledge({ groupId: 'g', outboundId: 'old', deliveredMessageId: 'old-msg' })
+  await h.store.appendOutbox({ groupId: 'g', outboundId: 'new', sourceMessageId: 'new', text: 'new', replacesOutboundIds: ['old'] })
+  await h.store.acknowledge({ groupId: 'g', outboundId: 'new', deliveredMessageId: 'new-msg' })
+  let calls = 0
+  h.runtime.registerGroupMessageRecaller(async () => { calls++; throw new Error('network_timeout') })
+  const outbound = h.store.getGroup('g').outbox.at(-1)
+  for (let i = 0; i < 3; i++) {
+    await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound })
+    const old = h.store.getGroup('g').outbox[0]
+    assert.equal(calls, i + 1)
+    if (i < 2) {
+      assert.ok(old.recallRetryAt)
+      await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound })
+      assert.equal(calls, i + 1)
+      await h.store.updateOutboundRecall({ groupId: 'g', outboundId: 'old', status: 'failed', error: old.recallError, retryAt: '2000-01-01T00:00:00.000Z' })
+    }
+  }
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound })
+  assert.equal(calls, 3)
+  assert.equal(h.store.getGroup('g').outbox[0].recallRetryAt, undefined)
+})
+
+test('撤回成功后持久写失败不能伪报成功，恢复永久拒绝后保留人工核验状态', async (t) => {
+  const h = await setup(t)
+  await h.store.appendOutbox({ groupId: 'g', outboundId: 'old', sourceMessageId: 'old', text: 'old' })
+  await h.store.acknowledge({ groupId: 'g', outboundId: 'old', deliveredMessageId: 'old-msg' })
+  await h.store.appendOutbox({ groupId: 'g', outboundId: 'new', sourceMessageId: 'new', text: 'new', replacesOutboundIds: ['old'] })
+  await h.store.acknowledge({ groupId: 'g', outboundId: 'new', deliveredMessageId: 'new-msg' })
+  const update = h.store.updateOutboundRecall
+  h.store.updateOutboundRecall = async args => { if (args.status === 'recalled') throw new Error('recall_disk_failure'); return update(args) }
+  let calls = 0
+  h.runtime.registerGroupMessageRecaller(async () => { if (calls++ > 0) { const error = new Error('already_absent_unverified'); error.serverErrorCode = '1001'; throw error } })
+  const outbound = h.store.getGroup('g').outbox.at(-1)
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound })
+  assert.equal(h.store.getGroup('g').outbox[0].recallStatus, 'failed')
+  assert.equal(h.store.getGroup('g').outbox[1].status, 'sent')
+  await update({ groupId: 'g', outboundId: 'old', status: 'failed', error: 'recall_disk_failure', retryAt: '2000-01-01T00:00:00.000Z' })
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound })
+  await h.runtime.completeOutboundReplacement({ groupId: 'g', outbound })
+  assert.equal(calls, 2)
+  assert.equal(h.store.getGroup('g').outbox[0].recallRetryAt, undefined)
+  assert.equal(h.store.getGroup('g').outbox[0].recalledAt, undefined)
+})
+
+test('真实Store与Bridge在监听和启动补偿并发、回执落盘崩溃及两次重启下不重发旧消息', async (t) => {
+  let h = await setup(t)
+  await h.store.appendOutbox({ groupId: 'g', outboundId: 'old', sourceMessageId: 'old', text: 'old confirmation' })
+  const messages = [], sends = [], recalls = []
+  let release, entered, failAck = true
+  const gate = new Promise(resolve => { release = resolve }), started = new Promise(resolve => { entered = resolve })
+  const adapter = {
+    startGroupSubscription: () => ({ done: Promise.resolve(), stop() {} }),
+    readGroup: async () => ({ complete: true, messages: [...messages] }),
+    findOutboundMessage: async (_group, outbound) => messages.find(message => message.text === outbound.text),
+    async sendGroup({ text, idempotencyKey }) { sends.push(idempotencyKey); messages.push({ text, messageId: `actual-${idempotencyKey}` }); if (idempotencyKey === 'old') { entered(); await gate } return {} },
+    async recallMessage(id) { recalls.push(id); const index = messages.findIndex(message => message.messageId === id); if (index >= 0) messages.splice(index, 1) },
+  }
+  const originalAck = h.runtime.acknowledge
+  h.runtime.acknowledge = async args => { if (args.outboundId === 'old' && failAck) { failAck = false; throw new Error('ack_disk_failure') } return originalAck(args) }
+  const start = () => startDwsBridge({ runtime: h.runtime, adapter, logger: { warn() {} }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 10 })
+  let stop = start()
+  await started
+  // 发送已经开始时提交替换。外部旧发送不能撤销，晚回执须保留，纠正不能并发越过旧发送。
+  await h.store.appendOutbox({ groupId: 'g', outboundId: 'new', sourceMessageId: 'new', text: 'new correction', replacesOutboundIds: ['old'] })
+  assert.deepEqual(sends, ['old'])
+  release()
+  await until(() => h.store.getGroup('g').outbox.find(x => x.outboundId === 'new').status === 'sent')
+  await until(() => h.store.getGroup('g').outbox.find(x => x.outboundId === 'old').recallStatus === 'recalled')
+  await stop(); await h.runtime.close()
+  for (let i = 0; i < 2; i++) {
+    h = await setup(t, { snapshot: h.snapshot })
+    stop = start(); await new Promise(resolve => setTimeout(resolve, 30)); await stop(); await h.runtime.close()
+  }
+  assert.deepEqual(sends, ['old', 'new'])
+  assert.deepEqual(recalls, ['actual-old'])
+  const old = Object.values(h.snapshot.tables.groups)[0].outbox.find(x => x.outboundId === 'old')
+  assert.equal(old.status, 'superseded')
+  assert.equal(old.deliveredMessageId, 'actual-old')
+  assert.ok(old.sendStartedAt)
 })
 
 test('等待通知在同版本 resume 清除 result 后失效，不发送旧问题', async (t) => {

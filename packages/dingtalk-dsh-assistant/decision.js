@@ -128,7 +128,7 @@ export function buildReplyReviewCandidates({ group, tasks = [], currentMessages 
   const contextualTaskIds = new Set(focusTaskIds)
   for (const messageId of currentReferences) for (const taskId of taskIdsByMessage.get(messageId) ?? []) contextualTaskIds.add(taskId)
   const currentText = currentMessages.map((message) => `${message.text ?? ''}\n${message.quotedMessage?.content ?? ''}`).join('\n')
-  const active = (group.outbox ?? []).filter((outbound) => ['pending', 'sent'].includes(outbound.status) && outbound.recallStatus !== 'recalled')
+  const active = (group.outbox ?? []).filter((outbound) => ['pending', 'sent'].includes(outbound.status) && !outbound.supersededByOutboundId && outbound.recallStatus !== 'recalled')
   const decorated = active.map((outbound, index) => {
     const sourceIds = uniqueValues([...(outbound.matterSourceMessageIds ?? []), outbound.sourceMessageId, outbound.replyToMessageId]).filter((messageId) => messages.has(messageId))
     const derivedTaskIds = new Set(outbound.taskIds ?? [])

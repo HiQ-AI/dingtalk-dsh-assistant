@@ -10,3 +10,13 @@ outbox-idempotency,1,PASS,round-1.md
 full-regression,1,PASS,round-1.md
 local-installation,1,PASS,round-1.md
 live-task-recovery,1,PASS,round-1.md
+replacement-atomic-graph,2,PASS,round-2.md
+send-replacement-race-restart,2,PASS,round-2.md
+late-delivery-unknown,2,PASS,round-2.md
+partial-recall-bounded-retry,2,PASS,round-2.md
+recall-storage-failure,2,PASS,round-2.md
+permanent-send-rejection,2,PASS,round-2.md
+outbox-ui-states,2,PASS,round-2.md
+full-regression,2,PASS,round-2.md
+local-installation,2,PENDING,round-2.md
+live-correction-delivery,2,PENDING,round-2.md
