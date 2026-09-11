@@ -761,7 +761,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if ('decision' in review && review.decision === 'reject' && request.value.kind !== 'plan-confirmed') throw new Error('task_review_reject_plan_only')
       if (reviewRequestIdentity(request.kind, diagnostic ? { ...task, taskPromptRefs: request.promptRefs } : task, request.value) !== requestId) { reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
       if (request.kind === 'completion' && review.accepted) {
-        const rejected = completionPreflight(request, task, request.value, 'running')
+        const rejected = completionPreflight(request, task, request.value, request.task.state === 'waiting' ? 'waiting' : 'running')
         if (rejected) return rejected
         const outbound = taskOutbound(request, task, review.notification)
         Object.defineProperty(review, 'preparedNotification', { value: { request, outbound }, enumerable: false })
@@ -834,7 +834,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         if (kind === 'completion' && restored.accepted) {
           // 原审阅与当前候选、Topic、流程身份相同，重新构造非持久的通知准备态。
           request.readReview = true
-          const rejected = completionPreflight(request, task, value, 'running')
+          const rejected = completionPreflight(request, task, value, request.task.state === 'waiting' ? 'waiting' : 'running')
           if (rejected) throw new Error(`task_review_context_changed:${rejected.status}`)
           Object.defineProperty(restored, 'preparedNotification', { value: { request, outbound: taskOutbound(request, task, restored.notification) }, enumerable: false })
         }

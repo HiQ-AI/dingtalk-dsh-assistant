@@ -887,6 +887,46 @@ test('报告审阅耗尽保持同身份停等，显式重试重置原请求后�
   assert.equal(h.resident().sent.filter(message => message.content[0].text.startsWith('[TASK_CHECKPOINT_REVIEW]')).length, 1)
 })
 
+test('完成审阅耗尽后出现人工阻塞，协调恢复只重放原报告并收口 waiting Task', async t => {
+  const h = await setup(t, { retryDelayMs: 1 }), task = await createTask(h, 'coord-recover')
+  await fullCheckpoints(h, task)
+  const residentId = h.resident().agent.session.id
+  h.resident().agent.session.deriveMessages = () => h.resident().agent.session.snapshotEvents().filter(event => event.type === 'user/message').map(event => event.data)
+  h.idle.set(residentId, Promise.resolve())
+  const completedValue = { ...inputVersion(task), submissionId: 'durable-completed-report', status: 'completed', summary: '业务交付已完成', evidence: ['已有代码、构建和部署证据'], artifacts: [] }
+  const completedReceipt = await rawLeafCall(h, task, 'submit_task_result', completedValue)
+  await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: completedReceipt.submissionId })?.status === 'failed')
+  const completionRequest = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
+  assert.equal(h.store.getCoordinationRequest('g', completionRequest.requestId).status, 'exhausted')
+
+  const blockerReceipt = await rawLeafCall(h, task, 'submit_task_result', { ...inputVersion(task), submissionId: 'operator-blocker', status: 'waiting', waitingKind: 'human-intervention', summary: '等待 Runtime 恢复', evidence: ['完成报告已持久化'], artifacts: [], waitingReason: '协调请求耗尽', blockerCategory: 'unexpected', requestedAction: '重放已持久化完成报告', risk: '不得重复业务执行', attemptedActions: ['已确认完成报告存在'] })
+  await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: blockerReceipt.submissionId })?.status === 'accepted')
+  const waiting = h.store.getTask(task.taskId)
+  assert.equal(waiting.state, 'waiting')
+  const blockerId = waiting.humanBlocker.requestId
+  const leafCallsBefore = h.calls.filter(call => call.sessionId === task.childSessionId).length
+  const reviewAttemptsBefore = waiting.executionEvents.filter(event => event.kind === 'completion-review-requested').length
+
+  h.idle.set(residentId, new Promise(() => {}))
+  const retried = await h.runtime.retryCoordinationRequest({ groupId: 'g', requestId: completionRequest.requestId })
+  assert.equal(retried.submissionId, completedReceipt.submissionId)
+  await until(() => h.store.getCoordinationRequest('g', completionRequest.requestId).resumeEpoch === 1)
+  await until(() => h.store.getTask(task.taskId).executionEvents.filter(event => event.kind === 'completion-review-requested').length === reviewAttemptsBefore + 1)
+  const recoveredRequest = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
+  const candidates = await h.call('group_reply_review_get', { requestIds: [recoveredRequest.requestId] })
+  assert.equal((await h.call('group_task_review_submit', { requestId: recoveredRequest.requestId, review: { accepted: true, reason: '已接收报告足以收口', notification: { reply: '任务已完成，沿用原交付结果。', replyToMessageId: task.title, atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: candidates.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } } })).status, 'accepted')
+  await until(() => h.store.getTask(task.taskId).state === 'completed')
+  await until(() => h.store.getGroup('g').outbox.some(item => item.sourceMessageId.startsWith(`task-result:${task.taskId}:completed`)))
+  const current = h.store.getTask(task.taskId)
+  assert.equal(h.runtime.getTaskReport({ taskId: task.taskId, submissionId: completedReceipt.submissionId }).status, 'accepted')
+  assert.equal(current.humanBlocker, undefined)
+  assert.equal(current.humanBlockerHistory.find(item => item.requestId === blockerId).status, 'superseded')
+  assert.equal(h.store.getCoordinationRequest('g', completionRequest.requestId).status, 'completed')
+  assert.equal(h.calls.filter(call => call.sessionId === task.childSessionId).length, leafCallsBefore, '恢复不得新建或恢复叶子执行')
+  assert.equal(current.executionEvents.filter(event => event.kind === 'task-report-received' && event.submissionId === completedReceipt.submissionId).length, 1)
+  assert.equal(h.store.getGroup('g').outbox.filter(item => item.sourceMessageId.startsWith(`task-result:${task.taskId}:completed`)).length, 1)
+})
+
 test('旧运行任务恢复时从已批准计划补齐阶段索引，原检查点不改写且只补一次', async t => {
   const h = await setup(t), task = await createTask(h)
   await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['准备', '执行'] })
