@@ -115,6 +115,7 @@ const isGoalRoundLimitExhausted = (goal) => Number.isInteger(goal?.roundsStarted
   && Number.isInteger(goal?.maxGoalRounds)
   && goal.roundsStarted >= goal.maxGoalRounds
   && (goal.phase === 'blocked' || goal.phase === 'paused' || (goal.phase === 'active' && goal.activation === 'disarmed'))
+const isAgentUnavailableError = (error) => /(?:agent|session).*unavailable|unavailable.*(?:agent|session)/iu.test(error instanceof Error ? error.message : String(error))
 const withHumanBlockerHistory = (task, blocker) => {
   const history = task.humanBlockerHistory ?? []
   const index = history.findIndex((item) => item.requestId === blocker.requestId)
@@ -1122,7 +1123,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     ensureLeafDescriptor(handle, task); applyPermission(handle, 'danger-full-access')
     await attachGoal(task, handle, false); return handle
   }
-  async function restartPausedLeaf(task, previous, attempt) {
+  async function restartInactiveLeaf(task, previous, attempt, cause = 'paused') {
     const replacementSessionId = `session-${task.taskId}-${randomUUID().slice(0, 8)}`
     const replacementTask = { ...task, childSessionId: replacementSessionId }
     const replacement = await createLeaf(replacementTask)
@@ -1138,7 +1139,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     leafTaskBySession.delete(task.childSessionId)
     await previous.dispose()
     await dispatchTaskInput(store.getTask(task.taskId))
-    await store.recordAlert({ taskId: task.taskId, fingerprint: `leaf-paused-restarted:${attempt}`, detail: `Replaced paused DSH leaf Session ${task.childSessionId} with ${replacementSessionId}`, status: 'resolved' })
+    await store.recordAlert({ taskId: task.taskId, fingerprint: `leaf-${cause}-restarted:${attempt}`, detail: `Replaced ${cause} DSH leaf Session ${task.childSessionId} with ${replacementSessionId}`, status: 'resolved' })
     return replacement
   }
   async function inspectRunningTasks() {
@@ -1200,7 +1201,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
             const attempt = (pausedRecoveryCounts.get(task.taskId) ?? 0) + 1
             pausedRecoveryCounts.set(task.taskId, attempt)
             if (attempt <= 2) {
-              handle = await restartPausedLeaf(task, handle, attempt)
+              handle = await restartInactiveLeaf(task, handle, attempt)
               task = store.getTask(task.taskId)
               sessionRecovered = true
               goalRecovered = true
@@ -1222,6 +1223,32 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
             await attachGoal(task, handle, false)
             goalRecovered = true
             await store.recordAlert({ taskId: task.taskId, fingerprint: `leaf-goal-recovered:${before?.phase ?? 'missing'}:${before?.activation ?? 'missing'}`, detail: `Recovered DSH Goal for Session ${task.childSessionId} from ${before?.phase ?? 'missing'}/${before?.activation ?? 'missing'}`, status: 'resolved' })
+          } else if (handle.agent.status === 'idle') {
+            const identity = `running-idle-recovery:${task.taskId}:${task.runSequence}:${task.inputVersion}`
+            try {
+              await followupTaskInternal(task, 'Task 仍为 running，但当前叶子执行已停下。继续原任务，先核对当前事实和未完成项，再按当前有效目标完成剩余工作并提交结构化结果。', identity)
+              await store.recordAlert({ taskId: task.taskId, fingerprint: 'leaf-idle-continuation-requested', detail: `Requested continuation from idle DSH leaf Session ${task.childSessionId}`, status: 'resolved' })
+              results.push({ taskId: task.taskId, ok: true, continuationRequested: true, sessionRecovered, goalRecovered, agentStatus: handle.agent.status })
+              continue
+            } catch (error) {
+              if (!isAgentUnavailableError(error)) throw error
+              const attempt = (pausedRecoveryCounts.get(task.taskId) ?? 0) + 1
+              pausedRecoveryCounts.set(task.taskId, attempt)
+              if (attempt > 2) {
+                const reason = `DSH leaf Session连续${attempt}次不可用，自动重建两次后仍未恢复。`
+                await submitTaskResultInternal(task.taskId, {
+                  inputVersion: task.inputVersion, runSequence: task.runSequence, status: 'waiting', waitingKind: 'human-intervention', summary: reason,
+                  evidence: [`Task ${task.taskId}`, `Session ${task.childSessionId}`, `Goal ${before.id} ${before.phase}/${before.activation ?? 'none'}`, error instanceof Error ? error.message : String(error)], artifacts: [], waitingReason: reason,
+                  blockerCategory: 'unexpected', risk: '任务载体持续不可用，任务无法继续执行且可能延误交付。', attemptedActions: ['Runtime续执行失败', '自动重建叶子会话两次并恢复同一Task Goal'], requestedAction: '请检查 DSH Agent Registry 与 Session 状态后引用本阻塞消息回复处置意见。',
+                })
+                results.push({ taskId: task.taskId, ok: false, waiting: true, error: reason })
+                continue
+              }
+              handle = await restartInactiveLeaf(task, handle, attempt, 'unavailable')
+              task = store.getTask(task.taskId)
+              sessionRecovered = true
+              goalRecovered = true
+            }
           }
           const live = ctx.agents.get?.(SessionId(task.childSessionId))
           const goal = ctx.goals.get(handle.agent)
