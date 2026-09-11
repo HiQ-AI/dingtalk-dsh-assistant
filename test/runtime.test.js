@@ -1185,6 +1185,8 @@ test('人工批准与排队启动竞争时不突破并发上限', async (t) => {
   await until(() => entered)
   await h.runtime.decideAuthorization({ requestId: h.store.getTask(waiting.taskId).humanBlocker.requestId, decision: 'approved', comment: '批准测试' })
   assert.equal(h.store.getTask(waiting.taskId).state, 'queued')
+  assert.match(h.store.getTask(waiting.taskId).resumeContext, /Requested action: 执行隔离测试/)
+  assert.match(h.store.getTask(waiting.taskId).resumeContext, /If the decision, requested action, and note conflict, do not act/)
   assert.equal(h.store.listTasks().filter((task) => task.state === 'running').length, 0)
   release()
   await until(() => h.store.getTask(queued.taskId).state === 'running')
@@ -1698,6 +1700,11 @@ test('通知补发同批跳过退订群、隔离损坏 Resident，正常群仍�
   assert.equal(h.handles.get(residentSessionId('gone')).sent.length, 0)
   assert.ok(h.runtime.listRecoveryIssues().some((issue) => issue.groupId === 'bad' && issue.kind === 'task-notification-reconcile'))
   assert.equal(h.runtime.listRecoveryIssues().some((issue) => issue.groupId === 'gone' && issue.kind === 'task-notification-reconcile'), false)
+  await assert.rejects(h.runtime.reconcileCompletedNotifications(), /resident_not_active:bad/)
+  const repeated = h.runtime.listRecoveryIssues().filter((issue) => issue.groupId === 'bad' && issue.kind === 'task-notification-reconcile')
+  assert.equal(repeated.length, 1, '相同恢复故障只保留一个稳定身份')
+  assert.equal(repeated[0].count, 2)
+  assert.ok(repeated[0].firstSeenAt <= repeated[0].lastSeenAt)
 })
 
 test('工作区屏障内到达的历史导入与通知等待新 Resident，导入先前事件进入新 seed', async (t) => {

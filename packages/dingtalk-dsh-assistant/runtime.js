@@ -116,6 +116,29 @@ const isGoalRoundLimitExhausted = (goal) => Number.isInteger(goal?.roundsStarted
   && goal.roundsStarted >= goal.maxGoalRounds
   && (goal.phase === 'blocked' || goal.phase === 'paused' || (goal.phase === 'active' && goal.activation === 'disarmed'))
 const isAgentUnavailableError = (error) => /(?:agent|session).*unavailable|unavailable.*(?:agent|session)/iu.test(error instanceof Error ? error.message : String(error))
+const createRecoveryIssueLedger = () => {
+  const entries = new Map()
+  return {
+    push: (issue) => {
+      const now = new Date().toISOString()
+      const key = JSON.stringify([issue.kind ?? '', issue.groupId ?? '', issue.taskId ?? '', issue.sourceMessageId ?? '', issue.error ?? ''])
+      const prior = entries.get(key)
+      entries.set(key, { ...issue, count: (prior?.count ?? 0) + 1, firstSeenAt: prior?.firstSeenAt ?? now, lastSeenAt: now })
+    },
+    resolve: (matches) => {
+      for (const [key, issue] of entries) if (matches(issue)) entries.delete(key)
+    },
+    map: (mapper) => [...entries.values()].map(mapper),
+  }
+}
+const authorizationResumeContext = ({ requestId, decision, requestedAction, reply, source }) => `[HUMAN_INTERVENTION_REPLY]
+Blocker request: ${requestId}
+Decision: ${decision}
+Requested action: ${requestedAction}
+User note: ${reply}
+Source: ${source}
+
+The decision applies only to the exact requested action above. The user note may narrow how it is performed, but never authorizes another action. If the decision, requested action, and note conflict, do not act; submit a scope-conflict checkpoint for clarification.`
 const withHumanBlockerHistory = (task, blocker) => {
   const history = task.humanBlockerHistory ?? []
   const index = history.findIndex((item) => item.requestId === blocker.requestId)
@@ -133,7 +156,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
   const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), checkpointReviewRuns = new Map(), activeGroupResidentOperations = new Set(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), startingTasks = new Set(), pendingLeafDisposals = new Set()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
-  const recoveryIssues = [], subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
+  const recoveryIssues = createRecoveryIssueLedger(), subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
   let taskTail = Promise.resolve(), pumpTail = Promise.resolve(), configTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, runtimeApi, currentDwsProfile = '', runtimeClosing = false, closePromise
   let groupMessageRecaller
   let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks
@@ -933,7 +956,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     }
     const queued = await store.updateTask(task.taskId, (current) => ({
       ...current, state: 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
-      resumeContext: `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\nSource: ${source}`,
+      resumeContext: authorizationResumeContext({ requestId, decision, requestedAction: blocker.requestedAction, reply, source }),
       humanBlocker: answered, humanBlockerHistory: withHumanBlockerHistory(current, answered),
     }))
     const pumping = pumpTasks()
@@ -1758,7 +1781,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       resumeGoalAfterResolution(handle, goal)
       const answered = { ...task.humanBlocker, status: 'answered', reply, decision }
       const running = await store.updateTask(taskId, (current) => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined, humanBlocker: answered, humanBlockerHistory: withHumanBlockerHistory(current, answered) }))
-      await followupTaskInternal(running, `[HUMAN_INTERVENTION_REPLY]\nBlocker request: ${requestId}\nDecision: ${decision}\nReply: ${reply}\n\nContinue the same task only within the approved scope. Re-check current state before acting.`)
+      await followupTaskInternal(running, authorizationResumeContext({ requestId, decision, requestedAction: task.humanBlocker.requestedAction, reply, source: 'migration' }))
       return running
     }),
     createTask: (request) => submitWebTaskAction('new-task', request),
@@ -1780,12 +1803,20 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       await Promise.all(pending.map(async (item) => {
         try {
           await coordinateTaskResult(item.task, item.task.result)
+          recoveryIssues.resolve((issue) => issue.taskId === item.task.taskId && ['task-notification', 'task-notification-fallback', 'task-notification-reconcile'].includes(issue.kind))
           repaired.push({ taskId: item.task.taskId, sourceMessageId: item.resultKey })
         } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          // 任务上下文在扫描与投递之间发生变化，说明这份快照已经失效；下一轮只处理新快照。
+          // 这不是当前运行故障，不能污染健康状态或形成永久重试噪声。
+          if (detail.startsWith('task_result_context_changed:')) {
+            recoveryIssues.resolve((issue) => issue.taskId === item.task.taskId && ['task-notification', 'task-notification-fallback', 'task-notification-reconcile'].includes(issue.kind))
+            return
+          }
           failures.push(error)
           recoveryIssues.push({
             groupId: item.task.groupId, taskId: item.task.taskId, sourceMessageId: item.resultKey, kind: 'task-notification-reconcile',
-            error: error instanceof Error ? error.message : String(error),
+            error: detail,
           })
         }
       }))
