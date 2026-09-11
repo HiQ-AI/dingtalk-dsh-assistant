@@ -20,3 +20,8 @@ outbox-ui-states,2,PASS,round-2.md
 full-regression,2,PASS,round-2.md
 local-installation,2,PASS,round-2.md
 live-correction-delivery,2,PASS,round-2.md
+uat-flow-scope,3,PASS,round-3.md
+source-upload-order,3,PASS,round-3.md
+live-config-readback,3,PASS,round-3.md
+selected-leaf-reload,3,PASS,round-3.md
+unrelated-flow-preservation,3,PASS,round-3.md
