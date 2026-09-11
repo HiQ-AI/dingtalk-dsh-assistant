@@ -94,7 +94,7 @@ const humanBlockerSchema = z.object({
   supersededAt: z.string().min(1).optional(), supersededBy: z.string().min(1).optional(), supersedeReason: z.string().min(1).optional(),
 })
 const groupSchema = z.object({
-  coordinationRequests: z.record(z.string(), z.object({ attempt: z.number().int().nonnegative().default(0), resumeEpoch: z.number().int().nonnegative().default(0), updatedAt: z.string().optional(), nextRetryAt: z.string().optional(), status: z.enum(['pending', 'exhausted', 'completed']), messageId: z.string().optional(), lastError: z.string().optional() })).default({}),
+  coordinationRequests: z.record(z.string(), z.object({ attempt: z.number().int().nonnegative().default(0), resumeEpoch: z.number().int().nonnegative().default(0), updatedAt: z.string().optional(), nextRetryAt: z.string().optional(), status: z.enum(['pending', 'exhausted', 'completed', 'superseded']), messageId: z.string().optional(), lastError: z.string().optional(), supersededBy: z.string().optional(), supersedeReason: z.string().optional() })).default({}),
   groupId: z.string().min(1), name: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), residentAgentPreset: z.string().min(1).optional(), nextSequence: z.number().int().positive(),
   messages: z.array(inboundSchema), outbox: z.array(outboundSchema),
   routingRevision: z.number().int().nonnegative(), topics: z.array(topicSchema), routeHistory: z.array(z.record(z.string(), z.unknown())), taskReservations: z.array(z.record(z.string(), z.unknown())),
@@ -303,8 +303,8 @@ export async function openResidentStore(storageDomain) {
       if (!entry) throw new Error(`group_not_found:${groupId}`)
       const [key, group] = entry
       const requests = { ...group.coordinationRequests, [requestId]: { ...group.coordinationRequests?.[requestId], ...patch, updatedAt: new Date().toISOString() } }
-      const completed = Object.entries(requests).filter(([, value]) => value.status === 'completed').sort((a, b) => a[0] === requestId ? 1 : b[0] === requestId ? -1 : (a[1].updatedAt ?? '').localeCompare(b[1].updatedAt ?? '') || a[0].localeCompare(b[0]))
-      for (const [expired] of completed.slice(0, Math.max(0, completed.length - 500))) delete requests[expired]
+      const terminal = Object.entries(requests).filter(([, value]) => ['completed', 'superseded'].includes(value.status)).sort((a, b) => a[0] === requestId ? 1 : b[0] === requestId ? -1 : (a[1].updatedAt ?? '').localeCompare(b[1].updatedAt ?? '') || a[0].localeCompare(b[0]))
+      for (const [expired] of terminal.slice(0, Math.max(0, terminal.length - 500))) delete requests[expired]
       const updated = groupSchema.parse({ ...group, coordinationRequests: requests })
       await groups.put(key, updated)
       return updated.coordinationRequests[requestId]

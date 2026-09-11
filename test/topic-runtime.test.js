@@ -619,6 +619,36 @@ test('Task 通知要求真实 Topic 引用及参与人，并拒绝旧 Task 输�
   assert.equal((await h.call('group_reply_submit', { requestId: request.requestId, reply: '结果', replyReview: { kind: 'substantive' }, replyToMessageId: 'a1', atOpenDingTalkIds: ['od-a'] })).status, 'task-stale')
   assert.match((await outcome).error.message, /task_result_context_changed/)
   assert.equal(h.store.getGroup('g').outbox.length, 0)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.store.getCoordinationRequest('g', request.requestId).status, 'superseded')
+})
+
+test('同Topic新版本替代内存请求时持久协调账同步落superseded终态', async (t) => {
+  const h = await setup(t); await ingest(h, 'a1')
+  const old = (await route(h)).pendingDecisions[0]
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.store.getCoordinationRequest('g', old.requestId).status, 'pending')
+  await ingest(h, 'a2')
+  await route(h, { a2: old.topicId })
+  await new Promise(resolve => setImmediate(resolve))
+  const current = h.envelope('[GROUP_TOPIC_DECISION]')
+  const terminal = h.store.getCoordinationRequest('g', old.requestId)
+  assert.equal(terminal.status, 'superseded')
+  assert.equal(terminal.supersededBy, current.requestId)
+  assert.equal(terminal.supersedeReason, 'topic-revision-replaced')
+})
+
+test('普通Task通知与完成通知一致：引用消息时省略at默认关联发送人', async (t) => {
+  const h = await setup(t), { task } = await taskFixture(h)
+  const replyTask = await h.store.updateTask(task.taskId, (current) => ({ ...current, state: 'completed', result: { inputVersion: current.inputVersion, runSequence: current.runSequence, status: 'completed', summary: '已核验', evidence: ['核验通过'], artifacts: [] } }))
+  const promise = h.coordinator.requestReply(replyTask, replyTask.result, 'task-result:default-recipient')
+  const request = h.envelope('[TASK_COORDINATION]')
+  const result = await h.call('group_reply_submit', { requestId: request.requestId, reply: '结果', replyReview: { kind: 'substantive' }, replyToMessageId: 'a1' })
+  assert.equal(result.status, 'accepted')
+  const outbound = await promise
+  assert.equal(outbound.replyToMessageId, 'a1')
+  assert.deepEqual(outbound.atOpenDingTalkIds, ['od-a'])
+  assert.equal(h.store.getCoordinationRequest('g', request.requestId).status, 'completed')
 })
 
 test('审阅后历史候选变化必须重新读取，不能用旧快照发新回复', async (t) => {

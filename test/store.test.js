@@ -59,6 +59,17 @@ test('协调重试状态跨重启保留且按群隔离', async () => {
   assert.deepEqual(residentDomainSpec.tables.groups.valueSchema.parse(legacy).coordinationRequests, {})
 })
 
+test('被新请求替代的协调账保留明确终态与替代身份', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'coord-superseded' })
+  await store.updateCoordinationRequest('coord-superseded', 'old', { status: 'pending', attempt: 2 })
+  await store.updateCoordinationRequest('coord-superseded', 'old', { status: 'superseded', supersededBy: 'new', supersedeReason: 'topic-revision-replaced', nextRetryAt: undefined })
+  assert.deepEqual(store.getCoordinationRequest('coord-superseded', 'old'), {
+    status: 'superseded', attempt: 2, resumeEpoch: 0, supersededBy: 'new', supersedeReason: 'topic-revision-replaced', nextRetryAt: undefined, updatedAt: store.getCoordinationRequest('coord-superseded', 'old').updatedAt,
+  })
+})
+
 test('协调仅淘汰completed旧记录，保留pending/exhausted与当前恢复epoch', async () => {
   const { facility, seed } = memoryFacility()
   const store = await openResidentStore(facility)

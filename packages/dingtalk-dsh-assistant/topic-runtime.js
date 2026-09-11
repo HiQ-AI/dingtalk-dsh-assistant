@@ -199,6 +199,21 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     return request
   }
   const requestIdentity = (kind, value) => `coord-${kind}-${fingerprint(value)}`
+  const supersedeRequest = (request, supersededBy, reason) => {
+    if (!request?.requestId || request.requestId === supersededBy) return Promise.resolve()
+    return (store.updateCoordinationRequest?.(request.groupId, request.requestId, {
+      status: 'superseded', supersededBy, supersedeReason: reason, nextRetryAt: undefined, lastError: undefined,
+    }) ?? Promise.resolve()).catch((error) => onError(request.groupId, error))
+  }
+  const replyRouting = (messages, replyToMessageId, atOpenDingTalkIds) => {
+    const participants = messages.filter((message) => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
+    const target = participants.find((message) => message.messageId === replyToMessageId)
+    const recipients = atOpenDingTalkIds?.length ? atOpenDingTalkIds : target ? [target.senderOpenDingTalkId] : []
+    if (participants.length && !target) throw new Error('group_reply_routing_required')
+    if (replyToMessageId && !target) throw new Error('group_reply_target_not_in_topic')
+    if (new Set(recipients).size !== recipients.length || recipients.some((id) => !participants.some((message) => message.senderOpenDingTalkId === id))) throw new Error('group_reply_recipient_not_in_topic')
+    return { target, recipients }
+  }
   function reviewRequestIdentity(kind, task, value) {
     const { submittedAt: _submittedAt, reviewedAt: _reviewedAt, ...content } = value
     return requestIdentity(kind, { groupId: task.groupId, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
@@ -302,6 +317,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     for (const [id, request] of decisions) {
       if (request.groupId !== groupId || request.topicId !== topic.topicId) continue
       if (request.requestId === requestId) return request
+      supersedeRequest(request, requestId, 'topic-revision-replaced')
       decisions.delete(id)
     }
     const messages = topicMessages(groupId, topic.topicId, topic.revision)
@@ -506,7 +522,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       activeToolCalls.add(pending)
       try {
         const result = jsonOutput(await pending)
-        if (args.requestId && ![routes, decisions, reviews, replies, titleMigrations, summaryMigrations].some((collection) => collection.has(args.requestId)) && store.getCoordinationRequest?.(groupId, args.requestId)) {
+        const coordination = args.requestId ? store.getCoordinationRequest?.(groupId, args.requestId) : undefined
+        if (args.requestId && ![routes, decisions, reviews, replies, titleMigrations, summaryMigrations].some((collection) => collection.has(args.requestId)) && coordination?.status === 'pending') {
           await store.updateCoordinationRequest(groupId, args.requestId, { status: 'completed', nextRetryAt: undefined })
         }
         return result
@@ -679,6 +696,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if (unavailable.length) {
         if (diagnosticCheckpoint(request)) return { status: 'prompt-unavailable', ids: unavailable, nextAction: 'continue-diagnostic-review' }
         const error = `task_prompt_selection_stale:${unavailable.join(',')}`
+        void supersedeRequest(request, undefined, error)
         reviews.delete(requestId); request.reject(new Error(error))
         return { status: 'task-stale', error }
       }
@@ -706,6 +724,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         if (pendingInput(groupId).length) return { status: 'routing-required' }
         const current = store.getTask(request.task.taskId)
         if (!current || current.inputVersion !== request.task.inputVersion || current.runSequence !== request.task.runSequence || current.state !== request.resultState || JSON.stringify(current.result) !== request.resultFingerprint) {
+          void supersedeRequest(request, undefined, 'task-result-context-changed')
           replies.delete(args.requestId); request.reject(new Error('task_result_context_changed')); return { status: 'task-stale' }
         }
         const unreadSections = [...request.requiredSections].filter((section) => (request.readSectionOffsets.get(section) ?? 0) < request.sections[section].length)
@@ -723,17 +742,14 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const task = store.getTask(request.task.taskId)
       let replyReview
       try { replyReview = validateReplyReview(args.replyReview, request.candidates, { confirmationTaskIds: [task.taskId] }) } catch (error) { return { status: 'review-required', error: error.message } }
-      const candidates = request.messages.filter((message) => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
-      const target = candidates.find((message) => message.messageId === args.replyToMessageId)
-      if (candidates.length && (!target || !args.atOpenDingTalkIds?.length)) throw new Error('group_reply_routing_required')
-      if (args.replyToMessageId && !target) throw new Error('group_reply_target_not_in_topic')
-      if (args.atOpenDingTalkIds && (new Set(args.atOpenDingTalkIds).size !== args.atOpenDingTalkIds.length || args.atOpenDingTalkIds.some((id) => !candidates.some((message) => message.senderOpenDingTalkId === id)))) throw new Error('group_reply_recipient_not_in_topic')
+      const { target, recipients } = replyRouting(request.messages, args.replyToMessageId, args.atOpenDingTalkIds)
       const outbound = { groupId, outboundId: `reply-${args.requestId}`, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.task.result), text: args.reply.trim(), taskIds: [task.taskId], topicRefs: task.topicRefs,
         replyKind: replyReview?.kind, replacesOutboundIds: replyReview?.replaceOutboundIds,
-        ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: args.atOpenDingTalkIds } : {}) }
+        ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: recipients } : {}) }
       // 对外调用在短状态提交之后；独立通知的失败不消费其他 Topic 请求。
       const persisted = await appendOutbox({ ...outbound, preflight })
       if (persisted?.status) { await schedule(groupId); return persisted }
+      await store.updateCoordinationRequest?.(groupId, args.requestId, { status: 'completed', nextRetryAt: undefined, lastError: undefined })
       replies.delete(args.requestId); request.resolve(outbound)
       return { status: 'accepted', outboundId: outbound.outboundId }
     })
@@ -743,14 +759,14 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const task = store.getTask(request.task.taskId)
       const diagnostic = diagnosticCheckpoint(request)
       refreshVisibleReads(request)
-      if (!task || task.inputVersion !== request.task.inputVersion || task.runSequence !== request.task.runSequence || task.checkpoints?.at(-1)?.checkpointId !== request.task.checkpoints?.at(-1)?.checkpointId || (!diagnostic && JSON.stringify(task.taskPromptRefs ?? []) !== JSON.stringify(request.promptRefs))) { reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
+      if (!task || task.inputVersion !== request.task.inputVersion || task.runSequence !== request.task.runSequence || task.checkpoints?.at(-1)?.checkpointId !== request.task.checkpoints?.at(-1)?.checkpointId || (!diagnostic && JSON.stringify(task.taskPromptRefs ?? []) !== JSON.stringify(request.promptRefs))) { await supersedeRequest(request, undefined, 'task-review-context-changed'); reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
       try {
         if (!diagnostic) {
           assertCurrentTaskPrompts(task, store.getTaskPrompts?.() ?? [])
           assertCurrentTaskPrompts({ taskPromptRefs: [...request.readPromptRefs.values()] }, store.getTaskPrompts?.() ?? [])
           assertCurrentTaskPrompts({ taskPromptRefs: [...request.readPromptVersions.values()] }, store.getTaskPrompts?.() ?? [])
         }
-      } catch (error) { reviews.delete(requestId); request.reject(error); return { status: 'task-stale', error: error.message } }
+      } catch (error) { await supersedeRequest(request, undefined, error.message); reviews.delete(requestId); request.reject(error); return { status: 'task-stale', error: error.message } }
       const missingPromptRefs = diagnosticCheckpoint(request) ? [] : request.promptRefs.filter((ref) => !request.readPromptRefs.has(ref.id))
       if (missingPromptRefs.length) return { status: 'prompt-review-required', missingPromptRefs }
       if ((request.kind === 'completion') !== Object.hasOwn(input ?? {}, 'accepted')) throw new Error('task_review_kind_invalid')
@@ -759,7 +775,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if (!diagnostic && unreadSections.length && (review.accepted === true || ['acknowledge', 'guidance'].includes(review.decision))) return { status: 'context-review-required', unreadSections }
       if ('decision' in review && ((review.decision === 'guidance' && !review.guidance) || (review.decision !== 'guidance' && review.guidance))) throw new Error('task_review_guidance_invalid')
       if ('decision' in review && review.decision === 'reject' && request.value.kind !== 'plan-confirmed') throw new Error('task_review_reject_plan_only')
-      if (reviewRequestIdentity(request.kind, diagnostic ? { ...task, taskPromptRefs: request.promptRefs } : task, request.value) !== requestId) { reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
+      if (reviewRequestIdentity(request.kind, diagnostic ? { ...task, taskPromptRefs: request.promptRefs } : task, request.value) !== requestId) { await supersedeRequest(request, undefined, 'task-review-context-changed'); reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
       if (request.kind === 'completion' && review.accepted) {
         const rejected = completionPreflight(request, task, request.value, request.task.state === 'waiting' ? 'waiting' : 'running')
         if (rejected) return rejected
@@ -776,6 +792,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         }
         return { ...current, executionEvents: [...(current.executionEvents ?? []), { kind: 'coordination-review-accepted', requestId, review: durableReview, inputVersion: task.inputVersion, runSequence: task.runSequence, at: new Date().toISOString() }] }
       }))
+      await store.updateCoordinationRequest?.(groupId, requestId, { status: 'completed', nextRetryAt: undefined, lastError: undefined })
       reviews.delete(requestId); request.resolve(review)
       return { status: 'accepted' }
     })
@@ -791,12 +808,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
   }
   function taskOutbound(request, task, draft) {
     const replyReview = validateReplyReview(draft.replyReview, request.candidates, { confirmationTaskIds: [task.taskId] })
-    const participants = request.messages.filter((message) => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
-    const target = participants.find((message) => message.messageId === draft.replyToMessageId)
-    const recipients = draft.atOpenDingTalkIds?.length ? draft.atOpenDingTalkIds : target ? [target.senderOpenDingTalkId] : []
-    if (participants.length && !target) throw new Error('group_reply_routing_required')
-    if (draft.replyToMessageId && !target) throw new Error('group_reply_target_not_in_topic')
-    if (new Set(recipients).size !== recipients.length || recipients.some((id) => !participants.some((message) => message.senderOpenDingTalkId === id))) throw new Error('group_reply_recipient_not_in_topic')
+    const { target, recipients } = replyRouting(request.messages, draft.replyToMessageId, draft.atOpenDingTalkIds)
     return { groupId: task.groupId, outboundId: `reply-${request.requestId}`, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.value), text: draft.reply.trim(), taskIds: [task.taskId], topicRefs: task.topicRefs,
       replyKind: replyReview.kind, replacesOutboundIds: replyReview.replaceOutboundIds,
       ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: recipients } : {}) }
@@ -839,6 +851,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
           if (rejected) throw new Error(`task_review_context_changed:${rejected.status}`)
           Object.defineProperty(restored, 'preparedNotification', { value: { request, outbound: taskOutbound(request, task, restored.notification) }, enumerable: false })
         }
+        void store.updateCoordinationRequest?.(task.groupId, requestId, { status: 'completed', nextRetryAt: undefined, lastError: undefined })
         resolve(restored)
         return promise
       }
@@ -940,6 +953,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     invalidateTaskReviews(taskId, reason = 'task_review_context_changed') {
       for (const [requestId, request] of reviews) {
         if (request.task.taskId !== taskId) continue
+        void supersedeRequest(request, undefined, reason)
         reviews.delete(requestId)
         request.reject(new Error(reason))
       }
