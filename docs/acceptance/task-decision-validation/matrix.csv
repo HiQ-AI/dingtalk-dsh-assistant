@@ -18,5 +18,5 @@ recall-storage-failure,2,PASS,round-2.md
 permanent-send-rejection,2,PASS,round-2.md
 outbox-ui-states,2,PASS,round-2.md
 full-regression,2,PASS,round-2.md
-local-installation,2,PENDING,round-2.md
-live-correction-delivery,2,PENDING,round-2.md
+local-installation,2,PASS,round-2.md
+live-correction-delivery,2,PASS,round-2.md

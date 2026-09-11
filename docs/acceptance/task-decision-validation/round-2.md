@@ -16,4 +16,16 @@
 
 ## 部署与现场
 
-待部署 Assistant 和 Observer 固定包；不手工标 sent、不删记录。DSH 和其它依赖保持不变。待回读纠正通知实际 messageId、旧意图停止发送与撤回错误尝试计数停止增长。
+固定源码 `3c85ec4584c7a41346e14639d3e143071c058438` 的 Assistant/Observer 0.5.14 包已通过原生 CLI 安装；28 个非 package.json 安装文件与源码逐一哈希一致，其它依赖与配置未变。不手工标 sent、不删记录。
+
+- Assistant tgz：136268 字节，SHA256 `C7A37E6779D87EC60D17FABAE7CEEA9C52B2B07DB11F6401C0CAABE2E89E450E`。
+- Observer tgz：19553 字节，SHA256 `2A67DD8B502BA2F5BFB1320A0286C2B82A863DBB14A04BB44948D37F3918949B`。
+- 备份 `C:/Users/64554/.dsh/backups/outbox-replacement-3c85ec4-20260911` 已独立列出存储、配置、lock 和 patch 文件。停机稳定预检 390 Outbox、43 条有效后继；重启后 Domain v7、46 Tasks、invalidRecords=0、strippedFields=0。
+- 新 Runtime PID 1212992，同时监听 3080/18998；health=ok、recoveryIssueCount=0、DWS listener ready、backfill ok。认证首页 HTTP 200 且含 __DSH_BOOT__；隔离 headless Edge 实际打开运行看板、Outbox 与撤回待处理筛选，authenticatedUi/installedReplacementStatuses/recallFailuresVisible 均 true，截图已人工检查。
+- 原纠正 `outbound-50b240c77234b0b5b1fc08614541e427` 已 sent，messageId `msgMKH5gUe38XFDPHAphNCDcg==`。独立 `dws chat +messages-mget` 回读 complete=true、failedCount=0、foundCount=1，创建时间 2026-09-11 14:38:43，正文与引用对象匹配；不是仅凭内部 sent 判断送达。
+- 原被替换 `outbound-2e132af08a1610f388a1c5059cc58254` 为 superseded，后继为上述纠正，deliveryAttemptCount=17310。旧发送未知保留 recallError=replacement_delivery_unknown、recallAttemptCount=1、无 recallRetryAt。
+- 另一普通回复 `outbound-6d4a7d47b6a983402c0902c0a2694b97` 保留 pending 与明确服务端拒绝原因，deliveryBlockedAt 已持久化，deliveryAttemptCount=7118。未改变其业务目标或手工重发。
+- 从 14:38 到 14:40:47 的独立 Store 回读，上述 17310/7118 计数不再增长。原纠正 deliveryAttemptCount=150 亦稳定，历史计数未清零。
+- 4 条可撤回旧通知已 recalled；7 条历史通知服务端返回 dws_recall_failed:1:1001，均 failed、recallAttemptCount=1、无 recallRetryAt。没有伪称撤回成功，也未猜测服务端拒绝原因；失败不再阻塞新纠正。
+
+本轮 10 项 case 全 PASS。Provider 拒绝和历史发送未知属于保留的真实业务边界，不代表已成功撤回所有旧消息。实际业务任务保持原叶子继续，不将本轮通知修复等同 UAT3 业务交付。
