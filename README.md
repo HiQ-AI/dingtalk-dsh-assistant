@@ -239,7 +239,7 @@ Topic 决策产生非空回复时，Runtime 使用 DWS 原生引用回复，并�
 
 Task 可设置独立的简短标题用于看板展示；标题与 objective 分离，重命名不会改变任务授权范围、Goal 或验收标准。运行看板通过 DSH 官方 `sidebar.footer.action` 提供左侧菜单入口，并由 `shell.overlay` 承载右侧完整内容区域；点击运行看板时切换到看板并清除 Session 选中状态，点击任意 Session 时关闭看板、恢复该 Session 的选中状态与对话/轨迹。运行看板复用 Session 的实际选中背景色，不额外显示焦点边框。
 
-运行看板 Header 的高度和字体规格与 Session 页面一致。各页不再重复显示页面标题和子标题；任务列按 Header 与主内容实际占用计算剩余视口高度，卡片在列内独立滚动，页面本身不会因状态桶高度产生额外补白或纵向滚动。
+运行看板 Header 的高度和字体规格与 Session 页面一致。各页不再重复显示页面标题和子标题；任务列按 Header 与主内容实际占用计算剩余视口高度，卡片在列内独立滚动，页面本身不会因状态桶高度产生额外补白或纵向滚动。人工介入列表区分待处理、已处理和已失效请求；只有待发送或等待回复的请求提供处理操作，未知状态以异常标记展示且不会导致整个看板崩溃。
 
 Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存标题、目标、验收标准、执行状态、结果，以及 `topicRefs: [{topicId, revision}]` 和 `inputVersion`；不保存 sourceMessageId、triggerHistory、messageHistory 或群消息正文副本。`group_task_context_get` 返回执行约定与 Topic 引用，原始上下文由 `group_topic_context_get` 按固定 revision 分页读取。只有确实影响任务的新增信息才推进 inputVersion，不向每个关联 Task 广播全部讨论。运行中和等待中的 Task 接纳上下文时继续原轮次；完成或归档 Task 只有被明确重开才开启新轮次。目标发生实质变化时，续接动作必须同时提交概括当前完整目标的新标题；Runtime 原子更新目标和标题，并由 objectiveHistory、titleHistory 与 runHistory 保留旧值。普通信息补充、等待恢复和异常唤醒不修改标题，归档不删除历史。
 
