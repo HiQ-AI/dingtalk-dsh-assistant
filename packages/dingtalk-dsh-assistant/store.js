@@ -2,14 +2,15 @@ import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import { storedTaskCheckpointBaseSchema, taskResultSchema } from './task-result.js'
-import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint } from './topic-model.js'
+import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision } from './topic-model.js'
+import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
 
 export { resolveTopicMessages } from './topic-model.js'
 
 const missingText = (value) => typeof value !== 'string' || value.trim() === '' || value.trim().toLowerCase() === 'null'
 const replacementBusy = (group, replacesOutboundIds, decisionId) => replacesOutboundIds.length > 0 && (
   group.outbox.some((outbound) => outbound.status === 'pending' && (outbound.replacesOutboundIds ?? []).some((id) => replacesOutboundIds.includes(id)))
-  || group.topics.some((topic) => topic.decisions.some((record) => record.status !== 'completed' && record.decisionId !== decisionId
+  || group.topics.some((topic) => topic.decisions.some((record) => isPendingDecision(record) && record.decisionId !== decisionId
     && (record.decision.replyReview?.replaceOutboundIds ?? []).some((id) => replacesOutboundIds.includes(id))))
 )
 
@@ -163,6 +164,24 @@ const assertTaskRevisionMetadata = (task, action) => {
   const objectiveChanged = Boolean(objective && objective !== task.objective)
   if (title && !objectiveChanged) throw new Error('task_title_requires_objective_revision')
   if (objectiveChanged && !title) throw new Error('task_objective_title_required')
+  if (action.kind === 'task-reopen') stagePlanFor({ taskId: task.taskId, runSequence: task.runSequence + 1 }, normalizeRunPlan(objective || task.objective, action.acceptanceCriteria, action.stageTasks).stageTasks)
+}
+const assertNewTaskMetadata = action => {
+  const metadata = validateTaskMetadata(action)
+  stagePlanFor({ taskId: 'new-task', runSequence: 1 }, normalizeRunPlan(metadata.objective, metadata.acceptanceCriteria, action.stageTasks).stageTasks)
+}
+
+// 接纳和恢复共用执行层的纯校验；必须在任何预约或渠道副作用之前调用。
+export function assertTaskContextRevision(task, action, basisIds) {
+  assertTaskRevisionMetadata(task, action)
+  if (action.kind === 'task-context') {
+    const objective = action.objective?.trim() || task.objective
+    reviseTaskProgress(task, { ...action, objective, ...normalizeRunPlan(objective, action.acceptanceCriteria ?? task.acceptanceCriteria, action.stageTasks ?? task.stageTasks) }, basisIds)
+  }
+}
+const taskRevisionBasis = (group, task, action) => {
+  const refs = [...new Map([...task.topicRefs, ...action.topicRefs ?? []].map(ref => [ref.topicId, ref])).values()]
+  return new Set(refs.flatMap(ref => topicMessages(group, group.topics.find(topic => topic.topicId === ref.topicId), ref.revision).map(message => message.messageId)))
 }
 
 function taskTiming(task, activities, now = Date.now()) {
@@ -358,7 +377,7 @@ export async function openResidentStore(storageDomain) {
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       if ([...tasks.entries()].some(([, task]) => task.groupId === groupId)) throw new Error('group_has_referenced_topics')
-      if (entry[1].topics.some((topic) => topic.decisions.some((decision) => decision.status !== 'completed'))) throw new Error('group_has_pending_decisions')
+      if (entry[1].topics.some((topic) => topic.decisions.some(isPendingDecision))) throw new Error('group_has_pending_decisions')
       if (entry[1].outbox.some((outbound) => outbound.status === 'pending')) throw new Error('group_has_pending_outbox')
       await groups.delete(entry[0])
       return { removed: true, groupId }
@@ -505,7 +524,7 @@ export async function openResidentStore(storageDomain) {
           if (!dependency || dependency.revision !== ref.revision) { result = { status: 'topic-stale', topicId: ref.topicId }; return latest }
         }
         if (topic.revision !== revision) { result = { status: 'topic-stale', revision: topic.revision }; return latest }
-        if (topic.decisions.some((item) => item.status !== 'completed')) { result = { status: 'topic-busy' }; return latest }
+        if (topic.decisions.some(isPendingDecision)) { result = { status: 'topic-busy' }; return latest }
         const replacing = decision.replyReview?.replaceOutboundIds ?? []
         if (replacementBusy(latest, replacing, decisionId)) {
           result = { status: 'reply-busy' }; return latest
@@ -513,6 +532,7 @@ export async function openResidentStore(storageDomain) {
         const targetTaskIds = (decision.actions ?? []).map((action) => action.taskId).filter(Boolean)
         if (new Set(targetTaskIds).size !== targetTaskIds.length) throw new Error('topic_task_action_duplicate')
         for (const action of decision.actions ?? []) {
+          if (action.kind === 'new-task') assertNewTaskMetadata(action)
           if (action.taskId && !expectedTaskVersions.some((item) => item.taskId === action.taskId)) throw new Error('topic_task_version_required')
           const task = action.taskId ? tasks.get(action.taskId) : undefined
           if (task) assertTaskRevisionMetadata(task, action)
@@ -521,6 +541,10 @@ export async function openResidentStore(storageDomain) {
           const task = tasks.get(expected.taskId)
           if (!task || task.groupId !== groupId || task.inputVersion !== expected.inputVersion || (expected.runSequence !== undefined && task.runSequence !== expected.runSequence)) { result = { status: 'task-stale', taskId: expected.taskId }; return latest }
           if (latest.taskReservations.some((item) => item.taskId === expected.taskId)) { result = { status: 'task-busy', taskId: expected.taskId }; return latest }
+        }
+        for (const action of decision.actions ?? []) {
+          const task = action.taskId ? tasks.get(action.taskId) : undefined
+          if (task && action.kind === 'task-context') assertTaskContextRevision(task, action, taskRevisionBasis(latest, task, action))
         }
         const now = new Date().toISOString()
         const operations = (decision.actions ?? []).map((action, actionIndex) => ({ operationId: `${decisionId}:action:${actionIndex}`, actionIndex, status: 'pending',
@@ -554,11 +578,13 @@ export async function openResidentStore(storageDomain) {
           if (!topic || topic.revision !== ref.revision) { result = { status: 'topic-stale', topicId: ref.topicId }; return latest }
         }
         const task = action.taskId ? tasks.get(action.taskId) : undefined
+        if (action.kind === 'new-task') assertNewTaskMetadata(action)
         if (action.kind !== 'new-task') {
           if (!task || task.groupId !== groupId || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence) { result = { status: 'task-stale', taskId: action.taskId }; return latest }
           if (latest.taskReservations.some((reservation) => reservation.taskId === task.taskId)) { result = { status: 'task-busy', taskId: task.taskId }; return latest }
           if ((action.kind === 'task-reopen' && task.state !== 'completed') || (['task-context', 'task-cancel'].includes(action.kind) && task.state === 'completed')) { result = { status: 'task-state-invalid', taskId: task.taskId }; return latest }
-          assertTaskRevisionMetadata(task, action)
+          const basisIds = new Set([messageId, ...taskRevisionBasis(latest, task, { ...action, topicRefs })])
+          assertTaskContextRevision(task, action, basisIds)
         }
         const now = new Date().toISOString(), refs = [...topicRefs, { topicId, revision: 1 }]
         const decision = { actions: [{ ...action, topicRefs: refs }], reply: '', basisMessageIds: [messageId] }
@@ -577,14 +603,47 @@ export async function openResidentStore(storageDomain) {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       if (Object.keys(patch).some((key) => !['status', 'operations', 'progress', 'error'].includes(key))) throw new Error('topic_decision_patch_invalid')
+      if (patch.status === 'rejected') throw new Error('topic_decision_rejection_requires_validation')
       let result
       await groups.update(entry[0], (latest) => ({ ...latest, topics: latest.topics.map((topic) => topic.topicId !== topicId ? topic : { ...topic, decisions: topic.decisions.map((record) => {
         if (record.decisionId !== decisionId) return record
-        if (record.status === 'completed') { result = record; return record }
+        if (!isPendingDecision(record)) { result = record; return record }
         result = { ...record, ...patch, updatedAt: new Date().toISOString() }; return result
       }) }) }))
       if (!result) throw new Error(`topic_decision_not_found:${decisionId}`)
       return result
+    }),
+    rejectInvalidTopicDecision: ({ groupId, topicId, decisionId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let rejected = false
+      await groups.update(entry[0], (latest) => {
+        const record = latest.topics.find(topic => topic.topicId === topicId)?.decisions.find(item => item.decisionId === decisionId)
+        if (!record) throw new Error(`topic_decision_not_found:${decisionId}`)
+        if (record.status === 'rejected') { rejected = true; return latest }
+        if (!isPendingDecision(record) || !record.decision.actions.length || record.decision.actions.some(action => action.kind !== 'task-context')) return latest
+        if (record.operations.length !== record.decision.actions.length || record.operations.some((operation, index) => operation.actionIndex !== index || operation.taskId !== record.decision.actions[index].taskId)) return latest
+        // Task 写入与 operation 写回之间崩溃时，以 Task 的持久幂等账为准。
+        if (record.operations.some(operation => operation.status !== 'pending' || tasks.get(operation.taskId)?.appliedOperations.includes(operation.operationId))) return latest
+        for (const action of record.decision.actions) {
+          const task = tasks.get(action.taskId)
+          if (!task || task.groupId !== groupId || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence) return latest
+        }
+        let failure
+        try {
+          for (const action of record.decision.actions) assertTaskContextRevision(tasks.get(action.taskId), action, taskRevisionBasis(latest, tasks.get(action.taskId), action))
+        } catch (error) {
+          if (!(error instanceof TaskRevisionError)) throw error
+          failure = error.message
+        }
+        if (!failure) return latest
+        rejected = true
+        return { ...latest, taskReservations: latest.taskReservations.filter(item => item.decisionId !== decisionId),
+          topics: latest.topics.map(topic => topic.topicId !== topicId ? topic : { ...topic,
+            decisions: topic.decisions.map(item => item.decisionId !== decisionId ? item : { ...item, status: 'rejected', error: failure, updatedAt: new Date().toISOString() }),
+          }) }
+      })
+      return rejected
     }),
     completeTopicDecision: ({ groupId, topicId, decisionId }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
@@ -594,6 +653,7 @@ export async function openResidentStore(storageDomain) {
         const topic = latest.topics.find((item) => item.topicId === topicId)
         const record = topic?.decisions.find((item) => item.decisionId === decisionId)
         if (!record) throw new Error(`topic_decision_not_found:${decisionId}`)
+        if (record.status === 'rejected') throw new Error('topic_decision_rejected')
         if (record.operations.some((operation) => operation.status !== 'applied')) throw new Error('topic_decision_operations_pending')
         result = { ...record, status: 'completed', updatedAt: new Date().toISOString() }
         const update = record.decision.topicUpdate ?? {}
@@ -758,10 +818,12 @@ export async function openResidentStore(storageDomain) {
       }
       const refs = validateTopicRefs(group, topicRefs)
       const metadata = validateTaskMetadata({ title, objective, acceptanceCriteria })
+      const plan = normalizeRunPlan(metadata.objective, metadata.acceptanceCriteria, stageTasks)
+      const stagePlan = stagePlanFor({ taskId, runSequence: 1 }, plan.stageTasks)
       const now = new Date().toISOString()
       const task = taskSchema.parse({ taskId, groupId, topicRefs: refs, inputVersion, appliedOperations: operationId ? [operationId] : [], ...metadata,
         ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), state: 'queued', childSessionId: taskSessionId(taskId),
-        runSequence: 1, runStartedAt: now, stageTasks: stageTasks.length ? stageTasks : ['完成并验证当前轮目标'], runHistory: [], stateHistory: [{ state: 'queued', at: now, runSequence: 1 }], createdAt: now, updatedAt: now })
+        runSequence: 1, runStartedAt: now, ...plan, stagePlan, runHistory: [], stateHistory: [{ state: 'queued', at: now, runSequence: 1 }], createdAt: now, updatedAt: now })
       await tasks.put(taskId, task)
       return { created: true, task }
     }),

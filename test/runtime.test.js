@@ -7,6 +7,7 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 import { buildTaskAssociationIndex, openResidentRuntime, residentSessionId } from '../packages/dingtalk-dsh-assistant/runtime.js'
 import { openResidentStore, taskSessionId } from '../packages/dingtalk-dsh-assistant/store.js'
+import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
 
 const agentWorkspace = mkdtempSync(join(tmpdir(), 'dsh-agent-workspace-'))
 const replacementWorkspace = mkdtempSync(join(tmpdir(), 'dsh-replacement-workspace-'))
@@ -797,6 +798,73 @@ test('报告先持久接收并停等，Topic 决策事件解除等待而无需�
   assert.equal(h.store.getTask(task.taskId).executionEvents.filter(event => event.kind === 'task-report-received').length, 1)
 })
 
+test('坏阶段决策在持久化前拒绝，同一请求纠正后恢复报告与正常阶段推进', async t => {
+  const h = await setup(t), task = await createTask(h)
+  await h.store.updateTask(task.taskId, current => ({ ...current, stagePlan: undefined }))
+  const context = (await h.call('group_task_context_get', { taskIds: [task.taskId] })).tasks[0]
+  assert.equal(task.checkpoints?.length ?? 0, 0, '阶段身份不代表计划已获批准')
+  assert.deepEqual(context.stagePlan, stagePlanFor(task, task.stageTasks))
+  const leafPrompt = h.handles.get(task.childSessionId).sections.map(section => typeof section.text === 'function' ? section.text() : section.text).join('\n')
+  assert.ok(leafPrompt.includes(context.stagePlan[0].stageId), '主叶获得相同的代码生成ID')
+  await ingest(h, 'revision-input')
+  const request = (await route(h, { 'revision-input': task.topicRefs[0].topicId })).pendingDecisions[0]
+  const action = { kind: 'task-context', taskId: task.taskId, ...inputVersion(task), context: '新增阶段验收', progressImpact: 'replan',
+    impactEvidence: { basisMessageIds: ['revision-input'], reason: '当前阶段需重验', affectedStageIds: ['invented-id'] }, topicRefs: [{ topicId: request.topicId, revision: request.revision }] }
+  const review = await h.call('group_reply_review_get', { requestIds: [request.requestId] })
+  const before = structuredClone(h.store.getGroup('g'))
+  const submit = () => decide(h, request, { actions: [action], reply: '已关联补充输入。', replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map(item => item.outboundId) } })
+  assert.equal((await submit()).status, 'invalid-arguments')
+  assert.deepEqual(h.store.getGroup('g'), before, '拒绝不能写决策、预约、确认或已消费状态')
+  action.impactEvidence.affectedStageIds = [context.stagePlan[0].stageId]
+  assert.equal((await submit()).status, 'accepted')
+  const current = h.store.getTask(task.taskId)
+  assert.equal(current.inputVersion, task.inputVersion + 1)
+  await checkpoint(h, current, { kind: 'plan-confirmed', remainingItems: current.stageTasks })
+  const stage = h.store.getTask(task.taskId).stagePlan[0]
+  await checkpoint(h, current, { kind: 'stage-completed', stageId: stage.stageId, stageTask: stage.title, completedItems: [stage.title], remainingItems: [] })
+  assert.equal(h.store.getTask(task.taskId).checkpoints.at(-1).coordinatorDecision, 'acknowledge')
+})
+
+test('历史坏决策重启后退回重判，原报告不跳过且纠正后恢复同一Task', async t => {
+  const h = await setup(t), task = await createTask(h)
+  await ingest(h, 'fix-delivery')
+  const request = (await route(h, { 'fix-delivery': task.topicRefs[0].topicId })).pendingDecisions[0]
+  const action = { kind: 'task-context', taskId: task.taskId, ...inputVersion(task), context: '补充交付验收', progressImpact: 'replan',
+    impactEvidence: { basisMessageIds: ['fix-delivery'], reason: '补充验收依据', affectedStageIds: [stagePlanFor(task, task.stageTasks)[0].stageId] }, topicRefs: [{ topicId: request.topicId, revision: request.revision }] }
+  const received = await rawLeafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), submissionId: 'blocked-plan', kind: 'plan-confirmed', summary: '待审计划', remainingItems: task.stageTasks, nextStep: '实施' })
+  assert.equal(received.status, 'input-wait')
+  const accepted = await h.store.acceptTopicDecision({ groupId: 'g', topicId: request.topicId, revision: request.revision, decisionId: request.requestId,
+    decision: { basisMessageIds: ['fix-delivery'], actions: [action], reply: '已接收。', replyReview: { kind: 'confirmation' } }, expectedTaskVersions: [{ taskId: task.taskId, ...inputVersion(task) }] })
+  assert.equal(accepted.status, 'accepted')
+  await h.runtime.close()
+  // 隔离快照模拟旧版本曾接受的错误；不经过新入口伪造接纳成功。
+  const record = h.snapshot.tables.groups.g.topics.find(topic => topic.topicId === request.topicId).decisions.at(-1)
+  record.status = 'failed'; record.error = 'task_revision_stage_invalid'
+  record.decision.actions[0].impactEvidence.affectedStageIds = ['invented-id']
+  delete h.snapshot.tables.tasks[task.taskId].stagePlan
+  const reopened = await setup(t, { snapshot: h.snapshot, goals: h.goals })
+  await reopened.runtime.recoverInterruptedDecisions(); await reopened.runtime.drainTopicOperations('g')
+  await until(() => reopened.envelope('[GROUP_TOPIC_DECISION]')?.requestId !== request.requestId && reopened.envelope('[GROUP_TOPIC_DECISION]')?.rejectedDecisions?.length === 1)
+  const retry = reopened.envelope('[GROUP_TOPIC_DECISION]')
+  assert.equal(reopened.store.getTopic('g', request.topicId).processedRevision, request.revision - 1)
+  assert.equal(reopened.store.getTask(task.taskId).inputVersion, task.inputVersion)
+  assert.equal(reopened.runtime.getTaskReport({ taskId: task.taskId, submissionId: 'blocked-plan' }).status, 'input-wait')
+  assert.deepEqual(retry.ownedDeltaMessageIds, ['fix-delivery'])
+  const review = await reopened.call('group_reply_review_get', { requestIds: [retry.requestId] })
+  assert.equal((await decide(reopened, retry, { actions: [action], reply: '已关联有效补充。', replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map(item => item.outboundId) } })).status, 'accepted')
+  const current = reopened.store.getTask(task.taskId)
+  await until(() => reopened.runtime.getTaskReport({ taskId: task.taskId, submissionId: 'blocked-plan' }).status === 'history-only')
+  assert.equal(current.inputVersion, task.inputVersion + 1)
+  assert.equal(current.childSessionId, task.childSessionId)
+  assert.equal(reopened.store.listTasks().length, 1)
+  await checkpoint(reopened, current, { kind: 'plan-confirmed', remainingItems: current.stageTasks })
+  assert.equal(reopened.goals.get(task.childSessionId).phase, 'active')
+  assert.equal(reopened.store.getTopic('g', request.topicId).processedRevision, request.revision)
+  const records = reopened.store.getTopic('g', request.topicId).decisions
+  assert.equal(records.find(item => item.decisionId === request.requestId).status, 'rejected')
+  assert.equal(records.at(-1).status, 'completed')
+})
+
 test('报告审阅耗尽保持同身份停等，显式重试重置原请求后恢复推进', async t => {
   const h = await setup(t, { retryDelayMs: 1 }), task = await createTask(h)
   const residentId = h.resident().agent.session.id
@@ -1087,6 +1155,10 @@ test('Web 重开完成任务建立新轮次，固定保留旧输入版本与历�
   assert.equal(reopened.inputVersion, completed.inputVersion + 1)
   assert.equal(reopened.runHistory.length, 1)
   assert.deepEqual(reopened.runHistory[0].topicRefs, completed.topicRefs)
+  const stages = (await h.call('group_task_context_get', { taskIds: [task.taskId] })).tasks[0].stagePlan
+  assert.deepEqual(stages, stagePlanFor(reopened, reopened.stageTasks))
+  const prompt = h.handles.get(reopened.childSessionId).sections.map(section => typeof section.text === 'function' ? section.text() : section.text).join('\n')
+  for (const stage of stages) assert.ok(prompt.includes(stage.stageId))
   assert.equal(h.store.listTasks().length, 1)
   for (const field of ['messageHistory', 'sourceMessageId', 'triggerHistory', 'relatedContexts']) assert.equal(field in reopened.runHistory[0], false)
 })

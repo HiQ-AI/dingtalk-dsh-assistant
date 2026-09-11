@@ -1,0 +1,12 @@
+case,round,status,evidence
+stable-stage-identity,1,PASS,round-1.md
+atomic-invalid-input,1,PASS,round-1.md
+create-reopen-normalization,1,PASS,round-1.md
+restart-redecision-report,1,PASS,round-1.md
+shared-topic-ownership,1,PASS,round-1.md
+partial-execution-and-cancel,1,PASS,round-1.md
+storage-failure,1,PASS,round-1.md
+outbox-idempotency,1,PASS,round-1.md
+full-regression,1,PASS,round-1.md
+local-installation,1,PENDING,round-1.md
+live-task-recovery,1,PENDING,round-1.md

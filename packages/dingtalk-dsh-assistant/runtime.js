@@ -10,7 +10,7 @@ import { taskProgressSnapshot } from './task-progress.js'
 import { createTaskReportQueue, taskReportReceiptSchema, taskReports } from './task-reports.js'
 import { createTaskReportStepGate } from './task-report-step-gate.js'
 import { createStatusQueryHandler } from './status-query.js'
-import { reviseTaskProgress, stagePlanFor, reconcileLegacyStagePlan } from './task-input-revision.js'
+import { reviseTaskProgress, stagePlanFor, reconcileLegacyStagePlan, normalizeRunPlan } from './task-input-revision.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
 const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_TOPIC_ROUTE]', '[GROUP_TOPIC_DECISION]', '[TASK_COORDINATION]', '[TASK_COMPLETION_REVIEW]', '[TASK_CHECKPOINT_REVIEW]', '[GROUP_MESSAGE_STEER]', '[GROUP_DECISION_RECHECK]', '[GROUP_DECISION_RESUME]']
@@ -57,7 +57,7 @@ const taskAssociationContext = (task) => ({
   archived: Boolean(task.archivedAt),
   ...(task.acceptanceCriteria ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
   ...(task.stageTasks ? { stageTasks: task.stageTasks } : {}),
-  ...(task.stagePlan ? { stagePlan: task.stagePlan } : {}),
+  stagePlan: stagePlanFor(task, task.stageTasks ?? []),
   ...(task.taskPromptRefs ? { taskPromptRefs: task.taskPromptRefs } : {}),
   topicRefs: task.topicRefs, inputVersion: task.inputVersion, runSequence: task.runSequence,
   ...(task.objectiveHistory ? { objectiveHistory: task.objectiveHistory } : {}),
@@ -999,7 +999,7 @@ ${(store.getTask(task.taskId) ?? task).acceptanceCriteria.map((item) => `- ${ite
 
 ### 当前执行轮次阶段任务
 
-${((store.getTask(task.taskId) ?? task).stagePlan ?? (store.getTask(task.taskId) ?? task).stageTasks.map(title => ({ title }))).map(item => `- ${item.title}${item.stageId ? `（stageId: ${item.stageId}）` : ''}`).join('\n')}
+${stagePlanFor(store.getTask(task.taskId) ?? task, (store.getTask(task.taskId) ?? task).stageTasks).map(item => `- ${item.title}（stageId: ${item.stageId}）`).join('\n')}
 
 ### Topic 固定版本输入
 
@@ -1330,11 +1330,6 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       title: current.title ?? current.objective, revisedAt: new Date().toISOString(), inputVersion: current.inputVersion, runSequence: current.runSequence, ...(decisionId ? { decisionId } : {}),
     }] }
   }
-  function normalizeRunPlan(objective, acceptanceCriteria, stageTasks) {
-    const clean = (values) => Array.isArray(values) ? values.map((item) => String(item).trim()).filter(Boolean) : []
-    const criteria = clean(acceptanceCriteria), stages = clean(stageTasks)
-    return { acceptanceCriteria: criteria.length ? criteria : [objective], stageTasks: stages.length ? stages : ['完成并验证当前轮目标'] }
-  }
   function replaceTaskGoalObjective(task, handle) {
     const goal = ctx.goals.get(handle.agent)
     if (goal && goal.phase !== 'complete') ctx.goals.complete(handle.agent, goalRef(goal))
@@ -1367,17 +1362,19 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     if (operation && task.appliedOperations.includes(operation.operationId)) { await pumpTasks(); return store.getTask(task.taskId) }
     if (task.state !== 'completed') throw new Error(`task_not_completed:${task.taskId}`)
     const nextObjective = typeof objective === 'string' && objective.trim() ? objective.trim() : task.objective
+    const plan = normalizeRunPlan(nextObjective, acceptanceCriteria, stageTasks)
+    const stagePlan = stagePlanFor({ taskId: task.taskId, runSequence: task.runSequence + 1 }, plan.stageTasks)
     const queued = await mutateTask(task, operation, (current) => ({
       ...withRevisedObjective(current, nextObjective, title, operation?.decisionId),
       topicRefs, inputVersion: current.inputVersion + 1, state: 'queued', runSequence: current.runSequence + 1, runStartedAt: new Date().toISOString(),
-      ...normalizeRunPlan(nextObjective, acceptanceCriteria, stageTasks),
+      ...plan,
       runHistory: [...(current.runHistory ?? []), {
         runSequence: current.runSequence, startedAt: current.runStartedAt ?? current.createdAt, endedAt: new Date().toISOString(),
         topicRefs: current.topicRefs, inputVersion: current.inputVersion, title: current.title, objective: current.objective, childSessionId: current.childSessionId,
         acceptanceCriteria: current.acceptanceCriteria, stageTasks: current.stageTasks, taskPromptRefs: current.taskPromptRefs ?? [], checkpoints: current.checkpoints ?? [], ...(current.result ? { result: current.result } : {}),
       }],
       lastCompletedResult: current.result, completion: undefined, result: undefined, waitingKind: undefined, waitingReason: undefined,
-      lastWaitingResult: undefined, checkpoints: [], stagePlan: undefined, taskPromptRefs: [], humanBlocker: undefined, reopenContext: 'Topic 输入已更新，独立核验新执行轮次并重新选择适用任务流程', archivedAt: undefined,
+      lastWaitingResult: undefined, checkpoints: [], stagePlan, taskPromptRefs: [], humanBlocker: undefined, reopenContext: 'Topic 输入已更新，独立核验新执行轮次并重新选择适用任务流程', archivedAt: undefined,
       completionSequence: (current.completionSequence ?? 0) + 1,
     }))
     await pumpTasks()
@@ -1456,6 +1453,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const decisionId = accepted.record.decisionId
       await topics.applyAccepted(groupId, accepted.topicId, decisionId)
       const record = store.getTopic(groupId, accepted.topicId).decisions.find((item) => item.decisionId === decisionId)
+      if (record.status === 'rejected') throw new Error(`task_web_decision_rejected:${record.error}`)
       if (record.status !== 'completed') return { status: 'accepted', decisionId, topicId: accepted.topicId }
       return store.getTask(record.operations[0].taskId)
     } finally { release() }
