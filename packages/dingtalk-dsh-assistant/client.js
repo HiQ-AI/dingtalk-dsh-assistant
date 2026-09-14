@@ -34,8 +34,8 @@ async function request(path, options) {
   return value
 }
 export async function readResidentOverview() {
-  const [health, groups, tasks, alerts, environment, agentConfig] = await Promise.all(['/health', '/state/groups', '/state/tasks', '/state/supervisor/alerts', '/state/environment', '/state/agent-config'].map((path) => request(path)))
-  return { health, groups, tasks, alerts, environment, agentConfig }
+  const [health, groups, tasks, alerts, environment, agentConfig, taskSheetSync] = await Promise.all(['/health', '/state/groups', '/state/tasks', '/state/supervisor/alerts', '/state/environment', '/state/agent-config', '/state/task-sheet-sync'].map((path) => request(path)))
+  return { health, groups, tasks, alerts, environment, agentConfig, taskSheetSync }
 }
 
 function Environment({ value }) {
@@ -83,8 +83,12 @@ export function DingTalkDshAssistantCard() {
   const [error, setError] = useState()
   const [updateFeedback, setUpdateFeedback] = useState()
   const [checkingVersion, setCheckingVersion] = useState(false)
+  const [sheetSyncDraft, setSheetSyncDraft] = useState({ enabled: false, documentUrl: '', sheetId: '' })
+  const [sheetOptions, setSheetOptions] = useState([])
+  const [sheetFeedback, setSheetFeedback] = useState()
+  const [checkingSheet, setCheckingSheet] = useState(false)
   const refresh = useCallback(async () => {
-    try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setLeafSessionPrompt(next.agentConfig.leafSessionPrompt ?? ''); setTaskPrompts(next.agentConfig.taskPrompts ?? []); setMaxConcurrentTasks(next.agentConfig.maxConcurrentTasks ?? 5); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
+    try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setLeafSessionPrompt(next.agentConfig.leafSessionPrompt ?? ''); setTaskPrompts(next.agentConfig.taskPrompts ?? []); setMaxConcurrentTasks(next.agentConfig.maxConcurrentTasks ?? 5); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); const configuredSheet = next.taskSheetSync?.config; setSheetSyncDraft(configuredSheet ? { enabled: configuredSheet.enabled, documentUrl: configuredSheet.documentUrl, sheetId: configuredSheet.sheetId } : { enabled: false, documentUrl: '', sheetId: '' }); if (configuredSheet) setSheetOptions([{ sheetId: configuredSheet.sheetId, title: configuredSheet.sheetTitle }]); setError(undefined) }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }, [])
   useEffect(() => { refresh() }, [refresh])
@@ -100,6 +104,16 @@ export function DingTalkDshAssistantCard() {
     }
   }
   const mutate = async (operation) => { try { await operation(); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } }
+  const checkTaskSheet = async () => {
+    setCheckingSheet(true)
+    try {
+      const checked = await request('/task-sheet-sync/check', { method: 'POST', body: JSON.stringify({ documentUrl: sheetSyncDraft.documentUrl.trim() }) })
+      setSheetOptions(checked.sheets)
+      setSheetSyncDraft((current) => ({ ...current, sheetId: checked.sheets.some((sheet) => sheet.sheetId === current.sheetId) ? current.sheetId : (checked.sheets.length === 1 ? checked.sheets[0].sheetId : '') }))
+      setSheetFeedback({ kind: 'success', message: `已识别“${checked.name}”，请选择目标工作表。` })
+    } catch (cause) { setSheetFeedback({ kind: 'error', message: cause instanceof Error ? cause.message : String(cause) }) }
+    finally { setCheckingSheet(false) }
+  }
   const addGroup = async () => {
     if (!newGroup.groupId.trim()) return setGroupFeedback({ kind: 'error', message: '请先从搜索结果中选择要常驻的群聊。' })
     if (!newGroup.responsibility.trim()) return setGroupFeedback({ kind: 'error', message: '请填写该群的会话职责后再添加。' })
@@ -149,6 +163,20 @@ export function DingTalkDshAssistantCard() {
       updateFeedback ? React.createElement('div', { role: 'status', style: { color: colors.muted, fontSize: 12, overflowWrap: 'anywhere' } }, updateFeedback) : null,
       overview?.version?.changelogUrl ? React.createElement('a', { href: overview.version.changelogUrl, target: '_blank', rel: 'noreferrer', style: { color: colors.accent } }, '查看 CHANGELOG') : null),
     React.createElement(Environment, { value: overview?.environment }),
+    React.createElement('section', { style: panel },
+      React.createElement('strong', null, '任务表格同步'),
+      React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, 'Resident 纯脚本每 3 分钟全量覆盖所选工作表；不调用模型。该工作表中的手工内容会在下轮被覆盖。'),
+      React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '钉钉在线电子表格地址', React.createElement('input', { 'aria-label': '钉钉任务表格地址', style: input, placeholder: 'https://alidocs.dingtalk.com/i/nodes/...', value: sheetSyncDraft.documentUrl, onChange: (event) => { setSheetSyncDraft((current) => ({ ...current, documentUrl: event.target.value, sheetId: '' })); setSheetOptions([]) } })),
+      React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'start' }, disabled: checkingSheet || !sheetSyncDraft.documentUrl.trim(), onClick: checkTaskSheet }, checkingSheet ? '检查中…' : '检查连接'),
+      sheetOptions.length ? React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '目标工作表', React.createElement('select', { 'aria-label': '任务同步目标工作表', style: input, value: sheetSyncDraft.sheetId, onChange: (event) => setSheetSyncDraft((current) => ({ ...current, sheetId: event.target.value })) }, React.createElement('option', { value: '' }, '请选择'), ...sheetOptions.map((sheet) => React.createElement('option', { key: sheet.sheetId, value: sheet.sheetId }, sheet.title)))) : null,
+      React.createElement('label', { style: { display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12 } }, React.createElement('input', { type: 'checkbox', checked: sheetSyncDraft.enabled, onChange: (event) => setSheetSyncDraft((current) => ({ ...current, enabled: event.target.checked })) }), '启用每 3 分钟同步'),
+      sheetFeedback ? React.createElement('div', { role: sheetFeedback.kind === 'error' ? 'alert' : 'status', style: { color: sheetFeedback.kind === 'error' ? colors.danger : 'var(--dsw-alias-status-success, #168544)', fontSize: 12 } }, sheetFeedback.message) : null,
+      React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '最近成功'), React.createElement('span', null, overview?.taskSheetSync?.status?.lastSuccessAt ?? '尚未同步')),
+      React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '最近任务数 / 状态'), React.createElement('span', null, `${overview?.taskSheetSync?.status?.taskCount ?? '-'} / ${overview?.taskSheetSync?.status?.state ?? 'idle'}`)),
+      overview?.taskSheetSync?.status?.lastError ? React.createElement('div', { role: 'alert', style: { color: colors.danger, fontSize: 12, overflowWrap: 'anywhere' } }, overview.taskSheetSync.status.lastError) : null,
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } },
+        React.createElement('button', { type: 'button', style: button, disabled: !overview?.taskSheetSync?.config?.enabled, onClick: () => mutate(() => request('/task-sheet-sync/run', { method: 'POST' })) }, '立即同步'),
+        React.createElement('button', { type: 'button', style: { ...button, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !sheetSyncDraft.documentUrl.trim() || !sheetSyncDraft.sheetId, onClick: () => mutate(() => request('/config/task-sheet-sync', { method: 'PUT', body: JSON.stringify(sheetSyncDraft) })) }, '保存同步配置'))),
     React.createElement('section', { style: panel }, React.createElement('strong', null, 'Agent 配置'),
       React.createElement('strong', { style: { fontSize: 13 } }, 'Agent 名称 / 别名'),
       React.createElement('input', { 'aria-label': 'Agent 名称和别名', placeholder: '例如 数字助理,小助手', style: input, value: agentNames, onChange: (event) => setAgentNames(event.target.value) }),

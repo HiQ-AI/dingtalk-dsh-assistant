@@ -113,8 +113,19 @@ test('投影水位已保存但淘汰删除失败，重启重放补齐裁剪且�
   assert.equal(restored.listActivities(task.taskId).at(-1).seq, 500)
 })
 
-test('Topic破坏性模型使用独立domain版本7', () => {
+test('任务表格同步保持当前domain版本7', () => {
   assert.equal(residentDomainSpec.version, 7)
+})
+
+test('任务表格同步配置与运行状态独立持久化', async () => {
+  const { facility, seed } = memoryFacility()
+  const store = await openResidentStore(facility)
+  const config = { enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', nodeId: 'node', documentName: '任务表', sheetId: 'sheet', sheetTitle: 'Sheet1', intervalMs: 180000 }
+  await store.setTaskSheetSyncConfig(config)
+  await store.setTaskSheetSyncStatus({ state: 'success', taskCount: 3, lastSuccessAt: '2026-09-14T04:00:00Z' })
+  const restored = await openResidentStore(memoryFacility(seed).facility)
+  assert.deepEqual(restored.getTaskSheetSyncConfig(), config)
+  assert.deepEqual(restored.getTaskSheetSyncStatus(), { state: 'success', taskCount: 3, lastSuccessAt: '2026-09-14T04:00:00Z' })
 })
 
 test('删除后重建同 ID 流程不能复用旧修订号使旧计划恢复有效', async () => {
