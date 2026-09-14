@@ -13,8 +13,8 @@ HTTP配置检查和立即同步接口,PASS
 设置页配置和状态展示,PASS
 全量423项测试,PASS
 Assistant安装包包含同步实现,PASS
-本地DSH Web安装与新API回读,PENDING
-正式同步配置持久化与启动同步,PENDING
-连续三个真实周期,PENDING
-任务减少归零及旧尾行清理,PENDING
-同事身份可打开表格,PENDING
+本地DSH Web安装与新API回读,PASS
+正式同步配置持久化与启动同步,PASS
+连续三个真实周期,PASS
+任务减少归零及旧尾行清理,PASS
+目标同事群具备读取权限,PASS
