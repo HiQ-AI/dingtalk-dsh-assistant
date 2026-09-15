@@ -142,6 +142,8 @@ const taskSchema = z.object({
 const schedulerSchema = z.object({
   tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), agentWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
   leafSessionPrompt: z.string().optional(), taskPrompts: z.array(taskPromptSchema).optional(), taskPromptsVersion: z.number().int().nonnegative().optional(), taskExecutionGuidance: z.string().optional(), taskEvidenceGuidance: z.string().optional(), maxConcurrentTasks: z.number().int().positive().max(50).optional(),
+  taskSheetSyncConfig: z.object({ enabled: z.boolean(), documentUrl: z.string().url(), nodeId: z.string().min(1), documentName: z.string().min(1), sheetId: z.string().min(1), sheetTitle: z.string().min(1), intervalMs: z.literal(180000) }).optional(),
+  taskSheetSyncStatus: z.object({ state: z.enum(['idle', 'running', 'success', 'failed']), trigger: z.enum(['startup', 'timer', 'manual']).optional(), lastAttemptAt: z.string().optional(), lastSuccessAt: z.string().optional(), snapshotAt: z.string().optional(), batchId: z.string().optional(), taskCount: z.number().int().nonnegative().optional(), lastError: z.string().optional() }).optional(),
 })
 const activitySchema = z.object({
   activityId: z.string().min(1), taskId: z.string().min(1), sessionId: z.string().min(1), eventKey: z.string().min(1),
@@ -315,6 +317,21 @@ export async function openResidentStore(storageDomain) {
     getAgentWorkspaceDir: () => scheduler.get('runtime')?.agentWorkspaceDir,
     getAgentNames: () => scheduler.get('runtime')?.agentNames ?? [],
     getMaxConcurrentTasks: () => scheduler.get('runtime')?.maxConcurrentTasks,
+    getTaskSheetSyncConfig: () => scheduler.get('runtime')?.taskSheetSyncConfig,
+    setTaskSheetSyncConfig: async (taskSheetSyncConfig) => {
+      const parsed = schedulerSchema.shape.taskSheetSyncConfig.unwrap().parse(taskSheetSyncConfig)
+      await scheduler.update('runtime', (current) => ({ ...current, taskSheetSyncConfig: parsed }))
+      return parsed
+    },
+    getTaskSheetSyncStatus: () => scheduler.get('runtime')?.taskSheetSyncStatus ?? { state: 'idle' },
+    setTaskSheetSyncStatus: async (patch) => {
+      let next
+      await scheduler.update('runtime', (current) => {
+        next = schedulerSchema.shape.taskSheetSyncStatus.unwrap().parse({ ...(current?.taskSheetSyncStatus ?? { state: 'idle' }), ...patch })
+        return { ...current, taskSheetSyncStatus: next }
+      })
+      return next
+    },
     setMaxConcurrentTasks: async (maxConcurrentTasks) => {
       await scheduler.update('runtime', (current) => ({ ...current, maxConcurrentTasks }))
       return { maxConcurrentTasks }
