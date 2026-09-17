@@ -13,12 +13,48 @@ const DOMAIN = 'dingtalk_dsh_assistant'
 const isSynthetic = (id) => /^(?:web(?:-reopen)?:|recovery:)/u.test(id ?? '')
 const withVersion = (result, runSequence) => result ? { ...result, inputVersion: 1, runSequence } : undefined
 const stripSource = ({ sourceMessageId, sourceMessageIds, triggerHistory, messageHistory, relatedContexts, ...rest }) => rest
+const legacyUnit = (groupId, message) => ({
+  unitId: stableId('unit', `${groupId}:${message.messageId}:legacy-whole-message`), unitRevision: 1, unitKey: 'legacy-whole-message',
+  summary: message.text?.slice(0, 240) || '附件事项',
+  sourceRanges: message.text ? [{ start: 0, end: message.text.length, quote: message.text }] : [],
+  sourceAttachments: (message.imageRefs ?? []).map((ref) => ({ imageRefId: ref.id })), contextRanges: [],
+})
+
+function upgradeV7(document) {
+  const output = structuredClone(document), issues = []
+  output.unit.version = 8
+  for (const [groupKey, group] of Object.entries(output.tables.groups ?? {})) {
+    const unitByMessage = new Map()
+    group.messages = group.messages.map((message) => {
+      const units = message.units?.length ? message.units : [legacyUnit(group.groupId, message)]
+      if (units.some((unit) => unit.sourceRanges.length + (unit.sourceAttachments?.length ?? 0) === 0)) issues.push({ type: 'missing-unit-source', groupId: group.groupId, messageId: message.messageId })
+      unitByMessage.set(message.messageId, units)
+      return { ...message, units }
+    })
+    group.topics = group.topics.map((topic) => ({ ...topic, entries: topic.entries.map((entry) => {
+      if (entry.unitId && entry.unitRevision) return entry
+      const units = unitByMessage.get(entry.messageId)
+      if (units?.length !== 1) { issues.push({ type: 'ambiguous-topic-entry', groupId: group.groupId, topicId: topic.topicId, messageId: entry.messageId }); return entry }
+      return { ...entry, unitId: units[0].unitId, unitRevision: units[0].unitRevision }
+    }) }))
+    output.tables.groups[groupKey] = group
+  }
+  for (const table of Object.keys(residentDomainSpec.tables)) output.tables[table] ??= {}
+  if (!issues.length) for (const [table, declaration] of Object.entries(residentDomainSpec.tables)) for (const [key, value] of Object.entries(output.tables[table])) {
+    const parsed = declaration.valueSchema.safeParse(value)
+    if (!parsed.success) issues.push({ type: 'invalid-target-record', table, key, paths: parsed.error.issues.map((issue) => issue.path.join('.')) })
+    else output.tables[table][key] = parsed.data
+  }
+  const counts = { groups: Object.keys(output.tables.groups ?? {}).length, messages: Object.values(output.tables.groups ?? {}).reduce((sum, group) => sum + group.messages.length, 0), tasks: Object.keys(output.tables.tasks ?? {}).length, topics: Object.values(output.tables.groups ?? {}).reduce((sum, group) => sum + group.topics.length, 0), outbox: Object.values(output.tables.groups ?? {}).reduce((sum, group) => sum + group.outbox.length, 0) }
+  return { document: output, report: { ready: issues.length === 0, sourceVersion: 7, targetVersion: 8, counts, mappings: [], issues } }
+}
 
 // 只接受已核验的 SDK JSON unit 形态，不猜 profile 路径或修改原介质。
 export function planTopicMigration(document) {
-  if (document?.unit?.name !== DOMAIN || document.unit.version !== 6 || !document.tables || Array.isArray(document.tables)) throw new Error('migration_source_must_be_v6_json_unit')
+  if (document?.unit?.name === DOMAIN && document.unit.version === 7 && document.tables && !Array.isArray(document.tables)) return upgradeV7(document)
+  if (document?.unit?.name !== DOMAIN || document.unit.version !== 6 || !document.tables || Array.isArray(document.tables)) throw new Error('migration_source_must_be_v6_or_v7_json_unit')
   const output = structuredClone(document)
-  output.unit.version = 7
+  output.unit.version = 8
   output.global ??= null
   const issues = [], mappings = []
   for (const table of Object.keys(document.tables)) if (!(table in residentDomainSpec.tables)) issues.push({ type: 'unknown-table', table })
@@ -32,7 +68,8 @@ export function planTopicMigration(document) {
       if (known.has(message.messageId)) issues.push({ type: 'duplicate-message', groupId: group.groupId, messageId: message.messageId })
       known.add(message.messageId)
       if (message.agentDeliveryStatus === 'decision-commit-failed') issues.push({ type: 'unreconciled-commit', groupId: group.groupId, messageId: message.messageId })
-      return { ...message, messageVersion: 1, facts: [], sourceKind: 'dingtalk', routingStatus: ['delivered', 'skipped'].includes(message.agentDeliveryStatus) ? 'routed' : 'pending' }
+      const migrated = { ...message, messageVersion: 1, facts: [], sourceKind: 'dingtalk', routingStatus: ['delivered', 'skipped'].includes(message.agentDeliveryStatus) ? 'routed' : 'pending' }
+      return { ...migrated, units: [legacyUnit(group.groupId, migrated)] }
     })
     group.nextSequence = Math.max(group.nextSequence, ...group.messages.map((message) => message.sequence + 1), 1)
   }
@@ -50,8 +87,10 @@ export function planTopicMigration(document) {
     const topic = { topicId, groupId: task.groupId, title: task.title ?? task.objective.slice(0, 120), revision: 0, processedRevision: 0, status: 'active', summary: '', summaryRevision: 0, openQuestions: [], entries: [], decisions: [], createdAt: at, updatedAt: task.updatedAt, migrationBaseline: true }
     const append = (message) => {
       if (topic.entries.some((entry) => entry.messageId === message.messageId)) return
+      const unit = message.units?.[0] ?? legacyUnit(task.groupId, message)
+      message.units = [unit]
       topic.revision += 1
-      topic.entries.push({ revision: topic.revision, messageId: message.messageId, messageVersion: 1, action: 'add', reason: 'migration-baseline' })
+      topic.entries.push({ revision: topic.revision, messageId: message.messageId, messageVersion: 1, unitId: unit.unitId, unitRevision: unit.unitRevision, action: 'add', effectOwner: true, reason: 'migration-baseline' })
     }
     const sources = [...new Set([task.sourceMessageId, ...(task.triggerHistory ?? []).map((item) => item.sourceMessageId), ...(task.messageHistory ?? []).map((item) => item.messageId), ...(task.runHistory ?? []).map((item) => item.sourceMessageId), ...(task.objectiveHistory ?? []).map((item) => item.sourceMessageId)].filter(Boolean))]
     for (const messageId of sources) {
@@ -120,7 +159,7 @@ export function planTopicMigration(document) {
     for (const task of Object.values(output.tables.tasks)) validateTopicRefs(groupById.get(task.groupId), task.topicRefs)
   }
   const counts = { groups: Object.keys(output.tables.groups ?? {}).length, messages: [...groupById.values()].reduce((count, group) => count + group.messages.length, 0), tasks: sourceTasks.size, topics: mappings.length, outbox: [...groupById.values()].reduce((count, group) => count + group.outbox.length, 0) }
-  return { document: output, report: { ready: issues.length === 0, sourceVersion: 6, targetVersion: 7, counts, mappings, issues } }
+  return { document: output, report: { ready: issues.length === 0, sourceVersion: 6, targetVersion: 8, counts, mappings, issues } }
 }
 
 export async function migrateTopicStorage({ source, target, check = false }) {
@@ -167,7 +206,7 @@ export async function migrateTopicStorage({ source, target, check = false }) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const { values } = parseArgs({ options: { source: { type: 'string' }, target: { type: 'string' }, check: { type: 'boolean', default: false } }, strict: true })
-    if (!values.source || !values.target) throw new Error('usage: node scripts/migrate-topic-storage.js --source <v6-unit.json> --target <independent-root/dingtalk_dsh_assistant.json> [--check]')
+    if (!values.source || !values.target) throw new Error('usage: node scripts/migrate-topic-storage.js --source <v6-or-v7-unit.json> --target <independent-root/dingtalk_dsh_assistant.json> [--check]')
     const report = await migrateTopicStorage(values)
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
     if (!report.ready) process.exitCode = 1

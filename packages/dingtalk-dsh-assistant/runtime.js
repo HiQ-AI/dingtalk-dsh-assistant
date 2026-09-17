@@ -1634,7 +1634,16 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     },
     onHumanBlockerRequested(listener) { humanBlockerListeners.add(listener); return () => humanBlockerListeners.delete(listener) },
     onAuthorizationDecided(listener) { authorizationDecisionListeners.add(listener); return () => authorizationDecisionListeners.delete(listener) },
-    prepareOutbound: ({ groupId, outbound }) => recallReplacedOutbounds({ groupId, outboundIds: outbound.replacesOutboundIds ?? [], replacementSourceMessageId: outbound.sourceMessageId }),
+    prepareOutbound: async ({ groupId, outbound }) => {
+      const current = store.getGroup(groupId)?.outbox.find((item) => item.outboundId === outbound.outboundId)
+      if (!current || current.status !== 'pending') return { status: 'superseded' }
+      if (current.taskIds?.length === 1 && current.taskInputVersion && current.taskRunSequence) {
+        const task = store.getTask(current.taskIds[0])
+        if (!task || task.inputVersion !== current.taskInputVersion || task.runSequence !== current.taskRunSequence) return { status: 'superseded' }
+      }
+      await recallReplacedOutbounds({ groupId, outboundIds: outbound.replacesOutboundIds ?? [], replacementSourceMessageId: outbound.sourceMessageId })
+      return { status: 'ready' }
+    },
     registerGroupMessageRecaller(recaller) {
       if (typeof recaller !== 'function') throw new Error('group_message_recaller_invalid')
       groupMessageRecaller = recaller

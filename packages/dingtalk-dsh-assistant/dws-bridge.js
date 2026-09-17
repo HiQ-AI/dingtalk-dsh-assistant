@@ -285,7 +285,8 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
   }
   const processOutbound = async ({ groupId, outbound }) => {
     try {
-      await runtime.prepareOutbound?.({ groupId, outbound })
+      const prepared = await runtime.prepareOutbound?.({ groupId, outbound })
+      if (prepared?.status === 'superseded') return
       const delivery = await dispatchOutbox({ adapter, groupId, outbound })
       await runtime.recordOutboundDeliveryAttempt?.({ groupId, outboundId: outbound.outboundId, ...(delivery.status === 'pending' ? { reason: delivery.reason } : {}) })
       if (delivery.status === 'sent') await runtime.acknowledge({ groupId, outboundId: outbound.outboundId, deliveredMessageId: delivery.messageId })

@@ -52,8 +52,8 @@ test('fake adapter 先归类，再读取工具正式 Topic 标识独立提交', 
   const routing = await run(value, [request])
   assert.equal(routing[1].name, 'group_topic_route_submit')
   const args = topicRouteSubmissionSchema.parse(JSON.parse(routing[1].argumentsDelta))
-  assert.deepEqual(args.routes[0].topics, [{ newTopicKey: 'fake-m1', title: '任务：核验提交协议' }])
-  const pendingDecisions = [{ requestId: 'decision-1', topicId: 'topic-persisted', revision: 1, messages }]
+  assert.deepEqual(args.routes[0].units[0].topics, [{ newTopicKey: 'fake-m1', title: '任务：核验提交协议' }])
+  const pendingDecisions = [{ requestId: 'decision-1', topicId: 'topic-persisted', revision: 1, messages: [{ ...messages[0], unitId: 'unit-m1', unitRevision: 1 }] }]
   const decision = await run(value, [request, assistant(routing[2]), result(routing[1].id, { status: 'accepted', pendingDecisions })])
   assert.equal(decision[1].name, 'group_decision_submit')
   const submission = groupDecisionSubmissionSchema.parse(JSON.parse(decision[1].argumentsDelta))
@@ -81,7 +81,7 @@ test('fake adapter 一批多个话题处理完一个提交一个', async () => {
 
 test('fake adapter 补充任务携带当前 Task 版本与新 Topic 版本', async () => {
   const tasks = [{ taskId: 'task-1', inputVersion: 3, runSequence: 2, topicRefs: [{ topicId: 'topic-a', revision: 1 }] }]
-  const request = topicRequest('DECISION', { requestId: 'd1', topicId: 'topic-a', revision: 2, messages: [{ messageId: 'm2', messageVersion: 1, text: '补充：仅核验本月' }] })
+  const request = topicRequest('DECISION', { requestId: 'd1', topicId: 'topic-a', revision: 2, messages: [{ messageId: 'm2', messageVersion: 1, unitId: 'unit-m2', unitRevision: 1, text: '补充：仅核验本月' }] })
   const chunks = await run(adapter(), [request], `## 本群全部任务关联索引\n\n${JSON.stringify(tasks)}`)
   const { decision } = groupDecisionSubmissionSchema.parse(JSON.parse(chunks[1].argumentsDelta))
   assert.equal(decision.actions[0].inputVersion, 3)

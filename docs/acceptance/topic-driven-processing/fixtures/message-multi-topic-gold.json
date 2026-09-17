@@ -1,0 +1,45 @@
+[
+  {
+    "id": "issue-1066-structured",
+    "category": "should-split",
+    "input": "请回归审核增强的四项改动；请确认审核草稿方案和排期；请确认撤回通知方案和排期。",
+    "expectedUnits": 3,
+    "notes": "四项回归合为一个交付目标，两个新增需求各自独立。"
+  },
+  {
+    "id": "issue-1066-no-headings",
+    "category": "adversarial-rewrite",
+    "input": "麻烦把这轮审核增强完整回归后反馈，同时看看审核填写到一半怎么保存并给排期，撤回成功后通知原审核人的方案和排期也分别确认。",
+    "expectedUnits": 3,
+    "notes": "没有标题、编号或换行，仍按独立交付边界拆分。"
+  },
+  {
+    "id": "regression-four-checks",
+    "category": "should-merge",
+    "input": "回归批量 ID 搜索、专家多选、多审核人结论和撤回限制，完成后反馈一次回归结论。",
+    "expectedUnits": 1,
+    "notes": "四个验收点属于同一回归交付。"
+  },
+  {
+    "id": "background-and-request",
+    "category": "background",
+    "input": "相关分支已合入 UAT2，这次只需要确认审核草稿的实现方案和排期。",
+    "expectedUnits": 1,
+    "notes": "分支信息作为背景，不另建事项。"
+  },
+  {
+    "id": "mixed-authorization",
+    "category": "mixed-authorization",
+    "input": "@助理 请分析审核草稿方案；@李四 请负责撤回通知实现。",
+    "expectedUnits": 2,
+    "expectedAgentOwnedUnits": 1,
+    "notes": "只能为明确交给助理的事项创建 Task。"
+  },
+  {
+    "id": "later-correction",
+    "category": "correction",
+    "input": "刚才审核草稿先不用做，撤回通知的方案继续。",
+    "expectedUnits": 2,
+    "notes": "分别更新对应事项，不连带取消另一个目标。"
+  }
+]

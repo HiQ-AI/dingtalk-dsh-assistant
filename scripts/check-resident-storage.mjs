@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { residentDomainSpec } from '../packages/dingtalk-dsh-assistant/store.js'
 
-// v7 可选扩展无需数据重写。只读预检与 v6→v7 迁移脚本分开，避免误用写入路径。
+// v8 可选扩展无需数据重写。只读预检与 v6/v7→v8 迁移脚本分开，避免误用写入路径。
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 function removedFields(source, parsed) {
   if (Array.isArray(source)) return source.reduce((count, value, index) => count + removedFields(value, parsed?.[index]), 0)

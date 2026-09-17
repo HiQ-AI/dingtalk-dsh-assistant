@@ -41,6 +41,7 @@ function pageNumber(url, name, fallback, maximum = Number.MAX_SAFE_INTEGER) {
 
 function topicSummary(topic) {
   const unfinished = topic.decisions?.findLast((item) => item.status !== 'completed')
+  const pendingUnits = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision).map((entry) => entry.unitId ?? `legacy:${entry.messageId}`))
   return {
     topicId: topic.topicId, groupId: topic.groupId, title: topic.title,
     revision: topic.revision, processedRevision: topic.processedRevision, status: topic.status,
@@ -48,6 +49,7 @@ function topicSummary(topic) {
     summaryRevision: topic.summaryRevision,
     openQuestionCount: topic.openQuestions?.length ?? 0,
     pendingRevisionCount: Math.max(0, topic.revision - topic.processedRevision),
+    pendingUnitCount: pendingUnits.size,
     ...(unfinished ? { processing: { decisionId: unfinished.decisionId, status: unfinished.status, appliedOperations: (unfinished.operations ?? []).filter((item) => item.status === 'applied').length, totalOperations: unfinished.operations?.length ?? 0, ...(unfinished.error ? { error: String(unfinished.error).slice(0, 1000) } : {}) } } : {}),
     createdAt: topic.createdAt, updatedAt: topic.updatedAt,
   }
@@ -60,14 +62,17 @@ function groupSummary(group, runtime) {
   summary.messages = (summary.messages ?? []).map((message) => ({
     ...message,
     topicRefs: topics.flatMap((topic) => {
-      const current = topic.entries?.findLast((entry) => entry.messageId === message.messageId)
-      return current?.action === 'add' ? [{ topicId: topic.topicId, revision: topic.revision, title: topic.title }] : []
+      const state = new Map()
+      for (const entry of topic.entries?.filter((item) => item.messageId === message.messageId) ?? []) state.set(entry.unitId ?? `legacy:${entry.messageId}`, entry)
+      return [...state.values()].filter((entry) => entry.action === 'add').map((entry) => ({ topicId: topic.topicId, revision: topic.revision, title: topic.title, unitId: entry.unitId, unitRevision: entry.unitRevision }))
     }),
   }))
+  const pendingUnits = new Set(topics.flatMap((topic) => topic.entries.filter((entry) => entry.revision > topic.processedRevision).map((entry) => entry.unitId ?? `legacy:${entry.messageId}`)))
   summary.topicProgress = {
     total: topics.length,
     pending: topics.filter((topic) => topic.revision > topic.processedRevision).length,
     pendingRevisions: topics.reduce((count, topic) => count + Math.max(0, topic.revision - topic.processedRevision), 0),
+    pendingUnits: pendingUnits.size,
     unroutedMessages: (group.messages ?? []).filter((message) => message.routingStatus === 'pending' || message.routingStatus === 'failed').length,
   }
   return summary

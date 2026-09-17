@@ -73,7 +73,7 @@ test('仅Task快照存在的历史原文迁回Message，Web输入没有伪造钉
 test('真实SDK JSON迁移check零写、独立目标读回、重复运行与旧版本回退可读', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-topic-migration-'))
   t.after(() => rm(root, { recursive: true, force: true }))
-  const sourceRoot = join(root, 'v6'), targetRoot = join(root, 'v7')
+  const sourceRoot = join(root, 'v6'), targetRoot = join(root, 'v8')
   await mkdir(sourceRoot)
   const source = join(sourceRoot, 'dingtalk_dsh_assistant.json'), target = join(targetRoot, 'dingtalk_dsh_assistant.json')
   await writeFile(source, JSON.stringify(fixture(), null, 2))
@@ -83,7 +83,7 @@ test('真实SDK JSON迁移check零写、独立目标读回、重复运行与旧�
   await assert.rejects(stat(targetRoot), { code: 'ENOENT' })
   const migrated = await migrateTopicStorage({ source, target })
   assert.equal(migrated.verified, true)
-  assert.equal(JSON.parse(await readFile(target, 'utf8')).unit.version, 7)
+  assert.equal(JSON.parse(await readFile(target, 'utf8')).unit.version, 8)
   assert.equal((await migrateTopicStorage({ source, target })).written, false)
   assert.equal(await readFile(source, 'utf8'), original)
   const backend = new JsonStorageBackend(targetRoot)
@@ -94,10 +94,32 @@ test('真实SDK JSON迁移check零写、独立目标读回、重复运行与旧�
   assert.equal(store.getGroup('g').outbox[0].resultFingerprint, fingerprint(taskResultSchema.parse(store.getTask('task-old').result)))
   await store.close(); await backend.close()
   const oldBackend = new JsonStorageBackend(sourceRoot)
-  await assert.rejects(oldBackend.kv.open({ name: residentDomainSpec.name, version: 7, tables: Object.keys(residentDomainSpec.tables), hasGlobal: false }), { code: 'version-mismatch' })
+  await assert.rejects(oldBackend.kv.open({ name: residentDomainSpec.name, version: 8, tables: Object.keys(residentDomainSpec.tables), hasGlobal: false }), { code: 'version-mismatch' })
   const old = await oldBackend.kv.open({ name: residentDomainSpec.name, version: 6, tables: Object.keys(residentDomainSpec.tables), hasGlobal: false })
   assert.equal((await old.loadAll()).tables.tasks['task-old'].sourceMessageId, 'm')
   await old.close(); await oldBackend.close()
+})
+
+test('v7到v8为每条历史消息建立单事项基线并保留Task与已发回执', () => {
+  const v8FromV6 = planTopicMigration(fixture()).document
+  const v7 = structuredClone(v8FromV6)
+  v7.unit.version = 7
+  for (const group of Object.values(v7.tables.groups)) {
+    for (const message of group.messages) delete message.units
+    for (const topic of group.topics) for (const entry of topic.entries) {
+      delete entry.unitId; delete entry.unitRevision; delete entry.effectOwner
+    }
+  }
+  const migrated = planTopicMigration(v7)
+  assert.equal(migrated.report.ready, true)
+  assert.equal(migrated.report.sourceVersion, 7)
+  assert.equal(migrated.report.targetVersion, 8)
+  const group = migrated.document.tables.groups.g
+  assert.equal(group.messages.every((message) => message.units?.length === 1), true)
+  assert.equal(group.topics.every((topic) => topic.entries.every((entry) => entry.unitId && entry.unitRevision === 1)), true)
+  assert.equal(migrated.document.tables.tasks['task-old'].state, 'completed')
+  assert.equal(group.outbox[0].deliveredMessageId, 'channel-old')
+  assert.equal(group.outbox[0].status, 'sent')
 })
 
 test('已发v6等待通知匹配当前结果时补指纹并保留原业务键，新问题不会命中旧回执', () => {
