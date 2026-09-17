@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import { storedTaskCheckpointBaseSchema, taskResultSchema } from './task-result.js'
-import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema } from './topic-model.js'
+import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId } from './topic-model.js'
 import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
 
 export { resolveTopicMessages } from './topic-model.js'
@@ -531,7 +531,7 @@ export async function openResidentStore(storageDomain) {
           const message = latest.messages.find((item) => item.messageId === route.messageId)
           if (!message) throw new Error(`message_not_found:${route.messageId}`)
           if (message.messageVersion !== route.messageVersion) throw new Error('topic_message_version_stale')
-          const routeUnits = route.units ?? [{ unitKey: 'whole-message', summary: message.text.slice(0, 240) || '附件事项', sourceRefs: [...(message.text ? [{ quote: message.text }] : []), ...(message.imageRefs ?? []).map((ref) => ({ imageRefId: ref.id })), ...(message.mediaUnavailable ?? []).map((value) => ({ imageRefId: String(value).split(':', 1)[0] }))], contextRefs: [], topics: route.topics, effectOwner: route.effectOwner, reason: route.reason }]
+          const routeUnits = route.units ?? [{ unitKey: 'whole-message', summary: message.text.slice(0, 240) || '附件事项', sourceRefs: [...(message.text ? [{ quote: message.text }] : []), ...(message.imageRefs ?? []).map((ref) => ({ imageRefId: attachmentRefId(ref) })), ...(message.mediaUnavailable ?? []).map((value) => ({ imageRefId: String(value).split(':', 1)[0] }))], contextRefs: [], topics: route.topics, effectOwner: route.effectOwner, reason: route.reason }]
           if (!Array.isArray(routeUnits) || routeUnits.length === 0) throw new Error('topic_route_units_required')
           if (new Set(routeUnits.map((unit) => unit.unitKey)).size !== routeUnits.length) throw new Error('topic_route_unit_key_duplicate')
           const existingUnits = message.units ?? []
@@ -552,7 +552,7 @@ export async function openResidentStore(storageDomain) {
               sourceRanges.push({ start: 0, end: message.text.length, quote: message.text })
             }
             const sourceAttachments = unit.sourceRefs.filter((ref) => ref.imageRefId).map(({ imageRefId }) => {
-              const available = (message.imageRefs ?? []).filter((ref) => ref.id === imageRefId).length
+              const available = (message.imageRefs ?? []).filter((ref) => attachmentRefId(ref) === imageRefId).length
               const unavailable = (message.mediaUnavailable ?? []).filter((value) => String(value).split(':', 1)[0] === imageRefId).length
               if (available + unavailable !== 1) throw new Error('topic_unit_attachment_invalid')
               return { imageRefId }
