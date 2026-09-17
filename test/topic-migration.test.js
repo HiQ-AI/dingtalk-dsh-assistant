@@ -106,6 +106,7 @@ test('v7到v8为每条历史消息建立单事项基线并保留Task与已发回
   v7.unit.version = 7
   for (const group of Object.values(v7.tables.groups)) {
     for (const message of group.messages) delete message.units
+    group.messages[0].imageRefs = [{ attachmentId: 'attachment-v7', mediaType: 'image/png' }]
     for (const topic of group.topics) for (const entry of topic.entries) {
       delete entry.unitId; delete entry.unitRevision; delete entry.effectOwner
     }
@@ -116,6 +117,7 @@ test('v7到v8为每条历史消息建立单事项基线并保留Task与已发回
   assert.equal(migrated.report.targetVersion, 8)
   const group = migrated.document.tables.groups.g
   assert.equal(group.messages.every((message) => message.units?.length === 1), true)
+  assert.deepEqual(group.messages[0].units[0].sourceAttachments, [{ imageRefId: 'attachment-v7' }])
   assert.equal(group.topics.every((topic) => topic.entries.every((entry) => entry.unitId && entry.unitRevision === 1)), true)
   assert.equal(migrated.document.tables.tasks['task-old'].state, 'completed')
   assert.equal(group.outbox[0].deliveredMessageId, 'channel-old')

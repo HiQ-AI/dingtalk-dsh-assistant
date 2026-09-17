@@ -245,6 +245,16 @@ test('启动恢复会收口已经完成 Topic 决策的遗留投递状态', asyn
   await store.close()
 })
 
+test('旧路由协议使用真实 attachmentId 建立事项附件来源', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'attachment-source' })
+  await store.ingest({ groupId: 'attachment-source', messageId: 'image', text: '', occurredAt: '2026-09-17T00:00:00Z', imageRefs: [{ attachmentId: 'attachment-1', mediaType: 'image/png' }] })
+  await store.routeMessages({ groupId: 'attachment-source', routeId: 'route-image', routingRevision: 0, routes: [{ messageId: 'image', messageVersion: 1, topics: [{ newTopicKey: 'image', title: '图片事项' }] }] })
+  assert.deepEqual(store.getGroup('attachment-source').messages[0].units[0].sourceAttachments, [{ imageRefId: 'attachment-1' }])
+  await store.close()
+})
+
 test('Task 当前轮耗时拆分状态时间和可配对工具时间', async () => {
   const { facility } = memoryFacility()
   const store = await openResidentStore(facility)

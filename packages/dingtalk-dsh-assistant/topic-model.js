@@ -4,6 +4,7 @@ import { z } from 'zod'
 export const topicRefSchema = z.object({ topicId: z.string().min(1), revision: z.number().int().positive() }).strict()
 export const unitRefSchema = z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()
 export const sourceRangeSchema = z.object({ start: z.number().int().nonnegative(), end: z.number().int().positive(), quote: z.string().min(1) }).strict()
+export const attachmentRefId = (ref) => ref?.id ?? ref?.attachmentId
 export const topicEntrySchema = z.object({ revision: z.number().int().positive(), messageId: z.string().min(1), messageVersion: z.number().int().positive(), unitId: z.string().min(1).optional(), unitRevision: z.number().int().positive().optional(), action: z.enum(['add', 'remove']), relationship: z.enum(['continuation', 'affected']).optional(), effectOwner: z.boolean().optional(), reason: z.string().optional() })
 export const topicDecisionSchema = z.object({
   decisionId: z.string().min(1), revision: z.number().int().positive(), decision: z.record(z.string(), z.unknown()), fingerprint: z.string(),
@@ -36,7 +37,7 @@ export function topicMessages(group, topic, revision) {
     const fact = current?.messageVersion === version ? current : current?.facts?.find((item) => item.messageVersion === version)
     if (!fact) throw new Error(`topic_message_fact_missing:${messageId}:${version}`)
     const unit = fact.units?.find((item) => item.unitId === unitId && item.unitRevision === unitRevision)
-      ?? { unitId, unitRevision, unitKey: 'legacy-whole-message', summary: fact.text || '历史事项', sourceRanges: fact.text ? [{ start: 0, end: fact.text.length, quote: fact.text }] : [], sourceAttachments: (fact.imageRefs ?? []).map((ref) => ({ imageRefId: ref.id })), contextRanges: [] }
+      ?? { unitId, unitRevision, unitKey: 'legacy-whole-message', summary: fact.text || '历史事项', sourceRanges: fact.text ? [{ start: 0, end: fact.text.length, quote: fact.text }] : [], sourceAttachments: (fact.imageRefs ?? []).map((ref) => ({ imageRefId: attachmentRefId(ref) })), contextRanges: [] }
     if (!unit) throw new Error(`topic_unit_fact_missing:${unitId}:${unitRevision}`)
     const { facts, units, ...snapshot } = fact
     const unitText = [...unit.sourceRanges, ...(unit.contextRanges ?? [])].map((range) => range.quote).join('\n') || unit.sourceAttachments.map((ref) => `[附件:${ref.imageRefId}]`).join('\n')

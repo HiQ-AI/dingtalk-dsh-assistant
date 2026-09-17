@@ -7,7 +7,7 @@ import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { residentDomainSpec } from '../packages/dingtalk-dsh-assistant/store.js'
 import { taskResultSchema } from '../packages/dingtalk-dsh-assistant/task-result.js'
-import { stableId, fingerprint, validateTopicRefs } from '../packages/dingtalk-dsh-assistant/topic-model.js'
+import { stableId, fingerprint, validateTopicRefs, attachmentRefId } from '../packages/dingtalk-dsh-assistant/topic-model.js'
 
 const DOMAIN = 'dingtalk_dsh_assistant'
 const isSynthetic = (id) => /^(?:web(?:-reopen)?:|recovery:)/u.test(id ?? '')
@@ -17,7 +17,7 @@ const legacyUnit = (groupId, message) => ({
   unitId: stableId('unit', `${groupId}:${message.messageId}:legacy-whole-message`), unitRevision: 1, unitKey: 'legacy-whole-message',
   summary: message.text?.slice(0, 240) || '附件事项',
   sourceRanges: message.text ? [{ start: 0, end: message.text.length, quote: message.text }] : [],
-  sourceAttachments: (message.imageRefs ?? []).map((ref) => ({ imageRefId: ref.id })), contextRanges: [],
+  sourceAttachments: (message.imageRefs ?? []).map((ref) => ({ imageRefId: attachmentRefId(ref) })), contextRanges: [],
 })
 
 function upgradeV7(document) {
