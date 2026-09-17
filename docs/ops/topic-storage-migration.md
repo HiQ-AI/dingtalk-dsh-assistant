@@ -1,6 +1,6 @@
 # Topic 存储迁移与回退
 
-本次存储 domain 从 6 升为 7。新 Runtime 不能直接打开旧介质，禁止只修改 JSON 中的版本号。当前工具只支持已核验的 `@deepseek-ai/dsh-storage-json@0.1.1-rc.2` 后端；该 SDK 每个 unit 保存一个包含 `unit`、`global`、`tables` 的 JSON 文件。其他后端必须另行实现并验收，不能套用文件迁移。
+本次存储 domain 从 7 升为 8；仍停留在 6 的介质也可由同一工具直接转换到 8。新 Runtime 不能直接打开旧介质，禁止只修改 JSON 中的版本号。当前工具只支持已核验的 `@deepseek-ai/dsh-storage-json@0.1.1-rc.2` 后端；该 SDK 每个 domain 保存一个包含 `unit`、`global`、`tables` 的 JSON 文件。其他后端必须另行实现并验收，不能套用文件迁移。
 
 迁移工具不启动 Runtime、不调用 DWS、不执行 Task。所有操作均写到明确指定的独立目标。原介质和配套 Session 检查点作为回退依据保留。
 
@@ -16,8 +16,8 @@
 以下路径是需要替换的示例。先检查，确认输出 `ready: true`、数量和映射合理后，才执行第二条命令。
 
 ```powershell
-node scripts/migrate-topic-storage.js --source 'D:/migration/v6/dingtalk_dsh_assistant.json' --target 'D:/migration/v7/dingtalk_dsh_assistant.json' --check
-node scripts/migrate-topic-storage.js --source 'D:/migration/v6/dingtalk_dsh_assistant.json' --target 'D:/migration/v7/dingtalk_dsh_assistant.json'
+node scripts/migrate-topic-storage.js --source 'D:/migration/v7/dingtalk_dsh_assistant.json' --target 'D:/migration/v8/dingtalk_dsh_assistant.json' --check
+node scripts/migrate-topic-storage.js --source 'D:/migration/v7/dingtalk_dsh_assistant.json' --target 'D:/migration/v8/dingtalk_dsh_assistant.json'
 ```
 
 `--check` 只读取文件并在内存中验证，不创建目标目录。报告包含群、消息、Task、Topic、Outbox 数量、Task→Topic 映射和问题类型，不包含原始聊天正文。缺失消息、快照正文冲突、跨群缺失、未知表、无法验证的新记录以及旧 `decision-commit-failed` 都阻止生成；必须先核对原始事实和实际副作用，不得把它们直接标成可重试。
@@ -25,6 +25,9 @@ node scripts/migrate-topic-storage.js --source 'D:/migration/v6/dingtalk_dsh_ass
 生成先以排他方式一次写入完整目标文件并同步到磁盘，再通过真实 SDK 重新打开目标，逐表比较读回结果，并检查源文件字节未改变。目标必须不存在；这样避免 JSON SDK 逐记录 `put` 反复重写整个 domain，并规避 Windows 大文件连续原子替换的失败窗口。成功返回 `verified: true`。对完全相同的目标再次运行返回 `written: false`，不会产生第二批 Topic；不同目标内容会明确拒绝。
 
 ## 数据转换
+
+- v7 的每条历史消息机械建立一个 `legacy-whole-message` 事项，Topic entry 增加 `unitId + unitRevision`；不推断历史消息是否本可拆成多个事项。
+- v7 Task、Decision、Topic 固定版本和 Outbox 原样保留；已发送回执仍为 `sent`，不会生成新动作或重新投递。
 
 - 每个旧 Task 生成一个稳定 ID 的迁移 Topic。Task 只保存 `topicRefs`、`inputVersion: 1` 和执行信息；删除 `sourceMessageId`、`triggerHistory`、`messageHistory`、群消息 `relatedContexts`。
 - 原始 Group 消息优先作为事实来源。只在 Task 快照存在的原文迁回 Group，并标记 `sourceKind: migration`；不同副本的冲突不会自动择一覆盖。
@@ -46,4 +49,4 @@ node scripts/migrate-topic-storage.js --source 'D:/migration/v6/dingtalk_dsh_ass
 node --test test/store.test.js test/topic-store.test.js test/topic-migration.test.js
 ```
 
-测试通过真实 JSON SDK 验证独立目标和原介质版本回退可读。没有迁移真实 profile，也没有对外发送测试消息。
+测试通过真实 JSON SDK 验证 v6/v7 到 v8 的独立目标和原介质版本回退可读。没有迁移真实 profile，也没有对外发送测试消息。

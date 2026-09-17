@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import { storedTaskCheckpointBaseSchema, taskResultSchema } from './task-result.js'
-import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision } from './topic-model.js'
+import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema } from './topic-model.js'
 import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
 
 export { resolveTopicMessages } from './topic-model.js'
@@ -49,6 +49,9 @@ const quotedMessageSchema = z.object({ messageId: z.string().min(1).optional(), 
 const messageFactFields = {
   messageVersion: z.number().int().positive(), imageRefs: z.array(z.record(z.string(), z.unknown())).optional(), mediaUnavailable: z.array(z.string()).optional(),
   sourceKind: z.enum(['dingtalk', 'web', 'internal', 'migration']).optional(), migrationSource: z.string().optional(),
+  ignoredRanges: z.array(sourceRangeSchema.extend({ reason: z.string().min(1) })).optional(),
+  units: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive(), unitKey: z.string().min(1), summary: z.string().min(1), sourceRanges: z.array(sourceRangeSchema), sourceAttachments: z.array(z.object({ imageRefId: z.string().min(1) }).strict()).default([]), contextRanges: z.array(sourceRangeSchema.extend({ purpose: z.string().min(1) })).default([]), predecessorUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).default([]), effectInheritance: z.enum(['inherit', 'new-scope']).optional(), revisionReason: z.string().min(1).optional() }).refine((unit) => unit.sourceRanges.length + unit.sourceAttachments.length > 0, 'topic_unit_source_required')).optional(),
+  activeUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).optional(),
 }
 const inboundSchema = z.object({
   ...messageFactFields, facts: z.array(z.record(z.string(), z.unknown())).default([]), routingStatus: z.enum(['pending', 'routed', 'failed']).default('pending'), routingError: z.string().optional(),
@@ -61,7 +64,8 @@ const inboundSchema = z.object({
 const outboundSchema = z.object({
   topicRefs: z.array(topicRefSchema).optional(), decisionId: z.string().optional(), resultFingerprint: z.string().min(1).optional(),
   outboundId: z.string().min(1), sourceMessageId: z.string().min(1), text: z.string(), status: z.enum(['pending', 'sent', 'superseded']),
-  supersededByOutboundId: z.string().min(1).optional(), supersededAt: z.string().min(1).optional(), sendStartedAt: z.string().min(1).optional(),
+  taskInputVersion: z.number().int().positive().optional(), taskRunSequence: z.number().int().positive().optional(),
+  supersededByOutboundId: z.string().min(1).optional(), supersededAt: z.string().min(1).optional(), supersededReason: z.string().min(1).optional(), sendStartedAt: z.string().min(1).optional(),
   readbackRequired: z.boolean().optional(),
   deliveryAttemptCount: z.number().int().nonnegative().optional(), deliveryAttemptedAt: z.string().min(1).optional(),
   deliveryPendingReason: z.string().min(1).optional(), deliveryError: z.string().min(1).optional(),
@@ -70,7 +74,7 @@ const outboundSchema = z.object({
   replyToMessageId: z.string().min(1).optional(), replyToSenderOpenDingTalkId: z.string().min(1).optional(),
   atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
   replyKind: z.enum(['confirmation', 'substantive', 'correction']).optional(),
-  matterSourceMessageIds: z.array(z.string().min(1)).optional(), taskIds: z.array(z.string().min(1)).optional(),
+  matterSourceMessageIds: z.array(z.string().min(1)).optional(), matterUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).optional(), taskIds: z.array(z.string().min(1)).optional(),
   replacesOutboundIds: z.array(z.string().min(1)).optional(),
   recallStatus: z.enum(['requested', 'recalled', 'failed']).optional(), recallReason: z.string().min(1).optional(),
   recalledAt: z.string().min(1).optional(), recallError: z.string().min(1).optional(),
@@ -160,7 +164,7 @@ const compareActivity = (a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurr
   || a.sessionId.localeCompare(b.sessionId) || a.eventKey.localeCompare(b.eventKey)
 
 export const residentDomainSpec = defineDomain({
-  name: 'dingtalk_dsh_assistant', version: 7, tables: {
+  name: 'dingtalk_dsh_assistant', version: 8, tables: {
     groups: domainTable(groupSchema), scheduler: domainTable(schedulerSchema), tasks: domainTable(taskSchema), alerts: domainTable(alertSchema), activities: domainTable(activitySchema),
   },
 })
@@ -170,8 +174,9 @@ function settleCompletedMessageDeliveries(messages, topics) {
   return messages.map((message) => {
     if (message.routingStatus !== 'routed' || ['delivered', 'skipped'].includes(message.agentDeliveryStatus)) return message
     const activeEntries = topics.flatMap((topic) => {
-      const entry = [...topic.entries].reverse().find((item) => item.messageId === message.messageId)
-      return entry?.action === 'add' && entry.messageVersion === message.messageVersion ? [{ topic, entry }] : []
+      const latestByUnit = new Map()
+      for (const entry of topic.entries) if (entry.messageId === message.messageId) latestByUnit.set(entry.unitId, entry)
+      return [...latestByUnit.values()].filter((entry) => entry.action === 'add' && entry.messageVersion === message.messageVersion).map((entry) => ({ topic, entry }))
     })
     if (activeEntries.some(({ topic, entry }) => topic.processedRevision < entry.revision)) return message
     const { agentDeliveryError: _error, agentDecisionRetryAt: _retryAt, ...current } = message
@@ -218,6 +223,14 @@ export function assertTaskContextRevision(task, action, basisIds) {
 const taskRevisionBasis = (group, task, action) => {
   const refs = [...new Map([...task.topicRefs, ...action.topicRefs ?? []].map(ref => [ref.topicId, ref])).values()]
   return new Set(refs.flatMap(ref => topicMessages(group, group.topics.find(topic => topic.topicId === ref.topicId), ref.revision).map(message => message.messageId)))
+}
+
+const resolveSourceRef = (text, ref, error = 'topic_unit_source_ambiguous') => {
+  const quote = ref?.quote
+  if (typeof quote !== 'string' || quote.length === 0) throw new Error('topic_unit_source_required')
+  const start = text.indexOf(quote)
+  if (start < 0 || text.indexOf(quote, start + 1) >= 0) throw new Error(error)
+  return { start, end: start + quote.length, quote }
 }
 
 function taskTiming(task, activities, now = Date.now()) {
@@ -296,6 +309,16 @@ export async function openResidentStore(storageDomain) {
     const cleanup = () => { if (tails.get(groupId) === current) tails.delete(groupId) }
     current.then(cleanup, cleanup)
     return current
+  }
+  const supersedeStaleTaskOutbox = async (task) => {
+    const groupEntry = findGroupEntry(task.groupId)
+    if (!groupEntry) return
+    await groups.update(groupEntry[0], (group) => ({ ...group, outbox: group.outbox.map((outbound) => {
+      if (outbound.status !== 'pending' || !outbound.taskIds?.includes(task.taskId)) return outbound
+      if (outbound.taskInputVersion === undefined || outbound.taskRunSequence === undefined) return outbound
+      if (outbound.taskInputVersion === task.inputVersion && outbound.taskRunSequence === task.runSequence) return outbound
+      return { ...outbound, status: 'superseded', supersededAt: new Date().toISOString(), supersededReason: 'task-execution-version-changed' }
+    }) }))
   }
 
   return {
@@ -457,10 +480,11 @@ export async function openResidentStore(storageDomain) {
           const now = new Date().toISOString()
           return { ...latest, messages: latest.messages.map((item) => item.messageId === messageId ? next : item),
             topics: latest.topics.map((topic) => {
-              const currentRef = [...topic.entries].reverse().find((item) => item.messageId === messageId)
-              if (!currentRef || currentRef.action === 'remove') return topic
-              return { ...topic, revision: topic.revision + 1, status: 'active', updatedAt: now,
-                entries: [...topic.entries, { revision: topic.revision + 1, messageId, messageVersion: next.messageVersion, action: 'add', reason: 'message-fact-enriched' }] }
+              const active = [...new Map(topic.entries.filter((item) => item.messageId === messageId).map((item) => [item.unitId, item])).values()].filter((item) => item.action === 'add')
+              if (!active.length) return topic
+              let revision = topic.revision
+              return { ...topic, revision: revision + active.length, status: 'active', updatedAt: now,
+                entries: [...topic.entries, ...active.map((item) => ({ revision: ++revision, messageId, messageVersion: next.messageVersion, unitId: item.unitId, unitRevision: item.unitRevision, action: 'add', effectOwner: item.effectOwner, relationship: item.relationship, reason: 'message-fact-enriched' }))] }
             }) }
         }
         sequence = latest.nextSequence
@@ -502,53 +526,115 @@ export async function openResidentStore(storageDomain) {
         }
         if (latest.routingRevision !== routingRevision) throw new Error('topic_routing_stale')
         if (new Set(routes.map((route) => route.messageId)).size !== routes.length) throw new Error('topic_route_message_duplicate')
-        const newTopics = new Map(), topicIdsByKey = {}
+        const newTopics = new Map(), topicIdsByKey = {}, unitsByMessage = new Map(), ignoredByMessage = new Map()
         for (const route of routes) {
           const message = latest.messages.find((item) => item.messageId === route.messageId)
           if (!message) throw new Error(`message_not_found:${route.messageId}`)
           if (message.messageVersion !== route.messageVersion) throw new Error('topic_message_version_stale')
-          if (!Array.isArray(route.topics) || (route.topics.length === 0 && !route.reason?.trim())) throw new Error('topic_route_reason_required')
-          if (route.topics.length > 1 && route.topics.some((ref) => !['continuation', 'affected'].includes(ref.relationship) || !ref.reason?.trim())) throw new Error('topic_route_relationship_required')
-          if (route.topics.length > 1 && !route.effectOwner) throw new Error('topic_route_effect_owner_required')
-          const selected = new Set()
-          for (const ref of route.topics) {
-            if (!!ref.topicId === !!ref.newTopicKey) throw new Error('topic_route_target_invalid')
-            if (ref.topicId && !latest.topics.some((topic) => topic.topicId === ref.topicId)) throw new Error(`topic_not_found:${ref.topicId}`)
-            if (ref.newTopicKey) {
-              if (!ref.title?.trim()) throw new Error('topic_title_required')
-              if (newTopics.has(ref.newTopicKey) && newTopics.get(ref.newTopicKey).title !== ref.title.trim()) throw new Error('topic_title_conflict')
-              const topicId = stableId('topic', `${groupId}:${routeId}:${ref.newTopicKey}`)
-              topicIdsByKey[ref.newTopicKey] = topicId
-              newTopics.set(ref.newTopicKey, { topicId, groupId, title: ref.title.trim(), revision: 0, processedRevision: 0, status: 'active', summary: '', summaryRevision: 0, openQuestions: [], entries: [], decisions: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+          const routeUnits = route.units ?? [{ unitKey: 'whole-message', summary: message.text.slice(0, 240) || '附件事项', sourceRefs: [...(message.text ? [{ quote: message.text }] : []), ...(message.imageRefs ?? []).map((ref) => ({ imageRefId: ref.id })), ...(message.mediaUnavailable ?? []).map((value) => ({ imageRefId: String(value).split(':', 1)[0] }))], contextRefs: [], topics: route.topics, effectOwner: route.effectOwner, reason: route.reason }]
+          if (!Array.isArray(routeUnits) || routeUnits.length === 0) throw new Error('topic_route_units_required')
+          if (new Set(routeUnits.map((unit) => unit.unitKey)).size !== routeUnits.length) throw new Error('topic_route_unit_key_duplicate')
+          const existingUnits = message.units ?? []
+          const resolvedUnits = []
+          const ignoredRanges = (route.ignoredRefs ?? []).map((ref) => ({ ...resolveSourceRef(message.text, ref, 'topic_ignored_source_ambiguous'), reason: ref.reason }))
+          for (const unit of routeUnits) {
+            if (!Array.isArray(unit.topics) || (unit.topics.length === 0 && !unit.reason?.trim())) throw new Error('topic_route_reason_required')
+            if (unit.topics.length > 1 && unit.topics.some((ref) => !['continuation', 'affected'].includes(ref.relationship) || !ref.reason?.trim())) throw new Error('topic_route_relationship_required')
+            if (unit.topics.length > 1 && !unit.effectOwner) throw new Error('topic_route_effect_owner_required')
+            const prior = existingUnits.findLast((item) => item.unitKey === unit.unitKey)
+            const replacesUnitIds = unit.replacesUnitIds ?? []
+            const predecessors = replacesUnitIds.map((unitId) => existingUnits.findLast((item) => item.unitId === unitId)).filter(Boolean)
+            if (predecessors.length !== replacesUnitIds.length || new Set(replacesUnitIds).size !== replacesUnitIds.length) throw new Error('topic_unit_revision_mapping_invalid')
+            if (prior && replacesUnitIds.length && !replacesUnitIds.includes(prior.unitId)) throw new Error('topic_unit_revision_mapping_invalid')
+            const sourceRanges = unit.sourceRefs.filter((ref) => ref.quote).map((ref) => resolveSourceRef(message.text, ref))
+            if (unit.sourceRefs.some((ref) => ref.wholeMessage)) {
+              if (unit.sourceRefs.filter((ref) => ref.wholeMessage).length !== 1 || !message.text) throw new Error('topic_unit_whole_message_invalid')
+              sourceRanges.push({ start: 0, end: message.text.length, quote: message.text })
             }
-            const id = ref.topicId ?? topicIdsByKey[ref.newTopicKey]
-            if (selected.has(id)) throw new Error('topic_route_target_duplicate')
-            selected.add(id)
+            const sourceAttachments = unit.sourceRefs.filter((ref) => ref.imageRefId).map(({ imageRefId }) => {
+              const available = (message.imageRefs ?? []).filter((ref) => ref.id === imageRefId).length
+              const unavailable = (message.mediaUnavailable ?? []).filter((value) => String(value).split(':', 1)[0] === imageRefId).length
+              if (available + unavailable !== 1) throw new Error('topic_unit_attachment_invalid')
+              return { imageRefId }
+            })
+            const contextRanges = (unit.contextRefs ?? []).map((ref) => ({ ...resolveSourceRef(message.text, ref, 'topic_unit_context_ambiguous'), purpose: ref.purpose }))
+            const comparable = { summary: unit.summary.trim(), sourceRanges, sourceAttachments, contextRanges, predecessorUnitRefs: predecessors.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ...(unit.effectInheritance ? { effectInheritance: unit.effectInheritance } : {}), ...(unit.revisionReason ? { revisionReason: unit.revisionReason } : {}) }
+            const same = prior && JSON.stringify({ summary: prior.summary, sourceRanges: prior.sourceRanges, sourceAttachments: prior.sourceAttachments ?? [], contextRanges: prior.contextRanges ?? [], predecessorUnitRefs: prior.predecessorUnitRefs ?? [], effectInheritance: prior.effectInheritance, revisionReason: prior.revisionReason }) === JSON.stringify(comparable)
+            const stored = { unitId: prior?.unitId ?? stableId('unit', `${groupId}:${route.messageId}:${unit.unitKey}`), unitRevision: same ? prior.unitRevision : (prior?.unitRevision ?? 0) + 1, unitKey: unit.unitKey, ...comparable }
+            const selected = new Set()
+            for (const ref of unit.topics) {
+              if (!!ref.topicId === !!ref.newTopicKey) throw new Error('topic_route_target_invalid')
+              if (ref.topicId && !latest.topics.some((topic) => topic.topicId === ref.topicId)) throw new Error(`topic_not_found:${ref.topicId}`)
+              if (ref.newTopicKey) {
+                if (!ref.title?.trim()) throw new Error('topic_title_required')
+                if (newTopics.has(ref.newTopicKey) && newTopics.get(ref.newTopicKey).title !== ref.title.trim()) throw new Error('topic_title_conflict')
+                const topicId = stableId('topic', `${groupId}:${routeId}:${ref.newTopicKey}`)
+                topicIdsByKey[ref.newTopicKey] = topicId
+                newTopics.set(ref.newTopicKey, { topicId, groupId, title: ref.title.trim(), revision: 0, processedRevision: 0, status: 'active', summary: '', summaryRevision: 0, openQuestions: [], entries: [], decisions: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+              }
+              const id = ref.topicId ?? topicIdsByKey[ref.newTopicKey]
+              if (selected.has(id)) throw new Error('topic_route_target_duplicate')
+              selected.add(id)
+            }
+            if (unit.effectOwner) {
+              const ownerId = unit.effectOwner.topicId ?? topicIdsByKey[unit.effectOwner.newTopicKey]
+              if (!ownerId || !selected.has(ownerId)) throw new Error('topic_route_effect_owner_invalid')
+            }
+            resolvedUnits.push({ ...stored, topics: unit.topics, effectOwner: unit.effectOwner, reason: unit.reason })
           }
-          if (route.effectOwner) {
-            const ownerId = route.effectOwner.topicId ?? topicIdsByKey[route.effectOwner.newTopicKey]
-            if (!ownerId || !selected.has(ownerId)) throw new Error('topic_route_effect_owner_invalid')
+          if (route.units) {
+            const activeExistingIds = new Set((message.activeUnitRefs ?? existingUnits.map(({ unitId }) => ({ unitId }))).map((ref) => ref.unitId))
+            const retained = new Set(resolvedUnits.filter((unit) => activeExistingIds.has(unit.unitId)).map((unit) => unit.unitId))
+            const replaced = new Set(resolvedUnits.flatMap((unit) => unit.predecessorUnitRefs).map((ref) => ref.unitId))
+            if ([...activeExistingIds].some((unitId) => !retained.has(unitId) && !replaced.has(unitId))) throw new Error('topic_unit_revision_mapping_required')
+            const covered = new Uint8Array(message.text.length)
+            for (const range of [...resolvedUnits.flatMap((unit) => [...unit.sourceRanges, ...unit.contextRanges]), ...ignoredRanges]) for (let index = range.start; index < range.end; index++) covered[index] = 1
+            let offset = 0, uncovered = false
+            for (const character of message.text) {
+              if (!/\s/u.test(character) && covered[offset] !== 1) { uncovered = true; break }
+              offset += character.length
+            }
+            if (uncovered) throw new Error('topic_route_uncovered_text')
           }
+          unitsByMessage.set(route.messageId, resolvedUnits)
+          ignoredByMessage.set(route.messageId, ignoredRanges)
         }
         let topics = [...latest.topics, ...newTopics.values()]
         for (const route of routes) {
-          const targetIds = route.topics.map((ref) => ref.topicId ?? topicIdsByKey[ref.newTopicKey])
-          const effectOwnerId = route.effectOwner
-            ? route.effectOwner.topicId ?? topicIdsByKey[route.effectOwner.newTopicKey]
-            : targetIds[0]
+          const resolvedUnits = unitsByMessage.get(route.messageId)
           topics = topics.map((topic) => {
-            const old = [...topic.entries].reverse().find((item) => item.messageId === route.messageId)
-            const selected = targetIds.includes(topic.topicId)
-            const target = route.topics.find((ref) => (ref.topicId ?? topicIdsByKey[ref.newTopicKey]) === topic.topicId)
-            const owner = selected && topic.topicId === effectOwnerId
-            if ((!selected && (!old || old.action === 'remove')) || (selected && old?.action === 'add' && old.messageVersion === route.messageVersion && Boolean(old.effectOwner) === owner && old.relationship === target?.relationship)) return topic
-            const revision = topic.revision + 1
-            const reason = target?.reason ?? route.reason
-            return { ...topic, revision, status: 'active', updatedAt: new Date().toISOString(), entries: [...topic.entries, { revision, messageId: route.messageId, messageVersion: route.messageVersion, action: selected ? 'add' : 'remove', ...(selected ? { effectOwner: owner, ...(target?.relationship ? { relationship: target.relationship } : {}) } : {}), ...(reason ? { reason } : {}) }] }
+            const nextEntries = []
+            const desiredIds = new Set(resolvedUnits.filter((unit) => unit.topics.some((ref) => (ref.topicId ?? topicIdsByKey[ref.newTopicKey]) === topic.topicId)).map((unit) => unit.unitId))
+            const oldIds = new Set(topic.entries.filter((entry) => entry.messageId === route.messageId && entry.action === 'add').map((entry) => entry.unitId))
+            for (const unitId of oldIds) {
+              if (desiredIds.has(unitId)) continue
+              const prior = [...topic.entries].reverse().find((entry) => entry.unitId === unitId)
+              if (prior?.action === 'add') nextEntries.push({ messageId: route.messageId, messageVersion: route.messageVersion, unitId, unitRevision: prior.unitRevision, action: 'remove', reason: route.reason ?? 'unit-routing-revised' })
+            }
+            for (const unit of resolvedUnits) {
+              const target = unit.topics.find((ref) => (ref.topicId ?? topicIdsByKey[ref.newTopicKey]) === topic.topicId)
+              if (!target) continue
+              const targetIds = unit.topics.map((ref) => ref.topicId ?? topicIdsByKey[ref.newTopicKey])
+              const ownerId = unit.effectOwner ? unit.effectOwner.topicId ?? topicIdsByKey[unit.effectOwner.newTopicKey] : targetIds[0]
+              const owner = topic.topicId === ownerId
+              const old = [...topic.entries].reverse().find((entry) => entry.unitId === unit.unitId)
+              if (old?.action === 'add' && old.messageVersion === route.messageVersion && old.unitRevision === unit.unitRevision && Boolean(old.effectOwner) === owner && old.relationship === target.relationship) continue
+              nextEntries.push({ messageId: route.messageId, messageVersion: route.messageVersion, unitId: unit.unitId, unitRevision: unit.unitRevision, action: 'add', effectOwner: owner, ...(target.relationship ? { relationship: target.relationship } : {}), reason: target.reason ?? unit.reason ?? route.reason })
+            }
+            if (nextEntries.length === 0) return topic
+            let revision = topic.revision
+            const entries = [...topic.entries, ...nextEntries.map((entry) => ({ ...entry, revision: ++revision }))]
+            return { ...topic, revision, status: 'active', updatedAt: new Date().toISOString(), entries }
           })
         }
         receipt = { routeId, fingerprint: requestFingerprint, routingRevision: latest.routingRevision + 1, topicIdsByKey, createdAt: new Date().toISOString() }
-        const routedMessages = latest.messages.map((message) => routes.some((route) => route.messageId === message.messageId) ? { ...message, routingStatus: 'routed', routingError: undefined } : message)
+        const routedMessages = latest.messages.map((message) => {
+          if (!unitsByMessage.has(message.messageId)) return message
+          const current = unitsByMessage.get(message.messageId).map(({ topics: _topics, effectOwner: _owner, reason: _reason, ...unit }) => unit)
+          const historical = [...(message.units ?? [])]
+          for (const unit of current) if (!historical.some((item) => item.unitId === unit.unitId && item.unitRevision === unit.unitRevision)) historical.push(unit)
+          return { ...message, units: historical, activeUnitRefs: current.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ignoredRanges: ignoredByMessage.get(message.messageId), routingStatus: 'routed', routingError: undefined }
+        })
         return { ...latest, topics, routingRevision: latest.routingRevision + 1, routeHistory: [...latest.routeHistory, receipt],
           messages: settleCompletedMessageDeliveries(routedMessages, topics) }
       })
@@ -639,12 +725,14 @@ export async function openResidentStore(storageDomain) {
           assertTaskContextRevision(task, action, basisIds)
         }
         const now = new Date().toISOString(), refs = [...topicRefs, { topicId, revision: 1 }]
-        const decision = { actions: [{ ...action, topicRefs: refs }], reply: '', basisMessageIds: [messageId] }
+        const unit = { unitId: stableId('unit', `web:${identity}`), unitRevision: 1, unitKey: 'web-input', summary: text, sourceRanges: [{ start: 0, end: text.length, quote: text }], contextRanges: [] }
+        const unitRef = { unitId: unit.unitId, unitRevision: 1 }
+        const decision = { actions: [{ ...action, topicRefs: refs, basisUnitRefs: [unitRef] }], reply: '', basisMessageIds: [messageId], basisUnitRefs: [unitRef] }
         const operation = { operationId: `${decisionId}:action:0`, actionIndex: 0, taskId: task?.taskId ?? stableId('task', `${decisionId}:0`), status: 'pending' }
         const record = { decisionId, revision: 1, decision, fingerprint: digest, status: 'accepted', operations: [operation], outboundId: stableId('outbound', decisionId), createdAt: now, updatedAt: now }
-        const message = inboundSchema.parse({ messageId, sequence: latest.nextSequence, text, occurredAt: now, sourceKind: 'web', messageVersion: 1, facts: [], routingStatus: 'routed', agentDeliveryStatus: 'delivered' })
+        const message = inboundSchema.parse({ messageId, sequence: latest.nextSequence, text, occurredAt: now, sourceKind: 'web', messageVersion: 1, units: [unit], facts: [], routingStatus: 'routed', agentDeliveryStatus: 'delivered' })
         const topic = topicSchema.parse({ topicId, groupId, title: action.title ?? task?.title ?? text.slice(0, 120), revision: 1, processedRevision: 0, status: 'active', summary: '', summaryRevision: 0, openQuestions: [],
-          entries: [{ revision: 1, messageId, messageVersion: 1, action: 'add', reason: 'web-task-input' }], decisions: [record], createdAt: now, updatedAt: now })
+          entries: [{ revision: 1, messageId, messageVersion: 1, ...unitRef, action: 'add', effectOwner: true, reason: 'web-task-input' }], decisions: [record], createdAt: now, updatedAt: now })
         result = { status: 'accepted', topicId, messageId, record }
         return { ...latest, messages: [...latest.messages, message], nextSequence: latest.nextSequence + 1, topics: [...latest.topics, topic], routingRevision: latest.routingRevision + 1,
           taskReservations: [...latest.taskReservations, { taskId: operation.taskId, inputVersion: task?.inputVersion ?? 1, runSequence: task?.runSequence ?? 1, decisionId, topicId }] }
@@ -787,7 +875,7 @@ export async function openResidentStore(storageDomain) {
       }))
       return { groupId, status, onlyMissing, ...(messageIds !== undefined ? { messageIds } : {}), updated, total: group.messages.length, group }
     }),
-    appendOutbox: ({ groupId, preflight, outboundId, topicRefs, decisionId, resultFingerprint, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, replyKind, matterSourceMessageIds, taskIds, replacesOutboundIds }) => serialize(groupId, async () => {
+    appendOutbox: ({ groupId, preflight, outboundId, topicRefs, decisionId, resultFingerprint, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, replyKind, matterSourceMessageIds, matterUnitRefs, taskIds, taskInputVersion, taskRunSequence, replacesOutboundIds }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const [storageKey, current] = entry
@@ -806,6 +894,8 @@ export async function openResidentStore(storageDomain) {
           ...(Array.isArray(atOpenDingTalkIds) && atOpenDingTalkIds.length > 0 ? { atOpenDingTalkIds } : {}),
           ...(replyKind ? { replyKind } : {}),
           ...(Array.isArray(matterSourceMessageIds) && matterSourceMessageIds.length > 0 ? { matterSourceMessageIds: [...new Set(matterSourceMessageIds)] } : {}),
+          ...(Array.isArray(matterUnitRefs) && matterUnitRefs.length > 0 ? { matterUnitRefs: [...new Map(matterUnitRefs.map((ref) => [`${ref.unitId}:${ref.unitRevision}`, ref])).values()] } : {}),
+          ...(taskInputVersion ? { taskInputVersion } : {}), ...(taskRunSequence ? { taskRunSequence } : {}),
           ...(Array.isArray(taskIds) && taskIds.length > 0 ? { taskIds: [...new Set(taskIds)] } : {}),
           ...(Array.isArray(replacesOutboundIds) && replacesOutboundIds.length > 0 ? { replacesOutboundIds: [...new Set(replacesOutboundIds)] } : {}),
         }]),
@@ -914,11 +1004,12 @@ export async function openResidentStore(storageDomain) {
         return taskSchema.parse({ ...next, appliedOperations: [...latest.appliedOperations, operationId], updatedAt: at,
           stateHistory: next.state !== latest.state ? [...(latest.stateHistory ?? []), { state: next.state, at, runSequence: next.runSequence ?? 1 }] : latest.stateHistory })
       })
+      await supersedeStaleTaskOutbox(task)
       return { applied: !duplicate, task }
     }),
     updateTask: (taskId, transform) => serialize(tasks.get(taskId)?.groupId ?? taskId, async () => {
       if (tasks.get(taskId) === undefined) throw new Error(`task_not_found:${taskId}`)
-      return tasks.update(taskId, (task) => {
+      const updated = await tasks.update(taskId, (task) => {
         const at = new Date().toISOString()
         const next = transform(task)
         const stateChangedAt = next.runSequence !== task.runSequence && next.runStartedAt ? next.runStartedAt : at
@@ -926,6 +1017,8 @@ export async function openResidentStore(storageDomain) {
         validateTopicRefs(findGroupEntry(task.groupId)[1], next.topicRefs)
         return taskSchema.parse({ ...next, ...(stateHistory ? { stateHistory } : {}), updatedAt: at })
       })
+      await supersedeStaleTaskOutbox(updated)
+      return updated
     }),
     recordAlert: async ({ taskId, fingerprint, detail, status = 'active' }) => {
       const task = tasks.get(taskId)

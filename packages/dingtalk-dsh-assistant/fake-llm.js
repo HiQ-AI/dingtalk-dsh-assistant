@@ -23,19 +23,21 @@ function* call(name, args) {
 
 function makeDecision(request, tasks) {
   const basisMessageIds = request.messages.map((message) => message.messageId)
+  const basisUnitRefs = request.messages.filter(({ unitId, unitRevision }) => unitId && unitRevision).map(({ unitId, unitRevision }) => ({ unitId, unitRevision }))
   const text = request.messages.map((message) => message.text ?? message.message ?? '').join('\n')
   const message = request.messages.at(-1)?.text ?? request.messages.at(-1)?.message ?? ''
   const topicRefs = [{ topicId: request.topicId, revision: request.revision }]
   let decision
   if (!request.messages.length) decision = { actions: [], reason: '消息已移入其他 Topic，当前话题无需执行' }
   else if (message.startsWith('忽略：')) decision = { actions: [], reason: message.slice(3) || 'not addressed' }
-  else if (message.startsWith('任务：')) decision = { actions: [{ kind: 'new-task', title: message.slice(3), objective: message.slice(3), acceptanceCriteria: ['任务目标已完成并有可核验证据'], topicRefs }], reply: '已识别为正式任务。' }
+  else if (message.startsWith('任务：')) decision = { actions: [{ kind: 'new-task', title: message.slice(3), objective: message.slice(3), acceptanceCriteria: ['任务目标已完成并有可核验证据'], topicRefs, basisUnitRefs }], reply: '已识别为正式任务。' }
   else if (message.startsWith('补充：')) {
     const task = tasks.find((item) => item.topicRefs?.some((ref) => ref.topicId === request.topicId))
-    decision = task === undefined ? { actions: [], reply: '没有可补充的任务。' } : { actions: [{ kind: 'task-context', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, context: message.slice(3), topicRefs }], reply: '已补充到现有任务。' }
+    decision = task === undefined ? { actions: [], reply: '没有可补充的任务。' } : { actions: [{ kind: 'task-context', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, context: message.slice(3), topicRefs, basisUnitRefs }], reply: '已补充到现有任务。' }
   }
   else decision = { actions: [], reply: `fake-answer:${text}` }
-  return { ...decision, ...(decision.reply ? { replyReview: { kind: decision.actions.length ? 'confirmation' : 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } : {}), basisMessageIds: basisMessageIds.length ? basisMessageIds : request.removedMessageIds }
+  const unitBasis = basisUnitRefs.length ? basisUnitRefs : request.removedUnitRefs?.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })).filter(({ unitId, unitRevision }) => unitId && unitRevision)
+  return { ...decision, ...(decision.reply ? { replyReview: { kind: decision.actions.length ? 'confirmation' : 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } : {}), basisMessageIds, ...(unitBasis?.length ? { basisUnitRefs: unitBasis } : {}) }
 }
 
 class FakeResidentAdapter extends LlmAdapter {
@@ -93,7 +95,7 @@ class FakeResidentAdapter extends LlmAdapter {
           const relatedTask = text.startsWith('补充：') ? tasks[0] : undefined
           const topic = request.topics?.find((item) => item.entries?.some((entry) => entry.messageId === quotedId))
           const topicId = relatedTask?.topicRefs?.[0]?.topicId ?? topic?.topicId
-          return { messageId: message.messageId, messageVersion: message.messageVersion, topics: topicId ? [{ topicId }] : [{ newTopicKey: `fake-${message.messageId}`, title: text.slice(0, 30) || '附件讨论' }] }
+           return { messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [], units: [{ unitKey: 'whole-message', summary: text || '附件讨论', replacesUnitIds: [], sourceRefs: [{ quote: text || '[图片消息]' }], contextRefs: [], topics: topicId ? [{ topicId }] : [{ newTopicKey: `fake-${message.messageId}`, title: text.slice(0, 30) || '附件讨论' }] }] }
         })
         yield* call('group_topic_route_submit', { requestId: request.requestId, routes })
         return

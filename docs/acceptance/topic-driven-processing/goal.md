@@ -1,8 +1,8 @@
 # Topic 驱动处理实施
 
-> 状态：COMPLETE（本地实现与 PR 交付）
+> 状态：ACTIVE（单消息多事项实施）
 > Goal ID：topic-driven-processing
-> 最近维护：2026-09-07T12:39:47+08:00
+> 最近维护：2026-09-17T16:30:00+08:00
 > 权威目标：goal.md
 
 ## 总目标
@@ -19,8 +19,8 @@
 
 ## 范围与约束
 
-- 唯一实施工作区：D:/project/dingtalk-dsh-assistant-topic-processing，分支 worktree-topic-driven-processing。
-- 主检出保持现状，不触碰已有 docs/tmp；方案从主检出复制到隔离工作区。
+- 唯一实施工作区：D:/project/dingtalk-dsh-assistant，分支 feature/message-multi-topic-routing。
+- 不触碰工作区内与本目标无关的未跟踪产物。
 - 每群一个 Resident、每 Task 一个叶子；不引入第二套引擎或长期双写兼容路径。
 - 原方案是开工前快照；实现取舍和新证据记录在本目录。
 
@@ -34,24 +34,31 @@
 | SG3 | Task 及通知输入迁移 | 版本校验、来源读取、回复回执与所有入口 | 完成 | round-1.md；round-2/full-tests.log；round-2/native-dsh.json |
 | SG4 | API、Observer、假模型、文档 | 可查询/浏览 Topic，完整新协议运行 | 完成 | round-1.md；round-2/full-tests.log；round-2/native-dsh.json |
 | SG5 | 回归、故障验证及 PR | 本地证据矩阵、完整回归、PR 回读 | 完成 | 233/233；PR #63 OPEN；CI 34084158313 success；round-4.md |
+| SG6 | 单消息多事项协议与存储 | 同一消息可拆出多个事项，各事项有独立来源、Topic 归属、动作所有权和固定版本 | 完成 | round-6.md；正式回归脚本 4/4 |
+| SG7 | 事项级任务、通知与恢复 | 每个事项独立创建/续接 Task，完成后独立反馈，不受兄弟事项阻塞，重试不重复 | 完成 | round-6.md；全量测试 400/400 |
+| SG8 | 迁移、界面、文档与交付 | 存储升级可校验回退，API/Observer/文档同步，全量测试与 PR 交付 | 完成 | round-6.md；checklist-audit.md；PR #99 OPEN |
 
 ## 当前检查点
 
-- 当前子目标：SG5
-- 唯一下一步：本轮实现与 PR 交付完成；后续按迁移 runbook 独立安排部署验收。
-- 未闭环项：真实模型语义质量、真实DWS、实际profile迁移及持续负载/全强杀点验证仍在矩阵中单列，不属于本轮已完成的本地交付证据。
+- 当前子目标：本地实现与 PR 交付已完成。
+- 唯一下一步：发布时按 `checklist-audit.md` 补齐生产模型、实际 profile 和真实 DWS 分层验证。
+- 未闭环项：真实模型语义评测、实际 profile v7→v8 迁移、真实 DWS 投递与已部署增量集成差异，保留为发布层验收边界。
 
 ## 进展
 
 - 2026-09-07：用户批准实施。fetch 确认 origin/main 为 0925f0d，创建隔离工作树并复制已批准方案。
+- 2026-09-17：用户批准按 `docs/spec/message-multi-topic-routing.md` 实施，并明确每个事项完成即可直接反馈，不等待同消息其他事项。复审已确认整条消息唯一 effectOwner、全群 pendingInput 门禁和同源回复候选串扰是当前关键缺口。
+- 2026-09-17：事项协议、v8 存储、运行时、HTTP 投影、迁移与文档完成；正式回归 4/4、全量测试 400/400。按外部 Agent Checklist 查漏，未把结构测试解释为真实模型语义或部署验证。
+- 2026-09-17：提交 `0b5d78a` 已推送，PR #99 创建并回读为 OPEN，base `main`、head `feature/message-multi-topic-routing`。
 
 ## 重大决策
 
 - 先完成本地源码及隔离迁移验证；真实 profile 切换与外部发送需要分层确认现场，不把 mock 通过当真实交付。
+- 多事项采用“消息内 unit → 持久 Topic → Task”单一路径；执行权以 unit 为单位，同一 unit 仍只有一个 owner。事项结果通知只检查本事项及固定输入边界，不等待兄弟事项。
 
 ## 重要信息
 
-- 存储 SDK 单记录原子更新，无跨表事务。目标 domain version 7，旧 version 6 需明确离线迁移。
+- 存储 SDK 单记录原子更新，无跨表事务。当前目标 domain version 8，提供 v7→v8 明确离线迁移；v6 可按同一工具显式迁移到 v8。
 - 原有相关 Runtime 行为测试上轮 8/8 通过，仅为旧协议基线。
 
 - 2026-09-07 实施中：真实 JsonStorageBackend/DomainFacility 隔离迁移、重复迁移、v6回退读取已验证；未改变实际profile。

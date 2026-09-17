@@ -171,7 +171,7 @@ test('Topic 查询有界分页且群摘要不泄漏内部决策、归类和预�
     assert.equal(projected.routeHistory, undefined)
     assert.equal(projected.taskReservations, undefined)
     assert.deepEqual(projected.messages, [{ ...group.messages[0], topicRefs: [{ topicId: 'topic-0', revision: 3, title: '话题 0' }] }])
-    assert.deepEqual(projected.topicProgress, { total: 102, pending: 102, pendingRevisions: 204, unroutedMessages: 1 })
+    assert.deepEqual(projected.topicProgress, { total: 102, pending: 102, pendingRevisions: 204, pendingUnits: 0, unroutedMessages: 1 })
     const detail = await (await fetch(`${baseUrl}/state/topics/topic-0?groupId=g&revision=2&offset=1&limit=3`)).json()
     assert.deepEqual(request, { groupId: 'g', topicId: 'topic-0', revision: 2, offset: 1, limit: 3 })
     assert.equal(detail.topic.decisions, undefined)

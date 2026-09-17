@@ -113,8 +113,8 @@ test('投影水位已保存但淘汰删除失败，重启重放补齐裁剪且�
   assert.equal(restored.listActivities(task.taskId).at(-1).seq, 500)
 })
 
-test('任务表格同步保持当前domain版本7', () => {
-  assert.equal(residentDomainSpec.version, 7)
+test('Topic事项模型使用独立domain版本8', () => {
+  assert.equal(residentDomainSpec.version, 8)
 })
 
 test('任务表格同步配置与运行状态独立持久化', async () => {
@@ -378,6 +378,20 @@ test('叶子会话提示词、回复审阅与撤回元数据持久化', async ()
   await store.updateOutboundRecall({ groupId: 'group-a', outboundId: group.outbox[0].outboundId, status: 'recalled', reason: 'superseded-by:m-new' })
   assert.equal(store.getGroup('group-a').outbox[1].recallStatus, 'recalled')
   assert.equal(store.getGroup('group-a').outbox[1].recallReason, 'superseded-by:m-new')
+})
+
+test('Task 新执行版本使旧待发事项通知变为 superseded', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'supersede', responsibility: '测试' })
+  await store.ingest({ groupId: 'supersede', messageId: 'm', text: '@助理 执行', occurredAt: '2026-09-17T00:00:00Z' })
+  const { task } = await createRoutedTask(store, { groupId: 'supersede', sourceMessageId: 'm', title: '事项', objective: '执行事项', acceptanceCriteria: ['完成'] })
+  await store.appendOutbox({ groupId: 'supersede', sourceMessageId: 'task-result:test', text: '旧结果', taskIds: [task.taskId], taskInputVersion: task.inputVersion, taskRunSequence: task.runSequence })
+  await store.updateTask(task.taskId, (current) => ({ ...current, inputVersion: current.inputVersion + 1 }))
+  const outbound = store.getGroup('supersede').outbox[0]
+  assert.equal(outbound.status, 'superseded')
+  assert.equal(outbound.supersededReason, 'task-execution-version-changed')
+  assert.ok(outbound.supersededAt)
 })
 
 test('旧版流程与证据配置合并为叶子会话提示词并在保存后移除旧字段', async () => {

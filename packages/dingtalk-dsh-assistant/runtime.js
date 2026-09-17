@@ -1687,7 +1687,13 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     onAuthorizationDecided(listener) { authorizationDecisionListeners.add(listener); return () => authorizationDecisionListeners.delete(listener) },
     prepareOutbound: async ({ groupId, outbound }) => {
       const group = await store.reconcileOutboxReplacements({ groupId })
-      return group.outbox.find(item => item.outboundId === outbound.outboundId)
+      const current = group.outbox.find(item => item.outboundId === outbound.outboundId)
+      if (!current) return { status: 'superseded' }
+      if (current.taskIds?.length === 1 && current.taskInputVersion && current.taskRunSequence) {
+        const task = store.getTask(current.taskIds[0])
+        if (!task || task.inputVersion !== current.taskInputVersion || task.runSequence !== current.taskRunSequence) return { status: 'superseded' }
+      }
+      return current
     },
     beginOutboundSend: (args) => store.beginOutboundSend(args),
     completeOutboundReplacement: recallReplacedOutbounds,
