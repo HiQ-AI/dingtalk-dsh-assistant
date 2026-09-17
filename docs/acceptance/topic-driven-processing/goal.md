@@ -36,12 +36,12 @@
 | SG5 | 回归、故障验证及 PR | 本地证据矩阵、完整回归、PR 回读 | 完成 | 233/233；PR #63 OPEN；CI 34084158313 success；round-4.md |
 | SG6 | 单消息多事项协议与存储 | 同一消息可拆出多个事项，各事项有独立来源、Topic 归属、动作所有权和固定版本 | 完成 | round-6.md；正式回归脚本 4/4 |
 | SG7 | 事项级任务、通知与恢复 | 每个事项独立创建/续接 Task，完成后独立反馈，不受兄弟事项阻塞，重试不重复 | 完成 | round-6.md；全量测试 400/400 |
-| SG8 | 迁移、界面、文档与交付 | 存储升级可校验回退，API/Observer/文档同步，全量测试与 PR 交付 | 进行中 | round-6.md；checklist-audit.md；待 PR 回读 |
+| SG8 | 迁移、界面、文档与交付 | 存储升级可校验回退，API/Observer/文档同步，全量测试与 PR 交付 | 完成 | round-6.md；checklist-audit.md；PR #99 OPEN |
 
 ## 当前检查点
 
-- 当前子目标：SG8
-- 唯一下一步：完成提交、PR 正文门禁与 GitHub 状态回读。
+- 当前子目标：本地实现与 PR 交付已完成。
+- 唯一下一步：发布时按 `checklist-audit.md` 补齐生产模型、实际 profile 和真实 DWS 分层验证。
 - 未闭环项：真实模型语义评测、实际 profile v7→v8 迁移、真实 DWS 投递与已部署增量集成差异，保留为发布层验收边界。
 
 ## 进展
@@ -49,6 +49,7 @@
 - 2026-09-07：用户批准实施。fetch 确认 origin/main 为 0925f0d，创建隔离工作树并复制已批准方案。
 - 2026-09-17：用户批准按 `docs/spec/message-multi-topic-routing.md` 实施，并明确每个事项完成即可直接反馈，不等待同消息其他事项。复审已确认整条消息唯一 effectOwner、全群 pendingInput 门禁和同源回复候选串扰是当前关键缺口。
 - 2026-09-17：事项协议、v8 存储、运行时、HTTP 投影、迁移与文档完成；正式回归 4/4、全量测试 400/400。按外部 Agent Checklist 查漏，未把结构测试解释为真实模型语义或部署验证。
+- 2026-09-17：提交 `0b5d78a` 已推送，PR #99 创建并回读为 OPEN，base `main`、head `feature/message-multi-topic-routing`。
 
 ## 重大决策
 
