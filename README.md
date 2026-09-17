@@ -51,6 +51,7 @@ DWS 群消息
 ## 包结构
 
 - `packages/dingtalk-dsh-assistant`：核心业务插件。负责 DWS 接入、群与 Session 绑定、消息处理、Task 调度、阻塞时的人工介入、可靠回复和配置页面。
+- 任务表格同步：可在插件设置中绑定钉钉在线电子表格的一个工作表，由 Resident 纯脚本每 3 分钟将全部未归档 Task 全量覆盖写入；同步不调用模型，状态与失败原因在设置页单独显示。
 - `packages/dingtalk-dsh-observer`：DSH Web 展示扩展。提供群聊会话、任务看板、归档任务、人工介入和告警页面。
 - `.dsh/profiles/resident`：resident Runtime 的参考 profile 与 Cordis patch。
 - `.dsh/profiles/web`：Web contribution 的参考 profile。
@@ -105,7 +106,7 @@ dsh plugin --profile web add @zzusp/dingtalk-dsh-assistant@latest @zzusp/dingtal
 
 以下源码安装方式只用于开发未发布代码；普通安装和升级不需要克隆仓库，也不需要手工添加两个内部包。
 
-维护者发布新版本时，先将根包、assistant 和 observer 的版本号及 `CHANGELOG.md` 更新为同一版本并合并到 `main`，再推送对应的 `v<version>` Tag。GitHub Actions 会在 Node.js 24.19.0 下重新构建、测试和打包，按 observer → assistant → 根发行包的顺序发布 npm；三个包回读一致后才创建 GitHub Release。发布 job 绑定 GitHub Environment `NPM_PUBLISH`，优先使用其中的 `NPM_PUBLISH_TOKEN`，未配置时回退到 `NPM_TOKEN`。
+维护者发布新版本时，先将根包、assistant 和 observer 的版本号及 `CHANGELOG.md` 更新为同一版本并合并到 `main`，再推送对应的 `v<version>` Tag。GitHub Actions 会在 Node.js 24.19.0 下重新构建、测试和打包，使用 npm Trusted Publishing（OIDC）按 observer → assistant → 根发行包的顺序发布；三个包回读一致后才创建 GitHub Release。发布 job 绑定 GitHub Environment `NPM_PUBLISH`，不再使用长期 npm publish token。首次启用和故障恢复见 [npm 发布 Runbook](docs/ops/npm-release.md)。
 
 ### 源码开发安装
 
@@ -225,17 +226,21 @@ Topic 的 `title` 是对齐 Task 名称的 8–20 字短语，最多 30 字，�
 
 图片及其紧邻短消息在归类阶段共同理解；附件读取失败不能据标题或缩略图猜测正文并启动 Task。原始消息保存附件与事实版本，Topic 固定版本解析相应原始事实，重启后仍能追溯输入。
 
-Task 完成和信息阻塞通知使用 `group_reply_submit` 结构化提交，绑定 Task runSequence、inputVersion、事项来源、相关 Topic 版本及回复快照。每个事项完成后立即进入自己的验收和 Outbox 链路，不等待同消息其他事项；通知请求冻结创建时已接收入站的序号边界，边界后的无关新消息不会扩展旧请求。Resident 根据所引用 Topic 的原始消息选择 `replyToMessageId` 和 `atOpenDingTalkIds`；Runtime 核对真实消息与稳定参与人身份。当前事项的 Topic 或执行版本变化会使旧通知失效，待发送记录在 Task 新轮次出现后标为 `superseded`。Outbox 待投递、DWS 发送和群回读确认分别计量；通知使用提交 requestId 派生稳定 Outbox 身份，运行层重启或调用方未收到返回值时可读取已接受回执，找不到回执的未知请求不会自动重发。
+Task 完成和信息阻塞通知使用 `group_reply_submit` 结构化提交，绑定 Task runSequence、inputVersion、事项来源、相关 Topic 版本及回复快照。每个事项完成后立即进入自己的验收和 Outbox 链路，不等待同消息其他事项；通知请求冻结创建时已接收入站的序号边界，边界后的无关新消息不会扩展旧请求。Resident 根据所引用 Topic 的原始消息选择 `replyToMessageId`；省略 `atOpenDingTalkIds` 时，Runtime 统一从被引用消息推导发送人，显式接收人仍必须属于当前 Topic。当前事项的 Topic 或执行版本变化会使旧通知失效，并在持久协调账中进入 `superseded` 终态。Outbox 待投递、DWS 发送和群回读确认分别计量；通知使用提交 requestId 派生稳定 Outbox 身份，运行层重启或调用方未收到返回值时可读取已接受回执，找不到回执的未知请求不会自动重发。
 
 Topic 决策产生非空回复时，Runtime 使用 DWS 原生引用回复，并验证选定消息属于当前 Topic 快照。原消息的引用链只提供上下文，不自动成为出站引用目标。发送人 ID 缺失时不得猜测引用参数。回读必须匹配正文与精确的引用消息 ID；同文但属于其他话题的引用回复不能认领为本次投递。
 
-任何非空回复提交前，Resident 必须通过 `group_reply_review_get` 按请求 ID 读取 Runtime 绑定的未撤回历史确认、近期回复、内容相关回复和当前 Task 关联回复。Resident 根据消息正文、任务目标、动作范围和时间线判断是否属于同一事项；引用消息 ID 和词面相似度只用于定位候选。若同一事项已有等价确认且没有新信息，本次保持静默；若确认内容必须补全，则只允许选择本插件已发送且已经 DWS 回读的旧 Outbox，先经 DWS 撤回并验证不存在，再发送一条合并后的最新确认。候选未完整审阅或旧消息尚未回读时拒绝新意图；审阅通过后先持久化新 Outbox 和替换关系，再由渠道发送前完成精确撤回。撤回失败保持 pending，不发送新回复，后续按同一意图重试。
+任何非空回复提交前，Resident 必须通过 `group_reply_review_get` 按请求 ID 读取 Runtime 绑定的历史确认、近期回复、内容相关回复和当前 Task 关联回复。Resident 根据正文、目标、动作范围和时间线判断同一事项，引用 ID 和相似度只定位候选。等价确认没有新信息时保持静默；必须补全或纠正时，完整审阅后选择当前群真实 Outbox。接纳前校验替换图，原子持久化新通知与替换关系；旧 pending 进入 superseded，不再发送，但这不证明历史从未送达。历史发送未知只核验，迟到回执仍记录实际 messageId。
+
+替换通知先经原生幂等发送及 DWS 回读确认，再独立撤回已授权的旧消息（包括替换链）。撤回失败不再阻塞纠正通知，也不把旧消息伪标撤回：明确服务端拒绝停止自动重试；其它异常按 30 秒间隔最多尝试 3 次，之后等待核验。历史未知查询未命中保留 replacement_delivery_unknown，可由迟到回执继续恢复，不等于确认未发送。发送入口共享群级串行队列，实际外发前再原子检查旧意图未被替换。看板分别展示已替代、撤回待处理、待回读与已回读，保留审计原因。
+
+普通发送遇到明确服务端拒绝时持久化 deliveryBlockedAt，看板显示发送待处理，停止对相同意图自动重试；读取失败或送达未知不冒充明确拒绝，继续保留原生幂等与回读保护。
 
 ### 叶子任务
 
 Task 可设置独立的简短标题用于看板展示；标题与 objective 分离，重命名不会改变任务授权范围、Goal 或验收标准。运行看板通过 DSH 官方 `sidebar.footer.action` 提供左侧菜单入口，并由 `shell.overlay` 承载右侧完整内容区域；点击运行看板时切换到看板并清除 Session 选中状态，点击任意 Session 时关闭看板、恢复该 Session 的选中状态与对话/轨迹。运行看板复用 Session 的实际选中背景色，不额外显示焦点边框。
 
-运行看板 Header 的高度和字体规格与 Session 页面一致。各页不再重复显示页面标题和子标题；任务列按 Header 与主内容实际占用计算剩余视口高度，卡片在列内独立滚动，页面本身不会因状态桶高度产生额外补白或纵向滚动。
+运行看板 Header 的高度和字体规格与 Session 页面一致。各页不再重复显示页面标题和子标题；任务列按 Header 与主内容实际占用计算剩余视口高度，卡片在列内独立滚动，页面本身不会因状态桶高度产生额外补白或纵向滚动。人工介入列表区分待处理、已处理和已失效请求；只有待发送或等待回复的请求提供处理操作，未知状态以异常标记展示且不会导致整个看板崩溃。
 
 Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存标题、目标、验收标准、执行状态、结果，以及 `topicRefs: [{topicId, revision}]` 和 `inputVersion`；不保存 sourceMessageId、triggerHistory、messageHistory 或群消息正文副本。`group_task_context_get` 返回执行约定与 Topic 引用，原始上下文由 `group_topic_context_get` 按固定 revision 分页读取。只有确实影响任务的新增信息才推进 inputVersion，不向每个关联 Task 广播全部讨论。运行中和等待中的 Task 接纳上下文时继续原轮次；完成或归档 Task 只有被明确重开才开启新轮次。目标发生实质变化时，续接动作必须同时提交概括当前完整目标的新标题；Runtime 原子更新目标和标题，并由 objectiveHistory、titleHistory 与 runHistory 保留旧值。普通信息补充、等待恢复和异常唤醒不修改标题，归档不删除历史。
 
@@ -259,12 +264,14 @@ Topic 查询的 `processing` 提供最新未完成意图的 decisionId、status�
 
 同一消息版本产生过已接受的 Task 动作或确认后，其执行归属保留在持久决策中；将消息从 Topic A 改归 Topic B 不会重新授予执行权。新的授权消息或新的事实版本需要重新判断，历史动作不会因归类修订而自动撤销。
 
-已接受的历史决策若误用唯一阶段标题填写 `affectedStageIds`，执行时会归一化为对应稳定 stageId；未知标题仍按非法修订拒绝，避免错误扩大失效范围。
+Task 创建和重开时即生成稳定 `stagePlan`，主会话查询与叶子输入使用同一份阶段身份；阶段 ID 的存在不代表计划已批准。`affectedStageIds` 只接受真实 ID，不接受标题或猜测值。创建、重开和上下文修订在 Store 原子接纳点校验阶段及修订参数，接纳和执行共用参数规范化；错误参数不会生成决策、预约或确认，主会话可读取当前上下文后用同一请求纠正重提。
+
+历史已接受的无效上下文修订，仅在整份决策都是 `task-context`、动作映射完整、所有动作未执行且 Task 幂等账本和执行版本均确认安全时，原子标记 `rejected` 并释放自身预约。原消息、Task、历史回复和 processedRevision 保留，Runtime 使用新的稳定请求身份重新判断尚未处理的输入。部分执行、含取消动作或结果不明的记录不会自动退回重放；存储错误仍按原错误链处理。`rejected` 是意图终态，不代表业务输入处理完成。
 
 ### 阻塞与人工介入
 
 - 缺少任务信息：叶子进入 information waiting，由主会话结合 Task 所引用 Topic 固定版本的消息时间线，向真正能够补充该信息的一位或多位参与人询问。
-- Task 遇到操作红线、环境异常或需要真人判断时进入 `human-intervention`，页面“人工介入”和 DWS 登录人本人私聊共享同一阻塞状态机。
+- Task 遇到操作红线、环境异常或需要真人判断时进入 `human-intervention`，页面“人工介入”和 DWS 登录人本人私聊共享同一阻塞状态机。批准只对应阻塞单中精确列出的动作；处理意见可以收窄执行方式，不能授权另一动作，和原动作冲突时任务必须继续停住并提交范围冲突。
 - waiting 不占 `maxConcurrentTasks` 执行名额；信息或人工回复到达时统一进入 FIFO queued，保留待恢复上下文。调度器把正在创建或恢复 Session 的 Task 计入容量，获得唯一名额后续接原叶子 Session 和 Goal。
 - 钉钉人工处理必须引用阻塞消息并提供非空意见；明确回复“拒绝”“不同意”或“不批准”时记为不执行，其余回复使 Task 继续，并保留完整原文。Runtime 使用独立的个人 IM 实时订阅按被引用消息的 `messageId` 精确关联并恢复 Task，历史查询仅用于离线恢复；等待不设超时。
 - 批准复用指纹绑定 taskId、runSequence、阻塞类别、规范化动作和风险；旧版本没有这些字段的记录不会自动授权当前轮次。
@@ -297,8 +304,9 @@ Topic 查询的 `processing` 提供最新未完成意图的 decisionId、status�
 
 - 群聊会话：查看不同 resident Session 的分页收信箱和发信箱；状态固定在最左列，长内容最多显示两行，完整内容可通过悬停标题或详情查看。
 - 任务看板：按待执行、执行中、等待中、已完成展示 Task，并打开 DSH 原生叶子对话和轨迹。活动任务卡片中的“任务”面板默认收起，只显示完成数/总数和进度；展开后显示各阶段任务、状态和耗时。执行轮次耗时统计不占用任务卡片空间，仍可通过 `/state/task-timings` 接口用于诊断。
+- 任务表格同步：在“设置 → 插件 → 钉钉个人助理”填写钉钉在线电子表格地址，检查连接后选择目标工作表并启用。插件启动时立即同步，之后每 180 秒全量覆盖所选工作表；归档 Task 会在下一轮移除。所选工作表由插件托管，手工内容会被覆盖。
 - 归档任务：查看已归档 Task，相关群消息仍可重新打开原任务。
-- 人工介入：以与消息表格一致的状态列、行高和内容密度分页查看阻塞事项，并在页面选择继续任务或不执行。
+- 人工介入：以与消息表格一致的状态列、行高和内容密度分页查看阻塞事项，并在页面明确选择“批准该事项并继续”或“不执行”。
 - 告警：按类型查看当前异常和分页的已恢复历史。
 
 看板不读取或重建 DSH Session JSONL，只通过插件状态接口展示业务投影；对话与轨迹仍由 DSH 原生页面负责。

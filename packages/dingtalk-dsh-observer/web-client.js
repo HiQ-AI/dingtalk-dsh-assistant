@@ -54,7 +54,10 @@ window.__ModuleLoader__.load({
     const short = (value) => value ? String(value).replace(/^session-/, '').slice(0, 14) : '—'
     const outboxDelivery = (message) => {
       if (message.recallStatus === 'recalled') return { id: 'recalled', label: '已撤回', state: 'neutral' }
+      if (message.recallStatus === 'failed') return { id: 'recall-failed', label: '撤回待处理', state: 'warning', detail: message.recallError === 'replacement_delivery_unknown' ? '已停止旧意图发送；历史是否送达仍未知，等待核验' : `旧消息撤回失败${message.recallRetryAt ? '，将有限重试' : '，需核验后处理'}：${message.recallError || '原因未记录'}` }
+      if (message.supersededByOutboundId || message.status === 'superseded') return { id: 'superseded', label: '已替代', state: 'neutral', detail: message.deliveredMessageId ? '已记录送达，等待替换通知送达后撤回' : '已停止旧意图发送；未声称历史消息未送达' }
       if (message.status === 'sent') return { id: 'confirmed', label: message.deliveredMessageId ? '已回读' : '已发送', state: 'done' }
+      if (message.deliveryBlockedAt) return { id: 'failed', label: '发送待处理', state: 'error', detail: '服务端已拒绝发送，停止自动重试；需核验失败原因' }
       const reason = message.deliveryPendingReason
       const details = {
         preflight_history_partial: '发送前检查：历史消息不完整，本次未发送',
@@ -342,7 +345,7 @@ window.__ModuleLoader__.load({
         return React.createElement('tr', { key: message.outboundId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
           React.createElement('td', { style: { ...tableBodyCell, width: 124 } }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
           React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）'),
-            status.detail ? React.createElement('div', { style: { marginTop: 6, fontSize: 12, color: status.state === 'error' ? colors.danger : colors.warning, overflowWrap: 'anywhere' } }, status.detail, message.deliveryError ? `：${message.deliveryError}` : '') : null,
+            status.detail ? React.createElement('div', { style: { marginTop: 6, fontSize: 12, color: status.state === 'error' ? colors.danger : colors.warning, overflowWrap: 'anywhere' } }, status.detail, !message.supersededByOutboundId && !message.recallStatus && message.deliveryError ? `：${message.deliveryError}` : '') : null,
             message.deliveryAttemptedAt ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, `最近尝试 ${fmt(message.deliveryAttemptedAt)} · 共 ${message.deliveryAttemptCount || 1} 次`) : null),
           React.createElement('td', { style: { ...tableBodyCell, width: 220 } },
             React.createElement('div', { style: { minWidth: 0 } }, singleLineTableContent(React.createElement('code', { title: message.sourceMessageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, short(message.sourceMessageId))), message.replyToMessageId ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, '回复 ', React.createElement('code', { title: message.replyToMessageId }, short(message.replyToMessageId))) : null)),
@@ -449,7 +452,7 @@ window.__ModuleLoader__.load({
           (data?.groups || []).length ? React.createElement(SelectMenu, { label: '选择群聊会话', value: selectedGroup?.groupId || '', options: (data?.groups || []).map((group) => ({ id: group.groupId, label: group.name || group.groupId })), onChange: (value) => { setSelectedGroupId(value); setMessagePage(1); setOutboxPage(1) }, fitContent: true }) : null,
           groupTableView === 'messages'
             ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
-            : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读' }, { id: 'confirmed', label: '已发送' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
+            : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读' }, { id: 'confirmed', label: '已发送' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回待处理' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 910, borderCollapse: 'collapse', tableLayout: 'fixed' } },
           React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 104 } }, '话题处理'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '发送人 / 时间'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '话题'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 240 } }, '消息'))),
@@ -466,8 +469,13 @@ window.__ModuleLoader__.load({
         'pending-send': { label: '待发送', state: 'warning' },
         'waiting-reply': { label: '等待处理', state: 'warning' },
         answered: { label: '已处理', state: 'done' },
+        superseded: { label: '已失效', state: 'neutral' },
       }
       const authorizationDecision = { approved: { label: '已继续', state: 'done' }, rejected: { label: '不执行', state: 'error' } }
+      const isPendingAuthorization = (item) => item.status === 'pending-send' || item.status === 'waiting-reply'
+      const authorizationPresentation = (item) => item.status === 'answered'
+        ? authorizationDecision[item.decision] || authorizationStatus.answered
+        : authorizationStatus[item.status] || { label: '状态异常', state: 'error' }
       const decideAuthorization = async (requestId, decision) => {
         try {
           setNavigationError(undefined); setDecidingAuthorizationId(requestId)
@@ -477,21 +485,21 @@ window.__ModuleLoader__.load({
         finally { setDecidingAuthorizationId('') }
       }
       const authorizationItems = [...(data?.authorizations || [])].sort((left, right) => {
-        const leftPending = left.status === 'answered' ? 0 : 1; const rightPending = right.status === 'answered' ? 0 : 1
+        const leftPending = isPendingAuthorization(left) ? 1 : 0; const rightPending = isPendingAuthorization(right) ? 1 : 0
         return rightPending - leftPending || String(right.createdAt || '').localeCompare(String(left.createdAt || ''))
       })
-      const filteredAuthorizationItems = authorizationItems.filter((item) => authorizationFilter === 'all' || (authorizationFilter === 'pending' ? item.status !== 'answered' : item.decision === authorizationFilter))
+      const filteredAuthorizationItems = authorizationItems.filter((item) => authorizationFilter === 'all' || (authorizationFilter === 'pending' ? isPendingAuthorization(item) : authorizationFilter === 'superseded' ? item.status === 'superseded' : item.decision === authorizationFilter))
       const authorizationPageSize = 10
       const authorizationPageCount = Math.max(1, Math.ceil(filteredAuthorizationItems.length / authorizationPageSize))
       const currentAuthorizationPage = Math.min(authorizationPage, authorizationPageCount)
       const visibleAuthorizationItems = filteredAuthorizationItems.slice((currentAuthorizationPage - 1) * authorizationPageSize, currentAuthorizationPage * authorizationPageSize)
       const selectedAuthorization = authorizationItems.find((item) => item.requestId === selectedAuthorizationId)
+      const selectedAuthorizationPending = selectedAuthorization ? isPendingAuthorization(selectedAuthorization) : false
       const authorizationDetailField = (label, value) => React.createElement('div', { style: { display: 'grid', gap: 5 } },
         React.createElement('strong', { style: { fontSize: 11, color: colors.muted } }, label),
         React.createElement('div', { style: { fontSize: 13, lineHeight: 1.65, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, value || '—'))
       const authorizationRows = visibleAuthorizationItems.map((item, rowIndex) => {
-        const pending = item.status !== 'answered'
-        const status = pending ? authorizationStatus[item.status] : authorizationDecision[item.decision] || authorizationStatus.answered
+        const status = authorizationPresentation(item)
         const group = groupsById.get(item.groupId)
         return React.createElement('div', { key: item.requestId, style: { width: '100%', minWidth: 0, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: '104px minmax(220px, 1.1fr) minmax(280px, 1.5fr) 126px 52px', alignItems: 'center', gap: 16, borderTop: `1px solid ${colors.border}`, background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface, color: 'inherit', padding: '12px 16px', fontSize: 14 } },
           React.createElement('div', { style: { justifySelf: 'start' } }, tableStatusTag(status.label, status.state, { fontWeight: 600 })),
@@ -503,7 +511,7 @@ window.__ModuleLoader__.load({
       const authorizationDetail = selectedAuthorization ? React.createElement('div', { role: 'presentation', onMouseDown: (event) => { if (event.target === event.currentTarget) setSelectedAuthorizationId('') }, style: { position: 'fixed', inset: 0, zIndex: 1100, display: 'flex', justifyContent: 'flex-end', background: 'rgba(0,0,0,.28)', backdropFilter: 'blur(2px)' } },
         React.createElement('section', { role: 'dialog', 'aria-modal': true, 'aria-label': '人工介入事项详情', style: { width: 'min(640px, 100%)', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', borderLeft: `1px solid ${colors.border}`, background: colors.surface, boxShadow: '-20px 0 60px rgba(0,0,0,.2)' } },
           React.createElement('header', { style: { flex: '0 0 auto', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 24, padding: '24px 24px 20px', borderBottom: `1px solid ${colors.border}`, background: colors.surface } },
-            React.createElement('div', { style: { minWidth: 0 } }, React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } }, statusTag(selectedAuthorization.status === 'answered' ? (authorizationDecision[selectedAuthorization.decision]?.label || '已处理') : (authorizationStatus[selectedAuthorization.status]?.label || '等待处理'), selectedAuthorization.status === 'answered' ? (authorizationDecision[selectedAuthorization.decision]?.state || 'done') : 'warning'), React.createElement('span', { style: { color: colors.muted, fontSize: 11.5 } }, fmt(selectedAuthorization.createdAt))), React.createElement('h3', { style: { margin: 0, fontSize: 18, fontWeight: 600, lineHeight: 1.5 } }, selectedAuthorization.objective || '人工介入事项'), React.createElement('code', { style: { display: 'block', marginTop: 10, color: colors.muted, fontSize: 10.5 } }, selectedAuthorization.requestId)),
+            React.createElement('div', { style: { minWidth: 0 } }, React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } }, statusTag(authorizationPresentation(selectedAuthorization).label, authorizationPresentation(selectedAuthorization).state), React.createElement('span', { style: { color: colors.muted, fontSize: 11.5 } }, fmt(selectedAuthorization.createdAt))), React.createElement('h3', { style: { margin: 0, fontSize: 18, fontWeight: 600, lineHeight: 1.5 } }, selectedAuthorization.objective || '人工介入事项'), React.createElement('code', { style: { display: 'block', marginTop: 10, color: colors.muted, fontSize: 10.5 } }, selectedAuthorization.requestId)),
             React.createElement(Button, { variant: 'ghost', size: 'sm', type: 'button', 'aria-label': '关闭人工介入事项', onClick: () => setSelectedAuthorizationId(''), style: { flex: '0 0 auto', minWidth: 52, whiteSpace: 'nowrap' } }, '关闭')),
           React.createElement('div', { style: { flex: '1 1 auto', overflowY: 'auto', padding: '0 24px 24px' } },
             React.createElement('section', { style: { padding: '24px 0', borderBottom: `1px solid ${colors.border}` } }, authorizationDetailField('需要人工处理', selectedAuthorization.requestedAction)),
@@ -513,13 +521,13 @@ window.__ModuleLoader__.load({
             React.createElement('details', { style: { padding: '18px 0', borderBottom: `1px solid ${colors.border}` } }, React.createElement('summary', { style: { cursor: 'pointer', fontSize: 12, fontWeight: 600 } }, `已尝试 · ${(selectedAuthorization.attemptedActions || []).length}`), React.createElement('div', { style: { marginTop: 14 } }, authorizationDetailField('', (selectedAuthorization.attemptedActions || []).map((value, index) => `${index + 1}. ${value}`).join('\n')))),
             React.createElement('section', { style: { padding: '20px 0', borderBottom: `1px solid ${colors.border}` } }, authorizationDetailField('关联信息', `Task ID：${selectedAuthorization.taskId || '—'}\n群聊：${groupsById.get(selectedAuthorization.groupId)?.name || selectedAuthorization.groupId || '—'}`)),
             selectedAuthorization.status === 'answered' ? React.createElement('section', { style: { padding: '20px 0' } }, authorizationDetailField('处理结果', `${selectedAuthorization.decision === 'approved' ? '继续任务' : selectedAuthorization.decision === 'rejected' ? '不执行' : selectedAuthorization.decision || '已处理'}\n处理渠道：${selectedAuthorization.decisionSource === 'web' ? '运行看板' : selectedAuthorization.decisionSource === 'dingtalk' ? '钉钉私聊' : selectedAuthorization.decisionSource || '历史迁移'}\n处理时间：${fmt(selectedAuthorization.decidedAt)}\n处理意见：${selectedAuthorization.reply || '—'}`)) : null),
-          selectedAuthorization.status !== 'answered' ? React.createElement('footer', { style: { flex: '0 0 auto', display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 10, alignItems: 'center', padding: '16px 24px', borderTop: `1px solid ${colors.border}`, background: colors.surface2 } },
-            React.createElement('input', { 'aria-label': `处理意见 ${selectedAuthorization.requestId}`, value: authorizationComments[selectedAuthorization.requestId] || '', onChange: (event) => setAuthorizationComments((current) => ({ ...current, [selectedAuthorization.requestId]: event.target.value })), placeholder: '处理意见（可选）', style: { minWidth: 0, border: `1px solid ${colors.border}`, borderRadius: 9, background: colors.surface2, color: 'inherit', padding: '9px 11px', fontFamily: 'inherit', fontSize: 12 } }),
+          selectedAuthorizationPending ? React.createElement('footer', { style: { flex: '0 0 auto', display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 10, alignItems: 'center', padding: '16px 24px', borderTop: `1px solid ${colors.border}`, background: colors.surface2 } },
+            React.createElement('input', { 'aria-label': `执行限制或拒绝原因 ${selectedAuthorization.requestId}`, value: authorizationComments[selectedAuthorization.requestId] || '', onChange: (event) => setAuthorizationComments((current) => ({ ...current, [selectedAuthorization.requestId]: event.target.value })), placeholder: '执行限制或拒绝原因（可选）', style: { minWidth: 0, border: `1px solid ${colors.border}`, borderRadius: 9, background: colors.surface2, color: 'inherit', padding: '9px 11px', fontFamily: 'inherit', fontSize: 12 } }),
             React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: decidingAuthorizationId === selectedAuthorization.requestId, onClick: () => decideAuthorization(selectedAuthorization.requestId, 'rejected'), style: { color: colors.danger } }, '不执行'),
-            React.createElement(Button, { variant: 'primary', size: 'sm', type: 'button', disabled: decidingAuthorizationId === selectedAuthorization.requestId, onClick: () => decideAuthorization(selectedAuthorization.requestId, 'approved') }, decidingAuthorizationId === selectedAuthorization.requestId ? '处理中…' : '继续任务')) : null)) : null
+            React.createElement(Button, { variant: 'primary', size: 'sm', type: 'button', disabled: decidingAuthorizationId === selectedAuthorization.requestId, onClick: () => decideAuthorization(selectedAuthorization.requestId, 'approved') }, decidingAuthorizationId === selectedAuthorization.requestId ? '处理中…' : '批准该事项并继续')) : null)) : null
       const authorizationsPage = React.createElement(React.Fragment, null, React.createElement('section', null,
         React.createElement('div', { style: tableFrame },
-          React.createElement('div', { style: { ...toolbar, justifyContent: 'flex-end' } }, React.createElement(SelectMenu, { label: '筛选处理状态', value: authorizationFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'pending', label: '等待处理' }, { id: 'approved', label: '已继续' }, { id: 'rejected', label: '不执行' }], onChange: (value) => { setAuthorizationFilter(value); setAuthorizationPage(1) }, fitContent: true })),
+          React.createElement('div', { style: { ...toolbar, justifyContent: 'flex-end' } }, React.createElement(SelectMenu, { label: '筛选处理状态', value: authorizationFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'pending', label: '等待处理' }, { id: 'approved', label: '已继续' }, { id: 'rejected', label: '不执行' }, { id: 'superseded', label: '已失效' }], onChange: (value) => { setAuthorizationFilter(value); setAuthorizationPage(1) }, fitContent: true })),
           React.createElement('div', { style: { height: 42, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: '104px minmax(220px, 1.1fr) minmax(280px, 1.5fr) 126px 52px', alignItems: 'center', gap: 16, padding: '0 16px', background: colors.surface2, color: colors.muted, fontSize: 13, fontWeight: 600 } }, React.createElement('span', null, '状态'), React.createElement('span', null, '任务'), React.createElement('span', null, '阻塞事项'), React.createElement('span', null, '提出时间'), React.createElement('span', null, '操作')),
           React.createElement('div', null, ...(authorizationRows.length ? authorizationRows : [React.createElement('div', { key: 'empty', style: { padding: 36, textAlign: 'center', color: colors.muted, fontSize: 12 } }, '暂无人工介入事项')])),
           React.createElement('div', { style: tableFooter },

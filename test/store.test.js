@@ -59,6 +59,17 @@ test('协调重试状态跨重启保留且按群隔离', async () => {
   assert.deepEqual(residentDomainSpec.tables.groups.valueSchema.parse(legacy).coordinationRequests, {})
 })
 
+test('被新请求替代的协调账保留明确终态与替代身份', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'coord-superseded' })
+  await store.updateCoordinationRequest('coord-superseded', 'old', { status: 'pending', attempt: 2 })
+  await store.updateCoordinationRequest('coord-superseded', 'old', { status: 'superseded', supersededBy: 'new', supersedeReason: 'topic-revision-replaced', nextRetryAt: undefined })
+  assert.deepEqual(store.getCoordinationRequest('coord-superseded', 'old'), {
+    status: 'superseded', attempt: 2, resumeEpoch: 0, supersededBy: 'new', supersedeReason: 'topic-revision-replaced', nextRetryAt: undefined, updatedAt: store.getCoordinationRequest('coord-superseded', 'old').updatedAt,
+  })
+})
+
 test('协调仅淘汰completed旧记录，保留pending/exhausted与当前恢复epoch', async () => {
   const { facility, seed } = memoryFacility()
   const store = await openResidentStore(facility)
@@ -104,6 +115,17 @@ test('投影水位已保存但淘汰删除失败，重启重放补齐裁剪且�
 
 test('Topic事项模型使用独立domain版本8', () => {
   assert.equal(residentDomainSpec.version, 8)
+})
+
+test('任务表格同步配置与运行状态独立持久化', async () => {
+  const { facility, seed } = memoryFacility()
+  const store = await openResidentStore(facility)
+  const config = { enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', nodeId: 'node', documentName: '任务表', sheetId: 'sheet', sheetTitle: 'Sheet1', intervalMs: 180000 }
+  await store.setTaskSheetSyncConfig(config)
+  await store.setTaskSheetSyncStatus({ state: 'success', taskCount: 3, lastSuccessAt: '2026-09-14T04:00:00Z' })
+  const restored = await openResidentStore(memoryFacility(seed).facility)
+  assert.deepEqual(restored.getTaskSheetSyncConfig(), config)
+  assert.deepEqual(restored.getTaskSheetSyncStatus(), { state: 'success', taskCount: 3, lastSuccessAt: '2026-09-14T04:00:00Z' })
 })
 
 test('删除后重建同 ID 流程不能复用旧修订号使旧计划恢复有效', async () => {
@@ -340,7 +362,9 @@ test('叶子会话提示词、回复审阅与撤回元数据持久化', async ()
   await store.subscribe({ groupId: 'group-a' })
   await store.setAgentNames(['数字助理', '小助手'])
   await store.setLeafSessionPrompt('开发类按发布流程，并提交当前证据')
-  const group = await store.appendOutbox({ groupId: 'group-a', sourceMessageId: 'task-result:1', text: 'done', replyToMessageId: 'm-source', replyToSenderOpenDingTalkId: 'od-requester', atOpenDingTalkIds: ['od-requester'], replyKind: 'confirmation', matterSourceMessageIds: ['m-source', 'm-source'], taskIds: ['task-1', 'task-1'], replacesOutboundIds: ['out-old', 'out-old'] })
+  await store.appendOutbox({ groupId: 'group-a', outboundId: 'out-old', sourceMessageId: 'old', text: 'old' })
+  const appended = await store.appendOutbox({ groupId: 'group-a', sourceMessageId: 'task-result:1', text: 'done', replyToMessageId: 'm-source', replyToSenderOpenDingTalkId: 'od-requester', atOpenDingTalkIds: ['od-requester'], replyKind: 'confirmation', matterSourceMessageIds: ['m-source', 'm-source'], taskIds: ['task-1', 'task-1'], replacesOutboundIds: ['out-old', 'out-old'] })
+  const group = { ...appended, outbox: appended.outbox.slice(1) }
   assert.equal(store.getLeafSessionPrompt(), '开发类按发布流程，并提交当前证据')
   assert.deepEqual(store.getAgentNames(), ['数字助理', '小助手'])
   assert.equal(group.outbox[0].replyToMessageId, 'm-source')
@@ -352,8 +376,8 @@ test('叶子会话提示词、回复审阅与撤回元数据持久化', async ()
   await store.acknowledge({ groupId: 'group-a', outboundId: group.outbox[0].outboundId, deliveredMessageId: 'sent-1' })
   await store.updateOutboundRecall({ groupId: 'group-a', outboundId: group.outbox[0].outboundId, status: 'requested', reason: 'superseded-by:m-new' })
   await store.updateOutboundRecall({ groupId: 'group-a', outboundId: group.outbox[0].outboundId, status: 'recalled', reason: 'superseded-by:m-new' })
-  assert.equal(store.getGroup('group-a').outbox[0].recallStatus, 'recalled')
-  assert.equal(store.getGroup('group-a').outbox[0].recallReason, 'superseded-by:m-new')
+  assert.equal(store.getGroup('group-a').outbox[1].recallStatus, 'recalled')
+  assert.equal(store.getGroup('group-a').outbox[1].recallReason, 'superseded-by:m-new')
 })
 
 test('Task 新执行版本使旧待发事项通知变为 superseded', async () => {

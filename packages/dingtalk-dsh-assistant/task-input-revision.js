@@ -1,11 +1,17 @@
 import { stableId } from './topic-model.js'
 
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right)
+export class TaskRevisionError extends Error {}
+export function normalizeRunPlan(objective, acceptanceCriteria, stageTasks) {
+  const clean = values => Array.isArray(values) ? values.map(item => String(item).trim()).filter(Boolean) : []
+  const criteria = clean(acceptanceCriteria), stages = clean(stageTasks)
+  return { acceptanceCriteria: criteria.length ? criteria : [objective], stageTasks: stages.length ? stages : ['完成并验证当前轮目标'] }
+}
 export const stagePlanFor = (task, titles) => {
-  if (titles.some(title => typeof title !== 'string' || !title.trim()) || new Set(titles).size !== titles.length) throw new Error('task_revision_stage_titles_invalid')
+  if (titles.some(title => typeof title !== 'string' || !title.trim()) || new Set(titles).size !== titles.length) throw new TaskRevisionError('task_revision_stage_titles_invalid')
   const plan = titles.map(title => task.stagePlan?.find(stage => stage.title === title)
     ?? { stageId: stableId('stage', `${task.taskId}:${task.runSequence}:${title}`), title })
-  if (new Set(plan.map(stage => stage.stageId)).size !== plan.length) throw new Error('task_revision_stage_identity_conflict')
+  if (new Set(plan.map(stage => stage.stageId)).size !== plan.length) throw new TaskRevisionError('task_revision_stage_identity_conflict')
   return plan
 }
 
@@ -24,14 +30,14 @@ export function reconcileLegacyStagePlan(task) {
 
 export function reviseTaskProgress(task, { objective = task.objective, acceptanceCriteria = task.acceptanceCriteria, stageTasks = task.stageTasks, progressImpact, impactEvidence }, basisIds) {
   const stages = stagePlanFor(task, task.stageTasks ?? [])
-  const affectedStageIds = impactEvidence?.affectedStageIds?.map(reference => stages.find(stage => stage.stageId === reference || stage.title === reference)?.stageId)
+  const affectedStageIds = impactEvidence?.affectedStageIds
   const scopeChanged = objective !== task.objective || !same(acceptanceCriteria, task.acceptanceCriteria) || !same(stageTasks, task.stageTasks)
   if (impactEvidence) {
-    if (!impactEvidence.basisMessageIds?.length || impactEvidence.basisMessageIds.some(id => !basisIds.has(id))) throw new Error('task_revision_basis_invalid')
-    if (typeof impactEvidence.reason !== 'string' || !impactEvidence.reason.trim()) throw new Error('task_revision_reason_required')
-    if (!affectedStageIds?.length || affectedStageIds.some(id => id === undefined)) throw new Error('task_revision_stage_invalid')
+    if (!impactEvidence.basisMessageIds?.length || impactEvidence.basisMessageIds.some(id => !basisIds.has(id))) throw new TaskRevisionError('task_revision_basis_invalid')
+    if (typeof impactEvidence.reason !== 'string' || !impactEvidence.reason.trim()) throw new TaskRevisionError('task_revision_reason_required')
+    if (!affectedStageIds?.length || affectedStageIds.some(id => !stages.some(stage => stage.stageId === id))) throw new TaskRevisionError('task_revision_stage_invalid')
   }
-  if (progressImpact === 'replan' && !scopeChanged && !affectedStageIds?.length) throw new Error('task_revision_impact_required')
+  if (progressImpact === 'replan' && !scopeChanged && !affectedStageIds?.length) throw new TaskRevisionError('task_revision_impact_required')
   const replan = scopeChanged || progressImpact === 'replan' || Boolean(impactEvidence)
   let firstAffected = stages.length
   if (replan) {

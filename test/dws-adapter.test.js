@@ -241,6 +241,15 @@ test('outbox 可使用无失败的最近消息窗口完成去重与投递确认'
   assert.deepEqual(await dispatchOutbox({ adapter, groupId: 'cid-a', outbound: { outboundId: 'out-recent', text: 'reply' } }), { status: 'sent', messageId: 'recent-id', deduplicated: false })
 })
 
+test('历史检查期间被替代的旧消息不能继续发送，领取持久失败同样零外发', async () => {
+  let sends = 0
+  const adapter = { readGroup: async () => ({ complete: true, messages: [] }), sendGroup: async () => { sends++ } }
+  const args = { adapter, groupId: 'g', outbound: { outboundId: 'old', text: 'old' } }
+  assert.deepEqual(await dispatchOutbox({ ...args, beforeSend: async () => false }), { status: 'superseded' })
+  await assert.rejects(dispatchOutbox({ ...args, beforeSend: async () => { throw new Error('disk_full') } }), /disk_full/)
+  assert.equal(sends, 0)
+})
+
 test('outbox 可识别钉钉补充@、移除Markdown并附加Agent签名后的已发送消息', async () => {
   let sends = 0
   const adapter = {

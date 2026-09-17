@@ -143,8 +143,14 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /aria-label': '人工介入事项详情'/)
   assert.match(source, /approved: \{ label: '已继续'/)
   assert.match(source, /rejected: \{ label: '不执行'/)
+  assert.match(source, /superseded: \{ label: '已失效', state: 'neutral' \}/)
+  assert.match(source, /const isPendingAuthorization = \(item\) => item\.status === 'pending-send' \|\| item\.status === 'waiting-reply'/)
+  assert.match(source, /authorizationStatus\[item\.status\] \|\| \{ label: '状态异常', state: 'error' \}/)
+  assert.match(source, /authorizationFilter === 'superseded' \? item\.status === 'superseded'/)
+  assert.match(source, /selectedAuthorizationPending \? React\.createElement\('footer'/)
   assert.match(source, /'处理结果'/)
-  assert.match(source, /'继续任务'/)
+  assert.match(source, /'批准该事项并继续'/)
+  assert.match(source, /执行限制或拒绝原因（可选）/)
   assert.match(source, /'暂无人工介入事项'/)
   assert.doesNotMatch(source, /授权审批|授权申请单详情|筛选审批状态|审批意见/)
   assert.match(source, /现场证据 ·/)
@@ -305,12 +311,17 @@ test('发件状态按实际投递环节展示，pending不会伪装为已回读'
     [{ status: 'pending', deliveryPendingReason: 'preflight_history_partial' }, 'failed', '发送受阻'],
     [{ status: 'pending', deliveryPendingReason: 'send_failed', deliveryError: 'timeout' }, 'failed', '投递异常'],
     [{ status: 'pending', deliveryError: 'legacy_error' }, 'failed', '投递异常'],
+    [{ status: 'pending', deliveryBlockedAt: '2026-09-11T00:00:00Z', deliveryError: 'server_rejected' }, 'failed', '发送待处理'],
     [{ status: 'pending', deliveryPendingReason: 'postflight_failed', deliveryError: 'CLI_ORG_NOT_AUTHORIZED' }, 'waiting', '待回读'],
     [{ status: 'pending', deliveryPendingReason: 'delivery_unknown' }, 'waiting', '待回读'],
     [{ status: 'pending', deliveryPendingReason: 'message_not_observed' }, 'waiting', '待回读'],
     [{ status: 'sent', deliveredMessageId: 'actual-message-id' }, 'confirmed', '已回读'],
     [{ status: 'sent' }, 'confirmed', '已发送'],
     [{ status: 'sent', recallStatus: 'recalled' }, 'recalled', '已撤回'],
+    [{ status: 'superseded', supersededByOutboundId: 'new' }, 'superseded', '已替代'],
+    [{ status: 'sent', supersededByOutboundId: 'new' }, 'superseded', '已替代'],
+    [{ status: 'superseded', recallStatus: 'failed', recallError: 'replacement_delivery_unknown' }, 'recall-failed', '撤回待处理'],
+    [{ status: 'sent', recallStatus: 'failed', recallError: 'dws_recall_failed:1:1001' }, 'recall-failed', '撤回待处理'],
   ]
   for (const [message, id, label] of scenarios) {
     const result = classify(message)

@@ -56,7 +56,7 @@ export function createTaskReportQueue({ store, serialize, hasPendingInput, execu
       }
       let status, result, error
       try {
-        result = await execute(taskId, report.reportType, report.value)
+        result = await execute(taskId, report.reportType, report.value, { recoveryError: report.recoveryError, submissionId: report.submissionId })
         status = result?.accepted === false ? 'rejected' : 'accepted'
       } catch (cause) {
         error = String(cause.message ?? cause).slice(0, 1600)
@@ -138,16 +138,18 @@ export function createTaskReportQueue({ store, serialize, hasPendingInput, execu
       return receipt(taskId, report)
     },
     recover(task) { for (const report of taskReports(task)) startDiagnostic(task.taskId, report); start(task.taskId) },
-    async retry(taskId, submissionId) {
+    async retry(taskId, submissionId, { coordinationRequestId } = {}) {
       const report = await serialize(async () => {
         const task = store.getTask(taskId)
         const existing = task && taskReports(task).find(item => item.submissionId === submissionId)
         if (!existing) throw new Error(`task_report_not_found:${submissionId}`)
         if (!matchesCurrent(task, existing) || task.state === 'completed') throw new Error(`task_report_retry_stale:${submissionId}`)
-        if (existing.status !== 'failed') throw new Error(`task_report_retry_requires_failed:${submissionId}`)
+        const recoveryError = coordinationRequestId && task.executionEvents?.findLast(event => event.kind === 'task-report-settled' && event.submissionId === submissionId && event.status === 'failed' && event.error === `topic_request_retry_exhausted:${coordinationRequestId}`)?.error
+        const recoverRejectedActiveCheck = recoveryError && existing.status === 'rejected' && existing.error === `task_not_active:${taskId}`
+        if (existing.status !== 'failed' && !recoverRejectedActiveCheck) throw new Error(`task_report_retry_requires_failed:${submissionId}`)
         const status = hasPendingInput(task) ? 'input-wait' : 'review-wait'
         await store.updateTask(taskId, current => ({ ...current, executionEvents: [...(current.executionEvents ?? []), {
-          kind: 'task-report-settled', submissionId, inputVersion: existing.inputVersion, runSequence: existing.runSequence, status, at: new Date().toISOString(),
+          kind: 'task-report-settled', submissionId, inputVersion: existing.inputVersion, runSequence: existing.runSequence, status, recoveryError: recoveryError ?? existing.error, at: new Date().toISOString(),
         }] }))
         return taskReports(store.getTask(taskId)).find(item => item.submissionId === submissionId)
       })

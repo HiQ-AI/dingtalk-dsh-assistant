@@ -1,6 +1,7 @@
 import { checkForUpdates } from './version-check.js'
 import { z } from 'zod'
 import { taskContextImpactFields } from './decision.js'
+import { isPendingDecision } from './topic-model.js'
 
 const WEB_ORIGINS = new Set(['http://127.0.0.1:3080', 'http://localhost:3080'])
 
@@ -40,7 +41,7 @@ function pageNumber(url, name, fallback, maximum = Number.MAX_SAFE_INTEGER) {
 }
 
 function topicSummary(topic) {
-  const unfinished = topic.decisions?.findLast((item) => item.status !== 'completed')
+  const unfinished = topic.decisions?.findLast(isPendingDecision)
   const pendingUnits = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision).map((entry) => entry.unitId ?? `legacy:${entry.messageId}`))
   return {
     topicId: topic.topicId, groupId: topic.groupId, title: topic.title,
@@ -151,6 +152,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/dws-bridge') return send(response, 200, store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] })
   if (request.method === 'GET' && url.pathname === '/state/environment') return send(response, 200, await store.inspectEnvironment())
   if (request.method === 'GET' && url.pathname === '/state/agent-config') return send(response, 200, store.getAgentConfig())
+  if (request.method === 'GET' && url.pathname === '/state/task-sheet-sync') return send(response, 200, store.getTaskSheetSyncState())
   if (request.method === 'GET' && url.pathname === '/state/version') return send(response, 200, await checkForUpdatesImpl({ force: url.searchParams.get('refresh') === 'true' }))
   if (request.method === 'POST' && url.pathname === '/tasks') return submitWebTask(request, response, store, 'createTask')
   const reportRoute = /^\/tasks\/([^/]+)\/reports\/([^/]+)(\/retry)?$/u.exec(url.pathname)
@@ -197,6 +199,9 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     return send(response, 200, await store.reissueAuthorization({ requestId, ...(await readJson(request)) }))
   }
   if (request.method === 'PUT' && url.pathname === '/config/agent') return send(response, 200, await store.updateAgentConfig(await readJson(request)))
+  if (request.method === 'POST' && url.pathname === '/task-sheet-sync/check') return send(response, 200, await store.inspectTaskSheet(await readJson(request)))
+  if (request.method === 'PUT' && url.pathname === '/config/task-sheet-sync') return send(response, 200, await store.updateTaskSheetSyncConfig(await readJson(request)))
+  if (request.method === 'POST' && url.pathname === '/task-sheet-sync/run') return send(response, 200, await store.runTaskSheetSync())
   if (request.method === 'GET' && url.pathname === '/config/groups/search') return send(response, 200, await store.searchGroups(url.searchParams.get('q') ?? ''))
   if (request.method === 'POST' && url.pathname === '/config/groups') return send(response, 200, await store.subscribe(await readJson(request)))
   if (request.method === 'POST' && url.pathname.startsWith('/config/groups/') && url.pathname.endsWith('/backfill')) {

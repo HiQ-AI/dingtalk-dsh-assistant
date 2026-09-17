@@ -2,14 +2,46 @@ import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import { storedTaskCheckpointBaseSchema, taskResultSchema } from './task-result.js'
-import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, sourceRangeSchema } from './topic-model.js'
+import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema } from './topic-model.js'
+import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
 
 export { resolveTopicMessages } from './topic-model.js'
 
 const missingText = (value) => typeof value !== 'string' || value.trim() === '' || value.trim().toLowerCase() === 'null'
+// 先验证完整替换图，再派生唯一后继；发送事实与停止旧意图发送分别保存。
+export function reconcileReplacementGraph(outbox) {
+  const byId = new Map(outbox.map(item => [item.outboundId, item]))
+  if (byId.size !== outbox.length) throw new Error('outbox_identity_duplicate')
+  const visiting = new Set(), visited = new Set()
+  const visit = id => {
+    if (visiting.has(id)) throw new Error('outbox_replacement_cycle')
+    if (visited.has(id)) return
+    visiting.add(id)
+    for (const target of byId.get(id).replacesOutboundIds ?? []) {
+      if (!byId.has(target)) throw new Error(`group_reply_replacement_unknown:${target}`)
+      visit(target)
+    }
+    visiting.delete(id); visited.add(id)
+  }
+  for (const id of byId.keys()) visit(id)
+  const reaches = (from, target) => (byId.get(from).replacesOutboundIds ?? []).some(id => id === target || reaches(id, target))
+  const now = new Date().toISOString()
+  return outbox.map(item => {
+    const successors = outbox.filter(candidate => candidate.replacesOutboundIds?.includes(item.outboundId)).map(candidate => candidate.outboundId)
+    if (item.supersededByOutboundId) {
+      if (!byId.has(item.supersededByOutboundId) || !reaches(item.supersededByOutboundId, item.outboundId)) throw new Error('outbox_replacement_successor_invalid')
+      successors.push(item.supersededByOutboundId)
+    }
+    for (const left of successors) for (const right of successors) {
+      if (left !== right && !reaches(left, right) && !reaches(right, left)) throw new Error('outbox_replacement_fork')
+    }
+    const successor = item.supersededByOutboundId ?? successors.find(id => successors.every(other => id === other || reaches(other, id)))
+    return successor ? { ...item, status: item.status === 'pending' ? 'superseded' : item.status, supersededByOutboundId: successor, supersededAt: item.supersededAt ?? now } : item
+  })
+}
 const replacementBusy = (group, replacesOutboundIds, decisionId) => replacesOutboundIds.length > 0 && (
-  group.outbox.some((outbound) => outbound.status === 'pending' && (outbound.replacesOutboundIds ?? []).some((id) => replacesOutboundIds.includes(id)))
-  || group.topics.some((topic) => topic.decisions.some((record) => record.status !== 'completed' && record.decisionId !== decisionId
+  group.outbox.some((outbound) => outbound.status === 'pending' && !replacesOutboundIds.includes(outbound.outboundId) && (outbound.replacesOutboundIds ?? []).some((id) => replacesOutboundIds.includes(id)))
+  || group.topics.some((topic) => topic.decisions.some((record) => isPendingDecision(record) && record.decisionId !== decisionId
     && (record.decision.replyReview?.replaceOutboundIds ?? []).some((id) => replacesOutboundIds.includes(id))))
 )
 
@@ -32,10 +64,12 @@ const inboundSchema = z.object({
 const outboundSchema = z.object({
   topicRefs: z.array(topicRefSchema).optional(), decisionId: z.string().optional(), resultFingerprint: z.string().min(1).optional(),
   outboundId: z.string().min(1), sourceMessageId: z.string().min(1), text: z.string(), status: z.enum(['pending', 'sent', 'superseded']),
-  taskInputVersion: z.number().int().positive().optional(), taskRunSequence: z.number().int().positive().optional(), supersededAt: z.string().min(1).optional(), supersededReason: z.string().min(1).optional(),
+  taskInputVersion: z.number().int().positive().optional(), taskRunSequence: z.number().int().positive().optional(),
+  supersededByOutboundId: z.string().min(1).optional(), supersededAt: z.string().min(1).optional(), supersededReason: z.string().min(1).optional(), sendStartedAt: z.string().min(1).optional(),
   readbackRequired: z.boolean().optional(),
   deliveryAttemptCount: z.number().int().nonnegative().optional(), deliveryAttemptedAt: z.string().min(1).optional(),
   deliveryPendingReason: z.string().min(1).optional(), deliveryError: z.string().min(1).optional(),
+  deliveryBlockedAt: z.string().min(1).optional(),
   deliveredMessageId: z.string().min(1).optional(), deliveredAt: z.string().min(1).optional(),
   replyToMessageId: z.string().min(1).optional(), replyToSenderOpenDingTalkId: z.string().min(1).optional(),
   atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
@@ -44,6 +78,7 @@ const outboundSchema = z.object({
   replacesOutboundIds: z.array(z.string().min(1)).optional(),
   recallStatus: z.enum(['requested', 'recalled', 'failed']).optional(), recallReason: z.string().min(1).optional(),
   recalledAt: z.string().min(1).optional(), recallError: z.string().min(1).optional(),
+  recallAttemptCount: z.number().int().nonnegative().optional(), recallRetryAt: z.string().min(1).optional(),
 })
 const legacyWaitingResultSchema = z.object({
   inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(),
@@ -63,7 +98,7 @@ const humanBlockerSchema = z.object({
   supersededAt: z.string().min(1).optional(), supersededBy: z.string().min(1).optional(), supersedeReason: z.string().min(1).optional(),
 })
 const groupSchema = z.object({
-  coordinationRequests: z.record(z.string(), z.object({ attempt: z.number().int().nonnegative().default(0), resumeEpoch: z.number().int().nonnegative().default(0), updatedAt: z.string().optional(), nextRetryAt: z.string().optional(), status: z.enum(['pending', 'exhausted', 'completed']), messageId: z.string().optional(), lastError: z.string().optional() })).default({}),
+  coordinationRequests: z.record(z.string(), z.object({ attempt: z.number().int().nonnegative().default(0), resumeEpoch: z.number().int().nonnegative().default(0), updatedAt: z.string().optional(), nextRetryAt: z.string().optional(), status: z.enum(['pending', 'exhausted', 'completed', 'superseded']), messageId: z.string().optional(), lastError: z.string().optional(), supersededBy: z.string().optional(), supersedeReason: z.string().optional() })).default({}),
   groupId: z.string().min(1), name: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), residentAgentPreset: z.string().min(1).optional(), nextSequence: z.number().int().positive(),
   messages: z.array(inboundSchema), outbox: z.array(outboundSchema),
   routingRevision: z.number().int().nonnegative(), topics: z.array(topicSchema), routeHistory: z.array(z.record(z.string(), z.unknown())), taskReservations: z.array(z.record(z.string(), z.unknown())),
@@ -111,6 +146,8 @@ const taskSchema = z.object({
 const schedulerSchema = z.object({
   tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), agentWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
   leafSessionPrompt: z.string().optional(), taskPrompts: z.array(taskPromptSchema).optional(), taskPromptsVersion: z.number().int().nonnegative().optional(), taskExecutionGuidance: z.string().optional(), taskEvidenceGuidance: z.string().optional(), maxConcurrentTasks: z.number().int().positive().max(50).optional(),
+  taskSheetSyncConfig: z.object({ enabled: z.boolean(), documentUrl: z.string().url(), nodeId: z.string().min(1), documentName: z.string().min(1), sheetId: z.string().min(1), sheetTitle: z.string().min(1), intervalMs: z.literal(180000) }).optional(),
+  taskSheetSyncStatus: z.object({ state: z.enum(['idle', 'running', 'success', 'failed']), trigger: z.enum(['startup', 'timer', 'manual']).optional(), lastAttemptAt: z.string().optional(), lastSuccessAt: z.string().optional(), snapshotAt: z.string().optional(), batchId: z.string().optional(), taskCount: z.number().int().nonnegative().optional(), lastError: z.string().optional() }).optional(),
 })
 const activitySchema = z.object({
   activityId: z.string().min(1), taskId: z.string().min(1), sessionId: z.string().min(1), eventKey: z.string().min(1),
@@ -168,6 +205,24 @@ const assertTaskRevisionMetadata = (task, action) => {
   const objectiveChanged = Boolean(objective && objective !== task.objective)
   if (title && !objectiveChanged) throw new Error('task_title_requires_objective_revision')
   if (objectiveChanged && !title) throw new Error('task_objective_title_required')
+  if (action.kind === 'task-reopen') stagePlanFor({ taskId: task.taskId, runSequence: task.runSequence + 1 }, normalizeRunPlan(objective || task.objective, action.acceptanceCriteria, action.stageTasks).stageTasks)
+}
+const assertNewTaskMetadata = action => {
+  const metadata = validateTaskMetadata(action)
+  stagePlanFor({ taskId: 'new-task', runSequence: 1 }, normalizeRunPlan(metadata.objective, metadata.acceptanceCriteria, action.stageTasks).stageTasks)
+}
+
+// 接纳和恢复共用执行层的纯校验；必须在任何预约或渠道副作用之前调用。
+export function assertTaskContextRevision(task, action, basisIds) {
+  assertTaskRevisionMetadata(task, action)
+  if (action.kind === 'task-context') {
+    const objective = action.objective?.trim() || task.objective
+    reviseTaskProgress(task, { ...action, objective, ...normalizeRunPlan(objective, action.acceptanceCriteria ?? task.acceptanceCriteria, action.stageTasks ?? task.stageTasks) }, basisIds)
+  }
+}
+const taskRevisionBasis = (group, task, action) => {
+  const refs = [...new Map([...task.topicRefs, ...action.topicRefs ?? []].map(ref => [ref.topicId, ref])).values()]
+  return new Set(refs.flatMap(ref => topicMessages(group, group.topics.find(topic => topic.topicId === ref.topicId), ref.revision).map(message => message.messageId)))
 }
 
 const resolveSourceRef = (text, ref, error = 'topic_unit_source_ambiguous') => {
@@ -273,8 +328,8 @@ export async function openResidentStore(storageDomain) {
       if (!entry) throw new Error(`group_not_found:${groupId}`)
       const [key, group] = entry
       const requests = { ...group.coordinationRequests, [requestId]: { ...group.coordinationRequests?.[requestId], ...patch, updatedAt: new Date().toISOString() } }
-      const completed = Object.entries(requests).filter(([, value]) => value.status === 'completed').sort((a, b) => a[0] === requestId ? 1 : b[0] === requestId ? -1 : (a[1].updatedAt ?? '').localeCompare(b[1].updatedAt ?? '') || a[0].localeCompare(b[0]))
-      for (const [expired] of completed.slice(0, Math.max(0, completed.length - 500))) delete requests[expired]
+      const terminal = Object.entries(requests).filter(([, value]) => ['completed', 'superseded'].includes(value.status)).sort((a, b) => a[0] === requestId ? 1 : b[0] === requestId ? -1 : (a[1].updatedAt ?? '').localeCompare(b[1].updatedAt ?? '') || a[0].localeCompare(b[0]))
+      for (const [expired] of terminal.slice(0, Math.max(0, terminal.length - 500))) delete requests[expired]
       const updated = groupSchema.parse({ ...group, coordinationRequests: requests })
       await groups.put(key, updated)
       return updated.coordinationRequests[requestId]
@@ -285,6 +340,21 @@ export async function openResidentStore(storageDomain) {
     getAgentWorkspaceDir: () => scheduler.get('runtime')?.agentWorkspaceDir,
     getAgentNames: () => scheduler.get('runtime')?.agentNames ?? [],
     getMaxConcurrentTasks: () => scheduler.get('runtime')?.maxConcurrentTasks,
+    getTaskSheetSyncConfig: () => scheduler.get('runtime')?.taskSheetSyncConfig,
+    setTaskSheetSyncConfig: async (taskSheetSyncConfig) => {
+      const parsed = schedulerSchema.shape.taskSheetSyncConfig.unwrap().parse(taskSheetSyncConfig)
+      await scheduler.update('runtime', (current) => ({ ...current, taskSheetSyncConfig: parsed }))
+      return parsed
+    },
+    getTaskSheetSyncStatus: () => scheduler.get('runtime')?.taskSheetSyncStatus ?? { state: 'idle' },
+    setTaskSheetSyncStatus: async (patch) => {
+      let next
+      await scheduler.update('runtime', (current) => {
+        next = schedulerSchema.shape.taskSheetSyncStatus.unwrap().parse({ ...(current?.taskSheetSyncStatus ?? { state: 'idle' }), ...patch })
+        return { ...current, taskSheetSyncStatus: next }
+      })
+      return next
+    },
     setMaxConcurrentTasks: async (maxConcurrentTasks) => {
       await scheduler.update('runtime', (current) => ({ ...current, maxConcurrentTasks }))
       return { maxConcurrentTasks }
@@ -381,7 +451,7 @@ export async function openResidentStore(storageDomain) {
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       if ([...tasks.entries()].some(([, task]) => task.groupId === groupId)) throw new Error('group_has_referenced_topics')
-      if (entry[1].topics.some((topic) => topic.decisions.some((decision) => decision.status !== 'completed'))) throw new Error('group_has_pending_decisions')
+      if (entry[1].topics.some((topic) => topic.decisions.some(isPendingDecision))) throw new Error('group_has_pending_decisions')
       if (entry[1].outbox.some((outbound) => outbound.status === 'pending')) throw new Error('group_has_pending_outbox')
       await groups.delete(entry[0])
       return { removed: true, groupId }
@@ -591,14 +661,16 @@ export async function openResidentStore(storageDomain) {
           if (!dependency || dependency.revision !== ref.revision) { result = { status: 'topic-stale', topicId: ref.topicId }; return latest }
         }
         if (topic.revision !== revision) { result = { status: 'topic-stale', revision: topic.revision }; return latest }
-        if (topic.decisions.some((item) => item.status !== 'completed')) { result = { status: 'topic-busy' }; return latest }
+        if (topic.decisions.some(isPendingDecision)) { result = { status: 'topic-busy' }; return latest }
         const replacing = decision.replyReview?.replaceOutboundIds ?? []
         if (replacementBusy(latest, replacing, decisionId)) {
           result = { status: 'reply-busy' }; return latest
         }
+        if (replacing.length) reconcileReplacementGraph([...latest.outbox, { outboundId: stableId('outbound', decisionId), status: 'pending', replacesOutboundIds: replacing }])
         const targetTaskIds = (decision.actions ?? []).map((action) => action.taskId).filter(Boolean)
         if (new Set(targetTaskIds).size !== targetTaskIds.length) throw new Error('topic_task_action_duplicate')
         for (const action of decision.actions ?? []) {
+          if (action.kind === 'new-task') assertNewTaskMetadata(action)
           if (action.taskId && !expectedTaskVersions.some((item) => item.taskId === action.taskId)) throw new Error('topic_task_version_required')
           const task = action.taskId ? tasks.get(action.taskId) : undefined
           if (task) assertTaskRevisionMetadata(task, action)
@@ -607,6 +679,10 @@ export async function openResidentStore(storageDomain) {
           const task = tasks.get(expected.taskId)
           if (!task || task.groupId !== groupId || task.inputVersion !== expected.inputVersion || (expected.runSequence !== undefined && task.runSequence !== expected.runSequence)) { result = { status: 'task-stale', taskId: expected.taskId }; return latest }
           if (latest.taskReservations.some((item) => item.taskId === expected.taskId)) { result = { status: 'task-busy', taskId: expected.taskId }; return latest }
+        }
+        for (const action of decision.actions ?? []) {
+          const task = action.taskId ? tasks.get(action.taskId) : undefined
+          if (task && action.kind === 'task-context') assertTaskContextRevision(task, action, taskRevisionBasis(latest, task, action))
         }
         const now = new Date().toISOString()
         const operations = (decision.actions ?? []).map((action, actionIndex) => ({ operationId: `${decisionId}:action:${actionIndex}`, actionIndex, status: 'pending',
@@ -640,11 +716,13 @@ export async function openResidentStore(storageDomain) {
           if (!topic || topic.revision !== ref.revision) { result = { status: 'topic-stale', topicId: ref.topicId }; return latest }
         }
         const task = action.taskId ? tasks.get(action.taskId) : undefined
+        if (action.kind === 'new-task') assertNewTaskMetadata(action)
         if (action.kind !== 'new-task') {
           if (!task || task.groupId !== groupId || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence) { result = { status: 'task-stale', taskId: action.taskId }; return latest }
           if (latest.taskReservations.some((reservation) => reservation.taskId === task.taskId)) { result = { status: 'task-busy', taskId: task.taskId }; return latest }
           if ((action.kind === 'task-reopen' && task.state !== 'completed') || (['task-context', 'task-cancel'].includes(action.kind) && task.state === 'completed')) { result = { status: 'task-state-invalid', taskId: task.taskId }; return latest }
-          assertTaskRevisionMetadata(task, action)
+          const basisIds = new Set([messageId, ...taskRevisionBasis(latest, task, { ...action, topicRefs })])
+          assertTaskContextRevision(task, action, basisIds)
         }
         const now = new Date().toISOString(), refs = [...topicRefs, { topicId, revision: 1 }]
         const unit = { unitId: stableId('unit', `web:${identity}`), unitRevision: 1, unitKey: 'web-input', summary: text, sourceRanges: [{ start: 0, end: text.length, quote: text }], contextRanges: [] }
@@ -665,14 +743,47 @@ export async function openResidentStore(storageDomain) {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       if (Object.keys(patch).some((key) => !['status', 'operations', 'progress', 'error'].includes(key))) throw new Error('topic_decision_patch_invalid')
+      if (patch.status === 'rejected') throw new Error('topic_decision_rejection_requires_validation')
       let result
       await groups.update(entry[0], (latest) => ({ ...latest, topics: latest.topics.map((topic) => topic.topicId !== topicId ? topic : { ...topic, decisions: topic.decisions.map((record) => {
         if (record.decisionId !== decisionId) return record
-        if (record.status === 'completed') { result = record; return record }
+        if (!isPendingDecision(record)) { result = record; return record }
         result = { ...record, ...patch, updatedAt: new Date().toISOString() }; return result
       }) }) }))
       if (!result) throw new Error(`topic_decision_not_found:${decisionId}`)
       return result
+    }),
+    rejectInvalidTopicDecision: ({ groupId, topicId, decisionId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let rejected = false
+      await groups.update(entry[0], (latest) => {
+        const record = latest.topics.find(topic => topic.topicId === topicId)?.decisions.find(item => item.decisionId === decisionId)
+        if (!record) throw new Error(`topic_decision_not_found:${decisionId}`)
+        if (record.status === 'rejected') { rejected = true; return latest }
+        if (!isPendingDecision(record) || !record.decision.actions.length || record.decision.actions.some(action => action.kind !== 'task-context')) return latest
+        if (record.operations.length !== record.decision.actions.length || record.operations.some((operation, index) => operation.actionIndex !== index || operation.taskId !== record.decision.actions[index].taskId)) return latest
+        // Task 写入与 operation 写回之间崩溃时，以 Task 的持久幂等账为准。
+        if (record.operations.some(operation => operation.status !== 'pending' || tasks.get(operation.taskId)?.appliedOperations.includes(operation.operationId))) return latest
+        for (const action of record.decision.actions) {
+          const task = tasks.get(action.taskId)
+          if (!task || task.groupId !== groupId || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence) return latest
+        }
+        let failure
+        try {
+          for (const action of record.decision.actions) assertTaskContextRevision(tasks.get(action.taskId), action, taskRevisionBasis(latest, tasks.get(action.taskId), action))
+        } catch (error) {
+          if (!(error instanceof TaskRevisionError)) throw error
+          failure = error.message
+        }
+        if (!failure) return latest
+        rejected = true
+        return { ...latest, taskReservations: latest.taskReservations.filter(item => item.decisionId !== decisionId),
+          topics: latest.topics.map(topic => topic.topicId !== topicId ? topic : { ...topic,
+            decisions: topic.decisions.map(item => item.decisionId !== decisionId ? item : { ...item, status: 'rejected', error: failure, updatedAt: new Date().toISOString() }),
+          }) }
+      })
+      return rejected
     }),
     completeTopicDecision: ({ groupId, topicId, decisionId }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
@@ -682,6 +793,7 @@ export async function openResidentStore(storageDomain) {
         const topic = latest.topics.find((item) => item.topicId === topicId)
         const record = topic?.decisions.find((item) => item.decisionId === decisionId)
         if (!record) throw new Error(`topic_decision_not_found:${decisionId}`)
+        if (record.status === 'rejected') throw new Error('topic_decision_rejected')
         if (record.operations.some((operation) => operation.status !== 'applied')) throw new Error('topic_decision_operations_pending')
         result = { ...record, status: 'completed', updatedAt: new Date().toISOString() }
         const update = record.decision.topicUpdate ?? {}
@@ -775,7 +887,7 @@ export async function openResidentStore(storageDomain) {
         if (veto !== undefined) return latest
         if (replacementBusy(latest, replacesOutboundIds ?? [], decisionId)) { veto = { status: 'reply-busy' }; return latest }
         return { ...latest,
-        outbox: [...latest.outbox, {
+        outbox: reconcileReplacementGraph([...latest.outbox, {
           outboundId: outboundId ?? `outbound-${randomUUID()}`, ...(topicRefs ? { topicRefs } : {}), ...(decisionId ? { decisionId } : {}), ...(resultFingerprint ? { resultFingerprint } : {}), sourceMessageId, text, status: 'pending', readbackRequired: true,
           ...(replyToMessageId ? { replyToMessageId } : {}),
           ...(replyToSenderOpenDingTalkId ? { replyToSenderOpenDingTalkId } : {}),
@@ -786,9 +898,29 @@ export async function openResidentStore(storageDomain) {
           ...(taskInputVersion ? { taskInputVersion } : {}), ...(taskRunSequence ? { taskRunSequence } : {}),
           ...(Array.isArray(taskIds) && taskIds.length > 0 ? { taskIds: [...new Set(taskIds)] } : {}),
           ...(Array.isArray(replacesOutboundIds) && replacesOutboundIds.length > 0 ? { replacesOutboundIds: [...new Set(replacesOutboundIds)] } : {}),
-        }],
+        }]),
       } })
       return veto ?? group
+    }),
+    reconcileOutboxReplacements: ({ groupId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      const outbox = reconcileReplacementGraph(entry[1].outbox)
+      if (outbox.every((item, index) => item.status === entry[1].outbox[index].status && item.supersededByOutboundId === entry[1].outbox[index].supersededByOutboundId && item.supersededAt === entry[1].outbox[index].supersededAt)) return entry[1]
+      return groups.update(entry[0], latest => ({ ...latest, outbox: reconcileReplacementGraph(latest.outbox) }))
+    }),
+    beginOutboundSend: ({ groupId, outboundId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let started = false
+      await groups.update(entry[0], latest => {
+        const outbound = latest.outbox.find(item => item.outboundId === outboundId)
+        if (!outbound) throw new Error(`outbound_not_found:${outboundId}`)
+        if (outbound.status !== 'pending' || outbound.supersededByOutboundId) return latest
+        started = true
+        return { ...latest, outbox: latest.outbox.map(item => item.outboundId === outboundId ? { ...item, sendStartedAt: item.sendStartedAt ?? new Date().toISOString() } : item) }
+      })
+      return started
     }),
     attachOutboxTasks: ({ groupId, sourceMessageId, taskIds }) => serialize(groupId, async () => {
       if (!Array.isArray(taskIds) || taskIds.length === 0 || taskIds.some((taskId) => typeof taskId !== 'string' || taskId.trim() === '')) throw new Error('outbox_task_ids_invalid')
@@ -812,9 +944,9 @@ export async function openResidentStore(storageDomain) {
       const [storageKey, current] = entry
       if (!current.outbox.some((item) => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
       const deliveredAt = new Date().toISOString()
-      return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: 'sent', deliveredAt, ...(deliveredMessageId ? { deliveredMessageId } : {}), deliveryPendingReason: undefined, deliveryError: undefined } : item) }))
+      return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? { ...item, status: item.status === 'superseded' ? 'superseded' : 'sent', deliveredAt: item.deliveredAt ?? deliveredAt, ...(deliveredMessageId ? { deliveredMessageId: item.deliveredMessageId ?? deliveredMessageId } : {}), deliveryPendingReason: undefined, deliveryError: undefined, deliveryBlockedAt: undefined } : item) }))
     }),
-    recordOutboundDeliveryAttempt: ({ groupId, outboundId, reason, error }) => serialize(groupId, async () => {
+    recordOutboundDeliveryAttempt: ({ groupId, outboundId, reason, error, blocked }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const [storageKey, current] = entry
@@ -822,11 +954,12 @@ export async function openResidentStore(storageDomain) {
       const attemptedAt = new Date().toISOString()
       return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? {
         ...item, deliveryAttemptCount: (item.deliveryAttemptCount ?? 0) + 1, deliveryAttemptedAt: attemptedAt,
+        ...(blocked === true ? { deliveryBlockedAt: item.deliveryBlockedAt ?? attemptedAt } : {}),
         ...(reason ? { deliveryPendingReason: reason } : { deliveryPendingReason: undefined }),
         ...(error ? { deliveryError: error } : { deliveryError: undefined }),
       } : item) }))
     }),
-    updateOutboundRecall: async ({ groupId, outboundId, status, reason, error }) => {
+    updateOutboundRecall: ({ groupId, outboundId, status, reason, error, retryAt }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const [storageKey, current] = entry
@@ -834,10 +967,11 @@ export async function openResidentStore(storageDomain) {
       const now = new Date().toISOString()
       return groups.update(storageKey, (latest) => ({ ...latest, outbox: latest.outbox.map((item) => item.outboundId === outboundId ? {
         ...item, recallStatus: status, ...(reason ? { recallReason: reason } : {}),
-        ...(status === 'recalled' ? { recalledAt: now, recallError: undefined } : {}),
-        ...(status === 'failed' ? { recallError: error || 'unknown' } : {}),
+        ...(status === 'requested' ? { recallAttemptCount: (item.recallAttemptCount ?? 0) + 1 } : {}),
+        ...(status === 'recalled' ? { recalledAt: now, recallError: undefined, recallRetryAt: undefined } : {}),
+        ...(status === 'failed' ? { recallError: error || 'unknown', recallRetryAt: retryAt } : {}),
       } : item) }))
-    },
+    }),
     createTask: ({ groupId, taskId = `task-${randomUUID()}`, operationId, topicRefs, inputVersion = 1, title, objective, requesterName, requesterOpenDingTalkId, acceptanceCriteria = [], stageTasks = [] }) => serialize(groupId, async () => {
       const group = findGroupEntry(groupId)?.[1]
       if (!group) throw new Error(`group_not_subscribed:${groupId}`)
@@ -848,10 +982,12 @@ export async function openResidentStore(storageDomain) {
       }
       const refs = validateTopicRefs(group, topicRefs)
       const metadata = validateTaskMetadata({ title, objective, acceptanceCriteria })
+      const plan = normalizeRunPlan(metadata.objective, metadata.acceptanceCriteria, stageTasks)
+      const stagePlan = stagePlanFor({ taskId, runSequence: 1 }, plan.stageTasks)
       const now = new Date().toISOString()
       const task = taskSchema.parse({ taskId, groupId, topicRefs: refs, inputVersion, appliedOperations: operationId ? [operationId] : [], ...metadata,
         ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), state: 'queued', childSessionId: taskSessionId(taskId),
-        runSequence: 1, runStartedAt: now, stageTasks: stageTasks.length ? stageTasks : ['完成并验证当前轮目标'], runHistory: [], stateHistory: [{ state: 'queued', at: now, runSequence: 1 }], createdAt: now, updatedAt: now })
+        runSequence: 1, runStartedAt: now, ...plan, stagePlan, runHistory: [], stateHistory: [{ state: 'queued', at: now, runSequence: 1 }], createdAt: now, updatedAt: now })
       await tasks.put(taskId, task)
       return { created: true, task }
     }),

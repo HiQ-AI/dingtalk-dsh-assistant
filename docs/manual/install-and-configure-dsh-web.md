@@ -308,6 +308,10 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:18998/state/dws-bridge' | ConvertTo-Jso
 
 打开 DSH Web，进入“设置 → 插件 → 钉钉个人助理”。页面分为运行状态、环境检查、Agent 配置和常驻群配置。
 
+页面还提供“任务表格同步”。粘贴钉钉在线电子表格链接，点击“检查连接”，从真实返回中选择目标工作表，再勾选启用并保存。启用后 Resident 立即执行一次，之后每 3 分钟全量覆盖所选工作表；可用“立即同步”触发同一同步流程。
+
+该地址必须是钉钉在线电子表格（ALIDOC/axls），普通 xlsx/xls 附件和 AI 多维表不支持。整个所选工作表由插件托管，表内手工内容会在下轮被覆盖，其他工作表不受影响。同步复用当前 Resident 的 DWS profile，不保存额外 token，也不修改文档分享权限。设置页的最近成功时间、任务数和错误信息是同步状态依据；主健康接口正常不能替代表格写后回读。
+
 ### 1. 检查运行与 DWS 环境
 
 先确认：
@@ -615,4 +619,6 @@ Topic 版本使用 domain v7。升级已有 v6 profile 前，按[Topic 存储离
 | POST /tasks/{taskId}/reports/{submissionId}/retry | 202 接受显式恢复；不存在 404，旧版本/非 failed 状态 409 |
 | POST /config/groups/{groupId}/coordination/{requestId}/retry | 202 恢复原协调请求；不存在或群不匹配 404 |
 
-input-wait/review-wait 表示报告已持久保存而未批准业务推进，不应反复重提；Runtime 在输入与审阅事件后恢复。failed 才使用报告 retry，accepted 不重放；history-only 不推进新目标。202 仅代表恢复请求已接纳，之后用 GET 回读最终报告状态，不能把它当作业务完成。协调恢复保持原请求身份；外部动作结果不确定时先独立回查，不能通过这些接口重复生产动作。
+input-wait/review-wait 表示报告已持久保存而未批准业务推进，不应反复重提；Runtime 在输入与审阅事件后恢复。failed 才使用报告 retry，accepted 不重放；history-only 不推进新目标。202 仅代表恢复请求已接纳，之后用 GET 回读最终报告状态，不能把它当作业务完成。协调恢复保持原报告身份；若完成审阅耗尽后 Task 已被人工介入报告置为 waiting，协调 retry 只重放该已持久化完成报告，成功后将对应阻塞转为历史并收口原协调请求，不恢复叶子业务执行。外部动作结果不确定时先独立回查，不能通过这些接口重复生产动作。
+
+完成通知存在真实群参与人时必须引用通知上下文中的真实消息。选择 `replyToMessageId` 后，未显式填写 `atOpenDingTalkIds` 会默认只 @ 该被引用消息的发送人；需要通知其他参与人时必须显式列出，Runtime 仍拒绝群外 ID。

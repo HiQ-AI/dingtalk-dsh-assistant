@@ -11,6 +11,10 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
     unsubscribe: async (value) => ({ removed: true, ...value }),
     getAgentConfig: () => ({ workspaceDir: 'D:\\baibu-agent' }),
     updateAgentConfig: async (value) => value,
+    getTaskSheetSyncState: () => ({ config: { enabled: true }, status: { state: 'success' } }),
+    inspectTaskSheet: async () => ({ name: '任务表', sheets: [{ sheetId: 's1', title: 'Sheet1' }] }),
+    updateTaskSheetSyncConfig: async (value) => value,
+    runTaskSheetSync: async () => ({ state: 'success', taskCount: 2 }),
     inspectEnvironment: async () => ({ dws: { installed: true }, skills: [] }),
     searchGroups: async (query) => ({ complete: true, groups: [{ groupId: 'g', name: query }] }),
     archiveTask: async ({ taskId }) => ({ taskId, state: 'completed', archivedAt: '2026-08-25T00:00:00.000Z' }),
@@ -41,6 +45,10 @@ test('生产HTTP开放只读状态与明确的本机群配置接口，测试控�
   assert.equal((await fetch(`${baseUrl}/state/authorizations`)).status, 200)
   assert.equal((await fetch(`${baseUrl}/config/groups/search?q=产品`)).status, 200)
   assert.equal((await fetch(`${baseUrl}/state/agent-config`)).status, 200)
+  assert.deepEqual(await (await fetch(`${baseUrl}/state/task-sheet-sync`)).json(), { config: { enabled: true }, status: { state: 'success' } })
+  assert.deepEqual(await (await fetch(`${baseUrl}/task-sheet-sync/check`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node' }) })).json(), { name: '任务表', sheets: [{ sheetId: 's1', title: 'Sheet1' }] })
+  assert.deepEqual(await (await fetch(`${baseUrl}/config/task-sheet-sync`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', sheetId: 's1' }) })).json(), { enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', sheetId: 's1' })
+  assert.deepEqual(await (await fetch(`${baseUrl}/task-sheet-sync/run`, { method: 'POST' })).json(), { state: 'success', taskCount: 2 })
   assert.deepEqual(await (await fetch(`${baseUrl}/state/version`)).json(), { currentVersion: '0.4.0', latestVersion: null, updateAvailable: false })
   assert.equal((await fetch(`${baseUrl}/config/agent`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceDir: 'D:\\baibu-agent' }) })).status, 200)
   assert.equal((await fetch(`${baseUrl}/config/agent`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ proxyUrl: 'http://127.0.0.1:10808' }) })).status, 200)
@@ -148,6 +156,7 @@ test('Web输入版本与幂等身份冲突返回409，可靠接收尚未完成�
 test('Topic 查询有界分页且群摘要不泄漏内部决策、归类和预约记录', async () => {
   const topics = Array.from({ length: 102 }, (_, index) => ({ groupId: 'g', topicId: `topic-${index}`, title: `话题 ${index}`, revision: 3, processedRevision: 1, status: 'active', summary: '摘'.repeat(1100), openQuestions: ['待确认'], entries: [{ revision: 1, messageId: 'm1', action: index === 0 ? 'add' : 'remove' }], decisions: [{ decisionId: 'old', status: 'failed', operations: [] }, { decisionId: 'current', status: 'failed', error: '失败'.repeat(600), operations: [{ status: 'applied', action: { secretInternal: true } }, { status: 'pending' }] }, { decisionId: 'done', status: 'completed', operations: [] }] }))
   const group = { groupId: 'g', topics, routeHistory: [{ request: 'internal' }], taskReservations: [{ taskId: 't' }], messages: [{ messageId: 'm1', routingStatus: 'pending' }], outbox: [] }
+  for (const topic of topics) topic.decisions.push({ decisionId: 'rejected-latest', status: 'rejected', operations: [], error: 'task_revision_stage_invalid' })
   let request
   await withServer(false, async (baseUrl) => {
     const listing = await (await fetch(`${baseUrl}/state/topics?groupId=g&offset=100&limit=2`)).json()
