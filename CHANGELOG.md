@@ -8,6 +8,19 @@
 - 普通任务回复与完成通知复用同一引用和接收人规则；引用真实 Topic 消息时可省略 `atOpenDingTalkIds`，由 Runtime 推导被引用发送人。
 - 人工介入批准显式绑定精确 requestedAction；处理意见与动作冲突时要求保持停等并重新澄清，看板按钮同步展示准确语义。
 
+## [0.5.15] - 2026-09-19
+
+### 新增
+
+- 一条群消息可拆分为多个独立事项，分别归入 Topic、创建或续接 Task；一个事项完成即可反馈，不等待同消息的其他事项。
+- 任务看板可定时全量同步到配置的钉钉电子表格，并在写入后完整回读校验。
+
+### 修复
+
+- 兼容真实 DSH 附件引用的 `attachmentId`，确保 v7→v8 迁移保留消息附件来源。
+- 修复常驻任务的决策、完成报告与通知恢复，避免失效审阅、重复执行和永久失败重试。
+- 修复已失效人工介入在任务看板中的状态显示；发布流程支持 npm 部分发布后的安全重试。
+
 ## [0.5.14] - 2026-09-10
 
 ### 新增
@@ -218,6 +231,7 @@
 - assistant、observer 与发行包统一使用同一个产品版本号。
 - Node.js 最低版本与实际 zstd Runtime 要求一致，调整为 24。
 
+[0.5.15]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.15
 [0.5.14]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.14
 [0.5.13]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.13
 [0.5.12]: https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases/tag/v0.5.12

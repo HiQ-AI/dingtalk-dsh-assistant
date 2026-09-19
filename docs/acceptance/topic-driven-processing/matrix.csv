@@ -66,3 +66,7 @@
 "U08","6","完整本地回归","PASS","round-6.md","npm test 400/400，0 fail，0 skipped"
 "U09","6","生产模型冻结 gold 语义评测","NOT_RUN","checklist-audit.md","未取得误拆率、漏拆率、错误续接率和授权扩大率"
 "U10","6","真实 DWS 独立投递与群回读","NOT_RUN","checklist-audit.md","未获得本轮真实发送授权"
+"U11","7","实际 profile v7 到 v8 离线迁移","PASS","round-7.md","真实存储预检、备份、迁移及只读结构校验通过"
+"U12","7","本地 DSH Web 安装与运行健康","PASS","round-7.md","双端口、health、DWS bridge、Task/Topic 状态回读通过"
+"U13","7","任务表同步完整回读","PASS","round-7.md","A1:N200 完整、12 条任务、表头匹配、无旧尾行"
+"U14","7","真实 DWS 独立投递与群回读","NOT_RUN","round-7.md","本轮未获真实发送授权，未发送测试消息"
