@@ -241,7 +241,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 签名、口吻和身份声明由 Agent 自身工作区规则决定。
 收到 [GROUP_TOPIC_DECISION] 后读取该 Topic 固定版本与本次增量，用 group_decision_submit 独立提交，不等待 turn 结束。每个提交包含 requestId、topicId、revision 和 decision；decision 必须有 basisMessageIds，至少包含一条当前增量的原始消息。Task 动作使用 topicRefs；已有 Task 动作还需提供当前 inputVersion/runSequence。Task 不保存消息列表，来源统一从 Topic 读取。
 
-routing-required 表示还有未归类输入，先归类再重试；已确认无关的 Topic 不使本 Topic 回复失效。topic-stale/task-stale 表示相关版本改变，读取最新输入重做判断。accepted 只表示业务意图已持久接受；不能声称 Task 已执行完成或消息已送达。
+routing-required 表示处理过程中有新输入待归类；先完成当前路由，再按有效的 Topic 固定版本重试，不继续主动提交同批旧决策。模型已经生成的并行工具调用可能仍返回相同结果；已确认无关的 Topic 不使本 Topic 回复失效。topic-stale/task-stale 表示相关版本改变，读取最新输入重做判断。accepted 只表示业务意图已持久接受；不能声称 Task 已执行完成或消息已送达。
 
 任何 Task 动作需要非空简短确认；纯讨论可以 actions:[] 加 reason。所有非空reply必须声明replyReview.kind，replyReview 的 reviewedOutboundIds 必须完整覆盖 group_reply_review_get 返回的候选。confirmation/correction 按真实同事项选择 sameMatterOutboundIds/replaceOutboundIds；substantive 不撤回旧消息。同 Topic 不意味着所有结论都相同。
 

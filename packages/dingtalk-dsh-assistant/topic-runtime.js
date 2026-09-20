@@ -293,6 +293,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       await persist({ status: 'pending', attempt: request.attempt, messageId: request.messageId })
       await agent.whenIdle()
       if (!current()) return
+      if (collection === decisions && pendingInput(request.groupId).length) { request.routingPaused = true; return }
       if (request.attempt >= maxRequestAttempts) { await exhausted(); return }
       const delay = Math.max(0, state?.nextRetryAt ? Date.parse(state.nextRetryAt) - Date.now() : Math.min(retryDelayMs * 2 ** request.attempt, 300_000))
       await persist({ nextRetryAt: new Date(Date.now() + delay).toISOString() })
@@ -302,6 +303,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
           if (!current()) return
           if (agent.status === 'running') await agent.whenIdle()
           if (!current()) return
+          if (collection === decisions && pendingInput(request.groupId).length) { request.routingPaused = true; return }
           request.attempt++
           await persist({ attempt: request.attempt, nextRetryAt: undefined })
           if (!current()) return
@@ -333,7 +335,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       ...(rejected.length ? { rejectedDecisionIds: rejected.map(record => record.decisionId) } : {}) })
     for (const [id, request] of decisions) {
       if (request.groupId !== groupId || request.topicId !== topic.topicId) continue
-      if (request.requestId === requestId) return request
+      if (request.requestId === requestId) { request.dispatch?.(); return request }
       supersedeRequest(request, requestId, 'topic-revision-replaced')
       decisions.delete(id)
     }
@@ -356,17 +358,24 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       removedUnitRefs, removedMessageIds, omittedDeltaUnitRefs, omittedDeltaMessageIds: [...new Set(messages.filter((message) => deltaIds.has(unitKey(message)) && !request.readUnitRefs.has(unitKey(message))).map((message) => message.messageId))], ...effectOwnership(groupId, topic.topicId, topic.revision, visibleMessages), replyReviewCandidateCount: request.candidates.length, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length, processedRevision: topic.processedRevision, summary: topic.summary, openQuestions: topic.openQuestions }
     const dispatch = () => {
       const agent = send(groupId, `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n按此 Topic 固定版本处理本次事项增量。共享事项由 effectOwnerTopicIds 指定唯一动作主归属；只有 ownedDeltaUnitRefs 中的依据允许创建或更新 Task。每个 Task action 都必须携带自己的 basisUnitRefs，不能用一个事项为另一事项授权。omittedDeltaUnitRefs 非空时先分页读完。removedUnitRefs 只能支持无动作静默决策。纯确认不消费事项的任务执行权。`, visibleMessages.flatMap((message) => message.imageRefs ?? []), request)
+      request.dispatchState = 'dispatched'
       monitor(agent, request, decisions)
     }
-    if (!onDecisionRequest) dispatch()
-    else {
+    request.dispatchState = 'pending'
+    request.dispatch = () => {
+      if (request.dispatchState !== 'pending' || pendingInput(groupId).length || store.getTopic(groupId, topic.topicId)?.revision !== topic.revision) return
+      if (!onDecisionRequest) { dispatch(); return }
+      request.dispatchState = 'checking'
       const pending = Promise.resolve().then(() => onDecisionRequest({ groupId, requestId: request.requestId })).catch((error) => { onError(groupId, error); return false }).then((handled) => {
         if (!live() || decisions.get(request.requestId) !== request) return
-        if (handled !== true) dispatch()
+        if (pendingInput(groupId).length || store.getTopic(groupId, topic.topicId)?.revision !== topic.revision) { request.dispatchState = 'pending'; return }
+        if (handled === true) request.dispatchState = 'dispatched'
+        else { request.dispatchState = 'pending'; dispatch() }
       })
       activeToolCalls.add(pending)
       pending.then(() => activeToolCalls.delete(pending), (error) => { activeToolCalls.delete(pending); onError(groupId, error) })
     }
+    request.dispatch()
     return request
   }
   function createRouteRequest(groupId, messages, reason) {
@@ -437,7 +446,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const commit = unfinished(topic)
       if (commit) {
         if ((retries.get(commit.decisionId) ?? 0) <= Date.now()) resume(groupId, topic.topicId, commit.decisionId)
-      } else if (topic.processedRevision < topic.revision) result.push(createDecisionRequest(groupId, topic))
+      } else if (!pending.length && topic.processedRevision < topic.revision) result.push(createDecisionRequest(groupId, topic))
     }
     onInputSettled?.(groupId)
     return result.map(({ requestId, topicId, revision, messages, candidates, removedUnitRefs, removedMessageIds, visibleMessages, readUnitRefs }) => {
@@ -453,6 +462,14 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     const promise = Promise.resolve().then(() => wake(groupId)).catch((error) => { onError(groupId, error); return [] }).finally(() => scheduled.delete(groupId))
     scheduled.set(groupId, promise)
     return promise
+  }
+  function resumePausedDecisionMonitors(groupId) {
+    if (pendingInput(groupId).length) return
+    for (const request of decisions.values()) {
+      if (request.groupId !== groupId || !request.routingPaused) continue
+      request.routingPaused = false
+      monitor(getAgent(groupId), request, decisions)
+    }
   }
   function resume(groupId, topicId, decisionId) {
     if (applying.has(decisionId)) return applying.get(decisionId).promise
@@ -640,7 +657,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       }
       if (result.status !== 'routed' && result.status !== 'duplicate') { routes.delete(args.requestId); await schedule(groupId); return result }
       routes.delete(args.requestId)
-      return { status: 'accepted', topicIdsByKey: result.topicIdsByKey, pendingDecisions: await schedule(groupId) }
+      const pendingDecisions = await schedule(groupId)
+      resumePausedDecisionMonitors(groupId)
+      return { status: 'accepted', topicIdsByKey: result.topicIdsByKey, pendingDecisions }
     })
     tool('group_topic_title_submit', '提交基于历史 Topic summary 重新概括的简短标题；不执行任务、不发送回复。', {
       type: 'object', additionalProperties: false,
@@ -713,6 +732,10 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       } else {
         if (!['routing-required', 'review-required'].includes(result.status)) decisions.delete(args.requestId)
         await schedule(groupId)
+      }
+      if (result.status === 'routing-required') {
+        const current = [...routes.values()].find((item) => item.groupId === groupId && !item.exhausted)
+        return { status: result.status, decisionId: args.requestId, ...(current ? { routeRequestId: current.requestId, nextAction: 'route-first' } : { nextAction: 'wait-for-current-request' }) }
       }
       return { status: result.status, decisionId: args.requestId }
     })
