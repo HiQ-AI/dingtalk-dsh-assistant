@@ -1,0 +1,11 @@
+case,round-1,status,evidence
+新 coordination 报告拒绝,1,PASS,test/task-result.test.js 和 test/runtime.test.js
+他人检查不能经空 blockedItems 获批等待,1,PASS,test/runtime.test.js 内部等待审阅用例
+误扩职责内部修订且保留已完成阶段,1,PASS,test/runtime.test.js 范围修订用例
+可自行继续时不阻塞或发群通知,1,PASS,test/runtime.test.js continue 用例
+真实信息等待及人工授权保持可用,1,PASS,test/runtime.test.js 既有等待与授权用例
+历史 coordination 可读且通知补偿不重发,1,PASS,test/runtime.test.js 历史结果用例
+全部自动测试,1,PASS,pnpm test 433 通过 0 失败
+当前在线等待任务只读审计,1,PASS,check-waiting-tasks.mjs --check 共 56 项等待候选 0
+真实模型语义判断与真实群投递,1,NOT_RUN,需要隔离模型与授权业务场景
+本机安装与运行态验证,1,NOT_RUN,当前仍有其他运行任务

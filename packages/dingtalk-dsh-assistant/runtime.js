@@ -251,7 +251,7 @@ Task 完成验收和检查点审阅通过 group_task_review_submit 返回，普�
 
 \`title\` 是不超过 120 字的简洁任务名，只概括被授权的事项，不得包含消息信封、发送人、完成状态或未经核验的根因。\`objective/context\` 用于主会话选路、动作授权和可观测记录，不得在其中编造或强化根因、完成度、方案优劣或排除性结论；叶子还会收到 Runtime 从Topic 固定版本生成的独立来源证据并自行核验。task-context 或 task-reopen 修订 objective 时必须同时提交概括新完整目标的 title；普通补充、等待恢复和异常唤醒不得提交 title。
 
-新建任务必须提供至少一条 \`acceptanceCriteria\`；修订目标时也可更新 \`acceptanceCriteria\` 和 \`stageTasks\`。验收标准只描述原始消息明确要求的业务结果、目标环境和限制，不得把主会话建议、历史做法或预计验证步骤扩写成用户要求，也不得按开发、分析、部署等任务类型绑定固定模板。具体处理流程由叶子按插件任务流程索引选择并形成计划；你在计划和完成审阅中通过 group_task_prompt_get 一次批量读取本轮需要的流程，结合固定 Topic 原文检查一致性。
+新建任务必须提供至少一条 \`acceptanceCriteria\`；先确认当前 Agent 被交付的动作。消息中“你完成 X 后由甲检查”只将 X 及必要自验证写入本 Task，甲的后续检查保留在 Topic 上下文，不写入本 Task 的验收或阶段；每个事项完成即独立反馈。若当前 Agent 还被明确要求取得批准后继续发布、收集反馈并修改，这些工作仍属于本 Task。修订目标时也可更新 \`acceptanceCriteria\` 和 \`stageTasks\`。验收标准只描述原始消息明确要求的业务结果、目标环境和限制，不得把主会话建议、历史做法或预计验证步骤扩写成用户要求，也不得按开发、分析、部署等任务类型绑定固定模板。具体处理流程由叶子按插件任务流程索引选择并形成计划；你在计划和完成审阅中通过 group_task_prompt_get 一次批量读取本轮需要的流程，结合固定 Topic 原文检查一致性。
 
 状态追问先读取 group_task_context_get 的 currentFacts，核对报告、批准、证据来源与发生时间；原始报告不等于独立验收。“状态查错了吧”本身不证明实现或数据库有问题，不因此 replan。字段与旧值相同且没有否定证据时保留进展；目标不变但新事实否定阶段时，task-context 必须提供 impactEvidence，填写本次原始 basisMessageIds、具体 reason 和 stagePlan 中真实 affectedStageIds。只使受影响阶段及后续失效，保留原版本有效证据。当前 surface 内仍可见且版本未变的流程与证据正文直接复用，不因 requestId 变化重读。
 
@@ -700,7 +700,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     const goal = ctx.goals.get(handle.agent)
     if (goal === undefined) throw new Error(`task_goal_missing:${taskId}`)
     if (result.status === 'waiting') {
-      if (result.waitingKind === 'information' || result.waitingKind === 'coordination') {
+      if (result.waitingKind === 'information') {
         const waiting = await updateTaskInput(taskId, result, (current) => ({ ...current, state: 'waiting', waitingKind: result.waitingKind, waitingReason: result.waitingReason, result }))
         if (goal.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-input-required', message: result.waitingReason })
         return waiting
@@ -739,8 +739,26 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     const recoveredRequestId = completionRecovery ? recoveryError.slice('topic_request_retry_exhausted:'.length) : undefined
     if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
     if (result.status !== 'completed') {
+      const task = store.getTask(taskId)
+      if (!task || task.state !== 'running') throw new Error(`task_not_active:${taskId}`)
+      assertTaskInput(task, result)
+      const fingerprintValue = result.waitingKind === 'human-intervention' ? humanBlockerFingerprint(task.taskId, task.runSequence, result.blockerCategory, result.requestedAction, result.risk) : undefined
+      const previouslyApproved = fingerprintValue && [...(task.humanBlockerHistory ?? []), ...(task.humanBlocker ? [task.humanBlocker] : [])]
+        .some(item => item.fingerprint === fingerprintValue && item.runSequence === task.runSequence && item.status === 'answered' && item.decision === 'approved')
+      const review = previouslyApproved ? { decision: 'approve-wait' } : await withoutInitiator(() => topics.requestReview('waiting', task, result))
+      if (review.decision !== 'approve-wait') {
+        if (review.decision === 'revise-scope') {
+          const operation = { operationId: stableId('scope', `${task.taskId}:${task.inputVersion}:${fingerprint(result)}`), inputVersion: task.inputVersion, runSequence: task.runSequence }
+          const revised = await appendTaskContextInternal(task, `按原始消息纠正执行责任：${review.reason}`, task.topicRefs, review.title, review.objective, review.acceptanceCriteria, review.stageTasks, 'replan', operation, { basisMessageIds: review.basisMessageIds, affectedStageIds: review.affectedStageIds, reason: review.reason })
+          const handle = leafHandles.get(taskId)
+          if (handle) resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
+          await followupTaskInternal(revised, `[TASK_SCOPE_REVISED]\n${review.reason}\n目标与验收已按你负责的交付修订。核对已完成证据，不重复已写入操作；按新 inputVersion 补齐必要检查点并提交 completed。外部后续检查由 resident 在完成通知中交接。`, `waiting-scope:${taskId}:${fingerprint(result)}`)
+          return revised
+        }
+        throw new Error(`task_waiting_not_required:${taskId}:${review.decision}:${review.reason}`)
+      }
       const waiting = await serializeTasks(() => submitTaskResultInternal(taskId, result))
-      if (result.waitingKind === 'information' || result.waitingKind === 'coordination') void withoutInitiator(() => coordinateTaskResult(waiting, result)).catch((error) => recoveryIssues.push({ groupId: waiting.groupId, taskId, kind: 'task-notification', error: error.message }))
+      if (result.waitingKind === 'information') void withoutInitiator(() => coordinateTaskResult(waiting, result)).catch((error) => recoveryIssues.push({ groupId: waiting.groupId, taskId, kind: 'task-notification', error: error.message }))
       return waiting
     }
     const prepared = await serializeTasks(async () => {
@@ -1019,7 +1037,7 @@ Task objective 是本任务的动作授权上限，必须逐字尊重其中的�
 
 先读当前实现、运行态或原始材料，再作判断。历史分支、库表、环境、版本和结论仅供定位，必须现场复核。结论先给结果再附证据，区分观察、推断和未验证项，并主动检验反例。
 
-把选用流程落实为本任务可验证的阶段和验收项，明确适用步骤、沿用的可核验证据和不适用依据，按下述流程索引及检查点协议推进。目标修订时说明哪些证据仍有效、哪些要重验，保留未受影响的工作；独立目标交主会话判断是否拆分任务。
+把选用流程落实为本任务可验证的阶段和验收项，明确适用步骤、沿用的可核验证据和不适用依据，按下述流程索引及检查点协议推进。当前 Agent 完成交付及必要自验证即完成；他人后续检查不进入本 Task 的阶段或等待条件。若现有目标误将其列为你的验收，提交 scope-conflict 检查点由 resident 修订目标、验收与阶段，保留已完成证据。目标修订时说明哪些证据仍有效、哪些要重验，保留未受影响的工作；独立目标交主会话判断是否拆分任务。
 
 独立回读文件、PR、流水线、部署、数据或其他实际交付结果；一个层级成功不能替代其他必需层级。用户明确停止或转交时如实交接，不能包装成验收通过。完成前提交本次范围、结果、证据与产物路径、未验证项和必要的简短复盘；按当前工作区规则判断是否需要沉淀经验，不复制敏感数据或把临时事实写成长期规则。
 
@@ -1064,16 +1082,15 @@ ${JSON.stringify({ taskId: task.taskId, topicRefs: store.getTask(task.taskId)?.t
 
 ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVersion, runSequence, ...facts }) => facts)(queryFactsSnapshot(store.getTask(task.taskId) ?? task)))}
 
-完成结果提交后由 Runtime 完整交给 resident 主会话，再由主会话结合 Task 完整时间线判断如何通知原群相关参与人。完成前需要原群参与者或其他机器人独立检查时，提交 waitingKind=coordination、具体 request 和已完成工作的 evidence；Runtime 同样交给 resident 主会话发起检查，真实结论到达后再继续 Task。叶子不直接向 parent resident 调用 send_message。群聊消息的发送、回复、编辑、更正和撤回均由 resident 主会话判断；叶子只提交业务结果、结论、证据、未验证项和置信边界，不得判断、建议或申请撤回/编辑/更正任何群消息，不得提供消息处置目标或 messageId。群聊通知只有 Runtime 这一个出口：叶子会话不得调用 DWS 或其他消息工具向来源群发送、回复、编辑或撤回任务进度、阻塞或完成通知，也不得把自行发送群通知作为完成证据；叶子只允许读取群消息用于业务核验，并通过 submit_task_result 提交结构化结果。
+完成结果提交后由 Runtime 完整交给 resident 主会话，再由主会话结合 Task 完整时间线判断如何通知原群相关参与人。完成自身交付及必要自验证后提交 completed，在结果中如实说明他人的后续检查尚未发生，不等其回复。叶子不直接向 parent resident 调用 send_message。群聊消息的发送、回复、编辑、更正和撤回均由 resident 主会话判断；叶子只提交业务结果、结论、证据、未验证项和置信边界，不得判断、建议或申请撤回/编辑/更正任何群消息，不得提供消息处置目标或 messageId。群聊通知只有 Runtime 这一个出口：叶子会话不得调用 DWS 或其他消息工具向来源群发送、回复、编辑或撤回任务进度、阻塞或完成通知，也不得把自行发送群通知作为完成证据；叶子只允许读取群消息用于业务核验，并通过 submit_task_result 提交结构化结果。
 
 ### 阻塞规则
 
-除以下三类情况外，不得暂停或阻塞 Goal，也不得提交 waiting：
-1. \`waitingKind=information\`：只有 Task 相关参与人才能补充的目标、完成条件或必要业务信息不明确；必须提供具体 questions，Runtime 将由主会话根据完整消息时间线选择实际询问对象。
-2. \`waitingKind=coordination\`：已完成本 Task 可自行完成的工作，但原始目标要求原群参与者或其他机器人独立检查；提供明确的 request、写后回读等 evidence。Runtime 将交给 resident 判断如何在原群请求检查，不向人工发审批。请求已发出不等于检查通过。
-3. \`waitingKind=human-intervention\`：已经取得证据且自身无法解决的操作红线、网络中断、磁盘不足、资源不足、意外事件或必须真人确认的处置方案；必须提供 blockerCategory、risk、evidence、attemptedActions 和 requestedAction。risk 单独说明执行该操作可能造成的具体影响；操作红线使用 blockerCategory=redline，并把完整操作范围和不在授权内的事项写入 requestedAction；Runtime 只发送这一条人工介入消息。
+除以下两类情况外，不得暂停或阻塞 Goal，也不得提交 waiting：
+1. \`waitingKind=information\`：只有 Task 相关参与人才能补充的目标、完成条件或必要业务信息不明确；必须说明本 Agent 尚未完成的工作及其必要依赖 blockedItems，并提供具体 questions，Runtime 将由主会话根据完整消息时间线选择实际询问对象。
+2. \`waitingKind=human-intervention\`：必须说明本 Agent 尚未完成的工作及其必要依赖 blockedItems；已经取得证据且自身无法解决的操作红线、网络中断、磁盘不足、资源不足、意外事件或必须真人确认的处置方案；必须提供 blockerCategory、risk、evidence、attemptedActions 和 requestedAction。risk 单独说明执行该操作可能造成的具体影响；操作红线使用 blockerCategory=redline，并把完整操作范围和不在授权内的事项写入 requestedAction；Runtime 只发送这一条人工介入消息。
 
-代码错误、命令失败、可重试波动、普通不确定性、实现困难或正在正常运行但耗时较长的外部流水线，应继续诊断或监控，不得伪装成人工阻塞。不要直接使用 Goal 工具标记 blocked；合法等待统一通过 submit_task_result 交给 Host。Goal 执行轮数耗尽时 Host 会停止自动续接并形成可见的异常介入事项。`,
+他人或其他机器人在你完成后进行的独立检查不是等待条件；完成自身工作后提交 completed，后续反馈由 resident 按正常 Topic 消息处理。代码错误、命令失败、可重试波动、普通不确定性、实现困难或正在正常运行但耗时较长的外部流水线，应继续诊断或监控，不得伪装成人工阻塞。不要直接使用 Goal 工具标记 blocked；合法等待统一通过 submit_task_result 交给 Host。Goal 执行轮数耗尽时 Host 会停止自动续接并形成可见的异常介入事项。`,
       })
       agentCtx.tools.register({
         name: 'group_topic_context_get', description: '按 Task 已接纳的固定版本读取原始 Topic 消息。',
@@ -1797,7 +1814,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     reconcileCompletedNotifications: async () => {
       const pending = await serializeTasks(async () => {
         const items = []
-        for (const task of store.listTasks().filter((item) => (item.state === 'completed' && item.result?.status === 'completed') || (item.state === 'waiting' && ['information', 'coordination'].includes(item.result?.waitingKind)))) {
+        for (const task of store.listTasks().filter((item) => (item.state === 'completed' && item.result?.status === 'completed') || (item.state === 'waiting' && item.result?.waitingKind === 'information'))) {
           let current = task
           if ((current.completionSequence ?? 0) === 0 && current.lastCompletedResult?.status === 'completed') current = await store.updateTask(current.taskId, (item) => ({ ...item, completionSequence: 1 }))
           const resultKey = taskResultOutboxKey(current, current.result)

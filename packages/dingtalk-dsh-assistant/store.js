@@ -84,7 +84,12 @@ const legacyWaitingResultSchema = z.object({
   inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(),
   status: z.literal('waiting'), summary: z.string().min(1), evidence: z.array(z.string()), artifacts: z.array(z.string()), waitingReason: z.string().min(1),
 }).strict()
-const persistedTaskResultSchema = z.union([taskResultSchema, legacyWaitingResultSchema])
+const historicalCoordinationResultSchema = z.object({
+  inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), submissionId: z.string().optional(),
+  status: z.literal('waiting'), waitingKind: z.literal('coordination'), summary: z.string().min(1),
+  evidence: z.array(z.string()), artifacts: z.array(z.string()), waitingReason: z.string().min(1), request: z.string().min(1),
+}).strict()
+const persistedTaskResultSchema = z.union([taskResultSchema, historicalCoordinationResultSchema, legacyWaitingResultSchema])
 const humanBlockerSchema = z.object({
   requestId: z.string().min(1), fingerprint: z.string().min(1).optional(), category: z.enum(['redline', 'network', 'disk', 'resource', 'unexpected', 'human-decision']),
   runSequence: z.number().int().positive().optional(),

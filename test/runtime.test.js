@@ -6,7 +6,7 @@ import test, { after } from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 import { buildTaskAssociationIndex, openResidentRuntime, residentSessionId } from '../packages/dingtalk-dsh-assistant/runtime.js'
-import { openResidentStore, taskSessionId } from '../packages/dingtalk-dsh-assistant/store.js'
+import { openResidentStore, resolveTopicMessages, taskSessionId } from '../packages/dingtalk-dsh-assistant/store.js'
 import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
 import { startDwsBridge } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
 
@@ -123,8 +123,8 @@ async function decide(h, request, decision = {}, groupId = 'g') {
   await h.runtime.drainTopicOperations(groupId)
   return result
 }
-async function createTask(h, id = 'task-input', extra = {}) {
-  await ingest(h, id)
+async function createTask(h, id = 'task-input', extra = {}, source = {}) {
+  await ingest(h, id, source)
   const request = (await route(h)).pendingDecisions.find((item) => item.messages.some((message) => message.messageId === id))
   const action = { kind: 'new-task', title: id, objective: `核验 ${id}`, acceptanceCriteria: ['结果可查'], stageTasks: ['核验阶段'], topicRefs: [{ topicId: request.topicId, revision: request.revision }], ...extra }
   assert.equal((await decide(h, request, { actions: [action], reply: '已收到，会继续处理。' })).status, 'accepted')
@@ -787,7 +787,7 @@ test('报告先持久接收并停等，Topic 决策事件解除等待而无需�
   const h = await setup(t), task = await createTask(h)
   await ingest(h, 'pending-status', { text: '这项现在是什么状态？' })
   const started = performance.now()
-  const value = { ...inputVersion(task), submissionId: 'saved-report', status: 'waiting', waitingKind: 'information', summary: '缺少范围', evidence: [], artifacts: [], waitingReason: '需要范围', questions: ['具体范围？'] }
+  const value = { ...inputVersion(task), submissionId: 'saved-report', status: 'waiting', waitingKind: 'information', summary: '缺少范围', evidence: [], artifacts: [], waitingReason: '需要范围', questions: ['具体范围？'], blockedItems: [blockedItem(h, task, '需要范围')] }
   const receipt = await rawLeafCall(h, task, 'submit_task_result', value)
   assert.equal(receipt.status, 'input-wait')
   assert.ok(performance.now() - started < 1000, '正常本地接收不能等待模型审阅')
@@ -796,6 +796,9 @@ test('报告先持久接收并停等，Topic 决策事件解除等待而无需�
   assert.deepEqual(await rawLeafCall(h, task, 'submit_task_result', value), receipt)
   const request = (await route(h, { 'pending-status': task.topicRefs[0].topicId })).pendingDecisions[0]
   await decide(h, request)
+  await until(() => Boolean(h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')))
+  const waitingReview = h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')
+  assert.equal((await h.call('group_task_review_submit', { requestId: waitingReview.requestId, review: { decision: 'approve-wait', reason: '当前交付仍缺必要范围' } })).status, 'accepted')
   await until(() => h.store.getTask(task.taskId).state === 'waiting')
   await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: receipt.submissionId }).status === 'accepted')
   assert.equal(h.store.getTask(task.taskId).executionEvents.filter(event => event.kind === 'task-report-received').length, 1)
@@ -904,7 +907,11 @@ test('完成审阅耗尽后出现人工阻塞，协调恢复只重放原报告�
   await h.store.updateTask(task.taskId, current => ({ ...current, executionEvents: [...current.executionEvents, { kind: 'task-report-settled', submissionId: completedReceipt.submissionId, inputVersion: task.inputVersion, runSequence: task.runSequence, status: 'failed', error: `topic_request_retry_exhausted:${laterRequestId}`, at: new Date().toISOString() }] }))
   await h.store.updateCoordinationRequest('g', laterRequestId, { status: 'exhausted', attempt: 3, resumeEpoch: 0, lastError: `topic_request_retry_exhausted:${laterRequestId}` })
 
-  const blockerReceipt = await rawLeafCall(h, task, 'submit_task_result', { ...inputVersion(task), submissionId: 'operator-blocker', status: 'waiting', waitingKind: 'human-intervention', summary: '等待 Runtime 恢复', evidence: ['完成报告已持久化'], artifacts: [], waitingReason: '协调请求耗尽', blockerCategory: 'unexpected', requestedAction: '重放已持久化完成报告', risk: '不得重复业务执行', attemptedActions: ['已确认完成报告存在'] })
+  h.idle.set(residentId, new Promise(() => {}))
+  const blockerReceipt = await rawLeafCall(h, task, 'submit_task_result', { ...inputVersion(task), submissionId: 'operator-blocker', status: 'waiting', waitingKind: 'human-intervention', summary: '等待 Runtime 恢复', evidence: ['完成报告已持久化'], artifacts: [], waitingReason: '协调请求耗尽', blockerCategory: 'unexpected', requestedAction: '重放已持久化完成报告', risk: '不得重复业务执行', attemptedActions: ['已确认完成报告存在'], blockedItems: [blockedItem(h, task, '协调恢复')] })
+  await until(() => Boolean(h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')))
+  const waitingRequest = h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')
+  assert.equal((await h.call('group_task_review_submit', { requestId: waitingRequest.requestId, review: { decision: 'approve-wait', reason: '完成报告仍待恢复落盘' } })).status, 'accepted')
   await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: blockerReceipt.submissionId })?.status === 'accepted')
   const waiting = h.store.getTask(task.taskId)
   assert.equal(waiting.state, 'waiting')
@@ -952,8 +959,20 @@ test('旧运行任务恢复时从已批准计划补齐阶段索引，原检查�
 })
 // 既有业务验收等待持久报告处理结果；独立 receipt 测试直接调用 rawLeafCall。
 const leafCall = async (h, task, name, args) => {
-  const value = await rawLeafCall(h, task, name, args)
+  const waiting = name === 'submit_task_result' && args.status === 'waiting' && args.waitingKind !== 'coordination'
+  const previousReview = waiting ? h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')?.requestId : undefined
+  const submitted = waiting && !args.blockedItems ? { ...args, blockedItems: [blockedItem(h, task, args.waitingReason)] } : args
+  const value = await rawLeafCall(h, task, name, submitted)
   if (!['submit_task_checkpoint', 'submit_task_result'].includes(name) || value.status === 'input-wait') return value
+  if (waiting) {
+    await until(() => !['review-wait', undefined].includes(h.runtime.getTaskReport({ taskId: task.taskId, submissionId: value.submissionId })?.status) || h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')?.requestId !== previousReview)
+    const current = h.runtime.getTaskReport({ taskId: task.taskId, submissionId: value.submissionId })
+    if (current.status === 'input-wait') return current
+    if (current.status === 'review-wait') {
+      const request = h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')
+      assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'approve-wait', reason: '来源消息明确要求当前 Agent 完成交付，所需输入仍缺失' } })).status, 'accepted')
+    }
+  }
   let report = value
   await until(() => { report = h.runtime.getTaskReport({ taskId: task.taskId, submissionId: value.submissionId }); return report.status !== 'review-wait' })
   if (report.status === 'input-wait') return report
@@ -961,6 +980,7 @@ const leafCall = async (h, task, name, args) => {
   if (report.status === 'history-only') throw new Error('task_result_context_changed:history-only')
   return name === 'submit_task_checkpoint' ? report.result : h.store.getTask(task.taskId)
 }
+const blockedItem = (h, task, dependency) => ({ requirement: task.objective, basisMessageIds: [resolveTopicMessages(h.store.getGroup(task.groupId), task.topicRefs[0].topicId, task.topicRefs[0].revision)[0].messageId], dependency, reason: '测试夹具中的本职工作缺少必要输入' })
 async function checkpoint(h, task, patch) {
   const previous = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')?.requestId
   const args = { ...inputVersion(task), summary: '核验检查点', evidence: ['执行证据'], completedItems: [], remainingItems: [], nextStep: '继续', needsCoordinatorDecision: false, ...patch }
@@ -1559,26 +1579,66 @@ test('等待通知在同版本 resume 清除 result 后失效，不发送旧问�
   assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 0)
 })
 
-test('叶子请求同群独立检查由 Host 交常驻处理，不触发人工审批或直发群聊', async (t) => {
+test('已完成自身工作的叶子不能以外部独立检查提交等待', async (t) => {
   const h = await setup(t), task = await createTask(h)
   const blockers = []
   h.runtime.onHumanBlockerRequested((value) => { blockers.push(value) })
   const priorOutbox = h.store.getGroup('g').outbox.length
   const result = { ...inputVersion(task), status: 'waiting', waitingKind: 'coordination', summary: '工时已补填并独立回读', evidence: ['10 条日期与需求 ID 清单', 'operation_id=verified'], waitingReason: '等待 leobot 检查结论', request: '请 leobot 检查 10 条工时清单并反馈具体结论' }
-  await leafCall(h, task, 'submit_task_result', result)
-  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
-  assert.equal(h.store.getTask(task.taskId).waitingKind, 'coordination')
+  await assert.rejects(rawLeafCall(h, task, 'submit_task_result', result), /task_waiting_coordination_obsolete/)
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
   assert.equal(blockers.length, 0)
   assert.equal(h.store.getGroup('g').outbox.length, priorOutbox)
-  const envelope = h.envelope('[TASK_COORDINATION]')
-  const resident = h.handles.get(residentSessionId('g'))
-  assert.ok(resident.sent.some((message) => message.content[0].text.includes(result.request)))
-  const review = await h.call('group_reply_review_get', { requestIds: [envelope.requestId] })
-  const args = { requestId: envelope.requestId, reply: result.request, replyToMessageId: 'task-input', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } }
-  assert.equal((await h.call('group_reply_submit', args)).status, 'accepted')
-  assert.equal((await h.call('group_reply_submit', args)).status, 'accepted')
-  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
-  assert.equal(h.store.getTask(task.taskId).state, 'waiting')
+  assert.equal(h.envelope('[TASK_COORDINATION]'), undefined)
+})
+
+test('把他人后续检查误列为本职阶段时，内部修订范围并保留已完成证据', async (t) => {
+  const h = await setup(t)
+  const task = await createTask(h, 'own-work', { title: '填写工时并检查', objective: '填写工时、独立回读，等待甲检查', acceptanceCriteria: ['工时已回读', '甲检查通过'], stageTasks: ['填写并回读', '甲检查'] }, { text: '@助理 请填写工时并自行核对，完成后由甲检查一下。' })
+  await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['填写并回读', '甲检查'] })
+  await checkpoint(h, task, { kind: 'stage-completed', stageTask: '填写并回读', completedItems: ['填写并回读'], remainingItems: ['甲检查'], evidence: ['写入后独立回读一致'] })
+  const result = { ...inputVersion(task), status: 'waiting', waitingKind: 'information', summary: '自身工作已完成', evidence: ['写入后独立回读一致'], waitingReason: '等待甲检查', questions: ['请甲检查是否通过'], blockedItems: [] }
+  const receipt = await rawLeafCall(h, task, 'submit_task_result', result)
+  await until(() => Boolean(h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')
+  await assert.rejects(h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'approve-wait', reason: '等待甲' } }), /task_waiting_blocked_items_invalid/)
+  const revision = { decision: 'revise-scope', reason: '甲的检查是后续协作', basisMessageIds: ['own-work'], affectedStageIds: [task.stagePlan[1].stageId], title: '填写并回读工时', objective: '填写工时并自行回读核验', acceptanceCriteria: ['工时已填写并独立回读'], stageTasks: ['填写并回读'] }
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: revision })).status, 'accepted')
+  await until(() => h.store.getTask(task.taskId).inputVersion === task.inputVersion + 1)
+  const revised = h.store.getTask(task.taskId)
+  assert.equal(revised.state, 'running')
+  assert.deepEqual(revised.stageTasks, ['填写并回读'])
+  assert.equal(revised.checkpoints.filter(item => item.kind === 'stage-completed').length, 1)
+  assert.equal(h.store.getGroup('g').outbox.filter(item => item.sourceMessageId.startsWith('task-result:')).length, 0)
+  assert.equal(h.goals.get(task.childSessionId).phase, 'active')
+  await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: receipt.submissionId }).status === 'history-only')
+})
+
+test('等待审阅认为仍可自行继续时保持 Task 运行且不发阻塞通知', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const result = { ...inputVersion(task), status: 'waiting', waitingKind: 'information', summary: '暂未读到资料', evidence: [], waitingReason: '资料尚未查找', questions: ['资料在哪里？'], blockedItems: [blockedItem(h, task, '资料位置')] }
+  const receipt = await rawLeafCall(h, task, 'submit_task_result', result)
+  await until(() => Boolean(h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'continue', reason: '可按原文给出的链接自行读取' } })).status, 'accepted')
+  await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: receipt.submissionId }).status === 'rejected')
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  assert.equal(h.goals.get(task.childSessionId).phase, 'active')
+  assert.equal(h.store.getGroup('g').outbox.filter(item => item.sourceMessageId.startsWith('task-result:')).length, 0)
+})
+
+test('历史 coordination 等待结果可重启读取，但通知补偿不会重发旧检查', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const historical = { ...inputVersion(task), status: 'waiting', waitingKind: 'coordination', summary: '已完成自验', evidence: ['回读一致'], artifacts: [], waitingReason: '等待外部检查', request: '请甲检查' }
+  await h.store.updateTask(task.taskId, current => ({ ...current, state: 'waiting', waitingKind: 'coordination', waitingReason: historical.waitingReason, result: historical }))
+  const before = h.store.getGroup('g').outbox.length
+  assert.deepEqual(await h.runtime.reconcileCompletedNotifications(), [])
+  assert.equal(h.store.getGroup('g').outbox.length, before)
+  await h.runtime.close()
+  const reopened = await setup(t, { snapshot: h.snapshot })
+  assert.equal(reopened.store.getTask(task.taskId).result.request, '请甲检查')
+  assert.deepEqual(await reopened.runtime.reconcileCompletedNotifications(), [])
+  assert.equal(reopened.store.getGroup('g').outbox.length, before)
 })
 
 test('同版本重新 waiting 新问题不能被旧问题的通知快照覆盖', async (t) => {
