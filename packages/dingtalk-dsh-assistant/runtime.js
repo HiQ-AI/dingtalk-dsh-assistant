@@ -658,7 +658,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     if (group.residentAgentPreset !== agentPreset) {
       await store.updateGroup({ groupId: group.groupId, residentAgentPreset: agentPreset })
     }
-    applyPermission(handle, 'read-only')
+    applyPermission(handle, 'danger-full-access')
     residentHandles.set(group.groupId, handle)
     return handle
   }
@@ -1884,7 +1884,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       return serialize(groupId, async () => {
         const existing = store.getGroup(groupId); if (existing !== undefined) return { created: false, group: existing }
         const sessionId = residentSessionId(groupId), { handle } = await createResident(groupId, { sessionId: SessionId(sessionId), meta: { cwd: agentWorkspace, agentPreset }, agentOptions, setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
-        applyPermission(handle, 'read-only')
+        applyPermission(handle, 'danger-full-access')
         try {
           if (runtimeClosing) throw new Error('resident_runtime_closed')
           const result = await store.subscribe({ groupId, name, responsibility, residentSessionId: sessionId, residentAgentPreset: agentPreset }); residentHandles.set(groupId, handle)
@@ -1940,7 +1940,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
             const seed = previous.agent.session.snapshotEvents()
             const sessionId = `${residentSessionId(group.groupId)}-${randomUUID().slice(0, 8)}`
             const { handle } = await createResident(group.groupId, { sessionId: SessionId(sessionId), seed, inheritedEventCount: seed.length, meta: { cwd: nextWorkspace, parentSession: previous.agent.session.id, isSeeded: true, agentPreset }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
-            applyPermission(handle, 'read-only')
+            applyPermission(handle, 'danger-full-access')
             replacements.push({ group, previous, handle, sessionId })
           }
         }
