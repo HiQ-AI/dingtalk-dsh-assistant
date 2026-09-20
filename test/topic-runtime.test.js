@@ -318,9 +318,62 @@ test('未知输入返回 routing-required，归到 B 后原 A 请求继续有效
   const h = await setup(t); await ingest(h, 'a')
   const a = (await route(h)).pendingDecisions[0]
   await ingest(h, 'b')
-  assert.equal((await h.call('group_decision_submit', submission(a))).status, 'routing-required')
+  const deferred = await h.call('group_decision_submit', submission(a))
+  assert.equal(deferred.status, 'routing-required')
+  assert.equal(deferred.nextAction, 'route-first')
+  assert.equal(deferred.routeRequestId, h.envelope('[GROUP_TOPIC_ROUTE]').requestId)
   assert.equal(h.store.getTopic('g', a.topicId).decisions.length, 0)
   await route(h)
+  await complete(h, a)
+})
+
+test('待归类输入先完成路由，再派发已准备好的其他 Topic 决策', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'a'); const a = (await route(h)).pendingDecisions[0]
+  await ingest(h, 'b')
+  await h.store.routeMessages({ groupId: 'g', routeId: 'direct-b', routingRevision: h.store.getGroup('g').routingRevision, routes: [{ messageId: 'b', messageVersion: 1, topics: [{ newTopicKey: 'b', title: 'B' }] }] })
+  await ingest(h, 'c')
+  const before = h.sent.filter((text) => text.startsWith('[GROUP_TOPIC_DECISION]')).length
+  assert.deepEqual(await h.coordinator.schedule('g'), [])
+  assert.equal(h.sent.filter((text) => text.startsWith('[GROUP_TOPIC_DECISION]')).length, before)
+  const routed = await route(h)
+  assert.equal(routed.status, 'accepted')
+  assert.equal(routed.pendingDecisions.length, 3)
+  assert.equal(h.sent.filter((text) => text.startsWith('[GROUP_TOPIC_DECISION]')).length, before + 2)
+  await complete(h, a)
+})
+
+test('异步决策预处理期间来了新消息，路由后只派发一次原请求', async (t) => {
+  let release, started
+  const entered = new Promise((resolve) => { started = resolve })
+  const held = new Promise((resolve) => { release = resolve })
+  const h = await setup(t, { onDecisionRequest: async () => { started(); await held; return false } })
+  await ingest(h, 'a'); const a = (await route(h)).pendingDecisions[0]
+  await entered
+  await ingest(h, 'b')
+  release()
+  await h.coordinator.drain('g')
+  assert.equal(h.sent.filter((text) => text.startsWith('[GROUP_TOPIC_DECISION]')).length, 0)
+  const routed = await route(h)
+  assert.equal(routed.status, 'accepted')
+  await h.coordinator.drain('g')
+  const aRequests = h.sent.filter((text) => text.startsWith('[GROUP_TOPIC_DECISION]') && text.includes(a.requestId))
+  assert.equal(aRequests.length, 1)
+  await complete(h, a)
+})
+
+test('新消息等待归类时决策协议提醒不消耗重试次数', async (t) => {
+  let idle
+  const settled = new Promise((resolve) => { idle = resolve })
+  const h = await setup(t, { whenIdle: () => settled, retryDelayMs: 1000 })
+  await ingest(h, 'a'); const a = (await route(h)).pendingDecisions[0]
+  await ingest(h, 'b'); await h.coordinator.schedule('g')
+  idle()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(h.store.getCoordinationRequest('g', a.requestId).attempt, 0)
+  assert.equal(h.sent.filter((text) => text.includes(`[COORDINATION_RESUME]\n请求 ${a.requestId}`)).length, 0)
+  await route(h)
+  assert.equal(h.store.getCoordinationRequest('g', a.requestId).status, 'pending')
   await complete(h, a)
 })
 

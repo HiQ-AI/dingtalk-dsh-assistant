@@ -214,7 +214,7 @@ Topic 处理模型使用存储 domain v8。已有 v6/v7 数据必须先按[离�
 
 每个群唯一绑定一个 resident Session。群名称、群 ID、职责和稳定决策协议通过 DSH `systemPrompt.section` 注入。消息明确指向已配置的 Agent 名称/别名、使用 `cc:`，或明确确认此前“是否需要我处理”的询问，并形成职责范围内的可验证目标时，主会话可以创建 Task；未明确指名但判断事项应形成任务时，主会话先在群里询问“这个事项是否需要我处理？”，收到肯定答复后再结合原消息和后续补充创建。Host 在接受 `new-task` 时再次校验群职责非空，并要求依据消息明确指向 Agent，或引用本插件此前持久化的 `task-proposal` 询问，不能只信任模型结论。主会话只负责选择 Task 路由；Runtime 使用原始群消息生成来源证据信封交给叶子，主会话生成的根因、完成度、方案优劣或排除性判断不作为叶子事实。
 
-每条新消息先可靠持久化到 Inbox，接收接口随后返回；Resident 使用 `group_topic_route_submit` 对冻结的消息批次先拆分可独立补充、取消、交付、验收和反馈的事项 unit，再分别匹配持久 Topic。一个消息可包含多个 unit，每个 unit 有精确来源、唯一动作 owner 和自己的 `unitId + unitRevision`；四个属于同一交付目标的验收点保持一个事项，独立需求分别处理。超长路由原文通过 `group_topic_route_context_get` 按固定坐标读完，Host 在完整读取、范围覆盖和归属校验前不会接受部分路由。Topic 跨 turn 存在，已归类的无关话题不会使当前话题决策失效。同群仍有未归类输入时，应先完成归类再判断其影响。归类、Topic 决策与 Task 执行分别维护进度，DWS 补拉完成只证明可靠接收。
+每条新消息先可靠持久化到 Inbox，接收接口随后返回；Resident 使用 `group_topic_route_submit` 对冻结的消息批次先拆分可独立补充、取消、交付、验收和反馈的事项 unit，再分别匹配持久 Topic。一个消息可包含多个 unit，每个 unit 有精确来源、唯一动作 owner 和自己的 `unitId + unitRevision`；四个属于同一交付目标的验收点保持一个事项，独立需求分别处理。超长路由原文通过 `group_topic_route_context_get` 按固定坐标读完，Host 在完整读取、范围覆盖和归属校验前不会接受部分路由。Topic 跨 turn 存在，已归类的无关话题不会使当前话题决策失效。同群仍有未归类输入时，Host 先派发路由，清完待归类批次才派发新 Topic 决策；已接受的业务意图仍独立恢复。新消息若恰在决策处理中到达，提交仍可能返回 `routing-required`，归类后依当前 Topic 版本重试。归类、Topic 决策与 Task 执行分别维护进度，DWS 补拉完成只证明可靠接收。
 
 Topic 的 `title` 是对齐 Task 名称的 8–20 字短语，最多 30 字，细节保存在 `summary`。v6 迁移形成的历史 Topic 如果摘要为空，Runtime 会先让 Resident 根据其固定版本引用消息生成独立摘要；随后再根据摘要重新概括标题并通过 `group_topic_title_submit` 原子写回，禁止直接截断摘要。摘要和标题分两步提交，每步都校验 Topic 快照，过期结果不会覆盖新内容。
 
