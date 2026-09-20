@@ -1559,6 +1559,28 @@ test('等待通知在同版本 resume 清除 result 后失效，不发送旧问�
   assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 0)
 })
 
+test('叶子请求同群独立检查由 Host 交常驻处理，不触发人工审批或直发群聊', async (t) => {
+  const h = await setup(t), task = await createTask(h)
+  const blockers = []
+  h.runtime.onHumanBlockerRequested((value) => { blockers.push(value) })
+  const priorOutbox = h.store.getGroup('g').outbox.length
+  const result = { ...inputVersion(task), status: 'waiting', waitingKind: 'coordination', summary: '工时已补填并独立回读', evidence: ['10 条日期与需求 ID 清单', 'operation_id=verified'], waitingReason: '等待 leobot 检查结论', request: '请 leobot 检查 10 条工时清单并反馈具体结论' }
+  await leafCall(h, task, 'submit_task_result', result)
+  await until(() => Boolean(h.envelope('[TASK_COORDINATION]')))
+  assert.equal(h.store.getTask(task.taskId).waitingKind, 'coordination')
+  assert.equal(blockers.length, 0)
+  assert.equal(h.store.getGroup('g').outbox.length, priorOutbox)
+  const envelope = h.envelope('[TASK_COORDINATION]')
+  const resident = h.handles.get(residentSessionId('g'))
+  assert.ok(resident.sent.some((message) => message.content[0].text.includes(result.request)))
+  const review = await h.call('group_reply_review_get', { requestIds: [envelope.requestId] })
+  const args = { requestId: envelope.requestId, reply: result.request, replyToMessageId: 'task-input', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map((item) => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } }
+  assert.equal((await h.call('group_reply_submit', args)).status, 'accepted')
+  assert.equal((await h.call('group_reply_submit', args)).status, 'accepted')
+  assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
+  assert.equal(h.store.getTask(task.taskId).state, 'waiting')
+})
+
 test('同版本重新 waiting 新问题不能被旧问题的通知快照覆盖', async (t) => {
   const h = await setup(t), task = await createTask(h)
   const result = (id) => ({ ...inputVersion(task), status: 'waiting', waitingKind: 'information', summary: `问题${id}`, evidence: [], artifacts: [], waitingReason: `缺少输入${id}`, questions: [`输入${id}是什么？`] })

@@ -967,7 +967,10 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     replies.set(request.requestId, request)
     try {
       const inline = (...args) => inlineCurrentSection(request, ...args)
-      const text = `[TASK_COORDINATION]\n回复请求 ID：${request.requestId}\nTask ID: ${task.taskId}\nTopic 请求：${JSON.stringify({ requestId: request.requestId, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: inline('topicRefs', task.topicRefs), messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: messageContext.hasMoreMessages, messagesSection: 'messages', replyReviewCandidateCount: request.candidates.length })}\n当前目标：${JSON.stringify(inline('objective', task.objective))}\n核验结果：${JSON.stringify(inline('result', result))}\n通过 group_reply_submit 提交结果或阻塞通知；先按 requestId 读取 ${request.candidates.length} 条历史回复候选。遇到 section 指针用 group_task_review_context_get 按 nextOffset 续读完整 JSON；提交前读完超限目标、核验结果和 Topic 引用。更多消息可用 messages section 或固定 Topic 版本原文分页读取。保留实际完成内容、证据、交付状态和未验证边界。`
+      const instruction = result.waitingKind === 'coordination'
+        ? '这是叶子请求原群参与者或其他机器人独立检查的中途协调。核对原始授权和已完成证据后，通过 group_reply_submit 发起具体检查请求；不要把请求已发送说成检查通过或任务完成。检查结论应作为后续 Topic 输入续接同一 Task。'
+        : '通过 group_reply_submit 提交结果或阻塞通知；保留实际完成内容、证据、交付状态和未验证边界。'
+      const text = `[TASK_COORDINATION]\n回复请求 ID：${request.requestId}\nTask ID: ${task.taskId}\nTopic 请求：${JSON.stringify({ requestId: request.requestId, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: inline('topicRefs', task.topicRefs), messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: messageContext.hasMoreMessages, messagesSection: 'messages', replyReviewCandidateCount: request.candidates.length })}\n当前目标：${JSON.stringify(inline('objective', task.objective))}\n核验结果：${JSON.stringify(inline('result', result))}\n${instruction}先按 requestId 读取 ${request.candidates.length} 条历史回复候选。遇到 section 指针用 group_task_review_context_get 按 nextOffset 续读完整 JSON；提交前读完超限目标、核验结果和 Topic 引用。更多消息可用 messages section 或固定 Topic 版本原文分页读取。`
       if (text.length > TASK_REVIEW_MAX_CHARS) throw new Error('task_review_envelope_too_large')
       const agent = send(task.groupId, text, [], request)
       monitor(agent, request, replies)

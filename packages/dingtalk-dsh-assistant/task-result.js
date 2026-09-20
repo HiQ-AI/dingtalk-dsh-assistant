@@ -40,6 +40,17 @@ const informationWaitingResultSchema = z.object({
   questions: z.array(z.string().trim().min(1)).min(1),
 }).strict()
 
+const coordinationWaitingResultSchema = z.object({
+  ...executionVersion,
+  status: z.literal('waiting'),
+  waitingKind: z.literal('coordination'),
+  summary: z.string().trim().min(1),
+  evidence: z.array(z.string().trim().min(1)).min(1),
+  artifacts: z.array(z.string().trim().min(1)).default([]),
+  waitingReason: z.string().trim().min(1),
+  request: z.string().trim().min(1),
+}).strict()
+
 const humanInterventionWaitingResultSchema = z.object({
   ...executionVersion,
   status: z.literal('waiting'),
@@ -54,13 +65,15 @@ const humanInterventionWaitingResultSchema = z.object({
   requestedAction: z.string().trim().min(1),
 }).strict()
 
-export const taskResultSchema = z.union([completedResultSchema, informationWaitingResultSchema, humanInterventionWaitingResultSchema])
+export const taskResultSchema = z.union([completedResultSchema, informationWaitingResultSchema, coordinationWaitingResultSchema, humanInterventionWaitingResultSchema])
 
 function parseResultShape(value) {
   const schema = value?.status === 'completed'
     ? completedResultSchema
     : value?.status === 'waiting' && value?.waitingKind === 'information'
       ? informationWaitingResultSchema
+      : value?.status === 'waiting' && value?.waitingKind === 'coordination'
+        ? coordinationWaitingResultSchema
       : value?.status === 'waiting' && value?.waitingKind === 'human-intervention'
         ? humanInterventionWaitingResultSchema
         : null

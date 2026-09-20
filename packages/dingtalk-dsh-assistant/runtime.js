@@ -700,8 +700,8 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     const goal = ctx.goals.get(handle.agent)
     if (goal === undefined) throw new Error(`task_goal_missing:${taskId}`)
     if (result.status === 'waiting') {
-      if (result.waitingKind === 'information') {
-        const waiting = await updateTaskInput(taskId, result, (current) => ({ ...current, state: 'waiting', waitingKind: 'information', waitingReason: result.waitingReason, result }))
+      if (result.waitingKind === 'information' || result.waitingKind === 'coordination') {
+        const waiting = await updateTaskInput(taskId, result, (current) => ({ ...current, state: 'waiting', waitingKind: result.waitingKind, waitingReason: result.waitingReason, result }))
         if (goal.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-input-required', message: result.waitingReason })
         return waiting
       }
@@ -740,7 +740,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
     if (result.status !== 'completed') {
       const waiting = await serializeTasks(() => submitTaskResultInternal(taskId, result))
-      if (result.waitingKind === 'information') void withoutInitiator(() => coordinateTaskResult(waiting, result)).catch((error) => recoveryIssues.push({ groupId: waiting.groupId, taskId, kind: 'task-notification', error: error.message }))
+      if (result.waitingKind === 'information' || result.waitingKind === 'coordination') void withoutInitiator(() => coordinateTaskResult(waiting, result)).catch((error) => recoveryIssues.push({ groupId: waiting.groupId, taskId, kind: 'task-notification', error: error.message }))
       return waiting
     }
     const prepared = await serializeTasks(async () => {
@@ -1064,13 +1064,14 @@ ${JSON.stringify({ taskId: task.taskId, topicRefs: store.getTask(task.taskId)?.t
 
 ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVersion, runSequence, ...facts }) => facts)(queryFactsSnapshot(store.getTask(task.taskId) ?? task)))}
 
-完成结果提交后由 Runtime 完整交给 resident 主会话，再由主会话结合 Task 完整时间线判断如何通知原群相关参与人。群聊消息的发送、回复、编辑、更正和撤回均由 resident 主会话判断；叶子只提交业务结果、结论、证据、未验证项和置信边界，不得判断、建议或申请撤回/编辑/更正任何群消息，不得提供消息处置目标或 messageId。群聊通知只有 Runtime 这一个出口：叶子会话不得调用 DWS 或其他消息工具向来源群发送、回复、编辑或撤回任务进度、阻塞或完成通知，也不得把自行发送群通知作为完成证据；叶子只允许读取群消息用于业务核验，并通过 submit_task_result 提交结构化结果。
+完成结果提交后由 Runtime 完整交给 resident 主会话，再由主会话结合 Task 完整时间线判断如何通知原群相关参与人。完成前需要原群参与者或其他机器人独立检查时，提交 waitingKind=coordination、具体 request 和已完成工作的 evidence；Runtime 同样交给 resident 主会话发起检查，真实结论到达后再继续 Task。叶子不直接向 parent resident 调用 send_message。群聊消息的发送、回复、编辑、更正和撤回均由 resident 主会话判断；叶子只提交业务结果、结论、证据、未验证项和置信边界，不得判断、建议或申请撤回/编辑/更正任何群消息，不得提供消息处置目标或 messageId。群聊通知只有 Runtime 这一个出口：叶子会话不得调用 DWS 或其他消息工具向来源群发送、回复、编辑或撤回任务进度、阻塞或完成通知，也不得把自行发送群通知作为完成证据；叶子只允许读取群消息用于业务核验，并通过 submit_task_result 提交结构化结果。
 
 ### 阻塞规则
 
-除以下两类情况外，不得暂停或阻塞 Goal，也不得提交 waiting：
+除以下三类情况外，不得暂停或阻塞 Goal，也不得提交 waiting：
 1. \`waitingKind=information\`：只有 Task 相关参与人才能补充的目标、完成条件或必要业务信息不明确；必须提供具体 questions，Runtime 将由主会话根据完整消息时间线选择实际询问对象。
-2. \`waitingKind=human-intervention\`：已经取得证据且自身无法解决的操作红线、网络中断、磁盘不足、资源不足、意外事件或必须真人确认的处置方案；必须提供 blockerCategory、risk、evidence、attemptedActions 和 requestedAction。risk 单独说明执行该操作可能造成的具体影响；操作红线使用 blockerCategory=redline，并把完整操作范围和不在授权内的事项写入 requestedAction；Runtime 只发送这一条人工介入消息。
+2. \`waitingKind=coordination\`：已完成本 Task 可自行完成的工作，但原始目标要求原群参与者或其他机器人独立检查；提供明确的 request、写后回读等 evidence。Runtime 将交给 resident 判断如何在原群请求检查，不向人工发审批。请求已发出不等于检查通过。
+3. \`waitingKind=human-intervention\`：已经取得证据且自身无法解决的操作红线、网络中断、磁盘不足、资源不足、意外事件或必须真人确认的处置方案；必须提供 blockerCategory、risk、evidence、attemptedActions 和 requestedAction。risk 单独说明执行该操作可能造成的具体影响；操作红线使用 blockerCategory=redline，并把完整操作范围和不在授权内的事项写入 requestedAction；Runtime 只发送这一条人工介入消息。
 
 代码错误、命令失败、可重试波动、普通不确定性、实现困难或正在正常运行但耗时较长的外部流水线，应继续诊断或监控，不得伪装成人工阻塞。不要直接使用 Goal 工具标记 blocked；合法等待统一通过 submit_task_result 交给 Host。Goal 执行轮数耗尽时 Host 会停止自动续接并形成可见的异常介入事项。`,
       })
@@ -1440,7 +1441,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     const previousPlan = JSON.stringify([task.objective, task.acceptanceCriteria, task.stageTasks])
     task = await mutateTask(task, operation, (current) => {
       const revised = withRevisedObjective(current, objective, title, operation?.decisionId)
-      const resumed = current.state === 'waiting' && current.waitingKind === 'information'
+      const resumed = current.state === 'waiting' && ['information', 'coordination'].includes(current.waitingKind)
       const refs = [...new Map([...current.topicRefs, ...topicRefs].map((ref) => [ref.topicId, ref])).values()]
       const plan = normalizeRunPlan(revised.objective, acceptanceCriteria ?? revised.acceptanceCriteria, stageTasks ?? revised.stageTasks)
       const progress = reviseTaskProgress(current, { objective: revised.objective, ...plan, progressImpact, impactEvidence }, new Set(refs.flatMap(ref => resolveTopicMessages(store.getGroup(task.groupId), ref.topicId, ref.revision)).map(message => message.messageId)))
@@ -1451,7 +1452,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
           retainedCheckpointIds: progress.checkpoints.map(checkpoint => checkpoint.checkpointId), checkpoints: progress.invalidatedCheckpoints, at: new Date().toISOString() }],
         ...plan,
         ...(resumed ? { state: 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
-          resumeContext: '[TASK_CONTEXT_RESUME]\nInformation required by the task is now available.' } : {}),
+          resumeContext: '[TASK_CONTEXT_RESUME]\nThe requested task input or independent check has arrived. Verify the actual result before continuing.' } : {}),
       }
     })
     if (['running', 'waiting'].includes(task.state)) {
@@ -1796,7 +1797,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     reconcileCompletedNotifications: async () => {
       const pending = await serializeTasks(async () => {
         const items = []
-        for (const task of store.listTasks().filter((item) => (item.state === 'completed' && item.result?.status === 'completed') || (item.state === 'waiting' && item.result?.waitingKind === 'information'))) {
+        for (const task of store.listTasks().filter((item) => (item.state === 'completed' && item.result?.status === 'completed') || (item.state === 'waiting' && ['information', 'coordination'].includes(item.result?.waitingKind)))) {
           let current = task
           if ((current.completionSequence ?? 0) === 0 && current.lastCompletedResult?.status === 'completed') current = await store.updateTask(current.taskId, (item) => ({ ...item, completionSequence: 1 }))
           const resultKey = taskResultOutboxKey(current, current.result)
