@@ -8,4 +8,4 @@ case,round-1,status,evidence
 全部自动测试,1,PASS,pnpm test 433 通过 0 失败
 当前在线等待任务只读审计,1,PASS,check-waiting-tasks.mjs --check 共 56 项等待候选 0
 真实模型语义判断与真实群投递,1,NOT_RUN,需要隔离模型与授权业务场景
-本机安装与运行态验证,1,NOT_RUN,当前仍有其他运行任务
+本机安装与运行态验证,2,PASS,round-2.md 安装哈希双端口健康与 Task 回读
