@@ -127,7 +127,7 @@ const activityProjectionSchema = z.object({
 const taskSchema = z.object({
   taskId: z.string().min(1), groupId: z.string().min(1), topicRefs: z.array(topicRefSchema).min(1), inputVersion: z.number().int().positive(), appliedOperations: z.array(z.string()).default([]), title: z.string().min(1).optional(), objective: z.string().min(1),
   state: z.enum(['queued', 'running', 'waiting', 'completed']), childSessionId: z.string().min(1),
-  waitingReason: z.string().optional(), waitingKind: z.enum(['information', 'human-intervention']).optional(),
+  waitingReason: z.string().optional(), waitingKind: z.enum(['information', 'coordination', 'human-intervention']).optional(),
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
   objectiveHistory: z.array(taskObjectiveRevisionSchema).optional(), titleHistory: z.array(taskTitleRevisionSchema).optional(),
   runSequence: z.number().int().positive().optional(), runStartedAt: z.string().min(1).optional(),
