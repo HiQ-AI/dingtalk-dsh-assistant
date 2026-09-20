@@ -97,6 +97,10 @@ const completionReviewSchema = z.union([
   z.strictObject({ accepted: z.literal(true), reason: z.string().trim().min(1), notification: notificationDraftSchema }),
 ])
 const checkpointReviewSchema = z.strictObject({ decision: z.enum(['acknowledge', 'guidance', 'reject']), reason: z.string().trim().min(1), guidance: z.string().trim().min(1).optional() })
+const waitingReviewSchema = z.union([
+  z.strictObject({ decision: z.enum(['approve-wait', 'continue']), reason: z.string().trim().min(1) }),
+  z.strictObject({ decision: z.literal('revise-scope'), reason: z.string().trim().min(1), basisMessageIds: z.array(z.string().trim().min(1)).min(1), affectedStageIds: z.array(z.string().trim().min(1)).min(1), title: z.string().trim().min(1).max(120), objective: z.string().trim().min(1), acceptanceCriteria: z.array(z.string().trim().min(1)).min(1), stageTasks: z.array(z.string().trim().min(1)).min(1) }),
+])
 const COMPLETION_MESSAGE_MAX_CHARS = 12_000
 const COMPLETION_MESSAGE_MAX_COUNT = 20
 const ROUTE_CONTEXT_MAX_CHARS = 40_000
@@ -826,7 +830,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       replies.delete(args.requestId); request.resolve(outbound)
       return { status: 'accepted', outboundId: outbound.outboundId }
     })
-    tool('group_task_review_submit', '提交内部完成验收或检查点审阅；请求绑定执行版本，不能产生群消息。', { type: 'object', properties: { requestId: { type: 'string' }, review: { type: 'object' } }, required: ['requestId', 'review'], additionalProperties: false }, async ({ requestId, review: input }) => {
+    tool('group_task_review_submit', '提交内部完成、等待或检查点审阅；请求绑定执行版本，不能产生群消息。', { type: 'object', properties: { requestId: { type: 'string' }, review: { type: 'object' } }, required: ['requestId', 'review'], additionalProperties: false }, async ({ requestId, review: input }) => {
       const request = reviews.get(requestId)
       if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
       const task = store.getTask(request.task.taskId)
@@ -843,9 +847,17 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const missingPromptRefs = diagnosticCheckpoint(request) ? [] : request.promptRefs.filter((ref) => !request.readPromptRefs.has(ref.id))
       if (missingPromptRefs.length) return { status: 'prompt-review-required', missingPromptRefs }
       if ((request.kind === 'completion') !== Object.hasOwn(input ?? {}, 'accepted')) throw new Error('task_review_kind_invalid')
-      const review = request.kind === 'completion' ? completionReviewSchema.parse(input) : checkpointReviewSchema.parse(input)
+      const review = request.kind === 'completion' ? completionReviewSchema.parse(input) : request.kind === 'waiting' ? waitingReviewSchema.parse(input) : checkpointReviewSchema.parse(input)
       const unreadSections = [...request.requiredSections].filter((section) => (request.readSectionOffsets.get(section) ?? 0) < request.sections[section].length)
-      if (!diagnostic && unreadSections.length && (review.accepted === true || ['acknowledge', 'guidance'].includes(review.decision))) return { status: 'context-review-required', unreadSections }
+      if (!diagnostic && unreadSections.length && (review.accepted === true || ['acknowledge', 'guidance', 'approve-wait', 'revise-scope'].includes(review.decision))) return { status: 'context-review-required', unreadSections }
+      if (request.kind === 'waiting' && review.decision === 'approve-wait') {
+        const sourceIds = new Set(taskMessages(task).map(message => message.messageId))
+        if (!request.value.blockedItems?.length || request.value.blockedItems.some(item => item.basisMessageIds.some(id => !sourceIds.has(id)))) throw new Error('task_waiting_blocked_items_invalid')
+      }
+      if (request.kind === 'waiting' && review.decision === 'revise-scope') {
+        const sourceIds = new Set(taskMessages(task).map(message => message.messageId))
+        if (review.basisMessageIds.some(id => !sourceIds.has(id))) throw new Error('task_waiting_scope_basis_invalid')
+      }
       if ('decision' in review && ((review.decision === 'guidance' && !review.guidance) || (review.decision !== 'guidance' && review.guidance))) throw new Error('task_review_guidance_invalid')
       if ('decision' in review && review.decision === 'reject' && request.value.kind !== 'plan-confirmed') throw new Error('task_review_reject_plan_only')
       if (reviewRequestIdentity(request.kind, diagnostic ? { ...task, taskPromptRefs: request.promptRefs } : task, request.value) !== requestId) { await supersedeRequest(request, undefined, 'task-review-context-changed'); reviews.delete(requestId); request.reject(new Error('task_review_context_changed')); return { status: 'task-stale' } }
@@ -918,7 +930,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     try {
       const accepted = store.getTask(task.taskId)?.executionEvents?.find(event => event.kind === 'coordination-review-accepted' && event.requestId === requestId)
       if (accepted) {
-        const restored = kind === 'completion' ? completionReviewSchema.parse(accepted.review) : checkpointReviewSchema.parse(accepted.review)
+        const restored = kind === 'completion' ? completionReviewSchema.parse(accepted.review) : kind === 'waiting' ? waitingReviewSchema.parse(accepted.review) : checkpointReviewSchema.parse(accepted.review)
         if (kind === 'completion' && restored.accepted) {
           // 原审阅与当前候选、Topic、流程身份相同，重新构造非持久的通知准备态。
           request.readReview = true
@@ -933,14 +945,16 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       reviews.set(request.requestId, request)
       refreshVisibleReads(request)
       const inline = (...args) => inlineCurrentSection(request, ...args)
-      const label = kind === 'completion' ? '[TASK_COMPLETION_REVIEW]' : '[TASK_CHECKPOINT_REVIEW]'
+      const label = kind === 'completion' ? '[TASK_COMPLETION_REVIEW]' : kind === 'waiting' ? '[TASK_WAITING_REVIEW]' : '[TASK_CHECKPOINT_REVIEW]'
       const reviewInfo = { requestId: request.requestId, kind, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, promptRefs: inline('promptRefs', promptRefs, 2_000, !diagnosticCheckpoint(request)), visiblePromptRefs: [...request.readPromptRefs.values()] }
       request.sections.messages = JSON.stringify(messages)
       const context = { topicRefs: inline('topicRefs', task.topicRefs), messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: messageContext.hasMoreMessages, messagesSection: 'messages', ...(kind === 'completion' ? { replyReviewCandidateCount: request.candidates.length } : {}) }
       const originalContext = `\n${kind === 'completion' ? '通知上下文' : '任务原始上下文'}：${JSON.stringify(context)}`
       const instruction = kind === 'completion'
-        ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。通过时同时准备群通知；存在真实群参与人时必须从通知上下文选择 replyToMessageId，省略 atOpenDingTalkIds 时默认 @ 被引用消息的发送人；需要通知其他参与人时显式填写。存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界。"
-        : `检查点审阅：{decision:'acknowledge'|'guidance'|'reject',reason:string,guidance?:string}。计划与原始消息或任务流程冲突时必须 reject；只有原始消息明确支持的 workflowAssessment.exceptions 才能覆盖流程。`
+        ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。当前 Agent 的交付及必要自验证完成即可通过；他人后续检查不构成完成条件。通过时同时准备群通知；存在真实群参与人时必须从通知上下文选择 replyToMessageId，省略 atOpenDingTalkIds 时默认 @ 被引用消息的发送人；需要通知其他参与人时显式填写。存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界。"
+        : kind === 'waiting'
+          ? "等待审阅：真实必要依赖用 {decision:'approve-wait',reason:string}；可自行继续用 {decision:'continue',reason:string}；已完成自身工作、仅等他人后续检查时用 {decision:'revise-scope',reason:string,basisMessageIds:string[],affectedStageIds:string[],title:string,objective:string,acceptanceCriteria:string[],stageTasks:string[]}。revise-scope 必须以原始消息明确的本 Agent 交付重写完整目标、验收和剩余阶段，并用 affectedStageIds 指明旧阶段中从哪一项起受影响，保留之前有效的证据；不要把实际未完成的本职工作删去。只有 blockedItems 中确有当前 Agent 尚未完成的交付，且所列依赖必要，才可 approve-wait。审阅不代替业务完成，也不得因为没有 blockedItems 批准等待。"
+          : `检查点审阅：{decision:'acknowledge'|'guidance'|'reject',reason:string,guidance?:string}。计划与原始消息或任务流程冲突时必须 reject；只有原始消息明确支持的 workflowAssessment.exceptions 才能覆盖流程。`
       const unreadPrompts = promptRefs.filter((ref) => !request.readPromptRefs.has(ref.id))
       const promptInstruction = diagnosticCheckpoint(request) ? '这是异常报告，即使未选流程、旧流程过期或未读完也必须保持协调通道可用，不批准阶段推进。' : `${promptRefs.length ? (unreadPrompts.length ? `按 requestId 用 group_task_prompt_get 批量读取尚不可见的流程 ${JSON.stringify(unreadPrompts)}；visiblePromptRefs 指明当前 surface 中已具备正文的流程，无需重读。` : `全部已选流程正文仍在当前 surface 中，直接复用 visiblePromptRefs，不再调用 group_task_prompt_get。`) : '当前未选择专用流程，需结合索引核查是否确无匹配。'}核查选择原因和可用流程索引；如需读取未选候选，也应合并到一次批量调用。若漏选适用流程应要求重新规划，允许多个流程组合，也允许有明确理由的无匹配。`
       const contextInstruction = diagnosticCheckpoint(request) ? '异常报告的 section 原文按需续读，不以读完索引或旧流程作为协调前提。' : '通过审阅前必须读完超限的目标、验收、阶段、待审阅内容和流程索引。'
@@ -967,9 +981,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     replies.set(request.requestId, request)
     try {
       const inline = (...args) => inlineCurrentSection(request, ...args)
-      const instruction = result.waitingKind === 'coordination'
-        ? '这是叶子请求原群参与者或其他机器人独立检查的中途协调。核对原始授权和已完成证据后，通过 group_reply_submit 发起具体检查请求；不要把请求已发送说成检查通过或任务完成。检查结论应作为后续 Topic 输入续接同一 Task。'
-        : '通过 group_reply_submit 提交结果或阻塞通知；保留实际完成内容、证据、交付状态和未验证边界。'
+      const instruction = '通过 group_reply_submit 提交结果或真实阻塞通知；保留实际完成内容、证据、交付状态和未验证边界。'
       const text = `[TASK_COORDINATION]\n回复请求 ID：${request.requestId}\nTask ID: ${task.taskId}\nTopic 请求：${JSON.stringify({ requestId: request.requestId, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: inline('topicRefs', task.topicRefs), messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: messageContext.hasMoreMessages, messagesSection: 'messages', replyReviewCandidateCount: request.candidates.length })}\n当前目标：${JSON.stringify(inline('objective', task.objective))}\n核验结果：${JSON.stringify(inline('result', result))}\n${instruction}先按 requestId 读取 ${request.candidates.length} 条历史回复候选。遇到 section 指针用 group_task_review_context_get 按 nextOffset 续读完整 JSON；提交前读完超限目标、核验结果和 Topic 引用。更多消息可用 messages section 或固定 Topic 版本原文分页读取。`
       if (text.length > TASK_REVIEW_MAX_CHARS) throw new Error('task_review_envelope_too_large')
       const agent = send(task.groupId, text, [], request)

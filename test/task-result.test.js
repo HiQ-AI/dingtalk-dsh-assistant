@@ -9,7 +9,7 @@ test('诊断允许受影响阶段但拒绝推进字段与计划评估，历史�
   assert.throws(() => parseTaskCheckpoint({ ...diagnostic, workflowAssessment: { promptRefs: [] } }), /task_checkpoint_invalid/)
   assert.equal(storedTaskCheckpointBaseSchema.parse({ ...diagnostic, completedItems: ['旧记录'] }).completedItems[0], '旧记录')
   assert.equal(taskCheckpointJsonSchema.oneOf?.length ?? taskCheckpointJsonSchema.anyOf.length, 5)
-  assert.equal(taskResultJsonSchema.oneOf.length, 4)
+  assert.equal(taskResultJsonSchema.oneOf.length, 3)
 })
 
 test('Task checkpoint只接受事件驱动的结构化内部同步', () => {
@@ -37,7 +37,7 @@ test('Task waiting结果要求明确waitingReason且拒绝多余字段', () => {
   assert.throws(() => parseTaskResult({ inputVersion: 1, runSequence: 1, status: 'waiting', waitingKind: 'information', summary: 'need input', evidence: [], artifacts: [], waitingReason: 'missing file', questions: ['Which file?'], extra: true }))
   assert.equal(parseTaskResult({ inputVersion: 1, runSequence: 1, status: 'waiting', waitingKind: 'information', summary: 'need input', evidence: [], artifacts: [], waitingReason: 'missing file', questions: ['Which file?'] }).waitingReason, 'missing file')
   const coordination = { inputVersion: 1, runSequence: 1, status: 'waiting', waitingKind: 'coordination', summary: '已回读工时', evidence: ['10 条写入独立回读一致'], waitingReason: '等待同群检查结论', request: '请 leobot 核验清单并给出结论' }
-  assert.equal(parseTaskResult(coordination).request, coordination.request)
+  assert.throws(() => parseTaskResult(coordination), /task_waiting_coordination_obsolete/)
   assert.throws(() => parseTaskResult({ ...coordination, evidence: [] }))
   assert.throws(() => parseTaskResult({ ...coordination, requestedAction: '请人工批准' }))
   assert.throws(() => parseTaskResult({ inputVersion: 1, runSequence: 1, status: 'waiting', waitingKind: 'human-intervention', summary: 'network down', evidence: [], artifacts: [], waitingReason: 'offline', blockerCategory: 'network', requestedAction: 'restore network' }))

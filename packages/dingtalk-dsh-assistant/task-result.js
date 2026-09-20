@@ -18,6 +18,12 @@ const workflowAssessmentSchema = z.object({
   inapplicableSteps: z.array(z.object({ promptId: z.string().trim().min(1), step: z.string().trim().min(1), reason: z.string().trim().min(1) }).strict()).default([]),
   exceptions: z.array(z.object({ requirement: z.string().trim().min(1), basisMessageIds: z.array(z.string().trim().min(1)).min(1), reason: z.string().trim().min(1) }).strict()).default([]),
 }).strict()
+const blockedItemSchema = z.object({
+  requirement: z.string().trim().min(1),
+  basisMessageIds: z.array(z.string().trim().min(1)).min(1),
+  dependency: z.string().trim().min(1),
+  reason: z.string().trim().min(1),
+}).strict()
 
 const completedResultSchema = z.object({
   ...executionVersion,
@@ -38,17 +44,7 @@ const informationWaitingResultSchema = z.object({
   artifacts: z.array(z.string().trim().min(1)).default([]),
   waitingReason: z.string().trim().min(1),
   questions: z.array(z.string().trim().min(1)).min(1),
-}).strict()
-
-const coordinationWaitingResultSchema = z.object({
-  ...executionVersion,
-  status: z.literal('waiting'),
-  waitingKind: z.literal('coordination'),
-  summary: z.string().trim().min(1),
-  evidence: z.array(z.string().trim().min(1)).min(1),
-  artifacts: z.array(z.string().trim().min(1)).default([]),
-  waitingReason: z.string().trim().min(1),
-  request: z.string().trim().min(1),
+  blockedItems: z.array(blockedItemSchema).default([]),
 }).strict()
 
 const humanInterventionWaitingResultSchema = z.object({
@@ -63,17 +59,17 @@ const humanInterventionWaitingResultSchema = z.object({
   risk: z.string().trim().min(1).default('未单独说明；以阻塞原因、现场证据和申请范围为准。'),
   attemptedActions: z.array(z.string().trim().min(1)).default([]),
   requestedAction: z.string().trim().min(1),
+  blockedItems: z.array(blockedItemSchema).default([]),
 }).strict()
 
-export const taskResultSchema = z.union([completedResultSchema, informationWaitingResultSchema, coordinationWaitingResultSchema, humanInterventionWaitingResultSchema])
+export const taskResultSchema = z.union([completedResultSchema, informationWaitingResultSchema, humanInterventionWaitingResultSchema])
 
 function parseResultShape(value) {
+  if (value?.status === 'waiting' && value?.waitingKind === 'coordination') throw new Error('task_waiting_coordination_obsolete:请按当前 Agent 的交付及必要自验证重新判断；已完成则提交 completed，外部后续检查不阻塞 Task。')
   const schema = value?.status === 'completed'
     ? completedResultSchema
     : value?.status === 'waiting' && value?.waitingKind === 'information'
       ? informationWaitingResultSchema
-      : value?.status === 'waiting' && value?.waitingKind === 'coordination'
-        ? coordinationWaitingResultSchema
       : value?.status === 'waiting' && value?.waitingKind === 'human-intervention'
         ? humanInterventionWaitingResultSchema
         : null
