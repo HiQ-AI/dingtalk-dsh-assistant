@@ -389,20 +389,21 @@ test('恢复失败保留原 Resident Session，其他群仍能工作', async (t)
   assert.equal((await decide(h, request, { reply: '正常' }, 'b')).status, 'accepted')
 })
 
-test('新群创建原生 Session 后绑定，工具不能访问其他 Session', async (t) => {
+test('新群主会话具有完整工具权限，Topic 工具仍不能访问其他 Session', async (t) => {
   const h = await setup(t, { groups: [] })
   const result = await h.runtime.subscribe({ groupId: 'g', name: '新群' })
   assert.equal(result.created, true)
   assert.equal(result.group.residentSessionId, residentSessionId('g'))
   assert.equal(h.calls[0].resumed, false)
   assert.equal(h.calls[0].input.meta.cwd, agentWorkspace)
-  assert.deepEqual(h.permissions, [[residentSessionId('g'), 'read-only']])
+  assert.deepEqual(h.permissions, [[residentSessionId('g'), 'danger-full-access']])
   assert.equal((await h.runtime.subscribe({ groupId: 'g' })).created, false)
   assert.equal(h.calls.length, 1)
 })
 
 test('工作区切换保留事件历史并重建 Resident，旧 Session 释放', async (t) => {
   const h = await setup(t), oldId = h.store.getGroup('g').residentSessionId
+  assert.deepEqual(h.permissions, [[oldId, 'danger-full-access']])
   h.resident().agent.session.append('turn/end', { status: 'success' })
   h.idle.set(oldId, Promise.resolve())
   const result = await h.runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
@@ -410,6 +411,7 @@ test('工作区切换保留事件历史并重建 Resident，旧 Session 释放',
   assert.notEqual(h.store.getGroup('g').residentSessionId, oldId)
   const replacement = h.calls.at(-1)
   assert.equal(replacement.input.meta.cwd, replacementWorkspace)
+  assert.deepEqual(h.permissions.at(-1), [h.store.getGroup('g').residentSessionId, 'danger-full-access'])
   assert.ok(replacement.input.seed.some((event) => event.type === 'turn/end'))
   assert.ok(h.disposed.includes(oldId))
 })
