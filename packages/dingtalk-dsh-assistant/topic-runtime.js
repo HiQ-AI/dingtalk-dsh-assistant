@@ -400,7 +400,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if (!complete) continue
     }
     const envelope = { requestId: request.requestId, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length || visibleMessages.some((message) => message.textHasMore), topics, totalTopics: store.listTopics(groupId).length, hasMoreTopics: topics.length < store.listTopics(groupId).length, ...(reason ? { reason } : {}) }
-    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\nTopic 请求：${JSON.stringify(envelope)}\n先把每条消息拆成能独立补充、取消、验收或反馈的事项 units，再把每个事项归入已有 Topic 或新 Topic。四个验收项可属于同一回归事项，两个独立需求必须分别建事项；共同业务领域不是合并理由。每个 unit 提供稳定 unitKey、简短 summary、能在原文中唯一定位的 sourceRefs.quote、共享约束 contextRefs 和 topics，并由 effectOwner 指定唯一动作主归属；其余非空原文必须放入 ignoredRefs 并说明原因。纯背景不得冒充事项；需要查询历史资料时不得把资料来源 Topic 加入归属，可以检索资料后只处理当前请求。通过 group_topic_route_submit 一次完整提交本批消息；不执行任务、不回复群聊。${reason ? `这是归属复核：${reason}` : ''}`, messages.flatMap((message) => message.imageRefs ?? []), request)
+    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\nTopic 请求：${JSON.stringify(envelope)}\n先把每条消息拆成能独立补充、取消、验收或反馈的事项 units，再把每个事项归入已有 Topic 或新 Topic。四个验收项可属于同一回归事项，两个独立需求必须分别建事项；共同业务领域不是合并理由。每个 unit 提供稳定 unitKey、简短 summary、能在当前消息原文中唯一定位的 sourceRefs.quote、共享约束 contextRefs 和 topics，并由 effectOwner 指定唯一动作主归属；contextRefs.quote 也只能引用当前消息 text 中唯一出现的片段，quotedMessage 是单独提供的背景，不要把被引用消息的正文填入 contextRefs。其余非空原文必须放入 ignoredRefs 并说明原因。纯背景不得冒充事项；需要查询历史资料时不得把资料来源 Topic 加入归属，可以检索资料后只处理当前请求。通过 group_topic_route_submit 一次完整提交本批消息；不执行任务、不回复群聊。${reason ? `这是归属复核：${reason}` : ''}`, messages.flatMap((message) => message.imageRefs ?? []), request)
     monitor(agent, request, routes)
     return envelope
   }
@@ -526,6 +526,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     if (new Set(targets).size !== targets.length) throw new Error('topic_decision_task_target_duplicate')
     const basis = new Set(decision.basisUnitRefs.map(unitKey))
     const messageBasis = new Set(decision.basisMessageIds)
+    const sourceText = (message) => message._sourceMessageText ?? message.text
     if (basis.size !== decision.basisUnitRefs.length || decision.basisUnitRefs.some((ref) => !request.messages.some((message) => unitKey(message) === unitKey(ref)) && !request.removedUnitRefs.some((removed) => unitKey(removed) === unitKey(ref)))) throw new Error('topic_decision_basis_invalid')
     const topic = store.getTopic(request.groupId, request.topicId)
     const delta = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= request.revision).map(unitKey))
@@ -555,13 +556,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         if (['task-context', 'task-cancel'].includes(action.kind) && task.state === 'completed') throw new Error('task_not_active')
       }
       if (decision.actions.length) {
-        const directedAway = request.messages.filter((message) => messageBasis.has(message.messageId) && isDirectedToOtherParticipants(message.text, store.getAgentNames()))
-        for (const other of directedAway) if (!request.messages.some((message) => messageBasis.has(message.messageId) && message.quotedMessage?.messageId === other.messageId && isExplicitAgentDirection(message.text, store.getAgentNames()))) throw new Error('task_action_directed_to_other_participants')
+        const directedAway = request.messages.filter((message) => messageBasis.has(message.messageId) && isDirectedToOtherParticipants(sourceText(message), store.getAgentNames()))
+        for (const other of directedAway) if (!request.messages.some((message) => messageBasis.has(message.messageId) && message.quotedMessage?.messageId === other.messageId && isExplicitAgentDirection(sourceText(message), store.getAgentNames()))) throw new Error('task_action_directed_to_other_participants')
       }
       if (action.kind === 'new-task') {
         const group = store.getGroup(request.groupId)
         if (!group.responsibility?.trim()) throw new Error('task_group_responsibility_required')
-        const directed = request.messages.some((message) => messageBasis.has(message.messageId) && isExplicitAgentDirection(message.text, store.getAgentNames()))
+        const directed = request.messages.some((message) => messageBasis.has(message.messageId) && isExplicitAgentDirection(sourceText(message), store.getAgentNames()))
         const confirmsProposal = request.messages.some((message) => {
           if (!messageBasis.has(message.messageId) || !message.quotedMessage?.messageId) return false
           const outbound = group.outbox.find((item) => item.deliveredMessageId === message.quotedMessage.messageId && item.status === 'sent')

@@ -246,7 +246,7 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存�
 
 消息的 `routingStatus` 表示待归类、已归类或归类失败；Topic 的 `processedRevision` 表示决策及所需动作已可靠落地；Task 的输入下发、输入确认与任务完成另行记录。任何一项均不能替代另一项。运行看板的“话题”页在左侧只展示名称与摘要，右侧分开展示完整标题、话题摘要、待解决问题和关联任务；固定版本消息列表直接展示并支持分页，每条消息所引用的上一条消息默认折叠。群消息状态由 `routingStatus`、Topic revision 与 `processedRevision` 投影为“待归类、话题处理中、已处理、归类失败”，不再把旧 `agentDeliveryStatus` 当成业务处理完成度。Task 卡片上的话题链接打开该任务接纳的版本。Topic 归属仅表示消息延续同一讨论目标，或实质改变该 Topic 的事实、范围、结论或动作；为回答问题查询旧分支、PR 或任务资料不会建立 Topic 归属。多 Topic 路由必须逐项声明关系和理由，并显式指定唯一动作主归属。Topic 决策信封和 `group_topic_context_get` 的单次完整 JSON 返回均限制为 40,000 字符；读取方按 `nextOffset`/`nextTextOffset` 连续读取分页或超长消息片段。`omittedDeltaMessageIds` 非空时，Resident 必须读完该固定 revision 的全部缺失增量，Host 在读完前拒绝决策。
 
-常驻群聊主会话负责上下文理解和结构化选路，也需按消息范围读取钉钉文档等资料；其 DSH 权限 preset 为 `danger-full-access`，不暴露 `get_goal`、`create_goal`、`update_goal`，也不注入 Goal 工具说明。完整工具权限不扩大群消息或 Task 的业务授权，Task 动作仍经 Topic 决策和 Runtime 校验。Task 叶子会话由 Runtime 使用 DSH Goal 管理执行、阻塞、恢复与完成，权限 preset 同为 `danger-full-access`，可按 Task objective 和工作区规则使用完整本机能力。DWS 群通知仍只有 Runtime 一个出口；叶子不得绕过结构化结果链路直接向来源群发送消息。
+常驻群聊主会话负责上下文理解和结构化选路，也需按消息范围读取钉钉文档等资料；其 DSH 权限 preset 为 `danger-full-access`，不暴露 `get_goal`、`create_goal`、`update_goal`，也不注入 Goal 工具说明。完整工具权限不扩大群消息或 Task 的业务授权，Task 动作仍经 Topic 决策和 Runtime 校验。任务授权与“明确交给其他人”的校验使用 Topic 固定版本保留的原始消息全文，即使路由时将称呼列为 ignoredRefs，也不会抹去点名证据。`sourceRefs.quote`、`contextRefs.quote` 只引用当前消息中唯一出现的原文；被引用消息作为独立的 `quotedMessage` 背景提供，不填入当前消息的 `contextRefs`。Task 叶子会话由 Runtime 使用 DSH Goal 管理执行、阻塞、恢复与完成，权限 preset 同为 `danger-full-access`，可按 Task objective 和工作区规则使用完整本机能力。DWS 群通知仍只有 Runtime 一个出口；叶子不得绕过结构化结果链路直接向来源群发送消息。
 
 主会话向运行中或等待中的叶子传递任务上下文、目标修订、真人批复、恢复提示和结果驳回时统一使用 DSH `steer`，在叶子的下一个 step 边界插入，不使用 `followup` 排队到下一 Turn。
 
