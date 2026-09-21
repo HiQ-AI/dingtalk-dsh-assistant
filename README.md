@@ -238,6 +238,22 @@ Topic 决策产生非空回复时，Runtime 使用 DWS 原生引用回复，并�
 
 普通发送遇到明确服务端拒绝时持久化 deliveryBlockedAt，看板显示发送待处理，停止对相同意图自动重试；读取失败或送达未知不冒充明确拒绝，继续保留原生幂等与回读保护。
 
+### 性能观测与协调资源读取
+
+`GET /state/performance` 是只读观测接口，可按 `day`、`sessionId`、`groupId`、`taskId`、`requestId`、`submissionId` 精确筛选。`rows` 按上海自然日返回模型和工具调用、首流事件/响应/工具耗时分布、上下文及 token 用量；分布包含 `count/sum/max/p50/p95`。`inputTokens` 是未缓存输入；`totalInputTokens` 合计已报告的未缓存、缓存读取和缓存写入，缺失分项另计，不能把未知用量当作已确认的零。模型/工具资源累计耗时与区间并集分别展示，不能把跨行累计值当作端到端等待时间。已有 `/state/task-timings` 继续提供 Task 状态耗时。
+
+`workflow.taskWaits` 从持久状态历史和报告收发边界派生排队、运行、系统等待、人工等待、信息等待及审阅等待，按日对每类区间取并集。旧历史没有 `waitingKind` 时记为 `unknownWait`，不借当前状态猜测历史；报告等待可能与运行状态重叠，不能把这些列当作互斥阶段相加。状态历史没有精确请求/会话/报告关联时，相应筛选返回缺失说明。
+
+`workflow.responses` 只匹配 `replyToMessageId` 精确指向入站消息、且已经保存送达消息 ID 和送达时间的回复；按入站日期归组。`firstReplyMs` 包含确认回执，`firstLabeledSubstantiveReplyMs` 只采用 `replyKind=substantive` 标签，标签不等于人工验证了实质回复内容。未匹配消息返回空值与缺失原因，不记为零耗时。
+
+`coordination.requests` 按请求汇总会话数量、模型输入、未缓存输入及协调消息正文序列化后的字节数；不将字节数折算成 token 或费用。`rows.coordinationQueueMs` 使用 `dingtalk/coordination-dispatched` 中真实入队、分派时刻的差，包含等待轮到本请求及准备会话的时间；重复分派同一消息不重复记录。缺失、倒序时间或请求身份不符单列缺失；旧队列边界没有自动回填。
+
+`observedSince` 和 `coverage=observed-events-only` 标明本投影的观测范围。缺失 usage、首流事件、step 起点或工具配对由缺失计数明确记录；fork seed 和重复投影不计作新模型调用。投影在现有 scheduler 表按会话分区保存，更新某会话不重写其它会话的历史；step 结束清理配对状态并压缩已完成步骤身份，缺失工具结果仍保留计数。精确分位频数、去重范围与每日区间并集随保留历史增长，`retention` 明示这一限制，不作任意条数截断。只持久保存计量元数据，不保存正文或工具参数。首流事件不等于首个可见字，更不等于首次实质回复；人工内容标注、全部外部阶段归因和账单计价仍未完成，不能据此承诺费用或真实业务响应收益。
+
+请求会话通过 `group_message_get` 读取本请求消息及引用链，通过 `group_resource_get` 读取消息明确引用的附件或 URL。任意消息 ID、资源 ID 或 URL 被拒绝；分页须连续读取，身份、版本、格式或完整性不符会明确失败。公网文本读取仅允许无凭据的 HTTPS/443、公网 IPv4 DNS 结果；固定本次连接地址，不跟随重定向，不读取内网或环回地址。资源不支持、缺少读取器、图片不可用或正文未读完整时，不得猜测内容或当作证据齐全。
+
+本轮源码实现及验证状态见[性能优化目标与验收记录](docs/acceptance/performance-flow-optimization/goal.md)。本轮尚未部署；独立 DSH glob 责任包只产出本地补丁，未安装到运行 profile。22条带固定前缀的历史失败搜索已完成对照，8条无固定前缀及4条宽 worktrees 查询仍需准确目录输入。上下文、首次实质回复与费用等真实流量收益仍待部署后独立观测，不能由本地用例通过代替。
+
 ### 叶子任务
 
 Task 可设置独立的简短标题用于看板展示；标题与 objective 分离，重命名不会改变任务授权范围、Goal 或验收标准。运行看板通过 DSH 官方 `sidebar.footer.action` 提供左侧菜单入口，并由 `shell.overlay` 承载右侧完整内容区域；点击运行看板时切换到看板并清除 Session 选中状态，点击任意 Session 时关闭看板、恢复该 Session 的选中状态与对话/轨迹。运行看板复用 Session 的实际选中背景色，不额外显示焦点边框。
@@ -246,11 +262,13 @@ Task 可设置独立的简短标题用于看板展示；标题与 objective 分�
 
 Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存标题、目标、验收标准、执行状态、结果，以及 `topicRefs: [{topicId, revision}]` 和 `inputVersion`；不保存 sourceMessageId、triggerHistory、messageHistory 或群消息正文副本。`group_task_context_get` 返回执行约定与 Topic 引用，原始上下文由 `group_topic_context_get` 按固定 revision 分页读取。只有确实影响任务的新增信息才推进 inputVersion，不向每个关联 Task 广播全部讨论。运行中和等待中的 Task 接纳上下文时继续原轮次；完成或归档 Task 只有被明确重开才开启新轮次。目标发生实质变化时，续接动作必须同时提交概括当前完整目标的新标题；Runtime 原子更新目标和标题，并由 objectiveHistory、titleHistory 与 runHistory 保留旧值。普通信息补充、等待恢复和异常唤醒不修改标题，归档不删除历史。叶子完成自身交付与必要自验证后即可提交 `completed`；原群参与者或其他机器人的后续检查属于 Topic 协作，不阻塞叶子 Task。若信息或人工介入确实阻塞本职交付，等待报告需列出 `blockedItems`（未完成要求、来源消息、必要依赖和原因），经 resident 内部审阅后才能进入 waiting。误把他人职责写入目标时，resident 按原消息修订 Task 目标、验收和阶段，保留已完成证据；外部反馈经正常 Topic 输入处理。历史 `coordination` 结果只读兼容，不再重发检查请求。
 
-内部审阅预算等确定性系统故障会将原报告记为 `failed`，Task 进入 `waitingKind=system` 并释放运行名额；Host 通过可靠 Outbox 对任务相关人说明暂停，不要求叶子反复改稿或用户批准业务动作。同一版本和错误码只生成一个待发通知，恢复前的新报告被拒绝。修复故障后，维护者可对原报告调用 `POST /tasks/<taskId>/reports/<submissionId>/retry`，Runtime 在当前并发容量允许时恢复同一报告审阅；旧版或已完成报告不可重试，已过时的待发故障通知自动失效。
+内部审阅预算等确定性系统故障会将原报告记为 `failed`，Task 进入 `waitingKind=system` 并释放运行名额；Host 通过可靠 Outbox 通知暂停，同一轮次、版本和错误码不重复通知，也不要求叶子反复改稿。恢复入口仍为 `POST /tasks/<taskId>/reports/<submissionId>/retry`。恢复前在 Task 提交锁内只读重建审阅输入，复核报告版本、轮次、当前流程、待处理输入和人工授权；探测失败保持系统等待，不启动叶子或清除故障。通过后在并发容量允许时处理原 submissionId，不能靠创建新报告或会话绕过故障。
+
+派发及重开时，Runtime 从已有报告工件、检查点证据和交接记录提取原生绝对路径，检查当前是否存在，随任务输入提供 goal、验收目录及可确认的仓库/worktree 位置。不会遍历工作区寻找这些位置；无法确认时明确标记 unknown。位置存在不代表旧验收仍有效，也不扩大任务授权。优先在已确认的目录检索，避免重新扫描整个工作区。
 
 消息的 `routingStatus` 表示待归类、已归类或归类失败；Topic 的 `processedRevision` 表示决策及所需动作已可靠落地；Task 的输入下发、输入确认与任务完成另行记录。任何一项均不能替代另一项。运行看板的“话题”页在左侧只展示名称与摘要，右侧分开展示完整标题、话题摘要、待解决问题和关联任务；固定版本消息列表直接展示并支持分页，每条消息所引用的上一条消息默认折叠。群消息状态由 `routingStatus`、Topic revision 与 `processedRevision` 投影为“待归类、话题处理中、已处理、归类失败”，不再把旧 `agentDeliveryStatus` 当成业务处理完成度。Task 卡片上的话题链接打开该任务接纳的版本。Topic 归属仅表示消息延续同一讨论目标，或实质改变该 Topic 的事实、范围、结论或动作；为回答问题查询旧分支、PR 或任务资料不会建立 Topic 归属。多 Topic 路由必须逐项声明关系和理由，并显式指定唯一动作主归属。路由回执最多 1 KiB，决策首屏及 `group_decision_context_get` 单页最多 12 KiB，均按完整 UTF-8 JSON 计费；Topic 历史分页仍按原有 40,000 字符预算读取。`omittedDeltaCount` 非零时，Resident 必须读完固定请求的 `messages` 段；其他标记为必要的来源或归属段也须读完。Host 在必要依据读完前拒绝决策，旧历史未读完不会阻塞本次事项。
 
-常驻群聊主会话负责上下文理解和结构化选路，也需按消息范围读取钉钉文档等资料；其 DSH 权限 preset 为 `danger-full-access`，不暴露 `get_goal`、`create_goal`、`update_goal`，也不注入 Goal 工具说明。完整工具权限不扩大群消息或 Task 的业务授权，Task 动作仍经 Topic 决策和 Runtime 校验。任务授权与“明确交给其他人”的校验按动作引用的事项判断：从固定版本原文读取该事项之前最近的点名，即使称呼列为 ignoredRefs 也保留证据；同一消息中后续改为点名其他人时，不得借用前一事项的授权。`sourceRefs.quote`、`contextRefs.quote` 只引用当前消息中唯一出现的原文；被引用消息作为独立的 `quotedMessage` 背景提供，不填入当前消息的 `contextRefs`。Task 叶子会话由 Runtime 使用 DSH Goal 管理执行、阻塞、恢复与完成，权限 preset 同为 `danger-full-access`，可按 Task objective 和工作区规则使用完整本机能力。DWS 群通知仍只有 Runtime 一个出口；叶子不得绕过结构化结果链路直接向来源群发送消息。
+每个协调 requestId 使用独立的路由、决策或审阅 Session；同一请求的多步读取与有限重试复用该会话，终态释放运行句柄并保留原生日志。Host 继续拥有 Topic、Task、授权、版本和 Outbox 的唯一提交权。工具调用检查当前 groupId、requestId、角色及请求状态，旧会话不能提交新请求或跨群动作。常驻群主会话保留管理用途和原配置权限；请求会话只开放本角色的读取及结构化提交工具，不暴露工程写工具或 Goal 工具。完整工具权限不扩大群消息或 Task 的业务授权，Task 动作仍经 Topic 决策和 Runtime 校验。任务授权与“明确交给其他人”的校验按动作引用的事项判断：从固定版本原文读取该事项之前最近的点名，即使称呼列为 ignoredRefs 也保留证据；同一消息中后续改为点名其他人时，不得借用前一事项的授权。`sourceRefs.quote`、`contextRefs.quote` 只引用当前消息中唯一出现的原文；被引用消息作为独立的 `quotedMessage` 背景提供，不填入当前消息的 `contextRefs`。Task 叶子会话由 Runtime 使用 DSH Goal 管理执行、阻塞、恢复与完成，权限 preset 同为 `danger-full-access`，可按 Task objective 和工作区规则使用完整本机能力。DWS 群通知仍只有 Runtime 一个出口；叶子不得绕过结构化结果链路直接向来源群发送消息。
 
 主会话向运行中或等待中的叶子传递任务上下文、目标修订、真人批复、恢复提示和结果驳回时统一使用 DSH `steer`，在叶子的下一个 step 边界插入，不使用 `followup` 排队到下一 Turn。
 

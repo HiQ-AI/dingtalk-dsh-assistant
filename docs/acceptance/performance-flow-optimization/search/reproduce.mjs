@@ -1,0 +1,17 @@
+import {createHash} from 'node:crypto';
+const pathDigest=p=>({count:p.length,sha256:createHash('sha256').update(JSON.stringify(p)).digest('hex')});
+import fs from 'node:fs';
+import path from 'node:path';
+import {parseArgs} from 'node:util';
+import {spawn} from 'node:child_process';
+const {values}=parseArgs({options:{diagnostics:{type:'string'},cwd:{type:'string'},rg:{type:'string'},out:{type:'string'}}});
+if(!values.diagnostics||!values.cwd||!values.rg){console.error('Usage: node reproduce.mjs --diagnostics <private-json> --cwd <recorded-session-cwd> --rg <rg-binary> [--out <summary-json>]');process.exit(2);}
+const cwd=path.resolve(values.cwd),rgPath=path.resolve(values.rg);
+const calls=JSON.parse(fs.readFileSync(values.diagnostics)).searchCalls.filter(c=>c.name==='glob'&&c.error);
+const metadata=pattern=>{let depth=0;for(const part of pattern.split('/').slice(0,-1)){if(!part||/[\*?\[\]{}!]/.test(part))break;depth++;}return{patternSha256:createHash('sha256').update(pattern).digest('hex'),fixedPrefixDepth:depth,classification:depth?'fixed-prefix':'no-fixed-directory-prefix'};};
+const publicValue=(key,value)=>key==='paths'&&Array.isArray(value)?pathDigest(value):key==='stderr'?{bytes:Buffer.byteLength(value),sha256:createHash('sha256').update(value).digest('hex')}:value;
+const excludes=['.git','.svn','.hg','.bzr','.jj','.sl'].flatMap(n=>[`--glob=!**/${n}`,`--glob=!**/${n}/**`]);
+async function run(pattern,root,sort=true,timeout=32000){const start=performance.now();return await new Promise(resolve=>{const p=spawn(rgPath,['--no-config','--files',`--glob=${pattern}`,...sort?['--sort=modified']:[],'--no-ignore','--hidden',...excludes,'--',root],{windowsHide:true,cwd});let out='',err='',timedOut=false; const t=setTimeout(()=>{timedOut=true;p.kill();},timeout);p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.on('close',code=>{clearTimeout(t);resolve({ms:Math.round(performance.now()-start),code,timedOut,paths:out.trim().split(/\r?\n/).filter(Boolean).map(p=>path.resolve(cwd,p).toLowerCase()).sort(),stderr:err.slice(0,300)});});});}
+function narrow(args){const segments=args.pattern.split('/');let n=0;while(n<segments.length-1&&!/[\*?\[\]{}!]/.test(segments[n]))n++;return {root:path.join(args.path,...segments.slice(0,n)),pattern:args.pattern};}
+const results=[];
+for(let i=0;i<calls.length;i++){const c=calls[i],n=narrow(c.args);if(n.root===c.args.path){results.push({index:i,...metadata(c.args.pattern),historicalMs:c.ms});continue;}const scoped=await run(n.pattern,n.root,true,3000);const native=await run(n.pattern,n.root,false,3000);const original=[1,3,12].includes(i)?await run(c.args.pattern,c.args.path):null;results.push({index:i,...metadata(c.args.pattern),historicalMs:c.ms,scoped,native,equalScopedNative:JSON.stringify(scoped.paths)===JSON.stringify(native.paths),original,equalOriginal:original&&!original.timedOut?JSON.stringify(original.paths)===JSON.stringify(scoped.paths):null});console.log(JSON.stringify({index:i,scopedMs:scoped.ms,count:scoped.paths.length,equalScopedNative:results.at(-1).equalScopedNative,originalMs:original?.ms,originalTimeout:original?.timedOut}));fs.writeFileSync(values.out??new URL('./results.json',import.meta.url),JSON.stringify({engine:'packaged-ripgrep',privacy:'case identities and path-set digests only',semantics:'--no-ignore --hidden and six VCS directory exclusions; file paths only',results},publicValue,2));}

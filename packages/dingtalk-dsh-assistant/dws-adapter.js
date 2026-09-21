@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { readFile, unlink } from 'node:fs/promises'
+import { readFile, unlink, realpath, stat, mkdtemp, rm } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import path from 'node:path'
 
@@ -78,8 +78,9 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     compileSendStatus(openTaskId) {
       return withProfile(['chat', '+messages-query-send-status', '--open-task-id', assertStableId(openTaskId, 'open_task_id'), '--format', 'json'])
     },
-    compileMessageResourceDownload({ groupId, messageId, resourceId }) {
-      return withProfile(['chat', '+messages-resource-download', '--type', 'mediaId', '--resource-id', assertStableId(resourceId, 'resource_id'), '--message-id', assertStableId(messageId, 'message_id'), '--open-conversation-id', assertStableId(groupId, 'group_id'), '--format', 'json'])
+    compileMessageResourceDownload({ groupId, messageId, resourceId, type = 'mediaId' }) {
+      if (!['mediaId', 'fileId'].includes(type)) throw new Error('dws_resource_type_invalid')
+      return withProfile(['chat', '+messages-resource-download', '--type', type, '--resource-id', assertStableId(resourceId, 'resource_id'), '--message-id', assertStableId(messageId, 'message_id'), '--open-conversation-id', assertStableId(groupId, 'group_id'), '--format', 'json'])
     },
     compileConversationRead(conversationId, { start, end }) {
       return withProfile(['chat', '+chat-messages', '--group', assertStableId(conversationId, 'conversation_id'), '--start', assertStableId(start, 'start'), '--end', assertStableId(end, 'end'), '--order', 'asc', '--page-all', '--format', 'json'])
@@ -91,6 +92,18 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       const args = ['chat', '+messages-recall', '--msg-id', assertStableId(messageId, 'message_id'), '--format', 'json']
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
+    },
+    async readMessage(groupId, messageId) {
+      requireEnabled()
+      const result = await runner.run(withProfile(['chat', '+messages-mget', '--msg-ids', assertStableId(messageId, 'message_id'), '--format', 'json']))
+      if (result.exitCode !== 0) throw commandError('dws_read_failed', result)
+      const value = parseJson(result.stdout, 'messages-mget')
+      if (value.complete !== true || value.hasMore === true || value.failedCount !== 0 || !Array.isArray(value.failures) || value.failures.length
+        || value.foundCount !== 1 || !Array.isArray(value.notFoundMessageIds) || value.notFoundMessageIds.length
+        || !Array.isArray(value.messages) || value.messages.length !== 1) throw new Error('dws_message_read_incomplete')
+      const message = value.messages[0]
+      if (message.messageId !== messageId || message.conversationId !== groupId) throw new Error('dws_message_identity_mismatch')
+      return message
     },
     async readGroup(groupId) {
       requireEnabled()
@@ -176,6 +189,31 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       const result = await runner.run(this.compileMessageRecall(messageId))
       if (result.exitCode !== 0) throw commandError('dws_recall_failed', result)
       return parseJson(result.stdout, 'recall')
+    },
+    async readMessageResource(groupId, messageId, resource) {
+      requireEnabled()
+      const downloadRoot = await mkdtemp(path.join(runner.cwd, 'coordination-resource-'))
+      try {
+      const args = this.compileMessageResourceDownload({ groupId, messageId, resourceId: resource.resourceId, type: resource.type })
+      const result = await runner.run([...args, '--output', path.relative(runner.cwd, downloadRoot)])
+      if (result.exitCode !== 0) throw commandError('dws_resource_read_failed', result)
+      const receipt = parseJson(result.stdout, 'resource-download')
+      if (receipt.complete === false || receipt.hasMore === true || receipt.failures?.length || typeof receipt.localPath !== 'string' || !receipt.localPath) throw new Error('dws_resource_read_incomplete')
+      const root = await realpath(downloadRoot)
+      const localPath = await realpath(path.resolve(runner.cwd, receipt.localPath))
+      const relative = path.relative(root, localPath)
+      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('dws_resource_path_outside_workspace')
+      try {
+        const info = await stat(localPath)
+        if (!info.isFile() || info.size === 0 || info.size > 8 * 1024 * 1024 || receipt.sizeBytes !== undefined && receipt.sizeBytes !== info.size) throw new Error('dws_resource_size_invalid')
+        const data = new Uint8Array(await readFile(localPath))
+        const extension = path.extname(localPath).toLowerCase()
+        const imageTypes = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }
+        if (imageTypes[extension]) return { image: { data, mediaType: imageTypes[extension], name: path.basename(localPath) } }
+        if (!['.txt', '.md', '.json', '.csv', '.tsv', '.xml', '.html', '.log'].includes(extension)) throw new Error('coordination_resource_format_unsupported')
+        return { text: new TextDecoder('utf-8', { fatal: true }).decode(data), mediaType: 'text/plain' }
+      } finally { await unlink(localPath) }
+      } finally { await rm(downloadRoot, { recursive: true, force: true }) }
     },
     async loadMessageImages({ groupId, messageId, resourceRefs = [] }) {
       requireEnabled()

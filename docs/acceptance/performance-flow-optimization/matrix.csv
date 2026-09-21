@@ -1,0 +1,29 @@
+case,round,status,reason,evidence
+BASELINE,1,PASS,原基线全量473通过,baseline.log
+RUNTIME-INTEGRATION,2,FAIL,首次请求会话改造集成出现多条失败；保留原输出,runtime-integration.log
+RUNTIME-INTEGRATION,3,FAIL,第二次集成仍有未收敛断言,runtime-integration-2.log
+RUNTIME-INTEGRATION,4,FAIL,第三次集成仍有历史归属及来源断言失败,runtime-integration-3.log
+RUNTIME-INTEGRATION,5,PASS,第4次集成132通过；不代表最终全量或真实组合通过,runtime-integration-4.log
+SG1-RECOVERY,5,PASS,当前runtime测试覆盖系统等待与恢复；最终全量仍待,runtime-integration-4.log; test/runtime.test.js
+SG2-PERFORMANCE,5,PENDING,源码/测试已有；最终计量测试输出由主代理补录,test/performance.test.js; test/performance-runtime.test.js
+SG3-ROUTING-REPLAY,5,PENDING,紧凑目录已实现；81条人工真值和完整回放未完成,../../spec/plugin-performance-flow-plan.md
+SG4-VALIDATION,5,PENDING,结构问题集合已实现；最终专项/全量输出待填写,test/topic-runtime.test.js
+SG5-LOCATIONS,5,PASS,原生绝对位置验证/未知/历史来源测试通过且包含于132项回归,runtime-integration-4.log
+SG5-GLOB-PREFIX,5,PASS,22条112–662ms；集合摘要等于限定相同范围rg；外部源码本地提交,search/pruning-results.json; search/report.md
+SG5-GLOB-WIDE,5,FAIL,4条宽worktrees按32秒限仍超时；8条无固定前缀未适用优化,search/pruning-long-results.json; search/report.md
+SG6-NATIVE,5,PENDING,原生Session/工具限制/资源完整性组合验证由主代理继续,packages/dingtalk-dsh-assistant/coordination-sessions.js; test/coordination-resources.test.js
+FINAL-FULL,5,PENDING,当前改动最终全量测试及必要静态/构建证据待填,goal.md
+REAL-TRAFFIC,5,PENDING,未部署；实质回复标注/上下文与冷缓存对照尚未验证,README.md; goal.md
+PR-DELIVERY,5,PENDING,尚未创建回读PR；不得用本地提交代替远端交付,goal.md
+FINAL-FULL,6,FAIL,510项508通过2失败；见反例说明,round-6.md; round-6-tests.log
+FINAL-FULL,7,PASS,511项全通过；随后继续补原生反例,round-7.md; round-7-tests.log
+FINAL-FULL,8,PASS,514项全通过；包含6个原生生命周期用例,round-8.md; round-8-tests.log
+SG1-RECOVERY,8,PASS,版本授权预算等待的拒绝与恢复闭环,round-8-tests.log
+SG2-PERFORMANCE,8,PASS,缓存分项排队等待响应关联分区持久化与缺失明确,round-8-tests.log
+SG3-CONTEXT,8,PASS,分页正文关联Task所有Topic及材料可见性反例,round-8-tests.log
+SG4-VALIDATION,8,PASS,多字段多动作一次问题集合及零副作用,round-8-tests.log
+SG6-NATIVE,8,PASS,原生工具结果落稳角色限制消息回填与创建中路由优先,round-8-tests.log
+PACK-READBACK,8,PASS,三包本地打包与独立长度SHA256清单,round-7/package-readback.json
+FINAL-FULL,9,PASS,冻结代码514项全通过；目录预算实验调整后再验,round-9-tests.log
+PACK-READBACK,9,PASS,冻结代码重新打三包并核对清单SHA,round-9-pack.log; round-7/package-readback.json
+SG3-FIXED-PROJECTION,9,PASS,91批覆盖81消息；同快照完整输入P50降65.89%且正文目录关联不丢,round-7/route-projection-summary.json; round-7/route-projection-notes.md

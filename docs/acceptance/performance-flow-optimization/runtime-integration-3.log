@@ -1,0 +1,309 @@
+✔ Resident 完整提示词保留群职责与动态别名，不叠加登录人特殊禁令 (33.4442ms)
+✔ 内部审阅预算故障由 Host 暂停并一次通知，叶子重复提交不能耗尽轮次 (184.6924ms)
+✔ 系统等待恢复先只读构造原报告，预算仍超限时不解除等待或建立模型会话 (46.2179ms)
+▶ 系统等待恢复拒绝旧输入、待授权和未归类撤销消息，失败不产生报告重试事件
+  ✔ stale (34.2565ms)
+  ✔ authorization (32.6756ms)
+  ✔ pending-input (28.0378ms)
+✔ 系统等待恢复拒绝旧输入、待授权和未归类撤销消息，失败不产生报告重试事件 (96.7903ms)
+✔ 活动投影从 DSH 工具结果关联真实工具名与错误位 (49.0588ms)
+✔ 活动落盘失败暂停后续投影，故障消失按原事件顺序补齐并清除当前告警 (376.8735ms)
+✔ 活动故障跨 Runtime 重启从 Session 原事件补投影 (341.8823ms)
+✔ 已完成任务重启后从持久 Session 审计并补齐遗漏活动 (34.3695ms)
+✔ 历史已完成任务的 Session 不存在时审计收束为不可回填，不反复报当前写盘故障 (27.0556ms)
+✔ 已完成任务的持久 Session 读取故障仍保留重试和当前告警 (37.5682ms)
+✔ 关联状态追问走同模型无工具短路径，事实未变才写入统一 Outbox (64.8475ms)
+✔ 短路径识别执行请求后交还常驻，不创建动作或发送推测回复 (60.2301ms)
+✔ 短答生成期间 Task 事实变化，原子提交拒绝旧快照并交还常驻 (61.4838ms)
+▶ 短答期间关联任务集合或群职责改变，拒绝按旧集合和旧准入发言
+  ✔ association (155.3223ms)
+  ✔ responsibility (93.1617ms)
+✔ 短答期间关联任务集合或群职责改变，拒绝按旧集合和旧准入发言 (249.9194ms)
+✔ 纯工具心跳不使只含业务事实的短答失效，短答不携带活动投影 (115.7081ms)
+✔ 别名修复请求创建任务，后续无称呼的图片补充续接同一叶子 (54.127ms)
+✔ 入站持久接收立即返回，模型尚未提交时也能接收后续消息 (5.4208ms)
+✔ 重复入站幂等，Topic 提交成功后只生成一条可靠回复 (20.1316ms)
+✔ 普通 assistant 文本或 turn 结束不能替代 Topic 结构化提交 (29.252ms)
+✔ 注册工具符合 DSH JSON Schema，Resident 只能通过 Topic 决策建任务 (7.1601ms)
+✔ 来源附件先持久保存，归类输入可恢复相同 imageRefs (27.3549ms)
+✔ 附件缺失硬拦截任务，仍发送明确缺失反馈 (32.9914ms)
+✔ 多群请求隔离，A 等待归类不阻止 B 完成 (29.4673ms)
+✔ Task 只保存固定 Topic 引用，叶子收到版本化原始上下文 (50.8111ms)
+✔ 任务关联摘要不复制原文，按需读取返回 Topic refs 与执行约定 (48.0635ms)
+✔ 任务并发容量满时 FIFO 排队，取消释放名额并保留取消事实 (91.4662ms)
+✔ Outbox 已落盘时监听器失败不会回滚已接受 Topic 决策 (27.6361ms)
+✖ 历史导入只发送 Topic 索引，不重放历史消息正文或指令 (34.8984ms)
+✔ 恢复失败保留原 Resident Session，其他群仍能工作 (39.0386ms)
+✔ 新群主会话具有完整工具权限，Topic 工具仍不能访问其他 Session (3.8505ms)
+✔ 工作区切换保留事件历史并重建 Resident，旧 Session 释放 (10.4342ms)
+✔ 存在活动 Task 时拒绝工作区或模型切换，不修改已保存配置 (41.9244ms)
+✔ 模型与推理深度使用原生配置服务保存 (4.1717ms)
+✔ 叶子会话提示词通过统一配置字段保存和读取 (5.0406ms)
+✔ 内置通用规范不依赖用户补充，动态清空及恢复后仍只注入叶子 (49.7963ms)
+✔ 叶子只常驻流程索引，按需加载后直接动态注入当前正文 (52.9299ms)
+✔ 长任务可组合超过五个流程，重复加载去重，恢复后保留组合并按阶段裁减 (65.4412ms)
+✔ 流程加载与组合调整排队期间目标变化时拒绝迟到写入 (34.9652ms)
+✔ 流程修订后旧选择失效，拒绝叶子用旧流程完成任务 (46.7622ms)
+✔ 计划绑定已选流程，主会话读完同一流程正文后才可审阅 (106.4659ms)
+✔ 主会话可拒绝自行扩写的冲突计划，叶子重新规划前不能推进 (69.3947ms)
+✔ 流程修订只使引用任务的旧计划失效，未引用任务不接收更新 (153.6316ms)
+✔ 任务目标变化保留流程引用供重审，并拒绝未加载流程 (56.8167ms)
+▶ 流程修改、禁用和删除后未重新加载也不能推进旧阶段
+  ✔ modify (99.9408ms)
+  ✔ disable (94.8283ms)
+  ✔ delete (123.2658ms)
+✔ 流程修改、禁用和删除后未重新加载也不能推进旧阶段 (321.0319ms)
+✖ 待审计划遇流程改版会失效并归档，重新加载后可重新规划 (54.544ms)
+✔ 首次异常可报告但不能改变进度，随后可制定计划并正常完成 (202.5053ms)
+✖ 异常可抢占待审计划，旧审阅不得回写或阻止新计划 (3079.8286ms)
+✔ 被拒计划仍能报告证据缺口，诊断确认不解除计划拒绝 (91.3536ms)
+✔ 完成审阅发起即记录事件，拒绝与失败也保留耗时起点 (103.9245ms)
+✔ 完成审阅期间流程更新保持 Task 与 Goal 活动并记录失败 (73.486ms)
+✔ 审阅通过后最后落盘前流程改变，不能完成任务或发送通知 (78.5031ms)
+✔ 重启恢复过期待审计划时归档失败项，新计划不再被 pending 卡住 (71.2079ms)
+✔ 完成审阅通过后的并发暂停不能被完成 CAS 覆盖 (99.5908ms)
+✔ 退订存储失败时保留 Resident，修复后可再次退订 (6.6368ms)
+✔ 关闭后拒绝新消息，关闭两次只释放每个 Session 一次 (3.802ms)
+✔ 报告先持久接收并停等，Topic 决策事件解除等待而无需再次提交或巡检 (108.925ms)
+✔ 坏阶段决策在持久化前拒绝，同一请求纠正后恢复报告与正常阶段推进 (133.187ms)
+✔ 历史坏决策重启后退回重判，原报告不跳过且纠正后恢复同一Task (158.3082ms)
+✖ 报告审阅耗尽保持同身份停等，显式重试重置原请求后恢复推进 (3051.6433ms)
+✖ 完成审阅耗尽后出现人工阻塞，协调恢复只重放原报告并收口 waiting Task (3084.2061ms)
+✔ 旧运行任务恢复时从已批准计划补齐阶段索引，原检查点不改写且只补一次 (68.3451ms)
+✔ 叶子结果与检查点拒绝缺失或过期 inputVersion/runSequence (48.9369ms)
+✔ 检查点逐项推进并由结构化内部审阅确认，不能跳项完成 (136.7024ms)
+✔ 首阶段等待时可独立核验后续阶段，跨序提交必须交主会话审阅 (81.1003ms)
+✔ 完成验收拒绝后保持 running 并向叶子发送具体纠偏 (111.251ms)
+✔ 一次完成审阅同时准备通知，完成落盘后直接入 Outbox 且 FIFO 下个任务启动 (164.0771ms)
+✔ 通知已入 Outbox 后执行事件写入失败不会重复发起通知协调 (105.8935ms)
+✔ 尚未归类的新消息阻止叶子提交等待或完成结果 (36.1205ms)
+✔ Web 创建按 requestId 幂等，原始输入只落 Topic，参数变更不能复用身份 (11.7793ms)
+✔ Web 补充提升输入版本并重置当前检查点，同请求重试不重复补充 (56.6976ms)
+✔ 目标修订原子更新任务名称并保留旧名称，普通补充不得单独改名 (47.2861ms)
+✔ 目标变化缺少新任务名称时拒绝续接 (36.8813ms)
+✔ preserve 新输入作废待审 checkpoint，并按新版本重新审阅 (70.4494ms)
+✔ 授权变化即使阶段名称不变也撤销旧阶段批准 (56.8661ms)
+✔ 相同待审计划的重复提交与Supervisor恢复共用一次审阅和拒绝注入 (58.9ms)
+✔ 旧执行轮次的 idle 回收不释放已重开的叶子 (118.8339ms)
+✔ 人工批准与排队启动竞争时不突破并发上限 (180.7746ms)
+✔ Web 重开完成任务建立新轮次，固定保留旧输入版本与历史 (51.911ms)
+✔ 完成任务按新目标重开时同步更新名称并在轮次历史保留旧名称 (44.7873ms)
+✔ 叶子 Topic 读取仅允许已接纳版本，拒绝未来版本及其他话题 (62.4995ms)
+✔ 同一消息并发补齐身份与附件不会丢失任一事实 (8.3458ms)
+✔ 人工授权重发、引用校验、批准幂等及已批准范围复用 (100.598ms)
+✔ Goal 耗尽转真实 waiting，正常 turn 结束只记录活动不完成 Task (67.9741ms)
+✔ 叶子异常暂停最多重建两次，继续失败升级为人工阻塞 (40.1065ms)
+✔ running 叶子 idle 时由 Runtime 继续，底层 unavailable 时重建同一 Task (49.6138ms)
+✔ Resident 恢复超时由原生 AbortSignal 隔离，不阻止下一群恢复 (27.4487ms)
+✔ 恢复清理旧协议与旧 Topic 请求 Inbox，但保留普通待办 (5.14ms)
+✔ 重启恢复 Running 叶子沿用 Goal 与已接纳输入，并重新注入已选流程正文 (42.4423ms)
+✔ 关闭等待已接受的可靠 Outbox 写入，期间新消息被拒绝 (32.5657ms)
+✔ 替换确认先送达新消息，随后精确撤回旧消息且重复恢复幂等 (72.9535ms)
+✔ 未回读的旧确认停止重发，不阻塞替换，未观察到仍保持送达未知 (84.3711ms)
+✔ 链式替换先送达最终通知，部分撤回失败不阻塞其他目标且永久拒绝不重试 (10.2912ms)
+✔ 撤回瞬态异常有限重试，持久次数达到上限后不再调用渠道 (6.3125ms)
+✔ 撤回成功后持久写失败不能伪报成功，恢复永久拒绝后保留人工核验状态 (4.5785ms)
+✔ 真实Store与Bridge在监听和启动补偿并发、回执落盘崩溃及两次重启下不重发旧消息 (124.525ms)
+✔ 等待通知在同版本 resume 清除 result 后失效，不发送旧问题 (62.5552ms)
+✔ 信息等待只在原通知确认送达后有限跟进，重复巡检不补发 (79.0328ms)
+✔ 信息等待同时通知反馈人与发起人，并引用反馈消息 (121.211ms)
+✔ 信息等待通知投递失败产生告警，送达后解除 (84.8454ms)
+✔ 历史已送达询问只按指定任务补一次暂停更正，送达前不启动催促 (43.6046ms)
+✔ 已完成自身工作的叶子不能以外部独立检查提交等待 (39.8731ms)
+✔ 把他人后续检查误列为本职阶段时，内部修订范围并保留已完成证据 (111.5571ms)
+✔ 等待审阅认为仍可自行继续时保持 Task 运行且不发阻塞通知 (66.7762ms)
+✔ 历史 coordination 等待结果可重启读取，但通知补偿不会重发旧检查 (53.0087ms)
+✔ 同版本重新 waiting 新问题不能被旧问题的通知快照覆盖 (98.7971ms)
+✔ 等待结果原子落盘遇新输入，报告保留且 Goal 停等 (64.0547ms)
+✔ 完成审阅通过后原子落盘遇新输入，不能提前 complete Goal (99.9213ms)
+✔ 通知 Outbox 首次失败后相同请求重试使用稳定结果键且只落一次 (127.2877ms)
+✖ 慢叶子创建期间同群其他 Topic 仍可完成 (11014.4161ms)
+✔ 排队叶子启动中取消立即落盘，迟到的 Session 创建不能复活任务 (124.3344ms)
+✔ 缺少稳定发送人 ID 不伪造引用，缓冲回复监听异常不损失已存意图 (37.0332ms)
+✔ DWS 恢复关闭同群 carrier 告警且不误清其他异常 (37.0243ms)
+✔ 通知补发同批跳过退订群、隔离损坏 Resident，正常群仍独立完成 (37.6546ms)
+✖ 工作区屏障内到达的历史导入与通知等待新 Resident，导入先前事件进入新 seed (45.1074ms)
+✖ 切换工作区等待已经开始的结果通知，通知落盘前不释放旧 Resident (31.5589ms)
+✔ 退订屏障之后的历史导入拒绝旧 Resident，等待期间其他群仍可提交 (33.5572ms)
+✔ 关闭与进行中工作区切换串行收口，旧和替换 Resident 均释放一次 (26.8288ms)
+✖ 同 Topic 一次决策不能重复改变同一 Task，共享主 Topic 可取消两个不同 Task 各一次 (3096.8487ms)
+✖ 已执行来源改归属不会重新授予效果权限，新授权消息可以创建新任务 (91.7221ms)
+✔ 工作区切换等待期间不占任务提交队列，提交前复核新出现的活动任务 (21.6845ms)
+✔ 关闭拒绝尚未提交的结果通知且不悬挂 (23.5122ms)
+✔ 关闭等待已开始提交的结果通知 Outbox，不能提前关闭存储 (32.5079ms)
+✔ 相同引用 ID 下的不同事项不自动撤回，只有显式 replacement 才能产生撤回意图 (66.4614ms)
+✔ 任务工作位置仅验证已有工件，保留历史来源并排除不存在及远程定位 (59.0776ms)
+ℹ tests 132
+ℹ suites 0
+ℹ pass 122
+ℹ fail 10
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 32781.0125
+
+✖ failing tests:
+
+test at test\runtime.test.js:591:1
+✖ 历史导入只发送 Topic 索引，不重放历史消息正文或指令 (34.8984ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /历史 Topic 索引/. Input:
+
+  '[GROUP_TOPIC_DECISION]\n' +
+    'Topic 请求：{"requestId":"coord-decision-d0daba2ac59227da43a7f25b720a41d50b5f7eb236ea492b02245b9987db5d7c","topicId":"topic-644b5cfe3a3ab3fe19e4197d1858ec77","revision":1,"processedRevision":0,"title":"a","summaryRevision":0,"replyReviewCandidateCount":0,"totalMessages":1,"historyAvailable":false,"ownedDeltaUnitRefs":[{"unitId":"unit-d9026eedb966d330a3ef3d4b07fcd36b","unitRevision":1}],"ownedDeltaMessageIds":["a"],"messages":[{"unitId":"unit-d9026eedb966d330a3ef3d4b07fcd36b","unitRevision":1,"messageId":"a","messageVersion":1,"text":"@助理 a","unitSummary":"@助理 a","sourceRanges":[{"start":0,"end":5}],"contextRanges":[],"senderName":"甲","senderOpenDingTalkId":"od-a","sourceKind":"dingtalk","sourceAttachments":[],"predecessorUnitRefs":[],"effectOwnerTopicId":"topic-644b5cfe3a3ab3fe19e4197d1858ec77"}],"quotedMessages":[],"sourceMessages":[],"summary":"","openQuestions":[],"removedUnitRefs":[],"removedMessageIds":[],"omittedDeltaCount":0}\n' +
+    '按此 Topic 固定版本处理本次事项增量。仅本 Topic 拥有的当前事项可创建或更新 Task；每个 action 携带各自 basisUnitRefs。同一消息拆出多个事项时，new-task 必须提供 dispatchAssessment，分别写明业务对象、当前 Agent 交付、他人后续事项、来源 Unit 和适用流程 ID/版本及选择原因；不得把其他事项或他人验收写入当前目标。单事项任务也应按此核对。提交前用 group_decision_context_get 读完 messages 及其他必要 section 指针。需要历史时再用 group_topic_context_get 查询。'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:597:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '[GROUP_TOPIC_DECISION]\nTopic 请求：{"requestId":"coord-decision-d0daba2ac59227da43a7f25b720a41d50b5f7eb236ea492b02245b9987db5d7c","topicId":"topic-644b5cfe3a3ab3fe19e4197d1858ec77","revision":1,"processedRevision":0,"title":"a","summaryRevision":0,"replyReviewCandidateCount":0,"totalMessages":1,"historyAvailable":false,"ownedDeltaUnitRefs":[{"unitId":"unit-d9026eedb966d330a3ef3d4b07fcd36b","unitRevision":1}],"ownedDeltaMessageIds":["a"],"messages":[{"unitId":"unit-d9026eedb966d330a3ef3d4b07fcd36b","unitRevision":1,"messageId":"a","messageVersion":1,"text":"@助理 a","unitSummary":"@助理 a","sourceRanges":[{"start":0,"end":5}],"contextRanges":[],"senderName":"甲","senderOpenDingTalkId":"od-a","sourceKind":"dingtalk","sourceAttachments":[],"predecessorUnitRefs":[],"effectOwnerTopicId":"topic-644b5cfe3a3ab3fe19e4197d1858ec77"}],"quotedMessages":[],"sourceMessages":[],"summary":"","openQuestions":[],"removedUnitRefs":[],"removedMessageIds":[],"omittedDeltaCount":0}\n按此 Topic 固定版本处理本次事项增量。仅本 Topic 拥有的当前事项可创建或更新 Task；每个 action 携带各自 basisUnitRefs。同一消息拆出多个事项时，new-task 必须提供 dispatchAssessment，分别写明业务对象、当前 Agent 交付、他人后续事项、来源 Unit 和适用流程 ID/版本及选择原因；不得把其他事项或他人验收写入当前目标。单事项任务也应按此核对。提交前用 group_decision_context_get 读完 messages 及其他必要 section 指针。需要历史时再用 group_topic_context_get 查询。',
+    expected: /历史 Topic 索引/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:840:1
+✖ 待审计划遇流程改版会失效并归档，重新加载后可重新规划 (54.544ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /task_review_request_unknown/. Input:
+
+  'Error: coordination_tool_wrong_request'
+
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:850:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: coordination_tool_wrong_request
+        at Object.assert (file:///D:/project/dingtalk-dsh-assistant-performance-flow/packages/dingtalk-dsh-assistant/coordination-sessions.js:42:82)
+        at assertResidentToolSession (file:///D:/project/dingtalk-dsh-assistant-performance-flow/packages/dingtalk-dsh-assistant/runtime.js:453:42)
+        at Object.execute (file:///D:/project/dingtalk-dsh-assistant-performance-flow/packages/dingtalk-dsh-assistant/topic-runtime.js:664:7)
+        at h.call (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:97:48)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:850:3)
+        at async Test.run (node:internal/test_runner/test:1389:7)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:960:7),
+    expected: /task_review_request_unknown/,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:865:1
+✖ 异常可抢占待审计划，旧审阅不得回写或阻止新计划 (3079.8286ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /task_review_request_unknown/. Input:
+
+  'AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立'
+
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:872:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+        at until (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:35:10)
+        at async h.call (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:95:20)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:872:3)
+        at async Test.run (node:internal/test_runner/test:1389:7)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:960:7),
+    expected: /task_review_request_unknown/,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1093:1
+✖ 报告审阅耗尽保持同身份停等，显式重试重置原请求后恢复推进 (3051.6433ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:35:10)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:1099:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1114:1
+✖ 完成审阅耗尽后出现人工阻塞，协调恢复只重放原报告并收口 waiting Task (3084.2061ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:35:10)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:1122:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:2006:1
+✖ 慢叶子创建期间同群其他 Topic 仍可完成 (11014.4161ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:35:10)
+      at async route (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:136:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:2012:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:2103:1
+✖ 工作区屏障内到达的历史导入与通知等待新 Resident，导入先前事件进入新 seed (45.1074ms)
+  TypeError: Cannot read properties of undefined (reading 'some')
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:2126:38)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test\runtime.test.js:2133:1
+✖ 切换工作区等待已经开始的结果通知，通知落盘前不释放旧 Resident (31.5589ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:2142:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:2186:1
+✖ 同 Topic 一次决策不能重复改变同一 Task，共享主 Topic 可取消两个不同 Task 各一次 (3096.8487ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:35:10)
+      at async h.call (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:95:20)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:2191:18)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:2219:1
+✖ 已执行来源改归属不会重新授予效果权限，新授权消息可以创建新任务 (91.7221ms)
+  TypeError: Cannot read properties of undefined (reading 'topicId')
+      at file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:2227:40
+      at Array.find (<anonymous>)
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:2227:6)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

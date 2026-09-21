@@ -1,0 +1,62 @@
+[
+  {
+    "name": "dingtalk-dsh-assistant-0.5.15.tgz",
+    "bytes": 30484,
+    "sha256": "FD1CB44DAEF4DCC45A8597D41CE615577E302DA2E92CE351886B9D9CEE874847",
+    "entries": [
+      "package/index.js",
+      "package/package.json",
+      "package/CHANGELOG.md",
+      "package/README.md",
+      "package/cordis.patch.yml"
+    ]
+  },
+  {
+    "name": "zzusp-dingtalk-dsh-assistant-0.5.15.tgz",
+    "bytes": 177530,
+    "sha256": "FCE2AB68B29FE090220607C22386B4DA25C50084858300B3FF17053BA78215D0",
+    "entries": [
+      "package/client.js",
+      "package/coordination-context.js",
+      "package/coordination-resources.js",
+      "package/coordination-sessions.js",
+      "package/decision.js",
+      "package/dws-adapter.js",
+      "package/dws-bridge.js",
+      "package/dws-runner.js",
+      "package/environment.js",
+      "package/fake-llm.js",
+      "package/http.js",
+      "package/index.js",
+      "package/performance.js",
+      "package/resident.js",
+      "package/runtime.js",
+      "package/status-query.js",
+      "package/store.js",
+      "package/task-input-revision.js",
+      "package/task-progress.js",
+      "package/task-report-step-gate.js",
+      "package/task-reports.js",
+      "package/task-result.js",
+      "package/task-sheet-sync.js",
+      "package/tool-schema.js",
+      "package/topic-model.js",
+      "package/topic-runtime.js",
+      "package/version-check.js",
+      "package/web-client.js",
+      "package/package.json",
+      "package/cordis.patch.yml"
+    ]
+  },
+  {
+    "name": "zzusp-dingtalk-dsh-observer-0.5.15.tgz",
+    "bytes": 19929,
+    "sha256": "A46FFE2E28F41E09D3558EC94C614B2D60630B6F6F25F5669F2B31A9B1EDFA55",
+    "entries": [
+      "package/index.js",
+      "package/web-client.js",
+      "package/package.json",
+      "package/cordis.patch.yml"
+    ]
+  }
+]

@@ -135,13 +135,15 @@ export function validateTaskDispatchAssessment(action, { requiresAssessment = fa
     if (requiresAssessment) throw new Error('task_dispatch_assessment_required')
     return
   }
+  const issues = []
   const key = ({ unitId, unitRevision }) => `${unitId}:${unitRevision}`
   const basis = new Set((action.basisUnitRefs ?? []).map(key))
   const declared = assessment.sourceUnitRefs.map(key)
-  if (new Set(declared).size !== declared.length || declared.length !== basis.size || declared.some((ref) => !basis.has(ref))) throw new Error('task_dispatch_source_units_invalid')
+  if (new Set(declared).size !== declared.length || declared.length !== basis.size || declared.some((ref) => !basis.has(ref))) issues.push({ field: 'dispatchAssessment.sourceUnitRefs', code: 'task_dispatch_source_units_invalid', message: 'task_dispatch_source_units_invalid' })
   const prompts = new Map(currentPrompts.filter((item) => item.enabled).map((item) => [item.id, item.revision]))
   const ids = assessment.workflowRefs.map((ref) => ref.id)
-  if (new Set(ids).size !== ids.length || assessment.workflowRefs.some((ref) => prompts.get(ref.id) !== ref.revision)) throw new Error('task_dispatch_workflow_refs_invalid')
+  if (new Set(ids).size !== ids.length || assessment.workflowRefs.some((ref) => prompts.get(ref.id) !== ref.revision)) issues.push({ field: 'dispatchAssessment.workflowRefs', code: 'task_dispatch_workflow_refs_invalid', message: 'task_dispatch_workflow_refs_invalid', currentPrompts: [...prompts].map(([id, revision]) => ({ id, revision })) })
+  if (issues.length) { const error = new Error(issues[0].message); error.issues = issues; throw error }
 }
 
 const compactText = (value, limit = 800) => {
@@ -286,4 +288,62 @@ export function blockTaskDecisionForUnavailableMedia(decision, mediaUnavailable)
   const unavailable = Array.isArray(mediaUnavailable) ? mediaUnavailable.map((item) => String(item).trim()).filter(Boolean) : []
   if (unavailable.length === 0 || !decision.actions.some((action) => ['new-task', 'task-context', 'task-reopen'].includes(action.kind))) return decision
   return { basisMessageIds: decision.basisMessageIds, basisUnitRefs: decision.basisUnitRefs, actions: [], reply: `我没能获取到以下任务信息：${unavailable.join('；')}。请重新发送可访问的内容，信息补齐后我再开始处理。`, ...(decision.replyReview ? { replyReview: decision.replyReview } : {}) }
+}
+
+// 仅查询固定输入与当前事实，聚合可独立判定的问题；任何 issue 都阻止提交。
+export function collectDecisionIssues(request, decision, { store, delta, ownership, unitKey, unitDirection }) {
+  const issues = []
+  let field = 'decision'
+  const addIssue = (field, code) => issues.push({ field, code, message: code })
+  const targets = decision.actions.map((action) => action.taskId).filter(Boolean)
+  if (new Set(targets).size !== targets.length) addIssue(field, 'topic_decision_task_target_duplicate')
+  const basis = new Set(decision.basisUnitRefs.map(unitKey))
+  if (basis.size !== decision.basisUnitRefs.length || decision.basisUnitRefs.some((ref) => !request.messages.some((message) => unitKey(message) === unitKey(ref)) && !request.removedUnitRefs.some((removed) => unitKey(removed) === unitKey(ref)))) addIssue(field, 'topic_decision_basis_invalid')
+  if (![...basis].some((id) => delta.has(id))) addIssue(field, 'topic_decision_current_basis_required')
+  if (decision.actions.length || decision.replyReview?.kind === 'confirmation') {
+    const currentOwnership = ownership
+    const owned = new Set(currentOwnership.ownedDeltaUnitRefs.map(unitKey))
+    if (![...basis].some((id) => owned.has(id))) addIssue(field, 'topic_effect_owner_required')
+  }
+  for (const [actionIndex, action] of decision.actions.entries()) {
+    field = `decision.actions.${actionIndex}`
+    if (action.basisUnitRefs.some((ref) => !basis.has(unitKey(ref)))) addIssue(field, 'task_unit_basis_invalid')
+    const actionBasis = new Set(action.basisUnitRefs.map(unitKey))
+    const actionMessages = request.messages.filter((message) => actionBasis.has(unitKey(message)))
+    const currentOwnership = ownership
+    const owned = new Set(currentOwnership.ownedDeltaUnitRefs.map(unitKey))
+    if (!action.basisUnitRefs.some((ref) => owned.has(unitKey(ref)))) addIssue(field, 'topic_effect_owner_required')
+    if (!action.topicRefs.some((ref) => ref.topicId === request.topicId && ref.revision === request.revision)) addIssue(field, 'task_current_topic_required')
+    if (new Set(action.topicRefs.map((ref) => ref.topicId)).size !== action.topicRefs.length) addIssue(field, 'task_topic_duplicate')
+    for (const ref of action.topicRefs) {
+      const current = store.getTopic(request.groupId, ref.topicId)
+      if (!current || current.revision !== ref.revision) issues.push({ field, code: 'task_topic_version_invalid', message: 'task_topic_version_invalid', submitted: ref, current: current ? { topicId: current.topicId, revision: current.revision } : null })
+    }
+    if (action.taskId) {
+      const task = store.getTask(action.taskId)
+      if (!task || task.groupId !== request.groupId) addIssue(field, 'task_topic_wrong_group')
+      if (action.kind === 'task-reopen' && task?.state !== 'completed') addIssue(field, 'task_not_completed')
+      if (['task-context', 'task-cancel'].includes(action.kind) && task?.state === 'completed') addIssue(field, 'task_not_active')
+    }
+    if (decision.actions.length) {
+      const directedAway = actionMessages.filter((message) => unitDirection(message, request.messages.filter((item) => item.messageId === message.messageId), store.getAgentNames()) === 'other')
+      for (const other of directedAway) if (!actionMessages.some((message) => message.quotedMessage?.messageId === other.messageId && unitDirection(message, request.messages.filter((item) => item.messageId === message.messageId), store.getAgentNames()) === 'agent')) addIssue(field, 'task_action_directed_to_other_participants')
+    }
+    if (action.kind === 'new-task') {
+      const group = store.getGroup(request.groupId)
+      const multiUnitSource = actionMessages.some((message) => (group.messages.find((item) => item.messageId === message.messageId)?.activeUnitRefs?.length ?? 0) > 1)
+      try { validateTaskDispatchAssessment(action, { requiresAssessment: multiUnitSource, currentPrompts: store.getTaskPrompts?.() ?? [] }) }
+      catch (error) { for (const issue of error.issues ?? [{ field: 'dispatchAssessment', code: error.message, message: error.message }]) issues.push({ ...issue, field: field + '.' + issue.field }) }
+      if (!group.responsibility?.trim()) addIssue(field, 'task_group_responsibility_required')
+      const directed = actionMessages.some((message) => unitDirection(message, request.messages.filter((item) => item.messageId === message.messageId), store.getAgentNames()) === 'agent')
+      const confirmsProposal = actionMessages.some((message) => {
+        if (!message.quotedMessage?.messageId) return false
+        const outbound = group.outbox.find((item) => item.deliveredMessageId === message.quotedMessage.messageId && item.status === 'sent')
+        if (!outbound?.decisionId) return false
+        return group.topics.some((topic) => topic.decisions.some((record) => record.decisionId === outbound.decisionId && record.decision.actions.some((candidate) => candidate.kind === 'task-proposal' && candidate.topicRefs.some((ref) => ref.topicId === request.topicId))))
+      })
+      if (!directed && !confirmsProposal) addIssue(field, 'task_explicit_authorization_required')
+    }
+  }
+  return issues
 }

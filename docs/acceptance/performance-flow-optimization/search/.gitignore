@@ -1,0 +1,4 @@
+# 由 verify-semantics.mjs 生成，仅用于本地复现。
+fixtures/
+# 初步匹配语义探针；正式断言由 verify-semantics.mjs 提供。
+probe.mjs

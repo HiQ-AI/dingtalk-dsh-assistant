@@ -66,3 +66,18 @@ Topic 决策输出预算版本在安装前须完成工具协议与长历史回�
 UAT2 角色菜单组任务 `task-ecf5a0c74b07381abba1330a4ebb4551` 的计划检查点曾因 `topic_context_budget_exceeded` 循环拒绝。切换前先只读回读当前状态、备份并对稳定存储运行 `scripts/check-resident-storage.mjs --check`；切换后确认 `topic-runtime.js` 哈希为本次源码，再检查该任务是否产生新的计划审阅、已确认阶段或明确终态。仅修复分页预算不等于业务菜单配置完成；不得手工写入检查点或任务完成状态。停机前若还有其它运行中任务，要分别判断是否可安全中断。
 
 本轮系统故障分类修复需验证：固定审阅预算错误落为 `failed`，Task 进入 `waitingKind=system`，原 `submissionId` 和已确认阶段保留；同错误的新提交不会反复排队。核查 `task-system:<taskId>:<runSequence>:<inputVersion>:<code>` Outbox 只有一条；只有确认当前修复包已经装入且任务仍为同一版本时，才通过原报告的 retry API 重试。retry 会占用一个运行名额；其它 Task 占满并发时应等待空位。故障通知已 sent 时回读 deliveredMessageId，pending 且任务已恢复时必须 superseded。旧二进制的 Task Schema 不认识 `waitingKind=system`，写入这种状态后不得直接降级到旧包继续运行。
+
+
+## 请求会话与性能优化的切换核验
+
+本节是后续受控部署的核验步骤；本轮仅交付源码、测试与补丁，尚未执行安装、重启或真实群业务重放。沿用本文既有备份、精确版本安装、独立读回与回滚步骤，不直接修改 node_modules、存储 JSON 或配置来制造通过状态。
+
+1. 切换前保存当前正式包版本、安装文件摘要、活跃 Task 和 pending coordinationRequests 的数量及身份摘要。读取原失败报告的 inputVersion、runSequence、submissionId，确认是否仍为 system waiting。不得批量恢复历史任务或重新发消息。
+2. 新版本启动后，检查每个请求使用独立的 route/decision/review 会话，身份与原持久请求相符；同请求重试复用会话，终态句柄释放、原生日志保留。跨群、跨请求、旧角色或过期版本提交应被拒绝。重启不能重复执行已持久接纳的业务写入。
+3. 协调会话读取外部资料必须经消息/资源读取工具。确认工具只接受当前消息和引用链内的身份；附件缺失、分页未读完、不支持格式或 URL 不满足公网 HTTPS 限制时明确失败。不要为了恢复旧 pwsh 行为而给协调角色开放工程写工具。
+4. 对原报告调用 retry 前，核对修复包已实际装入、当前版本和授权仍有效。Runtime 先在锁内只读准备原审阅上下文；预算、流程或待处理输入检查失败，Task 应继续 system waiting，不能唤醒叶子。成功后仅恢复原 submissionId；容量已满时等待，通知过期时应 superseded，已投递通知仍独立核验 deliveredMessageId。
+5. 新叶子输入应携带任务工件中已存在的准确工作位置，或明确 unknown。核对一个有 goal/验收目录的已知任务和一个缺位置任务；验证存在性不得被当成授权或历史证据仍有效。
+6. 使用既有已鉴权入口只读请求 `/state/performance`，先记录 `observedSince`、coverage 和缺失计数，再按日/请求/任务筛选；同时读 `/state/task-timings`。不要导出凭据、正文或完整资源内容。分开比较累计资源时间、区间并集、未缓存和缓存输入；保留观测窗口、样本数量和业务复杂度差异。
+7. 用新的真实输入观察首次实质回复、处理时长、上下文和有效阶段推进；不得重放历史业务动作获取样本。此前81条消息的人工路由真值、首次实质回复标注及冷缓存成本对照尚未完成，达到性能目标需独立证据。
+
+DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码仓本地提交，见本轮 [搜索记录](../acceptance/performance-flow-optimization/search/report.md)。它不随本插件自动安装；未取得可追溯的正式责任包前不能声称生产 glob 已修复。8条无固定前缀和4条宽 worktrees 搜索仍未解决，不得用增大 timeout 或改写结果集掩盖。当前 Domain 仍为8，新增观测投影可选；降级前必须验证旧版本读取是否保留新增字段，不能让旧 Schema 静默丢失计量状态。
