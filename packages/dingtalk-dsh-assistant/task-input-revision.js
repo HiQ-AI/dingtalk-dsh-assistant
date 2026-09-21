@@ -39,17 +39,15 @@ export function reviseTaskProgress(task, { objective = task.objective, acceptanc
   }
   if (progressImpact === 'replan' && !scopeChanged && !affectedStageIds?.length) throw new TaskRevisionError('task_revision_impact_required')
   const replan = scopeChanged || progressImpact === 'replan' || Boolean(impactEvidence)
-  let firstAffected = stages.length
+  const nextStages = stagePlanFor(task, stageTasks ?? [])
+  const affected = new Set(affectedStageIds ?? [])
   if (replan) {
-    // 明确的证据可限定目标/验收变化的影响；结构化阶段差异始终独立检查，不能被声明掩盖。
-    firstAffected = !impactEvidence && (objective !== task.objective || !same(acceptanceCriteria, task.acceptanceCriteria)) ? 0 : stages.length
-    const changedStage = stages.findIndex((stage, i) => stageTasks[i] !== stage.title)
-    if (changedStage >= 0) firstAffected = Math.min(firstAffected, changedStage)
-    if (firstAffected < 0) firstAffected = stages.length
-    for (const id of affectedStageIds ?? []) firstAffected = Math.min(firstAffected, stages.findIndex(stage => stage.stageId === id))
+    if (!impactEvidence && (objective !== task.objective || !same(acceptanceCriteria, task.acceptanceCriteria))) for (const stage of stages) affected.add(stage.stageId)
+    const nextIds = new Set(nextStages.map(stage => stage.stageId))
+    for (const stage of stages) if (!nextIds.has(stage.stageId)) affected.add(stage.stageId)
   }
-  const retainedTitles = new Set(stages.slice(0, firstAffected).map(stage => stage.title))
-  const retainedIds = new Set(stages.slice(0, firstAffected).map(stage => stage.stageId))
+  const retainedIds = new Set(stages.filter(stage => !affected.has(stage.stageId)).map(stage => stage.stageId))
+  const retainedTitles = new Set(stages.filter(stage => retainedIds.has(stage.stageId)).map(stage => stage.title))
   const checkpoints = (task.checkpoints ?? []).filter(checkpoint => ['acknowledge', 'guidance'].includes(checkpoint.coordinatorDecision)
     && checkpoint.runSequence === task.runSequence && (!replan || checkpoint.kind === 'stage-completed'
       && checkpoint.completedItems?.length > 0 && (!checkpoint.stageId || retainedIds.has(checkpoint.stageId))
@@ -59,7 +57,7 @@ export function reviseTaskProgress(task, { objective = task.objective, acceptanc
     scopeChanged, progressImpact: replan ? 'replan' : 'preserve', checkpoints,
     invalidatedCheckpoints: (task.checkpoints ?? []).filter(checkpoint => !checkpoints.includes(checkpoint)),
     reason: impactEvidence?.reason ?? (scopeChanged ? '目标、验收或阶段有明确变化。' : '补充输入，未改变目标、验收或已确认事实。'),
-    affectedStageIds: replan ? stages.slice(firstAffected).map(stage => stage.stageId) : [],
-    stagePlan: stagePlanFor(task, stageTasks ?? []),
+    affectedStageIds: replan ? stages.filter(stage => affected.has(stage.stageId)).map(stage => stage.stageId) : [],
+    stagePlan: nextStages,
   }
 }

@@ -222,6 +222,11 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/cancel'.length))
     return submitWebTask(request, response, store, 'cancelTask', taskId)
   }
+  if (request.method === 'POST' && /^\/tasks\/[^/]+\/information-wait-notice$/u.test(url.pathname)) {
+    const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/information-wait-notice'.length))
+    try { return send(response, 202, await store.reconcileInformationWaitNotice({ taskId })) }
+    catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
   if (request.method === 'POST' && url.pathname.startsWith('/config/groups/') && url.pathname.endsWith('/history/hydrate')) {
     const groupId = decodeURIComponent(url.pathname.slice('/config/groups/'.length, -'/history/hydrate'.length))
     return send(response, 200, await store.hydrateGroupHistory({ groupId }))

@@ -6,10 +6,10 @@
 
 1. 跑本轮回归和 `node scripts/build-web-client.mjs`，确认生成文件与源码一致。
 2. 读取 `%USERPROFILE%/.dsh/profiles/web/package.json`，保存 Assistant/Observer 两个依赖的原值用于回退；对 profile patch 和任务流程配置计算摘要，不记录凭据或消息正文。
-   本次协调修复还需对确认过的 `dingtalk_dsh_assistant` v7 JSON 文件做只读预检。先在脱敏副本验证，也可直接读取原文件；脚本不会打开 Domain 写入接口，不改原文件，不输出正文、记录 ID、凭据或源路径：
+   本次协调修复还需对确认过的当前 `dingtalk_dsh_assistant` v8 JSON 文件做只读预检。先在脱敏副本验证，也可直接读取原文件；脚本不会打开 Domain 写入接口，不改原文件，不输出正文、记录 ID、凭据或源路径：
 
 ```powershell
-node scripts/check-resident-storage.mjs --check --source '<已确认的v7存储文件或副本绝对路径>'
+node scripts/check-resident-storage.mjs --check --source '<已确认的v8存储文件或副本绝对路径>'
 ```
 
    必须退出码为 0 且 `ok: true`；输出各表数量、扩展字段数量、校验错误代码计数及 `strippedFields`。`strippedFields > 0` 表示当前 Schema 会丢字段，不能忽略后继续切换。运行中存储可能变化；停止已核实的实例、排空写入后，先把完整存储备份到仓库外受保护目录并记录 SHA256，再对稳定原文件重跑预检。备份包含业务消息和授权内容，禁止提交 Git。脚本只验证当前 Schema 可读且不剥离已有字段，不替代 Topic 引用和业务完成证据验收。
@@ -49,3 +49,12 @@ Topic 决策输出预算版本在安装前须完成工具协议与长历史回�
 **不能仅换回旧二进制并继续写原存储。** 旧 Schema 可能在更新 Task/Group 时剥离这些新字段，造成通知恢复、水位或审阅状态丢失。曾写入新状态后，应先停止写入，保留当前完整文件和安装前备份；优先前向修复。确需降级时，先在隔离副本证明目标版本不会丢新字段、不会重放外部动作，再允许恢复写入；未证明之前保持停机或只读查看，不启动旧版可写实例。
 
 不得直接恢复安装前快照覆盖切换后新产生的审批、通知或外部动作记录。回退包本身仍走原生插件安装并独立核对依赖和文件摘要，但包回退不等于存储已安全回退。若新旧存储不能无损转换，保留现态完成前向修复。
+
+## 信息等待与阶段进度修复验收
+
+安装前只读核对运行任务与等待任务，运行中 Task 不得被重启中断。使用隔离 Store 验证旧记录保留、跨序已审阅阶段登记、等待通知送达前不提醒、30 分钟与 2 小时有限跟进、恢复后旧 pending 通知失效。安装后只读回读 /state/tasks 和 /state/groups 中当前等待及 Outbox，群通知必须凭 deliveredMessageId 与 DWS 原消息独立确认；旧等待已有 sent 记录时不重发原询问。当前 method-select Task 只按受管版本化补充恢复已取证阶段，循环次数仍缺真实会话证据时保持未验证。
+
+
+历史已发送旧式询问不会在启动时批量补发或自动催促。仅对核对过的当前信息等待 Task，可调用 POST /tasks/<taskId>/information-wait-notice 一次性登记明确暂停的更正通知；先独立确认旧询问的 deliveredMessageId、任务仍 waiting 且结果未变化。接口返回 enqueued 只表示 Outbox 落盘，随后必须读回新消息 deliveredMessageId 和 DWS 原消息；重复调用只复用同一稳定键。当前案例为 task-7e10fc01558bb150f5224affeb5196e4，勿对其他历史任务批量调用。
+
+UAT2 角色菜单组任务 `task-ecf5a0c74b07381abba1330a4ebb4551` 的计划检查点曾因 `topic_context_budget_exceeded` 循环拒绝。切换前先只读回读当前状态、备份并对稳定存储运行 `scripts/check-resident-storage.mjs --check`；切换后确认 `topic-runtime.js` 哈希为本次源码，再检查该任务是否产生新的计划审阅、已确认阶段或明确终态。仅修复分页预算不等于业务菜单配置完成；不得手工写入检查点或任务完成状态。停机前若还有其它运行中任务，要分别判断是否可安全中断。

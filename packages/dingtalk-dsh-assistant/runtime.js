@@ -500,14 +500,14 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       }
     }
   }
-  async function appendReliableOutbox({ groupId, sourceMessageId, outboundId, topicRefs, decisionId, resultFingerprint, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, replyKind, taskIds, replacesOutboundIds = [], onPersisted, preflight }) {
+  async function appendReliableOutbox({ groupId, sourceMessageId, outboundId, topicRefs, decisionId, resultFingerprint, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, replyKind, taskIds, taskInputVersion, taskRunSequence, matterSourceMessageIds, matterUnitRefs, replacesOutboundIds = [], onPersisted, preflight }) {
     const before = store.getGroup(groupId)
     if (before === undefined) throw new Error(`group_not_subscribed:${groupId}`)
     const existing = before.outbox.find((item) => item.sourceMessageId === sourceMessageId)
     if (existing !== undefined) { onPersisted?.(); return before }
     const rejected = preflight?.(before)
     if (rejected) return rejected
-    const group = await store.appendOutbox({ groupId, sourceMessageId, outboundId, topicRefs, decisionId, resultFingerprint, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, replyKind, taskIds, replacesOutboundIds, preflight })
+    const group = await store.appendOutbox({ groupId, sourceMessageId, outboundId, topicRefs, decisionId, resultFingerprint, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, replyKind, taskIds, taskInputVersion, taskRunSequence, matterSourceMessageIds, matterUnitRefs, replacesOutboundIds, preflight })
     if (group?.status) return group
     const outbound = group.outbox.find((item) => item.sourceMessageId === sourceMessageId)
     if (outbound === undefined) throw new Error(`outbox_append_missing:${groupId}:${sourceMessageId}`)
@@ -576,13 +576,42 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
   }
 
   function taskResultOutboxKey(task, result) {
-    const prior = store.getGroup(task.groupId)?.outbox.find((outbound) => outbound.taskIds?.includes(task.taskId) && outbound.resultFingerprint === fingerprint(result))
+    const prior = store.getGroup(task.groupId)?.outbox.find((outbound) => outbound.taskIds?.includes(task.taskId) && outbound.resultFingerprint === fingerprint(result) && !/:(?:followup:\d+|correction)$/.test(outbound.sourceMessageId))
     if (prior) return prior.sourceMessageId
     if (result.status === 'completed') {
       const completionSequence = task.completionSequence ?? 0
       return `task-result:${task.taskId}:completed${completionSequence > 0 ? `:${completionSequence}` : ''}`
     }
     return `task-result:${task.taskId}:waiting:${task.runSequence}:${task.inputVersion}:${createHash('sha256').update(JSON.stringify(result)).digest('hex').slice(0, 16)}`
+  }
+  function informationWaitOutbound(task, result, followup = 0) {
+    const resultKey = taskResultOutboxKey(task, result)
+    const sourceMessageId = followup < 0 ? `${resultKey}:correction` : followup ? `${resultKey}:followup:${followup}` : resultKey
+    const messages = topics.taskMessages(task).filter(message => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
+    const blockedIds = new Set(result.blockedItems?.flatMap(item => item.basisMessageIds) ?? [])
+    const target = [...messages].reverse().find(message => blockedIds.has(message.messageId)) ?? messages.at(-1)
+    const atOpenDingTalkIds = [...new Set([target?.senderOpenDingTalkId, task.requesterOpenDingTalkId].filter(Boolean))]
+      .filter(id => messages.some(message => message.senderOpenDingTalkId === id))
+    const retained = new Set(task.executionEvents?.findLast(event => event.kind === 'input-revised' && event.inputVersion === task.inputVersion)?.retainedCheckpointIds ?? [])
+    const done = (task.checkpoints ?? []).filter(item => item.kind === 'stage-completed' && ['acknowledge', 'guidance'].includes(item.coordinatorDecision)
+      && item.runSequence === task.runSequence && (item.inputVersion === task.inputVersion || retained.has(item.checkpointId))).map(item => item.stageTask)
+    const remaining = (task.stageTasks ?? []).filter(title => !done.includes(title))
+    const text = followup <= 0
+      ? `任务“${task.title ?? task.objective}”已暂停，等待必要信息。已完成：${done.join('、') || '尚无已验收阶段'}。未完成：${remaining.join('、') || '待核对'}。原因：${result.waitingReason}\n请补充：${result.questions.join('；')}\n收到有效资料后继续执行；任务发起人可在看板查看等待状态。`
+      : followup === 1 ? `任务“${task.title ?? task.objective}”仍在等待补充，尚未恢复。请提供：${result.questions.join('；')}`
+        : `任务“${task.title ?? task.objective}”等待必要资料已超过 2 小时，请任务发起人协助跟进。缺口：${result.waitingReason}`
+    return { groupId: task.groupId, sourceMessageId, outboundId: stableId('outbound', sourceMessageId), topicRefs: task.topicRefs,
+      resultFingerprint: fingerprint(result), text, taskIds: [task.taskId], taskInputVersion: task.inputVersion, taskRunSequence: task.runSequence,
+      replyKind: 'substantive', ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds } : {}) }
+  }
+  async function coordinateInformationWait(task, result, followup = 0) {
+    const outbound = informationWaitOutbound(task, result, followup)
+    const preflight = () => {
+      const current = store.getTask(task.taskId)
+      return current?.state === 'waiting' && current.waitingKind === 'information' && current.inputVersion === task.inputVersion
+        && current.runSequence === task.runSequence && JSON.stringify(current.result) === JSON.stringify(result) ? undefined : { status: 'task-stale' }
+    }
+    return appendReliableOutbox({ ...outbound, preflight })
   }
 
   async function coordinateTaskResultInternal(task, result) {
@@ -634,7 +663,8 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       let review
       try {
         review = checkpoint.kind === 'stage-completed' && checkpoint.needsCoordinatorDecision === false && checkpoint.evidence.length > 0
-          ? { decision: 'acknowledge', reason: 'Host 已校验阶段顺序、执行版本和非空证据。' }
+          && checkpoint.stageTask === (task.checkpoints?.findLast(item => item.coordinatorDecision)?.remainingItems ?? [])[0]
+          ? { decision: 'acknowledge', reason: 'Host 已校验阶段身份、执行版本和非空证据。' }
           : await withoutInitiator(() => reviewTaskCheckpoint(task, checkpoint))
         await persistCheckpointReview(task, checkpoint, review)
       } catch (error) {
@@ -758,7 +788,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         throw new Error(`task_waiting_not_required:${taskId}:${review.decision}:${review.reason}`)
       }
       const waiting = await serializeTasks(() => submitTaskResultInternal(taskId, result))
-      if (result.waitingKind === 'information') void withoutInitiator(() => coordinateTaskResult(waiting, result)).catch((error) => recoveryIssues.push({ groupId: waiting.groupId, taskId, kind: 'task-notification', error: error.message }))
+      if (result.waitingKind === 'information') void withoutInitiator(() => coordinateInformationWait(waiting, result)).catch((error) => recoveryIssues.push({ groupId: waiting.groupId, taskId, kind: 'task-notification', error: error.message }))
       return waiting
     }
     const prepared = await serializeTasks(async () => {
@@ -899,10 +929,11 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (diagnostic && checkpoint.completedItems.length) throw new Error(`task_checkpoint_progress_requires_stage_completed:${taskId}`)
       if (checkpoint.kind === 'stage-completed') {
         if (!task.checkpoints?.at(-1)?.coordinatorDecision) throw new Error(`task_checkpoint_review_pending:${taskId}`)
-        const completesCurrentItem = checkpoint.completedItems.length === 1 && checkpoint.completedItems[0] === previousRemainingItems[0]
-        if (checkpoint.stageTask !== previousRemainingItems[0] || (checkpoint.stageId && checkpoint.stageId !== task.stagePlan?.find(stage => stage.title === previousRemainingItems[0])?.stageId)) throw new Error(`task_checkpoint_stage_invalid:${taskId}`)
-        const keepsRemainingOrder = checkpoint.remainingItems.length === Math.max(0, previousRemainingItems.length - 1) && checkpoint.remainingItems.every((item, index) => item === previousRemainingItems[index + 1])
-        if (!completesCurrentItem || !keepsRemainingOrder) throw new Error(`task_checkpoint_must_advance_one:${taskId}:${previousRemainingItems[0] ?? 'none'}`)
+        const target = task.stagePlan?.find(stage => stage.title === checkpoint.stageTask)
+        if (!target || checkpoint.stageId && checkpoint.stageId !== target.stageId || !previousRemainingItems.includes(checkpoint.stageTask)) throw new Error(`task_checkpoint_stage_invalid:${taskId}`)
+        const remaining = previousRemainingItems.filter(item => item !== checkpoint.stageTask)
+        if (checkpoint.completedItems.length !== 1 || checkpoint.completedItems[0] !== checkpoint.stageTask
+          || checkpoint.remainingItems.length !== remaining.length || checkpoint.remainingItems.some((item, index) => item !== remaining[index])) throw new Error(`task_checkpoint_must_advance_one:${taskId}:${checkpoint.stageTask}`)
       } else if (checkpoint.kind !== 'plan-confirmed' && (checkpoint.remainingItems.length !== previousRemainingItems.length || checkpoint.remainingItems.some((item, index) => item !== previousRemainingItems[index]))) {
         throw new Error(`task_checkpoint_progress_requires_stage_completed:${taskId}`)
       }
@@ -1025,7 +1056,7 @@ Task objective 限制的是业务动作范围，包括业务代码、业务数�
 
 ### 与主会话的内部检查点
 
-开始执行后把当前目标拆成至少 1 个有验收意义的检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed。计划必须携带 workflowAssessment：精确列出当前已选流程引用、可复用证据、不适用步骤，以及任何覆盖流程要求的例外；例外必须引用明确提出该要求的原始 basisMessageIds，主会话生成的目标、验收标准或旧摘要不能充当例外依据。若当前目标与流程冲突且原始消息没有明确例外，提交 scope-conflict 或修正计划，不能按扩写目标继续执行。后续按 remainingItems 顺序逐项提交 stage-completed，每次 completedItems 只填本次完成的第一项，不累计历史；阶段提交被拒绝时先纠正并取得确认，再进入下一阶段。Host 会自动校验普通阶段的版本、顺序和非空证据，需要协调判断时再交给主会话。收到新版 TASK_TOPIC_CONTEXT 后，按其中的 progressImpact 处理：preserve 表示保留未受影响的既有进展，replan 表示按修订范围重提计划。范围冲突、证据缺口或风险实质变化时提交对应 checkpoint；即使尚无计划、计划被拒或流程失效也可上报。异常报告 completedItems 必须为空，remainingItems 保持最近已确认进度；若抢占待审计划，原待审项归档且必须重新规划。完成前 remainingItems 必须为空。不要提交命令流水、等待或无新事实的状态；checkpoint 不发送群聊，也不代替 submit_task_result。
+开始执行后把当前目标拆成至少 1 个有验收意义的检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed。计划必须携带 workflowAssessment：精确列出当前已选流程引用、可复用证据、不适用步骤，以及任何覆盖流程要求的例外；例外必须引用明确提出该要求的原始 basisMessageIds，主会话生成的目标、验收标准或旧摘要不能充当例外依据。若当前目标与流程冲突且原始消息没有明确例外，提交 scope-conflict 或修正计划，不能按扩写目标继续执行。后续对有独立证据的阶段逐项提交 stage-completed，每次 completedItems 只填本次完成的一个阶段，remainingItems 按原计划顺序移除该阶段；跨序完成必须交主会话审阅独立性，不得绕过业务前置条件。阶段提交被拒绝时先纠正并取得确认。Host 校验阶段身份、执行版本和非空证据。收到新版 TASK_TOPIC_CONTEXT 后，按其中的 progressImpact 处理：preserve 表示保留未受影响的既有进展，replan 表示按修订范围重提计划。范围冲突、证据缺口或风险实质变化时提交对应 checkpoint；即使尚无计划、计划被拒或流程失效也可上报。异常报告 completedItems 必须为空，remainingItems 保持最近已确认进度；若抢占待审计划，原待审项归档且必须重新规划。完成前 remainingItems 必须为空。不要提交命令流水、等待或无新事实的状态；checkpoint 不发送群聊，也不代替 submit_task_result。
 
 ### 任务授权边界
 
@@ -1087,7 +1118,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
 ### 阻塞规则
 
 除以下两类情况外，不得暂停或阻塞 Goal，也不得提交 waiting：
-1. \`waitingKind=information\`：只有 Task 相关参与人才能补充的目标、完成条件或必要业务信息不明确；必须说明本 Agent 尚未完成的工作及其必要依赖 blockedItems，并提供具体 questions，Runtime 将由主会话根据完整消息时间线选择实际询问对象。
+1. \`waitingKind=information\`：只有 Task 相关参与人才能补充的目标、完成条件或必要业务信息不明确；必须说明本 Agent 尚未完成的工作及其必要依赖 blockedItems，每项尽量带当前 stageId、已尝试取证入口 attemptedSources 和来源消息；先登记可独立完成的阶段，再提供具体 questions。Runtime 将在真实等待落盘后向相关反馈人与任务发起人发送明确的暂停通知。
 2. \`waitingKind=human-intervention\`：必须说明本 Agent 尚未完成的工作及其必要依赖 blockedItems；已经取得证据且自身无法解决的操作红线、网络中断、磁盘不足、资源不足、意外事件或必须真人确认的处置方案；必须提供 blockerCategory、risk、evidence、attemptedActions 和 requestedAction。risk 单独说明执行该操作可能造成的具体影响；操作红线使用 blockerCategory=redline，并把完整操作范围和不在授权内的事项写入 requestedAction；Runtime 只发送这一条人工介入消息。
 
 他人或其他机器人在你完成后进行的独立检查不是等待条件；完成自身工作后提交 completed，后续反馈由 resident 按正常 Topic 消息处理。代码错误、命令失败、可重试波动、普通不确定性、实现困难或正在正常运行但耗时较长的外部流水线，应继续诊断或监控，不得伪装成人工阻塞。不要直接使用 Goal 工具标记 blocked；合法等待统一通过 submit_task_result 交给 Host。Goal 执行轮数耗尽时 Host 会停止自动续接并形成可见的异常介入事项。`,
@@ -1670,6 +1701,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       inspectRunningTasks().catch(() => undefined)
       recoverDecisionMessages().catch(() => undefined)
       runtimeApi?.reconcileCompletedNotifications().catch(() => undefined)
+      runtimeApi?.reconcileInformationWaitFollowups().catch((error) => recoveryIssues.push({ kind: 'information-wait-followup', error: error.message }))
       pumpTasks().catch((error) => recoveryIssues.push({ kind: 'task-pump', error: error.message }))
     }, supervisorIntervalMs)
     supervisorTimer.unref?.()
@@ -1710,6 +1742,8 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       if (current.taskIds?.length === 1 && current.taskInputVersion && current.taskRunSequence) {
         const task = store.getTask(current.taskIds[0])
         if (!task || task.inputVersion !== current.taskInputVersion || task.runSequence !== current.taskRunSequence) return { status: 'superseded' }
+        if (current.sourceMessageId.startsWith(`task-result:${task.taskId}:waiting:`)
+          && (task.state !== 'waiting' || task.waitingKind !== 'information' || fingerprint(task.result) !== current.resultFingerprint)) return { status: 'superseded' }
       }
       return current
     },
@@ -1760,7 +1794,20 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
         return { accepted, duplicates, enriched, total: messages.length, group: store.getGroup(groupId) }
       })
     },
-    acknowledge: store.acknowledge, recordOutboundDeliveryAttempt: store.recordOutboundDeliveryAttempt, reportCarrierIssue: store.recordAlert,
+    acknowledge: async (args) => {
+      const group = await store.acknowledge(args)
+      const outbound = group.outbox.find(item => item.outboundId === args.outboundId)
+      if (outbound?.sourceMessageId.includes(':waiting:')) for (const taskId of outbound.taskIds ?? []) await store.resolveAlerts?.({ taskId, fingerprintPrefix: `information-wait-delivery:${outbound.sourceMessageId}` })
+      return group
+    },
+    recordOutboundDeliveryAttempt: async (args) => {
+      const group = await store.recordOutboundDeliveryAttempt(args)
+      const outbound = group.outbox.find(item => item.outboundId === args.outboundId)
+      if (outbound?.deliveryBlockedAt && outbound.sourceMessageId.includes(':waiting:')) for (const taskId of outbound.taskIds ?? []) {
+        await store.recordAlert({ taskId, fingerprint: `information-wait-delivery:${outbound.sourceMessageId}`, detail: outbound.deliveryError ?? '等待通知投递被阻断' })
+      }
+      return group
+    }, reportCarrierIssue: store.recordAlert,
     resolveGroupCarrierIssues: async ({ groupId }) => {
       const tasks = store.listTasks().filter((task) => task.groupId === groupId)
       for (const task of tasks) await store.resolveAlerts?.({ taskId: task.taskId, fingerprintPrefix: 'dws-consumer-' })
@@ -1826,7 +1873,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const repaired = [], failures = []
       await Promise.all(pending.map(async (item) => {
         try {
-          await coordinateTaskResult(item.task, item.task.result)
+          await (item.task.state === 'waiting' ? coordinateInformationWait(item.task, item.task.result) : coordinateTaskResult(item.task, item.task.result))
           recoveryIssues.resolve((issue) => issue.taskId === item.task.taskId && ['task-notification', 'task-notification-fallback', 'task-notification-reconcile'].includes(issue.kind))
           repaired.push({ taskId: item.task.taskId, sourceMessageId: item.resultKey })
         } catch (error) {
@@ -1846,6 +1893,37 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       }))
       if (failures.length > 0) throw new AggregateError(failures, `task_notification_reconcile_failed:${failures.map((error) => error instanceof Error ? error.message : String(error)).join('|')}`)
       return repaired
+    },
+    reconcileInformationWaitFollowups: async ({ now = Date.now() } = {}) => {
+      const due = []
+      for (const task of store.listTasks().filter(item => item.state === 'waiting' && item.waitingKind === 'information' && item.result?.status === 'waiting')) {
+        const group = store.getGroup(task.groupId)
+        const key = taskResultOutboxKey(task, task.result)
+        const original = group?.outbox.find(item => item.sourceMessageId === key && item.status === 'sent' && item.deliveredAt)
+        const initial = original?.text.includes('已暂停') ? original
+          : group?.outbox.find(item => item.sourceMessageId === `${key}:correction` && item.status === 'sent' && item.deliveredAt)
+        if (!initial) continue
+        const elapsed = now - Date.parse(initial.deliveredAt)
+        const sentFollowups = new Set(group.outbox.filter(item => item.sourceMessageId.startsWith(`${key}:followup:`)).map(item => item.sourceMessageId))
+        if (elapsed >= 2 * 60 * 60_000 && !sentFollowups.has(`${key}:followup:2`)) due.push({ task, followup: 2 })
+        else if (elapsed >= 30 * 60_000 && elapsed < 2 * 60 * 60_000 && !sentFollowups.has(`${key}:followup:1`)) due.push({ task, followup: 1 })
+      }
+      const submitted = []
+      for (const { task, followup } of due) {
+        const outcome = await coordinateInformationWait(task, task.result, followup)
+        if (!outcome?.status) submitted.push({ taskId: task.taskId, followup })
+      }
+      return submitted
+    },
+    reconcileInformationWaitNotice: async ({ taskId }) => {
+      const task = store.getTask(taskId)
+      if (!task || task.state !== 'waiting' || task.waitingKind !== 'information' || task.result?.status !== 'waiting') throw new Error(`task_information_wait_not_current:${taskId}`)
+      const key = taskResultOutboxKey(task, task.result)
+      const original = store.getGroup(task.groupId)?.outbox.find(item => item.sourceMessageId === key)
+      if (!original || original.status !== 'sent' || !original.deliveredMessageId) throw new Error(`task_information_wait_notice_unconfirmed:${taskId}`)
+      if (original.text.includes('已暂停')) return { status: 'current', sourceMessageId: key }
+      const correction = await coordinateInformationWait(task, task.result, -1)
+      return { status: correction?.status ?? 'enqueued', sourceMessageId: `${key}:correction` }
     },
     archiveTask: ({ taskId }) => serializeTasks(async () => {
       const task = store.getTask(taskId)

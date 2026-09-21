@@ -4,7 +4,7 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { Session } from '@deepseek-ai/dsh-session'
 import { Inbox } from '@deepseek-ai/dsh-agent'
 import { openResidentStore, resolveTopicMessages } from '../packages/dingtalk-dsh-assistant/store.js'
-import { createTopicCoordinator, projectTopicContext, TASK_REVIEW_MAX_CHARS } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
+import { boundedTopicContext, createTopicCoordinator, projectTopicContext, TASK_REVIEW_MAX_CHARS } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
 import { visiblePromptRefs, visibleSectionLength } from '../packages/dingtalk-dsh-assistant/coordination-context.js'
 import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
 
@@ -777,6 +777,19 @@ async function readReviewSection(h, requestId, section) {
     offset = page.nextOffset
   }
 }
+
+test('话题上下文剩余预算连一个字符也装不下时保留已装入消息', () => {
+  const first = { messageId: 'first', unitId: 'unit-first', unitRevision: 1, text: '已读消息' }
+  const second = { messageId: 'second', unitId: 'unit-second', unitRevision: 1, text: '后续消息' }
+  const context = { topic: {}, messages: [first, second], offset: 0, total: 2, taskRefs: [] }
+  const budget = JSON.stringify(boundedTopicContext({ ...context, messages: [first] })).length
+  const result = boundedTopicContext(context, { maxChars: budget })
+  assert.deepEqual(result.messages.map(message => message.messageId), ['first'])
+  assert.equal(result.nextOffset, 1)
+  assert.equal(result.nextTextOffset, undefined)
+  assert.equal(result.hasMoreMessages, true)
+  assert.ok(JSON.stringify(result).length <= budget)
+})
 const reviewPrompt = (id, prompt = '按流程核验') => ({ id, name: id, description: `${id}适用范围`, prompt, enabled: true })
 
 test('单条超长消息保持 12k 硬预算并可完整续读', async (t) => {
