@@ -146,6 +146,62 @@ async function createTask(h, id = 'task-input', extra = {}, source = {}) {
 }
 const workflowAssessment = (task, patch = {}) => ({ promptRefs: task.taskPromptRefs ?? [], reusedEvidence: [], inapplicableSteps: [], exceptions: [], ...patch })
 
+test('内部审阅预算故障由 Host 暂停并一次通知，叶子重复提交不能耗尽轮次', async t => {
+  const original = await setup(t), task = await createTask(original, 'system-failure')
+  await original.store.updateTask(task.taskId, current => ({ ...current, executionEvents: [...(current.executionEvents ?? []),
+    { kind: 'task-report-received', submissionId: 'system-plan', digest: 'fixed', reportType: 'checkpoint', value: { ...inputVersion(task),
+      kind: 'plan-confirmed', summary: '保持原计划', remainingItems: task.stageTasks, completedItems: [], evidence: [], nextStep: '等待审阅',
+      needsCoordinatorDecision: false, workflowAssessment: workflowAssessment(task) },
+      inputVersion: task.inputVersion, runSequence: task.runSequence, at: new Date().toISOString(), status: 'review-wait' },
+    { kind: 'task-report-settled', submissionId: 'system-plan', inputVersion: task.inputVersion, runSequence: task.runSequence,
+      status: 'failed', error: 'topic_context_budget_exceeded', at: new Date().toISOString() },
+  ] }))
+  await original.runtime.close()
+  const h = await setup(t, { snapshot: original.snapshot, goals: original.goals })
+  await until(() => h.store.getTask(task.taskId).state === 'waiting')
+  const paused = h.store.getTask(task.taskId)
+  assert.equal(paused.waitingKind, 'system')
+  assert.equal(h.runtime.getTaskReport({ taskId: task.taskId, submissionId: 'system-plan' }).status, 'failed')
+  assert.ok(h.goals.get(task.childSessionId).phase === 'blocked')
+  const notices = () => h.store.getGroup('g').outbox.filter(item => item.sourceMessageId.startsWith(`task-system:${task.taskId}:`))
+  await until(() => notices().length === 1)
+  assert.match(notices()[0].text, /插件内部故障已暂停/u)
+  for (let i = 0; i < 100; i++) await assert.rejects(rawLeafCall(h, task, 'submit_task_checkpoint', {
+    ...inputVersion(task), submissionId: `repeat-${i}`, kind: 'plan-confirmed', summary: '重复改稿', remainingItems: task.stageTasks, nextStep: '等待审阅',
+    workflowAssessment: workflowAssessment(task),
+  }), /task_system_waiting/u)
+  assert.equal(h.store.getTask(task.taskId).executionEvents.filter(event => event.kind === 'task-report-received').length, 1)
+  assert.equal(notices().length, 1)
+  const other = await createTask(h, 'independent-task')
+  assert.equal(other.state, 'running')
+  await h.store.updateTask(other.taskId, current => ({ ...current, state: 'completed', completion: '独立任务已结束' }))
+  const retry = await h.runtime.retryTaskReport({ taskId: task.taskId, submissionId: 'system-plan' })
+  assert.equal(retry.status, 'review-wait')
+  assert.equal(notices()[0].status, 'superseded')
+  await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '故障修复后按原目标审阅通过' } })).status, 'accepted')
+  await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: 'system-plan' }).status === 'accepted')
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  assert.equal(h.store.listAlerts().filter(item => item.taskId === task.taskId && item.fingerprint.startsWith('task-system-failure:') && item.status !== 'resolved').length, 0)
+})
+
+test('活动投影从 DSH 工具结果关联真实工具名与错误位', async t => {
+  const h = await setup(t), task = await createTask(h, 'activity-result')
+  const session = h.handles.get(task.childSessionId).agent.session
+  const observer = h.events.get('session/event')
+  session.append('tool/call', { callId: 'tool-1', name: 'group_topic_context_get' })
+  observer(session, session.snapshotEvents().at(-1))
+  session.append('tool/result', {
+    message: { source: { kind: 'tool', callId: 'tool-1' }, content: [{ type: 'tool-result', isError: true, content: [{ type: 'text', text: 'synthetic error' }] }] },
+  })
+  const result = session.snapshotEvents().at(-1)
+  observer(session, result)
+  await h.runtime.flushActivities()
+  const projected = h.store.listActivities(task.taskId).find(item => item.eventKey === `${task.childSessionId}:${result.seq}`)
+  assert.deepEqual(projected.detail, { tool: 'group_topic_context_get', isError: true, callId: 'tool-1' })
+})
+
 function statusLlm(answer, calls) {
   return { async *stream(request) {
     calls.push(request)

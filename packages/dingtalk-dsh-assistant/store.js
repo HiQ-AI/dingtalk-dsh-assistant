@@ -132,7 +132,7 @@ const activityProjectionSchema = z.object({
 const taskSchema = z.object({
   taskId: z.string().min(1), groupId: z.string().min(1), topicRefs: z.array(topicRefSchema).min(1), inputVersion: z.number().int().positive(), appliedOperations: z.array(z.string()).default([]), title: z.string().min(1).optional(), objective: z.string().min(1),
   state: z.enum(['queued', 'running', 'waiting', 'completed']), childSessionId: z.string().min(1),
-  waitingReason: z.string().optional(), waitingKind: z.enum(['information', 'coordination', 'human-intervention']).optional(),
+  waitingReason: z.string().optional(), waitingKind: z.enum(['information', 'coordination', 'human-intervention', 'system']).optional(),
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
   objectiveHistory: z.array(taskObjectiveRevisionSchema).optional(), titleHistory: z.array(taskTitleRevisionSchema).optional(),
   runSequence: z.number().int().positive().optional(), runStartedAt: z.string().min(1).optional(),
@@ -324,8 +324,10 @@ export async function openResidentStore(storageDomain) {
       const sameVersion = outbound.taskInputVersion === task.inputVersion && outbound.taskRunSequence === task.runSequence
       const obsoleteWait = outbound.sourceMessageId.startsWith(`task-result:${task.taskId}:waiting:`)
         && (task.state !== 'waiting' || task.waitingKind !== 'information' || outbound.resultFingerprint !== fingerprint(task.result))
-      if (sameVersion && !obsoleteWait) return outbound
-      return { ...outbound, status: 'superseded', supersededAt: new Date().toISOString(), supersededReason: obsoleteWait ? 'task-information-wait-ended' : 'task-execution-version-changed' }
+      const obsoleteSystemWait = outbound.sourceMessageId.startsWith(`task-system:${task.taskId}:`)
+        && (task.state !== 'waiting' || task.waitingKind !== 'system')
+      if (sameVersion && !obsoleteWait && !obsoleteSystemWait) return outbound
+      return { ...outbound, status: 'superseded', supersededAt: new Date().toISOString(), supersededReason: obsoleteWait ? 'task-information-wait-ended' : obsoleteSystemWait ? 'task-system-wait-ended' : 'task-execution-version-changed' }
     }) }))
   }
 

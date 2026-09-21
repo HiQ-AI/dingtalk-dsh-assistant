@@ -1,5 +1,7 @@
 import { fingerprint, stableId } from './topic-model.js'
 
+export const deterministicReviewFailure = (error) => /^(?:topic_context_(?:budget_exceeded|metadata_too_large)|task_review_envelope_too_large|route_context_budget_exceeded)(?::|$)/u.test(error ?? '')
+
 export const taskReportReceiptSchema = { type: 'object', additionalProperties: false, properties: {
   accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, submissionId: { type: 'string' },
   status: { type: 'string', enum: ['input-wait', 'review-wait', 'history-only', 'accepted', 'rejected', 'failed'] },
@@ -61,8 +63,8 @@ export function createTaskReportQueue({ store, serialize, hasPendingInput, execu
       } catch (cause) {
         error = String(cause.message ?? cause).slice(0, 1600)
         status = error.startsWith('task_input_pending:') ? 'input-wait'
-          : /task_(?:input_version_stale|checkpoint_run_changed|result_context_changed):/.test(error) ? 'history-only'
-            : /topic_request_not_submitted|topic_request_retry_exhausted|resident_runtime_closed|task_review_request_failed/.test(error) ? 'failed' : 'rejected'
+          : /task_(?:input_version_stale|checkpoint_run_changed|result_context_changed|review_context_changed)(?::|$)/u.test(error) ? 'history-only'
+            : deterministicReviewFailure(error) || /topic_request_not_submitted|topic_request_retry_exhausted|resident_runtime_closed|task_review_request_failed/u.test(error) ? 'failed' : 'rejected'
       }
       task = store.getTask(taskId)
       if (status === 'accepted' && !matchesCurrent(task, report)) status = 'history-only'
@@ -111,6 +113,7 @@ export function createTaskReportQueue({ store, serialize, hasPendingInput, execu
       const report = await serialize(async () => {
         const task = store.getTask(taskId)
         if (!task) throw new Error(`task_not_found:${taskId}`)
+        if (task.state === 'waiting' && task.waitingKind === 'system') throw new Error(`task_system_waiting:${taskId}`)
         const { submissionId: suppliedId, ...body } = value
         const digest = fingerprint({ reportType, body })
         const submissionId = suppliedId ?? stableId('report', `${taskId}:${digest}`)

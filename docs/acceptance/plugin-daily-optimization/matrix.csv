@@ -1,0 +1,12 @@
+case,round-1,status,evidence
+system-failure-classification,PASS,PASS,task-reports.test.js 100次恢复与业务驳回对照
+system-wait-host-notification,PASS,PASS,runtime.test.js 重启恢复后单条Outbox
+system-wait-retry,PASS,PASS,runtime.test.js 同报告重试成功与旧通知失效
+independent-task-progress,PASS,PASS,runtime.test.js 系统等待释放并发名额
+tool-result-linkage,PASS,PASS,runtime.test.js DSH事件结构关联名称和错误位
+full-unit-suite,PASS,PASS,pnpm test 461 pass
+dispatch-preflight,TODO,TODO,子目标2未实施
+input-revision,TODO,TODO,子目标3未实施
+activity-statistics,TODO,TODO,子目标4未实施
+activity-recovery,TODO,TODO,子目标5未实施
+local-runtime,TODO,TODO,待最终包安装与真实启动

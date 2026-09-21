@@ -141,6 +141,23 @@ test('协调失败只通知一次且保持阻塞，Supervisor恢复不自动重�
   assert.equal(f.queue.get('task1', 'report1').status, 'failed')
 })
 
+test('确定性上下文故障保留报告，100 次恢复不重复审阅，业务驳回仍可改稿', async () => {
+  const f = fixture({ inputPending: false, execute: () => { throw new Error('topic_context_budget_exceeded') } })
+  await f.queue.submit('task1', 'checkpoint', value())
+  await f.queue.drain()
+  for (let i = 0; i < 100; i++) f.queue.recover(f.store.getTask())
+  await f.queue.drain()
+  assert.equal(f.queue.get('task1', 'report1').status, 'failed')
+  assert.equal(f.executed.length, 1)
+  assert.equal(f.notified.length, 1)
+  assert.equal(f.queue.hasBlocking(f.store.getTask()), true)
+  const business = fixture({ inputPending: false, execute: () => ({ accepted: false, code: 'task_checkpoint_rejected' }) })
+  await business.queue.submit('task1', 'checkpoint', value())
+  await business.queue.drain()
+  assert.equal(business.queue.get('task1', 'report1').status, 'rejected')
+  assert.equal(business.queue.hasBlocking(business.store.getTask()), false)
+})
+
 test('协调重试耗尽落failed并保持Goal门禁，仅显式retry恢复同一报告', async () => {
   let exhausted = true
   const f = fixture({ inputPending: false, execute: () => {

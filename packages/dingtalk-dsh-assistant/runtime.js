@@ -7,7 +7,7 @@ import { boundedTopicContext, createTopicCoordinator } from './topic-runtime.js'
 import { resolveTopicMessages, stableId, fingerprint } from './topic-model.js'
 import { assertCurrentTaskPrompts, isDiagnosticCheckpoint, parseTaskCheckpoint, parseTaskResult, taskCheckpointJsonSchema, taskResultJsonSchema } from './task-result.js'
 import { taskProgressSnapshot } from './task-progress.js'
-import { createTaskReportQueue, taskReportReceiptSchema, taskReports } from './task-reports.js'
+import { createTaskReportQueue, deterministicReviewFailure, taskReportReceiptSchema, taskReports } from './task-reports.js'
 import { createTaskReportStepGate } from './task-report-step-gate.js'
 import { createStatusQueryHandler } from './status-query.js'
 import { reviseTaskProgress, stagePlanFor, reconcileLegacyStagePlan, normalizeRunPlan } from './task-input-revision.js'
@@ -144,9 +144,15 @@ const withHumanBlockerHistory = (task, blocker) => {
   const index = history.findIndex((item) => item.requestId === blocker.requestId)
   return index < 0 ? [...history, blocker] : history.map((item, current) => current === index ? blocker : item)
 }
-const activityDetail = (event) => {
+const activityDetail = (event, session) => {
   if (event.type === 'tool/call') return { tool: event.data?.name ?? 'unknown', ...(event.data?.callId ? { callId: event.data.callId } : {}) }
-  if (event.type === 'tool/result') return { tool: event.data?.name ?? 'unknown', isError: event.data?.isError === true, ...(event.data?.message?.source?.callId ? { callId: event.data.message.source.callId } : {}) }
+  if (event.type === 'tool/result') {
+    const callId = event.data?.message?.source?.callId
+    const call = callId && session.snapshotEvents().findLast(item => item.type === 'tool/call' && item.data?.callId === callId)
+    const result = event.data?.message?.content?.find(item => item.type === 'tool-result')
+    return { tool: call?.data?.name ?? 'unknown', ...(typeof result?.isError === 'boolean' ? { isError: result.isError } : {}),
+      ...(callId ? { callId } : {}) }
+  }
   if (event.type === 'turn/end') return { status: event.data?.status ?? 'unknown' }
   if (event.type === 'goal/change') return { phase: event.data?.goal?.phase ?? event.data?.phase ?? 'unknown' }
   return { contentBlocks: event.data?.message?.content?.length ?? 0 }
@@ -612,6 +618,21 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         && current.runSequence === task.runSequence && JSON.stringify(current.result) === JSON.stringify(result) ? undefined : { status: 'task-stale' }
     }
     return appendReliableOutbox({ ...outbound, preflight })
+  }
+  async function coordinateSystemWait(task, report) {
+    const code = report.error.split(':')[0]
+    const sourceMessageId = `task-system:${task.taskId}:${task.runSequence}:${task.inputVersion}:${code}`
+    const source = topics.taskMessages(task).at(-1)
+    const text = `任务“${task.title ?? task.objective}”因插件内部故障已暂停。已完成的检查点与原报告已保留；当前故障：${code}。插件修复并确认审阅可用后，将在原授权范围内继续处理；无需重新提交任务或批准业务操作。`
+    const preflight = () => {
+      const current = store.getTask(task.taskId)
+      return current?.state === 'waiting' && current.waitingKind === 'system' && current.inputVersion === task.inputVersion
+        && current.runSequence === task.runSequence ? undefined : { status: 'task-stale' }
+    }
+    return appendReliableOutbox({ groupId: task.groupId, sourceMessageId, outboundId: stableId('outbound', sourceMessageId),
+      topicRefs: task.topicRefs, text, taskIds: [task.taskId], taskInputVersion: task.inputVersion, taskRunSequence: task.runSequence,
+      replyKind: 'substantive', ...(source ? { replyToMessageId: source.messageId, replyToSenderOpenDingTalkId: source.senderOpenDingTalkId,
+        atOpenDingTalkIds: [...new Set([source.senderOpenDingTalkId, task.requesterOpenDingTalkId].filter(Boolean))] } : {}), preflight })
   }
 
   async function coordinateTaskResultInternal(task, result) {
@@ -1575,7 +1596,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     const taskId = leafTaskBySession.get(String(session.id))
     if (taskId === undefined || !PROJECTED_EVENTS.has(event.type) || typeof store.recordActivity !== 'function') return
     const occurredAt = typeof event.time === 'number' ? new Date(event.time).toISOString() : typeof event.time === 'string' ? event.time : undefined
-    activityTail = activityTail.then(() => store.recordActivity({ taskId, sessionId: String(session.id), eventKey: `${String(session.id)}:${event.seq}`, seq: event.seq, type: event.type, detail: activityDetail(event), occurredAt })).catch(error => recoveryIssues.push({ taskId, kind: 'activity-projection', error: error.message }))
+    activityTail = activityTail.then(() => store.recordActivity({ taskId, sessionId: String(session.id), eventKey: `${String(session.id)}:${event.seq}`, seq: event.seq, type: event.type, detail: activityDetail(event, session), occurredAt })).catch(error => recoveryIssues.push({ taskId, kind: 'activity-projection', error: error.message }))
   }) : undefined
   const statusQueryTails = new Map()
   const statusQueryAttempts = new Set()
@@ -1656,6 +1677,19 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       if (goal?.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-coordination-pending', message: '报告已保存，等待输入接纳或审阅结果。' })
     },
     notify: async (task, report) => {
+      if (report.status === 'failed' && deterministicReviewFailure(report.error)) {
+        const waiting = await serializeTasks(() => store.updateTask(task.taskId, current => current.state === 'running'
+          && current.inputVersion === report.inputVersion && current.runSequence === report.runSequence
+          ? { ...current, state: 'waiting', waitingKind: 'system', waitingReason: report.error } : current))
+        if (waiting.state !== 'waiting' || waiting.waitingKind !== 'system') return
+        const handle = leafHandles.get(task.taskId)
+        const goal = handle && ctx.goals.get(handle.agent)
+        if (goal?.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-system-failure', message: report.error })
+        await store.recordAlert({ taskId: task.taskId, fingerprint: `task-system-failure:${task.runSequence}:${task.inputVersion}:${report.error.split(':')[0]}`, detail: report.error })
+        await coordinateSystemWait(waiting, report)
+        return
+      }
+      if (report.status === 'accepted') await store.resolveAlerts?.({ taskId: task.taskId, fingerprintPrefix: `task-system-failure:${task.runSequence}:${task.inputVersion}:` })
       if (task.state !== 'running') return
       const handle = leafHandles.get(task.taskId)
       if (!handle) throw new Error('task_report_leaf_unavailable')
@@ -1744,6 +1778,8 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
         if (!task || task.inputVersion !== current.taskInputVersion || task.runSequence !== current.taskRunSequence) return { status: 'superseded' }
         if (current.sourceMessageId.startsWith(`task-result:${task.taskId}:waiting:`)
           && (task.state !== 'waiting' || task.waitingKind !== 'information' || fingerprint(task.result) !== current.resultFingerprint)) return { status: 'superseded' }
+        if (current.sourceMessageId.startsWith(`task-system:${task.taskId}:`)
+          && (task.state !== 'waiting' || task.waitingKind !== 'system')) return { status: 'superseded' }
       }
       return current
     },
@@ -1963,9 +1999,26 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const report = task && taskReports(task).find(item => item.submissionId === submissionId)
       if (!report) throw new Error(`task_report_not_found:${submissionId}`)
       if (report.inputVersion !== task.inputVersion || report.runSequence !== task.runSequence || task.state === 'completed') throw new Error(`task_report_retry_stale:${submissionId}`)
+      if (report.status !== 'failed') throw new Error(`task_report_retry_requires_failed:${submissionId}`)
+      const systemWait = task.state === 'waiting' && task.waitingKind === 'system'
+      if (task.state === 'waiting' && task.waitingKind === 'system') {
+        if (!deterministicReviewFailure(report.error)) throw new Error(`task_report_retry_requires_failed:${submissionId}`)
+        if (store.listTasks().filter(item => item.state === 'running').length >= taskConcurrencyLimit) throw new Error(`task_report_retry_capacity_full:${submissionId}`)
+        await serializeTasks(() => store.updateTask(taskId, current => current.state === 'waiting' && current.waitingKind === 'system'
+          && current.inputVersion === report.inputVersion && current.runSequence === report.runSequence
+          ? { ...current, state: 'running', waitingKind: undefined, waitingReason: undefined } : current))
+      }
       const failedRequestId = coordinationRequestId ?? (report.error?.startsWith('topic_request_retry_exhausted:') ? report.error.slice('topic_request_retry_exhausted:'.length) : undefined)
       if (failedRequestId) await topics.resetReviewRequest(task.groupId, failedRequestId)
-      return reports.retry(taskId, submissionId, { coordinationRequestId: failedRequestId })
+      try { return await reports.retry(taskId, submissionId, { coordinationRequestId: failedRequestId }) }
+      catch (error) {
+        if (systemWait && taskReports(store.getTask(taskId)).find(item => item.submissionId === submissionId)?.status === 'failed') {
+          await serializeTasks(() => store.updateTask(taskId, current => current.state === 'running'
+            && current.inputVersion === report.inputVersion && current.runSequence === report.runSequence
+            ? { ...current, state: 'waiting', waitingKind: 'system', waitingReason: report.error } : current))
+        }
+        throw error
+      }
     },
     retryCoordinationRequest: ({ groupId, requestId }) => {
       for (const task of store.listTasks().filter(item => item.groupId === groupId)) {
