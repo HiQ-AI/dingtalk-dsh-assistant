@@ -41,6 +41,7 @@ test('生产HTTP开放只读状态与明确的本机群配置接口，测试控�
   assert.equal(health.status, 200)
   assert.equal((await health.json()).transport, 'fake-dws')
   assert.equal((await fetch(`${baseUrl}/state/tasks`)).status, 200)
+  assert.deepEqual(await (await fetch(`${baseUrl}/state/activity-audit`)).json(), { total: 0, pending: 0, audited: 0, unavailable: [] })
   assert.deepEqual(await (await fetch(`${baseUrl}/state/task-timings`)).json(), [{ taskId: 'task-1', wallMs: 1000 }])
   assert.equal((await fetch(`${baseUrl}/state/authorizations`)).status, 200)
   assert.equal((await fetch(`${baseUrl}/config/groups/search?q=产品`)).status, 200)
@@ -68,6 +69,15 @@ test('生产HTTP开放只读状态与明确的本机群配置接口，测试控�
   assert.deepEqual(await retried.json(), { retried: true, groupId: 'cid/a', messageId: 'msg+b' })
   assert.equal((await fetch(`${baseUrl}/test/tasks`, { method: 'POST', body: '{}' })).status, 404)
 }))
+
+test('活动审计历史缺源计入单独状态但不误报当前健康故障', async () => withServer(false, async (baseUrl) => {
+  const health = await (await fetch(`${baseUrl}/health`)).json()
+  assert.equal(health.status, 'ok')
+  assert.deepEqual(health.activityAudit, { total: 2, pending: 0, audited: 1, unavailableCount: 1 })
+  assert.deepEqual(await (await fetch(`${baseUrl}/state/activity-audit`)).json(), { total: 2, pending: 0, audited: 1,
+    unavailable: [{ taskId: 'old-task', reason: 'session-not-found' }] })
+}, { overrides: { getActivityAuditStatus: () => ({ total: 2, pending: 0, audited: 1,
+  unavailable: [{ taskId: 'old-task', reason: 'session-not-found' }] }) } }))
 
 test('显式testApiEnabled才开放测试写入口', async () => withServer(true, async (baseUrl) => {
   const response = await fetch(`${baseUrl}/test/subscriptions`, { method: 'POST', body: JSON.stringify({ groupId: 'g' }) })

@@ -274,6 +274,38 @@ test('已完成任务重启后从持久 Session 审计并补齐遗漏活动', as
   assert.equal(restored.runtime.listRecoveryIssues().filter(issue => issue.kind === 'activity-projection').length, 0)
 })
 
+test('历史已完成任务的 Session 不存在时审计收束为不可回填，不反复报当前写盘故障', async t => {
+  const original = await setup(t), task = await createTask(original, 'missing-completed-session')
+  await original.store.updateTask(task.taskId, value => ({ ...value, state: 'completed' }))
+  await original.runtime.close()
+  let attempts = 0
+  const restored = await setup(t, { snapshot: original.snapshot, sessionPersistence: {
+    async prepare(id) { attempts += 1; throw new Error(`session "${id}" not found`) },
+  } })
+  await restored.runtime.reconcileActivityProjections({ force: true })
+  await restored.runtime.reconcileActivityProjections({ force: true })
+  assert.equal(attempts, 1)
+  assert.deepEqual(restored.runtime.getActivityAuditStatus(), { total: 1, pending: 0, audited: 0,
+    unavailable: [{ taskId: task.taskId, reason: 'session-not-found' }] })
+  assert.equal(restored.runtime.listRecoveryIssues().filter(issue => issue.kind === 'activity-projection').length, 0)
+})
+
+test('已完成任务的持久 Session 读取故障仍保留重试和当前告警', async t => {
+  const original = await setup(t), task = await createTask(original, 'completed-session-read-failure')
+  await original.store.updateTask(task.taskId, value => ({ ...value, state: 'completed' }))
+  await original.runtime.close()
+  let attempts = 0
+  const restored = await setup(t, { snapshot: original.snapshot, sessionPersistence: {
+    async prepare() { attempts += 1; throw new Error('EPERM: synthetic read failure') },
+  } })
+  await restored.runtime.reconcileActivityProjections({ force: true })
+  await restored.runtime.reconcileActivityProjections({ force: true })
+  assert.equal(attempts, 2)
+  assert.equal(restored.runtime.getActivityAuditStatus().pending, 1)
+  assert.deepEqual(restored.runtime.getActivityAuditStatus().unavailable, [])
+  assert.equal(restored.runtime.listRecoveryIssues().filter(issue => issue.kind === 'activity-projection').length, 1)
+})
+
 function statusLlm(answer, calls) {
   return { async *stream(request) {
     calls.push(request)

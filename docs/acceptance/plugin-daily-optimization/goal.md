@@ -16,3 +16,5 @@
 证据起点：2026-09-21 当日审计见 `docs/spec/plugin-daily-review-20260921.md`；PR #110 已合并，当前 worktree 基于最新 `origin/main` 98f63bd。
 
 本轮交付：提交 `4127560`、`8f68b6c`，`pnpm test` 470/470；PR #111 已回读为 OPEN，base `main`、head `worktree-plugin-daily-optimization`。当前未安装本机运行 Profile，真实群消息与业务数据不作为测试重放。`gh pr checks` 暂无报告的检查，不等同于 CI 通过。
+
+部署验收续修：PR #111 已合并为 `25a3429`。首次本机安装后发现历史已完成 Task 的 Session 不存在，被新审计误计为当前 `activity-projection` 故障；当前任务 61/61 completed。续修在独立 worktree `worktree-activity-audit-history` 完成后才替换本机包，保留首次安装包与停机前存储备份用于追溯。
