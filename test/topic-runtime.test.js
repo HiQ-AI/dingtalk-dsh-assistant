@@ -399,6 +399,46 @@ test('Topic 关联不能替代原消息授权，明确给他人的请求不得�
   assert.equal(h.store.getGroup('g').outbox.length, 0)
 })
 
+test('事项正文剥离称呼后仍按原始消息核验任务授权及其他人定向', async (t) => {
+  for (const [name, text, expectedError] of [
+    ['agent', '@助理 请修复关联 ID 合并', null],
+    ['colleague', '@李四 请修复关联 ID 合并', /task_action_directed_to_other_participants/],
+  ]) {
+    await t.test(name, async (caseContext) => {
+      const h = await setup(caseContext)
+      await ingest(h, name, { text })
+      await h.coordinator.schedule('g')
+      const routeRequest = h.envelope('[GROUP_TOPIC_ROUTE]')
+      const routed = await h.call('group_topic_route_submit', { requestId: routeRequest.requestId, routes: [{ messageId: name, messageVersion: 1,
+        ignoredRefs: [{ quote: text.split(' ')[0], reason: '称呼不是独立事项' }],
+        units: [{ unitKey: 'repair', summary: '修复关联 ID 合并', sourceRefs: [{ quote: '请修复关联 ID 合并' }], topics: [{ newTopicKey: 'repair', title: '关联 ID 合并修复' }] }],
+      }] })
+      const request = routed.pendingDecisions[0]
+      assert.equal(request.messages[0].text, '请修复关联 ID 合并')
+      const basisUnitRefs = [{ unitId: request.messages[0].unitId, unitRevision: request.messages[0].unitRevision }]
+      const action = { kind: 'new-task', title: '修复关联 ID 合并', objective: '修复关联 ID 合并', acceptanceCriteria: ['修复结果'], topicRefs: [{ topicId: request.topicId, revision: request.revision }], basisUnitRefs }
+      const decision = h.call('group_decision_submit', submission(request, { basisUnitRefs, actions: [action], reply: '开始处理', replyReview: { kind: 'confirmation' } }))
+      if (expectedError) await assert.rejects(decision, expectedError)
+      else {
+        const result = await decision
+        assert.equal(result.status, 'accepted', JSON.stringify(result))
+        await h.coordinator.drain('g')
+        assert.equal(h.store.listTasks().length, 1)
+      }
+    })
+  }
+})
+
+test('引用消息正文不能作为当前消息的 contextRefs', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'quoted-context', { text: '@助理 这个需要修复', quotedMessage: { messageId: 'previous', content: '此前的错误详情' } })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await assert.rejects(h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'quoted-context', messageVersion: 1, ignoredRefs: [], units: [{
+    unitKey: 'repair', summary: '修复错误', sourceRefs: [{ quote: '@助理 这个需要修复' }], contextRefs: [{ quote: '此前的错误详情', purpose: '引用消息背景' }], topics: [{ newTopicKey: 'repair', title: '错误修复' }],
+  }] }] }), /topic_unit_context_ambiguous:contextRefs.quote must uniquely match current message.text/)
+})
+
 test('已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox', async (t) => {
   let failed = false
   const h = await setup(t, { afterAction() { if (!failed) { failed = true; throw new Error('injected_after_task_commit') } } })

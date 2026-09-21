@@ -562,7 +562,7 @@ export async function openResidentStore(storageDomain) {
               if (available + unavailable !== 1) throw new Error('topic_unit_attachment_invalid')
               return { imageRefId }
             })
-            const contextRanges = (unit.contextRefs ?? []).map((ref) => ({ ...resolveSourceRef(message.text, ref, 'topic_unit_context_ambiguous'), purpose: ref.purpose }))
+            const contextRanges = (unit.contextRefs ?? []).map((ref) => ({ ...resolveSourceRef(message.text, ref, 'topic_unit_context_ambiguous:contextRefs.quote must uniquely match current message.text; quotedMessage content is separate'), purpose: ref.purpose }))
             const comparable = { summary: unit.summary.trim(), sourceRanges, sourceAttachments, contextRanges, predecessorUnitRefs: predecessors.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ...(unit.effectInheritance ? { effectInheritance: unit.effectInheritance } : {}), ...(unit.revisionReason ? { revisionReason: unit.revisionReason } : {}) }
             const same = prior && JSON.stringify({ summary: prior.summary, sourceRanges: prior.sourceRanges, sourceAttachments: prior.sourceAttachments ?? [], contextRanges: prior.contextRanges ?? [], predecessorUnitRefs: prior.predecessorUnitRefs ?? [], effectInheritance: prior.effectInheritance, revisionReason: prior.revisionReason }) === JSON.stringify(comparable)
             const stored = { unitId: prior?.unitId ?? stableId('unit', `${groupId}:${route.messageId}:${unit.unitKey}`), unitRevision: same ? prior.unitRevision : (prior?.unitRevision ?? 0) + 1, unitKey: unit.unitKey, ...comparable }
