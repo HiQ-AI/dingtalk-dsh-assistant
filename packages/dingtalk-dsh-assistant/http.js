@@ -114,14 +114,17 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     const inboundConfigured = transport === 'dws'
     const dwsBridge = inboundConfigured ? store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] } : undefined
     const inboundProcessing = inboundConfigured && dwsBridge.healthy === true
+    const activityAudit = store.getActivityAuditStatus?.()
     return send(response, 200, {
       status: recoveryIssues.length === 0 && (!inboundConfigured || inboundProcessing) ? 'ok' : 'degraded', transport,
       inboundConfigured, inboundProcessing, outboundAuthorized, modelMode,
       recoveryIssueCount: recoveryIssues.length,
+      ...(activityAudit ? { activityAudit: { total: activityAudit.total, pending: activityAudit.pending, audited: activityAudit.audited, unavailableCount: activityAudit.unavailable.length } } : {}),
       ...(dwsBridge !== undefined ? { dwsBridge } : {}),
     })
   }
   if (request.method === 'GET' && url.pathname === '/state/recovery-issues') return send(response, 200, store.listRecoveryIssues())
+  if (request.method === 'GET' && url.pathname === '/state/activity-audit') return send(response, 200, store.getActivityAuditStatus?.() ?? { total: 0, pending: 0, audited: 0, unavailable: [] })
   if (request.method === 'GET' && url.pathname === '/state/groups') {
     const groupId = url.searchParams.get('groupId')
     return send(response, 200, groupId ? groupSummary(store.getGroup(groupId), store) : store.listGroups().map((group) => groupSummary(group, store)))

@@ -50,6 +50,8 @@ Topic 决策输出预算版本在安装前须完成工具协议与长历史回�
 
 新版启动后，监督器逐个读取已完成 Task 的持久 Session，审计并补齐活动投影；历史已裁剪的 500 条明细之前的数据无法恢复，统计覆盖范围应保留 `retained-only` 标记。观察 `activity-projection` 恢复问题和投影水位，不以 health 短暂为 healthy 代替队列审计完成。Outbox 的发送尝试、回读尝试和投递轮数分别核对，`deliveryAttemptCount` 不能推断重复群发。多 Unit 消息的任务派发还需检查 `dispatchAssessment` 来源 Unit 与当前流程版本。
 
+历史已完成 Task 的 Session 若被清理，`/state/activity-audit` 将列为 `session-not-found`、不再无限重试；`/health.activityAudit` 汇总 pending/audited/unavailableCount。不可回填属于历史证据缺口，不等于当前投影写盘失败；若 pending 长期不降或 `/state/recovery-issues` 保留活动故障，仍需检查存储和 Session 持久化。
+
 **不能仅换回旧二进制并继续写原存储。** 旧 Schema 可能在更新 Task/Group 时剥离这些新字段，造成通知恢复、水位或审阅状态丢失。曾写入新状态后，应先停止写入，保留当前完整文件和安装前备份；优先前向修复。确需降级时，先在隔离副本证明目标版本不会丢新字段、不会重放外部动作，再允许恢复写入；未证明之前保持停机或只读查看，不启动旧版可写实例。
 
 不得直接恢复安装前快照覆盖切换后新产生的审批、通知或外部动作记录。回退包本身仍走原生插件安装并独立核对依赖和文件摘要，但包回退不等于存储已安全回退。若新旧存储不能无损转换，保留现态完成前向修复。

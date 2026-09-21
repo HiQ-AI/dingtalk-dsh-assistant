@@ -170,6 +170,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
   let taskTail = Promise.resolve(), pumpTail = Promise.resolve(), configTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, runtimeApi, currentDwsProfile = '', runtimeClosing = false, closePromise
   const activityProjectionFailures = new Map()
   const completedActivityAuditQueue = store.listTasks().filter(task => task.state === 'completed').map(task => ({ taskId: task.taskId, sessionId: task.childSessionId }))
+  const completedActivityAuditTotal = completedActivityAuditQueue.length
+  const completedActivityAuditUnavailable = new Map()
   let groupMessageRecaller
   let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks
   if (store.getMaxConcurrentTasks?.() === undefined) await store.setMaxConcurrentTasks?.(taskConcurrencyLimit)
@@ -1844,15 +1846,21 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
               prepared = await persistence.prepare(SessionId(audit.sessionId), AbortSignal.timeout(resumeTimeoutMs))
               await reconcileActivityProjection(audit.taskId, prepared.session)
             } catch (error) {
-              completedActivityAuditQueue.push(audit)
-              recoveryIssues.push({ taskId: audit.taskId, kind: 'activity-projection', error: error.message })
+              if (!prepared && /^session "[^"]+" not found$/u.test(error.message)) completedActivityAuditUnavailable.set(audit.taskId, 'session-not-found')
+              else {
+                completedActivityAuditQueue.push(audit)
+                recoveryIssues.push({ taskId: audit.taskId, kind: 'activity-projection', error: error.message })
+              }
             } finally { prepared?.[Symbol.dispose]?.() }
-          }
+          } else completedActivityAuditQueue.push(audit)
         }
       })
       activityTail = work
       return work
     },
+    getActivityAuditStatus: () => ({ total: completedActivityAuditTotal, pending: completedActivityAuditQueue.length,
+      audited: completedActivityAuditTotal - completedActivityAuditQueue.length - completedActivityAuditUnavailable.size,
+      unavailable: [...completedActivityAuditUnavailable].map(([taskId, reason]) => ({ taskId, reason })) }),
     listRecoveryIssues: () => recoveryIssues.map((issue) => ({ ...issue })),
     onGroupSubscribed(listener) { subscriptionListeners.add(listener); return () => subscriptionListeners.delete(listener) },
     onGroupUnsubscribed(listener) { unsubscriptionListeners.add(listener); return () => unsubscriptionListeners.delete(listener) },
