@@ -8,3 +8,4 @@ R06,恢复或同版本新问题使旧通知失效,PASS,PASS
 R07,全量测试,PASS,PASS
 R08,Web构建和包检查,PASS,PASS
 R09,本机安装与真实DWS回读,PENDING,PENDING
+R10,真实长话题预算边界与检查点恢复,PENDING,PENDING

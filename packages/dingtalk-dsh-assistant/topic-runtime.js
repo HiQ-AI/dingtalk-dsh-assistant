@@ -86,7 +86,10 @@ export function boundedTopicContext(context, { textOffset = 0, maxChars = TOPIC_
       if (fits) low = middle
       else high = middle - 1
     }
-    if (low === 0) break
+    if (low === 0) {
+      nextTextOffset = undefined
+      break
+    }
     const end = start + low
     messages.push({ ...message, text: text.slice(start, end), textOffset: start, textTotal: text.length, textHasMore: end < text.length })
     nextTextOffset = end
