@@ -3,7 +3,7 @@ import test from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { Session } from '@deepseek-ai/dsh-session'
 import { Inbox } from '@deepseek-ai/dsh-agent'
-import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
+import { openResidentStore, resolveTopicMessages } from '../packages/dingtalk-dsh-assistant/store.js'
 import { createTopicCoordinator, projectTopicContext, TASK_REVIEW_MAX_CHARS } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
 import { visiblePromptRefs, visibleSectionLength } from '../packages/dingtalk-dsh-assistant/coordination-context.js'
 import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
@@ -41,7 +41,14 @@ async function setup(t, options = {}) {
   coordinator.register({ tools: { register(tool) { tools.set(tool.name, tool) } } }, 'g')
   t.after(async () => { await coordinator.close(); await store.close() })
   return { store, snapshot, coordinator, sent, errors, applications,
-    call: (name, args, exec = { groupId: 'g' }) => tools.get(name).execute(args, exec),
+    rawCall: (name, args, exec = { groupId: 'g' }) => tools.get(name).execute(args, exec),
+    async call(name, args, exec = { groupId: 'g' }) {
+      const result = await tools.get(name).execute(args, exec)
+      if (name !== 'group_topic_route_submit' || result.status !== 'accepted') return result
+      const receipt = store.getGroup('g').routeHistory.find((item) => item.routeId === args.requestId)
+      const pendingDecisions = (await coordinator.schedule('g')).map((item) => ({ ...item, messages: resolveTopicMessages(store.getGroup('g'), item.topicId, item.revision) }))
+      return { ...result, topicIdsByKey: receipt?.topicIdsByKey ?? {}, pendingDecisions }
+    },
     envelope(prefix, label = 'Topic 请求') { const text = sent.findLast((item) => item.startsWith(prefix)); return text ? JSON.parse(text.split('\n').find((line) => line.startsWith(`${label}：`)).slice(label.length + 1)) : undefined },
   }
 }
@@ -65,16 +72,17 @@ test('Topic 工具统一返回 lossless JSON', async (t) => {
   await ingest(h, 'lossless')
   await h.coordinator.schedule('g')
   const request = h.envelope('[GROUP_TOPIC_ROUTE]')
-  const routed = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{
+  const routed = await h.rawCall('group_topic_route_submit', { requestId: request.requestId, routes: [{
     messageId: 'lossless', messageVersion: 1, topics: [{ newTopicKey: 'lossless', title: '无损输出' }],
   }] })
   assert.deepEqual(JSON.parse(JSON.stringify(routed)), routed)
-  const recovered = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{
+  const recovered = await h.rawCall('group_topic_route_submit', { requestId: request.requestId, routes: [{
     messageId: 'lossless', messageVersion: 1, topics: [{ newTopicKey: 'lossless', title: '无损输出' }],
   }] })
   assert.equal(recovered.status, 'accepted')
   assert.equal(recovered.recovered, true)
-  assert.deepEqual(recovered.topicIdsByKey, routed.topicIdsByKey)
+  assert.equal(recovered.requestId, routed.requestId)
+  assert.ok(Buffer.byteLength(JSON.stringify(routed), 'utf8') <= 1024)
   const reviewed = await h.call('group_topic_route_review', { messageIds: ['lossless'], reason: '核验输出投影' })
   assert.deepEqual(JSON.parse(JSON.stringify(reviewed)), reviewed)
 })
@@ -100,7 +108,8 @@ test('归类期间消息版本变化返回刷新后的当前请求', async (t) =
   const result = await h.call('group_topic_route_submit', { requestId: original.requestId, routes: [{ messageId: 'edited', messageVersion: 1, topics: [{ newTopicKey: 'edited', title: '消息修改' }] }] })
   assert.equal(result.status, 'stale')
   assert.equal(result.reason, 'message-version-changed')
-  assert.equal(result.currentRequest.messages[0].messageVersion, 2)
+  assert.equal(result.currentRequest.requestId, h.envelope('[GROUP_TOPIC_ROUTE]').requestId)
+  assert.equal(h.envelope('[GROUP_TOPIC_ROUTE]').messages[0].messageVersion, 2)
   assert.equal(h.store.listTopics('g').length, 0)
 })
 async function route(h, choices = {}) {
@@ -114,6 +123,17 @@ async function route(h, choices = {}) {
 }
 const submission = (request, patch = {}) => ({ requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision: { basisMessageIds: [request.messages.at(-1)?.messageId ?? request.removedMessageIds?.[0]], ...(patch.reply ? { replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } : {}), actions: [], ...(patch.reply === undefined ? { reason: '无需回复' } : {}), ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) } })
 async function complete(h, request) {
+  const envelope = h.envelope('[GROUP_TOPIC_DECISION]')
+  if (envelope?.requestId === request.requestId) {
+    for (const section of ['messages', 'quotedMessages', 'sourceMessages', 'removedUnitRefs', 'rejectedDecisions', 'ownership']) {
+      if (envelope[section]?.section !== section) continue
+      let offset = 0, page
+      do {
+        page = await h.call('group_decision_context_get', { requestId: request.requestId, section, offset })
+        offset = page.nextOffset
+      } while (page.hasMore)
+    }
+  }
   assert.equal((await h.call('group_decision_submit', submission(request))).status, 'accepted')
   await h.coordinator.drain('g')
 }
@@ -127,17 +147,101 @@ test('Topic 决策信封受字符预算约束，缺失增量读完后才可提�
     await route(h, { [`large-${index}`]: first.topicId })
   }
   const request = h.envelope('[GROUP_TOPIC_DECISION]')
-  assert.ok(JSON.stringify(request.messages).length <= 40_000)
-  assert.ok(request.omittedDeltaMessageIds.length > 0)
-  assert.equal(request.ownedDeltaMessageIds.every((id) => request.messages.some((message) => message.messageId === id)), true)
-  await assert.rejects(h.call('group_decision_submit', submission(request)), /topic_decision_delta_unread/)
-  let offset = 0, textOffset = 0
-  while (offset < request.totalMessages) {
-    const page = await h.call('group_topic_context_get', { topicId: request.topicId, revision: request.revision, offset, limit: 5, ...(textOffset ? { textOffset } : {}) })
-    assert.ok(JSON.stringify(page).length <= 40_000)
-    offset = page.nextOffset; textOffset = page.nextTextOffset ?? 0
-  }
+  assert.ok(Buffer.byteLength(h.sent.findLast((item) => item.startsWith('[GROUP_TOPIC_DECISION]')), 'utf8') <= 12 * 1024)
+  assert.equal(request.omittedDeltaCount, 10)
+  assert.equal(request.messages.section, 'messages')
+  const args = submission({ ...request, messages: [{ messageId: 'large-9' }] })
+  await assert.rejects(h.call('group_decision_submit', args), /topic_decision_delta_unread/)
+  await assert.rejects(h.call('group_decision_context_get', { requestId: request.requestId, section: 'messages', offset: 2 }), /decision_context_offset_out_of_order/)
+  await assert.rejects(h.call('group_decision_context_get', { requestId: request.requestId, section: 'unknown' }), /decision_context_section_unknown/)
+  await assert.rejects(h.call('group_decision_context_get', { requestId: request.requestId, section: 'messages' }, { groupId: 'other' }), /wrong_session/)
+  let offset = 0, text = '', page
+  do {
+    page = await h.call('group_decision_context_get', { requestId: request.requestId, section: 'messages', offset })
+    assert.ok(Buffer.byteLength(JSON.stringify(page), 'utf8') <= 12 * 1024)
+    text += page.text; offset = page.nextOffset
+  } while (page.hasMore)
+  assert.equal(JSON.parse(text).at(-1).messageId, 'large-9')
+  assert.equal((await h.call('group_decision_submit', args)).status, 'accepted')
+})
+
+test('超长直接引用保持当前事项可见，引用续读前拒绝决策', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'quoted-long', { text: '@助理 请确认', quotedMessage: { messageId: 'quoted-long-source', content: '引用'.repeat(12_000) } })
+  const request = (await route(h)).pendingDecisions[0]
+  const envelope = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.equal(envelope.messages[0].messageId, 'quoted-long')
+  assert.equal(envelope.quotedMessages.section, 'quotedMessages')
+  assert.ok(Buffer.byteLength(h.sent.findLast((item) => item.startsWith('[GROUP_TOPIC_DECISION]')), 'utf8') <= 12 * 1024)
+  await assert.rejects(h.call('group_decision_submit', submission(request)), /topic_decision_context_unread/)
+  let offset = 0, text = '', page
+  do {
+    page = await h.call('group_decision_context_get', { requestId: request.requestId, section: 'quotedMessages', offset })
+    text += page.text; offset = page.nextOffset
+  } while (page.hasMore)
+  assert.equal(JSON.parse(text)[0].content, '引用'.repeat(12_000))
   assert.equal((await h.call('group_decision_submit', submission(request))).status, 'accepted')
+})
+
+test('长历史不进入新决策首屏，路由回执保持精简', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'history-0')
+  const first = (await route(h)).pendingDecisions[0]
+  await complete(h, first)
+  for (let index = 1; index <= 24; index++) {
+    const id = `history-${index}`
+    await ingest(h, id, { text: `@助理 ${'历史内容'.repeat(100)}` })
+    const routed = await route(h, { [id]: first.topicId })
+    assert.ok(Buffer.byteLength(JSON.stringify({ status: routed.status, requestId: routed.requestId }), 'utf8') <= 1024)
+    await complete(h, routed.pendingDecisions[0])
+  }
+  await ingest(h, 'current', { text: '@助理 现在确认测试账号？', quotedMessage: { messageId: 'quoted-current', content: '测试账号' } })
+  const routed = await route(h, { current: first.topicId })
+  const envelope = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.equal(envelope.totalMessages, 26)
+  assert.equal(envelope.historyAvailable, true)
+  assert.deepEqual(envelope.messages.map((message) => message.messageId), ['current'])
+  assert.equal(envelope.quotedMessages.length, 1)
+  assert.ok(Buffer.byteLength(h.sent.findLast((item) => item.startsWith('[GROUP_TOPIC_DECISION]')), 'utf8') <= 12 * 1024)
+  assert.equal(routed.pendingDecisions[0].topicId, first.topicId)
+})
+
+test('同消息多事项的引用与原始点名只发送一次', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'multi', { text: '@助理 第一项；第二项', quotedMessage: { messageId: 'quoted-multi', content: '前一条讨论' } })
+  await h.coordinator.schedule('g')
+  const routeRequest = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const raw = await h.rawCall('group_topic_route_submit', { requestId: routeRequest.requestId, routes: [{ messageId: 'multi', messageVersion: 1,
+    ignoredRefs: [{ quote: '@助理 ', reason: '点名适用于下列事项' }], units: [
+      { unitKey: 'one', summary: '第一项', sourceRefs: [{ quote: '第一项；' }], topics: [{ newTopicKey: 'same', title: '两项讨论' }] },
+      { unitKey: 'two', summary: '第二项', sourceRefs: [{ quote: '第二项' }], contextRefs: [{ quote: '@助理 ', purpose: '原始点名' }], topics: [{ newTopicKey: 'same', title: '两项讨论' }] },
+    ] }] })
+  assert.ok(Buffer.byteLength(JSON.stringify(raw), 'utf8') <= 1024)
+  assert.equal(raw.pendingDecisions, undefined)
+  const envelope = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.equal(envelope.messages.length, 2)
+  assert.equal(envelope.quotedMessages.length, 1)
+  assert.equal(envelope.sourceMessages.length, 1)
+  assert.equal(envelope.sourceMessages[0].text, '@助理 第一项；第二项')
+  assert.equal(envelope.messages[0].quotedMessageId, 'quoted-multi')
+  assert.equal(envelope.messages[1].quotedMessageId, 'quoted-multi')
+})
+
+test('压缩移除已见决策正文后需重新取得必要增量', async (t) => {
+  let visible = []
+  const h = await setup(t, { session: { deriveMessages: () => visible } })
+  await ingest(h, 'surface')
+  const request = (await route(h)).pendingDecisions[0]
+  const body = h.sent.findLast((item) => item.startsWith('[GROUP_TOPIC_DECISION]'))
+  visible = [{ role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text: body }] }]
+  const args = { requestId: request.requestId, topicId: request.topicId, revision: request.revision,
+    decision: { basisMessageIds: ['surface'], actions: [], reply: '正在核对' } }
+  assert.equal((await h.call('group_decision_submit', args)).status, 'review-required')
+  visible = []
+  await assert.rejects(h.call('group_decision_submit', args), /topic_decision_delta_unread/)
+  visible = [{ role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text: body }] }]
+  assert.equal((await h.call('group_decision_submit', { ...args, decision: { ...args.decision,
+    replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } })).status, 'accepted')
 })
 
 test('超长单消息必须按连续文本片段读完后才允许决策', async (t) => {

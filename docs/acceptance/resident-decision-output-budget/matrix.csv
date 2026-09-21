@@ -1,0 +1,10 @@
+case_id,case,round_1,status,evidence
+R01,路由成功及恢复回执不携带决策正文,PASS,PASS,round-1.md R01
+R02,长历史只传当前增量且首屏不超12KiB,PASS,PASS,round-1.md R02
+R03,同消息多事项去重引用和原始点名,PASS,PASS,round-1.md R03
+R04,超长增量和引用可续读且未读拒绝提交,PASS,PASS,round-1.md R04
+R05,跨群和越序读取失败关闭,PASS,PASS,round-1.md R05
+R06,压缩后已读失效并可恢复,PASS,PASS,round-1.md R06
+R07,授权隔离和独立事项回归,PASS,PASS,round-1.md R07
+R08,状态快路径和完整源码测试,PASS,PASS,round-1.md R08
+R09,本机包安装与运行态核验,PENDING,PENDING,活动Task结束后按runbook执行

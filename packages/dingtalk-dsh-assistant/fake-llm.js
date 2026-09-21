@@ -101,7 +101,7 @@ class FakeResidentAdapter extends LlmAdapter {
         return
       }
       const submitted = new Set(calls.filter((item) => item.name === 'group_decision_submit').map((item) => JSON.parse(item.arguments).requestId))
-      const pending = input.startsWith('[GROUP_TOPIC_DECISION]') ? [request] : results.flatMap((result) => result.pendingDecisions ?? [])
+      const pending = input.startsWith('[GROUP_TOPIC_DECISION]') ? [request] : []
       const next = pending.find((item) => !submitted.has(item.requestId))
       if (next) {
         const decision = makeDecision(next, tasks)

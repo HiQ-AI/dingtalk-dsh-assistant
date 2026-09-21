@@ -86,7 +86,19 @@ async function setup(t, options = {}) {
   h.ctx = ctx
   h.runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: options.maxConcurrentTasks ?? 1, supervisorIntervalMs: 0, resumeTimeoutMs: options.resumeTimeoutMs ?? 10_000, decisionRetryBaseMs: options.retryDelayMs ?? 60_000 })
   h.resident = (groupId = 'g') => h.handles.get(store.getGroup(groupId)?.residentSessionId)
-  h.call = (name, args, groupId = 'g', agent) => h.resident(groupId).tools.get(name).execute(args, { agent: agent ?? h.resident(groupId).agent })
+  h.call = async (name, args, groupId = 'g', agent) => {
+    const result = await h.resident(groupId).tools.get(name).execute(args, { agent: agent ?? h.resident(groupId).agent })
+    if (name !== 'group_topic_route_submit' || result.status !== 'accepted') return result
+    const receipt = store.getGroup(groupId).routeHistory.find((item) => item.routeId === args.requestId)
+    const delivered = h.resident(groupId).sent.filter((message) => message.content[0]?.text.startsWith('[GROUP_TOPIC_DECISION]'))
+      .map((message) => JSON.parse(message.content[0].text.split('\n').find((line) => line.startsWith('Topic 请求：')).slice('Topic 请求：'.length)))
+    const pendingDecisions = delivered.filter((item) => {
+      const topic = store.getTopic(groupId, item.topicId)
+      return topic?.revision === item.revision && topic.processedRevision < item.revision
+    })
+      .map((item) => ({ ...item, messages: resolveTopicMessages(store.getGroup(groupId), item.topicId, item.revision) }))
+    return { ...result, topicIdsByKey: receipt?.topicIdsByKey ?? {}, pendingDecisions }
+  }
   h.envelope = (prefix, groupId = 'g', label = 'Topic 请求') => {
     const text = h.resident(groupId).sent.findLast((message) => message.content[0]?.text.startsWith(prefix))?.content[0].text
     return text ? JSON.parse(text.split('\n').find((line) => line.startsWith(`${label}：`)).slice(label.length + 1)) : undefined
@@ -1610,7 +1622,7 @@ test('把他人后续检查误列为本职阶段时，内部修订范围并保�
   assert.deepEqual(revised.stageTasks, ['填写并回读'])
   assert.equal(revised.checkpoints.filter(item => item.kind === 'stage-completed').length, 1)
   assert.equal(h.store.getGroup('g').outbox.filter(item => item.sourceMessageId.startsWith('task-result:')).length, 0)
-  assert.equal(h.goals.get(task.childSessionId).phase, 'active')
+  await until(() => h.goals.get(task.childSessionId).phase === 'active')
   await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: receipt.submissionId }).status === 'history-only')
 })
 
@@ -1911,7 +1923,10 @@ test('已执行来源改归属不会重新授予效果权限，新授权消息�
   const review = await h.call('group_topic_route_review', { messageIds: ['executed-source'], reason: '原归类错误，移到 B' })
   const moved = await h.call('group_topic_route_submit', { requestId: review.requestId, routes: [{ messageId: 'executed-source', messageVersion: 1, topics: [{ newTopicKey: 'correct-b', title: 'B' }] }] })
   const b = moved.pendingDecisions.find((request) => request.topicId !== a.topicId)
-  assert.equal(b.effectOwnerTopicIds['executed-source'], a.topicId)
+  const bEnvelope = h.resident().sent.filter((message) => message.content[0]?.text.startsWith('[GROUP_TOPIC_DECISION]'))
+    .map((message) => JSON.parse(message.content[0].text.split('\n').find((line) => line.startsWith('Topic 请求：')).slice('Topic 请求：'.length)))
+    .find((item) => item.topicId === b.topicId)
+  assert.equal(bEnvelope.messages.find((message) => message.messageId === 'executed-source').effectOwnerTopicId, a.topicId)
   assert.deepEqual(b.ownedDeltaMessageIds, [])
   const newAction = { kind: 'new-task', title: '重复原指令', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: b.topicId, revision: b.revision }] }
   await assert.rejects(h.call('group_decision_submit', { requestId: b.requestId, topicId: b.topicId, revision: b.revision, decision: { basisMessageIds: ['executed-source'], actions: [newAction], reply: '再建任务', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } }), /topic_effect_owner_required/)
