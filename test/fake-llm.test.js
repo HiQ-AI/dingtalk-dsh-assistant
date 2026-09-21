@@ -54,7 +54,7 @@ test('fake adapter 先归类，再读取工具正式 Topic 标识独立提交', 
   const args = topicRouteSubmissionSchema.parse(JSON.parse(routing[1].argumentsDelta))
   assert.deepEqual(args.routes[0].units[0].topics, [{ newTopicKey: 'fake-m1', title: '任务：核验提交协议' }])
   const pendingDecisions = [{ requestId: 'decision-1', topicId: 'topic-persisted', revision: 1, messages: [{ ...messages[0], unitId: 'unit-m1', unitRevision: 1 }] }]
-  const decision = await run(value, [request, assistant(routing[2]), result(routing[1].id, { status: 'accepted', pendingDecisions })])
+  const decision = await run(value, [request, assistant(routing[2]), result(routing[1].id, { status: 'accepted', requestId: 'route-1' }), topicRequest('DECISION', pendingDecisions[0])])
   assert.equal(decision[1].name, 'group_decision_submit')
   const submission = groupDecisionSubmissionSchema.parse(JSON.parse(decision[1].argumentsDelta))
   assert.equal(submission.requestId, 'decision-1')
@@ -70,12 +70,14 @@ test('fake adapter 一批多个话题处理完一个提交一个', async () => {
   const request = topicRequest('ROUTE', { requestId: 'route-1', messages, topics: [] })
   const routing = await run(value, [request])
   const pendingDecisions = messages.map((message, index) => ({ requestId: `d${index}`, topicId: `t${index}`, revision: 1, messages: [message] }))
-  const history = [request, assistant(routing[2]), result(routing[1].id, { status: 'accepted', pendingDecisions })]
-  const first = await run(value, history)
-  const second = await run(value, [...history, assistant(first[2]), result(first[1].id, { status: 'accepted' })])
+  const history = [request, assistant(routing[2]), result(routing[1].id, { status: 'accepted', requestId: 'route-1' })]
+  const firstHistory = [...history, topicRequest('DECISION', pendingDecisions[0])]
+  const first = await run(value, firstHistory)
+  const secondHistory = [...firstHistory, assistant(first[2]), result(first[1].id, { status: 'accepted' }), topicRequest('DECISION', pendingDecisions[1])]
+  const second = await run(value, secondHistory)
   assert.equal(JSON.parse(first[1].argumentsDelta).topicId, 't0')
   assert.equal(JSON.parse(second[1].argumentsDelta).topicId, 't1')
-  const done = await run(value, [...history, assistant(first[2]), result(first[1].id, { status: 'accepted' }), assistant(second[2]), result(second[1].id, { status: 'accepted' })])
+  const done = await run(value, [...secondHistory, assistant(second[2]), result(second[1].id, { status: 'accepted' })])
   assert.equal(done.at(-1).reason.kind, 'stop')
 })
 
