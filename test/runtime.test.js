@@ -69,6 +69,7 @@ async function setup(t, options = {}) {
   const selection = { provider: 'fake', model: 'fake' }
   const ctx = {
     ...(options.llm ? { llm: options.llm } : {}),
+    ...(options.sessionPersistence ? { sessionPersistence: options.sessionPersistence } : {}),
     agentDefaultModel: { currentSelection: () => ({ ...selection }), async saveSelection(value) { Object.assign(selection, value); h.savedSelection = value } },
     agents: { create: (input) => makeHandle(input, false), resume: (input) => makeHandle(input, true), get: (id) => h.handles.get(String(id))?.agent },
     subagents: { drainContinuableDescendants: async () => {} },
@@ -191,15 +192,86 @@ test('活动投影从 DSH 工具结果关联真实工具名与错误位', async 
   const session = h.handles.get(task.childSessionId).agent.session
   const observer = h.events.get('session/event')
   session.append('tool/call', { callId: 'tool-1', name: 'group_topic_context_get' })
+  session.snapshotEvents().at(-1).time = 1000
   observer(session, session.snapshotEvents().at(-1))
   session.append('tool/result', {
     message: { source: { kind: 'tool', callId: 'tool-1' }, content: [{ type: 'tool-result', isError: true, content: [{ type: 'text', text: 'synthetic error' }] }] },
   })
   const result = session.snapshotEvents().at(-1)
+  result.time = 1250
   observer(session, result)
   await h.runtime.flushActivities()
   const projected = h.store.listActivities(task.taskId).find(item => item.eventKey === `${task.childSessionId}:${result.seq}`)
-  assert.deepEqual(projected.detail, { tool: 'group_topic_context_get', isError: true, callId: 'tool-1' })
+  assert.deepEqual(projected.detail, { tool: 'group_topic_context_get', isError: true, callId: 'tool-1', durationMs: 250, resultSizeBytes: Buffer.byteLength(JSON.stringify(result.data.message.content[0].content)) })
+})
+
+test('活动落盘失败暂停后续投影，故障消失按原事件顺序补齐并清除当前告警', async t => {
+  const h = await setup(t), task = await createTask(h, 'activity-recovery')
+  const session = h.handles.get(task.childSessionId).agent.session
+  const observer = h.events.get('session/event')
+  const record = h.store.recordActivity.bind(h.store)
+  let blocked = true, attempts = 0
+  h.store.recordActivity = async input => {
+    attempts += 1
+    if (blocked) throw new Error('EPERM: synthetic rename failure')
+    return record(input)
+  }
+  session.append('tool/call', { callId: 'recover-1', name: 'read' })
+  const first = session.snapshotEvents().at(-1)
+  observer(session, first)
+  session.append('tool/result', { message: { source: { callId: 'recover-1' }, content: [{ type: 'tool-result', isError: false }] } })
+  const second = session.snapshotEvents().at(-1)
+  observer(session, second)
+  await h.runtime.flushActivities()
+  assert.equal(attempts, 3)
+  assert.equal(h.store.listActivities(task.taskId).length, 0)
+  assert.equal(h.runtime.listRecoveryIssues().filter(issue => issue.kind === 'activity-projection').length, 1)
+  blocked = false
+  await h.runtime.reconcileActivityProjections({ force: true })
+  const recovered = h.store.listActivities(task.taskId)
+  assert.deepEqual(recovered.map(item => item.seq), [first.seq, second.seq])
+  assert.equal(h.store.getTask(task.taskId).activityProjection.sessions[task.childSessionId].lastSeq, second.seq)
+  assert.equal(h.runtime.listRecoveryIssues().filter(issue => issue.kind === 'activity-projection').length, 0)
+  await h.runtime.reconcileActivityProjections({ force: true })
+  assert.equal(h.store.listActivities(task.taskId).length, 2)
+})
+
+test('活动故障跨 Runtime 重启从 Session 原事件补投影', async t => {
+  const original = await setup(t), task = await createTask(original, 'activity-restart')
+  const session = original.handles.get(task.childSessionId).agent.session
+  const observer = original.events.get('session/event')
+  original.store.recordActivity = async () => { throw new Error('EPERM: synthetic persistent failure') }
+  session.append('tool/call', { callId: 'after-restart', name: 'read' })
+  observer(session, session.snapshotEvents().at(-1))
+  session.append('tool/result', { message: { source: { callId: 'after-restart' }, content: [{ type: 'tool-result', isError: false }] } })
+  observer(session, session.snapshotEvents().at(-1))
+  await original.runtime.flushActivities()
+  assert.equal(original.store.listActivities(task.taskId).length, 0)
+  const events = new Map([[task.childSessionId, session.snapshotEvents()]])
+  await original.runtime.close()
+  const restored = await setup(t, { snapshot: original.snapshot, goals: original.goals, sessionEvents: events })
+  assert.equal(restored.store.listActivities(task.taskId).length, 2)
+  assert.equal(restored.runtime.listRecoveryIssues().filter(issue => issue.kind === 'activity-projection').length, 0)
+})
+
+test('已完成任务重启后从持久 Session 审计并补齐遗漏活动', async t => {
+  const original = await setup(t), task = await createTask(original, 'completed-activity-restart')
+  const session = original.handles.get(task.childSessionId).agent.session
+  session.append('tool/call', { callId: 'completed-replay', name: 'read' })
+  const missing = session.snapshotEvents().at(-1)
+  await original.store.updateTask(task.taskId, value => ({ ...value, state: 'completed' }))
+  const sessionEvents = new Map([[task.childSessionId, session.snapshotEvents()]])
+  await original.runtime.close()
+  let disposed = 0
+  const restored = await setup(t, { snapshot: original.snapshot, sessionPersistence: {
+    async prepare(id) { return { session: { id, snapshotEvents: () => sessionEvents.get(String(id)) }, [Symbol.dispose]() { disposed += 1 } } },
+  } })
+  assert.equal(restored.store.listActivities(task.taskId).length, 0)
+  await restored.runtime.reconcileActivityProjections({ force: true })
+  assert.equal(restored.store.listActivities(task.taskId).find(item => item.seq === missing.seq)?.detail.tool, 'read')
+  assert.equal(restored.store.getTask(task.taskId).activityProjection.sessions[task.childSessionId].lastSeq, missing.seq)
+  assert.equal(disposed, 1)
+  assert.equal(restored.runtime.listRecoveryIssues().filter(issue => issue.kind === 'activity-projection').length, 0)
 })
 
 function statusLlm(answer, calls) {
@@ -1240,6 +1312,21 @@ test('preserve 新输入作废待审 checkpoint，并按新版本重新审阅', 
   await assert.rejects(pending, /task_review_context_changed/)
   await checkpoint(h, updated, { kind: 'plan-confirmed', remainingItems: ['核验'] })
   assert.equal(h.store.getTask(task.taskId).checkpoints[0].inputVersion, 2)
+})
+
+test('授权变化即使阶段名称不变也撤销旧阶段批准', async t => {
+  const h = await setup(t), task = await createTask(h)
+  await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['核验'] })
+  const before = h.store.getTask(task.taskId)
+  assert.equal(before.checkpoints.length, 1)
+  const updated = await h.runtime.appendTaskContext({ taskId: task.taskId, requestId: 'authorization-changed', topicRefs: task.topicRefs,
+    context: '原有授权已被撤回', authorizationChange: 'changed', ...inputVersion(before) })
+  assert.deepEqual(updated.checkpoints, [])
+  const revision = updated.executionEvents.findLast(event => event.kind === 'input-revised')
+  assert.equal(revision.authorizationChange, 'changed')
+  assert.equal(revision.authorizationBasisMessageIds.length, 1)
+  assert.ok(h.store.getGroup('g').messages.some(message => message.messageId === revision.authorizationBasisMessageIds[0] && message.sourceKind === 'web'))
+  assert.deepEqual(revision.retainedCheckpointIds, [])
 })
 
 test('相同待审计划的重复提交与Supervisor恢复共用一次审阅和拒绝注入', async (t) => {

@@ -30,7 +30,7 @@ export function createTaskReportQueue({ store, serialize, hasPendingInput, execu
   const receipt = (taskId, report) => ({
     accepted: true, taskId, submissionId: report.submissionId, status: report.status,
     instruction: pending(report) ? '报告已保存，尚未批准阶段推进或任务完成。等待 Runtime 事件通知，不重复提交，不继续依赖该批准的动作。'
-      : report.status === 'history-only' ? '已保存为原版本历史事实，不推进当前目标。' : '报告已处理；以处理结果为准。',
+      : report.status === 'history-only' ? report.staleReview ? '输入版本变化使待审报告作废；按当前版本重新核对后，仅对仍适用的阶段提交新报告。旧报告不推进目标。' : '已保存为原版本历史事实，不推进当前目标。' : '报告已处理；以处理结果为准。',
     ...(report.receipt ? { result: report.receipt } : {}), ...(report.error ? { error: report.error } : {}),
   })
   async function settle(taskId, report, status, extra = {}) {
@@ -39,37 +39,38 @@ export function createTaskReportQueue({ store, serialize, hasPendingInput, execu
         inputVersion: report.inputVersion, runSequence: report.runSequence, status, at: new Date().toISOString(), ...extra }],
     })))
   }
-  const needsNotification = report => ['accepted', 'rejected', 'failed'].includes(report.status) && !report.notifiedAt
+  const needsNotification = report => (['accepted', 'rejected', 'failed'].includes(report.status) || report.status === 'history-only' && report.staleReview) && !report.notifiedAt
   const matchesCurrent = (task, report) => report.inputVersion === task.inputVersion && report.runSequence === task.runSequence
   async function process(taskId, report) {
     let task = store.getTask(taskId)
-    if (!matchesCurrent(task, report) && (pending(report) || needsNotification(report) || report.status === 'failed')) {
-      await settle(taskId, report, 'history-only')
-      return
+    if (!matchesCurrent(task, report) && report.status !== 'history-only' && (pending(report) || needsNotification(report) || report.status === 'failed')) {
+      await settle(taskId, report, 'history-only', { staleReview: pending(report) || needsNotification(report) })
+      report = taskReports(store.getTask(taskId)).find(item => item.submissionId === report.submissionId)
     }
     if (pending(report)) {
       if (!matchesCurrent(task, report) || task.state === 'completed') {
-        await settle(taskId, report, 'history-only')
-        return
+        await settle(taskId, report, 'history-only', { staleReview: true })
+        report = taskReports(store.getTask(taskId)).find(item => item.submissionId === report.submissionId)
+      } else {
+        if (hasPendingInput(task) && !diagnostic(report)) {
+          if (report.status !== 'input-wait') await settle(taskId, report, 'input-wait')
+          return
+        }
+        let status, result, error
+        try {
+          result = await execute(taskId, report.reportType, report.value, { recoveryError: report.recoveryError, submissionId: report.submissionId })
+          status = result?.accepted === false ? 'rejected' : 'accepted'
+        } catch (cause) {
+          error = String(cause.message ?? cause).slice(0, 1600)
+          status = error.startsWith('task_input_pending:') ? 'input-wait'
+            : /task_(?:input_version_stale|checkpoint_run_changed|result_context_changed|review_context_changed)(?::|$)/u.test(error) ? 'history-only'
+              : deterministicReviewFailure(error) || /topic_request_not_submitted|topic_request_retry_exhausted|resident_runtime_closed|task_review_request_failed/u.test(error) ? 'failed' : 'rejected'
+        }
+        task = store.getTask(taskId)
+        if (status === 'accepted' && !matchesCurrent(task, report)) status = 'history-only'
+        await settle(taskId, report, status, { ...(status === 'history-only' ? { staleReview: true } : {}), ...(result ? { receipt: result } : {}), ...(error ? { error } : {}) })
+        report = taskReports(store.getTask(taskId)).find(item => item.submissionId === report.submissionId)
       }
-      if (hasPendingInput(task) && !diagnostic(report)) {
-        if (report.status !== 'input-wait') await settle(taskId, report, 'input-wait')
-        return
-      }
-      let status, result, error
-      try {
-        result = await execute(taskId, report.reportType, report.value, { recoveryError: report.recoveryError, submissionId: report.submissionId })
-        status = result?.accepted === false ? 'rejected' : 'accepted'
-      } catch (cause) {
-        error = String(cause.message ?? cause).slice(0, 1600)
-        status = error.startsWith('task_input_pending:') ? 'input-wait'
-          : /task_(?:input_version_stale|checkpoint_run_changed|result_context_changed|review_context_changed)(?::|$)/u.test(error) ? 'history-only'
-            : deterministicReviewFailure(error) || /topic_request_not_submitted|topic_request_retry_exhausted|resident_runtime_closed|task_review_request_failed/u.test(error) ? 'failed' : 'rejected'
-      }
-      task = store.getTask(taskId)
-      if (status === 'accepted' && !matchesCurrent(task, report)) status = 'history-only'
-      await settle(taskId, report, status, { ...(result ? { receipt: result } : {}), ...(error ? { error } : {}) })
-      report = taskReports(store.getTask(taskId)).find(item => item.submissionId === report.submissionId)
     }
     if (isClosing() || !needsNotification(report)) return
     // notify 必须先把稳定身份通知持久化；失败保留待通知终态，恢复不能再次执行报告。

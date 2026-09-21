@@ -68,6 +68,7 @@ const outboundSchema = z.object({
   supersededByOutboundId: z.string().min(1).optional(), supersededAt: z.string().min(1).optional(), supersededReason: z.string().min(1).optional(), sendStartedAt: z.string().min(1).optional(),
   readbackRequired: z.boolean().optional(),
   deliveryAttemptCount: z.number().int().nonnegative().optional(), deliveryAttemptedAt: z.string().min(1).optional(),
+  sendAttemptCount: z.number().int().nonnegative().optional(), readbackAttemptCount: z.number().int().nonnegative().optional(),
   deliveryPendingReason: z.string().min(1).optional(), deliveryError: z.string().min(1).optional(),
   deliveryBlockedAt: z.string().min(1).optional(),
   deliveredMessageId: z.string().min(1).optional(), deliveredAt: z.string().min(1).optional(),
@@ -128,6 +129,12 @@ const activityProjectionSchema = z.object({
   truncated: z.boolean().default(false),
   sessions: z.record(z.string(), z.object({ lastSeq: z.number().int().nonnegative().optional() })).default({}),
   retentionFloor: z.object({ occurredAt: z.string(), sessionId: z.string(), eventKey: z.string() }).optional(),
+  aggregate: z.object({
+    total: z.number().int().nonnegative(),
+    days: z.record(z.string(), z.object({ total: z.number().int().nonnegative(), byType: z.record(z.string(), z.number().int().nonnegative()) })),
+    retainedEventKeys: z.array(z.string()),
+    coverage: z.enum(['complete', 'retained-only']),
+  }).optional(),
 })
 const taskSchema = z.object({
   taskId: z.string().min(1), groupId: z.string().min(1), topicRefs: z.array(topicRefSchema).min(1), inputVersion: z.number().int().positive(), appliedOperations: z.array(z.string()).default([]), title: z.string().min(1).optional(), objective: z.string().min(1),
@@ -165,8 +172,19 @@ const alertSchema = z.object({
   status: z.enum(['active', 'resolved']).optional(), resolvedAt: z.string().min(1).optional(),
 })
 const ACTIVITY_PROJECTION_LIMIT_PER_TASK = 500
-const compareActivity = (a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt)
-  || a.sessionId.localeCompare(b.sessionId) || a.eventKey.localeCompare(b.eventKey)
+const activityTime = (occurredAt) => Date.parse(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(occurredAt)
+  ? `${occurredAt.replace(' ', 'T')}+08:00` : occurredAt)
+const compareActivity = (a, b) => activityTime(a.occurredAt) - activityTime(b.occurredAt) || a.sessionId.localeCompare(b.sessionId) || a.eventKey.localeCompare(b.eventKey)
+const activityDayFormatter = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
+const activityDay = (occurredAt) => activityDayFormatter.format(activityTime(occurredAt))
+const countActivity = (aggregate, activity) => {
+  const day = activityDay(activity.occurredAt)
+  const current = aggregate.days[day] ?? { total: 0, byType: {} }
+  return {
+    ...aggregate, total: aggregate.total + 1,
+    days: { ...aggregate.days, [day]: { total: current.total + 1, byType: { ...current.byType, [activity.type]: (current.byType[activity.type] ?? 0) + 1 } } },
+  }
+}
 
 export const residentDomainSpec = defineDomain({
   name: 'dingtalk_dsh_assistant', version: 8, tables: {
@@ -928,9 +946,18 @@ export async function openResidentStore(storageDomain) {
         if (!outbound) throw new Error(`outbound_not_found:${outboundId}`)
         if (outbound.status !== 'pending' || outbound.supersededByOutboundId) return latest
         started = true
-        return { ...latest, outbox: latest.outbox.map(item => item.outboundId === outboundId ? { ...item, sendStartedAt: item.sendStartedAt ?? new Date().toISOString() } : item) }
+        return { ...latest, outbox: latest.outbox.map(item => item.outboundId === outboundId ? { ...item, sendStartedAt: item.sendStartedAt ?? new Date().toISOString(), sendAttemptCount: (item.sendAttemptCount ?? 0) + 1 } : item) }
       })
       return started
+    }),
+    recordOutboundReadbackAttempt: ({ groupId, outboundId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      return groups.update(entry[0], latest => {
+        if (!latest.outbox.some(item => item.outboundId === outboundId)) throw new Error(`outbound_not_found:${outboundId}`)
+        return { ...latest, outbox: latest.outbox.map(item => item.outboundId === outboundId
+          ? { ...item, readbackAttemptCount: (item.readbackAttemptCount ?? 0) + 1 } : item) }
+      })
     }),
     attachOutboxTasks: ({ groupId, sourceMessageId, taskIds }) => serialize(groupId, async () => {
       if (!Array.isArray(taskIds) || taskIds.length === 0 || taskIds.some((taskId) => typeof taskId !== 'string' || taskId.trim() === '')) throw new Error('outbox_task_ids_invalid')
@@ -1063,10 +1090,16 @@ export async function openResidentStore(storageDomain) {
       const entries = [...activities.entries()].filter(([, item]) => item.taskId === taskId)
       const existing = entries.find(([, item]) => item.sessionId === sessionId && item.eventKey === eventKey)?.[1]
       const activity = activitySchema.parse({ activityId: `activity-${randomUUID()}`, taskId, sessionId, eventKey, type, detail, seq, occurredAt: occurredAt ?? new Date().toISOString() })
-      if (!Number.isFinite(Date.parse(activity.occurredAt))) throw new Error('activity_occurred_at_invalid')
+      if (!Number.isFinite(activityTime(activity.occurredAt))) throw new Error('activity_occurred_at_invalid')
       const previous = task.activityProjection
       if (previous?.retentionFloor && compareActivity(activity, previous.retentionFloor) <= 0) {
         // 水位已落盘而删除尚未完成时，旧事件重放负责补齐删除。
+        if (seq !== undefined && seq > (previous.sessions?.[sessionId]?.lastSeq ?? -1)) {
+          await tasks.update(taskId, (current) => ({ ...current, activityProjection: activityProjectionSchema.parse({
+            ...previous, lastSyncedAt: new Date().toISOString(),
+            sessions: { ...previous.sessions, [sessionId]: { ...previous.sessions?.[sessionId], lastSeq: seq } },
+          }) }))
+        }
         for (const [expiredKey, item] of entries) if (compareActivity(item, previous.retentionFloor) <= 0) await activities.delete(expiredKey)
         return { created: false, expired: true }
       }
@@ -1077,10 +1110,18 @@ export async function openResidentStore(storageDomain) {
       const latest = ordered.at(-1)?.[1]
       const floor = removed.at(-1)?.[1] ?? previous?.retentionFloor
       const session = previous?.sessions?.[sessionId] ?? {}
+      const retained = ordered.slice(-ACTIVITY_PROJECTION_LIMIT_PER_TASK)
+      const baseline = previous?.aggregate ?? entries
+        .filter(([, item]) => !previous?.retentionFloor || compareActivity(item, previous.retentionFloor) > 0)
+        .reduce((summary, [entryKey, item]) => ({ ...countActivity(summary, item), retainedEventKeys: [...summary.retainedEventKeys, entryKey] }), {
+          total: 0, days: {}, retainedEventKeys: [], coverage: previous?.truncated ? 'retained-only' : 'complete',
+        })
+      const aggregate = (baseline.retainedEventKeys.includes(key) ? baseline : countActivity(baseline, existing ?? activity))
       const activityProjection = activityProjectionSchema.parse({
         ...previous, lastSyncedAt: new Date().toISOString(), latestEventKey: latest?.eventKey, latestOccurredAt: latest?.occurredAt,
         truncated: previous?.truncated || removed.length > 0,
         sessions: { ...previous?.sessions, [sessionId]: { ...session, ...(seq === undefined ? {} : { lastSeq: Math.max(session.lastSeq ?? 0, seq) }) } },
+        aggregate: { ...aggregate, retainedEventKeys: retained.map(([entryKey]) => entryKey) },
         ...(floor ? { retentionFloor: { occurredAt: floor.occurredAt, sessionId: floor.sessionId, eventKey: floor.eventKey } } : {}),
       })
       await tasks.update(taskId, (current) => ({ ...current, activityProjection }))

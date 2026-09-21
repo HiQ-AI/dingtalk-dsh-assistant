@@ -61,14 +61,16 @@ test('DWS profile固定附加到订阅、回读和发送命令', () => {
 })
 
 test('Task完成通知使用DWS原生引用回复并@提出人', async () => {
-  let reads = 0
+  let reads = 0, sendAttempts = 0, readbackAttempts = 0
   let request
   const adapter = {
     async readGroup() { reads += 1; return { complete: true, messages: reads === 1 ? [] : [{ messageId: 'done-id', text: 'done', quotedMessage: { messageId: 'm-source' } }] } },
     async sendGroupReply(value) { request = value; return { deliveryStatus: 'success' } },
   }
-  const result = await dispatchOutbox({ adapter, groupId: 'cid-a', outbound: { outboundId: 'out-done', text: 'done', replyToMessageId: 'm-source', replyToSenderOpenDingTalkId: 'od-requester', atOpenDingTalkIds: ['od-requester'] } })
+  const result = await dispatchOutbox({ adapter, groupId: 'cid-a', outbound: { outboundId: 'out-done', text: 'done', replyToMessageId: 'm-source', replyToSenderOpenDingTalkId: 'od-requester', atOpenDingTalkIds: ['od-requester'] }, beforeSend: async () => { sendAttempts += 1; return true }, beforeReadback: async () => { readbackAttempts += 1 } })
   assert.equal(result.status, 'sent')
+  assert.equal(sendAttempts, 1)
+  assert.equal(readbackAttempts, 2)
   assert.deepEqual(request.atOpenDingTalkIds, ['od-requester'])
   assert.equal(request.replyToMessageId, 'm-source')
 })

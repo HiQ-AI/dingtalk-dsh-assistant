@@ -1,10 +1,24 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { blockTaskDecisionForUnavailableMedia, buildReplyReviewCandidates, isDirectedToOtherParticipants, isExplicitAgentDirection, groupDecisionSchema, REPLY_REVIEW_CANDIDATE_LIMIT, REPLY_REVIEW_MAX_CHARS, TOPIC_TITLE_MAX_CHARS, groupDecisionSubmissionSchema, topicRouteSubmissionSchema } from '../packages/dingtalk-dsh-assistant/decision.js'
+import { blockTaskDecisionForUnavailableMedia, buildReplyReviewCandidates, isDirectedToOtherParticipants, isExplicitAgentDirection, groupDecisionSchema, REPLY_REVIEW_CANDIDATE_LIMIT, REPLY_REVIEW_MAX_CHARS, TOPIC_TITLE_MAX_CHARS, groupDecisionSubmissionSchema, topicRouteSubmissionSchema, validateTaskDispatchAssessment } from '../packages/dingtalk-dsh-assistant/decision.js'
 
 const topicRefs = [{ topicId: 'topic-a', revision: 2 }]
 const executionVersion = { inputVersion: 1, runSequence: 1 }
+
+test('派发核对绑定来源事项与当前启用流程版本', () => {
+  const basisUnitRefs = [{ unitId: 'unit-flow-attribute', unitRevision: 2 }]
+  const action = { kind: 'new-task', title: '流属性权限配置', objective: '核对流属性权限配置', acceptanceCriteria: ['配置核验'], topicRefs, basisUnitRefs,
+    dispatchAssessment: { businessObject: '流属性', agentDeliverable: '配置与核验', externalFollowup: ['测试同事复测'], sourceUnitRefs: basisUnitRefs,
+      workflowRefs: [{ id: 'workflow-uat', revision: 3 }], workflowReason: '涉及 UAT 配置验证' } }
+  const prompts = [{ id: 'workflow-uat', revision: 3, enabled: true }]
+  assert.deepEqual(groupDecisionSchema.parse({ basisMessageIds: ['m1'], actions: [action], reply: '开始' }).actions[0], action)
+  assert.doesNotThrow(() => validateTaskDispatchAssessment(action, { requiresAssessment: true, currentPrompts: prompts }))
+  assert.throws(() => validateTaskDispatchAssessment({ ...action, dispatchAssessment: { ...action.dispatchAssessment, sourceUnitRefs: [{ unitId: 'unit-method-select', unitRevision: 1 }] } }, { requiresAssessment: true, currentPrompts: prompts }), /task_dispatch_source_units_invalid/)
+  assert.throws(() => validateTaskDispatchAssessment(action, { requiresAssessment: true, currentPrompts: [{ ...prompts[0], revision: 4 }] }), /task_dispatch_workflow_refs_invalid/)
+  assert.throws(() => validateTaskDispatchAssessment(action, { requiresAssessment: true, currentPrompts: [{ ...prompts[0], enabled: false }] }), /task_dispatch_workflow_refs_invalid/)
+  assert.throws(() => validateTaskDispatchAssessment({ ...action, dispatchAssessment: undefined }, { requiresAssessment: true, currentPrompts: prompts }), /task_dispatch_assessment_required/)
+})
 
 test('定向重规划证据必须给出消息依据、原因及受影响阶段', () => {
   const action = { kind: 'task-context', taskId: 'task1', context: '修订部署范围', progressImpact: 'replan', impactEvidence: { basisMessageIds: ['m1'], reason: '用户要求调整目标环境', affectedStageIds: ['stage-deploy'] }, topicRefs, ...executionVersion }

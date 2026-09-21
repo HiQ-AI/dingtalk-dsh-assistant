@@ -369,7 +369,10 @@ test('#1066 单消息拆成三个事项，各自建 Task 且已完成事项不�
   assert.equal(routed.pendingDecisions.length, 3)
   const [first, ...siblings] = routed.pendingDecisions
   const ref = { unitId: first.messages[0].unitId, unitRevision: first.messages[0].unitRevision }
-  const action = { kind: 'new-task', title: first.messages[0].unitSummary, objective: first.messages[0].unitSummary, acceptanceCriteria: ['给出可核验证据'], topicRefs: [{ topicId: first.topicId, revision: first.revision }], basisUnitRefs: [ref] }
+  const action = { kind: 'new-task', title: first.messages[0].unitSummary, objective: first.messages[0].unitSummary, acceptanceCriteria: ['给出可核验证据'], topicRefs: [{ topicId: first.topicId, revision: first.revision }], basisUnitRefs: [ref],
+    dispatchAssessment: { businessObject: '审核增强', agentDeliverable: '回归结果', externalFollowup: [], sourceUnitRefs: [ref], workflowRefs: [], workflowReason: '当前无专用流程' } }
+  await assert.rejects(h.call('group_decision_submit', submission(first, { basisUnitRefs: [ref], actions: [{ ...action, dispatchAssessment: undefined }], reply: '已开始处理。', replyReview: { kind: 'confirmation' } })), /task_dispatch_assessment_required/)
+  await assert.rejects(h.call('group_decision_submit', submission(first, { basisUnitRefs: [ref], actions: [{ ...action, dispatchAssessment: { ...action.dispatchAssessment, sourceUnitRefs: [{ unitId: siblings[0].messages[0].unitId, unitRevision: 1 }] } }], reply: '已开始处理。', replyReview: { kind: 'confirmation' } })), /task_dispatch_source_units_invalid/)
   assert.equal((await h.call('group_decision_submit', submission(first, { basisUnitRefs: [ref], actions: [action], reply: '已开始处理。', replyReview: { kind: 'confirmation' } }))).status, 'accepted')
   await h.coordinator.drain('g')
   const task = h.store.listTasks()[0]
@@ -391,7 +394,8 @@ test('#1066 单消息拆成三个事项，各自建 Task 且已完成事项不�
   assert.equal(siblings.every((request) => h.store.getTopic('g', request.topicId).processedRevision === 0), true)
   for (const request of siblings) {
     const unitRef = { unitId: request.messages[0].unitId, unitRevision: request.messages[0].unitRevision }
-    const siblingAction = { kind: 'new-task', title: request.messages[0].unitSummary, objective: request.messages[0].unitSummary, acceptanceCriteria: ['给出方案和排期'], topicRefs: [{ topicId: request.topicId, revision: request.revision }], basisUnitRefs: [unitRef] }
+    const siblingAction = { kind: 'new-task', title: request.messages[0].unitSummary, objective: request.messages[0].unitSummary, acceptanceCriteria: ['给出方案和排期'], topicRefs: [{ topicId: request.topicId, revision: request.revision }], basisUnitRefs: [unitRef],
+      dispatchAssessment: { businessObject: request.messages[0].unitSummary, agentDeliverable: '方案和排期', externalFollowup: [], sourceUnitRefs: [unitRef], workflowRefs: [], workflowReason: '当前无专用流程' } }
     assert.equal((await h.call('group_decision_submit', submission(request, { basisUnitRefs: [unitRef], actions: [siblingAction], reply: '已分别开始分析。', replyReview: { kind: 'confirmation' } }))).status, 'accepted')
     await h.coordinator.drain('g')
   }
@@ -552,7 +556,8 @@ test('同一消息拆分后的任务授权按事项就近点名判断', async (t
       const selected = request.messages.find((message) => message.unitSummary === units[target.charCodeAt(0) - 97].summary)
       const own = { unitId: selected.unitId, unitRevision: selected.unitRevision }
       const all = request.messages.map((item) => ({ unitId: item.unitId, unitRevision: item.unitRevision }))
-      const action = { kind: 'new-task', title: `处理 ${target}`, objective: `处理 ${target}`, acceptanceCriteria: ['完成'], topicRefs: [{ topicId: request.topicId, revision: request.revision }], basisUnitRefs: [own] }
+      const action = { kind: 'new-task', title: `处理 ${target}`, objective: `处理 ${target}`, acceptanceCriteria: ['完成'], topicRefs: [{ topicId: request.topicId, revision: request.revision }], basisUnitRefs: [own],
+        dispatchAssessment: { businessObject: `事项 ${target}`, agentDeliverable: `处理 ${target}`, externalFollowup: [], sourceUnitRefs: [own], workflowRefs: [], workflowReason: '当前无专用流程' } }
       const decision = h.call('group_decision_submit', submission(request, { basisUnitRefs: name === 'other-despite-agent-in-decision' ? all : [own], actions: [action], reply: '开始处理', replyReview: { kind: 'confirmation' } }))
       if (expectedError) await assert.rejects(decision, expectedError)
       else {

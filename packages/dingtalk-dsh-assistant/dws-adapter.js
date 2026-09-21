@@ -257,9 +257,10 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
   }
 }
 
-export async function dispatchOutbox({ adapter, groupId, outbound, beforeSend }) {
+export async function dispatchOutbox({ adapter, groupId, outbound, beforeSend, beforeReadback }) {
   let phase = 'preflight'
   try {
+    await beforeReadback?.()
     const before = await adapter.readGroup(groupId)
     const usableHistory = (history) => history.complete === true || (history.partial === false && (history.failedCount ?? 0) === 0 && Array.isArray(history.failures) && history.failures.length === 0)
     if (!usableHistory(before)) return { status: 'pending', reason: 'preflight_history_partial' }
@@ -277,6 +278,7 @@ export async function dispatchOutbox({ adapter, groupId, outbound, beforeSend })
     if (sent?.deliveryStatus === 'unknown') return { status: 'pending', reason: 'delivery_unknown', sendResult: sent }
 
     phase = 'postflight'
+    await beforeReadback?.()
     const after = await adapter.readGroup(groupId)
     if (!usableHistory(after)) return { status: 'pending', reason: 'postflight_history_partial', sendResult: sent }
     const delivered = after.messages.find((message) => matchesOutbound(message, outbound))

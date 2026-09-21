@@ -299,6 +299,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       if (outbound.status === 'sent') { await runtime.completeOutboundReplacement?.({ groupId, outbound }); return }
       if (outbound.deliveryBlockedAt) return
       const delivery = await dispatchOutbox({ adapter, groupId, outbound,
+        ...(runtime.recordOutboundReadbackAttempt ? { beforeReadback: () => runtime.recordOutboundReadbackAttempt({ groupId, outboundId: outbound.outboundId }) } : {}),
         ...(runtime.beginOutboundSend ? { beforeSend: () => runtime.beginOutboundSend({ groupId, outboundId: outbound.outboundId }) } : {}) })
       if (delivery.status === 'superseded') return
       await runtime.recordOutboundDeliveryAttempt?.({ groupId, outboundId: outbound.outboundId, ...(delivery.status === 'pending' ? { reason: delivery.reason } : {}) })

@@ -6,7 +6,7 @@ import { TaskRevisionError } from './task-input-revision.js'
 import { visiblePromptRefs, visibleSectionLength, visibleCoordinatorText, visibleToolOutputs, promptContent } from './coordination-context.js'
 import { taskProgressSnapshot } from './task-progress.js'
 import { assertCurrentTaskPrompts, isDiagnosticCheckpoint } from './task-result.js'
-import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, isExplicitAgentDirection, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS } from './decision.js'
+import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, isExplicitAgentDirection, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS, validateTaskDispatchAssessment } from './decision.js'
 
 const textMessage = (text, images = []) => Object.freeze({ id: randomUUID(), role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text }, ...images.map((attachment) => ({ type: 'image', attachment }))] })
 const objectOutput = { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] }
@@ -439,7 +439,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     request.visibleMessages = Array.isArray(envelope.messages) ? envelope.messages : []
     request.inlineDelta = Array.isArray(envelope.messages)
     envelope.omittedDeltaCount = request.inlineDelta ? 0 : deltaMessages.length
-    const instruction = '按此 Topic 固定版本处理本次事项增量。仅本 Topic 拥有的当前事项可创建或更新 Task；每个 action 携带各自 basisUnitRefs。提交前用 group_decision_context_get 读完 messages 及其他必要 section 指针。需要历史时再用 group_topic_context_get 查询。'
+    const instruction = '按此 Topic 固定版本处理本次事项增量。仅本 Topic 拥有的当前事项可创建或更新 Task；每个 action 携带各自 basisUnitRefs。同一消息拆出多个事项时，new-task 必须提供 dispatchAssessment，分别写明业务对象、当前 Agent 交付、他人后续事项、来源 Unit 和适用流程 ID/版本及选择原因；不得把其他事项或他人验收写入当前目标。单事项任务也应按此核对。提交前用 group_decision_context_get 读完 messages 及其他必要 section 指针。需要历史时再用 group_topic_context_get 查询。'
     const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n${instruction}`
     if (Buffer.byteLength(body, 'utf8') > DECISION_OUTPUT_MAX_BYTES) throw new Error('decision_context_budget_exceeded')
     const dispatch = () => {
@@ -663,6 +663,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       }
       if (action.kind === 'new-task') {
         const group = store.getGroup(request.groupId)
+        const multiUnitSource = actionMessages.some((message) => (group.messages.find((item) => item.messageId === message.messageId)?.activeUnitRefs?.length ?? 0) > 1)
+        validateTaskDispatchAssessment(action, { requiresAssessment: multiUnitSource, currentPrompts: store.getTaskPrompts?.() ?? [] })
         if (!group.responsibility?.trim()) throw new Error('task_group_responsibility_required')
         const directed = actionMessages.some((message) => unitDirection(message, request.messages.filter((item) => item.messageId === message.messageId), store.getAgentNames()) === 'agent')
         const confirmsProposal = actionMessages.some((message) => {

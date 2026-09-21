@@ -77,7 +77,11 @@ test('pending期间版本更新不会用旧完成报告推进新目标', async (
   await f.queue.drain()
   assert.equal(f.queue.get('task1', 'report1').status, 'history-only')
   assert.equal(f.executed.length, 0)
-  assert.equal(f.notified.length, 0)
+  assert.equal(f.notified.length, 1)
+  assert.equal(f.notified[0][1].staleReview, true)
+  for (let i = 0; i < 20; i++) f.queue.recover(f.store.getTask())
+  await f.queue.drain()
+  assert.equal(f.notified.length, 1)
 })
 
 test('两个并发提交在异步审阅期间复用同一执行', async () => {
