@@ -1,0 +1,13 @@
+case,round-1,status,evidence
+system-failure-classification,PASS,PASS,task-reports.test.js 100次恢复与业务驳回对照
+system-wait-host-notification,PASS,PASS,runtime.test.js 重启恢复后单条Outbox
+system-wait-retry,PASS,PASS,runtime.test.js 同报告重试成功与旧通知失效
+independent-task-progress,PASS,PASS,runtime.test.js 系统等待释放并发名额
+tool-result-linkage,PASS,PASS,runtime.test.js DSH事件结构关联名称和错误位
+full-unit-suite,PASS,PASS,pnpm test 470 pass
+dispatch-preflight,PASS,PASS,decision.test.js和topic-runtime.test.js多Unit来源及流程版本反例
+input-revision,PASS,PASS,task-input-revision.test.js和task-reports.test.js授权变更及旧审阅历史化
+activity-statistics,PASS,PASS,store.test.js 500条裁剪后聚合及跨午夜和重放
+activity-recovery,PASS,PASS,runtime.test.js 临时EPERM和活跃任务重启补投影
+completed-activity-recovery,PASS,PASS,runtime.test.js 持久Session审计并补齐已完成任务遗漏活动
+local-runtime,TODO,TODO,待最终包安装与真实启动

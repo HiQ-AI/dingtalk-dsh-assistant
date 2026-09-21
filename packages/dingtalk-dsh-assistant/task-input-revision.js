@@ -28,20 +28,22 @@ export function reconcileLegacyStagePlan(task) {
   return { stageTasks: titles, stagePlan: stagePlanFor(task, titles), planCheckpointId: plan.checkpointId }
 }
 
-export function reviseTaskProgress(task, { objective = task.objective, acceptanceCriteria = task.acceptanceCriteria, stageTasks = task.stageTasks, progressImpact, impactEvidence }, basisIds) {
+export function reviseTaskProgress(task, { objective = task.objective, acceptanceCriteria = task.acceptanceCriteria, stageTasks = task.stageTasks, progressImpact, impactEvidence, authorizationChange }, basisIds) {
   const stages = stagePlanFor(task, task.stageTasks ?? [])
   const affectedStageIds = impactEvidence?.affectedStageIds
   const scopeChanged = objective !== task.objective || !same(acceptanceCriteria, task.acceptanceCriteria) || !same(stageTasks, task.stageTasks)
+  if (authorizationChange !== undefined && !['none', 'changed'].includes(authorizationChange)) throw new TaskRevisionError('task_revision_authorization_change_invalid')
   if (impactEvidence) {
     if (!impactEvidence.basisMessageIds?.length || impactEvidence.basisMessageIds.some(id => !basisIds.has(id))) throw new TaskRevisionError('task_revision_basis_invalid')
     if (typeof impactEvidence.reason !== 'string' || !impactEvidence.reason.trim()) throw new TaskRevisionError('task_revision_reason_required')
     if (!affectedStageIds?.length || affectedStageIds.some(id => !stages.some(stage => stage.stageId === id))) throw new TaskRevisionError('task_revision_stage_invalid')
   }
   if (progressImpact === 'replan' && !scopeChanged && !affectedStageIds?.length) throw new TaskRevisionError('task_revision_impact_required')
-  const replan = scopeChanged || progressImpact === 'replan' || Boolean(impactEvidence)
+  const replan = scopeChanged || progressImpact === 'replan' || Boolean(impactEvidence) || authorizationChange === 'changed'
   const nextStages = stagePlanFor(task, stageTasks ?? [])
   const affected = new Set(affectedStageIds ?? [])
   if (replan) {
+    if (authorizationChange === 'changed') for (const stage of stages) affected.add(stage.stageId)
     if (!impactEvidence && (objective !== task.objective || !same(acceptanceCriteria, task.acceptanceCriteria))) for (const stage of stages) affected.add(stage.stageId)
     const nextIds = new Set(nextStages.map(stage => stage.stageId))
     for (const stage of stages) if (!nextIds.has(stage.stageId)) affected.add(stage.stageId)
@@ -56,7 +58,8 @@ export function reviseTaskProgress(task, { objective = task.objective, acceptanc
   return {
     scopeChanged, progressImpact: replan ? 'replan' : 'preserve', checkpoints,
     invalidatedCheckpoints: (task.checkpoints ?? []).filter(checkpoint => !checkpoints.includes(checkpoint)),
-    reason: impactEvidence?.reason ?? (scopeChanged ? '目标、验收或阶段有明确变化。' : '补充输入，未改变目标、验收或已确认事实。'),
+    reason: impactEvidence?.reason ?? (authorizationChange === 'changed' ? '授权发生变化，原阶段批准和证据须重新核对。' : scopeChanged ? '目标、验收或阶段有明确变化。' : '补充输入，未改变目标、验收或已确认事实。'),
+    authorizationChange: authorizationChange ?? 'none',
     affectedStageIds: replan ? stages.filter(stage => affected.has(stage.stageId)).map(stage => stage.stageId) : [],
     stagePlan: nextStages,
   }

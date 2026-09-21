@@ -246,6 +246,8 @@ Task 可设置独立的简短标题用于看板展示；标题与 objective 分�
 
 Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存标题、目标、验收标准、执行状态、结果，以及 `topicRefs: [{topicId, revision}]` 和 `inputVersion`；不保存 sourceMessageId、triggerHistory、messageHistory 或群消息正文副本。`group_task_context_get` 返回执行约定与 Topic 引用，原始上下文由 `group_topic_context_get` 按固定 revision 分页读取。只有确实影响任务的新增信息才推进 inputVersion，不向每个关联 Task 广播全部讨论。运行中和等待中的 Task 接纳上下文时继续原轮次；完成或归档 Task 只有被明确重开才开启新轮次。目标发生实质变化时，续接动作必须同时提交概括当前完整目标的新标题；Runtime 原子更新目标和标题，并由 objectiveHistory、titleHistory 与 runHistory 保留旧值。普通信息补充、等待恢复和异常唤醒不修改标题，归档不删除历史。叶子完成自身交付与必要自验证后即可提交 `completed`；原群参与者或其他机器人的后续检查属于 Topic 协作，不阻塞叶子 Task。若信息或人工介入确实阻塞本职交付，等待报告需列出 `blockedItems`（未完成要求、来源消息、必要依赖和原因），经 resident 内部审阅后才能进入 waiting。误把他人职责写入目标时，resident 按原消息修订 Task 目标、验收和阶段，保留已完成证据；外部反馈经正常 Topic 输入处理。历史 `coordination` 结果只读兼容，不再重发检查请求。
 
+内部审阅预算等确定性系统故障会将原报告记为 `failed`，Task 进入 `waitingKind=system` 并释放运行名额；Host 通过可靠 Outbox 对任务相关人说明暂停，不要求叶子反复改稿或用户批准业务动作。同一版本和错误码只生成一个待发通知，恢复前的新报告被拒绝。修复故障后，维护者可对原报告调用 `POST /tasks/<taskId>/reports/<submissionId>/retry`，Runtime 在当前并发容量允许时恢复同一报告审阅；旧版或已完成报告不可重试，已过时的待发故障通知自动失效。
+
 消息的 `routingStatus` 表示待归类、已归类或归类失败；Topic 的 `processedRevision` 表示决策及所需动作已可靠落地；Task 的输入下发、输入确认与任务完成另行记录。任何一项均不能替代另一项。运行看板的“话题”页在左侧只展示名称与摘要，右侧分开展示完整标题、话题摘要、待解决问题和关联任务；固定版本消息列表直接展示并支持分页，每条消息所引用的上一条消息默认折叠。群消息状态由 `routingStatus`、Topic revision 与 `processedRevision` 投影为“待归类、话题处理中、已处理、归类失败”，不再把旧 `agentDeliveryStatus` 当成业务处理完成度。Task 卡片上的话题链接打开该任务接纳的版本。Topic 归属仅表示消息延续同一讨论目标，或实质改变该 Topic 的事实、范围、结论或动作；为回答问题查询旧分支、PR 或任务资料不会建立 Topic 归属。多 Topic 路由必须逐项声明关系和理由，并显式指定唯一动作主归属。路由回执最多 1 KiB，决策首屏及 `group_decision_context_get` 单页最多 12 KiB，均按完整 UTF-8 JSON 计费；Topic 历史分页仍按原有 40,000 字符预算读取。`omittedDeltaCount` 非零时，Resident 必须读完固定请求的 `messages` 段；其他标记为必要的来源或归属段也须读完。Host 在必要依据读完前拒绝决策，旧历史未读完不会阻塞本次事项。
 
 常驻群聊主会话负责上下文理解和结构化选路，也需按消息范围读取钉钉文档等资料；其 DSH 权限 preset 为 `danger-full-access`，不暴露 `get_goal`、`create_goal`、`update_goal`，也不注入 Goal 工具说明。完整工具权限不扩大群消息或 Task 的业务授权，Task 动作仍经 Topic 决策和 Runtime 校验。任务授权与“明确交给其他人”的校验按动作引用的事项判断：从固定版本原文读取该事项之前最近的点名，即使称呼列为 ignoredRefs 也保留证据；同一消息中后续改为点名其他人时，不得借用前一事项的授权。`sourceRefs.quote`、`contextRefs.quote` 只引用当前消息中唯一出现的原文；被引用消息作为独立的 `quotedMessage` 背景提供，不填入当前消息的 `contextRefs`。Task 叶子会话由 Runtime 使用 DSH Goal 管理执行、阻塞、恢复与完成，权限 preset 同为 `danger-full-access`，可按 Task objective 和工作区规则使用完整本机能力。DWS 群通知仍只有 Runtime 一个出口；叶子不得绕过结构化结果链路直接向来源群发送消息。
@@ -306,6 +308,13 @@ Task 创建和重开时即生成稳定 `stagePlan`，主会话查询与叶子输
 
 - 群聊会话：查看不同 resident Session 的分页收信箱和发信箱；状态固定在最左列，长内容最多显示两行，完整内容可通过悬停标题或详情查看。
 - 任务看板：按待执行、执行中、等待中、已完成展示 Task，并打开 DSH 原生叶子对话和轨迹。活动任务卡片中的“任务”面板默认收起，只显示完成数/总数和进度；展开后显示各阶段任务、状态和耗时。执行轮次耗时统计不占用任务卡片空间，仍可通过 `/state/task-timings` 接口用于诊断。
+- 叶子活动投影写盘遇临时故障会有限重试并暂停该任务的后续投影；监督器按原 Session 事件序号补齐后解除当前故障。任务完成时先补齐活动再释放叶子 Session，持续故障保留恢复问题供排查。
+- Runtime 启动后还会逐个审计已完成 Task 的持久 Session；若曾在完成前后漏写活动，按原事件补齐。持续故障保留待审计队列和恢复问题，不会由下一条活动成功自动清除。
+- Outbox 的 `deliveryAttemptCount` 表示投递流程轮数；`sendAttemptCount` 记录实际进入发送调用的次数，`readbackAttemptCount` 记录发送前后读群历史的次数。查询重复发送时应核对这两个计数和远端消息 ID，不能由投递轮数推断重复外发。
+- 工具活动从 DSH 的 `tool/call` 和 `tool/result` 关联工具名、错误位、耗时及结果字节数；缺少可关联调用时显示 `unknown`，不推断为成功。
+- Task 的 `activityProjection.aggregate` 保存上海本地日期的事件总数和类型计数；500 条活动明细裁剪后累计数仍在。旧存储若已裁剪历史，首次生成的聚合标为 `retained-only`，不可当作历史完整总量。
+- 同一消息拆出多个事项时，Resident 新建 Task 必须提供 `dispatchAssessment`：业务对象、当前 Agent 交付、他人后续、来源 Unit、当前流程引用与选择原因。Host 校验来源 Unit、流程启用和版本；单事项可选。业务对象及交付的语义仍由 Resident 按原消息判断。
+- Task 收到补充输入后，原版本待审报告转为历史并向仍在运行的叶子提示按当前版本核对后重提；不会自动重放业务操作。明确标记授权变化且有新来源消息时，原阶段批准保守失效，即使阶段名称不变也须重新核对。
 - 任务表格同步：在“设置 → 插件 → 钉钉个人助理”填写钉钉在线电子表格地址，检查连接后选择目标工作表并启用。插件启动时立即同步，之后每 180 秒全量覆盖所选工作表；归档 Task 会在下一轮移除。所选工作表由插件托管，手工内容会被覆盖。
 - 归档任务：查看已归档 Task，相关群消息仍可重新打开原任务。
 - 人工介入：以与消息表格一致的状态列、行高和内容密度分页查看阻塞事项，并在页面明确选择“批准该事项并继续”或“不执行”。

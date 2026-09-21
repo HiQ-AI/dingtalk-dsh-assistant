@@ -63,6 +63,18 @@ test('真实目标变化优先采用明确影响证据，未限定时保守失�
   assert.equal(broad.checkpoints.length, 0)
 })
 
+test('授权变化即使目标和阶段标题不变也失效旧批准，普通资料补充仍保留', () => {
+  const current = task()
+  const preserved = reviseTaskProgress(current, { authorizationChange: 'none' }, basis)
+  assert.deepEqual(preserved.checkpoints, current.checkpoints)
+  const revoked = reviseTaskProgress(current, { authorizationChange: 'changed', progressImpact: 'preserve' }, basis)
+  assert.equal(revoked.progressImpact, 'replan')
+  assert.deepEqual(revoked.checkpoints, [])
+  assert.deepEqual(revoked.affectedStageIds, current.stagePlan.map(stage => stage.stageId))
+  assert.equal(revoked.authorizationChange, 'changed')
+  assert.throws(() => reviseTaskProgress(current, { authorizationChange: 'unknown' }, basis), /task_revision_authorization_change_invalid/)
+})
+
 test('重排阶段保留独立阶段身份，仅明确受影响阶段失效', () => {
   const current = task()
   const result = reviseTaskProgress(current, { stageTasks: ['SQL', '准备', '部署'], impactEvidence: impact(current, 2) }, basis)

@@ -9,12 +9,19 @@ export { topicRefSchema }
 const unitRefSchema = z.strictObject({ unitId: z.string().min(1), unitRevision: z.number().int().positive() })
 const taskSources = { topicRefs: z.array(topicRefSchema).min(1), basisUnitRefs: z.array(unitRefSchema).min(1).optional() }
 const impactEvidenceSchema = z.strictObject({ basisMessageIds: z.array(z.string().min(1)).min(1), reason: z.string().trim().min(1), affectedStageIds: z.array(z.string().min(1)).min(1) })
-export const taskContextImpactFields = { progressImpact: z.enum(['preserve', 'replan']).optional(), impactEvidence: impactEvidenceSchema.optional() }
+export const taskContextImpactFields = { progressImpact: z.enum(['preserve', 'replan']).optional(), impactEvidence: impactEvidenceSchema.optional(), authorizationChange: z.enum(['none', 'changed']).optional() }
 const taskVersion = { inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() }
 const topicUpdateSchema = z.strictObject({ summary: z.string().optional(), openQuestions: z.array(z.string().min(1)).optional(), status: z.enum(['active', 'waiting', 'closed']).optional() })
 const decisionBasis = { topicUpdate: topicUpdateSchema.optional(), basisMessageIds: z.array(z.string().min(1)).min(1), basisUnitRefs: z.array(unitRefSchema).min(1).optional() }
 const taskProposal = z.strictObject({ kind: z.literal('task-proposal'), title: z.string().min(1).max(120), objective: z.string().min(1), ...taskSources })
-const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: z.array(z.string().min(1)).min(1), stageTasks: z.array(z.string().min(1)).optional(), ...taskSources })
+const dispatchAssessmentSchema = z.strictObject({
+  businessObject: z.string().trim().min(1), agentDeliverable: z.string().trim().min(1),
+  externalFollowup: z.array(z.string().trim().min(1)),
+  sourceUnitRefs: z.array(unitRefSchema).min(1),
+  workflowRefs: z.array(z.strictObject({ id: z.string().min(1), revision: z.number().int().positive() })),
+  workflowReason: z.string().trim().min(1),
+})
+const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: z.array(z.string().min(1)).min(1), stageTasks: z.array(z.string().min(1)).optional(), dispatchAssessment: dispatchAssessmentSchema.optional(), ...taskSources })
 const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...taskContextImpactFields, ...runPlan, ...taskSources })
 const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
 const taskCancel = z.strictObject({ kind: z.literal('task-cancel'), taskId: z.string().min(1), ...taskVersion, reason: z.string().min(1), ...taskSources })
@@ -120,6 +127,21 @@ export const groupDecisionSubmissionJsonSchema = {
   type: 'object', additionalProperties: false,
   properties: { requestId: stringJsonSchema, topicId: stringJsonSchema, revision: { type: 'integer' }, decision: groupDecisionJsonSchema },
   required: ['requestId', 'topicId', 'revision', 'decision'],
+}
+
+export function validateTaskDispatchAssessment(action, { requiresAssessment = false, currentPrompts = [] } = {}) {
+  const assessment = action.dispatchAssessment
+  if (!assessment) {
+    if (requiresAssessment) throw new Error('task_dispatch_assessment_required')
+    return
+  }
+  const key = ({ unitId, unitRevision }) => `${unitId}:${unitRevision}`
+  const basis = new Set((action.basisUnitRefs ?? []).map(key))
+  const declared = assessment.sourceUnitRefs.map(key)
+  if (new Set(declared).size !== declared.length || declared.length !== basis.size || declared.some((ref) => !basis.has(ref))) throw new Error('task_dispatch_source_units_invalid')
+  const prompts = new Map(currentPrompts.filter((item) => item.enabled).map((item) => [item.id, item.revision]))
+  const ids = assessment.workflowRefs.map((ref) => ref.id)
+  if (new Set(ids).size !== ids.length || assessment.workflowRefs.some((ref) => prompts.get(ref.id) !== ref.revision)) throw new Error('task_dispatch_workflow_refs_invalid')
 }
 
 const compactText = (value, limit = 800) => {

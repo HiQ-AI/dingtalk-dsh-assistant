@@ -44,7 +44,11 @@ Topic 决策输出预算版本在安装前须完成工具协议与长历史回�
 
 叶子职责边界修复部署前，先只读查看 `/state/tasks` 中的活动与等待 Task，核对是否存在历史 `waitingKind=coordination`，以及仅等他人后续检查的其他等待报告。旧 `coordination` 结果仍可读取，但新版不再提交或补发该检查请求；不要直接改存储 JSON 或批量把等待改成完成。对确认属于误扩范围的任务，使用受管的版本化任务修订，保留已完成的阶段证据，再由叶子按新版本提交结果。安装后分别核验等待审阅、Task/Goal 状态、Outbox 投递与实际业务证据；已有 Task 完成不因后续检查未回复而回退。
 
-本次协调修复保持 Domain 版本 **7**，通过可选字段和默认值读取旧记录：Task 的 `activityProjection`、`stagePlan`，Group 的 `coordinationRequests`，活动的 `seq`，以及 `executionEvents` 内报告接收、审阅、处理、通知状态。旧字段和历史检查点保持可读，不运行 v6→v7 全库迁移。首次恢复活跃旧任务时，从其已批准计划补齐阶段索引，记录 `stage-plan-reconciled` 与旧阶段数组；不更改原检查点、审批、inputVersion 或结果。没有已批准计划不补造阶段。`--check` 只验证读取兼容性与字段保留，启动规范化由两次重启幂等测试单独覆盖。
+当前协调修复使用 Domain 版本 **8**，通过可选字段和默认值读取旧记录：Task 的 `activityProjection`、`stagePlan`，Group 的 `coordinationRequests`，活动的 `seq`，以及 `executionEvents` 内报告接收、审阅、处理、通知状态。旧字段和历史检查点保持可读，不运行全库迁移。首次恢复活跃旧任务时，从其已批准计划补齐阶段索引，记录 `stage-plan-reconciled` 与旧阶段数组；不更改原检查点、审批、inputVersion 或结果。没有已批准计划不补造阶段。`--check` 只验证读取兼容性与字段保留，启动规范化由两次重启幂等测试单独覆盖。
+
+活动投影故障核验：注入短暂写入失败后，确认同一 Session 原事件按序补齐、`/state/recovery-issues` 当前活动故障解除；持续写入失败时应保持 degraded，不能仅凭较新活动存在就判定恢复。任务完成时仍保留故障 Session 以供监督器补齐；部署前产生的旧活动缺口需单独核对，不把新版重试机制当成历史回填证明。
+
+新版启动后，监督器逐个读取已完成 Task 的持久 Session，审计并补齐活动投影；历史已裁剪的 500 条明细之前的数据无法恢复，统计覆盖范围应保留 `retained-only` 标记。观察 `activity-projection` 恢复问题和投影水位，不以 health 短暂为 healthy 代替队列审计完成。Outbox 的发送尝试、回读尝试和投递轮数分别核对，`deliveryAttemptCount` 不能推断重复群发。多 Unit 消息的任务派发还需检查 `dispatchAssessment` 来源 Unit 与当前流程版本。
 
 **不能仅换回旧二进制并继续写原存储。** 旧 Schema 可能在更新 Task/Group 时剥离这些新字段，造成通知恢复、水位或审阅状态丢失。曾写入新状态后，应先停止写入，保留当前完整文件和安装前备份；优先前向修复。确需降级时，先在隔离副本证明目标版本不会丢新字段、不会重放外部动作，再允许恢复写入；未证明之前保持停机或只读查看，不启动旧版可写实例。
 
@@ -58,3 +62,5 @@ Topic 决策输出预算版本在安装前须完成工具协议与长历史回�
 历史已发送旧式询问不会在启动时批量补发或自动催促。仅对核对过的当前信息等待 Task，可调用 POST /tasks/<taskId>/information-wait-notice 一次性登记明确暂停的更正通知；先独立确认旧询问的 deliveredMessageId、任务仍 waiting 且结果未变化。接口返回 enqueued 只表示 Outbox 落盘，随后必须读回新消息 deliveredMessageId 和 DWS 原消息；重复调用只复用同一稳定键。当前案例为 task-7e10fc01558bb150f5224affeb5196e4，勿对其他历史任务批量调用。
 
 UAT2 角色菜单组任务 `task-ecf5a0c74b07381abba1330a4ebb4551` 的计划检查点曾因 `topic_context_budget_exceeded` 循环拒绝。切换前先只读回读当前状态、备份并对稳定存储运行 `scripts/check-resident-storage.mjs --check`；切换后确认 `topic-runtime.js` 哈希为本次源码，再检查该任务是否产生新的计划审阅、已确认阶段或明确终态。仅修复分页预算不等于业务菜单配置完成；不得手工写入检查点或任务完成状态。停机前若还有其它运行中任务，要分别判断是否可安全中断。
+
+本轮系统故障分类修复需验证：固定审阅预算错误落为 `failed`，Task 进入 `waitingKind=system`，原 `submissionId` 和已确认阶段保留；同错误的新提交不会反复排队。核查 `task-system:<taskId>:<runSequence>:<inputVersion>:<code>` Outbox 只有一条；只有确认当前修复包已经装入且任务仍为同一版本时，才通过原报告的 retry API 重试。retry 会占用一个运行名额；其它 Task 占满并发时应等待空位。故障通知已 sent 时回读 deliveredMessageId，pending 且任务已恢复时必须 superseded。旧二进制的 Task Schema 不认识 `waitingKind=system`，写入这种状态后不得直接降级到旧包继续运行。

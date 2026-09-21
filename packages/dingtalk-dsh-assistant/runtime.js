@@ -7,7 +7,7 @@ import { boundedTopicContext, createTopicCoordinator } from './topic-runtime.js'
 import { resolveTopicMessages, stableId, fingerprint } from './topic-model.js'
 import { assertCurrentTaskPrompts, isDiagnosticCheckpoint, parseTaskCheckpoint, parseTaskResult, taskCheckpointJsonSchema, taskResultJsonSchema } from './task-result.js'
 import { taskProgressSnapshot } from './task-progress.js'
-import { createTaskReportQueue, taskReportReceiptSchema, taskReports } from './task-reports.js'
+import { createTaskReportQueue, deterministicReviewFailure, taskReportReceiptSchema, taskReports } from './task-reports.js'
 import { createTaskReportStepGate } from './task-report-step-gate.js'
 import { createStatusQueryHandler } from './status-query.js'
 import { reviseTaskProgress, stagePlanFor, reconcileLegacyStagePlan, normalizeRunPlan } from './task-input-revision.js'
@@ -144,9 +144,19 @@ const withHumanBlockerHistory = (task, blocker) => {
   const index = history.findIndex((item) => item.requestId === blocker.requestId)
   return index < 0 ? [...history, blocker] : history.map((item, current) => current === index ? blocker : item)
 }
-const activityDetail = (event) => {
+const activityDetail = (event, session) => {
   if (event.type === 'tool/call') return { tool: event.data?.name ?? 'unknown', ...(event.data?.callId ? { callId: event.data.callId } : {}) }
-  if (event.type === 'tool/result') return { tool: event.data?.name ?? 'unknown', isError: event.data?.isError === true, ...(event.data?.message?.source?.callId ? { callId: event.data.message.source.callId } : {}) }
+  if (event.type === 'tool/result') {
+    const callId = event.data?.message?.source?.callId
+    const call = callId && session.snapshotEvents().findLast(item => item.type === 'tool/call' && item.data?.callId === callId)
+    const result = event.data?.message?.content?.find(item => item.type === 'tool-result')
+    const eventTime = typeof event.time === 'number' ? event.time : Date.parse(event.time)
+    const callTime = typeof call?.time === 'number' ? call.time : Date.parse(call?.time)
+    return { tool: call?.data?.name ?? 'unknown', ...(typeof result?.isError === 'boolean' ? { isError: result.isError } : {}),
+      ...(Number.isFinite(eventTime - callTime) && eventTime >= callTime ? { durationMs: eventTime - callTime } : {}),
+      ...(result?.content ? { resultSizeBytes: Buffer.byteLength(JSON.stringify(result.content)) } : {}),
+      ...(callId ? { callId } : {}) }
+  }
   if (event.type === 'turn/end') return { status: event.data?.status ?? 'unknown' }
   if (event.type === 'goal/change') return { phase: event.data?.goal?.phase ?? event.data?.phase ?? 'unknown' }
   return { contentBlocks: event.data?.message?.content?.length ?? 0 }
@@ -158,6 +168,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = createRecoveryIssueLedger(), subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
   let taskTail = Promise.resolve(), pumpTail = Promise.resolve(), configTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, runtimeApi, currentDwsProfile = '', runtimeClosing = false, closePromise
+  const activityProjectionFailures = new Map()
+  const completedActivityAuditQueue = store.listTasks().filter(task => task.state === 'completed').map(task => ({ taskId: task.taskId, sessionId: task.childSessionId }))
   let groupMessageRecaller
   let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks
   if (store.getMaxConcurrentTasks?.() === undefined) await store.setMaxConcurrentTasks?.(taskConcurrencyLimit)
@@ -613,6 +625,21 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     }
     return appendReliableOutbox({ ...outbound, preflight })
   }
+  async function coordinateSystemWait(task, report) {
+    const code = report.error.split(':')[0]
+    const sourceMessageId = `task-system:${task.taskId}:${task.runSequence}:${task.inputVersion}:${code}`
+    const source = topics.taskMessages(task).at(-1)
+    const text = `任务“${task.title ?? task.objective}”因插件内部故障已暂停。已完成的检查点与原报告已保留；当前故障：${code}。插件修复并确认审阅可用后，将在原授权范围内继续处理；无需重新提交任务或批准业务操作。`
+    const preflight = () => {
+      const current = store.getTask(task.taskId)
+      return current?.state === 'waiting' && current.waitingKind === 'system' && current.inputVersion === task.inputVersion
+        && current.runSequence === task.runSequence ? undefined : { status: 'task-stale' }
+    }
+    return appendReliableOutbox({ groupId: task.groupId, sourceMessageId, outboundId: stableId('outbound', sourceMessageId),
+      topicRefs: task.topicRefs, text, taskIds: [task.taskId], taskInputVersion: task.inputVersion, taskRunSequence: task.runSequence,
+      replyKind: 'substantive', ...(source ? { replyToMessageId: source.messageId, replyToSenderOpenDingTalkId: source.senderOpenDingTalkId,
+        atOpenDingTalkIds: [...new Set([source.senderOpenDingTalkId, task.requesterOpenDingTalkId].filter(Boolean))] } : {}), preflight })
+  }
 
   async function coordinateTaskResultInternal(task, result) {
     const resultKey = taskResultOutboxKey(task, result)
@@ -873,6 +900,13 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     })
     const completedRunSequence = completed.runSequence
     prepared.handle.agent.whenIdle().then(async () => {
+      await activityTail
+      try { await reconcileActivityProjection(taskId, prepared.handle.agent.session) }
+      catch (error) {
+        activityProjectionFailures.set(taskId, { session: prepared.handle.agent.session, nextRetryAt: Date.now() + 30_000 })
+        recoveryIssues.push({ taskId, kind: 'activity-projection', error: error.message })
+        return
+      }
       const dispose = await serializeTasks(() => {
         const current = store.getTask(taskId)
         if (leafHandles.get(taskId) !== prepared.handle || current?.state !== 'completed' || current.runSequence !== completedRunSequence) return false
@@ -1032,7 +1066,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
           if (!current) return false
           if (message.id === stableId('message', `task-input:${current.taskId}:${current.runSequence}:${current.inputVersion}`)) return true
           return taskReports(current).some(report => {
-            if (report.runSequence !== current.runSequence || report.inputVersion !== current.inputVersion || !['accepted', 'rejected', 'failed'].includes(report.status)) return false
+            if (!(report.status === 'history-only' && report.staleReview) && (report.runSequence !== current.runSequence || report.inputVersion !== current.inputVersion || !['accepted', 'rejected', 'failed'].includes(report.status))) return false
             const identity = report.receipt?.code === 'task_checkpoint_rejected' ? `checkpoint-rejected:${report.receipt.checkpointId}`
               : report.error?.startsWith('task_result_objective_not_covered:') ? `result-rejected:${task.taskId}:${fingerprint(report.value)}`
                 : `task-report:${task.taskId}:${report.submissionId}:${report.status}`
@@ -1482,7 +1516,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     await pumpTasks()
     return store.getTask(queued.taskId)
   }
-  async function appendTaskContextInternal(task, context, topicRefs, title, objective, acceptanceCriteria, stageTasks, progressImpact, operation, impactEvidence) {
+  async function appendTaskContextInternal(task, context, topicRefs, title, objective, acceptanceCriteria, stageTasks, progressImpact, operation, impactEvidence, authorizationChange) {
     if (cancellingTasks.has(task.taskId)) throw new Error(`task_cancel_pending:${task.taskId}`)
     if (operation && task.appliedOperations.includes(operation.operationId)) { if (['running', 'waiting'].includes(task.state)) await dispatchTaskInput(task); return task }
     if (task.state === 'completed') throw new Error(`task_not_active:${task.taskId}`)
@@ -1491,12 +1525,19 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const revised = withRevisedObjective(current, objective, title, operation?.decisionId)
       const resumed = current.state === 'waiting' && ['information', 'coordination'].includes(current.waitingKind)
       const refs = [...new Map([...current.topicRefs, ...topicRefs].map((ref) => [ref.topicId, ref])).values()]
+      const source = store.getGroup(task.groupId)
+      const priorMessageIds = new Set(current.topicRefs.flatMap(ref => resolveTopicMessages(source, ref.topicId, ref.revision)).map(message => message.messageId))
+      const newMessageIds = new Set(refs.flatMap(ref => resolveTopicMessages(source, ref.topicId, ref.revision)).map(message => message.messageId).filter(id => !priorMessageIds.has(id)))
+      const decision = source.topics.flatMap(topic => topic.decisions).find(record => record.decisionId === operation?.decisionId)?.decision
+      const authorizationBasisMessageIds = (decision?.basisMessageIds ?? []).filter(id => newMessageIds.has(id))
+      if (authorizationChange === 'changed' && authorizationBasisMessageIds.length === 0) throw new Error('task_revision_authorization_basis_invalid')
       const plan = normalizeRunPlan(revised.objective, acceptanceCriteria ?? revised.acceptanceCriteria, stageTasks ?? revised.stageTasks)
-      const progress = reviseTaskProgress(current, { objective: revised.objective, ...plan, progressImpact, impactEvidence }, new Set(refs.flatMap(ref => resolveTopicMessages(store.getGroup(task.groupId), ref.topicId, ref.revision)).map(message => message.messageId)))
+      const progress = reviseTaskProgress(current, { objective: revised.objective, ...plan, progressImpact, impactEvidence, authorizationChange }, new Set(refs.flatMap(ref => resolveTopicMessages(store.getGroup(task.groupId), ref.topicId, ref.revision)).map(message => message.messageId)))
       return { ...revised, topicRefs: refs, inputVersion: current.inputVersion + 1,
         checkpoints: progress.checkpoints, stagePlan: progress.stagePlan, taskPromptRefs: current.taskPromptRefs,
         executionEvents: [...(current.executionEvents ?? []), { kind: 'input-revised', previousInputVersion: current.inputVersion, inputVersion: current.inputVersion + 1, runSequence: current.runSequence,
-          progressImpact: progress.progressImpact, reason: progress.reason, affectedStageIds: progress.affectedStageIds,
+          progressImpact: progress.progressImpact, reason: progress.reason, affectedStageIds: progress.affectedStageIds, authorizationChange: progress.authorizationChange,
+          ...(authorizationBasisMessageIds.length ? { authorizationBasisMessageIds } : {}),
           retainedCheckpointIds: progress.checkpoints.map(checkpoint => checkpoint.checkpointId), checkpoints: progress.invalidatedCheckpoints, at: new Date().toISOString() }],
         ...plan,
         ...(resumed ? { state: 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
@@ -1527,11 +1568,11 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     if (!task || task.groupId !== groupId) throw new Error('task_topic_wrong_group')
     if (action.kind === 'task-cancel') return cancelTaskInternal(task.taskId, action.reason, action.topicRefs, operation)
     if (action.kind === 'task-reopen') return reopenCompletedTaskInternal(task, action.context, action.topicRefs, action.title, action.objective, action.acceptanceCriteria, action.stageTasks, operation)
-    return appendTaskContextInternal(task, action.context, action.topicRefs, action.title, action.objective, action.acceptanceCriteria, action.stageTasks, action.progressImpact, operation, action.impactEvidence)
+    return appendTaskContextInternal(task, action.context, action.topicRefs, action.title, action.objective, action.acceptanceCriteria, action.stageTasks, action.progressImpact, operation, action.impactEvidence, action.authorizationChange)
   }
   async function submitWebTaskAction(kind, request) {
     if (runtimeClosing) throw new Error('resident_runtime_closed')
-    const { requestId, context, taskId, title, objective, acceptanceCriteria, stageTasks, progressImpact, impactEvidence } = request
+    const { requestId, context, taskId, title, objective, acceptanceCriteria, stageTasks, progressImpact, impactEvidence, authorizationChange } = request
     if (typeof requestId !== 'string' || !requestId.trim()) throw new Error('task_request_id_required')
     if (typeof context !== 'string' || !context.trim()) throw new Error('task_context_required')
     const existingTask = taskId ? store.getTask(taskId) : undefined
@@ -1545,6 +1586,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     const action = { kind, ...(task ? { taskId, inputVersion: request.inputVersion, runSequence: request.runSequence, ...(kind === 'task-cancel' ? { reason: context.trim() } : { context: context.trim() }) } : { title, objective, acceptanceCriteria }),
       ...(task && title !== undefined ? { title } : {}), ...(objective !== undefined ? { objective } : {}), ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}), ...(stageTasks !== undefined ? { stageTasks } : {}),
       ...(kind === 'task-context' && progressImpact !== undefined ? { progressImpact } : {}), ...(kind === 'task-context' && impactEvidence !== undefined ? { impactEvidence } : {}),
+      ...(kind === 'task-context' && authorizationChange !== undefined ? { authorizationChange } : {}),
       topicRefs: topicRefs.length ? topicRefs : [{ topicId: 'web-input', revision: 1 }] }
     groupDecisionSchema.parse({ basisMessageIds: ['web-input'], actions: [action], reply: '' })
     const text = JSON.stringify({ kind, context: context.trim(), ...(taskId ? { taskId } : {}), ...(title ? { title } : {}), ...(objective ? { objective } : {}), ...(acceptanceCriteria ? { acceptanceCriteria } : {}), ...(stageTasks ? { stageTasks } : {}) })
@@ -1571,11 +1613,40 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     if (sessions?.flush) await sessions.flush(handle.agent.session)
     return { task, accepted: true }
   }
+  async function writeProjectedActivity(taskId, session, event) {
+    const occurredAt = typeof event.time === 'number' ? new Date(event.time).toISOString() : typeof event.time === 'string' ? event.time : undefined
+    const input = { taskId, sessionId: String(session.id), eventKey: `${String(session.id)}:${event.seq}`,
+      seq: event.seq, type: event.type, detail: activityDetail(event, session), occurredAt }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { return await store.recordActivity(input) }
+      catch (error) {
+        if (attempt === 2) throw error
+        await new Promise(resolve => setTimeout(resolve, 100 * 2 ** attempt))
+      }
+    }
+  }
+  async function reconcileActivityProjection(taskId, session) {
+    while (true) {
+      const lastSeq = store.getTask(taskId)?.activityProjection?.sessions?.[String(session.id)]?.lastSeq ?? -1
+      const pending = session.snapshotEvents().filter(event => PROJECTED_EVENTS.has(event.type) && event.seq > lastSeq)
+        .sort((left, right) => left.seq - right.seq)
+      if (pending.length === 0) break
+      for (const event of pending) await writeProjectedActivity(taskId, session, event)
+    }
+    activityProjectionFailures.delete(taskId)
+    recoveryIssues.resolve(issue => issue.taskId === taskId && issue.kind === 'activity-projection')
+  }
   const disposeObserver = typeof ctx.on === 'function' ? ctx.on('session/event', (session, event) => {
     const taskId = leafTaskBySession.get(String(session.id))
     if (taskId === undefined || !PROJECTED_EVENTS.has(event.type) || typeof store.recordActivity !== 'function') return
-    const occurredAt = typeof event.time === 'number' ? new Date(event.time).toISOString() : typeof event.time === 'string' ? event.time : undefined
-    activityTail = activityTail.then(() => store.recordActivity({ taskId, sessionId: String(session.id), eventKey: `${String(session.id)}:${event.seq}`, seq: event.seq, type: event.type, detail: activityDetail(event), occurredAt })).catch(error => recoveryIssues.push({ taskId, kind: 'activity-projection', error: error.message }))
+    activityTail = activityTail.then(async () => {
+      if (activityProjectionFailures.has(taskId)) return
+      try { await writeProjectedActivity(taskId, session, event) }
+      catch (error) {
+        activityProjectionFailures.set(taskId, { session, nextRetryAt: Date.now() + 30_000 })
+        recoveryIssues.push({ taskId, kind: 'activity-projection', error: error.message })
+      }
+    })
   }) : undefined
   const statusQueryTails = new Map()
   const statusQueryAttempts = new Set()
@@ -1656,7 +1727,20 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       if (goal?.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-coordination-pending', message: '报告已保存，等待输入接纳或审阅结果。' })
     },
     notify: async (task, report) => {
-      if (task.state !== 'running') return
+      if (report.status === 'failed' && deterministicReviewFailure(report.error)) {
+        const waiting = await serializeTasks(() => store.updateTask(task.taskId, current => current.state === 'running'
+          && current.inputVersion === report.inputVersion && current.runSequence === report.runSequence
+          ? { ...current, state: 'waiting', waitingKind: 'system', waitingReason: report.error } : current))
+        if (waiting.state !== 'waiting' || waiting.waitingKind !== 'system') return
+        const handle = leafHandles.get(task.taskId)
+        const goal = handle && ctx.goals.get(handle.agent)
+        if (goal?.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-system-failure', message: report.error })
+        await store.recordAlert({ taskId: task.taskId, fingerprint: `task-system-failure:${task.runSequence}:${task.inputVersion}:${report.error.split(':')[0]}`, detail: report.error })
+        await coordinateSystemWait(waiting, report)
+        return
+      }
+      if (report.status === 'accepted') await store.resolveAlerts?.({ taskId: task.taskId, fingerprintPrefix: `task-system-failure:${task.runSequence}:${task.inputVersion}:` })
+      if (task.state !== 'running') return report.status === 'history-only' && report.staleReview && task.state === 'waiting' ? false : undefined
       const handle = leafHandles.get(task.taskId)
       if (!handle) throw new Error('task_report_leaf_unavailable')
       const identity = report.receipt?.code === 'task_checkpoint_rejected' ? `checkpoint-rejected:${report.receipt.checkpointId}`
@@ -1665,7 +1749,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const id = stableId('message', identity)
       const exists = [...(handle.agent.inbox?.nextStep ?? []), ...(handle.agent.inbox?.nextTurn ?? [])].some(message => message.id === id)
         || handle.agent.session.snapshotEvents().some(event => event.type === 'user/message' && event.data.id === id)
-      if (!exists) handle.agent.steer({ ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: `[TASK_REPORT_REVIEWED]\n${JSON.stringify({ submissionId: report.submissionId, status: report.status, result: report.receipt, error: report.error })}\n只依据本次结果继续；已接收不代表业务完成。不要重复提交同一报告。` }] }), id })
+      if (!exists) handle.agent.steer({ ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: `[TASK_REPORT_REVIEWED]\n${JSON.stringify({ submissionId: report.submissionId, status: report.status, result: report.receipt, error: report.error })}\n${report.status === 'history-only' ? '原报告因输入版本变化作废；核对新版目标、授权和保留的阶段证据，仅对仍适用的事项用当前版本提交新报告。不要重复执行已完成的业务写入。' : '只依据本次结果继续；已接收不代表业务完成。不要重复提交同一报告。'}` }] }), id })
       const sessions = ctx.get?.('sessions') ?? ctx.sessions
       if (sessions?.flush) await sessions.flush(handle.agent.session)
       if (report.status !== 'failed') resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
@@ -1688,7 +1772,13 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const current = plan ? await store.updateTask(task.taskId, value => ({ ...value, stageTasks: plan.stageTasks, stagePlan: plan.stagePlan,
         executionEvents: [...(value.executionEvents ?? []), { kind: 'stage-plan-reconciled', planCheckpointId: plan.planCheckpointId, previousStageTasks: value.stageTasks, at: new Date().toISOString() }],
       })) : task
-      await resumeLeaf(current); await dispatchTaskInput(current); reports.recover(current)
+      const handle = await resumeLeaf(current)
+      try { await reconcileActivityProjection(current.taskId, handle.agent.session) }
+      catch (error) {
+        activityProjectionFailures.set(current.taskId, { session: handle.agent.session, nextRetryAt: Date.now() + 30_000 })
+        recoveryIssues.push({ taskId: current.taskId, kind: 'activity-projection', error: error.message })
+      }
+      await dispatchTaskInput(current); reports.recover(current)
     } catch (error) { recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, childSessionId: task.childSessionId, error: error instanceof Error ? error.message : String(error) }) }
   }
   await serializeTasks(pumpTasks)
@@ -1702,6 +1792,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       recoverDecisionMessages().catch(() => undefined)
       runtimeApi?.reconcileCompletedNotifications().catch(() => undefined)
       runtimeApi?.reconcileInformationWaitFollowups().catch((error) => recoveryIssues.push({ kind: 'information-wait-followup', error: error.message }))
+      runtimeApi?.reconcileActivityProjections().catch((error) => recoveryIssues.push({ kind: 'activity-projection-recovery', error: error.message }))
       pumpTasks().catch((error) => recoveryIssues.push({ kind: 'task-pump', error: error.message }))
     }, supervisorIntervalMs)
     supervisorTimer.unref?.()
@@ -1724,6 +1815,44 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     })),
     hasGroupConfiguration: store.hasGroupConfiguration, initializeGroupConfiguration: store.initializeGroupConfiguration,
     listActivities: store.listActivities ?? (() => []), flushActivities: () => activityTail,
+    reconcileActivityProjections: async ({ now = Date.now(), force = false } = {}) => {
+      const work = activityTail.then(async () => {
+        for (const [taskId, failure] of activityProjectionFailures) {
+          if (!force && failure.nextRetryAt > now) continue
+          try { await reconcileActivityProjection(taskId, failure.session) }
+          catch (error) {
+            activityProjectionFailures.set(taskId, { ...failure, nextRetryAt: Date.now() + 30_000 })
+            recoveryIssues.push({ taskId, kind: 'activity-projection', error: error.message })
+            continue
+          }
+          const handle = leafHandles.get(taskId)
+          const task = store.getTask(taskId)
+          if (task?.state === 'completed' && handle?.agent.session === failure.session) {
+            await handle.agent.whenIdle()
+            if (leafHandles.get(taskId) !== handle || store.getTask(taskId)?.state !== 'completed') continue
+            leafHandles.delete(taskId)
+            leafTaskBySession.delete(String(failure.session.id))
+            await handle.dispose()
+          }
+        }
+        const persistence = ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
+        if (persistence?.prepare && completedActivityAuditQueue.length) {
+          const audit = completedActivityAuditQueue.shift()
+          if (!activityProjectionFailures.has(audit.taskId)) {
+            let prepared
+            try {
+              prepared = await persistence.prepare(SessionId(audit.sessionId), AbortSignal.timeout(resumeTimeoutMs))
+              await reconcileActivityProjection(audit.taskId, prepared.session)
+            } catch (error) {
+              completedActivityAuditQueue.push(audit)
+              recoveryIssues.push({ taskId: audit.taskId, kind: 'activity-projection', error: error.message })
+            } finally { prepared?.[Symbol.dispose]?.() }
+          }
+        }
+      })
+      activityTail = work
+      return work
+    },
     listRecoveryIssues: () => recoveryIssues.map((issue) => ({ ...issue })),
     onGroupSubscribed(listener) { subscriptionListeners.add(listener); return () => subscriptionListeners.delete(listener) },
     onGroupUnsubscribed(listener) { unsubscriptionListeners.add(listener); return () => unsubscriptionListeners.delete(listener) },
@@ -1744,10 +1873,13 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
         if (!task || task.inputVersion !== current.taskInputVersion || task.runSequence !== current.taskRunSequence) return { status: 'superseded' }
         if (current.sourceMessageId.startsWith(`task-result:${task.taskId}:waiting:`)
           && (task.state !== 'waiting' || task.waitingKind !== 'information' || fingerprint(task.result) !== current.resultFingerprint)) return { status: 'superseded' }
+        if (current.sourceMessageId.startsWith(`task-system:${task.taskId}:`)
+          && (task.state !== 'waiting' || task.waitingKind !== 'system')) return { status: 'superseded' }
       }
       return current
     },
     beginOutboundSend: (args) => store.beginOutboundSend(args),
+    recordOutboundReadbackAttempt: (args) => store.recordOutboundReadbackAttempt(args),
     completeOutboundReplacement: recallReplacedOutbounds,
     registerGroupMessageRecaller(recaller) {
       if (typeof recaller !== 'function') throw new Error('group_message_recaller_invalid')
@@ -1963,9 +2095,26 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const report = task && taskReports(task).find(item => item.submissionId === submissionId)
       if (!report) throw new Error(`task_report_not_found:${submissionId}`)
       if (report.inputVersion !== task.inputVersion || report.runSequence !== task.runSequence || task.state === 'completed') throw new Error(`task_report_retry_stale:${submissionId}`)
+      if (report.status !== 'failed') throw new Error(`task_report_retry_requires_failed:${submissionId}`)
+      const systemWait = task.state === 'waiting' && task.waitingKind === 'system'
+      if (task.state === 'waiting' && task.waitingKind === 'system') {
+        if (!deterministicReviewFailure(report.error)) throw new Error(`task_report_retry_requires_failed:${submissionId}`)
+        if (store.listTasks().filter(item => item.state === 'running').length >= taskConcurrencyLimit) throw new Error(`task_report_retry_capacity_full:${submissionId}`)
+        await serializeTasks(() => store.updateTask(taskId, current => current.state === 'waiting' && current.waitingKind === 'system'
+          && current.inputVersion === report.inputVersion && current.runSequence === report.runSequence
+          ? { ...current, state: 'running', waitingKind: undefined, waitingReason: undefined } : current))
+      }
       const failedRequestId = coordinationRequestId ?? (report.error?.startsWith('topic_request_retry_exhausted:') ? report.error.slice('topic_request_retry_exhausted:'.length) : undefined)
       if (failedRequestId) await topics.resetReviewRequest(task.groupId, failedRequestId)
-      return reports.retry(taskId, submissionId, { coordinationRequestId: failedRequestId })
+      try { return await reports.retry(taskId, submissionId, { coordinationRequestId: failedRequestId }) }
+      catch (error) {
+        if (systemWait && taskReports(store.getTask(taskId)).find(item => item.submissionId === submissionId)?.status === 'failed') {
+          await serializeTasks(() => store.updateTask(taskId, current => current.state === 'running'
+            && current.inputVersion === report.inputVersion && current.runSequence === report.runSequence
+            ? { ...current, state: 'waiting', waitingKind: 'system', waitingReason: report.error } : current))
+        }
+        throw error
+      }
     },
     retryCoordinationRequest: ({ groupId, requestId }) => {
       for (const task of store.listTasks().filter(item => item.groupId === groupId)) {

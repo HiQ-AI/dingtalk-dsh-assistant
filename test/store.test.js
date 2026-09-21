@@ -41,6 +41,76 @@ test('活动投影滚动500条、并发重复与重启乱序恢复，水位按Se
   assert.equal(newer.created, true)
   assert.equal(store.listActivities(task.taskId).at(-1).sessionId, 's2')
   assert.equal(store.getTask(task.taskId).activityProjection.sessions.s1.lastSeq, 500)
+  assert.equal(store.getTask(task.taskId).activityProjection.aggregate.total, 503)
+  assert.deepEqual(store.getTask(task.taskId).activityProjection.aggregate.days['2026-09-10'], { total: 503, byType: { 'tool/call': 503 } })
+  assert.equal(store.getTask(task.taskId).activityProjection.aggregate.retainedEventKeys.length, 500)
+})
+
+test('活动按上海本地日聚合，毫秒时间归属准确，裁剪和重放不重计', async () => {
+  const { facility, seed } = memoryFacility()
+  let store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'activity-day' })
+  await store.ingest({ groupId: 'activity-day', messageId: 'day-1', text: '工作', occurredAt: '2026-09-10T00:00:00Z' })
+  const { task } = await createRoutedTask(store, { groupId: 'activity-day', sourceMessageId: 'day-1', title: '活动按日', objective: '聚合', acceptanceCriteria: ['按日'] })
+  const event = (seq, occurredAt, type = 'tool/call') => ({ taskId: task.taskId, sessionId: 'day-session', seq, eventKey: `event-${seq}`, type, occurredAt })
+  await store.recordActivity(event(1, '2026-09-20T15:59:59.999Z'))
+  await store.recordActivity(event(2, '2026-09-20T16:00:00.000Z', 'tool/result'))
+  await store.recordActivity(event(3, '2026-09-21 00:00:00', 'tool/call'))
+  assert.deepEqual(store.getTask(task.taskId).activityProjection.aggregate.days, {
+    '2026-09-20': { total: 1, byType: { 'tool/call': 1 } },
+    '2026-09-21': { total: 2, byType: { 'tool/result': 1, 'tool/call': 1 } },
+  })
+  assert.equal((await store.recordActivity(event(2, '2026-09-20T16:00:00.000Z', 'tool/result'))).created, false)
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  await store.recordActivity(event(4, '2026-09-20T16:00:00.001Z'))
+  assert.equal(store.getTask(task.taskId).activityProjection.aggregate.total, 4)
+  assert.deepEqual(store.getTask(task.taskId).activityProjection.aggregate.days['2026-09-21'], { total: 3, byType: { 'tool/result': 1, 'tool/call': 2 } })
+})
+
+test('裁剪前的乱序旧事件仍推进会话水位，避免投影恢复原地重试', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'activity-floor' })
+  await store.ingest({ groupId: 'activity-floor', messageId: 'floor-1', text: '工作', occurredAt: '2026-09-10T00:00:00Z' })
+  const { task } = await createRoutedTask(store, { groupId: 'activity-floor', sourceMessageId: 'floor-1', title: '活动水位', objective: '恢复', acceptanceCriteria: ['水位'] })
+  const event = (seq, sessionId = 's1') => ({ taskId: task.taskId, sessionId, seq, eventKey: `event-${seq}`, type: 'tool/call', occurredAt: new Date(Date.UTC(2026, 8, 10) + seq * 1000).toISOString() })
+  for (let seq = 0; seq <= 500; seq += 1) await store.recordActivity(event(seq))
+  const before = store.getTask(task.taskId).activityProjection.aggregate.total
+  assert.equal((await store.recordActivity(event(0, 'replayed-session'))).expired, true)
+  const projection = store.getTask(task.taskId).activityProjection
+  assert.equal(projection.sessions['replayed-session'].lastSeq, 0)
+  assert.equal(projection.aggregate.total, before)
+})
+
+test('事件写入后任务投影失败，重启重放只补计一次', async () => {
+  const { facility, seed } = memoryFacility()
+  let failProjection = false
+  const faultFacility = { async open(...args) {
+    const domain = await facility.open(...args)
+    return { ...domain, table(name) {
+      const table = domain.table(name)
+      return name !== 'tasks' ? table : { ...table, async update(key, transform) {
+        if (failProjection) { failProjection = false; throw new Error('injected-projection-failure') }
+        return table.update(key, transform)
+      } }
+    } }
+  } }
+  let store = await openResidentStore(faultFacility)
+  await store.subscribe({ groupId: 'aggregate-replay' })
+  await store.ingest({ groupId: 'aggregate-replay', messageId: 'replay-1', text: '工作', occurredAt: '2026-09-10T00:00:00Z' })
+  const { task } = await createRoutedTask(store, { groupId: 'aggregate-replay', sourceMessageId: 'replay-1', title: '聚合重放', objective: '恢复', acceptanceCriteria: ['不重计'] })
+  const event = (seq) => ({ taskId: task.taskId, sessionId: 'replay', seq, eventKey: `event-${seq}`, type: 'tool/result', occurredAt: `2026-09-20T16:00:00.${String(seq).padStart(3, '0')}Z` })
+  await store.recordActivity(event(1))
+  failProjection = true
+  await assert.rejects(store.recordActivity(event(2)), /injected-projection-failure/)
+  assert.equal(store.getTask(task.taskId).activityProjection.aggregate.total, 1)
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  await store.recordActivity(event(2))
+  await store.recordActivity(event(2))
+  assert.equal(store.getTask(task.taskId).activityProjection.aggregate.total, 2)
+  assert.deepEqual(store.getTask(task.taskId).activityProjection.aggregate.days['2026-09-21'], { total: 2, byType: { 'tool/result': 2 } })
 })
 
 test('协调重试状态跨重启保留且按群隔离', async () => {
@@ -170,9 +240,14 @@ test('同群消息按稳定 messageId 去重并递增排序', async () => {
   await store.appendOutbox({ groupId: 'group-a', sourceMessageId: 'm-1', text: 'reply-one' })
   const replied = await store.appendOutbox({ groupId: 'group-a', sourceMessageId: 'm-1', text: 'reply-one-again' })
   const outboundId = replied.outbox[0].outboundId
+  await store.recordOutboundReadbackAttempt({ groupId: 'group-a', outboundId })
+  assert.equal(await store.beginOutboundSend({ groupId: 'group-a', outboundId }), true)
+  await store.recordOutboundReadbackAttempt({ groupId: 'group-a', outboundId })
   await store.recordOutboundDeliveryAttempt({ groupId: 'group-a', outboundId, reason: 'delivery_unknown' })
   const attempted = store.getGroup('group-a').outbox[0]
   assert.equal(attempted.deliveryAttemptCount, 1)
+  assert.equal(attempted.sendAttemptCount, 1)
+  assert.equal(attempted.readbackAttemptCount, 2)
   assert.equal(attempted.deliveryPendingReason, 'delivery_unknown')
   assert.ok(attempted.deliveryAttemptedAt)
   await store.acknowledge({ groupId: 'group-a', outboundId, deliveredMessageId: 'sent-1' })
