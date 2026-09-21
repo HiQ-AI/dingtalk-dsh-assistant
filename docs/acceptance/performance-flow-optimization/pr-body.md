@@ -31,6 +31,8 @@ export function createCoordinationStepGate(entry, isCurrent) {
 
 ## 验证
 
+- [x] [原生 CI](https://github.com/HiQ-AI/dingtalk-dsh-assistant/actions/runs/35615780197)：源码 `da347869e252abf3f90fb04fe425284749e366da` 构建、测试、三包打包与上传全部 success；产物 API 独立回读 228177 bytes，head_sha 一致。后续仅交付文档更新。
+
 - [x] `pnpm test`：最终 **514 PASS、0 FAIL、0 SKIP**，包含 6 个真实 DSH AgentLoop/Session/ToolRuntime 生命周期用例，模型使用确定性适配器。见 `docs/acceptance/performance-flow-optimization/round-9-tests.log`。
 - [x] `node scripts/build-web-client.mjs` 与 Web 产物 diff：exit 0；三个 `pnpm pack` 完成，独立 tar 清单、字节数、SHA256 读回。见同目录 `round-9-pack.log`、`round-7/package-readback.json`。
 - [x] 原始 91 路由批次覆盖全部 81 条消息，在**同一当前快照**调用固定基线和新生成器：完整输入 P50 **32310→11021 B**、P95 **34971→13748 B**；正文、79 项目录、140 次关联 Topic 验证通过，续页次数不变。保留首次超预算实验。该快照不是当时审计快照，不声称历史状态还原或人工语义验收。见 `round-7/route-projection-summary.json`。

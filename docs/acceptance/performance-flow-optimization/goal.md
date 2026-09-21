@@ -2,7 +2,7 @@
 
 > 状态：ACTIVE
 > Goal ID：performance-flow-20260921
-> 最近维护：2026-09-21T22:30:00+08:00
+> 最近维护：2026-09-21T23:01:00+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant-performance-flow/docs/acceptance/performance-flow-optimization/goal.md
 
 ## 总目标
@@ -25,19 +25,19 @@
 
 | ID | 子目标 | 完成判据 | 状态 | 证据 |
 | --- | --- | --- | --- | --- |
-| SG1 | 故障止损与恢复 | 同错无空转、重启不解除、版本/授权失效拒绝恢复 | 已实现，待最终集成确认 | runtime-integration-4.log：132 PASS；runtime.js retryTaskReport |
-| SG2 | 正确性能聚合 | usage/首流/等待可复查，seed/replace不重计 | 已实现，待最终集成确认 | performance.js；test/performance*.test.js；README观测缺口 |
-| SG3 | 紧凑输入与材料复用 | 路由目录减量、关联历史不漏、可见性失效正确 | 已实现，真实回放待补 | topic-runtime.js；81条人工路由真值未完成 |
-| SG4 | 结构错误一次反馈 | 多错误集合、失败零副作用、版本反例 | 已实现，待最终集成确认 | topic-model.js；test/topic-runtime.test.js |
+| SG1 | 故障止损与恢复 | 同错无空转、重启不解除、版本/授权失效拒绝恢复 | 本地集成验证完成 | runtime-integration-4.log：132 PASS；runtime.js retryTaskReport |
+| SG2 | 正确性能聚合 | usage/首流/等待可复查，seed/replace不重计 | 本地集成验证完成 | performance.js；test/performance*.test.js；README观测缺口 |
+| SG3 | 紧凑输入与材料复用 | 路由目录减量、关联历史不漏、可见性失效正确 | 本地与离线投影完成，人工语义待补 | topic-runtime.js；81条人工路由真值未完成 |
+| SG4 | 结构错误一次反馈 | 多错误集合、失败零副作用、版本反例 | 本地集成验证完成 | topic-model.js；test/topic-runtime.test.js |
 | SG5 | 工作位置与检索 | 复现历史检索参数、准确路径传递、工具责任明确 | 部分完成，外部包未部署 | search/report.md；22条改善；8无前缀及4宽目录未解决 |
 | SG6 | 请求级协调会话 | 角色/请求/群隔离、资源释放、恢复幂等 | 本地与原生验证完成 | round-9-tests.log：514 PASS；原生生命周期6项、manager4项 |
-| SG7 | 集成回放与交付 | 全量测试、固定样本、中文PR与状态回查 | 进行中 | matrix.csv、round-1.md；最终全量及PR待主代理填写 |
+| SG7 | 集成回放与交付 | 全量测试、固定样本、中文PR与状态回查 | 进行中 | round-9-tests.log：514 PASS；PR #113 OPEN/DRAFT；CI success，绑定源码da34786 |
 
 ## 当前检查点
 
 - 当前子目标：SG7
-- 唯一下一步：完成离线投影结果、创建草稿PR并运行/回读原生CI；保持真实流量验收未完成。
-- 未闭环项：PR/CI回读；81条消息人工真值与首次实质回复标注；责任包发布安装及12条宽范围搜索；真实流量性能目标。当前不部署。
+- 唯一下一步：后续经部署后执行真实流量与人工语义验收；本轮源码和草稿PR交付完成。
+- 未闭环项：81条消息人工真值与首次实质回复标注；责任包发布安装及12条宽范围搜索；真实流量性能目标。当前不部署。
 
 ## 进展
 
@@ -50,7 +50,7 @@
 
 ## 重要信息
 
-- 仓库：https://github.com/HiQ-AI/dingtalk-dsh-assistant；base=fd8fa15，branch=worktree-performance-flow；PR待创建，base=main，最新已推送SHA未产生（本轮尚未push），worktree保留。
+- 仓库：https://github.com/HiQ-AI/dingtalk-dsh-assistant；base=fd8fa15，branch=worktree-performance-flow；PR #113 OPEN/DRAFT，base=main，源码已推送SHA=da347869e252abf3f90fb04fe425284749e366da，worktree保留。
 - 原方案：D:/project/dingtalk-dsh-assistant/docs/spec/plugin-performance-flow-plan.md。
 - 本机运行：D:/dsh_home；本轮部署须在源码与本地验证闭环之后单独决定，当前未部署。
 
@@ -68,3 +68,7 @@
 - 最终本地代码：第9轮514/514通过；Web构建无差异、三包再次打包并独立读回。原生反例修复工具结果释放竞争、claimed消息丢失和创建期路由优先。
 - 本轮准备以草稿PR交付已验证代码；人工语义真值、真实供应商/渠道E2E及整体检索超时率未达标，验收目标保持ACTIVE，不假收敛。
 - 离线固定样本：91批覆盖81消息；同快照路由content P50 32310→11021B、P95 34971→13748B；目录续页次数不变。仅结构/体积验证，不替代人工语义与实流量。
+
+- 交付回读：PR https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/113，OPEN/DRAFT，head=da347869e252abf3f90fb04fe425284749e366da；远端分支SHA一致。原生CI手动触发：https://github.com/HiQ-AI/dingtalk-dsh-assistant/actions/runs/35615780197。
+
+- 原生 CI 已回读 success：run 35615780197，源码 SHA da347869e252abf3f90fb04fe425284749e366da；构建、测试、三包打包及上传均成功。产物 npm-packages-da347869e252abf3f90fb04fe425284749e366da，id=10646272483，228177 bytes，未过期。此后提交仅更新交付文档，不冒充CI已测试新文档SHA。

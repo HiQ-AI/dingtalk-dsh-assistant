@@ -8,3 +8,11 @@
 
 最后的 `git diff --check` 通过。源码交付使用草稿 PR；仍保留真实流量、人工语义及外部工具未达标项，不生成总体验收全绿报告。没有修改在线 profile，没有发送真实历史业务消息。
 归档日志仅移除空白行上的空格，不改测试名称、数值、结论或堆栈；未将失败记录改成成功。
+
+## 远端交付回读
+
+- PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/113，OPEN、DRAFT，base=main、head=worktree-performance-flow。
+- 已推送源码：`da347869e252abf3f90fb04fe425284749e366da`，`git ls-remote` 与 PR headRefOid 一致。
+- CI：https://github.com/HiQ-AI/dingtalk-dsh-assistant/actions/runs/35615780197，`gh run view` 回读 completed/success；Web 构建、测试、三包打包及上传步骤全部 success。
+- 独立 artifacts API 回读：id `10646272483`，name `npm-packages-da347869e252abf3f90fb04fe425284749e366da`，size `228177` bytes，expired=false，workflow_run.head_sha 与源码一致。
+- 后续仅交付文档提交，CI 结论绑定上述源码 SHA；未合并、未部署、未宣称真实流量验收通过。
