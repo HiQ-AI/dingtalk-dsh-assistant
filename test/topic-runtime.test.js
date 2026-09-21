@@ -429,6 +429,56 @@ test('事项正文剥离称呼后仍按原始消息核验任务授权及其他�
   }
 })
 
+test('同一消息拆分后的任务授权按事项就近点名判断', async (t) => {
+  for (const [name, text, sources, target, expectedError] of [
+    ['other-b', '@助理 修复 A；@李四 修复 B。', ['@助理 修复 A；', '@李四 修复 B。'], 'b', /task_action_directed_to_other_participants/],
+    ['shared-agent', '@助理 修复 A；修复 B。', ['@助理 修复 A；', '修复 B。'], 'b', null],
+    ['other-after-agent', '@助理 修复 A；@李四 修复 B；修复 C。', ['@助理 修复 A；', '@李四 修复 B；', '修复 C。'], 'c', /task_action_directed_to_other_participants/],
+    ['agent-after-other', '@李四 修复 A；@助理 修复 B。', ['@李四 修复 A；', '@助理 修复 B。'], 'b', null],
+    ['other-despite-agent-in-decision', '@李四 修复 A；@助理 修复 B。', ['@李四 修复 A；', '@助理 修复 B。'], 'a', /task_action_directed_to_other_participants/],
+  ]) {
+    await t.test(name, async (caseContext) => {
+      const h = await setup(caseContext)
+      await ingest(h, name, { text })
+      await h.coordinator.schedule('g')
+      const routeRequest = h.envelope('[GROUP_TOPIC_ROUTE]')
+      const units = sources.map((quote, index) => ({ unitKey: String.fromCharCode(97 + index), summary: quote, sourceRefs: [{ quote }], topics: [{ newTopicKey: name === 'other-despite-agent-in-decision' ? 'shared' : `matter-${index}`, title: name === 'other-despite-agent-in-decision' ? '共同话题' : `事项 ${index}` }] }))
+      const routed = await h.call('group_topic_route_submit', { requestId: routeRequest.requestId, routes: [{ messageId: name, messageVersion: 1, ignoredRefs: [], units }] })
+      const request = routed.pendingDecisions.find((item) => item.messages.some((message) => message.unitSummary === units[target.charCodeAt(0) - 97].summary))
+      const selected = request.messages.find((message) => message.unitSummary === units[target.charCodeAt(0) - 97].summary)
+      const own = { unitId: selected.unitId, unitRevision: selected.unitRevision }
+      const all = request.messages.map((item) => ({ unitId: item.unitId, unitRevision: item.unitRevision }))
+      const action = { kind: 'new-task', title: `处理 ${target}`, objective: `处理 ${target}`, acceptanceCriteria: ['完成'], topicRefs: [{ topicId: request.topicId, revision: request.revision }], basisUnitRefs: [own] }
+      const decision = h.call('group_decision_submit', submission(request, { basisUnitRefs: name === 'other-despite-agent-in-decision' ? all : [own], actions: [action], reply: '开始处理', replyReview: { kind: 'confirmation' } }))
+      if (expectedError) await assert.rejects(decision, expectedError)
+      else {
+        assert.equal((await decision).status, 'accepted')
+        await h.coordinator.drain('g')
+        assert.equal(h.store.listTasks().length, 1)
+      }
+      if (expectedError) assert.equal(h.store.listTasks().length, 0)
+    })
+  }
+})
+
+test('其他人的称呼被归类为 ignoredRefs 后仍禁止接走其事项', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'ignored-other', { text: '@助理 修复 A；@李四 修复 B。' })
+  await h.coordinator.schedule('g')
+  const routeRequest = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const routed = await h.call('group_topic_route_submit', { requestId: routeRequest.requestId, routes: [{ messageId: 'ignored-other', messageVersion: 1,
+    ignoredRefs: [{ quote: '@李四 ', reason: '称呼不属于事项正文' }], units: [
+      { unitKey: 'a', summary: '修复 A', sourceRefs: [{ quote: '@助理 修复 A；' }], topics: [{ newTopicKey: 'a', title: '修复 A' }] },
+      { unitKey: 'b', summary: '修复 B', sourceRefs: [{ quote: '修复 B。' }], topics: [{ newTopicKey: 'b', title: '修复 B' }] },
+    ],
+  }] })
+  const b = routed.pendingDecisions.find((item) => item.messages[0].unitSummary === '修复 B')
+  const basisUnitRefs = [{ unitId: b.messages[0].unitId, unitRevision: b.messages[0].unitRevision }]
+  const action = { kind: 'new-task', title: '修复 B', objective: '修复 B', acceptanceCriteria: ['完成'], topicRefs: [{ topicId: b.topicId, revision: b.revision }], basisUnitRefs }
+  await assert.rejects(h.call('group_decision_submit', submission(b, { basisUnitRefs, actions: [action], reply: '开始处理', replyReview: { kind: 'confirmation' } })), /task_action_directed_to_other_participants/)
+  assert.equal(h.store.listTasks().length, 0)
+})
+
 test('引用消息正文不能作为当前消息的 contextRefs', async (t) => {
   const h = await setup(t)
   await ingest(h, 'quoted-context', { text: '@助理 这个需要修复', quotedMessage: { messageId: 'previous', content: '此前的错误详情' } })
@@ -437,6 +487,26 @@ test('引用消息正文不能作为当前消息的 contextRefs', async (t) => {
   await assert.rejects(h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'quoted-context', messageVersion: 1, ignoredRefs: [], units: [{
     unitKey: 'repair', summary: '修复错误', sourceRefs: [{ quote: '@助理 这个需要修复' }], contextRefs: [{ quote: '此前的错误详情', purpose: '引用消息背景' }], topics: [{ newTopicKey: 'repair', title: '错误修复' }],
   }] }] }), /topic_unit_context_ambiguous:contextRefs.quote must uniquely match current message.text/)
+  assert.equal(h.store.listTopics('g').length, 0)
+  const routed = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'quoted-context', messageVersion: 1, ignoredRefs: [], units: [{
+    unitKey: 'repair', summary: '修复错误', sourceRefs: [{ quote: '@助理 这个需要修复' }], contextRefs: [], topics: [{ newTopicKey: 'repair', title: '错误修复' }],
+  }] }] })
+  const current = routed.pendingDecisions[0]
+  const basisUnitRefs = [{ unitId: current.messages[0].unitId, unitRevision: current.messages[0].unitRevision }]
+  const action = { kind: 'new-task', title: '修复错误', objective: '修复错误', acceptanceCriteria: ['完成'], topicRefs: [{ topicId: current.topicId, revision: current.revision }], basisUnitRefs }
+  assert.equal((await h.call('group_decision_submit', submission(current, { basisUnitRefs, actions: [action], reply: '开始处理', replyReview: { kind: 'confirmation' } }))).status, 'accepted')
+  await h.coordinator.drain('g')
+  assert.equal(h.store.listTasks().length, 1)
+})
+
+test('引用消息中的 Agent 点名不授权当前未点名事项', async (t) => {
+  const h = await setup(t)
+  await ingest(h, 'quoted-direction', { text: '请修复 B', quotedMessage: { messageId: 'previous', content: '@助理 请修复 A' } })
+  const request = (await route(h)).pendingDecisions[0]
+  const basisUnitRefs = [{ unitId: request.messages[0].unitId, unitRevision: request.messages[0].unitRevision }]
+  const action = { kind: 'new-task', title: '修复 B', objective: '修复 B', acceptanceCriteria: ['完成'], topicRefs: [{ topicId: request.topicId, revision: request.revision }], basisUnitRefs }
+  await assert.rejects(h.call('group_decision_submit', submission(request, { basisUnitRefs, actions: [action], reply: '开始处理', replyReview: { kind: 'confirmation' } })), /task_explicit_authorization_required/)
+  assert.equal(h.store.listTasks().length, 0)
 })
 
 test('已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox', async (t) => {

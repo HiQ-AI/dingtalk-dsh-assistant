@@ -6,7 +6,7 @@ import { TaskRevisionError } from './task-input-revision.js'
 import { visiblePromptRefs, visibleSectionLength, promptContent } from './coordination-context.js'
 import { taskProgressSnapshot } from './task-progress.js'
 import { assertCurrentTaskPrompts, isDiagnosticCheckpoint } from './task-result.js'
-import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, isDirectedToOtherParticipants, isExplicitAgentDirection, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS } from './decision.js'
+import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, isExplicitAgentDirection, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS } from './decision.js'
 
 const textMessage = (text, images = []) => Object.freeze({ id: randomUUID(), role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text }, ...images.map((attachment) => ({ type: 'image', attachment }))] })
 const objectOutput = { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] }
@@ -27,6 +27,17 @@ const invalidArguments = (error) => ({
 })
 const sameVersions = (left, right) => left.length === right.length && left.every((item) => right.some((other) => other.messageId === item.messageId && other.messageVersion === item.messageVersion))
 const unitKey = (value) => value.unitId ? `${value.unitId}:${value.unitRevision}` : `legacy:${value.messageId}:${value.messageVersion}`
+const unitDirection = (message, sameMessageUnits, agentNames) => {
+  const original = message._sourceMessageText ?? message.text
+  const ends = (message.sourceRanges ?? []).map((range) => range.end)
+  const limit = ends.length ? Math.max(...ends) : sameMessageUnits.length === 1 ? original.length : 0
+  const mentions = [...original.matchAll(/(?<![\w.])@([^\s@，,：:；;。！？!?（）()]+)/gu)]
+    .filter((match) => match.index < limit && !original.slice(Math.max(0, match.index - 8), match.index).endsWith('mediaId='))
+  const latest = mentions.at(-1)
+  if (latest) return isExplicitAgentDirection(latest[0], agentNames) ? 'agent' : 'other'
+  if (/^\s*cc\s*:/iu.test(original) || isExplicitAgentDirection(message.text, agentNames)) return 'agent'
+  return 'none'
+}
 const topicIndex = (topics) => topics.map(({ topicId, title, revision, processedRevision, status, summary }) => ({ topicId, title, revision, processedRevision, status, summary: summary?.slice(0, 240) }))
 const boundedItems = (items, maxChars, maxCount, required = () => false) => {
   const selected = items.filter(required)
@@ -525,8 +536,6 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     const targets = decision.actions.map((action) => action.taskId).filter(Boolean)
     if (new Set(targets).size !== targets.length) throw new Error('topic_decision_task_target_duplicate')
     const basis = new Set(decision.basisUnitRefs.map(unitKey))
-    const messageBasis = new Set(decision.basisMessageIds)
-    const sourceText = (message) => message._sourceMessageText ?? message.text
     if (basis.size !== decision.basisUnitRefs.length || decision.basisUnitRefs.some((ref) => !request.messages.some((message) => unitKey(message) === unitKey(ref)) && !request.removedUnitRefs.some((removed) => unitKey(removed) === unitKey(ref)))) throw new Error('topic_decision_basis_invalid')
     const topic = store.getTopic(request.groupId, request.topicId)
     const delta = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= request.revision).map(unitKey))
@@ -540,6 +549,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
     }
     for (const action of decision.actions) {
       if (action.basisUnitRefs.some((ref) => !basis.has(unitKey(ref)))) throw new Error('task_unit_basis_invalid')
+      const actionBasis = new Set(action.basisUnitRefs.map(unitKey))
+      const actionMessages = request.messages.filter((message) => actionBasis.has(unitKey(message)))
       const ownership = effectOwnership(request.groupId, request.topicId, request.revision, request.messages)
       const owned = new Set(ownership.ownedDeltaUnitRefs.map(unitKey))
       if (!action.basisUnitRefs.some((ref) => owned.has(unitKey(ref)))) throw new Error('topic_effect_owner_required')
@@ -556,18 +567,18 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
         if (['task-context', 'task-cancel'].includes(action.kind) && task.state === 'completed') throw new Error('task_not_active')
       }
       if (decision.actions.length) {
-        const directedAway = request.messages.filter((message) => messageBasis.has(message.messageId) && isDirectedToOtherParticipants(sourceText(message), store.getAgentNames()))
-        for (const other of directedAway) if (!request.messages.some((message) => messageBasis.has(message.messageId) && message.quotedMessage?.messageId === other.messageId && isExplicitAgentDirection(sourceText(message), store.getAgentNames()))) throw new Error('task_action_directed_to_other_participants')
+        const directedAway = actionMessages.filter((message) => unitDirection(message, request.messages.filter((item) => item.messageId === message.messageId), store.getAgentNames()) === 'other')
+        for (const other of directedAway) if (!actionMessages.some((message) => message.quotedMessage?.messageId === other.messageId && unitDirection(message, request.messages.filter((item) => item.messageId === message.messageId), store.getAgentNames()) === 'agent')) throw new Error('task_action_directed_to_other_participants')
       }
       if (action.kind === 'new-task') {
         const group = store.getGroup(request.groupId)
         if (!group.responsibility?.trim()) throw new Error('task_group_responsibility_required')
-        const directed = request.messages.some((message) => messageBasis.has(message.messageId) && isExplicitAgentDirection(sourceText(message), store.getAgentNames()))
-        const confirmsProposal = request.messages.some((message) => {
-          if (!messageBasis.has(message.messageId) || !message.quotedMessage?.messageId) return false
+        const directed = actionMessages.some((message) => unitDirection(message, request.messages.filter((item) => item.messageId === message.messageId), store.getAgentNames()) === 'agent')
+        const confirmsProposal = actionMessages.some((message) => {
+          if (!message.quotedMessage?.messageId) return false
           const outbound = group.outbox.find((item) => item.deliveredMessageId === message.quotedMessage.messageId && item.status === 'sent')
           if (!outbound?.decisionId) return false
-          return group.topics.some((topic) => topic.decisions.some((record) => record.decisionId === outbound.decisionId && record.decision.actions.some((candidate) => candidate.kind === 'task-proposal')))
+          return group.topics.some((topic) => topic.decisions.some((record) => record.decisionId === outbound.decisionId && record.decision.actions.some((candidate) => candidate.kind === 'task-proposal' && candidate.topicRefs.some((ref) => ref.topicId === request.topicId))))
         })
         if (!directed && !confirmsProposal) throw new Error('task_explicit_authorization_required')
       }
