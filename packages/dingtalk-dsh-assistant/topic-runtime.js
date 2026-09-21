@@ -996,7 +996,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       if (!diagnostic && unreadSections.length && (review.accepted === true || ['acknowledge', 'guidance', 'approve-wait', 'revise-scope'].includes(review.decision))) return { status: 'context-review-required', unreadSections }
       if (request.kind === 'waiting' && review.decision === 'approve-wait') {
         const sourceIds = new Set(taskMessages(task).map(message => message.messageId))
-        if (!request.value.blockedItems?.length || request.value.blockedItems.some(item => item.basisMessageIds.some(id => !sourceIds.has(id)))) throw new Error('task_waiting_blocked_items_invalid')
+        if (!request.value.blockedItems?.length || request.value.blockedItems.some(item => item.basisMessageIds.some(id => !sourceIds.has(id))
+          || item.stageId && !task.stagePlan?.some(stage => stage.stageId === item.stageId))) throw new Error('task_waiting_blocked_items_invalid')
       }
       if (request.kind === 'waiting' && review.decision === 'revise-scope') {
         const sourceIds = new Set(taskMessages(task).map(message => message.messageId))
@@ -1097,7 +1098,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, seriali
       const instruction = kind === 'completion'
         ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。当前 Agent 的交付及必要自验证完成即可通过；他人后续检查不构成完成条件。通过时同时准备群通知；存在真实群参与人时必须从通知上下文选择 replyToMessageId，省略 atOpenDingTalkIds 时默认 @ 被引用消息的发送人；需要通知其他参与人时显式填写。存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界。"
         : kind === 'waiting'
-          ? "等待审阅：真实必要依赖用 {decision:'approve-wait',reason:string}；可自行继续用 {decision:'continue',reason:string}；已完成自身工作、仅等他人后续检查时用 {decision:'revise-scope',reason:string,basisMessageIds:string[],affectedStageIds:string[],title:string,objective:string,acceptanceCriteria:string[],stageTasks:string[]}。revise-scope 必须以原始消息明确的本 Agent 交付重写完整目标、验收和剩余阶段，并用 affectedStageIds 指明旧阶段中从哪一项起受影响，保留之前有效的证据；不要把实际未完成的本职工作删去。只有 blockedItems 中确有当前 Agent 尚未完成的交付，且所列依赖必要，才可 approve-wait。审阅不代替业务完成，也不得因为没有 blockedItems 批准等待。"
+          ? "等待审阅：真实必要依赖用 {decision:'approve-wait',reason:string}；可自行继续用 {decision:'continue',reason:string}；已完成自身工作、仅等他人后续检查时用 {decision:'revise-scope',reason:string,basisMessageIds:string[],affectedStageIds:string[],title:string,objective:string,acceptanceCriteria:string[],stageTasks:string[]}。revise-scope 必须以原始消息明确的本 Agent 交付重写完整目标、验收和剩余阶段，并用 affectedStageIds 指明旧阶段中从哪一项起受影响，保留之前有效的证据；不要把实际未完成的本职工作删去。只有 blockedItems 中确有当前 Agent 尚未完成的交付，且所列依赖必要，才可 approve-wait。先核对仍可独立完成的阶段、已尝试的取证入口及失败证据，不能从一个入口不可用推断所有入口不可用；不得把排查方法扩大成原始要求。审阅不代替业务完成，也不得因为没有 blockedItems 批准等待。"
           : `检查点审阅：{decision:'acknowledge'|'guidance'|'reject',reason:string,guidance?:string}。计划与原始消息或任务流程冲突时必须 reject；只有原始消息明确支持的 workflowAssessment.exceptions 才能覆盖流程。`
       const unreadPrompts = promptRefs.filter((ref) => !request.readPromptRefs.has(ref.id))
       const promptInstruction = diagnosticCheckpoint(request) ? '这是异常报告，即使未选流程、旧流程过期或未读完也必须保持协调通道可用，不批准阶段推进。' : `${promptRefs.length ? (unreadPrompts.length ? `按 requestId 用 group_task_prompt_get 批量读取尚不可见的流程 ${JSON.stringify(unreadPrompts)}；visiblePromptRefs 指明当前 surface 中已具备正文的流程，无需重读。` : `全部已选流程正文仍在当前 surface 中，直接复用 visiblePromptRefs，不再调用 group_task_prompt_get。`) : '当前未选择专用流程，需结合索引核查是否确无匹配。'}核查选择原因和可用流程索引；如需读取未选候选，也应合并到一次批量调用。若漏选适用流程应要求重新规划，允许多个流程组合，也允许有明确理由的无匹配。`

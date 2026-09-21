@@ -19,10 +19,12 @@ const workflowAssessmentSchema = z.object({
   exceptions: z.array(z.object({ requirement: z.string().trim().min(1), basisMessageIds: z.array(z.string().trim().min(1)).min(1), reason: z.string().trim().min(1) }).strict()).default([]),
 }).strict()
 const blockedItemSchema = z.object({
+  stageId: z.string().trim().min(1).optional(),
   requirement: z.string().trim().min(1),
   basisMessageIds: z.array(z.string().trim().min(1)).min(1),
   dependency: z.string().trim().min(1),
   reason: z.string().trim().min(1),
+  attemptedSources: z.array(z.string().trim().min(1)).optional(),
 }).strict()
 
 const completedResultSchema = z.object({

@@ -44,8 +44,8 @@ test('同目标下证据否定仍触发定向重规划，preserve不能覆盖明
   const result = reviseTaskProgress(current, { progressImpact: 'preserve', impactEvidence: impact(current) }, basis)
   assert.equal(result.progressImpact, 'replan')
   assert.equal(result.scopeChanged, false)
-  assert.deepEqual(result.checkpoints.map(cp => cp.checkpointId), ['cp0'])
-  assert.deepEqual(result.affectedStageIds, current.stagePlan.slice(1).map(stage => stage.stageId))
+  assert.deepEqual(result.checkpoints.map(cp => cp.checkpointId), ['cp0', 'cp2'])
+  assert.deepEqual(result.affectedStageIds, [current.stagePlan[1].stageId])
   assert.equal(result.checkpoints[0].inputVersion, 2)
 })
 
@@ -63,10 +63,10 @@ test('真实目标变化优先采用明确影响证据，未限定时保守失�
   assert.equal(broad.checkpoints.length, 0)
 })
 
-test('重排或替换阶段按最早差异失效，不能以较晚impact掩盖', () => {
+test('重排阶段保留独立阶段身份，仅明确受影响阶段失效', () => {
   const current = task()
   const result = reviseTaskProgress(current, { stageTasks: ['SQL', '准备', '部署'], impactEvidence: impact(current, 2) }, basis)
-  assert.equal(result.checkpoints.length, 0)
+  assert.deepEqual(result.checkpoints.map(cp => cp.checkpointId), ['cp0', 'cp1'])
   assert.equal(result.stagePlan[0].stageId, current.stagePlan[1].stageId)
   const appended = reviseTaskProgress(current, { stageTasks: [...current.stageTasks, '验收'] }, basis)
   assert.deepEqual(appended.checkpoints.map(cp => cp.checkpointId), ['cp0', 'cp1', 'cp2'])
@@ -86,7 +86,7 @@ test('拒绝记录、其他run以及空completedItems不能冒充有效受影响
   const current = task()
   current.checkpoints.push({ ...current.checkpoints[1], checkpointId: 'rejected', coordinatorDecision: 'reject' }, { ...current.checkpoints[1], checkpointId: 'other-run', runSequence: 9 }, { ...current.checkpoints[3], checkpointId: 'empty-affected', completedItems: [] })
   const result = reviseTaskProgress(current, { impactEvidence: impact(current) }, basis)
-  assert.deepEqual(result.checkpoints.map(cp => cp.checkpointId), ['cp0'])
+  assert.deepEqual(result.checkpoints.map(cp => cp.checkpointId), ['cp0', 'cp2'])
   const preserve = reviseTaskProgress(current, {}, basis)
   assert.ok(!preserve.checkpoints.some(cp => ['rejected', 'other-run'].includes(cp.checkpointId)))
 })

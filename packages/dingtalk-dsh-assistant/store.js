@@ -321,8 +321,11 @@ export async function openResidentStore(storageDomain) {
     await groups.update(groupEntry[0], (group) => ({ ...group, outbox: group.outbox.map((outbound) => {
       if (outbound.status !== 'pending' || !outbound.taskIds?.includes(task.taskId)) return outbound
       if (outbound.taskInputVersion === undefined || outbound.taskRunSequence === undefined) return outbound
-      if (outbound.taskInputVersion === task.inputVersion && outbound.taskRunSequence === task.runSequence) return outbound
-      return { ...outbound, status: 'superseded', supersededAt: new Date().toISOString(), supersededReason: 'task-execution-version-changed' }
+      const sameVersion = outbound.taskInputVersion === task.inputVersion && outbound.taskRunSequence === task.runSequence
+      const obsoleteWait = outbound.sourceMessageId.startsWith(`task-result:${task.taskId}:waiting:`)
+        && (task.state !== 'waiting' || task.waitingKind !== 'information' || outbound.resultFingerprint !== fingerprint(task.result))
+      if (sameVersion && !obsoleteWait) return outbound
+      return { ...outbound, status: 'superseded', supersededAt: new Date().toISOString(), supersededReason: obsoleteWait ? 'task-information-wait-ended' : 'task-execution-version-changed' }
     }) }))
   }
 
