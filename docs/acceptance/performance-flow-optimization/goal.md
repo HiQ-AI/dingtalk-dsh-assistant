@@ -2,7 +2,7 @@
 
 > 状态：ACTIVE
 > Goal ID：performance-flow-20260921
-> 最近维护：2026-09-21T23:01:00+08:00
+> 最近维护：2026-09-22T09:48:00+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant-performance-flow/docs/acceptance/performance-flow-optimization/goal.md
 
 ## 总目标
@@ -31,12 +31,13 @@
 | SG4 | 结构错误一次反馈 | 多错误集合、失败零副作用、版本反例 | 本地集成验证完成 | topic-model.js；test/topic-runtime.test.js |
 | SG5 | 工作位置与检索 | 复现历史检索参数、准确路径传递、工具责任明确 | 部分完成，外部包未部署 | search/report.md；22条改善；8无前缀及4宽目录未解决 |
 | SG6 | 请求级协调会话 | 角色/请求/群隔离、资源释放、恢复幂等 | 本地与原生验证完成 | round-9-tests.log：514 PASS；原生生命周期6项、manager4项 |
-| SG7 | 集成回放与交付 | 全量测试、固定样本、中文PR与状态回查 | 进行中 | round-9-tests.log：514 PASS；PR #113 OPEN/DRAFT；CI success，绑定源码da34786 |
+| SG7 | 集成回放与交付 | 全量测试、固定样本、中文PR与状态回查 | 已合并并本机安装，真实流量收益待验 | PR #113 merged bfe3994；本地安装文件哈希一致 |
+| SG8 | 新分区计量写入故障 | 原生Domain首次写入成功、复启续写，健康状态恢复；不重放消息 | 修复已本地验证，PR #114 待新CI及部署 | round-10.md；515 PASS |
 
 ## 当前检查点
 
-- 当前子目标：SG7
-- 唯一下一步：后续经部署后执行真实流量与人工语义验收；本轮源码和草稿PR交付完成。
+- 当前子目标：SG8
+- 唯一下一步：提交SG8修复PR并部署；切换前确认业务会话空闲，安装后验证新分区持久化和健康恢复。
 - 未闭环项：81条消息人工真值与首次实质回复标注；责任包发布安装及12条宽范围搜索；真实流量性能目标。当前不部署。
 
 ## 进展
@@ -72,3 +73,7 @@
 - 交付回读：PR https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/113，OPEN/DRAFT，head=da347869e252abf3f90fb04fe425284749e366da；远端分支SHA一致。原生CI手动触发：https://github.com/HiQ-AI/dingtalk-dsh-assistant/actions/runs/35615780197。
 
 - 原生 CI 已回读 success：run 35615780197，源码 SHA da347869e252abf3f90fb04fe425284749e366da；构建、测试、三包打包及上传均成功。产物 npm-packages-da347869e252abf3f90fb04fe425284749e366da，id=10646272483，228177 bytes，未过期。此后提交仅更新交付文档，不冒充CI已测试新文档SHA。
+
+- 2026-09-22：用户反馈今日消息已投递却似无响应。只读核对：两条相关实质回复先后于09:46:37和09:47:08由Outbox送达并有deliveredMessageId；代理接收与群回复间存在数分钟排队/处理。另发现性能投影新分区调用update导致原生Domain报no record，健康降级；mock错误容许upsert而漏检。新增原生回归，修复为put，515项本地通过；未重放消息。
+
+- CI前两次在原有审阅耗尽fixture失败：1ms重试窗口在CI准备请求时触发，改为200ms仍覆盖耗尽/恢复；515项重跑通过，新提交待CI。
