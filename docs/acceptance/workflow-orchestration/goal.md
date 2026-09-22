@@ -2,7 +2,7 @@
 
 > 状态：ACTIVE
 > Goal ID：workflow-orchestration
-> 最近维护：2026-09-22T17:41:00+08:00
+> 最近维护：2026-09-22T17:45:00+08:00
 > 权威目标：D:/project/dingtalk-dsh-coordination-latency/docs/acceptance/workflow-orchestration/goal.md
 
 ## 总目标
@@ -35,12 +35,12 @@
 | SG7 | 群聊延迟与任务发起修复 | schema、字段反馈、公平调度及新输入保护回归通过，本地验证与 PR 回读 | 已完成 | round-16.md；613/613；PR #117 OPEN |
 | SG8 | 修复包本地部署 | 精确安装摘要、新进程、健康、认证Web及延时存活回读 | 已完成 | round-17.md；源码60f883c；PID69760 |
 
-| SG9 | 决策上下文与积压闭环 | 工具契约、轮转及慢提交针对性回归，部署及六项状态回读 | 进行中 | round-18 待验证 |
+| SG9 | 决策上下文与积压闭环 | 工具契约、轮转及慢提交针对性回归，部署及六项状态回读 | 等待部署窗口 | round-18.md；623/623；PR #118 OPEN |
 
 ## 当前检查点
 
 - 当前子目标：SG9
-- 唯一下一步：补齐决策流程上下文、定位慢提交与调度积压，回归后更新 PR 并部署，再回查六项真实请求。
+- 唯一下一步：等待用户选择部署窗口；当前4个running、2个queued及pwsh子进程，自检已拒绝切换。收到允许后备份、安装63a157f修复包并核验任务恢复；不自动合并PR。
 - 未闭环项：真实渠道 D03 未验收。原 #1336 话题已进入决策、尚无关联 Task；本轮不将其标为业务完成，也未人为补建。首次部署空转问题已前向修复，第二次实例健康稳定。
 
 ## 进展
@@ -76,3 +76,8 @@
 - PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/116，OPEN，base=main。
 - 代码提交：8cc9df6194a24fa151c347dd0b329bbe82b02693；git ls-remote 与本地 HEAD 一致。
 - 本地596/596、隔离原生DSH、UI10项、18次队列回放、三个包构建通过。PR创建时statusCheckRollup为空，不当作远程CI通过。
+
+### SG9交付
+
+- PR #118 OPEN，代码63a157f7a2dca9b8a5ae0818ba7eb7e2d8dac939；最终623/623通过；本地tgz209851字节，SHA256见round-18.md。
+- 当前包仍是60f883c；新包未安装。已完成源码、测试、打包和PR，部署与真实业务恢复仍未闭环。用户尚未回答切换风险选择前不停止现有实例。

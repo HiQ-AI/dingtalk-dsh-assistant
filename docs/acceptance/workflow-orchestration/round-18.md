@@ -18,3 +18,10 @@
 ## 真实业务与部署边界
 
 17:40旧包回读：#1336、#1353、#1354已创建running Task；#1371已重开queued；#1350旧决策blocked，#1372尚无Task。这些推进发生在本次包部署之前。没有手工补建、修改真实存储或发送测试消息。runbook要求活动任务安全结束前保留实例，部署状态另行回读。
+
+## 交付回读
+
+- PR #118 OPEN：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/118；head=63a157f7a2dca9b8a5ae0818ba7eb7e2d8dac939，base main。旧PR #117已经合并，不在旧分支推送。
+- `pnpm --dir packages/dingtalk-dsh-assistant pack --pack-destination ../../docs/tmp/deploy-63a157f` 生成209851字节0.5.15本地修复包；SHA256 `7049e108c6aa03e025056a29ddea8515ae9c8be2863193861fbe49e5e2c97a0a`。
+- `deploy-local.ps1 -Check` 零写自检在进程检查阶段拒绝：当前PID69760拥有dws外的pwsh子进程154448；随后只读确认4个running、2个queued Task。按runbook保留服务，未执行停机/安装/重启。
+- 已向用户请求选择暂缓切换或授权中断恢复；包已可审阅，不能标记为部署完成。
