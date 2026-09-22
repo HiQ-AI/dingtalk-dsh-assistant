@@ -14,6 +14,7 @@ import { coordinationTools, createCoordinationSessions, createCoordinationStepGa
 import { createCoordinationResourceTools } from './coordination-resources.js'
 import { reviseTaskProgress, stagePlanFor, reconcileLegacyStagePlan, normalizeRunPlan } from './task-input-revision.js'
 import { PERFORMANCE_EVENT_TYPES } from './performance.js'
+import { inspectTaskWorktree, archiveTaskWorktree, validateTaskDocumentSources } from './task-worktree-archive.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
 const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_TOPIC_ROUTE]', '[GROUP_TOPIC_DECISION]', '[TASK_COORDINATION]', '[TASK_COMPLETION_REVIEW]', '[TASK_CHECKPOINT_REVIEW]', '[GROUP_MESSAGE_STEER]', '[GROUP_DECISION_RECHECK]', '[GROUP_DECISION_RESUME]']
@@ -26,6 +27,8 @@ const TASK_MESSAGE_CONTEXT_MAX_CHARS = 40_000
 export async function taskWorkLocations(task) {
   const previous = task.runHistory?.at(-1)
   const sources = [
+    ...(task.localWorktrees ?? []).filter(item => item.status === 'registered').map(item => ({ text: item.path, source: 'task.localWorktrees' })),
+    ...(task.localWorktrees ?? []).flatMap(item => (item.documents ?? []).filter(document => document.archivePath).map(document => ({ text: document.archivePath, source: 'task.localWorktrees.documents' }))),
     ...(task.result?.artifacts ?? []).map(text => ({ text, source: 'result.artifacts' })),
     ...(task.lastWaitingResult?.artifacts ?? []).map(text => ({ text, source: 'lastWaitingResult.artifacts' })),
     ...[...(task.checkpoints ?? []), ...(previous?.checkpoints ?? [])].flatMap(item =>
@@ -204,7 +207,7 @@ const activityDetail = (event, session) => {
 }
 
 export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 30_000 } = {}) {
-  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), checkpointReviewRuns = new Map(), activeGroupResidentOperations = new Set(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), startingTasks = new Set(), pendingLeafDisposals = new Set()
+  const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), checkpointReviewRuns = new Map(), activeGroupResidentOperations = new Set(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), startingTasks = new Set(), pendingLeafDisposals = new Set(), leafDisposalsByTask = new Map(), archiveJobs = new Map()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = createRecoveryIssueLedger(), subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
@@ -598,7 +601,52 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       })
     })
     pendingLeafDisposals.add(disposal)
-    void disposal.finally(() => pendingLeafDisposals.delete(disposal))
+    leafDisposalsByTask.set(task.taskId, disposal)
+    void disposal.finally(() => { pendingLeafDisposals.delete(disposal); if (leafDisposalsByTask.get(task.taskId) === disposal) leafDisposalsByTask.delete(task.taskId) })
+    return disposal
+  }
+
+  async function archiveTaskInternal(taskId) {
+    const first = await serializeTasks(async () => {
+      const task = store.getTask(taskId)
+      if (!task) throw new Error(`task_not_found:${taskId}`)
+      if (task.state !== 'completed') throw new Error(`task_not_completed:${taskId}`)
+      if (task.archivedAt) return task
+      if (leafHandles.has(taskId)) throw new Error(`task_leaf_still_active:${taskId}`)
+      return store.updateTask(taskId, current => ({ ...current, archiveCleanup: { status: 'running', updatedAt: new Date().toISOString() } }))
+    })
+    if (first.archivedAt) return first
+    try {
+      await leafDisposalsByTask.get(taskId)
+      const entries = first.localWorktrees ?? []
+      for (const entry of entries.filter(item => item.status === 'registered' && item.createdByTask)) {
+        if (entry.ownerTaskId !== taskId) throw new Error(`worktree_owner_mismatch:${entry.path}`)
+        if (store.listTasks().some(other => other.taskId !== taskId && !other.archivedAt && (other.localWorktrees ?? []).some(item => item.status === 'registered' && item.path === entry.path))) throw new Error(`worktree_in_use_by_other_task:${entry.path}`)
+        await archiveTaskWorktree({ taskId, entry, workspaceDir: agentWorkspace, checkOnly: true })
+      }
+      for (const entry of entries.filter(item => item.status === 'registered' && item.createdByTask)) {
+        await archiveTaskWorktree({ taskId, entry, workspaceDir: agentWorkspace, onProgress: async progress => {
+          await serializeTasks(() => store.updateTask(taskId, current => ({ ...current,
+            localWorktrees: current.localWorktrees.map(item => item.path === progress.path ? progress : item), updatedAt: new Date().toISOString(),
+          })))
+        } })
+      }
+      return serializeTasks(() => store.updateTask(taskId, current => ({ ...current, archivedAt: new Date().toISOString(),
+        archiveCleanup: { status: 'completed', updatedAt: new Date().toISOString() } })))
+    } catch (error) {
+      await serializeTasks(() => store.updateTask(taskId, current => ({ ...current,
+        archiveCleanup: { status: 'failed', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() },
+      })))
+      throw error
+    }
+  }
+
+  function archiveTask(taskId) {
+    if (archiveJobs.has(taskId)) return archiveJobs.get(taskId)
+    const job = archiveTaskInternal(taskId)
+    archiveJobs.set(taskId, job)
+    void job.finally(() => { if (archiveJobs.get(taskId) === job) archiveJobs.delete(taskId) }).catch(() => undefined)
+    return job
   }
 
   async function cancelTaskInternal(taskId, normalizedReason, topicRefs, operation) {
@@ -620,14 +668,16 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
           result: undefined,
           waitingKind: undefined,
           waitingReason: undefined,
-          archivedAt: new Date().toISOString(),
+          archivedAt: (current.localWorktrees ?? []).some(item => item.status === 'registered' && item.createdByTask) ? undefined : new Date().toISOString(),
         }
       })
+      let disposal
       if (handle !== undefined) {
         if (leafHandles.get(taskId) === handle) leafHandles.delete(taskId)
         leafTaskBySession.delete(String(handle.agent.session.id))
-        disposeCancelledLeaf(cancelled, handle)
+        disposal = disposeCancelledLeaf(cancelled, handle)
       }
+      if (!cancelled.archivedAt) void Promise.resolve(disposal).then(() => archiveTask(taskId)).catch(error => recoveryIssues.push({ groupId: cancelled.groupId, taskId, kind: 'task-archive-cleanup', error: error.message }))
       void pumpTasks().catch((error) => recoveryIssues.push({ groupId: cancelled.groupId, kind: 'task-pump', error: error.message }))
       return cancelled
     } finally {
@@ -871,6 +921,8 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       const task = store.getTask(taskId)
       if (task === undefined || task.state !== 'running' && !(completionRecovery && task.state === 'waiting')) throw new Error(`task_not_active:${taskId}`)
       assertTaskInput(task, result)
+      const registered = (task.localWorktrees ?? []).filter(item => item.status === 'registered').map(item => item.path).sort()
+      if (JSON.stringify(registered) !== JSON.stringify([...(result.localWorktrees ?? [])].sort())) throw new Error(`task_worktree_result_mismatch:${taskId}`)
       const handle = leafHandles.get(taskId)
       if (handle === undefined) throw new Error(`task_leaf_not_active:${taskId}`)
       const goal = ctx.goals.get(handle.agent)
@@ -908,6 +960,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (current.inputVersion !== prepared.task.inputVersion || current.runSequence !== prepared.task.runSequence || current.objective !== prepared.task.objective || current.checkpoints?.at(-1)?.checkpointId !== prepared.lastCheckpointId || !samePromptRefs(current.taskPromptRefs ?? [], prepared.task.taskPromptRefs ?? [])) throw new Error(`task_result_context_changed:${taskId}`)
       assertWorkflowPlan(current)
       assertTaskInput(current, result)
+      if (JSON.stringify((current.localWorktrees ?? []).filter(item => item.status === 'registered').map(item => item.path).sort()) !== JSON.stringify([...(result.localWorktrees ?? [])].sort())) throw new Error(`task_worktree_result_mismatch:${taskId}`)
       const goal = ctx.goals.get(prepared.handle.agent)
       if (goal === undefined) throw new Error(`task_goal_missing:${taskId}`)
       const completedAt = new Date().toISOString()
@@ -1126,7 +1179,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         name: 'group-task-blocking-policy', order: 45,
         text: () => `## 群任务执行与完成规则
 
-你必须通过 submit_task_result 结束任务；自然语言总结、Goal complete 或 turn end 都不构成 Task 完成。checkpoint/result 的 accepted:true 仅表示报告已持久接收；input-wait/review-wait 时结束当前轮并等待 TASK_REPORT_REVIEWED，不重复提交、不继续依赖该批准的动作。submissionId 标识同一份报告，重试保持不变；有新事实时提交新的报告。
+你必须通过 submit_task_result 结束任务；自然语言总结、Goal complete 或 turn end 都不构成 Task 完成。新建本地 Git worktree 后立即使用 task_worktree_register 登记；文档形成后更新登记。完成报告的 localWorktrees 必须列出当前登记路径。完成时保留 worktree，归档时由 Runtime 核验、迁出已登记文档并清理目录。checkpoint/result 的 accepted:true 仅表示报告已持久接收；input-wait/review-wait 时结束当前轮并等待 TASK_REPORT_REVIEWED，不重复提交、不继续依赖该批准的动作。submissionId 标识同一份报告，重试保持不变；有新事实时提交新的报告。
 
 ### 工作区 Skill 的通用执行边界
 
@@ -1214,6 +1267,35 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
           const current = store.getTask(task.taskId)
           if (!current.topicRefs.some((ref) => ref.topicId === args.topicId && ref.revision === args.revision)) throw new Error('task_topic_not_admitted')
           return boundedTopicContext(store.getTopicContext({ ...args, groupId: current.groupId, limit: args.limit ?? 10 }), { textOffset: args.textOffset ?? 0 })
+        },
+      })
+      agentCtx.tools.register({
+        name: 'task_worktree_register', description: '登记当前叶子任务创建的本地 Git worktree 及待归档文档；任务完成后保留，任务归档时清理。文档使用 worktree 内 docs/ 分类相对路径。',
+        parameters: { type: 'object', additionalProperties: false, properties: {
+          inputVersion: { type: 'integer' }, runSequence: { type: 'integer' }, location: { type: 'string' },
+          createdByTask: { type: 'boolean' }, documents: { type: 'array', items: { type: 'string' } },
+        }, required: ['inputVersion', 'runSequence', 'location', 'createdByTask', 'documents'] },
+        output: { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] },
+        execute: async ({ inputVersion, runSequence, location, createdByTask, documents }, exec) => {
+          if (String(exec.agent?.session.id) !== task.childSessionId) throw new Error(`task_worktree_wrong_session:${task.taskId}`)
+          validateTaskDocumentSources(documents)
+          const identity = await inspectTaskWorktree({ location, workspaceDir: agentWorkspace })
+          if (!identity.branch) throw new Error('task_worktree_detached_branch')
+          return serializeTasks(async () => {
+            const current = store.getTask(task.taskId)
+            if (!current || current.childSessionId !== task.childSessionId || !['running', 'waiting'].includes(current.state)
+              || current.inputVersion !== inputVersion || current.runSequence !== runSequence) throw new Error(`task_worktree_registration_stale:${task.taskId}`)
+            if (store.listTasks().some(other => other.taskId !== task.taskId && (other.localWorktrees ?? []).some(item => item.status === 'registered' && item.path === identity.path && item.createdByTask))) throw new Error(`task_worktree_other_owner:${identity.path}`)
+            const previous = (current.localWorktrees ?? []).find(item => item.path === identity.path && item.status === 'registered')
+            if (previous && previous.createdByTask !== createdByTask) throw new Error(`task_worktree_ownership_changed:${identity.path}`)
+            const entry = { ...identity, ownerTaskId: task.taskId, createdByTask, runSequence, registeredAt: previous?.registeredAt ?? new Date().toISOString(),
+              status: 'registered', documents: documents.map(source => ({ source })) }
+            await store.updateTask(task.taskId, value => ({ ...value,
+              localWorktrees: [...(value.localWorktrees ?? []).filter(item => item.path !== identity.path || item.status !== 'registered'), entry],
+              archiveCleanup: { status: 'pending', updatedAt: new Date().toISOString() }, updatedAt: new Date().toISOString(),
+            }))
+            return entry
+          })
         },
       })
       agentCtx.tools.register({
@@ -1550,6 +1632,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
   async function reopenCompletedTaskInternal(task, context, topicRefs, title, objective, acceptanceCriteria, stageTasks, operation) {
     if (operation && task.appliedOperations.includes(operation.operationId)) { await pumpTasks(); return store.getTask(task.taskId) }
     if (task.state !== 'completed') throw new Error(`task_not_completed:${task.taskId}`)
+    if (archiveJobs.has(task.taskId)) throw new Error(`task_archive_running:${task.taskId}`)
     const nextObjective = typeof objective === 'string' && objective.trim() ? objective.trim() : task.objective
     const plan = normalizeRunPlan(nextObjective, acceptanceCriteria, stageTasks)
     const stagePlan = stagePlanFor({ taskId: task.taskId, runSequence: task.runSequence + 1 }, plan.stageTasks)
@@ -2193,13 +2276,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const correction = await coordinateInformationWait(task, task.result, -1)
       return { status: correction?.status ?? 'enqueued', sourceMessageId: `${key}:correction` }
     },
-    archiveTask: ({ taskId }) => serializeTasks(async () => {
-      const task = store.getTask(taskId)
-      if (task === undefined) throw new Error(`task_not_found:${taskId}`)
-      if (task.state !== 'completed') throw new Error(`task_not_completed:${taskId}`)
-      if (task.archivedAt) return task
-      return store.updateTask(taskId, (current) => ({ ...current, archivedAt: new Date().toISOString() }))
-    }),
+    archiveTask: ({ taskId }) => archiveTask(taskId),
     cancelTask: ({ reason, ...request }) => submitWebTaskAction('task-cancel', { ...request, context: reason }),
     renameTask: ({ taskId, title }) => serializeTasks(async () => {
       const task = store.getTask(taskId)
