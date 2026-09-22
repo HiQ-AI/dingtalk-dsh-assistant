@@ -208,7 +208,13 @@ dws:
 
 ## 群聊工作流
 
-Topic 处理模型使用存储 domain v8。已有 v6/v7 数据必须先按[离线迁移与回退说明](docs/ops/topic-storage-migration.md)完成只读检查、独立目标转换和回读，再切换运行配置；不能直接用新 Runtime 打开旧存储。下文说明代码契约，不代表该版本已发布或本机 profile 已升级。
+流程契约使用存储 domain v9。已有 v8 数据须按[工作流存储迁移](docs/ops/workflow-storage-migration.md)进行零写自检、独立目标转换和真实 SDK 回读；v6/v7 先按[旧 Topic 迁移](docs/ops/topic-storage-migration.md)得到 v8，再转换到 v9。不能直接用新 Runtime 打开旧存储。活动任务迁移后停在系统等待，显式恢复并重新确认结构化计划后才继续。下文说明代码契约，不代表该版本已发布或本机 profile 已升级。
+
+节点接口与恢复语义见[工作流节点契约](docs/api/workflow-node-contracts.md)。计划以稳定 criterionId/stageId、来源和版本为准；阶段产出引用产物及证据，完成提交包含逐项验收。报告 received、审阅批准、业务应用和通知送达分别记录。完成结果与通知意图同次持久化，通知失败恢复原意图，不重做业务。
+
+已接纳 Decision 的已知本地瞬时存储错误最多尝试三次；未知错误进入 blocked，保留原 operationId 和冲突保留记录。普通消息重试不能解锁未知结果，Host 必须对账后按原操作恢复。Task 取消先保存 stopRequest，未确定的外部动作继续对账，不能把“取消已请求”显示成副作用已撤销。执行许可与 Task 状态分离，等待审阅时停止叶子并释放许可，恢复必须重新排队取得许可。
+
+材料清单、版本和完整性检查由 Host 提前计算；只读注册检查器目前包含产物 SHA256 核验，摘要匹配不代表业务验收通过。外部动作账本只约束已注册适配器，未接入的任意 shell、SQL、部署不会自动获得去重或资源锁保障。
 
 ### 常驻主会话
 

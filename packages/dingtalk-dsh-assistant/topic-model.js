@@ -6,9 +6,15 @@ export const unitRefSchema = z.object({ unitId: z.string().min(1), unitRevision:
 export const sourceRangeSchema = z.object({ start: z.number().int().nonnegative(), end: z.number().int().positive(), quote: z.string().min(1) }).strict()
 export const attachmentRefId = (ref) => ref?.id ?? ref?.attachmentId
 export const topicEntrySchema = z.object({ revision: z.number().int().positive(), messageId: z.string().min(1), messageVersion: z.number().int().positive(), unitId: z.string().min(1).optional(), unitRevision: z.number().int().positive().optional(), action: z.enum(['add', 'remove']), relationship: z.enum(['continuation', 'affected']).optional(), effectOwner: z.boolean().optional(), reason: z.string().optional() })
+const topicOperationSchema = z.looseObject({
+  operationId: z.string().min(1), actionIndex: z.number().int().nonnegative(), taskId: z.string().min(1).optional(),
+  status: z.enum(['pending', 'applying', 'applied', 'blocked']), attempt: z.number().int().nonnegative().optional(),
+  reconciled: z.boolean().optional(), lastError: z.string().optional(), recoveryResolution: z.enum(['not-applied', 'applied']).optional(), recoveryReason: z.string().optional(),
+})
 export const topicDecisionSchema = z.object({
   decisionId: z.string().min(1), revision: z.number().int().positive(), decision: z.record(z.string(), z.unknown()), fingerprint: z.string(),
-  status: z.enum(['accepted', 'applying', 'failed', 'completed', 'rejected']), operations: z.array(z.record(z.string(), z.unknown())),
+  status: z.enum(['accepted', 'applying', 'failed', 'blocked', 'completed', 'rejected']), operations: z.array(topicOperationSchema),
+  attempt: z.number().int().nonnegative().optional(), retryBaseAttempt: z.number().int().nonnegative().optional(), nextRetryAt: z.string().optional(), recoveryReason: z.string().optional(), failureOperationId: z.string().min(1).optional(),
   outboundId: z.string().min(1), createdAt: z.string(), updatedAt: z.string(), error: z.string().optional(),
   progress: z.record(z.string(), z.unknown()).optional(),
 })

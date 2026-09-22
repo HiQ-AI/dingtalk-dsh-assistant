@@ -1,0 +1,7 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["packages/dingtalk-dsh-observer"],
+  "locale": "zh-CN",
+  "canonicalMap": "docs/acceptance/workflow-orchestration/round-7-ui-scope.md",
+  "requiredCapabilities": ["CRUD"]
+}

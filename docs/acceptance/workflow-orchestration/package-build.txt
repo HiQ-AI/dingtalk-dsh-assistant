@@ -1,0 +1,57 @@
+📦  dingtalk-dsh-assistant@0.5.15
+Tarball Contents
+CHANGELOG.md
+cordis.patch.yml
+index.js
+package.json
+README.md
+Tarball Details
+D:\project\dingtalk-dsh-workflow-orchestration\docs\tmp\workflow-pack\dingtalk-dsh-assistant-0.5.15.tgz
+📦  @zzusp/dingtalk-dsh-assistant@0.5.15
+Tarball Contents
+client.js
+coordination-context.js
+coordination-resources.js
+coordination-sessions.js
+cordis.patch.yml
+decision.js
+dws-adapter.js
+dws-bridge.js
+dws-runner.js
+environment.js
+fake-llm.js
+http.js
+index.js
+package.json
+performance.js
+resident.js
+runtime.js
+status-query.js
+storage-v8-schema.js
+store.js
+task-actions.js
+task-checks.js
+task-input-revision.js
+task-permits.js
+task-plan.js
+task-progress.js
+task-report-step-gate.js
+task-reports.js
+task-result.js
+task-sheet-sync.js
+task-worktree-archive.js
+tool-schema.js
+topic-model.js
+topic-runtime.js
+version-check.js
+web-client.js
+Tarball Details
+D:\project\dingtalk-dsh-workflow-orchestration\docs\tmp\workflow-pack\zzusp-dingtalk-dsh-assistant-0.5.15.tgz
+📦  @zzusp/dingtalk-dsh-observer@0.5.15
+Tarball Contents
+cordis.patch.yml
+index.js
+package.json
+web-client.js
+Tarball Details
+D:\project\dingtalk-dsh-workflow-orchestration\docs\tmp\workflow-pack\zzusp-dingtalk-dsh-observer-0.5.15.tgz

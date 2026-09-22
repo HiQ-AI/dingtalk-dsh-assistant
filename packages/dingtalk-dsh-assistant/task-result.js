@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { toToolJsonSchema } from './tool-schema.js'
+import { taskPlanSchema, stageOutputSchema, taskArtifactSchema, modelEvidenceSchema, criterionReviewSchema } from './task-plan.js'
 
 export function assertCurrentTaskPrompts(task, prompts) {
   const current = new Map(prompts.filter((item) => item.enabled).map((item) => [item.id, item.revision]))
@@ -65,12 +66,15 @@ const humanInterventionWaitingResultSchema = z.object({
   blockedItems: z.array(blockedItemSchema).default([]),
 }).strict()
 
-export const taskResultSchema = z.union([completedResultSchema, informationWaitingResultSchema, humanInterventionWaitingResultSchema])
+const completedReportSchema = completedResultSchema.extend({ planRevision: z.number().int().positive(), criterionReviews: z.array(criterionReviewSchema).min(1) })
+export const taskResultSchema = z.union([completedReportSchema, informationWaitingResultSchema, humanInterventionWaitingResultSchema])
+// 历史只读契约与新提交分开；不得把旧完成字符串推断为结构化验收通过。
+export const storedTaskResultSchema = z.union([completedReportSchema, completedResultSchema, informationWaitingResultSchema, humanInterventionWaitingResultSchema])
 
 function parseResultShape(value) {
   if (value?.status === 'waiting' && value?.waitingKind === 'coordination') throw new Error('task_waiting_coordination_obsolete:请按当前 Agent 的交付及必要自验证重新判断；已完成则提交 completed，外部后续检查不阻塞 Task。')
   const schema = value?.status === 'completed'
-    ? completedResultSchema
+    ? completedReportSchema
     : value?.status === 'waiting' && value?.waitingKind === 'information'
       ? informationWaitingResultSchema
       : value?.status === 'waiting' && value?.waitingKind === 'human-intervention'
@@ -96,13 +100,17 @@ export const storedTaskCheckpointBaseSchema = z.object({
   nextStep: z.string().trim().min(1),
   needsCoordinatorDecision: z.boolean().default(false),
   workflowAssessment: workflowAssessmentSchema.optional(),
+  plan: taskPlanSchema.optional(),
+  stageOutput: stageOutputSchema.optional(),
+  artifactRecords: z.array(taskArtifactSchema).optional(),
+  modelEvidence: z.array(modelEvidenceSchema).optional(),
 }).strict()
 
 const checkpointBase = storedTaskCheckpointBaseSchema.omit({ kind: true, workflowAssessment: true })
 const checkpointBranches = [
-  checkpointBase.extend({ kind: z.literal('plan-confirmed'), completedItems: z.array(z.string()).max(0).default([]), workflowAssessment: workflowAssessmentSchema.optional() }),
-  checkpointBase.extend({ kind: z.literal('stage-completed'), stageTask: z.string().trim().min(1), evidence: z.array(z.string().trim().min(1)).min(1) }),
-  ...['scope-conflict', 'evidence-gap', 'risk-changed'].map((kind) => checkpointBase.extend({ kind: z.literal(kind), completedItems: z.array(z.string()).max(0).default([]) })),
+  checkpointBase.omit({ stageOutput: true, artifactRecords: true, modelEvidence: true }).extend({ kind: z.literal('plan-confirmed'), plan: taskPlanSchema, completedItems: z.array(z.string()).max(0).default([]), workflowAssessment: workflowAssessmentSchema.optional() }),
+  checkpointBase.omit({ plan: true }).extend({ kind: z.literal('stage-completed'), stageOutput: stageOutputSchema, artifactRecords: z.array(taskArtifactSchema).default([]), modelEvidence: z.array(modelEvidenceSchema).default([]), evidence: z.array(z.string().trim().min(1)).min(1) }),
+  ...['scope-conflict', 'evidence-gap', 'risk-changed'].map((kind) => checkpointBase.omit({ plan: true, stageOutput: true, artifactRecords: true, modelEvidence: true }).extend({ kind: z.literal(kind), completedItems: z.array(z.string()).max(0).default([]) })),
 ]
 export const taskCheckpointSchema = z.discriminatedUnion('kind', checkpointBranches)
 export const taskCheckpointJsonSchema = toToolJsonSchema(taskCheckpointSchema)

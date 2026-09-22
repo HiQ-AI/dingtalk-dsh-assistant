@@ -36,6 +36,22 @@ test('pending报告先落盘，重复提交复用身份，不执行也不通知'
   await assert.rejects(f.queue.submit('task1', 'checkpoint', value({ summary: '不同报告' })), /task_report_identity_conflict/)
 })
 
+test('完成已提交但报告未结算的恢复只认同一 submission 和结果，不重执行业务', async () => {
+  for (const sameSubmission of [true, false]) {
+    const f = fixture()
+    const result = { inputVersion: 2, runSequence: 1, status: 'completed', summary: '已验证' }
+    await f.queue.submit('task1', 'result', { submissionId: 'completion1', ...result })
+    await f.queue.drain()
+    f.change({ state: 'completed', outcome: 'succeeded', result, executionEvents: [...f.store.getTask().executionEvents,
+      { kind: 'task-completed', submissionId: sameSubmission ? 'completion1' : 'different', inputVersion: 2, runSequence: 1 }] })
+    const recovered = f.restart()
+    recovered.recover(f.store.getTask())
+    await recovered.drain()
+    assert.equal(f.executed.length, 0)
+    assert.equal(taskReports(f.store.getTask())[0].status, sameSubmission ? 'accepted' : 'history-only')
+  }
+})
+
 test('回执分别表达收件、审阅和应用，不把驳回与系统故障显示成批准', () => {
   for (const [status, reviewStatus, applicationStatus, nextAction] of [
     ['input-wait', 'pending', 'pending', 'wait-for-resolution'],

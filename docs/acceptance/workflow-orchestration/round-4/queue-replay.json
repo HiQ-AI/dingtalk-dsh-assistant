@@ -1,0 +1,665 @@
+{
+  "baselineCommit": "83fc504596f0faff4c65f92991a444ea13f6af5a",
+  "currentCommit": "fcd0d18d5639131c9b11fa5c7e0f7203b9597bb2",
+  "currentIncludesWorkingTree": true,
+  "currentModuleSha256": "e8ad465a2d6deb3400846da127c1230a3dac5b3dc9b4355b18a39614cc1265c1",
+  "workload": {
+    "horizonTicks": 96,
+    "tickVirtualMs": 10,
+    "serviceTicks": 1,
+    "groups": 2,
+    "baselineRouteIntervalTicks": 2,
+    "baselineReviewIntervalTicks": 8
+  },
+  "boundary": "真实新旧队列模块；fake agent、虚拟时间、有限事件流。只验证调度、公平性和单群并发，不证明真实provider token、渠道延迟、持续过载容量或业务验收。",
+  "rounds": [
+    {
+      "round": 1,
+      "multiplier": 0.5,
+      "baseline": {
+        "multiplier": 0.5,
+        "jobs": 60,
+        "durationVirtualMs": 950,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 60,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 48,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 12,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "de5ae58d3eeb4068a2e59924de0e4665de5d4364f966ec5e81ed569ac4f2b8a3"
+      },
+      "current": {
+        "multiplier": 0.5,
+        "jobs": 60,
+        "durationVirtualMs": 950,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 60,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 48,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 12,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "de5ae58d3eeb4068a2e59924de0e4665de5d4364f966ec5e81ed569ac4f2b8a3"
+      }
+    },
+    {
+      "round": 2,
+      "multiplier": 0.5,
+      "baseline": {
+        "multiplier": 0.5,
+        "jobs": 60,
+        "durationVirtualMs": 950,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 60,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 48,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 12,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "de5ae58d3eeb4068a2e59924de0e4665de5d4364f966ec5e81ed569ac4f2b8a3"
+      },
+      "current": {
+        "multiplier": 0.5,
+        "jobs": 60,
+        "durationVirtualMs": 950,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 60,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 48,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 12,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "de5ae58d3eeb4068a2e59924de0e4665de5d4364f966ec5e81ed569ac4f2b8a3"
+      }
+    },
+    {
+      "round": 3,
+      "multiplier": 0.5,
+      "baseline": {
+        "multiplier": 0.5,
+        "jobs": 60,
+        "durationVirtualMs": 950,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 60,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 48,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 12,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "de5ae58d3eeb4068a2e59924de0e4665de5d4364f966ec5e81ed569ac4f2b8a3"
+      },
+      "current": {
+        "multiplier": 0.5,
+        "jobs": 60,
+        "durationVirtualMs": 950,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 60,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 48,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 12,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "de5ae58d3eeb4068a2e59924de0e4665de5d4364f966ec5e81ed569ac4f2b8a3"
+      }
+    },
+    {
+      "round": 1,
+      "multiplier": 1,
+      "baseline": {
+        "multiplier": 1,
+        "jobs": 120,
+        "durationVirtualMs": 970,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 120,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 96,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 24,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "f3e4ddac59482a79d59a6eba2143952fa7138656a92259a994e930c0be905bc1"
+      },
+      "current": {
+        "multiplier": 1,
+        "jobs": 120,
+        "durationVirtualMs": 970,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 120,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 96,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 24,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "f3e4ddac59482a79d59a6eba2143952fa7138656a92259a994e930c0be905bc1"
+      }
+    },
+    {
+      "round": 2,
+      "multiplier": 1,
+      "baseline": {
+        "multiplier": 1,
+        "jobs": 120,
+        "durationVirtualMs": 970,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 120,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 96,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 24,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "f3e4ddac59482a79d59a6eba2143952fa7138656a92259a994e930c0be905bc1"
+      },
+      "current": {
+        "multiplier": 1,
+        "jobs": 120,
+        "durationVirtualMs": 970,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 120,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 96,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 24,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "f3e4ddac59482a79d59a6eba2143952fa7138656a92259a994e930c0be905bc1"
+      }
+    },
+    {
+      "round": 3,
+      "multiplier": 1,
+      "baseline": {
+        "multiplier": 1,
+        "jobs": 120,
+        "durationVirtualMs": 970,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 120,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 96,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 24,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "f3e4ddac59482a79d59a6eba2143952fa7138656a92259a994e930c0be905bc1"
+      },
+      "current": {
+        "multiplier": 1,
+        "jobs": 120,
+        "durationVirtualMs": 970,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 0,
+          "b": 0
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 120,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "route": {
+            "count": 96,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 24,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          }
+        },
+        "dispatchTraceDigest": "f3e4ddac59482a79d59a6eba2143952fa7138656a92259a994e930c0be905bc1"
+      }
+    },
+    {
+      "round": 1,
+      "multiplier": 2,
+      "baseline": {
+        "multiplier": 2,
+        "jobs": 239,
+        "durationVirtualMs": 1210,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 95,
+          "b": 94
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 239,
+            "p50": 0,
+            "p95": 790,
+            "max": 950
+          },
+          "route": {
+            "count": 191,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 48,
+            "p50": 590,
+            "p95": 920,
+            "max": 950
+          }
+        },
+        "dispatchTraceDigest": "51632b98f291df2edbc5af16abbdef4cb78d45b9d9c8bdc3fc6890397bb88b18"
+      },
+      "current": {
+        "multiplier": 2,
+        "jobs": 239,
+        "durationVirtualMs": 1210,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 1,
+          "b": 1
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 239,
+            "p50": 120,
+            "p95": 240,
+            "max": 240
+          },
+          "route": {
+            "count": 191,
+            "p50": 160,
+            "p95": 240,
+            "max": 240
+          },
+          "review": {
+            "count": 48,
+            "p50": 0,
+            "p95": 0,
+            "max": 10
+          }
+        },
+        "dispatchTraceDigest": "8304f3286a15e2bfa1dd39419469aca973f5423bbfb2bdea8b8387106cf46e6d"
+      }
+    },
+    {
+      "round": 2,
+      "multiplier": 2,
+      "baseline": {
+        "multiplier": 2,
+        "jobs": 239,
+        "durationVirtualMs": 1210,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 95,
+          "b": 94
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 239,
+            "p50": 0,
+            "p95": 790,
+            "max": 950
+          },
+          "route": {
+            "count": 191,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 48,
+            "p50": 590,
+            "p95": 920,
+            "max": 950
+          }
+        },
+        "dispatchTraceDigest": "51632b98f291df2edbc5af16abbdef4cb78d45b9d9c8bdc3fc6890397bb88b18"
+      },
+      "current": {
+        "multiplier": 2,
+        "jobs": 239,
+        "durationVirtualMs": 1210,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 1,
+          "b": 1
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 239,
+            "p50": 120,
+            "p95": 240,
+            "max": 240
+          },
+          "route": {
+            "count": 191,
+            "p50": 160,
+            "p95": 240,
+            "max": 240
+          },
+          "review": {
+            "count": 48,
+            "p50": 0,
+            "p95": 0,
+            "max": 10
+          }
+        },
+        "dispatchTraceDigest": "8304f3286a15e2bfa1dd39419469aca973f5423bbfb2bdea8b8387106cf46e6d"
+      }
+    },
+    {
+      "round": 3,
+      "multiplier": 2,
+      "baseline": {
+        "multiplier": 2,
+        "jobs": 239,
+        "durationVirtualMs": 1210,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 95,
+          "b": 94
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 239,
+            "p50": 0,
+            "p95": 790,
+            "max": 950
+          },
+          "route": {
+            "count": 191,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "review": {
+            "count": 48,
+            "p50": 590,
+            "p95": 920,
+            "max": 950
+          }
+        },
+        "dispatchTraceDigest": "51632b98f291df2edbc5af16abbdef4cb78d45b9d9c8bdc3fc6890397bb88b18"
+      },
+      "current": {
+        "multiplier": 2,
+        "jobs": 239,
+        "durationVirtualMs": 1210,
+        "peakPerGroup": {
+          "a": 1,
+          "b": 1
+        },
+        "maxRouteStartsWhileReviewQueued": {
+          "a": 1,
+          "b": 1
+        },
+        "waitVirtualMs": {
+          "all": {
+            "count": 239,
+            "p50": 120,
+            "p95": 240,
+            "max": 240
+          },
+          "route": {
+            "count": 191,
+            "p50": 160,
+            "p95": 240,
+            "max": 240
+          },
+          "review": {
+            "count": 48,
+            "p50": 0,
+            "p95": 0,
+            "max": 10
+          }
+        },
+        "dispatchTraceDigest": "8304f3286a15e2bfa1dd39419469aca973f5423bbfb2bdea8b8387106cf46e6d"
+      }
+    }
+  ]
+}

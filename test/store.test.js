@@ -183,8 +183,8 @@ test('投影水位已保存但淘汰删除失败，重启重放补齐裁剪且�
   assert.equal(restored.listActivities(task.taskId).at(-1).seq, 500)
 })
 
-test('Topic事项模型使用独立domain版本8', () => {
-  assert.equal(residentDomainSpec.version, 8)
+test('工作流结构化契约使用独立domain版本9', () => {
+  assert.equal(residentDomainSpec.version, 9)
 })
 
 test('任务表格同步配置与运行状态独立持久化', async () => {

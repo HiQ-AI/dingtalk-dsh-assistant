@@ -1,9 +1,11 @@
 import { fingerprint, stableId } from './topic-model.js'
+import { TaskPlanValidationError } from './task-plan.js'
 
 export const deterministicReviewFailure = (error) => /^(?:topic_context_(?:budget_exceeded|metadata_too_large)|task_review_envelope_too_large|route_context_budget_exceeded)(?::|$)/u.test(error ?? '')
 
 // 只有明确由报告内容导致的缺口才交回叶子修订；基础设施及未知错误停止推进。
 const businessRejections = new Set([
+  'task_plan_not_prepared', 'task_plan_artifact_unregistered', 'task_plan_stage_blocked', 'task_plan_stages_incomplete', 'task_plan_reviews_incomplete', 'task_plan_criterion_not_pass',
   'task_checkpoint_rejected', 'task_result_objective_not_covered', 'task_waiting_not_required',
   'task_worktree_result_mismatch', 'task_checkpoints_insufficient', 'task_checkpoints_remaining',
   'task_checkpoint_plan_required', 'task_workflow_plan_rejected', 'task_workflow_assessment_required',
@@ -13,6 +15,7 @@ const businessRejections = new Set([
   'task_checkpoint_stage_invalid', 'task_checkpoint_progress_requires_stage_completed', 'task_checkpoint_must_advance_one',
 ])
 const staleReportErrors = new Set([
+  'task_plan_output_stale', 'task_plan_completion_stale',
   'task_checkpoint_review_superseded',
   'task_input_version_stale', 'task_checkpoint_run_changed', 'task_checkpoint_context_changed',
   'task_result_context_changed', 'task_review_context_changed', 'task_workflow_plan_stale', 'task_prompt_selection_stale',
@@ -21,6 +24,7 @@ export function classifyTaskReportError(error) {
   const code = String(error?.message ?? error ?? '').split(':', 1)[0]
   if (code === 'task_input_pending') return 'input-wait'
   if (staleReportErrors.has(code)) return 'history-only'
+  if (error instanceof TaskPlanValidationError) return 'rejected'
   return businessRejections.has(code) ? 'rejected' : 'failed'
 }
 
@@ -67,7 +71,7 @@ export function taskReports(task) {
   return [...reports.values()]
 }
 
-export function createTaskReportQueue({ store, serialize, hasPendingInput, execute, suspend, notify, onError, isClosing }) {
+export function createTaskReportQueue({ store, serialize, hasPendingInput, execute, suspend, notify, onSettled, onError, isClosing }) {
   const runs = new Map()
   const urgent = new Map()
   const requested = new Set()
@@ -89,7 +93,13 @@ export function createTaskReportQueue({ store, serialize, hasPendingInput, execu
       report = taskReports(store.getTask(taskId)).find(item => item.submissionId === report.submissionId)
     }
     if (pending(report)) {
-      if (!matchesCurrent(task, report) || task.state === 'completed') {
+      const committed = matchesCurrent(task, report) && task.state === 'completed' && task.outcome === 'succeeded'
+        && report.reportType === 'result' && report.value.status === 'completed' && fingerprint(task.result) === fingerprint(report.value)
+        && task.executionEvents?.some(event => event.kind === 'task-completed' && event.submissionId === report.submissionId && event.inputVersion === report.inputVersion && event.runSequence === report.runSequence)
+      if (committed) {
+        await settle(taskId, report, 'accepted', { receipt: { taskId, state: task.state, outcome: task.outcome } })
+        report = taskReports(store.getTask(taskId)).find(item => item.submissionId === report.submissionId)
+      } else if (!matchesCurrent(task, report) || task.state === 'completed') {
         await settle(taskId, report, 'history-only', { staleReview: true })
         report = taskReports(store.getTask(taskId)).find(item => item.submissionId === report.submissionId)
       } else {
@@ -117,6 +127,7 @@ export function createTaskReportQueue({ store, serialize, hasPendingInput, execu
     await serialize(() => store.updateTask(taskId, current => ({ ...current, executionEvents: [
       ...(current.executionEvents ?? []), { kind: 'task-report-notified', submissionId: report.submissionId, at: new Date().toISOString() },
     ] })))
+    onSettled?.(store.getTask(taskId), report)
   }
   function start(taskId) {
     if (isClosing()) return

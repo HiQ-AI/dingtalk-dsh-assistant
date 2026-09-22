@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { taskProgressSnapshot } from '../packages/dingtalk-dsh-assistant/task-progress.js'
+import { taskProgressSnapshot, acceptedTaskStageOutputs } from '../packages/dingtalk-dsh-assistant/task-progress.js'
+import { taskPlanFixture, stageOutputFixture } from './fixtures/task-plan.js'
 
 const task = () => ({ taskId: 'task-1', groupId: 'g1', inputVersion: 2, runSequence: 3, state: 'running', objective: '发布', stageTasks: ['SQL', '后端', '前端'], checkpoints: [
   { checkpointId: 'c1', inputVersion: 2, runSequence: 3, kind: 'stage-completed', stageTask: 'SQL', summary: 'SQL已执行', submittedAt: '2026-09-10T07:25:00Z', coordinatorDecision: 'acknowledge', reviewedAt: '2026-09-10T07:25:01Z', evidence: ['工单DONE'] },
@@ -74,4 +75,79 @@ test('同state等待原因、Topic或活动事实变化使revision失效，纯�
   const topicRevision = taskProgressSnapshot(original).revision
   original.activityProjection = { lastSyncedAt: '2026-09-10T09:01:00Z', latestOccurredAt: '2026-09-10T09:00:30Z', truncated: false }
   assert.notEqual(taskProgressSnapshot(original).revision, topicRevision)
+})
+
+test('结构化计划按稳定阶段 ID 投影；旧文字和 completed 状态不能冒充通过', () => {
+  const original = task()
+  original.plan = taskPlanFixture({ inputVersion: 2, runSequence: 3, titles: ['准备', '核验'] })
+  const stage = stageOutputFixture(original.plan)
+  original.checkpoints = [{ checkpointId: 'v2', inputVersion: 2, runSequence: 3, kind: 'stage-completed', coordinatorDecision: 'acknowledge', stageOutput: stage.output, stageTask: '旧名称', completedItems: ['旧名称'], summary: '完成第一阶段' }, ...original.checkpoints]
+  original.plan.stages[0].title = '改名后的准备'
+  const snapshot = taskProgressSnapshot(original)
+  assert.equal(snapshot.confirmedStages.length, 1)
+  assert.equal(snapshot.confirmedStages[0].stageId, stage.output.stageId)
+  assert.equal(snapshot.confirmedStages[0].stageTask, '改名后的准备')
+  assert.equal(snapshot.currentStage, '核验')
+  assert.deepEqual(snapshot.plan, original.plan)
+  assert.equal(snapshot.completedStageCount, 1)
+  original.state = 'completed'; original.outcome = 'cancelled'
+  const cancelled = taskProgressSnapshot(original)
+  assert.equal(cancelled.outcomeLabel, '已取消')
+  assert.equal(cancelled.completedStageCount, 1)
+  assert.equal(cancelled.totalStageCount, 2)
+  delete original.outcome
+  assert.equal(taskProgressSnapshot(original).outcome, 'legacy-unknown')
+})
+
+test('结构化证据换输入或计划版本后必须由 Host 显式保留，旧轮不能保留', () => {
+  const original = task()
+  original.plan = taskPlanFixture({ inputVersion: 2, runSequence: 3 })
+  const stage = stageOutputFixture(original.plan)
+  original.checkpoints = [{ checkpointId: 'v2', inputVersion: 2, runSequence: 3, kind: 'stage-completed', coordinatorDecision: 'acknowledge', stageOutput: stage.output }]
+  original.plan.revision = 2
+  assert.equal(acceptedTaskStageOutputs(original).length, 0)
+  original.executionEvents = [{ kind: 'task-plan-adopted', planRevision: 2, inputVersion: 2, runSequence: 3, retainedCheckpointIds: ['v2'] }]
+  assert.equal(acceptedTaskStageOutputs(original).length, 1)
+  original.inputVersion = 3
+  assert.equal(acceptedTaskStageOutputs(original).length, 0)
+  original.executionEvents.push({ kind: 'input-revised', inputVersion: 3, runSequence: 3, retainedCheckpointIds: ['v2'] }, { kind: 'task-plan-adopted', planRevision: 2, inputVersion: 3, runSequence: 3, retainedCheckpointIds: ['v2'] })
+  assert.equal(acceptedTaskStageOutputs(original).length, 1)
+  original.checkpoints[0].runSequence = 2
+  assert.equal(acceptedTaskStageOutputs(original).length, 0)
+})
+
+test('超预算计划移为明确不完整的来源引用，不截断正文或突破进度快照预算', () => {
+  const original = task()
+  original.plan = taskPlanFixture({ inputVersion: 2, runSequence: 3, descriptions: ['文'.repeat(20000)] })
+  const snapshot = taskProgressSnapshot(original)
+  assert.equal(snapshot.plan, undefined)
+  assert.equal(snapshot.planRef.complete, false)
+  assert.equal(snapshot.planRef.revision, 1)
+  assert.equal(snapshot.omitted.plan, 1)
+  assert.equal(snapshot.hasMore, true)
+  assert.ok(JSON.stringify(snapshot).length < 12000)
+})
+
+test('跨计划采用及多次无关输入须逐次保留，不能丢合法证据或复活中途失效项', () => {
+  const original = task()
+  original.inputVersion = 1
+  original.runSequence = 1
+  original.plan = taskPlanFixture({ inputVersion: 1, runSequence: 1, titles: ['A', 'B'] })
+  original.checkpoints = original.plan.stages.map((_, index) => ({ checkpointId: `chain-${index}`, inputVersion: 1, runSequence: 1, kind: 'stage-completed', coordinatorDecision: 'acknowledge', stageOutput: stageOutputFixture(original.plan, index).output }))
+  const before = structuredClone(original.checkpoints)
+  original.plan.revision = 2
+  original.inputVersion = 3
+  original.executionEvents = [
+    { kind: 'task-plan-adopted', planRevision: 2, inputVersion: 1, runSequence: 1, retainedCheckpointIds: ['chain-0', 'chain-1'] },
+    { kind: 'input-revised', previousInputVersion: 1, inputVersion: 2, runSequence: 1, retainedCheckpointIds: ['chain-0', 'chain-1'] },
+    { kind: 'input-revised', previousInputVersion: 2, inputVersion: 3, runSequence: 1, retainedCheckpointIds: ['chain-0', 'chain-1'] },
+  ]
+  assert.equal(acceptedTaskStageOutputs(original).length, 2)
+  assert.deepEqual(original.checkpoints, before)
+  original.executionEvents[1].retainedCheckpointIds = ['chain-1']
+  assert.equal(acceptedTaskStageOutputs(original).length, 0, '上游失效后依赖下游也不能保留')
+  original.executionEvents[1].retainedCheckpointIds = ['chain-0']
+  assert.deepEqual(acceptedTaskStageOutputs(original).map(item => item.checkpointId), ['chain-0'], '最新版宣称保留也不能复活中间失效的 B')
+  original.executionEvents.splice(1, 1)
+  assert.equal(acceptedTaskStageOutputs(original).length, 0, '缺失中间版本证据时不能跳跃保留')
 })

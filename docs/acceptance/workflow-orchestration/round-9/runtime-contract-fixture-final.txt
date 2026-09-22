@@ -1,0 +1,369 @@
+✔ Resident 完整提示词保留群职责与动态别名，不叠加登录人特殊禁令 (45.5993ms)
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+To C:\Users\64554\AppData\Local\Temp\dsh-agent-workspace-PWqx9V\archive-fixture-FHT5KA\remote.git
+ * [new branch]      HEAD -> main
+Preparing worktree (new branch 'task-task-541266b7fe6132c8f4a0792d8f6fd243')
+To C:\Users\64554\AppData\Local\Temp\dsh-agent-workspace-PWqx9V\archive-fixture-FHT5KA\remote.git
+ * [new branch]      task-task-541266b7fe6132c8f4a0792d8f6fd243 -> task-task-541266b7fe6132c8f4a0792d8f6fd243
+✖ 叶子登记的 worktree 在归档失败时保留，修复后迁出文档并删除目录 (12013.0203ms)
+✔ 运行时协调请求独立日志与工具角色绑定；群主和旧请求均不能越权提交 (206.8326ms)
+✔ 重启仅为未接纳协调请求建新会话，已接纳业务效果不重放 (78.729ms)
+✔ 内部审阅预算故障由 Host 暂停并一次通知，叶子重复提交不能耗尽轮次 (400.4113ms)
+✔ 系统等待恢复先只读构造原报告，预算仍超限时不解除等待或建立模型会话 (94.2038ms)
+▶ 系统等待恢复拒绝旧输入、待授权和未归类撤销消息，失败不产生报告重试事件
+  ✔ stale (131.7423ms)
+  ✔ authorization (61.3459ms)
+  ✔ pending-input (52.2349ms)
+✔ 系统等待恢复拒绝旧输入、待授权和未归类撤销消息，失败不产生报告重试事件 (247.619ms)
+✔ 活动投影从 DSH 工具结果关联真实工具名与错误位 (86.3349ms)
+✔ 活动落盘失败暂停后续投影，故障消失按原事件顺序补齐并清除当前告警 (448.6649ms)
+✔ 活动故障跨 Runtime 重启从 Session 原事件补投影 (389.1798ms)
+✔ 已完成任务重启后从持久 Session 审计并补齐遗漏活动 (65.4092ms)
+✔ 历史已完成任务的 Session 不存在时审计收束为不可回填，不反复报当前写盘故障 (68.0568ms)
+✔ 已完成任务的持久 Session 读取故障仍保留重试和当前告警 (73.2407ms)
+✔ 关联状态追问走同模型无工具短路径，事实未变才写入统一 Outbox (103.6913ms)
+✔ 短路径识别执行请求后交还常驻，不创建动作或发送推测回复 (77.0841ms)
+✔ 短答生成期间 Task 事实变化，原子提交拒绝旧快照并交还常驻 (112.2667ms)
+▶ 短答期间关联任务集合或群职责改变，拒绝按旧集合和旧准入发言
+  ✔ association (132.8874ms)
+  ✔ responsibility (188.7662ms)
+✔ 短答期间关联任务集合或群职责改变，拒绝按旧集合和旧准入发言 (324.1336ms)
+✔ 纯工具心跳不使只含业务事实的短答失效，短答不携带活动投影 (137.6719ms)
+✔ 别名修复请求创建任务，后续无称呼的图片补充续接同一叶子 (150.142ms)
+✔ 入站持久接收立即返回，模型尚未提交时也能接收后续消息 (13.8514ms)
+✔ 重复入站幂等，Topic 提交成功后只生成一条可靠回复 (52.558ms)
+✔ 普通 assistant 文本或 turn 结束不能替代 Topic 结构化提交 (41.0199ms)
+✔ 注册工具符合 DSH JSON Schema，Resident 只能通过 Topic 决策建任务 (24.9496ms)
+✔ 来源附件先持久保存，归类输入可恢复相同 imageRefs (36.8843ms)
+✔ 附件缺失硬拦截任务，仍发送明确缺失反馈 (47.7844ms)
+✔ 多群请求隔离，A 等待归类不阻止 B 完成 (46.605ms)
+✔ Task 只保存固定 Topic 引用，叶子收到版本化原始上下文 (71.4567ms)
+✖ 任务关联摘要不复制原文，按需读取返回 Topic refs 与执行约定 (67.9023ms)
+✔ 任务并发容量满时 FIFO 排队，取消释放名额并保留取消事实 (192.3879ms)
+✔ Host 动作默认无适配器，显式注册后仍逐次绑定身份版本与授权 (97.8894ms)
+✔ 取消先持久停止再中断叶子，未知动作跨重启保留占用且读回后才终结 (114.4199ms)
+✔ 取消等待非中断动作时不持有全局提交锁，独立任务仍能保存新动作 (136.8807ms)
+✔ Outbox 已落盘时监听器失败不会回滚已接受 Topic 决策 (38.4522ms)
+✔ 历史导入只发送 Topic 索引，不重放历史消息正文或指令 (41.5888ms)
+✔ 恢复失败保留原 Resident Session，其他群仍能工作 (32.105ms)
+✔ 新群主会话具有完整工具权限，Topic 工具仍不能访问其他 Session (7.9544ms)
+✔ 工作区切换保留事件历史并重建 Resident，旧 Session 释放 (16.0152ms)
+✔ 存在活动 Task 时拒绝工作区或模型切换，不修改已保存配置 (51.425ms)
+✔ 模型与推理深度使用原生配置服务保存 (9.4513ms)
+✔ 叶子会话提示词通过统一配置字段保存和读取 (20.7185ms)
+✔ 内置通用规范不依赖用户补充，动态清空及恢复后仍只注入叶子 (88.5106ms)
+✔ 叶子只常驻流程索引，按需加载后直接动态注入当前正文 (66.8587ms)
+✔ 长任务可组合超过五个流程，重复加载去重，恢复后保留组合并按阶段裁减 (87.246ms)
+✔ 流程加载与组合调整排队期间目标变化时拒绝迟到写入 (83.972ms)
+✔ 流程修订后旧选择失效，拒绝叶子用旧流程完成任务 (81.2887ms)
+✔ 计划绑定已选流程，主会话读完同一流程正文后才可审阅 (129.0186ms)
+✔ 主会话可拒绝自行扩写的冲突计划，叶子重新规划前不能推进 (112.4792ms)
+✔ 流程修订只使引用任务的旧计划失效，未引用任务不接收更新 (202.1571ms)
+✔ 任务目标变化保留流程引用供重审，并拒绝未加载流程 (63.0377ms)
+▶ 流程修改、禁用和删除后未重新加载也不能推进旧阶段
+  ✔ modify (129.2005ms)
+  ✔ disable (115.5114ms)
+  ✔ delete (117.5859ms)
+✔ 流程修改、禁用和删除后未重新加载也不能推进旧阶段 (365.0809ms)
+✔ 待审计划遇流程改版会失效并归档，重新加载后可重新规划 (112.4082ms)
+✔ 首次异常可报告但不能改变进度，随后可制定计划并正常完成 (284.8897ms)
+✔ 异常可抢占待审计划，旧审阅不得回写或阻止新计划 (187.5265ms)
+✔ 被拒计划仍能报告证据缺口，诊断确认不解除计划拒绝 (106.3189ms)
+✔ 完成审阅发起即记录事件，拒绝与失败也保留耗时起点 (143.5379ms)
+✖ 完成审阅期间流程更新保持 Task 与 Goal 活动并记录失败 (137.5288ms)
+✖ 审阅通过后最后落盘前流程改变，不能完成任务或发送通知 (114.9587ms)
+✔ 重启恢复过期待审计划时归档失败项，新计划不再被 pending 卡住 (114.299ms)
+✔ 完成审阅通过后的并发暂停不能被完成 CAS 覆盖 (162.605ms)
+✔ 退订存储失败时保留 Resident，修复后可再次退订 (10.3392ms)
+✔ 关闭后拒绝新消息，关闭两次只释放每个 Session 一次 (7.5796ms)
+✔ 报告先持久接收并停等，Topic 决策事件解除等待而无需再次提交或巡检 (122.1336ms)
+✔ 坏阶段决策在持久化前拒绝，同一请求纠正后恢复报告与正常阶段推进 (153.3524ms)
+✖ 历史坏决策重启后退回重判，原报告不跳过且纠正后恢复同一Task (163.7027ms)
+✔ 报告审阅耗尽保持同身份停等，显式重试重置原请求后恢复推进 (1557.86ms)
+▶ 完成审阅耗尽进入系统等待，拒绝新报告且原完成报告可显式恢复
+  ✔ 直接恢复系统等待 (243.5922ms)
+  ✔ 保留历史人工阻塞事实 (266.9999ms)
+✔ 完成审阅耗尽进入系统等待，拒绝新报告且原完成报告可显式恢复 (513.0948ms)
+✔ 旧运行任务恢复时从已批准计划补齐阶段索引，原检查点不改写且只补一次 (114.5756ms)
+✔ 直接叶子工具不能绕过结构化必填、准备记录或可信检查器边界 (101.6187ms)
+✔ 真实检查工具记录 UNKNOWN 不满足独立验收，文件产生后重新检查方可通过 (251.8384ms)
+✔ 叶子结果与检查点拒绝缺失或过期 inputVersion/runSequence (56.0724ms)
+✔ 检查点逐项推进并由结构化内部审阅确认，不能跳项完成 (164.1468ms)
+✔ 首阶段尚未完成时拒绝跨序推进，不能以主会话审阅绕过顺序 (100.4975ms)
+✔ 完成验收拒绝后保持 running 并向叶子发送具体纠偏 (180.1716ms)
+✖ 一次完成审阅同时准备通知，完成落盘后直接入 Outbox 且 FIFO 下个任务启动 (261.9014ms)
+✔ 通知已入 Outbox 后执行事件写入失败不会重复发起通知协调 (149.7199ms)
+✔ 尚未归类的新消息阻止叶子提交等待或完成结果 (63.9684ms)
+✔ Web 创建按 requestId 幂等，原始输入只落 Topic，参数变更不能复用身份 (26.9864ms)
+✖ Web 补充提升输入版本并重置当前检查点，同请求重试不重复补充 (112.4608ms)
+✔ 目标修订原子更新任务名称并保留旧名称，普通补充不得单独改名 (87.6285ms)
+✔ 目标变化缺少新任务名称时拒绝续接 (61.9889ms)
+✔ preserve 新输入作废待审 checkpoint，并按新版本重新审阅 (111.8183ms)
+✔ 授权变化即使阶段名称不变也撤销旧阶段批准 (86.4881ms)
+✔ 相同待审计划的重复提交与Supervisor恢复共用一次审阅和拒绝注入 (68.5663ms)
+✔ 旧执行轮次的 idle 回收不释放已重开的叶子 (233.4186ms)
+✖ 人工批准与排队启动竞争时不突破并发上限 (3174.2627ms)
+✔ Web 重开完成任务建立新轮次，固定保留旧输入版本与历史 (65.4085ms)
+✔ 完成任务按新目标重开时同步更新名称并在轮次历史保留旧名称 (45.1988ms)
+✔ 叶子 Topic 读取仅允许已接纳版本，拒绝未来版本及其他话题 (117.9812ms)
+✔ 同一消息并发补齐身份与附件不会丢失任一事实 (12.0273ms)
+✖ 人工授权重发、引用校验、批准幂等及已批准范围复用 (110.7327ms)
+✔ Goal 耗尽转真实 waiting，正常 turn 结束只记录活动不完成 Task (57.5487ms)
+✖ 叶子异常暂停最多重建两次，继续失败升级为人工阻塞 (12011.9719ms)
+✖ running 叶子 idle 时由 Runtime 继续，底层 unavailable 时重建同一 Task (12002.0316ms)
+✔ Resident 恢复超时由原生 AbortSignal 隔离，不阻止下一群恢复 (35.6783ms)
+✔ 恢复清理旧协议与旧 Topic 请求 Inbox，但保留普通待办 (11.6409ms)
+✔ 重启恢复 Running 叶子沿用 Goal 与已接纳输入，并重新注入已选流程正文 (83.1299ms)
+✔ 关闭等待已接受的可靠 Outbox 写入，期间新消息被拒绝 (43.2766ms)
+✔ 替换确认先送达新消息，随后精确撤回旧消息且重复恢复幂等 (99.7108ms)
+✔ 未回读的旧确认停止重发，不阻塞替换，未观察到仍保持送达未知 (89.2678ms)
+✔ 链式替换先送达最终通知，部分撤回失败不阻塞其他目标且永久拒绝不重试 (13.8157ms)
+✔ 撤回瞬态异常有限重试，持久次数达到上限后不再调用渠道 (9.142ms)
+✔ 撤回成功后持久写失败不能伪报成功，恢复永久拒绝后保留人工核验状态 (9.9119ms)
+✔ 真实Store与Bridge在监听和启动补偿并发、回执落盘崩溃及两次重启下不重发旧消息 (126.8872ms)
+✔ 迁移任务重启不自动执行，显式恢复清门禁并要求重订计划 (62.5363ms)
+✔ 等待通知在同版本 resume 清除 result 后失效，不发送旧问题 (79.062ms)
+✔ 信息等待只在原通知确认送达后有限跟进，重复巡检不补发 (85.6229ms)
+✔ 信息等待同时通知反馈人与发起人，并引用反馈消息 (140.2465ms)
+✔ 信息等待通知投递失败产生告警，送达后解除 (81.7254ms)
+✔ 历史已送达询问只按指定任务补一次暂停更正，送达前不启动催促 (64.4872ms)
+✔ 已完成自身工作的叶子不能以外部独立检查提交等待 (55.8232ms)
+✔ 把他人后续检查误列为本职阶段时，内部修订范围并保留已完成证据 (145.3716ms)
+✖ 等待审阅认为仍可自行继续时保持 Task 运行且不发阻塞通知 (88.1684ms)
+✔ 历史 coordination 等待结果可重启读取，但通知补偿不会重发旧检查 (74.7734ms)
+✖ 同版本重新 waiting 新问题不能被旧问题的通知快照覆盖 (116.6328ms)
+✔ 等待结果原子落盘遇新输入，报告保留且 Goal 停等 (63.99ms)
+✔ 完成审阅通过后原子落盘遇新输入，不能提前 complete Goal (141.0082ms)
+✖ 通知 Outbox 首次失败后相同请求重试使用稳定结果键且只落一次 (3163.6599ms)
+✔ 慢叶子创建期间同群其他 Topic 仍可完成 (101.9527ms)
+✔ 排队叶子启动中取消立即落盘，迟到的 Session 创建不能复活任务 (115.5515ms)
+✔ 缺少稳定发送人 ID 不伪造引用，缓冲回复监听异常不损失已存意图 (34.5971ms)
+✔ DWS 恢复关闭同群 carrier 告警且不误清其他异常 (38.2516ms)
+✔ 通知补发同批跳过退订群、隔离损坏 Resident，正常群仍独立完成 (38.4962ms)
+✔ 工作区屏障内到达的历史导入与通知等待新 Resident，导入先前事件进入新 seed (45.7455ms)
+✔ 切换工作区等待已经开始的结果通知，通知落盘前不释放旧 Resident (22.3933ms)
+✔ 退订屏障之后的历史导入拒绝旧 Resident，等待期间其他群仍可提交 (56.7927ms)
+✔ 关闭与进行中工作区切换串行收口，旧和替换 Resident 均释放一次 (27.9167ms)
+✔ 同 Topic 一次决策不能重复改变同一 Task，共享主 Topic 可取消两个不同 Task 各一次 (167.1621ms)
+✔ 已执行来源改归属不会重新授予效果权限，新授权消息可以创建新任务 (133.5944ms)
+✔ 工作区切换等待期间不占任务提交队列，提交前复核新出现的活动任务 (37.0188ms)
+✔ 关闭拒绝尚未提交的结果通知且不悬挂 (15.9591ms)
+✔ 关闭等待已开始提交的结果通知 Outbox，不能提前关闭存储 (31.4994ms)
+✔ 相同引用 ID 下的不同事项不自动撤回，只有显式 replacement 才能产生撤回意图 (81.3121ms)
+✔ 任务工作位置仅验证已有工件，保留历史来源并排除不存在及远程定位 (52.5746ms)
+ℹ tests 143
+ℹ suites 0
+ℹ pass 129
+ℹ fail 11
+ℹ cancelled 3
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 58243.8778
+
+✖ failing tests:
+
+test at test\runtime.test.js:168:1
+✖ 叶子登记的 worktree 在归档失败时保留，修复后迁出文档并删除目录 (12013.0203ms)
+  'test timed out after 12000ms'
+
+test at test\runtime.test.js:659:1
+✖ 任务关联摘要不复制原文，按需读取返回 Topic refs 与执行约定 (67.9023ms)
+  AssertionError [ERR_ASSERTION]: Expected "actual" to be strictly unequal to:
+
+  undefined
+      at assertJsonValue (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:669:12)
+      at Array.forEach (<anonymous>)
+      at assertJsonValue (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:671:71)
+      at Array.forEach (<anonymous>)
+      at assertJsonValue (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:670:37)
+      at Array.forEach (<anonymous>)
+      at assertJsonValue (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:671:71)
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:673:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'notStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1082:1
+✖ 完成审阅期间流程更新保持 Task 与 Goal 活动并记录失败 (137.5288ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'blocked'
+  - 'active'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:1093:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'blocked',
+    expected: 'active',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1098:1
+✖ 审阅通过后最后落盘前流程改变，不能完成任务或发送通知 (114.9587ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'blocked'
+  - 'active'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:1120:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'blocked',
+    expected: 'active',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1272:1
+✖ 历史坏决策重启后退回重判，原报告不跳过且纠正后恢复同一Task (163.7027ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'blocked'
+  - 'active'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:1306:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'blocked',
+    expected: 'active',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1563:1
+✖ 一次完成审阅同时准备通知，完成落盘后直接入 Outbox 且 FIFO 下个任务启动 (261.9014ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'queued'
+  - 'running'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:1569:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'queued',
+    expected: 'running',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1614:1
+✖ Web 补充提升输入版本并重置当前检查点，同请求重试不重复补充 (112.4608ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(leaf.sent.some((message) => message.content[0].text.includes('"inputVersion":2')))
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:1628:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1722:1
+✖ 人工批准与排队启动竞争时不突破并发上限 (3174.2627ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:40:10)
+      at runNextTicks (node:internal/process/task_queues:65:5)
+      at process.processTimers (node:internal/timers:568:9)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:1733:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1798:1
+✖ 人工授权重发、引用校验、批准幂等及已批准范围复用 (110.7327ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'queued'
+  - 'running'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:1817:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'queued',
+    expected: 'running',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:1841:1
+✖ 叶子异常暂停最多重建两次，继续失败升级为人工阻塞 (12011.9719ms)
+  'test timed out after 12000ms'
+
+test at test\runtime.test.js:1858:1
+✖ running 叶子 idle 时由 Runtime 继续，底层 unavailable 时重建同一 Task (12002.0316ms)
+  'test timed out after 12000ms'
+
+test at test\runtime.test.js:2218:1
+✖ 等待审阅认为仍可自行继续时保持 Task 运行且不发阻塞通知 (88.1684ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'blocked'
+  - 'active'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:2227:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'blocked',
+    expected: 'active',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\runtime.test.js:2245:1
+✖ 同版本重新 waiting 新问题不能被旧问题的通知快照覆盖 (116.6328ms)
+  Error: task_not_active:task-de733a3ec378013552a4cba4dd6cf38b
+      at leafCall (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:1432:27)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:2251:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test\runtime.test.js:2282:1
+✖ 通知 Outbox 首次失败后相同请求重试使用稳定结果键且只落一次 (3163.6599ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:40:10)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:2287:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }

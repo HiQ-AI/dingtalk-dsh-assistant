@@ -6,15 +6,21 @@ import { buildReplyReviewCandidates, groupDecisionSchema } from './decision.js'
 import { boundedTopicContext, createTopicCoordinator } from './topic-runtime.js'
 import { resolveTopicMessages, stableId, fingerprint } from './topic-model.js'
 import { assertCurrentTaskPrompts, isDiagnosticCheckpoint, parseTaskCheckpoint, parseTaskResult, taskCheckpointJsonSchema, taskResultJsonSchema } from './task-result.js'
-import { taskProgressSnapshot } from './task-progress.js'
+import { taskProgressSnapshot, acceptedTaskStageOutputs } from './task-progress.js'
 import { createTaskReportQueue, taskReportReceipt, taskReportReceiptSchema, taskReports } from './task-reports.js'
 import { createTaskReportStepGate } from './task-report-step-gate.js'
+import { createTaskPermits, createTaskPermitStepGate } from './task-permits.js'
+import { createTaskActionCoordinator } from './task-actions.js'
 import { createStatusQueryHandler } from './status-query.js'
 import { coordinationTools, createCoordinationSessions, createCoordinationStepGate } from './coordination-sessions.js'
 import { createCoordinationResourceTools } from './coordination-resources.js'
 import { reviseTaskProgress, stagePlanFor, reconcileLegacyStagePlan, normalizeRunPlan } from './task-input-revision.js'
 import { PERFORMANCE_EVENT_TYPES } from './performance.js'
 import { inspectTaskWorktree, archiveTaskWorktree, validateTaskDocumentSources } from './task-worktree-archive.js'
+import { prepareTaskPlan, taskPlanDraftSchema, validateTaskPlan, validateStageOutput, validateCriterionReview, projectTaskPlan, reviseTaskPlan, taskArtifactSchema } from './task-plan.js'
+import { runTaskCheck, taskCheckSchema } from './task-checks.js'
+import { toToolJsonSchema } from './tool-schema.js'
+import { z } from 'zod'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
 const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_TOPIC_ROUTE]', '[GROUP_TOPIC_DECISION]', '[TASK_COORDINATION]', '[TASK_COMPLETION_REVIEW]', '[TASK_CHECKPOINT_REVIEW]', '[GROUP_MESSAGE_STEER]', '[GROUP_DECISION_RECHECK]', '[GROUP_DECISION_RESUME]']
@@ -101,6 +107,8 @@ const taskAssociationContext = (task) => ({
   archived: Boolean(task.archivedAt),
   ...(task.acceptanceCriteria ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
   ...(task.stageTasks ? { stageTasks: task.stageTasks } : {}),
+  ...(task.plan ? { plan: task.plan } : {}),
+  ...(task.outcome ? { outcome: task.outcome } : {}),
   stagePlan: stagePlanFor(task, task.stageTasks ?? []),
   ...(task.taskPromptRefs ? { taskPromptRefs: task.taskPromptRefs } : {}),
   topicRefs: task.topicRefs, inputVersion: task.inputVersion, runSequence: task.runSequence,
@@ -206,18 +214,41 @@ const activityDetail = (event, session) => {
   return { contentBlocks: event.data?.message?.content?.length ?? 0 }
 }
 
-export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 30_000 } = {}) {
+export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 30_000, actionAdapters = new Map(), authorizeTaskAction = () => false } = {}) {
   const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), checkpointReviewRuns = new Map(), activeGroupResidentOperations = new Set(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), startingTasks = new Set(), pendingLeafDisposals = new Set(), leafDisposalsByTask = new Map(), archiveJobs = new Map()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
   const recoveryIssues = createRecoveryIssueLedger(), subscriptionListeners = new Set(), unsubscriptionListeners = new Set(), outboxListeners = new Set(), humanBlockerListeners = new Set(), authorizationDecisionListeners = new Set(), bufferedOutboxEvents = []
   let taskTail = Promise.resolve(), pumpTail = Promise.resolve(), configTail = Promise.resolve(), activityTail = Promise.resolve(), supervisorTimer, runtimeApi, currentDwsProfile = '', runtimeClosing = false, closePromise
   const activityProjectionFailures = new Map()
+  const stopRecoveries = new Map()
+  // 只注册 Host 明确提供的适配器；未接入的 shell/SQL/部署不属于此账本的覆盖范围。
+  const taskActions = createTaskActionCoordinator({ store, serialize: operation => serializeTasks(operation), adapters: actionAdapters,
+    authorize: authorizeTaskAction, isCancelled: task => Boolean(task.stopRequest) || cancellingTasks.has(task.taskId), isClosing: () => runtimeClosing })
   const completedActivityAuditQueue = store.listTasks().filter(task => task.state === 'completed').map(task => ({ taskId: task.taskId, sessionId: task.childSessionId }))
   const completedActivityAuditTotal = completedActivityAuditQueue.length
   const completedActivityAuditUnavailable = new Map()
   let groupMessageRecaller, groupMessageReader, groupResourceReader
   let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks
+  const taskPermits = createTaskPermits({ limit: () => taskConcurrencyLimit }), permitReleases = new Map()
+  const executionEligible = task => task && ['queued', 'running'].includes(task.state) && task.migrationReview?.status !== 'required' && !task.stopRequest && !cancellingTasks.has(task.taskId) && !reports.hasBlocking(task)
+  function requestExecutionPermit(taskId) {
+    if (runtimeClosing || !executionEligible(store.getTask(taskId))) { taskPermits.dequeue(taskId); return undefined }
+    return taskPermits.request(taskId)
+  }
+  function releaseTaskPermitWhenIdle(taskId, handle = leafHandles.get(taskId), { reschedule = true } = {}) {
+    const token = taskPermits.suspend(taskId)
+    if (!token || permitReleases.has(token)) return
+    // 先为已就绪的其他任务排队，避免审阅比当前step更快落稳时原任务抢回许可。
+    for (const ready of store.listTasks()) if (ready.taskId !== taskId && executionEligible(ready)) taskPermits.enqueue(ready.taskId)
+    const goal = handle && ctx.goals.get(handle.agent)
+    if (goal?.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-execution-permit-wait', message: '等待当前步骤落稳并交还执行许可。' })
+    const release = Promise.resolve().then(() => handle?.agent.whenIdle()).then(() => {
+      taskPermits.release(token)
+      if (reschedule && !runtimeClosing) void pumpTasks().catch(error => recoveryIssues.push({ taskId, kind: 'task-permit-pump', error: error.message }))
+    }).catch(error => recoveryIssues.push({ taskId, kind: 'task-permit-release', error: error.message })).finally(() => permitReleases.delete(token))
+    permitReleases.set(token, release)
+  }
   if (store.getMaxConcurrentTasks?.() === undefined) await store.setMaxConcurrentTasks?.(taskConcurrencyLimit)
   if (!Number.isFinite(decisionRetryBaseMs) || decisionRetryBaseMs < 0) throw new Error('decision_retry_base_invalid')
   const selection = ctx.agentDefaultModel.currentSelection()
@@ -233,6 +264,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     permissionPresets.set(handle.agent.session, preset)
   }
   const resumeGoalAfterResolution = (handle, goal) => {
+    const taskId = leafTaskBySession.get(String(handle.agent.session.id))
+    if (!taskId || !requestExecutionPermit(taskId)) return goal
     let resumable = goal
     if (isGoalRoundLimitExhausted(resumable)) {
       resumable = ctx.goals.edit(handle.agent, goalRef(resumable), { maxGoalRounds: resumable.maxGoalRounds + maxGoalRounds })
@@ -649,40 +682,75 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     return job
   }
 
-  async function cancelTaskInternal(taskId, normalizedReason, topicRefs, operation) {
-    try {
-      const task = store.getTask(taskId)
-      if (task === undefined) throw new Error(`task_not_found:${taskId}`)
-      if (task.state === 'completed') { if (operation && task.appliedOperations.includes(operation.operationId)) return task; throw new Error(`task_not_active:${taskId}`) }
+  function recoverTaskStop(taskId) {
+    if (stopRecoveries.has(taskId)) return stopRecoveries.get(taskId)
+    const run = Promise.resolve().then(async () => {
+      let task = store.getTask(taskId)
+      if (!task?.stopRequest || task.stopRequest.status === 'settled') return task
       const handle = signalTaskCancellation(taskId)
-      if (handle !== undefined) {
-        const goal = ctx.goals.get(handle.agent)
-        if (goal !== undefined && goal.phase !== 'complete') ctx.goals.complete(handle.agent, goalRef(goal))
-      }
-      const cancelled = await mutateTask(task, operation, (current) => {
-        return {
-          ...current,
-          ...(topicRefs ? { topicRefs } : {}), inputVersion: current.inputVersion + 1,
-          state: 'completed',
-          completion: `已取消：${normalizedReason}`,
-          result: undefined,
-          waitingKind: undefined,
-          waitingReason: undefined,
-          archivedAt: (current.localWorktrees ?? []).some(item => item.status === 'registered' && item.createdByTask) ? undefined : new Date().toISOString(),
-        }
+      const agent = handle?.agent ?? ctx.agents.get?.(SessionId(task.childSessionId))
+      if (!handle && agent) agent.cancel({ kind: 'user' })
+      releaseTaskPermitWhenIdle(taskId, handle)
+      // 当前工具可能有外部副作用；等待必须在全局提交锁之外。
+      if (agent) await agent.whenIdle()
+      if (runtimeClosing) return store.getTask(taskId)
+      await taskActions.cancelPrepared(taskId)
+      const pending = taskActions.list(taskId).filter(intent => ['executing', 'unknown'].includes(intent.status))
+      await Promise.allSettled(pending.map(intent => taskActions.reconcile(intent.actionId)))
+      if (runtimeClosing) return store.getTask(taskId)
+      const unresolved = taskActions.list(taskId).filter(intent => ['executing', 'unknown'].includes(intent.status))
+      if (unresolved.length) return serializeTasks(() => store.updateTask(taskId, current => ({ ...current,
+        state: 'waiting', waitingKind: 'system', waitingReason: '取消等待已发出动作的真实结果对账。', stopRequest: { ...current.stopRequest, status: 'reconciling' } })))
+      const cancelled = await serializeTasks(async () => {
+        const current = store.getTask(taskId)
+        if (!current.stopRequest || current.stopRequest.status === 'settled') return current
+        const goal = agent && ctx.goals.get(agent)
+        if (goal && goal.phase !== 'complete') ctx.goals.complete(agent, goalRef(goal))
+        return store.updateTask(taskId, latest => ({ ...latest, state: 'completed', outcome: 'cancelled',
+          completion: `已取消：${latest.stopRequest.reason}`, result: undefined, waitingKind: undefined, waitingReason: undefined,
+          stopRequest: { ...latest.stopRequest, status: 'settled', settledAt: new Date().toISOString() },
+          archivedAt: (latest.localWorktrees ?? []).some(item => item.status === 'registered' && item.createdByTask) ? undefined : new Date().toISOString(),
+          executionEvents: [...(latest.executionEvents ?? []), { kind: 'task-stop-settled', runSequence: latest.runSequence, at: new Date().toISOString() }],
+        }))
       })
+      if (store.getTask(taskId)?.runSequence !== cancelled.runSequence || store.getTask(taskId)?.stopRequest?.status !== 'settled') return store.getTask(taskId)
       let disposal
-      if (handle !== undefined) {
-        if (leafHandles.get(taskId) === handle) leafHandles.delete(taskId)
+      if (handle && leafHandles.get(taskId) === handle) {
+        leafHandles.delete(taskId)
         leafTaskBySession.delete(String(handle.agent.session.id))
         disposal = disposeCancelledLeaf(cancelled, handle)
       }
       if (!cancelled.archivedAt) void Promise.resolve(disposal).then(() => archiveTask(taskId)).catch(error => recoveryIssues.push({ groupId: cancelled.groupId, taskId, kind: 'task-archive-cleanup', error: error.message }))
-      void pumpTasks().catch((error) => recoveryIssues.push({ groupId: cancelled.groupId, kind: 'task-pump', error: error.message }))
-      return cancelled
-    } finally {
       cancellingTasks.delete(taskId)
+      void pumpTasks().catch(error => recoveryIssues.push({ groupId: cancelled.groupId, taskId, kind: 'task-pump', error: error.message }))
+      return cancelled
+    }).catch(error => {
+      recoveryIssues.push({ taskId, kind: 'task-stop-recovery', error: error instanceof Error ? error.message : String(error) })
+      return store.getTask(taskId)
+    }).finally(() => stopRecoveries.delete(taskId))
+    stopRecoveries.set(taskId, run)
+    return run
+  }
+
+  async function cancelTaskInternal(taskId, normalizedReason, topicRefs, operation) {
+    const stopped = await serializeTasks(async () => {
+      const task = store.getTask(taskId)
+      if (!task) throw new Error(`task_not_found:${taskId}`)
+      if (operation && task.appliedOperations.includes(operation.operationId)) return task
+      if (task.state === 'completed') throw new Error(`task_not_active:${taskId}`)
+      return mutateTask(task, operation, current => ({ ...current, ...(topicRefs ? { topicRefs } : {}), inputVersion: current.inputVersion + 1,
+        state: 'waiting', waitingKind: 'system', waitingReason: '已请求停止；等待叶子停止及已发出动作对账。',
+        stopRequest: { status: 'requested', reason: normalizedReason, requestedAt: new Date().toISOString(), inputVersion: current.inputVersion, runSequence: current.runSequence },
+        executionEvents: [...(current.executionEvents ?? []), { kind: 'task-stop-requested', operationId: operation?.operationId, decisionId: operation?.decisionId,
+          authorizationRefs: operation?.authorizationRefs ?? [], topicRefs: topicRefs ?? current.topicRefs, inputVersion: current.inputVersion, runSequence: current.runSequence, reason: normalizedReason, at: new Date().toISOString() }],
+      }))
+    })
+    if (stopped.stopRequest?.status !== 'settled') {
+      signalTaskCancellation(taskId)
+      releaseTaskPermitWhenIdle(taskId)
+      void recoverTaskStop(taskId)
     }
+    return stopped
   }
 
   function taskResultOutboxKey(task, result) {
@@ -748,6 +816,65 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
   function coordinateTaskResult(task, result) {
     return runGroupResidentOperation(task.groupId, () => coordinateTaskResultInternal(task, result))
   }
+  const completionNotifications = new Map()
+  function recoverCompletionNotification(taskId, intentId) {
+    if (runtimeClosing) return Promise.resolve()
+    if (completionNotifications.has(intentId)) return completionNotifications.get(intentId)
+    const run = (async () => {
+      let task = store.getTask(taskId), intent = task?.notificationIntents?.find(item => item.intentId === intentId)
+      if (!intent || ['delivered', 'superseded', 'blocked'].includes(intent.status)) return
+      const save = (status, extra = {}) => serializeTasks(() => store.updateTask(taskId, current => ({ ...current, notificationIntents: current.notificationIntents.map(item => {
+        if (item.intentId !== intentId || ['superseded', 'delivered'].includes(item.status)) return item
+        const valid = current.state === 'completed' && current.inputVersion === item.inputVersion && current.runSequence === item.runSequence && fingerprint(current.result) === item.resultFingerprint
+        return { ...item, ...extra, status: valid ? status : 'superseded', updatedAt: new Date().toISOString() }
+      }) })))
+      const current = () => {
+        const value = store.getTask(taskId)
+        return value?.state === 'completed' && value.inputVersion === intent.inputVersion && value.runSequence === intent.runSequence && fingerprint(value.result) === intent.resultFingerprint
+      }
+      if (!current()) { await save('superseded'); return }
+      const findOutbound = () => store.getGroup(task.groupId)?.outbox.find(item => item.outboundId === intent.outboundId || item.sourceMessageId === intent.sourceMessageId && item.resultFingerprint === intent.resultFingerprint)
+      let outbound = findOutbound()
+      if (!outbound && intent.outbound) {
+        const { notificationFence: fence, ...draft } = intent.outbound
+        const draftCurrent = () => fence && fence.observedTopics.every(ref => store.getTopic(task.groupId, ref.topicId)?.revision === ref.revision)
+          && fence.outboxFingerprint === fingerprint(store.getGroup(task.groupId)?.outbox ?? [])
+        const preflight = () => !current() ? { status: 'task-stale' } : topics.hasPendingTaskInput(store.getTask(taskId)) ? { status: 'routing-required' } : !draftCurrent() ? { status: 'review-required' } : undefined
+        if (!preflight()) {
+          await appendReliableOutbox({ ...draft, outboundId: intent.outboundId, preflight })
+          outbound = findOutbound()
+        }
+      }
+      if (!outbound) {
+        if (topics.hasPendingTaskInput(store.getTask(taskId))) return
+        await coordinateTaskResult(store.getTask(taskId), store.getTask(taskId).result)
+        outbound = findOutbound()
+      }
+      if (!current()) { await save('superseded'); return }
+      if (outbound) {
+        await save(outbound.status === 'sent' ? 'delivered' : outbound.status === 'superseded' ? 'superseded' : 'enqueued', { outboundId: outbound.outboundId, lastError: undefined })
+        try {
+          await serializeTasks(() => store.updateTask(taskId, current => current.executionEvents?.some(event => event.kind === 'completion-notification-enqueued' && event.intentId === intentId) ? current : {
+            ...current, executionEvents: [...(current.executionEvents ?? []), { kind: 'completion-notification-enqueued', intentId, outboundId: outbound.outboundId, inputVersion: intent.inputVersion, runSequence: intent.runSequence, at: new Date().toISOString() }],
+          }))
+        } catch (error) { recoveryIssues.push({ taskId, kind: 'task-notification-telemetry', error: error.message }) }
+      }
+    })().catch(async error => {
+      if (runtimeClosing) return
+      recoveryIssues.push({ taskId, kind: 'completion-notification', error: error.message })
+      try {
+        await serializeTasks(() => store.updateTask(taskId, current => ({ ...current, notificationIntents: current.notificationIntents.map(item => item.intentId !== intentId || ['superseded', 'delivered'].includes(item.status) ? item : {
+          ...item, status: current.state === 'completed' && current.inputVersion === item.inputVersion && current.runSequence === item.runSequence ? 'blocked' : 'superseded',
+          lastError: String(error.message).slice(0, 1000), updatedAt: new Date().toISOString(),
+        }) })))
+      } catch (failure) { recoveryIssues.push({ taskId, kind: 'completion-notification-storage', error: failure.message }) }
+    }).finally(() => completionNotifications.delete(intentId))
+    completionNotifications.set(intentId, run)
+    return run
+  }
+  function recoverCompletionNotifications() {
+    for (const task of store.listTasks()) for (const intent of task.notificationIntents ?? []) if (['pending', 'enqueued'].includes(intent.status)) void recoverCompletionNotification(task.taskId, intent.intentId)
+  }
   async function reviewTaskCheckpoint(task, checkpoint) {
     if (!isDiagnosticCheckpoint(checkpoint)) {
       assertCurrentTaskPrompts(task, store.getTaskPrompts())
@@ -770,11 +897,18 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (current?.inputVersion !== task.inputVersion || current?.runSequence !== task.runSequence) throw new Error(`task_checkpoint_run_changed:${task.taskId}`)
       return updateTaskInput(task.taskId, checkpoint, (value) => {
         assertCheckpointCurrent(value, task, checkpoint)
-        const completedTitles = value.checkpoints.filter(item => item.kind === 'stage-completed' && item.coordinatorDecision && item.coordinatorDecision !== 'reject').flatMap(item => item.completedItems)
-        const planTitles = [...new Set([...completedTitles, ...checkpoint.remainingItems])]
+        const changingPlan = checkpoint.kind === 'plan-confirmed' && review.decision !== 'reject'
+        const revision = changingPlan && value.plan ? reviseTaskPlan(value.plan, checkpoint.plan) : undefined
+        const invalidated = (value.checkpoints ?? []).filter(item => item.kind === 'stage-completed' && revision?.invalidatedStageIds.includes(item.stageOutput?.stageId))
+        const projected = changingPlan ? projectTaskPlan(checkpoint.plan) : undefined
         return { ...value,
-          ...(checkpoint.kind === 'plan-confirmed' && review.decision !== 'reject' ? { stageTasks: planTitles, stagePlan: stagePlanFor(value, planTitles) } : {}),
-          checkpoints: (value.checkpoints ?? []).map((item) => item.checkpointId === checkpoint.checkpointId ? { ...item, coordinatorDecision: review.decision, coordinatorReason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}), reviewedAt: new Date().toISOString() } : item),
+          ...(changingPlan ? {
+            acceptanceCriteria: projected.acceptanceCriteria, stageTasks: projected.stageTasks, stagePlan: projected.stagePlan, plan: checkpoint.plan,
+            planHistory: [...(value.planHistory ?? []), ...(value.plan ? [value.plan] : [])],
+            retiredPlanIds: [...new Set([...(value.retiredPlanIds ?? []), ...(revision?.retiredIds ?? [])])],
+            executionEvents: [...(value.executionEvents ?? []), { kind: 'task-plan-adopted', planRevision: checkpoint.plan.revision, inputVersion: value.inputVersion, runSequence: value.runSequence, retainedCheckpointIds: acceptedOutputs(value).filter(item => !invalidated.includes(item)).map(item => item.checkpointId), at: new Date().toISOString() }, ...(invalidated.length ? [{ kind: 'task-plan-evidence-invalidated', planRevision: checkpoint.plan.revision, checkpoints: invalidated, at: new Date().toISOString() }] : [])],
+          } : {}),
+          checkpoints: (value.checkpoints ?? []).filter(item => !invalidated.includes(item)).map((item) => item.checkpointId === checkpoint.checkpointId ? { ...item, coordinatorDecision: review.decision, coordinatorReason: review.reason, ...(review.guidance ? { guidance: review.guidance } : {}), reviewedAt: new Date().toISOString() } : item),
           updatedAt: new Date().toISOString(),
         }
       })
@@ -841,6 +975,27 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     if ((task.taskPromptRefs?.length ?? 0) > 0 && !plan.workflowAssessment) throw new Error(`task_workflow_assessment_required:${task.taskId}`)
     if (plan.workflowAssessment && !samePromptRefs(plan.workflowAssessment.promptRefs, task.taskPromptRefs ?? [])) throw new Error(`task_workflow_plan_stale:${task.taskId}`)
   }
+  const planSources = task => [...new Map(topics.taskMessages(task).map(message => [message.messageId, { messageId: message.messageId, messageVersion: message.messageVersion }])).values()]
+  const taskArtifacts = task => (task.executionEvents ?? []).filter(event => event.kind === 'task-artifact-registered' && event.runSequence === task.runSequence).map(event => event.artifact)
+  const taskChecks = task => (task.executionEvents ?? []).filter(event => event.kind === 'task-check-recorded' && event.runSequence === task.runSequence && event.inputVersion === task.inputVersion && event.planRevision === task.plan?.revision).map(event => event.evidence)
+  const acceptedOutputs = acceptedTaskStageOutputs
+  function assertCompletionEvidence(task, result) {
+    if (!task.plan || result.planRevision !== task.plan.revision) throw new Error('task_plan_completion_stale')
+    const completed = acceptedOutputs(task)
+    if (task.plan.stages.some(stage => !completed.some(checkpoint => checkpoint.stageOutput?.stageId === stage.stageId))) throw new Error('task_plan_stages_incomplete')
+    if (result.criterionReviews.length !== task.plan.criteria.length || new Set(result.criterionReviews.map(item => item.criterionId)).size !== task.plan.criteria.length) throw new Error('task_plan_reviews_incomplete')
+    const modelEvidence = new Map()
+    for (const checkpoint of completed) for (const evidence of checkpoint.modelEvidence ?? []) {
+      if (!checkpoint.stageOutput.evidenceRefs.includes(evidence.evidenceId)) continue
+      const previous = modelEvidence.get(evidence.evidenceId)
+      if (previous && fingerprint(previous) !== fingerprint(evidence)) throw new Error('task_plan_evidence_identity_conflict')
+      modelEvidence.set(evidence.evidenceId, evidence)
+    }
+    for (const review of result.criterionReviews) {
+      validateCriterionReview(review, { plan: task.plan, modelEvidence: [...modelEvidence.values()], checkerResults: taskChecks(task), artifactIds: taskArtifacts(task).map(item => item.artifactId) })
+      if (review.verdict !== 'pass') throw new Error('task_plan_criterion_not_pass')
+    }
+  }
   function updateTaskInput(taskId, value, transform) {
     return store.updateTask(taskId, (current) => { assertTaskInput(current, value); return { ...transform(current), acknowledgedInputVersion: value.inputVersion } })
   }
@@ -858,6 +1013,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (result.waitingKind === 'information') {
         const waiting = await updateTaskInput(taskId, result, (current) => ({ ...current, state: 'waiting', waitingKind: result.waitingKind, waitingReason: result.waitingReason, result }))
         if (goal.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-input-required', message: result.waitingReason })
+        releaseTaskPermitWhenIdle(taskId, handle)
         return waiting
       }
       const fingerprint = humanBlockerFingerprint(task.taskId, task.runSequence, result.blockerCategory, result.requestedAction, result.risk)
@@ -883,6 +1039,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         humanBlocker: blocker,
       }))
       if (goal.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-human-intervention-required', message: result.waitingReason })
+      releaseTaskPermitWhenIdle(taskId, handle)
       for (const listener of humanBlockerListeners) void Promise.resolve().then(() => listener({ task: waiting, result })).catch((error) => recoveryIssues.push({ groupId: waiting.groupId, taskId, kind: 'human-blocker-notification', error: error.message }))
       return store.getTask(taskId)
     }
@@ -929,6 +1086,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (goal === undefined) throw new Error(`task_goal_missing:${taskId}`)
       const checkpoints = task.checkpoints ?? []
       assertWorkflowPlan(task)
+      assertCompletionEvidence(task, result)
       if (checkpoints.length < 2) throw new Error(`task_checkpoints_insufficient:${taskId}`)
       if (!checkpoints.at(-1)?.coordinatorDecision) throw new Error(`task_checkpoint_review_pending:${taskId}`)
       if ((checkpoints.at(-1)?.remainingItems?.length ?? 0) > 0) throw new Error(`task_checkpoints_remaining:${taskId}`)
@@ -958,7 +1116,8 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       const current = store.getTask(taskId)
       if (current === undefined || current.state !== prepared.task.state || current.state !== 'running' && !prepared.recoveredFromWaiting) throw new Error(`task_not_active:${taskId}`)
       if (current.inputVersion !== prepared.task.inputVersion || current.runSequence !== prepared.task.runSequence || current.objective !== prepared.task.objective || current.checkpoints?.at(-1)?.checkpointId !== prepared.lastCheckpointId || !samePromptRefs(current.taskPromptRefs ?? [], prepared.task.taskPromptRefs ?? [])) throw new Error(`task_result_context_changed:${taskId}`)
-      assertWorkflowPlan(current)
+        assertWorkflowPlan(current)
+        assertCompletionEvidence(current, result)
       assertTaskInput(current, result)
       if (JSON.stringify((current.localWorktrees ?? []).filter(item => item.status === 'registered').map(item => item.path).sort()) !== JSON.stringify([...(result.localWorktrees ?? [])].sort())) throw new Error(`task_worktree_result_mismatch:${taskId}`)
       const goal = ctx.goals.get(prepared.handle.agent)
@@ -972,10 +1131,14 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
           ...task.humanBlocker, status: 'superseded', supersededAt: completedAt, supersedeReason: '原完成报告协调恢复后已完成任务',
           recallStatus: task.humanBlocker.messageId ? 'pending' : 'not-required',
         } : undefined
-        return { ...task, acknowledgedInputVersion: result.inputVersion, state: 'completed', completion: result.summary, result, waitingKind: undefined, waitingReason: undefined,
+        const sourceMessageId = taskResultOutboxKey(task, result)
+        const intentId = stableId('notification', `${task.taskId}:${task.runSequence}:${task.inputVersion}:${fingerprint(result)}`)
+        const notificationIntent = { intentId, outboundId: review.preparedNotification?.outbound.outboundId ?? stableId('outbound', intentId), inputVersion: task.inputVersion, runSequence: task.runSequence, resultFingerprint: fingerprint(result), sourceMessageId, status: 'pending', ...(review.preparedNotification ? { outbound: { ...review.preparedNotification.outbound, notificationFence: review.preparedNotification.fence } } : {}), createdAt: completedAt, updatedAt: completedAt }
+        return { ...task, acknowledgedInputVersion: result.inputVersion, state: 'completed', outcome: 'succeeded', completion: result.summary, result, waitingKind: undefined, waitingReason: undefined,
+          notificationIntents: [...(task.notificationIntents ?? []).filter(item => item.intentId !== intentId), notificationIntent],
           ...(blocker ? { humanBlocker: undefined, humanBlockerHistory: withHumanBlockerHistory(task, blocker) } : {}),
           executionEvents: [...(task.executionEvents ?? []),
-            { kind: 'task-completed', inputVersion: result.inputVersion, runSequence: result.runSequence, at: completedAt }],
+            { kind: 'task-completed', submissionId, inputVersion: result.inputVersion, runSequence: result.runSequence, at: completedAt }],
         }
       })
       if (goal.phase !== 'complete') ctx.goals.complete(prepared.handle.agent, goalRef(goal))
@@ -986,19 +1149,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       for (const listener of authorizationDecisionListeners) await listener({ authorization, task: completed })
     }
     for (const requestId of prepared.recoveredRequestIds) await store.updateCoordinationRequest(completed.groupId, requestId, { status: 'completed', nextRetryAt: undefined, lastError: undefined })
-    void withoutInitiator(async () => {
-      const committed = await runGroupResidentOperation(completed.groupId, () => topics.commitCompletionNotification(review.preparedNotification, completed, result))
-      if (committed?.status) {
-        await recordTaskCoordinationEvent(taskId, { kind: 'completion-notification-fallback', inputVersion: result.inputVersion, runSequence: result.runSequence, status: committed.status, at: new Date().toISOString() })
-        await coordinateTaskResult(completed, result)
-        return
-      }
-      await recordTaskCoordinationEvent(taskId, { kind: 'completion-notification-enqueued', inputVersion: result.inputVersion, runSequence: result.runSequence, outboundId: committed.outboundId, at: new Date().toISOString() })
-        .catch((error) => recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification-telemetry', error: error.message }))
-    }).catch(async (error) => {
-      recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification', error: error.message })
-      await withoutInitiator(() => coordinateTaskResult(completed, result)).catch((fallbackError) => recoveryIssues.push({ groupId: completed.groupId, taskId, kind: 'task-notification-fallback', error: fallbackError.message }))
-    })
+    void withoutInitiator(() => recoverCompletionNotification(taskId, completed.notificationIntents.at(-1).intentId))
     const completedRunSequence = completed.runSequence
     prepared.handle.agent.whenIdle().then(async () => {
       await activityTail
@@ -1021,7 +1172,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     return completed
   }
   async function submitTaskCheckpointInternal(taskId, value) {
-    const checkpoint = parseTaskCheckpoint(value)
+    let checkpoint = parseTaskCheckpoint(value)
     const diagnostic = isDiagnosticCheckpoint(checkpoint)
     if (cancellingTasks.has(taskId)) throw new Error(`task_cancel_pending:${taskId}`)
     const { submitted, reviewTask } = await serializeTasks(async () => {
@@ -1029,6 +1180,28 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       const task = store.getTask(taskId)
       if (task === undefined || task.state !== 'running') throw new Error(`task_not_running:${taskId}`)
       assertTaskInput(task, checkpoint)
+      const reportContent = ({ checkpointId, submittedAt, coordinatorDecision, coordinatorReason, guidance, reviewedAt, stageTask, stageId, completedItems, remainingItems, ...body }) => body
+      const alreadyReviewed = task.checkpoints?.find(item => item.coordinatorDecision && fingerprint(reportContent(item)) === fingerprint(reportContent(checkpoint)))
+      if (alreadyReviewed) return { submitted: alreadyReviewed, reviewTask: task }
+      if (checkpoint.kind === 'plan-confirmed') {
+        const proposal = task.executionEvents?.findLast(event => event.kind === 'task-plan-prepared' && event.inputVersion === task.inputVersion && event.runSequence === task.runSequence && fingerprint(event.plan) === fingerprint(checkpoint.plan))
+        if (!proposal) throw new Error('task_plan_not_prepared')
+        validateTaskPlan(checkpoint.plan, { sourceRefs: planSources(task), workflowRefs: task.taskPromptRefs ?? [], previousPlan: task.plan, retiredIds: task.retiredPlanIds ?? [] })
+        if (checkpoint.plan.inputVersion !== task.inputVersion || checkpoint.plan.runSequence !== task.runSequence) throw new Error('task_plan_output_stale')
+        const retainedIds = task.plan ? reviseTaskPlan(task.plan, checkpoint.plan).retainedStageIds : []
+        const completedIds = acceptedOutputs(task).map(item => item.stageOutput?.stageId).filter(id => retainedIds.includes(id))
+        const projection = projectTaskPlan(checkpoint.plan, completedIds)
+        checkpoint = { ...checkpoint, completedItems: [], remainingItems: projection.remainingItems }
+      } else if (checkpoint.kind === 'stage-completed') {
+        if (!task.plan) throw new Error('task_checkpoint_plan_required')
+        const registered = taskArtifacts(task)
+        for (const artifact of checkpoint.artifactRecords) if (!registered.some(item => fingerprint(item) === fingerprint(artifact))) throw new Error('task_plan_artifact_unregistered')
+        const output = validateStageOutput(checkpoint.stageOutput, { plan: { ...task.plan, inputVersion: task.inputVersion }, completedStageIds: acceptedOutputs(task).map(item => item.stageOutput?.stageId), artifacts: registered, evidence: [...checkpoint.modelEvidence, ...taskChecks(task)] })
+        if (output.blockers.length) throw new Error('task_plan_stage_blocked')
+        const stage = task.plan.stages.find(item => item.stageId === output.stageId)
+        const projection = projectTaskPlan(task.plan, [...acceptedOutputs(task).map(item => item.stageOutput?.stageId), stage.stageId])
+        checkpoint = { ...checkpoint, stageId: stage.stageId, stageTask: stage.title, completedItems: [stage.title], remainingItems: projection.remainingItems }
+      }
       if (!leafHandles.has(taskId)) throw new Error(`task_leaf_not_active:${taskId}`)
       if (!diagnostic) assertCurrentTaskPrompts(task, store.getTaskPrompts())
       const accepted = task.checkpoints?.find(item => item.checkpointId === stableId('checkpoint', `${taskId}:${fingerprint(checkpoint)}`) && item.coordinatorDecision)
@@ -1159,6 +1332,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       const inheritedPreset = agentPresets.composeFrom(agentCtx, parent.ctx)
       if (inheritedPreset !== agentPreset) throw new Error(`leaf_agent_preset_invalid:${inheritedPreset ?? 'none'}`)
       installSelection(agentCtx)
+      agentCtx.on('agent/pre-step', createTaskPermitStepGate(() => taskPermits.has(task.taskId) && store.getTask(task.taskId)?.state === 'running' && store.getTask(task.taskId)?.childSessionId === task.childSessionId && executionEligible(store.getTask(task.taskId))))
       agentCtx.on('agent/pre-step', createTaskReportStepGate({
         isBlocked: () => { const current = store.getTask(task.taskId); return current && reports.hasBlocking(current) },
         isResolutionMessage: (_agent, message) => {
@@ -1189,9 +1363,13 @@ ${quotedMessageRecoveryPolicy('leaf')}
 
 Task objective 限制的是业务动作范围，包括业务代码、业务数据、部署环境、外部系统和对外操作。适用的工作区规则，或由工作区规则授权且由 Skill 明确要求的内部维护动作不视为扩大 Task objective，但必须严格限制在该规则和 Skill 声明的内部目录、数据类型和操作边界内，不得借此修改未获授权的业务代码、业务数据、环境或外部系统。Runtime 不指定或绑定任何具体 Skill，是否适用及如何执行以当前注入的 Skill 描述和完整说明为准。
 
+### 结构化产出协议 v2
+
+先调用 task_plan_prepare 提交 criteria/stages 草稿及来源，使用返回的稳定 ID；改名保留已有 ID，删除后不复用。plan-confirmed 必须原样携带 Host 返回 plan。stage-completed 必须携带 stageOutput，引用当前 planRevision、阶段 ID、已登记 artifactRefs 和 modelEvidence/Host checker 的 evidenceRefs；字符串 evidence 仅作为摘要。先 task_artifact_register 登记产物；需要独立文件摘要证据时用 task_check_run，模型陈述不得冒充检查器。completed 必须提交当前 planRevision 与逐项 criterionReviews，所有必需项 pass 且有对应证据。Host 将从 plan/有效 stageOutput 生成展示进度，不以模型给的剩余文字决定完成。任何 UNKNOWN 或未覆盖项必须如实报告。
+
 ### 与主会话的内部检查点
 
-开始执行后把当前目标拆成至少 1 个有验收意义的检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed。计划必须携带 workflowAssessment：精确列出当前已选流程引用、可复用证据、不适用步骤，以及任何覆盖流程要求的例外；例外必须引用明确提出该要求的原始 basisMessageIds，主会话生成的目标、验收标准或旧摘要不能充当例外依据。若当前目标与流程冲突且原始消息没有明确例外，提交 scope-conflict 或修正计划，不能按扩写目标继续执行。后续对有独立证据的阶段逐项提交 stage-completed，每次 completedItems 只填本次完成的一个阶段，remainingItems 按原计划顺序移除该阶段；跨序完成必须交主会话审阅独立性，不得绕过业务前置条件。阶段提交被拒绝时先纠正并取得确认。Host 校验阶段身份、执行版本和非空证据。收到新版 TASK_TOPIC_CONTEXT 后，按其中的 progressImpact 处理：preserve 表示保留未受影响的既有进展，replan 表示按修订范围重提计划。范围冲突、证据缺口或风险实质变化时提交对应 checkpoint；即使尚无计划、计划被拒或流程失效也可上报。异常报告 completedItems 必须为空，remainingItems 保持最近已确认进度；若抢占待审计划，原待审项归档且必须重新规划。完成前 remainingItems 必须为空。不要提交命令流水、等待或无新事实的状态；checkpoint 不发送群聊，也不代替 submit_task_result。
+开始执行后把当前目标拆成至少 1 个有验收意义的检查点，并立即通过 submit_task_checkpoint 提交 plan-confirmed。计划必须携带 workflowAssessment：精确列出当前已选流程引用、可复用证据、不适用步骤，以及任何覆盖流程要求的例外；例外必须引用明确提出该要求的原始 basisMessageIds，主会话生成的目标、验收标准或旧摘要不能充当例外依据。若当前目标与流程冲突且原始消息没有明确例外，提交 scope-conflict 或修正计划，不能按扩写目标继续执行。后续对有独立证据的阶段逐项提交 stage-completed，每次 completedItems 只填本次完成的一个阶段，remainingItems 按原计划顺序移除该阶段；阶段按已批准计划顺序完成；调整顺序必须先提交新计划并通过审阅。阶段提交被拒绝时先纠正并取得确认。Host 校验阶段身份、执行版本和非空证据。收到新版 TASK_TOPIC_CONTEXT 后，按其中的 progressImpact 处理：preserve 表示保留未受影响的既有进展，replan 表示按修订范围重提计划。范围冲突、证据缺口或风险实质变化时提交对应 checkpoint；即使尚无计划、计划被拒或流程失效也可上报。异常报告 completedItems 必须为空，remainingItems 保持最近已确认进度；若抢占待审计划，原待审项归档且必须重新规划。完成前 remainingItems 必须为空。不要提交命令流水、等待或无新事实的状态；checkpoint 不发送群聊，也不代替 submit_task_result。
 
 ### 任务授权边界
 
@@ -1237,6 +1415,10 @@ ${(store.getTask(task.taskId) ?? task).acceptanceCriteria.map((item) => `- ${ite
 ### 当前执行轮次阶段任务
 
 ${stagePlanFor(store.getTask(task.taskId) ?? task, (store.getTask(task.taskId) ?? task).stageTasks).map(item => `- ${item.title}（stageId: ${item.stageId}）`).join('\n')}
+
+### 当前结构化计划与来源
+
+${JSON.stringify({ plan: (store.getTask(task.taskId) ?? task).plan, sourceRefs: planSources(store.getTask(task.taskId) ?? task) })}
 
 ### Topic 固定版本输入
 
@@ -1340,6 +1522,49 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
           return { taskId: task.taskId, taskPromptRefs: refs }
         }),
       })
+      const boundTask = exec => {
+        const current = store.getTask(task.taskId)
+        if (!current || String(exec.agent?.session.id) !== current.childSessionId || current.childSessionId !== task.childSessionId) throw new Error('leaf_tool_session_mismatch')
+        if (current.state !== 'running' || current.stopRequest && current.stopRequest.status !== 'settled') throw new Error('task_not_running')
+        return current
+      }
+      const planPrepareSchema = z.object({ inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), draft: taskPlanDraftSchema }).strict()
+      agentCtx.tools.register({ name: 'task_plan_prepare', description: '准备结构化计划：Host分配稳定验收项和阶段身份。返回的plan必须原样用于plan-confirmed；准备不批准执行。', parameters: toToolJsonSchema(planPrepareSchema),
+        output: { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] },
+        execute: (args, exec) => serializeTasks(async () => {
+          const input = planPrepareSchema.parse(args), current = boundTask(exec)
+          assertTaskInput(current, input)
+          const revision = (current.plan?.revision ?? 0) + 1
+          const plan = prepareTaskPlan(input.draft, { creationId: `${current.taskId}:${current.runSequence}:${revision}:${fingerprint(input.draft)}`, revision, inputVersion: current.inputVersion, runSequence: current.runSequence, sourceRefs: planSources(current), workflowRefs: current.taskPromptRefs ?? [], previousPlan: current.plan, retiredIds: current.retiredPlanIds ?? [] })
+          if (!current.executionEvents?.some(event => event.kind === 'task-plan-prepared' && fingerprint(event.plan) === fingerprint(plan))) await store.updateTask(current.taskId, value => ({ ...value, executionEvents: [...(value.executionEvents ?? []), { kind: 'task-plan-prepared', inputVersion: current.inputVersion, runSequence: current.runSequence, plan, at: new Date().toISOString() }] }))
+          return { plan, approved: false }
+        }) })
+      const artifactRegisterSchema = z.object({ inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), artifact: taskArtifactSchema.omit({ artifactId: true }) }).strict()
+      agentCtx.tools.register({ name: 'task_artifact_register', description: '登记本轮产物引用；登记不证明产物存在或满足业务验收。', parameters: toToolJsonSchema(artifactRegisterSchema),
+        output: { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] },
+        execute: (args, exec) => serializeTasks(async () => {
+          const input = artifactRegisterSchema.parse(args), current = boundTask(exec)
+          assertTaskInput(current, input)
+          const artifact = { artifactId: stableId('artifact', `${current.taskId}:${current.runSequence}:${fingerprint(input.artifact)}`), ...input.artifact }
+          if (!taskArtifacts(current).some(item => item.artifactId === artifact.artifactId)) await store.updateTask(current.taskId, value => ({ ...value, executionEvents: [...(value.executionEvents ?? []), { kind: 'task-artifact-registered', inputVersion: current.inputVersion, runSequence: current.runSequence, artifact, at: new Date().toISOString() }] }))
+          return artifact
+        }) })
+      const checkSchema = z.object({ inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), criterionIds: z.array(z.string().min(1)).min(1), check: taskCheckSchema }).strict()
+      agentCtx.tools.register({ name: 'task_check_run', description: '运行已注册的只读文件摘要检查；UNKNOWN不是PASS，文件摘要匹配不等于业务正确。', parameters: toToolJsonSchema(checkSchema),
+        output: { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] },
+        execute: async (args, exec) => {
+          const input = checkSchema.parse(args), current = boundTask(exec)
+          assertTaskInput(current, input); assertWorkflowPlan(current)
+          if (new Set(input.criterionIds).size !== input.criterionIds.length || input.criterionIds.some(id => !current.plan?.criteria.some(item => item.criterionId === id))) throw new Error('task_check_criterion_invalid')
+          const receiptId = stableId('check', `${current.taskId}:${current.runSequence}:${current.inputVersion}:${current.plan.revision}:${fingerprint(input)}:${randomUUID()}`)
+          const evidence = await runTaskCheck(input.check, { receiptId, criterionIds: input.criterionIds, workspaceRoot: agentWorkspace, artifacts: taskArtifacts(current) })
+          await serializeTasks(() => {
+            const latest = boundTask(exec); assertTaskInput(latest, input)
+            if (latest.plan?.revision !== current.plan.revision) throw new Error('task_plan_output_stale')
+            return store.updateTask(current.taskId, value => ({ ...value, executionEvents: [...(value.executionEvents ?? []), { kind: 'task-check-recorded', inputVersion: current.inputVersion, runSequence: current.runSequence, planRevision: current.plan.revision, evidence, at: new Date().toISOString() }] }))
+          })
+          return evidence
+        } })
       for (const [name, reportType, parse, parameters] of [
         ['submit_task_checkpoint', 'checkpoint', parseTaskCheckpoint, taskCheckpointJsonSchema],
         ['submit_task_result', 'result', parseTaskResult, taskResultJsonSchema],
@@ -1360,7 +1585,13 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     const existing = ctx.goals.get(handle.agent)
     if (existing === undefined) {
       if (!creating) throw new Error(`task_goal_missing:${task.taskId}`)
-      ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds }); return
+      const created = ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds })
+      if (!requestExecutionPermit(task.taskId)) ctx.goals.block(handle.agent, goalRef(created), { code: 'task-execution-permit-wait', message: '等待执行许可。' })
+      return
+    }
+    if (!requestExecutionPermit(task.taskId)) {
+      if (existing.phase === 'active') ctx.goals.block(handle.agent, goalRef(existing), { code: 'task-execution-permit-wait', message: '等待执行许可。' })
+      return
     }
     if (task.state === 'running' && !reports.hasBlocking(task) && !isGoalRoundLimitExhausted(existing) && (
       existing.phase === 'paused'
@@ -1384,12 +1615,15 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     }
   }
   async function resumeLeaf(task) {
+    if (task.migrationReview?.status === 'required' || task.stopRequest) throw new Error(`task_execution_blocked:${task.taskId}`)
     if (leafHandles.has(task.taskId)) return leafHandles.get(task.taskId)
     const handle = await ctx.agents.resume({ resumeSessionId: SessionId(task.childSessionId), agentOptions, setup: leafSetup(task), signal: AbortSignal.timeout(resumeTimeoutMs) })
     ensureLeafDescriptor(handle, task); applyPermission(handle, 'danger-full-access')
     await attachGoal(task, handle, false); return handle
   }
   async function restartInactiveLeaf(task, previous, attempt, cause = 'paused') {
+    if (!requestExecutionPermit(task.taskId)) return previous
+    await previous.agent.whenIdle()
     const replacementSessionId = `session-${task.taskId}-${randomUUID().slice(0, 8)}`
     const replacementTask = { ...task, childSessionId: replacementSessionId }
     const replacement = await createLeaf(replacementTask)
@@ -1415,8 +1649,14 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
         let task = store.getTask(listed.taskId)
         if (task?.state !== 'running') continue
         if (reports.hasBlocking(task)) {
+          releaseTaskPermitWhenIdle(task.taskId)
           reports.recover(task)
           results.push({ taskId: task.taskId, ok: true, waiting: 'coordination' })
+          continue
+        }
+        const hadPermit = taskPermits.has(task.taskId)
+        if (!requestExecutionPermit(task.taskId)) {
+          results.push({ taskId: task.taskId, ok: true, waiting: 'execution-permit' })
           continue
         }
         const pendingCheckpoint = task.checkpoints?.at(-1)
@@ -1440,7 +1680,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
             sessionRecovered = true
             await store.recordAlert({ taskId: task.taskId, fingerprint: 'leaf-session-recovered', detail: `Recovered DSH leaf Session ${task.childSessionId}`, status: 'resolved' })
           }
-          const before = ctx.goals.get(handle.agent)
+          let before = ctx.goals.get(handle.agent)
           if (isGoalRoundLimitExhausted(before)) {
             const reason = `DSH leaf Goal已耗尽执行轮数（${before.roundsStarted}/${before.maxGoalRounds}），但Task仍为running，已停止自动续接。`
             await submitTaskResultInternal(task.taskId, {
@@ -1451,6 +1691,8 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
             results.push({ taskId: task.taskId, ok: false, waiting: true, exhausted: true, agentStatus: handle.agent.status })
             continue
           }
+          // 重新取得执行许可不是扩展执行轮数的授权，先保留耗尽检查。
+          if (!hadPermit) before = resumeGoalAfterResolution(handle, before)
           if (before?.phase === 'paused' || before?.phase === 'blocked' || before?.phase === 'complete') {
             if (handle.agent.status !== 'idle') {
               results.push({ taskId: task.taskId, ok: true, deferred: true, sessionRecovered, goalRecovered: false, agentStatus: handle.agent.status })
@@ -1539,15 +1781,22 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
   async function pumpTasksInternal() {
     if (runtimeClosing) return
     const tasks = store.listTasks()
-    let available = taskConcurrencyLimit - tasks.filter((task) => task.state === 'running').length - startingTasks.size
-    for (const task of tasks.filter((item) => item.state === 'queued')) {
-      if (available <= 0) break
-      if (store.getTask(task.taskId)?.state !== 'queued') continue
+    for (const taskId of taskPermits.snapshot().holders) if (!executionEligible(store.getTask(taskId))) releaseTaskPermitWhenIdle(taskId)
+    for (const taskId of taskPermits.snapshot().queue) if (!executionEligible(store.getTask(taskId))) taskPermits.dequeue(taskId)
+    const candidates = tasks.filter(task => executionEligible(task) && (task.state === 'queued' || !taskPermits.has(task.taskId)))
+    const order = taskPermits.snapshot().queue
+    candidates.sort((a, b) => (order.includes(a.taskId) ? order.indexOf(a.taskId) : order.length) - (order.includes(b.taskId) ? order.indexOf(b.taskId) : order.length))
+    for (const task of candidates) {
+      if (!requestExecutionPermit(task.taskId)) continue
       startingTasks.add(task.taskId)
-      available -= 1
       try {
         if (!residentHandles.has(task.groupId)) throw new Error(`resident_not_active:${task.groupId}`)
-        if (task.resumeContext) {
+        if (task.state === 'running') {
+          const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
+          const goal = ctx.goals.get(handle.agent)
+          if (isGoalRoundLimitExhausted(goal)) continue
+          resumeGoalAfterResolution(handle, goal)
+        } else if (task.resumeContext) {
           const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
           const running = await store.updateTask(task.taskId, (current) => current.state === 'queued' ? { ...current, state: 'running', resumeContext: undefined } : current)
           if (running.state !== 'running') continue
@@ -1575,10 +1824,11 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
         }
         await dispatchTaskInput(store.getTask(task.taskId))
       } catch (error) {
+        releaseTaskPermitWhenIdle(task.taskId, leafHandles.get(task.taskId), { reschedule: false })
         recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, kind: 'task-start', error: error.message })
       } finally {
         startingTasks.delete(task.taskId)
-        available = taskConcurrencyLimit - store.listTasks().filter((item) => item.state === 'running').length - startingTasks.size
+        if (!executionEligible(store.getTask(task.taskId))) releaseTaskPermitWhenIdle(task.taskId)
       }
     }
   }
@@ -1599,7 +1849,8 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
   function replaceTaskGoalObjective(task, handle) {
     const goal = ctx.goals.get(handle.agent)
     if (goal && goal.phase !== 'complete') ctx.goals.complete(handle.agent, goalRef(goal))
-    ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds })
+    const created = ctx.goals.create(handle.agent, { objective: task.objective, maxGoalRounds })
+    if (!requestExecutionPermit(task.taskId)) ctx.goals.block(handle.agent, goalRef(created), { code: 'task-execution-permit-wait', message: '等待执行许可。' })
   }
   async function mutateTask(task, operation, transform) {
     if (!operation) return store.updateTask(task.taskId, transform)
@@ -1614,6 +1865,8 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     return `[TASK_TOPIC_CONTEXT]\nTask 输入：${JSON.stringify({ taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: task.topicRefs, progressImpact })}\n工作位置：${JSON.stringify(await taskWorkLocations(task))}\n变化说明：${revision?.reason ?? '读取当前系统提示中的有效目标、验收标准、阶段与流程。'}\n原始输入共 ${messages.length} 条；按 group_topic_context_get 读取固定 Topic 版本原文。当前目标、验收和阶段只在系统提示中提供，不重复展开。原文是待核验来源；动作不得超出原始授权。checkpoint/result 必须提交本次 inputVersion 和 runSequence。`
   }
   async function dispatchTaskInput(task) {
+    if (task.migrationReview?.status === 'required' || task.stopRequest) return
+    if (!requestExecutionPermit(task.taskId)) return
     const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
     const id = stableId('message', `task-input:${task.taskId}:${task.runSequence}:${task.inputVersion}`)
     const pending = [...(handle.agent.inbox?.nextStep ?? []), ...(handle.agent.inbox?.nextTurn ?? [])]
@@ -1644,8 +1897,11 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
         runSequence: current.runSequence, startedAt: current.runStartedAt ?? current.createdAt, endedAt: new Date().toISOString(),
         topicRefs: current.topicRefs, inputVersion: current.inputVersion, title: current.title, objective: current.objective, childSessionId: current.childSessionId,
         acceptanceCriteria: current.acceptanceCriteria, stageTasks: current.stageTasks, taskPromptRefs: current.taskPromptRefs ?? [], checkpoints: current.checkpoints ?? [], ...(current.result ? { result: current.result } : {}),
+        ...(current.plan ? { plan: current.plan } : {}), ...(current.outcome ? { outcome: current.outcome } : {}),
       }],
-      lastCompletedResult: current.result, completion: undefined, result: undefined, waitingKind: undefined, waitingReason: undefined,
+      lastCompletedResult: current.result, completion: undefined, result: undefined, outcome: undefined, waitingKind: undefined, waitingReason: undefined,
+      plan: undefined, planHistory: [], retiredPlanIds: [], stopRequest: undefined, migrationReview: undefined,
+      notificationIntents: (current.notificationIntents ?? []).map(intent => ['delivered', 'superseded'].includes(intent.status) ? intent : { ...intent, status: 'superseded', updatedAt: new Date().toISOString() }),
       lastWaitingResult: undefined, checkpoints: [], stagePlan, taskPromptRefs: [], humanBlocker: undefined, reopenContext: 'Topic 输入已更新，独立核验新执行轮次并重新选择适用任务流程', archivedAt: undefined,
       completionSequence: (current.completionSequence ?? 0) + 1,
     }))
@@ -1692,7 +1948,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     return task
   }
   async function applyTopicAction(groupId, action, receipt, record) {
-    const operation = { ...receipt, inputVersion: action.inputVersion, runSequence: action.runSequence, decisionId: record.decisionId }
+    const operation = { ...receipt, inputVersion: action.inputVersion, runSequence: action.runSequence, decisionId: record.decisionId, authorizationRefs: record.decision.basisMessageIds }
     if (action.kind === 'task-proposal') return
     if (action.kind === 'new-task') {
       const basis = action.topicRefs.flatMap((ref) => resolveTopicMessages(store.getGroup(groupId), ref.topicId, ref.revision)).findLast((message) => record.decision.basisMessageIds.includes(message.messageId) && message.sourceKind !== 'web' && message.sourceKind !== 'internal')
@@ -1747,6 +2003,10 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     if (!exists) handle.agent.steer(Object.freeze({ ...message, id }))
     const sessions = ctx.get?.('sessions') ?? ctx.sessions
     if (sessions?.flush) await sessions.flush(handle.agent.session)
+    if (task.state === 'running') {
+      resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
+      if (!taskPermits.has(task.taskId)) void pumpTasks().catch(error => recoveryIssues.push({ taskId: task.taskId, kind: 'task-permit-pump', error: error.message }))
+    }
     return { task, accepted: true }
   }
   async function writeProjectedActivity(taskId, session, event) {
@@ -1919,7 +2179,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     dispatchRequest: (request, message) => coordinationSessions.dispatch(request, message),
     onRequestFinished: request => coordinationSessions.finish(request), assertSession: assertResidentToolSession, serializeTasks,
     applyAction: applyTopicAction, appendOutbox: appendReliableOutbox, reviewCandidates: replyReviewCandidatesFor, validateReplyReview,
-    cancelTask: signalTaskCancellation, isClosing: () => runtimeClosing, retryDelayMs: decisionRetryBaseMs,
+    cancelTask: taskId => { taskPermits.suspend(taskId) }, isClosing: () => runtimeClosing, retryDelayMs: decisionRetryBaseMs,
     ...(statusQueries ? { onDecisionRequest: tryStatusQuery } : {}),
     onInputSettled: groupId => { for (const task of store.listTasks().filter(task => task.groupId === groupId)) reports.recover(task) },
     onError: (groupId, error) => recoveryIssues.push({ groupId, kind: 'topic-processing', error: error.message ?? String(error) }),
@@ -1936,6 +2196,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       if (!handle) return
       const goal = ctx.goals.get(handle.agent)
       if (goal?.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-coordination-pending', message: '报告已保存，等待输入接纳或审阅结果。' })
+      releaseTaskPermitWhenIdle(task.taskId, handle)
     },
     notify: async (task, report) => {
       if (report.status === 'failed') {
@@ -1963,8 +2224,8 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       if (!exists) handle.agent.steer({ ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: `[TASK_REPORT_REVIEWED]\n${JSON.stringify(taskReportReceipt(task.taskId, report))}\n${report.status === 'history-only' ? '原报告因输入版本变化作废；核对新版目标、授权和保留的阶段证据，仅对仍适用的事项用当前版本提交新报告。不要重复执行已完成的业务写入。' : '只依据本次结果继续；已接收不代表业务完成。不要重复提交同一报告。'}` }] }), id })
       const sessions = ctx.get?.('sessions') ?? ctx.sessions
       if (sessions?.flush) await sessions.flush(handle.agent.session)
-      if (report.status !== 'failed') resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
     },
+    onSettled: () => { void pumpTasks().catch(error => recoveryIssues.push({ kind: 'task-permit-pump', error: error.message })) },
     onError: error => recoveryIssues.push({ kind: 'task-report-processing', error: error.message }),
   })
   for (const group of store.listGroups()) {
@@ -1976,8 +2237,13 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       recoveryIssues.push({ groupId: group.groupId, residentSessionId: group.residentSessionId, error: detail })
     }
   }
+  void taskActions.recover().then(results => {
+    for (const result of results) if (result.status === 'rejected') recoveryIssues.push({ kind: 'task-action-recovery', error: String(result.reason?.message ?? result.reason) })
+  }).catch(error => recoveryIssues.push({ kind: 'task-action-recovery', error: error.message }))
   for (const task of store.listTasks().filter((item) => item.state === 'running' || item.state === 'waiting')) {
     if (!residentHandles.has(task.groupId)) continue
+    if (task.stopRequest) { void recoverTaskStop(task.taskId); continue }
+    if (task.migrationReview?.status === 'required') continue
     try {
       const plan = reconcileLegacyStagePlan(task)
       const current = plan ? await store.updateTask(task.taskId, value => ({ ...value, stageTasks: plan.stageTasks, stagePlan: plan.stagePlan,
@@ -1993,6 +2259,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     } catch (error) { recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, childSessionId: task.childSessionId, error: error instanceof Error ? error.message : String(error) }) }
   }
   await serializeTasks(pumpTasks)
+  recoverCompletionNotifications()
   function recoverDecisionMessages() {
     if (runtimeClosing) return Promise.resolve([])
     return topics.recover()
@@ -2000,6 +2267,8 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
   if (supervisorIntervalMs > 0) {
     supervisorTimer = setInterval(() => {
       inspectRunningTasks().catch(() => undefined)
+      recoverCompletionNotifications()
+      for (const task of store.listTasks().filter(item => item.stopRequest && item.stopRequest.status !== 'settled')) void recoverTaskStop(task.taskId)
       recoverDecisionMessages().catch(() => undefined)
       runtimeApi?.reconcileCompletedNotifications().catch(() => undefined)
       runtimeApi?.reconcileInformationWaitFollowups().catch((error) => recoveryIssues.push({ kind: 'information-wait-followup', error: error.message }))
@@ -2009,6 +2278,26 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     supervisorTimer.unref?.()
   }
   runtimeApi = {
+    // 此组 API 仅供 Host 集成，不注册成叶子工具；权限由部署注入的适配器授权器判定。
+    prepareTaskAction: value => taskActions.prepare(value),
+    executeTaskAction: async ({ taskId, actionId, inputVersion, runSequence }) => {
+      const intent = taskActions.get(actionId)
+      if (!intent || intent.taskId !== taskId || intent.inputVersion !== inputVersion || intent.runSequence !== runSequence) throw new Error('task_action_request_binding_invalid')
+      return taskActions.execute(actionId)
+    },
+    reconcileTaskAction: async ({ taskId, actionId, inputVersion, runSequence }) => {
+      const intent = taskActions.get(actionId)
+      if (!intent || intent.taskId !== taskId || intent.inputVersion !== inputVersion || intent.runSequence !== runSequence) throw new Error('task_action_request_binding_invalid')
+      const receipt = await taskActions.reconcile(actionId)
+      if (store.getTask(taskId)?.stopRequest) await recoverTaskStop(taskId)
+      return receipt
+    },
+    listTaskActions: ({ taskId }) => taskActions.list(taskId),
+    recoverTaskActions: async () => {
+      const results = await taskActions.recover()
+      await Promise.all(store.listTasks().filter(task => task.stopRequest && task.stopRequest.status !== 'settled').map(task => recoverTaskStop(task.taskId)))
+      return results
+    },
     getGroup: store.getGroup, listGroups: store.listGroups, getTask: store.getTask, listTasks: store.listTasks, listAlerts: store.listAlerts,
     listTopics: store.listTopics, getTopic: store.getTopic, getTopicContext: store.getTopicContext,
     listTaskTimings: store.listTaskTimings ?? (() => []),
@@ -2164,6 +2453,23 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       for (const task of tasks) await store.resolveAlerts?.({ taskId: task.taskId, fingerprintPrefix: 'dws-consumer-' })
     },
     inspectRunningTasks,
+    recoverCompletionNotifications: async () => { recoverCompletionNotifications(); await Promise.allSettled([...completionNotifications.values()]) },
+    retryCompletionNotification: async ({ taskId, intentId }) => {
+      await serializeTasks(async () => {
+        const task = store.getTask(taskId)
+        const intent = task?.notificationIntents?.find(item => item.intentId === intentId)
+        if (!intent || intent.status !== 'blocked') throw new Error('notification_retry_requires_blocked')
+        if (task.state !== 'completed' || task.inputVersion !== intent.inputVersion || task.runSequence !== intent.runSequence) throw new Error('notification_retry_stale')
+        if (intent.lastError?.startsWith('topic_request_retry_exhausted:')) await topics.resetReviewRequest(task.groupId, intent.lastError.slice('topic_request_retry_exhausted:'.length))
+        return store.updateTask(taskId, task => {
+        const intent = task.notificationIntents?.find(item => item.intentId === intentId)
+        if (!intent || intent.status !== 'blocked') throw new Error('notification_retry_requires_blocked')
+        if (task.state !== 'completed' || task.inputVersion !== intent.inputVersion || task.runSequence !== intent.runSequence) throw new Error('notification_retry_stale')
+        return { ...task, notificationIntents: task.notificationIntents.map(item => item.intentId === intentId ? { ...item, status: 'pending', lastError: undefined, updatedAt: new Date().toISOString() } : item) }
+        })
+      })
+      return recoverCompletionNotification(taskId, intentId)
+    },
     recordHumanBlockerDelivery: ({ taskId, requestId, openTaskId, conversationId, messageId, sentAt, formatVersion }) => serializeTasks(async () => {
       const task = store.getTask(taskId)
       if (task?.humanBlocker?.requestId !== requestId) throw new Error(`human_blocker_not_found:${taskId}:${requestId}`)
@@ -2213,18 +2519,27 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const pending = await serializeTasks(async () => {
         const items = []
         for (const task of store.listTasks().filter((item) => (item.state === 'completed' && item.result?.status === 'completed') || (item.state === 'waiting' && item.result?.waitingKind === 'information'))) {
+          const intent = task.state === 'completed' ? task.notificationIntents?.find(item => item.inputVersion === task.inputVersion && item.runSequence === task.runSequence && item.resultFingerprint === fingerprint(task.result) && !['superseded', 'delivered'].includes(item.status)) : undefined
+          // 历史完成事实没有通知意图，不能在启动时猜测补发。
+          if (task.state === 'completed' && !intent) continue
           let current = task
           if ((current.completionSequence ?? 0) === 0 && current.lastCompletedResult?.status === 'completed') current = await store.updateTask(current.taskId, (item) => ({ ...item, completionSequence: 1 }))
           const resultKey = taskResultOutboxKey(current, current.result)
           const group = store.getGroup(current.groupId)
-          if (group !== undefined && !group.outbox.some((item) => item.sourceMessageId === resultKey)) items.push({ task: current, resultKey })
+          if (group !== undefined && !group.outbox.some((item) => item.sourceMessageId === resultKey)) items.push({ task: current, resultKey, intent })
         }
         return items
       })
       const repaired = [], failures = []
       await Promise.all(pending.map(async (item) => {
         try {
-          await (item.task.state === 'waiting' ? coordinateInformationWait(item.task, item.task.result) : coordinateTaskResult(item.task, item.task.result))
+          if (item.intent) {
+            await recoverCompletionNotification(item.task.taskId, item.intent.intentId)
+            if (runtimeClosing) throw new Error('resident_runtime_closed')
+            const current = store.getTask(item.task.taskId)?.notificationIntents.find(intent => intent.intentId === item.intent.intentId)
+            if (current?.status === 'blocked') throw new Error(current.lastError ?? 'completion_notification_blocked')
+            if (!['enqueued', 'delivered'].includes(current?.status)) return
+          } else await coordinateInformationWait(item.task, item.task.result)
           recoveryIssues.resolve((issue) => issue.taskId === item.task.taskId && ['task-notification', 'task-notification-fallback', 'task-notification-reconcile'].includes(issue.kind))
           repaired.push({ taskId: item.task.taskId, sourceMessageId: item.resultKey })
         } catch (error) {
@@ -2289,13 +2604,20 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const task = store.getTask(taskId); if (task?.state !== 'running') throw new Error(`task_not_running:${taskId}`)
       const handle = leafHandles.get(taskId) ?? await resumeLeaf(task), goal = ctx.goals.get(handle.agent)
       if (goal?.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-input-required', message: reason })
+      releaseTaskPermitWhenIdle(taskId, handle)
       return store.updateTask(taskId, (current) => ({ ...current, state: 'waiting', waitingKind: 'information', waitingReason: reason }))
     }),
     resumeTask: async ({ taskId }) => {
       const queued = await serializeTasks(async () => {
         const task = store.getTask(taskId)
         if (task?.state !== 'waiting') throw new Error(`task_not_waiting:${taskId}`)
-        return store.updateTask(taskId, (current) => ({ ...current, state: 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined, resumeContext: '[TASK_CONTEXT_RESUME]\nResume requested by the host.' }))
+        return store.updateTask(taskId, (current) => ({ ...current, state: 'queued', waitingKind: undefined, waitingReason: undefined, lastWaitingResult: current.result, result: undefined,
+          ...(current.migrationReview?.status === 'required' ? {
+            migrationReview: undefined, plan: undefined, checkpoints: [],
+            executionEvents: [...(current.executionEvents ?? []), { kind: 'workflow-migration-resumed', inputVersion: current.inputVersion, runSequence: current.runSequence, at: new Date().toISOString(), review: current.migrationReview, historicalCheckpoints: current.checkpoints ?? [] }],
+            resumeContext: '[TASK_CONTEXT_RESUME]\nHost 已显式恢复迁移任务。历史计划和证据仅供参考；必须读取当前来源与 workflow，重新提交结构化计划确认后才能执行阶段。',
+          } : { resumeContext: '[TASK_CONTEXT_RESUME]\nResume requested by the host.' }),
+        }))
       })
       await pumpTasks()
       return store.getTask(queued.taskId)
@@ -2338,6 +2660,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
         throw error
       }
     },
+    retryDecisionOperation: args => topics.retryOperation(args),
     retryCoordinationRequest: ({ groupId, requestId }) => {
       for (const task of store.listTasks().filter(item => item.groupId === groupId)) {
         const failed = task.executionEvents?.findLast(event => event.kind === 'task-report-settled' && event.status === 'failed' && event.error === `topic_request_retry_exhausted:${requestId}`)
@@ -2504,6 +2827,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
         await Promise.allSettled([...inflightMessages.values()])
         await topicClosing
         await coordinationClosing
+        await Promise.allSettled([...completionNotifications.values()])
         await reports.drain()
         await pumpTail
         const all = [...leafHandles.values(), ...residentHandles.values()]

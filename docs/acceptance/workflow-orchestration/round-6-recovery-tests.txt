@@ -1,0 +1,166 @@
+✖ 运行看板保留左侧菜单并替换右侧整体内容 (8.1599ms)
+✔ 任务卡不请求或展示执行轮次耗时统计 (4.3484ms)
+✔ 运行看板提供统一视觉尺度、响应式布局和可见键盘焦点 (2.1324ms)
+✔ Agent配置页面提供叶子任务并行上限且默认值为5 (1.1036ms)
+✔ 发件状态按实际投递环节展示，pending不会伪装为已回读 (1.5233ms)
+✔ pending报告先落盘，重复提交复用身份，不执行也不通知 (4.9674ms)
+✔ 完成已提交但报告未结算的恢复只认同一 submission 和结果，不重执行业务 (1.3621ms)
+✔ 回执分别表达收件、审阅和应用，不把驳回与系统故障显示成批准 (0.8294ms)
+✔ 未知故障及伪造前缀只阻塞系统，明确业务缺口才允许返工 (3.1387ms)
+✔ 输入解除后并发recover一次执行一次通知，终态重复提交不执行 (0.7244ms)
+✔ 进程重建读取持久pending，不要求模型再次提交 (0.3396ms)
+✔ 已知旧版本与已完成任务只保留事实，未知run和未来版本拒绝 (0.3854ms)
+✔ pending期间版本更新不会用旧完成报告推进新目标 (0.5226ms)
+✔ 两个并发提交在异步审阅期间复用同一执行 (0.3287ms)
+✔ settled后通知失败再重建，补通知而不重复执行报告 (0.8825ms)
+✔ 同Task不同报告串行执行，drain等待后续报告完成 (0.49ms)
+✔ 协调失败只通知一次且保持阻塞，Supervisor恢复不自动重试执行 (0.5131ms)
+✔ 确定性上下文故障保留报告，100 次恢复不重复审阅，业务驳回仍可改稿 (1.3978ms)
+✔ 协调重试耗尽落failed并保持Goal门禁，仅显式retry恢复同一报告 (1.445ms)
+✔ 真实子进程在settled落文件后、通知前退出，恢复仅补一次通知 (255.4375ms)
+✔ 风险诊断可抢占等待计划，普通阶段仍串行 (0.7636ms)
+✔ failed只允许显式同版本重试，成功后清掉失败通知状态与阻塞 (0.5358ms)
+✔ 旧版本failed不阻塞新目标、不能retry，恢复归档history (0.3661ms)
+ℹ tests 23
+ℹ suites 0
+ℹ pass 22
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 543.5916
+
+✖ failing tests:
+
+test at test\observer-client.test.js:6:1
+✖ 运行看板保留左侧菜单并替换右侧整体内容 (8.1599ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /checkpointDuration\(checkpoint, currentCheckpointEvents, Date\.now\(\)\)/. Input:
+
+  'window.__ModuleLoader__.load({\r\n' +
+    "  id: '@zzusp/dingtalk-dsh-observer',\r\n" +
+    '  factory: (require) => {\r\n' +
+    '    const module = { exports: {} }\r\n' +
+    "    const React = require('react')\r\n" +
+    "    const { Button, IconChecklistOutline14, IconChevronDownOutline14, IconChevronUpOutline14, Menu, Pill, StateDot } = require('@deepseek-ai/dsh-client-ui-primitives')\r\n" +
+    '    const { useCallback, useEffect, useState } = React\r\n' +
+    "    const ENDPOINT = 'http://127.0.0.1:18998'\r\n" +
+    '    const colors = {\r\n' +
+    "      surface: 'var(--dsw-alias-bg-base, #fff)',\r\n" +
+    "      surface2: 'var(--dsw-alias-bg-layer-1, #f7f7f8)',\r\n" +
+    "      cardSurface: 'var(--dsw-alias-bg-layer-1, #fff)',\r\n" +
+    "      border: 'var(--dsw-alias-border-l2, rgba(127,127,127,.25))',\r\n" +
+    "      muted: 'var(--dsw-alias-label-secondary, #737373)',\r\n" +
+    "      accent: 'var(--dsw-alias-brand-primary, #4d6bfe)',\r\n" +
+    "      danger: 'var(--dsw-alias-state-error-primary, #c33)',\r\n" +
+    "      warning: 'var(--dsw-alias-state-warn-primary, #a56500)'\r\n" +
+    '    }\r\n' +
+    '    let open = false\r\n' +
+    '    let selectedSessionSnapshot\r\n' +
+    '    const openListeners = new Set()\r\n' +
+    '    const clearSessionSelection = () => {\r\n' +
+    `      const element = document.querySelector('[role="treeitem"][aria-selected="true"]')\r\n` +
+    '      if (!element) return\r\n' +
+    "      const selectedClasses = [...element.classList].filter((name) => name.endsWith('_selected'))\r\n" +
+    '      selectedSessionSnapshot = { element, selectedClasses }\r\n' +
+    "      document.documentElement.style.setProperty('--dingtalk-dsh-observer-selected-bg', getComputedStyle(element).backgroundColor)\r\n" +
+    "      element.setAttribute('aria-selected', 'false')\r\n" +
+    '      for (const name of selectedClasses) element.classList.remove(name)\r\n' +
+    '    }\r\n' +
+    '    const restoreSessionSelection = () => {\r\n' +
+    '      const snapshot = selectedSessionSnapshot\r\n' +
+    '      selectedSessionSnapshot = undefined\r\n' +
+    '      if (!snapshot?.element?.isConnected) return\r\n' +
+    "      snapshot.element.setAttribute('aria-selected', 'true')\r\n" +
+    '      for (const name of snapshot.selectedClasses) snapshot.element.classList.add(name)\r\n' +
+    '    }\r\n' +
+    '    const setOpen = (value) => {\r\n' +
+    '      if (value === open) return\r\n' +
+    '      if (value) clearSessionSelection()\r\n' +
+    '      else restoreSessionSelection()\r\n' +
+    '      open = value\r\n' +
+    '      for (const listener of openListeners) listener(value)\r\n' +
+    '    }\r\n' +
+    '    const useOpen = () => {\r\n' +
+    '      const [value, setValue] = useState(open)\r\n' +
+    '      useEffect(() => { openListeners.add(setValue); return () => openListeners.delete(setValue) }, [])\r\n' +
+    '      return value\r\n' +
+    '    }\r\n' +
+    "    const fmt = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'\r\n" +
+    "    const fmtTime = (value) => value ? new Date(value).toLocaleTimeString('zh-CN', { hour12: false }) : '—'\r\n" +
+    '    const fmtDuration = (value) => { const seconds = Math.max(0, Math.floor(value / 1000)); if (seconds < 60) return `${seconds}秒`; const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes}分${seconds % 60}秒`; const hours = Math.floor(minutes / 60); return `${hours}小时${minutes % 60}分` }\r\n' +
+    "    const checkpointDuration = (checkpoint, events, now) => { let startedAt; for (const event of events) { const submittedAt = Date.parse(event.submittedAt); const remainingItems = event.remainingItems || []; if (startedAt === undefined && remainingItems[0] === checkpoint && Number.isFinite(submittedAt)) startedAt = submittedAt; if (startedAt !== undefined && !remainingItems.includes(checkpoint) && Number.isFinite(submittedAt)) return fmtDuration(submittedAt - startedAt) } return startedAt === undefined ? '—' : fmtDuration(now - startedAt) }\r\n" +
+    "    const short = (value) => value ? String(value).replace(/^session-/, '').slice(0, 14) : '—'\r\n" +
+    '    const outboxDelivery = (message) => {\r\n' +
+    "      if (message.recallStatus === 'recalled') return { id: 'recalled', label: '已撤回', state: 'neutral' }\r\n" +
+    "      if (message.recallStatus === 'failed') return { id: 'recall-failed', label: '撤回待处理', state: 'warning', detail: message.recallError === 'replacement_delivery_unknown' ? '已停止旧意图发送；历史是否送达仍未知，等待核验' : `旧消息撤回失败${message.recallRetryAt ? '，将有限重试' : '，需核验后处理'}：${message.recallError || '原因未记录'}` }\r\n" +
+    "      if (message.supersededByOutboundId || message.status === 'superseded') return { id: 'superseded', label: '已替代', state: 'neutral', detail: message.deliveredMessageId ? '已记录送达，等待替换通知送达后撤回' : '已停止旧意图发送；未声称历史消息未送达' }\r\n" +
+    "      if (message.status === 'sent') return { id: 'confirmed', label: message.deliveredMessageId ? '已回读' : '已发送', state: 'done' }\r\n" +
+    "      if (message.deliveryBlockedAt) return { id: 'failed', label: '发送待处理', state: 'error', detail: '服务端已拒绝发送，停止自动重试；需核验失败原因' }\r\n" +
+    '      const reason = message.deliveryPendingReason\r\n' +
+    '      const details = {\r\n' +
+    "        preflight_history_partial: '发送前检查：历史消息不完整，本次未发送',\r\n" +
+    "        preflight_failed: '发送前检查失败，本次未发送',\r\n" +
+    "        send_failed: '发送调用失败，尚未确认送达',\r\n" +
+    "        delivery_unknown: '发送结果未知，等待确认',\r\n" +
+    "        postflight_history_partial: '发送后回读：历史消息不完整',\r\n" +
+    "        postflight_failed: '发送后回读失败',\r\n" +
+    "        message_not_observed: '已调用发送，回读尚未找到对应消息',\r\n" +
+    '      }\r\n' +
+    "      const detail = details[reason] || reason || (message.deliveryError ? '投递异常' : '')\r\n" +
+    "      if (['delivery_unknown', 'postflight_history_partial', 'postflight_failed', 'message_not_observed'].includes(reason)) return { id: 'waiting', label: '待回读', state: 'warning', detail }\r\n" +
+    "      if (reason === 'preflight_failed' || reason === 'preflight_history_partial') return { id: 'failed', label: '发送受阻', state: 'error', detail }\r\n" +
+    "      if (message.deliveryError || reason === 'send_failed') return { id: 'failed', label: '投递异常', state: 'error', detail }\r\n" +
+    "      return { id: 'queued', label: '待发送', state: 'ongoing', detail }\r\n" +
+    '    }\r\n' +
+    '    const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }\r\n' +
+    '    const observerCss = `\r\n' +
+    '      [data-dingtalk-observer] :is(button, input, select, textarea, summary, [tabindex]):focus-visible {\r\n' +
+    '        outline: 2px solid var(--dsw-alias-brand-primary, #4d6bfe) !important;\r\n' +
+    '        outline-offset: 2px !important;\r\n' +
+    '      }\r\n' +
+    '      @media (max-width: 960px) {\r\n' +
+    '        [data-dingtalk-observer] .observer-main { padding: 16px !important; }\r\n' +
+    '        [data-dingtalk-observer] .observer-topics-layout { display: grid !important; grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr); }\r\n' +
+    '        [data-dingtalk-observer] .observer-topic-list { max-width: none !important; }\r\n' +
+    '        [data-dingtalk-observer] .observer-task-board { grid-template-columns: repeat(2, minmax(280px, 1fr)) !important; }\r\n' +
+    '      }\r\n' +
+    '      @media (max-width: 720px) {\r\n' +
+    '        [data-dingtalk-observer] .observer-main { padding: 12px !important; }\r\n' +
+    '        [data-dingtalk-observer] .observer-topics-layout,\r\n' +
+    '        [data-dingtalk-observer] .observer-task-board { grid-template-columns: minmax(0, 1fr) !important; }\r\n' +
+    '        [data-dingtalk-observer] .observer-topic-detail { min-height: 320px !important; }\r\n' +
+    '        [data-dingtalk-observer] .observer-toolbar { align-items: stretch !important; }\r\n' +
+    '      }\r\n' +
+    '    `\r\n' +
+    "    const pill = (tone) => ({ display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: `${ui.space1}px ${ui.space2}px`, fontSize: ui.textSm, color: tone, background: `color-mix(in srgb, ${tone} 12%, transparent)` })\r\n" +
+    '    const card = { border: `1px solid ${colors.border}`, borderRadius: ui.radiusMd, background: colors.cardSurface, padding: ui.space4 }\r\n' +
+    "    const tableFrame = { border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, overflow: 'hidden' }\r\n" +
+    "    const tableHeadCell = { height: 42, boxSizing: 'border-box', padding: `0 ${ui.space4}px`, color: colors.muted, fontSize: ui.textSm, fontWeight: 600, verticalAlign: 'middle' }\r\n" +
+    "    const tableBodyCell = { padding: `${ui.space3}px ${ui.space4}px`, borderTop: `1px solid ${colors.border}`, fontSize: ui.textMd, lineHeight: 1.55, verticalAlign: 'middle' }\r\n" +
+    "    const tableBodyContent = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }\r\n" +
+    "    const clampTableContent = (...children) => React.createElement('div', { style: tableBodyContent }, ...children)\r\n" +
+    "    const singleLineTableContent = (...children) => React.createElement('div', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, ...children)\r\n" +
+    "    const tableFooter = { minHeight: 48, boxSizing: 'border-box', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, padding: '8px 12px', borderTop: `1px solid ${colors.border}`, background: colors.surface2 }\r\n" +
+    "    const toolbar = { minHeight: 48, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', borderBottom: `1px solid ${colors.border}`, background: colors.cardSurface }\r\n" +
+    "    const navigationTabStyle = (selected, { paddingBottom = 12 } = {}) => ({ position: 'relative', boxSizing: 'border-box', border: 0, borderBottom: selected ? `2px solid ${colors.accent}` : '2px solid transparent', borderRadius: 0, padding: `0 0 ${paddingBottom}px`, cursor: 'pointer', font: 'inherit', fontSize: ui.textMd, fontWeight: 500, lineHeight: '20px', color: selected ? colors.accent : colors.muted, background: 'transparent', whiteSpace: 'nowrap' })\r\n" +
+    '    const statusTone = {\r\n' +
+    "      done: 'var(--dsw-alias-state-success-primary, #248a3d)',\r\n" +
+    "      warning: 'var(--dsw-alias-state-warn-primary, #a56500)',\r\n" +
+    "      ongoing: 'var(--dsw-alias-brand-primary, #4d6bfe)',\r\n" +
+    "      error: 'var(--dsw-alias-state-error-primary, #c33)'\r\n" +
+    '    }\r\n' +
+    "    const CheckpointDoneIcon = ({ size = 12 }) => React.createElement('svg', { width: size, height: size, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, React.createElement('circle', { cx: 8, cy: 8, r: 6.25 }), React.createElement('path', { d: 'M5 8.1 7.05 10 11.2 5.9' }))\r\n" +
+    '    const statusTag = (label, state, { borderless = false, fontSize = 11, fontWeight = 500 } = {}) => {\r\n' +
+    '      const tone = statusTone[state] || colors.muted\r\n' +
+    '      return React'... 78070 more characters
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/observer-client.test.js:100:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'window.__ModuleLoader__.load({\r\n  id: \'@zzusp/dingtalk-dsh-observer\',\r\n  factory: (require) => {\r\n    const module = { exports: {} }\r\n    const React = require(\'react\')\r\n    const { Button, IconChecklistOutline14, IconChevronDownOutline14, IconChevronUpOutline14, Menu, Pill, StateDot } = require(\'@deepseek-ai/dsh-client-ui-primitives\')\r\n    const { useCallback, useEffect, useState } = React\r\n    const ENDPOINT = \'http://127.0.0.1:18998\'\r\n    const colors = {\r\n      surface: \'var(--dsw-alias-bg-base, #fff)\',\r\n      surface2: \'var(--dsw-alias-bg-layer-1, #f7f7f8)\',\r\n      cardSurface: \'var(--dsw-alias-bg-layer-1, #fff)\',\r\n      border: \'var(--dsw-alias-border-l2, rgba(127,127,127,.25))\',\r\n      muted: \'var(--dsw-alias-label-secondary, #737373)\',\r\n      accent: \'var(--dsw-alias-brand-primary, #4d6bfe)\',\r\n      danger: \'var(--dsw-alias-state-error-primary, #c33)\',\r\n      warning: \'var(--dsw-alias-state-warn-primary, #a56500)\'\r\n    }\r\n    let open = false\r\n    let selectedSessionSnapshot\r\n    const openListeners = new Set()\r\n    const clearSessionSelection = () => {\r\n      const element = document.querySelector(\'[role="treeitem"][aria-selected="true"]\')\r\n      if (!element) return\r\n      const selectedClasses = [...element.classList].filter((name) => name.endsWith(\'_selected\'))\r\n      selectedSessionSnapshot = { element, selectedClasses }\r\n      document.documentElement.style.setProperty(\'--dingtalk-dsh-observer-selected-bg\', getComputedStyle(element).backgroundColor)\r\n      element.setAttribute(\'aria-selected\', \'false\')\r\n      for (const name of selectedClasses) element.classList.remove(name)\r\n    }\r\n    const restoreSessionSelection = () => {\r\n      const snapshot = selectedSessionSnapshot\r\n      selectedSessionSnapshot = undefined\r\n      if (!snapshot?.element?.isConnected) return\r\n      snapshot.element.setAttribute(\'aria-selected\', \'true\')\r\n      for (const name of snapshot.selectedClasses) snapshot.element.classList.add(name)\r\n    }\r\n    const setOpen = (value) => {\r\n      if (value === open) return\r\n      if (value) clearSessionSelection()\r\n      else restoreSessionSelection()\r\n      open = value\r\n      for (const listener of openListeners) listener(value)\r\n    }\r\n    const useOpen = () => {\r\n      const [value, setValue] = useState(open)\r\n      useEffect(() => { openListeners.add(setValue); return () => openListeners.delete(setValue) }, [])\r\n      return value\r\n    }\r\n    const fmt = (value) => value ? new Date(value).toLocaleString(\'zh-CN\', { hour12: false }) : \'—\'\r\n    const fmtTime = (value) => value ? new Date(value).toLocaleTimeString(\'zh-CN\', { hour12: false }) : \'—\'\r\n    const fmtDuration = (value) => { const seconds = Math.max(0, Math.floor(value / 1000)); if (seconds < 60) return `${seconds}秒`; const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes}分${seconds % 60}秒`; const hours = Math.floor(minutes / 60); return `${hours}小时${minutes % 60}分` }\r\n    const checkpointDuration = (checkpoint, events, now) => { let startedAt; for (const event of events) { const submittedAt = Date.parse(event.submittedAt); const remainingItems = event.remainingItems || []; if (startedAt === undefined && remainingItems[0] === checkpoint && Number.isFinite(submittedAt)) startedAt = submittedAt; if (startedAt !== undefined && !remainingItems.includes(checkpoint) && Number.isFinite(submittedAt)) return fmtDuration(submittedAt - startedAt) } return startedAt === undefined ? \'—\' : fmtDuration(now - startedAt) }\r\n    const short = (value) => value ? String(value).replace(/^session-/, \'\').slice(0, 14) : \'—\'\r\n    const outboxDelivery = (message) => {\r\n      if (message.recallStatus === \'recalled\') return { id: \'recalled\', label: \'已撤回\', state: \'neutral\' }\r\n      if (message.recallStatus === \'failed\') return { id: \'recall-failed\', label: \'撤回待处理\', state: \'warning\', detail: message.recallError === \'replacement_delivery_unknown\' ? \'已停止旧意图发送；历史是否送达仍未知，等待核验\' : `旧消息撤回失败${message.recallRetryAt ? \'，将有限重试\' : \'，需核验后处理\'}：${message.recallError || \'原因未记录\'}` }\r\n      if (message.supersededByOutboundId || message.status === \'superseded\') return { id: \'superseded\', label: \'已替代\', state: \'neutral\', detail: message.deliveredMessageId ? \'已记录送达，等待替换通知送达后撤回\' : \'已停止旧意图发送；未声称历史消息未送达\' }\r\n      if (message.status === \'sent\') return { id: \'confirmed\', label: message.deliveredMessageId ? \'已回读\' : \'已发送\', state: \'done\' }\r\n      if (message.deliveryBlockedAt) return { id: \'failed\', label: \'发送待处理\', state: \'error\', detail: \'服务端已拒绝发送，停止自动重试；需核验失败原因\' }\r\n      const reason = message.deliveryPendingReason\r\n      const details = {\r\n        preflight_history_partial: \'发送前检查：历史消息不完整，本次未发送\',\r\n        preflight_failed: \'发送前检查失败，本次未发送\',\r\n        send_failed: \'发送调用失败，尚未确认送达\',\r\n        delivery_unknown: \'发送结果未知，等待确认\',\r\n        postflight_history_partial: \'发送后回读：历史消息不完整\',\r\n        postflight_failed: \'发送后回读失败\',\r\n        message_not_observed: \'已调用发送，回读尚未找到对应消息\',\r\n      }\r\n      const detail = details[reason] || reason || (message.deliveryError ? \'投递异常\' : \'\')\r\n      if ([\'delivery_unknown\', \'postflight_history_partial\', \'postflight_failed\', \'message_not_observed\'].includes(reason)) return { id: \'waiting\', label: \'待回读\', state: \'warning\', detail }\r\n      if (reason === \'preflight_failed\' || reason === \'preflight_history_partial\') return { id: \'failed\', label: \'发送受阻\', state: \'error\', detail }\r\n      if (message.deliveryError || reason === \'send_failed\') return { id: \'failed\', label: \'投递异常\', state: \'error\', detail }\r\n      return { id: \'queued\', label: \'待发送\', state: \'ongoing\', detail }\r\n    }\r\n    const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }\r\n    const observerCss = `\r\n      [data-dingtalk-observer] :is(button, input, select, textarea, summary, [tabindex]):focus-visible {\r\n        outline: 2px solid var(--dsw-alias-brand-primary, #4d6bfe) !important;\r\n        outline-offset: 2px !important;\r\n      }\r\n      @media (max-width: 960px) {\r\n        [data-dingtalk-observer] .observer-main { padding: 16px !important; }\r\n        [data-dingtalk-observer] .observer-topics-layout { display: grid !important; grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr); }\r\n        [data-dingtalk-observer] .observer-topic-list { max-width: none !important; }\r\n        [data-dingtalk-observer] .observer-task-board { grid-template-columns: repeat(2, minmax(280px, 1fr)) !important; }\r\n      }\r\n      @media (max-width: 720px) {\r\n        [data-dingtalk-observer] .observer-main { padding: 12px !important; }\r\n        [data-dingtalk-observer] .observer-topics-layout,\r\n        [data-dingtalk-observer] .observer-task-board { grid-template-columns: minmax(0, 1fr) !important; }\r\n        [data-dingtalk-observer] .observer-topic-detail { min-height: 320px !important; }\r\n        [data-dingtalk-observer] .observer-toolbar { align-items: stretch !important; }\r\n      }\r\n    `\r\n    const pill = (tone) => ({ display: \'inline-flex\', alignItems: \'center\', borderRadius: 999, padding: `${ui.space1}px ${ui.space2}px`, fontSize: ui.textSm, color: tone, background: `color-mix(in srgb, ${tone} 12%, transparent)` })\r\n    const card = { border: `1px solid ${colors.border}`, borderRadius: ui.radiusMd, background: colors.cardSurface, padding: ui.space4 }\r\n    const tableFrame = { border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, overflow: \'hidden\' }\r\n    const tableHeadCell = { height: 42, boxSizing: \'border-box\', padding: `0 ${ui.space4}px`, color: colors.muted, fontSize: ui.textSm, fontWeight: 600, verticalAlign: \'middle\' }\r\n    const tableBodyCell = { padding: `${ui.space3}px ${ui.space4}px`, borderTop: `1px solid ${colors.border}`, fontSize: ui.textMd, lineHeight: 1.55, verticalAlign: \'middle\' }\r\n    const tableBodyContent = { display: \'-webkit-box\', WebkitLineClamp: 2, WebkitBoxOrient: \'vertical\', overflow: \'hidden\', overflowWrap: \'anywhere\' }\r\n    const clampTableContent = (...children) => React.createElement(\'div\', { style: tableBodyContent }, ...children)\r\n    const singleLineTableContent = (...children) => React.createElement(\'div\', { style: { overflow: \'hidden\', textOverflow: \'ellipsis\', whiteSpace: \'nowrap\' } }, ...children)\r\n    const tableFooter = { minHeight: 48, boxSizing: \'border-box\', display: \'flex\', justifyContent: \'flex-end\', alignItems: \'center\', gap: 8, padding: \'8px 12px\', borderTop: `1px solid ${colors.border}`, background: colors.surface2 }\r\n    const toolbar = { minHeight: 48, boxSizing: \'border-box\', display: \'flex\', alignItems: \'center\', justifyContent: \'space-between\', gap: 12, padding: \'8px 12px\', borderBottom: `1px solid ${colors.border}`, background: colors.cardSurface }\r\n    const navigationTabStyle = (selected, { paddingBottom = 12 } = {}) => ({ position: \'relative\', boxSizing: \'border-box\', border: 0, borderBottom: selected ? `2px solid ${colors.accent}` : \'2px solid transparent\', borderRadius: 0, padding: `0 0 ${paddingBottom}px`, cursor: \'pointer\', font: \'inherit\', fontSize: ui.textMd, fontWeight: 500, lineHeight: \'20px\', color: selected ? colors.accent : colors.muted, background: \'transparent\', whiteSpace: \'nowrap\' })\r\n    const statusTone = {\r\n      done: \'var(--dsw-alias-state-success-primary, #248a3d)\',\r\n      warning: \'var(--dsw-alias-state-warn-primary, #a56500)\',\r\n      ongoing: \'var(--dsw-alias-brand-primary, #4d6bfe)\',\r\n      error: \'var(--dsw-alias-state-error-primary, #c33)\'\r\n    }\r\n    const CheckpointDoneIcon = ({ size = 12 }) => React.createElement(\'svg\', { width: size, height: size, viewBox: \'0 0 16 16\', fill: \'none\', stroke: \'currentColor\', strokeWidth: 1.5, strokeLinecap: \'round\', strokeLinejoin: \'round\', \'aria-hidden\': true }, React.createElement(\'circle\', { cx: 8, cy: 8, r: 6.25 }), React.createElement(\'path\', { d: \'M5 8.1 7.05 10 11.2 5.9\' }))\r\n    const statusTag = (label, state, { borderless = false, fontSize = 11, fontWeight = 500 } = {}) => {\r\n      const tone = statusTone[state] || colors.muted\r\n      return React'... 78070 more characters,
+    expected: /checkpointDuration\(checkpoint, currentCheckpointEvents, Date\.now\(\)\)/,
+    operator: 'match',
+    diff: 'simple'
+  }

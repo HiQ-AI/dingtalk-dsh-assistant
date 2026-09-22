@@ -12,6 +12,7 @@ import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { taskReportReceipt } from '../packages/dingtalk-dsh-assistant/task-reports.js'
 import { stableId } from '../packages/dingtalk-dsh-assistant/topic-model.js'
 import { createTaskReportStepGate } from '../packages/dingtalk-dsh-assistant/task-report-step-gate.js'
+import { createTaskPermits, createTaskPermitStepGate } from '../packages/dingtalk-dsh-assistant/task-permits.js'
 import { installFakeLlm } from '../packages/dingtalk-dsh-assistant/fake-llm.js'
 
 const requireGoal = createRequire(import.meta.resolve('@deepseek-ai/dsh-goal'))
@@ -140,4 +141,38 @@ test('真实AgentLoop拒绝step并回填Inbox不会空转；结果通知只放�
   assert.equal(agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.id === 'resolution-1').length, 1)
   assert.equal(agent.status, 'idle')
   assert.ok(checks <= 3, '阻塞后的新step最多一次拒绝，不能无限turn')
+})
+
+test('真实AgentLoop的协调结果不能绕过执行许可；A让出后B先执行，A重获才续步', async t => {
+  const ctx = new Context()
+  new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
+  new SystemPrompt(ctx, { includeRuntimeContext: false }); new LlmRuntime(ctx); installFakeLlm(ctx)
+  ctx.provide('tools'); ctx.set('tools', {})
+  const loop = new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+  const a = loop.create('permit-A', { provider: 'fake-resident', model: 'fixture' })
+  const b = loop.create('permit-B', { provider: 'fake-resident', model: 'fixture' })
+  t.after(() => ctx.fiber.dispose())
+  const permits = createTaskPermits({ limit: () => 1 })
+  ctx.on('agent/pre-step', createTaskPermitStepGate(agent => permits.has(agent.id)))
+  ctx.on('agent/pre-step', createTaskReportStepGate({ isBlocked: () => true, isResolutionMessage: (_agent, message) => message.source?.kind === 'coordinator' }))
+  const message = id => ({ ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: '报告处理结果' }] }), id })
+  const first = permits.request(a.id)
+  permits.request(b.id)
+  permits.suspend(a.id)
+  a.steer(message('resolution-a'))
+  await a.whenIdle()
+  assert.equal(a.session.snapshotEvents().filter(event => event.type === 'assistant/message').length, 0)
+  assert.equal(a.inbox.nextStep[0].id, 'resolution-a')
+  permits.release(first)
+  assert.equal(permits.request(a.id), undefined)
+  const second = permits.request(b.id)
+  b.steer(message('resolution-b')); await b.whenIdle()
+  assert.equal(b.session.snapshotEvents().filter(event => event.type === 'assistant/message').length, 1)
+  assert.equal(a.session.snapshotEvents().filter(event => event.type === 'assistant/message').length, 0)
+  permits.release(second)
+  assert.ok(permits.request(a.id))
+  a.steer(message('permit-a-restored')); await a.whenIdle()
+  assert.equal(a.session.snapshotEvents().filter(event => event.type === 'assistant/message').length, 1)
+  assert.equal(a.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.id === 'resolution-a').length, 1)
+  assert.deepEqual(permits.snapshot().holders, [a.id])
 })

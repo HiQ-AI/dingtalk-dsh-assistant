@@ -25,11 +25,11 @@ const patch = [
   { id: 'llm-deepseek', disabled: true }, { id: 'llm-pi-ai', disabled: true },
   { id: 'agent-default-model', config: { provider: 'fake-resident', model: 'fake' } },
   { id: 'session-persistence-jsonl', config: { root: path.join(home, 'sessions'), compression: 'none', packChunks: false } },
+  { id: 'storage-json', config: { root: path.join(home, 'data') } },
+  { id: 'storage-domain', config: { backend: 'json' } },
   { insert: [
+    { id: 'subagent-model-selection-settings', name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings', config: { enabled: false } },
     { id: 'agent-presets', name: '@deepseek-ai/dsh-agent-presets', config: { default: 'standard', roots: [{ path: path.join(dshPackage, 'config/agent-presets'), trust: 'system' }], includeUserRoot: false } },
-    { id: 'storage', name: '@deepseek-ai/dsh-storage' },
-    { id: 'storage-json', name: '@deepseek-ai/dsh-storage-json', config: { root: path.join(home, 'data') } },
-    { id: 'storage-domain', name: '@deepseek-ai/dsh-storage-domain', config: { backend: 'json' } },
     { id: 'topic-resident', name: pathToFileURL(path.join(root, 'packages/dingtalk-dsh-assistant/resident.js')).href, config: { host: '127.0.0.1', port, fakeModel: true, testApiEnabled: true, agentWorkspaceDir: runDir, supervisorIntervalMs: 100, groups: [], dws: { enabled: false, writesAuthorized: false, executable: process.execPath, profile: 'fake-e2e-no-dws' } } },
   ] },
 ]
@@ -85,6 +85,11 @@ try {
   assert.ok(task.checkpoints.every((item) => item.coordinatorDecision === 'acknowledge'))
   assert.equal(task.result.inputVersion, task.inputVersion)
   assert.equal(task.result.runSequence, task.runSequence)
+  assert.equal(task.contractVersion, 2)
+  assert.equal(task.outcome, 'succeeded')
+  assert.equal(task.result.planRevision, task.plan.revision)
+  assert.ok(task.result.criterionReviews.every(item => item.verdict === 'pass'))
+  assert.ok(task.checkpoints.filter(item => item.kind === 'stage-completed').every(item => item.stageOutput.evidenceRefs.length > 0))
   assert.equal(task.topicRefs.length, 1)
   assert.equal(task.messageHistory, undefined)
   const notified = await until(() => request('/state/groups?groupId=topic-e2e-group'), (item) => item.outbox.some((outbound) => outbound.text === `coordinated:${task.taskId}`), 'task_notification')
@@ -104,7 +109,7 @@ try {
       if (event.type === 'tool/call') toolCounts[event.data.name] = (toolCounts[event.data.name] ?? 0) + 1
     }
   }
-  for (const name of ['group_topic_route_submit', 'group_decision_submit', 'submit_task_checkpoint', 'submit_task_result', 'group_task_review_submit', 'group_reply_submit']) assert.ok(toolCounts[name] > 0, `native_tool_call_missing:${name}`)
+  for (const name of ['group_topic_route_submit', 'group_decision_submit', 'task_plan_prepare', 'task_artifact_register', 'submit_task_checkpoint', 'submit_task_result', 'group_task_review_submit']) assert.ok(toolCounts[name] > 0, `native_tool_call_missing:${name}`)
   const evidence = { status: 'PASS', dshVersion: JSON.parse(await readFile(path.join(dshPackage, 'package.json'), 'utf8')).version, health, topics: durable.topics.length, outbox: notified.outbox.length, toolCounts, task: { state: task.state, inputVersion: task.inputVersion, runSequence: task.runSequence, checkpoints: task.checkpoints.map((item) => ({ kind: item.kind, remainingItems: item.remainingItems.length, coordinatorDecision: item.coordinatorDecision })), duplicateRequestTaskCount: 1, resultStatus: task.result.status }, durableDecisions: durable.topics.map((topic) => ({ topicId: topic.topicId, revision: topic.revision, processedRevision: topic.processedRevision, status: topic.decisions[0].status })), runDir }
   await writeFile(path.join(runDir, 'evidence.json'), JSON.stringify(evidence, null, 2))
   console.log(JSON.stringify(evidence))

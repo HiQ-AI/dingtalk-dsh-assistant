@@ -2,6 +2,7 @@ import { checkForUpdates } from './version-check.js'
 import { z } from 'zod'
 import { taskContextImpactFields } from './decision.js'
 import { isPendingDecision } from './topic-model.js'
+import { taskBoardProgress } from './task-progress.js'
 
 const WEB_ORIGINS = new Set(['http://127.0.0.1:3080', 'http://localhost:3080'])
 
@@ -147,7 +148,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 200, { ...context, topic: { ...topicSummary(context.topic), summary: context.topic.summary, openQuestions: context.topic.openQuestions } })
     } catch (error) { return send(response, 400, { error: error.message }) }
   }
-  if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, store.listTasks())
+  if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, store.listTasks().map(task => ({ ...task, workflowProgress: taskBoardProgress(task) })))
   if (request.method === 'GET' && url.pathname === '/state/task-timings') return send(response, 200, store.listTaskTimings())
   if (request.method === 'GET' && url.pathname === '/state/performance') return send(response, 200, store.listPerformance(Object.fromEntries(['day', 'sessionId', 'groupId', 'taskId', 'requestId', 'submissionId'].filter(key => url.searchParams.has(key)).map(key => [key, url.searchParams.get(key)]))))
   if (request.method === 'GET' && url.pathname === '/state/authorizations') return send(response, 200, store.listAuthorizationRequests())
@@ -160,6 +161,13 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/version') return send(response, 200, await checkForUpdatesImpl({ force: url.searchParams.get('refresh') === 'true' }))
   if (request.method === 'POST' && url.pathname === '/tasks') return submitWebTask(request, response, store, 'createTask')
   const reportRoute = /^\/tasks\/([^/]+)\/reports\/([^/]+)(\/retry)?$/u.exec(url.pathname)
+  const notificationRetry = request.method === 'POST' && /^\/tasks\/([^/]+)\/notifications\/([^/]+)\/retry$/u.exec(url.pathname)
+  if (notificationRetry) {
+    try {
+      await store.retryCompletionNotification({ taskId: decodeURIComponent(notificationRetry[1]), intentId: decodeURIComponent(notificationRetry[2]) })
+      return send(response, 202, { received: true })
+    } catch (error) { return send(response, 409, { error: error.message }) }
+  }
   if (reportRoute && (request.method === 'GET' && !reportRoute[3] || request.method === 'POST' && reportRoute[3])) {
     try {
       // 此操作无 body 参数；身份仅由路径确定，禁止 body 覆盖 task/submission。
@@ -170,6 +178,14 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const status = /^task_report_not_found(:|$)/u.test(error.message) ? 404 : /^task_report_retry_(stale|requires_failed)(:|$)/u.test(error.message) ? 409 : residentErrorStatus(error)
       return send(response, status, { error: error.message })
     }
+  }
+  const operationRetry = request.method === 'POST' && /^\/config\/groups\/([^/]+)\/topics\/([^/]+)\/decisions\/([^/]+)\/operations\/([^/]+)\/retry$/u.exec(url.pathname)
+  if (operationRetry) {
+    try {
+      const body = z.strictObject({ resolution: z.enum(['not-applied', 'applied']), reason: z.string().trim().min(1) }).parse(await readJson(request))
+      const value = await store.retryDecisionOperation({ ...body, groupId: decodeURIComponent(operationRetry[1]), topicId: decodeURIComponent(operationRetry[2]), decisionId: decodeURIComponent(operationRetry[3]), operationId: decodeURIComponent(operationRetry[4]) })
+      return send(response, 202, value)
+    } catch (error) { return send(response, error instanceof z.ZodError ? 400 : 409, { error: error.message }) }
   }
   const coordinationRetry = request.method === 'POST' ? /^\/config\/groups\/([^/]+)\/coordination\/([^/]+)\/retry$/u.exec(url.pathname) : null
   if (coordinationRetry) {

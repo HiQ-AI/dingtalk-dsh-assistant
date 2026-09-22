@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { acceptedTaskStageOutputs, taskOutcomeLabel } from './task-progress.js'
 
 export const TASK_SHEET_SYNC_INTERVAL_MS = 180_000
 export const TASK_SHEET_COLUMNS = ['任务名称', '来源群', '发起人', '当前状态', '当前阶段', '已完成 / 总阶段', '最近进展', '等待原因', '执行结果', '创建时间', '更新时间', '本轮开始时间', '执行轮次', '任务 ID']
@@ -13,6 +14,11 @@ const current = (task, value) => value && value.inputVersion === task.inputVersi
 const formatTime = (value) => Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium', hour12: false }).format(new Date(value)) : ''
 
 export function taskStageProjection(task) {
+  if (task.plan) {
+    const completedIds = new Set(acceptedTaskStageOutputs(task).map(checkpoint => checkpoint.stageOutput.stageId))
+    const stages = task.plan.stages
+    return { currentStage: task.state === 'completed' ? '' : limit(stages.find(stage => !completedIds.has(stage.stageId))?.title), progress: `${completedIds.size} / ${stages.length}`, recentProgress: limit((task.checkpoints ?? []).filter(item => current(task, item)).at(-1)?.summary) }
+  }
   const checkpoints = (task.checkpoints ?? []).filter((item) => current(task, item))
   const planIndex = checkpoints.findLastIndex((item) => item.kind === 'plan-confirmed' && ['acknowledge', 'guidance'].includes(item.coordinatorDecision))
   if (planIndex < 0) return { currentStage: '', progress: '未制定计划', recentProgress: limit(checkpoints.at(-1)?.summary) }
@@ -21,7 +27,7 @@ export function taskStageProjection(task) {
   const latest = checkpoints.at(-1)
   const remaining = latest?.remainingItems ?? stages
   const remainingSet = new Set(remaining.filter((item) => stages.includes(item)))
-  const completed = task.state === 'completed' ? stages.length : stages.filter((item) => !remainingSet.has(item)).length
+  const completed = stages.filter((item) => !remainingSet.has(item)).length
   return {
     currentStage: task.state === 'completed' ? '' : limit(stages.find((item) => remainingSet.has(item))),
     progress: stages.length ? `${completed} / ${stages.length}` : '未制定计划',
@@ -39,7 +45,7 @@ export function buildTaskSheetSnapshot({ tasks, groups, snapshotAt = new Date().
     const stage = taskStageProjection(task)
     const result = current(task, task.result) ? task.result : undefined
     return [
-      limit(task.title || task.objective, 160), limit(groupsById.get(task.groupId)?.name || task.groupId, 120), limit(task.requesterName, 80), stateLabel[task.state] ?? task.state,
+      limit(task.title || task.objective, 160), limit(groupsById.get(task.groupId)?.name || task.groupId, 120), limit(task.requesterName, 80), taskOutcomeLabel(task) ?? stateLabel[task.state] ?? task.state,
       stage.currentStage, stage.progress, stage.recentProgress, limit(task.waitingReason), limit(result?.summary), formatTime(task.createdAt), formatTime(task.updatedAt), formatTime(task.runStartedAt), String(task.runSequence ?? 1), task.taskId,
     ]
   })

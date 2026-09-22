@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildTaskSheetSnapshot, createTaskSheetSyncService, snapshotToCsv, TASK_SHEET_SYNC_INTERVAL_MS } from '../packages/dingtalk-dsh-assistant/task-sheet-sync.js'
+import { buildTaskSheetSnapshot, taskStageProjection, createTaskSheetSyncService, snapshotToCsv, TASK_SHEET_SYNC_INTERVAL_MS } from '../packages/dingtalk-dsh-assistant/task-sheet-sync.js'
+import { taskPlanFixture, stageOutputFixture } from './fixtures/task-plan.js'
 
 const task = (patch = {}) => ({ taskId: 'task-1', groupId: 'g1', inputVersion: 1, runSequence: 1, title: '核验任务', objective: '完成核验', state: 'running', requesterName: '张三', createdAt: '2026-09-14T01:00:00Z', updatedAt: '2026-09-14T02:00:00Z', runStartedAt: '2026-09-14T01:10:00Z', stageTasks: ['准备', '验证'], checkpoints: [{ checkpointId: 'p1', kind: 'plan-confirmed', inputVersion: 1, runSequence: 1, coordinatorDecision: 'acknowledge', remainingItems: ['准备', '验证'], summary: '计划确认' }, { checkpointId: 'p2', kind: 'stage-completed', inputVersion: 1, runSequence: 1, coordinatorDecision: 'acknowledge', remainingItems: ['验证'], summary: '准备完成' }], ...patch })
 
@@ -56,4 +57,15 @@ test('并发触发单飞且定时周期固定为三分钟', async () => {
   assert.deepEqual(skipped, { state: 'skipped', reason: 'task_sheet_sync_already_running' })
   assert.equal(interval, 180000)
   release()
+})
+
+test('任务表按已接受结构化产出计数，取消失败和历史未知不会显示全成功', () => {
+  const plan = taskPlanFixture({ titles: ['准备', '核验'] }), stage = stageOutputFixture(plan)
+  const original = task({ plan, checkpoints: [{ checkpointId: 'v2', kind: 'stage-completed', inputVersion: 1, runSequence: 1, coordinatorDecision: 'acknowledge', stageOutput: stage.output, summary: '准备完成', remainingItems: [] }] })
+  assert.deepEqual(taskStageProjection(original), { currentStage: '核验', progress: '1 / 2', recentProgress: '准备完成' })
+  const snapshot = buildTaskSheetSnapshot({ tasks: [task({ ...original, taskId: 'cancelled', state: 'completed', outcome: 'cancelled' }), task({ ...original, taskId: 'failed', state: 'completed', outcome: 'failed' }), task({ ...original, taskId: 'unknown', state: 'completed' })], groups: [] })
+  assert.deepEqual(snapshot.values.slice(2).map(row => row[3]), ['已取消', '已失败', '历史结果未知'])
+  assert.ok(snapshot.values.slice(2).every(row => row[5] === '1 / 2'))
+  const legacy = task({ state: 'completed' })
+  assert.equal(taskStageProjection(legacy).progress, '1 / 2')
 })

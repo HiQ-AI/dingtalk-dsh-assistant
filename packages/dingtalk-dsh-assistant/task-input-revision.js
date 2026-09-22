@@ -1,4 +1,5 @@
 import { stableId } from './topic-model.js'
+import { acceptedTaskStageOutputs } from './task-progress.js'
 
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right)
 export class TaskRevisionError extends Error {}
@@ -47,10 +48,14 @@ export function reviseTaskProgress(task, { objective = task.objective, acceptanc
     if (!impactEvidence && (objective !== task.objective || !same(acceptanceCriteria, task.acceptanceCriteria))) for (const stage of stages) affected.add(stage.stageId)
     const nextIds = new Set(nextStages.map(stage => stage.stageId))
     for (const stage of stages) if (!nextIds.has(stage.stageId)) affected.add(stage.stageId)
+    // 结构化阶段按前序依赖排序；上游事实失效时依赖其产物的下游一并失效。
+    for (const stage of task.plan?.stages ?? []) if (stage.dependsOn.some(id => affected.has(id))) affected.add(stage.stageId)
   }
   const retainedIds = new Set(stages.filter(stage => !affected.has(stage.stageId)).map(stage => stage.stageId))
   const retainedTitles = new Set(stages.filter(stage => retainedIds.has(stage.stageId)).map(stage => stage.title))
+  const validOutputs = task.plan ? new Set(acceptedTaskStageOutputs(task).map(item => item.checkpointId)) : undefined
   const checkpoints = (task.checkpoints ?? []).filter(checkpoint => ['acknowledge', 'guidance'].includes(checkpoint.coordinatorDecision)
+    && (!validOutputs || checkpoint.kind !== 'stage-completed' || validOutputs.has(checkpoint.checkpointId))
     && checkpoint.runSequence === task.runSequence && (!replan || checkpoint.kind === 'stage-completed'
       && checkpoint.completedItems?.length > 0 && (!checkpoint.stageId || retainedIds.has(checkpoint.stageId))
       && (!checkpoint.stageTask || !stages.some(stage => stage.title === checkpoint.stageTask) || retainedTitles.has(checkpoint.stageTask))

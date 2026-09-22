@@ -1,0 +1,23 @@
+{
+  "findings": [
+    {
+      "category": "violation",
+      "file": "DESIGN.md",
+      "line": null,
+      "message": "A product/admin project has no maintained DESIGN.md.",
+      "remediation": "Create DESIGN.md or document the maintained equivalent in project policy.",
+      "ruleId": "contract.design-missing",
+      "severity": "error"
+    }
+  ],
+  "mode": "strict",
+  "projectRoot": "D:\\project\\dingtalk-dsh-workflow-orchestration",
+  "schemaVersion": 1,
+  "summary": {
+    "errors": 1,
+    "total": 1,
+    "unresolved": 0,
+    "violations": 1,
+    "warnings": 0
+  }
+}

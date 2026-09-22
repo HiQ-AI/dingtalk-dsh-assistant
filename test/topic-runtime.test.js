@@ -34,6 +34,7 @@ async function setup(t, options = {}) {
     appendOutbox: async (outbound) => { await options.beforeAppend?.(); return store.appendOutbox(outbound) }, cancelTask() {}, onError(_groupId, error) { errors.push(error); options.onError?.(error) },
     async applyAction(groupId, action, operation) {
       applications.push(operation.operationId)
+      await options.beforeAction?.(operation)
       if (action.kind === 'new-task') await store.createTask({ groupId, taskId: operation.taskId, operationId: operation.operationId, ...action })
       else await store.applyTaskOperation({ taskId: action.taskId, operationId: operation.operationId, expectedInputVersion: action.inputVersion, expectedRunSequence: action.runSequence, transform: (task) => ({ ...task, inputVersion: task.inputVersion + 1, topicRefs: action.topicRefs }) })
       await options.afterAction?.(operation)
@@ -637,6 +638,7 @@ test('已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox', asyn
   assert.equal(h.store.getTopic('g', request.topicId).decisions[0].status, 'failed')
   assert.equal(h.store.listTasks().length, 1)
   assert.equal(h.store.getGroup('g').outbox.length, 1)
+  await h.store.updateTopicDecision({ groupId: 'g', topicId: request.topicId, decisionId: request.requestId, patch: { nextRetryAt: new Date(0).toISOString() } })
   await h.coordinator.close(); await h.store.close()
   const reopened = await setup(t, { snapshot: h.snapshot })
   await reopened.coordinator.recover(); await reopened.coordinator.drain('g')
@@ -644,7 +646,7 @@ test('已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox', asyn
   assert.equal(reopened.store.getGroup('g').outbox.length, 1)
   assert.equal(reopened.store.getTopic('g', request.topicId).processedRevision, 1)
   assert.equal(reopened.store.getTopic('g', request.topicId).decisions[0].operations[0].status, 'applied')
-  assert.deepEqual(reopened.applications, h.applications)
+  assert.deepEqual(reopened.applications, [])
 })
 
 test('同revision拒绝后新请求跨重启稳定，共享消息不转授权且已发回复不重放', async t => {
@@ -1154,10 +1156,92 @@ test('未知回复请求不可用且不产生 Outbox', async (t) => {
 })
 
 
-test('已接受决策失败后到期自动恢复，无需新消息或重启', { timeout: 2_000 }, async (t) => {
+test('本地已知瞬时错误最多三次，跨重启保存预算并保持冲突保留', async t => {
+  const h = await setup(t, { beforeAction() { throw Object.assign(new Error('暂时不可写'), { code: 'storage_transient' }) } })
+  await ingest(h, 'retry-budget')
+  const request = (await route(h)).pendingDecisions[0]
+  const action = { kind: 'new-task', title: '核验', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: request.topicId, revision: 1 }] }
+  await h.call('group_decision_submit', submission(request, { actions: [action], reply: '收到' })); await h.coordinator.drain('g')
+  const saved = () => h.store.getTopic('g', request.topicId).decisions[0]
+  assert.equal(saved().attempt, 1); assert.ok(saved().nextRetryAt)
+  for (let i = 0; i < 2; i++) {
+    await h.store.updateTopicDecision({ groupId: 'g', topicId: request.topicId, decisionId: request.requestId, patch: { nextRetryAt: new Date(0).toISOString() } })
+    await h.coordinator.recover(); await h.coordinator.drain('g')
+  }
+  assert.equal(saved().status, 'blocked'); assert.equal(saved().attempt, 3)
+  assert.equal(h.applications.length, 3); assert.ok(h.store.getGroup('g').taskReservations.length)
+  await h.coordinator.close(); await h.store.close()
+  const reopened = await setup(t, { snapshot: h.snapshot })
+  await reopened.coordinator.recover(); await reopened.coordinator.drain('g')
+  assert.equal(reopened.applications.length, 0)
+  assert.equal(reopened.store.getTopic('g', request.topicId).decisions[0].attempt, 3)
+})
+
+test('未知错误停住，普通消息重试不解锁；显式原操作对账恢复', async t => {
+  let fail = true
+  const h = await setup(t, { beforeAction() { if (fail) throw new Error('unknown-effect') } })
+  await ingest(h, 'unknown')
+  const request = (await route(h)).pendingDecisions[0]
+  const action = { kind: 'new-task', title: '核验', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: request.topicId, revision: 1 }] }
+  await h.call('group_decision_submit', submission(request, { actions: [action], reply: '收到' })); await h.coordinator.drain('g')
+  const record = h.store.getTopic('g', request.topicId).decisions[0]
+  assert.equal(record.status, 'blocked')
+  await h.coordinator.retryMessage('g', 'unknown'); await h.coordinator.drain('g')
+  assert.equal(h.applications.length, 1)
+  const args = { groupId: 'g', topicId: request.topicId, decisionId: record.decisionId, operationId: record.operations[0].operationId, reason: '独立查询确认Task尚未创建' }
+  await assert.rejects(h.coordinator.retryOperation({ ...args, resolution: 'applied' }), /evidence_conflict/)
+  fail = false
+  await h.coordinator.retryOperation({ ...args, resolution: 'not-applied' }); await h.coordinator.drain('g')
+  assert.equal(h.store.getTopic('g', request.topicId).decisions[0].status, 'completed')
+  assert.equal(h.store.listTasks().length, 1)
+  assert.equal(new Set(h.applications).size, 1)
+})
+
+test('取消控制可越过已阻塞保留，普通上下文和进行中保留仍拒绝', async t => {
+  const h = await setup(t), { task } = await taskFixture(h)
+  const cancel = { kind: 'task-cancel', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, reason: '明确撤销' }
+  const first = await h.store.submitWebTaskInput({ groupId: 'g', requestId: 'cancel-first', text: '停止任务', action: cancel })
+  assert.equal(first.status, 'accepted')
+  assert.equal((await h.store.submitWebTaskInput({ groupId: 'g', requestId: 'cancel-busy', text: '停止任务', action: cancel })).status, 'task-busy')
+  await h.store.updateTopicDecision({ groupId: 'g', topicId: first.topicId, decisionId: first.record.decisionId, patch: { status: 'blocked' } })
+  assert.equal((await h.store.submitWebTaskInput({ groupId: 'g', requestId: 'context-busy', text: '继续核验', action: { ...cancel, kind: 'task-context', context: '继续核验' } })).status, 'task-busy')
+  const next = await h.store.submitWebTaskInput({ groupId: 'g', requestId: 'cancel-again', text: '明确停止', action: cancel })
+  assert.equal(next.status, 'accepted')
+  assert.equal(h.store.getTopic('g', first.topicId).decisions[0].status, 'blocked')
+  assert.equal(h.store.getGroup('g').taskReservations.filter(item => item.taskId === task.taskId).length, 2)
+})
+
+test('部分成功时不能用已应用动作或Outbox的对账解锁另一未知操作', async t => {
+  let fail = true
+  const h = await setup(t, { beforeAction(operation) { if (operation.actionIndex === 1 && fail) throw new Error('second-operation-unknown') } })
+  await ingest(h, 'two-actions')
+  const request = (await route(h)).pendingDecisions[0]
+  const actions = ['A', 'B'].map(title => ({ kind: 'new-task', title, objective: title, acceptanceCriteria: ['证据'], topicRefs: [{ topicId: request.topicId, revision: 1 }] }))
+  assert.equal((await h.call('group_decision_submit', submission(request, { actions, reply: '核验两项' }))).status, 'accepted')
+  await h.coordinator.drain('g')
+  const record = h.store.getTopic('g', request.topicId).decisions[0]
+  assert.equal(record.status, 'blocked')
+  assert.equal(record.operations[0].status, 'applied'); assert.equal(record.operations[1].status, 'blocked')
+  assert.equal(record.failureOperationId, record.operations[1].operationId)
+  const args = { groupId: 'g', topicId: request.topicId, decisionId: record.decisionId, resolution: 'applied', reason: '第一个动作已经应用' }
+  for (const operationId of [record.operations[0].operationId, record.outboundId]) {
+    await assert.rejects(h.coordinator.retryOperation({ ...args, operationId }), /wrong_failed_operation/)
+  }
+  assert.equal(h.applications.length, 2)
+  assert.equal(h.store.listTasks().length, 1)
+  fail = false
+  await h.coordinator.retryOperation({ ...args, operationId: record.operations[1].operationId, resolution: 'not-applied', reason: '独立核对第二项未创建' })
+  await h.coordinator.drain('g')
+  assert.equal(h.store.listTasks().length, 2)
+  assert.equal(h.applications.filter(id => id === record.operations[0].operationId).length, 1)
+})
+
+test('已接受决策已落盘后到期对账完成，不重复执行动作', { timeout: 2_000 }, async (t) => {
   let attempt = 0, recovered
   const secondAttempt = new Promise((resolve) => { recovered = resolve })
-  const h = await setup(t, { retryDelayMs: 10, afterAction() { attempt += 1; if (attempt === 1) throw new Error('temporary_action_failure'); recovered() } })
+  const h = await setup(t, { retryDelayMs: 10, afterAction() { attempt += 1; if (attempt === 1) throw new Error('temporary_action_failure') } })
+  const completeDecision = h.store.completeTopicDecision
+  h.store.completeTopicDecision = async args => { const result = await completeDecision(args); recovered(); return result }
   await ingest(h, 'a', { text: '@助理 请查原因' })
   const request = (await route(h)).pendingDecisions[0]
   const action = { kind: 'new-task', title: '查原因', objective: '查原因', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: request.topicId, revision: 1 }] }
@@ -1169,7 +1253,7 @@ test('已接受决策失败后到期自动恢复，无需新消息或重启', { 
   assert.equal(h.store.getTopic('g', request.topicId).decisions[0].status, 'completed')
   assert.equal(h.store.listTasks().length, 1)
   assert.equal(h.store.getGroup('g').outbox.length, 1)
-  assert.equal(h.applications.length, 2)
+  assert.equal(h.applications.length, 1)
   assert.equal(new Set(h.applications).size, 1)
 })
 
@@ -1264,6 +1348,7 @@ test('精确消息重试清除失败等待且不重放已完成动作', async (t
   const action = { kind: 'new-task', title: '核验', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: request.topicId, revision: 1 }] }
   await h.call('group_decision_submit', submission(request, { actions: [action], reply: '收到' })); await h.coordinator.drain('g')
   fail = false
+  await h.store.updateTopicDecision({ groupId: 'g', topicId: request.topicId, decisionId: request.requestId, patch: { nextRetryAt: new Date(0).toISOString() } })
   await h.coordinator.retryMessage('g', 'a'); await h.coordinator.drain('g')
   assert.equal(h.store.getTopic('g', request.topicId).decisions[0].status, 'completed')
   assert.equal(h.store.listTasks().length, 1)
@@ -1304,7 +1389,7 @@ test('归类快照只携带当前事实，失败决策按需查询可见精简�
   assert.equal((await h.call('group_decision_submit', submission(request, { reply: '答复' }))).status, 'accepted')
   await h.coordinator.drain('g')
   const context = await h.call('group_topic_context_get', { topicId: request.topicId, revision: request.revision })
-  assert.equal(context.topic.processing.status, 'failed')
+  assert.equal(context.topic.processing.status, 'blocked')
   assert.equal(context.topic.processing.error, 'delivery-store-failure')
   assert.equal(context.topic.processing.appliedOperations, 0)
   assert.equal(context.topic.processing.totalOperations, 0)
@@ -1347,6 +1432,27 @@ function visibleTool(session, name, result) {
   session.append('assistant/message', { turn: 1, step: 1, message: { id: `assistant-${id}`, role: 'assistant', source: { kind: 'model', provider: 'fixture', model: 'fixture' }, content: [{ type: 'tool-call', id, name, arguments: '{}' }] } }, { surfaceOp: 'append' })
   session.append('tool/result', { turn: 1, step: 1, message: { id: `result-${id}`, role: 'user', source: { kind: 'tool', callId: id }, content: [{ type: 'tool-result', toolCallId: id, content: [{ type: 'text', text: JSON.stringify(result) }] }] } }, { surfaceOp: 'append' })
 }
+
+test('材料清单从当前surface分页形成，跨请求与压缩摘要不冒充正文', async t => {
+  const session = Session.create('manifest-session'), h = await setup(t, { session }), { task } = await taskFixture(h)
+  const pending = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '材料'.repeat(3000) }).catch(() => {})
+  const requestId = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求').requestId
+  const manifest = () => h.call('group_task_review_context_get', { requestId, section: 'manifest' })
+  assert.equal((await manifest()).entries.find(item => item.id === 'value').complete, false)
+  let offset = 0
+  do {
+    const page = await h.call('group_task_review_context_get', { requestId, section: 'value', offset })
+    visibleTool(session, 'group_task_review_context_get', { ...page, requestId: 'other-request' })
+    assert.equal((await manifest()).entries.find(item => item.id === 'value').complete, false)
+    visibleTool(session, 'group_task_review_context_get', page)
+    offset = page.nextOffset
+    if (!page.hasMore) break
+  } while (true)
+  assert.equal((await manifest()).entries.find(item => item.id === 'value').complete, true)
+  compactSurface(session)
+  assert.equal((await manifest()).entries.find(item => item.id === 'value').complete, false)
+  await h.coordinator.close(); await pending
+})
 
 test('审阅先落Task执行事件，重启同报告换提交时间仍恢复原response且不再次注入', async t => {
   const h = await setup(t), { task } = await taskFixture(h)

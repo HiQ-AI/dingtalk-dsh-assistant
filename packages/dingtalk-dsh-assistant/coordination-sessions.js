@@ -20,7 +20,7 @@ export function coordinationTools(role) {
 }
 
 export function createCoordinationSessions({ create, isCurrent, onError }) {
-  const entries = new Map(), bySession = new Map(), tails = new Map(), queues = new Map(), active = new Map(), pending = new Set()
+  const entries = new Map(), bySession = new Map(), tails = new Map(), queues = new Map(), active = new Map(), pending = new Set(), routeBursts = new Map()
   let closed = false
   const keyOf = request => `${request.groupId}:${request.requestId}`
   async function obtain(request) {
@@ -50,6 +50,12 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
     return entry
   }
   function finish(request, { cancel = false } = {}) {
+    if (cancel) {
+      const queue = queues.get(request.groupId)
+      for (let index = (queue?.length ?? 0) - 1; index >= 0; index--) {
+        if (keyOf(queue[index].request) === keyOf(request)) queue.splice(index, 1)[0].reject(new Error('coordination_request_inactive'))
+      }
+    }
     const entry = entries.get(keyOf(request))
     if (!entry) return
     if (!entry.active) { if (cancel) entry.ready.then(() => entry.handle.agent.cancel({ kind: 'user' })).catch(() => {}); return }
@@ -76,22 +82,28 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
       queue.splice(index < 0 ? queue.length : index, 0, job)
       // 入站撤销/变更在当前 step 落稳后优先；不取消正在持久化的提交工具结果。
       const running = active.get(groupId)
-      if (running && running.role !== 'route') running.yieldRequested = true
+      if (running && running.role !== 'route' && !running.fairnessTurn) running.yieldRequested = true
     } else queue.push(job)
     if (!tails.has(groupId)) {
       const run = Promise.resolve().then(async () => {
         while (queue.length) {
-          const { request, message, resolve, reject, queuedAt } = queue.shift()
+          const nonRouteIndex = queue.findIndex(item => coordinationRole(item.request) !== 'route')
+          const fairnessTurn = (routeBursts.get(groupId) ?? 0) >= 2 && nonRouteIndex >= 0
+          const { request, message, resolve, reject, queuedAt } = queue.splice(fairnessTurn ? nonRouteIndex : 0, 1)[0]
           let entry
           try {
             if (closed || !isCurrent(request)) throw new Error('coordination_request_inactive')
             entry = await obtain(request)
-            if (entry.role !== 'route' && queue.some(item => coordinationRole(item.request) === 'route')) {
+            if (closed || !entry.active || !isCurrent(request)) throw new Error('coordination_request_inactive')
+            if (!fairnessTurn && entry.role !== 'route' && queue.some(item => coordinationRole(item.request) === 'route')) {
               const index = queue.findIndex(item => coordinationRole(item.request) !== 'route')
               queue.splice(index < 0 ? queue.length : index, 0, { request, message, resolve, reject, queuedAt })
               continue
             }
             entry.yieldRequested = false
+            entry.fairnessTurn = fairnessTurn
+            const priorRouteBurst = routeBursts.get(groupId) ?? 0
+            routeBursts.set(groupId, entry.role === 'route' ? Math.min(2, priorRouteBurst + 1) : 0)
             let release
             const released = new Promise(done => { release = done })
             entry.release = release
@@ -100,7 +112,7 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
             const exists = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])].some(item => item.id === message.id)
               || agent.session.snapshotEvents().some(event => event.type === 'user/message' && event.data?.id === message.id)
             if (!exists) {
-              agent.session.append('dingtalk/coordination-dispatched', { requestId: request.requestId, queuedAt, dispatchedAt: Date.now() })
+              agent.session.append('dingtalk/coordination-dispatched', { requestId: request.requestId, queuedAt, dispatchedAt: Date.now(), role: entry.role, fairnessTurn, priorRouteBurst, queueDepth: queue.length })
               agent.steer(message)
             }
             resolve(agent)
@@ -120,6 +132,7 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
       closed = true
       for (const entry of entries.values()) finish(entry.request, { cancel: true })
       await Promise.allSettled([...tails.values(), ...pending])
+      routeBursts.clear()
     },
   }
 }
