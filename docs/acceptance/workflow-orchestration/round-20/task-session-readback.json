@@ -1,0 +1,69 @@
+{
+  "at": "2026-09-22T10:15:35.660Z",
+  "tasks": [
+    {
+      "taskId": "task-3d7e4224c76d9154a02fabb29017e2c4",
+      "state": "running",
+      "sessionExists": true,
+      "sessionEventsAfterRestart": 919,
+      "lastSessionEvent": "tool/call",
+      "lastSessionTime": 1790072120702,
+      "inputVersion": 1,
+      "runSequence": 1
+    },
+    {
+      "taskId": "task-1473097e5550f79f463a61aa4cbc70d4",
+      "state": "running",
+      "sessionExists": true,
+      "sessionEventsAfterRestart": 1500,
+      "lastSessionEvent": "turn/end",
+      "lastSessionTime": 1790072133890,
+      "inputVersion": 1,
+      "runSequence": 1
+    },
+    {
+      "taskId": "task-d8d91493224e68decab1193e45bf8195",
+      "state": "completed",
+      "sessionExists": true,
+      "sessionEventsAfterRestart": 1,
+      "lastSessionEvent": "session/end-seed",
+      "lastSessionTime": 1790072024512,
+      "inputVersion": 1,
+      "runSequence": 1
+    },
+    {
+      "taskId": "task-4ac87e9bd5710dd979c0004faf3cb95c",
+      "state": "running",
+      "sessionExists": true,
+      "sessionEventsAfterRestart": 1454,
+      "lastSessionEvent": "assistant/chunk",
+      "lastSessionTime": 1790072135501,
+      "inputVersion": 1,
+      "runSequence": 1
+    },
+    {
+      "taskId": "task-01b89f39-c0b5-4cf7-8ddd-568c85d5827e",
+      "state": "queued",
+      "sessionExists": false,
+      "sessionEventsAfterRestart": 0,
+      "inputVersion": 2,
+      "runSequence": 2
+    },
+    {
+      "taskId": "task-da8acd66-f95a-4ffe-ad83-b6770425b536",
+      "state": "queued",
+      "sessionExists": false,
+      "sessionEventsAfterRestart": 0,
+      "inputVersion": 2,
+      "runSequence": 10
+    },
+    {
+      "taskId": "task-add60fd5-7764-410f-9169-e1c0a5ba917a",
+      "state": "queued",
+      "sessionExists": false,
+      "sessionEventsAfterRestart": 0,
+      "inputVersion": 2,
+      "runSequence": 7
+    }
+  ]
+}

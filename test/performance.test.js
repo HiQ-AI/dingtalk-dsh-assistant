@@ -205,3 +205,72 @@ test('协调队列只采用真实入队和分派边界，同seq不重复，错�
   const [request] = coordinationCosts(rows).requests
   assert.equal(request.queueSamples, 2); assert.equal(request.queueMs, 800); assert.equal(request.missingQueueBoundaries, 2)
 })
+
+async function queuedPerformanceStore(beforePut = async () => {}) {
+  const snapshot = { tables: {}, global: null }, writes = []
+  let closed = false
+  const backend = new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
+    loadAll: async () => structuredClone(snapshot), close: async () => { closed = true },
+    async putRecord(table, key, value) {
+      writes.push(`${table}:${key}`)
+      await beforePut(table, key)
+      const records = snapshot.tables[table] ??= {}
+      records[key] = structuredClone(value)
+    },
+    async deleteRecord(table, key) { delete snapshot.tables[table][key] },
+  } } } }) } } }, { backend: 'performance-queue-test' })
+  const store = await openResidentStore(backend)
+  return { store, writes, snapshot, isClosed: () => closed }
+}
+
+test('原生Domain只排一个计量写，业务写越过其余会话且同会话事件合并持久化', async () => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const h = await queuedPerformanceStore(async (table, key) => {
+    if (key === 'performance:s1') { entered.resolve(); await release.promise }
+  })
+  const first = h.store.recordPerformanceEvent(input(1, 'assistant/message', 1))
+  await entered.promise
+  let settled = false
+  const batch = Array.from({ length: 30 }, (_, index) => h.store.recordPerformanceEvent(input(index + 1, 'assistant/message', index, { step: index }, { sessionId: 's2' })))
+  batch[0].then(() => { settled = true })
+  const other = h.store.recordPerformanceEvent(input(1, 'assistant/message', 1, {}, { sessionId: 's3' }))
+  const business = h.store.subscribe({ groupId: 'g', responsibility: '测试' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, false)
+  assert.deepEqual(h.writes.slice(1), ['scheduler:performance:s1'])
+  release.resolve()
+  await Promise.all([first, ...batch, other, business])
+  assert.deepEqual(h.writes.slice(1), ['scheduler:performance:s1', 'groups:g', 'scheduler:performance:s2', 'scheduler:performance:s3'])
+  assert.equal(h.store.listPerformance({ sessionId: 's2' }).rows[0].modelCalls, 30)
+  await h.store.close()
+})
+
+test('批次写失败不发布或丢失重试机会，后续session继续且关闭等待所有计量写', async () => {
+  let fail = true
+  const h = await queuedPerformanceStore(async (table, key) => {
+    if (key === 'performance:s1' && fail) { fail = false; throw new Error('disk-test-failure') }
+  })
+  const value = input(1, 'assistant/chunk', 1)
+  const failed = h.store.recordPerformanceEvent(value)
+  const sameBatch = h.store.recordPerformanceEvent(input(2, 'step/start', 2))
+  const nextSession = h.store.recordPerformanceEvent(input(1, 'step/start', 1, {}, { sessionId: 's3' }))
+  await Promise.all([assert.rejects(failed, /disk-test-failure/), assert.rejects(sameBatch, /disk-test-failure/), nextSession])
+  assert.equal(h.store.listPerformance({ sessionId: 's1' }).rows.length, 0)
+  assert.deepEqual(await h.store.recordPerformanceEvent(value), { created: true })
+  assert.deepEqual(await h.store.recordPerformanceEvent(value), { created: false })
+  const queued = h.store.recordPerformanceEvent(input(1, 'assistant/message', 1, {}, { sessionId: 's2' }))
+  const closed = h.store.close()
+  await assert.rejects(h.store.recordPerformanceEvent(input(2, 'step/start', 2)), /resident_store_closed/)
+  await Promise.all([queued, closed])
+  assert.equal(h.isClosed(), true)
+  assert.ok(h.snapshot.tables.scheduler['performance:s2'])
+})
+
+test('无新写的去重批次完成回调可立即追加事件，不留下悬空写入', async () => {
+  const h = await queuedPerformanceStore()
+  const value = input(1, 'assistant/message', 1)
+  await h.store.recordPerformanceEvent(value)
+  await h.store.recordPerformanceEvent(value).then(() => h.store.recordPerformanceEvent(input(2, 'assistant/message', 2, { step: 1 })))
+  assert.equal(h.store.listPerformance().rows[0].modelCalls, 2)
+  await h.store.close()
+})

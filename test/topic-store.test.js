@@ -532,3 +532,30 @@ test('新Outbox结果指纹通过真实domain schema保存且重开可查询', a
   assert.equal(reopened.getGroup('g').outbox[0].resultFingerprint, 'canonical-result-fingerprint')
   assert.deepEqual(reopened.getGroup('g').outbox[0].taskIds, ['task-example'])
 })
+
+test('重判原子门禁拒绝任何相关 Outbox、业务动作和未知进度', async () => {
+  for (const variant of ['outbound', 'source', 'decision', 'action', 'applied-ledger', 'progress', 'wrong-operation']) {
+    const { store } = await setup()
+    try {
+      await ingest(store, 'm')
+      const routed = await route(store, 'route', [['m', { newTopicKey: 'a', title: 'A' }]])
+      const topicId = routed.topicIdsByKey.a
+      await store.acceptTopicDecision(decision('d', topicId, 1))
+      const record = store.getTopic('g', topicId).decisions[0]
+      await store.updateTopicDecision({ groupId: 'g', topicId, decisionId: 'd', patch: { status: 'blocked', failureOperationId: record.outboundId, ...(variant === 'progress' ? { progress: { uncertain: true } } : {}) } })
+      if (['outbound', 'source', 'decision'].includes(variant)) await store.appendOutbox({ groupId: 'g', outboundId: variant === 'outbound' ? record.outboundId : 'other', sourceMessageId: variant === 'source' ? 'topic-decision:d' : 'other', ...(variant === 'decision' ? { decisionId: 'd' } : {}), text: '已记录发送意图' })
+      if (variant === 'applied-ledger') await store.createTask({ groupId: 'g', taskId: 'task-historical', operationId: 'd:action:0', topicRefs: [{ topicId, revision: 1 }], title: '旧任务', objective: '旧任务', acceptanceCriteria: ['完成'] })
+      if (variant === 'action') {
+        // 使用真实动作决策单独核验，不能把“尚未写 Task”误认为没有业务意图。
+        await ingest(store, 'action')
+        const second = await route(store, 'route2', [['action', { newTopicKey: 'b', title: 'B' }]])
+        const id = second.topicIdsByKey.b
+        await store.acceptTopicDecision(decision('action-d', id, 1, { decision: { basisMessageIds: ['action'], actions: [{ kind: 'new-task', title: 'A', objective: 'A', acceptanceCriteria: ['A'], topicRefs: [{ topicId: id, revision: 1 }] }], reply: '开始', replyReview: { kind: 'confirmation' } } }))
+        const action = store.getTopic('g', id).decisions[0]
+        await store.updateTopicDecision({ groupId: 'g', topicId: id, decisionId: action.decisionId, patch: { status: 'blocked', failureOperationId: action.outboundId } })
+        await assert.rejects(store.reconsiderBlockedTopicDecision({ groupId: 'g', topicId: id, decisionId: action.decisionId, operationId: action.outboundId, reason: '核对' }), /side_effect_or_unknown/)
+      } else await assert.rejects(store.reconsiderBlockedTopicDecision({ groupId: 'g', topicId, decisionId: 'd', operationId: variant === 'wrong-operation' ? 'wrong' : record.outboundId, reason: '核对' }), /side_effect_or_unknown|wrong_failed_operation/)
+      assert.equal(store.getTopic('g', topicId).decisions[0].status, 'blocked')
+    } finally { await store.close() }
+  }
+})

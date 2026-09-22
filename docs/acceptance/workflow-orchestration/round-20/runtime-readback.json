@@ -1,0 +1,181 @@
+{
+  "at": "2026-09-22T10:14:51.236Z",
+  "health": {
+    "status": "degraded",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 3,
+    "activityAudit": {
+      "total": 59,
+      "pending": 59,
+      "audited": 0,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "healthy": true,
+      "groups": [
+        {
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-09-22T10:13:51.787Z",
+            "readyAt": "2026-09-22T10:13:52.759Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-09-22T10:14:42.069Z",
+            "succeededAt": "2026-09-22T10:14:42.898Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-09-22T10:13:51.838Z",
+        "readyAt": "2026-09-22T10:13:52.758Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "issues": [
+    {
+      "taskId": "task-01b89f39-c0b5-4cf7-8ddd-568c85d5827e",
+      "kind": "task-start",
+      "error": "session \"session-task-01b89f39-c0b5-4cf7-8ddd-568c85d5827e\" not found",
+      "count": 27,
+      "firstSeenAt": "2026-09-22T10:13:51.246Z",
+      "lastSeenAt": "2026-09-22T10:14:46.833Z"
+    },
+    {
+      "taskId": "task-da8acd66-f95a-4ffe-ad83-b6770425b536",
+      "kind": "task-start",
+      "error": "session \"session-task-da8acd66-f95a-4ffe-ad83-b6770425b536\" not found",
+      "count": 27,
+      "firstSeenAt": "2026-09-22T10:13:51.251Z",
+      "lastSeenAt": "2026-09-22T10:14:46.841Z"
+    },
+    {
+      "taskId": "task-add60fd5-7764-410f-9169-e1c0a5ba917a",
+      "kind": "task-start",
+      "error": "session \"session-task-add60fd5-7764-410f-9169-e1c0a5ba917a\" not found",
+      "count": 26,
+      "firstSeenAt": "2026-09-22T10:13:51.257Z",
+      "lastSeenAt": "2026-09-22T10:14:45.100Z"
+    }
+  ],
+  "report": {
+    "contractVersion": 2,
+    "received": true,
+    "taskId": "task-4ac87e9bd5710dd979c0004faf3cb95c",
+    "submissionId": "report-dbf179d506596223f09f905089dffad6",
+    "reviewStatus": "rejected",
+    "applicationStatus": "blocked",
+    "nextAction": "revise-report",
+    "instruction": "报告未获批准；按具体缺口修订，形成新报告。",
+    "result": {
+      "accepted": false,
+      "taskId": "task-4ac87e9bd5710dd979c0004faf3cb95c",
+      "code": "task_checkpoint_rejected",
+      "checkpointId": "checkpoint-01b184929a0770023aeb8e6a3ce3a4c2"
+    }
+  },
+  "tasks": [
+    {
+      "taskId": "task-01b89f39-c0b5-4cf7-8ddd-568c85d5827e",
+      "state": "queued",
+      "inputVersion": 2,
+      "runSequence": 2,
+      "sameChildSession": true
+    },
+    {
+      "taskId": "task-da8acd66-f95a-4ffe-ad83-b6770425b536",
+      "state": "queued",
+      "inputVersion": 2,
+      "runSequence": 10,
+      "sameChildSession": true
+    },
+    {
+      "taskId": "task-add60fd5-7764-410f-9169-e1c0a5ba917a",
+      "state": "queued",
+      "inputVersion": 2,
+      "runSequence": 7,
+      "sameChildSession": true
+    },
+    {
+      "taskId": "task-1473097e5550f79f463a61aa4cbc70d4",
+      "state": "running",
+      "inputVersion": 1,
+      "runSequence": 1,
+      "sameChildSession": true,
+      "eventsAfterRestart": []
+    },
+    {
+      "taskId": "task-3d7e4224c76d9154a02fabb29017e2c4",
+      "state": "running",
+      "inputVersion": 1,
+      "runSequence": 1,
+      "sameChildSession": true,
+      "eventsAfterRestart": [
+        {
+          "kind": "task-report-received",
+          "at": "2026-09-22T10:14:29.894Z",
+          "status": "review-wait"
+        },
+        {
+          "kind": "task-report-settled",
+          "at": "2026-09-22T10:14:33.892Z",
+          "status": "accepted"
+        },
+        {
+          "kind": "task-report-notified",
+          "at": "2026-09-22T10:14:37.523Z"
+        }
+      ]
+    },
+    {
+      "taskId": "task-4ac87e9bd5710dd979c0004faf3cb95c",
+      "state": "running",
+      "inputVersion": 1,
+      "runSequence": 1,
+      "sameChildSession": true,
+      "eventsAfterRestart": [
+        {
+          "kind": "task-report-settled",
+          "at": "2026-09-22T10:14:23.667Z",
+          "status": "review-wait"
+        },
+        {
+          "kind": "task-report-settled",
+          "at": "2026-09-22T10:14:26.273Z",
+          "status": "rejected"
+        },
+        {
+          "kind": "task-report-notified",
+          "at": "2026-09-22T10:14:27.533Z"
+        }
+      ]
+    },
+    {
+      "taskId": "task-75aec79363abab3d96753472daa841d7",
+      "state": "running",
+      "inputVersion": 1,
+      "runSequence": 1,
+      "sameChildSession": true,
+      "eventsAfterRestart": []
+    }
+  ],
+  "web": {
+    "handshake": 303,
+    "page": 200,
+    "html": true
+  }
+}

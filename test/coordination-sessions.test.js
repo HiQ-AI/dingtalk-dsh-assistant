@@ -174,3 +174,18 @@ test('两群路由计数和模型槽互相独立', async t => {
   const b2 = h.handles.find(handle => handle.entry.request.groupId === 'b' && handle.entry.role === 'route')
   assert.equal(b2.events.find(event => event.type === 'dingtalk/coordination-dispatched').data.priorRouteBurst, 0)
 })
+
+
+test('决策短事务连续三步完成而非每次读取重新排队，超时和路由抢占仍在边界让出', async () => {
+  const make = () => ({ active: true, role: 'decision', request: {}, sliceSteps: 0, sliceStartedAt: Date.now(), hasContenders: () => true })
+  const entry = make(), gate = createCoordinationStepGate(entry, () => true)
+  let calls = 0
+  for (let step = 0; step < 3; step++) await gate({ messages: [], agent: { inbox: {} } }, () => { calls++; return {} })
+  assert.equal(calls, 3, '读取、审阅、提交不需要遍历整群队列三次')
+  assert.deepEqual(await gate({ messages: [], agent: { inbox: {} } }, () => { throw new Error('fourth step must yield') }), { kind: 'reject' })
+  assert.equal(entry.sliceYielded, true)
+  const timed = make(); timed.sliceSteps = 1; timed.sliceStartedAt -= 30_001
+  assert.deepEqual(await createCoordinationStepGate(timed, () => true)({ messages: [], agent: { inbox: {} } }, () => { throw new Error('time budget') }), { kind: 'reject' })
+  const preempted = make(); preempted.yieldRequested = true
+  assert.deepEqual(await createCoordinationStepGate(preempted, () => true)({ messages: [], agent: { inbox: {} } }, () => { throw new Error('route preempts before budget') }), { kind: 'reject' })
+})

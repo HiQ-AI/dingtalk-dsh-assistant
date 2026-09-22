@@ -36,6 +36,16 @@ const refsFor = message => {
   return [...new Map(refs.filter(ref => typeof ref.resourceId === 'string').map(ref => [ref.type + ':' + ref.resourceId, ref])).values()]
 }
 
+// DWS 事件文件卡片带下载提示，精确消息回读不带；只接受同名、同 fileId 的这一种展示差异。
+const sameDwsFileProjection = (message, remote) => {
+  if (message.sourceKind !== 'dingtalk' || typeof remote.text !== 'string'
+    || message.text !== `${remote.text} 注意：如需下载使用dws drive download命令下载`) return false
+  const file = /^\[文件\] (.+) fileId: ([^\s]+)$/u.exec(remote.text)
+  const refs = remote.resourceRefs
+  return Boolean(file && Array.isArray(refs) && refs.length === 1
+    && refs[0].type === 'fileId' && refs[0].resourceId === file[2] && refs[0].name === file[1])
+}
+
 // 请求内的唯一只读入口。外部消息只能沿已知引用链扩展；资源只能从这些消息的精确引用读取。
 export function createCoordinationResourceTools({ request, assertCurrent, readMessage, readResource, readImage, readUrl = readPublicResource }) {
   const known = new Map((request.messages ?? []).map(message => [message.messageId, { ...message, text: message._sourceMessageText ?? message.text }]))
@@ -53,7 +63,7 @@ export function createCoordinationResourceTools({ request, assertCurrent, readMe
         const remote = await readMessage(request.groupId, messageId)
         assertCurrent(exec)
         if (remote?.messageId !== messageId || remote.groupId !== request.groupId || remote.complete === false || remote.hasMore === true || remote.failures?.length) throw new Error('coordination_message_identity_or_completeness_invalid')
-        if (message && remote.text !== message.text) throw new Error('coordination_message_version_changed')
+        if (message && remote.text !== message.text && !sameDwsFileProjection(message, remote)) throw new Error('coordination_message_version_changed')
         message = remote
       }
     }

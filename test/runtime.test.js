@@ -103,6 +103,7 @@ async function setup(t, options = {}) {
     ...(options.attachments ? { attachments: options.attachments } : {}),
   }
   h.ctx = ctx
+  await options.beforeRuntime?.(h)
   h.runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: options.maxConcurrentTasks ?? 1, supervisorIntervalMs: 0, resumeTimeoutMs: options.resumeTimeoutMs ?? 10_000, decisionRetryBaseMs: options.retryDelayMs ?? 60_000, actionAdapters: options.actionAdapters, authorizeTaskAction: options.authorizeTaskAction })
   h.resident = (groupId = 'g') => h.handles.get(store.getGroup(groupId)?.residentSessionId)
   h.messages = (groupId = 'g') => h.deliveries.filter(({ sessionId }) => sessionId === store.getGroup(groupId)?.residentSessionId || h.handles.get(sessionId)?.agent.session.snapshotEvents().some(event => event.type === 'dingtalk/coordination' && event.data.groupId === groupId)).map(item => item.message)
@@ -418,6 +419,7 @@ test('活动故障跨 Runtime 重启从 Session 原事件补投影', async t => 
   const events = new Map([[task.childSessionId, session.snapshotEvents()]])
   await original.runtime.close()
   const restored = await setup(t, { snapshot: original.snapshot, goals: original.goals, sessionEvents: events })
+  await restored.runtime.flushActivities()
   assert.equal(restored.store.listActivities(task.taskId).length, 2)
   assert.equal(restored.runtime.listRecoveryIssues().filter(issue => issue.kind === 'activity-projection').length, 0)
 })
@@ -2803,4 +2805,170 @@ test('任务工作位置仅验证已有工件，保留历史来源并排除不�
     assert.equal(reopened.locations.find(item => item.kind === 'goal').source, 'previousRun.result.artifacts')
     assert.equal((await taskWorkLocations({ result: { artifacts: ['relative/goal.md', 'https://example.com'] } })).status, 'unknown')
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('启动活动审计不阻塞后续叶子和API，固定快照后live按序接续且close排空', async t => {
+  const original = await setup(t, { maxConcurrentTasks: 2 })
+  const first = await createTask(original, 'audit-first')
+  original.idle.set(first.childSessionId, Promise.resolve())
+  const second = await createTask(original, 'audit-second')
+  const session = original.handles.get(first.childSessionId).agent.session
+  session.append('tool/call', { callId: 'history', name: 'read' })
+  const historical = session.snapshotEvents().at(-1)
+  const sessionEvents = new Map([[first.childSessionId, session.snapshotEvents()]])
+  await original.runtime.close()
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let writes = 0
+  const restored = await setup(t, { snapshot: original.snapshot, goals: original.goals, sessionEvents, maxConcurrentTasks: 2,
+    beforeRuntime(h) {
+      const record = h.store.recordActivity.bind(h.store)
+      h.store.recordActivity = async value => {
+        if (value.taskId === first.taskId && writes++ === 0) { entered.resolve(); await release.promise }
+        return record(value)
+      }
+    },
+  })
+  await entered.promise
+  assert.ok(restored.handles.has(second.childSessionId), '首Task审计尚未完成时第二Task已恢复')
+  const liveSession = restored.handles.get(first.childSessionId).agent.session
+  liveSession.append('tool/result', { message: { source: { callId: 'history' }, content: [{ type: 'tool-result', isError: false }] } })
+  const live = liveSession.snapshotEvents().at(-1)
+  restored.events.get('session/event')(liveSession, live)
+  for (const id of restored.handles.keys()) restored.idle.set(id, Promise.resolve())
+  let closed = false
+  const closing = restored.runtime.close().then(() => { closed = true })
+  await immediate()
+  assert.equal(closed, false)
+  release.resolve()
+  await closing
+  assert.equal(writes, 2, '历史固定快照和live各写一次，不重新扫描已入队的live事件')
+  const taskRecord = restored.snapshot.tables.tasks[first.taskId]
+  assert.equal(taskRecord.activityProjection.sessions[first.childSessionId].lastSeq, live.seq)
+  const projected = Object.values(restored.snapshot.tables.activities).filter(item => item.taskId === first.taskId)
+  assert.deepEqual(projected.map(item => item.seq), [historical.seq, live.seq])
+})
+
+test('活动重试固定快照期间新增事件不丢且失败水位不跳洞', async t => {
+  const h = await setup(t), task = await createTask(h, 'recovery-live')
+  const session = h.handles.get(task.childSessionId).agent.session, observer = h.events.get('session/event')
+  const record = h.store.recordActivity.bind(h.store)
+  let blocked = true
+  h.store.recordActivity = async value => { if (blocked) throw new Error('audit-failure'); return record(value) }
+  session.append('tool/call', { callId: 'failed-first', name: 'read' })
+  const first = session.snapshotEvents().at(-1); observer(session, first)
+  await h.runtime.flushActivities()
+  assert.equal(h.store.getTask(task.taskId).activityProjection?.sessions?.[task.childSessionId]?.lastSeq, undefined)
+  blocked = false
+  let appended = false
+  h.store.recordActivity = async value => {
+    if (!appended) {
+      appended = true
+      session.append('tool/result', { message: { source: { callId: 'failed-first' }, content: [{ type: 'tool-result', isError: false }] } })
+      observer(session, session.snapshotEvents().at(-1))
+    }
+    return record(value)
+  }
+  await h.runtime.reconcileActivityProjections({ force: true })
+  await h.runtime.flushActivities()
+  assert.deepEqual(h.store.listActivities(task.taskId).map(item => item.seq), [first.seq, session.snapshotEvents().at(-1).seq])
+})
+
+
+
+
+test('启动resume失败会释放活动恢复预约，后续flush和close不悬挂', async t => {
+  const original = await setup(t), task = await createTask(original, 'audit-resume-failure')
+  await original.runtime.close()
+  const restored = await setup(t, { snapshot: original.snapshot, goals: original.goals, resumeFailure: id => id === task.childSessionId })
+  await restored.runtime.flushActivities()
+  assert.ok(restored.runtime.listRecoveryIssues().some(issue => issue.taskId === task.taskId))
+  await restored.runtime.close()
+})
+
+test('input-wait重启按原report形状恢复待审稿，复用已持久reject且保留checkpoint身份', async t => {
+  const h = await setup(t), task = await createTask(h, 'checkpoint-order-restart')
+  const receipt = await rawLeafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '等待原稿审阅', evidence: [], completedItems: [], remainingItems: ['核验'], nextStep: '核验', needsCoordinatorDecision: true })
+  await until(() => h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求'))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  const pendingCheckpoint = structuredClone(h.store.getTask(task.taskId).checkpoints.at(-1))
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'reject', reason: '须先限定隔离核验环境' } })).status, 'accepted')
+  await until(() => taskReports(h.store.getTask(task.taskId)).find(r => r.submissionId === receipt.submissionId)?.status === 'rejected')
+  await h.runtime.close()
+  // 构造已接受审阅、尚未应用且因输入等待的崩溃边界；保留原持久审阅ID。
+  const stored = h.snapshot.tables.tasks[task.taskId]
+  stored.checkpoints = [pendingCheckpoint]
+  stored.executionEvents = stored.executionEvents.filter(e => !(e.submissionId === receipt.submissionId && ['task-report-settled', 'task-report-notified'].includes(e.kind)))
+  stored.executionEvents.push({ kind: 'task-report-settled', submissionId: receipt.submissionId, ...inputVersion(task), status: 'input-wait', error: `task_input_pending:${task.taskId}`, at: new Date().toISOString() })
+  const received = stored.executionEvents.find(e => e.kind === 'task-report-received' && e.submissionId === receipt.submissionId)
+  assert.notDeepEqual(Object.keys(pendingCheckpoint).slice(0, 5), Object.keys(received.value).slice(0, 5))
+  const mismatchSnapshot = structuredClone(h.snapshot)
+  mismatchSnapshot.tables.tasks[task.taskId].executionEvents.find(e => e.kind === 'task-report-received' && e.submissionId === receipt.submissionId).value.summary = '真实不同稿'
+  const mismatch = await setup(t, { snapshot: mismatchSnapshot, goals: new Map(h.goals) })
+  await until(() => taskReports(mismatch.store.getTask(task.taskId)).find(r => r.submissionId === receipt.submissionId)?.status === 'failed')
+  assert.match(taskReports(mismatch.store.getTask(task.taskId)).find(r => r.submissionId === receipt.submissionId).error, /task_checkpoint_review_pending/)
+  assert.deepEqual(mismatch.store.getTask(task.taskId).checkpoints.at(-1), pendingCheckpoint)
+  const restored = await setup(t, { snapshot: h.snapshot, goals: h.goals })
+  await until(() => taskReports(restored.store.getTask(task.taskId)).find(r => r.submissionId === receipt.submissionId)?.status === 'rejected')
+  const current = restored.store.getTask(task.taskId)
+  assert.equal(current.checkpoints.at(-1).coordinatorDecision, 'reject')
+  assert.equal(current.checkpoints.at(-1).checkpointId, pendingCheckpoint.checkpointId)
+  assert.equal(current.checkpoints.at(-1).submittedAt, pendingCheckpoint.submittedAt)
+  assert.equal(current.executionEvents.filter(e => e.kind === 'coordination-review-accepted').length, 1)
+  assert.equal(current.executionEvents.filter(e => e.kind === 'task-report-received' && e.submissionId === receipt.submissionId).length, 1)
+  assert.equal(current.executionEvents.find(e => e.kind === 'coordination-review-accepted').requestId, request.requestId)
+  assert.equal(restored.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求'), undefined, '不新建第二次模型审阅')
+  assert.equal(current.plan, undefined, 'reject绝不能恢复成计划通过')
+})
+
+test('旧Session缺失时仅为已重开的独立轮次建立新Session并保持Task身份', async t => {
+  const original = await setup(t), task = await createTask(original, 'missing-reopened-session')
+  await original.store.updateTask(task.taskId, current => ({ ...current, state: 'queued', inputVersion: 2, runSequence: 2,
+    runHistory: [{ inputVersion: 1, runSequence: 1, childSessionId: current.childSessionId, objective: current.objective,
+      startedAt: current.runStartedAt, topicRefs: current.topicRefs, acceptanceCriteria: current.acceptanceCriteria, stageTasks: current.stageTasks }],
+    reopenContext: '核验新一轮来源', checkpoints: [], plan: undefined }))
+  await original.runtime.close()
+  const restored = await setup(t, { snapshot: original.snapshot, beforeResume: async ({ resumeSessionId }) => {
+    if (resumeSessionId === task.childSessionId) throw new Error(`session "${resumeSessionId}" not found`)
+  } })
+  await until(() => restored.store.getTask(task.taskId).state === 'running')
+  const current = restored.store.getTask(task.taskId)
+  assert.notEqual(current.childSessionId, task.childSessionId)
+  assert.equal(current.inputVersion, 2)
+  assert.equal(current.runSequence, 2)
+  assert.equal(current.runHistory[0].childSessionId, task.childSessionId)
+  assert.equal(current.executionEvents.filter(event => event.kind === 'task-reopen-session-recreated').length, 1)
+  assert.equal(restored.store.listTasks().filter(item => item.taskId === task.taskId).length, 1)
+  assert.equal(restored.deliveries.filter(item => item.sessionId === current.childSessionId && item.message.content?.[0]?.text?.startsWith('[TASK_REOPEN]')).length, 1)
+  assert.equal(restored.runtime.listRecoveryIssues().filter(issue => issue.taskId === task.taskId && issue.kind === 'task-start').length, 0)
+  await restored.runtime.close()
+  const again = await setup(t, { snapshot: original.snapshot, goals: restored.goals })
+  await until(() => again.calls.some(call => call.resumed && call.sessionId === current.childSessionId))
+  assert.equal(again.store.getTask(task.taskId).childSessionId, current.childSessionId)
+  assert.equal(again.store.getTask(task.taskId).executionEvents.filter(event => event.kind === 'task-reopen-session-recreated').length, 1)
+})
+
+test('非缺失故障和非重开任务不得替换旧Session', async t => {
+  for (const errorText of ['EPERM: synthetic read failure', 'session "other" not found']) {
+    const original = await setup(t), task = await createTask(original, 'no-session-replacement')
+    await original.store.updateTask(task.taskId, current => ({ ...current, state: 'queued', inputVersion: 2, runSequence: 2,
+      runHistory: [{ inputVersion: 1, runSequence: 1, childSessionId: current.childSessionId, objective: current.objective,
+        startedAt: current.runStartedAt, topicRefs: current.topicRefs, acceptanceCriteria: current.acceptanceCriteria, stageTasks: current.stageTasks }], reopenContext: '新轮次' }))
+    await original.runtime.close()
+    const restored = await setup(t, { snapshot: original.snapshot, beforeResume: async ({ resumeSessionId }) => {
+      if (resumeSessionId === task.childSessionId) throw new Error(errorText)
+    } })
+    await until(() => restored.runtime.listRecoveryIssues().some(issue => issue.taskId === task.taskId && issue.kind === 'task-start'))
+    assert.equal(restored.store.getTask(task.taskId).childSessionId, task.childSessionId)
+    assert.equal(restored.store.getTask(task.taskId).state, 'queued')
+    assert.equal(restored.calls.some(call => call.sessionId !== task.childSessionId && !call.resumed && call.sessionId.startsWith(`session-${task.taskId}-`)), false)
+  }
+  const original = await setup(t), task = await createTask(original, 'running-missing-session')
+  await original.runtime.close()
+  const restored = await setup(t, { snapshot: original.snapshot, beforeResume: async ({ resumeSessionId }) => {
+    if (resumeSessionId === task.childSessionId) throw new Error(`session "${resumeSessionId}" not found`)
+  } })
+  await until(() => restored.runtime.listRecoveryIssues().some(issue => issue.taskId === task.taskId))
+  assert.equal(restored.store.getTask(task.taskId).state, 'running')
+  assert.equal(restored.store.getTask(task.taskId).childSessionId, task.childSessionId)
+  assert.equal(restored.calls.some(call => !call.resumed && call.sessionId.startsWith(`session-${task.taskId}-`)), false)
 })

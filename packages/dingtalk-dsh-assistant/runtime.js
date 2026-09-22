@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
+import { isDeepStrictEqual } from 'node:util'
 import path from 'node:path'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { buildReplyReviewCandidates, groupDecisionSchema } from './decision.js'
@@ -1181,7 +1182,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (task === undefined || task.state !== 'running') throw new Error(`task_not_running:${taskId}`)
       assertTaskInput(task, checkpoint)
       const reportContent = ({ checkpointId, submittedAt, coordinatorDecision, coordinatorReason, guidance, reviewedAt, stageTask, stageId, completedItems, remainingItems, ...body }) => body
-      const alreadyReviewed = task.checkpoints?.find(item => item.coordinatorDecision && fingerprint(reportContent(item)) === fingerprint(reportContent(checkpoint)))
+      const alreadyReviewed = task.checkpoints?.find(item => item.coordinatorDecision && isDeepStrictEqual(reportContent(item), reportContent(checkpoint)))
       if (alreadyReviewed) return { submitted: alreadyReviewed, reviewTask: task }
       if (checkpoint.kind === 'plan-confirmed') {
         const proposal = task.executionEvents?.findLast(event => event.kind === 'task-plan-prepared' && event.inputVersion === task.inputVersion && event.runSequence === task.runSequence && fingerprint(event.plan) === fingerprint(checkpoint.plan))
@@ -1210,7 +1211,10 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       let superseded
       if (pendingReview && !pendingReview.coordinatorDecision) {
         const comparable = ({ checkpointId: _checkpointId, submittedAt: _submittedAt, coordinatorDecision: _decision, coordinatorReason: _reason, guidance: _guidance, reviewedAt: _reviewedAt, ...rest }) => rest
-        if (JSON.stringify(comparable(pendingReview)) === JSON.stringify(checkpoint)) return { submitted: pendingReview, reviewTask: task }
+        if (isDeepStrictEqual(comparable(pendingReview), checkpoint)) {
+          // 存储 schema 会重排字段；恢复原提交形状，保留既有审阅 requestId 的指纹与落盘身份。
+          return { submitted: { ...checkpoint, checkpointId: pendingReview.checkpointId, submittedAt: pendingReview.submittedAt }, reviewTask: task }
+        }
         if (!diagnostic) throw new Error(`task_checkpoint_review_pending:${taskId}`)
         superseded = pendingReview
       }
@@ -1621,6 +1625,31 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     ensureLeafDescriptor(handle, task); applyPermission(handle, 'danger-full-access')
     await attachGoal(task, handle, false); return handle
   }
+  async function resumeReopenedLeaf(task) {
+    try { return await resumeLeaf(task) } catch (error) {
+      if (task.state !== 'queued' || !task.reopenContext || !task.runHistory?.length
+        || error.message !== `session "${task.childSessionId}" not found`) throw error
+    }
+    const replacementSessionId = `session-${task.taskId}-${randomUUID().slice(0, 8)}`
+    const replacement = await createLeaf({ ...task, childSessionId: replacementSessionId })
+    try {
+      await store.updateTask(task.taskId, current => {
+        if (current.state !== 'queued' || !current.reopenContext || current.childSessionId !== task.childSessionId
+          || current.inputVersion !== task.inputVersion || current.runSequence !== task.runSequence) throw new Error(`task-reopen-session-stale:${task.taskId}`)
+        return { ...current, childSessionId: replacementSessionId, executionEvents: [...(current.executionEvents ?? []), {
+          kind: 'task-reopen-session-recreated', inputVersion: current.inputVersion, runSequence: current.runSequence,
+          previousSessionId: task.childSessionId, sessionId: replacementSessionId, reason: 'previous-session-not-found', at: new Date().toISOString(),
+        }] }
+      })
+    } catch (error) {
+      leafHandles.delete(task.taskId); leafTaskBySession.delete(replacementSessionId)
+      await replacement.dispose()
+      throw error
+    }
+    leafTaskBySession.delete(task.childSessionId)
+    recoveryIssues.resolve(issue => issue.taskId === task.taskId && issue.kind === 'task-start' && issue.error === `session "${task.childSessionId}" not found`)
+    return replacement
+  }
   async function restartInactiveLeaf(task, previous, attempt, cause = 'paused') {
     if (!requestExecutionPermit(task.taskId)) return previous
     await previous.agent.whenIdle()
@@ -1803,14 +1832,14 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
           resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
           await followupTaskInternal(running, `${task.resumeContext}\n\nContinue the same task only within the approved scope. Re-check current state before acting.`)
         } else if (task.reopenContext) {
-          const handle = await resumeLeaf(task)
+          const handle = await resumeReopenedLeaf(task)
           const running = await store.updateTask(task.taskId, (current) => current.state === 'queued' ? { ...current, state: 'running', reopenContext: undefined } : current)
           if (running.state === 'completed') {
             signalTaskCancellation(task.taskId); leafHandles.delete(task.taskId); leafTaskBySession.delete(task.childSessionId)
             await handle.dispose(); cancellingTasks.delete(task.taskId); continue
           }
-          replaceTaskGoalObjective(running, handle)
-          await followupTaskInternal(running, `[TASK_REOPEN]\n执行轮次：${task.runSequence}\n当前有效目标：${task.objective}\n本轮验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n\n${task.reopenContext}\n\n这是独立的新执行轮次。历史轮次只供参考，不得把旧结果当成本轮完成证据；请独立核验当前事实，并在当前有效目标与原始来源消息的授权范围内重新提交可核验结果。`)
+          if (String(handle.agent.session.id) === task.childSessionId) replaceTaskGoalObjective(running, handle)
+          await followupTaskInternal(running, `[TASK_REOPEN]\n执行轮次：${task.runSequence}\n当前有效目标：${task.objective}\n本轮验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n\n${task.reopenContext}\n\n${running.childSessionId === task.childSessionId ? '' : '原执行Session文件缺失，本轮使用新Session；历史会话细节不可恢复，须从当前Task记录、来源消息和外部事实独立重建。\n'}这是独立的新执行轮次。历史轮次只供参考，不得把旧结果当成本轮完成证据；请独立核验当前事实，并在当前有效目标与原始来源消息的授权范围内重新提交可核验结果。`)
         } else {
           const handle = await createLeaf(task)
           if (runtimeClosing) { await handle.dispose(); continue }
@@ -2022,13 +2051,11 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     }
   }
   async function reconcileActivityProjection(taskId, session) {
-    while (true) {
-      const lastSeq = store.getTask(taskId)?.activityProjection?.sessions?.[String(session.id)]?.lastSeq ?? -1
-      const pending = session.snapshotEvents().filter(event => PROJECTED_EVENTS.has(event.type) && event.seq > lastSeq)
-        .sort((left, right) => left.seq - right.seq)
-      if (pending.length === 0) break
-      for (const event of pending) await writeProjectedActivity(taskId, session, event)
-    }
+    // 只审计进入时的固定快照；live 事件由同一 activityTail 接续，不能追着运行中的叶子阻塞启动。
+    const lastSeq = store.getTask(taskId)?.activityProjection?.sessions?.[String(session.id)]?.lastSeq ?? -1
+    const pending = session.snapshotEvents().filter(event => PROJECTED_EVENTS.has(event.type) && event.seq > lastSeq)
+      .sort((left, right) => left.seq - right.seq)
+    for (const event of pending) await writeProjectedActivity(taskId, session, event)
     activityProjectionFailures.delete(taskId)
     recoveryIssues.resolve(issue => issue.taskId === taskId && issue.kind === 'activity-projection')
   }
@@ -2166,7 +2193,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
           agentCtx.tools.restrict({ allow: [...allowed].filter(name => agentCtx.tools.get(name)) })
           agentCtx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'coordination_tool_outside_role')
           registerCoordinationMessageTool(agentCtx, entry)
-          agentCtx.systemPrompt.section({ name: 'dingtalk-coordination-scope', order: 120, text: `当前仅处理 ${role} 请求 ${request.requestId}。业务提交仅限本请求，不能执行工程修改。引用消息恢复使用 group_message_get；该工具检查本请求引用身份和读取完整性，替代群主协议中的 pwsh 查询。缺失附件正文必须明确保留读取失败，不能猜测内容。` })
+          agentCtx.systemPrompt.section({ name: 'dingtalk-coordination-scope', order: 120, text: `当前仅处理 ${role} 请求 ${request.requestId}。业务提交仅限本请求，不能执行工程修改。引用消息恢复使用 group_message_get；该工具检查本请求引用身份和读取完整性，替代群主协议中的 pwsh 查询。缺失附件正文必须明确保留读取失败，不能猜测内容。group_resource_get 只解析图片与受支持文本；已确认精确资源身份但 xlsx 等格式不受支持，不等于文件缺失。用户已明确交办文件处理时，将文件引用和读取限制交给 Task，由叶子用适用工具解析；协调阶段不以先完成文件处理作为发起前提。若授权或资源身份不明确，仍先澄清。` })
         } })
       handle.agent.session.append('dingtalk/coordination', identity)
       registerPerformanceSession(sessionId, identity)
@@ -2250,19 +2277,27 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     if (!residentHandles.has(task.groupId)) continue
     if (task.stopRequest) { void recoverTaskStop(task.taskId); continue }
     if (task.migrationReview?.status === 'required') continue
+    // 在 resume 可能产生首个 live 事件之前预约历史恢复槽，禁止水位跨过尚未回填的历史。
+    const activitySession = Promise.withResolvers()
+    activityTail = activityTail.then(async () => {
+      const session = await activitySession.promise
+      if (!session) return
+      try { await reconcileActivityProjection(task.taskId, session) }
+      catch (error) {
+        activityProjectionFailures.set(task.taskId, { session, nextRetryAt: Date.now() + 30_000 })
+        recoveryIssues.push({ taskId: task.taskId, kind: 'activity-projection', error: error.message })
+      }
+    })
     try {
       const plan = reconcileLegacyStagePlan(task)
       const current = plan ? await store.updateTask(task.taskId, value => ({ ...value, stageTasks: plan.stageTasks, stagePlan: plan.stagePlan,
         executionEvents: [...(value.executionEvents ?? []), { kind: 'stage-plan-reconciled', planCheckpointId: plan.planCheckpointId, previousStageTasks: value.stageTasks, at: new Date().toISOString() }],
       })) : task
       const handle = await resumeLeaf(current)
-      try { await reconcileActivityProjection(current.taskId, handle.agent.session) }
-      catch (error) {
-        activityProjectionFailures.set(current.taskId, { session: handle.agent.session, nextRetryAt: Date.now() + 30_000 })
-        recoveryIssues.push({ taskId: current.taskId, kind: 'activity-projection', error: error.message })
-      }
+      activitySession.resolve(handle.agent.session)
       await dispatchTaskInput(current); reports.recover(current)
     } catch (error) { recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, childSessionId: task.childSessionId, error: error instanceof Error ? error.message : String(error) }) }
+    finally { activitySession.resolve(undefined) }
   }
   await serializeTasks(pumpTasks)
   recoverCompletionNotifications()

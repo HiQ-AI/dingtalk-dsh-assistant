@@ -182,7 +182,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   const operationRetry = request.method === 'POST' && /^\/config\/groups\/([^/]+)\/topics\/([^/]+)\/decisions\/([^/]+)\/operations\/([^/]+)\/retry$/u.exec(url.pathname)
   if (operationRetry) {
     try {
-      const body = z.strictObject({ resolution: z.enum(['not-applied', 'applied']), reason: z.string().trim().min(1) }).parse(await readJson(request))
+      const body = z.strictObject({ resolution: z.enum(['not-applied', 'applied', 'reconsider']), reason: z.string().trim().min(1) }).parse(await readJson(request))
       const value = await store.retryDecisionOperation({ ...body, groupId: decodeURIComponent(operationRetry[1]), topicId: decodeURIComponent(operationRetry[2]), decisionId: decodeURIComponent(operationRetry[3]), operationId: decodeURIComponent(operationRetry[4]) })
       return send(response, 202, value)
     } catch (error) { return send(response, error instanceof z.ZodError ? 400 : 409, { error: error.message }) }

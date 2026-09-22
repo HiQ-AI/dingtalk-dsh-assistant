@@ -338,6 +338,37 @@ export async function openResidentStore(storageDomain) {
   // v6 数据只能通过离线迁移进入；启动不再猜测旧消息来源。
   const tails = new Map()
   const pendingPerformanceChunks = new Set()
+  const performanceBatches = new Map()
+  let performanceWriter, closing = false, closePromise
+  function flushPerformanceBatches() {
+    if (performanceWriter) return performanceWriter
+    // Domain 的所有表共用写链；一次仅提交一个计量批次，给已排队的业务写让路。
+    performanceWriter = Promise.resolve().then(async () => {
+      while (performanceBatches.size) {
+        const [partition, batch] = performanceBatches.entries().next().value
+        performanceBatches.delete(partition)
+        try {
+          let projection = scheduler.get(partition)?.performanceProjection
+          const results = batch.map(item => {
+            const result = projectPerformanceEvent(projection, item.input)
+            projection = result.projection
+            return { created: result.created }
+          })
+          if (results.some(result => result.created)) await scheduler.put(partition, { tasks: [], ...scheduler.get(partition), performanceProjection: projection })
+          batch.forEach((item, index) => item.resolve(results[index]))
+        } catch (error) {
+          // 不发布失败投影；后续批次从持久状态重算，原事件可由调用方重试。
+          batch.forEach(item => item.reject(error))
+        } finally {
+          for (const item of batch) if (item.chunkKey) pendingPerformanceChunks.delete(item.chunkKey)
+        }
+      }
+    }).finally(() => {
+      performanceWriter = undefined
+      if (performanceBatches.size) flushPerformanceBatches()
+    })
+    return performanceWriter
+  }
   const findGroupEntry = (groupId) => {
     const direct = groups.get(groupId)
     if (direct !== undefined) return [groupId, direct]
@@ -377,19 +408,17 @@ export async function openResidentStore(storageDomain) {
       }
     },
     recordPerformanceEvent: (input) => {
+      if (closing) return Promise.reject(new Error('resident_store_closed'))
       if (!PERFORMANCE_EVENT_TYPES.has(input.event?.type) || input.event.seq <= (input.seedSeq ?? -1)) return Promise.resolve({ created: false })
       const partition = `performance:${input.sessionId}`
       const chunkKey = input.event.type === 'assistant/chunk' ? performanceChunkKey(input) : undefined
       if (chunkKey && (pendingPerformanceChunks.has(chunkKey) || hasPerformanceFirstStream(scheduler.get(partition)?.performanceProjection, input))) return Promise.resolve({ created: false })
       if (chunkKey) pendingPerformanceChunks.add(chunkKey)
-      return serialize(partition, async () => {
-        const result = projectPerformanceEvent(scheduler.get(partition)?.performanceProjection, input)
-        if (result.created) {
-          const current = scheduler.get(partition)
-          await scheduler.put(partition, { tasks: [], ...current, performanceProjection: result.projection })
-        }
-        return { created: result.created }
-      }).finally(() => { if (chunkKey) pendingPerformanceChunks.delete(chunkKey) })
+      const batch = performanceBatches.get(partition) ?? []
+      performanceBatches.set(partition, batch)
+      const persisted = new Promise((resolve, reject) => batch.push({ input, chunkKey, resolve, reject }))
+      flushPerformanceBatches()
+      return persisted
     },
     getCoordinationRequest: (groupId, requestId) => findGroupEntry(groupId)?.[1].coordinationRequests?.[requestId],
     updateCoordinationRequest: (groupId, requestId, patch) => serialize(groupId, async () => {
@@ -736,7 +765,7 @@ export async function openResidentStore(storageDomain) {
       })
       return result
     }),
-    updateTopicDecision: ({ groupId, topicId, decisionId, patch }) => serialize(groupId, async () => {
+    updateTopicDecision: ({ groupId, topicId, decisionId, patch, expectedStatus }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       if (Object.keys(patch).some((key) => !['status', 'operations', 'progress', 'error', 'attempt', 'retryBaseAttempt', 'nextRetryAt', 'recoveryReason', 'failureOperationId'].includes(key))) throw new Error('topic_decision_patch_invalid')
@@ -744,6 +773,7 @@ export async function openResidentStore(storageDomain) {
       let result
       await groups.update(entry[0], (latest) => ({ ...latest, topics: latest.topics.map((topic) => topic.topicId !== topicId ? topic : { ...topic, decisions: topic.decisions.map((record) => {
         if (record.decisionId !== decisionId) return record
+        if (expectedStatus !== undefined && record.status !== expectedStatus) throw new Error('decision_recovery_status_changed')
         if (!isPendingDecision(record)) { result = record; return record }
         if (patch.operations && (patch.operations.length !== record.operations.length || record.operations.some((operation, index) => {
           const next = patch.operations[index]
@@ -752,6 +782,31 @@ export async function openResidentStore(storageDomain) {
         result = { ...record, ...patch, updatedAt: new Date().toISOString() }; return result
       }) }) }))
       if (!result) throw new Error(`topic_decision_not_found:${decisionId}`)
+      return result
+    }),
+    reconsiderBlockedTopicDecision: ({ groupId, topicId, decisionId, operationId, reason }) => serialize(groupId, async () => {
+      if (!reason?.trim()) throw new Error('decision_recovery_evidence_required')
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let result
+      await groups.update(entry[0], (latest) => {
+        const topic = latest.topics.find(item => item.topicId === topicId)
+        const record = topic?.decisions.find(item => item.decisionId === decisionId)
+        if (!record || !['blocked', 'rejected'].includes(record.status)) throw new Error('decision_recovery_not_blocked')
+        if (operationId !== record.failureOperationId || operationId !== record.outboundId) throw new Error('decision_recovery_wrong_failed_operation')
+        if (record.decision.actions.length || record.operations.length || Object.keys(record.progress ?? {}).length
+          || topic.processedRevision >= record.revision
+          || latest.taskReservations.some(item => item.decisionId === decisionId)
+          || [...tasks.entries()].some(([, task]) => task.appliedOperations?.some(id => id.startsWith(`${decisionId}:action:`)))
+          || latest.outbox.some(item => item.outboundId === record.outboundId || item.decisionId === decisionId || item.sourceMessageId === `topic-decision:${decisionId}`)) throw new Error('decision_reconsider_side_effect_or_unknown')
+        if (record.status === 'rejected') {
+          if (!record.recoveryReason) throw new Error('decision_recovery_not_blocked')
+          result = record
+          return latest
+        }
+        result = { ...record, status: 'rejected', recoveryReason: reason.trim(), nextRetryAt: undefined, updatedAt: new Date().toISOString() }
+        return { ...latest, topics: latest.topics.map(item => item.topicId !== topicId ? item : { ...item, decisions: item.decisions.map(value => value.decisionId === decisionId ? result : value) }) }
+      })
       return result
     }),
     rejectInvalidTopicDecision: ({ groupId, topicId, decisionId }) => serialize(groupId, async () => {
@@ -886,6 +941,10 @@ export async function openResidentStore(storageDomain) {
       const group = await groups.update(storageKey, (latest) => {
         veto = preflight?.(latest)
         if (veto !== undefined) return latest
+        if (latest.topics.some(topic => topic.decisions.some(record => record.status === 'rejected'
+          && (record.decisionId === decisionId || record.outboundId === outboundId || sourceMessageId === `topic-decision:${record.decisionId}`)))) {
+          veto = { status: 'decision-rejected' }; return latest
+        }
         if (replacementBusy(latest, replacesOutboundIds ?? [], decisionId)) { veto = { status: 'reply-busy' }; return latest }
         return { ...latest,
         outbox: reconcileReplacementGraph([...latest.outbox, {
@@ -1101,6 +1160,13 @@ export async function openResidentStore(storageDomain) {
       for (const [expiredKey] of removed) await activities.delete(expiredKey)
       return { created: !existing && !removed.some(([removedKey]) => removedKey === key), ...(existing ? { activity: existing } : { activity }), truncated: activityProjection.truncated }
     }),
-    close: () => domain.close(),
+    close: () => {
+      closing = true
+      return closePromise ??= (async () => {
+        while (performanceWriter) await performanceWriter
+        await Promise.allSettled([...tails.values()])
+        await domain.close()
+      })()
+    },
   }
 }

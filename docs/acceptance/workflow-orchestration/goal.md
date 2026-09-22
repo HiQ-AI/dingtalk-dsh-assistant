@@ -1,8 +1,8 @@
 # 流程编排与节点契约实施
 
-> 状态：COMPLETE
+> 状态：ACTIVE
 > Goal ID：workflow-orchestration
-> 最近维护：2026-09-22T17:22:00+08:00
+> 最近维护：2026-09-22T17:45:00+08:00
 > 权威目标：D:/project/dingtalk-dsh-coordination-latency/docs/acceptance/workflow-orchestration/goal.md
 
 ## 总目标
@@ -35,13 +35,21 @@
 | SG7 | 群聊延迟与任务发起修复 | schema、字段反馈、公平调度及新输入保护回归通过，本地验证与 PR 回读 | 已完成 | round-16.md；613/613；PR #117 OPEN |
 | SG8 | 修复包本地部署 | 精确安装摘要、新进程、健康、认证Web及延时存活回读 | 已完成 | round-17.md；源码60f883c；PID69760 |
 
+| SG9 | 决策上下文与积压闭环 | 工具契约、轮转及慢提交针对性回归，部署及六项状态回读 | 恢复核验中 | round-18.md；623/623；PR #118 OPEN |
+
+| SG10 | 三条历史重开Task恢复 | 原Session缺失的精确恢复、原Task身份/版本不变、本地运行回读 | 已完成 | round-21.md；632/632；三条running |
+
 ## 当前检查点
 
-- 当前子目标：SG8
-- 唯一下一步：等待 PR 审阅；真实群业务时延及 Task 完成需独立观察，不自动合并。
-- 未闭环项：真实渠道 D03 未验收。原 #1336 话题已进入决策、尚无关联 Task；本轮不将其标为业务完成，也未人为补建。首次部署空转问题已前向修复，第二次实例健康稳定。
+- 当前子目标：SG10
+- 唯一下一步：SG10已交付，持续由各Task执行原交办；原Session细节不可恢复，业务完成需后续各Task独立提交和审阅。不自动合并PR。
+- 未闭环项：真实渠道D03、真实端到端时延及三个业务目标本身未验收。#1350/#1371/单位不一致Task已重建本轮Session并running，旧历史Session细节仍不可恢复。
+
 
 ## 进展
+
+- 2026-09-22 SG9：发现决策缺少流程目录、单步轮转放大等待、计量与业务共用整库写链、DWS文件卡片尾注误判。四项本地修复已实现，最终回归进行中。PR #117已合并804c56c，新分支codex/decision-context-backlog基于同树origin/main。
+- 17:40旧包回读：#1336/#1353/#1354已有running Task，#1371已reopen queued；#1350旧决策blocked，#1372尚无Task。此为旧包推进事实，不归为SG9效果。运行中任务未结束前依runbook保留实例，不强制重启。
 
 - 2026-09-22：确认 origin/main=83fc504，创建 worktree-workflow-orchestration，复制已批准方案。
 - 2026-09-22：续修前确认 origin/main=ee4835c（PR #116 已合并），创建 codex/group-coordination-latency 隔离工作区；基于现场 #1336 证据追加 SG7。
@@ -71,3 +79,16 @@
 - PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/116，OPEN，base=main。
 - 代码提交：8cc9df6194a24fa151c347dd0b329bbe82b02693；git ls-remote 与本地 HEAD 一致。
 - 本地596/596、隔离原生DSH、UI10项、18次队列回放、三个包构建通过。PR创建时statusCheckRollup为空，不当作远程CI通过。
+
+### SG9交付
+
+- PR #118 OPEN，代码63a157f7a2dca9b8a5ae0818ba7eb7e2d8dac939；最终623/623通过；本地tgz209851字节，SHA256见round-18.md。
+- 当前包仍是60f883c；新包未安装。已完成源码、测试、打包和PR，部署与真实业务恢复仍未闭环。用户尚未回答切换风险选择前不停止现有实例。
+
+- 用户已批准中断并重启。第一次补修切换备份为D:/dsh_home/backups/decision-context-63a157f-20260922，精确安装34文件一致；PID843020。运行中核验发现活动回填阻塞启动，保持本轮修复推进，不将部署判为完成。
+
+- 18:12恢复核验：407c59d精确安装34文件相同。翻译旧零效果草稿已通过reconsider标rejected且无旧Outbox，新决策重开原Task inputVersion2/run2；三条历史Task原Session缺失仍queued。权限Task同稿checkpoint因字段顺序误判，精确修复保留原reject审阅身份，正在全量回归。
+
+- 18:16 SG9最新交付：PR #118 OPEN，部署源码e48f61e，630/630；34文件hash一致，PID179220，Web认证200、入站桥接正常。权限原报告retry复用reject并恢复原Session；三条历史Session缺失单列，SG9整体仍未完全闭环。以上替代早期未部署状态，历史记录仅保留审计。
+
+- 18:30 SG10交付：ff6f29f已部署，632/632；三条目标Task各自新Session且running，Task身份、轮次、来源和已接纳操作数量不变，Web、入站、桥接正常，health ok/恢复告警0。PR #118 OPEN；各业务任务本身继续执行，不将运行态当完成。
