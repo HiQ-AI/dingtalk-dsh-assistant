@@ -2919,3 +2919,56 @@ test('input-wait重启按原report形状恢复待审稿，复用已持久reject�
   assert.equal(restored.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求'), undefined, '不新建第二次模型审阅')
   assert.equal(current.plan, undefined, 'reject绝不能恢复成计划通过')
 })
+
+test('旧Session缺失时仅为已重开的独立轮次建立新Session并保持Task身份', async t => {
+  const original = await setup(t), task = await createTask(original, 'missing-reopened-session')
+  await original.store.updateTask(task.taskId, current => ({ ...current, state: 'queued', inputVersion: 2, runSequence: 2,
+    runHistory: [{ inputVersion: 1, runSequence: 1, childSessionId: current.childSessionId, objective: current.objective,
+      startedAt: current.runStartedAt, topicRefs: current.topicRefs, acceptanceCriteria: current.acceptanceCriteria, stageTasks: current.stageTasks }],
+    reopenContext: '核验新一轮来源', checkpoints: [], plan: undefined }))
+  await original.runtime.close()
+  const restored = await setup(t, { snapshot: original.snapshot, beforeResume: async ({ resumeSessionId }) => {
+    if (resumeSessionId === task.childSessionId) throw new Error(`session "${resumeSessionId}" not found`)
+  } })
+  await until(() => restored.store.getTask(task.taskId).state === 'running')
+  const current = restored.store.getTask(task.taskId)
+  assert.notEqual(current.childSessionId, task.childSessionId)
+  assert.equal(current.inputVersion, 2)
+  assert.equal(current.runSequence, 2)
+  assert.equal(current.runHistory[0].childSessionId, task.childSessionId)
+  assert.equal(current.executionEvents.filter(event => event.kind === 'task-reopen-session-recreated').length, 1)
+  assert.equal(restored.store.listTasks().filter(item => item.taskId === task.taskId).length, 1)
+  assert.equal(restored.deliveries.filter(item => item.sessionId === current.childSessionId && item.message.content?.[0]?.text?.startsWith('[TASK_REOPEN]')).length, 1)
+  assert.equal(restored.runtime.listRecoveryIssues().filter(issue => issue.taskId === task.taskId && issue.kind === 'task-start').length, 0)
+  await restored.runtime.close()
+  const again = await setup(t, { snapshot: original.snapshot, goals: restored.goals })
+  await until(() => again.calls.some(call => call.resumed && call.sessionId === current.childSessionId))
+  assert.equal(again.store.getTask(task.taskId).childSessionId, current.childSessionId)
+  assert.equal(again.store.getTask(task.taskId).executionEvents.filter(event => event.kind === 'task-reopen-session-recreated').length, 1)
+})
+
+test('非缺失故障和非重开任务不得替换旧Session', async t => {
+  for (const errorText of ['EPERM: synthetic read failure', 'session "other" not found']) {
+    const original = await setup(t), task = await createTask(original, 'no-session-replacement')
+    await original.store.updateTask(task.taskId, current => ({ ...current, state: 'queued', inputVersion: 2, runSequence: 2,
+      runHistory: [{ inputVersion: 1, runSequence: 1, childSessionId: current.childSessionId, objective: current.objective,
+        startedAt: current.runStartedAt, topicRefs: current.topicRefs, acceptanceCriteria: current.acceptanceCriteria, stageTasks: current.stageTasks }], reopenContext: '新轮次' }))
+    await original.runtime.close()
+    const restored = await setup(t, { snapshot: original.snapshot, beforeResume: async ({ resumeSessionId }) => {
+      if (resumeSessionId === task.childSessionId) throw new Error(errorText)
+    } })
+    await until(() => restored.runtime.listRecoveryIssues().some(issue => issue.taskId === task.taskId && issue.kind === 'task-start'))
+    assert.equal(restored.store.getTask(task.taskId).childSessionId, task.childSessionId)
+    assert.equal(restored.store.getTask(task.taskId).state, 'queued')
+    assert.equal(restored.calls.some(call => call.sessionId !== task.childSessionId && !call.resumed && call.sessionId.startsWith(`session-${task.taskId}-`)), false)
+  }
+  const original = await setup(t), task = await createTask(original, 'running-missing-session')
+  await original.runtime.close()
+  const restored = await setup(t, { snapshot: original.snapshot, beforeResume: async ({ resumeSessionId }) => {
+    if (resumeSessionId === task.childSessionId) throw new Error(`session "${resumeSessionId}" not found`)
+  } })
+  await until(() => restored.runtime.listRecoveryIssues().some(issue => issue.taskId === task.taskId))
+  assert.equal(restored.store.getTask(task.taskId).state, 'running')
+  assert.equal(restored.store.getTask(task.taskId).childSessionId, task.childSessionId)
+  assert.equal(restored.calls.some(call => !call.resumed && call.sessionId.startsWith(`session-${task.taskId}-`)), false)
+})

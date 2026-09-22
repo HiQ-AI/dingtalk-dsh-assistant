@@ -37,10 +37,12 @@
 
 | SG9 | 决策上下文与积压闭环 | 工具契约、轮转及慢提交针对性回归，部署及六项状态回读 | 恢复核验中 | round-18.md；623/623；PR #118 OPEN |
 
+| SG10 | 三条历史重开Task恢复 | 原Session缺失的精确恢复、原Task身份/版本不变、本地运行回读 | 实施中 | docs/spec/missing-reopened-task-sessions.md |
+
 ## 当前检查点
 
-- 当前子目标：SG9
-- 唯一下一步：e48f61e已部署，原报告恢复通过。三条历史重开Task原Session缺失仍queued，需要独立历史会话恢复方案；不能声称全部恢复，不自动合并PR。
+- 当前子目标：SG10
+- 唯一下一步：为三条queued且已重开的Task添加原Session缺失时的新执行Session恢复，完成回归、前向部署与逐项Task/Session回读。不自动合并PR。
 - 未闭环项：三条历史Session缺失；真实渠道D03及真实端到端时延未验收。#1336/#1353/#1372 running且有重启后Session事件，#1354 completed；#1350已重新决策重开，#1371已重开，但二者会话缺失。
 
 

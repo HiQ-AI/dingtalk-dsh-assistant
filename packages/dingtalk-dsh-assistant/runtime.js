@@ -1625,6 +1625,31 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     ensureLeafDescriptor(handle, task); applyPermission(handle, 'danger-full-access')
     await attachGoal(task, handle, false); return handle
   }
+  async function resumeReopenedLeaf(task) {
+    try { return await resumeLeaf(task) } catch (error) {
+      if (task.state !== 'queued' || !task.reopenContext || !task.runHistory?.length
+        || error.message !== `session "${task.childSessionId}" not found`) throw error
+    }
+    const replacementSessionId = `session-${task.taskId}-${randomUUID().slice(0, 8)}`
+    const replacement = await createLeaf({ ...task, childSessionId: replacementSessionId })
+    try {
+      await store.updateTask(task.taskId, current => {
+        if (current.state !== 'queued' || !current.reopenContext || current.childSessionId !== task.childSessionId
+          || current.inputVersion !== task.inputVersion || current.runSequence !== task.runSequence) throw new Error(`task-reopen-session-stale:${task.taskId}`)
+        return { ...current, childSessionId: replacementSessionId, executionEvents: [...(current.executionEvents ?? []), {
+          kind: 'task-reopen-session-recreated', inputVersion: current.inputVersion, runSequence: current.runSequence,
+          previousSessionId: task.childSessionId, sessionId: replacementSessionId, reason: 'previous-session-not-found', at: new Date().toISOString(),
+        }] }
+      })
+    } catch (error) {
+      leafHandles.delete(task.taskId); leafTaskBySession.delete(replacementSessionId)
+      await replacement.dispose()
+      throw error
+    }
+    leafTaskBySession.delete(task.childSessionId)
+    recoveryIssues.resolve(issue => issue.taskId === task.taskId && issue.kind === 'task-start' && issue.error === `session "${task.childSessionId}" not found`)
+    return replacement
+  }
   async function restartInactiveLeaf(task, previous, attempt, cause = 'paused') {
     if (!requestExecutionPermit(task.taskId)) return previous
     await previous.agent.whenIdle()
@@ -1807,14 +1832,14 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
           resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
           await followupTaskInternal(running, `${task.resumeContext}\n\nContinue the same task only within the approved scope. Re-check current state before acting.`)
         } else if (task.reopenContext) {
-          const handle = await resumeLeaf(task)
+          const handle = await resumeReopenedLeaf(task)
           const running = await store.updateTask(task.taskId, (current) => current.state === 'queued' ? { ...current, state: 'running', reopenContext: undefined } : current)
           if (running.state === 'completed') {
             signalTaskCancellation(task.taskId); leafHandles.delete(task.taskId); leafTaskBySession.delete(task.childSessionId)
             await handle.dispose(); cancellingTasks.delete(task.taskId); continue
           }
-          replaceTaskGoalObjective(running, handle)
-          await followupTaskInternal(running, `[TASK_REOPEN]\n执行轮次：${task.runSequence}\n当前有效目标：${task.objective}\n本轮验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n\n${task.reopenContext}\n\n这是独立的新执行轮次。历史轮次只供参考，不得把旧结果当成本轮完成证据；请独立核验当前事实，并在当前有效目标与原始来源消息的授权范围内重新提交可核验结果。`)
+          if (String(handle.agent.session.id) === task.childSessionId) replaceTaskGoalObjective(running, handle)
+          await followupTaskInternal(running, `[TASK_REOPEN]\n执行轮次：${task.runSequence}\n当前有效目标：${task.objective}\n本轮验收标准：${JSON.stringify(task.acceptanceCriteria)}\n本轮阶段任务：${JSON.stringify(task.stageTasks)}\n\n${task.reopenContext}\n\n${running.childSessionId === task.childSessionId ? '' : '原执行Session文件缺失，本轮使用新Session；历史会话细节不可恢复，须从当前Task记录、来源消息和外部事实独立重建。\n'}这是独立的新执行轮次。历史轮次只供参考，不得把旧结果当成本轮完成证据；请独立核验当前事实，并在当前有效目标与原始来源消息的授权范围内重新提交可核验结果。`)
         } else {
           const handle = await createLeaf(task)
           if (runtimeClosing) { await handle.dispose(); continue }

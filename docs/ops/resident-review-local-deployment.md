@@ -109,3 +109,7 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 活动任务中断仅在用户明确批准后执行：核验目标DSH进程树、停机后备份完整当前存储和profile，再安装精确包；记录每个活动Task的inputVersion/runSequence/childSessionId并回读恢复。原Session确实缺失的历史重开任务应单列，不把新建空Session当作成功恢复。
 
 同稿检查点恢复按结构内容比较，不因存储字段顺序变化拒绝。重试保留原submissionId、checkpointId、submittedAt和既有审阅请求身份；已有reject必须应用原拒绝，不能变成批准或再开启一次审阅。真正不同稿仍保留pending冲突。仅在精确修复包核验通过后调用原报告retry接口。
+
+## 历史重开任务缺失原 Session 的恢复
+
+仅对已重开、queued、带reopenContext且resume原childSessionId明确返回该ID不存在的Task，Runtime创建新独立Session并先持久化新的childSessionId和`task-reopen-session-recreated`事件，再继续原TASK_REOPEN与Topic输入派发。旧Session ID保留在runHistory；其它错误及running/waiting不换会话。切换前按既有流程备份稳定存储，核对三个目标Task的taskId、轮次、来源版本与原ID；切换后逐个读回新Session、原Task身份、运行事件及未重复业务动作。旧轮执行细节不可恢复，当前轮必须独立核验；不得把旧结果映射成新轮通过。

@@ -85,3 +85,5 @@
 "D04","20","PASS","精确补修包本地部署","round-20.md;round-20/runtime-readback.json","34文件hash一致；Web及入站桥接正常"
 "R04","20","PASS","原权限报告恢复","round-20.md;round-20/task-session-readback.json","复用reject；原Session继续执行"
 "R05","20","BLOCKED","三条历史任务会话恢复","round-20.md;round-20/task-session-readback.json","原Session不存在，queued，不构造空会话"
+"R06","21","PASS","已重开Task缺失旧Session恢复","round-21.md;round-21/full-tests.txt","632/632；同Task新Session；其它错误及running不换"
+"R07","21","UNVERIFIED","三任务现场恢复","round-21.md","待部署后逐项回读"
