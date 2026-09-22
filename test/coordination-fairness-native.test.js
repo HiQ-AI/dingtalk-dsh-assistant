@@ -30,6 +30,8 @@ test('自动续行排队期间finish、版本失效和close均唤醒请求级等
       const waiting = manager.whenSettled(a).then(() => { settled = true })
       const first = handles.get(a)
       await first.gate({ agent: first.agent, messages: [] }, () => ({}))
+      await first.gate({ agent: first.agent, messages: [] }, () => ({}))
+      await first.gate({ agent: first.agent, messages: [] }, () => ({}))
       const second = manager.dispatch(b, { id: 'b' })
       assert.deepEqual(await first.gate({ agent: first.agent, messages: [] }, () => { throw new Error('must yield') }), { kind: 'reject' })
       first.idle.resolve(); await second; await tick()
@@ -78,13 +80,14 @@ test('同群九次无效提交按step让出，工具结果落稳后路由和其�
       agentCtx.tools.register({ name: 'submit', description: '确定性协调提交', parameters: { type: 'object' }, output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }, execute() {
         const count = calls.get(entry.request.requestId)
         if (entry.request === a && count <= 9) return { accepted: false, error: 'invalid_submission' }
+        if (entry.request === b && count < 3) return { accepted: false, next: count === 1 ? 'review' : 'submit' }
         current.delete(entry.request); manager.finish(entry.request)
         if (!current.size) done.resolve()
         return { accepted: true }
       } })
       agentCtx.on('tools/post-execute', async (_exec, _result, next) => {
         if (entry.request === a && calls.get(a.requestId) === 1) { entered.resolve(); await release.promise }
-        if (entry.request === b) { otherEntered.resolve(); await otherRelease.promise }
+        if (entry.request === b && calls.get(b.requestId) === 1) { otherEntered.resolve(); await otherRelease.promise }
         return next()
       })
     } })
@@ -115,7 +118,8 @@ test('同群九次无效提交按step让出，工具结果落稳后路由和其�
   await Promise.all(queued); await done.promise
   await Promise.all([...agents.values()].map(agent => agent.whenIdle()))
   await settlement
-  assert.deepEqual(order.slice(0, 4), [a.requestId, route.requestId, b.requestId, review.requestId])
+  assert.deepEqual(order.slice(0, 6), [a.requestId, route.requestId, b.requestId, b.requestId, b.requestId, review.requestId])
+  assert.equal(agents.get(b).session.snapshotEvents().filter(event => event.type === 'dingtalk/coordination-dispatched').length, 1, '正常三步事务只获槽一次，避免每次读取遍历队列')
   assert.equal(calls.get(a.requestId), 10)
   assert.equal(first.session.snapshotEvents().filter(event => event.type === 'tool/result').length, 10)
   assert.equal(peak, 1)

@@ -75,3 +75,7 @@
 "D01","17","PASS","精确包安装与34个文件摘要回读","round-17.md","Assistant源码60f883c；其他依赖及配置未变"
 "D02","17","PASS","新进程双端口、健康、认证Web访问","round-17.md","health ok；恢复错误0；Web握手后200"
 "D03","17","UNVERIFIED","真实渠道端到端时延及原话题Task完成","round-17.md","已恢复决策派发；未把真实业务待处理标通过"
+"L07","18","PASS","决策流程目录及版本安全读取","round-18.md;round-18/full-tests-final.txt","过期与跨请求拒绝；inline复用；623/623"
+"L08","18","PASS","短事务轮转与计量写链公平性","round-18.md;round-18/full-tests-final.txt","三步一次获槽；计量合并；业务插入；错误及close回归"
+"L09","18","PASS","文件卡片精确展示差异","round-18.md;round-18/full-tests-final.txt","同名同ID尾注容许；真实变化拒绝"
+"D04","18","UNVERIFIED","补修包部署与六项业务回读","round-18.md","活动Task仍运行；尚未切换"

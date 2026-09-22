@@ -90,3 +90,22 @@ test('DWS资源下载实际检查大小与路径，正文读取后清理临时�
   await assert.rejects(adapter.readMessageResource('g', 'm', { type: 'fileId', resourceId: 'file' }), /size_invalid/)
   await assert.rejects(access(path.join(cwd, 'resource.txt')))
 })
+
+test('DWS 文件卡片只允许同名同 fileId 的精确下载尾注差异，真实内容或资源变更仍拒绝', async () => {
+  const base = '[文件] 翻译测试_260922.xlsx fileId: fixture-file-translation-001'
+  const source = { messageId: 'a', sourceKind: 'dingtalk', text: `${base} 注意：如需下载使用dws drive download命令下载` }
+  const remote = { messageId: 'a', groupId: 'g', text: base, resourceRefs: [{ type: 'fileId', resourceId: 'fixture-file-translation-001', name: '翻译测试_260922.xlsx' }] }
+  const make = (message = remote, inbound = source) => harness({ request: { requestId: 'r', groupId: 'g', messages: [inbound] }, readMessage: async () => message, readResource: async () => ({ text: '测试正文' }) })
+  const h = make()
+  assert.equal((await h.call('group_message_get', { messageId: 'a' })).message.text, base)
+  assert.equal((await h.call('group_resource_get', { messageId: 'a', type: 'fileId', resourceId: remote.resourceRefs[0].resourceId })).text, '测试正文')
+  for (const changed of [
+    { ...remote, resourceRefs: [{ ...remote.resourceRefs[0], resourceId: 'different-file' }] },
+    { ...remote, resourceRefs: [{ ...remote.resourceRefs[0], name: '另一个文件.xlsx' }] },
+    { ...remote, resourceRefs: [] },
+    { ...remote, text: base.replace('260922', '260923') },
+    { ...remote, text: '已经修改的普通文本', resourceRefs: [] },
+  ]) await assert.rejects(make(changed).call('group_message_get', { messageId: 'a' }), /coordination_message_version_changed/)
+  await assert.rejects(make({ ...remote, text: '原文', resourceRefs: [] }, { ...source, text: '原文 注意：如需下载使用dws drive download命令下载' }).call('group_message_get', { messageId: 'a' }), /coordination_message_version_changed/)
+  await assert.rejects(make(remote, { ...source, text: `${source.text} 追加业务要求` }).call('group_message_get', { messageId: 'a' }), /coordination_message_version_changed/)
+})

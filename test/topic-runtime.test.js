@@ -1865,3 +1865,76 @@ test('决策一次报告独立动作的版本和归属问题，不写Task或Outb
   assert.equal(h.store.listTasks().length, 0)
   assert.equal(h.applications.length, 0)
 })
+
+test('决策首包提供固定流程索引、合法 section 与批量正文读取，并拒绝跨请求', async (t) => {
+  const h = await setup(t)
+  await h.store.setTaskPrompts([reviewPrompt('investigate'), { ...reviewPrompt('disabled'), enabled: false }], 0)
+  await ingest(h, 'decision-prompts')
+  await h.coordinator.schedule('g')
+  const route = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await h.call('group_topic_route_submit', { requestId: route.requestId, routes: [{ messageId: 'decision-prompts', messageVersion: 1, topics: [{ newTopicKey: 'a', title: '排查' }] }] })
+  const request = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.deepEqual(request.promptIndex.map(({ id }) => id), ['investigate'])
+  assert.ok(request.contextSections.includes('promptIndex'))
+  assert.deepEqual(h.tools.get('group_decision_context_get').parameters.properties.section.enum, request.contextSections)
+  const scoped = new Map()
+  h.coordinator.register({ tools: { register(tool) { scoped.set(tool.name, tool) } } }, 'g', request)
+  assert.ok(scoped.has('group_task_prompt_get'))
+  await assert.rejects(scoped.get('group_task_prompt_get').execute({ requestId: 'another', ids: ['investigate'] }, { groupId: 'g' }), /coordination_tool_wrong_request/)
+  const read = await scoped.get('group_task_prompt_get').execute({ requestId: request.requestId, ids: ['investigate'] }, { groupId: 'g' })
+  assert.equal(read.prompts[0].revision, request.promptIndex[0].revision)
+  assert.equal(read.prompts[0].prompt, '按流程核验')
+  await assert.rejects(h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['disabled'] }), /task_review_prompt_not_available/)
+  await assert.rejects(h.call('group_decision_context_get', { requestId: request.requestId, section: 'workflows' }), /allowed=.*promptIndex/)
+  await h.store.setTaskPrompts([reviewPrompt('investigate', '新版')], 1)
+  const stale = await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['investigate'] })
+  assert.equal(stale.status, 'decision-stale')
+  const current = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.notEqual(current.requestId, request.requestId)
+  assert.equal((await h.call('group_task_prompt_get', { requestId: current.requestId, ids: ['investigate'] })).prompts[0].prompt, '新版')
+  await assert.rejects(h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['investigate'] }), /task_review_request_unknown/)
+})
+
+test('超长流程索引通过声明的 promptIndex 分页完整读取且保持决策首包预算', async (t) => {
+  const h = await setup(t)
+  await h.store.setTaskPrompts(Array.from({ length: 24 }, (_, index) => ({ ...reviewPrompt(`flow-${index}`), description: '流程适用范围'.repeat(60) })), 0)
+  await ingest(h, 'large-prompt-index')
+  await h.coordinator.schedule('g')
+  const route = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await h.call('group_topic_route_submit', { requestId: route.requestId, routes: [{ messageId: 'large-prompt-index', messageVersion: 1, topics: [{ newTopicKey: 'a', title: '流程索引' }] }] })
+  const request = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.equal(request.promptIndex.section, 'promptIndex')
+  let offset = 0, text = ''
+  while (true) {
+    const page = await h.call('group_decision_context_get', { requestId: request.requestId, section: 'promptIndex', offset })
+    text += page.text
+    if (!page.hasMore) break
+    offset = page.nextOffset
+  }
+  assert.equal(JSON.parse(text).length, 24)
+  assertSupportedJsonSchema(h.tools.get('group_decision_context_get').parameters)
+  assert.equal((await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['flow-23'] })).prompts[0].id, 'flow-23')
+})
+
+test('读取流程后更新或禁用，new-task 提交拒绝旧版本且不写 Task 或 Outbox', async (t) => {
+  for (const change of ['revision', 'disabled']) await t.test(change, async (t) => {
+    const h = await setup(t)
+    await h.store.setTaskPrompts([reviewPrompt('repair')], 0)
+    await ingest(h, 'prompt-stale-task', { text: '@助理 请修复审核草稿保存问题' })
+    await h.coordinator.schedule('g')
+    const route = h.envelope('[GROUP_TOPIC_ROUTE]')
+    await h.call('group_topic_route_submit', { requestId: route.requestId, routes: [{ messageId: 'prompt-stale-task', messageVersion: 1, topics: [{ newTopicKey: 'a', title: '审核草稿' }] }] })
+    const request = h.envelope('[GROUP_TOPIC_DECISION]')
+    assert.ok(Array.isArray(request.messages))
+    assert.match(h.sent.findLast(text => text.startsWith('[GROUP_TOPIC_DECISION]')), /首包内联的 messages 和其他正文可直接使用，无需重复读取/)
+    const read = await h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['repair'] })
+    const ref = { unitId: request.messages[0].unitId, unitRevision: request.messages[0].unitRevision }
+    const action = { kind: 'new-task', title: '修复审核草稿', objective: '修复审核草稿保存', acceptanceCriteria: ['保存回显正确'], topicRefs: [{ topicId: request.topicId, revision: request.revision }], basisUnitRefs: [ref],
+      dispatchAssessment: { businessObject: '审核草稿', agentDeliverable: '保存修复', externalFollowup: [], sourceUnitRefs: [ref], workflowRefs: read.prompts.map(({ id, revision }) => ({ id, revision })), workflowReason: '修复流程适用' } }
+    await h.store.setTaskPrompts([{ ...reviewPrompt('repair', change === 'revision' ? '新版本正文' : '按流程核验'), enabled: change !== 'disabled' }], 1)
+    await assertDecisionIssue(h.call('group_decision_submit', submission(request, { basisUnitRefs: [ref], actions: [action], reply: '已开始修复。', replyReview: { kind: 'confirmation' } })), /task_dispatch_workflow_refs_invalid/)
+    assert.equal(h.store.listTasks().length, 0)
+    assert.equal(h.store.getGroup('g').outbox.length, 0)
+    assert.equal(h.store.getTopic('g', request.topicId).decisions.length, 0)
+  })
+})

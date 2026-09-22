@@ -7,8 +7,10 @@ export function createCoordinationStepGate(entry, isCurrent) {
   const yieldGate = createTaskReportStepGate({ isBlocked: () => entry.yieldRequested === true || entry.request.routingPaused === true, isResolutionMessage: () => false })
   return (event, next) => {
     if (!entry.active || !isCurrent(entry.request)) return { kind: 'reject' }
-    // 只在原生 step 边界让出：上一轮工具、post-execute 和结果日志已经落稳。
-    if ((entry.sliceSteps ?? 0) >= 1 && entry.hasContenders?.()) {
+    // 在原生 step 边界让出：决策/审阅可连续完成读取、审阅、提交，最多三步或30秒；不打断已运行步骤。
+    const steps = entry.sliceSteps ?? 0
+    const limit = entry.role === 'route' ? 1 : 3
+    if (steps > 0 && (steps >= limit || Date.now() - entry.sliceStartedAt >= 30_000) && entry.hasContenders?.()) {
       entry.yieldRequested = true
     }
     // 路由也可能在首个 step 前抢占；原输入仍在 Inbox，必须按公平队列自动续行。
@@ -24,7 +26,7 @@ export const coordinationRole = request => request.kind && ['checkpoint', 'compl
 export function coordinationTools(role) {
   const reads = ['read', 'glob', 'grep', 'skill', 'group_task_context_get', 'group_task_list', 'group_topic_list', 'group_topic_context_get', 'group_message_get', 'group_resource_get']
   const submits = role === 'route' ? ['group_topic_route_context_get', 'group_topic_route_submit', 'group_topic_title_submit', 'group_topic_summary_submit']
-    : role === 'decision' ? ['group_decision_context_get', 'group_decision_submit', 'group_reply_review_get', 'group_topic_route_review']
+    : role === 'decision' ? ['group_decision_context_get', 'group_task_prompt_get', 'group_decision_submit', 'group_reply_review_get', 'group_topic_route_review']
       : ['group_reply_review_get', 'group_task_review_context_get', 'group_task_prompt_get', 'group_reply_submit', 'group_task_review_submit']
   return [...reads, ...submits]
 }
@@ -125,6 +127,7 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
             entry.yieldRequested = false
             entry.settlement ??= Promise.withResolvers()
             entry.sliceSteps = 0
+            entry.sliceStartedAt = Date.now()
             entry.sliceYielded = false
             entry.hasContenders = () => queue.some(item => keyOf(item.request) !== keyOf(request) && isCurrent(item.request))
             entry.fairnessTurn = fairnessTurn

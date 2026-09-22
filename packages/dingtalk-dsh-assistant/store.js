@@ -338,6 +338,37 @@ export async function openResidentStore(storageDomain) {
   // v6 数据只能通过离线迁移进入；启动不再猜测旧消息来源。
   const tails = new Map()
   const pendingPerformanceChunks = new Set()
+  const performanceBatches = new Map()
+  let performanceWriter, closing = false, closePromise
+  function flushPerformanceBatches() {
+    if (performanceWriter) return performanceWriter
+    // Domain 的所有表共用写链；一次仅提交一个计量批次，给已排队的业务写让路。
+    performanceWriter = Promise.resolve().then(async () => {
+      while (performanceBatches.size) {
+        const [partition, batch] = performanceBatches.entries().next().value
+        performanceBatches.delete(partition)
+        try {
+          let projection = scheduler.get(partition)?.performanceProjection
+          const results = batch.map(item => {
+            const result = projectPerformanceEvent(projection, item.input)
+            projection = result.projection
+            return { created: result.created }
+          })
+          if (results.some(result => result.created)) await scheduler.put(partition, { tasks: [], ...scheduler.get(partition), performanceProjection: projection })
+          batch.forEach((item, index) => item.resolve(results[index]))
+        } catch (error) {
+          // 不发布失败投影；后续批次从持久状态重算，原事件可由调用方重试。
+          batch.forEach(item => item.reject(error))
+        } finally {
+          for (const item of batch) if (item.chunkKey) pendingPerformanceChunks.delete(item.chunkKey)
+        }
+      }
+    }).finally(() => {
+      performanceWriter = undefined
+      if (performanceBatches.size) flushPerformanceBatches()
+    })
+    return performanceWriter
+  }
   const findGroupEntry = (groupId) => {
     const direct = groups.get(groupId)
     if (direct !== undefined) return [groupId, direct]
@@ -377,19 +408,17 @@ export async function openResidentStore(storageDomain) {
       }
     },
     recordPerformanceEvent: (input) => {
+      if (closing) return Promise.reject(new Error('resident_store_closed'))
       if (!PERFORMANCE_EVENT_TYPES.has(input.event?.type) || input.event.seq <= (input.seedSeq ?? -1)) return Promise.resolve({ created: false })
       const partition = `performance:${input.sessionId}`
       const chunkKey = input.event.type === 'assistant/chunk' ? performanceChunkKey(input) : undefined
       if (chunkKey && (pendingPerformanceChunks.has(chunkKey) || hasPerformanceFirstStream(scheduler.get(partition)?.performanceProjection, input))) return Promise.resolve({ created: false })
       if (chunkKey) pendingPerformanceChunks.add(chunkKey)
-      return serialize(partition, async () => {
-        const result = projectPerformanceEvent(scheduler.get(partition)?.performanceProjection, input)
-        if (result.created) {
-          const current = scheduler.get(partition)
-          await scheduler.put(partition, { tasks: [], ...current, performanceProjection: result.projection })
-        }
-        return { created: result.created }
-      }).finally(() => { if (chunkKey) pendingPerformanceChunks.delete(chunkKey) })
+      const batch = performanceBatches.get(partition) ?? []
+      performanceBatches.set(partition, batch)
+      const persisted = new Promise((resolve, reject) => batch.push({ input, chunkKey, resolve, reject }))
+      flushPerformanceBatches()
+      return persisted
     },
     getCoordinationRequest: (groupId, requestId) => findGroupEntry(groupId)?.[1].coordinationRequests?.[requestId],
     updateCoordinationRequest: (groupId, requestId, patch) => serialize(groupId, async () => {
@@ -1101,6 +1130,13 @@ export async function openResidentStore(storageDomain) {
       for (const [expiredKey] of removed) await activities.delete(expiredKey)
       return { created: !existing && !removed.some(([removedKey]) => removedKey === key), ...(existing ? { activity: existing } : { activity }), truncated: activityProjection.truncated }
     }),
-    close: () => domain.close(),
+    close: () => {
+      closing = true
+      return closePromise ??= (async () => {
+        while (performanceWriter) await performanceWriter
+        await Promise.allSettled([...tails.values()])
+        await domain.close()
+      })()
+    },
   }
 }

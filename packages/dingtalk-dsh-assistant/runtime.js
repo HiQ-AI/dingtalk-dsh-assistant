@@ -2166,7 +2166,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
           agentCtx.tools.restrict({ allow: [...allowed].filter(name => agentCtx.tools.get(name)) })
           agentCtx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'coordination_tool_outside_role')
           registerCoordinationMessageTool(agentCtx, entry)
-          agentCtx.systemPrompt.section({ name: 'dingtalk-coordination-scope', order: 120, text: `当前仅处理 ${role} 请求 ${request.requestId}。业务提交仅限本请求，不能执行工程修改。引用消息恢复使用 group_message_get；该工具检查本请求引用身份和读取完整性，替代群主协议中的 pwsh 查询。缺失附件正文必须明确保留读取失败，不能猜测内容。` })
+          agentCtx.systemPrompt.section({ name: 'dingtalk-coordination-scope', order: 120, text: `当前仅处理 ${role} 请求 ${request.requestId}。业务提交仅限本请求，不能执行工程修改。引用消息恢复使用 group_message_get；该工具检查本请求引用身份和读取完整性，替代群主协议中的 pwsh 查询。缺失附件正文必须明确保留读取失败，不能猜测内容。group_resource_get 只解析图片与受支持文本；已确认精确资源身份但 xlsx 等格式不受支持，不等于文件缺失。用户已明确交办文件处理时，将文件引用和读取限制交给 Task，由叶子用适用工具解析；协调阶段不以先完成文件处理作为发起前提。若授权或资源身份不明确，仍先澄清。` })
         } })
       handle.agent.session.append('dingtalk/coordination', identity)
       registerPerformanceSession(sessionId, identity)

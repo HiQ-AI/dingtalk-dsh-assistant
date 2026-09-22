@@ -11,6 +11,7 @@ import { assertCurrentTaskPrompts, isDiagnosticCheckpoint } from './task-result.
 import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, isExplicitAgentDirection, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS, collectDecisionIssues } from './decision.js'
 
 const textMessage = (text, images = []) => Object.freeze({ id: randomUUID(), role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text }, ...images.map((attachment) => ({ type: 'image', attachment }))] })
+const DECISION_SECTIONS = ['messages', 'summary', 'removedUnitRefs', 'rejectedDecisions', 'ownership', 'quotedMessages', 'sourceMessages', 'promptIndex']
 const objectOutput = { schema: { type: 'object' }, render: (_args, out) => [{ type: 'text', text: JSON.stringify(out) }] }
 const jsonOutput = (value) => {
   if (value === undefined) throw new Error('tool_output_undefined')
@@ -431,8 +432,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     wait().catch(fail)
   }
   function createDecisionRequest(groupId, topic) {
+    const promptCatalog = (store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map(({ id, name, description, revision }) => ({ id, name, description, revision }))
     const rejected = topic.decisions.filter(record => record.status === 'rejected' && record.revision > topic.processedRevision)
-    const requestId = requestIdentity('decision', { groupId, topicId: topic.topicId, revision: topic.revision,
+    const requestId = requestIdentity('decision', { groupId, topicId: topic.topicId, revision: topic.revision, promptCatalog,
       ...(rejected.length ? { rejectedDecisionIds: rejected.map(record => record.decisionId) } : {}) })
     for (const [id, request] of decisions) {
       if (request.groupId !== groupId || request.topicId !== topic.topicId) continue
@@ -443,7 +445,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const messages = topicMessages(groupId, topic.topicId, topic.revision)
     const removedUnitRefs = topic.entries.filter((entry) => entry.action === 'remove' && entry.revision > topic.processedRevision && entry.revision <= topic.revision).map(({ unitId, unitRevision, messageId }) => ({ unitId, unitRevision, messageId }))
     const removedMessageIds = [...new Set(topic.entries.filter((entry) => entry.action === 'remove' && entry.revision > topic.processedRevision && entry.revision <= topic.revision).map((entry) => entry.messageId))]
-    const request = { requestId, groupId, topicId: topic.topicId, revision: topic.revision, messages, removedUnitRefs, removedMessageIds,
+    const request = { requestId, groupId, topicId: topic.topicId, revision: topic.revision, messages, removedUnitRefs, removedMessageIds, promptCatalog, readPromptRefs: new Map(), readPromptVersions: new Map(),
       topicRefs: [{ topicId: topic.topicId, revision: topic.revision }], candidates: scopedCandidates(groupId, messages, [{ topicId: topic.topicId, revision: topic.revision }]), readReview: false }
     decisions.set(request.requestId, request)
     const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= topic.revision).map(unitKey))
@@ -467,7 +469,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const quotedMessages = [...quoted].map(([quoteId, message]) => ({ ...message, quoteId }))
     const sourceMessages = [...sources.values()]
     request.hasSourceContext = quotedMessages.length > 0 || sourceMessages.length > 0
-    request.sections = { messages: JSON.stringify(projected), summary: JSON.stringify({ summary: topic.summary, openQuestions: topic.openQuestions }),
+    request.sections = { promptIndex: JSON.stringify(promptCatalog), messages: JSON.stringify(projected), summary: JSON.stringify({ summary: topic.summary, openQuestions: topic.openQuestions }),
       removedUnitRefs: JSON.stringify(removedUnitRefs), rejectedDecisions: JSON.stringify(rejected.map(record => ({ decisionId: record.decisionId, error: record.error }))),
       ownership: JSON.stringify({ ownedDeltaUnitRefs: ownership.ownedDeltaUnitRefs, ownedDeltaMessageIds: ownership.ownedDeltaMessageIds }),
       quotedMessages: JSON.stringify(quotedMessages), sourceMessages: JSON.stringify(sourceMessages) }
@@ -476,13 +478,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     request.readUnitRefs = new Set()
     const pointer = (section) => ({ section, totalChars: request.sections[section].length, contentFingerprint: fingerprint(request.sections[section]), nextOffset: 0, hasMore: true })
     const envelope = { requestId, topicId: topic.topicId, revision: topic.revision, processedRevision: topic.processedRevision,
-      title: topic.title, summaryRevision: topic.summaryRevision, replyReviewCandidateCount: request.candidates.length,
+      title: topic.title, promptIndex: promptCatalog, contextSections: DECISION_SECTIONS, summaryRevision: topic.summaryRevision, replyReviewCandidateCount: request.candidates.length,
       totalMessages: messages.length, historyAvailable: messages.length > deltaMessages.length,
       ownedDeltaUnitRefs: ownership.ownedDeltaUnitRefs, ownedDeltaMessageIds: ownership.ownedDeltaMessageIds,
       messages: projected, quotedMessages, sourceMessages, summary: topic.summary, openQuestions: topic.openQuestions,
       removedUnitRefs, removedMessageIds, ...(rejected.length ? { rejectedDecisions: rejected.map(record => ({ decisionId: record.decisionId, error: record.error })),
         recoveryInstruction: '此前决策被拒绝，Task 动作未执行；先读取当前 Task 的 stagePlan，以真实 stageId 重新判断未处理输入。已发送回复仍须审阅，不重复确认。' } : {}) }
-    const sectionFields = { summary: ['summary', 'openQuestions'], quotedMessages: ['quotedMessages'], sourceMessages: ['sourceMessages'],
+    const sectionFields = { promptIndex: ['promptIndex'], summary: ['summary', 'openQuestions'], quotedMessages: ['quotedMessages'], sourceMessages: ['sourceMessages'],
       removedUnitRefs: ['removedUnitRefs'], rejectedDecisions: ['rejectedDecisions'], ownership: ['ownedDeltaUnitRefs', 'ownedDeltaMessageIds'], messages: ['messages'] }
     while (serializedBytes(envelope) > DECISION_OUTPUT_MAX_BYTES - 1500) {
       const section = Object.entries(sectionFields).filter(([, fields]) => fields.some((field) => Object.hasOwn(envelope, field)))
@@ -497,7 +499,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     request.visibleMessages = Array.isArray(envelope.messages) ? envelope.messages : []
     request.inlineDelta = Array.isArray(envelope.messages)
     envelope.omittedDeltaCount = request.inlineDelta ? 0 : deltaMessages.length
-    const instruction = '按此 Topic 固定版本处理本次事项增量。仅本 Topic 拥有的当前事项可创建或更新 Task；每个 action 携带各自 basisUnitRefs。同一消息拆出多个事项时，new-task 必须提供 dispatchAssessment，分别写明业务对象、当前 Agent 交付、他人后续事项、来源 Unit 和适用流程 ID/版本及选择原因；不得把其他事项或他人验收写入当前目标。单事项任务也应按此核对。提交前用 group_decision_context_get 读完 messages 及其他必要 section 指针。需要历史时再用 group_topic_context_get 查询。'
+    const instruction = '按此 Topic 固定版本处理本次事项增量。仅本 Topic 拥有的当前事项可创建或更新 Task；每个 action 携带各自 basisUnitRefs。同一消息拆出多个事项时，new-task 必须提供 dispatchAssessment，分别写明业务对象、当前 Agent 交付、他人后续事项、来源 Unit 和适用流程 ID/版本及选择原因；不得把其他事项或他人验收写入当前目标。单事项任务也应按此核对。首包内联的 messages 和其他正文可直接使用，无需重复读取；仅遇到 section 指针时，用 group_decision_context_get 按 nextOffset 续读完整内容。流程索引为 promptIndex，按本请求 requestId 用 group_task_prompt_get 一次读取候选流程正文；不要猜测 section。group_decision_context_get 只接受 contextSections 列出的 section。查询已有 Task 用 group_task_list 和 group_task_context_get；需要历史时用 group_topic_context_get。'
     const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n${instruction}`
     if (Buffer.byteLength(body, 'utf8') > DECISION_OUTPUT_MAX_BYTES) throw new Error('decision_context_budget_exceeded')
     const dispatch = () => {
@@ -938,12 +940,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     })
     tool('group_decision_context_get', '按当前群固定决策请求读取超长事项或上下文段；按 nextOffset 连续读取。', {
       type: 'object', additionalProperties: false, required: ['requestId', 'section'], properties: {
-        requestId: { type: 'string' }, section: { type: 'string' }, offset: { type: 'integer' },
+        requestId: { type: 'string' }, section: { type: 'string', enum: DECISION_SECTIONS }, offset: { type: 'integer' },
       },
     }, ({ requestId, section, offset = 0 }) => {
       const request = decisions.get(requestId)
       if (!request || request.groupId !== groupId) throw new Error('decision_context_request_unknown')
-      if (!Object.hasOwn(request.sections, section)) throw new Error('decision_context_section_unknown')
+      if (store.getTopic(groupId, request.topicId)?.revision !== request.revision) throw new Error('decision_context_topic_stale')
+      if (!Object.hasOwn(request.sections, section)) throw new Error(`decision_context_section_unknown:allowed=${DECISION_SECTIONS.join(',')}`)
       if (getAgent(groupId, request)?.session?.deriveMessages && visibleCoordinatorText(getAgent(groupId, request), request.text)) request.surfaceTracked = true
       if (getAgent(groupId, request)?.session?.deriveMessages) request.readSectionOffsets.set(section, visibleSectionLength(getAgent(groupId, request), request.sections[section]))
       if ((request.readSectionOffsets.get(section) ?? 0) !== offset) throw new Error('decision_context_offset_out_of_order')
@@ -994,11 +997,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       if ((request.readSectionOffsets.get(section) ?? 0) === offset) request.readSectionOffsets.set(section, page.nextOffset)
       return page
     })
-    tool('group_task_prompt_get', '按审阅请求批量读取已选或索引中候选任务流程正文；一次传入本轮需要的全部流程 ID，核查是否漏选适用流程，允许多个组合或确无匹配。', { type: 'object', additionalProperties: false, required: ['requestId', 'ids'], properties: {
+    tool('group_task_prompt_get', '按决策或审阅请求的固定流程版本批量读取索引中候选任务流程正文；一次传入本轮需要的全部流程 ID，核查是否漏选适用流程，允许多个组合或确无匹配。', { type: 'object', additionalProperties: false, required: ['requestId', 'ids'], properties: {
       requestId: { type: 'string' }, ids: { type: 'array', items: { type: 'string' } },
-    } }, ({ requestId, ids }) => {
-      const request = reviews.get(requestId)
+    } }, async ({ requestId, ids }) => {
+      const decisionRequest = decisions.get(requestId)
+      const request = decisionRequest ?? reviews.get(requestId)
       if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
+      if (decisionRequest && store.getTopic(groupId, request.topicId)?.revision !== request.revision) throw new Error('decision_context_topic_stale')
       if (ids.length < 1) throw new Error('task_review_prompt_ids_required')
       const uniqueIds = [...new Set(ids)]
       const refs = uniqueIds.map((id) => request.promptCatalog.find((item) => item.id === id))
@@ -1007,6 +1012,12 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const prompts = refs.map((ref) => currentPrompts.find((item) => item.id === ref.id && item.enabled && item.revision === ref.revision))
       const unavailable = refs.filter((_ref, index) => !prompts[index]).map((ref) => ref.id)
       if (unavailable.length) {
+        if (decisionRequest) {
+          await supersedeRequest(request, undefined, 'decision-prompt-catalog-changed')
+          decisions.delete(requestId)
+          await schedule(groupId)
+          return { status: 'decision-stale', error: 'decision_prompt_catalog_changed', nextAction: 'wait-for-current-request' }
+        }
         if (diagnosticCheckpoint(request)) return { status: 'prompt-unavailable', ids: unavailable, nextAction: 'continue-diagnostic-review' }
         const error = `task_prompt_selection_stale:${unavailable.join(',')}`
         void supersedeRequest(request, undefined, error)
