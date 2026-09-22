@@ -2,6 +2,16 @@
 
 本 runbook 用于未发布修复包在现有 Windows DSH `web` profile 的安装与验证，不升级 DSH、模型、OAuth、代理或其它插件。沿用[源码开发安装说明](../manual/install-and-configure-dsh-web.md)的原生插件安装路径。组织权限由负责人处理，本轮不重新登录、不主动重试或补发真实群消息。
 
+## 群消息延迟修复的验收补充
+
+本次调度/决策修复沿用 domain v9，不新增迁移；v8 到 v9 必须使用[独立迁移规程](workflow-storage-migration.md)。部署仍需按下文停机、备份、安装精确包并回查源码摘要，不能热替换活动会话的工具契约。
+
+- 安装前运行 `node --test test/group-decision-contract.test.js test/coordination-fairness-native.test.js test/topic-runtime.test.js`，确认严格分支、步骤公平性、路由后自动重验及旧版本反例通过。
+- 安装后分别读取消息 routingStatus、Topic revision/processedRevision、coordinationRequests 和关联 Task；端口健康不能证明任务已发起。
+- 原生会话的 `dingtalk/coordination-dispatched` 应体现同群请求交错；量子让出不能增加 coordinationRequests.attempt。检查工具结果已落盘且同群模型不并发。
+- `routing-required` 的草稿仅在内存中等待，不标成已接受。重启恢复来源重新决策，不批量补建任务、清空旧记录或重放外部动作。
+- 真实环境只读观察新输入的入站、归类、Task 创建时间；实际渠道时延和钉钉送达须独立验证。未知待路由输入仍阻止提交，不能靠放宽此保护获得性能数字。
+
 ## 安装前自检
 
 1. 跑本轮回归和 `node scripts/build-web-client.mjs`，确认生成文件与源码一致。

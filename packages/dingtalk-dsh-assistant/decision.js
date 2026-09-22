@@ -32,10 +32,17 @@ const replyReviewSchema = z.strictObject({
   sameMatterOutboundIds: z.array(z.string().min(1)).default([]),
   replaceOutboundIds: z.array(z.string().min(1)).default([]),
 })
+// DSH 不支持数组长度约束；先按 reply / reason 分支，避免投影时把互斥字段合并为可同时填写。
+const replyDecisionSchema = z.strictObject({
+  ...decisionBasis, actions: z.array(taskAction),
+  reply: z.string().describe('群回复或任务确认；actions 为空时必须非空，提交任务动作时 Host 也要求非空确认。此分支不得填写 reason。'),
+  replyReview: replyReviewSchema.optional(),
+}).superRefine((decision, ctx) => {
+  if (decision.actions.length === 0 && decision.reply.length === 0) ctx.addIssue({ code: 'custom', path: ['reply'], message: 'actions 为空时 reply 必须非空；不回复请改用 actions: [] + reason 分支。' })
+})
 export const groupDecisionSchema = z.union([
-  z.strictObject({ ...decisionBasis, actions: z.tuple([]), reply: z.string().min(1), replyReview: replyReviewSchema.optional() }),
-  z.strictObject({ ...decisionBasis, actions: z.tuple([]), reason: z.string().min(1) }),
-  z.strictObject({ ...decisionBasis, actions: z.array(taskAction).min(1), reply: z.string(), replyReview: replyReviewSchema.optional() }),
+  replyDecisionSchema,
+  z.strictObject({ ...decisionBasis, actions: z.tuple([]), reason: z.string().min(1).describe('不回复且不执行任务动作的原因；不得同时填写 reply 或 replyReview。') }),
 ])
 
 const stringJsonSchema = { type: 'string' }

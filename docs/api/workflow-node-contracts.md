@@ -14,11 +14,15 @@
 
 工具声明由同一 Zod schema 投影为 DSH 支持的 JSON Schema；Host 保留完整 Zod 与关联校验。审阅工具按绑定请求 kind 公开 schema，提交仍由 Host 保存的 kind 解析。调用者不能更换 kind、群或版本绕过门禁。
 
+`group_decision_submit.decision` 公开为两个严格 `oneOf` 分支：`reply`（可带 actions/replyReview）或 `actions: [] + reason`；不得混填 reply/reason。联合类型错误展开为具体字段路径和 branch，最多返回八项，便于修正；非法提交不产生 Task 或 Outbox。
+
+已路由 Topic 可在同群还有待路由消息时准备决策。提交仍在 Store 群锁内核对所有已入站的未知输入、Topic/Task 版本和来源归属。`routing-required` 返回 `nextAction: wait-for-routing`、`retryScheduled: true`，表示 Host 在内存保留未接纳草稿；路由完成后重新走完整提交校验。无关输入不要求重新调用模型，同 Topic 新版本使旧草稿失效。草稿不持久化，进程重启后按当前来源重建，不视为已接纳业务意图。
+
 ## 报告、许可与停止
 
 报告回执 received 只表示已经收件；reviewStatus 与 applicationStatus 表达审阅及应用阶段。submissionId 相同但正文摘要不同会冲突。旧版本报告保留历史，不能换新版本号重提旧证据。
 
-Task running 不是执行许可。报告等待、暂停和取消须停止后续叶子步骤；恢复通过同一许可入口，达到并发限制则排队。协调请求仍按群串行，归类有优先权但通过有限连续派发改善其他审阅等待；未知未归类输入安全门禁不取消。
+Task running 不是执行许可。报告等待、暂停和取消须停止后续叶子步骤；恢复通过同一许可入口，达到并发限制则排队。协调请求仍按群串行；有其他有效请求排队时，每次最多执行一个原生 step，工具及 post-execute 结果落稳后再让出，原 Session 排队续行。路由连续获槽两次后给非路由请求机会；公平让出不消耗协议重试次数。没有竞争时继续当前轮次，未知未归类输入的提交安全门禁不取消。
 
 stopRequest 表达 requested / reconciling / settled。已登记动作结果未知时保持对账，不把取消请求当作外部回滚完成。只有取消可越过同 Task 全部处于 blocked 的 Decision 保留；普通追加或重开仍受冲突检查。旧 blocked 记录和已应用操作不得删除。原操作恢复会再次检查当前 Task 版本和停止状态。
 

@@ -171,7 +171,12 @@ async function createTask(h, id = 'task-input', extra = {}, source = {}) {
   const action = { kind: 'new-task', title: id, objective: `核验 ${id}`, acceptanceCriteria: ['结果可查'], stageTasks: ['核验阶段'], topicRefs: [{ topicId: request.topicId, revision: request.revision }], ...extra }
   assert.equal((await decide(h, request, { actions: [action], reply: '已收到，会继续处理。' })).status, 'accepted')
   assert.equal(h.store.getTopic('g', request.topicId).decisions.at(-1).status, 'completed', JSON.stringify(h.runtime.listRecoveryIssues()))
-  return h.store.listTasks().find((task) => task.topicRefs.some((ref) => ref.topicId === request.topicId))
+  const task = h.store.listTasks().find((task) => task.topicRefs.some((ref) => ref.topicId === request.topicId))
+  const pendingInput = h.store.getGroup('g').messages.some(message => message.routingStatus !== 'routed')
+    || task.topicRefs.some(ref => { const topic = h.store.getTopic('g', ref.topicId); return topic.processedRevision < topic.revision })
+  const hasCapacity = h.store.listTasks().filter(item => item.taskId !== task.taskId && item.state === 'running').length < h.runtime.getAgentConfig().maxConcurrentTasks
+  if (!pendingInput && hasCapacity) await until(() => h.store.getTask(task.taskId).state === 'running' && h.store.getTask(task.taskId).dispatchedInputVersion === task.inputVersion)
+  return h.store.getTask(task.taskId)
 }
 const workflowAssessment = (task, patch = {}) => ({ promptRefs: task.taskPromptRefs ?? [], reusedEvidence: [], inapplicableSteps: [], exceptions: [], ...patch })
 
@@ -563,8 +568,10 @@ test('别名修复请求创建任务，后续无称呼的图片补充续接同�
   await ingest(h, 'repair-request', { text: '@当前登录人(当前登录人) 选择数据集时切换数据库列表未更新，需要修复；后续步骤禁用数据库切换。' })
   const first = (await route(h)).pendingDecisions[0]
   assert.equal((await decide(h, first, { actions: [{ kind: 'new-task', title: '数据库切换修复', objective: '修复首步切库刷新并禁用后续步骤切库', acceptanceCriteria: ['首步切库刷新列表，后续步骤不可切库'], topicRefs: [{ topicId: first.topicId, revision: first.revision }] }], reply: '收到，我来处理。' })).status, 'accepted')
+  await until(() => h.store.listTasks()[0].state === 'running' && h.store.listTasks()[0].dispatchedInputVersion === 1)
   const task = h.store.listTasks()[0]
   assert.equal(task.state, 'running')
+  h.idle.set(task.childSessionId, Promise.resolve())
   await ingest(h, 'repair-image', { text: '[图片消息] 问题页面截图', images: [{ data: 'base64', mediaType: 'image/png' }] })
   const second = (await route(h, { 'repair-image': first.topicId })).pendingDecisions[0]
   const review = await h.call('group_reply_review_get', { requestIds: [second.requestId] })
@@ -575,6 +582,7 @@ test('别名修复请求创建任务，后续无称呼的图片补充续接同�
   assert.equal(updated.inputVersion, task.inputVersion + 1)
   assert.equal(updated.runSequence, task.runSequence)
   assert.deepEqual(updated.topicRefs, [{ topicId: second.topicId, revision: second.revision }])
+  await until(() => h.store.getTask(task.taskId).dispatchedInputVersion === updated.inputVersion)
   assert.ok(JSON.stringify(h.handles.get(task.childSessionId).sent).includes('database-image'))
 })
 
@@ -1694,7 +1702,14 @@ test('Web 补充提升输入版本并重置当前检查点，同请求重试不�
   assert.equal(h.store.getGroup('g').messages.length, 2)
   await assert.rejects(h.runtime.appendTaskContext({ ...request, requestId: 'stale-append' }), /task_web_task-stale|task_input_version_stale/)
   const leaf = h.handles.get(task.childSessionId)
+  await until(() => leaf.sent.some((message) => message.content[0].text.includes('"inputVersion":2')))
   assert.ok(leaf.sent.some((message) => message.content[0].text.includes('"inputVersion":2')))
+  await until(() => h.store.getTask(task.taskId).dispatchedInputVersion === updated.inputVersion)
+  const revision = h.goals.get(task.childSessionId).revision, sent = leaf.sent.length
+  await h.runtime.recoverInterruptedDecisions()
+  await immediate(); await immediate()
+  assert.equal(h.goals.get(task.childSessionId).revision, revision, '已持许可且输入已送达时，无关pump不能再次resume Goal')
+  assert.equal(leaf.sent.length, sent, '同版本稳定消息ID不能重复派发')
 })
 
 test('目标修订原子更新任务名称并保留旧名称，普通补充不得单独改名', async (t) => {
@@ -1815,7 +1830,7 @@ test('Web 重开完成任务建立新轮次，固定保留旧输入版本与历�
   await h.runtime.cancelTask({ taskId: task.taskId, requestId: 'cancel-before-reopen', topicRefs: task.topicRefs, ...inputVersion(h.store.getTask(task.taskId)), reason: '先停止' })
   const completed = h.store.getTask(task.taskId)
   const reopened = await h.runtime.reopenTask({ taskId: task.taskId, requestId: 'web-reopen-1', topicRefs: completed.topicRefs, context: '继续核验剩余范围', ...inputVersion(completed) })
-  assert.equal(reopened.state, 'running')
+  await until(() => h.store.getTask(task.taskId).state === 'running')
   assert.equal(reopened.runSequence, completed.runSequence + 1)
   assert.equal(reopened.inputVersion, completed.inputVersion + 1)
   assert.equal(reopened.runHistory.length, 1)
@@ -2377,6 +2392,34 @@ test('通知 Outbox 首次失败后相同请求重试使用稳定结果键且只
   assert.equal(h.store.getGroup('g').outbox.filter((item) => item.sourceMessageId.startsWith('task-result:')).length, 1)
 })
 
+test('接纳后新入站先阻止叶子启动，同话题决策完成再恢复或取消', async t => {
+  for (const cancel of [false, true]) await t.test(cancel ? '同话题取消不启动叶子' : '同话题无动作后恢复启动', async t => {
+    const h = await setup(t)
+    const complete = h.store.completeTopicDecision.bind(h.store)
+    let injected = false
+    h.store.completeTopicDecision = async (...args) => {
+      if (!injected && h.store.listTasks().length) {
+        injected = true
+        await ingest(h, 'followup-before-start', { text: cancel ? '刚才的任务撤销' : '补充说明仅供参考' })
+      }
+      return complete(...args)
+    }
+    const task = await createTask(h, 'accept-before-new-input')
+    await immediate(); await immediate()
+    assert.equal(h.store.getTask(task.taskId).state, 'queued')
+    assert.equal(h.calls.some(call => call.sessionId === task.childSessionId), false)
+    const request = (await route(h, { 'followup-before-start': task.topicRefs[0].topicId })).pendingDecisions.find(item => item.topicId === task.topicRefs[0].topicId)
+    await immediate()
+    assert.equal(h.calls.some(call => call.sessionId === task.childSessionId), false, '已路由但未决策仍不能启动')
+    const review = cancel ? await h.call('group_reply_review_get', { requestIds: [request.requestId] }) : undefined
+    const decision = await decide(h, request, cancel ? { reply: '已取消。', replyReview: { kind: 'confirmation', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] }, actions: [{ kind: 'task-cancel', taskId: task.taskId, ...inputVersion(task), topicRefs: [{ topicId: request.topicId, revision: request.revision }], reason: '用户撤销' }] } : {})
+    assert.equal(decision.status, 'accepted', JSON.stringify(decision))
+    await until(() => h.store.getTask(task.taskId).state === (cancel ? 'completed' : 'running'))
+    assert.equal(h.calls.some(call => call.sessionId === task.childSessionId), !cancel)
+    if (cancel) assert.equal(h.store.getTask(task.taskId).outcome, 'cancelled')
+  })
+})
+
 test('慢叶子创建期间同群其他 Topic 仍可完成', async (t) => {
   let release, entered = false
   const gate = new Promise((resolve) => { release = resolve })
@@ -2395,7 +2438,7 @@ test('慢叶子创建期间同群其他 Topic 仍可完成', async (t) => {
     assert.equal(h.store.listTasks()[0].state, 'queued')
   } finally { release() }
   await h.runtime.drainTopicOperations('g')
-  assert.equal(h.store.listTasks()[0].state, 'running')
+  await until(() => h.store.listTasks()[0].state === 'running')
 })
 
 test('排队叶子启动中取消立即落盘，迟到的 Session 创建不能复活任务', async (t) => {
@@ -2687,7 +2730,8 @@ test('工作区切换等待期间不占任务提交队列，提交前复核新�
   await until(() => (h.idleCalls.get(oldId) ?? 0) > beforeIdle)
   try {
     const task = await h.runtime.createTask({ groupId: 'g', requestId: 'created-during-config', context: '配置等待时用户独立下达任务', title: '即时任务', objective: '核验', acceptanceCriteria: ['证据'] })
-    assert.equal(task.state, 'running')
+    await until(() => h.store.getTask(task.taskId).state === 'running' && h.store.getTask(task.taskId).dispatchedInputVersion === task.inputVersion)
+    assert.equal(h.store.getTask(task.taskId).state, 'running')
   } finally { releaseIdle() }
   assert.match((await changing).error.message, /agent_config_has_active_tasks/)
   assert.equal(h.resident(), old)

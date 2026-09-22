@@ -66,3 +66,8 @@
 "M03","11","PASS","observer、任务表、API 同读一个任务","round-7.md;round-11.md","结果/等待/投递状态一致；取消不显示验收全通过"
 "P01","11","PASS","固定回放集与 0.5×/1×/2× 负载","round-4.md","有基线及三轮结果；正确性不退化，等待与成本可解释"
 "N01","12","PASS","隔离原生DSH结构化工作流与fake模型协议","round-12.md","真实ToolRuntime/Session/JSON落盘；不含实际渠道或业务验收"
+"L01","15","PASS","决策互斥分支与状态问答只读限制","round-15.md;round-15/full-tests.txt","非法字段有定位；状态问答不能发起任务"
+"L02","15","PASS","前一话题九次无效提交与后续图文请求","round-15.md;round-15/full-tests.txt","旧话题结束前创建唯一Task；attempt保持0"
+"L03","15","PASS","原生步骤公平性及首步骤路由抢占","round-15.md;round-15/full-tests.txt","结果落稳后切换；同群峰值1；自动续行"
+"L04","15","PASS","缓存重验的撤销版本与审阅候选变化","round-15.md;round-15/full-tests.txt","旧草稿无副作用；协调账收口"
+"L05","15","PASS","接纳后新输入与叶子执行许可","round-15.md;round-15/full-tests.txt","路由前不启动；允许后恢复；取消不建叶子"
