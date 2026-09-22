@@ -82,3 +82,6 @@
 "R01","19","PASS","固定快照后台活动恢复","round-19.md;round-19/full-tests.txt","不阻塞后续Task和API；live顺序、失败水位、close排空"
 "R02","19","PASS","零副作用通知重新决策","round-19.md;round-19/full-tests.txt","副作用反例、原子状态CAS、迟到Outbox拒绝；629/629"
 "R03","20","PASS","同稿检查点字段顺序恢复","round-20.md;round-20/full-tests.txt","630/630；复用原reject与身份；不同稿拒绝"
+"D04","20","PASS","精确补修包本地部署","round-20.md;round-20/runtime-readback.json","34文件hash一致；Web及入站桥接正常"
+"R04","20","PASS","原权限报告恢复","round-20.md;round-20/task-session-readback.json","复用reject；原Session继续执行"
+"R05","20","BLOCKED","三条历史任务会话恢复","round-20.md;round-20/task-session-readback.json","原Session不存在，queued，不构造空会话"

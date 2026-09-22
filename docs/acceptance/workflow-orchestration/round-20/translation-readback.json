@@ -1,0 +1,21 @@
+{
+  "revision": 5,
+  "processedRevision": 5,
+  "decisions": [
+    {
+      "id": "coord-decision-ad5d99331aa54b93fc86239e95a82239197b0b33fa4dcbb98212871cab70910f",
+      "status": "rejected",
+      "operations": []
+    },
+    {
+      "id": "coord-decision-69c13be255e34706d28f292eb77ebaa40dc772f798d17514fb8cedbd23035d66",
+      "status": "completed",
+      "operations": [
+        {
+          "status": "applied"
+        }
+      ]
+    }
+  ],
+  "oldOutboxCount": 0
+}
