@@ -70,6 +70,19 @@ test('同request耗尽后立即恢复等待旧句柄释放，创建新日志且�
   assert.equal(h.handles[1].events.filter(event => event.type === 'user/message').length, 1)
 })
 
+test('路由量子续行排到决策之后仍能选中路由，不在队首反复让位空转', async t => {
+  const h = fixture(t), routing = h.request('route', 'sliced'), decision = h.request('decision', 'waiting')
+  await h.manager.dispatch(routing, { id: 'route-first-step' })
+  const waiting = h.manager.dispatch(decision, { id: 'decision-after-route' })
+  h.handles[0].entry.sliceYielded = true
+  h.handles[0].idle.resolve()
+  const delivered = await waiting
+  assert.equal(delivered, h.handles[1].agent)
+  assert.equal(h.handles[0].events.filter(event => event.type === 'dingtalk/coordination-dispatched').length, 2)
+  assert.equal(h.handles[1].events.find(event => event.type === 'dingtalk/coordination-dispatched').data.priorRouteBurst, 2)
+  assert.deepEqual(h.errors, [])
+})
+
 test('角色工具集合不给工程写工具，三种角色只允许对应业务提交', () => {
   for (const role of ['route', 'decision', 'review']) {
     const tools = coordinationTools(role)

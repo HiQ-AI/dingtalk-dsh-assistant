@@ -109,7 +109,9 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
         while (queue.length) {
           const nonRouteIndex = queue.findIndex(item => coordinationRole(item.request) !== 'route')
           const fairnessTurn = (routeBursts.get(groupId) ?? 0) >= 2 && nonRouteIndex >= 0
-          const { request, message, resolve, reject, queuedAt } = queue.splice(fairnessTurn ? nonRouteIndex : 0, 1)[0]
+          // 路由的公平续行可能在队尾，不能再假定队首必为路由，否则会反复让位而空转。
+          const routeIndex = queue.findIndex(item => coordinationRole(item.request) === 'route')
+          const { request, message, resolve, reject, queuedAt } = queue.splice(fairnessTurn ? nonRouteIndex : routeIndex < 0 ? 0 : routeIndex, 1)[0]
           let entry
           try {
             if (closed || !isCurrent(request)) throw new Error('coordination_request_inactive')
