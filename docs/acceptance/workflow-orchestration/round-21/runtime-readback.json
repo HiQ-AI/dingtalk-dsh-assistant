@@ -1,0 +1,64 @@
+{
+  "at": "2026-09-22T10:29:54.858Z",
+  "tasks": [
+    {
+      "id": "task-01b89f39-c0b5-4cf7-8ddd-568c85d5827e",
+      "state": "running",
+      "inputVersion": 2,
+      "runSequence": 2,
+      "oldSessionId": "session-task-01b89f39-c0b5-4cf7-8ddd-568c85d5827e",
+      "newSessionId": "session-task-01b89f39-c0b5-4cf7-8ddd-568c85d5827e-22da926d",
+      "sessionFilePresent": true,
+      "sessionEventCount": 836,
+      "reopenMessage": true,
+      "topicMessage": true,
+      "sessionRecoveryEvents": 1,
+      "appliedOperationCountBefore": 1,
+      "appliedOperationCountAfter": 1,
+      "topicRefsUnchanged": true,
+      "runHistoryUnchanged": true
+    },
+    {
+      "id": "task-da8acd66-f95a-4ffe-ad83-b6770425b536",
+      "state": "running",
+      "inputVersion": 2,
+      "runSequence": 10,
+      "oldSessionId": "session-task-da8acd66-f95a-4ffe-ad83-b6770425b536",
+      "newSessionId": "session-task-da8acd66-f95a-4ffe-ad83-b6770425b536-dffac6c8",
+      "sessionFilePresent": true,
+      "sessionEventCount": 704,
+      "reopenMessage": true,
+      "topicMessage": true,
+      "sessionRecoveryEvents": 1,
+      "appliedOperationCountBefore": 1,
+      "appliedOperationCountAfter": 1,
+      "topicRefsUnchanged": true,
+      "runHistoryUnchanged": true
+    },
+    {
+      "id": "task-add60fd5-7764-410f-9169-e1c0a5ba917a",
+      "state": "running",
+      "inputVersion": 2,
+      "runSequence": 7,
+      "oldSessionId": "session-task-add60fd5-7764-410f-9169-e1c0a5ba917a",
+      "newSessionId": "session-task-add60fd5-7764-410f-9169-e1c0a5ba917a-003974e6",
+      "sessionFilePresent": true,
+      "sessionEventCount": 188,
+      "reopenMessage": true,
+      "topicMessage": true,
+      "sessionRecoveryEvents": 1,
+      "appliedOperationCountBefore": 1,
+      "appliedOperationCountAfter": 1,
+      "topicRefsUnchanged": true,
+      "runHistoryUnchanged": true
+    }
+  ],
+  "health": {
+    "status": "ok",
+    "issues": 0,
+    "bridge": true,
+    "inboundProcessing": true
+  },
+  "issueCount": 0,
+  "allTaskCount": 67
+}

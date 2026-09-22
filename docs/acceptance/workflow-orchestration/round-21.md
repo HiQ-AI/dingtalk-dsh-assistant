@@ -12,6 +12,10 @@
 - `node --test`：632/632 PASS，0 fail/cancel/skip，122.67秒；完整输出round-21/full-tests.txt。
 - `node scripts/build-web-client.mjs`无生成文件变化；`git diff --check`通过。
 
-## 待现场核验
+## 本地部署与现场回读
 
-完成精确包安装、逐项旧/新Session、Task状态、来源版本、桥接与延时存活回读后补充。历史轮次不能依赖缺失会话自动重建为已验证结果。
+- 部署前`--check -AllowActiveTasks`通过，v9数据0 invalid/stripped/unknown；按用户此前批准的中断重启授权停止已核验DSH进程树。停机后备份存储与profile至`D:/dsh_home/backups/decision-context-ff6f29f-20260922`，备份hash一致。
+- 部署源码ff6f29f，包SHA256 `F2D1A662776358BD8A9A331553AF148264A80AAF0CEF39CF34937BAE26BEF88C`；安装34个JS文件与源码hash逐一相同。新PID199008，3080/18998同进程，Web认证303→页面200 HTML，stderr空。
+- 三条目标Task均保留原Task ID、inputVersion2、runSequence2/10/7、Topic引用与runHistory；各有且仅有1条`task-reopen-session-recreated`，新Session文件存在且分别收到TASK_REOPEN和TASK_TOPIC_CONTEXT。三条当前均running，旧已接纳业务操作数量各自保持1未重复。
+- 健康ok、恢复告警0、DWS桥接与入站处理正常；独立结构化回读见round-21/runtime-readback.json、web-readback.json。
+- 历史轮次的原Session细节仍不存在；三条当前仅确认已恢复执行，业务目标完成和真实渠道结果需由各Task后续提交并审阅，不能预先判定完成。

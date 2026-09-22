@@ -37,13 +37,13 @@
 
 | SG9 | 决策上下文与积压闭环 | 工具契约、轮转及慢提交针对性回归，部署及六项状态回读 | 恢复核验中 | round-18.md；623/623；PR #118 OPEN |
 
-| SG10 | 三条历史重开Task恢复 | 原Session缺失的精确恢复、原Task身份/版本不变、本地运行回读 | 实施中 | docs/spec/missing-reopened-task-sessions.md |
+| SG10 | 三条历史重开Task恢复 | 原Session缺失的精确恢复、原Task身份/版本不变、本地运行回读 | 已完成 | round-21.md；632/632；三条running |
 
 ## 当前检查点
 
 - 当前子目标：SG10
-- 唯一下一步：为三条queued且已重开的Task添加原Session缺失时的新执行Session恢复，完成回归、前向部署与逐项Task/Session回读。不自动合并PR。
-- 未闭环项：三条历史Session缺失；真实渠道D03及真实端到端时延未验收。#1336/#1353/#1372 running且有重启后Session事件，#1354 completed；#1350已重新决策重开，#1371已重开，但二者会话缺失。
+- 唯一下一步：SG10已交付，持续由各Task执行原交办；原Session细节不可恢复，业务完成需后续各Task独立提交和审阅。不自动合并PR。
+- 未闭环项：真实渠道D03、真实端到端时延及三个业务目标本身未验收。#1350/#1371/单位不一致Task已重建本轮Session并running，旧历史Session细节仍不可恢复。
 
 
 ## 进展
@@ -90,3 +90,5 @@
 - 18:12恢复核验：407c59d精确安装34文件相同。翻译旧零效果草稿已通过reconsider标rejected且无旧Outbox，新决策重开原Task inputVersion2/run2；三条历史Task原Session缺失仍queued。权限Task同稿checkpoint因字段顺序误判，精确修复保留原reject审阅身份，正在全量回归。
 
 - 18:16 SG9最新交付：PR #118 OPEN，部署源码e48f61e，630/630；34文件hash一致，PID179220，Web认证200、入站桥接正常。权限原报告retry复用reject并恢复原Session；三条历史Session缺失单列，SG9整体仍未完全闭环。以上替代早期未部署状态，历史记录仅保留审计。
+
+- 18:30 SG10交付：ff6f29f已部署，632/632；三条目标Task各自新Session且running，Task身份、轮次、来源和已接纳操作数量不变，Web、入站、桥接正常，health ok/恢复告警0。PR #118 OPEN；各业务任务本身继续执行，不将运行态当完成。
