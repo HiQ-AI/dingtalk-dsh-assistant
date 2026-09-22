@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { openResidentStore, residentDomainSpec } from '../packages/dingtalk-dsh-assistant/store.js'
 import { projectPerformanceEvent, listPerformance, performanceProjectionSchema, workflowPerformance, coordinationCosts } from '../packages/dingtalk-dsh-assistant/performance.js'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
+import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 
 const base = Date.parse('2026-09-21T12:00:00+08:00')
 const input = (seq, type, time, data = {}, identity = {}) => ({ sessionId: 's1', groupId: 'g', requestId: 'r1', ...identity, event: { seq, type, time: base + time, data: { turn: 1, step: 0, ...data } } })
@@ -13,7 +14,7 @@ function facility(seed = new Map()) {
   const table = name => ({
     get: key => seed.get(`${name}:${key}`),
     entries: () => [...seed.entries()].filter(([key]) => key.startsWith(`${name}:`)).map(([key, value]) => [key.slice(name.length + 1), value])[Symbol.iterator](),
-    async put(key, value) { writes++; seed.set(`${name}:${key}`, residentDomainSpec.tables[name].valueSchema.parse(value)) },
+    async put(key, value) { writes++; writtenKeys.push(`${name}:${key}`); seed.set(`${name}:${key}`, residentDomainSpec.tables[name].valueSchema.parse(value)) },
     async delete(key) { seed.delete(`${name}:${key}`) },
     async update(key, transform) { const value = residentDomainSpec.tables[name].valueSchema.parse(transform(seed.get(`${name}:${key}`))); writes++; writtenKeys.push(`${name}:${key}`); seed.set(`${name}:${key}`, value); return value },
   })
@@ -170,6 +171,23 @@ test('按会话分区持久化，一个会话增加指标不重写其它会话�
   assert.deepEqual(memory.seed.get('scheduler:performance:s1'), first)
   assert.equal(store.listPerformance().rows.length, 2)
   assert.equal(store.listPerformance().retention.writePartition, 'session')
+  await store.close()
+})
+
+test('原生Domain首次写入性能分区并在重启后续写', async () => {
+  const snapshot = { tables: {}, global: null }
+  const facility = new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
+    loadAll: async () => structuredClone(snapshot), close: async () => {},
+    async putRecord(table, key, value) { (snapshot.tables[table] ??= {})[key] = structuredClone(value) },
+    async deleteRecord(table, key) { delete snapshot.tables[table][key] },
+  } } } }) } } }, { backend: 'performance-native-test' })
+  let store = await openResidentStore(facility)
+  await store.recordPerformanceEvent(input(1, 'step/start', 0))
+  assert.ok(snapshot.tables.scheduler['performance:s1'])
+  await store.close()
+  store = await openResidentStore(facility)
+  await store.recordPerformanceEvent(input(2, 'assistant/message', 100, { usage: { inputTokens: 10, outputTokens: 2 } }))
+  assert.equal(store.listPerformance().rows[0].modelCalls, 1)
   await store.close()
 })
 

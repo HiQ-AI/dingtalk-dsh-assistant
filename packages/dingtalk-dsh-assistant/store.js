@@ -362,7 +362,10 @@ export async function openResidentStore(storageDomain) {
       if (chunkKey) pendingPerformanceChunks.add(chunkKey)
       return serialize(partition, async () => {
         const result = projectPerformanceEvent(scheduler.get(partition)?.performanceProjection, input)
-        if (result.created) await scheduler.update(partition, current => ({ tasks: [], ...current, performanceProjection: result.projection }))
+        if (result.created) {
+          const current = scheduler.get(partition)
+          await scheduler.put(partition, { tasks: [], ...current, performanceProjection: result.projection })
+        }
         return { created: result.created }
       }).finally(() => { if (chunkKey) pendingPerformanceChunks.delete(chunkKey) })
     },

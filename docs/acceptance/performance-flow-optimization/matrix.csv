@@ -29,3 +29,5 @@ PACK-READBACK,9,PASS,冻结代码重新打三包并核对清单SHA,round-9-pack.
 SG3-FIXED-PROJECTION,9,PASS,91批覆盖81消息；同快照完整输入P50降65.89%且正文目录关联不丢,round-7/route-projection-summary.json; round-7/route-projection-notes.md
 PR-DELIVERY,9,PASS,PR113独立回读OPEN及DRAFT并核对远端源码SHA,round-9.md
 CI-SOURCE,9,PASS,源码da34786构建测试打包上传均成功且独立回读产物,https://github.com/HiQ-AI/dingtalk-dsh-assistant/actions/runs/35615780197
+PERFORMANCE-NATIVE-CREATE,10,PASS,原生Domain首次写入新分区及重启续写,round-10.md
+FINAL-FULL,10,PASS,修复后全量515项通过,round-10.md
