@@ -42,3 +42,23 @@ export function visibleCoordinatorText(agent, text) {
   return agent?.session?.deriveMessages?.().some((message) => message.role === 'user' && message.source?.kind === 'coordinator'
     && message.content?.some((part) => part.type === 'text' && part.text === text)) ?? false
 }
+
+// 仅在同一请求的首包内去重；原 section 保持完整，分页及当前 surface 校验仍读取原文。
+export function compactSectionValue(request, section, value) {
+  request.inlineMaterials ??= new Map()
+  const visit = (item, path) => {
+    const text = JSON.stringify(item)
+    if (text && text.length >= 120) {
+      const digest = fingerprint(text)
+      const previous = request.inlineMaterials.get(digest)
+      if (previous && previous.section !== section && previous.text === text) return {
+        materialRef: { requestId: request.requestId, section: previous.section, path: previous.path, contentFingerprint: digest },
+      }
+      if (!previous) request.inlineMaterials.set(digest, { section, path, text })
+    }
+    if (Array.isArray(item)) return item.map((entry, index) => visit(entry, [...path, index]))
+    if (item && typeof item === 'object') return Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, visit(entry, [...path, key])]))
+    return item
+  }
+  return visit(value, [])
+}

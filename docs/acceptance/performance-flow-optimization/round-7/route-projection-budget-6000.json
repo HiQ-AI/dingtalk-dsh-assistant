@@ -1,0 +1,92 @@
+{
+  "date": "2026-09-21",
+  "cutoff": "2026-09-21T13:44:54.212Z",
+  "baselineRef": "fd8fa1537b42a261965439108baae5700bb4bb78",
+  "newGeneratorSha256": "f729acbaf0fcc87a63413343ff059372080c75b0eeb61083bb99c660940b7c62",
+  "auditStoreSha256": "a059adbfaeca719bdb4a455b486fff9910e4a7a28540310b26df0fcad32c9044",
+  "comparedStoreSha256": "7c968979173b1707c68fe8bb7fc64f3c7f9c12a3433269f663123bd1837b0cf5",
+  "exactHistoricalStoreAvailable": false,
+  "sampleFingerprint": "89e936e1e46842183a2abec16b1f5369b5f018e9491a05b35481be8e04c23c5e",
+  "samples": {
+    "historicalRouteEnvelopes": 91,
+    "todayMessages": 81,
+    "todayCovered": 81,
+    "allBatchMessages": 81,
+    "sourceVersionChanges": 16,
+    "missingHistoricalVersions": 0
+  },
+  "historicalObservedContentBytes": {
+    "count": 91,
+    "sum": 2902463,
+    "p50": 31772,
+    "p95": 33035,
+    "max": 33646
+  },
+  "sameSnapshotGeneratedContentBytes": {
+    "before": {
+      "count": 91,
+      "sum": 2962075,
+      "p50": 32310,
+      "p95": 34971,
+      "max": 35299
+    },
+    "after": {
+      "count": 91,
+      "sum": 1144965,
+      "p50": 12405,
+      "p95": 15132,
+      "max": 16365
+    },
+    "p50Reduction": 0.6160631383472609,
+    "p95Reduction": 0.5672986188556233,
+    "totalReduction": 0.6134584708354784
+  },
+  "sameSnapshotGeneratedEnvelopeBytes": {
+    "before": {
+      "count": 91,
+      "sum": 2757194,
+      "p50": 30111,
+      "p95": 32381,
+      "max": 32690
+    },
+    "after": {
+      "count": 91,
+      "sum": 927764,
+      "p50": 10066,
+      "p95": 12483,
+      "max": 13790
+    }
+  },
+  "checks": {
+    "businessStateUnchanged": true,
+    "fullMessageTextChecks": 101,
+    "completeDirectoryBatches": 91,
+    "directoryFirstPageCount": {
+      "count": 91,
+      "sum": 5005,
+      "p50": 55,
+      "p95": 55,
+      "max": 55
+    },
+    "directoryTotalCount": {
+      "count": 91,
+      "sum": 7189,
+      "p50": 79,
+      "p95": 79,
+      "max": 79
+    },
+    "directoryPages": 91,
+    "quotedBatches": 66,
+    "relatedTopicRelationsChecked": 140,
+    "linkedTaskChecks": 111,
+    "relatedPages": 0,
+    "noRelatedTopicLoss": true
+  },
+  "limitations": [
+    "The current store differs from the audit snapshot; this is paired projection on one captured current snapshot, not historical state reconstruction.",
+    "All 81 dated messages are covered by the 91 historical batches; nested quote identities are not additional batch messages. No LLM or external business action is replayed.",
+    "Directory, related-task/quote relation and full-text checks are deterministic structure checks, not human semantic routing ground truth.",
+    "The old module is the pinned baseline generator with imports resolved against current dependencies; results quantify this route generator change only.",
+    "Byte reduction is not token, cache, model-latency or business-response improvement."
+  ]
+}

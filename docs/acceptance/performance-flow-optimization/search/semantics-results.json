@@ -1,0 +1,39 @@
+{
+  "results": [
+    {
+      "original": "docs/*.md",
+      "narrowed": "docs/*.md",
+      "baseline": [
+        "docs/.hidden.md",
+        "docs/a.md",
+        "docs/ignored.md"
+      ],
+      "equal": true
+    },
+    {
+      "original": "docs/**/*",
+      "narrowed": "docs/**/*",
+      "baseline": [
+        "docs/.gitignore",
+        "docs/.hidden.md",
+        "docs/a.md",
+        "docs/ignored.md",
+        "docs/nested/a.md",
+        "docs/node_modules/pkg/a.md"
+      ],
+      "equal": true
+    },
+    {
+      "original": "docs/a.md",
+      "narrowed": "docs/a.md",
+      "baseline": [
+        "docs/a.md"
+      ],
+      "equal": true
+    }
+  ],
+  "unsafeBasenameRewriteExtra": [
+    "docs/nested/a.md",
+    "docs/node_modules/pkg/a.md"
+  ]
+}

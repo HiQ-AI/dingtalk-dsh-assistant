@@ -10,7 +10,10 @@ import { taskProgressSnapshot } from './task-progress.js'
 import { createTaskReportQueue, deterministicReviewFailure, taskReportReceiptSchema, taskReports } from './task-reports.js'
 import { createTaskReportStepGate } from './task-report-step-gate.js'
 import { createStatusQueryHandler } from './status-query.js'
+import { coordinationTools, createCoordinationSessions, createCoordinationStepGate } from './coordination-sessions.js'
+import { createCoordinationResourceTools } from './coordination-resources.js'
 import { reviseTaskProgress, stagePlanFor, reconcileLegacyStagePlan, normalizeRunPlan } from './task-input-revision.js'
+import { PERFORMANCE_EVENT_TYPES } from './performance.js'
 
 const PROJECTED_EVENTS = new Set(['assistant/message', 'tool/call', 'tool/result', 'turn/end', 'goal/change'])
 const STALE_RESIDENT_REQUEST_PREFIXES = ['[GROUP_TOPIC_ROUTE]', '[GROUP_TOPIC_DECISION]', '[TASK_COORDINATION]', '[TASK_COMPLETION_REVIEW]', '[TASK_CHECKPOINT_REVIEW]', '[GROUP_MESSAGE_STEER]', '[GROUP_DECISION_RECHECK]', '[GROUP_DECISION_RESUME]']
@@ -20,6 +23,44 @@ const TASK_CONTEXT_REQUEST_LIMIT = 8
 const RESIDENT_TASK_INDEX_MAX_CHARS = 16_000
 const RESIDENT_TOPIC_INDEX_MAX_CHARS = 16_000
 const TASK_MESSAGE_CONTEXT_MAX_CHARS = 40_000
+export async function taskWorkLocations(task) {
+  const previous = task.runHistory?.at(-1)
+  const sources = [
+    ...(task.result?.artifacts ?? []).map(text => ({ text, source: 'result.artifacts' })),
+    ...(task.lastWaitingResult?.artifacts ?? []).map(text => ({ text, source: 'lastWaitingResult.artifacts' })),
+    ...[...(task.checkpoints ?? []), ...(previous?.checkpoints ?? [])].flatMap(item =>
+      (item.evidence ?? []).map(text => ({ text, source: `checkpoint:${item.checkpointId ?? 'history'}` }))),
+    ...(previous?.result?.artifacts ?? []).map(text => ({ text, source: 'previousRun.result.artifacts' })),
+    ...[task.reopenContext, task.resumeContext].filter(Boolean).map(text => ({ text, source: 'handoff' })),
+  ]
+  const candidates = new Map()
+  for (const { text, source } of sources) {
+    const values = [String(text).trim(), ...String(text).matchAll(/`([^`\r\n]+)`|\]\(([^)\r\n]+)\)|([A-Za-z]:[\\/][^\s`<>"'，；。)]+)/gu)]
+    for (const value of values) {
+      const candidate = (typeof value === 'string' ? value : value[1] ?? value[2] ?? value[3]).replace(/^<|>$/gu, '')
+      if (path.isAbsolute(candidate) && !candidate.startsWith('\\\\')) candidates.set(path.normalize(candidate), source)
+    }
+  }
+  const locations = new Map()
+  const add = async (file, source, kind) => {
+    const info = await stat(file).catch(() => undefined)
+    if (!info?.isFile() && !info?.isDirectory()) return
+    locations.set(file, { path: file, kind: kind ?? (info.isDirectory() ? 'directory' : path.basename(file) === 'goal.md' ? 'goal' : 'artifact'), source })
+  }
+  for (const [file, source] of [...candidates].slice(0, 24)) {
+    await add(file, source)
+    if (!locations.has(file)) continue
+    const normalized = file.split(path.sep).join('/')
+    const match = normalized.match(/^(.*)\/docs\/acceptance\/([^/]+)(?:\/|$)/u)
+    if (match) {
+      await add(path.normalize(`${match[1]}/docs/acceptance/${match[2]}`), source, 'acceptance')
+      const marker = await stat(path.join(match[1], '.git')).catch(() => undefined)
+      if (marker) await add(path.normalize(match[1]), source, marker.isFile() ? 'worktree' : 'repository')
+    }
+  }
+  return { status: locations.size ? 'verified' : 'unknown', locations: [...locations.values()], unchecked: Math.max(0, candidates.size - 24),
+    guidance: '仅为已记录路径的当前存在性核验，不代表授权或历史结果仍有效。优先从这些位置读取；位置未知时读取现有任务工件或询问缺失位置，不要重新扫描整个工作区。' }
+}
 const compactText = (value, limit) => {
   const text = String(value ?? '').trim()
   return text.length <= limit ? text : `${text.slice(0, limit)}…`
@@ -172,7 +213,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
   const completedActivityAuditQueue = store.listTasks().filter(task => task.state === 'completed').map(task => ({ taskId: task.taskId, sessionId: task.childSessionId }))
   const completedActivityAuditTotal = completedActivityAuditQueue.length
   const completedActivityAuditUnavailable = new Map()
-  let groupMessageRecaller
+  let groupMessageRecaller, groupMessageReader, groupResourceReader
   let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks
   if (store.getMaxConcurrentTasks?.() === undefined) await store.setMaxConcurrentTasks?.(taskConcurrencyLimit)
   if (!Number.isFinite(decisionRetryBaseMs) || decisionRetryBaseMs < 0) throw new Error('decision_retry_base_invalid')
@@ -225,12 +266,12 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 
 本节是“钉钉中已存在、可按消息 ID 恢复的引用消息”的专用规则，优先于通用外部资源缺失规则。任何引用 ID 尚未查询、查询结果不完整、查询失败、未命中或出现循环时，都不得猜测上下文，也不得向群成员回复“请补原问题、正文或截图”。${owner === 'resident' ? '不得调用 group_decision_submit 提交这类群回复；保留工具错误并结束当前 step，Runtime 会持久化原消息并自动重新判断。' : '不得用主会话摘要替代原文；通过 submit_task_result 如实提交 waiting 状态和 DWS 读取证据，不得要求群成员重新提供已经存在于钉钉中的消息。'}`
   }
-  function configureResident(agentCtx, groupId) {
+  function configureResident(agentCtx, groupId, scope) {
     installSelection(agentCtx)
     agentCtx.tools.restrict({ deny: ['get_goal', 'create_goal', 'update_goal'] })
     agentCtx.systemPrompt.section({ name: 'tool:goal', order: 114, text: '' })
     registerResidentContextTools(agentCtx, groupId)
-    topics.register(agentCtx, groupId)
+    topics.register(agentCtx, groupId, scope)
     registerResidentTaskTools(agentCtx, groupId)
     agentCtx.systemPrompt.section({
       name: 'dingtalk-group-responsibility', order: 40,
@@ -242,7 +283,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
     agentCtx.systemPrompt.section({
       name: 'dingtalk-group-task-index', order: 42,
       text: () => {
-        const taskIndex = buildResidentTaskIndex(store.listTasks().filter((task) => task.groupId === groupId))
+        const taskIndex = buildResidentTaskIndex(store.listTasks().filter((task) => task.groupId === groupId && (!scope || task.taskId === scope.task?.taskId || task.topicRefs.some(ref => scope.topicRefs?.some(item => item.topicId === ref.topicId)))))
         return `## 本群任务关联索引\n\n${taskIndex.total === 0 ? '无。' : JSON.stringify(taskIndex)}\n\n索引只负责召回；需要历史任务时使用 group_task_list 分页搜索。对候选 Task 调用 group_task_context_get，再读取其 Topic 固定版本原文后决定动作。`
       },
     })
@@ -408,7 +449,12 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     while (activeGroupResidentOperations.size > 0) await Promise.allSettled([...activeGroupResidentOperations].map((operation) => operation.promise))
   }
   async function waitForActiveGroupSubmissions(groupId) { await topics.drain(groupId) }
-  function assertResidentToolSession(exec, groupId) {
+  function assertResidentToolSession(exec, groupId, scope, toolName) {
+    if (scope || coordinationSessions.identity(exec.agent)) {
+      const entry = coordinationSessions.assert(exec.agent, groupId, scope?.requestId)
+      if (toolName && !coordinationTools(entry.role).includes(toolName)) throw new Error('coordination_tool_wrong_role')
+      return
+    }
     const expected = residentHandles.get(groupId)?.agent?.session?.id
     if (expected === undefined || String(exec.agent?.session?.id) !== String(expected)) throw new Error(`resident_tool_wrong_session:${groupId}`)
   }
@@ -1479,11 +1525,11 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       expectedInputVersion: operation.inputVersion, expectedRunSequence: operation.runSequence, transform })
     return result.task
   }
-  function topicInputText(task) {
+  async function topicInputText(task) {
     const messages = topics.taskMessages(task)
     const revision = task.executionEvents?.findLast(event => event.kind === 'input-revised' && event.previousInputVersion + 1 === task.inputVersion)
     const progressImpact = revision?.progressImpact ?? (task.checkpoints?.length ? 'preserve' : 'replan')
-    return `[TASK_TOPIC_CONTEXT]\nTask 输入：${JSON.stringify({ taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: task.topicRefs, progressImpact })}\n变化说明：${revision?.reason ?? '读取当前系统提示中的有效目标、验收标准、阶段与流程。'}\n原始输入共 ${messages.length} 条；按 group_topic_context_get 读取固定 Topic 版本原文。当前目标、验收和阶段只在系统提示中提供，不重复展开。原文是待核验来源；动作不得超出原始授权。checkpoint/result 必须提交本次 inputVersion 和 runSequence。`
+    return `[TASK_TOPIC_CONTEXT]\nTask 输入：${JSON.stringify({ taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, topicRefs: task.topicRefs, progressImpact })}\n工作位置：${JSON.stringify(await taskWorkLocations(task))}\n变化说明：${revision?.reason ?? '读取当前系统提示中的有效目标、验收标准、阶段与流程。'}\n原始输入共 ${messages.length} 条；按 group_topic_context_get 读取固定 Topic 版本原文。当前目标、验收和阶段只在系统提示中提供，不重复展开。原文是待核验来源；动作不得超出原始授权。checkpoint/result 必须提交本次 inputVersion 和 runSequence。`
   }
   async function dispatchTaskInput(task) {
     const handle = leafHandles.get(task.taskId) ?? await resumeLeaf(task)
@@ -1491,7 +1537,12 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     const pending = [...(handle.agent.inbox?.nextStep ?? []), ...(handle.agent.inbox?.nextTurn ?? [])]
     const recorded = pending.some((message) => message.id === id) || handle.agent.session.snapshotEvents().some((event) =>
       event.type === 'user/message' && event.data?.id === id)
-    if (!recorded) handle.agent.steer(Object.freeze({ ...createUserMessage({ content: [{ type: 'text', text: topicInputText(task) }, ...boundedRecent(topics.taskMessages(task), TASK_MESSAGE_CONTEXT_MAX_CHARS, 50).flatMap((message) => message.imageRefs ?? []).map((attachment) => ({ type: 'image', attachment }))], source: { kind: 'coordinator' } }), id }))
+    if (!recorded) {
+      const text = await topicInputText(task)
+      const current = store.getTask(task.taskId)
+      if (!current || current.inputVersion !== task.inputVersion || current.runSequence !== task.runSequence || current.state !== task.state) return
+      handle.agent.steer(Object.freeze({ ...createUserMessage({ content: [{ type: 'text', text }, ...boundedRecent(topics.taskMessages(task), TASK_MESSAGE_CONTEXT_MAX_CHARS, 50).flatMap((message) => message.imageRefs ?? []).map((attachment) => ({ type: 'image', attachment }))], source: { kind: 'coordinator' } }), id }))
+    }
     const sessions = ctx.get?.('sessions') ?? ctx.sessions
     if (sessions?.flush) await sessions.flush(handle.agent.session)
     await store.updateTask(task.taskId, (current) => current.inputVersion === task.inputVersion ? { ...current, dispatchedInputVersion: task.inputVersion } : current)
@@ -1638,7 +1689,50 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     activityProjectionFailures.delete(taskId)
     recoveryIssues.resolve(issue => issue.taskId === taskId && issue.kind === 'activity-projection')
   }
+  const performanceSessionIdentities = new Map()
+  let performanceTail = Promise.resolve()
+  function registerPerformanceSession(sessionId, identity) {
+    if (!store.getGroup(identity.groupId)) throw new Error('performance_group_not_subscribed')
+    performanceSessionIdentities.set(String(sessionId), { groupId: identity.groupId,
+      ...Object.fromEntries(['taskId', 'requestId', 'submissionId'].filter(key => typeof identity[key] === 'string').map(key => [key, identity[key]])) })
+  }
+  function registerCoordinationMessageTool(agentCtx, entry) {
+    for (const tool of createCoordinationResourceTools({ request: entry.request,
+      assertCurrent: exec => coordinationSessions.assert(exec.agent, entry.request.groupId, entry.request.requestId),
+      readMessage: groupMessageReader, readResource: groupResourceReader,
+      readImage: attachments?.readImage ? ref => attachments.readImage(ref) : undefined,
+    })) agentCtx.tools.register(tool)
+  }
+  function performanceIdentity(session, visited = new Set()) {
+    const sessionId = String(session.id)
+    if (visited.has(sessionId)) return undefined
+    visited.add(sessionId)
+    const registered = performanceSessionIdentities.get(sessionId)
+    if (registered) return registered
+    const taskId = leafTaskBySession.get(sessionId)
+    const task = taskId ? store.getTask(taskId) : store.listTasks().find(item => item.childSessionId === sessionId || item.runHistory?.some(run => run.childSessionId === sessionId))
+    if (task) { const identity = { groupId: task.groupId, taskId: task.taskId }; performanceSessionIdentities.set(sessionId, identity); return identity }
+    const group = store.listGroups().find(item => item.residentSessionId === sessionId)
+    if (group) { const identity = { groupId: group.groupId }; performanceSessionIdentities.set(sessionId, identity); return identity }
+    const parentId = session.header?.parentSession
+    if (!parentId) return undefined
+    const parent = ctx.agents.get?.(SessionId(parentId))?.session
+    const inherited = performanceSessionIdentities.get(String(parentId)) ?? (parent && performanceIdentity(parent, visited))
+    if (inherited) performanceSessionIdentities.set(sessionId, inherited)
+    return inherited
+  }
   const disposeObserver = typeof ctx.on === 'function' ? ctx.on('session/event', (session, event) => {
+    if (PERFORMANCE_EVENT_TYPES.has(event.type) && typeof store.recordPerformanceEvent === 'function') {
+      const identity = performanceIdentity(session)
+      if (identity) {
+        const sessionId = String(session.id)
+        // 原生事件本身已落日志；计量持久化单独排队，不阻塞模型或原有活动投影。
+        // store同步过滤首chunk后的流事件，不能先放到全局Promise尾巴再过滤。
+        const write = store.recordPerformanceEvent({ ...identity, sessionId, event, seedSeq: (session.firstLiveSeq ?? 0) - 1 })
+          .catch(error => { recoveryIssues.push({ ...identity, sessionId, kind: 'performance-projection', error: error.message }) })
+        performanceTail = Promise.all([performanceTail, write]).then(() => undefined)
+      }
+    }
     const taskId = leafTaskBySession.get(String(session.id))
     if (taskId === undefined || !PROJECTED_EVENTS.has(event.type) || typeof store.recordActivity !== 'function') return
     activityTail = activityTail.then(async () => {
@@ -1707,8 +1801,40 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     run.finally(() => { if (statusQueryTails.get(groupId) === run) statusQueryTails.delete(groupId) }).catch(() => undefined)
     return run
   }
+  const coordinationSessions = createCoordinationSessions({
+    isCurrent: request => topics.isCurrentRequest(request),
+    onError: error => { if (!runtimeClosing) recoveryIssues.push({ kind: 'coordination-session', error: error.message }) },
+    create: async entry => {
+      const { request, role, sessionId } = entry
+      const parent = residentHandles.get(request.groupId)?.agent
+      if (!parent) throw new Error(`resident_not_active:${request.groupId}`)
+      const identity = { groupId: request.groupId, requestId: request.requestId, role,
+        ...(request.task ? { taskId: request.task.taskId } : {}) }
+      const handle = await ctx.agents.create({ sessionId: SessionId(sessionId),
+        meta: { cwd: agentWorkspace, parentSession: parent.session.id, origin: 'subagent', delegationDepth: 1, agentPreset },
+        agentOptions, signal: AbortSignal.timeout(resumeTimeoutMs), setup: async agentCtx => {
+          if (agentPresets === undefined) throw new Error('agent_presets_required')
+          const preset = await agentPresets.mount(agentCtx, agentPreset)
+          if (preset?.id !== undefined && preset.id !== agentPreset) throw new Error('coordination_agent_preset_invalid')
+          configureResident(agentCtx, request.groupId, request)
+          agentCtx.on('agent/pre-step', createCoordinationStepGate(entry, request => topics.isCurrentRequest(request)))
+          const allowed = new Set(coordinationTools(role))
+          // restrict 仅过滤全局工具；preset 注册的本地工具必须由原生单调 guard 拦截。
+          agentCtx.tools.restrict({ allow: [...allowed].filter(name => agentCtx.tools.get(name)) })
+          agentCtx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'coordination_tool_outside_role')
+          registerCoordinationMessageTool(agentCtx, entry)
+          agentCtx.systemPrompt.section({ name: 'dingtalk-coordination-scope', order: 120, text: `当前仅处理 ${role} 请求 ${request.requestId}。业务提交仅限本请求，不能执行工程修改。引用消息恢复使用 group_message_get；该工具检查本请求引用身份和读取完整性，替代群主协议中的 pwsh 查询。缺失附件正文必须明确保留读取失败，不能猜测内容。` })
+        } })
+      handle.agent.session.append('dingtalk/coordination', identity)
+      registerPerformanceSession(sessionId, identity)
+      applyPermission(handle, 'danger-full-access')
+      return handle
+    },
+  })
   const topics = createTopicCoordinator({
-    store, getAgent: (groupId) => residentHandles.get(groupId)?.agent, assertSession: assertResidentToolSession, serializeTasks,
+    store, getAgent: (groupId, request) => request ? coordinationSessions.get(groupId, request) : residentHandles.get(groupId)?.agent,
+    dispatchRequest: (request, message) => coordinationSessions.dispatch(request, message),
+    onRequestFinished: request => coordinationSessions.finish(request), assertSession: assertResidentToolSession, serializeTasks,
     applyAction: applyTopicAction, appendOutbox: appendReliableOutbox, reviewCandidates: replyReviewCandidatesFor, validateReplyReview,
     cancelTask: signalTaskCancellation, isClosing: () => runtimeClosing, retryDelayMs: decisionRetryBaseMs,
     ...(statusQueries ? { onDecisionRequest: tryStatusQuery } : {}),
@@ -1803,6 +1929,8 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     getGroup: store.getGroup, listGroups: store.listGroups, getTask: store.getTask, listTasks: store.listTasks, listAlerts: store.listAlerts,
     listTopics: store.listTopics, getTopic: store.getTopic, getTopicContext: store.getTopicContext,
     listTaskTimings: store.listTaskTimings ?? (() => []),
+    listPerformance: store.listPerformance,
+    flushPerformance: () => performanceTail,
     markMessageAgentDelivery: store.markMessageAgentDelivery, markMessagesAgentDelivery: store.markMessagesAgentDelivery,
     hydrateGroupHistory: ({ groupId }) => serializeHydration(groupId, () => runGroupResidentOperation(groupId, async () => {
       if (runtimeClosing) throw new Error('resident_runtime_closed')
@@ -2099,23 +2227,33 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     submitTaskResult: ({ taskId, result }) => submitTaskResult(taskId, result),
     getTaskReport: ({ taskId, submissionId }) => reports.get(taskId, submissionId),
     retryTaskReport: async ({ taskId, submissionId, coordinationRequestId }) => {
-      const task = store.getTask(taskId)
-      const report = task && taskReports(task).find(item => item.submissionId === submissionId)
-      if (!report) throw new Error(`task_report_not_found:${submissionId}`)
-      if (report.inputVersion !== task.inputVersion || report.runSequence !== task.runSequence || task.state === 'completed') throw new Error(`task_report_retry_stale:${submissionId}`)
-      if (report.status !== 'failed') throw new Error(`task_report_retry_requires_failed:${submissionId}`)
-      const systemWait = task.state === 'waiting' && task.waitingKind === 'system'
-      if (task.state === 'waiting' && task.waitingKind === 'system') {
-        if (!deterministicReviewFailure(report.error)) throw new Error(`task_report_retry_requires_failed:${submissionId}`)
-        if (store.listTasks().filter(item => item.state === 'running').length >= taskConcurrencyLimit) throw new Error(`task_report_retry_capacity_full:${submissionId}`)
-        await serializeTasks(() => store.updateTask(taskId, current => current.state === 'waiting' && current.waitingKind === 'system'
-          && current.inputVersion === report.inputVersion && current.runSequence === report.runSequence
-          ? { ...current, state: 'running', waitingKind: undefined, waitingReason: undefined } : current))
-      }
+      // 只读探测与版本/授权复核在同一Task提交锁内，成功前不清除系统等待。
+      const { task, report, systemWait } = await serializeTasks(async () => {
+        const task = store.getTask(taskId)
+        const report = task && taskReports(task).find(item => item.submissionId === submissionId)
+        if (!report) throw new Error(`task_report_not_found:${submissionId}`)
+        if (report.inputVersion !== task.inputVersion || report.runSequence !== task.runSequence || task.state === 'completed') throw new Error(`task_report_retry_stale:${submissionId}`)
+        if (report.status !== 'failed') throw new Error(`task_report_retry_requires_failed:${submissionId}`)
+        const systemWait = task.state === 'waiting' && task.waitingKind === 'system'
+        if (systemWait && ['pending-send', 'waiting-reply'].includes(task.humanBlocker?.status)) throw new Error(`task_report_retry_authorization_pending:${submissionId}`)
+        if (topics.hasPendingTaskInput(task)) throw new Error(`task_input_pending:${taskId}`)
+        if (!isDiagnosticCheckpoint(report.value)) {
+          assertCurrentTaskPrompts(task, store.getTaskPrompts())
+          if (report.value.kind === 'plan-confirmed' && !samePromptRefs(report.value.workflowAssessment?.promptRefs, task.taskPromptRefs)) throw new Error(`task_workflow_plan_stale:${taskId}`)
+        }
+        topics.prepareReview(report.reportType === 'checkpoint' ? 'checkpoint' : report.value.status === 'completed' ? 'completion' : 'waiting', task, report.value)
+        if (systemWait) {
+          if (!deterministicReviewFailure(report.error)) throw new Error(`task_report_retry_requires_failed:${submissionId}`)
+          if (store.listTasks().filter(item => item.state === 'running').length >= taskConcurrencyLimit) throw new Error(`task_report_retry_capacity_full:${submissionId}`)
+          await store.updateTask(taskId, current => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined }))
+        }
+        return { task, report, systemWait }
+      })
       const failedRequestId = coordinationRequestId ?? (report.error?.startsWith('topic_request_retry_exhausted:') ? report.error.slice('topic_request_retry_exhausted:'.length) : undefined)
-      if (failedRequestId) await topics.resetReviewRequest(task.groupId, failedRequestId)
-      try { return await reports.retry(taskId, submissionId, { coordinationRequestId: failedRequestId }) }
-      catch (error) {
+      try {
+        if (failedRequestId) await topics.resetReviewRequest(task.groupId, failedRequestId)
+        return await reports.retry(taskId, submissionId, { coordinationRequestId: failedRequestId })
+      } catch (error) {
         if (systemWait && taskReports(store.getTask(taskId)).find(item => item.submissionId === submissionId)?.status === 'failed') {
           await serializeTasks(() => store.updateTask(taskId, current => current.state === 'running'
             && current.inputVersion === report.inputVersion && current.runSequence === report.runSequence
@@ -2276,23 +2414,27 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       }
     }),
     setCurrentDwsProfile: (value) => { currentDwsProfile = typeof value === 'string' ? value.trim() : '' },
+    setGroupMessageReader: reader => { groupMessageReader = reader },
+    setGroupResourceReader: reader => { groupResourceReader = reader },
     async close() {
       if (closePromise !== undefined) return closePromise
       runtimeClosing = true
       if (supervisorTimer !== undefined) clearInterval(supervisorTimer)
       if (typeof disposeObserver === 'function') disposeObserver()
       const topicClosing = topics.close()
+      const coordinationClosing = coordinationSessions.close()
       closePromise = serializeConfig(async () => {
         await waitForAllResidentOperations()
         await Promise.allSettled([...inflightMessages.values()])
         await topicClosing
+        await coordinationClosing
         await reports.drain()
         await pumpTail
         const all = [...leafHandles.values(), ...residentHandles.values()]
         await ctx.subagents.drainContinuableDescendants(all.map((handle) => handle.agent))
         await Promise.all(all.map((handle) => handle.dispose()))
         await Promise.allSettled([...pendingLeafDisposals])
-        leafHandles.clear(); residentHandles.clear(); leafTaskBySession.clear(); await activityTail; await store.close()
+        leafHandles.clear(); residentHandles.clear(); leafTaskBySession.clear(); await activityTail; await performanceTail; await store.close()
       })
       return closePromise
     },

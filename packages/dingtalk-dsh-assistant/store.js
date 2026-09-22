@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import { storedTaskCheckpointBaseSchema, taskResultSchema } from './task-result.js'
-import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId } from './topic-model.js'
+import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch } from './topic-model.js'
 import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
+import { PERFORMANCE_EVENT_TYPES, performanceProjectionSchema, performanceChunkKey, hasPerformanceFirstStream, projectPerformanceEvent, listPerformance, workflowPerformance, coordinationCosts } from './performance.js'
 
 export { resolveTopicMessages } from './topic-model.js'
 
@@ -123,7 +124,7 @@ const taskRunSchema = z.object({
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
   acceptanceCriteria: z.array(z.string().min(1)), stageTasks: z.array(z.string().min(1)), taskPromptRefs: z.array(taskPromptRefSchema).optional(), checkpoints: z.array(persistedTaskCheckpointSchema).optional(), result: persistedTaskResultSchema.optional(),
 })
-const taskStateEventSchema = z.object({ state: z.enum(['queued', 'running', 'waiting', 'completed']), at: z.string().min(1), runSequence: z.number().int().positive() })
+const taskStateEventSchema = z.object({ state: z.enum(['queued', 'running', 'waiting', 'completed']), waitingKind: z.enum(['information', 'coordination', 'human-intervention', 'system']).optional(), at: z.string().min(1), runSequence: z.number().int().positive() })
 const activityProjectionSchema = z.object({
   lastSyncedAt: z.string(), latestEventKey: z.string().optional(), latestOccurredAt: z.string().optional(),
   truncated: z.boolean().default(false),
@@ -156,6 +157,7 @@ const taskSchema = z.object({
   reopenContext: z.string().min(1).optional(), resumeContext: z.string().min(1).optional(), archivedAt: z.string().min(1).optional(), createdAt: z.string().min(1), updatedAt: z.string().min(1),
 })
 const schedulerSchema = z.object({
+  performanceProjection: performanceProjectionSchema.optional(),
   tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), agentWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
   leafSessionPrompt: z.string().optional(), taskPrompts: z.array(taskPromptSchema).optional(), taskPromptsVersion: z.number().int().nonnegative().optional(), taskExecutionGuidance: z.string().optional(), taskEvidenceGuidance: z.string().optional(), maxConcurrentTasks: z.number().int().positive().max(50).optional(),
   taskSheetSyncConfig: z.object({ enabled: z.boolean(), documentUrl: z.string().url(), nodeId: z.string().min(1), documentName: z.string().min(1), sheetId: z.string().min(1), sheetTitle: z.string().min(1), intervalMs: z.literal(180000) }).optional(),
@@ -248,13 +250,6 @@ const taskRevisionBasis = (group, task, action) => {
   return new Set(refs.flatMap(ref => topicMessages(group, group.topics.find(topic => topic.topicId === ref.topicId), ref.revision).map(message => message.messageId)))
 }
 
-const resolveSourceRef = (text, ref, error = 'topic_unit_source_ambiguous') => {
-  const quote = ref?.quote
-  if (typeof quote !== 'string' || quote.length === 0) throw new Error('topic_unit_source_required')
-  const start = text.indexOf(quote)
-  if (start < 0 || text.indexOf(quote, start + 1) >= 0) throw new Error(error)
-  return { start, end: start + quote.length, quote }
-}
 
 function taskTiming(task, activities, now = Date.now()) {
   const runSequence = task.runSequence ?? 1
@@ -320,6 +315,7 @@ export async function openResidentStore(storageDomain) {
   }
   // v6 数据只能通过离线迁移进入；启动不再猜测旧消息来源。
   const tails = new Map()
+  const pendingPerformanceChunks = new Set()
   const findGroupEntry = (groupId) => {
     const direct = groups.get(groupId)
     if (direct !== undefined) return [groupId, direct]
@@ -350,6 +346,26 @@ export async function openResidentStore(storageDomain) {
   }
 
   return {
+    listPerformance: (filter) => {
+      const projections = [...scheduler.entries()].map(([, value]) => value.performanceProjection).filter(Boolean)
+      const base = listPerformance(undefined, filter)
+      const rows = projections.flatMap(value => listPerformance(value, filter).rows)
+      return { ...base, observedSince: projections.map(value => value.observedSince).sort()[0] ?? null,
+        rows, coordination: coordinationCosts(rows), workflow: workflowPerformance({ tasks: [...tasks.entries()].map(([, value]) => value), groups: [...groups.entries()].map(([, value]) => value) }, filter),
+      }
+    },
+    recordPerformanceEvent: (input) => {
+      if (!PERFORMANCE_EVENT_TYPES.has(input.event?.type) || input.event.seq <= (input.seedSeq ?? -1)) return Promise.resolve({ created: false })
+      const partition = `performance:${input.sessionId}`
+      const chunkKey = input.event.type === 'assistant/chunk' ? performanceChunkKey(input) : undefined
+      if (chunkKey && (pendingPerformanceChunks.has(chunkKey) || hasPerformanceFirstStream(scheduler.get(partition)?.performanceProjection, input))) return Promise.resolve({ created: false })
+      if (chunkKey) pendingPerformanceChunks.add(chunkKey)
+      return serialize(partition, async () => {
+        const result = projectPerformanceEvent(scheduler.get(partition)?.performanceProjection, input)
+        if (result.created) await scheduler.update(partition, current => ({ tasks: [], ...current, performanceProjection: result.projection }))
+        return { created: result.created }
+      }).finally(() => { if (chunkKey) pendingPerformanceChunks.delete(chunkKey) })
+    },
     getCoordinationRequest: (groupId, requestId) => findGroupEntry(groupId)?.[1].coordinationRequests?.[requestId],
     updateCoordinationRequest: (groupId, requestId, patch) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
@@ -554,79 +570,7 @@ export async function openResidentStore(storageDomain) {
         }
         if (latest.routingRevision !== routingRevision) throw new Error('topic_routing_stale')
         if (new Set(routes.map((route) => route.messageId)).size !== routes.length) throw new Error('topic_route_message_duplicate')
-        const newTopics = new Map(), topicIdsByKey = {}, unitsByMessage = new Map(), ignoredByMessage = new Map()
-        for (const route of routes) {
-          const message = latest.messages.find((item) => item.messageId === route.messageId)
-          if (!message) throw new Error(`message_not_found:${route.messageId}`)
-          if (message.messageVersion !== route.messageVersion) throw new Error('topic_message_version_stale')
-          const routeUnits = route.units ?? [{ unitKey: 'whole-message', summary: message.text.slice(0, 240) || '附件事项', sourceRefs: [...(message.text ? [{ quote: message.text }] : []), ...(message.imageRefs ?? []).map((ref) => ({ imageRefId: attachmentRefId(ref) })), ...(message.mediaUnavailable ?? []).map((value) => ({ imageRefId: String(value).split(':', 1)[0] }))], contextRefs: [], topics: route.topics, effectOwner: route.effectOwner, reason: route.reason }]
-          if (!Array.isArray(routeUnits) || routeUnits.length === 0) throw new Error('topic_route_units_required')
-          if (new Set(routeUnits.map((unit) => unit.unitKey)).size !== routeUnits.length) throw new Error('topic_route_unit_key_duplicate')
-          const existingUnits = message.units ?? []
-          const resolvedUnits = []
-          const ignoredRanges = (route.ignoredRefs ?? []).map((ref) => ({ ...resolveSourceRef(message.text, ref, 'topic_ignored_source_ambiguous'), reason: ref.reason }))
-          for (const unit of routeUnits) {
-            if (!Array.isArray(unit.topics) || (unit.topics.length === 0 && !unit.reason?.trim())) throw new Error('topic_route_reason_required')
-            if (unit.topics.length > 1 && unit.topics.some((ref) => !['continuation', 'affected'].includes(ref.relationship) || !ref.reason?.trim())) throw new Error('topic_route_relationship_required')
-            if (unit.topics.length > 1 && !unit.effectOwner) throw new Error('topic_route_effect_owner_required')
-            const prior = existingUnits.findLast((item) => item.unitKey === unit.unitKey)
-            const replacesUnitIds = unit.replacesUnitIds ?? []
-            const predecessors = replacesUnitIds.map((unitId) => existingUnits.findLast((item) => item.unitId === unitId)).filter(Boolean)
-            if (predecessors.length !== replacesUnitIds.length || new Set(replacesUnitIds).size !== replacesUnitIds.length) throw new Error('topic_unit_revision_mapping_invalid')
-            if (prior && replacesUnitIds.length && !replacesUnitIds.includes(prior.unitId)) throw new Error('topic_unit_revision_mapping_invalid')
-            const sourceRanges = unit.sourceRefs.filter((ref) => ref.quote).map((ref) => resolveSourceRef(message.text, ref))
-            if (unit.sourceRefs.some((ref) => ref.wholeMessage)) {
-              if (unit.sourceRefs.filter((ref) => ref.wholeMessage).length !== 1 || !message.text) throw new Error('topic_unit_whole_message_invalid')
-              sourceRanges.push({ start: 0, end: message.text.length, quote: message.text })
-            }
-            const sourceAttachments = unit.sourceRefs.filter((ref) => ref.imageRefId).map(({ imageRefId }) => {
-              const available = (message.imageRefs ?? []).filter((ref) => attachmentRefId(ref) === imageRefId).length
-              const unavailable = (message.mediaUnavailable ?? []).filter((value) => String(value).split(':', 1)[0] === imageRefId).length
-              if (available + unavailable !== 1) throw new Error('topic_unit_attachment_invalid')
-              return { imageRefId }
-            })
-            const contextRanges = (unit.contextRefs ?? []).map((ref) => ({ ...resolveSourceRef(message.text, ref, 'topic_unit_context_ambiguous:contextRefs.quote must uniquely match current message.text; quotedMessage content is separate'), purpose: ref.purpose }))
-            const comparable = { summary: unit.summary.trim(), sourceRanges, sourceAttachments, contextRanges, predecessorUnitRefs: predecessors.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ...(unit.effectInheritance ? { effectInheritance: unit.effectInheritance } : {}), ...(unit.revisionReason ? { revisionReason: unit.revisionReason } : {}) }
-            const same = prior && JSON.stringify({ summary: prior.summary, sourceRanges: prior.sourceRanges, sourceAttachments: prior.sourceAttachments ?? [], contextRanges: prior.contextRanges ?? [], predecessorUnitRefs: prior.predecessorUnitRefs ?? [], effectInheritance: prior.effectInheritance, revisionReason: prior.revisionReason }) === JSON.stringify(comparable)
-            const stored = { unitId: prior?.unitId ?? stableId('unit', `${groupId}:${route.messageId}:${unit.unitKey}`), unitRevision: same ? prior.unitRevision : (prior?.unitRevision ?? 0) + 1, unitKey: unit.unitKey, ...comparable }
-            const selected = new Set()
-            for (const ref of unit.topics) {
-              if (!!ref.topicId === !!ref.newTopicKey) throw new Error('topic_route_target_invalid')
-              if (ref.topicId && !latest.topics.some((topic) => topic.topicId === ref.topicId)) throw new Error(`topic_not_found:${ref.topicId}`)
-              if (ref.newTopicKey) {
-                if (!ref.title?.trim()) throw new Error('topic_title_required')
-                if (newTopics.has(ref.newTopicKey) && newTopics.get(ref.newTopicKey).title !== ref.title.trim()) throw new Error('topic_title_conflict')
-                const topicId = stableId('topic', `${groupId}:${routeId}:${ref.newTopicKey}`)
-                topicIdsByKey[ref.newTopicKey] = topicId
-                newTopics.set(ref.newTopicKey, { topicId, groupId, title: ref.title.trim(), revision: 0, processedRevision: 0, status: 'active', summary: '', summaryRevision: 0, openQuestions: [], entries: [], decisions: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
-              }
-              const id = ref.topicId ?? topicIdsByKey[ref.newTopicKey]
-              if (selected.has(id)) throw new Error('topic_route_target_duplicate')
-              selected.add(id)
-            }
-            if (unit.effectOwner) {
-              const ownerId = unit.effectOwner.topicId ?? topicIdsByKey[unit.effectOwner.newTopicKey]
-              if (!ownerId || !selected.has(ownerId)) throw new Error('topic_route_effect_owner_invalid')
-            }
-            resolvedUnits.push({ ...stored, topics: unit.topics, effectOwner: unit.effectOwner, reason: unit.reason })
-          }
-          if (route.units) {
-            const activeExistingIds = new Set((message.activeUnitRefs ?? existingUnits.map(({ unitId }) => ({ unitId }))).map((ref) => ref.unitId))
-            const retained = new Set(resolvedUnits.filter((unit) => activeExistingIds.has(unit.unitId)).map((unit) => unit.unitId))
-            const replaced = new Set(resolvedUnits.flatMap((unit) => unit.predecessorUnitRefs).map((ref) => ref.unitId))
-            if ([...activeExistingIds].some((unitId) => !retained.has(unitId) && !replaced.has(unitId))) throw new Error('topic_unit_revision_mapping_required')
-            const covered = new Uint8Array(message.text.length)
-            for (const range of [...resolvedUnits.flatMap((unit) => [...unit.sourceRanges, ...unit.contextRanges]), ...ignoredRanges]) for (let index = range.start; index < range.end; index++) covered[index] = 1
-            let offset = 0, uncovered = false
-            for (const character of message.text) {
-              if (!/\s/u.test(character) && covered[offset] !== 1) { uncovered = true; break }
-              offset += character.length
-            }
-            if (uncovered) throw new Error('topic_route_uncovered_text')
-          }
-          unitsByMessage.set(route.messageId, resolvedUnits)
-          ignoredByMessage.set(route.messageId, ignoredRanges)
-        }
+        const { newTopics, topicIdsByKey, unitsByMessage, ignoredByMessage } = resolveRouteBatch(latest, { groupId, routeId, routes })
         let topics = [...latest.topics, ...newTopics.values()]
         for (const route of routes) {
           const resolvedUnits = unitsByMessage.get(route.messageId)
@@ -1039,7 +983,7 @@ export async function openResidentStore(storageDomain) {
         validateTopicRefs(findGroupEntry(latest.groupId)[1], next.topicRefs)
         const at = new Date().toISOString()
         return taskSchema.parse({ ...next, appliedOperations: [...latest.appliedOperations, operationId], updatedAt: at,
-          stateHistory: next.state !== latest.state ? [...(latest.stateHistory ?? []), { state: next.state, at, runSequence: next.runSequence ?? 1 }] : latest.stateHistory })
+          stateHistory: next.state !== latest.state || next.waitingKind !== latest.waitingKind ? [...(latest.stateHistory ?? []), { state: next.state, ...(next.waitingKind ? { waitingKind: next.waitingKind } : {}), at, runSequence: next.runSequence ?? 1 }] : latest.stateHistory })
       })
       await supersedeStaleTaskOutbox(task)
       return { applied: !duplicate, task }
@@ -1050,7 +994,7 @@ export async function openResidentStore(storageDomain) {
         const at = new Date().toISOString()
         const next = transform(task)
         const stateChangedAt = next.runSequence !== task.runSequence && next.runStartedAt ? next.runStartedAt : at
-        const stateHistory = next.state !== task.state ? [...(task.stateHistory ?? []), { state: next.state, at: stateChangedAt, runSequence: next.runSequence ?? task.runSequence ?? 1 }] : task.stateHistory
+        const stateHistory = next.state !== task.state || next.waitingKind !== task.waitingKind ? [...(task.stateHistory ?? []), { state: next.state, ...(next.waitingKind ? { waitingKind: next.waitingKind } : {}), at: stateChangedAt, runSequence: next.runSequence ?? task.runSequence ?? 1 }] : task.stateHistory
         validateTopicRefs(findGroupEntry(task.groupId)[1], next.topicRefs)
         return taskSchema.parse({ ...next, ...(stateHistory ? { stateHistory } : {}), updatedAt: at })
       })

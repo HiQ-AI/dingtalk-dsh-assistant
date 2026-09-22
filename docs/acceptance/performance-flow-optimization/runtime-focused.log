@@ -1,0 +1,34 @@
+✔ 历史导入只发送 Topic 索引，不重放历史消息正文或指令 (42.2626ms)
+✔ 待审计划遇流程改版会失效并归档，重新加载后可重新规划 (78.9024ms)
+✔ 异常可抢占待审计划，旧审阅不得回写或阻止新计划 (62.5895ms)
+✖ 慢叶子创建期间同群其他 Topic 仍可完成 (15015.932ms)
+✔ 工作区屏障内到达的历史导入与通知等待新 Resident，导入先前事件进入新 seed (57.964ms)
+✔ 切换工作区等待已经开始的结果通知，通知落盘前不释放旧 Resident (24.4696ms)
+✔ 同 Topic 一次决策不能重复改变同一 Task，共享主 Topic 可取消两个不同 Task 各一次 (184.947ms)
+✔ 已执行来源改归属不会重新授予效果权限，新授权消息可以创建新任务 (151.9562ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 7
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16035.4796
+
+✖ failing tests:
+
+test at test\runtime.test.js:2008:1
+✖ 慢叶子创建期间同群其他 Topic 仍可完成 (15015.932ms)
+  AssertionError [ERR_ASSERTION]: fixture 条件未在 3 秒内成立
+      at until (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:35:10)
+      at async route (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:136:3)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-performance-flow/test/runtime.test.js:2014:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }

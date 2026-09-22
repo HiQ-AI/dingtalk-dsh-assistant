@@ -1,0 +1,91 @@
+diff --git a/packages/fs/tool-fs-search/README.md b/packages/fs/tool-fs-search/README.md
+index 1b94b76..b6eed70 100644
+--- a/packages/fs/tool-fs-search/README.md
++++ b/packages/fs/tool-fs-search/README.md
+@@ -13,0 +14,2 @@ English | [中文](README.zh.md)
++At the session working-directory root, literal directory prefixes in glob patterns prune unrelated directories before traversal. The original pattern, hidden/ignored inclusion, VCS exclusions, modification ordering, and empty results for absent prefixes are preserved. Searches rooted elsewhere keep their existing matching behavior.
++
+diff --git a/packages/fs/tool-fs-search/README.zh.md b/packages/fs/tool-fs-search/README.zh.md
+index e42dc43..3906fdc 100644
+--- a/packages/fs/tool-fs-search/README.zh.md
++++ b/packages/fs/tool-fs-search/README.zh.md
+@@ -13,0 +14,2 @@ kind: "package-reference"
++当搜索根等于会话工作目录时，glob 模式中的固定目录前缀会提前剪除无关目录。原始模式、隐藏与忽略文件的包含规则、VCS 排除规则、修改时间排序和不存在前缀的空结果语义均保持不变；其他搜索根保持现有匹配行为。
++
+diff --git a/packages/fs/tool-fs-search/src/glob.ts b/packages/fs/tool-fs-search/src/glob.ts
+index 5627d32..ded3c8e 100644
+--- a/packages/fs/tool-fs-search/src/glob.ts
++++ b/packages/fs/tool-fs-search/src/glob.ts
+@@ -13 +13 @@ import type { Context } from '@deepseek-ai/cordis'
+-import { sep } from 'node:path'
++import { resolve, sep } from 'node:path'
+@@ -86,0 +87 @@ export function parseGlobArgs(args: { pattern: string; path?: string }): GlobInp
++ * @param workdir - session cwd; enables fixed-directory pruning at that root.
+@@ -89 +90,13 @@ export function parseGlobArgs(args: { pattern: string; path?: string }): GlobInp
+-export function buildGlobCommand(input: GlobInput): string[] {
++export function buildGlobCommand(input: GlobInput, workdir?: string): string[] {
++  const prune: string[] = []
++  // Override globs are relative to cwd, not an arbitrary search path.
++  if (workdir !== undefined && resolve(workdir, input.path ?? '.') === resolve(workdir)) {
++    let prefix = ''
++    for (const segment of input.pattern.split('/').slice(0, -1)) {
++      if (!segment || segment === '.' || segment === '..' || /[\\*?\[\]{}!]/.test(segment)) break
++      // Directory-only overrides retain the original file whitelist and let
++      // missing prefixes return no matches rather than a missing-root error.
++      prune.push(`--glob=!/${prefix}*/`, `--glob=/${prefix}${segment}/`)
++      prefix += `${segment}/`
++    }
++  }
+@@ -91,0 +105 @@ export function buildGlobCommand(input: GlobInput): string[] {
++    ...prune,
+@@ -343 +357 @@ export function applyGlobTool(ctx: Context, caps: GlobToolCaps): void {
+-      const run = await runRipgrep(ctx, exec, 'glob', buildGlobCommand(input), caps.rawOutputMaxBytes, caps.graceMs, caps.stderrMaxBytes)
++      const run = await runRipgrep(ctx, exec, 'glob', buildGlobCommand(input, exec.agent?.session.header.cwd ?? process.cwd()), caps.rawOutputMaxBytes, caps.graceMs, caps.stderrMaxBytes)
+diff --git a/packages/fs/tool-fs-search/tests/integration.spec.ts b/packages/fs/tool-fs-search/tests/integration.spec.ts
+index 94be0e1..480f0f8 100644
+--- a/packages/fs/tool-fs-search/tests/integration.spec.ts
++++ b/packages/fs/tool-fs-search/tests/integration.spec.ts
+@@ -47,0 +48,23 @@ describe('search tools over the real subprocess service + the packaged rg', () =
++  it('prunes fixed directories while preserving shallow, hidden, ignored, VCS and absent results', async () => {
++    await mkdir(join(dir, 'docs', 'nested'), { recursive: true })
++    await mkdir(join(dir, 'docs', 'node_modules', 'pkg'), { recursive: true })
++    await mkdir(join(dir, 'docs', '.git'), { recursive: true })
++    for (const file of ['a.md', '.hidden.md', 'ignored.md', 'nested/a.md', 'node_modules/pkg/a.md', '.git/config.md']) {
++      await writeFile(join(dir, 'docs', file), 'fixture')
++    }
++    await writeFile(join(dir, 'docs', '.gitignore'), 'ignored.md\nnode_modules/\n')
++    const shallow = await call('glob', { pattern: 'docs/*.md', path: dir }, agent())
++    expect(shallow.isError).toBeFalsy()
++    expect(text(shallow)).toContain('a.md')
++    expect(text(shallow)).toContain('.hidden.md')
++    expect(text(shallow)).toContain('ignored.md')
++    expect(text(shallow)).not.toContain('nested')
++    expect(text(shallow)).not.toContain('node_modules')
++    const recursive = await call('glob', { pattern: 'docs/**/*', path: dir }, agent())
++    expect(text(recursive)).toContain('node_modules')
++    expect(text(recursive)).not.toContain('config.md')
++    const absent = await call('glob', { pattern: 'missing/deep/*.md', path: dir }, agent())
++    expect(absent.isError).toBeFalsy()
++    expect(text(absent)).not.toContain('a.md')
++  })
++
+diff --git a/packages/fs/tool-fs-search/tests/tools.spec.ts b/packages/fs/tool-fs-search/tests/tools.spec.ts
+index 465000b..f060f3b 100644
+--- a/packages/fs/tool-fs-search/tests/tools.spec.ts
++++ b/packages/fs/tool-fs-search/tests/tools.spec.ts
+@@ -1209,0 +1210,15 @@ describe('helpers', () => {
++
++it('glob prunes only literal directory prefixes at the session root', () => {
++  const cwd = process.cwd()
++  expect(buildGlobCommand({ pattern: 'docs/acceptance/*.md', path: '.' }, cwd).slice(0, 6)).toEqual([
++    '--files', '--glob=!/*/', '--glob=/docs/', '--glob=!/docs/*/', '--glob=/docs/acceptance/', '--glob=docs/acceptance/*.md',
++  ])
++  expect(buildGlobCommand({ pattern: 'docs/*/goal.md' }, cwd).slice(0, 4)).toEqual([
++    '--files', '--glob=!/*/', '--glob=/docs/', '--glob=docs/*/goal.md',
++  ])
++  for (const pattern of ['*.md', '**/*.md', '../docs/*.md', './docs/*.md', '/docs/*.md', '{docs,src}/*.md', 'docs\\name/*.md']) {
++    expect(buildGlobCommand({ pattern }, cwd)).toEqual(buildGlobCommand({ pattern }))
++  }
++  expect(buildGlobCommand({ pattern: 'docs/*.md', path: 'elsewhere' }, cwd))
++    .toEqual(buildGlobCommand({ pattern: 'docs/*.md', path: 'elsewhere' }))
++})

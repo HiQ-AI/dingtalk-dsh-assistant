@@ -39,7 +39,7 @@ async function setup(t, options = {}) {
   const store = await openResidentStore(memoryFacility(snapshot))
   for (const groupId of options.groups ?? ['g']) if (!store.getGroup(groupId)) await store.subscribe({ groupId, responsibility: '处理测试任务', residentSessionId: residentSessionId(groupId), residentAgentPreset: 'standard' })
   await store.setAgentNames(['助理'])
-  const h = { store, snapshot, handles: new Map(), calls: [], cancelled: [], disposed: [], permissions: [], goals: options.goals ?? new Map(), events: new Map(), idle: new Map(), idleCalls: new Map(), onSteer: undefined }
+  const h = { store, snapshot, handles: new Map(), deliveries: [], calls: [], cancelled: [], disposed: [], permissions: [], goals: options.goals ?? new Map(), events: new Map(), idle: new Map(), idleCalls: new Map(), onSteer: undefined }
   const never = new Promise(() => {})
   const makeHandle = async (input, resumed) => {
     const sessionId = String(input.sessionId ?? input.resumeSessionId)
@@ -51,16 +51,18 @@ async function setup(t, options = {}) {
     const session = { id: sessionId, seq: events.length, header: input.meta ?? {}, inheritedEventCount,
       snapshotEvents() { return [...events] }, ownEvents() { return events.slice(inheritedEventCount) },
       append(type, data) { events.push({ seq: this.seq++, type, data }) } }
-    const tools = new Map(), sections = [], restrictions = [], sent = []
+    const tools = new Map(), sections = [], restrictions = [], sent = [], guards = []
+    let cancelIdle; const cancelledIdle = new Promise(resolve => { cancelIdle = resolve })
+    let completeStep; const completedStep = new Promise(resolve => { completeStep = resolve })
     const agent = { session, status: 'running', inbox: options.inbox ?? { nextStep: [], nextTurn: [], remove() { return false } },
-      steer(message) { sent.push(message); session.append('user/message', message); h.onSteer?.(sessionId, message) },
-      followup(message) { sent.push(message); h.onSteer?.(sessionId, message) },
-      whenIdle: () => { h.idleCalls.set(sessionId, (h.idleCalls.get(sessionId) ?? 0) + 1); return h.idle.get(sessionId) ?? never },
-      cancel(cause) { h.cancelled.push({ sessionId, cause }) },
+      steer(message) { sent.push(message); h.deliveries.push({ sessionId, message }); session.append('user/message', message); h.onSteer?.(sessionId, message) },
+      followup(message) { sent.push(message); h.deliveries.push({ sessionId, message }); h.onSteer?.(sessionId, message) },
+      whenIdle: () => { h.idleCalls.set(sessionId, (h.idleCalls.get(sessionId) ?? 0) + 1); return Promise.race([h.idle.get(sessionId) ?? (sessionId.startsWith('session-coordination-') ? Promise.resolve() : never), cancelledIdle, completedStep]) },
+      cancel(cause) { h.cancelled.push({ sessionId, cause }); cancelIdle() },
     }
-    const handle = { agent, tools, sections, restrictions, sent, async dispose() { await options.disposeGate?.(sessionId); h.disposed.push(sessionId) } }
+    const handle = { agent, tools, sections, restrictions, sent, guards, completeStep, async dispose() { await options.disposeGate?.(sessionId); h.disposed.push(sessionId) } }
     h.handles.set(sessionId, handle)
-    const agentCtx = { on: () => () => {}, tools: { register(tool) { tools.set(tool.name, tool) }, restrict(rule) { restrictions.push(rule) } }, systemPrompt: { section(value) { sections.push(value) } } }
+    const agentCtx = { on: () => () => {}, tools: { register(tool) { tools.set(tool.name, tool) }, restrict(rule) { restrictions.push(rule) }, guard(check) { guards.push(check) }, get(name) { return ['read', 'glob', 'grep', 'skill'].includes(name) ? { name } : undefined } }, systemPrompt: { section(value) { sections.push(value) } } }
     const setupResult = await input.setup?.(agentCtx)
     assert.equal(setupResult, undefined)
     h.calls.push({ resumed, sessionId, input })
@@ -88,11 +90,18 @@ async function setup(t, options = {}) {
   h.ctx = ctx
   h.runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: options.maxConcurrentTasks ?? 1, supervisorIntervalMs: 0, resumeTimeoutMs: options.resumeTimeoutMs ?? 10_000, decisionRetryBaseMs: options.retryDelayMs ?? 60_000 })
   h.resident = (groupId = 'g') => h.handles.get(store.getGroup(groupId)?.residentSessionId)
+  h.messages = (groupId = 'g') => h.deliveries.filter(({ sessionId }) => sessionId === store.getGroup(groupId)?.residentSessionId || h.handles.get(sessionId)?.agent.session.snapshotEvents().some(event => event.type === 'dingtalk/coordination' && event.data.groupId === groupId)).map(item => item.message)
+  h.owner = (requestId, groupId = 'g') => [...h.handles.values()].findLast(handle => handle.agent.session.snapshotEvents().some(event => event.type === 'dingtalk/coordination' && event.data.groupId === groupId && event.data.requestId === requestId))
   h.call = async (name, args, groupId = 'g', agent) => {
-    const result = await h.resident(groupId).tools.get(name).execute(args, { agent: agent ?? h.resident(groupId).agent })
+    const requestId = args.requestId ?? args.requestIds?.[0]
+    if (requestId) await until(() => h.owner(requestId, groupId))
+    const owner = requestId ? h.owner(requestId, groupId) : h.resident(groupId)
+    const result = await owner.tools.get(name).execute(args, { agent: agent ?? owner.agent })
+    if (requestId && result.status === 'accepted') owner.completeStep()
     if (name !== 'group_topic_route_submit' || result.status !== 'accepted') return result
+    await new Promise(resolve => setTimeout(resolve, 10))
     const receipt = store.getGroup(groupId).routeHistory.find((item) => item.routeId === args.requestId)
-    const delivered = h.resident(groupId).sent.filter((message) => message.content[0]?.text.startsWith('[GROUP_TOPIC_DECISION]'))
+    const delivered = h.messages(groupId).filter((message) => message.content[0]?.text.startsWith('[GROUP_TOPIC_DECISION]'))
       .map((message) => JSON.parse(message.content[0].text.split('\n').find((line) => line.startsWith('Topic 请求：')).slice('Topic 请求：'.length)))
     const pendingDecisions = delivered.filter((item) => {
       const topic = store.getTopic(groupId, item.topicId)
@@ -102,7 +111,7 @@ async function setup(t, options = {}) {
     return { ...result, topicIdsByKey: receipt?.topicIdsByKey ?? {}, pendingDecisions }
   }
   h.envelope = (prefix, groupId = 'g', label = 'Topic 请求') => {
-    const text = h.resident(groupId).sent.findLast((message) => message.content[0]?.text.startsWith(prefix))?.content[0].text
+    const text = h.messages(groupId).findLast((message) => message.content[0]?.text.startsWith(prefix))?.content[0].text
     return text ? JSON.parse(text.split('\n').find((line) => line.startsWith(`${label}：`)).slice(label.length + 1)) : undefined
   }
   t.after(async () => { h.onSteer = undefined; for (const id of h.handles.keys()) h.idle.set(id, Promise.resolve()); await h.runtime.close() })
@@ -127,6 +136,10 @@ test('Resident 完整提示词保留群职责与动态别名，不叠加登录�
 
 async function route(h, topicByMessage = {}, groupId = 'g') {
   await h.runtime.recoverInterruptedDecisions()
+  await until(() => {
+    const envelope = h.envelope('[GROUP_TOPIC_ROUTE]', groupId)
+    return envelope && !h.store.getGroup(groupId).routeHistory.some(item => item.routeId === envelope.requestId)
+  })
   const request = h.envelope('[GROUP_TOPIC_ROUTE]', groupId)
   assert.ok(request, 'Runtime 必须先建立归类请求')
   return h.call('group_topic_route_submit', { requestId: request.requestId, routes: request.messages.map((message) => ({ messageId: message.messageId, messageVersion: message.messageVersion, topics: [topicByMessage[message.messageId] ? { topicId: topicByMessage[message.messageId] } : { newTopicKey: message.messageId, title: message.messageId }] })) }, groupId)
@@ -146,6 +159,55 @@ async function createTask(h, id = 'task-input', extra = {}, source = {}) {
   return h.store.listTasks().find((task) => task.topicRefs.some((ref) => ref.topicId === request.topicId))
 }
 const workflowAssessment = (task, patch = {}) => ({ promptRefs: task.taskPromptRefs ?? [], reusedEvidence: [], inapplicableSteps: [], exceptions: [], ...patch })
+
+test('运行时协调请求独立日志与工具角色绑定；群主和旧请求均不能越权提交', async t => {
+  const h = await setup(t, { groups: ['g', 'b'] })
+  await ingest(h, 'isolated')
+  await until(() => h.envelope('[GROUP_TOPIC_ROUTE]'))
+  const routing = h.envelope('[GROUP_TOPIC_ROUTE]'), owner = h.owner(routing.requestId)
+  const create = h.calls.find(call => call.sessionId === owner.agent.session.id)
+  assert.equal(create.input.meta.parentSession, residentSessionId('g'))
+  assert.equal(create.input.seed, undefined, '新请求不继承群主历史')
+  assert.equal(owner.agent.session.snapshotEvents().find(event => event.type === 'dingtalk/coordination').data.requestId, routing.requestId)
+  const allow = owner.restrictions.find(rule => rule.allow)?.allow
+  assert.ok(owner.tools.has('group_topic_route_submit'))
+  assert.ok(owner.tools.has('group_resource_get'))
+  assert.ok(!allow.includes('pwsh'))
+  assert.equal(owner.tools.has('group_decision_submit'), false)
+  assert.equal(owner.guards[0]({ name: 'pwsh' }), 'coordination_tool_outside_role')
+  await assert.rejects(() => h.resident().tools.get('group_topic_route_submit').execute({ requestId: routing.requestId, routes: [] }, { agent: h.resident().agent }), /request_session_required/)
+  await assert.rejects(() => owner.tools.get('group_topic_route_submit').execute({ requestId: routing.requestId, routes: [] }, { agent: h.resident('b').agent }), /wrong_request/)
+  const result = await route(h)
+  const decision = result.pendingDecisions[0], next = h.owner(decision.requestId)
+  assert.notEqual(owner.agent.session.id, next.agent.session.id)
+  await assert.rejects(() => next.tools.get('group_topic_route_review').execute({ messageIds: ['unrelated'], reason: '不能越界纠正' }, { agent: next.agent }), /coordination_message_outside_request/)
+  assert.equal(h.resident().sent.filter(message => message.content[0]?.text.startsWith('[GROUP_TOPIC_')).length, 0)
+  await assert.rejects(() => next.tools.get('group_decision_submit').execute({ requestId: decision.requestId }, { agent: owner.agent }), /wrong_request/)
+  await decide(h, decision)
+  await until(() => h.disposed.includes(next.agent.session.id))
+  assert.equal(h.store.listTasks().length, 0)
+})
+
+test('重启仅为未接纳协调请求建新会话，已接纳业务效果不重放', async t => {
+  const first = await setup(t)
+  await ingest(first, 'restart-request')
+  await until(() => first.envelope('[GROUP_TOPIC_ROUTE]'))
+  const old = first.envelope('[GROUP_TOPIC_ROUTE]'), oldOwner = first.owner(old.requestId)
+  await first.runtime.close()
+  const second = await setup(t, { snapshot: first.snapshot })
+  await second.runtime.recoverInterruptedDecisions()
+  await until(() => second.envelope('[GROUP_TOPIC_ROUTE]'))
+  const restored = second.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.equal(restored.requestId, old.requestId)
+  assert.notEqual(second.owner(restored.requestId).agent.session.id, oldOwner.agent.session.id)
+  const decision = (await route(second)).pendingDecisions[0]
+  await decide(second, decision, { reply: '一次通知。' })
+  await second.runtime.close()
+  const third = await setup(t, { snapshot: second.snapshot })
+  await third.runtime.recoverInterruptedDecisions()
+  assert.equal(third.store.getGroup('g').outbox.length, 1)
+  assert.equal(third.calls.filter(call => call.sessionId.startsWith('session-coordination-')).length, 0)
+})
 
 test('内部审阅预算故障由 Host 暂停并一次通知，叶子重复提交不能耗尽轮次', async t => {
   const original = await setup(t), task = await createTask(original, 'system-failure')
@@ -185,6 +247,41 @@ test('内部审阅预算故障由 Host 暂停并一次通知，叶子重复提�
   await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: 'system-plan' }).status === 'accepted')
   assert.equal(h.store.getTask(task.taskId).state, 'running')
   assert.equal(h.store.listAlerts().filter(item => item.taskId === task.taskId && item.fingerprint.startsWith('task-system-failure:') && item.status !== 'resolved').length, 0)
+})
+
+test('系统等待恢复先只读构造原报告，预算仍超限时不解除等待或建立模型会话', async t => {
+  const h = await setup(t), task = await createTask(h, 'preflight-budget')
+  const promptRef = { id: 'large-prompt-'.repeat(5000), revision: 1 }
+  // 故障注入：合法字符串身份使未读流程提示本身超过信封预算。
+  h.store.getTaskPrompts = () => [{ ...promptRef, enabled: true, name: 'large', description: '', prompt: '规则' }]
+  const value = { ...inputVersion(task), kind: 'plan-confirmed', summary: '原计划', remainingItems: task.stageTasks,
+    completedItems: [], evidence: [], nextStep: '等待审阅', needsCoordinatorDecision: false, workflowAssessment: { ...workflowAssessment(task), promptRefs: [promptRef] } }
+  await h.store.updateTask(task.taskId, current => ({ ...current, state: 'waiting', waitingKind: 'system', waitingReason: 'task_review_envelope_too_large', taskPromptRefs: [promptRef],
+    executionEvents: [...(current.executionEvents ?? []), { kind: 'task-report-received', submissionId: 'budget-original', digest: 'fixed', reportType: 'checkpoint', value,
+      ...inputVersion(task), at: new Date().toISOString(), status: 'failed', error: 'task_review_envelope_too_large' }] }))
+  const before = JSON.stringify(h.store.getTask(task.taskId)), groupBefore = JSON.stringify(h.store.getGroup('g')), sessions = h.calls.length
+  for (let i = 0; i < 3; i++) await assert.rejects(h.runtime.retryTaskReport({ taskId: task.taskId, submissionId: 'budget-original' }), /task_review_envelope_too_large/)
+  assert.equal(JSON.stringify(h.store.getTask(task.taskId)), before)
+  assert.equal(JSON.stringify(h.store.getGroup('g')), groupBefore)
+  assert.equal(h.calls.length, sessions)
+})
+
+test('系统等待恢复拒绝旧输入、待授权和未归类撤销消息，失败不产生报告重试事件', async t => {
+  for (const scenario of ['stale', 'authorization', 'pending-input']) await t.test(scenario, async child => {
+    const h = await setup(child), task = await createTask(h, `preflight-${scenario}`)
+    const value = { ...inputVersion(task), kind: 'plan-confirmed', summary: '原计划', remainingItems: task.stageTasks,
+      completedItems: [], evidence: [], nextStep: '等待审阅', needsCoordinatorDecision: false, workflowAssessment: workflowAssessment(task) }
+    await h.store.updateTask(task.taskId, current => ({ ...current, state: 'waiting', waitingKind: 'system', waitingReason: 'topic_context_budget_exceeded',
+      ...(scenario === 'stale' ? { inputVersion: task.inputVersion + 1 } : {}),
+      ...(scenario === 'authorization' ? { humanBlocker: { requestId: 'approval-pending', category: 'redline', requestedAction: '重新批准', status: 'waiting-reply' } } : {}),
+      executionEvents: [...(current.executionEvents ?? []), { kind: 'task-report-received', submissionId: 'blocked-original', digest: 'fixed', reportType: 'checkpoint', value,
+        ...inputVersion(task), at: new Date().toISOString(), status: 'failed', error: 'topic_context_budget_exceeded' }] }))
+    if (scenario === 'pending-input') await h.store.ingest({ groupId: 'g', messageId: 'cancel-before-retry', text: '@助理 取消授权，停止任务', occurredAt: new Date().toISOString() })
+    const before = JSON.stringify(h.store.getTask(task.taskId)), sessions = h.calls.length
+    await assert.rejects(h.runtime.retryTaskReport({ taskId: task.taskId, submissionId: 'blocked-original' }), scenario === 'stale' ? /task_report_retry_stale/ : scenario === 'authorization' ? /task_report_retry_authorization_pending/ : /task_input_pending/)
+    assert.equal(JSON.stringify(h.store.getTask(task.taskId)), before)
+    assert.equal(h.calls.length, sessions)
+  })
 })
 
 test('活动投影从 DSH 工具结果关联真实工具名与错误位', async t => {
@@ -324,7 +421,7 @@ const statusReply = input => ({ kind: 'reply', decision: {
 test('关联状态追问走同模型无工具短路径，事实未变才写入统一 Outbox', async t => {
   const calls = [], h = await setup(t, { llm: statusLlm(statusReply, calls) })
   const task = await createTask(h)
-  const before = h.resident().sent.filter(message => message.content[0].text.startsWith('[GROUP_TOPIC_DECISION]')).length
+  const before = h.messages().filter(message => message.content[0].text.startsWith('[GROUP_TOPIC_DECISION]')).length
   await ingest(h, 'status-question', { text: '状态查错了吧？' })
   await route(h, { 'status-question': task.topicRefs[0].topicId })
   await until(() => h.store.getGroup('g').outbox.some(item => item.text.startsWith('已有部署证据')))
@@ -332,7 +429,7 @@ test('关联状态追问走同模型无工具短路径，事实未变才写入�
   assert.deepEqual(calls[0].tools, [])
   assert.equal(calls[0].provider, 'fake'); assert.equal(calls[0].model, 'fake')
   assert.equal(h.store.getTask(task.taskId).inputVersion, task.inputVersion)
-  assert.equal(h.resident().sent.filter(message => message.content[0].text.startsWith('[GROUP_TOPIC_DECISION]')).length, before)
+  assert.equal(h.messages().filter(message => message.content[0].text.startsWith('[GROUP_TOPIC_DECISION]')).length, before)
   const input = JSON.parse(calls[0].messages[0].content[0].text)
   assert.deepEqual(input.sourceMessageIds, ['status-question'])
   assert.equal(input.taskSnapshots[0].taskId, task.taskId)
@@ -430,7 +527,8 @@ test('重复入站幂等，Topic 提交成功后只生成一条可靠回复', as
   assert.equal((await decide(h, request, { reply: '已核验。' })).status, 'accepted')
   assert.equal(h.store.getGroup('g').messages.length, 1)
   assert.deepEqual(h.store.getGroup('g').outbox.map((item) => item.text), ['已核验。'])
-  assert.equal((await decide(h, request, { reply: '重复。' })).status, 'topic-stale')
+  const retired = h.owner(request.requestId)
+  await assert.rejects(() => retired.tools.get('group_decision_submit').execute({ requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision: { actions: [], reason: '重复' } }, { agent: retired.agent }), /coordination_tool_wrong_request/)
   assert.equal(h.store.getGroup('g').outbox.length, 1)
 })
 
@@ -528,7 +626,7 @@ test('任务并发容量满时 FIFO 排队，取消释放名额并保留取消�
   await h.runtime.cancelTask({ taskId: one.taskId, requestId: 'cancel-one', topicRefs: one.topicRefs, ...inputVersion(h.store.getTask(one.taskId)), reason: '用户取消' })
   assert.equal(h.store.getTask(one.taskId).state, 'completed')
   assert.equal(h.store.getTask(three.taskId).state, 'running')
-  assert.equal(h.cancelled[0].sessionId, one.childSessionId)
+  assert.equal(h.cancelled.filter(item => item.sessionId.startsWith('session-task-'))[0].sessionId, one.childSessionId)
 })
 
 test('Outbox 已落盘时监听器失败不会回滚已接受 Topic 决策', async (t) => {
@@ -547,7 +645,7 @@ test('历史导入只发送 Topic 索引，不重放历史消息正文或指令'
   const request = (await route(h)).pendingDecisions[0]; await decide(h, request)
   const result = await h.runtime.hydrateGroupHistory({ groupId: 'g' })
   assert.equal(result.imported, 1)
-  const text = h.resident().sent.at(-1).content[0].text
+  const text = h.messages().at(-1).content[0].text
   assert.match(text, /历史 Topic 索引/)
   assert.doesNotMatch(text, /@助理 a/)
   assert.equal(h.store.getGroup('g').outbox.length, 0)
@@ -801,7 +899,7 @@ test('待审计划遇流程改版会失效并归档，重新加载后可重新�
   assert.match((await pending).error.message, /task_prompt_selection_stale/)
   assert.equal(h.store.getTask(task.taskId).checkpoints.length, 0)
   assert.ok(h.store.getTask(task.taskId).executionEvents.some((event) => event.kind === 'checkpoint-review-invalidated'))
-  await assert.rejects(h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '迟到确认' } }), /task_review_request_unknown/)
+  await assert.rejects(h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '迟到确认' } }), /coordination_tool_wrong_request/)
   await leafCall(h, task, 'load_task_prompt', { id: 'audit-flow' })
   const updated = h.store.getTask(task.taskId)
   assert.equal((await checkpoint(h, updated, { kind: 'plan-confirmed', remainingItems: ['重新核验'], workflowAssessment: workflowAssessment(updated) })).accepted, true)
@@ -823,7 +921,7 @@ test('异常可抢占待审计划，旧审阅不得回写或阻止新计划', as
   const previous = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
   assert.equal((await checkpoint(h, task, { kind: 'scope-conflict', remainingItems: [], summary: '计划未获准前发现冲突', needsCoordinatorDecision: true })).accepted, true)
   assert.match((await pending).error.message, /task_checkpoint_review_superseded/)
-  await assert.rejects(h.call('group_task_review_submit', { requestId: previous.requestId, review: { decision: 'acknowledge', reason: '迟到审阅' } }), /task_review_request_unknown/)
+  await assert.rejects(h.call('group_task_review_submit', { requestId: previous.requestId, review: { decision: 'acknowledge', reason: '迟到审阅' } }), /coordination_tool_wrong_request/)
   assert.equal(h.store.getTask(task.taskId).checkpoints.length, 1)
   assert.equal((await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['协调后核验'] })).accepted, true)
 })
@@ -1046,41 +1144,44 @@ test('历史坏决策重启后退回重判，原报告不跳过且纠正后恢�
 
 test('报告审阅耗尽保持同身份停等，显式重试重置原请求后恢复推进', async t => {
   const h = await setup(t, { retryDelayMs: 1 }), task = await createTask(h)
-  const residentId = h.resident().agent.session.id
-  h.resident().agent.session.deriveMessages = () => h.resident().agent.session.snapshotEvents().filter(event => event.type === 'user/message').map(event => event.data)
-  h.idle.set(residentId, Promise.resolve())
+  let reviewIdle = true
+  h.onSteer = (sessionId, message) => { if (/^\[TASK_(?:CHECKPOINT|COMPLETION|WAITING)_REVIEW\]/u.test(message.content[0]?.text)) { h.idle.set(sessionId, reviewIdle ? Promise.resolve() : new Promise(() => {})); const session = h.handles.get(sessionId).agent.session; session.deriveMessages = () => session.snapshotEvents().filter(event => event.type === 'user/message').map(event => event.data) } }
+  const pauseReviewIdle = () => { reviewIdle = false }
   const receipt = await rawLeafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), submissionId: 'exhausted-plan', kind: 'plan-confirmed', summary: '待审计划', remainingItems: ['核验'], nextStep: '等待审阅' })
   await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: receipt.submissionId })?.status === 'failed')
   const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
   assert.equal(h.goals.get(task.childSessionId).phase, 'blocked')
   assert.equal(h.store.getCoordinationRequest('g', request.requestId).status, 'exhausted')
-  h.idle.set(residentId, new Promise(() => {}))
+  const originalOwner = h.owner(request.requestId)
+  pauseReviewIdle()
   const retried = await h.runtime.retryTaskReport({ taskId: task.taskId, submissionId: receipt.submissionId })
   assert.equal(retried.submissionId, receipt.submissionId)
   await until(() => h.store.getTask(task.taskId).checkpoints?.length === 1)
   assert.equal(h.store.getCoordinationRequest('g', request.requestId).resumeEpoch, 1)
+  await until(() => h.owner(request.requestId) && h.owner(request.requestId) !== originalOwner)
   assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'acknowledge', reason: '现在可审阅' } })).status, 'accepted')
   await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: receipt.submissionId }).status === 'accepted')
   assert.equal(h.store.getTask(task.taskId).executionEvents.filter(event => event.kind === 'task-report-received').length, 1)
-  assert.equal(h.resident().sent.filter(message => message.content[0].text.startsWith('[TASK_CHECKPOINT_REVIEW]')).length, 1)
+  assert.equal(h.messages().filter(message => message.content[0].text.startsWith('[TASK_CHECKPOINT_REVIEW]')).length, 2)
 })
 
 test('完成审阅耗尽后出现人工阻塞，协调恢复只重放原报告并收口 waiting Task', async t => {
   const h = await setup(t, { retryDelayMs: 1 }), task = await createTask(h, 'coord-recover')
   await fullCheckpoints(h, task)
-  const residentId = h.resident().agent.session.id
-  h.resident().agent.session.deriveMessages = () => h.resident().agent.session.snapshotEvents().filter(event => event.type === 'user/message').map(event => event.data)
-  h.idle.set(residentId, Promise.resolve())
+  let reviewIdle = true
+  h.onSteer = (sessionId, message) => { if (/^\[TASK_(?:CHECKPOINT|COMPLETION|WAITING)_REVIEW\]/u.test(message.content[0]?.text)) h.idle.set(sessionId, reviewIdle ? Promise.resolve() : new Promise(() => {})) }
+  const pauseReviewIdle = () => { reviewIdle = false }
   const completedValue = { ...inputVersion(task), submissionId: 'durable-completed-report', status: 'completed', summary: '业务交付已完成', evidence: ['已有代码、构建和部署证据'], artifacts: [] }
   const completedReceipt = await rawLeafCall(h, task, 'submit_task_result', completedValue)
   await until(() => h.runtime.getTaskReport({ taskId: task.taskId, submissionId: completedReceipt.submissionId })?.status === 'failed')
   const completionRequest = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
+  const exhaustedOwner = h.owner(completionRequest.requestId)
   assert.equal(h.store.getCoordinationRequest('g', completionRequest.requestId).status, 'exhausted')
   const laterRequestId = 'coord-completion-later-exhaustion'
   await h.store.updateTask(task.taskId, current => ({ ...current, executionEvents: [...current.executionEvents, { kind: 'task-report-settled', submissionId: completedReceipt.submissionId, inputVersion: task.inputVersion, runSequence: task.runSequence, status: 'failed', error: `topic_request_retry_exhausted:${laterRequestId}`, at: new Date().toISOString() }] }))
   await h.store.updateCoordinationRequest('g', laterRequestId, { status: 'exhausted', attempt: 3, resumeEpoch: 0, lastError: `topic_request_retry_exhausted:${laterRequestId}` })
 
-  h.idle.set(residentId, new Promise(() => {}))
+  pauseReviewIdle()
   const blockerReceipt = await rawLeafCall(h, task, 'submit_task_result', { ...inputVersion(task), submissionId: 'operator-blocker', status: 'waiting', waitingKind: 'human-intervention', summary: '等待 Runtime 恢复', evidence: ['完成报告已持久化'], artifacts: [], waitingReason: '协调请求耗尽', blockerCategory: 'unexpected', requestedAction: '重放已持久化完成报告', risk: '不得重复业务执行', attemptedActions: ['已确认完成报告存在'], blockedItems: [blockedItem(h, task, '协调恢复')] })
   await until(() => Boolean(h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')))
   const waitingRequest = h.envelope('[TASK_WAITING_REVIEW]', 'g', '审阅请求')
@@ -1092,11 +1193,12 @@ test('完成审阅耗尽后出现人工阻塞，协调恢复只重放原报告�
   const leafCallsBefore = h.calls.filter(call => call.sessionId === task.childSessionId).length
   const reviewAttemptsBefore = waiting.executionEvents.filter(event => event.kind === 'completion-review-requested').length
 
-  h.idle.set(residentId, new Promise(() => {}))
+  pauseReviewIdle()
   const retried = await h.runtime.retryCoordinationRequest({ groupId: 'g', requestId: completionRequest.requestId })
   assert.equal(retried.submissionId, completedReceipt.submissionId)
   await until(() => h.store.getCoordinationRequest('g', completionRequest.requestId).resumeEpoch === 1)
   await until(() => h.store.getTask(task.taskId).executionEvents.filter(event => event.kind === 'completion-review-requested').length === reviewAttemptsBefore + 1)
+  await until(() => { const current = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求'); return current && h.owner(current.requestId) && h.owner(current.requestId) !== exhaustedOwner })
   const recoveredRequest = h.envelope('[TASK_COMPLETION_REVIEW]', 'g', '审阅请求')
   const candidates = await h.call('group_reply_review_get', { requestIds: [recoveredRequest.requestId] })
   assert.equal((await h.call('group_task_review_submit', { requestId: recoveredRequest.requestId, review: { accepted: true, reason: '已接收报告足以收口', notification: { reply: '任务已完成，沿用原交付结果。', replyToMessageId: task.title, replyReview: { kind: 'substantive', reviewedOutboundIds: candidates.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } } })).status, 'accepted')
@@ -1333,7 +1435,7 @@ test('preserve 新输入作废待审 checkpoint，并按新版本重新审阅', 
   const pending = leafCall(h, task, 'submit_task_checkpoint', value)
   await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
   await h.runtime.inspectRunningTasks()
-  assert.equal(h.resident().sent.filter((message) => message.content[0].text.startsWith('[TASK_CHECKPOINT_REVIEW]')).length, 1)
+  assert.equal(h.messages().filter((message) => message.content[0].text.startsWith('[TASK_CHECKPOINT_REVIEW]')).length, 1)
   const request = { taskId: task.taskId, requestId: 'preserve-pending', topicRefs: task.topicRefs, context: '补充核验地址，不改变范围', progressImpact: 'preserve', ...inputVersion(task) }
   const updated = await h.runtime.appendTaskContext(request)
   assert.equal(updated.inputVersion, 2)
@@ -1368,7 +1470,7 @@ test('相同待审计划的重复提交与Supervisor恢复共用一次审阅和�
   await until(() => Boolean(h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')))
   const second = leafCall(h, task, 'submit_task_checkpoint', value)
   await Promise.all([h.runtime.inspectRunningTasks(), h.runtime.inspectRunningTasks(), h.runtime.inspectRunningTasks()])
-  const reviewRequests = h.resident().sent.filter((message) => message.content[0].text.startsWith('[TASK_CHECKPOINT_REVIEW]'))
+  const reviewRequests = h.messages().filter((message) => message.content[0].text.startsWith('[TASK_CHECKPOINT_REVIEW]'))
   assert.equal(reviewRequests.length, 1)
   const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
   await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'reject', reason: '计划扩大授权范围' } })
@@ -1960,7 +2062,7 @@ test('通知 Outbox 首次失败后相同请求重试使用稳定结果键且只
 test('慢叶子创建期间同群其他 Topic 仍可完成', async (t) => {
   let release, entered = false
   const gate = new Promise((resolve) => { release = resolve })
-  const h = await setup(t, { beforeCreate: async (input) => { if (input.meta?.origin === 'subagent') { entered = true; await gate } } })
+  const h = await setup(t, { beforeCreate: async (input) => { if (String(input.sessionId).startsWith('session-task-')) { entered = true; await gate } } })
   t.after(() => release())
   await ingest(h, 'slow-a')
   const a = (await route(h)).pendingDecisions[0]
@@ -2077,7 +2179,7 @@ test('工作区屏障内到达的历史导入与通知等待新 Resident，导�
   const current = h.resident()
   assert.notEqual(current.agent.session.id, oldId)
   assert.equal(imported.residentSessionId, current.agent.session.id)
-  assert.ok(h.calls.at(-1).input.seed.some((event) => event.type === 'user/message' && event.data.id === priorHistory))
+  assert.ok(h.calls.findLast(call => !call.sessionId.startsWith('session-coordination-')).input.seed.some((event) => event.type === 'user/message' && event.data.id === priorHistory))
   assert.equal(old.sent.some((message) => message.content[0].text.startsWith('[TASK_COORDINATION]')), false)
   assert.equal(h.envelope('[TASK_COORDINATION]').taskId, task.taskId)
   await submitNotification(h)
@@ -2093,7 +2195,7 @@ test('切换工作区等待已经开始的结果通知，通知落盘前不释�
   const changing = h.runtime.updateAgentConfig({ workspaceDir: replacementWorkspace })
   await immediate()
   assert.equal(h.resident(), old)
-  assert.equal(h.calls.filter((call) => !call.resumed).length, 0)
+  assert.equal(h.calls.filter((call) => !call.resumed && !call.sessionId.startsWith('session-coordination-')).length, 0)
   assert.equal((await submitNotification(h)).status, 'accepted')
   await notifying; await changing
   assert.equal(h.store.getGroup('g').outbox.length, 1)
@@ -2141,6 +2243,7 @@ test('同 Topic 一次决策不能重复改变同一 Task，共享主 Topic 可�
   const h = await setup(t), one = await createTask(h, 'task-one'), two = await createTask(h, 'task-two')
   await ingest(h, 'cancel-both', { text: '@助理 两个任务都取消' })
   await h.runtime.recoverInterruptedDecisions()
+  await until(() => h.envelope('[GROUP_TOPIC_ROUTE]')?.messages.some(message => message.messageId === 'cancel-both'))
   const routing = h.envelope('[GROUP_TOPIC_ROUTE]')
   const routed = await h.call('group_topic_route_submit', { requestId: routing.requestId, routes: routing.messages.map((message) => ({ messageId: message.messageId, messageVersion: message.messageVersion, topics: [
     { topicId: one.topicRefs[0].topicId, relationship: 'affected', reason: '明确取消任务一' },
@@ -2149,7 +2252,9 @@ test('同 Topic 一次决策不能重复改变同一 Task，共享主 Topic 可�
   const owner = routed.pendingDecisions.find((item) => item.topicId === one.topicRefs[0].topicId)
   const actions = [one, two].map((task) => ({ kind: 'task-cancel', taskId: task.taskId, ...inputVersion(task), reason: '用户明确取消两个任务', topicRefs: [{ topicId: owner.topicId, revision: owner.revision }] }))
   const submission = { requestId: owner.requestId, topicId: owner.topicId, revision: owner.revision, decision: { basisMessageIds: ['cancel-both'], actions: [actions[0], actions[0]], reply: '已取消这两个任务。', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } }
-  await assert.rejects(h.call('group_decision_submit', submission), /topic_decision_task_target_duplicate/)
+  const duplicate = await h.call('group_decision_submit', submission)
+  assert.equal(duplicate.status, 'invalid-arguments')
+  assert.ok(duplicate.issues.some(issue => issue.code === 'topic_decision_task_target_duplicate'))
   assert.equal(h.store.getTask(one.taskId).state, 'running')
   assert.equal(h.store.getTask(two.taskId).state, 'queued')
   await h.call('group_reply_review_get', { requestIds: [owner.requestId] }).then((review) => { submission.decision.replyReview.reviewedOutboundIds = review.candidates.map((item) => item.outboundId) })
@@ -2174,13 +2279,15 @@ test('已执行来源改归属不会重新授予效果权限，新授权消息�
   const review = await h.call('group_topic_route_review', { messageIds: ['executed-source'], reason: '原归类错误，移到 B' })
   const moved = await h.call('group_topic_route_submit', { requestId: review.requestId, routes: [{ messageId: 'executed-source', messageVersion: 1, topics: [{ newTopicKey: 'correct-b', title: 'B' }] }] })
   const b = moved.pendingDecisions.find((request) => request.topicId !== a.topicId)
-  const bEnvelope = h.resident().sent.filter((message) => message.content[0]?.text.startsWith('[GROUP_TOPIC_DECISION]'))
+  const bEnvelope = h.messages().filter((message) => message.content[0]?.text.startsWith('[GROUP_TOPIC_DECISION]'))
     .map((message) => JSON.parse(message.content[0].text.split('\n').find((line) => line.startsWith('Topic 请求：')).slice('Topic 请求：'.length)))
     .find((item) => item.topicId === b.topicId)
   assert.equal(bEnvelope.messages.find((message) => message.messageId === 'executed-source').effectOwnerTopicId, a.topicId)
   assert.deepEqual(b.ownedDeltaMessageIds, [])
   const newAction = { kind: 'new-task', title: '重复原指令', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: b.topicId, revision: b.revision }] }
-  await assert.rejects(h.call('group_decision_submit', { requestId: b.requestId, topicId: b.topicId, revision: b.revision, decision: { basisMessageIds: ['executed-source'], actions: [newAction], reply: '再建任务', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } }), /topic_effect_owner_required/)
+  const unauthorized = await h.call('group_decision_submit', { requestId: b.requestId, topicId: b.topicId, revision: b.revision, decision: { basisMessageIds: ['executed-source'], actions: [newAction], reply: '再建任务', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } })
+  assert.equal(unauthorized.status, 'invalid-arguments')
+  assert.ok(unauthorized.issues.some(issue => issue.code === 'topic_effect_owner_required'))
   assert.equal(h.store.listTasks().length, 1)
   await ingest(h, 'fresh-authorization', { text: '@助理 请另建一个独立任务，重新核验 B' })
   const fresh = (await route(h, { 'fresh-authorization': b.topicId })).pendingDecisions.find((request) => request.topicId === b.topicId)
@@ -2251,4 +2358,25 @@ test('相同引用 ID 下的不同事项不自动撤回，只有显式 replaceme
   assert.equal(outbox.length, 2)
   assert.deepEqual(outbox[1].replacesOutboundIds ?? [], [])
   assert.equal(outbox[0].recallStatus, undefined)
+})
+
+test('任务工作位置仅验证已有工件，保留历史来源并排除不存在及远程定位', async () => {
+  const { taskWorkLocations } = await import('../packages/dingtalk-dsh-assistant/runtime.js')
+  const { mkdir, writeFile } = await import('node:fs/promises')
+  const root = mkdtempSync(join(tmpdir(), 'dsh-work-locations-'))
+  try {
+    const acceptance = join(root, 'docs', 'acceptance', 'feature-one')
+    const goal = join(acceptance, 'goal.md')
+    await mkdir(acceptance, { recursive: true })
+    await writeFile(goal, 'goal')
+    await writeFile(join(root, '.git'), 'gitdir: fixture')
+    const result = await taskWorkLocations({ checkpoints: [{ checkpointId: 'c1', evidence: [`已记录 \`${goal}\``] }],
+      result: { artifacts: [goal, join(root, 'missing.md'), 'https://example.com/report'] } })
+    assert.equal(result.status, 'verified')
+    assert.deepEqual(new Set(result.locations.map(item => item.kind)), new Set(['goal', 'acceptance', 'worktree']))
+    assert.equal(result.locations.some(item => item.path.endsWith('missing.md')), false)
+    const reopened = await taskWorkLocations({ runHistory: [{ result: { artifacts: [goal] } }] })
+    assert.equal(reopened.locations.find(item => item.kind === 'goal').source, 'previousRun.result.artifacts')
+    assert.equal((await taskWorkLocations({ result: { artifacts: ['relative/goal.md', 'https://example.com'] } })).status, 'unknown')
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

@@ -62,7 +62,6 @@ export async function apply(ctx, config = {}) {
     supervisorIntervalMs: config.supervisorIntervalMs ?? 5_000,
   })
   runtime.setCurrentDwsProfile(dwsConfig.profile)
-  await runtime.recoverInterruptedDecisions()
   const updateAgentConfig = runtime.updateAgentConfig
   runtime.updateAgentConfig = async (next) => {
     const result = await updateAgentConfig(next)
@@ -83,6 +82,17 @@ export async function apply(ctx, config = {}) {
     profile: dwsConfig.profile,
     runner: dwsRunner,
   })
+  runtime.setGroupMessageReader(async (groupId, messageId) => {
+    const message = await dwsAdapter.readMessage(groupId, messageId)
+    return { ...normalizeHistoryMessage(message, groupId), resourceRefs: message.resourceRefs ?? [] }
+  })
+  runtime.setGroupResourceReader(async (groupId, messageId, resource) => {
+    const value = await dwsAdapter.readMessageResource(groupId, messageId, resource)
+    if (!value.image) return value
+    const imageRefs = await ctx.attachments.saveImages([value.image])
+    return { imageRefs }
+  })
+  await runtime.recoverInterruptedDecisions()
   const initialEnvironment = await inspectEnvironment({ runner: dwsRunner, profile: dwsConfig.profile })
   let dwsBridgeHealth = dwsConfig.enabled === true ? { healthy: false, groups: [] } : undefined
   const stopDws = dwsConfig.enabled === true

@@ -89,7 +89,7 @@ test('叶子会话使用DSH原生descriptor且恢复旧会话时补齐', async (
   assert.match(source, /label: leafDisplayName\(task\.title \?\? task\.objective\)/)
   assert.match(source, /heading\.length <= 20/)
   assert.match(source, /ensureLeafDescriptor\(handle, task\); applyPermission\(handle, 'danger-full-access'\)/)
-  assert.equal(source.match(/applyPermission\(handle, 'danger-full-access'\)/g)?.length, 5)
+  assert.equal(source.match(/applyPermission\(handle, 'danger-full-access'\)/g)?.length, 6)
   assert.doesNotMatch(source, /applyPermission\(handle, 'read-only'\)/)
   assert.doesNotMatch(source, /applyPermission\(handle, 'workspace-write'\)/)
 })
