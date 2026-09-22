@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
+import { isDeepStrictEqual } from 'node:util'
 import path from 'node:path'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { buildReplyReviewCandidates, groupDecisionSchema } from './decision.js'
@@ -1181,7 +1182,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       if (task === undefined || task.state !== 'running') throw new Error(`task_not_running:${taskId}`)
       assertTaskInput(task, checkpoint)
       const reportContent = ({ checkpointId, submittedAt, coordinatorDecision, coordinatorReason, guidance, reviewedAt, stageTask, stageId, completedItems, remainingItems, ...body }) => body
-      const alreadyReviewed = task.checkpoints?.find(item => item.coordinatorDecision && fingerprint(reportContent(item)) === fingerprint(reportContent(checkpoint)))
+      const alreadyReviewed = task.checkpoints?.find(item => item.coordinatorDecision && isDeepStrictEqual(reportContent(item), reportContent(checkpoint)))
       if (alreadyReviewed) return { submitted: alreadyReviewed, reviewTask: task }
       if (checkpoint.kind === 'plan-confirmed') {
         const proposal = task.executionEvents?.findLast(event => event.kind === 'task-plan-prepared' && event.inputVersion === task.inputVersion && event.runSequence === task.runSequence && fingerprint(event.plan) === fingerprint(checkpoint.plan))
@@ -1210,7 +1211,10 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
       let superseded
       if (pendingReview && !pendingReview.coordinatorDecision) {
         const comparable = ({ checkpointId: _checkpointId, submittedAt: _submittedAt, coordinatorDecision: _decision, coordinatorReason: _reason, guidance: _guidance, reviewedAt: _reviewedAt, ...rest }) => rest
-        if (JSON.stringify(comparable(pendingReview)) === JSON.stringify(checkpoint)) return { submitted: pendingReview, reviewTask: task }
+        if (isDeepStrictEqual(comparable(pendingReview), checkpoint)) {
+          // 存储 schema 会重排字段；恢复原提交形状，保留既有审阅 requestId 的指纹与落盘身份。
+          return { submitted: { ...checkpoint, checkpointId: pendingReview.checkpointId, submittedAt: pendingReview.submittedAt }, reviewTask: task }
+        }
         if (!diagnostic) throw new Error(`task_checkpoint_review_pending:${taskId}`)
         superseded = pendingReview
       }

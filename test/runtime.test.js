@@ -2884,3 +2884,38 @@ test('启动resume失败会释放活动恢复预约，后续flush和close不悬�
   assert.ok(restored.runtime.listRecoveryIssues().some(issue => issue.taskId === task.taskId))
   await restored.runtime.close()
 })
+
+test('input-wait重启按原report形状恢复待审稿，复用已持久reject且保留checkpoint身份', async t => {
+  const h = await setup(t), task = await createTask(h, 'checkpoint-order-restart')
+  const receipt = await rawLeafCall(h, task, 'submit_task_checkpoint', { ...inputVersion(task), kind: 'plan-confirmed', summary: '等待原稿审阅', evidence: [], completedItems: [], remainingItems: ['核验'], nextStep: '核验', needsCoordinatorDecision: true })
+  await until(() => h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求'))
+  const request = h.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求')
+  const pendingCheckpoint = structuredClone(h.store.getTask(task.taskId).checkpoints.at(-1))
+  assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision: 'reject', reason: '须先限定隔离核验环境' } })).status, 'accepted')
+  await until(() => taskReports(h.store.getTask(task.taskId)).find(r => r.submissionId === receipt.submissionId)?.status === 'rejected')
+  await h.runtime.close()
+  // 构造已接受审阅、尚未应用且因输入等待的崩溃边界；保留原持久审阅ID。
+  const stored = h.snapshot.tables.tasks[task.taskId]
+  stored.checkpoints = [pendingCheckpoint]
+  stored.executionEvents = stored.executionEvents.filter(e => !(e.submissionId === receipt.submissionId && ['task-report-settled', 'task-report-notified'].includes(e.kind)))
+  stored.executionEvents.push({ kind: 'task-report-settled', submissionId: receipt.submissionId, ...inputVersion(task), status: 'input-wait', error: `task_input_pending:${task.taskId}`, at: new Date().toISOString() })
+  const received = stored.executionEvents.find(e => e.kind === 'task-report-received' && e.submissionId === receipt.submissionId)
+  assert.notDeepEqual(Object.keys(pendingCheckpoint).slice(0, 5), Object.keys(received.value).slice(0, 5))
+  const mismatchSnapshot = structuredClone(h.snapshot)
+  mismatchSnapshot.tables.tasks[task.taskId].executionEvents.find(e => e.kind === 'task-report-received' && e.submissionId === receipt.submissionId).value.summary = '真实不同稿'
+  const mismatch = await setup(t, { snapshot: mismatchSnapshot, goals: new Map(h.goals) })
+  await until(() => taskReports(mismatch.store.getTask(task.taskId)).find(r => r.submissionId === receipt.submissionId)?.status === 'failed')
+  assert.match(taskReports(mismatch.store.getTask(task.taskId)).find(r => r.submissionId === receipt.submissionId).error, /task_checkpoint_review_pending/)
+  assert.deepEqual(mismatch.store.getTask(task.taskId).checkpoints.at(-1), pendingCheckpoint)
+  const restored = await setup(t, { snapshot: h.snapshot, goals: h.goals })
+  await until(() => taskReports(restored.store.getTask(task.taskId)).find(r => r.submissionId === receipt.submissionId)?.status === 'rejected')
+  const current = restored.store.getTask(task.taskId)
+  assert.equal(current.checkpoints.at(-1).coordinatorDecision, 'reject')
+  assert.equal(current.checkpoints.at(-1).checkpointId, pendingCheckpoint.checkpointId)
+  assert.equal(current.checkpoints.at(-1).submittedAt, pendingCheckpoint.submittedAt)
+  assert.equal(current.executionEvents.filter(e => e.kind === 'coordination-review-accepted').length, 1)
+  assert.equal(current.executionEvents.filter(e => e.kind === 'task-report-received' && e.submissionId === receipt.submissionId).length, 1)
+  assert.equal(current.executionEvents.find(e => e.kind === 'coordination-review-accepted').requestId, request.requestId)
+  assert.equal(restored.envelope('[TASK_CHECKPOINT_REVIEW]', 'g', '审阅请求'), undefined, '不新建第二次模型审阅')
+  assert.equal(current.plan, undefined, 'reject绝不能恢复成计划通过')
+})

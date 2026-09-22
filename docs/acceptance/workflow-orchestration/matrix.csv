@@ -81,3 +81,4 @@
 "D04","18","UNVERIFIED","补修包部署与六项业务回读","round-18.md","活动Task仍运行；尚未切换"
 "R01","19","PASS","固定快照后台活动恢复","round-19.md;round-19/full-tests.txt","不阻塞后续Task和API；live顺序、失败水位、close排空"
 "R02","19","PASS","零副作用通知重新决策","round-19.md;round-19/full-tests.txt","副作用反例、原子状态CAS、迟到Outbox拒绝；629/629"
+"R03","20","PASS","同稿检查点字段顺序恢复","round-20.md;round-20/full-tests.txt","630/630；复用原reject与身份；不同稿拒绝"

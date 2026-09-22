@@ -107,3 +107,5 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 仅用于旧决策已blocked、failureOperationId等于outboundId、actions/operations/progress为空、没有任何相关Outbox、任务幂等账或reservation且该revision未处理的场景。先只读核对，保留证据与具体原因；通过既有 `POST /config/groups/{groupId}/topics/{topicId}/decisions/{decisionId}/operations/{outboundId}/retry` 提交 `{"resolution":"reconsider","reason":"核验结果与重新判断原因"}`。该入口原子标旧草稿rejected并保留记录，重新判断原始输入；不得用于有动作、已投递或未知效果的决策。旧恢复入口使用blocked状态CAS，迟到的旧Outbox也拒绝。不得直接编辑存储JSON。
 
 活动任务中断仅在用户明确批准后执行：核验目标DSH进程树、停机后备份完整当前存储和profile，再安装精确包；记录每个活动Task的inputVersion/runSequence/childSessionId并回读恢复。原Session确实缺失的历史重开任务应单列，不把新建空Session当作成功恢复。
+
+同稿检查点恢复按结构内容比较，不因存储字段顺序变化拒绝。重试保留原submissionId、checkpointId、submittedAt和既有审阅请求身份；已有reject必须应用原拒绝，不能变成批准或再开启一次审阅。真正不同稿仍保留pending冲突。仅在精确修复包核验通过后调用原报告retry接口。
