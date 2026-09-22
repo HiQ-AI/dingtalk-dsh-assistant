@@ -79,3 +79,5 @@
 "L08","18","PASS","短事务轮转与计量写链公平性","round-18.md;round-18/full-tests-final.txt","三步一次获槽；计量合并；业务插入；错误及close回归"
 "L09","18","PASS","文件卡片精确展示差异","round-18.md;round-18/full-tests-final.txt","同名同ID尾注容许；真实变化拒绝"
 "D04","18","UNVERIFIED","补修包部署与六项业务回读","round-18.md","活动Task仍运行；尚未切换"
+"R01","19","PASS","固定快照后台活动恢复","round-19.md;round-19/full-tests.txt","不阻塞后续Task和API；live顺序、失败水位、close排空"
+"R02","19","PASS","零副作用通知重新决策","round-19.md;round-19/full-tests.txt","副作用反例、原子状态CAS、迟到Outbox拒绝；629/629"

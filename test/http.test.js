@@ -121,6 +121,8 @@ test('Host 原操作恢复固定路径身份且要求对账，模型字段不能
     assert.deepEqual(calls[0], { resolution: 'not-applied', reason: '已独立查询确认未应用', groupId: 'g', topicId: 'topic', decisionId: 'd', operationId: 'op' })
     for (const body of [{ resolution: 'not-applied' }, { resolution: 'unknown', reason: '不确定' }, { resolution: 'applied', reason: '覆盖', groupId: 'foreign' }]) assert.equal((await post(body)).status, 400)
     assert.equal(calls.length, 1)
+    assert.equal((await post({ resolution: 'reconsider', reason: '零副作用，保留旧决策并重新判断' })).status, 202)
+    assert.equal(calls[1].resolution, 'reconsider')
     assert.equal((await post({ resolution: 'applied', reason: '与账本矛盾' })).status, 409)
   }, { overrides: { retryDecisionOperation: async value => { if (value.resolution === 'applied') throw new Error('decision_recovery_evidence_conflict'); calls.push(value); return { status: 'completed' } } } })
 })

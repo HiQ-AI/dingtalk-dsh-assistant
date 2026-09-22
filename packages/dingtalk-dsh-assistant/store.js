@@ -765,7 +765,7 @@ export async function openResidentStore(storageDomain) {
       })
       return result
     }),
-    updateTopicDecision: ({ groupId, topicId, decisionId, patch }) => serialize(groupId, async () => {
+    updateTopicDecision: ({ groupId, topicId, decisionId, patch, expectedStatus }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       if (Object.keys(patch).some((key) => !['status', 'operations', 'progress', 'error', 'attempt', 'retryBaseAttempt', 'nextRetryAt', 'recoveryReason', 'failureOperationId'].includes(key))) throw new Error('topic_decision_patch_invalid')
@@ -773,6 +773,7 @@ export async function openResidentStore(storageDomain) {
       let result
       await groups.update(entry[0], (latest) => ({ ...latest, topics: latest.topics.map((topic) => topic.topicId !== topicId ? topic : { ...topic, decisions: topic.decisions.map((record) => {
         if (record.decisionId !== decisionId) return record
+        if (expectedStatus !== undefined && record.status !== expectedStatus) throw new Error('decision_recovery_status_changed')
         if (!isPendingDecision(record)) { result = record; return record }
         if (patch.operations && (patch.operations.length !== record.operations.length || record.operations.some((operation, index) => {
           const next = patch.operations[index]
@@ -781,6 +782,31 @@ export async function openResidentStore(storageDomain) {
         result = { ...record, ...patch, updatedAt: new Date().toISOString() }; return result
       }) }) }))
       if (!result) throw new Error(`topic_decision_not_found:${decisionId}`)
+      return result
+    }),
+    reconsiderBlockedTopicDecision: ({ groupId, topicId, decisionId, operationId, reason }) => serialize(groupId, async () => {
+      if (!reason?.trim()) throw new Error('decision_recovery_evidence_required')
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let result
+      await groups.update(entry[0], (latest) => {
+        const topic = latest.topics.find(item => item.topicId === topicId)
+        const record = topic?.decisions.find(item => item.decisionId === decisionId)
+        if (!record || !['blocked', 'rejected'].includes(record.status)) throw new Error('decision_recovery_not_blocked')
+        if (operationId !== record.failureOperationId || operationId !== record.outboundId) throw new Error('decision_recovery_wrong_failed_operation')
+        if (record.decision.actions.length || record.operations.length || Object.keys(record.progress ?? {}).length
+          || topic.processedRevision >= record.revision
+          || latest.taskReservations.some(item => item.decisionId === decisionId)
+          || [...tasks.entries()].some(([, task]) => task.appliedOperations?.some(id => id.startsWith(`${decisionId}:action:`)))
+          || latest.outbox.some(item => item.outboundId === record.outboundId || item.decisionId === decisionId || item.sourceMessageId === `topic-decision:${decisionId}`)) throw new Error('decision_reconsider_side_effect_or_unknown')
+        if (record.status === 'rejected') {
+          if (!record.recoveryReason) throw new Error('decision_recovery_not_blocked')
+          result = record
+          return latest
+        }
+        result = { ...record, status: 'rejected', recoveryReason: reason.trim(), nextRetryAt: undefined, updatedAt: new Date().toISOString() }
+        return { ...latest, topics: latest.topics.map(item => item.topicId !== topicId ? item : { ...item, decisions: item.decisions.map(value => value.decisionId === decisionId ? result : value) }) }
+      })
       return result
     }),
     rejectInvalidTopicDecision: ({ groupId, topicId, decisionId }) => serialize(groupId, async () => {
@@ -915,6 +941,10 @@ export async function openResidentStore(storageDomain) {
       const group = await groups.update(storageKey, (latest) => {
         veto = preflight?.(latest)
         if (veto !== undefined) return latest
+        if (latest.topics.some(topic => topic.decisions.some(record => record.status === 'rejected'
+          && (record.decisionId === decisionId || record.outboundId === outboundId || sourceMessageId === `topic-decision:${record.decisionId}`)))) {
+          veto = { status: 'decision-rejected' }; return latest
+        }
         if (replacementBusy(latest, replacesOutboundIds ?? [], decisionId)) { veto = { status: 'reply-busy' }; return latest }
         return { ...latest,
         outbox: reconcileReplacementGraph([...latest.outbox, {

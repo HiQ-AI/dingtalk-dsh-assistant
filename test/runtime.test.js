@@ -103,6 +103,7 @@ async function setup(t, options = {}) {
     ...(options.attachments ? { attachments: options.attachments } : {}),
   }
   h.ctx = ctx
+  await options.beforeRuntime?.(h)
   h.runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: options.maxConcurrentTasks ?? 1, supervisorIntervalMs: 0, resumeTimeoutMs: options.resumeTimeoutMs ?? 10_000, decisionRetryBaseMs: options.retryDelayMs ?? 60_000, actionAdapters: options.actionAdapters, authorizeTaskAction: options.authorizeTaskAction })
   h.resident = (groupId = 'g') => h.handles.get(store.getGroup(groupId)?.residentSessionId)
   h.messages = (groupId = 'g') => h.deliveries.filter(({ sessionId }) => sessionId === store.getGroup(groupId)?.residentSessionId || h.handles.get(sessionId)?.agent.session.snapshotEvents().some(event => event.type === 'dingtalk/coordination' && event.data.groupId === groupId)).map(item => item.message)
@@ -418,6 +419,7 @@ test('活动故障跨 Runtime 重启从 Session 原事件补投影', async t => 
   const events = new Map([[task.childSessionId, session.snapshotEvents()]])
   await original.runtime.close()
   const restored = await setup(t, { snapshot: original.snapshot, goals: original.goals, sessionEvents: events })
+  await restored.runtime.flushActivities()
   assert.equal(restored.store.listActivities(task.taskId).length, 2)
   assert.equal(restored.runtime.listRecoveryIssues().filter(issue => issue.kind === 'activity-projection').length, 0)
 })
@@ -2803,4 +2805,82 @@ test('任务工作位置仅验证已有工件，保留历史来源并排除不�
     assert.equal(reopened.locations.find(item => item.kind === 'goal').source, 'previousRun.result.artifacts')
     assert.equal((await taskWorkLocations({ result: { artifacts: ['relative/goal.md', 'https://example.com'] } })).status, 'unknown')
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('启动活动审计不阻塞后续叶子和API，固定快照后live按序接续且close排空', async t => {
+  const original = await setup(t, { maxConcurrentTasks: 2 })
+  const first = await createTask(original, 'audit-first')
+  original.idle.set(first.childSessionId, Promise.resolve())
+  const second = await createTask(original, 'audit-second')
+  const session = original.handles.get(first.childSessionId).agent.session
+  session.append('tool/call', { callId: 'history', name: 'read' })
+  const historical = session.snapshotEvents().at(-1)
+  const sessionEvents = new Map([[first.childSessionId, session.snapshotEvents()]])
+  await original.runtime.close()
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let writes = 0
+  const restored = await setup(t, { snapshot: original.snapshot, goals: original.goals, sessionEvents, maxConcurrentTasks: 2,
+    beforeRuntime(h) {
+      const record = h.store.recordActivity.bind(h.store)
+      h.store.recordActivity = async value => {
+        if (value.taskId === first.taskId && writes++ === 0) { entered.resolve(); await release.promise }
+        return record(value)
+      }
+    },
+  })
+  await entered.promise
+  assert.ok(restored.handles.has(second.childSessionId), '首Task审计尚未完成时第二Task已恢复')
+  const liveSession = restored.handles.get(first.childSessionId).agent.session
+  liveSession.append('tool/result', { message: { source: { callId: 'history' }, content: [{ type: 'tool-result', isError: false }] } })
+  const live = liveSession.snapshotEvents().at(-1)
+  restored.events.get('session/event')(liveSession, live)
+  for (const id of restored.handles.keys()) restored.idle.set(id, Promise.resolve())
+  let closed = false
+  const closing = restored.runtime.close().then(() => { closed = true })
+  await immediate()
+  assert.equal(closed, false)
+  release.resolve()
+  await closing
+  assert.equal(writes, 2, '历史固定快照和live各写一次，不重新扫描已入队的live事件')
+  const taskRecord = restored.snapshot.tables.tasks[first.taskId]
+  assert.equal(taskRecord.activityProjection.sessions[first.childSessionId].lastSeq, live.seq)
+  const projected = Object.values(restored.snapshot.tables.activities).filter(item => item.taskId === first.taskId)
+  assert.deepEqual(projected.map(item => item.seq), [historical.seq, live.seq])
+})
+
+test('活动重试固定快照期间新增事件不丢且失败水位不跳洞', async t => {
+  const h = await setup(t), task = await createTask(h, 'recovery-live')
+  const session = h.handles.get(task.childSessionId).agent.session, observer = h.events.get('session/event')
+  const record = h.store.recordActivity.bind(h.store)
+  let blocked = true
+  h.store.recordActivity = async value => { if (blocked) throw new Error('audit-failure'); return record(value) }
+  session.append('tool/call', { callId: 'failed-first', name: 'read' })
+  const first = session.snapshotEvents().at(-1); observer(session, first)
+  await h.runtime.flushActivities()
+  assert.equal(h.store.getTask(task.taskId).activityProjection?.sessions?.[task.childSessionId]?.lastSeq, undefined)
+  blocked = false
+  let appended = false
+  h.store.recordActivity = async value => {
+    if (!appended) {
+      appended = true
+      session.append('tool/result', { message: { source: { callId: 'failed-first' }, content: [{ type: 'tool-result', isError: false }] } })
+      observer(session, session.snapshotEvents().at(-1))
+    }
+    return record(value)
+  }
+  await h.runtime.reconcileActivityProjections({ force: true })
+  await h.runtime.flushActivities()
+  assert.deepEqual(h.store.listActivities(task.taskId).map(item => item.seq), [first.seq, session.snapshotEvents().at(-1).seq])
+})
+
+
+
+
+test('启动resume失败会释放活动恢复预约，后续flush和close不悬挂', async t => {
+  const original = await setup(t), task = await createTask(original, 'audit-resume-failure')
+  await original.runtime.close()
+  const restored = await setup(t, { snapshot: original.snapshot, goals: original.goals, resumeFailure: id => id === task.childSessionId })
+  await restored.runtime.flushActivities()
+  assert.ok(restored.runtime.listRecoveryIssues().some(issue => issue.taskId === task.taskId))
+  await restored.runtime.close()
 })

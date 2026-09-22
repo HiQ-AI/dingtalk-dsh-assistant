@@ -2022,13 +2022,11 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     }
   }
   async function reconcileActivityProjection(taskId, session) {
-    while (true) {
-      const lastSeq = store.getTask(taskId)?.activityProjection?.sessions?.[String(session.id)]?.lastSeq ?? -1
-      const pending = session.snapshotEvents().filter(event => PROJECTED_EVENTS.has(event.type) && event.seq > lastSeq)
-        .sort((left, right) => left.seq - right.seq)
-      if (pending.length === 0) break
-      for (const event of pending) await writeProjectedActivity(taskId, session, event)
-    }
+    // 只审计进入时的固定快照；live 事件由同一 activityTail 接续，不能追着运行中的叶子阻塞启动。
+    const lastSeq = store.getTask(taskId)?.activityProjection?.sessions?.[String(session.id)]?.lastSeq ?? -1
+    const pending = session.snapshotEvents().filter(event => PROJECTED_EVENTS.has(event.type) && event.seq > lastSeq)
+      .sort((left, right) => left.seq - right.seq)
+    for (const event of pending) await writeProjectedActivity(taskId, session, event)
     activityProjectionFailures.delete(taskId)
     recoveryIssues.resolve(issue => issue.taskId === taskId && issue.kind === 'activity-projection')
   }
@@ -2250,19 +2248,27 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     if (!residentHandles.has(task.groupId)) continue
     if (task.stopRequest) { void recoverTaskStop(task.taskId); continue }
     if (task.migrationReview?.status === 'required') continue
+    // 在 resume 可能产生首个 live 事件之前预约历史恢复槽，禁止水位跨过尚未回填的历史。
+    const activitySession = Promise.withResolvers()
+    activityTail = activityTail.then(async () => {
+      const session = await activitySession.promise
+      if (!session) return
+      try { await reconcileActivityProjection(task.taskId, session) }
+      catch (error) {
+        activityProjectionFailures.set(task.taskId, { session, nextRetryAt: Date.now() + 30_000 })
+        recoveryIssues.push({ taskId: task.taskId, kind: 'activity-projection', error: error.message })
+      }
+    })
     try {
       const plan = reconcileLegacyStagePlan(task)
       const current = plan ? await store.updateTask(task.taskId, value => ({ ...value, stageTasks: plan.stageTasks, stagePlan: plan.stagePlan,
         executionEvents: [...(value.executionEvents ?? []), { kind: 'stage-plan-reconciled', planCheckpointId: plan.planCheckpointId, previousStageTasks: value.stageTasks, at: new Date().toISOString() }],
       })) : task
       const handle = await resumeLeaf(current)
-      try { await reconcileActivityProjection(current.taskId, handle.agent.session) }
-      catch (error) {
-        activityProjectionFailures.set(current.taskId, { session: handle.agent.session, nextRetryAt: Date.now() + 30_000 })
-        recoveryIssues.push({ taskId: current.taskId, kind: 'activity-projection', error: error.message })
-      }
+      activitySession.resolve(handle.agent.session)
       await dispatchTaskInput(current); reports.recover(current)
     } catch (error) { recoveryIssues.push({ groupId: task.groupId, taskId: task.taskId, childSessionId: task.childSessionId, error: error instanceof Error ? error.message : String(error) }) }
+    finally { activitySession.resolve(undefined) }
   }
   await serializeTasks(pumpTasks)
   recoverCompletionNotifications()

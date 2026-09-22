@@ -1339,7 +1339,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         || task.topicRefs.some((ref) => { const topic = store.getTopic(task.groupId, ref.topicId); return !topic || topic.processedRevision < topic.revision })
     },
     async retryOperation({ groupId, topicId, decisionId, operationId, resolution, reason }) {
-      if (!reason?.trim() || !['not-applied', 'applied'].includes(resolution)) throw new Error('decision_recovery_evidence_required')
+      if (!reason?.trim() || !['not-applied', 'applied', 'reconsider'].includes(resolution)) throw new Error('decision_recovery_evidence_required')
+      if (resolution === 'reconsider') {
+        if (applying.has(decisionId)) throw new Error('decision_recovery_not_blocked')
+        const result = await store.reconsiderBlockedTopicDecision({ groupId, topicId, decisionId, operationId, reason })
+        await schedule(groupId)
+        return result
+      }
       const record = store.getTopic(groupId, topicId)?.decisions.find(item => item.decisionId === decisionId)
       if (!record || record.status !== 'blocked' || applying.has(decisionId)) throw new Error('decision_recovery_not_blocked')
       if (operationId !== record.failureOperationId) throw new Error('decision_recovery_wrong_failed_operation')
@@ -1350,7 +1356,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const applied = operation ? store.getTask(operation.taskId)?.appliedOperations?.includes(operationId) : store.getGroup(groupId).outbox.some(item => item.outboundId === operationId)
       if (!applied && action && action.kind !== 'new-task' && (!task || task.stopRequest || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence)) throw new Error('decision_recovery_task_stale')
       if (resolution === 'applied' && !applied || resolution === 'not-applied' && applied) throw new Error('decision_recovery_evidence_conflict')
-      await store.updateTopicDecision({ groupId, topicId, decisionId, patch: {
+      await store.updateTopicDecision({ groupId, topicId, decisionId, expectedStatus: 'blocked', patch: {
         status: 'accepted', retryBaseAttempt: record.attempt ?? 0, nextRetryAt: undefined, recoveryReason: reason.trim(),
         operations: record.operations.map(item => item.operationId === operationId ? { ...item, status: applied ? 'applied' : 'pending', recoveryResolution: resolution, recoveryReason: reason.trim() } : item),
       } })

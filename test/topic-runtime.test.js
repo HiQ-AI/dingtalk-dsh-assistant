@@ -1938,3 +1938,52 @@ test('读取流程后更新或禁用，new-task 提交拒绝旧版本且不写 T
     assert.equal(h.store.getTopic('g', request.topicId).decisions.length, 0)
   })
 })
+
+test('无动作且从未入 Outbox 的 blocked 决策可并发安全重判，保留失败证据与原输入', async t => {
+  let fail = true
+  const h = await setup(t, { beforeAppend() { if (fail) throw new Error('EPERM rename') } })
+  await ingest(h, 'reconsider')
+  const request = (await route(h)).pendingDecisions[0]
+  await h.call('group_decision_submit', submission(request, { reply: '旧的错误判断' }))
+  await h.coordinator.drain('g')
+  const before = h.store.getTopic('g', request.topicId)
+  const record = before.decisions[0]
+  assert.equal(record.status, 'blocked')
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  const args = { groupId: 'g', topicId: request.topicId, decisionId: record.decisionId, operationId: record.outboundId, resolution: 'reconsider', reason: '已核验原文件存在，旧回复未落盘，需重新判断' }
+  fail = false
+  const results = await Promise.all([h.coordinator.retryOperation(args), h.coordinator.retryOperation(args)])
+  assert.ok(results.every(item => item.status === 'rejected'))
+  const after = h.store.getTopic('g', request.topicId)
+  assert.equal(after.processedRevision, before.processedRevision)
+  assert.equal(after.decisions[0].error, 'EPERM rename')
+  assert.equal(after.decisions[0].decision.reply, '旧的错误判断')
+  assert.equal(after.decisions[0].recoveryReason, args.reason)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  const next = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.notEqual(next.requestId, request.requestId)
+  assert.equal(next.messages[0].messageId, 'reconsider')
+  for (const identity of [{ outboundId: record.outboundId }, { decisionId: record.decisionId }, { sourceMessageId: `topic-decision:${record.decisionId}` }]) {
+    assert.equal((await h.store.appendOutbox({ groupId: 'g', sourceMessageId: 'late-stale', text: '旧草稿', ...identity })).status, 'decision-rejected')
+  }
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+})
+
+test('重判与旧 not-applied 恢复并发时旧恢复 CAS 不得复活已拒绝草稿', async t => {
+  const h = await setup(t, { beforeAppend() { throw new Error('EPERM rename') } })
+  await ingest(h, 'recovery-race')
+  const request = (await route(h)).pendingDecisions[0]
+  await h.call('group_decision_submit', submission(request, { reply: '旧草稿' }))
+  await h.coordinator.drain('g')
+  const record = h.store.getTopic('g', request.topicId).decisions[0]
+  const args = { groupId: 'g', topicId: request.topicId, decisionId: record.decisionId, operationId: record.outboundId, reason: '核对零副作用' }
+  const results = await Promise.allSettled([
+    h.coordinator.retryOperation({ ...args, resolution: 'reconsider' }),
+    h.coordinator.retryOperation({ ...args, resolution: 'not-applied' }),
+  ])
+  assert.equal(results[0].status, 'fulfilled')
+  assert.equal(results[1].status, 'rejected')
+  assert.match(results[1].reason.message, /decision_recovery_status_changed|decision_recovery_not_blocked/)
+  assert.equal(h.store.getTopic('g', request.topicId).decisions[0].status, 'rejected')
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+})

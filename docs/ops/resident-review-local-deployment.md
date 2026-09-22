@@ -17,6 +17,7 @@
 - 决策必须能从首包看到流程索引和合法 section；未知 section 应返回合法值提示，流程正文按固定请求版本读取。内联消息不重复分页。
 - 公平轮转检查短事务三步连续完成、30秒后边界让出以及路由抢占；不得把预算当执行超时强杀工具。
 - 性能投影共用 v9 Domain，后台只提交一个计量写，等待事件按会话合并，close 排空；不改变每条记录回执的持久化语义。单文件整库写成本仍存在，独立监测实际提交耗时。
+- 活动投影恢复使用固定快照，在同一后台有序队列先补历史后接live；API与后续叶子不等待历史统计追平。关闭仍排空，失败保留水位和恢复错误。
 - 保留运行中的 Task，等安全结束再部署。切换后逐项回查来源消息到 Topic、Decision、Task；新建与旧任务续办分别确认，不人工改状态。
 
 ## 安装前自检
@@ -100,3 +101,9 @@ UAT2 角色菜单组任务 `task-ecf5a0c74b07381abba1330a4ebb4551` 的计划检�
 DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码仓本地提交，见本轮 [搜索记录](../acceptance/performance-flow-optimization/search/report.md)。它不随本插件自动安装；未取得可追溯的正式责任包前不能声称生产 glob 已修复。8条无固定前缀和4条宽 worktrees 搜索仍未解决，不得用增大 timeout 或改写结果集掩盖。当前 Domain 仍为8，新增观测投影可选；降级前必须验证旧版本读取是否保留新增字段，不能让旧 Schema 静默丢失计量状态。
 
 报告契约 v2 切换时须停止旧活动协调/叶子会话并由 Runtime 重新绑定工具契约；外部调用方同步读取 received、reviewStatus、applicationStatus、nextAction，不再读取顶层 accepted/status。未知审阅异常进入 system waiting，保留原 submissionId；修复后通过原报告的显式重试入口恢复，不能提交新业务报告绕过阻塞。此批不改变 Domain v8 格式，后续 v9 升级须使用独立迁移规程。
+
+## 无副作用的阻断通知重新决策
+
+仅用于旧决策已blocked、failureOperationId等于outboundId、actions/operations/progress为空、没有任何相关Outbox、任务幂等账或reservation且该revision未处理的场景。先只读核对，保留证据与具体原因；通过既有 `POST /config/groups/{groupId}/topics/{topicId}/decisions/{decisionId}/operations/{outboundId}/retry` 提交 `{"resolution":"reconsider","reason":"核验结果与重新判断原因"}`。该入口原子标旧草稿rejected并保留记录，重新判断原始输入；不得用于有动作、已投递或未知效果的决策。旧恢复入口使用blocked状态CAS，迟到的旧Outbox也拒绝。不得直接编辑存储JSON。
+
+活动任务中断仅在用户明确批准后执行：核验目标DSH进程树、停机后备份完整当前存储和profile，再安装精确包；记录每个活动Task的inputVersion/runSequence/childSessionId并回读恢复。原Session确实缺失的历史重开任务应单列，不把新建空Session当作成功恢复。
