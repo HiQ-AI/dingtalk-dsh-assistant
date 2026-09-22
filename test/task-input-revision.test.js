@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { reviseTaskProgress, stagePlanFor, reconcileLegacyStagePlan } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
+import { taskPlanFixture, stageOutputFixture } from './fixtures/task-plan.js'
+import { acceptedTaskStageOutputs } from '../packages/dingtalk-dsh-assistant/task-progress.js'
 
 const basis = new Set(['m1'])
 function task() {
@@ -10,6 +12,22 @@ function task() {
   return current
 }
 const impact = (current, index = 1) => ({ basisMessageIds: ['m1'], reason: '该阶段证据被新事实否定', affectedStageIds: [current.stagePlan[index].stageId] })
+
+test('结构化上游 A 失效传递至依赖 B/C，独立 D 保留原版本产物', () => {
+  const current = task()
+  current.plan = taskPlanFixture({ taskId: current.taskId, inputVersion: current.inputVersion, titles: ['准备', 'SQL', '部署', '独立检查'] })
+  current.plan.stages[3].dependsOn = []
+  current.stageTasks = current.plan.stages.map(item => item.title)
+  current.stagePlan = current.plan.stages.map(({ stageId, title }) => ({ stageId, title }))
+  current.checkpoints = current.plan.stages.map((stage, i) => ({ checkpointId: `cp${i}`, kind: 'stage-completed', coordinatorDecision: 'acknowledge', inputVersion: current.inputVersion, runSequence: current.runSequence, stageId: stage.stageId, stageTask: stage.title, completedItems: [stage.title], stageOutput: stageOutputFixture(current.plan, i).output }))
+  const before = structuredClone(current.checkpoints)
+  const revised = reviseTaskProgress(current, { progressImpact: 'replan', impactEvidence: impact(current, 0) }, basis)
+  assert.deepEqual(revised.affectedStageIds, current.plan.stages.slice(0, 3).map(item => item.stageId))
+  assert.deepEqual(revised.checkpoints.map(item => item.checkpointId), ['cp3'])
+  assert.deepEqual(current.checkpoints, before)
+  const updated = { ...current, inputVersion: 4, checkpoints: revised.checkpoints, executionEvents: [{ kind: 'input-revised', previousInputVersion: 3, inputVersion: 4, runSequence: 1, retainedCheckpointIds: ['cp3'] }] }
+  assert.deepEqual(acceptedTaskStageOutputs(updated).map(item => item.checkpointId), ['cp3'])
+})
 
 test('旧任务按已批准细计划恢复阶段索引，保留历史版本和原报告', () => {
   const current = task()

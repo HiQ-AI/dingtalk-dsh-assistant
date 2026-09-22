@@ -1,0 +1,36 @@
+✖ 一次完成审阅同时准备通知，完成落盘后直接入 Outbox 且 FIFO 下个任务启动 (224.47ms)
+✔ 通知已入 Outbox 后执行事件写入失败不会重复发起通知协调 (89.9081ms)
+✔ 非法完成通知草稿只重做通知，业务完成及固定意图跨重启保留 (109.4498ms)
+✔ 通知写入持续故障不产生未处理拒绝，恢复只补同一Outbox身份 (95.4417ms)
+✔ 完成审阅一次提交通知草稿，Task 落盘后才写入 Outbox (40.7112ms)
+✔ 完成审阅后新增历史候选使通知草稿失效 (15.9631ms)
+✔ 材料清单从当前surface分页形成，跨请求与压缩摘要不冒充正文 (10.7914ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 6
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1032.2106
+
+✖ failing tests:
+
+test at test\runtime.test.js:1563:1
+✖ 一次完成审阅同时准备通知，完成落盘后直接入 Outbox 且 FIFO 下个任务启动 (224.47ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'queued'
+  - 'running'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-workflow-orchestration/test/runtime.test.js:1569:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'queued',
+    expected: 'running',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

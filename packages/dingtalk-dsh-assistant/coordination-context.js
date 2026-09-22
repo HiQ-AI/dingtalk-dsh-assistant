@@ -1,4 +1,5 @@
 import { fingerprint } from './topic-model.js'
+import { z } from 'zod'
 const projections = new WeakMap()
 
 // 只读取 DSH 当前 surface 上的工具结果；原始事件日志、压缩摘要和模型复述不构成正文可见证明。
@@ -61,4 +62,39 @@ export function compactSectionValue(request, section, value) {
     return item
   }
   return visit(value, [])
+}
+
+const manifestInputSchema = z.object({
+  requestId: z.string().min(1),
+  materials: z.array(z.object({
+    id: z.string().min(1), version: z.number().int().positive(), text: z.string().optional(), missingReason: z.string().min(1).optional(),
+    pages: z.array(z.object({ offset: z.number().int().nonnegative(), text: z.string() }).strict()).default([]),
+  }).strict()),
+}).strict()
+
+// 只描述当前请求已取得的材料；不补抓网络，也不把有摘要等同于正文已读取。
+export function buildMaterialManifest(value) {
+  const { requestId, materials } = manifestInputSchema.parse(value)
+  if (new Set(materials.map(item => item.id)).size !== materials.length) throw new Error('material_manifest_duplicate_identity')
+  const entries = materials.map(item => {
+    if (item.text === undefined) {
+      if (item.pages.length) throw new Error('material_manifest_page_without_source')
+      return { id: item.id, version: item.version, status: 'missing', missingReason: item.missingReason ?? 'material_unavailable', complete: false, readRanges: [] }
+    }
+    if (item.missingReason) throw new Error('material_manifest_conflicting_availability')
+    const ranges = item.pages.map(page => {
+      if (page.offset > item.text.length || item.text.slice(page.offset, page.offset + page.text.length) !== page.text) throw new Error('material_manifest_page_mismatch')
+      return { start: page.offset, end: page.offset + page.text.length }
+    }).filter(range => range.end > range.start).sort((a, b) => a.start - b.start)
+    const merged = []
+    for (const range of ranges) {
+      const last = merged.at(-1)
+      if (last && range.start <= last.end) last.end = Math.max(last.end, range.end)
+      else merged.push({ ...range })
+    }
+    const nextOffset = merged[0]?.start === 0 ? merged[0].end : 0
+    const complete = nextOffset === item.text.length
+    return { id: item.id, version: item.version, contentFingerprint: fingerprint(item.text), totalChars: item.text.length, readChars: merged.reduce((sum, range) => sum + range.end - range.start, 0), readRanges: merged, nextOffset, complete, status: complete ? 'complete' : 'partial' }
+  })
+  return { requestId, manifestFingerprint: fingerprint(entries), complete: entries.every(item => item.complete), entries }
 }

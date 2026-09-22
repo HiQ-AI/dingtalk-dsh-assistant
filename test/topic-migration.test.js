@@ -6,9 +6,8 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
-import { residentDomainSpec, openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
+import { residentDomainSpec, taskResultSchema } from '../packages/dingtalk-dsh-assistant/storage-v8-schema.js'
 import { planTopicMigration, migrateTopicStorage } from '../scripts/migrate-topic-storage.js'
-import { taskResultSchema } from '../packages/dingtalk-dsh-assistant/task-result.js'
 import { fingerprint } from '../packages/dingtalk-dsh-assistant/topic-model.js'
 
 const at = '2026-09-07T00:00:00.000Z'
@@ -88,10 +87,11 @@ test('真实SDK JSON迁移check零写、独立目标读回、重复运行与旧�
   assert.equal(await readFile(source, 'utf8'), original)
   const backend = new JsonStorageBackend(targetRoot)
   const facility = new DomainFacility({ emit() {}, storage: { backend: { get: () => backend } } }, { backend: 'json' })
-  const store = await openResidentStore(facility)
-  assert.equal(store.getTask('task-old').topicRefs.length, 1)
-  assert.equal(store.getGroup('g').outbox[0].deliveredMessageId, 'channel-old')
-  assert.equal(store.getGroup('g').outbox[0].resultFingerprint, fingerprint(taskResultSchema.parse(store.getTask('task-old').result)))
+  const store = await facility.open(residentDomainSpec)
+  const task = store.table('tasks').get('task-old'), group = store.table('groups').get('g')
+  assert.equal(task.topicRefs.length, 1)
+  assert.equal(group.outbox[0].deliveredMessageId, 'channel-old')
+  assert.equal(group.outbox[0].resultFingerprint, fingerprint(taskResultSchema.parse(task.result)))
   await store.close(); await backend.close()
   const oldBackend = new JsonStorageBackend(sourceRoot)
   await assert.rejects(oldBackend.kv.open({ name: residentDomainSpec.name, version: 8, tables: Object.keys(residentDomainSpec.tables), hasGlobal: false }), { code: 'version-mismatch' })

@@ -1,4 +1,5 @@
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
+import { randomUUID } from 'node:crypto'
 
 const jsonLine = (input, label) => {
   const line = input.split(/\r?\n/u).find((value) => value.startsWith(`${label}：`))
@@ -12,7 +13,7 @@ const toolResults = (messages) => messages.flatMap((message) => message.content.
 const toolCalls = (messages) => messages.flatMap((message) => message.content.filter((block) => block.type === 'tool-call'))
 
 function* call(name, args) {
-  const id = `fake-${name}-${Date.now()}`
+  const id = `fake-${name}-${randomUUID()}`
   const serialized = JSON.stringify(args)
   yield { type: 'block-start', index: 0, blockType: 'tool-call' }
   yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: serialized }
@@ -42,7 +43,10 @@ function makeDecision(request, tasks) {
 
 class FakeResidentAdapter extends LlmAdapter {
   async * stream(options) {
-    const lastUser = options.messages.findLast((message) => message.role === 'user' && (message.source.kind === 'user' || message.source.kind === 'coordinator'))
+    let lastUser = options.messages.findLast((message) => message.role === 'user' && (message.source.kind === 'user' || message.source.kind === 'coordinator'))
+    if (lastUser?.content.some(block => block.type === 'text' && block.text.startsWith('[TASK_REPORT_REVIEWED]'))) {
+      lastUser = options.messages.findLast(message => message.role === 'user' && message.content.some(block => block.type === 'text' && block.text.startsWith('[TASK_TOPIC_CONTEXT]')))
+    }
     const input = lastUser?.content.filter((block) => block.type === 'text').map((block) => block.text).join('') ?? ''
     const afterInput = options.messages.slice(options.messages.lastIndexOf(lastUser) + 1)
     const results = toolResults(afterInput)
@@ -56,28 +60,56 @@ class FakeResidentAdapter extends LlmAdapter {
     const tasks = activeTasksText?.startsWith('[') ? JSON.parse(activeTasksText) : []
     if (input.startsWith('[TASK_TOPIC_CONTEXT]')) {
       const ref = jsonLine(input, 'Task 输入')
-      const stages = jsonLine(input, '本轮阶段任务')
-      if (!ref || !Array.isArray(stages) || !stages.length) throw new Error('fake_task_input_missing')
+      const systemSection = title => options.system?.split(`### ${title}\n\n`)[1]?.split('\n\n')[0]
+      const binding = JSON.parse(systemSection('当前结构化计划与来源') ?? '{}')
+      const stages = systemSection('当前执行轮次阶段任务')?.split('\n').map(line => line.replace(/^- /u, '').replace(/（stageId: .*）$/u, ''))
+      const criteria = systemSection('当前执行轮次验收标准')?.split('\n').map(line => line.replace(/^- /u, ''))
+      if (!ref || !stages?.length || !criteria?.length || !binding.sourceRefs?.length) throw new Error('fake_task_input_missing')
       const acknowledgements = afterInput.flatMap((message) => message.content.filter((block) => block.type === 'tool-result'))
       if (acknowledgements.some((block) => block.isError)) throw new Error('fake_task_tool_rejected')
-      const accepted = calls.filter((item) => acknowledgements.some((block) => block.toolCallId === item.id))
-      const checkpoints = accepted.filter((item) => item.name === 'submit_task_checkpoint')
       const version = { inputVersion: ref.inputVersion, runSequence: ref.runSequence }
-      const task = tasks.find((item) => item.taskId === ref.taskId)
-      // 默认单阶段也拆成两个协议检查点；stageTask 始终引用 Host 给定阶段。
-      const items = stages.length >= 2 ? stages : [`读取：${stages[0]}`, `核验：${stages[0]}`]
+      const resultFor = name => {
+        const sent = calls.findLast(item => item.name === name), result = sent && results.findLast(item => item.toolCallId === sent.id)
+        if (!result) return undefined
+        const { toolCallId, ...body } = result
+        return body
+      }
+      const resolutions = afterInput.flatMap(message => message.content.filter(block => block.type === 'text' && block.text.startsWith('[TASK_REPORT_REVIEWED]')).map(block => JSON.parse(block.text.split('\n')[1])))
+      const approved = []
+      for (const submitted of calls.filter(item => ['submit_task_checkpoint', 'submit_task_result'].includes(item.name))) {
+        const receipt = results.findLast(item => item.toolCallId === submitted.id)
+        const settled = resolutions.findLast(item => item.submissionId === receipt?.submissionId) ?? receipt
+        if (['rejected', 'stale', 'failed'].includes(settled?.reviewStatus)) throw new Error('fake_task_report_not_approved')
+        if (settled?.reviewStatus !== 'approved' || settled.applicationStatus !== 'applied') { yield { type: 'finish', reason: { kind: 'stop' } }; return }
+        approved.push(submitted)
+      }
+      const prepared = resultFor('task_plan_prepare')
+      if (!prepared) {
+        yield* call('task_plan_prepare', { ...version, draft: {
+          criteria: criteria.map((description, index) => ({ key: `c${index}`, description, sourceRefs: binding.sourceRefs, verificationPolicy: 'semantic' })),
+          stages: stages.map((title, index) => ({ key: `s${index}`, title, criterionKeys: criteria.map((_, i) => `c${i}`), dependsOnKeys: index ? [`s${index - 1}`] : [], expectedOutputs: ['隔离 fake 工具协议回执'] })),
+        } })
+        return
+      }
+      const plan = prepared.plan ?? prepared
+      const checkpoints = approved.filter(item => item.name === 'submit_task_checkpoint')
       if (!checkpoints.length) {
-        yield* call('submit_task_checkpoint', { ...version, kind: 'plan-confirmed', summary: 'fake 模型协议计划', completedItems: [], evidence: ['已读取本轮 Topic 输入'], remainingItems: items, nextStep: items[0], needsCoordinatorDecision: false,
-          workflowAssessment: { promptRefs: task?.taskPromptRefs ?? [], reusedEvidence: [], inapplicableSteps: [], exceptions: [] } })
+        yield* call('submit_task_checkpoint', { ...version, kind: 'plan-confirmed', plan, summary: 'fake 模型协议计划', completedItems: [], evidence: ['已读取本轮 Topic 输入'], remainingItems: stages, nextStep: stages[0], needsCoordinatorDecision: false,
+          workflowAssessment: { promptRefs: plan.workflowRefs, reusedEvidence: [], inapplicableSteps: [], exceptions: [] } })
         return
       }
+      const artifact = resultFor('task_artifact_register')
+      if (!artifact) { yield* call('task_artifact_register', { ...version, artifact: { uri: `fake://tool-protocol/${ref.taskId}`, version: `${ref.runSequence}:${ref.inputVersion}` } }); return }
       const index = checkpoints.length - 1
-      if (index < items.length) {
-        yield* call('submit_task_checkpoint', { ...version, kind: 'stage-completed', stageTask: stages[Math.min(index, stages.length - 1)], summary: `fake 协议检查：${items[index]}`, completedItems: [items[index]], evidence: ['仅验证隔离 fake 模型工具协议'], remainingItems: items.slice(index + 1), nextStep: items[index + 1] ?? '提交结果', needsCoordinatorDecision: false })
-        return
+      if (index < plan.stages.length) {
+        const stage = plan.stages[index], evidenceId = `fake-evidence-${stage.stageId}`
+        yield* call('submit_task_checkpoint', { ...version, kind: 'stage-completed', stageTask: stage.title, summary: `fake 协议检查：${stage.title}`, completedItems: [stage.title], evidence: ['仅验证隔离 fake 模型工具协议'], remainingItems: stages.slice(index + 1), nextStep: stages[index + 1] ?? '提交结果', needsCoordinatorDecision: false,
+          stageOutput: { ...version, stageId: stage.stageId, planRevision: plan.revision, artifactRefs: [artifact.artifactId], evidenceRefs: [evidenceId], blockers: [] },
+          artifactRecords: [{ artifactId: artifact.artifactId, uri: artifact.uri, version: artifact.version }], modelEvidence: [{ evidenceId, producerKind: 'model', criterionIds: stage.criterionIds, artifactRefs: [artifact.artifactId], sourceRef: `fake-protocol:${stage.stageId}`, observedAt: new Date().toISOString(), outcome: 'pass', reason: '隔离fake协议夹具，不是实际业务验收' }],
+        }); return
       }
-      if (!accepted.some((item) => item.name === 'submit_task_result')) {
-        yield* call('submit_task_result', { ...version, status: 'completed', workType: 'non-development', summary: '隔离 fake 模型协议检查完成', evidence: ['检查点已按顺序逐项提交并收到 Host 审阅回执'], artifacts: [] })
+      if (!approved.some(item => item.name === 'submit_task_result')) {
+        yield* call('submit_task_result', { ...version, status: 'completed', planRevision: plan.revision, criterionReviews: plan.criteria.map(item => ({ criterionId: item.criterionId, evidenceRefs: plan.stages.filter(stage => stage.criterionIds.includes(item.criterionId)).map(stage => `fake-evidence-${stage.stageId}`), verdict: 'pass', reason: '隔离fake协议阶段已核准' })), workType: 'non-development', summary: '隔离 fake 模型协议检查完成', evidence: ['检查点已按顺序逐项提交并收到 Host 审阅回执'], artifacts: [artifact.uri] })
         return
       }
     }

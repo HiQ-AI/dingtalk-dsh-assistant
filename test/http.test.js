@@ -36,6 +36,15 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
   try { await run(`http://127.0.0.1:${server.address().port}`) } finally { await new Promise((resolve) => server.close(resolve)) }
 }
 
+test('通知恢复仅使用路径身份，受阻或过期意图返回冲突', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    assert.equal((await fetch(base + '/tasks/t/notifications/n/retry', { method: 'POST', body: JSON.stringify({ taskId: 'other' }) })).status, 202)
+    assert.deepEqual(calls, [{ taskId: 't', intentId: 'n' }])
+    assert.equal((await fetch(base + '/tasks/t/notifications/stale/retry', { method: 'POST' })).status, 409)
+  }, { overrides: { retryCompletionNotification: async args => { if (args.intentId === 'stale') throw new Error('notification_retry_stale'); calls.push(args) } } })
+})
+
 test('生产HTTP开放只读状态与明确的本机群配置接口，测试控制面仍关闭', async () => withServer(false, async (baseUrl) => {
   const health = await fetch(`${baseUrl}/health`)
   assert.equal(health.status, 200)
@@ -102,6 +111,18 @@ test('报告查询与显式恢复只采用路径身份，缺失返回404、不�
     retryTaskReport: async value => { if (value.submissionId === 'missing') throw new Error('task_report_not_found:missing'); if (value.submissionId === 'stale') throw new Error('task_report_retry_stale:stale'); calls.push(['retry', value]); return { status: 'review-wait' } },
     retryCoordinationRequest: async value => { if (value.requestId === 'missing') throw new Error('topic_request_unknown_or_wrong_group'); calls.push(['coordination', value]); return { status: 'pending' } },
   } })
+})
+
+test('Host 原操作恢复固定路径身份且要求对账，模型字段不能覆盖作用域', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    const post = body => fetch(base + '/config/groups/g/topics/topic/decisions/d/operations/op/retry', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    assert.equal((await post({ resolution: 'not-applied', reason: '已独立查询确认未应用' })).status, 202)
+    assert.deepEqual(calls[0], { resolution: 'not-applied', reason: '已独立查询确认未应用', groupId: 'g', topicId: 'topic', decisionId: 'd', operationId: 'op' })
+    for (const body of [{ resolution: 'not-applied' }, { resolution: 'unknown', reason: '不确定' }, { resolution: 'applied', reason: '覆盖', groupId: 'foreign' }]) assert.equal((await post(body)).status, 400)
+    assert.equal(calls.length, 1)
+    assert.equal((await post({ resolution: 'applied', reason: '与账本矛盾' })).status, 409)
+  }, { overrides: { retryDecisionOperation: async value => { if (value.resolution === 'applied') throw new Error('decision_recovery_evidence_conflict'); calls.push(value); return { status: 'completed' } } } })
 })
 
 test('context支持同源影响证据，create/reopen拒绝这些字段', async () => {

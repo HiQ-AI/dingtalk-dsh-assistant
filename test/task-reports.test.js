@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createTaskReportQueue, taskReports } from '../packages/dingtalk-dsh-assistant/task-reports.js'
+import { createTaskReportQueue, taskReports, taskReportReceipt, taskReportReceiptSchema, classifyTaskReportError } from '../packages/dingtalk-dsh-assistant/task-reports.js'
 
 const value = (changes = {}) => ({ submissionId: 'report1', inputVersion: 2, runSequence: 1, kind: 'stage-completed', stageTask: '核验', summary: '已核验', evidence: ['test passed'], nextStep: '等待', ...changes })
 function fixture(options = {}) {
@@ -22,12 +22,76 @@ test('pending报告先落盘，重复提交复用身份，不执行也不通知'
   const f = fixture()
   const first = await f.queue.submit('task1', 'checkpoint', value())
   const second = await f.queue.submit('task1', 'checkpoint', value())
-  assert.equal(first.status, 'input-wait')
+  assert.equal(first.reviewStatus, 'pending')
+  assert.equal(first.contractVersion, 2)
+  assert.equal(first.received, true)
+  assert.equal(first.applicationStatus, 'pending')
+  assert.equal(first.nextAction, 'wait-for-resolution')
+  assert.equal('accepted' in first, false)
+  assert.equal('status' in first, false)
   assert.equal(second.submissionId, first.submissionId)
   assert.equal(taskReports(f.store.getTask()).length, 1)
   assert.equal(f.executed.length, 0)
   assert.equal(f.notified.length, 0)
   await assert.rejects(f.queue.submit('task1', 'checkpoint', value({ summary: '不同报告' })), /task_report_identity_conflict/)
+})
+
+test('完成已提交但报告未结算的恢复只认同一 submission 和结果，不重执行业务', async () => {
+  for (const sameSubmission of [true, false]) {
+    const f = fixture()
+    const result = { inputVersion: 2, runSequence: 1, status: 'completed', summary: '已验证' }
+    await f.queue.submit('task1', 'result', { submissionId: 'completion1', ...result })
+    await f.queue.drain()
+    f.change({ state: 'completed', outcome: 'succeeded', result, executionEvents: [...f.store.getTask().executionEvents,
+      { kind: 'task-completed', submissionId: sameSubmission ? 'completion1' : 'different', inputVersion: 2, runSequence: 1 }] })
+    const recovered = f.restart()
+    recovered.recover(f.store.getTask())
+    await recovered.drain()
+    assert.equal(f.executed.length, 0)
+    assert.equal(taskReports(f.store.getTask())[0].status, sameSubmission ? 'accepted' : 'history-only')
+  }
+})
+
+test('回执分别表达收件、审阅和应用，不把驳回与系统故障显示成批准', () => {
+  for (const [status, reviewStatus, applicationStatus, nextAction] of [
+    ['input-wait', 'pending', 'pending', 'wait-for-resolution'],
+    ['review-wait', 'pending', 'pending', 'wait-for-resolution'],
+    ['accepted', 'approved', 'applied', 'continue'],
+    ['rejected', 'rejected', 'blocked', 'revise-report'],
+    ['failed', 'failed', 'blocked', 'repair-system'],
+    ['history-only', 'stale', 'superseded', 'review-current-input'],
+  ]) {
+    const receipt = taskReportReceipt('task1', { submissionId: 'report1', status })
+    assert.equal(receipt.received, true)
+    assert.deepEqual([receipt.reviewStatus, receipt.applicationStatus, receipt.nextAction], [reviewStatus, applicationStatus, nextAction])
+    assert.ok(taskReportReceiptSchema.required.every(key => Object.hasOwn(receipt, key)))
+    assert.ok(Object.keys(receipt).every(key => Object.hasOwn(taskReportReceiptSchema.properties, key)))
+  }
+  assert.throws(() => taskReportReceipt('task1', { status: 'corrupt' }), /task_report_status_invalid/)
+})
+
+test('未知故障及伪造前缀只阻塞系统，明确业务缺口才允许返工', async () => {
+  for (const message of ['disk unavailable', 'task_goal_missing:task1', 'task_not_active:task1', 'provider:task_result_objective_not_covered:x', 'task_checkpoint_rejected_suffix']) {
+    const f = fixture({ inputPending: false, execute: () => { throw new Error(message) } })
+    await f.queue.submit('task1', 'checkpoint', value())
+    await f.queue.drain()
+    for (let i = 0; i < 10; i++) f.queue.recover(f.store.getTask())
+    await f.queue.drain()
+    const receipt = f.queue.get('task1', 'report1')
+    assert.equal(receipt.reviewStatus, 'failed', message)
+    assert.equal(receipt.nextAction, 'repair-system')
+    assert.equal(f.queue.hasBlocking(f.store.getTask()), true)
+    assert.equal(f.executed.length, 1)
+  }
+  const business = fixture({ inputPending: false, execute: () => { throw new Error('task_result_objective_not_covered:task1:缺独立证据') } })
+  await business.queue.submit('task1', 'result', value())
+  await business.queue.drain()
+  assert.equal(business.queue.get('task1', 'report1').reviewStatus, 'rejected')
+  assert.equal(business.queue.get('task1', 'report1').nextAction, 'revise-report')
+  assert.equal(business.queue.hasBlocking(business.store.getTask()), false)
+  assert.equal(classifyTaskReportError('task_checkpoint_context_changed:task1'), 'history-only')
+  assert.equal(classifyTaskReportError('task_workflow_plan_stale:task1'), 'history-only')
+  assert.equal(classifyTaskReportError('task_input_pending:task1'), 'input-wait')
 })
 
 test('输入解除后并发recover一次执行一次通知，终态重复提交不执行', async () => {
@@ -38,7 +102,7 @@ test('输入解除后并发recover一次执行一次通知，终态重复提交�
   await f.queue.drain()
   assert.equal(f.executed.length, 1)
   assert.equal(f.notified.length, 1)
-  assert.equal(f.queue.get('task1', 'report1').status, 'accepted')
+  assert.equal(f.queue.get('task1', 'report1').reviewStatus, 'approved')
   await f.queue.submit('task1', 'checkpoint', value())
   await f.queue.drain()
   assert.equal(f.executed.length, 1)
@@ -51,20 +115,20 @@ test('进程重建读取持久pending，不要求模型再次提交', async () =
   f.unblock()
   restarted.recover(f.store.getTask())
   await restarted.drain()
-  assert.equal(restarted.get('task1', 'report1').status, 'accepted')
+  assert.equal(restarted.get('task1', 'report1').reviewStatus, 'approved')
   assert.equal(f.executed.length, 1)
 })
 
 test('已知旧版本与已完成任务只保留事实，未知run和未来版本拒绝', async () => {
   const f = fixture({ inputPending: false })
-  assert.equal((await f.queue.submit('task1', 'result', value({ inputVersion: 1 }))).status, 'history-only')
+  assert.equal((await f.queue.submit('task1', 'result', value({ inputVersion: 1 }))).reviewStatus, 'stale')
   assert.equal(f.executed.length, 0)
   await assert.rejects(f.queue.submit('task1', 'result', value({ submissionId: 'future', inputVersion: 3 })), /task_input_version_stale/)
   const later = fixture({ task: { runSequence: 2, inputVersion: 4, runHistory: [{ runSequence: 1, inputVersion: 2 }] } })
-  assert.equal((await later.queue.submit('task1', 'result', value())).status, 'history-only')
+  assert.equal((await later.queue.submit('task1', 'result', value())).reviewStatus, 'stale')
   await assert.rejects(later.queue.submit('task1', 'result', value({ submissionId: 'unknown', runSequence: 0 })), /task_report_unknown_run/)
   const complete = fixture({ task: { state: 'completed' }, inputPending: false })
-  assert.equal((await complete.queue.submit('task1', 'result', value())).status, 'history-only')
+  assert.equal((await complete.queue.submit('task1', 'result', value())).reviewStatus, 'stale')
   assert.equal(complete.executed.length, 0)
 })
 
@@ -75,7 +139,7 @@ test('pending期间版本更新不会用旧完成报告推进新目标', async (
   f.unblock()
   f.queue.recover(f.store.getTask())
   await f.queue.drain()
-  assert.equal(f.queue.get('task1', 'report1').status, 'history-only')
+  assert.equal(f.queue.get('task1', 'report1').reviewStatus, 'stale')
   assert.equal(f.executed.length, 0)
   assert.equal(f.notified.length, 1)
   assert.equal(f.notified[0][1].staleReview, true)
@@ -101,7 +165,7 @@ test('settled后通知失败再重建，补通知而不重复执行报告', asyn
   await f.queue.drain()
   assert.equal(f.executed.length, 1)
   assert.equal(f.notified.length, 0)
-  assert.equal(f.queue.get('task1', 'report1').status, 'accepted')
+  assert.equal(f.queue.get('task1', 'report1').reviewStatus, 'approved')
   assert.equal(f.queue.hasPending(f.store.getTask()), true)
   assert.equal(taskReports(f.store.getTask())[0].notifiedAt, undefined)
   unavailable = false
@@ -142,7 +206,7 @@ test('协调失败只通知一次且保持阻塞，Supervisor恢复不自动重�
   assert.equal(f.notified.length, 1)
   assert.equal(f.queue.hasPending(f.store.getTask()), false)
   assert.equal(f.queue.hasBlocking(f.store.getTask()), true)
-  assert.equal(f.queue.get('task1', 'report1').status, 'failed')
+  assert.equal(f.queue.get('task1', 'report1').reviewStatus, 'failed')
 })
 
 test('确定性上下文故障保留报告，100 次恢复不重复审阅，业务驳回仍可改稿', async () => {
@@ -151,14 +215,14 @@ test('确定性上下文故障保留报告，100 次恢复不重复审阅，业�
   await f.queue.drain()
   for (let i = 0; i < 100; i++) f.queue.recover(f.store.getTask())
   await f.queue.drain()
-  assert.equal(f.queue.get('task1', 'report1').status, 'failed')
+  assert.equal(f.queue.get('task1', 'report1').reviewStatus, 'failed')
   assert.equal(f.executed.length, 1)
   assert.equal(f.notified.length, 1)
   assert.equal(f.queue.hasBlocking(f.store.getTask()), true)
   const business = fixture({ inputPending: false, execute: () => ({ accepted: false, code: 'task_checkpoint_rejected' }) })
   await business.queue.submit('task1', 'checkpoint', value())
   await business.queue.drain()
-  assert.equal(business.queue.get('task1', 'report1').status, 'rejected')
+  assert.equal(business.queue.get('task1', 'report1').reviewStatus, 'rejected')
   assert.equal(business.queue.hasBlocking(business.store.getTask()), false)
 })
 
@@ -170,7 +234,7 @@ test('协调重试耗尽落failed并保持Goal门禁，仅显式retry恢复同�
   } })
   await f.queue.submit('task1', 'checkpoint', value())
   await f.queue.drain()
-  assert.equal(f.queue.get('task1', 'report1').status, 'failed')
+  assert.equal(f.queue.get('task1', 'report1').reviewStatus, 'failed')
   assert.equal(f.queue.hasBlocking(f.store.getTask()), true)
   for (let i = 0; i < 10; i++) f.queue.recover(f.store.getTask())
   await f.queue.drain()
@@ -180,7 +244,7 @@ test('协调重试耗尽落failed并保持Goal门禁，仅显式retry恢复同�
   const received = await f.queue.retry('task1', 'report1')
   assert.equal(received.submissionId, 'report1')
   await f.queue.drain()
-  assert.equal(f.queue.get('task1', 'report1').status, 'accepted')
+  assert.equal(f.queue.get('task1', 'report1').reviewStatus, 'approved')
   assert.equal(f.queue.hasBlocking(f.store.getTask()), false)
   assert.equal(f.executed.length, 2)
 })
@@ -223,8 +287,8 @@ test('风险诊断可抢占等待计划，普通阶段仍串行', async () => {
   await f.queue.submit('task1', 'checkpoint', value({ kind: 'scope-conflict', submissionId: 'risk1' }))
   await f.queue.drain()
   assert.deepEqual(f.executed.map(args => args[2].kind), ['plan-confirmed', 'scope-conflict'])
-  assert.equal(f.queue.get('task1', 'report1').status, 'rejected')
-  assert.equal(f.queue.get('task1', 'risk1').status, 'accepted')
+  assert.equal(f.queue.get('task1', 'report1').reviewStatus, 'rejected')
+  assert.equal(f.queue.get('task1', 'risk1').reviewStatus, 'approved')
 })
 
 test('failed只允许显式同版本重试，成功后清掉失败通知状态与阻塞', async () => {
@@ -234,7 +298,7 @@ test('failed只允许显式同版本重试，成功后清掉失败通知状态�
   await f.queue.drain()
   fail = false
   const retry = await f.queue.retry('task1', 'report1')
-  assert.equal(retry.status, 'review-wait')
+  assert.equal(retry.reviewStatus, 'pending')
   assert.equal(retry.error, undefined)
   await f.queue.drain()
   assert.equal(f.executed.length, 2)
@@ -252,6 +316,6 @@ test('旧版本failed不阻塞新目标、不能retry，恢复归档history', as
   await assert.rejects(f.queue.retry('task1', 'report1'), /retry_stale/)
   f.queue.recover(f.store.getTask())
   await f.queue.drain()
-  assert.equal(f.queue.get('task1', 'report1').status, 'history-only')
+  assert.equal(f.queue.get('task1', 'report1').reviewStatus, 'stale')
   assert.equal(f.executed.length, 1)
 })

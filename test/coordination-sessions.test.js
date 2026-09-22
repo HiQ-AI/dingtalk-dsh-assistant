@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createCoordinationSessions, coordinationTools } from '../packages/dingtalk-dsh-assistant/coordination-sessions.js'
+import { createCoordinationSessions, createCoordinationStepGate, coordinationTools } from '../packages/dingtalk-dsh-assistant/coordination-sessions.js'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
@@ -78,4 +78,86 @@ test('角色工具集合不给工程写工具，三种角色只允许对应业�
   assert.ok(!coordinationTools('route').includes('group_decision_submit'))
   assert.ok(!coordinationTools('review').includes('group_decision_submit'))
   assert.ok(!coordinationTools('decision').includes('group_task_review_submit'))
+})
+
+test('连续两批路由后最老审阅获得公平轮，新增路由不能立即让它 yield', async t => {
+  const h = fixture(t)
+  const first = h.request('route', '1'), second = h.request('route', '2'), third = h.request('route', '3')
+  const oldReview = h.request('checkpoint', 'old'), newReview = h.request('checkpoint', 'new')
+  await h.manager.dispatch(first, { id: 'route1' })
+  const oldPending = h.manager.dispatch(oldReview, { id: 'old' })
+  const newPending = h.manager.dispatch(newReview, { id: 'new' })
+  const secondPending = h.manager.dispatch(second, { id: 'route2' })
+  const thirdPending = h.manager.dispatch(third, { id: 'route3' })
+  h.handles[0].idle.resolve(); await secondPending
+  assert.equal(h.handles[1].entry.request, second)
+  h.handles[1].idle.resolve(); await oldPending
+  const review = h.handles[2]
+  assert.equal(review.entry.request, oldReview)
+  assert.equal(review.entry.fairnessTurn, true)
+  const fourthPending = h.manager.dispatch(h.request('route', '4'), { id: 'route4' })
+  assert.equal(review.entry.yieldRequested, false)
+  const dispatch = review.events.find(event => event.type === 'dingtalk/coordination-dispatched').data
+  assert.equal(dispatch.priorRouteBurst, 2)
+  assert.equal(dispatch.fairnessTurn, true)
+  assert.equal(dispatch.role, 'review')
+  assert.ok(dispatch.dispatchedAt >= dispatch.queuedAt)
+  assert.equal(dispatch.queueDepth, 2)
+  review.idle.resolve(); await thirdPending
+  h.handles[3].idle.resolve(); await fourthPending
+  h.handles[4].idle.resolve(); await newPending
+  assert.equal(h.handles[5].entry.request, newReview)
+})
+
+test('过期公平轮不运行模型，最老有效请求接续；保护公平轮仍受版本门禁约束', async t => {
+  const h = fixture(t), first = h.request('route', '1'), second = h.request('route', '2')
+  await h.manager.dispatch(first, { id: 'r1' })
+  const expired = h.request('checkpoint', 'expired'), current = h.request('checkpoint', 'current')
+  const expiredPending = h.manager.dispatch(expired, { id: 'expired' })
+  const rejection = assert.rejects(expiredPending, /inactive/)
+  const currentPending = h.manager.dispatch(current, { id: 'current' })
+  const secondPending = h.manager.dispatch(second, { id: 'r2' })
+  h.requests.delete(expired)
+  h.handles[0].idle.resolve(); await secondPending
+  h.handles[1].idle.resolve(); await currentPending; await rejection
+  assert.equal(h.handles.length, 3)
+  const entry = h.handles[2].entry
+  assert.equal(entry.fairnessTurn, true)
+  h.requests.delete(current)
+  const gate = createCoordinationStepGate(entry, request => h.requests.has(request))
+  assert.deepEqual(gate({}, () => { throw new Error('expired must not proceed') }), { kind: 'reject' })
+  assert.throws(() => h.manager.assert(h.handles[2].agent, 'g', current.requestId), /wrong_request/)
+})
+
+test('显式取消排队请求不创建会话，公平轮中取消仍结束正在执行的会话', async t => {
+  const h = fixture(t)
+  await h.manager.dispatch(h.request('route', '1'), { id: 'r1' })
+  const cancelled = h.request('checkpoint', 'cancelled')
+  const pending = h.manager.dispatch(cancelled, { id: 'cancelled' })
+  const rejected = assert.rejects(pending, /inactive/)
+  h.manager.finish(cancelled, { cancel: true }); await rejected
+  const second = h.manager.dispatch(h.request('route', '2'), { id: 'r2' })
+  const review = h.request('checkpoint', 'review'), reviewPending = h.manager.dispatch(review, { id: 'review' })
+  h.handles[0].idle.resolve(); await second
+  h.handles[1].idle.resolve(); await reviewPending
+  assert.equal(h.handles.length, 3)
+  assert.equal(h.handles[2].entry.fairnessTurn, true)
+  h.manager.finish(review, { cancel: true })
+  await tick(); await tick()
+  assert.equal(h.handles[2].cancellations, 1)
+  assert.equal(h.handles[2].disposed, 1)
+})
+
+test('两群路由计数和模型槽互相独立', async t => {
+  const h = fixture(t)
+  const a1 = await h.manager.dispatch(h.request('route', '1', 'a'), { id: 'a1' })
+  const b1 = await h.manager.dispatch(h.request('checkpoint', '1', 'b'), { id: 'b1' })
+  assert.notEqual(a1.session.id, b1.session.id)
+  const a2Pending = h.manager.dispatch(h.request('route', '2', 'a'), { id: 'a2' })
+  h.handles[0].idle.resolve(); await a2Pending
+  const b2Pending = h.manager.dispatch(h.request('route', '2', 'b'), { id: 'b2' })
+  assert.equal(h.handles[1].entry.yieldRequested, true, 'A 的连续路由计数不能保护 B 的普通审阅')
+  h.handles[1].idle.resolve(); await b2Pending
+  const b2 = h.handles.find(handle => handle.entry.request.groupId === 'b' && handle.entry.role === 'route')
+  assert.equal(b2.events.find(event => event.type === 'dingtalk/coordination-dispatched').data.priorRouteBurst, 0)
 })

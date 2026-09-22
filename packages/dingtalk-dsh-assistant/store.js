@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
-import { storedTaskCheckpointBaseSchema, taskResultSchema } from './task-result.js'
+import { taskPlanSchema } from './task-plan.js'
+import { storedTaskCheckpointBaseSchema, storedTaskResultSchema } from './task-result.js'
 import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch } from './topic-model.js'
 import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
 import { PERFORMANCE_EVENT_TYPES, performanceProjectionSchema, performanceChunkKey, hasPerformanceFirstStream, projectPerformanceEvent, listPerformance, workflowPerformance, coordinationCosts } from './performance.js'
@@ -9,6 +10,11 @@ import { PERFORMANCE_EVENT_TYPES, performanceProjectionSchema, performanceChunkK
 export { resolveTopicMessages } from './topic-model.js'
 
 const missingText = (value) => typeof value !== 'string' || value.trim() === '' || value.trim().toLowerCase() === 'null'
+// 撤销控制可以越过已停住的决策；原保留和未知操作仍留档，不能恢复成普通执行。
+const blockedReservationsOnly = (group, taskId) => {
+  const reservations = group.taskReservations.filter(item => item.taskId === taskId)
+  return reservations.length > 0 && reservations.every(item => group.topics.some(topic => topic.decisions.some(record => record.decisionId === item.decisionId && record.status === 'blocked')))
+}
 // 先验证完整替换图，再派生唯一后继；发送事实与停止旧意图发送分别保存。
 export function reconcileReplacementGraph(outbox) {
   const byId = new Map(outbox.map(item => [item.outboundId, item]))
@@ -91,7 +97,7 @@ const historicalCoordinationResultSchema = z.object({
   status: z.literal('waiting'), waitingKind: z.literal('coordination'), summary: z.string().min(1),
   evidence: z.array(z.string()), artifacts: z.array(z.string()), waitingReason: z.string().min(1), request: z.string().min(1),
 }).strict()
-const persistedTaskResultSchema = z.union([taskResultSchema, historicalCoordinationResultSchema, legacyWaitingResultSchema])
+const persistedTaskResultSchema = z.union([storedTaskResultSchema, historicalCoordinationResultSchema, legacyWaitingResultSchema])
 const humanBlockerSchema = z.object({
   requestId: z.string().min(1), fingerprint: z.string().min(1).optional(), category: z.enum(['redline', 'network', 'disk', 'resource', 'unexpected', 'human-decision']),
   runSequence: z.number().int().positive().optional(),
@@ -119,6 +125,7 @@ const persistedTaskCheckpointSchema = storedTaskCheckpointBaseSchema.extend({
   coordinatorDecision: z.enum(['acknowledge', 'guidance', 'reject']).optional(), coordinatorReason: z.string().min(1).optional(), guidance: z.string().min(1).optional(), reviewedAt: z.string().min(1).optional(),
 })
 const taskRunSchema = z.object({
+  plan: taskPlanSchema.optional(), outcome: z.enum(['succeeded', 'cancelled', 'failed', 'legacy-unknown']).optional(),
   runSequence: z.number().int().positive(), startedAt: z.string().min(1), endedAt: z.string().min(1).optional(),
   topicRefs: z.array(topicRefSchema), inputVersion: z.number().int().positive(), title: z.string().min(1).optional(), objective: z.string().min(1), childSessionId: z.string().min(1),
   requesterName: z.string().min(1).optional(), requesterOpenDingTalkId: z.string().min(1).optional(),
@@ -147,6 +154,11 @@ const activityProjectionSchema = z.object({
   }).optional(),
 })
 const taskSchema = z.object({
+  contractVersion: z.literal(2).optional(), plan: taskPlanSchema.optional(), planHistory: z.array(taskPlanSchema).optional(), retiredPlanIds: z.array(z.string()).default([]),
+  outcome: z.enum(['succeeded', 'cancelled', 'failed', 'legacy-unknown']).optional(),
+  notificationIntents: z.array(z.strictObject({ intentId: z.string().min(1), outboundId: z.string().min(1), inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), resultFingerprint: z.string().min(1), sourceMessageId: z.string().min(1), status: z.enum(['pending', 'enqueued', 'delivered', 'superseded', 'blocked']), outbound: z.record(z.string(), z.unknown()).optional(), createdAt: z.string().min(1), updatedAt: z.string().min(1), lastError: z.string().optional() })).default([]),
+  stopRequest: z.strictObject({ status: z.enum(['requested', 'reconciling', 'settled']), reason: z.string().min(1), requestedAt: z.string().min(1), settledAt: z.string().min(1).optional(), inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() }).optional(),
+  migrationReview: z.strictObject({ status: z.literal('required'), reason: z.string().min(1), candidate: z.record(z.string(), z.unknown()) }).optional(),
   taskId: z.string().min(1), groupId: z.string().min(1), topicRefs: z.array(topicRefSchema).min(1), inputVersion: z.number().int().positive(), appliedOperations: z.array(z.string()).default([]), title: z.string().min(1).optional(), objective: z.string().min(1),
   state: z.enum(['queued', 'running', 'waiting', 'completed']), childSessionId: z.string().min(1),
   waitingReason: z.string().optional(), waitingKind: z.enum(['information', 'coordination', 'human-intervention', 'system']).optional(),
@@ -199,7 +211,7 @@ const countActivity = (aggregate, activity) => {
 }
 
 export const residentDomainSpec = defineDomain({
-  name: 'dingtalk_dsh_assistant', version: 8, tables: {
+  name: 'dingtalk_dsh_assistant', version: 9, tables: {
     groups: domainTable(groupSchema), scheduler: domainTable(schedulerSchema), tasks: domainTable(taskSchema), alerts: domainTable(alertSchema), activities: domainTable(activitySchema),
   },
 })
@@ -663,7 +675,7 @@ export async function openResidentStore(storageDomain) {
         for (const expected of expectedTaskVersions) {
           const task = tasks.get(expected.taskId)
           if (!task || task.groupId !== groupId || task.inputVersion !== expected.inputVersion || (expected.runSequence !== undefined && task.runSequence !== expected.runSequence)) { result = { status: 'task-stale', taskId: expected.taskId }; return latest }
-          if (latest.taskReservations.some((item) => item.taskId === expected.taskId)) { result = { status: 'task-busy', taskId: expected.taskId }; return latest }
+          if (latest.taskReservations.some((item) => item.taskId === expected.taskId) && !(decision.actions.some(action => action.kind === 'task-cancel' && action.taskId === expected.taskId) && decision.actions.filter(action => action.taskId === expected.taskId).every(action => action.kind === 'task-cancel') && blockedReservationsOnly(latest, expected.taskId))) { result = { status: 'task-busy', taskId: expected.taskId }; return latest }
         }
         for (const action of decision.actions ?? []) {
           const task = action.taskId ? tasks.get(action.taskId) : undefined
@@ -704,7 +716,7 @@ export async function openResidentStore(storageDomain) {
         if (action.kind === 'new-task') assertNewTaskMetadata(action)
         if (action.kind !== 'new-task') {
           if (!task || task.groupId !== groupId || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence) { result = { status: 'task-stale', taskId: action.taskId }; return latest }
-          if (latest.taskReservations.some((reservation) => reservation.taskId === task.taskId)) { result = { status: 'task-busy', taskId: task.taskId }; return latest }
+          if (latest.taskReservations.some((reservation) => reservation.taskId === task.taskId) && !(action.kind === 'task-cancel' && blockedReservationsOnly(latest, task.taskId))) { result = { status: 'task-busy', taskId: task.taskId }; return latest }
           if ((action.kind === 'task-reopen' && task.state !== 'completed') || (['task-context', 'task-cancel'].includes(action.kind) && task.state === 'completed')) { result = { status: 'task-state-invalid', taskId: task.taskId }; return latest }
           const basisIds = new Set([messageId, ...taskRevisionBasis(latest, task, { ...action, topicRefs })])
           assertTaskContextRevision(task, action, basisIds)
@@ -727,12 +739,16 @@ export async function openResidentStore(storageDomain) {
     updateTopicDecision: ({ groupId, topicId, decisionId, patch }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
-      if (Object.keys(patch).some((key) => !['status', 'operations', 'progress', 'error'].includes(key))) throw new Error('topic_decision_patch_invalid')
+      if (Object.keys(patch).some((key) => !['status', 'operations', 'progress', 'error', 'attempt', 'retryBaseAttempt', 'nextRetryAt', 'recoveryReason', 'failureOperationId'].includes(key))) throw new Error('topic_decision_patch_invalid')
       if (patch.status === 'rejected') throw new Error('topic_decision_rejection_requires_validation')
       let result
       await groups.update(entry[0], (latest) => ({ ...latest, topics: latest.topics.map((topic) => topic.topicId !== topicId ? topic : { ...topic, decisions: topic.decisions.map((record) => {
         if (record.decisionId !== decisionId) return record
         if (!isPendingDecision(record)) { result = record; return record }
+        if (patch.operations && (patch.operations.length !== record.operations.length || record.operations.some((operation, index) => {
+          const next = patch.operations[index]
+          return next.operationId !== operation.operationId || next.actionIndex !== operation.actionIndex || next.taskId !== operation.taskId || operation.status === 'applied' && next.status !== 'applied'
+        }))) throw new Error('topic_operation_identity_or_applied_state_changed')
         result = { ...record, ...patch, updatedAt: new Date().toISOString() }; return result
       }) }) }))
       if (!result) throw new Error(`topic_decision_not_found:${decisionId}`)
@@ -979,7 +995,7 @@ export async function openResidentStore(storageDomain) {
       const plan = normalizeRunPlan(metadata.objective, metadata.acceptanceCriteria, stageTasks)
       const stagePlan = stagePlanFor({ taskId, runSequence: 1 }, plan.stageTasks)
       const now = new Date().toISOString()
-      const task = taskSchema.parse({ taskId, groupId, topicRefs: refs, inputVersion, appliedOperations: operationId ? [operationId] : [], ...metadata,
+      const task = taskSchema.parse({ contractVersion: 2, taskId, groupId, topicRefs: refs, inputVersion, appliedOperations: operationId ? [operationId] : [], ...metadata,
         ...(requesterName ? { requesterName } : {}), ...(requesterOpenDingTalkId ? { requesterOpenDingTalkId } : {}), state: 'queued', childSessionId: taskSessionId(taskId),
         runSequence: 1, runStartedAt: now, ...plan, stagePlan, runHistory: [], stateHistory: [{ state: 'queued', at: now, runSequence: 1 }], createdAt: now, updatedAt: now })
       await tasks.put(taskId, task)

@@ -81,3 +81,5 @@ UAT2 角色菜单组任务 `task-ecf5a0c74b07381abba1330a4ebb4551` 的计划检�
 7. 用新的真实输入观察首次实质回复、处理时长、上下文和有效阶段推进；不得重放历史业务动作获取样本。此前81条消息的人工路由真值、首次实质回复标注及冷缓存成本对照尚未完成，达到性能目标需独立证据。
 
 DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码仓本地提交，见本轮 [搜索记录](../acceptance/performance-flow-optimization/search/report.md)。它不随本插件自动安装；未取得可追溯的正式责任包前不能声称生产 glob 已修复。8条无固定前缀和4条宽 worktrees 搜索仍未解决，不得用增大 timeout 或改写结果集掩盖。当前 Domain 仍为8，新增观测投影可选；降级前必须验证旧版本读取是否保留新增字段，不能让旧 Schema 静默丢失计量状态。
+
+报告契约 v2 切换时须停止旧活动协调/叶子会话并由 Runtime 重新绑定工具契约；外部调用方同步读取 received、reviewStatus、applicationStatus、nextAction，不再读取顶层 accepted/status。未知审阅异常进入 system waiting，保留原 submissionId；修复后通过原报告的显式重试入口恢复，不能提交新业务报告绕过阻塞。此批不改变 Domain v8 格式，后续 v9 升级须使用独立迁移规程。

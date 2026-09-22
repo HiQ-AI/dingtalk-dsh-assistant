@@ -8,9 +8,9 @@ import { fileURLToPath } from 'node:url'
 import { checkResidentStorage } from '../scripts/check-resident-storage.mjs'
 
 const task = () => ({ taskId: 'task1', groupId: 'group1', topicRefs: [{ topicId: 'topic1', revision: 1 }], inputVersion: 1, objective: 'fixture', state: 'running', childSessionId: 'session1', createdAt: '2026-09-10T00:00:00Z', updatedAt: '2026-09-10T00:00:00Z' })
-const document = () => ({ unit: { name: 'dingtalk_dsh_assistant', version: 8 }, global: null, tables: { tasks: { task1: task() }, groups: {}, scheduler: {}, alerts: {}, activities: {} } })
+const document = () => ({ unit: { name: 'dingtalk_dsh_assistant', version: 9 }, global: null, tables: { tasks: { task1: task() }, groups: {}, scheduler: {}, alerts: {}, activities: {} } })
 
-test('v8旧记录和新增扩展字段都通过，预检不改输入', () => {
+test('v9历史记录和新增扩展字段都通过，预检不改输入', () => {
   const legacy = document()
   const before = structuredClone(legacy)
   assert.equal(checkResidentStorage(legacy).ok, true)

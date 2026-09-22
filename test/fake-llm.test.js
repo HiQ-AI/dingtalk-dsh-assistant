@@ -4,6 +4,7 @@ import { createUserMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm
 import { installFakeLlm } from '../packages/dingtalk-dsh-assistant/fake-llm.js'
 import { groupDecisionSubmissionSchema, topicRouteSubmissionSchema } from '../packages/dingtalk-dsh-assistant/decision.js'
 import { taskCheckpointSchema, taskResultSchema } from '../packages/dingtalk-dsh-assistant/task-result.js'
+import { prepareTaskPlan, validateStageOutput, validateCriterionReview } from '../packages/dingtalk-dsh-assistant/task-plan.js'
 
 function adapter() {
   let value
@@ -21,19 +22,40 @@ const assistant = (chunk) => ({ role: 'assistant', source: { kind: 'model' }, co
 const topicRequest = (kind, value) => user(`[GROUP_TOPIC_${kind}]\nTopic 请求：${JSON.stringify(value)}`)
 
 test('fake 叶子按固定输入版本逐项 checkpoint 再提交 result，工具拒绝立即失败', async () => {
-  const value = adapter(), history = [user('[TASK_TOPIC_CONTEXT]\nTask 输入：{"inputVersion":2,"runSequence":3}\n本轮阶段任务：["读取","核验"]')]
-  const submissions = []
-  for (let index = 0; index < 4; index++) {
-    const chunks = await run(value, history)
+  const value = adapter(), history = [user('[TASK_TOPIC_CONTEXT]\nTask 输入：{"taskId":"t","inputVersion":2,"runSequence":3}')]
+  const sourceRefs = [{ messageId: 'm', messageVersion: 1 }]
+  const system = `### 当前执行轮次阶段任务\n\n- 读取（stageId: old1）\n- 核验（stageId: old2）\n\n### 当前执行轮次验收标准\n\n- 工具协议通过\n\n### 当前结构化计划与来源\n\n${JSON.stringify({ sourceRefs })}`
+  const submissions = [], evidence = [], completedStageIds = []
+  let plan, artifact
+  for (let index = 0; index < 6; index++) {
+    const chunks = await run(value, history, system)
     const args = JSON.parse(chunks[1].argumentsDelta)
-    submissions.push(index < 3 ? taskCheckpointSchema.parse(args) : taskResultSchema.parse(args))
-    assert.equal(chunks[1].name, index < 3 ? 'submit_task_checkpoint' : 'submit_task_result')
-    history.push(assistant(chunks[2]), createToolResultMessage({ callId: chunks[1].id, content: [{ type: 'text', text: 'Checkpoint acknowledged: test' }], isError: false }))
+    const name = chunks[1].name
+    history.push(assistant(chunks[2]))
+    if (name === 'task_plan_prepare') {
+      plan = prepareTaskPlan(args.draft, { creationId: 'host-prepared', revision: 1, inputVersion: 2, runSequence: 3, sourceRefs, workflowRefs: [] })
+      history.push(result(chunks[1].id, plan)); continue
+    }
+    if (name === 'task_artifact_register') { artifact = { artifactId: 'host-artifact', ...args.artifact }; history.push(result(chunks[1].id, artifact)); continue }
+    const submitted = name === 'submit_task_checkpoint' ? taskCheckpointSchema.parse(args) : taskResultSchema.parse(args)
+    submissions.push(submitted)
+    if (submitted.kind === 'stage-completed') {
+      validateStageOutput(submitted.stageOutput, { plan, artifacts: [artifact], evidence: submitted.modelEvidence, completedStageIds })
+      completedStageIds.push(submitted.stageOutput.stageId); evidence.push(...submitted.modelEvidence)
+    }
+    if (submitted.status === 'completed') for (const review of submitted.criterionReviews) validateCriterionReview(review, { plan, modelEvidence: evidence, artifactIds: [artifact.artifactId] })
+    const receipt = { submissionId: `submission-${index}`, received: true, reviewStatus: 'pending', applicationStatus: 'pending' }
+    history.push(result(chunks[1].id, receipt))
+    assert.equal((await run(value, history, system)).at(-1).reason.kind, 'stop', '仅收件不能推进')
+    history.push(user(`[TASK_REPORT_REVIEWED]\n${JSON.stringify({ ...receipt, reviewStatus: 'approved', applicationStatus: 'applied' })}`))
   }
   assert.deepEqual(submissions.map((item) => item.remainingItems), [['读取', '核验'], ['核验'], [], undefined])
   assert.ok(submissions.every((item) => item.inputVersion === 2 && item.runSequence === 3))
-  assert.equal((await run(value, history)).at(-1).reason.kind, 'stop')
-  await assert.rejects(run(value, [history[0], createToolResultMessage({ callId: 'bad', content: [{ type: 'text', text: 'rejected' }], isError: true })]), /fake_task_tool_rejected/u)
+  assert.equal((await run(value, history, system)).at(-1).reason.kind, 'stop')
+  await assert.rejects(run(value, [history[0], createToolResultMessage({ callId: 'bad', content: [{ type: 'text', text: 'rejected' }], isError: true })], system), /fake_task_tool_rejected/u)
+  const rejected = structuredClone(history)
+  rejected.at(-1).content[0].text = `[TASK_REPORT_REVIEWED]\n${JSON.stringify({ submissionId: 'submission-5', reviewStatus: 'rejected', applicationStatus: 'blocked' })}`
+  await assert.rejects(run(value, rejected, system), /fake_task_report_not_approved/)
 })
 
 test('fake adapter 产出完整 dsh 流式 chunk 协议', async () => {
