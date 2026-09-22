@@ -231,7 +231,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
   let groupMessageRecaller, groupMessageReader, groupResourceReader
   let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks
   const taskPermits = createTaskPermits({ limit: () => taskConcurrencyLimit }), permitReleases = new Map()
-  const executionEligible = task => task && ['queued', 'running'].includes(task.state) && task.migrationReview?.status !== 'required' && !task.stopRequest && !cancellingTasks.has(task.taskId) && !reports.hasBlocking(task)
+  const executionEligible = task => task && ['queued', 'running'].includes(task.state) && task.migrationReview?.status !== 'required' && !task.stopRequest && !cancellingTasks.has(task.taskId) && !reports.hasBlocking(task) && !topics.hasPendingTaskInput(task)
   function requestExecutionPermit(taskId) {
     if (runtimeClosing || !executionEligible(store.getTask(taskId))) { taskPermits.dequeue(taskId); return undefined }
     return taskPermits.request(taskId)
@@ -1783,7 +1783,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     const tasks = store.listTasks()
     for (const taskId of taskPermits.snapshot().holders) if (!executionEligible(store.getTask(taskId))) releaseTaskPermitWhenIdle(taskId)
     for (const taskId of taskPermits.snapshot().queue) if (!executionEligible(store.getTask(taskId))) taskPermits.dequeue(taskId)
-    const candidates = tasks.filter(task => executionEligible(task) && (task.state === 'queued' || !taskPermits.has(task.taskId)))
+    const candidates = tasks.filter(task => executionEligible(task) && (task.state === 'queued' || !taskPermits.has(task.taskId) || task.dispatchedInputVersion !== task.inputVersion))
     const order = taskPermits.snapshot().queue
     candidates.sort((a, b) => (order.includes(a.taskId) ? order.indexOf(a.taskId) : order.length) - (order.includes(b.taskId) ? order.indexOf(b.taskId) : order.length))
     for (const task of candidates) {
@@ -2177,11 +2177,17 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
   const topics = createTopicCoordinator({
     store, getAgent: (groupId, request) => request ? coordinationSessions.get(groupId, request) : residentHandles.get(groupId)?.agent,
     dispatchRequest: (request, message) => coordinationSessions.dispatch(request, message),
+    waitRequestIdle: request => coordinationSessions.whenSettled(request),
     onRequestFinished: request => coordinationSessions.finish(request), assertSession: assertResidentToolSession, serializeTasks,
     applyAction: applyTopicAction, appendOutbox: appendReliableOutbox, reviewCandidates: replyReviewCandidatesFor, validateReplyReview,
     cancelTask: taskId => { taskPermits.suspend(taskId) }, isClosing: () => runtimeClosing, retryDelayMs: decisionRetryBaseMs,
     ...(statusQueries ? { onDecisionRequest: tryStatusQuery } : {}),
-    onInputSettled: groupId => { for (const task of store.listTasks().filter(task => task.groupId === groupId)) reports.recover(task) },
+    onInputSettled: groupId => {
+      if (runtimeClosing) return
+      for (const task of store.listTasks().filter(task => task.groupId === groupId)) reports.recover(task)
+      // Decision 完成后才释放输入预留；回调不能等待任务队列，避免嵌套提交互等。
+      void pumpTasks().catch(error => recoveryIssues.push({ groupId, kind: 'task-start', error: error.message ?? String(error) }))
+    },
     onError: (groupId, error) => recoveryIssues.push({ groupId, kind: 'topic-processing', error: error.message ?? String(error) }),
   })
   const reports = createTaskReportQueue({

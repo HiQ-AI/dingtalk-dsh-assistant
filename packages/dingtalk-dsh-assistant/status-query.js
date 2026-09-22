@@ -4,7 +4,8 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { z } from 'zod'
 import { groupDecisionSchema } from './decision.js'
 
-const replyDecisionSchema = groupDecisionSchema.options[0]
+const replyDecisionSchema = groupDecisionSchema.refine(decision => decision.actions.length === 0 && typeof decision.reply === 'string' && decision.reply.length > 0,
+  { message: '状态问答只允许非空回复，不允许 Task 动作或无回复分支。' })
 const outputSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('reply'), decision: replyDecisionSchema }),
   z.strictObject({ kind: z.literal('handoff'), reason: z.string().trim().min(1) }),

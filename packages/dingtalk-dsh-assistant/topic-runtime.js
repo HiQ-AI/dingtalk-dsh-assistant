@@ -22,11 +22,24 @@ const jsonOutput = (value) => {
   if (json === undefined) throw new Error('tool_output_not_json')
   return JSON.parse(json)
 }
-const invalidArguments = (error) => ({
-  status: 'invalid-arguments',
-  issues: error.issues.map((issue) => ({ field: issue.path.join('.') || '$', path: issue.path.join('.') || '$', code: issue.code, message: issue.message })),
-  nextAction: 'correct-arguments',
-})
+const invalidArguments = (error) => {
+  const issues = []
+  const visit = (items, prefix = [], branch = []) => {
+    for (const issue of items) {
+      const path = [...prefix, ...issue.path]
+      if (issue.code === 'invalid_union' && issue.errors.length) {
+        issue.errors.forEach((items, index) => visit(items, path, [...branch, index + 1]))
+        continue
+      }
+      const paths = issue.code === 'unrecognized_keys' ? issue.keys.map(key => [...path, key]) : [path]
+      for (const field of paths) issues.push({ field: field.join('.') || '$', path: field.join('.') || '$', code: issue.code,
+        message: issue.code === 'unrecognized_keys' ? '此分支不接受该字段；请移除或选择匹配的分支。' : issue.message,
+        ...(branch.length ? { branch: branch.join('.') } : {}) })
+    }
+  }
+  visit(error.issues)
+  return { status: 'invalid-arguments', issues: issues.slice(0, 8), nextAction: 'correct-arguments' }
+}
 const sameVersions = (left, right) => left.length === right.length && left.every((item) => right.some((other) => other.messageId === item.messageId && other.messageVersion === item.messageVersion))
 const unitKey = (value) => value.unitId ? `${value.unitId}:${value.unitRevision}` : `legacy:${value.messageId}:${value.messageVersion}`
 const unitDirection = (message, sameMessageUnits, agentNames) => {
@@ -186,7 +199,7 @@ export function projectTopicContext(context) {
 }
 
 // 请求是可丢弃的模型输入；已经接受的业务意图只以 Store 中的 decision 为准。
-export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
+export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
   const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map(), summaryMigrations = new Map()
   const collections = [routes, decisions, replies, reviews, titleMigrations, summaryMigrations]
   const isCurrentRequest = request => collections.some(collection => collection.get(request.requestId) === request)
@@ -281,6 +294,12 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       status: 'superseded', supersededBy, supersedeReason: reason, nextRetryAt: undefined, lastError: undefined,
     }) ?? Promise.resolve()).catch((error) => onError(request.groupId, error))
   }
+  async function settleCoordinationRequest(groupId, requestId) {
+    const state = requestId && store.getCoordinationRequest?.(groupId, requestId)
+    if (state?.status === 'pending' && !collections.some(collection => collection.has(requestId))) {
+      await store.updateCoordinationRequest(groupId, requestId, { status: 'completed', nextRetryAt: undefined })
+    }
+  }
   const replyRouting = (messages, replyToMessageId, atOpenDingTalkIds) => {
     const participants = messages.filter((message) => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
     const target = participants.find((message) => message.messageId === replyToMessageId)
@@ -342,12 +361,15 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     return agent
   }
   function monitor(agentOrPromise, request, collection) {
+    if (request.monitoring) return
+    request.monitoring = true
     let agent = agentOrPromise?.then ? undefined : agentOrPromise
     // Provider 请求重试由 DSH 完成；这里只在整个 agent 真正停稳后补有限次协议提醒。
     // 保留同一请求和 Promise，绝不每秒删除请求、重建身份及整包原文。
     const current = () => live() && collection.get(request.requestId) === request
     const persist = (patch) => store.updateCoordinationRequest?.(request.groupId, request.requestId, patch) ?? Promise.resolve()
     const exhausted = async () => {
+      request.monitoring = false
       request.exhausted = true
       const error = new Error(`topic_request_retry_exhausted:${request.requestId}`)
       await persist({ status: 'exhausted', lastError: error.message })
@@ -357,25 +379,26 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     }
     const wait = async () => {
       if (!agent) agent = await agentOrPromise
-      if (!current()) return
+      if (!current()) { request.monitoring = false; return }
       const state = store.getCoordinationRequest?.(request.groupId, request.requestId)
       request.attempt = state?.attempt ?? request.attempt ?? 0
       request.resumeEpoch = state?.resumeEpoch ?? 0
       if (state?.status === 'exhausted' || request.exhausted) { await exhausted(); return }
       await persist({ status: 'pending', attempt: request.attempt, messageId: request.messageId })
-      await agent.whenIdle()
-      if (!current()) return
-      if (collection === decisions && pendingInput(request.groupId).length) { request.routingPaused = true; return }
+      await (waitRequestIdle ? waitRequestIdle(request) : agent.whenIdle())
+      if (!current()) { request.monitoring = false; return }
+      if (collection === decisions && (pendingInput(request.groupId).length || request.retryAfterRouting || request.retryingAfterRouting)) { request.monitoring = false; request.routingPaused = true; return }
       if (request.attempt >= maxRequestAttempts) { await exhausted(); return }
       const delay = Math.max(0, state?.nextRetryAt ? Date.parse(state.nextRetryAt) - Date.now() : Math.min(retryDelayMs * 2 ** request.attempt, 300_000))
       await persist({ nextRetryAt: new Date(Date.now() + delay).toISOString() })
       const timer = setTimeout(() => {
         timers.delete(timer)
         const retry = async () => {
-          if (!current()) return
-          if (agent.status === 'running') await agent.whenIdle()
-          if (!current()) return
-          if (collection === decisions && pendingInput(request.groupId).length) { request.routingPaused = true; return }
+          if (!current()) { request.monitoring = false; return }
+          if (waitRequestIdle) await waitRequestIdle(request)
+          else if (agent.status === 'running') await agent.whenIdle()
+          if (!current()) { request.monitoring = false; return }
+          if (collection === decisions && (pendingInput(request.groupId).length || request.retryAfterRouting || request.retryingAfterRouting)) { request.monitoring = false; request.routingPaused = true; return }
           request.attempt++
           await persist({ attempt: request.attempt, nextRetryAt: undefined })
           if (!current()) return
@@ -398,6 +421,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       timer.unref?.(); timers.add(timer)
     }
     const fail = (error) => {
+      request.monitoring = false
       if (!current()) return
       request.exhausted = true
       retire(request)
@@ -484,12 +508,12 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     }
     request.dispatchState = 'pending'
     request.dispatch = () => {
-      if (request.dispatchState !== 'pending' || pendingInput(groupId).length || store.getTopic(groupId, topic.topicId)?.revision !== topic.revision) return
+      if (request.dispatchState !== 'pending' || decisions.get(requestId) !== request || store.getTopic(groupId, topic.topicId)?.revision !== topic.revision) return
       if (!onDecisionRequest) { dispatch(); return }
       request.dispatchState = 'checking'
       const pending = Promise.resolve().then(() => onDecisionRequest({ groupId, requestId: request.requestId })).catch((error) => { onError(groupId, error); return false }).then((handled) => {
         if (!live() || decisions.get(request.requestId) !== request) return
-        if (pendingInput(groupId).length || store.getTopic(groupId, topic.topicId)?.revision !== topic.revision) { request.dispatchState = 'pending'; return }
+        if (store.getTopic(groupId, topic.topicId)?.revision !== topic.revision) { request.dispatchState = 'pending'; return }
         if (handled === true) request.dispatchState = 'dispatched'
         else { request.dispatchState = 'pending'; dispatch() }
       })
@@ -581,7 +605,27 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         const due = commit.nextRetryAt ? Date.parse(commit.nextRetryAt) : 0
         if (due <= Date.now()) resume(groupId, topic.topicId, commit.decisionId)
         else armDecisionRetry(groupId, commit.decisionId, due)
-      } else if (!pending.length && topic.processedRevision < topic.revision) result.push(createDecisionRequest(groupId, topic))
+      } else if (topic.processedRevision < topic.revision) {
+        const request = createDecisionRequest(groupId, topic)
+        result.push(request)
+        if (!pending.length && request.retryAfterRouting && !request.retryingAfterRouting) {
+          // 草稿未被接纳；路由完成后重新走完整校验，不让模型重算同一份决策。
+          const retry = request.retryAfterRouting
+          request.retryAfterRouting = undefined
+          request.retryingAfterRouting = true
+          const work = Promise.resolve().then(() => live() && decisions.get(request.requestId) === request ? retry() : undefined).catch(error => onError(groupId, error)).finally(() => {
+            activeToolCalls.delete(work)
+            request.retryingAfterRouting = false
+            if (live() && decisions.get(request.requestId) === request && !request.retryAfterRouting) {
+              request.routingPaused = false
+              const agent = getAgent(groupId, request)
+              if (agent) monitor(agent, request, decisions)
+              else { request.dispatchState = 'pending'; request.dispatch() }
+            }
+          })
+          activeToolCalls.add(work)
+        }
+      }
     }
     onInputSettled?.(groupId)
     return result.map(({ requestId, topicId, revision, messages, candidates, removedUnitRefs, removedMessageIds, visibleMessages, readUnitRefs }) => {
@@ -601,7 +645,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
   function resumePausedDecisionMonitors(groupId) {
     if (pendingInput(groupId).length) return
     for (const request of decisions.values()) {
-      if (request.groupId !== groupId || !request.routingPaused) continue
+      if (request.groupId !== groupId || !request.routingPaused || request.retryAfterRouting || request.retryingAfterRouting) continue
       request.routingPaused = false
       monitor(getAgent(groupId, request), request, decisions)
     }
@@ -718,10 +762,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       activeToolCalls.add(pending)
       try {
         const result = jsonOutput(await pending)
-        const coordination = args.requestId ? store.getCoordinationRequest?.(groupId, args.requestId) : undefined
-        if (args.requestId && ![routes, decisions, reviews, replies, titleMigrations, summaryMigrations].some((collection) => collection.has(args.requestId)) && coordination?.status === 'pending') {
-          await store.updateCoordinationRequest(groupId, args.requestId, { status: 'completed', nextRetryAt: undefined })
-        }
+        await settleCoordinationRequest(groupId, args.requestId)
         return result
       }
       catch (error) {
@@ -827,7 +868,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       await schedule(groupId)
       return result
     })
-    tool('group_decision_submit', '提交一个 Topic 固定版本的独立业务决策；accepted 表示意图已持久化，动作进度可查询。', groupDecisionSubmissionJsonSchema, async (input, { validateSnapshot } = {}) => {
+    tool('group_decision_submit', '提交一个 Topic 固定版本的独立业务决策；accepted 表示意图已持久化，动作进度可查询。', groupDecisionSubmissionJsonSchema, async function submitDecision(input, { validateSnapshot } = {}) {
       const args = groupDecisionSubmissionSchema.parse(input)
       const request = decisions.get(args.requestId)
       if (!request || request.groupId !== groupId || request.topicId !== args.topicId || request.revision !== args.revision) { await schedule(groupId); return { status: 'topic-stale', nextAction: 'use-current-request' } }
@@ -867,12 +908,21 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         decisions.delete(args.requestId)
         resume(groupId, args.topicId, args.requestId)
       } else {
+        if (result.status === 'routing-required') {
+          const prepared = structuredClone(args)
+          request.retryAfterRouting = async () => {
+            const result = await submitDecision(prepared, { validateSnapshot })
+            await settleCoordinationRequest(groupId, args.requestId)
+            return result
+          }
+          request.routingPaused = true
+        }
         if (!['routing-required', 'review-required'].includes(result.status)) decisions.delete(args.requestId)
         await schedule(groupId)
       }
       if (result.status === 'routing-required') {
         const current = [...routes.values()].find((item) => item.groupId === groupId && !item.exhausted)
-        return { status: result.status, decisionId: args.requestId, ...(current ? { routeRequestId: current.requestId, nextAction: 'route-first' } : { nextAction: 'wait-for-current-request' }) }
+        return { status: result.status, decisionId: args.requestId, ...(current ? { routeRequestId: current.requestId } : {}), nextAction: 'wait-for-routing', retryScheduled: true }
       }
       return { status: result.status, decisionId: args.requestId }
     })

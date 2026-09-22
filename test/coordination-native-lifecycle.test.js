@@ -158,7 +158,7 @@ test('原生scope-local工程工具可绕过restrict展示但不能绕过单调g
   assert.ok(JSON.stringify(resultEvents(agent)[0]).includes('coordination_tool_outside_role'))
 })
 
-test('路由优先级yield拒绝已claim的审阅消息时，消息必须留在Inbox供恢复', { timeout: 10000 }, async t => {
+test('首step前路由抢占保留已claim消息，并自动续行且请求等待不能提前结束', { timeout: 10000 }, async t => {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx, { includeRuntimeContext: false }); new LlmRuntime(ctx); new ToolRuntime(ctx)
@@ -166,9 +166,27 @@ test('路由优先级yield拒绝已claim的审阅消息时，消息必须留在I
   installFakeLlm(ctx)
   const loop = new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
   const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const routeEntered = Promise.withResolvers(), routeRelease = Promise.withResolvers()
+  class RouteModel extends LlmAdapter {
+    async *stream() {
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+      yield { type: 'tool-call-delta', index: 0, id: 'route-yield', name: 'group_topic_route_submit', argumentsDelta: '{}' }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'route-yield', name: 'group_topic_route_submit', arguments: '{}' } }
+      yield { type: 'finish', reason: { kind: 'tool-calls' } }
+    }
+  }
+  ctx.llm.registerAdapter(['native-route-yield'], new RouteModel())
+  ctx.tools.register({ name: 'group_topic_route_submit', description: '原生路由结果边界', parameters: { type: 'object' },
+    output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+    execute(_args, exec) { manager.finish(manager.identity(exec.agent).request); return { accepted: true } },
+  })
+  ctx.on('tools/post-execute', async (exec, _result, next) => {
+    if (exec.name === 'group_topic_route_submit') { routeEntered.resolve(); await routeRelease.promise }
+    return next()
+  })
   let held = false
   const manager = createCoordinationSessions({ isCurrent: () => true, onError: error => { throw error }, create: async entry => loop.createAgent(ctx, {
-    sessionId: entry.sessionId, agentOptions: { provider: 'fake-resident', model: 'fixture' }, setup(agentCtx) {
+    sessionId: entry.sessionId, agentOptions: { provider: entry.role === 'route' ? 'native-route-yield' : 'fake-resident', model: 'fixture' }, setup(agentCtx) {
       const gate = createCoordinationStepGate(entry, () => true)
       agentCtx.on('agent/pre-step', async (event, next) => {
         if (entry.role === 'review' && !held) { held = true; entered.resolve(); await release.promise }
@@ -176,20 +194,26 @@ test('路由优先级yield拒绝已claim的审阅消息时，消息必须留在I
       })
     },
   }) })
-  t.after(async () => { release.resolve(); await manager.close(); await ctx.fiber.dispose() })
+  t.after(async () => { release.resolve(); routeRelease.resolve(); await manager.close(); await ctx.fiber.dispose() })
   const review = { groupId: 'g', requestId: 'coord-checkpoint-yield', kind: 'checkpoint' }
   const message = { ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: '必须恢复的审阅消息' }] }), id: 'yielded-message' }
   const agent = await manager.dispatch(review, message)
+  let settled = false
+  const settlement = manager.whenSettled(review).then(() => { settled = true })
   await entered.promise
   const routing = manager.dispatch({ groupId: 'g', requestId: 'coord-route-priority' }, { ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: '新入站' }] }), id: 'priority-route-message' })
   release.resolve()
   const routeAgent = await routing
-  await routeAgent.whenIdle()
+  await routeEntered.promise
+  await flush()
+  assert.equal(settled, false, '路由抢占属于公平等待，不能让monitor启动失败重试')
+  assert.equal(resultEvents(routeAgent).length, 0, '路由工具仍在post-execute边界')
   assert.equal(agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.id === message.id).length, 0)
   assert.equal(agent.inbox.nextStep.filter(item => item.id === message.id).length, 1, 'pre-step已claim的消息不能在yield时消失')
-  const resumed = await manager.dispatch(review, { ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: '继续当前请求' }] }), id: 'yield-resume' })
-  assert.equal(resumed, agent)
-  await resumed.whenIdle()
+  routeRelease.resolve()
+  await settlement
+  assert.equal(settled, true)
+  assert.equal(manager.get('g', review), agent)
   assert.equal(agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.id === message.id).length, 1)
   assert.equal(agent.inbox.nextStep.length, 0)
 })

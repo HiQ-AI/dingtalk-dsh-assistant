@@ -1,10 +1,20 @@
 // 请求会话只管理模型运行句柄；业务版本、授权与提交仍由 Topic coordinator 持有。
 import { createHash, randomUUID } from 'node:crypto'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { createTaskReportStepGate } from './task-report-step-gate.js'
 
 export function createCoordinationStepGate(entry, isCurrent) {
-  const yieldGate = createTaskReportStepGate({ isBlocked: () => entry.yieldRequested === true, isResolutionMessage: () => false })
-  return (event, next) => entry.active && isCurrent(entry.request) ? yieldGate(event, next) : { kind: 'reject' }
+  const yieldGate = createTaskReportStepGate({ isBlocked: () => entry.yieldRequested === true || entry.request.routingPaused === true, isResolutionMessage: () => false })
+  return (event, next) => {
+    if (!entry.active || !isCurrent(entry.request)) return { kind: 'reject' }
+    // 只在原生 step 边界让出：上一轮工具、post-execute 和结果日志已经落稳。
+    if ((entry.sliceSteps ?? 0) >= 1 && entry.hasContenders?.()) {
+      entry.yieldRequested = true
+    }
+    // 路由也可能在首个 step 前抢占；原输入仍在 Inbox，必须按公平队列自动续行。
+    if (entry.yieldRequested && !entry.request.routingPaused) entry.sliceYielded = true
+    return yieldGate(event, () => { entry.sliceSteps = (entry.sliceSteps ?? 0) + 1; return next() })
+  }
 }
 
 export const coordinationRole = request => request.kind && ['checkpoint', 'completion', 'waiting'].includes(request.kind)
@@ -42,6 +52,16 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
     return entry.ready
   }
   function get(groupId, request) { return entries.get(`${groupId}:${request.requestId}`)?.handle?.agent }
+  async function whenSettled(request) {
+    const entry = entries.get(keyOf(request))
+    if (!entry) return
+    await entry.ready
+    await entry.settlement?.promise
+  }
+  function settle(entry) {
+    entry?.settlement?.resolve()
+    if (entry) entry.settlement = undefined
+  }
   function identity(agent) { return bySession.get(String(agent?.session?.id)) }
   function assert(agent, groupId, requestId) {
     const entry = identity(agent)
@@ -65,7 +85,7 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
       if (cancel) entry.handle.agent.cancel({ kind: 'user' })
       await entry.handle.agent.whenIdle()
       await entry.handle.dispose()
-    }).catch(error => { if (error.message !== 'coordination_request_inactive') onError(error) }).finally(() => { entry.release?.(); bySession.delete(entry.sessionId); if (entries.get(keyOf(request)) === entry) entries.delete(keyOf(request)); pending.delete(disposal) })
+    }).catch(error => { if (error.message !== 'coordination_request_inactive') onError(error) }).finally(() => { settle(entry); entry.release?.(); bySession.delete(entry.sessionId); if (entries.get(keyOf(request)) === entry) entries.delete(keyOf(request)); pending.delete(disposal) })
     pending.add(disposal)
     entry.disposal = disposal
   }
@@ -89,7 +109,9 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
         while (queue.length) {
           const nonRouteIndex = queue.findIndex(item => coordinationRole(item.request) !== 'route')
           const fairnessTurn = (routeBursts.get(groupId) ?? 0) >= 2 && nonRouteIndex >= 0
-          const { request, message, resolve, reject, queuedAt } = queue.splice(fairnessTurn ? nonRouteIndex : 0, 1)[0]
+          // 路由的公平续行可能在队尾，不能再假定队首必为路由，否则会反复让位而空转。
+          const routeIndex = queue.findIndex(item => coordinationRole(item.request) === 'route')
+          const { request, message, resolve, reject, queuedAt } = queue.splice(fairnessTurn ? nonRouteIndex : routeIndex < 0 ? 0 : routeIndex, 1)[0]
           let entry
           try {
             if (closed || !isCurrent(request)) throw new Error('coordination_request_inactive')
@@ -101,6 +123,10 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
               continue
             }
             entry.yieldRequested = false
+            entry.settlement ??= Promise.withResolvers()
+            entry.sliceSteps = 0
+            entry.sliceYielded = false
+            entry.hasContenders = () => queue.some(item => keyOf(item.request) !== keyOf(request) && isCurrent(item.request))
             entry.fairnessTurn = fairnessTurn
             const priorRouteBurst = routeBursts.get(groupId) ?? 0
             routeBursts.set(groupId, entry.role === 'route' ? Math.min(2, priorRouteBurst + 1) : 0)
@@ -118,7 +144,13 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
             resolve(agent)
             await Promise.race([agent.whenIdle(), released])
             if (entry.release === release) entry.release = undefined
-          } catch (error) { reject(error); if (error.message !== 'coordination_request_inactive') onError(error) }
+            if (entry.sliceYielded && !entry.request.routingPaused && !closed && entry.active && isCurrent(request)
+              && !queue.some(item => keyOf(item.request) === keyOf(request))) {
+              // 续行仍排队获同群槽；steer 仅在下次获槽后调用，不并发唤醒旧会话。
+              queue.push({ request, message: createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: '继续当前协调请求，读取已有工具结果并按当前请求约束提交。' }] }), resolve() {}, reject() {}, queuedAt: Date.now() })
+            }
+            if (!queue.some(item => keyOf(item.request) === keyOf(request))) settle(entry)
+          } catch (error) { settle(entry ?? entries.get(keyOf(request))); reject(error); if (error.message !== 'coordination_request_inactive') onError(error) }
           finally { if (active.get(groupId) === entry) active.delete(groupId) }
         }
         tails.delete(groupId); queues.delete(groupId)
@@ -127,7 +159,7 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
     }
     return delivered
   }
-  return { get, identity, assert, dispatch, finish,
+  return { get, identity, assert, dispatch, finish, whenSettled,
     async close() {
       closed = true
       for (const entry of entries.values()) finish(entry.request, { cancel: true })

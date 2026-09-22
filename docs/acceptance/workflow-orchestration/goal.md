@@ -2,8 +2,8 @@
 
 > 状态：COMPLETE
 > Goal ID：workflow-orchestration
-> 最近维护：2026-09-22T15:28:59.3972140+08:00
-> 权威目标：D:/project/dingtalk-dsh-workflow-orchestration/docs/acceptance/workflow-orchestration/goal.md
+> 最近维护：2026-09-22T17:22:00+08:00
+> 权威目标：D:/project/dingtalk-dsh-coordination-latency/docs/acceptance/workflow-orchestration/goal.md
 
 ## 总目标
 
@@ -32,28 +32,41 @@
 | SG4 | 确定性检查与材料预检 | 注册检查器、材料完整性和版本校验通过 | 已完成 | round-11.md，材料与检查器集成 |
 | SG5 | 执行许可与调度 | 不超并发、无旁路恢复、公平性反例通过 | 已完成 | round-4.md、round-11.md |
 | SG6 | 综合验收与交付 | 基线对比、矩阵、PR 回读完成 | 已完成 | round-11.md、round-12.md、PR #116 OPEN已回读 |
+| SG7 | 群聊延迟与任务发起修复 | schema、字段反馈、公平调度及新输入保护回归通过，本地验证与 PR 回读 | 已完成 | round-16.md；613/613；PR #117 OPEN |
+| SG8 | 修复包本地部署 | 精确安装摘要、新进程、健康、认证Web及延时存活回读 | 已完成 | round-17.md；源码60f883c；PID69760 |
 
 ## 当前检查点
 
-- 当前子目标：SG6
-- 唯一下一步：本轮本地验证与PR交付已完成，等待审阅；没有自动合并或部署步骤。
-- 未闭环项：本轮范围内无。真实渠道E01、生产迁移及部署明确未执行，需要后续独立安排。
+- 当前子目标：SG8
+- 唯一下一步：等待 PR 审阅；真实群业务时延及 Task 完成需独立观察，不自动合并。
+- 未闭环项：真实渠道 D03 未验收。原 #1336 话题已进入决策、尚无关联 Task；本轮不将其标为业务完成，也未人为补建。首次部署空转问题已前向修复，第二次实例健康稳定。
 
 ## 进展
 
 - 2026-09-22：确认 origin/main=83fc504，创建 worktree-workflow-orchestration，复制已批准方案。
+- 2026-09-22：续修前确认 origin/main=ee4835c（PR #116 已合并），创建 codex/group-coordination-latency 隔离工作区；基于现场 #1336 证据追加 SG7。
+- 2026-09-22：公开决策分支和字段反馈修复；原生 AgentLoop 公平推进与图文任务创建回放通过，前一话题未结束时已创建唯一 Task，协议 attempt 保持 0。缓存重提交完成协调账问题经审阅发现并回归修复。
 
 ## 重大决策
 
 - 按方案的存储/调度依赖顺序集成；独立纯模块可并行准备，集成验证仍按批次执行。
 - 第一批可独立交付；v9 变更作为共同候选验证，禁止真实存储试写中间格式。
+- SG7 保留未知输入的原子提交保护，只解除准备门禁；路由等待草稿在内存重验，旧 Topic 版本失效。无法同时保证无限未归类输入下无等待和处理所有已入站撤销。
+- SG7 补充叶子许可的输入门禁，防止 Decision 接纳后刚到达的撤销被任务启动越过；允许协调处理完成后重新排队。
+- 2026-09-22 用户追加本地部署：读取当前 v9、无活动 Task，使用本轮精确修复包安装，停止前备份稳定存储及 profile。不会重跑历史迁移或批量补发。
 
 ## 重要信息
 
-- 主仓 D:/project/dingtalk-dsh-assistant；隔离工作区 D:/project/dingtalk-dsh-workflow-orchestration。
+- 主仓 D:/project/dingtalk-dsh-assistant；当前隔离工作区 D:/project/dingtalk-dsh-coordination-latency。
 - 基线版本 0.5.15；Node >=24；pnpm workspace。
 
 ## 交付回读
+
+- 本轮 PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/117，OPEN，main ← codex/group-coordination-latency，已独立回读并附加任务。
+- 最终本地部署源码：60f883cfeae9020c7a9a78fac3a2274c371efb64，包摘要及备份/运行态见 round-17.md；后续提交仅补充验收文档。
+- 全量613/613；安装34个JS摘要一致；17:20后仍health ok、入站/桥接正常、恢复错误0，双端口PID69760。
+
+### 上一批交付历史
 
 - PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/116，OPEN，base=main。
 - 代码提交：8cc9df6194a24fa151c347dd0b329bbe82b02693；git ls-remote 与本地 HEAD 一致。

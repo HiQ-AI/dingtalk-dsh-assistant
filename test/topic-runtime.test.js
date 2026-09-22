@@ -106,6 +106,20 @@ test('工具参数错误返回精简字段问题且不产生副作用', async (t
   assert.equal(h.store.listTopics('g').length, 0)
 })
 
+test('联合分支错误返回具体多余字段和动作路径，不只返回 Invalid input', async t => {
+  const h = await setup(t)
+  const input = { requestId: 'invalid', topicId: 'invalid', revision: 1,
+    decision: { basisMessageIds: ['m'], actions: [], reply: '收到', reason: '不能混用两个分支' } }
+  const result = await h.rawCall('group_decision_submit', input)
+  assert.equal(result.status, 'invalid-arguments')
+  assert.ok(result.issues.some(issue => issue.path === 'decision.reason' && issue.code === 'unrecognized_keys' && issue.branch))
+  assert.ok(result.issues.some(issue => issue.path === 'decision.reply' && issue.branch))
+  const invalidAction = await h.rawCall('group_decision_submit', { ...input, decision: { basisMessageIds: ['m'], actions: [{ kind: 'unknown-action' }], reply: '收到' } })
+  assert.ok(invalidAction.issues.some(issue => issue.path.startsWith('decision.actions.0')))
+  assert.equal(h.store.listTasks().length, 0)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+})
+
 test('归类期间消息版本变化返回刷新后的当前请求', async (t) => {
   const h = await setup(t)
   await ingest(h, 'edited', { text: '@助理 初始内容' })
@@ -429,28 +443,36 @@ test('同消息复核不能改 unitKey 重授执行权，显式拆分保留旧�
   assert.equal(h.store.getGroup('g').messages[0].activeUnitRefs.length, 2)
 })
 
-test('未知输入返回 routing-required，归到 B 后原 A 请求继续有效', async (t) => {
+test('未知输入返回 routing-required，归到 B 后原 A 草稿自动重验提交', async (t) => {
   const h = await setup(t); await ingest(h, 'a')
   const a = (await route(h)).pendingDecisions[0]
   await ingest(h, 'b')
   const deferred = await h.call('group_decision_submit', submission(a))
   assert.equal(deferred.status, 'routing-required')
-  assert.equal(deferred.nextAction, 'route-first')
+  assert.equal(deferred.nextAction, 'wait-for-routing')
+  assert.equal(deferred.retryScheduled, true)
   assert.equal(deferred.routeRequestId, h.envelope('[GROUP_TOPIC_ROUTE]').requestId)
   assert.equal(h.store.getTopic('g', a.topicId).decisions.length, 0)
   await route(h)
-  await complete(h, a)
+  await new Promise(resolve => setImmediate(resolve))
+  await h.coordinator.drain('g')
+  assert.equal(h.store.getTopic('g', a.topicId).processedRevision, 1)
+  assert.equal(h.store.getTopic('g', a.topicId).decisions.length, 1)
+  assert.equal(h.store.getCoordinationRequest('g', a.requestId).status, 'completed')
+  assert.equal(h.store.getCoordinationRequest('g', a.requestId).nextRetryAt, undefined)
+  assert.equal(h.sent.filter(text => text.startsWith('[GROUP_TOPIC_DECISION]') && text.includes(a.requestId)).length, 1)
 })
 
-test('待归类输入先完成路由，再派发已准备好的其他 Topic 决策', async (t) => {
+test('待归类输入不阻止已准备的其他 Topic 决策进入公平队列', async (t) => {
   const h = await setup(t)
   await ingest(h, 'a'); const a = (await route(h)).pendingDecisions[0]
   await ingest(h, 'b')
   await h.store.routeMessages({ groupId: 'g', routeId: 'direct-b', routingRevision: h.store.getGroup('g').routingRevision, routes: [{ messageId: 'b', messageVersion: 1, topics: [{ newTopicKey: 'b', title: 'B' }] }] })
   await ingest(h, 'c')
   const before = h.sent.filter((text) => text.startsWith('[GROUP_TOPIC_DECISION]')).length
-  assert.deepEqual(await h.coordinator.schedule('g'), [])
-  assert.equal(h.sent.filter((text) => text.startsWith('[GROUP_TOPIC_DECISION]')).length, before)
+  assert.equal((await h.coordinator.schedule('g')).length, 2)
+  assert.equal(h.sent.filter((text) => text.startsWith('[GROUP_TOPIC_DECISION]')).length, before + 1)
+  assert.equal(h.store.listTasks().length, 0)
   const routed = await route(h)
   assert.equal(routed.status, 'accepted')
   assert.equal(routed.pendingDecisions.length, 3)
@@ -458,7 +480,46 @@ test('待归类输入先完成路由，再派发已准备好的其他 Topic 决�
   await complete(h, a)
 })
 
-test('异步决策预处理期间来了新消息，路由后只派发一次原请求', async (t) => {
+test('待路由的新建任务草稿遇同话题撤销时失效，不能自动补建', async t => {
+  const h = await setup(t)
+  await ingest(h, 'request-task')
+  const a = (await route(h)).pendingDecisions[0]
+  await ingest(h, 'cancel-task', { text: '@助理 先不要执行这个任务' })
+  const action = { kind: 'new-task', title: '排查审核撤回', objective: '排查撤回规则', acceptanceCriteria: ['原因证据'], topicRefs: [{ topicId: a.topicId, revision: 1 }] }
+  assert.equal((await h.call('group_decision_submit', submission(a, { actions: [action], reply: '开始排查' }))).status, 'routing-required')
+  const routed = await route(h, { 'cancel-task': a.topicId })
+  await new Promise(resolve => setImmediate(resolve))
+  const current = routed.pendingDecisions.find(request => request.topicId === a.topicId)
+  assert.equal(current.revision, 2)
+  assert.notEqual(current.requestId, a.requestId)
+  assert.equal(h.store.getCoordinationRequest('g', a.requestId).status, 'superseded')
+  assert.equal(h.store.listTasks().length, 0)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  await complete(h, current)
+  assert.equal(h.store.listTasks().length, 0)
+})
+
+test('路由等待期间回复候选变化，缓存草稿仍须重新审阅', async t => {
+  let candidates = []
+  const h = await setup(t, { reviewCandidates: () => structuredClone(candidates) })
+  await ingest(h, 'a')
+  const a = (await route(h)).pendingDecisions[0]
+  await ingest(h, 'b')
+  assert.equal((await h.call('group_decision_submit', submission(a, { reply: '排查结论' }))).status, 'routing-required')
+  candidates = [{ outboundId: 'new-a-result', sourceMessageId: 'a', reply: '等待期间已有新结果' }]
+  await route(h)
+  await new Promise(resolve => setImmediate(resolve))
+  await h.coordinator.drain('g')
+  assert.equal(h.store.getTopic('g', a.topicId).decisions.length, 0)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  await h.call('group_reply_review_get', { requestIds: [a.requestId] })
+  const accepted = await h.call('group_decision_submit', submission(a, { reply: '新结论', replyReview: { kind: 'substantive', reviewedOutboundIds: ['new-a-result'], sameMatterOutboundIds: [], replaceOutboundIds: [] } }))
+  assert.equal(accepted.status, 'accepted')
+  await h.coordinator.drain('g')
+  assert.equal(h.store.getGroup('g').outbox.length, 1)
+})
+
+test('异步决策预处理期间来了新消息，原请求仍仅派发一次且提交受保护', async (t) => {
   let release, started
   const entered = new Promise((resolve) => { started = resolve })
   const held = new Promise((resolve) => { release = resolve })
@@ -467,8 +528,9 @@ test('异步决策预处理期间来了新消息，路由后只派发一次原�
   await entered
   await ingest(h, 'b')
   release()
-  await h.coordinator.drain('g')
-  assert.equal(h.sent.filter((text) => text.startsWith('[GROUP_TOPIC_DECISION]')).length, 0)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.sent.filter((text) => text.startsWith('[GROUP_TOPIC_DECISION]')).length, 1)
+  assert.equal(h.store.listTasks().length, 0)
   const routed = await route(h)
   assert.equal(routed.status, 'accepted')
   await h.coordinator.drain('g')
