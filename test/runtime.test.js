@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { after } from 'node:test'
@@ -159,6 +160,56 @@ async function createTask(h, id = 'task-input', extra = {}, source = {}) {
   return h.store.listTasks().find((task) => task.topicRefs.some((ref) => ref.topicId === request.topicId))
 }
 const workflowAssessment = (task, patch = {}) => ({ promptRefs: task.taskPromptRefs ?? [], reusedEvidence: [], inapplicableSteps: [], exceptions: [], ...patch })
+
+test('叶子登记的 worktree 在归档失败时保留，修复后迁出文档并删除目录', async t => {
+  const h = await setup(t)
+  const task = await createTask(h, 'worktree-archive')
+  const root = mkdtempSync(join(agentWorkspace, 'archive-fixture-'))
+  const primary = join(root, 'primary')
+  const remote = join(root, 'remote.git')
+  const location = join(agentWorkspace, 'worktrees', `task-${task.taskId}`)
+  const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true }).trim()
+  mkdirSync(primary)
+  mkdirSync(join(agentWorkspace, 'worktrees'), { recursive: true })
+  git(root, 'init', '--bare', remote)
+  git(primary, 'init')
+  git(primary, 'config', 'user.name', 'Test')
+  git(primary, 'config', 'user.email', 'test@example.test')
+  writeFileSync(join(primary, 'README.md'), 'base\n')
+  git(primary, 'add', '.')
+  git(primary, 'commit', '-m', 'base')
+  git(primary, 'remote', 'add', 'origin', remote)
+  git(primary, 'push', '-u', 'origin', 'HEAD:refs/heads/main')
+  git(primary, 'worktree', 'add', '-b', `task-${task.taskId}`, location)
+  git(location, 'push', '-u', 'origin', `task-${task.taskId}`)
+  const doc = join(location, 'docs', 'spec', 'plan.md')
+  mkdirSync(join(location, 'docs', 'spec'), { recursive: true })
+  writeFileSync(doc, '归档方案\n')
+  const leaf = h.handles.get(task.childSessionId)
+  await assert.rejects(leaf.tools.get('task_worktree_register').execute({ inputVersion: task.inputVersion, runSequence: task.runSequence, location, createdByTask: true, documents: ['docs/spec/../secret.md'] }, { agent: leaf.agent }), /invalid_document_source/)
+  await leaf.tools.get('task_worktree_register').execute({ inputVersion: task.inputVersion, runSequence: task.runSequence, location, createdByTask: true, documents: ['docs/spec/plan.md'] }, { agent: leaf.agent })
+  assert.equal(h.store.getTask(task.taskId).localWorktrees[0].path, location)
+  const restoredStore = await openResidentStore(memoryFacility(h.snapshot))
+  assert.equal(restoredStore.getTask(task.taskId).localWorktrees[0].path, location)
+  const borrower = await createTask(h, 'borrowed-worktree')
+  await h.store.updateTask(borrower.taskId, current => ({ ...current, localWorktrees: [{ ...h.store.getTask(task.taskId).localWorktrees[0], ownerTaskId: current.taskId, createdByTask: false }] }))
+  writeFileSync(join(location, 'README.md'), 'dirty\n')
+  await h.runtime.cancelTask({ taskId: task.taskId, requestId: 'archive-fixture-cancel', topicRefs: task.topicRefs, ...inputVersion(task), reason: '测试取消与清理' })
+  await until(() => h.store.getTask(task.taskId).archiveCleanup?.status === 'failed')
+  assert.match(h.store.getTask(task.taskId).archiveCleanup.error, /worktree_in_use_by_other_task/)
+  await h.store.updateTask(borrower.taskId, current => ({ ...current, localWorktrees: [] }))
+  await assert.rejects(h.runtime.archiveTask({ taskId: task.taskId }), /worktree_dirty_code/)
+  assert.equal(h.store.getTask(task.taskId).archiveCleanup.status, 'failed')
+  assert.equal(h.store.getTask(task.taskId).archivedAt, undefined)
+  assert.equal(existsSync(location), true)
+  git(location, 'checkout', '--', 'README.md')
+  const archived = await h.runtime.archiveTask({ taskId: task.taskId })
+  assert.equal(archived.archiveCleanup.status, 'completed')
+  assert.equal(archived.localWorktrees[0].status, 'cleaned')
+  assert.equal(existsSync(location), false)
+  assert.equal(existsSync(archived.localWorktrees[0].documents[0].archivePath), true)
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+})
 
 test('运行时协调请求独立日志与工具角色绑定；群主和旧请求均不能越权提交', async t => {
   const h = await setup(t, { groups: ['g', 'b'] })

@@ -242,6 +242,7 @@ window.__ModuleLoader__.load({
       const [expandedCheckpointTaskId, setExpandedCheckpointTaskId] = useState('')
       const [copiedId, setCopiedId] = useState('')
       const [navigatingSessionId, setNavigatingSessionId] = useState('')
+      const [archivingTaskId, setArchivingTaskId] = useState('')
       const [alertType, setAlertType] = useState('all')
       const [alertView, setAlertView] = useState('active')
       const [resolvedAlertPage, setResolvedAlertPage] = useState(1)
@@ -374,6 +375,18 @@ window.__ModuleLoader__.load({
         const checkpointsExpanded = expandedCheckpointTaskId === task.taskId
         const hovered = hoveredTaskId === task.taskId
         const navigating = navigatingSessionId === task.childSessionId
+        const worktrees = Array.isArray(task.localWorktrees) ? task.localWorktrees : []
+        const cleanup = task.archiveCleanup
+        const cleanupRunning = cleanup?.status === 'running' || archivingTaskId === task.taskId
+        const archiveTask = async () => {
+          if (cleanupRunning) return
+          setArchivingTaskId(task.taskId)
+          setNavigationError('')
+          try { await post(`/tasks/${encodeURIComponent(task.taskId)}/archive`); await refresh() }
+          catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)); await refresh().catch(() => {}) }
+          finally { setArchivingTaskId('') }
+        }
+        const cleanupLabel = cleanup?.status === 'running' ? '正在归档文档并清理目录' : cleanup?.status === 'failed' ? '归档清理失败' : cleanup?.status === 'completed' ? '归档清理完成' : '待归档清理'
         return React.createElement('div', { key: task.taskId, onMouseEnter: () => setHoveredTaskId(task.taskId), onMouseLeave: () => setHoveredTaskId(''), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, boxShadow: hovered ? '0 8px 20px rgba(15,23,42,.08), 0 2px 6px rgba(15,23,42,.05)' : 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.08))', padding: '11px 13px', color: 'inherit', display: 'grid', gap: 6, opacity: queued ? 0.72 : 1, transition: 'box-shadow 180ms ease' } },
           React.createElement('button', { type: 'button', disabled: queued || navigating, onClick: (event) => { if (event.target.closest('[data-task-card-action]')) return; navigate(task.childSessionId, group?.residentSessionId) }, style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: queued || navigating ? 'default' : 'pointer', textAlign: 'left', display: 'grid', gap: 6, fontFamily: 'inherit' } },
           React.createElement('strong', { title: task.title || task.objective, style: { fontSize: 13, lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, task.title || task.objective),
@@ -387,9 +400,18 @@ window.__ModuleLoader__.load({
               checkpointsExpanded ? React.createElement('div', { style: { display: 'grid', gap: 4, padding: '2px 9px 9px' } }, ...checkpoints.map((checkpoint, index) => { const completed = completedCheckpointNames.has(checkpoint); const current = !completed && currentCheckpoint === checkpoint; const tone = completed ? statusTone.done : current ? colors.accent : colors.muted; const duration = checkpointDuration(checkpoint, currentCheckpointEvents, Date.now()); return React.createElement('div', { key: `${index}:${checkpoint}`, title: checkpoint, style: { minWidth: 0, display: 'grid', gridTemplateColumns: '12px minmax(0,1fr) 64px', gap: 5, alignItems: 'start', fontSize: 10.5, lineHeight: 1.4 } }, React.createElement('span', { 'aria-hidden': true, style: { width: 12, height: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: tone } }, completed ? React.createElement(CheckpointDoneIcon, { size: 12 }) : current ? React.createElement(StateDot, { state: 'ongoing', size: 10 }) : '○'), React.createElement('span', { style: { color: 'inherit', display: '-webkit-box', WebkitLineClamp: 'unset', WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, checkpoint), React.createElement('span', { title: `执行时长 ${duration}`, style: { width: 64, color: colors.muted, textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } }, duration)) })) : null) : null,
           task.waitingReason ? React.createElement('div', { title: task.waitingReason, style: { fontSize: 10.5, lineHeight: 1.45, color: colors.warning } }, `等待：${task.waitingReason}`,
             task.waitingKind === 'information' ? React.createElement('div', { style: { marginTop: 3, color: colors.muted } }, waitingNoticeLabel, task.requesterName ? ` · 发起人 ${task.requesterName}` : '') : null) : null),
+          worktrees.length || cleanup ? React.createElement('section', { 'aria-label': '本地工作目录归档', style: { display: 'grid', gap: 5, minWidth: 0, padding: '7px 0', borderTop: `1px solid ${colors.border}`, fontSize: 10.5, lineHeight: 1.45 } },
+            React.createElement('strong', { role: 'status', style: { color: cleanup?.status === 'failed' ? colors.danger : cleanupRunning ? colors.warning : colors.muted, fontWeight: 600 } }, cleanupLabel),
+            cleanup?.error ? React.createElement('span', { role: 'alert', style: { color: colors.danger, overflowWrap: 'anywhere' } }, cleanup.error) : null,
+            ...worktrees.map((worktree, index) => React.createElement('div', { key: `${worktree.path}:${index}`, style: { display: 'grid', gap: 2, minWidth: 0 } },
+              React.createElement('span', { style: { color: colors.muted } }, `工作目录 · ${worktree.status === 'cleaned' ? '已清理' : '已登记'}${worktree.createdByTask ? '' : ' · 借用'}${worktree.branch ? ` · ${worktree.branch}` : ''}`),
+              React.createElement('code', { title: worktree.path, style: { overflowWrap: 'anywhere' } }, worktree.path),
+              ...(worktree.documents || []).map((document, documentIndex) => React.createElement('div', { key: `${document.source}:${documentIndex}`, style: { display: 'grid', gap: 1, paddingLeft: 8, color: colors.muted } },
+                React.createElement('span', null, `文档 · ${document.source}`),
+                document.archivePath ? React.createElement('code', { title: document.archivePath, style: { overflowWrap: 'anywhere', color: 'inherit' } }, `归档到 ${document.archivePath}`) : null))))) : null,
           React.createElement('div', { style: { minWidth: 0, marginTop: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
             React.createElement('span', { title: `最后活动 ${fmt(task.updatedAt)}`, style: { minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt)),
-            task.state === 'completed' && !task.archivedAt ? React.createElement('button', { type: 'button', onClick: async (event) => { event.stopPropagation(); try { await post(`/tasks/${encodeURIComponent(task.taskId)}/archive`); await refresh() } catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) } }, style: { flex: '0 0 auto', border: `1px solid ${colors.border}`, borderRadius: 7, background: colors.surface2, color: colors.muted, padding: '3px 7px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10.5 } }, '归档') : null),
+            task.state === 'completed' && !task.archivedAt ? React.createElement('button', { type: 'button', disabled: cleanupRunning, 'aria-busy': cleanupRunning, onClick: (event) => { event.stopPropagation(); archiveTask() }, style: { flex: '0 0 auto', border: `1px solid ${colors.border}`, borderRadius: 7, background: colors.surface2, color: cleanupRunning ? colors.muted : colors.accent, padding: '3px 7px', cursor: cleanupRunning ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 10.5 } }, cleanupRunning ? '清理中…' : cleanup?.status === 'failed' ? '重试归档' : '归档') : null),
           navigating ? React.createElement('div', { role: 'status', style: { fontSize: 11.5, color: colors.accent } }, '正在打开会话…') : queued ? React.createElement('div', { style: { fontSize: 11.5, color: colors.muted } }, '等待执行，尚无对话和轨迹') : null))
       }
       const alertCategories = [
@@ -552,7 +574,7 @@ window.__ModuleLoader__.load({
       const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, minHeight: 'calc(100dvh - 138px)', boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
       const main = React.createElement('main', { className: 'observer-main', style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? `${ui.space6}px ${ui.space6}px 0` : `${ui.space6}px ${ui.space6}px ${ui.space6 + ui.space2}px`, display: 'grid', alignContent: 'start', gap: ui.space6, pointerEvents: 'auto' } },
         error ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法连接 resident 插件：${error}`) : null,
-        navigationError ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法打开 DSH Session：${navigationError}`) : null,
+        navigationError ? React.createElement('div', { role: 'alert', style: { ...card, borderColor: colors.danger, color: colors.danger } }, `操作失败：${navigationError}`) : null,
         pageViewport
       )
       return React.createElement('div', { 'data-dingtalk-observer': '', style: { width: '100%', height: '100%', minWidth: 0, minHeight: 0, background: colors.surface, color: 'inherit', overflow: 'auto' } }, React.createElement('style', null, observerCss), header, main)

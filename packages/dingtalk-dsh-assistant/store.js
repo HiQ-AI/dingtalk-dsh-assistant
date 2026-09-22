@@ -125,6 +125,15 @@ const taskRunSchema = z.object({
   acceptanceCriteria: z.array(z.string().min(1)), stageTasks: z.array(z.string().min(1)), taskPromptRefs: z.array(taskPromptRefSchema).optional(), checkpoints: z.array(persistedTaskCheckpointSchema).optional(), result: persistedTaskResultSchema.optional(),
 })
 const taskStateEventSchema = z.object({ state: z.enum(['queued', 'running', 'waiting', 'completed']), waitingKind: z.enum(['information', 'coordination', 'human-intervention', 'system']).optional(), at: z.string().min(1), runSequence: z.number().int().positive() })
+const taskWorktreeDocumentSchema = z.object({ source: z.string().min(1), archivePath: z.string().min(1).optional(), sha256: z.string().min(1).optional() })
+const taskWorktreeSchema = z.object({
+  path: z.string().min(1), repositoryRoot: z.string().min(1), gitDir: z.string().min(1), head: z.string().min(1),
+  branch: z.string().optional(), originUrl: z.string().optional(), ownerTaskId: z.string().min(1),
+  createdByTask: z.boolean(), runSequence: z.number().int().positive(), registeredAt: z.string().min(1),
+  status: z.enum(['registered', 'cleaned']), documents: z.array(taskWorktreeDocumentSchema),
+  cleanedAt: z.string().min(1).optional(),
+})
+const archiveCleanupSchema = z.object({ status: z.enum(['pending', 'running', 'failed', 'completed']), error: z.string().optional(), updatedAt: z.string().min(1) })
 const activityProjectionSchema = z.object({
   lastSyncedAt: z.string(), latestEventKey: z.string().optional(), latestOccurredAt: z.string().optional(),
   truncated: z.boolean().default(false),
@@ -153,6 +162,7 @@ const taskSchema = z.object({
   humanBlocker: humanBlockerSchema.optional(), humanBlockerHistory: z.array(humanBlockerSchema).optional(),
   completion: z.string().optional(), result: persistedTaskResultSchema.optional(), lastWaitingResult: persistedTaskResultSchema.optional(), lastCompletedResult: persistedTaskResultSchema.optional(),
   completionSequence: z.number().int().nonnegative().optional(),
+  localWorktrees: z.array(taskWorktreeSchema).default([]), archiveCleanup: archiveCleanupSchema.optional(),
   stateHistory: z.array(taskStateEventSchema).optional(),
   reopenContext: z.string().min(1).optional(), resumeContext: z.string().min(1).optional(), archivedAt: z.string().min(1).optional(), createdAt: z.string().min(1), updatedAt: z.string().min(1),
 })

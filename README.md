@@ -264,7 +264,9 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存�
 
 内部审阅预算等确定性系统故障会将原报告记为 `failed`，Task 进入 `waitingKind=system` 并释放运行名额；Host 通过可靠 Outbox 通知暂停，同一轮次、版本和错误码不重复通知，也不要求叶子反复改稿。恢复入口仍为 `POST /tasks/<taskId>/reports/<submissionId>/retry`。恢复前在 Task 提交锁内只读重建审阅输入，复核报告版本、轮次、当前流程、待处理输入和人工授权；探测失败保持系统等待，不启动叶子或清除故障。通过后在并发容量允许时处理原 submissionId，不能靠创建新报告或会话绕过故障。
 
-派发及重开时，Runtime 从已有报告工件、检查点证据和交接记录提取原生绝对路径，检查当前是否存在，随任务输入提供 goal、验收目录及可确认的仓库/worktree 位置。不会遍历工作区寻找这些位置；无法确认时明确标记 unknown。位置存在不代表旧验收仍有效，也不扩大任务授权。优先在已确认的目录检索，避免重新扫描整个工作区。
+派发及重开时，Runtime 从已登记的本地 worktree、已有报告工件、检查点证据和交接记录提取原生绝对路径，检查当前是否存在，随任务输入提供可确认的工作位置。不会遍历工作区寻找这些位置；无法确认时明确标记 unknown。位置存在不代表旧验收仍有效，也不扩大任务授权。优先在已确认的目录检索，避免重新扫描整个工作区。
+
+叶子新建受管理工作区 `worktrees/` 下的 Git linked worktree 后，调用 `task_worktree_register` 登记路径、当前执行版本、创建归属和应保留的 `docs/<类别>/...` 文件清单；文档形成后再次登记更新清单。Host 校验真实路径、Git 身份、当前叶子 Session 及任务归属，并把记录保存到 Task 的 `localWorktrees`。提交 completed 时，`localWorktrees` 列出所有仍登记的目录路径，与 Task 记录一致。任务完成时保留目录和开发分支。归档时先只读预检：Git HEAD 与登记一致、远端分支指向该提交、代码无未提交修改，未跟踪文件全部已列为待迁出文档。然后将文档按原分类复制到当前 Agent 工作区 `docs/<类别>/<taskId>/<仓库名>/`，核对 SHA256，正常执行 `git worktree remove`，并分别回查实际目录及 Git 登记。借用的目录仅记录、不删除；归档失败保留 completed 且不写 `archivedAt`，任务看板显示原因并支持重试。开发分支不会随目录删除；跨轮续作仍使用同一分支。此流程不依赖 `goal.md` 或个人绝对路径。
 
 消息的 `routingStatus` 表示待归类、已归类或归类失败；Topic 的 `processedRevision` 表示决策及所需动作已可靠落地；Task 的输入下发、输入确认与任务完成另行记录。任何一项均不能替代另一项。运行看板的“话题”页在左侧只展示名称与摘要，右侧分开展示完整标题、话题摘要、待解决问题和关联任务；固定版本消息列表直接展示并支持分页，每条消息所引用的上一条消息默认折叠。群消息状态由 `routingStatus`、Topic revision 与 `processedRevision` 投影为“待归类、话题处理中、已处理、归类失败”，不再把旧 `agentDeliveryStatus` 当成业务处理完成度。Task 卡片上的话题链接打开该任务接纳的版本。Topic 归属仅表示消息延续同一讨论目标，或实质改变该 Topic 的事实、范围、结论或动作；为回答问题查询旧分支、PR 或任务资料不会建立 Topic 归属。多 Topic 路由必须逐项声明关系和理由，并显式指定唯一动作主归属。路由回执最多 1 KiB，决策首屏及 `group_decision_context_get` 单页最多 12 KiB，均按完整 UTF-8 JSON 计费；Topic 历史分页仍按原有 40,000 字符预算读取。`omittedDeltaCount` 非零时，Resident 必须读完固定请求的 `messages` 段；其他标记为必要的来源或归属段也须读完。Host 在必要依据读完前拒绝决策，旧历史未读完不会阻塞本次事项。
 
@@ -272,7 +274,7 @@ Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存�
 
 主会话向运行中或等待中的叶子传递任务上下文、目标修订、真人批复、恢复提示和结果驳回时统一使用 DSH `steer`，在叶子的下一个 step 边界插入，不使用 `followup` 排队到下一 Turn。
 
-群成员明确撤销原任务授权，例如“不要处理、不用做、停止、取消、忽略刚才”时，Resident 将当前撤销消息关联到唯一的 queued、running 或 waiting Task，并提交 `task-cancel`，不得继续作为普通 `task-context` 发送给叶子。Runtime 在等待全局 Task 串行队列前同步调用 DSH `agent.cancel()`，立即中止叶子的当前 Turn 并清空尚未执行的输入；取消建立后拒绝叶子迟到提交的 checkpoint/result。任务随后持久化为已取消并归档，撤销消息及其归属保存在 Topic 历史；叶子 handle 的 dispose 在状态落盘后异步收敛，不阻塞群消息回复或 Web 取消响应，Runtime 关闭时仍会等待其完成。模糊讨论、普通目标收窄或只暂停某一步不能推断为取消整个 Task。
+群成员明确撤销原任务授权，例如“不要处理、不用做、停止、取消、忽略刚才”时，Resident 将当前撤销消息关联到唯一的 queued、running 或 waiting Task，并提交 `task-cancel`，不得继续作为普通 `task-context` 发送给叶子。Runtime 在等待全局 Task 串行队列前同步调用 DSH `agent.cancel()`，立即中止叶子的当前 Turn 并清空尚未执行的输入；取消建立后拒绝叶子迟到提交的 checkpoint/result。任务随后持久化为已取消，撤销消息及其归属保存在 Topic 历史；叶子 handle 的 dispose 在状态落盘后异步收敛，不阻塞群消息回复或 Web 取消响应，Runtime 关闭时仍会等待其完成。没有待清理自有 worktree 时立即归档；有登记的自有 worktree 时在叶子释放后走同一归档清理流程，失败保留已取消但未归档状态和原因。模糊讨论、普通目标收窄或只暂停某一步不能推断为取消整个 Task。
 
 人工 Web Task 输入通过 `POST /tasks`、`POST /tasks/{taskId}/context` 和 `POST /tasks/{taskId}/reopen` 提交。三者均需由调用方提供稳定 `requestId` 与原始 `context`；新建还需 groupId、title、objective、acceptanceCriteria，可不提供 topicRefs，由 Runtime 建立 Web 来源 Topic。追加和重开需提供 topicRefs、inputVersion、runSequence，均从当前 Task/Topic 查询获得。相同 requestId 只可重试同一内容；版本或身份冲突返回 HTTP 409，持久接受但动作未完成返回 202。body 不接受 taskId、childSessionId 或伪造渠道来源。Resident 不持有这三个 Web 写入口，只通过带原始依据的 `group_decision_submit` 发起业务动作。
 
@@ -335,7 +337,7 @@ Task 创建和重开时即生成稳定 `stagePlan`，主会话查询与叶子输
 - 同一消息拆出多个事项时，Resident 新建 Task 必须提供 `dispatchAssessment`：业务对象、当前 Agent 交付、他人后续、来源 Unit、当前流程引用与选择原因。Host 校验来源 Unit、流程启用和版本；单事项可选。业务对象及交付的语义仍由 Resident 按原消息判断。
 - Task 收到补充输入后，原版本待审报告转为历史并向仍在运行的叶子提示按当前版本核对后重提；不会自动重放业务操作。明确标记授权变化且有新来源消息时，原阶段批准保守失效，即使阶段名称不变也须重新核对。
 - 任务表格同步：在“设置 → 插件 → 钉钉个人助理”填写钉钉在线电子表格地址，检查连接后选择目标工作表并启用。插件启动时立即同步，之后每 180 秒全量覆盖所选工作表；归档 Task 会在下一轮移除。所选工作表由插件托管，手工内容会被覆盖。
-- 归档任务：查看已归档 Task，相关群消息仍可重新打开原任务。
+- 归档任务：查看已归档 Task，相关群消息仍可重新打开原任务。任务卡片展示已登记 worktree、文档归档位置及清理状态；清理失败时可查看原因并重试归档。
 - 人工介入：以与消息表格一致的状态列、行高和内容密度分页查看阻塞事项，并在页面明确选择“批准该事项并继续”或“不执行”。
 - 告警：按类型查看当前异常和分页的已恢复历史。
 

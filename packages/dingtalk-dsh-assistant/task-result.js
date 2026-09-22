@@ -34,6 +34,7 @@ const completedResultSchema = z.object({
   summary: z.string().trim().min(1),
   evidence: z.array(z.string().trim().min(1)).min(1),
   artifacts: z.array(z.string().trim().min(1)).default([]),
+  localWorktrees: z.array(z.string().trim().min(1)).optional(),
   delivery: z.record(z.string(), z.unknown()).optional(),
 }).strict()
 
