@@ -1143,7 +1143,7 @@ test('历史坏决策重启后退回重判，原报告不跳过且纠正后恢�
 })
 
 test('报告审阅耗尽保持同身份停等，显式重试重置原请求后恢复推进', async t => {
-  const h = await setup(t, { retryDelayMs: 1 }), task = await createTask(h)
+  const h = await setup(t, { retryDelayMs: 200 }), task = await createTask(h)
   let reviewIdle = true
   h.onSteer = (sessionId, message) => { if (/^\[TASK_(?:CHECKPOINT|COMPLETION|WAITING)_REVIEW\]/u.test(message.content[0]?.text)) { h.idle.set(sessionId, reviewIdle ? Promise.resolve() : new Promise(() => {})); const session = h.handles.get(sessionId).agent.session; session.deriveMessages = () => session.snapshotEvents().filter(event => event.type === 'user/message').map(event => event.data) } }
   const pauseReviewIdle = () => { reviewIdle = false }
