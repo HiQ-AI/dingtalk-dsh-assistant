@@ -1,8 +1,8 @@
 # 流程编排与节点契约实施
 
-> 状态：ACTIVE
+> 状态：COMPLETE
 > Goal ID：workflow-orchestration
-> 最近维护：2026-09-22T15:22:41.8729713+08:00
+> 最近维护：2026-09-22T15:28:59.3972140+08:00
 > 权威目标：D:/project/dingtalk-dsh-workflow-orchestration/docs/acceptance/workflow-orchestration/goal.md
 
 ## 总目标
@@ -31,13 +31,13 @@
 | SG3 | 可靠中转、重试、取消 | 故障恢复不重复动作且未知结果阻塞 | 已完成 | round-11.md，未知结果与取消反例 |
 | SG4 | 确定性检查与材料预检 | 注册检查器、材料完整性和版本校验通过 | 已完成 | round-11.md，材料与检查器集成 |
 | SG5 | 执行许可与调度 | 不超并发、无旁路恢复、公平性反例通过 | 已完成 | round-4.md、round-11.md |
-| SG6 | 综合验收与交付 | 基线对比、矩阵、PR 回读完成 | 进行中 | 本地全仓通过，原生隔离补验与PR待完成 |
+| SG6 | 综合验收与交付 | 基线对比、矩阵、PR 回读完成 | 已完成 | round-11.md、round-12.md、PR #116 OPEN已回读 |
 
 ## 当前检查点
 
 - 当前子目标：SG6
-- 唯一下一步：收尾隔离原生验收，创建PR并独立回查。
-- 未闭环项：本地实现与596项回归完成，PR待创建；用户明确本轮仅本地验证与 PR；真实渠道 E2E 和真实迁移不执行。
+- 唯一下一步：本轮本地验证与PR交付已完成，等待审阅；没有自动合并或部署步骤。
+- 未闭环项：本轮范围内无。真实渠道E01、生产迁移及部署明确未执行，需要后续独立安排。
 
 ## 进展
 
@@ -52,3 +52,9 @@
 
 - 主仓 D:/project/dingtalk-dsh-assistant；隔离工作区 D:/project/dingtalk-dsh-workflow-orchestration。
 - 基线版本 0.5.15；Node >=24；pnpm workspace。
+
+## 交付回读
+
+- PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/116，OPEN，base=main。
+- 代码提交：8cc9df6194a24fa151c347dd0b329bbe82b02693；git ls-remote 与本地 HEAD 一致。
+- 本地596/596、隔离原生DSH、UI10项、18次队列回放、三个包构建通过。PR创建时statusCheckRollup为空，不当作远程CI通过。
