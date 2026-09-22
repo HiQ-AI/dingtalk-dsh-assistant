@@ -8,6 +8,7 @@
 - 新进程 PID 69760，3080/18998 同属此进程。17:16 后健康为 ok，inboundProcessing=true、DWS bridge healthy=true、recoveryIssueCount=0。
 - Web 原生 token 握手 303 设置 cookie，携 cookie 访问页面 200 且为 HTML；没有公开 token，不声称完成浏览器交互验收。
 - 17:17:55 只读观察：未归类积压已清空；原问题话题已从未派发进入独立决策会话并调用 group_decision_context_get，attempt=0。此时仍未接受决策、未创建关联 Task，不能把恢复派发当业务完成。
+- 17:20 后再次回读健康仍为 ok，双端口 PID 仍为 69760；原话题首轮派发时 queueDepth=11，仍在协调队列中推进，未声称全链路时延达标。
 - 历史活动审计仍在推进；缺失旧 Session 计为 unavailable，与当前恢复错误分开。真实模型端到端时延和钉钉消息送达未作验收，不发送测试消息、不批量补建任务。
 
 第一次候选启动空转已记录于第 16 轮，修复后重新全量测试与打包。最终实例未启用 Inspector。

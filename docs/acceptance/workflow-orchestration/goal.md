@@ -1,8 +1,8 @@
 # 流程编排与节点契约实施
 
-> 状态：ACTIVE
+> 状态：COMPLETE
 > Goal ID：workflow-orchestration
-> 最近维护：2026-09-22T16:58:00+08:00
+> 最近维护：2026-09-22T17:22:00+08:00
 > 权威目标：D:/project/dingtalk-dsh-coordination-latency/docs/acceptance/workflow-orchestration/goal.md
 
 ## 总目标
@@ -32,13 +32,14 @@
 | SG4 | 确定性检查与材料预检 | 注册检查器、材料完整性和版本校验通过 | 已完成 | round-11.md，材料与检查器集成 |
 | SG5 | 执行许可与调度 | 不超并发、无旁路恢复、公平性反例通过 | 已完成 | round-4.md、round-11.md |
 | SG6 | 综合验收与交付 | 基线对比、矩阵、PR 回读完成 | 已完成 | round-11.md、round-12.md、PR #116 OPEN已回读 |
-| SG7 | 群聊延迟与任务发起修复 | schema、字段反馈、公平调度及新输入保护回归通过，本地验证与 PR 回读 | 进行中 | docs/spec/group-coordination-latency.md |
+| SG7 | 群聊延迟与任务发起修复 | schema、字段反馈、公平调度及新输入保护回归通过，本地验证与 PR 回读 | 已完成 | round-16.md；613/613；PR #117 OPEN |
+| SG8 | 修复包本地部署 | 精确安装摘要、新进程、健康、认证Web及延时存活回读 | 已完成 | round-17.md；源码60f883c；PID69760 |
 
 ## 当前检查点
 
-- 当前子目标：SG7
-- 唯一下一步：补齐状态问答只读契约回归后打包部署到本地 web profile，再完成源码交付。
-- 未闭环项：Runtime 152/152；首轮全仓 611/612，状态问答原先按联合类型数组下标选分支导致只读边界回归，已改成明确限制；需全量重验。用户已明确授权打包本地部署，部署尚未执行。
+- 当前子目标：SG8
+- 唯一下一步：等待 PR 审阅；真实群业务时延及 Task 完成需独立观察，不自动合并。
+- 未闭环项：真实渠道 D03 未验收。原 #1336 话题已进入决策、尚无关联 Task；本轮不将其标为业务完成，也未人为补建。首次部署空转问题已前向修复，第二次实例健康稳定。
 
 ## 进展
 
@@ -56,10 +57,16 @@
 
 ## 重要信息
 
-- 主仓 D:/project/dingtalk-dsh-assistant；隔离工作区 D:/project/dingtalk-dsh-workflow-orchestration。
+- 主仓 D:/project/dingtalk-dsh-assistant；当前隔离工作区 D:/project/dingtalk-dsh-coordination-latency。
 - 基线版本 0.5.15；Node >=24；pnpm workspace。
 
 ## 交付回读
+
+- 本轮 PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/117，OPEN，main ← codex/group-coordination-latency，已独立回读并附加任务。
+- 最终本地部署源码：60f883cfeae9020c7a9a78fac3a2274c371efb64，包摘要及备份/运行态见 round-17.md；后续提交仅补充验收文档。
+- 全量613/613；安装34个JS摘要一致；17:20后仍health ok、入站/桥接正常、恢复错误0，双端口PID69760。
+
+### 上一批交付历史
 
 - PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/116，OPEN，base=main。
 - 代码提交：8cc9df6194a24fa151c347dd0b329bbe82b02693；git ls-remote 与本地 HEAD 一致。
