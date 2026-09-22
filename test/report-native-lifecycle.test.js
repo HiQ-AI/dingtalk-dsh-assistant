@@ -9,6 +9,7 @@ import { Inbox, agentEvents, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
+import { taskReportReceipt } from '../packages/dingtalk-dsh-assistant/task-reports.js'
 import { stableId } from '../packages/dingtalk-dsh-assistant/topic-model.js'
 import { createTaskReportStepGate } from '../packages/dingtalk-dsh-assistant/task-report-step-gate.js'
 import { installFakeLlm } from '../packages/dingtalk-dsh-assistant/fake-llm.js'
@@ -70,12 +71,18 @@ test('真实Goal恢复加一次稳定Inbox通知，不因重复恢复入队两�
   const deliver = () => {
     const goal = h.goals.get(h.agent)
     if (goal.phase === 'blocked') h.goals.resume(h.agent, ref(goal))
-    if (!h.agent.inbox.nextTurn.some(message => message.id === id)) h.agent.inbox.append('next-turn', { ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: '[TASK_REPORT_REVIEWED] accepted' }] }), id })
+    if (!h.agent.inbox.nextTurn.some(message => message.id === id)) h.agent.inbox.append('next-turn', { ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: '[TASK_REPORT_REVIEWED]\n' + JSON.stringify(taskReportReceipt('task-native', { submissionId: 'submission-1', status: 'accepted' })) }] }), id })
   }
   deliver()
   deliver()
   await flushJobs()
   assert.equal(h.agent.inbox.nextTurn.filter(message => message.id === id).length, 1)
+  const receipt = JSON.parse(h.agent.inbox.nextTurn.find(message => message.id === id).content[0].text.split('\n')[1])
+  assert.equal(receipt.contractVersion, 2)
+  assert.equal(receipt.received, true)
+  assert.equal(receipt.reviewStatus, 'approved')
+  assert.equal(receipt.applicationStatus, 'applied')
+  assert.equal('accepted' in receipt, false)
   assert.equal(h.followups.length, 0, '结果消息与自动轮次竞争时driver不额外注入Goal轮次')
   assert.equal(h.goals.get(h.agent).phase, 'active')
   assert.equal(h.goals.get(h.agent).activation, 'armed')

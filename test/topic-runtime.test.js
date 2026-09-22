@@ -3,6 +3,7 @@ import test from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { Session } from '@deepseek-ai/dsh-session'
 import { Inbox } from '@deepseek-ai/dsh-agent'
+import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { openResidentStore, resolveTopicMessages } from '../packages/dingtalk-dsh-assistant/store.js'
 import { boundedTopicContext, createTopicCoordinator, projectTopicContext, TASK_REVIEW_MAX_CHARS } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
 import { visiblePromptRefs, visibleSectionLength, compactSectionValue } from '../packages/dingtalk-dsh-assistant/coordination-context.js'
@@ -38,9 +39,9 @@ async function setup(t, options = {}) {
       await options.afterAction?.(operation)
     },
   })
-  coordinator.register({ tools: { register(tool) { tools.set(tool.name, tool) } } }, 'g')
+  coordinator.register({ tools: { register(tool) { tools.set(tool.name, tool) } } }, 'g', options.scope)
   t.after(async () => { await coordinator.close(); await store.close() })
-  return { store, snapshot, coordinator, sent, errors, applications,
+  return { store, snapshot, coordinator, sent, errors, applications, tools,
     rawCall: (name, args, exec = { groupId: 'g' }) => tools.get(name).execute(args, exec),
     async call(name, args, exec = { groupId: 'g' }) {
       const result = await tools.get(name).execute(args, exec)
@@ -688,6 +689,41 @@ test('同revision拒绝后新请求跨重启稳定，共享消息不转授权且
   await again.coordinator.recover(); await again.coordinator.drain('g')
   assert.deepEqual(again.store.getGroup('g').outbox, after)
   assert.equal(again.applications.length, 1)
+})
+
+test('审阅工具同源契约通过真实 DSH 校验，并按请求种类限制字段', async (t) => {
+  const samples = {
+    completion: { accepted: false, reason: '缺少证据' },
+    checkpoint: { decision: 'acknowledge', reason: '计划有效' },
+    waiting: { decision: 'continue', reason: '依赖已恢复' },
+  }
+  for (const kind of [undefined, ...Object.keys(samples)]) {
+    const h = await setup(t, { scope: kind ? { kind, requestId: 'review-contract' } : undefined })
+    const schema = h.tools.get('group_task_review_submit').parameters
+    assert.doesNotThrow(() => assertSupportedJsonSchema(schema))
+    for (const [sampleKind, review] of Object.entries(samples)) {
+      const errors = validateJsonSchemaValue(schema, { requestId: 'review-contract', review })
+      assert.equal(errors.length === 0, !kind || kind === sampleKind, `${kind}: ${sampleKind}`)
+    }
+    for (const review of [{}, { decision: 'invented', reason: '不合法' }, { ...samples[kind ?? 'completion'], unauthorized: true }]) {
+      assert.ok(validateJsonSchemaValue(schema, { requestId: 'review-contract', review }).length)
+    }
+  }
+})
+
+test('Host 审阅拒绝跨种类决策及原生投影未执行的空文本约束', async (t) => {
+  for (const kind of ['checkpoint', 'waiting']) {
+    const h = await setup(t), { task } = await taskFixture(h)
+    const pending = h.coordinator.requestReview(kind, task, { summary: '检查' })
+    const request = h.envelope(kind === 'waiting' ? '[TASK_WAITING_REVIEW]' : '[TASK_CHECKPOINT_REVIEW]', '审阅请求')
+    assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: {
+      decision: kind === 'waiting' ? 'acknowledge' : 'continue', reason: '跨种类',
+    } })).status, 'invalid-arguments')
+    const decision = kind === 'waiting' ? 'continue' : 'acknowledge'
+    assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision, reason: ' ' } })).status, 'invalid-arguments')
+    assert.equal((await h.call('group_task_review_submit', { requestId: request.requestId, review: { decision, reason: '已核验' } })).status, 'accepted')
+    assert.equal((await pending).decision, decision)
+  }
 })
 
 test('内部审阅按请求绑定 Task 版本，拒绝错种类和版本变更', async (t) => {

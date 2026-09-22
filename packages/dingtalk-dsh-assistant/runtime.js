@@ -7,7 +7,7 @@ import { boundedTopicContext, createTopicCoordinator } from './topic-runtime.js'
 import { resolveTopicMessages, stableId, fingerprint } from './topic-model.js'
 import { assertCurrentTaskPrompts, isDiagnosticCheckpoint, parseTaskCheckpoint, parseTaskResult, taskCheckpointJsonSchema, taskResultJsonSchema } from './task-result.js'
 import { taskProgressSnapshot } from './task-progress.js'
-import { createTaskReportQueue, deterministicReviewFailure, taskReportReceiptSchema, taskReports } from './task-reports.js'
+import { createTaskReportQueue, taskReportReceipt, taskReportReceiptSchema, taskReports } from './task-reports.js'
 import { createTaskReportStepGate } from './task-report-step-gate.js'
 import { createStatusQueryHandler } from './status-query.js'
 import { coordinationTools, createCoordinationSessions, createCoordinationStepGate } from './coordination-sessions.js'
@@ -1179,7 +1179,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
         name: 'group-task-blocking-policy', order: 45,
         text: () => `## 群任务执行与完成规则
 
-你必须通过 submit_task_result 结束任务；自然语言总结、Goal complete 或 turn end 都不构成 Task 完成。新建本地 Git worktree 后立即使用 task_worktree_register 登记；文档形成后更新登记。完成报告的 localWorktrees 必须列出当前登记路径。完成时保留 worktree，归档时由 Runtime 核验、迁出已登记文档并清理目录。checkpoint/result 的 accepted:true 仅表示报告已持久接收；input-wait/review-wait 时结束当前轮并等待 TASK_REPORT_REVIEWED，不重复提交、不继续依赖该批准的动作。submissionId 标识同一份报告，重试保持不变；有新事实时提交新的报告。
+你必须通过 submit_task_result 结束任务；自然语言总结、Goal complete 或 turn end 都不构成 Task 完成。新建本地 Git worktree 后立即使用 task_worktree_register 登记；文档形成后更新登记。完成报告的 localWorktrees 必须列出当前登记路径。完成时保留 worktree，归档时由 Runtime 核验、迁出已登记文档并清理目录。checkpoint/result 的 received:true 仅表示报告已持久接收；reviewStatus=pending 时结束当前轮并等待 TASK_REPORT_REVIEWED，不重复提交、不继续依赖该批准的动作。submissionId 标识同一份报告，重试保持不变；有新事实时提交新的报告。
 
 ### 工作区 Skill 的通用执行边界
 
@@ -1938,7 +1938,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       if (goal?.phase === 'active') ctx.goals.block(handle.agent, goalRef(goal), { code: 'task-coordination-pending', message: '报告已保存，等待输入接纳或审阅结果。' })
     },
     notify: async (task, report) => {
-      if (report.status === 'failed' && deterministicReviewFailure(report.error)) {
+      if (report.status === 'failed') {
         const waiting = await serializeTasks(() => store.updateTask(task.taskId, current => current.state === 'running'
           && current.inputVersion === report.inputVersion && current.runSequence === report.runSequence
           ? { ...current, state: 'waiting', waitingKind: 'system', waitingReason: report.error } : current))
@@ -1960,7 +1960,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const id = stableId('message', identity)
       const exists = [...(handle.agent.inbox?.nextStep ?? []), ...(handle.agent.inbox?.nextTurn ?? [])].some(message => message.id === id)
         || handle.agent.session.snapshotEvents().some(event => event.type === 'user/message' && event.data.id === id)
-      if (!exists) handle.agent.steer({ ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: `[TASK_REPORT_REVIEWED]\n${JSON.stringify({ submissionId: report.submissionId, status: report.status, result: report.receipt, error: report.error })}\n${report.status === 'history-only' ? '原报告因输入版本变化作废；核对新版目标、授权和保留的阶段证据，仅对仍适用的事项用当前版本提交新报告。不要重复执行已完成的业务写入。' : '只依据本次结果继续；已接收不代表业务完成。不要重复提交同一报告。'}` }] }), id })
+      if (!exists) handle.agent.steer({ ...createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: `[TASK_REPORT_REVIEWED]\n${JSON.stringify(taskReportReceipt(task.taskId, report))}\n${report.status === 'history-only' ? '原报告因输入版本变化作废；核对新版目标、授权和保留的阶段证据，仅对仍适用的事项用当前版本提交新报告。不要重复执行已完成的业务写入。' : '只依据本次结果继续；已接收不代表业务完成。不要重复提交同一报告。'}` }] }), id })
       const sessions = ctx.get?.('sessions') ?? ctx.sessions
       if (sessions?.flush) await sessions.flush(handle.agent.session)
       if (report.status !== 'failed') resumeGoalAfterResolution(handle, ctx.goals.get(handle.agent))
@@ -2320,7 +2320,6 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
         }
         topics.prepareReview(report.reportType === 'checkpoint' ? 'checkpoint' : report.value.status === 'completed' ? 'completion' : 'waiting', task, report.value)
         if (systemWait) {
-          if (!deterministicReviewFailure(report.error)) throw new Error(`task_report_retry_requires_failed:${submissionId}`)
           if (store.listTasks().filter(item => item.state === 'running').length >= taskConcurrencyLimit) throw new Error(`task_report_retry_capacity_full:${submissionId}`)
           await store.updateTask(taskId, current => ({ ...current, state: 'running', waitingKind: undefined, waitingReason: undefined }))
         }

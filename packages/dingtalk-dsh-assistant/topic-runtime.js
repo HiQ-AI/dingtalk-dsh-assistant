@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { coordinationRole, coordinationTools } from './coordination-sessions.js'
 import { z } from 'zod'
+import { toToolJsonSchema } from './tool-schema.js'
 import { resolveTopicMessages } from './store.js'
 import { fingerprint, isPendingDecision } from './topic-model.js'
 import { TaskRevisionError } from './task-input-revision.js'
@@ -116,6 +117,12 @@ const waitingReviewSchema = z.union([
   z.strictObject({ decision: z.enum(['approve-wait', 'continue']), reason: z.string().trim().min(1) }),
   z.strictObject({ decision: z.literal('revise-scope'), reason: z.string().trim().min(1), basisMessageIds: z.array(z.string().trim().min(1)).min(1), affectedStageIds: z.array(z.string().trim().min(1)).min(1), title: z.string().trim().min(1).max(120), objective: z.string().trim().min(1), acceptanceCriteria: z.array(z.string().trim().min(1)).min(1), stageTasks: z.array(z.string().trim().min(1)).min(1) }),
 ])
+const reviewSchemas = { completion: completionReviewSchema, checkpoint: checkpointReviewSchema, waiting: waitingReviewSchema }
+const reviewSubmissionSchema = (kind) => z.strictObject({
+  requestId: z.string().min(1),
+  // 未绑定会话仅公开同源分支全集；实际提交仍按 Host 保存的请求种类解析。
+  review: reviewSchemas[kind] ?? z.union([...completionReviewSchema.options, checkpointReviewSchema, ...waitingReviewSchema.options]),
+})
 const COMPLETION_MESSAGE_MAX_CHARS = 12_000
 const DECISION_OUTPUT_MAX_BYTES = 12 * 1024
 const ROUTE_RECEIPT_MAX_BYTES = 1024
@@ -973,7 +980,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       replies.delete(args.requestId); request.resolve(outbound)
       return { status: 'accepted', outboundId: outbound.outboundId }
     })
-    tool('group_task_review_submit', '提交内部完成、等待或检查点审阅；请求绑定执行版本，不能产生群消息。', { type: 'object', properties: { requestId: { type: 'string' }, review: { type: 'object' } }, required: ['requestId', 'review'], additionalProperties: false }, async ({ requestId, review: input }) => {
+    tool('group_task_review_submit', '提交内部完成、等待或检查点审阅；请求绑定执行版本，不能产生群消息。', toToolJsonSchema(reviewSubmissionSchema(scope?.kind)), async ({ requestId, review: input }) => {
       const request = reviews.get(requestId)
       if (!request || request.groupId !== groupId) throw new Error('task_review_request_unknown')
       const task = store.getTask(request.task.taskId)
@@ -990,7 +997,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const missingPromptRefs = diagnosticCheckpoint(request) ? [] : request.promptRefs.filter((ref) => !request.readPromptRefs.has(ref.id))
       if (missingPromptRefs.length) return { status: 'prompt-review-required', missingPromptRefs }
       if ((request.kind === 'completion') !== Object.hasOwn(input ?? {}, 'accepted')) throw new Error('task_review_kind_invalid')
-      const review = request.kind === 'completion' ? completionReviewSchema.parse(input) : request.kind === 'waiting' ? waitingReviewSchema.parse(input) : checkpointReviewSchema.parse(input)
+      const review = reviewSchemas[request.kind].parse(input)
       const unreadSections = [...request.requiredSections].filter((section) => (request.readSectionOffsets.get(section) ?? 0) < request.sections[section].length)
       if (!diagnostic && unreadSections.length && (review.accepted === true || ['acknowledge', 'guidance', 'approve-wait', 'revise-scope'].includes(review.decision))) return { status: 'context-review-required', unreadSections }
       if (request.kind === 'waiting' && review.decision === 'approve-wait') {
@@ -1099,7 +1106,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     try {
       const accepted = store.getTask(task.taskId)?.executionEvents?.find(event => event.kind === 'coordination-review-accepted' && event.requestId === requestId)
       if (accepted) {
-        const restored = kind === 'completion' ? completionReviewSchema.parse(accepted.review) : kind === 'waiting' ? waitingReviewSchema.parse(accepted.review) : checkpointReviewSchema.parse(accepted.review)
+        const restored = reviewSchemas[kind].parse(accepted.review)
         if (kind === 'completion' && restored.accepted) {
           // 原审阅与当前候选、Topic、流程身份相同，重新构造非持久的通知准备态。
           request.readReview = true

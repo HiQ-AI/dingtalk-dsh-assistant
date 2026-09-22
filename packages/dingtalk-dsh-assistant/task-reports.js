@@ -2,11 +2,57 @@ import { fingerprint, stableId } from './topic-model.js'
 
 export const deterministicReviewFailure = (error) => /^(?:topic_context_(?:budget_exceeded|metadata_too_large)|task_review_envelope_too_large|route_context_budget_exceeded)(?::|$)/u.test(error ?? '')
 
+// 只有明确由报告内容导致的缺口才交回叶子修订；基础设施及未知错误停止推进。
+const businessRejections = new Set([
+  'task_checkpoint_rejected', 'task_result_objective_not_covered', 'task_waiting_not_required',
+  'task_worktree_result_mismatch', 'task_checkpoints_insufficient', 'task_checkpoints_remaining',
+  'task_checkpoint_plan_required', 'task_workflow_plan_rejected', 'task_workflow_assessment_required',
+  'task_checkpoint_plan_insufficient', 'task_checkpoint_plan_stage_duplicate',
+  'task_workflow_assessment_refs_invalid', 'task_workflow_inapplicable_prompt_invalid',
+  'task_workflow_exception_basis_invalid', 'task_workflow_assessment_plan_only',
+  'task_checkpoint_stage_invalid', 'task_checkpoint_progress_requires_stage_completed', 'task_checkpoint_must_advance_one',
+])
+const staleReportErrors = new Set([
+  'task_checkpoint_review_superseded',
+  'task_input_version_stale', 'task_checkpoint_run_changed', 'task_checkpoint_context_changed',
+  'task_result_context_changed', 'task_review_context_changed', 'task_workflow_plan_stale', 'task_prompt_selection_stale',
+])
+export function classifyTaskReportError(error) {
+  const code = String(error?.message ?? error ?? '').split(':', 1)[0]
+  if (code === 'task_input_pending') return 'input-wait'
+  if (staleReportErrors.has(code)) return 'history-only'
+  return businessRejections.has(code) ? 'rejected' : 'failed'
+}
+
 export const taskReportReceiptSchema = { type: 'object', additionalProperties: false, properties: {
-  accepted: { type: 'boolean', const: true }, taskId: { type: 'string' }, submissionId: { type: 'string' },
-  status: { type: 'string', enum: ['input-wait', 'review-wait', 'history-only', 'accepted', 'rejected', 'failed'] },
+  contractVersion: { type: 'integer', const: 2 }, received: { type: 'boolean', const: true }, taskId: { type: 'string' }, submissionId: { type: 'string' },
+  reviewStatus: { type: 'string', enum: ['pending', 'approved', 'rejected', 'stale', 'failed'] },
+  applicationStatus: { type: 'string', enum: ['pending', 'applied', 'superseded', 'blocked'] },
+  nextAction: { type: 'string', enum: ['wait-for-resolution', 'continue', 'revise-report', 'review-current-input', 'repair-system'] },
   instruction: { type: 'string' }, result: { type: 'object', additionalProperties: true }, error: { type: 'string' },
-}, required: ['accepted', 'taskId', 'submissionId', 'status', 'instruction'] }
+}, required: ['contractVersion', 'received', 'taskId', 'submissionId', 'reviewStatus', 'applicationStatus', 'nextAction', 'instruction'] }
+
+const receiptStates = {
+  'input-wait': ['pending', 'pending', 'wait-for-resolution'],
+  'review-wait': ['pending', 'pending', 'wait-for-resolution'],
+  'history-only': ['stale', 'superseded', 'review-current-input'],
+  accepted: ['approved', 'applied', 'continue'],
+  rejected: ['rejected', 'blocked', 'revise-report'],
+  failed: ['failed', 'blocked', 'repair-system'],
+}
+export function taskReportReceipt(taskId, report) {
+  const state = receiptStates[report.status]
+  if (!state) throw new Error(`task_report_status_invalid:${report.status}`)
+  const [reviewStatus, applicationStatus, nextAction] = state
+  return {
+    contractVersion: 2, received: true, taskId, submissionId: report.submissionId, reviewStatus, applicationStatus, nextAction,
+    instruction: reviewStatus === 'pending' ? '报告已保存，尚未批准阶段推进或任务完成。等待 Runtime 事件通知，不重复提交，不继续依赖该批准的动作。'
+      : reviewStatus === 'stale' ? '已保存为历史事实，不推进当前目标；核对当前版本及可复用证据，不重复执行已完成的业务写入。'
+        : reviewStatus === 'failed' ? '报告处理发生系统故障，保持阻塞。由 Host 或维护者修复后按原报告身份显式恢复，不进行业务返工。'
+          : reviewStatus === 'rejected' ? '报告未获批准；按具体缺口修订，形成新报告。' : '报告审阅及应用完成；按处理结果继续。此回执不证明外部通知已送达。',
+    ...(report.receipt ? { result: report.receipt } : {}), ...(report.error ? { error: report.error } : {}),
+  }
+}
 
 // 报告持久化在既有 executionEvents；业务完成判定仍由 Runtime 原有校验执行。
 export function taskReports(task) {
@@ -27,12 +73,7 @@ export function createTaskReportQueue({ store, serialize, hasPendingInput, execu
   const requested = new Set()
   const pending = report => ['input-wait', 'review-wait'].includes(report.status)
   const diagnostic = report => report.reportType === 'checkpoint' && ['scope-conflict', 'evidence-gap', 'risk-changed'].includes(report.value.kind)
-  const receipt = (taskId, report) => ({
-    accepted: true, taskId, submissionId: report.submissionId, status: report.status,
-    instruction: pending(report) ? '报告已保存，尚未批准阶段推进或任务完成。等待 Runtime 事件通知，不重复提交，不继续依赖该批准的动作。'
-      : report.status === 'history-only' ? report.staleReview ? '输入版本变化使待审报告作废；按当前版本重新核对后，仅对仍适用的阶段提交新报告。旧报告不推进目标。' : '已保存为原版本历史事实，不推进当前目标。' : '报告已处理；以处理结果为准。',
-    ...(report.receipt ? { result: report.receipt } : {}), ...(report.error ? { error: report.error } : {}),
-  })
+  const receipt = taskReportReceipt
   async function settle(taskId, report, status, extra = {}) {
     await serialize(() => store.updateTask(taskId, current => ({ ...current,
       executionEvents: [...(current.executionEvents ?? []), { kind: 'task-report-settled', submissionId: report.submissionId,
@@ -62,9 +103,7 @@ export function createTaskReportQueue({ store, serialize, hasPendingInput, execu
           status = result?.accepted === false ? 'rejected' : 'accepted'
         } catch (cause) {
           error = String(cause.message ?? cause).slice(0, 1600)
-          status = error.startsWith('task_input_pending:') ? 'input-wait'
-            : /task_(?:input_version_stale|checkpoint_run_changed|result_context_changed|review_context_changed)(?::|$)/u.test(error) ? 'history-only'
-              : deterministicReviewFailure(error) || /topic_request_not_submitted|topic_request_retry_exhausted|resident_runtime_closed|task_review_request_failed/u.test(error) ? 'failed' : 'rejected'
+          status = classifyTaskReportError(cause)
         }
         task = store.getTask(taskId)
         if (status === 'accepted' && !matchesCurrent(task, report)) status = 'history-only'
