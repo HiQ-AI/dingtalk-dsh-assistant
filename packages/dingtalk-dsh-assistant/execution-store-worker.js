@@ -6,6 +6,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { installEffectsSchema, validateEffectsSchema, reduceEffectCommand, recoverEffects,
   queryEffects, assertRunEffectsDrained, assertNodeEffectsSettled } from './execution-effects.js'
 
+import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced } from './message-ledger.js'
+
 const SCHEMA_VERSION = 1
 const APPLICATION_ID = 0x44534845
 let db, owner, healthy = true
@@ -45,7 +47,7 @@ function canonical(value) {
 function runDto(r) {
   return r && { runId: r.run_id, taskId: r.task_id, workflowId: r.workflow_id, workflowDigest: r.workflow_digest,
     requirementRef: r.requirement_ref, revision: r.revision, generation: r.generation, status: r.status,
-    stopRequested: !!r.stop_requested, recoveryReason: r.recovery_reason, maxClaims: r.max_claims, claimCount: r.claim_count,
+    stopRequested: !!r.stop_requested, pauseRequested: !!r.pause_requested, recoveryReason: r.recovery_reason, maxClaims: r.max_claims, claimCount: r.claim_count,
     createdAt: r.created_at, updatedAt: r.updated_at }
 }
 function nodeDto(n) {
@@ -65,9 +67,11 @@ function currentNode(a) {
   if (n.generation !== integer(a.generation, 'generation', 1) || n.lease_epoch !== integer(a.leaseEpoch, 'leaseEpoch')) fail('NODE_STALE')
   return n
 }
-function activeRun(a, { allowFence = false } = {}) {
+function activeRun(a, { allowFence = false, allowPause = false } = {}) {
   const r = getRun(a.runId)
   if (r.stop_requested || terminalRun(r)) fail('RUN_NOT_ACTIVE')
+  if (r.pause_requested && !allowPause) fail('RUN_PAUSED')
+  if (!allowFence) assertMessageTaskUnfenced(db, r.task_id)
   if (!allowFence && pendingInputs(r.run_id).length) fail('INPUT_PENDING')
   return r
 }
@@ -96,6 +100,7 @@ function install() {
       claim_count INTEGER NOT NULL DEFAULT 0 CHECK(claim_count>=0 AND claim_count<=max_claims),
       status TEXT NOT NULL CHECK(status IN ('queued','running','waiting','succeeded','failed','cancelling','cancelled')),
       stop_requested INTEGER NOT NULL DEFAULT 0 CHECK(stop_requested IN (0,1)),recovery_reason TEXT,
+      pause_requested INTEGER NOT NULL DEFAULT 0 CHECK(pause_requested IN (0,1)),
       created_at TEXT NOT NULL,updated_at TEXT NOT NULL) STRICT;
     CREATE UNIQUE INDEX execution_one_active_task ON execution_runs(task_id)
       WHERE status NOT IN ('succeeded','failed','cancelled');
@@ -122,6 +127,7 @@ function install() {
   `)
   db.prepare('INSERT INTO execution_meta(singleton,instance_id,schema_version) VALUES(1,?,?)').run(workerData.instanceId, SCHEMA_VERSION)
   installEffectsSchema(db)
+  installMessageSchema(db)
 }
 function validate(connection) {
   if (scalar(connection.prepare('PRAGMA application_id').get()) !== APPLICATION_ID) fail('STORE_APPLICATION_MISMATCH')
@@ -133,7 +139,7 @@ function validate(connection) {
   if (integrity.length !== 1 || scalar(integrity[0]) !== 'ok') fail('STORE_INTEGRITY_FAILED')
   if (connection.prepare('PRAGMA foreign_key_check').all().length) fail('STORE_FOREIGN_KEY_FAILED')
   for (const sql of [
-    'SELECT run_id,task_id,workflow_id,workflow_digest,requirement_ref,revision,generation,max_claims,claim_count,status,stop_requested,recovery_reason,created_at,updated_at FROM execution_runs LIMIT 0',
+    'SELECT run_id,task_id,workflow_id,workflow_digest,requirement_ref,revision,generation,max_claims,claim_count,status,stop_requested,pause_requested,recovery_reason,created_at,updated_at FROM execution_runs LIMIT 0',
     'SELECT node_run_id,run_id,node_id,node_version,executor,position,generation,lease_epoch,current,input_ref,input_digest,status,session_id,session_bound,drained,drain_evidence_ref,output_ref,evidence_refs,wait_reason FROM execution_nodes LIMIT 0',
     'SELECT seq,run_id,input_id,source_key,requirement_ref,status,accepted_at,applied_at FROM execution_inputs LIMIT 0',
     'SELECT command_id,payload_digest,result,created_at FROM execution_receipts LIMIT 0',
@@ -146,6 +152,7 @@ function validate(connection) {
   // running+drained 在确认退出和提交结果之间是合法持久检查点。
   if (bad.length) fail('STORE_INVARIANT_FAILED')
   validateEffectsSchema(connection)
+  validateMessageSchema(connection)
 }
 function configure() {
   db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=1000;')
@@ -162,10 +169,11 @@ function recover() {
     const reason = JSON.stringify({ kind: 'recovery', reference: 'controller-restarted' })
     db.prepare("UPDATE execution_nodes SET status='waiting',wait_reason=? WHERE current=1 AND status='running'").run(reason)
     for (const row of active) {
-      db.prepare("UPDATE execution_runs SET status=CASE WHEN stop_requested=1 THEN 'cancelling' ELSE 'waiting' END,recovery_reason='controller-restarted',updated_at=? WHERE run_id=?").run(now, row.run_id)
+      db.prepare("UPDATE execution_runs SET status=CASE WHEN stop_requested=1 THEN 'cancelling' ELSE 'waiting' END,recovery_reason=CASE WHEN pause_requested=1 THEN recovery_reason ELSE 'controller-restarted' END,updated_at=? WHERE run_id=?").run(now, row.run_id)
       emitEvent(null, 'node.recovery', { nodeRunId: row.node_run_id }, now)
     }
     recoverEffects(db, context(null, now))
+    recoverMessages(db)
     db.exec('COMMIT')
   } catch (cause) { rollback(); throw cause }
 }
@@ -204,8 +212,9 @@ function coreCommand(command, now) {
       if (old.requirement_ref !== a.requirementRef) fail('INPUT_SOURCE_CONFLICT')
       return { status: 'applied', inputId: old.input_id, seq: old.seq, accepted: false }
     }
-    const r = activeRun(a, { allowFence: true })
+    const r = activeRun(a, { allowFence: true, allowPause: true })
     if (a.expectedRevision !== undefined && r.revision !== integer(a.expectedRevision, 'expectedRevision')) fail('REVISION_CONFLICT')
+    if (a.expectedRevision !== undefined && pendingInputs(a.runId).length) fail('INPUT_PENDING')
     if (db.prepare('SELECT input_id FROM execution_inputs WHERE run_id=? AND input_id=?').get(a.runId, a.inputId)) fail('INPUT_ID_CONFLICT')
     const inserted = db.prepare("INSERT INTO execution_inputs(run_id,input_id,source_key,requirement_ref,status,accepted_at) VALUES(?,?,?,?,'pending',?)")
       .run(a.runId, a.inputId, a.sourceKey, a.requirementRef, now)
@@ -239,6 +248,33 @@ function coreCommand(command, now) {
     for (const id of a.inputIds) db.prepare("UPDATE execution_inputs SET status='applied',applied_at=? WHERE run_id=? AND input_id=?").run(now, r.run_id, id)
     db.prepare("UPDATE execution_runs SET requirement_ref=?,revision=revision+1,generation=?,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
       .run(a.requirementRef, generation, now, r.run_id)
+    return { status: 'applied', run: runDto(getRun(r.run_id)) }
+  }
+  if (command.kind === 'run.pause') {
+    object(a, ['runId', 'reason']); text(a.reason, 'reason')
+    const r = activeRun(a, { allowFence: true, allowPause: true })
+    if (!r.pause_requested) db.prepare("UPDATE execution_runs SET pause_requested=1,status='waiting',revision=revision+1,recovery_reason='pause_requested',updated_at=? WHERE run_id=?").run(now, r.run_id)
+    return { status: 'applied', run: runDto(getRun(r.run_id)) }
+  }
+  if (command.kind === 'run.paused') {
+    object(a, ['runId'])
+    const r = getRun(a.runId)
+    if (!r.pause_requested || r.stop_requested || terminalRun(r)) fail('RUN_NOT_PAUSING')
+    if (nodes(r.run_id).some(n => !n.drained)) fail('NODE_NOT_DRAINED')
+    assertRunEffectsDrained(db, r.run_id)
+    db.prepare("UPDATE execution_nodes SET status='ready',wait_reason=NULL WHERE run_id=? AND current=1 AND (status='running' OR (status='waiting' AND json_extract(wait_reason,'$.reference')='controller-restarted'))").run(r.run_id)
+    db.prepare("UPDATE execution_runs SET status='waiting',recovery_reason='user_pause',updated_at=? WHERE run_id=?").run(now, r.run_id)
+    return { status: 'applied', run: runDto(getRun(r.run_id)) }
+  }
+  if (command.kind === 'run.resume') {
+    object(a, ['runId'])
+    const r = getRun(a.runId)
+    if (!r.pause_requested || r.stop_requested || terminalRun(r) || r.recovery_reason !== 'user_pause') fail('RUN_NOT_USER_PAUSED')
+    if (nodes(r.run_id).some(n => !n.drained)) fail('NODE_NOT_DRAINED')
+    assertRunEffectsDrained(db, r.run_id)
+    const ready = nodes(r.run_id).some(n => n.status === 'ready')
+    db.prepare('UPDATE execution_runs SET pause_requested=0,status=?,revision=revision+1,recovery_reason=?,updated_at=? WHERE run_id=?')
+      .run(ready || pendingInputs(r.run_id).length ? 'queued' : 'waiting', ready ? null : 'recovery-required', now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
   if (command.kind === 'run.stop') {
@@ -359,7 +395,7 @@ function command(value) {
       return { replayed: true, dispatchEligible: false, result: JSON.parse(prior.result) }
     }
     const core = coreCommand(value, now)
-    const effect = core === null ? reduceEffectCommand(db, value, context(value.id, now)) : null
+    const effect = core === null ? (reduceMessageCommand(db, value, context(value.id, now)) ?? reduceEffectCommand(db, value, context(value.id, now))) : null
     if (core === null && effect === null) fail('UNKNOWN_COMMAND')
     const result = core ?? effect.result
     db.prepare('INSERT INTO execution_receipts(command_id,payload_digest,result,created_at) VALUES(?,?,?,?)').run(value.id, hash, JSON.stringify(result), now)
@@ -373,6 +409,14 @@ function command(value) {
   }
 }
 function query(value) {
+  if (value?.kind === 'run.list') {
+    const limit = integer(value.limit ?? 100, 'limit', 1); if (limit > 200) fail('INVALID_ARGUMENT')
+    const before = integer(value.beforeSequenceId ?? Number.MAX_SAFE_INTEGER, 'beforeSequenceId', 1)
+    if (value.activeOnly !== undefined && typeof value.activeOnly !== 'boolean') fail('INVALID_ARGUMENT')
+    return db.prepare("SELECT rowid AS sequence_id,* FROM execution_runs WHERE rowid<? AND (? IS NULL OR task_id=?) AND (?=0 OR (status NOT IN ('succeeded','failed','cancelled') AND pause_requested=0)) ORDER BY rowid DESC LIMIT ?")
+      .all(before, value.taskId ? text(value.taskId, 'taskId') : null, value.taskId ?? null, value.activeOnly ? 1 : 0, limit)
+      .map(row => ({ ...runDto(row), sequenceId: row.sequence_id }))
+  }
   if (value?.kind === 'run') {
     object(value, ['kind', 'runId', 'includeHistory'], ['kind', 'runId'])
     if (value.includeHistory !== undefined && typeof value.includeHistory !== 'boolean') fail('INVALID_ARGUMENT')
@@ -391,6 +435,8 @@ function query(value) {
     const r = db.prepare('SELECT result FROM execution_receipts WHERE command_id=?').get(value.commandId)
     return r ? { replayed: true, dispatchEligible: false, result: JSON.parse(r.result) } : null
   }
+  const messageResult = queryMessages(db, value)
+  if (messageResult !== undefined) return messageResult
   const result = queryEffects(db, value)
   if (result === null || result === undefined) fail('UNKNOWN_QUERY')
   return result

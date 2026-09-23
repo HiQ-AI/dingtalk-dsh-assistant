@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, writeFile, readFile, unlink, readdir, symlink } from 'n
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createManagedWorkspaces } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
+import { freezeCandidate, readCandidate } from '../packages/dingtalk-dsh-assistant/execution-candidate.js'
 
 const exec = promisify(execFile)
 const git = async (directory, ...args) => (await exec('git', ['-C', directory, ...args], { windowsHide: true })).stdout.trim()
@@ -19,6 +20,17 @@ async function setup() {
   const input = { runId: 'run-synthetic', generation: 1, requirementDigest: 'a'.repeat(64), baseCommit }
   return { directory, root, sourceRepository, adapter, input }
 }
+
+test('Windows深目录超过MAX_PATH仍能提取固定基线并冻结读取候选', { skip: process.platform !== 'win32' }, async () => {
+  const f = await setup(), root = join(f.directory, 'nested-' + 'x'.repeat(90))
+  await mkdir(root)
+  const adapter = await createManagedWorkspaces({ root, sourceRepository: f.sourceRepository })
+  const prepared = await adapter.prepare(f.input)
+  assert.ok(join(prepared.directory, '.git/objects/pack/pack-' + 'a'.repeat(40) + '.keep').length > 260)
+  assert.equal((await adapter.execute(prepared)).status, 'succeeded')
+  const candidate = await freezeCandidate({ repository: prepared.directory, baseCommit: f.input.baseCommit, generation: 1, requirementDigest: f.input.requirementDigest })
+  assert.equal((await (await readCandidate(candidate)).readFile('value.txt')).toString(), 'base\n')
+})
 test('受管代际只取固定base，不带源未提交文件；旧代删除与用户变更不污染新代', async () => {
   const f = await setup()
   await writeFile(join(f.sourceRepository, 'value.txt'), 'source user edit\n'); await writeFile(join(f.sourceRepository, 'private.txt'), 'untracked\n')

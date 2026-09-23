@@ -109,6 +109,28 @@ async function submitWebTask(request, response, runtime, kind, taskId) {
 export async function handleRequest(request, response, store, { testApiEnabled = false, transport = 'fake-dws', outboundAuthorized = false, modelMode = 'fake', checkForUpdatesImpl = checkForUpdates } = {}) {
   applyResidentCorsHeaders(request, response)
   const url = new URL(request.url ?? '/', 'http://localhost')
+  const workflowTaskAction = /^\/tasks\/([^/]+)\/(context|cancel|reopen|archive|title)$/u.exec(url.pathname)
+  if (workflowTaskAction && ['POST', 'PUT'].includes(request.method) && await store.isWorkflowTask?.(decodeURIComponent(workflowTaskAction[1]))) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
+    const action = workflowTaskAction[2]
+    if (request.method !== 'POST' || !['cancel', 'context'].includes(action)) return send(response, 409, { error: 'WORKFLOW_WEB_ACTION_UNSUPPORTED' })
+    try {
+      const fields = { requestId: requiredText, inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), topicRefs: z.array(z.strictObject({ topicId: requiredText, revision: z.number().int().positive() })).optional() }
+      const body = z.strictObject({ ...fields, ...(action === 'cancel' ? { reason: requiredText.max(16000) } : { context: requiredText.max(16000) }) }).parse(await readJson(request))
+      const result = await store.submitWorkflowTask({ ...body, action, taskId: decodeURIComponent(workflowTaskAction[1]) })
+      return send(response, 202, result)
+    } catch(error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|PENDING|TERMINAL/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
+  const workflowReply = /^\/workflows\/([^/]+)\/requests\/([^/]+)\/answer$/u.exec(url.pathname)
+  if (request.method === 'POST' && workflowReply) {
+    const address = request.socket?.remoteAddress
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.resumeWorkflowRequest) return send(response, 404, { error: 'workflow_disabled' })
+    try {
+      const body = z.strictObject({ eventId: requiredText, answer: requiredText.max(16000) }).parse(await readJson(request))
+      return send(response, 200, await store.resumeWorkflowRequest({ ...body, runId: decodeURIComponent(workflowReply[1]), requestId: decodeURIComponent(workflowReply[2]) }))
+    } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : 400, { error: error.message }) }
+  }
   if (request.method === 'OPTIONS') return send(response, 204, null)
   if (request.method === 'GET' && url.pathname === '/health') {
     const recoveryIssues = store.listRecoveryIssues()
@@ -148,7 +170,8 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 200, { ...context, topic: { ...topicSummary(context.topic), summary: context.topic.summary, openQuestions: context.topic.openQuestions } })
     } catch (error) { return send(response, 400, { error: error.message }) }
   }
-  if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, store.listTasks().map(task => ({ ...task, workflowProgress: taskBoardProgress(task) })))
+  if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, (await (store.listTaskView?.() ?? store.listTasks())).map(task => ({ ...task, workflowProgress: taskBoardProgress(task) })))
+  if (request.method === 'GET' && url.pathname === '/state/workflows') return send(response, 200, await store.getWorkflowState?.(url.searchParams.get('runId') ?? undefined) ?? { enabled: false })
   if (request.method === 'GET' && url.pathname === '/state/task-timings') return send(response, 200, store.listTaskTimings())
   if (request.method === 'GET' && url.pathname === '/state/performance') return send(response, 200, store.listPerformance(Object.fromEntries(['day', 'sessionId', 'groupId', 'taskId', 'requestId', 'submissionId'].filter(key => url.searchParams.has(key)).map(key => [key, url.searchParams.get(key)]))))
   if (request.method === 'GET' && url.pathname === '/state/authorizations') return send(response, 200, store.listAuthorizationRequests())

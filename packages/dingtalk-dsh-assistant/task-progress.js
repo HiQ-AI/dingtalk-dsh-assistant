@@ -8,6 +8,7 @@ export const taskOutcome = task => task.outcome ?? (task.state === 'completed' ?
 export const taskOutcomeLabel = task => ({ succeeded: '已成功', cancelled: '已取消', failed: '已失败', 'legacy-unknown': '历史结果未知' })[taskOutcome(task)]
 
 export function taskBoardProgress(task) {
+  if (task.engine === 'workflow-v2') return { outcome: taskOutcome(task), outcomeLabel: taskOutcomeLabel(task), stages: (task.executionNodes ?? []).map(node => ({ stageId: node.nodeId, title: node.title ?? node.nodeId, completed: node.status === 'succeeded' })) }
   const completed = new Set(acceptedTaskStageOutputs(task).map(item => item.stageOutput.stageId))
   return { outcome: taskOutcome(task), outcomeLabel: taskOutcomeLabel(task), stages: (task.plan?.stages ?? []).map(stage => ({
     stageId: stage.stageId, title: stage.title, completed: completed.has(stage.stageId),

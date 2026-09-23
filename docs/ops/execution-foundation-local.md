@@ -1,6 +1,8 @@
-# 实验性执行底座本地运维
+# 执行底座与消息工作流本地运维
 
-本说明对应 M1 的独立执行入口 `@zzusp/dingtalk-dsh-assistant/execution`。它**不默认加载**，不读取或迁移 resident 的 Task 账；现有群消息、Web 看板和 resident 流程继续使用原入口。当前仅准入受信定义的 `pure/read` 顺序节点，用于隔离环境中的合成任务与受控读取。
+第 1—8 节记录独立执行底座的装配与边界，第 9 节为当前 resident 消息工作流的正式切换步骤。独立入口与 resident 集成入口不能同时对同一控制库持有写者。以下 M1/M2 描述仅适用于独立装配，不代表第 9 节集成入口仍缺少消息、通知或工程适配器。
+
+M1 对应的独立执行入口 `@zzusp/dingtalk-dsh-assistant/execution`。它**不默认加载**，不读取或迁移 resident 的 Task 账；现有群消息、Web 看板和 resident 流程继续使用原入口。当前仅准入受信定义的 `pure/read` 顺序节点，用于隔离环境中的合成任务与受控读取。
 
 M2 增加了显式注册的本地 Git 交付适配器，见第 7 节；默认未注册时仍只准入 pure/read。没有生产发布、SQL、钉钉发送或 shell 作业启动适配器。不得将现有生产任务、工程 shell、凭据操作或旧存储迁入本入口；工具白名单与独立目录不构成操作系统隔离。局部测试不代表真实模型质量、渠道送达、整体时延、token 成本或完整业务链已经验收。
 
@@ -200,7 +202,7 @@ await store.query({ kind: 'safety.get' })
 
 ## 7. M2 本地候选与受控 Git 交付
 
-包的 `./execution` 入口导出 `freezeCandidate`、`readCandidate`、`verifyCandidate` 和 `createGitDelivery`。M2 已提供第 8 节的受管代际目录；跨代自动清理、GitHub PR 适配器、真实项目 shell 检查、消息通知及完整开发业务准入仍未完成。
+包的 `./execution` 入口导出 `freezeCandidate`、`readCandidate`、`verifyCandidate` 和 `createGitDelivery`。M2 已提供第 8 节的受管代际目录；跨代自动清理不在本节范围。第 9 节 resident 集成另有固定命令检查、GitHub PR 与通知适配器；工程能力必须通过 workflow.repositories 显式准入，不能把本节独立示例当作完整工程配置。
 
 ### 冻结与验证
 
@@ -267,3 +269,53 @@ async function prepareDirectory({ input, runId, generation, requirementDigest, p
 结果丢失时沿用第7节 `delivery.reconcile(effectId)` 后恢复：完整归属、完成标记及固定HEAD仍相符才能复用；之后用户对文件的正常编辑保留。目录不存在、初始化残缺、归属或HEAD冲突时不覆盖，保持恢复错误/unknown供定位。已记录创建成功的目录再次使用前也重新检查当前身份，旧receipt不是当前目录存在的证明。
 
 准入限制：SHA-1独立非bare源仓库；不支持源worktree共享对象、`.gitattributes`、链接、子模块、shallow、alternates/grafts、hook和执行型Git配置。初始化Git使用独立global/system配置边界；不运行项目脚本。文件上限与候选一致（单文件16MiB、合计64MiB、10000项）。独立仓库和元信息不构成OS权限/网络沙箱，不能因此开放任意shell。
+
+## 9. 消息工作流按群离线切换
+
+切换工具为 `scripts/cutover-message-workflow.mjs`，不是在线迁移。运行器已在旧群入口注册和每次处理前调用 `workflow-cutover.js` 的 `readWorkflowSeal({ sealPath, conversationId })`；返回 `blockLegacy: true` 时禁止旧引擎处理该群。`sealed` 已经禁止旧入口，不能等 `active` 才禁止。文件损坏、快照校验失败应阻止服务启动，不能退化为“未配置”。只有部署包含此检查的新二进制才可使用该封存协议，旧二进制不理解 seal，禁止再次可写启动。
+
+1. 先在当前运行时逐项核对所选群的活动 Task、入站未结记录、话题决策、协调请求、任务保留、人工请求、Outbox 与待通知。未结记录必须按原业务入口处理并独立读回；工具不会删除、置成功或 supersede 它们。
+2. 记录 Runtime 真实 PID、端口与启动该实例的计划任务准确名称。禁用自动启动，按前面的停机规范停止实例；再次确认 PID 不存在、端口不监听、计划任务不存在或已 Disabled。不要只检查 HTTP 请求失败。
+3. 使用实际 DSH_HOME 路径显式传参；以下均是占位符，不能直接照抄。`--runtime-pid` 是刚才已停止的真实 PID，不是任意不存在的 PID。计划任务准确名称不存在时，探测结果会记 `scheduledTaskPresent:false`；仍须由操作者确认没有其它自启入口。
+
+```powershell
+$legacyFile = '<DSH_HOME>/storages/dingtalk-dsh-assistant/dingtalk_dsh_assistant.json'
+$cutoverJournal = '<旧JSON同目录>/dingtalk_dsh_assistant.workflow-seal.json'
+$controlDb = '<本实例执行数据目录>/control.sqlite'
+$artifactDirectory = '<本实例执行数据目录>/artifacts'
+$instanceId = '<固定实例ID>'
+$groupId = '<指定群ID>'
+$stoppedRuntimePid = '<刚停止的真实PID>'
+$runtimePort = '<Runtime端口>'
+$scheduledTaskName = '<准确计划任务名称>'
+
+node scripts/cutover-message-workflow.mjs --legacy $legacyFile --journal $cutoverJournal --db $controlDb --artifacts $artifactDirectory --instance $instanceId --group $groupId --runtime-pid $stoppedRuntimePid --runtime-port $runtimePort --scheduled-task $scheduledTaskName --check
+```
+
+`--check` 零写入：只读旧 JSON、已有控制库身份、现有 journal 与 Windows 进程/监听/计划任务。返回 `CHECK_PASS` 只表示本次离线门禁通过，不代表模型、渠道或新链路业务验收。出现 `CUTOVER_LEGACY_NOT_DRAINED`，按 `details.issues` 中的原始 ID 对账；不得为部署而清空队列。已有库缺消息 schema 返回 `CUTOVER_OFFLINE_SCHEMA_UPGRADE_REQUIRED`，不得在线补表或覆盖原库。
+
+4. 自检通过且目标未改变，再将上述末尾的 `--check` 替换成 `--execute`。工具再次探测停机、校验旧文件摘要，保存不可变 `dingtalk_dsh_assistant.workflow-seal.json.legacy-snapshot.json`，先持久写单一 journal 的 `sealed` 阶段，再显式初始化新控制库/工件目录并调用同库 `message.group.begin` 与 `message.group.activate`，最后独立回读群状态后将 journal 更新为 `active`。旧 JSON 内容不变。
+5. 运行器从 storageDomain 的 JSON backend.root 自动定位固定相邻 seal，无需可被误删的 seal 路径配置；安装、启动新实例，回读 seal 摘要、控制库 instanceId、group engine/epoch、实际包文件摘要及新 PID，然后分别验收消息接收、S/R/I、Task 首节点活动、任务状态与通知事实。不能用 `ACTIVATED` 代替这些业务证据。
+
+### 中断恢复与边界
+
+工具在 snapshot 落盘后、journal sealed 后、控制库初始化后、group begin 后任意中断，应保留全部现场，用同一参数重新执行 `--check` 和 `--execute`。命令 ID 由 journalId 和 groupId 固定派生；已接管群只读核验，不递增第二次 epoch。新建数据库后工件目录创建中断也可恢复，不删除数据库重来。
+
+seal 是新旧入口的共同协议，JSON 与 SQLite 不是跨库原子事务。安全前提是停机窗口内已禁用所有自启入口，且恢复启动使用遵守 seal 的版本。工具不声称可以阻止操作者手动启动不认识 seal 的历史程序。PID/端口/计划任务检查是当前 OS 观测，不能证明任意未知自启机制不存在。
+
+journal 已 sealed 后不得直接删 journal 或恢复旧快照来“回滚”。控制库未接管时可以前向重试；接管后产生的新消息、审批和效果必须保留。`message.group.abort` 只停止未完成的控制库切换并保留 buffered 消息，不构成恢复旧引擎业务写入的充分证据。旧入口放开必须另行完成无新事实/无效果的对账和显式交接；本工具不提供绕过动作。
+
+同源编辑验收：本地测试覆盖同文版本复用、否定编辑取消原任务、运行中修订同一任务输入代际，以及执行前取消/暂停修订。编辑未能关联原任务时保留澄清与源屏障，不视为完成。切换仍要求旧账 Outbox、协调、任务等实际排空；测试通过不能替代现场对账。
+
+### 工程仓库准入与固定检查
+
+`workflow.repositories` 必须来自实际仓库核验。源目录需要独立 `.git` 目录、无非 sample hook、无受禁止的 Git 配置/替代对象源、无 `.gitattributes`；带用户 hook 的主仓不得删除 hook 来过门禁。可由部署操作者在独立目录 `git init --template=` 后，仅 fetch 已核对的 commit，建立固定 `refs/remotes/origin/main` 并 detached checkout；不要复制主仓 `.git` 或未提交修改。更新基线必须另行核验 commit、检查配置和版本，不能让模型自行更新源目录。
+
+本机 `D:/project/jimu_dataset_web` 的 origin 为 `https://github.com/HiQ-AI/dataset-web.git`，有有效 hooks，不能直接准入；其基线源码可在独立 source checkout 中验证。项目真实脚本为 `build`、`build:test`、`lint`，没有 `test`。检查任务在冻结候选的独立目录执行，依赖不会继承主仓。固定 `checks.steps` 应含冻结 lockfile 的依赖安装和真实构建；Windows `shell:false` 下使用 Node 可执行文件与 Yarn CLI JS 的绝对路径，不能直接把 `.ps1/.cmd` 作为 executable。必须先在隔离候选目录实跑成功，再写入正式 profile，不能用空 repositories 或仅语法检查宣称工程链已准入。
+## 工程确定失败与代际续接
+
+固定工程检查失败会显示 `ENGINEERING_VERIFICATION_FAILED`，不由5秒恢复定时器反复运行；新增需求仍通过同一Task输入代际重新验证。已推送后补充需求从上一交付SHA创建新代目录，精确核对远端未漂移后快进同一任务分支、更新同一OPEN PR。旧PR关闭或身份不符不另建PR绕过。
+
+检查节点取消/超时须等待前台进程树退出。Host异常退出后的未排空外部检查保留 `EXECUTOR_DRAIN_EVIDENCE_REQUIRED` 屏障；SQLite独占锁不是旧子进程退出证明，禁止手改drained放行。
+
+Web 操作验收需使用配置明确映射的 `workflow.webActorId`。新任务取消/补充走同库 Web 事件与 Controller，不依赖旧 Topic；验证重复 requestId、跨站 Origin、伪造 actor、陈旧版本及暂停补充反例。归档/改名/重开尚未实现，返回明确冲突，不转发旧引擎。持久 Web 事件准备后中断由服务恢复接纳；输入接纳前后不得改写 Task 执行基线字段。

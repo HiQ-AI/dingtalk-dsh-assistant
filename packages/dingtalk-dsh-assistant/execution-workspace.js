@@ -17,7 +17,7 @@ function git(directory, args) {
   return new Promise((resolve, reject) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
     Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' })
-    const child = spawn('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-C', directory, ...args], { env, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.longpaths=true', '-C', directory, ...args], { env, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
     const chunks = []; let size = 0, errorText = '', failure
     const stop = code => { failure ??= executionError(code); child.kill() }
     const timer = setTimeout(() => stop('WORKSPACE_GIT_TIMEOUT'), 30000)
@@ -123,7 +123,12 @@ export async function createManagedWorkspaces({ root, sourceRepository }) {
     const container = dirname(prepared.directory)
     await mkdir(container) // EEXIST是冲突，不能接管、reset或删除。
     await writeExclusive(join(container, 'metadata.json'), prepared)
-    await git(container, ['clone', '--no-local', '--no-hardlinks', '--no-checkout', '--template=', '--', sourceRepository, prepared.directory])
+    // Git for Windows旧版本clone将绝对GIT_DIR传给index-pack，深目录触发内部MAX_PATH。
+    // 在最终受管目录初始化并定向fetch固定基线，仍不共享对象/硬链接或复制源工作目录。
+    await mkdir(prepared.directory)
+    await git(prepared.directory, ['init', '--template='])
+    await git(prepared.directory, ['config', 'core.longpaths', 'true'])
+    await git(prepared.directory, ['fetch', '--no-tags', '--', sourceRepository, prepared.baseCommit])
     await git(prepared.directory, ['-c', 'core.autocrlf=false', 'checkout', '--detach', prepared.baseCommit])
     if (await text(prepared.directory, ['rev-parse', 'HEAD']) !== prepared.baseCommit) fail('WORKSPACE_BASE_CONFLICT')
     if (canonicalExecutionJson((await checkedPaths(prepared.directory)).sort()) !== canonicalExecutionJson(base.files.map(file => file.path).sort())) fail('WORKSPACE_CHECKOUT_MISMATCH')

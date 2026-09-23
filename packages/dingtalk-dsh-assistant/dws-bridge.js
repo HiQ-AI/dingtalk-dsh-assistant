@@ -98,6 +98,8 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         if (['failed', 'decision-failed', 'decision-commit-failed'].includes(persisted?.agentDeliveryStatus)) await runtime.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'skipped' })
         return
       }
+      // 新工作流先持久化原事件与资源引用；材料节点按依赖读取图片，接收不占下载队列。
+      if (runtime.isWorkflowGroup?.(message.groupId)) return runtime.ingest(message)
       const factsChanged = persisted !== undefined && (
         (message.senderName !== undefined && message.senderName !== persisted.senderName) ||
         (message.senderOpenDingTalkId !== undefined && message.senderOpenDingTalkId !== persisted.senderOpenDingTalkId) ||

@@ -12,6 +12,81 @@ const workflow = execute => ({ id: 'synthetic', version: '1', nodes: [
   { id: 'calculate', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: number, outputSchema: number, mapInput: ({ requirement }) => requirement, execute: execute ?? (async ({ input }) => input + 1) },
   { id: 'verify', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: number, outputSchema: number, mapInput: ({ previousOutput }) => previousOutput, execute: async ({ input }) => input * 2 },
 ] })
+
+test('暂停等待真实排空，保留新输入，系统恢复不解除用户暂停，resume先应用新输入', async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), calls = []
+  const { controller, artifacts } = await setup(t, workflow(async ({ input, signal }) => {
+    calls.push(input)
+    if (input === 1) { entered.resolve(); await release.promise; signal.throwIfAborted() }
+    return input + 1
+  }))
+  await controller.createRun({ commandId: 'create', taskId: 'task', runId: 'run', workflowId: 'synthetic', input: 1 })
+  await entered.promise
+  await controller.pause({ commandId: 'pause', runId: 'run', reason: 'user pause' })
+  assert.equal((await controller.state('run')).run.recoveryReason, 'pause_requested')
+  await assert.rejects(controller.resume({ commandId: 'early-resume', runId: 'run' }), { code: 'RUN_NOT_USER_PAUSED' })
+  await controller.changeInput({ commandId: 'change', runId: 'run', inputId: 'input', sourceKey: 'source', input: 9 })
+  release.resolve()
+  let state = await controller.whenIdle('run')
+  assert.equal(state.run.recoveryReason, 'user_pause')
+  assert.equal(state.pendingInputCount, 1)
+  await controller.recover({ commandId: 'system-recover', runId: 'run' })
+  state = await controller.whenIdle('run')
+  assert.equal(state.run.pauseRequested, true)
+  assert.deepEqual(calls, [1])
+  await controller.resume({ commandId: 'resume', runId: 'run' })
+  state = await controller.whenIdle('run')
+  assert.equal(state.run.status, 'succeeded')
+  assert.equal(await artifacts.read(state.nodes[1].outputRef), 20)
+  assert.deepEqual(calls, [1, 9])
+})
+
+test('取消的任务不能通过resume复活', async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const { controller } = await setup(t, workflow(async ({ signal }) => { entered.resolve(); await release.promise; signal.throwIfAborted(); return 1 }))
+  await controller.createRun({ commandId: 'create', taskId: 'task', runId: 'run', workflowId: 'synthetic', input: 1 })
+  await entered.promise
+  await controller.stop({ commandId: 'stop', runId: 'run', reason: 'cancel' }); release.resolve()
+  assert.equal((await controller.whenIdle('run')).run.status, 'cancelled')
+  await assert.rejects(controller.resume({ commandId: 'resume', runId: 'run' }), { code: 'RUN_NOT_USER_PAUSED' })
+})
+
+test('暂停在排空前重启：系统恢复仅完成暂停，用户resume才重领节点', async t => {
+  const { store, artifacts, controller, dbPath, instanceId } = await setup(t)
+  const definition = defineExecutionWorkflow(workflow()), requirement = await artifacts.put(1)
+  const input = await artifacts.put({ workflowDigest: definition.digest, nodeId: 'calculate', nodeVersion: '1', requirementRef: requirement.ref, data: 1 })
+  await store.command({ id: 'create', kind: 'run.create', args: { runId: 'run', taskId: 'task', workflowId: definition.id, workflowDigest: definition.digest, requirementRef: requirement.ref,
+    nodes: definition.nodes.map((n, index) => ({ nodeId: n.id, nodeVersion: n.version, executor: n.executor, inputRef: index ? null : input.ref, inputDigest: index ? null : input.digest })) } })
+  await store.command({ id: 'claim', kind: 'node.claim', args: { runId: 'run', nodeId: 'calculate', expectedGeneration: 1, expectedLeaseEpoch: 0 } })
+  await store.command({ id: 'pause', kind: 'run.pause', args: { runId: 'run', reason: 'user pause' } })
+  await controller.close(); await store.close()
+  const reopened = await openExecutionStore({ dbPath, instanceId })
+  const resumed = createExecutionController({ store: reopened, artifacts, workflows: [workflow()] })
+  t.after(async () => { await resumed.close(); await reopened.close() })
+  await resumed.recover({ commandId: 'recover', runId: 'run' })
+  const paused = await resumed.whenIdle('run')
+  assert.equal(paused.run.recoveryReason, 'user_pause')
+  assert.equal(paused.nodes[0].leaseEpoch, 1)
+  await resumed.resume({ commandId: 'resume', runId: 'run' })
+  assert.equal((await resumed.whenIdle('run')).run.status, 'succeeded')
+})
+
+test('当前定义改变时注册历史定义，旧run按旧digest续接而新run用当前定义', async t => {
+  const { store, artifacts, controller } = await setup(t)
+  const old = workflow(), definition = defineExecutionWorkflow(old), requirement = await artifacts.put(2)
+  const input = await artifacts.put({ workflowDigest: definition.digest, nodeId: 'calculate', nodeVersion: '1', requirementRef: requirement.ref, data: 2 })
+  await store.command({ id: 'old-create', kind: 'run.create', args: { runId: 'old-run', taskId: 'old-task', workflowId: definition.id, workflowDigest: definition.digest, requirementRef: requirement.ref,
+    nodes: definition.nodes.map((n, index) => ({ nodeId: n.id, nodeVersion: n.version, executor: n.executor, inputRef: index ? null : input.ref, inputDigest: index ? null : input.digest })) } })
+  await controller.close()
+  const replacement = createExecutionController({ store, artifacts, workflows: [workflow(async ({ input }) => input + 10)], historicalWorkflows: [old] })
+  t.after(() => replacement.close())
+  await replacement.recover({ commandId: 'recover', runId: 'old-run' })
+  let state = await replacement.whenIdle('old-run')
+  assert.equal(await artifacts.read(state.nodes[1].outputRef), 6)
+  await replacement.createRun({ commandId: 'new-create', taskId: 'new-task', runId: 'new-run', workflowId: 'synthetic', input: 2 })
+  state = await replacement.whenIdle('new-run')
+  assert.equal(await artifacts.read(state.nodes[1].outputRef), 24)
+})
 async function setup(t, definition = workflow()) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-execution-controller-'))
   const dbPath = join(directory, 'control.db'), instanceId = 'synthetic-instance'
@@ -201,4 +276,29 @@ test('大量合法长inputId分批应用，不超过RPC上限且只运行最后�
   assert.equal(state.pendingInputCount, 0)
   assert.equal(await artifacts.read(state.nodes[1].outputRef), 132)
   assert.deepEqual(calls, [0, 65])
+})
+
+test('外部检查未排空跨Store重启保留屏障，真实存活父子进程不能被recover误放行', { skip: process.platform !== 'win32' }, async t => {
+  const { spawn, execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const directory=await mkdtemp(join(tmpdir(),'dsh-drain-restart-')), options={dbPath:join(directory,'control.db'),instanceId:'drain-restart',initialize:true}
+  const artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+  let store=await openExecutionStore(options),controller,child,pids,downstream=0
+  t.after(async()=>{if(child){await promisify(execFile)('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true}).catch(()=>{})}await controller?.close();await store.close()})
+  const definition=workflow(async()=>{
+    child=spawn(process.execPath,['-e',"const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});console.log(JSON.stringify([process.pid,c.pid]));setInterval(()=>{},1000)"],{windowsHide:true,stdio:['ignore','pipe','pipe']})
+    pids=await new Promise((resolve,reject)=>{child.stdout.once('data',b=>resolve(JSON.parse(b.toString())));child.once('error',reject)})
+    throw Object.assign(new Error('synthetic termination acknowledgement unavailable'),{code:'VERIFY_JOB_DRAIN_UNCONFIRMED',executionDrained:false})
+  });definition.nodes[0].drainPolicy='external-process';definition.nodes[1].execute=async()=>{downstream++;return 0}
+  controller=createExecutionController({store,artifacts,workflows:[definition]})
+  await controller.createRun({commandId:'create',runId:'run',taskId:'task',workflowId:'synthetic',input:1})
+  await assert.rejects(controller.whenIdle('run'),{code:'VERIFY_JOB_DRAIN_UNCONFIRMED'})
+  await assert.rejects(controller.recover({commandId:'same-process-recover',runId:'run'}),{code:'EXECUTOR_DRAIN_EVIDENCE_REQUIRED'})
+  await controller.close();await store.close()
+  store=await openExecutionStore({...options,initialize:false});controller=createExecutionController({store,artifacts,workflows:[definition]})
+  for(const pid of pids)assert.doesNotThrow(()=>process.kill(pid,0))
+  await assert.rejects(controller.recover({commandId:'restart-recover',runId:'run'}),{code:'EXECUTOR_DRAIN_EVIDENCE_REQUIRED'})
+  const state=await controller.state('run');assert.equal(state.nodes[0].drained,false);assert.equal(state.nodes[1].status,'blocked');assert.equal(downstream,0)
+  await promisify(execFile)('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true})
+  for(const pid of pids)assert.throws(()=>process.kill(pid,0));child=null
 })

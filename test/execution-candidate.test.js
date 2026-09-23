@@ -52,3 +52,17 @@ test('存在执行过滤器或真实 hook 时拒绝准入，未调用其命令',
   const hook = await fixture(); await writeFile(join(hook.repository, '.git/hooks/pre-commit'), 'exit 9')
   await assert.rejects(freezeCandidate(hook), { code: 'CANDIDATE_HOOKS_UNSUPPORTED' })
 })
+
+test('Git batch保留空blob/重复blob/二进制及Unicode路径，返回字节不共享可变缓存', async () => {
+  const args=await fixture(),binary=Buffer.from([0,10,13,255,128,32,0])
+  await writeFile(join(args.repository,'中文 空文件.txt'),Buffer.alloc(0));await writeFile(join(args.repository,'a.bin'),binary);await writeFile(join(args.repository,'b.bin'),binary)
+  const candidate=await freezeCandidate(args),snapshot=await readCandidate(candidate)
+  assert.deepEqual(await snapshot.readFile('中文 空文件.txt'),Buffer.alloc(0))
+  const changed=await snapshot.readFile('a.bin');changed.fill(42)
+  assert.deepEqual(await snapshot.readFile('a.bin'),binary);assert.deepEqual(await snapshot.readFile('b.bin'),binary)
+  const file=snapshot.files.find(f=>f.path==='a.bin'),{deflateSync}=await import('node:zlib'),{chmod}=await import('node:fs/promises')
+  const objectPath=join(args.repository,'.git','objects',file.oid.slice(0,2),file.oid.slice(2));await chmod(objectPath,0o600)
+  await writeFile(objectPath,deflateSync(Buffer.concat([Buffer.from(`blob ${binary.length}\0`),Buffer.alloc(binary.length,33)])))
+  const independent=await readCandidate(candidate)
+  await assert.rejects(independent.readFile('a.bin'),{code:'CANDIDATE_BLOB_INVALID'})
+})

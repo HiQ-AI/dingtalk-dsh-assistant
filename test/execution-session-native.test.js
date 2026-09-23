@@ -42,6 +42,7 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
   await writeFile(join(root, 'fixture.txt'), 'NATIVE_READ_VALUE_922d')
   ctx.on('agent/created', ({ agent }) => { handles.push(agent) })
   class Scripted extends LlmAdapter {
+    async resolveModel(provider, model) { return { ...await super.resolveModel(provider, model), reasoning: { efforts: [{ id: 'low', name: 'Low' }] } } }
     async *stream(options) {
       requests.push(JSON.parse(JSON.stringify(options)))
       const next = typeof script === 'function' ? script(requests.length) : script[requests.length - 1]
@@ -85,6 +86,12 @@ async function processPhase(root, phase) {
 if (process.argv[2] === '--execution-session-child') {
   await processPhase(process.argv[3], process.argv[4])
 } else {
+  test('固定reasoningEffort透传到原生Provider请求', async t => {
+    const h = await host(); t.after(() => h.close())
+    const result = await drive(h, { definition: definition({ reasoningEffort: 'low' }) })
+    assert.equal(h.requests.length, 1, JSON.stringify(result))
+    assert.equal(h.requests[0].reasoningEffort, 'low')
+  })
   test('正式适配器：两次读取同Session，先持久绑定，提交结果排空后仅回调业务output', { timeout: 10000 }, async t => {
     const h = await host({ script: [{ name: 'read_fixture' }, { name: 'read_fixture' }, submit('complete')] })
     t.after(() => h.close())

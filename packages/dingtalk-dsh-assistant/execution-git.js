@@ -13,7 +13,7 @@ const checkPreparedSize = value => { if (Buffer.byteLength(canonicalExecutionJso
 function git(directory, args, { input = '', env = {} } = {}) {
   return new Promise((resolve, reject) => {
     const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
-    const child = spawn('git', ['--no-pager', '-C', directory, ...args], { shell: false, windowsHide: true, env: { ...clean, GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0', ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn('git', ['--no-pager', '-c', 'core.longpaths=true', '-C', directory, ...args], { shell: false, windowsHide: true, env: { ...clean, GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0', ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = '', stderr = '', size = 0, failure
     const stop = code => { failure ??= executionError(code); child.kill() }
     const timer = setTimeout(() => stop('GIT_TIMEOUT'), 15000)
@@ -44,9 +44,20 @@ async function admit(repository, bare) {
 }
 
 export async function createGitDelivery({ repository, remote, branch, author }) {
-  if (!isAbsolute(repository ?? '') || !isAbsolute(remote ?? '') || /[\0\r\n]/.test(repository + remote)) fail('GIT_LOCAL_SCOPE_REQUIRED')
-  repository = await realpath(repository); remote = await realpath(remote)
-  if (!(await stat(repository)).isDirectory() || !(await stat(remote)).isDirectory() || repository === remote) fail('GIT_SCOPE_INVALID')
+  if (!isAbsolute(repository ?? '') || typeof remote !== 'string' || !remote || /[\0\r\n]/.test(repository + remote)) fail('GIT_LOCAL_SCOPE_REQUIRED')
+  const localRemote = isAbsolute(remote)
+  if (!localRemote) {
+    if (/^git@[a-zA-Z0-9.-]+:[a-zA-Z0-9_.\/-]+(?:\.git)?$/.test(remote)) {
+      if (remote.split(':')[1].split('/').some(part => !part || part === '..' || part === '.')) fail('GIT_REMOTE_URL_INVALID')
+    } else {
+      let url
+      try { url = new URL(remote) } catch { fail('GIT_REMOTE_URL_INVALID') }
+      if (!['https:', 'ssh:'].includes(url.protocol) || url.password || (url.protocol === 'https:' && url.username) || url.search || url.hash
+        || !url.hostname || !/^\/[a-zA-Z0-9_.\/-]+$/.test(url.pathname)) fail('GIT_REMOTE_URL_INVALID')
+    }
+  }
+  repository = await realpath(repository); if (localRemote) remote = await realpath(remote)
+  if (!(await stat(repository)).isDirectory() || (localRemote && !(await stat(remote)).isDirectory()) || repository === remote) fail('GIT_SCOPE_INVALID')
   if (typeof branch !== 'string' || !branch || branch.startsWith('-') || /[\0\r\n]/.test(branch)) fail('GIT_BRANCH_INVALID')
   const ref = `refs/heads/${branch}`
   await command(repository, ['check-ref-format', ref])
@@ -54,7 +65,7 @@ export async function createGitDelivery({ repository, remote, branch, author }) 
   author = { name: author.name, email: author.email }
   const scope = { repository, remote, ref, author }
   const check = async () => {
-    await admit(repository, false); await admit(remote, true)
+    await admit(repository, false); if (localRemote) await admit(remote, true)
     const signing = await git(repository, ['config', '--bool', '--get', 'commit.gpgsign'])
     if ((signing.code !== 0 && signing.code !== 1) || signing.stdout === 'true') fail('GIT_SIGNING_UNSUPPORTED')
     const worktrees = await command(repository, ['worktree', 'list', '--porcelain', '-z'])
@@ -92,7 +103,8 @@ export async function createGitDelivery({ repository, remote, branch, author }) 
     const identity = `${author.name} <${author.email}> ${date}`
     const raw = `tree ${candidate.tree}\nparent ${candidate.baseCommit}\nauthor ${identity}\ncommitter ${identity}\n\n${message}`
     const commitId = await command(repository, ['hash-object', '-t', 'commit', '--stdin'], { input: raw })
-    const body = { version: 1, action: 'commit', ...scope, candidateDigest: candidate.digest, generation: candidate.generation, requirementDigest: candidate.requirementDigest, tree: candidate.tree, baseCommit: candidate.baseCommit, expectedLocalSha, date, message, commitId, verification: structuredClone(verification) }
+    const changedPaths = (await command(repository, ['diff', '--name-only', '-z', candidate.baseCommit, candidate.tree, '--'])).split('\0').filter(Boolean)
+    const body = { version: 1, action: 'commit', ...scope, candidateDigest: candidate.digest, generation: candidate.generation, requirementDigest: candidate.requirementDigest, tree: candidate.tree, baseCommit: candidate.baseCommit, expectedLocalSha, date, message, commitId, changedPaths, verification: structuredClone(verification) }
     const prepared = { ...body, digest: executionDigest(body) }
     // 与节点工件一致的64KiB上限；完整验证日志超限时拒绝，不能截断审计证据。
     checkPreparedSize(prepared)
@@ -121,7 +133,7 @@ export async function createGitDelivery({ repository, remote, branch, author }) 
     if ((await reconcileCommit(commit)).status !== 'succeeded') fail('GIT_COMMIT_NOT_DELIVERED')
     if (await currentRemote() !== expectedRemoteSha) fail('GIT_REMOTE_CONFLICT')
     if (expectedRemoteSha && (await git(repository, ['merge-base', '--is-ancestor', expectedRemoteSha, commit.commitId])).code !== 0) fail('GIT_NON_FAST_FORWARD')
-    const body = { version: 1, action: 'push', ...scope, commitId: commit.commitId, expectedRemoteSha, candidateDigest: commit.candidateDigest, generation: commit.generation, requirementDigest: commit.requirementDigest, verificationDigest: commit.verification.digest }
+    const body = { version: 1, action: 'push', ...scope, commitId: commit.commitId, expectedRemoteSha, candidateDigest: commit.candidateDigest, generation: commit.generation, requirementDigest: commit.requirementDigest, verificationDigest: commit.verification.digest, verification: commit.verification, changedPaths: commit.changedPaths }
     return freeze({ ...body, digest: executionDigest(body) })
   }
   async function reconcilePush(prepared) {
@@ -133,7 +145,12 @@ export async function createGitDelivery({ repository, remote, branch, author }) 
     validate(prepared, 'push'); await check()
     if (prepared.expectedRemoteSha !== null && (!oid(prepared.expectedRemoteSha) || (await git(repository, ['merge-base', '--is-ancestor', prepared.expectedRemoteSha, prepared.commitId])).code !== 0)) fail('GIT_NON_FAST_FORWARD')
     // lease仅实现精确旧值条件；上面的祖先检查禁止借此覆盖历史。
-    await command(repository, ['push', '--porcelain', `--force-with-lease=${ref}:${prepared.expectedRemoteSha ?? ''}`, '--', remote, `${prepared.commitId}:${ref}`])
+    try { await command(repository, ['push', '--porcelain', `--force-with-lease=${ref}:${prepared.expectedRemoteSha ?? ''}`, '--', remote, `${prepared.commitId}:${ref}`]) }
+    catch (error) {
+      const observed = await reconcilePush(prepared)
+      if (observed.status === 'succeeded') return observed
+      throw error
+    }
     return reconcilePush(prepared)
   }
   return Object.freeze({ prepareCommit, executeCommit, reconcileCommit, preparePush, executePush, reconcilePush })

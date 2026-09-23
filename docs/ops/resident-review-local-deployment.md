@@ -1,5 +1,21 @@
 # 常驻通知修复本地部署
 
+## 消息与任务工作流入口
+
+`workflow` 配置显式提供 `groupIds`、`dbPath`、`instanceId`、`artifactDirectory`、`ownerActorId`。控制库必须由独立初始化/迁移步骤建立；常规插件启动不建库、不自动封存旧群。
+
+启动在恢复任何旧 Resident 之前回读每个指定群的控制账：必须 `message.group.state=active`、`engine=workflow` 且存在 `legacySealRef`；同时旧存储不得有未完成 Task、未归类消息、未完成协调请求或未结 Outbox。只有配置没有持久切换事实会拒绝启动。发送失败记录仍属于未结投递，不能删掉或标记送达来满足门禁。
+
+验证 `/state/workflows` 的消息节点、命令和预算；`/state/tasks` 合并旧任务与 `engine=workflow-v2` 任务，进度直接来自 executionNodes。已切换群不再恢复旧 Resident，也不能通过旧 Web 新建 Task 接口旁路创建；未配置群维持原入口。通知与任务运行分开：渠道 ACK 不能标记送达，必须拿到可信消息 ID 后独立回读正文和群。没有消息 ID 时保留未确认状态。
+
+入口本地回归：`node --test test/workflow-entry.test.js test/http.test.js test/workflow-service.test.js`；原生 Runtime 防双入口测试：`node --test --test-name-pattern='已切换群' test/runtime.test.js`。测试不向真实渠道发送消息。
+
+普通澄清通过 `POST /workflows/<runId>/requests/<requestId>/answer` 接收 `{eventId,answer}`，禁止传入 actorId。此接口沿用本机可信操作者边界，只接受 loopback 和许可的同源 Origin；不是远程登录鉴权。Host 必须显式配置 `workflow.webActorId` 映射本机操作者，缺失则禁写，不默认冒认 owner。请求仍检查 permittedActors 和原请求身份。钉钉答复必须引用已独立回读的澄清通知消息 ID，并匹配同群唯一请求；Web/IM 消费同一首终态，迟到冲突只读回原答复，不创建新任务。本接口不提供生产操作批准，生产 approval 意图在未实现相应审批流程时保持 unsupported。
+
+消息接纳在同一 SQLite 事务中保存话题版本、带源消息版本和原文的事实、单元归属及命令。纯话题事实也可成为后续关联候选；有效话题限制由 Host 加入任务输入，不依赖模型再次复述。S 使用代码计算的 UTF-16 片段边界和全文长度，I 参数为严格命名合同（创建/调研要求 objective、workflowId，工程要求 repositoryId）。字段校验失败只重试原节点并提供错误位置；必需上下文超限明确进入 needs_attention，不能制造无法补齐的空材料等待。执行材料就绪前不接纳业务命令，材料恢复不重跑已成功 I。
+
+业务命令领取前执行 Host 只读准入检查：主体、工作流、仓库、目标任务和执行版本。不满足条件时持久 `rejected` 并生成拒绝事实通知，依赖动作同时拒绝；没有外部调用的已知拒绝不归 `unknown`。开始执行之后的异常仍按未知效果对账。旧已完成任务以 `engine=legacy` 的只读候选提供状态/结果，不能交给新 Controller 恢复，也不能因询问历史结果创建新任务。
+
 本 runbook 用于未发布修复包在现有 Windows DSH `web` profile 的安装与验证，不升级 DSH、模型、OAuth、代理或其它插件。沿用[源码开发安装说明](../manual/install-and-configure-dsh-web.md)的原生插件安装路径。组织权限由负责人处理，本轮不重新登录、不主动重试或补发真实群消息。
 
 ## 群消息延迟修复的验收补充
@@ -22,16 +38,18 @@
 
 ## 安装前自检
 
+先确认当前运行实例的实际 `DSH_HOME`，不要按用户目录猜测。本机当前为 `D:/dsh_home`，profile 为 `D:/dsh_home/profiles/web`。在部署 PowerShell 中设置 `$env:DSH_HOME = 'D:/dsh_home'`，并以 `$profileDirectory = Join-Path $env:DSH_HOME 'profiles/web'` 定位安装和启动入口；其它机器必须核对其实际值。存储目录另外从 profile 的 storageDomain JSON `root` 读取，本机当前是 `storages/dingtalk-dsh-assistant-v9-pr116`，不能用包名拼默认目录。
+
 1. 跑本轮回归和 `node scripts/build-web-client.mjs`，确认生成文件与源码一致。
-2. 读取 `%USERPROFILE%/.dsh/profiles/web/package.json`，保存 Assistant/Observer 两个依赖的原值用于回退；对 profile patch 和任务流程配置计算摘要，不记录凭据或消息正文。
-   本次协调修复还需对确认过的当前 `dingtalk_dsh_assistant` v8 JSON 文件做只读预检。先在脱敏副本验证，也可直接读取原文件；脚本不会打开 Domain 写入接口，不改原文件，不输出正文、记录 ID、凭据或源路径：
+2. 读取 `<实际DSH_HOME>/profiles/web/package.json`，保存 Assistant/Observer 两个依赖的原值用于回退；对 profile patch 和任务流程配置计算摘要，不记录凭据或消息正文。
+   当前切换需对确认过的 `dingtalk_dsh_assistant` v9 JSON 文件做只读预检。先在脱敏副本验证，也可直接读取原文件；脚本不会打开 Domain 写入接口，不改原文件，不输出正文、记录 ID、凭据或源路径：
 
 ```powershell
-node scripts/check-resident-storage.mjs --check --source '<已确认的v8存储文件或副本绝对路径>'
+node scripts/check-resident-storage.mjs --check --source '<已确认的v9存储文件或副本绝对路径>'
 ```
 
    必须退出码为 0 且 `ok: true`；输出各表数量、扩展字段数量、校验错误代码计数及 `strippedFields`。`strippedFields > 0` 表示当前 Schema 会丢字段，不能忽略后继续切换。运行中存储可能变化；停止已核实的实例、排空写入后，先把完整存储备份到仓库外受保护目录并记录 SHA256，再对稳定原文件重跑预检。备份包含业务消息和授权内容，禁止提交 Git。脚本只验证当前 Schema 可读且不剥离已有字段，不替代 Topic 引用和业务完成证据验收。
-3. 确认 `%USERPROFILE%/.dsh/profiles/web/node_modules/@deepseek-ai/dsh/lib/bin.js` 存在。本机全局 `dsh.ps1` 曾指向已删除目录；本 runbook 固定使用 profile 内的原生 CLI，不依赖全局 shim。查询 3080、18998 listener，确认同属当前 DSH Web 进程，记录 PID。检查进程与端口后才能停止该实例，不结束其他 Node/DWS 进程。
+3. 确认 `<实际DSH_HOME>/profiles/web/node_modules/@deepseek-ai/dsh/lib/bin.js` 存在。本机全局 `dsh.ps1` 曾指向已删除目录；本 runbook 固定使用 profile 内的原生 CLI，不依赖全局 shim。查询 3080、18998 listener，确认同属当前 DSH Web 进程，记录 PID。检查进程与端口后才能停止该实例，不结束其他 Node/DWS 进程。
    同时读取 `node_modules/.modules.yaml` 的 `virtualStoreDir`，确认它指向当前 profile 下的 `node_modules/.pnpm`。若 DSH_HOME 或 profile 曾迁移、该路径仍指向旧目录，先停机并在当前 profile 执行 `pnpm install --force` 重建依赖树，再运行原生插件安装；不得整体链接或复制旧 profile 的 `node_modules`。重建后按 loader 的实际 import 核对必需 peer 是否已安装，缺失时安装项目声明的精确兼容版本并重新启动验证，不能仅因插件安装命令退出码为 0 就判定可运行。
 4. 在 `docs/tmp/` 下创建本次唯一打包目录（包含本轮提交标识），按实际修改打包内部包。本次协调修复只修改 Assistant，Observer 保持原依赖；同时修改两个包的任务才执行两条命令：
 
@@ -44,7 +62,7 @@ pnpm --dir packages/dingtalk-dsh-observer pack --pack-destination ../../docs/tmp
 
 ## 安装与启动
 
-1. 停止已核实的 DSH Web PID 及仅属于该进程的 DWS 监听子进程，避免遗留重复监听；将新 tgz 绝对路径传给 profile 内的原生 CLI：`node "$env:USERPROFILE/.dsh/profiles/web/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add <assistant.tgz> <observer.tgz>`。
+1. 停止已核实的 DSH Web PID 及仅属于该进程的 DWS 监听子进程，避免遗留重复监听；将新 tgz 绝对路径传给 profile 内的原生 CLI：`node "$profileDirectory/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add <assistant.tgz> <observer.tgz>`。
 2. 回读 profile 的两个依赖，逐一比较安装目录与工作区源码及 patch 文件的 SHA256，确认原有 profile patch 未变。`pnpm pack` 可能移除 `package.json` 末尾换行：manifest 按 JSON 内容或仅去除末尾空白后比较，其他差异仍必须调查，不能一律忽略哈希不一致。
 3. 若启用了任务表格同步，重启后回读 `/state/task-sheet-sync`，确认配置中的 nodeId/sheetId 未漂移、启动同步成功，并用 `dws sheet +read` 完整回读托管范围。`/health`、CLI 退出码或设置页提示均不能替代表格内容核对。
 4. 按现有 `scripts/start-web.ps1` 启动；后台 PowerShell 进程使用 `Start-Process -WindowStyle Hidden`。stdout/stderr 只存本地 `docs/tmp/`，日志可能含登录链接，不进入 Git。
@@ -113,3 +131,5 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 ## 历史重开任务缺失原 Session 的恢复
 
 仅对已重开、queued、带reopenContext且resume原childSessionId明确返回该ID不存在的Task，Runtime创建新独立Session并先持久化新的childSessionId和`task-reopen-session-recreated`事件，再继续原TASK_REOPEN与Topic输入派发。旧Session ID保留在runHistory；其它错误及running/waiting不换会话。切换前按既有流程备份稳定存储，核对三个目标Task的taskId、轮次、来源版本与原ID；切换后逐个读回新Session、原Task身份、运行事件及未重复业务动作。旧轮执行细节不可恢复，当前轮必须独立核验；不得把旧结果映射成新轮通过。
+
+任务表格同步读取与看板一致的异步任务视图，包含 `workflow-v2` 节点进度、等待原因与结果；不能只同步旧 JSON Task。隔离验证通过不代表真实表格回读，安装后仍按既有配置独立核验托管范围。

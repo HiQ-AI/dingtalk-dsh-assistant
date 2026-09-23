@@ -36,6 +36,26 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
   try { await run(`http://127.0.0.1:${server.address().port}`) } finally { await new Promise((resolve) => server.close(resolve)) }
 }
 
+test('工作流只读状态与异步任务视图保留新节点真实完成状态', async () => {
+  await withServer(false, async base => {
+    const tasks = await (await fetch(base + '/state/tasks')).json()
+    assert.equal(tasks[0].workflowProgress.stages[0].completed, true)
+    assert.equal(tasks[0].workflowProgress.stages[1].completed, false)
+    assert.deepEqual(await (await fetch(base + '/state/workflows?runId=r')).json(), { runId: 'r', status: 'waiting' })
+  }, { overrides: { listTaskView: async () => [{ taskId: 't', engine: 'workflow-v2', executionNodes: [{ nodeId: 'prepare', status: 'succeeded' }, { nodeId: 'execute', status: 'running' }] }], getWorkflowState: async runId => ({ runId, status: 'waiting' }) } })
+})
+
+test('本机澄清回答拒绝body伪造actor与外站Origin，只传固定路径身份', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    const post = (body, origin) => fetch(base + '/workflows/run/requests/question/answer', { method: 'POST', headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(body) })
+    assert.equal((await post({ eventId: 'answer', answer: '第一个', actorId: 'owner' })).status, 400)
+    assert.equal((await post({ eventId: 'answer', answer: '第一个' }, 'https://evil.example')).status, 403)
+    assert.equal((await post({ eventId: 'answer', answer: '第一个' }, 'http://localhost:3080')).status, 200)
+    assert.deepEqual(calls, [{ eventId: 'answer', answer: '第一个', runId: 'run', requestId: 'question' }])
+  }, { overrides: { resumeWorkflowRequest: async args => { calls.push(args); return { accepted: true } } } })
+})
+
 test('通知恢复仅使用路径身份，受阻或过期意图返回冲突', async () => {
   const calls = []
   await withServer(false, async base => {

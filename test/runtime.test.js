@@ -104,7 +104,7 @@ async function setup(t, options = {}) {
   }
   h.ctx = ctx
   await options.beforeRuntime?.(h)
-  h.runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: options.maxConcurrentTasks ?? 1, supervisorIntervalMs: 0, resumeTimeoutMs: options.resumeTimeoutMs ?? 10_000, decisionRetryBaseMs: options.retryDelayMs ?? 60_000, actionAdapters: options.actionAdapters, authorizeTaskAction: options.authorizeTaskAction })
+  h.runtime = await openResidentRuntime(ctx, store, agentWorkspace, { maxConcurrentTasks: options.maxConcurrentTasks ?? 1, supervisorIntervalMs: 0, resumeTimeoutMs: options.resumeTimeoutMs ?? 10_000, decisionRetryBaseMs: options.retryDelayMs ?? 60_000, actionAdapters: options.actionAdapters, authorizeTaskAction: options.authorizeTaskAction, workflowGroupIds: options.workflowGroupIds ?? [] })
   h.resident = (groupId = 'g') => h.handles.get(store.getGroup(groupId)?.residentSessionId)
   h.messages = (groupId = 'g') => h.deliveries.filter(({ sessionId }) => sessionId === store.getGroup(groupId)?.residentSessionId || h.handles.get(sessionId)?.agent.session.snapshotEvents().some(event => event.type === 'dingtalk/coordination' && event.data.groupId === groupId)).map(item => item.message)
   h.owner = (requestId, groupId = 'g') => [...h.handles.values()].findLast(handle => handle.agent.session.snapshotEvents().some(event => event.type === 'dingtalk/coordination' && event.data.groupId === groupId && event.data.requestId === requestId))
@@ -2971,4 +2971,14 @@ test('非缺失故障和非重开任务不得替换旧Session', async t => {
   assert.equal(restored.store.getTask(task.taskId).state, 'running')
   assert.equal(restored.store.getTask(task.taskId).childSessionId, task.childSessionId)
   assert.equal(restored.calls.some(call => !call.resumed && call.sessionId.startsWith(`session-${task.taskId}-`)), false)
+})
+
+
+test('已切换群不恢复旧resident，旧入口拒绝接收且不产生协调会话', async t => {
+  const h = await setup(t, { workflowGroupIds: ['g'] })
+  assert.equal(h.resident(), undefined)
+  await assert.rejects(h.runtime.ingest({ groupId: 'g', messageId: 'new', text: '执行新任务' }), /workflow_group_requires_workflow_ingress/)
+  await h.runtime.recoverInterruptedDecisions()
+  assert.equal(h.resident(), undefined)
+  assert.equal(h.messages().length, 0)
 })

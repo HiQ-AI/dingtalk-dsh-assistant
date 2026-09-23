@@ -1,12 +1,17 @@
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { realpath, lstat, readdir, open, mkdtemp, unlink, rmdir } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { realpath, lstat, readdir, open, mkdir, writeFile, unlink, rmdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { executionDigest, executionError } from './execution-artifacts.js'
 
 const MAX_FILE = 16 * 1024 * 1024, MAX_TOTAL = 64 * 1024 * 1024, MAX_FILES = 10000
 const verifiedReceipts = new WeakSet()
 const fail = code => { throw executionError(code) }
+async function candidateDirectory(gitDirectory) {
+  const directory = join(gitDirectory, `candidate-${randomUUID()}`)
+  await mkdir(directory)
+  return directory
+}
 const oid = value => typeof value === 'string' && /^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(value)
 // 固定 argv、禁止 shell；清除调用进程的 Git 目录/配置注入。
 async function git(repository, args, { input, index, limit = MAX_TOTAL } = {}) {
@@ -14,7 +19,7 @@ async function git(repository, args, { input, index, limit = MAX_TOTAL } = {}) {
   Object.assign(env, { GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' })
   if (index) env.GIT_INDEX_FILE = index
   return new Promise((resolveResult, reject) => {
-    const child = spawn('git', ['--no-pager', '-C', repository, ...args], { shell: false, windowsHide: true, env, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn('git', ['--no-pager', '-c', 'core.longpaths=true', '-C', repository, ...args], { shell: false, windowsHide: true, env, stdio: ['pipe', 'pipe', 'pipe'] })
     const chunks = []; let length = 0, stderr = '', overflow = false
     const timer = setTimeout(() => { overflow = true; child.kill() }, 30000)
     child.stdout.on('data', bytes => { length += bytes.length; if (length > limit) { overflow = true; child.kill() } else chunks.push(bytes) })
@@ -73,7 +78,7 @@ export async function freezeCandidate({ repository, baseCommit, generation, requ
   if (paths.length > MAX_FILES) fail('CANDIDATE_FILE_LIMIT')
   const attributes = (await git(repo.repository, ['check-attr', '-z', '--stdin', 'filter'], { input: Buffer.from(paths.join('\0') + '\0') })).toString().split('\0')
   for (let i = 2; i < attributes.length; i += 3) if (!['unspecified', 'unset'].includes(attributes[i])) fail('CANDIDATE_UNSUPPORTED_GIT_EXTENSION')
-  const directory = await mkdtemp(join(repo.gitDirectory, 'candidate-')), index = join(directory, 'index')
+  const directory = await candidateDirectory(repo.gitDirectory), index = join(directory, 'index'), blobs = []
   try {
     await git(repo.repository, ['read-tree', '--empty'], { index })
     let total = 0; const entries = []
@@ -97,9 +102,18 @@ export async function freezeCandidate({ repository, baseCommit, generation, requ
         if (length !== metadata.size || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) fail('CANDIDATE_FILE_CHANGED')
         bytes = buffer.subarray(0, length)
       } finally { await file.close() }
-      const hash = (await git(repo.repository, ['hash-object', '-w', '--no-filters', '--stdin'], { input: bytes })).toString().trim()
+      // 固定已经校验的字节副本，batch只读这些副本，不再次读取可变工作文件。
+      const frozenPath = join(directory, `blob-${blobs.length}`)
+      const hash = createHash(baseCommit.length === 40 ? 'sha1' : 'sha256').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
+      await writeFile(frozenPath, bytes, { flag: 'wx' })
+      blobs.push({ path: frozenPath, hash })
       const mode = process.platform === 'win32' ? (modes.get(path) ?? '100644') : (metadata.mode & 0o111 ? '100755' : '100644')
       entries.push(`${mode} ${hash}\t${path}\0`)
+    }
+    if (blobs.length) {
+      const input = Buffer.from(blobs.map(blob => JSON.stringify(blob.path.replaceAll('\\', '/'))).join('\n') + '\n')
+      const hashes = (await git(repo.repository, ['hash-object', '-w', '--no-filters', '--stdin-paths'], { input, limit: MAX_FILES * 66 })).toString().trim().split('\n')
+      if (hashes.length !== blobs.length || hashes.some((hash, index) => hash !== blobs[index].hash)) fail('CANDIDATE_BLOB_INVALID')
     }
     await git(repo.repository, ['update-index', '-z', '--index-info'], { index, input: Buffer.from(entries.join('')) })
     const tree = (await git(repo.repository, ['write-tree'], { index })).toString().trim()
@@ -107,7 +121,11 @@ export async function freezeCandidate({ repository, baseCommit, generation, requ
     const candidate = Object.freeze({ ...payload, digest: executionDigest(payload) })
     await readCandidate(candidate)
     return candidate
-  } finally { await unlink(index).catch(error => { if (error.code !== 'ENOENT') throw error }); await rmdir(directory) }
+  } finally {
+    await unlink(index).catch(error => { if (error.code !== 'ENOENT') throw error })
+    for (const blob of blobs) await unlink(blob.path)
+    await rmdir(directory)
+  }
 }
 export async function readCandidate(candidate) {
   if (!candidate || Object.keys(candidate).sort().join(',') !== 'baseCommit,digest,generation,gitDirectory,repository,requirementDigest,tree,version') fail('CANDIDATE_IDENTITY_INVALID')
@@ -117,21 +135,43 @@ export async function readCandidate(candidate) {
   if (repo.gitDirectory !== payload.gitDirectory || repo.repository !== payload.repository) fail('CANDIDATE_REPOSITORY_MISMATCH')
   if ((await git(repo.repository, ['cat-file', '-t', payload.baseCommit])).toString().trim() !== 'commit') fail('CANDIDATE_BASE_INVALID')
   const files = Object.freeze(await filesInTree(repo.repository, payload.tree)), byPath = new Map(files.map(file => [file.path, file]))
-  const directory = await mkdtemp(join(repo.gitDirectory, 'candidate-')), index = join(directory, 'index')
+  const directory = await candidateDirectory(repo.gitDirectory), index = join(directory, 'index')
   try {
     await git(repo.repository, ['read-tree', payload.tree], { index })
     const attributes = (await git(repo.repository, ['check-attr', '--cached', '-z', '--stdin', 'filter'], { index, input: Buffer.from(files.map(file => file.path).join('\0') + '\0') })).toString().split('\0')
     for (let i = 2; i < attributes.length; i += 3) if (!['unspecified', 'unset'].includes(attributes[i])) fail('CANDIDATE_UNSUPPORTED_GIT_EXTENSION')
   } finally { await unlink(index).catch(error => { if (error.code !== 'ENOENT') throw error }); await rmdir(directory) }
+  let loaded
+  async function loadBlobs() {
+    const unique = [...new Map(files.map(file => [file.oid, file])).values()]
+    if (!unique.length) return new Map()
+    const output = await git(repo.repository, ['cat-file', '--batch'], { input: Buffer.from(unique.map(file => file.oid).join('\n') + '\n'), limit: MAX_TOTAL + MAX_FILES * 128 })
+    const result = new Map(); let offset = 0
+    for (const file of unique) {
+      const end = output.indexOf(10, offset)
+      if (end < offset || end - offset > 100) fail('CANDIDATE_BLOB_INVALID')
+      const header = output.subarray(offset, end).toString('ascii')
+      if (header !== `${file.oid} blob ${file.size}`) fail('CANDIDATE_BLOB_INVALID')
+      offset = end + 1
+      if (offset + file.size >= output.length || output[offset + file.size] !== 10) fail('CANDIDATE_BLOB_INVALID')
+      const bytes = output.subarray(offset, offset + file.size)
+      const actual = createHash(file.oid.length === 40 ? 'sha1' : 'sha256').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
+      if (actual !== file.oid) fail('CANDIDATE_BLOB_INVALID')
+      result.set(file.oid, bytes); offset += file.size + 1
+    }
+    if (offset !== output.length) fail('CANDIDATE_BLOB_INVALID')
+    return result
+  }
   return Object.freeze({ candidate: Object.freeze({ ...payload, digest }), files, async readFile(path) {
     const file = byPath.get(path); if (!file) fail('CANDIDATE_FILE_NOT_FOUND')
-    const bytes = await git(repo.repository, ['cat-file', 'blob', file.oid], { limit: MAX_FILE })
-    const actual = createHash(file.oid.length === 40 ? 'sha1' : 'sha256').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
-    if (bytes.length !== file.size || actual !== file.oid) fail('CANDIDATE_BLOB_INVALID')
-    return bytes
+    const bytes = (await (loaded ??= loadBlobs())).get(file.oid)
+    if (!bytes || bytes.length !== file.size) fail('CANDIDATE_BLOB_INVALID')
+    // 调用方不能修改下一检查器读到的冻结字节。
+    return Buffer.from(bytes)
   } })
 }
-export async function verifyCandidate({ candidate, checks }) {
+export async function verifyCandidate({ candidate, checks, signal }) {
+  signal?.throwIfAborted()
   const snapshot = await readCandidate(candidate)
   if (!Array.isArray(checks) || !checks.length || checks.length > 32 || new Set(checks.map(check => check.id)).size !== checks.length) fail('CANDIDATE_CHECKS_INVALID')
   checks = checks.map(check => ({ id: check.id, version: check.version, run: check.run }))
@@ -139,8 +179,10 @@ export async function verifyCandidate({ candidate, checks }) {
   for (const check of checks) {
     if (!check || typeof check.id !== 'string' || !check.id || typeof check.version !== 'string' || !check.version || typeof check.run !== 'function') fail('CANDIDATE_CHECKS_INVALID')
     let result
-    try { result = await check.run(Object.freeze({ files: snapshot.files, readFile: snapshot.readFile, candidateDigest: snapshot.candidate.digest })) }
-    catch (error) { result = { passed: false, log: String(error?.message ?? error) } }
+    signal?.throwIfAborted()
+    try { result = await check.run(Object.freeze({ files: snapshot.files, readFile: snapshot.readFile, candidateDigest: snapshot.candidate.digest }), { signal }) }
+    catch (error) { if (error.executionDrained === false) throw error; result = { passed: false, log: String(error?.message ?? error) } }
+    signal?.throwIfAborted()
     if (!result || typeof result.passed !== 'boolean' || typeof result.log !== 'string' || Buffer.byteLength(result.log) > 65536) fail('CANDIDATE_CHECK_RESULT_INVALID')
     results.push(Object.freeze({ id: check.id, version: check.version, passed: result.passed, log: result.log }))
   }

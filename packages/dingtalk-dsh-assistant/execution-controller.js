@@ -23,9 +23,12 @@ export function defineExecutionWorkflow(definition) {
   const nodes = definition.nodes.map(node => {
     requireId(node.id); requireId(node.version)
     if (ids.has(node.id)) throw executionError('DUPLICATE_NODE')
+    if (node.inputDependencies !== undefined && (!Array.isArray(node.inputDependencies) || new Set(node.inputDependencies).size !== node.inputDependencies.length
+      || node.inputDependencies.some(id => !ids.has(id)))) throw executionError('NODE_DEPENDENCY_INVALID')
     ids.add(node.id)
     if (!['code', 'agent'].includes(node.executor)) throw executionError('EXECUTOR_NOT_ADMITTED')
-    if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push', 'workspace.prepare'].includes(e))
+    if (node.drainPolicy !== undefined && (node.drainPolicy !== 'external-process' || node.executor !== 'code')) throw executionError('NODE_DRAIN_POLICY_INVALID')
+    if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push', 'github.pr', 'workspace.prepare', 'workspace.edit'].includes(e))
       || (node.executor === 'agent' && node.allowedEffects.some(e => !['pure', 'read'].includes(e)))) throw executionError('EFFECT_NOT_ADMITTED')
     if (typeof node.mapInput !== 'function') throw executionError('INPUT_MAPPER_REQUIRED')
     if (node.executor === 'code' && typeof node.execute !== 'function') throw executionError('CODE_EXECUTOR_REQUIRED')
@@ -37,23 +40,33 @@ export function defineExecutionWorkflow(definition) {
     id: n.id, version: n.version, executor: n.executor, allowedEffects: n.allowedEffects,
     inputSchema: n.inputSchema, outputSchema: n.outputSchema, mapper: n.mapInput.toString(),
     implementation: n.execute?.toString() ?? null, provider: n.provider ?? null, model: n.model ?? null,
+    ...(n.reasoningEffort === undefined ? {} : { reasoningEffort: n.reasoningEffort }),
+    ...(n.drainPolicy === undefined ? {} : { drainPolicy: n.drainPolicy }),
     prompt: n.prompt ?? null, allowedTools: n.allowedTools ?? [], rulesDigest: n.rulesDigest ?? null,
+    ...(n.inputDependencies ? { inputDependencies: n.inputDependencies } : {}),
     maxSteps: n.maxSteps ?? 32, timeoutMs: n.timeoutMs ?? 120000,
   })) })
   return Object.freeze({ id: definition.id, version: definition.version, nodes: Object.freeze(nodes), digest })
 }
 
 /** 一个Controller拥有推进权；等待及状态查询不调用模型，所有身份由控制账产生。 */
-export function createExecutionController({ store, artifacts, sessions, delivery, workflows, readTools = [], maxConcurrentRuns = 4, changeQuietMs = 2000, maxChangeDelayMs = 10000 }) {
+export function createExecutionController({ store, artifacts, sessions, delivery, workflows, historicalWorkflows = [], readTools = [], maxConcurrentRuns = 4, changeQuietMs = 2000, maxChangeDelayMs = 10000 }) {
   if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1 || maxConcurrentRuns > 32 || !Number.isFinite(changeQuietMs) || changeQuietMs < 0 || maxChangeDelayMs < changeQuietMs) throw executionError('CONTROLLER_CONFIG_INVALID')
   const definitions = new Map(), byDigest = new Map()
-  for (const input of workflows) {
+  function registerDefinition(input, historical = false, replay = false) {
     const definition = defineExecutionWorkflow(input)
-    if (definitions.has(definition.id)) throw executionError('DUPLICATE_WORKFLOW')
+    if (!historical && definitions.has(definition.id)) {
+      if (replay && definitions.get(definition.id).digest === definition.digest) return definition
+      throw executionError('DUPLICATE_WORKFLOW')
+    }
     if (!delivery && definition.nodes.some(node => node.allowedEffects.some(e => !['pure', 'read'].includes(e)))) throw executionError('DELIVERY_ADAPTER_REQUIRED')
     for (const node of definition.nodes) if ((node.allowedTools ?? []).some(name => !readTools.includes(name))) throw executionError('TOOL_NOT_ADMITTED')
-    definitions.set(definition.id, definition); byDigest.set(definition.digest, definition)
+    if (!historical) definitions.set(definition.id, definition)
+    byDigest.set(definition.digest, definition)
+    return definition
   }
+  for (const input of historicalWorkflows) registerDefinition(input, true)
+  for (const input of workflows) registerDefinition(input)
   let closed = false, running = 0
   const queue = [], flights = new Map(), active = new Map(), errors = new Map(), dirty = new Set()
   const query = runId => store.query({ kind: 'run', runId })
@@ -63,16 +76,16 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     if (!definition || definition.id !== run.workflowId) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
     return definition
   }
-  async function prepareInput(definition, node, requirementRef, previousOutput) {
+  async function prepareInput(definition, node, requirementRef, previousOutput, dependencyOutputs = {}) {
     const requirement = await artifacts.read(requirementRef)
-    const data = validate(node.inputSchema, await node.mapInput({ requirement, previousOutput }))
+    const data = validate(node.inputSchema, await node.mapInput({ requirement, previousOutput, dependencyOutputs }))
     return artifacts.put({ workflowDigest: definition.digest, nodeId: node.id, nodeVersion: node.version, requirementRef, data })
   }
   async function isCurrent(binding) {
     if (closed) return false
     const state = await query(binding.runId)
     const node = state.nodes.find(n => n.nodeRunId === binding.nodeRunId)
-    return !!node && state.run.stopRequested !== true && state.pendingInputCount === 0 && node.status === 'running'
+    return !!node && state.run.stopRequested !== true && state.run.pauseRequested !== true && state.pendingInputCount === 0 && node.status === 'running'
       && node.generation === binding.generation && node.leaseEpoch === binding.leaseEpoch && node.inputDigest === binding.inputDigest
   }
   function interrupt(runId) {
@@ -136,6 +149,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       if (state.run.stopRequested) {
         await command(`stopped:${runId}`, 'run.stopped', { runId }); return
       }
+      if (state.run.pauseRequested) {
+        if (state.run.recoveryReason !== 'user_pause') await command(`paused:${runId}:${state.run.revision}`, 'run.paused', { runId })
+        return
+      }
       if (state.pendingInputCount) { await applyPending(state, definition); continue }
       if (['succeeded', 'failed', 'cancelled'].includes(state.run.status)) return
       const ready = state.nodes.find(node => node.status === 'ready')
@@ -159,7 +176,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           abort.signal.throwIfAborted()
           output = await nodeDefinition.execute({ input: structuredClone(input.data), signal: abort.signal, runId: binding.runId, generation: binding.generation, requirementDigest: binding.requirementDigest,
             perform: async ({ action, prepared }) => {
-              if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
+              if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : action === 'edit' ? 'workspace.edit' : action === 'pr' ? 'github.pr' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
               abort.signal.throwIfAborted()
               const effect = await delivery.execute({ binding, action, prepared })
               if (effect.state !== 'succeeded') throw executionError('DELIVERY_RECONCILIATION_REQUIRED')
@@ -169,7 +186,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           abort.signal.throwIfAborted(); submitted = true
         } else {
           if (!sessions) throw executionError('SESSION_ADAPTER_UNAVAILABLE')
-          const agentDefinition = Object.fromEntries(['provider', 'model', 'prompt', 'allowedTools', 'outputSchema', 'maxSteps', 'timeoutMs'].filter(key => nodeDefinition[key] !== undefined).map(key => [key, nodeDefinition[key]]))
+          const agentDefinition = Object.fromEntries(['provider', 'model', 'reasoningEffort', 'prompt', 'allowedTools', 'outputSchema', 'maxSteps', 'timeoutMs'].filter(key => nodeDefinition[key] !== undefined).map(key => [key, nodeDefinition[key]]))
           outcome = await sessions.run({ binding, input: input.data, definition: agentDefinition,
             onSessionBound: () => command(`bound:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.sessionBound', {
               runId, nodeId: ready.nodeId, generation: binding.generation, leaseEpoch: binding.leaseEpoch, sessionId: binding.sessionId,
@@ -184,8 +201,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       if (!(await isCurrent(binding))) continue
       const identity = { runId, nodeId: ready.nodeId, generation: binding.generation, leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest }
       if (failure || !submitted) {
+        if (failure) errors.set(runId, failure)
         await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
-          ...identity, outcome: 'waiting', evidenceRefs: [], waitReason: { kind: 'recovery', reference: failure?.code ?? outcome?.reason ?? outcome?.status ?? 'NO_NODE_SUBMISSION' },
+          ...identity, outcome: 'waiting', evidenceRefs: [], waitReason: { kind: 'recovery', reference: failure?.code ?? (failure ? 'NODE_EXECUTION_FAILED' : outcome?.reason ?? outcome?.status ?? 'NO_NODE_SUBMISSION') },
         })
         return
       }
@@ -193,7 +211,16 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         validate(nodeDefinition.outputSchema, output)
         const result = await artifacts.put(output)
         const next = definition.nodes[ready.position + 1]
-        const nextInput = next ? await prepareInput(definition, next, state.run.requirementRef, output) : null
+        const dependencies = {}
+        for (const id of next?.inputDependencies ?? []) {
+          if (id === ready.nodeId) dependencies[id] = output
+          else {
+            const source = state.nodes.find(node => node.nodeId === id && node.status === 'succeeded' && node.outputRef)
+            if (!source) throw executionError('NODE_DEPENDENCY_UNAVAILABLE')
+            dependencies[id] = await artifacts.read(source.outputRef)
+          }
+        }
+        const nextInput = next ? await prepareInput(definition, next, state.run.requirementRef, output, dependencies) : null
         await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
           ...identity, outcome: 'succeeded', outputRef: result.ref, evidenceRefs: [result.ref],
           ...(next ? { nextInput: { nodeId: next.id, inputRef: nextInput.ref, inputDigest: nextInput.digest } } : {}),
@@ -211,6 +238,11 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   }
   return {
     isCurrent,
+    registerWorkflow(input) {
+      if (closed) throw executionError('CONTROLLER_CLOSED')
+      const definition = registerDefinition(input, false, true)
+      return { id: definition.id, version: definition.version, digest: definition.digest }
+    },
     async createRun({ commandId, taskId, runId = `run-${executionDigest(commandId)}`, workflowId, input }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId); requireId(runId)
@@ -223,10 +255,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       })
       schedule(runId); return { runId, receipt }
     },
-    async changeInput({ commandId, runId, inputId, sourceKey, input }) {
+    async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       const requirement = await artifacts.put(input)
-      const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref })
+      const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref, ...(expectedRevision === undefined ? {} : { expectedRevision }) })
       if (!receipt.replayed && receipt.result.accepted !== false) { interrupt(runId); schedule(runId) }
       return receipt
     },
@@ -234,17 +266,27 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const receipt = await command(commandId, 'run.stop', { runId, reason })
       interrupt(runId); schedule(runId); return receipt
     },
+    async pause({ commandId, runId, reason }) {
+      const receipt = await command(commandId, 'run.pause', { runId, reason })
+      interrupt(runId); schedule(runId); return receipt
+    },
+    async resume({ commandId, runId }) {
+      const receipt = await command(commandId, 'run.resume', { runId })
+      schedule(runId); return receipt
+    },
     async recover({ commandId, runId }) {
       if (flights.has(runId)) throw executionError('EXECUTOR_STILL_ACTIVE')
-      const state = await query(runId); definitionOf(state.run)
+      const state = await query(runId); const definition = definitionOf(state.run)
       await sessions?.cancel(runId)
       // 独占Store已排除旧Controller；这里只排空纯/read原生句柄，不释放外部效果hold。
       for (const node of state.nodes) if (!node.drained && node.leaseEpoch > 0) {
+        // 独占控制账不能证明旧操作系统子进程已退出；保留持久未排空屏障。
+        if (definition.nodes.find(item => item.id === node.nodeId)?.drainPolicy === 'external-process') throw executionError('EXECUTOR_DRAIN_EVIDENCE_REQUIRED')
         if (node.executor === 'agent') await sessions?.assertDrained({ ...node, taskId: state.run.taskId })
         await drained(node, 'exclusive-controller-recovery')
       }
       // 已持久接纳的变更或停止优先收口，不能绕过输入屏障再次启动旧输入。
-      if (!state.pendingInputCount && !state.run.stopRequested && !state.nodes.some(node => node.status === 'ready')
+      if (!state.pendingInputCount && !state.run.stopRequested && !state.run.pauseRequested && !state.nodes.some(node => node.status === 'ready')
         && !['succeeded', 'failed', 'cancelled'].includes(state.run.status)) await command(commandId, 'run.recover', { runId })
       schedule(runId)
     },

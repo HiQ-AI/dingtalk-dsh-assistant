@@ -1,13 +1,15 @@
 import { executionDigest, executionError } from './execution-artifacts.js'
 
 /** 受信Host交付网关；不向模型暴露authorizationRef、binding或原始adapter。 */
-export function createExecutionDelivery({ store, artifacts, adapter, workspaceAdapter, authorize }) {
+export function createExecutionDelivery({ store, artifacts, adapter, workspaceAdapter, editAdapter, prAdapter, authorize }) {
   if (typeof authorize !== 'function') throw executionError('DELIVERY_AUTHORIZER_REQUIRED')
   const flights = new Map()
   const methods = {
     commit: { id: 'git-delivery', adapter, execute: 'executeCommit', reconcile: 'reconcileCommit' },
     push: { id: 'git-delivery', adapter, execute: 'executePush', reconcile: 'reconcilePush' },
     workspace: { id: 'managed-workspace', adapter: workspaceAdapter, execute: 'execute', reconcile: 'reconcile' },
+    edit: { id: 'managed-edit', adapter: editAdapter, execute: 'execute', reconcile: 'reconcile' },
+    pr: { id: 'github-pr', adapter: prAdapter, execute: 'execute', reconcile: 'reconcile' },
   }
   const command = (id, kind, args) => store.command({ id, kind, args })
   async function lookup(effectId) {
@@ -32,6 +34,9 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
       const current = await route.adapter.reconcile(effect.definition.payload)
       if (current?.status !== 'succeeded') throw executionError('WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED')
     }
+    if (effect.state === 'succeeded' && effect.definition.action === 'edit') {
+      if ((await route.adapter.reconcile(effect.definition.payload))?.status !== 'succeeded') throw executionError('EDIT_CURRENT_IDENTITY_UNCONFIRMED')
+    }
     if (['succeeded', 'failed', 'prepared'].includes(effect.state)) return effect
     const { action, payload } = effect.definition
     if (!methods[action]) throw executionError('DELIVERY_ACTION_INVALID')
@@ -55,7 +60,7 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
         effectId, kind: 'operation', runId: binding.runId, nodeId: binding.nodeId, generation: binding.generation,
         leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest,
         definition: { adapterId: route.id, adapterVersion: '1', principalId: grant.principalId, action, payload: prepared },
-        resourceKeys: [action === 'workspace' ? `workspace:${prepared.directory}` : `git:${action === 'push' ? prepared.remote : prepared.repository}:${prepared.ref}`], authorizationRef: grant.authorizationRef,
+        resourceKeys: [['workspace', 'edit'].includes(action) ? `workspace:${prepared.directory}` : action === 'pr' ? `github:${prepared.repo}:${prepared.head}` : `git:${action === 'push' ? prepared.remote : prepared.repository}:${prepared.ref}`], authorizationRef: grant.authorizationRef,
       })
     }
     const { epoch } = await store.query({ kind: 'safety.get' })
@@ -73,9 +78,9 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
       // 在第一个await之前复制，调用方后续修改对象不能改变已授权的发送字节。
       const snapshot = structuredClone(request), { binding, action, prepared } = snapshot
       if (!methods[action]?.adapter || prepared?.action !== action || prepared.generation !== binding?.generation
-        || (action === 'workspace' && prepared.runId !== binding?.runId)
+        || (['workspace', 'edit', 'pr'].includes(action) && prepared.runId !== binding?.runId)
         || !/^[a-f0-9]{64}$/.test(binding?.requirementDigest ?? '') || prepared.requirementDigest !== binding.requirementDigest) return Promise.reject(executionError('DELIVERY_INPUT_INVALID'))
-      const effectId = `${action === 'workspace' ? 'workspace' : 'git'}-${executionDigest({ nodeRunId: binding.nodeRunId, action })}`
+      const effectId = `${['workspace', 'edit'].includes(action) ? action : 'git'}-${executionDigest({ nodeRunId: binding.nodeRunId, action })}`
       const digest = executionDigest(snapshot), existing = flights.get(effectId)
       if (existing) return existing.digest === digest ? existing.promise : Promise.reject(executionError('DELIVERY_IDENTITY_CONFLICT'))
       const promise = dispatch(snapshot, effectId).finally(() => flights.delete(effectId))

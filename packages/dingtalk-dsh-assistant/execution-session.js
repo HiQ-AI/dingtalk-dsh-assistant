@@ -127,7 +127,7 @@ export function createExecutionSessions({ ctx, isCurrent }) {
     binding = Object.freeze(copy(binding))
     const entry = { binding, input: copy(input), cancelled: false, stale: false, attempted: false, accepted: false, steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
     // 定义还可含 Controller 的 mapper/checker 函数；此边界只快照模型实际需要的字段。
-    const fixedDefinition = copy({ provider: definition.provider, model: definition.model, prompt: definition.prompt, allowedTools: definition.allowedTools, outputSchema: definition.outputSchema, maxSteps: definition.maxSteps ?? 32, timeoutMs: definition.timeoutMs ?? 120000 })
+    const fixedDefinition = copy({ provider: definition.provider, model: definition.model, ...(definition.reasoningEffort === undefined ? {} : { reasoningEffort: definition.reasoningEffort }), prompt: definition.prompt, allowedTools: definition.allowedTools, outputSchema: definition.outputSchema, maxSteps: definition.maxSteps ?? 32, timeoutMs: definition.timeoutMs ?? 120000 })
     entries.set(binding.runId, entry); sessions.set(binding.sessionId, entry)
     entry.timer = setTimeout(() => {
       halt(entry, 'execution_timeout')
@@ -147,7 +147,7 @@ export function createExecutionSessions({ ctx, isCurrent }) {
         if (binding.sessionBound && !stored) throw failure('execution_session_missing')
         if (stored) validateHistory(stored.events, entry.binding)
         if (!await current(entry)) return { status: entry.cancelled || closed ? 'cancelled' : 'stale' }
-        const options = { agentOptions: { provider: fixedDefinition.provider, model: fixedDefinition.model }, setup: setup(entry, fixedDefinition), signal: entry.abort.signal }
+        const options = { agentOptions: { provider: fixedDefinition.provider, model: fixedDefinition.model, ...(fixedDefinition.reasoningEffort === undefined ? {} : { reasoningEffort: fixedDefinition.reasoningEffort }) }, setup: setup(entry, fixedDefinition), signal: entry.abort.signal }
         entry.handle = stored
           ? await ctx.agents.resume({ ...options, resumeSessionId: binding.sessionId })
           : await ctx.agents.create({ ...options, sessionId: binding.sessionId,

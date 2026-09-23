@@ -42,7 +42,8 @@ test('Git交付仅提交已验证tree，冻结日期/身份，工作目录与用
   assert.equal((await f.adapter.reconcileCommit(restored)).status, 'succeeded')
   const push = await f.adapter.preparePush({ commit: restored, expectedRemoteSha: null })
   assert.equal(push.verificationDigest, f.verification.digest)
-  assert.equal(push.verification, undefined)
+  assert.deepEqual(push.verification, prepared.verification)
+  assert.ok(push.changedPaths.includes('value.txt'))
   assert.equal((await f.adapter.executePush(push)).status, 'succeeded')
   assert.equal(await git(f.remote, 'rev-parse', 'refs/heads/delivery'), prepared.commitId)
   assert.equal((await f.adapter.reconcilePush(JSON.parse(JSON.stringify(push)))).status, 'succeeded')
@@ -78,9 +79,10 @@ test('准备后远端ref改变，精确lease拒绝覆盖', async () => {
   await assert.rejects(f.adapter.preparePush({ commit: prepared, expectedRemoteSha: sibling }), { code: 'GIT_NON_FAST_FORWARD' })
   assert.equal(await git(f.remote, 'rev-parse', 'refs/heads/delivery'), sibling)
 })
-test('不准入hooks或URL协议；准备后新增hook同样阻断', async () => {
+test('仅准入Host显式HTTPS/SSH或本地remote，拒绝危险协议/hooks', async () => {
   const f = await setup()
-  await assert.rejects(createGitDelivery({ ...f.scope, remote: 'ext::malicious' }), { code: 'GIT_LOCAL_SCOPE_REQUIRED' })
+  for (const remote of ['ext::malicious', 'file:///tmp/remote', 'https://user:password@example.com/a/b.git', 'http://example.com/a/b.git']) await assert.rejects(createGitDelivery({ ...f.scope, remote }), { code: 'GIT_REMOTE_URL_INVALID' })
+  for (const remote of ['https://github.com/test/repo.git', 'git@github.com:test/repo.git', 'ssh://git@github.com/test/repo.git']) assert.ok(await createGitDelivery({ ...f.scope, remote }))
   await assert.rejects(createGitDelivery({ ...f.scope, branch: 'main' }), { code: 'GIT_CHECKED_OUT_REF' })
   await git(f.repository, 'config', 'commit.gpgsign', 'true')
   await assert.rejects(createGitDelivery(f.scope), { code: 'GIT_SIGNING_UNSUPPORTED' })
