@@ -28,3 +28,11 @@ session-timeout-event-assertion,4,PASS,round-4.md#首轮完整回归未通过
 full-repository-regression,5,PASS,round-5.md
 package-content-readback,5,PASS,round-5.md
 controller-real-git-delivery,5,PASS,round-5.md
+workspace-controller-output,6,FAIL,round-6.md
+workspace-controller-output,7,PASS,round-7.md#实跑结果
+workspace-generation-baseline,7,PASS,round-7.md#实跑结果
+workspace-identity-unknown-recovery,7,PASS,round-7.md#实跑结果
+workspace-control-fences,7,PASS,round-7.md#实跑结果
+full-repository-regression,7,PASS,round-7.md#实跑结果
+package-content-readback,7,PASS,round-7.md#实跑结果
+isolated-project-shell-check,7,NOT_RUN,round-7.md#准入与未验证

@@ -18,7 +18,7 @@ async function fixture(t, overrides = {}) {
   let sent = 0, authorized = 0
   const adapter = { executeCommit: async () => { sent++; return { status: 'succeeded', commitId: 'c'.repeat(40) } }, reconcileCommit: async () => ({ status: 'succeeded', commitId: 'c'.repeat(40) }), ...overrides.adapter }
   const authorize = overrides.authorize ?? (async () => { authorized++; return { principalId: 'synthetic', authorizationRef: 'task-grant' } })
-  const gateway = createExecutionDelivery({ store, artifacts, adapter, authorize })
+  const gateway = createExecutionDelivery({ store, artifacts, adapter, workspaceAdapter: overrides.workspaceAdapter, authorize })
   const request = { binding: { ...binding, requirementDigest: 'a'.repeat(64) }, action: 'commit', prepared: { action: 'commit', generation: 1, requirementDigest: 'a'.repeat(64), repository: 'synthetic-repo', remote: 'synthetic-remote', ref: 'refs/heads/task', candidateDigest: 'd'.repeat(64) } }
   return { store, artifacts, gateway, request, counts: () => ({ sent, authorized }) }
 }
@@ -64,4 +64,31 @@ test('Git能力仅给显式注册网关的受信code节点，Agent不能领取Gi
   const node = { id: 'git', version: '1', executor: 'code', allowedEffects: ['git.commit'], inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, mapInput: ({ requirement }) => requirement, execute: async () => ({}) }
   assert.throws(() => createExecutionController({ workflows: [{ id: 'git', version: '1', nodes: [node] }] }), { code: 'DELIVERY_ADAPTER_REQUIRED' })
   assert.throws(() => defineExecutionWorkflow({ id: 'git', version: '1', nodes: [{ ...node, executor: 'agent' }] }), { code: 'EFFECT_NOT_ADMITTED' })
+})
+
+for (const control of ['stop', 'input', 'revoke']) test(`${control}先落账时不能创建受管目录`, async t => {
+  let creates = 0
+  const f = await fixture(t, { workspaceAdapter: { execute: async () => { creates++; return { status: 'succeeded' } }, reconcile: async () => ({ status: 'unknown' }) } })
+  const operation = control === 'stop' ? { kind: 'run.stop', args: { runId: 'run', reason: 'synthetic' } }
+    : control === 'input' ? { kind: 'input.accept', args: { runId: 'run', inputId: 'input', sourceKey: 'source', requirementRef: 'changed.json' } }
+      : { kind: 'safety.revoke', args: { scope: 'run', key: 'run', reason: 'synthetic revoke' } }
+  await f.store.command({ id: 'control', ...operation })
+  await assert.rejects(f.gateway.execute({ binding: f.request.binding, action: 'workspace', prepared: { action: 'workspace', runId: 'run', generation: 1, requirementDigest: 'a'.repeat(64), directory: 'synthetic' } }))
+  assert.equal(creates, 0)
+})
+
+test('受管目录归属不同run，即使代际与需求相同也不得创建', async t => {
+  let creates = 0
+  const f = await fixture(t, { workspaceAdapter: { execute: async () => { creates++; return { status: 'succeeded' } } } })
+  await assert.rejects(f.gateway.execute({ binding: f.request.binding, action: 'workspace', prepared: { action: 'workspace', runId: 'other-run', generation: 1, requirementDigest: 'a'.repeat(64), directory: 'synthetic' } }), { code: 'DELIVERY_INPUT_INVALID' })
+  assert.equal(creates, 0)
+})
+
+test('历史目录创建成功后路径丢失不能靠重投回执继续认领，也不能重克隆', async t => {
+  let creates = 0
+  const f = await fixture(t, { workspaceAdapter: { execute: async () => { creates++; return { status: 'succeeded' } }, reconcile: async () => ({ status: 'unknown' }) } })
+  const request = { binding: f.request.binding, action: 'workspace', prepared: { action: 'workspace', runId: 'run', generation: 1, requirementDigest: 'a'.repeat(64), directory: 'synthetic' } }
+  assert.equal((await f.gateway.execute(request)).state, 'succeeded')
+  await assert.rejects(f.gateway.execute(request), { code: 'WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED' })
+  assert.equal(creates, 1)
 })

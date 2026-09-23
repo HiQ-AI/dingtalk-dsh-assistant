@@ -200,11 +200,11 @@ await store.query({ kind: 'safety.get' })
 
 ## 7. M2 本地候选与受控 Git 交付
 
-包的 `./execution` 入口导出 `freezeCandidate`、`readCandidate`、`verifyCandidate` 和 `createGitDelivery`。本批是 M2 的首个交付环节，尚无自动开发工作区/跨代清理、GitHub PR 适配器、真实项目 shell 检查、消息通知或完整开发业务准入。
+包的 `./execution` 入口导出 `freezeCandidate`、`readCandidate`、`verifyCandidate` 和 `createGitDelivery`。M2 已提供第 8 节的受管代际目录；跨代自动清理、GitHub PR 适配器、真实项目 shell 检查、消息通知及完整开发业务准入仍未完成。
 
 ### 冻结与验证
 
-`freezeCandidate({repository,baseCommit,generation,requirementDigest})` 对受管仓库的 tracked/untracked 文件及删除生成完整 tree，使用临时 index，不创建临时 commit，不改用户 index 和工作文件。冻结前调用方必须持有写 lease 并排空写者；它不是对并发修改目录的原子拍照。新代必须从有效基线准备新受管目录，不能把失效旧目录直接再次冻结；本批没有自动生成此类新目录的业务管理器。
+`freezeCandidate({repository,baseCommit,generation,requirementDigest})` 对受管仓库的 tracked/untracked 文件及删除生成完整 tree，使用临时 index，不创建临时 commit，不改用户 index 和工作文件。冻结前调用方必须持有写 lease 并排空写者；它不是对并发修改目录的原子拍照。新代应通过第 8 节从有效基线准备新受管目录，不能把失效旧目录直接再次冻结。
 
 `verifyCandidate({candidate,checks:[{id,version,run}]})` 的 run 只取得固定 tree 的文件列表及 readFile。日志和 passed 是显式结果；默认没有 shell 测试。检查函数来自受信插件，不构成操作系统沙箱。文件上限16 MiB、全部文件64 MiB、10000项；不支持符号链接、子模块或适用的执行型过滤器。
 
@@ -237,3 +237,33 @@ ctx.provide('executionDelivery', {
 - 效果先进入控制账，再取得一次发送资格。开始前已落账的stop/补充/撤权阻断发送；已开始动作的迟到结果仍入账，不承诺撤回在途操作。
 - 回执丢失保持 unknown 和资源占用。先 `runtime.delivery.reconcile(effectId)` 独立读回本地/远端事实；确认 succeeded/failed 后才能 `controller.recover(...)`。对账不产生 commit/push。远端又前进、条件冲突或无法证明结果时保持 unknown，不自动解锁重试。
 - 任务状态和节点进度由控制账产生，无需执行 Agent 额外回复进度；本批尚未接入旧 Web 看板/钉钉展示。
+
+## 8. M2 受管代际目录
+
+新增 `createManagedWorkspaces({root,sourceRepository})` 导出。root 是预先创建的专用绝对目录，必须位于源仓库之外；sourceRepository 是固定本地源。准备方法只读，目录路径由 runId/generation 摘要生成，业务消息不能指定任意写入路径。
+
+在已有 `executionDelivery` 服务对象中添加 `workspaceAdapter`，仍使用同一个真实任务授权回调；直接 openExecutionRuntime 则放在 deliveryOptions 中。不得另行重复 provide 已存在服务。
+
+```js
+const workspaceAdapter = await createManagedWorkspaces({
+  root: '<既有的受管根目录绝对路径>',
+  sourceRepository: '<固定源仓库绝对路径>',
+})
+// 作为受信code节点的execute；节点声明allowedEffects:['workspace.prepare']。
+async function prepareDirectory({ input, runId, generation, requirementDigest, perform }) {
+  const prepared = await workspaceAdapter.prepare({
+    runId, generation, requirementDigest, baseCommit: input.baseCommit,
+  })
+  return perform({ action: 'workspace', prepared })
+}
+```
+
+`perform` 返回适配器业务产出，例如 `{status:'succeeded',directory,baseCommit,baseTree,preparedDigest}`，不会把控制账的回执信封当业务参数。权威效果记录和证据仍通过 store 查询。Agent不能声明 workspace.prepare 能力，原始execute/reconcile仅供受信Host内部，不是模型工具。
+
+流程固定为：控制账身份/授权/屏障检查 → 持久效果开始 → 独占创建父容器及归属文件 → 独立无hardlink clone → detached checkout固定base → 对照完整文件全集和每个blob SHA → 写初始化完成标记 → 控制账观察回执。源未提交修改和旧代目录从不复制；源HEAD/index/工作文件保全。一个代际一次分配，不提供覆盖、reset、重新克隆或自动删除入口。
+
+新补充先在Controller持久接纳并排空旧执行，再建立新代目录。A代删除/未跟踪内容不进入B代；A目录保留以便核对。保留旧改动需要后续明确采纳和重新验证，本批不自动合并。
+
+结果丢失时沿用第7节 `delivery.reconcile(effectId)` 后恢复：完整归属、完成标记及固定HEAD仍相符才能复用；之后用户对文件的正常编辑保留。目录不存在、初始化残缺、归属或HEAD冲突时不覆盖，保持恢复错误/unknown供定位。已记录创建成功的目录再次使用前也重新检查当前身份，旧receipt不是当前目录存在的证明。
+
+准入限制：SHA-1独立非bare源仓库；不支持源worktree共享对象、`.gitattributes`、链接、子模块、shallow、alternates/grafts、hook和执行型Git配置。初始化Git使用独立global/system配置边界；不运行项目脚本。文件上限与候选一致（单文件16MiB、合计64MiB、10000项）。独立仓库和元信息不构成OS权限/网络沙箱，不能因此开放任意shell。

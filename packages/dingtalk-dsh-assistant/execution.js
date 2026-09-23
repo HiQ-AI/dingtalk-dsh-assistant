@@ -6,6 +6,7 @@ import { createExecutionDelivery } from './execution-delivery.js'
 
 export { freezeCandidate, readCandidate, verifyCandidate } from './execution-candidate.js'
 export { createGitDelivery } from './execution-git.js'
+export { createManagedWorkspaces } from './execution-workspace.js'
 
 export const name = 'dingtalk-execution-foundation'
 export const inject = ['executionWorkflows', 'agents', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'llm', 'tools', 'systemPrompt']

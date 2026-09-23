@@ -25,8 +25,8 @@ export function defineExecutionWorkflow(definition) {
     if (ids.has(node.id)) throw executionError('DUPLICATE_NODE')
     ids.add(node.id)
     if (!['code', 'agent'].includes(node.executor)) throw executionError('EXECUTOR_NOT_ADMITTED')
-    if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push'].includes(e))
-      || (node.executor === 'agent' && node.allowedEffects.some(e => e.startsWith('git.')))) throw executionError('EFFECT_NOT_ADMITTED')
+    if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push', 'workspace.prepare'].includes(e))
+      || (node.executor === 'agent' && node.allowedEffects.some(e => !['pure', 'read'].includes(e)))) throw executionError('EFFECT_NOT_ADMITTED')
     if (typeof node.mapInput !== 'function') throw executionError('INPUT_MAPPER_REQUIRED')
     if (node.executor === 'code' && typeof node.execute !== 'function') throw executionError('CODE_EXECUTOR_REQUIRED')
     if (node.executor === 'agent' && (![node.provider, node.model, node.prompt].every(v => typeof v === 'string' && v.length) || !Array.isArray(node.allowedTools))) throw executionError('AGENT_DEFINITION_INVALID')
@@ -50,7 +50,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   for (const input of workflows) {
     const definition = defineExecutionWorkflow(input)
     if (definitions.has(definition.id)) throw executionError('DUPLICATE_WORKFLOW')
-    if (!delivery && definition.nodes.some(node => node.allowedEffects.some(e => e.startsWith('git.')))) throw executionError('DELIVERY_ADAPTER_REQUIRED')
+    if (!delivery && definition.nodes.some(node => node.allowedEffects.some(e => !['pure', 'read'].includes(e)))) throw executionError('DELIVERY_ADAPTER_REQUIRED')
     for (const node of definition.nodes) if ((node.allowedTools ?? []).some(name => !readTools.includes(name))) throw executionError('TOOL_NOT_ADMITTED')
     definitions.set(definition.id, definition); byDigest.set(definition.digest, definition)
   }
@@ -157,13 +157,13 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           abort.signal.throwIfAborted()
           if (!await isCurrent(binding)) throw executionError('NODE_STALE')
           abort.signal.throwIfAborted()
-          output = await nodeDefinition.execute({ input: structuredClone(input.data), signal: abort.signal, generation: binding.generation, requirementDigest: binding.requirementDigest,
+          output = await nodeDefinition.execute({ input: structuredClone(input.data), signal: abort.signal, runId: binding.runId, generation: binding.generation, requirementDigest: binding.requirementDigest,
             perform: async ({ action, prepared }) => {
-              if (!nodeDefinition.allowedEffects.includes(`git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
+              if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
               abort.signal.throwIfAborted()
               const effect = await delivery.execute({ binding, action, prepared })
               if (effect.state !== 'succeeded') throw executionError('DELIVERY_RECONCILIATION_REQUIRED')
-              return effect.result
+              return effect.result.result // 对执行节点交接适配器产出，控制账回执仍单独留存。
             },
           })
           abort.signal.throwIfAborted(); submitted = true
