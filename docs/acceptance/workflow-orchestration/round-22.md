@@ -19,6 +19,10 @@
 - `node --test`：633/633 PASS，0 fail/cancel/skip，47.69秒；完整输出round-22/full-tests.txt。
 - Web客户端重新生成；`git diff --check`通过。
 
-## 待部署
+## 本地部署与真实请求回读
 
-本地正式profile仍运行上一包；需精确安装本候选、回读配置为gpt-6-sol，并在重启后验证持久值与后续真实模型请求。业务响应正确性与模型账户授权另行按真实请求结果判断。
+- 部署前自检v9数据0 invalid/stripped/unknown，识别7条非终态Task及当前DSH进程树；按既有中断重启授权停止后备份完整存储/profile至`D:/dsh_home/backups/default-model-f9e67af-20260923`，备份hash一致。
+- 源码f9e67af，包SHA256 `601805A1DE622E0A79C708C4FE749711A646836C710E2590856CB7530F2DD969`；34个JS安装摘要逐一匹配，Observer及其它依赖保持。
+- 新PID113788于10:46:52启动，3080/18998同进程；认证Web握手303、页面200 HTML。健康ok、恢复告警0、入站处理与DWS桥接正常。
+- `D:/dsh_home/settings.yaml`持久值及`GET /state/agent-config`均为`openai-codex/gpt-6-sol`、reasoningEffort low。
+- 部署后8个不同协调/任务Session的真实`request/context`记录均为`openai-codex/gpt-6-sol`，证明实际请求已切换，不只页面回显。脱敏证据见runtime-readback.json；不包含正文或凭据。
