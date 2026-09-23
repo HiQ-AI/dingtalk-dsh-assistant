@@ -322,16 +322,16 @@ Web 操作验收需使用配置明确映射的 `workflow.webActorId`。新任务
 
 ### 工程固定检查的阶段预算与失败证据
 
-`checks[].timeoutMs` 是整个检查的总执行预算，默认仍为 `120000`，允许范围 `1..1200000` 毫秒。每个 `steps[]` 可显式配置 `timeoutMs`，范围 `1..900000`；省略时沿用共享总预算语义。实际单步 deadline 取自身预算与总剩余时间的较小值，不在下一步重置总时间。参数只能由 Host 配置提供，不由消息或模型延长。
+`checks[].timeoutMs` 是整个检查的总执行预算，默认仍为 `120000`，允许范围 `1..2400000` 毫秒。每个 `steps[]` 可显式配置 `timeoutMs`，范围 `1..1800000`；省略时沿用共享总预算语义。实际单步 deadline 取自身预算与总剩余时间的较小值，不在下一步重置总时间。参数只能由 Host 配置提供，不由消息或模型延长。
 
 冷安装与构建各需独立预算的仓库，可明确写为：
 
 ```js
 {
-  id: 'install-build', version: '1', timeoutMs: 1200000,
+  id: 'install-build', version: '1', timeoutMs: 2400000,
   steps: [
     { executable: trustedNodePath, args: [trustedYarnCliPath, 'install', '--frozen-lockfile'], timeoutMs: 600000 },
-    { executable: trustedNodePath, args: [trustedYarnCliPath, 'build'], timeoutMs: 900000 },
+    { executable: trustedNodePath, args: [trustedYarnCliPath, 'build'], timeoutMs: 1800000 },
   ],
 }
 ```

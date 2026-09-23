@@ -79,9 +79,9 @@ test('检查分步预算分别生效且总预算不可被后续step重置', asyn
     if(item.id==='second'){assert.equal(log.steps[0].exitCode,0);assert.equal(log.steps[0].timeoutScope,null);assert.equal(log.steps[1].budgetMs,500)}
     if(item.id==='total')assert.ok(log.steps[1].budgetMs<1000)
   }
-  assert.throws(()=>createVerificationJobCheck({id:'bad-total',version:'1',root,timeoutMs:1200001,steps:[step(1,100)]}),{code:'VERIFY_JOB_CONFIG_INVALID'})
-  assert.throws(()=>createVerificationJobCheck({id:'bad-step',version:'1',root,timeoutMs:1200000,steps:[step(1,900001)]}),{code:'VERIFY_JOB_CONFIG_INVALID'})
-  assert.ok(createVerificationJobCheck({id:'declared',version:'1',root,timeoutMs:1200000,steps:[step(1,600000),step(1,900000)]}))
+  assert.throws(()=>createVerificationJobCheck({id:'bad-total',version:'1',root,timeoutMs:2400001,steps:[step(1,100)]}),{code:'VERIFY_JOB_CONFIG_INVALID'})
+  assert.throws(()=>createVerificationJobCheck({id:'bad-step',version:'1',root,timeoutMs:2400000,steps:[step(1,1800001)]}),{code:'VERIFY_JOB_CONFIG_INVALID'})
+  assert.ok(createVerificationJobCheck({id:'declared',version:'1',root,timeoutMs:2400000,steps:[step(1,600000),step(1,1800000)]}))
 })
 
 test('20KB真实控制字符与最坏文本转义日志有界无损，末步输出不在顶层重复', async () => {

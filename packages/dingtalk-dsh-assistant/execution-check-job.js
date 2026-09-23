@@ -17,8 +17,8 @@ export function createVerificationJobCheck({ id, version, root, executable, args
   const commands = structuredClone(steps ?? [{ executable, args }])
   if (![id, version].every(value => typeof value === 'string' && value) || !isAbsolute(root ?? '') || !Array.isArray(commands) || !commands.length || commands.length > 8
     || commands.some(command => typeof command.executable !== 'string' || !command.executable || !Array.isArray(command.args) || command.args.some(value => typeof value !== 'string')
-      || (command.timeoutMs !== undefined && (!Number.isSafeInteger(command.timeoutMs) || command.timeoutMs < 1 || command.timeoutMs > 900000)))
-    || Buffer.byteLength(JSON.stringify({ root, commands })) > 8000 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 1200000) throw executionError('VERIFY_JOB_CONFIG_INVALID')
+      || (command.timeoutMs !== undefined && (!Number.isSafeInteger(command.timeoutMs) || command.timeoutMs < 1 || command.timeoutMs > 1800000)))
+    || Buffer.byteLength(JSON.stringify({ root, commands })) > 8000 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2400000) throw executionError('VERIFY_JOB_CONFIG_INVALID')
   return { id, version, configurationDigest: executionDigest({ id, version, root, commands, timeoutMs }), async run(snapshot, { signal } = {}) {
     signal?.throwIfAborted()
     await mkdir(root, { recursive: true })
