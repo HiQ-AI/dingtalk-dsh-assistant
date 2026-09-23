@@ -389,3 +389,5 @@ pnpm test
 ## 实验性执行底座
 
 独立入口 `@zzusp/dingtalk-dsh-assistant/execution` 提供 M1 的 SQLite 控制账与受信顺序节点，默认不加载。离线初始化、Host 服务注入、恢复及当前能力边界见[执行底座本地运维](docs/ops/execution-foundation-local.md)；现阶段不用于生产任务、shell 或旧 resident 数据迁移。
+
+M2 已增加固定 Git tree 候选验证与显式注册的本地 Git 交付环节，包含控制账发送许可、条件更新及未知结果对账。真实项目 shell、远程平台 PR 和完整业务迁移尚未接入。

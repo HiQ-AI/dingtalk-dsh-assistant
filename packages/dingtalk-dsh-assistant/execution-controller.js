@@ -25,7 +25,8 @@ export function defineExecutionWorkflow(definition) {
     if (ids.has(node.id)) throw executionError('DUPLICATE_NODE')
     ids.add(node.id)
     if (!['code', 'agent'].includes(node.executor)) throw executionError('EXECUTOR_NOT_ADMITTED')
-    if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read'].includes(e))) throw executionError('EFFECT_NOT_ADMITTED')
+    if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push'].includes(e))
+      || (node.executor === 'agent' && node.allowedEffects.some(e => e.startsWith('git.')))) throw executionError('EFFECT_NOT_ADMITTED')
     if (typeof node.mapInput !== 'function') throw executionError('INPUT_MAPPER_REQUIRED')
     if (node.executor === 'code' && typeof node.execute !== 'function') throw executionError('CODE_EXECUTOR_REQUIRED')
     if (node.executor === 'agent' && (![node.provider, node.model, node.prompt].every(v => typeof v === 'string' && v.length) || !Array.isArray(node.allowedTools))) throw executionError('AGENT_DEFINITION_INVALID')
@@ -43,12 +44,13 @@ export function defineExecutionWorkflow(definition) {
 }
 
 /** 一个Controller拥有推进权；等待及状态查询不调用模型，所有身份由控制账产生。 */
-export function createExecutionController({ store, artifacts, sessions, workflows, readTools = [], maxConcurrentRuns = 4, changeQuietMs = 2000, maxChangeDelayMs = 10000 }) {
+export function createExecutionController({ store, artifacts, sessions, delivery, workflows, readTools = [], maxConcurrentRuns = 4, changeQuietMs = 2000, maxChangeDelayMs = 10000 }) {
   if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1 || maxConcurrentRuns > 32 || !Number.isFinite(changeQuietMs) || changeQuietMs < 0 || maxChangeDelayMs < changeQuietMs) throw executionError('CONTROLLER_CONFIG_INVALID')
   const definitions = new Map(), byDigest = new Map()
   for (const input of workflows) {
     const definition = defineExecutionWorkflow(input)
     if (definitions.has(definition.id)) throw executionError('DUPLICATE_WORKFLOW')
+    if (!delivery && definition.nodes.some(node => node.allowedEffects.some(e => e.startsWith('git.')))) throw executionError('DELIVERY_ADAPTER_REQUIRED')
     for (const node of definition.nodes) if ((node.allowedTools ?? []).some(name => !readTools.includes(name))) throw executionError('TOOL_NOT_ADMITTED')
     definitions.set(definition.id, definition); byDigest.set(definition.digest, definition)
   }
@@ -143,7 +145,8 @@ export function createExecutionController({ store, artifacts, sessions, workflow
         runId, nodeId: ready.nodeId, expectedGeneration: ready.generation, expectedLeaseEpoch: ready.leaseEpoch,
       })
       if (receipt.result.status === 'budget_exhausted') return
-      const binding = { ...receipt.result.binding, taskId: state.run.taskId }
+      const binding = { ...receipt.result.binding, taskId: state.run.taskId,
+        requirementDigest: executionDigest(await artifacts.read(state.run.requirementRef)) }
       const abort = new AbortController(); active.set(runId, abort)
       let output, submitted = false, failure, outcome
       try {
@@ -154,7 +157,15 @@ export function createExecutionController({ store, artifacts, sessions, workflow
           abort.signal.throwIfAborted()
           if (!await isCurrent(binding)) throw executionError('NODE_STALE')
           abort.signal.throwIfAborted()
-          output = await nodeDefinition.execute({ input: structuredClone(input.data), signal: abort.signal })
+          output = await nodeDefinition.execute({ input: structuredClone(input.data), signal: abort.signal, generation: binding.generation, requirementDigest: binding.requirementDigest,
+            perform: async ({ action, prepared }) => {
+              if (!nodeDefinition.allowedEffects.includes(`git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
+              abort.signal.throwIfAborted()
+              const effect = await delivery.execute({ binding, action, prepared })
+              if (effect.state !== 'succeeded') throw executionError('DELIVERY_RECONCILIATION_REQUIRED')
+              return effect.result
+            },
+          })
           abort.signal.throwIfAborted(); submitted = true
         } else {
           if (!sessions) throw executionError('SESSION_ADAPTER_UNAVAILABLE')

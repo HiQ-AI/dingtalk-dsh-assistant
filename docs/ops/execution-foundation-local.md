@@ -2,7 +2,7 @@
 
 本说明对应 M1 的独立执行入口 `@zzusp/dingtalk-dsh-assistant/execution`。它**不默认加载**，不读取或迁移 resident 的 Task 账；现有群消息、Web 看板和 resident 流程继续使用原入口。当前仅准入受信定义的 `pure/read` 顺序节点，用于隔离环境中的合成任务与受控读取。
 
-本批没有生产发布、SQL、钉钉发送或 shell 作业启动适配器。不得将现有生产任务、工程 shell、凭据操作或旧存储迁入本入口；工具白名单与独立目录不构成操作系统隔离。M1 的局部测试不代表真实模型质量、渠道送达、整体时延、token 成本或完整业务链已经验收。
+M2 增加了显式注册的本地 Git 交付适配器，见第 7 节；默认未注册时仍只准入 pure/read。没有生产发布、SQL、钉钉发送或 shell 作业启动适配器。不得将现有生产任务、工程 shell、凭据操作或旧存储迁入本入口；工具白名单与独立目录不构成操作系统隔离。局部测试不代表真实模型质量、渠道送达、整体时延、token 成本或完整业务链已经验收。
 
 ## 1. 离线初始化
 
@@ -197,3 +197,43 @@ await store.query({ kind: 'safety.get' })
 排障材料只留错误代码、脱敏身份、版本和必要摘要，不公开消息正文、凭据或本机个人目录。备份应使用 SQLite 一致性机制，或在所有相关写者已停稳后保全数据库及关联工件/Session；不能只复制运行中的主 `.db` 文件。M1 没有自动迁移或备份恢复命令，恢复旧快照前必须核对其后实际效果，不能抹掉新审批和未决操作再执行。
 
 本入口源码、合成测试、真实服务接线、生产部署、渠道回读和性能验收分别留证。只有对应层实际通过，才记录该层完成。
+
+## 7. M2 本地候选与受控 Git 交付
+
+包的 `./execution` 入口导出 `freezeCandidate`、`readCandidate`、`verifyCandidate` 和 `createGitDelivery`。本批是 M2 的首个交付环节，尚无自动开发工作区/跨代清理、GitHub PR 适配器、真实项目 shell 检查、消息通知或完整开发业务准入。
+
+### 冻结与验证
+
+`freezeCandidate({repository,baseCommit,generation,requirementDigest})` 对受管仓库的 tracked/untracked 文件及删除生成完整 tree，使用临时 index，不创建临时 commit，不改用户 index 和工作文件。冻结前调用方必须持有写 lease 并排空写者；它不是对并发修改目录的原子拍照。新代必须从有效基线准备新受管目录，不能把失效旧目录直接再次冻结；本批没有自动生成此类新目录的业务管理器。
+
+`verifyCandidate({candidate,checks:[{id,version,run}]})` 的 run 只取得固定 tree 的文件列表及 readFile。日志和 passed 是显式结果；默认没有 shell 测试。检查函数来自受信插件，不构成操作系统沙箱。文件上限16 MiB、全部文件64 MiB、10000项；不支持符号链接、子模块或适用的执行型过滤器。
+
+验证成功票据由本进程创建并冻结，复制出来的普通 JSON 不算可信票据。`prepareCommit` 要求这张真实票据和精确 requiredChecks；重启时尚未准备交付的候选需重新运行只读检查。已经持久准备的动作使用原 payload 对账，不能因票据不在内存就重发写操作。
+
+### 受信 Host 装配
+
+```js
+const adapter = await createGitDelivery({
+  repository: '<受管源仓库绝对路径>', remote: '<本地bare远端绝对路径>',
+  branch: 'delivery', author: { name: 'Synthetic', email: 'synthetic@example.invalid' },
+})
+ctx.provide('executionDelivery', {
+  adapter,
+  // 此回调必须查询实际任务授权；没有授权返回null，不接受模型自报。
+  authorize: async ({ binding, action, prepared }) => lookupTaskGrant(binding.taskId, action, prepared),
+})
+```
+
+定义插件应在装配执行入口前提供此服务；直接使用 openExecutionRuntime 时传 `deliveryOptions`。上述回调是接线示意，`lookupTaskGrant` 必须由 Host 实现。authorizer 返回 `{principalId,authorizationRef}`；这不是新增人工确认环节，已有明确任务授权可以直接复用。静态授权示例不得用于真实用户入口。
+
+只有 code 节点可以声明 `allowedEffects:['git.commit']` 或 `['git.push']`；Agent 声明会被拒绝。受信 execute 回调取得 Host 的 generation、requirementDigest 和 `perform({action,prepared})`。candidate 必须使用这些身份；不能使用另一任务的同代候选。每个节点每种动作只有一个固定 operation 身份，需要多次不同动作应拆节点。
+
+顺序为：冻结 → 真实只读验证 → `adapter.prepareCommit({candidate,verification,requiredChecks,message,date})` → commit 节点 `perform` → `preparePush({commit,expectedRemoteSha})` → push 节点 `perform`。date 是首次计划时冻结的 Unix秒+时区字符串（例如 `1790150400 +0000`），必须持久复用，不能每次恢复取当前时间。prepared 含验证检查、版本和日志，仍受64 KiB节点工件上限约束；超限明确失败，不截断证据。
+
+### Git 边界与恢复
+
+- 当前只支持 SHA-1、本地路径 bare remote、无真实 hook、无签名要求的受管仓库；HTTP/SSH/凭据和 GitHub PR 未接入。Git参数固定且不调用shell。
+- 目标分支不能在任何 worktree 中被检出。commit 使用精确已验证 tree；update-ref核对旧SHA。push 使用精确 ref/commit 和远端旧SHA lease，并检查 fast-forward，不能覆盖分叉历史。
+- 效果先进入控制账，再取得一次发送资格。开始前已落账的stop/补充/撤权阻断发送；已开始动作的迟到结果仍入账，不承诺撤回在途操作。
+- 回执丢失保持 unknown 和资源占用。先 `runtime.delivery.reconcile(effectId)` 独立读回本地/远端事实；确认 succeeded/failed 后才能 `controller.recover(...)`。对账不产生 commit/push。远端又前进、条件冲突或无法证明结果时保持 unknown，不自动解锁重试。
+- 任务状态和节点进度由控制账产生，无需执行 Agent 额外回复进度；本批尚未接入旧 Web 看板/钉钉展示。

@@ -254,21 +254,26 @@ if (process.argv[2] === '--execution-session-child') {
     assert.equal(resumed.result.status, 'submitted')
   })
 
-  test('重复合法工具读取受maxSteps约束；timeout取消后仍须等真实工具排空', { timeout: 10000 }, async t => {
+  test('重复合法工具读取受maxSteps约束；timeout取消后仍须等真实工具排空', { timeout: 20000 }, async t => {
     const h = await host({ script: () => ({ name: 'read_fixture' }) }); t.after(() => h.close())
     const result = await drive(h, { definition: definition({ maxSteps: 3 }) })
     assert.deepEqual(result, { status: 'no_submission', reason: 'execution_step_budget_exhausted' })
     assert.equal(h.requests.length, 3); assert.equal(h.reads.length, 3)
     await delay(60); assert.equal(h.requests.length, 3)
     const slow = await host({ script: [{ name: 'slow_tool' }] })
-    const entered = Promise.withResolvers(), release = Promise.withResolvers()
+    const entered = Promise.withResolvers(), release = Promise.withResolvers(), aborted = Promise.withResolvers()
     t.after(async () => { release.resolve(); await slow.close() })
     slow.ctx.tools.register({ name: 'slow_tool', description: '超时后仍排空', parameters: { type: 'object' }, output,
-      async execute(_args, exec) { entered.resolve(); await release.promise; exec.signal.throwIfAborted(); return {} },
+      async execute(_args, exec) {
+        exec.signal.addEventListener('abort', () => aborted.resolve(), { once: true })
+        entered.resolve(); await release.promise; exec.signal.throwIfAborted(); return {}
+      },
     })
     let completed = false
-    const active = drive(slow, { definition: definition({ allowedTools: ['slow_tool'], timeoutMs: 100 }) }).then(value => { completed = true; return value })
-    await entered.promise; await delay(150)
+    const active = drive(slow, { definition: definition({ allowedTools: ['slow_tool'], timeoutMs: 3000 }) }).then(value => { completed = true; return value })
+    // 原来的100ms包含JSONL启动耗时，高并发时会在进入工具前超时并永等entered。
+    await Promise.race([entered.promise, active.then(() => { throw new Error('timeout_before_tool_entered') })])
+    await aborted.promise
     assert.equal(completed, false); assert.ok(slow.ctx.agents.get(binding().sessionId))
     release.resolve()
     assert.deepEqual(await active, { status: 'no_submission', reason: 'execution_timeout' })

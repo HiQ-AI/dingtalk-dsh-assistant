@@ -19,3 +19,12 @@ full-repository-regression,2,PASS,round-2.md#最终验证
 controller-input-batch-byte-bound,3,PASS,round-3.md#反例与修订
 full-repository-regression,3,PASS,round-3.md#交付验证
 package-content-readback,3,PASS,round-3.md#交付验证
+candidate-freeze-fixed-validation,4,PASS,round-4.md#已验证
+git-condition-commit-push,4,PASS,round-4.md#已验证
+delivery-fences-and-reconciliation,4,PASS,round-4.md#已验证
+controller-real-git-delivery,4,PASS,round-4.md#已验证
+full-repository-regression,4,FAIL,round-4.md#首轮完整回归未通过
+session-timeout-event-assertion,4,PASS,round-4.md#首轮完整回归未通过
+full-repository-regression,5,PASS,round-5.md
+package-content-readback,5,PASS,round-5.md
+controller-real-git-delivery,5,PASS,round-5.md
