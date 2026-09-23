@@ -385,3 +385,7 @@ pnpm test
 - [人工介入中心](docs/spec/authorization-approval-center.md)
 - [钉钉人工介入回复实时生效](docs/spec/approval-reply-live-events.md)
 - [运行看板](docs/spec/dingtalk-resident-observer.md)
+
+## 实验性执行底座
+
+独立入口 `@zzusp/dingtalk-dsh-assistant/execution` 提供 M1 的 SQLite 控制账与受信顺序节点，默认不加载。离线初始化、Host 服务注入、恢复及当前能力边界见[执行底座本地运维](docs/ops/execution-foundation-local.md)；现阶段不用于生产任务、shell 或旧 resident 数据迁移。
