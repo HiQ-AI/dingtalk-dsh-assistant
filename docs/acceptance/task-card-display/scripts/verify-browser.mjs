@@ -22,7 +22,8 @@ const routes = new Map([
 // 真实 React 与完整 observer 代码；DSH 外壳/primitive 仅用无副作用语义替身。
 const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>流程状态验收夹具</title><style>body{margin:0;color:#202124;font:14px "Microsoft YaHei",sans-serif}#sidebar{padding:8px}button{font:inherit}#app{height:calc(100dvh - 48px)}</style><div id="sidebar"></div><div id="app"></div><script src="/react.js"></script><script src="/react-dom.js"></script><script>
 window.opened=[];const h=React.createElement;
-const primitives={Button:({variant,size,children,...props})=>h('button',props,children),Pill:({children,...props})=>h('span',props,children),StateDot:({state,size=7})=>h('span',{'aria-hidden':true,style:{display:'inline-block',width:size,height:size,borderRadius:'50%',background:state==='done'?'#248a3d':'#737373'}}),Menu:({anchor})=>anchor};
+const matrixCells=[[0,0],[4,0],[8,0],[8,4],[8,8],[4,8],[0,8],[0,4]];
+const primitives={Button:({variant,size,children,...props})=>h('button',props,children),Pill:({children,...props})=>h('span',props,children),StateDot:({state,size=10})=>state==='ongoing'?h('svg',{'data-state':'ongoing',width:size,height:size,viewBox:'0 0 10 10',shapeRendering:'crispEdges','aria-hidden':true,style:{color:'#5675ef'}},...matrixCells.map(([x,y])=>h('rect',{key:x+'-'+y,x,y,width:2,height:2,fill:'currentColor'}))):h('span',{'data-state':state,'aria-hidden':true,style:{display:'inline-block',width:size,height:size,borderRadius:'50%',background:state==='done'?'#248a3d':'#737373'}}),Menu:({anchor})=>anchor};
 primitives.IconChecklistOutline14=({size=14,...props})=>h('svg',{...props,width:size,height:size,viewBox:'0 0 14 14',fill:'none'},
   h('path',{d:'M13.3277 9.69629V10.976H7.28086V9.69629H13.3277Z',fill:'currentColor'}),
   h('path',{d:'M13.3277 2.97256V4.25225H7.28086V2.97256H13.3277Z',fill:'currentColor'}),
@@ -98,6 +99,10 @@ try {
   assert.equal(await toggle.locator('svg').first().locator('path').count(), 4)
   assert.equal(await toggle.locator('svg').last().locator('path').getAttribute('d'), 'M3 9L7 5L11 9')
   checks.push('checklist-icon-distinct-from-collapse-chevron')
+  const currentStageIcon = page.locator('[data-state="ongoing"]:visible').first()
+  assert.equal(await currentStageIcon.getAttribute('viewBox'), '0 0 10 10')
+  assert.equal(await currentStageIcon.locator('rect').count(), 8)
+  checks.push('ongoing-icon-pixel-matrix')
   const outline = await toggle.evaluate(element => getComputedStyle(element).outlineStyle)
   assert.notEqual(outline, 'none')
   checks.push('keyboard-enter-expands', 'visible-focus')
