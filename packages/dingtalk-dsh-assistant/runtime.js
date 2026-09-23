@@ -143,7 +143,7 @@ const leafDisplayName = (objective) => {
 }
 const installModelSelection = (agentCtx, selection) => {
   const disposeAssembly = agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => {
-    const selected = selection.current
+    const selected = selection.current()
     const assembled = await next()
     selection.assembled = selected
     if (selected === undefined) return assembled
@@ -252,10 +252,13 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
   }
   if (store.getMaxConcurrentTasks?.() === undefined) await store.setMaxConcurrentTasks?.(taskConcurrencyLimit)
   if (!Number.isFinite(decisionRetryBaseMs) || decisionRetryBaseMs < 0) throw new Error('decision_retry_base_invalid')
-  const selection = ctx.agentDefaultModel.currentSelection()
-  const agentOptions = { provider: selection.provider, model: selection.model }
+  const currentSelection = () => ctx.agentDefaultModel.currentSelection()
+  const agentOptions = () => {
+    const selected = currentSelection()
+    return { provider: selected.provider, model: selected.model }
+  }
   const installSelection = (agentCtx) => {
-    installModelSelection(agentCtx, { current: selection, assembled: undefined })
+    installModelSelection(agentCtx, { current: () => ({ ...currentSelection() }), assembled: undefined })
   }
   const applyPermission = (handle, preset) => {
     const permissionPresets = agentPresets?.serviceFor?.(handle.agent, 'permissionPresets')
@@ -283,8 +286,8 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
       mode: 'continuable',
       provider: 'dingtalk-dsh-assistant',
       label: leafDisplayName(task.title ?? task.objective),
-      agentProvider: agentOptions.provider,
-      agentModel: agentOptions.model,
+      agentProvider: currentSelection().provider,
+      agentModel: currentSelection().model,
     }))
   }
   const residentSetup = (groupId) => async (agentCtx) => {
@@ -943,7 +946,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
   }
   async function resumeResident(group) {
     if (residentHandles.has(group.groupId)) return residentHandles.get(group.groupId)
-    const handle = await ctx.agents.resume({ resumeSessionId: SessionId(group.residentSessionId), agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+    const handle = await ctx.agents.resume({ resumeSessionId: SessionId(group.residentSessionId), agentOptions: agentOptions(), setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
     discardStaleResidentRequests(handle.agent)
     if (group.residentAgentPreset !== agentPreset) {
       await store.updateGroup({ groupId: group.groupId, residentAgentPreset: agentPreset })
@@ -1609,7 +1612,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     const handle = await ctx.agents.create({
       sessionId: SessionId(task.childSessionId),
       meta: { cwd: agentWorkspace, parentSession: parent.session.id, origin: 'subagent', delegationDepth: 1 },
-      agentOptions, setup: leafSetup(task), signal: AbortSignal.timeout(resumeTimeoutMs),
+      agentOptions: agentOptions(), setup: leafSetup(task), signal: AbortSignal.timeout(resumeTimeoutMs),
     })
     try {
       if (runtimeClosing || store.getTask(task.taskId)?.state === 'completed') { handle.agent.cancel({ kind: 'user' }); return handle }
@@ -1621,7 +1624,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
   async function resumeLeaf(task) {
     if (task.migrationReview?.status === 'required' || task.stopRequest) throw new Error(`task_execution_blocked:${task.taskId}`)
     if (leafHandles.has(task.taskId)) return leafHandles.get(task.taskId)
-    const handle = await ctx.agents.resume({ resumeSessionId: SessionId(task.childSessionId), agentOptions, setup: leafSetup(task), signal: AbortSignal.timeout(resumeTimeoutMs) })
+    const handle = await ctx.agents.resume({ resumeSessionId: SessionId(task.childSessionId), agentOptions: agentOptions(), setup: leafSetup(task), signal: AbortSignal.timeout(resumeTimeoutMs) })
     ensureLeafDescriptor(handle, task); applyPermission(handle, 'danger-full-access')
     await attachGoal(task, handle, false); return handle
   }
@@ -2120,9 +2123,9 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
   const statusQueries = llm?.stream ? createStatusQueryHandler({
     llm,
     modelConfig: ({ groupId }) => {
-      const config = residentHandles.get(groupId)?.agent.session.requestHeader?.()?.config ?? agentOptions
+      const config = residentHandles.get(groupId)?.agent.session.requestHeader?.()?.config ?? agentOptions()
       const { reasoningEffort: _oldEffort, ...base } = config
-      return { ...base, ...selection }
+      return { ...base, ...currentSelection() }
     },
     recordEvent: async event => {
       const agent = residentHandles.get(event.groupId)?.agent
@@ -2182,7 +2185,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
         ...(request.task ? { taskId: request.task.taskId } : {}) }
       const handle = await ctx.agents.create({ sessionId: SessionId(sessionId),
         meta: { cwd: agentWorkspace, parentSession: parent.session.id, origin: 'subagent', delegationDepth: 1, agentPreset },
-        agentOptions, signal: AbortSignal.timeout(resumeTimeoutMs), setup: async agentCtx => {
+        agentOptions: agentOptions(), signal: AbortSignal.timeout(resumeTimeoutMs), setup: async agentCtx => {
           if (agentPresets === undefined) throw new Error('agent_presets_required')
           const preset = await agentPresets.mount(agentCtx, agentPreset)
           if (preset?.id !== undefined && preset.id !== agentPreset) throw new Error('coordination_agent_preset_invalid')
@@ -2714,7 +2717,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       if (runtimeClosing) throw new Error('resident_runtime_closed')
       return serialize(groupId, async () => {
         const existing = store.getGroup(groupId); if (existing !== undefined) return { created: false, group: existing }
-        const sessionId = residentSessionId(groupId), { handle } = await createResident(groupId, { sessionId: SessionId(sessionId), meta: { cwd: agentWorkspace, agentPreset }, agentOptions, setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+        const sessionId = residentSessionId(groupId), { handle } = await createResident(groupId, { sessionId: SessionId(sessionId), meta: { cwd: agentWorkspace, agentPreset }, agentOptions: agentOptions(), setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
         applyPermission(handle, 'danger-full-access')
         try {
           if (runtimeClosing) throw new Error('resident_runtime_closed')
@@ -2726,7 +2729,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     }),
     updateGroup: (request) => serialize(request.groupId, () => store.updateGroup(request)),
     getAgentConfig: () => ({
-      agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, provider: selection.provider, model: selection.model, reasoningEffort: selection.reasoningEffort, proxyUrl: store.getProxyUrl?.() ?? '',
+      agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, ...currentSelection(), proxyUrl: store.getProxyUrl?.() ?? '',
       leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', taskPrompts: store.getTaskPrompts?.() ?? [], taskPromptsVersion: store.getTaskPromptsVersion?.() ?? 0, maxConcurrentTasks: taskConcurrencyLimit,
     }),
     updateAgentConfig: ({ agentNames, workspaceDir, model, reasoningEffort, proxyUrl, leafSessionPrompt, taskPrompts, taskPromptsVersion, maxConcurrentTasks: nextMaxConcurrentTasksInput }) => serializeConfig(async () => {
@@ -2735,6 +2738,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const nextAgentNames = agentNames === undefined ? (store.getAgentNames?.() ?? []) : [...new Set(agentNames.map((name) => name.trim()).filter(Boolean))]
       const namesChanged = JSON.stringify(nextAgentNames) !== JSON.stringify(store.getAgentNames?.() ?? [])
       const nextWorkspace = workspaceDir === undefined ? agentWorkspace : await resolveAgentWorkspace(workspaceDir)
+      const selection = currentSelection()
       const nextSelection = {
         provider: selection.provider,
         model: model === undefined ? selection.model : model.trim(),
@@ -2752,9 +2756,9 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const nextMaxConcurrentTasks = nextMaxConcurrentTasksInput === undefined ? taskConcurrencyLimit : nextMaxConcurrentTasksInput
       if (!Number.isInteger(nextMaxConcurrentTasks) || nextMaxConcurrentTasks < 1 || nextMaxConcurrentTasks > 50) throw new Error('agent_max_concurrent_tasks_invalid')
       const concurrencyChanged = nextMaxConcurrentTasks !== taskConcurrencyLimit
-      const resultConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, ...selection, proxyUrl: nextProxyUrl, leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', taskPrompts: store.getTaskPrompts?.() ?? [], taskPromptsVersion: store.getTaskPromptsVersion?.() ?? 0, maxConcurrentTasks: taskConcurrencyLimit })
+      const resultConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, ...currentSelection(), proxyUrl: nextProxyUrl, leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', taskPrompts: store.getTaskPrompts?.() ?? [], taskPromptsVersion: store.getTaskPromptsVersion?.() ?? 0, maxConcurrentTasks: taskConcurrencyLimit })
       if (!workspaceChanged && !selectionChanged && !proxyChanged && !guidanceChanged && !taskPromptsChanged && !namesChanged && !concurrencyChanged) return resultConfig()
-      if (workspaceChanged || selectionChanged) await serializeTasks(() => {
+      if (workspaceChanged) await serializeTasks(() => {
         if (store.listTasks().some((task) => task.state === 'running' || task.state === 'waiting' || task.state === 'queued')) throw new Error('agent_config_has_active_tasks')
       })
       const groups = workspaceChanged ? store.listGroups() : []
@@ -2770,13 +2774,13 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
             await waitForActiveGroupSubmissions(group.groupId)
             const seed = previous.agent.session.snapshotEvents()
             const sessionId = `${residentSessionId(group.groupId)}-${randomUUID().slice(0, 8)}`
-            const { handle } = await createResident(group.groupId, { sessionId: SessionId(sessionId), seed, inheritedEventCount: seed.length, meta: { cwd: nextWorkspace, parentSession: previous.agent.session.id, isSeeded: true, agentPreset }, agentOptions, setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
+            const { handle } = await createResident(group.groupId, { sessionId: SessionId(sessionId), seed, inheritedEventCount: seed.length, meta: { cwd: nextWorkspace, parentSession: previous.agent.session.id, isSeeded: true, agentPreset }, agentOptions: agentOptions(), setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
             applyPermission(handle, 'danger-full-access')
             replacements.push({ group, previous, handle, sessionId })
           }
         }
         const result = await serializeTasks(async () => {
-          if ((workspaceChanged || selectionChanged) && store.listTasks().some((task) => task.state === 'running' || task.state === 'waiting' || task.state === 'queued')) throw new Error('agent_config_has_active_tasks')
+          if (workspaceChanged && store.listTasks().some((task) => task.state === 'running' || task.state === 'waiting' || task.state === 'queued')) throw new Error('agent_config_has_active_tasks')
           if (selectionChanged) await ctx.agentDefaultModel.saveSelection(nextSelection)
           if (proxyChanged) await store.setProxyUrl(nextProxyUrl)
           if (namesChanged) await store.setAgentNames(nextAgentNames)
@@ -2798,11 +2802,6 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
           if (workspaceChanged) {
             await store.setAgentWorkspaceDir(nextWorkspace)
             for (const item of replacements) await store.updateGroup({ groupId: item.group.groupId, residentSessionId: item.sessionId })
-          }
-          if (selectionChanged) {
-            selection.provider = nextSelection.provider; selection.model = nextSelection.model
-            if (nextSelection.reasoningEffort === undefined) delete selection.reasoningEffort
-            else selection.reasoningEffort = nextSelection.reasoningEffort
           }
           if (concurrencyChanged) taskConcurrencyLimit = nextMaxConcurrentTasks
           if (workspaceChanged) {

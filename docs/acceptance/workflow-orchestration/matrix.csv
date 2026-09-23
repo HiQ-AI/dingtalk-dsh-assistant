@@ -87,3 +87,5 @@
 "R05","20","BLOCKED","三条历史任务会话恢复","round-20.md;round-20/task-session-readback.json","原Session不存在，queued，不构造空会话"
 "R06","21","PASS","已重开Task缺失旧Session恢复","round-21.md;round-21/full-tests.txt","632/632；同Task新Session；其它错误及running不换"
 "R07","21","PASS","三任务现场恢复","round-21.md;round-21/runtime-readback.json;round-21/web-readback.json","三条running且新Session输入已交付；健康ok告警0"
+"R08","22","PASS","默认处理模型热更新","round-22.md;round-22/full-tests.txt","633/633；活动Task可保存；在途稳定下一请求更新"
+"D05","22","UNVERIFIED","gpt-6-sol本地部署读回","round-22.md","待精确包安装和真实请求回读"
