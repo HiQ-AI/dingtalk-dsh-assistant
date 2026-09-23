@@ -4,11 +4,13 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
+import { createHash } from 'node:crypto'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
+import { messageSchemas, taskWorkflowCatalog } from '../packages/dingtalk-dsh-assistant/message-context.js'
 
 const schema = { type: 'object', additionalProperties: true }
 const splitOne = text => ({ kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] })
@@ -16,7 +18,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'workflow-service-'))
   const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'test', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
-  const controller = createExecutionController({ store, artifacts, workflows: [{ id: 'task-analysis', version: 'test', nodes: [
+  const controller = createExecutionController({ store, artifacts, ...(options.external ? { delivery: { execute: async () => { throw new Error('EXTERNAL_EFFECT_NOT_EXPECTED') } } } : {}), workflows: [{ id: 'task-analysis', version: 'test', nodes: [
     { id: 'analyze', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: schema, outputSchema: schema,
       mapInput: ({ requirement }) => requirement, execute: options.execute ?? (async ({ input }) => ({ summary: `已分析：${input.request}`, evidenceIds: input.materials.map(item => item.id), limitations: [] })) },
   ] }] })
@@ -27,7 +29,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
     if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
     return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '整理本条材料', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
   }
-  const service = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', ...options.config }, legacy, judge: options.judge ?? judge, execution, notifications, readResource: options.readResource })
+  const service = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', ...options.config }, legacy, judge: options.judge ?? judge, execution, notifications, readResource: options.readResource, external: options.external })
   t.after(async () => { await service.close(); await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
   const message = { groupId: 'g', messageId: 'm', text: '整理本条材料', senderOpenDingTalkId: actor }
   return { service, execution, message }
@@ -193,6 +195,76 @@ test('同文高版本编辑复用原Task且别名重投回原run', async t => {
   assert.equal((await service.ingest({ ...message, messageVersion: 2 })).runId, first.runId)
   assert.equal((await execution.store.query({ kind: 'run.list' })).length, 1)
   assert.equal((await execution.store.query({ kind: 'message.list' })).length, 1)
+})
+
+test('五类旧只读流程共享消息schema、可用列表和创建路由，外部效果流程不准入', async t => {
+  const ids = ['task-investigation', 'task-planning', 'task-pr-review', 'task-data-query', 'task-retrospective']
+  let selected = 0
+  const judge = async ({ stage, input }) => {
+    if (stage === 'S') return splitOne(input.source.text)
+    if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
+    const available = input.facts.availableWorkflows.map(item => item.id)
+    assert.ok(ids.every(id => available.includes(id)))
+    assert.deepEqual(input.facts.unavailableWorkflows, ['UAT交付', '生产发布', '数据变更', 'UAT同提交重建'])
+    return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: input.text, workflowId: ids[selected++] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
+  for (let index = 0; index < ids.length; index++) {
+    const receipt = await service.ingest({ ...message, messageId: `readonly-${index}`, text: `审阅材料 ${index}` })
+    const state = await service.messages.process(receipt.runId)
+    assert.equal(state.run.status, 'settled')
+    const run = await execution.store.query({ kind: 'run', runId: state.commands[0].result.runId })
+    assert.equal(run.run.workflowId, ids[index])
+  }
+  assert.deepEqual(taskWorkflowCatalog.filter(item => item.mode === 'read-only').map(item => item.id), ['task-analysis', ...ids])
+  const envelope = { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '生产数据变更', workflowId: 'task-data-change' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  assert.equal(messageSchemas.I.safeParse(envelope).success, true)
+  const denied = await fixture(t, 'owner', undefined, { judge: async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
+    : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] } : envelope })
+  const blocked = await denied.service.ingest({ ...denied.message, messageId: 'external-denied', text: '执行生产数据变更' })
+  const deniedState = await denied.service.messages.process(blocked.runId)
+  assert.equal(deniedState.commands[0].status, 'rejected')
+  assert.deepEqual(await denied.execution.store.query({ kind: 'run.list' }), [])
+})
+
+test('受信外部适配器齐备时四类流程可选并按固定需求创建，模型不持有执行能力', async t => {
+  const ids = ['task-uat-delivery', 'task-production-release', 'task-data-change', 'task-uat-rebuild']
+  const digest = createHash('sha256').update('rules').digest('hex')
+  const releaseAdapter = kind => ({ id: kind, version: '1', rulesDigest: digest,
+    inspect: async () => { throw new Error('PREFLIGHT_NOT_AVAILABLE') }, prepareOperation: async () => { throw new Error('EFFECT_NOT_EXPECTED') } })
+  const dataChangeAdapter = { id: 'bytebase-test', version: '1', rulesDigest: digest,
+    validate: async () => { throw new Error('VALIDATION_NOT_EXPECTED') }, rehearse: async () => { throw new Error('REHEARSAL_NOT_EXPECTED') },
+    inspect: async () => { throw new Error('INSPECT_NOT_EXPECTED') }, prepareIssue: async () => { throw new Error('ISSUE_NOT_EXPECTED') },
+    prepareExecute: async () => { throw new Error('EXECUTE_NOT_EXPECTED') }, readback: async () => { throw new Error('READBACK_NOT_EXPECTED') } }
+  const source = 'SELECT 1', hash = createHash('sha256').update(source).digest('hex')
+  let selected = 0, prepared = 0, effects = 0
+  const external = { releaseAdapters: Object.fromEntries(['uat-delivery', 'production-release', 'uat-rebuild'].map(kind => [kind, releaseAdapter(kind)])), dataChangeAdapter,
+    operationAdapter: { execute: async () => { effects++; throw new Error('EFFECT_NOT_EXPECTED') }, reconcile: async () => { effects++; throw new Error('EFFECT_NOT_EXPECTED') } },
+    authorizeExternal: async () => { throw new Error('AUTHORIZATION_NOT_EXPECTED') },
+    prepareRequirement: async ({ workflowId, action }) => {
+      prepared++
+      assert.ok(ids.includes(workflowId))
+      if (workflowId === 'task-data-change') return { request: action.arguments.objective, constraints: [], target: { instance: 'test', database: 'test', environment: 'uat' },
+        sources: [{ id: 's', sha256: hash, content: source }], baseline: { snapshotId: 'baseline', sha256: hash } }
+      return { request: action.arguments.objective, constraints: [], evidenceRefs: ['source'], target: { repository: 'org/repo', environment: workflowId === 'task-production-release' ? 'production' : 'uat', service: 'service', commitSha: 'a'.repeat(40), runbookId: 'runbook' } }
+    } }
+  const judge = async ({ stage, input }) => {
+    if (stage === 'S') return splitOne(input.source.text)
+    if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
+    assert.ok(ids.every(id => input.facts.availableWorkflows.some(item => item.id === id)))
+    assert.deepEqual(input.facts.unavailableWorkflows, [])
+    return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: input.text, workflowId: ids[selected++] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { external, judge })
+  for (let index = 0; index < ids.length; index++) {
+    const receipt = await service.ingest({ ...message, messageId: `external-${index}`, text: `处理外部任务 ${index}` })
+    const state = await service.messages.process(receipt.runId)
+    assert.equal(state.commands[0].status, 'applied', JSON.stringify(state.commands[0]))
+    const run = await execution.store.query({ kind: 'run', runId: state.commands[0].result.runId })
+    assert.equal(run.run.workflowId, ids[index])
+  }
+  assert.equal(prepared, 4)
+  assert.equal(effects, 0)
 })
 
 test('原消息否定编辑取消原Task，不发第二个任务且屏障释放', async t => {

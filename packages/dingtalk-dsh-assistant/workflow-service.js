@@ -1,18 +1,48 @@
 import { openExecutionRuntime } from './execution.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
-import { createAnalysisTaskWorkflow } from './task-workflow.js'
+import { createAnalysisTaskWorkflow, createReadOnlyTaskWorkflows } from './task-workflow.js'
 import { createMessageWorkflow } from './message-workflow.js'
 import { createMessageModel } from './message-model.js'
+import { taskWorkflowCatalog } from './message-context.js'
 import { createWorkflowNotifications, workflowResultText } from './workflow-notifications.js'
 import { createEngineeringRegistry } from './workflow-engineering.js'
+import { createDataChangeTaskWorkflow } from './workflow-data-change.js'
+import { createReleaseTaskWorkflow, releaseWorkflowKinds } from './task-release-workflows.js'
+import { createWorkflowApprovalService } from './workflow-approval.js'
 
 const sourceKey = (profile, groupId, messageId) => `dws:${executionDigest([profile, groupId, messageId])}`
 const requireText = (value, code) => { if (typeof value !== 'string' || !value.trim()) throw executionError(code); return value }
 const terminal = status => ['succeeded', 'failed', 'cancelled'].includes(status)
+const catalogById = new Map(taskWorkflowCatalog.map(item => [item.id, item]))
+const readOnlyCatalog = taskWorkflowCatalog.filter(item => item.mode === 'read-only').map(({ id, purpose }) => ({ id, purpose }))
+const externalLabels = Object.freeze(Object.fromEntries(taskWorkflowCatalog.filter(item => item.mode === 'external').map(item => [item.id, item.purpose])))
+
+function createExternalRegistry(external, selected) {
+  const configured = !!external && (!!external.dataChangeAdapter || !!external.releaseAdapters && Object.keys(external.releaseAdapters).length > 0)
+  if (!configured) return { workflows: [], records: new Map(), byId: new Map() }
+  if (typeof external.operationAdapter?.execute !== 'function' || typeof external.operationAdapter?.reconcile !== 'function'
+    || typeof external.authorizeExternal !== 'function' || typeof external.prepareRequirement !== 'function') throw executionError('EXTERNAL_WORKFLOW_GATE_REQUIRED')
+  const workflows = [], records = new Map(), byId = new Map()
+  const add = (workflow, adapter, modelConfig = null) => {
+    if (catalogById.get(workflow.id)?.mode !== 'external' || byId.has(workflow.id)) throw executionError('EXTERNAL_WORKFLOW_CATALOG_MISMATCH')
+    const definition = defineExecutionWorkflow(workflow)
+    const config = { kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
+      rulesDigest: adapter.rulesDigest, ...(modelConfig ? { modelConfig } : {}) }
+    workflows.push(workflow); records.set(workflow.id, { workflowId: workflow.id, definitionVersion: workflow.version, digest: definition.digest, config })
+    byId.set(workflow.id, { workflow, adapter })
+  }
+  if (external.dataChangeAdapter) add(createDataChangeTaskWorkflow({ ...selected, adapter: external.dataChangeAdapter }), external.dataChangeAdapter, selected)
+  for (const kind of releaseWorkflowKinds) if (external.releaseAdapters?.[kind]) {
+    const adapter = external.releaseAdapters[kind]
+    add(createReleaseTaskWorkflow({ kind, adapter }), adapter)
+  }
+  if (external.releaseAdapters && Object.keys(external.releaseAdapters).some(kind => !releaseWorkflowKinds.includes(kind))) throw executionError('EXTERNAL_WORKFLOW_KIND_UNKNOWN')
+  return { workflows, records, byId }
+}
 
 /** Host装配服务。新群只交新控制账；旧历史只读，不写回旧Task或重复调用旧路由。 */
-export async function openWorkflowService({ ctx, config, legacy, judge, readMessage, readResource, notifications, engineeringGhCommand, execution: suppliedExecution }) {
+export async function openWorkflowService({ ctx, config, legacy, judge, readMessage, readResource, notifications, engineeringGhCommand, external, execution: suppliedExecution }) {
   if (!Array.isArray(config.groupIds) || !config.groupIds.length || new Set(config.groupIds).size !== config.groupIds.length) throw executionError('WORKFLOW_GROUPS_REQUIRED')
   const groups = new Set(config.groupIds)
   const ownerActorId = requireText(config.ownerActorId, 'WORKFLOW_OWNER_REQUIRED')
@@ -21,30 +51,52 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     return { provider: value.provider, model: value.model, ...(value.reasoningEffort ? { reasoningEffort: value.reasoningEffort } : {}) }
   }
   const engineering = createEngineeringRegistry({ repositories: config.repositories ?? [], ownerActorId, modelConfig, author: config.gitAuthor, ghCommand: engineeringGhCommand })
+  const selectedExternal = createExternalRegistry(external, modelConfig())
+  const externalWorkflows = [...selectedExternal.byId.keys()].map(id => ({ id, purpose: externalLabels[id] }))
+  const unavailableWorkflows = Object.entries(externalLabels).filter(([id]) => !selectedExternal.byId.has(id)).map(([, label]) => label)
   const execution = suppliedExecution ?? await openExecutionRuntime({
     ctx, dbPath: config.dbPath, instanceId: config.instanceId, artifactDirectory: config.artifactDirectory,
-    deliveryOptions: engineering.deliveryOptions,
+    deliveryOptions: { ...engineering.deliveryOptions,
+      ...(selectedExternal.workflows.length ? { externalAdapter: external.operationAdapter, authorizeExternal: external.authorizeExternal } : {}) },
     workflows: async store => {
       const selected = modelConfig()
-      const workflow = createAnalysisTaskWorkflow(selected)
-      const definition = defineExecutionWorkflow(workflow)
+      const workflows = [createAnalysisTaskWorkflow(selected), ...createReadOnlyTaskWorkflows(selected)]
+      const definitions = new Map(workflows.map(workflow => [workflow.id, defineExecutionWorkflow(workflow)]))
       const prior = await store.query({ kind: 'workflow.list' })
       const engineeringWorkflows = await engineering.restore(store)
-      const historicalWorkflows = prior.filter(record => record.config?.kind !== 'engineering').map(record => {
-        if (record.workflowId !== 'task-analysis' || record.definitionVersion !== '1') throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
-        const previous = createAnalysisTaskWorkflow(record.config)
+      const historicalWorkflows = prior.filter(record => record.config?.kind !== 'engineering' && record.config?.kind !== 'external').map(record => {
+        const previous = [createAnalysisTaskWorkflow(record.config), ...createReadOnlyTaskWorkflows(record.config)].find(item => item.id === record.workflowId)
+        if (!previous || previous.version !== record.definitionVersion) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
         if (defineExecutionWorkflow(previous).digest !== record.digest) throw executionError('WORKFLOW_DEFINITION_DRIFT')
         return previous
-      }).filter(item => defineExecutionWorkflow(item).digest !== definition.digest)
-      await store.command({ id: `workflow:${definition.digest}`, kind: 'workflow.register', args: {
-        workflowId: workflow.id, definitionVersion: workflow.version,
-        config: selected, digest: definition.digest,
-      } })
-      return { workflows: [workflow, ...engineeringWorkflows], historicalWorkflows }
+      }).filter(item => defineExecutionWorkflow(item).digest !== definitions.get(item.id)?.digest)
+      for (const record of prior.filter(item => item.config?.kind === 'external')) {
+        const route = selectedExternal.byId.get(record.workflowId), saved = record.config
+        if (!route || saved.registryVersion !== '1' || saved.adapterId !== route.adapter.id
+          || saved.adapterVersion !== route.adapter.version || saved.rulesDigest !== route.adapter.rulesDigest) throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
+        const previous = record.workflowId === 'task-data-change'
+          ? createDataChangeTaskWorkflow({ ...saved.modelConfig, adapter: route.adapter })
+          : createReleaseTaskWorkflow({ kind: record.workflowId.slice(5), adapter: route.adapter })
+        if (previous.version !== record.definitionVersion || defineExecutionWorkflow(previous).digest !== record.digest)
+          throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
+        if (record.digest !== selectedExternal.records.get(record.workflowId).digest) historicalWorkflows.push(previous)
+      }
+      for (const workflow of workflows) {
+        const definition = definitions.get(workflow.id)
+        await store.command({ id: `workflow:${definition.digest}`, kind: 'workflow.register', args: {
+          workflowId: workflow.id, definitionVersion: workflow.version, config: selected, digest: definition.digest,
+        } })
+      }
+      for (const record of selectedExternal.records.values()) await store.command({ id: `workflow:${record.digest}`, kind: 'workflow.register', args: record })
+      return { workflows: [...workflows, ...engineeringWorkflows, ...selectedExternal.workflows], historicalWorkflows }
     },
   })
   let closed = false, resolveMaterials
   const { store, controller, artifacts } = execution
+  if (suppliedExecution && typeof controller.registerWorkflow === 'function') {
+    for (const workflow of createReadOnlyTaskWorkflows(modelConfig())) controller.registerWorkflow(workflow)
+    for (const workflow of selectedExternal.workflows) controller.registerWorkflow(workflow)
+  }
   const notifier = createWorkflowNotifications({ store, controller, artifacts, adapter: notifications })
   const legacyGroup = id => legacy.getGroup?.(id)
   const messageJudge = judge ?? createMessageModel({ llm: ctx.get?.('llm') ?? ctx.llm, modelConfig })
@@ -53,6 +105,20 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const origin = await store.query({ kind: 'message.task', taskId })
     if (!origin || origin.run.conversationId !== conversationId || ![origin.run.actorId, ownerActorId].includes(actorId)) throw executionError('WORKFLOW_TASK_FORBIDDEN')
     return origin
+  }
+  const approvals = createWorkflowApprovalService({ store, controller, authorizeTask: async ({ taskId, actorId, conversationId, channel }) => {
+    const origin = await store.query({ kind: 'message.task', taskId })
+    if (!origin || !groups.has(origin.run.conversationId)) return false
+    if (channel === 'web') return !!config.webActorId && actorId === config.webActorId
+    return conversationId === origin.run.conversationId
+  } })
+  async function isApprovalRequest(requestId) {
+    try { await approvals.get(requestId); return true }
+    catch (error) { if (error.code === 'approval_not_found') return false; throw error }
+  }
+  async function decideApproval(input, identity) {
+    if (identity?.channel === 'web' && (!config.webActorId || identity.actorId !== config.webActorId)) throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')
+    return approvals.decide(input, identity)
   }
   async function currentTask(taskId, selector) {
     const runs = await store.query({ kind: 'run.list', taskId, limit: 200 })
@@ -108,7 +174,18 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       const result = await controller.createRun({ commandId: `dispatch:${info.commandId}`, ...prepared })
       return { taskId: prepared.taskId, runId: result.runId, status: 'accepted', reply: '工程任务已接纳，按登记的仓库范围实施、验证并提交 PR。' }
     }
-    if (action.arguments.workflowId !== 'task-analysis') throw executionError('WORKFLOW_TYPE_NOT_ADMITTED')
+    const workflowId = action.arguments.workflowId
+    if (selectedExternal.byId.has(workflowId)) {
+      const taskId = requireText(action.taskId, 'WORKFLOW_TASK_ID_REQUIRED')
+      const references = [...new Set(action.requiredExecutionMaterials ?? [])]
+      const materials = references.length ? await resolveMaterials({ run: info.run, needs: references.map(resourceRef => ({ resourceRef })) }) : { ready: true, data: { resources: [] } }
+      if (!materials.ready) throw executionError('WORKFLOW_REQUIRED_MATERIAL_NOT_READY')
+      const input = await external.prepareRequirement({ workflowId, action, info, materials: materials.data.resources })
+      const result = await controller.createRun({ commandId: `dispatch:${info.commandId}`, taskId,
+        runId: `run-${executionDigest(info.commandId).slice(0, 40)}`, workflowId, input })
+      return { taskId, runId: result.runId, status: 'accepted', reply: `${externalLabels[workflowId]}任务已接纳，按受控流程执行并独立回读。` }
+    }
+    if (catalogById.get(workflowId)?.mode !== 'read-only') throw executionError('WORKFLOW_TYPE_NOT_ADMITTED')
     const taskId = requireText(action.taskId, 'WORKFLOW_TASK_ID_REQUIRED')
     const references = [...new Set(action.requiredExecutionMaterials ?? [])]
     const material = references.length ? await resolveMaterials({ run: info.run, needs: references.map(resourceRef => ({ resourceRef })) }) : { ready: true, data: { resources: [] } }
@@ -119,7 +196,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       materials: [{ id: info.run.sourceKey, text: info.run.body }, ...material.data.resources.filter(item => item.resourceRef !== info.run.sourceKey).map(item => ({ id: item.resourceRef, text: item.text }))],
     }
     const result = await controller.createRun({ commandId: `dispatch:${info.commandId}`, taskId,
-      runId: `run-${executionDigest(info.commandId).slice(0, 40)}`, workflowId: 'task-analysis', input })
+      runId: `run-${executionDigest(info.commandId).slice(0, 40)}`, workflowId, input })
     return { taskId, runId: result.runId, status: 'accepted', reply: '任务已接纳，执行进度由工作流记录。' }
   }
   async function taskAction(action, info) {
@@ -182,6 +259,12 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     runId: action.arguments.runId, requestId: action.arguments.requestId,
     eventId: info.run.sourceKey, answer: action.arguments.answer,
   }, { channel: 'im', actorId: info.run.actorId, conversationId: info.run.conversationId })
+  handlers.approval = async (action, info) => {
+    const requestId = requireText(action.arguments.requestId, 'WORKFLOW_APPROVAL_REQUEST_REQUIRED')
+    if (!info.run.body.includes(requestId) && !info.run.context.quoteRefs?.some(ref => ref.text?.includes(requestId))) throw executionError('WORKFLOW_APPROVAL_SOURCE_REQUIRED')
+    return decideApproval({ requestId, decision: action.arguments.decision, eventId: info.run.sourceKey },
+      { channel: 'im', actorId: info.run.actorId, conversationId: info.run.conversationId })
+  }
   const messages = createMessageWorkflow({ store, judge: messageJudge, policy: config.policy, handlers,
     context: {
       async validateAction(action, info) {
@@ -195,7 +278,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         if (['create', 'research', 'reopen'].includes(action.intent) && info.run.actorId !== ownerActorId) return reject('当前消息发送人没有创建业务任务的权限')
         if (['create', 'research', 'answer', 'reopen'].includes(action.intent)) {
           const workflowId = action.intent === 'answer' ? 'task-analysis' : action.arguments.workflowId
-          if (!['task-analysis', 'task-engineering'].includes(workflowId)) return reject('请求的任务流程未准入')
+          if (!catalogById.has(workflowId) || catalogById.get(workflowId).mode === 'external' && !selectedExternal.byId.has(workflowId)) return reject('请求的任务流程未准入')
           if (workflowId === 'task-engineering' && !engineering.availableWorkflows().some(item => item.repositoryId === action.arguments.repositoryId)) return reject('请求的工程仓库未准入')
         }
         if (['pause', 'cancel', 'resume', 'revise', 'status', 'result'].includes(action.intent) && info.binding.disposition !== 'conversation') {
@@ -280,9 +363,9 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         if (binding.topicId && (!storedTopic || storedTopic.conversationId !== run.conversationId)) throw executionError('WORKFLOW_TOPIC_FORBIDDEN')
         const topic = storedTopic ? { ...storedTopic, facts: storedTopic.facts.map(fact => ({ ...fact, sourceRefs: fact.sourceRefs.map(({ text: _text, ...ref }) => ref) })), sources: [...new Map(storedTopic.facts.flatMap(fact => fact.sourceRefs).map(ref => [`${ref.sourceKey}:${ref.sourceVersion}`, ref])).values()] } : null
         if (topic && !binding.taskId) {
-          return { topic, availableWorkflows: [{ id: 'task-analysis', purpose: '仅分析已提供材料' }, ...engineering.availableWorkflows()], actorMayCreate: run.actorId === ownerActorId }
+          return { topic, availableWorkflows: [...readOnlyCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: run.actorId === ownerActorId }
         }
-        if (!binding.taskId) return { availableWorkflows: [{ id: 'task-analysis', purpose: '仅分析已提供材料，不执行代码、数据库或外部修改' }, ...engineering.availableWorkflows()], actorMayCreate: run.actorId === ownerActorId }
+        if (!binding.taskId) return { availableWorkflows: [...readOnlyCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: run.actorId === ownerActorId }
         await taskAccess(binding.taskId, run.actorId, run.conversationId)
         const runs = await store.query({ kind: 'run.list', taskId: binding.taskId, limit: 200 })
         if (!runs.length) {
@@ -462,7 +545,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     return { failures }
   }
   return {
-    ingest, resumeRequest, submitWebTask, isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
+    ingest, resumeRequest, decideApproval, isApprovalRequest, submitWebTask, isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info, messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },
     recover: recoverAll,
     async close() { closed = true; await messages.close(); if (!suppliedExecution) await execution.close() },

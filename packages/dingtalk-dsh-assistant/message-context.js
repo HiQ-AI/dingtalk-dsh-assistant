@@ -1,14 +1,24 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import { readOnlyTaskCatalog } from './task-readonly-workflows.js'
 
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const span = z.strictObject({ start: z.number().int().nonnegative(), end: z.number().int().positive() })
 const need = z.strictObject({ resourceRef: z.string().min(1), reason: z.string().min(1) })
 const wait = z.strictObject({ kind: z.enum(['needs_context', 'needs_clarification']), reason: z.string().min(1), needs: z.array(need).default([]), question: z.string().optional() })
 const argumentText = z.string().trim().min(1)
-const actionArguments = z.strictObject({ objective: argumentText.optional(), workflowId: z.enum(['task-analysis', 'task-engineering']).optional(), repositoryId: argumentText.optional(), acceptanceCriteria: z.array(argumentText).optional(), runId: argumentText.optional(), scope: z.enum(['conversation', 'task']).optional(), resultRef: argumentText.optional(), requestId: argumentText.optional(), answer: argumentText.optional(), kind: z.enum(['fact', 'constraint']).optional(), text: argumentText.optional() })
+export const taskWorkflowCatalog = Object.freeze([
+  { id: 'task-analysis', purpose: '已给材料分析', mode: 'read-only' },
+  ...readOnlyTaskCatalog.map(({ id, purpose }) => ({ id, purpose, mode: 'read-only' })),
+  { id: 'task-engineering', purpose: '登记仓库开发并提交PR', mode: 'engineering' },
+  { id: 'task-uat-delivery', purpose: 'UAT交付', mode: 'external' },
+  { id: 'task-production-release', purpose: '生产发布', mode: 'external' },
+  { id: 'task-data-change', purpose: '数据变更', mode: 'external' },
+  { id: 'task-uat-rebuild', purpose: 'UAT同提交重建', mode: 'external' },
+])
+const actionArguments = z.strictObject({ objective: argumentText.optional(), workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)).optional(), repositoryId: argumentText.optional(), acceptanceCriteria: z.array(argumentText).optional(), runId: argumentText.optional(), scope: z.enum(['conversation', 'task']).optional(), resultRef: argumentText.optional(), requestId: argumentText.optional(), answer: argumentText.optional(), decision: z.enum(['approved', 'rejected']).optional(), kind: z.enum(['fact', 'constraint']).optional(), text: argumentText.optional() })
 const actionSchema = z.strictObject({ intent: z.enum(['no_action', 'fact', 'answer', 'research', 'create', 'revise', 'pause', 'cancel', 'resume', 'status', 'result', 'reopen', 'approval', 'clarification']), arguments: actionArguments, dependsOn: z.array(z.number().int().nonnegative()) }).superRefine((action, ctx) => {
-  const required = ['create', 'research', 'reopen'].includes(action.intent) ? ['objective', 'workflowId'] : action.intent === 'revise' ? ['objective'] : action.intent === 'clarification' ? ['runId', 'requestId', 'answer'] : []
+  const required = ['create', 'research', 'reopen'].includes(action.intent) ? ['objective', 'workflowId'] : action.intent === 'revise' ? ['objective'] : action.intent === 'clarification' ? ['runId', 'requestId', 'answer'] : action.intent === 'approval' ? ['requestId', 'decision'] : []
   if (action.arguments.workflowId === 'task-engineering') required.push('repositoryId')
   for (const key of required) if (!action.arguments[key]) ctx.addIssue({ code: 'custom', path: ['arguments', key], message: `${action.intent} requires ${key}` })
 })

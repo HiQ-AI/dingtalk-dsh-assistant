@@ -131,6 +131,7 @@ export async function apply(ctx, config = {}) {
     runner: dwsRunner,
   })
   const workflow = workflowConfig ? await openWorkflowService({ ctx, config: { ...workflowConfig, profile: dwsConfig.profile }, legacy: runtime,
+    external: ctx.get?.('dingtalkTaskWorkflowExternal'),
     readMessage: (groupId, messageId) => dwsAdapter.readMessage(groupId, messageId),
     readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
     notifications: {
@@ -172,6 +173,13 @@ export async function apply(ctx, config = {}) {
     runtime.resumeWorkflowRequest = args => {
       if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')
       return workflow.resumeRequest(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    }
+    const legacyDecideAuthorization = runtime.decideAuthorization
+    runtime.decideAuthorization = async args => {
+      if (!await workflow.isApprovalRequest(args.requestId)) return legacyDecideAuthorization(args)
+      if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
+      return workflow.decideApproval({ requestId: args.requestId, decision: args.decision,
+        eventId: `web:${args.requestId}:${args.decision}` }, { channel: 'web', actorId: workflowConfig.webActorId })
     }
     const legacyCreateTask = runtime.createTask
     runtime.createTask = args => workflow.isGroup(args.groupId) ? Promise.reject(new Error('workflow_group_use_message_input')) : legacyCreateTask(args)

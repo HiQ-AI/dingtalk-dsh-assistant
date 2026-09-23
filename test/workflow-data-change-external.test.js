@@ -1,0 +1,136 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
+import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
+import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
+import { createDataChangeTaskWorkflow } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
+
+const sha = value => createHash('sha256').update(value).digest('hex')
+const sql = 'BEGIN; UPDATE t SET v=2 WHERE id=1 AND v=1; COMMIT;'
+const target = { instance: 'prod', database: 'app', environment: 'production' }
+const input = () => ({ request: '更新一条记录', constraints: [], target, baseline: { snapshotId: 'baseline-1', sha256: sha('baseline') },
+  sources: [{ id: 'change.csv', content: 'id,v\n1,2', sha256: sha('id,v\n1,2') }] })
+const proposal = { applySql: sql, rollbackSql: 'BEGIN; UPDATE t SET v=1 WHERE id=1 AND v=2; COMMIT;',
+  verificationSql: 'SELECT v FROM t WHERE id=1;', expectedChange: '仅 id=1 的 v 从 1 变成 2' }
+
+async function fixture(t, { unknownExecution = false, driftPreflight = false, driftIssue = false } = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-data-external-'))
+  const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'data-external', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  const sends = [], reconciles = []
+  let approved = false, createdPackageDigest = null
+  const sheet = { id: 'sheet-1', sha256: sha(sql), target }, plan = { id: 'plan-1', sheetId: 'sheet-1' }
+  const task = { id: 'task-1', planId: 'plan-1', status: 'NOT_STARTED' }, issue = { id: 'issue-1', planId: 'plan-1', taskId: 'task-1' }
+  const adapter = {
+    id: 'synthetic-bytebase', version: '1', rulesDigest: sha('synthetic-bytebase-v1'),
+    async validate(args) { return { passed: true, packageDigest: args.packageDigest, receiptId: 'validate-1' } },
+    async rehearse(args) { return { passed: true, isolated: true, packageDigest: args.package.validation.packageDigest,
+      receiptId: 'rehearse-1', observedChange: 'one row only' } },
+    async prepareIssue(args) { createdPackageDigest = args.prepared.package.validation.packageDigest; return { sheetSha256: sha(sql), packageDigest: createdPackageDigest } },
+    async prepareExecute(args) { return { taskId: args.identity.taskId, approvalRequestId: args.identity.approvalRequestId,
+      packageDigest: args.identity.packageDigest } },
+    async inspect(args) {
+      if (args.stage === 'approval') return approved ? { decision: 'approved', taskId: task.id, sheetSha256: sheet.sha256,
+        packageDigest: createdPackageDigest, requestId: 'approval-execute', decidedBy: 'owner' } : { decision: 'pending' }
+      if (args.stage === 'pre-execution') return { sheet: driftPreflight ? { ...sheet, sha256: sha('altered') } : sheet, plan, task }
+      throw Error('unexpected inspection')
+    },
+    async readback(args) {
+      if (args.stage === 'create-issue') { assert.equal(args.receipt.result.issueId, issue.id); return { issue, sheet: driftIssue ? { ...sheet, sha256: sha('altered') } : sheet, plan, task } }
+      if (args.stage === 'execute-task') return { task: { ...task, status: 'DONE' }, taskRun: { id: 'task-run-1', taskId: task.id, status: 'DONE' },
+        production: { passed: true, target, packageDigest: createdPackageDigest, readbackId: 'production-readback-1', observedChange: 'id=1 has v=2' } }
+      throw Error('unexpected readback')
+    },
+  }
+  const externalAdapter = {
+    async execute(prepared) {
+      sends.push(prepared.stage)
+      if (prepared.stage === 'create-issue') return { status: 'succeeded', result: { issueId: issue.id } }
+      if (prepared.stage === 'execute-task' && unknownExecution) throw new Error('ack lost')
+      if (prepared.stage === 'execute-task') return { status: 'succeeded', result: { taskId: task.id } }
+      throw Error('unexpected stage')
+    },
+    async reconcile(prepared) {
+      reconciles.push(prepared.stage)
+      return prepared.stage === 'execute-task' && unknownExecution
+        ? { status: 'succeeded', result: { taskId: task.id } } : { status: 'unknown', reason: 'not_observed' }
+    },
+  }
+  const delivery = createExecutionDelivery({ store, artifacts, authorize: async () => ({ principalId: 'owner', authorizationRef: 'unused' }),
+    externalAdapter, authorizeExternal: async ({ prepared }) => {
+      if (prepared.stage === 'create-issue') return { principalId: 'owner', authorizationRef: 'issue-submission-specific' }
+      assert.equal(prepared.taskId, 'task-1')
+      assert.equal(prepared.approvalRequestId, 'approval-execute')
+      return { principalId: 'owner', approval: { requestId: prepared.approvalRequestId, approverIds: ['owner'] } }
+    },
+  })
+  const sessions = { async run({ onSessionBound, onResult }) { await onSessionBound(); onResult(proposal) }, async cancel() {}, async close() {} }
+  const workflow = createDataChangeTaskWorkflow({ provider: 'test', model: 'synthetic', adapter })
+  assert.equal(defineExecutionWorkflow(workflow).nodes.length, 11)
+  const controller = createExecutionController({ store, artifacts, sessions, delivery, workflows: [workflow] })
+  t.after(async () => { await controller.close(); await store.close() })
+  return { store, artifacts, controller, delivery, workflow, sends, reconciles, approve() { approved = true } }
+}
+
+for (const unknownExecution of [false, true]) test(`数据变更受控链：工单独立回读、审批前零生产发送、生产回查${unknownExecution ? '及未知回执不重放' : ''}`, async t => {
+  const f = await fixture(t, { unknownExecution })
+  await f.controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: f.workflow.id, input: input() })
+  let state = await f.controller.whenIdle('run')
+  assert.equal(state.run.status, 'waiting')
+  assert.equal(state.nodes[7].waitReason?.reference, 'DATA_CHANGE_APPROVAL_PENDING', JSON.stringify(state.nodes.map(node => [node.nodeId, node.status, node.waitReason])))
+  assert.deepEqual(f.sends, ['create-issue'])
+  f.approve()
+  await f.controller.recover({ commandId: 'recover-approval', runId: 'run' })
+  state = await f.controller.whenIdle('run')
+  assert.equal(state.run.status, 'waiting')
+  assert.deepEqual(f.sends, ['create-issue'])
+  assert.equal(state.nodes[9].waitReason.reference, 'effect_approval_required')
+  await f.store.command({ id: 'approve-execute', kind: 'approval.decide', args: {
+    requestId: 'approval-execute', actorId: 'owner', source: 'web', decision: 'approved',
+  } })
+  await f.controller.recover({ commandId: 'recover-effect', runId: 'run' })
+  state = await f.controller.whenIdle('run')
+  if (unknownExecution) {
+    assert.equal(state.nodes[9].waitReason?.reference, 'DELIVERY_RECONCILIATION_REQUIRED')
+    assert.deepEqual(f.sends, ['create-issue', 'execute-task'])
+    const effect = (await f.store.query({ kind: 'effect.list', runId: 'run' })).find(item => item.definition?.payload?.stage === 'execute-task')
+    assert.ok(effect)
+    assert.equal((await f.delivery.reconcile(effect.effectId)).state, 'succeeded')
+    await f.controller.recover({ commandId: 'reconcile-effect', runId: 'run' })
+    state = await f.controller.whenIdle('run')
+  }
+  assert.equal(state.run.status, 'succeeded', JSON.stringify(state.nodes.map(node => [node.nodeId, node.waitReason])))
+  assert.deepEqual(f.sends, ['create-issue', 'execute-task'])
+  if (unknownExecution) assert.deepEqual(f.reconciles, ['execute-task'])
+  const result = await f.artifacts.read(state.nodes.at(-1).outputRef)
+  assert.equal(result.taskRunId, 'task-run-1')
+  assert.equal(result.productionReadbackId, 'production-readback-1')
+})
+
+test('数据变更工单或执行适配器缺失时拒绝注册', () => {
+  assert.throws(() => createDataChangeTaskWorkflow({ provider: 'test', model: 'test', adapter: {} }), { code: 'DATA_CHANGE_EXTERNAL_ADAPTER_REQUIRED' })
+})
+
+test('工单 Sheet 内容漂移阻止审批及生产发送', async t => {
+  const f = await fixture(t, { driftIssue: true })
+  await f.controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: f.workflow.id, input: input() })
+  const state = await f.controller.whenIdle('run')
+  assert.equal(state.nodes[6].waitReason?.reference, 'DATA_CHANGE_ISSUE_READBACK_UNCONFIRMED')
+  assert.deepEqual(f.sends, ['create-issue'])
+})
+
+test('审批后执行前 Sheet 漂移阻止生产发送', async t => {
+  const f = await fixture(t, { driftPreflight: true })
+  await f.controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: f.workflow.id, input: input() })
+  await f.controller.whenIdle('run')
+  f.approve()
+  await f.controller.recover({ commandId: 'recover-approval', runId: 'run' })
+  const state = await f.controller.whenIdle('run')
+  assert.equal(state.nodes[8].waitReason?.reference, 'DATA_CHANGE_PREFLIGHT_CHANGED')
+  assert.deepEqual(f.sends, ['create-issue'])
+})

@@ -134,7 +134,7 @@ await controller.changeInput({
 | --- | --- |
 | 并发 run | 4；允许配置为 1—32 |
 | Controller 待调度队列 | 最多 256 项 |
-| 工作流 | 最多 32 个顺序节点，仅 code/agent，效果声明限 pure/read |
+| 工作流 | 最多 32 个顺序节点，仅 code/agent；独立底座示例只用 pure/read，已准入的工程 code 节点可声明受控 Git/工作目录/PR 效果，外部流程 code 节点可声明 `external.operation`，均须相应受信适配器 |
 | 输入替换合并 | 静默 2 秒、首条起最长 10 秒；它是合并参数，不是业务完成时限 |
 | 整个 run 的 claim 次数 | 默认节点数 × 3，恢复和换 generation 不重置已用次数；不是每个节点各自无限重试 |
 | Agent 每次执行 | 默认最多 32 step、120 秒；maxSteps 允许 1—256 |
@@ -343,3 +343,11 @@ Web 操作验收需使用配置明确映射的 `workflow.webActorId`。新任务
 检查 job 日志只在 `steps[]` 保存 stdout/stderr，顶层只保留退出/超时摘要。各流带 `stdoutEncoding/stderrEncoding`：有效 UTF-8 普通文本在其 JSON 编码不长于 base64 时使用 `utf8`，其余输出使用 `base64`；读取时按该字段解码。32KiB 限制按所有步骤合计的原始输出字节计量，不按 base64 长度计量。固定命令与root的JSON配置共同受8KB上限约束，避免大配置挤掉64KiB结果的日志空间。没有静默删去已采集字节。
 
 业务工程检查的 Node 版本与 DSH Host 分开固定：本机 DSH 使用 Node 24；上述 dataset-web 基线 `.nvmrc/.node-version` 为 Node 20，生产 Dockerfile 的依赖与构建阶段为 Node 22，因此本地生产构建验证采用已安装的 `D:/soft/node-v22.13.0/node.exe`。不能因为 Host 要求 Node 24 就让业务工程自动使用 Node 24。Yarn CLI 也固定绝对路径和实际版本；需独立回读实际 Vue 构建子进程的 Node 路径，而不只核对启动脚本。
+
+## 10. 原任务流程目录与外部效果准入
+
+新消息入口按发布版目录仅暴露通用材料分析、五类已给材料只读审查及已配置仓库的工程流程。材料审查无仓库/数据库工具，不能回报“已查询 PR、已导出文件”。UAT 交付、生产发布、同提交重构建、数据变更只有源码中的固定节点合同；当前本机配置无对应受信 Host 适配器，入口仍拒绝这些执行类型。运行中历史旧 Task 不按新定义重放。
+
+受控外部效果只允许 code 节点声明 `external.operation`。受信适配器须提供当前只读快照、精确准备对象、发送和独立回读；prepared 必须绑定 run/generation/requirementDigest、workflowKind、目标资源键和平台操作身份。网关在同一控制账检查停止、输入修订、撤权、资源占用及批准，再发放一次发送资格。生产批准绑定一个精确 effect 请求；Web 或钉钉认证入口的首个有效终态由控制账记录，尚未接入两端审批 UI 与真实通知前，不得打开生产准入。unknown 效果只读对账，不重试发送。
+
+隔离验证可运行 `node --test test/task-readonly-workflows.test.js test/task-release-workflows.test.js test/workflow-data-change.test.js test/execution-external-delivery.test.js test/workflow-service.test.js`。合成适配器通过仅证明编排合同，不证明 Woodpecker、Bytebase、Registry、Kubernetes、真实数据库或渠道投递。完整迁移状态见[第 27 轮](../acceptance/runtime-redesign/round-27.md)。
