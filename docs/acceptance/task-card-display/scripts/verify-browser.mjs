@@ -23,7 +23,12 @@ const routes = new Map([
 const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>流程状态验收夹具</title><style>body{margin:0;color:#202124;font:14px "Microsoft YaHei",sans-serif}#sidebar{padding:8px}button{font:inherit}#app{height:calc(100dvh - 48px)}</style><div id="sidebar"></div><div id="app"></div><script src="/react.js"></script><script src="/react-dom.js"></script><script>
 window.opened=[];const h=React.createElement;
 const primitives={Button:({variant,size,children,...props})=>h('button',props,children),Pill:({children,...props})=>h('span',props,children),StateDot:({state,size=7})=>h('span',{'aria-hidden':true,style:{display:'inline-block',width:size,height:size,borderRadius:'50%',background:state==='done'?'#248a3d':'#737373'}}),Menu:({anchor})=>anchor};
-for(const name of ['IconChecklistOutline14','IconChevronDownOutline14','IconChevronUpOutline14'])primitives[name]=props=>h('svg',{...props,width:14,height:14,'aria-hidden':true},h('path',{d:'M3 5L7 9L11 5',fill:'none',stroke:'currentColor'}));
+primitives.IconChecklistOutline14=({size=14,...props})=>h('svg',{...props,width:size,height:size,viewBox:'0 0 14 14',fill:'none'},
+  h('path',{d:'M13.3277 9.69629V10.976H7.28086V9.69629H13.3277Z',fill:'currentColor'}),
+  h('path',{d:'M13.3277 2.97256V4.25225H7.28086V2.97256H13.3277Z',fill:'currentColor'}),
+  h('path',{d:'M4.64512 10.336C4.64505 9.62755 4.07081 9.05322 3.3623 9.05322C2.65386 9.05329 2.07956 9.62759 2.07949 10.336C2.07949 11.0445 2.65382 11.6188 3.3623 11.6188C4.07085 11.6188 4.64512 11.0446 4.64512 10.336ZM5.92559 10.336C5.92559 11.7515 4.77777 12.8993 3.3623 12.8993C1.94689 12.8993 0.799805 11.7515 0.799805 10.336C0.799871 8.92066 1.94693 7.7736 3.3623 7.77354C4.77773 7.77354 5.92552 8.92062 5.92559 10.336Z',fill:'currentColor'}),
+  h('path',{d:'M4.64531 3.6123C4.6453 2.90382 4.07098 2.32949 3.3625 2.32949C2.65403 2.32951 2.0797 2.90383 2.07969 3.6123C2.07969 4.32079 2.65402 4.8951 3.3625 4.89512C4.07099 4.89512 4.64531 4.3208 4.64531 3.6123ZM5.925 3.6123C5.925 5.02772 4.77792 6.1748 3.3625 6.1748C1.9471 6.17479 0.8 5.02771 0.8 3.6123C0.800013 2.19691 1.9471 1.04982 3.3625 1.0498C4.77791 1.0498 5.92499 2.1969 5.925 3.6123Z',fill:'currentColor'}));
+for(const name of ['IconChevronDownOutline14','IconChevronUpOutline14'])primitives[name]=props=>h('svg',{...props,width:14,height:14,viewBox:'0 0 14 14',fill:'none'},h('path',{d:name==='IconChevronUpOutline14'?'M3 9L7 5L11 9':'M3 5L7 9L11 5',stroke:'currentColor',strokeWidth:1.5,strokeLinecap:'round',strokeLinejoin:'round'}));
 const roots={sidebar:ReactDOM.createRoot(document.getElementById('sidebar')),app:ReactDOM.createRoot(document.getElementById('app'))};
 window.__ModuleLoader__={load(def){const mod=def.factory(name=>name==='react'?React:primitives);mod.apply({slots:{inject(name,callback){return callback()},register(spec,Component){const target=spec.name==='conversation'?'app':'sidebar';roots[target].render(h(Component,{...(spec.inject?.()||{}),wide:true}));return()=>roots[target].render(null)}},sessions:{subagentAddress(){return undefined},async refreshSubagents(){},async refresh(){},open(id){window.opened.push(id)}}})}};
 </script><script src="/observer.js"></script></html>`
@@ -90,11 +95,15 @@ try {
   await page.setViewportSize({ width: 1920, height: 1100 })
   await toggle.focus(); await page.keyboard.press('Enter')
   assert.equal(await toggle.getAttribute('aria-expanded'), 'true')
-  await toggle.locator('xpath=..').screenshot({ path: path.join(output, 'progress-expanded.png') })
-  await page.setViewportSize({ width: 1440, height: 1100 })
+  assert.equal(await toggle.locator('svg').first().locator('path').count(), 4)
+  assert.equal(await toggle.locator('svg').last().locator('path').getAttribute('d'), 'M3 9L7 5L11 9')
+  checks.push('checklist-icon-distinct-from-collapse-chevron')
   const outline = await toggle.evaluate(element => getComputedStyle(element).outlineStyle)
   assert.notEqual(outline, 'none')
   checks.push('keyboard-enter-expands', 'visible-focus')
+  await toggle.evaluate(element => element.blur())
+  await toggle.locator('xpath=..').screenshot({ path: path.join(output, 'progress-expanded.png') })
+  await page.setViewportSize({ width: 1440, height: 1100 })
   const archiveButtons = page.getByRole('button', { name: '检查并归档' })
   assert.equal(await archiveButtons.count(), 1)
   await archiveButtons.first().click()
