@@ -3,6 +3,18 @@ import { createHash } from 'node:crypto'
 import { freezeCandidate, readCandidate, verifyCandidate } from './execution-candidate.js'
 
 const text = { type: 'string' }
+function verificationFailure(verification) {
+  const evidence = verification.checks.flatMap(check => {
+    const bytes = Buffer.from(check.log, 'utf8'), parts = Math.max(1, Math.ceil(bytes.length / 16384))
+    return Array.from({ length: parts }, (_, part) => ({
+      kind: 'engineering-verification-failure', candidateDigest: verification.candidateDigest, verificationDigest: verification.digest,
+      checkId: check.id, checkVersion: check.version, passed: check.passed,
+      encoding: 'base64', part, parts, logBytes: bytes.length, logSha256: createHash('sha256').update(bytes).digest('hex'),
+      data: bytes.subarray(part * 16384, (part + 1) * 16384).toString('base64'),
+    }))
+  })
+  return Object.assign(executionError('ENGINEERING_VERIFICATION_FAILED'), { evidence })
+}
 const requirementSchema = { type: 'object', properties: {
   request: text, constraints: { type: 'array', items: text },
   materials: { type: 'array', items: { type: 'object', properties: { id: text, text }, required: ['id', 'text'], additionalProperties: false } },
@@ -56,7 +68,7 @@ export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort
   checks = checks.map(check => Object.freeze({ ...check }))
   // 只保存本进程真正执行检查产生的WeakSet票据；持久JSON不能进入此缓存。
   const verificationTickets = new Map()
-  const rulesDigest = executionDigest({ adapterIdentity, discovery, prepareGeneration: prepareGeneration?.toString() ?? null, checks: checks.map(check => ({ id: check.id, version: check.version, implementation: check.run.toString(), configurationDigest: check.configurationDigest ?? null })),
+  const rulesDigest = executionDigest({ adapterIdentity, discovery, verificationFailure: verificationFailure.toString(), prepareGeneration: prepareGeneration?.toString() ?? null, checks: checks.map(check => ({ id: check.id, version: check.version, implementation: check.run.toString(), configurationDigest: check.configurationDigest ?? null })),
     delivery: deliveryPlan ? { identity: deliveryPlan.identity, date: deliveryPlan.date, commitMessage: deliveryPlan.commitMessage, title: deliveryPlan.title, body: deliveryPlan.body, expectedRemoteSha: deliveryPlan.expectedRemoteSha } : null })
   const requirement = { type: 'object', properties: {
     request: text, constraints: { type: 'array', items: text }, baseCommit: text,
@@ -120,7 +132,7 @@ export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort
         if ((await workspaceAdapter.reconcile(workspace)).status !== 'succeeded') throw executionError('WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED')
         const candidate = await freezeCandidate({ repository: workspace.directory, baseCommit: input.baseCommit, generation, requirementDigest })
         const verification = await verifyCandidate({ candidate, checks, signal })
-        if (!verification.passed) throw executionError('ENGINEERING_VERIFICATION_FAILED')
+        if (!verification.passed) throw verificationFailure(verification)
         const key = executionDigest({ candidateDigest: candidate.digest, rulesDigest, generation: candidate.generation, requirementDigest: candidate.requirementDigest })
         verificationTickets.set(key, verification)
         if (verificationTickets.size > 64) verificationTickets.delete(verificationTickets.keys().next().value)
@@ -176,7 +188,7 @@ export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort
         let verification = verificationTickets.get(key)
         if (!verification) {
           verification = await verifyCandidate({ candidate: input.candidate, checks, signal })
-          if (!verification.passed) throw executionError('ENGINEERING_VERIFICATION_FAILED')
+          if (!verification.passed) throw verificationFailure(verification)
           verificationTickets.set(key, verification)
           if (verificationTickets.size > 64) verificationTickets.delete(verificationTickets.keys().next().value)
         }

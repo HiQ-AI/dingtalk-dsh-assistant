@@ -41,7 +41,7 @@
     "profile:install": "pwsh -NoProfile -File scripts/install-profile.ps1",
     "profile:dump": "pwsh -NoProfile -File scripts/dump-profile.ps1",
     "start": "pwsh -NoProfile -File scripts/start-resident.ps1",
-    "test": "node --test"
+    "test": "node --test --test-concurrency=4 \"test/*.test.js\""
   },
   "engines": {
     "node": ">=24"

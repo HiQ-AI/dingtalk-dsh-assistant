@@ -274,3 +274,32 @@ test('Web事件已准备后中断由恢复通路接纳一次，后续恢复不�
  const after=await execution.controller.state(task.runId)
  assert.equal(after.run.revision,before.run.revision);assert.equal(after.pendingInputCount,before.pendingInputCount)
 })
+
+test('C01 媒体连接器挂起不阻durable接收和独立SQLite读回',{timeout:5000},async t=>{
+ let release,started;const gate=new Promise(r=>release=r),began=new Promise(r=>started=r)
+ const judge=async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'new',candidateId:null,evidence:['source']}:{kind:'intent',actions:[{intent:'create',arguments:{objective:'读取附件',workflowId:'task-analysis'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:['file'],replyPolicy:'result'}
+ const {service,execution,message}=await fixture(t,'owner',undefined,{judge,readResource:async()=>{started();await gate;return{text:'完整材料'}}})
+ const received=await service.ingest({...message,resourceRefs:[{resourceId:'file'}]})
+ try{await began;const persisted=await execution.store.query({kind:'message.run',runId:received.runId});assert.equal(persisted.run.body,message.text);assert.equal(persisted.commands.length,0);assert.equal((await execution.store.query({kind:'run.list'})).length,0)}finally{release()}
+ await service.messages.process(received.runId)
+ assert.equal((await service.state(received.runId)).commands[0].status,'applied')
+})
+
+test('C13 渠道读回挂起时新业务和取消继续，ACK不冒充送达',{timeout:7000},async t=>{
+ let readStarted,releaseRead,executionStarted,releaseExecution,executions=0,disclose=false
+ const reading=new Promise(r=>readStarted=r),readGate=new Promise(r=>releaseRead=r),running=new Promise(r=>executionStarted=r),executionGate=new Promise(r=>releaseExecution=r)
+ const notices={canDisclose:async()=>disclose,send:async n=>({messageId:n.id}),readback:async n=>{readStarted();await readGate;return{messageId:n.id,conversationId:'g'}}}
+ const {service,execution,message}=await fixture(t,'owner',notices,{config:{webActorId:'owner'},execute:async()=>{if(++executions===1){executionStarted();await executionGate}return{summary:'完成'}}})
+ const first=await service.ingest(message);await service.messages.process(first.runId);await running
+ const task=(await service.state(first.runId)).commands[0].result;await service.flushNotifications();assert.equal((await execution.store.query({kind:'message.notifications'}))[0].status,'prepared');disclose=true;const flushing=service.flushNotifications()
+ try{await reading
+ const pending=await execution.store.query({kind:'message.notifications'});assert.ok(pending.some(n=>n.status==='acknowledged'));assert.ok(!pending.some(n=>n.status==='delivered'))
+ const next=await service.ingest({...message,messageId:'second'});await service.messages.process(next.runId);const nextTask=(await service.state(next.runId)).commands[0].result;await execution.controller.whenIdle(nextTask.runId)
+ assert.equal((await execution.controller.state(nextTask.runId)).run.status,'succeeded')
+ const view=(await service.tasks()).find(t=>t.taskId===task.taskId);assert.equal(view.state,'running')
+ await service.submitWebTask({action:'cancel',taskId:task.taskId,requestId:'cancel-during-readback',inputVersion:view.inputVersion,runSequence:1,reason:'取消'},{channel:'web',actorId:'owner'})
+ assert.equal((await execution.controller.state(task.runId)).run.stopRequested,true)
+ }finally{releaseExecution();releaseRead()}
+ await flushing;await execution.controller.whenIdle(task.runId);assert.equal((await execution.controller.state(task.runId)).run.status,'cancelled')
+ assert.equal((await execution.store.query({kind:'message.notifications',states:['delivered']})).length,1)
+})

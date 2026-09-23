@@ -202,8 +202,13 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const identity = { runId, nodeId: ready.nodeId, generation: binding.generation, leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest }
       if (failure || !submitted) {
         if (failure) errors.set(runId, failure)
+        const evidenceRefs = []
+        if (nodeDefinition.executor === 'code' && failure?.code === 'ENGINEERING_VERIFICATION_FAILED' && failure.evidence !== undefined) {
+          if (!Array.isArray(failure.evidence) || failure.evidence.length > 128) throw executionError('NODE_FAILURE_EVIDENCE_INVALID')
+          for (const payload of failure.evidence) evidenceRefs.push((await artifacts.put(payload)).ref)
+        }
         await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
-          ...identity, outcome: 'waiting', evidenceRefs: [], waitReason: { kind: 'recovery', reference: failure?.code ?? (failure ? 'NODE_EXECUTION_FAILED' : outcome?.reason ?? outcome?.status ?? 'NO_NODE_SUBMISSION') },
+          ...identity, outcome: 'waiting', evidenceRefs, waitReason: { kind: 'recovery', reference: failure?.code ?? (failure ? 'NODE_EXECUTION_FAILED' : outcome?.reason ?? outcome?.status ?? 'NO_NODE_SUBMISSION') },
         })
         return
       }

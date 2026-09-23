@@ -376,6 +376,8 @@ pnpm install
 pnpm test
 ```
 
+`pnpm test` 以4个文件并发显式运行 `test/*.test.js`，避免自动扫描 `docs/tmp` 中隔离验证的其他业务仓库，以及按CPU核数启动大量真实Git/SQLite测试进程相互争用资源。
+
 测试接口仅在 `testApiEnabled` 显式开启时可用。生产状态接口默认只监听本机地址，不应直接暴露到外网。
 
 关键设计说明：
@@ -409,3 +411,5 @@ M2 已增加固定 Git tree 候选验证与显式注册的本地 Git 交付环�
 请求必须包含稳定 `requestId`、任务视图中的 `inputVersion` 和 `runSequence`。补充请求传 `context`，取消请求传 `reason`；可附空 `topicRefs`，新任务不要求旧 Topic。相同请求重投复用持久事件，改变同一 requestId 的内容返回 409。补充完整保留旧需求字段和安全约束，仅追加新要求；暂停期间接纳补充不会自动恢复。待处理输入或陈旧版本返回 409。准备事件后进程中断由恢复通路续接稳定 Controller 命令。
 
 新工作流任务当前不支持 Web 归档、改名和重开，对应路径明确返回 `WORKFLOW_WEB_ACTION_UNSUPPORTED`，不写入旧任务账。旧任务仍使用原接口。执行器无法证明排空时，看板显示等待及 Controller 错误原因，不能继续显示为正常运行。
+
+工程固定检查支持 Host 显式配置总预算及每步预算，并将失败检查已采集的受限日志保存为失败节点证据；参数范围、超时归属和准入要求见[检查阶段预算与失败证据](docs/ops/execution-foundation-local.md#工程固定检查的阶段预算与失败证据)。调整预算不等于构建通过。

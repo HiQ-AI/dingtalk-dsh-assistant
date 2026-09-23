@@ -113,3 +113,28 @@ export function make({source,counter,remote}){const checks=[{id:'actual',version
   const resumed=JSON.parse((await exec(process.execPath,[runner,inputFile,JSON.stringify(scope)],{windowsHide:true})).stdout)
   assert.equal(JSON.parse(await readFile(counter,'utf8')),2);assert.equal(resumed.commitId,prepared.commitId);assert.equal(resumed.verification.checks[0].log,'actual check 2')
 })
+
+test('失败工程检查以有界工件保留完整日志，节点仍waiting且下游不执行', { timeout: 60000 }, async t => {
+  const {createHash}=await import('node:crypto')
+  const directory=await mkdtemp(join(tmpdir(),'dsh-check-evidence-')),source=join(directory,'source');await mkdir(source)
+  const exec=promisify(execFile),git=async(...args)=>(await exec('git',['-C',source,...args],{windowsHide:true})).stdout.trim()
+  await git('init','-b','main');await git('config','user.name','Test');await git('config','user.email','test@example.invalid');await writeFile(join(source,'value.txt'),'source');await git('add','.');await git('commit','-m','base')
+  const {createVerificationJobCheck}=await import('../packages/dingtalk-dsh-assistant/execution-check-job.js')
+  let log
+  const job=createVerificationJobCheck({id:'build',version:'1',root:join(directory,'checks'),executable:process.execPath,args:['-e',"process.stdout.write(Buffer.alloc(10000,0));process.stderr.write(Buffer.alloc(10000,1));process.exitCode=3"]})
+  const store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'failure',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+  const factory=createEngineeringTaskWorkflow({provider:'test',model:'test',workspaceAdapter:{prepare:async()=>({directory:source}),reconcile:async()=>({status:'succeeded'})},editAdapter:{},adapterIdentity:source,checks:[{id:'build',version:'1',run:async snapshot=>{const result=await job.run(snapshot);log=result.log;return result}}]})
+  let nextCalls=0
+  const controller=createExecutionController({store,artifacts,workflows:[{id:'failed-check',version:'1',nodes:[factory.nodes.find(n=>n.id==='verify-candidate'),{id:'next',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:{type:'object'},outputSchema:{type:'object'},mapInput:({previousOutput})=>previousOutput,execute:async()=>{nextCalls++;return {}}}]}]})
+  t.after(async()=>{await controller.close();await store.close()})
+  await controller.createRun({commandId:'create',runId:'run',taskId:'task',workflowId:'failed-check',input:{request:'verify',constraints:[],editablePaths:['value.txt'],baseCommit:await git('rev-parse','HEAD')}})
+  const state=await controller.whenIdle('run'),node=state.nodes[0]
+  assert.equal(state.run.status,'waiting');assert.equal(node.status,'waiting');assert.equal(node.outputRef,null);assert.equal(node.waitReason.reference,'ENGINEERING_VERIFICATION_FAILED');assert.equal(nextCalls,0);assert.equal(state.nodes[1].status,'blocked')
+  assert.ok(node.evidenceRefs.length>1);assert.ok(node.evidenceRefs.length<=128)
+  const chunks=await Promise.all(node.evidenceRefs.map(ref=>artifacts.read(ref)))
+  assert.ok(chunks.every(c=>c.kind==='engineering-verification-failure'&&c.passed===false&&Buffer.byteLength(JSON.stringify(c))<65536))
+  const bytes=Buffer.concat(chunks.sort((a,b)=>a.part-b.part).map(c=>Buffer.from(c.data,'base64')))
+  assert.equal(bytes.toString('utf8'),log);assert.equal(createHash('sha256').update(bytes).digest('hex'),chunks[0].logSha256)
+  const recorded=JSON.parse(log).steps[0];assert.deepEqual(Buffer.from(recorded.stdout,'base64'),Buffer.alloc(10000,0));assert.deepEqual(Buffer.from(recorded.stderr,'base64'),Buffer.alloc(10000,1))
+  assert.deepEqual(await store.query({kind:'effect.list',runId:'run'}),[])
+})

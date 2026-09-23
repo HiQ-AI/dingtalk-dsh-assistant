@@ -214,3 +214,29 @@ test('I投影去除Host目标副本，完整保留身份材料权限和约束',(
   assert.ok(Buffer.byteLength(JSON.stringify(projected))<Buffer.byteLength(JSON.stringify({...base,binding,facts})))
   assert.equal(binding.target,target)
 })
+
+test('C02 共享材料连接器暂停时所有相关事项均不接纳，独立版B可先执行',{timeout:5000},async t=>{
+ for(const shared of [false,true]){
+  let release,started;const gate=new Promise(r=>release=r),ready=new Promise(r=>started=r);let reads=0,bDone;const bFinished=new Promise(r=>bDone=r);const sent=[]
+  const units=structuredClone(split);units.units[0].contextNeeds=[{resourceRef:'shared-rules',reason:'必要规则'}]
+  if(shared){units.units[1].contextNeeds=[...units.units[0].contextNeeds];units.sharedConstraints=['两项均须遵守附件规则']}
+  const {workflow,store}=await fixture(t,{context:{material:async()=>{if(++reads===(shared?2:1))started();await gate;return{ready:true,data:{constraints:['禁止生产写入']}}}},judge:async({stage})=>stage==='S'?units:stage==='R'?binding:intent,handlers:{status:async(_,info)=>{sent.push(info.unit.goalText);if(info.unit.goalText==='查B')bDone();return{ok:true}}}})
+  const received=await workflow.receive({...source,sourceKey:source.sourceKey+shared},{process:false});const work=workflow.process(received.runId)
+  try{await ready
+   if(shared){assert.deepEqual(sent,[]);assert.equal((await store.query({kind:'message.run',runId:received.runId})).commands.length,0)}
+   else {await bFinished;assert.deepEqual(sent,['查B'])}
+  }finally{release()}
+  await work;assert.deepEqual(new Set(sent),new Set(['查A','查B']))
+ }
+})
+
+test('C09 业务创建handler暂停时独立状态及取消handler先接纳',{timeout:5000},async t=>{
+ let release,started;const gate=new Promise(r=>release=r),began=new Promise(r=>started=r);const effects=[]
+ const {workflow}=await fixture(t,{judge:async({stage,input})=>stage==='S'?{kind:'split',units:[{spans:[{start:0,end:input.source.text.length}],goalText:input.source.text,constraints:[],contextNeeds:[]}],sharedConstraints:[],coverage:[{start:0,end:input.source.text.length,role:'unit'}]}:stage==='R'?binding:{...intent,actions:[{intent:input.text==='启动'?'create':input.text==='查询'?'status':'cancel',arguments:input.text==='启动'?{objective:'任务',workflowId:'task-analysis'}:{},dependsOn:[]}]},handlers:{create:async()=>{started();await gate;effects.push('created');return{}},status:async()=>{effects.push('status');return{}},cancel:async()=>{effects.push('cancel');return{}}}})
+ const first=await workflow.receive({...source,body:'启动'},{process:false});const creating=workflow.process(first.runId)
+ try{await began
+ for(const body of ['查询','取消']){const next=await workflow.receive({...source,sourceKey:body,body},{process:false});await workflow.process(next.runId);assert.equal((await workflow.state(next.runId)).run.status,'settled')}
+ assert.deepEqual(effects,['status','cancel'])
+ }finally{release()}
+ await creating
+})

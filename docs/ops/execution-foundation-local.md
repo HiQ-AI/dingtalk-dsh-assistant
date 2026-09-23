@@ -319,3 +319,27 @@ journal 已 sealed 后不得直接删 journal 或恢复旧快照来“回滚”�
 检查节点取消/超时须等待前台进程树退出。Host异常退出后的未排空外部检查保留 `EXECUTOR_DRAIN_EVIDENCE_REQUIRED` 屏障；SQLite独占锁不是旧子进程退出证明，禁止手改drained放行。
 
 Web 操作验收需使用配置明确映射的 `workflow.webActorId`。新任务取消/补充走同库 Web 事件与 Controller，不依赖旧 Topic；验证重复 requestId、跨站 Origin、伪造 actor、陈旧版本及暂停补充反例。归档/改名/重开尚未实现，返回明确冲突，不转发旧引擎。持久 Web 事件准备后中断由服务恢复接纳；输入接纳前后不得改写 Task 执行基线字段。
+
+### 工程固定检查的阶段预算与失败证据
+
+`checks[].timeoutMs` 是整个检查的总执行预算，默认仍为 `120000`，允许范围 `1..1200000` 毫秒。每个 `steps[]` 可显式配置 `timeoutMs`，范围 `1..900000`；省略时沿用共享总预算语义。实际单步 deadline 取自身预算与总剩余时间的较小值，不在下一步重置总时间。参数只能由 Host 配置提供，不由消息或模型延长。
+
+冷安装与构建各需独立预算的仓库，可明确写为：
+
+```js
+{
+  id: 'install-build', version: '1', timeoutMs: 1200000,
+  steps: [
+    { executable: trustedNodePath, args: [trustedYarnCliPath, 'install', '--frozen-lockfile'], timeoutMs: 600000 },
+    { executable: trustedNodePath, args: [trustedYarnCliPath, 'build'], timeoutMs: 900000 },
+  ],
+}
+```
+
+示例不代表该仓库已经构建通过。必须用真实冻结候选完整实跑 PASS 后准入；不自动增加预算，不忽略超时或退出码。每步日志记录 `startedAt/elapsedMs/budgetMs/timeoutScope`，`timeoutScope` 为 `step`、`check` 或未超时的 `null`；elapsed 包括终止排空时间，可能略超过 deadline。总预算从开始执行检查步骤计时，保留原来不含候选物化时间的语义。
+
+失败工程检查保持 `waiting/ENGINEERING_VERIFICATION_FAILED`，不发放交付资格。检查日志以最多 128 个内容地址工件保存到失败节点 `evidenceRefs`：每个日志按 16KiB 原始 UTF-8 字节分块、base64 编码，附检查 ID/版本/结果、part/parts、字节总数和日志 SHA256；重组按同一检查的 part 顺序拼接字节，再校验 SHA 并解码 UTF-8。每工件仍受 64KiB 上限约束。没有把日志丢在仅本轮可见的内存错误里，也不把失败节点标记成功。
+
+检查 job 日志只在 `steps[]` 保存 stdout/stderr，顶层只保留退出/超时摘要。各流带 `stdoutEncoding/stderrEncoding`：有效 UTF-8 普通文本在其 JSON 编码不长于 base64 时使用 `utf8`，其余输出使用 `base64`；读取时按该字段解码。32KiB 限制按所有步骤合计的原始输出字节计量，不按 base64 长度计量。固定命令与root的JSON配置共同受8KB上限约束，避免大配置挤掉64KiB结果的日志空间。没有静默删去已采集字节。
+
+业务工程检查的 Node 版本与 DSH Host 分开固定：本机 DSH 使用 Node 24；上述 dataset-web 基线 `.nvmrc/.node-version` 为 Node 20，生产 Dockerfile 的依赖与构建阶段为 Node 22，因此本地生产构建验证采用已安装的 `D:/soft/node-v22.13.0/node.exe`。不能因为 Host 要求 Node 24 就让业务工程自动使用 Node 24。Yarn CLI 也固定绝对路径和实际版本；需独立回读实际 Vue 构建子进程的 Node 路径，而不只核对启动脚本。
