@@ -1,0 +1,35 @@
+{
+  "checks": [
+    "normal-delivery-hidden",
+    "archive-data-absent-from-card",
+    "waiting-reason-readable",
+    "four-outcomes",
+    "independent-notification-status",
+    "ended-is-not-all-passed",
+    "same-title-stable-stage-ids",
+    "keyboard-enter-expands",
+    "visible-focus",
+    "archive-preview-before-action",
+    "borrowed-retained",
+    "owned-cleanup-preview",
+    "narrow-keyboard-space-collapses",
+    "narrow-chinese-cards",
+    "archived-record-on-demand",
+    "confirm-archives-exact-task-once",
+    "empty-task-list",
+    "read-error-visible"
+  ],
+  "sourceSha256": "b04faf380dba1a9fb2aa2227bf2ec9bd0aca88ac6b4184e5275cc695248a97a3",
+  "browser": "153.0.4234.48",
+  "viewport": {
+    "viewport": 390,
+    "document": 390,
+    "board": 366
+  },
+  "errors": [],
+  "blockedWrites": [],
+  "simulatedWrites": [
+    "/tasks/fixture-succeeded/archive"
+  ],
+  "boundary": "完整observer源码与真实React浏览器渲染；DSH壳、UI primitive与API为替身。归档POST仅由隔离夹具模拟，未接真实profile、未执行真实归档或发送消息。"
+}
