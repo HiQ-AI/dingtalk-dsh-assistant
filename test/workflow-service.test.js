@@ -12,9 +12,19 @@ import { createExecutionController } from '../packages/dingtalk-dsh-assistant/ex
 import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { messageSchemas, taskWorkflowCatalog } from '../packages/dingtalk-dsh-assistant/message-context.js'
 import { notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
+import { queryConversationTaskProgress } from '../packages/dingtalk-dsh-assistant/task-progress-query.js'
 
 const schema = { type: 'object', additionalProperties: true }
 const splitOne = text => ({ kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] })
+test('内置进展查询限制本群与八项候选，流程结果可审计',()=>{
+  const legacyTasks=Array.from({length:10},(_,index)=>({taskId:`t-${index}`,groupId:'g',title:`审核草稿保存 ${index}`,objective:'修复审核草稿保存',state:'completed'}))
+  legacyTasks.push({taskId:'other',groupId:'other',title:'审核草稿保存',objective:'修复审核草稿保存',state:'completed'})
+  const result=queryConversationTaskProgress({queryText:'审核草稿保存的问题进展如何？',conversationId:'g',actorId:'member',ownerActorId:'owner',occurredAt:'2026-09-24T00:00:00Z',workflowOrigins:[],workflowRuns:[],legacyTasks})
+  assert.equal(result.items.length,8)
+  assert.equal(result.flow.steps[1].count,10)
+  assert.match(result.reply,/仅显示前 8 项/)
+  assert.ok(result.items.every(item=>item.taskId!=='other'))
+})
 test('渠道回读仅归一化空白，正文差异仍阻止送达',()=>{
   assert.equal(sameDeliveredText('第一行 第二行','第一行\n第二行'),true)
   assert.equal(sameDeliveredText('第一行 第三行','第一行\n第二行'),false)
@@ -257,6 +267,7 @@ test('无引用的先别管它静默收束，不追问也不创建任务',async 
 test('明确问小小鹏审核问题是否部署时即使I误判无动作也回读群任务',async t=>{
   const task={taskId:'old-review',groupId:'g',title:'审核草稿与撤回通知',objective:'修复审核草稿与撤回通知',state:'completed',result:{delivery:{uat2Status:'deployed-and-handed-to-testing'}}}
   const {service,message}=await fixture(t,'participant',undefined,{legacy:{listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'conversation',candidateId:null,evidence:['群审核任务']}:{kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}})
+  assert.deepEqual(service.catalog().builtInWorkflows[0].nodes.map(node=>node.id),['scope','candidates','readback','reply'])
   const received=await service.ingest({...message,text:'小小鹏，我审核的问题都改完部署到uat2了吗？'})
   await service.messages.process(received.runId)
   const state=await service.state(received.runId)
@@ -282,6 +293,8 @@ test('审核状态问句、两个任务说明和引用问题清单归为同一�
   await service.messages.process(first.runId)
   const firstState=await service.state(first.runId)
   assert.equal(firstState.commands[0].kind,'status')
+  assert.equal(firstState.commands[0].result.flow.version,'task-progress-query@1')
+  assert.deepEqual(firstState.commands[0].result.flow.steps.map(step=>step.nodeId),['scope','candidates','readback','reply'])
   assert.match(firstState.commands[0].result.reply,/审核草稿与撤回通知可靠化/)
   assert.match(firstState.commands[0].result.reply,/修复专家审核后仍可撤回分配/)
   const second=await service.ingest({...message,senderOpenDingTalkId:'owner',messageId:'two-tasks',text:'审核问题会匹配到两个任务'})
@@ -296,6 +309,7 @@ test('审核状态问句、两个任务说明和引用问题清单归为同一�
   assert.match(thirdState.commands[0].result.reply,/UAT2：deployed-and-handed-to-testing/)
   assert.match(thirdState.commands[0].result.reply,/cancelled/)
   assert.equal(thirdState.commands[0].result.items.length,2)
+  assert.equal(thirdState.commands[0].result.flow.version,'task-progress-query@1')
   assert.equal((await execution.store.query({kind:'run.list'})).length,0)
   const topicIds=[firstState,secondState,thirdState].map(state=>state.units[0].topicId)
   assert.equal(new Set(topicIds).size,1)

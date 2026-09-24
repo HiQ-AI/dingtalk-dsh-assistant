@@ -10,6 +10,7 @@ import { createEngineeringRegistry } from './workflow-engineering.js'
 import { createDataChangeTaskWorkflow } from './workflow-data-change.js'
 import { createReleaseTaskWorkflow, releaseWorkflowKinds } from './task-release-workflows.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
+import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
 
 const sourceKey = (profile, groupId, messageId) => `dws:${executionDigest([profile, groupId, messageId])}`
 const requireText = (value, code) => { if (typeof value !== 'string' || !value.trim()) throw executionError(code); return value }
@@ -204,35 +205,16 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   async function taskAction(action, info) {
     if (info.binding.disposition === 'conversation' && ['status', 'result'].includes(action.intent)) {
       const origins = await store.query({ kind: 'message.task-candidates', conversationId: info.run.conversationId, limit: 200 })
-      const visible = origins.filter(origin => [origin.run.actorId, ownerActorId].includes(info.run.actorId))
       const allRuns = await store.query({ kind: 'run.list', limit: 200 })
-      const items = visible.map(origin => {
-        const run = allRuns.find(item => item.taskId === origin.command.args.taskId)
-        return { taskId: origin.command.args.taskId, title: origin.command.args.arguments.objective, status: run?.status ?? origin.command.status }
-      })
-      let issueWords=[]
-      {
-        const legacyTasks = (legacy.listTasks?.() ?? []).filter(task => task.groupId === info.run.conversationId)
-        const queryText=info.unit.goalText ?? ''
-        const words = [...new Set((queryText.match(/[\u4e00-\u9fff]+/g) ?? []).flatMap(part => Array.from({length:Math.max(0,part.length-1)},(_,index)=>part.slice(index,index+2))))]
-        const issues=[...queryText.matchAll(/([^，,、；;：:？?]{4,40})的问题/gu)].map(match=>match[1].replace(/^.*(?:范围|问句|：)/u,''))
-        issueWords=issues.map(issue=>[...new Set(Array.from({length:Math.max(0,issue.length-1)},(_,index)=>issue.slice(index,index+2)))])
-        const asksDelivery=/(?:部署|发布).*(?:UAT|uat|测试环境)|(?:UAT|uat).*(?:部署|发布)/u.test(queryText)
-        const cutoff = info.run.context?.occurredAt ?? info.run.createdAt
-        const related = legacyTasks.filter(task => (!task.createdAt || task.createdAt < cutoff) && (!asksDelivery || !/(?:仅授权排查|不实施代码|不实施代码、配置|不实施代码、配置或数据)/u.test(task.objective ?? ''))
-          && (!asksDelivery || issueWords.length<2 || task.outcome && task.outcome!=='legacy-unknown' || task.result?.delivery?.uat2Status))
-          .map(task => {const title=String(task.title ?? ''),objective=String(task.objective ?? '');const issueScore=issueWords.length>=2?Math.max(...issueWords.map(parts=>parts.filter(word=>title.includes(word)||objective.includes(word)).length)):0;return {task,issueScore,score:words.filter(word=>title.includes(word)).length*3+words.filter(word=>objective.includes(word)).length}})
-          .filter(item => item.score >= 3 && (issueWords.length<2 || item.issueScore>=3)).sort((a, b) => b.issueScore-a.issueScore || b.score - a.score || String(b.task.updatedAt ?? '').localeCompare(String(a.task.updatedAt ?? '')))
-        for (const {task} of related.slice(0, 8))
-          items.push({ taskId: task.taskId, title: task.title ?? task.objective ?? task.taskId, status: task.state ?? 'unknown', outcome: task.outcome ?? null, engine: 'legacy', uat2Status: task.result?.delivery?.uat2Status ?? null })
-      }
-      return { status: 'observed', observedAt: new Date().toISOString(), items, coverage: '本群任务标题和目标匹配的候选；未验证候选与提问的业务归属', reply: items.length ? `${issueWords.length>=2?'按补充的问题清单检索到以下候选任务；业务归属仍需核对：':'找到以下可能相关的任务，是否属于你说的审核问题还需结合问题清单确认：'}\n${items.slice(0, 8).map(item => `${item.title}：${item.status}${item.outcome ? `（${item.outcome}）` : ''}${item.uat2Status ? `；UAT2：${item.uat2Status}` : '；UAT2：未见部署回执'}`).join('\n')}` : '当前没有找到标题或目标明确匹配的本群任务。' }
+      return queryConversationTaskProgress({ queryText: info.unit.goalText, conversationId: info.run.conversationId,
+        actorId: info.run.actorId, ownerActorId, occurredAt: info.run.context?.occurredAt ?? info.run.createdAt,
+        workflowOrigins: origins, workflowRuns: allRuns, legacyTasks: legacy.listTasks?.() ?? [] })
     }
     const taskId = info.binding.taskId ?? action.taskId
     const origin = await taskAccess(taskId, info.run.actorId, info.run.conversationId)
     const existingRuns = await store.query({ kind: 'run.list', taskId, limit: 200 })
     if (!existingRuns.length) {
-      if (['status', 'result'].includes(action.intent)) return { taskId, status: origin.command.status, beforeStart: true, reply: `任务尚未开始执行；当前状态：${origin.command.status}` }
+      if (['status', 'result'].includes(action.intent)) return singleTaskProgressResult({ taskId, status: origin.command.status, beforeStart: true, reply: `任务尚未开始执行；当前状态：${origin.command.status}` })
       if (!['cancel', 'pause', 'resume', 'revise'].includes(action.intent)) throw executionError('WORKFLOW_ACTION_NOT_ADMITTED')
       const receipt = await store.command({ id: `prestart:${info.commandId}`, kind: 'message.task.control', args: {
         taskId, action: action.intent, actorId: info.run.actorId, sourceRunId: info.run.runId,
@@ -245,8 +227,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (action.intent === 'status' || action.intent === 'result') {
       const last = state.nodes.filter(node => node.outputRef).at(-1)
       const output = last ? await artifacts.read(last.outputRef) : null
-      return { taskId, runId: state.run.runId, status: state.run.status, observedAt: new Date().toISOString(), output,
-        reply: action.intent === 'result' && workflowResultText(output) ? workflowResultText(output) : `任务状态：${state.run.status}${state.run.recoveryReason ? `；等待原因：${state.run.recoveryReason}` : ''}` }
+      return singleTaskProgressResult({ taskId, runId: state.run.runId, status: state.run.status, observedAt: new Date().toISOString(), output,
+        reply: action.intent === 'result' && workflowResultText(output) ? workflowResultText(output) : `任务状态：${state.run.status}${state.run.recoveryReason ? `；等待原因：${state.run.recoveryReason}` : ''}` })
     }
     if (action.intent === 'cancel') await controller.stop({ ...args, reason: info.unit.goalText })
     else if (action.intent === 'pause') await controller.pause({ ...args, reason: info.unit.goalText })
@@ -265,8 +247,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (info.binding.engine !== 'legacy') return taskAction(action, info)
     const task = legacy.getTask?.(info.binding.taskId)
     if (!task || task.groupId !== info.run.conversationId) throw executionError('WORKFLOW_TASK_FORBIDDEN')
-    return { taskId: task.taskId, engine: 'legacy', status: task.state, outcome: task.outcome, observedAt: new Date().toISOString(),
-      reply: info.run.actorId === ownerActorId && intent === 'result' ? task.result ?? task.completion ?? '旧任务没有保存可读取的结果正文。' : `旧任务状态：${task.state}${task.outcome ? `；结果：${task.outcome}` : ''}${task.result?.delivery?.uat2Status ? `；UAT2：${task.result.delivery.uat2Status}` : '；UAT2：未见部署回执'}` }
+    return singleTaskProgressResult({ taskId: task.taskId, engine: 'legacy', status: task.state, outcome: task.outcome, observedAt: new Date().toISOString(),
+      reply: info.run.actorId === ownerActorId && intent === 'result' ? (typeof task.result === 'string' ? task.result : task.result?.summary ?? task.completion ?? '旧任务没有保存可读取的结果正文。') : `旧任务状态：${task.state}${task.outcome ? `；结果：${task.outcome}` : ''}${task.result?.delivery?.uat2Status ? `；UAT2：${task.result.delivery.uat2Status}` : '；UAT2：未见部署回执'}` })
   }
   handlers.create = createTask
   handlers.research = createTask
@@ -683,7 +665,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   }
   return {
     ingest, resumeRequest, reprocessMessage, decideApproval, isApprovalRequest, submitWebTask, mailboxes, topics, topicContext, isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
-    catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, workflows: workflowCatalogState() }),
+    catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, builtInWorkflows: [taskProgressQueryDefinition], workflows: workflowCatalogState() }),
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,
       messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },
     recover: recoverAll,
