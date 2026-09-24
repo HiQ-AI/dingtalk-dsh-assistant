@@ -228,7 +228,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   }
   if(kind==='message.attention') {r.status='needs_attention';r.reason=a.reason;save(db,r);return {result:{run:r}}}
   if(kind==='message.capacity.retry') {
-    const stage=a.projectionVersion==='s-compact-v1'?'S':a.projectionVersion==='r-source-refs-v1'?'R':null
+    const stage=a.projectionVersion==='s-compact-v1'?'S':['r-source-refs-v1','r-bounded-cards-v2'].includes(a.projectionVersion)?'R':null
     if(!stage||r.status!=='needs_attention'||!r.reason?.startsWith(`MESSAGE_CONTEXT_CAPACITY:${stage}:`))return {result:{run:r,retry:false}}
     current(db,r)
     if(!r.snapshot||['command','request','barrier'].some(type=>rows(db,r.runId,type).length))return {result:{run:r,retry:false}}

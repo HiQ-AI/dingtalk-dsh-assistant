@@ -3,7 +3,7 @@ import { digest, messageSchemas, prepareMessageContext, splitContext, validateSp
 import { messageSystem } from './message-model.js'
 
 export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.1', initialWindowMs: 45000, linkedWindowMs: 30000, attemptMs: 20000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, maxInputBytes: 64000, maxOutputBytes: 48000, recoveryDelaysMs: [5000, 30000] })
-const limits = { S: [8000, 2000], R: [4000, 1000], I: [6000, 1500] }
+const limits = { S: [8000, 2000], R: [12000, 1000], I: [6000, 1500] }
 
 /** 无常驻模型会话。每个判断独立、无工具；数据库是恢复和派发的唯一事实源。 */
 export function createMessageWorkflow({ store, judge, context = {}, handlers = {}, policy = {}, clock = Date.now }) {
@@ -215,7 +215,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     return Promise.all(pending.map(async run => {
       if (run.status === 'needs_attention') {
         const stage = run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:S:$:') ? 'S' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:R:') ? 'R' : null
-        const version = stage === 'S' ? 's-compact-v1' : stage === 'R' ? 'r-source-refs-v1' : null
+        const version = stage === 'S' ? 's-compact-v1' : stage === 'R' ? 'r-bounded-cards-v2' : null
         if (!version || run.capacityRetryVersion === version) return
         const retried = await cmd('message.capacity.retry', { runId: run.runId, projectionVersion: version }, `capacity-retry:${run.runId}:${version}`)
         if (!retried?.retry) return
