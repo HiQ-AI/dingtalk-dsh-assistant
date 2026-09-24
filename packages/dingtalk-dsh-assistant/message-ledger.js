@@ -228,9 +228,12 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   }
   if(kind==='message.attention') {r.status='needs_attention';r.reason=a.reason;save(db,r);return {result:{run:r}}}
   if(kind==='message.capacity.retry') {
-    if(a.projectionVersion!=='s-compact-v1'||r.status!=='needs_attention'||!r.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:S:$:'))return {result:{run:r,retry:false}}
+    const stage=a.projectionVersion==='s-compact-v1'?'S':a.projectionVersion==='r-source-refs-v1'?'R':null
+    if(!stage||r.status!=='needs_attention'||!r.reason?.startsWith(`MESSAGE_CONTEXT_CAPACITY:${stage}:`))return {result:{run:r,retry:false}}
     current(db,r)
-    if(!r.snapshot||['unit','node','command','request','barrier'].some(type=>rows(db,r.runId,type).length))return {result:{run:r,retry:false}}
+    if(!r.snapshot||['command','request','barrier'].some(type=>rows(db,r.runId,type).length))return {result:{run:r,retry:false}}
+    if(stage==='S'&&['unit','node'].some(type=>rows(db,r.runId,type).length))return {result:{run:r,retry:false}}
+    if(stage==='R'&&(!rows(db,r.runId,'unit').length||rows(db,r.runId,'node').some(node=>node.nodeId!=='S'||!['completed','succeeded'].includes(node.status))))return {result:{run:r,retry:false}}
     if(r.capacityRetryVersion===a.projectionVersion)return {result:{run:r,retry:false}}
     r.capacityRetryVersion=a.projectionVersion;r.status='pending';r.reason=null;r.deadline=new Date(Date.parse(now)+r.policy.initialWindowMs).toISOString();save(db,r)
     return {result:{run:r,retry:true}}

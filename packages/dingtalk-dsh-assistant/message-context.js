@@ -68,6 +68,13 @@ export function candidateCards(candidates) {
   return candidates.map(candidate => {
     const card = pick(candidate, ['candidateId', 'engine', 'topicId', 'taskId', 'runId', 'resultRef', 'title', 'goal', 'entityKeys', 'scope', 'state', 'relevantTime', 'explicitReferenceMatches', 'distinguishingFacts', 'sourceRefs', 'versions'])
     const omissions = []
+    // 未被本次引用的历史来源只参与 Host 召回，不重复塞进 R 的身份卡。
+    if (card.sourceRefs?.length) {
+      const explicit = new Set(card.explicitReferenceMatches ?? [])
+      const omitted = card.sourceRefs.filter(ref => !explicit.has(ref)).length
+      card.sourceRefs = card.sourceRefs.filter(ref => explicit.has(ref))
+      if (omitted) omissions.push({ field: 'sourceRefs', count: omitted })
+    }
     // 标题只是召回线索，不能挤占稳定身份和关键判别事实。截掉的字段显式留缺口。
     for (const [key, size] of [['title', 32], ['goal', 64]]) {
       if (typeof card[key] !== 'string') continue

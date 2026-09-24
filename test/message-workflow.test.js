@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { createMessageWorkflow } from '../packages/dingtalk-dsh-assistant/message-workflow.js'
-import { prepareMessageContext, splitContext, intentContext } from '../packages/dingtalk-dsh-assistant/message-context.js'
+import { prepareMessageContext, splitContext, intentContext, candidateCards } from '../packages/dingtalk-dsh-assistant/message-context.js'
 import { createMessageModel } from '../packages/dingtalk-dsh-assistant/message-model.js'
 import { messageSystem } from '../packages/dingtalk-dsh-assistant/message-model.js'
 
@@ -204,6 +204,25 @@ test('S容量修复仅恢复无副作用旧消息一次，重复恢复不循环'
   await workflow.recover()
   assert.equal(calls, before)
   assert.equal((await workflow.state(runId)).run.status, 'needs_attention')
+})
+
+test('R身份卡保留明确引用并压缩无关历史来源', () => {
+  const refs = Array.from({ length: 60 }, (_, i) => `channel:account:group:history-${i}`)
+  const cards = candidateCards(Array.from({ length: 8 }, (_, i) => ({ candidateId: `legacy:task-${i}`, taskId: `task-${i}`, title: `任务 ${i}`, goal: `任务 ${i}`, state: 'completed', sourceRefs: refs, explicitReferenceMatches: i === 0 ? [refs[0]] : [], distinguishingFacts: ['旧引擎已完成任务，仅支持只读状态和结果查询'] })))
+  assert.deepEqual(cards[0].sourceRefs, [refs[0]])
+  assert.equal(cards[0].omissions[0].count, 59)
+  assert.ok(Buffer.byteLength(JSON.stringify({ candidates: cards }) + messageSystem('R')) <= 4000)
+})
+
+test('R容量旧阻断仅在无命令、请求和副作用时重试', async t => {
+  const { workflow, store } = await fixture(t, { judge: async ({ stage }) => stage === 'S' ? split : stage === 'R' ? binding : intent, handlers: { status: async () => ({ ok: true }) } })
+  const { runId } = await workflow.receive(source, { process: false })
+  const snapshot = await prepareMessageContext(source, {})
+  await store.command({ id: 'snapshot-r', kind: 'message.snapshot', args: { runId, snapshot } })
+  await store.command({ id: 'split-r', kind: 'message.split', args: { runId, units: split.units.map((unit, i) => ({ ...unit, unitId: `${runId}:u${i}` })), coverage: split.coverage } })
+  await store.command({ id: 'attention-r', kind: 'message.attention', args: { runId, reason: `MESSAGE_CONTEXT_CAPACITY:R:${runId}:u0:16000/4000` } })
+  await workflow.recover()
+  assert.equal((await workflow.state(runId)).run.capacityRetryVersion, 'r-source-refs-v1')
 })
 
 test('I参数命名错误不派发，字段校验反馈只重试I', async t => {

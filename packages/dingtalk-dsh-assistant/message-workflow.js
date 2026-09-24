@@ -214,8 +214,10 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const pending = await store.query({ kind: 'message.pending' })
     return Promise.all(pending.map(async run => {
       if (run.status === 'needs_attention') {
-        if (!run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:S:$:') || run.capacityRetryVersion === 's-compact-v1') return
-        const retried = await cmd('message.capacity.retry', { runId: run.runId, projectionVersion: 's-compact-v1' }, `capacity-retry:${run.runId}:s-compact-v1`)
+        const stage = run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:S:$:') ? 'S' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:R:') ? 'R' : null
+        const version = stage === 'S' ? 's-compact-v1' : stage === 'R' ? 'r-source-refs-v1' : null
+        if (!version || run.capacityRetryVersion === version) return
+        const retried = await cmd('message.capacity.retry', { runId: run.runId, projectionVersion: version }, `capacity-retry:${run.runId}:${version}`)
         if (!retried?.retry) return
         return process(run.runId)
       }
