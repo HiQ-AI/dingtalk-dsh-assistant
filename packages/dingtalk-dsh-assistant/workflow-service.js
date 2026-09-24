@@ -13,6 +13,7 @@ import { createWorkflowApprovalService } from './workflow-approval.js'
 import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
 
 const sourceKey = (profile, groupId, messageId) => `dws:${executionDigest([profile, groupId, messageId])}`
+export const isDirectedTaskRequest = body => typeof body === 'string' && /(?:小小鹏|@孙鹏(?:\(孙鹏\))?).{0,50}(?:需要(?:你|我)?(?:修复|处理|排查)|请(?:你|帮忙)?(?:修复|处理|排查)|帮(?:我|忙)?(?:修复|处理|排查))/su.test(body)
 const requireText = (value, code) => { if (typeof value !== 'string' || !value.trim()) throw executionError(code); return value }
 const terminal = status => ['succeeded', 'failed', 'cancelled'].includes(status)
 const catalogById = new Map(taskWorkflowCatalog.map(item => [item.id, item]))
@@ -100,8 +101,11 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     for (const workflow of createReadOnlyTaskWorkflows(modelConfig())) controller.registerWorkflow(workflow)
     for (const workflow of selectedExternal.workflows) controller.registerWorkflow(workflow)
   }
-  const notifier = createWorkflowNotifications({ store, controller, artifacts, adapter: notifications })
+  const notifier = createWorkflowNotifications({ store, controller, artifacts, adapter: notifications,
+    groupResponsibility: groupId => legacy.getGroup?.(groupId)?.responsibility ?? '' })
   const legacyGroup = id => legacy.getGroup?.(id)
+  const mayCreate = (run, workflowId) => run.actorId === ownerActorId || (workflowId !== undefined && catalogById.get(workflowId)?.mode !== 'external'
+    && /任务准入/u.test(legacyGroup(run.conversationId)?.responsibility ?? '') && isDirectedTaskRequest(run.body))
   const messageJudge = judge ?? createMessageModel({ llm: ctx.get?.('llm') ?? ctx.llm, modelConfig })
 
   async function taskAccess(taskId, actorId, conversationId) {
@@ -160,7 +164,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     return executeWebEvent(event)
   }
   async function createTask(action, info) {
-    if (info.run.actorId !== ownerActorId && action.intent !== 'answer') throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+    if (!mayCreate(info.run, action.arguments.workflowId) && action.intent !== 'answer') throw executionError('WORKFLOW_ACTION_FORBIDDEN')
     if (info.run.context.editOf) {
       const original = await messages.state(info.run.context.editOf.sourceRunId)
       const previous = original.commands.filter(item => item.args?.taskId && ['create', 'research', 'answer', 'reopen'].includes(item.kind))
@@ -173,7 +177,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       info = { ...info, run: latest }
     }
     if (action.arguments.workflowId === 'task-engineering') {
-      const prepared = await engineering.prepareTask(action, info, controller)
+      const prepared = await engineering.prepareTask(action, { ...info, authorizedGroupRequest: mayCreate(info.run, action.arguments.workflowId) }, controller)
       const result = await controller.createRun({ commandId: `dispatch:${info.commandId}`, ...prepared })
       return { taskId: prepared.taskId, runId: result.runId, status: 'accepted', reply: '工程任务已接纳，按登记的仓库范围实施、验证并提交 PR。' }
     }
@@ -275,7 +279,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           return ['status', 'result', 'no_action'].includes(action.intent) ? { allowed: true } : reject('旧任务只读，请明确发起新工作流任务')
         }
         if (!handlers[action.intent] && action.intent !== 'no_action') return reject(`尚未提供 ${action.intent} 处理流程`)
-        if (['create', 'research', 'reopen'].includes(action.intent) && info.run.actorId !== ownerActorId) return reject('当前消息发送人没有创建业务任务的权限')
+        if (['create', 'research', 'reopen'].includes(action.intent) && !mayCreate(info.run, action.arguments.workflowId)) return reject('当前消息发送人没有创建业务任务的权限')
         if (['create', 'research', 'answer', 'reopen'].includes(action.intent)) {
           const workflowId = action.intent === 'answer' ? 'task-analysis' : action.arguments.workflowId
           if (!catalogById.has(workflowId) || catalogById.get(workflowId).mode === 'external' && !selectedExternal.byId.has(workflowId)) return reject('请求的任务流程未准入')
@@ -325,17 +329,18 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         if (typeof ref === 'object' && ref.text) return ref
         return null
       },
-      async candidates({ run, unit }) {
+      async candidates({ run, unit, explicitSourceKeys = [] }) {
         const values = await store.query({ kind: 'run.list', limit: 200 })
         const result = []
         const origins = await store.query({ kind: 'message.task-candidates', conversationId: run.conversationId, limit: 200 })
-        const quoted = new Set([...(run.context.quoteRefs ?? []).map(ref => ref.sourceKey), ...(run.context.editOf ? [run.sourceKey] : [])])
+        const quoted = new Set([...(run.context.quoteRefs ?? []).map(ref => ref.sourceKey), ...(run.context.editOf ? [run.sourceKey] : []), ...explicitSourceKeys])
         for (const origin of origins) {
           if (origin.run.runId === run.runId || (['superseded', 'failed'].includes(origin.command.status) && !(run.context.editOf && origin.run.sourceKey === run.sourceKey))) continue
           const item = values.find(value => value.taskId === origin.command.args.taskId)
           const explicit = quoted.has(origin.run.sourceKey)
           result.push({ candidateId: item?.runId ?? origin.command.commandId, taskId: origin.command.args.taskId, ...(origin.command.args.binding?.topicId ? { topicId: origin.command.args.binding.topicId } : {}), ...(item ? { runId: item.runId } : {}),
             title: origin.command.args.arguments.objective, goal: origin.command.args.arguments.objective, state: item?.status ?? 'accepted',
+            historyRef: `workflow-task-history:${origin.command.args.taskId}`,
             relevantTime: item?.updatedAt ?? origin.run.createdAt, versions: { requirement: item?.revision ?? 0 },
             sourceRefs: [origin.run.sourceKey], explicitReferenceMatches: explicit ? [origin.run.sourceKey] : [],
             distinguishingFacts: [...(item ? [] : ['任务命令已接纳，执行实例尚未创建']), ...(run.context.editOf && origin.run.sourceKey === run.sourceKey ? ['被本条编辑直接修订的原任务；不得再次创建相同Task'] : [])] })
@@ -366,7 +371,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         const words = [...new Set((unit.goalText ?? '').toLowerCase().match(/[a-z0-9_-]+|[\u4e00-\u9fff]{2}/g) ?? [])]
         const score = card => card.explicitReferenceMatches.length * 10000 + words.filter(word => card.goal?.toLowerCase().includes(word)).length
         result.sort((a, b) => score(b) - score(a) || String(b.relevantTime).localeCompare(String(a.relevantTime)))
-        return result.slice(0, 8).map((card, index) => {
+        const cards = result.slice(0, 8).map((card, index) => {
           if (index > 1 || card.engine !== 'legacy') return card
           const task = legacy.getTask?.(card.taskId)
           const lastChange = task?.objectiveHistory?.at(-1)?.objective
@@ -374,6 +379,16 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
             `最近目标：${String(lastChange ?? task?.objective ?? task?.title ?? '').slice(0, 160)}`,
             `结果：${String(task?.outcome ?? task?.result ?? '未记录').slice(0, 120)}`] }
         })
+        const bounded = []
+        for (const card of cards) {
+          const hasLongDetail = Buffer.byteLength(card.goal ?? '') > 520 || card.distinguishingFacts.some(fact => Buffer.byteLength(fact) > 420)
+          const text = hasLongDetail ? JSON.stringify(card) : ''
+          if (!hasLongDetail || Buffer.byteLength(text) > 65536) { bounded.push(card); continue }
+          const detailRef = `candidate-detail:${executionDigest(card)}`
+          await store.command({ id: `material:${run.runId}:${executionDigest([detailRef, text])}`, kind: 'message.material.record', args: { runId: run.runId, resourceRef: detailRef, material: { text } } })
+          bounded.push({ ...card, detailRef })
+        }
+        return { cards: bounded, total: result.length, explicitOverflow: result.slice(8).some(card => card.explicitReferenceMatches.length > 0) }
       },
       async facts({ run, binding }) {
         if (binding.engine === 'legacy') {
@@ -385,9 +400,9 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         if (binding.topicId && (!storedTopic || storedTopic.conversationId !== run.conversationId)) throw executionError('WORKFLOW_TOPIC_FORBIDDEN')
         const topic = storedTopic ? { ...storedTopic, facts: storedTopic.facts.map(fact => ({ ...fact, sourceRefs: fact.sourceRefs.map(({ text: _text, ...ref }) => ref) })), sources: [...new Map(storedTopic.facts.flatMap(fact => fact.sourceRefs).map(ref => [`${ref.sourceKey}:${ref.sourceVersion}`, ref])).values()] } : null
         if (topic && !binding.taskId) {
-          return { topic, availableWorkflows: [...readOnlyCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: run.actorId === ownerActorId }
+          return { topic, availableWorkflows: [...readOnlyCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: mayCreate(run, 'task-engineering') }
         }
-        if (!binding.taskId) return { availableWorkflows: [...readOnlyCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: run.actorId === ownerActorId }
+        if (!binding.taskId) return { availableWorkflows: [...readOnlyCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: mayCreate(run, 'task-engineering') }
         await taskAccess(binding.taskId, run.actorId, run.conversationId)
         const runs = await store.query({ kind: 'run.list', taskId: binding.taskId, limit: 200 })
         if (!runs.length) {
@@ -439,6 +454,19 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
             if (task?.groupId !== run.conversationId) return { ready: false }
             const history = (task.objectiveHistory ?? []).slice(-3).map(item => ({ at: item.revisedAt, objective: String(item.objective ?? '').slice(0, 280) }))
             await remember(need.resourceRef, JSON.stringify({ taskId, title: task.title, currentObjective: String(task.objective ?? '').slice(0, 500), state: task.state, outcome: task.outcome, uat2Status: task.result?.delivery?.uat2Status ?? null, ...(run.actorId === ownerActorId ? { result: String(task.result ?? '').slice(0, 500) } : {}), history }))
+            continue
+          }
+          if (need.resourceRef.startsWith('workflow-task-history:')) {
+            const taskId = need.resourceRef.slice('workflow-task-history:'.length)
+            const origin = await taskAccess(taskId, run.actorId, run.conversationId)
+            const runs = await store.query({ kind: 'run.list', taskId, limit: 200 })
+            const current = runs[0] ? await currentTask(taskId) : null
+            await remember(need.resourceRef, JSON.stringify({ taskId, objective: origin.command.args.arguments.objective,
+              sourceKey: origin.run.sourceKey, sourceVersion: origin.run.sourceVersion,
+              constraints: origin.command.args.constraints ?? [],
+              status: current?.run.status ?? origin.command.status,
+              revisions: runs.slice(0, 5).map(item => ({ runId: item.runId, status: item.status, revision: item.revision })),
+              nodes: current?.nodes.map(node => ({ nodeId: node.nodeId, status: node.status, waitReason: node.waitReason })) ?? [] }))
             continue
           }
           const quote = run.context.quoteRefs.find(item => item.sourceKey === need.resourceRef)

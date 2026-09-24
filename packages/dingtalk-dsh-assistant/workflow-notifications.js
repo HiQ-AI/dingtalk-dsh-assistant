@@ -15,6 +15,12 @@ export function sameDeliveredText(observed, expected, quoted = false) {
 export function notificationOpenTaskId(ack) {
   return ack?.sendReceipt?.openTaskId ?? ack?.result?.openTaskId ?? ack?.result?.result?.openTaskId
 }
+export function formatGroupReply(text, responsibility = '') {
+  if (typeof text !== 'string' || !text.trim()) throw new Error('WORKFLOW_REPLY_TEXT_REQUIRED')
+  const body = text.trim()
+  if (!responsibility.includes('小小鹏代回') || /(?:^|\n)\s*- 小小鹏代回\s*$/u.test(body)) return body
+  return `${body}\n\n- 小小鹏代回`
+}
 export function sendWorkflowNotification(adapter, notification) {
   const payload = notification.payload
   const base = { groupId: payload.conversationId, text: payload.text, idempotencyKey: notification.id }
@@ -24,13 +30,15 @@ export function sendWorkflowNotification(adapter, notification) {
 }
 
 /** 通知独立于任务执行。ACK不代表送达，未知发送只回查，不再次发送。 */
-export function createWorkflowNotifications({ store, artifacts, controller, adapter }) {
+export function createWorkflowNotifications({ store, artifacts, controller, adapter, groupResponsibility = () => '' }) {
   let flight, beforeSequenceId, preparedCursor = 0, readbackCursor = 0
   const command = (kind, args, id) => store.command({ id, kind, args })
   async function prepare(run, action, phase, text) {
     const notificationId = `notice-${executionDigest([action.commandId, phase])}`
+    const responsibility = groupResponsibility(run.conversationId)
+    if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
     await command('message.notification.prepare', { runId: run.runId, commandId: action.commandId, notificationId,
-      payload: { text, phase, conversationId: run.conversationId, sourceMessageId: run.context.sourceMessageId, actorId: run.actorId },
+      payload: { text: formatGroupReply(text, responsibility), phase, conversationId: run.conversationId, sourceMessageId: run.context.sourceMessageId, actorId: run.actorId },
       disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
     }, `prepare:${notificationId}`)
   }
@@ -41,8 +49,10 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
       const state = await store.query({ kind: 'message.run', runId: run.runId })
       for (const request of state.requests.filter(item => item.status === 'pending' && item.kind === 'needs_clarification')) {
         const notificationId = `clarify-${executionDigest([run.runId, request.id, request.revision])}`
+        const responsibility = groupResponsibility(run.conversationId)
+        if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
         await command('message.notification.prepare', { runId: run.runId, requestId: request.id, notificationId,
-          payload: { text: request.question ?? request.reason, phase: 'clarification', conversationId: run.conversationId, sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId },
+          payload: { text: formatGroupReply(request.question ?? request.reason, responsibility), phase: 'clarification', conversationId: run.conversationId, sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId },
           disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
         }, `prepare:${notificationId}`)
       }

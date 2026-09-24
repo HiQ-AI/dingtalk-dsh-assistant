@@ -1,6 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics } from './message-topics.js'
 
+export function isPassiveTaskProgress(body) {
+  if (typeof body !== 'string') return false
+  const text = body.trim()
+  const withoutMention = text.replace(/^@[^\s，,]+(?:\([^)]*\))?\s*/u, '')
+  return /^任务已创建[，,]\s*开始处理[。.!！]?\s*任务[:：]\s*\S+\s*[—-]\s*\S+$/u.test(withoutMention)
+}
+export function isQuietGroupMessage(body) {
+  return typeof body === 'string' && (/^先别管(?:它|这个|这件事|了)[。.!！\s]*$/u.test(body.trim()) || isPassiveTaskProgress(body))
+}
+
 // 仅供已认证 Host 调用；外层 execution_receipts 事务提供命令幂等和崩溃原子性。
 // command({id,kind,args}) -> {result,replayed,dispatchEligible}；重投旧 receipt 不重新授予派发。
 // receive: runId/sourceKey/sourceVersion/conversationId/actorId/body/context/policy/barriers。
@@ -255,8 +265,8 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   const r=run(db,a.runId);current(db,r,a.expectedRevision)
   if(kind==='message.quiet') {
     const original=str(a.body)
-    if(r.body!==original||r.context?.quoteRefs?.length||rows(db,r.runId,'command').length||!['pending','waiting'].includes(r.status))fail('MESSAGE_QUIET_NOT_ALLOWED')
-    if(!/^先别管(?:它|这个|这件事|了)[。.!！\s]*$/u.test(original.trim()))fail('MESSAGE_QUIET_NOT_ALLOWED')
+    if(r.body!==original||(r.context?.quoteRefs?.length&&!isPassiveTaskProgress(original))||rows(db,r.runId,'command').length||!['pending','waiting'].includes(r.status))fail('MESSAGE_QUIET_NOT_ALLOWED')
+    if(!isQuietGroupMessage(original))fail('MESSAGE_QUIET_NOT_ALLOWED')
     for(const request of rows(db,r.runId,'request').filter(item=>item.status==='pending')){request.status='superseded';request.reason='message_quiet';put(db,r.runId,'request',request)}
     for(const unit of rows(db,r.runId,'unit').filter(item=>item.status==='pending')){unit.status='ignored';put(db,r.runId,'unit',unit)}
     r.status='settled';r.reason='message_quiet';save(db,r)
@@ -286,13 +296,16 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     return {result:{run:r}}
   }
   if(kind==='message.capacity.retry') {
-    const stage=a.projectionVersion==='s-compact-v1'?'S':['r-source-refs-v1','r-bounded-cards-v2'].includes(a.projectionVersion)?'R':a.projectionVersion==='i-bounded-facts-v1'?'I':null
+    const stage=['s-compact-v1','s-budget-v2'].includes(a.projectionVersion)?'S':['r-source-refs-v1','r-bounded-cards-v2','r-budget-v3'].includes(a.projectionVersion)?'R':['i-bounded-facts-v1','i-budget-v2'].includes(a.projectionVersion)?'I':null
     if(!stage||r.status!=='needs_attention'||!r.reason?.startsWith(`MESSAGE_CONTEXT_CAPACITY:${stage}:`))return {result:{run:r,retry:false}}
     current(db,r)
-    if(!r.snapshot||['command','request','barrier'].some(type=>rows(db,r.runId,type).length))return {result:{run:r,retry:false}}
-    if(stage==='S'&&['unit','node'].some(type=>rows(db,r.runId,type).length))return {result:{run:r,retry:false}}
-    if(stage==='R'&&(!rows(db,r.runId,'unit').length||rows(db,r.runId,'node').some(node=>node.nodeId!=='S'||!['completed','succeeded'].includes(node.status))))return {result:{run:r,retry:false}}
-    if(stage==='I'&&(!rows(db,r.runId,'unit').length||!rows(db,r.runId,'node').some(node=>node.nodeId==='R'&&['completed','succeeded'].includes(node.status))||rows(db,r.runId,'node').some(node=>!['S','R'].includes(node.nodeId)||!['completed','succeeded'].includes(node.status))))return {result:{run:r,retry:false}}
+    if(!r.snapshot||r.correction)return {result:{run:r,retry:false}}
+    const units=rows(db,r.runId,'unit'),nodes=rows(db,r.runId,'node')
+    const target=stage==='S'?null:units.find(unit=>r.reason.startsWith(`MESSAGE_CONTEXT_CAPACITY:${stage}:${unit.id}:`))
+    if(stage==='S'&&(units.length||nodes.length))return {result:{run:r,retry:false}}
+    if(stage!=='S'&&(!target||target.status!=='pending'||rows(db,r.runId,'command').some(command=>command.unitId===target.id)||rows(db,r.runId,'request').some(request=>request.unitId===target.id&&request.status==='pending')||nodes.some(node=>node.unitId===target.id&&node.nodeId!==stage&&node.nodeId!=='R'&&node.nodeId!=='S')))return {result:{run:r,retry:false}}
+    if(stage==='R'&&!nodes.some(node=>node.nodeId==='S'&&['completed','succeeded'].includes(node.status)))return {result:{run:r,retry:false}}
+    if(stage==='I'&&!nodes.some(node=>node.unitId===target.id&&node.nodeId==='R'&&['completed','succeeded'].includes(node.status)))return {result:{run:r,retry:false}}
     if(r.capacityRetryVersion===a.projectionVersion)return {result:{run:r,retry:false}}
     r.capacityRetryVersion=a.projectionVersion;r.status='pending';r.reason=null;r.deadline=new Date(Date.parse(now)+r.policy.initialWindowMs).toISOString();save(db,r)
     return {result:{run:r,retry:true}}
@@ -341,13 +354,15 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(Date.parse(r.deadline)<=Date.parse(now))fail('MESSAGE_DEADLINE_EXCEEDED')
     const s=db.prepare('SELECT claims,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(r.sourceKey)
     const baseline=r.budgetBaseline??{claims:0,input_tokens:0,output_tokens:0}
-    if(s.claims-baseline.claims>=(r.policy.effectiveMaxClaims??r.policy.maxClaims))fail('MESSAGE_BUDGET_EXHAUSTED')
+    const deterministic=a.input?.deterministic===true
+    if(deterministic&&(!a.input.inputHash||a.estimatedInputTokens!==0||a.maxOutputTokens!==0))fail('MESSAGE_INVALID_BUDGET')
+    if(!deterministic&&s.claims-baseline.claims>=(r.policy.effectiveMaxClaims??r.policy.maxClaims))fail('MESSAGE_BUDGET_EXHAUSTED')
     const reserve={input:a.estimatedInputTokens??0,output:a.maxOutputTokens??0};if(!Object.values(reserve).every(x=>Number.isSafeInteger(x)&&x>=0))fail('MESSAGE_INVALID_BUDGET');if(s.input_tokens-baseline.input_tokens+reserve.input>(r.policy.maxInputTokens??64000)||s.output_tokens-baseline.output_tokens+reserve.output>(r.policy.maxOutputTokens??12000))fail('MESSAGE_BUDGET_EXHAUSTED')
     const previous=rows(db,r.runId,'node').find(n=>n.unitId===a.unitId&&n.nodeId===a.nodeId&&n.revision===r.revision&&n.status!=='superseded')
     if(previous&&['running','succeeded','waiting'].includes(previous.status))fail('MESSAGE_NODE_NOT_READY')
     if(previous?.retryAt&&Date.parse(previous.retryAt)>Date.parse(now))fail('MESSAGE_RETRY_NOT_DUE')
     const n={id:previous?.id??randomUUID(),nodeRunId:previous?.id??null,runId:r.runId,unitId:a.unitId,nodeId:a.nodeId,revision:r.revision,leaseEpoch:(previous?.leaseEpoch??0)+1,status:'running',input:a.input,reservedTokens:reserve,createdAt:previous?.createdAt??now,startedAt:now};n.nodeRunId=n.id
-    db.prepare('UPDATE message_sources SET claims=claims+1,input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE source_key=?').run(reserve.input,reserve.output,r.sourceKey)
+    db.prepare('UPDATE message_sources SET claims=claims+?,input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE source_key=?').run(deterministic?0:1,reserve.input,reserve.output,r.sourceKey)
     put(db,r.runId,'node',n);return {result:{node:n}}
   }
   if(kind==='message.node.complete'||kind==='message.node.fail') {

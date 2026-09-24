@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { createMessageWorkflow } from '../packages/dingtalk-dsh-assistant/message-workflow.js'
 import { prepareMessageContext, splitContext, intentContext, candidateCards } from '../packages/dingtalk-dsh-assistant/message-context.js'
-import { createMessageModel } from '../packages/dingtalk-dsh-assistant/message-model.js'
+import { createMessageModel, prepareMessageRequest } from '../packages/dingtalk-dsh-assistant/message-model.js'
 import { messageSystem } from '../packages/dingtalk-dsh-assistant/message-model.js'
 
 async function fixture(t, options = {}) {
@@ -184,8 +184,94 @@ test('S投影保留可追溯缺口，长群职责和30条历史不阻塞事项�
   const projected = splitContext(snapshot)
   assert.equal(snapshot.policy.length, 4200)
   assert.equal(projected.policy, undefined)
-  assert.ok(projected.omissions.includes('history-0'))
+  assert.ok(projected.omissions.includes('h1'))
+  assert.equal(snapshot.historyManifest[0].sourceKey, 'history-0')
   assert.ok(Buffer.byteLength(JSON.stringify(projected) + messageSystem('S')) <= 8000)
+})
+
+test('S短引用在材料请求前恢复原sourceKey，正文只进入一次模型输入', async t => {
+  const original = 'dws:' + 'a'.repeat(64)
+  const { workflow } = await fixture(t, { context: { history: async () => [{ sourceKey: original, text: '历史事实', conversationId: 'group' }] }, judge: async ({ stage, input }) => {
+    assert.equal(stage, 'S')
+    assert.equal(input.omissions[0], 'h1')
+    assert.ok(input.segments.every(segment => segment.text === undefined))
+    return { kind: 'needs_context', reason: '查历史', needs: [{ resourceRef: 'h1', reason: '指代前文' }] }
+  } })
+  const { runId } = await workflow.receive(source, { process: false }); await workflow.process(runId)
+  assert.equal((await workflow.state(runId)).requests[0].needs[0].resourceRef, original)
+})
+
+test('R明确引用候选不因容量被删除；超出保护集合时留可见容量状态', async t => {
+  let relationCalls = 0
+  const { workflow } = await fixture(t, { context: { candidates: async () => Array.from({ length: 8 }, (_, i) => ({ candidateId: `c${i}`, goal: `任务${i}`, explicitReferenceMatches: [`ref${i}`], sourceRefs: [`ref${i}`], distinguishingFacts: ['完整关键事实'.repeat(200)] })) }, judge: async ({ stage, input }) => {
+    if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.source.text.length }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.source.text.length, role: 'unit' }], sharedConstraints: [] }
+    relationCalls++; return binding
+  } })
+  const { runId } = await workflow.receive(source, { process: false }); await workflow.process(runId)
+  const state = await workflow.state(runId)
+  assert.match(state.run.reason, /^MESSAGE_CONTEXT_CAPACITY:R:/)
+  assert.equal(relationCalls, 0)
+  assert.equal(state.commands.length, 0)
+})
+
+test('R补取的长材料尾部限制进入I与效果命令，原文引用保留', async t => {
+  let intentInput, applied
+  const restriction = '禁止生产写入，仅验证UAT2'
+  const { workflow } = await fixture(t, { context: { material: async () => ({ ready: true, data: { resources: [{ resourceRef: 'history:audit', text: '历史描述'.repeat(1000) + `。${restriction}` }], constraints: [restriction] } }) }, judge: async ({ stage, input }) => {
+    if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.source.text.length }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.source.text.length, role: 'unit' }], sharedConstraints: [] }
+    if (stage === 'R') return input.clarificationAnswers ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['材料已取回'] } : { kind: 'needs_context', reason: '查历史', needs: [{ resourceRef: 'history:audit', reason: '核对目标' }] }
+    intentInput = input
+    return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '验证问题', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  }, handlers: { create: async action => { applied = action; return { accepted: true } } } })
+  const { runId } = await workflow.receive(source, { process: false }); await workflow.process(runId); await workflow.recover()
+  assert.ok(JSON.stringify(intentInput.resolvedEvidence).includes(restriction))
+  assert.ok(applied)
+  assert.ok(applied.constraints.includes(restriction))
+  assert.ok(applied.requiredExecutionMaterials.includes('history:audit'))
+  assert.equal((await workflow.state(runId)).run.status, 'settled')
+})
+
+test('确定性S跳过模型容量及调用账，后继R仍受自己的容量约束', async t => {
+  let calls = 0
+  const { workflow } = await fixture(t, { judge: async () => { calls++; return binding } })
+  const body = '小小鹏，审核任务都部署了吗？' + '补充说明'.repeat(800)
+  const { runId } = await workflow.receive({ ...source, body }, { process: false }); await workflow.process(runId)
+  const state = await workflow.state(runId)
+  assert.equal(state.nodes.find(node => node.nodeId === 'S').usage.input, 0)
+  assert.equal(state.budget.claims, 0)
+  assert.equal(calls, 0)
+  assert.match(state.run.reason, /^MESSAGE_CONTEXT_CAPACITY:R:/)
+})
+
+test('旧R容量阻断含已解决材料请求时恢复原节点且不重跑S', async t => {
+  let sCalls = 0
+  const { workflow, store } = await fixture(t, { judge: async ({ stage }) => { if (stage === 'S') { sCalls++; return split }; return stage === 'R' ? binding : intent }, handlers: { status: async () => ({ ok: true }) } })
+  const { runId } = await workflow.receive(source, { process: false })
+  const snapshot = await prepareMessageContext(source, {})
+  await store.command({ id: 'budget-snapshot', kind: 'message.snapshot', args: { runId, snapshot } })
+  const claimed = (await store.command({ id: 'budget-s-claim', kind: 'message.node.claim', args: { runId, unitId: '$', nodeId: 'S', input: {}, estimatedInputTokens: 0, maxOutputTokens: 0 } })).result.node
+  await store.command({ id: 'budget-s-complete', kind: 'message.node.complete', args: { runId, nodeRunId: claimed.nodeRunId, leaseEpoch: claimed.leaseEpoch, output: { output: split }, usage: { inputTokens: 0, outputTokens: 0 } } })
+  await store.command({ id: 'budget-split', kind: 'message.split', args: { runId, units: split.units.map((unit, i) => ({ ...unit, unitId: `${runId}:u${i}` })) } })
+  const requestId = 'resolved-budget-request'
+  await store.command({ id: 'budget-request', kind: 'message.wait', args: { runId, unitId: `${runId}:u0`, nodeId: 'R', reason: '旧材料请求', request: { requestId, kind: 'needs_context', question: '核对目标', needs: [{ resourceRef: 'history:a', reason: '查历史' }], permittedActors: ['user'] } } })
+  await store.command({ id: 'budget-wake', kind: 'message.wake', args: { runId, requestId, eventId: 'material-ready', actorId: 'user', answer: { resources: [{ resourceRef: 'history:a', text: '已核对' }] } } })
+  await store.command({ id: 'budget-attention', kind: 'message.attention', args: { runId, reason: `MESSAGE_CONTEXT_CAPACITY:R:${runId}:u0:16000/14000` } })
+  await workflow.recover()
+  const state = await workflow.state(runId)
+  assert.equal(state.run.status, 'settled', JSON.stringify({ reason: state.run.reason, capacityRetryVersion: state.run.capacityRetryVersion, requests: state.requests, commands: state.commands, nodes: state.nodes.map(node => ({ id: node.nodeId, unitId: node.unitId, status: node.status, error: node.error })) }))
+  assert.equal(state.run.capacityRetryVersion, 'r-bounded-cards-v2')
+  assert.equal(state.requests[0].status, 'resolved')
+  assert.equal(sCalls, 0)
+})
+
+test('模型请求计量与实际发送复用同一system和message', async () => {
+  const input = { source: '含中文与code()' }, prepared = prepareMessageRequest('R', input)
+  let observed
+  const model = createMessageModel({ modelConfig: { provider: 'test', model: 'test' }, llm: { async *stream(args) { observed = args; yield { type: 'text-delta', text: JSON.stringify(binding) }; yield { type: 'finish', reason: { kind: 'stop' } } } } })
+  await model({ stage: 'R', input, prepared, maxOutputTokens: 1000 })
+  assert.equal(observed.system, prepared.system)
+  assert.deepEqual(observed.messages, prepared.messages)
+  assert.equal(prepared.inputBytes, Buffer.byteLength(prepared.system) + Buffer.byteLength(JSON.stringify(input)))
 })
 
 test('S容量修复仅恢复无副作用旧消息一次，重复恢复不循环', async t => {
@@ -219,6 +305,9 @@ test('R容量旧阻断仅在无命令、请求和副作用时重试', async t =>
   const { runId } = await workflow.receive(source, { process: false })
   const snapshot = await prepareMessageContext(source, {})
   await store.command({ id: 'snapshot-r', kind: 'message.snapshot', args: { runId, snapshot } })
+  const claimed = await store.command({ id: 'claim-s-before-r', kind: 'message.node.claim', args: { runId, unitId: '$', nodeId: 'S', input: {}, estimatedInputTokens: 0, maxOutputTokens: 0 } })
+  const node = claimed.result.node
+  await store.command({ id: 'complete-s-before-r', kind: 'message.node.complete', args: { runId, nodeRunId: node.nodeRunId, leaseEpoch: node.leaseEpoch, output: { output: split }, usage: { inputTokens: 0, outputTokens: 0 } } })
   await store.command({ id: 'split-r', kind: 'message.split', args: { runId, units: split.units.map((unit, i) => ({ ...unit, unitId: `${runId}:u${i}` })), coverage: split.coverage } })
   await store.command({ id: 'attention-r', kind: 'message.attention', args: { runId, reason: `MESSAGE_CONTEXT_CAPACITY:R:${runId}:u0:16000/4000` } })
   await workflow.recover()

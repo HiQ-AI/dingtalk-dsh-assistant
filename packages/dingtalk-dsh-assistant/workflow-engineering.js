@@ -125,7 +125,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
   }
   async function prepareTask(action, info, controller) {
     if (!store) fail('ENGINEERING_REGISTRY_NOT_RESTORED')
-    if (info.run.actorId !== ownerActorId) fail('WORKFLOW_ACTION_FORBIDDEN')
+    if (info.run.actorId !== ownerActorId && info.authorizedGroupRequest !== true) fail('WORKFLOW_ACTION_FORBIDDEN')
     const taskId = text(action.taskId, 'WORKFLOW_TASK_ID_REQUIRED'), commandId = text(info.commandId, 'WORKFLOW_COMMAND_REQUIRED')
     const workflowId = `task-engineering-${executionDigest(commandId).slice(0, 40)}`, runId = `run-${executionDigest(commandId).slice(0, 40)}`
     const request = text(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')

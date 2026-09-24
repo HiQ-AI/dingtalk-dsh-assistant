@@ -9,13 +9,18 @@ import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
-import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
+import { isDirectedTaskRequest, openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { messageSchemas, taskWorkflowCatalog } from '../packages/dingtalk-dsh-assistant/message-context.js'
-import { notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
+import { formatGroupReply, notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 import { queryConversationTaskProgress } from '../packages/dingtalk-dsh-assistant/task-progress-query.js'
 
 const schema = { type: 'object', additionalProperties: true }
 const splitOne = text => ({ kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] })
+test('明确交办与问题报告分开准入',()=>{
+  assert.equal(isDirectedTaskRequest('@孙鹏(孙鹏) 小小鹏 数据集合并出现的这个问题需要修复'),true)
+  assert.equal(isDirectedTaskRequest('@孙鹏(孙鹏) 修复又引入了归一化计算问题：当前得到 0.001 t。'),false)
+  assert.equal(isDirectedTaskRequest('@孙鹏 任务已创建，开始处理。'),false)
+})
 test('内置进展查询限制本群与八项候选，流程结果可审计',()=>{
   const legacyTasks=Array.from({length:10},(_,index)=>({taskId:`t-${index}`,groupId:'g',title:`审核草稿保存 ${index}`,objective:'修复审核草稿保存',state:'completed'}))
   legacyTasks.push({taskId:'other',groupId:'other',title:'审核草稿保存',objective:'修复审核草稿保存',state:'completed'})
@@ -36,6 +41,25 @@ test('渠道回读仅归一化空白，正文差异仍阻止送达',()=>{
 })
 test('DWS 发送 ACK 的实际 result.openTaskId 可用于独立回读',()=>{
   assert.equal(notificationOpenTaskId({success:true,result:{openTaskId:'task-1'}}),'task-1')
+})
+test('群职责指定的日常代答署名在通知准备时固化且不会重复附加',()=>{
+  const rule='针对消息必须引用回复；日常代答末尾空一行附 - 小小鹏代回'
+  assert.equal(formatGroupReply('任务状态已核对。',rule),'任务状态已核对。\n\n- 小小鹏代回')
+  assert.equal(formatGroupReply('任务状态已核对。\n\n- 小小鹏代回',rule),'任务状态已核对。\n\n- 小小鹏代回')
+  assert.equal(formatGroupReply('任务状态已核对。','普通群'),'任务状态已核对。')
+})
+test('群职责贯穿即时进展查询的持久通知正文与引用来源',async t=>{
+  const sent=[]
+  const notifications={canDisclose:async()=>true,send:async notice=>{sent.push(notice);return{messageId:'reply-1'}},readback:async()=>({messageId:'reply-1',conversationId:'g'})}
+  const task={taskId:'review-1',groupId:'g',title:'审核草稿保存',objective:'修复审核草稿保存',state:'completed'}
+  const {service,message}=await fixture(t,'participant',notifications,{legacy:{listTasks:()=>[task],getGroup:id=>({groupId:id,responsibility:'日常代答末尾空一行附 - 小小鹏代回；针对消息必须引用回复',messages:[]})},judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'conversation',candidateId:null,evidence:['本群任务']}:{kind:'intent',actions:[{intent:'status',arguments:{scope:'conversation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'result'}})
+  const received=await service.ingest({...message,text:'审核草稿保存进度如何？'})
+  await service.messages.process(received.runId)
+  await service.flushNotifications()
+  assert.equal(sent.length,1)
+  assert.match(sent[0].payload.text,/\n\n- 小小鹏代回$/u)
+  assert.equal(sent[0].payload.sourceMessageId,message.messageId)
+  assert.equal(sent[0].status,'sending')
 })
 test('工作流通知引用来源消息，缺来源才发送普通群消息',async()=>{
   const sent=[]
@@ -233,6 +257,19 @@ test('同文高版本编辑复用原Task且别名重投回原run', async t => {
   assert.equal((await execution.store.query({ kind: 'run.list' })).length, 1)
   assert.equal((await execution.store.query({ kind: 'message.list' })).length, 1)
 })
+test('群职责允许明确点名交办创建任务，普通问题报告仍无创建权',async t=>{
+  const judge=async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'
+    ?{kind:'binding',disposition:'new',candidateId:null,evidence:['新事项']}
+    :{kind:'intent',actions:[{intent:'create',arguments:{objective:'核对归一化回归',workflowId:'task-analysis'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'receipt'}
+  const {service,message,execution}=await fixture(t,'participant',undefined,{judge,legacy:{getGroup:id=>({groupId:id,responsibility:'## 任务准入\n消息明确要求“小小鹏”处理时可以创建任务。',messages:[]})}})
+  const passive=await service.ingest({...message,messageId:'report',text:'@孙鹏(孙鹏) 修复又引入了归一化计算问题：当前得到 0.001 t。'})
+  await service.messages.process(passive.runId)
+  assert.equal((await service.state(passive.runId)).commands[0].status,'rejected')
+  const directed=await service.ingest({...message,messageId:'request',text:'@孙鹏(孙鹏) 小小鹏 数据集合并出现的这个问题需要修复'})
+  await service.messages.process(directed.runId)
+  assert.equal((await service.state(directed.runId)).commands[0].status,'applied')
+  assert.equal((await execution.store.query({kind:'run.list'})).length,1)
+})
 test('本机操作者逐条重处理旧澄清，旧请求失效且有命令消息拒绝重跑',async t=>{
   let clarified=false
   const judge=async({stage,input})=>{
@@ -258,6 +295,16 @@ test('无引用的先别管它静默收束，不追问也不创建任务',async 
   await service.messages.process(received.runId)
   const state=await service.state(received.runId)
   assert.equal(state.run.status,'settled')
+  assert.equal(state.run.reason,'message_quiet')
+  assert.equal(state.requests.length,0)
+  assert.equal(state.commands.length,0)
+  assert.deepEqual(await execution.store.query({kind:'run.list'}),[])
+})
+test('第三方任务已创建进展同步即使含@也静默，不生成澄清或业务任务',async t=>{
+  const {service,message,execution}=await fixture(t,'owner',undefined,{judge:async()=>{throw new Error('PROGRESS_SYNC_MUST_NOT_CALL_MODEL')}})
+  const received=await service.ingest({...message,text:'@孙鹏  任务已创建，开始处理。 任务：dingtalk_at_xcm:20260924130713-437 — 小煤球',quotedMessage:{messageId:'old-reply',content:'此前话题的回复'}})
+  await service.messages.process(received.runId)
+  const state=await service.state(received.runId)
   assert.equal(state.run.reason,'message_quiet')
   assert.equal(state.requests.length,0)
   assert.equal(state.commands.length,0)
