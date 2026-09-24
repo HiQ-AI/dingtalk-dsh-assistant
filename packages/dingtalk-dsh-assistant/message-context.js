@@ -47,7 +47,8 @@ export async function prepareMessageContext(run, context = {}) {
 
 export function splitContext(snapshot) {
   const segments = Array.from(snapshot.source.text.matchAll(/[^\n。！？；!?;]+[\n。！？；!?;]*|[\n。！？；!?;]+/gu), (match, index) => ({ id: `fragment-${index}`, start: match.index, end: match.index + match[0].length, text: match[0] }))
-  return { snapshotId: snapshot.snapshotId, source: snapshot.source, sourceEdit: snapshot.sourceEdit, sourceLength: snapshot.source.text.length, segments, background: snapshot.history, quotes: snapshot.quotes, attachments: snapshot.attachments.map(item => pick(item, ['resourceRef', 'name', 'purpose', 'state'])), policy: snapshot.policy, actorPermissions: snapshot.actorPermissions, omissions: snapshot.omissions }
+  // S 只拆分事项；群职责留在持久快照中，不占用拆分节点的输入预算。
+  return { snapshotId: snapshot.snapshotId, source: snapshot.source, sourceEdit: snapshot.sourceEdit, sourceLength: snapshot.source.text.length, segments, background: snapshot.history, quotes: snapshot.quotes, attachments: snapshot.attachments.map(item => pick(item, ['resourceRef', 'name', 'purpose', 'state'])), actorPermissions: snapshot.actorPermissions, omissions: snapshot.omissions.map(item => item.reason === 'background_budget' ? item.sourceKey : item) }
 }
 export function validateSplit(output, text) {
   if (output.kind !== 'split') return output

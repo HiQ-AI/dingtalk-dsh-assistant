@@ -7,6 +7,7 @@ import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution
 import { createMessageWorkflow } from '../packages/dingtalk-dsh-assistant/message-workflow.js'
 import { prepareMessageContext, splitContext, intentContext } from '../packages/dingtalk-dsh-assistant/message-context.js'
 import { createMessageModel } from '../packages/dingtalk-dsh-assistant/message-model.js'
+import { messageSystem } from '../packages/dingtalk-dsh-assistant/message-model.js'
 
 async function fixture(t, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'message-workflow-'))
@@ -173,6 +174,36 @@ test('执行材料未齐不接纳，ready事件只检查材料不重跑I', async
   ready = true; await workflow.recover()
   assert.equal(sends, 2)
   assert.equal(iCalls, 2)
+})
+
+test('S投影保留可追溯缺口，长群职责和30条历史不阻塞事项拆分', async () => {
+  const snapshot = await prepareMessageContext({ ...source, context: { compactPolicy: '职责'.repeat(2100) } }, {
+    history: async () => Array.from({ length: 30 }, (_, index) => ({ sourceKey: `history-${index}`, text: '历史消息'.repeat(30), conversationId: 'group' })),
+    splitBackground: async ({ history }) => ({ messages: history.slice(-7).map(item => ({ sourceKey: item.sourceKey, text: item.text.slice(0, 20) })), omissions: history.slice(0, -7).map(item => ({ sourceKey: item.sourceKey, reason: 'background_budget', contentLength: item.text.length })) })
+  })
+  const projected = splitContext(snapshot)
+  assert.equal(snapshot.policy.length, 4200)
+  assert.equal(projected.policy, undefined)
+  assert.ok(projected.omissions.includes('history-0'))
+  assert.ok(Buffer.byteLength(JSON.stringify(projected) + messageSystem('S')) <= 8000)
+})
+
+test('S容量修复仅恢复无副作用旧消息一次，重复恢复不循环', async t => {
+  let calls = 0
+  const { workflow, store } = await fixture(t, { judge: async ({ stage }) => { calls++; return stage === 'S' ? split : stage === 'R' ? binding : intent }, handlers: { status: async () => ({ ok: true }) } })
+  const { runId } = await workflow.receive(source, { process: false })
+  await store.command({ id: 'snapshot', kind: 'message.snapshot', args: { runId, snapshot: await prepareMessageContext(source, {}) } })
+  await store.command({ id: 'attention', kind: 'message.attention', args: { runId, reason: 'MESSAGE_CONTEXT_CAPACITY:S:$:12000/8000' } })
+  await workflow.recover()
+  assert.equal((await workflow.state(runId)).run.status, 'settled')
+  const before = calls
+  await workflow.recover()
+  assert.equal(calls, before)
+  assert.equal((await workflow.state(runId)).run.capacityRetryVersion, 's-compact-v1')
+  await store.command({ id: 'attention-again', kind: 'message.attention', args: { runId, reason: 'MESSAGE_CONTEXT_CAPACITY:S:$:12000/8000' } })
+  await workflow.recover()
+  assert.equal(calls, before)
+  assert.equal((await workflow.state(runId)).run.status, 'needs_attention')
 })
 
 test('I参数命名错误不派发，字段校验反馈只重试I', async t => {

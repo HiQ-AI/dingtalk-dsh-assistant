@@ -227,6 +227,14 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     put(db,r.runId,'material',{id,runId:r.runId,resourceRef:a.resourceRef,material:a.material,recordedAt:now});return {result:{material:a.material}}
   }
   if(kind==='message.attention') {r.status='needs_attention';r.reason=a.reason;save(db,r);return {result:{run:r}}}
+  if(kind==='message.capacity.retry') {
+    if(a.projectionVersion!=='s-compact-v1'||r.status!=='needs_attention'||!r.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:S:$:'))return {result:{run:r,retry:false}}
+    current(db,r)
+    if(!r.snapshot||['unit','node','command','request','barrier'].some(type=>rows(db,r.runId,type).length))return {result:{run:r,retry:false}}
+    if(r.capacityRetryVersion===a.projectionVersion)return {result:{run:r,retry:false}}
+    r.capacityRetryVersion=a.projectionVersion;r.status='pending';r.reason=null;r.deadline=new Date(Date.parse(now)+r.policy.initialWindowMs).toISOString();save(db,r)
+    return {result:{run:r,retry:true}}
+  }
   if(kind==='message.relink') {const u=get(db,'unit',a.unitId);if(u.runId!==r.runId)fail('MESSAGE_STALE');if(rows(db,r.runId,'command').some(c=>c.unitId===u.id&&['running','unknown','applied'].includes(c.status)))fail('MESSAGE_CORRECTION_EFFECT_PENDING');revoke(db,r,[u.id]);const s=db.prepare('SELECT corrections FROM message_sources WHERE source_key=?').get(r.sourceKey);db.prepare('UPDATE message_sources SET corrections=corrections+1 WHERE source_key=?').run(r.sourceKey);u.status='pending';u.corrections=(u.corrections??0)+1;put(db,r.runId,'unit',u);if(u.corrections>1||s.corrections>=r.policy.maxCorrections){r.status='needs_attention';r.reason='correction_budget_exhausted';save(db,r);return {result:{run:r,unit:u}}}return {result:{run:r,unit:u}}}
   if(kind==='message.recover') { if(r.status==='waiting'||r.status==='settled')fail('MESSAGE_NOT_RECOVERABLE'); if((r.recoveryWindows??0)>=2||Date.parse(now)-Date.parse(r.createdAt)>600000){r.status='needs_attention';r.reason='recovery_exhausted';save(db,r);return {result:{run:r}}}r.recoveryWindows=(r.recoveryWindows??0)+1;r.deadline=new Date(Date.parse(now)+30000).toISOString();r.status='pending';save(db,r);return {result:{run:r}} }
   if(kind==='message.snapshot') {r.snapshot=a.snapshot;save(db,r);return {result:{run:r}}}
