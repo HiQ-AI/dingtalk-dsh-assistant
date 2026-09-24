@@ -22,6 +22,29 @@ test('木啄只读全量分页并过滤私有 variables', async () => {
   assert.equal(calls.length, 2)
 })
 
+test('木啄构建证明只从精确成功步骤读取结构化 digest', async () => {
+  const imageDigest = `sha256:${'b'.repeat(64)}`
+  const pipeline = { number: 7, commit: SHA, status: 'success', workflows: [
+    { children: [{ id: 19, name: 'buildkit-build-and-push', state: 'success', exit_code: 0 }] },
+  ] }
+  const logs = [
+    `#23 exporting manifest ${imageDigest} done`,
+    `#23 pushing manifest for registry.cn-sh1.ctyun.cn/hiq-ai/dataset:uat2@${imageDigest} 0.0s done`,
+  ].map(data => ({ step_id: 19, data: Buffer.from(data).toString('base64') }))
+  logs.splice(1, 0, { step_id: 19, data: null })
+  const fetchImpl = async url => json(url.endsWith('/pipelines/7') ? pipeline : logs)
+  const clients = createPlatformClients({ woodpeckerToken: 'test', fetchImpl })
+  const result = await clients.woodpecker.readBuildEvidence({ baseUrl: target.woodpecker.baseUrl,
+    repositoryId: 4, pipelineNumber: 7 })
+  assert.equal(result.commitSha, SHA)
+  assert.equal(result.imageDigest, imageDigest)
+  assert.match(result.evidenceRef, /^woodpecker-build:/)
+  const missing = createPlatformClients({ woodpeckerToken: 'test', fetchImpl: async url =>
+    json(url.endsWith('/pipelines/7') ? pipeline : [{ step_id: 19, data: Buffer.from('pushed :uat2').toString('base64') }]) })
+  await assert.rejects(missing.woodpecker.readBuildEvidence({ baseUrl: target.woodpecker.baseUrl,
+    repositoryId: 4, pipelineNumber: 7 }), /WOODPECKER_BUILD_DIGEST_UNCONFIRMED/)
+})
+
 test('UAT 触发前独立回读分支、流水线和 Cron', async () => {
   const calls = []
   const clients = createPlatformClients({ githubToken: 'test', woodpeckerToken: 'test', fetchImpl: async (url, options) => {

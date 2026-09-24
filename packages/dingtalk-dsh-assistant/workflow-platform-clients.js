@@ -122,6 +122,35 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       }
       fail('WOODPECKER_LIST_INCOMPLETE')
     },
+    async readBuildEvidence({ baseUrl, repositoryId, pipelineNumber }) {
+      if (!Number.isInteger(repositoryId) || repositoryId < 1
+        || !Number.isInteger(pipelineNumber) || pipelineNumber < 1) fail('WOODPECKER_PIPELINE_INVALID')
+      const pipeline = await request(woodpeckerUrl(baseUrl,
+        `repos/${repositoryId}/pipelines/${pipelineNumber}`), woodpeckerToken)
+      if (pipeline.number !== pipelineNumber || !sha(pipeline.commit) || pipeline.status !== 'success'
+        || !Array.isArray(pipeline.workflows)) fail('WOODPECKER_BUILD_UNCONFIRMED')
+      const steps = pipeline.workflows.flatMap(workflow => Array.isArray(workflow.children) ? workflow.children : [])
+        .filter(step => step.name === 'buildkit-build-and-push')
+      if (steps.length !== 1 || !Number.isInteger(steps[0].id)
+        || steps[0].state !== 'success' || steps[0].exit_code !== 0)
+        fail('WOODPECKER_BUILD_STEP_UNCONFIRMED')
+      const logs = await request(woodpeckerUrl(baseUrl,
+        `repos/${repositoryId}/logs/${pipelineNumber}/${steps[0].id}`), woodpeckerToken)
+      if (!Array.isArray(logs) || logs.some(row => row.step_id !== steps[0].id
+        || row.data !== null && (typeof row.data !== 'string'
+          || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(row.data))))
+        fail('WOODPECKER_BUILD_LOG_INVALID')
+      const lines = logs.filter(row => row.data !== null)
+        .map(row => Buffer.from(row.data, 'base64').toString('utf8').trim())
+      const exported = lines.map(line => /^#\d+ exporting manifest (sha256:[0-9a-f]{64}) done$/.exec(line))
+        .filter(Boolean).map(match => match[1])
+      const pushed = lines.map(line => /^#\d+ pushing manifest for (registry\.cn-sh1\.ctyun\.cn\/[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+)@(sha256:[0-9a-f]{64}) \d+(?:\.\d+)?s done$/.exec(line))
+        .filter(Boolean)
+      if (exported.length !== 1 || pushed.length !== 1 || exported[0] !== pushed[0][2])
+        fail('WOODPECKER_BUILD_DIGEST_UNCONFIRMED')
+      return { pipelineNumber, commitSha: pipeline.commit, image: pushed[0][1], imageDigest: pushed[0][2],
+        evidenceRef: evidence('woodpecker-build', `${repositoryId}:${pipelineNumber}:${steps[0].id}:${pushed[0][2]}`) }
+    },
     async triggerBuild({ target, commitSha }) {
       const { baseUrl, repositoryId, cronName } = target?.woodpecker ?? {}
       if (!sha(commitSha) || !safeName(cronName) || !Number.isInteger(repositoryId)) fail('WOODPECKER_TRIGGER_INVALID')

@@ -29,6 +29,7 @@ function fixture(overrides = {}) {
       async listPipelines() { return { complete: overrides.complete ?? true, hasMore: false,
         pipelines: state.pipeline, evidenceRef: 'woodpecker:list:1' } },
       async readBuildEvidence({ pipelineNumber }) { return { pipelineNumber, commitSha,
+        image: overrides.buildImage ?? `${target.registry.image}:uat2`,
         imageDigest: overrides.buildDigest ?? imageDigest, evidenceRef: 'woodpecker:build:1' } },
       async triggerBuild(args) { state.calls.push(args); if (overrides.finish !== false) state.pipeline.push({ number: 1,
         commitSha, branch: target.branch, status: 'success' }); return { evidenceRef: 'woodpecker:trigger:1' } },

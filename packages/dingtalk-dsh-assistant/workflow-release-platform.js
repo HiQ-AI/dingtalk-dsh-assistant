@@ -118,7 +118,8 @@ export function createReleasePlatform({ targets, clients }) {
     const build = await read('woodpecker', 'readBuildEvidence', { baseUrl: target.woodpecker.baseUrl,
       repositoryId: target.woodpecker.repositoryId, pipelineNumber: succeeded[0].number })
     if (build.pipelineNumber !== succeeded[0].number || build.commitSha !== commitSha
-      || !digest(build.imageDigest)) fail('RELEASE_PLATFORM_BUILD_DIGEST_UNCONFIRMED')
+      || !digest(build.imageDigest) || !nonempty(build.image)
+      || !build.image.startsWith(`${target.registry.image}:`)) fail('RELEASE_PLATFORM_BUILD_DIGEST_UNCONFIRMED')
     return { scan, build }
   }
   async function inspect({ kind, phase, requirement, effect }) {
