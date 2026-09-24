@@ -417,6 +417,46 @@ function coreCommand(command, now) {
       .run(a.toDigest, a.nodes.length * 3, now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
+  if (command.kind === 'run.workflow.reissue-repository') {
+    object(a, ['runId', 'expectedRevision', 'fromDigest', 'toDigest', 'toWorkflowId', 'requirementRef', 'inputRef', 'inputDigest', 'nodes'])
+    digest(a.fromDigest, 'fromDigest'); digest(a.toDigest, 'toDigest'); text(a.toWorkflowId, 'toWorkflowId')
+    ref(a.requirementRef, 'requirementRef'); ref(a.inputRef, 'inputRef'); digest(a.inputDigest, 'inputDigest')
+    if (command.id !== `reissue-repository:${a.runId}:${a.toDigest}`) fail('WORKFLOW_MIGRATION_COMMAND_INVALID')
+    const r = activeRun(a), current = nodes(r.run_id)
+    const oldRecord = db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.fromDigest)
+    const nextRecord = db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.toDigest)
+    const oldConfig = oldRecord && JSON.parse(oldRecord.body).config, nextConfig = nextRecord && JSON.parse(nextRecord.body).config
+    const apply = current.find(n => n.node_id === 'apply-changes'), inspect = current.find(n => n.node_id === 'inspect-and-propose')
+    if (r.status !== 'waiting' || r.revision !== integer(a.expectedRevision, 'expectedRevision')
+      || r.workflow_digest !== a.fromDigest || a.fromDigest === a.toDigest || r.workflow_id === a.toWorkflowId
+      || !oldConfig || !nextConfig || oldConfig.kind !== 'engineering' || nextConfig.kind !== 'engineering'
+      || oldConfig.runId !== r.run_id || nextConfig.runId !== r.run_id || oldConfig.taskId !== r.task_id || nextConfig.taskId !== r.task_id
+      || (oldConfig.repoId === nextConfig.repoId && (!['6', '7'].includes(JSON.parse(oldRecord.body).definitionVersion)
+        || JSON.parse(nextRecord.body).definitionVersion !== '8'
+        || JSON.parse(apply?.wait_reason ?? 'null')?.reference !== 'ENGINEERING_NO_CHANGES_PROPOSED'))
+      || oldConfig.ownerActorId !== nextConfig.ownerActorId
+      || oldConfig.sourceCommandId !== nextConfig.sourceCommandId || !inspect || inspect.status !== 'succeeded'
+      || !apply || apply.status !== 'waiting' || !['ENGINEERING_EDIT_SCOPE_MISMATCH', 'ENGINEERING_NO_CHANGES_PROPOSED'].includes(JSON.parse(apply.wait_reason ?? 'null')?.reference)
+      || current.some(n => !n.drained) || pendingInputs(r.run_id).length
+      || db.prepare("SELECT effect_id FROM execution_effects WHERE run_id=? AND node_id<>'prepare-workspace' LIMIT 1").get(r.run_id)) fail('WORKFLOW_REISSUE_UNSAFE')
+    if (!Array.isArray(a.nodes) || a.nodes.length < 4 || a.nodes.length > 32
+      || a.nodes[0]?.nodeId !== 'prepare-generation' || a.nodes[1]?.nodeId !== 'prepare-workspace'
+      || a.nodes[2]?.nodeId !== 'inspect-and-propose' || new Set(a.nodes.map(node => node.nodeId)).size !== a.nodes.length) fail('INVALID_NODE_PLAN')
+    a.nodes.forEach((node, index) => {
+      object(node, ['nodeId', 'nodeVersion', 'executor', 'inputRef', 'inputDigest'])
+      text(node.nodeId, 'nodeId'); text(node.nodeVersion, 'nodeVersion')
+      if (!['code', 'agent'].includes(node.executor) || (index === 0) !== (node.inputRef !== null)) fail('INVALID_NODE_PLAN')
+      inputPair(node, index === 0)
+    })
+    if (a.nodes[0].inputRef !== a.inputRef || a.nodes[0].inputDigest !== a.inputDigest
+      || JSON.parse(nextRecord.body).workflowId !== a.toWorkflowId) fail('WORKFLOW_REISSUE_UNSAFE')
+    assertRunEffectsDrained(db, r.run_id)
+    db.prepare("UPDATE execution_nodes SET current=0,status='superseded' WHERE run_id=? AND current=1").run(r.run_id)
+    a.nodes.forEach((node, index) => addNode(r.run_id, node, index, r.generation + 1, index === 0 ? 'ready' : 'blocked'))
+    db.prepare("UPDATE execution_runs SET workflow_id=?,workflow_digest=?,requirement_ref=?,revision=revision+1,generation=generation+1,max_claims=max_claims+?,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
+      .run(a.toWorkflowId, a.toDigest, a.requirementRef, a.nodes.length * 3, now, r.run_id)
+    return { status: 'applied', run: runDto(getRun(r.run_id)) }
+  }
   if (command.kind === 'node.claim') {
     object(a, ['runId', 'nodeId', 'expectedGeneration', 'expectedLeaseEpoch'])
     const r = activeRun(a)

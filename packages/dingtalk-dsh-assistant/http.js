@@ -249,6 +249,14 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/context'.length))
     return submitWebTask(request, response, store, 'appendTaskContext', taskId)
   }
+  if (request.method === 'POST' && /^\/tasks\/[^/]+\/reissue-repository$/u.test(url.pathname)) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
+    const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/reissue-repository'.length))
+    try {
+      const body = z.strictObject({ repositoryId: requiredText, requestId: requiredText }).parse(await readJson(request))
+      return send(response, 202, await store.submitWorkflowTask({ ...body, taskId, action: 'reissue-repository' }))
+    } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|UNSAFE|NOT_REISSUABLE/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
   if (request.method === 'POST' && /^\/tasks\/[^/]+\/archive$/u.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/archive'.length))
     return send(response, 200, await store.archiveTask({ taskId }))

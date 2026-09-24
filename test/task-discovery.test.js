@@ -84,6 +84,49 @@ test('旧工程失败节点仅在排空且无编辑效果时切换到新流程�
   assert.equal(after.nodeHistory.some(node => node.nodeId === 'index-files' && node.status === 'superseded'), true)
 })
 
+test('空方案工程任务仅在排空且无编辑效果时升级同仓库流程代次', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-reissue-repository-'))
+  const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'reissue-repository', initialize: true })
+  t.after(() => store.close())
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  const oldDigest = 'c'.repeat(64), nextDigest = 'd'.repeat(64)
+  const requirement = await artifacts.put({ request: '修复归一化计算' })
+  const initial = await artifacts.put({ workflowDigest: oldDigest, nodeId: 'prepare-generation', nodeVersion: '1', requirementRef: requirement.ref, data: { request: '修复归一化计算' } })
+  const nextRequirement = await artifacts.put({ request: '修复归一化计算', baseCommit: 'e'.repeat(40) })
+  const first = await artifacts.put({ workflowDigest: nextDigest, nodeId: 'prepare-generation', nodeVersion: '1', requirementRef: nextRequirement.ref, data: { request: '修复归一化计算', baseCommit: 'e'.repeat(40) } })
+  for (const [id, digest, repoId] of [['old', oldDigest, 'dataset'], ['new', nextDigest, 'dataset']])
+    await store.command({ id, kind: 'workflow.register', args: { workflowId: `workflow-${id}`, definitionVersion: id === 'old' ? '7' : '8', digest,
+      config: { kind: 'engineering', runId: 'run', taskId: 'task', repoId, ownerActorId: 'owner', sourceCommandId: 'source' } } })
+  const names = ['prepare-generation', 'prepare-workspace', 'inspect-and-propose', 'apply-changes', 'verify-candidate']
+  await store.command({ id: 'create', kind: 'run.create', args: { runId: 'run', taskId: 'task', workflowId: 'workflow-old', workflowDigest: oldDigest,
+    requirementRef: requirement.ref, nodes: names.map((nodeId, index) => ({ nodeId, nodeVersion: '1', executor: index === 2 ? 'agent' : 'code',
+      inputRef: index ? null : initial.ref, inputDigest: index ? null : initial.digest })) } })
+  for (let index = 0; index < 4; index++) {
+    const nodeId = names[index], claimed = (await store.command({ id: `claim-${index}`, kind: 'node.claim', args: {
+      runId: 'run', nodeId, expectedGeneration: 1, expectedLeaseEpoch: 0 } })).result.binding
+    if (index === 2) await store.command({ id: 'bind-inspect', kind: 'node.sessionBound', args: {
+      runId: 'run', nodeId, generation: 1, leaseEpoch: 1, sessionId: claimed.sessionId } })
+    await store.command({ id: `drain-${index}`, kind: 'node.drained', args: { runId: 'run', nodeId, generation: 1, leaseEpoch: 1, evidenceRef: requirement.ref } })
+    await store.command({ id: `commit-${index}`, kind: 'node.commit', args: { runId: 'run', nodeId, generation: 1, leaseEpoch: 1,
+      inputDigest: claimed.inputDigest, outcome: index === 3 ? 'waiting' : 'succeeded', evidenceRefs: [],
+      ...(index === 3 ? { waitReason: { kind: 'recovery', reference: 'ENGINEERING_NO_CHANGES_PROPOSED' } }
+        : { outputRef: requirement.ref, nextInput: { nodeId: names[index + 1], inputRef: initial.ref, inputDigest: initial.digest } }) } })
+  }
+  const before = await store.query({ kind: 'run', runId: 'run' })
+  const args = { runId: 'run', expectedRevision: before.run.revision, fromDigest: oldDigest, toDigest: nextDigest,
+    toWorkflowId: 'workflow-new', requirementRef: nextRequirement.ref, inputRef: first.ref, inputDigest: first.digest,
+    nodes: names.map((nodeId, index) => ({ nodeId, nodeVersion: '1', executor: index === 2 ? 'agent' : 'code',
+      inputRef: index ? null : first.ref, inputDigest: index ? null : first.digest })) }
+  await assert.rejects(store.command({ id: 'reissue-repository:run:' + nextDigest, kind: 'run.workflow.reissue-repository', args: { ...args, toWorkflowId: 'workflow-old' } }), { code: 'WORKFLOW_REISSUE_UNSAFE' })
+  await store.command({ id: 'reissue-repository:run:' + nextDigest, kind: 'run.workflow.reissue-repository', args })
+  const after = await store.query({ kind: 'run', runId: 'run', includeHistory: true })
+  assert.equal(after.run.workflowId, 'workflow-new')
+  assert.equal(after.run.workflowDigest, nextDigest)
+  assert.equal(after.run.generation, 2)
+  assert.equal(after.nodes[0].status, 'ready')
+  assert.equal(after.nodeHistory.some(node => node.nodeId === 'inspect-and-propose' && node.status === 'superseded'), true)
+})
+
 test('按需检索支持路径缩小范围与四千字符读取，拒绝越权路径', { timeout: 120000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-inspect-')), source = join(directory, 'source'), root = join(directory, 'managed')
   await mkdir(source); await mkdir(join(source, 'src')); await mkdir(root)

@@ -10,7 +10,7 @@ import { createManagedEdits } from './execution-edit.js'
 import { createGitDelivery } from './execution-git.js'
 import { createGithubPullRequests } from './execution-pr.js'
 import { createVerificationJobCheck } from './execution-check-job.js'
-import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow } from './task-workflow.js'
+import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow, createEngineeringScopedWorkflow, createEngineeringPatchWorkflow } from './task-workflow.js'
 import { freezeCandidate, readCandidate } from './execution-candidate.js'
 
 const exec = promisify(execFile)
@@ -42,7 +42,11 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (typeof config.baseBranch !== 'string' || !config.baseBranch || config.baseBranch.startsWith('-') || /[\s\0]/.test(config.baseBranch)) fail('ENGINEERING_BASE_BRANCH_REQUIRED')
     // 配置校验发生在任何消息进入前；真正执行时仍重新校验适配器。
     config.checks.forEach(check => createVerificationJobCheck({ ...check, root: join(config.managedRoot, 'checks') }))
-    configs.set(config.id, { config, digest: executionDigest({ config, ghCommand: ghCommand ?? null, author: author ?? null }) })
+    if (config.purpose !== undefined && (typeof config.purpose !== 'string' || !config.purpose.trim())) fail('ENGINEERING_REPOSITORY_INVALID')
+    if (config.routingTerms !== undefined && (!Array.isArray(config.routingTerms) || config.routingTerms.some(term => typeof term !== 'string' || !term.trim()))) fail('ENGINEERING_REPOSITORY_INVALID')
+    // 路由说明只用于接纳前判断，不改变既有任务冻结的执行配置摘要。
+    const { purpose, routingTerms, ...executionConfig } = config
+    configs.set(config.id, { config, digest: executionDigest({ config: executionConfig, ghCommand: ghCommand ?? null, author: author ?? null }) })
   }
   let store
   async function build(record, { allowDefinitionMigration = false } = {}) {
@@ -100,7 +104,10 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       return { ...input, baseCommit: prior?.commitId ?? saved.input.baseCommit, expectedRemoteSha }
     }
     const checks = config.checks.map(check => createVerificationJobCheck({ ...check, root: join(config.managedRoot, 'checks') }))
-    const workflowFactory = config.discovery && (!record.definitionVersion || record.definitionVersion === '6') ? createEngineeringDirectWorkflow : createEngineeringTaskWorkflow
+    const workflowFactory = !config.discovery ? createEngineeringTaskWorkflow
+      : record.definitionVersion === '6' ? createEngineeringDirectWorkflow
+        : record.definitionVersion === '7' ? createEngineeringScopedWorkflow
+          : !record.definitionVersion || record.definitionVersion === '8' ? createEngineeringPatchWorkflow : createEngineeringTaskWorkflow
     const workflow = workflowFactory({ workflowId: record.workflowId, provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort,
       workspaceAdapter, editAdapter, checks, prepareGeneration, adapterIdentity: saved.repositoryDigest, discovery: config.discovery,
       deliveryPlan: { identity: executionDigest(saved), gitAdapterFor, prAdapterFor, date: saved.date, title: saved.title, body: saved.body, commitMessage: saved.title, expectedRemoteSha: null } })
@@ -117,7 +124,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
   }
   async function repositoryInspect(binding, args, signal, input) {
     const item = routes.get(binding.runId), saved = item?.record.config, config = configs.get(saved?.repoId)?.config
-    if (!saved || !config?.discovery || item.record.definitionVersion !== '6' || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
+    if (!saved || !config?.discovery || !['6', '7', '8'].includes(item.record.definitionVersion) || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
     const { operation, query = '', path, offset = 0, limit = operation === 'read' ? 8000 : 100 } = args
     if (!['list', 'search', 'read'].includes(operation) || !Number.isSafeInteger(offset) || offset < 0
       || !Number.isSafeInteger(limit) || limit < 1 || limit > (operation === 'read' ? 16000 : 200)
@@ -173,6 +180,8 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     const request = text(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
     const repoId = text(action.arguments.repositoryId, 'ENGINEERING_REPOSITORY_REQUIRED'), entry = configs.get(repoId)
     if (!entry) fail('ENGINEERING_REPOSITORY_NOT_ADMITTED')
+    const matches = [...configs.values()].filter(item => item.config.routingTerms?.some(term => request.includes(term)))
+    if (matches.length === 1 && matches[0].config.id !== repoId) fail('ENGINEERING_REPOSITORY_SCOPE_MISMATCH')
     const constraints = [...new Set([...(action.constraints ?? []), ...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])]
     if (constraints.length > 32 || constraints.some(item => typeof item !== 'string') || Buffer.byteLength(request) > 12000) fail('ENGINEERING_INPUT_LIMIT')
     const fingerprint = executionDigest({ taskId, request, constraints, repoId })
@@ -193,6 +202,46 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (item.record.config.fingerprint !== fingerprint) fail('ENGINEERING_TASK_COMMAND_CONFLICT')
     controller.registerWorkflow(item.workflow)
     return { taskId, runId, workflowId, input: structuredClone(item.record.config.input) }
+  }
+  async function reissueTask({ taskId, repositoryId, requestId }, controller, artifacts) {
+    text(taskId, 'WORKFLOW_TASK_ID_REQUIRED'); text(repositoryId, 'ENGINEERING_REPOSITORY_REQUIRED')
+    text(requestId, 'WORKFLOW_REQUEST_ID_REQUIRED')
+    const entry = configs.get(repositoryId)
+    if (!entry?.config.discovery) fail('ENGINEERING_REPOSITORY_NOT_ADMITTED')
+    const runs = await store.query({ kind: 'run.list', taskId, limit: 200 })
+    const run = runs.find(item => !['succeeded', 'failed', 'cancelled'].includes(item.status))
+    if (!run) fail('ENGINEERING_TASK_NOT_REISSUABLE')
+    const state = await store.query({ kind: 'run', runId: run.runId }), prior = routes.get(run.runId)
+    if (!prior || prior.record.config.taskId !== taskId) fail('ENGINEERING_TASK_NOT_REISSUABLE')
+    if (prior.record.config.reissueRequestId === requestId && prior.record.config.repoId === repositoryId) return { taskId, runId: run.runId, generation: state.run.generation, repositoryId }
+    const saved = prior.record.config, baseCommit = await git(entry.config.sourceRepository, ['rev-parse', '--verify', `${entry.config.baseRef}^{commit}`])
+    const matches = [...configs.values()].filter(item => item.config.routingTerms?.some(term => saved.input.request.includes(term)))
+    if (matches.length === 1 && matches[0].config.id !== repositoryId) fail('ENGINEERING_REPOSITORY_SCOPE_MISMATCH')
+    if (!/^[a-f0-9]{40}$/.test(baseCommit)) fail('ENGINEERING_BASE_INVALID')
+    const input = { ...saved.input, baseCommit, editablePaths: entry.config.editablePaths }
+    const nextConfig = { ...saved, repoId: repositoryId, repositoryDigest: entry.digest, input,
+      fingerprint: executionDigest({ taskId, request: input.request, constraints: input.constraints, repoId: repositoryId }), reissueRequestId: requestId,
+      body: `## 任务\n\n${input.request}\n\n## 约束\n\n${input.constraints.map(value => `- ${value}`).join('\n') || '无额外约束'}\n\n## 验证配置\n\n${entry.config.checks.map(check => `- ${check.id} / ${check.version}`).join('\n')}` }
+    const workflowId = `task-engineering-reissue-${executionDigest([run.runId, requestId]).slice(0, 40)}`
+    const record = { workflowId, config: nextConfig, definitionVersion: '8' }
+    let next
+    try {
+      next = await build(record)
+      const requirement = await artifacts.put(input), first = next.workflow.nodes[0]
+      const firstInput = await artifacts.put({ workflowDigest: next.definition.digest, nodeId: first.id, nodeVersion: first.version,
+        requirementRef: requirement.ref, data: input })
+      await store.command({ id: `workflow:${next.definition.digest}`, kind: 'workflow.register', args: { ...record, digest: next.definition.digest } })
+      await store.command({ id: `reissue-repository:${run.runId}:${next.definition.digest}`, kind: 'run.workflow.reissue-repository', args: {
+        runId: run.runId, expectedRevision: state.run.revision, fromDigest: state.run.workflowDigest,
+        toDigest: next.definition.digest, toWorkflowId: workflowId, requirementRef: requirement.ref,
+        inputRef: firstInput.ref, inputDigest: firstInput.digest,
+        nodes: next.workflow.nodes.map((node, index) => ({ nodeId: node.id, nodeVersion: node.version, executor: node.executor,
+          inputRef: index ? null : firstInput.ref, inputDigest: index ? null : firstInput.digest })),
+      } })
+    } catch (error) { routes.set(run.runId, prior); throw error }
+    controller.registerWorkflow(next.workflow)
+    await controller.recover({ commandId: `reissue-drive:${run.runId}:${next.definition.digest}`, runId: run.runId })
+    return { taskId, runId: run.runId, generation: state.run.generation + 1, repositoryId }
   }
   return {
     deliveryOptions,
@@ -297,6 +346,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       const promise = prepareTask(action, info, controller).finally(() => preparing.delete(key))
       preparing.set(key, { digest, promise }); return promise
     },
-    availableWorkflows: () => [...configs.values()].map(({ config }) => ({ id: 'task-engineering', repositoryId: config.id, editablePaths: [...config.editablePaths], ...(config.discovery ? { discovery: structuredClone(config.discovery) } : {}), purpose: '仅在配置范围内选择及修改文件，按固定检查验证并提交PR' })),
+    reissueTask,
+    availableWorkflows: () => [...configs.values()].map(({ config }) => ({ id: 'task-engineering', repositoryId: config.id, editablePaths: [...config.editablePaths], ...(config.discovery ? { discovery: structuredClone(config.discovery) } : {}), purpose: config.purpose ?? '仅在配置范围内选择及修改文件，按固定检查验证并提交PR' })),
   }
 }

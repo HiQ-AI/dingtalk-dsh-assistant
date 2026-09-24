@@ -46,6 +46,20 @@ test('工作流只读状态与异步任务视图保留新节点真实完成状�
   }, { overrides: { listTaskView: async () => [{ taskId: 't', engine: 'workflow-v2', executionNodes: [{ nodeId: 'prepare', status: 'succeeded' }, { nodeId: 'execute', status: 'running' }] }], getWorkflowState: async runId => ({ runId, status: 'waiting' }), getWorkflowCatalog: () => ({ engine: 'workflow-v2', workflows: [{ id: 'task-analysis' }] }) } })
 })
 
+test('工程仓库重发仅接受本机同源严格参数并返回受管结果', async () => {
+  const submitted = []
+  await withServer(false, async base => {
+    const post = (body, origin) => fetch(base + '/tasks/task-1/reissue-repository', { method: 'POST',
+      headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(body) })
+    assert.equal((await post({ repositoryId: 'dataset', requestId: 'reissue-1' }, 'https://evil.example')).status, 403)
+    assert.equal((await post({ repositoryId: 'dataset', requestId: 'reissue-1', actorId: 'forged' })).status, 400)
+    const response = await post({ repositoryId: 'dataset', requestId: 'reissue-1' })
+    assert.equal(response.status, 202)
+    assert.deepEqual(await response.json(), { taskId: 'task-1', generation: 3 })
+    assert.deepEqual(submitted, [{ repositoryId: 'dataset', requestId: 'reissue-1', taskId: 'task-1', action: 'reissue-repository' }])
+  }, { overrides: { submitWorkflowTask: async value => { submitted.push(value); return { taskId: value.taskId, generation: 3 } } } })
+})
+
 test('群收发信箱合并新工作流持久消息与通知，按 ID 去重且保留旧群记录', async () => {
   const group = { groupId: 'g', messages: [{ messageId: 'old', text: '旧消息', sequence: 1, occurredAt: '2026-09-23T11:00:00Z' }], outbox: [{ outboundId: 'old-out', sourceMessageId: 'old', text: '旧回复', status: 'sent' }] }
   const mailboxes = {

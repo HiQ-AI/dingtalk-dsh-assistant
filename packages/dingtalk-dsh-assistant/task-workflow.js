@@ -286,6 +286,76 @@ export function createEngineeringDirectWorkflow(options) {
   return workflow
 }
 
+/** v7 只调整空方案的终态诊断；v6 原定义仍用于历史任务恢复。 */
+export function createEngineeringScopedWorkflow(options) {
+  const workflow = createEngineeringDirectWorkflow(options)
+  const apply = workflow.nodes.find(node => node.id === 'apply-changes')
+  const previous = apply.execute
+  workflow.version = '7'
+  apply.version = '3'
+  apply.execute = async context => {
+    if (!context.input.proposal.changes.length) throw executionError('ENGINEERING_NO_CHANGES_PROPOSED')
+    return previous(context)
+  }
+  return workflow
+}
+
+/** v8 接受局部精确替换，由 Host 在冻结候选中还原完整文件后交给既有编辑效果。 */
+export function createEngineeringPatchWorkflow(options) {
+  const workflow = createEngineeringScopedWorkflow(options)
+  const inspect = workflow.nodes.find(node => node.id === 'inspect-and-propose')
+  const apply = workflow.nodes.find(node => node.id === 'apply-changes')
+  const permitted = path => typeof path === 'string' && path.length > 0 && !/[\\:\0\r\n]/.test(path)
+    && path.split('/').every(part => part && !['.', '..', '.git'].includes(part.toLowerCase()) && !/[. ]$/.test(part))
+    && options.discovery.allowedPrefixes.some(prefix => path.startsWith(prefix))
+  const proposal = { type: 'object', properties: {
+    changes: inspect.outputSchema.properties.changes,
+    replacements: { type: 'array', items: { type: 'object', properties: {
+      path: text, expectedHash: text, from: text, to: text,
+    }, required: ['path', 'expectedHash', 'from', 'to'], additionalProperties: false } },
+  }, required: ['changes', 'replacements'], additionalProperties: false }
+  workflow.version = '8'
+  inspect.version = '2'
+  inspect.outputSchema = proposal
+  inspect.prompt = '你是工程修改节点。根据 request 和 constraints，用 engineering_repo_inspect 按需搜索与读取相关实现和测试。大文件不要逐字重写：在 replacements 中提交精确的短原文 from、新文 to、原文件完整 expectedHash 和 path；Host 校验原文在冻结文件中仅出现一次，再还原完整文件。小文件或新文件可在 changes 中提交完整内容。两数组均必填；任务要求修改时不得提交两个空数组。不得执行命令、声称验证或汇报进度。最后调用 execution_node_submit。'
+  apply.version = '4'
+  apply.inputSchema = { type: 'object', properties: { requirement: apply.inputSchema.properties.requirement, proposal }, required: ['requirement', 'proposal'], additionalProperties: false }
+  apply.execute = async ({ input, runId, generation, requirementDigest, perform }) => {
+    const { changes, replacements } = input.proposal
+    if (!changes.length && !replacements.length) throw executionError('ENGINEERING_NO_CHANGES_PROPOSED')
+    if (changes.some(change => !permitted(change.path)) || replacements.some(change => !permitted(change.path)
+      || !/^[a-f0-9]{64}$/.test(change.expectedHash) || !change.from)) throw executionError('ENGINEERING_EDIT_SCOPE_MISMATCH')
+    const workspace = await options.workspaceAdapter.prepare({ runId, generation, requirementDigest, baseCommit: input.requirement.baseCommit })
+    if ((await options.workspaceAdapter.reconcile(workspace)).status !== 'succeeded') throw executionError('WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED')
+    const result = [...changes], grouped = new Map()
+    for (const replacement of replacements) {
+      if (result.some(change => change.path.toLowerCase() === replacement.path.toLowerCase())) throw executionError('ENGINEERING_PATCH_CONFLICT')
+      const group = grouped.get(replacement.path) ?? []
+      group.push(replacement); grouped.set(replacement.path, group)
+    }
+    if (grouped.size) {
+      const snapshot = await readCandidate(await freezeCandidate({ repository: workspace.directory,
+        baseCommit: input.requirement.baseCommit, generation, requirementDigest }))
+      const files = new Set(snapshot.files.map(file => file.path))
+      for (const [path, group] of grouped) {
+        if (!files.has(path) || new Set(group.map(item => item.expectedHash)).size !== 1) throw executionError('ENGINEERING_PATCH_CONFLICT')
+        const bytes = await snapshot.readFile(path), expectedHash = createHash('sha256').update(bytes).digest('hex')
+        if (expectedHash !== group[0].expectedHash) throw executionError('ENGINEERING_PATCH_BASE_CONFLICT')
+        let content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+        for (const item of group) {
+          const at = content.indexOf(item.from)
+          if (at < 0 || content.indexOf(item.from, at + 1) >= 0) throw executionError('ENGINEERING_PATCH_AMBIGUOUS')
+          content = content.slice(0, at) + item.to + content.slice(at + item.from.length)
+        }
+        result.push({ path, expectedHash, content })
+      }
+    }
+    const prepared = await options.editAdapter.prepare({ workspace, changes: result })
+    return perform({ action: 'edit', prepared })
+  }
+  return workflow
+}
+
 /** 与factory共用Host scope解析器；不把任意仓库路径变成模型工具。 */
 export function createEngineeringDeliveryAdapters({ gitAdapterFor, prAdapterFor }) {
   return {

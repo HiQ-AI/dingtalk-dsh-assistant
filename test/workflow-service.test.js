@@ -685,6 +685,7 @@ test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入�
  assert.equal((await post('context',input,'https://evil.example')).status,403)
  assert.equal((await post('context',{...input,actorId:'owner'})).status,400)
  await assert.rejects(service.submitWebTask({...input,action:'context',taskId:task.taskId},{channel:'web',actorId:'attacker'}),/FORBIDDEN/)
+ await assert.rejects(service.submitWebTask({action:'reissue-repository',taskId:task.taskId,repositoryId:'backend',requestId:'unauthorized'},{channel:'web',actorId:'attacker'}),/FORBIDDEN/)
  assert.equal((await post('context',input)).status,202);assert.equal((await post('context',input)).status,202)
  assert.equal((await post('context',{...input,context:'冲突内容'})).status,409)
  let state=await execution.controller.state(original.runId);assert.equal(state.pendingInputCount,1);assert.equal(state.run.pauseRequested,true)

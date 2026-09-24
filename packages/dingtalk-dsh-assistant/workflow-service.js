@@ -165,6 +165,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const origin=await store.query({kind:'message.task',taskId:request.taskId})
     if(!origin)throw executionError('WORKFLOW_TASK_NOT_FOUND')
     await taskAccess(request.taskId,identity.actorId,origin.run.conversationId)
+    if(request.action==='reissue-repository')return engineering.reissueTask(request,controller,artifacts)
     if(!['cancel','context'].includes(request.action))throw executionError('WORKFLOW_WEB_ACTION_UNSUPPORTED')
     const eventId=executionDigest([request.taskId,requireText(request.requestId,'WORKFLOW_WEB_EVENT_REQUIRED')])
     const prior=await store.query({kind:'message.web-task',eventId})
@@ -645,7 +646,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       try {
         if (run.status === 'waiting') {
           const state = await store.query({ kind: 'run', runId: run.runId })
-          if (state.nodes?.some(node => ['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_INDEX_CAPACITY_EXCEEDED', 'EXECUTION_BUDGET_EXHAUSTED', 'EDIT_PREPARED_INVALID', 'ENGINEERING_EDIT_SCOPE_MISMATCH'].includes(node.waitReason?.reference))) continue
+          if (state.nodes?.some(node => ['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_INDEX_CAPACITY_EXCEEDED', 'EXECUTION_BUDGET_EXHAUSTED', 'EDIT_PREPARED_INVALID', 'ENGINEERING_EDIT_SCOPE_MISMATCH', 'ENGINEERING_NO_CHANGES_PROPOSED'].includes(node.waitReason?.reference))) continue
         }
         await controller.recover({ commandId: `recover:${run.runId}:${run.revision}:${run.claimCount}`, runId: run.runId })
       }
