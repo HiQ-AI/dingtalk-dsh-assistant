@@ -127,6 +127,13 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     } catch(error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|PENDING|TERMINAL/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
   const workflowReply = /^\/workflows\/([^/]+)\/requests\/([^/]+)\/answer$/u.exec(url.pathname)
+  const workflowReprocess = /^\/workflows\/([^/]+)\/reprocess$/u.exec(url.pathname)
+  if (request.method === 'POST' && workflowReprocess) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.reprocessWorkflowMessage) return send(response, 404, { error: 'workflow_disabled' })
+    try { return send(response, 200, await store.reprocessWorkflowMessage(decodeURIComponent(workflowReprocess[1]))) }
+    catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /PENDING|STALE|EXISTS/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
   if (request.method === 'POST' && workflowReply) {
     const address = request.socket?.remoteAddress
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })

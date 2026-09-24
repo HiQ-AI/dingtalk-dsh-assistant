@@ -316,7 +316,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         const outboundIds = new Set(await store.query({ kind: 'message.outboundIds', conversationId: run.conversationId }))
         const current = []
         for (const item of recent) {
-          if (item.runId === run.runId || item.createdAt > run.createdAt) continue
+          if (item.runId === run.runId || item.createdAt > run.createdAt || item.reason === 'message_reprocessed') continue
           if (outboundIds.has(item.context?.sourceMessageId)) continue
           current.push(item)
           if (current.length === 30) break
@@ -486,6 +486,15 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       eventId: requireText(input.eventId, 'WORKFLOW_EVENT_REQUIRED'), actorId: identity.actorId, answer })
     return { accepted: true, runId: data.run.runId, requestId: request.id, status: result.request.status, answer: result.request.answer }
   }
+  async function reprocessMessage(runId, identity) {
+    if(identity?.channel!=='web'||!config.webActorId||identity.actorId!==config.webActorId) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+    const prior=await messages.state(requireText(runId,'WORKFLOW_RUN_REQUIRED'))
+    if(!groups.has(prior.run.conversationId)) throw executionError('WORKFLOW_GROUP_NOT_ADMITTED')
+    const result=await messages.reprocess(runId)
+    return {previousRunId:runId,runId:result.run.runId,status:result.run.status,
+      units:result.units.map(unit=>({unitId:unit.id,status:unit.status})),
+      requests:result.requests.filter(request=>request.status==='pending').map(request=>({requestId:request.id,kind:request.kind,question:request.question}))}
+  }
   async function quotedClarification(message) {
     const messageId = message.quotedMessage?.messageId
     if (!messageId) return null
@@ -635,7 +644,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     return { messages, outbox }
   }
   return {
-    ingest, resumeRequest, decideApproval, isApprovalRequest, submitWebTask, mailboxes, isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
+    ingest, resumeRequest, reprocessMessage, decideApproval, isApprovalRequest, submitWebTask, mailboxes, isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
     catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, workflows: workflowCatalogState() }),
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,
       messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },

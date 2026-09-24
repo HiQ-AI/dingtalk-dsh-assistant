@@ -23,6 +23,13 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     if (launch) void process(runId).catch(() => {})
     return { ...result, runId }
   }
+  async function reprocess(runId) {
+    const previous=await state(runId)
+    const nextVersion=previous.run.sourceVersion+1
+    const newRunId=`msg-replay-${digest([previous.run.sourceKey,nextVersion]).slice(0,40)}`
+    const result=await cmd('message.reprocess',{runId,newRunId},`reprocess:${runId}:${newRunId}`)
+    return process(result.run.runId)
+  }
   async function waiting(data, unitId, stage, output) {
     return cmd('message.wait', { runId: data.run.runId, unitId, nodeId: stage, expectedRevision: revision(data), reason: output.reason, request: { requestId: digest([data.run.runId, unitId, stage, revision(data), output]), kind: output.kind, question: output.question ?? output.reason, needs: output.needs ?? [], permittedActors: [data.run.actorId] } })
   }
@@ -257,5 +264,5 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   }
   async function resume(input) { const result = await cmd('message.wake', input, `wake:${input.eventId}`); if (result?.run?.runId) await process(result.run.runId); return result }
   async function close() { closed = true; for (const controller of controllers) controller.abort(); for (const item of queue.splice(0)) item.reject(new Error('MESSAGE_WORKFLOW_CLOSED')); await Promise.allSettled(flights.values()) }
-  return { receive, process, recover, resume, state, close }
+  return { receive, reprocess, process, recover, resume, state, close }
 }

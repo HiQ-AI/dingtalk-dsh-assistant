@@ -196,6 +196,23 @@ test('同文高版本编辑复用原Task且别名重投回原run', async t => {
   assert.equal((await execution.store.query({ kind: 'run.list' })).length, 1)
   assert.equal((await execution.store.query({ kind: 'message.list' })).length, 1)
 })
+test('本机操作者逐条重处理旧澄清，旧请求失效且有命令消息拒绝重跑',async t=>{
+  let clarified=false
+  const judge=async({stage,input})=>{
+    if(stage==='S')return clarified?splitOne(input.source.text):{kind:'needs_clarification',reason:'旧上下文不足',question:'旧问题',needs:[]}
+    if(stage==='R')return{kind:'binding',disposition:'new',candidateId:null,evidence:['source']}
+    return{kind:'intent',actions:[{intent:'create',arguments:{objective:'整理本条材料',workflowId:'task-analysis'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'result'}
+  }
+  const {service,message}=await fixture(t,'owner',undefined,{judge,config:{webActorId:'owner'}})
+  const first=await service.ingest(message);await service.messages.process(first.runId)
+  await assert.rejects(service.reprocessMessage(first.runId,{channel:'web',actorId:'other'}),/FORBIDDEN/)
+  clarified=true
+  const replay=await service.reprocessMessage(first.runId,{channel:'web',actorId:'owner'})
+  assert.notEqual(replay.runId,first.runId)
+  assert.equal((await service.state(first.runId)).requests[0].status,'superseded')
+  assert.equal((await service.state(replay.runId)).commands.length,1)
+  await assert.rejects(service.reprocessMessage(replay.runId,{channel:'web',actorId:'owner'}),/MESSAGE_REPROCESS_EFFECT_PENDING/)
+})
 
 test('已回读的自身澄清通知不再作为新消息入站，收发信箱分别投影', async t => {
   const sent = []

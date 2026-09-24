@@ -155,6 +155,22 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     db.prepare('UPDATE message_sources SET current_version=? WHERE source_key=?').run(alias.sourceVersion,alias.sourceKey)
     return {result:{run:original,alias}}
   }
+  if(kind==='message.reprocess') {
+    const old=run(db,str(a.runId));current(db,old)
+    if(old.context?.replayOf)fail('MESSAGE_REPROCESS_EXHAUSTED')
+    if(!['waiting','needs_attention','pending'].includes(old.status)||rows(db,old.runId,'command').length)fail('MESSAGE_REPROCESS_EFFECT_PENDING')
+    if(db.prepare('SELECT 1 FROM message_runs WHERE run_id=?').get(str(a.newRunId)))fail('MESSAGE_REPROCESS_EXISTS')
+    const sequence=db.prepare('SELECT rowid AS seq FROM message_runs WHERE run_id=?').get(old.runId).seq
+    for(const request of rows(db,old.runId,'request').filter(item=>item.status==='pending')){request.status='superseded';request.reason='message_reprocessed';put(db,old.runId,'request',request)}
+    old.status='superseded';old.reason='message_reprocessed';save(db,old)
+    const next={...old,runId:a.newRunId,sourceVersion:old.sourceVersion+1,revision:0,status:'pending',createdAt:now,
+      context:{...old.context,replayOf:old.runId,replayOfSequenceId:sequence},snapshot:null,
+      policy:{...old.policy,effectiveMaxClaims:undefined},deadline:new Date(Date.parse(now)+(old.policy.initialWindowMs??45000)).toISOString()}
+    delete next.activatedAt;delete next.reason;delete next.capacityRetryVersion
+    db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(next.runId,next.sourceKey,next.sourceVersion,json(next))
+    db.prepare('UPDATE message_sources SET current_version=? WHERE source_key=?').run(next.sourceVersion,next.sourceKey)
+    return {result:{run:next,previousRunId:old.runId}}
+  }
   if(kind==='message.receive') {
     for(const k of ['runId','sourceKey','conversationId','actorId','body']) str(a[k])
     if(!Number.isSafeInteger(a.sourceVersion)||a.sourceVersion<1) fail('MESSAGE_INVALID_ARGUMENT')

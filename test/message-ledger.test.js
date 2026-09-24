@@ -13,6 +13,20 @@ async function fixture(t) {
 }
 const receive=(runId='m',extra={})=>({runId,sourceKey:runId,sourceVersion:1,conversationId:'g',actorId:'a',body:'do this',...extra})
 const bad=(p,code)=>assert.rejects(p,e=>e.code===code)
+test('人工重处理仅允许无业务命令的旧消息，保留旧请求并生成有序新版本',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{context:{sourceMessageId:'original'}}))
+ await f.call('wait',{runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,reason:'old context',request:{requestId:'q',kind:'needs_clarification',question:'old?',permittedActors:['a']}})
+ const result=await f.call('reprocess',{runId:'m',newRunId:'m-replay'})
+ assert.equal(result.result.run.sourceVersion,2)
+ assert.equal(result.result.run.context.replayOfSequenceId,1)
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).requests[0].status,'superseded')
+ assert.equal((await f.store.query({kind:'message.source',sourceKey:'m'})).runId,'m-replay')
+ await bad(f.call('reprocess',{runId:'m',newRunId:'again'}),'MESSAGE_STALE')
+ await f.call('receive',receive('effect'))
+ await f.call('split',{runId:'effect',units:[{unitId:'u'}]})
+ await f.call('accept',{runId:'effect',unitId:'u',commands:[{commandId:'effect-command',kind:'create',args:{}}]})
+ await bad(f.call('reprocess',{runId:'effect',newRunId:'effect-replay'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+})
 test('消息账同库持久化、幂等、全部事项归宿和重启未知命令',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',expectedRevision:0,units:[{unitId:'u'},{unitId:'v'}]})
  const accept={runId:'m',unitId:'u',expectedRevision:0,commands:[{commandId:'c',kind:'query',args:{}}]}
