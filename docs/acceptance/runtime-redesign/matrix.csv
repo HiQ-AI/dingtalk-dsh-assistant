@@ -95,3 +95,8 @@ BUDGET_TARGETED_REGRESSION,30,message-workflow-ledger-service-93-tests,PASS,roun
 BUDGET_FULL_REGRESSION,30,repository-test-suite-888-tests,PASS,round-30.md
 LOCAL_CUTOVER,31,exact-assistant-package-and-runtime-readback,PASS,round-31.md
 NORMALIZATION_TASK_RECOVERY,31,existing-engineering-task-resume,BLOCKED,round-31.md
+PASSIVE_TOPIC_BINDING,32,unique-quote-chain-and-unresolved-status,PASS,round-32.md
+COMPLETED_INVESTIGATION_FOLLOWUP,32,clarification-and-confirmed-new-task,PASS,round-32.md
+REJECTED_FACT_REPROCESS,32,prepared-only-notification-superseded,PASS,round-32.md
+FULL_REGRESSION,32,repository-test-suite-893-tests,PASS,round-32.md
+LOCAL_CUTOVER,32,exact-package-and-historical-readback,BLOCKED,round-32.md

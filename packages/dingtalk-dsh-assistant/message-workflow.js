@@ -38,7 +38,7 @@ function statusFollowup(snapshot) {
 export function createMessageWorkflow({ store, judge, context = {}, handlers = {}, policy = {}, clock = Date.now }) {
   if (!store?.command || !store?.query || typeof judge !== 'function') throw new Error('MESSAGE_DEPENDENCIES_REQUIRED')
   const config = { ...defaultMessagePolicy, ...policy }, flights = new Map(), controllers = new Set(), queue = []
-  let closed = false, occupied = 0, processTail = Promise.resolve()
+  let closed = false, occupied = 0, processTail = Promise.resolve(), quietReconciled = false
   const cmd = async (kind, args, id = `${kind}:${randomUUID()}`) => (await store.command({ id, kind, args })).result
   const state = runId => store.query({ kind: 'message.run', runId })
   const revision = data => data.run.revision ?? data.run.matterSetRevision ?? 0
@@ -166,7 +166,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const missingDetails = detailRefs.filter(ref => !resolvedRefs.has(ref))
     if (missingDetails.length) { await waiting(data, unit.unitId, 'R', { kind: 'needs_context', reason: 'CANDIDATE_DETAIL_REQUIRED', needs: missingDetails.map(resourceRef => ({ resourceRef, reason: '核对候选完整目标与判别事实' })) }); return }
     const target = relationCandidates.find(card => card.candidateId === linked.candidateId) ?? null
-    const binding = { ...linked, ...target, target }
+    let binding = { ...linked, ...target, target }
     data = await state(runId)
     const facts = await context.facts?.({ run: data.run, snapshot, unit, binding }) ?? {}
     const resolvedEvidence = resolvedMaterialEvidence(data.requests, unit.unitId)
@@ -192,6 +192,21 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       && /[吗？?]/u.test(data.run.body)) {
       intent.actions = [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }]
       intent.replyPolicy = 'result'
+    }
+    const investigationMatched = binding.engine === 'legacy' && binding.state === 'completed'
+      && /仅授权排查分析/u.test(binding.goal ?? '')
+      && /(?:依然|仍然|还是|再次|又).*(?:问题|没有|未显示|失败)|(?:问题|没有|未显示|失败).*(?:依然|仍然|还是|再次|又)/u.test(data.run.body)
+      && /@孙鹏|小小鹏/u.test(data.run.body)
+    if (investigationMatched && !/(?:需要|请|帮忙).{0,20}(?:修复|处理)/u.test(data.run.body)
+      && !data.requests.some(request => request.unitId === unit.unitId && request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN')) {
+      await waiting(data, unit.unitId, 'I', { kind: 'needs_clarification', reason: 'COMPLETED_INVESTIGATION_REPORTED_AGAIN',
+        question: `这与此前仅完成排查的“${binding.title}”事项一致。现在是否需要我继续实施修复并验证？`, needs: [] })
+      return
+    }
+    if (investigationMatched && data.requests.some(request => request.unitId === unit.unitId && request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
+      && request.status === 'resolved' && /^(?:是|需要|请|好|可以|同意|继续|修复)/u.test(String(request.answer).trim()))
+      && intent.actions.some(action => ['create', 'research', 'reopen'].includes(action.intent))) {
+      binding = { kind: 'binding', disposition: 'new', candidateId: null, evidence: [...(binding.evidence ?? []), `此前排查任务：${binding.taskId}`], priorTaskId: binding.taskId }
     }
     const admission = await context.validateActions?.({ run: data.run, unit, binding, intent, facts, requests: data.requests })
     if (admission && admission.kind !== 'accepted') { await waiting(data, unit.unitId, 'I', admission); return }
@@ -279,7 +294,8 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     if (!data?.run || ['superseded', 'needs_attention', 'buffered'].includes(data.run.status)) return data
     if (data.run.status === 'settled') { await dispatch(runId); return state(runId) }
     if ((!data.run.context?.quoteRefs?.length || isPassiveTaskProgress(data.run.body)) && isQuietGroupMessage(data.run.body)) {
-      await cmd('message.quiet', { runId, body: data.run.body }, `quiet:${runId}`)
+      const topic = isPassiveTaskProgress(data.run.body) ? await context.passiveTopic?.(data.run) : null
+      await cmd('message.quiet', { runId, body: data.run.body, ...(topic ? { topic } : {}) }, `quiet:${runId}`)
       return state(runId)
     }
     if (data.run.correction) { await resegment(runId, data.run.correction.reason); return state(runId) }
@@ -323,6 +339,16 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const results = []
     for (const run of pending) {
       results.push(await recoverOne(run))
+    }
+    if (!quietReconciled && context.passiveTopic) {
+      const quiet = await store.query({ kind: 'message.quiet.unbound', limit: 200 })
+      for (const run of quiet.filter(item => isPassiveTaskProgress(item.body))) {
+        const current = await store.query({ kind: 'message.source', sourceKey: run.sourceKey })
+        if (current?.runId !== run.runId) continue
+        const topic = await context.passiveTopic(run)
+        if (topic) results.push(await cmd('message.quiet.topic.bind', { runId: run.runId, topic }, `quiet-topic:${run.runId}:${topic.topicId}`))
+      }
+      quietReconciled = true
     }
     return results
   }

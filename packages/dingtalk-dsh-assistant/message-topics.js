@@ -8,6 +8,25 @@ CREATE TABLE message_topic_bindings(unit_id TEXT PRIMARY KEY,run_id TEXT NOT NUL
 CREATE INDEX message_topics_conversation ON message_topics(conversation_id);
 CREATE INDEX message_topic_sources ON message_topic_bindings(source_key);`)}
 export function validateMessageTopics(db){db.prepare('SELECT topic_id,conversation_id,body FROM message_topics LIMIT 0').all();db.prepare('SELECT unit_id,run_id,topic_id,source_key,source_version FROM message_topic_bindings LIMIT 0').all()}
+export function bindQuietTopic(db, { runId, topicId, evidenceSourceKey, quoteMessageId }) {
+ for(const value of [runId,topicId,evidenceSourceKey,quoteMessageId])str(value)
+ const row=db.prepare('SELECT body FROM message_runs WHERE run_id=?').get(runId)
+ if(!row)fail('MESSAGE_RUN_NOT_FOUND')
+ const run=JSON.parse(row.body)
+ if(run.status!=='settled'||run.reason!=='message_quiet'||!run.context?.quoteRefs?.some(ref=>ref.messageId===quoteMessageId))fail('MESSAGE_QUIET_TOPIC_FORBIDDEN')
+ const topicRow=db.prepare('SELECT body FROM message_topics WHERE topic_id=?').get(topicId)
+ if(!topicRow)fail('MESSAGE_QUIET_TOPIC_NOT_FOUND')
+ const topic=JSON.parse(topicRow.body)
+ if(topic.conversationId!==run.conversationId||evidenceSourceKey===run.sourceKey)fail('MESSAGE_QUIET_TOPIC_SCOPE_MISMATCH')
+ const evidence=db.prepare(`SELECT 1 FROM message_topic_bindings b JOIN message_runs r ON r.run_id=b.run_id
+  WHERE b.source_key=? AND b.topic_id=? AND json_extract(r.body,'$.conversationId')=? LIMIT 1`).get(evidenceSourceKey,topicId,run.conversationId)
+ if(!evidence)fail('MESSAGE_QUIET_TOPIC_EVIDENCE_MISSING')
+ const unitId=`quiet:${run.runId}`
+ const existing=db.prepare('SELECT topic_id FROM message_topic_bindings WHERE unit_id=?').get(unitId)
+ if(existing&&existing.topic_id!==topicId)fail('MESSAGE_TOPIC_BINDING_CONFLICT')
+ if(!existing)db.prepare('INSERT INTO message_topic_bindings VALUES(?,?,?,?,?)').run(unitId,run.runId,topicId,run.sourceKey,run.sourceVersion)
+ return { topicId, unitId, bound: !existing }
+}
 export function reduceMessageTopic(db,{kind,args:a},ctx){
  if(kind!=='message.topic.upsert')return null
  for(const key of ['topicId','conversationId','sourceRunId','unitId','title'])str(a[key])
@@ -38,5 +57,6 @@ export function queryMessageTopics(db,a){
  if(a.kind==='message.topics'){const limit=a.limit??30;if(!Number.isSafeInteger(limit)||limit<1||limit>200)fail('MESSAGE_TOPIC_INVALID');return db.prepare('SELECT body FROM message_topics WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?').all(str(a.conversationId),limit).map(r=>JSON.parse(r.body))}
  if(a.kind==='message.topic.source')return db.prepare('SELECT DISTINCT t.body FROM message_topics t JOIN message_topic_bindings b ON b.topic_id=t.topic_id WHERE b.source_key=?').all(str(a.sourceKey)).map(r=>JSON.parse(r.body))
  if(a.kind==='message.topic.bindings')return db.prepare('SELECT b.source_key,b.source_version,b.unit_id,t.body FROM message_topic_bindings b JOIN message_topics t ON t.topic_id=b.topic_id WHERE t.conversation_id=? ORDER BY b.rowid').all(str(a.conversationId)).map(r=>({sourceKey:r.source_key,sourceVersion:r.source_version,unitId:r.unit_id,topic:JSON.parse(r.body)}))
+ if(a.kind==='message.topic.sources')return db.prepare('SELECT DISTINCT source_key FROM message_topic_bindings WHERE topic_id=?').all(str(a.topicId)).map(r=>r.source_key)
  return undefined
 }

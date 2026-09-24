@@ -309,6 +309,67 @@ test('第三方任务已创建进展同步即使含@也静默，不生成澄清�
   assert.equal(state.requests.length,0)
   assert.equal(state.commands.length,0)
   assert.deepEqual(await execution.store.query({kind:'run.list'}),[])
+  const mailbox=(await service.mailboxes()).messages.find(item=>item.messageId===message.messageId)
+  assert.equal(mailbox.routingStatus,'pending')
+  assert.deepEqual(mailbox.topicRefs,[])
+})
+test('已送达回复引用可将第三方进展静默绑定到唯一话题，且旧消息可确定性补录',async t=>{
+  const outbox=[]
+  let calls=0
+  const judge=async({stage,input})=>{calls++;return stage==='S'?splitOne(input.source.text):stage==='R'
+    ?{kind:'binding',disposition:'new',candidateId:null,evidence:['source']}
+    :{kind:'intent',actions:[{intent:'fact',arguments:{kind:'fact',text:input.text},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}
+  const {service,message,execution}=await fixture(t,'owner',undefined,{judge,legacy:{getGroup:id=>({groupId:id,responsibility:'处理本人交办事项',messages:[],outbox})}})
+  const origin=await service.ingest({...message,messageId:'source-1',text:'审核草稿保存的问题'})
+  await service.messages.process(origin.runId)
+  const topic=(await service.topics('g'))[0]
+  assert.ok(topic)
+  const progress={...message,messageId:'progress-1',text:'@孙鹏  任务已创建，开始处理。 任务：external-1 — 小煤球',quotedMessage:{messageId:'reply-1',content:'审核问题已核对'}}
+  const received=await service.ingest(progress)
+  await service.messages.process(received.runId)
+  assert.equal((await service.mailboxes()).messages.find(item=>item.messageId==='progress-1').routingStatus,'pending')
+  const priorCalls=calls
+  outbox.push({status:'sent',deliveredMessageId:'reply-1',sourceMessageId:'source-1'})
+  await service.messages.recover()
+  const routed=(await service.mailboxes()).messages.find(item=>item.messageId==='progress-1')
+  assert.equal(routed.routingStatus,'routed')
+  assert.deepEqual(routed.topicRefs.map(item=>item.topicId),[topic.topicId])
+  assert.ok((await service.topicContext({groupId:'g',topicId:topic.topicId})).messages.some(item=>item.messageId==='progress-1'))
+  assert.equal(calls,priorCalls)
+  assert.deepEqual(await execution.store.query({kind:'run.list'}),[])
+  await service.messages.recover()
+  assert.equal((await service.mailboxes()).messages.find(item=>item.messageId==='progress-1').topicRefs.length,1)
+})
+test('已完成的纯排查任务再次收到相同问题反馈时提出修复授权问题',async t=>{
+  const task={taskId:'old-draft',groupId:'g',title:'排查评审意见草稿再次进入未回显问题',objective:'排查草稿未回显，仅授权排查分析，不实施修改',state:'completed',outcome:'succeeded'}
+  const {service,message,execution}=await fixture(t,'participant',undefined,{legacy:{listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'
+    ?{kind:'binding',disposition:'existing',candidateId:'legacy:old-draft',evidence:['同一现象']}
+    :{kind:'intent',actions:[{intent:'fact',arguments:{kind:'fact',text:'问题仍然存在'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'receipt'}})
+  const received=await service.ingest({...message,text:'@孙鹏(孙鹏) 审核草稿保存依然有问题，填写评审意见点击保存草稿后，再次进入没有显示草稿内容'})
+  await service.messages.process(received.runId)
+  const state=await service.state(received.runId)
+  assert.equal(state.run.status,'waiting')
+  assert.equal(state.commands.length,0)
+  assert.equal(state.requests.length,1)
+  assert.match(state.requests[0].question,/是否需要我继续实施修复并验证/u)
+  assert.deepEqual(await execution.store.query({kind:'run.list'}),[])
+})
+test('旧排查任务的肯定答复只授权同一消息继续准入，随后可创建新工作流任务',async t=>{
+  const task={taskId:'old-draft',groupId:'g',title:'排查草稿未回显',objective:'排查草稿未回显，仅授权排查分析',state:'completed',outcome:'succeeded'}
+  const judge=async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'
+    ?{kind:'binding',disposition:'existing',candidateId:'legacy:old-draft',evidence:['同一现象']}
+    :input.clarificationAnswers?.length
+      ?{kind:'intent',actions:[{intent:'create',arguments:{objective:'核验草稿未回显新反馈',workflowId:'task-analysis'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
+      :{kind:'intent',actions:[{intent:'fact',arguments:{kind:'fact',text:'问题仍然存在'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
+  const {service,message,execution}=await fixture(t,'participant',undefined,{legacy:{getGroup:id=>({groupId:id,responsibility:'任务准入：肯定答复后准入',messages:[]}),listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge})
+  const received=await service.ingest({...message,text:'@孙鹏(孙鹏) 草稿未回显依然有问题'})
+  await service.messages.process(received.runId)
+  const request=(await service.state(received.runId)).requests[0]
+  await service.messages.resume({runId:received.runId,requestId:request.id,eventId:'confirm-1',actorId:'participant',answer:'需要，请继续修复'})
+  const state=await service.state(received.runId)
+  assert.equal(state.run.status,'settled')
+  assert.equal(state.commands[0].status,'applied')
+  assert.equal((await execution.store.query({kind:'run.list'})).length,1)
 })
 
 test('明确问小小鹏审核问题是否部署时即使I误判无动作也回读群任务',async t=>{

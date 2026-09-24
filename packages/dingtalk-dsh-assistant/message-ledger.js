@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics } from './message-topics.js'
+import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic } from './message-topics.js'
 
 export function isPassiveTaskProgress(body) {
   if (typeof body !== 'string') return false
@@ -121,7 +121,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       n.recallStatus='recalled';n.recalledAt=now;put(db,n.runId,'notification',n)
       return {result:{notification:n}}
     }
-    if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');if(n.requestId){const q=get(db,'request',n.requestId),r=run(db,n.runId);if(q.status!=='pending'||q.revision!==r.revision||r.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}n.status='sending';n.leaseEpoch++;n.startedAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:true}}
+    if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);if(source.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}n.status='sending';n.leaseEpoch++;n.startedAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:true}}
     if(a.leaseEpoch!==n.leaseEpoch)fail('MESSAGE_NOTIFICATION_STALE')
     if(kind==='message.notification.sent') {if(n.status!=='sending')fail('MESSAGE_NOTIFICATION_STALE');n.status='acknowledged';n.ack=a.ack;n.ackAt=now}
     else if(kind==='message.notification.readback') {if(!['acknowledged','unknown'].includes(n.status)||!a.evidence)fail('MESSAGE_NOTIFICATION_EVIDENCE_REQUIRED');n.status='delivered';n.evidence=a.evidence;n.deliveredAt=now}
@@ -170,12 +170,18 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const stalledContext=old.sourceVersion===6 && old.status==='waiting' && rows(db,old.runId,'node').some(node=>node.nodeId==='S'&&node.output?.output?.kind==='needs_context')
     if(old.sourceVersion>=5 && !(old.sourceVersion===5 && old.reason==='recovery_exhausted' && !old.budgetBaseline) && !stalledContext)fail('MESSAGE_REPROCESS_EXHAUSTED')
     const oldUnits=rows(db,old.runId,'unit')
-    if(!['waiting','needs_attention','pending'].includes(old.status) && !(old.status==='settled'&&oldUnits.length&&oldUnits.every(item=>item.status==='ignored')) || rows(db,old.runId,'command').length)fail('MESSAGE_REPROCESS_EFFECT_PENDING')
+    const oldCommands=rows(db,old.runId,'command'),oldNotifications=rows(db,old.runId,'notification')
+    const rejectedFacts=old.status==='settled'&&oldUnits.length>0&&oldCommands.length>0
+      && oldCommands.every(item=>item.kind==='fact'&&item.status==='rejected')
+      && oldNotifications.every(item=>item.status==='prepared')
+    if((!['waiting','needs_attention','pending'].includes(old.status) && !(old.status==='settled'&&oldUnits.length&&oldUnits.every(item=>item.status==='ignored')) && !rejectedFacts)
+      || oldCommands.length&&!rejectedFacts)fail('MESSAGE_REPROCESS_EFFECT_PENDING')
     if(db.prepare('SELECT 1 FROM message_runs WHERE run_id=?').get(str(a.newRunId)))fail('MESSAGE_REPROCESS_EXISTS')
     const sequence=old.context?.replayOfSequenceId??db.prepare('SELECT rowid AS seq FROM message_runs WHERE run_id=?').get(old.runId).seq
     const origin=old.context?.replayOf?run(db,old.context.replayOf):old
     const spent=db.prepare('SELECT claims,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(old.sourceKey)
     for(const request of rows(db,old.runId,'request').filter(item=>item.status==='pending')){request.status='superseded';request.reason='message_reprocessed';put(db,old.runId,'request',request)}
+    if(rejectedFacts)for(const notice of oldNotifications){notice.status='superseded';notice.supersededAt=now;put(db,old.runId,'notification',notice)}
     old.status='superseded';old.reason='message_reprocessed';save(db,old)
     const next={...old,runId:a.newRunId,sourceVersion:old.sourceVersion+1,revision:0,status:'pending',createdAt:now,
       context:{...old.context,occurredAt:old.context?.occurredAt??origin.context?.occurredAt??origin.createdAt,replayOf:origin.runId,replayOfSequenceId:sequence},snapshot:null,
@@ -266,11 +272,16 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   if(kind==='message.quiet') {
     const original=str(a.body)
     if(r.body!==original||(r.context?.quoteRefs?.length&&!isPassiveTaskProgress(original))||rows(db,r.runId,'command').length||!['pending','waiting'].includes(r.status))fail('MESSAGE_QUIET_NOT_ALLOWED')
-    if(!isQuietGroupMessage(original))fail('MESSAGE_QUIET_NOT_ALLOWED')
+    if(!isQuietGroupMessage(original)||a.topic&&!isPassiveTaskProgress(original))fail('MESSAGE_QUIET_NOT_ALLOWED')
     for(const request of rows(db,r.runId,'request').filter(item=>item.status==='pending')){request.status='superseded';request.reason='message_quiet';put(db,r.runId,'request',request)}
     for(const unit of rows(db,r.runId,'unit').filter(item=>item.status==='pending')){unit.status='ignored';put(db,r.runId,'unit',unit)}
     r.status='settled';r.reason='message_quiet';save(db,r)
-    return {result:{run:r}}
+    const binding=a.topic?bindQuietTopic(db,{runId:r.runId,...a.topic}):null
+    return {result:{run:r,binding}}
+  }
+  if(kind==='message.quiet.topic.bind') {
+    if(!isPassiveTaskProgress(r.body))fail('MESSAGE_QUIET_TOPIC_FORBIDDEN')
+    return {result:{binding:bindQuietTopic(db,{runId:r.runId,...a.topic})}}
   }
   if(kind==='message.material.record') {
     str(a.resourceRef)
@@ -414,6 +425,13 @@ export function queryMessages(db,a) {
   }
   if(a.kind==='message.outboundIds') {
     return db.prepare("SELECT json_extract(i.body,'$.evidence.messageId') AS message_id FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='notification' AND json_extract(r.body,'$.conversationId')=? AND json_extract(i.body,'$.evidence.messageId') IS NOT NULL").all(str(a.conversationId)).map(row=>row.message_id)
+  }
+  if(a.kind==='message.quiet.unbound') {
+    const limit=a.limit??100
+    if(!Number.isSafeInteger(limit)||limit<1||limit>200)fail('MESSAGE_QUERY_INVALID')
+    return db.prepare(`SELECT r.body FROM message_runs r LEFT JOIN message_topic_bindings b ON b.run_id=r.run_id
+      WHERE b.run_id IS NULL AND json_extract(r.body,'$.status')='settled' AND json_extract(r.body,'$.reason')='message_quiet'
+      ORDER BY r.rowid DESC LIMIT ?`).all(limit).map(row=>JSON.parse(row.body))
   }
   if(a.kind==='message.requestByReply') {
     const found=db.prepare("SELECT i.body FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='notification' AND json_extract(i.body,'$.requestId') IS NOT NULL AND json_extract(i.body,'$.evidence.messageId')=? AND json_extract(r.body,'$.conversationId')=?").all(str(a.messageId),str(a.conversationId))
