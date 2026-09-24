@@ -354,6 +354,19 @@ test('已完成的纯排查任务再次收到相同问题反馈时提出修复�
   assert.match(state.requests[0].question,/是否需要我继续实施修复并验证/u)
   assert.deepEqual(await execution.store.query({kind:'run.list'}),[])
 })
+test('旧任务缺标题且长目标进入R候选时仍能计算材料摘要',async t=>{
+  const task={taskId:'untitled',groupId:'g',objective:'历史目标'.repeat(90),state:'completed',outcome:'succeeded'}
+  let sawCandidate=false
+  const {service,message}=await fixture(t,'owner',undefined,{legacy:{listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'
+    ?(sawCandidate=true,assert.equal(input.candidates.find(item=>item.candidateId==='legacy:untitled').title,task.objective),{kind:'binding',disposition:'new',candidateId:null,evidence:['新消息']})
+    :{kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}})
+  const received=await service.ingest({...message,text:'历史目标需要核对'})
+  await service.messages.process(received.runId)
+  const state=await service.state(received.runId)
+  assert.notEqual(state.run.reason,'MESSAGE_CONTEXT_OR_DISPATCH_FAILED:INVALID_JSON_VALUE')
+  assert.notEqual(state.run.status,'needs_attention')
+  assert.equal(sawCandidate,true)
+})
 test('旧排查任务的肯定答复只授权同一消息继续准入，随后可创建新工作流任务',async t=>{
   const task={taskId:'old-draft',groupId:'g',title:'排查草稿未回显',objective:'排查草稿未回显，仅授权排查分析',state:'completed',outcome:'succeeded'}
   const judge=async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'
