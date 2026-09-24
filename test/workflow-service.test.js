@@ -104,7 +104,24 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
     if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
     return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '整理本条材料', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
   }
-  const service = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', ...options.config }, legacy, judge: options.judge ?? judge, execution, notifications, readResource: options.readResource, external: options.external })
+  const legacyJudge = options.judge ?? judge
+  const batchJudge = async request => request.stage === 'IB'
+    ? { kind: 'topic_intents', decisions: await Promise.all(request.input.units.map(async unit => ({
+      unitId: unit.unitId, intent: await legacyJudge({ ...request, stage: 'I', input: unit.input }),
+    }))) }
+    : legacyJudge(request)
+  const service = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', ...options.config }, legacy, judge: batchJudge, execution, notifications, readResource: options.readResource, external: options.external })
+  const process = service.messages.process.bind(service.messages)
+  service.messages.process = async runId => {
+    await process(runId)
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const state = await service.messages.state(runId)
+      if (['needs_attention', 'superseded'].includes(state.run.status) || state.requests.some(item => item.status === 'pending')
+        || state.run.status === 'settled' && state.commands.every(command => ['applied', 'rejected', 'failed', 'unknown', 'superseded'].includes(command.status))) return state
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    return service.messages.state(runId)
+  }
   t.after(async () => { await service.close(); await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
   const message = { groupId: 'g', messageId: 'm', text: '整理本条材料', senderOpenDingTalkId: actor }
   return { service, execution, message }
@@ -123,6 +140,7 @@ test('真实同库消息接纳→固定Task执行→看板结果；重复入站�
   assert.equal((await service.topicContext({groupId:'g',topicId:topic.topicId})).messages[0].messageId,message.messageId)
   const taskRunId = state.commands[0].result.runId
   await execution.controller.whenIdle(taskRunId)
+  assert.deepEqual((await service.recover()).failures, [])
   const tasks = await service.tasks()
   assert.equal(tasks.length, 1)
   assert.equal(tasks[0].state, 'completed')
@@ -419,6 +437,7 @@ test('本人可答复他人旧排查澄清，其他群成员不能冒用且不�
   await assert.rejects(service.resumeRequest({runId:received.runId,requestId:request.id,eventId:'outsider',answer:'修复'}, {channel:'im',actorId:'outsider',conversationId:'g'}),/WORKFLOW_ACTION_FORBIDDEN/u)
   const other=await service.ingest({...message,messageId:'other-reply',senderOpenDingTalkId:'outsider',text:'我也要修复',quotedMessage:{messageId:'clarify-sent'}})
   assert.equal(other.duplicate,false)
+  await service.messages.process(other.runId)
   assert.equal((await service.state(received.runId)).requests[0].status,'pending')
   const answer='修复并验证，完成后发uat提测'
   const eventId=`dws:${executionDigest(['','g','owner-reply'])}`
@@ -571,7 +590,7 @@ test('五类旧只读流程共享消息schema、可用列表和创建路由，�
   const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
   const catalog = service.catalog()
   assert.equal(catalog.engine, 'workflow-v2')
-  assert.deepEqual(catalog.messageStages.map(stage => stage.id), ['receive', 'context', 'S', 'R', 'I', 'dispatch'])
+  assert.deepEqual(catalog.messageStages.map(stage => stage.id), ['receive', 'context', 'S', 'R', 'routing-barrier', 'IB', 'intent-check', 'dispatch'])
   assert.equal(catalog.workflows.length, taskWorkflowCatalog.length)
   assert.ok(ids.every(id => catalog.workflows.some(item => item.id === id && item.status === 'available' && item.version && item.nodes.length)))
   assert.equal(catalog.workflows.find(item => item.id === 'task-data-change').status, 'unavailable')
@@ -686,7 +705,7 @@ test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入�
  assert.equal((await post('context',{...input,actorId:'owner'})).status,400)
  await assert.rejects(service.submitWebTask({...input,action:'context',taskId:task.taskId},{channel:'web',actorId:'attacker'}),/FORBIDDEN/)
  await assert.rejects(service.submitWebTask({action:'reissue-repository',taskId:task.taskId,repositoryId:'backend',requestId:'unauthorized'},{channel:'web',actorId:'attacker'}),/FORBIDDEN/)
- assert.equal((await post('context',input)).status,202);assert.equal((await post('context',input)).status,202)
+ const firstContext=await post('context',input);assert.equal(firstContext.status,202,await firstContext.text());assert.equal((await post('context',input)).status,202)
  assert.equal((await post('context',{...input,context:'冲突内容'})).status,409)
  let state=await execution.controller.state(original.runId);assert.equal(state.pendingInputCount,1);assert.equal(state.run.pauseRequested,true)
  assert.equal((await post('reopen',input)).status,409);assert.equal((await post('archive',{})).status,409)
@@ -725,7 +744,130 @@ test('C01 媒体连接器挂起不阻durable接收和独立SQLite读回',{timeou
  const received=await service.ingest({...message,resourceRefs:[{resourceId:'file'}]})
  try{await began;const persisted=await execution.store.query({kind:'message.run',runId:received.runId});assert.equal(persisted.run.body,message.text);assert.equal(persisted.commands.length,0);assert.equal((await execution.store.query({kind:'run.list'})).length,0)}finally{release()}
  await service.messages.process(received.runId)
- assert.equal((await service.state(received.runId)).commands[0].status,'applied')
+ let settled
+ for(let attempt=0;attempt<100;attempt++){
+   settled=await service.state(received.runId)
+   if(settled.commands[0]?.status==='applied')break
+   await new Promise(resolve=>setTimeout(resolve,10))
+ }
+ assert.equal(settled.commands[0].status,'applied')
+})
+
+test('方案阶段完成后等待确认，确认沿用业务Task并只启动下一阶段', async t => {
+  const judge = async ({ stage, input }) => {
+    if (stage === 'S') return splitOne(input.source.text)
+    if (stage === 'R') return input.candidates.length
+      ? { kind: 'binding', disposition: 'existing', candidateId: input.candidates[0].candidateId, evidence: ['原任务'] }
+      : { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
+    return input.text.startsWith('确认方案')
+      ? { kind: 'intent', actions: [{ intent: 'reopen', arguments: { objective: '继续执行', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '先给方案', workflowId: 'task-analysis', workflowPlan: [
+        { workflowId: 'task-analysis', gate: 'none' }, { workflowId: 'task-analysis', gate: 'confirmation' },
+      ] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+  }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
+  const first = await service.ingest({ ...message, text: '先给方案，确认后继续' })
+  const accepted = await service.messages.process(first.runId)
+  const taskId = accepted.commands[0].result.taskId
+  await execution.controller.whenIdle(accepted.commands[0].result.runId)
+  assert.deepEqual((await service.recover()).failures, [])
+  let plan = await execution.controller.taskPlan(taskId)
+  assert.equal(plan.task.status, 'waiting_confirmation')
+  assert.equal(plan.stages[0].status, 'succeeded')
+  assert.equal(plan.stages[1].status, 'waiting_confirmation')
+  assert.equal((await execution.store.query({ kind: 'run.list', taskId })).length, 1)
+  const second = await service.ingest({ ...message, messageId: 'confirm-stage', text: '确认方案，继续执行' })
+  const confirmed = await service.messages.process(second.runId)
+  assert.equal(confirmed.commands[0].status, 'applied')
+  plan = await execution.controller.taskPlan(taskId)
+  assert.equal(plan.stages[1].status, 'running')
+  assert.equal((await execution.store.query({ kind: 'run.list', taskId })).length, 2)
+  await execution.controller.whenIdle(plan.stages[1].runId)
+  assert.deepEqual((await service.recover()).failures, [])
+  assert.equal((await execution.controller.taskPlan(taskId)).task.status, 'succeeded')
+})
+
+test('编排UAT但缺受信适配器时只阻塞UAT阶段，不冒充提测完成', async t => {
+  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
+    : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
+      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '先分析再提测', workflowId: 'task-analysis', workflowPlan: [
+        { workflowId: 'task-analysis', gate: 'none' }, { workflowId: 'task-uat-delivery', gate: 'none' },
+      ] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
+  const received = await service.ingest({ ...message, text: '分析并提测' })
+  const result = await service.messages.process(received.runId)
+  assert.equal(result.commands.length, 1, JSON.stringify({ status: result.run.status, reason: result.run.reason, requests: result.requests }))
+  await execution.controller.whenIdle(result.commands[0].result.runId)
+  assert.deepEqual((await service.recover()).failures, [])
+  const task = (await service.tasks())[0]
+  assert.equal(task.state, 'waiting')
+  assert.equal(task.plan.stages[1].status, 'blocked')
+  assert.match(task.waitingReason, /受信执行适配器/)
+  assert.equal((await execution.store.query({ kind: 'run.list', taskId: task.taskId })).length, 1)
+})
+
+test('执行中收到追加阶段意图时保留当前Run，完成后从核验产物启动后继', async t => {
+  let release, began
+  const gate = new Promise(resolve => { release = resolve })
+  const started = new Promise(resolve => { began = resolve })
+  t.after(() => release())
+  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
+    : stage === 'R' ? input.candidates.length
+      ? { kind: 'binding', disposition: 'existing', candidateId: input.candidates[0].candidateId, evidence: ['原任务'] }
+      : { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
+      : input.text.startsWith('追加')
+        ? { kind: 'intent', actions: [{ intent: 'reopen', arguments: { objective: '追加后续分析', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+        : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '先排查', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge,
+    execute: async ({ input }) => { if (input.request === '先排查') { began(); await gate }; return { summary: input.request, evidenceIds: input.materials.map(item => item.id), limitations: [] } } })
+  const first = await service.ingest({ ...message, text: '先排查' })
+  const accepted = await service.messages.process(first.runId)
+  await started
+  const taskId = accepted.commands[0].result.taskId
+  const firstRunId = accepted.commands[0].result.runId
+  const second = await service.ingest({ ...message, messageId: 'append-later', text: '追加后续分析' })
+  const appended = await service.messages.process(second.runId)
+  assert.equal(appended.commands[0].status, 'applied')
+  let plan = await execution.controller.taskPlan(taskId)
+  assert.equal(plan.stages.length, 2)
+  assert.equal(plan.stages[0].runId, firstRunId)
+  assert.equal(plan.stages[1].status, 'blocked')
+  release(); await execution.controller.whenIdle(firstRunId)
+  assert.deepEqual((await service.recover()).failures, [])
+  plan = await execution.controller.taskPlan(taskId)
+  assert.equal(plan.stages[1].status, 'running')
+  await execution.controller.whenIdle(plan.stages[1].runId)
+  assert.deepEqual((await service.recover()).failures, [])
+  assert.equal((await execution.controller.taskPlan(taskId)).task.status, 'succeeded')
+  assert.equal((await execution.store.query({ kind: 'run.list', taskId })).length, 2)
+})
+
+test('纯排查完成后续办仍用原业务Task，原Run成功证据不重跑', async t => {
+  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
+    : stage === 'R' ? input.candidates.length
+      ? { kind: 'binding', disposition: 'existing', candidateId: input.candidates[0].candidateId, evidence: ['原任务'] }
+      : { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
+      : input.text.startsWith('继续')
+        ? { kind: 'intent', actions: [{ intent: 'reopen', arguments: { objective: '继续分析', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+        : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '仅排查', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
+  const first = await service.ingest({ ...message, text: '仅排查' })
+  const accepted = await service.messages.process(first.runId)
+  const taskId = accepted.commands[0].result.taskId, firstRunId = accepted.commands[0].result.runId
+  await execution.controller.whenIdle(firstRunId)
+  assert.deepEqual((await service.recover()).failures, [])
+  assert.equal((await execution.controller.taskPlan(taskId)).task.status, 'succeeded')
+  const second = await service.ingest({ ...message, messageId: 'continue-task', text: '继续分析' })
+  const resumed = await service.messages.process(second.runId)
+  assert.equal(resumed.commands[0].status, 'applied')
+  const plan = await execution.controller.taskPlan(taskId)
+  assert.equal(plan.task.planRevision, 2)
+  assert.equal(plan.stages[0].runId, firstRunId)
+  assert.equal(plan.stages[0].status, 'succeeded')
+  assert.equal(plan.stages[1].status, 'running')
+  await execution.controller.whenIdle(plan.stages[1].runId)
+  assert.deepEqual((await service.recover()).failures, [])
+  assert.equal((await service.tasks()).length, 1)
 })
 
 test('C13 渠道读回挂起时新业务和取消继续，ACK不冒充送达',{timeout:7000},async t=>{

@@ -21,6 +21,216 @@ const split = { kind: 'split', units: [{ spans: [{ start: 0, end: 2 }], goalText
 const binding = { kind: 'binding', disposition: 'conversation', candidateId: null, evidence: ['source'] }
 const intent = { kind: 'intent', actions: [{ intent: 'status', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
 
+test('三条同话题先全部关联，再一次 IB 只创建一个业务任务', async t => {
+  let releaseLast, lastStarted
+  const gate = new Promise(resolve => { releaseLast = resolve })
+  const started = new Promise(resolve => { lastStarted = resolve })
+  const calls = [], created = []
+  const { workflow } = await fixture(t, {
+    context: { bindTopic: async ({ run, unit }) => ({ topicId: 'topic-three', conversationId: run.conversationId,
+      sourceRunId: run.runId, unitId: unit.unitId, title: '一项任务', facts: [] }), facts: async () => ({}),
+      validateAction: async () => ({ allowed: true }) },
+    judge: async ({ stage, input }) => {
+      calls.push(stage)
+      if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }], sharedConstraints: [] }
+      if (stage === 'R') { if (input.sourceKey === 'three') { lastStarted(); await gate }; return binding }
+      if (stage === 'IB') return { kind: 'topic_intents', decisions: input.units.map((item, index) => ({ unitId: item.unitId,
+        intent: { kind: 'intent', actions: [index === 0
+          ? { intent: 'create', arguments: { objective: '合并办理', workflowId: 'task-analysis' }, dependsOn: [] }
+          : { intent: 'no_action', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' } })) }
+      throw new Error(`unexpected stage ${stage}`)
+    },
+    handlers: { create: async (_, info) => { created.push(info.run.sourceKey); return { taskId: 'one-task' } } },
+  })
+  const items = await Promise.all(['one', 'two', 'three'].map(sourceKey => workflow.receive({ sourceKey, sourceVersion: 1,
+    conversationId: 'group', actorId: 'alice', body: sourceKey }, { process: false })))
+  const flights = items.map(item => workflow.process(item.runId))
+  await started
+  assert.equal(calls.filter(stage => stage === 'IB').length, 0)
+  releaseLast(); await Promise.all(flights)
+  for (let attempt = 0; attempt < 100 && created.length < 1; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.deepEqual(created, ['one'])
+  assert.equal(calls.filter(stage => stage === 'IB').length, 1)
+})
+
+test('同群待关联消息阻止意图判断；归类完成后同话题只判断一次且各来源独立派发', async t => {
+  let releaseSecond, secondStarted
+  const blocked = new Promise(resolve => { releaseSecond = resolve })
+  const started = new Promise(resolve => { secondStarted = resolve })
+  const calls = [], sent = []
+  const { workflow, store } = await fixture(t, {
+    context: { bindTopic: async ({ run, unit }) => ({ topicId: 'topic-a', conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.id ?? unit.unitId, title: '查询', facts: [] }), facts: async () => ({}) },
+    judge: async ({ stage, input }) => {
+      calls.push(stage)
+      if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }], sharedConstraints: [] }
+      if (stage === 'R') { if (input.sourceKey === 'm2') { secondStarted(); await blocked }; return binding }
+      if (stage === 'IB') return { kind: 'topic_intents', decisions: input.units.map(item => ({ unitId: item.unitId, intent })) }
+      throw new Error(`unexpected stage ${stage}`)
+    },
+    handlers: { status: async (_, info) => { sent.push(info.run.sourceKey); return { ok: true } } },
+  })
+  const one = await workflow.receive({ sourceKey: 'm1', sourceVersion: 1, conversationId: 'group', actorId: 'alice', body: '查A' }, { process: false })
+  const two = await workflow.receive({ sourceKey: 'm2', sourceVersion: 1, conversationId: 'group', actorId: 'bob', body: '查B' }, { process: false })
+  const firstFlight = workflow.process(one.runId), secondFlight = workflow.process(two.runId)
+  await started
+  assert.equal(calls.filter(stage => stage === 'IB').length, 0)
+  assert.ok((await store.query({ kind: 'message.routing.pending', conversationId: 'group' })).length >= 1)
+  releaseSecond(); await Promise.all([firstFlight, secondFlight])
+  for (let attempt = 0; attempt < 100 && sent.length < 2; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(sent.length, 2, JSON.stringify({ calls, one: await workflow.state(one.runId), two: await workflow.state(two.runId), topic: await store.query({ kind: 'message.topic', topicId: 'topic-a' }) }))
+  assert.deepEqual(sent.sort(), ['m1', 'm2'])
+  assert.equal(calls.filter(stage => stage === 'IB').length, 1)
+  assert.equal((await store.query({ kind: 'message.topic', topicId: 'topic-a' })).processedRevision, 2)
+})
+
+test('意图判断途中同话题新消息使旧结果失效并集合重判', async t => {
+  let releaseFirst, firstStarted
+  const held = new Promise(resolve => { releaseFirst = resolve })
+  const started = new Promise(resolve => { firstStarted = resolve })
+  const batches = [], sent = [], stages = []
+  const { workflow } = await fixture(t, {
+    context: { bindTopic: async ({ run, unit }) => ({ topicId: 'topic-shared', conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.id ?? unit.unitId, title: '查询', facts: [] }), facts: async () => ({}) },
+    judge: async ({ stage, input }) => {
+      stages.push(stage)
+      if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }], sharedConstraints: [] }
+      if (stage === 'R') return binding
+      if (stage === 'IB') { batches.push(input.units.map(item => item.unitId)); if (batches.length === 1) { firstStarted(); await held }; return { kind: 'topic_intents', decisions: input.units.map(item => ({ unitId: item.unitId, intent })) } }
+      throw new Error(`unexpected stage ${stage}`)
+    },
+    handlers: { status: async (_, info) => { sent.push(info.run.sourceKey); return { ok: true } } },
+  })
+  const one = await workflow.receive({ sourceKey: 'one', sourceVersion: 1, conversationId: 'group', actorId: 'alice', body: '查A' }, { process: false })
+  await workflow.process(one.runId); await started
+  const two = await workflow.receive({ sourceKey: 'two', sourceVersion: 1, conversationId: 'group', actorId: 'alice', body: '查B' }, { process: false })
+  await workflow.process(two.runId)
+  releaseFirst()
+  for (let attempt = 0; attempt < 100 && sent.length < 2; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(batches.length, 2)
+  assert.deepEqual(batches.map(batch => batch.length), [1, 2])
+  assert.deepEqual(sent.sort(), ['one', 'two'])
+  assert.equal(stages.filter(stage => stage === 'S').length, 2)
+  assert.equal(stages.filter(stage => stage === 'R').length, 2)
+})
+
+test('不同话题使用独立 IB 判断且可并行', async t => {
+  let release
+  const held = new Promise(resolve => { release = resolve })
+  const started = new Set()
+  const { workflow } = await fixture(t, {
+    context: { bindTopic: async ({ run, unit }) => ({ topicId: `topic-${run.sourceKey}`, conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.unitId, title: run.body, facts: [] }), facts: async () => ({}) },
+    judge: async ({ stage, input }) => {
+      if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }], sharedConstraints: [] }
+      if (stage === 'R') return binding
+      if (stage === 'IB') { started.add(input.topicId); await held; return { kind: 'topic_intents', decisions: input.units.map(item => ({ unitId: item.unitId, intent })) } }
+      throw new Error(`unexpected stage ${stage}`)
+    },
+    handlers: { status: async () => ({ ok: true }) },
+  })
+  const one = await workflow.receive({ sourceKey: 'a', sourceVersion: 1, conversationId: 'group', actorId: 'alice', body: '查A' }, { process: false })
+  const two = await workflow.receive({ sourceKey: 'b', sourceVersion: 1, conversationId: 'group', actorId: 'alice', body: '查B' }, { process: false })
+  await Promise.all([workflow.process(one.runId), workflow.process(two.runId)])
+  for (let attempt = 0; attempt < 100 && started.size < 2; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.deepEqual([...started].sort(), ['topic-a', 'topic-b'])
+  release()
+})
+
+test('I 期间收到另一话题消息，待其归类后复用原话题已完成判断', async t => {
+  let releaseIntent, releaseRouting, intentStarted, routingStarted
+  const intentGate = new Promise(resolve => { releaseIntent = resolve })
+  const routingGate = new Promise(resolve => { releaseRouting = resolve })
+  const sawIntent = new Promise(resolve => { intentStarted = resolve })
+  const sawRouting = new Promise(resolve => { routingStarted = resolve })
+  const intentCalls = [], sent = []
+  const { workflow } = await fixture(t, {
+    context: { bindTopic: async ({ run, unit }) => ({ topicId: `topic-${run.sourceKey}`, conversationId: run.conversationId,
+      sourceRunId: run.runId, unitId: unit.unitId, title: run.body, facts: [] }), facts: async () => ({}) },
+    judge: async ({ stage, input }) => {
+      if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }], sharedConstraints: [] }
+      if (stage === 'R') { if (input.sourceKey === 'b') { routingStarted(); await routingGate }; return binding }
+      if (stage === 'IB') { intentCalls.push(input.topicId); if (input.topicId === 'topic-a') { intentStarted(); await intentGate }; return { kind: 'topic_intents', decisions: input.units.map(item => ({ unitId: item.unitId, intent })) } }
+      throw new Error(`unexpected stage ${stage}`)
+    },
+    handlers: { status: async (_, info) => { sent.push(info.run.sourceKey); return { ok: true } } },
+  })
+  const one = await workflow.receive({ sourceKey: 'a', sourceVersion: 1, conversationId: 'group', actorId: 'alice', body: '查A' }, { process: false })
+  await workflow.process(one.runId); await sawIntent
+  const two = await workflow.receive({ sourceKey: 'b', sourceVersion: 1, conversationId: 'group', actorId: 'alice', body: '查B' }, { process: false })
+  const second = workflow.process(two.runId)
+  await sawRouting
+  releaseIntent()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.deepEqual(sent, [])
+  releaseRouting(); await second
+  for (let attempt = 0; attempt < 100 && sent.length < 2; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.deepEqual(sent.sort(), ['a', 'b'])
+  assert.equal(intentCalls.filter(topic => topic === 'topic-a').length, 1)
+})
+
+test('R 已持久归属但等待另一消息时重建运行器，恢复后只派发一次', async t => {
+  const sent = []
+  const makeOptions = () => ({
+    context: { bindTopic: async ({ run, unit }) => ({ topicId: 'topic-recovery', conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.unitId, title: '查询', facts: [] }), facts: async () => ({}) },
+    judge: async ({ stage, input }) => {
+      if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }], sharedConstraints: [] }
+      if (stage === 'R') return binding
+      if (stage === 'IB') return { kind: 'topic_intents', decisions: input.units.map(item => ({ unitId: item.unitId, intent })) }
+      throw new Error(`unexpected stage ${stage}`)
+    },
+    handlers: { status: async (_, info) => { sent.push(info.run.sourceKey); return { ok: true } } },
+  })
+  const { workflow, store } = await fixture(t, makeOptions())
+  const one = await workflow.receive({ sourceKey: 'recover-one', sourceVersion: 1, conversationId: 'group', actorId: 'alice', body: '查A' }, { process: false })
+  const two = await workflow.receive({ sourceKey: 'recover-two', sourceVersion: 1, conversationId: 'group', actorId: 'alice', body: '查B' }, { process: false })
+  await workflow.process(one.runId)
+  assert.equal((await workflow.state(one.runId)).run.routingStatus, 'routing_complete')
+  assert.deepEqual(sent, [])
+  await workflow.close()
+  const restarted = createMessageWorkflow({ store, ...makeOptions() })
+  t.after(() => restarted.close())
+  await restarted.recover()
+  for (let attempt = 0; attempt < 100 && sent.length < 2; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.deepEqual(sent.sort(), ['recover-one', 'recover-two'])
+  await restarted.recover()
+  assert.equal(sent.length, 2)
+  await restarted.close()
+})
+
+test('同话题不同发送者逐单元授权，拒绝者不继承首条消息权限', async t => {
+  const sent = []
+  const { workflow } = await fixture(t, {
+    context: { bindTopic: async ({ run, unit }) => ({ topicId: 'topic-auth', conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.unitId, title: '查询', facts: [] }), facts: async () => ({}), validateAction: async (_, info) => ({ allowed: info.run.actorId === 'alice', reason: '无权' }) },
+    judge: async ({ stage, input }) => {
+      if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }], sharedConstraints: [] }
+      if (stage === 'R') return binding
+      if (stage === 'IB') return { kind: 'topic_intents', decisions: input.units.map(item => ({ unitId: item.unitId, intent })) }
+      throw new Error(`unexpected stage ${stage}`)
+    },
+    handlers: { status: async (_, info) => { sent.push(info.run.actorId); return { ok: true } } },
+  })
+  const one = await workflow.receive({ sourceKey: 'auth-one', sourceVersion: 1, conversationId: 'group', actorId: 'alice', body: '查A' }, { process: false })
+  const two = await workflow.receive({ sourceKey: 'auth-two', sourceVersion: 1, conversationId: 'group', actorId: 'bob', body: '查B' }, { process: false })
+  await Promise.all([workflow.process(one.runId), workflow.process(two.runId)])
+  for (let attempt = 0; attempt < 100 && (await workflow.state(two.runId)).run.status !== 'settled'; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.deepEqual(sent, ['alice'])
+  assert.equal((await workflow.state(two.runId)).commands[0].status, 'rejected')
+})
+
+test('message.task.latest 返回最近已应用的续办命令，message.task 保持首条来源', async t => {
+  const { store } = await fixture(t, { judge: async () => { throw new Error('MODEL_NOT_EXPECTED') } })
+  for (const [version, kind] of [[1, 'create'], [2, 'reopen']]) {
+    const runId = `latest-run-${version}`, sourceKey = `latest-source-${version}`, unitId = `${runId}:u0`, commandId = `${runId}:command`
+    await store.command({ id: `receive:${runId}`, kind: 'message.receive', args: { runId, sourceKey, sourceVersion: 1, conversationId: 'group', actorId: 'owner', body: '继续', policy: {} } })
+    await store.command({ id: `split:${runId}`, kind: 'message.split', args: { runId, units: [{ unitId, goalText: '继续', spans: [{ start: 0, end: 2 }], constraints: [], contextNeeds: [] }] } })
+    await store.command({ id: `accept:${runId}`, kind: 'message.accept', args: { runId, unitId, commands: [{ commandId, kind, args: { taskId: 'same-task', arguments: { objective: `目标${version}` } }, dependsOn: [] }] } })
+    const claimed = await store.command({ id: `claim:${runId}`, kind: 'message.command.claim', args: { commandId } })
+    await store.command({ id: `complete:${runId}`, kind: 'message.command.complete', args: { commandId, leaseEpoch: claimed.result.command.leaseEpoch, result: { ok: true } } })
+  }
+  assert.equal((await store.query({ kind: 'message.task', taskId: 'same-task' })).command.kind, 'create')
+  const latest = await store.query({ kind: 'message.task.latest', taskId: 'same-task' })
+  assert.equal(latest.command.kind, 'reopen')
+  assert.equal(latest.run.runId, 'latest-run-2')
+})
+
 test('A关联等待时B独立接纳和回复；重复接收不重复派发', async t => {
   let release, bDone
   const blocked = new Promise(resolve => { release = resolve }), done = new Promise(resolve => { bDone = resolve })

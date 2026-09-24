@@ -9,7 +9,7 @@ import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow
 test('单Task恢复失败和正在执行Task不能阻止其它恢复与通知扫描',async()=>{
  const recovered=[],queries=[]
  const store={command:async()=>({result:{}}),query:async q=>{queries.push(q.kind);if(q.kind==='run.list')return [{runId:'running',status:'running'},{runId:'bad',status:'waiting'},{runId:'good',status:'waiting'},{runId:'check-failed',status:'waiting'}];if(q.kind==='run')return {nodes:q.runId==='check-failed'?[{waitReason:{reference:'ENGINEERING_VERIFICATION_FAILED'}}]:[]};return []}}
- const controller={recover:async({runId})=>{recovered.push(runId);if(runId!=='good')throw Object.assign(new Error('busy'),{code:runId==='running'?'EXECUTOR_STILL_ACTIVE':'EFFECT_UNKNOWN'})}}
+ const controller={pendingTaskPlans:async()=>[],recover:async({runId})=>{recovered.push(runId);if(runId!=='good')throw Object.assign(new Error('busy'),{code:runId==='running'?'EXECUTOR_STILL_ACTIVE':'EFFECT_UNKNOWN'})}}
  const service=await openWorkflowService({ctx:{},config:{groupIds:['g'],ownerActorId:'a'},legacy:{getAgentConfig:()=>({provider:'test',model:'test'}),getGroup:()=>({messages:[]})},judge:async()=>{},execution:{store,controller,artifacts:{}}})
  try {const result=await service.recover();assert.deepEqual(recovered,['bad','good']);assert.ok(queries.includes('message.list'));assert.equal(result.failures.length,1)}finally{await service.close()}
 })

@@ -2,6 +2,7 @@ import { executionDigest, executionError } from './execution-artifacts.js'
 import { createHash } from 'node:crypto'
 import { freezeCandidate, readCandidate, verifyCandidate } from './execution-candidate.js'
 export { createReadOnlyTaskWorkflows } from './task-readonly-workflows.js'
+export { createGeneralTaskWorkflow } from './task-general-workflow.js'
 
 const text = { type: 'string' }
 function verificationFailure(verification) {

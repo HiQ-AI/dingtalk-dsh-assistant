@@ -8,6 +8,19 @@ CREATE TABLE message_topic_bindings(unit_id TEXT PRIMARY KEY,run_id TEXT NOT NUL
 CREATE INDEX message_topics_conversation ON message_topics(conversation_id);
 CREATE INDEX message_topic_sources ON message_topic_bindings(source_key);`)}
 export function validateMessageTopics(db){db.prepare('SELECT topic_id,conversation_id,body FROM message_topics LIMIT 0').all();db.prepare('SELECT unit_id,run_id,topic_id,source_key,source_version FROM message_topic_bindings LIMIT 0').all()}
+export function invalidateMessageSourceTopics(db,sourceKey,now){
+ for(const row of db.prepare('SELECT DISTINCT t.body FROM message_topics t JOIN message_topic_bindings b ON b.topic_id=t.topic_id WHERE b.source_key=?').all(sourceKey)){
+  const topic=JSON.parse(row.body);topic.inputRevision=(topic.inputRevision??0)+1;topic.updatedAt=now
+  db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(encode(topic),topic.topicId)
+ }
+}
+export function unbindMessageUnit(db,unitId,now){
+ const row=db.prepare('SELECT topic_id FROM message_topic_bindings WHERE unit_id=?').get(unitId)
+ if(!row)return
+ const topicRow=db.prepare('SELECT body FROM message_topics WHERE topic_id=?').get(row.topic_id)
+ if(topicRow){const topic=JSON.parse(topicRow.body);topic.inputRevision=(topic.inputRevision??0)+1;topic.updatedAt=now;db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(encode(topic),topic.topicId)}
+ db.prepare('DELETE FROM message_topic_bindings WHERE unit_id=?').run(unitId)
+}
 export function bindQuietTopic(db, { runId, topicId, evidenceSourceKey, quoteMessageId }) {
  for(const value of [runId,topicId,evidenceSourceKey,quoteMessageId])str(value)
  const row=db.prepare('SELECT body FROM message_runs WHERE run_id=?').get(runId)
@@ -46,7 +59,7 @@ export function reduceMessageTopic(db,{kind,args:a},ctx){
  if(topic.facts.length>256)fail('MESSAGE_TOPIC_CAPACITY')
  const bound=db.prepare('SELECT topic_id FROM message_topic_bindings WHERE unit_id=?').get(a.unitId)
  if(bound&&bound.topic_id!==a.topicId)fail('MESSAGE_TOPIC_BINDING_CONFLICT')
- topic.revision++;topic.updatedAt=ctx.now
+ topic.revision++;topic.inputRevision=(topic.inputRevision??0)+(!bound?1:0);topic.updatedAt=ctx.now
  db.prepare('INSERT INTO message_topics VALUES(?,?,?) ON CONFLICT(topic_id) DO UPDATE SET body=excluded.body').run(topic.topicId,topic.conversationId,encode(topic))
  if(!bound)db.prepare('INSERT INTO message_topic_bindings VALUES(?,?,?,?,?)').run(a.unitId,a.sourceRunId,a.topicId,source.sourceKey,source.sourceVersion)
  u.topicId=topic.topicId;db.prepare('UPDATE message_items SET body=? WHERE item_id=?').run(encode(u),'unit:'+a.unitId)
@@ -58,5 +71,14 @@ export function queryMessageTopics(db,a){
  if(a.kind==='message.topic.source')return db.prepare('SELECT DISTINCT t.body FROM message_topics t JOIN message_topic_bindings b ON b.topic_id=t.topic_id WHERE b.source_key=?').all(str(a.sourceKey)).map(r=>JSON.parse(r.body))
  if(a.kind==='message.topic.bindings')return db.prepare('SELECT b.source_key,b.source_version,b.unit_id,t.body FROM message_topic_bindings b JOIN message_topics t ON t.topic_id=b.topic_id WHERE t.conversation_id=? ORDER BY b.rowid').all(str(a.conversationId)).map(r=>({sourceKey:r.source_key,sourceVersion:r.source_version,unitId:r.unit_id,topic:JSON.parse(r.body)}))
  if(a.kind==='message.topic.sources')return db.prepare('SELECT DISTINCT source_key FROM message_topic_bindings WHERE topic_id=?').all(str(a.topicId)).map(r=>r.source_key)
+ if(a.kind==='message.topic.pending')return db.prepare(`SELECT t.body FROM message_topics t WHERE t.conversation_id=? AND EXISTS (
+   SELECT 1 FROM message_topic_bindings b JOIN message_items i ON i.item_id='unit:'||b.unit_id
+   JOIN message_runs r ON r.run_id=b.run_id JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=COALESCE(json_extract(r.body,'$.validSourceVersion'),r.source_version)
+   WHERE b.topic_id=t.topic_id AND json_extract(i.body,'$.status')='pending'
+ ) ORDER BY t.rowid`).all(str(a.conversationId)).map(r=>JSON.parse(r.body))
+ if(a.kind==='message.topic.units')return db.prepare(`SELECT i.body AS unit,r.body AS run FROM message_topic_bindings b
+   JOIN message_items i ON i.item_id='unit:'||b.unit_id JOIN message_runs r ON r.run_id=b.run_id
+   JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=COALESCE(json_extract(r.body,'$.validSourceVersion'),r.source_version)
+   WHERE b.topic_id=? AND json_extract(i.body,'$.status')='pending' ORDER BY r.rowid,i.rowid`).all(str(a.topicId)).map(row=>({unit:JSON.parse(row.unit),run:JSON.parse(row.run)}))
  return undefined
 }

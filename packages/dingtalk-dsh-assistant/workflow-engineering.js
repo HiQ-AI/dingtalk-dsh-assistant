@@ -176,7 +176,8 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (!store) fail('ENGINEERING_REGISTRY_NOT_RESTORED')
     if (info.run.actorId !== ownerActorId && info.authorizedGroupRequest !== true) fail('WORKFLOW_ACTION_FORBIDDEN')
     const taskId = text(action.taskId, 'WORKFLOW_TASK_ID_REQUIRED'), commandId = text(info.commandId, 'WORKFLOW_COMMAND_REQUIRED')
-    const workflowId = `task-engineering-${executionDigest(commandId).slice(0, 40)}`, runId = `run-${executionDigest(commandId).slice(0, 40)}`
+    const workflowId = `task-engineering-${executionDigest(commandId).slice(0, 40)}`
+    const runId = info.stageRunId ? text(info.stageRunId, 'WORKFLOW_RUN_ID_REQUIRED') : `run-${executionDigest(commandId).slice(0, 40)}`
     const request = text(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
     const repoId = text(action.arguments.repositoryId, 'ENGINEERING_REPOSITORY_REQUIRED'), entry = configs.get(repoId)
     if (!entry) fail('ENGINEERING_REPOSITORY_NOT_ADMITTED')
