@@ -138,6 +138,17 @@ export async function apply(ctx, config = {}) {
     notifications: {
       canDisclose: async notification => workflowConfig.groupIds.includes(notification.payload.conversationId) && notification.disclosure.conversationId === notification.payload.conversationId,
       send: notification => sendWorkflowNotification(dwsAdapter, notification),
+      recall: async ({ messageId }) => dwsAdapter.recallMessage(messageId),
+      readbackRecall: async ({ conversationId, messageId, ack }) => {
+        if ((ack?.recallStatus ?? ack?.result?.recallStatus) !== 'SUCCESS') return undefined
+        const now = new Date()
+        const local = date => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(date)
+        const start = local(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000))
+        const end = local(new Date(now.getTime() + 60 * 60 * 1000))
+        const messages = await dwsAdapter.readConversation(conversationId, { start, end })
+        if (messages.some(item => item.messageId === messageId)) return undefined
+        return { messageId, conversationId, recallStatus: 'SUCCESS', observedAt: now.toISOString(), queryStart: start, queryEnd: end, ack }
+      },
       readback: async notification => {
         const ack = notification.ack
         let messageId = ack?.messageId ?? ack?.result?.messageId
@@ -171,6 +182,9 @@ export async function apply(ctx, config = {}) {
       return workflow.reprocessMessage(runId, { channel: 'web', actorId: workflowConfig.webActorId })
     }
     runtime.getWorkflowMailboxes = () => workflow.mailboxes()
+    runtime.prepareWorkflowNotificationOperation = args => workflow.prepareWorkflowNotificationOperation(args)
+    runtime.executeWorkflowNotificationOperation = args => workflow.executeWorkflowNotificationOperation(args)
+    runtime.reconcileWorkflowNotificationOperation = args => workflow.reconcileWorkflowNotificationOperation(args)
     runtime.listWorkflowTopics = groupId => workflow.topics(groupId)
     runtime.getWorkflowTopicContext = args => workflow.topicContext(args)
     runtime.getWorkflowCatalog = () => workflow.catalog()

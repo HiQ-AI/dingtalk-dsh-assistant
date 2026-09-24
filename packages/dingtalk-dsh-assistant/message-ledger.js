@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic, invalidateMessageSourceTopics, unbindMessageUnit } from './message-topics.js'
 
 export function isPassiveTaskProgress(body) {
@@ -26,6 +26,15 @@ const fail = code => { throw Object.assign(new Error(code), { code }) }
 const str = v => { if (typeof v !== 'string' || !v.trim()) fail('MESSAGE_INVALID_ARGUMENT'); return v }
 const json = v => JSON.stringify(v)
 const canonical=v=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v
+const textHash=v=>createHash('sha256').update(str(v)).digest('hex')
+const digest=v=>createHash('sha256').update(json(canonical(v))).digest('hex')
+function notificationFactDigest(db,n){
+  const replacements=db.prepare("SELECT body FROM message_items WHERE kind='notification-replacement' AND json_extract(body,'$.restoresNotificationId')=? ORDER BY rowid").all(n.id).map(row=>JSON.parse(row.body).messageId)
+  const command=n.commandId?get(db,'command',n.commandId):null,request=n.requestId?get(db,'request',n.requestId):null
+  return digest({id:n.id,eventKey:n.eventKey??null,status:n.status,payload:n.payload,evidenceMessageId:n.evidence?.messageId??null,recallStatus:n.recallStatus??null,replacements,
+    command:command?{status:command.status,kind:command.kind,args:command.args,result:command.result}:null,
+    request:request?{status:request.status,kind:request.kind,revision:request.revision}:null})
+}
 const unitMeaning=u=>Object.fromEntries(Object.entries(u).filter(([k])=>!['id','runId','revision','status','corrections','preservedUnitId','topicId'].includes(k)))
 
 export function installMessageSchema(db) {
@@ -82,6 +91,7 @@ export function recoverMessages(db) {
     const r=JSON.parse(row.body)
     for(const n of rows(db,r.runId,'node')) if(n.status==='running') { n.status='failed'; n.error='process_interrupted'; n.retryAt=new Date().toISOString(); put(db,r.runId,'node',n) }
     for(const n of rows(db,r.runId,'notification'))if(n.status==='sending'){n.status='unknown';put(db,r.runId,'notification',n)}
+    for(const operation of rows(db,r.runId,'notification-operation'))if(operation.status==='in_flight'){operation.status='unknown';operation.error='process_interrupted';put(db,r.runId,'notification-operation',operation)}
     for(const c of rows(db,r.runId,'command')) if(c.status==='running') { c.status='unknown'; put(db,r.runId,'command',c) }
   }
 }
@@ -120,6 +130,57 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   if(!kind.startsWith('message.')) return null
   const now=ctx.now
   if(kind.startsWith('message.notification.')) {
+    if(kind==='message.notification.operation.prepare') {
+      const n=get(db,'notification',a.notificationId),type=str(a.type),operationId=str(a.operationId),reason=str(a.reason),authorizationRef=str(a.authorizationRef)
+      const existing=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-operation:'+operationId)
+      if(existing){
+        const prior=JSON.parse(existing.body),s=prior.snapshot
+        if(s.notificationId!==n.id||s.type!==type||s.reason!==reason||s.authorizationRef!==authorizationRef||s.evidenceRef!==(a.evidenceRef??null)||s.keepNotificationId!==(a.keepNotificationId??null)||s.body!==(a.body??(type==='restore'?n.payload.text:null)))fail('MESSAGE_NOTIFICATION_OPERATION_CONFLICT')
+        return {result:{operation:prior}}
+      }
+      if(!['recall','restore'].includes(type)||n.status!=='delivered'||!n.evidence?.messageId)fail('MESSAGE_NOTIFICATION_OPERATION_NOT_READY')
+      if(type==='recall'&&n.recallStatus==='recalled')fail('MESSAGE_NOTIFICATION_ALREADY_RECALLED')
+      if(type==='restore'&&n.recallStatus!=='recalled')fail('MESSAGE_NOTIFICATION_NOT_RECALLED')
+      if(!['fact_conflict','duplicate_event','explicit_user','correction'].includes(reason))fail('MESSAGE_NOTIFICATION_REASON_REQUIRED')
+      if(reason==='fact_conflict'&&!a.evidenceRef)fail('MESSAGE_NOTIFICATION_EVIDENCE_REQUIRED')
+      if(reason==='duplicate_event'){
+        const kept=get(db,'notification',str(a.keepNotificationId))
+        if(!n.eventKey||kept.id===n.id||kept.eventKey!==n.eventKey||kept.status!=='delivered'||kept.recallStatus==='recalled')fail('MESSAGE_NOTIFICATION_NOT_DUPLICATE')
+      }
+      if(type==='restore'&&a.body!==undefined&&a.body!==n.payload.text&&reason!=='correction')fail('MESSAGE_NOTIFICATION_CORRECTION_REQUIRED')
+      const body=type==='restore'?str(a.body??n.payload.text):null
+      const snapshot={notificationId:n.id,eventKey:n.eventKey??null,commandId:n.commandId??null,requestId:n.requestId??null,executionRunId:n.commandId?get(db,'command',n.commandId).result?.runId??null:null,
+        type,reason,authorizationRef,evidenceRef:a.evidenceRef??null,keepNotificationId:a.keepNotificationId??null,body,bodyHash:body?textHash(body):null,
+        originalBody:n.payload.text,originalBodyHash:textHash(n.payload.text),expectedFactDigest:notificationFactDigest(db,n),messageId:n.evidence.messageId,conversationId:n.payload.conversationId,sourceMessageId:n.payload.sourceMessageId??null}
+      const operation={id:operationId,runId:n.runId,snapshot,status:'prepared',createdAt:now}
+      put(db,n.runId,'notification-operation',operation);return {result:{operation}}
+    }
+    if(kind==='message.notification.operation.claim') {
+      const op=get(db,'notification-operation',a.operationId),n=get(db,'notification',op.snapshot.notificationId)
+      if(op.status!=='prepared'||a.expectedFactDigest!==op.snapshot.expectedFactDigest||a.authorizationRef!==op.snapshot.authorizationRef||notificationFactDigest(db,n)!==op.snapshot.expectedFactDigest)fail('MESSAGE_NOTIFICATION_OPERATION_STALE')
+      op.status='in_flight';op.claimedAt=now;put(db,op.runId,'notification-operation',op);return {result:{operation:op},dispatchEligible:true}
+    }
+    if(kind==='message.notification.operation.result') {
+      const op=get(db,'notification-operation',a.operationId)
+      if(op.status!=='in_flight')fail('MESSAGE_NOTIFICATION_OPERATION_STALE')
+      op.status=a.ack?'acknowledged':'unknown';op.ack=a.ack??null;op.error=a.error??null;op.resultAt=now;put(db,op.runId,'notification-operation',op);return {result:{operation:op}}
+    }
+    if(kind==='message.notification.operation.reconcile') {
+      const op=get(db,'notification-operation',a.operationId),n=get(db,'notification',op.snapshot.notificationId)
+      if(op.status==='completed'){if(op.externalMessageId!==a.messageId||op.evidenceRef!==a.evidenceRef)fail('MESSAGE_NOTIFICATION_OPERATION_CONFLICT');return {result:{operation:op}}}
+      if(!['in_flight','acknowledged','unknown'].includes(op.status)||!a.evidenceRef||!a.messageId)fail('MESSAGE_NOTIFICATION_OPERATION_EVIDENCE_REQUIRED')
+      if(op.snapshot.type==='recall'){
+        if(a.messageId!==op.snapshot.messageId||a.recallStatus!=='SUCCESS'||n.recallStatus==='recalled')fail('MESSAGE_RECALL_EVIDENCE_MISMATCH')
+        n.recallStatus='recalled';n.recalledAt=now;n.recallEvidenceRef=str(a.evidenceRef);put(db,n.runId,'notification',n)
+      }else{
+        if(a.messageId===op.snapshot.messageId||n.recallStatus!=='recalled')fail('MESSAGE_REPLACEMENT_EVIDENCE_MISMATCH')
+        if(db.prepare("SELECT 1 FROM message_items WHERE kind='notification-replacement' AND json_extract(body,'$.messageId')=?").get(a.messageId))fail('MESSAGE_REPLACEMENT_CONFLICT')
+        const replacement={id:op.id,restoresNotificationId:n.id,eventKey:`${n.eventKey??n.id}:replacement:${op.id}`,messageId:str(a.messageId),body:op.snapshot.body,bodyHash:op.snapshot.bodyHash,conversationId:op.snapshot.conversationId,sourceMessageId:op.snapshot.sourceMessageId,evidenceRef:str(a.evidenceRef),status:'delivered',recordedAt:now}
+        put(db,n.runId,'notification-replacement',replacement)
+      }
+      op.status='completed';op.externalMessageId=a.messageId;op.evidenceRef=a.evidenceRef;op.completedAt=now;put(db,op.runId,'notification-operation',op)
+      return {result:{operation:op}}
+    }
     if(kind==='message.notification.prepare') {
       const r=run(db,a.runId)
       if(Boolean(a.commandId)===Boolean(a.requestId))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')
@@ -127,20 +188,33 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       else {const q=get(db,'request',a.requestId);current(db,r,q.revision);if(q.runId!==r.runId||q.status!=='pending'||q.kind!=='needs_clarification')fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')}
       if(!a.disclosure||a.disclosure.conversationId!==r.conversationId||!a.disclosure.authorizationRef)fail('MESSAGE_DISCLOSURE_REQUIRED')
       str(a.notificationId)
+      const eventKey=str(a.eventKey??`${a.requestId?'request.clarification':'action.reply'}:${a.requestId??a.commandId}:${a.payload?.phase??'notice'}`)
+      const sameEvent=db.prepare("SELECT body FROM message_items WHERE kind='notification' AND json_extract(body,'$.eventKey')=? LIMIT 1").get(eventKey)
+      if(sameEvent){const old=JSON.parse(sameEvent.body);if(old.eventKey!==eventKey||json(canonical(old.payload))!==json(canonical(a.payload)))fail('MESSAGE_NOTIFICATION_EVENT_CONFLICT');return {result:{notification:old}}}
       if(db.prepare('SELECT 1 FROM message_items WHERE item_id=?').get('notification:'+a.notificationId)) {const old=get(db,'notification',a.notificationId);if(old.runId!==a.runId||old.commandId!==a.commandId||old.requestId!==a.requestId||json(canonical(old.payload))!==json(canonical(a.payload)))fail('MESSAGE_NOTIFICATION_CONFLICT');return {result:{notification:old}}}
-      const n={id:a.notificationId,runId:r.runId,...(a.commandId?{commandId:a.commandId}:{requestId:a.requestId}),payload:a.payload,disclosure:a.disclosure,status:'prepared',leaseEpoch:0,createdAt:now};put(db,r.runId,'notification',n);return {result:{notification:n}}
+      const n={id:a.notificationId,eventKey,runId:r.runId,...(a.commandId?{commandId:a.commandId}:{requestId:a.requestId}),payload:a.payload,disclosure:a.disclosure,status:'prepared',leaseEpoch:0,createdAt:now};put(db,r.runId,'notification',n);return {result:{notification:n}}
     }
     const n=get(db,'notification',a.notificationId)
     if(kind==='message.notification.recall.record') {
-      if(n.status!=='delivered'||n.evidence?.messageId!==a.messageId||a.recallStatus!=='SUCCESS')fail('MESSAGE_RECALL_EVIDENCE_MISMATCH')
-      if(n.recallStatus==='recalled')return {result:{notification:n}}
-      n.recallStatus='recalled';n.recalledAt=now;put(db,n.runId,'notification',n)
+      if(n.status!=='delivered'||n.evidence?.messageId!==a.messageId||a.recallStatus!=='SUCCESS'||!a.evidenceRef)fail('MESSAGE_RECALL_EVIDENCE_MISMATCH')
+      if(n.recallStatus==='recalled') {if(n.recallEvidenceRef!==a.evidenceRef)fail('MESSAGE_RECALL_EVIDENCE_CONFLICT');return {result:{notification:n}}}
+      n.recallStatus='recalled';n.recalledAt=now;n.recallEvidenceRef=str(a.evidenceRef);put(db,n.runId,'notification',n)
       return {result:{notification:n}}
+    }
+    if(kind==='message.notification.replacement.record') {
+      if(n.status!=='delivered'||n.recallStatus!=='recalled'||!a.evidenceRef||a.conversationId!==n.payload.conversationId||a.sourceMessageId!==n.payload.sourceMessageId)fail('MESSAGE_REPLACEMENT_EVIDENCE_MISMATCH')
+      const replacementId=str(a.replacementId),messageId=str(a.messageId),body=str(a.body),evidenceRef=str(a.evidenceRef)
+      if(messageId===n.evidence?.messageId)fail('MESSAGE_REPLACEMENT_EVIDENCE_MISMATCH')
+      const previous=db.prepare("SELECT body FROM message_items WHERE kind='notification-replacement' AND (item_id=? OR json_extract(body,'$.messageId')=?) LIMIT 1").get('notification-replacement:'+replacementId,messageId)
+      if(previous){const prior=JSON.parse(previous.body);if(prior.id!==replacementId||prior.restoresNotificationId!==n.id||prior.messageId!==messageId||prior.bodyHash!==textHash(body)||prior.evidenceRef!==evidenceRef)fail('MESSAGE_REPLACEMENT_CONFLICT');return {result:{replacement:prior}}}
+      const replacement={id:replacementId,restoresNotificationId:n.id,eventKey:`${n.eventKey??n.id}:replacement:${replacementId}`,messageId,body,bodyHash:textHash(body),conversationId:a.conversationId,sourceMessageId:a.sourceMessageId,evidenceRef,status:'delivered',recordedAt:now}
+      put(db,n.runId,'notification-replacement',replacement)
+      return {result:{replacement}}
     }
     if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);if(source.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}n.status='sending';n.leaseEpoch++;n.startedAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:true}}
     if(a.leaseEpoch!==n.leaseEpoch)fail('MESSAGE_NOTIFICATION_STALE')
     if(kind==='message.notification.sent') {if(n.status!=='sending')fail('MESSAGE_NOTIFICATION_STALE');n.status='acknowledged';n.ack=a.ack;n.ackAt=now}
-    else if(kind==='message.notification.readback') {if(!['acknowledged','unknown'].includes(n.status)||!a.evidence)fail('MESSAGE_NOTIFICATION_EVIDENCE_REQUIRED');n.status='delivered';n.evidence=a.evidence;n.deliveredAt=now}
+    else if(kind==='message.notification.readback') {if(!['acknowledged','unknown'].includes(n.status)||!a.evidence?.messageId)fail('MESSAGE_NOTIFICATION_EVIDENCE_REQUIRED');n.status='delivered';n.evidence=a.evidence;n.deliveredAt=now}
     else if(kind==='message.notification.fail') {if(n.status!=='sending')fail('MESSAGE_NOTIFICATION_STALE');n.status='unknown';n.error=a.error}
     else fail('MESSAGE_UNKNOWN_COMMAND')
     put(db,n.runId,'notification',n);return {result:{notification:n}}
@@ -521,6 +595,9 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
 }
 export function queryMessages(db,a) {
   if(a.kind==='message.notification'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification:'+str(a.notificationId));return row?JSON.parse(row.body):null}
+  if(a.kind==='message.notificationOperation'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-operation:'+str(a.operationId));return row?JSON.parse(row.body):null}
+  if(a.kind==='message.notificationReplacement'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-replacement:'+str(a.replacementId));return row?JSON.parse(row.body):null}
+  if(a.kind==='message.notificationReplacements')return db.prepare("SELECT body FROM message_items WHERE kind='notification-replacement' AND json_extract(body,'$.restoresNotificationId')=? ORDER BY rowid").all(str(a.notificationId)).map(row=>JSON.parse(row.body))
   if(a.kind==='message.web-task'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('web-task:'+str(a.eventId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.web-tasks.pending')return db.prepare("SELECT body FROM message_items WHERE kind='web-task' AND json_extract(body,'$.status')='pending' ORDER BY rowid LIMIT 100").all().map(row=>JSON.parse(row.body))
   const topic=queryMessageTopics(db,a)
@@ -560,7 +637,9 @@ export function queryMessages(db,a) {
   if(a.kind==='message.notifications') {
     const limit=a.limit??100,after=a.afterSequenceId??0,states=a.states??['prepared','sending','acknowledged','unknown']
     if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(after)||after<0||!Array.isArray(states)||!states.length||states.some(s=>!['prepared','sending','acknowledged','unknown','delivered','superseded'].includes(s)))fail('MESSAGE_INVALID_LIMIT')
-    return db.prepare("SELECT rowid AS seq,body FROM message_items WHERE kind='notification' AND rowid>? AND json_extract(body,'$.status') IN (SELECT value FROM json_each(?)) ORDER BY rowid LIMIT ?").all(after,json(states),limit).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
+    const scoped = a.runId ? ' AND run_id=?' : ''
+    return db.prepare(`SELECT rowid AS seq,body FROM message_items WHERE kind='notification' AND rowid>? AND json_extract(body,'$.status') IN (SELECT value FROM json_each(?))${scoped} ORDER BY rowid LIMIT ?`)
+      .all(after,json(states),...(a.runId?[str(a.runId)]:[]),limit).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
   }
   if(a.kind==='message.group') {const row=db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(str(a.conversationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.task-candidates') {const limit=a.limit??30;if(!Number.isSafeInteger(limit)||limit<1||limit>200)fail('MESSAGE_INVALID_LIMIT');return db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.kind') IN ('create','research','reopen') AND json_extract(r.body,'$.conversationId')=? ORDER BY i.rowid DESC LIMIT ?").all(str(a.conversationId),limit).map(x=>({run:JSON.parse(x.run),command:JSON.parse(x.command)}))}

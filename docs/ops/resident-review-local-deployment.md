@@ -64,6 +64,10 @@ I 节点接收完整群职责、事实、R 已解决的必要材料与限制，�
 
 ## 安装前自检
 
+话题通知恢复操作须先读取原 Task/Run/通知与真实群消息，逐条区分承接、结果、澄清和拒绝。受管操作要求本群负责人从钉钉原消息明确写出 `撤回通知 <通知ID>` 或 `补发通知 <通知ID>`，本机 HTTP 预检冻结正文及事实摘要，执行时再次核验；只有 DWS 发送/撤回适配器和独立回读同时可用才执行。HTTP 的 loopback 边界不是业务授权，调用方自报的成功证据不能完成对账。已领取操作结果不明时只核对，不重复调用发送或撤回。直接使用 DWS CLI 绕过 Runtime 的操作必须按已发生事实单独对账，不能把同源的有效承接与结果一并判错。
+
+本次四条撤回、两条补发的对账使用 `docs/acceptance/topic-intent-task-composition/scripts/reconcile-notification-recovery.mjs`。先对确认过的控制库、工件目录及独立 DWS 查询快照运行 `--check`；停机并备份后在隔离副本运行 `--execute`，验证 Task/Run 和外部调用计数不变，再对原库执行并只读回查。脚本只写通知账和证据工件，不发送消息、不撤回、不重跑任务。
+
 先确认当前运行实例的实际 `DSH_HOME`，不要按用户目录猜测。本机当前为 `D:/dsh_home`，profile 为 `D:/dsh_home/profiles/web`。在部署 PowerShell 中设置 `$env:DSH_HOME = 'D:/dsh_home'`，并以 `$profileDirectory = Join-Path $env:DSH_HOME 'profiles/web'` 定位安装和启动入口；其它机器必须核对其实际值。存储目录另外从 profile 的 storageDomain JSON `root` 读取，本机当前是 `storages/dingtalk-dsh-assistant-v9-pr116`，不能用包名拼默认目录。
 
 1. 跑本轮回归和 `node scripts/build-web-client.mjs`，确认生成文件与源码一致。

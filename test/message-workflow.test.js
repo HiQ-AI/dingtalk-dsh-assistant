@@ -32,13 +32,17 @@ test('短指代保留原文进入 R，不在 S 扩写旧话题', async t => {
   await workflow.process('short-reference')
   assert.equal(routed?.goalText, '这不是让你去查吗')
 })
-test('同一发送人紧邻账号话题的短指代绑定该话题', async t => {
+test('短指代由 R 核对最近消息和候选后关联话题', async t => {
   const first = { ...source, runId: 'account-first', sourceKey: 'account-first', body: '查账号创建时间' }
+  let relationInput
   const { workflow } = await fixture(t, { context: { history: async run => run.runId === 'account-followup' ? [{ sourceKey: first.sourceKey, sourceVersion: 1, actorId: first.actorId, text: first.body }] : [], splitBackground: async ({ history }) => ({ messages: history }), candidates: async ({ run }) => run.runId === 'account-followup'
     ? [{ candidateId: 'account-topic', topicId: 'account-topic', title: first.body, goal: first.body, state: 'topic', relevantTime: new Date().toISOString(), sourceRefs: [first.sourceKey], explicitReferenceMatches: [] }] : [] },
   judge: async ({ stage, input }) => {
     if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }] }
-    if (stage === 'R') { if (input.sourceKey === 'account-followup') throw new Error('R should bind recent topic without model'); return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['首条'] } }
+    if (stage === 'R') {
+      if (input.sourceKey === 'account-followup') { relationInput = input; return { kind: 'binding', disposition: 'existing', candidateId: 'account-topic', evidence: ['account-first 原文指向账号创建时间'] } }
+      return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['首条'] }
+    }
     return { kind: 'intent', actions: [{ intent: 'no_action', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
   } })
   await workflow.receive(first)
@@ -46,6 +50,32 @@ test('同一发送人紧邻账号话题的短指代绑定该话题', async t => 
   await workflow.receive({ ...source, runId: 'account-followup', sourceKey: 'account-followup', body: '这不是让你去查吗' })
   const result = await workflow.process('account-followup')
   assert.equal(result.nodes.find(node => node.nodeId === 'R').output.output.candidateId, 'account-topic')
+  assert.equal(relationInput.candidates[0].recentSourceMatch, true)
+  assert.equal(relationInput.recentMessages.at(-1).text, first.body)
+  assert.equal(JSON.stringify(result).includes('verifiedRecentSourceKey'), false)
+})
+
+test('同人相邻消息仅排序候选，R 可保留跨话题歧义', async t => {
+  const first = { ...source, runId: 'topic-one', sourceKey: 'topic-one', body: '排查账号问题' }
+  const second = { ...source, runId: 'topic-two', sourceKey: 'topic-two', body: '设计发布方案' }
+  let relationInput
+  const { workflow } = await fixture(t, { context: {
+    history: async run => run.runId === 'ambiguous' ? [first, second].map(item => ({ sourceKey: item.sourceKey, sourceVersion: 1, actorId: item.actorId, text: item.body })) : [],
+    splitBackground: async ({ history }) => ({ messages: history }),
+    candidates: async ({ run }) => run.runId === 'ambiguous' ? [first, second].map(item => ({ candidateId: item.runId, topicId: item.runId, goal: item.body, state: 'topic', sourceRefs: [item.sourceKey], explicitReferenceMatches: [] })) : [],
+  }, judge: async ({ stage, input }) => {
+    if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }] }
+    if (stage === 'R') { relationInput = input; return { kind: 'binding', disposition: 'unresolved', candidateId: null, evidence: ['两个话题均可能是指代目标'] } }
+    throw new Error(`unexpected stage ${stage}`)
+  } })
+  await workflow.receive(first)
+  await workflow.receive(second)
+  await workflow.receive({ ...source, runId: 'ambiguous', sourceKey: 'ambiguous', body: '继续处理这个' })
+  const result = await workflow.process('ambiguous')
+  assert.equal(relationInput.candidates[0].candidateId, 'topic-two')
+  assert.equal(relationInput.candidates[0].recentSourceMatch, true)
+  assert.equal(result.units[0].routingBinding, undefined)
+  assert.equal(result.requests.some(request => request.nodeId === 'R' && request.status === 'pending'), true)
 })
 
 test('三条同话题先全部关联，再一次 IB 只创建一个业务任务', async t => {

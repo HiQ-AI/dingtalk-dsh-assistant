@@ -151,23 +151,22 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const retrieved = await context.candidates?.({ run: data.run, snapshot, unit, explicitSourceKeys: followup ? [followup.sourceKey] : [] }) ?? []
     const rawCandidates = Array.isArray(retrieved) ? retrieved : retrieved.cards
     if (!Array.isArray(rawCandidates) || retrieved.explicitOverflow) { await cmd('message.attention', { runId, reason: `MESSAGE_REFERENCED_CANDIDATES_CAPACITY:R:${unit.unitId}` }); return }
-    const candidates = candidateCards(rawCandidates)
     const nearest = snapshot.history.at(-1)
-    const recentTopics = nearest && nearest.actorId === data.run.actorId && !data.run.context?.quoteRefs?.length
-      && /^这不是让你(?:去)?查/u.test(data.run.body.trim())
-      ? rawCandidates.filter(card => card.topicId && card.sourceRefs?.includes(nearest.sourceKey)) : []
-    const recentSource = recentTopics.length === 1 ? await store.query({ kind: 'message.source', sourceKey: nearest.sourceKey }) : null
-    const recentAt = recentSource?.context?.occurredAt ?? Date.parse(recentSource?.createdAt ?? '')
-    const currentAt = data.run.context?.occurredAt ?? Date.parse(data.run.createdAt)
-    const fixedRecent = Number.isFinite(recentAt) && Number.isFinite(currentAt) && currentAt >= recentAt && currentAt - recentAt <= 90_000
-      ? { kind: 'binding', disposition: 'existing', candidateId: recentTopics[0].candidateId, evidence: ['同一发送人在90秒内紧接该话题消息发出无其他引用的短指代'] } : undefined
+    const recentSourceKey = nearest?.actorId === data.run.actorId && !data.run.context?.quoteRefs?.length ? nearest.sourceKey : null
+    const candidates = candidateCards(rawCandidates).map((card, index) => ({
+      ...card, ...(recentSourceKey && rawCandidates[index].sourceRefs?.includes(recentSourceKey) ? { recentSourceMatch: true } : {}),
+    }))
     const priorTopic = followup && rawCandidates.find(card => card.topicId && card.sourceRefs?.includes(followup.sourceKey))
-    const relationCandidates = [...candidates]
+    const relationCandidates = [...candidates].sort((left, right) =>
+      Number(Boolean(right.explicitReferenceMatches?.length)) - Number(Boolean(left.explicitReferenceMatches?.length))
+      || Number(Boolean(right.recentSourceMatch)) - Number(Boolean(left.recentSourceMatch)))
     if (priorTopic) {
       const index = relationCandidates.findIndex(card => card.candidateId === priorTopic.candidateId)
       if (index > 0) relationCandidates.unshift(...relationCandidates.splice(index, 1))
     }
-    const relationInput = { ...base, candidates: relationCandidates, candidatePreparationMs: clock() - candidateStartedAt, omittedCandidateCount: Array.isArray(retrieved) ? 0 : Math.max(0, retrieved.total - rawCandidates.length) }
+    const relationInput = { ...base, candidates: relationCandidates,
+      recentMessages: snapshot.history.slice(-3).map(item => ({ sourceKey: item.sourceKey, actorId: item.actorId, text: item.text?.slice(0, 600) })),
+      candidatePreparationMs: clock() - candidateStartedAt, omittedCandidateCount: Array.isArray(retrieved) ? 0 : Math.max(0, retrieved.total - rawCandidates.length) }
     const answers = data.requests.filter(request => request.unitId === unit.unitId && request.nodeId === 'R' && request.status === 'resolved')
       .map(request => ({ requestId: request.id, question: request.question, answer: projectMaterial(request.answer) }))
     const previousFailure = data.nodes.findLast(node => node.unitId === unit.unitId && node.nodeId === 'R' && node.status === 'failed')?.error
@@ -180,7 +179,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       relationCandidates.splice(removable, 1)
       relationInput.omittedCandidateCount++
     }
-    const linked = await invoke(data, unit.unitId, 'R', relationInput, fixedRecent ?? (followup ? { kind: 'binding', disposition: 'conversation', candidateId: priorTopic?.candidateId ?? null, evidence: ['前文任务状态问句的范围补充'] } : undefined))
+    const linked = await invoke(data, unit.unitId, 'R', relationInput, followup ? { kind: 'binding', disposition: 'conversation', candidateId: priorTopic?.candidateId ?? null, evidence: ['前文任务状态问句的范围补充'] } : undefined)
     if (!linked) return
     if (linked.kind !== 'binding' || linked.disposition === 'unresolved') { await waiting(data, unit.unitId, 'R', linked.kind === 'binding' ? { kind: 'needs_clarification', reason: 'MESSAGE_TARGET_UNRESOLVED' } : linked); return }
     const detailRefs = [...new Set(relationCandidates.filter(card => card.candidateId === linked.candidateId || linked.disposition === 'new' && card.explicitReferenceMatches?.length)
@@ -189,7 +188,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const missingDetails = detailRefs.filter(ref => !resolvedRefs.has(ref))
     if (missingDetails.length) { await waiting(data, unit.unitId, 'R', { kind: 'needs_context', reason: 'CANDIDATE_DETAIL_REQUIRED', needs: missingDetails.map(resourceRef => ({ resourceRef, reason: '核对候选完整目标与判别事实' })) }); return }
     const target = relationCandidates.find(card => card.candidateId === linked.candidateId) ?? null
-    let binding = { ...linked, ...target, target, ...(fixedRecent ? { verifiedRecentSourceKey: nearest.sourceKey } : {}) }
+    let binding = { ...linked, ...target, target }
     data = await state(runId)
     const facts = await context.facts?.({ run: data.run, snapshot, unit, binding }) ?? {}
     if (context.bindTopic) {

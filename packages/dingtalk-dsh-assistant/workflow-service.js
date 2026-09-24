@@ -6,7 +6,7 @@ import { createMessageWorkflow } from './message-workflow.js'
 import { isPassiveTaskProgress } from './message-ledger.js'
 import { createMessageModel } from './message-model.js'
 import { taskWorkflowCatalog } from './message-context.js'
-import { createWorkflowNotifications, workflowResultText } from './workflow-notifications.js'
+import { createWorkflowNotifications, executeNotificationOperation, workflowResultText } from './workflow-notifications.js'
 import { createEngineeringRegistry } from './workflow-engineering.js'
 import { createDataChangeTaskWorkflow } from './workflow-data-change.js'
 import { createReleaseTaskWorkflow, releaseWorkflowKinds } from './task-release-workflows.js'
@@ -149,6 +149,62 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   }
   const notifier = createWorkflowNotifications({ store, controller, artifacts, adapter: notifications,
     groupResponsibility: groupId => legacy.getGroup?.(groupId)?.responsibility ?? '' })
+  async function authorizedNotificationOperation(notification, authorizationRef, type) {
+    if (!notification || !groups.has(notification.payload?.conversationId) || !config.webActorId) throw executionError('WORKFLOW_NOTIFICATION_FORBIDDEN')
+    const source = await store.query({ kind: 'message.source', sourceKey: requireText(authorizationRef, 'WORKFLOW_NOTIFICATION_AUTHORIZATION_REQUIRED') })
+    const action = type === 'recall' ? '撤回通知' : '补发通知'
+    const authorizedTargets = [notification.id, notification.evidence?.messageId].filter(Boolean)
+    if (!source || source.actorId !== ownerActorId || source.conversationId !== notification.payload.conversationId
+      || source.status === 'superseded'
+      || !source.body.split(/\r?\n/u).some(line => authorizedTargets.some(id => line.trim() === `${action} ${id}`)))
+      throw executionError('WORKFLOW_NOTIFICATION_AUTHORIZATION_REQUIRED')
+    return source
+  }
+  async function prepareWorkflowNotificationOperation(input) {
+    const notice = await store.query({ kind: 'message.notification', notificationId: input.notificationId })
+    await authorizedNotificationOperation(notice, input.authorizationRef, input.type)
+    return (await store.command({ id: `notification-operation:${input.operationId}:prepare`, kind: 'message.notification.operation.prepare', args: input })).result.operation
+  }
+  async function executeWorkflowNotificationOperation(input) {
+    const operation = await store.query({ kind: 'message.notificationOperation', operationId: input.operationId })
+    if (!operation) throw executionError('MESSAGE_NOTIFICATION_OPERATION_NOT_FOUND')
+    const notice = await store.query({ kind: 'message.notification', notificationId: operation.snapshot.notificationId })
+    await authorizedNotificationOperation(notice, input.authorizationRef, operation.snapshot.type)
+    const adapter = { ...notifications,
+      async readbackRecall(args) {
+        const observation = await notifications.readbackRecall(args)
+        if (!observation || observation.recallStatus !== 'SUCCESS' || observation.messageId !== args.messageId) return undefined
+        const evidence = await artifacts.put(observation)
+        return { ...observation, evidenceRef: evidence.ref }
+      },
+      async readback(args) {
+        const observation = await notifications.readback(args)
+        if (!observation?.messageId) return undefined
+        const evidence = await artifacts.put(observation)
+        return { ...observation, evidenceRef: evidence.ref }
+      },
+    }
+    return executeNotificationOperation({ store, adapter, ...input })
+  }
+  async function reconcileWorkflowNotificationOperation(input) {
+    const operation = await store.query({ kind: 'message.notificationOperation', operationId: input.operationId })
+    if (!operation || !['acknowledged', 'unknown', 'in_flight'].includes(operation.status)) throw executionError('MESSAGE_NOTIFICATION_OPERATION_RECONCILE_REQUIRED')
+    const notice = await store.query({ kind: 'message.notification', notificationId: operation.snapshot.notificationId })
+    await authorizedNotificationOperation(notice, input.authorizationRef, operation.snapshot.type)
+    if (input.authorizationRef !== operation.snapshot.authorizationRef) throw executionError('WORKFLOW_NOTIFICATION_AUTHORIZATION_REQUIRED')
+    const snapshot = operation.snapshot
+    const observed = snapshot.type === 'recall'
+      ? await notifications.readbackRecall({ conversationId: snapshot.conversationId, messageId: snapshot.messageId, operationId: operation.id, ack: operation.ack })
+      : await notifications.readback({ id: operation.id, payload: { conversationId: snapshot.conversationId, sourceMessageId: snapshot.sourceMessageId, text: snapshot.body }, ack: operation.ack })
+    if (!observed?.messageId || snapshot.type === 'recall' && (observed.messageId !== snapshot.messageId || observed.recallStatus !== 'SUCCESS'))
+      return operation
+    if (!await notifications.canDisclose(notice)) throw executionError('WORKFLOW_NOTIFICATION_FORBIDDEN')
+    const evidence = await artifacts.put(observed)
+    return (await store.command({ id: `notification-operation:${operation.id}:reconcile`, kind: 'message.notification.operation.reconcile', args: {
+      operationId: operation.id, messageId: observed.messageId, evidenceRef: evidence.ref,
+      ...(snapshot.type === 'recall' ? { recallStatus: observed.recallStatus } : {}),
+    } })).result.operation
+  }
   const legacyGroup = id => legacy.getGroup?.(id)
   const investigationConfirmation = request => request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
     || (request.nodeId === 'I' && request.kind === 'needs_clarification'
@@ -157,18 +213,6 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (run.actorId === ownerActorId) return true
     if (workflowId === undefined || catalogById.get(workflowId)?.mode === 'external'
       || !/任务准入/u.test(legacyGroup(run.conversationId)?.responsibility ?? '')) return false
-    if (['task-investigation', 'task-general'].includes(workflowId) && binding?.topicId
-      && /^这不是让你(?:去)?查/u.test(run.body.trim()) && !run.context?.quoteRefs?.length) {
-      const nearest = run.snapshot?.history?.at(-1)
-      const source = nearest?.actorId === run.actorId ? await store.query({ kind: 'message.source', sourceKey: nearest.sourceKey }) : null
-      const topic = await store.query({ kind: 'message.topic', topicId: binding.topicId })
-      const priorAt = source?.context?.occurredAt ?? Date.parse(source?.createdAt ?? '')
-      const currentAt = run.context?.occurredAt ?? Date.parse(run.createdAt)
-      if (source?.conversationId === run.conversationId && topic?.conversationId === run.conversationId
-        && topic.facts.some(fact => fact.sourceRefs.some(ref => ref.sourceKey === nearest.sourceKey))
-        && Number.isFinite(priorAt) && Number.isFinite(currentAt)
-        && currentAt >= priorAt && currentAt - priorAt <= 90_000) return true
-    }
     if (isDirectedTaskRequest(run.body)) return true
     const state = await store.query({ kind: 'message.run', runId: run.runId })
     return state.requests.some(request => investigationConfirmation(request)
@@ -200,6 +244,69 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const selected = selector && selector !== 'current' ? runs.find(run => run.runId === selector) : runs[0]
     if (!selected) throw executionError('WORKFLOW_TASK_NOT_FOUND')
     return controller.state(selected.runId)
+  }
+  async function taskFacts(origin, selector) {
+    const taskId = origin.command.args.taskId
+    const plan = await controller.taskPlan(taskId)
+    const runs = await store.query({ kind: 'run.list', taskId, limit: 200 })
+    const state = runs.length ? await currentTask(taskId, selector) : null
+    const last = state?.nodes.filter(node => node.outputRef).at(-1)
+    const outputStage = plan?.stages.findLast(stage => stage.outputRef)
+    const outputRef = outputStage?.outputRef ?? last?.outputRef ?? null
+    const output = outputRef ? await artifacts.read(outputRef) : null
+    const result = output && typeof output === 'object' ? {
+      outputRef, stageId: outputStage?.stageId ?? null,
+      summary: typeof output.summary === 'string' ? output.summary.slice(0, 700) : null,
+      evidenceIds: Array.isArray(output.evidenceIds) ? output.evidenceIds.slice(0, 32) : [],
+      limitations: Array.isArray(output.limitations) ? output.limitations.slice(0, 16) : [],
+    } : outputRef ? { outputRef } : null
+    const blockedStage = plan?.stages.find(stage => stage.status === 'blocked')
+    const objectiveAssessment = state?.run.status === 'succeeded' && state.run.workflowId === 'task-general'
+      && output?.outcome === 'completed' && result?.evidenceIds?.length
+      ? { status: 'satisfied', evidenceRefs: [outputRef, ...result.evidenceIds], reason: '通用任务的 Host 完成核验已通过' }
+      : blockedStage
+        ? { status: 'insufficient_evidence', evidenceRefs: [blockedStage.outputRef].filter(Boolean), reason: blockedStage.unavailableReason ?? '后续阶段受阻' }
+        : { status: 'unassessed', evidenceRefs: [outputRef].filter(Boolean), reason: '执行状态和结果已记录；尚无逐项业务目标核验' }
+    const notifications = []
+    let afterSequenceId = 0
+    for (;;) {
+      const page = await store.query({ kind: 'message.notifications', runId: origin.run.runId,
+        states: ['prepared', 'sending', 'acknowledged', 'unknown', 'delivered', 'superseded'], afterSequenceId, limit: 200 })
+      for (const notice of page) {
+        const replacements = await store.query({ kind: 'message.notificationReplacements', notificationId: notice.id })
+        notifications.push({ notificationId: notice.id, eventKey: notice.eventKey ?? null, phase: notice.payload.phase,
+          status: notice.status, messageId: notice.evidence?.messageId ?? null, recallStatus: notice.recallStatus ?? null,
+          replacements: replacements.map(item => ({ messageId: item.messageId, status: item.status })) })
+      }
+      if (page.length < 200) break
+      afterSequenceId = page.at(-1).sequenceId
+    }
+    return { taskId, objective: origin.command.args.arguments.objective,
+      sourceKey: origin.run.sourceKey, sourceVersion: origin.run.sourceVersion,
+      topicId: origin.command.args.binding?.topicId ?? null,
+      workflowId: state?.run.workflowId ?? origin.command.args.arguments.workflowId,
+      status: state?.run.status ?? origin.command.status,
+      nodes: state?.nodes.map(node => ({ nodeId: node.nodeId, status: node.status, waitReason: node.waitReason })) ?? [],
+      run: state ? { runId: state.run.runId, status: state.run.status, revision: state.run.revision } : null,
+      stages: plan?.stages.map(stage => ({ stageId: stage.stageId, workflowId: stage.workflowId,
+        status: stage.status, runId: stage.runId ?? null, outputRef: stage.outputRef ?? null })) ?? [],
+      result, objectiveAssessment, notifications,
+    }
+  }
+  async function topicTaskFacts(topic, run) {
+    const origins = await store.query({ kind: 'message.task-candidates', conversationId: run.conversationId, limit: 200 })
+    const sourceKeys = new Set(topic.sources.map(ref => ref.sourceKey))
+    const matched = origins.filter(origin => ['accepted', 'applied'].includes(origin.command.status)
+      && (origin.command.args.binding?.topicId === topic.topicId
+        || !origin.command.args.binding?.topicId && sourceKeys.has(origin.run.sourceKey)))
+    const unique = [...new Map(matched.map(origin => [origin.command.args.taskId, origin])).values()]
+    const tasks = []
+    for (const origin of unique.slice(0, 20)) {
+      try { await taskAccess(origin.command.args.taskId, run.actorId, run.conversationId) }
+      catch (error) { if (error.code === 'WORKFLOW_TASK_FORBIDDEN') continue; throw error }
+      tasks.push(await taskFacts(origin))
+    }
+    return { tasks, total: unique.length, hasMore: unique.length > 20 || origins.length === 200 }
   }
   const stageRunId = (taskId, planRevision, stageId, attempt = 1) =>
     `run-${executionDigest({ taskId, planRevision, stageId, attempt })}`
@@ -579,6 +686,17 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
             `最近目标：${String(lastChange ?? task?.objective ?? task?.title ?? '').slice(0, 160)}`,
             `结果：${String(task?.outcome ?? task?.result ?? '未记录').slice(0, 120)}`] }
         })
+        for (const card of cards) {
+          if (!card.taskId || card.engine === 'legacy') continue
+          let origin
+          try { origin = await taskAccess(card.taskId, run.actorId, run.conversationId) }
+          catch (error) { if (error.code === 'WORKFLOW_TASK_FORBIDDEN') continue; throw error }
+          const facts = await taskFacts(origin)
+          if (facts.result?.outputRef) card.resultRef = facts.result.outputRef
+          card.distinguishingFacts.push(`执行状态：${facts.status}；业务目标：${facts.objectiveAssessment.status}`)
+          if (facts.result?.summary) card.distinguishingFacts.push(`已执行结果：${facts.result.summary.slice(0, 240)}`)
+          if (facts.result?.limitations?.length) card.distinguishingFacts.push(`结果限制：${facts.result.limitations.slice(0, 4).join('；')}`)
+        }
         const bounded = []
         for (const card of cards) {
           const hasLongDetail = Buffer.byteLength(card.goal ?? '') > 520 || card.distinguishingFacts.some(fact => Buffer.byteLength(fact) > 420)
@@ -600,18 +718,14 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         if (binding.topicId && (!storedTopic || storedTopic.conversationId !== run.conversationId)) throw executionError('WORKFLOW_TOPIC_FORBIDDEN')
         const topic = storedTopic ? { ...storedTopic, facts: storedTopic.facts.map(fact => ({ ...fact, sourceRefs: fact.sourceRefs.map(({ text: _text, ...ref }) => ref) })), sources: [...new Map(storedTopic.facts.flatMap(fact => fact.sourceRefs).map(ref => [`${ref.sourceKey}:${ref.sourceVersion}`, ref])).values()] } : null
         if (topic && !binding.taskId) {
-          return { topic, availableWorkflows: [...readOnlyCatalog, ...generalCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: await mayCreate(run, 'task-investigation', binding) }
+          return { topic, ...(await topicTaskFacts(topic, run)), availableWorkflows: [...readOnlyCatalog, ...generalCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: await mayCreate(run, 'task-investigation', binding) }
         }
         if (!binding.taskId) return { availableWorkflows: [...readOnlyCatalog, ...generalCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: await mayCreate(run, 'task-investigation', binding) }
         await taskAccess(binding.taskId, run.actorId, run.conversationId)
-        const runs = await store.query({ kind: 'run.list', taskId: binding.taskId, limit: 200 })
-        if (!runs.length) {
-          const origin = await store.query({ kind: 'message.task', taskId: binding.taskId })
-          return { ...(topic ? { topic } : {}), task: { taskId: binding.taskId, status: origin.command.status, beforeStart: true, objective: origin.command.args.arguments.objective } }
-        }
-        const state = await currentTask(binding.taskId, binding.runId)
-        const { runId, taskId, status, inputGeneration, waitReason, pauseRequested } = state.run
-        return { ...(topic ? { topic } : {}), task: { runId, taskId, status, inputGeneration: inputGeneration ?? 0, waitReason: waitReason ?? null, pauseRequested: pauseRequested ?? false }, nodes: state.nodes.map(({ nodeId, status }) => ({ nodeId, status })) }
+        const origin = await store.query({ kind: 'message.task', taskId: binding.taskId })
+        const detail = await taskFacts(origin, binding.runId)
+        return { ...(topic ? { topic } : {}), task: detail,
+          ...(topic ? { topicTasks: await topicTaskFacts(topic, run) } : {}) }
       },
       async validateActions({ run, unit, binding, intent, requests }) {
         for (const action of intent.actions.filter(item => item.intent === 'clarification')) {
@@ -686,14 +800,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
               items.push({ resourceRef: need.resourceRef, unavailable: 'not_authorized' })
               continue
             }
-            const runs = await store.query({ kind: 'run.list', taskId, limit: 200 })
-            const current = runs[0] ? await currentTask(taskId) : null
-            await remember(need.resourceRef, JSON.stringify({ taskId, objective: origin.command.args.arguments.objective,
-              sourceKey: origin.run.sourceKey, sourceVersion: origin.run.sourceVersion,
-              constraints: origin.command.args.constraints ?? [],
-              status: current?.run.status ?? origin.command.status,
-              revisions: runs.slice(0, 5).map(item => ({ runId: item.runId, status: item.status, revision: item.revision })),
-              nodes: current?.nodes.map(node => ({ nodeId: node.nodeId, status: node.status, waitReason: node.waitReason })) ?? [] }))
+            await remember(need.resourceRef, JSON.stringify(await taskFacts(origin)))
             continue
           }
           const quote = run.context.quoteRefs.find(item => item.sourceKey === need.resourceRef)
@@ -939,7 +1046,12 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           deliveredMessageId: notice.evidence?.messageId, status: notice.status === 'delivered' ? 'sent' : notice.status === 'superseded' ? 'superseded' : 'pending',
           ...(notice.recallStatus ? { recallStatus: notice.recallStatus } : {}),
           createdAt: notice.createdAt, deliveredAt: notice.deliveredAt, deliveryAttemptedAt: notice.startedAt,
-          deliveryAttemptCount: notice.leaseEpoch, ...(notice.status === 'unknown' ? { deliveryPendingReason: 'send_unknown' } : {}) })
+          deliveryAttemptCount: notice.leaseEpoch, ...(notice.status === 'unknown' ? { deliveryPendingReason: 'send_unknown' } : {}),
+          ...(notice.status === 'acknowledged' ? { deliveryPendingReason: 'message_not_observed' } : {}) })
+        for (const replacement of await store.query({ kind: 'message.notificationReplacements', notificationId: notice.id }))
+          outbox.push({ groupId, outboundId: `replacement:${replacement.id}`, text: replacement.body,
+            sourceMessageId: replacement.sourceMessageId, deliveredMessageId: replacement.messageId,
+            replacesNotificationId: notice.id, status: 'sent', createdAt: replacement.recordedAt, deliveredAt: replacement.recordedAt })
       }
       if (page.length < 200) break
       afterSequenceId = page.at(-1).sequenceId
@@ -961,7 +1073,9 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     return {topic,messages:messages.slice(offset,offset+limit),total:messages.length,offset,limit}
   }
   return {
-    ingest, resumeRequest, reprocessMessage, decideApproval, isApprovalRequest, submitWebTask, mailboxes, topics, topicContext, isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
+    ingest, resumeRequest, reprocessMessage, decideApproval, isApprovalRequest, submitWebTask, mailboxes, topics, topicContext,
+    prepareWorkflowNotificationOperation, executeWorkflowNotificationOperation, reconcileWorkflowNotificationOperation,
+    isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
     catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, builtInWorkflows: [taskProgressQueryDefinition], workflows: workflowCatalogState() }),
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,
       messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },

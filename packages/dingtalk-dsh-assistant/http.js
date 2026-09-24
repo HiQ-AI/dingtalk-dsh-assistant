@@ -134,6 +134,21 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     } catch(error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|PENDING|TERMINAL/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
   const workflowReply = /^\/workflows\/([^/]+)\/requests\/([^/]+)\/answer$/u.exec(url.pathname)
+  const notificationOperation = /^\/workflows\/notifications\/operations(?:\/([^/]+)\/(execute|reconcile))?$/u.exec(url.pathname)
+  if(request.method==='POST'&&notificationOperation){
+    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||(request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin)))return send(response,403,{error:'workflow_local_identity_required'})
+    const operationId=notificationOperation[1]?decodeURIComponent(notificationOperation[1]):undefined,action=notificationOperation[2]??'prepare'
+    const method={prepare:'prepareWorkflowNotificationOperation',execute:'executeWorkflowNotificationOperation',reconcile:'reconcileWorkflowNotificationOperation'}[action]
+    if(!store[method])return send(response,404,{error:'workflow_disabled'})
+    try{
+      const fields=action==='prepare'
+        ? z.strictObject({operationId:requiredText,notificationId:requiredText,type:z.enum(['recall','restore']),reason:z.enum(['fact_conflict','duplicate_event','explicit_user','correction']),authorizationRef:requiredText,evidenceRef:requiredText.optional(),keepNotificationId:requiredText.optional(),body:requiredText.optional()})
+        : action==='execute'?z.strictObject({expectedFactDigest:requiredText,authorizationRef:requiredText})
+          :z.strictObject({authorizationRef:requiredText})
+      const body=fields.parse(await readJson(request))
+      return send(response,action==='execute'?202:200,await store[method]({...body,...(operationId?{operationId}:{})}))
+    }catch(error){return send(response,error instanceof z.ZodError?400:/AUTHORIZATION|FORBIDDEN/u.test(error.message)?403:/STALE|CONFLICT|READY|RECONCILE|RECALLED|DUPLICATE/u.test(error.message)?409:400,{error:error.message})}
+  }
   const workflowReprocess = /^\/workflows\/([^/]+)\/reprocess$/u.exec(url.pathname)
   if (request.method === 'POST' && workflowReprocess) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
