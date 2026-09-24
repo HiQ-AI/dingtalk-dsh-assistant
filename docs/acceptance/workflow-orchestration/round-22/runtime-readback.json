@@ -1,0 +1,66 @@
+{
+  "at": "2026-09-23T02:51:00.829Z",
+  "agentConfig": {
+    "provider": "openai-codex",
+    "model": "gpt-6-sol",
+    "reasoningEffort": "low"
+  },
+  "settingsPersisted": true,
+  "health": {
+    "status": "ok",
+    "recoveryIssueCount": 0,
+    "inboundProcessing": true,
+    "dwsBridgeHealthy": true
+  },
+  "issueCount": 0,
+  "modelRequests": [
+    {
+      "session": "session-coordination-52ae2292e535161bd07e92a4-c7cb3273",
+      "time": 1790131752379,
+      "model": "gpt-6-sol",
+      "provider": "openai-codex"
+    },
+    {
+      "session": "session-coordination-53369593af5b29bc3907dcd8-7b24b2bd",
+      "time": 1790131720208,
+      "model": "gpt-6-sol",
+      "provider": "openai-codex"
+    },
+    {
+      "session": "session-coordination-f2c8c127ab87ff478233bc71-de1f3827",
+      "time": 1790131840159,
+      "model": "gpt-6-sol",
+      "provider": "openai-codex"
+    },
+    {
+      "session": "session-task-3d7e4224c76d9154a02fabb29017e2c4",
+      "time": 1790131822694,
+      "model": "gpt-6-sol",
+      "provider": "openai-codex"
+    },
+    {
+      "session": "session-task-75aec79363abab3d96753472daa841d7",
+      "time": 1790131755834,
+      "model": "gpt-6-sol",
+      "provider": "openai-codex"
+    },
+    {
+      "session": "session-task-d8d91493224e68decab1193e45bf8195",
+      "time": 1790131751113,
+      "model": "gpt-6-sol",
+      "provider": "openai-codex"
+    },
+    {
+      "session": "session-task-da8acd66-f95a-4ffe-ad83-b6770425b536-dffac6c8",
+      "time": 1790131748352,
+      "model": "gpt-6-sol",
+      "provider": "openai-codex"
+    },
+    {
+      "session": "session-task-fe59e003b0f46a28dcec1de89a56b2dd-44a7f8b4",
+      "time": 1790131827477,
+      "model": "gpt-6-sol",
+      "provider": "openai-codex"
+    }
+  ]
+}

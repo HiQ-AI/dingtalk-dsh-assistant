@@ -194,7 +194,7 @@ window.__ModuleLoader__.load({
           React.createElement('input', { 'aria-label': 'Agent 默认模型', placeholder: '例如 gpt-5.6-sol', style: input, value: agentModel.model, onChange: (event) => setAgentModel((current) => ({ ...current, model: event.target.value })) }),
           React.createElement('select', { 'aria-label': 'Agent 推理深度', style: input, value: agentModel.reasoningEffort, onChange: (event) => setAgentModel((current) => ({ ...current, reasoningEffort: event.target.value })) },
             React.createElement('option', { value: '' }, '模型默认'), React.createElement('option', { value: 'low' }, '轻度'), React.createElement('option', { value: 'medium' }, '中度'), React.createElement('option', { value: 'high' }, '高度'), React.createElement('option', { value: 'xhigh' }, '极高')),
-          React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '通过 dsh 原生默认模型设置保存；活动 Task 存在时禁止切换。'),
+          React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '通过 dsh 原生默认模型设置保存；保存后从下一次模型请求起生效，不中断当前在途请求。'),
           React.createElement('strong', { style: { fontSize: 13 } }, '叶子任务并行上限'),
           React.createElement('input', { type: 'number', min: 1, max: 50, step: 1, 'aria-label': '叶子任务并行上限', style: input, value: maxConcurrentTasks, onChange: (event) => setMaxConcurrentTasks(Number(event.target.value)) }),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '默认 5；调低不会中断正在运行的任务，空出的名额按 FIFO 启动待执行任务。'),
