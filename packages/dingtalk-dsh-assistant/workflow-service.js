@@ -240,6 +240,26 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (identity?.channel === 'web' && (!config.webActorId || identity.actorId !== config.webActorId)) throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')
     return approvals.decide(input, identity)
   }
+  async function listApprovalRequests() {
+    const approvals = await store.query({ kind: 'approval.list', limit: 200 })
+    const rows = await Promise.all(approvals.map(async approval => {
+      const effect = await store.query({ kind: 'effect.get', effectId: approval.effectId })
+      const prepared = effect.definition?.payload
+      if (prepared?.workflowKind !== 'production-release' || prepared.operation !== 'approval-gate') return null
+      const state = await controller.state(effect.runId)
+      const origin = await store.query({ kind: 'message.task', taskId: state.run.taskId })
+      if (!origin || !groups.has(origin.run.conversationId)) return null
+      return { requestId: approval.requestId, taskId: state.run.taskId, groupId: origin.run.conversationId,
+        objective: origin.command.args.arguments?.objective ?? '生产发布',
+        requestedAction: `审批生产发布 ${prepared.resourceKey}，提交 ${prepared.expected.commitSha}，标签 ${prepared.expected.tag}`,
+        waitingReason: '等待受信真人批准后创建生产 Tag', risk: '生产发布会更新运行服务',
+        evidence: [prepared.resourceKey, prepared.expected.commitSha, prepared.expected.tag], attemptedActions: [],
+        createdAt: approval.createdAt, status: approval.decision === 'pending' ? 'waiting-reply' : 'answered',
+        decision: approval.decision, decidedAt: approval.updatedAt, decisionSource: approval.decisionSource,
+        taskState: state.run.status }
+    }))
+    return rows.filter(Boolean)
+  }
   async function currentTask(taskId, selector) {
     const runs = await store.query({ kind: 'run.list', taskId, limit: 200 })
     const selected = selector && selector !== 'current' ? runs.find(run => run.runId === selector) : runs[0]
@@ -1074,7 +1094,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     return {topic,messages:messages.slice(offset,offset+limit),total:messages.length,offset,limit}
   }
   return {
-    ingest, resumeRequest, reprocessMessage, decideApproval, isApprovalRequest, submitWebTask, mailboxes, topics, topicContext,
+    ingest, resumeRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, submitWebTask, mailboxes, topics, topicContext,
     prepareWorkflowNotificationOperation, executeWorkflowNotificationOperation, reconcileWorkflowNotificationOperation,
     isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
     catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, builtInWorkflows: [taskProgressQueryDefinition], workflows: workflowCatalogState() }),

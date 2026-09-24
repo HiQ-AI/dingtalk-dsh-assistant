@@ -209,6 +209,8 @@ export async function apply(ctx, config = {}) {
       return workflow.decideApproval({ requestId: args.requestId, decision: args.decision,
         eventId: `web:${args.requestId}:${args.decision}` }, { channel: 'web', actorId: workflowConfig.webActorId })
     }
+    const legacyListAuthorizations = runtime.listAuthorizationRequests
+    runtime.listAuthorizationRequests = async () => [...legacyListAuthorizations(), ...await workflow.listApprovalRequests()]
     const legacyCreateTask = runtime.createTask
     runtime.createTask = args => workflow.isGroup(args.groupId) ? Promise.reject(new Error('workflow_group_use_message_input')) : legacyCreateTask(args)
     const taskFailures = await workflow.recoverExecutionTasks()

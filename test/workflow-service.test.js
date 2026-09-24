@@ -666,7 +666,9 @@ test('受信外部适配器齐备时四类流程可选并按固定需求创建�
   const releaseAdapter = kind => ({ id: kind, version: '1', rulesDigest: digest,
     inspect: async () => { throw new Error('PREFLIGHT_NOT_AVAILABLE') }, prepareOperation: async () => { throw new Error('EFFECT_NOT_EXPECTED') } })
   const dataChangeAdapter = { id: 'bytebase-test', version: '1', rulesDigest: digest,
-    validate: async () => { throw new Error('VALIDATION_NOT_EXPECTED') }, rehearse: async () => { throw new Error('REHEARSAL_NOT_EXPECTED') },
+    validate: async () => { throw new Error('VALIDATION_NOT_EXPECTED') },
+    prepareRehearsal: async () => { throw new Error('REHEARSAL_NOT_EXPECTED') },
+    readbackRehearsal: async () => { throw new Error('REHEARSAL_NOT_EXPECTED') },
     inspect: async () => { throw new Error('INSPECT_NOT_EXPECTED') }, prepareIssue: async () => { throw new Error('ISSUE_NOT_EXPECTED') },
     prepareExecute: async () => { throw new Error('EXECUTE_NOT_EXPECTED') }, readback: async () => { throw new Error('READBACK_NOT_EXPECTED') } }
   const source = 'SELECT 1', hash = createHash('sha256').update(source).digest('hex')

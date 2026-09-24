@@ -1,5 +1,6 @@
 import { promisify } from 'node:util'
 import { execFile as execFileCallback } from 'node:child_process'
+import { createHash } from 'node:crypto'
 
 const execFile = promisify(execFileCallback)
 const fail = code => { throw new Error(code) }
@@ -7,10 +8,12 @@ const sha = value => typeof value === 'string' && /^[0-9a-f]{40}$/.test(value)
 const evidence = (system, identity) => `${system}:${identity}`
 const safePath = value => typeof value === 'string' && /^[A-Za-z0-9._/-]+$/.test(value)
 const safeName = value => typeof value === 'string' && /^[A-Za-z0-9._-]+$/.test(value)
+const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value)
 
 /** 只接受受信 Host 注入的凭据与固定端点；异常不透传服务端响应或认证头。 */
 export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig,
-  kubeServer, bytebaseBaseUrl, bytebaseToken,
+  kubeServer, bytebaseBaseUrl, bytebaseToken, registryBearerToken,
+  githubTagWritesEnabled = false,
   fetchImpl = fetch, execFileImpl = execFile, attestations } = {}) {
   async function request(url, token, options = {}) {
     if (!url.startsWith('https://')) fail('PLATFORM_HTTPS_REQUIRED')
@@ -63,10 +66,37 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
     },
     async readTag({ repository, tag }) {
       if (!safeName(tag)) fail('GITHUB_TAG_INVALID')
-      const row = await request(githubUrl(repository, `git/ref/tags/${encodeURIComponent(tag)}`), githubToken)
+      const url = githubUrl(repository, `git/ref/tags/${encodeURIComponent(tag)}`)
+      let response
+      try { response = await fetchImpl(url, { headers: { Accept: 'application/vnd.github+json',
+        ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {}) }, signal: AbortSignal.timeout(30000) }) }
+      catch { fail('GITHUB_TAG_READ_FAILED') }
+      if (response.status === 404) {
+        // 私有仓库的权限不足也可能被隐藏为 404，独立确认仓库可读。
+        const repo = await request(`https://api.github.com/repos/${repository}`, githubToken)
+        if (repo.full_name !== repository) fail('GITHUB_REPOSITORY_UNCONFIRMED')
+        return { exists: false, evidenceRef: evidence('github-tag-absent', `${repository}:${tag}`) }
+      }
+      if (!response.ok) fail(`GITHUB_TAG_HTTP_${response.status}`)
+      let row
+      try { row = await response.json() } catch { fail('GITHUB_TAG_RESPONSE_INVALID') }
       if (row?.object?.type !== 'commit' || !sha(row.object.sha)) fail('GITHUB_TAG_UNCONFIRMED')
-      return { commitSha: row.object.sha, evidenceRef: evidence('github-tag', `${repository}:${tag}:${row.object.sha}`) }
+      return { exists: true, commitSha: row.object.sha,
+        evidenceRef: evidence('github-tag', `${repository}:${tag}:${row.object.sha}`) }
     },
+  }
+  if (githubTagWritesEnabled) github.createTag = async ({ target, commitSha, tag }) => {
+    if (!safeName(tag) || !sha(commitSha) || target?.releaseTag !== tag || !safePath(target?.branch)) fail('GITHUB_TAG_WRITE_INVALID')
+    const head = await github.readBranch({ repository: target.repository, branch: target.branch })
+    if (head.commitSha !== commitSha) fail('GITHUB_TAG_BRANCH_MOVED')
+    const prior = await github.readTag({ repository: target.repository, tag })
+    if (prior.exists) fail('GITHUB_TAG_ALREADY_EXISTS')
+    await request(githubUrl(target.repository, 'git/refs'), githubToken, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref: `refs/tags/${tag}`, sha: commitSha }) })
+    const after = await github.readTag({ repository: target.repository, tag })
+    if (after.commitSha !== commitSha) fail('GITHUB_TAG_READBACK_MISMATCH')
+    return after
   }
   const woodpeckerUrl = (baseUrl, suffix) => {
     if (baseUrl !== 'https://woodpecker.hiqdat.dev') fail('WOODPECKER_ENDPOINT_NOT_ALLOWED')
@@ -110,6 +140,35 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
     },
   }
   const kubernetes = {
+    async readPods({ namespace, deployment, deploymentUid }) {
+      if (!safeName(namespace) || !safeName(deployment) || !safeName(deploymentUid) || !kubeconfig) fail('KUBE_TARGET_INVALID')
+      const readList = async type => {
+        try {
+          const result = await execFileImpl('kubectl', ['--kubeconfig', kubeconfig,
+            ...(kubeServer ? ['--server', kubeServer] : []), '--request-timeout=15s', '-n', namespace,
+            'get', type, '-o', 'json'], { maxBuffer: 4 * 1024 * 1024 })
+          return JSON.parse(result.stdout)
+        } catch { fail('KUBE_POD_READ_FAILED') }
+      }
+      const replicaSets = await readList('replicasets')
+      const podList = await readList('pods')
+      if (!Array.isArray(replicaSets?.items) || !Array.isArray(podList?.items)) fail('KUBE_POD_LIST_INVALID')
+      const owned = new Set(replicaSets.items.filter(row => row.metadata?.ownerReferences?.some(ref =>
+        ref.kind === 'Deployment' && ref.uid === deploymentUid && ref.name === deployment))
+        .map(row => row.metadata?.uid).filter(Boolean))
+      if (!owned.size) fail('KUBE_REPLICASET_NOT_FOUND')
+      const pods = podList.items.filter(row => row.metadata?.ownerReferences?.some(ref =>
+        ref.kind === 'ReplicaSet' && owned.has(ref.uid)))
+      if (!pods.length) fail('KUBE_PODS_NOT_FOUND')
+      return { complete: true, deploymentUid, pods: pods.map(row => {
+        const container = row.status?.containerStatuses?.find(item => item.name === row.spec?.containers?.[0]?.name)
+        const imageDigest = container?.imageID?.match(/sha256:[a-f0-9]{64}$/)?.[0]
+        return { deploymentUid, imageDigest,
+          ready: row.status?.phase === 'Running' && container?.ready === true
+            && row.metadata?.deletionTimestamp == null,
+        }
+      }), evidenceRef: evidence('kube-pods', `${namespace}:${deployment}:${deploymentUid}:${pods.map(row => row.metadata?.resourceVersion).join(',')}`) }
+    },
     async readDeployment({ namespace, deployment }) {
       if (!safeName(namespace) || !safeName(deployment) || !kubeconfig) fail('KUBE_TARGET_INVALID')
       let row
@@ -119,10 +178,9 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
           'get', 'deployment', deployment, '-o', 'json'], { maxBuffer: 1024 * 1024 })
         row = JSON.parse(result.stdout)
       } catch { fail('KUBE_DEPLOYMENT_READ_FAILED') }
-      const container = row?.spec?.template?.spec?.containers?.[0]
       const status = row?.status
-      return { sourceSha: row?.metadata?.annotations?.['deployment.kubernetes.io/source-sha'],
-        imageDigest: container?.image?.match(/@(?<digest>sha256:[a-f0-9]{64})$/)?.groups?.digest,
+      return { uid: row?.metadata?.uid, desiredReplicas: row?.spec?.replicas,
+        readyReplicas: status?.readyReplicas ?? 0,
         generation: row?.metadata?.generation, observedGeneration: status?.observedGeneration,
         ready: status?.readyReplicas === row?.spec?.replicas && status?.availableReplicas === row?.spec?.replicas,
         evidenceRef: evidence('kube-deployment', `${namespace}:${deployment}:${row?.metadata?.resourceVersion}`) }
@@ -135,8 +193,31 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       return { accessible: response.ok, evidenceRef: evidence('entry', `${url}:${response.status}`) }
     },
   }
-  // 没有可核验的 source SHA / 镜像清单绑定时不提供 readManifest 能力。
   const registry = {}
+  if (registryBearerToken) registry.readManifest = async ({ image, digest: expected }) => {
+    if (!/^registry\.cn-sh1\.ctyun\.cn\/[A-Za-z0-9._/-]+$/.test(image)
+      || !digest(expected)) fail('REGISTRY_TARGET_INVALID')
+    const name = image.slice('registry.cn-sh1.ctyun.cn/'.length)
+    let response
+    try { response = await fetchImpl(`https://registry.cn-sh1.ctyun.cn/v2/${name}/manifests/${expected}`,
+      { headers: { Authorization: `Bearer ${registryBearerToken}`,
+        Accept: ['application/vnd.oci.image.index.v1+json', 'application/vnd.docker.distribution.manifest.list.v2+json',
+          'application/vnd.oci.image.manifest.v1+json', 'application/vnd.docker.distribution.manifest.v2+json'].join(', ') },
+        signal: AbortSignal.timeout(30000) }) }
+    catch { fail('REGISTRY_READ_FAILED') }
+    if (!response.ok) fail(`REGISTRY_HTTP_${response.status}`)
+    let bytes, body
+    try { bytes = Buffer.from(await response.arrayBuffer()); body = JSON.parse(bytes.toString('utf8')) }
+    catch { fail('REGISTRY_MANIFEST_INVALID') }
+    const actual = `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+    if (actual !== expected || response.headers?.get?.('docker-content-digest') !== expected) fail('REGISTRY_DIGEST_MISMATCH')
+    const platformDigests = Array.isArray(body.manifests)
+      ? body.manifests.filter(item => item.platform?.os !== 'unknown' && item.platform?.architecture !== 'unknown')
+        .map(item => item.digest) : [expected]
+    if (!platformDigests.length || platformDigests.some(value => !digest(value))) fail('REGISTRY_PLATFORM_DIGEST_INVALID')
+    return { digest: actual, platformDigests,
+      evidenceRef: evidence('registry-manifest', `${name}:${actual}`) }
+  }
   const bytebase = {
     async getDatabase({ target }) {
       if (!bytebaseBaseUrl?.startsWith('https://') || !bytebaseToken || !safePath(target?.database)) fail('BYTEBASE_READ_NOT_CONFIGURED')

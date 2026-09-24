@@ -52,7 +52,7 @@ function WorkflowCatalog({ value }) {
   const workflows = value.workflows ?? []
   const available = workflows.filter(item => item.status === 'available')
   const unavailable = workflows.filter(item => item.status !== 'available')
-  const stageName = { prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '验证产出', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'inspect-preflight': '检查发布条件', 'inspect-runtime': '核验运行版本', finalize: '核验交付', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'rehearse-isolated': '隔离演练', 'inspect-approval': '核对审批', 'readback-production': '生产只读回查' }
+  const stageName = { prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '验证产出', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'inspect-preflight': '检查发布条件', 'inspect-runtime': '核验运行版本', finalize: '核验交付', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'prepare-rehearsal': '核对 UAT 演练条件', 'run-rehearsal': '在 UAT 数据库演练', 'readback-rehearsal': '回读 UAT 演练', 'approval-gate': '等待真人审批', 'readback-production': '生产只读回查' }
   return React.createElement('section', { style: panel, 'aria-label': '任务工作流目录' },
     React.createElement('div', { style: { display: 'grid', gap: 4 } },
       React.createElement('strong', null, '任务工作流'),

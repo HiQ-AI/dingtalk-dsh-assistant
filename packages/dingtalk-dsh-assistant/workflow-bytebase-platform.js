@@ -12,15 +12,17 @@ const required = (condition, code) => { if (!condition) throw executionError(cod
 
 /**
  * Bytebase 的受限平台端口。api 由运行时提供已认证的实现；本模块只接受显式列入配置的
- * 项目、数据库和隔离副本，绝不将宽泛的 Bytebase MCP 工具直接暴露给工作流。
+ * 生产与 UAT 数据库；UAT 演练作为独立外部效果进入 Controller 效果账。
  *
- * api: getDatabase, validateSql, rehearseIsolated, createIssueBundle,
+ * api: getDatabase, readBaseline, checkPreconditions, validateSql, rehearseInUat,
+ * getUatRehearsalByOperationKey, createIssueBundle,
  * getIssueBundle, getApproval, runTask, getTaskExecution, queryVerification,
  * findIssueByOperationKey。所有方法必须返回 Bytebase 的独立读回结果。
  */
 export function createBytebaseDataChangePlatform({ config, api }) {
   const targets = config?.targets
-  const names = ['getDatabase', 'validateSql', 'rehearseIsolated', 'createIssueBundle',
+  const names = ['getDatabase', 'readBaseline', 'checkPreconditions', 'validateSql', 'rehearseInUat',
+    'getUatRehearsalByOperationKey', 'createIssueBundle',
     'getIssueBundle', 'getApproval', 'runTask', 'getTaskExecution', 'queryVerification',
     'findIssueByOperationKey']
   required(nonempty(config?.adapterId) && nonempty(config?.adapterVersion)
@@ -28,26 +30,38 @@ export function createBytebaseDataChangePlatform({ config, api }) {
   'BYTEBASE_PLATFORM_NOT_CONFIGURED')
   const seen = new Set()
   for (const entry of targets) {
-    const { project, target, isolation } = entry
+    const { project, target, uatTarget } = entry
     required(/^projects\/[A-Za-z0-9._-]+$/.test(project ?? '') && canonicalTarget(target)
-      && ['uat', 'production'].includes(target?.environment)
-      && nonempty(isolation?.proofRef) && canonicalTarget(isolation?.target)
-      && isolation?.target?.environment === 'isolated'
-      && target.instance !== isolation.target.instance
-      && target.database !== isolation.target.database, 'BYTEBASE_TARGET_CONFIG_INVALID')
+      && target?.environment === 'production' && canonicalTarget(uatTarget)
+      && uatTarget.environment === 'uat' && uatTarget.instance !== target.instance
+      && uatTarget.database !== target.database, 'BYTEBASE_TARGET_CONFIG_INVALID')
     const key = executionDigest(target)
     required(!seen.has(key), 'BYTEBASE_TARGET_CONFIG_DUPLICATE')
     seen.add(key)
   }
   const rulesDigest = executionDigest({ adapterId: config.adapterId, adapterVersion: config.adapterVersion,
-    targets: targets.map(({ project, target, isolation }) => ({ project, target, isolation })) })
+    targets: targets.map(({ project, target, uatTarget }) => ({ project, target, uatTarget })) })
   const entryFor = target => {
     const entry = targets.find(item => exactTarget(item.target, target))
     required(entry && same(entry.target, target), 'BYTEBASE_TARGET_NOT_ALLOWED')
     return entry
   }
-  const assertDatabase = (db, entry) => required(db?.project === entry.project
-    && exactTarget(db, entry.target), 'BYTEBASE_DATABASE_IDENTITY_UNCONFIRMED')
+  const assertDatabase = (db, project, target) => required(db?.project === project
+    && exactTarget(db, target), 'BYTEBASE_DATABASE_IDENTITY_UNCONFIRMED')
+  const assertBaseline = (baseline, project, target) => required(baseline?.project === project
+    && exactTarget(baseline.target, target) && nonempty(baseline.snapshotId)
+    && /^[a-f0-9]{64}$/.test(baseline.sha256 ?? '')
+    && nonempty(baseline.schemaVersion) && /^[a-f0-9]{64}$/.test(baseline.schemaDigest ?? '')
+    && nonempty(baseline.evidenceRef), 'BYTEBASE_BASELINE_UNCONFIRMED')
+  const checkPreconditions = async ({ project, target, baseline, pkg, signal }) => {
+    const result = await api.checkPreconditions({ project, target, baseline,
+      applySql: pkg.applySql, applySqlSha256: pkg.applySqlSha256,
+      expectedChange: pkg.expectedChange, verificationSql: pkg.verificationSql, signal })
+    required(result?.passed === true && exactTarget(result.target, target)
+      && result.sqlSha256 === pkg.applySqlSha256 && nonempty(result.checkId)
+      && result.baselineEvidenceRef === baseline.evidenceRef, 'BYTEBASE_PRECONDITIONS_UNCONFIRMED')
+    return result
+  }
   const issueBundle = (bundle, { project, target, sqlSha256, packageDigest, operationKey }) => {
     const { issue, sheet, plan, task } = bundle ?? {}
     required(nonempty(issue?.id) && nonempty(sheet?.id) && nonempty(plan?.id) && nonempty(task?.id)
@@ -66,49 +80,119 @@ export function createBytebaseDataChangePlatform({ config, api }) {
   const executeKey = request => executionDigest({ stage: 'execute-task',
     packageDigest: request.packageDigest, taskId: request.taskId,
     approvalRequestId: request.approvalRequestId })
+  const rehearsalKey = ({ project, target, uatTarget, productionBaseline, uatBaseline, packageDigest }) => executionDigest({
+    kind: 'bytebase-uat-rehearsal', project, sourceTarget: target, uatTarget,
+    productionSchemaVersion: productionBaseline?.schemaVersion,
+    productionSchemaDigest: productionBaseline?.schemaDigest,
+    uatSnapshotId: uatBaseline?.snapshotId, uatSchemaDigest: uatBaseline?.schemaDigest,
+    packageDigest })
+  const rehearsalView = (result, intent) => {
+    required(result?.passed === true && result.uat === true && nonempty(result.receiptId)
+      && nonempty(result.taskRunId) && nonempty(result.verificationReadbackId)
+      && nonempty(result.observedChange) && result.packageDigest === intent.packageDigest
+      && result.sqlSha256 === intent.applySqlSha256
+      && result.operationKey === intent.operationKey
+      && exactTarget(result.target, intent.uatTarget)
+      && exactTarget(result.sourceTarget, intent.sourceTarget)
+      && result.productionBaselineEvidenceRef === intent.productionBaseline.evidenceRef
+      && result.uatBaselineEvidenceRef === intent.uatBaseline.evidenceRef
+      && result.schemaVersion === intent.uatBaseline.schemaVersion
+      && result.schemaDigest === intent.uatBaseline.schemaDigest,
+    'BYTEBASE_REHEARSAL_UNCONFIRMED')
+    return { passed: true, uat: true, receiptId: result.receiptId,
+      packageDigest: result.packageDigest, observedChange: result.observedChange }
+  }
+  const assertApproval = (approval, { issueId, taskId, target, sheetSha256, packageDigest,
+    requestId }) => required(approval?.decision === 'approved'
+    && approval.source === 'bytebase' && approval.human === true
+    && approval.issueId === issueId && approval.taskId === taskId
+    && exactTarget(approval.target, target)
+    && approval.sheetSha256 === sheetSha256 && approval.packageDigest === packageDigest
+    && nonempty(approval.requestId) && (!requestId || approval.requestId === requestId)
+    && nonempty(approval.decidedBy), 'BYTEBASE_APPROVAL_UNCONFIRMED')
   const checkRequest = request => {
-    required(request?.workflowKind === 'data-change' && ['create-issue', 'execute-task'].includes(request.stage),
+    required(request?.workflowKind === 'data-change'
+      && ['rehearse-uat', 'create-issue', 'execute-task'].includes(request.stage),
       'BYTEBASE_OPERATION_INVALID')
     const entry = entryFor(request.target)
     required(request.intent?.project === entry.project && request.intent.packageDigest === request.packageDigest
       && request.intent.applySqlSha256 === request.applySqlSha256
       && exactTarget(request.intent.target, entry.target)
-      && request.intent.operationKey === (request.stage === 'create-issue' ? issueKey(request) : executeKey(request)),
+      && (request.stage !== 'rehearse-uat' || (exactTarget(request.intent.uatTarget, entry.uatTarget)
+        && exactTarget(request.intent.sourceTarget, entry.target)
+        && request.intent.productionBaseline?.schemaVersion === request.intent.uatBaseline?.schemaVersion
+        && request.intent.productionBaseline?.schemaDigest === request.intent.uatBaseline?.schemaDigest))
+      && request.intent.operationKey === (request.stage === 'rehearse-uat'
+        ? rehearsalKey({ project: entry.project, target: request.target,
+          uatTarget: entry.uatTarget, productionBaseline: request.intent.productionBaseline,
+          uatBaseline: request.intent.uatBaseline, packageDigest: request.packageDigest })
+        : request.stage === 'create-issue' ? issueKey(request) : executeKey(request)),
     'BYTEBASE_OPERATION_IDENTITY_CHANGED')
     return entry
   }
   const adapter = {
     id: config.adapterId, version: config.adapterVersion, rulesDigest,
-    async validate({ target, baseline, applySql, applySqlSha256, packageDigest, signal }) {
+    async validate({ target, baseline, applySql, applySqlSha256, expectedChange,
+      verificationSql, packageDigest, signal }) {
       const entry = entryFor(target)
       required(sha(applySql) === applySqlSha256 && nonempty(baseline?.snapshotId)
         && /^[a-f0-9]{64}$/.test(baseline?.sha256 ?? ''), 'BYTEBASE_PACKAGE_INVALID')
-      assertDatabase(await api.getDatabase({ project: entry.project, target, signal }), entry)
+      assertDatabase(await api.getDatabase({ project: entry.project, target, signal }), entry.project, target)
+      const actualBaseline = await api.readBaseline({ project: entry.project, target,
+        scope: 'current', signal })
+      assertBaseline(actualBaseline, entry.project, target)
+      required(actualBaseline?.snapshotId === baseline.snapshotId
+        && actualBaseline.sha256 === baseline.sha256, 'BYTEBASE_BASELINE_UNCONFIRMED')
+      await checkPreconditions({ project: entry.project, target, baseline: actualBaseline,
+        pkg: { applySql, applySqlSha256, expectedChange, verificationSql }, signal })
       const result = await api.validateSql({ project: entry.project, target, sql: applySql,
-        sqlSha256: applySqlSha256, baseline, signal })
+        sqlSha256: applySqlSha256, baseline: actualBaseline, signal })
       required(result?.passed === true && result.sqlSha256 === applySqlSha256
         && exactTarget(result.target, target) && nonempty(result.reviewId), 'BYTEBASE_SQL_REVIEW_UNCONFIRMED')
       return { passed: true, packageDigest, receiptId: result.reviewId }
     },
-    async rehearse({ package: pkg, signal }) {
+    async prepareRehearsal({ package: pkg, signal }) {
       const entry = entryFor(pkg.target)
       required(pkg.validation?.packageDigest === executionDigest((({ validation, ...body }) => body)(pkg))
         && sha(pkg.applySql) === pkg.applySqlSha256, 'BYTEBASE_PACKAGE_IDENTITY_CHANGED')
-      const result = await api.rehearseIsolated({ project: entry.project, target: entry.isolation.target,
-        isolationProofRef: entry.isolation.proofRef, baseline: pkg.baseline,
+      const productionBaseline = await api.readBaseline({ project: entry.project, target: pkg.target,
+        scope: 'current', signal })
+      assertBaseline(productionBaseline, entry.project, pkg.target)
+      required(productionBaseline.snapshotId === pkg.baseline.snapshotId
+        && productionBaseline.sha256 === pkg.baseline.sha256, 'BYTEBASE_BASELINE_UNCONFIRMED')
+      assertDatabase(await api.getDatabase({ project: entry.project, target: entry.uatTarget, signal }),
+        entry.project, entry.uatTarget)
+      const uatBaseline = await api.readBaseline({ project: entry.project, target: entry.uatTarget,
+        scope: 'current', signal })
+      assertBaseline(uatBaseline, entry.project, entry.uatTarget)
+      required(uatBaseline.schemaVersion === productionBaseline.schemaVersion
+        && uatBaseline.schemaDigest === productionBaseline.schemaDigest,
+      'BYTEBASE_UAT_SCHEMA_BASELINE_CHANGED')
+      await checkPreconditions({ project: entry.project, target: pkg.target,
+        baseline: productionBaseline, pkg, signal })
+      await checkPreconditions({ project: entry.project, target: entry.uatTarget,
+        baseline: uatBaseline, pkg, signal })
+      return { project: entry.project, target: pkg.target, sourceTarget: pkg.target,
+        uatTarget: entry.uatTarget, productionBaseline, uatBaseline,
+        operationKey: rehearsalKey({ project: entry.project, target: pkg.target,
+          uatTarget: entry.uatTarget, productionBaseline, uatBaseline,
+          packageDigest: pkg.validation.packageDigest }),
         applySql: pkg.applySql, verificationSql: pkg.verificationSql,
-        rollbackSql: pkg.rollbackSql, packageDigest: pkg.validation.packageDigest, signal })
-      required(result?.passed === true && result.isolated === true && nonempty(result.receiptId)
-        && nonempty(result.observedChange) && result.packageDigest === pkg.validation.packageDigest
-        && result.isolationProofRef === entry.isolation.proofRef
-        && result.baselineSha256 === pkg.baseline.sha256
-        && exactTarget(result.target, entry.isolation.target), 'BYTEBASE_REHEARSAL_UNCONFIRMED')
-      return { passed: true, isolated: true, receiptId: result.receiptId,
-        packageDigest: result.packageDigest, observedChange: result.observedChange }
+        rollbackSql: pkg.rollbackSql, packageDigest: pkg.validation.packageDigest,
+        applySqlSha256: pkg.applySqlSha256 }
+    },
+    async readbackRehearsal({ package: pkg, request, receipt, signal }) {
+      checkRequest(request)
+      required(receipt?.result?.receiptId && request.packageDigest === pkg.validation.packageDigest
+        && sha(pkg.applySql) === request.applySqlSha256, 'BYTEBASE_REHEARSAL_RECEIPT_UNKNOWN')
+      const result = await api.getUatRehearsalByOperationKey({ project: request.intent.project,
+        operationKey: request.intent.operationKey, signal })
+      required(result?.receiptId === receipt.result.receiptId, 'BYTEBASE_REHEARSAL_RECEIPT_UNKNOWN')
+      return rehearsalView(result, request.intent)
     },
     async prepareIssue({ prepared, runId, generation, requirementDigest }) {
       const pkg = prepared.package, entry = entryFor(pkg.target)
-      required(prepared.rehearsal?.passed === true && prepared.rehearsal?.isolated === true
+      required(prepared.rehearsal?.passed === true && prepared.rehearsal?.uat === true
         && prepared.rehearsal.packageDigest === pkg.validation.packageDigest, 'BYTEBASE_REHEARSAL_REQUIRED')
       const request = { runId, generation, requirementDigest, packageDigest: pkg.validation.packageDigest,
         target: pkg.target }
@@ -148,11 +232,8 @@ export function createBytebaseDataChangePlatform({ config, api }) {
       if (stage === 'approval') {
         const approval = await api.getApproval({ project: entry.project, issueId: issue.id, signal })
         if (approval?.decision === 'pending') return approval
-        required(approval?.decision === 'approved' && approval.taskId === task.id
-          && approval.sheetSha256 === sheet.sha256
-          && approval.packageDigest === pkg.validation.packageDigest
-          && nonempty(approval.requestId) && nonempty(approval.decidedBy),
-        'BYTEBASE_APPROVAL_UNCONFIRMED')
+        assertApproval(approval, { issueId: issue.id, taskId: task.id, target: pkg.target,
+          sheetSha256: sheet.sha256, packageDigest: pkg.validation.packageDigest })
         return approval
       }
       required(stage === 'pre-execution', 'BYTEBASE_INSPECTION_INVALID')
@@ -164,13 +245,22 @@ export function createBytebaseDataChangePlatform({ config, api }) {
         && bundle?.task?.status === 'NOT_STARTED', 'BYTEBASE_PREFLIGHT_CHANGED')
       return { sheet, plan, task }
     },
-    async prepareExecute({ identity, issue, approval }) {
+    async prepareExecute({ identity, issue, approval, prepared, signal }) {
       const entry = entryFor(identity.target)
-      required(approval?.decision === 'approved' && approval.requestId === identity.approvalRequestId,
-        'BYTEBASE_APPROVAL_UNCONFIRMED')
+      const pkg = prepared.package
+      assertApproval(approval, { issueId: issue.id, taskId: identity.taskId,
+        target: identity.target, sheetSha256: identity.applySqlSha256,
+        packageDigest: identity.packageDigest, requestId: identity.approvalRequestId })
+      const baseline = await api.readBaseline({ project: entry.project, target: identity.target,
+        scope: 'current', signal })
+      assertBaseline(baseline, entry.project, identity.target)
+      await checkPreconditions({ project: entry.project, target: identity.target,
+        baseline, pkg, signal })
       return { project: entry.project, target: identity.target, issueId: issue.id,
         taskId: identity.taskId, approvalRequestId: identity.approvalRequestId,
         packageDigest: identity.packageDigest, applySqlSha256: identity.applySqlSha256,
+        baseline, applySql: pkg.applySql, expectedChange: pkg.expectedChange,
+        verificationSql: pkg.verificationSql,
         operationKey: executeKey({ packageDigest: identity.packageDigest, taskId: identity.taskId,
           approvalRequestId: identity.approvalRequestId }) }
     },
@@ -178,6 +268,26 @@ export function createBytebaseDataChangePlatform({ config, api }) {
   const externalAdapter = {
     async execute(request) {
       const entry = checkRequest(request)
+      if (request.stage === 'rehearse-uat') {
+        required(sha(request.intent.applySql) === request.applySqlSha256
+          && exactTarget(request.intent.uatTarget, entry.uatTarget)
+          && exactTarget(request.intent.sourceTarget, request.target)
+          && nonempty(request.intent.productionBaseline?.evidenceRef)
+          && nonempty(request.intent.uatBaseline?.evidenceRef), 'BYTEBASE_REHEARSAL_IDENTITY_CHANGED')
+        assertDatabase(await api.getDatabase({ project: entry.project, target: entry.uatTarget }),
+          entry.project, entry.uatTarget)
+        const currentUatBaseline = await api.readBaseline({ project: entry.project,
+          target: entry.uatTarget, scope: 'current' })
+        assertBaseline(currentUatBaseline, entry.project, entry.uatTarget)
+        required(currentUatBaseline.schemaVersion === request.intent.uatBaseline.schemaVersion
+          && currentUatBaseline.schemaDigest === request.intent.uatBaseline.schemaDigest,
+        'BYTEBASE_UAT_SCHEMA_BASELINE_CHANGED')
+        await checkPreconditions({ project: entry.project, target: entry.uatTarget,
+          baseline: currentUatBaseline, pkg: request.intent })
+        const result = await api.rehearseInUat(request.intent)
+        const verified = rehearsalView(result, request.intent)
+        return { status: 'succeeded', result: { receiptId: verified.receiptId } }
+      }
       if (request.stage === 'create-issue') {
         required(sha(request.intent.applySql) === request.applySqlSha256,
           'BYTEBASE_SQL_IDENTITY_CHANGED')
@@ -192,9 +302,19 @@ export function createBytebaseDataChangePlatform({ config, api }) {
         && bundle?.sheet?.sha256 === request.applySqlSha256
         && bundle?.issue?.packageDigest === request.packageDigest, 'BYTEBASE_PREFLIGHT_CHANGED')
       const approval = await api.getApproval({ project: entry.project, issueId: request.intent.issueId })
-      required(approval?.decision === 'approved' && approval.requestId === request.approvalRequestId
-        && approval.taskId === request.taskId && approval.sheetSha256 === request.applySqlSha256
-        && approval.packageDigest === request.packageDigest, 'BYTEBASE_APPROVAL_CHANGED')
+      assertApproval(approval, { issueId: request.intent.issueId, taskId: request.taskId,
+        target: request.target, sheetSha256: request.applySqlSha256,
+        packageDigest: request.packageDigest, requestId: request.approvalRequestId })
+      const currentBaseline = await api.readBaseline({ project: entry.project,
+        target: request.target, scope: 'current' })
+      assertBaseline(currentBaseline, entry.project, request.target)
+      required(currentBaseline.schemaVersion === request.intent.baseline?.schemaVersion
+        && currentBaseline.schemaDigest === request.intent.baseline?.schemaDigest,
+      'BYTEBASE_PRODUCTION_SCHEMA_CHANGED')
+      required(sha(request.intent.applySql) === request.applySqlSha256,
+        'BYTEBASE_SQL_IDENTITY_CHANGED')
+      await checkPreconditions({ project: entry.project, target: request.target,
+        baseline: currentBaseline, pkg: request.intent })
       const result = await api.runTask({ project: entry.project, issueId: request.intent.issueId,
         taskId: request.taskId, operationKey: request.intent.operationKey })
       required(result?.taskId === request.taskId, 'BYTEBASE_RUN_TASK_RECEIPT_UNKNOWN')
@@ -202,6 +322,13 @@ export function createBytebaseDataChangePlatform({ config, api }) {
     },
     async reconcile(request) {
       const entry = checkRequest(request)
+      if (request.stage === 'rehearse-uat') {
+        const result = await api.getUatRehearsalByOperationKey({ project: entry.project,
+          operationKey: request.intent.operationKey })
+        if (!result?.passed) return { status: 'unknown', reason: 'rehearsal_not_observed' }
+        const verified = rehearsalView(result, request.intent)
+        return { status: 'succeeded', result: { receiptId: verified.receiptId } }
+      }
       if (request.stage === 'create-issue') {
         const found = await api.findIssueByOperationKey({ project: entry.project,
           operationKey: request.intent.operationKey })

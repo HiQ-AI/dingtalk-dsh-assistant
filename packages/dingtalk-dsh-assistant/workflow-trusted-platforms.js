@@ -12,10 +12,10 @@ const digestText = value => createHash('sha256').update(value, 'utf8').digest('h
 /** 将已认证的平台端口接到固定工作流。配置只保存目标白名单，不保存凭据。 */
 export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }) {
   const owner = requireText(ownerActorId, 'EXTERNAL_OWNER_REQUIRED')
-  if (config?.release?.targets?.some(target => target.kind === 'production-release')
-    && (!Array.isArray(config?.productionApproverActorIds) || !config.productionApproverActorIds.length
-      || config.productionApproverActorIds.some(id => typeof id !== 'string' || !id.trim())))
-    throw executionError('PRODUCTION_APPROVER_NOT_CONFIGURED')
+  const productionApprovers = config?.productionApproverActorIds ?? [owner]
+  if (!Array.isArray(productionApprovers) || !productionApprovers.length
+    || productionApprovers.some(id => typeof id !== 'string' || !id.trim()))
+    throw executionError('PRODUCTION_APPROVER_INVALID')
   const release = config?.release?.targets?.length
     ? createReleasePlatform({ targets: config.release.targets.map(({ id, ...target }) => target), clients: clients?.release })
     : null
@@ -48,14 +48,14 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       const selected = databaseTargets.get(targetId)
       if (!selected) throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
       const changeRef = requireText(action.arguments.changeRef, 'EXTERNAL_CHANGE_REF_REQUIRED')
-      const baselineRef = requireText(action.arguments.baselineRef, 'EXTERNAL_BASELINE_REF_REQUIRED')
       const source = materials.find(item => item.resourceRef === changeRef)
-      const baseline = materials.find(item => item.resourceRef === baselineRef)
-      if (!source?.text || !baseline?.text) throw executionError('EXTERNAL_MATERIAL_NOT_FOUND')
-      let snapshot
-      try { snapshot = JSON.parse(baseline.text) } catch { throw executionError('EXTERNAL_BASELINE_INVALID') }
-      if (typeof snapshot?.snapshotId !== 'string' || !/^[a-f0-9]{64}$/.test(snapshot.sha256 ?? ''))
-        throw executionError('EXTERNAL_BASELINE_INVALID')
+      if (!source?.text) throw executionError('EXTERNAL_MATERIAL_NOT_FOUND')
+      const snapshot = await clients.bytebase.readBaseline({ project: selected.project,
+        target: selected.target, scope: 'current' })
+      if (snapshot?.project !== selected.project || executionDigest(snapshot.target) !== executionDigest(selected.target)
+        || typeof snapshot.snapshotId !== 'string' || !snapshot.snapshotId
+        || !/^[a-f0-9]{64}$/.test(snapshot.sha256 ?? '') || typeof snapshot.evidenceRef !== 'string'
+        || !snapshot.evidenceRef) throw executionError('EXTERNAL_BASELINE_UNCONFIRMED')
       return { request, constraints, target: selected.target,
         sources: [{ id: changeRef, sha256: digestText(source.text), content: source.text }],
         baseline: { snapshotId: snapshot.snapshotId, sha256: snapshot.sha256 } }
@@ -76,12 +76,22 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     if (prepared.workflowKind === 'data-change') {
       if (!bytebase || ![...databaseTargets.values()].some(item => executionDigest(item.target) === executionDigest(prepared.target)))
         throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
+      if (prepared.stage === 'execute-task' && (typeof prepared.approvalRequestId !== 'string'
+        || !prepared.approvalRequestId || typeof prepared.taskId !== 'string' || !prepared.taskId))
+        throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
+      return { principalId: owner, authorizationRef: `bytebase:${executionDigest([binding.runId, binding.nodeRunId, prepared])}` }
     } else if (!release || !release.configuredKinds.includes(prepared.workflowKind)) {
       throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
     }
+    if (prepared.workflowKind === 'production-release' && prepared.operation !== 'approval-gate') {
+      if (prepared.operation === 'tag' && (!/^[a-f0-9]{64}$/.test(prepared.expected?.approvalReceiptDigest ?? '')
+        || !/^[a-f0-9]{64}$/.test(prepared.expected?.approvalScopeDigest ?? '')))
+        throw executionError('RELEASE_APPROVAL_PROOF_REQUIRED')
+      return { principalId: owner, authorizationRef: `release:${executionDigest([binding.runId, binding.nodeRunId, prepared])}` }
+    }
     return { principalId: owner, approval: {
       requestId: `external:${executionDigest([binding.runId, binding.nodeRunId, prepared])}`,
-      approverIds: prepared.workflowKind === 'production-release' ? [...new Set(config.productionApproverActorIds)] : [owner],
+      approverIds: [...new Set(productionApprovers)],
     } }
   }
   return { releaseAdapters: release?.releaseAdapters ?? {},

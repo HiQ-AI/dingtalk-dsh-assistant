@@ -28,15 +28,20 @@ function fixture(overrides = {}) {
     woodpecker: {
       async listPipelines() { return { complete: overrides.complete ?? true, hasMore: false,
         pipelines: state.pipeline, evidenceRef: 'woodpecker:list:1' } },
+      async readBuildEvidence({ pipelineNumber }) { return { pipelineNumber, commitSha,
+        imageDigest: overrides.buildDigest ?? imageDigest, evidenceRef: 'woodpecker:build:1' } },
       async triggerBuild(args) { state.calls.push(args); if (overrides.finish !== false) state.pipeline.push({ number: 1,
         commitSha, branch: target.branch, status: 'success' }); return { evidenceRef: 'woodpecker:trigger:1' } },
     },
     kubernetes: {
-      async readDeployment() { return { sourceSha: commitSha, imageDigest, generation: 3,
-        observedGeneration: 3, ready: true, evidenceRef: 'k8s:deployment:1' } },
+      async readDeployment() { return { uid: 'deployment-uid', generation: 3, observedGeneration: 3,
+        desiredReplicas: 1, readyReplicas: 1, ready: true, evidenceRef: 'k8s:deployment:1' } },
+      async readPods() { return { complete: true, deploymentUid: 'deployment-uid', pods: [{ ready: true,
+        deploymentUid: 'deployment-uid', imageDigest: overrides.podDigest ?? imageDigest }], evidenceRef: 'k8s:pods:1' } },
       async readEntry() { return { accessible: true, evidenceRef: 'http:entry:1' } },
     },
-    registry: { async readManifest() { return { digest: imageDigest, evidenceRef: 'registry:manifest:1' } } },
+    registry: { async readManifest() { return { digest: overrides.manifestDigest ?? imageDigest,
+      platformDigests: overrides.platformDigests ?? [imageDigest], evidenceRef: 'registry:manifest:1' } } },
     attestations: { async read() { return { facts: { localE2ePassed: true, developmentPrVerified: true,
       uatPrVerified: true, sourcePackageSupported: true }, evidenceRef: 'attestation:1' } } },
   }
@@ -119,4 +124,61 @@ test('执行前再查：已有在途流水线不重触发，普通 UAT 失败须
   failed.state.pipeline.push({ number: 6, branch: target.branch, commitSha, status: 'failure' })
   await assert.rejects(failed.platform.releaseAdapters['uat-delivery'].inspect({ phase: 'preflight', requirement }),
     { code: 'RELEASE_PLATFORM_FAILED_BUILD_REQUIRES_REBUILD' })
+})
+
+test('运行态凭流水线 SHA→镜像摘要→Pod imageID 同链，Deployment 无源码注解也可确认', async () => {
+  const childDigest = `sha256:${'c'.repeat(64)}`
+  const good = fixture({ podDigest: childDigest, platformDigests: [childDigest] })
+  good.state.pipeline.push({ number: 9, branch: target.branch, commitSha, status: 'success' })
+  const effect = { prepared: { workflowKind: 'uat-delivery', targetDigest: executionDigest(requirement.target),
+    operationKey: 'operation-1' }, receipt: { status: 'succeeded' } }
+  const observed = await good.platform.releaseAdapters['uat-delivery'].inspect({ phase: 'runtime', requirement, effect })
+  assert.equal(observed.facts.sourceSha, commitSha)
+  assert.equal(observed.facts.registryDigest, imageDigest)
+  assert.equal(observed.facts.runtimeDigest, childDigest)
+  assert.equal(observed.facts.imageChainVerified, true)
+
+  const drift = fixture({ podDigest: `sha256:${'d'.repeat(64)}`, platformDigests: [childDigest] })
+  drift.state.pipeline.push({ number: 9, branch: target.branch, commitSha, status: 'success' })
+  await assert.rejects(drift.platform.releaseAdapters['uat-delivery'].inspect({ phase: 'runtime', requirement, effect }),
+    { code: 'RELEASE_PLATFORM_RUNTIME_UNCONFIRMED' })
+  const missing = fixture({ buildDigest: 'unknown' })
+  missing.state.pipeline.push({ number: 9, branch: target.branch, commitSha, status: 'success' })
+  await assert.rejects(missing.platform.releaseAdapters['uat-delivery'].inspect({ phase: 'runtime', requirement, effect }),
+    { code: 'RELEASE_PLATFORM_BUILD_DIGEST_UNCONFIRMED' })
+})
+
+test('生产机械预检不依赖业务布尔证明，审批回执只授权冻结的 Tag', async () => {
+  const prodTarget = { ...target, kind: 'production-release', environment: 'production', branch: 'main',
+    releaseTag: 'v20260925-1', productionTriggerVerified: true }
+  const prodRequirement = { ...requirement, target: { ...requirement.target, environment: 'production' } }
+  const { clients } = fixture()
+  delete clients.attestations
+  clients.github.resolveApprovedPullRequest = async () => ({ number: 75, baseBranch: 'main',
+    mergeCommitSha: commitSha, merged: true, unique: true, evidenceRef: 'github:pr:75' })
+  clients.github.readTag = async () => ({ exists: false, evidenceRef: 'github:tag:absent' })
+  const platform = createReleasePlatform({ targets: [prodTarget], clients })
+  const adapter = platform.releaseAdapters['production-release']
+  const preflight = await adapter.inspect({ phase: 'preflight', requirement: prodRequirement })
+  assert.deepEqual(preflight.facts, {})
+  const merged = { phase: 'merged', status: 'confirmed', targetDigest: executionDigest(prodRequirement.target),
+    evidenceRefs: ['github:main:1'], facts: {} }
+  const approvalScopeDigest = executionDigest({ target: prodRequirement.target, operation: 'tag' })
+  const gate = await adapter.prepareOperation({ kind: 'production-release', operation: 'approval-gate',
+    requirement: prodRequirement, observation: merged, runId: 'run-prod', generation: 1,
+    requirementDigest: executionDigest(prodRequirement), expected: { commitSha, previousPhase: 'merged',
+      previousEvidenceDigest: executionDigest(merged.evidenceRefs), approvalScopeDigest } })
+  assert.equal(gate.expected.tag, prodTarget.releaseTag)
+  const receipt = await platform.operationAdapter.execute(gate)
+  assert.equal(receipt.scopeDigest, approvalScopeDigest)
+  const approved = await adapter.inspect({ phase: 'approved', requirement: prodRequirement,
+    effect: { prepared: gate, receipt } })
+  const tag = await adapter.prepareOperation({ kind: 'production-release', operation: 'tag',
+    requirement: prodRequirement, observation: approved, runId: 'run-prod', generation: 1,
+    requirementDigest: executionDigest(prodRequirement), expected: { commitSha, previousPhase: 'approved',
+      previousEvidenceDigest: executionDigest(approved.evidenceRefs), approvalScopeDigest,
+      approvalReceiptDigest: approved.facts.approvalReceiptDigest } })
+  assert.equal(tag.expected.tag, prodTarget.releaseTag)
+  await assert.rejects(platform.operationAdapter.execute({ ...tag, expected: { ...tag.expected,
+    approvalScopeDigest: '0'.repeat(64) } }), { code: 'RELEASE_PLATFORM_OPERATION_INVALID' })
 })

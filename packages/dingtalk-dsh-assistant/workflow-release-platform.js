@@ -9,19 +9,18 @@ const kinds = new Set(['uat-delivery', 'uat-rebuild', 'production-release'])
 const phases = {
   'uat-delivery': ['preflight', 'integrated', 'built', 'runtime'],
   'uat-rebuild': ['preflight', 'built', 'runtime'],
-  'production-release': ['preflight', 'merged', 'tagged', 'built', 'runtime'],
+  'production-release': ['preflight', 'merged', 'approved', 'tagged', 'built', 'runtime'],
 }
 const operations = {
   'uat-delivery': ['integrate', 'build'],
   'uat-rebuild': ['rebuild'],
-  'production-release': ['merge-main', 'tag', 'build'],
+  'production-release': ['merge-main', 'approval-gate', 'tag', 'build'],
 }
 const precedingPhase = { integrate: 'preflight', build: 'integrated', rebuild: 'preflight',
-  'merge-main': 'preflight', tag: 'merged' }
+  'merge-main': 'preflight', 'approval-gate': 'merged', tag: 'approved' }
 const attestations = {
   'uat-delivery': ['localE2ePassed', 'developmentPrVerified', 'uatPrVerified', 'sourcePackageSupported'],
   'uat-rebuild': ['failurePipelineVerified', 'branchHeadMatches', 'noNewerRuntimeVersion', 'sourcePackageSupported'],
-  'production-release': ['releaseSetVerified', 'uatAccepted', 'productionBaselineVerified', 'dependencyOrderVerified', 'rollbackBoundaryVerified'],
 }
 const validEvidence = value => nonempty(value?.evidenceRef)
 const safe = value => value && typeof value === 'object' && !Array.isArray(value)
@@ -29,16 +28,18 @@ const safe = value => value && typeof value === 'object' && !Array.isArray(value
 /** Host 固定配置。凭据由注入的受信客户端持有，不能出现在 target 或 prepared 中。 */
 export function createReleasePlatform({ targets, clients }) {
   if (!Array.isArray(targets) || !safe(clients) || !targets.length) fail('RELEASE_PLATFORM_CONFIG_INVALID')
-  for (const name of ['github', 'woodpecker', 'kubernetes', 'registry', 'attestations']) {
+  for (const name of ['github', 'woodpecker', 'kubernetes', 'registry',
+    ...(targets.some(target => target.kind !== 'production-release') ? ['attestations'] : [])]) {
     if (!safe(clients[name])) fail('RELEASE_PLATFORM_CLIENT_REQUIRED')
   }
-  const commonMethods = { github: ['readBranch'], woodpecker: ['listPipelines'],
-    kubernetes: ['readDeployment', 'readEntry'], registry: ['readManifest'], attestations: ['read'] }
+  const commonMethods = { github: ['readBranch'], woodpecker: ['listPipelines', 'readBuildEvidence'],
+    kubernetes: ['readDeployment', 'readPods', 'readEntry'], registry: ['readManifest'] }
   for (const target of targets) {
     const methods = { ...commonMethods,
       github: [...commonMethods.github, ...(target?.kind === 'uat-rebuild' ? []
         : ['resolveApprovedPullRequest', 'readPullRequest']), ...(target?.kind === 'production-release' ? ['readTag', 'createTag'] : [])],
-      woodpecker: [...commonMethods.woodpecker, ...(target?.kind === 'production-release' ? [] : ['triggerBuild'])] }
+      woodpecker: [...commonMethods.woodpecker, ...(target?.kind === 'production-release' ? [] : ['triggerBuild'])],
+      ...(target?.kind === 'production-release' ? {} : { attestations: ['read'] }) }
     for (const [client, required] of Object.entries(methods)) {
       if (required.some(method => typeof clients[client]?.[method] !== 'function')) fail('RELEASE_PLATFORM_CAPABILITY_MISSING')
     }
@@ -110,6 +111,16 @@ export function createReleasePlatform({ targets, clients }) {
       ? row.ref === `refs/tags/${target.releaseTag}` : row.branch === target.branch))
     return { ...result, same, equivalentBuildAbsent: !same.some(row => ['created', 'pending', 'running', 'blocked', 'success'].includes(row.status)) }
   }
+  async function buildEvidence(target, commitSha) {
+    const scan = await pipelines(target, commitSha)
+    const succeeded = scan.same.filter(row => row.status === 'success')
+    if (succeeded.length !== 1) fail('RELEASE_PLATFORM_BUILD_UNCONFIRMED')
+    const build = await read('woodpecker', 'readBuildEvidence', { baseUrl: target.woodpecker.baseUrl,
+      repositoryId: target.woodpecker.repositoryId, pipelineNumber: succeeded[0].number })
+    if (build.pipelineNumber !== succeeded[0].number || build.commitSha !== commitSha
+      || !digest(build.imageDigest)) fail('RELEASE_PLATFORM_BUILD_DIGEST_UNCONFIRMED')
+    return { scan, build }
+  }
   async function inspect({ kind, phase, requirement, effect }) {
     if (!phases[kind]?.includes(phase)) fail('RELEASE_PLATFORM_PHASE_INVALID')
     const target = targetFor(requirement, kind), refs = [], facts = {}
@@ -118,11 +129,15 @@ export function createReleasePlatform({ targets, clients }) {
       const head = add(await branchHead(target))
       if (head.commitSha !== requirement.target.commitSha) fail('RELEASE_PLATFORM_BRANCH_MOVED')
       if (kind !== 'uat-rebuild') add(await approvedPullRequest(target, requirement.target.commitSha, requirement.evidenceRefs))
-      const signed = add(await read('attestations', 'read', { kind, target: requirement.target,
-        required: attestations[kind], evidenceRefs: requirement.evidenceRefs }))
-      if (attestations[kind].some(key => signed.facts?.[key] !== true)) fail('RELEASE_PLATFORM_ATTESTATION_MISSING')
-      for (const key of attestations[kind]) facts[key] = true
-      if (kind !== 'production-release') {
+      if (kind === 'production-release') {
+        const tag = add(await read('github', 'readTag', { repository: target.repository, tag: target.releaseTag }))
+        if (tag.exists !== false && tag.commitSha !== requirement.target.commitSha) fail('RELEASE_PLATFORM_TAG_CONFLICT')
+        add(await pipelines(target, requirement.target.commitSha))
+      } else {
+        const signed = add(await read('attestations', 'read', { kind, target: requirement.target,
+          required: attestations[kind], evidenceRefs: requirement.evidenceRefs }))
+        if (attestations[kind].some(key => signed.facts?.[key] !== true)) fail('RELEASE_PLATFORM_ATTESTATION_MISSING')
+        for (const key of attestations[kind]) facts[key] = true
         const scan = add(await pipelines(target, requirement.target.commitSha))
         facts.equivalentBuildAbsent = scan.equivalentBuildAbsent
         if (kind === 'uat-delivery' && scan.same.some(row => ['failure', 'error', 'killed', 'declined', 'canceled'].includes(row.status)))
@@ -131,25 +146,48 @@ export function createReleasePlatform({ targets, clients }) {
     } else if (phase === 'integrated' || phase === 'merged') {
       const ref = add(await branchHead(target))
       if (ref.commitSha !== requirement.target.commitSha) fail('RELEASE_PLATFORM_BRANCH_MISMATCH')
+    } else if (phase === 'approved') {
+      if (effect?.prepared?.operation !== 'approval-gate' || effect.receipt?.status !== 'succeeded'
+        || effect.prepared.expected.approvalScopeDigest !== executionDigest({ target: requirement.target, operation: 'tag' }))
+        fail('RELEASE_PLATFORM_APPROVAL_UNCONFIRMED')
+      if (effect.receipt.scopeDigest !== effect.prepared.expected.approvalScopeDigest)
+        fail('RELEASE_PLATFORM_APPROVAL_UNCONFIRMED')
+      refs.push(effect.receipt.evidenceRef ?? `effect:${executionDigest(effect.receipt)}`)
+      facts.approvalScopeDigest = effect.prepared.expected.approvalScopeDigest
+      facts.approvalReceiptDigest = executionDigest(effect.receipt)
     } else if (phase === 'tagged') {
       const tag = add(await read('github', 'readTag', { repository: target.repository,
         tag: effect?.prepared?.expected?.tag }))
       if (tag.commitSha !== requirement.target.commitSha) fail('RELEASE_PLATFORM_TAG_MISMATCH')
     } else if (phase === 'built') {
-      const scan = add(await pipelines(target, requirement.target.commitSha))
-      if (!scan.same.some(row => row.status === 'success')) fail('RELEASE_PLATFORM_BUILD_UNCONFIRMED')
+      const { scan, build } = await buildEvidence(target, requirement.target.commitSha)
+      add(scan); add(build)
+      facts.buildImageDigest = build.imageDigest
     } else if (phase === 'runtime') {
+      const { scan, build } = await buildEvidence(target, requirement.target.commitSha)
+      add(scan); add(build)
       const manifest = add(await read('registry', 'readManifest', { image: target.registry.image,
-        commitSha: requirement.target.commitSha }))
+        digest: build.imageDigest }))
       const deployment = add(await read('kubernetes', 'readDeployment', target.kubernetes))
+      const pods = add(await read('kubernetes', 'readPods', { ...target.kubernetes, deploymentUid: deployment.uid }))
       const entry = add(await read('kubernetes', 'readEntry', { url: target.entryUrl }))
-      if (!digest(manifest.digest) || !digest(deployment.imageDigest)
-        || manifest.digest !== deployment.imageDigest || deployment.sourceSha !== requirement.target.commitSha
+      if (!digest(manifest.digest) || manifest.digest !== build.imageDigest
+        || !Array.isArray(manifest.platformDigests) || !manifest.platformDigests.length
+        || manifest.platformDigests.some(value => !digest(value))
+        || new Set(manifest.platformDigests).size !== manifest.platformDigests.length
+        || !nonempty(deployment.uid) || pods.complete !== true || pods.deploymentUid !== deployment.uid
+        || !Array.isArray(pods.pods) || pods.pods.length < 1 || !Number.isInteger(deployment.readyReplicas)
+        || !Number.isInteger(deployment.desiredReplicas) || deployment.desiredReplicas < 1
+        || deployment.readyReplicas !== deployment.desiredReplicas || pods.pods.length !== deployment.desiredReplicas
+        || pods.pods.some(pod => pod.ready !== true || pod.deploymentUid !== deployment.uid
+          || !digest(pod.imageDigest) || !manifest.platformDigests.includes(pod.imageDigest))
         || !Number.isInteger(deployment.generation) || !Number.isInteger(deployment.observedGeneration)
         || deployment.observedGeneration < deployment.generation || deployment.ready !== true
         || entry.accessible !== true) fail('RELEASE_PLATFORM_RUNTIME_UNCONFIRMED')
-      Object.assign(facts, { sourceSha: deployment.sourceSha, registryDigest: manifest.digest,
-        runtimeDigest: deployment.imageDigest, observedGeneration: String(deployment.observedGeneration),
+      const runtimeImageDigests = [...new Set(pods.pods.map(pod => pod.imageDigest))].sort()
+      Object.assign(facts, { sourceSha: build.commitSha, registryDigest: manifest.digest,
+        runtimeDigest: runtimeImageDigests.length === 1 ? runtimeImageDigests[0] : `sha256:${executionDigest(runtimeImageDigests)}`,
+        runtimeImageDigests, imageChainVerified: true, observedGeneration: String(deployment.observedGeneration),
         ready: true, entryAccessible: true })
     }
     if (effect) {
@@ -167,6 +205,8 @@ export function createReleasePlatform({ targets, clients }) {
       || observation.targetDigest !== executionDigest(requirement.target)
       || observation.phase !== (kind === 'production-release' && operation === 'build' ? 'tagged' : precedingPhase[operation])
       || expected.previousPhase !== observation.phase || expected.previousEvidenceDigest !== executionDigest(observation.evidenceRefs)
+      || (kind === 'production-release' && expected.approvalScopeDigest !== executionDigest({ target: requirement.target, operation: 'tag' }))
+      || (kind === 'production-release' && operation === 'tag' && expected.approvalReceiptDigest !== observation.facts.approvalReceiptDigest)
       || !nonempty(runId) || !Number.isInteger(generation) || !/^[a-f0-9]{64}$/.test(requirementDigest)) fail('RELEASE_PLATFORM_PREPARE_INVALID')
     // 操作参数只取自白名单和冻结的需求，不接受模型生成的 URL、命令或认证字段。
     const operationKey = executionDigest({ kind, operation, runId, generation, requirementDigest,
@@ -177,7 +217,7 @@ export function createReleasePlatform({ targets, clients }) {
       resourceKey: `external:${requirement.target.environment}:${requirement.target.repository}:${requirement.target.service}`,
       targetDigest: observation.targetDigest, expected: { ...expected,
         ...(pr ? { pullRequestNumber: pr.number, mergeCommitSha: pr.mergeCommitSha } : {}),
-        ...(operation === 'tag' ? { tag: target.releaseTag } : {}) }, operationKey }
+        ...(['approval-gate', 'tag'].includes(operation) ? { tag: target.releaseTag } : {}) }, operationKey }
   }
   function assertPrepared(prepared) {
     if (!safe(prepared) || !operations[prepared.workflowKind]?.includes(prepared.operation)
@@ -193,7 +233,10 @@ export function createReleasePlatform({ targets, clients }) {
       || prepared.targetDigest !== executionDigest(identity)
       || prepared.expected.previousPhase !== (prepared.workflowKind === 'production-release' && prepared.operation === 'build'
         ? 'tagged' : precedingPhase[prepared.operation])
-      || (prepared.operation === 'tag' && prepared.expected.tag !== target.releaseTag)
+      || (['approval-gate', 'tag'].includes(prepared.operation) && prepared.expected.tag !== target.releaseTag)
+      || (prepared.workflowKind === 'production-release'
+        && prepared.expected.approvalScopeDigest !== executionDigest({ target: identity, operation: 'tag' }))
+      || (prepared.operation === 'tag' && !/^[a-f0-9]{64}$/.test(prepared.expected.approvalReceiptDigest ?? ''))
       || (['integrate', 'merge-main'].includes(prepared.operation)
         && (!Number.isInteger(prepared.expected.pullRequestNumber) || prepared.expected.pullRequestNumber < 1
           || prepared.expected.mergeCommitSha !== prepared.expected.commitSha))
@@ -207,6 +250,7 @@ export function createReleasePlatform({ targets, clients }) {
     // merge SHA 必须已在目标分支，故集成/主干合并只能确认既有结果；不可猜测 GitHub merge 产生的新 SHA。
     if (['integrate', 'merge-main'].includes(prepared.operation)
       || prepared.workflowKind === 'production-release' && prepared.operation === 'build') return reconcile(prepared)
+    if (prepared.operation === 'approval-gate') return reconcile(prepared)
     if (['build', 'rebuild'].includes(prepared.operation)) {
       const current = await pipelines(target, prepared.expected.commitSha)
       if (current.same.some(row => row.status === 'success')) return { status: 'succeeded',
@@ -235,9 +279,12 @@ export function createReleasePlatform({ targets, clients }) {
   async function reconcile(prepared) {
     const target = assertPrepared(prepared)
     const kind = prepared.operation === 'build' || prepared.operation === 'rebuild' ? 'build'
-      : prepared.operation === 'tag' ? 'tag' : 'branch'
+      : prepared.operation === 'tag' ? 'tag' : prepared.operation === 'approval-gate' ? 'approval' : 'branch'
     let observation
-    if (kind === 'build') {
+    if (kind === 'approval') {
+      return { status: 'succeeded', scopeDigest: prepared.expected.approvalScopeDigest,
+        evidenceRef: `approval-gate:${prepared.operationKey}`, operationKey: prepared.operationKey }
+    } else if (kind === 'build') {
       const scan = await pipelines(target, prepared.expected.commitSha)
       observation = { evidenceRef: scan.evidenceRef,
         confirmed: scan.same.some(row => row.status === 'success') }

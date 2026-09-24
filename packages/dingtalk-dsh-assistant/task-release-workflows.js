@@ -36,13 +36,13 @@ const finalSchema = { type: 'object', properties: {
 const catalog = {
   'uat-delivery': { environment: 'uat', operations: ['integrate', 'build'], phases: ['preflight', 'integrated', 'built', 'runtime'],
     requiredPreflight: ['localE2ePassed', 'developmentPrVerified', 'uatPrVerified', 'sourcePackageSupported', 'equivalentBuildAbsent'],
-    requiredFinal: ['sourceSha', 'registryDigest', 'runtimeDigest', 'observedGeneration', 'ready', 'entryAccessible'] },
-  'production-release': { environment: 'production', operations: ['merge-main', 'tag', 'build'], phases: ['preflight', 'merged', 'tagged', 'built', 'runtime'],
-    requiredPreflight: ['releaseSetVerified', 'uatAccepted', 'productionBaselineVerified', 'dependencyOrderVerified', 'rollbackBoundaryVerified'],
-    requiredFinal: ['sourceSha', 'registryDigest', 'runtimeDigest', 'observedGeneration', 'ready', 'entryAccessible'] },
+    requiredFinal: ['sourceSha', 'registryDigest', 'runtimeDigest', 'observedGeneration', 'ready', 'entryAccessible', 'imageChainVerified'] },
+  'production-release': { environment: 'production', operations: ['merge-main', 'approval-gate', 'tag', 'build'], phases: ['preflight', 'merged', 'approved', 'tagged', 'built', 'runtime'],
+    requiredPreflight: [],
+    requiredFinal: ['sourceSha', 'registryDigest', 'runtimeDigest', 'observedGeneration', 'ready', 'entryAccessible', 'imageChainVerified'] },
   'uat-rebuild': { environment: 'uat', operations: ['rebuild'], phases: ['preflight', 'built', 'runtime'],
     requiredPreflight: ['failurePipelineVerified', 'equivalentBuildAbsent', 'branchHeadMatches', 'noNewerRuntimeVersion', 'sourcePackageSupported'],
-    requiredFinal: ['sourceSha', 'registryDigest', 'runtimeDigest', 'observedGeneration', 'ready', 'entryAccessible'] },
+    requiredFinal: ['sourceSha', 'registryDigest', 'runtimeDigest', 'observedGeneration', 'ready', 'entryAccessible', 'imageChainVerified'] },
 }
 
 const targetDigest = target => executionDigest(target)
@@ -77,7 +77,10 @@ function assertPrepared(prepared, { kind, operation, runId, generation, requirem
     || prepared.expected.commitSha !== requirement.target.commitSha
     || prepared.expected.previousEvidenceDigest !== executionDigest(previous.evidenceRefs)
     || prepared.expected.previousPhase !== previous.phase
-    || (kind === 'production-release' && prepared.expected.approvalScopeDigest !== executionDigest({ target: requirement.target, operation }))) throw executionError('RELEASE_OPERATION_IDENTITY_INVALID')
+    || (kind === 'production-release' && prepared.expected.approvalScopeDigest !== executionDigest({ target: requirement.target, operation: 'tag' }))
+    || (kind === 'production-release' && ['approval-gate', 'tag'].includes(operation) && !nonempty(prepared.expected.tag))
+    || (kind === 'production-release' && operation === 'tag'
+      && prepared.expected.approvalReceiptDigest !== previous.facts.approvalReceiptDigest)) throw executionError('RELEASE_OPERATION_IDENTITY_INVALID')
   return prepared
 }
 
@@ -109,11 +112,15 @@ export function createReleaseTaskWorkflow({ kind, adapter }) {
         if (effect && (effect.prepared.workflowKind !== kind || effect.prepared.targetDigest !== targetDigest(requirement.target)
           || observation.facts.operationKey !== effect.prepared.operationKey
           || observation.facts.receiptDigest !== executionDigest(effect.receipt))) throw executionError('RELEASE_EFFECT_READBACK_MISMATCH')
+        if (phase === 'approved' && (effect?.prepared.operation !== 'approval-gate' || effect.receipt?.status !== 'succeeded'
+          || effect.receipt.scopeDigest !== executionDigest({ target: requirement.target, operation: 'tag' })
+          || observation.facts.approvalScopeDigest !== executionDigest({ target: requirement.target, operation: 'tag' })
+          || observation.facts.approvalReceiptDigest !== executionDigest(effect.receipt)))
+          throw executionError('RELEASE_APPROVAL_READBACK_MISMATCH')
         if (phase === 'preflight') assertFacts(observation, spec.requiredPreflight)
         if (phase === 'runtime') {
           assertFacts(observation, spec.requiredFinal)
-          if (observation.facts.sourceSha !== requirement.target.commitSha
-            || observation.facts.registryDigest !== observation.facts.runtimeDigest) throw executionError('RELEASE_RUNTIME_IDENTITY_MISMATCH')
+          if (observation.facts.sourceSha !== requirement.target.commitSha) throw executionError('RELEASE_RUNTIME_IDENTITY_MISMATCH')
         }
         return { requirement, observation }
       } })
@@ -124,8 +131,7 @@ export function createReleaseTaskWorkflow({ kind, adapter }) {
         execute: async ({ input }) => {
           assertObservation(input.observation, 'runtime', input.requirement)
           assertFacts(input.observation, spec.requiredFinal)
-          if (input.observation.facts.sourceSha !== input.requirement.target.commitSha
-            || input.observation.facts.registryDigest !== input.observation.facts.runtimeDigest) throw executionError('RELEASE_RUNTIME_IDENTITY_MISMATCH')
+          if (input.observation.facts.sourceSha !== input.requirement.target.commitSha) throw executionError('RELEASE_RUNTIME_IDENTITY_MISMATCH')
           return { workflowKind: kind, targetDigest: targetDigest(input.requirement.target), commitSha: input.requirement.target.commitSha,
             status: 'technical-delivery-confirmed', evidenceRefs: input.observation.evidenceRefs,
             boundaries: ['业务 E2E 和测试负责人正式验收须独立证明；本结果仅为技术交付。'] }
@@ -143,7 +149,8 @@ export function createReleaseTaskWorkflow({ kind, adapter }) {
         assertObservation(observation, phase, requirement)
         const expected = { commitSha: requirement.target.commitSha, previousPhase: phase,
           previousEvidenceDigest: executionDigest(observation.evidenceRefs),
-          ...(kind === 'production-release' ? { approvalScopeDigest: executionDigest({ target: requirement.target, operation }) } : {}) }
+          ...(kind === 'production-release' ? { approvalScopeDigest: executionDigest({ target: requirement.target, operation: 'tag' }),
+            ...(operation === 'tag' ? { approvalReceiptDigest: observation.facts.approvalReceiptDigest } : {}) } : {}) }
         const prepared = await adapter.prepareOperation({ kind, operation, requirement: structuredClone(requirement),
           observation: structuredClone(observation), runId, generation, requirementDigest, expected: structuredClone(expected), signal })
         signal?.throwIfAborted()

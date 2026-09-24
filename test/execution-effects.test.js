@@ -93,6 +93,16 @@ test('无授权依据和伪authorized=true拒绝；ref仅记录受信Host依据'
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM execution_effects').get().n, 0)
 })
 
+test('待真人审批效果可只读列出，不将已批准效果误作待审批', t => {
+  const f = fixture(); t.after(() => f.db.close())
+  f.command('effect.prepare', prepared('human-gate', { ...request('release-gate') }))
+  assert.deepEqual(queryEffects(f.db, { kind: 'approval.list', limit: 10 }).map(item => [item.requestId, item.decision]),
+    [['release-gate', 'pending']])
+  f.command('approval.decide', decide('release-gate'))
+  assert.equal(queryEffects(f.db, { kind: 'approval.list', limit: 10 })[0].decision, 'approved')
+  assert.throws(() => queryEffects(f.db, { kind: 'approval.list', limit: 0 }), code('effect_invalid_argument'))
+})
+
 test('首次begin与资源占用同事务，重复begin无第二次许可或事件', t => {
   const f = fixture(); t.after(() => f.db.close())
   f.command('effect.prepare', prepared())

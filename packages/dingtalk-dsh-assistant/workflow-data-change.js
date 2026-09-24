@@ -20,17 +20,19 @@ const packageSchema = { type: 'object', properties: {
 }, required: ['target', 'baseline', 'sourceDigest', 'applySql', 'applySqlSha256', 'rollbackSql', 'verificationSql', 'expectedChange', 'validation'], additionalProperties: false }
 const rehearsalSchema = { type: 'object', properties: {
   package: packageSchema,
-  rehearsal: { type: 'object', properties: { adapterId: text, adapterVersion: text, receiptId: text, packageDigest: sha, isolated: { type: 'boolean' }, passed: { type: 'boolean' }, observedChange: text }, required: ['adapterId', 'adapterVersion', 'receiptId', 'packageDigest', 'isolated', 'passed', 'observedChange'], additionalProperties: false },
+  rehearsal: { type: 'object', properties: { adapterId: text, adapterVersion: text, receiptId: text, packageDigest: sha, uat: { type: 'boolean' }, passed: { type: 'boolean' }, observedChange: text }, required: ['adapterId', 'adapterVersion', 'receiptId', 'packageDigest', 'uat', 'passed', 'observedChange'], additionalProperties: false },
 }, required: ['package', 'rehearsal'], additionalProperties: false }
 const hash = value => createHash('sha256').update(value, 'utf8').digest('hex')
 const nonempty = value => typeof value === 'string' && !!value.trim() && value === value.trim()
 const isSha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+const sameTarget = (a, b) => a?.instance === b?.instance && a?.database === b?.database
+  && a?.environment === b?.environment
 
-/** 只创建离线准备流程。Bytebase 工单、审批和生产执行不在本流程授权范围内。 */
+/** 只创建候选 SQL 与校验包；UAT 演练必须走正式流程的外部效果账。 */
 export function createDataChangePreparationWorkflow({ provider, model, reasoningEffort, adapter }) {
   if (!adapter || !nonempty(adapter.id) || !nonempty(adapter.version)
     || !isSha(adapter.rulesDigest)
-    || typeof adapter.validate !== 'function' || typeof adapter.rehearse !== 'function') throw executionError('DATA_CHANGE_ADAPTER_REQUIRED')
+    || typeof adapter.validate !== 'function') throw executionError('DATA_CHANGE_ADAPTER_REQUIRED')
   const adapterId = adapter.id, adapterVersion = adapter.version, rulesDigest = adapter.rulesDigest
   return { id: 'task-data-change-prepare', version: '1', nodes: [
     { id: 'freeze-input', version: '1', executor: 'code', allowedEffects: ['pure'],
@@ -71,22 +73,6 @@ export function createDataChangePreparationWorkflow({ provider, model, reasoning
         return { ...body, validation: { adapterId, adapterVersion, receiptId: receipt.receiptId, packageDigest } }
       },
     },
-    { id: 'rehearse-isolated', version: '1', executor: 'code', drainPolicy: 'external-process', allowedEffects: ['read'], rulesDigest,
-      inputSchema: packageSchema, outputSchema: rehearsalSchema,
-      mapInput: ({ previousOutput }) => previousOutput,
-      execute: async ({ input, signal }) => {
-        signal?.throwIfAborted()
-        const { validation, ...body } = input
-        if (validation.adapterId !== adapterId || validation.adapterVersion !== adapterVersion
-          || validation.packageDigest !== executionDigest(body)) throw executionError('DATA_CHANGE_PACKAGE_IDENTITY_CHANGED')
-        const receipt = await adapter.rehearse({ package: structuredClone(input), signal })
-        signal?.throwIfAborted()
-        if (receipt?.passed !== true || receipt.isolated !== true || receipt.packageDigest !== validation.packageDigest
-          || !nonempty(receipt.receiptId) || !nonempty(receipt.observedChange)) throw executionError('DATA_CHANGE_REHEARSAL_UNCONFIRMED')
-        return { package: input, rehearsal: { adapterId, adapterVersion, receiptId: receipt.receiptId,
-          packageDigest: receipt.packageDigest, isolated: true, passed: true, observedChange: receipt.observedChange } }
-      },
-    },
   ] }
 }
 
@@ -98,8 +84,9 @@ const issueViewSchema = { type: 'object', properties: {
   task: { type: 'object', properties: { id: text, planId: text, status: text }, required: ['id', 'planId', 'status'], additionalProperties: false },
 }, required: ['prepared', 'issue', 'sheet', 'plan', 'task'], additionalProperties: false }
 const approvalSchema = { type: 'object', properties: {
-  decision: text, taskId: text, sheetSha256: sha, packageDigest: sha, requestId: text, decidedBy: text,
-}, required: ['decision', 'taskId', 'sheetSha256', 'packageDigest', 'requestId', 'decidedBy'], additionalProperties: false }
+  decision: text, source: text, human: { type: 'boolean' }, issueId: text, target: targetSchema,
+  taskId: text, sheetSha256: sha, packageDigest: sha, requestId: text, decidedBy: text,
+}, required: ['decision', 'source', 'human', 'issueId', 'target', 'taskId', 'sheetSha256', 'packageDigest', 'requestId', 'decidedBy'], additionalProperties: false }
 const approvedViewSchema = { type: 'object', properties: { ...issueViewSchema.properties, approval: approvalSchema },
   required: [...issueViewSchema.required, 'approval'], additionalProperties: false }
 const externalRequestSchema = { type: 'object', properties: {
@@ -109,6 +96,8 @@ const externalRequestSchema = { type: 'object', properties: {
   taskId: text, approvalRequestId: text,
 }, required: ['action', 'workflowKind', 'stage', 'runId', 'generation', 'requirementDigest', 'resourceKey', 'packageDigest', 'applySqlSha256', 'target', 'intent'], additionalProperties: false }
 const preparedIssueSchema = { type: 'object', properties: { prepared: rehearsalSchema, request: externalRequestSchema }, required: ['prepared', 'request'], additionalProperties: false }
+const preparedRehearsalSchema = { type: 'object', properties: { package: packageSchema, request: externalRequestSchema }, required: ['package', 'request'], additionalProperties: false }
+const rehearsalReceiptSchema = { type: 'object', properties: { ...preparedRehearsalSchema.properties, receipt: { type: 'object' } }, required: [...preparedRehearsalSchema.required, 'receipt'], additionalProperties: false }
 const issuedSchema = { type: 'object', properties: { ...preparedIssueSchema.properties, receipt: { type: 'object' } }, required: [...preparedIssueSchema.required, 'receipt'], additionalProperties: false }
 const preparedExecuteSchema = { type: 'object', properties: { view: approvedViewSchema, request: externalRequestSchema }, required: ['view', 'request'], additionalProperties: false }
 const executedSchema = { type: 'object', properties: { ...preparedExecuteSchema.properties, receipt: { type: 'object' } }, required: [...preparedExecuteSchema.required, 'receipt'], additionalProperties: false }
@@ -126,10 +115,45 @@ const intent = value => {
 
 /** 受信适配器齐备才注册完整流程。所有发送经过 Controller 的持久效果账和独立授权。 */
 export function createDataChangeTaskWorkflow({ provider, model, reasoningEffort, adapter }) {
-  if (['inspect', 'prepareIssue', 'prepareExecute', 'readback'].some(name => typeof adapter?.[name] !== 'function')) throw executionError('DATA_CHANGE_EXTERNAL_ADAPTER_REQUIRED')
+  if (['prepareRehearsal', 'readbackRehearsal', 'inspect', 'prepareIssue', 'prepareExecute', 'readback'].some(name => typeof adapter?.[name] !== 'function')) throw executionError('DATA_CHANGE_EXTERNAL_ADAPTER_REQUIRED')
   const base = createDataChangePreparationWorkflow({ provider, model, reasoningEffort, adapter })
   const identity = (prepared, values) => assertDataChangeExecutionIdentity({ prepared, ...values })
-  return { id: 'task-data-change', version: '1', nodes: [...base.nodes,
+  return { id: 'task-data-change', version: '2', nodes: [...base.nodes,
+    { id: 'prepare-rehearsal', version: '1', executor: 'code', drainPolicy: 'external-process', allowedEffects: ['read'], rulesDigest: adapter.rulesDigest,
+      inputSchema: packageSchema, outputSchema: preparedRehearsalSchema,
+      mapInput: ({ previousOutput }) => previousOutput,
+      execute: async ({ input, runId, generation, requirementDigest, signal }) => {
+        signal?.throwIfAborted()
+        const { validation, ...body } = input
+        if (validation.adapterId !== adapter.id || validation.adapterVersion !== adapter.version
+          || validation.packageDigest !== executionDigest(body)) throw executionError('DATA_CHANGE_PACKAGE_IDENTITY_CHANGED')
+        const request = { action: 'external', workflowKind: 'data-change', stage: 'rehearse-uat', runId, generation,
+          requirementDigest, resourceKey: resourceKey(input.target), packageDigest: validation.packageDigest,
+          applySqlSha256: input.applySqlSha256, target: input.target,
+          intent: intent(await adapter.prepareRehearsal({ package: input, runId, generation, requirementDigest, signal })) }
+        signal?.throwIfAborted()
+        return { package: input, request }
+      },
+    },
+    { id: 'run-rehearsal', version: '1', executor: 'code', allowedEffects: ['external.operation'],
+      inputSchema: preparedRehearsalSchema, outputSchema: rehearsalReceiptSchema, mapInput: ({ previousOutput }) => previousOutput,
+      execute: async ({ input, perform }) => ({ ...input, receipt: await perform({ action: 'external', prepared: input.request }) }),
+    },
+    { id: 'readback-rehearsal', version: '1', executor: 'code', drainPolicy: 'external-process', allowedEffects: ['read'], rulesDigest: adapter.rulesDigest,
+      inputSchema: rehearsalReceiptSchema, outputSchema: rehearsalSchema, mapInput: ({ previousOutput }) => previousOutput,
+      execute: async ({ input, signal }) => {
+        signal?.throwIfAborted()
+        const receipt = await adapter.readbackRehearsal({ package: input.package, request: input.request,
+          receipt: input.receipt, signal })
+        signal?.throwIfAborted()
+        if (receipt?.passed !== true || receipt.uat !== true
+          || receipt.packageDigest !== input.package.validation.packageDigest
+          || !nonempty(receipt.receiptId) || !nonempty(receipt.observedChange)) throw executionError('DATA_CHANGE_REHEARSAL_UNCONFIRMED')
+        return { package: input.package, rehearsal: { adapterId: adapter.id, adapterVersion: adapter.version,
+          receiptId: receipt.receiptId, packageDigest: receipt.packageDigest,
+          uat: true, passed: true, observedChange: receipt.observedChange } }
+      },
+    },
     { id: 'prepare-issue', version: '1', executor: 'code', allowedEffects: ['read'], rulesDigest: adapter.rulesDigest,
       inputSchema: rehearsalSchema, outputSchema: preparedIssueSchema, mapInput: ({ previousOutput }) => previousOutput,
       execute: async ({ input, runId, generation, requirementDigest, signal }) => {
@@ -162,7 +186,7 @@ export function createDataChangeTaskWorkflow({ provider, model, reasoningEffort,
         return { prepared: input.prepared, issue: view.issue, sheet: view.sheet, plan: view.plan, task: view.task }
       },
     },
-    { id: 'inspect-approval', version: '1', executor: 'code', drainPolicy: 'external-process', allowedEffects: ['read'], rulesDigest: adapter.rulesDigest,
+    { id: 'approval-gate', version: '2', executor: 'code', drainPolicy: 'external-process', allowedEffects: ['read'], rulesDigest: adapter.rulesDigest,
       inputSchema: issueViewSchema, outputSchema: approvedViewSchema, mapInput: ({ previousOutput }) => previousOutput,
       execute: async ({ input, signal }) => {
         signal?.throwIfAborted()
@@ -170,7 +194,8 @@ export function createDataChangeTaskWorkflow({ provider, model, reasoningEffort,
           plan: input.plan, task: input.task, prepared: input.prepared, signal })
         signal?.throwIfAborted()
         if (approval?.decision === 'pending' || !approval) throw executionError('DATA_CHANGE_APPROVAL_PENDING')
-        identity(input.prepared, { sheet: input.sheet, plan: input.plan, task: input.task, approval })
+        identity(input.prepared, { issue: input.issue, sheet: input.sheet,
+          plan: input.plan, task: input.task, approval })
         return { ...input, approval }
       },
     },
@@ -184,12 +209,14 @@ export function createDataChangeTaskWorkflow({ provider, model, reasoningEffort,
         if (!current || executionDigest(current.sheet) !== executionDigest(input.sheet)
           || executionDigest(current.plan) !== executionDigest(input.plan)
           || executionDigest(current.task) !== executionDigest(input.task)) throw executionError('DATA_CHANGE_PREFLIGHT_CHANGED')
-        const exact = identity(input.prepared, { sheet: current.sheet, plan: current.plan, task: current.task, approval: input.approval })
+        const exact = identity(input.prepared, { issue: input.issue, sheet: current.sheet,
+          plan: current.plan, task: current.task, approval: input.approval })
         const request = { action: 'external', workflowKind: 'data-change', stage: 'execute-task', runId, generation,
           requirementDigest, resourceKey: resourceKey(exact.target), packageDigest: exact.packageDigest,
           applySqlSha256: exact.applySqlSha256, target: exact.target,
           taskId: exact.taskId, approvalRequestId: exact.approvalRequestId,
-          intent: intent(await adapter.prepareExecute({ identity: exact, issue: input.issue, approval: input.approval, signal })) }
+          intent: intent(await adapter.prepareExecute({ identity: exact, issue: input.issue,
+            approval: input.approval, prepared: input.prepared, signal })) }
         signal?.throwIfAborted()
         return { view: input, request }
       },
@@ -221,10 +248,10 @@ export function createDataChangeTaskWorkflow({ provider, model, reasoningEffort,
 }
 
 /** 后续工单/执行连接器必须用此精确身份核验；此函数本身不批准、提交或执行任何动作。 */
-export function assertDataChangeExecutionIdentity({ prepared, sheet, plan, task, approval }) {
+export function assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan, task, approval }) {
   const pkg = prepared?.package, rehearsal = prepared?.rehearsal
   const { validation, ...body } = pkg ?? {}
-  if (!pkg || !rehearsal || rehearsal.passed !== true || rehearsal.isolated !== true
+  if (!pkg || !rehearsal || rehearsal.passed !== true || rehearsal.uat !== true
     || !nonempty(rehearsal.receiptId) || !nonempty(validation?.receiptId)
     || validation?.packageDigest !== executionDigest(body)
     || validation?.packageDigest !== rehearsal.packageDigest
@@ -233,7 +260,9 @@ export function assertDataChangeExecutionIdentity({ prepared, sheet, plan, task,
     || sheet?.target?.database !== pkg.target.database || sheet?.target?.environment !== pkg.target.environment
     || !nonempty(sheet?.id) || plan?.sheetId !== sheet.id || !nonempty(plan?.id)
     || task?.planId !== plan.id || !nonempty(task?.id) || task?.status !== 'NOT_STARTED'
-    || approval?.decision !== 'approved' || approval?.taskId !== task.id
+    || approval?.decision !== 'approved' || approval?.source !== 'bytebase' || approval?.human !== true
+    || approval?.issueId !== issue?.id || !sameTarget(approval.target, pkg.target)
+    || approval?.taskId !== task.id
     || approval?.sheetSha256 !== pkg.applySqlSha256 || approval?.packageDigest !== pkg.validation.packageDigest
     || !nonempty(approval?.requestId) || !nonempty(approval?.decidedBy)) throw executionError('DATA_CHANGE_EXECUTION_IDENTITY_UNCONFIRMED')
   return { target: pkg.target, packageDigest: pkg.validation.packageDigest, applySqlSha256: pkg.applySqlSha256,
