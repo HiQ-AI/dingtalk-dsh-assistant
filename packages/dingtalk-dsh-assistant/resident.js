@@ -12,6 +12,7 @@ import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
 import { tmpdir } from 'node:os'
 import { openExecutionStore } from './execution-store.js'
 import { openWorkflowService } from './workflow-service.js'
+import { createTrustedWorkflowPlatforms } from './workflow-trusted-platforms.js'
 import { notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from './workflow-notifications.js'
 import { readWorkflowSeal, workflowSealPath, inspectLegacyDrain } from './workflow-cutover.js'
 import { join, resolve } from 'node:path'
@@ -131,8 +132,12 @@ export async function apply(ctx, config = {}) {
     profile: dwsConfig.profile,
     runner: dwsRunner,
   })
+  const trustedPlatforms = workflowConfig?.platforms ? createTrustedWorkflowPlatforms({
+    config: workflowConfig.platforms, clients: ctx.get?.('dingtalkTaskWorkflowPlatformClients'),
+    ownerActorId: workflowConfig.ownerActorId,
+  }) : null
   const workflow = workflowConfig ? await openWorkflowService({ ctx, config: { ...workflowConfig, profile: dwsConfig.profile }, legacy: runtime,
-    external: ctx.get?.('dingtalkTaskWorkflowExternal'),
+    external: workflowConfig.platforms ? trustedPlatforms : ctx.get?.('dingtalkTaskWorkflowExternal'),
     readMessage: (groupId, messageId) => dwsAdapter.readMessage(groupId, messageId),
     readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
     notifications: {

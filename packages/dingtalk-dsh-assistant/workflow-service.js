@@ -65,7 +65,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   }
   const engineering = createEngineeringRegistry({ repositories: config.repositories ?? [], ownerActorId, modelConfig, author: config.gitAuthor, ghCommand: engineeringGhCommand })
   const selectedExternal = createExternalRegistry(external, modelConfig())
-  const externalWorkflows = [...selectedExternal.byId.keys()].map(id => ({ id, purpose: externalLabels[id] }))
+  const externalWorkflows = [...selectedExternal.byId.keys()].map(id => ({ id, purpose: externalLabels[id],
+    ...(external?.availableTargets ? { targetIds: external.availableTargets.filter(item => item.workflowId === id).map(item => item.targetId) } : {}) }))
   const unavailableWorkflows = Object.entries(externalLabels).filter(([id]) => !selectedExternal.byId.has(id)).map(([, label]) => label)
   const generalStore = { current: suppliedExecution?.store ?? null }
   const sourceRead = {
@@ -1004,7 +1005,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         status: available ? 'available' : 'unavailable', version: workflow?.version ?? null,
         nodes: workflow?.nodes.map(node => ({ id: node.id, executor: node.executor, effects: node.allowedEffects })) ?? [],
         ...(item.mode === 'engineering' ? { repositories, reason: available ? '具体节点随任务和仓库配置冻结，在任务详情查看' : '未配置受信工程仓库' }
-          : !available ? { reason: '缺少受信平台适配器，当前不能发起' } : {}),
+          : !available ? { reason: '受信平台目标、客户端或验证未齐，当前不能发起' } : {}),
       }
     })
   }
