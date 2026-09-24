@@ -13,6 +13,18 @@ import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-ar
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createManagedWorkspaces } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
 
+test('已终结工程 Run 的旧定义不参与启动恢复', async () => {
+  const registry = createEngineeringRegistry({ ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }), repositories: [] })
+  const records = ['5', '6', '7', '8'].map(version => ({ digest: `old-${version}`, definitionVersion: version,
+    config: { kind: 'engineering', runId: `run-${version}`, repoId: 'removed-repository' } }))
+  const store = { async query({ kind, runId }) {
+    if (kind === 'workflow.list') return records
+    if (kind === 'run') return { run: { runId, workflowDigest: `old-${runId.slice(-1)}`, status: 'succeeded' }, nodes: [] }
+    throw new Error(`unexpected query: ${kind}`)
+  } }
+  assert.deepEqual(await registry.restore(store), [])
+})
+
 test('工程空方案重发保留原任务并冻结新仓库定义', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-engineering-reissue-')), source = join(directory, 'source')
   await mkdir(source)

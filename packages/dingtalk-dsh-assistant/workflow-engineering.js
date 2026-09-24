@@ -255,7 +255,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
         const state = await store.query({ kind: 'run', runId: record.config.runId })
         // 旧定义保留在账中供审计；只有当前运行绑定的定义需要恢复。
         if (state.run && state.run.workflowDigest !== record.digest) continue
-        if (state.run && ['succeeded', 'failed', 'cancelled'].includes(state.run.status) && ['3', '4'].includes(record.definitionVersion)) continue
+        if (state.run && ['succeeded', 'failed', 'cancelled'].includes(state.run.status)) continue
         const { workflow, definition } = await build(record, { allowDefinitionMigration: ['3', '4'].includes(record.definitionVersion) && !!state.run })
         if (record.definitionVersion === '5' && state.run?.generation === 1 && record.config?.repoId
           && configs.get(record.config.repoId)?.config.discovery

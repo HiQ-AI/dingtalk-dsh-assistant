@@ -22,6 +22,14 @@ const readOnlyCatalog = taskWorkflowCatalog.filter(item => item.mode === 'read-o
 const generalCatalog = taskWorkflowCatalog.filter(item => item.mode === 'general').map(({ id, purpose }) => ({ id, purpose }))
 const externalLabels = Object.freeze(Object.fromEntries(taskWorkflowCatalog.filter(item => item.mode === 'external').map(item => [item.id, item.purpose])))
 
+export function rankMessageCandidates(cards, goalText, recentSourceKey = null) {
+  const words = [...new Set((goalText ?? '').toLowerCase().match(/[a-z0-9_-]+|[\u4e00-\u9fff]{2}/g) ?? [])]
+  const score = card => card.explicitReferenceMatches.length * 10000
+    + (recentSourceKey && card.topicId && card.sourceRefs.includes(recentSourceKey) ? 5000 : 0)
+    + words.filter(word => card.goal?.toLowerCase().includes(word)).length
+  return cards.sort((a, b) => score(b) - score(a) || String(b.relevantTime).localeCompare(String(a.relevantTime)))
+}
+
 function createExternalRegistry(external, selected) {
   const configured = !!external && (!!external.dataChangeAdapter || !!external.releaseAdapters && Object.keys(external.releaseAdapters).length > 0)
   if (!configured) return { workflows: [], records: new Map(), byId: new Map() }
@@ -145,10 +153,22 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const investigationConfirmation = request => request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
     || (request.nodeId === 'I' && request.kind === 'needs_clarification'
       && /此前对应任务仅授权排查分析/u.test(String(request.reason)))
-  const mayCreate = async (run, workflowId) => {
+  const mayCreate = async (run, workflowId, binding) => {
     if (run.actorId === ownerActorId) return true
     if (workflowId === undefined || catalogById.get(workflowId)?.mode === 'external'
       || !/任务准入/u.test(legacyGroup(run.conversationId)?.responsibility ?? '')) return false
+    if (['task-investigation', 'task-general'].includes(workflowId) && binding?.topicId
+      && /^这不是让你(?:去)?查/u.test(run.body.trim()) && !run.context?.quoteRefs?.length) {
+      const nearest = run.snapshot?.history?.at(-1)
+      const source = nearest?.actorId === run.actorId ? await store.query({ kind: 'message.source', sourceKey: nearest.sourceKey }) : null
+      const topic = await store.query({ kind: 'message.topic', topicId: binding.topicId })
+      const priorAt = source?.context?.occurredAt ?? Date.parse(source?.createdAt ?? '')
+      const currentAt = run.context?.occurredAt ?? Date.parse(run.createdAt)
+      if (source?.conversationId === run.conversationId && topic?.conversationId === run.conversationId
+        && topic.facts.some(fact => fact.sourceRefs.some(ref => ref.sourceKey === nearest.sourceKey))
+        && Number.isFinite(priorAt) && Number.isFinite(currentAt)
+        && currentAt >= priorAt && currentAt - priorAt <= 90_000) return true
+    }
     if (isDirectedTaskRequest(run.body)) return true
     const state = await store.query({ kind: 'message.run', runId: run.runId })
     return state.requests.some(request => investigationConfirmation(request)
@@ -272,7 +292,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   }
   async function createTask(action, info) {
     const ownerConfirmed = await ownerConfirmedPriorTask(action, info)
-    if (!await mayCreate(info.run, action.arguments.workflowId) && !ownerConfirmed && action.intent !== 'answer') throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+    if (!await mayCreate(info.run, action.arguments.workflowId, info.binding) && !ownerConfirmed && action.intent !== 'answer') throw executionError('WORKFLOW_ACTION_FORBIDDEN')
     if (info.run.context.editOf) {
       const original = await messages.state(info.run.context.editOf.sourceRunId)
       const previous = original.commands.filter(item => item.args?.taskId && ['create', 'research', 'answer', 'reopen'].includes(item.kind))
@@ -457,7 +477,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           return ['status', 'result', 'no_action', 'fact'].includes(action.intent) ? { allowed: true } : reject('旧任务只读，请明确发起新工作流任务')
         }
         if (!handlers[action.intent] && action.intent !== 'no_action') return reject(`尚未提供 ${action.intent} 处理流程`)
-        if (['create', 'research', 'reopen'].includes(action.intent) && !await mayCreate(info.run, action.arguments.workflowId)
+        if (['create', 'research', 'reopen'].includes(action.intent) && !await mayCreate(info.run, action.arguments.workflowId, info.binding)
           && !await ownerConfirmedPriorTask(action, info)) return reject('当前消息发送人没有创建业务任务的权限')
         if (['create', 'research', 'answer', 'reopen'].includes(action.intent)) {
           const workflowId = action.intent === 'answer' ? 'task-analysis' : action.arguments.workflowId
@@ -547,9 +567,10 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
             relevantTime: task.updatedAt ?? task.completedAt ?? task.createdAt ?? null, versions: { inputVersion: task.inputVersion ?? 1, runSequence: task.runSequence ?? 1 }, sourceRefs: references,
             explicitReferenceMatches: references.filter(key => quoted.has(key)), distinguishingFacts: [`旧引擎任务状态：${task.state}；结果：${task.outcome ?? '未记录'}；UAT2：${task.result?.delivery?.uat2Status ?? '未见部署回执'}；仅支持只读查询`] })
         }
-        const words = [...new Set((unit.goalText ?? '').toLowerCase().match(/[a-z0-9_-]+|[\u4e00-\u9fff]{2}/g) ?? [])]
-        const score = card => card.explicitReferenceMatches.length * 10000 + words.filter(word => card.goal?.toLowerCase().includes(word)).length
-        result.sort((a, b) => score(b) - score(a) || String(b.relevantTime).localeCompare(String(a.relevantTime)))
+        const previous = run.snapshot?.history?.at(-1)
+        const recentReference = /^(?:这|这个|刚才|上面|前面|不是让你)/u.test(run.body.trim())
+          && previous?.actorId === run.actorId ? previous.sourceKey : null
+        rankMessageCandidates(result, unit.goalText, recentReference)
         const cards = result.slice(0, 8).map((card, index) => {
           if (index > 1 || card.engine !== 'legacy') return card
           const task = legacy.getTask?.(card.taskId)
@@ -579,9 +600,9 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         if (binding.topicId && (!storedTopic || storedTopic.conversationId !== run.conversationId)) throw executionError('WORKFLOW_TOPIC_FORBIDDEN')
         const topic = storedTopic ? { ...storedTopic, facts: storedTopic.facts.map(fact => ({ ...fact, sourceRefs: fact.sourceRefs.map(({ text: _text, ...ref }) => ref) })), sources: [...new Map(storedTopic.facts.flatMap(fact => fact.sourceRefs).map(ref => [`${ref.sourceKey}:${ref.sourceVersion}`, ref])).values()] } : null
         if (topic && !binding.taskId) {
-          return { topic, availableWorkflows: [...readOnlyCatalog, ...generalCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: await mayCreate(run, 'task-engineering') }
+          return { topic, availableWorkflows: [...readOnlyCatalog, ...generalCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: await mayCreate(run, 'task-investigation', binding) }
         }
-        if (!binding.taskId) return { availableWorkflows: [...readOnlyCatalog, ...generalCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: await mayCreate(run, 'task-engineering') }
+        if (!binding.taskId) return { availableWorkflows: [...readOnlyCatalog, ...generalCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: await mayCreate(run, 'task-investigation', binding) }
         await taskAccess(binding.taskId, run.actorId, run.conversationId)
         const runs = await store.query({ kind: 'run.list', taskId: binding.taskId, limit: 200 })
         if (!runs.length) {
@@ -593,6 +614,15 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         return { ...(topic ? { topic } : {}), task: { runId, taskId, status, inputGeneration: inputGeneration ?? 0, waitReason: waitReason ?? null, pauseRequested: pauseRequested ?? false }, nodes: state.nodes.map(({ nodeId, status }) => ({ nodeId, status })) }
       },
       async validateActions({ run, unit, binding, intent, requests }) {
+        for (const action of intent.actions.filter(item => item.intent === 'clarification')) {
+          const target = action.arguments.runId === run.runId ? await messages.state(run.runId)
+            : await messages.state(action.arguments.runId).catch(() => null)
+          const request = target?.requests.find(item => item.id === action.arguments.requestId)
+          if (!request || request.kind !== 'needs_clarification' || request.status !== 'pending') return {
+            kind: 'needs_clarification', reason: 'CLARIFICATION_TARGET_INVALID',
+            question: '这条消息没有可确认的待答澄清，请明确所指的排查事项。', needs: [],
+          }
+        }
         if (!run.context.editOf) return { kind: 'accepted' }
         const original = await messages.state(run.context.editOf.sourceRunId)
         const previous = original.commands.filter(item => item.args?.taskId && ['create', 'research', 'answer', 'reopen'].includes(item.kind))
@@ -649,7 +679,13 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           }
           if (need.resourceRef.startsWith('workflow-task-history:')) {
             const taskId = need.resourceRef.slice('workflow-task-history:'.length)
-            const origin = await taskAccess(taskId, run.actorId, run.conversationId)
+            let origin
+            try { origin = await taskAccess(taskId, run.actorId, run.conversationId) }
+            catch (error) {
+              if (error.code !== 'WORKFLOW_TASK_FORBIDDEN') throw error
+              items.push({ resourceRef: need.resourceRef, unavailable: 'not_authorized' })
+              continue
+            }
             const runs = await store.query({ kind: 'run.list', taskId, limit: 200 })
             const current = runs[0] ? await currentTask(taskId) : null
             await remember(need.resourceRef, JSON.stringify({ taskId, objective: origin.command.args.arguments.objective,

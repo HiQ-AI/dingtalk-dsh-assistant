@@ -187,17 +187,21 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(old.sourceVersion>=5 && !(old.sourceVersion===5 && old.reason==='recovery_exhausted' && !old.budgetBaseline) && !stalledContext)fail('MESSAGE_REPROCESS_EXHAUSTED')
     const oldUnits=rows(db,old.runId,'unit')
     const oldCommands=rows(db,old.runId,'command'),oldNotifications=rows(db,old.runId,'notification')
+    if(oldNotifications.some(item=>!['prepared','superseded'].includes(item.status)))fail('MESSAGE_REPROCESS_EFFECT_PENDING')
     const rejectedFacts=old.status==='settled'&&oldUnits.length>0&&oldCommands.length>0
       && oldCommands.every(item=>item.kind==='fact'&&item.status==='rejected')
       && oldNotifications.every(item=>item.status==='prepared')
+    const reconciledNoEffect=oldCommands.length>0
+      && oldCommands.every(item=>item.status==='superseded'&&item.priorStatus==='failed'&&item.evidenceRef)
+      && oldNotifications.every(item=>['prepared','superseded'].includes(item.status))
     if((!['waiting','needs_attention','pending'].includes(old.status) && !(old.status==='settled'&&oldUnits.length&&oldUnits.every(item=>item.status==='ignored')) && !rejectedFacts)
-      || oldCommands.length&&!rejectedFacts)fail('MESSAGE_REPROCESS_EFFECT_PENDING')
+      || oldCommands.length&&!rejectedFacts&&!reconciledNoEffect)fail('MESSAGE_REPROCESS_EFFECT_PENDING')
     if(db.prepare('SELECT 1 FROM message_runs WHERE run_id=?').get(str(a.newRunId)))fail('MESSAGE_REPROCESS_EXISTS')
     const sequence=old.context?.replayOfSequenceId??db.prepare('SELECT rowid AS seq FROM message_runs WHERE run_id=?').get(old.runId).seq
     const origin=old.context?.replayOf?run(db,old.context.replayOf):old
     const spent=db.prepare('SELECT claims,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(old.sourceKey)
     for(const request of rows(db,old.runId,'request').filter(item=>item.status==='pending')){request.status='superseded';request.reason='message_reprocessed';put(db,old.runId,'request',request)}
-    if(rejectedFacts)for(const notice of oldNotifications){notice.status='superseded';notice.supersededAt=now;put(db,old.runId,'notification',notice)}
+    for(const notice of oldNotifications.filter(item=>item.status==='prepared')){notice.status='superseded';notice.supersededAt=now;put(db,old.runId,'notification',notice)}
     old.status='superseded';old.routingStatus='routing_superseded';old.reason='message_reprocessed';save(db,old);invalidateMessageSourceTopics(db,old.sourceKey,now)
     const next={...old,runId:a.newRunId,sourceVersion:old.sourceVersion+1,revision:0,status:'pending',routingStatus:'routing_pending',intentStatus:null,createdAt:now,
       context:{...old.context,occurredAt:old.context?.occurredAt??origin.context?.occurredAt??origin.createdAt,replayOf:origin.runId,replayOfSequenceId:sequence},snapshot:null,
@@ -479,6 +483,21 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     }
     if(count)topicRunsStatus(db,a.topicId,'intent_rejudging')
     return {result:{status:'ready',superseded:count}}
+  }
+  if(kind==='message.topic.intent.retry') {
+    const u=get(db,'unit',a.unitId),r=run(db,u.runId)
+    current(db,r,a.expectedRevision)
+    if(!['ignored','pending'].includes(u.status)||!u.topicId||rows(db,r.runId,'command').some(c=>c.unitId===u.id)
+      ||rows(db,r.runId,'notification').some(n=>!['prepared','superseded'].includes(n.status)))fail('MESSAGE_INTENT_RETRY_EFFECT_PENDING')
+    const topic=queryMessageTopics(db,{kind:'message.topic',topicId:u.topicId})
+    if(!topic||topic.conversationId!==r.conversationId||topic.processedRevision>topic.inputRevision
+      ||queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId}).length)fail('MESSAGE_TOPIC_STALE')
+    for(const request of rows(db,r.runId,'request').filter(item=>item.unitId===u.id&&item.status==='pending')){request.status='superseded';request.reason='intent_rejudging';put(db,r.runId,'request',request)}
+    topic.inputRevision++;topic.updatedAt=now
+    db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(json(topic),topic.topicId)
+    u.status='pending';put(db,r.runId,'unit',u)
+    r.status='pending';r.intentStatus='intent_rejudging';r.deadline=new Date(Date.parse(now)+30000).toISOString();save(db,r)
+    return {result:{run:r,unit:u,topic}}
   }
   if(kind==='message.wait'||kind==='message.request.open') {
     const requestedId=a.request?.requestId??a.requestId;if(requestedId&&db.prepare('SELECT 1 FROM message_items WHERE item_id=?').get('request:'+requestedId)){const existing=get(db,'request',requestedId);if(existing.runId!==r.runId||existing.unitId!==(a.unitId??'$')||existing.nodeId!==a.nodeId||existing.revision!==r.revision)fail('MESSAGE_REQUEST_EXISTS');return {result:{request:existing,run:r}}}

@@ -21,6 +21,33 @@ const split = { kind: 'split', units: [{ spans: [{ start: 0, end: 2 }], goalText
 const binding = { kind: 'binding', disposition: 'conversation', candidateId: null, evidence: ['source'] }
 const intent = { kind: 'intent', actions: [{ intent: 'status', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
 
+test('短指代保留原文进入 R，不在 S 扩写旧话题', async t => {
+  let routed
+  const { workflow } = await fixture(t, { judge: async ({ stage, input }) => {
+    if (stage === 'S') throw new Error('short reference should use fixed split')
+    if (stage === 'R') { routed = input; return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['待核对'] } }
+    return { kind: 'intent', actions: [{ intent: 'no_action', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  } })
+  await workflow.receive({ ...source, runId: 'short-reference', sourceKey: 'short-reference', body: '这不是让你去查吗' })
+  await workflow.process('short-reference')
+  assert.equal(routed?.goalText, '这不是让你去查吗')
+})
+test('同一发送人紧邻账号话题的短指代绑定该话题', async t => {
+  const first = { ...source, runId: 'account-first', sourceKey: 'account-first', body: '查账号创建时间' }
+  const { workflow } = await fixture(t, { context: { history: async run => run.runId === 'account-followup' ? [{ sourceKey: first.sourceKey, sourceVersion: 1, actorId: first.actorId, text: first.body }] : [], splitBackground: async ({ history }) => ({ messages: history }), candidates: async ({ run }) => run.runId === 'account-followup'
+    ? [{ candidateId: 'account-topic', topicId: 'account-topic', title: first.body, goal: first.body, state: 'topic', relevantTime: new Date().toISOString(), sourceRefs: [first.sourceKey], explicitReferenceMatches: [] }] : [] },
+  judge: async ({ stage, input }) => {
+    if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }] }
+    if (stage === 'R') { if (input.sourceKey === 'account-followup') throw new Error('R should bind recent topic without model'); return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['首条'] } }
+    return { kind: 'intent', actions: [{ intent: 'no_action', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  } })
+  await workflow.receive(first)
+  await workflow.process(first.runId)
+  await workflow.receive({ ...source, runId: 'account-followup', sourceKey: 'account-followup', body: '这不是让你去查吗' })
+  const result = await workflow.process('account-followup')
+  assert.equal(result.nodes.find(node => node.nodeId === 'R').output.output.candidateId, 'account-topic')
+})
+
 test('三条同话题先全部关联，再一次 IB 只创建一个业务任务', async t => {
   let releaseLast, lastStarted
   const gate = new Promise(resolve => { releaseLast = resolve })
@@ -394,7 +421,7 @@ test('R 节点把 S 的历史短引用还原为来源键后再取材料', async 
   }},judge:async({stage,input})=>stage==='S'
     ?{kind:'split',units:[{spans:[{start:0,end:input.source.text.length}],goalText:input.source.text,constraints:[],contextNeeds:[{resourceRef:'h1',reason:'指代前文'}]}],coverage:[{start:0,end:input.source.text.length,role:'unit'}],sharedConstraints:[]}
     :stage==='R'?binding:intent,handlers:{status:async()=>({})}})
-  const {runId}=await workflow.receive({...source,body:'这不是让你去查吗'},{process:false})
+  const {runId}=await workflow.receive({...source,body:'这个账号怎么回事'},{process:false})
   await workflow.process(runId)
   assert.deepEqual(requested,['history-account'])
   assert.equal((await workflow.state(runId)).run.status,'settled')

@@ -152,6 +152,15 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const rawCandidates = Array.isArray(retrieved) ? retrieved : retrieved.cards
     if (!Array.isArray(rawCandidates) || retrieved.explicitOverflow) { await cmd('message.attention', { runId, reason: `MESSAGE_REFERENCED_CANDIDATES_CAPACITY:R:${unit.unitId}` }); return }
     const candidates = candidateCards(rawCandidates)
+    const nearest = snapshot.history.at(-1)
+    const recentTopics = nearest && nearest.actorId === data.run.actorId && !data.run.context?.quoteRefs?.length
+      && /^这不是让你(?:去)?查/u.test(data.run.body.trim())
+      ? rawCandidates.filter(card => card.topicId && card.sourceRefs?.includes(nearest.sourceKey)) : []
+    const recentSource = recentTopics.length === 1 ? await store.query({ kind: 'message.source', sourceKey: nearest.sourceKey }) : null
+    const recentAt = recentSource?.context?.occurredAt ?? Date.parse(recentSource?.createdAt ?? '')
+    const currentAt = data.run.context?.occurredAt ?? Date.parse(data.run.createdAt)
+    const fixedRecent = Number.isFinite(recentAt) && Number.isFinite(currentAt) && currentAt >= recentAt && currentAt - recentAt <= 90_000
+      ? { kind: 'binding', disposition: 'existing', candidateId: recentTopics[0].candidateId, evidence: ['同一发送人在90秒内紧接该话题消息发出无其他引用的短指代'] } : undefined
     const priorTopic = followup && rawCandidates.find(card => card.topicId && card.sourceRefs?.includes(followup.sourceKey))
     const relationCandidates = [...candidates]
     if (priorTopic) {
@@ -171,7 +180,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       relationCandidates.splice(removable, 1)
       relationInput.omittedCandidateCount++
     }
-    const linked = await invoke(data, unit.unitId, 'R', relationInput, followup ? { kind: 'binding', disposition: 'conversation', candidateId: priorTopic?.candidateId ?? null, evidence: ['前文任务状态问句的范围补充'] } : undefined)
+    const linked = await invoke(data, unit.unitId, 'R', relationInput, fixedRecent ?? (followup ? { kind: 'binding', disposition: 'conversation', candidateId: priorTopic?.candidateId ?? null, evidence: ['前文任务状态问句的范围补充'] } : undefined))
     if (!linked) return
     if (linked.kind !== 'binding' || linked.disposition === 'unresolved') { await waiting(data, unit.unitId, 'R', linked.kind === 'binding' ? { kind: 'needs_clarification', reason: 'MESSAGE_TARGET_UNRESOLVED' } : linked); return }
     const detailRefs = [...new Set(relationCandidates.filter(card => card.candidateId === linked.candidateId || linked.disposition === 'new' && card.explicitReferenceMatches?.length)
@@ -180,7 +189,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const missingDetails = detailRefs.filter(ref => !resolvedRefs.has(ref))
     if (missingDetails.length) { await waiting(data, unit.unitId, 'R', { kind: 'needs_context', reason: 'CANDIDATE_DETAIL_REQUIRED', needs: missingDetails.map(resourceRef => ({ resourceRef, reason: '核对候选完整目标与判别事实' })) }); return }
     const target = relationCandidates.find(card => card.candidateId === linked.candidateId) ?? null
-    let binding = { ...linked, ...target, target }
+    let binding = { ...linked, ...target, target, ...(fixedRecent ? { verifiedRecentSourceKey: nearest.sourceKey } : {}) }
     data = await state(runId)
     const facts = await context.facts?.({ run: data.run, snapshot, unit, binding }) ?? {}
     if (context.bindTopic) {
@@ -447,7 +456,8 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     if (!data.units.length) {
       const followup = statusFollowup(data.run.snapshot)
       const text = data.run.body
-      const fixed = followup?.kind === 'scope' || directedStatusQuestion(text) ? { kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: followup ? `前文状态问句：${data.run.snapshot.history.findLast(item=>item.sourceKey===followup.sourceKey)?.text ?? ''}；补充的问题范围：${text}` : text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] } : undefined
+      const shortReference = text.length <= 40 && /^这不是让你(?:去)?查/u.test(text.trim())
+      const fixed = followup?.kind === 'scope' || directedStatusQuestion(text) || shortReference ? { kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: followup ? `前文状态问句：${data.run.snapshot.history.findLast(item=>item.sourceKey===followup.sourceKey)?.text ?? ''}；补充的问题范围：${text}` : text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] } : undefined
       const result = await invoke(data, '$', 'S', splitContext(data.run.snapshot), fixed)
       if (!result) return state(runId)
       if (result.kind !== 'split') { await waiting(data, '$', 'S', result); return state(runId) }
