@@ -56,7 +56,7 @@ async function setup(t, options = {}) {
     const session = { id: sessionId, seq: events.length, header: input.meta ?? {}, inheritedEventCount,
       snapshotEvents() { return [...events] }, ownEvents() { return events.slice(inheritedEventCount) },
       append(type, data) { events.push({ seq: this.seq++, type, data }) } }
-    const tools = new Map(), sections = [], restrictions = [], sent = [], guards = []
+    const tools = new Map(), sections = [], restrictions = [], sent = [], guards = [], hooks = new Map()
     let cancelIdle; const cancelledIdle = new Promise(resolve => { cancelIdle = resolve })
     let completeStep; const completedStep = new Promise(resolve => { completeStep = resolve })
     // 工具返回才结束模拟步骤；显式 idle gate 仍可表示在途模型/工具尚未退出。
@@ -68,7 +68,7 @@ async function setup(t, options = {}) {
       whenIdle: () => { h.idleCalls.set(sessionId, (h.idleCalls.get(sessionId) ?? 0) + 1); return Promise.race([h.idle.get(sessionId) ?? toolStep?.promise ?? (hasFinishedToolStep || agent.status === 'idle' || sessionId.startsWith('session-coordination-') ? Promise.resolve() : never), cancelledIdle, completedStep]) },
       cancel(cause) { h.cancelled.push({ sessionId, cause }); cancelIdle() },
     }
-    const handle = { agent, tools, sections, restrictions, sent, guards, completeStep,
+    const handle = { agent, tools, sections, restrictions, sent, guards, hooks, completeStep,
       beginToolStep() {
         assert.equal(toolStep, undefined, 'fixture 每个叶子同时只能执行一个工具步骤')
         let finish; const promise = new Promise(resolve => { finish = resolve })
@@ -77,13 +77,14 @@ async function setup(t, options = {}) {
       finishToolStep() { toolStep?.finish(); toolStep = undefined; hasFinishedToolStep = true },
       async dispose() { await options.disposeGate?.(sessionId); h.disposed.push(sessionId) } }
     h.handles.set(sessionId, handle)
-    const agentCtx = { on: () => () => {}, tools: { register(tool) { tools.set(tool.name, tool) }, restrict(rule) { restrictions.push(rule) }, guard(check) { guards.push(check) }, get(name) { return ['read', 'glob', 'grep', 'skill'].includes(name) ? { name } : undefined } }, systemPrompt: { section(value) { sections.push(value) } } }
+    const agentCtx = { on(name, listener) { hooks.set(name, listener); return () => hooks.delete(name) }, tools: { register(tool) { tools.set(tool.name, tool) }, restrict(rule) { restrictions.push(rule) }, guard(check) { guards.push(check) }, get(name) { return ['read', 'glob', 'grep', 'skill'].includes(name) ? { name } : undefined } }, systemPrompt: { section(value) { sections.push(value) } } }
     const setupResult = await input.setup?.(agentCtx)
     assert.equal(setupResult, undefined)
     h.calls.push({ resumed, sessionId, input })
     return handle
   }
   const selection = { provider: 'fake', model: 'fake' }
+  h.defaultSelection = selection
   const ctx = {
     ...(options.llm ? { llm: options.llm } : {}),
     ...(options.sessionPersistence ? { sessionPersistence: options.sessionPersistence } : {}),
@@ -833,12 +834,24 @@ test('工作区切换保留事件历史并重建 Resident，旧 Session 释放',
   assert.ok(h.disposed.includes(oldId))
 })
 
-test('存在活动 Task 时拒绝工作区或模型切换，不修改已保存配置', async (t) => {
-  const h = await setup(t); await createTask(h)
+test('存在活动 Task 时仍保存默认模型并在下一请求生效，工作区切换继续拒绝', async (t) => {
+  const h = await setup(t); const task = await createTask(h)
+  const leaf = h.handles.get(task.childSessionId)
+  const assembledBefore = await leaf.hooks.get('system-prompt/assemble')({}, {}, async () => ({ variables: {} }))
+  assert.equal(assembledBefore.variables.model, 'fake')
   await assert.rejects(h.runtime.updateAgentConfig({ workspaceDir: replacementWorkspace }), /agent_config_has_active_tasks/)
-  await assert.rejects(h.runtime.updateAgentConfig({ model: 'other' }), /agent_config_has_active_tasks/)
+  const saved = await h.runtime.updateAgentConfig({ model: 'other', reasoningEffort: 'high' })
   assert.equal(h.runtime.getAgentConfig().workspaceDir, agentWorkspace)
-  assert.equal(h.runtime.getAgentConfig().model, 'fake')
+  assert.equal(h.runtime.getAgentConfig().model, 'other')
+  assert.deepEqual(h.savedSelection, { provider: 'fake', model: 'other', reasoningEffort: 'high' })
+  const inFlight = await leaf.hooks.get('agent/request')({}, async () => ({ provider: 'fake', model: 'fake', reasoningEffort: 'low' }))
+  assert.equal(inFlight.model, 'fake', '配置变化不能改写已经完成system-prompt组装的在途请求')
+  const assembledAfter = await leaf.hooks.get('system-prompt/assemble')({}, {}, async () => ({ variables: {} }))
+  assert.equal(assembledAfter.variables.model, 'other')
+  const nextRequest = await leaf.hooks.get('agent/request')({}, async () => ({ provider: 'fake', model: 'fake', reasoningEffort: 'low' }))
+  assert.deepEqual(nextRequest, { provider: 'fake', model: 'other', reasoningEffort: 'high' })
+  assert.equal(h.store.getTask(task.taskId).state, 'running')
+  assert.equal(h.store.getTask(task.taskId).childSessionId, task.childSessionId)
 })
 
 test('模型与推理深度使用原生配置服务保存', async (t) => {
@@ -2420,6 +2433,18 @@ test('接纳后新入站先阻止叶子启动，同话题决策完成再恢复�
     assert.equal(h.calls.some(call => call.sessionId === task.childSessionId), !cancel)
     if (cancel) assert.equal(h.store.getTask(task.taskId).outcome, 'cancelled')
   })
+})
+
+test('DSH原生默认模型在运行中变化时配置读回和下一请求同步更新', async (t) => {
+  const h = await setup(t), task = await createTask(h, 'native-model-change')
+  const leaf = h.handles.get(task.childSessionId)
+  h.defaultSelection.model = 'native-next-model'
+  h.defaultSelection.reasoningEffort = 'xhigh'
+  assert.equal(h.runtime.getAgentConfig().model, 'native-next-model')
+  const assembled = await leaf.hooks.get('system-prompt/assemble')({}, {}, async () => ({ variables: {} }))
+  assert.equal(assembled.variables.model, 'native-next-model')
+  const request = await leaf.hooks.get('agent/request')({}, async () => ({ provider: 'fake', model: 'fake' }))
+  assert.deepEqual(request, { provider: 'fake', model: 'native-next-model', reasoningEffort: 'xhigh' })
 })
 
 test('慢叶子创建期间同群其他 Topic 仍可完成', async (t) => {
