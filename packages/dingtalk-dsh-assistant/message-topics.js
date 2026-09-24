@@ -37,5 +37,6 @@ export function queryMessageTopics(db,a){
  if(a.kind==='message.topic'){const row=db.prepare('SELECT body FROM message_topics WHERE topic_id=?').get(str(a.topicId));return row?JSON.parse(row.body):null}
  if(a.kind==='message.topics'){const limit=a.limit??30;if(!Number.isSafeInteger(limit)||limit<1||limit>200)fail('MESSAGE_TOPIC_INVALID');return db.prepare('SELECT body FROM message_topics WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?').all(str(a.conversationId),limit).map(r=>JSON.parse(r.body))}
  if(a.kind==='message.topic.source')return db.prepare('SELECT DISTINCT t.body FROM message_topics t JOIN message_topic_bindings b ON b.topic_id=t.topic_id WHERE b.source_key=?').all(str(a.sourceKey)).map(r=>JSON.parse(r.body))
+ if(a.kind==='message.topic.bindings')return db.prepare('SELECT b.source_key,b.source_version,b.unit_id,t.body FROM message_topic_bindings b JOIN message_topics t ON t.topic_id=b.topic_id WHERE t.conversation_id=? ORDER BY b.rowid').all(str(a.conversationId)).map(r=>({sourceKey:r.source_key,sourceVersion:r.source_version,unitId:r.unit_id,topic:JSON.parse(r.body)}))
  return undefined
 }

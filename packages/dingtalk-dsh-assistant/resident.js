@@ -170,6 +170,8 @@ export async function apply(ctx, config = {}) {
       return workflow.reprocessMessage(runId, { channel: 'web', actorId: workflowConfig.webActorId })
     }
     runtime.getWorkflowMailboxes = () => workflow.mailboxes()
+    runtime.listWorkflowTopics = groupId => workflow.topics(groupId)
+    runtime.getWorkflowTopicContext = args => workflow.topicContext(args)
     runtime.getWorkflowCatalog = () => workflow.catalog()
     runtime.isWorkflowTask = taskId => workflow.isTask(taskId)
     runtime.submitWorkflowTask = args => {

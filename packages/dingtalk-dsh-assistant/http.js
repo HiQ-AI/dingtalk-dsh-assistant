@@ -56,8 +56,15 @@ function topicSummary(topic) {
     createdAt: topic.createdAt, updatedAt: topic.updatedAt,
   }
 }
+function workflowTopicSummary(topic) {
+  return { topicId: topic.topicId, groupId: topic.conversationId, title: topic.title,
+    revision: topic.revision, processedRevision: topic.revision, status: 'active',
+    summary: topic.facts.map(fact=>fact.text).join('\n').slice(0,1000), summaryRevision: topic.revision,
+    openQuestionCount: 0, pendingRevisionCount: 0, pendingUnitCount: 0,
+    createdAt: topic.createdAt, updatedAt: topic.updatedAt, engine: 'workflow-v2' }
+}
 
-function groupSummary(group, runtime, workflowMailboxes) {
+function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
   if (!group) return null
   const { topics: _topics, routeHistory: _routeHistory, taskReservations: _taskReservations, ...summary } = group
   const topics = runtime.listTopics(group.groupId)
@@ -71,16 +78,16 @@ function groupSummary(group, runtime, workflowMailboxes) {
   }))
   const workflowMessages = (workflowMailboxes?.messages ?? []).filter((message) => message.groupId === group.groupId)
   const existingMessageIds = new Set(summary.messages.map((message) => message.messageId))
-  summary.messages.push(...workflowMessages.filter((message) => !existingMessageIds.has(message.messageId)).map((message) => ({ ...message, sourceKind: 'workflow-v2', topicRefs: [] })))
+  summary.messages.push(...workflowMessages.filter((message) => !existingMessageIds.has(message.messageId)).map((message) => ({ ...message, sourceKind: 'workflow-v2' })))
   const existingOutboundIds = new Set((summary.outbox ?? []).map((message) => message.outboundId))
   summary.outbox = [...(summary.outbox ?? []), ...(workflowMailboxes?.outbox ?? []).filter((message) => message.groupId === group.groupId && !existingOutboundIds.has(message.outboundId))]
   const pendingUnits = new Set(topics.flatMap((topic) => topic.entries.filter((entry) => entry.revision > topic.processedRevision).map((entry) => entry.unitId ?? `legacy:${entry.messageId}`)))
   summary.topicProgress = {
-    total: topics.length,
+    total: topics.length + workflowTopics.filter(topic=>topic.conversationId===group.groupId).length,
     pending: topics.filter((topic) => topic.revision > topic.processedRevision).length,
     pendingRevisions: topics.reduce((count, topic) => count + Math.max(0, topic.revision - topic.processedRevision), 0),
     pendingUnits: pendingUnits.size,
-    unroutedMessages: (group.messages ?? []).filter((message) => message.routingStatus === 'pending' || message.routingStatus === 'failed').length,
+    unroutedMessages: (group.messages ?? []).filter((message) => message.routingStatus === 'pending' || message.routingStatus === 'failed').length + workflowMessages.filter(message=>!message.topicRefs?.length && ['pending','failed'].includes(message.routingStatus)).length,
   }
   return summary
 }
@@ -163,13 +170,16 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/groups') {
     const groupId = url.searchParams.get('groupId')
     const workflowMailboxes = await store.getWorkflowMailboxes?.()
-    return send(response, 200, groupId ? groupSummary(store.getGroup(groupId), store, workflowMailboxes) : store.listGroups().map((group) => groupSummary(group, store, workflowMailboxes)))
+    const workflowTopics = await store.listWorkflowTopics?.(groupId ?? undefined) ?? []
+    return send(response, 200, groupId ? groupSummary(store.getGroup(groupId), store, workflowMailboxes, workflowTopics) : store.listGroups().map((group) => groupSummary(group, store, workflowMailboxes, workflowTopics)))
   }
   if (request.method === 'GET' && url.pathname === '/state/topics') {
     try {
       const offset = pageNumber(url, 'offset', 0), limit = pageNumber(url, 'limit', 50, 100)
-      const topics = store.listTopics(url.searchParams.get('groupId') ?? undefined)
-      return send(response, 200, { topics: topics.slice(offset, offset + limit).map(topicSummary), total: topics.length, offset, limit })
+      const groupId=url.searchParams.get('groupId')??undefined
+      const topics = [...store.listTopics(groupId).map(topicSummary), ...((await store.listWorkflowTopics?.(groupId))??[]).map(workflowTopicSummary)]
+      topics.sort((a,b)=>String(b.updatedAt??b.createdAt).localeCompare(String(a.updatedAt??a.createdAt)))
+      return send(response, 200, { topics: topics.slice(offset, offset + limit), total: topics.length, offset, limit })
     } catch (error) { return send(response, 400, { error: error.message }) }
   }
   if (request.method === 'GET' && /^\/state\/topics\/[^/]+$/u.test(url.pathname)) {
@@ -178,7 +188,11 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       if (!groupId) return send(response, 400, { error: 'group_id_required' })
       const topicId = decodeURIComponent(url.pathname.slice('/state/topics/'.length))
       const revision = pageNumber(url, 'revision', undefined), offset = pageNumber(url, 'offset', 0), limit = pageNumber(url, 'limit', 50, 100)
-      if (!store.getTopic(groupId, topicId)) return send(response, 404, { error: 'topic_not_found' })
+      if (!store.getTopic?.(groupId, topicId)) {
+        const workflowContext=await store.getWorkflowTopicContext?.({groupId,topicId,offset,limit})
+        if(!workflowContext)return send(response,404,{error:'topic_not_found'})
+        return send(response,200,{...workflowContext,topic:{...workflowTopicSummary(workflowContext.topic),openQuestions:[]}})
+      }
       const context = await store.getTopicContext({ groupId, topicId, ...(revision === undefined ? {} : { revision }), offset, limit })
       return send(response, 200, { ...context, topic: { ...topicSummary(context.topic), summary: context.topic.summary, openQuestions: context.topic.openQuestions } })
     } catch (error) { return send(response, 400, { error: error.message }) }

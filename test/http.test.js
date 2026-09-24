@@ -50,7 +50,7 @@ test('群收发信箱合并新工作流持久消息与通知，按 ID 去重且�
   const group = { groupId: 'g', messages: [{ messageId: 'old', text: '旧消息', sequence: 1, occurredAt: '2026-09-23T11:00:00Z' }], outbox: [{ outboundId: 'old-out', sourceMessageId: 'old', text: '旧回复', status: 'sent' }] }
   const mailboxes = {
     messages: [
-      { groupId: 'g', messageId: 'new', text: '新消息', sequence: 2, occurredAt: '2026-09-24T02:00:00Z', routingStatus: 'pending' },
+      { groupId: 'g', messageId: 'new', text: '新消息', sequence: 2, occurredAt: '2026-09-24T02:00:00Z', routingStatus: 'pending', topicRefs: [{topicId:'workflow-topic',revision:1,title:'新话题'}] },
       { groupId: 'g', messageId: 'old', text: '不得覆盖旧记录', sequence: 2, occurredAt: '2026-09-24T02:01:00Z', routingStatus: 'routed' },
       { groupId: 'elsewhere', messageId: 'other', text: '其他群', sequence: 3, occurredAt: '2026-09-24T02:02:00Z', routingStatus: 'routed' },
     ],
@@ -65,12 +65,25 @@ test('群收发信箱合并新工作流持久消息与通知，按 ID 去重且�
     assert.deepEqual(item.messages.map(message => message.messageId), ['old', 'new'])
     assert.equal(item.messages[0].text, '旧消息')
     assert.equal(item.messages[1].sourceKind, 'workflow-v2')
+    assert.equal(item.messages[1].topicRefs[0].topicId,'workflow-topic')
     assert.deepEqual(item.outbox.map(message => message.outboundId), ['old-out', 'new-out'])
     assert.equal(item.outbox[0].text, '旧回复')
     const all = await (await fetch(base + '/state/groups')).json()
     assert.equal(all.length, 1)
     assert.deepEqual(all[0].messages.map(message => message.messageId), ['old', 'new'])
   }, { overrides: { listGroups: () => [group], getGroup: () => group, getWorkflowMailboxes: async () => mailboxes } })
+})
+test('新工作流话题进入列表与详情，跨群详情不可读',async()=>{
+  const topic={topicId:'workflow-topic',conversationId:'g',title:'归一化回归',revision:2,createdAt:'2026-09-24T02:00:00Z',updatedAt:'2026-09-24T02:01:00Z',facts:[{text:'复现 0.001 t'}]}
+  await withServer(false,async base=>{
+    const listing=await(await fetch(base+'/state/topics?groupId=g')).json()
+    assert.equal(listing.total,1)
+    assert.equal(listing.topics[0].topicId,'workflow-topic')
+    const detail=await(await fetch(base+'/state/topics/workflow-topic?groupId=g')).json()
+    assert.equal(detail.topic?.engine,'workflow-v2',JSON.stringify(detail))
+    assert.equal(detail.messages[0].text,'原消息')
+    assert.equal((await fetch(base+'/state/topics/workflow-topic?groupId=other')).status,404)
+  },{overrides:{listWorkflowTopics:async groupId=>groupId==='other'?[]:[topic],getWorkflowTopicContext:async({groupId})=>groupId==='g'?{topic,messages:[{messageId:'m',text:'原消息'}],total:1}:null}})
 })
 
 test('本机澄清回答拒绝body伪造actor与外站Origin，只传固定路径身份', async () => {

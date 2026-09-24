@@ -350,6 +350,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         }
         const topics = await store.query({ kind: 'message.topics', conversationId: run.conversationId, limit: 200 })
         for (const topic of topics) {
+          if (topic.facts.every(fact=>fact.sourceRunId===run.runId)) continue
           if (result.some(card => card.topicId === topic.topicId)) continue
           result.push({ candidateId: topic.topicId, topicId: topic.topicId, title: topic.title, goal: topic.title, state: 'topic', relevantTime: topic.updatedAt,
             versions: { topic: topic.revision }, sourceRefs: topic.facts.flatMap(fact => fact.sourceRefs.map(ref => ref.sourceKey)),
@@ -414,13 +415,13 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         return { kind: 'accepted' }
       },
       async topicFor({ run, unit, binding, intent, facts }) {
-        if (binding.disposition === 'conversation' || intent.actions.every(action => ['no_action', 'status', 'result', 'approval', 'clarification'].includes(action.intent))) return null
+        if (intent.actions.every(action => ['approval', 'clarification'].includes(action.intent))) return null
         if (facts.topic && ![facts.topic.actorId, ownerActorId].includes(run.actorId)) throw executionError('WORKFLOW_TOPIC_FORBIDDEN')
         const sourceRefs = [{ sourceKey: run.sourceKey, sourceVersion: run.sourceVersion, text: run.body }]
         const constraints = [...new Set([...(unit.constraints ?? []), ...(unit.sharedConstraints ?? []), ...intent.constraints])]
         for (const action of intent.actions) if (action.intent === 'fact' && action.arguments.kind === 'constraint' && typeof action.arguments.text === 'string') constraints.push(action.arguments.text)
-        return { topicId: binding.topicId ?? `topic-${executionDigest([run.runId, unit.unitId]).slice(0, 32)}`, conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.unitId,
-          title: facts.topic?.title ?? unit.goalText, ...(facts.topic ? { expectedRevision: facts.topic.revision } : {}),
+        return { topicId: unit.topicId ?? binding.topicId ?? `topic-${executionDigest([run.runId, unit.unitId]).slice(0, 32)}`, conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.unitId,
+          title: facts.topic?.title ?? unit.goalText, ...(facts.topic && facts.topic.topicId === (unit.topicId ?? binding.topicId) ? { expectedRevision: facts.topic.revision } : {}),
           facts: [{ kind: 'fact', text: unit.spans.map(span => run.body.slice(span.start, span.end)).join('\n'), sourceRefs }, ...constraints.map(text => ({ kind: 'constraint', text, sourceRefs }))] }
       },
       material: resolveMaterials = async function ({ run, needs }) {
@@ -611,15 +612,19 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const messages = [], outbox = []
     for (const groupId of groups) {
       const outboundIds = new Set(await store.query({ kind: 'message.outboundIds', conversationId: groupId }))
+      const topicBindings = await store.query({ kind: 'message.topic.bindings', conversationId: groupId })
+      const topicRefsBySource = new Map()
+      for (const item of topicBindings) topicRefsBySource.set(item.sourceKey, [...(topicRefsBySource.get(item.sourceKey) ?? []), { topicId: item.topic.topicId, revision: item.topic.revision, title: item.topic.title, unitId: item.unitId }])
       const senderNames = new Map((legacyGroup(groupId)?.messages ?? []).filter(item => item.senderOpenDingTalkId && item.senderName).map(item => [item.senderOpenDingTalkId, item.senderName]))
       let beforeSequenceId
       for (;;) {
         const page = await store.query({ kind: 'message.list', conversationId: groupId, limit: 200, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
         for (const run of page) {
-          if (outboundIds.has(run.context?.sourceMessageId)) continue
+          if (outboundIds.has(run.context?.sourceMessageId) || run.reason === 'message_reprocessed') continue
+          const topicRefs = topicRefsBySource.get(run.sourceKey) ?? []
           messages.push({ groupId, messageId: run.context?.sourceMessageId, text: run.body, senderOpenDingTalkId: run.actorId,
             senderName: run.context?.senderName ?? senderNames.get(run.actorId), occurredAt: run.context?.occurredAt ?? run.createdAt, sequence: run.sequenceId,
-            routingStatus: run.status === 'needs_attention' ? 'failed' : ['settled', 'superseded'].includes(run.status) ? 'routed' : 'pending' })
+            topicRefs, routingStatus: run.status === 'needs_attention' ? 'failed' : ['settled', 'superseded'].includes(run.status) ? 'routed' : 'pending' })
         }
         if (page.length < 200) break
         beforeSequenceId = page.at(-1).sequenceId
@@ -643,8 +648,22 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     }
     return { messages, outbox }
   }
+  async function topics(groupId) {
+    const selected=groupId ? [groupId] : [...groups]
+    return (await Promise.all(selected.filter(id=>groups.has(id)).map(id=>store.query({kind:'message.topics',conversationId:id,limit:200})))).flat()
+  }
+  async function topicContext({groupId,topicId,offset=0,limit=50}) {
+    if(!groups.has(groupId)) return null
+    const topic=await store.query({kind:'message.topic',topicId})
+    if(!topic||topic.conversationId!==groupId) return null
+    const refs=[...new Set(topic.facts.flatMap(fact=>fact.sourceRefs.map(ref=>ref.sourceKey)))]
+    const messages=(await Promise.all(refs.map(key=>store.query({kind:'message.source',sourceKey:key})))).filter(Boolean)
+      .map(run=>({messageId:run.context?.sourceMessageId,text:run.body,senderName:run.context?.senderName,occurredAt:run.context?.occurredAt??run.createdAt,sourceKind:'workflow-v2'}))
+      .sort((a,b)=>String(a.occurredAt).localeCompare(String(b.occurredAt)))
+    return {topic,messages:messages.slice(offset,offset+limit),total:messages.length,offset,limit}
+  }
   return {
-    ingest, resumeRequest, reprocessMessage, decideApproval, isApprovalRequest, submitWebTask, mailboxes, isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
+    ingest, resumeRequest, reprocessMessage, decideApproval, isApprovalRequest, submitWebTask, mailboxes, topics, topicContext, isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
     catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, workflows: workflowCatalogState() }),
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,
       messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },

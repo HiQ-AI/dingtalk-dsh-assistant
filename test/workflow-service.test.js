@@ -42,6 +42,10 @@ test('真实同库消息接纳→固定Task执行→看板结果；重复入站�
   const state = await service.state(accepted.runId)
   assert.equal(state.run.status, 'settled')
   assert.equal(state.commands.length, 1)
+  const topic=(await service.topics('g'))[0]
+  assert.ok(topic)
+  assert.equal((await service.mailboxes()).messages[0].topicRefs[0].topicId,topic.topicId)
+  assert.equal((await service.topicContext({groupId:'g',topicId:topic.topicId})).messages[0].messageId,message.messageId)
   const taskRunId = state.commands[0].result.runId
   await execution.controller.whenIdle(taskRunId)
   const tasks = await service.tasks()
@@ -211,7 +215,7 @@ test('本机操作者逐条重处理旧澄清，旧请求失效且有命令消�
   assert.notEqual(replay.runId,first.runId)
   assert.equal((await service.state(first.runId)).requests[0].status,'superseded')
   assert.equal((await service.state(replay.runId)).commands.length,1)
-  await assert.rejects(service.reprocessMessage(replay.runId,{channel:'web',actorId:'owner'}),/MESSAGE_REPROCESS_EFFECT_PENDING/)
+  await assert.rejects(service.reprocessMessage(replay.runId,{channel:'web',actorId:'owner'}),/MESSAGE_REPROCESS_EXHAUSTED/)
 })
 
 test('已回读的自身澄清通知不再作为新消息入站，收发信箱分别投影', async t => {

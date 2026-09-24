@@ -191,6 +191,7 @@ test('话题归属和命令同事务接纳，跨群证据或归属冲突整次�
  const topic={topicId:'topic',conversationId:'g',sourceRunId:'m',unitId:'u',title:'topic',facts:[{kind:'constraint',text:'do this',sourceRefs:[{sourceKey:'m',sourceVersion:1,text:'do this'}]}]}
  await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'create',args:{taskId:'task'}}],topic})
  const result=await f.store.query({kind:'message.topic',topicId:'topic'});assert.equal(result.facts[0].actorId,'a');assert.equal((await f.store.query({kind:'message.topic.source',sourceKey:'m'}))[0].topicId,'topic')
+ assert.deepEqual((await f.store.query({kind:'message.topic.bindings',conversationId:'g'})).map(item=>({sourceKey:item.sourceKey,topicId:item.topic.topicId})),[{sourceKey:'m',topicId:'topic'}])
  const badTopic={...topic,unitId:'v',conversationId:'another'}
  await bad(f.call('accept',{runId:'m',unitId:'v',commands:[{commandId:'bad',kind:'create',args:{}}],topic:badTopic}),'MESSAGE_TOPIC_SCOPE_MISMATCH')
  const state=await f.store.query({kind:'message.run',runId:'m'});assert.equal(state.commands.length,1);assert.equal(state.units.find(u=>u.id==='v').status,'pending');assert.equal(state.units.find(u=>u.id==='u').topicId,'topic')
