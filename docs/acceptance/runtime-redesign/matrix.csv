@@ -93,3 +93,5 @@ BUDGET_FIXED,30,deterministic-output-without-model-budget,PASS,round-30.md
 BUDGET_RESUME,30,resolved-material-capacity-recovery,PASS,round-30.md
 BUDGET_TARGETED_REGRESSION,30,message-workflow-ledger-service-93-tests,PASS,round-30.md
 BUDGET_FULL_REGRESSION,30,repository-test-suite-888-tests,PASS,round-30.md
+LOCAL_CUTOVER,31,exact-assistant-package-and-runtime-readback,PASS,round-31.md
+NORMALIZATION_TASK_RECOVERY,31,existing-engineering-task-resume,BLOCKED,round-31.md
