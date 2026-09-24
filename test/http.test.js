@@ -42,7 +42,8 @@ test('工作流只读状态与异步任务视图保留新节点真实完成状�
     assert.equal(tasks[0].workflowProgress.stages[0].completed, true)
     assert.equal(tasks[0].workflowProgress.stages[1].completed, false)
     assert.deepEqual(await (await fetch(base + '/state/workflows?runId=r')).json(), { runId: 'r', status: 'waiting' })
-  }, { overrides: { listTaskView: async () => [{ taskId: 't', engine: 'workflow-v2', executionNodes: [{ nodeId: 'prepare', status: 'succeeded' }, { nodeId: 'execute', status: 'running' }] }], getWorkflowState: async runId => ({ runId, status: 'waiting' }) } })
+    assert.deepEqual(await (await fetch(base + '/state/workflows/catalog')).json(), { engine: 'workflow-v2', workflows: [{ id: 'task-analysis' }] })
+  }, { overrides: { listTaskView: async () => [{ taskId: 't', engine: 'workflow-v2', executionNodes: [{ nodeId: 'prepare', status: 'succeeded' }, { nodeId: 'execute', status: 'running' }] }], getWorkflowState: async runId => ({ runId, status: 'waiting' }), getWorkflowCatalog: () => ({ engine: 'workflow-v2', workflows: [{ id: 'task-analysis' }] }) } })
 })
 
 test('本机澄清回答拒绝body伪造actor与外站Origin，只传固定路径身份', async () => {

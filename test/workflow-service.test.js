@@ -209,12 +209,21 @@ test('五类旧只读流程共享消息schema、可用列表和创建路由，�
     return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: input.text, workflowId: ids[selected++] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
   }
   const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
+  const catalog = service.catalog()
+  assert.equal(catalog.engine, 'workflow-v2')
+  assert.deepEqual(catalog.messageStages.map(stage => stage.id), ['receive', 'context', 'S', 'R', 'I', 'dispatch'])
+  assert.equal(catalog.workflows.length, taskWorkflowCatalog.length)
+  assert.ok(ids.every(id => catalog.workflows.some(item => item.id === id && item.status === 'available' && item.version && item.nodes.length)))
+  assert.equal(catalog.workflows.find(item => item.id === 'task-data-change').status, 'unavailable')
   for (let index = 0; index < ids.length; index++) {
     const receipt = await service.ingest({ ...message, messageId: `readonly-${index}`, text: `审阅材料 ${index}` })
     const state = await service.messages.process(receipt.runId)
     assert.equal(state.run.status, 'settled')
     const run = await execution.store.query({ kind: 'run', runId: state.commands[0].result.runId })
     assert.equal(run.run.workflowId, ids[index])
+    const view = (await service.tasks()).find(task => task.taskId === run.run.taskId)
+    assert.equal(view.workflowId, ids[index])
+    assert.equal(view.workflowVersion, run.run.definitionVersion)
   }
   assert.deepEqual(taskWorkflowCatalog.filter(item => item.mode === 'read-only').map(item => item.id), ['task-analysis', ...ids])
   const envelope = { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '生产数据变更', workflowId: 'task-data-change' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
@@ -256,6 +265,7 @@ test('受信外部适配器齐备时四类流程可选并按固定需求创建�
     return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: input.text, workflowId: ids[selected++] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
   }
   const { service, execution, message } = await fixture(t, 'owner', undefined, { external, judge })
+  assert.ok(ids.every(id => service.catalog().workflows.some(item => item.id === id && item.status === 'available' && item.version && item.nodes.length)))
   for (let index = 0; index < ids.length; index++) {
     const receipt = await service.ingest({ ...message, messageId: `external-${index}`, text: `处理外部任务 ${index}` })
     const state = await service.messages.process(receipt.runId)

@@ -8,6 +8,10 @@
 
 验证 `/state/workflows` 的消息节点、命令和预算；`/state/tasks` 合并旧任务与 `engine=workflow-v2` 任务，进度直接来自 executionNodes。已切换群不再恢复旧 Resident，也不能通过旧 Web 新建 Task 接口旁路创建；未配置群维持原入口。通知与任务运行分开：渠道 ACK 不能标记送达，必须拿到可信消息 ID 后独立回读正文和群。没有消息 ID 时保留未确认状态。
 
+配置页部署后回读 `GET /state/workflows/catalog`：确认 `engine=workflow-v2`、目标群在 `groupIds`、消息阶段为接收／上下文／S／R／I／派发，任务流程的可发起状态、版本和节点来自当前注册定义。实际浏览器中确认已切换群只显示只读目录，不出现旧“任务流程提示词”编辑器；未切换群的旧配置仍可折叠访问。通用配置保存不得改写已切换群不用的 `taskPrompts`。
+
+运行看板在真实浏览器中点击 `workflow-v2` 任务卡片，确认进入节点详情且排队任务也可查看；模型节点才显示所属会话记录入口。旧任务仍走原会话入口，任务卡片进度图标与折叠交互不变。
+
 入口本地回归：`node --test test/workflow-entry.test.js test/http.test.js test/workflow-service.test.js`；原生 Runtime 防双入口测试：`node --test --test-name-pattern='已切换群' test/runtime.test.js`。测试不向真实渠道发送消息。
 
 普通澄清通过 `POST /workflows/<runId>/requests/<requestId>/answer` 接收 `{eventId,answer}`，禁止传入 actorId。此接口沿用本机可信操作者边界，只接受 loopback 和许可的同源 Origin；不是远程登录鉴权。Host 必须显式配置 `workflow.webActorId` 映射本机操作者，缺失则禁写，不默认冒认 owner。请求仍检查 permittedActors 和原请求身份。钉钉答复必须引用已独立回读的澄清通知消息 ID，并匹配同群唯一请求；Web/IM 消费同一首终态，迟到冲突只读回原答复，不创建新任务。本接口不提供生产操作批准，生产 approval 意图在未实现相应审批流程时保持 unsupported。

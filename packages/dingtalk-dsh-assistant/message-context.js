@@ -8,13 +8,13 @@ const need = z.strictObject({ resourceRef: z.string().min(1), reason: z.string()
 const wait = z.strictObject({ kind: z.enum(['needs_context', 'needs_clarification']), reason: z.string().min(1), needs: z.array(need).default([]), question: z.string().optional() })
 const argumentText = z.string().trim().min(1)
 export const taskWorkflowCatalog = Object.freeze([
-  { id: 'task-analysis', purpose: '已给材料分析', mode: 'read-only' },
-  ...readOnlyTaskCatalog.map(({ id, purpose }) => ({ id, purpose, mode: 'read-only' })),
-  { id: 'task-engineering', purpose: '登记仓库开发并提交PR', mode: 'engineering' },
-  { id: 'task-uat-delivery', purpose: 'UAT交付', mode: 'external' },
-  { id: 'task-production-release', purpose: '生产发布', mode: 'external' },
-  { id: 'task-data-change', purpose: '数据变更', mode: 'external' },
-  { id: 'task-uat-rebuild', purpose: 'UAT同提交重建', mode: 'external' },
+  { id: 'task-analysis', label: '材料分析', purpose: '已给材料分析', mode: 'read-only' },
+  ...readOnlyTaskCatalog.map(({ id, purpose }) => ({ id, label: ({ 'task-investigation': '问题排查', 'task-planning': '方案设计', 'task-pr-review': 'PR 评审', 'task-data-query': '数据口径审查', 'task-retrospective': '任务复盘' })[id], purpose, mode: 'read-only' })),
+  { id: 'task-engineering', label: '代码开发', purpose: '登记仓库开发并提交PR', mode: 'engineering' },
+  { id: 'task-uat-delivery', label: 'UAT 交付', purpose: 'UAT交付', mode: 'external' },
+  { id: 'task-production-release', label: '生产发布', purpose: '生产发布', mode: 'external' },
+  { id: 'task-data-change', label: '数据变更', purpose: '数据变更', mode: 'external' },
+  { id: 'task-uat-rebuild', label: 'UAT 同提交重建', purpose: 'UAT同提交重建', mode: 'external' },
 ])
 const actionArguments = z.strictObject({ objective: argumentText.optional(), workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)).optional(), repositoryId: argumentText.optional(), acceptanceCriteria: z.array(argumentText).optional(), runId: argumentText.optional(), scope: z.enum(['conversation', 'task']).optional(), resultRef: argumentText.optional(), requestId: argumentText.optional(), answer: argumentText.optional(), decision: z.enum(['approved', 'rejected']).optional(), kind: z.enum(['fact', 'constraint']).optional(), text: argumentText.optional() })
 const actionSchema = z.strictObject({ intent: z.enum(['no_action', 'fact', 'answer', 'research', 'create', 'revise', 'pause', 'cancel', 'resume', 'status', 'result', 'reopen', 'approval', 'clarification']), arguments: actionArguments, dependsOn: z.array(z.number().int().nonnegative()) }).superRefine((action, ctx) => {

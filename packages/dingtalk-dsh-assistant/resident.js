@@ -165,6 +165,7 @@ export async function apply(ctx, config = {}) {
     }
     runtime.listTaskView = async () => [...runtime.listTasks(), ...await workflow.tasks()]
     runtime.getWorkflowState = runId => workflow.state(runId)
+    runtime.getWorkflowCatalog = () => workflow.catalog()
     runtime.isWorkflowTask = taskId => workflow.isTask(taskId)
     runtime.submitWorkflowTask = args => {
       if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')

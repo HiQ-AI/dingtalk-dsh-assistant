@@ -54,6 +54,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const selectedExternal = createExternalRegistry(external, modelConfig())
   const externalWorkflows = [...selectedExternal.byId.keys()].map(id => ({ id, purpose: externalLabels[id] }))
   const unavailableWorkflows = Object.entries(externalLabels).filter(([id]) => !selectedExternal.byId.has(id)).map(([, label]) => label)
+  const visibleDefinitions = new Map([createAnalysisTaskWorkflow(modelConfig()), ...createReadOnlyTaskWorkflows(modelConfig()), ...selectedExternal.workflows]
+    .map(workflow => [workflow.id, workflow]))
   const execution = suppliedExecution ?? await openExecutionRuntime({
     ctx, dbPath: config.dbPath, instanceId: config.instanceId, artifactDirectory: config.artifactDirectory,
     deliveryOptions: { ...engineering.deliveryOptions,
@@ -503,7 +505,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       const requirement = await artifacts.read(run.requirementRef)
       const final = state.nodes.filter(node => node.outputRef).at(-1)
       const output = final ? await artifacts.read(final.outputRef) : null
-      return { taskId: run.taskId, engine: 'workflow-v2', groupId: origin?.run.conversationId,
+      return { taskId: run.taskId, engine: 'workflow-v2', workflowId: run.workflowId, workflowVersion: run.definitionVersion, groupId: origin?.run.conversationId,
         title: requirement.request, objective: requirement.request, inputVersion: run.revision + 1, runSequence: 1,
         state: terminal(run.status) ? 'completed' : state.controllerError ? 'waiting' : run.status === 'running' ? 'running' : run.status === 'queued' ? 'queued' : 'waiting',
         outcome: terminal(run.status) ? run.status : undefined, createdAt: run.createdAt, updatedAt: run.updatedAt,
@@ -544,9 +546,25 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       : index === 1 ? result.value : [])
     return { failures }
   }
+  function workflowCatalogState() {
+    const repositories = engineering.availableWorkflows().map(item => item.repositoryId)
+    return taskWorkflowCatalog.map(item => {
+      const workflow = visibleDefinitions.get(item.id)
+      const available = !!workflow || item.mode === 'engineering' && repositories.length > 0
+      return { id: item.id, label: item.label, purpose: item.purpose, mode: item.mode,
+        status: available ? 'available' : 'unavailable', version: workflow?.version ?? null,
+        nodes: workflow?.nodes.map(node => ({ id: node.id, executor: node.executor, effects: node.allowedEffects })) ?? [],
+        ...(item.mode === 'engineering' ? { repositories, reason: available ? '具体节点随任务和仓库配置冻结，在任务详情查看' : '未配置受信工程仓库' }
+          : !available ? { reason: '缺少受信平台适配器，当前不能发起' } : {}),
+      }
+    })
+  }
+  const messageStages = [{ id: 'receive', label: '接收消息' }, { id: 'context', label: '补全上下文' }, { id: 'S', label: '拆分事项' }, { id: 'R', label: '关联话题' }, { id: 'I', label: '判断意图' }, { id: 'dispatch', label: '派发任务' }]
   return {
     ingest, resumeRequest, decideApproval, isApprovalRequest, submitWebTask, isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
-    async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info, messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },
+    catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, workflows: workflowCatalogState() }),
+    async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,
+      messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },
     recover: recoverAll,
     async close() { closed = true; await messages.close(); if (!suppliedExecution) await execution.close() },
   }
