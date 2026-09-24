@@ -225,6 +225,19 @@ test('R容量旧阻断仅在无命令、请求和副作用时重试', async t =>
   assert.equal((await workflow.state(runId)).run.capacityRetryVersion, 'r-bounded-cards-v2')
 })
 
+test('I容量阻断仅在无副作用时恢复原节点', async t => {
+  let large = true
+  const { workflow } = await fixture(t, { judge: async ({ stage }) => stage === 'S' ? split : stage === 'R' ? binding : intent, context: { facts: async () => ({ detail: large ? '事实'.repeat(10000) : '已核对' }) }, handlers: { status: async () => ({ ok: true }) } })
+  const { runId } = await workflow.receive(source, { process: false })
+  await workflow.process(runId)
+  assert.match((await workflow.state(runId)).run.reason, /^MESSAGE_CONTEXT_CAPACITY:I:/)
+  large = false
+  await workflow.recover()
+  const state = await workflow.state(runId)
+  assert.equal(state.run.status, 'settled')
+  assert.equal(state.run.capacityRetryVersion, 'i-bounded-facts-v1')
+})
+
 test('I参数命名错误不派发，字段校验反馈只重试I', async t => {
   let wrong = true, sent = 0, sawFailure = false
   const { workflow } = await fixture(t, { policy: { recoveryDelaysMs: [0] }, judge: async ({ stage, input }) => {
