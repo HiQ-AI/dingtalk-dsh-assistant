@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { isDirectedTaskRequest, openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { messageSchemas, taskWorkflowCatalog } from '../packages/dingtalk-dsh-assistant/message-context.js'
@@ -402,6 +403,32 @@ test('旧排查任务的肯定答复只授权同一消息继续准入，随后�
   assert.equal((await execution.store.query({kind:'run.list'})).length,1)
 })
 
+test('本人可答复他人旧排查澄清，其他群成员不能冒用且不阻断消息接收',async t=>{
+  const task={taskId:'old-draft',groupId:'g',title:'排查草稿未回显',objective:'仅授权排查分析',state:'completed',outcome:'succeeded'}
+  const judge=async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'
+    ?{kind:'binding',disposition:'existing',candidateId:'legacy:old-draft',evidence:['同一现象']}
+    :input.clarificationAnswers?.length
+      ?{kind:'intent',actions:[{intent:'create',arguments:{objective:'修复草稿未回显',workflowId:'task-analysis'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
+      :{kind:'needs_clarification',reason:'消息未明确授权；此前对应任务仅授权排查分析，不能据此实施修改。',question:'继续排查还是修复？',needs:[]}
+  const notifications={canDisclose:async()=>true,send:async()=>({messageId:'clarify-sent'}),readback:async()=>({messageId:'clarify-sent',conversationId:'g'})}
+  const {service,message,execution}=await fixture(t,'participant',notifications,{legacy:{getGroup:id=>({groupId:id,responsibility:'任务准入',messages:[]}),listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge})
+  const received=await service.ingest({...message,text:'@孙鹏(孙鹏) 审核草稿保存依然有问题，评审意见再次进入未回显'})
+  await service.messages.process(received.runId)
+  const request=(await service.state(received.runId)).requests[0]
+  await service.flushNotifications()
+  await assert.rejects(service.resumeRequest({runId:received.runId,requestId:request.id,eventId:'outsider',answer:'修复'}, {channel:'im',actorId:'outsider',conversationId:'g'}),/WORKFLOW_ACTION_FORBIDDEN/u)
+  const other=await service.ingest({...message,messageId:'other-reply',senderOpenDingTalkId:'outsider',text:'我也要修复',quotedMessage:{messageId:'clarify-sent'}})
+  assert.equal(other.duplicate,false)
+  assert.equal((await service.state(received.runId)).requests[0].status,'pending')
+  const answer='修复并验证，完成后发uat提测'
+  const eventId=`dws:${executionDigest(['','g','owner-reply'])}`
+  await execution.store.command({id:'old-misrouted-answer',kind:'message.receive',args:{runId:'old-misrouted-answer',sourceKey:eventId,sourceVersion:1,conversationId:'g',actorId:'owner',body:answer,context:{sourceMessageId:'owner-reply',quoteRefs:[{sourceKey:'quote',messageId:'clarify-sent'}]}}})
+  const accepted=await service.ingest({...message,messageId:'owner-reply',senderOpenDingTalkId:'owner',text:'修复并验证，完成后发uat提测',quotedMessage:{messageId:'clarify-sent'}})
+  assert.equal(accepted.status,'resolved')
+  assert.equal((await service.state('old-misrouted-answer')).run.status,'superseded')
+  assert.equal((await execution.store.query({kind:'run.list'})).length,1)
+})
+
 test('明确问小小鹏审核问题是否部署时即使I误判无动作也回读群任务',async t=>{
   const task={taskId:'old-review',groupId:'g',title:'审核草稿与撤回通知',objective:'修复审核草稿与撤回通知',state:'completed',result:{delivery:{uat2Status:'deployed-and-handed-to-testing'}}}
   const {service,message}=await fixture(t,'participant',undefined,{legacy:{listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'conversation',candidateId:null,evidence:['群审核任务']}:{kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}})
@@ -670,7 +697,7 @@ test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入�
 test('Controller未排空错误投影等待原因，不能显示正常执行',async t=>{
  const {service,execution,message}=await fixture(t,'owner',undefined,{execute:async()=>{throw Object.assign(new Error('EXECUTOR_DRAIN_EVIDENCE_REQUIRED'),{code:'EXECUTOR_DRAIN_EVIDENCE_REQUIRED',executionDrained:false})}})
  const first=await service.ingest(message);await service.messages.process(first.runId)
- const task=(await service.state(first.runId)).commands[0].result;await execution.controller.whenIdle(task.runId)
+ const task=(await service.state(first.runId)).commands[0].result;await execution.controller.whenIdle(task.runId).catch(error=>assert.equal(error.code,'EXECUTOR_DRAIN_EVIDENCE_REQUIRED'))
  assert.equal((await execution.controller.state(task.runId)).run.status,'running')
  const view=(await service.tasks())[0];assert.equal(view.state,'waiting');assert.equal(view.waitingReason,'EXECUTOR_DRAIN_EVIDENCE_REQUIRED')
 })

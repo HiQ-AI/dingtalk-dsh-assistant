@@ -19,7 +19,7 @@ export async function openExecutionRuntime({ ctx, dbPath, instanceId, artifactDi
     const artifacts = await openExecutionArtifacts({ directory: artifactDirectory, initialize })
     const delivery = deliveryOptions ? createExecutionDelivery({ ...deliveryOptions, store, artifacts }) : undefined
     sessions = createExecutionSessions({ ctx, isCurrent: binding => controller.isCurrent(binding) })
-    const definitions = typeof workflows === 'function' ? await workflows(store) : { workflows, historicalWorkflows }
+    const definitions = typeof workflows === 'function' ? await workflows(store, artifacts) : { workflows, historicalWorkflows }
     controller = createExecutionController({ store, artifacts, sessions, delivery, ...definitions, readTools, maxConcurrentRuns,
       ...(changeQuietMs === undefined ? {} : { changeQuietMs }), ...(maxChangeDelayMs === undefined ? {} : { maxChangeDelayMs }),
     })

@@ -39,6 +39,28 @@ async function fixture(t, args = creation()) {
   return f
 }
 const rejects = (promise, code) => assert.rejects(promise, e => e.code === code)
+
+test('工程索引容量等待仅在旧节点排空且下游未运行时切换定义', async t => {
+  const f = await fixture(t, creation([plan('prepare-workspace'), plan('index-files', 'code', false),
+    plan('select-files', 'agent', false), plan('validate-selection', 'code', false)]))
+  const prepare = await f.claim('prepare-workspace'); await f.drain(prepare)
+  await f.store.command(command('node.commit', { ...identity(prepare), inputDigest: d, outcome: 'succeeded', outputRef: 'sha256/prepare.json', evidenceRefs: [],
+    nextInput: { nodeId: 'index-files', inputRef: 'sha256/index-old.json', inputDigest: d } }))
+  const index = await f.claim('index-files'); await f.drain(index)
+  await f.store.command(command('node.commit', { ...identity(index), inputDigest: d, outcome: 'waiting', evidenceRefs: [],
+    waitReason: { kind: 'recovery', reference: 'ENGINEERING_INDEX_CAPACITY_EXCEEDED' } }))
+  const before = await f.query(), args = { runId: 'run', expectedRevision: before.run.revision, fromDigest: d, toDigest: changedDigest,
+    nodeRunId: index.nodeRunId, inputRef: 'sha256/index-new.json', inputDigest: changedDigest }
+  await rejects(f.store.command(command('run.workflow.migrate-index', { ...args, nodeRunId: 'other' })), 'WORKFLOW_MIGRATION_UNSAFE')
+  await f.store.command(command('run.workflow.migrate-index', args))
+  const after = await f.query()
+  assert.equal(after.run.workflowDigest, changedDigest)
+  assert.equal(after.run.status, 'queued')
+  assert.deepEqual(after.nodes.map(node => node.nodeVersion), ['1', '2', '2', '2'])
+  assert.equal(after.nodes[1].inputRef, args.inputRef)
+  assert.equal(after.nodes[1].status, 'ready')
+  await rejects(f.store.command(command('run.workflow.migrate-index', args)), 'WORKFLOW_MIGRATION_CONFLICT')
+})
 function child(t, source, args, preload) {
   const execArgs = [...(preload ? ['--import', 'data:text/javascript,' + encodeURIComponent(preload)] : []),
     '-e', `(async()=>{${source}})().catch(e=>{if(process.send)process.send({type:'error',code:e.code,message:e.message});process.exitCode=1})`, ...args]

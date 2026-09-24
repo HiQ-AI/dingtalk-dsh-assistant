@@ -176,6 +176,20 @@ test('执行材料未齐不接纳，ready事件只检查材料不重跑I', async
   assert.equal(iCalls, 2)
 })
 
+test('R 节点把 S 的历史短引用还原为来源键后再取材料', async t => {
+  const requested=[]
+  const {workflow}=await fixture(t,{context:{history:async()=>[{sourceKey:'history-account',text:'test3 创建时间为空',conversationId:'group'}],material:async({needs})=>{
+    requested.push(needs[0].resourceRef)
+    return needs[0].resourceRef==='history-account'?{ready:true,data:{resources:[{resourceRef:'history-account',text:'test3 创建时间为空'}]}}:{ready:false}
+  }},judge:async({stage,input})=>stage==='S'
+    ?{kind:'split',units:[{spans:[{start:0,end:input.source.text.length}],goalText:input.source.text,constraints:[],contextNeeds:[{resourceRef:'h1',reason:'指代前文'}]}],coverage:[{start:0,end:input.source.text.length,role:'unit'}],sharedConstraints:[]}
+    :stage==='R'?binding:intent,handlers:{status:async()=>({})}})
+  const {runId}=await workflow.receive({...source,body:'这不是让你去查吗'},{process:false})
+  await workflow.process(runId)
+  assert.deepEqual(requested,['history-account'])
+  assert.equal((await workflow.state(runId)).run.status,'settled')
+})
+
 test('S投影保留可追溯缺口，长群职责和30条历史不阻塞事项拆分', async () => {
   const snapshot = await prepareMessageContext({ ...source, context: { compactPolicy: '职责'.repeat(2100) } }, {
     history: async () => Array.from({ length: 30 }, (_, index) => ({ sourceKey: `history-${index}`, text: '历史消息'.repeat(30), conversationId: 'group' })),

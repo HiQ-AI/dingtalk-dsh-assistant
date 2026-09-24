@@ -268,6 +268,20 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(rows(db,r.runId,'command').filter(x=>x.unitId===u.id).every(x=>x.status==='applied')) {u.status='applied';put(db,r.runId,'unit',u)}
     settle(db,r);return {result:{command:c,run:r}}
   }
+  if(kind==='message.clarification.fold') {
+    const r=run(db,a.runId),target=run(db,a.targetRunId),q=get(db,'request',a.requestId)
+    if(r.status==='superseded'&&r.reason==='clarification_answer_reconciled')return {result:{run:r}}
+    if(r.runId===target.runId||r.sourceKey!==a.eventId||r.conversationId!==target.conversationId
+      ||q.runId!==target.runId||q.kind!=='needs_clarification'||q.status!=='pending'
+      ||!r.context?.quoteRefs?.some(ref=>ref.messageId===a.replyToMessageId)
+      ||rows(db,r.runId,'command').length||rows(db,r.runId,'notification').some(n=>!['prepared','delivered'].includes(n.status)))fail('MESSAGE_CLARIFICATION_FOLD_FORBIDDEN')
+    current(db,r)
+    revoke(db,r)
+    for(const request of rows(db,r.runId,'request').filter(item=>item.status==='pending')){request.status='superseded';request.reason='clarification_answer_reconciled';put(db,r.runId,'request',request)}
+    for(const notice of rows(db,r.runId,'notification').filter(item=>item.status==='prepared')){notice.status='superseded';notice.supersededAt=now;put(db,r.runId,'notification',notice)}
+    r.status='superseded';r.reason='clarification_answer_reconciled';save(db,r)
+    return {result:{run:r}}
+  }
   const r=run(db,a.runId);current(db,r,a.expectedRevision)
   if(kind==='message.quiet') {
     const original=str(a.body)
@@ -400,7 +414,8 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   if(kind==='message.wake'||kind==='message.request.resolve') {
     const q=get(db,'request',a.requestId)
     if(q.runId!==r.runId||q.revision!==r.revision)fail('MESSAGE_REQUEST_STALE')
-    if(q.permittedActors?.length&&!q.permittedActors.includes(a.actorId))fail('MESSAGE_ACTOR_FORBIDDEN')
+    if(q.permittedActors?.length&&!q.permittedActors.includes(a.actorId)
+      &&!(q.kind==='needs_clarification'&&a.ownerAnswer===true))fail('MESSAGE_ACTOR_FORBIDDEN')
     if(q.status!=='pending')return {result:{request:q,run:r}}
     q.status='resolved';q.answer=a.answer;q.eventId=str(a.eventId);q.resolvedAt=now;put(db,r.runId,'request',q)
     for(const n of rows(db,r.runId,'node')) if(n.unitId===q.unitId&&n.nodeId===q.nodeId&&n.revision===r.revision) {n.status='superseded';put(db,r.runId,'node',n)}

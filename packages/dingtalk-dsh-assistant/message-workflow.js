@@ -6,6 +6,9 @@ import { isPassiveTaskProgress, isQuietGroupMessage } from './message-ledger.js'
 export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.2', initialWindowMs: 45000, linkedWindowMs: 30000, attemptMs: 20000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, maxInputTokens: 64000, maxOutputTokens: 12000, nodeInputByteLimits: { S: 8000, R: 14000, I: 18000 }, recoveryDelaysMs: [5000, 30000] })
 const limits = { S: [8000, 2000], R: [14000, 1000], I: [18000, 1500] }
 const statusQuestion = text => /(?:完成|改完|进度|状态|部署).*[吗？?]/u.test(text) && /(?:审核|任务|问题)/u.test(text)
+const investigationConfirmation = request => request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
+  || (request.nodeId === 'I' && request.kind === 'needs_clarification'
+    && /此前对应任务仅授权排查分析/u.test(String(request.reason)))
 const directedStatusQuestion = text => /小小鹏/u.test(text) && statusQuestion(text)
 function projectMaterial(value) {
   if (!value || typeof value !== 'object') return value
@@ -127,7 +130,9 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const snapshot = data.run.snapshot
     const base = unitContext(snapshot, unit)
     if (unit.contextNeeds?.length) {
-      const material = await context.material?.({ run: data.run, unit, nodeId: 'R', needs: unit.contextNeeds })
+      const aliases = new Map((snapshot.historyManifest ?? []).map((item, index) => [`h${index + 1}`, item.sourceKey]))
+      const needs = unit.contextNeeds.map(need => ({ ...need, resourceRef: aliases.get(need.resourceRef) ?? need.resourceRef }))
+      const material = await context.material?.({ run: data.run, unit, nodeId: 'R', needs })
       if (!material?.ready) { await waiting(data, unit.unitId, 'R', { kind: 'needs_context', reason: 'UNIT_MATERIAL_PENDING', needs: unit.contextNeeds }); return }
       base.material = projectMaterial(material.data)
       if (base.material?.resources?.some(resource => resource.capacityExceeded)) { await cmd('message.attention', { runId, reason: `MESSAGE_MATERIAL_CAPACITY:R:${unit.unitId}` }); return }
@@ -181,6 +186,10 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       return
     }
     if (intent.kind === 'needs_resegmentation') { await resegment(runId, intent.reason); return }
+    const investigationMatched = binding.engine === 'legacy' && binding.state === 'completed'
+      && /仅授权排查分析/u.test(binding.goal ?? '')
+      && /(?:依然|仍然|还是|再次|又).*(?:问题|没有|未显示|失败)|(?:问题|没有|未显示|失败).*(?:依然|仍然|还是|再次|又)/u.test(data.run.body)
+      && /@孙鹏|小小鹏/u.test(data.run.body)
     if (intent.kind !== 'intent') { await waiting(data, unit.unitId, 'I', intent); return }
     if (intent.actions.some(action => ['create', 'research', 'answer', 'reopen', 'revise', 'pause', 'cancel', 'resume'].includes(action.intent))) {
       intent.requiredExecutionMaterials = [...new Set([...intent.requiredExecutionMaterials, ...resolvedEvidence.flatMap(item => item.needs.map(need => need.resourceRef))])]
@@ -193,17 +202,13 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       intent.actions = [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }]
       intent.replyPolicy = 'result'
     }
-    const investigationMatched = binding.engine === 'legacy' && binding.state === 'completed'
-      && /仅授权排查分析/u.test(binding.goal ?? '')
-      && /(?:依然|仍然|还是|再次|又).*(?:问题|没有|未显示|失败)|(?:问题|没有|未显示|失败).*(?:依然|仍然|还是|再次|又)/u.test(data.run.body)
-      && /@孙鹏|小小鹏/u.test(data.run.body)
     if (investigationMatched && !/(?:需要|请|帮忙).{0,20}(?:修复|处理)/u.test(data.run.body)
-      && !data.requests.some(request => request.unitId === unit.unitId && request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN')) {
+      && !data.requests.some(request => request.unitId === unit.unitId && investigationConfirmation(request))) {
       await waiting(data, unit.unitId, 'I', { kind: 'needs_clarification', reason: 'COMPLETED_INVESTIGATION_REPORTED_AGAIN',
         question: `这与此前仅完成排查的“${binding.title}”事项一致。现在是否需要我继续实施修复并验证？`, needs: [] })
       return
     }
-    if (investigationMatched && data.requests.some(request => request.unitId === unit.unitId && request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
+    if (investigationMatched && data.requests.some(request => request.unitId === unit.unitId && investigationConfirmation(request)
       && request.status === 'resolved' && /^(?:是|需要|请|好|可以|同意|继续|修复)/u.test(String(request.answer).trim()))
       && intent.actions.some(action => ['create', 'research', 'reopen'].includes(action.intent))) {
       binding = { kind: 'binding', disposition: 'new', candidateId: null, evidence: [...(binding.evidence ?? []), `此前排查任务：${binding.taskId}`], priorTaskId: binding.taskId }

@@ -63,12 +63,12 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     ctx, dbPath: config.dbPath, instanceId: config.instanceId, artifactDirectory: config.artifactDirectory,
     deliveryOptions: { ...engineering.deliveryOptions,
       ...(selectedExternal.workflows.length ? { externalAdapter: external.operationAdapter, authorizeExternal: external.authorizeExternal } : {}) },
-    workflows: async store => {
+    workflows: async (store, artifacts) => {
       const selected = modelConfig()
       const workflows = [createAnalysisTaskWorkflow(selected), ...createReadOnlyTaskWorkflows(selected)]
       const definitions = new Map(workflows.map(workflow => [workflow.id, defineExecutionWorkflow(workflow)]))
       const prior = await store.query({ kind: 'workflow.list' })
-      const engineeringWorkflows = await engineering.restore(store)
+      const engineeringWorkflows = await engineering.restore(store, artifacts)
       const historicalWorkflows = prior.filter(record => record.config?.kind !== 'engineering' && record.config?.kind !== 'external').map(record => {
         const previous = [createAnalysisTaskWorkflow(record.config), ...createReadOnlyTaskWorkflows(record.config)].find(item => item.id === record.workflowId)
         if (!previous || previous.version !== record.definitionVersion) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
@@ -105,13 +105,16 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const notifier = createWorkflowNotifications({ store, controller, artifacts, adapter: notifications,
     groupResponsibility: groupId => legacy.getGroup?.(groupId)?.responsibility ?? '' })
   const legacyGroup = id => legacy.getGroup?.(id)
+  const investigationConfirmation = request => request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
+    || (request.nodeId === 'I' && request.kind === 'needs_clarification'
+      && /此前对应任务仅授权排查分析/u.test(String(request.reason)))
   const mayCreate = async (run, workflowId) => {
     if (run.actorId === ownerActorId) return true
     if (workflowId === undefined || catalogById.get(workflowId)?.mode === 'external'
       || !/任务准入/u.test(legacyGroup(run.conversationId)?.responsibility ?? '')) return false
     if (isDirectedTaskRequest(run.body)) return true
     const state = await store.query({ kind: 'message.run', runId: run.runId })
-    return state.requests.some(request => request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
+    return state.requests.some(request => investigationConfirmation(request)
       && request.status === 'resolved' && /^(?:是|需要|请|好|可以|同意|继续|修复)/u.test(String(request.answer).trim()))
   }
   const messageJudge = judge ?? createMessageModel({ llm: ctx.get?.('llm') ?? ctx.llm, modelConfig })
@@ -540,10 +543,11 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (identity.channel === 'im' && identity.conversationId !== data.run.conversationId) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
     const request = data.requests.find(item => item.id === input.requestId)
     if (!request || request.kind !== 'needs_clarification') throw executionError('WORKFLOW_CLARIFICATION_NOT_FOUND')
-    if (!request.permittedActors?.includes(identity.actorId)) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+    const ownerAnswer = identity.actorId === ownerActorId
+    if (!request.permittedActors?.includes(identity.actorId) && !ownerAnswer) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
     const answer = requireText(input.answer, 'WORKFLOW_ANSWER_REQUIRED')
     const result = await messages.resume({ runId: data.run.runId, requestId: request.id,
-      eventId: requireText(input.eventId, 'WORKFLOW_EVENT_REQUIRED'), actorId: identity.actorId, answer })
+      eventId: requireText(input.eventId, 'WORKFLOW_EVENT_REQUIRED'), actorId: identity.actorId, answer, ownerAnswer })
     return { accepted: true, runId: data.run.runId, requestId: request.id, status: result.request.status, answer: result.request.answer }
   }
   async function reprocessMessage(runId, identity) {
@@ -560,7 +564,12 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (!messageId) return null
     const item = await store.query({ kind: 'message.requestByReply', conversationId: message.groupId, messageId })
     if (!item) return null
-    return resumeRequest({ runId: item.run.runId, requestId: item.request.id, eventId: sourceKey(config.profile ?? '', message.groupId, message.messageId), answer: message.text }, { channel: 'im', actorId: message.senderOpenDingTalkId, conversationId: message.groupId })
+    if (!item.request.permittedActors?.includes(message.senderOpenDingTalkId)
+      && message.senderOpenDingTalkId !== ownerActorId) return null
+    const eventId=sourceKey(config.profile ?? '', message.groupId, message.messageId)
+    const duplicate=await store.query({kind:'message.source',sourceKey:eventId})
+    if(duplicate&&duplicate.status!=='superseded')await store.command({id:`clarification-fold:${duplicate.runId}:${item.request.id}`,kind:'message.clarification.fold',args:{runId:duplicate.runId,targetRunId:item.run.runId,requestId:item.request.id,eventId,replyToMessageId:messageId}})
+    return resumeRequest({ runId: item.run.runId, requestId: item.request.id, eventId, answer: message.text }, { channel: 'im', actorId: message.senderOpenDingTalkId, conversationId: message.groupId })
   }
   async function ingest(message) {
     if (closed) throw executionError('WORKFLOW_SERVICE_CLOSED')

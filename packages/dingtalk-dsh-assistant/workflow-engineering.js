@@ -43,7 +43,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     configs.set(config.id, { config, digest: executionDigest({ config, ghCommand: ghCommand ?? null, author: author ?? null }) })
   }
   let store
-  async function build(record) {
+  async function build(record, { allowIndexMigration = false } = {}) {
     const saved = record.config, entry = configs.get(saved.repoId)
     if (saved.kind !== 'engineering' || saved.registryVersion !== '1' || !entry || saved.repositoryDigest !== entry.digest || saved.ownerActorId !== ownerActorId) fail('ENGINEERING_DEFINITION_CONFIG_DRIFT')
     const config = entry.config
@@ -102,7 +102,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       workspaceAdapter, editAdapter, checks, prepareGeneration, adapterIdentity: saved.repositoryDigest, discovery: config.discovery,
       deliveryPlan: { identity: executionDigest(saved), gitAdapterFor, prAdapterFor, date: saved.date, title: saved.title, body: saved.body, commitMessage: saved.title, expectedRemoteSha: null } })
     const definition = defineExecutionWorkflow(workflow)
-    if (record.digest && definition.digest !== record.digest) fail('ENGINEERING_DEFINITION_DRIFT')
+    if (record.digest && definition.digest !== record.digest && !allowIndexMigration) fail('ENGINEERING_DEFINITION_DRIFT')
     routes.set(saved.runId, { record: { ...record, digest: definition.digest, definitionVersion: workflow.version }, workflow, workspaceAdapter, editAdapter, gitAdapterFor, prAdapterFor, root: canonicalRoot })
     return { workflow, definition }
   }
@@ -154,10 +154,41 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
   }
   return {
     deliveryOptions,
-    async restore(controlStore) {
+    async restore(controlStore, artifacts) {
       store = controlStore
       const result = []
-      for (const record of await store.query({ kind: 'workflow.list' })) if (record.config?.kind === 'engineering') result.push((await build(record)).workflow)
+      for (const record of await store.query({ kind: 'workflow.list' })) {
+        if (record.config?.kind !== 'engineering') continue
+        const state = await store.query({ kind: 'run', runId: record.config.runId })
+        // 旧定义保留在账中供审计；只有当前运行绑定的定义需要恢复。
+        if (state.run && state.run.workflowDigest !== record.digest) continue
+        if (state.run && ['succeeded', 'failed', 'cancelled'].includes(state.run.status) && record.definitionVersion === '3') continue
+        const { workflow, definition } = await build(record, { allowIndexMigration: record.definitionVersion === '3' && !!state.run })
+        if (definition.digest !== record.digest) {
+          if (!artifacts || record.definitionVersion !== '3' || workflow.version !== '4') fail('ENGINEERING_DEFINITION_DRIFT')
+          const index = state.nodes.find(node => node.nodeId === 'index-files')
+          if (!index || index.status !== 'waiting' || !['ENGINEERING_INDEX_CAPACITY_EXCEEDED', 'controller-restarted'].includes(index.waitReason?.reference)) fail('ENGINEERING_DEFINITION_DRIFT')
+          const oldInput = await artifacts.read(index.inputRef)
+          if (executionDigest(oldInput) !== index.inputDigest || oldInput.workflowDigest !== record.digest || oldInput.nodeVersion !== '1'
+            || oldInput.nodeId !== 'index-files' || oldInput.requirementRef !== state.run.requirementRef) fail('ENGINEERING_MIGRATION_INPUT_INVALID')
+          const next = await artifacts.put({ ...oldInput, workflowDigest: definition.digest, nodeVersion: '2' })
+          await store.command({ id: `workflow:${definition.digest}`, kind: 'workflow.register', args: {
+            ...record, digest: definition.digest, definitionVersion: workflow.version,
+          } })
+          if (!index.drained) {
+            const evidence = await artifacts.put({ kind: 'exclusive-controller-recovery', nodeRunId: index.nodeRunId, fromDigest: record.digest })
+            await store.command({ id: `drained:${index.nodeRunId}:${index.leaseEpoch}`, kind: 'node.drained', args: {
+              runId: state.run.runId, nodeId: 'index-files', generation: index.generation, leaseEpoch: index.leaseEpoch, evidenceRef: evidence.ref,
+            } })
+          }
+          const current = await store.query({ kind: 'run', runId: record.config.runId })
+          await store.command({ id: `migrate-index:${record.config.runId}:${definition.digest}`, kind: 'run.workflow.migrate-index', args: {
+            runId: current.run.runId, expectedRevision: current.run.revision, fromDigest: record.digest, toDigest: definition.digest,
+            nodeRunId: index.nodeRunId, inputRef: next.ref, inputDigest: next.digest,
+          } })
+        }
+        result.push(workflow)
+      }
       return result
     },
     prepareTask(action, info, controller) {

@@ -83,7 +83,7 @@ export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort
     type: 'object', properties: { path: text, expectedHash: { oneOf: [text, { type: 'null' }] }, text: { oneOf: [text, { type: 'null' }] } }, required: ['path', 'expectedHash', 'text'], additionalProperties: false,
   } } }, required: ['request', 'constraints', 'files'], additionalProperties: false }
   const object = { type: 'object' }
-  const workflow = { id: workflowId, version: discovery ? '3' : deliveryPlan ? '2' : '1', nodes: [
+  const workflow = { id: workflowId, version: discovery ? '4' : deliveryPlan ? '2' : '1', nodes: [
     { id: 'prepare-workspace', version: '1', executor: 'code', allowedEffects: ['workspace.prepare'], inputSchema: requirement, outputSchema: requirement,
       mapInput: ({ requirement }) => requirement,
       execute: async ({ input, runId, generation, requirementDigest, perform }) => {
@@ -147,26 +147,33 @@ export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort
       && path.split('/').every(part => part && !['.', '..', '.git'].includes(part.toLowerCase()) && !/[. ]$/.test(part) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))
       && discovery.allowedPrefixes.some(prefix => path.startsWith(prefix))
     workflow.nodes.splice(1, 0,
-      { id: 'index-files', version: '1', executor: 'code', allowedEffects: ['read'], inputSchema: requirement, outputSchema: object,
+      { id: 'index-files', version: '2', executor: 'code', allowedEffects: ['read'], inputSchema: requirement, outputSchema: object,
         mapInput: ({ requirement }) => requirement,
         execute: async ({ input, runId, generation, requirementDigest, signal }) => {
           const workspace = await workspaceAdapter.prepare({ runId, generation, requirementDigest, baseCommit: input.baseCommit })
           if ((await workspaceAdapter.reconcile(workspace)).status !== 'succeeded') throw executionError('WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED')
           const candidate = await freezeCandidate({ repository: workspace.directory, baseCommit: input.baseCommit, generation, requirementDigest }), snapshot = await readCandidate(candidate)
-          const files = snapshot.files.filter(file => permitted(file.path)).map(file => ({ path: file.path, size: file.size }))
-          const result = { request: input.request, constraints: input.constraints, allowedPrefixes: discovery.allowedPrefixes, files, excludedCount: snapshot.files.length - files.length }
-          if (files.length > 2000 || Buffer.byteLength(JSON.stringify(result)) > 32000) throw executionError('ENGINEERING_INDEX_CAPACITY_EXCEEDED')
+          const paths = snapshot.files.filter(file => permitted(file.path)).map(file => file.path)
+          const directories = new Map()
+          for (const path of paths) {
+            const slash = path.lastIndexOf('/'), directory = slash < 0 ? '' : path.slice(0, slash + 1)
+            if (!directories.has(directory)) directories.set(directory, [])
+            directories.get(directory).push(path.slice(slash + 1))
+          }
+          const result = { request: input.request, constraints: input.constraints, allowedPrefixes: discovery.allowedPrefixes,
+            directories: [...directories].map(([directory, names]) => ({ directory, names })), fileCount: paths.length, excludedCount: snapshot.files.length - paths.length }
+          if (paths.length > 2000 || Buffer.byteLength(JSON.stringify(result)) > 32000) throw executionError('ENGINEERING_INDEX_CAPACITY_EXCEEDED')
           return result
         },
       },
-      { id: 'select-files', version: '1', executor: 'agent', allowedEffects: ['pure'], inputSchema: object, outputSchema: selection,
+      { id: 'select-files', version: '2', executor: 'agent', allowedEffects: ['pure'], inputSchema: object, outputSchema: selection,
         mapInput: ({ previousOutput }) => previousOutput, provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), allowedTools: [], maxSteps: 4, timeoutMs: 120000,
-        prompt: '你是工程文件选择节点。根据当前任务与文件清单选择必需的existingPaths，以及需要新建的newPaths，总计最多32个文件。existingPaths只能选清单已有路径，newPaths必须在allowedPrefixes目录内且不能已存在。不读写文件、不执行命令、不声称任务完成。仅调用execution_node_submit提交路径选择。',
+        prompt: '你是工程文件选择节点。directories中每项的directory与names中的文件名拼接为已有路径。根据任务选择必需的existingPaths及需要新建的newPaths，总计最多32个文件。existingPaths只能选清单已有路径，newPaths必须在allowedPrefixes目录内且不能已存在。不读写文件、不执行命令、不声称任务完成。仅调用execution_node_submit提交路径选择。',
       },
-      { id: 'validate-selection', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: object, outputSchema: object, inputDependencies: ['index-files'],
+      { id: 'validate-selection', version: '2', executor: 'code', allowedEffects: ['pure'], inputSchema: object, outputSchema: object, inputDependencies: ['index-files'],
         mapInput: ({ previousOutput, dependencyOutputs }) => ({ selection: previousOutput, manifest: dependencyOutputs['index-files'] }),
         execute: async ({ input }) => {
-          const known = new Set(input.manifest.files.map(file => file.path)), selected = [...input.selection.existingPaths, ...input.selection.newPaths]
+          const known = new Set(input.manifest.directories.flatMap(({ directory, names }) => names.map(name => directory + name))), selected = [...input.selection.existingPaths, ...input.selection.newPaths]
           if (!selected.length || selected.length > 32 || new Set(selected.map(path => path.toLowerCase())).size !== selected.length || selected.some(path => !permitted(path))
             || input.selection.existingPaths.some(path => !known.has(path)) || input.selection.newPaths.some(path => known.has(path))) throw executionError('ENGINEERING_SELECTION_INVALID')
           return { paths: selected }

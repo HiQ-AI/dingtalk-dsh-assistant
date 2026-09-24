@@ -308,6 +308,26 @@ function coreCommand(command, now) {
     db.prepare("UPDATE execution_runs SET status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?").run(now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
+  if (command.kind === 'run.workflow.migrate-index') {
+    object(a, ['runId', 'expectedRevision', 'fromDigest', 'toDigest', 'nodeRunId', 'inputRef', 'inputDigest'])
+    digest(a.fromDigest, 'fromDigest'); digest(a.toDigest, 'toDigest'); ref(a.inputRef, 'inputRef'); digest(a.inputDigest, 'inputDigest')
+    const r = activeRun(a)
+    if (r.revision !== integer(a.expectedRevision, 'expectedRevision') || r.workflow_digest !== a.fromDigest || a.fromDigest === a.toDigest) fail('WORKFLOW_MIGRATION_CONFLICT')
+    const current = nodes(r.run_id), index = current.findIndex(n => n.node_id === 'index-files')
+    if (index < 0 || current[index].node_run_id !== a.nodeRunId || current[index].node_version !== '1'
+      || current[index].status !== 'waiting' || !current[index].drained || current[index].executor !== 'code'
+      || !['ENGINEERING_INDEX_CAPACITY_EXCEEDED', 'controller-restarted'].includes(JSON.parse(current[index].wait_reason ?? 'null')?.reference)
+      || current.slice(0, index).some(n => n.status !== 'succeeded') || current.slice(index + 1).some(n => n.status !== 'blocked' || n.lease_epoch !== 0)
+      || current.find(n => n.node_id === 'select-files')?.node_version !== '1'
+      || current.find(n => n.node_id === 'validate-selection')?.node_version !== '1') fail('WORKFLOW_MIGRATION_UNSAFE')
+    assertRunEffectsDrained(db, r.run_id)
+    db.prepare("UPDATE execution_nodes SET node_version='2',input_ref=?,input_digest=?,status='ready',wait_reason=NULL WHERE node_run_id=?")
+      .run(a.inputRef, a.inputDigest, a.nodeRunId)
+    db.prepare("UPDATE execution_nodes SET node_version='2' WHERE run_id=? AND current=1 AND node_id IN ('select-files','validate-selection')").run(r.run_id)
+    db.prepare("UPDATE execution_runs SET workflow_digest=?,revision=revision+1,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
+      .run(a.toDigest, now, r.run_id)
+    return { status: 'applied', run: runDto(getRun(r.run_id)) }
+  }
   if (command.kind === 'node.claim') {
     object(a, ['runId', 'nodeId', 'expectedGeneration', 'expectedLeaseEpoch'])
     const r = activeRun(a)
