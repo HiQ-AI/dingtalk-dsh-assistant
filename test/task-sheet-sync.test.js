@@ -18,7 +18,7 @@ test('同步使用一次严格事务覆盖完整工作表并独立回读', async
   const store = {
     config: { enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', nodeId: 'node', documentName: '任务表', sheetId: 'sheet', sheetTitle: 'Sheet1', intervalMs: TASK_SHEET_SYNC_INTERVAL_MS },
     getTaskSheetSyncConfig() { return this.config }, getTaskSheetSyncStatus: () => statuses.at(-1) ?? { state: 'idle' }, setTaskSheetSyncStatus: async (value) => { statuses.push({ ...(statuses.at(-1) ?? {}), ...value }); return statuses.at(-1) },
-    listTasks: () => [task()], listGroups: () => [{ groupId: 'g1', name: '研发群' }],
+    listTaskView: async () => [task()], listTasks: () => { throw new Error('legacy_task_only_path') }, listGroups: () => [{ groupId: 'g1', name: '研发群' }],
   }
   let csv
   const calls = []
@@ -68,4 +68,10 @@ test('任务表按已接受结构化产出计数，取消失败和历史未知�
   assert.ok(snapshot.values.slice(2).every(row => row[5] === '1 / 2'))
   const legacy = task({ state: 'completed' })
   assert.equal(taskStageProjection(legacy).progress, '1 / 2')
+})
+
+test('新工作流任务使用节点事实投影阶段和结果', () => {
+  const item = task({ engine: 'workflow-v2', checkpoints: [], result: '已验证结果', executionNodes: [{ nodeId: 'prepare', status: 'succeeded' }, { nodeId: 'verify', status: 'running' }] })
+  assert.deepEqual(taskStageProjection(item), { currentStage: 'verify', progress: '1 / 2', recentProgress: 'prepare' })
+  assert.equal(buildTaskSheetSnapshot({ tasks: [item], groups: [] }).values[2][8], '已验证结果')
 })

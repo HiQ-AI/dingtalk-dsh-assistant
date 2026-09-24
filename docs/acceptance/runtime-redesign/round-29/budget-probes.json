@@ -1,0 +1,38 @@
+{
+  "checkedAt": "2026-09-24T05:38:36.816Z",
+  "directory": "D:\\project\\worktrees\\dingtalk-runtime-redesign\\docs\\tmp\\message-budget-audit-p4o08R",
+  "outcomes": [
+    {
+      "name": "explicit-candidate-pruned",
+      "reproduced": true,
+      "retained": [
+        "candidate-0",
+        "candidate-1",
+        "candidate-2",
+        "candidate-3"
+      ],
+      "omitted": 4,
+      "omittedCandidatesWereExplicit": true
+    },
+    {
+      "name": "material-not-forwarded",
+      "reproduced": true,
+      "materialSeenByRelation": true,
+      "materialSeenByIntent": false,
+      "state": "settled"
+    },
+    {
+      "name": "deterministic-node-capacity",
+      "reproduced": true,
+      "judgeCalls": 0,
+      "reason": "MESSAGE_CONTEXT_CAPACITY:S:$:22615/8000"
+    },
+    {
+      "name": "resolved-material-recovery-blocked",
+      "reproduced": true,
+      "reason": "MESSAGE_CONTEXT_CAPACITY:R:msg-ea8a709eb328ffd8c4a2dc6b00b39b52d95b57ed:u0:47310/14000",
+      "requestStatus": "resolved",
+      "capacityRecoveryAttempted": false
+    }
+  ]
+}

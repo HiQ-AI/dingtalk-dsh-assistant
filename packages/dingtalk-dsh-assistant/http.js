@@ -56,8 +56,15 @@ function topicSummary(topic) {
     createdAt: topic.createdAt, updatedAt: topic.updatedAt,
   }
 }
+function workflowTopicSummary(topic) {
+  return { topicId: topic.topicId, groupId: topic.conversationId, title: topic.title,
+    revision: topic.revision, processedRevision: topic.revision, status: 'active',
+    summary: topic.facts.map(fact=>fact.text).join('\n').slice(0,1000), summaryRevision: topic.revision,
+    openQuestionCount: 0, pendingRevisionCount: 0, pendingUnitCount: 0,
+    createdAt: topic.createdAt, updatedAt: topic.updatedAt, engine: 'workflow-v2' }
+}
 
-function groupSummary(group, runtime) {
+function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
   if (!group) return null
   const { topics: _topics, routeHistory: _routeHistory, taskReservations: _taskReservations, ...summary } = group
   const topics = runtime.listTopics(group.groupId)
@@ -69,13 +76,18 @@ function groupSummary(group, runtime) {
       return [...state.values()].filter((entry) => entry.action === 'add').map((entry) => ({ topicId: topic.topicId, revision: topic.revision, title: topic.title, unitId: entry.unitId, unitRevision: entry.unitRevision }))
     }),
   }))
+  const workflowMessages = (workflowMailboxes?.messages ?? []).filter((message) => message.groupId === group.groupId)
+  const existingMessageIds = new Set(summary.messages.map((message) => message.messageId))
+  summary.messages.push(...workflowMessages.filter((message) => !existingMessageIds.has(message.messageId)).map((message) => ({ ...message, sourceKind: 'workflow-v2' })))
+  const existingOutboundIds = new Set((summary.outbox ?? []).map((message) => message.outboundId))
+  summary.outbox = [...(summary.outbox ?? []), ...(workflowMailboxes?.outbox ?? []).filter((message) => message.groupId === group.groupId && !existingOutboundIds.has(message.outboundId))]
   const pendingUnits = new Set(topics.flatMap((topic) => topic.entries.filter((entry) => entry.revision > topic.processedRevision).map((entry) => entry.unitId ?? `legacy:${entry.messageId}`)))
   summary.topicProgress = {
-    total: topics.length,
+    total: topics.length + workflowTopics.filter(topic=>topic.conversationId===group.groupId).length,
     pending: topics.filter((topic) => topic.revision > topic.processedRevision).length,
     pendingRevisions: topics.reduce((count, topic) => count + Math.max(0, topic.revision - topic.processedRevision), 0),
     pendingUnits: pendingUnits.size,
-    unroutedMessages: (group.messages ?? []).filter((message) => message.routingStatus === 'pending' || message.routingStatus === 'failed').length,
+    unroutedMessages: (group.messages ?? []).filter((message) => message.routingStatus === 'pending' || message.routingStatus === 'failed').length + workflowMessages.filter(message=>!message.topicRefs?.length && ['pending','failed'].includes(message.routingStatus)).length,
   }
   return summary
 }
@@ -109,6 +121,35 @@ async function submitWebTask(request, response, runtime, kind, taskId) {
 export async function handleRequest(request, response, store, { testApiEnabled = false, transport = 'fake-dws', outboundAuthorized = false, modelMode = 'fake', checkForUpdatesImpl = checkForUpdates } = {}) {
   applyResidentCorsHeaders(request, response)
   const url = new URL(request.url ?? '/', 'http://localhost')
+  const workflowTaskAction = /^\/tasks\/([^/]+)\/(context|cancel|reopen|archive|title)$/u.exec(url.pathname)
+  if (workflowTaskAction && ['POST', 'PUT'].includes(request.method) && await store.isWorkflowTask?.(decodeURIComponent(workflowTaskAction[1]))) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
+    const action = workflowTaskAction[2]
+    if (request.method !== 'POST' || !['cancel', 'context'].includes(action)) return send(response, 409, { error: 'WORKFLOW_WEB_ACTION_UNSUPPORTED' })
+    try {
+      const fields = { requestId: requiredText, inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), topicRefs: z.array(z.strictObject({ topicId: requiredText, revision: z.number().int().positive() })).optional() }
+      const body = z.strictObject({ ...fields, ...(action === 'cancel' ? { reason: requiredText.max(16000) } : { context: requiredText.max(16000) }) }).parse(await readJson(request))
+      const result = await store.submitWorkflowTask({ ...body, action, taskId: decodeURIComponent(workflowTaskAction[1]) })
+      return send(response, 202, result)
+    } catch(error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|PENDING|TERMINAL/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
+  const workflowReply = /^\/workflows\/([^/]+)\/requests\/([^/]+)\/answer$/u.exec(url.pathname)
+  const workflowReprocess = /^\/workflows\/([^/]+)\/reprocess$/u.exec(url.pathname)
+  if (request.method === 'POST' && workflowReprocess) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.reprocessWorkflowMessage) return send(response, 404, { error: 'workflow_disabled' })
+    try { return send(response, 200, await store.reprocessWorkflowMessage(decodeURIComponent(workflowReprocess[1]))) }
+    catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /PENDING|STALE|EXISTS/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
+  if (request.method === 'POST' && workflowReply) {
+    const address = request.socket?.remoteAddress
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.resumeWorkflowRequest) return send(response, 404, { error: 'workflow_disabled' })
+    try {
+      const body = z.strictObject({ eventId: requiredText, answer: requiredText.max(16000) }).parse(await readJson(request))
+      return send(response, 200, await store.resumeWorkflowRequest({ ...body, runId: decodeURIComponent(workflowReply[1]), requestId: decodeURIComponent(workflowReply[2]) }))
+    } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : 400, { error: error.message }) }
+  }
   if (request.method === 'OPTIONS') return send(response, 204, null)
   if (request.method === 'GET' && url.pathname === '/health') {
     const recoveryIssues = store.listRecoveryIssues()
@@ -128,13 +169,17 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/activity-audit') return send(response, 200, store.getActivityAuditStatus?.() ?? { total: 0, pending: 0, audited: 0, unavailable: [] })
   if (request.method === 'GET' && url.pathname === '/state/groups') {
     const groupId = url.searchParams.get('groupId')
-    return send(response, 200, groupId ? groupSummary(store.getGroup(groupId), store) : store.listGroups().map((group) => groupSummary(group, store)))
+    const workflowMailboxes = await store.getWorkflowMailboxes?.()
+    const workflowTopics = await store.listWorkflowTopics?.(groupId ?? undefined) ?? []
+    return send(response, 200, groupId ? groupSummary(store.getGroup(groupId), store, workflowMailboxes, workflowTopics) : store.listGroups().map((group) => groupSummary(group, store, workflowMailboxes, workflowTopics)))
   }
   if (request.method === 'GET' && url.pathname === '/state/topics') {
     try {
       const offset = pageNumber(url, 'offset', 0), limit = pageNumber(url, 'limit', 50, 100)
-      const topics = store.listTopics(url.searchParams.get('groupId') ?? undefined)
-      return send(response, 200, { topics: topics.slice(offset, offset + limit).map(topicSummary), total: topics.length, offset, limit })
+      const groupId=url.searchParams.get('groupId')??undefined
+      const topics = [...store.listTopics(groupId).map(topicSummary), ...((await store.listWorkflowTopics?.(groupId))??[]).map(workflowTopicSummary)]
+      topics.sort((a,b)=>String(b.updatedAt??b.createdAt).localeCompare(String(a.updatedAt??a.createdAt)))
+      return send(response, 200, { topics: topics.slice(offset, offset + limit), total: topics.length, offset, limit })
     } catch (error) { return send(response, 400, { error: error.message }) }
   }
   if (request.method === 'GET' && /^\/state\/topics\/[^/]+$/u.test(url.pathname)) {
@@ -143,12 +188,18 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       if (!groupId) return send(response, 400, { error: 'group_id_required' })
       const topicId = decodeURIComponent(url.pathname.slice('/state/topics/'.length))
       const revision = pageNumber(url, 'revision', undefined), offset = pageNumber(url, 'offset', 0), limit = pageNumber(url, 'limit', 50, 100)
-      if (!store.getTopic(groupId, topicId)) return send(response, 404, { error: 'topic_not_found' })
+      if (!store.getTopic?.(groupId, topicId)) {
+        const workflowContext=await store.getWorkflowTopicContext?.({groupId,topicId,offset,limit})
+        if(!workflowContext)return send(response,404,{error:'topic_not_found'})
+        return send(response,200,{...workflowContext,topic:{...workflowTopicSummary(workflowContext.topic),openQuestions:[]}})
+      }
       const context = await store.getTopicContext({ groupId, topicId, ...(revision === undefined ? {} : { revision }), offset, limit })
       return send(response, 200, { ...context, topic: { ...topicSummary(context.topic), summary: context.topic.summary, openQuestions: context.topic.openQuestions } })
     } catch (error) { return send(response, 400, { error: error.message }) }
   }
-  if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, store.listTasks().map(task => ({ ...task, workflowProgress: taskBoardProgress(task) })))
+  if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, (await (store.listTaskView?.() ?? store.listTasks())).map(task => ({ ...task, workflowProgress: taskBoardProgress(task) })))
+  if (request.method === 'GET' && url.pathname === '/state/workflows') return send(response, 200, await store.getWorkflowState?.(url.searchParams.get('runId') ?? undefined) ?? { enabled: false })
+  if (request.method === 'GET' && url.pathname === '/state/workflows/catalog') return send(response, 200, await store.getWorkflowCatalog?.() ?? { enabled: false })
   if (request.method === 'GET' && url.pathname === '/state/task-timings') return send(response, 200, store.listTaskTimings())
   if (request.method === 'GET' && url.pathname === '/state/performance') return send(response, 200, store.listPerformance(Object.fromEntries(['day', 'sessionId', 'groupId', 'taskId', 'requestId', 'submissionId'].filter(key => url.searchParams.has(key)).map(key => [key, url.searchParams.get(key)]))))
   if (request.method === 'GET' && url.pathname === '/state/authorizations') return send(response, 200, store.listAuthorizationRequests())
@@ -197,6 +248,14 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'POST' && /^\/tasks\/[^/]+\/context$/u.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/context'.length))
     return submitWebTask(request, response, store, 'appendTaskContext', taskId)
+  }
+  if (request.method === 'POST' && /^\/tasks\/[^/]+\/reissue-repository$/u.test(url.pathname)) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
+    const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/reissue-repository'.length))
+    try {
+      const body = z.strictObject({ repositoryId: requiredText, requestId: requiredText }).parse(await readJson(request))
+      return send(response, 202, await store.submitWorkflowTask({ ...body, taskId, action: 'reissue-repository' }))
+    } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|UNSAFE|NOT_REISSUABLE/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
   if (request.method === 'POST' && /^\/tasks\/[^/]+\/archive$/u.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/archive'.length))

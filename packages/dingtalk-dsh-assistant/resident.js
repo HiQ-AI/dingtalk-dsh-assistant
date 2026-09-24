@@ -10,9 +10,44 @@ import { inspectEnvironment } from './environment.js'
 import { createTaskSheetSyncService } from './task-sheet-sync.js'
 import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
 import { tmpdir } from 'node:os'
+import { openExecutionStore } from './execution-store.js'
+import { openWorkflowService } from './workflow-service.js'
+import { notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from './workflow-notifications.js'
+import { readWorkflowSeal, workflowSealPath, inspectLegacyDrain } from './workflow-cutover.js'
+import { join, resolve } from 'node:path'
 
 export const name = 'dingtalk-dsh-assistant'
-export const inject = ['storageDomain', 'agents', 'agentDefaultModel', 'agentPresets', 'sessionPersistence', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments']
+export const inject = ['storage', 'storageDomain', 'agents', 'agentDefaultModel', 'agentPresets', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'tools', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments']
+
+export async function verifyResidentWorkflowSeal(ctx, workflowConfig) {
+  const domain = ctx.storageDomain
+  const backendName = domain.config?.routes?.dingtalk_dsh_assistant ?? domain.config?.backend
+  const backend = ctx.storage?.backend.get(backendName)
+  if (!backend?.root) throw new Error('workflow_seal_storage_path_unavailable')
+  const sealPath = workflowSealPath(join(resolve(backend.root), 'dingtalk_dsh_assistant.json'))
+  const seal = await readWorkflowSeal({ sealPath })
+  if (seal) {
+    if (!workflowConfig || seal.groupIds.some(id => !workflowConfig.groupIds?.includes(id))) throw new Error('workflow_sealed_group_configuration_required')
+    if (resolve(workflowConfig.dbPath) !== resolve(seal.dbPath) || workflowConfig.instanceId !== seal.instanceId) throw new Error('workflow_seal_instance_mismatch')
+    if (seal.phase !== 'active') throw new Error('workflow_cutover_requires_offline_resume')
+  }
+  if (workflowConfig && (!seal || workflowConfig.groupIds.some(id => !seal.groupIds.includes(id)))) throw new Error('workflow_group_seal_required')
+  return { seal, sealPath }
+}
+
+export async function verifyWorkflowActivation(store, control, groupIds) {
+  for (const groupId of groupIds) {
+    const state = await control.query({ kind: 'message.group', conversationId: groupId })
+    if (state?.state !== 'active' || state.engine !== 'workflow' || !state.legacySealRef) throw new Error(`workflow_group_not_activated:${groupId}`)
+    const group = store.getGroup(groupId)
+    if (!group) throw new Error(`workflow_group_not_subscribed:${groupId}`)
+    const report = inspectLegacyDrain({ unit: { name: 'dingtalk_dsh_assistant', version: 9 }, tables: {
+      groups: { [groupId]: { ...group, groupId } },
+      tasks: Object.fromEntries(store.listTasks().map((task, index) => [task.taskId ?? index, task])),
+    } }, [groupId])
+    if (!report.ready) throw Object.assign(new Error(`workflow_legacy_not_drained:${groupId}`), { details: report.issues })
+  }
+}
 
 function applyProxyEnvironment(proxyUrl) {
   for (const name of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) {
@@ -48,7 +83,20 @@ export async function apply(ctx, config = {}) {
   const host = config.host ?? '127.0.0.1'
   const port = config.port ?? 18998
   if (config.fakeModel === true) installFakeLlm(ctx)
+  const { seal, sealPath } = await verifyResidentWorkflowSeal(ctx, config.workflow)
   const store = await openResidentStore(ctx.storageDomain)
+  const workflowConfig = config.workflow
+  if (workflowConfig) {
+    if (!Array.isArray(workflowConfig.groupIds) || !workflowConfig.groupIds.length || !workflowConfig.ownerActorId || !workflowConfig.artifactDirectory) throw new Error('workflow_configuration_incomplete')
+    const control = await openExecutionStore({ dbPath: workflowConfig.dbPath, instanceId: workflowConfig.instanceId })
+    try {
+      await verifyWorkflowActivation(store, control, workflowConfig.groupIds)
+      for (const groupId of workflowConfig.groupIds) {
+        const group = await control.query({ kind: 'message.group', conversationId: groupId })
+        if (group.legacySealRef !== seal.sealRef) throw new Error('workflow_group_seal_mismatch')
+      }
+    } finally { await control.close() }
+  }
   const configuredProxyUrl = store.getProxyUrl?.() ?? config.proxyUrl ?? process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? ''
   if (store.getProxyUrl?.() === undefined && configuredProxyUrl) await store.setProxyUrl(configuredProxyUrl)
   applyProxyEnvironment(configuredProxyUrl)
@@ -60,6 +108,7 @@ export async function apply(ctx, config = {}) {
     maxConcurrentTasks: config.maxConcurrentTasks ?? 5,
     maxGoalRounds: config.maxGoalRounds ?? 24,
     supervisorIntervalMs: config.supervisorIntervalMs ?? 5_000,
+    workflowGroupIds: workflowConfig?.groupIds ?? [],
   })
   runtime.setCurrentDwsProfile(dwsConfig.profile)
   const updateAgentConfig = runtime.updateAgentConfig
@@ -82,6 +131,76 @@ export async function apply(ctx, config = {}) {
     profile: dwsConfig.profile,
     runner: dwsRunner,
   })
+  const workflow = workflowConfig ? await openWorkflowService({ ctx, config: { ...workflowConfig, profile: dwsConfig.profile }, legacy: runtime,
+    external: ctx.get?.('dingtalkTaskWorkflowExternal'),
+    readMessage: (groupId, messageId) => dwsAdapter.readMessage(groupId, messageId),
+    readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
+    notifications: {
+      canDisclose: async notification => workflowConfig.groupIds.includes(notification.payload.conversationId) && notification.disclosure.conversationId === notification.payload.conversationId,
+      send: notification => sendWorkflowNotification(dwsAdapter, notification),
+      readback: async notification => {
+        const ack = notification.ack
+        let messageId = ack?.messageId ?? ack?.result?.messageId
+        const openTaskId = notificationOpenTaskId(ack)
+        if (!messageId && openTaskId) {
+          const result = await dwsRunner.run(dwsAdapter.compileSendStatus(openTaskId))
+          if (result.exitCode !== 0) return undefined
+          const status = JSON.parse(result.stdout)
+          const conversationId = status.messageRef?.openConversationId ?? status.result?.openConversationId
+          if (status.result?.sendStatus !== 'SUCCESS' || conversationId !== notification.payload.conversationId) return undefined
+          messageId = status.messageRef?.openMessageId ?? status.result?.openMessageId
+        }
+        if (!messageId) return undefined
+        const observed = await dwsAdapter.readMessage(notification.payload.conversationId, messageId)
+        if (!sameDeliveredText(observed.text, notification.payload.text, !!notification.payload.sourceMessageId) || (observed.conversationId && observed.conversationId !== notification.payload.conversationId)) return undefined
+        return { messageId, conversationId: notification.payload.conversationId, observedAt: new Date().toISOString() }
+      },
+    },
+  }) : null
+  if (workflow) {
+    const legacyIngest = runtime.ingest
+    runtime.ingest = async message => {
+      const currentSeal = await readWorkflowSeal({ sealPath, conversationId: message.groupId })
+      if (currentSeal?.blockLegacy && !workflow.isGroup(message.groupId)) throw new Error('workflow_sealed_group_legacy_ingest_forbidden')
+      return workflow.isGroup(message.groupId) ? workflow.ingest(message) : legacyIngest(message)
+    }
+    runtime.listTaskView = async () => [...runtime.listTasks(), ...await workflow.tasks()]
+    runtime.getWorkflowState = runId => workflow.state(runId)
+    runtime.reprocessWorkflowMessage = runId => {
+      if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')
+      return workflow.reprocessMessage(runId, { channel: 'web', actorId: workflowConfig.webActorId })
+    }
+    runtime.getWorkflowMailboxes = () => workflow.mailboxes()
+    runtime.listWorkflowTopics = groupId => workflow.topics(groupId)
+    runtime.getWorkflowTopicContext = args => workflow.topicContext(args)
+    runtime.getWorkflowCatalog = () => workflow.catalog()
+    runtime.isWorkflowTask = taskId => workflow.isTask(taskId)
+    runtime.submitWorkflowTask = args => {
+      if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
+      return workflow.submitWebTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    }
+    runtime.resumeWorkflowRequest = args => {
+      if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')
+      return workflow.resumeRequest(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    }
+    const legacyDecideAuthorization = runtime.decideAuthorization
+    runtime.decideAuthorization = async args => {
+      if (!await workflow.isApprovalRequest(args.requestId)) return legacyDecideAuthorization(args)
+      if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
+      return workflow.decideApproval({ requestId: args.requestId, decision: args.decision,
+        eventId: `web:${args.requestId}:${args.decision}` }, { channel: 'web', actorId: workflowConfig.webActorId })
+    }
+    const legacyCreateTask = runtime.createTask
+    runtime.createTask = args => workflow.isGroup(args.groupId) ? Promise.reject(new Error('workflow_group_use_message_input')) : legacyCreateTask(args)
+    const taskFailures = await workflow.recoverExecutionTasks()
+    for (const failure of taskFailures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)
+  }
+  const recoverWorkflow = () => workflow.recover().then(result => {
+    for (const failure of result.failures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)
+  }).catch(error => ctx.logger.warn(error.message))
+  if (workflow) void recoverWorkflow()
+  const workflowTimer = workflow ? setInterval(recoverWorkflow, 5000) : null
+  workflowTimer?.unref()
   runtime.setGroupMessageReader(async (groupId, messageId) => {
     const message = await dwsAdapter.readMessage(groupId, messageId)
     return { ...normalizeHistoryMessage(message, groupId), resourceRefs: message.resourceRefs ?? [] }
@@ -160,6 +279,8 @@ export async function apply(ctx, config = {}) {
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
       await taskSheetSync.close()
       await stopDws()
+      if (workflowTimer) clearInterval(workflowTimer)
+      await workflow?.close()
       await runtime.close()
     }
   })

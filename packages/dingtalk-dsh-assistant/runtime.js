@@ -215,7 +215,8 @@ const activityDetail = (event, session) => {
   return { contentBlocks: event.data?.message?.content?.length ?? 0 }
 }
 
-export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 30_000, actionAdapters = new Map(), authorizeTaskAction = () => false } = {}) {
+export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'standard', agentWorkspaceDir, resumeTimeoutMs = 10_000, maxConcurrentTasks = 5, maxGoalRounds = 24, supervisorIntervalMs = 5_000, decisionRetryBaseMs = 30_000, actionAdapters = new Map(), authorizeTaskAction = () => false, workflowGroupIds = [] } = {}) {
+  const workflowGroups = new Set(workflowGroupIds)
   const residentHandles = new Map(), leafHandles = new Map(), leafTaskBySession = new Map(), pausedRecoveryCounts = new Map(), resultRecoveryCounts = new Map(), tails = new Map(), hydrationTails = new Map(), inflightMessages = new Map(), checkpointReviewRuns = new Map(), activeGroupResidentOperations = new Set(), groupResidentTransitionBarriers = new Map(), cancellingTasks = new Set(), startingTasks = new Set(), pendingLeafDisposals = new Set(), leafDisposalsByTask = new Map(), archiveJobs = new Map()
   const agentPresets = ctx.get?.('agentPresets') ?? ctx.agentPresets
   const attachments = ctx.get?.('attachments') ?? ctx.attachments
@@ -232,7 +233,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
   let groupMessageRecaller, groupMessageReader, groupResourceReader
   let taskConcurrencyLimit = store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks
   const taskPermits = createTaskPermits({ limit: () => taskConcurrencyLimit }), permitReleases = new Map()
-  const executionEligible = task => task && ['queued', 'running'].includes(task.state) && task.migrationReview?.status !== 'required' && !task.stopRequest && !cancellingTasks.has(task.taskId) && !reports.hasBlocking(task) && !topics.hasPendingTaskInput(task)
+  const executionEligible = task => task && !workflowGroups.has(task.groupId) && ['queued', 'running'].includes(task.state) && task.migrationReview?.status !== 'required' && !task.stopRequest && !cancellingTasks.has(task.taskId) && !reports.hasBlocking(task) && !topics.hasPendingTaskInput(task)
   function requestExecutionPermit(taskId) {
     if (runtimeClosing || !executionEligible(store.getTask(taskId))) { taskPermits.dequeue(taskId); return undefined }
     return taskPermits.request(taskId)
@@ -945,6 +946,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     return run
   }
   async function resumeResident(group) {
+    if (workflowGroups.has(group.groupId)) throw new Error('workflow_group_legacy_session_forbidden')
     if (residentHandles.has(group.groupId)) return residentHandles.get(group.groupId)
     const handle = await ctx.agents.resume({ resumeSessionId: SessionId(group.residentSessionId), agentOptions: agentOptions(), setup: residentSetup(group.groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
     discardStaleResidentRequests(handle.agent)
@@ -2205,7 +2207,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     },
   })
   const topics = createTopicCoordinator({
-    store, getAgent: (groupId, request) => request ? coordinationSessions.get(groupId, request) : residentHandles.get(groupId)?.agent,
+    store: new Proxy(store, { get(target, key) { return key === 'listGroups' ? () => target.listGroups().filter(group => !workflowGroups.has(group.groupId)) : Reflect.get(target, key) } }), getAgent: (groupId, request) => request ? coordinationSessions.get(groupId, request) : residentHandles.get(groupId)?.agent,
     dispatchRequest: (request, message) => coordinationSessions.dispatch(request, message),
     waitRequestIdle: request => coordinationSessions.whenSettled(request),
     onRequestFinished: request => coordinationSessions.finish(request), assertSession: assertResidentToolSession, serializeTasks,
@@ -2265,6 +2267,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     onError: error => recoveryIssues.push({ kind: 'task-report-processing', error: error.message }),
   })
   for (const group of store.listGroups()) {
+    if (workflowGroups.has(group.groupId)) continue
     try {
       await store.reconcileMessageDeliveries({ groupId: group.groupId })
       await resumeResident(group)
@@ -2441,6 +2444,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     listAuthorizationRequests,
     getAuthorizationRequest,
     ingest: (message) => {
+      if (workflowGroups.has(message.groupId)) return Promise.reject(new Error('workflow_group_requires_workflow_ingress'))
       if (runtimeClosing) return Promise.reject(new Error('resident_runtime_closed'))
       const key = Symbol(`${message.groupId}:${message.messageId}`)
       const operation = (async () => {
@@ -2717,6 +2721,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       if (runtimeClosing) throw new Error('resident_runtime_closed')
       return serialize(groupId, async () => {
         const existing = store.getGroup(groupId); if (existing !== undefined) return { created: false, group: existing }
+        if (workflowGroups.has(groupId)) throw new Error('workflow_group_subscription_not_initialized')
         const sessionId = residentSessionId(groupId), { handle } = await createResident(groupId, { sessionId: SessionId(sessionId), meta: { cwd: agentWorkspace, agentPreset }, agentOptions: agentOptions(), setup: residentSetup(groupId), signal: AbortSignal.timeout(resumeTimeoutMs) })
         applyPermission(handle, 'danger-full-access')
         try {
@@ -2761,7 +2766,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       if (workspaceChanged) await serializeTasks(() => {
         if (store.listTasks().some((task) => task.state === 'running' || task.state === 'waiting' || task.state === 'queued')) throw new Error('agent_config_has_active_tasks')
       })
-      const groups = workspaceChanged ? store.listGroups() : []
+      const groups = workspaceChanged ? store.listGroups().filter(group => !workflowGroups.has(group.groupId)) : []
       const releaseResidentTransitions = groups.map((group) => holdGroupResidentTransition(group.groupId))
       const replacements = []
       try {

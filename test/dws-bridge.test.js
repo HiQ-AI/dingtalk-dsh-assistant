@@ -4,6 +4,27 @@ import { EventEmitter } from 'node:events'
 import { readFile } from 'node:fs/promises'
 import { normalizeHistoryMessage, parseRedlineDecision, startDwsBridge } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
 
+test('新消息工作流接收不等待图片连接器，保留资源交材料节点', async () => {
+  let onEvent, received, downloads = 0
+  const runtime = {
+    listGroups: () => [{ groupId: 'workflow-group', messages: [] }],
+    isWorkflowGroup: id => id === 'workflow-group',
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async ingest(message) { received = message; return { accepted: true } },
+  }
+  const adapter = {
+    startGroupSubscription(_id, callback) { onEvent = callback; return { lifecycle: new EventEmitter(), done: Promise.resolve(), stop() {} } },
+    async loadMessageImages() { downloads++; throw new Error('连接器不可用不能阻止接收') },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn() {} }, groupBackfillIntervalMs: 0, humanPollIntervalMs: 0, outboxRetryIntervalMs: 0 })
+  try {
+    onEvent({ conversation_id: 'workflow-group', message_id: 'workflow-image', content: '根据附件整理材料', event_time: '2026-09-23T12:00:00Z' })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(received.messageId, 'workflow-image')
+    assert.equal(downloads, 0)
+  } finally { await stop() }
+})
+
 test('本人消息增量补拉默认每10秒执行并使用30秒重叠窗口', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/dws-bridge.js', import.meta.url), 'utf8')
   assert.match(source, /groupBackfillIntervalMs = 10_000/)

@@ -10,3 +10,6 @@ scratch/
 packages/*/scratch/
 *.tgz
 package-lock.json
+docs/tmp/execution-session-native/
+docs/tmp/execution-runtime-native/
+docs/tmp/execution-init-smoke/

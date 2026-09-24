@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import { apply, name } from '../packages/dingtalk-dsh-assistant/resident.js'
 import { buildTaskAssociationIndex } from '../packages/dingtalk-dsh-assistant/runtime.js'
 
-test('单一业务插件使用通用命名且 health 明示 fake transport', async () => {
+test('单一业务插件使用通用命名且 health 明示 fake transport', async (t) => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'resident-health-'))
+  t.after(() => rm(storageRoot, { recursive: true, force: true }))
   const effects = []
   const logs = []
   const records = new Map()
@@ -23,7 +27,9 @@ test('单一业务插件使用通用命名且 health 明示 fake transport', asy
         logs.push(message)
       },
     },
+    storage: { backend: new Map([['json', { root: storageRoot }]]) },
     storageDomain: {
+      config: { backend: 'json' },
       async open() {
         return { table: () => table, close: async () => undefined }
       },

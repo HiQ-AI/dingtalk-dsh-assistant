@@ -40,8 +40,8 @@ window.__ModuleLoader__.load({
       return value
     }
     async function readResidentOverview() {
-      const [health, groups, tasks, alerts, environment, agentConfig, taskSheetSync] = await Promise.all(['/health', '/state/groups', '/state/tasks', '/state/supervisor/alerts', '/state/environment', '/state/agent-config', '/state/task-sheet-sync'].map((path) => request(path)))
-      return { health, groups, tasks, alerts, environment, agentConfig, taskSheetSync }
+      const [health, groups, tasks, alerts, environment, agentConfig, taskSheetSync, workflows] = await Promise.all(['/health', '/state/groups', '/state/tasks', '/state/supervisor/alerts', '/state/environment', '/state/agent-config', '/state/task-sheet-sync', '/state/workflows/catalog'].map((path) => request(path)))
+      return { health, groups, tasks, alerts, environment, agentConfig, taskSheetSync, workflows }
     }
 
     function Environment({ value }) {
@@ -51,6 +51,39 @@ window.__ModuleLoader__.load({
         React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '登录状态'), React.createElement('span', null, value?.dws?.authenticated && value?.dws?.tokenValid ? `已登录 · ${value.dws.user ?? ''}` : '未登录或登录失效')),
         value?.dws?.executable ? React.createElement('code', { style: { fontSize: 12, color: colors.muted, overflowWrap: 'anywhere' } }, value.dws.executable) : null
       )
+    }
+
+    function WorkflowCatalog({ value }) {
+      if (value?.engine !== 'workflow-v2') return null
+      const workflows = value.workflows ?? []
+      const available = workflows.filter(item => item.status === 'available')
+      const unavailable = workflows.filter(item => item.status !== 'available')
+      const stageName = { prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '验证产出', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'inspect-preflight': '检查发布条件', 'inspect-runtime': '核验运行版本', finalize: '核验交付', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'rehearse-isolated': '隔离演练', 'inspect-approval': '核对审批', 'readback-production': '生产只读回查' }
+      return React.createElement('section', { style: panel, 'aria-label': '任务工作流目录' },
+        React.createElement('div', { style: { display: 'grid', gap: 4 } },
+          React.createElement('strong', null, '任务工作流'),
+          React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '流程由插件代码定义。节点按顺序交接并记录进度；具体任务的执行节点在任务详情查看。')),
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', fontSize: 12 } },
+          React.createElement('strong', { style: { marginRight: 4 } }, '消息进入'),
+          ...(value.messageStages ?? []).map((stage, index) => React.createElement('span', { key: stage.id, style: { border: `1px solid ${colors.border}`, borderRadius: 6, padding: '4px 7px', whiteSpace: 'nowrap' } }, `${index + 1} ${stage.label}`))),
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 10, fontSize: 12, color: colors.muted } },
+          React.createElement('span', null, `${available.length} 个可发起`), React.createElement('span', null, `${unavailable.length} 个待接入`)),
+        ...available.map(item => React.createElement('details', { key: item.id, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 10 } },
+          React.createElement('summary', { style: { cursor: 'pointer', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline', fontSize: 13 } },
+            React.createElement('strong', null, item.label),
+            React.createElement('span', { style: { color: colors.muted } }, item.purpose),
+            React.createElement('span', { style: { marginLeft: 'auto', color: 'var(--dsw-alias-status-success, #168544)' } }, '可发起')),
+          React.createElement('div', { style: { display: 'grid', gap: 8, padding: '10px 0 2px 12px', fontSize: 12 } },
+            item.version ? React.createElement('div', { style: { color: colors.muted } }, `定义版本 v${item.version}`) : null,
+            item.repositories?.length ? React.createElement('div', null, `已登记仓库：${item.repositories.join('、')}`) : null,
+            item.reason ? React.createElement('div', { style: { color: colors.muted } }, item.reason) : null,
+            item.nodes?.length ? React.createElement('ol', { style: { display: 'grid', gap: 5, margin: 0, paddingLeft: 22 } }, ...item.nodes.map(node => React.createElement('li', { key: node.id },
+              React.createElement('span', null, stageName[node.id] ?? node.id),
+              React.createElement('span', { style: { color: colors.muted, marginLeft: 7 } }, node.executor === 'agent' ? '模型判断' : node.effects?.some(effect => !['pure', 'read'].includes(effect)) ? '受控操作' : '代码校验')))) : null))),
+        unavailable.length ? React.createElement('div', { style: { display: 'grid', gap: 7, borderTop: `1px solid ${colors.border}`, paddingTop: 12, fontSize: 12 } },
+          React.createElement('strong', null, '尚不能发起'),
+          ...unavailable.map(item => React.createElement('div', { key: item.id, style: { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 4 } },
+            React.createElement('span', null, item.label), React.createElement('span', { style: { color: colors.muted } }, item.reason)))) : null)
     }
 
     function TaskPromptEditor({ prompts, onChange }) {
@@ -140,6 +173,11 @@ window.__ModuleLoader__.load({
         }
       }
       const activeTasks = overview?.tasks?.filter((task) => task.state === 'running' || task.state === 'waiting').length ?? 0
+      const workflowGroups = new Set(overview?.workflows?.groupIds ?? [])
+      const legacyGroups = (overview?.groups ?? []).filter(group => !workflowGroups.has(group.groupId))
+      const legacyConfigValid = !legacyGroups.length || Number.isInteger(maxConcurrentTasks) && maxConcurrentTasks >= 1 && maxConcurrentTasks <= 50 && taskPrompts.every(item => item.name.trim() && item.description.trim() && item.prompt.trim())
+      const agentConfigChanged = agentNames !== (overview?.agentConfig?.agentNames ?? []).join(',') || agentWorkspace !== overview?.agentConfig?.workspaceDir || agentModel.model !== overview?.agentConfig?.model || agentModel.reasoningEffort !== (overview?.agentConfig?.reasoningEffort ?? '') || proxyUrl !== (overview?.agentConfig?.proxyUrl ?? '') || !!legacyGroups.length && (leafSessionPrompt !== (overview?.agentConfig?.leafSessionPrompt ?? '') || JSON.stringify(taskPrompts) !== JSON.stringify(overview?.agentConfig?.taskPrompts ?? []) || maxConcurrentTasks !== (overview?.agentConfig?.maxConcurrentTasks ?? 5))
+      const saveAgentConfig = () => mutate(() => request('/config/agent', { method: 'PUT', body: JSON.stringify({ agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), workspaceDir: agentWorkspace, ...agentModel, proxyUrl, ...(legacyGroups.length ? { leafSessionPrompt, taskPrompts, taskPromptsVersion: overview?.agentConfig?.taskPromptsVersion ?? 0, maxConcurrentTasks } : {}) }) }))
       return React.createElement('div', { 'data-dingtalk-assistant-settings': '', style: { display: 'grid', gap: ui.space4 } }, React.createElement('style', null, settingsCss),
         React.createElement('section', { style: panel },
           React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, React.createElement('div', null, React.createElement('strong', null, '钉钉个人助理'), React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, 'resident runtime')), React.createElement('button', { type: 'button', style: button, onClick: refresh }, '刷新')),
@@ -189,23 +227,23 @@ window.__ModuleLoader__.load({
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '多个名称使用英文逗号分隔；任一名称被明确提及时可参与新任务判断。'),
           React.createElement('strong', { style: { fontSize: 13 } }, '工作目录'),
           React.createElement('input', { 'aria-label': 'Agent 工作区目录', placeholder: '现有绝对目录', style: input, value: agentWorkspace, onChange: (event) => setAgentWorkspace(event.target.value) }),
-          React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '所有常驻群主会话和新建叶子任务共用此工作区；AGENTS.md 由 dsh 原生发现。'),
+          React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '旧 Resident 会话使用此工作区；新工程工作流使用已登记的受管仓库。'),
           React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '默认处理模型'),
           React.createElement('input', { 'aria-label': 'Agent 默认模型', placeholder: '例如 gpt-5.6-sol', style: input, value: agentModel.model, onChange: (event) => setAgentModel((current) => ({ ...current, model: event.target.value })) }),
           React.createElement('select', { 'aria-label': 'Agent 推理深度', style: input, value: agentModel.reasoningEffort, onChange: (event) => setAgentModel((current) => ({ ...current, reasoningEffort: event.target.value })) },
             React.createElement('option', { value: '' }, '模型默认'), React.createElement('option', { value: 'low' }, '轻度'), React.createElement('option', { value: 'medium' }, '中度'), React.createElement('option', { value: 'high' }, '高度'), React.createElement('option', { value: 'xhigh' }, '极高')),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '通过 dsh 原生默认模型设置保存；保存后从下一次模型请求起生效，不中断当前在途请求。'),
-          React.createElement('strong', { style: { fontSize: 13 } }, '叶子任务并行上限'),
-          React.createElement('input', { type: 'number', min: 1, max: 50, step: 1, 'aria-label': '叶子任务并行上限', style: input, value: maxConcurrentTasks, onChange: (event) => setMaxConcurrentTasks(Number(event.target.value)) }),
-          React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '默认 5；调低不会中断正在运行的任务，空出的名额按 FIFO 启动待执行任务。'),
           React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '网络代理'),
           React.createElement('input', { 'aria-label': 'Agent 网络代理', placeholder: '例如 http://127.0.0.1:10808；留空表示不使用', style: input, value: proxyUrl, onChange: (event) => setProxyUrl(event.target.value) }),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '用于 resident Agent 调用模型；保存后写入插件配置并立即应用，重启后仍保留。'),
-          React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '叶子会话提示词'),
-          React.createElement('textarea', { 'aria-label': '叶子会话提示词', 'aria-describedby': 'leaf-prompt-help', rows: 6, style: { ...input, resize: 'none' }, placeholder: '可选：补充适用于所有叶子任务的偏好或约束，例如交付语言、报告格式。', value: leafSessionPrompt, onChange: (event) => setLeafSessionPrompt(event.target.value) }),
-          React.createElement('div', { id: 'leaf-prompt-help', style: { fontSize: 12, color: colors.muted } }, '通用执行规范已内置，留空也会生效。这里只填写定制补充；具体流程在下方维护。这些提示词只用于叶子会话。'),
-          React.createElement(TaskPromptEditor, { prompts: taskPrompts, onChange: setTaskPrompts }),
-          React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !agentModel.model.trim() || !Number.isInteger(maxConcurrentTasks) || maxConcurrentTasks < 1 || maxConcurrentTasks > 50 || taskPrompts.some((item) => !item.name.trim() || !item.description.trim() || !item.prompt.trim()) || (agentNames === (overview?.agentConfig?.agentNames ?? []).join(',') && agentWorkspace === overview?.agentConfig?.workspaceDir && agentModel.model === overview?.agentConfig?.model && agentModel.reasoningEffort === (overview?.agentConfig?.reasoningEffort ?? '') && proxyUrl === (overview?.agentConfig?.proxyUrl ?? '') && leafSessionPrompt === (overview?.agentConfig?.leafSessionPrompt ?? '') && JSON.stringify(taskPrompts) === JSON.stringify(overview?.agentConfig?.taskPrompts ?? []) && maxConcurrentTasks === (overview?.agentConfig?.maxConcurrentTasks ?? 5)), onClick: () => mutate(() => request('/config/agent', { method: 'PUT', body: JSON.stringify({ agentNames: agentNames.split(',').map((name) => name.trim()).filter(Boolean), workspaceDir: agentWorkspace, ...agentModel, proxyUrl, leafSessionPrompt, taskPrompts, taskPromptsVersion: overview?.agentConfig?.taskPromptsVersion ?? 0, maxConcurrentTasks }) })) }, '保存配置')),
+          legacyGroups.length ? React.createElement('details', { style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12 } },
+            React.createElement('summary', { style: { cursor: 'pointer', fontSize: 13, fontWeight: 600 } }, `旧版叶子任务配置 · ${legacyGroups.length} 个未切换群`),
+            React.createElement('div', { style: { display: 'grid', gap: 10, marginTop: 12 } },
+              React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '叶子任务并行上限', React.createElement('input', { type: 'number', min: 1, max: 50, step: 1, style: input, value: maxConcurrentTasks, onChange: event => setMaxConcurrentTasks(Number(event.target.value)) })),
+              React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '叶子会话提示词', React.createElement('textarea', { style: { ...input, resize: 'vertical', minHeight: 100 }, value: leafSessionPrompt, onChange: event => setLeafSessionPrompt(event.target.value) })),
+              React.createElement(TaskPromptEditor, { prompts: taskPrompts, onChange: setTaskPrompts }))) : null,
+          React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !agentModel.model.trim() || !legacyConfigValid || !agentConfigChanged, onClick: saveAgentConfig }, '保存配置')),
+        React.createElement(WorkflowCatalog, { value: overview?.workflows }),
         React.createElement('section', { style: panel }, React.createElement('strong', null, '常驻群与会话职责'),
           ...(overview?.groups ?? []).map((group) => React.createElement('div', { key: group.groupId, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12, display: 'grid', gap: 8 } },
             React.createElement('div', null, group.name ? React.createElement('strong', { style: { fontSize: 13 } }, group.name) : null, React.createElement('code', { style: { display: 'block', fontSize: 12, overflowWrap: 'anywhere', color: colors.muted } }, group.groupId)),

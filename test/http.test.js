@@ -36,6 +36,81 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
   try { await run(`http://127.0.0.1:${server.address().port}`) } finally { await new Promise((resolve) => server.close(resolve)) }
 }
 
+test('工作流只读状态与异步任务视图保留新节点真实完成状态', async () => {
+  await withServer(false, async base => {
+    const tasks = await (await fetch(base + '/state/tasks')).json()
+    assert.equal(tasks[0].workflowProgress.stages[0].completed, true)
+    assert.equal(tasks[0].workflowProgress.stages[1].completed, false)
+    assert.deepEqual(await (await fetch(base + '/state/workflows?runId=r')).json(), { runId: 'r', status: 'waiting' })
+    assert.deepEqual(await (await fetch(base + '/state/workflows/catalog')).json(), { engine: 'workflow-v2', workflows: [{ id: 'task-analysis' }] })
+  }, { overrides: { listTaskView: async () => [{ taskId: 't', engine: 'workflow-v2', executionNodes: [{ nodeId: 'prepare', status: 'succeeded' }, { nodeId: 'execute', status: 'running' }] }], getWorkflowState: async runId => ({ runId, status: 'waiting' }), getWorkflowCatalog: () => ({ engine: 'workflow-v2', workflows: [{ id: 'task-analysis' }] }) } })
+})
+
+test('工程仓库重发仅接受本机同源严格参数并返回受管结果', async () => {
+  const submitted = []
+  await withServer(false, async base => {
+    const post = (body, origin) => fetch(base + '/tasks/task-1/reissue-repository', { method: 'POST',
+      headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(body) })
+    assert.equal((await post({ repositoryId: 'dataset', requestId: 'reissue-1' }, 'https://evil.example')).status, 403)
+    assert.equal((await post({ repositoryId: 'dataset', requestId: 'reissue-1', actorId: 'forged' })).status, 400)
+    const response = await post({ repositoryId: 'dataset', requestId: 'reissue-1' })
+    assert.equal(response.status, 202)
+    assert.deepEqual(await response.json(), { taskId: 'task-1', generation: 3 })
+    assert.deepEqual(submitted, [{ repositoryId: 'dataset', requestId: 'reissue-1', taskId: 'task-1', action: 'reissue-repository' }])
+  }, { overrides: { submitWorkflowTask: async value => { submitted.push(value); return { taskId: value.taskId, generation: 3 } } } })
+})
+
+test('群收发信箱合并新工作流持久消息与通知，按 ID 去重且保留旧群记录', async () => {
+  const group = { groupId: 'g', messages: [{ messageId: 'old', text: '旧消息', sequence: 1, occurredAt: '2026-09-23T11:00:00Z' }], outbox: [{ outboundId: 'old-out', sourceMessageId: 'old', text: '旧回复', status: 'sent' }] }
+  const mailboxes = {
+    messages: [
+      { groupId: 'g', messageId: 'new', text: '新消息', sequence: 2, occurredAt: '2026-09-24T02:00:00Z', routingStatus: 'pending', topicRefs: [{topicId:'workflow-topic',revision:1,title:'新话题'}] },
+      { groupId: 'g', messageId: 'old', text: '不得覆盖旧记录', sequence: 2, occurredAt: '2026-09-24T02:01:00Z', routingStatus: 'routed' },
+      { groupId: 'elsewhere', messageId: 'other', text: '其他群', sequence: 3, occurredAt: '2026-09-24T02:02:00Z', routingStatus: 'routed' },
+    ],
+    outbox: [
+      { groupId: 'g', outboundId: 'new-out', sourceMessageId: 'new', text: '新通知', status: 'pending' },
+      { groupId: 'g', outboundId: 'old-out', sourceMessageId: 'old', text: '不得覆盖旧通知', status: 'sent' },
+      { groupId: 'elsewhere', outboundId: 'other-out', sourceMessageId: 'other', text: '其他群', status: 'sent' },
+    ],
+  }
+  await withServer(false, async base => {
+    const item = await (await fetch(base + '/state/groups?groupId=g')).json()
+    assert.deepEqual(item.messages.map(message => message.messageId), ['old', 'new'])
+    assert.equal(item.messages[0].text, '旧消息')
+    assert.equal(item.messages[1].sourceKind, 'workflow-v2')
+    assert.equal(item.messages[1].topicRefs[0].topicId,'workflow-topic')
+    assert.deepEqual(item.outbox.map(message => message.outboundId), ['old-out', 'new-out'])
+    assert.equal(item.outbox[0].text, '旧回复')
+    const all = await (await fetch(base + '/state/groups')).json()
+    assert.equal(all.length, 1)
+    assert.deepEqual(all[0].messages.map(message => message.messageId), ['old', 'new'])
+  }, { overrides: { listGroups: () => [group], getGroup: () => group, getWorkflowMailboxes: async () => mailboxes } })
+})
+test('新工作流话题进入列表与详情，跨群详情不可读',async()=>{
+  const topic={topicId:'workflow-topic',conversationId:'g',title:'归一化回归',revision:2,createdAt:'2026-09-24T02:00:00Z',updatedAt:'2026-09-24T02:01:00Z',facts:[{text:'复现 0.001 t'}]}
+  await withServer(false,async base=>{
+    const listing=await(await fetch(base+'/state/topics?groupId=g')).json()
+    assert.equal(listing.total,1)
+    assert.equal(listing.topics[0].topicId,'workflow-topic')
+    const detail=await(await fetch(base+'/state/topics/workflow-topic?groupId=g')).json()
+    assert.equal(detail.topic?.engine,'workflow-v2',JSON.stringify(detail))
+    assert.equal(detail.messages[0].text,'原消息')
+    assert.equal((await fetch(base+'/state/topics/workflow-topic?groupId=other')).status,404)
+  },{overrides:{listWorkflowTopics:async groupId=>groupId==='other'?[]:[topic],getWorkflowTopicContext:async({groupId})=>groupId==='g'?{topic,messages:[{messageId:'m',text:'原消息'}],total:1}:null}})
+})
+
+test('本机澄清回答拒绝body伪造actor与外站Origin，只传固定路径身份', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    const post = (body, origin) => fetch(base + '/workflows/run/requests/question/answer', { method: 'POST', headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(body) })
+    assert.equal((await post({ eventId: 'answer', answer: '第一个', actorId: 'owner' })).status, 400)
+    assert.equal((await post({ eventId: 'answer', answer: '第一个' }, 'https://evil.example')).status, 403)
+    assert.equal((await post({ eventId: 'answer', answer: '第一个' }, 'http://localhost:3080')).status, 200)
+    assert.deepEqual(calls, [{ eventId: 'answer', answer: '第一个', runId: 'run', requestId: 'question' }])
+  }, { overrides: { resumeWorkflowRequest: async args => { calls.push(args); return { accepted: true } } } })
+})
+
 test('通知恢复仅使用路径身份，受阻或过期意图返回冲突', async () => {
   const calls = []
   await withServer(false, async base => {

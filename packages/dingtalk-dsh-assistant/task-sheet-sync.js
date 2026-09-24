@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { acceptedTaskStageOutputs, taskOutcomeLabel } from './task-progress.js'
+import { acceptedTaskStageOutputs, taskOutcomeLabel, taskBoardProgress } from './task-progress.js'
 
 export const TASK_SHEET_SYNC_INTERVAL_MS = 180_000
 export const TASK_SHEET_COLUMNS = ['任务名称', '来源群', '发起人', '当前状态', '当前阶段', '已完成 / 总阶段', '最近进展', '等待原因', '执行结果', '创建时间', '更新时间', '本轮开始时间', '执行轮次', '任务 ID']
@@ -14,6 +14,10 @@ const current = (task, value) => value && value.inputVersion === task.inputVersi
 const formatTime = (value) => Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium', hour12: false }).format(new Date(value)) : ''
 
 export function taskStageProjection(task) {
+  if (task.engine === 'workflow-v2') {
+    const { stages } = taskBoardProgress(task)
+    return { currentStage: task.state === 'completed' ? '' : limit(stages.find(stage => !stage.completed)?.title), progress: `${stages.filter(stage => stage.completed).length} / ${stages.length}`, recentProgress: limit(stages.findLast(stage => stage.completed)?.title) }
+  }
   if (task.plan) {
     const completedIds = new Set(acceptedTaskStageOutputs(task).map(checkpoint => checkpoint.stageOutput.stageId))
     const stages = task.plan.stages
@@ -43,7 +47,7 @@ export function buildTaskSheetSnapshot({ tasks, groups, snapshotAt = new Date().
       || left.taskId.localeCompare(right.taskId))
   const rows = selected.map((task) => {
     const stage = taskStageProjection(task)
-    const result = current(task, task.result) ? task.result : undefined
+    const result = task.engine === 'workflow-v2' ? { summary: task.result } : current(task, task.result) ? task.result : undefined
     return [
       limit(task.title || task.objective, 160), limit(groupsById.get(task.groupId)?.name || task.groupId, 120), limit(task.requesterName, 80), taskOutcomeLabel(task) ?? stateLabel[task.state] ?? task.state,
       stage.currentStage, stage.progress, stage.recentProgress, limit(task.waitingReason), limit(result?.summary), formatTime(task.createdAt), formatTime(task.updatedAt), formatTime(task.runStartedAt), String(task.runSequence ?? 1), task.taskId,
@@ -87,7 +91,7 @@ export function createTaskSheetSyncService({ store, runner, profile, intervalMs 
     try {
       const info = parseJson(await runner.run(['sheet', 'info', '--node', config.nodeId, '--sheet-id', config.sheetId, ...profileArgs(profile), '--format', 'json']), 'info')
       if (info.id !== config.sheetId || info.mergedRanges?.length) throw new Error(info.mergedRanges?.length ? 'task_sheet_merged_cells_not_supported' : 'task_sheet_target_changed')
-      const snapshot = buildTaskSheetSnapshot({ tasks: structuredClone(store.listTasks()), groups: structuredClone(store.listGroups()), snapshotAt: attemptedAt })
+      const snapshot = buildTaskSheetSnapshot({ tasks: structuredClone(await (store.listTaskView?.() ?? store.listTasks())), groups: structuredClone(store.listGroups()), snapshotAt: attemptedAt })
       if (snapshot.values.length > info.rowCount || TASK_SHEET_COLUMNS.length > info.columnCount) throw new Error('task_sheet_capacity_exceeded')
       const operations = JSON.stringify([
         { toolName: 'range clear', input: { 'sheet-id': config.sheetId, range: `A1:N${info.rowCount}`, type: 'content' } },
