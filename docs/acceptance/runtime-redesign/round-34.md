@@ -19,8 +19,11 @@
 - 本机安装 Assistant `0.5.15-local.20260924.11`；已安装的关键源码文件 SHA256 与工作区逐项一致。`/health` 为 `ok`，恢复问题数为 0，工作流目录列出 `dataset-web`、`dataset`。
 - 插件接收 `reissue-normalization-dataset-20260924-1` 后独立回读：原 taskId/runId 保持，代次由 2 到 3；`prepare-generation`、`prepare-workspace` 已完成，`inspect-and-propose` 已运行；其叶子会话对后端 `DatasetMergeCommonServiceImpl.java` 的分段读取返回成功。
 - generation 3 的叶子在读取约 53 KiB 的后端文件后仍提交 `changes: []`，`apply-changes` 明确等待 `ENGINEERING_NO_CHANGES_PROPOSED`。没有编辑效果。针对完整文件输出过大的缺口，v8 增加 `replacements` 精确替换合同及 Host 还原；局部测试扩展为 5/5，覆盖短片段成功、未命中拒绝、空方案、同仓库单次流程升级、越权入口。Assistant `0.5.15-local.20260924.12` 的关键源码哈希与工作区一致，`/health=ok`、恢复问题数 0。
-- 插件接收 `reissue-normalization-patch-v8-20260924-1` 后独立回读：仍是原 taskId/runId，代次由 3 到 4；后续业务节点结果待回读。
+- 插件接收 `reissue-normalization-patch-v8-20260924-1` 后独立回读：仍是原 taskId/runId，代次由 3 到 4。叶子提交 1 个后端文件精确替换片段；编辑效果账 `apply-changes=succeeded`，受管工作目录只读 diff 显示目标文件新增 22 行。
+- 插件的 `dataset-package / 1` 固定检查退出码 0，耗时 592147 ms；此命令为 Maven `-DskipTests package`，没有运行回归测试。其后 commit、push、create-pr、finalize 节点全部为 succeeded，最终工件记录业务提交 `40a7c3ecb008cdb648ff98cace73f67fdacfb7d9`、PR #371、OPEN。
+- 独立 `gh pr view 371 --repo HiQ-AI/dataset` 回读同一 head SHA、OPEN、MERGEABLE；该 PR 仅修改 `DatasetMergeCommonServiceImpl.java`，没有新增测试文件。插件任务状态为 completed，结果文本指向 PR #371。
+- 完成通知在插件发信箱显示 sent，渠道消息 ID 为 `msgiDFWi1DsVxAuKCGTpj1a/A==`。`dws chat +messages-mget` 使用相同 profile 独立回读：complete=true、foundCount=1、failedCount=0，消息正文与 PR #371 相符，引用原请求消息。
 
 ## 边界
 
-本轮仅修复、部署插件并通过插件重发原任务。业务代码修改、固定 Maven 检查、Git 交付与完成通知仍须由插件任务后续节点自行完成，并分别回读；本轮没有直接编辑 `dataset` 业务代码，也没有声称该业务任务完成。按用户本轮要求，没有创建部署备份。
+本轮仅修复、部署插件并通过插件重发原任务；业务代码、检查、Git 交付与完成通知均由插件任务流完成，本轮没有直接编辑 `dataset` 业务代码。固定检查跳过了测试，也未见示例场景的回归用例，因此不能只凭构建和 PR 判断归一化结果实际为 1 t；业务 PR 待审。按用户本轮要求，没有创建部署备份。
