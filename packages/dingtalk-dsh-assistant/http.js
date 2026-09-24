@@ -57,7 +57,7 @@ function topicSummary(topic) {
   }
 }
 
-function groupSummary(group, runtime) {
+function groupSummary(group, runtime, workflowMailboxes) {
   if (!group) return null
   const { topics: _topics, routeHistory: _routeHistory, taskReservations: _taskReservations, ...summary } = group
   const topics = runtime.listTopics(group.groupId)
@@ -69,6 +69,11 @@ function groupSummary(group, runtime) {
       return [...state.values()].filter((entry) => entry.action === 'add').map((entry) => ({ topicId: topic.topicId, revision: topic.revision, title: topic.title, unitId: entry.unitId, unitRevision: entry.unitRevision }))
     }),
   }))
+  const workflowMessages = (workflowMailboxes?.messages ?? []).filter((message) => message.groupId === group.groupId)
+  const existingMessageIds = new Set(summary.messages.map((message) => message.messageId))
+  summary.messages.push(...workflowMessages.filter((message) => !existingMessageIds.has(message.messageId)).map((message) => ({ ...message, sourceKind: 'workflow-v2', topicRefs: [] })))
+  const existingOutboundIds = new Set((summary.outbox ?? []).map((message) => message.outboundId))
+  summary.outbox = [...(summary.outbox ?? []), ...(workflowMailboxes?.outbox ?? []).filter((message) => message.groupId === group.groupId && !existingOutboundIds.has(message.outboundId))]
   const pendingUnits = new Set(topics.flatMap((topic) => topic.entries.filter((entry) => entry.revision > topic.processedRevision).map((entry) => entry.unitId ?? `legacy:${entry.messageId}`)))
   summary.topicProgress = {
     total: topics.length,
@@ -150,7 +155,8 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/activity-audit') return send(response, 200, store.getActivityAuditStatus?.() ?? { total: 0, pending: 0, audited: 0, unavailable: [] })
   if (request.method === 'GET' && url.pathname === '/state/groups') {
     const groupId = url.searchParams.get('groupId')
-    return send(response, 200, groupId ? groupSummary(store.getGroup(groupId), store) : store.listGroups().map((group) => groupSummary(group, store)))
+    const workflowMailboxes = await store.getWorkflowMailboxes?.()
+    return send(response, 200, groupId ? groupSummary(store.getGroup(groupId), store, workflowMailboxes) : store.listGroups().map((group) => groupSummary(group, store, workflowMailboxes)))
   }
   if (request.method === 'GET' && url.pathname === '/state/topics') {
     try {

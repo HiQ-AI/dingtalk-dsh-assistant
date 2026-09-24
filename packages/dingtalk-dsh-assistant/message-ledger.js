@@ -105,6 +105,12 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       const n={id:a.notificationId,runId:r.runId,...(a.commandId?{commandId:a.commandId}:{requestId:a.requestId}),payload:a.payload,disclosure:a.disclosure,status:'prepared',leaseEpoch:0,createdAt:now};put(db,r.runId,'notification',n);return {result:{notification:n}}
     }
     const n=get(db,'notification',a.notificationId)
+    if(kind==='message.notification.recall.record') {
+      if(n.status!=='delivered'||n.evidence?.messageId!==a.messageId||a.recallStatus!=='SUCCESS')fail('MESSAGE_RECALL_EVIDENCE_MISMATCH')
+      if(n.recallStatus==='recalled')return {result:{notification:n}}
+      n.recallStatus='recalled';n.recalledAt=now;put(db,n.runId,'notification',n)
+      return {result:{notification:n}}
+    }
     if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');if(n.requestId){const q=get(db,'request',n.requestId),r=run(db,n.runId);if(q.status!=='pending'||q.revision!==r.revision||r.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}n.status='sending';n.leaseEpoch++;n.startedAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:true}}
     if(a.leaseEpoch!==n.leaseEpoch)fail('MESSAGE_NOTIFICATION_STALE')
     if(kind==='message.notification.sent') {if(n.status!=='sending')fail('MESSAGE_NOTIFICATION_STALE');n.status='acknowledged';n.ack=a.ack;n.ackAt=now}
@@ -227,6 +233,21 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     put(db,r.runId,'material',{id,runId:r.runId,resourceRef:a.resourceRef,material:a.material,recordedAt:now});return {result:{material:a.material}}
   }
   if(kind==='message.attention') {r.status='needs_attention';r.reason=a.reason;save(db,r);return {result:{run:r}}}
+  if(kind==='message.echo.quarantine') {
+    const id=r.context?.sourceMessageId
+    const outbound=id&&db.prepare("SELECT 1 FROM message_items i JOIN message_runs source ON source.run_id=i.run_id WHERE i.kind='notification' AND json_extract(source.body,'$.conversationId')=? AND json_extract(i.body,'$.evidence.messageId')=? LIMIT 1").get(r.conversationId,id)
+    if(!outbound||rows(db,r.runId,'command').length)fail('MESSAGE_ECHO_QUARANTINE_FORBIDDEN')
+    if(r.status==='superseded')return {result:{run:r}}
+    for(const request of rows(db,r.runId,'request').filter(item=>item.status==='pending')) {request.status='superseded';put(db,r.runId,'request',request)}
+    r.status='superseded';r.reason='outbound_echo';save(db,r)
+    return {result:{run:r}}
+  }
+  if(kind==='message.activate') {
+    if(r.status!=='pending'||r.activatedAt)return {result:{run:r}}
+    current(db,r)
+    r.activatedAt=now;r.deadline=new Date(Date.parse(now)+r.policy.initialWindowMs).toISOString();save(db,r)
+    return {result:{run:r}}
+  }
   if(kind==='message.capacity.retry') {
     const stage=a.projectionVersion==='s-compact-v1'?'S':['r-source-refs-v1','r-bounded-cards-v2'].includes(a.projectionVersion)?'R':a.projectionVersion==='i-bounded-facts-v1'?'I':null
     if(!stage||r.status!=='needs_attention'||!r.reason?.startsWith(`MESSAGE_CONTEXT_CAPACITY:${stage}:`))return {result:{run:r,retry:false}}
@@ -332,6 +353,14 @@ export function queryMessages(db,a) {
   if(topic!==undefined)return topic
   if(a.kind==='message.material'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('material:'+json([str(a.runId),str(a.resourceRef)]));return row?JSON.parse(row.body).material:null}
   if(a.kind==='message.request')return get(db,'request',a.requestId)
+  if(a.kind==='message.outboundByMessage') {
+    const messageId=str(a.messageId),conversationId=str(a.conversationId)
+    const row=db.prepare("SELECT i.body FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='notification' AND json_extract(r.body,'$.conversationId')=? AND (json_extract(i.body,'$.evidence.messageId')=? OR json_extract(i.body,'$.ack.messageId')=? OR json_extract(i.body,'$.ack.result.messageId')=?) LIMIT 1").get(conversationId,messageId,messageId,messageId)
+    return row?JSON.parse(row.body):null
+  }
+  if(a.kind==='message.outboundIds') {
+    return db.prepare("SELECT json_extract(i.body,'$.evidence.messageId') AS message_id FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='notification' AND json_extract(r.body,'$.conversationId')=? AND json_extract(i.body,'$.evidence.messageId') IS NOT NULL").all(str(a.conversationId)).map(row=>row.message_id)
+  }
   if(a.kind==='message.requestByReply') {
     const found=db.prepare("SELECT i.body FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='notification' AND json_extract(i.body,'$.requestId') IS NOT NULL AND json_extract(i.body,'$.evidence.messageId')=? AND json_extract(r.body,'$.conversationId')=?").all(str(a.messageId),str(a.conversationId))
     const requestIds=[...new Set(found.map(x=>JSON.parse(x.body).requestId))]
@@ -355,7 +384,7 @@ export function queryMessages(db,a) {
   }
   if(a.kind==='message.task') {const row=db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=? AND json_extract(i.body,'$.kind') IN ('create','research','reopen') ORDER BY i.rowid LIMIT 1").get(str(a.taskId));return row?{run:JSON.parse(row.run),command:JSON.parse(row.command)}:null}
   if(a.kind==='message.source') {const row=db.prepare('SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=r.source_version WHERE r.source_key=?').get(str(a.sourceKey));return row?JSON.parse(row.body):null}
-  if(a.kind==='message.pending')return db.prepare("SELECT r.body FROM message_runs r WHERE json_extract(r.body,'$.status') NOT IN ('settled','superseded','buffered','alias') OR (json_extract(r.body,'$.status')='settled' AND EXISTS (SELECT 1 FROM message_items i WHERE i.run_id=r.run_id AND i.kind='barrier' AND json_extract(i.body,'$.status')='pending'))").all().map(x=>JSON.parse(x.body))
+  if(a.kind==='message.pending')return db.prepare("SELECT r.body FROM message_runs r WHERE json_extract(r.body,'$.status') NOT IN ('settled','superseded','buffered','alias') OR (json_extract(r.body,'$.status')='settled' AND EXISTS (SELECT 1 FROM message_items i WHERE i.run_id=r.run_id AND i.kind='barrier' AND json_extract(i.body,'$.status')='pending')) ORDER BY r.rowid").all().map(x=>JSON.parse(x.body))
   if(a.kind==='message.command')return get(db,'command',a.commandId)
   if(a.kind==='message.run') {const r=run(db,a.runId);return {run:r,units:rows(db,r.runId,'unit'),nodes:rows(db,r.runId,'node'),commands:rows(db,r.runId,'command'),requests:rows(db,r.runId,'request'),barriers:rows(db,r.runId,'barrier'),budget:db.prepare('SELECT claims,corrections,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(r.sourceKey)}}
   return undefined

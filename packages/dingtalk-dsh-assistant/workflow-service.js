@@ -210,7 +210,14 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         const run = allRuns.find(item => item.taskId === origin.command.args.taskId)
         return { taskId: origin.command.args.taskId, title: origin.command.args.arguments.objective, status: run?.status ?? origin.command.status }
       })
-      return { status: 'observed', observedAt: new Date().toISOString(), items, coverage: '最近200条任务来源', reply: items.length ? `本群任务（最近200条来源）：\n${items.slice(0, 30).map(item => `${item.title}：${item.status}`).join('\n')}${items.length > 30 ? '\n其余任务请在任务详情查看。' : ''}` : '当前没有你可查看的任务。' }
+      if (info.run.actorId === ownerActorId) {
+        const legacyTasks = (legacy.listTasks?.() ?? []).filter(task => task.groupId === info.run.conversationId)
+        const words = [...new Set((info.unit.goalText ?? '').toLowerCase().match(/[a-z0-9_-]+|[\u4e00-\u9fff]{2}/g) ?? [])]
+        const related = legacyTasks.filter(task => words.some(word => `${task.title ?? ''} ${task.objective ?? ''}`.toLowerCase().includes(word)))
+        for (const task of (related.length ? related : legacyTasks).sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? ''))).slice(0, 30))
+          items.push({ taskId: task.taskId, title: task.title, status: task.state, outcome: task.outcome, engine: 'legacy' })
+      }
+      return { status: 'observed', observedAt: new Date().toISOString(), items, coverage: '本群新工作流与可见旧任务', reply: items.length ? `本群相关任务：\n${items.slice(0, 30).map(item => `${item.title}：${item.status}${item.outcome ? `（${item.outcome}）` : ''}`).join('\n')}${items.length > 30 ? '\n其余任务请在任务详情查看。' : ''}` : '当前没有你可查看的任务。' }
     }
     const taskId = info.binding.taskId ?? action.taskId
     const origin = await taskAccess(taskId, info.run.actorId, info.run.conversationId)
@@ -305,8 +312,16 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         return { messages, omissions }
       },
       async history(run) {
-        const recent = await store.query({ kind: 'message.list', conversationId: run.conversationId, limit: 30 })
-        const current = recent.filter(item => item.runId !== run.runId && item.createdAt <= run.createdAt).reverse()
+        const recent = await store.query({ kind: 'message.list', conversationId: run.conversationId, limit: 200 })
+        const outboundIds = new Set(await store.query({ kind: 'message.outboundIds', conversationId: run.conversationId }))
+        const current = []
+        for (const item of recent) {
+          if (item.runId === run.runId || item.createdAt > run.createdAt) continue
+          if (outboundIds.has(item.context?.sourceMessageId)) continue
+          current.push(item)
+          if (current.length === 30) break
+        }
+        current.reverse()
         const old = (legacyGroup(run.conversationId)?.messages ?? []).filter(item => !item.isBackfill || item.routingStatus === 'routed').slice(-30)
           .map(item => ({ sourceKey: sourceKey(config.profile ?? '', run.conversationId, item.messageId), sourceVersion: item.messageVersion ?? 1, text: item.text, actorId: item.senderOpenDingTalkId }))
         return [...old, ...current.map(item => ({ sourceKey: item.sourceKey, sourceVersion: item.sourceVersion, text: item.body, actorId: item.actorId }))].slice(-30)
@@ -347,13 +362,21 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
             ...(legacy.listTopics?.(run.conversationId) ?? []).filter(topic => task.topicRefs?.some(ref => ref.topicId === topic.topicId)).flatMap(topic => topic.entries?.map(entry => entry.messageId) ?? [])].filter(Boolean)
           const references = [...new Set(sourceIds)].map(id => sourceKey(config.profile ?? '', run.conversationId, id))
           result.push({ candidateId: `legacy:${task.taskId}`, engine: 'legacy', taskId: task.taskId, title: task.title, goal: task.objective ?? task.title, state: task.state,
+            historyRef: `task-history:${task.taskId}`,
             relevantTime: task.updatedAt ?? task.completedAt ?? task.createdAt ?? null, versions: { inputVersion: task.inputVersion ?? 1, runSequence: task.runSequence ?? 1 }, sourceRefs: references,
             explicitReferenceMatches: references.filter(key => quoted.has(key)), distinguishingFacts: ['旧引擎已完成任务，仅支持只读状态和结果查询'] })
         }
         const words = [...new Set((unit.goalText ?? '').toLowerCase().match(/[a-z0-9_-]+|[\u4e00-\u9fff]{2}/g) ?? [])]
         const score = card => card.explicitReferenceMatches.length * 10000 + words.filter(word => card.goal?.toLowerCase().includes(word)).length
         result.sort((a, b) => score(b) - score(a) || String(b.relevantTime).localeCompare(String(a.relevantTime)))
-        return result.slice(0, 8)
+        return result.slice(0, 8).map((card, index) => {
+          if (index > 1 || card.engine !== 'legacy') return card
+          const task = legacy.getTask?.(card.taskId)
+          const lastChange = task?.objectiveHistory?.at(-1)?.objective
+          return { ...card, distinguishingFacts: [...card.distinguishingFacts,
+            `最近目标：${String(lastChange ?? task?.objective ?? task?.title ?? '').slice(0, 160)}`,
+            `结果：${String(task?.outcome ?? task?.result ?? '未记录').slice(0, 120)}`] }
+        })
       },
       async facts({ run, binding }) {
         if (binding.engine === 'legacy') {
@@ -410,6 +433,14 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         for (const need of needs) {
           const cached = await store.query({ kind: 'message.material', runId: run.runId, resourceRef: need.resourceRef })
           if (cached) { items.push({ resourceRef: need.resourceRef, ...cached }); continue }
+          if (need.resourceRef.startsWith('task-history:')) {
+            const taskId = need.resourceRef.slice('task-history:'.length)
+            const task = legacy.getTask?.(taskId)
+            if (task?.groupId !== run.conversationId || run.actorId !== ownerActorId) return { ready: false }
+            const history = (task.objectiveHistory ?? []).slice(-3).map(item => ({ at: item.revisedAt, objective: String(item.objective ?? '').slice(0, 280) }))
+            await remember(need.resourceRef, JSON.stringify({ taskId, title: task.title, currentObjective: String(task.objective ?? '').slice(0, 500), state: task.state, outcome: task.outcome, result: String(task.result ?? '').slice(0, 500), history }))
+            continue
+          }
           const quote = run.context.quoteRefs.find(item => item.sourceKey === need.resourceRef)
           if (quote?.text) { await remember(need.resourceRef, quote.text); continue }
           const local = await store.query({ kind: 'message.source', sourceKey: need.resourceRef })
@@ -466,6 +497,11 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (closed) throw executionError('WORKFLOW_SERVICE_CLOSED')
     if (!groups.has(message.groupId)) throw executionError('WORKFLOW_GROUP_NOT_ADMITTED')
     const actorId = requireText(message.senderOpenDingTalkId, 'WORKFLOW_AUTHENTICATED_ACTOR_REQUIRED')
+    // 只用独立回读的消息 ID 排除自身回声；不能等待通知 flush，否则慢回读会挡住新消息。
+    if (actorId === ownerActorId) {
+      if (await store.query({ kind: 'message.outboundByMessage', conversationId: message.groupId, messageId: message.messageId }))
+        return { accepted: true, duplicate: true, processing: 'outbound-echo' }
+    }
     const clarification = await quotedClarification(message)
     if (clarification) return clarification
     // 切换前已可靠处理的消息属于旧引擎；渠道重叠补拉不能重新获得执行权。
@@ -490,6 +526,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const result = await messages.receive({ sourceKey: key, sourceVersion, conversationId: message.groupId, actorId,
       body: requireText(message.text, 'WORKFLOW_MESSAGE_BODY_REQUIRED'), barriers,
       context: { sourceMessageId: message.messageId,
+        ...(message.senderName ? { senderName: message.senderName } : {}),
+        ...(message.occurredAt ? { occurredAt: message.occurredAt } : {}),
         ...(existing ? { editOf: { sourceRunId: existing.aliasOf ?? existing.runId, sourceVersion: existing.sourceVersion, sourceKey: key } } : {}),
         quoteRefs: quoteKey ? [{ sourceKey: quoteKey, messageId: quote.messageId, ...(quote.content ? { text: quote.content } : {}) }] : [],
         attachments: (message.resourceRefs ?? []).map(resource => ({ resourceRef: resource.resourceId, state: 'pending', source: resource })),
@@ -560,8 +598,44 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     })
   }
   const messageStages = [{ id: 'receive', label: '接收消息' }, { id: 'context', label: '补全上下文' }, { id: 'S', label: '拆分事项' }, { id: 'R', label: '关联话题' }, { id: 'I', label: '判断意图' }, { id: 'dispatch', label: '派发任务' }]
+  async function mailboxes() {
+    const messages = [], outbox = []
+    for (const groupId of groups) {
+      const outboundIds = new Set(await store.query({ kind: 'message.outboundIds', conversationId: groupId }))
+      const senderNames = new Map((legacyGroup(groupId)?.messages ?? []).filter(item => item.senderOpenDingTalkId && item.senderName).map(item => [item.senderOpenDingTalkId, item.senderName]))
+      let beforeSequenceId
+      for (;;) {
+        const page = await store.query({ kind: 'message.list', conversationId: groupId, limit: 200, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
+        for (const run of page) {
+          if (outboundIds.has(run.context?.sourceMessageId)) continue
+          messages.push({ groupId, messageId: run.context?.sourceMessageId, text: run.body, senderOpenDingTalkId: run.actorId,
+            senderName: run.context?.senderName ?? senderNames.get(run.actorId), occurredAt: run.context?.occurredAt ?? run.createdAt, sequence: run.sequenceId,
+            routingStatus: run.status === 'needs_attention' ? 'failed' : ['settled', 'superseded'].includes(run.status) ? 'routed' : 'pending' })
+        }
+        if (page.length < 200) break
+        beforeSequenceId = page.at(-1).sequenceId
+      }
+    }
+    const states = ['prepared', 'sending', 'acknowledged', 'unknown', 'delivered', 'superseded']
+    let afterSequenceId = 0
+    for (;;) {
+      const page = await store.query({ kind: 'message.notifications', states, afterSequenceId, limit: 200 })
+      for (const notice of page) {
+        const groupId = notice.payload?.conversationId
+        if (!groups.has(groupId)) continue
+        outbox.push({ groupId, outboundId: notice.id, text: notice.payload.text, sourceMessageId: notice.payload.sourceMessageId,
+          deliveredMessageId: notice.evidence?.messageId, status: notice.status === 'delivered' ? 'sent' : notice.status === 'superseded' ? 'superseded' : 'pending',
+          ...(notice.recallStatus ? { recallStatus: notice.recallStatus } : {}),
+          createdAt: notice.createdAt, deliveredAt: notice.deliveredAt, deliveryAttemptedAt: notice.startedAt,
+          deliveryAttemptCount: notice.leaseEpoch, ...(notice.status === 'unknown' ? { deliveryPendingReason: 'send_unknown' } : {}) })
+      }
+      if (page.length < 200) break
+      afterSequenceId = page.at(-1).sequenceId
+    }
+    return { messages, outbox }
+  }
   return {
-    ingest, resumeRequest, decideApproval, isApprovalRequest, submitWebTask, isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
+    ingest, resumeRequest, decideApproval, isApprovalRequest, submitWebTask, mailboxes, isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
     catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, workflows: workflowCatalogState() }),
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,
       messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },

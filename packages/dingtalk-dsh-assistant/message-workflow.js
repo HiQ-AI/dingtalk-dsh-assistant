@@ -3,13 +3,13 @@ import { digest, messageSchemas, prepareMessageContext, splitContext, validateSp
 import { messageSystem } from './message-model.js'
 
 export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.1', initialWindowMs: 45000, linkedWindowMs: 30000, attemptMs: 20000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, maxInputBytes: 64000, maxOutputBytes: 48000, recoveryDelaysMs: [5000, 30000] })
-const limits = { S: [8000, 2000], R: [12000, 1000], I: [10000, 1500] }
+const limits = { S: [8000, 2000], R: [14000, 1000], I: [16000, 1500] }
 
 /** 无常驻模型会话。每个判断独立、无工具；数据库是恢复和派发的唯一事实源。 */
 export function createMessageWorkflow({ store, judge, context = {}, handlers = {}, policy = {}, clock = Date.now }) {
   if (!store?.command || !store?.query || typeof judge !== 'function') throw new Error('MESSAGE_DEPENDENCIES_REQUIRED')
   const config = { ...defaultMessagePolicy, ...policy }, flights = new Map(), controllers = new Set(), queue = []
-  let closed = false, occupied = 0
+  let closed = false, occupied = 0, processTail = Promise.resolve()
   const cmd = async (kind, args, id = `${kind}:${randomUUID()}`) => (await store.command({ id, kind, args })).result
   const state = runId => store.query({ kind: 'message.run', runId })
   const revision = data => data.run.revision ?? data.run.matterSetRevision ?? 0
@@ -91,7 +91,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const binding = { ...linked, ...target, target }
     data = await state(runId)
     const facts = await context.facts?.({ run: data.run, snapshot, unit, binding }) ?? {}
-    const intent = await invoke(data, unit.unitId, 'I', intentContext(base, binding, facts))
+    const intent = await invoke(data, unit.unitId, 'I', intentContext(base, binding, facts, snapshot.policy))
     if (!intent) return
     if (intent.kind === 'needs_relink') {
       const result = await cmd('message.relink', { runId, unitId: unit.unitId, expectedRevision: revision(data), reason: intent.reason })
@@ -204,15 +204,34 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   }
   function process(runId) {
     if (closed) return Promise.reject(new Error('MESSAGE_WORKFLOW_CLOSED'))
-    if (!flights.has(runId)) flights.set(runId, drive(runId).catch(async error => {
+    if (!flights.has(runId)) {
+      const flight = processTail.then(async () => {
+        const data = await state(runId)
+        if (data.run.status === 'pending' && !data.run.activatedAt) await cmd('message.activate', { runId }, `activate:${runId}`)
+        return drive(runId)
+      }).catch(async error => {
       if (!closed && !['MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)) await cmd('message.attention', { runId, reason: `MESSAGE_CONTEXT_OR_DISPATCH_FAILED:${error.code ?? error.message}` })
       return state(runId)
-    }).finally(() => flights.delete(runId)))
+      }).finally(() => flights.delete(runId))
+      flights.set(runId, flight)
+      processTail = flight.catch(() => {})
+    }
     return flights.get(runId)
   }
   async function recover() {
     const pending = await store.query({ kind: 'message.pending' })
-    return Promise.all(pending.map(async run => {
+    const results = []
+    for (const run of pending) {
+      results.push(await recoverOne(run))
+    }
+    return results
+  }
+  async function recoverOne(run) {
+      if (run.context?.sourceMessageId && await store.query({ kind: 'message.outboundByMessage', conversationId: run.conversationId, messageId: run.context.sourceMessageId })) {
+        try { await cmd('message.echo.quarantine', { runId: run.runId }, `echo-quarantine:${run.runId}`) }
+        catch (error) { if (error.code !== 'MESSAGE_ECHO_QUARANTINE_FORBIDDEN') throw error }
+        return
+      }
       if (run.status === 'needs_attention') {
         const stage = run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:S:$:') ? 'S' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:R:') ? 'R' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:I:') ? 'I' : null
         const version = stage === 'S' ? 's-compact-v1' : stage === 'R' ? 'r-bounded-cards-v2' : stage === 'I' ? 'i-bounded-facts-v1' : null
@@ -230,12 +249,11 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         }
         return process(run.runId)
       }
-      if (Date.parse(run.deadline) <= clock()) {
+      if (run.activatedAt && Date.parse(run.deadline) <= clock()) {
         try { await cmd('message.recover', { runId: run.runId }) }
         catch (error) { if (['MESSAGE_RECOVERY_EXHAUSTED', 'MESSAGE_NOT_RECOVERABLE'].includes(error.code)) return; throw error }
       }
       return process(run.runId)
-    }))
   }
   async function resume(input) { const result = await cmd('message.wake', input, `wake:${input.eventId}`); if (result?.run?.runId) await process(result.run.runId); return result }
   async function close() { closed = true; for (const controller of controllers) controller.abort(); for (const item of queue.splice(0)) item.reject(new Error('MESSAGE_WORKFLOW_CLOSED')); await Promise.allSettled(flights.values()) }

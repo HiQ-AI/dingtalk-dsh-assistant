@@ -197,6 +197,44 @@ test('同文高版本编辑复用原Task且别名重投回原run', async t => {
   assert.equal((await execution.store.query({ kind: 'message.list' })).length, 1)
 })
 
+test('已回读的自身澄清通知不再作为新消息入站，收发信箱分别投影', async t => {
+  const sent = []
+  const notifications = { canDisclose: async () => true, send: async notice => { const item = { messageId: 'out-1', text: notice.payload.text }; sent.push(item); return { messageId: item.messageId } }, readback: async () => ({ messageId: 'out-1', conversationId: 'g' }) }
+  const { service, execution, message } = await fixture(t, 'owner', notifications, { judge: async ({ stage }) => stage === 'S' ? { kind: 'needs_clarification', reason: '问题不明确', question: '请说明具体任务', needs: [] } : null })
+  const original = await service.ingest(message)
+  await service.messages.process(original.runId)
+  await service.flushNotifications()
+  const echo = await service.ingest({ ...message, messageId: 'out-1', text: sent[0].text })
+  assert.equal(echo.processing, 'outbound-echo')
+  const genuine = await service.ingest({ ...message, messageId: 'manual-2', text: sent[0].text })
+  assert.equal(genuine.duplicate, false)
+  assert.equal((await execution.store.query({ kind: 'message.list', conversationId: 'g', limit: 30 })).length, 2)
+  const mailboxes = await service.mailboxes()
+  assert.equal(mailboxes.messages.length, 2)
+  assert.equal(mailboxes.outbox.length, 1)
+  assert.equal(mailboxes.outbox[0].status, 'sent')
+  await execution.store.command({ id: 'old-echo', kind: 'message.receive', args: { runId: 'old-echo', sourceKey: 'echo:out-1', sourceVersion: 1, conversationId: 'g', actorId: 'owner', body: sent[0].text, context: { sourceMessageId: 'out-1' } } })
+  await service.messages.recover()
+  assert.equal((await service.state('old-echo')).run.status, 'superseded')
+  await execution.store.command({ id: 'recall-out-1', kind: 'message.notification.recall.record', args: { notificationId: mailboxes.outbox[0].outboundId, messageId: 'out-1', recallStatus: 'SUCCESS' } })
+  assert.equal((await service.mailboxes()).outbox[0].recallStatus, 'recalled')
+})
+
+test('群职责进入 I 而不占用 S/R；任务历史可由固定材料键读取', async t => {
+  let seen
+  const task = { taskId: 'old-1', groupId: 'g', title: '审核草稿保存', objective: '修复审核草稿保存问题', state: 'completed', outcome: '已完成', objectiveHistory: [{ objective: '定位保存失败', revisedAt: '2026-09-23T00:00:00Z' }] }
+  const { service, message } = await fixture(t, 'owner', undefined, { legacy: { listTasks: () => [task], getTask: id => id === task.taskId ? task : null }, judge: async ({ stage, input }) => {
+    if (stage === 'S') return { ...splitOne(input.source.text), units: [{ ...splitOne(input.source.text).units[0], contextNeeds: [{ resourceRef: 'task-history:old-1', reason: '核对已有任务' }] }] }
+    if (stage === 'R') { seen = input; return { kind: 'binding', disposition: 'conversation', candidateId: null, evidence: ['群任务'] } }
+    assert.match(input.groupResponsibility, /处理本人交办事项/)
+    return { kind: 'intent', actions: [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  } })
+  const received = await service.ingest(message)
+  await service.messages.process(received.runId)
+  assert.match(JSON.stringify(seen.material), /定位保存失败/)
+  assert.equal((await service.state(received.runId)).run.status, 'settled')
+})
+
 test('五类旧只读流程共享消息schema、可用列表和创建路由，外部效果流程不准入', async t => {
   const ids = ['task-investigation', 'task-planning', 'task-pr-review', 'task-data-query', 'task-retrospective']
   let selected = 0

@@ -46,6 +46,33 @@ test('工作流只读状态与异步任务视图保留新节点真实完成状�
   }, { overrides: { listTaskView: async () => [{ taskId: 't', engine: 'workflow-v2', executionNodes: [{ nodeId: 'prepare', status: 'succeeded' }, { nodeId: 'execute', status: 'running' }] }], getWorkflowState: async runId => ({ runId, status: 'waiting' }), getWorkflowCatalog: () => ({ engine: 'workflow-v2', workflows: [{ id: 'task-analysis' }] }) } })
 })
 
+test('群收发信箱合并新工作流持久消息与通知，按 ID 去重且保留旧群记录', async () => {
+  const group = { groupId: 'g', messages: [{ messageId: 'old', text: '旧消息', sequence: 1, occurredAt: '2026-09-23T11:00:00Z' }], outbox: [{ outboundId: 'old-out', sourceMessageId: 'old', text: '旧回复', status: 'sent' }] }
+  const mailboxes = {
+    messages: [
+      { groupId: 'g', messageId: 'new', text: '新消息', sequence: 2, occurredAt: '2026-09-24T02:00:00Z', routingStatus: 'pending' },
+      { groupId: 'g', messageId: 'old', text: '不得覆盖旧记录', sequence: 2, occurredAt: '2026-09-24T02:01:00Z', routingStatus: 'routed' },
+      { groupId: 'elsewhere', messageId: 'other', text: '其他群', sequence: 3, occurredAt: '2026-09-24T02:02:00Z', routingStatus: 'routed' },
+    ],
+    outbox: [
+      { groupId: 'g', outboundId: 'new-out', sourceMessageId: 'new', text: '新通知', status: 'pending' },
+      { groupId: 'g', outboundId: 'old-out', sourceMessageId: 'old', text: '不得覆盖旧通知', status: 'sent' },
+      { groupId: 'elsewhere', outboundId: 'other-out', sourceMessageId: 'other', text: '其他群', status: 'sent' },
+    ],
+  }
+  await withServer(false, async base => {
+    const item = await (await fetch(base + '/state/groups?groupId=g')).json()
+    assert.deepEqual(item.messages.map(message => message.messageId), ['old', 'new'])
+    assert.equal(item.messages[0].text, '旧消息')
+    assert.equal(item.messages[1].sourceKind, 'workflow-v2')
+    assert.deepEqual(item.outbox.map(message => message.outboundId), ['old-out', 'new-out'])
+    assert.equal(item.outbox[0].text, '旧回复')
+    const all = await (await fetch(base + '/state/groups')).json()
+    assert.equal(all.length, 1)
+    assert.deepEqual(all[0].messages.map(message => message.messageId), ['old', 'new'])
+  }, { overrides: { listGroups: () => [group], getGroup: () => group, getWorkflowMailboxes: async () => mailboxes } })
+})
+
 test('本机澄清回答拒绝body伪造actor与外站Origin，只传固定路径身份', async () => {
   const calls = []
   await withServer(false, async base => {

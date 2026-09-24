@@ -309,10 +309,11 @@ window.__ModuleLoader__.load({
       }
       const copyButton = (value, label) => React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: !value, onClick: (event) => { event.stopPropagation(); copyId(value).catch((cause) => setNavigationError(cause instanceof Error ? cause.message : String(cause))) }, style: { color: copiedId === value ? 'var(--dsw-alias-state-success-primary, #248a3d)' : undefined, cursor: value ? 'pointer' : 'default', fontSize: 10.5 } }, copiedId === value ? '已复制' : `复制${label}`)
       const selectedGroup = groupsById.get(selectedGroupId) || (data?.groups || [])[0]
-      const selectedMessages = [...(selectedGroup?.messages || [])].filter((message) => message.sourceKind === 'dingtalk' || message.sourceKind === 'migration' || !message.sourceKind).sort((left, right) => Number(right.sequence || 0) - Number(left.sequence || 0))
+      const selectedMessages = [...(selectedGroup?.messages || [])].filter((message) => message.sourceKind === 'dingtalk' || message.sourceKind === 'migration' || message.sourceKind === 'workflow-v2' || !message.sourceKind).sort((left, right) => (new Date(right.occurredAt).getTime() || 0) - (new Date(left.occurredAt).getTime() || 0) || Number(right.sequence || 0) - Number(left.sequence || 0))
       const messageWorkflowState = (message) => {
         if (message.routingStatus === 'failed') return 'failed'
         if (message.routingStatus !== 'routed') return 'routing'
+        if (message.sourceKind === 'workflow-v2') return 'processed'
         const related = (selectedGroup?.topics || []).flatMap((topic) => {
           const entry = [...(topic.entries || [])].reverse().find((item) => item.messageId === message.messageId)
           return entry?.action === 'add' && entry.messageVersion === message.messageVersion ? [{ topic, entry }] : []

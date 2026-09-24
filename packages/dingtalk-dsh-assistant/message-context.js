@@ -65,8 +65,8 @@ export function unitContext(snapshot, unit) {
 }
 export function candidateCards(candidates) {
   if (candidates.length > 8) throw new Error('MESSAGE_CANDIDATE_CAPACITY')
-  return candidates.map(candidate => {
-    const card = pick(candidate, ['candidateId', 'engine', 'topicId', 'taskId', 'runId', 'resultRef', 'title', 'goal', 'entityKeys', 'scope', 'state', 'relevantTime', 'explicitReferenceMatches', 'distinguishingFacts', 'sourceRefs', 'versions'])
+  return candidates.map((candidate, index) => {
+    const card = pick(candidate, ['candidateId', 'engine', 'topicId', 'taskId', 'runId', 'resultRef', 'title', 'goal', 'historyRef', 'entityKeys', 'scope', 'state', 'relevantTime', 'explicitReferenceMatches', 'distinguishingFacts', 'sourceRefs', 'versions'])
     const omissions = []
     // 未被本次引用的历史来源只参与 Host 召回，不重复塞进 R 的身份卡。
     if (card.sourceRefs?.length) {
@@ -76,7 +76,7 @@ export function candidateCards(candidates) {
       if (omitted) omissions.push({ field: 'sourceRefs', count: omitted })
     }
     // 标题只是召回线索，不能挤占稳定身份和关键判别事实。截掉的字段显式留缺口。
-    for (const [key, size] of [['title', 32], ['goal', 64]]) {
+    for (const [key, size] of [['title', 32], ['goal', index < 2 ? 180 : 64]]) {
       if (typeof card[key] !== 'string') continue
       if (key === 'title' && card.title === card.goal) { delete card.title; continue }
       if (Array.from(card[key]).length > size) { omissions.push({ field: key, length: card[key].length, hash: digest(card[key]) }); card[key] = Array.from(card[key]).slice(0, size).join('') }
@@ -87,7 +87,7 @@ export function candidateCards(candidates) {
 
 // Host 的 binding.target 是派发时使用的同一身份卡副本，模型只需一份完整关联结果。
 // 此投影不裁剪目标字段、原文、约束或事实；稳定身份仍保留在 binding 顶层。
-export function intentContext(base, binding, facts) {
+export function intentContext(base, binding, facts, responsibility = '') {
   const { target, ...identity } = binding
-  return { ...base, binding: { ...target, ...identity }, facts }
+  return { ...base, binding: { ...target, ...identity }, facts, ...(responsibility ? { groupResponsibility: responsibility } : {}) }
 }

@@ -293,13 +293,17 @@ test('C02 共享材料连接器暂停时所有相关事项均不接纳，独立�
  }
 })
 
-test('C09 业务创建handler暂停时独立状态及取消handler先接纳',{timeout:5000},async t=>{
+test('同群消息按接收顺序逐条处理，后一条不越过正在执行的消息',{timeout:5000},async t=>{
  let release,started;const gate=new Promise(r=>release=r),began=new Promise(r=>started=r);const effects=[]
  const {workflow}=await fixture(t,{judge:async({stage,input})=>stage==='S'?{kind:'split',units:[{spans:[{start:0,end:input.source.text.length}],goalText:input.source.text,constraints:[],contextNeeds:[]}],sharedConstraints:[],coverage:[{start:0,end:input.source.text.length,role:'unit'}]}:stage==='R'?binding:{...intent,actions:[{intent:input.text==='启动'?'create':input.text==='查询'?'status':'cancel',arguments:input.text==='启动'?{objective:'任务',workflowId:'task-analysis'}:{},dependsOn:[]}]},handlers:{create:async()=>{started();await gate;effects.push('created');return{}},status:async()=>{effects.push('status');return{}},cancel:async()=>{effects.push('cancel');return{}}}})
  const first=await workflow.receive({...source,body:'启动'},{process:false});const creating=workflow.process(first.runId)
- try{await began
- for(const body of ['查询','取消']){const next=await workflow.receive({...source,sourceKey:body,body},{process:false});await workflow.process(next.runId);assert.equal((await workflow.state(next.runId)).run.status,'settled')}
- assert.deepEqual(effects,['status','cancel'])
- }finally{release()}
+ await began
+ const later=[]
+ for(const body of ['查询','取消']){const next=await workflow.receive({...source,sourceKey:body,body},{process:false});later.push(workflow.process(next.runId))}
+ await new Promise(resolve=>setTimeout(resolve,30))
+ assert.deepEqual(effects,[])
+ release()
  await creating
+ await Promise.all(later)
+ assert.deepEqual(effects,['created','status','cancel'])
 })
