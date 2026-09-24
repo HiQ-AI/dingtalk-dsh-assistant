@@ -157,15 +157,19 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   }
   if(kind==='message.reprocess') {
     const old=run(db,str(a.runId));current(db,old)
-    if(old.context?.replayOf)fail('MESSAGE_REPROCESS_EXHAUSTED')
-    if(!['waiting','needs_attention','pending'].includes(old.status)||rows(db,old.runId,'command').length)fail('MESSAGE_REPROCESS_EFFECT_PENDING')
+    const stalledContext=old.sourceVersion===6 && old.status==='waiting' && rows(db,old.runId,'node').some(node=>node.nodeId==='S'&&node.output?.output?.kind==='needs_context')
+    if(old.sourceVersion>=5 && !(old.sourceVersion===5 && old.reason==='recovery_exhausted' && !old.budgetBaseline) && !stalledContext)fail('MESSAGE_REPROCESS_EXHAUSTED')
+    const oldUnits=rows(db,old.runId,'unit')
+    if(!['waiting','needs_attention','pending'].includes(old.status) && !(old.status==='settled'&&oldUnits.length&&oldUnits.every(item=>item.status==='ignored')) || rows(db,old.runId,'command').length)fail('MESSAGE_REPROCESS_EFFECT_PENDING')
     if(db.prepare('SELECT 1 FROM message_runs WHERE run_id=?').get(str(a.newRunId)))fail('MESSAGE_REPROCESS_EXISTS')
-    const sequence=db.prepare('SELECT rowid AS seq FROM message_runs WHERE run_id=?').get(old.runId).seq
+    const sequence=old.context?.replayOfSequenceId??db.prepare('SELECT rowid AS seq FROM message_runs WHERE run_id=?').get(old.runId).seq
+    const origin=old.context?.replayOf?run(db,old.context.replayOf):old
+    const spent=db.prepare('SELECT claims,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(old.sourceKey)
     for(const request of rows(db,old.runId,'request').filter(item=>item.status==='pending')){request.status='superseded';request.reason='message_reprocessed';put(db,old.runId,'request',request)}
     old.status='superseded';old.reason='message_reprocessed';save(db,old)
     const next={...old,runId:a.newRunId,sourceVersion:old.sourceVersion+1,revision:0,status:'pending',createdAt:now,
-      context:{...old.context,replayOf:old.runId,replayOfSequenceId:sequence},snapshot:null,
-      policy:{...old.policy,effectiveMaxClaims:undefined},deadline:new Date(Date.parse(now)+(old.policy.initialWindowMs??45000)).toISOString()}
+      context:{...old.context,occurredAt:old.context?.occurredAt??origin.context?.occurredAt??origin.createdAt,replayOf:origin.runId,replayOfSequenceId:sequence},snapshot:null,
+      budgetBaseline:spent,policy:{...old.policy,effectiveMaxClaims:undefined},deadline:new Date(Date.parse(now)+(old.policy.initialWindowMs??45000)).toISOString()}
     delete next.activatedAt;delete next.reason;delete next.capacityRetryVersion
     db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(next.runId,next.sourceKey,next.sourceVersion,json(next))
     db.prepare('UPDATE message_sources SET current_version=? WHERE source_key=?').run(next.sourceVersion,next.sourceKey)
@@ -221,6 +225,14 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       settle(db,r);return {result:{command:c,run:r}}
     }
     if(kind==='message.command.reconcile') {if(c.status!=='unknown')fail('MESSAGE_COMMAND_NOT_UNKNOWN');if(!['applied','failed'].includes(a.status)||!a.evidenceRef)fail('MESSAGE_RECONCILE_EVIDENCE_REQUIRED');c.status=a.status;c.result=a.result??null;c.evidenceRef=a.evidenceRef;put(db,r.runId,'command',c);const u=get(db,'unit',c.unitId);if(rows(db,r.runId,'command').filter(x=>x.unitId===u.id).every(x=>x.status==='applied')){u.status='applied';put(db,r.runId,'unit',u)}settle(db,r);return {result:{command:c}}}
+    if(kind==='message.command.retry.readonly') {
+      current(db,r,c.revision)
+      if(!['status','result'].includes(c.kind)||c.status!=='unknown'||c.error!=='INVALID_ARGUMENT'||(c.readonlyRetryCount??0)>=1||c.result!==null)fail('MESSAGE_READONLY_RETRY_FORBIDDEN')
+      if(rows(db,r.runId,'notification').some(item=>item.commandId===c.commandId||item.commandId===c.id))fail('MESSAGE_READONLY_RETRY_FORBIDDEN')
+      c.readonlyRetryCount=(c.readonlyRetryCount??0)+1;c.status='pending';c.error=null;c.result=null;put(db,r.runId,'command',c)
+      if(r.status==='needs_attention'&&r.reason==='recovery_exhausted'){r.status='pending';r.reason=null;r.deadline=new Date(Date.parse(now)+30000).toISOString();save(db,r)}
+      return {result:{command:c,run:r}}
+    }
     if(kind==='message.command.claim') {
       current(db,r,c.revision)
       if(c.status!=='pending') fail('MESSAGE_COMMAND_NOT_READY')
@@ -241,6 +253,15 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     settle(db,r);return {result:{command:c,run:r}}
   }
   const r=run(db,a.runId);current(db,r,a.expectedRevision)
+  if(kind==='message.quiet') {
+    const original=str(a.body)
+    if(r.body!==original||r.context?.quoteRefs?.length||rows(db,r.runId,'command').length||!['pending','waiting'].includes(r.status))fail('MESSAGE_QUIET_NOT_ALLOWED')
+    if(!/^先别管(?:它|这个|这件事|了)[。.!！\s]*$/u.test(original.trim()))fail('MESSAGE_QUIET_NOT_ALLOWED')
+    for(const request of rows(db,r.runId,'request').filter(item=>item.status==='pending')){request.status='superseded';request.reason='message_quiet';put(db,r.runId,'request',request)}
+    for(const unit of rows(db,r.runId,'unit').filter(item=>item.status==='pending')){unit.status='ignored';put(db,r.runId,'unit',unit)}
+    r.status='settled';r.reason='message_quiet';save(db,r)
+    return {result:{run:r}}
+  }
   if(kind==='message.material.record') {
     str(a.resourceRef)
     if(!a.material||typeof a.material.text!=='string'||Buffer.byteLength(a.material.text)>65536)fail('MESSAGE_MATERIAL_INVALID')
@@ -319,8 +340,9 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(a.unitId!=='$'&&get(db,'unit',a.unitId).runId!==r.runId)fail('MESSAGE_STALE')
     if(Date.parse(r.deadline)<=Date.parse(now))fail('MESSAGE_DEADLINE_EXCEEDED')
     const s=db.prepare('SELECT claims,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(r.sourceKey)
-    if(s.claims>=(r.policy.effectiveMaxClaims??r.policy.maxClaims))fail('MESSAGE_BUDGET_EXHAUSTED')
-    const reserve={input:a.estimatedInputTokens??0,output:a.maxOutputTokens??0};if(!Object.values(reserve).every(x=>Number.isSafeInteger(x)&&x>=0))fail('MESSAGE_INVALID_BUDGET');if(s.input_tokens+reserve.input>(r.policy.maxInputTokens??64000)||s.output_tokens+reserve.output>(r.policy.maxOutputTokens??12000))fail('MESSAGE_BUDGET_EXHAUSTED')
+    const baseline=r.budgetBaseline??{claims:0,input_tokens:0,output_tokens:0}
+    if(s.claims-baseline.claims>=(r.policy.effectiveMaxClaims??r.policy.maxClaims))fail('MESSAGE_BUDGET_EXHAUSTED')
+    const reserve={input:a.estimatedInputTokens??0,output:a.maxOutputTokens??0};if(!Object.values(reserve).every(x=>Number.isSafeInteger(x)&&x>=0))fail('MESSAGE_INVALID_BUDGET');if(s.input_tokens-baseline.input_tokens+reserve.input>(r.policy.maxInputTokens??64000)||s.output_tokens-baseline.output_tokens+reserve.output>(r.policy.maxOutputTokens??12000))fail('MESSAGE_BUDGET_EXHAUSTED')
     const previous=rows(db,r.runId,'node').find(n=>n.unitId===a.unitId&&n.nodeId===a.nodeId&&n.revision===r.revision&&n.status!=='superseded')
     if(previous&&['running','succeeded','waiting'].includes(previous.status))fail('MESSAGE_NODE_NOT_READY')
     if(previous?.retryAt&&Date.parse(previous.retryAt)>Date.parse(now))fail('MESSAGE_RETRY_NOT_DUE')
@@ -334,6 +356,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(a.usage) { const used={input:a.usage.inputTokens,output:a.usage.outputTokens};if(!Object.values(used).every(x=>Number.isSafeInteger(x)&&x>=0))fail('MESSAGE_INVALID_BUDGET');db.prepare('UPDATE message_sources SET input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE source_key=?').run(used.input-n.reservedTokens.input,used.output-n.reservedTokens.output,r.sourceKey);n.usage=used }
     if(kind.endsWith('complete')&&Date.parse(now)>Date.parse(r.deadline))fail('MESSAGE_DEADLINE_EXCEEDED')
     n.status=kind.endsWith('complete')?'succeeded':'failed';n.output=a.output??null;n.error=a.error??null;n.retryAt=a.retryAt??null;n.completedAt=now
+    if(n.status==='succeeded'){r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)}
     put(db,r.runId,'node',n);return {result:{node:n}}
   }
   if(kind==='message.accept') {

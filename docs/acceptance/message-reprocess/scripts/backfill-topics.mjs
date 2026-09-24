@@ -29,12 +29,14 @@ function inspect(db, item) {
 }
 
 const reader = new DatabaseSync(dbPath, { readOnly: true })
+const instanceId = reader.prepare('SELECT instance_id FROM execution_meta WHERE singleton=1').get()?.instance_id
+if (!instanceId) throw new Error('store_instance_missing')
 const checked = plan.map(item => ({ ...item, ...inspect(reader, item) }))
 reader.close()
 console.log(JSON.stringify({ mode, checked: checked.map(({ runId, topicId, alreadyBound }) => ({ runId, topicId, alreadyBound })) }))
 if (mode === '--check') process.exit(0)
 
-const store = await openExecutionStore({ dbPath, instanceId: `topic-backfill-${Date.now()}` })
+const store = await openExecutionStore({ dbPath, instanceId })
 try {
   for (const item of checked) {
     if (item.alreadyBound) continue

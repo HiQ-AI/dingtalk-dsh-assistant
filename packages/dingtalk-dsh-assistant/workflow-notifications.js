@@ -5,6 +5,23 @@ export function workflowResultText(output) {
   if (output?.deliveryStatus === 'pr_verified' && typeof output.url === 'string') return `代码已验证并提交 PR${output.number ? ` #${output.number}` : ''}：${output.url}。当前状态：${output.state ?? '已回读'}。`
   return null
 }
+export function sameDeliveredText(observed, expected, quoted = false) {
+  const normalize = text => typeof text === 'string' ? text.replace(/\s+/gu, ' ').trim() : null
+  const actual = normalize(observed), wanted = normalize(expected)
+  if (actual === null || wanted === null) return false
+  if (actual === wanted) return true
+  return quoted && wanted.length >= 24 && actual.replace(/\s+/gu, '').includes(wanted.replace(/\s+/gu, ''))
+}
+export function notificationOpenTaskId(ack) {
+  return ack?.sendReceipt?.openTaskId ?? ack?.result?.openTaskId ?? ack?.result?.result?.openTaskId
+}
+export function sendWorkflowNotification(adapter, notification) {
+  const payload = notification.payload
+  const base = { groupId: payload.conversationId, text: payload.text, idempotencyKey: notification.id }
+  return payload.sourceMessageId && payload.actorId
+    ? adapter.sendGroupReply({ ...base, replyToMessageId: payload.sourceMessageId, replyToSenderOpenDingTalkId: payload.actorId })
+    : adapter.sendGroup(base)
+}
 
 /** 通知独立于任务执行。ACK不代表送达，未知发送只回查，不再次发送。 */
 export function createWorkflowNotifications({ store, artifacts, controller, adapter }) {

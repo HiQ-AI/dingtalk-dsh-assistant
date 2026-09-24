@@ -11,9 +11,32 @@ import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execu
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { messageSchemas, taskWorkflowCatalog } from '../packages/dingtalk-dsh-assistant/message-context.js'
+import { notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 
 const schema = { type: 'object', additionalProperties: true }
 const splitOne = text => ({ kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] })
+test('渠道回读仅归一化空白，正文差异仍阻止送达',()=>{
+  assert.equal(sameDeliveredText('第一行 第二行','第一行\n第二行'),true)
+  assert.equal(sameDeliveredText('第一行 第三行','第一行\n第二行'),false)
+  assert.equal(sameDeliveredText('引用内容：这是待核对的原问题。回复内容：第一行 第二行','第一行\n第二行',true),false)
+  assert.equal(sameDeliveredText('引用内容：原消息。回复内容：审核草稿和撤回通知已交付测试，分配撤回任务已取消。','审核草稿和撤回通知已交付测试，分配撤回任务已取消。',true),true)
+  assert.equal(sameDeliveredText('@向春梅 更正审核问题：1. 草稿保存已部署。2. 分配撤回未部署。','更正审核问题：1. 草稿保存已部署。\n2. 分配撤回未部署。',true),true)
+  assert.equal(sameDeliveredText('', ''),true)
+  assert.equal(sameDeliveredText(null,'第一行'),false)
+})
+test('DWS 发送 ACK 的实际 result.openTaskId 可用于独立回读',()=>{
+  assert.equal(notificationOpenTaskId({success:true,result:{openTaskId:'task-1'}}),'task-1')
+})
+test('工作流通知引用来源消息，缺来源才发送普通群消息',async()=>{
+  const sent=[]
+  const adapter={sendGroupReply:async value=>sent.push({kind:'reply',...value}),sendGroup:async value=>sent.push({kind:'group',...value})}
+  await sendWorkflowNotification(adapter,{id:'n1',payload:{conversationId:'g',text:'已核对任务状态',sourceMessageId:'m1',actorId:'sender'}})
+  await sendWorkflowNotification(adapter,{id:'n2',payload:{conversationId:'g',text:'系统通知'}})
+  assert.equal(sent[0].kind,'reply')
+  assert.equal(sent[0].replyToMessageId,'m1')
+  assert.equal(sent[0].replyToSenderOpenDingTalkId,'sender')
+  assert.equal(sent[1].kind,'group')
+})
 async function fixture(t, actor = 'owner', notifications, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'workflow-service-'))
   const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'test', initialize: true })
@@ -215,7 +238,84 @@ test('本机操作者逐条重处理旧澄清，旧请求失效且有命令消�
   assert.notEqual(replay.runId,first.runId)
   assert.equal((await service.state(first.runId)).requests[0].status,'superseded')
   assert.equal((await service.state(replay.runId)).commands.length,1)
-  await assert.rejects(service.reprocessMessage(replay.runId,{channel:'web',actorId:'owner'}),/MESSAGE_REPROCESS_EXHAUSTED/)
+  assert.equal((await service.ingest(message)).duplicate,true)
+  await assert.rejects(service.reprocessMessage(replay.runId,{channel:'web',actorId:'owner'}),/MESSAGE_REPROCESS_EFFECT_PENDING/)
+})
+
+test('无引用的先别管它静默收束，不追问也不创建任务',async t=>{
+  const {service,message,execution}=await fixture(t,'owner',undefined,{judge:async()=>{throw new Error('MODEL_MUST_NOT_RUN')}})
+  const received=await service.ingest({...message,text:'先别管它'})
+  await service.messages.process(received.runId)
+  const state=await service.state(received.runId)
+  assert.equal(state.run.status,'settled')
+  assert.equal(state.run.reason,'message_quiet')
+  assert.equal(state.requests.length,0)
+  assert.equal(state.commands.length,0)
+  assert.deepEqual(await execution.store.query({kind:'run.list'}),[])
+})
+
+test('明确问小小鹏审核问题是否部署时即使I误判无动作也回读群任务',async t=>{
+  const task={taskId:'old-review',groupId:'g',title:'审核草稿与撤回通知',objective:'修复审核草稿与撤回通知',state:'completed',result:{delivery:{uat2Status:'deployed-and-handed-to-testing'}}}
+  const {service,message}=await fixture(t,'participant',undefined,{legacy:{listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'conversation',candidateId:null,evidence:['群审核任务']}:{kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}})
+  const received=await service.ingest({...message,text:'小小鹏，我审核的问题都改完部署到uat2了吗？'})
+  await service.messages.process(received.runId)
+  const state=await service.state(received.runId)
+  assert.equal(state.run.status,'settled')
+  assert.equal(state.commands[0].kind,'status')
+  assert.match(state.commands[0].result.reply,/UAT2：deployed-and-handed-to-testing/)
+})
+test('审核状态问句、两个任务说明和引用问题清单归为同一话题，不误建三个任务',async t=>{
+  const tasks=[
+    {taskId:'draft',groupId:'g',title:'审核草稿与撤回通知可靠化',objective:'修复审核草稿保存和撤回消息通知',state:'completed',outcome:'succeeded',result:{delivery:{uat2Status:'deployed-and-handed-to-testing'}}},
+    {taskId:'withdraw',groupId:'g',title:'修复专家审核后仍可撤回分配',objective:'修复分配后打回修改撤回的问题',state:'completed',outcome:'cancelled'},
+    {taskId:'draft-investigation',groupId:'g',title:'排查审核草稿保存问题',objective:'排查审核草稿保存问题，仅授权排查分析，不实施代码、配置或数据修改',state:'completed',outcome:'succeeded'},
+    {taskId:'notice-investigation',groupId:'g',title:'排查撤回消息通知问题',objective:'核对撤回消息通知异常，不实施代码、配置或数据修改',state:'completed',outcome:'succeeded'},
+    {taskId:'draft-unknown',groupId:'g',title:'排查审核草稿保存',objective:'核对审核草稿保存现象',state:'completed'},
+  ]
+  const {service,message,execution}=await fixture(t,'participant',undefined,{legacy:{listTasks:()=>tasks,getTask:id=>tasks.find(task=>task.taskId===id)},judge:async({stage,input})=>{
+    if(stage==='S' && input.source.text.includes('小小鹏'))throw new Error('STATUS_SPLIT_SHOULD_USE_HOST_RULE')
+    if(stage==='S')return splitOne(input.source.text)
+    if(stage==='R')return{kind:'binding',disposition:'conversation',candidateId:null,evidence:['群任务']}
+    return{kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
+  }})
+  const first=await service.ingest({...message,messageId:'review-question',text:'小小鹏，我审核的问题都改完部署到uat2了吗？'})
+  await service.messages.process(first.runId)
+  const firstState=await service.state(first.runId)
+  assert.equal(firstState.commands[0].kind,'status')
+  assert.match(firstState.commands[0].result.reply,/审核草稿与撤回通知可靠化/)
+  assert.match(firstState.commands[0].result.reply,/修复专家审核后仍可撤回分配/)
+  const second=await service.ingest({...message,senderOpenDingTalkId:'owner',messageId:'two-tasks',text:'审核问题会匹配到两个任务'})
+  await service.messages.process(second.runId)
+  const secondState=await service.state(second.runId)
+  assert.deepEqual(secondState.commands.map(item=>item.kind),['fact'])
+  const third=await service.ingest({...message,messageId:'review-details',text:'审核草稿保存的问题，分配后打回修改撤回的问题，撤回消息通知的问题',quotedMessage:{messageId:'two-tasks',content:'审核问题会匹配到两个任务'}})
+  await service.messages.process(third.runId)
+  const thirdState=await service.state(third.runId)
+  assert.equal(thirdState.units.length,1)
+  assert.deepEqual(thirdState.commands.map(item=>item.kind),['status'])
+  assert.match(thirdState.commands[0].result.reply,/UAT2：deployed-and-handed-to-testing/)
+  assert.match(thirdState.commands[0].result.reply,/cancelled/)
+  assert.equal(thirdState.commands[0].result.items.length,2)
+  assert.equal((await execution.store.query({kind:'run.list'})).length,0)
+  const topicIds=[firstState,secondState,thirdState].map(state=>state.units[0].topicId)
+  assert.equal(new Set(topicIds).size,1)
+})
+test('恢复扫描先重试一次无回执只读查询，再完成原命令',async t=>{
+  const task={taskId:'old-review',groupId:'g',title:'审核草稿保存',objective:'修复审核草稿保存',state:'completed',outcome:'succeeded'}
+  const {service,execution}=await fixture(t,'participant',undefined,{legacy:{listTasks:()=>[task],getTask:id=>id===task.taskId?task:null}})
+  const command=(kind,args)=>execution.store.command({id:`test-${kind}`,kind:`message.${kind}`,args})
+  await command('receive',{runId:'recover-status',sourceKey:'recover-status',sourceVersion:1,conversationId:'g',actorId:'participant',body:'小小鹏，审核草稿保存的问题完成了吗？',policy:{initialWindowMs:45000}})
+  await command('snapshot',{runId:'recover-status',snapshot:{snapshotId:'test-snapshot',source:{sourceKey:'recover-status',sourceVersion:1,text:'小小鹏，审核草稿保存的问题完成了吗？',actorId:'participant',conversationId:'g'},history:[],quotes:[],attachments:[],omissions:[],policy:'',actorPermissions:[]}})
+  await command('split',{runId:'recover-status',units:[{unitId:'recover-unit',goalText:'小小鹏，审核草稿保存的问题完成了吗？',spans:[{start:0,end:22}],constraints:[],contextNeeds:[],sharedConstraints:[]}]})
+  await command('accept',{runId:'recover-status',unitId:'recover-unit',commands:[{commandId:'recover-command',kind:'status',args:{taskId:null,arguments:{scope:'conversation'},binding:{disposition:'conversation'},replyPolicy:'none'}}]})
+  const claimed=(await command('command.claim',{commandId:'recover-command'})).result.command
+  await command('command.fail',{commandId:'recover-command',leaseEpoch:claimed.leaseEpoch,error:'INVALID_ARGUMENT'})
+  await command('attention',{runId:'recover-status',reason:'recovery_exhausted'})
+  await service.messages.recover()
+  const state=await service.state('recover-status')
+  assert.equal(state.run.status,'settled')
+  assert.equal(state.commands[0].status,'applied')
+  assert.equal(state.commands[0].readonlyRetryCount,1)
 })
 
 test('已回读的自身澄清通知不再作为新消息入站，收发信箱分别投影', async t => {
@@ -254,6 +354,28 @@ test('群职责进入 I 而不占用 S/R；任务历史可由固定材料键读�
   await service.messages.process(received.runId)
   assert.match(JSON.stringify(seen.material), /定位保存失败/)
   assert.equal((await service.state(received.runId)).run.status, 'settled')
+})
+
+test('群成员可核对本群旧任务摘要和UAT2交付状态，跨群历史不可读取', async t => {
+  const task={taskId:'old-uat',groupId:'g',title:'审核草稿与撤回通知',objective:'修复审核草稿与撤回通知',state:'completed',outcome:'succeeded',result:{delivery:{uat2Status:'deployed-and-handed-to-testing'}},objectiveHistory:[]}
+  const {service,message}=await fixture(t,'participant',undefined,{legacy:{listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge:async({stage,input})=>{
+    if(stage==='S')return splitOne(input.source.text)
+    if(stage==='R')return{kind:'binding',disposition:'existing',candidateId:'legacy:old-uat',evidence:['同群旧任务']}
+    assert.equal(input.facts.legacyTask.uat2Status,'deployed-and-handed-to-testing')
+    return{kind:'intent',actions:[{intent:'status',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
+  }})
+  const received=await service.ingest({...message,text:'审核问题部署UAT2了吗'})
+  await service.messages.process(received.runId)
+  const state=await service.state(received.runId)
+  assert.equal(state.run.status,'settled')
+  assert.match(state.commands[0].result.reply,/UAT2：deployed-and-handed-to-testing/)
+})
+
+test('旧群历史缺发送人字段时仍能写入快照',async t=>{
+  const {service,message}=await fixture(t,'owner',undefined,{legacy:{getGroup:id=>({groupId:id,responsibility:'处理本人交办事项',messages:[{messageId:'old',text:'历史问题'}]})}})
+  const received=await service.ingest(message)
+  await service.messages.process(received.runId)
+  assert.ok((await service.state(received.runId)).run.snapshot)
 })
 
 test('五类旧只读流程共享消息schema、可用列表和创建路由，外部效果流程不准入', async t => {

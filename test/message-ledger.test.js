@@ -19,13 +19,42 @@ test('人工重处理仅允许无业务命令的旧消息，保留旧请求并�
  const result=await f.call('reprocess',{runId:'m',newRunId:'m-replay'})
  assert.equal(result.result.run.sourceVersion,2)
  assert.equal(result.result.run.context.replayOfSequenceId,1)
+ assert.equal(result.result.run.context.occurredAt,(await f.store.query({kind:'message.run',runId:'m'})).run.createdAt)
  assert.equal((await f.store.query({kind:'message.run',runId:'m'})).requests[0].status,'superseded')
  assert.equal((await f.store.query({kind:'message.source',sourceKey:'m'})).runId,'m-replay')
+ const second=await f.call('reprocess',{runId:'m-replay',newRunId:'m-replay-2'})
+ assert.equal(second.result.run.context.occurredAt,result.result.run.context.occurredAt)
+ assert.equal(second.result.run.context.replayOf,'m')
  await bad(f.call('reprocess',{runId:'m',newRunId:'again'}),'MESSAGE_STALE')
  await f.call('receive',receive('effect'))
  await f.call('split',{runId:'effect',units:[{unitId:'u'}]})
  await f.call('accept',{runId:'effect',unitId:'u',commands:[{commandId:'effect-command',kind:'create',args:{}}]})
  await bad(f.call('reprocess',{runId:'effect',newRunId:'effect-replay'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+})
+test('人工重处理重新分配节点预算，旧版本消耗不阻断新版本关联节点',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{policy:{maxClaims:2,maxInputTokens:100,maxOutputTokens:100}}))
+ await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',estimatedInputTokens:80,maxOutputTokens:50,input:{}})
+ const replay=(await f.call('reprocess',{runId:'m',newRunId:'m-replay'})).result.run
+ assert.deepEqual(replay.budgetBaseline,{claims:1,input_tokens:80,output_tokens:50})
+ await f.call('split',{runId:'m-replay',units:[{unitId:'u'}]})
+ const claim=(await f.call('node.claim',{runId:'m-replay',unitId:'u',nodeId:'R',estimatedInputTokens:80,maxOutputTokens:50,input:{}})).result.node
+ assert.equal(claim.nodeId,'R')
+})
+test('旧版第五次重处理因预算耗尽时仅补一次无副作用恢复机会',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{sourceVersion:5}))
+ await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+ const next=(await f.call('reprocess',{runId:'m',newRunId:'m-replay'})).result.run
+ assert.equal(next.sourceVersion,6)
+ await f.call('attention',{runId:'m-replay',reason:'recovery_exhausted'})
+ await bad(f.call('reprocess',{runId:'m-replay',newRunId:'m-replay-2'}),'MESSAGE_REPROCESS_EXHAUSTED')
+})
+test('第六版只在S因上下文等待且无业务命令时允许一次确定性状态查询重处理',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{sourceVersion:6}))
+ const claim=(await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',input:{}})).result.node
+ await f.call('node.complete',{runId:'m',nodeRunId:claim.nodeRunId,leaseEpoch:claim.leaseEpoch,output:{output:{kind:'needs_context',reason:'历史范围',needs:[]}}})
+ await f.call('wait',{runId:'m',unitId:'$',nodeId:'S',reason:'历史范围',request:{requestId:'context',kind:'needs_context',needs:[]}})
+ assert.equal((await f.call('reprocess',{runId:'m',newRunId:'m-replay'})).result.run.sourceVersion,7)
+ await bad(f.call('reprocess',{runId:'m-replay',newRunId:'m-replay-2'}),'MESSAGE_REPROCESS_EXHAUSTED')
 })
 test('消息账同库持久化、幂等、全部事项归宿和重启未知命令',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',expectedRevision:0,units:[{unitId:'u'},{unitId:'v'}]})
@@ -93,6 +122,24 @@ test('单元重关联不影响另一个单元，纠正额度耗尽撤权并待�
  await f.call('accept',{runId:'m',unitId:'v',expectedRevision:0,commands:[],outcome:'ignored'})
  await f.call('relink',{runId:'m',unitId:'u',expectedRevision:0,reason:'again'})
  await bad(f.call('node.claim',{runId:'m',unitId:'u',nodeId:'R',input:{}}),'MESSAGE_NEEDS_ATTENTION')
+})
+test('无回执只读状态查询的参数错误仅可受控重试一次，创建命令不可重试',async t=>{
+ const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'status',kind:'status',args:{}}]})
+ const first=(await f.call('command.claim',{commandId:'status'})).result.command
+ await f.call('command.fail',{commandId:'status',leaseEpoch:first.leaseEpoch,error:'INVALID_ARGUMENT'})
+ await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+ await f.call('command.retry.readonly',{commandId:'status'})
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).run.status,'pending')
+ const next=(await f.call('command.claim',{commandId:'status'})).result.command
+ assert.equal(next.leaseEpoch,first.leaseEpoch+1)
+ await f.call('command.fail',{commandId:'status',leaseEpoch:next.leaseEpoch,error:'INVALID_ARGUMENT'})
+ await bad(f.call('command.retry.readonly',{commandId:'status'}),'MESSAGE_READONLY_RETRY_FORBIDDEN')
+ await f.call('receive',receive('create'));await f.call('split',{runId:'create',units:[{unitId:'create-unit'}]})
+ await f.call('accept',{runId:'create',unitId:'create-unit',commands:[{commandId:'new-task',kind:'create',args:{}}]})
+ const creation=(await f.call('command.claim',{commandId:'new-task'})).result.command
+ await f.call('command.fail',{commandId:'new-task',leaseEpoch:creation.leaseEpoch,error:'INVALID_ARGUMENT'})
+ await bad(f.call('command.retry.readonly',{commandId:'new-task'}),'MESSAGE_READONLY_RETRY_FORBIDDEN')
 })
 test('token預留在失败与重启后不清零，未知usage保守计费',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{policy:{maxInputTokens:100,maxOutputTokens:100}}))

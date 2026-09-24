@@ -4,6 +4,16 @@ import { messageSystem } from './message-model.js'
 
 export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.1', initialWindowMs: 45000, linkedWindowMs: 30000, attemptMs: 20000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, maxInputBytes: 64000, maxOutputBytes: 48000, recoveryDelaysMs: [5000, 30000] })
 const limits = { S: [8000, 2000], R: [14000, 1000], I: [16000, 1500] }
+const statusQuestion = text => /(?:完成|改完|进度|状态|部署).*[吗？?]/u.test(text) && /(?:审核|任务|问题)/u.test(text)
+const directedStatusQuestion = text => /小小鹏/u.test(text) && statusQuestion(text)
+function statusFollowup(snapshot) {
+  const body = snapshot.source.text.trim()
+  const previous = snapshot.history.slice(-6).findLast(item => statusQuestion(item.text))
+  if (!previous || /^(?:请|帮我|小小鹏).*(?:修复|处理|排查|部署)/u.test(body)) return null
+  if (/匹配到.{0,8}(?:个|项)任务/u.test(body)) return { kind: 'count', sourceKey: previous.sourceKey }
+  if (snapshot.quotes.length && (body.match(/问题/gu) ?? []).length >= 2) return { kind: 'scope', sourceKey: previous.sourceKey }
+  return null
+}
 
 /** 无常驻模型会话。每个判断独立、无工具；数据库是恢复和派发的唯一事实源。 */
 export function createMessageWorkflow({ store, judge, context = {}, handlers = {}, policy = {}, clock = Date.now }) {
@@ -33,7 +43,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   async function waiting(data, unitId, stage, output) {
     return cmd('message.wait', { runId: data.run.runId, unitId, nodeId: stage, expectedRevision: revision(data), reason: output.reason, request: { requestId: digest([data.run.runId, unitId, stage, revision(data), output]), kind: output.kind, question: output.question ?? output.reason, needs: output.needs ?? [], permittedActors: [data.run.actorId] } })
   }
-  async function invoke(data, unitId, stage, input) {
+  async function invoke(data, unitId, stage, input, fixedOutput) {
     const runId = data.run.runId, rev = revision(data)
     const prior = data.nodes.find(node => node.unitId === unitId && node.nodeId === stage && ['completed', 'succeeded'].includes(node.status) && (node.revision ?? rev) === rev)
     if (prior) return prior.output?.output ?? prior.output
@@ -53,13 +63,13 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (revision(current) !== rev) return null
       const deadline = current.run.deadline
       const remaining = deadline ? Number(new Date(deadline)) - clock() - config.commitReserveMs : config.attemptMs
-      if (remaining <= 0) return null
+      if (remaining <= 0) { await cmd('message.attention', { runId, reason: `MESSAGE_DEADLINE_BEFORE_CLAIM:${stage}:${unitId}` }); return null }
       const claimed = await cmd('message.node.claim', { runId, unitId, nodeId: stage, expectedRevision: rev, estimatedInputTokens: inputBytes, maxOutputTokens: outputLimit, input: { ...input, inputBytes, inputReadyAt: clock() } })
       binding = claimed?.node
       if (!binding) return null
       controller = new AbortController(); controllers.add(controller)
       const timeout = new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('MESSAGE_NODE_TIMEOUT')) }, Math.min(config.attemptMs, remaining)) })
-      const response = await Promise.race([judge({ stage, input, schema: messageSchemas[stage], signal: controller.signal, maxOutputTokens: outputLimit }), timeout])
+      const response = fixedOutput ? { output: fixedOutput, usage: { inputTokens: 0, outputTokens: 0 } } : await Promise.race([judge({ stage, input, schema: messageSchemas[stage], signal: controller.signal, maxOutputTokens: outputLimit }), timeout])
       const output = messageSchemas[stage].parse(response.output ?? response)
       if (stage === 'S') validateSplit(output, current.run.body)
       if (stage === 'R' && output.kind === 'binding' && output.candidateId !== null && !input.candidates.some(card => card.candidateId === output.candidateId)) throw new Error('MESSAGE_UNKNOWN_TARGET')
@@ -74,7 +84,8 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         try { await cmd('message.node.fail', { runId, nodeRunId: binding.nodeRunId, leaseEpoch: binding.leaseEpoch, expectedRevision: rev, error: failure, retryAt: new Date(clock() + config.recoveryDelaysMs[0]).toISOString() }) }
         catch (failure) { if (!['MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(failure.code)) throw failure }
       }
-      else if (!['MESSAGE_NODE_NOT_READY', 'MESSAGE_RETRY_NOT_DUE', 'MESSAGE_DEADLINE_EXCEEDED', 'MESSAGE_BUDGET_EXHAUSTED', 'MESSAGE_STALE'].includes(error.code)) throw error
+      else if (error.code === 'MESSAGE_BUDGET_EXHAUSTED') await cmd('message.attention', { runId, reason: `MESSAGE_BUDGET_EXHAUSTED:${stage}:${unitId}` })
+      else if (!['MESSAGE_NODE_NOT_READY', 'MESSAGE_RETRY_NOT_DUE', 'MESSAGE_DEADLINE_EXCEEDED', 'MESSAGE_STALE'].includes(error.code)) throw error
       return null
     } finally { clearTimeout(timer); if (controller) { controller.abort(); controllers.delete(controller) }; release() }
   }
@@ -90,15 +101,22 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (!material?.ready) { await waiting(data, unit.unitId, 'R', { kind: 'needs_context', reason: 'UNIT_MATERIAL_PENDING', needs: unit.contextNeeds }); return }
       base.material = material.data
     }
-    const candidates = candidateCards(await context.candidates?.({ run: data.run, snapshot, unit }) ?? [])
-    const linked = await invoke(data, unit.unitId, 'R', { ...base, candidates })
+    const candidateStartedAt = clock()
+    const rawCandidates = await context.candidates?.({ run: data.run, snapshot, unit }) ?? []
+    const candidates = candidateCards(rawCandidates)
+    const followup = statusFollowup(snapshot)
+    const priorTopic = followup && rawCandidates.find(card => card.topicId && card.sourceRefs?.includes(followup.sourceKey))
+    const linked = await invoke(data, unit.unitId, 'R', { ...base, candidates, candidatePreparationMs: clock() - candidateStartedAt }, followup ? { kind: 'binding', disposition: 'conversation', candidateId: priorTopic?.candidateId ?? null, evidence: ['前文任务状态问句的范围补充'] } : undefined)
     if (!linked) return
     if (linked.kind !== 'binding' || linked.disposition === 'unresolved') { await waiting(data, unit.unitId, 'R', linked.kind === 'binding' ? { kind: 'needs_clarification', reason: 'MESSAGE_TARGET_UNRESOLVED' } : linked); return }
     const target = candidates.find(card => card.candidateId === linked.candidateId) ?? null
     const binding = { ...linked, ...target, target }
     data = await state(runId)
     const facts = await context.facts?.({ run: data.run, snapshot, unit, binding }) ?? {}
-    const intent = await invoke(data, unit.unitId, 'I', intentContext(base, binding, facts, snapshot.policy))
+    const fixedIntent = followup ? { kind: 'intent', actions: followup.kind === 'count'
+      ? [{ intent: 'fact', arguments: { kind: 'fact', text: base.text }, dependsOn: [] }]
+      : [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: followup.kind === 'count' ? 'none' : 'result' } : undefined
+    const intent = await invoke(data, unit.unitId, 'I', intentContext(base, binding, facts, snapshot.policy, candidates), fixedIntent)
     if (!intent) return
     if (intent.kind === 'needs_relink') {
       const result = await cmd('message.relink', { runId, unitId: unit.unitId, expectedRevision: revision(data), reason: intent.reason })
@@ -107,6 +125,12 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     }
     if (intent.kind === 'needs_resegmentation') { await resegment(runId, intent.reason); return }
     if (intent.kind !== 'intent') { await waiting(data, unit.unitId, 'I', intent); return }
+    if (binding.disposition === 'conversation' && intent.actions.every(action => action.intent === 'no_action')
+      && /小小鹏/u.test(data.run.body) && /(?:审核|任务).*(?:完成|改完|进度|状态|部署)/u.test(data.run.body)
+      && /[吗？?]/u.test(data.run.body)) {
+      intent.actions = [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }]
+      intent.replyPolicy = 'result'
+    }
     const admission = await context.validateActions?.({ run: data.run, unit, binding, intent, facts, requests: data.requests })
     if (admission && admission.kind !== 'accepted') { await waiting(data, unit.unitId, 'I', admission); return }
     if (intent.requiredExecutionMaterials.length) {
@@ -192,6 +216,10 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     let data = await state(runId)
     if (!data?.run || ['superseded', 'needs_attention', 'buffered'].includes(data.run.status)) return data
     if (data.run.status === 'settled') { await dispatch(runId); return state(runId) }
+    if (!data.run.context?.quoteRefs?.length && /^先别管(?:它|这个|这件事|了)[。.!！\s]*$/u.test(data.run.body.trim())) {
+      await cmd('message.quiet', { runId, body: data.run.body }, `quiet:${runId}`)
+      return state(runId)
+    }
     if (data.run.correction) { await resegment(runId, data.run.correction.reason); return state(runId) }
     if (!data.run.snapshot) {
       const snapshot = await prepareMessageContext(data.run, context)
@@ -199,7 +227,10 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       data = await state(runId)
     }
     if (!data.units.length) {
-      const result = await invoke(data, '$', 'S', splitContext(data.run.snapshot))
+      const followup = statusFollowup(data.run.snapshot)
+      const text = data.run.body
+      const fixed = followup?.kind === 'scope' || directedStatusQuestion(text) ? { kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: followup ? `前文状态问句：${data.run.snapshot.history.findLast(item=>item.sourceKey===followup.sourceKey)?.text ?? ''}；补充的问题范围：${text}` : text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] } : undefined
+      const result = await invoke(data, '$', 'S', splitContext(data.run.snapshot), fixed)
       if (!result) return state(runId)
       if (result.kind !== 'split') { await waiting(data, '$', 'S', result); return state(runId) }
       await cmd('message.split', { runId, expectedRevision: revision(data), units: result.units.map((unit, index) => ({ ...unit, unitId: `${runId}:u${index}`, sharedConstraints: result.sharedConstraints })) }, `split:${runId}:${revision(data)}`)
@@ -238,6 +269,12 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         try { await cmd('message.echo.quarantine', { runId: run.runId }, `echo-quarantine:${run.runId}`) }
         catch (error) { if (error.code !== 'MESSAGE_ECHO_QUARANTINE_FORBIDDEN') throw error }
         return
+      }
+      const readonly = await state(run.runId)
+      const retryable = readonly.commands.filter(item => ['status', 'result'].includes(item.kind) && item.status === 'unknown' && item.error === 'INVALID_ARGUMENT' && !item.readonlyRetryCount)
+      if (retryable.length && (run.status === 'pending' || run.status === 'needs_attention' && run.reason === 'recovery_exhausted')) {
+        for (const command of retryable) await cmd('message.command.retry.readonly', { commandId: command.commandId }, `readonly-retry:${command.commandId}`)
+        return process(run.runId)
       }
       if (run.status === 'needs_attention') {
         const stage = run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:S:$:') ? 'S' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:R:') ? 'R' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:I:') ? 'I' : null

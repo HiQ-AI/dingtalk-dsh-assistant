@@ -87,7 +87,8 @@ export function candidateCards(candidates) {
 
 // Host 的 binding.target 是派发时使用的同一身份卡副本，模型只需一份完整关联结果。
 // 此投影不裁剪目标字段、原文、约束或事实；稳定身份仍保留在 binding 顶层。
-export function intentContext(base, binding, facts, responsibility = '') {
+export function intentContext(base, binding, facts, responsibility = '', candidates = []) {
   const { target, ...identity } = binding
-  return { ...base, binding: { ...target, ...identity }, facts, ...(responsibility ? { groupResponsibility: responsibility } : {}) }
+  const summaries = candidates.slice(0,4).map(item => pick(item,['candidateId','engine','taskId','title','state','relevantTime']))
+  return { ...base, binding: { ...target, ...identity }, facts, ...(binding.disposition === 'conversation' ? { candidates: summaries } : {}), ...(responsibility ? { groupResponsibility: responsibility } : {}) }
 }

@@ -12,6 +12,7 @@ import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
 import { tmpdir } from 'node:os'
 import { openExecutionStore } from './execution-store.js'
 import { openWorkflowService } from './workflow-service.js'
+import { notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from './workflow-notifications.js'
 import { readWorkflowSeal, workflowSealPath, inspectLegacyDrain } from './workflow-cutover.js'
 import { join, resolve } from 'node:path'
 
@@ -136,11 +137,11 @@ export async function apply(ctx, config = {}) {
     readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
     notifications: {
       canDisclose: async notification => workflowConfig.groupIds.includes(notification.payload.conversationId) && notification.disclosure.conversationId === notification.payload.conversationId,
-      send: notification => dwsAdapter.sendGroup({ groupId: notification.payload.conversationId, text: notification.payload.text, idempotencyKey: notification.id }),
+      send: notification => sendWorkflowNotification(dwsAdapter, notification),
       readback: async notification => {
         const ack = notification.ack
         let messageId = ack?.messageId ?? ack?.result?.messageId
-        const openTaskId = ack?.sendReceipt?.openTaskId ?? ack?.result?.result?.openTaskId
+        const openTaskId = notificationOpenTaskId(ack)
         if (!messageId && openTaskId) {
           const result = await dwsRunner.run(dwsAdapter.compileSendStatus(openTaskId))
           if (result.exitCode !== 0) return undefined
@@ -151,7 +152,7 @@ export async function apply(ctx, config = {}) {
         }
         if (!messageId) return undefined
         const observed = await dwsAdapter.readMessage(notification.payload.conversationId, messageId)
-        if (observed.text !== notification.payload.text || (observed.conversationId && observed.conversationId !== notification.payload.conversationId)) return undefined
+        if (!sameDeliveredText(observed.text, notification.payload.text, !!notification.payload.sourceMessageId) || (observed.conversationId && observed.conversationId !== notification.payload.conversationId)) return undefined
         return { messageId, conversationId: notification.payload.conversationId, observedAt: new Date().toISOString() }
       },
     },
