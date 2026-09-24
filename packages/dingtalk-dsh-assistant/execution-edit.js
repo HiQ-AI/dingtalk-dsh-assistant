@@ -24,14 +24,13 @@ export function createManagedEdits({ workspaceAdapter }) {
       if (item.isSymbolicLink() || (index < path.split('/').length - 1 ? !item.isDirectory() : !item.isFile())) fail('EDIT_PATH_UNSAFE')
     }
     const bytes = await readFile(full)
-    if (bytes.length > 48000) fail('EDIT_FILE_TOO_LARGE')
     return hash(bytes)
   }
   function validate(prepared) {
     const { digest, ...body } = prepared ?? {}
     if (digest !== executionDigest(body) || body.action !== 'edit' || body.version !== 1 || body.directory !== body.workspace?.directory
       || body.runId !== body.workspace?.runId || body.generation !== body.workspace?.generation || body.requirementDigest !== body.workspace?.requirementDigest
-      || !Array.isArray(body.changes) || !body.changes.length || body.changes.length > 32 || Buffer.byteLength(JSON.stringify(prepared)) > 60000) fail('EDIT_PREPARED_INVALID')
+      || !Array.isArray(body.changes) || !body.changes.length) fail('EDIT_PREPARED_INVALID')
     const paths = new Set()
     for (const change of body.changes) {
       if (!validPath(change.path) || paths.has(change.path.toLowerCase()) || (change.expectedHash !== null && !/^[a-f0-9]{64}$/.test(change.expectedHash))

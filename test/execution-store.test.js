@@ -52,7 +52,7 @@ test('工程索引容量等待仅在旧节点排空且下游未运行时切换�
   const before = await f.query(), args = { runId: 'run', expectedRevision: before.run.revision, fromDigest: d, toDigest: changedDigest,
     nodeRunId: index.nodeRunId, inputRef: 'sha256/index-new.json', inputDigest: changedDigest }
   await rejects(f.store.command(command('run.workflow.migrate-index', { ...args, nodeRunId: 'other' })), 'WORKFLOW_MIGRATION_UNSAFE')
-  await f.store.command(command('run.workflow.migrate-index', args))
+  await f.store.command(command('run.workflow.migrate-index', args, `migrate-index:run:${changedDigest}`))
   const after = await f.query()
   assert.equal(after.run.workflowDigest, changedDigest)
   assert.equal(after.run.status, 'queued')
@@ -60,6 +60,52 @@ test('工程索引容量等待仅在旧节点排空且下游未运行时切换�
   assert.equal(after.nodes[1].inputRef, args.inputRef)
   assert.equal(after.nodes[1].status, 'ready')
   await rejects(f.store.command(command('run.workflow.migrate-index', args)), 'WORKFLOW_MIGRATION_CONFLICT')
+  // 构造旧包已补额度却留下预算耗尽领取回执的快照。
+  await f.store.close()
+  const raw = new DatabaseSync(f.dbPath)
+  const oldNode = after.nodes[1]
+  const exhaustedClaim = `claim:${oldNode.nodeRunId}:${oldNode.leaseEpoch + 1}`
+  raw.prepare('INSERT INTO execution_receipts(command_id,payload_digest,result,created_at) VALUES(?,?,?,?)')
+    .run(exhaustedClaim, d, JSON.stringify({ status: 'budget_exhausted' }), new Date().toISOString())
+  raw.prepare('INSERT INTO execution_receipts(command_id,payload_digest,result,created_at) VALUES(?,?,?,?)')
+    .run(`index-budget:run:${changedDigest}`, d, JSON.stringify({ status: 'applied' }), new Date().toISOString())
+  raw.close(); await f.open(false)
+  await rejects(f.store.command(command('run.workflow.index-budget-lease', { runId: 'run', workflowDigest: changedDigest })), 'WORKFLOW_BUDGET_COMMAND_INVALID')
+  const leaseId = `index-budget-lease:run:${changedDigest}`
+  await f.store.command(command('run.workflow.index-budget-lease', { runId: 'run', workflowDigest: changedDigest }, leaseId))
+  const resumed = await f.query()
+  assert.equal(resumed.nodes[1].status, 'ready')
+  assert.equal(resumed.nodes[1].leaseEpoch, oldNode.leaseEpoch + 1)
+  const next = await f.store.command(command('node.claim', { runId: 'run', nodeId: 'index-files', expectedGeneration: resumed.nodes[1].generation,
+    expectedLeaseEpoch: resumed.nodes[1].leaseEpoch }, `claim:${resumed.nodes[1].nodeRunId}:${resumed.nodes[1].leaseEpoch + 1}`))
+  assert.equal(next.result.status, 'applied')
+  assert.equal(next.result.binding.nodeId, 'index-files')
+  assert.equal((await f.store.command(command('run.workflow.index-budget-lease', { runId: 'run', workflowDigest: changedDigest }, leaseId))).replayed, true)
+})
+test('工程读取节点仅在旧执行已排空且下游未开始时迁移定义', async t => {
+  const names = ['prepare-workspace', 'index-files', 'select-files', 'validate-selection', 'read-files', 'propose-changes', 'apply-changes']
+  const f = await fixture(t, creation(names.map((name, index) => plan(name, index === 2 || index === 5 ? 'agent' : 'code', index === 0))))
+  await f.store.close()
+  const raw = new DatabaseSync(f.dbPath)
+  raw.prepare("UPDATE execution_nodes SET status='succeeded' WHERE run_id='run' AND position<4").run()
+  raw.prepare("UPDATE execution_nodes SET status='waiting',lease_epoch=1,drained=0,input_ref='sha256/old.json',input_digest=?,wait_reason=? WHERE run_id='run' AND node_id='read-files'")
+    .run(d, JSON.stringify({ kind: 'recovery', reference: 'TASK_CONTEXT_TOO_LARGE' }))
+  raw.prepare("UPDATE execution_runs SET status='waiting',recovery_reason='TASK_CONTEXT_TOO_LARGE' WHERE run_id='run'").run()
+  raw.close(); await f.open(false)
+  const read = (await f.query()).nodes[4]
+  const args = { runId: 'run', expectedRevision: 0, fromDigest: d, toDigest: changedDigest,
+    nodeRunId: read.nodeRunId, inputRef: 'sha256/new.json', inputDigest: changedDigest }
+  await rejects(f.store.command(command('run.workflow.migrate-read', { ...args, nodeRunId: 'other' }, `migrate-read:run:${changedDigest}`)), 'WORKFLOW_MIGRATION_UNSAFE')
+  await rejects(f.store.command(command('run.workflow.migrate-read', args, `migrate-read:run:${changedDigest}`)), 'WORKFLOW_MIGRATION_UNSAFE')
+  await f.store.command(command('node.drained', { ...identity(read), evidenceRef: 'sha256/disposed.json' }))
+  await f.store.command(command('run.workflow.migrate-read', args, `migrate-read:run:${changedDigest}`))
+  const state = await f.query()
+  assert.equal(state.run.workflowDigest, changedDigest)
+  assert.equal(state.run.status, 'queued')
+  assert.equal(state.nodes[4].nodeVersion, '2')
+  assert.equal(state.nodes[4].status, 'ready')
+  assert.equal(state.nodes[4].inputRef, args.inputRef)
+  assert.ok(state.nodes.slice(5).every(node => node.status === 'blocked'))
 })
 function child(t, source, args, preload) {
   const execArgs = [...(preload ? ['--import', 'data:text/javascript,' + encodeURIComponent(preload)] : []),

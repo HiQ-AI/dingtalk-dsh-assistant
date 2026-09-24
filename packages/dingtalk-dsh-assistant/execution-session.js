@@ -38,7 +38,7 @@ function validateHistory(events, binding) {
  * 节点只持有本次原生运行句柄。身份/租约来自 Controller；业务完成由 onResult 持久接纳。
  * outputSchema 使用 dsh-tools 支持的 JSON Schema。工具仅提交 { output }，不接受模型身份。
  */
-export function createExecutionSessions({ ctx, isCurrent }) {
+export function createExecutionSessions({ ctx, isCurrent, repositoryInspect }) {
   if (typeof isCurrent !== 'function') throw failure('execution_current_check_required')
   const entries = new Map(), sessions = new Map()
   let closed = false
@@ -71,7 +71,7 @@ export function createExecutionSessions({ ctx, isCurrent }) {
     return agentCtx => {
       const allowed = new Set([...definition.allowedTools, SUBMIT])
       agentCtx.systemPrompt.section({ name: 'execution:node', order: 0, text: definition.prompt, complete: true })
-      agentCtx.tools.restrict({ allow: definition.allowedTools })
+      agentCtx.tools.restrict({ allow: definition.allowedTools.filter(name => name !== 'engineering_repo_inspect') })
       // restrict 只过滤继承工具；单调 guard 同时约束后来注册的 scope-local 工具。
       agentCtx.tools.guard(exec => {
         if (!allowed.has(exec.name)) { halt(entry, 'execution_tool_not_allowed'); return 'execution_tool_not_allowed' }
@@ -107,6 +107,21 @@ export function createExecutionSessions({ ctx, isCurrent }) {
           // 不在工具栈内调用 Controller：原生工具结果与 post-execute 必须先排空。
           exec.concludeTurn()
           return { received: true }
+        },
+      })
+      if (definition.allowedTools.includes('engineering_repo_inspect')) agentCtx.tools.register({
+        name: 'engineering_repo_inspect',
+        description: '在本任务受管仓库中按需列出路径、搜索文本或分段读取文件；返回完整文件 SHA256 用于修改校验。',
+        parameters: { type: 'object', properties: {
+          operation: { type: 'string', enum: ['list', 'search', 'read'] }, query: { type: 'string' }, path: { type: 'string' },
+          offset: { type: 'integer' }, limit: { type: 'integer' },
+        }, required: ['operation'], additionalProperties: false },
+        output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+        async execute(args, exec) {
+          if (typeof repositoryInspect !== 'function') throw failure('execution_repository_inspector_unavailable')
+          if (!await current(entry)) throw failure('execution_binding_stale')
+          exec.signal.throwIfAborted()
+          return repositoryInspect(entry.binding, args, exec.signal, entry.input)
         },
       })
     }

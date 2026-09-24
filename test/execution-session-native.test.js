@@ -30,7 +30,7 @@ const leases = events => [...new Set(events.flatMap(event => event.type === 'din
 async function temp() { await mkdir(artifacts, { recursive: true }); return mkdtemp(join(artifacts, 'run-')) }
 
 // 只有 LlmAdapter 为脚本；每次 Host 都用真实原生 Loop、Tools、文件 JSONL 后端。
-async function host({ root, script = [submit('done')], isCurrent = async () => true } = {}) {
+async function host({ root, script = [submit('done')], isCurrent = async () => true, repositoryInspect } = {}) {
   root ??= await temp()
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
@@ -66,7 +66,7 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
     async execute(_args, exec) { const text = await readFile(join(root, 'fixture.txt'), { encoding: 'utf8', signal: exec.signal }); reads.push(exec.agent.session.id); return { text } },
   })
   ctx.tools.register({ name: 'unsafe_write', description: '用于拒绝测试的副作用', parameters: { type: 'object' }, output, execute() { effects.push('root-write'); return {} } })
-  const manager = createExecutionSessions({ ctx, isCurrent })
+  const manager = createExecutionSessions({ ctx, isCurrent, repositoryInspect })
   return { ctx, root, manager, requests, reads, effects, handles, async close() { await manager.close(); await ctx.fiber.dispose() } }
 }
 
@@ -86,6 +86,17 @@ async function processPhase(root, phase) {
 if (process.argv[2] === '--execution-session-child') {
   await processPhase(process.argv[3], process.argv[4])
 } else {
+  test('工程只读工具在原生节点会话中可用并绑定当前运行身份', async t => {
+    const calls = []
+    const h = await host({ script: [{ name: 'engineering_repo_inspect', args: { operation: 'list', query: 'value' } }, submit('done')],
+      repositoryInspect: async (identity, args) => { calls.push({ identity, args }); return { paths: ['src/value.txt'], total: 1, nextOffset: null } } })
+    t.after(() => h.close())
+    const result = await drive(h, { definition: definition({ allowedTools: ['engineering_repo_inspect'] }) })
+    assert.equal(result.status, 'submitted')
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].identity.runId, 'run')
+    assert.deepEqual(calls[0].args, { operation: 'list', query: 'value' })
+  })
   test('固定reasoningEffort透传到原生Provider请求', async t => {
     const h = await host(); t.after(() => h.close())
     const result = await drive(h, { definition: definition({ reasoningEffort: 'low' }) })

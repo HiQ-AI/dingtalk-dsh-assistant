@@ -61,6 +61,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     .map(workflow => [workflow.id, workflow]))
   const execution = suppliedExecution ?? await openExecutionRuntime({
     ctx, dbPath: config.dbPath, instanceId: config.instanceId, artifactDirectory: config.artifactDirectory,
+    readTools: ['engineering_repo_inspect'], repositoryInspect: engineering.repositoryInspect,
     deliveryOptions: { ...engineering.deliveryOptions,
       ...(selectedExternal.workflows.length ? { externalAdapter: external.operationAdapter, authorizeExternal: external.authorizeExternal } : {}) },
     workflows: async (store, artifacts) => {
@@ -644,7 +645,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       try {
         if (run.status === 'waiting') {
           const state = await store.query({ kind: 'run', runId: run.runId })
-          if (state.nodes?.some(node => node.waitReason?.reference === 'ENGINEERING_VERIFICATION_FAILED')) continue
+          if (state.nodes?.some(node => ['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_INDEX_CAPACITY_EXCEEDED', 'EXECUTION_BUDGET_EXHAUSTED', 'EDIT_PREPARED_INVALID', 'ENGINEERING_EDIT_SCOPE_MISMATCH'].includes(node.waitReason?.reference))) continue
         }
         await controller.recover({ commandId: `recover:${run.runId}:${run.revision}:${run.claimCount}`, runId: run.runId })
       }
@@ -656,13 +657,16 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     // 三条恢复通路独立：消息等模型或投递等连接器时，不占住其它通路下一轮恢复。
     const results = await Promise.allSettled([
       messageRecoveryFlight ??= messages.recover().finally(() => { messageRecoveryFlight = undefined }),
-      taskRecoveryFlight ??= recoverTasks().finally(() => { taskRecoveryFlight = undefined }),
+      recoverExecutionTasks(),
       notifier.flush(),
     ])
     const failures = results.flatMap((result, index) => result.status === 'rejected'
       ? [{ scope: ['messages', 'tasks', 'notifications'][index], code: result.reason.code ?? result.reason.message }]
       : index === 1 ? result.value : [])
     return { failures }
+  }
+  function recoverExecutionTasks() {
+    return taskRecoveryFlight ??= recoverTasks().finally(() => { taskRecoveryFlight = undefined })
   }
   function workflowCatalogState() {
     const repositories = engineering.availableWorkflows().map(item => item.repositoryId)
@@ -737,7 +741,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, builtInWorkflows: [taskProgressQueryDefinition], workflows: workflowCatalogState() }),
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,
       messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },
-    recover: recoverAll,
+    recover: recoverAll, recoverExecutionTasks,
     async close() { closed = true; await messages.close(); if (!suppliedExecution) await execution.close() },
   }
 }

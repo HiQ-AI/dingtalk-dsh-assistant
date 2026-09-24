@@ -192,9 +192,14 @@ export async function apply(ctx, config = {}) {
     }
     const legacyCreateTask = runtime.createTask
     runtime.createTask = args => workflow.isGroup(args.groupId) ? Promise.reject(new Error('workflow_group_use_message_input')) : legacyCreateTask(args)
-    await workflow.recover()
+    const taskFailures = await workflow.recoverExecutionTasks()
+    for (const failure of taskFailures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)
   }
-  const workflowTimer = workflow ? setInterval(() => { workflow.recover().catch(error => ctx.logger.warn(error.message)) }, 5000) : null
+  const recoverWorkflow = () => workflow.recover().then(result => {
+    for (const failure of result.failures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)
+  }).catch(error => ctx.logger.warn(error.message))
+  if (workflow) void recoverWorkflow()
+  const workflowTimer = workflow ? setInterval(recoverWorkflow, 5000) : null
   workflowTimer?.unref()
   runtime.setGroupMessageReader(async (groupId, messageId) => {
     const message = await dwsAdapter.readMessage(groupId, messageId)

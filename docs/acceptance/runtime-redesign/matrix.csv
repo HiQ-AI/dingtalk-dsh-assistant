@@ -101,3 +101,9 @@ REJECTED_FACT_REPROCESS,32,prepared-only-notification-superseded,PASS,round-32.m
 FULL_REGRESSION,32,repository-test-suite-893-tests,PASS,round-32.md
 NOTIFICATION_IMMUTABLE,32,changed-responsibility-does-not-block-prepared-notice,PASS,round-32.md
 LOCAL_CUTOVER,32,exact-package-and-historical-readback,PASS,round-32.md
+DIRECT_ENGINEERING_FLOW,33,new-node-order-and-native-read-tool,PASS,round-33.md
+GUARDED_REPLAN,33,old-run-supersession-without-edit-effect,PASS,round-33.md
+READ_SCOPE,33,path-filter-chunk-read-and-out-of-scope-rejection,PASS,round-33.md
+LOCAL_RUNTIME,33,exact-package-health-and-generation-two-readback,PASS,round-33.md
+NORMALIZATION_BUSINESS_FIX,33,repository-admission-and-nonempty-change,BLOCKED,round-33.md
+OBSERVER_LABEL,33,installed-label-and-browser-readback,PASS,round-33.md

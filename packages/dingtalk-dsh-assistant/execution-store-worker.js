@@ -304,7 +304,11 @@ function coreCommand(command, now) {
     if (!recovering.length) fail('RUN_NOT_RECOVERING')
     if (recovering.some(n => !n.drained)) fail('NODE_NOT_DRAINED')
     assertRunEffectsDrained(db, r.run_id)
-    for (const n of recovering) db.prepare("UPDATE execution_nodes SET status='ready',wait_reason=NULL WHERE node_run_id=?").run(n.node_run_id)
+    for (const n of recovering) {
+      const exhausted = JSON.parse(n.wait_reason).reference === 'EXECUTION_BUDGET_EXHAUSTED'
+      db.prepare("UPDATE execution_nodes SET status='ready',wait_reason=NULL,lease_epoch=lease_epoch+? WHERE node_run_id=?")
+        .run(exhausted ? 1 : 0, n.node_run_id)
+    }
     db.prepare("UPDATE execution_runs SET status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?").run(now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
@@ -323,9 +327,94 @@ function coreCommand(command, now) {
     assertRunEffectsDrained(db, r.run_id)
     db.prepare("UPDATE execution_nodes SET node_version='2',input_ref=?,input_digest=?,status='ready',wait_reason=NULL WHERE node_run_id=?")
       .run(a.inputRef, a.inputDigest, a.nodeRunId)
-    db.prepare("UPDATE execution_nodes SET node_version='2' WHERE run_id=? AND current=1 AND node_id IN ('select-files','validate-selection')").run(r.run_id)
+    db.prepare("UPDATE execution_nodes SET node_version='2' WHERE run_id=? AND current=1 AND node_id IN ('select-files','validate-selection','read-files')").run(r.run_id)
+    db.prepare("UPDATE execution_runs SET workflow_digest=?,revision=revision+1,max_claims=max_claims+?,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
+      .run(a.toDigest, r.claim_count >= r.max_claims ? current.length * 3 : 0, now, r.run_id)
+    return { status: 'applied', run: runDto(getRun(r.run_id)) }
+  }
+  if (command.kind === 'run.workflow.migrate-read') {
+    object(a, ['runId', 'expectedRevision', 'fromDigest', 'toDigest', 'nodeRunId', 'inputRef', 'inputDigest'])
+    digest(a.fromDigest, 'fromDigest'); digest(a.toDigest, 'toDigest'); ref(a.inputRef, 'inputRef'); digest(a.inputDigest, 'inputDigest')
+    if (command.id !== `migrate-read:${a.runId}:${a.toDigest}`) fail('WORKFLOW_MIGRATION_COMMAND_INVALID')
+    const r = activeRun(a), current = nodes(r.run_id), index = current.findIndex(n => n.node_id === 'read-files')
+    if (r.revision !== integer(a.expectedRevision, 'expectedRevision') || r.workflow_digest !== a.fromDigest || a.fromDigest === a.toDigest
+      || index < 0 || current[index].node_run_id !== a.nodeRunId || current[index].node_version !== '1'
+      || current[index].status !== 'waiting' || !current[index].drained || current[index].executor !== 'code'
+      || !['controller-restarted', 'TASK_CONTEXT_TOO_LARGE'].includes(JSON.parse(current[index].wait_reason ?? 'null')?.reference)
+      || current.slice(0, index).some(n => n.status !== 'succeeded')
+      || current.slice(index + 1).some(n => n.status !== 'blocked' || n.lease_epoch !== 0)
+      || pendingInputs(r.run_id).length) fail('WORKFLOW_MIGRATION_UNSAFE')
+    assertRunEffectsDrained(db, r.run_id)
+    db.prepare("UPDATE execution_nodes SET node_version='2',input_ref=?,input_digest=?,status='ready',wait_reason=NULL WHERE node_run_id=?")
+      .run(a.inputRef, a.inputDigest, a.nodeRunId)
     db.prepare("UPDATE execution_runs SET workflow_digest=?,revision=revision+1,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
       .run(a.toDigest, now, r.run_id)
+    return { status: 'applied', run: runDto(getRun(r.run_id)) }
+  }
+  if (command.kind === 'run.workflow.index-budget') {
+    object(a, ['runId', 'workflowDigest'])
+    digest(a.workflowDigest, 'workflowDigest')
+    if (command.id !== `index-budget:${a.runId}:${a.workflowDigest}`) fail('WORKFLOW_BUDGET_COMMAND_INVALID')
+    const r = activeRun(a), current = nodes(r.run_id), index = current.findIndex(n => n.node_id === 'index-files')
+    const migrated = db.prepare('SELECT command_id FROM execution_receipts WHERE command_id=?').get(`migrate-index:${a.runId}:${a.workflowDigest}`)
+    if (!migrated || r.workflow_digest !== a.workflowDigest || r.claim_count !== r.max_claims || index < 0
+      || current[index].node_version !== '2' || current[index].status !== 'waiting' || !current[index].drained
+      || JSON.parse(current[index].wait_reason ?? 'null')?.reference !== 'EXECUTION_BUDGET_EXHAUSTED'
+      || current.slice(0, index).some(n => n.status !== 'succeeded') || current.slice(index + 1).some(n => n.status !== 'blocked' || n.lease_epoch !== 0)) fail('WORKFLOW_BUDGET_EXTENSION_UNSAFE')
+    assertRunEffectsDrained(db, r.run_id)
+    // 预算耗尽的领取命令已有持久回执；推进代次，避免下次领取复用其命令 ID。
+    db.prepare("UPDATE execution_nodes SET lease_epoch=lease_epoch+1,status='ready',wait_reason=NULL WHERE node_run_id=?").run(current[index].node_run_id)
+    db.prepare("UPDATE execution_runs SET max_claims=max_claims+?,revision=revision+1,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
+      .run(current.length * 3, now, r.run_id)
+    return { status: 'applied', run: runDto(getRun(r.run_id)) }
+  }
+  if (command.kind === 'run.workflow.index-budget-lease') {
+    object(a, ['runId', 'workflowDigest'])
+    digest(a.workflowDigest, 'workflowDigest')
+    if (command.id !== `index-budget-lease:${a.runId}:${a.workflowDigest}`) fail('WORKFLOW_BUDGET_COMMAND_INVALID')
+    const r = activeRun(a), current = nodes(r.run_id), index = current.findIndex(n => n.node_id === 'index-files')
+    const budget = db.prepare('SELECT result FROM execution_receipts WHERE command_id=?').get(`index-budget:${a.runId}:${a.workflowDigest}`)
+    const node = current[index]
+    const staleClaim = node && db.prepare('SELECT result FROM execution_receipts WHERE command_id=?')
+      .get(`claim:${node.node_run_id}:${node.lease_epoch + 1}`)
+    if (!budget || JSON.parse(budget.result)?.status !== 'applied' || !node || r.workflow_digest !== a.workflowDigest
+      || r.status !== 'queued' || r.claim_count >= r.max_claims || node.node_version !== '2' || node.status !== 'ready' || !node.drained
+      || JSON.parse(staleClaim?.result ?? 'null')?.status !== 'budget_exhausted'
+      || current.slice(0, index).some(n => n.status !== 'succeeded') || current.slice(index + 1).some(n => n.status !== 'blocked' || n.lease_epoch !== 0)) fail('WORKFLOW_BUDGET_LEASE_UNSAFE')
+    assertRunEffectsDrained(db, r.run_id)
+    db.prepare('UPDATE execution_nodes SET lease_epoch=lease_epoch+1 WHERE node_run_id=?').run(node.node_run_id)
+    db.prepare('UPDATE execution_runs SET revision=revision+1,updated_at=? WHERE run_id=?').run(now, r.run_id)
+    return { status: 'applied', run: runDto(getRun(r.run_id)) }
+  }
+  if (command.kind === 'run.workflow.replan-direct') {
+    object(a, ['runId', 'expectedRevision', 'fromDigest', 'toDigest', 'inputRef', 'inputDigest', 'nodes'])
+    digest(a.fromDigest, 'fromDigest'); digest(a.toDigest, 'toDigest'); ref(a.inputRef, 'inputRef'); digest(a.inputDigest, 'inputDigest')
+    if (command.id !== `replan-direct:${a.runId}:${a.toDigest}`) fail('WORKFLOW_MIGRATION_COMMAND_INVALID')
+    const r = activeRun(a), current = nodes(r.run_id)
+    if (r.revision !== integer(a.expectedRevision, 'expectedRevision') || r.generation !== 1 || r.workflow_digest !== a.fromDigest || a.fromDigest === a.toDigest
+      || current.length < 4 || current[0].node_id !== 'prepare-generation' || current[1].node_id !== 'prepare-workspace'
+      || current.slice(0, 2).some(n => n.status !== 'succeeded') || current.slice(2).some(n => !n.drained)
+      || !current.some(n => n.status === 'waiting' && JSON.parse(n.wait_reason ?? 'null')?.reference === 'EDIT_PREPARED_INVALID')
+      || pendingInputs(r.run_id).length) fail('WORKFLOW_MIGRATION_UNSAFE')
+    if (!Array.isArray(a.nodes) || a.nodes.length < 4 || a.nodes.length > 32
+      || a.nodes[0]?.nodeId !== 'prepare-generation' || a.nodes[1]?.nodeId !== 'prepare-workspace'
+      || a.nodes[2]?.nodeId !== 'inspect-and-propose') fail('INVALID_NODE_PLAN')
+    a.nodes.forEach((node, index) => {
+      object(node, ['nodeId', 'nodeVersion', 'executor', 'inputRef', 'inputDigest'])
+      text(node.nodeId, 'nodeId'); text(node.nodeVersion, 'nodeVersion')
+      if (!['code', 'agent'].includes(node.executor) || (index === 0) !== (node.inputRef !== null)) fail('INVALID_NODE_PLAN')
+      inputPair(node, index === 0)
+    })
+    if (a.nodes[0].inputRef !== a.inputRef || a.nodes[0].inputDigest !== a.inputDigest
+      || !db.prepare('SELECT digest FROM message_workflows WHERE digest=?').get(a.toDigest)
+      || new Set(a.nodes.map(node => node.nodeId)).size !== a.nodes.length
+      || db.prepare("SELECT effect_id FROM execution_effects WHERE run_id=? AND node_id<>'prepare-workspace' LIMIT 1").get(r.run_id)) fail('WORKFLOW_MIGRATION_UNSAFE')
+    assertRunEffectsDrained(db, r.run_id)
+    db.prepare("UPDATE execution_nodes SET current=0,status='superseded' WHERE run_id=? AND current=1").run(r.run_id)
+    a.nodes.forEach((node, index) => addNode(r.run_id, node, index, r.generation + 1, index === 0 ? 'ready' : 'blocked'))
+    // 单次迁移补足新节点的领取次数，仍保留有限上限与原始 claim_count。
+    db.prepare("UPDATE execution_runs SET workflow_digest=?,revision=revision+1,generation=generation+1,max_claims=max_claims+?,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
+      .run(a.toDigest, a.nodes.length * 3, now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
   if (command.kind === 'node.claim') {

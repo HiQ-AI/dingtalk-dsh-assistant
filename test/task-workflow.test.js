@@ -15,6 +15,26 @@ import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/exec
 import { createGitDelivery } from '../packages/dingtalk-dsh-assistant/execution-git.js'
 import { createGithubPullRequests } from '../packages/dingtalk-dsh-assistant/execution-pr.js'
 
+test('工程读取节点可交接超过旧 48KB 限额的完整文件材料', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-task-large-read-'))
+  const source = join(directory, 'source')
+  await mkdir(source)
+  const exec = promisify(execFile), git = async (...args) => (await exec('git', ['-C', source, ...args], { windowsHide: true })).stdout.trim()
+  await git('init', '-b', 'main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid')
+  const content = 'a'.repeat(225000)
+  await writeFile(join(source, 'large.txt'), content); await git('add', 'large.txt'); await git('commit', '-m', 'base')
+  const workspaceAdapter = { prepare: async () => ({ directory: source }), reconcile: async () => ({ status: 'succeeded' }) }
+  const workflow = createEngineeringTaskWorkflow({ provider: 'test', model: 'synthetic', workspaceAdapter,
+    editAdapter: {}, checks: [{ id: 'noop', version: '1', run: async () => ({ passed: true, log: '' }) }], adapterIdentity: source })
+  const result = await workflow.nodes.find(node => node.id === 'read-files').execute({
+    input: { request: '检查大文件', constraints: [], baseCommit: await git('rev-parse', 'HEAD'), editablePaths: ['large.txt'] },
+    runId: 'large-run', generation: 1, requirementDigest: 'a'.repeat(64), signal: new AbortController().signal,
+  })
+  assert.equal(result.files[0].text, content)
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  assert.equal((await artifacts.read((await artifacts.put(result)).ref)).files[0].text, content)
+})
+
 for (const wrongEvidence of [false, true]) test(`固定分析工作流：真实控制账和工件交接，${wrongEvidence ? '拒绝未知证据' : '完成三个节点'}`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-task-workflow-'))
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'analysis', initialize: true })

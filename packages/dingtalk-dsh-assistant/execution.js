@@ -12,13 +12,13 @@ export const name = 'dingtalk-execution-foundation'
 export const inject = ['executionWorkflows', 'agents', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'llm', 'tools', 'systemPrompt']
 
 /** 独立入口；不读取、写回或迁移旧resident的Task账。 */
-export async function openExecutionRuntime({ ctx, dbPath, instanceId, artifactDirectory, initialize = false, workflows, historicalWorkflows = [], deliveryOptions, readTools = [], maxConcurrentRuns = 4, changeQuietMs, maxChangeDelayMs }) {
+export async function openExecutionRuntime({ ctx, dbPath, instanceId, artifactDirectory, initialize = false, workflows, historicalWorkflows = [], deliveryOptions, readTools = [], repositoryInspect, maxConcurrentRuns = 4, changeQuietMs, maxChangeDelayMs }) {
   const store = await openExecutionStore({ dbPath, instanceId, initialize })
   let sessions, controller
   try {
     const artifacts = await openExecutionArtifacts({ directory: artifactDirectory, initialize })
     const delivery = deliveryOptions ? createExecutionDelivery({ ...deliveryOptions, store, artifacts }) : undefined
-    sessions = createExecutionSessions({ ctx, isCurrent: binding => controller.isCurrent(binding) })
+    sessions = createExecutionSessions({ ctx, isCurrent: binding => controller.isCurrent(binding), repositoryInspect })
     const definitions = typeof workflows === 'function' ? await workflows(store, artifacts) : { workflows, historicalWorkflows }
     controller = createExecutionController({ store, artifacts, sessions, delivery, ...definitions, readTools, maxConcurrentRuns,
       ...(changeQuietMs === undefined ? {} : { changeQuietMs }), ...(maxChangeDelayMs === undefined ? {} : { maxChangeDelayMs }),

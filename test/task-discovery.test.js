@@ -11,9 +11,114 @@ import { createExecutionController, defineExecutionWorkflow } from '../packages/
 import { createManagedWorkspaces } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
 import { createManagedEdits } from '../packages/dingtalk-dsh-assistant/execution-edit.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
-import { createEngineeringTaskWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
+import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
 import { createEngineeringRegistry } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { createHash } from 'node:crypto'
+
+test('新工程流程直接按需读取并提交修改，不再生成目录索引或文件选择节点', { timeout: 120000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-direct-')), source = join(directory, 'source'), root = join(directory, 'managed')
+  await mkdir(source); await mkdir(join(source, 'src')); await mkdir(root)
+  const exec = promisify(execFile), git = async (...args) => (await exec('git', ['-C', source, ...args], { windowsHide: true })).stdout.trim()
+  await git('init', '-b', 'main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid')
+  await writeFile(join(source, 'src/value.txt'), 'old'); await git('add', '.'); await git('commit', '-m', 'base')
+  const baseCommit = await git('rev-parse', 'HEAD'), store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'direct', initialize: true })
+  t.after(() => store.close())
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  const workspaceAdapter = await createManagedWorkspaces({ root, sourceRepository: source }), editAdapter = createManagedEdits({ workspaceAdapter })
+  const delivery = createExecutionDelivery({ store, artifacts, workspaceAdapter, editAdapter, authorize: async () => ({ principalId: 'owner', authorizationRef: 'grant' }) })
+  const workflow = createEngineeringDirectWorkflow({ provider: 'test', model: 'synthetic', workspaceAdapter, editAdapter, adapterIdentity: source,
+    discovery: { allowedPrefixes: ['src/'] }, checks: [{ id: 'check', version: '1', run: async snapshot => ({ passed: (await snapshot.readFile('src/value.txt')).toString() === 'new', log: 'verified' }) }] })
+  assert.deepEqual(workflow.nodes.map(node => node.id), ['prepare-workspace', 'inspect-and-propose', 'apply-changes', 'verify-candidate'])
+  const sessions = { async run({ definition, onSessionBound, onResult }) {
+    assert.deepEqual(definition.allowedTools, ['engineering_repo_inspect'])
+    await onSessionBound()
+    await onResult({ changes: [{ path: 'src/value.txt', expectedHash: createHash('sha256').update('old').digest('hex'), content: 'new' }] })
+  }, async cancel() {}, async close() {} }
+  const controller = createExecutionController({ store, artifacts, sessions, delivery, workflows: [workflow], readTools: ['engineering_repo_inspect'] })
+  t.after(() => controller.close())
+  await controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: 'task-engineering',
+    input: { request: 'update', constraints: [], baseCommit, editablePaths: [] } })
+  const state = await controller.whenIdle('run')
+  assert.equal(state.run.status, 'succeeded')
+  assert.equal((await readFile(join(source, 'src/value.txt'), 'utf8')), 'old')
+  assert.equal(state.nodes.some(node => node.nodeId === 'index-files'), false)
+})
+
+test('旧工程失败节点仅在排空且无编辑效果时切换到新流程并保留历史', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-direct-replan-'))
+  const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'direct-replan', initialize: true })
+  t.after(() => store.close())
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  const oldDigest = 'a'.repeat(64), newDigest = 'b'.repeat(64), requirement = await artifacts.put({ request: 'fix' })
+  const oldInput = await artifacts.put({ workflowDigest: oldDigest, nodeId: 'prepare-generation', nodeVersion: '1', requirementRef: requirement.ref, data: { request: 'fix' } })
+  const newInput = await artifacts.put({ workflowDigest: newDigest, nodeId: 'prepare-generation', nodeVersion: '1', requirementRef: requirement.ref, data: { request: 'fix' } })
+  for (const [id, version, digest] of [['old', '5', oldDigest], ['new', '6', newDigest]])
+    await store.command({ id, kind: 'workflow.register', args: { workflowId: 'task-engineering-test', definitionVersion: version, digest, config: {} } })
+  const names = ['prepare-generation', 'prepare-workspace', 'index-files', 'apply-changes']
+  await store.command({ id: 'create', kind: 'run.create', args: { runId: 'run', taskId: 'task', workflowId: 'task-engineering-test', workflowDigest: oldDigest,
+    requirementRef: requirement.ref, maxClaims: 3, nodes: names.map((nodeId, index) => ({ nodeId, nodeVersion: '1', executor: 'code',
+      inputRef: index ? null : oldInput.ref, inputDigest: index ? null : oldInput.digest })) } })
+  for (let index = 0; index < 3; index++) {
+    const nodeId = names[index], claimed = (await store.command({ id: `claim-${index}`, kind: 'node.claim', args: {
+      runId: 'run', nodeId, expectedGeneration: 1, expectedLeaseEpoch: 0 } })).result.binding
+    await store.command({ id: `drain-${index}`, kind: 'node.drained', args: { runId: 'run', nodeId, generation: 1, leaseEpoch: 1, evidenceRef: requirement.ref } })
+    await store.command({ id: `commit-${index}`, kind: 'node.commit', args: { runId: 'run', nodeId, generation: 1, leaseEpoch: 1,
+      inputDigest: claimed.inputDigest, outcome: index === 2 ? 'waiting' : 'succeeded', evidenceRefs: [],
+      ...(index === 2 ? { waitReason: { kind: 'recovery', reference: 'EDIT_PREPARED_INVALID' } }
+        : { outputRef: requirement.ref, nextInput: { nodeId: names[index + 1], inputRef: oldInput.ref, inputDigest: oldInput.digest } }) } })
+  }
+  const before = await store.query({ kind: 'run', runId: 'run' })
+  await store.command({ id: `replan-direct:run:${newDigest}`, kind: 'run.workflow.replan-direct', args: {
+    runId: 'run', expectedRevision: before.run.revision, fromDigest: oldDigest, toDigest: newDigest,
+    inputRef: newInput.ref, inputDigest: newInput.digest,
+    nodes: ['prepare-generation', 'prepare-workspace', 'inspect-and-propose', 'apply-changes', 'verify-candidate'].map((nodeId, index) => ({ nodeId, nodeVersion: '1', executor: index === 2 ? 'agent' : 'code',
+      inputRef: index ? null : newInput.ref, inputDigest: index ? null : newInput.digest })),
+  } })
+  const after = await store.query({ kind: 'run', runId: 'run', includeHistory: true })
+  assert.equal(after.run.workflowDigest, newDigest)
+  assert.equal(after.run.maxClaims, 18)
+  assert.deepEqual(after.nodes.map(node => node.nodeId), ['prepare-generation', 'prepare-workspace', 'inspect-and-propose', 'apply-changes', 'verify-candidate'])
+  assert.equal(after.nodes[0].status, 'ready')
+  assert.equal(after.run.generation, 2)
+  assert.equal(after.nodeHistory.some(node => node.nodeId === 'index-files' && node.status === 'superseded'), true)
+})
+
+test('按需检索支持路径缩小范围与四千字符读取，拒绝越权路径', { timeout: 120000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-inspect-')), source = join(directory, 'source'), root = join(directory, 'managed')
+  await mkdir(source); await mkdir(join(source, 'src')); await mkdir(root)
+  const exec = promisify(execFile), git = async (...args) => (await exec('git', ['-C', source, ...args], { windowsHide: true })).stdout.trim()
+  await git('init', '-b', 'main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid')
+  await writeFile(join(source, 'src/value.txt'), 'v'.repeat(5000)); await writeFile(join(source, 'outside.txt'), 'hidden')
+  await git('add', '.'); await git('commit', '-m', 'base')
+  const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'inspect', initialize: true }); t.after(() => store.close())
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  const registry = createEngineeringRegistry({ ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }),
+    author: { name: 'Test', email: 'test@example.invalid' }, repositories: [{ id: 'repo', sourceRepository: source, managedRoot: root,
+      remote: 'https://github.com/example/repo.git', githubRepository: 'example/repo', baseRef: 'main', editablePaths: [], discovery: { allowedPrefixes: ['src/'] },
+      checks: [{ id: 'check', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }] }] })
+  await registry.restore(store, artifacts)
+  let workflow
+  const task = await registry.prepareTask({ taskId: 'task', arguments: { objective: 'update', repositoryId: 'repo' } },
+    { run: { actorId: 'owner' }, commandId: 'command', unit: { constraints: [], sharedConstraints: [] } }, { registerWorkflow(value) { workflow = value } })
+  const definition = defineExecutionWorkflow(workflow), requirement = await artifacts.put(task.input)
+  const first = await artifacts.put({ workflowDigest: definition.digest, nodeId: workflow.nodes[0].id,
+    nodeVersion: workflow.nodes[0].version, requirementRef: requirement.ref, data: task.input })
+  await store.command({ id: 'create', kind: 'run.create', args: { runId: task.runId, taskId: task.taskId, workflowId: task.workflowId,
+    workflowDigest: definition.digest, requirementRef: requirement.ref,
+    nodes: workflow.nodes.map((node, index) => ({ nodeId: node.id, nodeVersion: node.version, executor: node.executor,
+      inputRef: index ? null : first.ref, inputDigest: index ? null : first.digest })) } })
+  const workspaceAdapter = await createManagedWorkspaces({ root, sourceRepository: source })
+  const prepared = await workspaceAdapter.prepare({ runId: task.runId, generation: 1, requirementDigest: executionDigest(task.input), baseCommit: task.input.baseCommit })
+  await workspaceAdapter.execute(prepared)
+  const binding = { runId: task.runId, taskId: task.taskId, generation: 1, inputDigest: first.digest, requirementDigest: executionDigest(task.input) }
+  const listed = await registry.repositoryInspect(binding, { operation: 'list', path: 'src/', query: 'value' }, undefined, task.input)
+  assert.deepEqual(listed.paths, ['src/value.txt'])
+  const read = await registry.repositoryInspect(binding, { operation: 'read', path: 'src/value.txt', limit: 4000 }, undefined, task.input)
+  assert.equal(read.text.length, 4000); assert.equal(read.nextOffset, 4000)
+  await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', path: 'outside.txt' }, undefined, task.input), { code: 'ENGINEERING_READ_PATH_INVALID' })
+  await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', path: '../outside.txt' }, undefined, task.input), { code: 'ENGINEERING_READ_ARGUMENT_INVALID' })
+})
 
 for (const escalate of [false, true]) test(`发现选择流程：${escalate ? '后续Agent不能篡改已持久选择范围' : 'Host索引选择后读取，允许计划中新文件'}`, { timeout: 120000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-discovery-')), source = join(directory, 'source'), root = join(directory, 'managed')

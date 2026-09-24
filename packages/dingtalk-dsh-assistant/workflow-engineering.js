@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { mkdir, realpath } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
@@ -9,7 +10,8 @@ import { createManagedEdits } from './execution-edit.js'
 import { createGitDelivery } from './execution-git.js'
 import { createGithubPullRequests } from './execution-pr.js'
 import { createVerificationJobCheck } from './execution-check-job.js'
-import { createEngineeringTaskWorkflow } from './task-workflow.js'
+import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow } from './task-workflow.js'
+import { freezeCandidate, readCandidate } from './execution-candidate.js'
 
 const exec = promisify(execFile)
 const fail = code => { throw executionError(code) }
@@ -22,7 +24,7 @@ const githubName = remote => /^https:\/\/github\.com\/([a-zA-Z0-9_.-]+\/[a-zA-Z0
 export function createEngineeringRegistry({ repositories = [], ownerActorId, modelConfig, author, ghCommand }) {
   text(ownerActorId, 'ENGINEERING_OWNER_REQUIRED')
   if (!Array.isArray(repositories) || typeof modelConfig !== 'function') fail('ENGINEERING_REGISTRY_CONFIG_INVALID')
-  const configs = new Map(), routes = new Map(), preparing = new Map()
+  const configs = new Map(), routes = new Map(), preparing = new Map(), snapshots = new Map()
   for (const source of repositories) {
     const config = structuredClone(source)
     const fixedPaths = Array.isArray(config.editablePaths) && config.editablePaths.length > 0
@@ -43,7 +45,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     configs.set(config.id, { config, digest: executionDigest({ config, ghCommand: ghCommand ?? null, author: author ?? null }) })
   }
   let store
-  async function build(record, { allowIndexMigration = false } = {}) {
+  async function build(record, { allowDefinitionMigration = false } = {}) {
     const saved = record.config, entry = configs.get(saved.repoId)
     if (saved.kind !== 'engineering' || saved.registryVersion !== '1' || !entry || saved.repositoryDigest !== entry.digest || saved.ownerActorId !== ownerActorId) fail('ENGINEERING_DEFINITION_CONFIG_DRIFT')
     const config = entry.config
@@ -98,11 +100,12 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       return { ...input, baseCommit: prior?.commitId ?? saved.input.baseCommit, expectedRemoteSha }
     }
     const checks = config.checks.map(check => createVerificationJobCheck({ ...check, root: join(config.managedRoot, 'checks') }))
-    const workflow = createEngineeringTaskWorkflow({ workflowId: record.workflowId, provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort,
+    const workflowFactory = config.discovery && (!record.definitionVersion || record.definitionVersion === '6') ? createEngineeringDirectWorkflow : createEngineeringTaskWorkflow
+    const workflow = workflowFactory({ workflowId: record.workflowId, provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort,
       workspaceAdapter, editAdapter, checks, prepareGeneration, adapterIdentity: saved.repositoryDigest, discovery: config.discovery,
       deliveryPlan: { identity: executionDigest(saved), gitAdapterFor, prAdapterFor, date: saved.date, title: saved.title, body: saved.body, commitMessage: saved.title, expectedRemoteSha: null } })
     const definition = defineExecutionWorkflow(workflow)
-    if (record.digest && definition.digest !== record.digest && !allowIndexMigration) fail('ENGINEERING_DEFINITION_DRIFT')
+    if (record.digest && definition.digest !== record.digest && !allowDefinitionMigration) fail('ENGINEERING_DEFINITION_DRIFT')
     routes.set(saved.runId, { record: { ...record, digest: definition.digest, definitionVersion: workflow.version }, workflow, workspaceAdapter, editAdapter, gitAdapterFor, prAdapterFor, root: canonicalRoot })
     return { workflow, definition }
   }
@@ -111,6 +114,45 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       && (prepared.directory ?? prepared.repository) === join(item.root, `ws-${executionDigest({ runId: item.record.config.runId, generation: prepared.generation })}`, 'repository'))
     if (found.length !== 1) fail('ENGINEERING_DELIVERY_SCOPE_INVALID')
     return found[0]
+  }
+  async function repositoryInspect(binding, args, signal, input) {
+    const item = routes.get(binding.runId), saved = item?.record.config, config = configs.get(saved?.repoId)?.config
+    if (!saved || !config?.discovery || item.record.definitionVersion !== '6' || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
+    const { operation, query = '', path, offset = 0, limit = operation === 'read' ? 8000 : 100 } = args
+    if (!['list', 'search', 'read'].includes(operation) || !Number.isSafeInteger(offset) || offset < 0
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > (operation === 'read' ? 16000 : 200)
+      || typeof query !== 'string' || query.length > 256
+      || (path !== undefined && (typeof path !== 'string' || /[\\:\0\r\n]/.test(path) || path.split('/').some(part => ['.', '..', '.git'].includes(part.toLowerCase()))))) fail('ENGINEERING_READ_ARGUMENT_INVALID')
+    const key = `${binding.runId}:${binding.generation}:${binding.inputDigest}`
+    let snapshot = snapshots.get(key)
+    if (!snapshot) {
+      const state = await store.query({ kind: 'run', runId: binding.runId })
+      if (state.run.generation !== binding.generation || state.run.workflowDigest !== item.record.digest) fail('ENGINEERING_READ_STALE')
+      const workspace = await item.workspaceAdapter.prepare({ runId: binding.runId, generation: binding.generation,
+        requirementDigest: binding.requirementDigest, baseCommit: input.baseCommit })
+      if ((await item.workspaceAdapter.reconcile(workspace)).status !== 'succeeded') fail('WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED')
+      snapshot = await readCandidate(await freezeCandidate({ repository: workspace.directory, baseCommit: input.baseCommit,
+        generation: binding.generation, requirementDigest: binding.requirementDigest }))
+      snapshots.set(key, snapshot)
+      if (snapshots.size > 8) snapshots.delete(snapshots.keys().next().value)
+    }
+    signal?.throwIfAborted()
+    const allowed = value => config.discovery.allowedPrefixes.some(prefix => value.startsWith(prefix))
+    const files = snapshot.files.filter(file => allowed(file.path) && (operation === 'read' || !path || file.path.startsWith(path)))
+    if (operation === 'read') {
+      const file = files.find(file => file.path === path)
+      if (!file) fail('ENGINEERING_READ_PATH_INVALID')
+      const bytes = await snapshot.readFile(path), content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+      const text = content.slice(offset, offset + limit)
+      return { path, text, expectedHash: createHash('sha256').update(bytes).digest('hex'), offset, nextOffset: offset + text.length < content.length ? offset + text.length : null, totalChars: content.length }
+    }
+    const matches = []
+    for (const file of files) {
+      signal?.throwIfAborted()
+      if (operation === 'list' ? file.path.toLowerCase().includes(query.toLowerCase())
+        : (await snapshot.readFile(file.path)).toString('utf8').toLowerCase().includes(query.toLowerCase())) matches.push(file.path)
+    }
+    return { paths: matches.slice(offset, offset + limit), total: matches.length, nextOffset: offset + limit < matches.length ? offset + limit : null }
   }
   const deliveryOptions = {
     workspaceAdapter: { execute: prepared => route(prepared).workspaceAdapter.execute(prepared), reconcile: prepared => route(prepared).workspaceAdapter.reconcile(prepared) },
@@ -154,6 +196,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
   }
   return {
     deliveryOptions,
+    repositoryInspect,
     async restore(controlStore, artifacts) {
       store = controlStore
       const result = []
@@ -162,10 +205,55 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
         const state = await store.query({ kind: 'run', runId: record.config.runId })
         // 旧定义保留在账中供审计；只有当前运行绑定的定义需要恢复。
         if (state.run && state.run.workflowDigest !== record.digest) continue
-        if (state.run && ['succeeded', 'failed', 'cancelled'].includes(state.run.status) && record.definitionVersion === '3') continue
-        const { workflow, definition } = await build(record, { allowIndexMigration: record.definitionVersion === '3' && !!state.run })
+        if (state.run && ['succeeded', 'failed', 'cancelled'].includes(state.run.status) && ['3', '4'].includes(record.definitionVersion)) continue
+        const { workflow, definition } = await build(record, { allowDefinitionMigration: ['3', '4'].includes(record.definitionVersion) && !!state.run })
+        if (record.definitionVersion === '5' && state.run?.generation === 1 && record.config?.repoId
+          && configs.get(record.config.repoId)?.config.discovery
+          && state.nodes.some(node => node.nodeId === 'apply-changes' && node.status === 'waiting' && node.drained && node.waitReason?.reference === 'EDIT_PREPARED_INVALID')) {
+          const directRecord = { ...record, definitionVersion: '6' }
+          const direct = await build(directRecord, { allowDefinitionMigration: true })
+          const requirement = await artifacts.read(state.run.requirementRef)
+          const first = direct.workflow.nodes[0]
+          const input = await artifacts.put({ workflowDigest: direct.definition.digest, nodeId: first.id, nodeVersion: first.version,
+            requirementRef: state.run.requirementRef, data: requirement })
+          await store.command({ id: `workflow:${direct.definition.digest}`, kind: 'workflow.register', args: {
+            ...directRecord, digest: direct.definition.digest,
+          } })
+          await store.command({ id: `replan-direct:${state.run.runId}:${direct.definition.digest}`, kind: 'run.workflow.replan-direct', args: {
+            runId: state.run.runId, expectedRevision: state.run.revision, fromDigest: record.digest, toDigest: direct.definition.digest,
+            inputRef: input.ref, inputDigest: input.digest,
+            nodes: direct.workflow.nodes.map((node, index) => ({ nodeId: node.id, nodeVersion: node.version, executor: node.executor,
+              inputRef: index ? null : input.ref, inputDigest: index ? null : input.digest })),
+          } })
+          result.push(direct.workflow)
+          continue
+        }
         if (definition.digest !== record.digest) {
-          if (!artifacts || record.definitionVersion !== '3' || workflow.version !== '4') fail('ENGINEERING_DEFINITION_DRIFT')
+          if (!artifacts || !['3', '4'].includes(record.definitionVersion) || workflow.version !== '5') fail('ENGINEERING_DEFINITION_DRIFT')
+          if (record.definitionVersion === '4') {
+            const read = state.nodes.find(node => node.nodeId === 'read-files')
+            if (!read || read.status !== 'waiting' || !['controller-restarted', 'TASK_CONTEXT_TOO_LARGE'].includes(read.waitReason?.reference)) fail('ENGINEERING_DEFINITION_DRIFT')
+            const oldInput = await artifacts.read(read.inputRef)
+            if (executionDigest(oldInput) !== read.inputDigest || oldInput.workflowDigest !== record.digest || oldInput.nodeVersion !== '1'
+              || oldInput.nodeId !== 'read-files' || oldInput.requirementRef !== state.run.requirementRef) fail('ENGINEERING_MIGRATION_INPUT_INVALID')
+            const next = await artifacts.put({ ...oldInput, workflowDigest: definition.digest, nodeVersion: '2' })
+            await store.command({ id: `workflow:${definition.digest}`, kind: 'workflow.register', args: {
+              ...record, digest: definition.digest, definitionVersion: workflow.version,
+            } })
+            if (!read.drained) {
+              const evidence = await artifacts.put({ kind: 'exclusive-controller-recovery', nodeRunId: read.nodeRunId, fromDigest: record.digest })
+              await store.command({ id: `drained:${read.nodeRunId}:${read.leaseEpoch}`, kind: 'node.drained', args: {
+                runId: state.run.runId, nodeId: 'read-files', generation: read.generation, leaseEpoch: read.leaseEpoch, evidenceRef: evidence.ref,
+              } })
+            }
+            const current = await store.query({ kind: 'run', runId: record.config.runId })
+            await store.command({ id: `migrate-read:${record.config.runId}:${definition.digest}`, kind: 'run.workflow.migrate-read', args: {
+              runId: current.run.runId, expectedRevision: current.run.revision, fromDigest: record.digest, toDigest: definition.digest,
+              nodeRunId: read.nodeRunId, inputRef: next.ref, inputDigest: next.digest,
+            } })
+            result.push(workflow)
+            continue
+          }
           const index = state.nodes.find(node => node.nodeId === 'index-files')
           if (!index || index.status !== 'waiting' || !['ENGINEERING_INDEX_CAPACITY_EXCEEDED', 'controller-restarted'].includes(index.waitReason?.reference)) fail('ENGINEERING_DEFINITION_DRIFT')
           const oldInput = await artifacts.read(index.inputRef)
@@ -186,6 +274,18 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
             runId: current.run.runId, expectedRevision: current.run.revision, fromDigest: record.digest, toDigest: definition.digest,
             nodeRunId: index.nodeRunId, inputRef: next.ref, inputDigest: next.digest,
           } })
+        } else if (record.definitionVersion === '5' && state.nodes.find(node => node.nodeId === 'index-files')?.waitReason?.reference === 'EXECUTION_BUDGET_EXHAUSTED') {
+          await store.command({ id: `index-budget:${record.config.runId}:${definition.digest}`, kind: 'run.workflow.index-budget', args: {
+            runId: record.config.runId, workflowDigest: definition.digest,
+          } })
+        } else if (record.definitionVersion === '5') {
+          const index = state.nodes.find(node => node.nodeId === 'index-files')
+          if (index?.status === 'ready'
+            && (await store.query({ kind: 'receipt', commandId: `claim:${index.nodeRunId}:${index.leaseEpoch + 1}` }))?.result?.status === 'budget_exhausted') {
+            await store.command({ id: `index-budget-lease:${record.config.runId}:${definition.digest}`, kind: 'run.workflow.index-budget-lease', args: {
+              runId: record.config.runId, workflowDigest: definition.digest,
+            } })
+          }
         }
         result.push(workflow)
       }

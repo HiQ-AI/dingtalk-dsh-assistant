@@ -36,13 +36,11 @@ export async function openExecutionArtifacts({ directory, initialize = false }) 
   }
   async function read(ref) {
     const bytes = await readFile(target(ref))
-    if (bytes.length > 65536) throw executionError('ARTIFACT_TOO_LARGE')
     if (`sha256-${createHash('sha256').update(bytes).digest('hex')}.json` !== ref) throw executionError('ARTIFACT_DIGEST_MISMATCH')
     return JSON.parse(bytes.toString('utf8'))
   }
   async function put(value) {
     const bytes = Buffer.from(canonicalExecutionJson(value))
-    if (bytes.length > 65536) throw executionError('ARTIFACT_TOO_LARGE')
     const digest = createHash('sha256').update(bytes).digest('hex'), ref = `sha256-${digest}.json`
     const temporary = join(root, `.pending-${randomUUID()}`)
     let file
