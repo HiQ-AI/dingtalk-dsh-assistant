@@ -35,6 +35,11 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
   const command = (kind, args, id) => store.command({ id, kind, args })
   async function prepare(run, action, phase, text) {
     const notificationId = `notice-${executionDigest([action.commandId, phase])}`
+    const existing = await store.query({ kind: 'message.notification', notificationId })
+    if (existing) {
+      if (existing.runId !== run.runId || existing.commandId !== action.commandId) throw new Error('MESSAGE_NOTIFICATION_CONFLICT')
+      return
+    }
     const responsibility = groupResponsibility(run.conversationId)
     if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
     await command('message.notification.prepare', { runId: run.runId, commandId: action.commandId, notificationId,
@@ -49,6 +54,11 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
       const state = await store.query({ kind: 'message.run', runId: run.runId })
       for (const request of state.requests.filter(item => item.status === 'pending' && item.kind === 'needs_clarification')) {
         const notificationId = `clarify-${executionDigest([run.runId, request.id, request.revision])}`
+        const existing = await store.query({ kind: 'message.notification', notificationId })
+        if (existing) {
+          if (existing.runId !== run.runId || existing.requestId !== request.id) throw new Error('MESSAGE_NOTIFICATION_CONFLICT')
+          continue
+        }
         const responsibility = groupResponsibility(run.conversationId)
         if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
         await command('message.notification.prepare', { runId: run.runId, requestId: request.id, notificationId,

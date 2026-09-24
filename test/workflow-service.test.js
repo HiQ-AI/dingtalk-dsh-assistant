@@ -61,6 +61,23 @@ test('群职责贯穿即时进展查询的持久通知正文与引用来源',asy
   assert.equal(sent[0].payload.sourceMessageId,message.messageId)
   assert.equal(sent[0].status,'sending')
 })
+test('群职责调整后已送达通知保留原正文，新通知仍可继续发送',async t=>{
+  let responsibility='普通群'
+  const sent=[]
+  const notifications={canDisclose:async()=>true,send:async notice=>{sent.push(notice.payload.text);return{messageId:`reply-${sent.length}`}},readback:async notice=>({messageId:notice.ack.messageId,conversationId:'g'})}
+  const task={taskId:'review',groupId:'g',title:'审核草稿',objective:'排查审核草稿',state:'completed'}
+  const {service,message}=await fixture(t,'owner',notifications,{legacy:{listTasks:()=>[task],getGroup:id=>({groupId:id,responsibility,messages:[]})},judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'
+    ?{kind:'binding',disposition:'conversation',candidateId:null,evidence:['本群任务']}
+    :{kind:'intent',actions:[{intent:'status',arguments:{scope:'conversation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'result'}})
+  const first=await service.ingest({...message,messageId:'first',text:'审核草稿进度如何？'})
+  await service.messages.process(first.runId);await service.flushNotifications()
+  responsibility='日常代答末尾空一行附 - 小小鹏代回'
+  const second=await service.ingest({...message,messageId:'second',text:'审核草稿现在什么状态？'})
+  await service.messages.process(second.runId);await service.flushNotifications()
+  assert.equal(sent.length,2)
+  assert.doesNotMatch(sent[0],/小小鹏代回/u)
+  assert.match(sent[1],/\n\n- 小小鹏代回$/u)
+})
 test('工作流通知引用来源消息，缺来源才发送普通群消息',async()=>{
   const sent=[]
   const adapter={sendGroupReply:async value=>sent.push({kind:'reply',...value}),sendGroup:async value=>sent.push({kind:'group',...value})}

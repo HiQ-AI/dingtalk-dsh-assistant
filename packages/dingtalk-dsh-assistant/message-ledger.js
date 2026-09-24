@@ -412,6 +412,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   fail('MESSAGE_UNKNOWN_COMMAND')
 }
 export function queryMessages(db,a) {
+  if(a.kind==='message.notification'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification:'+str(a.notificationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.web-task'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('web-task:'+str(a.eventId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.web-tasks.pending')return db.prepare("SELECT body FROM message_items WHERE kind='web-task' AND json_extract(body,'$.status')='pending' ORDER BY rowid LIMIT 100").all().map(row=>JSON.parse(row.body))
   const topic=queryMessageTopics(db,a)
