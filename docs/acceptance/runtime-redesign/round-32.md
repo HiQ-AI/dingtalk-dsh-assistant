@@ -27,3 +27,11 @@
 46d3390 包切换后，本地 PID 31380 的 `/health=ok`、DWS healthy；对无业务命令的受阻版本调用受控重处理，版本 3 完成 R 历史补取并产生 `needs_clarification`：“收到。这个问题需要我继续排查，还是需要我实施修复并验证？”。旧拒绝通知保持 superseded。进展消息已绑定 `topic-review-issues-20260924` 且收信箱为 routed。澄清通知仍为 `prepared`，发送尝试 0。
 
 进一步只读核查通知扫描发现：群职责新增日常代答署名后，4 条已送达旧通知的持久正文与按当前规则重新生成的正文不同；恢复扫描重复调用 prepare 时遇到 `MESSAGE_NOTIFICATION_CONFLICT`，在处理新待发通知前退出。修复为先按通知 ID 回读已持久记录，并只对首次准备的新通知应用当前职责。`node --test test/workflow-service.test.js test/message-ledger.test.js` 70/70，通过旧已送达正文保持不变、职责更新后新通知仍可发送的反例。真实渠道发送尚待下一次精确包切换后回读。
+
+## 最终本地切换与渠道回读
+
+- 用户要求本次不备份，实际未创建本轮备份。停机后 v9 存储预检 `ok=true`、`invalidRecords=0`、`strippedFields=0`。
+- 源码 `9ea59f693426d51c99739235e91bc0f918c42f0f` 的精确 tgz SHA256 为 `BDDD1209CD805134D6DCE3817FB33ED57B0139C629AB624FCD71472A6C5385F8`；64 个源码/配置文件与安装目录摘要一致。新 PID 26248 同时监听 3080 和 18998，`/health` 为 ok、DWS healthy、`recoveryIssueCount=0`。
+- 草稿消息 `msglrqv1gZoH6YJAWCMyjda8w==` 的旧运行和未尝试发送的旧通知均为 superseded；新版本 `msg-replay-f45e1834fdcf2073b4fc0313c93783ebd80baffa` 打开 `needs_clarification`，未创建新业务 Task。新通知 `clarify-ab3bbf393cc58a0a8de854aefa95ba2de74fe94f939fed463cecd1a4f9d9fbb3` 为 sent，渠道消息 ID `msgRBUEOpM0tsVMycxnYa8vGw==`。DWS `+messages-mget` 独立回读 complete=true、foundCount=1、failedCount=0，正文为“收到。这个问题需要我继续排查，还是需要我实施修复并验证？”，引用原消息 ID 与目标群均一致。
+- 静默进展消息 `msgQg6tln8bTRD2WlpG73Lwgw==` 已唯一绑定 `topic-review-issues-20260924`，收信箱显示已处理并展示该话题；内置浏览器实际打开本地运行看板，见到收信箱该行与草稿消息待归类行、运行正常。该静默消息没有回复或新增业务 Task。
+- 全仓 `pnpm test` 893/893 是主修复提交后结果；随后两次小修的最终定向测试 `node --test test/workflow-service.test.js test/message-ledger.test.js` 为 70/70。归一化工程任务的 `ENGINEERING_INDEX_CAPACITY_EXCEEDED` 阻塞未在本轮变更范围内。

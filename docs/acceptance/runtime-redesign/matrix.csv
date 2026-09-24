@@ -100,4 +100,4 @@ COMPLETED_INVESTIGATION_FOLLOWUP,32,clarification-and-confirmed-new-task,PASS,ro
 REJECTED_FACT_REPROCESS,32,prepared-only-notification-superseded,PASS,round-32.md
 FULL_REGRESSION,32,repository-test-suite-893-tests,PASS,round-32.md
 NOTIFICATION_IMMUTABLE,32,changed-responsibility-does-not-block-prepared-notice,PASS,round-32.md
-LOCAL_CUTOVER,32,exact-package-and-historical-readback,BLOCKED,round-32.md
+LOCAL_CUTOVER,32,exact-package-and-historical-readback,PASS,round-32.md
