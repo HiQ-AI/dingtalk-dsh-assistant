@@ -2,7 +2,7 @@
 
 ## 范围与结果
 
-按 `docs/spec/task-workflow-responsibility-refactor.md` 的 R1–R4 做定向功能与本地切换验证。`node --test --test-force-exit` 分两组运行：Owner/服务/通用能力/UAT 平台等 109/109，通过；执行控制/存储/原生会话/交付/发布平台等 82/82，通过。启动首次暴露历史 `task-general` 定义误收 `file.write` 能力，Resident 报 `GENERAL_CAPABILITY_INVALID`；只调整历史定义的只读目录后，服务与通用能力定向复跑 75/75，通过。`node --check` 与 `git diff --check` 通过。以上为本地功能证据，未执行真实 PR 合并或 UAT 发布。
+按 `docs/spec/task-workflow-responsibility-refactor.md` 的 R1–R4 做定向功能与本地切换验证。`node --test --test-force-exit` 分两组运行：Owner/服务/通用能力/UAT 平台等 109/109，通过；执行控制/存储/原生会话/交付/发布平台等 82/82，通过。启动首次暴露历史 `task-general` 定义误收 `file.write` 能力，Resident 报 `GENERAL_CAPABILITY_INVALID`；只调整历史定义的只读目录后，服务与通用能力定向复跑 75/75，通过。本地目录回读又发现旧 `task-general` 仍显示可发起，移除其新流程注册和目录入口但保留历史定义恢复，服务与通用能力再次复跑 75/75，通过。`node --check` 与 `git diff --check` 通过。以上为本地功能证据，未执行真实 PR 合并或 UAT 发布。
 
 ## 用例证据
 
@@ -49,7 +49,7 @@
 `execution-store` 真进程强杀用例验证 Owner 已接纳决定的恢复；`execution-task-plan` 验证零阶段、待确认及新要求版本。
 
 ### w15
-活动库 `D:/dsh_home/workflows/runtime-v2/control.sqlite` 在停止 DSH Web 后运行 v4 `--check`：`writes:0`，未知效果、待审批、待应用 Owner 决策均为 0。`--execute` 产生 `pre-task-workflow-v4` SQLite 备份，回读 `PRAGMA user_version=4` 和 `execution_meta.schema_version=4`。备份/当前库 Task/阶段/Run/效果/消息行数均为 1/1/5/13/409。精确 tgz 安装后，关键源码文件 SHA256 与安装目录一致；新 PID 14904 监听 3080/18998，`18998/health` 为 `status:ok`、`recoveryIssueCount:0`。
+活动库 `D:/dsh_home/workflows/runtime-v2/control.sqlite` 在停止 DSH Web 后运行 v4 `--check`：`writes:0`，未知效果、待审批、待应用 Owner 决策均为 0。`--execute` 产生 `pre-task-workflow-v4` SQLite 备份，回读 `PRAGMA user_version=4` 和 `execution_meta.schema_version=4`。备份/当前库 Task/阶段/Run/效果/消息行数均为 1/1/5/13/409。最终精确 tgz SHA256 为 `2669CEB232D663751A8EA82256CC4384B48DAD4E1F3A5E8F1CEE76EC3A318B4A`；关键源码文件与安装目录哈希一致。新 PID 24540 监听 3080/18998，`18998/health` 为 `status:ok`、`recoveryIssueCount:0`，工作流目录已无旧 `task-general`，UAT 合并保持 unavailable。
 
 ### w16
 服务层及通用能力测试验证仅有聊天材料时无法宣称完成数据库调查；缺少能力或客观验收证据保持可见阻塞。

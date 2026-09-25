@@ -213,7 +213,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const generalWorkflowWith = (selected, available) => createGeneralTaskWorkflow({ ...selected, capabilities: available, completionCheck,
     completionIdentity: generalCompletionIdentity ?? 'task-result-verification-v3' })
   const generalWorkflow = selected => generalWorkflowWith(selected, capabilities.filter(item => item.effectClass === 'read'))
-  const visibleDefinitions = new Map([createAnalysisTaskWorkflow(modelConfig()), ...createReadOnlyTaskWorkflows(modelConfig()), generalWorkflow(modelConfig()), intakeWorkflow, stepWorkflow, ...selectedExternal.workflows]
+  const visibleDefinitions = new Map([createAnalysisTaskWorkflow(modelConfig()), ...createReadOnlyTaskWorkflows(modelConfig()), stepWorkflow, ...selectedExternal.workflows]
     .map(workflow => [workflow.id, workflow]))
   const execution = suppliedExecution ?? await openExecutionRuntime({
     ctx, dbPath: config.dbPath, instanceId: config.instanceId, artifactDirectory: config.artifactDirectory,
@@ -241,7 +241,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     workflows: async (store, artifacts) => {
       generalStore.current = store
       const selected = modelConfig()
-      const workflows = [createAnalysisTaskWorkflow(selected), ...createReadOnlyTaskWorkflows(selected), generalWorkflow(selected), intakeWorkflow, stepWorkflow]
+      const workflows = [createAnalysisTaskWorkflow(selected), ...createReadOnlyTaskWorkflows(selected), stepWorkflow]
       const definitions = new Map(workflows.map(workflow => [workflow.id, defineExecutionWorkflow(workflow)]))
       const prior = await store.query({ kind: 'workflow.list' })
       const activeDefinitions = new Set()
@@ -1478,7 +1478,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   }
   function workflowCatalogState() {
     const repositories = engineering.availableWorkflows().map(item => item.repositoryId)
-    return taskWorkflowCatalog.map(item => {
+    return taskWorkflowCatalog.filter(item => item.id !== 'task-general').map(item => {
       const workflow = visibleDefinitions.get(item.id)
       const available = !!workflow || item.mode === 'engineering' && repositories.length > 0
       return { id: item.id, label: item.label, purpose: item.purpose, mode: item.mode,

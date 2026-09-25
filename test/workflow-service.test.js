@@ -952,7 +952,8 @@ test('I 的流程提示不直接派发；专业目录供 Owner 选择，缺适�
   const catalog = service.catalog()
   assert.equal(catalog.engine, 'workflow-v2')
   assert.deepEqual(catalog.messageStages.map(stage => stage.id), ['receive', 'context', 'S', 'R', 'routing-barrier', 'IB', 'intent-check', 'dispatch'])
-  assert.equal(catalog.workflows.length, taskWorkflowCatalog.length)
+  assert.equal(catalog.workflows.length, taskWorkflowCatalog.length - 1)
+  assert.equal(catalog.workflows.some(item => item.id === 'task-general'), false)
   assert.ok(ids.every(id => catalog.workflows.some(item => item.id === id && item.status === 'available' && item.version && item.nodes.length)))
   assert.equal(catalog.workflows.find(item => item.id === 'task-data-change').status, 'unavailable')
   for (let index = 0; index < ids.length; index++) {
