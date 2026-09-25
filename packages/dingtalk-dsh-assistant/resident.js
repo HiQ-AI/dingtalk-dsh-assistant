@@ -18,7 +18,7 @@ import { readWorkflowSeal, workflowSealPath, inspectLegacyDrain } from './workfl
 import { join, resolve } from 'node:path'
 
 export const name = 'dingtalk-dsh-assistant'
-export const inject = ['storage', 'storageDomain', 'agents', 'agentDefaultModel', 'agentPresets', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'tools', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments']
+export const inject = ['storage', 'storageDomain', 'agents', 'agentDefaultModel', 'agentPresets', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'tools', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments', 'dingtalkTaskWorkflowPlatformClients']
 
 export async function verifyResidentWorkflowSeal(ctx, workflowConfig) {
   const domain = ctx.storageDomain

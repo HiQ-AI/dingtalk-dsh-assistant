@@ -38,17 +38,21 @@ export function defineExecutionWorkflow(definition) {
     assertSupportedJsonSchema(node.inputSchema); assertSupportedJsonSchema(node.outputSchema)
     return freeze({ ...node, allowedEffects: [...node.allowedEffects], ...(node.allowedTools ? { allowedTools: [...node.allowedTools] } : {}), inputSchema: structuredClone(node.inputSchema), outputSchema: structuredClone(node.outputSchema) })
   })
-  const digest = executionDigest({ id: definition.id, version: definition.version, nodes: nodes.map(n => ({
+  const digestInput = normalizeSource => ({ id: definition.id, version: definition.version, nodes: nodes.map(n => ({
     id: n.id, version: n.version, executor: n.executor, allowedEffects: n.allowedEffects,
-    inputSchema: n.inputSchema, outputSchema: n.outputSchema, mapper: n.mapInput.toString(),
-    implementation: n.execute?.toString() ?? null, provider: n.provider ?? null, model: n.model ?? null,
+    inputSchema: n.inputSchema, outputSchema: n.outputSchema, mapper: normalizeSource(n.mapInput.toString()),
+    implementation: n.execute ? normalizeSource(n.execute.toString()) : null, provider: n.provider ?? null, model: n.model ?? null,
     ...(n.reasoningEffort === undefined ? {} : { reasoningEffort: n.reasoningEffort }),
     ...(n.drainPolicy === undefined ? {} : { drainPolicy: n.drainPolicy }),
     prompt: n.prompt ?? null, allowedTools: n.allowedTools ?? [], rulesDigest: n.rulesDigest ?? null,
     ...(n.inputDependencies ? { inputDependencies: n.inputDependencies } : {}),
     maxSteps: n.maxSteps ?? 32, timeoutMs: n.timeoutMs ?? 120000,
   })) })
-  return Object.freeze({ id: definition.id, version: definition.version, nodes: Object.freeze(nodes), digest })
+  const digest = executionDigest(digestInput(source => source.replace(/\r\n?/g, '\n')))
+  const legacyDigests = [executionDigest(digestInput(source => source)),
+    executionDigest(digestInput(source => source.replace(/\r\n?|\n/g, '\r\n')))].filter(value => value !== digest)
+  return Object.freeze({ id: definition.id, version: definition.version, nodes: Object.freeze(nodes), digest,
+    legacyDigests: Object.freeze([...new Set(legacyDigests)]) })
 }
 
 /** 一个Controller拥有推进权；等待及状态查询不调用模型，所有身份由控制账产生。 */
@@ -64,7 +68,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     if (!delivery && definition.nodes.some(node => node.allowedEffects.some(e => !['pure', 'read'].includes(e)))) throw executionError('DELIVERY_ADAPTER_REQUIRED')
     for (const node of definition.nodes) if ((node.allowedTools ?? []).some(name => !readTools.includes(name))) throw executionError('TOOL_NOT_ADMITTED')
     if (!historical) definitions.set(definition.id, definition)
-    byDigest.set(definition.digest, definition)
+    for (const digest of [definition.digest, ...definition.legacyDigests]) byDigest.set(digest, definition)
     return definition
   }
   for (const input of historicalWorkflows) registerDefinition(input, true)
@@ -76,7 +80,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   function definitionOf(run) {
     const definition = byDigest.get(run.workflowDigest)
     if (!definition || definition.id !== run.workflowId) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
-    return definition
+    return run.workflowDigest === definition.digest ? definition : { ...definition, digest: run.workflowDigest }
   }
   async function prepareInput(definition, node, requirementRef, previousOutput, dependencyOutputs = {}) {
     const requirement = await artifacts.read(requirementRef)
@@ -253,8 +257,16 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     async createRun({ commandId, taskId, runId = `run-${executionDigest(commandId)}`, workflowId, input, stageBinding }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId); requireId(runId)
-      const definition = definitions.get(workflowId)
+      let definition = definitions.get(workflowId)
       if (!definition) throw executionError('WORKFLOW_NOT_FOUND')
+      if (stageBinding) {
+        const plan = await store.query({ kind: 'task.plan', taskId })
+        const stage = plan?.task.planRevision === stageBinding.planRevision
+          ? plan.stages.find(item => item.stageId === stageBinding.stageId) : null
+        if (!stage || stage.workflowId !== workflowId || ![definition.digest, ...definition.legacyDigests].includes(stage.workflowDigest))
+          throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
+        if (stage.workflowDigest !== definition.digest) definition = { ...definition, digest: stage.workflowDigest }
+      }
       const requirement = await artifacts.put(input)
       const first = await prepareInput(definition, definition.nodes[0], requirement.ref)
       const receipt = await command(commandId, 'run.create', { taskId, runId, workflowId, workflowDigest: definition.digest, requirementRef: requirement.ref,

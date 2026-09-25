@@ -1,9 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, symlink, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGeneralTaskWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
+import { createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { executionDigest, openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
@@ -23,6 +24,59 @@ function workflow(overrides = {}, completionCheck = async ({ acceptanceCriteria,
   })
   return { definition, calls }
 }
+
+test('受信文件读取只接受双重授权路径，独立回读能发现修改和链接逃逸', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-general-files-'))
+  const outside = await mkdtemp(join(tmpdir(), 'dsh-general-outside-'))
+  t.after(async () => { await rm(root, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }) })
+  await mkdir(join(root, 'docs'))
+  await writeFile(join(root, 'docs', 'note.md'), '核验材料', 'utf8')
+  await writeFile(join(outside, 'secret.md'), '不可读取', 'utf8')
+  const capability = createGeneralFileReadCapability({ root, readablePaths: ['docs/note.md', 'docs/link.md'] })
+  const scope = { readableFiles: ['docs/note.md', 'docs/link.md'] }
+  const input = { path: 'docs/note.md' }
+  assert.equal(await capability.authorize({ input, scope }), true)
+  const output = await capability.execute({ input })
+  assert.equal(output.content, '核验材料')
+  assert.equal((await capability.verify({ input, scope, output })).passed, true)
+  await writeFile(join(root, 'docs', 'note.md'), '已经改变', 'utf8')
+  assert.equal((await capability.verify({ input, scope, output })).passed, false)
+  assert.equal(await capability.authorize({ input: { path: 'docs/other.md' }, scope }), false)
+  assert.equal(await capability.authorize({ input, scope: { readableFiles: [] } }), false)
+  try {
+    await symlink(join(outside, 'secret.md'), join(root, 'docs', 'link.md'))
+    await assert.rejects(capability.execute({ input: { path: 'docs/link.md' } }), { code: 'GENERAL_FILE_SCOPE_DENIED' })
+  } catch (error) { if (error.code !== 'EPERM') throw error } // Windows 未开放符号链接权限时仍执行其余路径门禁断言。
+  assert.throws(() => createGeneralFileReadCapability({ root, readablePaths: ['../secret.md'] }), { code: 'GENERAL_FILE_CONFIG_INVALID' })
+})
+
+test('Owner 单步执行载体只有代码节点，按受信范围执行并独立核验', async () => {
+  const calls = []
+  const capabilities = [{ id: 'lookup', identity: 'lookup-v1', effectClass: 'read',
+    authorize: async ({ input, scope }) => input.key === 'a' && scope.folder === 'docs',
+    execute: async () => { calls.push('execute'); return { value: '已读回的值' } },
+    verify: async ({ output }) => { calls.push('verify'); return { passed: true,
+      outputDigest: executionDigest(output), sourceRefs: ['source:a'] } },
+  }]
+  const definition = createGeneralCapabilityStepWorkflow({ capabilities })
+  assert.equal(definition.id, 'task-general-capability')
+  assert.deepEqual(definition.nodes.map(node => node.executor), ['code'])
+  assert.notEqual(defineExecutionWorkflow(definition).digest, defineExecutionWorkflow(workflow().definition).digest)
+  const request = { capabilityId: 'lookup', input: { key: 'a' }, scope: { folder: 'docs' }, expectedEvidence: '源回读' }
+  const result = await definition.nodes[0].execute({ input: request })
+  assert.deepEqual(calls, ['execute', 'verify'])
+  assert.equal(result.verification.sourceRefs[0], 'source:a')
+  await assert.rejects(definition.nodes[0].execute({ input: { ...request, scope: { folder: 'forbidden' } } }),
+    { code: 'GENERAL_SCOPE_NOT_ADMITTED' })
+  await assert.rejects(definition.nodes[0].execute({ input: { ...request, capabilityId: 'shell' } }),
+    { code: 'GENERAL_CAPABILITY_UNAVAILABLE' })
+  assert.deepEqual(calls, ['execute', 'verify'])
+  const failed = createGeneralCapabilityStepWorkflow({ capabilities: [{ ...capabilities[0],
+    verify: async () => ({ passed: false }) }] })
+  await assert.rejects(failed.nodes[0].execute({ input: request }), { code: 'GENERAL_EVIDENCE_UNVERIFIED' })
+  assert.throws(() => createGeneralCapabilityStepWorkflow({ capabilities: [{ ...capabilities[0], effectClass: 'write' }] }),
+    { code: 'GENERAL_CAPABILITY_INVALID' })
+})
 
 test('通用流程只调用登记能力，逐步独立核验并保存证据', async () => {
   const { definition, calls } = workflow()

@@ -33,5 +33,5 @@ test('固定相邻seal不能因workflow配置删除而恢复旧入口，sealed�
  await assert.rejects(verifyResidentWorkflowSeal(ctx,config),/workflow_cutover_requires_offline_resume/)
  await writeFile(sealPath,JSON.stringify({...journal,phase:'active'}));assert.equal((await verifyResidentWorkflowSeal(ctx,config)).seal.blockLegacy,true)
  await assert.rejects(verifyResidentWorkflowSeal(ctx,{...config,instanceId:'wrong'}),/workflow_seal_instance_mismatch/)
- for(const service of ['storage','agentLoop','sessions','sessionProjections','tools'])assert.ok(inject.includes(service))
+ for(const service of ['storage','agentLoop','sessions','sessionProjections','tools','dingtalkTaskWorkflowPlatformClients'])assert.ok(inject.includes(service))
 })

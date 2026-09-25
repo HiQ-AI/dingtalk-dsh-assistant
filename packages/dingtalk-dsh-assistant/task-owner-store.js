@@ -40,9 +40,17 @@ const decision = value => {
     if (value.action !== 'advance' || !Array.isArray(value.appendStages) || !value.appendStages.length || value.appendStages.length > 32)
       fail('TASK_OWNER_DECISION_INVALID')
     for (const stage of value.appendStages) {
-      exact(stage, ['workflowId', 'gate'])
+      exact(stage, ['workflowId', 'gate', 'capabilityStep'], ['workflowId', 'gate'])
       id(stage.workflowId)
       if (!['none', 'confirmation'].includes(stage.gate)) fail('TASK_OWNER_DECISION_INVALID')
+      if (stage.capabilityStep !== undefined) {
+        if (stage.workflowId !== 'task-general-capability' || stage.gate !== 'none') fail('TASK_OWNER_DECISION_INVALID')
+        exact(stage.capabilityStep, ['capabilityId', 'input', 'expectedEvidence'])
+        id(stage.capabilityStep.capabilityId)
+        if (!stage.capabilityStep.input || Object.getPrototypeOf(stage.capabilityStep.input) !== Object.prototype
+          || typeof stage.capabilityStep.expectedEvidence !== 'string' || !stage.capabilityStep.expectedEvidence.trim()
+          || json(stage.capabilityStep).length > 8000) fail('TASK_OWNER_DECISION_INVALID')
+      } else if (stage.workflowId === 'task-general-capability') fail('TASK_OWNER_DECISION_INVALID')
     }
   }
   return value
@@ -262,9 +270,11 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       AND status<>'succeeded' AND status<>'invalidated' ORDER BY position LIMIT 1`)
       .get(o.task_id, currentTask.plan_revision)
     if (currentTask.control_state !== 'active') fail('TASK_OWNER_CONTROL_BLOCKED')
+    if (chosen.appendStages?.some(stage => stage.workflowId === 'task-general-capability')
+      && currentTask.plan_status !== 'succeeded') fail('TASK_OWNER_ADVANCE_CONFLICT')
     if (chosen.action === 'complete') {
       if (currentTask.plan_status !== 'succeeded' || chosen.appendStages !== undefined) fail('TASK_OWNER_COMPLETION_UNPROVEN')
-      const stages = db.prepare('SELECT status,output_ref,evidence_refs FROM task_plan_stages WHERE task_id=? AND plan_revision=?')
+      const stages = db.prepare('SELECT workflow_id,status,output_ref,evidence_refs FROM task_plan_stages WHERE task_id=? AND plan_revision=?')
         .all(o.task_id, currentTask.plan_revision)
       if (!stages.length || stages.some(stage => stage.status !== 'succeeded' || !stage.output_ref
         || !Array.isArray(JSON.parse(stage.evidence_refs)) || !JSON.parse(stage.evidence_refs).length))
@@ -273,7 +283,8 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
         .all(o.task_id).map(row => row.item_id)
       const assessments = chosen.assessments ?? []
       const knownEvidence = new Set(stages.flatMap(stage => [stage.output_ref, ...JSON.parse(stage.evidence_refs)]))
-      if (!items.length || assessments.length !== items.length
+      if (stages.every(stage => stage.workflow_id === 'task-general-intake')
+        || !items.length || assessments.length !== items.length
         || new Set(assessments.map(item => item.itemId)).size !== items.length
         || assessments.some(item => !items.includes(item.itemId)
           || item.evidenceRefs.some(evidence => !knownEvidence.has(evidence)))
@@ -281,9 +292,15 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
         fail('TASK_OWNER_COMPLETION_UNPROVEN')
     } else if (chosen.action === 'advance' && (currentTask.plan_status === 'succeeded'
       || !['ready', 'running'].includes(activeStage?.status))) {
+      const generalStep = chosen.appendStages?.length === 1
+        && chosen.appendStages[0].workflowId === 'task-general-capability'
+        && chosen.appendStages[0].capabilityStep
+        && db.prepare(`SELECT 1 FROM task_plan_stages WHERE task_id=? AND plan_revision=?
+          AND workflow_id IN ('task-general-intake','task-general-capability') LIMIT 1`)
+          .get(o.task_id, currentTask.plan_revision)
       const continuation = currentTask.plan_status === 'succeeded' && chosen.appendStages?.length
-        && db.prepare(`SELECT 1 FROM task_events WHERE task_id=? AND seq>? AND seq<=?
-          AND event_type='intent.received' LIMIT 1`).get(o.task_id, o.processed_watermark, t.event_watermark)
+        && (generalStep || db.prepare(`SELECT 1 FROM task_events WHERE task_id=? AND seq>? AND seq<=?
+          AND event_type='intent.received' LIMIT 1`).get(o.task_id, o.processed_watermark, t.event_watermark))
       if (!continuation) fail('TASK_OWNER_ADVANCE_CONFLICT')
     } else if (chosen.action === 'wait' && !['ready', 'running', 'waiting_confirmation'].includes(activeStage?.status)) {
       fail('TASK_OWNER_WAIT_CONFLICT')

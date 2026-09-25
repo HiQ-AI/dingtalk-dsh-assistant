@@ -7,8 +7,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
+import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
 
 const moduleUrl = new URL('../packages/dingtalk-dsh-assistant/execution-store.js', import.meta.url).href
+const ownerControllerUrl = new URL('../packages/dingtalk-dsh-assistant/task-owner-controller.js', import.meta.url).href
 const d = 'a'.repeat(64), changedDigest = 'b'.repeat(64)
 const command = (kind, args, id = randomUUID()) => ({ id, kind, args })
 const identity = n => ({ runId: n.runId, nodeId: n.nodeId, generation: n.generation, leaseEpoch: n.leaseEpoch })
@@ -175,6 +177,106 @@ test('独立锁库阻止另一个worker及进程；关闭后可重新取得锁',
   await f.store.close()
   await f.open()
   assert.equal((await f.query()).run.status, 'queued')
+})
+
+test('Owner候选落盘后进程强杀，重开原Task重新领取且旧租约失效', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-owner-crash-'))
+  const dbPath = join(root, 'control.sqlite'), instanceId = 'owner-crash'
+  let store = await openExecutionStore({ dbPath, instanceId, initialize: true })
+  t.after(async () => { await store?.close(); await rm(root, { recursive: true, force: true }) })
+  await store.command(command('task.plan.create', { taskId: 'task-owner', requirementRevision: 1,
+    stages: [{ stageId: 'stage-1', workflowId: 'analysis', workflowDigest: d, unavailableReason: null,
+      requirementRef: 'sha256/input.json', gate: 'none' }] }))
+  await store.command(command('task.owner.init', { taskId: 'task-owner', sessionId: 'owner-session',
+    sourceKey: 'source-1', criteria: ['核验目标'] }))
+  await store.command(command('task.owner.event', { taskId: 'task-owner', eventKey: 'event-1', eventType: 'task.created' }))
+  await store.close(); store = null
+  const probe = child(t, `const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});
+    const s=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});
+    await s.command({id:'claim',kind:'task.owner.claim',args:{taskId:'task-owner',turnId:'turn-old',expectedLeaseEpoch:0}});
+    await s.command({id:'bound',kind:'task.owner.sessionBound',args:{taskId:'task-owner',turnId:'turn-old',leaseEpoch:1,sessionId:'owner-session'}});
+    await s.command({id:'candidate',kind:'task.owner.candidate',args:{taskId:'task-owner',turnId:'turn-old',leaseEpoch:1,
+      decision:{action:'advance',summary:'推进原任务',evidenceRefs:[]}}});
+    process.send({type:'candidate'});setInterval(()=>{},10000)`, [dbPath, instanceId])
+  await probe.message('candidate')
+  assert.equal(probe.proc.kill('SIGKILL'), true)
+  assert.equal((await probe.exited).signal, 'SIGKILL')
+  store = await openExecutionStore({ dbPath, instanceId })
+  const owner = await store.query({ kind: 'task.owner', taskId: 'task-owner' })
+  assert.equal(owner.status, 'pending')
+  assert.equal(owner.sessionId, 'owner-session')
+  assert.equal(owner.processedWatermark, 0)
+  assert.equal((await store.query({ kind: 'task.owner.events', taskId: 'task-owner', limit: 10 })).length, 1)
+  await assert.rejects(store.command(command('task.owner.accept', { taskId: 'task-owner', turnId: 'turn-old',
+    leaseEpoch: 1 })), { code: 'TASK_OWNER_LEASE_STALE' })
+  await store.close(); store = null
+  const accepted = child(t, `const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});
+    const s=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});
+    const claim=(await s.command({id:'claim-new',kind:'task.owner.claim',args:{taskId:'task-owner',turnId:'turn-new',expectedLeaseEpoch:Number(process.argv[3])}})).result;
+    await s.command({id:'bound-new',kind:'task.owner.sessionBound',args:{taskId:'task-owner',turnId:'turn-new',leaseEpoch:claim.leaseEpoch,sessionId:'owner-session'}});
+    await s.command({id:'candidate-new',kind:'task.owner.candidate',args:{taskId:'task-owner',turnId:'turn-new',leaseEpoch:claim.leaseEpoch,
+      decision:{action:'advance',summary:'重新接纳原任务',evidenceRefs:[]}}});
+    await s.command({id:'accept-after-kill',kind:'task.owner.accept',args:{taskId:'task-owner',turnId:'turn-new',leaseEpoch:claim.leaseEpoch}});
+    process.send({type:'accepted',sessionId:claim.sessionId,eventWatermark:claim.eventWatermark});setInterval(()=>{},10000)`, [dbPath, instanceId, String(owner.leaseEpoch)])
+  const acceptedReceipt = await accepted.message('accepted')
+  assert.equal(acceptedReceipt.sessionId, 'owner-session')
+  assert.equal(acceptedReceipt.eventWatermark, owner.eventWatermark)
+  assert.equal(accepted.proc.kill('SIGKILL'), true)
+  assert.equal((await accepted.exited).signal, 'SIGKILL')
+  store = await openExecutionStore({ dbPath, instanceId })
+  const afterAcceptance = await store.query({ kind: 'task.owner', taskId: 'task-owner' })
+  assert.equal(afterAcceptance.processedWatermark, afterAcceptance.eventWatermark)
+  assert.deepEqual((await store.query({ kind: 'task.owner.actions.pending', limit: 10 })).map(item => item.turnId), ['turn-new'])
+  assert.equal((await store.query({ kind: 'receipt', commandId: 'accept-after-kill' })).result.status, 'accepted')
+})
+
+test('Owner已接纳的追加阶段落盘后强杀，重启只应用一次原决定', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-owner-applied-crash-'))
+  const dbPath = join(root, 'control.sqlite'), instanceId = 'owner-action-crash'
+  let store = await openExecutionStore({ dbPath, instanceId, initialize: true })
+  t.after(async () => { await store?.close(); await rm(root, { recursive: true, force: true }) })
+  await store.command(command('task.plan.create', { taskId: 'task-owner', requirementRevision: 1,
+    stages: [{ stageId: 'stage-1', workflowId: 'analysis', workflowDigest: d, unavailableReason: null,
+      requirementRef: 'sha256/input.json', gate: 'none' }] }))
+  await store.command(command('task.owner.init', { taskId: 'task-owner', sessionId: 'owner-session',
+    sourceKey: 'source-1', criteria: ['完成两个阶段'] }))
+  await store.command(command('task.owner.event', { taskId: 'task-owner', eventKey: 'event-1', eventType: 'task.created' }))
+  await store.command(command('task.owner.claim', { taskId: 'task-owner', turnId: 'turn-accepted', expectedLeaseEpoch: 0 }))
+  await store.command(command('task.owner.sessionBound', { taskId: 'task-owner', turnId: 'turn-accepted',
+    leaseEpoch: 1, sessionId: 'owner-session' }))
+  await store.command(command('task.owner.candidate', { taskId: 'task-owner', turnId: 'turn-accepted', leaseEpoch: 1,
+    decision: { action: 'advance', summary: '追加后续阶段', evidenceRefs: [],
+      appendStages: [{ workflowId: 'analysis', gate: 'none' }] } }))
+  await store.command(command('task.owner.accept', { taskId: 'task-owner', turnId: 'turn-accepted', leaseEpoch: 1 }))
+  await store.close(); store = null
+  const probe = child(t, `const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});
+    const {createTaskOwnerController}=await import(${JSON.stringify(ownerControllerUrl)});
+    const s=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});
+    const controller={taskPlan:taskId=>s.query({kind:'task.plan',taskId}),
+      extendTaskPlan:async({commandId,taskId,expectedPlanRevision,expectedControlRevision,requirementRevision,stages})=>s.command({id:commandId,kind:'task.plan.extend',args:{taskId,expectedPlanRevision,expectedControlRevision,requirementRevision,
+        stages:stages.map(stage=>({stageId:stage.stageId,workflowId:stage.workflowId,workflowDigest:'a'.repeat(64),unavailableReason:null,requirementRef:null,gate:stage.gate}))}})};
+    const owner=createTaskOwnerController({ctx:{},store:s,artifacts:{},controller,modelConfig:()=>({}),
+      authorizeStages:async()=>true,sessionRunner:{close:async()=>{}},
+      advanceTask:async()=>{process.send({type:'plan-applied'});await new Promise(()=>{})}});
+    await owner.applyPending()`, [dbPath, instanceId])
+  await probe.message('plan-applied')
+  assert.equal(probe.proc.kill('SIGKILL'), true)
+  assert.equal((await probe.exited).signal, 'SIGKILL')
+  store = await openExecutionStore({ dbPath, instanceId })
+  const plan = await store.query({ kind: 'task.plan', taskId: 'task-owner' })
+  assert.equal(plan.stages.length, 2)
+  assert.equal(plan.task.requirementRevision, 2)
+  let resumedCalls = 0
+  const owner = createTaskOwnerController({ ctx: {}, store, artifacts: {},
+    controller: { taskPlan: taskId => store.query({ kind: 'task.plan', taskId }) },
+    modelConfig: () => ({}), authorizeStages: async () => true,
+    sessionRunner: { close: async () => {} }, advanceTask: async () => { resumedCalls++ } })
+  assert.deepEqual(await owner.applyPending(), [])
+  assert.deepEqual(await owner.applyPending(), [])
+  assert.equal(resumedCalls, 1)
+  assert.equal((await store.query({ kind: 'task.plan', taskId: 'task-owner' })).stages.length, 2)
+  assert.deepEqual(await store.query({ kind: 'task.owner.actions.pending', limit: 10 }), [])
+  await owner.close()
 })
 
 test('顺序节点必须绑定输入；drained和业务输出落盘后，成功与后继ready原子提交', async t => {

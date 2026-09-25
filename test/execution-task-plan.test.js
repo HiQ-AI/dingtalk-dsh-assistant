@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
+import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
 
 const workflow = id => ({ id, version: '1', nodes: [{
   id: 'produce', version: '1', executor: 'code', allowedEffects: ['pure'],
@@ -71,6 +72,37 @@ test('任务取消落盘后阻止已领取节点准备新的外部效果', async
     effectId: 'new-write', kind: 'operation', runId: 'effect-run', nodeId: 'produce', generation: 1,
     inputDigest: digest, leaseEpoch: 1, definition: { adapterId: 'fixture', adapterVersion: '1', principalId: 'owner' },
     resourceKeys: ['resource:a'], authorizationRef: 'approved-scope' } }), { code: 'TASK_DISPATCH_BLOCKED' })
+})
+
+test('外部效果已发而回执未知时取消只阻止后续派发，原效果仍待对账', async t => {
+  const { store } = await setup(t)
+  const digest = 'c'.repeat(64)
+  await store.command({ id: 'plan-unknown', kind: 'task.plan.create', args: { taskId: 'unknown-task', requirementRevision: 1,
+    stages: [{ stageId: 'stage-1', workflowId: 'investigate', workflowDigest: digest,
+      unavailableReason: null, requirementRef: 'sha256/input.json', gate: 'none' }] } })
+  await store.command({ id: 'run-unknown', kind: 'run.create', args: { runId: 'unknown-run', taskId: 'unknown-task',
+    workflowId: 'investigate', workflowDigest: digest, requirementRef: 'sha256/input.json',
+    stageBinding: { planRevision: 1, stageId: 'stage-1', attempt: 1, expectedControlRevision: 1 },
+    nodes: [{ nodeId: 'produce', nodeVersion: '1', executor: 'code', inputRef: 'sha256/input.json', inputDigest: digest }] } })
+  await store.command({ id: 'claim-unknown', kind: 'node.claim', args: {
+    runId: 'unknown-run', nodeId: 'produce', expectedGeneration: 1, expectedLeaseEpoch: 0 } })
+  await store.command({ id: 'prepare-unknown', kind: 'effect.prepare', args: {
+    effectId: 'unknown-write', kind: 'operation', runId: 'unknown-run', nodeId: 'produce', generation: 1,
+    inputDigest: digest, leaseEpoch: 1, definition: { adapterId: 'fixture', adapterVersion: '1', principalId: 'owner' },
+    resourceKeys: ['resource:a'], authorizationRef: 'approved-scope' } })
+  assert.equal((await store.command({ id: 'begin-unknown', kind: 'effect.begin', args: {
+    effectId: 'unknown-write', leaseEpoch: 1, expectedSafetyEpoch: 0 } })).dispatchEligible, true)
+  await store.command({ id: 'cancel-unknown', kind: 'task.control.cancel', args: {
+    taskId: 'unknown-task', expectedControlRevision: 1 } })
+  await store.command({ id: 'observe-unknown', kind: 'effect.observe', args: { effectId: 'unknown-write',
+    receiptId: 'readback-unknown', status: 'unknown', evidenceRef: 'sha256/readback.json' } })
+  assert.equal((await store.query({ kind: 'effect.get', effectId: 'unknown-write' })).state, 'unknown')
+  await assert.rejects(store.command({ id: 'new-effect-after-cancel', kind: 'effect.prepare', args: {
+    effectId: 'another-write', kind: 'operation', runId: 'unknown-run', nodeId: 'produce', generation: 1,
+    inputDigest: digest, leaseEpoch: 1, definition: { adapterId: 'fixture', adapterVersion: '1', principalId: 'owner' },
+    resourceKeys: ['resource:b'], authorizationRef: 'approved-scope' } }), { code: 'TASK_DISPATCH_BLOCKED' })
+  await assert.rejects(store.command({ id: 'settle-before-readback', kind: 'task.control.settle', args: {
+    taskId: 'unknown-task', expectedControlRevision: 2 } }), { code: 'TASK_CONTROL_NOT_DRAINED' })
 })
 
 test('同一业务 Task 顺序启动独立 Run；方案确认前开发不启动；恢复重放无重复 Run', async t => {
@@ -225,6 +257,91 @@ test('未来 UAT 缺适配器保留阻塞阶段；工程 workflow 在交接时�
   assert.equal(plan.stages[2].status, 'blocked')
   assert.equal(plan.stages[2].unavailableReason, 'UAT adapter 未配置')
   assert.equal(plan.stages[2].runId, null)
+})
+
+test('排查、方案、真人确认、开发、UAT 四阶段沿用同一业务 Task 且逐段交接产物', async t => {
+  const { controller, store, artifacts } = await setup(t)
+  const taskId = 'four-stage-task'
+  const turns = []
+  const owner = createTaskOwnerController({ ctx: {}, store, artifacts, controller,
+    modelConfig: () => ({}), advanceTask: id => controller.advanceTaskPlan(id),
+    authorizeStages: async () => false,
+    sessionRunner: { async run({ binding, input, onSessionBound, onCandidate }) {
+      await onSessionBound()
+      turns.push({ binding, input })
+      const complete = input.stages.every(stage => stage.status === 'succeeded')
+      const evidenceRefs = input.stages.flatMap(stage => stage.evidenceRefs ?? [])
+      const decision = complete
+        ? { action: 'complete', summary: '全部阶段有产物', evidenceRefs,
+          assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs })) }
+        : { action: 'wait', summary: '等待当前阶段或真人确认', evidenceRefs: [] }
+      await onCandidate(decision)
+      return { status: 'submitted', decision }
+    }, async close() {} } })
+  t.after(() => owner.close())
+  await controller.createTaskPlan({ commandId: 'four-stage-create', taskId, stages: [
+    { stageId: 'investigation', workflowId: 'investigate', input: 1 },
+    { stageId: 'proposal', workflowId: 'investigate' },
+    { stageId: 'engineering', workflowId: 'implement', gate: 'confirmation' },
+    { stageId: 'uat', workflowId: 'implement' },
+  ] })
+  await owner.ensure({ taskId, sourceKey: 'fixture-source', criteria: ['完成排查、方案、开发和 UAT'],
+    origin: { sourceMessageId: 'fixture-message', actorId: 'authorized-user' } })
+  await owner.drive(taskId)
+  assert.deepEqual(await owner.applyPending(), [])
+  const originalSessionId = (await store.query({ kind: 'task.owner', taskId })).sessionId
+  let plan = await controller.advanceTaskPlan(taskId)
+  const runIds = []
+  for (let index = 0; index < 4; index++) {
+    const stage = plan.stages[index]
+    if (index > 0) {
+      const previous = plan.stages[index - 1]
+      assert.equal(previous.status, 'succeeded')
+      assert.equal(stage.runId, null)
+      if (index === 2) {
+        assert.equal(stage.status, 'waiting_confirmation')
+        assert.equal((await store.query({ kind: 'run.list', taskId })).length, 2)
+        await owner.observe(taskId)
+        await owner.drive(taskId)
+        assert.deepEqual(await owner.applyPending(), [])
+        const confirmationTurn = turns.at(-1)
+        assert.equal(confirmationTurn.binding.sessionId, originalSessionId)
+        assert.ok(confirmationTurn.input.events.some(event => event.eventType === 'workflow.confirmation.required'
+          && event.payload.stageId === 'engineering' && event.payload.runId === null))
+        assert.ok(confirmationTurn.input.events.some(event => event.eventType === 'workflow.succeeded'
+          && event.payload.stageId === 'proposal' && event.payload.outputRef === previous.outputRef))
+        assert.equal((await store.query({ kind: 'run.list', taskId })).length, 2)
+        await controller.confirmTaskStage({ commandId: 'four-stage-confirm', taskId, planRevision: 1,
+          stageId: stage.stageId, outputRef: previous.outputRef })
+      }
+      const priorValue = await artifacts.read(previous.outputRef)
+      await controller.bindTaskStageInput({ commandId: `four-stage-bind-${index}`, taskId, planRevision: 1,
+        stageId: stage.stageId, predecessorOutputRef: previous.outputRef, input: priorValue })
+      plan = await controller.advanceTaskPlan(taskId)
+    }
+    runIds.push(plan.stages[index].runId)
+    await controller.whenIdle(runIds[index])
+    plan = await controller.advanceTaskPlan(taskId)
+    await owner.observe(taskId)
+    await owner.drive(taskId)
+    assert.deepEqual(await owner.applyPending(), [])
+    const ownerTurn = turns.at(-1)
+    assert.equal(ownerTurn.binding.taskId, taskId)
+    assert.equal(ownerTurn.binding.sessionId, originalSessionId)
+    assert.ok(ownerTurn.input.events.some(event => event.eventType === 'workflow.succeeded'
+      && event.payload.stageId === plan.stages[index].stageId
+      && event.payload.runId === runIds[index]
+      && event.payload.outputRef === plan.stages[index].outputRef))
+  }
+  assert.equal(plan.task.status, 'succeeded')
+  assert.deepEqual(plan.stages.map(stage => stage.status), ['succeeded', 'succeeded', 'succeeded', 'succeeded'])
+  assert.equal(new Set(runIds).size, 4)
+  assert.equal((await store.query({ kind: 'run.list', taskId })).length, 4)
+  assert.equal(await artifacts.read(plan.stages[3].outputRef), 5)
+  assert.equal((await store.query({ kind: 'task.owner', taskId })).sessionId, originalSessionId)
+  assert.ok(turns.length >= 5)
+  await controller.advanceTaskPlan(taskId)
+  assert.equal((await store.query({ kind: 'run.list', taskId })).length, 4)
 })
 
 test('确认间隙取消阻断旧确认和后续 Run；重新打开仍需修订计划', async t => {

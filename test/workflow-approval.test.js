@@ -38,6 +38,10 @@ test('同一效果的 Web/钉钉审批首终态生效；无权及跨任务拒绝
   const second = await approvals.decide({ requestId: 'approval-1', decision: 'rejected', eventId: 'im-2' },
     { channel: 'im', actorId: 'owner', conversationId: 'group' })
   assert.equal(second.decision, 'approved'); assert.equal(second.applied, false); assert.equal(recoveries, 1)
+  await assert.rejects(delivery.execute({ binding: { ...binding, requirementDigest: 'c'.repeat(64) },
+    action: 'external', prepared: { ...prepared, resourceKey: 'external:production:other-service' } }),
+  { code: 'DELIVERY_IDENTITY_CONFLICT' })
+  assert.equal(sends, 0)
   assert.equal((await delivery.execute({ binding: { ...binding, requirementDigest: 'c'.repeat(64) }, action: 'external', prepared })).state, 'succeeded')
   assert.equal(sends, 1)
 })

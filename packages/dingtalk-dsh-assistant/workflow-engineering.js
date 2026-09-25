@@ -166,8 +166,10 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       workspaceAdapter, editAdapter, checks, prepareGeneration, adapterIdentity: saved.repositoryDigest, discovery: config.discovery,
       deliveryPlan: { identity: executionDigest(saved), gitAdapterFor, prAdapterFor, date: saved.date, title: saved.title, body: saved.body, commitMessage: saved.title, expectedRemoteSha: null } })
     const definition = defineExecutionWorkflow(workflow)
-    if (record.digest && definition.digest !== record.digest && !allowDefinitionMigration) fail('ENGINEERING_DEFINITION_DRIFT')
-    routes.set(saved.runId, { record: { ...record, digest: definition.digest, definitionVersion: workflow.version }, workflow, workspaceAdapter, editAdapter, gitAdapterFor, prAdapterFor, root: canonicalRoot })
+    const sameDefinition = !record.digest || [definition.digest, ...definition.legacyDigests].includes(record.digest)
+    if (!sameDefinition && !allowDefinitionMigration) fail('ENGINEERING_DEFINITION_DRIFT')
+    routes.set(saved.runId, { record: { ...record, digest: sameDefinition ? record.digest ?? definition.digest : definition.digest,
+      definitionVersion: workflow.version }, workflow, workspaceAdapter, editAdapter, gitAdapterFor, prAdapterFor, root: canonicalRoot })
     return { workflow, definition }
   }
   function route(prepared) {
@@ -332,7 +334,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
           result.push(direct.workflow)
           continue
         }
-        if (definition.digest !== record.digest) {
+        if (![definition.digest, ...definition.legacyDigests].includes(record.digest)) {
           if (!artifacts || !['3', '4'].includes(record.definitionVersion) || workflow.version !== '5') fail('ENGINEERING_DEFINITION_DRIFT')
           if (record.definitionVersion === '4') {
             const read = state.nodes.find(node => node.nodeId === 'read-files')

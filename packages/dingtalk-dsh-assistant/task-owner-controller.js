@@ -6,7 +6,7 @@ const key = (...parts) => createHash('sha256').update(JSON.stringify(parts)).dig
 
 /** Task 事件唤醒、模型候选、Host 接纳和执行回执的唯一入口。 */
 export function createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig, advanceTask,
-  authorizeStages, sessionRunner }) {
+  authorizeStages, authorizeCompletion = async () => true, capabilityCatalog = [], sessionRunner }) {
   if (!ctx || !store || !artifacts || !controller || typeof modelConfig !== 'function'
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
   let closed = false
@@ -73,7 +73,31 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     const acceptanceItems = await store.query({ kind: 'task.owner.acceptance', taskId })
     const result = { taskId, eventWatermark: claim.eventWatermark, goal,
       acceptanceItems, versions: claim.versions, task: plan.task, stages: plan.stages, events }
-    if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 128 * 1024) throw error('TASK_OWNER_INPUT_CAPACITY')
+    if (plan.stages[0]?.workflowId === 'task-general-intake') result.capabilities = capabilityCatalog
+    if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 128 * 1024) {
+      const pages = []
+      let batch = []
+      for (const item of events) {
+        const next = [...batch, item]
+        if (Buffer.byteLength(JSON.stringify(next), 'utf8') > 24 * 1024) {
+          if (!batch.length) throw error('TASK_OWNER_EVENT_CAPACITY')
+          const artifact = await artifacts.put(batch)
+          pages.push({ ref: artifact.ref, firstSeq: batch[0].eventSeq,
+            lastSeq: batch.at(-1).eventSeq, count: batch.length })
+          batch = [item]
+        } else batch = next
+      }
+      if (batch.length) {
+        if (Buffer.byteLength(JSON.stringify(batch), 'utf8') > 24 * 1024) throw error('TASK_OWNER_EVENT_CAPACITY')
+        const artifact = await artifacts.put(batch)
+        pages.push({ ref: artifact.ref, firstSeq: batch[0].eventSeq,
+          lastSeq: batch.at(-1).eventSeq, count: batch.length })
+      }
+      result.events = []
+      result.eventPages = pages
+    }
+    if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 128 * 1024
+      || result.eventPages?.length > 60) throw error('TASK_OWNER_INPUT_CAPACITY')
     return result
   }
 
@@ -91,15 +115,27 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         ownerEpoch: claim.ownerEpoch, sessionBound: claim.sessionBound }
       try {
         const input = await snapshot(taskId, claim)
+        const unreadPages = new Set((input.eventPages ?? []).map(page => page.ref))
         const result = await sessions.run({ binding, input, ...modelConfig(),
+          readPage: async pageRef => {
+            if (!unreadPages.has(pageRef)) throw error('TASK_OWNER_PAGE_NOT_ALLOWED')
+            const page = await artifacts.read(pageRef)
+            unreadPages.delete(pageRef)
+            return page
+          },
           onSessionBound: () => command(`owner-bound:${turnId}`, 'task.owner.sessionBound', {
             taskId, turnId, leaseEpoch: claim.leaseEpoch, sessionId: claim.sessionId }),
-          onCandidate: decision => command(`owner-candidate:${turnId}`, 'task.owner.candidate', {
-            taskId, turnId, leaseEpoch: claim.leaseEpoch, decision }),
+          onCandidate: decision => {
+            if (unreadPages.size) throw error('TASK_OWNER_EVENTS_UNREAD')
+            return command(`owner-candidate:${turnId}`, 'task.owner.candidate', {
+              taskId, turnId, leaseEpoch: claim.leaseEpoch, decision })
+          },
         })
         if (result.status !== 'submitted') throw error(result.reason ?? 'TASK_OWNER_NO_DECISION')
         if (result.decision.appendStages && !await authorizeStages({ taskId, stages: result.decision.appendStages }))
           throw error('TASK_OWNER_STAGE_NOT_AUTHORIZED')
+        if (result.decision.action === 'complete' && !await authorizeCompletion({ taskId, decision: result.decision }))
+          throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
         const accepted = (await command(`owner-accept:${turnId}`, 'task.owner.accept', {
           taskId, turnId, leaseEpoch: claim.leaseEpoch })).result
         return accepted
@@ -128,9 +164,11 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           const owner = await store.query({ kind: 'task.owner', taskId })
           const priorPlanReceipt = decision.appendStages?.length
             ? await store.query({ kind: 'receipt', commandId: `owner-plan:${turnId}` }) : null
-          if (owner.eventWatermark !== action.eventWatermark
-            || !priorPlanReceipt && (owner.planRevision !== action.planRevision
-              || owner.requirementRevision !== action.requirementRevision)
+          if ((!priorPlanReceipt && (owner.eventWatermark !== action.eventWatermark
+              || owner.planRevision !== action.planRevision
+              || owner.requirementRevision !== action.requirementRevision))
+            || priorPlanReceipt && (owner.planRevision !== priorPlanReceipt.result?.planRevision
+              || owner.requirementRevision !== action.requirementRevision + 1)
             || owner.controlRevision !== action.controlRevision
             || owner.authorizationRevision !== action.authorizationRevision
             || owner.inputFenceRevision !== action.inputFenceRevision) {
@@ -141,7 +179,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           if (decision.action === 'advance') {
             if (decision.appendStages?.length) {
               const stageIdBase = (await controller.taskPlan(taskId)).stages.length
-              const stages = decision.appendStages.map((stage, index) => ({ ...stage,
+              const stages = decision.appendStages.map((stage, index) => ({ workflowId: stage.workflowId, gate: stage.gate,
                 stageId: `stage-${stageIdBase + index + 1}` }))
               if (!priorPlanReceipt) {
                 const plan = await controller.taskPlan(taskId)
@@ -156,7 +194,8 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
                   requirementRevision: action.requirementRevision + 1, stages })
               }
             }
-            await advanceTask(taskId)
+            await advanceTask(taskId, decision.appendStages?.[0]?.capabilityStep
+              ? { ownerStep: decision.appendStages[0].capabilityStep } : undefined)
           }
           await command(`owner-applied:${turnId}`, 'task.owner.applied', { taskId, turnId, leaseEpoch: action.leaseEpoch })
         } catch (cause) {

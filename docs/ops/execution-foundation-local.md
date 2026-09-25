@@ -322,6 +322,8 @@ Web 操作验收需使用配置明确映射的 `workflow.webActorId`。新任务
 
 ## 10. 话题批量意图与业务 Task 计划升级
 
+本地 Resident 在加载时必须声明对 `dingtalkTaskWorkflowPlatformClients` 的服务依赖；先由 `platform-host` 提供该服务，再加载 Resident。缺少这个依赖声明时，Cordis 会隐藏兄弟插件提供的服务，即使 profile 已配置平台客户端也会在启动时触发 `RELEASE_PLATFORM_CLIENT_REQUIRED`。该实例已配置受信平台工作流，停机升级前需核对 `platform-host` 入口存在且先于 Resident 加载。
+
 原业务 Task 计划引入 schema v2；当前 Task 负责会话要求 schema v3。服务启动不会自动升级旧库。停掉持有控制库的 Runtime、入站桥接和计划任务后，确认对应进程及 `.owner.sqlite` 写者已经退出，保留控制库与工件目录原始备份，再用绝对路径执行零写自检：
 
 ```powershell
@@ -347,7 +349,17 @@ node scripts/migrate-task-owner-store.mjs --execute $controlDb
 
 若检查输出有未确认外部效果或待审批记录，先逐项核对；迁移不会把它们视为已成功。v3 启动后先回读 `PRAGMA user_version`、`execution_meta.schema_version`、Task 数量与备份，定向验证同一 Task 的会话恢复、补充意图、暂停取消、后续阶段与最终报告，再开放群入站。只读 `--check` 针对 v2，成功迁移后再调用会因来源版本不符而拒绝，不能用其代替 v3 回读。
 
-默认日常流程只读已授权话题来源及本任务前序产物，并可按当前原文生成可回读的 Markdown 摘录。Resident 可由受信插件提供 `dingtalkTaskGeneralCapabilities` 数组；每项需有固定 `id/identity/description` 及 `authorize/execute/verify`，其中 `verify` 必须回读结果并返回 `passed:true`、实际 `outputDigest` 和非空 `sourceRefs`。对非默认纯原文整理目标，还须同时提供 `dingtalkTaskGeneralCompletionCheck` 与 `dingtalkTaskGeneralCompletionIdentity`，验收器逐项核对 acceptanceCriteria 与证据后返回 `status:'satisfied'`、`resultVerified:true` 和相同顺序的 `criteria`。未配齐时流程显示证据不足，不把读取聊天误当作数据库调查或外部处理。
+默认日常流程只读已授权话题来源及本任务前序产物，并可按当前原文生成可回读的 Markdown 摘录。Resident 可由受信插件提供 `dingtalkTaskGeneralCapabilities` 数组；每项需有固定 `id/identity/description/effectClass`（当前仅接纳 `effectClass: 'read'`）及 `authorize/execute/verify`，其中 `verify` 必须回读结果并返回 `passed:true`、实际 `outputDigest` 和非空 `sourceRefs`。对非默认纯原文整理目标，还须同时提供 `dingtalkTaskGeneralCompletionCheck` 与 `dingtalkTaskGeneralCompletionIdentity`，验收器逐项核对 acceptanceCriteria 与证据后返回 `status:'satisfied'`、`resultVerified:true` 和相同顺序的 `criteria`。未配齐时流程显示证据不足，不把读取聊天误当作数据库调查或外部处理。
+
+受信 Host 如需让日常流程读取本地文件，可在 `workflow.generalFileRead` 配置绝对 `root` 和显式相对路径 `readablePaths`，例如 `{ root: 'D:/approved-workspace', readablePaths: ['notes/incident.md'] }`。运行时只把清单放入该 Task 的 `scope.readableFiles`，每次读取前 `realpath` 校验目标仍在 root 内，最大 12 KiB 且必须为 UTF-8；`verify` 独立重新打开同一文件核对内容摘要。未配置则没有文件读取能力。这个配置只允许读；文件生成、修改、任意路径搜索和平台查询都需要各自受信适配器及验收器，写入必须走效果账。新建日常任务先用 `task-general-intake` 纯代码阶段冻结目标和授权范围；Task Owner 选择受信只读能力后，Host 用 `task-general-capability` 单代码节点 Run 执行并二次回读，Owner 再决定下一步或完成，Host 对整体目标另做验收。旧 `task-general` 的 plan/report Agent 只用于既有持久 Run 的历史恢复。单个任务最多执行四个能力步骤，重复的能力、输入和授权范围组合会被拒绝。文件读取的 root 及其父目录必须由受信 Host 控制；不能将消息发送人可任意改写的目录作为授权根，逐级链接检查与末级 O_NOFOLLOW 不构成父目录并发替换防护。
+
+`read-task-message-resource` 仅对同时提供 DWS 精确消息回读与资源读取的 Host 可用：输入当前 Task 冻结的 `sourceKey`、附件 `type`（`mediaId` 或 `fileId`）及 `resourceId`，受信代码核对来源版本、原消息 ID、群 ID、正文和附件引用，再读取最多 12 KiB UTF-8 文本，独立重复回读一致后输出带来源键与内容摘要的 Markdown。任意 URL、未列入当前消息引用的附件、跨群消息及图片/二进制资源均拒绝；平台不返回完整资源引用或正文变化时明确阻塞。
+
+Task Owner 的单次输入若超过 128 KiB，会把当前事件按不超过 24 KiB 的内容地址页交给原生 `task_owner_read_events` 工具；Owner 必须读完全部事件页才能提交决定。页面过多或单条事件超出容量会明确阻塞，保留原 Task/事件水位供扩容与恢复，不截断消息后继续派发。
+
+工作流定义摘要先将受信函数源码的换行符归一为 LF；恢复时仅接受同一定义的旧原始换行摘要，并继续以旧摘要处理既有 Run/阶段。安装包必须与源文件逐项核对 SHA256，且在新进程中核对关键定义摘要；摘要兼容不等于允许实际实现变更绕过版本漂移检查。
+
+启动恢复只重建非终态 Run 实际引用的历史定义；控制账中已登记、但从未被 Run 使用或仅关联终态 Run 的旧定义保留原账记录，不因新版本能力列表变化阻断启动。非终态 Run 的定义仍须精确匹配，不允许跳过漂移检查。
 
 升级后先禁用群入站、启动新 Runtime 并回读控制库版本及实例身份；用隔离消息验证 R 归类屏障、同话题 IB 集合、新消息重判、Task 阶段结算、确认后单次启动和缺适配器阻塞，再开放入站。恢复扫描会结算已成功的阶段 Run 并启动满足条件的后继；`waiting_confirmation` 不自动越过。已执行效果仍应按原 Run/效果账独立核对，控制库迁移成功不代表模型判断、UAT 提测或渠道送达成功。
 

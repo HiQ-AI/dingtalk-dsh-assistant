@@ -18,7 +18,7 @@ const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-lo
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
 
-async function host(root) {
+async function host(root, pageRef = null) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
@@ -30,10 +30,12 @@ async function host(root) {
   class Scripted extends LlmAdapter {
     async *stream(options) {
       requests.push(options)
-      const id = `call-${requests.length}`, args = JSON.stringify({ decision })
+      const id = `call-${requests.length}`, name = pageRef && requests.length === 1
+        ? 'task_owner_read_events' : 'task_owner_submit'
+      const args = JSON.stringify(name === 'task_owner_read_events' ? { pageRef } : { decision })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
-      yield { type: 'tool-call-delta', index: 0, id, name: 'task_owner_submit', argumentsDelta: args }
-      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'task_owner_submit', arguments: args } }
+      yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } }
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
     }
   }
@@ -64,6 +66,25 @@ test('同一个业务 Task 的原生 Owner 会话跨唤醒复用并持久记录�
   assert.equal(saved.events.filter(event => event.type === 'user/message').length, 2)
   assert.equal(h.requests.length, 2)
   assert.ok(h.requests.every(request => request.tools.map(tool => tool.name).join(',') === 'task_owner_submit'))
+})
+
+test('原生Owner会话必须读取积压事件页后才能提交候选', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'task-owner-paged-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const pageRef = `sha256-${'a'.repeat(64)}.json`
+  const h = await host(root, pageRef)
+  t.after(() => h.close())
+  const read = []
+  const result = await h.sessions.run({ binding: { taskId: 'task-1', sessionId: 'paged-session',
+    turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+    input: { taskId: 'task-1', eventPages: [{ ref: pageRef, firstSeq: 1, lastSeq: 1, count: 1 }] },
+    provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+    readPage: async ref => { read.push(ref); return [{ eventSeq: 1, eventType: 'task.created', payload: null }] },
+    onCandidate: async value => assert.deepEqual(value, decision) })
+  assert.equal(result.status, 'submitted')
+  assert.deepEqual(read, [pageRef])
+  assert.deepEqual(h.requests.map(request => request.tools.map(tool => tool.name)), [
+    ['task_owner_read_events', 'task_owner_submit'], ['task_owner_read_events', 'task_owner_submit']])
 })
 
 test('已绑定的负责人会话缺失时拒绝另建会话', async t => {

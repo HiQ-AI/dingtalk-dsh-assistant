@@ -11,14 +11,18 @@ import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-ar
 import { createReleaseTaskWorkflow, releaseWorkflowKinds } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 
 const commitSha = 'a'.repeat(40)
-test('新增 UAT 部署保留已持久生产与重建定义摘要', () => {
+test('生产与重建旧定义摘要仍可恢复，新定义使用稳定换行摘要', () => {
   const frozenRules = '0e5ce6311e8a9d3d67e67fa22cd9422fad4b8951cd53cb93b91ddcf99ffc05c8'
   const expected = { 'production-release': '3ed7ab9e46b14c27e1d770b9c1302785f523a5b20abb7b6bb9fc5902860ca38b',
     'uat-rebuild': 'd0cf2f30ea1dc047ec7917f31d1171cfec69dfce0a1148872bef9f96f3009f17' }
+  const stable = { 'production-release': 'cfc445fccb8aad25bd3fb646f148a3682de2b1c8de26f799710838e1a37c0c26',
+    'uat-rebuild': '09ca4ce3df58c448fef049bd3502652c89849b514a90474d49f4d2bd3ec23d43' }
   for (const [kind, digest] of Object.entries(expected)) {
     const adapter = { id: `trusted-release-${kind}`, version: '1', rulesDigest: frozenRules,
       inspect() {}, prepareOperation() {} }
-    assert.equal(defineExecutionWorkflow(createReleaseTaskWorkflow({ kind, adapter })).digest, digest)
+    const definition = defineExecutionWorkflow(createReleaseTaskWorkflow({ kind, adapter }))
+    assert.equal(definition.digest, stable[kind])
+    assert.ok([definition.digest, ...definition.legacyDigests].includes(digest))
   }
 })
 const operations = {
