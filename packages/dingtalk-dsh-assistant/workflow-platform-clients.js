@@ -15,7 +15,7 @@ const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.tes
 /** 只接受受信 Host 注入的凭据与固定端点；异常不透传服务端响应或认证头。 */
 export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig,
   kubeServer, kubeSkipTlsVerify = false, bytebaseBaseUrl, bytebaseToken, bytebaseCredentials, registryBearerToken,
-  githubTagWritesEnabled = false, registryDockerCliEnabled = false,
+  githubTagWritesEnabled = false, githubMergeWritesEnabled = false, registryDockerCliEnabled = false,
   fetchImpl = fetch, execFileImpl = execFile, attestations } = {}) {
   async function request(url, token, options = {}) {
     if (!url.startsWith('https://')) fail('PLATFORM_HTTPS_REQUIRED')
@@ -66,9 +66,30 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
     async readPullRequest({ repository, number }) {
       if (!Number.isInteger(number) || number < 1) fail('GITHUB_PR_INVALID')
       const row = await request(githubUrl(repository, `pulls/${number}`), githubToken)
-      return { number, merged: !!row.merged_at, baseBranch: row.base?.ref,
-        headCommitSha: row.head?.sha, mergeCommitSha: row.merge_commit_sha,
+      return { number, merged: !!row.merged_at, state: row.state, draft: row.draft === true,
+        mergeable: row.mergeable, baseBranch: row.base?.ref, baseRepository: row.base?.repo?.full_name,
+        headRepository: row.head?.repo?.full_name, headCommitSha: row.head?.sha,
+        baseCommitSha: row.base?.sha, mergeCommitSha: row.merge_commit_sha,
         evidenceRef: evidence('github-pr', `${repository}:${number}:${row.updated_at}`) }
+    },
+    async readChecks({ repository, commitSha }) {
+      if (!sha(commitSha)) fail('GITHUB_CHECK_SHA_INVALID')
+      const checks = [], seen = new Set()
+      for (let page = 1; page <= 100; page++) {
+        const row = await request(githubUrl(repository,
+          `commits/${commitSha}/check-runs?per_page=100&page=${page}`), githubToken,
+        { headers: { Accept: 'application/vnd.github+json' } })
+        if (!Number.isInteger(row?.total_count) || !Array.isArray(row.check_runs)) fail('GITHUB_CHECK_LIST_INVALID')
+        for (const check of row.check_runs) {
+          if (!Number.isInteger(check.id) || seen.has(check.id) || typeof check.name !== 'string') fail('GITHUB_CHECK_LIST_INVALID')
+          seen.add(check.id)
+          checks.push({ id: check.id, name: check.name, status: check.status, conclusion: check.conclusion })
+        }
+        if (checks.length === row.total_count) return { complete: true, checks,
+          evidenceRef: evidence('github-checks', `${repository}:${commitSha}:${checks.map(item => `${item.id}:${item.conclusion}`).join(',')}`) }
+        if (row.check_runs.length !== 100 || checks.length > row.total_count) fail('GITHUB_CHECK_LIST_INCOMPLETE')
+      }
+      fail('GITHUB_CHECK_LIST_INCOMPLETE')
     },
     async readCommit({ repository, commitSha }) {
       if (!sha(commitSha)) fail('GITHUB_COMMIT_INVALID')
@@ -128,6 +149,14 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
     const after = await github.readTag({ repository: target.repository, tag })
     if (after.commitSha !== commitSha) fail('GITHUB_TAG_READBACK_MISMATCH')
     return after
+  }
+  if (githubMergeWritesEnabled) github.mergePullRequest = async ({ repository, number, headCommitSha }) => {
+    if (!Number.isInteger(number) || number < 1 || !sha(headCommitSha)) fail('GITHUB_MERGE_INPUT_INVALID')
+    const row = await request(githubUrl(repository, `pulls/${number}/merge`), githubToken,
+      { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sha: headCommitSha, merge_method: 'merge' }) })
+    if (row.merged !== true || !sha(row.sha)) fail('GITHUB_MERGE_DISPATCH_UNCONFIRMED')
+    return { mergeCommitSha: row.sha, evidenceRef: evidence('github-merge-dispatch', `${repository}:${number}:${row.sha}`) }
   }
   const woodpeckerUrl = (baseUrl, suffix) => {
     if (baseUrl !== 'https://woodpecker.hiqdat.dev') fail('WOODPECKER_ENDPOINT_NOT_ALLOWED')

@@ -30,7 +30,7 @@ export function defineExecutionWorkflow(definition) {
     ids.add(node.id)
     if (!['code', 'agent'].includes(node.executor)) throw executionError('EXECUTOR_NOT_ADMITTED')
     if (node.drainPolicy !== undefined && (node.drainPolicy !== 'external-process' || node.executor !== 'code')) throw executionError('NODE_DRAIN_POLICY_INVALID')
-    if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push', 'github.pr', 'workspace.prepare', 'workspace.edit', 'external.operation'].includes(e))
+    if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push', 'github.pr', 'workspace.prepare', 'workspace.edit', 'external.operation', 'file.write'].includes(e))
       || (node.executor === 'agent' && node.allowedEffects.some(e => !['pure', 'read'].includes(e)))) throw executionError('EFFECT_NOT_ADMITTED')
     if (typeof node.mapInput !== 'function') throw executionError('INPUT_MAPPER_REQUIRED')
     if (node.executor === 'code' && typeof node.execute !== 'function') throw executionError('CODE_EXECUTOR_REQUIRED')
@@ -180,9 +180,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           abort.signal.throwIfAborted()
           if (!await isCurrent(binding)) throw executionError('NODE_STALE')
           abort.signal.throwIfAborted()
-          output = await nodeDefinition.execute({ input: structuredClone(input.data), signal: abort.signal, runId: binding.runId, generation: binding.generation, requirementDigest: binding.requirementDigest,
+          output = await nodeDefinition.execute({ input: structuredClone(input.data), signal: abort.signal, runId: binding.runId,
+            taskId: binding.taskId, nodeRunId: binding.nodeRunId, generation: binding.generation, requirementDigest: binding.requirementDigest,
             perform: async ({ action, prepared }) => {
-              if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : action === 'edit' ? 'workspace.edit' : action === 'pr' ? 'github.pr' : action === 'external' ? 'external.operation' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
+              if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : action === 'edit' ? 'workspace.edit' : action === 'pr' ? 'github.pr' : action === 'external' ? 'external.operation' : action === 'file' ? 'file.write' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
               abort.signal.throwIfAborted()
               const effect = await delivery.execute({ binding, action, prepared })
               if (effect.state !== 'succeeded') throw executionError('DELIVERY_RECONCILIATION_REQUIRED')
@@ -291,6 +292,30 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           requirementRef: requirement?.ref ?? null, gate: stage.gate ?? 'none' })
       }
       return command(commandId, 'task.plan.create', { taskId, requirementRevision, stages: stored })
+    },
+    async initializeTaskPlan({ commandId, taskId, expectedPlanRevision = 0, expectedRequirementRevision,
+      expectedControlRevision, stages }) {
+      if (closed) throw executionError('CONTROLLER_CLOSED')
+      requireId(taskId)
+      const plan = await store.query({ kind: 'task.plan', taskId })
+      if (!plan || plan.task.planRevision !== 0 || plan.task.requirementRevision !== expectedRequirementRevision)
+        throw executionError('TASK_PLAN_STALE')
+      if (!Array.isArray(stages) || !stages.length) throw executionError('TASK_PLAN_STAGES_INVALID')
+      const stored = []
+      for (const [index, stage] of stages.entries()) {
+        const definition = definitions.get(stage.workflowId)
+        const dynamic = index > 0 && stage.workflowId === 'task-engineering' && !stage.unavailableReason
+        if (!definition && !(index > 0 && stage.unavailableReason) && !dynamic) throw executionError('WORKFLOW_NOT_FOUND')
+        if ((index === 0) !== Object.hasOwn(stage, 'input')) throw executionError('TASK_STAGE_INPUT_NOT_BOUND')
+        const requirement = index === 0 ? await artifacts.put(stage.input) : null
+        stored.push({ stageId: requireId(stage.stageId), workflowId: definition?.id ?? requireId(stage.workflowId),
+          workflowDigest: stage.unavailableReason || dynamic ? null : definition.digest,
+          unavailableReason: stage.unavailableReason ?? null, requirementRef: requirement?.ref ?? null,
+          gate: stage.gate ?? 'none' })
+      }
+      return command(commandId, 'task.plan.initialize', { taskId, expectedPlanRevision,
+        expectedRequirementRevision, expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision,
+        stages: stored })
     },
     async reviseTaskPlan({ commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, affectedFrom, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')

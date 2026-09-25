@@ -11,7 +11,7 @@ function fixture() {
   db.exec('PRAGMA foreign_keys=ON')
   installTaskPlanSchema(db)
   installTaskOwnerSchema(db)
-  db.prepare("INSERT INTO business_tasks(task_id,requirement_revision,plan_revision,status,created_at,updated_at) VALUES('task-1',1,1,'active',?,?)").run(at, at)
+  db.prepare("INSERT INTO business_tasks(task_id,requirement_revision,plan_revision,plan_requirement_revision,status,created_at,updated_at) VALUES('task-1',1,1,1,'active',?,?)").run(at, at)
   db.prepare("INSERT INTO task_controls(task_id,control_revision,state) VALUES('task-1',1,'active')").run()
   db.prepare("INSERT INTO task_plan_stages(task_id,plan_revision,stage_id,position,workflow_id,gate,status,attempt) VALUES('task-1',1,'stage-1',0,'task-general','none','ready',1)").run()
   const send = (kind, args) => {

@@ -228,12 +228,15 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);if(source.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}
       if(n.payload?.phase?.startsWith('owner:')){
         const reportId=n.payload.phase.slice('owner:'.length)
-        const fact=db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.application_status,o.event_watermark,o.processed_watermark
+        const fact=db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.application_status,o.event_watermark,o.processed_watermark,
+          b.requirement_revision,b.plan_requirement_revision
           FROM task_reports r JOIN task_owner_turns t ON t.turn_id=r.turn_id
-          JOIN task_owners o ON o.task_id=r.task_id WHERE r.report_id=?`).get(reportId)
+          JOIN task_owners o ON o.task_id=r.task_id
+          JOIN business_tasks b ON b.task_id=r.task_id WHERE r.report_id=?`).get(reportId)
         const latest=fact?db.prepare("SELECT turn_id FROM task_owner_turns WHERE task_id=? AND status='accepted' ORDER BY rowid DESC LIMIT 1").get(fact.task_id):null
         if(!fact||fact.application_status!=='applied'||fact.report_type==='complete'
-          &&(fact.event_watermark!==fact.processed_watermark||latest?.turn_id!==fact.turn_id)){
+          &&(fact.event_watermark!==fact.processed_watermark||latest?.turn_id!==fact.turn_id
+            ||fact.plan_requirement_revision!==fact.requirement_revision)){
           n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n)
           return {result:{notification:n},dispatchEligible:false}
         }

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { executionDigest, executionError } from './execution-artifacts.js'
 import { createReleasePlatform } from './workflow-release-platform.js'
+import { createUatMergePlatform } from './workflow-uat-merge-platform.js'
 import { createBytebaseDataChangePlatform } from './workflow-bytebase-platform.js'
 import { readEngineeringDeliveryProof } from './workflow-engineering.js'
 
@@ -109,10 +110,58 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     return `uat-source-proof:${executionDigest({ target, runId, refs: proof.evidenceRefs,
       live: [pr, developmentCommit, targetCommit, approved].map(item => item.evidenceRef) })}`
   }
+  async function readUatMergeDeliveryProof({ marker, taskId }) {
+    if (!execution) throw executionError('UAT_EXECUTION_BINDING_INVALID')
+    const [, sourceTaskId, runId] = marker.split(':')
+    if (!taskId || sourceTaskId !== taskId) throw executionError('UAT_MERGE_TASK_MISMATCH')
+    const state = await execution.controller.state(runId)
+    const final = state?.nodes?.find(node => node.nodeId === 'verify-source')
+    if (state?.run?.runId !== runId || state.run.taskId !== taskId
+      || state.run.workflowId !== 'task-uat-pr-merge' || state.run.status !== 'succeeded'
+      || final?.status !== 'succeeded' || !final.outputRef)
+      throw executionError('UAT_MERGE_RUN_UNCONFIRMED')
+    const proof = await execution.artifacts.read(final.outputRef)
+    if (proof?.status !== 'confirmed' || !/^[a-f0-9]{40}$/u.test(proof.headCommitSha ?? '')
+      || !/^[a-f0-9]{40}$/u.test(proof.mergeCommitSha ?? '')
+      || !/^[a-f0-9]{40}$/u.test(proof.treeSha ?? '')
+      || !Number.isInteger(proof.pullRequestNumber) || proof.pullRequestNumber < 1
+      || !Array.isArray(proof.evidenceRefs) || !proof.evidenceRefs.length
+      || proof.evidenceRefs.some(ref => typeof ref !== 'string' || !ref))
+      throw executionError('UAT_MERGE_ARTIFACT_UNCONFIRMED')
+    return { proof, runId, outputRef: final.outputRef }
+  }
+  async function verifyUatMergeDeploymentSource({ marker, taskId, target, selected, delivered }) {
+    const source = delivered ?? await readUatMergeDeliveryProof({ marker, taskId })
+    const { proof, runId, outputRef } = source
+    if (proof.repository !== target.repository || proof.service !== target.service
+      || proof.baseBranch !== selected.branch || proof.mergeCommitSha !== target.commitSha)
+      throw executionError('UAT_MERGE_SOURCE_MISMATCH')
+    const github = clients.release.github
+    const [pr, head, merge, approved, branch] = await Promise.all([
+      github.readPullRequest({ repository: target.repository, number: proof.pullRequestNumber }),
+      github.readCommit({ repository: target.repository, commitSha: proof.headCommitSha }),
+      github.readCommit({ repository: target.repository, commitSha: proof.mergeCommitSha }),
+      github.resolveApprovedPullRequest({ repository: target.repository, baseBranch: selected.branch,
+        mergeCommitSha: proof.mergeCommitSha }),
+      github.readBranch({ repository: target.repository, branch: selected.branch }),
+    ])
+    if (pr.number !== proof.pullRequestNumber || pr.merged !== true || pr.baseBranch !== selected.branch
+      || pr.headCommitSha !== proof.headCommitSha || pr.mergeCommitSha !== proof.mergeCommitSha
+      || head.treeSha !== proof.treeSha || merge.treeSha !== proof.treeSha
+      || approved.unique !== true || approved.number !== pr.number || approved.mergeCommitSha !== proof.mergeCommitSha
+      || branch.commitSha !== proof.mergeCommitSha
+      || [pr, head, merge, approved, branch].some(item => !item.evidenceRef))
+      throw executionError('UAT_MERGE_SOURCE_CHAIN_UNCONFIRMED')
+    return `uat-merge-source-proof:${executionDigest({ target, taskId, runId, outputRef,
+      artifact: executionDigest(proof), refs: [pr, head, merge, approved, branch].map(item => item.evidenceRef) })}`
+  }
   const release = config?.release?.targets?.length
     ? createReleasePlatform({ targets: config.release.targets.map(({ id, ...target }) => target),
       clients: { ...clients?.release, attestations: { read: readUatAttestation } } })
     : null
+  const uatMerge = config?.uatMerge?.targets?.length
+    ? createUatMergePlatform({ targets: config.release?.targets ?? [],
+      policies: config.uatMerge.targets, github: clients?.release?.github }) : null
   let boundStore = null
   async function readDataApproval({ runId, generation, requirementDigest, resourceKey,
     scopeDigest, issueId, planId, sheetId, target, sheetSha256, packageDigest, requestId }) {
@@ -152,7 +201,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       productionApi: clients?.productionPostgres,
       uatApi: clients?.uatPostgres, approvalApi: { getApproval: readDataApproval } })
     : null
-  if (!release && !bytebase) return null
+  if (!release && !bytebase && !uatMerge) return null
   const databaseTargets = new Map((config.bytebase?.targets ?? []).map(target => [target.id, target]))
   if ([...releaseTargets.keys(), ...databaseTargets.keys()].some(id => !id || typeof id !== 'string')
     || releaseTargets.size !== (config.release?.targets?.length ?? 0)
@@ -166,9 +215,32 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
   async function prepareRequirement({ workflowId, action, materials }) {
     const request = requireText(action.arguments?.objective, 'EXTERNAL_OBJECTIVE_REQUIRED')
     const constraints = [...new Set(action.constraints ?? [])]
+    if (workflowId === 'task-uat-pr-merge') {
+      if (!uatMerge) throw executionError('UAT_MERGE_PLATFORM_UNAVAILABLE')
+      const targetId = requireText(action.arguments?.targetId, 'UAT_MERGE_TARGET_REQUIRED')
+      const selected = releaseTargets.get(targetId)
+      const policy = config.uatMerge.targets.find(item => item.targetId === targetId)
+      if (!selected || selected.kind !== 'uat-deployment' || !policy)
+        throw executionError('UAT_MERGE_TARGET_NOT_ALLOWED')
+      const pullRequestNumber = action.arguments?.pullRequestNumber
+      const headCommitSha = action.arguments?.headCommitSha
+      if (!Number.isInteger(pullRequestNumber) || pullRequestNumber < 1
+        || !/^[a-f0-9]{40}$/u.test(headCommitSha ?? ''))
+        throw executionError('UAT_MERGE_PR_IDENTITY_REQUIRED')
+      return { request, targetId, repository: selected.repository, service: selected.service,
+        baseBranch: selected.branch, pullRequestNumber, headCommitSha,
+        requiredChecks: [...policy.requiredChecks],
+        evidenceRefs: (materials ?? []).map(item => item.resourceRef).filter(Boolean).concat(`uat-target:${targetId}`) }
+    }
     if (release && workflowId !== 'task-data-change') {
       const kind = workflowId.slice('task-'.length)
       const markers = (materials ?? []).filter(item => /^engineering-task:[^:]+:[^:]+$/u.test(item.resourceRef ?? ''))
+      const mergeMarkers = (materials ?? []).filter(item => /^uat-merge-task:[^:]+:[^:]+$/u.test(item.resourceRef ?? ''))
+      if (mergeMarkers.length > 1 || markers.length + mergeMarkers.length > 1
+        || (mergeMarkers.length && kind !== 'uat-deployment'))
+        throw executionError('UAT_SOURCE_NOT_UNIQUE')
+      const delivered = mergeMarkers.length
+        ? await readUatMergeDeliveryProof({ marker: mergeMarkers[0].resourceRef, taskId: action.taskId }) : null
       let selected = releaseTargets.get(action.arguments?.targetId)
       if (action.arguments?.targetId !== undefined && !selected) throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
       if (kind === 'uat-deployment' && markers.length === 1 && !selected) {
@@ -181,6 +253,13 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
         if (matches.length !== 1) throw executionError('EXTERNAL_TARGET_NOT_UNIQUE')
         selected = matches[0]
       }
+      if (kind === 'uat-deployment' && delivered && !selected) {
+        const matches = [...releaseTargets.values()].filter(item => item.kind === kind
+          && item.repository === delivered.proof.repository && item.service === delivered.proof.service
+          && item.branch === delivered.proof.baseBranch)
+        if (matches.length !== 1) throw executionError('EXTERNAL_TARGET_NOT_UNIQUE')
+        selected = matches[0]
+      }
       if (!selected || selected.kind !== kind || !release.configuredKinds.includes(kind)) throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
       if (markers.length && (kind !== 'uat-deployment' || markers.length !== 1)) throw executionError('UAT_ENGINEERING_RUN_UNRESOLVED')
       const suppliedCommitSha = action.arguments?.commitSha
@@ -189,7 +268,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       if (kind !== 'production-release' && action.arguments.releaseTag !== undefined)
         throw executionError('EXTERNAL_RELEASE_TAG_UNEXPECTED')
       const head = await clients.release.github.readBranch({ repository: selected.repository, branch: selected.branch })
-      const commitSha = suppliedCommitSha ?? (markers.length ? head.commitSha : null)
+      const commitSha = suppliedCommitSha ?? (delivered ? delivered.proof.mergeCommitSha : markers.length ? head.commitSha : null)
       requireText(commitSha, 'EXTERNAL_COMMIT_REQUIRED')
       if (head.commitSha !== commitSha || !head.evidenceRef) throw executionError('EXTERNAL_COMMIT_NOT_BRANCH_HEAD')
       const target = { repository: selected.repository, environment: selected.environment,
@@ -197,7 +276,9 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
         ...(releaseTag ? { releaseTag } : {}) }
       release.targetFor({ target }, kind)
       const sourceProof = markers.length ? await verifyEngineeringDeploymentSource({
-        marker: markers[0].resourceRef, target, selected }) : null
+        marker: markers[0].resourceRef, target, selected }) : delivered
+          ? await verifyUatMergeDeploymentSource({ marker: mergeMarkers[0].resourceRef,
+            taskId: action.taskId, target, selected, delivered }) : null
       return { request, target, constraints, evidenceRefs: [head.evidenceRef,
         ...(materials ?? []).map(item => item.resourceRef), ...(sourceProof ? [sourceProof] : [])] }
     }
@@ -223,10 +304,12 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
   const operationAdapter = {
     execute: prepared => prepared.workflowKind === 'data-change'
       ? bytebase?.externalAdapter.execute(prepared)
-      : release?.operationAdapter.execute(prepared),
+      : prepared.workflowKind === 'uat-pr-merge'
+        ? uatMerge?.operationAdapter.execute(prepared) : release?.operationAdapter.execute(prepared),
     reconcile: prepared => prepared.workflowKind === 'data-change'
       ? bytebase?.externalAdapter.reconcile(prepared)
-      : release?.operationAdapter.reconcile(prepared),
+      : prepared.workflowKind === 'uat-pr-merge'
+        ? uatMerge?.operationAdapter.reconcile(prepared) : release?.operationAdapter.reconcile(prepared),
   }
   function bindStore(store) {
     if (typeof store?.query !== 'function' || (boundStore && boundStore !== store))
@@ -262,6 +345,15 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
   async function authorizeExternal({ binding, prepared }) {
     if (!binding?.runId || prepared?.runId !== binding.runId || prepared.generation !== binding.generation)
       throw executionError('EXTERNAL_AUTHORIZATION_IDENTITY_INVALID')
+    if (prepared.workflowKind === 'uat-pr-merge') {
+      if (!uatMerge || prepared.operation !== 'merge-uat-pr'
+        || !uatMerge.configuredTargetIds.includes(prepared.expected?.targetId))
+        throw executionError('UAT_MERGE_TARGET_NOT_ALLOWED')
+      return { principalId: owner, approval: {
+        requestId: `external:${executionDigest([binding.runId, binding.nodeRunId, prepared])}`,
+        approverIds: [...new Set(productionApprovers)],
+      } }
+    }
     if (prepared.workflowKind === 'data-change') {
       if (!bytebase || ![...databaseTargets.values()].some(item => executionDigest(item.target) === executionDigest(prepared.target)))
         throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
@@ -292,10 +384,12 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     } }
   }
   return { releaseAdapters: release?.releaseAdapters ?? {},
+    ...(uatMerge ? { uatMergeAdapter: uatMerge.adapter } : {}),
     ...(bytebase ? { dataChangeAdapter: bytebase.workflowAdapter } : {}),
     operationAdapter, authorizeExternal, prepareRequirement, bindStore, bindExecution,
     availableTargets: [
       ...[...releaseTargets].map(([targetId, target]) => ({ targetId, workflowId: `task-${target.kind}` })),
+      ...(uatMerge ? uatMerge.configuredTargetIds.map(targetId => ({ targetId, workflowId: 'task-uat-pr-merge' })) : []),
       ...[...databaseTargets.keys()].map(targetId => ({ targetId, workflowId: 'task-data-change' })),
     ] }
 }

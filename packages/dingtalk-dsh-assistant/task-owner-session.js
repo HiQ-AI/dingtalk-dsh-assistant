@@ -17,11 +17,16 @@ const assessmentSchema = { type: 'object', properties: {
   itemId: { type: 'string' }, status: { type: 'string', enum: ['satisfied'] },
   evidenceRefs: { type: 'array', items: { type: 'string' } },
 }, required: ['itemId', 'status', 'evidenceRefs'], additionalProperties: false }
+const planChangeSchema = { type: 'object', properties: {
+  kind: { type: 'string', enum: ['initialize', 'append', 'replaceSuffix'] },
+  stages: { type: 'array', items: stageSchema }, affectedFrom: { type: 'integer' },
+}, required: ['kind', 'stages'], additionalProperties: false }
 export const ownerDecisionSchema = { type: 'object', properties: {
   action: { type: 'string', enum: ['advance', 'wait', 'complete', 'block'] },
   summary: { type: 'string' },
   evidenceRefs: { type: 'array', items: { type: 'string' } },
   appendStages: { type: 'array', items: stageSchema },
+  planChange: planChangeSchema,
   assessments: { type: 'array', items: assessmentSchema },
 }, required: ['action', 'summary', 'evidenceRefs'], additionalProperties: false }
 assertSupportedJsonSchema(ownerDecisionSchema)
@@ -81,7 +86,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent }) {
 
   function setup(entry, onCandidate, readPage) {
     return agentCtx => {
-      agentCtx.systemPrompt.section({ name: 'task:owner', order: 0, complete: true, text: `你负责一个业务任务。阅读本轮提供的有效目标、验收项、已执行成果和事件。若输入含 eventPages，先逐个调用 task_owner_read_events 读取全部页面，再提交决定；未读完不能提交。判断是否推进当前计划、等待输入、因缺证据阻塞或已满足整个目标。complete 必须对每个 acceptanceItem 提交 satisfied 的 assessments，并引用真实阶段证据；不能把阶段成功当作整体目标完成。日常任务从 capabilities 中选择一项真实可用的只读能力，在 appendStages 中追加 workflowId=task-general-capability、gate=none 和 capabilityStep（能力参数与预期证据）；Host 冻结范围并核验执行结果，一次只选择一步。缺能力时 block，不能虚构已执行。仅报告语言改变时，保留已核验业务产物和验收结论，按 report.preference.changed 事件所要求的语言重新写 summary，不追加流程。新增流程只能在 appendStages 中建议，不能自行执行或审批。最后仅调用 ${SUBMIT}。` })
+      agentCtx.systemPrompt.section({ name: 'task:owner', order: 0, complete: true, text: `你负责一个业务任务。阅读 goal 中的目标、explicitStages、授权、验收项、已执行成果和事件；workflowCatalog 与 capabilities 是 Host 给出的实际可用目录。若输入含 eventPages，先逐个调用 task_owner_read_events 读取全部页面，再提交决定；未读完不能提交。计划尚未建立时用 planChange.kind=initialize 提出首批阶段；以后按事实用 append 或 replaceSuffix 调整，replaceSuffix 必须提供 affectedFrom。用户只要求排查时不要自行安排开发或部署。用户的明确阶段顺序和授权范围高于你的建议；你提出计划不构成写入、合并、部署或审批的授权。complete 必须对每个 acceptanceItem 提交 satisfied 的 assessments，并引用真实阶段证据；阶段成功不代表整体目标完成。日常能力从 capabilities 中选择真实可用项，作为 task-general-capability 阶段并给出 capabilityStep；Host 冻结范围并核验执行结果。缺能力时 block，不能虚构已执行。仅报告语言改变时保留已核验业务产物，按事件要求的语言改写 summary，不追加流程。最后仅调用 ${SUBMIT}。` })
       agentCtx.tools.restrict({ allow: [] })
       agentCtx.tools.guard(exec => {
         if (exec.name !== SUBMIT && exec.name !== 'task_owner_read_events') return 'task_owner_tool_not_allowed'
@@ -113,6 +118,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent }) {
           if (problems.length) throw fail('TASK_OWNER_DECISION_INVALID')
           if (!args.decision.summary.trim() || args.decision.summary.length > 8000
             || args.decision.evidenceRefs.length > 64 || args.decision.appendStages?.length > 16
+            || args.decision.planChange?.stages?.length > 16
             || args.decision.assessments?.length > 32
             || args.decision.appendStages?.some(stage => !stage.workflowId.trim())
             || Buffer.byteLength(JSON.stringify(args.decision), 'utf8') > 16000) throw fail('TASK_OWNER_DECISION_INVALID')

@@ -11,7 +11,7 @@ import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, q
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 const APPLICATION_ID = 0x44534845
 let db, owner, healthy = true
 const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
@@ -558,6 +558,7 @@ function command(value) {
   object(value, ['id', 'kind', 'args'])
   text(value.id, 'command.id'); text(value.kind, 'command.kind')
   if (!value.args || Object.getPrototypeOf(value.args) !== Object.prototype) fail('INVALID_ARGUMENT')
+  if (value.kind === 'task.plan.accept') fail('UNKNOWN_COMMAND')
   const hash = createHash('sha256').update(canonical({ kind: value.kind, args: value.args })).digest('hex')
   const now = new Date().toISOString()
   try {
@@ -568,7 +569,24 @@ function command(value) {
       db.exec('COMMIT')
       return { replayed: true, dispatchEligible: false, result: JSON.parse(prior.result) }
     }
-    const core = coreCommand(value, now)
+    let combined = null
+    if (value.kind === 'task.accept') {
+      object(value.args, ['taskId', 'requirementRef', 'requirementRevision', 'sessionId', 'criteria', 'sourceKey', 'eventKey'])
+      const { taskId, requirementRef, requirementRevision, sessionId, criteria, sourceKey, eventKey } = value.args
+      const created = reduceTaskPlanCommand(db, { kind: 'task.plan.accept', args: { taskId, requirementRef, requirementRevision } }, context(value.id, now))
+      reduceTaskOwnerCommand(db, { kind: 'task.owner.init', args: { taskId, sessionId, criteria, sourceKey } }, context(value.id, now))
+      const event = reduceTaskOwnerCommand(db, { kind: 'task.owner.event', args: { taskId, eventKey, eventType: 'task.created', payloadRef: requirementRef } }, context(value.id, now))
+      combined = { ...created, ownerSessionId: sessionId, eventSeq: event.eventSeq }
+    } else if (value.kind === 'task.requirement.update') {
+      object(value.args, ['taskId', 'expectedRequirementRevision', 'requirementRef', 'eventKey', 'payloadRef'],
+        ['taskId', 'expectedRequirementRevision', 'requirementRef', 'eventKey'])
+      const { taskId, expectedRequirementRevision, requirementRef, eventKey, payloadRef } = value.args
+      if (db.prepare('SELECT 1 FROM task_events WHERE event_key=?').get(eventKey)) fail('TASK_OWNER_EVENT_CONFLICT')
+      const updated = reduceTaskPlanCommand(db, { kind: 'task.requirement.update', args: { taskId, expectedRequirementRevision, requirementRef } }, context(value.id, now))
+      const event = reduceTaskOwnerCommand(db, { kind: 'task.owner.event', args: { taskId, eventKey, eventType: 'intent.received', payloadRef: payloadRef ?? requirementRef } }, context(value.id, now))
+      combined = { ...updated, eventSeq: event.eventSeq }
+    }
+    const core = combined ?? coreCommand(value, now)
     const plan = core === null ? reduceTaskPlanCommand(db, value, context(value.id, now)) : null
     const ownerResult = core === null && plan === null ? reduceTaskOwnerCommand(db, value, context(value.id, now)) : null
     const effect = core === null && plan === null && ownerResult === null

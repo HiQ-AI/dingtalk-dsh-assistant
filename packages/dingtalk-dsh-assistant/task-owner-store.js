@@ -20,11 +20,23 @@ const exact = (value, allowed, required = allowed) => {
 }
 const json = value => JSON.stringify(value)
 const decision = value => {
-  exact(value, ['action', 'summary', 'evidenceRefs', 'appendStages', 'assessments'], ['action', 'summary', 'evidenceRefs'])
+  exact(value, ['action', 'summary', 'evidenceRefs', 'appendStages', 'planChange', 'assessments'], ['action', 'summary', 'evidenceRefs'])
   if (!['advance', 'wait', 'complete', 'block'].includes(value.action)
     || typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 4000
     || !Array.isArray(value.evidenceRefs) || value.evidenceRefs.length > 128) fail('TASK_OWNER_DECISION_INVALID')
   value.evidenceRefs.forEach(ref)
+  if (value.planChange !== undefined) {
+    if (value.action !== 'advance' || value.appendStages !== undefined) fail('TASK_OWNER_DECISION_INVALID')
+    exact(value.planChange, ['kind', 'stages', 'affectedFrom'], ['kind', 'stages'])
+    if (!['initialize', 'append', 'replaceSuffix'].includes(value.planChange.kind)
+      || !Array.isArray(value.planChange.stages) || !value.planChange.stages.length
+      || value.planChange.stages.length > 32) fail('TASK_OWNER_DECISION_INVALID')
+    if (value.planChange.kind === 'replaceSuffix') {
+      if (!Number.isSafeInteger(value.planChange.affectedFrom) || value.planChange.affectedFrom < 0)
+        fail('TASK_OWNER_DECISION_INVALID')
+    } else if (value.planChange.affectedFrom !== undefined) fail('TASK_OWNER_DECISION_INVALID')
+    value.appendStages = value.planChange.stages
+  }
   if (value.assessments !== undefined) {
     if (value.action !== 'complete' || !Array.isArray(value.assessments) || !value.assessments.length || value.assessments.length > 32)
       fail('TASK_OWNER_DECISION_INVALID')
@@ -56,7 +68,7 @@ const decision = value => {
   return value
 }
 const task = (db, taskId) => {
-  const row = db.prepare(`SELECT t.task_id,t.requirement_revision,t.plan_revision,t.status AS plan_status,
+  const row = db.prepare(`SELECT t.task_id,t.requirement_revision,t.plan_revision,t.plan_requirement_revision,t.status AS plan_status,
     c.control_revision,c.state AS control_state FROM business_tasks t
     JOIN task_controls c ON c.task_id=t.task_id WHERE t.task_id=?`).get(id(taskId))
   if (!row) fail('TASK_OWNER_TASK_NOT_FOUND')
@@ -270,10 +282,16 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       AND status<>'succeeded' AND status<>'invalidated' ORDER BY position LIMIT 1`)
       .get(o.task_id, currentTask.plan_revision)
     if (currentTask.control_state !== 'active') fail('TASK_OWNER_CONTROL_BLOCKED')
-    if (chosen.appendStages?.some(stage => stage.workflowId === 'task-general-capability')
-      && currentTask.plan_status !== 'succeeded') fail('TASK_OWNER_ADVANCE_CONFLICT')
+    if (chosen.appendStages?.some(stage => stage.capabilityStep)
+      && (chosen.appendStages.length !== 1
+        || !['pending', 'succeeded'].includes(currentTask.plan_status))) fail('TASK_OWNER_ADVANCE_CONFLICT')
+    if (chosen.planChange?.kind === 'initialize' && (currentTask.plan_status !== 'pending'
+      || currentTask.plan_revision !== 0)) fail('TASK_OWNER_ADVANCE_CONFLICT')
+    if (chosen.planChange && chosen.planChange.kind !== 'initialize' && currentTask.plan_revision === 0)
+      fail('TASK_OWNER_ADVANCE_CONFLICT')
     if (chosen.action === 'complete') {
-      if (currentTask.plan_status !== 'succeeded' || chosen.appendStages !== undefined) fail('TASK_OWNER_COMPLETION_UNPROVEN')
+      if (currentTask.plan_status !== 'succeeded' || chosen.appendStages !== undefined
+        || currentTask.plan_requirement_revision !== currentTask.requirement_revision) fail('TASK_OWNER_COMPLETION_UNPROVEN')
       const stages = db.prepare('SELECT workflow_id,status,output_ref,evidence_refs FROM task_plan_stages WHERE task_id=? AND plan_revision=?')
         .all(o.task_id, currentTask.plan_revision)
       if (!stages.length || stages.some(stage => stage.status !== 'succeeded' || !stage.output_ref
@@ -295,16 +313,17 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       const generalStep = chosen.appendStages?.length === 1
         && chosen.appendStages[0].workflowId === 'task-general-capability'
         && chosen.appendStages[0].capabilityStep
-        && db.prepare(`SELECT 1 FROM task_plan_stages WHERE task_id=? AND plan_revision=?
-          AND workflow_id IN ('task-general-intake','task-general-capability') LIMIT 1`)
-          .get(o.task_id, currentTask.plan_revision)
-      const continuation = currentTask.plan_status === 'succeeded' && chosen.appendStages?.length
+      const continuation = currentTask.plan_status === 'pending' && chosen.planChange?.kind === 'initialize'
+        || chosen.planChange?.kind === 'replaceSuffix'
+        || currentTask.plan_status === 'succeeded' && chosen.appendStages?.length
         && (generalStep || db.prepare(`SELECT 1 FROM task_events WHERE task_id=? AND seq>? AND seq<=?
           AND event_type='intent.received' LIMIT 1`).get(o.task_id, o.processed_watermark, t.event_watermark))
       if (!continuation) fail('TASK_OWNER_ADVANCE_CONFLICT')
-    } else if (chosen.action === 'wait' && !['ready', 'running', 'waiting_confirmation'].includes(activeStage?.status)) {
+    } else if (chosen.action === 'wait' && currentTask.plan_status !== 'pending'
+      && !['ready', 'running', 'waiting_confirmation'].includes(activeStage?.status)) {
       fail('TASK_OWNER_WAIT_CONFLICT')
-    } else if (chosen.action === 'block' && !['ready', 'running', 'waiting_confirmation', 'blocked'].includes(activeStage?.status)) {
+    } else if (chosen.action === 'block' && currentTask.plan_status !== 'pending'
+      && !['ready', 'running', 'waiting_confirmation', 'blocked'].includes(activeStage?.status)) {
       fail('TASK_OWNER_BLOCK_CONFLICT')
     }
     db.prepare("UPDATE task_owner_turns SET decision_json=candidate_json,status='accepted',application_status='pending',updated_at=? WHERE turn_id=?")

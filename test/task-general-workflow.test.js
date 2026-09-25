@@ -1,10 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile, symlink, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, symlink, mkdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGeneralTaskWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
-import { createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
+import { createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability,
+  createHistoricalGeneralCapabilityStepWorkflow } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
+import { createTaskMarkdownFileAdapter } from '../packages/dingtalk-dsh-assistant/task-markdown-file.js'
+import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { executionDigest, openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
@@ -76,6 +79,69 @@ test('Owner 单步执行载体只有代码节点，按受信范围执行并独�
   await assert.rejects(failed.nodes[0].execute({ input: request }), { code: 'GENERAL_EVIDENCE_UNVERIFIED' })
   assert.throws(() => createGeneralCapabilityStepWorkflow({ capabilities: [{ ...capabilities[0], effectClass: 'write' }] }),
     { code: 'GENERAL_CAPABILITY_INVALID' })
+  assert.equal(createHistoricalGeneralCapabilityStepWorkflow({ capabilities }).version, '1')
+})
+
+test('Task Markdown 文件仅落在 Host 根目录，回读核验原字节且冲突不覆盖', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-markdown-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const adapter = createTaskMarkdownFileAdapter({ root })
+  const capability = createGeneralMarkdownWriteCapability({ fileAdapter: adapter })
+  const binding = { taskId: 'task-1', runId: 'run-1', nodeRunId: 'node-1', generation: 1,
+    requirementDigest: 'a'.repeat(64) }
+  const input = { content: '# 调查结论\n\n已核对证据。\n' }
+  assert.equal(await capability.authorize({ input, scope: { writeMarkdown: true } }), true)
+  assert.equal(await capability.authorize({ input, scope: {} }), false)
+  assert.equal(await capability.authorize({ input: { ...input, path: 'C:\\outside.md' }, scope: { writeMarkdown: true } }), false)
+  const prepared = adapter.prepare({ input, binding })
+  assert.equal((await adapter.reconcile(prepared)).status, 'failed')
+  const first = await adapter.execute(prepared)
+  assert.equal(first.status, 'succeeded')
+  assert.equal(await readFile(first.result.path, 'utf8'), input.content)
+  assert.equal((await adapter.execute(prepared)).result.contentDigest, first.result.contentDigest)
+  assert.equal((await capability.verify({ prepared, output: first })).passed, true)
+  await writeFile(first.result.path, '# 外部修改\n')
+  await assert.rejects(adapter.reconcile(prepared), { code: 'TASK_MARKDOWN_CONFLICT' })
+  await assert.rejects(adapter.execute(prepared), { code: 'TASK_MARKDOWN_CONFLICT' })
+  assert.equal(await readFile(first.result.path, 'utf8'), '# 外部修改\n')
+  assert.throws(() => adapter.prepare({ input, binding: { ...binding, taskId: '../escape' } }),
+    { code: 'TASK_MARKDOWN_PREPARED_INVALID' })
+})
+
+test('Task Markdown 写入经过效果账，重启对账不重放写入', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-markdown-ledger-'))
+  let store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'markdown', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const fileAdapter = createTaskMarkdownFileAdapter({ root: join(root, 'task-files') })
+  const capability = createGeneralMarkdownWriteCapability({ fileAdapter })
+  const delivery = createExecutionDelivery({ store, artifacts, fileAdapter,
+    authorize: async () => null,
+    authorizeFile: async ({ binding, prepared }) => binding.taskId === prepared.taskId
+      ? { principalId: 'host', authorizationRef: 'task-markdown-grant' } : null })
+  const definition = createGeneralCapabilityStepWorkflow({ capabilities: [capability] })
+  let controller = createExecutionController({ store, artifacts, delivery, workflows: [definition] })
+  t.after(async () => { await controller?.close(); await store?.close(); await rm(root, { recursive: true, force: true }) })
+  await controller.createRun({ commandId: 'create-markdown', runId: 'run-1', taskId: 'task-1',
+    workflowId: 'task-general-capability', input: { capabilityId: capability.id,
+      input: { content: '# 可交付报告\n\n结论。\n' }, scope: { writeMarkdown: true }, expectedEvidence: '文件读回' } })
+  const state = await controller.whenIdle('run-1')
+  assert.equal(state.run.status, 'succeeded', JSON.stringify({ waitReason: state.nodes[0].waitReason,
+    error: (await controller.state('run-1')).controllerError,
+    effects: await store.query({ kind: 'effect.list', runId: 'run-1' }) }))
+  const output = await artifacts.read(state.nodes[0].outputRef)
+  assert.equal(await readFile(output.output.result.path, 'utf8'), '# 可交付报告\n\n结论。\n')
+  const effects = await store.query({ kind: 'effect.list', runId: 'run-1' })
+  assert.equal(effects.length, 1)
+  assert.equal(effects[0].state, 'succeeded')
+  assert.equal(effects[0].definition.action, 'file')
+  assert.equal((await delivery.reconcile(effects[0].effectId)).state, 'succeeded')
+  await controller.close(); controller = null
+  await store.close(); store = null
+  store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'markdown' })
+  const recoveredDelivery = createExecutionDelivery({ store, artifacts, fileAdapter, authorize: async () => null,
+    authorizeFile: async () => null })
+  assert.equal((await recoveredDelivery.reconcile(effects[0].effectId)).state, 'succeeded')
+  assert.equal(await readFile(output.output.result.path, 'utf8'), '# 可交付报告\n\n结论。\n')
 })
 
 test('通用流程只调用登记能力，逐步独立核验并保存证据', async () => {

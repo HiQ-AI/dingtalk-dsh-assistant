@@ -30,6 +30,154 @@ async function setup(t) {
   return { store, artifacts, controller, dbPath, instanceId }
 }
 
+test('任务与 Owner 原子接纳后保持零阶段，Owner 初始化计划才可启动 Run', async t => {
+  const { store, artifacts, controller } = await setup(t)
+  const goal = await artifacts.put(3)
+  await store.command({ id: 'accept-zero', kind: 'task.accept', args: {
+    taskId: 'new-task', requirementRef: goal.ref, requirementRevision: 1,
+    sessionId: 'owner-new-task', criteria: ['结果为 4'], sourceKey: 'source-1', eventKey: 'created-new-task',
+  } })
+  const before = await controller.taskPlan('new-task')
+  assert.equal(before.task.status, 'pending')
+  assert.equal(before.task.planRevision, 0)
+  assert.equal(before.task.requirementRef, goal.ref)
+  assert.deepEqual(before.stages, [])
+  assert.equal((await store.query({ kind: 'run.list', taskId: 'new-task' })).length, 0)
+  assert.equal((await store.query({ kind: 'task.owner', taskId: 'new-task' })).eventWatermark > 0, true)
+  await controller.initializeTaskPlan({ commandId: 'initialize-new-task', taskId: 'new-task',
+    expectedPlanRevision: 0, expectedRequirementRevision: 1, expectedControlRevision: 1,
+    stages: [{ stageId: 'stage-1', workflowId: 'investigate', input: 3 }] })
+  await assert.rejects(controller.initializeTaskPlan({ commandId: 'initialize-twice', taskId: 'new-task',
+    expectedPlanRevision: 0, expectedRequirementRevision: 1, expectedControlRevision: 1,
+    stages: [{ stageId: 'stage-1', workflowId: 'investigate', input: 3 }] }), { code: 'TASK_PLAN_STALE' })
+  const active = await controller.taskPlan('new-task')
+  assert.equal(active.task.planRevision, 1)
+  assert.equal(active.task.requirementRevision, 1)
+  assert.equal(active.stages[0].status, 'ready')
+  await controller.advanceTaskPlan('new-task')
+  assert.equal((await store.query({ kind: 'run.list', taskId: 'new-task' })).length, 1)
+})
+
+test('Owner 初始化失败时 Task 接纳事务整体回滚', async t => {
+  const { store, artifacts } = await setup(t)
+  const goal = await artifacts.put(3)
+  await assert.rejects(store.command({ id: 'accept-invalid-owner', kind: 'task.accept', args: {
+    taskId: 'rollback-task', requirementRef: goal.ref, requirementRevision: 1,
+    sessionId: 'owner-rollback', criteria: [], sourceKey: 'source-1', eventKey: 'created-rollback',
+  } }), { code: 'TASK_OWNER_CRITERIA_INVALID' })
+  assert.equal(await store.query({ kind: 'task.plan', taskId: 'rollback-task' }), null)
+  assert.equal(await store.query({ kind: 'task.owner', taskId: 'rollback-task' }), null)
+})
+
+test('要求更新与 Owner 事件原子落账并使旧计划候选失效', async t => {
+  const { store, artifacts, controller } = await setup(t)
+  const first = await artifacts.put(3), second = await artifacts.put(5)
+  await store.command({ id: 'accept-versioned', kind: 'task.accept', args: {
+    taskId: 'versioned', requirementRef: first.ref, requirementRevision: 1,
+    sessionId: 'owner-versioned', criteria: ['完成结果'], sourceKey: 'source-1', eventKey: 'created-versioned',
+  } })
+  const oldOwner = await store.query({ kind: 'task.owner', taskId: 'versioned' })
+  const updated = await store.command({ id: 'update-versioned', kind: 'task.requirement.update', args: {
+    taskId: 'versioned', expectedRequirementRevision: 1, requirementRef: second.ref, eventKey: 'updated-versioned',
+  } })
+  assert.equal(updated.result.requirementRevision, 2)
+  const current = await controller.taskPlan('versioned')
+  assert.equal(current.task.requirementRef, second.ref)
+  assert.equal(current.task.planRevision, 0)
+  assert.equal((await store.query({ kind: 'task.owner', taskId: 'versioned' })).eventWatermark > oldOwner.eventWatermark, true)
+  await assert.rejects(controller.initializeTaskPlan({ commandId: 'stale-initialize', taskId: 'versioned',
+    expectedPlanRevision: 0, expectedRequirementRevision: 1, expectedControlRevision: 1,
+    stages: [{ stageId: 'stage-1', workflowId: 'investigate', input: 3 }] }), { code: 'TASK_PLAN_STALE' })
+})
+
+test('零阶段任务的 Owner 可接纳 initialize 并保留待应用决定', async t => {
+  const { store, artifacts } = await setup(t)
+  const goal = await artifacts.put(3)
+  await store.command({ id: 'accept-owner-init', kind: 'task.accept', args: {
+    taskId: 'owner-init-task', requirementRef: goal.ref, requirementRevision: 1,
+    sessionId: 'owner-init-session', criteria: ['结果为 4'], sourceKey: 'source-1', eventKey: 'owner-init-event',
+  } })
+  const claim = (await store.command({ id: 'claim-owner-init', kind: 'task.owner.claim', args: {
+    taskId: 'owner-init-task', turnId: 'turn-owner-init', expectedLeaseEpoch: 0,
+  } })).result
+  await store.command({ id: 'bound-owner-init', kind: 'task.owner.sessionBound', args: {
+    taskId: 'owner-init-task', turnId: 'turn-owner-init', leaseEpoch: claim.leaseEpoch,
+    sessionId: 'owner-init-session',
+  } })
+  await store.command({ id: 'candidate-owner-init', kind: 'task.owner.candidate', args: {
+    taskId: 'owner-init-task', turnId: 'turn-owner-init', leaseEpoch: claim.leaseEpoch,
+    decision: { action: 'advance', summary: '先排查', evidenceRefs: [], planChange: {
+      kind: 'initialize', stages: [{ workflowId: 'investigate', gate: 'none' }],
+    } },
+  } })
+  const accepted = (await store.command({ id: 'accepted-owner-init', kind: 'task.owner.accept', args: {
+    taskId: 'owner-init-task', turnId: 'turn-owner-init', leaseEpoch: claim.leaseEpoch,
+  } })).result
+  assert.equal(accepted.decision.planChange.kind, 'initialize')
+  assert.equal(accepted.decision.appendStages.length, 1)
+  assert.equal((await store.query({ kind: 'task.owner.actions.pending', limit: 10 })).length, 1)
+})
+
+test('新任务计划结算后可追加阶段，要求版本不随计划操作增长', async t => {
+  const { store, artifacts, controller } = await setup(t)
+  const goal = await artifacts.put(3)
+  await store.command({ id: 'accept-append', kind: 'task.accept', args: {
+    taskId: 'append-task', requirementRef: goal.ref, requirementRevision: 1,
+    sessionId: 'owner-append', criteria: ['完成两个步骤'], sourceKey: 'source-1', eventKey: 'created-append',
+  } })
+  await controller.initializeTaskPlan({ commandId: 'initialize-append', taskId: 'append-task',
+    expectedPlanRevision: 0, expectedRequirementRevision: 1, expectedControlRevision: 1,
+    stages: [{ stageId: 'stage-1', workflowId: 'investigate', input: 3 }] })
+  let plan = await controller.advanceTaskPlan('append-task')
+  await controller.whenIdle(plan.stages[0].runId)
+  plan = await controller.advanceTaskPlan('append-task')
+  assert.equal(plan.task.status, 'succeeded')
+  await controller.extendTaskPlan({ commandId: 'extend-settled', taskId: 'append-task',
+    expectedPlanRevision: 1, expectedControlRevision: 1, requirementRevision: 1,
+    stages: [{ stageId: 'stage-2', workflowId: 'implement' }] })
+  plan = await controller.taskPlan('append-task')
+  assert.equal(plan.task.requirementRevision, 1)
+  assert.equal(plan.task.planRevision, 1)
+  assert.equal(plan.task.status, 'active')
+  assert.equal(plan.stages[1].status, 'ready')
+})
+
+test('新要求使旧成功计划的完成候选失效，必须重新确认计划适用性', async t => {
+  const { store, artifacts, controller } = await setup(t)
+  const first = await artifacts.put(3), second = await artifacts.put(5)
+  await store.command({ id: 'accept-fence', kind: 'task.accept', args: {
+    taskId: 'fence-task', requirementRef: first.ref, requirementRevision: 1,
+    sessionId: 'owner-fence', criteria: ['结果满足最新要求'], sourceKey: 'source-1', eventKey: 'fence-created',
+  } })
+  await controller.initializeTaskPlan({ commandId: 'initialize-fence', taskId: 'fence-task',
+    expectedPlanRevision: 0, expectedRequirementRevision: 1, expectedControlRevision: 1,
+    stages: [{ stageId: 'stage-1', workflowId: 'investigate', input: 3 }] })
+  let plan = await controller.advanceTaskPlan('fence-task')
+  await controller.whenIdle(plan.stages[0].runId)
+  plan = await controller.advanceTaskPlan('fence-task')
+  assert.equal(plan.task.status, 'succeeded')
+  await store.command({ id: 'update-fence', kind: 'task.requirement.update', args: {
+    taskId: 'fence-task', expectedRequirementRevision: 1, requirementRef: second.ref, eventKey: 'fence-updated',
+  } })
+  plan = await controller.taskPlan('fence-task')
+  assert.equal(plan.task.requirementRevision, 2)
+  assert.equal(plan.task.planRequirementRevision, 1)
+  const claim = (await store.command({ id: 'claim-fence-owner', kind: 'task.owner.claim', args: {
+    taskId: 'fence-task', turnId: 'turn-fence-owner', expectedLeaseEpoch: 0,
+  } })).result
+  await store.command({ id: 'bound-fence-owner', kind: 'task.owner.sessionBound', args: {
+    taskId: 'fence-task', turnId: 'turn-fence-owner', leaseEpoch: claim.leaseEpoch, sessionId: 'owner-fence',
+  } })
+  await store.command({ id: 'candidate-fence-owner', kind: 'task.owner.candidate', args: {
+    taskId: 'fence-task', turnId: 'turn-fence-owner', leaseEpoch: claim.leaseEpoch,
+    decision: { action: 'complete', summary: '错误地宣称完成', evidenceRefs: [plan.stages[0].outputRef],
+      assessments: [{ itemId: 'acceptance-1', status: 'satisfied', evidenceRefs: [plan.stages[0].outputRef] }] },
+  } })
+  await assert.rejects(store.command({ id: 'accept-stale-complete', kind: 'task.owner.accept', args: {
+    taskId: 'fence-task', turnId: 'turn-fence-owner', leaseEpoch: claim.leaseEpoch,
+  } }), { code: 'TASK_OWNER_COMPLETION_UNPROVEN' })
+})
+
 test('任务级控制屏障落盘后即阻止节点领取，不等待异步Run停止', async t => {
   const { store } = await setup(t)
   const digest = 'a'.repeat(64)
@@ -494,8 +642,14 @@ test('v1 迁移先零副作用检查，再备份升级并独立读回版本', as
   const ownerResult = JSON.parse((await runFile(process.execPath, [ownerMigration, '--execute', dbPath])).stdout)
   assert.equal(ownerResult.schemaReadback, 3)
   assert.ok(ownerResult.backupPath)
+  const v4Migration = fileURLToPath(new URL('../scripts/migrate-task-workflow-v4.mjs', import.meta.url))
+  const v4Check = JSON.parse((await runFile(process.execPath, [v4Migration, '--check', dbPath])).stdout)
+  assert.equal(v4Check.writes, 0)
+  const v4Result = JSON.parse((await runFile(process.execPath, [v4Migration, '--execute', dbPath])).stdout)
+  assert.equal(v4Result.schemaReadback, 4)
+  assert.ok(v4Result.backupPath)
   const reopened = await openExecutionStore({ dbPath, instanceId })
-  assert.equal(reopened.info.schemaVersion, 3)
+  assert.equal(reopened.info.schemaVersion, 4)
   assert.equal((await reopened.query({ kind: 'run', runId: 'historical-run' })).run.taskId, 'historical')
   await reopened.close()
 })

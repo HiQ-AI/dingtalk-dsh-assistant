@@ -179,11 +179,13 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
     : legacyJudge(request)
   const taskOwnerSessions = { async run({ input, onSessionBound, onCandidate }) {
     await onSessionBound()
-    const complete = input.stages.every(stage => stage.status === 'succeeded')
+    const needsPlan = input.stages.length === 0
+    const complete = !needsPlan && input.stages.every(stage => stage.status === 'succeeded')
     const activeStage = input.stages.find(stage => !['succeeded', 'invalidated'].includes(stage.status))
-    const decision = { action: complete ? 'complete' : activeStage?.status === 'blocked' ? 'block'
+    const decision = { action: needsPlan ? 'advance' : complete ? 'complete' : activeStage?.status === 'blocked' ? 'block'
       : activeStage?.status === 'ready' ? 'advance' : 'wait',
       summary: complete ? '全部阶段已完成' : '按当前计划推进', evidenceRefs: input.stages.flatMap(stage => stage.evidenceRefs ?? []),
+      ...(needsPlan ? { planChange: { kind: 'initialize', stages: [{ workflowId: 'task-analysis', gate: 'none' }] } } : {}),
       ...(complete ? { assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId,
         status: 'satisfied', evidenceRefs: input.stages.flatMap(stage => stage.evidenceRefs ?? []) })) } : {}) }
     await onCandidate(decision)
@@ -208,6 +210,31 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
   const message = { groupId: 'g', messageId: 'm', text: '整理本条材料', senderOpenDingTalkId: actor }
   return { service, execution, message }
 }
+
+test('I 只能提交目标：Task 与 Owner 原子接纳，Owner 未建计划前没有业务 Run', async t => {
+  const taskOwnerSessions = { async run({ input, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    assert.equal(input.stages.length, 0)
+    assert.equal(input.task.planRevision, 0)
+    assert.equal(input.goal.request, '整理本条材料')
+    const decision = { action: 'wait', summary: '等待明确下一步', evidenceRefs: [] }
+    await onCandidate(decision)
+    return { status: 'submitted', decision }
+  }, async close() {} }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { taskOwnerSessions })
+  assert.equal(messageSchemas.I.safeParse({ kind: 'intent', actions: [{ intent: 'create',
+    arguments: { objective: '整理本条材料', workflowPlan: [{ workflowId: 'task-analysis', gate: 'none' }] }, dependsOn: [] }],
+  constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }).success, false)
+  const accepted = await service.ingest(message)
+  const state = await service.messages.process(accepted.runId)
+  assert.equal(state.commands[0].status, 'applied')
+  const taskId = state.commands[0].result.taskId
+  const plan = await execution.controller.taskPlan(taskId)
+  assert.equal(plan.task.planRevision, 0)
+  assert.deepEqual(plan.stages, [])
+  assert.deepEqual(await execution.store.query({ kind: 'run.list', taskId }), [])
+  assert.ok((await execution.store.query({ kind: 'task.owner', taskId })).sessionId)
+})
 
 test('真实同库消息接纳→固定Task执行→看板结果；重复入站不重复创建', async t => {
   const { service, execution, message } = await fixture(t)
@@ -352,9 +379,10 @@ test('Owner长事件积压分页读取全部内容后才推进同一Task水位',
       readPages++
     }
     assert.equal(events.at(-1).eventSeq, input.eventWatermark)
-    const complete = input.stages.every(stage => stage.status === 'succeeded')
+    const complete = input.stages.length > 0 && input.stages.every(stage => stage.status === 'succeeded')
     const evidenceRefs = input.stages.flatMap(stage => stage.evidenceRefs ?? [])
     const decision = { action: complete ? 'complete' : 'advance', summary: complete ? '任务完成' : '开始执行',
+      ...(!input.stages.length ? { planChange: { kind: 'initialize', stages: [{ workflowId: 'task-analysis', gate: 'none' }] } } : {}),
       evidenceRefs, ...(complete ? { assessments: input.acceptanceItems.map(item => ({
         itemId: item.itemId, status: 'satisfied', evidenceRefs })) } : {}) }
     await onCandidate(decision)
@@ -736,6 +764,7 @@ test('本人可答复他人旧排查澄清，其他群成员不能冒用且不�
   const accepted=await service.ingest({...message,messageId:'owner-reply',senderOpenDingTalkId:'owner',text:'修复并验证，完成后发uat提测',quotedMessage:{messageId:'clarify-sent'}})
   assert.equal(accepted.status,'resolved')
   assert.equal((await service.state('old-misrouted-answer')).run.status,'superseded')
+  await service.recover()
   assert.equal((await execution.store.query({kind:'run.list'})).length,1)
 })
 
@@ -908,7 +937,7 @@ test('旧群历史缺发送人字段时仍能写入快照',async t=>{
   assert.ok((await service.state(received.runId)).run.snapshot)
 })
 
-test('五类旧只读流程共享消息schema、可用列表和创建路由，外部效果流程不准入', async t => {
+test('I 的流程提示不直接派发；专业目录供 Owner 选择，缺适配器不执行外部效果', async t => {
   const ids = ['task-investigation', 'task-planning', 'task-pr-review', 'task-data-query', 'task-retrospective']
   let selected = 0
   const judge = async ({ stage, input }) => {
@@ -916,7 +945,7 @@ test('五类旧只读流程共享消息schema、可用列表和创建路由，�
     if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
     const available = input.facts.availableWorkflows.map(item => item.id)
     assert.ok(ids.every(id => available.includes(id)))
-    assert.deepEqual(input.facts.unavailableWorkflows, ['将已合入UAT分支的精确提交部署到UAT环境', '生产发布', '数据变更', 'UAT同提交重建'])
+    assert.ok(input.facts.unavailableWorkflows.includes('生产发布'))
     return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: input.text, workflowId: ids[selected++] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
   }
   const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
@@ -931,9 +960,9 @@ test('五类旧只读流程共享消息schema、可用列表和创建路由，�
     const state = await service.messages.process(receipt.runId)
     assert.equal(state.run.status, 'settled')
     const run = await execution.store.query({ kind: 'run', runId: state.commands[0].result.runId })
-    assert.equal(run.run.workflowId, ids[index])
+    assert.equal(run.run.workflowId, 'task-analysis')
     const view = (await service.tasks()).find(task => task.taskId === run.run.taskId)
-    assert.equal(view.workflowId, ids[index])
+    assert.equal(view.workflowId, 'task-analysis')
     assert.equal(view.workflowVersion, run.run.definitionVersion)
   }
   assert.deepEqual(taskWorkflowCatalog.filter(item => item.mode === 'read-only').map(item => item.id), ['task-analysis', ...ids])
@@ -943,11 +972,12 @@ test('五类旧只读流程共享消息schema、可用列表和创建路由，�
     : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] } : envelope })
   const blocked = await denied.service.ingest({ ...denied.message, messageId: 'external-denied', text: '执行生产数据变更' })
   const deniedState = await denied.service.messages.process(blocked.runId)
-  assert.equal(deniedState.commands[0].status, 'rejected')
-  assert.deepEqual(await denied.execution.store.query({ kind: 'run.list' }), [])
+  assert.equal(deniedState.commands[0].status, 'applied')
+  assert.equal((await denied.execution.store.query({ kind: 'run.list' })).length, 1)
+  assert.equal((await denied.execution.store.query({ kind: 'run.list' }))[0].workflowId, 'task-analysis')
 })
 
-test('受信外部适配器齐备时四类流程可选并按固定需求创建，模型不持有执行能力', async t => {
+test('受信外部适配器齐备时目录可见，I 仍不能直接启动外部效果', async t => {
   const ids = ['task-uat-deployment', 'task-production-release', 'task-data-change', 'task-uat-rebuild']
   const digest = createHash('sha256').update('rules').digest('hex')
   const releaseAdapter = kind => ({ id: kind, version: '1', rulesDigest: digest,
@@ -975,7 +1005,7 @@ test('受信外部适配器齐备时四类流程可选并按固定需求创建�
     if (stage === 'S') return splitOne(input.source.text)
     if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
     assert.ok(ids.every(id => input.facts.availableWorkflows.some(item => item.id === id)))
-    assert.deepEqual(input.facts.unavailableWorkflows, [])
+    assert.ok(!input.facts.unavailableWorkflows.includes('生产发布'))
     return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: input.text, workflowId: ids[selected++] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
   }
   const { service, execution, message } = await fixture(t, 'owner', undefined, { external, judge })
@@ -985,9 +1015,9 @@ test('受信外部适配器齐备时四类流程可选并按固定需求创建�
     const state = await service.messages.process(receipt.runId)
     assert.equal(state.commands[0].status, 'applied', JSON.stringify(state.commands[0]))
     const run = await execution.store.query({ kind: 'run', runId: state.commands[0].result.runId })
-    assert.equal(run.run.workflowId, ids[index])
+    assert.equal(run.run.workflowId, 'task-analysis')
   }
-  assert.equal(prepared, 4)
+  assert.equal(prepared, 0)
   assert.equal(effects, 0)
 })
 
@@ -1006,7 +1036,7 @@ test('原消息否定编辑取消原Task，不发第二个任务且屏障释放'
   assert.ok(state.barriers.every(b=>b.status==='resolved'))
 })
 
-test('运行中原消息修订只更新原Task输入代际并解除编辑屏障', async t => {
+test('运行中原消息修订更新 Task 要求并保持旧 Run 输入冻结', async t => {
   let release,started
   const began=new Promise(r=>started=r), gate=new Promise(r=>release=r)
   t.after(()=>release())
@@ -1021,8 +1051,11 @@ test('运行中原消息修订只更新原Task输入代际并解除编辑屏障'
   const runs=await execution.store.query({kind:'run.list'});assert.equal(runs.length,1);assert.equal(runs[0].taskId,original.result.taskId)
   release();await execution.controller.whenIdle(original.result.runId)
   const final=await execution.store.query({kind:'run',runId:original.result.runId})
-  assert.equal((await execution.artifacts.read(final.run.requirementRef)).request,'按新增要求分析')
-  assert.deepEqual((await execution.artifacts.read(final.run.requirementRef)).constraints,['禁止生产写入','新增格式要求'])
+  assert.equal((await execution.artifacts.read(final.run.requirementRef)).request,'整理材料')
+  const plan=await execution.controller.taskPlan(original.result.taskId)
+  assert.equal((await execution.artifacts.read(plan.task.requirementRef)).request,'按新增要求分析')
+  assert.deepEqual((await execution.artifacts.read(plan.task.requirementRef)).constraints,['禁止生产写入','新增格式要求'])
+  assert.ok(plan.task.planRequirementRevision<plan.task.requirementRevision)
 })
 
 test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入不执行，暂停不恢复',async t=>{
@@ -1112,6 +1145,7 @@ test('只关联话题时意图仍读到已执行Task及结果限制，运行成�
   assert.ok(accepted.commands.length, JSON.stringify({ run: accepted.run, requests: accepted.requests, nodes: accepted.nodes }))
   const taskId = accepted.commands[0].result.taskId
   await execution.controller.whenIdle(accepted.commands[0].result.runId)
+  await service.recover()
   const second = await service.ingest({ ...message, messageId: 'followup', text: '继续查这个账号' })
   await service.messages.process(second.runId)
   const task = observed?.tasks?.find(item => item.taskId === taskId) ?? observed?.topicTasks?.tasks?.find(item => item.taskId === taskId)
@@ -1134,15 +1168,31 @@ test('方案阶段完成后等待确认，确认沿用业务Task并只启动下�
       ? { kind: 'binding', disposition: 'existing', candidateId: input.candidates[0].candidateId, evidence: ['原任务'] }
       : { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
     return input.text.startsWith('确认方案')
-      ? { kind: 'intent', actions: [{ intent: 'reopen', arguments: { objective: '继续执行', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '先给方案', workflowId: 'task-analysis', workflowPlan: [
-        { workflowId: 'task-analysis', gate: 'none' }, { workflowId: 'task-analysis', gate: 'confirmation' },
-      ] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+      ? { kind: 'intent', actions: [{ intent: 'reopen', arguments: { objective: '继续执行' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '先给方案，确认后继续',
+        explicitStages: ['先给方案，确认后继续'] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
   }
-  const { service, execution, message } = await fixture(t, 'owner', notifications, { judge })
+  const taskOwnerSessions = { async run({ input, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    const complete = input.stages.length === 2 && input.stages.every(stage => stage.status === 'succeeded')
+    const decision = { action: !input.stages.length ? 'advance' : complete ? 'complete'
+      : input.stages.some(stage => stage.status === 'ready') ? 'advance' : 'wait',
+      summary: complete ? '两段工作已核验' : '等待方案确认或流程完成',
+      evidenceRefs: input.stages.flatMap(stage => stage.evidenceRefs ?? []),
+      ...(!input.stages.length ? { planChange: { kind: 'initialize', stages: [
+        { workflowId: 'task-analysis', gate: 'none' }, { workflowId: 'task-analysis', gate: 'confirmation' },
+      ] } } : {}),
+      ...(complete ? { assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied',
+        evidenceRefs: input.stages.flatMap(stage => stage.evidenceRefs ?? []) })) } : {}),
+    }
+    await onCandidate(decision)
+    return { status: 'submitted', decision }
+  }, async close() {} }
+  const { service, execution, message } = await fixture(t, 'owner', notifications, { judge, taskOwnerSessions })
   const first = await service.ingest({ ...message, text: '先给方案，确认后继续' })
   const accepted = await service.messages.process(first.runId)
   const taskId = accepted.commands[0].result.taskId
+  assert.ok(accepted.commands[0]?.result?.runId, JSON.stringify({ run: accepted.run, requests: accepted.requests, commands: accepted.commands }))
   await execution.controller.whenIdle(accepted.commands[0].result.runId)
   assert.deepEqual((await service.recover()).failures, [])
   await service.flushNotifications()
@@ -1163,26 +1213,52 @@ test('方案阶段完成后等待确认，确认沿用业务Task并只启动下�
   assert.equal((await execution.controller.taskPlan(taskId)).task.status, 'succeeded')
 })
 
-test('编排UAT但缺受信适配器时只阻塞UAT阶段，不冒充提测完成', async t => {
+test('UAT 缺受信适配器时已完成分析保留，Owner 后续阶段明确受阻', async t => {
   const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
     : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
-      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '先分析再提测', workflowId: 'task-analysis', workflowPlan: [
-        { workflowId: 'task-analysis', gate: 'none' }, { workflowId: 'task-uat-deployment', gate: 'none' },
-      ] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
+      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '先分析再提测',
+        explicitStages: ['先分析，随后部署 UAT 提测'] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+  const sessions = { async run({ input, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    const decision = !input.stages.length
+      ? { action: 'advance', summary: '先分析', evidenceRefs: [], planChange: { kind: 'initialize',
+        stages: [{ workflowId: 'task-analysis', gate: 'none' }] } }
+      : { action: 'advance', summary: '准备 UAT', evidenceRefs: [], planChange: { kind: 'append',
+        stages: [{ workflowId: 'task-uat-deployment', gate: 'none' }] } }
+    await onCandidate(decision)
+    return { status: 'submitted', decision }
+  }, async close() {} }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge, taskOwnerSessions: sessions })
   const received = await service.ingest({ ...message, text: '分析并提测' })
   const result = await service.messages.process(received.runId)
-  assert.equal(result.commands.length, 1, JSON.stringify({ status: result.run.status, reason: result.run.reason, requests: result.requests }))
+  assert.equal(result.commands[0].status, 'applied')
   await execution.controller.whenIdle(result.commands[0].result.runId)
-  assert.deepEqual((await service.recover()).failures, [])
+  const recovered = await service.recover()
+  assert.ok(recovered.failures.some(item => item.code === 'TASK_OWNER_STAGE_NOT_AUTHORIZED'))
   const task = (await service.tasks())[0]
   assert.equal(task.state, 'waiting')
-  assert.equal(task.plan.stages[1].status, 'blocked')
-  assert.match(task.waitingReason, /受信执行适配器/)
+  assert.equal(task.plan.stages.length, 1)
+  assert.equal(task.plan.stages[0].status, 'succeeded')
+  assert.match(task.waitingReason, /TASK_OWNER_STAGE_NOT_AUTHORIZED/u)
   assert.equal((await execution.store.query({ kind: 'run.list', taskId: task.taskId })).length, 1)
 })
 
 test('阶段间取消后经原发送人重新授权，只替换未完成后缀', async t => {
+  const sessions = { async run({ input, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    const stages = input.stages
+    const decision = !stages.length
+      ? { action: 'advance', summary: '先分析，待确认', evidenceRefs: [],
+        planChange: { kind: 'initialize', stages: [
+          { workflowId: 'task-analysis', gate: 'none' }, { workflowId: 'task-analysis', gate: 'confirmation' }] } }
+      : input.goal.request === '重新开展后续分析'
+        ? { action: 'advance', summary: '仅替换未执行后缀', evidenceRefs: [],
+          planChange: { kind: 'replaceSuffix', affectedFrom: 1,
+            stages: [{ workflowId: 'task-analysis', gate: 'none' }] } }
+        : { action: 'wait', summary: '等待确认', evidenceRefs: [] }
+    await onCandidate(decision)
+    return { status: 'submitted', decision }
+  }, async close() {} }
   const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
     : stage === 'R' ? input.candidates.length
       ? { kind: 'binding', disposition: 'existing', candidateId: input.candidates[0].candidateId, evidence: ['原任务'] }
@@ -1193,10 +1269,8 @@ test('阶段间取消后经原发送人重新授权，只替换未完成后缀',
           ? { kind: 'intent', actions: [{ intent: 'reopen', arguments: { objective: '重新开展后续分析',
             workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
           : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '先分析',
-            workflowId: 'task-analysis', workflowPlan: [
-              { workflowId: 'task-analysis', gate: 'none' }, { workflowId: 'task-analysis', gate: 'confirmation' },
-            ] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
+            explicitStages: ['先分析，确认后继续'] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge, taskOwnerSessions: sessions })
   const initial = await service.ingest({ ...message, text: '先分析' })
   const created = await service.messages.process(initial.runId)
   const taskId = created.commands[0].result.taskId, firstRunId = created.commands[0].result.runId
@@ -1226,14 +1300,16 @@ test('已绑定Owner会话确实缺失时换代并在原Task恢复，旧任务�
       throw Object.assign(new Error('missing'), { code: 'TASK_OWNER_SESSION_MISSING' })
     }
     await onSessionBound()
-    const decision = { action: 'advance', summary: '恢复同一任务', evidenceRefs: [] }
+    const decision = { action: 'advance', summary: '恢复同一任务', evidenceRefs: [],
+      planChange: { kind: 'initialize', stages: [{ workflowId: 'task-analysis', gate: 'none' }] } }
     await onCandidate(decision)
     return { status: 'submitted', decision }
   }, async close() {} }
   const { service, execution, message } = await fixture(t, 'owner', undefined, { taskOwnerSessions: sessions })
   const received = await service.ingest(message)
   const attempted = await service.messages.process(received.runId)
-  assert.equal(attempted.commands[0].status, 'unknown')
+  assert.equal(attempted.commands[0].status, 'applied')
+  assert.match(attempted.commands[0].result.reply, /规划受阻/u)
   const before = (await execution.store.query({ kind: 'task.owners.list', limit: 10 }))[0]
   assert.equal(before.ownerEpoch, 2)
   assert.equal(before.status, 'pending')
@@ -1246,246 +1322,119 @@ test('已绑定Owner会话确实缺失时换代并在原Task恢复，旧任务�
   assert.equal((await execution.controller.taskPlan(before.taskId)).stages.length, 1)
 })
 
-test('前序产物以受信引用交给通用步骤，严格输入 schema 可读取', async t => {
-  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
-    : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
-      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '整理材料',
-        workflowId: 'task-analysis', workflowPlan: [
-          { workflowId: 'task-analysis', gate: 'none' }, { workflowId: 'task-general', gate: 'none' },
-        ] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
-  const accepted = await service.ingest({ ...message, text: '先分析再整理' })
-  const state = await service.messages.process(accepted.runId)
-  const taskId = state.commands[0].result.taskId
-  await execution.controller.whenIdle(state.commands[0].result.runId)
-  assert.deepEqual((await service.recover()).failures, [])
-  const plan = await execution.controller.taskPlan(taskId)
-  assert.equal(plan.stages[1].workflowId, 'task-general')
-  const input = await execution.artifacts.read(plan.stages[1].requirementRef)
-  assert.equal(input.scope.predecessorOutputRef, plan.stages[0].outputRef)
-  assert.equal(Object.hasOwn(input, 'predecessor'), false)
-})
-
-test('新日常任务仅由 Owner 选一步受信能力，单代码 Run 回读后由 Owner 验收', async t => {
+test('专业分析后在同一 Task 读取前序产物，不依赖 general intake', async t => {
+  let execution
   const sessions = { async run({ input, onSessionBound, onCandidate }) {
     await onSessionBound()
     const stages = input.stages
+    const completed = stages.length > 0 && stages.every(stage => stage.status === 'succeeded')
     let decision
-    if (stages[0].status === 'ready') decision = { action: 'advance', summary: '先冻结目标', evidenceRefs: [] }
-    else if (stages.length === 1 && stages[0].status === 'succeeded') decision = {
-      action: 'advance', summary: '整理来源原文', evidenceRefs: [], appendStages: [{
-        workflowId: 'task-general-capability', gate: 'none',
-        capabilityStep: { capabilityId: 'organize-topic-sources',
-          input: { sourceKeys: input.goal.scope.sourceKeys }, expectedEvidence: '原文与来源键回读一致' },
-      }],
-    }
-    else if (stages.at(-1).status === 'succeeded') {
-      const output = await execution.artifacts.read(stages.at(-1).outputRef)
-      decision = { action: 'complete', summary: output.output.markdown,
-        evidenceRefs: [stages.at(-1).outputRef], assessments: input.acceptanceItems.map(item => ({
-          itemId: item.itemId, status: 'satisfied', evidenceRefs: [stages.at(-1).outputRef],
-        })) }
-    } else decision = { action: 'wait', summary: '等待执行', evidenceRefs: [] }
+    if (!stages.length) decision = { action: 'advance', summary: '先分析', evidenceRefs: [],
+      planChange: { kind: 'initialize', stages: [{ workflowId: 'task-analysis', gate: 'none' }] } }
+    else if (completed && stages.length === 1) decision = { action: 'advance', summary: '读取分析产物', evidenceRefs: [],
+      planChange: { kind: 'append', stages: [{ workflowId: 'task-general-capability', gate: 'none',
+        capabilityStep: { capabilityId: 'read-predecessor-artifact',
+          input: { outputRef: stages[0].outputRef }, expectedEvidence: '前序产物独立回读' } }] } }
+    else if (completed) decision = { action: 'complete', summary: '分析与产物回读均完成',
+      evidenceRefs: stages.map(stage => stage.outputRef),
+      assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied',
+        evidenceRefs: stages.map(stage => stage.outputRef) })) }
+    else decision = { action: 'wait', summary: '等待当前流程', evidenceRefs: [] }
     await onCandidate(decision)
     return { status: 'submitted', decision }
   }, async close() {} }
-  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
-    : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
-      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '整理消息原文',
-        acceptanceCriteria: ['整理消息原文'], workflowId: 'task-general' }, dependsOn: [] }],
-        constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge, taskOwnerSessions: sessions })
-  const received = await service.ingest({ ...message, text: '整理消息原文' })
+  const { service, execution: actual, message } = await fixture(t, 'owner', undefined, {
+    taskOwnerSessions: sessions, judge: async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
+      : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
+        : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '先分析再核对产物' },
+          dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' },
+  })
+  execution = actual
+  const received = await service.ingest({ ...message, text: '先分析再核对产物' })
   const handled = await service.messages.process(received.runId)
   const taskId = handled.commands[0].result.taskId
   for (let attempt = 0; attempt < 8; attempt++) {
     const plan = await execution.controller.taskPlan(taskId)
     for (const stage of plan.stages) if (stage.runId) await execution.controller.whenIdle(stage.runId)
-    const recovered = await service.recover()
-    assert.deepEqual(recovered.failures, [])
-    if ((await execution.store.query({ kind: 'task.owner', taskId })).decision?.action === 'complete') break
+    assert.deepEqual((await service.recover()).failures, [])
+    if ((await execution.controller.taskPlan(taskId)).stages.length === 2
+      && (await execution.store.query({ kind: 'task.owner', taskId })).decision?.action === 'complete') break
   }
   const plan = await execution.controller.taskPlan(taskId)
-  assert.deepEqual(plan.stages.map(stage => stage.workflowId), ['task-general-intake', 'task-general-capability'])
-  assert.equal(plan.task.status, 'succeeded')
-  const output = await execution.artifacts.read(plan.stages[1].outputRef)
-  assert.match(output.output.markdown, /整理消息原文/u)
-  const owner = await execution.store.query({ kind: 'task.owner', taskId })
-  assert.equal(owner.decision.action, 'complete')
-  assert.equal((await execution.store.query({ kind: 'run.list', limit: 20 })).filter(run => run.taskId === taskId).length, 2)
-})
-
-test('同一日常 Task 连续两步能力，第二步只读取前步真实产物', async t => {
-  let execution
-  const sessions = { async run({ input, onSessionBound, onCandidate }) {
-    await onSessionBound()
-    const stages = input.stages
-    const done = stages.every(stage => stage.status === 'succeeded')
-    let decision
-    if (stages.length === 1 && stages[0].status === 'ready')
-      decision = { action: 'advance', summary: '冻结输入', evidenceRefs: [] }
-    else if (done && stages.length < 3) decision = { action: 'advance', summary: '核对下一项证据',
-      evidenceRefs: [], appendStages: [{ workflowId: 'task-general-capability', gate: 'none',
-        capabilityStep: stages.length === 1
-          ? { capabilityId: 'read-topic-sources', input: { sourceKeys: input.goal.scope.sourceKeys }, expectedEvidence: '消息回读' }
-          : { capabilityId: 'read-predecessor-artifact', input: { outputRef: stages[1].outputRef }, expectedEvidence: '前步产物回读' },
-      }] }
-    else if (done) decision = { action: 'complete', summary: '两步读回一致',
-      evidenceRefs: [stages[1].outputRef, stages[2].outputRef],
-      assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied',
-        evidenceRefs: [stages[1].outputRef, stages[2].outputRef] })) }
-    else decision = { action: 'wait', summary: '等待执行', evidenceRefs: [] }
-    await onCandidate(decision)
-    return { status: 'submitted', decision }
-  }, async close() {} }
-  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
-    : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
-      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '核对两步来源',
-        acceptanceCriteria: ['两步读回一致'], workflowId: 'task-general' }, dependsOn: [] }],
-        constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-  const fixtureValue = await fixture(t, 'owner', undefined, { judge, taskOwnerSessions: sessions,
-    generalCompletionCheck: async ({ evidence }) => ({ status: evidence.length === 2
-      && evidence[1].output.outputRef === evidence[0].evidenceId ? 'satisfied' : 'unverified',
-    resultVerified: evidence.length === 2 && evidence[1].output.outputRef === evidence[0].evidenceId,
-    criteria: [{ criterion: '两步读回一致', passed: true,
-      evidenceIds: evidence.map(item => item.evidenceId) }] }) })
-  execution = fixtureValue.execution
-  const received = await fixtureValue.service.ingest({ ...fixtureValue.message, text: '核对两步来源' })
-  const handled = await fixtureValue.service.messages.process(received.runId)
-  const taskId = handled.commands[0].result.taskId
-  for (let attempt = 0; attempt < 12; attempt++) {
-    const plan = await execution.controller.taskPlan(taskId)
-    for (const stage of plan.stages) if (stage.runId) await execution.controller.whenIdle(stage.runId)
-    assert.deepEqual((await fixtureValue.service.recover()).failures, [])
-    if ((await execution.store.query({ kind: 'task.owner', taskId })).decision?.action === 'complete') break
-  }
-  const plan = await execution.controller.taskPlan(taskId)
-  assert.deepEqual(plan.stages.map(stage => stage.workflowId),
-    ['task-general-intake', 'task-general-capability', 'task-general-capability'])
-  assert.equal(plan.stages[2].predecessorOutputRef, plan.stages[1].outputRef)
-  assert.equal((await execution.artifacts.read(plan.stages[2].outputRef)).output.outputRef, plan.stages[1].outputRef)
+  assert.deepEqual(plan.stages.map(stage => stage.workflowId), ['task-analysis', 'task-general-capability'])
+  const step = await execution.artifacts.read(plan.stages[1].requirementRef)
+  assert.equal(step.scope.predecessorOutputRef, plan.stages[0].outputRef)
+  assert.equal((await execution.artifacts.read(plan.stages[1].outputRef)).output.outputRef, plan.stages[0].outputRef)
   assert.equal((await execution.store.query({ kind: 'task.owner', taskId })).decision.action, 'complete')
 })
 
-test('通用能力阶段已追加但输入绑定前中断，恢复重用同一 Owner 决定和 Run', async t => {
+test('Owner 可在零阶段 Task 首先选择一项受信能力并完成原文整理', async t => {
+  let execution
   const sessions = { async run({ input, onSessionBound, onCandidate }) {
     await onSessionBound()
-    const decision = input.stages.length > 1 && input.stages[1].status === 'succeeded'
-      ? { action: 'complete', summary: '来源已读回', evidenceRefs: [input.stages[1].outputRef],
+    const stage = input.stages[0]
+    let decision
+    if (!stage) decision = { action: 'advance', summary: '整理来源原文', evidenceRefs: [],
+      planChange: { kind: 'initialize', stages: [{ workflowId: 'task-general-capability', gate: 'none',
+        capabilityStep: { capabilityId: 'organize-topic-sources',
+          input: { sourceKeys: input.goal.scope.sourceKeys }, expectedEvidence: '原文与来源键回读一致' } }] } }
+    else if (stage.status === 'succeeded') {
+      const output = await execution.artifacts.read(stage.outputRef)
+      decision = { action: 'complete', summary: output.output.markdown, evidenceRefs: [stage.outputRef],
         assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied',
-          evidenceRefs: [input.stages[1].outputRef] })) }
-      : input.stages[0].status === 'ready'
-      ? { action: 'advance', summary: '冻结目标', evidenceRefs: [] }
-      : input.stages.length > 1
-        ? { action: 'wait', summary: '已有能力阶段执行中', evidenceRefs: [] }
-      : { action: 'advance', summary: '读取原文', evidenceRefs: [], appendStages: [{
-        workflowId: 'task-general-capability', gate: 'none', capabilityStep: {
-          capabilityId: 'read-topic-sources', input: { sourceKeys: input.goal.scope.sourceKeys }, expectedEvidence: '来源回读',
-        },
-      }] }
+          evidenceRefs: [stage.outputRef] })) }
+    } else decision = { action: 'wait', summary: '等待执行', evidenceRefs: [] }
     await onCandidate(decision)
     return { status: 'submitted', decision }
   }, async close() {} }
-  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
-    : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
-      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '读取消息',
-        workflowId: 'task-general' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge, taskOwnerSessions: sessions,
-    generalCompletionCheck: async ({ evidence }) => ({ status: evidence.length ? 'satisfied' : 'unverified',
-      resultVerified: !!evidence.length, criteria: [{ criterion: '读取消息', passed: true,
-        evidenceIds: evidence.map(item => item.evidenceId) }] }) })
-  let failOnce = true
-  const bind = execution.controller.bindTaskStageInput.bind(execution.controller)
-  execution.controller.bindTaskStageInput = async args => {
-    if (failOnce) { failOnce = false; throw Object.assign(new Error('CRASH_AFTER_APPEND'), { code: 'CRASH_AFTER_APPEND' }) }
-    return bind(args)
-  }
-  const received = await service.ingest({ ...message, text: '读取消息' })
-  const handled = await service.messages.process(received.runId)
-  const taskId = handled.commands[0].args.taskId
-  const appended = await execution.controller.taskPlan(taskId)
-  assert.equal(appended.stages.length, 2)
-  assert.equal(appended.stages[1].requirementRef, null)
-  assert.deepEqual((await service.recover()).failures, [])
-  const rebound = await execution.controller.taskPlan(taskId)
-  assert.equal(rebound.stages.length, 2)
-  assert.ok(rebound.stages[1].requirementRef)
-  await execution.controller.whenIdle(rebound.stages[1].runId)
-  assert.equal((await execution.controller.taskPlan(taskId)).stages[1].runId, rebound.stages[1].runId)
-})
-
-test('Owner 重复提出相同能力与输入不会追加第三个 Run', async t => {
-  const sessions = { async run({ input, onSessionBound, onCandidate }) {
-    await onSessionBound()
-    const decision = { action: 'advance', summary: '读取当前来源', evidenceRefs: [], appendStages: [{
-      workflowId: 'task-general-capability', gate: 'none', capabilityStep: {
-        capabilityId: 'read-topic-sources', input: { sourceKeys: input.goal.scope.sourceKeys }, expectedEvidence: '来源回读',
-      },
-    }] }
-    await onCandidate(decision)
-    return { status: 'submitted', decision }
-  }, async close() {} }
-  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
-    : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
-      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '读取材料',
-        workflowId: 'task-general' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge, taskOwnerSessions: sessions })
-  const received = await service.ingest({ ...message, text: '读取材料' })
-  const handled = await service.messages.process(received.runId)
+  const result = await fixture(t, 'owner', undefined, { taskOwnerSessions: sessions,
+    judge: async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
+      : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
+        : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '整理消息原文' },
+          dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' } })
+  execution = result.execution
+  const received = await result.service.ingest({ ...result.message, text: '整理消息原文' })
+  const handled = await result.service.messages.process(received.runId)
   const taskId = handled.commands[0].result.taskId
-  let plan = await execution.controller.taskPlan(taskId)
-  await execution.controller.whenIdle(plan.stages[1].runId)
-  const recovered = await service.recover()
-  assert.equal(recovered.failures.some(item => item.code === 'TASK_OWNER_STAGE_NOT_AUTHORIZED'), true)
-  plan = await execution.controller.taskPlan(taskId)
-  assert.equal(plan.stages.length, 2)
-  assert.equal((await execution.store.query({ kind: 'run.list', limit: 20 })).filter(run => run.taskId === taskId).length, 2)
+  await execution.controller.whenIdle(handled.commands[0].result.runId)
+  assert.deepEqual((await result.service.recover()).failures, [])
+  const plan = await execution.controller.taskPlan(taskId)
+  assert.deepEqual(plan.stages.map(stage => stage.workflowId), ['task-general-capability'])
+  assert.equal((await execution.store.query({ kind: 'task.owner', taskId })).decision.action, 'complete')
 })
-
-test('来源编辑后旧版本冻结范围拒绝 Owner 旧能力步骤', async t => {
-  let service, message
-  const sessions = { async run({ input, onSessionBound, onCandidate }) {
-    await onSessionBound()
-    await service.ingest({ ...message, messageVersion: 2, text: '读取材料（来源已编辑）' })
-    const decision = { action: 'advance', summary: '读取旧来源', evidenceRefs: [], appendStages: [{
-      workflowId: 'task-general-capability', gate: 'none', capabilityStep: {
-        capabilityId: 'read-topic-sources', input: { sourceKeys: input.goal.scope.sourceKeys }, expectedEvidence: '来源回读',
-      },
-    }] }
-    await onCandidate(decision)
-    return { status: 'submitted', decision }
-  }, async close() {} }
-  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
-    : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
-      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '读取材料',
-        workflowId: 'task-general' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-  const fixtureValue = await fixture(t, 'owner', undefined, { judge, taskOwnerSessions: sessions })
-  service = fixtureValue.service
-  message = fixtureValue.message
-  const received = await service.ingest({ ...message, text: '读取材料' })
-  const handled = await service.messages.process(received.runId)
-  assert.equal(handled.commands[0].status, 'unknown')
-  const taskId = handled.commands[0].args.taskId
-  const owner = await fixtureValue.execution.store.query({ kind: 'task.owner', taskId })
-  assert.notEqual(owner.decision?.action, 'complete')
-  assert.equal((await fixtureValue.execution.controller.taskPlan(taskId)).stages.length, 1)
-  const source = await fixtureValue.execution.store.query({ kind: 'message.source', sourceKey: received.sourceKey ?? handled.run.sourceKey })
-  assert.equal(source.sourceVersion, 2)
-})
-
 test('执行中收到追加阶段意图时保留当前Run，完成后从核验产物启动后继', async t => {
   let release, began
   const gate = new Promise(resolve => { release = resolve })
   const started = new Promise(resolve => { began = resolve })
   t.after(() => release())
+  const sessions = { async run({ input, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    const stages = input.stages
+    const extra = input.goal.request === '追加后续分析'
+    const decision = !stages.length
+      ? { action: 'advance', summary: '先排查', evidenceRefs: [], planChange: { kind: 'initialize',
+        stages: [{ workflowId: 'task-analysis', gate: 'none' }] } }
+      : extra && stages.length === 1
+        ? { action: 'advance', summary: '保留当前执行并追加分析', evidenceRefs: [],
+          planChange: { kind: 'append', stages: [{ workflowId: 'task-analysis', gate: 'none' }] } }
+        : stages.length === 2 && stages[1].status === 'ready'
+          ? { action: 'advance', summary: '执行追加分析', evidenceRefs: [] }
+        : stages.length === 2 && stages.every(stage => stage.status === 'succeeded')
+          ? { action: 'complete', summary: '两段分析完成', evidenceRefs: stages.map(stage => stage.outputRef),
+            assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied',
+              evidenceRefs: stages.map(stage => stage.outputRef) })) }
+          : { action: 'wait', summary: '等待执行', evidenceRefs: [] }
+    await onCandidate(decision)
+    return { status: 'submitted', decision }
+  }, async close() {} }
   const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
     : stage === 'R' ? input.candidates.length
       ? { kind: 'binding', disposition: 'existing', candidateId: input.candidates[0].candidateId, evidence: ['原任务'] }
       : { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
       : input.text.startsWith('追加')
-        ? { kind: 'intent', actions: [{ intent: 'reopen', arguments: { objective: '追加后续分析', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
+        ? { kind: 'intent', actions: [{ intent: 'reopen', arguments: { objective: '追加后续分析' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
         : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '先排查', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge,
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge, taskOwnerSessions: sessions,
     execute: async ({ input }) => { if (input.request === '先排查') { began(); await gate }; return { summary: input.request, evidenceIds: input.materials.map(item => item.id), limitations: [] } } })
   const first = await service.ingest({ ...message, text: '先排查' })
   const accepted = await service.messages.process(first.runId)
@@ -1510,6 +1459,24 @@ test('执行中收到追加阶段意图时保留当前Run，完成后从核验�
 })
 
 test('纯排查完成后续办仍用原业务Task，原Run成功证据不重跑', async t => {
+  const sessions = { async run({ input, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    const stages = input.stages
+    const continued = input.goal.request === '继续分析'
+    const decision = !stages.length
+      ? { action: 'advance', summary: '仅排查', evidenceRefs: [], planChange: { kind: 'initialize',
+        stages: [{ workflowId: 'task-analysis', gate: 'none' }] } }
+      : continued && stages.length === 1
+        ? { action: 'advance', summary: '保留旧证据并继续', evidenceRefs: [],
+          planChange: { kind: 'append', stages: [{ workflowId: 'task-analysis', gate: 'none' }] } }
+        : stages.every(stage => stage.status === 'succeeded')
+          ? { action: 'complete', summary: '当前目标已完成', evidenceRefs: stages.map(stage => stage.outputRef),
+            assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied',
+              evidenceRefs: stages.map(stage => stage.outputRef) })) }
+          : { action: 'wait', summary: '等待执行', evidenceRefs: [] }
+    await onCandidate(decision)
+    return { status: 'submitted', decision }
+  }, async close() {} }
   const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
     : stage === 'R' ? input.candidates.length
       ? { kind: 'binding', disposition: 'existing', candidateId: input.candidates[0].candidateId, evidence: ['原任务'] }
@@ -1517,7 +1484,7 @@ test('纯排查完成后续办仍用原业务Task，原Run成功证据不重跑'
       : input.text.startsWith('继续')
         ? { kind: 'intent', actions: [{ intent: 'reopen', arguments: { objective: '继续分析', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
         : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '仅排查', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge, taskOwnerSessions: sessions })
   const first = await service.ingest({ ...message, text: '仅排查' })
   const accepted = await service.messages.process(first.runId)
   const taskId = accepted.commands[0].result.taskId, firstRunId = accepted.commands[0].result.runId
@@ -1528,7 +1495,7 @@ test('纯排查完成后续办仍用原业务Task，原Run成功证据不重跑'
   const resumed = await service.messages.process(second.runId)
   assert.equal(resumed.commands[0].status, 'applied')
   const plan = await execution.controller.taskPlan(taskId)
-  assert.equal(plan.task.planRevision, 2)
+  assert.equal(plan.task.planRevision, 1)
   assert.equal(plan.stages[0].runId, firstRunId)
   assert.equal(plan.stages[0].status, 'succeeded')
   assert.equal(plan.stages[1].status, 'running')

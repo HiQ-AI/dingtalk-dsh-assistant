@@ -192,6 +192,14 @@ test('生产机械预检不依赖业务布尔证明，审批回执只授权冻�
   const adapter = platform.releaseAdapters['production-release']
   const preflight = await adapter.inspect({ phase: 'preflight', requirement: prodRequirement })
   assert.deepEqual(preflight.facts, {})
+  clients.github.readPullRequest = async () => ({ number: 75, merged: true, baseBranch: 'main',
+    mergeCommitSha: commitSha, evidenceRef: 'github:pr:75' })
+  const verify = await adapter.prepareOperation({ kind: 'production-release', operation: 'verify-main-merge',
+    requirement: prodRequirement, observation: preflight, runId: 'run-prod', generation: 1,
+    requirementDigest: executionDigest(prodRequirement), expected: { commitSha, previousPhase: 'preflight',
+      previousEvidenceDigest: executionDigest(preflight.evidenceRefs),
+      approvalScopeDigest: executionDigest({ target: prodRequirement.target, operation: 'tag' }) } })
+  assert.equal((await platform.operationAdapter.execute(verify)).status, 'succeeded')
   const merged = { phase: 'merged', status: 'confirmed', targetDigest: executionDigest(prodRequirement.target),
     evidenceRefs: ['github:main:1'], facts: {} }
   const approvalScopeDigest = executionDigest({ target: prodRequirement.target, operation: 'tag' })

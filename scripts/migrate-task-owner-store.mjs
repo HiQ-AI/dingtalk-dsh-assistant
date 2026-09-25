@@ -65,7 +65,7 @@ if (!['--check', '--execute'].includes(mode) || !suppliedPath || process.argv.le
         installTaskOwnerSchema(db)
         db.exec('PRAGMA user_version=3')
         db.prepare('UPDATE execution_meta SET schema_version=3 WHERE singleton=1').run()
-        validateTaskPlanSchema(db)
+        validateTaskPlanSchema(db, { legacy: true })
         validateTaskOwnerSchema(db)
         db.exec('COMMIT')
       } catch (cause) { db.exec('ROLLBACK'); throw cause }

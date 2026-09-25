@@ -6,7 +6,8 @@ const key = (...parts) => createHash('sha256').update(JSON.stringify(parts)).dig
 
 /** Task 事件唤醒、模型候选、Host 接纳和执行回执的唯一入口。 */
 export function createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig, advanceTask,
-  authorizeStages, authorizeCompletion = async () => true, capabilityCatalog = [], sessionRunner }) {
+  authorizeStages, authorizeCompletion = async () => true, prepareInitialStage,
+  capabilityCatalog = [], workflowCatalog = [], sessionRunner }) {
   if (!ctx || !store || !artifacts || !controller || typeof modelConfig !== 'function'
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
   let closed = false
@@ -68,12 +69,13 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       if (!page.length || page.at(-1).eventSeq >= claim.eventWatermark) break
       cursor = page.at(-1).eventSeq
     }
-    const first = plan.stages[0]
-    const goal = first?.requirementRef ? await artifacts.read(first.requirementRef) : null
+    const goal = plan.task.requirementRef ? await artifacts.read(plan.task.requirementRef)
+      : plan.stages[0]?.requirementRef ? await artifacts.read(plan.stages[0].requirementRef) : null
     const acceptanceItems = await store.query({ kind: 'task.owner.acceptance', taskId })
     const result = { taskId, eventWatermark: claim.eventWatermark, goal,
       acceptanceItems, versions: claim.versions, task: plan.task, stages: plan.stages, events }
-    if (plan.stages[0]?.workflowId === 'task-general-intake') result.capabilities = capabilityCatalog
+    result.capabilities = capabilityCatalog
+    result.workflowCatalog = workflowCatalog
     if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 128 * 1024) {
       const pages = []
       let batch = []
@@ -132,7 +134,8 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           },
         })
         if (result.status !== 'submitted') throw error(result.reason ?? 'TASK_OWNER_NO_DECISION')
-        if (result.decision.appendStages && !await authorizeStages({ taskId, stages: result.decision.appendStages }))
+        const proposedStages = result.decision.planChange?.stages ?? result.decision.appendStages
+        if (proposedStages && !await authorizeStages({ taskId, stages: proposedStages }))
           throw error('TASK_OWNER_STAGE_NOT_AUTHORIZED')
         if (result.decision.action === 'complete' && !await authorizeCompletion({ taskId, decision: result.decision }))
           throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
@@ -161,14 +164,17 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       for (const action of page) {
         try {
           const { taskId, turnId, decision } = action
+          const proposedStages = decision.planChange?.stages ?? decision.appendStages
           const owner = await store.query({ kind: 'task.owner', taskId })
-          const priorPlanReceipt = decision.appendStages?.length
+          const currentPlan = await controller.taskPlan(taskId)
+          const requirementDelta = currentPlan.task.requirementRef ? 0 : 1
+          const priorPlanReceipt = proposedStages?.length
             ? await store.query({ kind: 'receipt', commandId: `owner-plan:${turnId}` }) : null
           if ((!priorPlanReceipt && (owner.eventWatermark !== action.eventWatermark
               || owner.planRevision !== action.planRevision
               || owner.requirementRevision !== action.requirementRevision))
             || priorPlanReceipt && (owner.planRevision !== priorPlanReceipt.result?.planRevision
-              || owner.requirementRevision !== action.requirementRevision + 1)
+              || owner.requirementRevision !== action.requirementRevision + requirementDelta)
             || owner.controlRevision !== action.controlRevision
             || owner.authorizationRevision !== action.authorizationRevision
             || owner.inputFenceRevision !== action.inputFenceRevision) {
@@ -177,25 +183,45 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
             continue
           }
           if (decision.action === 'advance') {
-            if (decision.appendStages?.length) {
-              const stageIdBase = (await controller.taskPlan(taskId)).stages.length
-              const stages = decision.appendStages.map((stage, index) => ({ workflowId: stage.workflowId, gate: stage.gate,
+            if (proposedStages?.length) {
+              const plan = currentPlan
+              const mode = decision.planChange?.kind ?? (plan.task.planRevision === 0 ? 'initialize'
+                : plan.task.status === 'succeeded' ? 'replaceSuffix' : 'append')
+              const affectedFrom = decision.planChange?.affectedFrom ?? plan.stages.length
+              const stageIdBase = mode === 'replaceSuffix' ? affectedFrom : plan.stages.length
+              const stages = proposedStages.map((stage, index) => ({ workflowId: stage.workflowId, gate: stage.gate,
                 stageId: `stage-${stageIdBase + index + 1}` }))
               if (!priorPlanReceipt) {
-                const plan = await controller.taskPlan(taskId)
-                if (plan.task.status === 'succeeded') await controller.reviseTaskPlan({
+                if (mode === 'replaceSuffix' && plan.stages.some(stage => stage.status === 'running')) continue
+                const prepared = mode === 'initialize' || mode === 'replaceSuffix' && affectedFrom === 0
+                  ? await (prepareInitialStage?.({ taskId, stage: proposedStages[0], decision, plan })
+                    ?? artifacts.read(plan.task.requirementRef).then(input => ({ input }))) : null
+                const initial = prepared ? { ...stages[0], ...prepared } : null
+                if (mode === 'initialize') await controller.initializeTaskPlan({
+                  commandId: `owner-plan:${turnId}`, taskId, expectedPlanRevision: 0,
+                  expectedRequirementRevision: action.requirementRevision,
+                  expectedControlRevision: action.controlRevision,
+                  stages: [initial, ...stages.slice(1)],
+                })
+                else if (mode === 'replaceSuffix') {
+                  const replacement = affectedFrom === 0
+                    ? [initial, ...stages.slice(1)]
+                    : stages
+                  await controller.reviseTaskPlan({
                   commandId: `owner-plan:${turnId}`, taskId, expectedPlanRevision: action.planRevision,
                   expectedControlRevision: action.controlRevision,
-                  requirementRevision: action.requirementRevision + 1, affectedFrom: action.stageCount ?? stageIdBase,
-                  stages: [...plan.stages.map(old => ({ stageId: old.stageId, workflowId: old.workflowId, gate: old.gate })), ...stages],
-                })
+                  requirementRevision: action.requirementRevision + requirementDelta, affectedFrom,
+                  stages: [...plan.stages.slice(0, affectedFrom).map(old => ({ stageId: old.stageId,
+                    workflowId: old.workflowId, gate: old.gate })), ...replacement],
+                  })
+                }
                 else await controller.extendTaskPlan({ commandId: `owner-plan:${turnId}`, taskId,
                   expectedPlanRevision: action.planRevision, expectedControlRevision: action.controlRevision,
-                  requirementRevision: action.requirementRevision + 1, stages })
+                  requirementRevision: action.requirementRevision + requirementDelta, stages })
               }
             }
-            await advanceTask(taskId, decision.appendStages?.[0]?.capabilityStep
-              ? { ownerStep: decision.appendStages[0].capabilityStep } : undefined)
+            await advanceTask(taskId, proposedStages?.[0]?.capabilityStep
+              ? { ownerStep: proposedStages[0].capabilityStep } : undefined)
           }
           await command(`owner-applied:${turnId}`, 'task.owner.applied', { taskId, turnId, leaseEpoch: action.leaseEpoch })
         } catch (cause) {

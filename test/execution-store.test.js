@@ -147,7 +147,7 @@ test('磁盘配置读回、显式初始化、正常开启及身份/schema严格�
   assert.equal((await f.query()).nodes[0].generation, 1)
   await f.store.close()
   const raw = new DatabaseSync(f.dbPath)
-  raw.exec('PRAGMA user_version=4')
+  raw.exec('PRAGMA user_version=5')
   raw.close()
   await rejects(f.open(), 'STORE_SCHEMA_MISMATCH')
 })

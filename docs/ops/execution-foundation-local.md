@@ -349,9 +349,18 @@ node scripts/migrate-task-owner-store.mjs --execute $controlDb
 
 若检查输出有未确认外部效果或待审批记录，先逐项核对；迁移不会把它们视为已成功。v3 启动后先回读 `PRAGMA user_version`、`execution_meta.schema_version`、Task 数量与备份，定向验证同一 Task 的会话恢复、补充意图、暂停取消、后续阶段与最终报告，再开放群入站。只读 `--check` 针对 v2，成功迁移后再调用会因来源版本不符而拒绝，不能用其代替 v3 回读。
 
+当前 Task Owner 独占编排要求 schema v4。已有 v3 实例须停掉所有控制库写者并保留数据库与工件备份，先只读检查未来阶段定义、未终态 Run、未知效果、审批和通知账；`--check` 不写库。执行后核对脚本输出的备份路径、`schemaReadback:4`、原 Task/Run/效果/通知计数与摘要，以及零阶段 Task 的恢复状态。不可仅换回 v3 程序继续写已升级的库。
+
+```powershell
+node scripts/migrate-task-workflow-v4.mjs --check $controlDb
+node scripts/migrate-task-workflow-v4.mjs --execute $controlDb
+```
+
 默认日常流程只读已授权话题来源及本任务前序产物，并可按当前原文生成可回读的 Markdown 摘录。Resident 可由受信插件提供 `dingtalkTaskGeneralCapabilities` 数组；每项需有固定 `id/identity/description/effectClass`（当前仅接纳 `effectClass: 'read'`）及 `authorize/execute/verify`，其中 `verify` 必须回读结果并返回 `passed:true`、实际 `outputDigest` 和非空 `sourceRefs`。对非默认纯原文整理目标，还须同时提供 `dingtalkTaskGeneralCompletionCheck` 与 `dingtalkTaskGeneralCompletionIdentity`，验收器逐项核对 acceptanceCriteria 与证据后返回 `status:'satisfied'`、`resultVerified:true` 和相同顺序的 `criteria`。未配齐时流程显示证据不足，不把读取聊天误当作数据库调查或外部处理。
 
-受信 Host 如需让日常流程读取本地文件，可在 `workflow.generalFileRead` 配置绝对 `root` 和显式相对路径 `readablePaths`，例如 `{ root: 'D:/approved-workspace', readablePaths: ['notes/incident.md'] }`。运行时只把清单放入该 Task 的 `scope.readableFiles`，每次读取前 `realpath` 校验目标仍在 root 内，最大 12 KiB 且必须为 UTF-8；`verify` 独立重新打开同一文件核对内容摘要。未配置则没有文件读取能力。这个配置只允许读；文件生成、修改、任意路径搜索和平台查询都需要各自受信适配器及验收器，写入必须走效果账。新建日常任务先用 `task-general-intake` 纯代码阶段冻结目标和授权范围；Task Owner 选择受信只读能力后，Host 用 `task-general-capability` 单代码节点 Run 执行并二次回读，Owner 再决定下一步或完成，Host 对整体目标另做验收。旧 `task-general` 的 plan/report Agent 只用于既有持久 Run 的历史恢复。单个任务最多执行四个能力步骤，重复的能力、输入和授权范围组合会被拒绝。文件读取的 root 及其父目录必须由受信 Host 控制；不能将消息发送人可任意改写的目录作为授权根，逐级链接检查与末级 O_NOFOLLOW 不构成父目录并发替换防护。
+UAT PR 合并是单独的受控步骤 `task-uat-pr-merge`。受信 Host 需配置 `workflow.trustedPlatforms.uatMerge.targets`，每个目标绑定 `targetId` 和非空 `requiredChecks`；只有对应 GitHub 检查真实通过、PR/head/目标精确匹配、Assistant 真人审批绑定本次合并、写端口 `uatMergeWritesEnabled` 已启用时才能发一次合并请求。超时或回执丢失只读对账原 PR，不再发送第二次。合并 Run 的 merge SHA/Git tree 作为后续独立 `task-uat-deployment` 的来源；无明确检查策略或未开写端口时目录保持不可发起，不以无检查的 PR 冒充合格来源。
+
+受信 Host 如需读取本地文件，可在 `workflow.generalFileRead` 配置绝对 `root` 和显式相对路径 `readablePaths`，例如 `{ root: 'D:/approved-workspace', readablePaths: ['notes/incident.md'] }`。运行时只把清单放入该 Task 的 `scope.readableFiles`，每次读取前 `realpath` 校验目标仍在 root 内，最大 12 KiB 且必须为 UTF-8；`verify` 独立重新打开同一文件核对内容摘要。未配置则没有文件读取能力。默认 Markdown 文件产出使用受信的 Task 输出目录和效果账，按 Task 生成固定文件名，写后独立读取并核对摘要；不接受消息指定任意路径，也不覆盖冲突文件。新 Task 与 Owner 先原子创建，初始零业务阶段；Owner 依据目标和受信能力目录决定是否初始化、追加或替换未执行后缀。`task-general-capability` 可被任何 Task 使用，专业 Run 也可交接其产物；旧 `task-general-intake`、`task-general` 仅为历史 Run 恢复。缺少能力或整体验收证据时保持待处理或阻塞。文件读取的 root 及其父目录必须由受信 Host 控制；不能将消息发送人可任意改写的目录作为授权根。
 
 `read-task-message-resource` 仅对同时提供 DWS 精确消息回读与资源读取的 Host 可用：输入当前 Task 冻结的 `sourceKey`、附件 `type`（`mediaId` 或 `fileId`）及 `resourceId`，受信代码核对来源版本、原消息 ID、群 ID、正文和附件引用，再读取最多 12 KiB UTF-8 文本，独立重复回读一致后输出带来源键与内容摘要的 Markdown。任意 URL、未列入当前消息引用的附件、跨群消息及图片/二进制资源均拒绝；平台不返回完整资源引用或正文变化时明确阻塞。
 
