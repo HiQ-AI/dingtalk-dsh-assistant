@@ -548,9 +548,10 @@ test('已回读的自身澄清通知不再作为新消息入站，收发信箱�
 
 test('受管撤回逐条核验负责人原消息，回读后补发保留原通知', async t => {
   let sends = 0, recalls = 0
+  const sentNotifications = []
   const notifications = {
     canDisclose: async () => true,
-    send: async () => ({ messageId: `out-${++sends}` }),
+    send: async notice => { const messageId = `out-${++sends}`; sentNotifications.push({ id: notice.id, messageId }); return { messageId } },
     readback: async notice => ({ messageId: notice.ack.messageId, conversationId: 'g' }),
     recall: async () => { recalls++; return { recallStatus: 'SUCCESS' } },
     readbackRecall: async ({ messageId }) => ({ messageId, recallStatus: 'SUCCESS', conversationId: 'g' }),
@@ -580,8 +581,10 @@ test('受管撤回逐条核验负责人原消息，回读后补发保留原通�
     type: 'restore', reason: 'explicit_user', authorizationRef: restoreSource })
   assert.equal((await service.executeWorkflowNotificationOperation({ operationId: restore.id,
     expectedFactDigest: restore.snapshot.expectedFactDigest, authorizationRef: restoreSource })).status, 'completed')
-  assert.equal(sends, 2)
-  assert.equal((await service.mailboxes()).outbox.find(item => item.replacesNotificationId === notice.id).deliveredMessageId, 'out-2')
+  const replacement = (await service.mailboxes()).outbox.find(item => item.replacesNotificationId === notice.id)
+  assert.equal(sentNotifications.filter(item => item.id === notice.id).length, 1)
+  assert.equal(sentNotifications.filter(item => item.id === restore.id).length, 1)
+  assert.equal(replacement.deliveredMessageId, sentNotifications.find(item => item.id === restore.id).messageId)
 })
 
 test('群职责进入 I 而不占用 S/R；任务历史可由固定材料键读取', async t => {
@@ -629,7 +632,7 @@ test('五类旧只读流程共享消息schema、可用列表和创建路由，�
     if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
     const available = input.facts.availableWorkflows.map(item => item.id)
     assert.ok(ids.every(id => available.includes(id)))
-    assert.deepEqual(input.facts.unavailableWorkflows, ['UAT交付', '生产发布', '数据变更', 'UAT同提交重建'])
+    assert.deepEqual(input.facts.unavailableWorkflows, ['将已合入UAT分支的精确提交部署到UAT环境', '生产发布', '数据变更', 'UAT同提交重建'])
     return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: input.text, workflowId: ids[selected++] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
   }
   const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
@@ -661,7 +664,7 @@ test('五类旧只读流程共享消息schema、可用列表和创建路由，�
 })
 
 test('受信外部适配器齐备时四类流程可选并按固定需求创建，模型不持有执行能力', async t => {
-  const ids = ['task-uat-delivery', 'task-production-release', 'task-data-change', 'task-uat-rebuild']
+  const ids = ['task-uat-deployment', 'task-production-release', 'task-data-change', 'task-uat-rebuild']
   const digest = createHash('sha256').update('rules').digest('hex')
   const releaseAdapter = kind => ({ id: kind, version: '1', rulesDigest: digest,
     inspect: async () => { throw new Error('PREFLIGHT_NOT_AVAILABLE') }, prepareOperation: async () => { throw new Error('EFFECT_NOT_EXPECTED') } })
@@ -674,7 +677,7 @@ test('受信外部适配器齐备时四类流程可选并按固定需求创建�
     prepareExecute: async () => { throw new Error('EXECUTE_NOT_EXPECTED') }, readback: async () => { throw new Error('READBACK_NOT_EXPECTED') } }
   const source = 'SELECT 1', hash = createHash('sha256').update(source).digest('hex')
   let selected = 0, prepared = 0, effects = 0
-  const external = { releaseAdapters: Object.fromEntries(['uat-delivery', 'production-release', 'uat-rebuild'].map(kind => [kind, releaseAdapter(kind)])), dataChangeAdapter,
+  const external = { releaseAdapters: Object.fromEntries(['uat-deployment', 'production-release', 'uat-rebuild'].map(kind => [kind, releaseAdapter(kind)])), dataChangeAdapter,
     operationAdapter: { execute: async () => { effects++; throw new Error('EFFECT_NOT_EXPECTED') }, reconcile: async () => { effects++; throw new Error('EFFECT_NOT_EXPECTED') } },
     authorizeExternal: async () => { throw new Error('AUTHORIZATION_NOT_EXPECTED') },
     prepareRequirement: async ({ workflowId, action }) => {
@@ -874,7 +877,7 @@ test('编排UAT但缺受信适配器时只阻塞UAT阶段，不冒充提测完�
   const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
     : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新任务'] }
       : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '先分析再提测', workflowId: 'task-analysis', workflowPlan: [
-        { workflowId: 'task-analysis', gate: 'none' }, { workflowId: 'task-uat-delivery', gate: 'none' },
+        { workflowId: 'task-analysis', gate: 'none' }, { workflowId: 'task-uat-deployment', gate: 'none' },
       ] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
   const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
   const received = await service.ingest({ ...message, text: '分析并提测' })

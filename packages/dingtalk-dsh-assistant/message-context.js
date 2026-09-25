@@ -50,7 +50,7 @@ export const taskWorkflowCatalog = Object.freeze([
   ...readOnlyTaskCatalog.map(({ id, purpose }) => ({ id, label: ({ 'task-investigation': '问题排查', 'task-planning': '方案设计', 'task-pr-review': 'PR 评审', 'task-data-query': '数据口径审查', 'task-retrospective': '任务复盘' })[id], purpose, mode: 'read-only' })),
   { id: 'task-engineering', label: '代码开发', purpose: '登记仓库开发并提交PR', mode: 'engineering' },
   { id: 'task-general', label: '通用任务', purpose: '受控的未固化任务', mode: 'general' },
-  { id: 'task-uat-delivery', label: 'UAT 交付', purpose: 'UAT交付', mode: 'external' },
+  { id: 'task-uat-deployment', label: 'UAT 部署', purpose: '将已合入UAT分支的精确提交部署到UAT环境', mode: 'external' },
   { id: 'task-production-release', label: '生产发布', purpose: '生产发布', mode: 'external' },
   { id: 'task-data-change', label: '数据变更', purpose: '数据变更', mode: 'external' },
   { id: 'task-uat-rebuild', label: 'UAT 同提交重建', purpose: 'UAT同提交重建', mode: 'external' },

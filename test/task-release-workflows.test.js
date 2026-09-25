@@ -11,21 +11,31 @@ import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-ar
 import { createReleaseTaskWorkflow, releaseWorkflowKinds } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 
 const commitSha = 'a'.repeat(40)
+test('新增 UAT 部署保留已持久生产与重建定义摘要', () => {
+  const frozenRules = '0e5ce6311e8a9d3d67e67fa22cd9422fad4b8951cd53cb93b91ddcf99ffc05c8'
+  const expected = { 'production-release': '3ed7ab9e46b14c27e1d770b9c1302785f523a5b20abb7b6bb9fc5902860ca38b',
+    'uat-rebuild': 'd0cf2f30ea1dc047ec7917f31d1171cfec69dfce0a1148872bef9f96f3009f17' }
+  for (const [kind, digest] of Object.entries(expected)) {
+    const adapter = { id: `trusted-release-${kind}`, version: '1', rulesDigest: frozenRules,
+      inspect() {}, prepareOperation() {} }
+    assert.equal(defineExecutionWorkflow(createReleaseTaskWorkflow({ kind, adapter })).digest, digest)
+  }
+})
 const operations = {
-  'uat-delivery': ['integrate', 'build'], 'production-release': ['merge-main', 'approval-gate', 'tag', 'build'], 'uat-rebuild': ['rebuild'],
+  'uat-deployment': ['build'], 'production-release': ['merge-main', 'approval-gate', 'tag', 'build'], 'uat-rebuild': ['rebuild'],
 }
 const phases = {
-  'uat-delivery': ['preflight', 'integrated', 'built', 'runtime'],
+  'uat-deployment': ['preflight', 'built', 'runtime'],
   'production-release': ['preflight', 'merged', 'approved', 'tagged', 'built', 'runtime'],
   'uat-rebuild': ['preflight', 'built', 'runtime'],
 }
-const requirement = kind => ({ request: '按精确提交完成交付', target: {
+const requirement = kind => ({ request: '按精确提交完成部署', target: {
   repository: 'hiq/repo', environment: kind === 'production-release' ? 'production' : 'uat',
   service: 'dataset-web', commitSha, runbookId: 'runbook-v1',
   ...(kind === 'production-release' ? { releaseTag: 'v20260925-1' } : {}),
 }, constraints: [], evidenceRefs: ['source:1'] })
 const preflight = {
-  localE2ePassed: true, developmentPrVerified: true, uatPrVerified: true, sourcePackageSupported: true,
+  targetBranchVerified: true, uatPrMerged: true, sourcePackageSupported: true,
   equivalentBuildAbsent: true, releaseSetVerified: true, uatAccepted: true, productionBaselineVerified: true,
   dependencyOrderVerified: true, rollbackBoundaryVerified: true, failurePipelineVerified: true,
   branchHeadMatches: true, noNewerRuntimeVersion: true,
@@ -88,7 +98,7 @@ for (const kind of releaseWorkflowKinds) test(`${kind}: 固定节点按顺序交
   assert.deepEqual(adapter.seen.operations, operations[kind])
   assert.deepEqual(calls, operations[kind])
   const result = await artifacts.read(state.nodes.at(-1).outputRef)
-  assert.equal(result.status, 'technical-delivery-confirmed')
+  assert.equal(result.status, kind === 'uat-deployment' ? 'uat-deployed' : 'technical-delivery-confirmed')
   assert.equal(result.commitSha, commitSha)
 })
 
@@ -107,8 +117,8 @@ test('生产 Run 必须冻结本次精确 Tag，UAT 不接收生产 Tag', async 
   const input = requirement('production-release')
   delete input.target.releaseTag
   await assert.rejects(production.nodes[0].execute({ input }), { code: 'RELEASE_REQUIREMENT_INVALID' })
-  const uat = createReleaseTaskWorkflow({ kind: 'uat-delivery', adapter: adapterFor('uat-delivery') })
-  const withTag = requirement('uat-delivery')
+  const uat = createReleaseTaskWorkflow({ kind: 'uat-deployment', adapter: adapterFor('uat-deployment') })
+  const withTag = requirement('uat-deployment')
   withTag.target.releaseTag = 'v20260925-1'
   await assert.rejects(uat.nodes[0].execute({ input: withTag }), { code: 'RELEASE_REQUIREMENT_INVALID' })
 })

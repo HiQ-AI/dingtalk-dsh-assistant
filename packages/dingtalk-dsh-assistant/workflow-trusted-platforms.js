@@ -79,20 +79,16 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
         baseline: previous.number, refs: [branch, commit, scan, build, manifest, deployment, pods]
           .map(item => item.evidenceRef) })}` }
   }
-  async function readUatAttestation({ kind, target, evidenceRefs }) {
-    if (kind === 'uat-rebuild') return readUatRebuildAttestation({ target })
-    if (kind !== 'uat-delivery' || !execution || !Array.isArray(evidenceRefs)) throw executionError('UAT_PROOF_UNAVAILABLE')
-    const selected = [...releaseTargets.values()].find(item => item.kind === kind && item.repository === target.repository
-      && item.environment === target.environment && item.service === target.service && item.runbookId === target.runbookId)
-    if (!selected || !Array.isArray(selected.businessE2eCheckIds) || !selected.businessE2eCheckIds.length
-      || selected.businessE2eCheckIds.some(id => typeof id !== 'string' || !id)) throw executionError('UAT_BUSINESS_E2E_UNCONFIGURED')
-    const markers = evidenceRefs.filter(ref => /^engineering-task:[^:]+:[^:]+$/u.test(ref))
-    if (markers.length !== 1) throw executionError('UAT_ENGINEERING_RUN_UNRESOLVED')
-    const [, taskId, runId] = markers[0].split(':')
+  async function readUatAttestation({ kind, target }) {
+    if (kind !== 'uat-rebuild') throw executionError('UAT_PROOF_UNAVAILABLE')
+    return readUatRebuildAttestation({ target })
+  }
+  async function verifyEngineeringDeploymentSource({ marker, target, selected }) {
+    if (!execution) throw executionError('UAT_EXECUTION_BINDING_INVALID')
+    const [, taskId, runId] = marker.split(':')
     const state = await execution.controller.state(runId)
-    const proof = await readEngineeringDeliveryProof({ state, artifacts: execution.artifacts,
-      taskId, requiredE2eCheckIds: selected.businessE2eCheckIds })
-    if (!proof.localE2ePassed || proof.pullRequest.repository !== target.repository) throw executionError('UAT_BUSINESS_E2E_UNCONFIRMED')
+    const proof = await readEngineeringDeliveryProof({ state, artifacts: execution.artifacts, taskId })
+    if (proof.pullRequest.repository !== target.repository) throw executionError('UAT_ENGINEERING_SOURCE_UNCONFIRMED')
     const github = clients.release.github
     if (typeof github.readCommit !== 'function' || typeof github.readPullRequest !== 'function'
       || typeof github.resolveApprovedPullRequest !== 'function') throw executionError('UAT_GITHUB_PROOF_UNAVAILABLE')
@@ -110,12 +106,11 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       || developmentCommit.treeSha !== proof.treeSha || targetCommit.treeSha !== proof.treeSha
       || [pr, developmentCommit, targetCommit, approved].some(item => !item.evidenceRef))
       throw executionError('UAT_SOURCE_CHAIN_UNCONFIRMED')
-    return { facts: { localE2ePassed: true, developmentPrVerified: true, uatPrVerified: true, sourcePackageSupported: true },
-      evidenceRef: `uat-source-proof:${executionDigest({ target, runId, refs: proof.evidenceRefs,
-        live: [pr, developmentCommit, targetCommit, approved].map(item => item.evidenceRef) })}` }
+    return `uat-source-proof:${executionDigest({ target, runId, refs: proof.evidenceRefs,
+      live: [pr, developmentCommit, targetCommit, approved].map(item => item.evidenceRef) })}`
   }
   const release = config?.release?.targets?.length
-    ? createReleasePlatform({ targets: config.release.targets.map(({ id, businessE2eCheckIds: _businessE2eCheckIds, ...target }) => target),
+    ? createReleasePlatform({ targets: config.release.targets.map(({ id, ...target }) => target),
       clients: { ...clients?.release, attestations: { read: readUatAttestation } } })
     : null
   let boundStore = null
@@ -173,7 +168,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       const markers = (materials ?? []).filter(item => /^engineering-task:[^:]+:[^:]+$/u.test(item.resourceRef ?? ''))
       let selected = releaseTargets.get(action.arguments?.targetId)
       if (action.arguments?.targetId !== undefined && !selected) throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
-      if (kind === 'uat-delivery' && markers.length === 1 && !selected) {
+      if (kind === 'uat-deployment' && markers.length === 1 && !selected) {
         if (!execution) throw executionError('UAT_EXECUTION_BINDING_INVALID')
         const [, taskId, runId] = markers[0].resourceRef.split(':')
         const state = await execution.controller.state(runId)
@@ -184,7 +179,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
         selected = matches[0]
       }
       if (!selected || selected.kind !== kind || !release.configuredKinds.includes(kind)) throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
-      if (markers.length && (kind !== 'uat-delivery' || markers.length !== 1)) throw executionError('UAT_ENGINEERING_RUN_UNRESOLVED')
+      if (markers.length && (kind !== 'uat-deployment' || markers.length !== 1)) throw executionError('UAT_ENGINEERING_RUN_UNRESOLVED')
       const suppliedCommitSha = action.arguments?.commitSha
       const releaseTag = kind === 'production-release'
         ? requireText(action.arguments.releaseTag, 'EXTERNAL_RELEASE_TAG_REQUIRED') : null
@@ -198,7 +193,10 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
         service: selected.service, commitSha, runbookId: selected.runbookId,
         ...(releaseTag ? { releaseTag } : {}) }
       release.targetFor({ target }, kind)
-      return { request, target, constraints, evidenceRefs: [head.evidenceRef, ...materials.map(item => item.resourceRef)] }
+      const sourceProof = markers.length ? await verifyEngineeringDeploymentSource({
+        marker: markers[0].resourceRef, target, selected }) : null
+      return { request, target, constraints, evidenceRefs: [head.evidenceRef,
+        ...(materials ?? []).map(item => item.resourceRef), ...(sourceProof ? [sourceProof] : [])] }
     }
     if (bytebase && workflowId === 'task-data-change') {
       const targetId = requireText(action.arguments?.targetId, 'EXTERNAL_TARGET_ID_REQUIRED')

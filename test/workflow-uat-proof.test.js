@@ -5,8 +5,8 @@ import { createTrustedWorkflowPlatforms } from '../packages/dingtalk-dsh-assista
 const developmentSha = 'a'.repeat(40)
 const mergeSha = 'b'.repeat(40)
 const treeSha = 'c'.repeat(40)
-const target = { id: 'uat', kind: 'uat-delivery', repository: 'HiQ-AI/dataset', environment: 'uat',
-  service: 'dataset', runbookId: 'dataset-uat', branch: 'uat', businessE2eCheckIds: ['business-e2e'],
+const target = { id: 'uat', kind: 'uat-deployment', repository: 'HiQ-AI/dataset', environment: 'uat',
+  service: 'dataset', runbookId: 'dataset-uat', branch: 'uat',
   woodpecker: { baseUrl: 'https://woodpecker.hiqdat.dev', repositoryId: 1, cronName: 'build' },
   kubernetes: { namespace: 'uat', deployment: 'dataset' },
   registry: { image: 'registry.cn-sh1.ctyun.cn/hiq-ai/dataset' }, entryUrl: 'https://uat.example.test/health' }
@@ -40,29 +40,38 @@ function fixture({ tree = treeSha, e2e = true } = {}) {
   const platform = createTrustedWorkflowPlatforms({ config: { release: { targets: [target] } }, clients, ownerActorId: 'owner' })
   platform.bindExecution({ controller: { state: async () => ({ run: { runId: 'engineering-run', taskId: 'task-1', workflowId: 'task-engineering', status: 'succeeded' }, nodes }) },
     artifacts: { read: async ref => outputs[ref.slice('artifact:'.length)] } })
-  const requirement = { request: '交付 UAT', constraints: [], target: { repository: target.repository, environment: target.environment,
+  const requirement = { request: '部署 UAT', constraints: [], target: { repository: target.repository, environment: target.environment,
     service: target.service, runbookId: target.runbookId, commitSha: mergeSha },
   evidenceRefs: ['engineering-task:task-1:engineering-run'] }
   return { platform, requirement }
 }
 
-test('UAT 来源证明复用工程工件并独立核对 PR 与相同 Git tree', async () => {
+test('UAT 部署可衔接工程 Run，核对 PR 与相同 Git tree 且不要求业务 E2E', async () => {
   const { platform, requirement } = fixture()
-  const prepared = await platform.prepareRequirement({ workflowId: 'task-uat-delivery',
-    action: { arguments: { objective: '交付 UAT' }, constraints: [] },
+  const prepared = await platform.prepareRequirement({ workflowId: 'task-uat-deployment',
+    action: { arguments: { objective: '部署 UAT' }, constraints: [] },
     materials: [{ resourceRef: 'engineering-task:task-1:engineering-run' }] })
   assert.equal(prepared.target.commitSha, mergeSha)
   assert.ok(prepared.evidenceRefs.includes('engineering-task:task-1:engineering-run'))
-  const result = await platform.releaseAdapters['uat-delivery'].inspect({ phase: 'preflight', requirement })
-  assert.equal(result.facts.localE2ePassed, true)
-  assert.equal(result.facts.sourcePackageSupported, true)
-  assert.ok(result.evidenceRefs.some(ref => ref.startsWith('uat-source-proof:')))
+  assert.ok(prepared.evidenceRefs.some(ref => ref.startsWith('uat-source-proof:')))
+  const result = await platform.releaseAdapters['uat-deployment'].inspect({ phase: 'preflight', requirement })
+  assert.equal(result.facts.uatPrMerged, true)
+  assert.equal(result.facts.localE2ePassed, undefined)
 })
 
-test('缺业务 E2E 或 UAT merge tree 不一致时阻断发布', async () => {
-  for (const scenario of [{ e2e: false }, { tree: 'f'.repeat(40) }]) {
-    const { platform, requirement } = fixture(scenario)
-    await assert.rejects(platform.releaseAdapters['uat-delivery'].inspect({ phase: 'preflight', requirement }),
-      { code: scenario.e2e === false ? 'UAT_BUSINESS_E2E_UNCONFIRMED' : 'UAT_SOURCE_CHAIN_UNCONFIRMED' })
-  }
+test('独立 UAT 部署无需工程 Run；自动衔接的 Git tree 漂移仍阻断', async () => {
+  const { platform } = fixture({ e2e: false })
+  const standalone = await platform.prepareRequirement({ workflowId: 'task-uat-deployment',
+    action: { arguments: { objective: '部署 UAT', targetId: 'uat', commitSha: mergeSha }, constraints: [] }, materials: [] })
+  assert.equal(standalone.target.commitSha, mergeSha)
+  assert.deepEqual(standalone.evidenceRefs, ['branch'])
+  const linked = await platform.prepareRequirement({ workflowId: 'task-uat-deployment',
+    action: { arguments: { objective: '部署 UAT' }, constraints: [] },
+    materials: [{ resourceRef: 'engineering-task:task-1:engineering-run' }] })
+  assert.equal(linked.target.commitSha, mergeSha)
+  const drift = fixture({ tree: 'f'.repeat(40) })
+  await assert.rejects(drift.platform.prepareRequirement({ workflowId: 'task-uat-deployment',
+    action: { arguments: { objective: '部署 UAT' }, constraints: [] },
+    materials: [{ resourceRef: 'engineering-task:task-1:engineering-run' }] }),
+  { code: 'UAT_SOURCE_CHAIN_UNCONFIRMED' })
 })

@@ -34,8 +34,8 @@ const finalSchema = { type: 'object', properties: {
 }, required: ['workflowKind', 'targetDigest', 'commitSha', 'status', 'evidenceRefs', 'boundaries'], additionalProperties: false }
 
 const catalog = {
-  'uat-delivery': { environment: 'uat', operations: ['integrate', 'build'], phases: ['preflight', 'integrated', 'built', 'runtime'],
-    requiredPreflight: ['localE2ePassed', 'developmentPrVerified', 'uatPrVerified', 'sourcePackageSupported', 'equivalentBuildAbsent'],
+  'uat-deployment': { environment: 'uat', operations: ['build'], phases: ['preflight', 'built', 'runtime'],
+    requiredPreflight: ['targetBranchVerified', 'uatPrMerged'],
     requiredFinal: ['sourceSha', 'registryDigest', 'runtimeDigest', 'observedGeneration', 'ready', 'entryAccessible', 'imageChainVerified'] },
   'production-release': { environment: 'production', operations: ['merge-main', 'approval-gate', 'tag', 'build'], phases: ['preflight', 'merged', 'approved', 'tagged', 'built', 'runtime'],
     requiredPreflight: [],
@@ -127,6 +127,21 @@ export function createReleaseTaskWorkflow({ kind, adapter }) {
         return { requirement, observation }
       } })
     if (index === spec.phases.length - 1) {
+      if (kind === 'uat-deployment') {
+        nodes.push({ id: 'finalize', version: '1', executor: 'code', allowedEffects: ['pure'],
+          inputSchema: stateSchema, outputSchema: finalSchema,
+          mapInput: ({ previousOutput }) => previousOutput,
+          execute: async ({ input }) => {
+            assertObservation(input.observation, 'runtime', input.requirement)
+            assertFacts(input.observation, spec.requiredFinal)
+            if (input.observation.facts.sourceSha !== input.requirement.target.commitSha) throw executionError('RELEASE_RUNTIME_IDENTITY_MISMATCH')
+            return { workflowKind: kind, targetDigest: targetDigest(input.requirement.target), commitSha: input.requirement.target.commitSha,
+              status: 'uat-deployed', evidenceRefs: input.observation.evidenceRefs,
+              boundaries: ['仅确认 UAT 运行版本；业务回归、提测和正式验收须分别证明。'] }
+          } })
+        break
+      }
+
       nodes.push({ id: 'finalize', version: '1', executor: 'code', allowedEffects: ['pure'],
         inputSchema: stateSchema, outputSchema: finalSchema,
         mapInput: ({ previousOutput }) => previousOutput,

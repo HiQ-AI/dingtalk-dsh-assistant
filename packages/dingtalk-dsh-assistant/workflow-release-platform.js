@@ -5,21 +5,20 @@ const sha = value => typeof value === 'string' && /^[0-9a-f]{40}$/.test(value)
 const digest = value => typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value)
 const nonempty = value => typeof value === 'string' && !!value.trim() && value === value.trim()
 const copy = value => structuredClone(value)
-const kinds = new Set(['uat-delivery', 'uat-rebuild', 'production-release'])
+const kinds = new Set(['uat-deployment', 'uat-rebuild', 'production-release'])
 const phases = {
-  'uat-delivery': ['preflight', 'integrated', 'built', 'runtime'],
+  'uat-deployment': ['preflight', 'built', 'runtime'],
   'uat-rebuild': ['preflight', 'built', 'runtime'],
   'production-release': ['preflight', 'merged', 'approved', 'tagged', 'built', 'runtime'],
 }
 const operations = {
-  'uat-delivery': ['integrate', 'build'],
+  'uat-deployment': ['build'],
   'uat-rebuild': ['rebuild'],
   'production-release': ['merge-main', 'approval-gate', 'tag', 'build'],
 }
-const precedingPhase = { integrate: 'preflight', build: 'integrated', rebuild: 'preflight',
+const precedingPhase = { build: 'preflight', rebuild: 'preflight',
   'merge-main': 'preflight', 'approval-gate': 'merged', tag: 'approved' }
 const attestations = {
-  'uat-delivery': ['localE2ePassed', 'developmentPrVerified', 'uatPrVerified', 'sourcePackageSupported'],
   'uat-rebuild': ['failurePipelineVerified', 'branchHeadMatches', 'noNewerRuntimeVersion', 'sourcePackageSupported'],
 }
 const validEvidence = value => nonempty(value?.evidenceRef)
@@ -29,7 +28,7 @@ const safe = value => value && typeof value === 'object' && !Array.isArray(value
 export function createReleasePlatform({ targets, clients }) {
   if (!Array.isArray(targets) || !safe(clients) || !targets.length) fail('RELEASE_PLATFORM_CONFIG_INVALID')
   for (const name of ['github', 'woodpecker', 'kubernetes', 'registry',
-    ...(targets.some(target => target.kind !== 'production-release') ? ['attestations'] : [])]) {
+    ...(targets.some(target => target.kind === 'uat-rebuild') ? ['attestations'] : [])]) {
     if (!safe(clients[name])) fail('RELEASE_PLATFORM_CLIENT_REQUIRED')
   }
   const commonMethods = { github: ['readBranch'], woodpecker: ['listPipelines', 'readBuildEvidence'],
@@ -39,7 +38,7 @@ export function createReleasePlatform({ targets, clients }) {
       github: [...commonMethods.github, ...(target?.kind === 'uat-rebuild' ? []
         : ['resolveApprovedPullRequest', 'readPullRequest']), ...(target?.kind === 'production-release' ? ['readTag', 'createTag'] : [])],
       woodpecker: [...commonMethods.woodpecker, ...(target?.kind === 'production-release' ? [] : ['triggerBuild'])],
-      ...(target?.kind === 'production-release' ? {} : { attestations: ['read'] }) }
+      ...(target?.kind === 'uat-rebuild' ? { attestations: ['read'] } : {}) }
     for (const [client, required] of Object.entries(methods)) {
       if (required.some(method => typeof clients[client]?.[method] !== 'function')) fail('RELEASE_PLATFORM_CAPABILITY_MISSING')
     }
@@ -68,7 +67,8 @@ export function createReleasePlatform({ targets, clients }) {
     byKey.set(key, target)
     byKind.set(target.kind, [...(byKind.get(target.kind) ?? []), target])
   }
-  const rulesDigest = executionDigest([...byKey.values()])
+  // 新增独立 UAT 部署不改变既有生产发布和同提交重建适配器的冻结规则身份。
+  const existingRulesDigest = executionDigest([...byKey.values()].filter(target => target.kind !== 'uat-deployment'))
   function targetFor(requirement, kind) {
     if (!safe(requirement?.target) || !sha(requirement.target.commitSha)
       || (kind === 'production-release' ? !/^v\d{8}-[1-9]\d*$/.test(requirement.target.releaseTag ?? '')
@@ -132,11 +132,19 @@ export function createReleasePlatform({ targets, clients }) {
     if (phase === 'preflight') {
       const head = add(await branchHead(target))
       if (head.commitSha !== requirement.target.commitSha) fail('RELEASE_PLATFORM_BRANCH_MOVED')
-      if (kind !== 'uat-rebuild') add(await approvedPullRequest(target, requirement.target.commitSha, requirement.evidenceRefs))
+      if (kind !== 'uat-rebuild') {
+        add(await approvedPullRequest(target, requirement.target.commitSha, requirement.evidenceRefs))
+        if (kind === 'uat-deployment') Object.assign(facts, { targetBranchVerified: true, uatPrMerged: true })
+      }
       if (kind === 'production-release') {
         const tag = add(await read('github', 'readTag', { repository: target.repository, tag: target.releaseTag }))
         if (tag.exists !== false && tag.commitSha !== requirement.target.commitSha) fail('RELEASE_PLATFORM_TAG_CONFLICT')
         add(await pipelines(target, requirement.target.commitSha))
+      } else if (kind === 'uat-deployment') {
+        const scan = add(await pipelines(target, requirement.target.commitSha))
+        if (!scan.same.some(row => row.status === 'success')
+          && scan.same.some(row => ['failure', 'error', 'killed', 'declined', 'canceled'].includes(row.status)))
+          fail('RELEASE_PLATFORM_FAILED_BUILD_REQUIRES_REBUILD')
       } else {
         const signed = add(await read('attestations', 'read', { kind, target: requirement.target,
           required: attestations[kind], evidenceRefs: requirement.evidenceRefs }))
@@ -144,8 +152,6 @@ export function createReleasePlatform({ targets, clients }) {
         for (const key of attestations[kind]) facts[key] = true
         const scan = add(await pipelines(target, requirement.target.commitSha))
         facts.equivalentBuildAbsent = scan.equivalentBuildAbsent
-        if (kind === 'uat-delivery' && scan.same.some(row => ['failure', 'error', 'killed', 'declined', 'canceled'].includes(row.status)))
-          fail('RELEASE_PLATFORM_FAILED_BUILD_REQUIRES_REBUILD')
       }
     } else if (phase === 'integrated' || phase === 'merged') {
       const ref = add(await branchHead(target))
@@ -215,7 +221,7 @@ export function createReleasePlatform({ targets, clients }) {
     // 操作参数只取自白名单和冻结的需求，不接受模型生成的 URL、命令或认证字段。
     const operationKey = executionDigest({ kind, operation, runId, generation, requirementDigest,
       targetDigest: observation.targetDigest, previousEvidenceDigest: expected.previousEvidenceDigest })
-    const pr = ['integrate', 'merge-main'].includes(operation)
+    const pr = operation === 'merge-main'
       ? await approvedPullRequest(target, requirement.target.commitSha, requirement.evidenceRefs) : null
     return { action: 'external', workflowKind: kind, operation, runId, generation, requirementDigest,
       resourceKey: `external:${requirement.target.environment}:${requirement.target.repository}:${requirement.target.service}`,
@@ -245,7 +251,7 @@ export function createReleasePlatform({ targets, clients }) {
       || (prepared.workflowKind === 'production-release'
         && prepared.expected.approvalScopeDigest !== executionDigest({ target: identity, operation: 'tag' }))
       || (prepared.operation === 'tag' && !/^[a-f0-9]{64}$/.test(prepared.expected.approvalReceiptDigest ?? ''))
-      || (['integrate', 'merge-main'].includes(prepared.operation)
+      || (prepared.operation === 'merge-main'
         && (!Number.isInteger(prepared.expected.pullRequestNumber) || prepared.expected.pullRequestNumber < 1
           || prepared.expected.mergeCommitSha !== prepared.expected.commitSha))
       || prepared.operationKey !== executionDigest({ kind: prepared.workflowKind, operation: prepared.operation,
@@ -256,7 +262,7 @@ export function createReleasePlatform({ targets, clients }) {
   async function execute(prepared) {
     const target = assertPrepared(prepared)
     // merge SHA 必须已在目标分支，故集成/主干合并只能确认既有结果；不可猜测 GitHub merge 产生的新 SHA。
-    if (['integrate', 'merge-main'].includes(prepared.operation)
+    if (prepared.operation === 'merge-main'
       || prepared.workflowKind === 'production-release' && prepared.operation === 'build') return reconcile(prepared)
     if (prepared.operation === 'approval-gate') return reconcile(prepared)
     if (['build', 'rebuild'].includes(prepared.operation)) {
@@ -299,7 +305,7 @@ export function createReleasePlatform({ targets, clients }) {
     } else if (kind === 'tag') {
       const tag = await read('github', 'readTag', { repository: target.repository, tag: prepared.expected.tag })
       observation = { evidenceRef: tag.evidenceRef, confirmed: tag.commitSha === prepared.expected.commitSha }
-    } else if (['integrate', 'merge-main'].includes(prepared.operation)) {
+    } else if (prepared.operation === 'merge-main') {
       const pr = await read('github', 'readPullRequest', { repository: target.repository,
         number: prepared.expected.pullRequestNumber })
       const ref = await branchHead(target)
@@ -314,7 +320,8 @@ export function createReleasePlatform({ targets, clients }) {
       operationKey: prepared.operationKey }
   }
   const releaseAdapters = Object.fromEntries([...byKind.keys()].map(kind => [kind, {
-    id: `trusted-release-${kind}`, version: '1', rulesDigest,
+    id: `trusted-release-${kind}`, version: '1',
+    rulesDigest: kind === 'uat-deployment' ? executionDigest(byKind.get(kind)) : existingRulesDigest,
     inspect: args => inspect({ ...args, kind }), prepareOperation,
   }]))
   return { releaseAdapters, operationAdapter: { execute, reconcile }, targetFor,

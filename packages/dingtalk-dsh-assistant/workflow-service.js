@@ -388,7 +388,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`, taskId,
         planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef,
         input: prepared.input, workflowId: prepared.workflowId })
-    } else if (current.workflowId === 'task-uat-delivery') {
+    } else if (current.workflowId === 'task-uat-deployment') {
       const preceding = plan.stages[currentIndex - 1]
       if (preceding?.workflowId !== 'task-engineering' || !preceding.runId || !selectedExternal.byId.has(current.workflowId))
         throw executionError('UAT_ENGINEERING_PREDECESSOR_REQUIRED')
