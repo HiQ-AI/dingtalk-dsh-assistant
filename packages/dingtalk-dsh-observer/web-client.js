@@ -311,6 +311,7 @@ window.__ModuleLoader__.load({
       const selectedGroup = groupsById.get(selectedGroupId) || (data?.groups || [])[0]
       const selectedMessages = [...(selectedGroup?.messages || [])].filter((message) => message.sourceKind === 'dingtalk' || message.sourceKind === 'migration' || message.sourceKind === 'workflow-v2' || !message.sourceKind).sort((left, right) => (new Date(right.occurredAt).getTime() || 0) - (new Date(left.occurredAt).getTime() || 0) || Number(right.sequence || 0) - Number(left.sequence || 0))
       const messageWorkflowState = (message) => {
+        if (['routing', 'routing_blocked', 'waiting_routing_barrier', 'intent_judging', 'intent_rejudging', 'processed'].includes(message.workflowStatus)) return message.workflowStatus
         if (message.routingStatus === 'failed') return 'failed'
         if (message.routingStatus !== 'routed') return 'routing'
         if (message.sourceKind === 'workflow-v2') return 'processed'
@@ -328,6 +329,10 @@ window.__ModuleLoader__.load({
       const visibleMessages = filteredMessages.slice((currentMessagePage - 1) * pageSize, currentMessagePage * pageSize)
       const delivery = {
         routing: { label: '待归类', state: 'ongoing' },
+        routing_blocked: { label: '关联受阻', state: 'error' },
+        waiting_routing_barrier: { label: '已关联 · 等待其他消息', state: 'ongoing' },
+        intent_judging: { label: '话题意图判断中', state: 'ongoing' },
+        intent_rejudging: { label: '新消息加入 · 重新判断', state: 'ongoing' },
         processing: { label: '话题处理中', state: 'ongoing' },
         processed: { label: '已处理', state: 'done' },
         failed: { label: '归类失败', state: 'error' },
@@ -335,7 +340,7 @@ window.__ModuleLoader__.load({
       const messageRows = visibleMessages.map((message, rowIndex) => {
         const status = delivery[messageWorkflowState(message)]
         return React.createElement('tr', { key: message.messageId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
-          React.createElement('td', { style: { ...tableBodyCell, width: 104 }, title: message.agentDeliveryError || '' }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
+          React.createElement('td', { style: { ...tableBodyCell, width: 104 }, title: message.workflowStatusDetail || message.agentDeliveryError || '' }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
           React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, clampTableContent(React.createElement('strong', { style: { fontSize: 14, fontWeight: 600 } }, message.senderName || message.senderOpenDingTalkId || '发送人未记录'), React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, fmt(message.occurredAt)))),
           React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, React.createElement('div', { style: { display: 'flex', gap: 4, minWidth: 0, overflow: 'hidden' } }, ...(message.topicRefs?.length ? message.topicRefs.map((ref) => React.createElement('button', { key: ref.topicId, type: 'button', title: ref.title, 'aria-label': `话题 ${ref.title}`, onClick: () => { setTopicTarget({ groupId: selectedGroup.groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', flex: '0 1 auto', minWidth: 0, maxWidth: 120, border: 0, padding: '2px 7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', fontFamily: 'inherit' } }, ref.title)) : [React.createElement('span', { key: 'unrouted', style: { color: colors.muted, fontSize: 12 } }, '待归类')]))),
           React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）')),
@@ -510,7 +515,7 @@ window.__ModuleLoader__.load({
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' } },
           (data?.groups || []).length ? React.createElement(SelectMenu, { label: '选择群聊会话', value: selectedGroup?.groupId || '', options: (data?.groups || []).map((group) => ({ id: group.groupId, label: group.name || group.groupId })), onChange: (value) => { setSelectedGroupId(value); setMessagePage(1); setOutboxPage(1) }, fitContent: true }) : null,
           groupTableView === 'messages'
-            ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
+            ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'waiting_routing_barrier', label: '等待其他消息关联' }, { id: 'intent_judging', label: '意图判断中' }, { id: 'intent_rejudging', label: '意图重新判断' }, { id: 'routing_blocked', label: '关联受阻' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
             : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读' }, { id: 'confirmed', label: '已发送' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回待处理' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 910, borderCollapse: 'collapse', tableLayout: 'fixed' } },
@@ -525,7 +530,8 @@ window.__ModuleLoader__.load({
       const groupsPage = React.createElement('section', null, React.createElement('div', { style: tableFrame }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
       const selectedWorkflowTask = (data?.tasks || []).find(task => task.taskId === selectedWorkflowTaskId && task.engine === 'workflow-v2')
       const nodeState = { succeeded: '已完成', running: '执行中', ready: '待执行', waiting: '等待处理', failed: '失败', pending: '未开始', cancelled: '已取消', skipped: '已跳过' }
-      const nodeTitle = { 'prepare-workspace': '准备工作目录', 'read-files': '读取文件', 'propose-changes': '生成修改方案', 'inspect-and-propose': '梳理修改方案', 'apply-changes': '应用修改', 'verify-candidate': '验证候选结果', 'index-files': '建立文件索引', 'select-files': '选择文件', 'validate-selection': '校验选择', 'prepare-commit': '检查提交条件', commit: '提交代码', 'prepare-push': '检查推送条件', push: '推送代码', 'prepare-pr': '检查 PR 条件', 'create-pr': '创建 PR', 'prepare-generation': '准备任务代际', prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '校验结果', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'rehearse-isolated': '隔离演练', 'prepare-issue': '准备工单', 'create-issue': '提交工单', 'readback-issue': '回读工单', 'inspect-approval': '核对审批', 'prepare-execute': '准备执行', 'execute-task': '执行受控任务', 'readback-production': '生产只读回查', finalize: '核验交付' }
+      const planStageState = { ready: '待执行', waiting_confirmation: '等待人工确认', running: '执行中', succeeded: '已完成', invalidated: '需重新执行', blocked: '受阻' }
+      const nodeTitle = { 'prepare-workspace': '准备工作目录', 'read-files': '读取文件', 'propose-changes': '生成修改方案', 'inspect-and-propose': '梳理修改方案', 'apply-changes': '应用修改', 'verify-candidate': '验证候选结果', 'index-files': '建立文件索引', 'select-files': '选择文件', 'validate-selection': '校验选择', 'prepare-commit': '检查提交条件', commit: '提交代码', 'prepare-push': '检查推送条件', push: '推送代码', 'prepare-pr': '检查 PR 条件', 'create-pr': '创建 PR', 'prepare-generation': '准备任务代际', prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '校验结果', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'prepare-rehearsal': '核对 UAT 演练条件', 'run-rehearsal': '在 UAT 数据库演练', 'readback-rehearsal': '回读 UAT 演练', 'prepare-issue': '准备工单', 'create-issue': '提交工单', 'readback-issue': '回读工单', 'approval-gate': '等待真人审批', 'prepare-execute': '准备执行', 'execute-task': '执行受控任务', 'readback-production': '生产只读回查', finalize: '核验交付' }
       const workflowDetail = selectedWorkflowTask ? React.createElement('section', { 'aria-label': '任务执行详情', style: { ...card, display: 'grid', gap: 18, maxWidth: 920, margin: '0 auto' } },
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'start' } },
           React.createElement('div', { style: { display: 'grid', gap: 6, minWidth: 0 } },
@@ -536,6 +542,19 @@ window.__ModuleLoader__.load({
           React.createElement('span', { style: pill(colors.accent) }, selectedWorkflowTask.workflowProgress?.outcomeLabel || selectedWorkflowTask.state),
           React.createElement('span', { style: { color: colors.muted } }, `${(selectedWorkflowTask.executionNodes || []).filter(node => node.status === 'succeeded').length} / ${(selectedWorkflowTask.executionNodes || []).length} 个节点完成`)),
         selectedWorkflowTask.waitingReason ? React.createElement('div', { role: 'status', style: { color: colors.warning, overflowWrap: 'anywhere', fontSize: 12 } }, `当前等待：${selectedWorkflowTask.waitingReason}`) : null,
+        selectedWorkflowTask.plan?.stages?.length ? React.createElement('section', { 'aria-label': '任务阶段', style: { display: 'grid', gap: 0 } },
+          React.createElement('strong', { style: { fontSize: 13, marginBottom: 6 } }, `任务阶段 · 计划 v${selectedWorkflowTask.plan.version}`),
+          ...selectedWorkflowTask.plan.stages.map((stage, index) => React.createElement('div', { key: stage.stageId, style: { display: 'grid', gridTemplateColumns: '24px minmax(0, 1fr)', gap: 12, padding: '12px 0', borderTop: `1px solid ${colors.border}` } },
+            React.createElement('span', { style: { ...pill(stage.status === 'succeeded' ? 'var(--dsw-alias-state-success-primary, #248a3d)' : stage.status === 'blocked' ? colors.danger : colors.accent), justifyContent: 'center', height: 24, boxSizing: 'border-box' } }, index + 1),
+            React.createElement('div', { style: { display: 'grid', gap: 5, minWidth: 0, fontSize: 12 } },
+              React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' } },
+                React.createElement('strong', { style: { fontSize: 13, overflowWrap: 'anywhere' } }, stage.title || stage.stageId),
+                React.createElement('span', { style: { color: stage.status === 'waiting_confirmation' || stage.status === 'blocked' ? colors.warning : colors.muted } }, planStageState[stage.status] || stage.status),
+                selectedWorkflowTask.plan.currentStageId === stage.stageId ? React.createElement('span', { style: pill(colors.accent) }, '当前阶段') : null),
+              React.createElement('span', { style: { color: colors.muted, overflowWrap: 'anywhere' } }, stage.workflowId || '通用流程', stage.runId ? ` · 执行 ${short(stage.runId)}` : ''),
+              stage.status === 'waiting_confirmation' ? React.createElement('span', { role: 'status', style: { color: colors.warning } }, '等待确认上一阶段产出后继续') : null,
+              stage.outputRef ? React.createElement('span', { style: { color: colors.muted } }, '阶段产出已记录') : null)))
+        ) : null,
         React.createElement('section', { 'aria-label': '流程节点', style: { display: 'grid', gap: 0 } },
           React.createElement('strong', { style: { fontSize: 13, marginBottom: 6 } }, '流程节点'),
           ...(selectedWorkflowTask.executionNodes || []).map((node, index) => React.createElement('div', { key: node.nodeRunId || `${node.nodeId}-${index}`, style: { display: 'grid', gridTemplateColumns: '24px minmax(0, 1fr)', gap: 12, padding: '12px 0', borderTop: `1px solid ${colors.border}` } },

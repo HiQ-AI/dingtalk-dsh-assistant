@@ -7,8 +7,9 @@ import { installEffectsSchema, validateEffectsSchema, reduceEffectCommand, recov
   queryEffects, assertRunEffectsDrained, assertNodeEffectsSettled } from './execution-effects.js'
 
 import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced } from './message-ledger.js'
+import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, queryTaskPlan, bindRunToTaskStage } from './execution-task-plan.js'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 const APPLICATION_ID = 0x44534845
 let db, owner, healthy = true
 const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
@@ -128,6 +129,7 @@ function install() {
   db.prepare('INSERT INTO execution_meta(singleton,instance_id,schema_version) VALUES(1,?,?)').run(workerData.instanceId, SCHEMA_VERSION)
   installEffectsSchema(db)
   installMessageSchema(db)
+  installTaskPlanSchema(db)
 }
 function validate(connection) {
   if (scalar(connection.prepare('PRAGMA application_id').get()) !== APPLICATION_ID) fail('STORE_APPLICATION_MISMATCH')
@@ -153,6 +155,7 @@ function validate(connection) {
   if (bad.length) fail('STORE_INVARIANT_FAILED')
   validateEffectsSchema(connection)
   validateMessageSchema(connection)
+  validateTaskPlanSchema(connection)
 }
 function configure() {
   db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=1000;')
@@ -185,7 +188,7 @@ function addNode(runId, plan, position, generation, status) {
 function coreCommand(command, now) {
   const a = command.args
   if (command.kind === 'run.create') {
-    object(a, ['runId', 'taskId', 'workflowId', 'workflowDigest', 'requirementRef', 'nodes', 'maxClaims'], ['runId', 'taskId', 'workflowId', 'workflowDigest', 'requirementRef', 'nodes'])
+    object(a, ['runId', 'taskId', 'workflowId', 'workflowDigest', 'requirementRef', 'nodes', 'maxClaims', 'stageBinding'], ['runId', 'taskId', 'workflowId', 'workflowDigest', 'requirementRef', 'nodes'])
     for (const key of ['runId', 'taskId', 'workflowId']) text(a[key], key)
     digest(a.workflowDigest, 'workflowDigest'); ref(a.requirementRef, 'requirementRef')
     if (!Array.isArray(a.nodes) || !a.nodes.length || a.nodes.length > 128) fail('INVALID_NODE_PLAN')
@@ -198,6 +201,13 @@ function coreCommand(command, now) {
     })
     if (db.prepare('SELECT run_id FROM execution_runs WHERE run_id=?').get(a.runId)) fail('RUN_EXISTS')
     if (db.prepare("SELECT run_id FROM execution_runs WHERE task_id=? AND status NOT IN ('succeeded','failed','cancelled')").get(a.taskId)) fail('TASK_ALREADY_RUNNING')
+    const plannedTask = db.prepare('SELECT task_id FROM business_tasks WHERE task_id=?').get(a.taskId)
+    if (plannedTask && !a.stageBinding) fail('TASK_STAGE_BINDING_REQUIRED')
+    if (!plannedTask && a.stageBinding) fail('TASK_PLAN_NOT_FOUND')
+    if (a.stageBinding) bindRunToTaskStage(db, a.stageBinding, {
+      taskId: a.taskId, runId: a.runId, workflowId: a.workflowId,
+      workflowDigest: a.workflowDigest, requirementRef: a.requirementRef,
+    })
     const maxClaims = integer(a.maxClaims ?? a.nodes.length * 3, 'maxClaims', 1)
     db.prepare("INSERT INTO execution_runs(run_id,task_id,workflow_id,workflow_digest,requirement_ref,max_claims,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'queued',?,?)")
       .run(a.runId, a.taskId, a.workflowId, a.workflowDigest, a.requirementRef, maxClaims, now, now)
@@ -544,9 +554,11 @@ function command(value) {
       return { replayed: true, dispatchEligible: false, result: JSON.parse(prior.result) }
     }
     const core = coreCommand(value, now)
-    const effect = core === null ? (reduceMessageCommand(db, value, context(value.id, now)) ?? reduceEffectCommand(db, value, context(value.id, now))) : null
-    if (core === null && effect === null) fail('UNKNOWN_COMMAND')
-    const result = core ?? effect.result
+    const plan = core === null ? reduceTaskPlanCommand(db, value, context(value.id, now)) : null
+    const effect = core === null && plan === null
+      ? (reduceMessageCommand(db, value, context(value.id, now)) ?? reduceEffectCommand(db, value, context(value.id, now))) : null
+    if (core === null && plan === null && effect === null) fail('UNKNOWN_COMMAND')
+    const result = core ?? plan ?? effect.result
     db.prepare('INSERT INTO execution_receipts(command_id,payload_digest,result,created_at) VALUES(?,?,?,?)').run(value.id, hash, JSON.stringify(result), now)
     emitEvent(value.id, value.kind, result, now)
     db.exec('COMMIT')
@@ -584,6 +596,8 @@ function query(value) {
     const r = db.prepare('SELECT result FROM execution_receipts WHERE command_id=?').get(value.commandId)
     return r ? { replayed: true, dispatchEligible: false, result: JSON.parse(r.result) } : null
   }
+  const planResult = queryTaskPlan(db, value)
+  if (planResult !== undefined) return planResult
   const messageResult = queryMessages(db, value)
   if (messageResult !== undefined) return messageResult
   const result = queryEffects(db, value)

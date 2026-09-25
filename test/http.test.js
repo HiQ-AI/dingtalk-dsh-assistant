@@ -111,6 +111,23 @@ test('本机澄清回答拒绝body伪造actor与外站Origin，只传固定路�
   }, { overrides: { resumeWorkflowRequest: async args => { calls.push(args); return { accepted: true } } } })
 })
 
+test('通知操作仅本机逐条预检和按路径执行，拒绝额外对象字段',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+   const post=(path,body,origin)=>fetch(base+path,{method:'POST',headers:{'content-type':'application/json',...(origin?{origin}:{})},body:JSON.stringify(body)})
+   const prepare={operationId:'op',notificationId:'notice',type:'recall',reason:'explicit_user',authorizationRef:'user-request'}
+   assert.equal((await post('/workflows/notifications/operations',prepare,'https://evil.example')).status,403)
+   assert.equal((await post('/workflows/notifications/operations',{...prepare,notificationIds:['other']})).status,400)
+   assert.equal((await post('/workflows/notifications/operations',prepare)).status,200)
+   assert.equal((await post('/workflows/notifications/operations/op/execute',{expectedFactDigest:'sha',authorizationRef:'user-request',notificationId:'other'})).status,400)
+   assert.equal((await post('/workflows/notifications/operations/op/execute',{expectedFactDigest:'sha',authorizationRef:'user-request'})).status,202)
+   assert.equal((await post('/workflows/notifications/operations/op/reconcile',{messageId:'out',evidenceRef:'readback',recallStatus:'SUCCESS'})).status,400)
+   assert.equal((await post('/workflows/notifications/operations/op/reconcile',{authorizationRef:'user-request'})).status,200)
+   assert.deepEqual(calls.map(item=>item[0]),['prepare','execute','reconcile'])
+   assert.equal(calls[1][1].operationId,'op')
+ },{overrides:{prepareWorkflowNotificationOperation:async args=>{calls.push(['prepare',args]);return {operationId:args.operationId}},executeWorkflowNotificationOperation:async args=>{calls.push(['execute',args]);return {status:'acknowledged'}},reconcileWorkflowNotificationOperation:async args=>{calls.push(['reconcile',args]);return {status:'completed'}}}})
+})
+
 test('通知恢复仅使用路径身份，受阻或过期意图返回冲突', async () => {
   const calls = []
   await withServer(false, async base => {

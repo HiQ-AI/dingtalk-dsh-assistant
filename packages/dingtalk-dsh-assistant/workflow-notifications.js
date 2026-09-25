@@ -29,11 +29,46 @@ export function sendWorkflowNotification(adapter, notification) {
     : adapter.sendGroup(base)
 }
 
+/** 只执行预检过的单条操作。领取后异常进入待核对，调用方不能重试外部动作。 */
+export async function executeNotificationOperation({ store, adapter, operationId, expectedFactDigest, authorizationRef }) {
+  const operation=await store.query({kind:'message.notificationOperation',operationId})
+  if(!operation)throw new Error('MESSAGE_NOTIFICATION_OPERATION_NOT_FOUND')
+  if(operation.status==='completed')return operation
+  if(operation.status!=='prepared')throw new Error('MESSAGE_NOTIFICATION_OPERATION_RECONCILE_REQUIRED')
+  const notification=await store.query({kind:'message.notification',notificationId:operation.snapshot.notificationId})
+  if(!adapter?.canDisclose||!await adapter.canDisclose(notification))throw new Error('MESSAGE_NOTIFICATION_DISCLOSURE_FORBIDDEN')
+  const type=operation.snapshot.type
+  if(type==='recall'&&(!adapter.recall||!adapter.readbackRecall))throw new Error('MESSAGE_NOTIFICATION_RECALL_ADAPTER_REQUIRED')
+  if(type==='restore'&&(!adapter.send||!adapter.readback))throw new Error('MESSAGE_NOTIFICATION_SEND_ADAPTER_REQUIRED')
+  const command=(kind,args,suffix)=>store.command({id:`notification-operation:${operationId}:${suffix}`,kind,args})
+  const claimed=await command('message.notification.operation.claim',{operationId,expectedFactDigest,authorizationRef},'claim')
+  if(!claimed.dispatchEligible)throw new Error('MESSAGE_NOTIFICATION_OPERATION_STALE')
+  const snapshot=claimed.result.operation.snapshot
+  let ack
+  try {
+    ack=type==='recall'
+      ? await adapter.recall({conversationId:snapshot.conversationId,messageId:snapshot.messageId,operationId})
+      : await adapter.send({id:operationId,payload:{conversationId:snapshot.conversationId,sourceMessageId:snapshot.sourceMessageId,actorId:notification.payload.actorId,text:snapshot.body}})
+    await command('message.notification.operation.result',{operationId,ack},'result')
+  }catch(error){
+    await command('message.notification.operation.result',{operationId,error:error.code??error.message},'unknown')
+    throw error
+  }
+  const evidence=type==='recall'
+    ? await adapter.readbackRecall({conversationId:snapshot.conversationId,messageId:snapshot.messageId,operationId,ack})
+    : await adapter.readback({id:operationId,payload:{conversationId:snapshot.conversationId,sourceMessageId:snapshot.sourceMessageId,text:snapshot.body},ack})
+  if(!evidence)return (await store.query({kind:'message.notificationOperation',operationId}))
+  return (await command('message.notification.operation.reconcile',{operationId,messageId:evidence.messageId,evidenceRef:evidence.evidenceRef, ...(type==='recall'?{recallStatus:evidence.recallStatus}:{})},'reconcile')).result.operation
+}
+
 /** 通知独立于任务执行。ACK不代表送达，未知发送只回查，不再次发送。 */
 export function createWorkflowNotifications({ store, artifacts, controller, adapter, groupResponsibility = () => '' }) {
   let flight, beforeSequenceId, preparedCursor = 0, readbackCursor = 0
   const command = (kind, args, id) => store.command({ id, kind, args })
   async function prepare(run, action, phase, text) {
+    const eventKey=phase.startsWith('terminal:') ? `task.result:${action.result.runId}:${phase}`
+      : ['create','reopen'].includes(action.kind) && action.result?.runId ? `task.accepted:${action.result.runId}`
+      : action.status==='rejected' ? `action.rejected:${action.commandId}` : `action.reply:${action.commandId}:${phase}`
     const notificationId = `notice-${executionDigest([action.commandId, phase])}`
     const existing = await store.query({ kind: 'message.notification', notificationId })
     if (existing) {
@@ -42,7 +77,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
     }
     const responsibility = groupResponsibility(run.conversationId)
     if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
-    await command('message.notification.prepare', { runId: run.runId, commandId: action.commandId, notificationId,
+    await command('message.notification.prepare', { runId: run.runId, commandId: action.commandId, notificationId, eventKey,
       payload: { text: formatGroupReply(text, responsibility), phase, conversationId: run.conversationId, sourceMessageId: run.context.sourceMessageId, actorId: run.actorId },
       disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
     }, `prepare:${notificationId}`)
@@ -61,7 +96,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         }
         const responsibility = groupResponsibility(run.conversationId)
         if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
-        await command('message.notification.prepare', { runId: run.runId, requestId: request.id, notificationId,
+        await command('message.notification.prepare', { runId: run.runId, requestId: request.id, notificationId, eventKey:`request.clarification:${request.id}:${request.revision}`,
           payload: { text: formatGroupReply(request.question ?? request.reason, responsibility), phase: 'clarification', conversationId: run.conversationId, sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId },
           disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
         }, `prepare:${notificationId}`)

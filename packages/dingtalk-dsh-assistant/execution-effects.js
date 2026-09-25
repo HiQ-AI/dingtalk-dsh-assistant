@@ -118,7 +118,8 @@ function approvalRow(db, id) {
 function approvalDto(row) {
   return { requestId: row.request_id, effectId: row.effect_id, approverIds: JSON.parse(row.approver_ids_json),
     decision: row.decision, decidedBy: row.decided_by, decisionSource: row.decision_source,
-    revoked: !!row.revoked, revokedBy: row.revoked_by, revokeSource: row.revoke_source }
+    revoked: !!row.revoked, revokedBy: row.revoked_by, revokeSource: row.revoke_source,
+    createdAt: row.created_at, updatedAt: row.updated_at }
 }
 
 function prepare(db, args, context) {
@@ -286,6 +287,11 @@ export function queryEffects(db, query) {
   if (query.kind === 'effect.get') return effectDto(effectRow(db, args.effectId))
   if (query.kind === 'effect.list') return db.prepare('SELECT * FROM execution_effects WHERE run_id=? ORDER BY created_at,effect_id').all(text(args.runId, 'runId')).map(effectDto)
   if (query.kind === 'approval.get') return approvalDto(approvalRow(db, args.requestId))
+  if (query.kind === 'approval.list') {
+    const limit = args.limit ?? 200
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) fail('effect_invalid_argument', 'limit')
+    return db.prepare("SELECT * FROM execution_approvals ORDER BY (decision='pending') DESC,created_at DESC,request_id DESC LIMIT ?").all(limit).map(approvalDto)
+  }
   if (query.kind === 'safety.get') return {
     epoch: db.prepare('SELECT safety_epoch FROM execution_meta WHERE singleton=1').get()?.safety_epoch,
     fences: db.prepare('SELECT scope,scope_key AS key,epoch,reason FROM execution_safety_fences ORDER BY epoch').all().map(row => ({ ...row })),

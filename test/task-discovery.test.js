@@ -269,10 +269,10 @@ test('恢复旧工程索引容量等待时迁移同一运行并保留旧定义',
         : { outputRef: requirement.ref, nextInput: { nodeId: names[i + 1], inputRef: input.ref, inputDigest: input.digest } }) } })
   }
   const [workflow] = await registry.restore(store, artifacts), state = await store.query({ kind: 'run', runId })
-  assert.equal(workflow.version, '4'); assert.equal(state.run.status, 'queued')
+  assert.equal(workflow.version, '5'); assert.equal(state.run.status, 'queued')
   assert.equal(state.nodes.find(node => node.nodeId === 'index-files').status, 'ready')
   assert.notEqual(state.run.workflowDigest, oldDigest)
   assert.equal((await store.query({ kind: 'workflow.list' })).length, 2)
   const [same] = await registry.restore(store, artifacts)
-  assert.equal(same.version, '4'); assert.equal((await store.query({ kind: 'workflow.list' })).length, 2)
+  assert.equal(same.version, '5'); assert.equal((await store.query({ kind: 'workflow.list' })).length, 2)
 })

@@ -320,6 +320,26 @@ journal 已 sealed 后不得直接删 journal 或恢复旧快照来“回滚”�
 
 Web 操作验收需使用配置明确映射的 `workflow.webActorId`。新任务取消/补充走同库 Web 事件与 Controller，不依赖旧 Topic；验证重复 requestId、跨站 Origin、伪造 actor、陈旧版本及暂停补充反例。归档/改名/重开尚未实现，返回明确冲突，不转发旧引擎。持久 Web 事件准备后中断由服务恢复接纳；输入接纳前后不得改写 Task 执行基线字段。
 
+## 10. 话题批量意图与业务 Task 计划升级
+
+本版本要求执行控制库 schema v2。旧 schema v1 不会在服务启动时自动升级。停掉持有控制库的 Runtime、入站桥接和计划任务后，确认对应进程及 `.owner.sqlite` 写者已经退出，保留控制库与工件目录原始备份，再用绝对路径执行零写自检：
+
+```powershell
+$controlDb = '<本实例执行数据目录的 control.sqlite 绝对路径>'
+node scripts/migrate-execution-task-plan.js --check $controlDb
+```
+
+核对输出 `fromVersion`、`toVersion:2`、`executionRuns` 与目标路径。自检不写数据库；确认路径和备份后才执行：
+
+```powershell
+node scripts/migrate-execution-task-plan.js --execute $controlDb
+node scripts/migrate-execution-task-plan.js --check $controlDb
+```
+
+执行时脚本先生成带 `pre-task-plan-v2` 后缀的 SQLite 备份，再在原控制库事务中建业务 Task/阶段表；最终回读 `schemaReadback:2`。保留脚本输出的 `backupPath`，不要直接删除活动 WAL 文件。旧单 Run 历史不会被推断为多阶段或已确认 UAT；需要续办时仅对已经成功且证据齐全的旧 workflow-v2 Run 显式建立计划。旧 JSON Task 不自动迁入新账。
+
+升级后先禁用群入站、启动新 Runtime 并回读控制库版本及实例身份；用隔离消息验证 R 归类屏障、同话题 IB 集合、新消息重判、Task 阶段结算、确认后单次启动和缺适配器阻塞，再开放入站。恢复扫描会结算已成功的阶段 Run 并启动满足条件的后继；`waiting_confirmation` 不自动越过。已执行效果仍应按原 Run/效果账独立核对，控制库迁移成功不代表模型判断、UAT 提测或渠道送达成功。
+
 ### 工程固定检查的阶段预算与失败证据
 
 `checks[].timeoutMs` 是整个检查的总执行预算，默认仍为 `120000`，允许范围 `1..2400000` 毫秒。每个 `steps[]` 可显式配置 `timeoutMs`，范围 `1..1800000`；省略时沿用共享总预算语义。实际单步 deadline 取自身预算与总剩余时间的较小值，不在下一步重置总时间。参数只能由 Host 配置提供，不由消息或模型延长。
@@ -344,7 +364,7 @@ Web 操作验收需使用配置明确映射的 `workflow.webActorId`。新任务
 
 业务工程检查的 Node 版本与 DSH Host 分开固定：本机 DSH 使用 Node 24；上述 dataset-web 基线 `.nvmrc/.node-version` 为 Node 20，生产 Dockerfile 的依赖与构建阶段为 Node 22，因此本地生产构建验证采用已安装的 `D:/soft/node-v22.13.0/node.exe`。不能因为 Host 要求 Node 24 就让业务工程自动使用 Node 24。Yarn CLI 也固定绝对路径和实际版本；需独立回读实际 Vue 构建子进程的 Node 路径，而不只核对启动脚本。
 
-## 10. 原任务流程目录与外部效果准入
+## 11. 原任务流程目录与外部效果准入
 
 新消息入口按发布版目录仅暴露通用材料分析、五类已给材料只读审查及已配置仓库的工程流程。材料审查无仓库/数据库工具，不能回报“已查询 PR、已导出文件”。UAT 交付、生产发布、同提交重构建、数据变更只有源码中的固定节点合同；当前本机配置无对应受信 Host 适配器，入口仍拒绝这些执行类型。运行中历史旧 Task 不按新定义重放。
 

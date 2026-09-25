@@ -14,6 +14,7 @@ import { createManagedEdits } from '../packages/dingtalk-dsh-assistant/execution
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createGitDelivery } from '../packages/dingtalk-dsh-assistant/execution-git.js'
 import { createGithubPullRequests } from '../packages/dingtalk-dsh-assistant/execution-pr.js'
+import { readEngineeringDeliveryProof } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
 
 test('工程读取节点可交接超过旧 48KB 限额的完整文件材料', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-task-large-read-'))
@@ -106,6 +107,10 @@ if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(arg
   if (publish) {
     const final = await artifacts.read(state.nodes.at(-1).outputRef)
     assert.equal(final.deliveryStatus, 'pr_verified'); assert.equal(final.number, 1); assert.equal(final.state, 'OPEN')
+    const proof = await readEngineeringDeliveryProof({ state, artifacts, taskId: 'task', requiredE2eCheckIds: ['expected-value'] })
+    assert.equal(proof.commitSha, final.commitId)
+    assert.equal(proof.localE2ePassed, true)
+    assert.equal(proof.pullRequest.number, 1)
   }
   const effects = await store.query({ kind: 'effect.list', runId: 'run' })
   assert.deepEqual(effects.map(effect => effect.definition.action).sort(), publish ? ['commit', 'edit', 'pr', 'push', 'workspace'] : ['edit', 'workspace'])

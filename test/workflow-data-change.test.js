@@ -19,21 +19,17 @@ const proposal = { applySql: 'BEGIN; UPDATE i18n SET value = \'b\' WHERE key = \
   rollbackSql: 'BEGIN; UPDATE i18n SET value = \'old\' WHERE key = \'a\' AND value = \'b\'; COMMIT;',
   verificationSql: 'SELECT value FROM i18n WHERE key = \'a\';', expectedChange: '仅 a 从 old 变成 b' }
 
-test('数据变更准备：固定四节点只调用隔离校验和演练，产出精确身份', async t => {
+test('数据变更准备只校验 SQL 包，UAT 演练不得藏在只读节点', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-data-prep-'))
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'data', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
-  let validateCalls = 0, rehearseCalls = 0
-  const adapter = { id: 'isolated-test', version: '1', rulesDigest: sha('isolated-test-v1'), async validate(input) {
+  let validateCalls = 0
+  const adapter = { id: 'uat-test', version: '1', rulesDigest: sha('uat-test-v1'), async validate(input) {
     validateCalls++; assert.equal(input.target.environment, 'production')
     return { passed: true, packageDigest: input.packageDigest, receiptId: 'validation-1' }
-  }, async rehearse(input) {
-    rehearseCalls++; assert.equal(input.package.applySqlSha256, sha(proposal.applySql))
-    return { passed: true, isolated: true, packageDigest: input.package.validation.packageDigest,
-      receiptId: 'rehearsal-1', observedChange: 'a= b, other keys unchanged' }
   } }
   const workflow = createDataChangePreparationWorkflow({ provider: 'test', model: 'synthetic', adapter })
-  assert.equal(defineExecutionWorkflow(workflow).nodes.length, 4)
+  assert.equal(defineExecutionWorkflow(workflow).nodes.length, 3)
   const sessions = { async run({ definition, onSessionBound, onResult }) {
     assert.deepEqual(definition.allowedTools, []); await onSessionBound(); onResult(proposal)
   }, async cancel() {}, async close() {} }
@@ -42,33 +38,39 @@ test('数据变更准备：固定四节点只调用隔离校验和演练，产�
   await controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: workflow.id, input: requirement() })
   const state = await controller.whenIdle('run')
   assert.equal(state.run.status, 'succeeded', JSON.stringify(state.nodes.map(node => [node.nodeId, node.waitReason])))
-  assert.equal(validateCalls, 1); assert.equal(rehearseCalls, 1)
-  const prepared = await artifacts.read(state.nodes.at(-1).outputRef)
+  assert.equal(validateCalls, 1)
+  const pkg = await artifacts.read(state.nodes.at(-1).outputRef)
+  const prepared = { package: pkg, rehearsal: { adapterId: adapter.id, adapterVersion: adapter.version,
+    receiptId: 'rehearsal-1', packageDigest: pkg.validation.packageDigest,
+    uat: true, passed: true, observedChange: 'a=b' } }
   const sheet = { id: 'sheet-1', sha256: sha(proposal.applySql), target: requirement().target }
-  const plan = { id: 'plan-1', sheetId: sheet.id }, task = { id: 'task-1', planId: plan.id, status: 'NOT_STARTED' }
-  const approval = { decision: 'approved', taskId: task.id, sheetSha256: sheet.sha256,
-    packageDigest: prepared.package.validation.packageDigest, requestId: 'request-1', decidedBy: 'owner' }
-  assert.equal(assertDataChangeExecutionIdentity({ prepared, sheet, plan, task, approval }).taskId, task.id)
+  const plan = { id: 'plan-1', sheetId: sheet.id }
+  const issue = { id: 'issue-1', planId: plan.id }
+  const approval = { decision: 'approved', source: 'assistant', human: true,
+    issueId: issue.id, planId: plan.id, sheetId: sheet.id, target: requirement().target,
+    sheetSha256: sheet.sha256,
+    packageDigest: prepared.package.validation.packageDigest, scopeDigest: sha('scope'),
+    requestId: 'request-1', decidedBy: 'owner' }
+  assert.equal(assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan, approval }).planId, plan.id)
   for (const changed of [
     { sheet: { ...sheet, sha256: sha('other') } },
     { sheet: { ...sheet, target: { ...sheet.target, database: 'other' } } },
     { plan: { ...plan, sheetId: 'other' } },
-    { task: { ...task, status: 'DONE' } },
+    { issue: { ...issue, taskId: 'premature-task' } },
+    { issue: { ...issue, planId: 'other' } },
     { approval: { ...approval, decision: 'pending' } },
+    { approval: { ...approval, sheetId: 'other' } },
     { approval: { ...approval, packageDigest: sha('other') } },
     { prepared: { ...prepared, package: { ...prepared.package, applySql: 'changed after approval' } } },
-  ]) assert.throws(() => assertDataChangeExecutionIdentity({ prepared, sheet, plan, task, approval, ...changed }), { code: 'DATA_CHANGE_EXECUTION_IDENTITY_UNCONFIRMED' })
+  ]) assert.throws(() => assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan, approval, ...changed }), { code: 'DATA_CHANGE_EXECUTION_IDENTITY_UNCONFIRMED' })
 })
 
-test('数据变更准备：来源摘要不符及假演练均被拒绝', async t => {
+test('数据变更准备：来源摘要不符被拒绝，校验不触发演练', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-data-invalid-'))
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'data', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
-  const adapter = { id: 'isolated-test', version: '1', rulesDigest: sha('isolated-test-v1'), async validate(input) {
+  const adapter = { id: 'uat-test', version: '1', rulesDigest: sha('uat-test-v1'), async validate(input) {
     return { passed: true, packageDigest: input.packageDigest, receiptId: 'validation-1' }
-  }, async rehearse(input) {
-    return { passed: true, isolated: false, packageDigest: input.package.validation.packageDigest,
-      receiptId: 'rehearsal-1', observedChange: 'changed' }
   } }
   const workflow = createDataChangePreparationWorkflow({ provider: 'test', model: 'synthetic', adapter })
   const sessions = { async run({ onSessionBound, onResult }) { await onSessionBound(); onResult(proposal) }, async cancel() {}, async close() {} }
@@ -80,7 +82,7 @@ test('数据变更准备：来源摘要不符及假演练均被拒绝', async t 
   assert.equal(rejected.run.status, 'waiting')
   assert.equal(rejected.nodes[0].waitReason.reference, 'DATA_CHANGE_INPUT_INVALID')
   await controller.createRun({ commandId: 'valid', runId: 'valid', taskId: 'valid', workflowId: workflow.id, input: requirement() })
-  const unconfirmed = await controller.whenIdle('valid')
-  assert.equal(unconfirmed.run.status, 'waiting')
-  assert.equal(unconfirmed.nodes[3].waitReason.reference, 'DATA_CHANGE_REHEARSAL_UNCONFIRMED')
+  const validated = await controller.whenIdle('valid')
+  assert.equal(validated.run.status, 'succeeded')
+  assert.equal(validated.nodes.length, 3)
 })

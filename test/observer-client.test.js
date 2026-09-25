@@ -3,6 +3,18 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 
+test('收信箱区分话题关联等待与意图重判，任务详情展示业务计划阶段', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  assert.match(source, /message\.workflowStatus/)
+  assert.match(source, /waiting_routing_barrier: \{ label: '已关联 · 等待其他消息'/)
+  assert.match(source, /intent_judging: \{ label: '话题意图判断中'/)
+  assert.match(source, /intent_rejudging: \{ label: '新消息加入 · 重新判断'/)
+  assert.match(source, /routing_blocked: \{ label: '关联受阻'/)
+  assert.match(source, /selectedWorkflowTask\.plan\.stages\.map/)
+  assert.match(source, /waiting_confirmation: '等待人工确认'/)
+  assert.match(source, /等待确认上一阶段产出后继续/)
+})
+
 test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /ctx\.slots\.inject\('conversation'/)

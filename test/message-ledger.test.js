@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
+import { executeNotificationOperation } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 async function fixture(t) {
  const dir=await mkdtemp(join(tmpdir(),'message-ledger-'));const options={dbPath:join(dir,'control.sqlite'),instanceId:randomUUID()}
  let store=await openExecutionStore({...options,initialize:true})
@@ -31,6 +32,31 @@ test('人工重处理仅允许无业务命令的旧消息，保留旧请求并�
  await f.call('accept',{runId:'effect',unitId:'u',commands:[{commandId:'effect-command',kind:'create',args:{}}]})
  await bad(f.call('reprocess',{runId:'effect',newRunId:'effect-replay'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
 })
+test('错误澄清命令经证据确认无效果并撤销后可重处理，有效果命令仍拒绝',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m'))
+ await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'clarification',args:{}}]})
+ const claim=await f.call('command.claim',{commandId:'c'})
+ await f.call('command.fail',{commandId:'c',leaseEpoch:claim.result.command.leaseEpoch,error:'WORKFLOW_CLARIFICATION_NOT_FOUND'})
+ await bad(f.call('reprocess',{runId:'m',newRunId:'early'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+ await f.call('command.reconcile',{commandId:'c',status:'failed',evidenceRef:'sha256-evidence.json'})
+ await f.call('relink',{runId:'m',unitId:'u',expectedRevision:0,reason:'错误指代'})
+ assert.equal((await f.call('reprocess',{runId:'m',newRunId:'safe-replay'})).result.run.sourceVersion,2)
+})
+test('无效果的忽略意图可仅重判 IB，保留话题和来源版本',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m'));await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ await f.call('topic.bind',{runId:'m',unitId:'u',expectedRevision:0,binding:{kind:'binding',disposition:'new',candidateId:null},topic:{topicId:'topic',conversationId:'g',sourceRunId:'m',unitId:'u',title:'账号排查',facts:[{kind:'fact',text:'do this',sourceRefs:[{sourceKey:'m',sourceVersion:1,text:'do this'}]}]}})
+ await f.call('topic.intent.accept',{runId:'m',topicId:'topic',conversationId:'g',inputRevision:1,decisions:[{unitId:'u',expectedRevision:0,commands:[],outcome:'ignored'}]})
+ const retry=await f.call('topic.intent.retry',{runId:'m',unitId:'u',expectedRevision:0})
+ assert.equal(retry.result.topic.inputRevision,2)
+ assert.equal(retry.result.unit.status,'pending')
+ assert.equal(retry.result.run.intentStatus,'intent_rejudging')
+ assert.equal((await f.store.query({kind:'message.source',sourceKey:'m'})).sourceVersion,1)
+ await f.call('wait',{runId:'m',unitId:'u',nodeId:'IB',expectedRevision:0,reason:'missing material',request:{requestId:'q',kind:'needs_context',needs:[]}})
+ const second=await f.call('topic.intent.retry',{runId:'m',unitId:'u',expectedRevision:0})
+ assert.equal(second.result.topic.inputRevision,3)
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).requests.find(item=>item.id==='q').status,'superseded')
+})
 test('旧事实命令被拒且通知未尝试发送时允许重处理并封存过期拒绝通知',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{body:'@孙鹏 草稿保存依然有问题'}))
  await f.call('split',{runId:'m',units:[{unitId:'u'}]})
@@ -52,9 +78,16 @@ test('来源运行重处理后旧澄清通知不得再领取发送',async t=>{
  await f.call('wait',{runId:'m',unitId:'$',nodeId:'S',reason:'范围',request:{requestId:'q',kind:'needs_clarification',question:'请确认',permittedActors:['a']}})
  await f.call('notification.prepare',{runId:'m',notificationId:'n',requestId:'q',payload:{text:'请确认'},disclosure:{conversationId:'g',authorizationRef:'m'}})
  await f.call('reprocess',{runId:'m',newRunId:'m-replay'})
- const claimed=await f.call('notification.claim',{notificationId:'n'})
- assert.equal(claimed.dispatchEligible,false)
- assert.equal(claimed.result.notification.status,'superseded')
+ await bad(f.call('notification.claim',{notificationId:'n'}),'MESSAGE_NOTIFICATION_NOT_READY')
+ assert.equal((await f.store.query({kind:'message.notification',notificationId:'n'})).status,'superseded')
+})
+test('澄清通知已经尝试发送时禁止重处理来源消息',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m'))
+ await f.call('wait',{runId:'m',unitId:'$',nodeId:'S',reason:'范围',request:{requestId:'q',kind:'needs_clarification',question:'请确认',permittedActors:['a']}})
+ await f.call('notification.prepare',{runId:'m',notificationId:'n',requestId:'q',payload:{text:'请确认'},disclosure:{conversationId:'g',authorizationRef:'m'}})
+ await f.call('notification.claim',{notificationId:'n'})
+ await bad(f.call('reprocess',{runId:'m',newRunId:'m-replay'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+ assert.equal((await f.store.query({kind:'message.source',sourceKey:'m'})).runId,'m')
 })
 test('人工重处理重新分配节点预算，旧版本消耗不阻断新版本关联节点',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{policy:{maxClaims:2,maxInputTokens:100,maxOutputTokens:100}}))
@@ -194,6 +227,87 @@ test('通知ACK和读回分离，发送中崩溃进入unknown，禁止盲重发'
  assert.equal((await f.store.query({kind:'message.notifications'}))[0].status,'unknown')
  await f.call('notification.readback',{notificationId:'n',leaseEpoch:n.leaseEpoch,evidence:{messageId:'out-1',text:'done'}})
  assert.equal((await f.store.query({kind:'message.notifications'})).length,0)
+})
+test('承接与结果是不同事件，同事件跨命令只保留一次',async t=>{
+ const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'query',args:{}}]})
+ const claim=(await f.call('command.claim',{commandId:'c'})).result.command
+ await f.call('command.complete',{commandId:'c',leaseEpoch:claim.leaseEpoch,result:{text:'done'}})
+ const base={runId:'m',commandId:'c',disclosure:{conversationId:'g',authorizationRef:'m'}}
+ await f.call('notification.prepare',{...base,notificationId:'accepted',eventKey:'task.accepted:task-1',payload:{text:'任务已接纳',conversationId:'g'}})
+ await f.call('notification.prepare',{...base,notificationId:'result',eventKey:'task.result:run-1:1',payload:{text:'分析完成',conversationId:'g'}})
+ const equivalent=await f.call('notification.prepare',{...base,notificationId:'accepted-again',eventKey:'task.accepted:task-1',payload:{text:'任务已接纳',conversationId:'g'}})
+ assert.equal(equivalent.result.notification.id,'accepted')
+ await f.call('receive',receive('second'));await f.call('split',{runId:'second',units:[{unitId:'v'}]})
+ await f.call('accept',{runId:'second',unitId:'v',commands:[{commandId:'c2',kind:'query',args:{}}]})
+ const another=(await f.call('command.claim',{commandId:'c2'})).result.command
+ await f.call('command.complete',{commandId:'c2',leaseEpoch:another.leaseEpoch,result:{}})
+ const crossRun=await f.call('notification.prepare',{runId:'second',commandId:'c2',notificationId:'accepted-new-run',eventKey:'task.accepted:task-1',payload:{text:'任务已接纳',conversationId:'g'},disclosure:{conversationId:'g',authorizationRef:'second'}})
+ assert.equal(crossRun.result.notification.id,'accepted')
+ assert.equal((await f.store.query({kind:'message.notifications',states:['prepared']})).length,2)
+ await bad(f.call('notification.prepare',{...base,notificationId:'changed',eventKey:'task.accepted:task-1',payload:{text:'不同事实',conversationId:'g'}}),'MESSAGE_NOTIFICATION_EVENT_CONFLICT')
+})
+test('撤回与改写补发凭独立证据入账，重复对账幂等且不抹掉原结果',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{context:{sourceMessageId:'in-1'}}));await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'query',args:{}}]})
+ const command=(await f.call('command.claim',{commandId:'c'})).result.command
+ await f.call('command.complete',{commandId:'c',leaseEpoch:command.leaseEpoch,result:{text:'材料分析完成'}})
+ await f.call('notification.prepare',{runId:'m',commandId:'c',notificationId:'n',eventKey:'task.result:run:1',payload:{text:'材料分析完成',conversationId:'g',sourceMessageId:'in-1'},disclosure:{conversationId:'g',authorizationRef:'m'}})
+ const notice=(await f.call('notification.claim',{notificationId:'n'})).result.notification
+ await f.call('notification.sent',{notificationId:'n',leaseEpoch:notice.leaseEpoch,ack:{messageId:'out-1'}})
+ await f.call('notification.readback',{notificationId:'n',leaseEpoch:notice.leaseEpoch,evidence:{messageId:'out-1',text:'材料分析完成'}})
+ const recall={notificationId:'n',messageId:'out-1',recallStatus:'SUCCESS',evidenceRef:'dws-recall-1'}
+ await bad(f.call('notification.recall.record',{...recall,evidenceRef:''}),'MESSAGE_RECALL_EVIDENCE_MISMATCH')
+ await f.call('notification.recall.record',recall);await f.call('notification.recall.record',recall)
+ await bad(f.call('notification.recall.record',{...recall,evidenceRef:'another'}),'MESSAGE_RECALL_EVIDENCE_CONFLICT')
+ const replacement={notificationId:'n',replacementId:'replacement-1',messageId:'out-2',body:'材料分析完成，尚未查询账号日志',conversationId:'g',sourceMessageId:'in-1',evidenceRef:'dws-readback-2'}
+ await f.call('notification.replacement.record',replacement);await f.call('notification.replacement.record',replacement)
+ await bad(f.call('notification.replacement.record',{...replacement,body:'已完成账号查证'}),'MESSAGE_REPLACEMENT_CONFLICT')
+ const saved=await f.store.query({kind:'message.notificationReplacement',replacementId:'replacement-1'})
+ assert.equal(saved.restoresNotificationId,'n');assert.equal(saved.body,replacement.body)
+ assert.equal((await f.store.query({kind:'message.notificationReplacements',notificationId:'n'})).length,1)
+ assert.equal((await f.store.query({kind:'message.notification',notificationId:'n'})).recallStatus,'recalled')
+ assert.equal((await f.store.query({kind:'message.command',commandId:'c'})).status,'applied')
+})
+test('受管通知操作预检冻结事实，领取后崩溃只待核对',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{context:{sourceMessageId:'in'}}));await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'query',args:{}}]})
+ const claim=(await f.call('command.claim',{commandId:'c'})).result.command;await f.call('command.complete',{commandId:'c',leaseEpoch:claim.leaseEpoch,result:{}})
+ await f.call('notification.prepare',{runId:'m',commandId:'c',notificationId:'n',eventKey:'task.result:run:1',payload:{text:'分析完成',conversationId:'g',sourceMessageId:'in'},disclosure:{conversationId:'g',authorizationRef:'m'}})
+ const notice=(await f.call('notification.claim',{notificationId:'n'})).result.notification
+ await f.call('notification.sent',{notificationId:'n',leaseEpoch:notice.leaseEpoch,ack:{messageId:'out'}})
+ await f.call('notification.readback',{notificationId:'n',leaseEpoch:notice.leaseEpoch,evidence:{messageId:'out'}})
+ const prepared=(await f.call('notification.operation.prepare',{operationId:'op',notificationId:'n',type:'recall',reason:'explicit_user',authorizationRef:'user-request'})).result.operation
+ await bad(f.call('notification.operation.claim',{operationId:'op',expectedFactDigest:'wrong',authorizationRef:'user-request'}),'MESSAGE_NOTIFICATION_OPERATION_STALE')
+ await f.call('notification.operation.claim',{operationId:'op',expectedFactDigest:prepared.snapshot.expectedFactDigest,authorizationRef:'user-request'})
+ await f.reopen()
+ assert.equal((await f.store.query({kind:'message.notificationOperation',operationId:'op'})).status,'unknown')
+ await bad(f.call('notification.operation.claim',{operationId:'op',expectedFactDigest:prepared.snapshot.expectedFactDigest,authorizationRef:'user-request'}),'MESSAGE_NOTIFICATION_OPERATION_STALE')
+ await f.call('notification.operation.reconcile',{operationId:'op',messageId:'out',evidenceRef:'dws-list-1',recallStatus:'SUCCESS'})
+ const completed=await f.store.query({kind:'message.notificationOperation',operationId:'op'})
+ assert.equal(completed.status,'completed')
+ const replacement=(await f.call('notification.operation.prepare',{operationId:'restore',notificationId:'n',type:'restore',reason:'correction',authorizationRef:'user-request',body:'分析完成，尚未查账号'})).result.operation
+ await f.call('notification.operation.claim',{operationId:'restore',expectedFactDigest:replacement.snapshot.expectedFactDigest,authorizationRef:'user-request'})
+ await f.call('notification.operation.result',{operationId:'restore',ack:{messageId:'replacement'}})
+ await f.call('notification.operation.reconcile',{operationId:'restore',messageId:'replacement',evidenceRef:'dws-list-2'})
+ assert.equal((await f.store.query({kind:'message.notificationReplacement',replacementId:'restore'})).body,'分析完成，尚未查账号')
+})
+test('补发操作已获发送ACK但回读未到时，重复执行不再次发送',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m'));await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'query',args:{}}]})
+ const command=(await f.call('command.claim',{commandId:'c'})).result.command;await f.call('command.complete',{commandId:'c',leaseEpoch:command.leaseEpoch,result:{}})
+ await f.call('notification.prepare',{runId:'m',commandId:'c',notificationId:'n',eventKey:'task.result:run:1',payload:{text:'结果',conversationId:'g'},disclosure:{conversationId:'g',authorizationRef:'m'}})
+ const notice=(await f.call('notification.claim',{notificationId:'n'})).result.notification
+ await f.call('notification.sent',{notificationId:'n',leaseEpoch:notice.leaseEpoch,ack:{messageId:'old'}})
+ await f.call('notification.readback',{notificationId:'n',leaseEpoch:notice.leaseEpoch,evidence:{messageId:'old'}})
+ await f.call('notification.recall.record',{notificationId:'n',messageId:'old',recallStatus:'SUCCESS',evidenceRef:'old-recall'})
+ const op=(await f.call('notification.operation.prepare',{operationId:'op',notificationId:'n',type:'restore',reason:'explicit_user',authorizationRef:'user'})).result.operation
+ let sends=0
+ const adapter={canDisclose:async()=>true,send:async()=>{sends++;return {messageId:'new'}},readback:async()=>null}
+ const after=await executeNotificationOperation({store:f.store,adapter,operationId:'op',expectedFactDigest:op.snapshot.expectedFactDigest,authorizationRef:'user'})
+ assert.equal(after.status,'acknowledged');assert.equal(sends,1)
+ await assert.rejects(executeNotificationOperation({store:f.store,adapter,operationId:'op',expectedFactDigest:op.snapshot.expectedFactDigest,authorizationRef:'user'}),/MESSAGE_NOTIFICATION_OPERATION_RECONCILE_REQUIRED/)
+ assert.equal(sends,1)
 })
 test('重拆保留严格相同已执行事项，不重复消费业务命令',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',units:[{unitId:'u',goal:'read'},{unitId:'v',goal:'write'}]})
