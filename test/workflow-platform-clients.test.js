@@ -117,3 +117,44 @@ test('OCI manifest index 独立验证内容摘要并只选真实平台', async (
   const row = await clients.registry.readManifest({ image: 'registry.cn-sh1.ctyun.cn/hiq-ai/dataset', digest })
   assert.deepEqual(row.platformDigests, [platform])
 })
+
+test('Bytebase 数据库身份只取平台实测项目、实例与环境，不用请求环境补齐', async () => {
+  const production = { instance: 'instances/flbnpguaf',
+    database: 'instances/flbnpguaf/databases/hiq_background_db', environment: 'production' }
+  const observed = { name: production.database, project: 'projects/flbn',
+    effectiveEnvironment: 'environments/prod', instanceResource: { name: production.instance },
+    successfulSyncTime: '2026-09-25T00:00:00Z' }
+  const create = row => createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev',
+    bytebaseToken: 'fixture-token', fetchImpl: async () => json(row) }).bytebase
+  const result = await create(observed).getDatabase({ project: 'projects/flbn', target: production })
+  assert.deepEqual({ project: result.project, instance: result.instance, database: result.database,
+    environment: result.environment }, { project: 'projects/flbn', ...production })
+  assert.match(result.evidenceRef, /^bytebase-database:/)
+  for (const changed of [
+    { project: 'projects/other' },
+    { name: 'instances/flbnpguaf/databases/other' },
+    { effectiveEnvironment: 'environments/uat' },
+    { instanceResource: { name: 'instances/other' } },
+    { effectiveEnvironment: undefined },
+  ]) await assert.rejects(create({ ...observed, ...changed }).getDatabase({
+    project: 'projects/flbn', target: production }), /BYTEBASE_DATABASE_IDENTITY_UNCONFIRMED/)
+  await assert.rejects(create(observed).getDatabase({ project: 'projects/flbn',
+    target: { ...production, environment: 'uat' } }), /BYTEBASE_DATABASE_IDENTITY_UNCONFIRMED/)
+})
+
+test('本机 Docker 凭据只读 OCI 原始清单并校验字节摘要', async () => {
+  const platform = `sha256:${'d'.repeat(64)}`
+  const bytes = Buffer.from(JSON.stringify({ manifests: [{ digest: platform,
+    platform: { os: 'linux', architecture: 'amd64' } }] }))
+  const expected = `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+  const calls = []
+  const clients = createPlatformClients({ registryDockerCliEnabled: true,
+    execFileImpl: async (name, args) => { calls.push([name, args]); return { stdout: bytes } } })
+  const row = await clients.registry.readManifest({ image: 'registry.cn-sh1.ctyun.cn/hiq-ai/dataset', digest: expected })
+  assert.equal(row.digest, expected)
+  assert.deepEqual(row.platformDigests, [platform])
+  assert.deepEqual(calls, [['docker', ['buildx', 'imagetools', 'inspect', '--raw',
+    `registry.cn-sh1.ctyun.cn/hiq-ai/dataset@${expected}`]]])
+  await assert.rejects(clients.registry.readManifest({ image: 'registry.cn-sh1.ctyun.cn/hiq-ai/dataset',
+    digest: `sha256:${'e'.repeat(64)}` }), /REGISTRY_DIGEST_MISMATCH/)
+})

@@ -12,8 +12,8 @@ const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.tes
 
 /** 只接受受信 Host 注入的凭据与固定端点；异常不透传服务端响应或认证头。 */
 export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig,
-  kubeServer, bytebaseBaseUrl, bytebaseToken, registryBearerToken,
-  githubTagWritesEnabled = false,
+  kubeServer, kubeSkipTlsVerify = false, bytebaseBaseUrl, bytebaseToken, registryBearerToken,
+  githubTagWritesEnabled = false, registryDockerCliEnabled = false,
   fetchImpl = fetch, execFileImpl = execFile, attestations } = {}) {
   async function request(url, token, options = {}) {
     if (!url.startsWith('https://')) fail('PLATFORM_HTTPS_REQUIRED')
@@ -174,7 +174,8 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       const readList = async type => {
         try {
           const result = await execFileImpl('kubectl', ['--kubeconfig', kubeconfig,
-            ...(kubeServer ? ['--server', kubeServer] : []), '--request-timeout=15s', '-n', namespace,
+            ...(kubeServer ? ['--server', kubeServer] : []),
+            ...(kubeSkipTlsVerify ? ['--insecure-skip-tls-verify'] : []), '--request-timeout=15s', '-n', namespace,
             'get', type, '-o', 'json'], { maxBuffer: 4 * 1024 * 1024 })
           return JSON.parse(result.stdout)
         } catch { fail('KUBE_POD_READ_FAILED') }
@@ -203,7 +204,8 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       let row
       try {
         const result = await execFileImpl('kubectl', ['--kubeconfig', kubeconfig,
-          ...(kubeServer ? ['--server', kubeServer] : []), '--request-timeout=15s', '-n', namespace,
+          ...(kubeServer ? ['--server', kubeServer] : []),
+          ...(kubeSkipTlsVerify ? ['--insecure-skip-tls-verify'] : []), '--request-timeout=15s', '-n', namespace,
           'get', 'deployment', deployment, '-o', 'json'], { maxBuffer: 1024 * 1024 })
         row = JSON.parse(result.stdout)
       } catch { fail('KUBE_DEPLOYMENT_READ_FAILED') }
@@ -223,23 +225,31 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
     },
   }
   const registry = {}
-  if (registryBearerToken) registry.readManifest = async ({ image, digest: expected }) => {
+  if (registryBearerToken || registryDockerCliEnabled) registry.readManifest = async ({ image, digest: expected }) => {
     if (!/^registry\.cn-sh1\.ctyun\.cn\/[A-Za-z0-9._/-]+$/.test(image)
       || !digest(expected)) fail('REGISTRY_TARGET_INVALID')
     const name = image.slice('registry.cn-sh1.ctyun.cn/'.length)
-    let response
-    try { response = await fetchImpl(`https://registry.cn-sh1.ctyun.cn/v2/${name}/manifests/${expected}`,
-      { headers: { Authorization: `Bearer ${registryBearerToken}`,
-        Accept: ['application/vnd.oci.image.index.v1+json', 'application/vnd.docker.distribution.manifest.list.v2+json',
-          'application/vnd.oci.image.manifest.v1+json', 'application/vnd.docker.distribution.manifest.v2+json'].join(', ') },
-        signal: AbortSignal.timeout(30000) }) }
-    catch { fail('REGISTRY_READ_FAILED') }
-    if (!response.ok) fail(`REGISTRY_HTTP_${response.status}`)
-    let bytes, body
-    try { bytes = Buffer.from(await response.arrayBuffer()); body = JSON.parse(bytes.toString('utf8')) }
+    let bytes, body, response
+    if (registryDockerCliEnabled) {
+      try {
+        const result = await execFileImpl('docker', ['buildx', 'imagetools', 'inspect', '--raw', `${image}@${expected}`],
+          { timeout: 30000, maxBuffer: 4 * 1024 * 1024, encoding: 'buffer' })
+        bytes = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout, 'utf8')
+      } catch { fail('REGISTRY_READ_FAILED') }
+    } else {
+      try { response = await fetchImpl(`https://registry.cn-sh1.ctyun.cn/v2/${name}/manifests/${expected}`,
+        { headers: { Authorization: `Bearer ${registryBearerToken}`,
+          Accept: ['application/vnd.oci.image.index.v1+json', 'application/vnd.docker.distribution.manifest.list.v2+json',
+            'application/vnd.oci.image.manifest.v1+json', 'application/vnd.docker.distribution.manifest.v2+json'].join(', ') },
+          signal: AbortSignal.timeout(30000) }) }
+      catch { fail('REGISTRY_READ_FAILED') }
+      if (!response.ok) fail(`REGISTRY_HTTP_${response.status}`)
+      try { bytes = Buffer.from(await response.arrayBuffer()) } catch { fail('REGISTRY_MANIFEST_INVALID') }
+    }
+    try { body = JSON.parse(bytes.toString('utf8')) }
     catch { fail('REGISTRY_MANIFEST_INVALID') }
     const actual = `sha256:${createHash('sha256').update(bytes).digest('hex')}`
-    if (actual !== expected || response.headers?.get?.('docker-content-digest') !== expected) fail('REGISTRY_DIGEST_MISMATCH')
+    if (actual !== expected || response && response.headers?.get?.('docker-content-digest') !== expected) fail('REGISTRY_DIGEST_MISMATCH')
     const platformDigests = Array.isArray(body.manifests)
       ? body.manifests.filter(item => item.platform?.os !== 'unknown' && item.platform?.architecture !== 'unknown')
         .map(item => item.digest) : [expected]
@@ -248,11 +258,21 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       evidenceRef: evidence('registry-manifest', `${name}:${actual}`) }
   }
   const bytebase = {
-    async getDatabase({ target }) {
-      if (!bytebaseBaseUrl?.startsWith('https://') || !bytebaseToken || !safePath(target?.database)) fail('BYTEBASE_READ_NOT_CONFIGURED')
+    async getDatabase({ project, target }) {
+      if (!bytebaseBaseUrl?.startsWith('https://') || !bytebaseToken
+        || !/^projects\/[A-Za-z0-9._-]+$/.test(project ?? '')
+        || !/^instances\/[A-Za-z0-9._-]+$/.test(target?.instance ?? '')
+        || !/^instances\/[A-Za-z0-9._-]+\/databases\/[A-Za-z0-9._-]+$/.test(target?.database ?? '')
+        || !target.database.startsWith(`${target.instance}/databases/`)
+        || !['production', 'uat'].includes(target?.environment)) fail('BYTEBASE_READ_NOT_CONFIGURED')
       const row = await request(`${bytebaseBaseUrl.replace(/\/$/, '')}/v1/${target.database}`, bytebaseToken)
-      return { project: row.project, instance: target.instance, database: row.name,
-        environment: target.environment, evidenceRef: evidence('bytebase-database', `${row.name}:${row.updateTime}`) }
+      const environment = { 'environments/prod': 'production', 'environments/uat': 'uat' }[row.effectiveEnvironment]
+      if (row.project !== project || row.name !== target.database
+        || row.instanceResource?.name !== target.instance || environment !== target.environment)
+        fail('BYTEBASE_DATABASE_IDENTITY_UNCONFIRMED')
+      return { project: row.project, instance: row.instanceResource.name, database: row.name,
+        environment, evidenceRef: evidence('bytebase-database',
+          `${row.name}:${row.effectiveEnvironment}:${row.successfulSyncTime ?? ''}`) }
     },
   }
   return { github, woodpecker, kubernetes, registry,

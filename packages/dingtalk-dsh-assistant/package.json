@@ -21,6 +21,7 @@
   "exports": {
     ".": "./index.js",
     "./resident": "./resident.js",
+    "./platform-host": "./platform-host.js",
     "./execution": "./execution.js",
     "./client": "./web-client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
