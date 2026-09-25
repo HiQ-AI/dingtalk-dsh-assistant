@@ -44,22 +44,25 @@ test('数据变更准备只校验 SQL 包，UAT 演练不得藏在只读节点',
     receiptId: 'rehearsal-1', packageDigest: pkg.validation.packageDigest,
     uat: true, passed: true, observedChange: 'a=b' } }
   const sheet = { id: 'sheet-1', sha256: sha(proposal.applySql), target: requirement().target }
-  const plan = { id: 'plan-1', sheetId: sheet.id }, task = { id: 'task-1', planId: plan.id, status: 'NOT_STARTED' }
-  const issue = { id: 'issue-1' }
+  const plan = { id: 'plan-1', sheetId: sheet.id }
+  const issue = { id: 'issue-1', planId: plan.id }
   const approval = { decision: 'approved', source: 'assistant', human: true,
-    issueId: issue.id, target: requirement().target, taskId: task.id, sheetSha256: sheet.sha256,
+    issueId: issue.id, planId: plan.id, sheetId: sheet.id, target: requirement().target,
+    sheetSha256: sheet.sha256,
     packageDigest: prepared.package.validation.packageDigest, scopeDigest: sha('scope'),
     requestId: 'request-1', decidedBy: 'owner' }
-  assert.equal(assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan, task, approval }).taskId, task.id)
+  assert.equal(assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan, approval }).planId, plan.id)
   for (const changed of [
     { sheet: { ...sheet, sha256: sha('other') } },
     { sheet: { ...sheet, target: { ...sheet.target, database: 'other' } } },
     { plan: { ...plan, sheetId: 'other' } },
-    { task: { ...task, status: 'DONE' } },
+    { issue: { ...issue, taskId: 'premature-task' } },
+    { issue: { ...issue, planId: 'other' } },
     { approval: { ...approval, decision: 'pending' } },
+    { approval: { ...approval, sheetId: 'other' } },
     { approval: { ...approval, packageDigest: sha('other') } },
     { prepared: { ...prepared, package: { ...prepared.package, applySql: 'changed after approval' } } },
-  ]) assert.throws(() => assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan, task, approval, ...changed }), { code: 'DATA_CHANGE_EXECUTION_IDENTITY_UNCONFIRMED' })
+  ]) assert.throws(() => assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan, approval, ...changed }), { code: 'DATA_CHANGE_EXECUTION_IDENTITY_UNCONFIRMED' })
 })
 
 test('数据变更准备：来源摘要不符被拒绝，校验不触发演练', async t => {

@@ -1,6 +1,8 @@
 import { promisify } from 'node:util'
 import { execFile as execFileCallback } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { executionDigest } from './execution-artifacts.js'
+import { narrowVerificationSql } from './workflow-postgres-uat-host.js'
 
 const execFile = promisify(execFileCallback)
 const fail = code => { throw new Error(code) }
@@ -29,8 +31,8 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
     try { return await response.json() } catch { fail('PLATFORM_RESPONSE_INVALID') }
   }
   let bytebaseCookie
-  async function bytebaseRequest(path) {
-    if (!bytebaseBaseUrl?.startsWith('https://') || !/^\/v1\/[A-Za-z0-9._/-]+$/.test(path))
+  async function bytebaseRequest(path, options = {}) {
+    if (!bytebaseBaseUrl?.startsWith('https://') || !/^\/v1\/[A-Za-z0-9._/%?=&:-]+$/.test(path))
       fail('BYTEBASE_READ_NOT_CONFIGURED')
     if (!bytebaseToken && !bytebaseCookie) {
       if (typeof bytebaseCredentials?.username !== 'string'
@@ -48,7 +50,7 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       bytebaseCookie = `access-token=${access}`
     }
     return request(`${bytebaseBaseUrl.replace(/\/$/, '')}${path}`, bytebaseToken,
-      bytebaseCookie ? { headers: { Cookie: bytebaseCookie } } : {})
+      { ...options, headers: { ...(bytebaseCookie ? { Cookie: bytebaseCookie } : {}), ...options.headers } })
   }
   const githubUrl = (repository, suffix) => {
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) fail('GITHUB_REPOSITORY_INVALID')
@@ -286,6 +288,62 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
     return { digest: actual, platformDigests,
       evidenceRef: evidence('registry-manifest', `${name}:${actual}`) }
   }
+  const bytebaseProject = 'projects/flbn'
+  const bytebaseInstance = 'instances/flbnpguaf'
+  const bytebaseDatabases = new Set(['hiq_editor', 'hiq_background_db', 'hiq_admin'])
+  const bytebaseTarget = (project, target) => {
+    if (project !== bytebaseProject || target?.instance !== bytebaseInstance
+      || target?.environment !== 'production'
+      || !bytebaseDatabases.has(target.database?.slice(`${bytebaseInstance}/databases/`.length))
+      || !target.database.startsWith(`${bytebaseInstance}/databases/`)) fail('BYTEBASE_TARGET_NOT_ALLOWED')
+  }
+  const bytebaseResource = (project, name, type) => {
+    if (project !== bytebaseProject || typeof name !== 'string'
+      || !new RegExp(`^projects/flbn/${type}/[A-Za-z0-9_-]+$`).test(name)) fail('BYTEBASE_RESOURCE_NOT_ALLOWED')
+    return name
+  }
+  const bytebaseList = async (project, type) => {
+    if (project !== bytebaseProject || !['issues', 'plans'].includes(type)) fail('BYTEBASE_LIST_NOT_ALLOWED')
+    const result = [], seen = new Set()
+    let pageToken = ''
+    for (let page = 0; page < 100; page++) {
+      const suffix = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''
+      const body = await bytebaseRequest(`/v1/${project}/${type}?pageSize=1000${suffix}`)
+      if (!Array.isArray(body?.[type])) fail('BYTEBASE_LIST_UNCONFIRMED')
+      result.push(...body[type])
+      if (!body.nextPageToken) return result
+      if (typeof body.nextPageToken !== 'string' || seen.has(body.nextPageToken)) fail('BYTEBASE_LIST_INCOMPLETE')
+      seen.add(body.nextPageToken)
+      pageToken = body.nextPageToken
+    }
+    fail('BYTEBASE_LIST_INCOMPLETE')
+  }
+  const bytebaseTitle = operationKey => {
+    if (typeof operationKey !== 'string' || !/^[a-f0-9]{64}$/.test(operationKey))
+      fail('BYTEBASE_OPERATION_KEY_INVALID')
+    return `Assistant data change ${operationKey}`
+  }
+  const bytebaseIssueAttempts = new Set()
+  const bytebaseRolloutAttempts = new Set()
+  const bytebaseTaskAttempts = new Set()
+  const bytebaseReadTaskRuns = async (taskId, project) => {
+    bytebaseResource(project, taskId.split('/rollout/')[0], 'plans')
+    if (!/^projects\/flbn\/plans\/[A-Za-z0-9_-]+\/rollout\/stages\/[A-Za-z0-9_-]+\/tasks\/[A-Za-z0-9_-]+$/.test(taskId))
+      fail('BYTEBASE_TASK_NOT_ALLOWED')
+    const rows = [], seen = new Set()
+    let pageToken = ''
+    for (let page = 0; page < 100; page++) {
+      const suffix = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''
+      const body = await bytebaseRequest(`/v1/${taskId}/taskRuns?pageSize=1000${suffix}`)
+      if (!Array.isArray(body?.taskRuns)) fail('BYTEBASE_TASK_RUN_LIST_UNCONFIRMED')
+      rows.push(...body.taskRuns)
+      if (!body.nextPageToken) return rows
+      if (typeof body.nextPageToken !== 'string' || seen.has(body.nextPageToken)) fail('BYTEBASE_TASK_RUN_LIST_INCOMPLETE')
+      seen.add(body.nextPageToken)
+      pageToken = body.nextPageToken
+    }
+    fail('BYTEBASE_TASK_RUN_LIST_INCOMPLETE')
+  }
   const bytebase = {
     async getDatabase({ project, target }) {
       if (!bytebaseBaseUrl?.startsWith('https://') || !bytebaseToken && !bytebaseCredentials
@@ -303,27 +361,174 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
         environment, evidenceRef: evidence('bytebase-database',
           `${row.name}:${row.effectiveEnvironment}:${row.successfulSyncTime ?? ''}`) }
     },
-    async readBaseline({ project, target, scope }) {
-      if (scope !== 'current') fail('BYTEBASE_BASELINE_SCOPE_INVALID')
-      await this.getDatabase({ project, target })
-      const [database, schema] = await Promise.all([
-        bytebaseRequest(`/v1/${target.database}`),
-        bytebaseRequest(`/v1/${target.database}/schema`),
-      ])
-      if (database.project !== project || database.name !== target.database
-        || database.instanceResource?.name !== target.instance
-        || typeof database.successfulSyncTime !== 'string'
-        || typeof schema.schema !== 'string' || !schema.schema)
-        fail('BYTEBASE_BASELINE_UNCONFIRMED')
-      const syncTime = Date.parse(database.successfulSyncTime)
-      if (!Number.isFinite(syncTime) || syncTime > Date.now() + 5 * 60 * 1000
-        || Date.now() - syncTime > 24 * 60 * 60 * 1000)
-        fail('BYTEBASE_BASELINE_STALE')
-      const schemaDigest = createHash('sha256').update(schema.schema, 'utf8').digest('hex')
-      const snapshotId = `schema:${schemaDigest}:${database.successfulSyncTime}`
-      return { project, target, snapshotId, sha256: schemaDigest,
-        schemaVersion: `schema:${schemaDigest}`, schemaDigest,
-        evidenceRef: evidence('bytebase-baseline', `${target.database}:${snapshotId}`) }
+    async getIssueBundle({ project, issueId }) {
+      bytebaseResource(project, issueId, 'issues')
+      const issueRow = await bytebaseRequest(`/v1/${issueId}`)
+      if (issueRow?.name !== issueId || issueRow.type !== 'DATABASE_CHANGE'
+        || typeof issueRow.description !== 'string') fail('BYTEBASE_ISSUE_UNCONFIRMED')
+      let identity
+      try { identity = JSON.parse(issueRow.description) } catch { fail('BYTEBASE_ISSUE_UNCONFIRMED') }
+      if (issueRow.title !== bytebaseTitle(identity?.operationKey)
+        || !/^[a-f0-9]{64}$/.test(identity?.packageDigest ?? '')) fail('BYTEBASE_ISSUE_UNCONFIRMED')
+      const planId = bytebaseResource(project, issueRow.plan, 'plans')
+      const planRow = await bytebaseRequest(`/v1/${planId}`)
+      const spec = planRow?.specs?.length === 1 ? planRow.specs[0] : null
+      const sheetId = bytebaseResource(project, spec?.changeDatabaseConfig?.sheet, 'sheets')
+      const targets = spec?.changeDatabaseConfig?.targets
+      if (planRow.name !== planId || planRow.issue !== issueId || planRow.title !== issueRow.title
+        || targets?.length !== 1) fail('BYTEBASE_PLAN_UNCONFIRMED')
+      const target = { instance: bytebaseInstance, database: targets[0], environment: 'production' }
+      bytebaseTarget(project, target)
+      if (identity.target?.database !== target.database || identity.target?.instance !== target.instance
+        || identity.target?.environment !== target.environment) fail('BYTEBASE_ISSUE_UNCONFIRMED')
+      const sheetRow = await bytebaseRequest(`/v1/${sheetId}?raw=true`)
+      if (sheetRow?.name !== sheetId || typeof sheetRow.content !== 'string'
+        || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(sheetRow.content))
+        fail('BYTEBASE_SHEET_UNCONFIRMED')
+      const sql = Buffer.from(sheetRow.content, 'base64').toString('utf8')
+      const sqlSha256 = createHash('sha256').update(sql).digest('hex')
+      if (sqlSha256 !== identity.applySqlSha256) fail('BYTEBASE_SHEET_UNCONFIRMED')
+      let task = null
+      if (planRow.hasRollout === true) {
+        const rollout = await bytebaseRequest(`/v1/${planId}/rollout`)
+        const stages = rollout?.stages
+        const tasks = Array.isArray(stages) ? stages.flatMap(stage => stage.tasks ?? []) : []
+        if (rollout.name !== `${planId}/rollout` || stages?.length !== 1
+          || stages[0].environment !== 'environments/prod' || tasks.length !== 1
+          || tasks[0].target !== target.database || tasks[0].specId !== spec.id
+          || tasks[0].databaseUpdate?.sheet !== sheetId) fail('BYTEBASE_ROLLOUT_UNCONFIRMED')
+        const taskId = tasks[0].name
+        if (!/^projects\/flbn\/plans\/[A-Za-z0-9_-]+\/rollout\/stages\/[A-Za-z0-9_-]+\/tasks\/[A-Za-z0-9_-]+$/.test(taskId))
+          fail('BYTEBASE_TASK_UNCONFIRMED')
+        task = { id: taskId, planId, status: tasks[0].status }
+      } else if (planRow.hasRollout !== false) fail('BYTEBASE_ROLLOUT_STATE_UNCONFIRMED')
+      return { issue: { id: issueId, project, planId, ...(task ? { taskId: task.id } : {}),
+        packageDigest: identity.packageDigest, operationKey: identity.operationKey },
+      sheet: { id: sheetId, project, sha256: sqlSha256, target },
+      plan: { id: planId, project, sheetId },
+      task }
+    },
+    async findIssueByOperationKey({ project, operationKey }) {
+      const title = bytebaseTitle(operationKey)
+      const rows = (await bytebaseList(project, 'issues')).filter(row => row.title === title)
+      if (rows.length > 1) fail('BYTEBASE_ISSUE_NOT_UNIQUE')
+      if (!rows.length) return null
+      return this.getIssueBundle({ project, issueId: rows[0].name })
+    },
+    async createIssueBundle({ project, target, operationKey, packageDigest,
+      applySqlSha256, applySql }) {
+      bytebaseTarget(project, target)
+      const title = bytebaseTitle(operationKey)
+      if (!/^[a-f0-9]{64}$/.test(packageDigest ?? '')
+        || createHash('sha256').update(applySql ?? '').digest('hex') !== applySqlSha256)
+        fail('BYTEBASE_ISSUE_INPUT_INVALID')
+      const existing = await this.findIssueByOperationKey({ project, operationKey })
+      if (existing) return existing
+      if (bytebaseIssueAttempts.has(operationKey)) fail('BYTEBASE_CREATE_RESULT_UNKNOWN')
+      bytebaseIssueAttempts.add(operationKey)
+      // Sheet/Plan/Rollout/Issue 不是原子 API。任一步结果未知由外部效果账只读对账，绝不自动重发。
+      const sheetRow = await bytebaseRequest(`/v1/${project}/sheets`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: Buffer.from(applySql).toString('base64') }) })
+      const sheetId = bytebaseResource(project, sheetRow?.name, 'sheets')
+      const planRow = await bytebaseRequest(`/v1/${project}/plans`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, description: operationKey,
+          specs: [{ id: randomUUID(), changeDatabaseConfig: { targets: [target.database], sheet: sheetId } }] }) })
+      const planId = bytebaseResource(project, planRow?.name, 'plans')
+      const issueRow = await bytebaseRequest(`/v1/${project}/issues`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, description: JSON.stringify({ operationKey, packageDigest,
+          applySqlSha256, target }), type: 'DATABASE_CHANGE', plan: planId }) })
+      const issueId = bytebaseResource(project, issueRow?.name, 'issues')
+      return this.getIssueBundle({ project, issueId })
+    },
+    async activateRollout({ project, issueId, operationKey }) {
+      bytebaseTitle(operationKey)
+      const bundle = await this.getIssueBundle({ project, issueId })
+      if (bundle.issue.operationKey !== operationKey) fail('BYTEBASE_ROLLOUT_IDENTITY_CHANGED')
+      if (bundle.task) return bundle
+      if (bytebaseRolloutAttempts.has(operationKey)) fail('BYTEBASE_ROLLOUT_RESULT_UNKNOWN')
+      bytebaseRolloutAttempts.add(operationKey)
+      const planId = bundle.plan.id
+      await bytebaseRequest(`/v1/${planId}/rollout`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parent: planId, target: 'environments/prod' }) })
+      const readback = await this.getIssueBundle({ project, issueId })
+      if (!readback.task) fail('BYTEBASE_ROLLOUT_UNCONFIRMED')
+      return readback
+    },
+    async getTaskExecution({ project, issueId, taskId }) {
+      const bundle = await this.getIssueBundle({ project, issueId })
+      if (bundle.task?.id !== taskId) fail('BYTEBASE_TASK_IDENTITY_CHANGED')
+      const runs = await bytebaseReadTaskRuns(taskId, project)
+      if (runs.length > 1) fail('BYTEBASE_TASK_RUN_NOT_UNIQUE')
+      const row = runs[0]
+      if (row && (typeof row.name !== 'string' || !row.name.startsWith(`${taskId}/taskRuns/`)
+        || !['PENDING', 'RUNNING', 'DONE', 'FAILED', 'CANCELED'].includes(row.status)))
+        fail('BYTEBASE_TASK_RUN_UNCONFIRMED')
+      return { task: bundle.task, taskRun: row ? { id: row.name, taskId,
+        status: row.status } : null }
+    },
+    async runTask({ project, issueId, taskId, operationKey }) {
+      bytebaseTitle(operationKey)
+      const bundle = await this.getIssueBundle({ project, issueId })
+      if (bundle.issue.operationKey !== operationKey || bundle.task?.id !== taskId)
+        fail('BYTEBASE_TASK_NOT_READY')
+      const runs = await bytebaseReadTaskRuns(taskId, project)
+      if (runs.length > 1) fail('BYTEBASE_TASK_RUN_NOT_UNIQUE')
+      if (runs.length) {
+        if (typeof runs[0].name !== 'string' || !runs[0].name.startsWith(`${taskId}/taskRuns/`)
+          || !['PENDING', 'RUNNING', 'DONE'].includes(runs[0].status)) fail('BYTEBASE_TASK_ALREADY_RUN')
+        return { taskId }
+      }
+      if (bundle.task.status !== 'NOT_STARTED') fail('BYTEBASE_TASK_NOT_READY')
+      if (bytebaseTaskAttempts.has(operationKey)) fail('BYTEBASE_TASK_RESULT_UNKNOWN')
+      bytebaseTaskAttempts.add(operationKey)
+      const stage = taskId.slice(0, taskId.lastIndexOf('/tasks/'))
+      await bytebaseRequest(`/v1/${stage}/tasks:batchRun`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent: stage, tasks: [taskId] }) })
+      return { taskId }
+    },
+    async queryVerification({ project, target, sql, taskRunId, expectedChange }) {
+      bytebaseTarget(project, target)
+      const select = narrowVerificationSql(sql)
+      let expected
+      try { expected = JSON.parse(expectedChange) } catch { fail('BYTEBASE_VERIFICATION_NOT_ALLOWED') }
+      if (!select || !Array.isArray(expected?.rows) || expected.rows.length < 1
+        || expected.rows.length > 1000
+        || expected.rows.some(row => !row || Object.keys(row).length !== 1
+          || !Number.isSafeInteger(row[select.column]))
+        || !/^projects\/flbn\/plans\/[A-Za-z0-9_-]+\/rollout\/stages\/[A-Za-z0-9_-]+\/tasks\/[A-Za-z0-9_-]+\/taskRuns\/[A-Za-z0-9_-]+$/.test(taskRunId ?? ''))
+        fail('BYTEBASE_VERIFICATION_NOT_ALLOWED')
+      const taskId = taskRunId.slice(0, taskRunId.lastIndexOf('/taskRuns/'))
+      const planId = taskId.slice(0, taskId.indexOf('/rollout/'))
+      const plan = await bytebaseRequest(`/v1/${planId}`)
+      const issueId = bytebaseResource(project, plan?.issue, 'issues')
+      const bundle = await this.getIssueBundle({ project, issueId })
+      if (bundle.task?.id !== taskId || bundle.sheet.target.database !== target.database)
+        fail('BYTEBASE_VERIFICATION_TASK_CHANGED')
+      const taskExecution = await this.getTaskExecution({ project, issueId, taskId })
+      if (taskExecution.task.status !== 'DONE' || taskExecution.taskRun?.id !== taskRunId
+        || taskExecution.taskRun.status !== 'DONE') fail('BYTEBASE_TASK_RUN_UNCONFIRMED')
+      const body = await bytebaseRequest(`/v1/${target.database}:query`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: target.database, statement: sql, limit: expected.rows.length + 1 }) })
+      const result = body?.results?.[0]
+      if (body?.results?.length !== 1 || result.error || result.columnNames?.length !== 1
+        || result.columnNames[0] !== select.column || result.rows?.length !== expected.rows.length
+        || result.rows.some(row => row.values?.length !== 1)) fail('BYTEBASE_VERIFICATION_UNCONFIRMED')
+      const observedRows = result.rows.map(row => {
+        const value = row.values[0]
+        const observed = Number(value.int32Value ?? value.int64Value)
+        if (!Number.isSafeInteger(observed)) fail('BYTEBASE_VERIFICATION_UNCONFIRMED')
+        return { [select.column]: observed }
+      })
+      if (JSON.stringify(observedRows) !== JSON.stringify(expected.rows))
+        fail('BYTEBASE_VERIFICATION_UNCONFIRMED')
+      return { passed: true, target, packageDigest: bundle.issue.packageDigest,
+        observedChange: JSON.stringify(observedRows),
+        readbackId: evidence('bytebase-verification', `${taskRunId}:${executionDigest(result.rows)}`) }
     },
   }
   return { github, woodpecker, kubernetes, registry,

@@ -75,6 +75,18 @@ export function createPostgresUatPlatform({ connections, connect, baselineReader
       && text(result.checkId), 'POSTGRES_UAT_PRECONDITIONS_UNCONFIRMED')
     return result
   }
+  const validateSql = async ({ project, target, sql, sqlSha256, verificationSql }) => {
+    const entry = entryFor(project, target)
+    required(sha(sql) === sqlSha256 && text(verificationSql), 'POSTGRES_UAT_SQL_IDENTITY_CHANGED')
+    const review = await sqlReview({ connection: entry.connection, target,
+      applySql: sql, applySqlSha256: sqlSha256, verificationSql })
+    required(review?.transactionSafe === true && review.sqlSha256 === sqlSha256
+      && sameTarget(review.target, target) && text(review.reviewId)
+      && /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/u.test(review.lockTable ?? ''),
+    'POSTGRES_UAT_SQL_NOT_TRANSACTION_SAFE')
+    return { passed: true, target, sqlSha256, reviewId: review.reviewId,
+      schemaProofDigest: review.schemaProofDigest }
+  }
   const getUatRehearsalByOperationKey = async ({ project, operationKey }) => {
     required(text(operationKey), 'POSTGRES_UAT_OPERATION_INVALID')
     const result = await receiptStore.get(operationKey)
@@ -85,8 +97,11 @@ export function createPostgresUatPlatform({ connections, connect, baselineReader
   }
   const rehearseInUat = async intent => {
     const entry = entryFor(intent?.project, intent?.uatTarget)
+    let expectedRows
+    try { expectedRows = JSON.parse(intent?.expectedChange)?.rows } catch { /* 无法比较预期时拒绝执行。 */ }
     required(text(intent.operationKey) && sha(intent.applySql) === intent.applySqlSha256
-      && typeof intent.verificationSql === 'string' && text(intent.packageDigest),
+      && typeof intent.verificationSql === 'string' && text(intent.packageDigest)
+      && Array.isArray(expectedRows),
     'POSTGRES_UAT_OPERATION_INVALID')
     const existing = await receiptStore.get(intent.operationKey)
     if (existing?.passed) {
@@ -101,7 +116,8 @@ export function createPostgresUatPlatform({ connections, connect, baselineReader
       applySql: intent.applySql, verificationSql: intent.verificationSql,
       applySqlSha256: intent.applySqlSha256 })
     required(review?.transactionSafe === true && review.sqlSha256 === intent.applySqlSha256
-      && review.target?.database === intent.uatTarget.database && text(review.reviewId),
+      && review.target?.database === intent.uatTarget.database && text(review.reviewId)
+      && /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/u.test(review.lockTable ?? ''),
     'POSTGRES_UAT_SQL_NOT_TRANSACTION_SAFE')
     required(await receiptStore.begin(intent.operationKey, {
       target: intent.uatTarget, packageDigest: intent.packageDigest,
@@ -112,9 +128,18 @@ export function createPostgresUatPlatform({ connections, connect, baselineReader
       await client.query('BEGIN')
       began = true
       await client.query('SET LOCAL statement_timeout = 30000')
-      await client.query(intent.applySql)
+      await client.query(`LOCK TABLE ${review.lockTable} IN SHARE ROW EXCLUSIVE MODE`)
+      const lockedReview = await sqlReview({ connection: entry.connection, target: intent.uatTarget,
+        applySql: intent.applySql, verificationSql: intent.verificationSql,
+        applySqlSha256: intent.applySqlSha256, client })
+      required(lockedReview?.transactionSafe === true && lockedReview.reviewId === review.reviewId
+        && lockedReview.lockTable === review.lockTable,
+      'POSTGRES_UAT_SQL_NOT_TRANSACTION_SAFE')
+      const applyResult = await client.query(intent.applySql)
+      required(Number.isInteger(applyResult?.rowCount) && applyResult.rowCount > 0,
+        'POSTGRES_UAT_VERIFICATION_UNCONFIRMED')
       const query = await client.query(intent.verificationSql)
-      const verification = await verify({ intent, query, review })
+      const verification = await verify({ intent, query, review: lockedReview, applyResult })
       required(verification?.passed === true && text(verification.observedChange)
         && text(verification.readbackId), 'POSTGRES_UAT_VERIFICATION_UNCONFIRMED')
       await client.query('ROLLBACK')
@@ -134,6 +159,6 @@ export function createPostgresUatPlatform({ connections, connect, baselineReader
       await client.end()
     }
   }
-  return { getDatabase, readBaseline, checkPreconditions, rehearseInUat,
+  return { getDatabase, readBaseline, checkPreconditions, validateSql, rehearseInUat,
     getUatRehearsalByOperationKey }
 }

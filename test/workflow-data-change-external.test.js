@@ -19,14 +19,14 @@ const proposal = { applySql: sql, rollbackSql: 'BEGIN; UPDATE t SET v=1 WHERE id
   verificationSql: 'SELECT v FROM t WHERE id=1;', expectedChange: '仅 id=1 的 v 从 1 变成 2' }
 
 async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
-  driftPreflight = false, driftIssue = false } = {}) {
+  driftPreflight = false, driftIssue = false, prematureTask = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-data-external-'))
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'data-external', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
   const sends = [], reconciles = []
   let rehearsalObserved = false, createdPackageDigest = null
   const sheet = { id: 'sheet-1', sha256: sha(sql), target }, plan = { id: 'plan-1', sheetId: 'sheet-1' }
-  const task = { id: 'task-1', planId: 'plan-1', status: 'NOT_STARTED' }, issue = { id: 'issue-1', planId: 'plan-1', taskId: 'task-1' }
+  const task = { id: 'task-1', planId: 'plan-1', status: 'NOT_STARTED' }, issue = { id: 'issue-1', planId: 'plan-1' }
   const adapter = {
     id: 'synthetic-bytebase', version: '1', rulesDigest: sha('synthetic-bytebase-v1'),
     async validate(args) { return { passed: true, packageDigest: args.packageDigest, receiptId: 'validate-1' } },
@@ -38,20 +38,26 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
       return { passed: true, uat: true, packageDigest: args.package.validation.packageDigest,
         receiptId: 'uat-rehearsal-1', observedChange: 'one row only' } },
     async prepareIssue(args) { createdPackageDigest = args.prepared.package.validation.packageDigest; return { sheetSha256: sha(sql), packageDigest: createdPackageDigest } },
-    async prepareApproval(args) { return { issueId: args.view.issue.id, taskId: args.view.task.id,
+    async prepareApproval(args) { return { issueId: args.view.issue.id,
+      planId: args.view.plan.id, sheetId: args.view.sheet.id,
       scopeDigest: sha('scope'), operationKey: sha('approval-operation') } },
-    async prepareExecute(args) { return { taskId: args.identity.taskId, approvalRequestId: args.identity.approvalRequestId,
+    async prepareExecute(args) { return { issueId: args.identity.issueId,
+      approvalRequestId: args.identity.approvalRequestId,
       packageDigest: args.identity.packageDigest } },
     async inspect(args) {
       if (args.stage === 'approval') return { decision: 'approved', source: 'assistant', human: true,
-        issueId: issue.id, target, taskId: task.id, sheetSha256: sheet.sha256,
+        issueId: issue.id, planId: plan.id, sheetId: sheet.id, target,
+        sheetSha256: sheet.sha256,
         packageDigest: createdPackageDigest, scopeDigest: sha('scope'),
         requestId: 'approval-gate', decidedBy: 'owner' }
-      if (args.stage === 'pre-execution') return { sheet: driftPreflight ? { ...sheet, sha256: sha('altered') } : sheet, plan, task }
+      if (args.stage === 'pre-execution') return { sheet: driftPreflight ? { ...sheet, sha256: sha('altered') } : sheet, plan }
       throw Error('unexpected inspection')
     },
     async readback(args) {
-      if (args.stage === 'create-issue') { assert.equal(args.receipt.result.issueId, issue.id); return { issue, sheet: driftIssue ? { ...sheet, sha256: sha('altered') } : sheet, plan, task } }
+      if (args.stage === 'create-issue') { assert.equal(args.receipt.result.issueId, issue.id); return {
+        issue: prematureTask ? { ...issue, taskId: task.id } : issue,
+        sheet: driftIssue ? { ...sheet, sha256: sha('altered') } : sheet,
+        plan, ...(prematureTask ? { task } : {}) } }
       if (args.stage === 'execute-task') return { task: { ...task, status: 'DONE' }, taskRun: { id: 'task-run-1', taskId: task.id, status: 'DONE' },
         production: { passed: true, target, packageDigest: createdPackageDigest, readbackId: 'production-readback-1', observedChange: 'id=1 has v=2' } }
       throw Error('unexpected readback')
@@ -87,7 +93,7 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
       if (prepared.stage === 'create-issue') return { principalId: 'owner', authorizationRef: 'issue-submission-specific' }
       if (prepared.stage === 'approval-gate') return { principalId: 'owner',
         approval: { requestId: 'approval-gate', approverIds: ['owner'] } }
-      assert.equal(prepared.taskId, 'task-1')
+      assert.equal(prepared.taskId, undefined)
       assert.equal(prepared.approvalRequestId, 'approval-gate')
       return { principalId: 'owner', authorizationRef: 'production-task-specific' }
     },
@@ -157,6 +163,15 @@ test('数据变更工单或执行适配器缺失时拒绝注册', () => {
 test('工单 Sheet 内容漂移阻止审批及生产发送', async t => {
   const f = await fixture(t, { driftIssue: true })
   await f.controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: f.workflow.id, input: input() })
+  const state = await f.controller.whenIdle('run')
+  assert.equal(state.nodes[8].waitReason?.reference, 'DATA_CHANGE_ISSUE_READBACK_UNCONFIRMED')
+  assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue'])
+})
+
+test('审批前工单若已出现 task，立即停在只读回读节点', async t => {
+  const f = await fixture(t, { prematureTask: true })
+  await f.controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task',
+    workflowId: f.workflow.id, input: input() })
   const state = await f.controller.whenIdle('run')
   assert.equal(state.nodes[8].waitReason?.reference, 'DATA_CHANGE_ISSUE_READBACK_UNCONFIRMED')
   assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue'])

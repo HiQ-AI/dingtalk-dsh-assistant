@@ -80,3 +80,56 @@ test('Cordis apply 提供 resident 读取的固定 service 名称', async () => 
   await apply(ctx, { secretsDirectory: 'C:/secret-home' }, { createHostClients: async () => service })
   assert.equal(ctx.services.dingtalkTaskWorkflowPlatformClients, service)
 })
+
+test('Host 只用本机连接凭据装配精确三个 UAT PostgreSQL 库', async () => {
+  const target = database => ({ instance: 'postgresql/192.168.8.8:30770', database, environment: 'uat' })
+  const observed = []
+  const clients = await createHostPlatformClients({ secretsDirectory: 'C:/secret-home',
+    uatPostgres: { receiptDbPath: 'C:/state/uat-receipts.sqlite',
+      targets: ['hiq_editor', 'hiq_background_db', 'hiq_admin']
+        .map(database => ({ project: 'projects/flbn', target: target(database) })) },
+    statImpl: async () => ({ isFile: () => true }),
+    readFileImpl: async path => path.endsWith('db-credentials.json')
+      ? JSON.stringify({ connections: { hiq_editor_uat: {
+        host: '192.168.8.8', port: 30770, user: 'fixture', password: 'secret' } } })
+      : '{}',
+    execFileImpl: async name => ({ stdout: name === 'kubectl'
+      ? JSON.stringify({ data: { WOODPECKER_TOKEN: Buffer.from('wood-secret').toString('base64') } })
+      : 'github-secret' }),
+    createClients: () => ({ kubernetes: { readDeployment() {}, readPods() {}, readEntry() {} } }),
+    loadPostgres: async () => ({ Client: class {} }),
+    createUatPostgres: args => { observed.push(args); return { platform: { getDatabase() {} } } },
+  })
+  assert.equal(typeof clients.uatPostgres.getDatabase, 'function')
+  assert.deepEqual(observed[0].entries.map(entry => entry.target.database),
+    ['hiq_editor', 'hiq_background_db', 'hiq_admin'])
+  assert.equal(observed[0].entries.every(entry => entry.connection.password === 'secret'), true)
+  assert.equal('password' in clients.uatPostgres, false)
+})
+
+test('Host 将三个 Bytebase 生产目标分别绑定天翼云只读从库凭据', async () => {
+  const databases = ['hiq_editor', 'hiq_background_db', 'hiq_admin']
+  const observed = []
+  const clients = await createHostPlatformClients({ secretsDirectory: 'C:/secret-home',
+    productionPostgres: { targets: databases.map(database => ({ project: 'projects/flbn',
+      target: { instance: 'instances/flbnpguaf',
+        database: `instances/flbnpguaf/databases/${database}`, environment: 'production' } })) },
+    statImpl: async () => ({ isFile: () => true }),
+    readFileImpl: async path => path.endsWith('db-credentials.json')
+      ? JSON.stringify({ connections: Object.fromEntries([
+        ['tianyi_editor_slave', 'hiq_editor'], ['tianyi_bg_slave', 'hiq_background_db'],
+        ['tianyi_admin_slave', 'hiq_admin']].map(([key, db]) => [key, {
+        host: '101.89.215.147', port: 5432, db, user: `user-${db}`, password: `secret-${db}` }])) })
+      : '{}',
+    execFileImpl: async name => ({ stdout: name === 'kubectl'
+      ? JSON.stringify({ data: { WOODPECKER_TOKEN: Buffer.from('wood-secret').toString('base64') } })
+      : 'github-secret' }),
+    createClients: () => ({ kubernetes: { readDeployment() {}, readPods() {}, readEntry() {} } }),
+    loadPostgres: async () => ({ Client: class {} }),
+    createProductionPostgres: args => { observed.push(args); return { getDatabase() {} } },
+  })
+  assert.equal(typeof clients.productionPostgres.getDatabase, 'function')
+  assert.deepEqual(observed[0].entries.map(entry => entry.connection.database), databases)
+  assert.deepEqual(observed[0].entries.map(entry => entry.connection.user), databases.map(db => `user-${db}`))
+  assert.equal('password' in clients.productionPostgres, false)
+})

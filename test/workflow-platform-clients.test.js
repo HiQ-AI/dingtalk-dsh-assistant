@@ -142,36 +142,118 @@ test('Bytebase 数据库身份只取平台实测项目、实例与环境，不�
     target: { ...production, environment: 'uat' } }), /BYTEBASE_DATABASE_IDENTITY_UNCONFIRMED/)
 })
 
-test('Bytebase Host 会话只读回读 schema 并冻结结构基线，身份缺失拒绝', async () => {
+test('Bytebase 工单以 operationKey 唯一对账，执行前检查任务且独立回读结果', async () => {
   const target = { instance: 'instances/flbnpguaf',
     database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
-  const database = { name: target.database, project: 'projects/flbn',
-    effectiveEnvironment: 'environments/prod', instanceResource: { name: target.instance },
-    successfulSyncTime: '2026-09-25T00:00:00Z' }
-  const urls = []
-  const clients = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev',
-    bytebaseCredentials: { username: 'fixture-user', password: 'fixture-password' },
-    fetchImpl: async (url, options) => {
-      urls.push([url, options])
-      if (url.endsWith('/auth/login')) return { ok: true,
-        headers: { getSetCookie: () => ['access-token=fixture-cookie; Path=/; HttpOnly'] } }
-      if (url.endsWith('/schema')) return json({ schema: 'CREATE TABLE public.t (id bigint);' })
-      return json(database)
+  const project = 'projects/flbn', issueId = `${project}/issues/1`, planId = `${project}/plans/1`
+  const sheetId = `${project}/sheets/1`, taskId = `${planId}/rollout/stages/prod/tasks/1`
+  const operationKey = 'a'.repeat(64), packageDigest = 'b'.repeat(64)
+  const applySql = 'UPDATE public.t SET v = 2 WHERE id = 1'
+  const applySqlSha256 = createHash('sha256').update(applySql).digest('hex')
+  const title = `Assistant data change ${operationKey}`
+  let created = false, activated = false, ran = false
+  const writes = []
+  const fetchImpl = async (url, options = {}) => {
+    const path = new URL(url).pathname
+    const method = options.method ?? 'GET'
+    if (method === 'POST') writes.push(path)
+    if (path.endsWith('/issues') && method === 'GET') return json({ issues: created
+      ? [{ name: issueId, title }] : [] })
+    if (path.endsWith('/sheets') && method === 'POST') return json({ name: sheetId })
+    if (path.endsWith('/plans') && method === 'POST') return json({ name: planId })
+    if (path.endsWith('/rollout') && method === 'POST') { activated = true; return json({ name: `${planId}/rollout` }) }
+    if (path.endsWith('/issues') && method === 'POST') { created = true; return json({ name: issueId }) }
+    if (path.endsWith('/issues/1')) return json({ name: issueId, title, type: 'DATABASE_CHANGE',
+      description: JSON.stringify({ operationKey, packageDigest, applySqlSha256, target }), plan: planId })
+    if (path.endsWith('/plans/1')) return json({ name: planId, issue: issueId, title, hasRollout: activated,
+      specs: [{ id: 'spec-1', changeDatabaseConfig: { targets: [target.database], sheet: sheetId } }] })
+    if (path.endsWith('/sheets/1')) return json({ name: sheetId,
+      content: Buffer.from(applySql).toString('base64') })
+    if (path.endsWith('/rollout')) return json({ name: `${planId}/rollout`, stages: [{
+      environment: 'environments/prod', tasks: [{ name: taskId, specId: 'spec-1',
+        target: target.database, databaseUpdate: { sheet: sheetId },
+        status: ran ? 'DONE' : 'NOT_STARTED' }] }] })
+    if (path.endsWith('/taskRuns')) return json({ taskRuns: ran
+      ? [{ name: `${taskId}/taskRuns/1`, status: 'DONE' }] : [] })
+    if (path.endsWith('/tasks:batchRun')) { ran = true; return json({}) }
+    if (path.endsWith(':query')) return json({ results: [{ columnNames: ['v'],
+      rows: [{ values: [{ int32Value: 2 }] }] }] })
+    throw new Error(`unexpected ${method} ${path}`)
+  }
+  const client = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev',
+    bytebaseToken: 'fixture-token', fetchImpl }).bytebase
+  const createdBundle = await client.createIssueBundle({ project, target, operationKey,
+    packageDigest, applySqlSha256, applySql })
+  assert.equal(createdBundle.issue.id, issueId)
+  assert.equal(createdBundle.task, null)
+  assert.equal(createdBundle.sheet.sha256, applySqlSha256)
+  assert.equal(writes.filter(path => path.endsWith('/rollout')).length, 0)
+  assert.equal(writes.filter(path => path.endsWith('/issues')).length, 1)
+  const same = await client.createIssueBundle({ project, target, operationKey,
+    packageDigest, applySqlSha256, applySql })
+  assert.deepEqual(same, createdBundle)
+  assert.equal(writes.filter(path => path.endsWith('/issues')).length, 1)
+  const activatedBundle = await client.activateRollout({ project, issueId, operationKey })
+  assert.equal(activatedBundle.task.id, taskId)
+  assert.equal(writes.filter(path => path.endsWith('/rollout')).length, 1)
+  assert.deepEqual(await client.activateRollout({ project, issueId, operationKey }), activatedBundle)
+  assert.equal(writes.filter(path => path.endsWith('/rollout')).length, 1)
+  await client.runTask({ project, issueId, taskId, operationKey })
+  assert.equal(writes.filter(path => path.endsWith('/tasks:batchRun')).length, 1)
+  assert.deepEqual(await client.runTask({ project, issueId, taskId, operationKey }), { taskId })
+  assert.equal(writes.filter(path => path.endsWith('/tasks:batchRun')).length, 1)
+  const execution = await client.getTaskExecution({ project, issueId, taskId })
+  assert.equal(execution.taskRun.status, 'DONE')
+  const verification = await client.queryVerification({ project, target,
+    sql: 'SELECT v FROM public.t WHERE id = 1', taskRunId: execution.taskRun.id,
+    expectedChange: '{"rows":[{"v":2}]}' })
+  assert.equal(verification.observedChange, '[{"v":2}]')
+  assert.equal(verification.packageDigest, packageDigest)
+})
+
+test('Bytebase 工单首步结果未知时拒绝再次发送写请求', async () => {
+  const project = 'projects/flbn', target = { instance: 'instances/flbnpguaf',
+    database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
+  let writes = 0
+  const client = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev',
+    bytebaseToken: 'fixture-token', fetchImpl: async (url, options = {}) => {
+      if (options.method === 'POST') { writes++; throw new Error('uncertain') }
+      return json({ issues: [] })
     } }).bytebase
-  const baseline = await clients.readBaseline({ project: 'projects/flbn', target, scope: 'current' })
-  assert.equal(baseline.schemaDigest, createHash('sha256').update('CREATE TABLE public.t (id bigint);').digest('hex'))
-  assert.equal(baseline.schemaVersion, `schema:${baseline.schemaDigest}`)
-  assert.equal(urls.filter(([url]) => url.endsWith('/auth/login')).length, 1)
-  assert.equal(urls.filter(([url]) => url.endsWith('/schema')).length, 1)
-  assert.equal(urls.at(-1)[1].headers.Cookie, 'access-token=fixture-cookie')
-  await assert.rejects(clients.readBaseline({ project: 'projects/flbn', target, scope: 'other' }),
-    /BYTEBASE_BASELINE_SCOPE_INVALID/)
-  const stale = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev',
-    bytebaseToken: 'fixture-token', fetchImpl: async url => url.endsWith('/schema')
-      ? json({ schema: 'CREATE TABLE public.t (id bigint);' })
-      : json({ ...database, successfulSyncTime: '2026-09-10T07:23:59Z' }) }).bytebase
-  await assert.rejects(stale.readBaseline({ project: 'projects/flbn', target, scope: 'current' }),
-    /BYTEBASE_BASELINE_STALE/)
+  const applySql = 'UPDATE public.t SET v = 2 WHERE id = 1'
+  const request = { project, target, operationKey: 'a'.repeat(64), packageDigest: 'b'.repeat(64),
+    applySql, applySqlSha256: createHash('sha256').update(applySql).digest('hex') }
+  await assert.rejects(client.createIssueBundle(request), /PLATFORM_REQUEST_FAILED/)
+  await assert.rejects(client.createIssueBundle(request), /BYTEBASE_CREATE_RESULT_UNKNOWN/)
+  assert.equal(writes, 1)
+})
+
+test('Bytebase Rollout 提交结果未知时禁止重发，留给只读对账', async () => {
+  const project = 'projects/flbn', issueId = `${project}/issues/1`, planId = `${project}/plans/1`
+  const target = { instance: 'instances/flbnpguaf',
+    database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
+  const applySql = 'UPDATE public.t SET v = 2 WHERE id = 1'
+  const operationKey = 'a'.repeat(64)
+  let writes = 0
+  const client = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev',
+    bytebaseToken: 'fixture-token', fetchImpl: async (url, options = {}) => {
+      const path = new URL(url).pathname
+      if (options.method === 'POST') { writes++; throw new Error('uncertain') }
+      if (path.endsWith('/issues/1')) return json({ name: issueId,
+        title: `Assistant data change ${operationKey}`, type: 'DATABASE_CHANGE', plan: planId,
+        description: JSON.stringify({ operationKey, packageDigest: 'b'.repeat(64),
+          applySqlSha256: createHash('sha256').update(applySql).digest('hex'), target }) })
+      if (path.endsWith('/plans/1')) return json({ name: planId, issue: issueId,
+        title: `Assistant data change ${operationKey}`, hasRollout: false,
+        specs: [{ id: 'spec-1', changeDatabaseConfig: { targets: [target.database],
+          sheet: `${project}/sheets/1` } }] })
+      if (path.endsWith('/sheets/1')) return json({ name: `${project}/sheets/1`,
+        content: Buffer.from(applySql).toString('base64') })
+      throw new Error(`unexpected ${path}`)
+    } }).bytebase
+  await assert.rejects(client.activateRollout({ project, issueId, operationKey }), /PLATFORM_REQUEST_FAILED/)
+  await assert.rejects(client.activateRollout({ project, issueId, operationKey }), /BYTEBASE_ROLLOUT_RESULT_UNKNOWN/)
+  assert.equal(writes, 1)
 })
 
 test('本机 Docker 凭据只读 OCI 原始清单并校验字节摘要', async () => {

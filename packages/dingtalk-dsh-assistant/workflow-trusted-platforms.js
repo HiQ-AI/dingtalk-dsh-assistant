@@ -115,8 +115,8 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     : null
   let boundStore = null
   async function readDataApproval({ runId, generation, requirementDigest, resourceKey,
-    scopeDigest, issueId, taskId, target, sheetSha256, packageDigest, requestId }) {
-    const expectedScope = executionDigest({ runId, generation, issueId, taskId,
+    scopeDigest, issueId, planId, sheetId, target, sheetSha256, packageDigest, requestId }) {
+    const expectedScope = executionDigest({ runId, generation, issueId, planId, sheetId,
       target, sheetSha256, packageDigest })
     if (!boundStore || scopeDigest !== expectedScope) throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
     const effects = await boundStore.query({ kind: 'effect.list', runId })
@@ -128,7 +128,8 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       && effect.definition.payload.resourceKey === resourceKey
       && effect.definition.payload.intent?.scopeDigest === scopeDigest
       && effect.definition.payload.intent?.issueId === issueId
-      && effect.definition.payload.intent?.taskId === taskId
+      && effect.definition.payload.intent?.planId === planId
+      && effect.definition.payload.intent?.sheetId === sheetId
       && effect.definition.payload.intent?.sheetSha256 === sheetSha256
       && effect.definition.payload.intent?.packageDigest === packageDigest
       && executionDigest(effect.definition.payload.target) === executionDigest(target))
@@ -142,12 +143,13 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     if (approval.effectId !== gates[0].effectId || approval.decision !== 'approved'
       || approval.revoked || approval.decisionSource !== 'web' || !approval.decidedBy)
       throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
-    return { decision: 'approved', source: 'assistant', human: true, issueId, taskId,
+    return { decision: 'approved', source: 'assistant', human: true, issueId, planId, sheetId,
       target, sheetSha256, packageDigest, scopeDigest,
       requestId: gates[0].requestId, decidedBy: approval.decidedBy }
   }
   const bytebase = config?.bytebase?.targets?.length
     ? createBytebaseDataChangePlatform({ config: config.bytebase, api: clients?.bytebase,
+      productionApi: clients?.productionPostgres,
       uatApi: clients?.uatPostgres, approvalApi: { getApproval: readDataApproval } })
     : null
   if (!release && !bytebase) return null
@@ -205,7 +207,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       const changeRef = requireText(action.arguments.changeRef, 'EXTERNAL_CHANGE_REF_REQUIRED')
       const source = materials.find(item => item.resourceRef === changeRef)
       if (!source?.text) throw executionError('EXTERNAL_MATERIAL_NOT_FOUND')
-      const snapshot = await clients.bytebase.readBaseline({ project: selected.project,
+      const snapshot = await clients.productionPostgres.readBaseline({ project: selected.project,
         target: selected.target, scope: 'current' })
       if (snapshot?.project !== selected.project || executionDigest(snapshot.target) !== executionDigest(selected.target)
         || typeof snapshot.snapshotId !== 'string' || !snapshot.snapshotId
@@ -270,7 +272,8 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
         runId: prepared.runId, generation: prepared.generation,
         requirementDigest: prepared.requirementDigest, resourceKey: prepared.resourceKey,
         scopeDigest: prepared.intent?.approvalScopeDigest, issueId: prepared.intent?.issueId,
-        taskId: prepared.taskId, target: prepared.target,
+        planId: prepared.intent?.planId, sheetId: prepared.intent?.sheetId,
+        target: prepared.target,
         sheetSha256: prepared.applySqlSha256, packageDigest: prepared.packageDigest,
         requestId: prepared.approvalRequestId,
       })

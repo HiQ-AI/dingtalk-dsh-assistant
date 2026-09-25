@@ -17,13 +17,14 @@ function fixture(overrides = {}) {
   return createPostgresUatPlatform({ connections: [{ project, target, connection }],
     connect: async () => ({ async query(sql) { queries.push(sql)
       if (sql.startsWith('SELECT current_database()')) return { rows: [{ database_name: target.database }] }
+      if (sql.startsWith('UPDATE')) return { rowCount: 1, rows: [] }
       return { rows: [{ v: 2 }] } }, async end() { queries.push('END_CONNECTION') } }),
     baselineReader: async () => ({ project, target, snapshotId: 'uat-snapshot', sha256: sha('snapshot'),
       schemaVersion: '42', schemaDigest: sha('schema'), evidenceRef: 'trusted:uat-baseline' }),
     preconditionReader: async args => ({ passed: true, target, sqlSha256: args.applySqlSha256,
       baselineEvidenceRef: args.baseline.evidenceRef, checkId: 'trusted:precondition' }),
     sqlReview: async args => ({ transactionSafe: true, target, sqlSha256: args.applySqlSha256,
-      reviewId: 'trusted:transaction-safe-review' }),
+      lockTable: 'public.t', reviewId: 'trusted:transaction-safe-review' }),
     verify: async () => ({ passed: true, observedChange: 'v=2', readbackId: 'readback-1' }),
     receiptStore: store, ...overrides })
 }
@@ -31,6 +32,7 @@ const intent = { project, uatTarget: target, sourceTarget: { instance: 'instance
   database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' },
   operationKey: 'operation-1', applySql, applySqlSha256: sha(applySql),
   verificationSql: 'SELECT v FROM public.t WHERE id = 1', packageDigest: sha('package'),
+  expectedChange: '{"rows":[{"v":2}]}',
   productionBaseline: { evidenceRef: 'bytebase:baseline' },
   uatBaseline: { evidenceRef: 'trusted:uat-baseline', schemaVersion: '42', schemaDigest: sha('schema') } }
 
@@ -45,6 +47,12 @@ test('UAT 端口限定精确连接、受信审核和持久效果账', async () =
   const precondition = await port.checkPreconditions({ project, target, baseline,
     applySql, applySqlSha256: sha(applySql) })
   assert.equal(precondition.passed, true)
+  const review = await port.validateSql({ project, target, sql: applySql,
+    sqlSha256: sha(applySql), verificationSql: intent.verificationSql })
+  assert.equal(review.passed, true)
+  await assert.rejects(port.validateSql({ project, target, sql: applySql,
+    sqlSha256: sha('other'), verificationSql: intent.verificationSql }),
+  { code: 'POSTGRES_UAT_SQL_IDENTITY_CHANGED' })
 })
 
 test('演练在同一事务回查并回滚，未知结果不重新执行', async () => {
@@ -53,7 +61,7 @@ test('演练在同一事务回查并回滚，未知结果不重新执行', async
   const result = await port.rehearseInUat(intent)
   assert.equal(result.passed, true)
   assert.deepEqual(queries.slice(0, -1), ['BEGIN', 'SET LOCAL statement_timeout = 30000',
-    applySql, intent.verificationSql, 'ROLLBACK'])
+    'LOCK TABLE public.t IN SHARE ROW EXCLUSIVE MODE', applySql, intent.verificationSql, 'ROLLBACK'])
   assert.equal((await port.getUatRehearsalByOperationKey({ project, operationKey: intent.operationKey })).receiptId,
     result.receiptId)
   const count = queries.length
@@ -75,4 +83,32 @@ test('未证实事务安全或验证失败时没有成功回执', async () => {
   assert.equal(queries.includes('ROLLBACK'), true)
   assert.equal(await failed.getUatRehearsalByOperationKey({ project, operationKey: intent.operationKey }), null)
   await assert.rejects(failed.rehearseInUat(intent), { code: 'POSTGRES_UAT_OPERATION_UNKNOWN' })
+})
+
+test('UPDATE 影响 0 行时回滚，不能以旧行回查冒充演练成功', async () => {
+  const statements = []
+  const port = fixture({ connect: async () => ({
+    async query(sql) { statements.push(sql)
+      if (sql === applySql) return { rowCount: 0 }
+      return { rows: [{ v: 2 }] } },
+    async end() {},
+  }) })
+  await assert.rejects(port.rehearseInUat({ ...intent, operationKey: 'zero-row-operation' }),
+    { code: 'POSTGRES_UAT_VERIFICATION_UNCONFIRMED' })
+  assert.equal(statements.includes('ROLLBACK'), true)
+  assert.equal(statements.includes(intent.verificationSql), false)
+})
+
+test('锁表后复审若发现新触发器，回滚且不执行 UPDATE', async () => {
+  const statements = []
+  let reviewCount = 0
+  const port = fixture({
+    connect: async () => ({ async query(sql) { statements.push(sql); return { rows: [] } }, async end() {} }),
+    sqlReview: async args => ({ transactionSafe: ++reviewCount === 1,
+      target, sqlSha256: args.applySqlSha256, lockTable: 'public.t', reviewId: 'review-1' }),
+  })
+  await assert.rejects(port.rehearseInUat({ ...intent, operationKey: 'changed-schema-operation' }),
+    { code: 'POSTGRES_UAT_SQL_NOT_TRANSACTION_SAFE' })
+  assert.deepEqual(statements, ['BEGIN', 'SET LOCAL statement_timeout = 30000',
+    'LOCK TABLE public.t IN SHARE ROW EXCLUSIVE MODE', 'ROLLBACK'])
 })

@@ -9,13 +9,15 @@ const config = { bytebase: { adapterId: 'bytebase', adapterVersion: '1', targets
   uatTarget: { instance: 'postgresql/192.168.8.8:30770', database: 'app', environment: 'uat' },
 }] } }
 const api = Object.fromEntries(['getDatabase', 'readBaseline', 'checkPreconditions', 'validateSql', 'rehearseInUat',
-  'getUatRehearsalByOperationKey', 'createIssueBundle',
+  'getUatRehearsalByOperationKey', 'createIssueBundle', 'activateRollout',
   'getIssueBundle', 'getApproval', 'runTask', 'getTaskExecution', 'queryVerification',
   'findIssueByOperationKey'].map(name => [name, async () => ({})]))
 api.readBaseline = async ({ project, target: requested }) => ({ project, target: requested,
   snapshotId: 'snapshot-1', sha256: 'a'.repeat(64), evidenceRef: 'bytebase:baseline:1' })
-const uatPostgres = Object.fromEntries(['getDatabase', 'readBaseline', 'checkPreconditions',
+const uatPostgres = Object.fromEntries(['getDatabase', 'readBaseline', 'checkPreconditions', 'validateSql',
   'rehearseInUat', 'getUatRehearsalByOperationKey'].map(name => [name, async () => ({})]))
+const productionPostgres = Object.fromEntries(['getDatabase', 'readBaseline', 'checkPreconditions']
+  .map(name => [name, api[name]]))
 
 test('未配置目标时不注册外部流程，缺受信端口时拒绝启动', () => {
   assert.equal(createTrustedWorkflowPlatforms({ config: {}, clients: {}, ownerActorId: 'owner' }), null)
@@ -26,7 +28,7 @@ test('未配置目标时不注册外部流程，缺受信端口时拒绝启动',
 })
 
 test('数据变更输入只接受白名单目标和精确 SQL 来源，基线由平台受信回读', async () => {
-  const platform = createTrustedWorkflowPlatforms({ config, clients: { bytebase: api, uatPostgres }, ownerActorId: 'owner' })
+  const platform = createTrustedWorkflowPlatforms({ config, clients: { bytebase: api, productionPostgres, uatPostgres }, ownerActorId: 'owner' })
   const action = { arguments: { objective: '修正一条记录', targetId: 'app-prod',
     changeRef: 'sql-1' }, constraints: ['仅此数据库'] }
   const materials = [{ resourceRef: 'sql-1', text: 'UPDATE app SET x = 1 WHERE id = 1;' }]
@@ -40,24 +42,27 @@ test('数据变更输入只接受白名单目标和精确 SQL 来源，基线由
   { code: 'EXTERNAL_TARGET_NOT_ALLOWED' })
   await assert.rejects(platform.prepareRequirement({ workflowId: 'task-data-change', action, materials: [] }),
     { code: 'EXTERNAL_MATERIAL_NOT_FOUND' })
-  const badApi = { ...api, readBaseline: async () => ({ project: 'projects/other', target,
+  const badApi = { ...productionPostgres, readBaseline: async () => ({ project: 'projects/other', target,
     snapshotId: 'snapshot-1', sha256: 'a'.repeat(64), evidenceRef: 'wrong-project' }) }
-  const guarded = createTrustedWorkflowPlatforms({ config, clients: { bytebase: badApi, uatPostgres }, ownerActorId: 'owner' })
+  const guarded = createTrustedWorkflowPlatforms({ config,
+    clients: { bytebase: api, productionPostgres: badApi, uatPostgres }, ownerActorId: 'owner' })
   await assert.rejects(guarded.prepareRequirement({ workflowId: 'task-data-change', action, materials }),
     { code: 'EXTERNAL_BASELINE_UNCONFIRMED' })
 })
 
 test('数据变更工单在 Assistant 任务页审批，生产执行前重验精确范围', async () => {
-  const platform = createTrustedWorkflowPlatforms({ config, clients: { bytebase: api, uatPostgres }, ownerActorId: 'owner' })
+  const platform = createTrustedWorkflowPlatforms({ config,
+    clients: { bytebase: api, productionPostgres, uatPostgres }, ownerActorId: 'owner' })
   const prepared = { workflowKind: 'data-change', runId: 'run-1', generation: 1, target }
   const grant = await platform.authorizeExternal({ binding: { runId: 'run-1', nodeRunId: 'node-1', generation: 1 }, prepared })
   assert.ok(grant.authorizationRef)
   assert.equal(grant.approval, undefined)
-  const scope = { runId: 'run-1', generation: 1, issueId: 'issue-1', taskId: 'task-1',
+  const scope = { runId: 'run-1', generation: 1, issueId: 'issue-1',
+    planId: 'plan-1', sheetId: 'sheet-1',
     target, sheetSha256: 'a'.repeat(64), packageDigest: 'b'.repeat(64) }
   const scopeDigest = executionDigest(scope)
   const gate = { ...prepared, stage: 'approval-gate', requirementDigest: 'c'.repeat(64),
-    resourceKey: 'database:app', taskId: scope.taskId, packageDigest: scope.packageDigest,
+    resourceKey: 'database:app', packageDigest: scope.packageDigest,
     applySqlSha256: scope.sheetSha256, intent: { ...scope, scopeDigest, operationKey: 'operation-1' } }
   assert.deepEqual((await platform.authorizeExternal({ binding: { runId: 'run-1', nodeRunId: 'node-2', generation: 1 },
     prepared: gate })).approval.approverIds, ['owner'])
