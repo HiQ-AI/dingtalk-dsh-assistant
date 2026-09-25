@@ -9,6 +9,18 @@
 - 四类外部效果都经 execution-delivery.js 的 external 效果账。每个效果请求冻结运行、代次、目标和内容身份；发送回执不能充当独立回读。未知结果仅恢复对账，不自动重发。生产发布在合并身份回读后进入真人审批节点，批准精确 Tag 才继续；生产数据变更在 Bytebase 工单创建并回读后，等待该平台真人审批，再执行生产任务。UAT 演练和建工单不触发重复的真人审批。
 - D:/baibu-agent/.secrets 中的凭据只由本机受信客户端读取；Host 配置和模型输入不包含凭据值，凭据也不能写入仓库、工件或日志。不得把宽泛的 Bytebase MCP call_api 当成受信执行端口。
 
+## 本地客户端装配
+
+在 `web` profile 的 `insert` 列表中，先于 `@zzusp/dingtalk-dsh-assistant/resident` 插入：
+
+```yaml
+- id: dingtalk-task-workflow-platform-clients
+  name: '@zzusp/dingtalk-dsh-assistant/platform-host'
+  config:
+    secretsDirectory: 'D:/baibu-agent/.secrets'
+```
+
+Host 在启动时只读取当前 Poller Secret、GitHub CLI 登录及 Docker buildx 可用性，失败则拒绝装配；不会把凭据写入 profile。目标白名单仍由 `workflow.platforms` 单独配置，缺证明和目标时目录保持不可发起。部署前先核实当前 Poller Secret 名称与 UAT K3s Server；若变更，更新客户端配置和定向验证后再安装，不修改凭据文件来适配旧代码。
 ## 当前本地接入状态与验证
 
 源码的四类平台编排层和 Host 装配入口已实现。`@zzusp/dingtalk-dsh-assistant/platform-host` 可在 Resident 前由 Cordis 加载，从本地 UAT kubeconfig 与当前 Poller 的 `db-dev/woodpecker-poller-credentials` Secret 取凭据；GitHub 令牌由本机 `gh auth token` 获取。Registry 只读回读用本机 Docker 凭据运行 `docker buildx imagetools inspect --raw`，并对原始清单字节重算期望 digest。插件只提供客户端，不能单靠安装使目录可发起。真实目标清单、UAT 验收证明、生产触发链及 Bytebase 工单/演练端口仍须逐项配置和验证。发布前按[现有本地部署 runbook](resident-review-local-deployment.md)打包并安装精确版本，先检查运行任务与持久效果，再回读 /state/workflows/catalog 中每一类是否可发起；不可用项应给出缺少配置的事实。平台连接只读探测与真实写操作分别验收；真实 UAT 构建、生产发布或生产 SQL 须有明确任务授权。2026-09-25 只读复核已从 Woodpecker Base64 日志解析出 dataset 与 dataset-web 的历史 UAT2 构建摘要，并与 Registry/Pod 回读一致；先前未解码原始 JSON 而判定“日志无摘要”的结论作废。UAT 目标清单、证明端口及精确 UAT 数据库目标尚未在本地 Host 配置；缺这些能力时目录继续显示“尚不能发起”。
