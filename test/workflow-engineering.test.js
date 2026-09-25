@@ -6,12 +6,38 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createEngineeringRegistry } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
+import { createEngineeringRegistry, readEngineeringDeliveryProof } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createManagedWorkspaces } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
+
+test('工程交付证明复用同一 Run 工件并要求显式业务 E2E 检查', async () => {
+  const commitId = 'a'.repeat(40), candidateDigest = 'b'.repeat(64), verificationDigest = 'c'.repeat(64)
+  const output = {
+    'verify-candidate': { candidate: { digest: candidateDigest, tree: 'd'.repeat(40) },
+      verification: { digest: verificationDigest, passed: true, checks: [{ id: 'business-e2e', version: '1', passed: true }] } },
+    'prepare-commit': { commitId, candidateDigest, tree: 'd'.repeat(40), verification: { digest: verificationDigest } },
+    commit: { prepared: { commitId }, receipt: { status: 'succeeded' } },
+    'prepare-push': { commitId, verificationDigest },
+    push: { prepared: { commitId }, receipt: { status: 'succeeded' } },
+    'prepare-pr': { commitId },
+    'create-pr': { prepared: { commitId }, receipt: { status: 'succeeded', number: 42, url: 'https://github.com/a/b/pull/42' } },
+    finalize: { deliveryStatus: 'pr_verified', commitId, number: 42, url: 'https://github.com/a/b/pull/42',
+      repo: 'a/b', head: 'feature/test', base: 'main', state: 'OPEN' },
+  }
+  const nodes = Object.keys(output).map(nodeId => ({ nodeId, status: 'succeeded', outputRef: `artifact:${nodeId}` }))
+  const artifacts = { read: async ref => output[ref.slice('artifact:'.length)] }
+  const state = { run: { runId: 'r', taskId: 't', workflowId: 'task-engineering', status: 'succeeded' }, nodes }
+  const proof = await readEngineeringDeliveryProof({ state, artifacts, taskId: 't', requiredE2eCheckIds: ['business-e2e'] })
+  assert.equal(proof.commitSha, commitId)
+  assert.equal(proof.localE2ePassed, true)
+  assert.equal(proof.evidenceRefs.length, 8)
+  assert.equal((await readEngineeringDeliveryProof({ state, artifacts, taskId: 't' })).localE2ePassed, false)
+  output['prepare-push'].commitId = 'e'.repeat(40)
+  await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, taskId: 't' }), { code: 'ENGINEERING_DELIVERY_PROOF_MISMATCH' })
+})
 
 test('已终结工程 Run 的旧定义不参与启动恢复', async () => {
   const registry = createEngineeringRegistry({ ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }), repositories: [] })

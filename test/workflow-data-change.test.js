@@ -46,9 +46,10 @@ test('数据变更准备只校验 SQL 包，UAT 演练不得藏在只读节点',
   const sheet = { id: 'sheet-1', sha256: sha(proposal.applySql), target: requirement().target }
   const plan = { id: 'plan-1', sheetId: sheet.id }, task = { id: 'task-1', planId: plan.id, status: 'NOT_STARTED' }
   const issue = { id: 'issue-1' }
-  const approval = { decision: 'approved', source: 'bytebase', human: true,
+  const approval = { decision: 'approved', source: 'assistant', human: true,
     issueId: issue.id, target: requirement().target, taskId: task.id, sheetSha256: sheet.sha256,
-    packageDigest: prepared.package.validation.packageDigest, requestId: 'request-1', decidedBy: 'owner' }
+    packageDigest: prepared.package.validation.packageDigest, scopeDigest: sha('scope'),
+    requestId: 'request-1', decidedBy: 'owner' }
   assert.equal(assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan, task, approval }).taskId, task.id)
   for (const changed of [
     { sheet: { ...sheet, sha256: sha('other') } },

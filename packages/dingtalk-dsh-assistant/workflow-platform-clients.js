@@ -12,7 +12,7 @@ const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.tes
 
 /** 只接受受信 Host 注入的凭据与固定端点；异常不透传服务端响应或认证头。 */
 export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig,
-  kubeServer, kubeSkipTlsVerify = false, bytebaseBaseUrl, bytebaseToken, registryBearerToken,
+  kubeServer, kubeSkipTlsVerify = false, bytebaseBaseUrl, bytebaseToken, bytebaseCredentials, registryBearerToken,
   githubTagWritesEnabled = false, registryDockerCliEnabled = false,
   fetchImpl = fetch, execFileImpl = execFile, attestations } = {}) {
   async function request(url, token, options = {}) {
@@ -27,6 +27,28 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
     if (!response.ok) fail(`PLATFORM_HTTP_${response.status}`)
     if (response.status === 204) return {}
     try { return await response.json() } catch { fail('PLATFORM_RESPONSE_INVALID') }
+  }
+  let bytebaseCookie
+  async function bytebaseRequest(path) {
+    if (!bytebaseBaseUrl?.startsWith('https://') || !/^\/v1\/[A-Za-z0-9._/-]+$/.test(path))
+      fail('BYTEBASE_READ_NOT_CONFIGURED')
+    if (!bytebaseToken && !bytebaseCookie) {
+      if (typeof bytebaseCredentials?.username !== 'string'
+        || typeof bytebaseCredentials?.password !== 'string') fail('BYTEBASE_READ_NOT_CONFIGURED')
+      let response
+      try { response = await fetchImpl(`${bytebaseBaseUrl.replace(/\/$/, '')}/v1/auth/login`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: bytebaseCredentials.username,
+          password: bytebaseCredentials.password, web: true }), signal: AbortSignal.timeout(30000),
+      }) } catch { fail('BYTEBASE_AUTH_FAILED') }
+      if (!response.ok) fail('BYTEBASE_AUTH_FAILED')
+      const cookies = response.headers?.getSetCookie?.() ?? []
+      const access = cookies.map(item => /^access-token=([^;]+)/.exec(item)?.[1]).find(Boolean)
+      if (!access) fail('BYTEBASE_AUTH_FAILED')
+      bytebaseCookie = `access-token=${access}`
+    }
+    return request(`${bytebaseBaseUrl.replace(/\/$/, '')}${path}`, bytebaseToken,
+      bytebaseCookie ? { headers: { Cookie: bytebaseCookie } } : {})
   }
   const githubUrl = (repository, suffix) => {
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) fail('GITHUB_REPOSITORY_INVALID')
@@ -43,8 +65,15 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       if (!Number.isInteger(number) || number < 1) fail('GITHUB_PR_INVALID')
       const row = await request(githubUrl(repository, `pulls/${number}`), githubToken)
       return { number, merged: !!row.merged_at, baseBranch: row.base?.ref,
-        mergeCommitSha: row.merge_commit_sha,
+        headCommitSha: row.head?.sha, mergeCommitSha: row.merge_commit_sha,
         evidenceRef: evidence('github-pr', `${repository}:${number}:${row.updated_at}`) }
+    },
+    async readCommit({ repository, commitSha }) {
+      if (!sha(commitSha)) fail('GITHUB_COMMIT_INVALID')
+      const row = await request(githubUrl(repository, `git/commits/${commitSha}`), githubToken)
+      if (row?.sha !== commitSha || !sha(row.tree?.sha)) fail('GITHUB_COMMIT_UNCONFIRMED')
+      return { commitSha, treeSha: row.tree.sha,
+        evidenceRef: evidence('github-commit', `${repository}:${commitSha}:${row.tree.sha}`) }
     },
     async resolveApprovedPullRequest({ repository, baseBranch, mergeCommitSha }) {
       if (!safePath(baseBranch) || !sha(mergeCommitSha)) fail('GITHUB_PR_IDENTITY_INVALID')
@@ -259,13 +288,13 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
   }
   const bytebase = {
     async getDatabase({ project, target }) {
-      if (!bytebaseBaseUrl?.startsWith('https://') || !bytebaseToken
+      if (!bytebaseBaseUrl?.startsWith('https://') || !bytebaseToken && !bytebaseCredentials
         || !/^projects\/[A-Za-z0-9._-]+$/.test(project ?? '')
         || !/^instances\/[A-Za-z0-9._-]+$/.test(target?.instance ?? '')
         || !/^instances\/[A-Za-z0-9._-]+\/databases\/[A-Za-z0-9._-]+$/.test(target?.database ?? '')
         || !target.database.startsWith(`${target.instance}/databases/`)
         || !['production', 'uat'].includes(target?.environment)) fail('BYTEBASE_READ_NOT_CONFIGURED')
-      const row = await request(`${bytebaseBaseUrl.replace(/\/$/, '')}/v1/${target.database}`, bytebaseToken)
+      const row = await bytebaseRequest(`/v1/${target.database}`)
       const environment = { 'environments/prod': 'production', 'environments/uat': 'uat' }[row.effectiveEnvironment]
       if (row.project !== project || row.name !== target.database
         || row.instanceResource?.name !== target.instance || environment !== target.environment)
@@ -273,6 +302,28 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       return { project: row.project, instance: row.instanceResource.name, database: row.name,
         environment, evidenceRef: evidence('bytebase-database',
           `${row.name}:${row.effectiveEnvironment}:${row.successfulSyncTime ?? ''}`) }
+    },
+    async readBaseline({ project, target, scope }) {
+      if (scope !== 'current') fail('BYTEBASE_BASELINE_SCOPE_INVALID')
+      await this.getDatabase({ project, target })
+      const [database, schema] = await Promise.all([
+        bytebaseRequest(`/v1/${target.database}`),
+        bytebaseRequest(`/v1/${target.database}/schema`),
+      ])
+      if (database.project !== project || database.name !== target.database
+        || database.instanceResource?.name !== target.instance
+        || typeof database.successfulSyncTime !== 'string'
+        || typeof schema.schema !== 'string' || !schema.schema)
+        fail('BYTEBASE_BASELINE_UNCONFIRMED')
+      const syncTime = Date.parse(database.successfulSyncTime)
+      if (!Number.isFinite(syncTime) || syncTime > Date.now() + 5 * 60 * 1000
+        || Date.now() - syncTime > 24 * 60 * 60 * 1000)
+        fail('BYTEBASE_BASELINE_STALE')
+      const schemaDigest = createHash('sha256').update(schema.schema, 'utf8').digest('hex')
+      const snapshotId = `schema:${schemaDigest}:${database.successfulSyncTime}`
+      return { project, target, snapshotId, sha256: schemaDigest,
+        schemaVersion: `schema:${schemaDigest}`, schemaDigest,
+        evidenceRef: evidence('bytebase-baseline', `${target.database}:${snapshotId}`) }
     },
   }
   return { github, woodpecker, kubernetes, registry,

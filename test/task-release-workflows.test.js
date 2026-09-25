@@ -22,6 +22,7 @@ const phases = {
 const requirement = kind => ({ request: '按精确提交完成交付', target: {
   repository: 'hiq/repo', environment: kind === 'production-release' ? 'production' : 'uat',
   service: 'dataset-web', commitSha, runbookId: 'runbook-v1',
+  ...(kind === 'production-release' ? { releaseTag: 'v20260925-1' } : {}),
 }, constraints: [], evidenceRefs: ['source:1'] })
 const preflight = {
   localE2ePassed: true, developmentPrVerified: true, uatPrVerified: true, sourcePackageSupported: true,
@@ -51,7 +52,7 @@ function adapterFor(kind, overrides = {}) {
       return { action: 'external', workflowKind: kind, operation, runId, generation, requirementDigest,
         resourceKey: `external:${input.target.environment}:${input.target.repository}:${input.target.service}`,
         targetDigest: executionDigest(input.target), expected: { ...expected,
-          ...(kind === 'production-release' && ['approval-gate', 'tag'].includes(operation) ? { tag: 'v20260925-1' } : {}),
+          ...(kind === 'production-release' && ['approval-gate', 'tag'].includes(operation) ? { tag: input.target.releaseTag } : {}),
           ...overrides.expected },
         operationKey: `${kind}:${operation}:${input.target.commitSha}` }
     } }
@@ -99,6 +100,17 @@ test('无 Host adapter 拒绝注册；生产业务放行由真人审批门禁决
   assert.equal(state.run.status, 'waiting')
   assert.equal(state.nodes.find(node => node.nodeId === 'execute-approval-gate').waitReason.reference, 'DELIVERY_NOT_AUTHORIZED')
   assert.deepEqual(calls, ['merge-main'])
+})
+
+test('生产 Run 必须冻结本次精确 Tag，UAT 不接收生产 Tag', async () => {
+  const production = createReleaseTaskWorkflow({ kind: 'production-release', adapter: adapterFor('production-release') })
+  const input = requirement('production-release')
+  delete input.target.releaseTag
+  await assert.rejects(production.nodes[0].execute({ input }), { code: 'RELEASE_REQUIREMENT_INVALID' })
+  const uat = createReleaseTaskWorkflow({ kind: 'uat-delivery', adapter: adapterFor('uat-delivery') })
+  const withTag = requirement('uat-delivery')
+  withTag.target.releaseTag = 'v20260925-1'
+  await assert.rejects(uat.nodes[0].execute({ input: withTag }), { code: 'RELEASE_REQUIREMENT_INVALID' })
 })
 
 test('UAT 运行源码与冻结版本不一致时停留在回读节点，不声明交付', async t => {

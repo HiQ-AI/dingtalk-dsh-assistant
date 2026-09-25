@@ -20,6 +20,46 @@ const git = async (directory, args) => (await exec('git', ['-C', directory, ...a
 const githubName = remote => /^https:\/\/github\.com\/([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(remote)?.[1]
   ?? /^(?:git@github\.com:|ssh:\/\/git@github\.com\/)([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(remote)?.[1]
 
+/** 从同一工程 Run 的不可变节点工件提取交付身份；平台现状仍须独立回读。 */
+export async function readEngineeringDeliveryProof({ state, artifacts, taskId, requiredE2eCheckIds = [] }) {
+  if (state?.run?.taskId !== taskId || state.run.workflowId !== 'task-engineering'
+    || state.run.status !== 'succeeded' || typeof artifacts?.read !== 'function'
+    || !Array.isArray(requiredE2eCheckIds) || requiredE2eCheckIds.some(id => typeof id !== 'string' || !id))
+    fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
+  const refs = [], outputs = {}
+  for (const id of ['verify-candidate', 'prepare-commit', 'commit', 'prepare-push', 'push', 'prepare-pr', 'create-pr', 'finalize']) {
+    const matches = state.nodes.filter(node => node.nodeId === id && node.status === 'succeeded' && node.outputRef)
+    if (matches.length !== 1) fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
+    refs.push(matches[0].outputRef)
+    outputs[id] = await artifacts.read(matches[0].outputRef)
+  }
+  const verified = outputs['verify-candidate'], commit = outputs['prepare-commit']
+  const committed = outputs.commit, preparedPush = outputs['prepare-push'], pushed = outputs.push
+  const preparedPr = outputs['prepare-pr'], createdPr = outputs['create-pr'], final = outputs.finalize
+  const hex40 = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value)
+  const hex64 = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+  if (!hex64(verified?.candidate?.digest) || !hex64(verified?.verification?.digest)
+    || verified.verification.passed !== true || !Array.isArray(verified.verification.checks)
+    || verified.verification.checks.some(check => check.passed !== true || !check.id || !check.version)
+    || !hex40(commit?.commitId) || commit.candidateDigest !== verified.candidate.digest
+    || commit.verification?.digest !== verified.verification.digest || commit.tree !== verified.candidate.tree
+    || committed?.prepared?.commitId !== commit.commitId || committed.receipt?.status !== 'succeeded'
+    || preparedPush?.commitId !== commit.commitId || preparedPush.verificationDigest !== verified.verification.digest
+    || pushed?.prepared?.commitId !== commit.commitId || pushed.receipt?.status !== 'succeeded'
+    || preparedPr?.commitId !== commit.commitId || createdPr?.prepared?.commitId !== commit.commitId
+    || createdPr.receipt?.status !== 'succeeded' || final?.deliveryStatus !== 'pr_verified'
+    || final.commitId !== commit.commitId || final.number !== createdPr.receipt.number
+    || final.url !== createdPr.receipt.url) fail('ENGINEERING_DELIVERY_PROOF_MISMATCH')
+  const checks = new Set(verified.verification.checks.map(check => check.id))
+  return { taskId, runId: state.run.runId, commitSha: commit.commitId,
+    treeSha: commit.tree, candidateDigest: verified.candidate.digest, verificationDigest: verified.verification.digest,
+    checkIds: [...checks], localE2ePassed: requiredE2eCheckIds.length > 0 && requiredE2eCheckIds.every(id => checks.has(id)),
+    sourcePackageSupported: true,
+    pullRequest: { number: final.number, url: final.url, repository: final.repo,
+      head: final.head, base: final.base, state: final.state, commitSha: final.commitId },
+    evidenceRefs: refs }
+}
+
 /** 可信Host仓库白名单→每次任务的持久固定定义。启动配置不来自消息/模型。 */
 export function createEngineeringRegistry({ repositories = [], ownerActorId, modelConfig, author, ghCommand }) {
   text(ownerActorId, 'ENGINEERING_OWNER_REQUIRED')

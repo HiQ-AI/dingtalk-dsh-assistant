@@ -670,6 +670,7 @@ test('受信外部适配器齐备时四类流程可选并按固定需求创建�
     prepareRehearsal: async () => { throw new Error('REHEARSAL_NOT_EXPECTED') },
     readbackRehearsal: async () => { throw new Error('REHEARSAL_NOT_EXPECTED') },
     inspect: async () => { throw new Error('INSPECT_NOT_EXPECTED') }, prepareIssue: async () => { throw new Error('ISSUE_NOT_EXPECTED') },
+    prepareApproval: async () => { throw new Error('APPROVAL_NOT_EXPECTED') },
     prepareExecute: async () => { throw new Error('EXECUTE_NOT_EXPECTED') }, readback: async () => { throw new Error('READBACK_NOT_EXPECTED') } }
   const source = 'SELECT 1', hash = createHash('sha256').update(source).digest('hex')
   let selected = 0, prepared = 0, effects = 0

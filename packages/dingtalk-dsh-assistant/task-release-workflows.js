@@ -4,7 +4,7 @@ const text = { type: 'string' }
 const sha = { type: 'string' }
 const nonempty = value => typeof value === 'string' && value.trim() === value && value.length > 0
 const identitySchema = { type: 'object', properties: {
-  repository: text, environment: text, service: text, commitSha: sha, runbookId: text,
+  repository: text, environment: text, service: text, commitSha: sha, runbookId: text, releaseTag: text,
 }, required: ['repository', 'environment', 'service', 'commitSha', 'runbookId'], additionalProperties: false }
 const requirementSchema = { type: 'object', properties: {
   request: text, target: identitySchema, constraints: { type: 'array', items: text },
@@ -51,6 +51,7 @@ function assertRequirement(input, kind) {
   if (!nonempty(input.request) || !nonempty(target.repository) || !nonempty(target.service)
     || !nonempty(target.runbookId) || !/^[a-f0-9]{40}$/.test(target.commitSha)
     || target.environment !== catalog[kind].environment
+    || (kind === 'production-release' ? !/^v\d{8}-[1-9]\d*$/.test(target.releaseTag ?? '') : target.releaseTag !== undefined)
     || input.constraints.length > 32 || input.evidenceRefs.length > 64
     || input.evidenceRefs.some(ref => !nonempty(ref)) || new Set(input.evidenceRefs).size !== input.evidenceRefs.length
     || Buffer.byteLength(JSON.stringify(input), 'utf8') > 24000) throw executionError('RELEASE_REQUIREMENT_INVALID')
@@ -78,7 +79,8 @@ function assertPrepared(prepared, { kind, operation, runId, generation, requirem
     || prepared.expected.previousEvidenceDigest !== executionDigest(previous.evidenceRefs)
     || prepared.expected.previousPhase !== previous.phase
     || (kind === 'production-release' && prepared.expected.approvalScopeDigest !== executionDigest({ target: requirement.target, operation: 'tag' }))
-    || (kind === 'production-release' && ['approval-gate', 'tag'].includes(operation) && !nonempty(prepared.expected.tag))
+    || (kind === 'production-release' && ['approval-gate', 'tag'].includes(operation)
+      && prepared.expected.tag !== requirement.target.releaseTag)
     || (kind === 'production-release' && operation === 'tag'
       && prepared.expected.approvalReceiptDigest !== previous.facts.approvalReceiptDigest)) throw executionError('RELEASE_OPERATION_IDENTITY_INVALID')
   return prepared

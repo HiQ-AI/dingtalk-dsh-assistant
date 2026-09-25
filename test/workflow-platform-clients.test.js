@@ -123,7 +123,7 @@ test('Bytebase 数据库身份只取平台实测项目、实例与环境，不�
     database: 'instances/flbnpguaf/databases/hiq_background_db', environment: 'production' }
   const observed = { name: production.database, project: 'projects/flbn',
     effectiveEnvironment: 'environments/prod', instanceResource: { name: production.instance },
-    successfulSyncTime: '2026-09-25T00:00:00Z' }
+    successfulSyncTime: new Date().toISOString() }
   const create = row => createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev',
     bytebaseToken: 'fixture-token', fetchImpl: async () => json(row) }).bytebase
   const result = await create(observed).getDatabase({ project: 'projects/flbn', target: production })
@@ -140,6 +140,38 @@ test('Bytebase 数据库身份只取平台实测项目、实例与环境，不�
     project: 'projects/flbn', target: production }), /BYTEBASE_DATABASE_IDENTITY_UNCONFIRMED/)
   await assert.rejects(create(observed).getDatabase({ project: 'projects/flbn',
     target: { ...production, environment: 'uat' } }), /BYTEBASE_DATABASE_IDENTITY_UNCONFIRMED/)
+})
+
+test('Bytebase Host 会话只读回读 schema 并冻结结构基线，身份缺失拒绝', async () => {
+  const target = { instance: 'instances/flbnpguaf',
+    database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
+  const database = { name: target.database, project: 'projects/flbn',
+    effectiveEnvironment: 'environments/prod', instanceResource: { name: target.instance },
+    successfulSyncTime: '2026-09-25T00:00:00Z' }
+  const urls = []
+  const clients = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev',
+    bytebaseCredentials: { username: 'fixture-user', password: 'fixture-password' },
+    fetchImpl: async (url, options) => {
+      urls.push([url, options])
+      if (url.endsWith('/auth/login')) return { ok: true,
+        headers: { getSetCookie: () => ['access-token=fixture-cookie; Path=/; HttpOnly'] } }
+      if (url.endsWith('/schema')) return json({ schema: 'CREATE TABLE public.t (id bigint);' })
+      return json(database)
+    } }).bytebase
+  const baseline = await clients.readBaseline({ project: 'projects/flbn', target, scope: 'current' })
+  assert.equal(baseline.schemaDigest, createHash('sha256').update('CREATE TABLE public.t (id bigint);').digest('hex'))
+  assert.equal(baseline.schemaVersion, `schema:${baseline.schemaDigest}`)
+  assert.equal(urls.filter(([url]) => url.endsWith('/auth/login')).length, 1)
+  assert.equal(urls.filter(([url]) => url.endsWith('/schema')).length, 1)
+  assert.equal(urls.at(-1)[1].headers.Cookie, 'access-token=fixture-cookie')
+  await assert.rejects(clients.readBaseline({ project: 'projects/flbn', target, scope: 'other' }),
+    /BYTEBASE_BASELINE_SCOPE_INVALID/)
+  const stale = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev',
+    bytebaseToken: 'fixture-token', fetchImpl: async url => url.endsWith('/schema')
+      ? json({ schema: 'CREATE TABLE public.t (id bigint);' })
+      : json({ ...database, successfulSyncTime: '2026-09-10T07:23:59Z' }) }).bytebase
+  await assert.rejects(stale.readBaseline({ project: 'projects/flbn', target, scope: 'current' }),
+    /BYTEBASE_BASELINE_STALE/)
 })
 
 test('本机 Docker 凭据只读 OCI 原始清单并校验字节摘要', async () => {

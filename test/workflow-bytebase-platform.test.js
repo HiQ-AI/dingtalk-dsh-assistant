@@ -6,7 +6,7 @@ import { createBytebaseDataChangePlatform } from '../packages/dingtalk-dsh-assis
 
 const sha = value => createHash('sha256').update(value).digest('hex')
 const target = { instance: 'instances/prod', database: 'instances/prod/databases/app', environment: 'production' }
-const uatTarget = { instance: 'instances/uat', database: 'instances/uat/databases/app', environment: 'uat' }
+const uatTarget = { instance: 'postgresql/192.168.8.8:30770', database: 'app', environment: 'uat' }
 const config = { adapterId: 'bytebase', adapterVersion: '1',
   targets: [{ project: 'projects/app', target, uatTarget }] }
 const applySql = 'UPDATE public.t SET v = 2 WHERE id = 1 AND v = 1;'
@@ -56,10 +56,6 @@ function fixture(options = {}) {
     async createIssueBundle(args) { calls.push('create-issue'); issue.operationKey = args.operationKey;
       return { issue, sheet, plan, task } },
     async getIssueBundle() { calls.push('read-issue'); return { issue, sheet, plan, task } },
-    async getApproval() { calls.push('read-approval'); return { decision: 'approved', taskId: task.id,
-      source: 'bytebase', human: true, issueId: issue.id, target,
-      sheetSha256: sheet.sha256, packageDigest: pkg.validation.packageDigest,
-      requestId: 'approval-1', decidedBy: 'reviewer' } },
     async runTask() { calls.push('run-task'); return { taskId: task.id } },
     async getTaskExecution() { calls.push('read-task'); return { task: { ...task, status: 'DONE' },
       taskRun: { id: 'task-run-1', taskId: task.id, status: 'DONE' } } },
@@ -67,8 +63,16 @@ function fixture(options = {}) {
       packageDigest: pkg.validation.packageDigest, readbackId: 'readback-1', observedChange: 'v=2' } },
     async findIssueByOperationKey() { calls.push('find-issue'); return options.issueVisible ? { issue, sheet, plan, task } : null },
   }
+  const uatApi = Object.fromEntries(['getDatabase', 'readBaseline', 'checkPreconditions',
+    'rehearseInUat', 'getUatRehearsalByOperationKey'].map(name => [name, api[name]]))
+  const approvalApi = { async getApproval(args) { calls.push('read-approval'); return {
+    decision: 'approved', source: 'assistant', human: true, issueId: args.issueId,
+    taskId: args.taskId, target: args.target, sheetSha256: args.sheetSha256,
+    packageDigest: args.packageDigest, scopeDigest: args.scopeDigest,
+    requestId: 'approval-1', decidedBy: 'reviewer' } } }
   return { ...createBytebaseDataChangePlatform({ config: options.config ?? config,
-    api: { ...api, ...options.api } }), calls,
+    api: { ...api, ...options.api }, uatApi: { ...uatApi, ...options.uatApi },
+    approvalApi: { ...approvalApi, ...options.approvalApi } }), calls,
     issue, sheet, plan, task }
 }
 
@@ -98,7 +102,7 @@ test('SQL Review 与 UAT 演练均核验精确摘要和同结构基线', async (
   assert.equal(rehearsal.uat, true)
   assert.ok(f.calls.includes('rehearse-uat'))
   assert.ok(f.calls.includes('read-rehearsal'))
-  const bad = fixture({ api: { async rehearseInUat(args) { return { passed: true, uat: true,
+  const bad = fixture({ uatApi: { async rehearseInUat(args) { return { passed: true, uat: true,
     operationKey: args.operationKey,
     target: args.sourceTarget, sourceTarget: args.sourceTarget,
     productionBaselineEvidenceRef: args.productionBaseline.evidenceRef,
@@ -135,8 +139,15 @@ test('工单创建、审批、执行和生产回查均依赖独立平台读回',
   assert.equal(receipt.result.issueId, f.issue.id)
   const view = await f.workflowAdapter.readback({ stage: 'create-issue', request, receipt })
   assert.equal(view.task.status, 'NOT_STARTED')
-  const approval = await f.workflowAdapter.inspect({ stage: 'approval', ...view, prepared })
+  const approvalIntent = await f.workflowAdapter.prepareApproval({ view: { ...view, prepared },
+    runId: 'run-1', generation: 1, requirementDigest: sha('requirement') })
+  const approvalRequest = { ...request, stage: 'approval-gate', intent: approvalIntent,
+    taskId: f.task.id }
+  const approvalReceipt = await f.externalAdapter.execute(approvalRequest)
+  const approval = await f.workflowAdapter.inspect({ stage: 'approval', ...view, prepared,
+    request: approvalRequest, receipt: approvalReceipt })
   assert.equal(approval.decision, 'approved')
+  assert.equal(approval.source, 'assistant')
   const preflight = await f.workflowAdapter.inspect({ stage: 'pre-execution', ...view, prepared })
   assert.equal(preflight.task.id, f.task.id)
   const executionIntent = await f.workflowAdapter.prepareExecute({ identity: {
@@ -168,7 +179,7 @@ test('不明执行回执只独立对账，不重复提交工单或运行 Task', 
 })
 
 test('未列入配置的目标和审批漂移均阻止外部执行', async () => {
-  const f = fixture({ api: { async getApproval() { return { decision: 'pending' } } } })
+  const f = fixture({ approvalApi: { async getApproval() { return { decision: 'pending' } } } })
   await assert.rejects(f.workflowAdapter.validate({ ...packageBody,
     target: { ...target, database: 'instances/prod/databases/other' },
     packageDigest: pkg.validation.packageDigest }), { code: 'BYTEBASE_TARGET_NOT_ALLOWED' })
@@ -182,9 +193,9 @@ test('未列入配置的目标和审批漂移均阻止外部执行', async () =>
   const executionIntent = await f.workflowAdapter.prepareExecute({ identity: {
     target, taskId: f.task.id, approvalRequestId,
     packageDigest: pkg.validation.packageDigest, applySqlSha256: pkg.applySqlSha256,
-  }, issue: { id: f.issue.id }, approval: { decision: 'approved', source: 'bytebase', human: true,
+  }, issue: { id: f.issue.id }, approval: { decision: 'approved', source: 'assistant', human: true,
     issueId: f.issue.id, target, taskId: f.task.id, sheetSha256: pkg.applySqlSha256,
-    packageDigest: pkg.validation.packageDigest, requestId: approvalRequestId,
+    packageDigest: pkg.validation.packageDigest, scopeDigest: sha('scope'), requestId: approvalRequestId,
     decidedBy: 'reviewer' }, prepared })
   const executionRequest = { ...request, stage: 'execute-task', intent: executionIntent,
     taskId: f.task.id, approvalRequestId }

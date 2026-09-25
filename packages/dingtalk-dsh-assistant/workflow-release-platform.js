@@ -57,12 +57,11 @@ export function createReleasePlatform({ targets, clients }) {
       || !Number.isInteger(target.woodpecker?.repositoryId) || target.woodpecker.repositoryId < 1
       || target.woodpecker.baseUrl !== 'https://woodpecker.hiqdat.dev'
       || (target.kind !== 'production-release' && !nonempty(target.woodpecker.cronName))
-      || (target.kind === 'production-release' && (target.productionTriggerVerified !== true
-        || !/^v\d{8}-[1-9]\d*$/.test(target.releaseTag ?? '')))) fail('RELEASE_PLATFORM_TARGET_INVALID')
+      || (target.kind === 'production-release' && target.productionTriggerVerified !== true)) fail('RELEASE_PLATFORM_TARGET_INVALID')
     const key = `${target.kind}:${target.repository}:${target.environment}:${target.service}:${target.runbookId}`
     if (byKey.has(key)) fail('RELEASE_PLATFORM_TARGET_DUPLICATE')
     // 严格白名单。不允许把认证材料、任意 HTTP 地址或命令随任务持久化。
-    if (Object.keys(target).some(field => !['kind', 'repository', 'environment', 'service', 'runbookId', 'branch', 'woodpecker', 'kubernetes', 'registry', 'entryUrl', 'productionTriggerVerified', 'releaseTag'].includes(field))
+    if (Object.keys(target).some(field => !['kind', 'repository', 'environment', 'service', 'runbookId', 'branch', 'woodpecker', 'kubernetes', 'registry', 'entryUrl', 'productionTriggerVerified'].includes(field))
       || Object.keys(target.woodpecker ?? {}).some(field => !['baseUrl', 'repositoryId', 'cronName'].includes(field))
       || Object.keys(target.kubernetes).some(field => !['namespace', 'deployment'].includes(field))
       || Object.keys(target.registry).some(field => !['image'].includes(field))) fail('RELEASE_PLATFORM_TARGET_INVALID')
@@ -71,11 +70,13 @@ export function createReleasePlatform({ targets, clients }) {
   }
   const rulesDigest = executionDigest([...byKey.values()])
   function targetFor(requirement, kind) {
-    if (!safe(requirement?.target) || !sha(requirement.target.commitSha)) fail('RELEASE_PLATFORM_IDENTITY_INVALID')
+    if (!safe(requirement?.target) || !sha(requirement.target.commitSha)
+      || (kind === 'production-release' ? !/^v\d{8}-[1-9]\d*$/.test(requirement.target.releaseTag ?? '')
+        : requirement.target.releaseTag !== undefined)) fail('RELEASE_PLATFORM_IDENTITY_INVALID')
     const { repository, environment, service, runbookId } = requirement.target
     const target = byKey.get(`${kind}:${repository}:${environment}:${service}:${runbookId}`)
     if (!target) fail('RELEASE_PLATFORM_TARGET_NOT_ALLOWED')
-    return target
+    return kind === 'production-release' ? { ...target, releaseTag: requirement.target.releaseTag } : target
   }
   function requireMethod(client, method) {
     const fn = clients[client]?.[method]
@@ -119,7 +120,9 @@ export function createReleasePlatform({ targets, clients }) {
       repositoryId: target.woodpecker.repositoryId, pipelineNumber: succeeded[0].number })
     if (build.pipelineNumber !== succeeded[0].number || build.commitSha !== commitSha
       || !digest(build.imageDigest) || !nonempty(build.image)
-      || !build.image.startsWith(`${target.registry.image}:`)) fail('RELEASE_PLATFORM_BUILD_DIGEST_UNCONFIRMED')
+      || (target.kind === 'production-release'
+        ? build.image !== `${target.registry.image}:${target.releaseTag}`
+        : !build.image.startsWith(`${target.registry.image}:`))) fail('RELEASE_PLATFORM_BUILD_DIGEST_UNCONFIRMED')
     return { scan, build }
   }
   async function inspect({ kind, phase, requirement, effect }) {
@@ -218,7 +221,7 @@ export function createReleasePlatform({ targets, clients }) {
       resourceKey: `external:${requirement.target.environment}:${requirement.target.repository}:${requirement.target.service}`,
       targetDigest: observation.targetDigest, expected: { ...expected,
         ...(pr ? { pullRequestNumber: pr.number, mergeCommitSha: pr.mergeCommitSha } : {}),
-        ...(['approval-gate', 'tag'].includes(operation) ? { tag: target.releaseTag } : {}) }, operationKey }
+        ...(kind === 'production-release' ? { tag: target.releaseTag } : {}) }, operationKey }
   }
   function assertPrepared(prepared) {
     if (!safe(prepared) || !operations[prepared.workflowKind]?.includes(prepared.operation)
@@ -227,14 +230,18 @@ export function createReleasePlatform({ targets, clients }) {
     const target = (byKind.get(prepared.workflowKind) ?? []).find(candidate => executionDigest({
       repository: candidate.repository, environment: candidate.environment, service: candidate.service,
       commitSha: prepared.expected.commitSha, runbookId: candidate.runbookId,
+      ...(prepared.workflowKind === 'production-release' ? { releaseTag: prepared.expected.tag } : {}),
     }) === prepared.targetDigest)
-    const identity = target && { repository: target.repository, environment: target.environment, service: target.service,
-      commitSha: prepared.expected.commitSha, runbookId: target.runbookId }
-    if (!target || prepared.resourceKey !== `external:${target.environment}:${target.repository}:${target.service}`
+    const boundTarget = target && (prepared.workflowKind === 'production-release'
+      ? { ...target, releaseTag: prepared.expected.tag } : target)
+    const identity = boundTarget && { repository: boundTarget.repository, environment: boundTarget.environment, service: boundTarget.service,
+      commitSha: prepared.expected.commitSha, runbookId: boundTarget.runbookId,
+      ...(prepared.workflowKind === 'production-release' ? { releaseTag: prepared.expected.tag } : {}) }
+    if (!boundTarget || prepared.resourceKey !== `external:${boundTarget.environment}:${boundTarget.repository}:${boundTarget.service}`
       || prepared.targetDigest !== executionDigest(identity)
       || prepared.expected.previousPhase !== (prepared.workflowKind === 'production-release' && prepared.operation === 'build'
         ? 'tagged' : precedingPhase[prepared.operation])
-      || (['approval-gate', 'tag'].includes(prepared.operation) && prepared.expected.tag !== target.releaseTag)
+      || (prepared.workflowKind === 'production-release' && !/^v\d{8}-[1-9]\d*$/.test(prepared.expected.tag ?? ''))
       || (prepared.workflowKind === 'production-release'
         && prepared.expected.approvalScopeDigest !== executionDigest({ target: identity, operation: 'tag' }))
       || (prepared.operation === 'tag' && !/^[a-f0-9]{64}$/.test(prepared.expected.approvalReceiptDigest ?? ''))
@@ -244,7 +251,7 @@ export function createReleasePlatform({ targets, clients }) {
       || prepared.operationKey !== executionDigest({ kind: prepared.workflowKind, operation: prepared.operation,
         runId: prepared.runId, generation: prepared.generation, requirementDigest: prepared.requirementDigest,
         targetDigest: prepared.targetDigest, previousEvidenceDigest: prepared.expected.previousEvidenceDigest })) fail('RELEASE_PLATFORM_OPERATION_INVALID')
-    return target
+    return boundTarget
   }
   async function execute(prepared) {
     const target = assertPrepared(prepared)

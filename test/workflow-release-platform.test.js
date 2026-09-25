@@ -51,7 +51,7 @@ function fixture(overrides = {}) {
 
 test('目标固定白名单，生产触发未证实则拒绝注册', () => {
   assert.throws(() => createReleasePlatform({ targets: [{ ...target, kind: 'production-release',
-    environment: 'production', releaseTag: 'v20260925-1' }], clients: fixture().clients }),
+    environment: 'production' }], clients: fixture().clients }),
   { code: 'RELEASE_PLATFORM_TARGET_INVALID' })
   const { platform } = fixture()
   assert.deepEqual(platform.configuredKinds, ['uat-delivery'])
@@ -59,6 +59,9 @@ test('目标固定白名单，生产触发未证实则拒绝注册', () => {
     repository: 'Other/repo' } }, 'uat-delivery'), { code: 'RELEASE_PLATFORM_TARGET_NOT_ALLOWED' })
   assert.throws(() => createReleasePlatform({ targets: [target], clients: { ...fixture().clients,
     github: { readBranch: fixture().clients.github.readBranch } } }), { code: 'RELEASE_PLATFORM_CAPABILITY_MISSING' })
+  assert.throws(() => createReleasePlatform({ targets: [{ ...target, kind: 'production-release',
+    environment: 'production', productionTriggerVerified: true, releaseTag: 'v20260925-1' }], clients: fixture().clients }),
+  { code: 'RELEASE_PLATFORM_TARGET_INVALID' })
 })
 
 test('没有唯一且已合入的精确 PR 身份，UAT 集成拒绝准备', async () => {
@@ -151,13 +154,16 @@ test('运行态凭流水线 SHA→镜像摘要→Pod imageID 同链，Deployment
 
 test('生产机械预检不依赖业务布尔证明，审批回执只授权冻结的 Tag', async () => {
   const prodTarget = { ...target, kind: 'production-release', environment: 'production', branch: 'main',
-    releaseTag: 'v20260925-1', productionTriggerVerified: true }
-  const prodRequirement = { ...requirement, target: { ...requirement.target, environment: 'production' } }
+    productionTriggerVerified: true }
+  const prodRequirement = { ...requirement, target: { ...requirement.target, environment: 'production',
+    releaseTag: 'v20260925-1' } }
   const { clients } = fixture()
   delete clients.attestations
   clients.github.resolveApprovedPullRequest = async () => ({ number: 75, baseBranch: 'main',
     mergeCommitSha: commitSha, merged: true, unique: true, evidenceRef: 'github:pr:75' })
   clients.github.readTag = async () => ({ exists: false, evidenceRef: 'github:tag:absent' })
+  const tagWrites = []
+  clients.github.createTag = async args => { tagWrites.push(args); return { evidenceRef: 'github:tag:created' } }
   const platform = createReleasePlatform({ targets: [prodTarget], clients })
   const adapter = platform.releaseAdapters['production-release']
   const preflight = await adapter.inspect({ phase: 'preflight', requirement: prodRequirement })
@@ -169,7 +175,7 @@ test('生产机械预检不依赖业务布尔证明，审批回执只授权冻�
     requirement: prodRequirement, observation: merged, runId: 'run-prod', generation: 1,
     requirementDigest: executionDigest(prodRequirement), expected: { commitSha, previousPhase: 'merged',
       previousEvidenceDigest: executionDigest(merged.evidenceRefs), approvalScopeDigest } })
-  assert.equal(gate.expected.tag, prodTarget.releaseTag)
+  assert.equal(gate.expected.tag, prodRequirement.target.releaseTag)
   const receipt = await platform.operationAdapter.execute(gate)
   assert.equal(receipt.scopeDigest, approvalScopeDigest)
   const approved = await adapter.inspect({ phase: 'approved', requirement: prodRequirement,
@@ -179,7 +185,34 @@ test('生产机械预检不依赖业务布尔证明，审批回执只授权冻�
     requirementDigest: executionDigest(prodRequirement), expected: { commitSha, previousPhase: 'approved',
       previousEvidenceDigest: executionDigest(approved.evidenceRefs), approvalScopeDigest,
       approvalReceiptDigest: approved.facts.approvalReceiptDigest } })
-  assert.equal(tag.expected.tag, prodTarget.releaseTag)
+  assert.equal(tag.expected.tag, prodRequirement.target.releaseTag)
   await assert.rejects(platform.operationAdapter.execute({ ...tag, expected: { ...tag.expected,
     approvalScopeDigest: '0'.repeat(64) } }), { code: 'RELEASE_PLATFORM_OPERATION_INVALID' })
+  assert.equal((await platform.operationAdapter.execute(tag)).status, 'unknown')
+  assert.equal(tagWrites.length, 1)
+  assert.equal(tagWrites[0].tag, prodRequirement.target.releaseTag)
+  assert.equal(tagWrites[0].target.releaseTag, prodRequirement.target.releaseTag)
+  const nextRequirement = { ...prodRequirement, target: { ...prodRequirement.target, releaseTag: 'v20260926-2' } }
+  const nextPreflight = await adapter.inspect({ phase: 'preflight', requirement: nextRequirement })
+  assert.deepEqual(nextPreflight.facts, {})
+  const nextMerged = { ...merged, targetDigest: executionDigest(nextRequirement.target) }
+  const nextScope = executionDigest({ target: nextRequirement.target, operation: 'tag' })
+  const nextGate = await adapter.prepareOperation({ kind: 'production-release', operation: 'approval-gate',
+    requirement: nextRequirement, observation: nextMerged, runId: 'run-next', generation: 1,
+    requirementDigest: executionDigest(nextRequirement), expected: { commitSha, previousPhase: 'merged',
+      previousEvidenceDigest: executionDigest(nextMerged.evidenceRefs), approvalScopeDigest: nextScope } })
+  assert.equal(nextGate.expected.tag, 'v20260926-2')
+  assert.notEqual(nextGate.expected.approvalScopeDigest, gate.expected.approvalScopeDigest)
+  await assert.rejects(platform.operationAdapter.execute({ ...gate, expected: { ...gate.expected,
+    tag: 'v20260926-2' } }), { code: 'RELEASE_PLATFORM_OPERATION_INVALID' })
+  const wrongImage = fixture({ buildImage: `${target.registry.image}:v20260924-1` })
+  delete wrongImage.clients.attestations
+  wrongImage.clients.github.resolveApprovedPullRequest = clients.github.resolveApprovedPullRequest
+  wrongImage.clients.github.readTag = clients.github.readTag
+  const wrongPlatform = createReleasePlatform({ targets: [prodTarget], clients: wrongImage.clients })
+  wrongImage.state.pipeline.push({ number: 55, branch: 'main', ref: `refs/tags/${prodRequirement.target.releaseTag}`,
+    commitSha, status: 'success' })
+  await assert.rejects(wrongPlatform.releaseAdapters['production-release'].inspect({ phase: 'built',
+    requirement: prodRequirement, effect: { prepared: tag, receipt: { status: 'succeeded' } } }),
+  { code: 'RELEASE_PLATFORM_BUILD_DIGEST_UNCONFIRMED' })
 })

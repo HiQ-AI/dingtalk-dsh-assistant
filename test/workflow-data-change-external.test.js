@@ -24,7 +24,7 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'data-external', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
   const sends = [], reconciles = []
-  let approved = false, rehearsalObserved = false, createdPackageDigest = null
+  let rehearsalObserved = false, createdPackageDigest = null
   const sheet = { id: 'sheet-1', sha256: sha(sql), target }, plan = { id: 'plan-1', sheetId: 'sheet-1' }
   const task = { id: 'task-1', planId: 'plan-1', status: 'NOT_STARTED' }, issue = { id: 'issue-1', planId: 'plan-1', taskId: 'task-1' }
   const adapter = {
@@ -38,12 +38,15 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
       return { passed: true, uat: true, packageDigest: args.package.validation.packageDigest,
         receiptId: 'uat-rehearsal-1', observedChange: 'one row only' } },
     async prepareIssue(args) { createdPackageDigest = args.prepared.package.validation.packageDigest; return { sheetSha256: sha(sql), packageDigest: createdPackageDigest } },
+    async prepareApproval(args) { return { issueId: args.view.issue.id, taskId: args.view.task.id,
+      scopeDigest: sha('scope'), operationKey: sha('approval-operation') } },
     async prepareExecute(args) { return { taskId: args.identity.taskId, approvalRequestId: args.identity.approvalRequestId,
       packageDigest: args.identity.packageDigest } },
     async inspect(args) {
-      if (args.stage === 'approval') return approved ? { decision: 'approved', source: 'bytebase', human: true,
+      if (args.stage === 'approval') return { decision: 'approved', source: 'assistant', human: true,
         issueId: issue.id, target, taskId: task.id, sheetSha256: sheet.sha256,
-        packageDigest: createdPackageDigest, requestId: 'approval-execute', decidedBy: 'owner' } : { decision: 'pending' }
+        packageDigest: createdPackageDigest, scopeDigest: sha('scope'),
+        requestId: 'approval-gate', decidedBy: 'owner' }
       if (args.stage === 'pre-execution') return { sheet: driftPreflight ? { ...sheet, sha256: sha('altered') } : sheet, plan, task }
       throw Error('unexpected inspection')
     },
@@ -62,6 +65,9 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
         return { status: 'succeeded', result: { receiptId: 'uat-rehearsal-1' } }
       }
       if (prepared.stage === 'create-issue') return { status: 'succeeded', result: { issueId: issue.id } }
+      if (prepared.stage === 'approval-gate') return { status: 'succeeded',
+        result: { scopeDigest: prepared.intent.scopeDigest,
+          operationKey: prepared.intent.operationKey } }
       if (prepared.stage === 'execute-task' && unknownExecution) throw new Error('ack lost')
       if (prepared.stage === 'execute-task') return { status: 'succeeded', result: { taskId: task.id } }
       throw Error('unexpected stage')
@@ -79,18 +85,20 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
     externalAdapter, authorizeExternal: async ({ prepared }) => {
       if (prepared.stage === 'rehearse-uat') return { principalId: 'owner', authorizationRef: 'uat-rehearsal-specific' }
       if (prepared.stage === 'create-issue') return { principalId: 'owner', authorizationRef: 'issue-submission-specific' }
+      if (prepared.stage === 'approval-gate') return { principalId: 'owner',
+        approval: { requestId: 'approval-gate', approverIds: ['owner'] } }
       assert.equal(prepared.taskId, 'task-1')
-      assert.equal(prepared.approvalRequestId, 'approval-execute')
-      return { principalId: 'owner', approval: { requestId: prepared.approvalRequestId, approverIds: ['owner'] } }
+      assert.equal(prepared.approvalRequestId, 'approval-gate')
+      return { principalId: 'owner', authorizationRef: 'production-task-specific' }
     },
   })
   const sessions = { async run({ onSessionBound, onResult }) { await onSessionBound(); onResult(proposal) }, async cancel() {}, async close() {} }
   const workflow = createDataChangeTaskWorkflow({ provider: 'test', model: 'synthetic', adapter })
-  assert.equal(defineExecutionWorkflow(workflow).nodes.length, 13)
+  assert.equal(defineExecutionWorkflow(workflow).nodes.length, 15)
   const controller = createExecutionController({ store, artifacts, sessions, delivery, workflows: [workflow] })
   t.after(async () => { await controller.close(); await store.close() })
   return { store, artifacts, controller, delivery, workflow, sends, reconciles,
-    approve() { approved = true }, observeRehearsal() { rehearsalObserved = true } }
+    observeRehearsal() { rehearsalObserved = true } }
 }
 
 test('UAT 演练未知回执进入效果账等待，对账成功后同一 Run 继续且不重发', async t => {
@@ -109,7 +117,7 @@ test('UAT 演练未知回执进入效果账等待，对账成功后同一 Run �
   assert.equal((await f.delivery.reconcile(effect.effectId)).state, 'succeeded')
   await f.controller.recover({ commandId: 'rehearsal-observed', runId: 'run' })
   state = await f.controller.whenIdle('run')
-  assert.equal(state.nodes[9].waitReason?.reference, 'DATA_CHANGE_APPROVAL_PENDING')
+  assert.equal(state.nodes[10].waitReason?.reference, 'effect_approval_required')
   assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue'])
 })
 
@@ -118,22 +126,16 @@ for (const unknownExecution of [false, true]) test(`数据变更受控链：工�
   await f.controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: f.workflow.id, input: input() })
   let state = await f.controller.whenIdle('run')
   assert.equal(state.run.status, 'waiting')
-  assert.equal(state.nodes[9].waitReason?.reference, 'DATA_CHANGE_APPROVAL_PENDING', JSON.stringify(state.nodes.map(node => [node.nodeId, node.status, node.waitReason])))
+  assert.equal(state.nodes[10].waitReason?.reference, 'effect_approval_required', JSON.stringify(state.nodes.map(node => [node.nodeId, node.status, node.waitReason])))
   assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue'])
-  f.approve()
-  await f.controller.recover({ commandId: 'recover-approval', runId: 'run' })
-  state = await f.controller.whenIdle('run')
-  assert.equal(state.run.status, 'waiting')
-  assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue'])
-  assert.equal(state.nodes[11].waitReason?.reference, 'effect_approval_required', JSON.stringify(state.nodes.map(node => [node.nodeId, node.status, node.waitReason])))
   await f.store.command({ id: 'approve-execute', kind: 'approval.decide', args: {
-    requestId: 'approval-execute', actorId: 'owner', source: 'web', decision: 'approved',
+    requestId: 'approval-gate', actorId: 'owner', source: 'web', decision: 'approved',
   } })
   await f.controller.recover({ commandId: 'recover-effect', runId: 'run' })
   state = await f.controller.whenIdle('run')
   if (unknownExecution) {
-    assert.equal(state.nodes[11].waitReason?.reference, 'DELIVERY_RECONCILIATION_REQUIRED')
-    assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue', 'execute-task'])
+    assert.equal(state.nodes[13].waitReason?.reference, 'DELIVERY_RECONCILIATION_REQUIRED')
+    assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue', 'approval-gate', 'execute-task'])
     const effect = (await f.store.query({ kind: 'effect.list', runId: 'run' })).find(item => item.definition?.payload?.stage === 'execute-task')
     assert.ok(effect)
     assert.equal((await f.delivery.reconcile(effect.effectId)).state, 'succeeded')
@@ -141,7 +143,7 @@ for (const unknownExecution of [false, true]) test(`数据变更受控链：工�
     state = await f.controller.whenIdle('run')
   }
   assert.equal(state.run.status, 'succeeded', JSON.stringify(state.nodes.map(node => [node.nodeId, node.waitReason])))
-  assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue', 'execute-task'])
+  assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue', 'approval-gate', 'execute-task'])
   if (unknownExecution) assert.deepEqual(f.reconciles, ['execute-task'])
   const result = await f.artifacts.read(state.nodes.at(-1).outputRef)
   assert.equal(result.taskRunId, 'task-run-1')
@@ -164,9 +166,11 @@ test('审批后执行前 Sheet 漂移阻止生产发送', async t => {
   const f = await fixture(t, { driftPreflight: true })
   await f.controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: f.workflow.id, input: input() })
   await f.controller.whenIdle('run')
-  f.approve()
+  await f.store.command({ id: 'approve-gate', kind: 'approval.decide', args: {
+    requestId: 'approval-gate', actorId: 'owner', source: 'web', decision: 'approved',
+  } })
   await f.controller.recover({ commandId: 'recover-approval', runId: 'run' })
   const state = await f.controller.whenIdle('run')
-  assert.equal(state.nodes[10].waitReason?.reference, 'DATA_CHANGE_PREFLIGHT_CHANGED')
-  assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue'])
+  assert.equal(state.nodes[12].waitReason?.reference, 'DATA_CHANGE_PREFLIGHT_CHANGED')
+  assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue', 'approval-gate'])
 })

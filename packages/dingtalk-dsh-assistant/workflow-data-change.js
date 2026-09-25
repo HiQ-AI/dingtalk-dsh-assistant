@@ -85,8 +85,8 @@ const issueViewSchema = { type: 'object', properties: {
 }, required: ['prepared', 'issue', 'sheet', 'plan', 'task'], additionalProperties: false }
 const approvalSchema = { type: 'object', properties: {
   decision: text, source: text, human: { type: 'boolean' }, issueId: text, target: targetSchema,
-  taskId: text, sheetSha256: sha, packageDigest: sha, requestId: text, decidedBy: text,
-}, required: ['decision', 'source', 'human', 'issueId', 'target', 'taskId', 'sheetSha256', 'packageDigest', 'requestId', 'decidedBy'], additionalProperties: false }
+  taskId: text, sheetSha256: sha, packageDigest: sha, scopeDigest: sha, requestId: text, decidedBy: text,
+}, required: ['decision', 'source', 'human', 'issueId', 'target', 'taskId', 'sheetSha256', 'packageDigest', 'scopeDigest', 'requestId', 'decidedBy'], additionalProperties: false }
 const approvedViewSchema = { type: 'object', properties: { ...issueViewSchema.properties, approval: approvalSchema },
   required: [...issueViewSchema.required, 'approval'], additionalProperties: false }
 const externalRequestSchema = { type: 'object', properties: {
@@ -99,6 +99,8 @@ const preparedIssueSchema = { type: 'object', properties: { prepared: rehearsalS
 const preparedRehearsalSchema = { type: 'object', properties: { package: packageSchema, request: externalRequestSchema }, required: ['package', 'request'], additionalProperties: false }
 const rehearsalReceiptSchema = { type: 'object', properties: { ...preparedRehearsalSchema.properties, receipt: { type: 'object' } }, required: [...preparedRehearsalSchema.required, 'receipt'], additionalProperties: false }
 const issuedSchema = { type: 'object', properties: { ...preparedIssueSchema.properties, receipt: { type: 'object' } }, required: [...preparedIssueSchema.required, 'receipt'], additionalProperties: false }
+const preparedApprovalSchema = { type: 'object', properties: { view: issueViewSchema, request: externalRequestSchema }, required: ['view', 'request'], additionalProperties: false }
+const approvalReceiptSchema = { type: 'object', properties: { ...preparedApprovalSchema.properties, receipt: { type: 'object' } }, required: [...preparedApprovalSchema.required, 'receipt'], additionalProperties: false }
 const preparedExecuteSchema = { type: 'object', properties: { view: approvedViewSchema, request: externalRequestSchema }, required: ['view', 'request'], additionalProperties: false }
 const executedSchema = { type: 'object', properties: { ...preparedExecuteSchema.properties, receipt: { type: 'object' } }, required: [...preparedExecuteSchema.required, 'receipt'], additionalProperties: false }
 const finalSchema = { type: 'object', properties: {
@@ -115,7 +117,7 @@ const intent = value => {
 
 /** 受信适配器齐备才注册完整流程。所有发送经过 Controller 的持久效果账和独立授权。 */
 export function createDataChangeTaskWorkflow({ provider, model, reasoningEffort, adapter }) {
-  if (['prepareRehearsal', 'readbackRehearsal', 'inspect', 'prepareIssue', 'prepareExecute', 'readback'].some(name => typeof adapter?.[name] !== 'function')) throw executionError('DATA_CHANGE_EXTERNAL_ADAPTER_REQUIRED')
+  if (['prepareRehearsal', 'readbackRehearsal', 'inspect', 'prepareIssue', 'prepareApproval', 'prepareExecute', 'readback'].some(name => typeof adapter?.[name] !== 'function')) throw executionError('DATA_CHANGE_EXTERNAL_ADAPTER_REQUIRED')
   const base = createDataChangePreparationWorkflow({ provider, model, reasoningEffort, adapter })
   const identity = (prepared, values) => assertDataChangeExecutionIdentity({ prepared, ...values })
   return { id: 'task-data-change', version: '2', nodes: [...base.nodes,
@@ -186,17 +188,40 @@ export function createDataChangeTaskWorkflow({ provider, model, reasoningEffort,
         return { prepared: input.prepared, issue: view.issue, sheet: view.sheet, plan: view.plan, task: view.task }
       },
     },
-    { id: 'approval-gate', version: '2', executor: 'code', drainPolicy: 'external-process', allowedEffects: ['read'], rulesDigest: adapter.rulesDigest,
-      inputSchema: issueViewSchema, outputSchema: approvedViewSchema, mapInput: ({ previousOutput }) => previousOutput,
+    { id: 'prepare-approval', version: '1', executor: 'code', drainPolicy: 'external-process', allowedEffects: ['read'], rulesDigest: adapter.rulesDigest,
+      inputSchema: issueViewSchema, outputSchema: preparedApprovalSchema, mapInput: ({ previousOutput }) => previousOutput,
+      execute: async ({ input, runId, generation, requirementDigest, signal }) => {
+        signal?.throwIfAborted()
+        const pkg = input.prepared.package
+        const request = { action: 'external', workflowKind: 'data-change', stage: 'approval-gate',
+          runId, generation, requirementDigest, resourceKey: resourceKey(pkg.target),
+          packageDigest: pkg.validation.packageDigest, applySqlSha256: pkg.applySqlSha256,
+          target: pkg.target, taskId: input.task.id,
+          intent: intent(await adapter.prepareApproval({ view: input, runId, generation,
+            requirementDigest, signal })) }
+        signal?.throwIfAborted()
+        return { view: input, request }
+      },
+    },
+    { id: 'approval-gate', version: '3', executor: 'code', allowedEffects: ['external.operation'],
+      inputSchema: preparedApprovalSchema, outputSchema: approvalReceiptSchema,
+      mapInput: ({ previousOutput }) => previousOutput,
+      execute: async ({ input, perform }) => ({ ...input,
+        receipt: await perform({ action: 'external', prepared: input.request }) }),
+    },
+    { id: 'readback-approval', version: '1', executor: 'code', drainPolicy: 'external-process', allowedEffects: ['read'], rulesDigest: adapter.rulesDigest,
+      inputSchema: approvalReceiptSchema, outputSchema: approvedViewSchema,
+      mapInput: ({ previousOutput }) => previousOutput,
       execute: async ({ input, signal }) => {
         signal?.throwIfAborted()
-        const approval = await adapter.inspect({ stage: 'approval', issue: input.issue, sheet: input.sheet,
-          plan: input.plan, task: input.task, prepared: input.prepared, signal })
+        const view = input.view
+        const approval = await adapter.inspect({ stage: 'approval', issue: view.issue, sheet: view.sheet,
+          plan: view.plan, task: view.task, prepared: view.prepared,
+          request: input.request, receipt: input.receipt, signal })
         signal?.throwIfAborted()
-        if (approval?.decision === 'pending' || !approval) throw executionError('DATA_CHANGE_APPROVAL_PENDING')
-        identity(input.prepared, { issue: input.issue, sheet: input.sheet,
-          plan: input.plan, task: input.task, approval })
-        return { ...input, approval }
+        identity(view.prepared, { issue: view.issue, sheet: view.sheet,
+          plan: view.plan, task: view.task, approval })
+        return { ...view, approval }
       },
     },
     { id: 'prepare-execute', version: '1', executor: 'code', drainPolicy: 'external-process', allowedEffects: ['read'], rulesDigest: adapter.rulesDigest,
@@ -260,11 +285,12 @@ export function assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan
     || sheet?.target?.database !== pkg.target.database || sheet?.target?.environment !== pkg.target.environment
     || !nonempty(sheet?.id) || plan?.sheetId !== sheet.id || !nonempty(plan?.id)
     || task?.planId !== plan.id || !nonempty(task?.id) || task?.status !== 'NOT_STARTED'
-    || approval?.decision !== 'approved' || approval?.source !== 'bytebase' || approval?.human !== true
+    || approval?.decision !== 'approved' || approval?.source !== 'assistant' || approval?.human !== true
     || approval?.issueId !== issue?.id || !sameTarget(approval.target, pkg.target)
     || approval?.taskId !== task.id
     || approval?.sheetSha256 !== pkg.applySqlSha256 || approval?.packageDigest !== pkg.validation.packageDigest
-    || !nonempty(approval?.requestId) || !nonempty(approval?.decidedBy)) throw executionError('DATA_CHANGE_EXECUTION_IDENTITY_UNCONFIRMED')
+    || !isSha(approval?.scopeDigest) || !nonempty(approval?.requestId)
+    || !nonempty(approval?.decidedBy)) throw executionError('DATA_CHANGE_EXECUTION_IDENTITY_UNCONFIRMED')
   return { target: pkg.target, packageDigest: pkg.validation.packageDigest, applySqlSha256: pkg.applySqlSha256,
     sheetId: sheet.id, planId: plan.id, taskId: task.id, approvalRequestId: approval.requestId, approvedBy: approval.decidedBy }
 }

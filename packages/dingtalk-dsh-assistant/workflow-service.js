@@ -7,7 +7,7 @@ import { isPassiveTaskProgress } from './message-ledger.js'
 import { createMessageModel } from './message-model.js'
 import { taskWorkflowCatalog } from './message-context.js'
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText } from './workflow-notifications.js'
-import { createEngineeringRegistry } from './workflow-engineering.js'
+import { createEngineeringRegistry, readEngineeringDeliveryProof } from './workflow-engineering.js'
 import { createDataChangeTaskWorkflow } from './workflow-data-change.js'
 import { createReleaseTaskWorkflow, releaseWorkflowKinds } from './task-release-workflows.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
@@ -142,6 +142,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   })
   let closed = false, resolveMaterials
   const { store, controller, artifacts } = execution
+  external?.bindStore?.(store)
+  external?.bindExecution?.({ store, controller, artifacts })
   generalStore.current = store
   if (suppliedExecution && typeof controller.registerWorkflow === 'function') {
     for (const workflow of createReadOnlyTaskWorkflows(modelConfig())) controller.registerWorkflow(workflow)
@@ -238,6 +240,12 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   }
   async function decideApproval(input, identity) {
     if (identity?.channel === 'web' && (!config.webActorId || identity.actorId !== config.webActorId)) throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')
+    const item = await approvals.get(input.requestId)
+    const prepared = item.effect.definition?.payload
+    if (prepared?.workflowKind === 'production-release' && prepared.operation === 'approval-gate'
+      || prepared?.workflowKind === 'data-change' && prepared.stage === 'approval-gate') {
+      if (identity?.channel !== 'web') throw executionError('WORKFLOW_APPROVAL_WEB_REQUIRED')
+    }
     return approvals.decide(input, identity)
   }
   async function listApprovalRequests() {
@@ -245,15 +253,23 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const rows = await Promise.all(approvals.map(async approval => {
       const effect = await store.query({ kind: 'effect.get', effectId: approval.effectId })
       const prepared = effect.definition?.payload
-      if (prepared?.workflowKind !== 'production-release' || prepared.operation !== 'approval-gate') return null
+      const productionRelease = prepared?.workflowKind === 'production-release' && prepared.operation === 'approval-gate'
+      const dataChange = prepared?.workflowKind === 'data-change' && prepared.stage === 'approval-gate'
+      if (!productionRelease && !dataChange) return null
       const state = await controller.state(effect.runId)
       const origin = await store.query({ kind: 'message.task', taskId: state.run.taskId })
       if (!origin || !groups.has(origin.run.conversationId)) return null
       return { requestId: approval.requestId, taskId: state.run.taskId, groupId: origin.run.conversationId,
-        objective: origin.command.args.arguments?.objective ?? '生产发布',
-        requestedAction: `审批生产发布 ${prepared.resourceKey}，提交 ${prepared.expected.commitSha}，标签 ${prepared.expected.tag}`,
-        waitingReason: '等待受信真人批准后创建生产 Tag', risk: '生产发布会更新运行服务',
-        evidence: [prepared.resourceKey, prepared.expected.commitSha, prepared.expected.tag], attemptedActions: [],
+        objective: origin.command.args.arguments?.objective ?? (productionRelease ? '生产发布' : '数据变更'),
+        requestedAction: productionRelease
+          ? `审批生产发布 ${prepared.resourceKey}，提交 ${prepared.expected.commitSha}，标签 ${prepared.expected.tag}`
+          : `审批数据变更工单 ${prepared.intent.issueId}，任务 ${prepared.intent.taskId}，SQL 摘要 ${prepared.intent.sheetSha256}`,
+        waitingReason: productionRelease ? '等待真人批准后创建生产 Tag' : '等待真人批准 Bytebase 工单对应的生产数据变更',
+        risk: productionRelease ? '生产发布会更新运行服务' : '生产数据库将执行工单中的 SQL',
+        evidence: productionRelease
+          ? [prepared.resourceKey, prepared.expected.commitSha, prepared.expected.tag]
+          : [prepared.resourceKey, prepared.intent.issueId, prepared.intent.taskId,
+            prepared.intent.sheetSha256, prepared.intent.packageDigest], attemptedActions: [],
         createdAt: approval.createdAt, status: approval.decision === 'pending' ? 'waiting-reply' : 'answered',
         decision: approval.decision, decidedAt: approval.updatedAt, decisionSource: approval.decisionSource,
         taskState: state.run.status }
@@ -372,6 +388,19 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`, taskId,
         planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef,
         input: prepared.input, workflowId: prepared.workflowId })
+    } else if (current.workflowId === 'task-uat-delivery') {
+      const preceding = plan.stages[currentIndex - 1]
+      if (preceding?.workflowId !== 'task-engineering' || !preceding.runId || !selectedExternal.byId.has(current.workflowId))
+        throw executionError('UAT_ENGINEERING_PREDECESSOR_REQUIRED')
+      const engineeringState = await controller.state(preceding.runId)
+      await readEngineeringDeliveryProof({ state: engineeringState, artifacts, taskId })
+      const action = { taskId, arguments: { ...args.arguments, workflowId: current.workflowId },
+        constraints: args.constraints ?? [] }
+      const marker = `engineering-task:${taskId}:${preceding.runId}`
+      const input = await external.prepareRequirement({ workflowId: current.workflowId, action,
+        materials: [{ resourceRef: marker }] })
+      await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`,
+        taskId, planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef, input })
     } else if (visibleDefinitions.has(current.workflowId)) {
       await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`, taskId,
         planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef, input })
