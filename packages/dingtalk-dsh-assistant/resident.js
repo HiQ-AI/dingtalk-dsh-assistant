@@ -138,6 +138,9 @@ export async function apply(ctx, config = {}) {
   }) : null
   const workflow = workflowConfig ? await openWorkflowService({ ctx, config: { ...workflowConfig, profile: dwsConfig.profile }, legacy: runtime,
     external: workflowConfig.platforms ? trustedPlatforms : ctx.get?.('dingtalkTaskWorkflowExternal'),
+    generalCapabilities: ctx.get?.('dingtalkTaskGeneralCapabilities') ?? [],
+    generalCompletionCheck: ctx.get?.('dingtalkTaskGeneralCompletionCheck'),
+    generalCompletionIdentity: ctx.get?.('dingtalkTaskGeneralCompletionIdentity'),
     readMessage: (groupId, messageId) => dwsAdapter.readMessage(groupId, messageId),
     readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
     notifications: {

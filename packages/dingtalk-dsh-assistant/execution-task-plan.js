@@ -31,12 +31,15 @@ const stageDto = row => ({
 })
 const taskDto = row => row && ({
   taskId: row.task_id, requirementRevision: row.requirement_revision, planRevision: row.plan_revision,
-  status: row.status, createdAt: row.created_at, updatedAt: row.updated_at,
+  controlRevision: row.control_revision, controlState: row.control_state,
+  status: row.control_state === 'active' ? row.status : row.control_state,
+  planStatus: row.status, createdAt: row.created_at, updatedAt: row.updated_at,
 })
 const stageRows = (db, taskId, revision) => db.prepare(
   'SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? ORDER BY position'
 ).all(taskId, revision)
-const taskRow = (db, taskId) => db.prepare('SELECT * FROM business_tasks WHERE task_id=?').get(taskId)
+const taskRow = (db, taskId) => db.prepare(`SELECT t.*,c.control_revision,c.state AS control_state
+  FROM business_tasks t JOIN task_controls c ON c.task_id=t.task_id WHERE t.task_id=?`).get(taskId)
 const activeStage = rows => rows.find(stage => !['succeeded', 'invalidated'].includes(stage.status))
 
 export function installTaskPlanSchema(db) {
@@ -61,18 +64,25 @@ export function installTaskPlanSchema(db) {
       UNIQUE(task_id,plan_revision,run_id)
     ) STRICT;
     CREATE INDEX task_plan_stages_current ON task_plan_stages(task_id,plan_revision,status);
+    CREATE TABLE task_controls(
+      task_id TEXT PRIMARY KEY REFERENCES business_tasks(task_id),control_revision INTEGER NOT NULL CHECK(control_revision>0),
+      state TEXT NOT NULL CHECK(state IN ('active','pausing','paused','cancelling','cancelled'))
+    ) STRICT;
   `)
 }
 
 export function validateTaskPlanSchema(db) {
   for (const sql of [
     'SELECT task_id,requirement_revision,plan_revision,status,created_at,updated_at FROM business_tasks LIMIT 0',
+    'SELECT task_id,control_revision,state FROM task_controls LIMIT 0',
     'SELECT task_id,plan_revision,stage_id,position,workflow_id,workflow_digest,unavailable_reason,requirement_ref,predecessor_output_ref,gate,status,attempt,run_id,output_ref,evidence_refs,confirmed_output_ref FROM task_plan_stages LIMIT 0',
   ]) db.prepare(sql).all()
   const invalid = db.prepare(`SELECT t.task_id FROM business_tasks t
     LEFT JOIN task_plan_stages s ON s.task_id=t.task_id AND s.plan_revision=t.plan_revision
     GROUP BY t.task_id HAVING COUNT(s.stage_id)=0`).all()
   if (invalid.length) fail('TASK_PLAN_INVARIANT_FAILED')
+  if (db.prepare(`SELECT t.task_id FROM business_tasks t LEFT JOIN task_controls c ON c.task_id=t.task_id
+    WHERE c.task_id IS NULL LIMIT 1`).get()) fail('TASK_PLAN_INVARIANT_FAILED')
 }
 
 export function queryTaskPlan(db, query) {
@@ -81,7 +91,10 @@ export function queryTaskPlan(db, query) {
     const limit = query.limit ?? 100, before = query.beforeSequenceId ?? Number.MAX_SAFE_INTEGER
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200
       || !Number.isSafeInteger(before) || before < 1) fail('TASK_PLAN_QUERY_INVALID')
-    return db.prepare("SELECT rowid AS sequence_id,* FROM business_tasks WHERE rowid<? AND status<>'succeeded' ORDER BY rowid DESC LIMIT ?")
+    return db.prepare(`SELECT t.rowid AS sequence_id,t.*,c.control_revision,c.state AS control_state
+      FROM business_tasks t JOIN task_controls c ON c.task_id=t.task_id
+      WHERE t.rowid<? AND t.status<>'succeeded' AND c.state NOT IN ('paused','cancelled')
+      ORDER BY t.rowid DESC LIMIT ?`)
       .all(before, limit).map(row => ({ ...taskDto(row), sequenceId: row.sequence_id }))
   }
   if (query?.kind !== 'task.plan') return undefined
@@ -132,10 +145,51 @@ function insertStages(db, taskId, revision, stages, previous = [], affectedFrom 
 
 export function reduceTaskPlanCommand(db, command, { now }) {
   const a = command.args
-  if (command.kind === 'task.plan.extend') {
-    exact(a, ['taskId', 'expectedPlanRevision', 'requirementRevision', 'stages'])
+  if (['task.control.pause', 'task.control.cancel', 'task.control.resume', 'task.control.reopen', 'task.control.settle'].includes(command.kind)) {
+    exact(a, command.kind === 'task.control.reopen'
+      ? ['taskId', 'expectedControlRevision', 'requirementRevision', 'authorizationRef']
+      : ['taskId', 'expectedControlRevision'])
     const taskId = name(a.taskId), task = taskRow(db, taskId)
-    if (!task || task.plan_revision !== natural(a.expectedPlanRevision) || task.status === 'succeeded'
+    if (!task || task.control_revision !== natural(a.expectedControlRevision)) fail('TASK_CONTROL_STALE')
+    const rows = stageRows(db, taskId, task.plan_revision), running = rows.find(stage => stage.status === 'running')
+    let state
+    if (command.kind === 'task.control.pause') {
+      if (task.control_state !== 'active' || task.status === 'succeeded') fail('TASK_CONTROL_CONFLICT')
+      state = running ? 'pausing' : 'paused'
+    } else if (command.kind === 'task.control.cancel') {
+      if (task.control_state === 'cancelled' || task.control_state === 'cancelling'
+        || task.status === 'succeeded') fail('TASK_CONTROL_CONFLICT')
+      state = running ? 'cancelling' : 'cancelled'
+    } else if (command.kind === 'task.control.resume') {
+      if (task.control_state !== 'paused') fail('TASK_CONTROL_CONFLICT')
+      state = 'active'
+    } else if (command.kind === 'task.control.reopen') {
+      if (task.control_state !== 'cancelled' || running || a.requirementRevision !== task.requirement_revision + 1) fail('TASK_CONTROL_CONFLICT')
+      reference(a.authorizationRef)
+      db.prepare("UPDATE business_tasks SET requirement_revision=?,status='blocked',updated_at=? WHERE task_id=?")
+        .run(a.requirementRevision, now, taskId)
+      state = 'active'
+    } else {
+      if (!['pausing', 'cancelling'].includes(task.control_state)) fail('TASK_CONTROL_CONFLICT')
+      if (running) {
+        const run = db.prepare('SELECT status,recovery_reason FROM execution_runs WHERE run_id=? AND task_id=?').get(running.run_id, taskId)
+        if (!run || task.control_state !== 'pausing' || run.status !== 'waiting'
+          || run.recovery_reason !== 'user_pause') fail('TASK_CONTROL_NOT_DRAINED')
+      }
+      state = task.control_state === 'pausing' ? 'paused' : 'cancelled'
+    }
+    const controlRevision = task.control_revision + 1
+    db.prepare('UPDATE task_controls SET state=?,control_revision=? WHERE task_id=?')
+      .run(state, controlRevision, taskId)
+    const taskStatus = state === 'active' ? (command.kind === 'task.control.reopen' ? 'blocked' : task.status) : state
+    return { status: 'applied', taskId, controlRevision, controlState: state,
+      taskStatus, runningRunId: running?.run_id ?? null }
+  }
+  if (command.kind === 'task.plan.extend') {
+    exact(a, ['taskId', 'expectedPlanRevision', 'expectedControlRevision', 'requirementRevision', 'stages'])
+    const taskId = name(a.taskId), task = taskRow(db, taskId)
+    if (!task || task.control_state !== 'active' || task.control_revision !== natural(a.expectedControlRevision)
+      || task.plan_revision !== natural(a.expectedPlanRevision) || task.status === 'succeeded'
       || a.requirementRevision !== task.requirement_revision + 1) fail('TASK_PLAN_STALE')
     const old = stageRows(db, taskId, task.plan_revision)
     if (!old.length || old.length + a.stages.length > 32) fail('TASK_PLAN_STAGES_INVALID')
@@ -166,6 +220,7 @@ export function reduceTaskPlanCommand(db, command, { now }) {
     assertRunEffectsDrained(db, runId)
     db.prepare("INSERT INTO business_tasks(task_id,requirement_revision,plan_revision,status,created_at,updated_at) VALUES(?,1,1,'succeeded',?,?)")
       .run(taskId, now, now)
+    db.prepare("INSERT INTO task_controls(task_id,control_revision,state) VALUES(?,1,'active')").run(taskId)
     db.prepare(`INSERT INTO task_plan_stages(task_id,plan_revision,stage_id,position,workflow_id,workflow_digest,unavailable_reason,
       requirement_ref,predecessor_output_ref,gate,status,attempt,run_id,output_ref,evidence_refs,confirmed_output_ref)
       VALUES(?,1,?,0,?,?,NULL,?,NULL,'none','succeeded',1,?,?,?,NULL)`)
@@ -180,13 +235,16 @@ export function reduceTaskPlanCommand(db, command, { now }) {
     if (db.prepare('SELECT run_id FROM execution_runs WHERE task_id=? LIMIT 1').get(taskId)) fail('TASK_PLAN_LEGACY_RUN_EXISTS')
     db.prepare("INSERT INTO business_tasks(task_id,requirement_revision,plan_revision,status,created_at,updated_at) VALUES(?,?,1,'active',?,?)")
       .run(taskId, a.requirementRevision, now, now)
+    db.prepare("INSERT INTO task_controls(task_id,control_revision,state) VALUES(?,1,'active')").run(taskId)
     insertStages(db, taskId, 1, a.stages)
     return { status: 'applied', taskId, planRevision: 1 }
   }
   if (command.kind === 'task.plan.confirm') {
-    exact(a, ['taskId', 'planRevision', 'stageId', 'outputRef'])
+    exact(a, ['taskId', 'planRevision', 'stageId', 'outputRef', 'expectedControlRevision'])
     const taskId = name(a.taskId), task = taskRow(db, taskId)
     if (!task || task.plan_revision !== natural(a.planRevision)) fail('TASK_PLAN_STALE')
+    if (task.control_revision !== natural(a.expectedControlRevision) || task.control_state !== 'active'
+      || task.status !== 'waiting_confirmation') fail('TASK_CONTROL_STALE')
     const row = stageRows(db, taskId, task.plan_revision).find(stage => stage.stage_id === name(a.stageId))
     if (!row || row.status !== 'waiting_confirmation' || row.gate !== 'confirmation') fail('TASK_CONFIRMATION_NOT_WAITING')
     reference(a.outputRef)
@@ -198,9 +256,10 @@ export function reduceTaskPlanCommand(db, command, { now }) {
     return { status: 'applied', taskId, stageId: row.stage_id }
   }
   if (command.kind === 'task.stage.input.bind') {
-    exact(a, ['taskId', 'planRevision', 'stageId', 'predecessorOutputRef', 'requirementRef', 'workflowId', 'workflowDigest'])
+    exact(a, ['taskId', 'planRevision', 'expectedControlRevision', 'stageId', 'predecessorOutputRef', 'requirementRef', 'workflowId', 'workflowDigest'])
     const taskId = name(a.taskId), task = taskRow(db, taskId)
     if (!task || task.plan_revision !== natural(a.planRevision)) fail('TASK_PLAN_STALE')
+    if (task.control_state !== 'active' || task.control_revision !== natural(a.expectedControlRevision)) fail('TASK_CONTROL_STALE')
     const rows = stageRows(db, taskId, task.plan_revision)
     const row = rows.find(stage => stage.stage_id === name(a.stageId))
     if (!row || row.position === 0 || row.status !== 'ready' || row.requirement_ref !== null) fail('TASK_STAGE_INPUT_BIND_CONFLICT')
@@ -239,6 +298,10 @@ export function reduceTaskPlanCommand(db, command, { now }) {
       db.prepare('UPDATE business_tasks SET status=?,updated_at=? WHERE task_id=?')
         .run(next.unavailable_reason ? 'blocked' : next.gate === 'confirmation' ? 'waiting_confirmation' : 'active', now, taskId)
     } else db.prepare("UPDATE business_tasks SET status='succeeded',updated_at=? WHERE task_id=?").run(now, taskId)
+    if (task.control_state === 'pausing' || task.control_state === 'cancelling') {
+      db.prepare('UPDATE task_controls SET state=?,control_revision=control_revision+1 WHERE task_id=?')
+        .run(task.control_state === 'pausing' ? 'paused' : 'cancelled', taskId)
+    }
     return { status: 'applied', taskId, stageId: row.stage_id, outputRef: last.output_ref, nextStageId: next?.stage_id ?? null }
   }
   if (command.kind === 'task.stage.block') {
@@ -252,12 +315,18 @@ export function reduceTaskPlanCommand(db, command, { now }) {
     db.prepare("UPDATE task_plan_stages SET status='blocked' WHERE task_id=? AND plan_revision=? AND stage_id=?")
       .run(taskId, task.plan_revision, row.stage_id)
     db.prepare("UPDATE business_tasks SET status='blocked',updated_at=? WHERE task_id=?").run(now, taskId)
+    if (task.control_state === 'pausing' || task.control_state === 'cancelling') {
+      db.prepare('UPDATE task_controls SET state=?,control_revision=control_revision+1 WHERE task_id=?')
+        .run(task.control_state === 'pausing' ? 'paused' : 'cancelled', taskId)
+    }
     return { status: 'applied', taskId, stageId: row.stage_id, runStatus: run.status }
   }
   if (command.kind === 'task.plan.revise') {
-    exact(a, ['taskId', 'expectedPlanRevision', 'requirementRevision', 'affectedFrom', 'stages'])
+    exact(a, ['taskId', 'expectedPlanRevision', 'expectedControlRevision', 'requirementRevision', 'affectedFrom', 'stages'])
     const taskId = name(a.taskId), task = taskRow(db, taskId)
-    if (!task || task.plan_revision !== natural(a.expectedPlanRevision) || a.requirementRevision < task.requirement_revision) fail('TASK_PLAN_STALE')
+    if (!task || task.control_state !== 'active' || task.control_revision !== natural(a.expectedControlRevision)
+      || task.plan_revision !== natural(a.expectedPlanRevision)
+      || a.requirementRevision < task.requirement_revision) fail('TASK_PLAN_STALE')
     natural(a.requirementRevision); validateStages(a.stages)
     const old = stageRows(db, taskId, task.plan_revision), affectedFrom = a.affectedFrom
     if (!Number.isSafeInteger(affectedFrom) || affectedFrom < 0 || affectedFrom >= a.stages.length || affectedFrom > old.length) fail('TASK_PLAN_IMPACT_INVALID')
@@ -277,10 +346,11 @@ export function reduceTaskPlanCommand(db, command, { now }) {
 
 // 与 run.create 在同一事务内调用；失败则 Run 和阶段状态均回滚。
 export function bindRunToTaskStage(db, binding, run) {
-  exact(binding, ['planRevision', 'stageId', 'attempt'])
+  exact(binding, ['planRevision', 'stageId', 'attempt', 'expectedControlRevision'])
   const task = taskRow(db, run.taskId), rows = task && stageRows(db, run.taskId, task.plan_revision)
   const row = rows?.find(stage => stage.stage_id === name(binding.stageId))
-  if (!task || task.plan_revision !== natural(binding.planRevision) || task.status !== 'active'
+  if (!task || task.control_state !== 'active' || task.control_revision !== natural(binding.expectedControlRevision)
+    || task.plan_revision !== natural(binding.planRevision) || task.status !== 'active'
     || !row || row.status !== 'ready' || row.attempt !== natural(binding.attempt)
     || row.requirement_ref === null || row.unavailable_reason !== null
     || row.workflow_id !== run.workflowId || row.workflow_digest !== run.workflowDigest

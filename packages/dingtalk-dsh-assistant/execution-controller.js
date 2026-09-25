@@ -280,7 +280,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       }
       return command(commandId, 'task.plan.create', { taskId, requirementRevision, stages: stored })
     },
-    async reviseTaskPlan({ commandId, taskId, expectedPlanRevision, requirementRevision, affectedFrom, stages }) {
+    async reviseTaskPlan({ commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, affectedFrom, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId)
       const previous = await store.query({ kind: 'task.plan', taskId })
@@ -304,9 +304,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           gate: retained?.gate ?? stage.gate ?? 'none' })
       }
       return command(commandId, 'task.plan.revise',
-        { taskId, expectedPlanRevision, requirementRevision, affectedFrom, stages: stored })
+        { taskId, expectedPlanRevision, expectedControlRevision: expectedControlRevision ?? previous.task.controlRevision,
+          requirementRevision, affectedFrom, stages: stored })
     },
-    async extendTaskPlan({ commandId, taskId, expectedPlanRevision, requirementRevision, stages }) {
+    async extendTaskPlan({ commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId)
       if (!Array.isArray(stages) || !stages.length) throw executionError('TASK_PLAN_STAGES_INVALID')
@@ -318,7 +319,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           workflowDigest: stage.unavailableReason || dynamic ? null : definition.digest,
           unavailableReason: stage.unavailableReason ?? null, requirementRef: null, gate: stage.gate ?? 'none' }
       })
-      return command(commandId, 'task.plan.extend', { taskId, expectedPlanRevision, requirementRevision, stages: stored })
+      const plan = await store.query({ kind: 'task.plan', taskId })
+      if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
+      return command(commandId, 'task.plan.extend', { taskId, expectedPlanRevision,
+        expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision, requirementRevision, stages: stored })
     },
     async taskPlan(taskId) { return store.query({ kind: 'task.plan', taskId: requireId(taskId) }) },
     async pendingTaskPlans({ limit = 100, beforeSequenceId } = {}) {
@@ -333,17 +337,23 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         taskId: requireId(taskId), runId: requireId(runId), stageId: requireId(stageId),
       })
     },
-    async confirmTaskStage({ commandId, taskId, stageId, planRevision, outputRef }) {
+    async confirmTaskStage({ commandId, taskId, stageId, planRevision, expectedControlRevision, outputRef }) {
+      const plan = await store.query({ kind: 'task.plan', taskId: requireId(taskId) })
+      if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
       return command(commandId, 'task.plan.confirm',
-        { taskId: requireId(taskId), planRevision, stageId: requireId(stageId), outputRef })
+        { taskId, planRevision, expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision,
+          stageId: requireId(stageId), outputRef })
     },
-    async bindTaskStageInput({ commandId, taskId, planRevision, stageId, predecessorOutputRef, input, workflowId }) {
+    async bindTaskStageInput({ commandId, taskId, planRevision, expectedControlRevision, stageId, predecessorOutputRef, input, workflowId }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
+      const plan = await store.query({ kind: 'task.plan', taskId: requireId(taskId) })
+      if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
       const requirement = await artifacts.put(input)
       const definition = workflowId ? definitions.get(workflowId) : null
       if (workflowId && !definition) throw executionError('WORKFLOW_NOT_FOUND')
       return command(commandId, 'task.stage.input.bind', {
-        taskId: requireId(taskId), planRevision, stageId: requireId(stageId),
+        taskId, planRevision, expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision,
+        stageId: requireId(stageId),
         predecessorOutputRef, requirementRef: requirement.ref,
         ...(definition ? { workflowId: definition.id, workflowDigest: definition.digest } : {}),
       })
@@ -353,6 +363,31 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const plan = await store.query({ kind: 'task.plan', taskId })
       if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
       const stage = plan.stages.find(item => !['succeeded', 'invalidated'].includes(item.status))
+      if (plan.task.controlState !== 'active') {
+        if (stage?.status === 'running' && stage.runId) {
+          const state = await query(stage.runId)
+          if (state.run?.status === 'succeeded') {
+            await command(`stage-complete:${taskId}:${plan.task.planRevision}:${stage.stageId}:${stage.attempt}`,
+              'task.stage.complete', { taskId, planRevision: plan.task.planRevision, stageId: stage.stageId, runId: stage.runId })
+          } else if (['failed', 'cancelled'].includes(state.run?.status)) {
+            await command(`stage-block:${taskId}:${plan.task.planRevision}:${stage.stageId}:${stage.attempt}`,
+              'task.stage.block', { taskId, planRevision: plan.task.planRevision, stageId: stage.stageId, runId: stage.runId })
+          } else if (plan.task.controlState === 'pausing' && state.run?.status === 'waiting' && state.run.recoveryReason === 'user_pause') {
+            await command(`task-control-settle:${taskId}:${plan.task.controlRevision}`, 'task.control.settle',
+              { taskId, expectedControlRevision: plan.task.controlRevision })
+          } else if (plan.task.controlState === 'cancelling') {
+            await this.stop({ commandId: `task-stop:${taskId}:${plan.task.controlRevision}`, runId: stage.runId,
+              reason: 'business-task-cancelled' })
+          } else if (plan.task.controlState === 'pausing') {
+            await this.pause({ commandId: `task-pause:${taskId}:${plan.task.controlRevision}`, runId: stage.runId,
+              reason: 'business-task-paused' })
+          }
+        } else if (['pausing', 'cancelling'].includes(plan.task.controlState)) {
+          await command(`task-control-settle:${taskId}:${plan.task.controlRevision}`, 'task.control.settle',
+            { taskId, expectedControlRevision: plan.task.controlRevision })
+        }
+        return store.query({ kind: 'task.plan', taskId })
+      }
       if (!stage || stage.status === 'waiting_confirmation' || stage.status === 'blocked') return plan
       if (stage.status === 'running') {
         const state = await query(stage.runId)
@@ -382,9 +417,29 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       await this.createRun({
         commandId: `stage-start:${taskId}:${plan.task.planRevision}:${stage.stageId}:${stage.attempt}`,
         taskId, runId, workflowId: stage.workflowId, input,
-        stageBinding: { planRevision: plan.task.planRevision, stageId: stage.stageId, attempt: stage.attempt },
+        stageBinding: { planRevision: plan.task.planRevision, stageId: stage.stageId,
+          attempt: stage.attempt, expectedControlRevision: plan.task.controlRevision },
       })
       return store.query({ kind: 'task.plan', taskId })
+    },
+    async controlTask({ commandId, taskId, intent, expectedControlRevision, requirementRevision, authorizationRef }) {
+      if (closed) throw executionError('CONTROLLER_CLOSED')
+      requireId(taskId)
+      if (!['pause', 'cancel', 'resume', 'reopen'].includes(intent)) throw executionError('TASK_CONTROL_INVALID')
+      const receipt = await command(commandId, `task.control.${intent}`, { taskId, expectedControlRevision,
+        ...(intent === 'reopen' ? { requirementRevision, authorizationRef } : {}) })
+      if (['pause', 'cancel'].includes(intent)) await this.advanceTaskPlan(taskId)
+      if (intent === 'resume') {
+        const plan = await store.query({ kind: 'task.plan', taskId })
+        const stage = plan.stages.find(item => item.status === 'running')
+        if (stage?.runId) {
+          const state = await query(stage.runId)
+          if (state.run?.pauseRequested) await this.resume({ commandId: `task-run-resume:${taskId}:${plan.task.controlRevision}`,
+            runId: stage.runId })
+        }
+        await this.advanceTaskPlan(taskId)
+      }
+      return { receipt, plan: await store.query({ kind: 'task.plan', taskId }) }
     },
     async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')

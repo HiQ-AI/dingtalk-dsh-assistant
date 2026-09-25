@@ -21,11 +21,25 @@ const githubName = remote => /^https:\/\/github\.com\/([a-zA-Z0-9_.-]+\/[a-zA-Z0
   ?? /^(?:git@github\.com:|ssh:\/\/git@github\.com\/)([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(remote)?.[1]
 
 /** 从同一工程 Run 的不可变节点工件提取交付身份；平台现状仍须独立回读。 */
-export async function readEngineeringDeliveryProof({ state, artifacts, taskId, requiredE2eCheckIds = [] }) {
-  if (state?.run?.taskId !== taskId || state.run.workflowId !== 'task-engineering'
-    || state.run.status !== 'succeeded' || typeof artifacts?.read !== 'function'
+export async function readEngineeringDeliveryProof({ state, artifacts, store, taskId, requiredE2eCheckIds = [] }) {
+  if (state?.run?.taskId !== taskId || state.run.status !== 'succeeded'
+    || typeof artifacts?.read !== 'function' || typeof store?.query !== 'function'
     || !Array.isArray(requiredE2eCheckIds) || requiredE2eCheckIds.some(id => typeof id !== 'string' || !id))
     fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
+  const records = await store.query({ kind: 'workflow.list' })
+  if (!Array.isArray(records)) fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
+  const registered = records.filter(record => record.workflowId === state.run.workflowId
+    && record.digest === state.run.workflowDigest)
+  const record = registered[0], saved = record?.config
+  if (registered.length !== 1 || saved?.kind !== 'engineering' || saved.taskId !== taskId
+    || saved.runId !== state.run.runId || typeof saved.sourceCommandId !== 'string'
+    || !saved.sourceCommandId || (saved.reissueRequestId !== undefined
+      && (typeof saved.reissueRequestId !== 'string' || !saved.reissueRequestId)))
+    fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
+  const expectedId = saved?.reissueRequestId
+    ? `task-engineering-reissue-${executionDigest([state.run.runId, saved.reissueRequestId]).slice(0, 40)}`
+    : `task-engineering-${executionDigest(saved.sourceCommandId).slice(0, 40)}`
+  if (state.run.workflowId !== expectedId) fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
   const refs = [], outputs = {}
   for (const id of ['verify-candidate', 'prepare-commit', 'commit', 'prepare-push', 'push', 'prepare-pr', 'create-pr', 'finalize']) {
     const matches = state.nodes.filter(node => node.nodeId === id && node.status === 'succeeded' && node.outputRef)

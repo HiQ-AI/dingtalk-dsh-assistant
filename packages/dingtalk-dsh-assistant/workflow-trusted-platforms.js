@@ -87,7 +87,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     if (!execution) throw executionError('UAT_EXECUTION_BINDING_INVALID')
     const [, taskId, runId] = marker.split(':')
     const state = await execution.controller.state(runId)
-    const proof = await readEngineeringDeliveryProof({ state, artifacts: execution.artifacts, taskId })
+    const proof = await readEngineeringDeliveryProof({ state, artifacts: execution.artifacts, store: execution.store, taskId })
     if (proof.pullRequest.repository !== target.repository) throw executionError('UAT_ENGINEERING_SOURCE_UNCONFIRMED')
     const github = clients.release.github
     if (typeof github.readCommit !== 'function' || typeof github.readPullRequest !== 'function'
@@ -158,7 +158,8 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     || releaseTargets.size !== (config.release?.targets?.length ?? 0)
     || databaseTargets.size !== (config.bytebase?.targets?.length ?? 0)) throw executionError('EXTERNAL_TARGET_ID_INVALID')
   function bindExecution(value) {
-    if (execution || typeof value?.controller?.state !== 'function' || typeof value?.artifacts?.read !== 'function')
+    if (execution || typeof value?.controller?.state !== 'function' || typeof value?.artifacts?.read !== 'function'
+      || typeof value?.store?.query !== 'function')
       throw executionError('UAT_EXECUTION_BINDING_INVALID')
     execution = value
   }
@@ -174,7 +175,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
         if (!execution) throw executionError('UAT_EXECUTION_BINDING_INVALID')
         const [, taskId, runId] = markers[0].resourceRef.split(':')
         const state = await execution.controller.state(runId)
-        const proof = await readEngineeringDeliveryProof({ state, artifacts: execution.artifacts, taskId })
+        const proof = await readEngineeringDeliveryProof({ state, artifacts: execution.artifacts, store: execution.store, taskId })
         const matches = [...releaseTargets.values()].filter(item => item.kind === kind
           && item.repository === proof.pullRequest.repository)
         if (matches.length !== 1) throw executionError('EXTERNAL_TARGET_NOT_UNIQUE')

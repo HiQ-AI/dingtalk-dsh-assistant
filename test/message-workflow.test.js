@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { createMessageWorkflow } from '../packages/dingtalk-dsh-assistant/message-workflow.js'
 import { prepareMessageContext, splitContext, intentContext, candidateCards } from '../packages/dingtalk-dsh-assistant/message-context.js'
@@ -646,6 +647,37 @@ test('I投影去除Host目标副本，完整保留身份材料权限和约束',(
   assert.deepEqual(projected,{...base,binding:{...target,disposition:'existing',evidence:['引用']},facts})
   assert.ok(Buffer.byteLength(JSON.stringify(projected))<Buffer.byteLength(JSON.stringify({...base,binding,facts})))
   assert.equal(binding.target,target)
+})
+test('编辑失效的旧话题约束不再进入意图上下文',()=>{
+  const facts={topic:{facts:[{kind:'constraint',text:'只用中文',status:'invalidated',sourceRefs:[{sourceKey:'m',sourceVersion:1}]},{kind:'constraint',text:'改用英文',status:'active',sourceRefs:[{sourceKey:'m',sourceVersion:2}]}]}}
+  const input=intentContext({text:'改用英文',constraints:[]},{kind:'binding',disposition:'existing',target:{taskId:'t'}},facts)
+  assert.deepEqual(input.facts.topic.facts.map(fact=>fact.text),['改用英文'])
+  assert.equal(facts.topic.facts.length,2)
+})
+test('有权且明确目标的暂停意图越过无关归类等待，普通意图仍等待',async t=>{
+  const effects=[]
+  const binding={kind:'binding',disposition:'existing',candidateId:'task',evidence:['明确任务']}
+  const {store,workflow}=await fixture(t,{
+    context:{bindTopic:async({run,unit})=>({topicId:'task-topic',conversationId:run.conversationId,sourceRunId:run.runId,unitId:unit.unitId,title:'任务',facts:[]}),
+      facts:async()=>({}),candidates:async()=>[{candidateId:'task',taskId:'task',topicId:'task-topic',engine:'workflow',title:'任务',goal:'原任务',state:'active'}],
+      authorizePriorityControl:async({run})=>run.sourceKey==='control'?{taskId:'task',action:'pause'}:null},
+    judge:async({stage,input})=>stage==='S'?{kind:'split',units:[{spans:[{start:0,end:input.sourceLength}],goalText:input.source.text,constraints:[],contextNeeds:[]}],sharedConstraints:[],coverage:[{start:0,end:input.sourceLength,role:'unit'}]}
+      :stage==='R'?binding:{kind:'topic_intents',decisions:input.units.map(item=>({unitId:item.unitId,intent:{kind:'intent',actions:[{intent:'pause',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}))},
+    handlers:{pause:async()=>{effects.push('pause');return{ok:true}}},
+  })
+  const command=async(kind,args)=>store.command({id:randomUUID(),kind:`message.${kind}`,args})
+  await command('receive',{runId:'origin',sourceKey:'origin',sourceVersion:1,conversationId:'g',actorId:'a',body:'原任务'})
+  await command('split',{runId:'origin',units:[{unitId:'origin-unit'}]})
+  await command('topic.bind',{runId:'origin',unitId:'origin-unit',expectedRevision:0,binding:{...binding,taskId:'task'},topic:{topicId:'task-topic',conversationId:'g',sourceRunId:'origin',unitId:'origin-unit',title:'任务',facts:[]}})
+  await command('topic.intent.accept',{runId:'origin',topicId:'task-topic',conversationId:'g',inputRevision:1,decisions:[{unitId:'origin-unit',expectedRevision:0,commands:[{commandId:'create-task',kind:'create',args:{taskId:'task'}}]}]})
+  const claimed=await command('command.claim',{commandId:'create-task'})
+  await command('command.complete',{commandId:'create-task',leaseEpoch:claimed.result.command.leaseEpoch,result:{taskId:'task'}})
+  await workflow.receive({sourceKey:'unrelated',sourceVersion:1,conversationId:'g',actorId:'a',body:'其他消息'}, {process:false})
+  const control=await workflow.receive({sourceKey:'control',sourceVersion:1,conversationId:'g',actorId:'a',body:'暂停任务'}, {process:false})
+  await workflow.process(control.runId)
+  for(let i=0;i<30&&!effects.length;i++)await new Promise(resolve=>setTimeout(resolve,10))
+  assert.deepEqual(effects,['pause'],JSON.stringify(await workflow.state(control.runId)))
+  assert.equal((await store.query({kind:'message.routing.pending',conversationId:'g'})).length,1)
 })
 
 test('C02 共享材料连接器暂停时所有相关事项均不接纳，独立版B可先执行',{timeout:5000},async t=>{

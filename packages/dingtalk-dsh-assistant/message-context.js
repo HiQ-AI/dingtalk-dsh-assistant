@@ -148,5 +148,6 @@ export function candidateCards(candidates) {
 export function intentContext(base, binding, facts, responsibility = '', candidates = [], resolvedEvidence = []) {
   const { target, ...identity } = binding
   const summaries = candidates.slice(0,4).map(item => pick(item,['candidateId','engine','taskId','title','state','relevantTime']))
-  return { ...base, binding: { ...target, ...identity }, facts, ...(resolvedEvidence.length ? { resolvedEvidence } : {}), ...(binding.disposition === 'conversation' ? { candidates: summaries } : {}), ...(responsibility ? { groupResponsibility: responsibility } : {}) }
+  const effectiveFacts = facts?.topic?.facts ? { ...facts, topic: { ...facts.topic, facts: facts.topic.facts.filter(fact => fact.status !== 'invalidated') } } : facts
+  return { ...base, binding: { ...target, ...identity }, facts: effectiveFacts, ...(resolvedEvidence.length ? { resolvedEvidence } : {}), ...(binding.disposition === 'conversation' ? { candidates: summaries } : {}), ...(responsibility ? { groupResponsibility: responsibility } : {}) }
 }

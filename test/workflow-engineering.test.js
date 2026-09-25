@@ -29,14 +29,28 @@ test('工程交付证明复用同一 Run 工件并要求显式业务 E2E 检查'
   }
   const nodes = Object.keys(output).map(nodeId => ({ nodeId, status: 'succeeded', outputRef: `artifact:${nodeId}` }))
   const artifacts = { read: async ref => output[ref.slice('artifact:'.length)] }
-  const state = { run: { runId: 'r', taskId: 't', workflowId: 'task-engineering', status: 'succeeded' }, nodes }
-  const proof = await readEngineeringDeliveryProof({ state, artifacts, taskId: 't', requiredE2eCheckIds: ['business-e2e'] })
+  const workflowId = `task-engineering-${executionDigest('source').slice(0, 40)}`
+  const state = { run: { runId: 'r', taskId: 't', workflowId, workflowDigest: 'f'.repeat(64), status: 'succeeded' }, nodes }
+  const record = { workflowId, digest: state.run.workflowDigest,
+    config: { kind: 'engineering', taskId: 't', runId: 'r', sourceCommandId: 'source' } }
+  const store = { query: async () => [record] }
+  const proof = await readEngineeringDeliveryProof({ state, artifacts, store, taskId: 't', requiredE2eCheckIds: ['business-e2e'] })
   assert.equal(proof.commitSha, commitId)
   assert.equal(proof.localE2ePassed, true)
   assert.equal(proof.evidenceRefs.length, 8)
-  assert.equal((await readEngineeringDeliveryProof({ state, artifacts, taskId: 't' })).localE2ePassed, false)
+  assert.equal((await readEngineeringDeliveryProof({ state, artifacts, store, taskId: 't' })).localE2ePassed, false)
+  const reissueId = `task-engineering-reissue-${executionDigest(['r', 'reissue-request']).slice(0, 40)}`
+  const reissued = { ...state, run: { ...state.run, workflowId: reissueId } }
+  const reissueStore = { query: async () => [{ ...record, workflowId: reissueId,
+    config: { ...record.config, reissueRequestId: 'reissue-request' } }] }
+  assert.equal((await readEngineeringDeliveryProof({ state: reissued, artifacts, store: reissueStore, taskId: 't' })).commitSha, commitId)
+  await assert.rejects(readEngineeringDeliveryProof({ state: { ...state, run: { ...state.run,
+    workflowId: 'task-engineering' } }, artifacts, store, taskId: 't' }),
+  { code: 'ENGINEERING_DELIVERY_PROOF_UNAVAILABLE' })
+  await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, store: { query: async () => [{ ...record,
+    digest: 'e'.repeat(64) }] }, taskId: 't' }), { code: 'ENGINEERING_DELIVERY_PROOF_UNAVAILABLE' })
   output['prepare-push'].commitId = 'e'.repeat(40)
-  await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, taskId: 't' }), { code: 'ENGINEERING_DELIVERY_PROOF_MISMATCH' })
+  await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, store, taskId: 't' }), { code: 'ENGINEERING_DELIVERY_PROOF_MISMATCH' })
 })
 
 test('已终结工程 Run 的旧定义不参与启动恢复', async () => {

@@ -322,14 +322,14 @@ Web 操作验收需使用配置明确映射的 `workflow.webActorId`。新任务
 
 ## 10. 话题批量意图与业务 Task 计划升级
 
-本版本要求执行控制库 schema v2。旧 schema v1 不会在服务启动时自动升级。停掉持有控制库的 Runtime、入站桥接和计划任务后，确认对应进程及 `.owner.sqlite` 写者已经退出，保留控制库与工件目录原始备份，再用绝对路径执行零写自检：
+原业务 Task 计划引入 schema v2；当前 Task 负责会话要求 schema v3。服务启动不会自动升级旧库。停掉持有控制库的 Runtime、入站桥接和计划任务后，确认对应进程及 `.owner.sqlite` 写者已经退出，保留控制库与工件目录原始备份，再用绝对路径执行零写自检：
 
 ```powershell
 $controlDb = '<本实例执行数据目录的 control.sqlite 绝对路径>'
 node scripts/migrate-execution-task-plan.js --check $controlDb
 ```
 
-核对输出 `fromVersion`、`toVersion:2`、`executionRuns` 与目标路径。自检不写数据库；确认路径和备份后才执行：
+仅来源库为 v1 时执行上述 v1→v2 步骤；已经是 v2 的实例从下面 v2→v3 自检开始。核对输出 `fromVersion`、`toVersion:2`、`executionRuns` 与目标路径。自检不写数据库；确认路径和备份后才执行：
 
 ```powershell
 node scripts/migrate-execution-task-plan.js --execute $controlDb
@@ -337,6 +337,17 @@ node scripts/migrate-execution-task-plan.js --check $controlDb
 ```
 
 执行时脚本先生成带 `pre-task-plan-v2` 后缀的 SQLite 备份，再在原控制库事务中建业务 Task/阶段表；最终回读 `schemaReadback:2`。保留脚本输出的 `backupPath`，不要直接删除活动 WAL 文件。旧单 Run 历史不会被推断为多阶段或已确认 UAT；需要续办时仅对已经成功且证据齐全的旧 workflow-v2 Run 显式建立计划。旧 JSON Task 不自动迁入新账。
+
+确认控制库实际为 v2 后，继续对 v3 执行零写检查。`--check` 只读并输出 `writes:0` 与 Task、阶段、Run、效果、审批和消息账的行数及 SHA256 摘要；旧库在该步骤不迁移既有 Task 为负责人会话，已有计划保留原运行历史，新建 Task 使用新机制。执行模式先用 SQLite `VACUUM INTO` 保存唯一的 `pre-task-owner-v3` 备份，逐表核对备份摘要，再在事务中增加任务级控制、负责会话事件/验收/报告账，回读 `schemaReadback:3` 并再次核对原表摘要。保留输出中的备份路径：
+
+```powershell
+node scripts/migrate-task-owner-store.mjs --check $controlDb
+node scripts/migrate-task-owner-store.mjs --execute $controlDb
+```
+
+若检查输出有未确认外部效果或待审批记录，先逐项核对；迁移不会把它们视为已成功。v3 启动后先回读 `PRAGMA user_version`、`execution_meta.schema_version`、Task 数量与备份，定向验证同一 Task 的会话恢复、补充意图、暂停取消、后续阶段与最终报告，再开放群入站。只读 `--check` 针对 v2，成功迁移后再调用会因来源版本不符而拒绝，不能用其代替 v3 回读。
+
+默认日常流程只读已授权话题来源及本任务前序产物，并可按当前原文生成可回读的 Markdown 摘录。Resident 可由受信插件提供 `dingtalkTaskGeneralCapabilities` 数组；每项需有固定 `id/identity/description` 及 `authorize/execute/verify`，其中 `verify` 必须回读结果并返回 `passed:true`、实际 `outputDigest` 和非空 `sourceRefs`。对非默认纯原文整理目标，还须同时提供 `dingtalkTaskGeneralCompletionCheck` 与 `dingtalkTaskGeneralCompletionIdentity`，验收器逐项核对 acceptanceCriteria 与证据后返回 `status:'satisfied'`、`resultVerified:true` 和相同顺序的 `criteria`。未配齐时流程显示证据不足，不把读取聊天误当作数据库调查或外部处理。
 
 升级后先禁用群入站、启动新 Runtime 并回读控制库版本及实例身份；用隔离消息验证 R 归类屏障、同话题 IB 集合、新消息重判、Task 阶段结算、确认后单次启动和缺适配器阻塞，再开放入站。恢复扫描会结算已成功的阶段 Run 并启动满足条件的后继；`waiting_confirmation` 不自动越过。已执行效果仍应按原 Run/效果账独立核对，控制库迁移成功不代表模型判断、UAT 提测或渠道送达成功。
 

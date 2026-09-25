@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createTrustedWorkflowPlatforms } from '../packages/dingtalk-dsh-assistant/workflow-trusted-platforms.js'
+import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 
 const developmentSha = 'a'.repeat(40)
 const mergeSha = 'b'.repeat(40)
@@ -38,7 +39,12 @@ function fixture({ tree = treeSha, e2e = true } = {}) {
     registry: { readManifest: async () => ({}) },
   } }
   const platform = createTrustedWorkflowPlatforms({ config: { release: { targets: [target] } }, clients, ownerActorId: 'owner' })
-  platform.bindExecution({ controller: { state: async () => ({ run: { runId: 'engineering-run', taskId: 'task-1', workflowId: 'task-engineering', status: 'succeeded' }, nodes }) },
+  const workflowId = `task-engineering-${executionDigest('engineering-source').slice(0, 40)}`
+  const workflowDigest = 'f'.repeat(64)
+  platform.bindExecution({ controller: { state: async () => ({ run: { runId: 'engineering-run', taskId: 'task-1', workflowId,
+    workflowDigest, status: 'succeeded' }, nodes }) },
+    store: { query: async () => [{ workflowId, digest: workflowDigest,
+      config: { kind: 'engineering', taskId: 'task-1', runId: 'engineering-run', sourceCommandId: 'engineering-source' } }] },
     artifacts: { read: async ref => outputs[ref.slice('artifact:'.length)] } })
   const requirement = { request: '部署 UAT', constraints: [], target: { repository: target.repository, environment: target.environment,
     service: target.service, runbookId: target.runbookId, commitSha: mergeSha },

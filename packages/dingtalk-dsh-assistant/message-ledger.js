@@ -72,6 +72,20 @@ function topicRunsStatus(db,topicId,intentStatus){
   }
 }
 const current = (db,r,revision) => { if(db.prepare('SELECT current_version FROM message_sources WHERE source_key=?').get(r.sourceKey).current_version!==(r.validSourceVersion??r.sourceVersion) || r.status==='superseded' || (revision!==undefined && r.revision!==revision)) fail('MESSAGE_STALE') }
+const controlKinds=new Set(['pause','cancel','resume','revise'])
+function authorizedPriorityControl(db,control,unit,source){
+ if(!control||!controlKinds.has(control.action)||!control.taskId||!unit||!source
+   ||(unit.routingBinding?.taskId??unit.routingBinding?.target?.taskId)!==control.taskId)return false
+ const origin=queryMessages(db,{kind:'message.task',taskId:control.taskId})
+ return !!origin&&origin.run.conversationId===source.conversationId&&origin.run.actorId===source.actorId
+}
+function priorityTopicControls(db,topic,controls){
+ if(!Array.isArray(controls))return null
+ const entries=queryMessageTopics(db,{kind:'message.topic.units',topicId:topic.topicId})
+ if(!entries.length||entries.length!==controls.length||new Set(controls.map(control=>control.unitId)).size!==controls.length)return null
+ const byUnit=new Map(controls.map(control=>[control.unitId,control]))
+ return entries.every(({run:source,unit})=>authorizedPriorityControl(db,byUnit.get(unit.id),unit,source))?byUnit:null
+}
 function settle(db,r) {
   const units=rows(db,r.runId,'unit').filter(u=>u.status!=='superseded')
   const requests=rows(db,r.runId,'request').filter(q=>q.status==='pending')
@@ -211,7 +225,20 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       put(db,n.runId,'notification-replacement',replacement)
       return {result:{replacement}}
     }
-    if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);if(source.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}n.status='sending';n.leaseEpoch++;n.startedAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:true}}
+    if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);if(source.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}
+      if(n.payload?.phase?.startsWith('owner:')){
+        const reportId=n.payload.phase.slice('owner:'.length)
+        const fact=db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.application_status,o.event_watermark,o.processed_watermark
+          FROM task_reports r JOIN task_owner_turns t ON t.turn_id=r.turn_id
+          JOIN task_owners o ON o.task_id=r.task_id WHERE r.report_id=?`).get(reportId)
+        const latest=fact?db.prepare("SELECT turn_id FROM task_owner_turns WHERE task_id=? AND status='accepted' ORDER BY rowid DESC LIMIT 1").get(fact.task_id):null
+        if(!fact||fact.application_status!=='applied'||fact.report_type==='complete'
+          &&(fact.event_watermark!==fact.processed_watermark||latest?.turn_id!==fact.turn_id)){
+          n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n)
+          return {result:{notification:n},dispatchEligible:false}
+        }
+      }
+      n.status='sending';n.leaseEpoch++;n.startedAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:true}}
     if(a.leaseEpoch!==n.leaseEpoch)fail('MESSAGE_NOTIFICATION_STALE')
     if(kind==='message.notification.sent') {if(n.status!=='sending')fail('MESSAGE_NOTIFICATION_STALE');n.status='acknowledged';n.ack=a.ack;n.ackAt=now}
     else if(kind==='message.notification.readback') {if(!['acknowledged','unknown'].includes(n.status)||!a.evidence?.messageId)fail('MESSAGE_NOTIFICATION_EVIDENCE_REQUIRED');n.status='delivered';n.evidence=a.evidence;n.deliveredAt=now}
@@ -347,12 +374,13 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       current(db,r,c.revision)
       if(c.status!=='pending') fail('MESSAGE_COMMAND_NOT_READY')
       if(c.topicId){
-        if(queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId}).length)fail('MESSAGE_INPUT_PENDING')
+        if(queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId}).length
+          && !authorizedPriorityControl(db,c.priorityControl,get(db,'unit',c.unitId),r))fail('MESSAGE_INPUT_PENDING')
         const topic=queryMessageTopics(db,{kind:'message.topic',topicId:c.topicId})
         if(!topic||topic.inputRevision!==c.topicInputRevision){
-          c.status='superseded';c.reason='topic_input_changed';put(db,r.runId,'command',c)
+          c.priorStatus=c.status;c.status='superseded';c.reason='topic_input_changed';put(db,r.runId,'command',c)
           const u=get(db,'unit',c.unitId)
-          if(!rows(db,r.runId,'command').some(item=>item.unitId===u.id&&['running','unknown','applied'].includes(item.status))){u.status='pending';put(db,r.runId,'unit',u)}
+          u.status='pending';put(db,r.runId,'unit',u)
           settle(db,r)
           return {result:{command:c},dispatchEligible:false}
         }
@@ -518,7 +546,11 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(topic.inputRevision!==a.inputRevision)fail('MESSAGE_TOPIC_STALE')
     if(topic.processedRevision===a.inputRevision)return {result:{status:'accepted',topic,decisions:a.decisions}}
     const pending=queryMessages(db,{kind:'message.routing.pending',conversationId:a.conversationId})
-    if(pending.length){topicRunsStatus(db,a.topicId,'waiting_routing_barrier');return {result:{status:'WAIT_ROUTING',pending:pending.length}}}
+    const priority=pending.length?priorityTopicControls(db,topic,a.priorityControls):null
+    if(pending.length&&(!priority||a.decisions?.some(decision=>{
+      const control=priority.get(decision.unitId)
+      return !control||decision.commands?.length!==1||decision.commands[0].kind!==control.action||decision.commands[0].args?.taskId!==control.taskId
+    }))){topicRunsStatus(db,a.topicId,'waiting_routing_barrier');return {result:{status:'WAIT_ROUTING',pending:pending.length}}}
     if(!Array.isArray(a.decisions)||!a.decisions.length)fail('MESSAGE_INVALID_DISPOSITION')
     const currentUnits=queryMessageTopics(db,{kind:'message.topic.units',topicId:a.topicId})
     if(currentUnits.length!==a.decisions.length||new Set(a.decisions.map(item=>item.unitId)).size!==a.decisions.length
@@ -527,12 +559,16 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       const item=currentUnits.find(({unit})=>unit.id===decision.unitId)
       const r=item.run,u=item.unit
       current(db,r,decision.expectedRevision)
-      if(!Array.isArray(decision.commands)||(!decision.commands.length&&!['ignored','rejected'].includes(decision.outcome)))fail('MESSAGE_INVALID_DISPOSITION')
+      if(!Array.isArray(decision.commands)||(!decision.commands.length&&!['ignored','rejected','applied'].includes(decision.outcome)))fail('MESSAGE_INVALID_DISPOSITION')
+      const outstanding=rows(db,r.runId,'command').filter(command=>command.unitId===u.id&&command.status==='superseded'&&command.reason==='topic_input_changed'&&command.priorStatus==='pending'&&!command.replacedBy)
+      const remaining=[...decision.commands]
+      for(const old of outstanding){const index=remaining.findIndex(command=>command.kind===old.kind);if(index<0)fail('MESSAGE_OUTSTANDING_ACTION_UNRESOLVED');old.replacedBy=remaining[index].commandId;put(db,r.runId,'command',old);remaining.splice(index,1)}
       if(decision.topicFacts?.length)reduceMessageTopic(db,{kind:'message.topic.upsert',args:{topicId:a.topicId,conversationId:a.conversationId,sourceRunId:r.runId,unitId:u.id,title:topic.title,facts:decision.topicFacts}},ctx)
       for(const x of decision.commands){
         str(x.commandId);str(x.kind)
         if(db.prepare('SELECT 1 FROM message_items WHERE item_id=?').get('command:'+x.commandId))fail('MESSAGE_COMMAND_CONFLICT')
-        put(db,r.runId,'command',{...x,id:x.commandId,runId:r.runId,unitId:u.id,revision:r.revision,topicId:a.topicId,topicInputRevision:a.inputRevision,status:'pending',leaseEpoch:0,createdAt:now})
+        put(db,r.runId,'command',{...x,id:x.commandId,runId:r.runId,unitId:u.id,revision:r.revision,topicId:a.topicId,topicInputRevision:a.inputRevision,
+          ...(priority?{priorityControl:priority.get(u.id)}:{}),status:'pending',leaseEpoch:0,createdAt:now})
       }
       u.status=decision.commands.length?'accepted':decision.outcome;put(db,r.runId,'unit',u);settle(db,r)
     }
@@ -545,14 +581,15 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   if(kind==='message.topic.refresh') {
     const topic=queryMessageTopics(db,{kind:'message.topic',topicId:a.topicId})
     if(!topic||topic.inputRevision!==a.inputRevision)fail('MESSAGE_TOPIC_STALE')
-    if(queryMessages(db,{kind:'message.routing.pending',conversationId:topic.conversationId}).length)return {result:{status:'WAIT_ROUTING'}}
+    if(queryMessages(db,{kind:'message.routing.pending',conversationId:topic.conversationId}).length
+      && !priorityTopicControls(db,topic,a.priorityControls))return {result:{status:'WAIT_ROUTING'}}
     let count=0
     for(const row of db.prepare("SELECT i.body FROM message_items i WHERE i.kind='command' AND json_extract(i.body,'$.topicId')=? AND json_extract(i.body,'$.status')='pending'").all(topic.topicId)){
       const c=JSON.parse(row.body)
       if(c.topicInputRevision===topic.inputRevision)continue
-      c.status='superseded';c.reason='topic_input_changed';put(db,c.runId,'command',c)
+      c.priorStatus=c.status;c.status='superseded';c.reason='topic_input_changed';put(db,c.runId,'command',c)
       const u=get(db,'unit',c.unitId)
-      if(!rows(db,u.runId,'command').some(item=>item.unitId===u.id&&['running','unknown','applied'].includes(item.status))){u.status='pending';put(db,u.runId,'unit',u)}
+      u.status='pending';put(db,u.runId,'unit',u)
       const owner=run(db,u.runId);settle(db,owner);count++
     }
     if(count)topicRunsStatus(db,a.topicId,'intent_rejudging')

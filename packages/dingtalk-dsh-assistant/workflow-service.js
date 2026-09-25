@@ -1,4 +1,5 @@
 import { openExecutionRuntime } from './execution.js'
+import { createTaskOwnerController } from './task-owner-controller.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
 import { createAnalysisTaskWorkflow, createReadOnlyTaskWorkflows, createGeneralTaskWorkflow } from './task-workflow.js'
@@ -21,6 +22,43 @@ const catalogById = new Map(taskWorkflowCatalog.map(item => [item.id, item]))
 const readOnlyCatalog = taskWorkflowCatalog.filter(item => item.mode === 'read-only').map(({ id, purpose }) => ({ id, purpose }))
 const generalCatalog = taskWorkflowCatalog.filter(item => item.mode === 'general').map(({ id, purpose }) => ({ id, purpose }))
 const externalLabels = Object.freeze(Object.fromEntries(taskWorkflowCatalog.filter(item => item.mode === 'external').map(item => [item.id, item.purpose])))
+
+export function createSourceDossierCapability(sourceRead) {
+  const capability = {
+    id: 'organize-topic-sources', description: '将已授权消息逐字整理为带来源键的 Markdown 摘录，不推断未给出的事实',
+    identity: 'organize-topic-sources-v1',
+    authorize: ({ input, scope }) => sourceRead.authorize({ input, scope }),
+    async execute({ input }) {
+      const fresh = await sourceRead.execute({ input })
+      const markdown = fresh.sources.map(source => `### ${source.sourceKey}\n\n${source.text.split('\n')
+        .map(line => `> ${line}`).join('\n')}`).join('\n\n')
+      if (Buffer.byteLength(markdown, 'utf8') > 12000) throw executionError('GENERAL_DOSSIER_CAPACITY')
+      return { markdown, sourceKeys: fresh.sources.map(source => source.sourceKey) }
+    },
+    async verify({ input, scope, output }) {
+      if (!await capability.authorize({ input, scope })) return { passed: false }
+      const fresh = await capability.execute({ input })
+      return { passed: executionDigest(fresh) === executionDigest(output),
+        outputDigest: executionDigest(fresh), sourceRefs: fresh.sourceKeys }
+    },
+  }
+  return capability
+}
+
+export async function verifyDefaultGeneralCompletion({ request, acceptanceCriteria, scope, evidence, report }) {
+  const isPureCompilation = text => /^(整理|汇总|摘录)/u.test(text)
+    && /消息|材料|原文|内容|记录/u.test(text)
+    && !/排查|查明|原因|修复|部署|发布|创建|更新|删除|发送|审批|数据库|代码|文件写入/u.test(text)
+  const pureCompilation = isPureCompilation(request) && acceptanceCriteria.every(isPureCompilation)
+  const dossier = evidence.find(item => item.capabilityId === 'organize-topic-sources'
+    && report.evidenceIds.includes(item.evidenceId) && item.verification.passed === true)
+  if (!pureCompilation || !dossier || !scope.sourceKeys.every(key => dossier.output.sourceKeys.includes(key))
+    || report.summary !== dossier.output.markdown || report.limitations.length)
+    return { status: 'unverified', resultVerified: false, criteria: [] }
+  return { status: 'satisfied', resultVerified: true,
+    criteria: acceptanceCriteria.map(criterion => ({ criterion, passed: true,
+      evidenceIds: [dossier.evidenceId] })) }
+}
 
 export function rankMessageCandidates(cards, goalText, recentSourceKey = null) {
   const words = [...new Set((goalText ?? '').toLowerCase().match(/[a-z0-9_-]+|[\u4e00-\u9fff]{2}/g) ?? [])]
@@ -54,7 +92,7 @@ function createExternalRegistry(external, selected) {
 }
 
 /** Host装配服务。新群只交新控制账；旧历史只读，不写回旧Task或重复调用旧路由。 */
-export async function openWorkflowService({ ctx, config, legacy, judge, readMessage, readResource, notifications, engineeringGhCommand, external, generalCapabilities = [], generalCompletionCheck, generalCompletionIdentity, execution: suppliedExecution }) {
+export async function openWorkflowService({ ctx, config, legacy, judge, readMessage, readResource, notifications, engineeringGhCommand, external, generalCapabilities = [], generalCompletionCheck, generalCompletionIdentity, execution: suppliedExecution, taskOwnerSessions }) {
   if (!Array.isArray(config.groupIds) || !config.groupIds.length || new Set(config.groupIds).size !== config.groupIds.length) throw executionError('WORKFLOW_GROUPS_REQUIRED')
   if (generalCompletionCheck && (!generalCompletionIdentity || typeof generalCompletionIdentity !== 'string')) throw executionError('GENERAL_COMPLETION_IDENTITY_REQUIRED')
   const groups = new Set(config.groupIds)
@@ -69,6 +107,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     ...(external?.availableTargets ? { targetIds: external.availableTargets.filter(item => item.workflowId === id).map(item => item.targetId) } : {}) }))
   const unavailableWorkflows = Object.entries(externalLabels).filter(([id]) => !selectedExternal.byId.has(id)).map(([, label]) => label)
   const generalStore = { current: suppliedExecution?.store ?? null }
+  const generalArtifacts = { current: suppliedExecution?.artifacts ?? null }
   const sourceRead = {
     id: 'read-topic-sources', description: '只读核对当前话题已授权的消息原文', identity: 'read-topic-sources-v1',
     async authorize({ input, scope }) {
@@ -86,19 +125,30 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     async verify({ input, scope, output }) {
       if (await sourceRead.authorize({ input, scope }) !== true) return { passed: false }
       const fresh = await sourceRead.execute({ input })
-      return { passed: executionDigest(fresh) === executionDigest(output), sourcesDigest: executionDigest(fresh) }
+      return { passed: executionDigest(fresh) === executionDigest(output), outputDigest: executionDigest(fresh),
+        sourceRefs: fresh.sources.map(source => source.sourceKey) }
     },
   }
-  const capabilities = [sourceRead, ...generalCapabilities]
-  const completionCheck = generalCompletionCheck ?? (async ({ scope, evidence, report }) => {
-    if (!Array.isArray(scope.sourceKeys) || !scope.sourceKeys.length || report.limitations.length) return false
-    const cited = new Set(report.evidenceIds), covered = new Set()
-    for (const item of evidence) if (cited.has(item.evidenceId) && item.capabilityId === sourceRead.id && item.verification.passed === true)
-      for (const source of item.output.sources ?? []) covered.add(source.sourceKey)
-    return scope.sourceKeys.every(key => covered.has(key))
-  })
+  const predecessorRead = {
+    id: 'read-predecessor-artifact', description: '只读核对本任务前一阶段的已验收产物',
+    identity: 'read-predecessor-artifact-v1',
+    async authorize({ input, scope }) {
+      return typeof input.outputRef === 'string' && input.outputRef === scope.predecessorOutputRef
+    },
+    async execute({ input }) { return { outputRef: input.outputRef,
+      value: await generalArtifacts.current.read(input.outputRef) } },
+    async verify({ input, scope, output }) {
+      if (!await predecessorRead.authorize({ input, scope })) return { passed: false }
+      const fresh = await predecessorRead.execute({ input })
+      return { passed: executionDigest(fresh) === executionDigest(output),
+        outputDigest: executionDigest(fresh), sourceRefs: [input.outputRef] }
+    },
+  }
+  const sourceDossier = createSourceDossierCapability(sourceRead)
+  const capabilities = [sourceRead, predecessorRead, sourceDossier, ...generalCapabilities]
+  const completionCheck = generalCompletionCheck ?? verifyDefaultGeneralCompletion
   const generalWorkflow = selected => createGeneralTaskWorkflow({ ...selected, capabilities, completionCheck,
-    completionIdentity: generalCompletionIdentity ?? 'topic-source-coverage-v1' })
+    completionIdentity: generalCompletionIdentity ?? 'task-result-verification-v3' })
   const visibleDefinitions = new Map([createAnalysisTaskWorkflow(modelConfig()), ...createReadOnlyTaskWorkflows(modelConfig()), generalWorkflow(modelConfig()), ...selectedExternal.workflows]
     .map(workflow => [workflow.id, workflow]))
   const execution = suppliedExecution ?? await openExecutionRuntime({
@@ -142,9 +192,11 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   })
   let closed = false, resolveMaterials
   const { store, controller, artifacts } = execution
+  let taskOwner
   external?.bindStore?.(store)
   external?.bindExecution?.({ store, controller, artifacts })
   generalStore.current = store
+  generalArtifacts.current = artifacts
   if (suppliedExecution && typeof controller.registerWorkflow === 'function') {
     for (const workflow of createReadOnlyTaskWorkflows(modelConfig())) controller.registerWorkflow(workflow)
     controller.registerWorkflow(generalWorkflow(modelConfig()))
@@ -246,7 +298,16 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       || prepared?.workflowKind === 'data-change' && prepared.stage === 'approval-gate') {
       if (identity?.channel !== 'web') throw executionError('WORKFLOW_APPROVAL_WEB_REQUIRED')
     }
-    return approvals.decide(input, identity)
+    const result = await approvals.decide(input, identity)
+    const effect = item.effect
+    if (effect?.runId) {
+      const state = await controller.state(effect.runId)
+      if (await store.query({ kind: 'task.owner', taskId: state.run.taskId }))
+        await taskOwner.event({ taskId: state.run.taskId,
+          eventKey: `approval:${input.requestId}:${executionDigest(result)}`,
+          eventType: 'approval.resolved', payload: { requestId: input.requestId, decision: result } })
+    }
+    return result
   }
   async function listApprovalRequests() {
     const approvals = await store.query({ kind: 'approval.list', limit: 200 })
@@ -357,10 +418,15 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         ? { unavailableReason: `${stage.workflowId} 缺少受信执行适配器` } : {}),
       ...(index === 0 ? { input } : {}) }))
     await controller.createTaskPlan({ commandId: `plan:${info.commandId}`, taskId, stages })
-    const plan = await controller.advanceTaskPlan(taskId)
-    const runId = plan.stages[0]?.runId
-    if (!runId) throw executionError('TASK_PLAN_FIRST_STAGE_NOT_STARTED')
-    return { taskId, runId }
+    await taskOwner.ensure({ taskId, sourceKey: info.run.sourceKey,
+      criteria: action.arguments.acceptanceCriteria ?? [action.arguments.objective],
+      origin: { sourceRunId: info.run.runId, commandId: info.commandId,
+      actorId: info.run.actorId, conversationId: info.run.conversationId } })
+    await taskOwner.drive(taskId)
+    const failures = await taskOwner.applyPending()
+    if (failures.length) throw executionError(failures[0].code)
+    const plan = await controller.taskPlan(taskId)
+    return { taskId, runId: plan.stages[0]?.runId ?? null }
   }
   async function advanceBusinessTask(taskId, continuation) {
     let plan = await controller.advanceTaskPlan(taskId)
@@ -376,7 +442,9 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const objective = args.arguments?.objective
     if (!objective) return plan
     const input = current.workflowId === 'task-general'
-      ? { request: objective, constraints: args.constraints ?? [], scope: { conversationId: origin.run.conversationId, sourceKeys: [origin.run.sourceKey] }, predecessor: previous }
+      ? { request: objective, acceptanceCriteria: args.arguments?.acceptanceCriteria ?? [objective],
+        constraints: args.constraints ?? [], scope: { conversationId: origin.run.conversationId,
+          sourceKeys: [origin.run.sourceKey], predecessorOutputRef } }
       : { request: objective, constraints: args.constraints ?? [], materials: [{ id: predecessorOutputRef, text: JSON.stringify(previous) }] }
     if (current.workflowId === 'task-engineering') {
       const action = { taskId, arguments: { ...args.arguments, workflowId: 'task-engineering' }, constraints: args.constraints ?? [] }
@@ -390,10 +458,10 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         input: prepared.input, workflowId: prepared.workflowId })
     } else if (current.workflowId === 'task-uat-deployment') {
       const preceding = plan.stages[currentIndex - 1]
-      if (preceding?.workflowId !== 'task-engineering' || !preceding.runId || !selectedExternal.byId.has(current.workflowId))
+      if (!preceding?.workflowId.startsWith('task-engineering-') || !preceding.runId || !selectedExternal.byId.has(current.workflowId))
         throw executionError('UAT_ENGINEERING_PREDECESSOR_REQUIRED')
       const engineeringState = await controller.state(preceding.runId)
-      await readEngineeringDeliveryProof({ state: engineeringState, artifacts, taskId })
+      await readEngineeringDeliveryProof({ state: engineeringState, artifacts, store, taskId })
       const action = { taskId, arguments: { ...args.arguments, workflowId: current.workflowId },
         constraints: args.constraints ?? [] }
       const marker = `engineering-task:${taskId}:${preceding.runId}`
@@ -407,12 +475,37 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     }
     return controller.advanceTaskPlan(taskId)
   }
+  taskOwner = createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig,
+    ...(taskOwnerSessions ? { sessionRunner: taskOwnerSessions } : {}),
+    advanceTask: advanceBusinessTask,
+    authorizeStages: async ({ taskId, stages }) => {
+      const latest = await store.query({ kind: 'message.task.latest', taskId })
+      const declared = latest?.command.args.arguments?.workflowPlan
+      if (!latest || latest.command.kind !== 'reopen' || !Array.isArray(declared) || declared.length !== stages.length
+        || !stages.every((stage, index) => stage.workflowId === declared[index].workflowId
+          && stage.gate === (declared[index].gate ?? 'none'))) return false
+      for (const stage of stages) {
+        if (!catalogById.has(stage.workflowId)
+          || catalogById.get(stage.workflowId).mode === 'external' && !selectedExternal.byId.has(stage.workflowId)
+          || !await mayCreate(latest.run, stage.workflowId)) return false
+      }
+      return true
+    } })
   async function executeWebEvent(event) {
     if(event.status==='pending') {
       try {
         const commandId=`web-task:${event.id}`
-        if(event.request.action==='cancel')await controller.stop({commandId,runId:event.executionRunId,reason:event.request.reason})
-        else await controller.changeInput({commandId,runId:event.executionRunId,inputId:commandId,sourceKey:commandId,input:event.input,expectedRevision:event.request.inputVersion-1})
+        if(event.request.action==='cancel') {
+          const plan = await controller.taskPlan(event.request.taskId)
+          if (plan) await controller.controlTask({ commandId, taskId: event.request.taskId,
+            intent: 'cancel', expectedControlRevision: plan.task.controlRevision })
+          else await controller.stop({commandId,runId:event.executionRunId,reason:event.request.reason})
+        } else await controller.changeInput({commandId,runId:event.executionRunId,inputId:commandId,sourceKey:commandId,input:event.input,expectedRevision:event.request.inputVersion-1})
+        if (await store.query({ kind: 'task.owner', taskId: event.request.taskId }))
+          await taskOwner.event({ taskId: event.request.taskId, eventKey: `web:${event.id}`,
+            eventType: event.request.action === 'cancel' ? 'control.changed' : 'intent.received',
+            payload: { action: event.request.action, requestId: event.request.requestId,
+              actorId: event.actorId, input: event.input } })
         event=(await store.command({id:`web-finish:${event.id}`,kind:'message.web-task.finish',args:{eventId:event.id,result:{status:'accepted',taskId:event.request.taskId,requestId:event.request.requestId}}})).result.event
       } catch(error) {
         if(!['REVISION_CONFLICT','INPUT_PENDING','RUN_TERMINAL','RUN_STOPPING'].includes(error.code))throw error
@@ -474,6 +567,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         ...(action.binding?.topicId ? await store.query({ kind: 'message.topic.sources', topicId: action.binding.topicId }) : [])])]
       if (sourceKeys.length > 16) throw executionError('GENERAL_SOURCE_CAPACITY')
       const input = { request: requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED'),
+        acceptanceCriteria: action.arguments.acceptanceCriteria ?? [action.arguments.objective],
         constraints: [...new Set(action.constraints ?? [...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])],
         scope: { conversationId: info.run.conversationId, sourceKeys } }
       const result = await createPlannedTask({ action, info, workflowId, input })
@@ -511,21 +605,83 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     }
     const taskId = info.binding.taskId ?? action.taskId
     const origin = await taskAccess(taskId, info.run.actorId, info.run.conversationId)
+    const currentPlan = await controller.taskPlan(taskId)
+    const recordIntent = () => taskOwner.event({ taskId, eventKey: `intent:${info.commandId}`,
+      eventType: 'intent.received', payload: { action: action.intent, sourceRunId: info.run.runId,
+        actorId: info.run.actorId, arguments: action.arguments, constraints: action.constraints } })
+    const extendAcceptance = async () => {
+      const criteria = action.arguments.acceptanceCriteria ?? [action.arguments.objective]
+      for (const [index, criterion] of criteria.entries()) await store.command({
+        id: `acceptance:${info.commandId}:${index}`, kind: 'task.owner.acceptance.extend',
+        args: { taskId, itemId: `acceptance-${executionDigest([info.commandId, index]).slice(0, 32)}`,
+          criterion, sourceKey: info.run.sourceKey,
+          eventKey: `acceptance-event-${executionDigest([info.commandId, index]).slice(0, 32)}` },
+      })
+    }
+    if (currentPlan && ['pause', 'cancel', 'resume'].includes(action.intent)) {
+      const controlled = await controller.controlTask({ commandId: `task-control:${info.commandId}`, taskId,
+        intent: action.intent, expectedControlRevision: currentPlan.task.controlRevision })
+      await taskOwner.event({ taskId, eventKey: `control:${info.commandId}`, eventType: 'control.changed',
+        payload: { intent: action.intent, sourceRunId: info.run.runId,
+          controlRevision: controlled.plan.task.controlRevision } })
+      return { taskId, runId: controlled.plan.stages.findLast(stage => stage.runId)?.runId ?? null,
+        status: controlled.plan.task.status, reply: `已记录任务${action.intent}请求；当前状态：${controlled.plan.task.status}` }
+    }
     if (action.intent === 'reopen') {
-      const prior = await controller.taskPlan(taskId)
+      let prior = await controller.taskPlan(taskId)
       if (!prior) throw executionError('TASK_PLAN_NOT_FOUND')
+      const reopenCommandId = `task-reopen:${info.commandId}`
+      const reopenReceipt = await store.query({ kind: 'receipt', commandId: reopenCommandId })
+      const wasCancelled = prior.task.controlState === 'cancelled' || !!reopenReceipt
+        || prior.task.planStatus === 'blocked' && prior.stages.some(stage => stage.status === 'waiting_confirmation')
+      const requested = action.arguments.workflowPlan ?? [{ workflowId: action.arguments.workflowId, gate: 'none' }]
+      if (wasCancelled && (!requested.length || requested.some(stage => !stage.workflowId)))
+        throw executionError('TASK_PLAN_STAGES_INVALID')
+      if (prior.task.controlState === 'cancelled') {
+        const authorization = await artifacts.put({ taskId, sourceKey: info.run.sourceKey,
+          actorId: info.run.actorId, conversationId: info.run.conversationId,
+          intent: action.intent, commandId: info.commandId })
+        await controller.controlTask({ commandId: reopenCommandId, taskId, intent: 'reopen',
+          expectedControlRevision: prior.task.controlRevision,
+          requirementRevision: prior.task.requirementRevision + 1, authorizationRef: authorization.ref })
+        prior = await controller.taskPlan(taskId)
+      }
       const current = prior.stages.find(stage => stage.status === 'waiting_confirmation')
-      if (current) {
+      if (current && !wasCancelled) {
         const predecessor = prior.stages[current.position - 1]
         if (!predecessor?.outputRef) throw executionError('TASK_CONFIRMATION_OUTPUT_MISSING')
         await controller.confirmTaskStage({ commandId: `confirm:${info.commandId}`, taskId, stageId: current.stageId,
           planRevision: prior.task.planRevision, outputRef: predecessor.outputRef })
+        await recordIntent()
         const advanced = await advanceBusinessTask(taskId, { run: info.run, command: { args: action } })
         return { taskId, runId: advanced.stages.find(stage => stage.stageId === current.stageId)?.runId,
           status: 'accepted', reply: '已确认当前方案，继续执行本任务的下一阶段。' }
       }
-      const requested = action.arguments.workflowPlan ?? [{ workflowId: action.arguments.workflowId, gate: 'none' }]
       if (!requested.length || requested.some(stage => !stage.workflowId)) throw executionError('TASK_PLAN_STAGES_INVALID')
+      if (wasCancelled) {
+        const affectedFrom = prior.stages.findIndex(stage => stage.status !== 'succeeded')
+        if (affectedFrom < 0) throw executionError('TASK_REOPEN_STAGE_NOT_FOUND')
+        const prefix = prior.stages.slice(0, affectedFrom).map(stage => ({ stageId: stage.stageId,
+          workflowId: stage.workflowId, gate: stage.gate }))
+        const replacements = requested.map((stage, index) => ({ stageId: `stage-${affectedFrom + index + 1}`,
+          workflowId: stage.workflowId, gate: stage.gate ?? 'none',
+          ...(!visibleDefinitions.has(stage.workflowId) && stage.workflowId !== 'task-engineering'
+            ? { unavailableReason: `${stage.workflowId} 缺少受信执行适配器` } : {}) }))
+        if (affectedFrom === 0) {
+          const original = await artifacts.read(prior.stages[0].requirementRef)
+          if (prior.stages[0].workflowId !== requested[0].workflowId || !original?.request)
+            throw executionError('TASK_REOPEN_INPUT_REQUIRED')
+          replacements[0].input = { ...original, request: requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED') }
+        }
+        await controller.reviseTaskPlan({ commandId: `reopen:${info.commandId}`, taskId,
+          expectedPlanRevision: prior.task.planRevision, requirementRevision: prior.task.requirementRevision,
+          affectedFrom, stages: [...prefix, ...replacements] })
+        await extendAcceptance()
+        await recordIntent()
+        const advanced = await advanceBusinessTask(taskId, { run: info.run, command: { args: action } })
+        return { taskId, runId: advanced.stages[affectedFrom]?.runId ?? null,
+          status: 'accepted', reply: '已按新授权重新打开任务并替换未完成阶段，已成功的阶段保留。' }
+      }
       if (prior.task.status !== 'succeeded') {
         const additions = requested.map((stage, index) => ({ stageId: `stage-${prior.stages.length + index + 1}`,
           workflowId: stage.workflowId, gate: stage.gate ?? 'none',
@@ -534,6 +690,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         await controller.extendTaskPlan({ commandId: `extend:${info.commandId}`, taskId,
           expectedPlanRevision: prior.task.planRevision, requirementRevision: prior.task.requirementRevision + 1,
           stages: additions })
+        await extendAcceptance()
+        await recordIntent()
         return { taskId, status: 'accepted', reply: '新阶段已排在当前执行之后；当前阶段继续，待前序产物核验后衔接。' }
       }
       const stages = [...prior.stages.map(stage => ({ stageId: stage.stageId, workflowId: stage.workflowId, gate: stage.gate })),
@@ -543,13 +701,17 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       await controller.reviseTaskPlan({ commandId: `reopen:${info.commandId}`, taskId,
         expectedPlanRevision: prior.task.planRevision, requirementRevision: prior.task.requirementRevision + 1,
         affectedFrom: prior.stages.length, stages })
+      await extendAcceptance()
+      await recordIntent()
       const advanced = await advanceBusinessTask(taskId, { run: info.run, command: { args: action } })
       return { taskId, runId: advanced.stages.find(stage => stage.stageId === stages[prior.stages.length].stageId)?.runId,
         status: 'accepted', reply: '已在原任务追加执行阶段，先前通过的阶段结果保留。' }
     }
     const existingRuns = await store.query({ kind: 'run.list', taskId, limit: 200 })
     if (!existingRuns.length) {
-      if (['status', 'result'].includes(action.intent)) return singleTaskProgressResult({ taskId, status: origin.command.status, beforeStart: true, reply: `任务尚未开始执行；当前状态：${origin.command.status}` })
+      if (['status', 'result'].includes(action.intent)) return singleTaskProgressResult({ taskId,
+        status: currentPlan?.task.status ?? origin.command.status, beforeStart: true,
+        reply: `任务尚未开始执行；当前状态：${currentPlan?.task.status ?? origin.command.status}` })
       if (!['cancel', 'pause', 'resume', 'revise'].includes(action.intent)) throw executionError('WORKFLOW_ACTION_NOT_ADMITTED')
       const receipt = await store.command({ id: `prestart:${info.commandId}`, kind: 'message.task.control', args: {
         taskId, action: action.intent, actorId: info.run.actorId, sourceRunId: info.run.runId,
@@ -562,8 +724,14 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (action.intent === 'status' || action.intent === 'result') {
       const last = state.nodes.filter(node => node.outputRef).at(-1)
       const output = last ? await artifacts.read(last.outputRef) : null
-      return singleTaskProgressResult({ taskId, runId: state.run.runId, status: state.run.status, observedAt: new Date().toISOString(), output,
-        reply: action.intent === 'result' && workflowResultText(output) ? workflowResultText(output) : `任务状态：${state.run.status}${state.run.recoveryReason ? `；等待原因：${state.run.recoveryReason}` : ''}` })
+      const owner = currentPlan ? await store.query({ kind: 'task.owner', taskId }) : null
+      const taskComplete = owner?.decision?.action === 'complete' && owner.applicationStatus === 'applied'
+        && owner.eventWatermark === owner.processedWatermark
+      const status = currentPlan ? taskComplete ? 'succeeded' : currentPlan.task.status : state.run.status
+      return singleTaskProgressResult({ taskId, runId: state.run.runId, status, observedAt: new Date().toISOString(), output,
+        reply: action.intent === 'result' && workflowResultText(output)
+          ? `${taskComplete ? '任务结果' : '当前流程结果'}：${workflowResultText(output)}`
+          : `任务状态：${status}${state.run.recoveryReason ? `；等待原因：${state.run.recoveryReason}` : ''}` })
     }
     if (action.intent === 'cancel') await controller.stop({ ...args, reason: info.unit.goalText })
     else if (action.intent === 'pause') await controller.pause({ ...args, reason: info.unit.goalText })
@@ -573,6 +741,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       await controller.changeInput({ ...args, inputId: info.commandId, sourceKey: info.run.sourceKey,
         input: { ...previous, request: requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED'),
           constraints: [...new Set([...(previous.constraints ?? []), ...(action.constraints ?? [...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])])] } })
+      if (currentPlan) await recordIntent()
     } else throw executionError('WORKFLOW_ACTION_NOT_ADMITTED')
     const observed = await controller.state(state.run.runId)
     return { taskId, runId: state.run.runId, status: observed.run.status, reply: `已记录${action.intent}请求；当前状态：${observed.run.status}` }
@@ -588,7 +757,20 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   handlers.create = createTask
   handlers.research = createTask
   handlers.answer = (action, info) => createTask({ ...action, arguments: { ...action.arguments, workflowId: 'task-analysis', objective: action.arguments.objective ?? info.unit.goalText } }, info)
-  handlers.fact = async (action, info) => ({ status: 'recorded', sourceKey: info.run.sourceKey, topic: await store.query({ kind: 'message.topic', topicId: action.binding.topicId }) })
+  handlers.fact = async (action, info) => {
+    const topic = await store.query({ kind: 'message.topic', topicId: action.binding.topicId })
+    const taskId = info.binding.taskId ?? action.taskId
+    if (taskId) {
+      const origin = await store.query({ kind: 'message.task', taskId })
+      if (origin?.run.conversationId === info.run.conversationId
+        && await store.query({ kind: 'task.owner', taskId }))
+        await taskOwner.event({ taskId, eventKey: `topic-fact:${info.commandId}`,
+          eventType: action.arguments.kind === 'constraint' ? 'intent.received' : 'topic.fact',
+          payload: { sourceKey: info.run.sourceKey, actorId: info.run.actorId,
+            kind: action.arguments.kind, text: action.arguments.text } })
+    }
+    return { status: 'recorded', sourceKey: info.run.sourceKey, topic }
+  }
   handlers.no_action = async () => ({ status: 'ignored' })
   handlers.clarification = async (action, info) => resumeRequest({
     runId: action.arguments.runId, requestId: action.arguments.requestId,
@@ -626,6 +808,19 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const messages = createMessageWorkflow({ store, judge: messageJudge, policy: config.policy, handlers,
     context: {
       passiveTopic,
+      async authorizePriorityControl({ run, unit, binding }) {
+        const taskId = binding?.taskId ?? binding?.target?.taskId
+        if (!taskId || binding?.disposition !== 'existing') return null
+        const origin = await store.query({ kind: 'message.task', taskId })
+        if (!origin || origin.run.conversationId !== run.conversationId || origin.run.actorId !== run.actorId) return null
+        const text = unit.goalText?.trim().replace(/^@\S+\s*/u, '') ?? ''
+        const actions = [
+          [/^(?:暂停|先停|先暂停)(?:这个|该|当前)?任务[。！!]?$/u, 'pause'],
+          [/^(?:取消|停止)(?:这个|该|当前)?任务[。！!]?$/u, 'cancel'],
+          [/^(?:恢复|继续)(?:这个|该|当前)?任务[。！!]?$/u, 'resume'],
+        ].filter(([pattern]) => pattern.test(text))
+        return actions.length === 1 ? { taskId, action: actions[0][1] } : null
+      },
       async validateAction(action, info) {
         const reject = reason => ({ allowed: false, reason })
         if (info.binding.engine === 'legacy') {
@@ -972,31 +1167,44 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       group.push(run)
       byTask.set(run.taskId, group)
     }
+    const owners = await store.query({ kind: 'task.owners.list', limit: 200 })
+    for (const owner of owners) if (!byTask.has(owner.taskId)) byTask.set(owner.taskId, [])
     return Promise.all([...byTask].map(async ([taskId, taskRuns]) => {
       const plan = await controller.taskPlan(taskId)
       const currentStage = plan?.stages.find(stage => !['succeeded', 'invalidated'].includes(stage.status)) ?? plan?.stages.at(-1)
       const run = taskRuns.find(item => item.runId === currentStage?.runId) ?? taskRuns[0]
       const origin = await store.query({ kind: 'message.task', taskId })
-      const state = await controller.state(run.runId)
+      const owner = owners.find(item => item.taskId === taskId)
+      const ownerComplete = owner?.decision?.action === 'complete' && owner.applicationStatus === 'applied'
+        && owner.eventWatermark === owner.processedWatermark
+      const state = run ? await controller.state(run.runId) : null
       const firstRun = plan?.stages[0]?.runId
         ? taskRuns.find(item => item.runId === plan.stages[0].runId) ?? await store.query({ kind: 'run', runId: plan.stages[0].runId }).then(item => item.run)
         : taskRuns.at(-1)
-      const requirement = await artifacts.read(firstRun.requirementRef)
-      const outputRef = currentStage?.outputRef ?? state.nodes.filter(node => node.outputRef).at(-1)?.outputRef
+      const requirement = await artifacts.read(firstRun?.requirementRef ?? plan?.stages[0]?.requirementRef)
+      const outputRef = currentStage?.outputRef ?? state?.nodes.filter(node => node.outputRef).at(-1)?.outputRef
       const output = outputRef ? await artifacts.read(outputRef) : null
       const planState = plan?.task.status
-      return { taskId, engine: 'workflow-v2', workflowId: run.workflowId, workflowVersion: run.definitionVersion, groupId: origin?.run.conversationId,
-        title: requirement.request, objective: requirement.request, inputVersion: run.revision + 1, runSequence: 1,
-        state: planState === 'succeeded' ? 'completed' : planState === 'blocked' || planState === 'waiting_confirmation' ? 'waiting'
-          : terminal(run.status) && !plan ? 'completed' : state.controllerError ? 'waiting' : run.status === 'running' ? 'running' : run.status === 'queued' ? 'queued' : 'waiting',
-        outcome: planState === 'succeeded' ? 'succeeded' : plan ? undefined : terminal(run.status) ? run.status : undefined,
-        createdAt: plan?.task.createdAt ?? run.createdAt, updatedAt: plan?.task.updatedAt ?? run.updatedAt,
+      return { taskId, engine: 'workflow-v2', workflowId: run?.workflowId ?? currentStage?.workflowId,
+        workflowVersion: run?.definitionVersion, groupId: origin?.run.conversationId,
+        title: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
+        objective: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
+        inputVersion: (run?.revision ?? 0) + 1, runSequence: taskRuns.length,
+        state: ownerComplete ? 'completed' : owner?.status === 'blocked' || planState === 'blocked' || planState === 'waiting_confirmation'
+          || planState === 'succeeded' ? 'waiting' : !run ? 'queued'
+          : terminal(run.status) && !plan ? 'completed' : state.controllerError ? 'waiting'
+            : run.status === 'running' ? 'running' : run.status === 'queued' ? 'queued' : 'waiting',
+        outcome: ownerComplete ? 'succeeded' : plan ? undefined : run && terminal(run.status) ? run.status : undefined,
+        createdAt: plan?.task.createdAt ?? run?.createdAt, updatedAt: plan?.task.updatedAt ?? run?.updatedAt,
         result: workflowResultText(output),
-        waitingReason: currentStage?.unavailableReason ?? (currentStage?.status === 'waiting_confirmation' ? '等待阶段确认' : null)
-          ?? state.controllerError ?? run.recoveryReason ?? state.nodes.find(node => node.status === 'waiting')?.waitReason?.reference,
-        taskRunId: run.runId,
-        stageTasks: state.nodes.map(node => node.nodeId), topicRefs: [], checkpoints: [],
-        executionNodes: state.nodes, childSessionId: state.nodes.findLast(node => node.sessionId)?.sessionId,
+        waitingReason: owner?.status === 'blocked' ? `任务负责会话受阻：${owner.lastFailure}`
+          : currentStage?.unavailableReason ?? (currentStage?.status === 'waiting_confirmation' ? '等待阶段确认' : null)
+          ?? state?.controllerError ?? run?.recoveryReason ?? state?.nodes.find(node => node.status === 'waiting')?.waitReason?.reference,
+        taskRunId: run?.runId ?? null,
+        stageTasks: state?.nodes.map(node => node.nodeId) ?? [], topicRefs: [], checkpoints: [],
+        executionNodes: state?.nodes ?? [], childSessionId: owner?.sessionId ?? state?.nodes.findLast(node => node.sessionId)?.sessionId,
+        taskOwner: owner ? { sessionId: owner.sessionId, status: owner.status, decision: owner.decision?.action ?? null,
+          eventWatermark: owner.eventWatermark, processedWatermark: owner.processedWatermark } : null,
         ...(plan ? { plan: { version: plan.task.planRevision, currentStageId: currentStage?.stageId ?? null,
           stages: plan.stages.map(stage => ({ stageId: stage.stageId,
             title: taskWorkflowCatalog.find(item => item.id === stage.workflowId)?.label ?? stage.stageId,
@@ -1008,11 +1216,26 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   async function recoverTasks() {
     const failures = []
     for(const event of await store.query({kind:'message.web-tasks.pending'}))try{await executeWebEvent(event)}catch(error){failures.push({scope:'web-task',eventId:event.id,code:error.code??error.message})}
+    let ownerCursor
+    do {
+      const owners = await store.query({ kind: 'task.owners.list', limit: 100,
+        ...(ownerCursor ? { beforeSequenceId: ownerCursor } : {}) })
+      for (const item of owners) try {
+        const plan = await controller.taskPlan(item.taskId)
+        if (plan?.stages.some(stage => stage.status === 'running')) await controller.advanceTaskPlan(item.taskId)
+        await taskOwner.observe(item.taskId)
+      }
+      catch (error) { failures.push({ scope: 'task-plan', taskId: item.taskId, code: error.code ?? error.message }) }
+      ownerCursor = owners.length === 100 ? owners.at(-1).sequenceId : undefined
+    } while (ownerCursor)
     let planCursor
     do {
-      const plans = await controller.pendingTaskPlans({ limit: 100, ...(planCursor ? { beforeSequenceId: planCursor } : {}) })
-      for (const item of plans) try { await advanceBusinessTask(item.taskId) }
-      catch (error) { failures.push({ scope: 'task-plan', taskId: item.taskId, code: error.code ?? error.message }) }
+      const plans = await controller.pendingTaskPlans({ limit: 100,
+        ...(planCursor ? { beforeSequenceId: planCursor } : {}) })
+      for (const plan of plans) if (!await store.query({ kind: 'task.owner', taskId: plan.taskId })) {
+        try { await advanceBusinessTask(plan.taskId) }
+        catch (error) { failures.push({ scope: 'legacy-task-plan', taskId: plan.taskId, code: error.code ?? error.message }) }
+      }
       planCursor = plans.length === 100 ? plans.at(-1).sequenceId : undefined
     } while (planCursor)
     const page = await store.query({ kind: 'run.list', limit: 200, activeOnly: true, ...(taskRecoveryCursor ? { beforeSequenceId: taskRecoveryCursor } : {}) })
@@ -1028,6 +1251,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       }
       catch (error) { if (error.code !== 'EXECUTOR_STILL_ACTIVE') failures.push({ scope: 'task', runId: run.runId, code: error.code ?? error.message }) }
     }
+    failures.push(...await taskOwner.recover())
     return failures
   }
   async function recoverAll() {
@@ -1130,6 +1354,6 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,
       messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },
     recover: recoverAll, recoverExecutionTasks,
-    async close() { closed = true; await messages.close(); if (!suppliedExecution) await execution.close() },
+    async close() { closed = true; await messages.close(); await taskOwner.close(); if (!suppliedExecution) await execution.close() },
   }
 }

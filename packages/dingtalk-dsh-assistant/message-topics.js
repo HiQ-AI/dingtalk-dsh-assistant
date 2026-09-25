@@ -11,6 +11,7 @@ export function validateMessageTopics(db){db.prepare('SELECT topic_id,conversati
 export function invalidateMessageSourceTopics(db,sourceKey,now){
  for(const row of db.prepare('SELECT DISTINCT t.body FROM message_topics t JOIN message_topic_bindings b ON b.topic_id=t.topic_id WHERE b.source_key=?').all(sourceKey)){
   const topic=JSON.parse(row.body);topic.inputRevision=(topic.inputRevision??0)+1;topic.updatedAt=now
+  topic.facts=topic.facts.map(fact=>fact.sourceRefs.some(ref=>ref.sourceKey===sourceKey)?{...fact,status:'invalidated',invalidatedAt:now}:fact)
   db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(encode(topic),topic.topicId)
  }
 }
@@ -54,7 +55,7 @@ export function reduceMessageTopic(db,{kind,args:a},ctx){
  for(const fact of a.facts){
   str(fact.text);if(!['constraint','fact'].includes(fact.kind)||!Array.isArray(fact.sourceRefs)||!fact.sourceRefs.length||fact.sourceRefs.length>16)fail('MESSAGE_TOPIC_EVIDENCE_REQUIRED')
   for(const ref of fact.sourceRefs){str(ref.sourceKey);str(ref.text);if(!Number.isSafeInteger(ref.sourceVersion)||ref.sourceVersion<1)fail('MESSAGE_TOPIC_EVIDENCE_REQUIRED');const evidence=db.prepare('SELECT body FROM message_runs WHERE source_key=? AND source_version=?').get(ref.sourceKey,ref.sourceVersion);if(!evidence)fail('MESSAGE_TOPIC_EVIDENCE_REQUIRED');const e=JSON.parse(evidence.body);if(e.conversationId!==a.conversationId||!e.body.includes(ref.text))fail('MESSAGE_TOPIC_EVIDENCE_INVALID')}
-  const id=hash([fact.kind,fact.text,fact.sourceRefs]);if(!topic.facts.some(f=>f.id===id))topic.facts.push({...fact,id,actorId:source.actorId,sourceRunId:source.runId,createdAt:ctx.now})
+  const id=hash([fact.kind,fact.text,fact.sourceRefs]);if(!topic.facts.some(f=>f.id===id))topic.facts.push({...fact,id,status:'active',actorId:source.actorId,sourceRunId:source.runId,createdAt:ctx.now})
  }
  if(topic.facts.length>256)fail('MESSAGE_TOPIC_CAPACITY')
  const bound=db.prepare('SELECT topic_id FROM message_topic_bindings WHERE unit_id=?').get(a.unitId)

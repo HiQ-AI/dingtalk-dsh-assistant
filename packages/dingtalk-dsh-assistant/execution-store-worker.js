@@ -8,8 +8,10 @@ import { installEffectsSchema, validateEffectsSchema, reduceEffectCommand, recov
 
 import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced } from './message-ledger.js'
 import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, queryTaskPlan, bindRunToTaskStage } from './execution-task-plan.js'
+import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
+  queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 const APPLICATION_ID = 0x44534845
 let db, owner, healthy = true
 const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
@@ -76,8 +78,17 @@ function activeRun(a, { allowFence = false, allowPause = false } = {}) {
   if (!allowFence && pendingInputs(r.run_id).length) fail('INPUT_PENDING')
   return r
 }
+function assertTaskDispatchAllowed(r) {
+  const task = db.prepare(`SELECT t.plan_revision,t.status,c.state AS control_state
+    FROM business_tasks t JOIN task_controls c ON c.task_id=t.task_id WHERE t.task_id=?`).get(r.task_id)
+  if (!task) return
+  if (task.control_state !== 'active' || task.status !== 'active'
+    || !db.prepare(`SELECT 1 FROM task_plan_stages WHERE task_id=? AND plan_revision=?
+      AND run_id=? AND status='running'`).get(r.task_id, task.plan_revision, r.run_id)) fail('TASK_DISPATCH_BLOCKED')
+}
 function assertDispatchAllowed(a) {
   const r = activeRun(a)
+  assertTaskDispatchAllowed(r)
   const n = currentNode(a)
   if (n.input_digest !== a.inputDigest || n.status !== 'running' || n.drained) fail('NODE_NOT_DISPATCHABLE')
   return { run: runDto(r), node: nodeDto(n) }
@@ -130,6 +141,7 @@ function install() {
   installEffectsSchema(db)
   installMessageSchema(db)
   installTaskPlanSchema(db)
+  installTaskOwnerSchema(db)
 }
 function validate(connection) {
   if (scalar(connection.prepare('PRAGMA application_id').get()) !== APPLICATION_ID) fail('STORE_APPLICATION_MISMATCH')
@@ -156,6 +168,7 @@ function validate(connection) {
   validateEffectsSchema(connection)
   validateMessageSchema(connection)
   validateTaskPlanSchema(connection)
+  validateTaskOwnerSchema(connection)
 }
 function configure() {
   db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=1000;')
@@ -177,6 +190,7 @@ function recover() {
     }
     recoverEffects(db, context(null, now))
     recoverMessages(db)
+    recoverTaskOwners(db)
     db.exec('COMMIT')
   } catch (cause) { rollback(); throw cause }
 }
@@ -470,6 +484,7 @@ function coreCommand(command, now) {
   if (command.kind === 'node.claim') {
     object(a, ['runId', 'nodeId', 'expectedGeneration', 'expectedLeaseEpoch'])
     const r = activeRun(a)
+    assertTaskDispatchAllowed(r)
     const n = currentNode({ ...a, generation: a.expectedGeneration, leaseEpoch: a.expectedLeaseEpoch })
     if (n.status !== 'ready' || !n.drained || !n.input_ref || !n.input_digest) fail('NODE_NOT_READY')
     if (nodes(r.run_id).some(other => other.position < n.position && other.status !== 'succeeded')) fail('NODE_PREDECESSOR_INCOMPLETE')
@@ -555,10 +570,11 @@ function command(value) {
     }
     const core = coreCommand(value, now)
     const plan = core === null ? reduceTaskPlanCommand(db, value, context(value.id, now)) : null
-    const effect = core === null && plan === null
+    const ownerResult = core === null && plan === null ? reduceTaskOwnerCommand(db, value, context(value.id, now)) : null
+    const effect = core === null && plan === null && ownerResult === null
       ? (reduceMessageCommand(db, value, context(value.id, now)) ?? reduceEffectCommand(db, value, context(value.id, now))) : null
-    if (core === null && plan === null && effect === null) fail('UNKNOWN_COMMAND')
-    const result = core ?? plan ?? effect.result
+    if (core === null && plan === null && ownerResult === null && effect === null) fail('UNKNOWN_COMMAND')
+    const result = core ?? plan ?? ownerResult ?? effect.result
     db.prepare('INSERT INTO execution_receipts(command_id,payload_digest,result,created_at) VALUES(?,?,?,?)').run(value.id, hash, JSON.stringify(result), now)
     emitEvent(value.id, value.kind, result, now)
     db.exec('COMMIT')
@@ -598,6 +614,8 @@ function query(value) {
   }
   const planResult = queryTaskPlan(db, value)
   if (planResult !== undefined) return planResult
+  const ownerResult = queryTaskOwner(db, value)
+  if (ownerResult !== undefined) return ownerResult
   const messageResult = queryMessages(db, value)
   if (messageResult !== undefined) return messageResult
   const result = queryEffects(db, value)

@@ -249,7 +249,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     }
     const topic = await context.topicFor?.({ run: data.run, unit, binding, intent, facts })
     if (topic) binding.topicId = topic.topicId
-    if (facts.topic?.facts) base.constraints = [...new Set([...base.constraints, ...facts.topic.facts.filter(fact => fact.kind === 'constraint').map(fact => fact.text)])]
+    if (facts.topic?.facts) base.constraints = [...new Set([...base.constraints, ...facts.topic.facts.filter(fact => fact.kind === 'constraint' && fact.status !== 'invalidated').map(fact => fact.text)])]
     const commands = intent.actions.every(action => action.intent === 'no_action') ? [] : intent.actions.map((action, index) => { const commandId = `${runId}:${unit.unitId}:${revision(data)}:${index}`; return { commandId, kind: action.intent, args: { taskId: binding.target?.taskId ?? (['create', 'research', 'answer'].includes(action.intent) ? `task-${digest(commandId).slice(0, 32)}` : null), arguments: action.arguments, binding, constraints: [...base.constraints, ...base.sharedConstraints, ...intent.constraints], requiredExecutionMaterials: intent.requiredExecutionMaterials, replyPolicy: intent.replyPolicy }, dependsOn: action.dependsOn.map(dep => `${runId}:${unit.unitId}:${revision(data)}:${dep}`) } })
     await cmd('message.accept', { runId, unitId: unit.unitId, expectedRevision: revision(data), commands, ...(topic ? { topic } : {}), ...(commands.length ? {} : { outcome: 'ignored' }) }, `accept:${runId}:${unit.unitId}:${revision(data)}`)
     await dispatch(runId)
@@ -278,12 +278,26 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const published = await state(runId)
     await Promise.all(published.units.filter(unit => unit.status !== 'superseded').map(unit => unitDrive(runId, unit)))
   }
+  async function authorizedPriorityControls(entries) {
+    if (!context.authorizePriorityControl || !entries.length) return null
+    const controls = await Promise.all(entries.map(async ({ run, unit }) => {
+      const control = await context.authorizePriorityControl({ run, unit, binding: unit.routingBinding })
+      return control && ['pause', 'cancel', 'resume', 'revise'].includes(control.action)
+        && control.taskId && control.taskId === (unit.routingBinding?.taskId ?? unit.routingBinding?.target?.taskId)
+        ? { unitId: unit.id, taskId: control.taskId, action: control.action } : null
+    }))
+    return controls.every(Boolean) ? controls : null
+  }
   async function topicDrive(topicId) {
     const topic = await store.query({ kind: 'message.topic', topicId })
-    if (!topic || (await store.query({ kind: 'message.routing.pending', conversationId: topic.conversationId })).length) return
+    if (!topic) return
+    const routingPending = (await store.query({ kind: 'message.routing.pending', conversationId: topic.conversationId })).length > 0
     let entries = await store.query({ kind: 'message.topic.units', topicId })
     if (!entries.length) return
-    const refreshed = await cmd('message.topic.refresh', { runId: entries[0].run.runId, topicId, inputRevision: topic.inputRevision }, `topic-refresh:${topicId}:${topic.inputRevision}`)
+    const priorityControls = routingPending ? await authorizedPriorityControls(entries) : null
+    if (routingPending && !priorityControls) return 'WAIT_ROUTING'
+    const refreshed = await cmd('message.topic.refresh', { runId: entries[0].run.runId, topicId, inputRevision: topic.inputRevision,
+      ...(priorityControls ? { priorityControls } : {}) }, `topic-refresh:${topicId}:${topic.inputRevision}`)
     if (refreshed.status !== 'ready') return refreshed.status
     entries = await store.query({ kind: 'message.topic.units', topicId })
     const prepared = await Promise.all(entries.map(async ({ run, unit }) => {
@@ -292,9 +306,12 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (!binding) throw new Error('MESSAGE_TOPIC_BINDING_MISSING')
       const facts = await context.facts?.({ run, snapshot: run.snapshot, unit, binding }) ?? {}
       const base = unitContext(run.snapshot, unit)
+      const priorActions = data.commands.filter(command => command.unitId === unit.id && ['applied', 'running', 'unknown', 'superseded'].includes(command.status))
+        .map(command => ({ commandId: command.commandId, intent: command.kind, arguments: command.args?.arguments ?? {}, status: command.status, priorStatus: command.priorStatus ?? null, taskId: command.args?.taskId ?? null }))
       const answers = data.requests.filter(request => request.unitId === unit.id && request.nodeId === 'IB' && request.status === 'resolved')
         .map(request => ({ requestId: request.id, question: request.question, answer: projectMaterial(request.answer) }))
-      return { run, unit, data, binding, facts, base, input: { ...intentContext(base, binding, facts, run.snapshot.policy, [], resolvedMaterialEvidence(data.requests, unit.id)), ...(answers.length ? { clarificationAnswers: answers } : {}) } }
+      const priorityControl = priorityControls?.find(control => control.unitId === unit.id)
+      return { run, unit, data, binding, facts, base, priorActions, input: { ...intentContext(base, binding, facts, run.snapshot.policy, [], resolvedMaterialEvidence(data.requests, unit.id)), ...(priorActions.length ? { priorActions } : {}), ...(priorityControl ? { authorizedControl: priorityControl } : {}), ...(answers.length ? { clarificationAnswers: answers } : {}) } }
     }))
     // 本次最新来源承担一次 IB 调用账；连续补充不反复消耗最早消息的预算。
     const first = prepared.at(-1)
@@ -308,6 +325,11 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     if (decisions.length !== prepared.length || new Set(decisions.map(item => item.unitId)).size !== prepared.length || prepared.some(item => !decisions.some(decision => decision.unitId === item.unit.id))) {
       await cmd('message.attention', { runId: first.run.runId, reason: `MESSAGE_TOPIC_INTENT_COVERAGE:${topicId}` }); return
     }
+    if (priorityControls && decisions.some(decision => {
+      const control = priorityControls.find(item => item.unitId === decision.unitId)
+      return decision.intent.kind !== 'intent' || decision.intent.actions.length !== 1
+        || decision.intent.actions[0].intent !== control.action
+    })) return 'WAIT_ROUTING'
     const accepted = []
     for (const item of prepared) {
       let intent = decisions.find(decision => decision.unitId === item.unit.id).intent
@@ -348,22 +370,30 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         if (!material?.ready) { await waiting(item.data, item.unit.id, 'execute', { kind: 'needs_context', reason: 'REQUIRED_EXECUTION_MATERIAL_PENDING', needs }); return }
       }
       const constraints = [...new Set([...item.base.constraints, ...item.base.sharedConstraints,
-        ...(item.facts.topic?.facts ?? []).filter(fact => fact.kind === 'constraint').map(fact => fact.text), ...intent.constraints])]
-      const commands = intent.actions.every(action => action.intent === 'no_action') ? [] : intent.actions.map((action, index) => {
-        const commandId = `${topicId}:${topic.inputRevision}:${item.unit.id}:${index}`
-        return { commandId, kind: action.intent, args: { taskId: actionBinding.target?.taskId ?? (['create', 'research', 'answer'].includes(action.intent) ? `task-${digest(commandId).slice(0, 32)}` : null), arguments: action.arguments, binding: actionBinding, constraints, requiredExecutionMaterials: intent.requiredExecutionMaterials, replyPolicy: intent.replyPolicy }, dependsOn: action.dependsOn.map(dep => `${topicId}:${topic.inputRevision}:${item.unit.id}:${dep}`) }
+        ...(item.facts.topic?.facts ?? []).filter(fact => fact.kind === 'constraint' && fact.status !== 'invalidated').map(fact => fact.text), ...intent.constraints])]
+      const usedPrior = new Set(), actionIds = intent.actions.map((action, index) => {
+        const prior = item.priorActions.find(command => command.status === 'applied' && !usedPrior.has(command.commandId)
+          && command.intent === action.intent && digest(command.arguments) === digest(action.arguments))
+        if (prior) { usedPrior.add(prior.commandId); return prior.commandId }
+        return `${topicId}:${topic.inputRevision}:${item.unit.id}:${index}`
+      })
+      const commands = intent.actions.every(action => action.intent === 'no_action') ? [] : intent.actions.flatMap((action, index) => {
+        const commandId = actionIds[index]
+        if (usedPrior.has(commandId)) return []
+        return [{ commandId, kind: action.intent, args: { taskId: priorityControls?.find(control => control.unitId === item.unit.id)?.taskId ?? actionBinding.target?.taskId ?? (['create', 'research', 'answer'].includes(action.intent) ? `task-${digest(commandId).slice(0, 32)}` : null), arguments: action.arguments, binding: actionBinding, constraints, requiredExecutionMaterials: intent.requiredExecutionMaterials, replyPolicy: intent.replyPolicy }, dependsOn: action.dependsOn.map(dep => actionIds[dep]) }]
       })
       const sourceRefs = [{ sourceKey: item.run.sourceKey, sourceVersion: item.run.sourceVersion, text: item.run.body }]
       const topicFacts = [...intent.constraints.map(text => ({ kind: 'constraint', text, sourceRefs })), ...intent.actions.filter(action => action.intent === 'fact').map(action => ({ kind: action.arguments.kind, text: action.arguments.text, sourceRefs }))]
-      accepted.push({ unitId: item.unit.id, expectedRevision: revision(item.data), commands, ...(commands.length ? {} : { outcome: 'ignored' }), topicFacts })
+      accepted.push({ unitId: item.unit.id, expectedRevision: revision(item.data), commands, ...(commands.length ? {} : { outcome: usedPrior.size ? 'applied' : 'ignored' }), topicFacts })
     }
-    const result = await cmd('message.topic.intent.accept', { runId: first.run.runId, topicId, conversationId: topic.conversationId, inputRevision: topic.inputRevision, decisions: accepted }, `topic-intent-accept:${topicId}:${topic.inputRevision}:${randomUUID()}`)
+    const result = await cmd('message.topic.intent.accept', { runId: first.run.runId, topicId, conversationId: topic.conversationId, inputRevision: topic.inputRevision, decisions: accepted,
+      ...(priorityControls ? { priorityControls } : {}) }, `topic-intent-accept:${topicId}:${topic.inputRevision}:${randomUUID()}`)
     if (result.status === 'accepted') await Promise.all(prepared.map(item => dispatch(item.run.runId)))
     return result.status
   }
   async function scheduleTopics(conversationId) {
     if (!context.bindTopic || closed) return
-    if ((await store.query({ kind: 'message.routing.pending', conversationId })).length) return
+    const routingPending = (await store.query({ kind: 'message.routing.pending', conversationId })).length > 0
     for (const topic of await store.query({ kind: 'message.topic.pending', conversationId })) {
       if (topicFlights.has(topic.topicId)) {
         const scheduled = topicFlights.get(topic.topicId).then(() => closed ? undefined : scheduleTopics(conversationId))
@@ -372,6 +402,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         continue
       }
       const entries = await store.query({ kind: 'message.topic.units', topicId: topic.topicId })
+      if (routingPending && !await authorizedPriorityControls(entries)) continue
       const snapshots = await Promise.all(entries.map(item => state(item.run.runId)))
       if (snapshots.some(data => data.run.status === 'needs_attention' || data.requests.some(request => request.status === 'pending' && entries.some(item => item.unit.id === request.unitId)))) continue
       let retry = false

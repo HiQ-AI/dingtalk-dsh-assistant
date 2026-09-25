@@ -10,16 +10,16 @@ const evidenceSchema = { type: 'object', properties: {
   output: object, verification: object,
 }, required: ['stepId', 'objective', 'capabilityId', 'inputDigest', 'evidenceId', 'output', 'verification'], additionalProperties: false }
 const stateSchema = { type: 'object', properties: {
-  request: string, constraints: { type: 'array', items: string }, scope: object,
+  request: string, acceptanceCriteria: { type: 'array', items: string }, constraints: { type: 'array', items: string }, scope: object,
   done: { type: 'boolean' }, evidence: { type: 'array', items: evidenceSchema },
-}, required: ['request', 'constraints', 'scope', 'done', 'evidence'], additionalProperties: false }
+}, required: ['request', 'acceptanceCriteria', 'constraints', 'scope', 'done', 'evidence'], additionalProperties: false }
 const reportSchema = { type: 'object', properties: {
   outcome: { type: 'string', enum: ['completed', 'blocked'] }, summary: string,
   evidenceIds: { type: 'array', items: string }, limitations: { type: 'array', items: string },
 }, required: ['outcome', 'summary', 'evidenceIds', 'limitations'], additionalProperties: false }
 const inputSchema = { type: 'object', properties: {
-  request: string, constraints: { type: 'array', items: string }, scope: object,
-}, required: ['request', 'constraints', 'scope'], additionalProperties: false }
+  request: string, acceptanceCriteria: { type: 'array', items: string }, constraints: { type: 'array', items: string }, scope: object,
+}, required: ['request', 'acceptanceCriteria', 'constraints', 'scope'], additionalProperties: false }
 
 /** 受信 Host 登记的只读能力；执行与独立核验都由代码完成。 */
 export function createGeneralTaskWorkflow({ provider, model, reasoningEffort, capabilities, completionCheck, completionIdentity, maxSteps = 3 }) {
@@ -39,7 +39,9 @@ export function createGeneralTaskWorkflow({ provider, model, reasoningEffort, ca
   const nodes = [{ id: 'prepare', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema, outputSchema: stateSchema,
     mapInput: ({ requirement }) => requirement,
     execute: async ({ input }) => {
-      if (!input.request.trim() || input.constraints.length > 32 || Buffer.byteLength(JSON.stringify(input), 'utf8') > 32000)
+      if (!input.request.trim() || !input.acceptanceCriteria.length || input.acceptanceCriteria.length > 16
+        || input.acceptanceCriteria.some(item => !item.trim()) || new Set(input.acceptanceCriteria).size !== input.acceptanceCriteria.length
+        || input.constraints.length > 32 || Buffer.byteLength(JSON.stringify(input), 'utf8') > 32000)
         throw executionError('GENERAL_REQUIREMENT_INVALID')
       return { ...input, done: false, evidence: [] }
     }, rulesDigest }]
@@ -72,7 +74,10 @@ export function createGeneralTaskWorkflow({ provider, model, reasoningEffort, ca
         const output = await capability.execute({ input: step.input, scope: state.scope, signal })
         const verification = await capability.verify({ input: step.input, scope: state.scope, output, expectedEvidence: step.expectedEvidence, signal })
         if (!output || typeof output !== 'object' || Array.isArray(output) || !verification || typeof verification !== 'object'
-          || verification.passed !== true || Buffer.byteLength(JSON.stringify({ output, verification }), 'utf8') > 32000)
+          || verification.passed !== true || verification.outputDigest !== executionDigest(output)
+          || !Array.isArray(verification.sourceRefs) || !verification.sourceRefs.length
+          || verification.sourceRefs.some(ref => typeof ref !== 'string' || !ref.trim())
+          || Buffer.byteLength(JSON.stringify({ output, verification }), 'utf8') > 32000)
           throw executionError('GENERAL_EVIDENCE_UNVERIFIED')
         return { ...state, evidence: [...state.evidence, { stepId: `step-${number}`, objective: step.objective,
           capabilityId: step.capabilityId, inputDigest, evidenceId: `step-${number}`, output, verification }] }
@@ -97,9 +102,15 @@ export function createGeneralTaskWorkflow({ provider, model, reasoningEffort, ca
         if (!report.limitations.length) throw executionError('GENERAL_REPORT_INVALID')
         throw executionError('GENERAL_TASK_BLOCKED')
       }
-      if (report.outcome !== 'completed' || !state.done || !state.evidence.length || !report.evidenceIds.length
-        || await completionCheck({ request: state.request, constraints: state.constraints, scope: state.scope,
-          evidence: state.evidence, report }) !== true) throw executionError('GENERAL_COMPLETION_UNVERIFIED')
+      if (report.outcome !== 'completed' || !state.done || !state.evidence.length || !report.evidenceIds.length)
+        throw executionError('GENERAL_COMPLETION_UNVERIFIED')
+      const assessment = await completionCheck({ request: state.request, acceptanceCriteria: state.acceptanceCriteria,
+        constraints: state.constraints, scope: state.scope, evidence: state.evidence, report })
+      if (assessment?.status !== 'satisfied' || assessment.resultVerified !== true
+        || !Array.isArray(assessment.criteria) || assessment.criteria.length !== state.acceptanceCriteria.length
+        || assessment.criteria.some((item, index) => item?.criterion !== state.acceptanceCriteria[index]
+          || item.passed !== true || !Array.isArray(item.evidenceIds) || !item.evidenceIds.length
+          || item.evidenceIds.some(id => !report.evidenceIds.includes(id)))) throw executionError('GENERAL_COMPLETION_UNVERIFIED')
       return report
     } })
   return { id: 'task-general', version: '1', nodes }
