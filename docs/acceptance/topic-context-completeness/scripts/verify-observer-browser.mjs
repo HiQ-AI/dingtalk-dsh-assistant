@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto'
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url)), require = createRequire(import.meta.url)
 const playwright = process.argv[2] ? require(path.resolve(process.argv[2], 'playwright')) : require('playwright')
-const output = path.join(root, 'docs/acceptance/topic-context-completeness/round-1')
+const output = path.resolve(process.argv[3] ?? path.join(root, 'docs/acceptance/topic-context-completeness/round-1'))
 await mkdir(output, { recursive: true })
 const reactPath = require.resolve('react/package.json'), reactVersion = JSON.parse(await readFile(reactPath, 'utf8')).version
 const domDirectory = (await readdir(path.join(root, 'node_modules/.pnpm'))).find(name => name.startsWith(`react-dom@${reactVersion}_`))
@@ -51,7 +51,18 @@ await page.route('**/*', async route => {
   if (target.pathname === '/state/tasks') data = tasks
   if (target.pathname === '/state/topics') data = { topics, total: 2 }
   if (target.pathname.startsWith('/state/topics/topic-')) data = { topic: topics.find(item => target.pathname.endsWith(item.topicId)), messages: [], total: 0 }
-  if (target.pathname === '/state/workflows/msg-1/trace') data = { runId: 'msg-1', revision: 1, reason: 'MESSAGE_CONTEXT_CAPACITY:IB:$:33000/32000', items: [{ id: 'n1', kind: 'intent', status: 'succeeded', input: { text: '完整输入' }, output: { reason: '当前判断' }, usage: null, sourceRunIds: ['msg-1'] }], nextCursor: null }
+  if (/\/state\/workflows\/msg-[12]\/trace/.test(target.pathname)) data = { runId: 'msg-1', revision: 1, reason: 'MESSAGE_CONTEXT_CAPACITY:IB:$:33000/32000', items: [{ id: 'n1', kind: 'intent', status: 'succeeded', input: { text: '完整输入' }, output: { kind: 'topic_intents', decisions: [{ intent: { actions: [{ intent: 'research', arguments: { objective: '核对租户权限' } }], constraints: ['仅排查，不修改'] } }] }, usage: null, sourceRunIds: ['msg-1'] }], nextCursor: null }
+  if (/\/state\/workflows\/msg-[12]\/trace/.test(target.pathname)) {
+    const currentId = target.pathname.includes('msg-2') ? 'msg-2' : 'msg-1'
+    data.status = 'needs_attention'; data.message = { text: '请核对租户权限，仅排查，不修改。' }
+    Object.assign(data.items[0], { topicTitle: '租户权限排查', startedAt: '2026-09-26T00:00:02Z', completedAt: '2026-09-26T00:00:05.500Z', sourceRunIds: ['msg-1', 'msg-2'], sourceMessages: [
+      { runId: 'msg-1', senderName: '张三', occurredAt: '2026-09-26T00:00:00Z', text: '请核对租户权限', current: currentId === 'msg-1' },
+      { runId: 'msg-2', senderName: '李四', occurredAt: '2026-09-26T00:00:01Z', text: '限定租户 A，先排查', current: currentId === 'msg-2' }] })
+    data.items.unshift(
+      { id: 's1', kind: 'split', status: 'succeeded', createdAt: '2026-09-26T00:00:00Z', output: { units: [{ goalText: '核对租户权限' }] } },
+      { id: 'r1', kind: 'route', status: 'succeeded', createdAt: '2026-09-26T00:00:02Z', input: { candidates: [{ candidateId: 't1', title: '租户权限排查' }] }, output: { kind: 'binding', disposition: 'existing', candidateId: 't1', evidence: ['明确引用了原排查消息'] } })
+    data.total = data.items.length
+  }
   if (target.pathname.startsWith('/state/workflows/topics/')) {
     const slow = target.pathname.includes('topic-1')
     if (slow) { slowRequested(); await new Promise(resolve => setTimeout(resolve, 800)) }
@@ -65,16 +76,38 @@ try {
   await page.getByRole('button', { name: '钉钉群聊运行看板', exact: true }).click()
   await page.getByRole('button', { name: '处理过程', exact: true }).click()
   await page.getByRole('region', { name: '消息处理过程' }).waitFor()
-  const input = page.locator('summary').filter({ hasText: /^输入$/ })
+  await page.getByText('提出 1 项处理决定', { exact: true }).waitFor()
+  await page.getByText('仅排查，不修改', { exact: true }).waitFor()
+  await page.getByText('耗时 3.5 秒', { exact: true }).waitFor()
+  await page.getByText(/本次判断覆盖 2 条消息/).waitFor()
+  await page.getByText('拆分为 1 个事项', { exact: true }).waitFor()
+  await page.getByText('租户权限排查', { exact: true }).waitFor()
+  assert.equal(await page.locator('summary').filter({ hasText: /^输入$/ }).last().isVisible(), false)
+  await page.locator('summary').filter({ hasText: /^技术详情$/ }).last().click()
+  const input = page.locator('summary').filter({ hasText: /^输入$/ }).last()
   await input.focus(); await page.keyboard.press('Enter')
   assert.equal(await input.evaluate(element => element.parentElement.open), true)
   await page.getByText('完整输入', { exact: false }).waitFor()
   await page.getByText(/上下文容量受阻/).waitFor()
-  const usage = page.locator('summary').filter({ hasText: /^用量$/ })
+  const usage = page.locator('summary').filter({ hasText: /^用量$/ }).last()
   await usage.focus(); await page.keyboard.press(' ')
-  await page.getByText('模型用量未知（未记录）').waitFor()
+  await page.getByText('模型用量未知（未记录）').last().waitFor()
   checks.push('message-trace', 'keyboard-details', 'unknown-usage', 'capacity-reason')
+  await page.locator('summary').filter({ hasText: /^技术详情$/ }).last().click()
+  await page.evaluate(() => document.querySelectorAll('*').forEach(element => { if (element.scrollTop) element.scrollTop = 0 }))
   await page.screenshot({ path: path.join(output, 'message-trace.png'), fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.evaluate(() => document.querySelectorAll('*').forEach(element => { if (element.scrollTop) element.scrollTop = 0 }))
+  await page.screenshot({ path: path.join(output, 'message-trace-narrow.png'), fullPage: true })
+  assert.ok(await page.getByText('提出 1 项处理决定', { exact: true }).isVisible())
+  const traceWidth=await page.getByRole('region',{name:'消息处理过程'}).evaluate(el=>({width:el.clientWidth,scroll:el.scrollWidth}))
+  assert.ok(traceWidth.scroll<=traceWidth.width+1)
+  checks.push('readable-conclusion','collapsed-technical-details','narrow-trace-no-overflow')
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.getByRole('button', { name: '查看这条消息的过程', exact: true }).click()
+  await page.getByText(/李四.*当前查看的消息/).waitFor()
+  assert.equal(await page.getByText('提出 1 项处理决定', { exact: true }).count(), 1)
+  checks.push('step-duration','shared-batch-sources','switch-source-keeps-single-judgment')
   await page.getByRole('button', { name: '返回收信箱' }).click()
   await page.getByRole('button', { name: '话题', exact: true }).click()
   await page.getByRole('button', { name: '慢话题', exact: true }).click()

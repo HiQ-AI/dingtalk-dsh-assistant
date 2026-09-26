@@ -32,7 +32,7 @@ test('判断轨迹区分未知用量与确定性处理，并展示容量受阻�
   assert.equal(usage({ kind: 'command' }), 'Host 接纳动作，不单独计模型用量')
   const recorded = { inputTokens: 0, outputTokens: 8 }
   assert.equal(usage({ usage: recorded }), recorded)
-  assert.match(reason('MESSAGE_CONTEXT_CAPACITY:IB:$:33000/32000'), /上下文容量受阻.*33000\/32000/)
+  assert.match(reason('MESSAGE_CONTEXT_CAPACITY:IB:$:33000/32000'), /上下文容量受阻.*后续判断已停止/)
   assert.match(reason('MESSAGE_MATERIAL_CAPACITY:R:u1'), /必要材料未能完整提供/)
   assert.equal(reason({ code: 'FAILED' }), '{"code":"FAILED"}')
 })
@@ -376,4 +376,33 @@ test('发件状态按实际投递环节展示，pending不会伪装为已回读'
   assert.match(source, /message\.deliveryError/)
   assert.match(source, /最近尝试.*fmt\(message\.deliveryAttemptedAt\)/)
   assert.match(source, /message\.deliveryAttemptCount/)
+})
+
+test('处理步骤直接展示事项、关联对象和动作结论，未知结构不编造结果', async () => {
+  const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+  const code=source.slice(source.indexOf('    const traceStatus ='),source.indexOf('    const traceUsage ='))
+  const {describe,status}=runInNewContext(`${code};({describe:describeTraceItem,status:traceStatus})`)
+  const split=describe({kind:'split',output:{units:[{goalText:'核对租户甲'},{goalText:'等待确认'}]}})
+  assert.equal(split.conclusion,'拆分为 2 个事项');assert.equal(split.rows[1].value,'等待确认')
+  const route=describe({kind:'route',input:{goalText:'核对租户甲',candidates:[{candidateId:'t1',title:'租户权限排查'}]},output:{kind:'binding',disposition:'existing',candidateId:'t1',evidence:['引用原话']}})
+  assert.ok(route.rows.some(row=>row.value==='租户权限排查'))
+  const intent=describe({kind:'intent',output:{decisions:[{intent:{actions:[{intent:'research',arguments:{objective:'核对权限'}}],constraints:['仅排查，不修改']}}]}})
+  assert.equal(intent.rows[0].label,'开展排查');assert.equal(intent.rows[1].value,'仅排查，不修改')
+  assert.equal(describe({kind:'route',output:{kind:'needs_clarification',question:'哪个租户？'}}).conclusion,'需要进一步确认')
+  assert.equal(describe({kind:'intent',status:'failed'}).conclusion,'本步未完成，请查看阻塞原因')
+  assert.equal(describe({kind:'unknown'}).conclusion,'尚未记录判断结论')
+  assert.equal(status('settled'),'处理已结束');assert.equal(status('alien'),'状态未记录')
+  assert.match(source,/技术详情/);assert.match(source,/回复送达情况见发信箱/)
+})
+
+test('步骤耗时使用本次 startedAt，缺失或倒置时间不冒充零耗时',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+ const code=source.slice(source.indexOf('const traceElapsed = ')+ 'const traceElapsed = '.length,source.indexOf('    const traceUsage ='))
+ const elapsed=runInNewContext(`(${code})`)
+ const step={startedAt:'2026-09-26T00:00:00Z',completedAt:'2026-09-26T00:00:02.500Z',status:'succeeded'}
+ assert.equal(elapsed(step,0),'耗时 2.5 秒')
+ assert.equal(elapsed({...step,attempt:2},0),'耗时 2.5 秒（第 2 次处理）')
+ assert.equal(elapsed({...step,startedAt:undefined},0),'耗时未记录')
+ assert.equal(elapsed({...step,completedAt:'2026-09-25T00:00:00Z'},0),'耗时未记录')
+ assert.equal(elapsed({...step,status:'running'},Date.parse('2026-09-26T00:01:05Z')),'已用时 1 分 5 秒')
 })

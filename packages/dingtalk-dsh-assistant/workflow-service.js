@@ -1695,7 +1695,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     for (const node of shared) if (!byId.has(node.nodeRunId)) byId.set(node.nodeRunId, node)
     const nodeKinds = { S: 'split', R: 'route', I: 'intent', IB: 'intent' }
     const items = [...byId.values()].map(node => ({ id: node.nodeRunId, kind: nodeKinds[node.nodeId] ?? 'node', nodeId: node.nodeId,
-      unitId: node.unitId, status: node.status, createdAt: node.createdAt, completedAt: node.completedAt ?? node.finishedAt,
+      unitId: node.unitId, status: node.status, createdAt: node.createdAt, startedAt: node.startedAt, attempt: node.leaseEpoch, completedAt: node.completedAt ?? node.finishedAt,
       topicId: node.input?.topicId ?? node.input?.sharedTopic?.topicId, intentRunId: node.input?.intentRunId,
       carrierRunId: node.carrierRunId, sourceRunIds: node.input?.units?.map(unit => unit.runId),
       evidenceRefs: node.output?.output?.evidence ?? node.input?.sharedTopic?.sources?.map(ref => `${ref.sourceKey}@${ref.sourceVersion}`) ?? [],
@@ -1703,12 +1703,26 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       deterministic: node.input?.deterministic === true,
       input: node.input, output: node.output?.output ?? node.output, reason: node.error ?? null, usage: node.usage ?? node.output?.usage ?? null }))
       .concat(data.commands.map(command => ({ id: command.commandId ?? command.id, kind: 'command', status: command.status,
-        unitId: command.unitId, topicId: command.topicId, createdAt: command.createdAt, completedAt: command.completedAt,
+        unitId: command.unitId, topicId: command.topicId, createdAt: command.createdAt, startedAt: command.startedAt, attempt: command.leaseEpoch, completedAt: command.completedAt,
         input: { kind: command.kind, args: command.args, dependsOn: command.dependsOn }, output: command.result,
         reason: command.error ?? command.reason ?? null })))
       .sort((a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')) || String(a.id).localeCompare(String(b.id)))
-    return { runId, status: data.run.status, reason: data.run.reason ?? null, revision: data.run.revision ?? data.run.matterSetRevision ?? 0,
-      items: items.slice(offset, offset + limit), nextCursor: offset + limit < items.length ? offset + limit : null, total: items.length }
+    const pageItems = items.slice(offset, offset + limit)
+    const sourceCache = new Map([[runId, data.run]])
+    for (const item of pageItems.filter(item => item.kind === 'intent')) {
+      const topic = item.topicId ? await store.query({ kind: 'message.topic', topicId: item.topicId }) : null
+      item.topicTitle = topic?.conversationId === data.run.conversationId ? topic.title : null
+      item.sourceMessages = []
+      for (const sourceId of [...new Set(item.sourceRunIds ?? [runId])]) {
+        if (!sourceCache.has(sourceId)) sourceCache.set(sourceId, (await messages.state(sourceId))?.run)
+        const source = sourceCache.get(sourceId)
+        if (!source || source.conversationId !== data.run.conversationId) continue
+        item.sourceMessages.push({ runId: sourceId, text: source.body, senderName: source.context?.senderName ?? null,
+          occurredAt: source.context?.occurredAt ?? source.createdAt, current: sourceId === runId })
+      }
+    }
+    return { runId, message: { text: data.run.body, receivedAt: data.run.createdAt }, status: data.run.status, reason: data.run.reason ?? null, revision: data.run.revision ?? data.run.matterSetRevision ?? 0,
+      items: pageItems, nextCursor: offset + limit < items.length ? offset + limit : null, total: items.length }
   }
   async function workflowTopicContext(topicId, { offset = 0, limit = 50, intentCursor = 0, expectedRevision = null } = {}) {
     const topic = await store.query({ kind: 'message.topic', topicId })
