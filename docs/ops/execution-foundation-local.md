@@ -435,3 +435,5 @@ Owner 可用 `task_owner_read_artifact` 按引用读取当前 Task 已成功阶�
 受控外部效果只允许 code 节点声明 `external.operation`。受信适配器须提供当前只读快照、精确准备对象、发送和独立回读；prepared 必须绑定 run/generation/requirementDigest、workflowKind、目标资源键和平台操作身份。网关在同一控制账检查停止、输入修订、撤权、资源占用及批准，再发放一次发送资格。生产批准绑定一个精确 effect 请求；Web 或钉钉认证入口的首个有效终态由控制账记录，尚未接入两端审批 UI 与真实通知前，不得打开生产准入。unknown 效果只读对账，不重试发送。
 
 隔离验证可运行 `node --test test/task-readonly-workflows.test.js test/task-release-workflows.test.js test/workflow-data-change.test.js test/execution-external-delivery.test.js test/workflow-service.test.js`。合成适配器通过仅证明编排合同，不证明 Woodpecker、Bytebase、Registry、Kubernetes、真实数据库或渠道投递。完整迁移状态见[第 27 轮](../acceptance/runtime-redesign/round-27.md)。
+
+早期 v4 的事实可能未写 status；迁移按准确来源版本补充状态：仍为最新来源则 active，来源已换版则 invalidated，并记录 migrationReason=v4-implicit-status。显式状态原样保留，缺失来源或非法状态仍拒绝迁移。

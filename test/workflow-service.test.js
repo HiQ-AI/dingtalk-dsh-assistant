@@ -1754,3 +1754,18 @@ test('局部撤销范围及模型误报整话题均保留其他任务限制且�
   assert.deepEqual(await execution.store.query({kind:'run.list'}),[])
  }
 })
+
+test('answer 创建的任务可回读来源及历史执行', async t => {
+  const {service,message,execution}=await fixture(t,'owner',undefined,{judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'
+    ?{kind:'binding',disposition:'new',candidateId:null,evidence:['新消息']}
+    :{kind:'intent',actions:[{intent:'answer',arguments:{objective:'回答当前材料'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}})
+  const received=await service.ingest(message)
+  const state=await service.messages.process(received.runId)
+  const command=state.commands.find(item=>item.kind==='answer')
+  assert.equal(command.status,'applied')
+  const origin=await execution.store.query({kind:'message.task',taskId:command.result.taskId})
+  assert.equal(origin.run.conversationId,message.groupId)
+  assert.equal((await execution.store.query({kind:'message.task.latest',taskId:command.result.taskId})).command.kind,'answer')
+  assert.ok((await execution.store.query({kind:'message.task-candidates',conversationId:message.groupId})).some(item=>item.command.args.taskId===command.result.taskId))
+  assert.equal((await service.taskRuns(command.result.taskId)).taskId,command.result.taskId)
+})

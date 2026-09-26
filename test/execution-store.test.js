@@ -158,7 +158,9 @@ test('话题事实 v4→v5 离线迁移先零写检查并备份，逐条回读�
   raw.exec('PRAGMA foreign_keys=ON')
   const fact={id:'old-fact',kind:'constraint',text:'只用中文',sourceRefs:[{sourceKey:'m',sourceVersion:1,text:'只用中文'}],status:'active'}
   raw.prepare('INSERT INTO message_runs(run_id,source_key,source_version,body) VALUES(?,?,?,?)').run('migration-source','m',1,JSON.stringify({runId:'migration-source',sourceKey:'m',sourceVersion:1,conversationId:'g',actorId:'owner',body:'只用中文'}))
-  const topic={topicId:'old-topic',conversationId:'g',title:'旧话题',revision:1,inputRevision:1,facts:[fact]}
+  raw.prepare('INSERT INTO message_runs(run_id,source_key,source_version,body) VALUES(?,?,?,?)').run('stale-v1','stale',1,JSON.stringify({conversationId:'g',body:'只用中文'}))
+  raw.prepare('INSERT INTO message_runs(run_id,source_key,source_version,body) VALUES(?,?,?,?)').run('stale-v2','stale',2,JSON.stringify({conversationId:'g',body:'已修改'}))
+  const topic={topicId:'old-topic',conversationId:'g',title:'旧话题',revision:1,inputRevision:1,facts:[fact,{...fact,id:'implicit-fact',status:undefined},{...fact,id:'stale-fact',status:undefined,sourceRefs:[{sourceKey:'stale',sourceVersion:1,text:'只用中文'}]}]}
   raw.prepare('INSERT INTO message_topics(topic_id,conversation_id,body) VALUES(?,?,?)').run(topic.topicId,topic.conversationId,JSON.stringify(topic))
   raw.exec('DROP TABLE message_topic_facts; PRAGMA user_version=4')
   raw.prepare('UPDATE execution_meta SET schema_version=4 WHERE singleton=1').run()
@@ -175,7 +177,7 @@ test('话题事实 v4→v5 离线迁移先零写检查并备份，逐条回读�
   restoredSource.close()
   const check=spawnSync(process.execPath,[script,'--check',f.dbPath],{encoding:'utf8'})
   assert.equal(check.status,0,check.stderr)
-  assert.equal(JSON.parse(check.stdout).facts,1)
+  assert.equal(JSON.parse(check.stdout).facts,3)
   assert.equal(JSON.parse(check.stdout).unknownEffects,0)
   assert.equal(JSON.parse(check.stdout).pendingApprovals,0)
   assert.equal(JSON.parse(check.stdout).baseline.execution_runs.count,1)
@@ -207,6 +209,8 @@ test('话题事实 v4→v5 离线迁移先零写检查并备份，逐条回读�
   assert.equal(Object.values(migrated.prepare('PRAGMA user_version').get())[0],5)
   assert.deepEqual(JSON.parse(migrated.prepare('SELECT body FROM message_topic_facts WHERE topic_id=? AND fact_id=?').get('old-topic','old-fact').body),fact)
   assert.equal(JSON.parse(migrated.prepare('SELECT body FROM message_topics WHERE topic_id=?').get('old-topic').body).facts,undefined)
+  assert.equal(JSON.parse(migrated.prepare('SELECT body FROM message_topic_facts WHERE fact_id=?').get('implicit-fact').body).status,'active')
+  assert.equal(JSON.parse(migrated.prepare('SELECT body FROM message_topic_facts WHERE fact_id=?').get('stale-fact').body).status,'invalidated')
   migrated.close()
 })
 

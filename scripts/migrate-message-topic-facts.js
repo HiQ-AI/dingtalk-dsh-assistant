@@ -15,6 +15,12 @@ if (!['--check', '--execute'].includes(mode) || !path || !isAbsolute(path) || !e
     for(const row of connection.prepare(`SELECT * FROM ${table} ORDER BY rowid`).iterate()) {hash.update(JSON.stringify(row));hash.update('\n');count++}
     return {count,sha256:hash.digest('hex')}
   }
+  // 早期 v4 未写 status；来源已换版的事实不能重新激活。
+  const migratedFact = fact => {
+    if (fact.status !== undefined) return fact
+    const stale = fact.sourceRefs.some(ref => db.prepare('SELECT MAX(source_version) AS version FROM message_runs WHERE source_key=?').get(ref.sourceKey).version !== ref.sourceVersion)
+    return { ...fact, status: stale ? 'invalidated' : 'active', migrationReason: 'v4-implicit-status' }
+  }
   try {
     if(mode==='--execute'){
       owner=new DatabaseSync(path+'.owner.sqlite')
@@ -35,7 +41,7 @@ if (!['--check', '--execute'].includes(mode) || !path || !isAbsolute(path) || !e
       const topic = JSON.parse(row.body)
       if (topic.topicId !== row.topic_id || !Array.isArray(topic.facts)) throw new Error('MIGRATION_TOPIC_INVALID')
       for (const fact of topic.facts) {
-        if (typeof fact.id !== 'string' || !['active','invalidated','superseded','unresolved'].includes(fact.status)
+        if (typeof fact.id !== 'string' || (fact.status !== undefined && !['active','invalidated','superseded','unresolved'].includes(fact.status))
           || !Array.isArray(fact.sourceRefs) || !fact.sourceRefs.length) throw new Error('MIGRATION_FACT_INVALID')
         for (const ref of fact.sourceRefs) {
           const evidence = db.prepare('SELECT body FROM message_runs WHERE source_key=? AND source_version=?').get(ref.sourceKey, ref.sourceVersion)
@@ -75,7 +81,7 @@ if (!['--check', '--execute'].includes(mode) || !path || !isAbsolute(path) || !e
         const update = db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?')
         for (const row of topics) {
           const topic = JSON.parse(row.body)
-          for (const fact of topic.facts) insert.run(fact.id,row.topic_id,fact.status,JSON.stringify(fact))
+          for (const original of topic.facts) { const fact=migratedFact(original); insert.run(fact.id,row.topic_id,fact.status,JSON.stringify(fact)) }
           delete topic.facts
           topic.contextRevision = topic.contextRevision ?? 0
           update.run(JSON.stringify(topic),row.topic_id)
@@ -85,7 +91,8 @@ if (!['--check', '--execute'].includes(mode) || !path || !isAbsolute(path) || !e
         if (scalar('SELECT COUNT(*) FROM message_topic_facts') !== factCount || db.prepare('PRAGMA foreign_key_check').all().length) {
           throw new Error('MIGRATION_READBACK_FAILED')
         }
-        for(const row of topics)for(const fact of JSON.parse(row.body).facts){
+        for(const row of topics)for(const original of JSON.parse(row.body).facts){
+          const fact=migratedFact(original)
           const saved=db.prepare('SELECT status,body FROM message_topic_facts WHERE topic_id=? AND fact_id=?').get(row.topic_id,fact.id)
           if(saved?.status!==fact.status||saved.body!==JSON.stringify(fact))throw new Error('MIGRATION_FACT_READBACK_MISMATCH')
         }
@@ -98,7 +105,8 @@ if (!['--check', '--execute'].includes(mode) || !path || !isAbsolute(path) || !e
       const reopened=new DatabaseSync(path,{readOnly:true})
       try {
         for(const table of unchangedTables)if(JSON.stringify(auditTable(reopened,table))!==JSON.stringify(baseline[table]))throw new Error(`MIGRATION_READBACK_MISMATCH:${table}`)
-        for(const row of topics)for(const fact of JSON.parse(row.body).facts){
+        for(const row of topics)for(const original of JSON.parse(row.body).facts){
+          const fact=migratedFact(original)
           const saved=reopened.prepare('SELECT status,body FROM message_topic_facts WHERE topic_id=? AND fact_id=?').get(row.topic_id,fact.id)
           if(saved?.status!==fact.status||saved.body!==JSON.stringify(fact))throw new Error('MIGRATION_FACT_READBACK_MISMATCH')
         }
