@@ -66,7 +66,8 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
   let flight, beforeSequenceId, preparedCursor = 0, readbackCursor = 0
   const command = (kind, args, id) => store.command({ id, kind, args })
   async function prepare(run, action, phase, text) {
-    const eventKey=phase.startsWith('terminal:') ? `task.result:${action.result.runId}:${phase}`
+    const eventKey=phase.startsWith('owner:') ? `task.owner.report:${phase.slice(6)}`
+      : phase.startsWith('terminal:') ? `task.result:${action.result.runId}:${phase}`
       : ['create','reopen'].includes(action.kind) && action.result?.runId ? `task.accepted:${action.result.runId}`
       : action.status==='rejected' ? `action.rejected:${action.commandId}` : `action.reply:${action.commandId}:${phase}`
     const notificationId = `notice-${executionDigest([action.commandId, phase])}`
@@ -75,11 +76,15 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
       if (existing.runId !== run.runId || existing.commandId !== action.commandId) throw new Error('MESSAGE_NOTIFICATION_CONFLICT')
       return
     }
+    const latest = phase.startsWith('owner:') && action.result?.taskId
+      ? await store.query({ kind: 'message.task.latest', taskId: action.result.taskId }) : null
+    const sourceRun = latest?.run?.conversationId === run.conversationId ? latest.run : run
     const responsibility = groupResponsibility(run.conversationId)
-    if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
+    if (responsibility.includes('引用回复') && (!sourceRun.context?.sourceMessageId || !sourceRun.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
     await command('message.notification.prepare', { runId: run.runId, commandId: action.commandId, notificationId, eventKey,
-      payload: { text: formatGroupReply(text, responsibility), phase, conversationId: run.conversationId, sourceMessageId: run.context.sourceMessageId, actorId: run.actorId },
-      disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
+      payload: { text: formatGroupReply(text, responsibility), phase, conversationId: run.conversationId,
+        sourceMessageId: sourceRun.context?.sourceMessageId, actorId: sourceRun.actorId },
+      disclosure: { conversationId: run.conversationId, authorizationRef: sourceRun.sourceKey },
     }, `prepare:${notificationId}`)
   }
   async function drain() {
@@ -103,13 +108,28 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
       }
       for (const action of state.commands.filter(item => ['applied', 'rejected'].includes(item.status) && (item.status === 'rejected' || item.args.replyPolicy !== 'none'))) {
         if (action.result?.reply) await prepare(run, action, 'receipt', action.result.reply)
+        if (action.result?.taskId && ['create', 'research', 'answer'].includes(action.kind)) {
+          const reports = await store.query({ kind: 'task.owner.reports', taskId: action.result.taskId })
+          for (const report of reports.filter(item => item.applicationStatus === 'applied'
+            && (['complete', 'block'].includes(item.reportType)
+              || item.triggerTypes.includes('workflow.succeeded') && item.facts.evidenceRefs.length
+              || item.triggerTypes.includes('workflow.confirmation.required')))) {
+            const text = report.reportType === 'complete' ? `任务已完成：${report.facts.summary}`
+              : report.reportType === 'block' ? `任务需要处理：${report.facts.summary}`
+                : report.triggerTypes.includes('workflow.confirmation.required') ? `任务等待确认：${report.facts.summary}`
+                  : `任务进展：${report.facts.summary}`
+            await prepare(run, action, `owner:${report.reportId}`, text)
+          }
+        }
         if (!['create', 'research', 'answer', 'reopen'].includes(action.kind) || !action.result?.runId) continue
         const task = await controller.state(action.result.runId)
         if (!['succeeded', 'failed', 'cancelled'].includes(task.run.status)) continue
+        const plan = await controller.taskPlan(task.run.taskId)
+        if (plan) continue
         const last = task.nodes.filter(node => node.outputRef).at(-1)
         const output = last ? await artifacts.read(last.outputRef) : null
-        const text = task.run.status === 'succeeded' ? workflowResultText(output) ?? '任务流程已完成，结果可在任务详情查看。'
-          : `任务${task.run.status === 'cancelled' ? '已取消' : '执行失败'}${task.run.recoveryReason ? `：${task.run.recoveryReason}` : ''}`
+        const text = task.run.status === 'succeeded' ? workflowResultText(output) ?? '流程已完成，结果可在任务详情查看。'
+          : `流程${task.run.status === 'cancelled' ? '已取消' : '执行失败'}${task.run.recoveryReason ? `：${task.run.recoveryReason}` : ''}`
         await prepare(run, action, `terminal:${task.run.runId}:${task.run.revision}`, text)
       }
     }

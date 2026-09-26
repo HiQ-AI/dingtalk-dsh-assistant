@@ -1,4 +1,72 @@
 import { executionDigest, executionError } from './execution-artifacts.js'
+import { lstat, open, realpath } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { isAbsolute, relative, resolve } from 'node:path'
+
+/** 只允许 Host 预先列出的工作区文件；读取后重新打开核验，拒绝符号链接逃逸。 */
+export function createGeneralFileReadCapability({ root, readablePaths }) {
+  if (typeof root !== 'string' || !isAbsolute(root) || !Array.isArray(readablePaths)
+    || !readablePaths.length || readablePaths.some(path => typeof path !== 'string' || !path || isAbsolute(path)
+      || path.split(/[\\/]/u).some(part => part === '..' || part === '.' || !part))) throw executionError('GENERAL_FILE_CONFIG_INVALID')
+  const permitted = new Set(readablePaths)
+  const within = (base, target) => { const rel = relative(base, target); return rel && rel !== '..' && !rel.startsWith(`..\\`) && !rel.startsWith('../') && !isAbsolute(rel) }
+  async function load(path) {
+    const base = await realpath(root), requested = resolve(base, path)
+    if (!within(base, requested)) throw executionError('GENERAL_FILE_SCOPE_DENIED')
+    const segments = relative(base, requested).split(/[\\/]/u)
+    let cursor = base
+    for (const segment of segments) {
+      cursor = resolve(cursor, segment)
+      if ((await lstat(cursor)).isSymbolicLink()) throw executionError('GENERAL_FILE_SCOPE_DENIED')
+    }
+    const target = await realpath(requested)
+    if (!within(base, target)) throw executionError('GENERAL_FILE_SCOPE_DENIED')
+    const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try {
+      const opened = await handle.stat(), current = await lstat(target)
+      if (!opened.isFile() || opened.dev !== current.dev || opened.ino !== current.ino) throw executionError('GENERAL_FILE_SCOPE_DENIED')
+      if (opened.size > 12000) throw executionError('GENERAL_FILE_CAPACITY')
+      const data = await handle.readFile()
+      const after = await lstat(target)
+      if (after.dev !== opened.dev || after.ino !== opened.ino || data.length > 12000) throw executionError('GENERAL_FILE_SCOPE_DENIED')
+      const content = new TextDecoder('utf-8', { fatal: true }).decode(data)
+      return { path, content, digest: executionDigest(content) }
+    } finally { await handle.close() }
+  }
+  return {
+    id: 'read-approved-file', effectClass: 'read', identity: `read-approved-file-v1:${executionDigest({ root, readablePaths: [...permitted].sort() })}`,
+    description: '读取受信 Host 在当前任务作用域明确列出的 UTF-8 文件，最多 12 KiB',
+    authorize: async ({ input, scope }) => typeof input.path === 'string' && permitted.has(input.path)
+      && Array.isArray(scope.readableFiles) && scope.readableFiles.includes(input.path),
+    execute: async ({ input }) => load(input.path),
+    async verify({ input, scope, output }) {
+      if (!await this.authorize({ input, scope })) return { passed: false }
+      const fresh = await load(input.path)
+      return { passed: executionDigest(fresh) === executionDigest(output), outputDigest: executionDigest(fresh), sourceRefs: [`file:${fresh.path}:${fresh.digest}`] }
+    },
+  }
+}
+
+/** 文件适配器只由 Host 注入；Task Owner 无法指定输出根目录或最终文件名。 */
+export function createGeneralMarkdownWriteCapability({ fileAdapter }) {
+  if (typeof fileAdapter?.prepare !== 'function' || typeof fileAdapter?.reconcile !== 'function')
+    throw executionError('GENERAL_MARKDOWN_ADAPTER_REQUIRED')
+  return {
+    id: 'write-task-markdown', effectClass: 'file.write', identity: 'write-task-markdown-v1',
+    description: '在当前任务专属目录新建 Markdown 文件并独立读回；参数仅含 content，不支持指定路径或覆盖',
+    authorize: async ({ input, scope }) => scope?.writeMarkdown === true
+      && input && Object.keys(input).length === 1 && typeof input.content === 'string'
+      && !!input.content.trim() && Buffer.byteLength(input.content, 'utf8') <= 12000,
+    prepare: ({ input, binding }) => fileAdapter.prepare({ input, binding }),
+    async verify({ prepared, output }) {
+      const observation = await fileAdapter.reconcile(prepared)
+      return { passed: observation.status === 'succeeded'
+          && executionDigest(observation) === executionDigest(output),
+        outputDigest: executionDigest(observation),
+        sourceRefs: observation.status === 'succeeded' ? [observation.evidenceRef] : [] }
+    },
+  }
+}
 
 const string = { type: 'string' }
 const object = { type: 'object' }
@@ -10,16 +78,16 @@ const evidenceSchema = { type: 'object', properties: {
   output: object, verification: object,
 }, required: ['stepId', 'objective', 'capabilityId', 'inputDigest', 'evidenceId', 'output', 'verification'], additionalProperties: false }
 const stateSchema = { type: 'object', properties: {
-  request: string, constraints: { type: 'array', items: string }, scope: object,
+  request: string, acceptanceCriteria: { type: 'array', items: string }, constraints: { type: 'array', items: string }, scope: object,
   done: { type: 'boolean' }, evidence: { type: 'array', items: evidenceSchema },
-}, required: ['request', 'constraints', 'scope', 'done', 'evidence'], additionalProperties: false }
+}, required: ['request', 'acceptanceCriteria', 'constraints', 'scope', 'done', 'evidence'], additionalProperties: false }
 const reportSchema = { type: 'object', properties: {
   outcome: { type: 'string', enum: ['completed', 'blocked'] }, summary: string,
   evidenceIds: { type: 'array', items: string }, limitations: { type: 'array', items: string },
 }, required: ['outcome', 'summary', 'evidenceIds', 'limitations'], additionalProperties: false }
 const inputSchema = { type: 'object', properties: {
-  request: string, constraints: { type: 'array', items: string }, scope: object,
-}, required: ['request', 'constraints', 'scope'], additionalProperties: false }
+  request: string, acceptanceCriteria: { type: 'array', items: string }, constraints: { type: 'array', items: string }, scope: object,
+}, required: ['request', 'acceptanceCriteria', 'constraints', 'scope'], additionalProperties: false }
 
 /** 受信 Host 登记的只读能力；执行与独立核验都由代码完成。 */
 export function createGeneralTaskWorkflow({ provider, model, reasoningEffort, capabilities, completionCheck, completionIdentity, maxSteps = 3 }) {
@@ -39,7 +107,9 @@ export function createGeneralTaskWorkflow({ provider, model, reasoningEffort, ca
   const nodes = [{ id: 'prepare', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema, outputSchema: stateSchema,
     mapInput: ({ requirement }) => requirement,
     execute: async ({ input }) => {
-      if (!input.request.trim() || input.constraints.length > 32 || Buffer.byteLength(JSON.stringify(input), 'utf8') > 32000)
+      if (!input.request.trim() || !input.acceptanceCriteria.length || input.acceptanceCriteria.length > 16
+        || input.acceptanceCriteria.some(item => !item.trim()) || new Set(input.acceptanceCriteria).size !== input.acceptanceCriteria.length
+        || input.constraints.length > 32 || Buffer.byteLength(JSON.stringify(input), 'utf8') > 32000)
         throw executionError('GENERAL_REQUIREMENT_INVALID')
       return { ...input, done: false, evidence: [] }
     }, rulesDigest }]
@@ -72,7 +142,10 @@ export function createGeneralTaskWorkflow({ provider, model, reasoningEffort, ca
         const output = await capability.execute({ input: step.input, scope: state.scope, signal })
         const verification = await capability.verify({ input: step.input, scope: state.scope, output, expectedEvidence: step.expectedEvidence, signal })
         if (!output || typeof output !== 'object' || Array.isArray(output) || !verification || typeof verification !== 'object'
-          || verification.passed !== true || Buffer.byteLength(JSON.stringify({ output, verification }), 'utf8') > 32000)
+          || verification.passed !== true || verification.outputDigest !== executionDigest(output)
+          || !Array.isArray(verification.sourceRefs) || !verification.sourceRefs.length
+          || verification.sourceRefs.some(ref => typeof ref !== 'string' || !ref.trim())
+          || Buffer.byteLength(JSON.stringify({ output, verification }), 'utf8') > 32000)
           throw executionError('GENERAL_EVIDENCE_UNVERIFIED')
         return { ...state, evidence: [...state.evidence, { stepId: `step-${number}`, objective: step.objective,
           capabilityId: step.capabilityId, inputDigest, evidenceId: `step-${number}`, output, verification }] }
@@ -97,10 +170,130 @@ export function createGeneralTaskWorkflow({ provider, model, reasoningEffort, ca
         if (!report.limitations.length) throw executionError('GENERAL_REPORT_INVALID')
         throw executionError('GENERAL_TASK_BLOCKED')
       }
-      if (report.outcome !== 'completed' || !state.done || !state.evidence.length || !report.evidenceIds.length
-        || await completionCheck({ request: state.request, constraints: state.constraints, scope: state.scope,
-          evidence: state.evidence, report }) !== true) throw executionError('GENERAL_COMPLETION_UNVERIFIED')
+      if (report.outcome !== 'completed' || !state.done || !state.evidence.length || !report.evidenceIds.length)
+        throw executionError('GENERAL_COMPLETION_UNVERIFIED')
+      const assessment = await completionCheck({ request: state.request, acceptanceCriteria: state.acceptanceCriteria,
+        constraints: state.constraints, scope: state.scope, evidence: state.evidence, report })
+      if (assessment?.status !== 'satisfied' || assessment.resultVerified !== true
+        || !Array.isArray(assessment.criteria) || assessment.criteria.length !== state.acceptanceCriteria.length
+        || assessment.criteria.some((item, index) => item?.criterion !== state.acceptanceCriteria[index]
+          || item.passed !== true || !Array.isArray(item.evidenceIds) || !item.evidenceIds.length
+          || item.evidenceIds.some(id => !report.evidenceIds.includes(id)))) throw executionError('GENERAL_COMPLETION_UNVERIFIED')
       return report
     } })
   return { id: 'task-general', version: '1', nodes }
+}
+
+/** Task Owner 选定一步后使用的受信执行载体；本流程不做全局规划或最终报告。 */
+export function createGeneralCapabilityStepWorkflow({ capabilities }) {
+  if (!Array.isArray(capabilities) || !capabilities.length) throw executionError('GENERAL_CONFIG_INVALID')
+  const byId = new Map()
+  for (const capability of capabilities) {
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(capability.id ?? '') || byId.has(capability.id)
+      || typeof capability.identity !== 'string' || !capability.identity
+      || !['read', 'file.write'].includes(capability.effectClass)
+      || typeof capability.authorize !== 'function'
+      || (capability.effectClass === 'read' && typeof capability.execute !== 'function')
+      || (capability.effectClass === 'file.write' && typeof capability.prepare !== 'function')
+      || typeof capability.verify !== 'function') throw executionError('GENERAL_CAPABILITY_INVALID')
+    byId.set(capability.id, capability)
+  }
+  const rulesDigest = executionDigest([...byId.values()].map(item => ({ id: item.id, identity: item.identity })))
+  const inputSchema = { type: 'object', properties: {
+    capabilityId: string, input: object, scope: object, expectedEvidence: string,
+  }, required: ['capabilityId', 'input', 'scope', 'expectedEvidence'], additionalProperties: false }
+  const outputSchema = { type: 'object', properties: {
+    capabilityId: string, inputDigest: string, output: object, verification: object,
+  }, required: ['capabilityId', 'inputDigest', 'output', 'verification'], additionalProperties: false }
+  return { id: 'task-general-capability', version: '2', nodes: [{
+    id: 'execute', version: '2', executor: 'code', allowedEffects: byId.size && [...byId.values()].some(item => item.effectClass === 'file.write') ? ['read', 'file.write'] : ['read'],
+    inputSchema, outputSchema, mapInput: ({ requirement }) => requirement, rulesDigest,
+    async execute({ input: request, signal, perform, runId, taskId, nodeRunId, generation, requirementDigest }) {
+      const capability = byId.get(request.capabilityId)
+      if (!capability) throw executionError('GENERAL_CAPABILITY_UNAVAILABLE')
+      if (!request.expectedEvidence.trim() || Buffer.byteLength(JSON.stringify(request), 'utf8') > 16000)
+        throw executionError('GENERAL_STEP_INVALID')
+      const { input, scope } = request
+      if (await capability.authorize({ input, scope }) !== true) throw executionError('GENERAL_SCOPE_NOT_ADMITTED')
+      const binding = { runId, taskId, nodeRunId, generation, requirementDigest }
+      const prepared = capability.effectClass === 'file.write' ? capability.prepare({ input, scope, binding }) : null
+      const output = prepared ? await perform({ action: 'file', prepared })
+        : await capability.execute({ input, scope, signal })
+      const verification = await capability.verify({ input, scope, output,
+        expectedEvidence: request.expectedEvidence, signal, prepared })
+      if (!output || typeof output !== 'object' || Array.isArray(output)
+        || !verification || typeof verification !== 'object' || verification.passed !== true
+        || verification.outputDigest !== executionDigest(output)
+        || !Array.isArray(verification.sourceRefs) || !verification.sourceRefs.length
+        || verification.sourceRefs.some(ref => typeof ref !== 'string' || !ref.trim())
+        || Buffer.byteLength(JSON.stringify({ output, verification }), 'utf8') > 32000)
+        throw executionError('GENERAL_EVIDENCE_UNVERIFIED')
+      return { capabilityId: request.capabilityId,
+        inputDigest: executionDigest({ capabilityId: request.capabilityId, input, scope }), output, verification }
+    },
+  }] }
+}
+
+/** 只供 v3 中已建立的只读 Run 恢复；新 Run 使用 version 2。 */
+export function createHistoricalGeneralCapabilityStepWorkflow({ capabilities }) {
+  if (!Array.isArray(capabilities) || !capabilities.length) throw executionError('GENERAL_CONFIG_INVALID')
+  const byId = new Map()
+  for (const capability of capabilities) {
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(capability.id ?? '') || byId.has(capability.id)
+      || typeof capability.identity !== 'string' || !capability.identity
+      || capability.effectClass !== 'read'
+      || typeof capability.authorize !== 'function' || typeof capability.execute !== 'function'
+      || typeof capability.verify !== 'function') throw executionError('GENERAL_CAPABILITY_INVALID')
+    byId.set(capability.id, capability)
+  }
+  const rulesDigest = executionDigest([...byId.values()].map(item => ({ id: item.id, identity: item.identity })))
+  const inputSchema = { type: 'object', properties: {
+    capabilityId: string, input: object, scope: object, expectedEvidence: string,
+  }, required: ['capabilityId', 'input', 'scope', 'expectedEvidence'], additionalProperties: false }
+  const outputSchema = { type: 'object', properties: {
+    capabilityId: string, inputDigest: string, output: object, verification: object,
+  }, required: ['capabilityId', 'inputDigest', 'output', 'verification'], additionalProperties: false }
+  return { id: 'task-general-capability', version: '1', nodes: [{
+    id: 'execute', version: '1', executor: 'code', allowedEffects: ['read'],
+    inputSchema, outputSchema, mapInput: ({ requirement }) => requirement, rulesDigest,
+    async execute({ input: request, signal }) {
+      const capability = byId.get(request.capabilityId)
+      if (!capability) throw executionError('GENERAL_CAPABILITY_UNAVAILABLE')
+      if (!request.expectedEvidence.trim() || Buffer.byteLength(JSON.stringify(request), 'utf8') > 16000)
+        throw executionError('GENERAL_STEP_INVALID')
+      const { input, scope } = request
+      if (await capability.authorize({ input, scope }) !== true) throw executionError('GENERAL_SCOPE_NOT_ADMITTED')
+      const output = await capability.execute({ input, scope, signal })
+      const verification = await capability.verify({ input, scope, output,
+        expectedEvidence: request.expectedEvidence, signal })
+      if (!output || typeof output !== 'object' || Array.isArray(output)
+        || !verification || typeof verification !== 'object' || verification.passed !== true
+        || verification.outputDigest !== executionDigest(output)
+        || !Array.isArray(verification.sourceRefs) || !verification.sourceRefs.length
+        || verification.sourceRefs.some(ref => typeof ref !== 'string' || !ref.trim())
+        || Buffer.byteLength(JSON.stringify({ output, verification }), 'utf8') > 32000)
+        throw executionError('GENERAL_EVIDENCE_UNVERIFIED')
+      return { capabilityId: request.capabilityId,
+        inputDigest: executionDigest({ capabilityId: request.capabilityId, input, scope }), output, verification }
+    },
+  }] }
+}
+
+/** 新日常任务的第一阶段只冻结目标和授权范围，之后由 Task Owner 独自规划。 */
+export function createGeneralIntakeWorkflow() {
+  const inputSchema = { type: 'object', properties: {
+    request: string, acceptanceCriteria: { type: 'array', items: string },
+    constraints: { type: 'array', items: string }, scope: object,
+  }, required: ['request', 'acceptanceCriteria', 'constraints', 'scope'], additionalProperties: false }
+  return { id: 'task-general-intake', version: '1', nodes: [{
+    id: 'freeze', version: '1', executor: 'code', allowedEffects: ['pure'],
+    inputSchema, outputSchema: inputSchema, mapInput: ({ requirement }) => requirement,
+    execute: async ({ input }) => {
+      if (!input.request.trim() || !input.acceptanceCriteria.length || input.acceptanceCriteria.length > 16
+        || input.acceptanceCriteria.some(item => typeof item !== 'string' || !item.trim())
+        || input.constraints.length > 32 || Buffer.byteLength(JSON.stringify(input), 'utf8') > 32000)
+        throw executionError('GENERAL_REQUIREMENT_INVALID')
+      return input
+    },
+  }] }
 }

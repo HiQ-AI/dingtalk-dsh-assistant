@@ -18,7 +18,7 @@ import { readWorkflowSeal, workflowSealPath, inspectLegacyDrain } from './workfl
 import { join, resolve } from 'node:path'
 
 export const name = 'dingtalk-dsh-assistant'
-export const inject = ['storage', 'storageDomain', 'agents', 'agentDefaultModel', 'agentPresets', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'tools', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments']
+export const inject = ['storage', 'storageDomain', 'agents', 'agentDefaultModel', 'agentPresets', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'tools', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments', 'dingtalkTaskWorkflowPlatformClients']
 
 export async function verifyResidentWorkflowSeal(ctx, workflowConfig) {
   const domain = ctx.storageDomain
@@ -138,6 +138,9 @@ export async function apply(ctx, config = {}) {
   }) : null
   const workflow = workflowConfig ? await openWorkflowService({ ctx, config: { ...workflowConfig, profile: dwsConfig.profile }, legacy: runtime,
     external: workflowConfig.platforms ? trustedPlatforms : ctx.get?.('dingtalkTaskWorkflowExternal'),
+    generalCapabilities: ctx.get?.('dingtalkTaskGeneralCapabilities') ?? [],
+    generalCompletionCheck: ctx.get?.('dingtalkTaskGeneralCompletionCheck'),
+    generalCompletionIdentity: ctx.get?.('dingtalkTaskGeneralCompletionIdentity'),
     readMessage: (groupId, messageId) => dwsAdapter.readMessage(groupId, messageId),
     readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
     notifications: {

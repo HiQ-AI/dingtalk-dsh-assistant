@@ -87,8 +87,11 @@ function assertPrepared(prepared, { kind, operation, runId, generation, requirem
 }
 
 /** 发布与重构建流程的受信 Host 合同。adapter 只读 inspect 和 prepareOperation；副作用只经 Delivery 外部网关。 */
-export function createReleaseTaskWorkflow({ kind, adapter }) {
-  const spec = catalog[kind]
+export function createReleaseTaskWorkflow({ kind, adapter, legacy = false }) {
+  const baseSpec = catalog[kind]
+  const spec = kind === 'production-release' && !legacy
+    ? { ...baseSpec, operations: ['verify-main-merge', 'approval-gate', 'tag', 'build'] }
+    : baseSpec
   if (!spec) throw executionError('RELEASE_WORKFLOW_UNKNOWN')
   if (!adapter || !nonempty(adapter.id) || !nonempty(adapter.version) || !/^[a-f0-9]{64}$/.test(adapter.rulesDigest)
     || typeof adapter.inspect !== 'function' || typeof adapter.prepareOperation !== 'function') throw executionError('RELEASE_ADAPTER_REQUIRED')
@@ -182,7 +185,11 @@ export function createReleaseTaskWorkflow({ kind, adapter }) {
   const rulesDigest = executionDigest({ kind, adapterId: adapter.id, adapterVersion: adapter.version, adapterRulesDigest: adapter.rulesDigest,
     operations: spec.operations, phases: spec.phases, preflight: spec.requiredPreflight, final: spec.requiredFinal })
   for (const node of nodes) node.rulesDigest = rulesDigest
-  return { id: `task-${kind}`, version: '1', nodes }
+  return { id: `task-${kind}`, version: kind === 'production-release' && !legacy ? '2' : '1', nodes }
 }
+
+/** v1 仅供历史 Run 恢复，不能用它创建新的生产发布任务。 */
+export const createLegacyReleaseTaskWorkflow = ({ kind, adapter }) =>
+  createReleaseTaskWorkflow({ kind, adapter, legacy: true })
 
 export const releaseWorkflowKinds = Object.freeze(Object.keys(catalog))

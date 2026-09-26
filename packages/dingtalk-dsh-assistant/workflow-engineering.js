@@ -21,11 +21,25 @@ const githubName = remote => /^https:\/\/github\.com\/([a-zA-Z0-9_.-]+\/[a-zA-Z0
   ?? /^(?:git@github\.com:|ssh:\/\/git@github\.com\/)([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(remote)?.[1]
 
 /** 从同一工程 Run 的不可变节点工件提取交付身份；平台现状仍须独立回读。 */
-export async function readEngineeringDeliveryProof({ state, artifacts, taskId, requiredE2eCheckIds = [] }) {
-  if (state?.run?.taskId !== taskId || state.run.workflowId !== 'task-engineering'
-    || state.run.status !== 'succeeded' || typeof artifacts?.read !== 'function'
+export async function readEngineeringDeliveryProof({ state, artifacts, store, taskId, requiredE2eCheckIds = [] }) {
+  if (state?.run?.taskId !== taskId || state.run.status !== 'succeeded'
+    || typeof artifacts?.read !== 'function' || typeof store?.query !== 'function'
     || !Array.isArray(requiredE2eCheckIds) || requiredE2eCheckIds.some(id => typeof id !== 'string' || !id))
     fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
+  const records = await store.query({ kind: 'workflow.list' })
+  if (!Array.isArray(records)) fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
+  const registered = records.filter(record => record.workflowId === state.run.workflowId
+    && record.digest === state.run.workflowDigest)
+  const record = registered[0], saved = record?.config
+  if (registered.length !== 1 || saved?.kind !== 'engineering' || saved.taskId !== taskId
+    || saved.runId !== state.run.runId || typeof saved.sourceCommandId !== 'string'
+    || !saved.sourceCommandId || (saved.reissueRequestId !== undefined
+      && (typeof saved.reissueRequestId !== 'string' || !saved.reissueRequestId)))
+    fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
+  const expectedId = saved?.reissueRequestId
+    ? `task-engineering-reissue-${executionDigest([state.run.runId, saved.reissueRequestId]).slice(0, 40)}`
+    : `task-engineering-${executionDigest(saved.sourceCommandId).slice(0, 40)}`
+  if (state.run.workflowId !== expectedId) fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
   const refs = [], outputs = {}
   for (const id of ['verify-candidate', 'prepare-commit', 'commit', 'prepare-push', 'push', 'prepare-pr', 'create-pr', 'finalize']) {
     const matches = state.nodes.filter(node => node.nodeId === id && node.status === 'succeeded' && node.outputRef)
@@ -152,8 +166,10 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       workspaceAdapter, editAdapter, checks, prepareGeneration, adapterIdentity: saved.repositoryDigest, discovery: config.discovery,
       deliveryPlan: { identity: executionDigest(saved), gitAdapterFor, prAdapterFor, date: saved.date, title: saved.title, body: saved.body, commitMessage: saved.title, expectedRemoteSha: null } })
     const definition = defineExecutionWorkflow(workflow)
-    if (record.digest && definition.digest !== record.digest && !allowDefinitionMigration) fail('ENGINEERING_DEFINITION_DRIFT')
-    routes.set(saved.runId, { record: { ...record, digest: definition.digest, definitionVersion: workflow.version }, workflow, workspaceAdapter, editAdapter, gitAdapterFor, prAdapterFor, root: canonicalRoot })
+    const sameDefinition = !record.digest || [definition.digest, ...definition.legacyDigests].includes(record.digest)
+    if (!sameDefinition && !allowDefinitionMigration) fail('ENGINEERING_DEFINITION_DRIFT')
+    routes.set(saved.runId, { record: { ...record, digest: sameDefinition ? record.digest ?? definition.digest : definition.digest,
+      definitionVersion: workflow.version }, workflow, workspaceAdapter, editAdapter, gitAdapterFor, prAdapterFor, root: canonicalRoot })
     return { workflow, definition }
   }
   function route(prepared) {
@@ -318,7 +334,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
           result.push(direct.workflow)
           continue
         }
-        if (definition.digest !== record.digest) {
+        if (![definition.digest, ...definition.legacyDigests].includes(record.digest)) {
           if (!artifacts || !['3', '4'].includes(record.definitionVersion) || workflow.version !== '5') fail('ENGINEERING_DEFINITION_DRIFT')
           if (record.definitionVersion === '4') {
             const read = state.nodes.find(node => node.nodeId === 'read-files')

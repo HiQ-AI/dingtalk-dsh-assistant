@@ -72,6 +72,20 @@ function topicRunsStatus(db,topicId,intentStatus){
   }
 }
 const current = (db,r,revision) => { if(db.prepare('SELECT current_version FROM message_sources WHERE source_key=?').get(r.sourceKey).current_version!==(r.validSourceVersion??r.sourceVersion) || r.status==='superseded' || (revision!==undefined && r.revision!==revision)) fail('MESSAGE_STALE') }
+const controlKinds=new Set(['pause','cancel','resume','revise'])
+function authorizedPriorityControl(db,control,unit,source){
+ if(!control||!controlKinds.has(control.action)||!control.taskId||!unit||!source
+   ||(unit.routingBinding?.taskId??unit.routingBinding?.target?.taskId)!==control.taskId)return false
+ const origin=queryMessages(db,{kind:'message.task',taskId:control.taskId})
+ return !!origin&&origin.run.conversationId===source.conversationId&&origin.run.actorId===source.actorId
+}
+function priorityTopicControls(db,topic,controls){
+ if(!Array.isArray(controls))return null
+ const entries=queryMessageTopics(db,{kind:'message.topic.units',topicId:topic.topicId})
+ if(!entries.length||entries.length!==controls.length||new Set(controls.map(control=>control.unitId)).size!==controls.length)return null
+ const byUnit=new Map(controls.map(control=>[control.unitId,control]))
+ return entries.every(({run:source,unit})=>authorizedPriorityControl(db,byUnit.get(unit.id),unit,source))?byUnit:null
+}
 function settle(db,r) {
   const units=rows(db,r.runId,'unit').filter(u=>u.status!=='superseded')
   const requests=rows(db,r.runId,'request').filter(q=>q.status==='pending')
@@ -102,8 +116,9 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const origin=queryMessages(db,{kind:'message.task',taskId:a.request.taskId})
     if(!origin)fail('MESSAGE_TASK_NOT_FOUND')
     const task=db.prepare('SELECT * FROM execution_runs WHERE run_id=? AND task_id=?').get(a.executionRunId,a.request.taskId)
-    if(!task||a.request.runSequence!==1||a.request.inputVersion!==task.revision+1)fail('REVISION_CONFLICT')
-    if(a.request.action==='context'&&db.prepare("SELECT 1 FROM execution_inputs WHERE run_id=? AND status='pending'").get(task.run_id))fail('INPUT_PENDING')
+    const businessTask=db.prepare('SELECT requirement_revision,requirement_ref FROM business_tasks WHERE task_id=?').get(a.request.taskId)
+    if(!task||!businessTask?.requirement_ref||a.request.runSequence!==1
+      ||a.request.inputVersion!==businessTask.requirement_revision+1)fail('REVISION_CONFLICT')
     if(!['cancel','context'].includes(a.request.action))fail('MESSAGE_WEB_ACTION_UNSUPPORTED')
     if(a.request.action==='context'&&['succeeded','failed','cancelled'].includes(task.status))fail('RUN_TERMINAL')
     const event={id:str(a.eventId),actorId:str(a.actorId),runId:origin.run.runId,executionRunId:task.run_id,request:a.request,input:a.input??null,status:'pending'}
@@ -211,7 +226,23 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       put(db,n.runId,'notification-replacement',replacement)
       return {result:{replacement}}
     }
-    if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);if(source.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}n.status='sending';n.leaseEpoch++;n.startedAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:true}}
+    if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);if(source.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}
+      if(n.payload?.phase?.startsWith('owner:')){
+        const reportId=n.payload.phase.slice('owner:'.length)
+        const fact=db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.application_status,o.event_watermark,o.processed_watermark,
+          b.requirement_revision,b.plan_requirement_revision
+          FROM task_reports r JOIN task_owner_turns t ON t.turn_id=r.turn_id
+          JOIN task_owners o ON o.task_id=r.task_id
+          JOIN business_tasks b ON b.task_id=r.task_id WHERE r.report_id=?`).get(reportId)
+        const latest=fact?db.prepare("SELECT turn_id FROM task_owner_turns WHERE task_id=? AND status='accepted' ORDER BY rowid DESC LIMIT 1").get(fact.task_id):null
+        if(!fact||fact.application_status!=='applied'||fact.report_type==='complete'
+          &&(fact.event_watermark!==fact.processed_watermark||latest?.turn_id!==fact.turn_id
+            ||fact.plan_requirement_revision!==fact.requirement_revision)){
+          n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n)
+          return {result:{notification:n},dispatchEligible:false}
+        }
+      }
+      n.status='sending';n.leaseEpoch++;n.startedAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:true}}
     if(a.leaseEpoch!==n.leaseEpoch)fail('MESSAGE_NOTIFICATION_STALE')
     if(kind==='message.notification.sent') {if(n.status!=='sending')fail('MESSAGE_NOTIFICATION_STALE');n.status='acknowledged';n.ack=a.ack;n.ackAt=now}
     else if(kind==='message.notification.readback') {if(!['acknowledged','unknown'].includes(n.status)||!a.evidence?.messageId)fail('MESSAGE_NOTIFICATION_EVIDENCE_REQUIRED');n.status='delivered';n.evidence=a.evidence;n.deliveredAt=now}
@@ -347,12 +378,13 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       current(db,r,c.revision)
       if(c.status!=='pending') fail('MESSAGE_COMMAND_NOT_READY')
       if(c.topicId){
-        if(queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId}).length)fail('MESSAGE_INPUT_PENDING')
+        if(queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId}).length
+          && !authorizedPriorityControl(db,c.priorityControl,get(db,'unit',c.unitId),r))fail('MESSAGE_INPUT_PENDING')
         const topic=queryMessageTopics(db,{kind:'message.topic',topicId:c.topicId})
         if(!topic||topic.inputRevision!==c.topicInputRevision){
-          c.status='superseded';c.reason='topic_input_changed';put(db,r.runId,'command',c)
+          c.priorStatus=c.status;c.status='superseded';c.reason='topic_input_changed';put(db,r.runId,'command',c)
           const u=get(db,'unit',c.unitId)
-          if(!rows(db,r.runId,'command').some(item=>item.unitId===u.id&&['running','unknown','applied'].includes(item.status))){u.status='pending';put(db,r.runId,'unit',u)}
+          u.status='pending';put(db,r.runId,'unit',u)
           settle(db,r)
           return {result:{command:c},dispatchEligible:false}
         }
@@ -384,8 +416,37 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     revoke(db,r)
     for(const request of rows(db,r.runId,'request').filter(item=>item.status==='pending')){request.status='superseded';request.reason='clarification_answer_reconciled';put(db,r.runId,'request',request)}
     for(const notice of rows(db,r.runId,'notification').filter(item=>item.status==='prepared')){notice.status='superseded';notice.supersededAt=now;put(db,r.runId,'notification',notice)}
-    r.status='superseded';r.reason='clarification_answer_reconciled';save(db,r)
+    for(const barrier of rows(db,r.runId,'barrier').filter(item=>item.status==='pending')){
+      barrier.status='resolved';barrier.resolution='clarification_answer_reconciled';put(db,r.runId,'barrier',barrier)
+    }
+    r.status='superseded';r.reason='clarification_answer_reconciled';r.routingStatus='routing_complete';r.intentStatus='processed';save(db,r)
     return {result:{run:r}}
+  }
+  if(kind==='message.clarification.reconcile') {
+    const r=run(db,a.runId),target=run(db,a.targetRunId),q=get(db,'request',a.requestId)
+    if(r.status!=='superseded'||r.reason!=='clarification_answer_reconciled'
+      ||q.runId!==target.runId||q.kind!=='needs_clarification'||q.status!=='resolved'
+      ||q.eventId!==r.sourceKey||r.conversationId!==target.conversationId
+      ||db.prepare('SELECT current_version FROM message_sources WHERE source_key=?').get(r.sourceKey)?.current_version!==r.sourceVersion)
+      fail('MESSAGE_CLARIFICATION_RECONCILE_FORBIDDEN')
+    const notices=rows(db,target.runId,'notification').filter(item=>item.requestId===q.id
+      && item.status==='delivered' && item.evidence?.messageId
+      && r.context?.quoteRefs?.some(ref=>ref.messageId===item.evidence.messageId))
+    if(notices.length!==1)fail('MESSAGE_CLARIFICATION_RECONCILE_PROOF_MISSING')
+    const topics=db.prepare(`SELECT DISTINCT b.topic_id FROM message_topic_bindings b
+      JOIN message_topics t ON t.topic_id=b.topic_id WHERE b.run_id=?
+      AND (?='$' OR b.unit_id=?) AND t.conversation_id=?`).all(target.runId,q.unitId,q.unitId,r.conversationId)
+    if(topics.length!==1)fail('MESSAGE_CLARIFICATION_TOPIC_NOT_UNIQUE')
+    const unitId=`clarification:${r.runId}`
+    const bound=db.prepare('SELECT topic_id FROM message_topic_bindings WHERE unit_id=?').get(unitId)
+    if(bound&&bound.topic_id!==topics[0].topic_id)fail('MESSAGE_CLARIFICATION_TOPIC_CONFLICT')
+    if(!bound)db.prepare('INSERT INTO message_topic_bindings VALUES(?,?,?,?,?)')
+      .run(unitId,r.runId,topics[0].topic_id,r.sourceKey,r.sourceVersion)
+    for(const barrier of rows(db,r.runId,'barrier').filter(item=>item.status==='pending')){
+      barrier.status='resolved';barrier.resolution='clarification_answer_reconciled';put(db,r.runId,'barrier',barrier)
+    }
+    r.routingStatus='routing_complete';r.intentStatus='processed';r.foldedIntoRunId=target.runId;save(db,r)
+    return {result:{run:r,topicId:topics[0].topic_id,bound:!bound}}
   }
   const r=run(db,a.runId);current(db,r,a.expectedRevision)
   if(kind==='message.quiet') {
@@ -518,7 +579,11 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(topic.inputRevision!==a.inputRevision)fail('MESSAGE_TOPIC_STALE')
     if(topic.processedRevision===a.inputRevision)return {result:{status:'accepted',topic,decisions:a.decisions}}
     const pending=queryMessages(db,{kind:'message.routing.pending',conversationId:a.conversationId})
-    if(pending.length){topicRunsStatus(db,a.topicId,'waiting_routing_barrier');return {result:{status:'WAIT_ROUTING',pending:pending.length}}}
+    const priority=pending.length?priorityTopicControls(db,topic,a.priorityControls):null
+    if(pending.length&&(!priority||a.decisions?.some(decision=>{
+      const control=priority.get(decision.unitId)
+      return !control||decision.commands?.length!==1||decision.commands[0].kind!==control.action||decision.commands[0].args?.taskId!==control.taskId
+    }))){topicRunsStatus(db,a.topicId,'waiting_routing_barrier');return {result:{status:'WAIT_ROUTING',pending:pending.length}}}
     if(!Array.isArray(a.decisions)||!a.decisions.length)fail('MESSAGE_INVALID_DISPOSITION')
     const currentUnits=queryMessageTopics(db,{kind:'message.topic.units',topicId:a.topicId})
     if(currentUnits.length!==a.decisions.length||new Set(a.decisions.map(item=>item.unitId)).size!==a.decisions.length
@@ -527,12 +592,16 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       const item=currentUnits.find(({unit})=>unit.id===decision.unitId)
       const r=item.run,u=item.unit
       current(db,r,decision.expectedRevision)
-      if(!Array.isArray(decision.commands)||(!decision.commands.length&&!['ignored','rejected'].includes(decision.outcome)))fail('MESSAGE_INVALID_DISPOSITION')
+      if(!Array.isArray(decision.commands)||(!decision.commands.length&&!['ignored','rejected','applied'].includes(decision.outcome)))fail('MESSAGE_INVALID_DISPOSITION')
+      const outstanding=rows(db,r.runId,'command').filter(command=>command.unitId===u.id&&command.status==='superseded'&&command.reason==='topic_input_changed'&&command.priorStatus==='pending'&&!command.replacedBy)
+      const remaining=[...decision.commands]
+      for(const old of outstanding){const index=remaining.findIndex(command=>command.kind===old.kind);if(index<0)fail('MESSAGE_OUTSTANDING_ACTION_UNRESOLVED');old.replacedBy=remaining[index].commandId;put(db,r.runId,'command',old);remaining.splice(index,1)}
       if(decision.topicFacts?.length)reduceMessageTopic(db,{kind:'message.topic.upsert',args:{topicId:a.topicId,conversationId:a.conversationId,sourceRunId:r.runId,unitId:u.id,title:topic.title,facts:decision.topicFacts}},ctx)
       for(const x of decision.commands){
         str(x.commandId);str(x.kind)
         if(db.prepare('SELECT 1 FROM message_items WHERE item_id=?').get('command:'+x.commandId))fail('MESSAGE_COMMAND_CONFLICT')
-        put(db,r.runId,'command',{...x,id:x.commandId,runId:r.runId,unitId:u.id,revision:r.revision,topicId:a.topicId,topicInputRevision:a.inputRevision,status:'pending',leaseEpoch:0,createdAt:now})
+        put(db,r.runId,'command',{...x,id:x.commandId,runId:r.runId,unitId:u.id,revision:r.revision,topicId:a.topicId,topicInputRevision:a.inputRevision,
+          ...(priority?{priorityControl:priority.get(u.id)}:{}),status:'pending',leaseEpoch:0,createdAt:now})
       }
       u.status=decision.commands.length?'accepted':decision.outcome;put(db,r.runId,'unit',u);settle(db,r)
     }
@@ -545,14 +614,15 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   if(kind==='message.topic.refresh') {
     const topic=queryMessageTopics(db,{kind:'message.topic',topicId:a.topicId})
     if(!topic||topic.inputRevision!==a.inputRevision)fail('MESSAGE_TOPIC_STALE')
-    if(queryMessages(db,{kind:'message.routing.pending',conversationId:topic.conversationId}).length)return {result:{status:'WAIT_ROUTING'}}
+    if(queryMessages(db,{kind:'message.routing.pending',conversationId:topic.conversationId}).length
+      && !priorityTopicControls(db,topic,a.priorityControls))return {result:{status:'WAIT_ROUTING'}}
     let count=0
     for(const row of db.prepare("SELECT i.body FROM message_items i WHERE i.kind='command' AND json_extract(i.body,'$.topicId')=? AND json_extract(i.body,'$.status')='pending'").all(topic.topicId)){
       const c=JSON.parse(row.body)
       if(c.topicInputRevision===topic.inputRevision)continue
-      c.status='superseded';c.reason='topic_input_changed';put(db,c.runId,'command',c)
+      c.priorStatus=c.status;c.status='superseded';c.reason='topic_input_changed';put(db,c.runId,'command',c)
       const u=get(db,'unit',c.unitId)
-      if(!rows(db,u.runId,'command').some(item=>item.unitId===u.id&&['running','unknown','applied'].includes(item.status))){u.status='pending';put(db,u.runId,'unit',u)}
+      u.status='pending';put(db,u.runId,'unit',u)
       const owner=run(db,u.runId);settle(db,owner);count++
     }
     if(count)topicRunsStatus(db,a.topicId,'intent_rejudging')
@@ -594,6 +664,29 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   fail('MESSAGE_UNKNOWN_COMMAND')
 }
 export function queryMessages(db,a) {
+  if(a.kind==='message.clarifications.unlinked') {
+    const limit=a.limit??100
+    if(!Number.isSafeInteger(limit)||limit<1||limit>200)fail('MESSAGE_INVALID_LIMIT')
+    return db.prepare(`SELECT answer.run_id AS run_id,target.run_id AS target_run_id,
+      json_extract(request.body,'$.id') AS request_id
+      FROM message_runs answer
+      JOIN message_items request ON request.kind='request'
+        AND json_extract(request.body,'$.kind')='needs_clarification'
+        AND json_extract(request.body,'$.status')='resolved'
+        AND json_extract(request.body,'$.eventId')=answer.source_key
+      JOIN message_runs target ON target.run_id=request.run_id
+      JOIN message_topic_bindings binding ON binding.run_id=target.run_id
+        AND (json_extract(request.body,'$.unitId')='$'
+          OR binding.unit_id=json_extract(request.body,'$.unitId'))
+      WHERE json_extract(answer.body,'$.status')='superseded'
+        AND json_extract(answer.body,'$.reason')='clarification_answer_reconciled'
+        AND json_extract(answer.body,'$.conversationId')=json_extract(target.body,'$.conversationId')
+        AND NOT EXISTS(SELECT 1 FROM message_topic_bindings linked WHERE linked.run_id=answer.run_id)
+      GROUP BY answer.run_id,target.run_id,request.item_id
+      HAVING COUNT(DISTINCT binding.topic_id)=1
+      ORDER BY answer.rowid LIMIT ?`).all(limit)
+      .map(row=>({runId:row.run_id,targetRunId:row.target_run_id,requestId:row.request_id}))
+  }
   if(a.kind==='message.notification'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification:'+str(a.notificationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationOperation'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-operation:'+str(a.operationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationReplacement'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-replacement:'+str(a.replacementId));return row?JSON.parse(row.body):null}

@@ -13,6 +13,38 @@ const workflow = execute => ({ id: 'synthetic', version: '1', nodes: [
   { id: 'verify', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: number, outputSchema: number, mapInput: ({ previousOutput }) => previousOutput, execute: async ({ input }) => input * 2 },
 ] })
 
+test('相同函数跨 LF/CRLF 打包保持定义身份，旧 CRLF 摘要可恢复', async t => {
+  const body = 'async ({ input }) => {\n return input + 1\n}'
+  const lf = workflow(eval(`(${body})`))
+  const crlf = { ...lf, nodes: lf.nodes.map(node => ({ ...node,
+    mapInput: eval(`(${node.mapInput.toString().replace(/\n/g, '\r\n')})`),
+    execute: eval(`(${node.execute.toString().replace(/\n/g, '\r\n')})`) })) }
+  const current = defineExecutionWorkflow(lf), historical = defineExecutionWorkflow(crlf)
+  assert.equal(current.digest, historical.digest)
+  assert.ok(historical.legacyDigests.some(digest => digest !== current.digest))
+  assert.notEqual(current.digest, defineExecutionWorkflow(workflow(async ({ input }) => input + 2)).digest)
+  const { store, artifacts, controller } = await setup(t, lf)
+  const requirement = await artifacts.put(2)
+  const oldDigest = historical.legacyDigests[0]
+  const input = await artifacts.put({ workflowDigest: oldDigest, nodeId: 'calculate', nodeVersion: '1', requirementRef: requirement.ref, data: 2 })
+  await store.command({ id: 'old-eol', kind: 'run.create', args: { runId: 'old-eol', taskId: 'old-task', workflowId: current.id,
+    workflowDigest: oldDigest, requirementRef: requirement.ref, nodes: current.nodes.map((node, index) => ({
+      nodeId: node.id, nodeVersion: node.version, executor: node.executor,
+      inputRef: index ? null : input.ref, inputDigest: index ? null : input.digest })) } })
+  await controller.recover({ commandId: 'recover-eol', runId: 'old-eol' })
+  const state = await controller.whenIdle('old-eol')
+  assert.equal(state.run.status, 'succeeded')
+  assert.equal(state.run.workflowDigest, oldDigest)
+  assert.equal(await artifacts.read(state.nodes[1].outputRef), 6)
+  await store.command({ id: 'old-stage-plan', kind: 'task.plan.create', args: { taskId: 'old-stage-task', requirementRevision: 1,
+    stages: [{ stageId: 'stage-1', workflowId: current.id, workflowDigest: oldDigest,
+      unavailableReason: null, requirementRef: requirement.ref, gate: 'none' }] } })
+  const stagePlan = await controller.advanceTaskPlan('old-stage-task')
+  const stageRun = await controller.whenIdle(stagePlan.stages[0].runId)
+  assert.equal(stageRun.run.workflowDigest, oldDigest)
+  assert.equal(await artifacts.read(stageRun.nodes[1].outputRef), 6)
+})
+
 test('暂停等待真实排空，保留新输入，系统恢复不解除用户暂停，resume先应用新输入', async t => {
   const entered = Promise.withResolvers(), release = Promise.withResolvers(), calls = []
   const { controller, artifacts } = await setup(t, workflow(async ({ input, signal }) => {

@@ -14,10 +14,10 @@ const phases = {
 const operations = {
   'uat-deployment': ['build'],
   'uat-rebuild': ['rebuild'],
-  'production-release': ['merge-main', 'approval-gate', 'tag', 'build'],
+  'production-release': ['merge-main', 'verify-main-merge', 'approval-gate', 'tag', 'build'],
 }
 const precedingPhase = { build: 'preflight', rebuild: 'preflight',
-  'merge-main': 'preflight', 'approval-gate': 'merged', tag: 'approved' }
+  'merge-main': 'preflight', 'verify-main-merge': 'preflight', 'approval-gate': 'merged', tag: 'approved' }
 const attestations = {
   'uat-rebuild': ['failurePipelineVerified', 'branchHeadMatches', 'noNewerRuntimeVersion', 'sourcePackageSupported'],
 }
@@ -221,7 +221,7 @@ export function createReleasePlatform({ targets, clients }) {
     // 操作参数只取自白名单和冻结的需求，不接受模型生成的 URL、命令或认证字段。
     const operationKey = executionDigest({ kind, operation, runId, generation, requirementDigest,
       targetDigest: observation.targetDigest, previousEvidenceDigest: expected.previousEvidenceDigest })
-    const pr = operation === 'merge-main'
+    const pr = ['merge-main', 'verify-main-merge'].includes(operation)
       ? await approvedPullRequest(target, requirement.target.commitSha, requirement.evidenceRefs) : null
     return { action: 'external', workflowKind: kind, operation, runId, generation, requirementDigest,
       resourceKey: `external:${requirement.target.environment}:${requirement.target.repository}:${requirement.target.service}`,
@@ -251,7 +251,7 @@ export function createReleasePlatform({ targets, clients }) {
       || (prepared.workflowKind === 'production-release'
         && prepared.expected.approvalScopeDigest !== executionDigest({ target: identity, operation: 'tag' }))
       || (prepared.operation === 'tag' && !/^[a-f0-9]{64}$/.test(prepared.expected.approvalReceiptDigest ?? ''))
-      || (prepared.operation === 'merge-main'
+      || (['merge-main', 'verify-main-merge'].includes(prepared.operation)
         && (!Number.isInteger(prepared.expected.pullRequestNumber) || prepared.expected.pullRequestNumber < 1
           || prepared.expected.mergeCommitSha !== prepared.expected.commitSha))
       || prepared.operationKey !== executionDigest({ kind: prepared.workflowKind, operation: prepared.operation,
@@ -262,7 +262,7 @@ export function createReleasePlatform({ targets, clients }) {
   async function execute(prepared) {
     const target = assertPrepared(prepared)
     // merge SHA 必须已在目标分支，故集成/主干合并只能确认既有结果；不可猜测 GitHub merge 产生的新 SHA。
-    if (prepared.operation === 'merge-main'
+    if (['merge-main', 'verify-main-merge'].includes(prepared.operation)
       || prepared.workflowKind === 'production-release' && prepared.operation === 'build') return reconcile(prepared)
     if (prepared.operation === 'approval-gate') return reconcile(prepared)
     if (['build', 'rebuild'].includes(prepared.operation)) {
@@ -305,7 +305,7 @@ export function createReleasePlatform({ targets, clients }) {
     } else if (kind === 'tag') {
       const tag = await read('github', 'readTag', { repository: target.repository, tag: prepared.expected.tag })
       observation = { evidenceRef: tag.evidenceRef, confirmed: tag.commitSha === prepared.expected.commitSha }
-    } else if (prepared.operation === 'merge-main') {
+    } else if (['merge-main', 'verify-main-merge'].includes(prepared.operation)) {
       const pr = await read('github', 'readPullRequest', { repository: target.repository,
         number: prepared.expected.pullRequestNumber })
       const ref = await branchHead(target)

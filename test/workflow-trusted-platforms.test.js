@@ -142,3 +142,39 @@ test('生产发布仅审批节点等待真人，Tag 必须带审批回读身份'
     action: { arguments: { objective: '生产发布', targetId: 'prod', commitSha: 'a'.repeat(40), releaseTag: 'latest' } }, materials: [] }),
   { code: 'RELEASE_PLATFORM_IDENTITY_INVALID' })
 })
+
+test('UAT 合并目标只来自受信白名单，授权不要求真人审批', async () => {
+  const releaseTarget = { id: 'dataset-uat', kind: 'uat-deployment', repository: 'HiQ-AI/dataset',
+    environment: 'uat', service: 'dataset', runbookId: 'dataset-uat', branch: 'uat',
+    woodpecker: { baseUrl: 'https://woodpecker.hiqdat.dev', repositoryId: 1, cronName: 'dataset-uat' },
+    kubernetes: { namespace: 'hiqlcd-app-uat2', deployment: 'dataset' },
+    registry: { image: 'registry.cn-sh1.ctyun.cn/hiq-ai/dataset' },
+    entryUrl: 'https://uat.example.test/health' }
+  const clients = { release: {
+    github: Object.fromEntries(['readBranch', 'resolveApprovedPullRequest', 'readPullRequest', 'readCommit',
+      'readChecks', 'mergePullRequest'].map(name => [name, async () => ({})])),
+    woodpecker: Object.fromEntries(['listPipelines', 'readBuildEvidence', 'triggerBuild']
+      .map(name => [name, async () => ({})])),
+    kubernetes: Object.fromEntries(['readDeployment', 'readPods', 'readEntry']
+      .map(name => [name, async () => ({})])),
+    registry: { readManifest: async () => ({}) },
+  } }
+  const config = { release: { targets: [releaseTarget] },
+    uatMerge: { targets: [{ targetId: 'dataset-uat', requiredChecks: ['unit'] }] } }
+  const platform = createTrustedWorkflowPlatforms({ config, clients, ownerActorId: 'owner' })
+  assert.ok(platform.uatMergeAdapter)
+  assert.ok(platform.availableTargets.some(item => item.workflowId === 'task-uat-pr-merge'))
+  const input = await platform.prepareRequirement({ workflowId: 'task-uat-pr-merge',
+    action: { arguments: { objective: '合入 UAT', targetId: 'dataset-uat',
+      pullRequestNumber: 42, headCommitSha: 'a'.repeat(40) } }, materials: [] })
+  assert.deepEqual(input.requiredChecks, ['unit'])
+  const prepared = { workflowKind: 'uat-pr-merge', operation: 'merge-uat-pr', runId: 'run-1', generation: 1,
+    expected: { targetId: 'dataset-uat' } }
+  const grant = await platform.authorizeExternal({ binding: { runId: 'run-1', nodeRunId: 'node-1', generation: 1 }, prepared })
+  assert.equal(grant.approval, undefined)
+  assert.match(grant.authorizationRef, /^uat-merge:/)
+  await assert.rejects(platform.prepareRequirement({ workflowId: 'task-uat-pr-merge',
+    action: { arguments: { objective: '合入 UAT', targetId: 'other',
+      pullRequestNumber: 42, headCommitSha: 'a'.repeat(40) } }, materials: [] }),
+  { code: 'UAT_MERGE_TARGET_NOT_ALLOWED' })
+})

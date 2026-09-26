@@ -11,7 +11,7 @@ const execFile = promisify(execFileCallback)
 export const name = 'dingtalk-task-workflow-platform-clients'
 
 /** 凭据在 Host 进程内闭包持有；不得放入 profile YAML、工作流配置或执行账。 */
-export async function createHostPlatformClients({ secretsDirectory, productionTagWritesEnabled = false,
+export async function createHostPlatformClients({ secretsDirectory, productionTagWritesEnabled = false, uatMergeWritesEnabled = false,
   uatPostgres, productionPostgres,
   statImpl = stat, readFileImpl = readFile, execFileImpl = execFile,
   createClients = createPlatformClients, createUatPostgres = createUatPostgresHost,
@@ -45,7 +45,7 @@ export async function createHostPlatformClients({ secretsDirectory, productionTa
   }
   const uat = createClients({ githubToken, woodpeckerToken, kubeconfig,
     kubeServer, kubeSkipTlsVerify: true, registryDockerCliEnabled: true,
-    githubTagWritesEnabled: productionTagWritesEnabled })
+    githubTagWritesEnabled: productionTagWritesEnabled, githubMergeWritesEnabled: uatMergeWritesEnabled })
   const production = createClients({ kubeconfig: productionKubeconfig })
   let bytebase
   try {
@@ -121,6 +121,7 @@ export async function createHostPlatformClients({ secretsDirectory, productionTa
 export async function apply(ctx, config = {}, { createHostClients = createHostPlatformClients } = {}) {
   const clients = await createHostClients({ secretsDirectory: config.secretsDirectory,
     productionTagWritesEnabled: config.productionTagWritesEnabled === true,
+    uatMergeWritesEnabled: config.uatMergeWritesEnabled === true,
     uatPostgres: config.uatPostgres, productionPostgres: config.productionPostgres })
   ctx.provide('dingtalkTaskWorkflowPlatformClients', clients)
 }

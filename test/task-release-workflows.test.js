@@ -8,21 +8,33 @@ import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execu
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
-import { createReleaseTaskWorkflow, releaseWorkflowKinds } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
+import { createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 
 const commitSha = 'a'.repeat(40)
-test('新增 UAT 部署保留已持久生产与重建定义摘要', () => {
+test('生产与重建旧定义摘要仍可恢复，新定义使用稳定换行摘要', () => {
   const frozenRules = '0e5ce6311e8a9d3d67e67fa22cd9422fad4b8951cd53cb93b91ddcf99ffc05c8'
   const expected = { 'production-release': '3ed7ab9e46b14c27e1d770b9c1302785f523a5b20abb7b6bb9fc5902860ca38b',
     'uat-rebuild': 'd0cf2f30ea1dc047ec7917f31d1171cfec69dfce0a1148872bef9f96f3009f17' }
+  const stable = { 'production-release': 'cfc445fccb8aad25bd3fb646f148a3682de2b1c8de26f799710838e1a37c0c26',
+    'uat-rebuild': '09ca4ce3df58c448fef049bd3502652c89849b514a90474d49f4d2bd3ec23d43' }
   for (const [kind, digest] of Object.entries(expected)) {
     const adapter = { id: `trusted-release-${kind}`, version: '1', rulesDigest: frozenRules,
       inspect() {}, prepareOperation() {} }
-    assert.equal(defineExecutionWorkflow(createReleaseTaskWorkflow({ kind, adapter })).digest, digest)
+    const definition = defineExecutionWorkflow(createLegacyReleaseTaskWorkflow({ kind, adapter }))
+    assert.equal(definition.digest, stable[kind])
+    assert.ok([definition.digest, ...definition.legacyDigests].includes(digest))
   }
+  const adapter = { id: 'trusted-release-production-release', version: '1', rulesDigest: frozenRules,
+    inspect() {}, prepareOperation() {} }
+  const next = createReleaseTaskWorkflow({ kind: 'production-release', adapter })
+  const historical = createLegacyReleaseTaskWorkflow({ kind: 'production-release', adapter })
+  assert.equal(next.version, '2')
+  assert.equal(historical.version, '1')
+  assert.ok(next.nodes.some(node => node.id === 'execute-verify-main-merge'))
+  assert.ok(historical.nodes.some(node => node.id === 'execute-merge-main'))
 })
 const operations = {
-  'uat-deployment': ['build'], 'production-release': ['merge-main', 'approval-gate', 'tag', 'build'], 'uat-rebuild': ['rebuild'],
+  'uat-deployment': ['build'], 'production-release': ['verify-main-merge', 'approval-gate', 'tag', 'build'], 'uat-rebuild': ['rebuild'],
 }
 const phases = {
   'uat-deployment': ['preflight', 'built', 'runtime'],
@@ -109,7 +121,7 @@ test('无 Host adapter 拒绝注册；生产业务放行由真人审批门禁决
   const state = await controller.whenIdle('run')
   assert.equal(state.run.status, 'waiting')
   assert.equal(state.nodes.find(node => node.nodeId === 'execute-approval-gate').waitReason.reference, 'DELIVERY_NOT_AUTHORIZED')
-  assert.deepEqual(calls, ['merge-main'])
+  assert.deepEqual(calls, ['verify-main-merge'])
 })
 
 test('生产 Run 必须冻结本次精确 Tag，UAT 不接收生产 Tag', async () => {
@@ -138,7 +150,7 @@ test('生产每个外部动作均重新由交付网关按精确范围授权', as
   const state = await controller.whenIdle('run')
   assert.equal(state.run.status, 'waiting')
   assert.equal(state.nodes.find(n => n.nodeId === 'execute-tag').waitReason.reference, 'DELIVERY_NOT_AUTHORIZED')
-  assert.deepEqual(calls, ['merge-main', 'approval-gate'])
+  assert.deepEqual(calls, ['verify-main-merge', 'approval-gate'])
 })
 
 test('生产流程经真实效果账等待 Web 审批，批准后同一精确动作只发送一次', async t => {
@@ -166,7 +178,7 @@ test('生产流程经真实效果账等待 Web 审批，批准后同一精确动
   const before = await controller.whenIdle('run')
   assert.equal(before.run.status, 'waiting')
   assert.equal(before.nodes.find(node => node.nodeId === 'execute-approval-gate').waitReason.reference, 'effect_approval_required')
-  assert.deepEqual(sends, ['merge-main'])
+  assert.deepEqual(sends, ['verify-main-merge'])
   const held = (await store.query({ kind: 'effect.list', runId: 'run' })).find(effect => effect.definition.payload.operation === 'approval-gate')
   assert.equal(held.state, 'prepared')
   assert.equal(held.requestId, 'release-approval')
