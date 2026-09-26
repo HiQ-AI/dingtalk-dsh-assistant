@@ -1,6 +1,6 @@
 # 话题上下文完整性与处理轨迹
 
-> 状态：COMPLETED
+> 状态：IN_PROGRESS
 > Goal ID：topic-context-completeness
 > 最近维护：2026-09-26T11:01:13+08:00
 > 权威目标：`D:/project/worktrees/dingtalk-topic-context-completeness/docs/acceptance/topic-context-completeness/goal.md`
@@ -34,10 +34,12 @@
 | SG5 | 文档与 PR | README/runbook 更新，diff 仅含本目标，PR 中文正文与实际验证一致、状态回读 | 完成 | PR #125 OPEN 已独立回读；实现提交 c10f72c |
 | SG6 | 已结束问答任务的状态展示 | 无 Owner 的成功计划显示完成；保留真实等待及 Owner 验收门禁；定向测试与本地记录核对 | 完成 | round-13.md；74 项测试通过，在线实例未运行 |
 
+| SG7 | 任务步骤耗时 | 编号时间线显示真实本次耗时，运行更新，缺失不猜；测试及本地回读 | 验证通过，待部署 | round-14.md；105 项测试与 30 项浏览器检查 |
+
 ## 当前检查点
 
-- 当前子目标：SG6
-- 唯一下一步：无；本地部署及目标任务完成状态在线回读通过。
+- 当前子目标：SG7
+- 唯一下一步：补充节点事件时间投影及步骤耗时，定向验证后本地更新。
 - 未闭环项：本轮部署无；此前 STORE_UNAVAILABLE 本次未复现，未宣称已定位其历史根因。
 
 ## 进展

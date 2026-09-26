@@ -172,6 +172,19 @@ window.__ModuleLoader__.load({
     ]
     const pages = [{ id: 'groups', label: '群消息' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '归档任务' }, { id: 'alerts', label: '告警' }]
     const traceStatus = (status) => ({ succeeded: '已完成', applied: '已接纳', settled: '处理已结束', processed: '处理已结束', running: '处理中', claimed: '处理中', pending: '等待处理', queued: '等待处理', waiting: '等待继续', needs_attention: '需要处理', failed: '失败', blocked: '已阻塞', superseded: '已被新消息替代', cancelled: '已取消', rejected: '未接纳', accepted: '已接纳' }[status] || '状态未记录')
+    function TaskStepElapsed({ node }) {
+      const [now, setNow] = useState(Date.now)
+      useEffect(() => {
+        if (node.status !== 'running' || !node.startedAt) return
+        setNow(Date.now())
+        const timer = setInterval(() => setNow(Date.now()), 1000)
+        return () => clearInterval(timer)
+      }, [node.status, node.startedAt])
+      const notStarted = !node.startedAt && ['pending', 'ready', 'blocked'].includes(node.status)
+      const label = notStarted ? '尚未开始' : traceElapsed({ ...node, attempt: node.leaseEpoch }, now)
+      return React.createElement('span', { style: { color: colors.muted, fontSize: 12, fontVariantNumeric: 'tabular-nums' } },
+        node.status === 'waiting' && node.completedAt ? `本次执行${label}` : label)
+    }
     const traceElapsed = (item, now) => {
       const start = Date.parse(item.startedAt), end = Date.parse(item.completedAt)
       const running = ['running', 'claimed'].includes(item.status)
@@ -716,6 +729,7 @@ window.__ModuleLoader__.load({
                   React.createElement('span', { 'aria-label': `步骤 ${index + 1}`, style: { display: 'grid', placeItems: 'center', width: 36, height: 36, boxSizing: 'border-box', borderRadius: '50%', border: `1px solid ${focused ? tone : colors.border}`, background: focused ? tone : colors.surface, color: focused ? 'var(--dsw-alias-label-on-brand, #fff)' : tone, fontSize: 12, fontWeight: 650, fontVariantNumeric: 'tabular-nums', position: 'relative' } }, String(index + 1).padStart(2, '0')),
                   React.createElement('div', { style: { minWidth: 0, padding: focused ? '12px 14px' : '6px 0 0', borderRadius: 10, background: focused ? `color-mix(in srgb, ${tone} 6%, ${colors.surface})` : 'transparent', display: 'grid', gap: 8 } },
                     React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '6px 10px' } }, React.createElement('strong', { style: { fontSize: 14, fontWeight: 600 } }, node.title || nodeTitle[node.nodeId] || '执行步骤'), React.createElement('span', { style: { color: tone, fontSize: 12 } }, nodeState[node.status] || '状态未记录')),
+                    React.createElement(TaskStepElapsed, { node }),
                     node.waitReason?.reference ? React.createElement('p', { style: { margin: 0, fontSize: 12, lineHeight: 1.65, color: colors.warning } }, node.waitReason.reference) : null,
                     node.outputRef ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '本步产出已记录') : null,
                     node.sessionId ? React.createElement('button', { type: 'button', onClick: () => navigate(node.sessionId), style: { justifySelf: 'start', padding: 0, border: 0, color: colors.accent, background: 'transparent', font: 'inherit', fontSize: 12, cursor: 'pointer' } }, '查看此节点会话记录') : null))

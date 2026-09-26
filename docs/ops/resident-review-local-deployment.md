@@ -168,4 +168,6 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 
 任务详情纯界面更新只打包 Observer；回读安装的 web-client.js 与源码 SHA256 一致。页面首屏显示状态、编号步骤与最新产出，历史执行展开后请求；不触发任务重跑或钉钉发送。
 
+步骤耗时涉及 Assistant 的事件时间投影与 Observer 展示，两个包一起安装。无 schema 变更；启动后从已提交 claim/commit 事件增量恢复当前租约时间，回读目标 executionNodes 的 startedAt/completedAt 与持久事件一致。等待耗时只到本次提交，未知结束时间不猜测，不请求 /state/task-timings。
+
 任务状态映射修复需打包 Assistant：对无 Owner 且计划已 succeeded 的记录，回读 `/state/tasks` 为 completed/succeeded，结果原文及信息局限保留。已有 Owner 的验收和 waiting_confirmation 仍保持原门禁。该修复只读展示，不修改持久任务、不重跑流程、不补发消息；部署前实例已停止时保留停机状态，安装包回读不等于在线验证。

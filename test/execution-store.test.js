@@ -42,6 +42,24 @@ async function fixture(t, args = creation()) {
 }
 const rejects = (promise, code) => assert.rejects(promise, e => e.code === code)
 
+test('节点耗时来自已提交 claim/commit，重开存储后仍可读取', async t => {
+  const f = await fixture(t)
+  assert.equal((await f.query()).nodes[0].startedAt, null)
+  const node = await f.claim()
+  const running = (await f.query()).nodes[0]
+  assert.ok(Number.isFinite(Date.parse(running.startedAt)))
+  assert.equal(running.completedAt, null)
+  await f.drain(node)
+  await f.store.command(command('node.commit', { ...identity(node), inputDigest: d,
+    outcome: 'succeeded', outputRef: 'sha256/result.json', evidenceRefs: [] }))
+  const completed = (await f.query()).nodes[0]
+  assert.equal(completed.startedAt, running.startedAt)
+  assert.ok(Date.parse(completed.completedAt) >= Date.parse(completed.startedAt))
+  await f.store.close()
+  await f.open()
+  assert.deepEqual((await f.query()).nodes[0], completed)
+})
+
 test('工程索引容量等待仅在旧节点排空且下游未运行时切换定义', async t => {
   const f = await fixture(t, creation([plan('prepare-workspace'), plan('index-files', 'code', false),
     plan('select-files', 'agent', false), plan('validate-selection', 'code', false)]))
@@ -387,9 +405,13 @@ test('sessionId先落盘；重启不推定旧句柄停止，确认排空后同Se
   assert.equal(recovered.sessionId, n.sessionId)
   assert.equal(recovered.sessionBound, true)
   assert.equal(recovered.leaseEpoch, 2)
+  const retryTiming = (await f.query()).nodes[0]
+  assert.ok(Date.parse(retryTiming.startedAt) >= Date.parse(state.nodes[0].startedAt))
+  assert.equal(retryTiming.completedAt, null)
   const replay = await f.store.command(command('node.claim', { runId: 'run', nodeId: 'one', expectedGeneration: 1, expectedLeaseEpoch: 0 }, 'claim'))
   assert.equal(replay.replayed, true)
   assert.equal((await f.query()).run.claimCount, 2)
+  assert.equal((await f.query()).nodes[0].startedAt, retryTiming.startedAt)
 })
 
 test('输入来源去重、payload冲突、drained前拒绝换代；旧结果CAS和未处理屏障持续生效', async t => {

@@ -34,6 +34,8 @@ const url = `http://127.0.0.1:${server.address().port}`
 
 const tasks = [{ taskId: 'task-1', title: '隔离任务', objective: '核对上下文', groupId: 'g', engine: 'workflow-v2', state: 'completed', updatedAt: '2026-09-26T00:00:00Z', topicRefs: [{ topicId: 'topic-2' }], executionNodes: [] }]
 tasks.push({ taskId: 'task-design', title: '核对租户权限并整理排查结论', objective: '核对租户 A 的权限配置，确认问题范围，整理处理建议。仅排查，不修改现有配置。', groupId: 'g', engine: 'workflow-v2', state: 'waiting', updatedAt: '2026-09-26T04:20:00Z', waitingReason: '排查结论已整理，等待确认是否继续检查关联角色。', result: '已核对当前租户与角色配置。\n\n排查结论\n租户配置完整；部分成员未关联预期角色，需要进一步确认角色分配规则。\n\n建议下一步\n核实成员的角色来源，再决定是否调整配置。当前尚未修改任何权限。', topicRefs: [], plan: { currentStageId: 'review', stages: [{ stageId: 'research', title: '权限排查', status: 'succeeded' }, { stageId: 'review', title: '确认后续范围', status: 'waiting_confirmation' }] }, executionNodes: [{ nodeId: 'read-files', title: '读取租户与角色配置', status: 'succeeded', outputRef: 'ref-1' }, { nodeId: 'analyze', title: '核对权限关联', status: 'succeeded', outputRef: 'ref-2' }, { nodeId: 'approval-gate', title: '确认后续检查范围', status: 'waiting', waitReason: { reference: '等待确认是否继续检查关联角色' } }, { nodeId: 'finalize', title: '整理最终处理建议', status: 'pending' }] })
+Object.assign(tasks[1].executionNodes[0], { startedAt: '2026-09-26T00:00:00Z', completedAt: '2026-09-26T00:00:03.500Z' })
+Object.assign(tasks[1].executionNodes[2], { startedAt: '2026-09-26T00:00:04Z', completedAt: '2026-09-26T00:00:06Z' })
 const topics = [{ topicId: 'topic-1', groupId: 'g', title: '慢话题', revision: 1 }, { topicId: 'topic-2', groupId: 'g', title: '当前话题', revision: 1 }]
 const browser = await playwright.chromium.launch({ channel: 'msedge', headless: true })
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'zh-CN', reducedMotion: 'reduce' })
@@ -157,6 +159,13 @@ try {
   for (let number = 1; number <= 4; number++) assert.equal(await detail.getByLabel(`步骤 ${number}`, { exact: true }).innerText(), String(number).padStart(2, '0'))
   assert.equal(await detail.locator('[role="status"]').count(), 2)
   assert.equal(await detail.locator('pre').count(), 0)
+  await detail.getByText('耗时 3.5 秒', { exact: true }).waitFor()
+  await detail.getByText('本次执行耗时 2.0 秒', { exact: true }).waitFor()
+  await detail.getByText('耗时未记录', { exact: true }).waitFor()
+  await detail.getByText('尚未开始', { exact: true }).waitFor()
+  assert.equal(calls.includes('/state/task-timings'), false)
+  checks.push('task-step-durations', 'task-step-waiting-time', 'task-step-missing-time', 'task-step-not-started', 'no-diagnostic-request')
+
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.evaluate(() => document.querySelectorAll('*').forEach(element => { if (element.scrollTop) element.scrollTop = 0 }))
   await page.screenshot({ path: path.join(output, 'task-detail-desktop.png'), fullPage: true })
@@ -167,6 +176,13 @@ try {
   await detail.getByRole('heading', { name: '最新产出', exact: true }).scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(output, 'task-result-narrow.png'), fullPage: true })
   checks.push('task-numbered-timeline', 'task-waiting-result-layout', 'task-narrow-no-overflow')
+  Object.assign(tasks[1].executionNodes[3], { status: 'running', startedAt: new Date(Date.now() - 2000).toISOString(), leaseEpoch: 2 })
+  await page.getByRole('button', { name: /刷新/ }).click()
+  const runningTime = detail.getByText(/^已用时.*第 2 次处理/)
+  await runningTime.waitFor()
+  const previousTime = await runningTime.innerText()
+  await page.waitForFunction(previous => [...document.querySelectorAll('span')].some(item => /^已用时.*第 2 次处理/.test(item.textContent) && item.textContent !== previous), previousTime)
+  checks.push('task-step-running-timer')
   assert.deepEqual(errors, []); assert.deepEqual(writes, [])
   const result = { passed: true, checks, screenshots: { message: 'message-trace.png', topic: 'topic-context.png', topicNarrow: 'topic-context-narrow.png', task: 'task-detail-desktop.png', taskNarrow: 'task-detail-narrow.png' }, sourceSha256: createHash('sha256').update(observer).digest('hex'), browser: await browser.version(), errors, writes, apiCalls: calls.length, boundary: '真实React与完整observer代码；隔离临时server，API全部由Playwright拦截，未访问真实18998；DSH primitives为语义替身。' }
   await writeFile(path.join(output, 'browser-results.json'), JSON.stringify(result, null, 2))
