@@ -1,0 +1,55 @@
+✔ 节点耗时来自已提交 claim/commit，重开存储后仍可读取 (163.0489ms)
+✔ 工程索引容量等待仅在旧节点排空且下游未运行时切换定义 (193.167ms)
+✔ 工程读取节点仅在旧执行已排空且下游未开始时迁移定义 (168.5098ms)
+✔ 磁盘配置读回、显式初始化、正常开启及身份/schema严格检查 (271.6069ms)
+✔ 话题事实 v4→v5 离线迁移先零写检查并备份，逐条回读身份 (619.177ms)
+✔ 损坏与空库不隐式建表；未知生产参数拒绝 (160.5467ms)
+✔ 独立锁库阻止另一个worker及进程；关闭后可重新取得锁 (352.3982ms)
+✔ Owner候选落盘后进程强杀，重开原Task重新领取且旧租约失效 (843.2652ms)
+✔ Owner已接纳的追加阶段落盘后强杀，重启只应用一次原决定 (740.1158ms)
+✔ 顺序节点必须绑定输入；drained和业务输出落盘后，成功与后继ready原子提交 (305.5818ms)
+✔ sessionId先落盘；重启不推定旧句柄停止，确认排空后同Session新lease恢复 (515.8043ms)
+✔ 输入来源去重、payload冲突、drained前拒绝换代；旧结果CAS和未处理屏障持续生效 (302.2003ms)
+✔ stop先持久阻断；run.stopped必须等租约排空；无等待模型调用 (272.2102ms)
+✔ 同Task仅一个非终态run，业务冲突不破坏控制库健康 (264.1064ms)
+✔ Task 历史 run 游标分页保持范围且无遗漏重复 (309.9725ms)
+✔ 会话创建失败可落waiting/recovery，不能伪造sessionBound或提交成功 (291.4358ms)
+✔ 持久预算跨input generation保留，耗尽状态提交且receipt replay不扣额 (511.8174ms)
+✔ 真实子进程COMMIT前强杀：状态及receipt共同回滚，独占锁随进程释放 (651.146ms)
+✔ 真实COMMIT后ACK丢失：调用器超时封闭写，重开按原ID读回且不再claim (10696.4289ms)
+✔ RPC队列有界，拒绝超额请求且已接纳查询可完成 (290.3701ms)
+✔ 测试进程限额触发原生SQLITE_FULL：整条命令回滚且封闭写，不模拟物理卷满 (833.1804ms)
+✔ 消息、话题与任务详情只展示有绑定的会话并支持历史分页 (3.9361ms)
+✔ 精简判断轨迹不包含技术详情，并展示容量受阻原因 (1.3833ms)
+✔ 收信箱区分话题关联等待与意图重判，任务详情展示业务计划阶段 (0.866ms)
+✔ 运行看板保留左侧菜单并替换右侧整体内容 (7.9842ms)
+✔ 任务卡不请求或展示执行轮次耗时统计 (1.292ms)
+✔ 运行看板提供统一视觉尺度、响应式布局和可见键盘焦点 (0.7983ms)
+✔ Agent配置页面提供叶子任务并行上限且默认值为5 (0.8384ms)
+✔ 发件状态按实际投递环节展示，pending不会伪装为已回读 (1.8341ms)
+✔ 处理步骤直接展示事项、关联对象和动作结论，未知结构不编造结果 (1.5315ms)
+✖ 步骤耗时使用本次 startedAt，缺失或倒置时间不冒充零耗时 (1.3219ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 30
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 18934.7876
+
+✖ failing tests:
+
+test at test\observer-client.test.js:390:1
+✖ 步骤耗时使用本次 startedAt，缺失或倒置时间不冒充零耗时 (1.3219ms)
+  evalmachine.<anonymous>:10
+      function TaskStepElapsed({ node }) {
+      ^^^^^^^^
+  
+  SyntaxError: Unexpected token 'function'
+      at new Script (node:vm:117:7)
+      at createScript (node:vm:269:10)
+      at runInNewContext (node:vm:310:10)
+      at TestContext.<anonymous> (file:///D:/project/worktrees/dingtalk-topic-context-completeness/test/observer-client.test.js:393:16)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

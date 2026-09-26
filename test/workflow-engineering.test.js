@@ -49,6 +49,14 @@ test('工程交付证明复用同一 Run 工件并要求显式业务 E2E 检查'
   { code: 'ENGINEERING_DELIVERY_PROOF_UNAVAILABLE' })
   await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, store: { query: async () => [{ ...record,
     digest: 'e'.repeat(64) }] }, taskId: 't' }), { code: 'ENGINEERING_DELIVERY_PROOF_UNAVAILABLE' })
+  record.definitionVersion = '10'
+  await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, store, taskId: 't' }), { code: 'ENGINEERING_ACCEPTANCE_PROOF_REQUIRED' })
+  output['business-acceptance'] = { acceptance: { passed: true, candidateDigest, checks: [{ id: 'acceptance', passed: true }] } }
+  state.nodes.push({ nodeId: 'business-acceptance', status: 'succeeded', outputRef: 'artifact:business-acceptance' })
+  assert.equal((await readEngineeringDeliveryProof({ state, artifacts, store, taskId: 't', requiredE2eCheckIds: ['acceptance'] })).localE2ePassed, true)
+  output['business-acceptance'].acceptance.candidateDigest = 'e'.repeat(64)
+  await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, store, taskId: 't' }), { code: 'ENGINEERING_ACCEPTANCE_PROOF_REQUIRED' })
+  delete record.definitionVersion
   output['prepare-push'].commitId = 'e'.repeat(40)
   await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, store, taskId: 't' }), { code: 'ENGINEERING_DELIVERY_PROOF_MISMATCH' })
 })
@@ -90,7 +98,8 @@ test('工程空方案重发保留原任务并冻结新仓库定义', async t => 
   await store.command({ id: 'create', kind: 'run.create', args: { taskId: 'task', runId: prepared.runId, workflowId: prepared.workflowId,
     workflowDigest: definition.digest, requirementRef: requirement.ref, nodes: workflow.nodes.map((node, index) => ({ nodeId: node.id,
       nodeVersion: node.version, executor: node.executor, inputRef: index ? null : first.ref, inputDigest: index ? null : first.digest })) } })
-  for (let index = 0; index < 4; index++) {
+  const applyIndex = workflow.nodes.findIndex(node => node.id === 'apply-changes')
+  for (let index = 0; index <= applyIndex; index++) {
     const node = workflow.nodes[index], claimed = (await store.command({ id: `claim-${index}`, kind: 'node.claim', args: {
       runId: prepared.runId, nodeId: node.id, expectedGeneration: 1, expectedLeaseEpoch: 0 } })).result.binding
     if (node.executor === 'agent') await store.command({ id: 'bind', kind: 'node.sessionBound', args: {
@@ -98,8 +107,8 @@ test('工程空方案重发保留原任务并冻结新仓库定义', async t => 
     await store.command({ id: `drain-${index}`, kind: 'node.drained', args: { runId: prepared.runId, nodeId: node.id,
       generation: 1, leaseEpoch: 1, evidenceRef: requirement.ref } })
     await store.command({ id: `commit-${index}`, kind: 'node.commit', args: { runId: prepared.runId, nodeId: node.id,
-      generation: 1, leaseEpoch: 1, inputDigest: claimed.inputDigest, outcome: index === 3 ? 'waiting' : 'succeeded', evidenceRefs: [],
-      ...(index === 3 ? { waitReason: { kind: 'recovery', reference: 'ENGINEERING_NO_CHANGES_PROPOSED' } }
+      generation: 1, leaseEpoch: 1, inputDigest: claimed.inputDigest, outcome: index === applyIndex ? 'waiting' : 'succeeded', evidenceRefs: [],
+      ...(index === applyIndex ? { waitReason: { kind: 'recovery', reference: 'ENGINEERING_NO_CHANGES_PROPOSED' } }
         : { outputRef: requirement.ref, nextInput: { nodeId: workflow.nodes[index + 1].id, inputRef: first.ref, inputDigest: first.digest } }) } })
   }
   const result = await registry.reissueTask({ taskId: 'task', repositoryId: 'backend', requestId: 'user-reissue' }, controller, artifacts)
@@ -195,10 +204,10 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   const head=`codex/task-${executionDigest('revision-command').slice(0,24)}`
   await writeFile(script,`const fs=require('node:fs'),cp=require('node:child_process');const [file,remote,head,...args]=process.argv.slice(2);let s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;const sha=()=>cp.execFileSync('git',['ls-remote',remote,'refs/heads/'+head],{encoding:'utf8'}).trim().split(/\\s+/)[0];const value=x=>args[args.indexOf(x)+1];if(s)s.headRefOid=sha();if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(args[1]==='list')console.log(JSON.stringify(s?[s]:[]));else if(args[1]==='view')console.log(JSON.stringify(s));else if(['create','edit'].includes(args[1])){s={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:sha(),headRefName:head,baseRefName:'main',body:fs.readFileSync(value('--body-file'),'utf8'),title:value('--title'),creates:(s?.creates??0)+(args[1]==='create'?1:0),edits:(s?.edits??0)+(args[1]==='edit'?1:0)};fs.writeFileSync(file,JSON.stringify(s));process.exit(1)}else process.exit(2)`)
   const store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'revision',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true});t.after(()=>store.close())
-  const registry=createEngineeringRegistry({ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]})
+  const registry=createEngineeringRegistry({ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],acceptanceChecks:[{id:'value-acceptance',version:'1',criterion:'修改后的值符合约定',expected:'true',executable:process.execPath,args:['-e',"console.log(JSON.stringify({actual:String(['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))}))"]}],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]})
   await registry.restore(store)
   const reached=Promise.withResolvers(),release=Promise.withResolvers();let firstCommit
-  const sessions={async run({input,onSessionBound,onResult}){await onSessionBound();assert.equal(input.files[0].text,input.request==='first'?'old':'one');onResult({changes:[{path:'value.txt',expectedHash:input.files[0].expectedHash,content:input.request==='first'?'one':'two'}]})},async cancel(){},async close(){}}
+  const sessions={async run({input,onSessionBound,onResult}){await onSessionBound();assert.equal(input.files[0].text,input.request==='first'?'old':'one');onResult({document:{name:'修改方案.md',markdown:'# 修改方案\n将 value.txt 更新为本轮需要的值，使用配置检查核对文件内容。'},changes:[{path:'value.txt',expectedHash:input.files[0].expectedHash,content:input.request==='first'?'one':'two'}]})},async cancel(){},async close(){}}
   const controller=createExecutionController({store,artifacts,sessions,delivery:createExecutionDelivery({store,artifacts,...registry.deliveryOptions}),workflows:[],changeQuietMs:0,maxChangeDelayMs:0});t.after(()=>controller.close())
   const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',objective:'first'}},{commandId:'revision-command',run:{actorId:'owner'},unit:{}},{registerWorkflow(workflow){const node=workflow.nodes.at(-1),original=node.execute;node.execute=async args=>{const result=await original(args);if(args.generation===1){firstCommit=result.commitId;reached.resolve();await release.promise}return result};controller.registerWorkflow(workflow)}})
   await controller.createRun({commandId:'create',...prepared})
@@ -206,6 +215,15 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   await controller.changeInput({commandId:'revise',runId:prepared.runId,inputId:'revision',sourceKey:'revision',input:{...prepared.input,request:'second'}});release.resolve()
   const state=await controller.whenIdle(prepared.runId)
   assert.equal(state.run.status,'succeeded',JSON.stringify(await controller.state(prepared.runId)));assert.equal(state.run.generation,2)
+  const directoryOutput = await artifacts.read(state.nodes.find(node => node.nodeId === 'prepare-workspace').outputRef)
+  assert.equal(directoryOutput.workspace.kind, 'independent-git-repository')
+  assert.ok(directoryOutput.workspace.directory.startsWith(root))
+  const planOutput = await artifacts.read(state.nodes.find(node => node.nodeId === 'propose-changes').outputRef)
+  assert.match(planOutput.document.markdown, /value.txt/)
+  assert.equal(state.nodes.find(node => node.nodeId === 'validate-proposal').status, 'succeeded')
+  const startOutput = await artifacts.read(state.nodes.find(node => node.nodeId === 'prepare-generation').outputRef)
+  assert.equal(startOutput.startingPoint.mode, 'continue')
+  assert.equal(startOutput.startingPoint.repository, 'test/repo')
   const result=await artifacts.read(state.nodes.at(-1).outputRef),pr=JSON.parse(await readFile(stateFile,'utf8'))
   assert.notEqual(result.commitId,firstCommit);assert.equal(await git(remote,'rev-parse',result.commitId+'^'),firstCommit)
   assert.equal(await git(remote,'show',result.commitId+':value.txt'),'two');assert.equal(pr.creates,1);assert.equal(pr.edits,1);assert.equal(pr.title,'second');assert.match(pr.body,/second/)

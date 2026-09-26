@@ -210,7 +210,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       if (failure || !submitted) {
         if (failure) errors.set(runId, failure)
         const evidenceRefs = []
-        if (nodeDefinition.executor === 'code' && failure?.code === 'ENGINEERING_VERIFICATION_FAILED' && failure.evidence !== undefined) {
+        if (nodeDefinition.executor === 'code' && ['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_ACCEPTANCE_FAILED'].includes(failure?.code) && failure.evidence !== undefined) {
           if (!Array.isArray(failure.evidence) || failure.evidence.length > 128) throw executionError('NODE_FAILURE_EVIDENCE_INVALID')
           for (const payload of failure.evidence) evidenceRefs.push((await artifacts.put(payload)).ref)
         }

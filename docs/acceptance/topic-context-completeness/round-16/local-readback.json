@@ -1,0 +1,37 @@
+{
+  "checkedAt": "2026-09-26T16:02:15.6912190+08:00",
+  "pid": 35752,
+  "health": "ok",
+  "recoveryIssueCount": 0,
+  "inboundProcessing": true,
+  "webStatus": 200,
+  "sourceFiles": 83,
+  "mismatches": 0,
+  "taskState": "completed",
+  "nodes": [
+    {
+      "Node": "prepare",
+      "State": "succeeded",
+      "Length": 219,
+      "HasMaterials": true,
+      "HasResult": false,
+      "NextCursor": null
+    },
+    {
+      "Node": "analyze",
+      "State": "succeeded",
+      "Length": 161,
+      "HasMaterials": false,
+      "HasResult": true,
+      "NextCursor": null
+    },
+    {
+      "Node": "validate-result",
+      "State": "succeeded",
+      "Length": 161,
+      "HasMaterials": false,
+      "HasResult": true,
+      "NextCursor": null
+    }
+  ]
+}

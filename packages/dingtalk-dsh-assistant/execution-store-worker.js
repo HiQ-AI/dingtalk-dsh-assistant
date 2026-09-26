@@ -11,7 +11,7 @@ import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, q
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
 
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 const APPLICATION_ID = 0x44534845
 let db, owner, healthy = true
 const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
@@ -616,6 +616,33 @@ function command(value) {
     throw cause
   }
 }
+const nodeTimes = new Map(), claimedNodes = new Map()
+let timingWatermark = 0
+function refreshNodeTimes() {
+  let rows
+  do {
+    rows = db.prepare("SELECT seq,kind,payload,created_at FROM execution_events WHERE seq>? AND kind IN ('node.claim','node.commit') ORDER BY seq LIMIT 1000").all(timingWatermark)
+    for (const row of rows) {
+      const result = JSON.parse(row.payload)
+      if (row.kind === 'node.claim' && result.binding) {
+        const node = result.binding
+        claimedNodes.set(node.runId, node.nodeRunId)
+        nodeTimes.set(node.nodeRunId, { leaseEpoch: node.leaseEpoch, startedAt: row.created_at, completedAt: null })
+      } else if (row.kind === 'node.commit' && result.run) {
+        const timing = nodeTimes.get(claimedNodes.get(result.run.runId))
+        if (timing) timing.completedAt = row.created_at
+        claimedNodes.delete(result.run.runId)
+      }
+      timingWatermark = row.seq
+    }
+  } while (rows.length === 1000)
+  timingWatermark = db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM execution_events').get().seq
+}
+function timedNodeDto(node) {
+  const timing = nodeTimes.get(node.node_run_id)
+  return { ...nodeDto(node), startedAt: timing?.leaseEpoch === node.lease_epoch ? timing.startedAt : null,
+    completedAt: timing?.leaseEpoch === node.lease_epoch ? timing.completedAt : null }
+}
 function query(value) {
   if (value?.kind === 'run.list') {
     const limit = integer(value.limit ?? 100, 'limit', 1); if (limit > 200) fail('INVALID_ARGUMENT')
@@ -634,9 +661,10 @@ function query(value) {
       inputId: i.input_id, sourceKey: i.source_key, requirementRef: i.requirement_ref, seq: i.seq, status: i.status,
       acceptedAt: i.accepted_at, appliedAt: i.applied_at,
     }))
-    return { run: runDto(run) ?? null, nodes: nodes(value.runId).map(nodeDto), inputs,
+    refreshNodeTimes()
+    return { run: runDto(run) ?? null, nodes: nodes(value.runId).map(timedNodeDto), inputs,
       pendingInputCount: inputs.filter(i => i.status === 'pending').length,
-      ...(value.includeHistory ? { nodeHistory: db.prepare('SELECT * FROM execution_nodes WHERE run_id=? ORDER BY generation,position').all(value.runId).map(nodeDto) } : {}) }
+      ...(value.includeHistory ? { nodeHistory: db.prepare('SELECT * FROM execution_nodes WHERE run_id=? ORDER BY generation,position').all(value.runId).map(timedNodeDto) } : {}) }
   }
   if (value?.kind === 'receipt') {
     object(value, ['kind', 'commandId']); text(value.commandId, 'commandId')

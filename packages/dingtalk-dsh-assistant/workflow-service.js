@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { openExecutionRuntime } from './execution.js'
 import { createTaskOwnerController } from './task-owner-controller.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
@@ -16,6 +17,165 @@ import { createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWork
 import { createUatPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
 import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
+import { describeVerificationChecks } from './execution-check-job.js'
+
+/** 将持久节点工件转换为可读产出；不推断未落盘的文件或外部执行结果。 */
+export function describeTaskNodeOutput(node, output, context = {}) {
+  if (node.nodeId === 'business-acceptance' && output?.acceptance) {
+    const items = output.acceptance.checks.map(check => {
+      const { acceptance } = JSON.parse(check.log)
+      return `${acceptance.criterion}\n预期：${acceptance.expected}\n实际：${acceptance.actual ?? '未取得实际结果'}\n结果：${check.passed ? '通过' : '未通过'}`
+    })
+    return { overview: `业务验收${output.acceptance.passed ? '通过' : '未通过'} · ${items.length} 项`, text: items.join('\n\n') }
+  }
+  if (node.nodeId === 'prepare-workspace') {
+    const workspace = output?.workspace ?? context.workspace
+    return { overview: workspace?.status === 'succeeded' ? '已创建独立 Git 工作目录' : '工作目录回执未记录',
+      text: workspace ? `工作目录\n${workspace.directory}\n\n来源仓库\n${workspace.sourceRepository ?? '未记录'}\n\n隔离方式\n独立 Git 仓库，未使用 git worktree；修改不会写入源仓库工作目录` : '该节点旧输出仅保存了任务输入，未找到属于本次节点的成功目录回执。' }
+  }
+  if (node.nodeId === 'prepare-generation') {
+    const point = output?.startingPoint ?? context.startingPoint, requirement = output?.requirement ?? output
+    return { overview: requirement?.expectedRemoteSha ? '从上一轮已推送的版本继续修改' : '从项目起始版本开始本轮修改',
+      text: `处理内容\n核对已选项目、工作分支和本轮修改起点，确认远端状态允许继续。\n\n项目\n${point?.repository ?? '历史记录未提供项目名称'}\n\n工作分支\n${point?.workBranch ?? '未记录'}\n\n起点版本\n${requirement?.baseCommit ?? '未记录'}` }
+  }
+  if (['verify-candidate', 'prepare-commit'].includes(node.nodeId) && output?.verification) {
+    const report = describeVerificationChecks(output.verification)
+    if (node.nodeId === 'verify-candidate') {
+      const text = report.map(check => `${check.title}\n${check.passed ? '通过' : '未通过'}\n${check.steps.map(step => `${step.title}：${step.passed ? '通过' : '未通过'}${step.limitation ? `；${step.limitation}` : ''}`).join('\n')}\n${check.limitation}`).join('\n\n')
+      return { overview: report.map(check => `${check.title}${check.passed ? '通过' : '未通过'}`).join('；'), text,
+        document: { name: '构建检查报告.md', content: `# 构建检查报告\n\n${text}` } }
+    }
+  }
+  const sections = []
+  const fileSummaries = []
+  let overview = ''
+  const summarizeFiles = (label, paths) => {
+    const count = new Set(paths.filter(path => typeof path === 'string')).size
+    if (count) fileSummaries.push(`${label} ${count} 个文件`)
+  }
+  const add = (label, value) => { if (typeof value === 'string' && value.trim()) sections.push(`${label}\n${value.trim()}`) }
+  add('产出摘要', workflowResultText(output))
+  if (typeof output === 'string') add('正文', output)
+  add('正文', output?.markdown)
+  add('任务要求', output?.request)
+  for (const [label, values] of [['发现', output?.findings], ['限制与未确认事项', output?.limitations], ['执行范围', output?.constraints], ['相关文件', output?.paths], ['已有文件', output?.existingPaths], ['新建文件', output?.newPaths]]) {
+    if (Array.isArray(values)) add(label, values.map(item => typeof item === 'string' ? item : item?.statement).filter(item => typeof item === 'string').join('\n'))
+    if (Array.isArray(values) && ['相关文件', '已有文件', '新建文件'].includes(label)) summarizeFiles(({ '相关文件': '已选择', '已有文件': '选择已有', '新建文件': '计划新建' })[label], values)
+  }
+  if (Array.isArray(output?.materials)) add('材料正文', output.materials.map(item => item?.text).filter(item => typeof item === 'string').join('\n\n'))
+  if (Array.isArray(output?.files)) {
+    const label = node.nodeId === 'apply-changes' && output.status === 'succeeded' ? '已修改' : node.nodeId === 'read-files' ? '已读取' : '涉及'
+    summarizeFiles(label, output.files.filter(item => item?.text !== null).map(item => item?.path))
+    summarizeFiles('尚不存在', output.files.filter(item => item?.text === null).map(item => item?.path))
+    add(`${label}文件`, output.files.filter(item => typeof item?.path === 'string').map(item => `${item.path}${item.text === null ? '（尚不存在）' : ''}`).join('\n'))
+  }
+  if (Array.isArray(output?.changes) || Array.isArray(output?.replacements)) summarizeFiles('修改方案涉及', [...(Array.isArray(output?.changes) ? output.changes : []), ...(Array.isArray(output?.replacements) ? output.replacements : [])].map(item => item?.path))
+  if (Array.isArray(output?.changes)) for (const change of output.changes) {
+    if (typeof change?.path !== 'string') continue
+    add('文件变更', `${change.content === null ? '删除' : '写入'} ${change.path}${typeof change.content === 'string' ? `\n文件内容：\n${change.content}` : ''}`)
+  }
+  if (Array.isArray(output?.replacements)) for (const replacement of output.replacements) {
+    if (typeof replacement?.path !== 'string' || typeof replacement.from !== 'string' || typeof replacement.to !== 'string') continue
+    add('修改方案', `文件：${replacement.path}\n修改前：\n${replacement.from}\n修改后：\n${replacement.to}`)
+  }
+  if (Array.isArray(output?.verification?.checks)) add('检查结果', describeVerificationChecks(output.verification).map(item => `${item.title}：${item.passed ? '通过' : '未通过'}；${item.limitation}`).join('\n'))
+  if (node.nodeId === 'index-files' && Array.isArray(output?.directories)) {
+    const paths = output.directories.flatMap(item => typeof item?.directory === 'string' && Array.isArray(item.names) ? item.names.filter(name => typeof name === 'string').map(name => item.directory + name) : [])
+    summarizeFiles('已索引', paths)
+    if (Number.isSafeInteger(output.excludedCount) && output.excludedCount >= 0) fileSummaries.push(`排除 ${output.excludedCount} 个文件`)
+    add('文件索引', paths.join('\n'))
+  }
+  if (['prepare-commit', 'commit', 'prepare-push', 'push', 'prepare-pr', 'create-pr', 'finalize'].includes(node.nodeId)) {
+    const prepared = ['commit', 'push', 'create-pr'].includes(node.nodeId) ? output?.prepared : output
+    const receipt = node.nodeId === 'finalize' ? output : output?.receipt
+    const action = { 'prepare-commit': '待提交', commit: '已提交', 'prepare-push': '待推送', push: '已推送' }[node.nodeId]
+    if (Array.isArray(prepared?.changedPaths)) {
+      summarizeFiles(receipt && receipt.status !== 'succeeded' ? '涉及' : action || '涉及', prepared.changedPaths)
+      add('变更文件', prepared.changedPaths.join('\n'))
+    }
+    add('提交说明', prepared?.message)
+    add('分支', prepared?.ref)
+    add('远端', prepared?.remote)
+    add('提交版本', receipt?.commitId ?? prepared?.commitId)
+    if (['prepare-commit', 'prepare-push'].includes(node.nodeId)) overview = node.nodeId === 'prepare-commit' ? '已生成提交计划' : '已生成推送计划'
+    if (['commit', 'push'].includes(node.nodeId)) {
+      overview = receipt?.status === 'succeeded' ? node.nodeId === 'commit' ? '已创建本地提交' : '已推送至远端' : '执行结果待核对'
+      add('执行结果', overview)
+    }
+    if (['prepare-pr', 'create-pr', 'finalize'].includes(node.nodeId)) {
+      add('PR 标题', prepared?.title)
+      add('目标仓库', receipt?.repo ?? prepared?.repo)
+      add('来源分支', receipt?.head ?? prepared?.head)
+      add('目标分支', receipt?.base ?? prepared?.base)
+      if (node.nodeId === 'prepare-pr') { overview = '已生成 PR 草稿'; add('PR 正文', prepared?.body) }
+      else {
+        overview = receipt?.status === 'succeeded' ? `${node.nodeId === 'finalize' ? '已回读' : '已创建'} PR${Number.isSafeInteger(receipt.number) ? ` #${receipt.number}` : ''}` : 'PR 结果待核对'
+        add('PR 地址', receipt?.url)
+        add('PR 状态', ({ open: '待合并', closed: '已关闭', merged: '已合并', OPEN: '待合并', CLOSED: '已关闭', MERGED: '已合并' })[receipt?.state] ?? receipt?.state)
+      }
+    }
+  }
+  let text = sections.join('\n\n'), document
+  if (['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId)) {
+    document = output?.document?.markdown ? { name: '修改方案.md', content: output.document.markdown }
+      : { name: '修改记录.md', content: `# 已保存的修改记录\n\n历史节点没有保存方案说明文档。以下从实际补丁整理，不包含未记录的修改理由或验证计划。\n\n${text}` }
+    text = document.content
+    overview = output?.document?.markdown ? '修改方案.md' : '修改记录.md（原节点未保存方案说明）'
+  }
+  if (node.nodeId === 'prepare-pr' && typeof output?.body === 'string') document = { name: '合并请求.md', content: `# ${output.title ?? '合并请求'}\n\n${output.body}` }
+  return { text, overview: [overview, ...fileSummaries].filter(Boolean).join('；'), ...(document ? { document } : {}) }
+}
+
+export const describeMessageTraceItem = (item) => {
+  const input = item.input ?? {}, output = item.output ?? {}
+  const text = value => typeof value === 'string' ? value : ''
+  const rows = []
+  const add = (label, value) => { if (text(value)) rows.push({ label, value }) }
+  const actionNames = { create: '创建任务', research: '开展排查', answer: '回答问题', status: '查询进展', result: '查询结果', fact: '补充话题事实', no_action: '不采取动作', revise: '调整任务', reopen: '重新打开任务', pause: '暂停任务', cancel: '取消任务', resume: '继续任务', report: '调整报告', clarification: '答复澄清', approve: '处理审批' }
+  let title = { split: '拆分事项', route: '关联话题', intent: '判断下一步', command: '接纳动作' }[item.kind] ?? (item.nodeId === 'material' ? '读取补充材料' : '处理记录')
+  let conclusion = '尚未记录判断结论'
+  if (item.kind === 'split' && Array.isArray(output.units)) {
+    conclusion = `拆分为 ${output.units.length} 个事项`
+    output.units.forEach((unit, i) => add(`事项 ${i + 1}`, unit.goalText ?? unit.text))
+  } else if (item.kind === 'route' && output.kind === 'binding') {
+    const candidate = input.candidates?.find(candidate => candidate.candidateId === output.candidateId)
+    conclusion = { existing: '关联到已有话题或任务', new: '判断为新话题', conversation: '关联到当前群的任务集合' }[output.disposition] ?? '已记录关联判断'
+    add('当前事项', input.goalText)
+    add('关联对象', candidate?.title ?? candidate?.goal)
+    if (!candidate && output.candidateId) add('关联对象', '历史记录未提供关联对象名称')
+    if (Array.isArray(output.evidence)) output.evidence.forEach(value => add('关联依据', value))
+  } else if (item.kind === 'intent') {
+    const decisions = Array.isArray(output.decisions) ? output.decisions : [{ intent: output }]
+    let count = 0
+    for (const decision of decisions) {
+      const intent = decision.intent ?? {}, unit = input.units?.find(unit => unit.unitId === decision.unitId)
+      const sourceIndex = item.sourceMessages?.findIndex(message => message.runId === unit?.runId) ?? -1
+      add(sourceIndex >= 0 ? `消息 ${sourceIndex + 1} 的事项` : '对应事项', unit?.input?.goalText ?? unit?.input?.source?.text)
+      for (const action of intent.actions ?? []) {
+        count++
+        add(actionNames[action.intent] ?? '其他动作', action.arguments?.objective ?? action.arguments?.text ?? action.arguments?.answer ?? actionNames[action.intent] ?? '具体内容未记录')
+      }
+      if (intent.kind === 'needs_clarification') add('需要确认', intent.question ?? intent.reason)
+      if (intent.kind === 'needs_context') add('需要材料', intent.reason)
+      for (const constraint of intent.constraints ?? []) add('执行限制', typeof constraint === 'string' ? constraint : constraint.text)
+    }
+    conclusion = count ? `提出 ${count} 项处理决定` : '已记录判断，等待补充信息或后续处理'
+  } else if (item.kind === 'command') {
+    const action = actionNames[input.kind] ?? '处理动作'
+    conclusion = `${action} · ${({applied:'已接纳',running:'处理中',unknown:'结果待核对',failed:'失败'}[item.status] ?? '状态未记录')}`
+    add('处理目标', input.args?.arguments?.objective ?? input.args?.arguments?.text)
+    add('处理结果', output.reply ?? output.summary)
+    if (output.taskId) add('后续任务', '已记录任务身份；实际执行进展请查看任务看板')
+  } else if (item.nodeId === 'material') {
+    conclusion = output.complete === true ? '本页材料读取完成' : '材料完整性尚未确认'
+    for (const fact of output.facts ?? []) add('原文依据', fact.quote)
+  }
+  if (output.kind === 'needs_clarification') { conclusion = '需要进一步确认'; add('待确认问题', output.question ?? output.reason) }
+  if (output.kind === 'needs_context') { conclusion = '需要补充材料'; add('原因', output.reason) }
+  if (['needs_relink', 'needs_resegmentation'].includes(output.kind)) { conclusion = output.kind === 'needs_relink' ? '需要重新关联话题' : '需要重新拆分事项'; add('原因', output.reason) }
+  if (['failed', 'blocked'].includes(item.status)) conclusion = '本步未完成，请查看阻塞原因'
+  return { title, conclusion, rows }
+}
 
 const sourceKey = (profile, groupId, messageId) => `dws:${executionDigest([profile, groupId, messageId])}`
 export const isDirectedTaskRequest = body => typeof body === 'string' && /(?:小小鹏|@孙鹏(?:\(孙鹏\))?).{0,50}(?:需要(?:你|我)?(?:修复|处理|排查)|请(?:你|帮忙)?(?:修复|处理|排查)|帮(?:我|忙)?(?:修复|处理|排查))/su.test(body)
@@ -465,6 +625,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   }
   async function taskFacts(origin, selector) {
     const taskId = origin.command.args.taskId
+    const factVersion = await store.query({ kind: 'message.task.version', taskId })
     const plan = await controller.taskPlan(taskId)
     const runs = await store.query({ kind: 'run.list', taskId, limit: 200 })
     const state = runs.length ? await currentTask(taskId, selector) : null
@@ -474,9 +635,9 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const output = outputRef ? await artifacts.read(outputRef) : null
     const result = output && typeof output === 'object' ? {
       outputRef, stageId: outputStage?.stageId ?? null,
-      summary: typeof output.summary === 'string' ? output.summary.slice(0, 700) : null,
-      evidenceIds: Array.isArray(output.evidenceIds) ? output.evidenceIds.slice(0, 32) : [],
-      limitations: Array.isArray(output.limitations) ? output.limitations.slice(0, 16) : [],
+      summary: typeof output.summary === 'string' ? output.summary : null,
+      evidenceIds: Array.isArray(output.evidenceIds) ? output.evidenceIds : [],
+      limitations: Array.isArray(output.limitations) ? output.limitations : [],
     } : outputRef ? { outputRef } : null
     const blockedStage = plan?.stages.find(stage => stage.status === 'blocked')
     const objectiveAssessment = plan?.task.planRequirementRevision !== plan?.task.requirementRevision
@@ -502,7 +663,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       afterSequenceId = page.at(-1).sequenceId
     }
     const requirement = plan?.task.requirementRef ? await artifacts.read(plan.task.requirementRef) : null
-    return { taskId, objective: requirement?.request ?? origin.command.args.arguments.objective,
+    return { taskId, factVersion, objective: requirement?.request ?? origin.command.args.arguments.objective,
       sourceKey: origin.run.sourceKey, sourceVersion: origin.run.sourceVersion,
       topicId: origin.command.args.binding?.topicId ?? null,
       workflowId: state?.run.workflowId ?? origin.command.args.arguments.workflowId,
@@ -515,26 +676,34 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     }
   }
   async function topicTaskFacts(topic, run) {
-    const origins = await store.query({ kind: 'message.task-candidates', conversationId: run.conversationId, limit: 200 })
+    const origins = []
+    let beforeSequenceId
+    do {
+      const page = await store.query({ kind: 'message.task-candidates', conversationId: run.conversationId, limit: 200, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
+      origins.push(...page)
+      beforeSequenceId = page.length === 200 ? page.at(-1).sequenceId : null
+      if (origins.length >= 10000 && beforeSequenceId) throw executionError('MESSAGE_CANDIDATE_CATALOG_CAPACITY')
+    } while (beforeSequenceId)
     const sourceKeys = new Set(topic.sources.map(ref => ref.sourceKey))
     const matched = origins.filter(origin => ['accepted', 'applied'].includes(origin.command.status)
       && (origin.command.args.binding?.topicId === topic.topicId
         || !origin.command.args.binding?.topicId && sourceKeys.has(origin.run.sourceKey)))
     const unique = [...new Map(matched.map(origin => [origin.command.args.taskId, origin])).values()]
     const tasks = []
-    for (const origin of unique.slice(0, 20)) {
+    for (const origin of unique) {
       try { await taskAccess(origin.command.args.taskId, run.actorId, run.conversationId) }
       catch (error) { if (error.code === 'WORKFLOW_TASK_FORBIDDEN') continue; throw error }
       tasks.push(await taskFacts(origin))
     }
-    return { tasks, total: unique.length, hasMore: unique.length > 20 || origins.length === 200 }
+    return { tasks, total: unique.length, hasMore: false }
   }
   const stageRunId = (taskId, planRevision, stageId, attempt = 1) =>
     `run-${executionDigest({ taskId, planRevision, stageId, attempt })}`
   async function createPlannedTask({ action, info }) {
     const taskId = requireText(action.taskId, 'WORKFLOW_TASK_ID_REQUIRED')
+    const topic = action.binding?.topicId ? await fullTopic(action.binding.topicId) : null
     const sourceKeys = [...new Set([info.run.sourceKey,
-      ...(action.binding?.topicId ? await store.query({ kind: 'message.topic.sources', topicId: action.binding.topicId }) : [])])]
+      ...(topic?.facts.flatMap(fact => fact.sourceRefs.map(ref => ref.sourceKey)) ?? [])])]
     if (sourceKeys.length > 16) throw executionError('TASK_SOURCE_CAPACITY')
     const sources = await Promise.all(sourceKeys.map(key => store.query({ kind: 'message.source', sourceKey: key })))
     if (sources.some(source => !source || source.conversationId !== info.run.conversationId
@@ -1072,6 +1241,33 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     }
     return matches.size === 1 ? matches.values().next().value : null
   }
+  async function fullTopic(topicId) {
+    let topic = await store.query({ kind: 'message.topic', topicId })
+    if (!topic) return null
+    const facts = topic.hasMoreFacts ? [] : topic.facts
+    let cursor = 0
+    let version = null
+    while (topic.hasMoreFacts && cursor !== null) {
+      const page = await store.query({ kind: 'message.topic.facts', topicId, status: 'active', cursor, limit: 100 })
+      if (version !== null && version !== page.contextRevision) throw executionError('MESSAGE_TOPIC_CONTEXT_STALE')
+      version = page.contextRevision
+      facts.push(...page.facts)
+      cursor = page.nextCursor
+    }
+    if (version !== null) {
+      topic = await store.query({ kind: 'message.topic', topicId })
+      if (topic.contextRevision !== version) throw executionError('MESSAGE_TOPIC_CONTEXT_STALE')
+    }
+    // 仅合并同一发送人逐字相同的事实。不同表述、不同发送人的授权和全部历史原记录仍保留。
+    const currentFacts = new Map()
+    for (const fact of facts) {
+      const key = executionDigest([fact.actorId, fact.kind, fact.text])
+      const existing = currentFacts.get(key)
+      if (existing) existing.equivalentFactCount = (existing.equivalentFactCount ?? 1) + 1
+      else currentFacts.set(key, { ...fact })
+    }
+    return { ...topic, facts: [...currentFacts.values()], historyFactCount: facts.length, hasMoreFacts: false }
+  }
   const messages = createMessageWorkflow({ store, judge: messageJudge, policy: config.policy, handlers,
     context: {
       passiveTopic,
@@ -1147,7 +1343,14 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       async candidates({ run, unit, explicitSourceKeys = [] }) {
         const values = await store.query({ kind: 'run.list', limit: 200 })
         const result = []
-        const origins = await store.query({ kind: 'message.task-candidates', conversationId: run.conversationId, limit: 200 })
+        const origins = []
+        let beforeSequenceId
+        do {
+          const page = await store.query({ kind: 'message.task-candidates', conversationId: run.conversationId, limit: 200, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
+          origins.push(...page)
+          beforeSequenceId = page.length === 200 ? page.at(-1).sequenceId : null
+          if (origins.length >= 10000 && beforeSequenceId) throw executionError('MESSAGE_CANDIDATE_CATALOG_CAPACITY')
+        } while (beforeSequenceId)
         const quoted = new Set([...(run.context.quoteRefs ?? []).map(ref => ref.sourceKey), ...(run.context.editOf ? [run.sourceKey] : []), ...explicitSourceKeys])
         for (const origin of origins) {
           if (origin.run.runId === run.runId || (['superseded', 'failed'].includes(origin.command.status) && !(run.context.editOf && origin.run.sourceKey === run.sourceKey))) continue
@@ -1160,13 +1363,24 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
             sourceRefs: [origin.run.sourceKey], explicitReferenceMatches: explicit ? [origin.run.sourceKey] : [],
             distinguishingFacts: [...(item ? [] : ['任务命令已接纳，执行实例尚未创建']), ...(run.context.editOf && origin.run.sourceKey === run.sourceKey ? ['被本条编辑直接修订的原任务；不得再次创建相同Task'] : [])] })
         }
-        const topics = await store.query({ kind: 'message.topics', conversationId: run.conversationId, limit: 200 })
+        const topics = []
+        let beforeTopicRowId
+        do {
+          const page = await store.query({ kind: 'message.topics', conversationId: run.conversationId, limit: 200, ...(beforeTopicRowId ? { beforeTopicRowId } : {}) })
+          topics.push(...page)
+          beforeTopicRowId = page.length === 200 ? page.at(-1).sequenceId : null
+          if (topics.length >= 10000 && beforeTopicRowId) throw executionError('MESSAGE_CANDIDATE_CATALOG_CAPACITY')
+        } while (beforeTopicRowId)
+        const explicitTopics = new Map()
+        for (const key of quoted) for (const topic of await store.query({ kind: 'message.topic.source', sourceKey: key })) {
+          if (topic.conversationId === run.conversationId) explicitTopics.set(topic.topicId, [...(explicitTopics.get(topic.topicId) ?? []), key])
+        }
         for (const topic of topics) {
           if (topic.facts.every(fact=>fact.sourceRunId===run.runId)) continue
           if (result.some(card => card.topicId === topic.topicId)) continue
           result.push({ candidateId: topic.topicId, topicId: topic.topicId, title: topic.title, goal: topic.title, state: 'topic', relevantTime: topic.updatedAt,
             versions: { topic: topic.revision }, sourceRefs: topic.facts.flatMap(fact => fact.sourceRefs.map(ref => ref.sourceKey)),
-            explicitReferenceMatches: topic.facts.flatMap(fact => fact.sourceRefs.map(ref => ref.sourceKey)).filter(key => quoted.has(key)), distinguishingFacts: ['话题事实，尚未关联执行Task'] })
+            explicitReferenceMatches: explicitTopics.get(topic.topicId) ?? [], distinguishingFacts: ['话题事实，尚未关联执行Task'] })
         }
         const legacyTasks = legacy.listTasks?.() ?? []
         const group = legacyGroup(run.conversationId)
@@ -1187,7 +1401,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         const recentReference = /^(?:这|这个|刚才|上面|前面|不是让你)/u.test(run.body.trim())
           && previous?.actorId === run.actorId ? previous.sourceKey : null
         rankMessageCandidates(result, unit.goalText, recentReference)
-        const cards = result.slice(0, 8).map((card, index) => {
+        const cards = result.map((card, index) => {
           if (index > 1 || card.engine !== 'legacy') return card
           const task = legacy.getTask?.(card.taskId)
           const lastChange = task?.objectiveHistory?.at(-1)?.objective
@@ -1195,7 +1409,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
             `最近目标：${String(lastChange ?? task?.objective ?? task?.title ?? '').slice(0, 160)}`,
             `结果：${String(task?.outcome ?? task?.result ?? '未记录').slice(0, 120)}`] }
         })
-        for (const card of cards) {
+        for (const card of cards.slice(0, 8)) {
           if (!card.taskId || card.engine === 'legacy') continue
           let origin
           try { origin = await taskAccess(card.taskId, run.actorId, run.conversationId) }
@@ -1215,7 +1429,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           await store.command({ id: `material:${run.runId}:${executionDigest([detailRef, text])}`, kind: 'message.material.record', args: { runId: run.runId, resourceRef: detailRef, material: { text } } })
           bounded.push({ ...card, detailRef })
         }
-        return { cards: bounded, total: result.length, explicitOverflow: result.slice(8).some(card => card.explicitReferenceMatches.length > 0) }
+        return { cards: bounded, total: result.length, explicitOverflow: false, catalogRevision: executionDigest(bounded.map(card => [card.candidateId, card.versions])) }
       },
       async facts({ run, binding }) {
         if (binding.engine === 'legacy') {
@@ -1223,7 +1437,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           if (!task || task.groupId !== run.conversationId) throw executionError('WORKFLOW_TASK_FORBIDDEN')
           return { legacyTask: { taskId: task.taskId, title: task.title, objective: task.objective ?? task.title, state: task.state, outcome: task.outcome ?? 'legacy-unknown', updatedAt: task.updatedAt ?? task.createdAt ?? null, uat2Status: task.result?.delivery?.uat2Status ?? null }, readOnly: true }
         }
-        const storedTopic = binding.topicId ? await store.query({ kind: 'message.topic', topicId: binding.topicId }) : null
+        const storedTopic = binding.topicId ? await fullTopic(binding.topicId) : null
         if (binding.topicId && (!storedTopic || storedTopic.conversationId !== run.conversationId)) throw executionError('WORKFLOW_TOPIC_FORBIDDEN')
         const topic = storedTopic ? { ...storedTopic, facts: storedTopic.facts.map(fact => ({ ...fact, sourceRefs: fact.sourceRefs.map(({ text: _text, ...ref }) => ref) })), sources: [...new Map(storedTopic.facts.flatMap(fact => fact.sourceRefs).map(ref => [`${ref.sourceKey}:${ref.sourceVersion}`, ref])).values()] } : null
         if (topic && !binding.taskId) {
@@ -1272,7 +1486,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       async topicFor({ run, unit, binding, intent, facts }) {
         if (intent.actions.every(action => ['approval', 'clarification'].includes(action.intent))) return null
         if (facts.topic && ![facts.topic.actorId, ownerActorId].includes(run.actorId)) throw executionError('WORKFLOW_TOPIC_FORBIDDEN')
-        const sourceTopics=!binding.topicId ? (await store.query({kind:'message.topics',conversationId:run.conversationId,limit:200})).filter(topic=>topic.facts.some(fact=>fact.sourceRefs.some(ref=>ref.sourceKey===run.sourceKey))) : []
+        const sourceTopics=!binding.topicId ? (await store.query({kind:'message.topic.source',sourceKey:run.sourceKey})).filter(topic=>topic.conversationId===run.conversationId) : []
         const sourceTopic=sourceTopics.length===1?sourceTopics[0]:null
         const sourceRefs = [{ sourceKey: run.sourceKey, sourceVersion: run.sourceVersion, text: run.body }]
         const constraints = [...new Set([...(unit.constraints ?? []), ...(unit.sharedConstraints ?? []), ...intent.constraints])]
@@ -1453,16 +1667,18 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       const outputRef = currentStage?.outputRef ?? state?.nodes.filter(node => node.outputRef).at(-1)?.outputRef
       const output = outputRef ? await artifacts.read(outputRef) : null
       const planState = plan?.task.status
+      // 无 Owner 的计划以持久终态为准；有 Owner 时仍须通过当前版本验收。
+      const taskComplete = ownerComplete || !owner && planState === 'succeeded'
       return { taskId, engine: 'workflow-v2', workflowId: run?.workflowId ?? currentStage?.workflowId,
         workflowVersion: run?.definitionVersion, groupId: origin?.run.conversationId,
         title: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
         objective: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
         inputVersion: (plan?.task.requirementRevision ?? run?.revision ?? 0) + 1, runSequence: taskRuns.length,
-        state: ownerComplete ? 'completed' : owner?.status === 'blocked' || planState === 'blocked' || planState === 'waiting_confirmation'
+        state: taskComplete ? 'completed' : owner?.status === 'blocked' || planState === 'blocked' || planState === 'waiting_confirmation'
           || planState === 'succeeded' ? 'waiting' : !run ? 'queued'
           : terminal(run.status) && !plan ? 'completed' : state.controllerError ? 'waiting'
             : run.status === 'running' ? 'running' : run.status === 'queued' ? 'queued' : 'waiting',
-        outcome: ownerComplete ? 'succeeded' : plan ? undefined : run && terminal(run.status) ? run.status : undefined,
+        outcome: taskComplete ? 'succeeded' : plan ? undefined : run && terminal(run.status) ? run.status : undefined,
         createdAt: plan?.task.createdAt ?? run?.createdAt, updatedAt: plan?.task.updatedAt ?? run?.updatedAt,
         result: workflowResultText(output),
         waitingReason: owner?.lastFailure ? `任务负责会话受阻：${owner.lastFailure}`
@@ -1525,7 +1741,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       try {
         if (run.status === 'waiting') {
           const state = await store.query({ kind: 'run', runId: run.runId })
-          if (state.nodes?.some(node => ['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_INDEX_CAPACITY_EXCEEDED', 'EXECUTION_BUDGET_EXHAUSTED', 'EDIT_PREPARED_INVALID', 'ENGINEERING_EDIT_SCOPE_MISMATCH', 'ENGINEERING_NO_CHANGES_PROPOSED'].includes(node.waitReason?.reference))) continue
+          if (state.nodes?.some(node => ['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_ACCEPTANCE_REQUIRED', 'ENGINEERING_ACCEPTANCE_FAILED', 'ENGINEERING_INDEX_CAPACITY_EXCEEDED', 'EXECUTION_BUDGET_EXHAUSTED', 'EDIT_PREPARED_INVALID', 'ENGINEERING_EDIT_SCOPE_MISMATCH', 'ENGINEERING_NO_CHANGES_PROPOSED'].includes(node.waitReason?.reference))) continue
         }
         await controller.recover({ commandId: `recover:${run.runId}:${run.revision}:${run.claimCount}`, runId: run.runId })
       }
@@ -1563,7 +1779,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       }
     })
   }
-  const messageStages = [{ id: 'receive', label: '接收消息' }, { id: 'context', label: '补全上下文' }, { id: 'S', label: '拆分事项' }, { id: 'R', label: '关联话题' },
+  const messageStages = [{ id: 'receive', label: '接收消息' }, { id: 'context', label: '补全上下文' }, { id: 'S', label: '拆分事项' }, { id: 'R', label: '关联话题' }, { id: 'material', label: '按需分块读取材料' },
     { id: 'routing-barrier', label: '等待新消息归类' }, { id: 'IB', label: '按话题判断意图' }, { id: 'intent-check', label: '检查话题新输入' }, { id: 'dispatch', label: '派发任务' }]
   async function mailboxes() {
     const messages = [], outbox = []
@@ -1581,7 +1797,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           const topicRefs = topicRefsBySource.get(run.sourceKey) ?? []
           const workflowStatus = ['routing_blocked', 'intent_blocked'].includes(run.routingStatus) || run.intentStatus === 'intent_blocked' ? 'routing_blocked'
             : run.routingStatus === 'routing_pending' ? 'routing' : run.intentStatus ?? (run.status === 'needs_attention' ? 'routing_blocked' : run.status === 'settled' ? 'processed' : 'routing')
-          messages.push({ groupId, messageId: run.context?.sourceMessageId, text: run.body, senderOpenDingTalkId: run.actorId,
+          messages.push({ groupId, messageId: run.context?.sourceMessageId, runId: run.runId, sourceVersion: run.sourceVersion, text: run.body, senderOpenDingTalkId: run.actorId,
             senderName: run.context?.senderName ?? senderNames.get(run.actorId), occurredAt: run.context?.occurredAt ?? run.createdAt, sequence: run.sequenceId,
             topicRefs, workflowStatus, ...(run.reason ? { workflowStatusDetail: run.reason } : {}),
             routingStatus: run.status === 'needs_attention' ? 'failed' : run.reason === 'message_quiet' && isPassiveTaskProgress(run.body) && !topicRefs.length ? 'pending' : ['settled', 'superseded'].includes(run.status) ? 'routed' : 'pending' })
@@ -1627,10 +1843,140 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       .sort((a,b)=>String(a.occurredAt).localeCompare(String(b.occurredAt)))
     return {topic,messages:messages.slice(offset,offset+limit),total:messages.length,offset,limit}
   }
+  async function messageTraceRecords(runId) {
+    const data = await messages.state(runId)
+    if (!data?.run || !groups.has(data.run.conversationId)) return null
+    const shared = []
+    let beforeSequenceId
+    do {
+      const page = await store.query({ kind: 'message.intent.runs', runId, limit: 100, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
+      shared.push(...page)
+      beforeSequenceId = page.length === 100 ? page.at(-1).sequenceId : null
+    } while (beforeSequenceId)
+    const byId = new Map(data.nodes.map(node => [node.nodeRunId, { ...node, carrierRunId: runId }]))
+    for (const node of shared) if (!byId.has(node.nodeRunId)) byId.set(node.nodeRunId, node)
+    const nodeKinds = { S: 'split', R: 'route', I: 'intent', IB: 'intent' }
+    const items = [...byId.values()].map(node => ({ id: node.nodeRunId, kind: nodeKinds[node.nodeId] ?? 'node', nodeId: node.nodeId,
+      unitId: node.unitId, status: node.status, createdAt: node.createdAt, startedAt: node.startedAt, attempt: node.leaseEpoch, completedAt: node.completedAt ?? node.finishedAt,
+      topicId: node.input?.topicId ?? node.input?.sharedTopic?.topicId, intentRunId: node.input?.intentRunId,
+      carrierRunId: node.carrierRunId, sourceRunIds: node.input?.units?.map(unit => unit.runId),
+      evidenceRefs: node.output?.output?.evidence ?? node.input?.sharedTopic?.sources?.map(ref => `${ref.sourceKey}@${ref.sourceVersion}`) ?? [],
+      gaps: [...(node.input?.omissions ?? []).map(item => item.reason ?? '历史输入已裁剪'), ...(node.input?.omittedCandidateCount ? [`未展示候选：${node.input.omittedCandidateCount}`] : [])],
+      deterministic: node.input?.deterministic === true,
+      input: node.input, output: node.output?.output ?? node.output, reason: node.error ?? null, usage: node.usage ?? node.output?.usage ?? null }))
+      .concat(data.commands.map(command => ({ id: command.commandId ?? command.id, kind: 'command', status: command.status,
+        unitId: command.unitId, topicId: command.topicId, createdAt: command.createdAt, startedAt: command.startedAt, attempt: command.leaseEpoch, completedAt: command.completedAt,
+        input: { kind: command.kind, args: command.args, dependsOn: command.dependsOn }, output: command.result,
+        reason: command.error ?? command.reason ?? null })))
+      .sort((a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')) || String(a.id).localeCompare(String(b.id)))
+    return { data, items }
+  }
+  async function messageTrace(runId, { offset = 0, limit = 50 } = {}) {
+    const trace = await messageTraceRecords(runId)
+    if (!trace) return null
+    const { data, items } = trace
+    const pageItems = items.slice(offset, offset + limit)
+    const sourceCache = new Map([[runId, data.run]])
+    for (const item of pageItems.filter(item => item.kind === 'intent')) {
+      const topic = item.topicId ? await store.query({ kind: 'message.topic', topicId: item.topicId }) : null
+      item.topicTitle = topic?.conversationId === data.run.conversationId ? topic.title : null
+      item.sourceMessages = []
+      for (const sourceId of [...new Set(item.sourceRunIds ?? [runId])]) {
+        if (!sourceCache.has(sourceId)) sourceCache.set(sourceId, (await messages.state(sourceId))?.run)
+        const source = sourceCache.get(sourceId)
+        if (!source || source.conversationId !== data.run.conversationId) continue
+        item.sourceMessages.push({ runId: sourceId, text: source.body, senderName: source.context?.senderName ?? null,
+          occurredAt: source.context?.occurredAt ?? source.createdAt, current: sourceId === runId })
+      }
+    }
+    return { runId, message: { text: data.run.body, receivedAt: data.run.createdAt }, status: data.run.status, reason: data.run.reason ?? null, revision: data.run.revision ?? data.run.matterSetRevision ?? 0,
+      items: pageItems.map(({ input, output, usage, evidenceRefs, deterministic, ...item }) => ({ ...item, summary: describeMessageTraceItem({ ...item, input, output }) })), nextCursor: offset + limit < items.length ? offset + limit : null, total: items.length }
+  }
+  async function workflowTopicContext(topicId, { offset = 0, limit = 50, intentCursor = 0, expectedRevision = null } = {}) {
+    const topic = await store.query({ kind: 'message.topic', topicId })
+    if (!topic || !groups.has(topic.conversationId)) return null
+    if (expectedRevision !== null && topic.contextRevision !== expectedRevision) throw executionError('MESSAGE_TOPIC_CONTEXT_STALE')
+    const page = await store.query({ kind: 'message.topic.facts', topicId, status: 'active', cursor: offset, limit })
+    if (page.contextRevision !== topic.contextRevision) throw executionError('MESSAGE_TOPIC_CONTEXT_STALE')
+    const sourceKeys = await store.query({ kind: 'message.topic.sources', topicId })
+    const intentRuns = await store.query({ kind: 'message.topic.intents', topicId, limit: 50, ...(intentCursor ? { beforeSequenceId: intentCursor } : {}) })
+    return { topicId, revision: page.contextRevision, current: { topicTitle: topic.title, activeFactCount: page.total,
+      sourceCount: sourceKeys.length, hasMoreFacts: page.nextCursor !== null }, facts: page.facts,
+      intentRuns, intentNextCursor: intentRuns.length === 50 ? intentRuns.at(-1).sequenceId : null, nextCursor: page.nextCursor, total: page.total }
+  }
+  async function messageEvidence(runId, resourceRef, { offset = 0, limit = 2000, hash = null } = {}) {
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 2 || limit > 8000) throw executionError('MESSAGE_EVIDENCE_CURSOR_INVALID')
+    const data = await messages.state(runId)
+    if (!data?.run || !groups.has(data.run.conversationId)) return null
+    let material = await store.query({ kind: 'message.material', runId, resourceRef })
+    if (!material) {
+      const trace = await messageTraceRecords(runId)
+      const sources = [data.run.snapshot?.source, ...(data.run.snapshot?.quotes ?? []), ...(data.run.snapshot?.history ?? []),
+        ...trace.items.flatMap(item => item.input?.sharedTopic?.sources ?? [])].filter(Boolean)
+      material = sources.find(ref => ref.sourceKey === resourceRef && typeof ref.text === 'string')
+    }
+    if (typeof material?.text !== 'string') return null
+    const currentHash = executionDigest(material.text)
+    if (hash && hash !== currentHash) throw executionError('MESSAGE_EVIDENCE_VERSION_CHANGED')
+    if (offset > material.text.length || offset > 0 && (!hash || /[\uDC00-\uDFFF]/u.test(material.text[offset] ?? ''))) throw executionError('MESSAGE_EVIDENCE_CURSOR_INVALID')
+    let end = Math.min(material.text.length, offset + limit)
+    if (end < material.text.length && /[\uD800-\uDBFF]/u.test(material.text[end - 1])) end--
+    return { runId, resourceRef, hash: currentHash, sourceVersion: material.sourceVersion ?? null, totalLength: material.text.length,
+      totalBytes: Buffer.byteLength(material.text), start: offset, end, text: material.text.slice(offset, end),
+      complete: offset === 0 && end === material.text.length, nextCursor: end < material.text.length ? end : null }
+  }
+  async function taskNodeOutput(taskId, runId, nodeRunId, { offset = 0, limit = 1200, outputRef, document = false } = {}) {
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 2 || limit > 8000)
+      throw executionError('TASK_OUTPUT_CURSOR_INVALID')
+    const origin = await store.query({ kind: 'message.task', taskId })
+    if (!origin || !groups.has(origin.run.conversationId)) return null
+    const state = await store.query({ kind: 'run', runId, includeHistory: true })
+    if (!state.run || state.run.taskId !== taskId) return null
+    const node = state.nodeHistory.find(item => item.nodeRunId === nodeRunId)
+    if (!node?.outputRef) return null
+    if (outputRef !== node.outputRef) throw executionError('TASK_OUTPUT_CHANGED')
+    const output = await artifacts.read(node.outputRef)
+    const context = {}
+    if (node.nodeId === 'prepare-workspace' && !output?.workspace) {
+      const effects = await store.query({ kind: 'effect.list', runId })
+      const effect = effects.find(item => item.nodeRunId === nodeRunId && item.generation === node.generation && item.state === 'succeeded' && item.definition?.action === 'workspace')
+      if (effect?.result?.result?.status === 'succeeded') context.workspace = { ...effect.result.result, sourceRepository: effect.definition.payload.sourceRepository }
+    }
+    if (node.nodeId === 'prepare-generation' && !output?.startingPoint) {
+      const records = await store.query({ kind: 'workflow.list' })
+      const record = records.find(item => item.workflowId === state.run.workflowId && item.digest === state.run.workflowDigest && item.config?.taskId === taskId)
+      if (record) context.startingPoint = { repository: record.config.repoId, workBranch: record.config.head }
+    }
+    const result = describeTaskNodeOutput(node, output, context), { text, overview } = result
+    if (document) return result.document ?? null
+    if (['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId)) {
+      const pathText = `方案工件路径\n${join(artifacts.root, node.outputRef)}`
+      return { text: pathText, overview: '', nextCursor: null, totalLength: pathText.length }
+    }
+    if (offset > text.length || offset > 0 && /[\uDC00-\uDFFF]/u.test(text[offset] ?? '')) throw executionError('TASK_OUTPUT_CURSOR_INVALID')
+    let end = Math.min(text.length, offset + limit)
+    if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1])) end--
+    return { text: text.slice(offset, end), nextCursor: end < text.length ? end : null, totalLength: text.length, overview,
+      ...(result.document ? { documentName: result.document.name } : {}) }
+  }
+  async function taskRuns(taskId, { offset = 0, limit = 20 } = {}) {
+    const origin = await store.query({ kind: 'message.task', taskId })
+    if (!origin || !groups.has(origin.run.conversationId)) return null
+    const owner = await store.query({ kind: 'task.owner', taskId })
+    const runs = await store.query({ kind: 'run.list', taskId, limit: limit + 1, ...(offset ? { beforeSequenceId: offset } : {}) })
+    const selected = runs.slice(0, limit)
+    return { taskId, taskOwner: owner ? { sessionId: owner.sessionId, sessionBound: owner.sessionBound, status: owner.status, decision: owner.decision?.action ?? null } : null, runs: await Promise.all(selected.map(async run => {
+      const state = await controller.state(run.runId)
+      return { runId: run.runId, status: run.status, startedAt: run.createdAt,
+        nodes: state.nodes.map(node => ({ nodeId: node.nodeId, label: node.title ?? node.nodeId,
+          status: node.status, sessionBound: node.sessionBound === true, sessionId: node.sessionBound === true ? node.sessionId ?? null : null })) }
+    })), nextCursor: runs.length > limit ? selected.at(-1).sequenceId : null, total: null }
+  }
   return {
     ingest, resumeRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, submitWebTask, mailboxes, topics, topicContext,
     prepareWorkflowNotificationOperation, executeWorkflowNotificationOperation, reconcileWorkflowNotificationOperation,
-    isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
+    isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, messageTrace, workflowTopicContext, messageEvidence, taskRuns, taskNodeOutput,
+    isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
     catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, builtInWorkflows: [taskProgressQueryDefinition], workflows: workflowCatalogState() }),
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,
       messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },

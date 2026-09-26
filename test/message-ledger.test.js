@@ -87,9 +87,36 @@ test('来源编辑使旧话题约束失效且保留审计事实',async t=>{
  await f.call('topic.bind',{runId:'m',unitId:'u',expectedRevision:0,binding:{kind:'binding',disposition:'new',candidateId:null},topic:{topicId:'topic',conversationId:'g',sourceRunId:'m',unitId:'u',title:'语言',facts:[{kind:'constraint',text:'只用中文',sourceRefs:[{sourceKey:'source',sourceVersion:1,text:'只用中文'}]}]}})
  await f.call('receive',receive('edit',{sourceKey:'source',sourceVersion:2,body:'改用英文'}))
  const topic=await f.store.query({kind:'message.topic',topicId:'topic'})
- assert.equal(topic.facts[0].text,'只用中文')
- assert.equal(topic.facts[0].status,'invalidated')
- assert.ok(topic.facts[0].invalidatedAt)
+ assert.deepEqual(topic.facts,[])
+ const history=await f.store.query({kind:'message.topic.facts',topicId:'topic',status:'invalidated'})
+ assert.equal(history.facts[0].text,'只用中文')
+ assert.equal(history.facts[0].status,'invalidated')
+ assert.ok(history.facts[0].invalidatedAt)
+ assert.equal(history.contextRevision,3)
+})
+test('一千条话题事实跨重启分页完整，同来源跨话题事实互不混入',async t=>{
+ const f=await fixture(t),texts=Array.from({length:1000},(_,i)=>`条件${i}`)
+ await f.call('receive',receive('many',{body:texts.join('、')}))
+ await f.call('split',{runId:'many',units:[{unitId:'many-unit'},{unitId:'other-unit'}]})
+ for(let start=0;start<texts.length;start+=30){
+  const facts=texts.slice(start,start+30).map(text=>({kind:'constraint',text,sourceRefs:[{sourceKey:'many',sourceVersion:1,text}]}))
+  await f.call('topic.upsert',{topicId:'many-topic',conversationId:'g',sourceRunId:'many',unitId:'many-unit',title:'条件',facts})
+ }
+ const topic=await f.store.query({kind:'message.topic',topicId:'many-topic'})
+ assert.equal(topic.facts.length,256);assert.equal(topic.hasMoreFacts,true);assert.equal(topic.contextRevision,1001)
+ await bad(f.call('topic.intent.accept',{runId:'many',topicId:'many-topic',conversationId:'g',inputRevision:topic.inputRevision,contextRevision:1000,decisions:[]}), 'MESSAGE_TOPIC_CONTEXT_STALE')
+ const sharedFact={kind:'constraint',text:texts[0],sourceRefs:[{sourceKey:'many',sourceVersion:1,text:texts[0]}]}
+ await f.call('topic.upsert',{topicId:'other-topic',conversationId:'g',sourceRunId:'many',unitId:'other-unit',title:'其他',facts:[sharedFact]})
+ let cursor=0,all=[]
+ do {const page=await f.store.query({kind:'message.topic.facts',topicId:'many-topic',cursor,limit:37});all.push(...page.facts);cursor=page.nextCursor;assert.equal(page.total,1000)} while(cursor)
+ assert.equal(all.length,1000);assert.equal(new Set(all.map(fact=>fact.id)).size,1000)
+ assert.deepEqual(all.map(fact=>fact.text),texts)
+ const other=await f.store.query({kind:'message.topic.facts',topicId:'other-topic',status:'all'})
+ assert.equal(other.total,1);assert.deepEqual(other.facts.map(fact=>fact.text),[texts[0]])
+ assert.equal(other.nextCursor,null)
+ await f.reopen()
+ assert.equal((await f.store.query({kind:'message.topic.facts',topicId:'many-topic',cursor:0,limit:1})).total,1000)
+ assert.equal((await f.store.query({kind:'message.topic.facts',topicId:'other-topic',cursor:0,limit:1})).total,1)
 })
 test('已认证同任务控制可越过无关归类等待，普通动作与其他发送者不可越权',async t=>{
  const f=await fixture(t)
@@ -457,4 +484,50 @@ test('源编辑取消未启动命令零Task；修订暂停命令不默认恢复'
  if(suffix==='revise'){assert.equal(result.result.command.args.arguments.objective,'new');assert.equal(result.result.command.args.sourceInputRunId,edit)}
  }
  assert.deepEqual(await f.store.query({kind:'run.list'}),[])
+})
+
+test('任务 Run 状态变化后原子拒绝旧事实摘要且不写入命令', async t => {
+ const f=await fixture(t)
+ await f.store.command({id:'version-task-create',kind:'run.create',args:{runId:'version-business',taskId:'version-task',workflowId:'w',workflowDigest:'a'.repeat(64),requirementRef:'sha256/in',nodes:[{nodeId:'n',nodeVersion:'1',executor:'code',inputRef:'sha256/in',inputDigest:'a'.repeat(64)}]}})
+ await f.call('receive',receive('version-source'))
+ await f.call('split',{runId:'version-source',units:[{unitId:'version-unit'}]})
+ await f.call('topic.bind',{runId:'version-source',unitId:'version-unit',expectedRevision:0,binding:{kind:'binding',disposition:'existing',candidateId:'version-task',taskId:'version-task'},topic:{topicId:'version-topic',conversationId:'g',sourceRunId:'version-source',unitId:'version-unit',title:'状态',facts:[]}})
+ const oldVersion=await f.store.query({kind:'message.task.version',taskId:'version-task'})
+ const topic=await f.store.query({kind:'message.topic',topicId:'version-topic'})
+ await f.store.command({id:'version-task-stop',kind:'run.stop',args:{runId:'version-business',reason:'用户取消'}})
+ const freshVersion=await f.store.query({kind:'message.task.version',taskId:'version-task'})
+ assert.notEqual(freshVersion.hash,oldVersion.hash)
+ const acceptance={runId:'version-source',topicId:'version-topic',conversationId:'g',inputRevision:topic.inputRevision,contextRevision:topic.contextRevision,taskFactVersions:[oldVersion],decisions:[{unitId:'version-unit',expectedRevision:0,commands:[{commandId:'version-status-command',kind:'status',args:{taskId:'version-task',arguments:{}}}]}]}
+ await bad(f.call('topic.intent.accept',acceptance),'MESSAGE_TASK_FACTS_STALE')
+ const rejected=await f.store.query({kind:'message.run',runId:'version-source'})
+ assert.deepEqual(rejected.commands,[])
+ assert.equal(rejected.units[0].status,'pending')
+ assert.equal((await f.store.query({kind:'message.topic',topicId:'version-topic'})).processedRevision,undefined)
+ await f.call('topic.intent.accept',{...acceptance,taskFactVersions:[freshVersion]})
+ assert.equal((await f.store.query({kind:'message.run',runId:'version-source'})).commands.length,1)
+})
+
+test('同批重复事实撤销幂等接纳，矛盾替代整批回滚且零命令',async t=>{
+ for(const conflict of [false,true]){
+  const f=await fixture(t)
+  await f.call('receive',receive('revision-old',{body:'仅排查'}))
+  await f.call('split',{runId:'revision-old',units:[{unitId:'revision-old-unit'}]})
+  await f.call('topic.bind',{runId:'revision-old',unitId:'revision-old-unit',expectedRevision:0,binding:{kind:'binding',disposition:'conversation',candidateId:null},topic:{topicId:'repeat-revision-topic',conversationId:'g',sourceRunId:'revision-old',unitId:'revision-old-unit',title:'原条件',facts:[{kind:'constraint',text:'仅排查',sourceRefs:[{sourceKey:'revision-old',sourceVersion:1,text:'仅排查'}]}]}})
+  await f.call('accept',{runId:'revision-old',unitId:'revision-old-unit',expectedRevision:0,commands:[],outcome:'ignored'})
+  const fact=(await f.store.query({kind:'message.topic.facts',topicId:'repeat-revision-topic'})).facts[0]
+  await f.call('receive',receive('revision-new',{body:'取消原条件；撤销原条件'}))
+  await f.call('split',{runId:'revision-new',units:[{unitId:'revision-A'},{unitId:'revision-B'}]})
+  for(const unitId of ['revision-A','revision-B'])await f.call('topic.bind',{runId:'revision-new',unitId,expectedRevision:0,binding:{kind:'binding',disposition:'conversation',candidateId:null},topic:{topicId:'repeat-revision-topic',conversationId:'g',sourceRunId:'revision-new',unitId,title:'原条件',facts:[]}})
+  const topic=await f.store.query({kind:'message.topic',topicId:'repeat-revision-topic'})
+  const acceptance={runId:'revision-new',topicId:topic.topicId,conversationId:'g',inputRevision:topic.inputRevision,contextRevision:topic.contextRevision,decisions:['revision-A','revision-B'].map((unitId,index)=>({unitId,expectedRevision:0,commands:[{commandId:`revision-command-${index}`,kind:'status',args:{arguments:{}}}],factRevisions:[{factId:fact.id,sourceQuote:conflict&&index===1?'撤销原条件':'取消原条件',scope:'当前话题'}]}))}
+  if(conflict)await bad(f.call('topic.intent.accept',acceptance),'MESSAGE_TOPIC_FACT_REVISION_CONFLICT')
+  else await f.call('topic.intent.accept',acceptance)
+  const state=await f.store.query({kind:'message.run',runId:'revision-new'})
+  const active=await f.store.query({kind:'message.topic.facts',topicId:topic.topicId,status:'active'})
+  const superseded=await f.store.query({kind:'message.topic.facts',topicId:topic.topicId,status:'superseded'})
+  assert.equal(state.commands.length,conflict?0:2)
+  assert.equal(active.facts.length,conflict?1:0)
+  assert.equal(superseded.facts.length,conflict?0:1)
+  if(conflict)assert.ok(state.units.every(unit=>unit.status==='pending'))
+ }
 })

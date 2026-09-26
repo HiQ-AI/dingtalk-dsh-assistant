@@ -1,0 +1,36 @@
+✔ 消息、话题与任务详情只展示有绑定的会话并支持历史分页 (5.0875ms)
+✖ 判断轨迹区分未知用量与确定性处理，并展示容量受阻原因 (2.675ms)
+✔ 收信箱区分话题关联等待与意图重判，任务详情展示业务计划阶段 (2.1344ms)
+✔ 运行看板保留左侧菜单并替换右侧整体内容 (7.618ms)
+✔ 任务卡不请求或展示执行轮次耗时统计 (1.3835ms)
+✔ 运行看板提供统一视觉尺度、响应式布局和可见键盘焦点 (0.8164ms)
+✔ Agent配置页面提供叶子任务并行上限且默认值为5 (0.6367ms)
+✔ 发件状态按实际投递环节展示，pending不会伪装为已回读 (1.2304ms)
+✔ 处理步骤直接展示事项、关联对象和动作结论，未知结构不编造结果 (1.6262ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 8
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 121.1685
+
+✖ failing tests:
+
+test at test\observer-client.test.js:23:1
+✖ 判断轨迹区分未知用量与确定性处理，并展示容量受阻原因 (2.675ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /上下文容量受阻.*33000\/32000/. Input:
+
+  '上下文容量受阻：必要材料超出本轮可读取范围，后续判断已停止。'
+
+      at TestContext.<anonymous> (file:///D:/project/worktrees/dingtalk-topic-context-completeness/test/observer-client.test.js:35:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '上下文容量受阻：必要材料超出本轮可读取范围，后续判断已停止。',
+    expected: /上下文容量受阻.*33000\/32000/,
+    operator: 'match',
+    diff: 'simple'
+  }

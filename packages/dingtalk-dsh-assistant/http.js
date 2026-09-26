@@ -213,6 +213,47 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     } catch (error) { return send(response, 400, { error: error.message }) }
   }
   if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, (await (store.listTaskView?.() ?? store.listTasks())).map(task => ({ ...task, workflowProgress: taskBoardProgress(task) })))
+  const workflowTrace = request.method === 'GET' && /^\/state\/workflows\/([^/]+)\/trace$/u.exec(url.pathname)
+  if (workflowTrace) {
+    if (!store.getWorkflowMessageTrace) return send(response, 404, { error: 'workflow_disabled' })
+    try { const value = await store.getWorkflowMessageTrace(decodeURIComponent(workflowTrace[1]),
+      { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 50, 100) }); return send(response, value ? 200 : 404, value ?? { error: 'message_not_found' }) }
+    catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
+  const workflowEvidence = request.method === 'GET' && /^\/state\/workflows\/([^/]+)\/evidence\/([^/]+)$/u.exec(url.pathname)
+  if (workflowEvidence) {
+    if (!store.getWorkflowMessageEvidence) return send(response, 404, { error: 'workflow_disabled' })
+    try { const value = await store.getWorkflowMessageEvidence(decodeURIComponent(workflowEvidence[1]), decodeURIComponent(workflowEvidence[2]),
+      { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 2000, 8000), hash: url.searchParams.get('hash') }); return send(response, value ? 200 : 404, value ?? { error: 'evidence_not_found' }) }
+    catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
+  const workflowTopicState = request.method === 'GET' && /^\/state\/workflows\/topics\/([^/]+)\/context$/u.exec(url.pathname)
+  if (workflowTopicState) {
+    if (!store.getWorkflowTopicState) return send(response, 404, { error: 'workflow_disabled' })
+    try { const value = await store.getWorkflowTopicState(decodeURIComponent(workflowTopicState[1]),
+      { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 50, 100), intentCursor: pageNumber(url, 'intentCursor', 0), expectedRevision: url.searchParams.has('revision') ? pageNumber(url, 'revision', 0) : null }); return send(response, value ? 200 : 404, value ?? { error: 'topic_not_found' }) }
+    catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
+  const workflowNodeOutput = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/runs\/([^/]+)\/nodes\/([^/]+)\/(output|document)$/u.exec(url.pathname)
+  if (workflowNodeOutput) {
+    if (!store.getWorkflowTaskNodeOutput) return send(response, 404, { error: 'workflow_disabled' })
+    try { const download = workflowNodeOutput[4] === 'document'
+      const value = await store.getWorkflowTaskNodeOutput(...workflowNodeOutput.slice(1, 4).map(decodeURIComponent),
+        { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 1200, 8000), outputRef: url.searchParams.get('ref'), ...(download ? { document: true } : {}) })
+      if (download && value) {
+        response.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="node-output.md"; filename*=UTF-8''${encodeURIComponent(value.name)}`, 'Cache-Control': 'no-store' })
+        return response.end(value.content)
+      }
+      return send(response, value ? 200 : 404, value ?? { error: 'output_not_found' }) }
+    catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
+  const workflowTaskRuns = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/runs$/u.exec(url.pathname)
+  if (workflowTaskRuns) {
+    if (!store.getWorkflowTaskRuns) return send(response, 404, { error: 'workflow_disabled' })
+    try { const value = await store.getWorkflowTaskRuns(decodeURIComponent(workflowTaskRuns[1]),
+      { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 20, 100) }); return send(response, value ? 200 : 404, value ?? { error: 'task_not_found' }) }
+    catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
   if (request.method === 'GET' && url.pathname === '/state/workflows') return send(response, 200, await store.getWorkflowState?.(url.searchParams.get('runId') ?? undefined) ?? { enabled: false })
   if (request.method === 'GET' && url.pathname === '/state/workflows/catalog') return send(response, 200, await store.getWorkflowCatalog?.() ?? { enabled: false })
   if (request.method === 'GET' && url.pathname === '/state/task-timings') return send(response, 200, store.listTaskTimings())

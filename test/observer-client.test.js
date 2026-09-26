@@ -1,7 +1,35 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { describeMessageTraceItem } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { runInNewContext } from 'node:vm'
+
+test('消息、话题与任务详情只展示有绑定的会话并支持历史分页', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  assert.match(source, /message\.runId \? React\.createElement\(Button[\s\S]*'处理过程'/)
+  assert.match(source, /\/state\/workflows\/\$\{encodeURIComponent\(runId\)\}\/trace/)
+  assert.match(source, /\/state\/workflows\/topics\/\$\{encodeURIComponent\(selection\.topicId\)\}\/context/)
+  assert.match(source, /\/state\/tasks\/\$\{encodeURIComponent\(task\.taskId\)\}\/runs/)
+  assert.match(source, /sessionId \? React\.createElement\('button'/)
+  assert.match(source, /会话尚未创建或历史未绑定/)
+  assert.match(source, /sessionAction\(page\.taskOwner\?\.sessionBound === true \? page\.taskOwner\.sessionId : null/)
+  assert.match(source, /setCursorHistory\(\(items\) => \[\.\.\.items, cursor\]\)/)
+  assert.match(source, /intentNextCursor/)
+  assert.match(source, /判断批次分页/)
+  assert.match(source, /查看本次判断/)
+  assert.match(source, /重新读取当前上下文/)
+})
+
+test('精简判断轨迹不包含技术详情，并展示容量受阻原因', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const reasonCode = source.slice(source.indexOf('const traceReason = ') + 'const traceReason = '.length, source.indexOf('    const readableValue ='))
+  const reason = runInNewContext(`(${reasonCode})`)
+  assert.match(reason('MESSAGE_CONTEXT_CAPACITY:IB:$:33000/32000'), /上下文容量受阻.*后续判断已停止/)
+  assert.match(reason('MESSAGE_MATERIAL_CAPACITY:R:u1'), /必要材料未能完整提供/)
+  assert.equal(reason({ code: 'FAILED' }), '{"code":"FAILED"}')
+  assert.match(reason('ENGINEERING_ACCEPTANCE_REQUIRED'), /缺少业务验收.*后续提交已停止/)
+  assert.match(reason('ENGINEERING_ACCEPTANCE_FAILED'), /业务验收未通过.*后续提交已停止/)
+})
 
 test('收信箱区分话题关联等待与意图重判，任务详情展示业务计划阶段', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
@@ -12,7 +40,7 @@ test('收信箱区分话题关联等待与意图重判，任务详情展示业�
   assert.match(source, /routing_blocked: \{ label: '关联受阻'/)
   assert.match(source, /selectedWorkflowTask\.plan\.stages\.map/)
   assert.match(source, /waiting_confirmation: '等待人工确认'/)
-  assert.match(source, /等待确认上一阶段产出后继续/)
+  assert.match(source, /'aria-label': '任务阶段'/)
 })
 
 test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
@@ -126,7 +154,7 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.doesNotMatch(source, /selectedGroup\.messages\?\.at\?\.\(-1\)/)
   assert.match(source, /state: 'completed', label: '已结束'/)
   assert.match(source, /task\.state === 'completed'/)
-  assert.match(source, /群聊会话/)
+  assert.match(source, /id: 'groups', label: '群消息'/)
   assert.match(source, /任务看板/)
   assert.match(source, /height: 'calc\(100dvh - 116px\)', minHeight: 420, maxHeight: 'calc\(100dvh - 116px\)'/)
   assert.doesNotMatch(source, /const pageHeader/)
@@ -193,7 +221,7 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /message\.senderName/)
   assert.match(source, /message\.occurredAt/)
   assert.match(source, /const pageSize = 10/)
-  assert.match(source, /选择群聊会话/)
+  assert.match(source, /选择群聊/)
   assert.match(source, /role: 'tablist', 'aria-label': '群聊数据视图'/)
   assert.match(source, /筛选处理状态/)
   assert.match(source, /筛选发件状态/)
@@ -270,8 +298,8 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /maxHeight: '4\.5em'/)
   assert.doesNotMatch(source, /task\.childSessionId \|\| '—'/)
   assert.doesNotMatch(source, /常驻 Session|copyButton\(selectedGroup\.residentSessionId, '会话 ID'\)|const selectedGroupSummary/)
-  assert.match(source, /\(data\?\.groups \|\| \[\]\)\.length \? React\.createElement\(SelectMenu, \{ label: '选择群聊会话'/)
-  assert.match(source, /label: '选择群聊会话'[\s\S]*fitContent: true/)
+  assert.match(source, /\(data\?\.groups \|\| \[\]\)\.length \? React\.createElement\(SelectMenu, \{ label: '选择群聊'/)
+  assert.match(source, /label: '选择群聊'[\s\S]*fitContent: true/)
   assert.match(source, /width: fitContent \? 'fit-content' : undefined/)
   assert.match(source, /gap: fitContent \? 8 : 16/)
   assert.doesNotMatch(source, /\(data\?\.groups \|\| \[\]\)\.length > 1/)
@@ -342,4 +370,33 @@ test('发件状态按实际投递环节展示，pending不会伪装为已回读'
   assert.match(source, /message\.deliveryError/)
   assert.match(source, /最近尝试.*fmt\(message\.deliveryAttemptedAt\)/)
   assert.match(source, /message\.deliveryAttemptCount/)
+})
+
+test('处理步骤直接展示事项、关联对象和动作结论，未知结构不编造结果', async () => {
+  const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+  const code=source.slice(source.indexOf('    const traceStatus ='),source.indexOf('    const traceElapsed ='))
+  const describe=describeMessageTraceItem; const status=runInNewContext(`${code};traceStatus`)
+  const split=describe({kind:'split',output:{units:[{goalText:'核对租户甲'},{goalText:'等待确认'}]}})
+  assert.equal(split.conclusion,'拆分为 2 个事项');assert.equal(split.rows[1].value,'等待确认')
+  const route=describe({kind:'route',input:{goalText:'核对租户甲',candidates:[{candidateId:'t1',title:'租户权限排查'}]},output:{kind:'binding',disposition:'existing',candidateId:'t1',evidence:['引用原话']}})
+  assert.ok(route.rows.some(row=>row.value==='租户权限排查'))
+  const intent=describe({kind:'intent',output:{decisions:[{intent:{actions:[{intent:'research',arguments:{objective:'核对权限'}}],constraints:['仅排查，不修改']}}]}})
+  assert.equal(intent.rows[0].label,'开展排查');assert.equal(intent.rows[1].value,'仅排查，不修改')
+  assert.equal(describe({kind:'route',output:{kind:'needs_clarification',question:'哪个租户？'}}).conclusion,'需要进一步确认')
+  assert.equal(describe({kind:'intent',status:'failed'}).conclusion,'本步未完成，请查看阻塞原因')
+  assert.equal(describe({kind:'unknown'}).conclusion,'尚未记录判断结论')
+  assert.equal(status('settled'),'处理已结束');assert.equal(status('alien'),'状态未记录')
+  assert.doesNotMatch(source,/技术详情|消息技术记录|const traceUsage/);assert.match(source,/回复送达情况见发信箱/)
+})
+
+test('步骤耗时使用本次 startedAt，缺失或倒置时间不冒充零耗时',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+ const code=source.slice(source.indexOf('const traceElapsed = ')+ 'const traceElapsed = '.length,source.indexOf('    const traceReason ='))
+ const elapsed=runInNewContext(`(${code})`)
+ const step={startedAt:'2026-09-26T00:00:00Z',completedAt:'2026-09-26T00:00:02.500Z',status:'succeeded'}
+ assert.equal(elapsed(step,0),'耗时 2.5 秒')
+ assert.equal(elapsed({...step,attempt:2},0),'耗时 2.5 秒（第 2 次处理）')
+ assert.equal(elapsed({...step,startedAt:undefined},0),'耗时未记录')
+ assert.equal(elapsed({...step,completedAt:'2026-09-25T00:00:00Z'},0),'耗时未记录')
+ assert.equal(elapsed({...step,status:'running'},Date.parse('2026-09-26T00:01:05Z')),'已用时 1 分 5 秒')
 })
