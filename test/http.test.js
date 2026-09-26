@@ -376,3 +376,16 @@ test('上下文只读 HTTP 对未启用接口和不存在资源返回404', async
     for (const path of paths) assert.equal((await fetch(base + path)).status, 404, path)
   }, { overrides: { getWorkflowMessageTrace: async () => null, getWorkflowTopicState: async () => null, getWorkflowMessageEvidence: async () => null, getWorkflowTaskRuns: async () => null, getWorkflowTaskNodeOutput: async () => null } })
 })
+
+test('节点文档下载沿用工件引用授权并以Markdown附件返回', async () => {
+  await withServer(false, async base => {
+    const response = await fetch(`${base}/state/tasks/task/runs/run/nodes/node/document?ref=ref`)
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get('content-type'), /text\/markdown/)
+    assert.match(response.headers.get('content-disposition'), /attachment/)
+    assert.equal(await response.text(), '# 修改方案\n真实文档')
+  }, { overrides: { getWorkflowTaskNodeOutput: async (task, run, node, args) => {
+    assert.deepEqual([task, run, node, args.document, args.outputRef], ['task', 'run', 'node', true, 'ref'])
+    return { name: '修改方案.md', content: '# 修改方案\n真实文档' }
+  } } })
+})

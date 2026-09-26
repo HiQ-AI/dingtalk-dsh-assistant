@@ -1612,6 +1612,8 @@ test('只读轨迹 API 回读真实节点、话题批次与已绑定 Owner，并
   assert.equal(await service.taskNodeOutput('other-task', command.result.runId, outputNode.nodeRunId, outputArgs), null)
   assert.equal(await service.taskNodeOutput(command.result.taskId, command.result.runId, 'other-node', outputArgs), null)
   await assert.rejects(service.taskNodeOutput(command.result.taskId, command.result.runId, outputNode.nodeRunId, { outputRef: 'wrong' }), /TASK_OUTPUT_CHANGED/)
+  await assert.rejects(service.taskNodeOutput(command.result.taskId, command.result.runId, outputNode.nodeRunId, { outputRef: 'wrong', document: true }), /TASK_OUTPUT_CHANGED/)
+  assert.equal(await service.taskNodeOutput('other-task', command.result.runId, outputNode.nodeRunId, { ...outputArgs, document: true }), null)
   const other = await openWorkflowService({ ctx: {}, config: { groupIds: ['other'], ownerActorId: 'owner' },
     legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test' }), getGroup: () => ({ messages: [] }) },
     execution, judge: async () => { throw new Error('UNEXPECTED_MODEL_CALL') },
@@ -1621,6 +1623,7 @@ test('只读轨迹 API 回读真实节点、话题批次与已绑定 Owner，并
     assert.equal(await other.messageTrace(receipt.runId), null)
     assert.equal(await other.taskRuns(command.result.taskId), null)
     assert.equal(await other.taskNodeOutput(command.result.taskId, command.result.runId, outputNode.nodeRunId, outputArgs), null)
+    assert.equal(await other.taskNodeOutput(command.result.taskId, command.result.runId, outputNode.nodeRunId, { ...outputArgs, document: true }), null)
   } finally { await other.close() }
 })
 
@@ -1644,7 +1647,7 @@ test('步骤产出只投影业务正文及限制，不泄露任意对象字段',
   assert.match(result.text, /涉及文件\napp.js\nnew.js（尚不存在）/)
   assert.match(result.text, /文件变更\n写入 app.js\n文件内容：\n完整修改方案\n\n文件变更\n删除 old.js/)
   assert.match(result.text, /修改方案\n文件：merge.java\n修改前：\n旧计算\n修改后：\n新计算/)
-  assert.match(result.text, /检查结果\nbuild：通过\nlint：未通过/)
+  assert.match(result.text, /检查结果\n配置检查 1：通过[\s\S]*配置检查 2：未通过/)
   assert.doesNotMatch(result.text, /not-for-ui|internal|toolArguments|hidden-material-id|hidden-hash|代码不直接展示/)
   assert.equal(await service.taskNodeOutput(taskId, 'missing-run', node.nodeRunId, { outputRef: node.outputRef }), null)
   await assert.rejects(service.taskNodeOutput(taskId, runId, node.nodeRunId, { outputRef: node.outputRef, offset: result.totalLength + 1 }), /TASK_OUTPUT_CURSOR_INVALID/)
@@ -1653,7 +1656,9 @@ test('步骤产出只投影业务正文及限制，不泄露任意对象字段',
 test('当前工程和分析节点逐类投影，数量去重且准备态不冒充执行', () => {
   const project = (nodeId, output) => describeTaskNodeOutput({ nodeId }, output)
   const input = { request: '任务要求', constraints: ['只在范围内操作'], baseCommit: 'abc123', materials: [{ text: '材料原文' }] }
-  for (const nodeId of ['prepare', 'prepare-generation', 'prepare-workspace']) assert.match(project(nodeId, input).text, /任务要求/)
+  assert.match(project('prepare', input).text, /任务要求/)
+  assert.match(project('prepare-generation', input).text, /本轮修改起点/)
+  assert.match(project('prepare-workspace', input).text, /未找到属于本次节点的成功目录回执/)
   for (const nodeId of ['analyze', 'validate-result']) assert.match(project(nodeId, { summary: '结论', limitations: ['证据不足'] }).text, /结论[\s\S]*证据不足/)
   assert.equal(project('index-files', { directories: [{ directory: 'src/', names: ['a.js', 'a.js', 'b.js'] }], excludedCount: 3 }).overview, '已索引 2 个文件；排除 3 个文件')
   assert.equal(project('select-files', { existingPaths: ['a.js', 'a.js'], newPaths: ['b.js'] }).overview, '选择已有 1 个文件；计划新建 1 个文件')
@@ -1661,7 +1666,7 @@ test('当前工程和分析节点逐类投影，数量去重且准备态不冒�
   assert.equal(project('read-files', { files: [{ path: 'a.js', text: '正文' }, { path: 'b.js', text: null }] }).overview, '已读取 1 个文件；尚不存在 1 个文件')
   for (const nodeId of ['propose-changes', 'inspect-and-propose']) {
     const result = project(nodeId, { changes: [{ path: 'a.js', content: '完整内容' }], replacements: [{ path: 'a.js', from: '旧', to: '新' }] })
-    assert.equal(result.overview, '修改方案涉及 1 个文件')
+    assert.match(result.overview, /原节点未保存方案说明.*修改方案涉及 1 个文件/)
     assert.match(result.text, /完整内容[\s\S]*修改前：[\s\S]*修改后：/)
   }
   const applied = project('apply-changes', { status: 'succeeded', files: [{ path: 'a.js', actualHash: 'secret' }] })
@@ -1670,7 +1675,7 @@ test('当前工程和分析节点逐类投影，数量去重且准备态不冒�
   assert.doesNotMatch(applied.text, /已读取|secret/)
   assert.equal(project('apply-changes', { status: 'unknown', files: [{ path: 'a.js' }] }).overview, '涉及 1 个文件')
   const verification = { checks: [{ id: 'build', passed: true, log: 'private-log' }, { id: 'lint', passed: false }] }
-  assert.equal(project('verify-candidate', { verification }).overview, '检查 2 项，1 项通过')
+  assert.match(project('verify-candidate', { verification }).text, /历史记录没有检查内容说明/)
   for (const [nodeId, label] of [['prepare-commit', '已生成提交计划'], ['prepare-push', '已生成推送计划']]) {
     const result = project(nodeId, { changedPaths: ['a.js'], message: '修改说明', ref: 'feature/fix', verification })
     assert.ok(result.overview.startsWith(label))

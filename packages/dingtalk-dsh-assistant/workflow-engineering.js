@@ -10,7 +10,7 @@ import { createManagedEdits } from './execution-edit.js'
 import { createGitDelivery } from './execution-git.js'
 import { createGithubPullRequests } from './execution-pr.js'
 import { createVerificationJobCheck } from './execution-check-job.js'
-import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow, createEngineeringScopedWorkflow, createEngineeringPatchWorkflow } from './task-workflow.js'
+import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow, createEngineeringScopedWorkflow, createEngineeringPatchWorkflow, createEngineeringDeliverableWorkflow } from './task-workflow.js'
 import { freezeCandidate, readCandidate } from './execution-candidate.js'
 
 const exec = promisify(execFile)
@@ -158,12 +158,13 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       return { ...input, baseCommit: prior?.commitId ?? saved.input.baseCommit, expectedRemoteSha }
     }
     const checks = config.checks.map(check => createVerificationJobCheck({ ...check, root: join(config.managedRoot, 'checks') }))
-    const workflowFactory = !config.discovery ? createEngineeringTaskWorkflow
+    const workflowFactory = !record.definitionVersion || record.definitionVersion === '9' ? createEngineeringDeliverableWorkflow : !config.discovery ? createEngineeringTaskWorkflow
       : record.definitionVersion === '6' ? createEngineeringDirectWorkflow
         : record.definitionVersion === '7' ? createEngineeringScopedWorkflow
           : !record.definitionVersion || record.definitionVersion === '8' ? createEngineeringPatchWorkflow : createEngineeringTaskWorkflow
     const workflow = workflowFactory({ workflowId: record.workflowId, provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort,
       workspaceAdapter, editAdapter, checks, prepareGeneration, adapterIdentity: saved.repositoryDigest, discovery: config.discovery,
+      project: { repository: config.githubRepository, sourceRepository: config.sourceRepository, workBranch: saved.head, targetBranch: config.baseBranch },
       deliveryPlan: { identity: executionDigest(saved), gitAdapterFor, prAdapterFor, date: saved.date, title: saved.title, body: saved.body, commitMessage: saved.title, expectedRemoteSha: null } })
     const definition = defineExecutionWorkflow(workflow)
     const sameDefinition = !record.digest || [definition.digest, ...definition.legacyDigests].includes(record.digest)
@@ -180,7 +181,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
   }
   async function repositoryInspect(binding, args, signal, input) {
     const item = routes.get(binding.runId), saved = item?.record.config, config = configs.get(saved?.repoId)?.config
-    if (!saved || !config?.discovery || !['6', '7', '8'].includes(item.record.definitionVersion) || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
+    if (!saved || !config?.discovery || !['6', '7', '8', '9'].includes(item.record.definitionVersion) || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
     const { operation, query = '', path, offset = 0, limit = operation === 'read' ? 8000 : 100 } = args
     if (!['list', 'search', 'read'].includes(operation) || !Number.isSafeInteger(offset) || offset < 0
       || !Number.isSafeInteger(limit) || limit < 1 || limit > (operation === 'read' ? 16000 : 200)

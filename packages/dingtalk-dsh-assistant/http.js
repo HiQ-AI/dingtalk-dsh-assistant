@@ -234,11 +234,17 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 50, 100), intentCursor: pageNumber(url, 'intentCursor', 0), expectedRevision: url.searchParams.has('revision') ? pageNumber(url, 'revision', 0) : null }); return send(response, value ? 200 : 404, value ?? { error: 'topic_not_found' }) }
     catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
   }
-  const workflowNodeOutput = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/runs\/([^/]+)\/nodes\/([^/]+)\/output$/u.exec(url.pathname)
+  const workflowNodeOutput = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/runs\/([^/]+)\/nodes\/([^/]+)\/(output|document)$/u.exec(url.pathname)
   if (workflowNodeOutput) {
     if (!store.getWorkflowTaskNodeOutput) return send(response, 404, { error: 'workflow_disabled' })
-    try { const value = await store.getWorkflowTaskNodeOutput(...workflowNodeOutput.slice(1).map(decodeURIComponent),
-      { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 1200, 8000), outputRef: url.searchParams.get('ref') }); return send(response, value ? 200 : 404, value ?? { error: 'output_not_found' }) }
+    try { const download = workflowNodeOutput[4] === 'document'
+      const value = await store.getWorkflowTaskNodeOutput(...workflowNodeOutput.slice(1, 4).map(decodeURIComponent),
+        { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 1200, 8000), outputRef: url.searchParams.get('ref'), ...(download ? { document: true } : {}) })
+      if (download && value) {
+        response.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="node-output.md"; filename*=UTF-8''${encodeURIComponent(value.name)}`, 'Cache-Control': 'no-store' })
+        return response.end(value.content)
+      }
+      return send(response, value ? 200 : 404, value ?? { error: 'output_not_found' }) }
     catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
   }
   const workflowTaskRuns = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/runs$/u.exec(url.pathname)

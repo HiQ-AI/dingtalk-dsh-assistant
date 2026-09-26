@@ -7,14 +7,46 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
-import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
-import { createAnalysisTaskWorkflow, createEngineeringTaskWorkflow, createEngineeringDeliveryAdapters } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
+import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
+import { createAnalysisTaskWorkflow, createEngineeringTaskWorkflow, createEngineeringDeliveryAdapters, createEngineeringDeliverableWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
+import { describeVerificationChecks } from '../packages/dingtalk-dsh-assistant/execution-check-job.js'
 import { createManagedWorkspaces } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
 import { createManagedEdits } from '../packages/dingtalk-dsh-assistant/execution-edit.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createGitDelivery } from '../packages/dingtalk-dsh-assistant/execution-git.js'
 import { createGithubPullRequests } from '../packages/dingtalk-dsh-assistant/execution-pr.js'
 import { readEngineeringDeliveryProof } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
+
+test('新工程节点保存起点、目录回执和方案文档，缺失覆盖的方案不得进入修改', async () => {
+  const project = { repository: 'org/repo', sourceRepository: '/source', workBranch: 'codex/task', targetBranch: 'main' }
+  const workflow = createEngineeringDeliverableWorkflow({ provider: 'test', model: 'test', discovery: { allowedPrefixes: ['src/'] }, project,
+    workspaceAdapter: { prepare: async input => ({ ...input, directory: '/isolated', sourceRepository: '/source' }) }, editAdapter: {},
+    checks: [{ id: 'check', version: '1', run: async () => ({ passed: true, log: '' }) }], adapterIdentity: 'test', prepareGeneration: async ({ input }) => ({ ...input, expectedRemoteSha: null }) })
+  assert.ok(defineExecutionWorkflow(workflow).digest)
+  assert.equal(workflow.version, '9')
+  const requirement = { request: '修改内容', baseCommit: 'a'.repeat(40), constraints: [], editablePaths: [] }
+  const start = await workflow.nodes[0].execute({ input: requirement })
+  assert.equal(start.startingPoint.repository, 'org/repo')
+  assert.equal(start.startingPoint.mode, 'initial')
+  const workspace = workflow.nodes.find(node => node.id === 'prepare-workspace')
+  assert.deepEqual(await workspace.mapInput({ requirement, dependencyOutputs: { 'prepare-generation': start } }), start.requirement)
+  const output = await workspace.execute({ input: requirement, perform: async ({ prepared }) => ({ status: 'succeeded', directory: prepared.directory, baseCommit: prepared.baseCommit }) })
+  assert.equal(output.workspace.directory, '/isolated')
+  assert.equal(output.workspace.kind, 'independent-git-repository')
+  await assert.rejects(workspace.execute({ input: requirement, perform: async () => ({ status: 'unknown' }) }), /ENGINEERING_WORKSPACE_RECEIPT_INVALID/)
+  const validation = workflow.nodes.find(node => node.id === 'validate-proposal')
+  const proposal = { changes: [], replacements: [{ path: 'src/value.js', expectedHash: 'a'.repeat(64), from: 'old', to: 'new' }], document: { name: '修改方案.md', markdown: '# 方案\n调整 src/value.js，验证计划：运行单元测试；尚未执行。' } }
+  assert.deepEqual(await validation.execute({ input: proposal }), proposal)
+  for (const markdown of ['', '没有提到变更文件', 'src/value.js' + 'x'.repeat(24000)]) await assert.rejects(validation.execute({ input: { ...proposal, document: { ...proposal.document, markdown } } }), /ENGINEERING_PROPOSAL_DOCUMENT_INVALID/)
+})
+
+test('检查报告解释真实命令，跳过测试不可被显示为测试通过', () => {
+  const result = describeVerificationChecks({ checks: [{ id: 'dataset-package', passed: true, log: JSON.stringify({ steps: [{ args: ['-DskipTests', 'package'], exitCode: 0, reason: null }] }) }] })
+  assert.match(result[0].title, /Java 项目打包（跳过测试）/)
+  assert.match(result[0].steps[0].limitation, /不能作为测试通过/)
+  assert.doesNotMatch(JSON.stringify(result), /dataset-package/)
+  assert.match(describeVerificationChecks({ checks: [{ id: 'private-id', passed: true, log: 'plain log' }] })[0].limitation, /无法确定验证范围/)
+})
 
 test('工程读取节点可交接超过旧 48KB 限额的完整文件材料', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-task-large-read-'))
@@ -107,10 +139,8 @@ if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(arg
   if (publish) {
     const final = await artifacts.read(state.nodes.at(-1).outputRef)
     assert.equal(final.deliveryStatus, 'pr_verified'); assert.equal(final.number, 1); assert.equal(final.state, 'OPEN')
-    const proof = await readEngineeringDeliveryProof({ state, artifacts, taskId: 'task', requiredE2eCheckIds: ['expected-value'] })
-    assert.equal(proof.commitSha, final.commitId)
-    assert.equal(proof.localE2ePassed, true)
-    assert.equal(proof.pullRequest.number, 1)
+    // 该夹具直接注册流程，没有真实 registry 身份，不能作为受信跨流程交付证明。
+    await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, store, taskId: 'task', requiredE2eCheckIds: ['expected-value'] }), { code: 'ENGINEERING_DELIVERY_PROOF_UNAVAILABLE' })
   }
   const effects = await store.query({ kind: 'effect.list', runId: 'run' })
   assert.deepEqual(effects.map(effect => effect.definition.action).sort(), publish ? ['commit', 'edit', 'pr', 'push', 'workspace'] : ['edit', 'workspace'])

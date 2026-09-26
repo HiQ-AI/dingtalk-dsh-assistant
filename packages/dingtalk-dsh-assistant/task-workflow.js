@@ -1,6 +1,7 @@
 import { executionDigest, executionError } from './execution-artifacts.js'
 import { createHash } from 'node:crypto'
 import { freezeCandidate, readCandidate, verifyCandidate } from './execution-candidate.js'
+import { describeVerificationChecks } from './execution-check-job.js'
 export { createReadOnlyTaskWorkflows } from './task-readonly-workflows.js'
 export { createGeneralTaskWorkflow } from './task-general-workflow.js'
 
@@ -354,6 +355,58 @@ export function createEngineeringPatchWorkflow(options) {
     const prepared = await options.editAdapter.prepare({ workspace, changes: result })
     return perform({ action: 'edit', prepared })
   }
+  return workflow
+}
+
+/** v9 为新任务持久化可读交付物；旧定义函数保持原样以便恢复已登记任务。 */
+export function createEngineeringDeliverableWorkflow(options) {
+  const workflow = options.discovery ? createEngineeringPatchWorkflow(options) : createEngineeringTaskWorkflow(options)
+  workflow.version = '9'
+  const start = workflow.nodes.find(node => node.id === 'prepare-generation')
+  if (start) {
+    const execute = start.execute, requirement = start.outputSchema
+    start.version = '2'
+    start.outputSchema = { type: 'object', properties: { requirement, startingPoint: { type: 'object' } }, required: ['requirement', 'startingPoint'], additionalProperties: false }
+    start.execute = async context => {
+      const requirement = await execute(context)
+      return { requirement, startingPoint: { ...options.project, mode: requirement.expectedRemoteSha ? 'continue' : 'initial',
+        baseCommit: requirement.baseCommit, remoteBranchChecked: true } }
+    }
+    for (const node of workflow.nodes.filter(node => node !== start)) {
+      const mapInput = node.mapInput
+      node.mapInput = args => mapInput({ ...args, dependencyOutputs: { ...args.dependencyOutputs,
+        'prepare-generation': args.dependencyOutputs['prepare-generation'].requirement } })
+    }
+  }
+  const workspace = workflow.nodes.find(node => node.id === 'prepare-workspace'), prepare = workspace.execute
+  workspace.version = '2'
+  workspace.outputSchema = { type: 'object', properties: { requirement: workspace.outputSchema, workspace: { type: 'object' } }, required: ['requirement', 'workspace'], additionalProperties: false }
+  workspace.execute = async context => {
+    let receipt, prepared
+    await prepare({ ...context, perform: async effect => { prepared = effect.prepared; receipt = await context.perform(effect); return receipt } })
+    if (receipt?.status !== 'succeeded' || receipt.directory !== prepared.directory) throw executionError('ENGINEERING_WORKSPACE_RECEIPT_INVALID')
+    return { requirement: context.input, workspace: { directory: receipt.directory, sourceRepository: prepared.sourceRepository,
+      kind: 'independent-git-repository', baseCommit: receipt.baseCommit, status: receipt.status } }
+  }
+  const proposal = workflow.nodes.find(node => ['inspect-and-propose', 'propose-changes'].includes(node.id))
+  const documentSchema = { type: 'object', properties: { name: { type: 'string', enum: ['修改方案.md'] }, markdown: { type: 'string' } }, required: ['name', 'markdown'], additionalProperties: false }
+  proposal.version = '3'
+  proposal.outputSchema = { ...proposal.outputSchema, properties: { ...proposal.outputSchema.properties, document: documentSchema }, required: [...proposal.outputSchema.required, 'document'] }
+  proposal.prompt += '\n同时提交 document：name 固定为 修改方案.md，markdown 是供人审阅的中文方案，说明问题与依据、修改理由、涉及文件及具体做法、计划执行的验证、尚未确认事项。必须逐个写出 changes/replacements 的完整相对路径；区分计划验证与已经验证，不把补丁代码当作方案说明。'
+  const validate = { id: 'validate-proposal', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: proposal.outputSchema, outputSchema: proposal.outputSchema,
+    mapInput: ({ previousOutput }) => previousOutput, execute: async ({ input }) => {
+      const paths = [...input.changes, ...(input.replacements ?? [])].map(item => item.path)
+      if (!paths.length || !input.document.markdown.trim() || input.document.markdown.length > 24000 || paths.some(path => !input.document.markdown.includes(path))) throw executionError('ENGINEERING_PROPOSAL_DOCUMENT_INVALID')
+      return input
+    } }
+  workflow.nodes.splice(workflow.nodes.indexOf(proposal) + 1, 0, validate)
+  const apply = workflow.nodes.find(node => node.id === 'apply-changes')
+  apply.inputSchema = { ...apply.inputSchema, properties: { ...apply.inputSchema.properties, proposal: proposal.outputSchema } }
+  const verify = workflow.nodes.find(node => node.id === 'verify-candidate'), execute = verify.execute
+  verify.version = '2'
+  verify.execute = async context => { const output = await execute(context); return { ...output, report: describeVerificationChecks(output.verification) } }
+  // project 参与新定义身份，避免项目说明变化却复用旧交付物。
+  for (const node of workflow.nodes) node.rulesDigest = executionDigest({ previous: node.rulesDigest ?? null, project: options.project ?? null, report: describeVerificationChecks.toString() })
   return workflow
 }
 

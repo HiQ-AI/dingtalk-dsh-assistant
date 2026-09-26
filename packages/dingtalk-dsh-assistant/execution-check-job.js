@@ -3,6 +3,27 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { join, dirname, isAbsolute } from 'node:path'
 import { executionDigest, executionError } from './execution-artifacts.js'
 
+/** 只解释已保存的执行记录，不把检查器内部名称当作业务结论。 */
+export function describeVerificationChecks(verification) {
+  return (verification?.checks ?? []).map((check, index) => {
+    let log
+    try { log = JSON.parse(check.log) } catch { /* 自定义检查器可能只保存纯文本。 */ }
+    const steps = (Array.isArray(log?.steps) ? log.steps : []).map((step, stepIndex) => {
+      const args = Array.isArray(step.args) ? step.args : []
+      const skippedTests = args.some(arg => /^-D(?:skipTests|maven\.test\.skip)(?:=true)?$/.test(arg))
+      const title = args.includes('package') ? 'Java 项目打包'
+        : args.includes('install') || args.includes('ci') ? '安装项目依赖'
+          : args.includes('build') ? '构建项目'
+            : args.includes('test') ? '执行项目测试' : `执行配置检查 ${stepIndex + 1}`
+      return { title: skippedTests ? `${title}（跳过测试）` : title, passed: step.exitCode === 0 && !step.reason, elapsedMs: step.elapsedMs,
+        ...(skippedTests ? { limitation: '此命令跳过了测试，不能作为测试通过的证据' } : {}) }
+    })
+    return { title: steps.length ? steps.map(step => step.title).join('、') : `配置检查 ${index + 1}`,
+      passed: check.passed === true, steps,
+      limitation: steps.length ? '以上仅代表已执行命令的结果；业务验收须有对应验证记录' : '历史记录没有检查内容说明，无法确定验证范围' }
+  })
+}
+
 const encodeOutput = bytes => {
   const value = bytes.toString('utf8')
   // 可读文本JSON比base64更大时使用base64，保留原始字节并限制编码膨胀。

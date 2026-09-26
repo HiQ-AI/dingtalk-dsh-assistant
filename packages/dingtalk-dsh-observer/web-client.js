@@ -361,6 +361,7 @@ window.__ModuleLoader__.load({
     function TaskStepOutput({ taskId, node }) {
       const [text, setText] = useState('')
       const [overview, setOverview] = useState('')
+      const [documentName, setDocumentName] = useState('')
       const [expanded, setExpanded] = useState(false)
       const [cursor, setCursor] = useState(0)
       const [nextCursor, setNextCursor] = useState(null)
@@ -371,14 +372,14 @@ window.__ModuleLoader__.load({
         let active = true
         setLoading(true); setError('')
         get(`/state/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(node.runId)}/nodes/${encodeURIComponent(node.nodeRunId)}/output?ref=${encodeURIComponent(node.outputRef)}&cursor=${cursor}`).then(value => {
-          if (active) { setText(previous => cursor ? previous + value.text : value.text); setNextCursor(value.nextCursor); setOverview(value.overview || '') }
+          if (active) { setText(previous => cursor ? previous + value.text : value.text); setNextCursor(value.nextCursor); setOverview(value.overview || ''); setDocumentName(value.documentName || '') }
         }, () => { if (active) setError('产出暂时无法读取，请重试。') }).finally(() => { if (active) setLoading(false) })
         return () => { active = false }
       }, [taskId, node.runId, node.nodeRunId, node.outputRef, cursor, retry])
       const content = React.createElement('div', { style: { minWidth: 0, fontSize: 13, lineHeight: 1.7 } },
         text ? React.createElement('div', { style: { display: 'grid', gap: 6, overflowWrap: 'anywhere' } }, ...text.split('\n\n').map((part, index) => {
           const [heading, ...lines] = part.split('\n')
-          const titled = ['产出摘要', '正文', '任务要求', '发现', '限制与未确认事项', '执行范围', '相关文件', '已有文件', '新建文件', '材料正文', '已读取文件', '已修改文件', '涉及文件', '文件变更', '修改方案', '检查结果', '文件索引', '基线版本', '可修改文件', '变更文件', '提交说明', '分支', '远端', '提交版本', '执行结果', 'PR 标题', '目标仓库', '来源分支', '目标分支', 'PR 正文', 'PR 地址', 'PR 状态'].includes(heading)
+          const titled = ['产出摘要', '正文', '任务要求', '发现', '限制与未确认事项', '执行范围', '相关文件', '已有文件', '新建文件', '材料正文', '已读取文件', '已修改文件', '涉及文件', '文件变更', '修改方案', '检查结果', '文件索引', '基线版本', '可修改文件', '变更文件', '提交说明', '分支', '远端', '提交版本', '执行结果', 'PR 标题', '目标仓库', '来源分支', '目标分支', 'PR 正文', 'PR 地址', 'PR 状态', '工作目录', '来源仓库', '隔离方式', '处理内容', '项目', '工作分支', '起点版本'].includes(heading)
           return React.createElement('div', { key: index, className: titled ? 'observer-task-output-row' : undefined }, titled ? React.createElement('strong', { style: { fontSize: 12, fontWeight: 500, color: colors.muted } }, heading) : null,
             React.createElement('div', { style: { whiteSpace: 'pre-wrap' } }, titled ? lines.join('\n') : part))
         })) : null,
@@ -386,9 +387,10 @@ window.__ModuleLoader__.load({
         error ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, error, React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', onClick: () => setRetry(value => value + 1) }, '重试读取产出')) : null,
         !loading && !error && !text ? React.createElement('span', { style: { color: colors.muted } }, '已保存节点产出，暂未提供可读展示') : null,
         !loading && !error && nextCursor !== null ? React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', onClick: () => setCursor(nextCursor) }, '继续阅读产出') : null)
-      return overview ? React.createElement('details', { onToggle: event => setExpanded(event.currentTarget.open), style: { fontSize: 13, lineHeight: 1.7 } },
+      const documentLink = documentName ? React.createElement('a', { href: `${ENDPOINT}/state/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(node.runId)}/nodes/${encodeURIComponent(node.nodeRunId)}/document?ref=${encodeURIComponent(node.outputRef)}`, style: { display: 'inline-block', marginTop: 6, color: colors.accent, fontSize: 12 } }, `下载 ${documentName}`) : null
+      return React.createElement('div', null, overview ? React.createElement('details', { onToggle: event => setExpanded(event.currentTarget.open), style: { fontSize: 13, lineHeight: 1.7 } },
         React.createElement('summary', { style: { cursor: 'pointer', color: colors.muted } }, overview, React.createElement('span', { style: { marginLeft: 12, color: colors.accent, fontSize: 12 } }, expanded ? '收起产出' : '查看产出')),
-        expanded ? React.createElement('div', { style: { marginTop: 8 } }, content) : null) : content
+        expanded ? React.createElement('div', { style: { marginTop: 8 } }, content) : null) : content, documentLink)
     }
     function TaskHistoryDisclosure({ task, onOpenSession }) {
       const [expanded, setExpanded] = useState(false)
@@ -726,7 +728,7 @@ window.__ModuleLoader__.load({
       const selectedWorkflowTask = (data?.tasks || []).find(task => task.taskId === selectedWorkflowTaskId && task.engine === 'workflow-v2')
       const nodeState = { succeeded: '已完成', running: '执行中', ready: '待执行', waiting: '等待处理', failed: '失败', pending: '未开始', cancelled: '已取消', skipped: '已跳过' }
       const planStageState = { ready: '待执行', waiting_confirmation: '等待人工确认', running: '执行中', succeeded: '已完成', invalidated: '需重新执行', blocked: '受阻' }
-      const nodeTitle = { 'prepare-workspace': '准备工作目录', 'read-files': '读取文件', 'propose-changes': '生成修改方案', 'inspect-and-propose': '梳理修改方案', 'apply-changes': '应用修改', 'verify-candidate': '验证候选结果', 'index-files': '建立文件索引', 'select-files': '选择文件', 'validate-selection': '校验选择', 'prepare-commit': '检查提交条件', commit: '提交代码', 'prepare-push': '检查推送条件', push: '推送代码', 'prepare-pr': '检查 PR 条件', 'create-pr': '创建 PR', 'prepare-generation': '准备任务代际', prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '校验结果', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'prepare-rehearsal': '核对 UAT 演练条件', 'run-rehearsal': '在 UAT 数据库演练', 'readback-rehearsal': '回读 UAT 演练', 'prepare-issue': '准备工单', 'create-issue': '提交工单', 'readback-issue': '回读工单', 'approval-gate': '等待真人审批', 'prepare-execute': '准备执行', 'execute-task': '执行受控任务', 'readback-production': '生产只读回查', finalize: '核验交付' }
+      const nodeTitle = { 'prepare-workspace': '创建独立工作目录', 'read-files': '读取相关文件', 'propose-changes': '编写修改方案', 'inspect-and-propose': '编写修改方案', 'validate-proposal': '检查修改方案', 'apply-changes': '按方案修改文件', 'verify-candidate': '构建与检查修改结果', 'index-files': '索引可修改文件', 'select-files': '选择改动文件', 'validate-selection': '检查文件范围', 'prepare-commit': '检查提交条件', commit: '提交代码', 'prepare-push': '检查推送条件', push: '推送代码', 'prepare-pr': '编写合并请求', 'create-pr': '创建合并请求', 'prepare-generation': '确认项目与修改起点', prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '校验结果', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'prepare-rehearsal': '核对 UAT 演练条件', 'run-rehearsal': '在 UAT 数据库演练', 'readback-rehearsal': '回读 UAT 演练', 'prepare-issue': '准备工单', 'create-issue': '提交工单', 'readback-issue': '回读工单', 'approval-gate': '等待真人审批', 'prepare-execute': '准备执行', 'execute-task': '执行受控任务', 'readback-production': '生产只读回查', finalize: '核对交付结果' }
       const taskNodes = selectedWorkflowTask?.executionNodes || []
       const completedSteps = taskNodes.filter(node => node.status === 'succeeded').length
       const taskTone = selectedWorkflowTask?.outcome === 'failed' ? colors.danger : selectedWorkflowTask?.state === 'waiting' ? colors.warning : selectedWorkflowTask?.outcome === 'succeeded' ? 'var(--dsw-alias-state-success-primary, #248a3d)' : colors.accent

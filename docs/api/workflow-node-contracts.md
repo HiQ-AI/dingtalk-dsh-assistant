@@ -77,3 +77,10 @@ IB 可返回 `factRevisions: [{ factId, sourceQuote, scope }]`。Host 只接受�
 消息 trace 只读响应补充 message.text/receivedAt；记录含 startedAt、completedAt、attempt，意图记录含 topicTitle 与 sourceMessages（同群原文、发送者名称、时间及 current 标记）。耗时采用本次领取开始至完成，不以记录创建时间代替；历史缺失字段视为未知。
 
 消息 trace 的步骤展示现在使用 summary={title,conclusion,rows:[{label,value}]}；响应不再包含 input、output、usage、evidenceRefs、deterministic。业务摘要在服务端从原持久记录投影，前端不展开或 stringify 全量模型上下文。原文证据读取仍由内部原始记录进行范围校验，不依赖精简后的展示响应。
+
+
+### 任务节点产出与文档
+
+`GET /state/tasks/:taskId/runs/:runId/nodes/:nodeRunId/output?ref=:outputRef` 返回 `text/overview/nextCursor/totalLength`，有文档时附 `documentName`；cursor 默认 0，limit 默认 1200、上限 8000。对应 `/document?ref=:outputRef` 按需下载 UTF-8 Markdown，响应为 attachment、Cache-Control=no-store。两条路径均核对当前配置群、Task/Run/节点和准确输出引用；文档不存在或跨范围返回 404，引用变化拒绝读取。文档正文不放进列表。
+
+新工程方案是节点实际保存的 Markdown 文档工件；历史补丁导出的修改记录明确标注未保存方案说明。旧工作目录仅从同一 nodeRunId、同一 generation 的成功 workspace 效果回执读取，不挪用其他轮次的目录。

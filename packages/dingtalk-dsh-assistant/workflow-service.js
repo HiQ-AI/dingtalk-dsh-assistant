@@ -16,9 +16,28 @@ import { createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWork
 import { createUatPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
 import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
+import { describeVerificationChecks } from './execution-check-job.js'
 
 /** 将持久节点工件转换为可读产出；不推断未落盘的文件或外部执行结果。 */
-export function describeTaskNodeOutput(node, output) {
+export function describeTaskNodeOutput(node, output, context = {}) {
+  if (node.nodeId === 'prepare-workspace') {
+    const workspace = output?.workspace ?? context.workspace
+    return { overview: workspace?.status === 'succeeded' ? '已创建独立 Git 工作目录' : '工作目录回执未记录',
+      text: workspace ? `工作目录\n${workspace.directory}\n\n来源仓库\n${workspace.sourceRepository ?? '未记录'}\n\n隔离方式\n独立 Git 仓库，未使用 git worktree；修改不会写入源仓库工作目录` : '该节点旧输出仅保存了任务输入，未找到属于本次节点的成功目录回执。' }
+  }
+  if (node.nodeId === 'prepare-generation') {
+    const point = output?.startingPoint ?? context.startingPoint, requirement = output?.requirement ?? output
+    return { overview: requirement?.expectedRemoteSha ? '从上一轮已推送的版本继续修改' : '从项目起始版本开始本轮修改',
+      text: `处理内容\n核对已选项目、工作分支和本轮修改起点，确认远端状态允许继续。\n\n项目\n${point?.repository ?? '历史记录未提供项目名称'}\n\n工作分支\n${point?.workBranch ?? '未记录'}\n\n起点版本\n${requirement?.baseCommit ?? '未记录'}` }
+  }
+  if (['verify-candidate', 'prepare-commit'].includes(node.nodeId) && output?.verification) {
+    const report = describeVerificationChecks(output.verification)
+    if (node.nodeId === 'verify-candidate') {
+      const text = report.map(check => `${check.title}\n${check.passed ? '通过' : '未通过'}\n${check.steps.map(step => `${step.title}：${step.passed ? '通过' : '未通过'}${step.limitation ? `；${step.limitation}` : ''}`).join('\n')}\n${check.limitation}`).join('\n\n')
+      return { overview: report.map(check => `${check.title}${check.passed ? '通过' : '未通过'}`).join('；'), text,
+        document: { name: '构建检查报告.md', content: `# 构建检查报告\n\n${text}` } }
+    }
+  }
   const sections = []
   const fileSummaries = []
   let overview = ''
@@ -51,20 +70,12 @@ export function describeTaskNodeOutput(node, output) {
     if (typeof replacement?.path !== 'string' || typeof replacement.from !== 'string' || typeof replacement.to !== 'string') continue
     add('修改方案', `文件：${replacement.path}\n修改前：\n${replacement.from}\n修改后：\n${replacement.to}`)
   }
-  if (Array.isArray(output?.verification?.checks)) add('检查结果', output.verification.checks.filter(item => typeof item?.id === 'string' && typeof item.passed === 'boolean').map(item => `${item.id}：${item.passed ? '通过' : '未通过'}`).join('\n'))
+  if (Array.isArray(output?.verification?.checks)) add('检查结果', describeVerificationChecks(output.verification).map(item => `${item.title}：${item.passed ? '通过' : '未通过'}；${item.limitation}`).join('\n'))
   if (node.nodeId === 'index-files' && Array.isArray(output?.directories)) {
     const paths = output.directories.flatMap(item => typeof item?.directory === 'string' && Array.isArray(item.names) ? item.names.filter(name => typeof name === 'string').map(name => item.directory + name) : [])
     summarizeFiles('已索引', paths)
     if (Number.isSafeInteger(output.excludedCount) && output.excludedCount >= 0) fileSummaries.push(`排除 ${output.excludedCount} 个文件`)
     add('文件索引', paths.join('\n'))
-  }
-  if (['prepare-generation', 'prepare-workspace'].includes(node.nodeId)) {
-    add('基线版本', output?.baseCommit)
-    if (Array.isArray(output?.editablePaths)) { summarizeFiles('可修改', output.editablePaths); add('可修改文件', output.editablePaths.join('\n')) }
-  }
-  if (node.nodeId === 'verify-candidate' && Array.isArray(output?.verification?.checks)) {
-    const checks = output.verification.checks
-    overview = `检查 ${checks.length} 项，${checks.filter(item => item.passed === true).length} 项通过`
   }
   if (['prepare-commit', 'commit', 'prepare-push', 'push', 'prepare-pr', 'create-pr', 'finalize'].includes(node.nodeId)) {
     const prepared = ['commit', 'push', 'create-pr'].includes(node.nodeId) ? output?.prepared : output
@@ -96,8 +107,15 @@ export function describeTaskNodeOutput(node, output) {
       }
     }
   }
-  const text = sections.join('\n\n')
-  return { text, overview: [overview, ...fileSummaries].filter(Boolean).join('；') }
+  let text = sections.join('\n\n'), document
+  if (['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId)) {
+    document = output?.document?.markdown ? { name: '修改方案.md', content: output.document.markdown }
+      : { name: '修改记录.md', content: `# 已保存的修改记录\n\n历史节点没有保存方案说明文档。以下从实际补丁整理，不包含未记录的修改理由或验证计划。\n\n${text}` }
+    text = document.content
+    overview = output?.document?.markdown ? '修改方案.md' : '修改记录.md（原节点未保存方案说明）'
+  }
+  if (node.nodeId === 'prepare-pr' && typeof output?.body === 'string') document = { name: '合并请求.md', content: `# ${output.title ?? '合并请求'}\n\n${output.body}` }
+  return { text, overview: [overview, ...fileSummaries].filter(Boolean).join('；'), ...(document ? { document } : {}) }
 }
 
 export const describeMessageTraceItem = (item) => {
@@ -1899,7 +1917,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       totalBytes: Buffer.byteLength(material.text), start: offset, end, text: material.text.slice(offset, end),
       complete: offset === 0 && end === material.text.length, nextCursor: end < material.text.length ? end : null }
   }
-  async function taskNodeOutput(taskId, runId, nodeRunId, { offset = 0, limit = 1200, outputRef } = {}) {
+  async function taskNodeOutput(taskId, runId, nodeRunId, { offset = 0, limit = 1200, outputRef, document = false } = {}) {
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 2 || limit > 8000)
       throw executionError('TASK_OUTPUT_CURSOR_INVALID')
     const origin = await store.query({ kind: 'message.task', taskId })
@@ -1910,11 +1928,24 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (!node?.outputRef) return null
     if (outputRef !== node.outputRef) throw executionError('TASK_OUTPUT_CHANGED')
     const output = await artifacts.read(node.outputRef)
-    const { text, overview } = describeTaskNodeOutput(node, output)
+    const context = {}
+    if (node.nodeId === 'prepare-workspace' && !output?.workspace) {
+      const effects = await store.query({ kind: 'effect.list', runId })
+      const effect = effects.find(item => item.nodeRunId === nodeRunId && item.generation === node.generation && item.state === 'succeeded' && item.definition?.action === 'workspace')
+      if (effect?.result?.result?.status === 'succeeded') context.workspace = { ...effect.result.result, sourceRepository: effect.definition.payload.sourceRepository }
+    }
+    if (node.nodeId === 'prepare-generation' && !output?.startingPoint) {
+      const records = await store.query({ kind: 'workflow.list' })
+      const record = records.find(item => item.workflowId === state.run.workflowId && item.digest === state.run.workflowDigest && item.config?.taskId === taskId)
+      if (record) context.startingPoint = { repository: record.config.repoId, workBranch: record.config.head }
+    }
+    const result = describeTaskNodeOutput(node, output, context), { text, overview } = result
+    if (document) return result.document ?? null
     if (offset > text.length || offset > 0 && /[\uDC00-\uDFFF]/u.test(text[offset] ?? '')) throw executionError('TASK_OUTPUT_CURSOR_INVALID')
     let end = Math.min(text.length, offset + limit)
     if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1])) end--
-    return { text: text.slice(offset, end), nextCursor: end < text.length ? end : null, totalLength: text.length, overview }
+    return { text: text.slice(offset, end), nextCursor: end < text.length ? end : null, totalLength: text.length, overview,
+      ...(result.document ? { documentName: result.document.name } : {}) }
   }
   async function taskRuns(taskId, { offset = 0, limit = 20 } = {}) {
     const origin = await store.query({ kind: 'message.task', taskId })
