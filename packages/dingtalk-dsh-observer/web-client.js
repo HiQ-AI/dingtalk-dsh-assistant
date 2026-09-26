@@ -166,56 +166,6 @@ window.__ModuleLoader__.load({
     ]
     const pages = [{ id: 'groups', label: '群消息' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '归档任务' }, { id: 'alerts', label: '告警' }]
     const traceStatus = (status) => ({ succeeded: '已完成', applied: '已接纳', settled: '处理已结束', processed: '处理已结束', running: '处理中', claimed: '处理中', pending: '等待处理', queued: '等待处理', waiting: '等待继续', needs_attention: '需要处理', failed: '失败', blocked: '已阻塞', superseded: '已被新消息替代', cancelled: '已取消', rejected: '未接纳', accepted: '已接纳' }[status] || '状态未记录')
-    const describeTraceItem = (item) => {
-      const input = item.input ?? {}, output = item.output ?? {}
-      const text = value => typeof value === 'string' ? value : ''
-      const rows = []
-      const add = (label, value) => { if (text(value)) rows.push({ label, value }) }
-      const actionNames = { create: '创建任务', research: '开展排查', answer: '回答问题', status: '查询进展', result: '查询结果', fact: '补充话题事实', no_action: '不采取动作', revise: '调整任务', reopen: '重新打开任务', pause: '暂停任务', cancel: '取消任务', resume: '继续任务', report: '调整报告', clarification: '答复澄清', approve: '处理审批' }
-      let title = { split: '拆分事项', route: '关联话题', intent: '判断下一步', command: '接纳动作' }[item.kind] ?? (item.nodeId === 'material' ? '读取补充材料' : '处理记录')
-      let conclusion = '尚未记录判断结论'
-      if (item.kind === 'split' && Array.isArray(output.units)) {
-        conclusion = `拆分为 ${output.units.length} 个事项`
-        output.units.forEach((unit, i) => add(`事项 ${i + 1}`, unit.goalText ?? unit.text))
-      } else if (item.kind === 'route' && output.kind === 'binding') {
-        const candidate = input.candidates?.find(candidate => candidate.candidateId === output.candidateId)
-        conclusion = { existing: '关联到已有话题或任务', new: '判断为新话题', conversation: '关联到当前群的任务集合' }[output.disposition] ?? '已记录关联判断'
-        add('当前事项', input.goalText)
-        add('关联对象', candidate?.title ?? candidate?.goal)
-        if (!candidate && output.candidateId) add('关联对象', '历史记录未提供名称，可在技术详情查看标识')
-        if (Array.isArray(output.evidence)) output.evidence.forEach(value => add('关联依据', value))
-      } else if (item.kind === 'intent') {
-        const decisions = Array.isArray(output.decisions) ? output.decisions : [{ intent: output }]
-        let count = 0
-        for (const decision of decisions) {
-          const intent = decision.intent ?? {}, unit = input.units?.find(unit => unit.unitId === decision.unitId)
-          const sourceIndex = item.sourceMessages?.findIndex(message => message.runId === unit?.runId) ?? -1
-          add(sourceIndex >= 0 ? `消息 ${sourceIndex + 1} 的事项` : '对应事项', unit?.input?.goalText ?? unit?.input?.source?.text)
-          for (const action of intent.actions ?? []) {
-            count++
-            add(actionNames[action.intent] ?? '其他动作', action.arguments?.objective ?? action.arguments?.text ?? action.arguments?.answer ?? actionNames[action.intent] ?? '详见原始记录')
-          }
-          if (intent.kind === 'needs_clarification') add('需要确认', intent.question ?? intent.reason)
-          if (intent.kind === 'needs_context') add('需要材料', intent.reason)
-          for (const constraint of intent.constraints ?? []) add('执行限制', typeof constraint === 'string' ? constraint : constraint.text)
-        }
-        conclusion = count ? `提出 ${count} 项处理决定` : '已记录判断，等待补充信息或后续处理'
-      } else if (item.kind === 'command') {
-        const action = actionNames[input.kind] ?? '处理动作'
-        conclusion = `${action} · ${traceStatus(item.status)}`
-        add('处理目标', input.args?.arguments?.objective ?? input.args?.arguments?.text)
-        add('处理结果', output.reply ?? output.summary)
-        if (output.taskId) add('后续任务', '已记录任务身份；实际执行进展请查看任务看板')
-      } else if (item.nodeId === 'material') {
-        conclusion = output.complete === true ? '本页材料读取完成' : '材料完整性尚未确认'
-        for (const fact of output.facts ?? []) add('原文依据', fact.quote)
-      }
-      if (output.kind === 'needs_clarification') { conclusion = '需要进一步确认'; add('待确认问题', output.question ?? output.reason) }
-      if (output.kind === 'needs_context') { conclusion = '需要补充材料'; add('原因', output.reason) }
-      if (['needs_relink', 'needs_resegmentation'].includes(output.kind)) { conclusion = output.kind === 'needs_relink' ? '需要重新关联话题' : '需要重新拆分事项'; add('原因', output.reason) }
-      if (['failed', 'blocked'].includes(item.status)) conclusion = '本步未完成，请查看阻塞原因'
-      return { title, conclusion, rows }
-    }
     const traceElapsed = (item, now) => {
       const start = Date.parse(item.startedAt), end = Date.parse(item.completedAt)
       const running = ['running', 'claimed'].includes(item.status)
@@ -224,13 +174,6 @@ window.__ModuleLoader__.load({
       const seconds = duration / 1000
       const value = seconds < 1 ? `${Math.round(duration)} 毫秒` : seconds < 60 ? `${seconds.toFixed(1)} 秒` : `${Math.floor(seconds / 60)} 分 ${Math.floor(seconds % 60)} 秒`
       return `${running ? '已用时' : '耗时'} ${value}${item.attempt > 1 ? `（第 ${item.attempt} 次处理）` : ''}`
-    }
-    const traceUsage = (item) => {
-      if (item.input?.deterministic === true) return '确定性处理，未调用模型'
-      if (item.kind === 'command') return 'Host 接纳动作，不单独计模型用量'
-      const usage = item.usage
-      if (!usage || Object.keys(usage).length === 0) return '模型用量未知（未记录）'
-      return usage
     }
     const traceReason = (reason) => {
       if (!reason) return null
@@ -272,7 +215,7 @@ window.__ModuleLoader__.load({
           React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '这里展示消息的判断与接纳过程；任务执行进展见任务看板，回复送达情况见发信箱。')) : null,
         ready && page.items?.length ? React.createElement('div', { 'aria-label': '本页处理步骤', style: { display: 'flex', flexWrap: 'wrap', gap: 8 } }, ...Object.entries(labels).map(([kind, label]) => { const count = page.items.filter(item => item.kind === kind).length; return count ? React.createElement('span', { key: kind, style: pill(colors.accent) }, `${label} · ${count} 条记录`) : null })) : null,
         loading ? React.createElement('div', { role: 'status', style: { minHeight: 160 } }, '正在读取处理记录…') : error ? React.createElement('div', { role: 'alert' }, `处理记录读取失败：${error}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setRetry((value) => value + 1) }, '重试')) : !page?.items?.length ? emptyState('此页没有处理记录', { detail: '历史消息可能尚未记录完整处理轨迹。' }) : React.createElement('ol', { 'aria-label': '逐步判断记录', start: Number(cursor || 0) + 1, style: { margin: 0, paddingLeft: 28, display: 'grid', gap: 16 } }, ...page.items.map((item, index) => {
-          const view = describeTraceItem(item)
+          const view = item.summary ?? { title: '处理记录', conclusion: '尚未记录判断结论', rows: [] }
           const tone = ['failed', 'blocked', 'needs_attention'].includes(item.status) ? colors.warning : colors.accent
           return React.createElement('li', { key: item.id || index, style: { borderLeft: `2px solid ${colors.border}`, padding: '0 0 12px 16px', minWidth: 0, fontSize: 14, overflowWrap: 'anywhere' } },
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } }, React.createElement('strong', null, view.title), React.createElement('span', { style: pill(tone) }, traceStatus(item.status)), React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, fmt(item.createdAt))),
@@ -288,13 +231,10 @@ window.__ModuleLoader__.load({
             view.rows.length ? React.createElement('dl', { style: { margin: '0 0 12px', display: 'grid', gap: 10 } }, ...view.rows.map((row, i) => React.createElement('div', { key: i }, React.createElement('dt', { style: { color: colors.muted, fontSize: 12, marginBottom: 4 } }, row.label), React.createElement('dd', { style: { margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.65 } }, row.value)))) : null,
             item.reason ? React.createElement('p', { style: { color: colors.warning, whiteSpace: 'pre-wrap' } }, traceReason(item.reason)) : null,
             item.sourceRunIds?.length > 1 ? React.createElement('p', { style: { color: colors.muted, fontSize: 12 } }, `同一话题的 ${new Set(item.sourceRunIds).size} 条消息共同判断，各事项的决定分别列出。`) : null,
-            item.gaps?.length ? React.createElement('p', { style: { color: colors.warning } }, `依据缺口：${item.gaps.join('；')}`) : null,
-            React.createElement('details', { style: { fontSize: 12 } }, React.createElement('summary', { style: { cursor: 'pointer', color: colors.muted, padding: '6px 0' } }, '技术详情'),
-              readout('输入', item.input), readout('输出', item.output), readout('依据与缺口', { evidenceRefs: item.evidenceRefs ?? '历史未记录', gaps: item.gaps ?? '历史未记录，不能据此判定没有缺口' }), readout('用量', traceUsage(item)), readout('记录标识', { runId, nodeId: item.nodeId, recordId: item.id, topicId: item.topicId })))
+            item.gaps?.length ? React.createElement('p', { style: { color: colors.warning } }, `依据缺口：${item.gaps.join('；')}`) : null)
         })),
         ready ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, `本页 ${page.items?.length ?? 0} 条${Number.isFinite(page.total) ? `，共 ${page.total} 条处理记录` : ''}；按记录时间排列，多事项可能分别判断。`) : null,
         ready ? React.createElement('p', { style: { color: colors.muted, fontSize: 12, margin: 0 } }, '耗时按本次开始到完成计算，包含工具等待；重试显示最近一次处理，不代表纯模型耗时。进行中记录可刷新查看最新状态。') : null,
-        ready ? readout('消息技术记录', { runId, status: page.status, reason: page.reason }) : null,
         React.createElement('div', { style: { display: 'flex', gap: 8 } }, cursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setCursor(cursorHistory.at(-1)); setCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, page?.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setCursorHistory((items) => [...items, cursor]); setCursor(page.nextCursor) } }, '下一页') : null))
     }
     function TopicBrowser({ groups, tasks, target, updatedAt, onOpenTask }) {

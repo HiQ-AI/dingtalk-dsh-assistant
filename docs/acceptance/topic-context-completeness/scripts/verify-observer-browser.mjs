@@ -1,3 +1,4 @@
+import { describeMessageTraceItem } from '../../../../packages/dingtalk-dsh-assistant/workflow-service.js'
 import assert from 'node:assert/strict'
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -69,6 +70,7 @@ await page.route('**/*', async route => {
     data = { topicId: slow ? 'topic-1' : 'topic-2', revision: 1, current: { text: slow ? '不应覆盖的旧上下文' : '当前有效上下文' }, facts: [], intentRuns: [{ intentRunId: target.searchParams.has('intentCursor') ? 'ib-older' : 'ib-1', carrierRunId: 'msg-1', status: 'succeeded', sourceRunIds: ['msg-1'] }], intentNextCursor: target.searchParams.has('intentCursor') ? null : 50, nextCursor: null }
   }
   if (target.pathname === '/state/tasks/task-1/runs') data = { taskId: 'task-1', taskOwner: { status: 'active', sessionId: 'reserved-owner', sessionBound: false }, runs: [{ runId: 'run-old', status: 'succeeded', nodes: [{ nodeId: 'analyze', label: '历史分析', status: 'succeeded', sessionId: 'node-history' }] }], nextCursor: null }
+  if (target.pathname.endsWith('/trace')) data.items = data.items.map(({input,output,usage,...item})=>({...item,summary:describeMessageTraceItem({...item,input,output})}))
   return route.fulfill({ contentType: 'application/json', body: JSON.stringify(data) })
 })
 try {
@@ -82,18 +84,9 @@ try {
   await page.getByText(/本次判断覆盖 2 条消息/).waitFor()
   await page.getByText('拆分为 1 个事项', { exact: true }).waitFor()
   await page.getByText('租户权限排查', { exact: true }).waitFor()
-  assert.equal(await page.locator('summary').filter({ hasText: /^输入$/ }).last().isVisible(), false)
-  await page.locator('summary').filter({ hasText: /^技术详情$/ }).last().click()
-  const input = page.locator('summary').filter({ hasText: /^输入$/ }).last()
-  await input.focus(); await page.keyboard.press('Enter')
-  assert.equal(await input.evaluate(element => element.parentElement.open), true)
-  await page.getByText('完整输入', { exact: false }).waitFor()
+  assert.equal(await page.getByRole('region',{name:'消息处理过程'}).locator('details,pre').count(),0)
   await page.getByText(/上下文容量受阻/).waitFor()
-  const usage = page.locator('summary').filter({ hasText: /^用量$/ }).last()
-  await usage.focus(); await page.keyboard.press(' ')
-  await page.getByText('模型用量未知（未记录）').last().waitFor()
-  checks.push('message-trace', 'keyboard-details', 'unknown-usage', 'capacity-reason')
-  await page.locator('summary').filter({ hasText: /^技术详情$/ }).last().click()
+  checks.push('message-trace','no-technical-details','capacity-reason')
   await page.evaluate(() => document.querySelectorAll('*').forEach(element => { if (element.scrollTop) element.scrollTop = 0 }))
   await page.screenshot({ path: path.join(output, 'message-trace.png'), fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 })
@@ -102,7 +95,7 @@ try {
   assert.ok(await page.getByText('提出 1 项处理决定', { exact: true }).isVisible())
   const traceWidth=await page.getByRole('region',{name:'消息处理过程'}).evaluate(el=>({width:el.clientWidth,scroll:el.scrollWidth}))
   assert.ok(traceWidth.scroll<=traceWidth.width+1)
-  checks.push('readable-conclusion','collapsed-technical-details','narrow-trace-no-overflow')
+  checks.push('readable-conclusion','summary-only-render','narrow-trace-no-overflow')
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.getByRole('button', { name: '查看这条消息的过程', exact: true }).click()
   await page.getByText(/李四.*当前查看的消息/).waitFor()

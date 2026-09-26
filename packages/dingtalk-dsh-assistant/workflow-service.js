@@ -17,6 +17,57 @@ import { createUatPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
 import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
 
+export const describeMessageTraceItem = (item) => {
+  const input = item.input ?? {}, output = item.output ?? {}
+  const text = value => typeof value === 'string' ? value : ''
+  const rows = []
+  const add = (label, value) => { if (text(value)) rows.push({ label, value }) }
+  const actionNames = { create: '创建任务', research: '开展排查', answer: '回答问题', status: '查询进展', result: '查询结果', fact: '补充话题事实', no_action: '不采取动作', revise: '调整任务', reopen: '重新打开任务', pause: '暂停任务', cancel: '取消任务', resume: '继续任务', report: '调整报告', clarification: '答复澄清', approve: '处理审批' }
+  let title = { split: '拆分事项', route: '关联话题', intent: '判断下一步', command: '接纳动作' }[item.kind] ?? (item.nodeId === 'material' ? '读取补充材料' : '处理记录')
+  let conclusion = '尚未记录判断结论'
+  if (item.kind === 'split' && Array.isArray(output.units)) {
+    conclusion = `拆分为 ${output.units.length} 个事项`
+    output.units.forEach((unit, i) => add(`事项 ${i + 1}`, unit.goalText ?? unit.text))
+  } else if (item.kind === 'route' && output.kind === 'binding') {
+    const candidate = input.candidates?.find(candidate => candidate.candidateId === output.candidateId)
+    conclusion = { existing: '关联到已有话题或任务', new: '判断为新话题', conversation: '关联到当前群的任务集合' }[output.disposition] ?? '已记录关联判断'
+    add('当前事项', input.goalText)
+    add('关联对象', candidate?.title ?? candidate?.goal)
+    if (!candidate && output.candidateId) add('关联对象', '历史记录未提供关联对象名称')
+    if (Array.isArray(output.evidence)) output.evidence.forEach(value => add('关联依据', value))
+  } else if (item.kind === 'intent') {
+    const decisions = Array.isArray(output.decisions) ? output.decisions : [{ intent: output }]
+    let count = 0
+    for (const decision of decisions) {
+      const intent = decision.intent ?? {}, unit = input.units?.find(unit => unit.unitId === decision.unitId)
+      const sourceIndex = item.sourceMessages?.findIndex(message => message.runId === unit?.runId) ?? -1
+      add(sourceIndex >= 0 ? `消息 ${sourceIndex + 1} 的事项` : '对应事项', unit?.input?.goalText ?? unit?.input?.source?.text)
+      for (const action of intent.actions ?? []) {
+        count++
+        add(actionNames[action.intent] ?? '其他动作', action.arguments?.objective ?? action.arguments?.text ?? action.arguments?.answer ?? actionNames[action.intent] ?? '具体内容未记录')
+      }
+      if (intent.kind === 'needs_clarification') add('需要确认', intent.question ?? intent.reason)
+      if (intent.kind === 'needs_context') add('需要材料', intent.reason)
+      for (const constraint of intent.constraints ?? []) add('执行限制', typeof constraint === 'string' ? constraint : constraint.text)
+    }
+    conclusion = count ? `提出 ${count} 项处理决定` : '已记录判断，等待补充信息或后续处理'
+  } else if (item.kind === 'command') {
+    const action = actionNames[input.kind] ?? '处理动作'
+    conclusion = `${action} · ${({applied:'已接纳',running:'处理中',unknown:'结果待核对',failed:'失败'}[item.status] ?? '状态未记录')}`
+    add('处理目标', input.args?.arguments?.objective ?? input.args?.arguments?.text)
+    add('处理结果', output.reply ?? output.summary)
+    if (output.taskId) add('后续任务', '已记录任务身份；实际执行进展请查看任务看板')
+  } else if (item.nodeId === 'material') {
+    conclusion = output.complete === true ? '本页材料读取完成' : '材料完整性尚未确认'
+    for (const fact of output.facts ?? []) add('原文依据', fact.quote)
+  }
+  if (output.kind === 'needs_clarification') { conclusion = '需要进一步确认'; add('待确认问题', output.question ?? output.reason) }
+  if (output.kind === 'needs_context') { conclusion = '需要补充材料'; add('原因', output.reason) }
+  if (['needs_relink', 'needs_resegmentation'].includes(output.kind)) { conclusion = output.kind === 'needs_relink' ? '需要重新关联话题' : '需要重新拆分事项'; add('原因', output.reason) }
+  if (['failed', 'blocked'].includes(item.status)) conclusion = '本步未完成，请查看阻塞原因'
+  return { title, conclusion, rows }
+}
+
 const sourceKey = (profile, groupId, messageId) => `dws:${executionDigest([profile, groupId, messageId])}`
 export const isDirectedTaskRequest = body => typeof body === 'string' && /(?:小小鹏|@孙鹏(?:\(孙鹏\))?).{0,50}(?:需要(?:你|我)?(?:修复|处理|排查)|请(?:你|帮忙)?(?:修复|处理|排查)|帮(?:我|忙)?(?:修复|处理|排查))/su.test(body)
 const requireText = (value, code) => { if (typeof value !== 'string' || !value.trim()) throw executionError(code); return value }
@@ -1681,7 +1732,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       .sort((a,b)=>String(a.occurredAt).localeCompare(String(b.occurredAt)))
     return {topic,messages:messages.slice(offset,offset+limit),total:messages.length,offset,limit}
   }
-  async function messageTrace(runId, { offset = 0, limit = 50 } = {}) {
+  async function messageTraceRecords(runId) {
     const data = await messages.state(runId)
     if (!data?.run || !groups.has(data.run.conversationId)) return null
     const shared = []
@@ -1707,6 +1758,12 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         input: { kind: command.kind, args: command.args, dependsOn: command.dependsOn }, output: command.result,
         reason: command.error ?? command.reason ?? null })))
       .sort((a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')) || String(a.id).localeCompare(String(b.id)))
+    return { data, items }
+  }
+  async function messageTrace(runId, { offset = 0, limit = 50 } = {}) {
+    const trace = await messageTraceRecords(runId)
+    if (!trace) return null
+    const { data, items } = trace
     const pageItems = items.slice(offset, offset + limit)
     const sourceCache = new Map([[runId, data.run]])
     for (const item of pageItems.filter(item => item.kind === 'intent')) {
@@ -1722,7 +1779,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       }
     }
     return { runId, message: { text: data.run.body, receivedAt: data.run.createdAt }, status: data.run.status, reason: data.run.reason ?? null, revision: data.run.revision ?? data.run.matterSetRevision ?? 0,
-      items: pageItems, nextCursor: offset + limit < items.length ? offset + limit : null, total: items.length }
+      items: pageItems.map(({ input, output, usage, evidenceRefs, deterministic, ...item }) => ({ ...item, summary: describeMessageTraceItem({ ...item, input, output }) })), nextCursor: offset + limit < items.length ? offset + limit : null, total: items.length }
   }
   async function workflowTopicContext(topicId, { offset = 0, limit = 50, intentCursor = 0, expectedRevision = null } = {}) {
     const topic = await store.query({ kind: 'message.topic', topicId })
@@ -1742,7 +1799,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (!data?.run || !groups.has(data.run.conversationId)) return null
     let material = await store.query({ kind: 'message.material', runId, resourceRef })
     if (!material) {
-      const trace = await messageTrace(runId, { limit: Number.MAX_SAFE_INTEGER })
+      const trace = await messageTraceRecords(runId)
       const sources = [data.run.snapshot?.source, ...(data.run.snapshot?.quotes ?? []), ...(data.run.snapshot?.history ?? []),
         ...trace.items.flatMap(item => item.input?.sharedTopic?.sources ?? [])].filter(Boolean)
       material = sources.find(ref => ref.sourceKey === resourceRef && typeof ref.text === 'string')

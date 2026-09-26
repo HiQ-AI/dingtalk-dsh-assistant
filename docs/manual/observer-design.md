@@ -2,11 +2,11 @@
 
 ## 使用场景
 
-中文本地运营工具，用户查看群消息为何被拆分、关联、执行或阻塞。重点是业务结论可直接阅读，技术数据可按需展开。
+中文本地运营工具，用户查看群消息为何被拆分、关联、执行或阻塞。重点是业务结论可直接阅读，不向页面传输或渲染完整技术数据。
 
 ## 视觉来源
 
-采用运行时 token 为权威：DSH CSS 变量 → observer 的 colors/ui → 共享 Button、Pill、card/readout。surface #fff、surface2 #f7f7f8、border rgba(127,127,127,.25)、accent #4d6bfe、warning #a56500、danger #c33 均只是主题变量的原有回退值，不新增独立色板。继承宿主字体，标题 16px、正文 14px、辅助 12px；ID 与 JSON 仅在技术详情中出现。
+采用运行时 token 为权威：DSH CSS 变量 → observer 的 colors/ui → 共享 Button、Pill、card/readout。surface #fff、surface2 #f7f7f8、border rgba(127,127,127,.25)、accent #4d6bfe、warning #a56500、danger #c33 均只是主题变量的原有回退值，不新增独立色板。继承宿主字体，标题 16px、正文 14px、辅助 12px；消息处理页面不展示技术 ID 与 JSON。
 
 ## 消息处理详情
 
@@ -16,7 +16,7 @@
 
 - 导航与操作使用宿主 Button，返回沿用原列表状态；读取错误在本区重试。
 - 分页沿用接口游标，本页阶段计数不冒充完整历史。刷新保留当前页，旧请求不能覆盖新页。
-- 折叠采用原生 details/summary，键盘可用；技术详情与原始 JSON 复用 readout。
+- 消息处理过程只展示业务摘要，不创建技术详情或原始 JSON 节点；其他页面已有折叠沿用原生 details/summary。
 - 滚动由宿主页面管理；JSON 自身限高滚动，详情正文自然换行；不改变全局滚动容器。
 - 仅适用只读界面；无表单、选择器、删除或权限变更。本次不引入新的状态转换或授权规则。
 
