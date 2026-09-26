@@ -1627,7 +1627,10 @@ test('只读轨迹 API 回读真实节点、话题批次与已绑定 Owner，并
 test('步骤产出只投影业务正文及限制，不泄露任意对象字段', async t => {
   const { service, execution, message } = await fixture(t, 'owner', undefined, {
     execute: async () => ({ summary: '已检查', findings: [{ statement: '无法确认创建人', evidenceIds: ['internal'] }],
-      limitations: ['缺少创建日志'], toolArguments: { secret: 'not-for-ui' }, markdown: '正文内容' }),
+      limitations: ['缺少创建日志'], toolArguments: { secret: 'not-for-ui' }, markdown: '正文内容',
+      materials: [{ id: 'hidden-material-id', text: '核对材料正文' }], files: [{ path: 'app.js', text: '代码不直接展示' }, { path: 'new.js', text: null }],
+      changes: [{ path: 'app.js', content: '代码不直接展示' }, { path: 'old.js', content: null }],
+      verification: { checks: [{ id: 'build', passed: true, log: 'log-not-for-ui' }, { id: 'lint', passed: false }] } }),
   })
   const receipt = await service.ingest(message)
   const state = await service.messages.process(receipt.runId)
@@ -1636,7 +1639,11 @@ test('步骤产出只投影业务正文及限制，不泄露任意对象字段',
   const node = (await execution.controller.state(runId)).nodes[0]
   const result = await service.taskNodeOutput(taskId, runId, node.nodeRunId, { outputRef: node.outputRef })
   assert.match(result.text, /已检查[\s\S]*正文内容[\s\S]*无法确认创建人[\s\S]*缺少创建日志/)
-  assert.doesNotMatch(result.text, /not-for-ui|internal|toolArguments/)
+  assert.match(result.text, /材料正文\n核对材料正文/)
+  assert.match(result.text, /已读取文件\napp.js\nnew.js（尚不存在）/)
+  assert.match(result.text, /文件变更\n写入 app.js\n删除 old.js/)
+  assert.match(result.text, /检查结果\nbuild：通过\nlint：未通过/)
+  assert.doesNotMatch(result.text, /not-for-ui|internal|toolArguments|hidden-material-id|代码不直接展示/)
   assert.equal(await service.taskNodeOutput(taskId, 'missing-run', node.nodeRunId, { outputRef: node.outputRef }), null)
   await assert.rejects(service.taskNodeOutput(taskId, runId, node.nodeRunId, { outputRef: node.outputRef, offset: result.totalLength + 1 }), /TASK_OUTPUT_CURSOR_INVALID/)
 })

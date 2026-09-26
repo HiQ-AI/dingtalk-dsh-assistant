@@ -80,11 +80,14 @@ window.__ModuleLoader__.load({
         outline: 2px solid var(--dsw-alias-brand-primary, #4d6bfe) !important;
         outline-offset: 2px !important;
       }
-      [data-dingtalk-observer] .observer-task-step { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px; }
-      [data-dingtalk-observer] .observer-task-overview { padding: 28px 0; }
+      [data-dingtalk-observer] .observer-task-step { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; padding-bottom: 24px; }
+      [data-dingtalk-observer] .observer-task-step:not(:last-child)::before { content: ''; position: absolute; left: 13px; top: 28px; bottom: 0; border-left: 1px solid var(--dsw-alias-border-primary, rgba(127,127,127,.25)); }
+      [data-dingtalk-observer] .observer-task-step-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; min-height: 28px; }
+      [data-dingtalk-observer] .observer-task-output-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; }
+      [data-dingtalk-observer] .observer-task-overview { padding: 20px 0; }
       [data-dingtalk-observer] .observer-task-result { padding: 24px; }
       @media (max-width: 960px) {
-        [data-dingtalk-observer] .observer-task-step { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+        [data-dingtalk-observer] .observer-task-output-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
         [data-dingtalk-observer] .observer-task-overview { padding: 20px 0; }
         [data-dingtalk-observer] .observer-task-result { padding: 18px; }
         [data-dingtalk-observer] .observer-main { padding: 16px !important; }
@@ -370,11 +373,11 @@ window.__ModuleLoader__.load({
         }, () => { if (active) setError('产出暂时无法读取，请重试。') }).finally(() => { if (active) setLoading(false) })
         return () => { active = false }
       }, [taskId, node.runId, node.nodeRunId, node.outputRef, cursor, retry])
-      return React.createElement('div', { style: { minWidth: 0, fontSize: 14, lineHeight: 1.8 } },
-        text ? React.createElement('div', { style: { display: 'grid', gap: 20, overflowWrap: 'anywhere' } }, ...text.split('\n\n').map((part, index) => {
+      return React.createElement('div', { style: { minWidth: 0, fontSize: 13, lineHeight: 1.7 } },
+        text ? React.createElement('div', { style: { display: 'grid', gap: 6, overflowWrap: 'anywhere' } }, ...text.split('\n\n').map((part, index) => {
           const [heading, ...lines] = part.split('\n')
-          const titled = ['产出摘要', '正文', '任务要求', '发现', '限制与未确认事项', '执行范围', '相关文件', '已有文件', '新建文件'].includes(heading)
-          return React.createElement('div', { key: index }, titled ? React.createElement('strong', { style: { display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 600, color: colors.muted } }, heading) : null,
+          const titled = ['产出摘要', '正文', '任务要求', '发现', '限制与未确认事项', '执行范围', '相关文件', '已有文件', '新建文件', '材料正文', '已读取文件', '文件变更', '检查结果'].includes(heading)
+          return React.createElement('div', { key: index, className: titled ? 'observer-task-output-row' : undefined }, titled ? React.createElement('strong', { style: { fontSize: 12, fontWeight: 500, color: colors.muted } }, heading) : null,
             React.createElement('div', { style: { whiteSpace: 'pre-wrap' } }, titled ? lines.join('\n') : part))
         })) : null,
         loading ? React.createElement('span', { role: 'status', style: { color: colors.muted } }, '正在读取产出…') : null,
@@ -729,34 +732,36 @@ window.__ModuleLoader__.load({
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, fontSize: 12, color: colors.muted } },
           React.createElement('span', null, '任务看板 / 任务详情'),
           React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedWorkflowTaskId('') }, '返回看板')),
-        React.createElement('header', { className: 'observer-task-overview', style: { borderBottom: `1px solid ${colors.border}`, marginBottom: 28 } },
+        React.createElement('header', { className: 'observer-task-overview', style: { borderBottom: `1px solid ${colors.border}`, marginBottom: 16 } },
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12, fontSize: 12 } },
             React.createElement('span', { style: { ...pill(taskTone), fontWeight: 600 } }, taskStatus),
             React.createElement('span', { style: { color: colors.muted } }, `最近更新 ${fmt(selectedWorkflowTask.updatedAt)}`)),
-          React.createElement('h1', { style: { margin: 0, fontSize: 24, fontWeight: 650, lineHeight: 1.45, letterSpacing: '-.02em', maxWidth: 900 } }, selectedWorkflowTask.title || selectedWorkflowTask.objective),
-          React.createElement('div', { style: { marginTop: 24, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '12px 24px', fontSize: 12 } },
+          React.createElement('h1', { style: { margin: 0, fontSize: 22, fontWeight: 650, lineHeight: 1.45, letterSpacing: '-.02em', maxWidth: 900 } }, selectedWorkflowTask.title || selectedWorkflowTask.objective),
+          React.createElement('div', { style: { marginTop: 16, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '12px 24px', fontSize: 12 } },
             React.createElement('span', { style: { color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, taskNodes.length ? `已完成 ${completedSteps} / ${taskNodes.length} 个步骤` : '暂无步骤记录'),
-            taskNodes.length ? React.createElement('div', { 'aria-label': '步骤完成情况', style: { display: 'flex', gap: 4, flex: '0 1 200px', minWidth: 80 } }, ...taskNodes.map((node, index) => React.createElement('span', { key: index, title: `步骤 ${index + 1}：${nodeState[node.status] || '状态未记录'}`, style: { flex: 1, height: 4, borderRadius: 2, background: node.status === 'succeeded' ? stepColor(node.status) : node.status === 'running' ? colors.accent : colors.border } }))) : null,
             activeStep ? React.createElement('span', { style: { color: stepColor(activeStep.status) } }, `当前 · ${activeStep.title || nodeTitle[activeStep.nodeId] || '执行步骤'}`) : null)),
-        selectedWorkflowTask.objective && selectedWorkflowTask.objective !== selectedWorkflowTask.title ? React.createElement('p', { style: { margin: '0 0 24px', color: colors.muted, fontSize: 14, lineHeight: 1.7 } }, selectedWorkflowTask.objective) : null,
-        selectedWorkflowTask.waitingReason ? React.createElement('div', { role: 'status', style: { marginBottom: 24, padding: '14px 18px', borderLeft: `3px solid ${colors.warning}`, background: colors.surface2, fontSize: 14, lineHeight: 1.7 } }, selectedWorkflowTask.waitingReason) : null,
-        selectedWorkflowTask.plan?.stages?.length ? React.createElement('div', { 'aria-label': '任务阶段', style: { display: 'flex', flexWrap: 'wrap', gap: '8px 24px', marginBottom: 28, fontSize: 12, color: colors.muted } }, ...selectedWorkflowTask.plan.stages.map((stage, index) => React.createElement('span', { key: stage.stageId }, `${String(index + 1).padStart(2, '0')} · ${stage.title || '任务阶段'} · ${planStageState[stage.status] || '状态未记录'}`))) : null,
+        selectedWorkflowTask.objective && selectedWorkflowTask.objective !== selectedWorkflowTask.title ? React.createElement('p', { style: { margin: '0 0 16px', color: colors.muted, fontSize: 14, lineHeight: 1.7 } }, selectedWorkflowTask.objective) : null,
+        selectedWorkflowTask.waitingReason ? React.createElement('div', { role: 'status', style: { marginBottom: 16, padding: '14px 18px', borderLeft: `3px solid ${colors.warning}`, background: colors.surface2, fontSize: 14, lineHeight: 1.7 } }, selectedWorkflowTask.waitingReason) : null,
+        selectedWorkflowTask.plan?.stages?.length ? React.createElement('div', { 'aria-label': '任务阶段', style: { display: 'flex', flexWrap: 'wrap', gap: '8px 24px', marginBottom: 16, fontSize: 12, color: colors.muted } }, ...selectedWorkflowTask.plan.stages.map((stage, index) => React.createElement('span', { key: stage.stageId }, `${String(index + 1).padStart(2, '0')} · ${stage.title || '任务阶段'} · ${planStageState[stage.status] || '状态未记录'}`))) : null,
         React.createElement('section', { 'aria-label': '执行步骤' },
-          React.createElement('h2', { style: { margin: '0 0 16px', fontSize: 16, fontWeight: 650 } }, '执行步骤'),
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 12 } },
+            React.createElement('h2', { style: { margin: 0, fontSize: 16, fontWeight: 650 } }, '执行步骤'),
+            taskNodes.length ? React.createElement('span', { style: { fontSize: 12, color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, `步骤完成 ${Math.round(completedSteps / taskNodes.length * 100)}%`) : null),
+          taskNodes.length ? React.createElement('div', { role: 'progressbar', 'aria-label': '步骤完成情况', 'aria-valuemin': 0, 'aria-valuemax': taskNodes.length, 'aria-valuenow': completedSteps, style: { height: 3, background: colors.border, marginBottom: 24 } }, React.createElement('div', { style: { width: `${completedSteps / taskNodes.length * 100}%`, height: '100%', background: taskTone } })) : null,
           !taskNodes.length ? React.createElement('p', { style: { padding: '20px 0', color: colors.muted, fontSize: 14 } }, '暂无执行步骤记录') : null,
           React.createElement('ol', { style: { padding: 0, margin: 0, listStyle: 'none' } }, ...taskNodes.map((node, index) => {
             const tone = stepColor(node.status)
-            return React.createElement('li', { key: node.nodeRunId || `${node.nodeId}-${index}`, className: 'observer-task-step', 'aria-current': node.status === 'running' ? 'step' : undefined, style: { padding: '24px 0', borderTop: `1px solid ${colors.border}` } },
-              React.createElement('div', { style: { minWidth: 0, display: 'grid', gridTemplateColumns: '36px minmax(0, 1fr)', gap: 14, alignContent: 'start' } },
-                React.createElement('span', { 'aria-label': `步骤 ${index + 1}`, style: { display: 'grid', placeItems: 'center', width: 36, height: 36, borderRadius: '50%', background: colors.surface2, color: tone, fontSize: 13, fontWeight: 650, fontVariantNumeric: 'tabular-nums' } }, String(index + 1).padStart(2, '0')),
-                React.createElement('div', { style: { display: 'grid', gap: 8, minWidth: 0, alignContent: 'start', paddingTop: 6 } },
-                  React.createElement('strong', { style: { fontSize: 14, lineHeight: 1.5 } }, node.title || nodeTitle[node.nodeId] || '执行步骤'),
-                  React.createElement('span', { style: { color: tone, fontSize: 12 } }, nodeState[node.status] || '状态未记录'),
-                  node.sessionId ? React.createElement('button', { type: 'button', onClick: () => navigate(node.sessionId), style: { justifySelf: 'start', padding: 0, border: 0, color: colors.accent, background: 'transparent', font: 'inherit', fontSize: 12, cursor: 'pointer' } }, '查看会话记录') : null)),
-              React.createElement('div', { style: { minWidth: 0, paddingTop: 6 } },
-                React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', marginBottom: 16 } }, React.createElement(TaskStepElapsed, { node })),
-                node.waitReason?.reference ? React.createElement('p', { style: { margin: '0 0 12px', fontSize: 14, lineHeight: 1.7, color: colors.warning } }, node.waitReason.reference) : null,
-                node.outputRef ? React.createElement(TaskStepOutput, { key: `${node.nodeRunId}:${node.outputRef}`, taskId: selectedWorkflowTask.taskId, node }) : React.createElement('span', { style: { color: colors.muted, fontSize: 13 } }, ['pending', 'ready', 'blocked'].includes(node.status) ? '执行后将在这里展示产出' : '暂未记录产出')))
+            return React.createElement('li', { key: node.nodeRunId || `${node.nodeId}-${index}`, className: 'observer-task-step', 'aria-current': node.status === 'running' ? 'step' : undefined },
+              React.createElement('span', { 'aria-label': `步骤 ${index + 1}`, style: { display: 'grid', placeItems: 'center', width: 28, height: 28, boxSizing: 'border-box', borderRadius: '50%', border: `${node.status === 'running' ? 2 : 1}px solid ${tone}`, background: colors.surface, color: tone, fontSize: 12, fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, String(index + 1).padStart(2, '0')),
+              React.createElement('div', { style: { minWidth: 0 } },
+                React.createElement('div', { className: 'observer-task-step-heading' },
+                  React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '4px 10px' } },
+                    React.createElement('strong', { style: { fontSize: 14, lineHeight: 1.6 } }, node.title || nodeTitle[node.nodeId] || '执行步骤'),
+                    React.createElement('span', { style: { color: tone, fontSize: 12 } }, nodeState[node.status] || '状态未记录')),
+                  React.createElement('div', { style: { marginLeft: 'auto', textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, React.createElement(TaskStepElapsed, { node }))),
+                node.waitReason?.reference ? React.createElement('p', { style: { margin: '0 0 6px', fontSize: 13, lineHeight: 1.7, color: colors.warning } }, node.waitReason.reference) : null,
+                node.outputRef ? React.createElement(TaskStepOutput, { key: `${node.nodeRunId}:${node.outputRef}`, taskId: selectedWorkflowTask.taskId, node }) : React.createElement('span', { style: { color: colors.muted, fontSize: 13 } }, ['pending', 'ready', 'blocked'].includes(node.status) ? '执行后将在这里展示产出' : '暂未记录产出'),
+                node.sessionId ? React.createElement('button', { type: 'button', onClick: () => navigate(node.sessionId), style: { display: 'block', marginTop: 6, padding: 0, border: 0, color: colors.accent, background: 'transparent', font: 'inherit', fontSize: 12, cursor: 'pointer' } }, '查看会话记录') : null))
           }))),
         React.createElement('section', { 'aria-label': '最新产出', style: { marginTop: 24, padding: '24px 0', borderTop: `1px solid ${colors.border}` } },
           React.createElement('h2', { style: { margin: '0 0 12px', fontSize: 16, fontWeight: 650 } }, '最新产出'),

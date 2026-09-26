@@ -1836,6 +1836,10 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     for (const [label, values] of [['发现', output?.findings], ['限制与未确认事项', output?.limitations], ['执行范围', output?.constraints], ['相关文件', output?.paths], ['已有文件', output?.existingPaths], ['新建文件', output?.newPaths]]) {
       if (Array.isArray(values)) add(label, values.map(item => typeof item === 'string' ? item : item?.statement).filter(item => typeof item === 'string').join('\n'))
     }
+    if (Array.isArray(output?.materials)) add('材料正文', output.materials.map(item => item?.text).filter(item => typeof item === 'string').join('\n\n'))
+    if (Array.isArray(output?.files)) add('已读取文件', output.files.filter(item => typeof item?.path === 'string').map(item => `${item.path}${item.text === null ? '（尚不存在）' : ''}`).join('\n'))
+    if (Array.isArray(output?.changes)) add('文件变更', output.changes.filter(item => typeof item?.path === 'string').map(item => `${item.content === null ? '删除' : '写入'} ${item.path}`).join('\n'))
+    if (Array.isArray(output?.verification?.checks)) add('检查结果', output.verification.checks.filter(item => typeof item?.id === 'string' && typeof item.passed === 'boolean').map(item => `${item.id}：${item.passed ? '通过' : '未通过'}`).join('\n'))
     const text = sections.join('\n\n')
     if (offset > text.length || offset > 0 && /[\uDC00-\uDFFF]/u.test(text[offset] ?? '')) throw executionError('TASK_OUTPUT_CURSOR_INVALID')
     let end = Math.min(text.length, offset + limit)

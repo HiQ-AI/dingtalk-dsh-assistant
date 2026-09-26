@@ -173,3 +173,5 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 步骤产出与通栏排版更新也需安装两个插件。新增只读 `/state/tasks/{taskId}/runs/{runId}/nodes/{nodeRunId}/output?ref={outputRef}&cursor=0`，limit 默认 1200、上限 8000；仅返回业务 text、nextCursor、totalLength。服务端核对配置群、Task/Run/节点及输出引用；旧引用变更后拒绝继续分页。进入详情才读取，长文逐页追加，失败就地重试；原始工件对象不传给页面。在线回读既有节点正文与摘要一致，不为验收重跑业务任务。
 
 任务状态映射修复需打包 Assistant：对无 Owner 且计划已 succeeded 的记录，回读 `/state/tasks` 为 completed/succeeded，结果原文及信息局限保留。已有 Owner 的验收和 waiting_confirmation 仍保持原门禁。该修复只读展示，不修改持久任务、不重跑流程、不补发消息；部署前实例已停止时保留停机状态，安装包回读不等于在线验证。
+
+任务详情使用紧凑编号时间线：标题与耗时同排、产出按标签展开、进度条表示已完成步骤比例。节点产出补充材料正文、文件清单、变更和已记录检查结果；此次需同时安装 Assistant 与 Observer，沿用只读分页接口及既有备份/回读流程，无 schema 变更。
