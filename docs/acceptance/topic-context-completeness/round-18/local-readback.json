@@ -1,0 +1,36 @@
+{
+  "checkedAt": "2026-09-26T16:55:08.7324679+08:00",
+  "implementation": "3979501",
+  "listeners": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 53952
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 53952
+    }
+  ],
+  "health": "ok",
+  "recoveryIssueCount": 0,
+  "inboundProcessing": true,
+  "authenticatedWeb": 200,
+  "taskStates": [
+    {
+      "Name": "completed",
+      "Count": 73
+    }
+  ],
+  "packages": [
+    {
+      "name": "zzusp-dingtalk-dsh-assistant-0.5.15.tgz",
+      "bytes": 458092,
+      "sha256": "F8BED1FD3843CE48A05806129AF62A286857EBCB50C60FF6C927119A7A979CE6"
+    },
+    {
+      "name": "zzusp-dingtalk-dsh-observer-0.5.15.tgz",
+      "bytes": 30570,
+      "sha256": "98C65EC837A68F74018F255DE39023A22A130CB45E45AF541D92CCA94BFDF4DE"
+    }
+  ]
+}

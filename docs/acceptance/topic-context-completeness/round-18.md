@@ -31,3 +31,11 @@ node docs/acceptance/topic-context-completeness/scripts/audit-task-node-outputs.
 ```
 
 最终六文件组合重跑：131 PASS、0 FAIL、0 skipped（82 秒），含文档跨群、跨任务和错误引用拒绝反例。日志 docs/tmp/deliverable-final-tests.log。
+
+## 本地部署与在线回读
+
+实现提交 3979501 两个唯一 tgz 已安装；83 个 JS/YML 文件与源码一致、profile patch 未变。备份包含 395 文件、477004485 字节，稳定存储只读校验 ok、invalidRecords=0、strippedFields=0。
+
+新 PID 53952 同时监听 3080/18998；health=ok、恢复问题0、入站开启、认证 Web 200，73 个任务仍为 completed。37 个真实工件、20 类节点逐页回读全部与投影一致；有文档的节点额外下载完整内容并比较，见 round-18/live-audit.json。原工作目录实际存在，git-common-dir 为 .git，与独立 Git 仓库描述一致。
+
+新 v9 在隔离工程链实跑；真实历史任务保持原执行定义，未重放产生新的模型方案、修改、提交或钉钉消息。截图为隔离夹具，线上证据为只读接口及安装/进程回读；不声称真实模型方案质量或业务修复已验收。
