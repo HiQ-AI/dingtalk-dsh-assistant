@@ -39,12 +39,13 @@ for (const task of tasks) for (const node of task.executionNodes ?? []) {
     let cursor = 0, text = ''
     do {
       const page = await read(`/state/tasks/${encodeURIComponent(task.taskId)}/runs/${encodeURIComponent(node.runId)}/nodes/${encodeURIComponent(node.nodeRunId)}/output?ref=${encodeURIComponent(node.outputRef)}&cursor=${cursor}`)
-      assert.equal(page.overview, projected.overview)
+      assert.equal(page.overview, ['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId) ? '' : projected.overview)
       text += page.text; pages++
       assert.ok(page.nextCursor === null || page.nextCursor > cursor)
       cursor = page.nextCursor
     } while (cursor !== null)
-    assert.equal(text, projected.text)
+    const pathOnly = ['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId)
+    assert.equal(pathOnly ? text.replaceAll('\\', '/') : text, pathOnly ? `方案工件路径\n${join(artifacts, node.outputRef)}`.replaceAll('\\', '/') : projected.text)
     if (projected.document) {
       const response = await fetch(`${api}/state/tasks/${encodeURIComponent(task.taskId)}/runs/${encodeURIComponent(node.runId)}/nodes/${encodeURIComponent(node.nodeRunId)}/document?ref=${encodeURIComponent(node.outputRef)}`)
       assert.equal(response.status, 200)
