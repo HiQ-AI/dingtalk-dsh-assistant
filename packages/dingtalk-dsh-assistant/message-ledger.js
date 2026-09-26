@@ -416,8 +416,37 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     revoke(db,r)
     for(const request of rows(db,r.runId,'request').filter(item=>item.status==='pending')){request.status='superseded';request.reason='clarification_answer_reconciled';put(db,r.runId,'request',request)}
     for(const notice of rows(db,r.runId,'notification').filter(item=>item.status==='prepared')){notice.status='superseded';notice.supersededAt=now;put(db,r.runId,'notification',notice)}
-    r.status='superseded';r.reason='clarification_answer_reconciled';save(db,r)
+    for(const barrier of rows(db,r.runId,'barrier').filter(item=>item.status==='pending')){
+      barrier.status='resolved';barrier.resolution='clarification_answer_reconciled';put(db,r.runId,'barrier',barrier)
+    }
+    r.status='superseded';r.reason='clarification_answer_reconciled';r.routingStatus='routing_complete';r.intentStatus='processed';save(db,r)
     return {result:{run:r}}
+  }
+  if(kind==='message.clarification.reconcile') {
+    const r=run(db,a.runId),target=run(db,a.targetRunId),q=get(db,'request',a.requestId)
+    if(r.status!=='superseded'||r.reason!=='clarification_answer_reconciled'
+      ||q.runId!==target.runId||q.kind!=='needs_clarification'||q.status!=='resolved'
+      ||q.eventId!==r.sourceKey||r.conversationId!==target.conversationId
+      ||db.prepare('SELECT current_version FROM message_sources WHERE source_key=?').get(r.sourceKey)?.current_version!==r.sourceVersion)
+      fail('MESSAGE_CLARIFICATION_RECONCILE_FORBIDDEN')
+    const notices=rows(db,target.runId,'notification').filter(item=>item.requestId===q.id
+      && item.status==='delivered' && item.evidence?.messageId
+      && r.context?.quoteRefs?.some(ref=>ref.messageId===item.evidence.messageId))
+    if(notices.length!==1)fail('MESSAGE_CLARIFICATION_RECONCILE_PROOF_MISSING')
+    const topics=db.prepare(`SELECT DISTINCT b.topic_id FROM message_topic_bindings b
+      JOIN message_topics t ON t.topic_id=b.topic_id WHERE b.run_id=?
+      AND (?='$' OR b.unit_id=?) AND t.conversation_id=?`).all(target.runId,q.unitId,q.unitId,r.conversationId)
+    if(topics.length!==1)fail('MESSAGE_CLARIFICATION_TOPIC_NOT_UNIQUE')
+    const unitId=`clarification:${r.runId}`
+    const bound=db.prepare('SELECT topic_id FROM message_topic_bindings WHERE unit_id=?').get(unitId)
+    if(bound&&bound.topic_id!==topics[0].topic_id)fail('MESSAGE_CLARIFICATION_TOPIC_CONFLICT')
+    if(!bound)db.prepare('INSERT INTO message_topic_bindings VALUES(?,?,?,?,?)')
+      .run(unitId,r.runId,topics[0].topic_id,r.sourceKey,r.sourceVersion)
+    for(const barrier of rows(db,r.runId,'barrier').filter(item=>item.status==='pending')){
+      barrier.status='resolved';barrier.resolution='clarification_answer_reconciled';put(db,r.runId,'barrier',barrier)
+    }
+    r.routingStatus='routing_complete';r.intentStatus='processed';r.foldedIntoRunId=target.runId;save(db,r)
+    return {result:{run:r,topicId:topics[0].topic_id,bound:!bound}}
   }
   const r=run(db,a.runId);current(db,r,a.expectedRevision)
   if(kind==='message.quiet') {
@@ -635,6 +664,29 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   fail('MESSAGE_UNKNOWN_COMMAND')
 }
 export function queryMessages(db,a) {
+  if(a.kind==='message.clarifications.unlinked') {
+    const limit=a.limit??100
+    if(!Number.isSafeInteger(limit)||limit<1||limit>200)fail('MESSAGE_INVALID_LIMIT')
+    return db.prepare(`SELECT answer.run_id AS run_id,target.run_id AS target_run_id,
+      json_extract(request.body,'$.id') AS request_id
+      FROM message_runs answer
+      JOIN message_items request ON request.kind='request'
+        AND json_extract(request.body,'$.kind')='needs_clarification'
+        AND json_extract(request.body,'$.status')='resolved'
+        AND json_extract(request.body,'$.eventId')=answer.source_key
+      JOIN message_runs target ON target.run_id=request.run_id
+      JOIN message_topic_bindings binding ON binding.run_id=target.run_id
+        AND (json_extract(request.body,'$.unitId')='$'
+          OR binding.unit_id=json_extract(request.body,'$.unitId'))
+      WHERE json_extract(answer.body,'$.status')='superseded'
+        AND json_extract(answer.body,'$.reason')='clarification_answer_reconciled'
+        AND json_extract(answer.body,'$.conversationId')=json_extract(target.body,'$.conversationId')
+        AND NOT EXISTS(SELECT 1 FROM message_topic_bindings linked WHERE linked.run_id=answer.run_id)
+      GROUP BY answer.run_id,target.run_id,request.item_id
+      HAVING COUNT(DISTINCT binding.topic_id)=1
+      ORDER BY answer.rowid LIMIT ?`).all(limit)
+      .map(row=>({runId:row.run_id,targetRunId:row.target_run_id,requestId:row.request_id}))
+  }
   if(a.kind==='message.notification'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification:'+str(a.notificationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationOperation'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-operation:'+str(a.operationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationReplacement'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-replacement:'+str(a.replacementId));return row?JSON.parse(row.body):null}

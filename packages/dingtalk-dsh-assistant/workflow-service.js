@@ -1481,6 +1481,18 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     }))
   }
   let messageRecoveryFlight, taskRecoveryFlight, taskRecoveryCursor
+  async function reconcileFoldedAnswers() {
+    const failures = []
+    for (const answer of await store.query({ kind: 'message.clarifications.unlinked', limit: 100 })) {
+      try {
+        await store.command({ id: `clarification-link:${answer.runId}:${answer.requestId}`,
+          kind: 'message.clarification.reconcile', args: answer })
+      } catch (error) {
+        failures.push({ scope: 'clarification-link', runId: answer.runId, code: error.code ?? error.message })
+      }
+    }
+    return failures
+  }
   async function recoverTasks() {
     const failures = []
     for(const event of await store.query({kind:'message.web-tasks.pending'}))try{await executeWebEvent(event)}catch(error){failures.push({scope:'web-task',eventId:event.id,code:error.code??error.message})}
@@ -1528,10 +1540,11 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       messageRecoveryFlight ??= messages.recover().finally(() => { messageRecoveryFlight = undefined }),
       recoverExecutionTasks(),
       notifier.flush(),
+      reconcileFoldedAnswers(),
     ])
     const failures = results.flatMap((result, index) => result.status === 'rejected'
-      ? [{ scope: ['messages', 'tasks', 'notifications'][index], code: result.reason.code ?? result.reason.message }]
-      : index === 1 ? result.value : [])
+      ? [{ scope: ['messages', 'tasks', 'notifications', 'clarification-link'][index], code: result.reason.code ?? result.reason.message }]
+      : index === 1 || index === 3 ? result.value : [])
     return { failures }
   }
   function recoverExecutionTasks() {

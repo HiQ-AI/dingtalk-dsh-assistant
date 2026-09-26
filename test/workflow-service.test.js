@@ -760,12 +760,22 @@ test('本人可答复他人旧排查澄清，其他群成员不能冒用且不�
   assert.equal((await service.state(received.runId)).requests[0].status,'pending')
   const answer='修复并验证，完成后发uat提测'
   const eventId=`dws:${executionDigest(['','g','owner-reply'])}`
-  await execution.store.command({id:'old-misrouted-answer',kind:'message.receive',args:{runId:'old-misrouted-answer',sourceKey:eventId,sourceVersion:1,conversationId:'g',actorId:'owner',body:answer,context:{sourceMessageId:'owner-reply',quoteRefs:[{sourceKey:'quote',messageId:'clarify-sent'}]}}})
+  const originalSource=(await service.state(received.runId)).run.sourceKey
+  await execution.store.command({id:'old-misrouted-answer',kind:'message.receive',args:{runId:'old-misrouted-answer',sourceKey:eventId,sourceVersion:1,conversationId:'g',actorId:'owner',body:answer,
+    barriers:[{barrierId:'fold-answer-fence',targetSourceKey:originalSource}],
+    context:{sourceMessageId:'owner-reply',quoteRefs:[{sourceKey:'quote',messageId:'clarify-sent'}]}}})
   const accepted=await service.ingest({...message,messageId:'owner-reply',senderOpenDingTalkId:'owner',text:'修复并验证，完成后发uat提测',quotedMessage:{messageId:'clarify-sent'}})
   assert.equal(accepted.status,'resolved')
   assert.equal((await service.state('old-misrouted-answer')).run.status,'superseded')
+  assert.equal((await execution.store.query({kind:'message.clarifications.unlinked'})).length,1)
   await service.recover()
   assert.equal((await execution.store.query({kind:'run.list'})).length,1)
+  assert.deepEqual(await execution.store.query({kind:'message.clarifications.unlinked'}),[])
+  const folded=await service.state('old-misrouted-answer')
+  assert.equal(folded.barriers[0].status,'resolved')
+  const origin=await service.state(received.runId)
+  assert.deepEqual((await execution.store.query({kind:'message.topic.source',sourceKey:eventId}))
+    .map(topic=>topic.topicId),[origin.units[0].topicId])
 })
 
 test('明确问小小鹏审核问题是否部署时即使I误判无动作也回读群任务',async t=>{
