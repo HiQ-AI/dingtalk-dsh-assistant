@@ -318,7 +318,7 @@ journal 已 sealed 后不得直接删 journal 或恢复旧快照来“回滚”�
 
 检查节点取消/超时须等待前台进程树退出。Host异常退出后的未排空外部检查保留 `EXECUTOR_DRAIN_EVIDENCE_REQUIRED` 屏障；SQLite独占锁不是旧子进程退出证明，禁止手改drained放行。
 
-Web 操作验收需使用配置明确映射的 `workflow.webActorId`。新任务取消/补充走同库 Web 事件与 Controller，不依赖旧 Topic；验证重复 requestId、跨站 Origin、伪造 actor、陈旧版本及暂停补充反例。归档/改名/重开尚未实现，返回明确冲突，不转发旧引擎。持久 Web 事件准备后中断由服务恢复接纳；输入接纳前后不得改写 Task 执行基线字段。
+Web 操作验收需使用配置明确映射的 `workflow.webActorId`。新任务取消/补充走同库 Web 事件与 Controller，不依赖旧 Topic；验证重复 requestId、跨站 Origin、伪造 actor、陈旧版本及暂停补充反例。Web 补充以 Task 要求版本校验，原子写入新版要求与 Owner 事件；运行中的旧 Run 输入保持冻结，Owner 根据新要求决定后续阶段。归档/改名/重开尚未实现，返回明确冲突，不转发旧引擎。持久 Web 事件准备后中断由服务恢复接纳，重复 requestId 不重复递增要求版本。
 
 ## 10. 话题批量意图与业务 Task 计划升级
 
@@ -349,7 +349,7 @@ node scripts/migrate-task-owner-store.mjs --execute $controlDb
 
 若检查输出有未确认外部效果或待审批记录，先逐项核对；迁移不会把它们视为已成功。v3 启动后先回读 `PRAGMA user_version`、`execution_meta.schema_version`、Task 数量与备份，定向验证同一 Task 的会话恢复、补充意图、暂停取消、后续阶段与最终报告，再开放群入站。只读 `--check` 针对 v2，成功迁移后再调用会因来源版本不符而拒绝，不能用其代替 v3 回读。
 
-当前 Task Owner 独占编排要求 schema v4。已有 v3 实例须停掉所有控制库写者并保留数据库与工件备份，先只读检查未来阶段定义、未终态 Run、未知效果、审批和通知账；`--check` 不写库。执行后核对脚本输出的备份路径、`schemaReadback:4`、原 Task/Run/效果/通知计数与摘要，以及零阶段 Task 的恢复状态。不可仅换回 v3 程序继续写已升级的库。
+当前 Task Owner 独占编排要求 schema v4。已有 v3 实例须停掉所有控制库写者并保留数据库与工件备份，先只读检查未来阶段定义、未终态 Run、未知效果、审批和通知账；`--check` 不写库。执行后核对脚本输出的备份路径、`schemaReadback:4`、原 Task/Run/效果/通知计数与摘要，以及零阶段 Task 的恢复状态。v3 迁移留下的空 `requirement_ref` 在旧任务恢复或续办时，从原任务命令和首阶段材料重建要求，原子绑定要求及 Owner 事件；来源缺失、已替换或版本漂移时明确报错，不伪造目标。不可仅换回 v3 程序继续写已升级的库。
 
 ```powershell
 node scripts/migrate-task-workflow-v4.mjs --check $controlDb
@@ -358,13 +358,14 @@ node scripts/migrate-task-workflow-v4.mjs --execute $controlDb
 
 默认日常流程只读已授权话题来源及本任务前序产物，并可按当前原文生成可回读的 Markdown 摘录。Resident 可由受信插件提供 `dingtalkTaskGeneralCapabilities` 数组；每项需有固定 `id/identity/description/effectClass`（当前仅接纳 `effectClass: 'read'`）及 `authorize/execute/verify`，其中 `verify` 必须回读结果并返回 `passed:true`、实际 `outputDigest` 和非空 `sourceRefs`。对非默认纯原文整理目标，还须同时提供 `dingtalkTaskGeneralCompletionCheck` 与 `dingtalkTaskGeneralCompletionIdentity`，验收器逐项核对 acceptanceCriteria 与证据后返回 `status:'satisfied'`、`resultVerified:true` 和相同顺序的 `criteria`。未配齐时流程显示证据不足，不把读取聊天误当作数据库调查或外部处理。
 
-UAT PR 合并是单独的受控步骤 `task-uat-pr-merge`。受信 Host 需配置 `workflow.trustedPlatforms.uatMerge.targets`，每个目标绑定 `targetId` 和非空 `requiredChecks`；只有对应 GitHub 检查真实通过、PR/head/目标精确匹配、Assistant 真人审批绑定本次合并、写端口 `uatMergeWritesEnabled` 已启用时才能发一次合并请求。超时或回执丢失只读对账原 PR，不再发送第二次。合并 Run 的 merge SHA/Git tree 作为后续独立 `task-uat-deployment` 的来源；无明确检查策略或未开写端口时目录保持不可发起，不以无检查的 PR 冒充合格来源。
+UAT PR 合并是单独的受控步骤 `task-uat-pr-merge`。受信 Host 需配置 `workflow.trustedPlatforms.uatMerge.targets`，每个目标绑定 `targetId` 和非空 `requiredChecks`；对应 GitHub 检查真实通过、PR/head/目标精确匹配、写端口 `uatMergeWritesEnabled` 已启用时才能发一次合并请求，无需真人审批。超时或回执丢失只读对账原 PR，不再发送第二次。合并 Run 的 merge SHA/Git tree 作为后续独立 `task-uat-deployment` 的来源；无明确检查策略或未开写端口时目录保持不可发起，不以无检查的 PR 冒充合格来源。
 
 受信 Host 如需读取本地文件，可在 `workflow.generalFileRead` 配置绝对 `root` 和显式相对路径 `readablePaths`，例如 `{ root: 'D:/approved-workspace', readablePaths: ['notes/incident.md'] }`。运行时只把清单放入该 Task 的 `scope.readableFiles`，每次读取前 `realpath` 校验目标仍在 root 内，最大 12 KiB 且必须为 UTF-8；`verify` 独立重新打开同一文件核对内容摘要。未配置则没有文件读取能力。默认 Markdown 文件产出使用受信的 Task 输出目录和效果账，按 Task 生成固定文件名，写后独立读取并核对摘要；不接受消息指定任意路径，也不覆盖冲突文件。新 Task 与 Owner 先原子创建，初始零业务阶段；Owner 依据目标和受信能力目录决定是否初始化、追加或替换未执行后缀。`task-general-capability` 可被任何 Task 使用，专业 Run 也可交接其产物；旧 `task-general-intake`、`task-general` 不在新注册与目录中，只有实际被未终态历史 Run 引用时才恢复。历史 `task-general` 的候选能力必须保持只读，不得把新增 `file.write` 传给旧定义，否则启动会报 `GENERAL_CAPABILITY_INVALID`。缺少能力或整体验收证据时保持待处理或阻塞。文件读取的 root 及其父目录必须由受信 Host 控制；不能将消息发送人可任意改写的目录作为授权根。
 
 `read-task-message-resource` 仅对同时提供 DWS 精确消息回读与资源读取的 Host 可用：输入当前 Task 冻结的 `sourceKey`、附件 `type`（`mediaId` 或 `fileId`）及 `resourceId`，受信代码核对来源版本、原消息 ID、群 ID、正文和附件引用，再读取最多 12 KiB UTF-8 文本，独立重复回读一致后输出带来源键与内容摘要的 Markdown。任意 URL、未列入当前消息引用的附件、跨群消息及图片/二进制资源均拒绝；平台不返回完整资源引用或正文变化时明确阻塞。
 
 Task Owner 的单次输入若超过 128 KiB，会把当前事件按不超过 24 KiB 的内容地址页交给原生 `task_owner_read_events` 工具；Owner 必须读完全部事件页才能提交决定。页面过多或单条事件超出容量会明确阻塞，保留原 Task/事件水位供扩容与恢复，不截断消息后继续派发。
+Owner 可用 `task_owner_read_artifact` 按引用读取当前 Task 已成功阶段的产物正文及证据，不能读取其它任务的任意工件。专业阶段含未解决的 `limitations`，或分析阶段无来源证据时，Host 拒绝整体完成；阶段成功与整体目标完成分别记录。
 
 工作流定义摘要先将受信函数源码的换行符归一为 LF；恢复时仅接受同一定义的旧原始换行摘要，并继续以旧摘要处理既有 Run/阶段。安装包必须与源文件逐项核对 SHA256，且在新进程中核对关键定义摘要；摘要兼容不等于允许实际实现变更绕过版本漂移检查。
 

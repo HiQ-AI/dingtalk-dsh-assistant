@@ -577,6 +577,19 @@ function command(value) {
       reduceTaskOwnerCommand(db, { kind: 'task.owner.init', args: { taskId, sessionId, criteria, sourceKey } }, context(value.id, now))
       const event = reduceTaskOwnerCommand(db, { kind: 'task.owner.event', args: { taskId, eventKey, eventType: 'task.created', payloadRef: requirementRef } }, context(value.id, now))
       combined = { ...created, ownerSessionId: sessionId, eventSeq: event.eventSeq }
+    } else if (value.kind === 'task.requirement.bind-legacy') {
+      object(value.args, ['taskId', 'expectedRequirementRevision', 'requirementRef',
+        'sessionId', 'criteria', 'sourceKey', 'eventKey'])
+      const { taskId, expectedRequirementRevision, requirementRef, sessionId, criteria,
+        sourceKey, eventKey } = value.args
+      const bound = reduceTaskPlanCommand(db, { kind: 'task.requirement.bind-legacy', args: {
+        taskId, expectedRequirementRevision, requirementRef } }, context(value.id, now))
+      if (!db.prepare('SELECT 1 FROM task_owners WHERE task_id=?').get(taskId))
+        reduceTaskOwnerCommand(db, { kind: 'task.owner.init', args: {
+          taskId, sessionId, criteria, sourceKey } }, context(value.id, now))
+      const event = reduceTaskOwnerCommand(db, { kind: 'task.owner.event', args: {
+        taskId, eventKey, eventType: 'task.recovered', payloadRef: requirementRef } }, context(value.id, now))
+      combined = { ...bound, eventSeq: event.eventSeq }
     } else if (value.kind === 'task.requirement.update') {
       object(value.args, ['taskId', 'expectedRequirementRevision', 'requirementRef', 'eventKey', 'payloadRef'],
         ['taskId', 'expectedRequirementRevision', 'requirementRef', 'eventKey'])

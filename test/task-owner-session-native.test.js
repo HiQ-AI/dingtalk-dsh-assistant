@@ -18,7 +18,7 @@ const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-lo
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
 
-async function host(root, pageRef = null) {
+async function host(root, pageRef = null, artifactRef = null) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
@@ -31,8 +31,10 @@ async function host(root, pageRef = null) {
     async *stream(options) {
       requests.push(options)
       const id = `call-${requests.length}`, name = pageRef && requests.length === 1
-        ? 'task_owner_read_events' : 'task_owner_submit'
-      const args = JSON.stringify(name === 'task_owner_read_events' ? { pageRef } : { decision })
+        ? 'task_owner_read_events' : artifactRef && requests.length === 1
+          ? 'task_owner_read_artifact' : 'task_owner_submit'
+      const args = JSON.stringify(name === 'task_owner_read_events' ? { pageRef }
+        : name === 'task_owner_read_artifact' ? { artifactRef } : { decision })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } }
@@ -85,6 +87,25 @@ test('原生Owner会话必须读取积压事件页后才能提交候选', async 
   assert.deepEqual(read, [pageRef])
   assert.deepEqual(h.requests.map(request => request.tools.map(tool => tool.name)), [
     ['task_owner_read_events', 'task_owner_submit'], ['task_owner_read_events', 'task_owner_submit']])
+})
+
+test('Owner 仅能读取当前 Task 已成功阶段的产物正文', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'task-owner-artifact-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const artifactRef = `sha256-${'b'.repeat(64)}.json`
+  const h = await host(root, null, artifactRef)
+  t.after(() => h.close())
+  const read = []
+  const result = await h.sessions.run({ binding: { taskId: 'task-1', sessionId: 'artifact-session',
+    turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+  input: { taskId: 'task-1', stageArtifacts: [{ stageId: 'stage-1', outputRef: artifactRef,
+    evidenceRefs: [] }] }, provider: 'owner-fixture', model: 'scripted',
+  onSessionBound: async () => {}, readArtifact: async ref => {
+    read.push(ref); return { summary: '发现原因', limitations: [] }
+  }, onCandidate: async value => assert.deepEqual(value, decision) })
+  assert.equal(result.status, 'submitted')
+  assert.deepEqual(read, [artifactRef])
+  assert.ok(h.requests.every(request => request.tools.some(tool => tool.name === 'task_owner_read_artifact')))
 })
 
 test('已绑定的负责人会话缺失时拒绝另建会话', async t => {

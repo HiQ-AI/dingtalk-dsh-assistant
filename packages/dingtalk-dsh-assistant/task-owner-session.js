@@ -84,12 +84,13 @@ export function createTaskOwnerSessions({ ctx, isCurrent }) {
     })()
   }
 
-  function setup(entry, onCandidate, readPage) {
+  function setup(entry, onCandidate, readPage, readArtifact) {
     return agentCtx => {
-      agentCtx.systemPrompt.section({ name: 'task:owner', order: 0, complete: true, text: `你负责一个业务任务。阅读 goal 中的目标、explicitStages、授权、验收项、已执行成果和事件；workflowCatalog 与 capabilities 是 Host 给出的实际可用目录。若输入含 eventPages，先逐个调用 task_owner_read_events 读取全部页面，再提交决定；未读完不能提交。计划尚未建立时用 planChange.kind=initialize 提出首批阶段；以后按事实用 append 或 replaceSuffix 调整，replaceSuffix 必须提供 affectedFrom。用户只要求排查时不要自行安排开发或部署。用户的明确阶段顺序和授权范围高于你的建议；你提出计划不构成写入、合并、部署或审批的授权。complete 必须对每个 acceptanceItem 提交 satisfied 的 assessments，并引用真实阶段证据；阶段成功不代表整体目标完成。日常能力从 capabilities 中选择真实可用项，作为 task-general-capability 阶段并给出 capabilityStep；Host 冻结范围并核验执行结果。缺能力时 block，不能虚构已执行。仅报告语言改变时保留已核验业务产物，按事件要求的语言改写 summary，不追加流程。最后仅调用 ${SUBMIT}。` })
+      agentCtx.systemPrompt.section({ name: 'task:owner', order: 0, complete: true, text: `你负责一个业务任务。阅读 goal 中的目标、explicitStages、授权、验收项、已执行成果和事件；workflowCatalog 与 capabilities 是 Host 给出的实际可用目录。若输入含 eventPages，先逐个调用 task_owner_read_events 读取全部页面，再提交决定；未读完不能提交。stageArtifacts 列出已成功阶段的产物引用，判断结果和目标是否完成前，调用 task_owner_read_artifact 阅读相关产物正文与局限。计划尚未建立时用 planChange.kind=initialize 提出首批阶段；以后按事实用 append 或 replaceSuffix 调整，replaceSuffix 必须提供 affectedFrom。用户只要求排查时不要自行安排开发或部署。用户的明确阶段顺序和授权范围高于你的建议；你提出计划不构成写入、合并、部署或审批的授权。complete 必须对每个 acceptanceItem 提交 satisfied 的 assessments，并引用真实阶段证据；阶段成功不代表整体目标完成。日常能力从 capabilities 中选择真实可用项，作为 task-general-capability 阶段并给出 capabilityStep；Host 冻结范围并核验执行结果。缺能力时 block，不能虚构已执行。仅报告语言改变时保留已核验业务产物，按事件要求的语言改写 summary，不追加流程。最后仅调用 ${SUBMIT}。` })
       agentCtx.tools.restrict({ allow: [] })
       agentCtx.tools.guard(exec => {
-        if (exec.name !== SUBMIT && exec.name !== 'task_owner_read_events') return 'task_owner_tool_not_allowed'
+        if (exec.name !== SUBMIT && exec.name !== 'task_owner_read_events'
+          && exec.name !== 'task_owner_read_artifact') return 'task_owner_tool_not_allowed'
         if (exec.name === SUBMIT && entry.unreadPages.size) return 'task_owner_events_unread'
         if (closed || entry.cancelled || entry.stale || entry.attempted) return 'task_owner_turn_stopped'
       })
@@ -147,13 +148,31 @@ export function createTaskOwnerSessions({ ctx, isCurrent }) {
           return { page: JSON.stringify(page) }
         },
       })
+      if (entry.readableArtifacts.size) agentCtx.tools.register({
+        name: 'task_owner_read_artifact',
+        description: '读取本任务已成功阶段的真实产物或证据正文。',
+        parameters: { type: 'object', properties: { artifactRef: { type: 'string' } },
+          required: ['artifactRef'], additionalProperties: false },
+        output: { schema: { type: 'object', properties: { artifact: { type: 'string' } },
+          required: ['artifact'], additionalProperties: false },
+          render: (_args, value) => [{ type: 'text', text: value.artifact }] },
+        async execute({ artifactRef }, exec) {
+          if (!await current(entry) || !entry.readableArtifacts.has(artifactRef)) throw fail('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
+          exec.signal.throwIfAborted()
+          const artifact = JSON.stringify(await readArtifact(artifactRef))
+          if (Buffer.byteLength(artifact, 'utf8') > 64 * 1024) throw fail('TASK_OWNER_ARTIFACT_CAPACITY')
+          return { artifact }
+        },
+      })
     }
   }
 
-  async function run({ binding, input, provider, model, reasoningEffort, onSessionBound, onCandidate, readPage, timeoutMs = 120000 }) {
+  async function run({ binding, input, provider, model, reasoningEffort, onSessionBound, onCandidate,
+    readPage, readArtifact, timeoutMs = 120000 }) {
     assertBinding(binding)
     if (!provider || !model || typeof onSessionBound !== 'function' || typeof onCandidate !== 'function'
       || input?.eventPages?.length && typeof readPage !== 'function'
+      || input?.stageArtifacts?.length && typeof readArtifact !== 'function'
       || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 2147483647) throw fail('TASK_OWNER_RUN_INVALID')
     if (closed) throw fail('TASK_OWNER_CLOSED')
     if (entries.has(binding.taskId)) throw notDrained('TASK_OWNER_BUSY')
@@ -161,6 +180,8 @@ export function createTaskOwnerSessions({ ctx, isCurrent }) {
     const entry = { binding, cancelled: false, stale: false, attempted: false, accepted: false, steps: 0,
       maxSteps: input.eventPages?.length ? 64 : 8,
       unreadPages: new Set((input.eventPages ?? []).map(page => page.ref)),
+      readableArtifacts: new Set((input.stageArtifacts ?? []).flatMap(stage =>
+        [stage.outputRef, ...(stage.evidenceRefs ?? [])])),
       abort: new AbortController(), drained: Promise.withResolvers() }
     entries.set(binding.taskId, entry)
     entry.timer = setTimeout(() => {
@@ -179,7 +200,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent }) {
       if (stored) validateHistory(stored.events, binding)
       if (!await current(entry)) return { status: 'stale' }
       const options = { agentOptions: { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
-        setup: setup(entry, onCandidate, readPage), signal: entry.abort.signal }
+        setup: setup(entry, onCandidate, readPage, readArtifact), signal: entry.abort.signal }
       entry.handle = stored ? await ctx.agents.resume({ ...options, resumeSessionId: binding.sessionId })
         : await ctx.agents.create({ ...options, sessionId: binding.sessionId, seed: [{ type: IDENTITY_EVENT,
           seq: 0, time: Date.now(), ignorable: true,

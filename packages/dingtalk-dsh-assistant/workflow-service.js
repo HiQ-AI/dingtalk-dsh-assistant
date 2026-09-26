@@ -573,8 +573,43 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const plan = await controller.taskPlan(taskId)
     return { taskId, runId: plan.stages[0]?.runId ?? null, planningError }
   }
+  async function ensureLegacyTaskRequirement(taskId) {
+    const plan = await controller.taskPlan(taskId)
+    if (!plan || plan.task.requirementRef) return plan
+    const origin = await store.query({ kind: 'message.task', taskId })
+    if (!origin?.command?.args?.arguments?.objective) throw executionError('TASK_REQUIREMENT_LEGACY_SOURCE_MISSING')
+    const args = origin.command.args, sourceKey = origin.run.sourceKey
+    const source = await store.query({ kind: 'message.source', sourceKey })
+    if (!source || source.status === 'superseded'
+      || source.sourceVersion !== origin.run.sourceVersion)
+      throw executionError('TASK_REQUIREMENT_LEGACY_SOURCE_CHANGED')
+    const first = plan.stages[0]?.requirementRef
+      ? await artifacts.read(plan.stages[0].requirementRef) : null
+    const objective = args.arguments.objective
+    const requirement = { request: objective, objective,
+      acceptanceCriteria: args.arguments.acceptanceCriteria ?? [objective],
+      constraints: args.constraints ?? first?.constraints ?? [],
+      explicitStages: args.arguments.explicitStages ?? [],
+      materials: first?.materials ?? [],
+      target: Object.fromEntries(['repositoryId', 'targetId', 'commitSha', 'releaseTag',
+        'changeRef', 'pullRequestNumber', 'headCommitSha']
+        .filter(key => args.arguments[key] !== undefined).map(key => [key, args.arguments[key]])),
+      scope: { conversationId: origin.run.conversationId, sourceKeys: [sourceKey],
+        sourceVersions: { [sourceKey]: origin.run.sourceVersion },
+        readableFiles, writeMarkdown: false },
+      authorization: { actorId: origin.run.actorId, sourceKey,
+        sourceVersion: origin.run.sourceVersion, commandId: origin.commandId } }
+    const saved = await artifacts.put(requirement)
+    await store.command({ id: `task-legacy-bind:${taskId}`, kind: 'task.requirement.bind-legacy', args: {
+      taskId, expectedRequirementRevision: plan.task.requirementRevision, requirementRef: saved.ref,
+      sessionId: `owner-${executionDigest(taskId).slice(0, 40)}`,
+      criteria: requirement.acceptanceCriteria, sourceKey,
+      eventKey: `task-legacy-recovered:${taskId}` } })
+    return controller.taskPlan(taskId)
+  }
   async function advanceBusinessTask(taskId, continuation) {
-    let plan = await controller.advanceTaskPlan(taskId)
+    let plan = await ensureLegacyTaskRequirement(taskId)
+    plan = await controller.advanceTaskPlan(taskId)
     const currentIndex = plan.stages.findIndex(stage => !['succeeded', 'invalidated'].includes(stage.status))
     const current = plan.stages[currentIndex]
     const predecessorOutputRef = plan.stages[currentIndex - 1]?.outputRef ?? null
@@ -697,9 +732,21 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         evidenceId: stage.outputRef, ...(await artifacts.read(stage.outputRef)),
       })))
       if (!plan.stages.every(stage => stage.status === 'succeeded')) return false
-      if (plan.stages.some(stage => stage.workflowId !== 'task-general-capability'))
-        return decision.evidenceRefs.length > 0 && decision.evidenceRefs.every(ref => plan.stages.some(stage =>
-          stage.outputRef === ref || stage.evidenceRefs?.includes(ref)))
+      if (plan.stages.some(stage => stage.workflowId !== 'task-general-capability')) {
+        const outputs = await Promise.all(plan.stages.map(stage => stage.outputRef
+          ? artifacts.read(stage.outputRef) : null))
+        const known = new Set(plan.stages.flatMap(stage => [stage.outputRef, ...(stage.evidenceRefs ?? [])]))
+        if (outputs.some(output => Array.isArray(output?.limitations) && output.limitations.length
+          || output?.outcome === 'blocked' || output?.status === 'unverified')) return false
+        if (plan.stages.some((stage, index) => ['task-analysis', 'task-investigation', 'task-planning',
+          'task-pr-review', 'task-data-query', 'task-retrospective'].includes(stage.workflowId)
+          && (!outputs[index]?.evidenceIds?.length || !outputs[index]?.summary?.trim()))) return false
+        const items = await store.query({ kind: 'task.owner.acceptance', taskId })
+        return decision.evidenceRefs.length > 0 && decision.evidenceRefs.every(ref => known.has(ref))
+          && items.length > 0 && decision.assessments?.length === items.length
+          && items.every(item => decision.assessments.some(assessment => assessment.itemId === item.itemId
+            && assessment.evidenceRefs?.some(ref => known.has(ref))))
+      }
       const assessment = await completionCheck({ request: initial.request,
         acceptanceCriteria: initial.acceptanceCriteria, constraints: initial.constraints,
         scope: initial.scope, evidence, report: { summary: decision.summary,
@@ -751,15 +798,23 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           if (plan) await controller.controlTask({ commandId, taskId: event.request.taskId,
             intent: 'cancel', expectedControlRevision: plan.task.controlRevision })
           else await controller.stop({commandId,runId:event.executionRunId,reason:event.request.reason})
-        } else await controller.changeInput({commandId,runId:event.executionRunId,inputId:commandId,sourceKey:commandId,input:event.input,expectedRevision:event.request.inputVersion-1})
-        if (await store.query({ kind: 'task.owner', taskId: event.request.taskId }))
+        } else {
+          if (!event.input?.request?.trim() || !Array.isArray(event.input.acceptanceCriteria)
+            || !event.input.scope?.sourceKeys?.length || !event.input.authorization)
+            throw executionError('TASK_WEB_REQUIREMENT_INVALID')
+          const saved = await artifacts.put(event.input)
+          await store.command({ id: commandId, kind: 'task.requirement.update', args: {
+            taskId: event.request.taskId, expectedRequirementRevision: event.request.inputVersion - 1,
+            requirementRef: saved.ref, eventKey: `web:${event.id}` } })
+        }
+        if (event.request.action === 'cancel' && await store.query({ kind: 'task.owner', taskId: event.request.taskId }))
           await taskOwner.event({ taskId: event.request.taskId, eventKey: `web:${event.id}`,
             eventType: event.request.action === 'cancel' ? 'control.changed' : 'intent.received',
             payload: { action: event.request.action, requestId: event.request.requestId,
               actorId: event.actorId, input: event.input } })
         event=(await store.command({id:`web-finish:${event.id}`,kind:'message.web-task.finish',args:{eventId:event.id,result:{status:'accepted',taskId:event.request.taskId,requestId:event.request.requestId}}})).result.event
       } catch(error) {
-        if(!['REVISION_CONFLICT','INPUT_PENDING','RUN_TERMINAL','RUN_STOPPING'].includes(error.code))throw error
+        if(!['REVISION_CONFLICT','TASK_REQUIREMENT_STALE','RUN_TERMINAL','RUN_STOPPING'].includes(error.code))throw error
         event=(await store.command({id:`web-reject:${event.id}`,kind:'message.web-task.finish',args:{eventId:event.id,error:error.code}})).result.event
       }
     }
@@ -777,8 +832,14 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const prior=await store.query({kind:'message.web-task',eventId})
     if(prior){if(executionDigest(prior.request)!==executionDigest(request)||prior.actorId!==identity.actorId)throw executionError('MESSAGE_WEB_EVENT_CONFLICT');return executeWebEvent(prior)}
     const state=await currentTask(request.taskId)
-    const previous=await artifacts.read(state.run.requirementRef)
-    const input=request.action==='context'?{...previous,request:`${previous.request}\n\n补充要求：\n${requireText(request.context,'WORKFLOW_CONTEXT_REQUIRED')}`} : null
+    const plan=await controller.taskPlan(request.taskId)
+    if (!plan?.task.requirementRef) throw executionError('TASK_REQUIREMENT_MISSING')
+    const previous=await artifacts.read(plan.task.requirementRef)
+    const input=request.action==='context'?{...previous,
+      request:`${previous.request}\n\n补充要求：\n${requireText(request.context,'WORKFLOW_CONTEXT_REQUIRED')}`,
+      constraints:[...new Set([...(previous.constraints ?? []), request.context])],
+      authorization:{ ...previous.authorization, actorId: identity.actorId, channel: 'web', requestId: request.requestId }} : null
+    if (input) input.objective = input.request
     const event=(await store.command({id:`web-prepare:${eventId}:${executionDigest(input)}`,kind:'message.web-task.prepare',args:{eventId,request,actorId:identity.actorId,executionRunId:state.run.runId,input}})).result.event
     return executeWebEvent(event)
   }
@@ -822,7 +883,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     }
     const taskId = info.binding.taskId ?? action.taskId
     const origin = await taskAccess(taskId, info.run.actorId, info.run.conversationId)
-    const currentPlan = await controller.taskPlan(taskId)
+    const currentPlan = await ensureLegacyTaskRequirement(taskId)
     const recordIntent = () => taskOwner.event({ taskId, eventKey: `intent:${info.commandId}`,
       eventType: 'intent.received', payload: { action: action.intent, sourceRunId: info.run.runId,
         actorId: info.run.actorId, arguments: action.arguments, constraints: action.constraints } })
@@ -1396,7 +1457,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         workflowVersion: run?.definitionVersion, groupId: origin?.run.conversationId,
         title: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
         objective: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
-        inputVersion: (run?.revision ?? 0) + 1, runSequence: taskRuns.length,
+        inputVersion: (plan?.task.requirementRevision ?? run?.revision ?? 0) + 1, runSequence: taskRuns.length,
         state: ownerComplete ? 'completed' : owner?.status === 'blocked' || planState === 'blocked' || planState === 'waiting_confirmation'
           || planState === 'succeeded' ? 'waiting' : !run ? 'queued'
           : terminal(run.status) && !plan ? 'completed' : state.controllerError ? 'waiting'
@@ -1428,7 +1489,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       const owners = await store.query({ kind: 'task.owners.list', limit: 100,
         ...(ownerCursor ? { beforeSequenceId: ownerCursor } : {}) })
       for (const item of owners) try {
-        const plan = await controller.taskPlan(item.taskId)
+        const plan = await ensureLegacyTaskRequirement(item.taskId)
         if (plan?.stages.some(stage => stage.status === 'running')) await controller.advanceTaskPlan(item.taskId)
         await taskOwner.observe(item.taskId)
       }

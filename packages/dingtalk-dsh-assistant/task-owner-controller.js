@@ -74,6 +74,9 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     const acceptanceItems = await store.query({ kind: 'task.owner.acceptance', taskId })
     const result = { taskId, eventWatermark: claim.eventWatermark, goal,
       acceptanceItems, versions: claim.versions, task: plan.task, stages: plan.stages, events }
+    result.stageArtifacts = plan.stages.filter(stage => stage.status === 'succeeded' && stage.outputRef)
+      .map(stage => ({ stageId: stage.stageId, outputRef: stage.outputRef,
+        evidenceRefs: stage.evidenceRefs ?? [] }))
     result.capabilities = capabilityCatalog
     result.workflowCatalog = workflowCatalog
     if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 128 * 1024) {
@@ -118,12 +121,18 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       try {
         const input = await snapshot(taskId, claim)
         const unreadPages = new Set((input.eventPages ?? []).map(page => page.ref))
+        const readableArtifacts = new Set(input.stageArtifacts.flatMap(stage =>
+          [stage.outputRef, ...stage.evidenceRefs]))
         const result = await sessions.run({ binding, input, ...modelConfig(),
           readPage: async pageRef => {
             if (!unreadPages.has(pageRef)) throw error('TASK_OWNER_PAGE_NOT_ALLOWED')
             const page = await artifacts.read(pageRef)
             unreadPages.delete(pageRef)
             return page
+          },
+          readArtifact: async artifactRef => {
+            if (!readableArtifacts.has(artifactRef)) throw error('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
+            return artifacts.read(artifactRef)
           },
           onSessionBound: () => command(`owner-bound:${turnId}`, 'task.owner.sessionBound', {
             taskId, turnId, leaseEpoch: claim.leaseEpoch, sessionId: claim.sessionId }),

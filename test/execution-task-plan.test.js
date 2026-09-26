@@ -609,6 +609,30 @@ test('旧单 Run 仅在完整成功且有输出证据时显式纳入业务 Task'
     runId: 'old-run', stageId: 'investigation' }), { code: 'TASK_PLAN_EXISTS' })
 })
 
+test('v4 历史任务空要求可原子补绑要求与 Owner 并保持原计划版本', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-legacy-bind-'))
+  const dbPath = join(directory, 'control.sqlite')
+  const initial = await openExecutionStore({ dbPath, instanceId: 'legacy-bind', initialize: true })
+  await initial.close()
+  const db = new DatabaseSync(dbPath)
+  const now = new Date().toISOString()
+  db.prepare("INSERT INTO business_tasks(task_id,requirement_revision,plan_revision,plan_requirement_revision,status,created_at,updated_at) VALUES('legacy',2,1,2,'active',?,?)").run(now, now)
+  db.prepare("INSERT INTO task_controls(task_id,control_revision,state) VALUES('legacy',1,'active')").run()
+  db.prepare("INSERT INTO task_plan_stages(task_id,plan_revision,stage_id,position,workflow_id,gate,status,attempt) VALUES('legacy',1,'stage-1',0,'investigate','none','ready',1)").run()
+  db.close()
+  const store = await openExecutionStore({ dbPath, instanceId: 'legacy-bind', initialize: false })
+  t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }) })
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  const saved = await artifacts.put({ request: '继续排查原任务', acceptanceCriteria: ['核对原问题'] })
+  const args = { taskId: 'legacy', expectedRequirementRevision: 2, requirementRef: saved.ref,
+    sessionId: 'owner-legacy', criteria: ['核对原问题'], sourceKey: 'source-legacy', eventKey: 'legacy-bound' }
+  const first = await store.command({ id: 'bind-legacy', kind: 'task.requirement.bind-legacy', args })
+  assert.equal(first.result.requirementRevision, 2)
+  assert.equal((await store.query({ kind: 'task.plan', taskId: 'legacy' })).task.requirementRef, saved.ref)
+  assert.equal((await store.query({ kind: 'task.owner', taskId: 'legacy' })).sessionId, 'owner-legacy')
+  assert.equal((await store.command({ id: 'bind-legacy', kind: 'task.requirement.bind-legacy', args })).replayed, true)
+})
+
 test('v1 迁移先零副作用检查，再备份升级并独立读回版本', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-plan-migrate-'))
   const dbPath = join(directory, 'control.sqlite'), instanceId = 'migration-test'

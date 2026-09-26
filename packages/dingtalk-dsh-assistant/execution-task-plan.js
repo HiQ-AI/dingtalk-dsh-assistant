@@ -176,6 +176,17 @@ export function reduceTaskPlanCommand(db, command, { now }) {
       .run(task.requirement_revision + 1, a.requirementRef, now, taskId)
     return { status: 'applied', taskId, requirementRevision: task.requirement_revision + 1, requirementRef: a.requirementRef }
   }
+  if (command.kind === 'task.requirement.bind-legacy') {
+    exact(a, ['taskId', 'expectedRequirementRevision', 'requirementRef'])
+    const taskId = name(a.taskId), task = taskRow(db, taskId)
+    if (!task || task.requirement_ref || task.requirement_revision !== natural(a.expectedRequirementRevision))
+      fail('TASK_REQUIREMENT_LEGACY_CONFLICT')
+    reference(a.requirementRef)
+    db.prepare('UPDATE business_tasks SET requirement_ref=?,updated_at=? WHERE task_id=?')
+      .run(a.requirementRef, now, taskId)
+    return { status: 'applied', taskId, requirementRevision: task.requirement_revision,
+      requirementRef: a.requirementRef }
+  }
   if (command.kind === 'task.plan.initialize') {
     exact(a, ['taskId', 'expectedPlanRevision', 'expectedRequirementRevision', 'expectedControlRevision', 'stages'])
     const taskId = name(a.taskId), task = taskRow(db, taskId)

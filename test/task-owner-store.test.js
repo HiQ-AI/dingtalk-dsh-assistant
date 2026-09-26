@@ -1,11 +1,28 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { installTaskPlanSchema } from '../packages/dingtalk-dsh-assistant/execution-task-plan.js'
+import { installTaskPlanSchema, reduceTaskPlanCommand } from '../packages/dingtalk-dsh-assistant/execution-task-plan.js'
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners } from '../packages/dingtalk-dsh-assistant/task-owner-store.js'
 
 const at = '2026-09-25T00:00:00.000Z'
+test('迁移后的空要求 Task 可绑定原目标且不改写计划版本', () => {
+  const db = new DatabaseSync(':memory:')
+  try {
+    installTaskPlanSchema(db)
+    db.prepare("INSERT INTO business_tasks(task_id,requirement_revision,plan_revision,plan_requirement_revision,status,created_at,updated_at) VALUES('legacy',3,1,3,'succeeded',?,?)").run(at, at)
+    db.prepare("INSERT INTO task_controls(task_id,control_revision,state) VALUES('legacy',1,'active')").run()
+    db.prepare("INSERT INTO task_plan_stages(task_id,plan_revision,stage_id,position,workflow_id,gate,status,attempt,output_ref) VALUES('legacy',1,'stage-1',0,'task-analysis','none','succeeded',1,?)").run('sha256-'+'a'.repeat(64)+'.json')
+    const ref = 'sha256-'+'b'.repeat(64)+'.json'
+    assert.equal(reduceTaskPlanCommand(db, { kind: 'task.requirement.bind-legacy', args: {
+      taskId: 'legacy', expectedRequirementRevision: 3, requirementRef: ref } }, { now: at }).requirementRevision, 3)
+    const row = db.prepare("SELECT requirement_revision,requirement_ref,plan_requirement_revision FROM business_tasks WHERE task_id='legacy'").get()
+    assert.deepEqual({ ...row }, { requirement_revision: 3, requirement_ref: ref, plan_requirement_revision: 3 })
+    assert.throws(() => reduceTaskPlanCommand(db, { kind: 'task.requirement.bind-legacy', args: {
+      taskId: 'legacy', expectedRequirementRevision: 3, requirementRef: ref } }, { now: at }),
+    { code: 'TASK_REQUIREMENT_LEGACY_CONFLICT' })
+  } finally { db.close() }
+})
 function fixture() {
   const db = new DatabaseSync(':memory:')
   db.exec('PRAGMA foreign_keys=ON')

@@ -143,7 +143,7 @@ test('生产发布仅审批节点等待真人，Tag 必须带审批回读身份'
   { code: 'RELEASE_PLATFORM_IDENTITY_INVALID' })
 })
 
-test('UAT 合并目标只来自受信白名单并在效果前等待 Assistant 真人审批', async () => {
+test('UAT 合并目标只来自受信白名单，授权不要求真人审批', async () => {
   const releaseTarget = { id: 'dataset-uat', kind: 'uat-deployment', repository: 'HiQ-AI/dataset',
     environment: 'uat', service: 'dataset', runbookId: 'dataset-uat', branch: 'uat',
     woodpecker: { baseUrl: 'https://woodpecker.hiqdat.dev', repositoryId: 1, cronName: 'dataset-uat' },
@@ -170,8 +170,9 @@ test('UAT 合并目标只来自受信白名单并在效果前等待 Assistant �
   assert.deepEqual(input.requiredChecks, ['unit'])
   const prepared = { workflowKind: 'uat-pr-merge', operation: 'merge-uat-pr', runId: 'run-1', generation: 1,
     expected: { targetId: 'dataset-uat' } }
-  const approval = await platform.authorizeExternal({ binding: { runId: 'run-1', nodeRunId: 'node-1', generation: 1 }, prepared })
-  assert.deepEqual(approval.approval.approverIds, ['owner'])
+  const grant = await platform.authorizeExternal({ binding: { runId: 'run-1', nodeRunId: 'node-1', generation: 1 }, prepared })
+  assert.equal(grant.approval, undefined)
+  assert.match(grant.authorizationRef, /^uat-merge:/)
   await assert.rejects(platform.prepareRequirement({ workflowId: 'task-uat-pr-merge',
     action: { arguments: { objective: '合入 UAT', targetId: 'other',
       pullRequestNumber: 42, headCommitSha: 'a'.repeat(40) } }, materials: [] }),

@@ -1076,7 +1076,11 @@ test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入�
  await assert.rejects(service.submitWebTask({action:'reissue-repository',taskId:task.taskId,repositoryId:'backend',requestId:'unauthorized'},{channel:'web',actorId:'attacker'}),/FORBIDDEN/)
  const firstContext=await post('context',input);assert.equal(firstContext.status,202,await firstContext.text());assert.equal((await post('context',input)).status,202)
  assert.equal((await post('context',{...input,context:'冲突内容'})).status,409)
- let state=await execution.controller.state(original.runId);assert.equal(state.pendingInputCount,1);assert.equal(state.run.pauseRequested,true)
+ let state=await execution.controller.state(original.runId);assert.equal(state.pendingInputCount,0);assert.equal(state.run.pauseRequested,true)
+ const revisedPlan=await execution.controller.taskPlan(task.taskId)
+ assert.equal(revisedPlan.task.requirementRevision,2)
+ assert.match((await execution.artifacts.read(revisedPlan.task.requirementRef)).request,/追加检查中文格式/u)
+ assert.equal((await execution.artifacts.read(state.run.requirementRef)).request,'整理本条材料')
  assert.equal((await post('reopen',input)).status,409);assert.equal((await post('archive',{})).status,409)
  const cancel={requestId:'web-cancel-1',inputVersion:(await service.tasks())[0].inputVersion,runSequence:1,reason:'停止'}
  assert.equal((await post('cancel',cancel)).status,202);assert.equal((await post('cancel',cancel)).status,202)
@@ -1097,13 +1101,17 @@ test('Web事件已准备后中断由恢复通路接纳一次，后续恢复不�
  const first=await service.ingest(message);await service.messages.process(first.runId)
  const task=(await service.state(first.runId)).commands[0].result;await began
  await execution.controller.pause({commandId:'prepare-pause',runId:task.runId,reason:'暂停'});release();await execution.controller.whenIdle(task.runId)
- const state=await execution.controller.state(task.runId),prior=await execution.artifacts.read(state.run.requirementRef)
- await execution.store.command({id:'prepare-only',kind:'message.web-task.prepare',args:{eventId:'web-crash',actorId:'owner',executionRunId:task.runId,request:{taskId:task.taskId,action:'context',requestId:'crash',inputVersion:state.run.revision+1,runSequence:1,context:'新要求'},input:{...prior,request:prior.request+'\n新要求'}}})
+ const state=await execution.controller.state(task.runId),plan=await execution.controller.taskPlan(task.taskId)
+ const prior=await execution.artifacts.read(plan.task.requirementRef)
+ await execution.store.command({id:'prepare-only',kind:'message.web-task.prepare',args:{eventId:'web-crash',actorId:'owner',executionRunId:task.runId,request:{taskId:task.taskId,action:'context',requestId:'crash',inputVersion:plan.task.requirementRevision+1,runSequence:1,context:'新要求'},input:{...prior,request:prior.request+'\n新要求'}}})
  assert.deepEqual(await service.recoverExecutionTasks(),[]);await execution.controller.whenIdle(task.runId)
  assert.equal((await execution.store.query({kind:'message.web-task',eventId:'web-crash'})).status,'accepted')
  const before=await execution.controller.state(task.runId);assert.deepEqual(await service.recoverExecutionTasks(),[]);await execution.controller.whenIdle(task.runId)
  const after=await execution.controller.state(task.runId)
  assert.equal(after.run.revision,before.run.revision);assert.equal(after.pendingInputCount,before.pendingInputCount)
+ const revised=await execution.controller.taskPlan(task.taskId)
+ assert.equal(revised.task.requirementRevision,plan.task.requirementRevision+1)
+ assert.match((await execution.artifacts.read(revised.task.requirementRef)).request,/新要求/u)
 })
 
 test('C01 媒体连接器挂起不阻durable接收和独立SQLite读回',{timeout:5000},async t=>{
@@ -1156,6 +1164,7 @@ test('只关联话题时意图仍读到已执行Task及结果限制，运行成�
   assert.equal(task.run.status, 'succeeded')
   assert.deepEqual(task.result.limitations, ['没有读取账号创建日志'])
   assert.equal(task.objectiveAssessment.status, 'unassessed')
+  assert.notEqual((await service.tasks()).find(item => item.taskId === taskId)?.state, 'completed')
 })
 
 test('方案阶段完成后等待确认，确认沿用业务Task并只启动下一阶段', async t => {

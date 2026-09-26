@@ -349,10 +349,8 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       if (!uatMerge || prepared.operation !== 'merge-uat-pr'
         || !uatMerge.configuredTargetIds.includes(prepared.expected?.targetId))
         throw executionError('UAT_MERGE_TARGET_NOT_ALLOWED')
-      return { principalId: owner, approval: {
-        requestId: `external:${executionDigest([binding.runId, binding.nodeRunId, prepared])}`,
-        approverIds: [...new Set(productionApprovers)],
-      } }
+      return { principalId: owner,
+        authorizationRef: `uat-merge:${executionDigest([binding.runId, binding.nodeRunId, prepared])}` }
     }
     if (prepared.workflowKind === 'data-change') {
       if (!bytebase || ![...databaseTargets.values()].some(item => executionDigest(item.target) === executionDigest(prepared.target)))

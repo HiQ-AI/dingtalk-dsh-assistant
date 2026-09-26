@@ -116,8 +116,9 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const origin=queryMessages(db,{kind:'message.task',taskId:a.request.taskId})
     if(!origin)fail('MESSAGE_TASK_NOT_FOUND')
     const task=db.prepare('SELECT * FROM execution_runs WHERE run_id=? AND task_id=?').get(a.executionRunId,a.request.taskId)
-    if(!task||a.request.runSequence!==1||a.request.inputVersion!==task.revision+1)fail('REVISION_CONFLICT')
-    if(a.request.action==='context'&&db.prepare("SELECT 1 FROM execution_inputs WHERE run_id=? AND status='pending'").get(task.run_id))fail('INPUT_PENDING')
+    const businessTask=db.prepare('SELECT requirement_revision,requirement_ref FROM business_tasks WHERE task_id=?').get(a.request.taskId)
+    if(!task||!businessTask?.requirement_ref||a.request.runSequence!==1
+      ||a.request.inputVersion!==businessTask.requirement_revision+1)fail('REVISION_CONFLICT')
     if(!['cancel','context'].includes(a.request.action))fail('MESSAGE_WEB_ACTION_UNSUPPORTED')
     if(a.request.action==='context'&&['succeeded','failed','cancelled'].includes(task.status))fail('RUN_TERMINAL')
     const event={id:str(a.eventId),actorId:str(a.actorId),runId:origin.run.runId,executionRunId:task.run_id,request:a.request,input:a.input??null,status:'pending'}
