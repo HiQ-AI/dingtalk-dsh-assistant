@@ -1629,7 +1629,8 @@ test('步骤产出只投影业务正文及限制，不泄露任意对象字段',
     execute: async () => ({ summary: '已检查', findings: [{ statement: '无法确认创建人', evidenceIds: ['internal'] }],
       limitations: ['缺少创建日志'], toolArguments: { secret: 'not-for-ui' }, markdown: '正文内容',
       materials: [{ id: 'hidden-material-id', text: '核对材料正文' }], files: [{ path: 'app.js', text: '代码不直接展示' }, { path: 'new.js', text: null }],
-      changes: [{ path: 'app.js', content: '代码不直接展示' }, { path: 'old.js', content: null }],
+      changes: [{ path: 'app.js', content: '完整修改方案' }, { path: 'old.js', content: null }],
+      replacements: [{ path: 'merge.java', expectedHash: 'hidden-hash', from: '旧计算', to: '新计算' }],
       verification: { checks: [{ id: 'build', passed: true, log: 'log-not-for-ui' }, { id: 'lint', passed: false }] } }),
   })
   const receipt = await service.ingest(message)
@@ -1641,11 +1642,28 @@ test('步骤产出只投影业务正文及限制，不泄露任意对象字段',
   assert.match(result.text, /已检查[\s\S]*正文内容[\s\S]*无法确认创建人[\s\S]*缺少创建日志/)
   assert.match(result.text, /材料正文\n核对材料正文/)
   assert.match(result.text, /已读取文件\napp.js\nnew.js（尚不存在）/)
-  assert.match(result.text, /文件变更\n写入 app.js\n删除 old.js/)
+  assert.match(result.text, /文件变更\n写入 app.js\n文件内容：\n完整修改方案\n\n文件变更\n删除 old.js/)
+  assert.match(result.text, /修改方案\n文件：merge.java\n修改前：\n旧计算\n修改后：\n新计算/)
   assert.match(result.text, /检查结果\nbuild：通过\nlint：未通过/)
-  assert.doesNotMatch(result.text, /not-for-ui|internal|toolArguments|hidden-material-id|代码不直接展示/)
+  assert.doesNotMatch(result.text, /not-for-ui|internal|toolArguments|hidden-material-id|hidden-hash|代码不直接展示/)
   assert.equal(await service.taskNodeOutput(taskId, 'missing-run', node.nodeRunId, { outputRef: node.outputRef }), null)
   await assert.rejects(service.taskNodeOutput(taskId, runId, node.nodeRunId, { outputRef: node.outputRef, offset: result.totalLength + 1 }), /TASK_OUTPUT_CURSOR_INVALID/)
+})
+
+test('只有局部替换的工程方案仍展示真实产出，分页不丢修改前后内容', async t => {
+  const { service, execution, message } = await fixture(t, 'owner', undefined, {
+    execute: async () => ({ changes: [], replacements: [{ path: 'merge.java', expectedHash: 'private-hash', from: '旧计算', to: '新计算'.repeat(600) }] }),
+  })
+  const receipt = await service.ingest(message)
+  const state = await service.messages.process(receipt.runId)
+  const { taskId, runId } = state.commands[0].result
+  await execution.controller.whenIdle(runId)
+  const node = (await execution.controller.state(runId)).nodes[0]
+  const first = await service.taskNodeOutput(taskId, runId, node.nodeRunId, { outputRef: node.outputRef })
+  assert.equal(first.nextCursor, 1200)
+  const rest = await service.taskNodeOutput(taskId, runId, node.nodeRunId, { outputRef: node.outputRef, offset: first.nextCursor })
+  assert.equal(first.text + rest.text, `修改方案\n文件：merge.java\n修改前：\n旧计算\n修改后：\n${'新计算'.repeat(600)}`)
+  assert.equal(rest.nextCursor, null)
 })
 
 test('只读历史执行 API 不把预留 Owner 身份伪装成已绑定会话', async t => {

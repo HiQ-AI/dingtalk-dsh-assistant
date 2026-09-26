@@ -175,3 +175,5 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 任务状态映射修复需打包 Assistant：对无 Owner 且计划已 succeeded 的记录，回读 `/state/tasks` 为 completed/succeeded，结果原文及信息局限保留。已有 Owner 的验收和 waiting_confirmation 仍保持原门禁。该修复只读展示，不修改持久任务、不重跑流程、不补发消息；部署前实例已停止时保留停机状态，安装包回读不等于在线验证。
 
 任务详情使用紧凑编号时间线：标题与耗时同排、产出按标签展开、进度条表示已完成步骤比例。节点产出补充材料正文、文件清单、变更和已记录检查结果；此次需同时安装 Assistant 与 Observer，沿用只读分页接口及既有备份/回读流程，无 schema 变更。
+
+工程节点产出展示真实修改方案：replacements 显示目标文件及修改前/后内容，changes 显示完整文件内容或删除动作。保留分页，隐藏原始 JSON、校验哈希和工具参数；无须重跑历史节点。部署同时更新 Assistant 与 Observer，回读既有方案工件与页面接口内容一致。

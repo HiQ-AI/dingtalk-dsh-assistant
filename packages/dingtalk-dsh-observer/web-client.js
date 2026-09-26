@@ -376,7 +376,7 @@ window.__ModuleLoader__.load({
       return React.createElement('div', { style: { minWidth: 0, fontSize: 13, lineHeight: 1.7 } },
         text ? React.createElement('div', { style: { display: 'grid', gap: 6, overflowWrap: 'anywhere' } }, ...text.split('\n\n').map((part, index) => {
           const [heading, ...lines] = part.split('\n')
-          const titled = ['产出摘要', '正文', '任务要求', '发现', '限制与未确认事项', '执行范围', '相关文件', '已有文件', '新建文件', '材料正文', '已读取文件', '文件变更', '检查结果'].includes(heading)
+          const titled = ['产出摘要', '正文', '任务要求', '发现', '限制与未确认事项', '执行范围', '相关文件', '已有文件', '新建文件', '材料正文', '已读取文件', '文件变更', '修改方案', '检查结果'].includes(heading)
           return React.createElement('div', { key: index, className: titled ? 'observer-task-output-row' : undefined }, titled ? React.createElement('strong', { style: { fontSize: 12, fontWeight: 500, color: colors.muted } }, heading) : null,
             React.createElement('div', { style: { whiteSpace: 'pre-wrap' } }, titled ? lines.join('\n') : part))
         })) : null,

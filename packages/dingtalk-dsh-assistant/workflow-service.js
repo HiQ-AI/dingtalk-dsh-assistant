@@ -1838,7 +1838,14 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     }
     if (Array.isArray(output?.materials)) add('材料正文', output.materials.map(item => item?.text).filter(item => typeof item === 'string').join('\n\n'))
     if (Array.isArray(output?.files)) add('已读取文件', output.files.filter(item => typeof item?.path === 'string').map(item => `${item.path}${item.text === null ? '（尚不存在）' : ''}`).join('\n'))
-    if (Array.isArray(output?.changes)) add('文件变更', output.changes.filter(item => typeof item?.path === 'string').map(item => `${item.content === null ? '删除' : '写入'} ${item.path}`).join('\n'))
+    if (Array.isArray(output?.changes)) for (const change of output.changes) {
+      if (typeof change?.path !== 'string') continue
+      add('文件变更', `${change.content === null ? '删除' : '写入'} ${change.path}${typeof change.content === 'string' ? `\n文件内容：\n${change.content}` : ''}`)
+    }
+    if (Array.isArray(output?.replacements)) for (const replacement of output.replacements) {
+      if (typeof replacement?.path !== 'string' || typeof replacement.from !== 'string' || typeof replacement.to !== 'string') continue
+      add('修改方案', `文件：${replacement.path}\n修改前：\n${replacement.from}\n修改后：\n${replacement.to}`)
+    }
     if (Array.isArray(output?.verification?.checks)) add('检查结果', output.verification.checks.filter(item => typeof item?.id === 'string' && typeof item.passed === 'boolean').map(item => `${item.id}：${item.passed ? '通过' : '未通过'}`).join('\n'))
     const text = sections.join('\n\n')
     if (offset > text.length || offset > 0 && /[\uDC00-\uDFFF]/u.test(text[offset] ?? '')) throw executionError('TASK_OUTPUT_CURSOR_INVALID')

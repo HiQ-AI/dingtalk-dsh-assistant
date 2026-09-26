@@ -1,6 +1,6 @@
 # 话题上下文完整性与处理轨迹
 
-> 状态：COMPLETED
+> 状态：IN_PROGRESS
 > Goal ID：topic-context-completeness
 > 最近维护：2026-09-26T16:03:16+08:00
 > 权威目标：`D:/project/worktrees/dingtalk-topic-context-completeness/docs/acceptance/topic-context-completeness/goal.md`
@@ -38,10 +38,12 @@
 
 | SG9 | 紧凑步骤时间线 | 编号细线串联、标题右侧耗时、节点正文对齐，桌面与窄屏可读 | 完成 | round-16.md |
 
+| SG10 | 工程方案产出 | 局部替换和完整文件修改可读，真实工件回读 | 进行中 | round-17.md |
+
 ## 当前检查点
 
-- 当前子目标：SG9
-- 唯一下一步：无；参考图时间线已实现、验证并部署本地。
+- 当前子目标：SG10
+- 唯一下一步：部署工程方案展示修复并回读目标节点。
 - 未闭环项：本轮无；截图为隔离夹具，真实业务产出已通过本地只读接口核验。
 
 ## 进展
