@@ -5,4 +5,4 @@
 - node --test test/execution-store.test.js test/observer-client.test.js test/workflow-service.test.js：105 PASS，0 FAIL。覆盖首次开始、完成、重开恢复、租约重试与幂等；原 observer 抽取测试因组件插入位置失败，调整组件位置后通过。
 - 独立 Edge、完整 React/observer：30 项通过，23 次只读请求（含新增手动刷新 6 次），0 写入、0 页面错误；运行计时更新、等待、未开始、缺失记录、编号、窄屏均通过，未调用 /state/task-timings。
 - strict 静态审计 0 findings；node scripts/build-web-client.mjs 通过。桌面截图已查看；示例数据不代表真实业务。
-- 安装及在线回读待执行。
+- 已安装两个独立包；PID 44428 监听 3080/18998，83 个 JS/YML 文件哈希一致，health=ok、入站开启、恢复问题 0、认证 Web 200。真实已完成任务三个步骤回读为 41ms、5722ms、13ms，任务仍 completed。备份 D:/dsh_home/backups/step-duration-0d73350，配置未变。
