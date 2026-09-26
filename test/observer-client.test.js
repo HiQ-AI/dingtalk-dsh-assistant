@@ -38,7 +38,7 @@ test('收信箱区分话题关联等待与意图重判，任务详情展示业�
   assert.match(source, /routing_blocked: \{ label: '关联受阻'/)
   assert.match(source, /selectedWorkflowTask\.plan\.stages\.map/)
   assert.match(source, /waiting_confirmation: '等待人工确认'/)
-  assert.match(source, /等待确认上一阶段产出后继续/)
+  assert.match(source, /'aria-label': '任务阶段'/)
 })
 
 test('运行看板保留左侧菜单并替换右侧整体内容', async () => {

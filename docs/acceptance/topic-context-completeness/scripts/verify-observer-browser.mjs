@@ -36,6 +36,8 @@ const tasks = [{ taskId: 'task-1', title: '隔离任务', objective: '核对上�
 tasks.push({ taskId: 'task-design', title: '核对租户权限并整理排查结论', objective: '核对租户 A 的权限配置，确认问题范围，整理处理建议。仅排查，不修改现有配置。', groupId: 'g', engine: 'workflow-v2', state: 'waiting', updatedAt: '2026-09-26T04:20:00Z', waitingReason: '排查结论已整理，等待确认是否继续检查关联角色。', result: '已核对当前租户与角色配置。\n\n排查结论\n租户配置完整；部分成员未关联预期角色，需要进一步确认角色分配规则。\n\n建议下一步\n核实成员的角色来源，再决定是否调整配置。当前尚未修改任何权限。', topicRefs: [], plan: { currentStageId: 'review', stages: [{ stageId: 'research', title: '权限排查', status: 'succeeded' }, { stageId: 'review', title: '确认后续范围', status: 'waiting_confirmation' }] }, executionNodes: [{ nodeId: 'read-files', title: '读取租户与角色配置', status: 'succeeded', outputRef: 'ref-1' }, { nodeId: 'analyze', title: '核对权限关联', status: 'succeeded', outputRef: 'ref-2' }, { nodeId: 'approval-gate', title: '确认后续检查范围', status: 'waiting', waitReason: { reference: '等待确认是否继续检查关联角色' } }, { nodeId: 'finalize', title: '整理最终处理建议', status: 'pending' }] })
 Object.assign(tasks[1].executionNodes[0], { startedAt: '2026-09-26T00:00:00Z', completedAt: '2026-09-26T00:00:03.500Z' })
 Object.assign(tasks[1].executionNodes[2], { startedAt: '2026-09-26T00:00:04Z', completedAt: '2026-09-26T00:00:06Z' })
+for (const [index, node] of tasks[1].executionNodes.entries()) Object.assign(node, { runId: 'design-run', nodeRunId: `design-node-${index}` })
+let outputFailures = 1
 const topics = [{ topicId: 'topic-1', groupId: 'g', title: '慢话题', revision: 1 }, { topicId: 'topic-2', groupId: 'g', title: '当前话题', revision: 1 }]
 const browser = await playwright.chromium.launch({ channel: 'msedge', headless: true })
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'zh-CN', reducedMotion: 'reduce' })
@@ -50,6 +52,13 @@ await page.route('**/*', async route => {
   calls.push(target.pathname)
   if (route.request().method() !== 'GET') { writes.push(target.pathname); return route.abort() }
   let data = []
+  if (target.pathname.includes('/nodes/') && target.pathname.endsWith('/output')) {
+    const first = target.pathname.includes('design-node-0')
+    if (!first && outputFailures-- > 0) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'temporary' }) })
+    const text = first ? '产出摘要\n已读取租户 A 的角色配置，范围覆盖 12 个角色与 86 名成员。\n\n发现\n租户基础配置完整，角色定义均可读取。\n成员名单已与当前角色关联记录对应。' : '产出摘要\n已核对成员与角色的关联关系。\n\n发现\n部分成员未关联预期角色，现有配置与反馈范围一致。\n\n限制与未确认事项\n尚未取得角色分配规则，暂不能判断该差异是否符合业务预期。'
+    const cursor = Number(target.searchParams.get('cursor') || 0), end = first && !cursor ? 42 : text.length
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: text.slice(cursor, end), nextCursor: end < text.length ? end : null, totalLength: text.length }) })
+  }
   if (target.pathname === '/health') data = { status: 'ok' }
   if (target.pathname === '/state/groups') data = [{ groupId: 'g', name: '隔离群', messages: [{ messageId: 'm', runId: 'msg-1', sequence: 1, text: '请检查记录', workflowStatus: 'processed', occurredAt: '2026-09-26T00:00:00Z', topicRefs: [] }], outbox: [] }]
   if (target.pathname === '/state/tasks') data = tasks
@@ -134,7 +143,7 @@ try {
   await page.getByRole('button', { name: '任务看板', exact: true }).click()
   await page.getByText('隔离任务', { exact: true }).click()
   assert.equal(calls.filter(url => url.includes('/tasks/task-1/runs')).length, 0)
-  await page.getByRole('region', { name: '任务目标', exact: true }).waitFor()
+  await page.getByText('核对上下文', { exact: true }).waitFor()
   await page.getByText('暂无执行步骤记录', { exact: true }).waitFor()
   const history = page.locator('summary').filter({ hasText: '查看历史执行与会话' })
   await history.focus(); await page.keyboard.press('Enter')
@@ -152,12 +161,18 @@ try {
   assert.equal(await run.evaluate(element => element.parentElement.open), false)
   await page.screenshot({ path: path.join(output, 'task-history-narrow.png'), fullPage: true })
   checks.push('narrow-history', 'narrow-keyboard-collapse')
+  assert.equal(calls.some(path => path.endsWith('/output')), false)
   await page.getByRole('button', { name: '返回看板', exact: true }).click()
   await page.getByText('核对租户权限并整理排查结论', { exact: true }).click()
   const detail = page.getByRole('region', { name: '任务执行详情', exact: true })
   await detail.getByRole('heading', { name: '最新产出', exact: true }).waitFor()
   for (let number = 1; number <= 4; number++) assert.equal(await detail.getByLabel(`步骤 ${number}`, { exact: true }).innerText(), String(number).padStart(2, '0'))
-  assert.equal(await detail.locator('[role="status"]').count(), 2)
+  await detail.getByRole('button', { name: '重试读取产出' }).click()
+  await detail.getByText('已核对成员与角色的关联关系。', { exact: false }).waitFor()
+  await detail.getByRole('button', { name: '继续阅读产出' }).click()
+  await detail.getByText('成员名单已与当前角色关联记录对应。', { exact: false }).waitFor()
+  assert.equal(await detail.locator('[role="status"]').count(), 1)
+  checks.push('step-output-default-visible', 'step-output-retry', 'step-output-read-more')
   assert.equal(await detail.locator('pre').count(), 0)
   await detail.getByText('耗时 3.5 秒', { exact: true }).waitFor()
   await detail.getByText('本次执行耗时 2.0 秒', { exact: true }).waitFor()

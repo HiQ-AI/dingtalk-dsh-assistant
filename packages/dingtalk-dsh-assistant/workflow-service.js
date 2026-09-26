@@ -1816,6 +1816,32 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       totalBytes: Buffer.byteLength(material.text), start: offset, end, text: material.text.slice(offset, end),
       complete: offset === 0 && end === material.text.length, nextCursor: end < material.text.length ? end : null }
   }
+  async function taskNodeOutput(taskId, runId, nodeRunId, { offset = 0, limit = 1200, outputRef } = {}) {
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 2 || limit > 8000)
+      throw executionError('TASK_OUTPUT_CURSOR_INVALID')
+    const origin = await store.query({ kind: 'message.task', taskId })
+    if (!origin || !groups.has(origin.run.conversationId)) return null
+    const state = await store.query({ kind: 'run', runId, includeHistory: true })
+    if (!state.run || state.run.taskId !== taskId) return null
+    const node = state.nodeHistory.find(item => item.nodeRunId === nodeRunId)
+    if (!node?.outputRef) return null
+    if (outputRef !== node.outputRef) throw executionError('TASK_OUTPUT_CHANGED')
+    const output = await artifacts.read(node.outputRef)
+    const sections = []
+    const add = (label, value) => { if (typeof value === 'string' && value.trim()) sections.push(`${label}\n${value.trim()}`) }
+    add('产出摘要', workflowResultText(output))
+    if (typeof output === 'string') add('正文', output)
+    add('正文', output?.markdown)
+    add('任务要求', output?.request)
+    for (const [label, values] of [['发现', output?.findings], ['限制与未确认事项', output?.limitations], ['执行范围', output?.constraints], ['相关文件', output?.paths], ['已有文件', output?.existingPaths], ['新建文件', output?.newPaths]]) {
+      if (Array.isArray(values)) add(label, values.map(item => typeof item === 'string' ? item : item?.statement).filter(item => typeof item === 'string').join('\n'))
+    }
+    const text = sections.join('\n\n')
+    if (offset > text.length || offset > 0 && /[\uDC00-\uDFFF]/u.test(text[offset] ?? '')) throw executionError('TASK_OUTPUT_CURSOR_INVALID')
+    let end = Math.min(text.length, offset + limit)
+    if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1])) end--
+    return { text: text.slice(offset, end), nextCursor: end < text.length ? end : null, totalLength: text.length }
+  }
   async function taskRuns(taskId, { offset = 0, limit = 20 } = {}) {
     const origin = await store.query({ kind: 'message.task', taskId })
     if (!origin || !groups.has(origin.run.conversationId)) return null
@@ -1832,7 +1858,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   return {
     ingest, resumeRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, submitWebTask, mailboxes, topics, topicContext,
     prepareWorkflowNotificationOperation, executeWorkflowNotificationOperation, reconcileWorkflowNotificationOperation,
-    isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, messageTrace, workflowTopicContext, messageEvidence, taskRuns,
+    isTask: async taskId => !!await store.query({kind:'message.task',taskId}), messages, execution, tasks, messageTrace, workflowTopicContext, messageEvidence, taskRuns, taskNodeOutput,
     isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
     catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, builtInWorkflows: [taskProgressQueryDefinition], workflows: workflowCatalogState() }),
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,

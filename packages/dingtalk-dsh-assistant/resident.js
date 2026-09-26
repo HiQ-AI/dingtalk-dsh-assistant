@@ -189,6 +189,7 @@ export async function apply(ctx, config = {}) {
     runtime.getWorkflowMessageEvidence = (runId, resourceRef, page) => workflow.messageEvidence(runId, resourceRef, page)
     runtime.getWorkflowTopicState = (topicId, page) => workflow.workflowTopicContext(topicId, page)
     runtime.getWorkflowTaskRuns = (taskId, page) => workflow.taskRuns(taskId, page)
+    runtime.getWorkflowTaskNodeOutput = (taskId, runId, nodeRunId, page) => workflow.taskNodeOutput(taskId, runId, nodeRunId, page)
     runtime.reprocessWorkflowMessage = runId => {
       if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')
       return workflow.reprocessMessage(runId, { channel: 'web', actorId: workflowConfig.webActorId })

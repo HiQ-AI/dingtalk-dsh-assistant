@@ -1601,6 +1601,17 @@ test('只读轨迹 API 回读真实节点、话题批次与已绑定 Owner，并
   assert.equal(runs.taskOwner.sessionBound, true)
   assert.ok(runs.taskOwner.sessionId)
   assert.ok(runs.runs.some(run => run.runId === command.result.runId && run.nodes.some(node => node.nodeId === 'analyze')))
+  const outputNode = (await execution.controller.state(command.result.runId)).nodes[0]
+  const outputArgs = { outputRef: outputNode.outputRef, limit: 8 }
+  const outputPage = await service.taskNodeOutput(command.result.taskId, command.result.runId, outputNode.nodeRunId, outputArgs)
+  assert.ok(outputPage.text.startsWith('产出摘要'))
+  assert.equal(outputPage.nextCursor, 8)
+  const rest = await service.taskNodeOutput(command.result.taskId, command.result.runId, outputNode.nodeRunId, { ...outputArgs, offset: 8, limit: 8000 })
+  assert.match(outputPage.text + rest.text, /已分析/)
+  assert.equal(rest.nextCursor, null)
+  assert.equal(await service.taskNodeOutput('other-task', command.result.runId, outputNode.nodeRunId, outputArgs), null)
+  assert.equal(await service.taskNodeOutput(command.result.taskId, command.result.runId, 'other-node', outputArgs), null)
+  await assert.rejects(service.taskNodeOutput(command.result.taskId, command.result.runId, outputNode.nodeRunId, { outputRef: 'wrong' }), /TASK_OUTPUT_CHANGED/)
   const other = await openWorkflowService({ ctx: {}, config: { groupIds: ['other'], ownerActorId: 'owner' },
     legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test' }), getGroup: () => ({ messages: [] }) },
     execution, judge: async () => { throw new Error('UNEXPECTED_MODEL_CALL') },
@@ -1609,7 +1620,25 @@ test('只读轨迹 API 回读真实节点、话题批次与已绑定 Owner，并
     assert.equal(await other.workflowTopicContext(topicId), null)
     assert.equal(await other.messageTrace(receipt.runId), null)
     assert.equal(await other.taskRuns(command.result.taskId), null)
+    assert.equal(await other.taskNodeOutput(command.result.taskId, command.result.runId, outputNode.nodeRunId, outputArgs), null)
   } finally { await other.close() }
+})
+
+test('步骤产出只投影业务正文及限制，不泄露任意对象字段', async t => {
+  const { service, execution, message } = await fixture(t, 'owner', undefined, {
+    execute: async () => ({ summary: '已检查', findings: [{ statement: '无法确认创建人', evidenceIds: ['internal'] }],
+      limitations: ['缺少创建日志'], toolArguments: { secret: 'not-for-ui' }, markdown: '正文内容' }),
+  })
+  const receipt = await service.ingest(message)
+  const state = await service.messages.process(receipt.runId)
+  const { taskId, runId } = state.commands[0].result
+  await execution.controller.whenIdle(runId)
+  const node = (await execution.controller.state(runId)).nodes[0]
+  const result = await service.taskNodeOutput(taskId, runId, node.nodeRunId, { outputRef: node.outputRef })
+  assert.match(result.text, /已检查[\s\S]*正文内容[\s\S]*无法确认创建人[\s\S]*缺少创建日志/)
+  assert.doesNotMatch(result.text, /not-for-ui|internal|toolArguments/)
+  assert.equal(await service.taskNodeOutput(taskId, 'missing-run', node.nodeRunId, { outputRef: node.outputRef }), null)
+  await assert.rejects(service.taskNodeOutput(taskId, runId, node.nodeRunId, { outputRef: node.outputRef, offset: result.totalLength + 1 }), /TASK_OUTPUT_CURSOR_INVALID/)
 })
 
 test('只读历史执行 API 不把预留 Owner 身份伪装成已绑定会话', async t => {

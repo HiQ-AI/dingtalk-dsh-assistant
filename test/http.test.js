@@ -355,23 +355,24 @@ test('上下文只读 HTTP 路径完整传递分页与版本参数', async () =>
   const calls = []
   const record = name => async (...args) => { calls.push({ name, args }); return { ok: true } }
   await withServer(false, async base => {
-    const paths = ['/state/workflows/run%3A1/trace?cursor=2&limit=3', '/state/workflows/topics/topic%3A1/context?cursor=4&limit=5&intentCursor=6&revision=7', '/state/workflows/run%3A1/evidence/source%3A1?cursor=8&limit=9&hash=abc', '/state/tasks/task%3A1/runs?cursor=10&limit=11']
+    const paths = ['/state/workflows/run%3A1/trace?cursor=2&limit=3', '/state/workflows/topics/topic%3A1/context?cursor=4&limit=5&intentCursor=6&revision=7', '/state/workflows/run%3A1/evidence/source%3A1?cursor=8&limit=9&hash=abc', '/state/tasks/task%3A1/runs?cursor=10&limit=11', '/state/tasks/task%3A1/runs/run%3A1/nodes/node%3A1/output?ref=abc&cursor=12&limit=13']
     for (const path of paths) assert.equal((await fetch(base + path)).status, 200)
     assert.deepEqual(calls, [
       { name: 'trace', args: ['run:1', { offset: 2, limit: 3 }] },
       { name: 'topic', args: ['topic:1', { offset: 4, limit: 5, intentCursor: 6, expectedRevision: 7 }] },
       { name: 'evidence', args: ['run:1', 'source:1', { offset: 8, limit: 9, hash: 'abc' }] },
       { name: 'runs', args: ['task:1', { offset: 10, limit: 11 }] },
+      { name: 'output', args: ['task:1', 'run:1', 'node:1', { offset: 12, limit: 13, outputRef: 'abc' }] },
     ])
-  }, { overrides: { getWorkflowMessageTrace: record('trace'), getWorkflowTopicState: record('topic'), getWorkflowMessageEvidence: record('evidence'), getWorkflowTaskRuns: record('runs') } })
+  }, { overrides: { getWorkflowMessageTrace: record('trace'), getWorkflowTopicState: record('topic'), getWorkflowMessageEvidence: record('evidence'), getWorkflowTaskRuns: record('runs'), getWorkflowTaskNodeOutput: record('output') } })
 })
 
 test('上下文只读 HTTP 对未启用接口和不存在资源返回404', async () => {
-  const paths = ['/state/workflows/missing/trace', '/state/workflows/topics/missing/context', '/state/workflows/missing/evidence/missing', '/state/tasks/missing/runs']
+  const paths = ['/state/workflows/missing/trace', '/state/workflows/topics/missing/context', '/state/workflows/missing/evidence/missing', '/state/tasks/missing/runs', '/state/tasks/missing/runs/missing/nodes/missing/output']
   await withServer(false, async base => {
     for (const path of paths) assert.equal((await fetch(base + path)).status, 404, path)
   })
   await withServer(false, async base => {
     for (const path of paths) assert.equal((await fetch(base + path)).status, 404, path)
-  }, { overrides: { getWorkflowMessageTrace: async () => null, getWorkflowTopicState: async () => null, getWorkflowMessageEvidence: async () => null, getWorkflowTaskRuns: async () => null } })
+  }, { overrides: { getWorkflowMessageTrace: async () => null, getWorkflowTopicState: async () => null, getWorkflowMessageEvidence: async () => null, getWorkflowTaskRuns: async () => null, getWorkflowTaskNodeOutput: async () => null } })
 })
