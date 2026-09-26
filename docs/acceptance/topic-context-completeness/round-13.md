@@ -10,3 +10,5 @@
 - 本轮未发送钉钉消息、未重跑目标任务。在线检查发现 3080/18998 未监听，计划任务上次结果为 1，日志 STORE_UNAVAILABLE；这是修复前已存在的实例启动问题，未做在线完成状态声明。
 
 用例 C23 状态见 matrix.csv；日志位于 round-13/。
+
+本地安装回读：Assistant 包为 docs/tmp/task-state-ee72278/zzusp-dingtalk-dsh-assistant-0.5.15.tgz，SHA256 为 3F32878719B40E52DD0B3AE742BC93F86BA8EF0A31A7E295B915F1F33B88A604；workflow-service.js 安装与源码均为 EEC679EACF16D974130D5524CA972E51E44E743E0943F410F35B0BF97C7071B9。profile patch 未变，Observer 依赖仍为前轮包。备份位于 D:/dsh_home/backups/task-state-ee72278，包含 profile、控制库及存储。只读存储预检 ok=true、invalidRecords=0、strippedFields=0。保留安装前停机状态；未声称在线生效。
