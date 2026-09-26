@@ -260,6 +260,31 @@ test('真实同库消息接纳→固定Task执行→看板结果；重复入站�
   assert.equal((await service.tasks()).length, 1)
 })
 
+test('没有 Owner 的已成功问答计划显示完成，结果中的未知不制造等待；确认阶段仍等待', async t => {
+  const { service, execution } = await fixture(t, 'owner', undefined, {
+    execute: async () => ({ summary: '现有信息无法确认账号创建人', limitations: ['缺少创建记录'] }),
+  })
+  for (const confirmation of [false, true]) {
+    const taskId = confirmation ? 'question-with-next-stage' : 'answered-question'
+    await execution.controller.createTaskPlan({ commandId: `create-${taskId}`, taskId, stages: [
+      { stageId: 'answer', workflowId: 'task-analysis', input: { request: '这个账号是你创建的吗？' } },
+      ...(confirmation ? [{ stageId: 'next', workflowId: 'task-analysis', gate: 'confirmation' }] : []),
+    ] })
+    let plan = await execution.controller.advanceTaskPlan(taskId)
+    await execution.controller.whenIdle(plan.stages[0].runId)
+    plan = await execution.controller.advanceTaskPlan(taskId)
+    const before = await execution.store.query({ kind: 'run.list', taskId })
+    const task = (await service.tasks()).find(item => item.taskId === taskId)
+    assert.equal(plan.task.status, confirmation ? 'waiting_confirmation' : 'succeeded')
+    assert.equal(task.taskOwner, null)
+    assert.equal(task.state, confirmation ? 'waiting' : 'completed')
+    assert.equal(task.outcome, confirmation ? undefined : 'succeeded')
+    assert.equal(task.waitingReason, confirmation ? '等待阶段确认' : undefined)
+    assert.deepEqual(await execution.store.query({ kind: 'run.list', taskId }), before)
+    if (!confirmation) assert.match(task.result, /无法确认/)
+  }
+})
+
 test('流程成功后由同一Task负责人验收并只汇报一次最终结果', async t => {
   const sent = []
   const notifications = { canDisclose: async () => true,

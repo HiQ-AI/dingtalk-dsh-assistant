@@ -1558,16 +1558,18 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       const outputRef = currentStage?.outputRef ?? state?.nodes.filter(node => node.outputRef).at(-1)?.outputRef
       const output = outputRef ? await artifacts.read(outputRef) : null
       const planState = plan?.task.status
+      // 无 Owner 的计划以持久终态为准；有 Owner 时仍须通过当前版本验收。
+      const taskComplete = ownerComplete || !owner && planState === 'succeeded'
       return { taskId, engine: 'workflow-v2', workflowId: run?.workflowId ?? currentStage?.workflowId,
         workflowVersion: run?.definitionVersion, groupId: origin?.run.conversationId,
         title: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
         objective: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
         inputVersion: (plan?.task.requirementRevision ?? run?.revision ?? 0) + 1, runSequence: taskRuns.length,
-        state: ownerComplete ? 'completed' : owner?.status === 'blocked' || planState === 'blocked' || planState === 'waiting_confirmation'
+        state: taskComplete ? 'completed' : owner?.status === 'blocked' || planState === 'blocked' || planState === 'waiting_confirmation'
           || planState === 'succeeded' ? 'waiting' : !run ? 'queued'
           : terminal(run.status) && !plan ? 'completed' : state.controllerError ? 'waiting'
             : run.status === 'running' ? 'running' : run.status === 'queued' ? 'queued' : 'waiting',
-        outcome: ownerComplete ? 'succeeded' : plan ? undefined : run && terminal(run.status) ? run.status : undefined,
+        outcome: taskComplete ? 'succeeded' : plan ? undefined : run && terminal(run.status) ? run.status : undefined,
         createdAt: plan?.task.createdAt ?? run?.createdAt, updatedAt: plan?.task.updatedAt ?? run?.updatedAt,
         result: workflowResultText(output),
         waitingReason: owner?.lastFailure ? `任务负责会话受阻：${owner.lastFailure}`
