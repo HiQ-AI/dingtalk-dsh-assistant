@@ -1,8 +1,8 @@
 # 话题上下文完整性与处理轨迹
 
-> 状态：ACTIVE
+> 状态：COMPLETED
 > Goal ID：topic-context-completeness
-> 最近维护：2026-09-26T10:32:00+08:00
+> 最近维护：2026-09-26T11:01:13+08:00
 > 权威目标：`D:/project/worktrees/dingtalk-topic-context-completeness/docs/acceptance/topic-context-completeness/goal.md`
 
 ## 总目标
@@ -31,13 +31,13 @@
 | SG2 | 事实存储与恢复 | 256 条以上话题历史可处理；源修改、上下文和任务事实版本可失效旧判断；迁移检查/回读通过 | 完成 | round-4.md / 迁移、分页、版本回归 |
 | SG3 | 查询与看板 | 消息→话题判断→任务 Owner/历史节点可追溯；只读范围、分页与状态正确 | 完成 | round-1/browser-results.json / 14 项 |
 | SG4 | 集成与语义验收 | C01–C14 全部实际通过；固定样本逐例审阅，成本和延迟分层记录 | 完成 | matrix.csv / 最终 C01–C16 PASS |
-| SG5 | 文档与 PR | README/runbook 更新，diff 仅含本目标，PR 中文正文与实际验证一致、状态回读 | 进行中 | 文档已同步，正在创建 PR |
+| SG5 | 文档与 PR | README/runbook 更新，diff 仅含本目标，PR 中文正文与实际验证一致、状态回读 | 完成 | PR #125 OPEN 已独立回读；实现提交 c10f72c |
 
 ## 当前检查点
 
 - 当前子目标：SG5
-- 唯一下一步：提交、推送并独立回读 PR 状态。
-- 未闭环项：PR 交付；真实模型语义收益、部署和渠道验证不属于本轮已验证结果。
+- 唯一下一步：无；实施与 PR 交付完成，合并及部署另行执行。
+- 未闭环项：本轮实施无；真实模型语义评测、合并、部署和真实渠道验证未执行。
 
 ## 进展
 
@@ -55,3 +55,5 @@
 - 此 goal 是本目标唯一进度文件；详细证据进入同目录 round-N.md。
 
 - 2026-09-26：最终 215 项定向测试全部通过；浏览器 14 项通过。复审发现的局部撤销和重复撤销均已修复，详见 round-3/4。
+
+- 2026-09-26：PR https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/125 已创建并独立回读为 OPEN，目标 main，功能提交 c10f72c。
