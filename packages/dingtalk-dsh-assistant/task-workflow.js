@@ -410,6 +410,46 @@ export function createEngineeringDeliverableWorkflow(options) {
   return workflow
 }
 
+/** v10 将构建与业务验收分开；缺少验收配置不会进入提交。 */
+export function createEngineeringAcceptanceWorkflow(options) {
+  const workflow = createEngineeringDeliverableWorkflow(options)
+  workflow.version = '10'
+  const checks = (options.acceptanceChecks ?? []).map(check => Object.freeze({ ...check })), tickets = new Map()
+  const identity = executionDigest(checks.map(check => ({ id: check.id, version: check.version, configurationDigest: check.configurationDigest ?? null, implementation: check.run.toString() })))
+  const validate = async (candidate, signal) => {
+    if (!checks.length) throw executionError('ENGINEERING_ACCEPTANCE_REQUIRED')
+    const key = executionDigest({ candidate, identity })
+    let receipt = tickets.get(key)
+    if (!receipt) {
+      receipt = await verifyCandidate({ candidate, checks, signal })
+      if (!receipt.passed) {
+        const error = verificationFailure(receipt)
+        error.code = 'ENGINEERING_ACCEPTANCE_FAILED'
+        error.message = error.code
+        throw error
+      }
+      tickets.set(key, receipt)
+      if (tickets.size > 64) tickets.delete(tickets.keys().next().value)
+    }
+    return receipt
+  }
+  const buildIndex = workflow.nodes.findIndex(node => node.id === 'verify-candidate')
+  workflow.nodes.splice(buildIndex + 1, 0, { id: 'business-acceptance', version: '1', executor: 'code', drainPolicy: 'external-process', allowedEffects: ['read'],
+    inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, mapInput: ({ previousOutput }) => previousOutput,
+    execute: async ({ input, signal }) => ({ ...input, acceptance: await validate(input.candidate, signal) }) })
+  const prepare = workflow.nodes.find(node => node.id === 'prepare-commit')
+  if (prepare) {
+    const execute = prepare.execute
+    prepare.execute = async context => {
+      // 只复用实际执行得到的票据；传入或持久化的 acceptance JSON 不可冒充通过。
+      await validate(context.input.candidate, context.signal)
+      return execute(context)
+    }
+  }
+  for (const node of workflow.nodes) node.rulesDigest = executionDigest({ previous: node.rulesDigest ?? null, acceptance: identity, gate: validate.toString() })
+  return workflow
+}
+
 /** 与factory共用Host scope解析器；不把任意仓库路径变成模型工具。 */
 export function createEngineeringDeliveryAdapters({ gitAdapterFor, prAdapterFor }) {
   return {

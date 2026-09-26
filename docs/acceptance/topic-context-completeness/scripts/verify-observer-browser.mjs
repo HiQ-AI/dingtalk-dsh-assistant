@@ -226,6 +226,16 @@ try {
   const previousTime = await runningTime.innerText()
   await page.waitForFunction(previous => [...document.querySelectorAll('span')].some(item => /^已用时.*第 2 次处理/.test(item.textContent) && item.textContent !== previous), previousTime)
   checks.push('task-step-running-timer')
+  Object.assign(tasks[1].executionNodes[2], { nodeId: 'verify-candidate', title: undefined, status: 'succeeded', waitReason: undefined })
+  Object.assign(tasks[1].executionNodes[3], { nodeId: 'business-acceptance', title: undefined, status: 'waiting', waitReason: { reference: 'ENGINEERING_ACCEPTANCE_REQUIRED' } })
+  await page.getByRole('button', { name: /刷新/ }).click()
+  await detail.getByText('业务验收', { exact: true }).waitFor()
+  await detail.getByText('构建检查', { exact: true }).waitFor()
+  await detail.getByText('缺少业务验收用例与预期结果，后续提交已停止', { exact: true }).waitFor()
+  assert.equal(await detail.getByText('ENGINEERING_ACCEPTANCE_REQUIRED', { exact: true }).count(), 0)
+  await page.screenshot({ path: path.join(output, 'acceptance-gate-narrow.png'), fullPage: true })
+  checks.push('build-acceptance-separated', 'acceptance-missing-blocker-readable')
+
   assert.deepEqual(errors, []); assert.deepEqual(writes, [])
   const result = { passed: true, checks, screenshots: { message: 'message-trace.png', topic: 'topic-context.png', topicNarrow: 'topic-context-narrow.png', task: 'task-detail-desktop.png', taskNarrow: 'task-detail-narrow.png' }, sourceSha256: createHash('sha256').update(observer).digest('hex'), browser: await browser.version(), errors, writes, apiCalls: calls.length, boundary: '真实React与完整observer代码；隔离临时server，API全部由Playwright拦截，未访问真实18998；DSH primitives为语义替身。' }
   await writeFile(path.join(output, 'browser-results.json'), JSON.stringify(result, null, 2))

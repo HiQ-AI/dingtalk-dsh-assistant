@@ -8,8 +8,8 @@ import { join } from 'node:path'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
-import { createAnalysisTaskWorkflow, createEngineeringTaskWorkflow, createEngineeringDeliveryAdapters, createEngineeringDeliverableWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
-import { describeVerificationChecks } from '../packages/dingtalk-dsh-assistant/execution-check-job.js'
+import { createAnalysisTaskWorkflow, createEngineeringTaskWorkflow, createEngineeringDeliveryAdapters, createEngineeringDeliverableWorkflow, createEngineeringAcceptanceWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
+import { describeVerificationChecks, createBusinessAcceptanceCheck } from '../packages/dingtalk-dsh-assistant/execution-check-job.js'
 import { createManagedWorkspaces } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
 import { createManagedEdits } from '../packages/dingtalk-dsh-assistant/execution-edit.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
@@ -192,4 +192,72 @@ test('失败工程检查以有界工件保留完整日志，节点仍waiting且�
   assert.equal(bytes.toString('utf8'),log);assert.equal(createHash('sha256').update(bytes).digest('hex'),chunks[0].logSha256)
   const recorded=JSON.parse(log).steps[0];assert.deepEqual(Buffer.from(recorded.stdout,'base64'),Buffer.alloc(10000,0));assert.deepEqual(Buffer.from(recorded.stderr,'base64'),Buffer.alloc(10000,1))
   assert.deepEqual(await store.query({kind:'effect.list',runId:'run'}),[])
+})
+
+
+test('业务验收独立于构建，缺用例或实际结果不匹配时阻止提交，重建后不信任旧票据', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-business-acceptance-')), source = join(directory, 'source')
+  await mkdir(source)
+  const exec = promisify(execFile), git = async (...args) => (await exec('git', ['-C', source, ...args], { windowsHide: true })).stdout.trim()
+  await git('init', '-b', 'main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid')
+  await writeFile(join(source, 'value.txt'), 'old'); await git('add', '.'); await git('commit', '-m', 'base')
+  const baseCommit = await git('rev-parse', 'HEAD')
+  await writeFile(join(source, 'value.txt'), '1 t')
+  let commits = 0, calls = 0
+  const options = { provider: 'test', model: 'test', adapterIdentity: 'test', editAdapter: {},
+    workspaceAdapter: { prepare: async () => ({ directory: source }), reconcile: async () => ({ status: 'succeeded' }) },
+    checks: [{ id: 'build', version: '1', run: async () => ({ passed: true, log: 'build-only' }) }],
+    deliveryPlan: { identity: 'test', date: '1770000000 +0000', commitMessage: 'fix', title: 'fix', body: 'fix', expectedRemoteSha: null,
+      gitAdapterFor: async () => ({ prepareCommit: async () => { commits++; return {} } }), prAdapterFor: async () => ({}) } }
+  const context = { input: { request: '归一化应得到 1 t', constraints: [], editablePaths: ['value.txt'], baseCommit }, runId: 'r', generation: 1, requirementDigest: 'a'.repeat(64) }
+  const makeCheck = (expected = '1 t', code = "console.log(JSON.stringify({actual:require('node:fs').readFileSync('value.txt','utf8')}))") => {
+    const check = createBusinessAcceptanceCheck({ id: 'normalization', version: '1', criterion: '归一化计算结果', expected, root: join(directory, 'checks'), executable: process.execPath, args: ['-e', code] })
+    const run = check.run
+    return { ...check, run: async (...args) => { calls++; return run(...args) } }
+  }
+  const build = workflow => workflow.nodes.find(n => n.id === 'verify-candidate').execute(context)
+  const accept = (workflow, input) => workflow.nodes.find(n => n.id === 'business-acceptance').execute({ input })
+  const prepare = (workflow, input) => workflow.nodes.find(n => n.id === 'prepare-commit').execute({ input })
+  const missing = createEngineeringAcceptanceWorkflow(options)
+  assert.equal(missing.version, '10'); assert.ok(defineExecutionWorkflow(missing).digest)
+  assert.deepEqual(missing.nodes.slice(-8, -5).map(n => n.id), ['business-acceptance', 'prepare-commit', 'commit'])
+  const built = await build(missing)
+  assert.equal(built.verification.passed, true)
+  await assert.rejects(accept(missing, built), /ENGINEERING_ACCEPTANCE_REQUIRED/)
+  await assert.rejects(prepare(missing, { ...built, acceptance: { passed: true } }), /ENGINEERING_ACCEPTANCE_REQUIRED/)
+  const failed = createEngineeringAcceptanceWorkflow({ ...options, acceptanceChecks: [makeCheck('2 t')] })
+  await assert.rejects(accept(failed, built), error => error.code === 'ENGINEERING_ACCEPTANCE_FAILED' && error.evidence.length > 0)
+  const empty = createEngineeringAcceptanceWorkflow({ ...options, acceptanceChecks: [makeCheck('1 t', 'process.exit(0)')] })
+  await assert.rejects(accept(empty, built), /ENGINEERING_ACCEPTANCE_FAILED/)
+  assert.equal(commits, 0)
+  const store = await openExecutionStore({ dbPath: join(directory, 'gates.db'), instanceId: 'gate', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  const gate = failed.nodes.find(n => n.id === 'business-acceptance')
+  const controller = createExecutionController({ store, artifacts, workflows: [{ id: 'gate', version: '1', nodes: [
+    { id: 'build', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, mapInput: ({ requirement }) => requirement, execute: async () => built },
+    gate,
+    { id: 'commit', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, mapInput: ({ previousOutput }) => previousOutput, execute: async () => { commits++; return {} } },
+  ] }] })
+  try {
+    await controller.createRun({ commandId: 'gate', runId: 'gate', taskId: 'gate', workflowId: 'gate', input: {} })
+    const state = await controller.whenIdle('gate')
+    assert.equal(state.run.status, 'waiting')
+    assert.equal(state.nodes[0].status, 'succeeded')
+    assert.equal(state.nodes[1].status, 'waiting')
+    assert.equal(state.nodes[1].waitReason.reference, 'ENGINEERING_ACCEPTANCE_FAILED')
+    assert.ok(state.nodes[1].evidenceRefs.length > 0)
+    assert.notEqual(state.nodes[2].status, 'succeeded')
+    assert.equal(commits, 0)
+  } finally { await controller.close(); await store.close() }
+  const passed = createEngineeringAcceptanceWorkflow({ ...options, acceptanceChecks: [makeCheck()] })
+  const accepted = await accept(passed, built)
+  const item = JSON.parse(accepted.acceptance.checks[0].log).acceptance
+  assert.deepEqual(item, { criterion: '归一化计算结果', expected: '1 t', actual: '1 t', passed: true })
+  const before = calls
+  await prepare(passed, accepted); assert.equal(calls, before); assert.equal(commits, 1)
+  const restarted = createEngineeringAcceptanceWorkflow({ ...options, acceptanceChecks: [makeCheck()] })
+  await prepare(restarted, JSON.parse(JSON.stringify(accepted))); assert.equal(calls, before + 1)
+  await writeFile(join(source, 'value.txt'), '0.001 t')
+  const changed = await build(restarted)
+  await assert.rejects(accept(restarted, { ...changed, acceptance: accepted.acceptance }), /ENGINEERING_ACCEPTANCE_FAILED/)
 })

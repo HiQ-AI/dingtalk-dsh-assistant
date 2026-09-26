@@ -437,3 +437,21 @@ Owner 可用 `task_owner_read_artifact` 按引用读取当前 Task 已成功阶�
 隔离验证可运行 `node --test test/task-readonly-workflows.test.js test/task-release-workflows.test.js test/workflow-data-change.test.js test/execution-external-delivery.test.js test/workflow-service.test.js`。合成适配器通过仅证明编排合同，不证明 Woodpecker、Bytebase、Registry、Kubernetes、真实数据库或渠道投递。完整迁移状态见[第 27 轮](../acceptance/runtime-redesign/round-27.md)。
 
 早期 v4 的事实可能未写 status；迁移按准确来源版本补充状态：仍为最新来源则 active，来源已换版则 invalidated，并记录 migrationReason=v4-implicit-status。显式状态原样保留，缺失来源或非法状态仍拒绝迁移。
+
+
+### 工程业务验收配置（v10）
+
+仓库 `checks` 仅表示构建/技术检查；新增可选 `acceptanceChecks`，每项包含检查器原有的 id/version/executable/args 或 steps/timeoutMs，以及必填 `criterion`（业务验收项）与 `expected`（精确预期字符串）。最多32项，ID不得与构建项重复。使用同一冻结候选的独立副本执行，末步 stdout 必须为 JSON `{"actual":"实际结果"}`；Host 检查全部步骤退出成功且 actual 与 expected 精确相等才放行。不能输出空回执或仅声明 passed:true。命令、验收项、预期由 Host 配置提供，消息和模型不能覆盖；Host 应只配置能够覆盖目标需求的实际回归用例，不能把通用构建或空命令标为业务验收。
+
+```js
+acceptanceChecks: [{
+  id: 'normalization-result', version: '1',
+  criterion: '固定业务输入的归一化结果', expected: '1 t',
+  executable: trustedNodePath, args: ['tools/accept-normalization.mjs'],
+  timeoutMs: 120000,
+}]
+```
+
+上例仅说明协议，不代表项目已提供该脚本。脚本须调用实际业务实现并输出计算结果；本轮没有为 dataset 配置或伪造业务用例。未配置时新任务停在 `ENGINEERING_ACCEPTANCE_REQUIRED`；用例失败或缺实际值为 `ENGINEERING_ACCEPTANCE_FAILED`，完整失败日志沿用 evidenceRefs 工件保存。准备提交前复用同进程可信票据，重启后重新实跑；验收记录绑定冻结候选摘要。修改候选、需求或代次后旧结果不可放行。
+
+Host 配置属于冻结定义身份。已有等待任务不能通过热改配置绕过漂移保护；为补充配置后的工作建立新的受管任务。旧任务保留原验收范围，不自动插入节点或重放外部动作。切换前后分别检查旧 v9 摘要、双包安装文件、健康状态及历史节点读取。

@@ -9,8 +9,8 @@ import { createManagedWorkspaces } from './execution-workspace.js'
 import { createManagedEdits } from './execution-edit.js'
 import { createGitDelivery } from './execution-git.js'
 import { createGithubPullRequests } from './execution-pr.js'
-import { createVerificationJobCheck } from './execution-check-job.js'
-import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow, createEngineeringScopedWorkflow, createEngineeringPatchWorkflow, createEngineeringDeliverableWorkflow } from './task-workflow.js'
+import { createVerificationJobCheck, createBusinessAcceptanceCheck } from './execution-check-job.js'
+import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow, createEngineeringScopedWorkflow, createEngineeringPatchWorkflow, createEngineeringDeliverableWorkflow, createEngineeringAcceptanceWorkflow } from './task-workflow.js'
 import { freezeCandidate, readCandidate } from './execution-candidate.js'
 
 const exec = promisify(execFile)
@@ -65,6 +65,14 @@ export async function readEngineeringDeliveryProof({ state, artifacts, store, ta
     || final.commitId !== commit.commitId || final.number !== createdPr.receipt.number
     || final.url !== createdPr.receipt.url) fail('ENGINEERING_DELIVERY_PROOF_MISMATCH')
   const checks = new Set(verified.verification.checks.map(check => check.id))
+  if (record.definitionVersion === '10') {
+    const node = state.nodes.find(node => node.nodeId === 'business-acceptance' && node.status === 'succeeded' && node.outputRef)
+    if (!node) fail('ENGINEERING_ACCEPTANCE_PROOF_REQUIRED')
+    const acceptance = (await artifacts.read(node.outputRef))?.acceptance
+    if (!acceptance?.passed || acceptance.candidateDigest !== verified.candidate.digest || !acceptance.checks?.length || acceptance.checks.some(check => !check.passed)) fail('ENGINEERING_ACCEPTANCE_PROOF_REQUIRED')
+    refs.push(node.outputRef)
+    acceptance.checks.forEach(check => checks.add(check.id))
+  }
   return { taskId, runId: state.run.runId, commitSha: commit.commitId,
     treeSha: commit.tree, candidateDigest: verified.candidate.digest, verificationDigest: verified.verification.digest,
     checkIds: [...checks], localE2ePassed: requiredE2eCheckIds.length > 0 && requiredE2eCheckIds.every(id => checks.has(id)),
@@ -96,6 +104,9 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (typeof config.baseBranch !== 'string' || !config.baseBranch || config.baseBranch.startsWith('-') || /[\s\0]/.test(config.baseBranch)) fail('ENGINEERING_BASE_BRANCH_REQUIRED')
     // 配置校验发生在任何消息进入前；真正执行时仍重新校验适配器。
     config.checks.forEach(check => createVerificationJobCheck({ ...check, root: join(config.managedRoot, 'checks') }))
+    if (config.acceptanceChecks !== undefined && !Array.isArray(config.acceptanceChecks)) fail('ENGINEERING_ACCEPTANCE_CONFIG_INVALID')
+    if (config.acceptanceChecks && (config.acceptanceChecks.length > 32 || new Set([...config.checks, ...config.acceptanceChecks].map(check => check.id)).size !== config.checks.length + config.acceptanceChecks.length)) fail('ENGINEERING_ACCEPTANCE_CONFIG_INVALID')
+    config.acceptanceChecks?.forEach(check => createBusinessAcceptanceCheck({ ...check, root: join(config.managedRoot, 'acceptance') }))
     if (config.purpose !== undefined && (typeof config.purpose !== 'string' || !config.purpose.trim())) fail('ENGINEERING_REPOSITORY_INVALID')
     if (config.routingTerms !== undefined && (!Array.isArray(config.routingTerms) || config.routingTerms.some(term => typeof term !== 'string' || !term.trim()))) fail('ENGINEERING_REPOSITORY_INVALID')
     // 路由说明只用于接纳前判断，不改变既有任务冻结的执行配置摘要。
@@ -158,12 +169,13 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       return { ...input, baseCommit: prior?.commitId ?? saved.input.baseCommit, expectedRemoteSha }
     }
     const checks = config.checks.map(check => createVerificationJobCheck({ ...check, root: join(config.managedRoot, 'checks') }))
-    const workflowFactory = !record.definitionVersion || record.definitionVersion === '9' ? createEngineeringDeliverableWorkflow : !config.discovery ? createEngineeringTaskWorkflow
+    const workflowFactory = !record.definitionVersion || record.definitionVersion === '10' ? createEngineeringAcceptanceWorkflow : record.definitionVersion === '9' ? createEngineeringDeliverableWorkflow : !config.discovery ? createEngineeringTaskWorkflow
       : record.definitionVersion === '6' ? createEngineeringDirectWorkflow
         : record.definitionVersion === '7' ? createEngineeringScopedWorkflow
           : !record.definitionVersion || record.definitionVersion === '8' ? createEngineeringPatchWorkflow : createEngineeringTaskWorkflow
     const workflow = workflowFactory({ workflowId: record.workflowId, provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort,
       workspaceAdapter, editAdapter, checks, prepareGeneration, adapterIdentity: saved.repositoryDigest, discovery: config.discovery,
+      acceptanceChecks: (config.acceptanceChecks ?? []).map(check => createBusinessAcceptanceCheck({ ...check, root: join(config.managedRoot, 'acceptance') })),
       project: { repository: config.githubRepository, sourceRepository: config.sourceRepository, workBranch: saved.head, targetBranch: config.baseBranch },
       deliveryPlan: { identity: executionDigest(saved), gitAdapterFor, prAdapterFor, date: saved.date, title: saved.title, body: saved.body, commitMessage: saved.title, expectedRemoteSha: null } })
     const definition = defineExecutionWorkflow(workflow)
@@ -181,7 +193,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
   }
   async function repositoryInspect(binding, args, signal, input) {
     const item = routes.get(binding.runId), saved = item?.record.config, config = configs.get(saved?.repoId)?.config
-    if (!saved || !config?.discovery || !['6', '7', '8', '9'].includes(item.record.definitionVersion) || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
+    if (!saved || !config?.discovery || !['6', '7', '8', '9', '10'].includes(item.record.definitionVersion) || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
     const { operation, query = '', path, offset = 0, limit = operation === 'read' ? 8000 : 100 } = args
     if (!['list', 'search', 'read'].includes(operation) || !Number.isSafeInteger(offset) || offset < 0
       || !Number.isSafeInteger(limit) || limit < 1 || limit > (operation === 'read' ? 16000 : 200)
@@ -281,7 +293,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       fingerprint: executionDigest({ taskId, request: input.request, constraints: input.constraints, repoId: repositoryId }), reissueRequestId: requestId,
       body: `## 任务\n\n${input.request}\n\n## 约束\n\n${input.constraints.map(value => `- ${value}`).join('\n') || '无额外约束'}\n\n## 验证配置\n\n${entry.config.checks.map(check => `- ${check.id} / ${check.version}`).join('\n')}` }
     const workflowId = `task-engineering-reissue-${executionDigest([run.runId, requestId]).slice(0, 40)}`
-    const record = { workflowId, config: nextConfig, definitionVersion: '8' }
+    const record = { workflowId, config: nextConfig, definitionVersion: '10' }
     let next
     try {
       next = await build(record)

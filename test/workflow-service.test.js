@@ -1922,3 +1922,11 @@ test('方案节点仅返回真实工件路径，不附正文、摘要或下载�
   assert.equal(page.nextCursor, null)
   assert.equal(page.totalLength, page.text.length)
 })
+
+
+test('业务验收产出独立显示验收项、预期和实际结果', () => {
+  const result = describeTaskNodeOutput({ nodeId: 'business-acceptance' }, { acceptance: { passed: true, checks: [{ passed: true, log: JSON.stringify({ acceptance: { criterion: '归一化结果', expected: '1 t', actual: '1 t', passed: true } }) }] } })
+  assert.equal(result.overview, '业务验收通过 · 1 项')
+  assert.equal(result.text, '归一化结果\n预期：1 t\n实际：1 t\n结果：通过')
+  assert.doesNotMatch(result.text, /Java|打包|skipTests/)
+})

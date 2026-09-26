@@ -49,6 +49,14 @@ test('工程交付证明复用同一 Run 工件并要求显式业务 E2E 检查'
   { code: 'ENGINEERING_DELIVERY_PROOF_UNAVAILABLE' })
   await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, store: { query: async () => [{ ...record,
     digest: 'e'.repeat(64) }] }, taskId: 't' }), { code: 'ENGINEERING_DELIVERY_PROOF_UNAVAILABLE' })
+  record.definitionVersion = '10'
+  await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, store, taskId: 't' }), { code: 'ENGINEERING_ACCEPTANCE_PROOF_REQUIRED' })
+  output['business-acceptance'] = { acceptance: { passed: true, candidateDigest, checks: [{ id: 'acceptance', passed: true }] } }
+  state.nodes.push({ nodeId: 'business-acceptance', status: 'succeeded', outputRef: 'artifact:business-acceptance' })
+  assert.equal((await readEngineeringDeliveryProof({ state, artifacts, store, taskId: 't', requiredE2eCheckIds: ['acceptance'] })).localE2ePassed, true)
+  output['business-acceptance'].acceptance.candidateDigest = 'e'.repeat(64)
+  await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, store, taskId: 't' }), { code: 'ENGINEERING_ACCEPTANCE_PROOF_REQUIRED' })
+  delete record.definitionVersion
   output['prepare-push'].commitId = 'e'.repeat(40)
   await assert.rejects(readEngineeringDeliveryProof({ state, artifacts, store, taskId: 't' }), { code: 'ENGINEERING_DELIVERY_PROOF_MISMATCH' })
 })
@@ -196,7 +204,7 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   const head=`codex/task-${executionDigest('revision-command').slice(0,24)}`
   await writeFile(script,`const fs=require('node:fs'),cp=require('node:child_process');const [file,remote,head,...args]=process.argv.slice(2);let s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;const sha=()=>cp.execFileSync('git',['ls-remote',remote,'refs/heads/'+head],{encoding:'utf8'}).trim().split(/\\s+/)[0];const value=x=>args[args.indexOf(x)+1];if(s)s.headRefOid=sha();if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(args[1]==='list')console.log(JSON.stringify(s?[s]:[]));else if(args[1]==='view')console.log(JSON.stringify(s));else if(['create','edit'].includes(args[1])){s={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:sha(),headRefName:head,baseRefName:'main',body:fs.readFileSync(value('--body-file'),'utf8'),title:value('--title'),creates:(s?.creates??0)+(args[1]==='create'?1:0),edits:(s?.edits??0)+(args[1]==='edit'?1:0)};fs.writeFileSync(file,JSON.stringify(s));process.exit(1)}else process.exit(2)`)
   const store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'revision',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true});t.after(()=>store.close())
-  const registry=createEngineeringRegistry({ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]})
+  const registry=createEngineeringRegistry({ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],acceptanceChecks:[{id:'value-acceptance',version:'1',criterion:'修改后的值符合约定',expected:'true',executable:process.execPath,args:['-e',"console.log(JSON.stringify({actual:String(['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))}))"]}],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]})
   await registry.restore(store)
   const reached=Promise.withResolvers(),release=Promise.withResolvers();let firstCommit
   const sessions={async run({input,onSessionBound,onResult}){await onSessionBound();assert.equal(input.files[0].text,input.request==='first'?'old':'one');onResult({document:{name:'修改方案.md',markdown:'# 修改方案\n将 value.txt 更新为本轮需要的值，使用配置检查核对文件内容。'},changes:[{path:'value.txt',expectedHash:input.files[0].expectedHash,content:input.request==='first'?'one':'two'}]})},async cancel(){},async close(){}}

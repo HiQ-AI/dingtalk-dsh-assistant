@@ -27,6 +27,8 @@ test('精简判断轨迹不包含技术详情，并展示容量受阻原因', as
   assert.match(reason('MESSAGE_CONTEXT_CAPACITY:IB:$:33000/32000'), /上下文容量受阻.*后续判断已停止/)
   assert.match(reason('MESSAGE_MATERIAL_CAPACITY:R:u1'), /必要材料未能完整提供/)
   assert.equal(reason({ code: 'FAILED' }), '{"code":"FAILED"}')
+  assert.match(reason('ENGINEERING_ACCEPTANCE_REQUIRED'), /缺少业务验收.*后续提交已停止/)
+  assert.match(reason('ENGINEERING_ACCEPTANCE_FAILED'), /业务验收未通过.*后续提交已停止/)
 })
 
 test('收信箱区分话题关联等待与意图重判，任务详情展示业务计划阶段', async () => {

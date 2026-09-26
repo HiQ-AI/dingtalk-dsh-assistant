@@ -1,6 +1,6 @@
 # 话题上下文完整性与处理轨迹
 
-> 状态：COMPLETE
+> 状态：IN_PROGRESS
 > Goal ID：topic-context-completeness
 > 最近维护：2026-09-26T16:21:56+08:00
 > 权威目标：`D:/project/worktrees/dingtalk-topic-context-completeness/docs/acceptance/topic-context-completeness/goal.md`
@@ -40,10 +40,12 @@
 
 | SG11 | 节点交付物契约 | 起点/目录/方案/检查报告真实可读，新旧定义安全，逐节点验收 | 已完成 | round-18.md |
 
+| SG12 | 构建与业务验收拆分 | 新节点缺证据不放行，提交前可信检查，旧定义稳定，部署回读 | 进行中 | round-19.md |
+
 ## 当前检查点
 
-- 当前子目标：SG11
-- 唯一下一步：无，本轮交付完成。
+- 当前子目标：SG12
+- 唯一下一步：完成构建与业务验收拆分的反例验证、部署和交付。
 - 未闭环项：无；旧任务缺失的原方案不补造，新方案语义正确性仍需具体业务验证。
 
 ## 进展

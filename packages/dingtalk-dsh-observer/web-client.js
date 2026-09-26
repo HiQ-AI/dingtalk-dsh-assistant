@@ -201,7 +201,7 @@ window.__ModuleLoader__.load({
       if (!reason) return null
       const text = typeof reason === 'string' ? reason : JSON.stringify(reason)
       if (/MESSAGE_(?:CONTEXT|MATERIAL|REFERENCED_CANDIDATES)_CAPACITY|context_capacity_blocked/.test(text)) return '上下文容量受阻：必要材料未能完整提供，后续判断已停止。'
-      return text
+      return ({ ENGINEERING_ACCEPTANCE_REQUIRED: '缺少业务验收用例与预期结果，后续提交已停止', ENGINEERING_ACCEPTANCE_FAILED: '业务验收未通过或未取得实际结果，后续提交已停止', ENGINEERING_VERIFICATION_FAILED: '构建检查未通过，后续步骤已停止' })[text] ?? text
     }
     const readableValue = (value) => value === undefined || value === null ? '历史未记录' : typeof value === 'string' ? value : JSON.stringify(value, null, 2)
     const readout = (label, value) => React.createElement('details', { style: { borderTop: `1px solid ${colors.border}`, padding: '8px 0', overflowWrap: 'anywhere' } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, label), React.createElement('pre', { style: { margin: '8px 0 0', padding: 10, maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: colors.surface2, borderRadius: ui.radiusSm, font: 'inherit', fontSize: 12 } }, readableValue(value)))
@@ -599,7 +599,7 @@ window.__ModuleLoader__.load({
         const notificationCounts = new Map()
         for (const intent of notifications.filter(item => item.status !== 'delivered')) notificationCounts.set(intent.status, (notificationCounts.get(intent.status) || 0) + 1)
         const retryExhausted = task.waitingReason?.startsWith('topic_request_retry_exhausted:')
-        const waitingLabel = retryExhausted ? '系统协调受阻 · 待恢复' : `等待 · ${task.waitingReason}`
+        const waitingLabel = retryExhausted ? '系统协调受阻 · 待恢复' : `等待 · ${traceReason(task.waitingReason)}`
         const cleanup = task.archiveCleanup
         const cleanupRunning = cleanup?.status === 'running' || archivingTaskId === task.taskId
         const archiveDetailOpen = archiveDetailTaskId === task.taskId
@@ -728,7 +728,7 @@ window.__ModuleLoader__.load({
       const selectedWorkflowTask = (data?.tasks || []).find(task => task.taskId === selectedWorkflowTaskId && task.engine === 'workflow-v2')
       const nodeState = { succeeded: '已完成', running: '执行中', ready: '待执行', waiting: '等待处理', failed: '失败', pending: '未开始', cancelled: '已取消', skipped: '已跳过' }
       const planStageState = { ready: '待执行', waiting_confirmation: '等待人工确认', running: '执行中', succeeded: '已完成', invalidated: '需重新执行', blocked: '受阻' }
-      const nodeTitle = { 'prepare-workspace': '创建独立工作目录', 'read-files': '读取相关文件', 'propose-changes': '编写修改方案', 'inspect-and-propose': '编写修改方案', 'validate-proposal': '检查修改方案', 'apply-changes': '按方案修改文件', 'verify-candidate': '构建与检查修改结果', 'index-files': '索引可修改文件', 'select-files': '选择改动文件', 'validate-selection': '检查文件范围', 'prepare-commit': '检查提交条件', commit: '提交代码', 'prepare-push': '检查推送条件', push: '推送代码', 'prepare-pr': '编写合并请求', 'create-pr': '创建合并请求', 'prepare-generation': '确认项目与修改起点', prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '校验结果', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'prepare-rehearsal': '核对 UAT 演练条件', 'run-rehearsal': '在 UAT 数据库演练', 'readback-rehearsal': '回读 UAT 演练', 'prepare-issue': '准备工单', 'create-issue': '提交工单', 'readback-issue': '回读工单', 'approval-gate': '等待真人审批', 'prepare-execute': '准备执行', 'execute-task': '执行受控任务', 'readback-production': '生产只读回查', finalize: '核对交付结果' }
+      const nodeTitle = { 'prepare-workspace': '创建独立工作目录', 'read-files': '读取相关文件', 'propose-changes': '编写修改方案', 'inspect-and-propose': '编写修改方案', 'validate-proposal': '检查修改方案', 'apply-changes': '按方案修改文件', 'verify-candidate': '构建检查', 'business-acceptance': '业务验收', 'index-files': '索引可修改文件', 'select-files': '选择改动文件', 'validate-selection': '检查文件范围', 'prepare-commit': '检查提交条件', commit: '提交代码', 'prepare-push': '检查推送条件', push: '推送代码', 'prepare-pr': '编写合并请求', 'create-pr': '创建合并请求', 'prepare-generation': '确认项目与修改起点', prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '校验结果', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'prepare-rehearsal': '核对 UAT 演练条件', 'run-rehearsal': '在 UAT 数据库演练', 'readback-rehearsal': '回读 UAT 演练', 'prepare-issue': '准备工单', 'create-issue': '提交工单', 'readback-issue': '回读工单', 'approval-gate': '等待真人审批', 'prepare-execute': '准备执行', 'execute-task': '执行受控任务', 'readback-production': '生产只读回查', finalize: '核对交付结果' }
       const taskNodes = selectedWorkflowTask?.executionNodes || []
       const completedSteps = taskNodes.filter(node => node.status === 'succeeded').length
       const taskTone = selectedWorkflowTask?.outcome === 'failed' ? colors.danger : selectedWorkflowTask?.state === 'waiting' ? colors.warning : selectedWorkflowTask?.outcome === 'succeeded' ? 'var(--dsw-alias-state-success-primary, #248a3d)' : colors.accent
@@ -748,7 +748,7 @@ window.__ModuleLoader__.load({
             React.createElement('span', { style: { color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, taskNodes.length ? `已完成 ${completedSteps} / ${taskNodes.length} 个步骤` : '暂无步骤记录'),
             activeStep ? React.createElement('span', { style: { color: stepColor(activeStep.status) } }, `当前 · ${activeStep.title || nodeTitle[activeStep.nodeId] || '执行步骤'}`) : null)),
         selectedWorkflowTask.objective && selectedWorkflowTask.objective !== selectedWorkflowTask.title ? React.createElement('p', { style: { margin: '0 0 16px', color: colors.muted, fontSize: 14, lineHeight: 1.7 } }, selectedWorkflowTask.objective) : null,
-        selectedWorkflowTask.waitingReason ? React.createElement('div', { role: 'status', style: { marginBottom: 16, padding: '14px 18px', borderLeft: `3px solid ${colors.warning}`, background: colors.surface2, fontSize: 14, lineHeight: 1.7 } }, selectedWorkflowTask.waitingReason) : null,
+        selectedWorkflowTask.waitingReason ? React.createElement('div', { role: 'status', style: { marginBottom: 16, padding: '14px 18px', borderLeft: `3px solid ${colors.warning}`, background: colors.surface2, fontSize: 14, lineHeight: 1.7 } }, traceReason(selectedWorkflowTask.waitingReason)) : null,
         selectedWorkflowTask.plan?.stages?.length ? React.createElement('div', { 'aria-label': '任务阶段', style: { display: 'flex', flexWrap: 'wrap', gap: '8px 24px', marginBottom: 16, fontSize: 12, color: colors.muted } }, ...selectedWorkflowTask.plan.stages.map((stage, index) => React.createElement('span', { key: stage.stageId }, `${String(index + 1).padStart(2, '0')} · ${stage.title || '任务阶段'} · ${planStageState[stage.status] || '状态未记录'}`))) : null,
         React.createElement('section', { 'aria-label': '执行步骤' },
           React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 12 } },
@@ -766,7 +766,7 @@ window.__ModuleLoader__.load({
                     React.createElement('strong', { style: { fontSize: 14, lineHeight: 1.6 } }, node.title || nodeTitle[node.nodeId] || '执行步骤'),
                     React.createElement('span', { style: { color: tone, fontSize: 12 } }, nodeState[node.status] || '状态未记录')),
                   React.createElement('div', { style: { marginLeft: 'auto', textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, React.createElement(TaskStepElapsed, { node }))),
-                node.waitReason?.reference ? React.createElement('p', { style: { margin: '0 0 6px', fontSize: 13, lineHeight: 1.7, color: colors.warning } }, node.waitReason.reference) : null,
+                node.waitReason?.reference ? React.createElement('p', { style: { margin: '0 0 6px', fontSize: 13, lineHeight: 1.7, color: colors.warning } }, traceReason(node.waitReason.reference)) : null,
                 node.outputRef ? React.createElement(TaskStepOutput, { key: `${node.nodeRunId}:${node.outputRef}`, taskId: selectedWorkflowTask.taskId, node }) : React.createElement('span', { style: { color: colors.muted, fontSize: 13 } }, ['pending', 'ready', 'blocked'].includes(node.status) ? '执行后将在这里展示产出' : '暂未记录产出'),
                 node.sessionId ? React.createElement('button', { type: 'button', onClick: () => navigate(node.sessionId), style: { display: 'block', marginTop: 6, padding: 0, border: 0, color: colors.accent, background: 'transparent', font: 'inherit', fontSize: 12, cursor: 'pointer' } }, '查看会话记录') : null))
           }))),

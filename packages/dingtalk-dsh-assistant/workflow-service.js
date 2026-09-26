@@ -21,6 +21,13 @@ import { describeVerificationChecks } from './execution-check-job.js'
 
 /** 将持久节点工件转换为可读产出；不推断未落盘的文件或外部执行结果。 */
 export function describeTaskNodeOutput(node, output, context = {}) {
+  if (node.nodeId === 'business-acceptance' && output?.acceptance) {
+    const items = output.acceptance.checks.map(check => {
+      const { acceptance } = JSON.parse(check.log)
+      return `${acceptance.criterion}\n预期：${acceptance.expected}\n实际：${acceptance.actual ?? '未取得实际结果'}\n结果：${check.passed ? '通过' : '未通过'}`
+    })
+    return { overview: `业务验收${output.acceptance.passed ? '通过' : '未通过'} · ${items.length} 项`, text: items.join('\n\n') }
+  }
   if (node.nodeId === 'prepare-workspace') {
     const workspace = output?.workspace ?? context.workspace
     return { overview: workspace?.status === 'succeeded' ? '已创建独立 Git 工作目录' : '工作目录回执未记录',
@@ -1734,7 +1741,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       try {
         if (run.status === 'waiting') {
           const state = await store.query({ kind: 'run', runId: run.runId })
-          if (state.nodes?.some(node => ['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_INDEX_CAPACITY_EXCEEDED', 'EXECUTION_BUDGET_EXHAUSTED', 'EDIT_PREPARED_INVALID', 'ENGINEERING_EDIT_SCOPE_MISMATCH', 'ENGINEERING_NO_CHANGES_PROPOSED'].includes(node.waitReason?.reference))) continue
+          if (state.nodes?.some(node => ['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_ACCEPTANCE_REQUIRED', 'ENGINEERING_ACCEPTANCE_FAILED', 'ENGINEERING_INDEX_CAPACITY_EXCEEDED', 'EXECUTION_BUDGET_EXHAUSTED', 'EDIT_PREPARED_INVALID', 'ENGINEERING_EDIT_SCOPE_MISMATCH', 'ENGINEERING_NO_CHANGES_PROPOSED'].includes(node.waitReason?.reference))) continue
         }
         await controller.recover({ commandId: `recover:${run.runId}:${run.revision}:${run.claimCount}`, runId: run.runId })
       }

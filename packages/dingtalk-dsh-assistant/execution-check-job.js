@@ -101,3 +101,20 @@ export function createVerificationJobCheck({ id, version, root, executable, args
       log: JSON.stringify({ candidateDigest: snapshot.candidateDigest, directory, exitCode: result.exitCode, reason: result.reason, timeoutScope: result.timeoutScope, startedAt, elapsedMs: Date.now() - start, timeoutMs, steps: results }) }
   } }
 }
+
+/** Host 固定验收项；命令退出成功且实际值匹配预期才通过。 */
+export function createBusinessAcceptanceCheck({ criterion, expected, ...config }) {
+  if (![criterion, expected].every(value => typeof value === 'string' && value.trim() && value.length <= 2000)) throw executionError('ENGINEERING_ACCEPTANCE_CONFIG_INVALID')
+  const check = createVerificationJobCheck(config)
+  return { ...check, configurationDigest: executionDigest({ command: check.configurationDigest, implementation: check.run.toString(), criterion, expected }), async run(snapshot, context) {
+    const result = await check.run(snapshot, context), log = JSON.parse(result.log), step = log.steps.at(-1)
+    let actual = null
+    try {
+      const parsed = JSON.parse(step.stdoutEncoding === 'base64' ? Buffer.from(step.stdout, 'base64').toString('utf8') : step.stdout)
+      if (typeof parsed.actual === 'string' && parsed.actual.length <= 2000) actual = parsed.actual
+    } catch { /* 无结构化实际值时验收不通过。 */ }
+    const passed = result.passed && actual !== null && actual === expected
+    log.acceptance = { criterion, expected, actual, passed }
+    return { passed, log: JSON.stringify(log) }
+  } }
+}
