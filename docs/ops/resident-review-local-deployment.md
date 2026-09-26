@@ -165,3 +165,5 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 仅对已重开、queued、带reopenContext且resume原childSessionId明确返回该ID不存在的Task，Runtime创建新独立Session并先持久化新的childSessionId和`task-reopen-session-recreated`事件，再继续原TASK_REOPEN与Topic输入派发。旧Session ID保留在runHistory；其它错误及running/waiting不换会话。切换前按既有流程备份稳定存储，核对三个目标Task的taskId、轮次、来源版本与原ID；切换后逐个读回新Session、原Task身份、运行事件及未重复业务动作。旧轮执行细节不可恢复，当前轮必须独立核验；不得把旧结果映射成新轮通过。
 
 任务表格同步读取与看板一致的异步任务视图，包含 `workflow-v2` 节点进度、等待原因与结果；不能只同步旧 JSON Task。隔离验证通过不代表真实表格回读，安装后仍按既有配置独立核验托管范围。
+
+任务详情纯界面更新只打包 Observer；回读安装的 web-client.js 与源码 SHA256 一致。页面首屏显示状态、编号步骤与最新产出，历史执行展开后请求；不触发任务重跑或钉钉发送。

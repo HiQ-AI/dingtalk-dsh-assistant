@@ -80,7 +80,13 @@ window.__ModuleLoader__.load({
         outline: 2px solid var(--dsw-alias-brand-primary, #4d6bfe) !important;
         outline-offset: 2px !important;
       }
+      [data-dingtalk-observer] .observer-task-layout { display: grid; grid-template-columns: minmax(260px, .85fr) minmax(0, 1.4fr); gap: 40px; }
+      [data-dingtalk-observer] .observer-task-overview { padding: 28px 0; }
+      [data-dingtalk-observer] .observer-task-result { padding: 24px; }
       @media (max-width: 960px) {
+        [data-dingtalk-observer] .observer-task-layout { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+        [data-dingtalk-observer] .observer-task-overview { padding: 20px 0; }
+        [data-dingtalk-observer] .observer-task-result { padding: 18px; }
         [data-dingtalk-observer] .observer-main { padding: 16px !important; }
         [data-dingtalk-observer] .observer-topics-layout { display: grid !important; grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr); }
         [data-dingtalk-observer] .observer-topic-list { max-width: none !important; }
@@ -336,6 +342,12 @@ window.__ModuleLoader__.load({
                 pager(messageOffset, context.total, messagePageSize, setMessageOffset, detailLoading))
             ))))
     }
+    function TaskHistoryDisclosure({ task, onOpenSession }) {
+      const [expanded, setExpanded] = useState(false)
+      return React.createElement('details', { onToggle: (event) => setExpanded(event.currentTarget.open), style: { borderTop: `1px solid ${colors.border}`, paddingTop: 16 } },
+        React.createElement('summary', { style: { cursor: 'pointer', fontSize: 14, fontWeight: 600 } }, '查看历史执行与会话'),
+        expanded ? React.createElement(TaskRunHistory, { task, onOpenSession }) : null)
+    }
     function TaskRunHistory({ task, onOpenSession }) {
       const [page, setPage] = useState()
       const [cursor, setCursor] = useState('')
@@ -353,8 +365,8 @@ window.__ModuleLoader__.load({
       return React.createElement('section', { 'aria-label': '任务负责人和历史执行', style: { display: 'grid', gap: 10, borderTop: `1px solid ${colors.border}`, paddingTop: 14, fontSize: 12 } },
         React.createElement('strong', { style: { fontSize: 13 } }, '任务负责人会话与历史执行'),
         loading ? React.createElement('span', { role: 'status' }, '正在读取历史执行…') : error ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `历史执行读取失败：${error}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setRetry((value) => value + 1) }, '重试')) : page ? React.createElement(React.Fragment, null,
-          React.createElement('div', { style: { display: 'grid', gap: 4 } }, React.createElement('strong', null, `Task Owner · ${page.taskOwner?.status || '状态未记录'}`), sessionAction(page.taskOwner?.sessionBound === true ? page.taskOwner.sessionId : null, '查看任务负责人会话')),
-          ...(page.runs || []).map((run, index) => React.createElement('details', { key: run.runId || index, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 8 } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, `执行 ${short(run.runId)} · ${run.status || '状态未记录'} · ${fmt(run.startedAt)}`), React.createElement('div', { style: { display: 'grid', gap: 9, padding: '9px 0 3px 16px' } }, ...(run.nodes || []).map((node, nodeIndex) => React.createElement('div', { key: node.nodeRunId || node.nodeId || nodeIndex, style: { display: 'grid', gap: 3 } }, React.createElement('strong', null, `${node.title || node.label || node.nodeId || '节点'} · ${node.status || '状态未记录'}`), sessionAction(node.sessionId, '查看此节点会话记录'))), !(run.nodes || []).length ? React.createElement('span', { style: { color: colors.muted } }, '此执行没有节点会话记录') : null))),
+          React.createElement('div', { style: { display: 'grid', gap: 4 } }, React.createElement('strong', null, '任务负责人'), sessionAction(page.taskOwner?.sessionBound === true ? page.taskOwner.sessionId : null, '查看任务负责人会话')),
+          ...(page.runs || []).map((run, index) => React.createElement('details', { key: run.runId || index, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 8 } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, `${fmt(run.startedAt)} · ${{ succeeded: '已完成', failed: '执行失败', cancelled: '已取消', running: '执行中', waiting: '等待处理', queued: '待执行' }[run.status] || '状态未记录'}`), React.createElement('div', { style: { display: 'grid', gap: 9, padding: '9px 0 3px 16px' } }, ...(run.nodes || []).map((node, nodeIndex) => React.createElement('div', { key: node.nodeRunId || node.nodeId || nodeIndex, style: { display: 'grid', gap: 3 } }, React.createElement('strong', null, `${node.title || node.label || node.nodeId || '节点'} · ${{ succeeded: '已完成', failed: '失败', running: '执行中', waiting: '等待处理', ready: '待执行', skipped: '已跳过', cancelled: '已取消' }[node.status] || '状态未记录'}`), sessionAction(node.sessionId, '查看此节点会话记录'))), !(run.nodes || []).length ? React.createElement('span', { style: { color: colors.muted } }, '此执行没有节点会话记录') : null))),
           !(page.runs || []).length ? React.createElement('span', { style: { color: colors.muted } }, '暂无历史执行') : null,
           React.createElement('div', { style: { display: 'flex', gap: 8 } }, cursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setCursor(cursorHistory.at(-1)); setCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, page.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setCursorHistory((items) => [...items, cursor]); setCursor(page.nextCursor) } }, '下一页') : null)) : React.createElement('span', { style: { color: colors.muted } }, '历史未记录'))
     }
@@ -667,40 +679,55 @@ window.__ModuleLoader__.load({
       const nodeState = { succeeded: '已完成', running: '执行中', ready: '待执行', waiting: '等待处理', failed: '失败', pending: '未开始', cancelled: '已取消', skipped: '已跳过' }
       const planStageState = { ready: '待执行', waiting_confirmation: '等待人工确认', running: '执行中', succeeded: '已完成', invalidated: '需重新执行', blocked: '受阻' }
       const nodeTitle = { 'prepare-workspace': '准备工作目录', 'read-files': '读取文件', 'propose-changes': '生成修改方案', 'inspect-and-propose': '梳理修改方案', 'apply-changes': '应用修改', 'verify-candidate': '验证候选结果', 'index-files': '建立文件索引', 'select-files': '选择文件', 'validate-selection': '校验选择', 'prepare-commit': '检查提交条件', commit: '提交代码', 'prepare-push': '检查推送条件', push: '推送代码', 'prepare-pr': '检查 PR 条件', 'create-pr': '创建 PR', 'prepare-generation': '准备任务代际', prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '校验结果', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'prepare-rehearsal': '核对 UAT 演练条件', 'run-rehearsal': '在 UAT 数据库演练', 'readback-rehearsal': '回读 UAT 演练', 'prepare-issue': '准备工单', 'create-issue': '提交工单', 'readback-issue': '回读工单', 'approval-gate': '等待真人审批', 'prepare-execute': '准备执行', 'execute-task': '执行受控任务', 'readback-production': '生产只读回查', finalize: '核验交付' }
-      const workflowDetail = selectedWorkflowTask ? React.createElement('section', { 'aria-label': '任务执行详情', style: { ...card, display: 'grid', gap: 18, maxWidth: 920, margin: '0 auto' } },
-        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'start' } },
-          React.createElement('div', { style: { display: 'grid', gap: 6, minWidth: 0 } },
-            React.createElement('strong', { style: { fontSize: 18, overflowWrap: 'anywhere' } }, selectedWorkflowTask.title || selectedWorkflowTask.objective),
-            React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, `${selectedWorkflowTask.workflowId || '任务工作流'}${selectedWorkflowTask.workflowVersion ? ` · 定义 v${selectedWorkflowTask.workflowVersion}` : ''} · ${selectedWorkflowTask.taskId}`)),
+      const taskNodes = selectedWorkflowTask?.executionNodes || []
+      const completedSteps = taskNodes.filter(node => node.status === 'succeeded').length
+      const taskTone = selectedWorkflowTask?.outcome === 'failed' ? colors.danger : selectedWorkflowTask?.state === 'waiting' ? colors.warning : selectedWorkflowTask?.outcome === 'succeeded' ? 'var(--dsw-alias-state-success-primary, #248a3d)' : colors.accent
+      const taskStatus = selectedWorkflowTask?.workflowProgress?.outcomeLabel || ({ succeeded: '已完成', failed: '执行失败', cancelled: '已取消' }[selectedWorkflowTask?.outcome]) || ({ completed: '已结束', running: '执行中', waiting: '等待处理', queued: '待执行' }[selectedWorkflowTask?.state]) || '状态未记录'
+      const activeStep = taskNodes.find(node => ['running', 'waiting', 'failed'].includes(node.status))
+      const stepColor = (status) => status === 'succeeded' ? 'var(--dsw-alias-state-success-primary, #248a3d)' : status === 'failed' ? colors.danger : status === 'waiting' ? colors.warning : status === 'running' ? colors.accent : colors.muted
+      const workflowDetail = selectedWorkflowTask ? React.createElement('section', { 'aria-label': '任务执行详情', style: { maxWidth: 1120, margin: '0 auto', minWidth: 0, overflowWrap: 'anywhere' } },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, fontSize: 12, color: colors.muted } },
+          React.createElement('span', null, '任务看板 / 任务详情'),
           React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedWorkflowTaskId('') }, '返回看板')),
-        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, fontSize: 12 } },
-          React.createElement('span', { style: pill(colors.accent) }, selectedWorkflowTask.workflowProgress?.outcomeLabel || selectedWorkflowTask.state),
-          React.createElement('span', { style: { color: colors.muted } }, `${(selectedWorkflowTask.executionNodes || []).filter(node => node.status === 'succeeded').length} / ${(selectedWorkflowTask.executionNodes || []).length} 个节点完成`)),
-        selectedWorkflowTask.waitingReason ? React.createElement('div', { role: 'status', style: { color: colors.warning, overflowWrap: 'anywhere', fontSize: 12 } }, `当前等待：${selectedWorkflowTask.waitingReason}`) : null,
-        selectedWorkflowTask.plan?.stages?.length ? React.createElement('section', { 'aria-label': '任务阶段', style: { display: 'grid', gap: 0 } },
-          React.createElement('strong', { style: { fontSize: 13, marginBottom: 6 } }, `任务阶段 · 计划 v${selectedWorkflowTask.plan.version}`),
-          ...selectedWorkflowTask.plan.stages.map((stage, index) => React.createElement('div', { key: stage.stageId, style: { display: 'grid', gridTemplateColumns: '24px minmax(0, 1fr)', gap: 12, padding: '12px 0', borderTop: `1px solid ${colors.border}` } },
-            React.createElement('span', { style: { ...pill(stage.status === 'succeeded' ? 'var(--dsw-alias-state-success-primary, #248a3d)' : stage.status === 'blocked' ? colors.danger : colors.accent), justifyContent: 'center', height: 24, boxSizing: 'border-box' } }, index + 1),
-            React.createElement('div', { style: { display: 'grid', gap: 5, minWidth: 0, fontSize: 12 } },
-              React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' } },
-                React.createElement('strong', { style: { fontSize: 13, overflowWrap: 'anywhere' } }, stage.title || stage.stageId),
-                React.createElement('span', { style: { color: stage.status === 'waiting_confirmation' || stage.status === 'blocked' ? colors.warning : colors.muted } }, planStageState[stage.status] || stage.status),
-                selectedWorkflowTask.plan.currentStageId === stage.stageId ? React.createElement('span', { style: pill(colors.accent) }, '当前阶段') : null),
-              React.createElement('span', { style: { color: colors.muted, overflowWrap: 'anywhere' } }, stage.workflowId || '通用流程', stage.runId ? ` · 执行 ${short(stage.runId)}` : ''),
-              stage.status === 'waiting_confirmation' ? React.createElement('span', { role: 'status', style: { color: colors.warning } }, '等待确认上一阶段产出后继续') : null,
-              stage.outputRef ? React.createElement('span', { style: { color: colors.muted } }, '阶段产出已记录') : null)))
-        ) : null,
-        React.createElement('section', { 'aria-label': '流程节点', style: { display: 'grid', gap: 0 } },
-          React.createElement('strong', { style: { fontSize: 13, marginBottom: 6 } }, '流程节点'),
-          ...(selectedWorkflowTask.executionNodes || []).map((node, index) => React.createElement('div', { key: node.nodeRunId || `${node.nodeId}-${index}`, style: { display: 'grid', gridTemplateColumns: '24px minmax(0, 1fr)', gap: 12, padding: '12px 0', borderTop: `1px solid ${colors.border}` } },
-            React.createElement('span', { style: { ...pill(node.status === 'succeeded' ? 'var(--dsw-alias-state-success-primary, #248a3d)' : node.status === 'failed' ? colors.danger : colors.accent), justifyContent: 'center', height: 24, boxSizing: 'border-box' } }, index + 1),
-            React.createElement('div', { style: { display: 'grid', gap: 5, minWidth: 0, fontSize: 12 } },
-              React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' } }, React.createElement('strong', { style: { fontSize: 13 } }, node.title || nodeTitle[node.nodeId] || node.nodeId), React.createElement('span', { style: { color: colors.muted } }, nodeState[node.status] || node.status)),
-              node.waitReason?.reference ? React.createElement('span', { style: { color: colors.warning, overflowWrap: 'anywhere' } }, `等待原因：${node.waitReason.reference}`) : null,
-              node.outputRef ? React.createElement('span', { style: { color: colors.muted } }, '节点产出已记录') : null,
-              node.sessionId ? React.createElement('button', { type: 'button', onClick: () => navigate(node.sessionId), style: { justifySelf: 'start', padding: 0, border: 0, color: colors.accent, background: 'transparent', font: 'inherit', cursor: 'pointer' } }, '查看此节点会话记录') : React.createElement('span', { style: { color: colors.muted } }, '会话尚未创建或历史未绑定'))))),
-        React.createElement(TaskRunHistory, { key: selectedWorkflowTask.taskId, task: selectedWorkflowTask, onOpenSession: navigate }),
-        selectedWorkflowTask.result ? React.createElement('section', { style: { display: 'grid', gap: 6, paddingTop: 12, borderTop: `1px solid ${colors.border}` } }, React.createElement('strong', { style: { fontSize: 13 } }, '任务产出'), React.createElement('div', { style: { fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, selectedWorkflowTask.result)) : null)
+        React.createElement('header', { className: 'observer-task-overview', style: { borderBottom: `1px solid ${colors.border}`, marginBottom: 28 } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12, fontSize: 12 } },
+            React.createElement('span', { style: { ...pill(taskTone), fontWeight: 600 } }, taskStatus),
+            React.createElement('span', { style: { color: colors.muted } }, `最近更新 ${fmt(selectedWorkflowTask.updatedAt)}`)),
+          React.createElement('h1', { style: { margin: 0, fontSize: 24, fontWeight: 650, lineHeight: 1.45, letterSpacing: '-.02em', maxWidth: 900 } }, selectedWorkflowTask.title || selectedWorkflowTask.objective),
+          React.createElement('div', { style: { marginTop: 24, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '12px 24px', fontSize: 12 } },
+            React.createElement('span', { style: { color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, taskNodes.length ? `已完成 ${completedSteps} / ${taskNodes.length} 个步骤` : '暂无步骤记录'),
+            taskNodes.length ? React.createElement('div', { 'aria-label': '步骤完成情况', style: { display: 'flex', gap: 4, flex: '0 1 200px', minWidth: 80 } }, ...taskNodes.map((node, index) => React.createElement('span', { key: index, title: `步骤 ${index + 1}：${nodeState[node.status] || '状态未记录'}`, style: { flex: 1, height: 4, borderRadius: 2, background: node.status === 'succeeded' ? stepColor(node.status) : node.status === 'running' ? colors.accent : colors.border } }))) : null,
+            activeStep ? React.createElement('span', { style: { color: stepColor(activeStep.status) } }, `当前 · ${activeStep.title || nodeTitle[activeStep.nodeId] || '执行步骤'}`) : null)),
+        React.createElement('div', { className: 'observer-task-layout' },
+          React.createElement('div', { style: { minWidth: 0 } },
+            selectedWorkflowTask.plan?.stages?.length ? React.createElement('section', { 'aria-label': '任务阶段', style: { marginBottom: 28 } },
+              React.createElement('h2', { style: { margin: '0 0 14px', fontSize: 14, fontWeight: 650 } }, '任务阶段'),
+              React.createElement('ol', { style: { listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 8 } }, ...selectedWorkflowTask.plan.stages.map((stage, index) => React.createElement('li', { key: stage.stageId, style: { display: 'grid', gridTemplateColumns: '24px minmax(0, 1fr)', gap: 10, padding: '10px 12px', background: selectedWorkflowTask.plan.currentStageId === stage.stageId ? colors.surface2 : 'transparent', borderLeft: `2px solid ${selectedWorkflowTask.plan.currentStageId === stage.stageId ? colors.accent : colors.border}`, fontSize: 12 } },
+                React.createElement('span', { style: { color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, String(index + 1).padStart(2, '0')),
+                React.createElement('div', { style: { display: 'grid', gap: 4 } }, React.createElement('strong', null, stage.title || '任务阶段'), React.createElement('span', { style: { color: stage.status === 'waiting_confirmation' || stage.status === 'blocked' ? colors.warning : colors.muted } }, planStageState[stage.status] || '状态未记录'), stage.status === 'waiting_confirmation' ? React.createElement('span', { role: 'status', style: { color: colors.warning } }, '等待确认上一阶段产出后继续') : null))))) : null,
+            React.createElement('section', { 'aria-label': '执行步骤' },
+              React.createElement('h2', { style: { margin: '0 0 22px', fontSize: 16, fontWeight: 650 } }, '执行步骤'),
+              !taskNodes.length ? React.createElement('p', { style: { padding: '20px 0', color: colors.muted, fontSize: 14 } }, '暂无执行步骤记录') : null,
+              React.createElement('ol', { style: { padding: 0, margin: 0, listStyle: 'none' } }, ...taskNodes.map((node, index) => {
+                const focused = ['running', 'waiting', 'failed'].includes(node.status)
+                const tone = stepColor(node.status)
+                return React.createElement('li', { key: node.nodeRunId || `${node.nodeId}-${index}`, 'aria-current': node.status === 'running' ? 'step' : undefined, style: { position: 'relative', display: 'grid', gridTemplateColumns: '36px minmax(0, 1fr)', gap: 14, paddingBottom: index === taskNodes.length - 1 ? 0 : 24 } },
+                  index < taskNodes.length - 1 ? React.createElement('span', { 'aria-hidden': true, style: { position: 'absolute', left: 17, top: 36, bottom: 0, width: 1, background: colors.border } }) : null,
+                  React.createElement('span', { 'aria-label': `步骤 ${index + 1}`, style: { display: 'grid', placeItems: 'center', width: 36, height: 36, boxSizing: 'border-box', borderRadius: '50%', border: `1px solid ${focused ? tone : colors.border}`, background: focused ? tone : colors.surface, color: focused ? 'var(--dsw-alias-label-on-brand, #fff)' : tone, fontSize: 12, fontWeight: 650, fontVariantNumeric: 'tabular-nums', position: 'relative' } }, String(index + 1).padStart(2, '0')),
+                  React.createElement('div', { style: { minWidth: 0, padding: focused ? '12px 14px' : '6px 0 0', borderRadius: 10, background: focused ? `color-mix(in srgb, ${tone} 6%, ${colors.surface})` : 'transparent', display: 'grid', gap: 8 } },
+                    React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '6px 10px' } }, React.createElement('strong', { style: { fontSize: 14, fontWeight: 600 } }, node.title || nodeTitle[node.nodeId] || '执行步骤'), React.createElement('span', { style: { color: tone, fontSize: 12 } }, nodeState[node.status] || '状态未记录')),
+                    node.waitReason?.reference ? React.createElement('p', { style: { margin: 0, fontSize: 12, lineHeight: 1.65, color: colors.warning } }, node.waitReason.reference) : null,
+                    node.outputRef ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '本步产出已记录') : null,
+                    node.sessionId ? React.createElement('button', { type: 'button', onClick: () => navigate(node.sessionId), style: { justifySelf: 'start', padding: 0, border: 0, color: colors.accent, background: 'transparent', font: 'inherit', fontSize: 12, cursor: 'pointer' } }, '查看此节点会话记录') : null))
+              }))),
+            React.createElement('div', { style: { marginTop: 28 } }, React.createElement(TaskHistoryDisclosure, { key: selectedWorkflowTask.taskId, task: selectedWorkflowTask, onOpenSession: navigate }))),
+          React.createElement('div', { style: { minWidth: 0, display: 'grid', alignContent: 'start', gap: 24 } },
+            selectedWorkflowTask.waitingReason ? React.createElement('section', { role: 'status', style: { display: 'grid', gap: 8, padding: '16px 18px', borderLeft: `3px solid ${taskTone}`, background: `color-mix(in srgb, ${taskTone} 6%, ${colors.surface})`, borderRadius: '0 10px 10px 0' } }, React.createElement('strong', { style: { color: taskTone, fontSize: 14 } }, '需要处理'), React.createElement('p', { style: { margin: 0, fontSize: 14, lineHeight: 1.7 } }, selectedWorkflowTask.waitingReason)) : null,
+            React.createElement('section', { className: 'observer-task-result', 'aria-label': '最新产出', style: { border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.surface, minHeight: 180 } },
+              React.createElement('header', { style: { paddingBottom: 16, marginBottom: 20, borderBottom: `1px solid ${colors.border}` } }, React.createElement('h2', { style: { margin: 0, fontSize: 18, fontWeight: 650 } }, '最新产出'), React.createElement('p', { style: { margin: '6px 0 0', fontSize: 12, color: colors.muted } }, '任务最近记录的结果')),
+              React.createElement('div', { style: { fontSize: 14, lineHeight: 1.85, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', color: selectedWorkflowTask.result ? 'inherit' : colors.muted } }, selectedWorkflowTask.result || '暂未记录产出'),
+              selectedWorkflowTask.result ? React.createElement('p', { style: { margin: '24px 0 0', paddingTop: 16, borderTop: `1px solid ${colors.border}`, fontSize: 12, color: colors.muted } }, '送达情况请查看发件记录。') : null),
+            React.createElement('section', { 'aria-label': '任务目标', style: { display: 'grid', gap: 8, padding: '0 4px' } }, React.createElement('h2', { style: { margin: 0, fontSize: 12, fontWeight: 600, color: colors.muted } }, '任务目标'), React.createElement('p', { style: { margin: 0, fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap' } }, selectedWorkflowTask.objective || '目标未记录')))))
         : null
       const tasksPage = workflowDetail || React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns)
       const authorizationStatus = {

@@ -1,0 +1,42 @@
+{
+  "passed": true,
+  "checks": [
+    "message-trace",
+    "no-technical-details",
+    "capacity-reason",
+    "readable-conclusion",
+    "summary-only-render",
+    "narrow-trace-no-overflow",
+    "step-duration",
+    "shared-batch-sources",
+    "switch-source-keeps-single-judgment",
+    "topic-context",
+    "stale-response-ignored",
+    "intent-batches",
+    "independent-intent-pagination",
+    "intent-trace-return-preserves-page",
+    "narrow-topic-context",
+    "task-business-overview",
+    "task-history-lazy-load",
+    "task-history",
+    "reserved-owner-no-link",
+    "narrow-history",
+    "narrow-keyboard-collapse",
+    "task-numbered-timeline",
+    "task-waiting-result-layout",
+    "task-narrow-no-overflow"
+  ],
+  "screenshots": {
+    "message": "message-trace.png",
+    "topic": "topic-context.png",
+    "topicNarrow": "topic-context-narrow.png",
+    "task": "task-detail-desktop.png",
+    "taskNarrow": "task-detail-narrow.png"
+  },
+  "sourceSha256": "71ffe71b60956837bcfb4978c500ff02995b94a227e12d45641b2b5e0e70522d",
+  "browser": "153.0.4234.48",
+  "errors": [],
+  "writes": [],
+  "apiCalls": 17,
+  "boundary": "真实React与完整observer代码；隔离临时server，API全部由Playwright拦截，未访问真实18998；DSH primitives为语义替身。"
+}
