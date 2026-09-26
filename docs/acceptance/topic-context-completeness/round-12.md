@@ -18,3 +18,9 @@
 ## 重现
 
 运行 `scripts/verify-observer-browser.mjs <playwright模块目录> docs/acceptance/topic-context-completeness/round-12`。截图本地生成，不入库。
+
+## 本地更新回读
+
+仅更新 Observer 0.5.15 的独立本地 tgz，目录 `docs/tmp/task-detail-fb5f9b8`；包 SHA256 `7D0903E91871C7E72D8B54E76283337FAC3FC82DDC6DF0BEB5D7CCED16230E24`。UI 源码与安装文件 SHA256 `71FFE71B60956837BCFB4978C500FF02995B94A227E12D45641B2B5E0E70522D`，profile patch 未变化。
+
+PID 46604 同时监听 3080/18998；health=ok、inboundProcessing=true、recoveryIssueCount=0；认证 Web HTTP 200。任务回读 73 条（72 completed、1 waiting），其中 5 条 workflow-v2。没有重跑任务或发送测试消息。备份在 `D:/dsh_home/backups/task-detail-20260926-fb5f9b8`，包括 profile、控制库和 Domain 存储；未变更数据结构。
