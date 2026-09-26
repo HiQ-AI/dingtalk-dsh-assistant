@@ -1,0 +1,8 @@
+{
+  "files": 83,
+  "mismatches": [],
+  "dependencies": {
+    "@zzusp/dingtalk-dsh-assistant": "file:D:/project/worktrees/dingtalk-topic-context-completeness/docs/tmp/business-acceptance-7170447/zzusp-dingtalk-dsh-assistant-0.5.15.tgz",
+    "@zzusp/dingtalk-dsh-observer": "file:D:/project/worktrees/dingtalk-topic-context-completeness/docs/tmp/business-acceptance-7170447/zzusp-dingtalk-dsh-observer-0.5.15.tgz"
+  }
+}

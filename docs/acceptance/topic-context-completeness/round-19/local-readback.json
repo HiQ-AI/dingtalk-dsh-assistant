@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-09-26T17:18:32.5691851+08:00",
+  "implementation": "7170447",
+  "pid": 51424,
+  "health": "ok",
+  "recoveryIssueCount": 0,
+  "inboundProcessing": true,
+  "authenticatedWeb": 200,
+  "taskStates": [
+    {
+      "Name": "completed",
+      "Count": 73
+    }
+  ],
+  "packages": [
+    {
+      "name": "zzusp-dingtalk-dsh-assistant-0.5.15.tgz",
+      "bytes": 459432,
+      "sha256": "91B14AA3FA6A4C6F6E25A7C6834CA39BC0F8D6EF720B6742CDFBFBD363C7927D"
+    },
+    {
+      "name": "zzusp-dingtalk-dsh-observer-0.5.15.tgz",
+      "bytes": 30780,
+      "sha256": "8F7B09FD339B60A630532A18432AE19299963FA53C86DE8ACF0BA47CA71D6EBD"
+    }
+  ]
+}
