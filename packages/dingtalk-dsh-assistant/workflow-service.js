@@ -17,6 +17,89 @@ import { createUatPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
 import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
 
+/** 将持久节点工件转换为可读产出；不推断未落盘的文件或外部执行结果。 */
+export function describeTaskNodeOutput(node, output) {
+  const sections = []
+  const fileSummaries = []
+  let overview = ''
+  const summarizeFiles = (label, paths) => {
+    const count = new Set(paths.filter(path => typeof path === 'string')).size
+    if (count) fileSummaries.push(`${label} ${count} 个文件`)
+  }
+  const add = (label, value) => { if (typeof value === 'string' && value.trim()) sections.push(`${label}\n${value.trim()}`) }
+  add('产出摘要', workflowResultText(output))
+  if (typeof output === 'string') add('正文', output)
+  add('正文', output?.markdown)
+  add('任务要求', output?.request)
+  for (const [label, values] of [['发现', output?.findings], ['限制与未确认事项', output?.limitations], ['执行范围', output?.constraints], ['相关文件', output?.paths], ['已有文件', output?.existingPaths], ['新建文件', output?.newPaths]]) {
+    if (Array.isArray(values)) add(label, values.map(item => typeof item === 'string' ? item : item?.statement).filter(item => typeof item === 'string').join('\n'))
+    if (Array.isArray(values) && ['相关文件', '已有文件', '新建文件'].includes(label)) summarizeFiles(({ '相关文件': '已选择', '已有文件': '选择已有', '新建文件': '计划新建' })[label], values)
+  }
+  if (Array.isArray(output?.materials)) add('材料正文', output.materials.map(item => item?.text).filter(item => typeof item === 'string').join('\n\n'))
+  if (Array.isArray(output?.files)) {
+    const label = node.nodeId === 'apply-changes' && output.status === 'succeeded' ? '已修改' : node.nodeId === 'read-files' ? '已读取' : '涉及'
+    summarizeFiles(label, output.files.filter(item => item?.text !== null).map(item => item?.path))
+    summarizeFiles('尚不存在', output.files.filter(item => item?.text === null).map(item => item?.path))
+    add(`${label}文件`, output.files.filter(item => typeof item?.path === 'string').map(item => `${item.path}${item.text === null ? '（尚不存在）' : ''}`).join('\n'))
+  }
+  if (Array.isArray(output?.changes) || Array.isArray(output?.replacements)) summarizeFiles('修改方案涉及', [...(Array.isArray(output?.changes) ? output.changes : []), ...(Array.isArray(output?.replacements) ? output.replacements : [])].map(item => item?.path))
+  if (Array.isArray(output?.changes)) for (const change of output.changes) {
+    if (typeof change?.path !== 'string') continue
+    add('文件变更', `${change.content === null ? '删除' : '写入'} ${change.path}${typeof change.content === 'string' ? `\n文件内容：\n${change.content}` : ''}`)
+  }
+  if (Array.isArray(output?.replacements)) for (const replacement of output.replacements) {
+    if (typeof replacement?.path !== 'string' || typeof replacement.from !== 'string' || typeof replacement.to !== 'string') continue
+    add('修改方案', `文件：${replacement.path}\n修改前：\n${replacement.from}\n修改后：\n${replacement.to}`)
+  }
+  if (Array.isArray(output?.verification?.checks)) add('检查结果', output.verification.checks.filter(item => typeof item?.id === 'string' && typeof item.passed === 'boolean').map(item => `${item.id}：${item.passed ? '通过' : '未通过'}`).join('\n'))
+  if (node.nodeId === 'index-files' && Array.isArray(output?.directories)) {
+    const paths = output.directories.flatMap(item => typeof item?.directory === 'string' && Array.isArray(item.names) ? item.names.filter(name => typeof name === 'string').map(name => item.directory + name) : [])
+    summarizeFiles('已索引', paths)
+    if (Number.isSafeInteger(output.excludedCount) && output.excludedCount >= 0) fileSummaries.push(`排除 ${output.excludedCount} 个文件`)
+    add('文件索引', paths.join('\n'))
+  }
+  if (['prepare-generation', 'prepare-workspace'].includes(node.nodeId)) {
+    add('基线版本', output?.baseCommit)
+    if (Array.isArray(output?.editablePaths)) { summarizeFiles('可修改', output.editablePaths); add('可修改文件', output.editablePaths.join('\n')) }
+  }
+  if (node.nodeId === 'verify-candidate' && Array.isArray(output?.verification?.checks)) {
+    const checks = output.verification.checks
+    overview = `检查 ${checks.length} 项，${checks.filter(item => item.passed === true).length} 项通过`
+  }
+  if (['prepare-commit', 'commit', 'prepare-push', 'push', 'prepare-pr', 'create-pr', 'finalize'].includes(node.nodeId)) {
+    const prepared = ['commit', 'push', 'create-pr'].includes(node.nodeId) ? output?.prepared : output
+    const receipt = node.nodeId === 'finalize' ? output : output?.receipt
+    const action = { 'prepare-commit': '待提交', commit: '已提交', 'prepare-push': '待推送', push: '已推送' }[node.nodeId]
+    if (Array.isArray(prepared?.changedPaths)) {
+      summarizeFiles(receipt && receipt.status !== 'succeeded' ? '涉及' : action || '涉及', prepared.changedPaths)
+      add('变更文件', prepared.changedPaths.join('\n'))
+    }
+    add('提交说明', prepared?.message)
+    add('分支', prepared?.ref)
+    add('远端', prepared?.remote)
+    add('提交版本', receipt?.commitId ?? prepared?.commitId)
+    if (['prepare-commit', 'prepare-push'].includes(node.nodeId)) overview = node.nodeId === 'prepare-commit' ? '已生成提交计划' : '已生成推送计划'
+    if (['commit', 'push'].includes(node.nodeId)) {
+      overview = receipt?.status === 'succeeded' ? node.nodeId === 'commit' ? '已创建本地提交' : '已推送至远端' : '执行结果待核对'
+      add('执行结果', overview)
+    }
+    if (['prepare-pr', 'create-pr', 'finalize'].includes(node.nodeId)) {
+      add('PR 标题', prepared?.title)
+      add('目标仓库', receipt?.repo ?? prepared?.repo)
+      add('来源分支', receipt?.head ?? prepared?.head)
+      add('目标分支', receipt?.base ?? prepared?.base)
+      if (node.nodeId === 'prepare-pr') { overview = '已生成 PR 草稿'; add('PR 正文', prepared?.body) }
+      else {
+        overview = receipt?.status === 'succeeded' ? `${node.nodeId === 'finalize' ? '已回读' : '已创建'} PR${Number.isSafeInteger(receipt.number) ? ` #${receipt.number}` : ''}` : 'PR 结果待核对'
+        add('PR 地址', receipt?.url)
+        add('PR 状态', ({ open: '待合并', closed: '已关闭', merged: '已合并', OPEN: '待合并', CLOSED: '已关闭', MERGED: '已合并' })[receipt?.state] ?? receipt?.state)
+      }
+    }
+  }
+  const text = sections.join('\n\n')
+  return { text, overview: [overview, ...fileSummaries].filter(Boolean).join('；') }
+}
+
 export const describeMessageTraceItem = (item) => {
   const input = item.input ?? {}, output = item.output ?? {}
   const text = value => typeof value === 'string' ? value : ''
@@ -1827,31 +1910,11 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (!node?.outputRef) return null
     if (outputRef !== node.outputRef) throw executionError('TASK_OUTPUT_CHANGED')
     const output = await artifacts.read(node.outputRef)
-    const sections = []
-    const add = (label, value) => { if (typeof value === 'string' && value.trim()) sections.push(`${label}\n${value.trim()}`) }
-    add('产出摘要', workflowResultText(output))
-    if (typeof output === 'string') add('正文', output)
-    add('正文', output?.markdown)
-    add('任务要求', output?.request)
-    for (const [label, values] of [['发现', output?.findings], ['限制与未确认事项', output?.limitations], ['执行范围', output?.constraints], ['相关文件', output?.paths], ['已有文件', output?.existingPaths], ['新建文件', output?.newPaths]]) {
-      if (Array.isArray(values)) add(label, values.map(item => typeof item === 'string' ? item : item?.statement).filter(item => typeof item === 'string').join('\n'))
-    }
-    if (Array.isArray(output?.materials)) add('材料正文', output.materials.map(item => item?.text).filter(item => typeof item === 'string').join('\n\n'))
-    if (Array.isArray(output?.files)) add('已读取文件', output.files.filter(item => typeof item?.path === 'string').map(item => `${item.path}${item.text === null ? '（尚不存在）' : ''}`).join('\n'))
-    if (Array.isArray(output?.changes)) for (const change of output.changes) {
-      if (typeof change?.path !== 'string') continue
-      add('文件变更', `${change.content === null ? '删除' : '写入'} ${change.path}${typeof change.content === 'string' ? `\n文件内容：\n${change.content}` : ''}`)
-    }
-    if (Array.isArray(output?.replacements)) for (const replacement of output.replacements) {
-      if (typeof replacement?.path !== 'string' || typeof replacement.from !== 'string' || typeof replacement.to !== 'string') continue
-      add('修改方案', `文件：${replacement.path}\n修改前：\n${replacement.from}\n修改后：\n${replacement.to}`)
-    }
-    if (Array.isArray(output?.verification?.checks)) add('检查结果', output.verification.checks.filter(item => typeof item?.id === 'string' && typeof item.passed === 'boolean').map(item => `${item.id}：${item.passed ? '通过' : '未通过'}`).join('\n'))
-    const text = sections.join('\n\n')
+    const { text, overview } = describeTaskNodeOutput(node, output)
     if (offset > text.length || offset > 0 && /[\uDC00-\uDFFF]/u.test(text[offset] ?? '')) throw executionError('TASK_OUTPUT_CURSOR_INVALID')
     let end = Math.min(text.length, offset + limit)
     if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1])) end--
-    return { text: text.slice(offset, end), nextCursor: end < text.length ? end : null, totalLength: text.length }
+    return { text: text.slice(offset, end), nextCursor: end < text.length ? end : null, totalLength: text.length, overview }
   }
   async function taskRuns(taskId, { offset = 0, limit = 20 } = {}) {
     const origin = await store.query({ kind: 'message.task', taskId })

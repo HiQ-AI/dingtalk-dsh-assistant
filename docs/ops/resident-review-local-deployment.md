@@ -170,10 +170,12 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 
 步骤耗时涉及 Assistant 的事件时间投影与 Observer 展示，两个包一起安装。无 schema 变更；启动后从已提交 claim/commit 事件增量恢复当前租约时间，回读目标 executionNodes 的 startedAt/completedAt 与持久事件一致。等待耗时只到本次提交，未知结束时间不猜测，不请求 /state/task-timings。
 
-步骤产出与通栏排版更新也需安装两个插件。新增只读 `/state/tasks/{taskId}/runs/{runId}/nodes/{nodeRunId}/output?ref={outputRef}&cursor=0`，limit 默认 1200、上限 8000；仅返回业务 text、nextCursor、totalLength。服务端核对配置群、Task/Run/节点及输出引用；旧引用变更后拒绝继续分页。进入详情才读取，长文逐页追加，失败就地重试；原始工件对象不传给页面。在线回读既有节点正文与摘要一致，不为验收重跑业务任务。
+步骤产出与通栏排版更新也需安装两个插件。新增只读 `/state/tasks/{taskId}/runs/{runId}/nodes/{nodeRunId}/output?ref={outputRef}&cursor=0`，limit 默认 1200、上限 8000；仅返回业务 text、nextCursor、totalLength 和轻量 overview。服务端核对配置群、Task/Run/节点及输出引用；旧引用变更后拒绝继续分页。进入详情才读取，长文逐页追加，失败就地重试；原始工件对象不传给页面。在线回读既有节点正文与摘要一致，不为验收重跑业务任务。
 
 任务状态映射修复需打包 Assistant：对无 Owner 且计划已 succeeded 的记录，回读 `/state/tasks` 为 completed/succeeded，结果原文及信息局限保留。已有 Owner 的验收和 waiting_confirmation 仍保持原门禁。该修复只读展示，不修改持久任务、不重跑流程、不补发消息；部署前实例已停止时保留停机状态，安装包回读不等于在线验证。
 
 任务详情使用紧凑编号时间线：标题与耗时同排、产出按标签展开、进度条表示已完成步骤比例。节点产出补充材料正文、文件清单、变更和已记录检查结果；此次需同时安装 Assistant 与 Observer，沿用只读分页接口及既有备份/回读流程，无 schema 变更。
 
 工程节点产出展示真实修改方案：replacements 显示目标文件及修改前/后内容，changes 显示完整文件内容或删除动作。保留分页，隐藏原始 JSON、校验哈希和工具参数；无须重跑历史节点。部署同时更新 Assistant 与 Observer，回读既有方案工件与页面接口内容一致。
+
+节点产出统一核对当前分析/工程链：只读分页附带 overview，文件数量依据完整工件去重；默认显示读取、修改、索引或方案涉及数量，展开后才渲染正文与清单。提交/推送准备、执行回执、PR 草稿/创建/回读分别呈现，不相互冒充。未知结构标明“已保存节点产出，暂未提供可读展示”。

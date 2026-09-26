@@ -360,6 +360,8 @@ window.__ModuleLoader__.load({
     }
     function TaskStepOutput({ taskId, node }) {
       const [text, setText] = useState('')
+      const [overview, setOverview] = useState('')
+      const [expanded, setExpanded] = useState(false)
       const [cursor, setCursor] = useState(0)
       const [nextCursor, setNextCursor] = useState(null)
       const [loading, setLoading] = useState(true)
@@ -369,21 +371,24 @@ window.__ModuleLoader__.load({
         let active = true
         setLoading(true); setError('')
         get(`/state/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(node.runId)}/nodes/${encodeURIComponent(node.nodeRunId)}/output?ref=${encodeURIComponent(node.outputRef)}&cursor=${cursor}`).then(value => {
-          if (active) { setText(previous => cursor ? previous + value.text : value.text); setNextCursor(value.nextCursor) }
+          if (active) { setText(previous => cursor ? previous + value.text : value.text); setNextCursor(value.nextCursor); setOverview(value.overview || '') }
         }, () => { if (active) setError('产出暂时无法读取，请重试。') }).finally(() => { if (active) setLoading(false) })
         return () => { active = false }
       }, [taskId, node.runId, node.nodeRunId, node.outputRef, cursor, retry])
-      return React.createElement('div', { style: { minWidth: 0, fontSize: 13, lineHeight: 1.7 } },
+      const content = React.createElement('div', { style: { minWidth: 0, fontSize: 13, lineHeight: 1.7 } },
         text ? React.createElement('div', { style: { display: 'grid', gap: 6, overflowWrap: 'anywhere' } }, ...text.split('\n\n').map((part, index) => {
           const [heading, ...lines] = part.split('\n')
-          const titled = ['产出摘要', '正文', '任务要求', '发现', '限制与未确认事项', '执行范围', '相关文件', '已有文件', '新建文件', '材料正文', '已读取文件', '文件变更', '修改方案', '检查结果'].includes(heading)
+          const titled = ['产出摘要', '正文', '任务要求', '发现', '限制与未确认事项', '执行范围', '相关文件', '已有文件', '新建文件', '材料正文', '已读取文件', '已修改文件', '涉及文件', '文件变更', '修改方案', '检查结果', '文件索引', '基线版本', '可修改文件', '变更文件', '提交说明', '分支', '远端', '提交版本', '执行结果', 'PR 标题', '目标仓库', '来源分支', '目标分支', 'PR 正文', 'PR 地址', 'PR 状态'].includes(heading)
           return React.createElement('div', { key: index, className: titled ? 'observer-task-output-row' : undefined }, titled ? React.createElement('strong', { style: { fontSize: 12, fontWeight: 500, color: colors.muted } }, heading) : null,
             React.createElement('div', { style: { whiteSpace: 'pre-wrap' } }, titled ? lines.join('\n') : part))
         })) : null,
         loading ? React.createElement('span', { role: 'status', style: { color: colors.muted } }, '正在读取产出…') : null,
         error ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, error, React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', onClick: () => setRetry(value => value + 1) }, '重试读取产出')) : null,
-        !loading && !error && !text ? React.createElement('span', { style: { color: colors.muted } }, '该步骤未记录文字产出') : null,
+        !loading && !error && !text ? React.createElement('span', { style: { color: colors.muted } }, '已保存节点产出，暂未提供可读展示') : null,
         !loading && !error && nextCursor !== null ? React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', onClick: () => setCursor(nextCursor) }, '继续阅读产出') : null)
+      return overview ? React.createElement('details', { onToggle: event => setExpanded(event.currentTarget.open), style: { fontSize: 13, lineHeight: 1.7 } },
+        React.createElement('summary', { style: { cursor: 'pointer', color: colors.muted } }, overview, React.createElement('span', { style: { marginLeft: 12, color: colors.accent, fontSize: 12 } }, expanded ? '收起产出' : '查看产出')),
+        expanded ? React.createElement('div', { style: { marginTop: 8 } }, content) : null) : content
     }
     function TaskHistoryDisclosure({ task, onOpenSession }) {
       const [expanded, setExpanded] = useState(false)

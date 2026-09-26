@@ -55,9 +55,10 @@ await page.route('**/*', async route => {
   if (target.pathname.includes('/nodes/') && target.pathname.endsWith('/output')) {
     const first = target.pathname.includes('design-node-0')
     if (!first && outputFailures-- > 0) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'temporary' }) })
-    const text = first ? '产出摘要\n已读取租户 A 的角色配置，范围覆盖 12 个角色与 86 名成员。\n\n发现\n租户基础配置完整，角色定义均可读取。\n成员名单已与当前角色关联记录对应。' : '产出摘要\n已核对成员与角色的关联关系。\n\n发现\n部分成员未关联预期角色，现有配置与反馈范围一致。\n\n限制与未确认事项\n尚未取得角色分配规则，暂不能判断该差异是否符合业务预期。'
+    let text = first ? '产出摘要\n已读取租户 A 的角色配置，范围覆盖 12 个角色与 86 名成员。\n\n发现\n租户基础配置完整，角色定义均可读取。\n成员名单已与当前角色关联记录对应。' : '产出摘要\n已核对成员与角色的关联关系。\n\n发现\n部分成员未关联预期角色，现有配置与反馈范围一致。\n\n限制与未确认事项\n尚未取得角色分配规则，暂不能判断该差异是否符合业务预期。'
+    if (first) text += '\n\n已读取文件\n' + Array.from({ length: 200 }, (_, i) => `src/file-${i}.js`).join('\n')
     const cursor = Number(target.searchParams.get('cursor') || 0), end = first && !cursor ? 42 : text.length
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: text.slice(cursor, end), nextCursor: end < text.length ? end : null, totalLength: text.length }) })
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: text.slice(cursor, end), nextCursor: end < text.length ? end : null, totalLength: text.length, overview: first ? '已读取 200 个文件' : '' }) })
   }
   if (target.pathname === '/health') data = { status: 'ok' }
   if (target.pathname === '/state/groups') data = [{ groupId: 'g', name: '隔离群', messages: [{ messageId: 'm', runId: 'msg-1', sequence: 1, text: '请检查记录', workflowStatus: 'processed', occurredAt: '2026-09-26T00:00:00Z', topicRefs: [] }], outbox: [] }]
@@ -169,8 +170,19 @@ try {
   for (let number = 1; number <= 4; number++) assert.equal(await detail.getByLabel(`步骤 ${number}`, { exact: true }).innerText(), String(number).padStart(2, '0'))
   await detail.getByRole('button', { name: '重试读取产出' }).click()
   await detail.getByText('已核对成员与角色的关联关系。', { exact: false }).waitFor()
+  const fileDisclosure = detail.locator('summary').filter({ hasText: '已读取 200 个文件' })
+  await fileDisclosure.waitFor()
+  assert.equal(await fileDisclosure.evaluate(element => element.parentElement.open), false)
+  assert.equal(await detail.getByText('src/file-0.js', { exact: false }).count(), 0)
+  await fileDisclosure.focus()
+  await page.keyboard.press('Enter')
   await detail.getByRole('button', { name: '继续阅读产出' }).click()
   await detail.getByText('成员名单已与当前角色关联记录对应。', { exact: false }).waitFor()
+  await detail.getByText('src/file-199.js', { exact: false }).waitFor()
+  assert.equal(await fileDisclosure.innerText(), '已读取 200 个文件收起产出')
+  await fileDisclosure.click()
+  await detail.getByText('src/file-199.js', { exact: false }).waitFor({ state: 'detached' })
+  checks.push('file-count-not-page-count', 'file-output-default-collapsed', 'file-output-keyboard-expand', 'file-output-collapse-unmount')
   assert.equal(await detail.locator('[role="status"]').count(), 1)
   checks.push('step-output-default-visible', 'step-output-retry', 'step-output-read-more')
   assert.equal(await detail.locator('pre').count(), 0)
