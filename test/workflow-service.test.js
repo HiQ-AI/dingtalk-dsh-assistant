@@ -174,7 +174,8 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
   const legacyJudge = options.judge ?? judge
   const batchJudge = async request => request.stage === 'IB'
     ? { kind: 'topic_intents', decisions: await Promise.all(request.input.units.map(async unit => ({
-      unitId: unit.unitId, intent: await legacyJudge({ ...request, stage: 'I', input: unit.input }),
+      unitId: unit.unitId, intent: await legacyJudge({ ...request, stage: 'I', input: { ...unit.input,
+        facts: { ...unit.input.facts, ...(request.input.sharedTopic ? { topic: request.input.sharedTopic } : {}) } } }),
     }))) }
     : legacyJudge(request)
   const taskOwnerSessions = { async run({ input, onSessionBound, onCandidate }) {
@@ -961,7 +962,7 @@ test('I 的流程提示不直接派发；专业目录供 Owner 选择，缺适�
   const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
   const catalog = service.catalog()
   assert.equal(catalog.engine, 'workflow-v2')
-  assert.deepEqual(catalog.messageStages.map(stage => stage.id), ['receive', 'context', 'S', 'R', 'routing-barrier', 'IB', 'intent-check', 'dispatch'])
+  assert.deepEqual(catalog.messageStages.map(stage => stage.id), ['receive', 'context', 'S', 'R', 'material', 'routing-barrier', 'IB', 'intent-check', 'dispatch'])
   assert.equal(catalog.workflows.length, taskWorkflowCatalog.length - 1)
   assert.equal(catalog.workflows.some(item => item.id === 'task-general'), false)
   assert.ok(ids.every(id => catalog.workflows.some(item => item.id === id && item.status === 'available' && item.version && item.nodes.length)))
@@ -1541,4 +1542,215 @@ test('C13 渠道读回挂起时新业务和取消继续，ACK不冒充送达',{t
  }finally{releaseExecution();releaseRead()}
  await flushing;await execution.controller.whenIdle(task.runId);assert.equal((await execution.controller.state(task.runId)).run.status,'cancelled')
  assert.equal((await execution.store.query({kind:'message.notifications',states:['delivered']})).length,1)
+})
+
+test('只读轨迹 API 回读真实节点、话题批次与已绑定 Owner，并隔离其他群', async t => {
+  const { service, execution, message } = await fixture(t)
+  const receipt = await service.ingest(message)
+  const processed = await service.messages.process(receipt.runId)
+  const command = processed.commands.find(item => item.status === 'applied')
+  assert.ok(command?.result.taskId)
+  await execution.controller.whenIdle(command.result.runId)
+  const trace = await service.messageTrace(receipt.runId)
+  assert.equal(trace.runId, receipt.runId)
+  assert.ok(trace.items.some(item => item.kind === 'split' && item.input && item.output))
+  assert.ok(trace.items.some(item => item.kind === 'route' && item.input && item.output))
+  const intent = trace.items.find(item => item.kind === 'intent')
+  assert.ok(intent?.input && intent?.output)
+  assert.ok(intent.sourceRunIds.includes(receipt.runId))
+  assert.ok(trace.items.some(item => item.kind === 'command' && item.output.taskId === command.result.taskId))
+  const page = await service.messageTrace(receipt.runId, { limit: 1 })
+  assert.equal(page.items.length, 1)
+  assert.equal(page.nextCursor, 1)
+  const topicId = processed.units[0].topicId
+  const context = await service.workflowTopicContext(topicId)
+  await assert.rejects(service.workflowTopicContext(topicId, { expectedRevision: context.revision + 1 }), /MESSAGE_TOPIC_CONTEXT_STALE/)
+  assert.ok(context.facts.some(fact => fact.sourceRefs.some(ref => ref.text === message.text)))
+  assert.ok(context.intentRuns.some(batch => batch.sourceRunIds.includes(receipt.runId)))
+  const runs = await service.taskRuns(command.result.taskId)
+  assert.equal(runs.taskOwner.sessionBound, true)
+  assert.ok(runs.taskOwner.sessionId)
+  assert.ok(runs.runs.some(run => run.runId === command.result.runId && run.nodes.some(node => node.nodeId === 'analyze')))
+  const other = await openWorkflowService({ ctx: {}, config: { groupIds: ['other'], ownerActorId: 'owner' },
+    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test' }), getGroup: () => ({ messages: [] }) },
+    execution, judge: async () => { throw new Error('UNEXPECTED_MODEL_CALL') },
+    taskOwnerSessions: { async run() { throw new Error('UNEXPECTED_OWNER_CALL') }, async close() {} } })
+  try {
+    assert.equal(await other.workflowTopicContext(topicId), null)
+    assert.equal(await other.messageTrace(receipt.runId), null)
+    assert.equal(await other.taskRuns(command.result.taskId), null)
+  } finally { await other.close() }
+})
+
+test('只读历史执行 API 不把预留 Owner 身份伪装成已绑定会话', async t => {
+  const { service, message } = await fixture(t, 'owner', undefined, {
+    taskOwnerSessions: { async run() { throw new Error('OWNER_NOT_STARTED') }, async close() {} },
+  })
+  const receipt = await service.ingest(message)
+  const processed = await service.messages.process(receipt.runId)
+  const taskId = processed.commands.find(item => item.status === 'applied')?.result.taskId
+  assert.ok(taskId)
+  const result = await service.taskRuns(taskId)
+  assert.ok(result.taskOwner.sessionId)
+  assert.equal(result.taskOwner.sessionBound, false)
+  assert.deepEqual(result.runs, [])
+})
+
+test('消息证据 API 仅回读绑定原文并以 hash 固定分页版本', async t => {
+  const { service, message } = await fixture(t)
+  const text = '整理本条材料：乙租户😀，验收日期十一月十五日。'
+  const receipt = await service.ingest({ ...message, text })
+  await service.messages.process(receipt.runId)
+  const state = await service.state(receipt.runId)
+  const resourceRef = state.run.sourceKey
+  const first = await service.messageEvidence(receipt.runId, resourceRef, { limit: 9 })
+  assert.equal(first.text, text.slice(0, first.end))
+  assert.equal(first.start, 0)
+  assert.equal(first.complete, false)
+  assert.ok(first.nextCursor)
+  await assert.rejects(service.messageEvidence(receipt.runId, resourceRef, { offset: first.nextCursor, limit: 9 }), /MESSAGE_EVIDENCE_CURSOR_INVALID/)
+  await assert.rejects(service.messageEvidence(receipt.runId, resourceRef, { offset: first.nextCursor, limit: 9, hash: 'wrong-hash' }), /MESSAGE_EVIDENCE_VERSION_CHANGED/)
+  assert.equal(await service.messageEvidence(receipt.runId, 'forged-source'), null)
+  const foreign = await service.ingest({ ...message, messageId: 'unrelated-evidence', text: '无关联的独立消息' })
+  await service.messages.process(foreign.runId)
+  const foreignState = await service.state(foreign.runId)
+  assert.equal(await service.messageEvidence(receipt.runId, foreignState.run.sourceKey), null)
+  let reconstructed = first.text
+  let cursor = first.nextCursor
+  while (cursor !== null) {
+    const page = await service.messageEvidence(receipt.runId, resourceRef, { offset: cursor, limit: 9, hash: first.hash })
+    assert.equal(page.start, cursor)
+    assert.equal(page.hash, first.hash)
+    assert.equal(page.sourceVersion, first.sourceVersion)
+    reconstructed += page.text
+    cursor = page.nextCursor
+  }
+  assert.equal(reconstructed, text)
+  assert.equal(first.totalBytes, Buffer.byteLength(text))
+  assert.equal(first.totalLength, text.length)
+})
+
+async function seedCompletedTopicFact(store, index, topicId, text, actorId='owner') {
+ const runId=`seed-run-${index}`, unitId=`seed-unit-${index}`, messageId=`seed-message-${index}`
+ const key=`dws:${executionDigest(['','g',messageId])}`
+ const call=(kind,args)=>store.command({id:`seed:${index}:${kind}`,kind:`message.${kind}`,args})
+ await call('receive',{runId,sourceKey:key,sourceVersion:1,conversationId:'g',actorId,body:text,context:{sourceMessageId:messageId}})
+ await call('split',{runId,units:[{unitId}]})
+ await call('topic.bind',{runId,unitId,expectedRevision:0,binding:{kind:'binding',disposition:'conversation',candidateId:null},topic:{topicId,conversationId:'g',sourceRunId:runId,unitId,title:topicId,facts:[{kind:'constraint',text,sourceRefs:[{sourceKey:key,sourceVersion:1,text}]}]}})
+ await call('accept',{runId,unitId,expectedRevision:0,commands:[],outcome:'ignored'})
+ return {messageId,key}
+}
+
+test('超过 200 个话题时明确引用仍找回最早话题且不建新 Task',async t=>{
+ let matched=false
+ const {service,execution,message}=await fixture(t,'owner',undefined,{judge:async({stage,input})=>{
+  if(stage==='S')return splitOne(input.source.text)
+  if(stage==='R'){
+   const oldest=input.candidates.find(card=>card.topicId==='archive-topic-0')
+   assert.ok(oldest,'最早话题必须进入明确引用候选')
+   assert.ok(oldest.explicitReferenceMatches.length>0)
+   matched=true
+   return {kind:'binding',disposition:'existing',candidateId:oldest.candidateId,evidence:['明确引用最早原消息']}
+  }
+  return {kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
+ }})
+ for(let i=0;i<205;i++)await seedCompletedTopicFact(execution.store,`archive-${i}`,`archive-topic-${i}`,`历史事项 ${i}`)
+ const receipt=await service.ingest({...message,messageId:'oldest-reference',text:'继续核对原事项',quotedMessage:{messageId:'seed-message-archive-0',content:'历史事项 0'}})
+ const state=await service.messages.process(receipt.runId)
+ assert.equal(matched,true,JSON.stringify(state))
+ assert.equal(state.units[0].topicId,'archive-topic-0')
+ assert.equal(state.commands.length,0)
+ assert.deepEqual(await execution.store.query({kind:'run.list'}),[])
+})
+
+test('同话题一千条相同事实在 IB 合并投影，跨发送人或不同约束不合并',async t=>{
+ const repeated='仅在 UAT 验证',different='禁止生产写入';let projected
+ const {service,execution,message}=await fixture(t,'owner',undefined,{judge:async({stage,input})=>{
+  if(stage==='S')return splitOne(input.source.text)
+  if(stage==='R'){
+   const candidate=input.candidates.find(card=>card.topicId==='long-lived-topic')
+   assert.ok(candidate)
+   return {kind:'binding',disposition:'existing',candidateId:candidate.candidateId,evidence:['继续同一话题']}
+  }
+  projected=input.facts.topic
+  return {kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
+ }})
+ for(let i=0;i<1000;i++)await seedCompletedTopicFact(execution.store,`repeat-${i}`,'long-lived-topic',repeated)
+ await seedCompletedTopicFact(execution.store,'different-actor','long-lived-topic',repeated,'colleague')
+ await seedCompletedTopicFact(execution.store,'different-constraint','long-lived-topic',different)
+ const receipt=await service.ingest({...message,messageId:'long-lived-followup',text:'继续核对原条件',quotedMessage:{messageId:'seed-message-repeat-0',content:repeated}})
+ const state=await service.messages.process(receipt.runId)
+ assert.ok(projected,JSON.stringify(state))
+ assert.equal(projected.historyFactCount,1003)
+ assert.equal(projected.facts.length,4)
+ const same=projected.facts.find(fact=>fact.actorId==='owner'&&fact.text===repeated)
+ assert.equal(same.equivalentFactCount,1000)
+ assert.equal(projected.facts.filter(fact=>fact.text===repeated).length,2)
+ assert.ok(projected.facts.some(fact=>fact.actorId==='colleague'&&fact.text===repeated))
+ assert.ok(projected.facts.some(fact=>fact.actorId==='owner'&&fact.text===different))
+ assert.ok(Buffer.byteLength(JSON.stringify(projected))<10000)
+ assert.equal(state.run.status,'settled',JSON.stringify(state))
+ assert.equal(state.commands.length,0)
+ const history=await execution.store.query({kind:'message.topic.facts',topicId:'long-lived-topic',status:'all',limit:1})
+ assert.equal(history.total,1003)
+})
+
+test('原发送人撤销仅排查条件可替换历史，另一发送人不得替换或派发',async t=>{
+ for(const actor of ['owner','colleague']){
+  const priorText='仅排查，不允许开发',sourceQuote='现在允许开发，取消仅排查条件'
+  const {service,execution,message}=await fixture(t,actor,undefined,{judge:async({stage,input})=>{
+   if(stage==='S')return splitOne(input.source.text)
+   if(stage==='R'){
+    const card=input.candidates.find(item=>item.topicId==='revision-topic')
+    assert.ok(card)
+    return {kind:'binding',disposition:'existing',candidateId:card.candidateId,evidence:['引用原条件']}
+   }
+   const fact=input.facts.topic.facts.find(item=>item.text===priorText)
+   assert.ok(fact)
+   return {kind:'intent',actions:[{intent:'create',arguments:{objective:'整理本条材料',workflowId:'task-analysis'},dependsOn:[]}],constraints:[],factRevisions:[{factId:fact.id,sourceQuote,scope:'当前话题'}],requiredExecutionMaterials:[],replyPolicy:'none'}
+  }})
+  await seedCompletedTopicFact(execution.store,`revision-${actor}`,'revision-topic',priorText,'owner')
+  const receipt=await service.ingest({...message,messageId:`revision-answer-${actor}`,text:`请整理本条材料；${sourceQuote}`,quotedMessage:{messageId:`seed-message-revision-${actor}`,content:priorText}})
+  const state=await service.messages.process(receipt.runId)
+  const active=await execution.store.query({kind:'message.topic.facts',topicId:'revision-topic',status:'active'})
+  const history=await execution.store.query({kind:'message.topic.facts',topicId:'revision-topic',status:'superseded'})
+  if(actor==='owner'){
+   assert.equal(state.commands.length,1,JSON.stringify(state))
+   assert.equal(state.commands[0].status,'applied',JSON.stringify(state))
+   assert.equal(state.commands[0].args.constraints.includes(priorText),false)
+   assert.equal(active.facts.some(fact=>fact.text===priorText),false)
+   assert.equal(history.facts.length,1)
+   assert.equal(history.facts[0].text,priorText)
+   assert.equal(history.facts[0].supersededBy.sourceQuote,sourceQuote)
+  }else{
+   assert.deepEqual(state.commands,[])
+   assert.ok(state.requests.some(request=>request.reason==='TOPIC_FACT_REVISION_UNCONFIRMED'&&request.status==='pending'),JSON.stringify(state))
+   assert.equal(active.facts.some(fact=>fact.text===priorText),true)
+   assert.equal(history.facts.length,0)
+   assert.deepEqual(await execution.store.query({kind:'run.list'}),[])
+  }
+ }
+})
+
+test('局部撤销范围及模型误报整话题均保留其他任务限制且零派发',async t=>{
+ for(const scope of ['仅任务A','当前话题']){
+  const priorText='任务A和任务B都禁止生产写入',sourceQuote='仅任务A取消禁止生产写入，任务B保持原限制'
+  const {service,execution,message}=await fixture(t,'owner',undefined,{judge:async({stage,input})=>{
+   if(stage==='S')return splitOne(input.source.text)
+   if(stage==='R'){const card=input.candidates.find(item=>item.topicId==='partial-revision-topic');assert.ok(card);return{kind:'binding',disposition:'existing',candidateId:card.candidateId,evidence:['引用共同限制']}}
+   const fact=input.facts.topic.facts.find(item=>item.text===priorText)
+   assert.ok(fact)
+   return{kind:'intent',actions:[{intent:'create',arguments:{objective:'整理本条材料',workflowId:'task-analysis'},dependsOn:[]}],constraints:[],factRevisions:[{factId:fact.id,sourceQuote,scope}],requiredExecutionMaterials:[],replyPolicy:'none'}
+  }})
+  await seedCompletedTopicFact(execution.store,`partial-${scope}`,'partial-revision-topic',priorText)
+  const receipt=await service.ingest({...message,messageId:`partial-answer-${scope}`,text:`请整理材料；${sourceQuote}`,quotedMessage:{messageId:`seed-message-partial-${scope}`,content:priorText}})
+  const state=await service.messages.process(receipt.runId)
+  assert.deepEqual(state.commands,[])
+  assert.ok(state.requests.some(request=>request.reason==='TOPIC_FACT_REVISION_UNCONFIRMED'&&request.status==='pending'),JSON.stringify(state))
+  const active=await execution.store.query({kind:'message.topic.facts',topicId:'partial-revision-topic',status:'active'})
+  const history=await execution.store.query({kind:'message.topic.facts',topicId:'partial-revision-topic',status:'superseded'})
+  assert.ok(active.facts.some(fact=>fact.text===priorText))
+  assert.equal(history.facts.length,0)
+  assert.deepEqual(await execution.store.query({kind:'run.list'}),[])
+ }
 })

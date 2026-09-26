@@ -11,7 +11,7 @@ import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, q
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
 
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 const APPLICATION_ID = 0x44534845
 let db, owner, healthy = true
 const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }

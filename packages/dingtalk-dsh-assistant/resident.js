@@ -185,6 +185,10 @@ export async function apply(ctx, config = {}) {
     }
     runtime.listTaskView = async () => [...runtime.listTasks(), ...await workflow.tasks()]
     runtime.getWorkflowState = runId => workflow.state(runId)
+    runtime.getWorkflowMessageTrace = (runId, page) => workflow.messageTrace(runId, page)
+    runtime.getWorkflowMessageEvidence = (runId, resourceRef, page) => workflow.messageEvidence(runId, resourceRef, page)
+    runtime.getWorkflowTopicState = (topicId, page) => workflow.workflowTopicContext(topicId, page)
+    runtime.getWorkflowTaskRuns = (taskId, page) => workflow.taskRuns(taskId, page)
     runtime.reprocessWorkflowMessage = runId => {
       if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')
       return workflow.reprocessMessage(runId, { channel: 'web', actorId: workflowConfig.webActorId })

@@ -164,7 +164,47 @@ window.__ModuleLoader__.load({
       { state: 'waiting', label: '等待中', tone: colors.warning, background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary, #a56500) 8%, var(--dsw-alias-bg-layer-1, #fff))' },
       { state: 'completed', label: '已结束', tone: 'var(--dsw-alias-state-success-primary, #248a3d)', background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary, #248a3d) 8%, var(--dsw-alias-bg-layer-1, #fff))' }
     ]
-    const pages = [{ id: 'groups', label: '群聊会话' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '归档任务' }, { id: 'alerts', label: '告警' }]
+    const pages = [{ id: 'groups', label: '群消息' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '归档任务' }, { id: 'alerts', label: '告警' }]
+    const traceUsage = (item) => {
+      if (item.input?.deterministic === true) return '确定性处理，未调用模型'
+      if (item.kind === 'command') return 'Host 接纳动作，不单独计模型用量'
+      const usage = item.usage
+      if (!usage || Object.keys(usage).length === 0) return '模型用量未知（未记录）'
+      return usage
+    }
+    const traceReason = (reason) => {
+      if (!reason) return null
+      const text = typeof reason === 'string' ? reason : JSON.stringify(reason)
+      if (/MESSAGE_(?:CONTEXT|MATERIAL|REFERENCED_CANDIDATES)_CAPACITY|context_capacity_blocked/.test(text)) return `上下文容量受阻；必要材料未能完整提供，本次判断未继续。原因：${text}`
+      return text
+    }
+    const readableValue = (value) => value === undefined || value === null ? '历史未记录' : typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+    const readout = (label, value) => React.createElement('details', { style: { borderTop: `1px solid ${colors.border}`, padding: '8px 0', overflowWrap: 'anywhere' } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, label), React.createElement('pre', { style: { margin: '8px 0 0', padding: 10, maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: colors.surface2, borderRadius: ui.radiusSm, font: 'inherit', fontSize: 12 } }, readableValue(value)))
+    function TraceDetail({ runId, onBack, backLabel = '返回收信箱' }) {
+      const [page, setPage] = useState()
+      const [cursor, setCursor] = useState('')
+      const [cursorHistory, setCursorHistory] = useState([])
+      const [retry, setRetry] = useState(0)
+      const [error, setError] = useState('')
+      const [loading, setLoading] = useState(true)
+      useEffect(() => {
+        let active = true
+        setLoading(true); setError('')
+        get(`/state/workflows/${encodeURIComponent(runId)}/trace${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`).then((value) => { if (active) setPage(value) }, (cause) => { if (active) setError(cause.message) }).finally(() => { if (active) setLoading(false) })
+        return () => { active = false }
+      }, [runId, cursor, retry])
+      const labels = { split: '拆分事项', route: '关联话题', intent: '话题意图判断', command: '接纳动作' }
+      return React.createElement('section', { 'aria-label': '消息处理过程', style: { ...card, display: 'grid', gap: 12 } },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } }, React.createElement('strong', { style: { fontSize: 16 } }, '消息处理过程'), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: onBack }, backLabel)),
+        React.createElement('span', { style: { color: colors.muted, fontSize: 12, overflowWrap: 'anywhere' } }, `消息执行 ${runId}`),
+        !loading && page?.reason ? React.createElement('p', { role: 'status', style: { color: colors.warning, margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, traceReason(page.reason)) : null,
+        loading ? React.createElement('div', { role: 'status' }, '正在读取处理记录…') : error ? React.createElement('div', { role: 'alert' }, `处理记录读取失败：${error}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setRetry((value) => value + 1) }, '重试')) : !page?.items?.length ? emptyState('此页没有处理记录', { detail: '历史消息可能尚未记录完整处理轨迹。' }) : React.createElement('ol', { style: { margin: 0, paddingLeft: 24, display: 'grid', gap: 12 } }, ...page.items.map((item, index) => React.createElement('li', { key: item.id || index, style: { borderBottom: `1px solid ${colors.border}`, paddingBottom: 10, fontSize: 12 } },
+          React.createElement('strong', { style: { fontSize: 13 } }, labels[item.kind] || item.kind || '处理记录'), ' · ', item.status || '状态未记录', ' · ', fmt(item.createdAt),
+          item.reason ? React.createElement('p', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, traceReason(item.reason)) : null,
+          item.sourceRunIds?.length ? React.createElement('p', { style: { color: colors.muted } }, `本批来源 ${item.sourceRunIds.map(short).join('、')}`) : null,
+          readout('输入', item.input), readout('输出', item.output), readout('依据与缺口', { evidenceRefs: item.evidenceRefs ?? '历史未记录，不能确认已提供依据', gaps: item.gaps ?? '历史未记录，不能据此判定没有缺口' }), readout('用量', traceUsage(item))))) ,
+        React.createElement('div', { style: { display: 'flex', gap: 8 } }, cursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setCursor(cursorHistory.at(-1)); setCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, page?.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setCursorHistory((items) => [...items, cursor]); setCursor(page.nextCursor) } }, '下一页') : null))
+    }
     function TopicBrowser({ groups, tasks, target, updatedAt, onOpenTask }) {
       const [groupId, setGroupId] = useState(target?.groupId || '')
       const [offset, setOffset] = useState(0)
@@ -172,6 +212,15 @@ window.__ModuleLoader__.load({
       const [messageOffset, setMessageOffset] = useState(0)
       const [listing, setListing] = useState()
       const [context, setContext] = useState()
+      const [topicContext, setTopicContext] = useState()
+      const [contextCursor, setContextCursor] = useState('')
+      const [contextCursorHistory, setContextCursorHistory] = useState([])
+      const [contextRevision, setContextRevision] = useState()
+      const [intentCursor, setIntentCursor] = useState('')
+      const [intentCursorHistory, setIntentCursorHistory] = useState([])
+      const [selectedIntentRun, setSelectedIntentRun] = useState('')
+      const [contextError, setContextError] = useState('')
+      const [contextLoading, setContextLoading] = useState(false)
       const [listError, setListError] = useState('')
       const [detailError, setDetailError] = useState('')
       const [loading, setLoading] = useState(true)
@@ -179,6 +228,15 @@ window.__ModuleLoader__.load({
       const [retry, setRetry] = useState(0)
       const topicPageSize = 10
       const messagePageSize = 25
+      useEffect(() => {
+        if (!target?.topicId) return
+        setGroupId(target.groupId || '')
+        setSelection(target)
+        setMessageOffset(0)
+        setContextCursor('')
+        setContextCursorHistory([])
+        setIntentCursor(''); setIntentCursorHistory([]); setSelectedIntentRun(''); setContextRevision(undefined)
+      }, [target?.groupId, target?.topicId, target?.revision])
       useEffect(() => {
         let active = true
         setLoading(true); setListError('')
@@ -195,7 +253,19 @@ window.__ModuleLoader__.load({
         get(`/state/topics/${encodeURIComponent(selection.topicId)}?${params}`).then((value) => { if (active) setContext(value) }, (error) => { if (active) setDetailError(error.message) }).finally(() => { if (active) setDetailLoading(false) })
         return () => { active = false }
       }, [selection, messageOffset, retry])
-      const selectTopic = (topic) => { setSelection({ groupId: topic.groupId, topicId: topic.topicId, revision: topic.revision }); setMessageOffset(0) }
+      useEffect(() => {
+        if (!selection) { setTopicContext(undefined); return }
+        let active = true
+        setContextLoading(true); setContextError('')
+        const params = new URLSearchParams()
+        if (contextCursor) params.set('cursor', contextCursor)
+        if (intentCursor) params.set('intentCursor', intentCursor)
+        if (contextRevision !== undefined) params.set('revision', String(contextRevision))
+        get(`/state/workflows/topics/${encodeURIComponent(selection.topicId)}/context?${params}`).then((value) => { if (active) { setTopicContext(value); setContextRevision(value.revision) } }, (cause) => { if (active) setContextError(cause.message) }).finally(() => { if (active) setContextLoading(false) })
+        return () => { active = false }
+      }, [selection, contextCursor, intentCursor, retry])
+      const selectTopic = (topic) => { setSelection({ groupId: topic.groupId, topicId: topic.topicId, revision: topic.revision }); setMessageOffset(0); setContextCursor(''); setContextCursorHistory([]); setIntentCursor(''); setIntentCursorHistory([]); setSelectedIntentRun(''); setContextRevision(undefined); setTopicContext(undefined) }
+      if (selectedIntentRun) return React.createElement(TraceDetail, { key: selectedIntentRun, runId: selectedIntentRun, onBack: () => setSelectedIntentRun(''), backLabel: '返回话题判断列表' })
       const topic = context?.topic
       const group = groups.find((item) => item.groupId === groupId)
       const relatedTasks = tasks.filter((task) => task.groupId === selection?.groupId && task.topicRefs?.some((ref) => ref.topicId === selection?.topicId))
@@ -215,6 +285,16 @@ window.__ModuleLoader__.load({
             React.createElement('header', { style: { padding: '17px 18px 15px', borderBottom: `1px solid ${colors.border}`, background: colors.cardSurface } }, React.createElement('h2', { title: topic?.title, style: { minWidth: 0, margin: 0, overflowWrap: 'anywhere', fontSize: 18, fontWeight: 650, lineHeight: 1.5, letterSpacing: '-.01em' } }, topic?.title || '话题详情')),
             detailError ? failure(`上下文加载失败：${detailError}`) : detailLoading ? React.createElement('div', { role: 'status' }, emptyState('正在读取固定版本上下文…')) : !context ? emptyState('选择一个话题查看消息和关联任务') : React.createElement('div', { role: 'region', 'aria-label': '话题详情内容', style: { minWidth: 0, maxHeight: 'calc(100vh - 260px)', padding: '0 18px 18px', display: 'grid', gap: 0, overflowY: 'auto', overflowX: 'hidden', overflowWrap: 'anywhere' } },
               React.createElement('section', { 'aria-label': '话题摘要', style: { marginTop: 16, padding: '13px 14px', borderLeft: `3px solid ${colors.accent}`, borderRadius: '0 9px 9px 0', background: `color-mix(in srgb, ${colors.accent} 6%, ${colors.surface2})` } }, React.createElement('strong', { style: { display: 'block', fontSize: 12 } }, '话题摘要'), React.createElement('p', { style: { margin: '6px 0 0', whiteSpace: 'pre-wrap', color: topic?.summary ? 'inherit' : colors.muted, fontSize: 13, lineHeight: 1.65 } }, topic?.summary || '暂无摘要')),
+              React.createElement('section', { 'aria-label': '当前上下文与判断记录', style: { padding: '16px 0', borderBottom: `1px solid ${colors.border}`, display: 'grid', gap: 10, fontSize: 12 } },
+                React.createElement('strong', { style: { fontSize: 13 } }, '当前上下文与判断记录'),
+                contextLoading ? React.createElement('span', { role: 'status' }, '正在读取话题上下文…') : contextError ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `上下文读取失败：${contextError}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setContextCursor(''); setContextCursorHistory([]); setIntentCursor(''); setIntentCursorHistory([]); setContextRevision(undefined); setRetry((value) => value + 1) } }, '重新读取当前上下文')) : topicContext ? React.createElement(React.Fragment, null,
+                  readout('当前有效状态', topicContext.current),
+                  React.createElement('strong', null, `事实 · ${(topicContext.facts || []).length} 条`),
+                  ...(topicContext.facts || []).map((fact, index) => React.createElement('details', { key: fact.factId || index }, React.createElement('summary', { style: { cursor: 'pointer' } }, `${fact.kind || '事实'} · ${fact.text || '内容未记录'} · ${fact.status || '状态未记录'}`), readout('原文来源', fact.sourceRefs))),
+                  React.createElement('strong', null, `意图判断批次 · ${(topicContext.intentRuns || []).length} 条`),
+                  ...(topicContext.intentRuns || []).map((item, index) => React.createElement('details', { key: item.nodeRunId || item.intentRunId || index }, React.createElement('summary', { style: { cursor: 'pointer' } }, `${fmt(item.createdAt)} · ${item.status || '状态未记录'} · ${short(item.intentRunId)}`), readout('本批来源', item.sourceRunIds), readout('判断依据', item.reason), item.carrierRunId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedIntentRun(item.carrierRunId) }, '查看本次判断') : React.createElement('span', { style: { color: colors.muted } }, '历史未记录判断来源'))),
+                  React.createElement('nav', { 'aria-label': '判断批次分页', style: { display: 'flex', gap: 8 } }, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: !intentCursorHistory.length, onClick: () => { setIntentCursor(intentCursorHistory.at(-1)); setIntentCursorHistory((items) => items.slice(0, -1)) } }, '上一页判断'), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: !topicContext.intentNextCursor, onClick: () => { setIntentCursorHistory((items) => [...items, intentCursor]); setIntentCursor(topicContext.intentNextCursor) } }, '下一页判断')),
+                  React.createElement('div', { style: { display: 'flex', gap: 8 } }, contextCursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setContextCursor(contextCursorHistory.at(-1)); setContextCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, topicContext.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setContextCursorHistory((items) => [...items, contextCursor]); setContextCursor(topicContext.nextCursor) } }, '下一页') : null)) : React.createElement('span', { style: { color: colors.muted } }, '历史未记录')),
               React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: 12, padding: '16px 0', borderBottom: `1px solid ${colors.border}` } },
                 React.createElement('section', { 'aria-label': '当前待解决问题', style: { minWidth: 0 } }, React.createElement('strong', { style: { display: 'block', marginBottom: 8, fontSize: 12 } }, `待解决问题 · ${topic?.openQuestions?.length || 0}`), topic?.openQuestions?.length ? React.createElement('ul', { style: { margin: 0, paddingLeft: 18, display: 'grid', gap: 6, fontSize: 12, lineHeight: 1.6 } }, ...topic.openQuestions.map((question, index) => React.createElement('li', { key: index }, question))) : React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '当前没有待解决问题')),
                 React.createElement('section', { 'aria-label': '关联任务', style: { minWidth: 0 } }, React.createElement('strong', { style: { display: 'block', marginBottom: 8, fontSize: 12 } }, `关联任务 · ${relatedTasks.length}`), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 7 } }, ...relatedTasks.map((task) => React.createElement(Button, { key: task.taskId, variant: 'outline', size: 'sm', type: 'button', disabled: task.engine !== 'workflow-v2' && (!task.childSessionId || task.state === 'queued'), onClick: () => onOpenTask(task), style: { maxWidth: '100%' } }, React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, task.title || task.objective))), relatedTasks.length === 0 ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '暂无关联任务') : null))),
@@ -223,6 +303,28 @@ window.__ModuleLoader__.load({
                 React.createElement('div', { style: { display: 'grid' } }, ...(context.messages?.length ? context.messages.map((message, index) => React.createElement('article', { key: `${message.messageId}:${index}`, style: { position: 'relative', minWidth: 0, padding: '10px 0 15px 22px', borderLeft: `1px solid ${colors.border}` } }, React.createElement('span', { 'aria-hidden': true, style: { position: 'absolute', top: 15, left: -4, width: 7, height: 7, borderRadius: '50%', background: index === 0 ? colors.accent : colors.cardSurface, border: `1px solid ${index === 0 ? colors.accent : colors.border}` } }), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '2px 8px', color: colors.muted, fontSize: 11 } }, React.createElement('strong', { style: { color: 'inherit', fontWeight: 600 } }, message.senderName || message.sourceKind || '未知发送人'), React.createElement('time', { dateTime: message.occurredAt || undefined, style: { fontVariantNumeric: 'tabular-nums' } }, fmt(message.occurredAt))), React.createElement('p', { style: { margin: '6px 0 0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 13, lineHeight: 1.7 } }, message.text || '（空消息）'), message.quotedMessage?.content ? React.createElement('details', { style: { marginTop: 9, color: colors.muted, fontSize: 12 } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, '查看引用消息'), React.createElement('blockquote', { style: { margin: '7px 0 0', padding: '8px 10px', borderLeft: `2px solid ${colors.border}`, background: colors.surface2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.6 } }, message.quotedMessage.content)) : null)) : [emptyState('此版本没有消息')])),
                 pager(messageOffset, context.total, messagePageSize, setMessageOffset, detailLoading))
             ))))
+    }
+    function TaskRunHistory({ task, onOpenSession }) {
+      const [page, setPage] = useState()
+      const [cursor, setCursor] = useState('')
+      const [cursorHistory, setCursorHistory] = useState([])
+      const [retry, setRetry] = useState(0)
+      const [loading, setLoading] = useState(true)
+      const [error, setError] = useState('')
+      useEffect(() => {
+        let active = true
+        setLoading(true); setError('')
+        get(`/state/tasks/${encodeURIComponent(task.taskId)}/runs${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`).then((value) => { if (active) setPage(value) }, (cause) => { if (active) setError(cause.message) }).finally(() => { if (active) setLoading(false) })
+        return () => { active = false }
+      }, [task.taskId, cursor, retry])
+      const sessionAction = (sessionId, label) => sessionId ? React.createElement('button', { type: 'button', onClick: () => onOpenSession(sessionId), style: { justifySelf: 'start', border: 0, padding: 0, background: 'transparent', color: colors.accent, font: 'inherit', cursor: 'pointer' } }, label) : React.createElement('span', { style: { color: colors.muted } }, '会话尚未创建或历史未绑定')
+      return React.createElement('section', { 'aria-label': '任务负责人和历史执行', style: { display: 'grid', gap: 10, borderTop: `1px solid ${colors.border}`, paddingTop: 14, fontSize: 12 } },
+        React.createElement('strong', { style: { fontSize: 13 } }, '任务负责人会话与历史执行'),
+        loading ? React.createElement('span', { role: 'status' }, '正在读取历史执行…') : error ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `历史执行读取失败：${error}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setRetry((value) => value + 1) }, '重试')) : page ? React.createElement(React.Fragment, null,
+          React.createElement('div', { style: { display: 'grid', gap: 4 } }, React.createElement('strong', null, `Task Owner · ${page.taskOwner?.status || '状态未记录'}`), sessionAction(page.taskOwner?.sessionBound === true ? page.taskOwner.sessionId : null, '查看任务负责人会话')),
+          ...(page.runs || []).map((run, index) => React.createElement('details', { key: run.runId || index, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 8 } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, `执行 ${short(run.runId)} · ${run.status || '状态未记录'} · ${fmt(run.startedAt)}`), React.createElement('div', { style: { display: 'grid', gap: 9, padding: '9px 0 3px 16px' } }, ...(run.nodes || []).map((node, nodeIndex) => React.createElement('div', { key: node.nodeRunId || node.nodeId || nodeIndex, style: { display: 'grid', gap: 3 } }, React.createElement('strong', null, `${node.title || node.label || node.nodeId || '节点'} · ${node.status || '状态未记录'}`), sessionAction(node.sessionId, '查看此节点会话记录'))), !(run.nodes || []).length ? React.createElement('span', { style: { color: colors.muted } }, '此执行没有节点会话记录') : null))),
+          !(page.runs || []).length ? React.createElement('span', { style: { color: colors.muted } }, '暂无历史执行') : null,
+          React.createElement('div', { style: { display: 'flex', gap: 8 } }, cursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setCursor(cursorHistory.at(-1)); setCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, page.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setCursorHistory((items) => [...items, cursor]); setCursor(page.nextCursor) } }, '下一页') : null)) : React.createElement('span', { style: { color: colors.muted } }, '历史未记录'))
     }
     function ObserverContent({ openSession }) {
       const [activePage, setActivePage] = useState('groups')
@@ -241,6 +343,7 @@ window.__ModuleLoader__.load({
       const [hoveredTaskId, setHoveredTaskId] = useState('')
       const [expandedCheckpointTaskId, setExpandedCheckpointTaskId] = useState('')
       const [selectedWorkflowTaskId, setSelectedWorkflowTaskId] = useState('')
+      const [selectedMessageRunId, setSelectedMessageRunId] = useState('')
       const [copiedId, setCopiedId] = useState('')
       const [navigatingSessionId, setNavigatingSessionId] = useState('')
       const [archivingTaskId, setArchivingTaskId] = useState('')
@@ -344,7 +447,7 @@ window.__ModuleLoader__.load({
           React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, clampTableContent(React.createElement('strong', { style: { fontSize: 14, fontWeight: 600 } }, message.senderName || message.senderOpenDingTalkId || '发送人未记录'), React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, fmt(message.occurredAt)))),
           React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, React.createElement('div', { style: { display: 'flex', gap: 4, minWidth: 0, overflow: 'hidden' } }, ...(message.topicRefs?.length ? message.topicRefs.map((ref) => React.createElement('button', { key: ref.topicId, type: 'button', title: ref.title, 'aria-label': `话题 ${ref.title}`, onClick: () => { setTopicTarget({ groupId: selectedGroup.groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', flex: '0 1 auto', minWidth: 0, maxWidth: 120, border: 0, padding: '2px 7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', fontFamily: 'inherit' } }, ref.title)) : [React.createElement('span', { key: 'unrouted', style: { color: colors.muted, fontSize: 12 } }, '待归类')]))),
           React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）')),
-          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`))))
+          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : React.createElement('span', { style: { color: colors.muted, fontSize: 11, display: 'block' } }, '历史未记录处理过程')))
       })
       const selectedOutbox = [...(selectedGroup?.outbox || [])].reverse()
       const outboxState = (message) => outboxDelivery(message).id
@@ -513,7 +616,7 @@ window.__ModuleLoader__.load({
       const groupTableToolbar = React.createElement('div', { style: toolbar },
         dataViewTabs,
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' } },
-          (data?.groups || []).length ? React.createElement(SelectMenu, { label: '选择群聊会话', value: selectedGroup?.groupId || '', options: (data?.groups || []).map((group) => ({ id: group.groupId, label: group.name || group.groupId })), onChange: (value) => { setSelectedGroupId(value); setMessagePage(1); setOutboxPage(1) }, fitContent: true }) : null,
+          (data?.groups || []).length ? React.createElement(SelectMenu, { label: '选择群聊', value: selectedGroup?.groupId || '', options: (data?.groups || []).map((group) => ({ id: group.groupId, label: group.name || group.groupId })), onChange: (value) => { setSelectedGroupId(value); setMessagePage(1); setOutboxPage(1); setSelectedMessageRunId('') }, fitContent: true }) : null,
           groupTableView === 'messages'
             ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'waiting_routing_barrier', label: '等待其他消息关联' }, { id: 'intent_judging', label: '意图判断中' }, { id: 'intent_rejudging', label: '意图重新判断' }, { id: 'routing_blocked', label: '关联受阻' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
             : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读' }, { id: 'confirmed', label: '已发送' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回待处理' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
@@ -527,7 +630,7 @@ window.__ModuleLoader__.load({
           React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 124 } }, '发送状态'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 220 } }, '来源 / 回复目标'), React.createElement('th', { style: { ...tableHeadCell, width: 220 } }, '投递消息 ID'), React.createElement('th', { style: { ...tableHeadCell, width: 220 } }, '发信箱 ID'))),
           React.createElement('tbody', null, ...(outboxRows.length ? outboxRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 5, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, '暂无符合条件的 Agent 发件记录'))])))),
         React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredOutbox.length} 条 · 每页 ${outboxPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage <= 1, onClick: () => setOutboxPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentOutboxPage} / ${outboxPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage >= outboxPageCount, onClick: () => setOutboxPage((page) => Math.min(outboxPageCount, page + 1)) }, '下一页')))
-      const groupsPage = React.createElement('section', null, React.createElement('div', { style: tableFrame }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
+      const groupsPage = selectedMessageRunId ? React.createElement(TraceDetail, { runId: selectedMessageRunId, onBack: () => setSelectedMessageRunId('') }) : React.createElement('section', null, React.createElement('div', { style: tableFrame }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
       const selectedWorkflowTask = (data?.tasks || []).find(task => task.taskId === selectedWorkflowTaskId && task.engine === 'workflow-v2')
       const nodeState = { succeeded: '已完成', running: '执行中', ready: '待执行', waiting: '等待处理', failed: '失败', pending: '未开始', cancelled: '已取消', skipped: '已跳过' }
       const planStageState = { ready: '待执行', waiting_confirmation: '等待人工确认', running: '执行中', succeeded: '已完成', invalidated: '需重新执行', blocked: '受阻' }
@@ -563,7 +666,8 @@ window.__ModuleLoader__.load({
               React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' } }, React.createElement('strong', { style: { fontSize: 13 } }, node.title || nodeTitle[node.nodeId] || node.nodeId), React.createElement('span', { style: { color: colors.muted } }, nodeState[node.status] || node.status)),
               node.waitReason?.reference ? React.createElement('span', { style: { color: colors.warning, overflowWrap: 'anywhere' } }, `等待原因：${node.waitReason.reference}`) : null,
               node.outputRef ? React.createElement('span', { style: { color: colors.muted } }, '节点产出已记录') : null,
-              node.sessionId ? React.createElement('button', { type: 'button', onClick: () => navigate(node.sessionId), style: { justifySelf: 'start', padding: 0, border: 0, color: colors.accent, background: 'transparent', font: 'inherit', cursor: 'pointer' } }, '查看此节点会话记录') : null)))),
+              node.sessionId ? React.createElement('button', { type: 'button', onClick: () => navigate(node.sessionId), style: { justifySelf: 'start', padding: 0, border: 0, color: colors.accent, background: 'transparent', font: 'inherit', cursor: 'pointer' } }, '查看此节点会话记录') : React.createElement('span', { style: { color: colors.muted } }, '会话尚未创建或历史未绑定'))))),
+        React.createElement(TaskRunHistory, { key: selectedWorkflowTask.taskId, task: selectedWorkflowTask, onOpenSession: navigate }),
         selectedWorkflowTask.result ? React.createElement('section', { style: { display: 'grid', gap: 6, paddingTop: 12, borderTop: `1px solid ${colors.border}` } }, React.createElement('strong', { style: { fontSize: 13 } }, '任务产出'), React.createElement('div', { style: { fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, selectedWorkflowTask.result)) : null)
         : null
       const tasksPage = workflowDetail || React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns)

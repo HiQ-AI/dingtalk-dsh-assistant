@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -147,9 +147,67 @@ test('磁盘配置读回、显式初始化、正常开启及身份/schema严格�
   assert.equal((await f.query()).nodes[0].generation, 1)
   await f.store.close()
   const raw = new DatabaseSync(f.dbPath)
-  raw.exec('PRAGMA user_version=5')
+  raw.exec('PRAGMA user_version=6')
   raw.close()
   await rejects(f.open(), 'STORE_SCHEMA_MISMATCH')
+})
+test('话题事实 v4→v5 离线迁移先零写检查并备份，逐条回读身份',async t=>{
+  const f=await fixture(t)
+  await f.store.close()
+  const raw=new DatabaseSync(f.dbPath)
+  raw.exec('PRAGMA foreign_keys=ON')
+  const fact={id:'old-fact',kind:'constraint',text:'只用中文',sourceRefs:[{sourceKey:'m',sourceVersion:1,text:'只用中文'}],status:'active'}
+  raw.prepare('INSERT INTO message_runs(run_id,source_key,source_version,body) VALUES(?,?,?,?)').run('migration-source','m',1,JSON.stringify({runId:'migration-source',sourceKey:'m',sourceVersion:1,conversationId:'g',actorId:'owner',body:'只用中文'}))
+  const topic={topicId:'old-topic',conversationId:'g',title:'旧话题',revision:1,inputRevision:1,facts:[fact]}
+  raw.prepare('INSERT INTO message_topics(topic_id,conversation_id,body) VALUES(?,?,?)').run(topic.topicId,topic.conversationId,JSON.stringify(topic))
+  raw.exec('DROP TABLE message_topic_facts; PRAGMA user_version=4')
+  raw.prepare('UPDATE execution_meta SET schema_version=4 WHERE singleton=1').run()
+  raw.close()
+  const script=resolve('scripts/migrate-message-topic-facts.js')
+  const invalidSource=new DatabaseSync(f.dbPath)
+  invalidSource.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify({conversationId:'other-group',body:'只用中文'}),'migration-source')
+  invalidSource.close()
+  const rejected=spawnSync(process.execPath,[script,'--check',f.dbPath],{encoding:'utf8'})
+  assert.notEqual(rejected.status,0)
+  assert.match(rejected.stderr,/MIGRATION_FACT_SOURCE_INVALID/)
+  const restoredSource=new DatabaseSync(f.dbPath)
+  restoredSource.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify({runId:'migration-source',sourceKey:'m',sourceVersion:1,conversationId:'g',actorId:'owner',body:'只用中文'}),'migration-source')
+  restoredSource.close()
+  const check=spawnSync(process.execPath,[script,'--check',f.dbPath],{encoding:'utf8'})
+  assert.equal(check.status,0,check.stderr)
+  assert.equal(JSON.parse(check.stdout).facts,1)
+  assert.equal(JSON.parse(check.stdout).unknownEffects,0)
+  assert.equal(JSON.parse(check.stdout).pendingApprovals,0)
+  assert.equal(JSON.parse(check.stdout).baseline.execution_runs.count,1)
+  const unchanged=new DatabaseSync(f.dbPath,{readOnly:true})
+  assert.equal(Object.values(unchanged.prepare('PRAGMA user_version').get())[0],4)
+  assert.equal(unchanged.prepare("SELECT name FROM sqlite_master WHERE name='message_topic_facts'").get(),undefined)
+  unchanged.close()
+  const liveOwner=new DatabaseSync(f.dbPath+'.owner.sqlite')
+  liveOwner.exec('BEGIN EXCLUSIVE')
+  try {
+    const blocked=spawnSync(process.execPath,[script,'--execute',f.dbPath],{encoding:'utf8'})
+    assert.notEqual(blocked.status,0)
+    assert.match(blocked.stderr,/locked|busy/)
+    const blockedReadback=new DatabaseSync(f.dbPath,{readOnly:true})
+    assert.equal(Object.values(blockedReadback.prepare('PRAGMA user_version').get())[0],4)
+    assert.equal(blockedReadback.prepare("SELECT name FROM sqlite_master WHERE name='message_topic_facts'").get(),undefined)
+    blockedReadback.close()
+  } finally {liveOwner.exec('ROLLBACK');liveOwner.close()}
+  const execute=spawnSync(process.execPath,[script,'--execute',f.dbPath],{encoding:'utf8'})
+  assert.equal(execute.status,0,execute.stderr)
+  const result=JSON.parse(execute.stdout)
+  assert.deepEqual(result.baseline,JSON.parse(check.stdout).baseline)
+  assert.equal((await stat(result.backupPath)).size>0,true)
+  const backup=new DatabaseSync(result.backupPath,{readOnly:true})
+  assert.equal(Object.values(backup.prepare('PRAGMA user_version').get())[0],4)
+  assert.equal(JSON.parse(backup.prepare('SELECT body FROM message_topics WHERE topic_id=?').get('old-topic').body).facts[0].id,'old-fact')
+  backup.close()
+  const migrated=new DatabaseSync(f.dbPath,{readOnly:true})
+  assert.equal(Object.values(migrated.prepare('PRAGMA user_version').get())[0],5)
+  assert.deepEqual(JSON.parse(migrated.prepare('SELECT body FROM message_topic_facts WHERE topic_id=? AND fact_id=?').get('old-topic','old-fact').body),fact)
+  assert.equal(JSON.parse(migrated.prepare('SELECT body FROM message_topics WHERE topic_id=?').get('old-topic').body).facts,undefined)
+  migrated.close()
 })
 
 test('损坏与空库不隐式建表；未知生产参数拒绝', async t => {
@@ -376,6 +434,24 @@ test('同Task仅一个非终态run，业务冲突不破坏控制库健康', asyn
   await f.store.command(command('run.stopped', { runId: 'run' }))
   await f.store.command(command('run.create', creation([plan()], { runId: 'another-run' })))
   assert.equal((await f.store.query({ kind: 'run', runId: 'another-run' })).run.status, 'queued')
+})
+test('Task 历史 run 游标分页保持范围且无遗漏重复',async t=>{
+  const f=await fixture(t,null)
+  for(const runId of ['history-1','history-2','history-3']){
+    await f.store.command(command('run.create',creation([plan()],{runId,taskId:'history-task'})))
+    await f.store.command(command('run.stop',{runId,reason:'test'}))
+    await f.store.command(command('run.stopped',{runId}))
+  }
+  await f.store.command(command('run.create',creation([plan()],{runId:'other-run',taskId:'other-task'})))
+  const first=await f.store.query({kind:'run.list',taskId:'history-task',limit:2})
+  assert.deepEqual(first.map(run=>run.runId),['history-3','history-2'])
+  assert.ok(first.every(run=>Number.isSafeInteger(run.sequenceId)))
+  const second=await f.store.query({kind:'run.list',taskId:'history-task',limit:2,beforeSequenceId:first.at(-1).sequenceId})
+  assert.deepEqual(second.map(run=>run.runId),['history-1'])
+  assert.equal(new Set([...first,...second].map(run=>run.runId)).size,3)
+  assert.deepEqual(await f.store.query({kind:'run.list',taskId:'history-task',activeOnly:true}),[])
+  assert.deepEqual((await f.store.query({kind:'run.list',activeOnly:true})).map(run=>run.runId),['other-run'])
+  await rejects(f.store.query({kind:'run.list',beforeSequenceId:0}),'INVALID_ARGUMENT')
 })
 
 test('会话创建失败可落waiting/recovery，不能伪造sessionBound或提交成功', async t => {

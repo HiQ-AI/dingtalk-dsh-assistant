@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic, invalidateMessageSourceTopics, unbindMessageUnit } from './message-topics.js'
+import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic, invalidateMessageSourceTopics, unbindMessageUnit, wholeTopicFactRevision } from './message-topics.js'
 
 export function isPassiveTaskProgress(body) {
   if (typeof body !== 'string') return false
@@ -25,6 +25,14 @@ export function isQuietGroupMessage(body) {
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const str = v => { if (typeof v !== 'string' || !v.trim()) fail('MESSAGE_INVALID_ARGUMENT'); return v }
 const json = v => JSON.stringify(v)
+function taskFactVersion(db, taskId) {
+  const task = db.prepare('SELECT requirement_revision,requirement_ref,plan_revision,plan_requirement_revision,status FROM business_tasks WHERE task_id=?').get(str(taskId)) ?? null
+  const control = db.prepare('SELECT * FROM task_controls WHERE task_id=?').get(taskId) ?? null
+  const owner = db.prepare('SELECT authorization_revision,input_fence_revision FROM task_owners WHERE task_id=?').get(taskId) ?? null
+  const runs = db.prepare('SELECT run_id,revision,status,pause_requested,stop_requested FROM execution_runs WHERE task_id=? ORDER BY rowid').all(taskId)
+  const nodes = db.prepare('SELECT n.node_run_id,n.status,n.output_ref,n.wait_reason FROM execution_nodes n JOIN execution_runs r ON r.run_id=n.run_id WHERE r.task_id=? AND n.current=1 ORDER BY n.rowid').all(taskId)
+  return { taskId, hash: createHash('sha256').update(json({ task, control, owner, runs, nodes })).digest('hex') }
+}
 const canonical=v=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v
 const textHash=v=>createHash('sha256').update(str(v)).digest('hex')
 const digest=v=>createHash('sha256').update(json(canonical(v))).digest('hex')
@@ -516,7 +524,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(r.correction&&a.correctionId!==r.correction.id)fail('MESSAGE_CORRECTION_STALE')
     if(rows(db,r.runId,'unit').length&&!r.correction)fail('MESSAGE_SPLIT_ALREADY_PUBLISHED')
     const ids=a.units.map(u=>str(u.unitId));if(new Set(ids).size!==ids.length)fail('MESSAGE_INVALID_UNITS')
-    if(r.policy.effectiveMaxClaims===undefined)r.policy.effectiveMaxClaims=Math.min(r.policy.maxClaims,1+2*a.units.length+4)
+    if(r.policy.effectiveMaxClaims===undefined)r.policy.effectiveMaxClaims=r.policy.maxClaims
     const previous=rows(db,r.runId,'unit'),preserved=new Set()
     for(const u of a.units)if(u.preservedUnitId) {
       const old=previous.find(x=>x.id===u.preservedUnitId)
@@ -549,7 +557,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(deterministic&&(!a.input.inputHash||a.estimatedInputTokens!==0||a.maxOutputTokens!==0))fail('MESSAGE_INVALID_BUDGET')
     if(!deterministic&&s.claims-baseline.claims>=(r.policy.effectiveMaxClaims??r.policy.maxClaims))fail('MESSAGE_BUDGET_EXHAUSTED')
     const reserve={input:a.estimatedInputTokens??0,output:a.maxOutputTokens??0};if(!Object.values(reserve).every(x=>Number.isSafeInteger(x)&&x>=0))fail('MESSAGE_INVALID_BUDGET');if(s.input_tokens-baseline.input_tokens+reserve.input>(r.policy.maxInputTokens??64000)||s.output_tokens-baseline.output_tokens+reserve.output>(r.policy.maxOutputTokens??12000))fail('MESSAGE_BUDGET_EXHAUSTED')
-    const previous=rows(db,r.runId,'node').find(n=>n.unitId===a.unitId&&n.nodeId===a.nodeId&&n.revision===r.revision&&n.input?.topicInputRevision===a.input?.topicInputRevision&&n.status!=='superseded')
+    const previous=rows(db,r.runId,'node').find(n=>n.unitId===a.unitId&&n.nodeId===a.nodeId&&n.revision===r.revision&&n.input?.topicInputRevision===a.input?.topicInputRevision&&n.input?.contextHash===a.input?.contextHash&&n.status!=='superseded')
     if(previous&&['running','succeeded','waiting'].includes(previous.status))fail('MESSAGE_NODE_NOT_READY')
     if(previous?.retryAt&&Date.parse(previous.retryAt)>Date.parse(now))fail('MESSAGE_RETRY_NOT_DUE')
     const n={id:previous?.id??randomUUID(),nodeRunId:previous?.id??null,runId:r.runId,unitId:a.unitId,nodeId:a.nodeId,revision:r.revision,leaseEpoch:(previous?.leaseEpoch??0)+1,status:'running',input:a.input,reservedTokens:reserve,createdAt:previous?.createdAt??now,startedAt:now};n.nodeRunId=n.id
@@ -574,9 +582,11 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     u.status=a.commands.length?'accepted':a.outcome;put(db,r.runId,'unit',u);settle(db,r);return {result:{unit:u,run:r,commands:rows(db,r.runId,'command').filter(c=>c.unitId===u.id)}}
   }
   if(kind==='message.topic.intent.accept') {
+    for(const version of a.taskFactVersions??[])if(taskFactVersion(db,version.taskId).hash!==version.hash)fail('MESSAGE_TASK_FACTS_STALE')
     const topic=queryMessageTopics(db,{kind:'message.topic',topicId:a.topicId})
     if(!topic||topic.conversationId!==a.conversationId)fail('MESSAGE_TOPIC_SCOPE_MISMATCH')
     if(topic.inputRevision!==a.inputRevision)fail('MESSAGE_TOPIC_STALE')
+    if(a.contextRevision!==undefined&&topic.contextRevision!==a.contextRevision)fail('MESSAGE_TOPIC_CONTEXT_STALE')
     if(topic.processedRevision===a.inputRevision)return {result:{status:'accepted',topic,decisions:a.decisions}}
     const pending=queryMessages(db,{kind:'message.routing.pending',conversationId:a.conversationId})
     const priority=pending.length?priorityTopicControls(db,topic,a.priorityControls):null
@@ -588,11 +598,33 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const currentUnits=queryMessageTopics(db,{kind:'message.topic.units',topicId:a.topicId})
     if(currentUnits.length!==a.decisions.length||new Set(a.decisions.map(item=>item.unitId)).size!==a.decisions.length
       ||currentUnits.some(({unit})=>!a.decisions.some(item=>item.unitId===unit.id)))fail('MESSAGE_TOPIC_STALE')
+    const appliedFactRevisions=new Map()
     for(const decision of a.decisions){
       const item=currentUnits.find(({unit})=>unit.id===decision.unitId)
       const r=item.run,u=item.unit
       current(db,r,decision.expectedRevision)
       if(!Array.isArray(decision.commands)||(!decision.commands.length&&!['ignored','rejected','applied'].includes(decision.outcome)))fail('MESSAGE_INVALID_DISPOSITION')
+      for(const change of decision.factRevisions??[]){
+        const revisionIdentity=json([r.actorId,change.sourceQuote,change.scope])
+        if(appliedFactRevisions.has(change.factId)){
+          if(appliedFactRevisions.get(change.factId)!==revisionIdentity||!r.body.includes(change.sourceQuote))fail('MESSAGE_TOPIC_FACT_REVISION_CONFLICT')
+          continue
+        }
+        const row=db.prepare("SELECT body FROM message_topic_facts WHERE topic_id=? AND fact_id=? AND status='active'").get(a.topicId,str(change.factId))
+        if(!row)fail('MESSAGE_TOPIC_FACT_REVISION_INVALID')
+        const fact=JSON.parse(row.body)
+        if(fact.actorId!==r.actorId||!r.body.includes(str(change.sourceQuote))||!/改为|修改|不再|取消|撤销|替换|现在允许/u.test(change.sourceQuote)||!wholeTopicFactRevision(r.body,change))fail('MESSAGE_TOPIC_FACT_REVISION_FORBIDDEN')
+        str(change.scope)
+        for(const prior of db.prepare("SELECT fact_id,body FROM message_topic_facts WHERE topic_id=? AND status='active'").all(a.topicId)){
+          const equivalent=JSON.parse(prior.body)
+          if(equivalent.actorId!==fact.actorId||equivalent.kind!==fact.kind||equivalent.text!==fact.text)continue
+          db.prepare("UPDATE message_topic_facts SET status='superseded',body=? WHERE topic_id=? AND fact_id=?").run(json({...equivalent,status:'superseded',supersededBy:{sourceKey:r.sourceKey,sourceVersion:r.sourceVersion,sourceQuote:change.sourceQuote,scope:change.scope},supersededAt:now}),a.topicId,prior.fact_id)
+        }
+        const revised=JSON.parse(db.prepare('SELECT body FROM message_topics WHERE topic_id=?').get(a.topicId).body)
+        revised.contextRevision=(revised.contextRevision??0)+1
+        db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(json(revised),a.topicId)
+        appliedFactRevisions.set(change.factId,revisionIdentity)
+      }
       const outstanding=rows(db,r.runId,'command').filter(command=>command.unitId===u.id&&command.status==='superseded'&&command.reason==='topic_input_changed'&&command.priorStatus==='pending'&&!command.replacedBy)
       const remaining=[...decision.commands]
       for(const old of outstanding){const index=remaining.findIndex(command=>command.kind===old.kind);if(index<0)fail('MESSAGE_OUTSTANDING_ACTION_UNRESOLVED');old.replacedBy=remaining[index].commandId;put(db,r.runId,'command',old);remaining.splice(index,1)}
@@ -607,7 +639,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     }
     const latest=queryMessageTopics(db,{kind:'message.topic',topicId:a.topicId})
     latest.processedRevision=a.inputRevision;latest.updatedAt=now
-    db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(json(latest),latest.topicId)
+    db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(json(Object.fromEntries(Object.entries(latest).filter(([key])=>!['facts','hasMoreFacts'].includes(key)))),latest.topicId)
     topicRunsStatus(db,a.topicId,'processed')
     return {result:{status:'accepted',topic:latest,decisions:a.decisions}}
   }
@@ -638,7 +670,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       ||queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId}).length)fail('MESSAGE_TOPIC_STALE')
     for(const request of rows(db,r.runId,'request').filter(item=>item.unitId===u.id&&item.status==='pending')){request.status='superseded';request.reason='intent_rejudging';put(db,r.runId,'request',request)}
     topic.inputRevision++;topic.updatedAt=now
-    db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(json(topic),topic.topicId)
+    db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(json(Object.fromEntries(Object.entries(topic).filter(([key])=>!['facts','hasMoreFacts'].includes(key)))),topic.topicId)
     u.status='pending';put(db,r.runId,'unit',u)
     r.status='pending';r.intentStatus='intent_rejudging';r.deadline=new Date(Date.parse(now)+30000).toISOString();save(db,r)
     return {result:{run:r,unit:u,topic}}
@@ -695,6 +727,15 @@ export function queryMessages(db,a) {
   if(a.kind==='message.web-tasks.pending')return db.prepare("SELECT body FROM message_items WHERE kind='web-task' AND json_extract(body,'$.status')='pending' ORDER BY rowid LIMIT 100").all().map(row=>JSON.parse(row.body))
   const topic=queryMessageTopics(db,a)
   if(topic!==undefined)return topic
+  if(a.kind==='message.intent.runs') {
+    const limit=a.limit??50,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER
+    if(!Number.isSafeInteger(limit)||limit<1||limit>100||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT')
+    return db.prepare(`SELECT i.rowid AS seq,i.body FROM message_items i WHERE i.kind='node' AND i.rowid<?
+      AND json_extract(i.body,'$.nodeId')='IB' AND EXISTS (
+        SELECT 1 FROM json_each(i.body,'$.input.units') u WHERE json_extract(u.value,'$.runId')=?
+      ) ORDER BY i.rowid DESC LIMIT ?`).all(before,str(a.runId),limit)
+      .map(row=>({...JSON.parse(row.body),carrierRunId:JSON.parse(row.body).runId,sequenceId:row.seq}))
+  }
   if(a.kind==='message.routing.pending')return db.prepare(`SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=COALESCE(json_extract(r.body,'$.validSourceVersion'),r.source_version)
     WHERE json_extract(r.body,'$.conversationId')=? AND json_extract(r.body,'$.status') NOT IN ('buffered','alias','superseded')
     AND NOT (json_extract(r.body,'$.status')='settled' AND json_extract(r.body,'$.reason')='message_quiet')
@@ -702,6 +743,7 @@ export function queryMessages(db,a) {
       OR EXISTS (SELECT 1 FROM message_items i LEFT JOIN message_topic_bindings b ON b.unit_id=json_extract(i.body,'$.id')
         WHERE i.run_id=r.run_id AND i.kind='unit' AND json_extract(i.body,'$.status')!='superseded' AND b.unit_id IS NULL))
     ORDER BY r.rowid`).all(str(a.conversationId)).map(row=>JSON.parse(row.body))
+  if(a.kind==='message.task.version')return taskFactVersion(db,a.taskId)
   if(a.kind==='message.material'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('material:'+json([str(a.runId),str(a.resourceRef)]));return row?JSON.parse(row.body).material:null}
   if(a.kind==='message.request')return get(db,'request',a.requestId)
   if(a.kind==='message.outboundByMessage') {
@@ -735,7 +777,7 @@ export function queryMessages(db,a) {
       .all(after,json(states),...(a.runId?[str(a.runId)]:[]),limit).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
   }
   if(a.kind==='message.group') {const row=db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(str(a.conversationId));return row?JSON.parse(row.body):null}
-  if(a.kind==='message.task-candidates') {const limit=a.limit??30;if(!Number.isSafeInteger(limit)||limit<1||limit>200)fail('MESSAGE_INVALID_LIMIT');return db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.kind') IN ('create','research','reopen') AND json_extract(r.body,'$.conversationId')=? ORDER BY i.rowid DESC LIMIT ?").all(str(a.conversationId),limit).map(x=>({run:JSON.parse(x.run),command:JSON.parse(x.command)}))}
+  if(a.kind==='message.task-candidates') {const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER;if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT');return db.prepare("SELECT i.rowid AS seq,r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.kind') IN ('create','research','reopen') AND json_extract(r.body,'$.conversationId')=? AND i.rowid<? ORDER BY i.rowid DESC LIMIT ?").all(str(a.conversationId),before,limit).map(x=>({run:JSON.parse(x.run),command:JSON.parse(x.command),sequenceId:x.seq}))}
   if(a.kind==='message.list') {
     const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER
     if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT')
