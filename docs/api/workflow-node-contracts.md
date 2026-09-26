@@ -84,3 +84,5 @@ IB 可返回 `factRevisions: [{ factId, sourceQuote, scope }]`。Host 只接受�
 `GET /state/tasks/:taskId/runs/:runId/nodes/:nodeRunId/output?ref=:outputRef` 返回 `text/overview/nextCursor/totalLength`，有文档时附 `documentName`；cursor 默认 0，limit 默认 1200、上限 8000。对应 `/document?ref=:outputRef` 按需下载 UTF-8 Markdown，响应为 attachment、Cache-Control=no-store。两条路径均核对当前配置群、Task/Run/节点和准确输出引用；文档不存在或跨范围返回 404，引用变化拒绝读取。文档正文不放进列表。
 
 新工程方案是节点实际保存的 Markdown 文档工件；历史补丁导出的修改记录明确标注未保存方案说明。旧工作目录仅从同一 nodeRunId、同一 generation 的成功 workspace 效果回执读取，不挪用其他轮次的目录。
+
+方案编写及方案检查节点只显示实际方案工件路径，不展示正文、文件数量、展开或下载入口。当前文档与补丁持久化在 JSON 工件中，因此显示真实 JSON 路径，不虚构独立 Markdown 文件路径；其余节点保持原展示。

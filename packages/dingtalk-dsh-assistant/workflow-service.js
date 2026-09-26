@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { openExecutionRuntime } from './execution.js'
 import { createTaskOwnerController } from './task-owner-controller.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
@@ -1941,6 +1942,10 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     }
     const result = describeTaskNodeOutput(node, output, context), { text, overview } = result
     if (document) return result.document ?? null
+    if (['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId)) {
+      const pathText = `方案工件路径\n${join(artifacts.root, node.outputRef)}`
+      return { text: pathText, overview: '', nextCursor: null, totalLength: pathText.length }
+    }
     if (offset > text.length || offset > 0 && /[\uDC00-\uDFFF]/u.test(text[offset] ?? '')) throw executionError('TASK_OUTPUT_CURSOR_INVALID')
     let end = Math.min(text.length, offset + limit)
     if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1])) end--

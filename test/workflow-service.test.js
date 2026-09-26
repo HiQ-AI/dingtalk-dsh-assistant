@@ -161,7 +161,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
   const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'test', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
   const controller = createExecutionController({ store, artifacts, ...(options.external ? { delivery: { execute: async () => { throw new Error('EXTERNAL_EFFECT_NOT_EXPECTED') } } } : {}), workflows: [{ id: 'task-analysis', version: 'test', nodes: [
-    { id: 'analyze', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: schema, outputSchema: schema,
+    { id: options.nodeId ?? 'analyze', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: schema, outputSchema: schema,
       mapInput: ({ requirement }) => requirement, execute: options.execute ?? (async ({ input }) => ({ summary: `已分析：${input.request}`, evidenceIds: input.materials.map(item => item.id), limitations: [] })) },
   ] }] })
   const execution = { store, artifacts, controller }
@@ -1903,4 +1903,22 @@ test('answer 创建的任务可回读来源及历史执行', async t => {
   assert.equal((await execution.store.query({kind:'message.task.latest',taskId:command.result.taskId})).command.kind,'answer')
   assert.ok((await execution.store.query({kind:'message.task-candidates',conversationId:message.groupId})).some(item=>item.command.args.taskId===command.result.taskId))
   assert.equal((await service.taskRuns(command.result.taskId)).taskId,command.result.taskId)
+})
+
+
+test('方案节点仅返回真实工件路径，不附正文、摘要或下载名称', async t => {
+  const { service, execution, message } = await fixture(t, 'owner', undefined, {
+    nodeId: 'inspect-and-propose', execute: async () => ({ changes: [], replacements: [{ path: 'a.js', from: 'old', to: 'new' }] }),
+  })
+  const receipt = await service.ingest(message)
+  const state = await service.messages.process(receipt.runId)
+  const { taskId, runId } = state.commands[0].result
+  await execution.controller.whenIdle(runId)
+  const node = (await execution.controller.state(runId)).nodes[0]
+  const page = await service.taskNodeOutput(taskId, runId, node.nodeRunId, { outputRef: node.outputRef })
+  assert.equal(page.text, `方案工件路径\n${join(execution.artifacts.root, node.outputRef)}`)
+  assert.equal(page.overview, '')
+  assert.equal(page.documentName, undefined)
+  assert.equal(page.nextCursor, null)
+  assert.equal(page.totalLength, page.text.length)
 })

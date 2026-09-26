@@ -379,7 +379,7 @@ window.__ModuleLoader__.load({
       const content = React.createElement('div', { style: { minWidth: 0, fontSize: 13, lineHeight: 1.7 } },
         text ? React.createElement('div', { style: { display: 'grid', gap: 6, overflowWrap: 'anywhere' } }, ...text.split('\n\n').map((part, index) => {
           const [heading, ...lines] = part.split('\n')
-          const titled = ['产出摘要', '正文', '任务要求', '发现', '限制与未确认事项', '执行范围', '相关文件', '已有文件', '新建文件', '材料正文', '已读取文件', '已修改文件', '涉及文件', '文件变更', '修改方案', '检查结果', '文件索引', '基线版本', '可修改文件', '变更文件', '提交说明', '分支', '远端', '提交版本', '执行结果', 'PR 标题', '目标仓库', '来源分支', '目标分支', 'PR 正文', 'PR 地址', 'PR 状态', '工作目录', '来源仓库', '隔离方式', '处理内容', '项目', '工作分支', '起点版本'].includes(heading)
+          const titled = ['产出摘要', '正文', '任务要求', '发现', '限制与未确认事项', '执行范围', '相关文件', '已有文件', '新建文件', '材料正文', '已读取文件', '已修改文件', '涉及文件', '文件变更', '修改方案', '检查结果', '文件索引', '基线版本', '可修改文件', '变更文件', '提交说明', '分支', '远端', '提交版本', '执行结果', 'PR 标题', '目标仓库', '来源分支', '目标分支', 'PR 正文', 'PR 地址', 'PR 状态', '方案工件路径', '工作目录', '来源仓库', '隔离方式', '处理内容', '项目', '工作分支', '起点版本'].includes(heading)
           return React.createElement('div', { key: index, className: titled ? 'observer-task-output-row' : undefined }, titled ? React.createElement('strong', { style: { fontSize: 12, fontWeight: 500, color: colors.muted } }, heading) : null,
             React.createElement('div', { style: { whiteSpace: 'pre-wrap' } }, titled ? lines.join('\n') : part))
         })) : null,
