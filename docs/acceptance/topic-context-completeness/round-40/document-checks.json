@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-09-27T12:30:26.995Z",
+  "baseline": "4612b0b5a3e12a77274f8ff849a93c7d05aea167",
+  "scope": "documentation-only",
+  "localLinks": 44,
+  "checks": {
+    "links": "PASS",
+    "runnableExampleUnchanged": "PASS",
+    "originalSpecUnchanged": "PASS",
+    "historicalMatrixUnchanged": "PASS",
+    "productCodeUnchanged": "PASS"
+  },
+  "runnableExampleSha256": "907f0179a865d75b588055c2e54dbe1feaace0fca4581108959ce20cd457b7a9",
+  "documentDigests": {
+    "packages/dingtalk-dsh-assistant/README.md": "8c28598770bbdb2f01b80f9929a9f160abc129207911a816bc2c371fdda389b0",
+    "docs/spec/workflow-session-responsibility.md": "749619d8484e272bb4fee9edb5ff2c62a030a3739f35aaa78890cdb2eadd5c7a",
+    "docs/acceptance/topic-context-completeness/round-39.md": "57d2270b59b1266f5237739d34e64ba166848edfe09a61c3ed6a5c20e8737fcd",
+    "docs/acceptance/topic-context-completeness/round-40.md": "86bafb4fc5cbb395a1b708c82a5b9c6b75391f1d41dc528c487a7b6e4315ab00"
+  }
+}
