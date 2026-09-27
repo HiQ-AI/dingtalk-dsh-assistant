@@ -2,7 +2,7 @@
 
 > 状态：IN_PROGRESS
 > Goal ID：topic-context-completeness
-> 最近维护：2026-09-27T18:23:43.3104533+08:00
+> 最近维护：2026-09-27T18:26:37.3409060+08:00
 > 权威目标：`D:/project/worktrees/dingtalk-topic-context-completeness/docs/acceptance/topic-context-completeness/goal.md`
 
 ## 总目标
@@ -55,8 +55,8 @@
 ## 当前检查点
 
 - 当前子目标：SG17
-- 唯一下一步：Windows父PID复用误判修复209+90回归通过，09702705/PID20848已部署并回读；现在提交PR125。DWS授权超时仍等待本人重新扫码，真实新消息未验证。
-- 未闭环项：DWS重新授权及真实入站；PR125提交回读。既有两条UAT业务验收保持通过，不重跑。
+- 唯一下一步：DWS原账号旧登录态失效，需要本人方便时重新发起扫码授权；之后验证listener ready、补读以及真实新消息持久入站。代码e14ae8e已推送PR125（OPEN）并独立回读，09702705/PID20848已部署。
+- 未闭环项：DWS重新授权及真实入站；PR125尚未合并，生产main流程未实跑。既有两条UAT业务验收保持通过，不重跑。所有原始失败/运行证据保留本地，未上传临时目录或账号数据。
 
 ## 进展
 

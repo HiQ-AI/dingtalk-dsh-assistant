@@ -1,0 +1,9 @@
+{
+  "number": 125,
+  "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/125",
+  "state": "OPEN",
+  "headRefOid": "e14ae8e46c8764653a25a2fa775217987a998289",
+  "headRefName": "worktree-topic-context-completeness",
+  "baseRefName": "main",
+  "title": "feat: 补齐话题上下文、任务产出与本地验收至UAT交付闭环"
+}
