@@ -3,6 +3,25 @@ $errors=$null;$tokens=$null
 $path=Join-Path $PSScriptRoot '../docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1'
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw '脚本解析失败'}
+$workspaceAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$workspace'},$true)
+$deployedScriptRoot=Split-Path -Parent ([IO.Path]::GetFullPath($path))
+$resolvedWorkspace=Invoke-Expression ($workspaceAssignment.Right.Extent.Text.Replace('$PSScriptRoot','$deployedScriptRoot'))
+if($resolvedWorkspace-ne [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).Replace('\','/').TrimEnd('/')){throw '部署源码必须来自脚本所在检出'}
+Write-Output 'PASS 1/1: 部署工作区由脚本位置解析，不绑定历史worktree'
+$continuationFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-MaintenanceContinuation'},$true)
+Invoke-Expression $continuationFunction.Extent.Text
+$ContinueMaintenanceId='recovery';$ExpectedMaintenanceRevision=28
+$continuationState=@{active=$true;phase='draining';drained=$true;maintenanceId='recovery';revision=28;processIncarnation='6012:instance'}
+Assert-MaintenanceContinuation $continuationState @{ProcessId=6012}
+foreach($case in @(@{revision=29},@{maintenanceId='other'},@{drained=$false},@{phase='stopping'},@{active=$false},@{processIncarnation='6013:instance'})){
+ $changed=$continuationState.Clone();foreach($key in $case.Keys){$changed[$key]=$case[$key]}
+ $rejected=$false;try{Assert-MaintenanceContinuation $changed @{ProcessId=6012}}catch{$rejected=$true}
+ if(-not $rejected){throw '接续维护必须拒绝漂移或未排空状态'}
+}
+$ExpectedMaintenanceRevision=$null;$rejected=$false
+try{Assert-MaintenanceContinuation $continuationState @{ProcessId=6012}}catch{$rejected=$true}
+if(-not $rejected){throw '接续维护不得缺失revision'}
+Write-Output 'PASS 8/8: 接续许可匹配通过；版本/ID/排空/阶段/active/PID漂移及缺少revision拒绝'
 $function=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Read-Deployment'},$true)
 Invoke-Expression $function.Extent.Text
 $WaitSeconds=1
