@@ -303,9 +303,10 @@ export function reduceTaskPlanCommand(db, command, { now }) {
     return { status: 'applied', taskId, planRevision: 1 }
   }
   if (command.kind === 'task.plan.confirm') {
-    exact(a, ['taskId', 'planRevision', 'stageId', 'outputRef', 'expectedControlRevision'])
+    exact(a, ['taskId', 'planRevision', 'stageId', 'outputRef', 'expectedControlRevision', 'expectedRequirementRevision'])
     const taskId = name(a.taskId), task = taskRow(db, taskId)
     if (!task || task.plan_revision !== natural(a.planRevision)) fail('TASK_PLAN_STALE')
+    if (a.expectedRequirementRevision !== undefined && task.requirement_revision !== natural(a.expectedRequirementRevision)) fail('TASK_REQUIREMENT_STALE')
     if (task.control_revision !== natural(a.expectedControlRevision) || task.control_state !== 'active'
       || task.status !== 'waiting_confirmation') fail('TASK_CONTROL_STALE')
     const row = stageRows(db, taskId, task.plan_revision).find(stage => stage.stage_id === name(a.stageId))

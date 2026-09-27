@@ -42,6 +42,65 @@ async function fixture(t, args = creation()) {
 }
 const rejects = (promise, code) => assert.rejects(promise, e => e.code === code)
 
+test('维护屏障与领取同事务，重启保留且旧许可不能恢复派发', async t => {
+  const f = await fixture(t)
+  const args = { active: true, expectedRevision: 0, maintenanceId: 'deploy-one', actorId: 'owner', reason: '部署排空' }
+  const entered = await f.store.command(command('runtime.maintenance.change', args, 'enter'))
+  assert.equal(entered.result.revision, 1)
+  for (const kind of ['node.claim','task.owner.claim','effect.begin','message.node.claim','message.command.claim','message.notification.claim','message.notification.operation.claim']) {
+    await rejects(f.store.command(command(kind, {})), 'RUNTIME_MAINTENANCE_ACTIVE')
+  }
+  assert.equal((await f.query()).run.claimCount, 0)
+  assert.equal((await f.store.query({ kind: 'runtime.maintenance' })).stopPermitted, false)
+  assert.equal((await f.store.command(command('runtime.maintenance.change', args, 'enter'))).replayed, true)
+  await f.store.close(); await f.open()
+  await rejects(f.claim(), 'RUNTIME_MAINTENANCE_ACTIVE')
+  await rejects(f.store.command(command('runtime.maintenance.change', { ...args, active: false })), 'RUNTIME_MAINTENANCE_STALE')
+  await rejects(f.store.command(command('runtime.maintenance.change', { ...args, active: false, expectedRevision: 1, actorId: 'different' })), 'RUNTIME_MAINTENANCE_STALE')
+  await f.store.command(command('runtime.maintenance.change', { ...args, active: false, expectedRevision: 1 }))
+  assert.equal((await f.claim()).status, 'running')
+})
+
+test('维护期间已有节点可排空，未排空不给停机许可', async t => {
+  const f = await fixture(t), node = await f.claim()
+  await f.store.command(command('runtime.maintenance.change', { active: true, expectedRevision: 0, maintenanceId: 'deploy-two', actorId: 'owner', reason: '部署' }))
+  assert.equal((await f.store.query({ kind: 'runtime.maintenance' })).stopPermitted, false)
+  const seal = {expectedRevision:1,maintenanceId:'deploy-two',actorId:'owner',reason:'停机'}
+  await rejects(f.store.command(command('runtime.maintenance.seal',seal)), 'RUNTIME_MAINTENANCE_NOT_DRAINED')
+  await f.drain(node)
+  await f.store.command(command('node.commit', { ...identity(node), inputDigest: d, outcome: 'succeeded', outputRef: 'sha256/result.json', evidenceRefs: [] }))
+  const state = await f.store.query({ kind: 'runtime.maintenance' })
+  assert.equal(state.active, true); assert.equal(state.stopPermitted, false)
+  await f.store.command(command('runtime.maintenance.seal',seal))
+  assert.equal((await f.store.query({kind:'runtime.maintenance'})).stopPermitted,true)
+})
+
+test('停机seal原子封存后旧进程leave和resume均拒绝；新进程持久回读后正式resume', async t => {
+  const f=await fixture(t), args={maintenanceId:'sealed-deploy',actorId:'owner',reason:'部署',expectedRevision:0}
+  await f.store.command(command('runtime.maintenance.change',{...args,active:true}))
+  await f.store.command(command('runtime.maintenance.seal',{...args,expectedRevision:1},'seal'))
+  const sealed=await f.store.query({kind:'runtime.maintenance'})
+  assert.equal(sealed.phase,'stopping');assert.equal(sealed.stopPermitted,true);assert.equal(sealed.resumePermitted,false)
+  assert.match(sealed.processIncarnation,new RegExp(`^${process.pid}:`))
+  await rejects(f.store.command(command('runtime.maintenance.change',{...args,expectedRevision:2,active:false})),'RUNTIME_MAINTENANCE_SEALED')
+  await rejects(f.store.command(command('runtime.maintenance.resume',{...args,expectedRevision:2})),'RUNTIME_MAINTENANCE_SEALED')
+  await rejects(f.store.command(command('runtime.maintenance.resume',{...args,expectedRevision:2,processIncarnation:'pretend-new'})),'RUNTIME_MAINTENANCE_INVALID')
+  await f.store.close();await f.open()
+  assert.equal((await f.store.query({kind:'runtime.maintenance'})).processIncarnation,sealed.processIncarnation)
+  await rejects(f.store.command(command('runtime.maintenance.resume',{...args,expectedRevision:2})),'RUNTIME_MAINTENANCE_SEALED')
+  await rejects(f.claim(),'RUNTIME_MAINTENANCE_ACTIVE')
+  await f.store.close()
+  const script=join(f.root,'resume.mjs')
+  await writeFile(script,`import {openExecutionStore} from ${JSON.stringify(moduleUrl)};const input=JSON.parse(process.argv[2]);const store=await openExecutionStore(input.options);try{const before=await store.query({kind:'runtime.maintenance'});await store.command({id:'new-process-resume',kind:'runtime.maintenance.resume',args:input.args});console.log(JSON.stringify({before,after:await store.query({kind:'runtime.maintenance'})}));}finally{await store.close()}`)
+  const child=spawnSync(process.execPath,[script,JSON.stringify({options:{dbPath:f.dbPath,instanceId:f.instanceId},args:{...args,expectedRevision:2}})],{encoding:'utf8',windowsHide:true})
+  assert.equal(child.status,0,child.stderr)
+  const result=JSON.parse(child.stdout)
+  assert.equal(result.before.stopPermitted,false);assert.equal(result.before.resumePermitted,true)
+  assert.notEqual(result.before.processIncarnation,sealed.processIncarnation)
+  assert.equal(result.after.active,false);assert.equal(result.after.phase,'inactive');assert.equal(result.after.revision,3)
+  await f.open();assert.equal((await f.claim()).status,'running')
+})
+
 test('节点耗时来自已提交 claim/commit，重开存储后仍可读取', async t => {
   const f = await fixture(t)
   assert.equal((await f.query()).nodes[0].startedAt, null)

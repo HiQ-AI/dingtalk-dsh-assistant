@@ -272,3 +272,18 @@ test('本机 Docker 凭据只读 OCI 原始清单并校验字节摘要', async (
   await assert.rejects(clients.registry.readManifest({ image: 'registry.cn-sh1.ctyun.cn/hiq-ai/dataset',
     digest: `sha256:${'e'.repeat(64)}` }), /REGISTRY_DIGEST_MISMATCH/)
 })
+
+test('失败流水线的构建证据仅显式精确终态且build步骤成功时允许读取',async()=>{
+ const imageDigest=`sha256:${'b'.repeat(64)}`
+ const pipeline={number:7,commit:SHA,status:'killed',workflows:[{children:[{id:19,name:'buildkit-build-and-push',state:'success',exit_code:0}]}]}
+ const logs=[`#23 exporting manifest ${imageDigest} done`,`#23 pushing manifest for registry.cn-sh1.ctyun.cn/hiq-ai/dataset:uat2@${imageDigest} 0.0s done`].map(data=>({step_id:19,data:Buffer.from(data).toString('base64')}))
+ const clients=createPlatformClients({woodpeckerToken:'test',fetchImpl:async url=>json(url.endsWith('/pipelines/7')?pipeline:logs)})
+ const args={baseUrl:target.woodpecker.baseUrl,repositoryId:4,pipelineNumber:7}
+ await assert.rejects(clients.woodpecker.readBuildEvidence(args),/WOODPECKER_BUILD_UNCONFIRMED/)
+ const result=await clients.woodpecker.readBuildEvidence({...args,expectedPipelineStatus:'killed'});assert.equal(result.pipelineStatus,'killed');assert.equal(result.buildStepStatus,'success');assert.equal(result.buildStepExitCode,0)
+ await assert.rejects(clients.woodpecker.readBuildEvidence({...args,expectedPipelineStatus:'running'}),/WOODPECKER_PIPELINE_INVALID/)
+ await assert.rejects(clients.woodpecker.readBuildEvidence({...args,expectedPipelineStatus:'failure'}),/WOODPECKER_BUILD_UNCONFIRMED/)
+ pipeline.workflows[0].children[0].state='killed';await assert.rejects(clients.woodpecker.readBuildEvidence({...args,expectedPipelineStatus:'killed'}),/WOODPECKER_BUILD_STEP_UNCONFIRMED/)
+ pipeline.workflows[0].children[0].state='success';pipeline.workflows[0].children[0].exit_code=1;await assert.rejects(clients.woodpecker.readBuildEvidence({...args,expectedPipelineStatus:'killed'}),/WOODPECKER_BUILD_STEP_UNCONFIRMED/)
+ pipeline.workflows[0].children[0].exit_code=0;logs[0].step_id=20;await assert.rejects(clients.woodpecker.readBuildEvidence({...args,expectedPipelineStatus:'killed'}),/WOODPECKER_BUILD_LOG_INVALID/)
+})

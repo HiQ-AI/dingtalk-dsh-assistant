@@ -1,5 +1,19 @@
 import { executionDigest, executionError } from './execution-artifacts.js'
 
+/** 只有与冻结普通 UAT 构建身份一致的明确终态收据允许节点失败收口。 */
+export function isTerminalUatBuildFailure(effect) {
+  const definition = effect?.definition, prepared = definition?.payload, receipt = effect?.result?.result
+  return effect?.state === 'failed' && definition?.action === 'external'
+    && definition.adapterId === 'external-operation' && definition.adapterVersion === '1'
+    && prepared?.workflowKind === 'uat-deployment' && prepared.operation === 'build'
+    && receipt?.status === 'failed' && receipt.reason === 'RELEASE_PIPELINE_FAILED'
+    && /^[a-f0-9]{64}$/.test(prepared.operationKey ?? '') && receipt.operationKey === prepared.operationKey
+    && /^[a-f0-9]{40}$/.test(prepared.expected?.commitSha ?? '') && receipt.commitSha === prepared.expected.commitSha
+    && Number.isSafeInteger(receipt.pipelineNumber) && receipt.pipelineNumber > 0
+    && ['failure', 'error', 'killed', 'declined', 'canceled', 'skipped'].includes(receipt.pipelineStatus)
+    && typeof receipt.evidenceRef === 'string' && receipt.evidenceRef.length > 0
+}
+
 /** 受信Host交付网关；不向模型暴露authorizationRef、binding或原始adapter。 */
 export function createExecutionDelivery({ store, artifacts, adapter, workspaceAdapter, editAdapter, prAdapter, externalAdapter, fileAdapter, authorize, authorizeExternal, authorizeFile }) {
   if (typeof authorize !== 'function') throw executionError('DELIVERY_AUTHORIZER_REQUIRED')

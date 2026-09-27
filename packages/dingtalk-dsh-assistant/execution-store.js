@@ -1,5 +1,11 @@
 import { Worker } from 'node:worker_threads'
 import { isAbsolute } from 'node:path'
+import { randomUUID } from 'node:crypto'
+
+// Host进程出生身份：worker重开不变，不能由HTTP/调用者options提供。
+const incarnationKey = Symbol.for('dsh.execution.process-incarnation')
+if (!Object.hasOwn(process, incarnationKey)) Object.defineProperty(process, incarnationKey, { value: `${process.pid}:${randomUUID()}` })
+const processIncarnation = process[incarnationKey]
 
 const MAX_PENDING = 64
 const MAX_MESSAGE_BYTES = 256 * 1024
@@ -23,7 +29,7 @@ export async function openExecutionStore(options) {
     || typeof options.instanceId !== 'string' || !options.instanceId.trim()
     || (options.initialize !== undefined && typeof options.initialize !== 'boolean')) throw error('INVALID_STORE_OPTIONS')
   const worker = new Worker(new URL('./execution-store-worker.js', import.meta.url), {
-    workerData: { dbPath: options.dbPath, instanceId: options.instanceId, initialize: options.initialize === true },
+    workerData: { dbPath: options.dbPath, instanceId: options.instanceId, initialize: options.initialize === true, processIncarnation },
   })
   let healthy = false, closed = false, closing = false, nextId = 0, info
   let resolveReady, rejectReady, resolveExit

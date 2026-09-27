@@ -22,7 +22,8 @@ const planChangeSchema = { type: 'object', properties: {
   stages: { type: 'array', items: stageSchema }, affectedFrom: { type: 'integer' },
 }, required: ['kind', 'stages'], additionalProperties: false }
 export const ownerDecisionSchema = { type: 'object', properties: {
-  action: { type: 'string', enum: ['advance', 'wait', 'complete', 'block'] },
+  action: { type: 'string', enum: ['advance', 'wait', 'complete', 'block', 'repairCurrentStage'] },
+  repair: { type: 'object', properties: { stageId: { type: 'string' }, runId: { type: 'string' }, generation: { type: 'integer' }, runRevision: { type: 'integer' }, requirementRevision: { type: 'integer' } }, required: ['stageId', 'runId', 'generation', 'runRevision', 'requirementRevision'], additionalProperties: false },
   summary: { type: 'string' },
   evidenceRefs: { type: 'array', items: { type: 'string' } },
   appendStages: { type: 'array', items: stageSchema },
@@ -86,7 +87,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent }) {
 
   function setup(entry, onCandidate, readPage, readArtifact) {
     return agentCtx => {
-      agentCtx.systemPrompt.section({ name: 'task:owner', order: 0, complete: true, text: `你负责一个业务任务。阅读 goal 中的目标、explicitStages、授权、验收项、已执行成果和事件；workflowCatalog 与 capabilities 是 Host 给出的实际可用目录。若输入含 eventPages，先逐个调用 task_owner_read_events 读取全部页面，再提交决定；未读完不能提交。stageArtifacts 列出已成功阶段的产物引用，判断结果和目标是否完成前，调用 task_owner_read_artifact 阅读相关产物正文与局限。计划尚未建立时用 planChange.kind=initialize 提出首批阶段；以后按事实用 append 或 replaceSuffix 调整，replaceSuffix 必须提供 affectedFrom。用户只要求排查时不要自行安排开发或部署。用户的明确阶段顺序和授权范围高于你的建议；你提出计划不构成写入、合并、部署或审批的授权。complete 必须对每个 acceptanceItem 提交 satisfied 的 assessments，并引用真实阶段证据；阶段成功不代表整体目标完成。日常能力从 capabilities 中选择真实可用项，作为 task-general-capability 阶段并给出 capabilityStep；Host 冻结范围并核验执行结果。缺能力时 block，不能虚构已执行。仅报告语言改变时保留已核验业务产物，按事件要求的语言改写 summary，不追加流程。最后仅调用 ${SUBMIT}。` })
+      agentCtx.systemPrompt.section({ name: 'task:owner', order: 0, complete: true, text: `你负责一个业务任务。阅读 goal 中的目标、explicitStages、授权、验收项、已执行成果和事件；workflowCatalog 与 capabilities 是 Host 给出的实际可用目录。若输入含 eventPages，先逐个调用 task_owner_read_events 读取全部页面，再提交决定；未读完不能提交。stageArtifacts 列出已成功阶段的产物引用，判断结果和目标是否完成前，调用 task_owner_read_artifact 阅读相关产物正文与局限。工程阶段若含 nodeArtifacts，按节点用途读取构建检查、本地验收及清理原始证据；completionEvidenceRefs 是这些明细所属的正式阶段证据，完成决定的 evidenceRefs 与 assessments 引用 completionEvidenceRefs，不能仅凭 PR 状态认定验收。计划尚未建立时用 planChange.kind=initialize 提出首批阶段；以后按事实用 append 或 replaceSuffix 调整，replaceSuffix 必须提供 affectedFrom。用户只要求排查时不要自行安排开发或部署。开发阶段必须在goal.target.uatEnvironment已有用户明确指定的uat1至uat9环境时安排，Host固定映射feature/uatN-base；缺失时wait并在summary询问具体环境，不猜测默认环境，不先创建开发阶段。main合并只在开发测试完成且用户明确安排上线时使用独立task-main-pr-merge流程。用户的明确阶段顺序和授权范围高于你的建议；你提出计划不构成写入、合并、部署或审批的授权。complete 必须对每个 acceptanceItem 提交 satisfied 的 assessments，并引用真实阶段证据；阶段成功不代表整体目标完成。日常能力从 capabilities 中选择真实可用项，作为 task-general-capability 阶段并给出 capabilityStep；Host 冻结范围并核验执行结果。缺能力时 block，不能虚构已执行。仅报告语言改变时保留已核验业务产物，按事件要求的语言改写 summary，不追加流程。若 currentExecution 显示工程节点明确验证失败且 repairable=true，先读取失败产物，再用 repairCurrentStage 和原样 repairBinding 明确请求本代修复；wait 只等待，不会启动修复，不得声称 wait 已调度。未知外部效果或未排空不能修复。最后仅调用 ${SUBMIT}。` })
       agentCtx.tools.restrict({ allow: [] })
       agentCtx.tools.guard(exec => {
         if (exec.name !== SUBMIT && exec.name !== 'task_owner_read_events'
@@ -181,7 +182,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent }) {
       maxSteps: input.eventPages?.length ? 64 : 8,
       unreadPages: new Set((input.eventPages ?? []).map(page => page.ref)),
       readableArtifacts: new Set((input.stageArtifacts ?? []).flatMap(stage =>
-        [stage.outputRef, ...(stage.evidenceRefs ?? [])])),
+        [stage.outputRef, ...(stage.evidenceRefs ?? [])].filter(Boolean))),
       abort: new AbortController(), drained: Promise.withResolvers() }
     entries.set(binding.taskId, entry)
     entry.timer = setTimeout(() => {

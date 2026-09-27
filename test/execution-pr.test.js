@@ -6,6 +6,38 @@ import { tmpdir } from 'node:os'
 import { createGithubPullRequests } from '../packages/dingtalk-dsh-assistant/execution-pr.js'
 import { createVerificationJobCheck } from '../packages/dingtalk-dsh-assistant/execution-check-job.js'
 
+test('受信旧 PR 原位改 UAT base，未知回执独立回读；身份、并发与歧义不改远端', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-pr-retarget-')), script = join(directory, 'gh.cjs'), state = join(directory, 'state.json')
+  const oldKey = 'c'.repeat(64), sha = 'a'.repeat(40)
+  await writeFile(script, `const fs=require('node:fs');const[file,...args]=process.argv.slice(2),s=JSON.parse(fs.readFileSync(file)),v=k=>args[args.indexOf(k)+1];
+if(args[0]==='api'){if(s.race)s.pr.baseRefName='feature/foreign';fs.writeFileSync(file,JSON.stringify(s));console.log(JSON.stringify({object:{sha:s.sha}}))}
+else if(args[1]==='list')console.log(JSON.stringify([s.pr,...(s.extra?[{...s.pr,number:99}]:[])]));
+else if(args[1]==='view')console.log(JSON.stringify(s.pr));
+else if(args[1]==='edit'){s.edits++;s.pr.baseRefName=v('--base');s.pr.body=fs.readFileSync(v('--body-file'),'utf8');if(s.afterEdit)s.pr.headRefOid='d'.repeat(40);fs.writeFileSync(file,JSON.stringify(s));process.exit(1)}
+else if(args[1]==='create'){s.creates++;fs.writeFileSync(file,JSON.stringify(s));process.exit(2)}else process.exit(2);`)
+  const initial = () => ({ edits: 0, creates: 0, sha, pr: { number: 371, url: 'https://github.com/test/repo/pull/371', state: 'OPEN',
+    headRefOid: sha, headRefName: 'codex/old', baseRefName: 'main', body: `old\n<!-- dsh-operation:${oldKey} -->` } })
+  const adapter = createGithubPullRequests({ repository: directory, repo: 'test/repo', base: 'feature/uat3-base', head: 'codex/old',
+    previousPullRequest: { number: 371, repo: 'test/repo', head: 'codex/old', base: 'main', operationKey: oldKey },
+    ghCommand: { executable: process.execPath, args: [script, state] } })
+  const prepared = adapter.prepare({ runId: 'new-run', generation: 1, requirementDigest: 'b'.repeat(64), commitId: sha, title: '重新验收并提测', body: '本轮验证' })
+  await writeFile(state, JSON.stringify(initial()))
+  assert.equal((await adapter.execute(prepared)).number, 371)
+  assert.equal((await adapter.execute(prepared)).status, 'succeeded')
+  let saved = JSON.parse(await readFile(state, 'utf8'))
+  assert.equal(saved.edits, 1); assert.equal(saved.creates, 0); assert.equal(saved.pr.baseRefName, 'feature/uat3-base')
+  for (const mutate of [s => { s.pr.state = 'MERGED' }, s => { s.extra = true }, s => { s.pr.baseRefName = 'feature/uat2-base' },
+    s => { s.pr.headRefOid = 'e'.repeat(40) }, s => { s.pr.body = 'untrusted' }, s => { s.race = true }]) {
+    const value = initial(); mutate(value); await writeFile(state, JSON.stringify(value))
+    const attempt = adapter.prepare({ ...prepared, runId: `negative-${Math.random()}` })
+    await assert.rejects(adapter.execute(attempt), /PR_PREVIOUS_IDENTITY_CONFLICT|PR_IDENTITY_AMBIGUOUS/)
+    saved = JSON.parse(await readFile(state, 'utf8')); assert.equal(saved.edits, 0); assert.equal(saved.creates, 0)
+  }
+  const changedAfter = initial(); changedAfter.afterEdit = true; await writeFile(state, JSON.stringify(changedAfter))
+  await assert.rejects(adapter.execute(adapter.prepare({ ...prepared, runId: 'changed-after' })), /PR_PREVIOUS_IDENTITY_CONFLICT/)
+  saved = JSON.parse(await readFile(state, 'utf8')); assert.equal(saved.edits, 1); assert.equal(saved.creates, 0)
+})
+
 test('PR create ACK丢失后list+view独立回读，重试不重复创建，head变更拒绝', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-pr-test-')), script = join(directory, 'gh.cjs'), state = join(directory, 'state.json')
   await writeFile(state, JSON.stringify({ count: 0, sha: 'a'.repeat(40), pr: null }))
@@ -108,4 +140,71 @@ test('实际约27KB安装构建输出通过；32KiB边界无损，超限仍停�
   const step=JSON.parse(limit.log).steps[0];assert.equal(step.outputBytes,32768);assert.equal(step.stdoutEncoding,'base64');assert.equal(Buffer.from(step.stdout,'base64').toString(),String.fromCharCode(34,92).repeat(16384))
   const over=await createVerificationJobCheck({id:'over',version:'1',root,steps:[command('process.stdout.write(Buffer.alloc(32769,120));setInterval(()=>{},1000)'),command('console.log("must not execute")')]}).run(snapshot)
   assert.equal(over.passed,false);assert.equal(JSON.parse(over.log).reason,'output_limit');assert.equal(JSON.parse(over.log).steps.length,1);assert.ok(Buffer.byteLength(over.log)<65536)
+})
+
+test('PR阶段日志绑定身份；读瞬态有界重试，发送后重启与损坏日志均不重发', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-pr-phases-')), repository = join(directory, 'repo')
+  const { mkdir, readdir } = await import('node:fs/promises')
+  await mkdir(repository)
+  const script = join(directory, 'gh.cjs'), state = join(directory, 'state.json')
+  await writeFile(script, `const fs=require('node:fs');const[file,...a]=process.argv.slice(2),s=JSON.parse(fs.readFileSync(file));
+if(a[1]==='create'){s.sends++;fs.writeFileSync(file,JSON.stringify(s));console.error('private stderr');process.exit(1)}
+s.reads++;fs.writeFileSync(file,JSON.stringify(s));if(s.fail || s.reads<=s.transient){console.error(s.auth?'HTTP 401':'TLS handshake timeout');process.exit(1)}
+console.log(JSON.stringify(a[0]==='api'?{object:{sha:'a'.repeat(40)}}:[]));`)
+  const config = { repository, repo: 'test/repo', base: 'feature/uat3-base', head: 'codex/test', ghCommand: { executable: process.execPath, args: [script, state] } }
+  const adapter = createGithubPullRequests(config)
+  const prepare = runId => adapter.prepare({ runId, generation: 1, requirementDigest: 'b'.repeat(64), commitId: 'a'.repeat(40), title: '验证', body: '测试' })
+  await writeFile(state, JSON.stringify({ reads: 0, sends: 0, fail: true }))
+  const failed = prepare('preflight'), outcome = await adapter.execute(failed)
+  assert.equal(outcome.status, 'failed'); assert.equal(outcome.mutationAttempted, false)
+  assert.equal(outcome.readAttempts, 3)
+  let saved = JSON.parse(await readFile(state, 'utf8')); assert.equal(saved.reads, 3); assert.equal(saved.sends, 0)
+  assert.equal((await adapter.execute(failed)).status, 'failed')
+  assert.equal(JSON.parse(await readFile(state, 'utf8')).reads, 3)
+  // 模拟已落 preflight-failed、尚未 delivery.observe 时重启，只走 reconcile。
+  const beforeRecovery = await readdir(join(directory, '.dsh-pr-journal'))
+  assert.deepEqual(await createGithubPullRequests(config).reconcile(failed), outcome)
+  assert.deepEqual(await readdir(join(directory, '.dsh-pr-journal')), beforeRecovery)
+  assert.equal(JSON.parse(await readFile(state, 'utf8')).reads, 3)
+  await writeFile(state, JSON.stringify({ reads: 0, sends: 0, fail: true, auth: true }))
+  await adapter.execute(prepare('auth')); assert.equal(JSON.parse(await readFile(state, 'utf8')).reads, 1)
+  await writeFile(state, JSON.stringify({ reads: 0, sends: 0, transient: 2 }))
+  const pending = prepare('pending'); assert.equal((await adapter.execute(pending)).status, 'unknown')
+  saved = JSON.parse(await readFile(state, 'utf8')); assert.equal(saved.sends, 1)
+  const reopened = createGithubPullRequests(config)
+  await reopened.execute(pending); assert.equal(JSON.parse(await readFile(state, 'utf8')).sends, 1)
+  const journal = join(directory, '.dsh-pr-journal')
+  const completed = JSON.parse(await readFile(join(journal, `${pending.operationKey}.send-complete.json`), 'utf8'))
+  assert.equal(completed.exitCode, 1); assert.equal(JSON.stringify(completed).includes('private'), false)
+  const crash = prepare('crash')
+  await writeFile(join(journal, `${crash.operationKey}.send-intent.json`), JSON.stringify({ version: 1, operationKey: crash.operationKey, preparedDigest: crash.digest, phase: 'send-intent' }))
+  await reopened.execute(crash); assert.equal(JSON.parse(await readFile(state, 'utf8')).sends, 1)
+  await writeFile(join(journal, `${crash.operationKey}.send-intent.json`), '{')
+  await assert.rejects(reopened.execute(crash), /PR_JOURNAL_INVALID/)
+  assert.equal(JSON.parse(await readFile(state, 'utf8')).sends, 1)
+  assert.ok((await readdir(journal)).some(name => name.endsWith('.preflight-failed.json')))
+  const before = await readdir(journal)
+  await adapter.reconcile(prepare('legacy-without-journal'))
+  assert.deepEqual(await readdir(journal), before)
+  const concurrent = prepare('concurrent')
+  await Promise.allSettled([adapter.execute(concurrent), reopened.execute(concurrent)])
+  assert.equal(JSON.parse(await readFile(state, 'utf8')).sends, 2)
+  const stopped = prepare('before-intent-crash')
+  await writeFile(join(journal, `${stopped.operationKey}.attempt-start.json`), JSON.stringify({ version: 1, operationKey: stopped.operationKey, preparedDigest: stopped.digest, phase: 'attempt-start' }))
+  await reopened.execute(stopped)
+  assert.equal(JSON.parse(await readFile(state, 'utf8')).sends, 2)
+  await writeFile(join(journal, `${stopped.operationKey}.attempt-start.json`), JSON.stringify({ version: 1, operationKey: stopped.operationKey, preparedDigest: 'wrong', phase: 'attempt-start' }))
+  await assert.rejects(reopened.execute(stopped), /PR_JOURNAL_INVALID/)
+  const failurePath = join(journal, `${failed.operationKey}.preflight-failed.json`)
+  const originalFailure = await readFile(failurePath, 'utf8')
+  await writeFile(failurePath, '{')
+  await assert.rejects(reopened.reconcile(failed), /PR_JOURNAL_INVALID/)
+  await writeFile(failurePath, originalFailure)
+  await writeFile(join(journal, `${failed.operationKey}.send-intent.json`), JSON.stringify({ version: 1, operationKey: failed.operationKey, preparedDigest: failed.digest, phase: 'send-intent' }))
+  assert.equal((await reopened.reconcile(failed)).status, 'unknown')
+  const freshRepository = join(directory, 'fresh', 'repo'); await mkdir(freshRepository, { recursive: true })
+  const fresh = createGithubPullRequests({ ...config, repository: freshRepository })
+  const legacy = fresh.prepare({ ...failed, runId: 'old-effect' })
+  assert.equal((await fresh.reconcile(legacy)).status, 'unknown')
+  assert.deepEqual(await readdir(join(directory, 'fresh')), ['repo'])
 })

@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
-import { mkdir, realpath } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
+import { mkdir, realpath, lstat, readFile } from 'node:fs/promises'
+import { isAbsolute, join, resolve } from 'node:path'
 import { executionDigest, executionError } from './execution-artifacts.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
 import { createManagedWorkspaces } from './execution-workspace.js'
@@ -10,13 +10,36 @@ import { createManagedEdits } from './execution-edit.js'
 import { createGitDelivery } from './execution-git.js'
 import { createGithubPullRequests } from './execution-pr.js'
 import { createVerificationJobCheck, createBusinessAcceptanceCheck } from './execution-check-job.js'
-import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow, createEngineeringScopedWorkflow, createEngineeringPatchWorkflow, createEngineeringDeliverableWorkflow, createEngineeringAcceptanceWorkflow } from './task-workflow.js'
+import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow, createEngineeringScopedWorkflow, createEngineeringPatchWorkflow, createEngineeringDeliverableWorkflow, createEngineeringAcceptanceWorkflow, createEngineeringLocalAcceptanceWorkflow, createEngineeringBranchReuseWorkflow, createEngineeringUatBaselineWorkflow, createEngineeringMappedBaselineWorkflow, createEngineeringRevalidationWorkflow } from './task-workflow.js'
+import { createLocalAcceptanceRunner } from './execution-local-acceptance.js'
 import { freezeCandidate, readCandidate } from './execution-candidate.js'
+import { engineeringPatchRepairReasons } from './execution-recovery-policy.js'
 
 const exec = promisify(execFile)
 const fail = code => { throw executionError(code) }
 const text = (value, code) => { if (typeof value !== 'string' || !value.trim()) fail(code); return value }
-const git = async (directory, args) => (await exec('git', ['-C', directory, ...args], { windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024 })).stdout.trim()
+export async function readEngineeringRemoteRefs(directory, args, { execImpl = exec, delay = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  if (args[0] !== 'ls-remote') fail('ENGINEERING_REMOTE_READ_ARGUMENT_INVALID')
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return (await execImpl('git', ['-C', directory, ...args], { windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024 })).stdout.trim()
+    } catch (error) {
+      const detail = String(error.stderr ?? '')
+      const denied = /authentication failed|permission denied|access denied|repository not found|could not read username|returned error: (?:401|403)|certificate problem|host key verification failed/i.test(detail)
+      const transient = !denied && (['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'].includes(error.code)
+        || error.code == null && error.killed === true && error.signal === 'SIGTERM'
+        || /connection (?:timed out|reset)|operation timed out|tls handshake timeout|ssl connection timeout|temporary failure in name resolution|returned error: (?:429|502|503|504)|remote end hung up unexpectedly/i.test(detail))
+      if (!transient) fail(error.code === 2 && args.includes('--exit-code') ? 'ENGINEERING_UAT_BRANCH_NOT_FOUND' : 'ENGINEERING_REMOTE_READ_FAILED')
+      if (attempt === 2) fail('ENGINEERING_REMOTE_READ_TRANSIENT')
+      await delay(250 * (attempt + 1))
+    }
+  }
+}
+const git = async (directory, args) => args[0] === 'ls-remote' ? readEngineeringRemoteRefs(directory, args)
+  : (await exec('git', ['-C', directory, ...args], { windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024 })).stdout.trim()
+export const uatBranchFor = environment => /^uat[1-9]$/.test(environment ?? '') ? `feature/${environment}-base` : null
+export const isUatBranch = branch => /^feature\/uat[1-9]-base$/.test(branch ?? '')
+
 const githubName = remote => /^https:\/\/github\.com\/([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(remote)?.[1]
   ?? /^(?:git@github\.com:|ssh:\/\/git@github\.com\/)([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(remote)?.[1]
 
@@ -73,20 +96,65 @@ export async function readEngineeringDeliveryProof({ state, artifacts, store, ta
     refs.push(node.outputRef)
     acceptance.checks.forEach(check => checks.add(check.id))
   }
+  let localEvidence
+  if (['11', '12', '13', '14', '15'].includes(record.definitionVersion)) {
+    const node = state.nodes.find(node => node.nodeId === 'finalize-local-acceptance' && node.status === 'succeeded' && node.outputRef)
+    const acceptance = node && (await artifacts.read(node.outputRef))?.localAcceptance
+    if (!acceptance?.passed || acceptance.candidateDigest !== verified.candidate.digest || !acceptance.cleanup?.dataCleaned
+      || !acceptance.cleanup?.processStopped || !acceptance.checks?.length || acceptance.checks.some(check => !check.passed)) fail('ENGINEERING_ACCEPTANCE_PROOF_REQUIRED')
+    refs.push(node.outputRef)
+    acceptance.checks.forEach(check => checks.add(check.scenarioId))
+    const output = await artifacts.read(node.outputRef), prepared = output.localPrepared
+    const definitionNode = state.nodes.find(item => item.nodeId === 'define-local-acceptance' && item.status === 'succeeded' && item.outputRef)
+    const context = definitionNode && (await artifacts.read(definitionNode.outputRef))?.localContext
+    const cases = prepared?.plan?.cases, criteria = context?.criteria
+    if (!prepared || prepared.taskId !== taskId || prepared.runId !== state.run.runId
+      || prepared.candidateDigest !== verified.candidate.digest || prepared.identity !== acceptance.identity
+      || !hex64(prepared.planDigest) || executionDigest(prepared.plan) !== prepared.planDigest
+      || acceptance.planDigest !== prepared.planDigest || prepared.uatEnvironment !== context?.uatEnvironment
+      || uatBranchFor(prepared.uatEnvironment) !== final.base || acceptance.uatEnvironment !== prepared.uatEnvironment
+      || !Array.isArray(criteria) || !criteria.length || !Array.isArray(cases) || cases.length !== criteria.length
+      || new Set(criteria.map(item => item.id)).size !== criteria.length
+      || new Set(cases.map(item => item.criterionId)).size !== cases.length
+      || acceptance.checks.length !== cases.length
+      || criteria.some(item => !item.id || !item.description || !cases.some(entry => entry.criterionId === item.id))
+      || cases.some(item => !context.scenarios?.some(scenario => scenario.id === item.scenarioId)
+        || acceptance.checks.filter(check => check.criterionId === item.criterionId && check.scenarioId === item.scenarioId
+          && check.expected === item.expected && check.actual === item.expected && check.passed === true
+          && executionDigest(check.steps) === executionDigest(item.steps)).length !== 1))
+      fail('ENGINEERING_ACCEPTANCE_PROOF_REQUIRED')
+    refs.push(definitionNode.outputRef)
+    localEvidence = { taskId, runId: state.run.runId, definitionVersion: record.definitionVersion,
+      candidateDigest: verified.candidate.digest, treeSha: commit.tree, commitSha: commit.commitId,
+      planDigest: prepared.planDigest, uatEnvironment: prepared.uatEnvironment,
+      criteriaDigest: executionDigest(criteria), scenarioIds: cases.map(item => item.scenarioId),
+      receiptDigest: executionDigest(acceptance), evidenceRefs: [definitionNode.outputRef, node.outputRef] }
+    if (['13', '14', '15'].includes(record.definitionVersion)) {
+      const workspaceNode = state.nodes.find(item => item.nodeId === 'prepare-workspace' && item.status === 'succeeded' && item.outputRef)
+      const workspace = workspaceNode && (await artifacts.read(workspaceNode.outputRef))?.workspace
+      if (!hex40(saved.targetCommit) || !hex40(saved.taskBase) || workspace?.taskBase !== saved.taskBase
+        || commit.mergeParent !== saved.targetCommit || workspace?.targetCommit !== saved.targetCommit
+        || !hex40(workspace.mergeTree) || !Array.isArray(workspace.conflictPaths)) fail('ENGINEERING_UAT_BASELINE_PROOF_REQUIRED')
+      localEvidence.targetCommit = saved.targetCommit
+      localEvidence.taskBase = saved.taskBase
+      localEvidence.mergeTree = workspace.mergeTree
+      localEvidence.evidenceRefs.push(workspaceNode.outputRef); refs.push(workspaceNode.outputRef)
+    }
+  }
   return { taskId, runId: state.run.runId, commitSha: commit.commitId,
     treeSha: commit.tree, candidateDigest: verified.candidate.digest, verificationDigest: verified.verification.digest,
     checkIds: [...checks], localE2ePassed: requiredE2eCheckIds.length > 0 && requiredE2eCheckIds.every(id => checks.has(id)),
     sourcePackageSupported: true,
     pullRequest: { number: final.number, url: final.url, repository: final.repo,
       head: final.head, base: final.base, state: final.state, commitSha: final.commitId },
-    evidenceRefs: refs }
+    evidenceRefs: refs, ...(localEvidence ? { localEvidence } : {}) }
 }
 
 /** 可信Host仓库白名单→每次任务的持久固定定义。启动配置不来自消息/模型。 */
 export function createEngineeringRegistry({ repositories = [], ownerActorId, modelConfig, author, ghCommand }) {
   text(ownerActorId, 'ENGINEERING_OWNER_REQUIRED')
   if (!Array.isArray(repositories) || typeof modelConfig !== 'function') fail('ENGINEERING_REGISTRY_CONFIG_INVALID')
-  const configs = new Map(), routes = new Map(), preparing = new Map(), snapshots = new Map()
+  const configs = new Map(), routes = new Map(), preparing = new Map(), snapshots = new Map(), conflictReads = new Map()
   for (const source of repositories) {
     const config = structuredClone(source)
     const fixedPaths = Array.isArray(config.editablePaths) && config.editablePaths.length > 0
@@ -110,16 +178,25 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (config.purpose !== undefined && (typeof config.purpose !== 'string' || !config.purpose.trim())) fail('ENGINEERING_REPOSITORY_INVALID')
     if (config.routingTerms !== undefined && (!Array.isArray(config.routingTerms) || config.routingTerms.some(term => typeof term !== 'string' || !term.trim()))) fail('ENGINEERING_REPOSITORY_INVALID')
     // 路由说明只用于接纳前判断，不改变既有任务冻结的执行配置摘要。
-    const { purpose, routingTerms, ...executionConfig } = config
+    if (config.localAcceptance) createLocalAcceptanceRunner({ root: join(config.managedRoot, 'local-acceptance'), config: config.localAcceptance })
+    const { purpose, routingTerms, localAcceptance, ...executionConfig } = config
     configs.set(config.id, { config, digest: executionDigest({ config: executionConfig, ghCommand: ghCommand ?? null, author: author ?? null }) })
   }
-  let store
+  let store, artifactStore
   async function build(record, { allowDefinitionMigration = false } = {}) {
     const saved = record.config, entry = configs.get(saved.repoId)
     if (saved.kind !== 'engineering' || saved.registryVersion !== '1' || !entry || saved.repositoryDigest !== entry.digest || saved.ownerActorId !== ownerActorId) fail('ENGINEERING_DEFINITION_CONFIG_DRIFT')
     const config = entry.config
+    const baseline = !record.definitionVersion || ['13', '14', '15'].includes(record.definitionVersion)
+    if (baseline && !/^[a-f0-9]{40}$/.test(saved.targetCommit ?? '')) fail('ENGINEERING_UAT_BASELINE_REQUIRED')
+    if (baseline && !/^[a-f0-9]{40}$/.test(saved.taskBase ?? '')) fail('ENGINEERING_TASK_BASE_REQUIRED')
+    const targetOptions = baseline ? { targetCommit: saved.targetCommit, taskBase: saved.taskBase } : {}
+    const assertTargetCurrent = async () => {
+      const remote = await git(config.sourceRepository, ['ls-remote', '--refs', '--', config.remote, `refs/heads/${saved.uatBranch}`])
+      if ((remote.split(/\s/)[0] || null) !== saved.targetCommit) fail('ENGINEERING_UAT_BASELINE_CHANGED')
+    }
     await mkdir(config.managedRoot, { recursive: true })
-    const baseWorkspaceAdapter = await createManagedWorkspaces({ root: config.managedRoot, sourceRepository: config.sourceRepository })
+    const baseWorkspaceAdapter = await createManagedWorkspaces({ root: config.managedRoot, sourceRepository: config.sourceRepository, ...targetOptions })
     const previousEffects = async generation => (await store.query({ kind: 'effect.list', runId: saved.runId })).filter(effect => effect.generation < generation && effect.state === 'succeeded')
     const previousPush = async generation => (await previousEffects(generation)).filter(effect => effect.definition.action === 'push').sort((a, b) => b.generation - a.generation)[0]?.definition.payload
     const workspaceFor = async ({ generation, baseCommit }) => {
@@ -129,9 +206,22 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
         return baseWorkspaceAdapter
       }
       if (baseCommit !== prior.commitId) fail('ENGINEERING_DERIVED_BASE_INVALID')
-      return createManagedWorkspaces({ root: config.managedRoot, sourceRepository: prior.repository })
+      return createManagedWorkspaces({ root: config.managedRoot, sourceRepository: prior.repository, ...targetOptions })
     }
     const workspaceAdapter = Object.fromEntries(['prepare', 'execute', 'reconcile'].map(method => [method, async value => (await workspaceFor(value))[method](value)]))
+    if (saved.branchSource) for (const method of ['prepare', 'execute']) {
+      const operation = workspaceAdapter[method]
+      workspaceAdapter[method] = async value => {
+        const prior = await previousPush(value.generation)
+        const remote = await git(config.sourceRepository, ['ls-remote', '--refs', '--', config.remote, `refs/heads/${saved.head}`])
+        if ((remote.split(/\s/)[0] || null) !== (prior?.commitId ?? saved.branchSource.expectedRemoteSha)) fail('GIT_REMOTE_CONFLICT')
+        return operation(value)
+      }
+    }
+    if (baseline) for (const method of ['prepare', 'execute']) {
+      const operation = workspaceAdapter[method]
+      workspaceAdapter[method] = async value => { await assertTargetCurrent(); return operation(value) }
+    }
     const editAdapter = createManagedEdits({ workspaceAdapter })
     const canonicalRoot = await realpath(config.managedRoot)
     const allowedRepository = repository => {
@@ -139,7 +229,14 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       // gitAdapterFor只由本定义的受信节点调用；派发时再次核run+generation目录。
       return repository
     }
-    const gitAdapterFor = repository => createGitDelivery({ repository: allowedRepository(repository), remote: config.remote, branch: saved.head, author: saved.author })
+    const gitAdapterFor = async repository => {
+      const adapter = await createGitDelivery({ repository: allowedRepository(repository), remote: config.remote, branch: saved.head, author: saved.author,
+        ...(baseline ? { mergeParent: saved.targetCommit } : {}) })
+      if (!baseline) return adapter
+      return { ...adapter,
+        preparePush: async value => { await assertTargetCurrent(); return adapter.preparePush(value) },
+        executePush: async value => { await assertTargetCurrent(); return adapter.executePush(value) } }
+    }
     const generationFor = async repository => {
       const state = await store.query({ kind: 'run', runId: saved.runId })
       for (let generation = 1; generation <= (state.run?.generation ?? 1); generation++) if (repository === join(canonicalRoot, `ws-${executionDigest({ runId: saved.runId, generation })}`, 'repository')) return generation
@@ -148,8 +245,8 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     const prAdapterFor = async repository => {
       const generation = await generationFor(repository)
       const prior = (await previousEffects(generation)).filter(effect => effect.definition.action === 'pr').sort((a, b) => b.generation - a.generation)[0]
-      return createGithubPullRequests({ repository: allowedRepository(repository), repo: config.githubRepository, base: config.baseBranch, head: saved.head,
-        ...(prior ? { previousOperationKey: prior.definition.payload.operationKey } : {}), ...(ghCommand ? { ghCommand } : {}) })
+      return createGithubPullRequests({ repository: allowedRepository(repository), repo: config.githubRepository, base: saved.uatBranch ?? config.baseBranch, head: saved.head,
+        ...(prior ? { previousOperationKey: prior.definition.payload.operationKey } : saved.previousPullRequest ? { previousPullRequest: saved.previousPullRequest } : {}), ...(ghCommand ? { ghCommand } : {}) })
     }
     const prepareGeneration = async ({ input, runId, generation }) => {
       if (runId !== saved.runId) fail('ENGINEERING_DELIVERY_SCOPE_INVALID')
@@ -169,20 +266,59 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       return { ...input, baseCommit: prior?.commitId ?? saved.input.baseCommit, expectedRemoteSha }
     }
     const checks = config.checks.map(check => createVerificationJobCheck({ ...check, root: join(config.managedRoot, 'checks') }))
-    const workflowFactory = !record.definitionVersion || record.definitionVersion === '10' ? createEngineeringAcceptanceWorkflow : record.definitionVersion === '9' ? createEngineeringDeliverableWorkflow : !config.discovery ? createEngineeringTaskWorkflow
+    const runner = ['11', '12', '13', '14', '15'].includes(record.definitionVersion) || !record.definitionVersion
+      ? createLocalAcceptanceRunner({ root: join(config.managedRoot, 'local-acceptance'), config: saved.localAcceptanceConfig }) : undefined
+    const signals = new Map(), drainFailures = new Map()
+    const localAcceptance = runner && { ...runner, resourceKey: 'external:local-acceptance:shared-uat',
+      async dispatch(prepared, perform, signal) {
+        signals.set(prepared.identity, signal)
+        try { return await perform({ action: 'external', prepared }) }
+        catch (error) {
+          const failure = drainFailures.get(prepared.identity)
+          const receipt = await runner.readReceipt(prepared).catch(() => null)
+          if (failure || receipt?.executionDrained === false || receipt?.cleanup?.processStopped === false) throw Object.assign(executionError('LOCAL_ACCEPTANCE_CLEANUP_UNCONFIRMED'), { executionDrained: false })
+          if (receipt?.cleanup?.dataCleaned === false) throw Object.assign(executionError('LOCAL_ACCEPTANCE_CLEANUP_UNCONFIRMED'), { evidence: [{ localAcceptance: receipt }] })
+          throw error
+        }
+        finally { signals.delete(prepared.identity) }
+      } }
+    const workflowFactory = !record.definitionVersion || record.definitionVersion === '15' ? createEngineeringRevalidationWorkflow : record.definitionVersion === '14' ? createEngineeringMappedBaselineWorkflow : record.definitionVersion === '13' ? createEngineeringUatBaselineWorkflow : record.definitionVersion === '12' ? createEngineeringBranchReuseWorkflow : record.definitionVersion === '11' ? createEngineeringLocalAcceptanceWorkflow : record.definitionVersion === '10' ? createEngineeringAcceptanceWorkflow : record.definitionVersion === '9' ? createEngineeringDeliverableWorkflow : !config.discovery ? createEngineeringTaskWorkflow
       : record.definitionVersion === '6' ? createEngineeringDirectWorkflow
         : record.definitionVersion === '7' ? createEngineeringScopedWorkflow
           : !record.definitionVersion || record.definitionVersion === '8' ? createEngineeringPatchWorkflow : createEngineeringTaskWorkflow
-    const workflow = workflowFactory({ workflowId: record.workflowId, provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort,
-      workspaceAdapter, editAdapter, checks, prepareGeneration, adapterIdentity: saved.repositoryDigest, discovery: config.discovery,
+    const workflowOptions = { workflowId: record.workflowId, provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort,
+      workspaceAdapter, editAdapter, checks, prepareGeneration: saved.branchSource ? async context => {
+        if (context.runId !== saved.runId) fail('ENGINEERING_DELIVERY_SCOPE_INVALID')
+        if (await previousPush(context.generation)) return prepareGeneration(context)
+        const remote = await git(config.sourceRepository, ['ls-remote', '--refs', '--', config.remote, `refs/heads/${saved.head}`])
+        if ((remote.split(/\s/)[0] || null) !== saved.branchSource.expectedRemoteSha) fail('GIT_REMOTE_CONFLICT')
+        return { ...context.input, baseCommit: saved.input.baseCommit, expectedRemoteSha: saved.branchSource.expectedRemoteSha }
+      } : prepareGeneration, adapterIdentity: saved.repositoryDigest, discovery: config.discovery, localAcceptance,
       acceptanceChecks: (config.acceptanceChecks ?? []).map(check => createBusinessAcceptanceCheck({ ...check, root: join(config.managedRoot, 'acceptance') })),
-      project: { repository: config.githubRepository, sourceRepository: config.sourceRepository, workBranch: saved.head, targetBranch: config.baseBranch },
-      deliveryPlan: { identity: executionDigest(saved), gitAdapterFor, prAdapterFor, date: saved.date, title: saved.title, body: saved.body, commitMessage: saved.title, expectedRemoteSha: null } })
+      project: { repository: config.githubRepository, sourceRepository: config.sourceRepository, workBranch: saved.head, targetBranch: saved.uatBranch ?? config.baseBranch,
+        ...(!record.definitionVersion || ['11', '12', '13', '14', '15'].includes(record.definitionVersion) ? { uatEnvironment: saved.uatEnvironment } : {}),
+        ...(!record.definitionVersion || ['12', '13', '14', '15'].includes(record.definitionVersion) ? { developmentBranch: saved.head, branchDisposition: saved.branchSource ? 'reused' : 'created' } : {}),
+        ...(baseline ? { targetCommit: saved.targetCommit, taskBase: saved.taskBase } : {}) },
+      deliveryPlan: { identity: executionDigest(saved), gitAdapterFor, prAdapterFor, date: saved.date, title: saved.title, body: saved.body, commitMessage: saved.title, expectedRemoteSha: null } }
+    if (baseline) {
+      const prepare = workflowOptions.prepareGeneration
+      workflowOptions.prepareGeneration = async context => { await assertTargetCurrent(); return prepare(context) }
+      workflowOptions.assertConflictReads = async ({ runId, generation, requirementDigest, paths }) => {
+        if (runId !== saved.runId) fail('ENGINEERING_READ_SCOPE_INVALID')
+        if (!config.discovery) {
+          if (paths.some(path => !config.editablePaths.includes(path))) fail('ENGINEERING_CONFLICT_NOT_READ')
+          return
+        }
+        const read = conflictReads.get(`${runId}:${generation}:${requirementDigest}`)
+        if (paths.some(path => !read?.has(path))) fail('ENGINEERING_CONFLICT_NOT_READ')
+      }
+    }
+    const workflow = workflowFactory(workflowOptions)
     const definition = defineExecutionWorkflow(workflow)
     const sameDefinition = !record.digest || [definition.digest, ...definition.legacyDigests].includes(record.digest)
     if (!sameDefinition && !allowDefinitionMigration) fail('ENGINEERING_DEFINITION_DRIFT')
     routes.set(saved.runId, { record: { ...record, digest: sameDefinition ? record.digest ?? definition.digest : definition.digest,
-      definitionVersion: workflow.version }, workflow, workspaceAdapter, editAdapter, gitAdapterFor, prAdapterFor, root: canonicalRoot })
+      definitionVersion: workflow.version }, workflow, workspaceAdapter, editAdapter, gitAdapterFor, prAdapterFor, runner, signals, drainFailures, localAcceptance, root: canonicalRoot })
     return { workflow, definition }
   }
   function route(prepared) {
@@ -193,33 +329,75 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
   }
   async function repositoryInspect(binding, args, signal, input) {
     const item = routes.get(binding.runId), saved = item?.record.config, config = configs.get(saved?.repoId)?.config
-    if (!saved || !config?.discovery || !['6', '7', '8', '9', '10'].includes(item.record.definitionVersion) || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
-    const { operation, query = '', path, offset = 0, limit = operation === 'read' ? 8000 : 100 } = args
-    if (!['list', 'search', 'read'].includes(operation) || !Number.isSafeInteger(offset) || offset < 0
-      || !Number.isSafeInteger(limit) || limit < 1 || limit > (operation === 'read' ? 16000 : 200)
+    if (!saved || !config?.discovery || !['6', '7', '8', '9', '10', '11', '12', '13', '14', '15'].includes(item.record.definitionVersion) || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
+    const { operation, query = '', path, offset = 0, source = 'current', limit = operation === 'read' ? 8000 : 100 } = args
+    let repairContext
+    if (source === 'previous' || operation === 'repair') {
+      const current = await store.query({ kind: 'run', runId: binding.runId })
+      if (current.run.generation !== binding.generation || current.run.workflowDigest !== item.record.digest) fail('ENGINEERING_READ_STALE')
+      const bindingRecord = await store.query({ kind: 'engineering.repair.context', runId: binding.runId, generation: binding.generation })
+      if (!bindingRecord || bindingRecord.taskId !== saved.taskId || !artifactStore) fail('ENGINEERING_REPAIR_CONTEXT_UNAVAILABLE')
+      repairContext = await artifactStore.read(bindingRecord.contextRef)
+      if (operation === 'repair') return { previousGeneration: repairContext.generation,
+        ...(repairContext.sourceKind === 'workspace' ? { sourceKind: 'workspace', workspaceSnapshotRef: repairContext.workspaceSnapshotRef }
+          : { candidateDigest: repairContext.candidate.digest }), materials: repairContext.materials }
+    }
+    if (!['current', 'previous'].includes(source) || !['list', 'search', 'read'].includes(operation) || !Number.isSafeInteger(offset) || offset < 0
+      || !Number.isSafeInteger(limit) || limit < 1
       || typeof query !== 'string' || query.length > 256
+      || (operation === 'read' && (typeof path !== 'string' || !path || path.split('/').some(part => !part)))
       || (path !== undefined && (typeof path !== 'string' || /[\\:\0\r\n]/.test(path) || path.split('/').some(part => ['.', '..', '.git'].includes(part.toLowerCase()))))) fail('ENGINEERING_READ_ARGUMENT_INVALID')
-    const key = `${binding.runId}:${binding.generation}:${binding.inputDigest}`
+    const key = `${binding.runId}:${binding.generation}:${binding.inputDigest}:${source}`
     let snapshot = snapshots.get(key)
     if (!snapshot) {
       const state = await store.query({ kind: 'run', runId: binding.runId })
       if (state.run.generation !== binding.generation || state.run.workflowDigest !== item.record.digest) fail('ENGINEERING_READ_STALE')
+      if (source === 'previous' && repairContext.sourceKind === 'workspace') {
+        const prior = await artifactStore.read(repairContext.workspaceSnapshotRef)
+        const expectedDirectory = join(item.root, `ws-${executionDigest({ runId: binding.runId, generation: repairContext.generation })}`, 'repository')
+        if (prior.directory !== expectedDirectory || prior.generation !== repairContext.generation || prior.runId !== binding.runId) fail('ENGINEERING_READ_SCOPE_INVALID')
+        snapshot = { files: prior.files, async readFile(path) {
+          const file = prior.files.find(value => value.path === path)
+          if (!file) fail('ENGINEERING_READ_PATH_INVALID')
+          const full = join(prior.directory, path)
+          if (!(await lstat(full)).isFile() || resolve(await realpath(full)).toLowerCase() !== resolve(full).toLowerCase()) fail('ENGINEERING_REPAIR_WORKSPACE_DRIFT')
+          const bytes = await readFile(full)
+          if (createHash('sha256').update(bytes).digest('hex') !== file.sha256) fail('ENGINEERING_REPAIR_WORKSPACE_DRIFT')
+          const stored = await artifactStore.read(file.ref)
+          return Buffer.from(stored.data, 'base64')
+        } }
+      } else if (source === 'previous') snapshot = await readCandidate(repairContext.candidate)
+      else {
       const workspace = await item.workspaceAdapter.prepare({ runId: binding.runId, generation: binding.generation,
         requirementDigest: binding.requirementDigest, baseCommit: input.baseCommit })
       if ((await item.workspaceAdapter.reconcile(workspace)).status !== 'succeeded') fail('WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED')
       snapshot = await readCandidate(await freezeCandidate({ repository: workspace.directory, baseCommit: input.baseCommit,
         generation: binding.generation, requirementDigest: binding.requirementDigest }))
+      }
       snapshots.set(key, snapshot)
       if (snapshots.size > 8) snapshots.delete(snapshots.keys().next().value)
     }
     signal?.throwIfAborted()
     const allowed = value => config.discovery.allowedPrefixes.some(prefix => value.startsWith(prefix))
+    if (operation === 'read' && !allowed(path)) fail('ENGINEERING_READ_PATH_INVALID')
+    const maxLimit = operation === 'read' ? 16000 : 200
+    if (limit > maxLimit) return { status: 'invalid_limit', code: 'ENGINEERING_READ_LIMIT_EXCEEDED', maxLimit,
+      message: `本次未读取正文；请将 limit 调整为不超过 ${maxLimit}，按 nextOffset 继续分页。`,
+      suggestedCall: { operation, ...(path === undefined ? {} : { path }), query, source, offset, limit: maxLimit } }
     const files = snapshot.files.filter(file => allowed(file.path) && (operation === 'read' || !path || file.path.startsWith(path)))
     if (operation === 'read') {
+      if (!allowed(path)) fail('ENGINEERING_READ_PATH_INVALID')
       const file = files.find(file => file.path === path)
-      if (!file) fail('ENGINEERING_READ_PATH_INVALID')
+      if (!file) return { status: 'not_found', code: 'ENGINEERING_READ_NOT_FOUND', path, source,
+        message: '该路径不在当前受信文件快照中；请先用 list/search 确认实际路径再读取。',
+        suggestedCall: { operation: 'list', query: path.split('/').at(-1), source } }
       const bytes = await snapshot.readFile(path), content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
       const text = content.slice(offset, offset + limit)
+      if (source === 'current' && ['13', '14', '15'].includes(item.record.definitionVersion) && text.length) {
+        const readKey = `${binding.runId}:${binding.generation}:${binding.requirementDigest}`
+        if (!conflictReads.has(readKey)) conflictReads.set(readKey, new Set())
+        conflictReads.get(readKey).add(path)
+      }
       return { path, text, expectedHash: createHash('sha256').update(bytes).digest('hex'), offset, nextOffset: offset + text.length < content.length ? offset + text.length : null, totalChars: content.length }
     }
     const matches = []
@@ -230,7 +408,36 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     }
     return { paths: matches.slice(offset, offset + limit), total: matches.length, nextOffset: offset + limit < matches.length ? offset + limit : null }
   }
+  function localRoute(prepared) {
+    const item = routes.get(prepared?.runId), saved = item?.record.config
+    if (!item?.runner || !['11', '12', '13', '14', '15'].includes(item.record.definitionVersion) || prepared.workflowKind !== 'local-acceptance'
+      || prepared.action !== 'external' || prepared.taskId !== saved.taskId || prepared.uatEnvironment !== saved.uatEnvironment
+      || prepared.resourceKey !== item.localAcceptance.resourceKey) fail('LOCAL_ACCEPTANCE_RECEIPT_INVALID')
+    return item
+  }
   const deliveryOptions = {
+    externalAdapter: {
+      async execute(prepared) {
+        const item = localRoute(prepared)
+        let receipt
+        try { receipt = await item.runner.execute(prepared, { signal: item.signals.get(prepared.identity) }) }
+        catch (error) { if (error.executionDrained === false) item.drainFailures.set(prepared.identity, true); throw error }
+        if (receipt.executionDrained === false || !receipt.cleanup?.processStopped || !receipt.cleanup?.dataCleaned)
+          return { status: 'unknown', reason: 'LOCAL_ACCEPTANCE_CLEANUP_UNCONFIRMED', localAcceptance: receipt }
+        return { ...receipt, status: 'succeeded' }
+      },
+      async reconcile(prepared) {
+        const receipt = await localRoute(prepared).runner.readReceipt(prepared)
+        return receipt?.executionDrained !== false && receipt?.cleanup?.processStopped && receipt?.cleanup?.dataCleaned
+          ? { ...receipt, status: 'succeeded' } : { status: 'unknown', reason: 'LOCAL_ACCEPTANCE_PENDING_RECONCILIATION', ...(receipt ? { localAcceptance: receipt } : {}) }
+      },
+    },
+    async authorizeExternal({ binding, prepared }) {
+      const item = localRoute(prepared), saved = item.record.config
+      if (binding.runId !== saved.runId || binding.taskId !== saved.taskId || saved.ownerActorId !== ownerActorId
+        || prepared.generation !== binding.generation || prepared.requirementDigest !== binding.requirementDigest) fail('ENGINEERING_EFFECT_NOT_AUTHORIZED')
+      return { principalId: ownerActorId, authorizationRef: `task-local-acceptance:${executionDigest({ taskId: saved.taskId, sourceCommandId: saved.sourceCommandId, identity: prepared.identity })}` }
+    },
     workspaceAdapter: { execute: prepared => route(prepared).workspaceAdapter.execute(prepared), reconcile: prepared => route(prepared).workspaceAdapter.reconcile(prepared) },
     editAdapter: { execute: prepared => route(prepared).editAdapter.execute(prepared), reconcile: prepared => route(prepared).editAdapter.reconcile(prepared) },
     adapter: Object.fromEntries(['executeCommit', 'reconcileCommit', 'executePush', 'reconcilePush'].map(method => [method, async prepared => (await route(prepared).gitAdapterFor(prepared.repository))[method](prepared)])),
@@ -238,6 +445,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     async authorize({ binding, prepared }) {
       const item = route(prepared), saved = item.record.config
       if (binding.runId !== saved.runId || binding.taskId !== saved.taskId || saved.ownerActorId !== ownerActorId) fail('ENGINEERING_EFFECT_NOT_AUTHORIZED')
+      if (prepared.action === 'pr' && !isUatBranch(prepared.base)) fail('ENGINEERING_UAT_BRANCH_REQUIRED')
       return { principalId: ownerActorId, authorizationRef: `task-grant:${executionDigest({ taskId: saved.taskId, sourceCommandId: saved.sourceCommandId, ownerActorId })}` }
     },
   }
@@ -250,19 +458,87 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     const request = text(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
     const repoId = text(action.arguments.repositoryId, 'ENGINEERING_REPOSITORY_REQUIRED'), entry = configs.get(repoId)
     if (!entry) fail('ENGINEERING_REPOSITORY_NOT_ADMITTED')
+    const uatEnvironment = action.arguments.uatEnvironment, uatBranch = uatBranchFor(uatEnvironment)
+    if (!uatBranch) fail('ENGINEERING_UAT_ENVIRONMENT_REQUIRED')
+    await git(entry.config.sourceRepository, ['check-ref-format', '--branch', uatBranch])
+    const remoteBranch = await git(entry.config.sourceRepository, ['ls-remote', '--exit-code', entry.config.remote, `refs/heads/${uatBranch}`])
+    if (!/^[a-f0-9]{40}\s+/.test(remoteBranch)) fail('ENGINEERING_UAT_BRANCH_NOT_FOUND')
+    const targetCommit = remoteBranch.split(/\s+/)[0]
     const matches = [...configs.values()].filter(item => item.config.routingTerms?.some(term => request.includes(term)))
     if (matches.length === 1 && matches[0].config.id !== repoId) fail('ENGINEERING_REPOSITORY_SCOPE_MISMATCH')
     const constraints = [...new Set([...(action.constraints ?? []), ...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])]
     if (constraints.length > 32 || constraints.some(item => typeof item !== 'string') || Buffer.byteLength(request) > 12000) fail('ENGINEERING_INPUT_LIMIT')
-    const fingerprint = executionDigest({ taskId, request, constraints, repoId })
+    const acceptanceCriteria = action.arguments.acceptanceCriteria ?? []
+    if (!Array.isArray(acceptanceCriteria) || acceptanceCriteria.length > 32 || acceptanceCriteria.some(value => typeof value !== 'string' || !value.trim() || value.length > 2000)) fail('LOCAL_ACCEPTANCE_CRITERIA_REQUIRED')
+    const fingerprint = executionDigest({ taskId, request, constraints, repoId, uatEnvironment, uatBranch, acceptanceCriteria,
+      ...(info.rerunOfTaskId ? { rerunOfTaskId: text(info.rerunOfTaskId, 'ENGINEERING_BRANCH_SOURCE_INVALID') } : {}) })
     let item = routes.get(runId)
     if (!item) {
-      const config = entry.config, baseCommit = await git(config.sourceRepository, ['rev-parse', '--verify', `${config.baseRef}^{commit}`])
+      const config = entry.config, sourceTaskId = info.rerunOfTaskId ?? taskId
+      await git(config.sourceRepository, ['fetch', '--no-tags', '--no-write-fetch-head', '--', config.remote, targetCommit])
+      const records = (await store.query({ kind: 'workflow.list' })).filter(record => record.config?.kind === 'engineering'
+        && record.config.taskId === sourceTaskId && record.config.repoId === repoId)
+      if (info.rerunOfTaskId && !records.length) fail('ENGINEERING_BRANCH_SOURCE_INVALID')
+      const repositoryIdentity = { sourceRepository: config.sourceRepository, remote: config.remote, githubRepository: config.githubRepository }
+      for (const record of records) {
+        const previous = record.config
+        if (previous.ownerActorId !== ownerActorId) fail('ENGINEERING_BRANCH_SOURCE_INVALID')
+        if (previous.repositoryIdentity) {
+          if (executionDigest(previous.repositoryIdentity) !== executionDigest(repositoryIdentity)) fail('ENGINEERING_BRANCH_SOURCE_INVALID')
+        } else if (previous.repositoryDigest !== entry.digest) {
+          const effects = await store.query({ kind: 'effect.list', runId: previous.runId })
+          if (!effects.some(effect => effect.state === 'succeeded' && effect.definition.action === 'push'
+            && effect.definition.payload.remote === config.remote && effect.definition.payload.ref === `refs/heads/${previous.head}`)) fail('ENGINEERING_BRANCH_SOURCE_INVALID')
+        }
+      }
+      const heads = [...new Set(records.map(record => record.config.head))]
+      if (heads.length > 1) fail('ENGINEERING_BRANCH_SOURCE_AMBIGUOUS')
+      let head = `codex/task-${executionDigest(commandId).slice(0, 24)}`, branchSource
+      let baseCommit = await git(config.sourceRepository, ['rev-parse', '--verify', `${config.baseRef}^{commit}`])
+      if (heads.length) {
+        const previousHead = text(heads[0], 'ENGINEERING_BRANCH_SOURCE_INVALID')
+        if (['main', 'master', config.baseBranch].includes(previousHead) || isUatBranch(previousHead)) fail('ENGINEERING_BRANCH_SOURCE_INVALID')
+        await git(config.sourceRepository, ['check-ref-format', '--branch', previousHead])
+        const remote = await git(config.sourceRepository, ['ls-remote', '--refs', '--', config.remote, `refs/heads/${previousHead}`])
+        if (remote) {
+          const parts = remote.split(/\s+/)
+          if (parts.length !== 2 || !/^[a-f0-9]{40}$/.test(parts[0]) || parts[1] !== `refs/heads/${previousHead}`) fail('ENGINEERING_BRANCH_SOURCE_INVALID')
+          head = previousHead; baseCommit = parts[0]
+          await git(config.sourceRepository, ['fetch', '--no-tags', '--no-write-fetch-head', '--', config.remote, baseCommit])
+          if (await git(config.sourceRepository, ['rev-parse', '--verify', `${baseCommit}^{commit}`]) !== baseCommit) fail('ENGINEERING_BASE_INVALID')
+          branchSource = { taskId: sourceTaskId, expectedRemoteSha: baseCommit }
+        }
+      }
       if (!/^[a-f0-9]{40}$/.test(baseCommit)) fail('ENGINEERING_BASE_INVALID')
+      const taskBases = [...new Set(records.map(record => record.config.taskBase ?? record.config.input.baseCommit))]
+      if (branchSource && taskBases.length !== 1) fail('ENGINEERING_TASK_BASE_AMBIGUOUS')
+      const taskBase = branchSource ? taskBases[0] : baseCommit
+      if (!/^[a-f0-9]{40}$/.test(taskBase ?? '')) fail('ENGINEERING_TASK_BASE_REQUIRED')
+      try { await git(config.sourceRepository, ['merge-base', '--is-ancestor', taskBase, baseCommit]) }
+      catch { fail('ENGINEERING_TASK_BASE_NOT_ANCESTOR') }
+      let previousPullRequest
+      if (branchSource) {
+        const candidates = []
+        for (const sourceRunId of new Set(records.map(record => record.config.runId))) {
+          const effects = await store.query({ kind: 'effect.list', runId: sourceRunId })
+          const prior = effects.filter(effect => effect.definition.action === 'pr')
+          if (prior.some(effect => !['succeeded', 'rejected', 'failed'].includes(effect.state))) fail('ENGINEERING_PREVIOUS_PR_UNCONFIRMED')
+          for (const effect of prior.filter(effect => effect.state === 'succeeded').sort((a, b) => b.generation - a.generation)) {
+            const payload = effect.definition.payload, receipt = effect.result?.result
+            if (payload.repo !== config.githubRepository || payload.head !== head || receipt?.status !== 'succeeded'
+              || !Number.isSafeInteger(receipt.number) || receipt.number < 1 || !/^[a-f0-9]{64}$/.test(payload.operationKey ?? '')
+              || typeof payload.base !== 'string' || !payload.base) fail('ENGINEERING_PREVIOUS_PR_INVALID')
+            if (!candidates.some(item => item.number === receipt.number)) candidates.push({ number: receipt.number,
+              repo: payload.repo, head: payload.head, base: payload.base, operationKey: payload.operationKey })
+          }
+        }
+        if (candidates.length > 1) fail('ENGINEERING_PREVIOUS_PR_AMBIGUOUS')
+        previousPullRequest = candidates[0]
+      }
       const selected = modelConfig(), selectedAuthor = author ?? { name: await git(config.sourceRepository, ['config', 'user.name']), email: await git(config.sourceRepository, ['config', 'user.email']) }
-      const saved = { kind: 'engineering', registryVersion: '1', repoId, repositoryDigest: entry.digest, runId, taskId, sourceCommandId: commandId, ownerActorId,
-        fingerprint, provider: selected.provider, model: selected.model, ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }), input: { request, constraints, baseCommit, editablePaths: entry.config.editablePaths },
-        head: `codex/task-${executionDigest(commandId).slice(0, 24)}`, date: `${Math.floor(Date.now() / 1000)} +0000`,
+      const saved = { kind: 'engineering', registryVersion: '1', repoId, uatEnvironment, uatBranch, targetCommit, taskBase, repositoryIdentity, localAcceptanceConfig: config.localAcceptance ?? null, repositoryDigest: entry.digest, runId, taskId, sourceCommandId: commandId, ownerActorId,
+        fingerprint, provider: selected.provider, model: selected.model, ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }), input: { request, constraints, baseCommit, editablePaths: entry.config.editablePaths, acceptanceCriteria },
+        head, ...(branchSource ? { branchSource } : {}), ...(previousPullRequest ? { previousPullRequest } : {}), date: `${Math.floor(Date.now() / 1000)} +0000`,
         title: request.replace(/[\r\n\0]+/g, ' ').slice(0, 120), body: `## 任务\n\n${request}\n\n## 约束\n\n${constraints.map(value => `- ${value}`).join('\n') || '无额外约束'}\n\n## 验证配置\n\n${config.checks.map(check => `- ${check.id} / ${check.version}`).join('\n')}`, author: selectedAuthor }
       const { definition } = await build({ workflowId, config: saved })
       item = routes.get(runId)
@@ -273,7 +549,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     controller.registerWorkflow(item.workflow)
     return { taskId, runId, workflowId, input: structuredClone(item.record.config.input) }
   }
-  async function reissueTask({ taskId, repositoryId, requestId }, controller, artifacts) {
+  async function reissueTask({ taskId, repositoryId, requestId, uatEnvironment }, controller, artifacts) {
     text(taskId, 'WORKFLOW_TASK_ID_REQUIRED'); text(repositoryId, 'ENGINEERING_REPOSITORY_REQUIRED')
     text(requestId, 'WORKFLOW_REQUEST_ID_REQUIRED')
     const entry = configs.get(repositoryId)
@@ -283,23 +559,47 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (!run) fail('ENGINEERING_TASK_NOT_REISSUABLE')
     const state = await store.query({ kind: 'run', runId: run.runId }), prior = routes.get(run.runId)
     if (!prior || prior.record.config.taskId !== taskId) fail('ENGINEERING_TASK_NOT_REISSUABLE')
-    if (prior.record.config.reissueRequestId === requestId && prior.record.config.repoId === repositoryId) return { taskId, runId: run.runId, generation: state.run.generation, repositoryId }
-    const saved = prior.record.config, baseCommit = await git(entry.config.sourceRepository, ['rev-parse', '--verify', `${entry.config.baseRef}^{commit}`])
+    if (prior.record.config.reissueRequestId === requestId && prior.record.config.repoId === repositoryId) {
+      if (uatEnvironment && uatEnvironment !== prior.record.config.uatEnvironment) fail('ENGINEERING_TASK_COMMAND_CONFLICT')
+      return { taskId, runId: run.runId, generation: state.run.generation, repositoryId }
+    }
+    uatEnvironment ??= prior.record.config.uatEnvironment
+    const uatBranch = uatBranchFor(uatEnvironment)
+    if (!uatBranch) fail('ENGINEERING_UAT_ENVIRONMENT_REQUIRED')
+    await git(entry.config.sourceRepository, ['check-ref-format', '--branch', uatBranch])
+    const targetRemote = await git(entry.config.sourceRepository, ['ls-remote', '--exit-code', entry.config.remote, `refs/heads/${uatBranch}`])
+    const targetCommit = targetRemote.split(/\s+/)[0]
+    if (!/^[a-f0-9]{40}$/.test(targetCommit)) fail('ENGINEERING_UAT_BRANCH_NOT_FOUND')
+    await git(entry.config.sourceRepository, ['fetch', '--no-tags', '--no-write-fetch-head', '--', entry.config.remote, targetCommit])
+    const saved = prior.record.config
+    if (saved.branchSource && repositoryId !== saved.repoId) fail('ENGINEERING_REUSED_BRANCH_NOT_REISSUABLE')
+    let baseCommit = await git(entry.config.sourceRepository, ['rev-parse', '--verify', `${entry.config.baseRef}^{commit}`])
+    if (saved.branchSource) {
+      const remote = await git(entry.config.sourceRepository, ['ls-remote', '--refs', '--', entry.config.remote, `refs/heads/${saved.head}`])
+      const parts = remote.split(/\s+/)
+      if (parts.length !== 2 || !/^[a-f0-9]{40}$/.test(parts[0]) || parts[1] !== `refs/heads/${saved.head}`) fail('ENGINEERING_BRANCH_SOURCE_INVALID')
+      baseCommit = parts[0]
+      await git(entry.config.sourceRepository, ['fetch', '--no-tags', '--no-write-fetch-head', '--', entry.config.remote, baseCommit])
+    }
     const matches = [...configs.values()].filter(item => item.config.routingTerms?.some(term => saved.input.request.includes(term)))
     if (matches.length === 1 && matches[0].config.id !== repositoryId) fail('ENGINEERING_REPOSITORY_SCOPE_MISMATCH')
     if (!/^[a-f0-9]{40}$/.test(baseCommit)) fail('ENGINEERING_BASE_INVALID')
-    const input = { ...saved.input, baseCommit, editablePaths: entry.config.editablePaths }
-    const nextConfig = { ...saved, repoId: repositoryId, repositoryDigest: entry.digest, input,
-      fingerprint: executionDigest({ taskId, request: input.request, constraints: input.constraints, repoId: repositoryId }), reissueRequestId: requestId,
+    const input = { ...saved.input, acceptanceCriteria: saved.input.acceptanceCriteria ?? [], baseCommit, editablePaths: entry.config.editablePaths }
+    const taskBase = saved.branchSource ? (saved.taskBase ?? saved.input.baseCommit) : baseCommit
+    try { await git(entry.config.sourceRepository, ['merge-base', '--is-ancestor', taskBase, baseCommit]) }
+    catch { fail('ENGINEERING_TASK_BASE_NOT_ANCESTOR') }
+    const nextConfig = { ...saved, targetCommit, taskBase, repositoryIdentity: { sourceRepository: entry.config.sourceRepository, remote: entry.config.remote, githubRepository: entry.config.githubRepository }, localAcceptanceConfig: entry.config.localAcceptance ?? null, uatEnvironment, uatBranch, repoId: repositoryId, repositoryDigest: entry.digest, input,
+      ...(saved.branchSource ? { branchSource: { ...saved.branchSource, expectedRemoteSha: baseCommit } } : {}),
+      fingerprint: executionDigest({ taskId, request: input.request, constraints: input.constraints, repoId: repositoryId, uatEnvironment, uatBranch, acceptanceCriteria: input.acceptanceCriteria }), reissueRequestId: requestId,
       body: `## 任务\n\n${input.request}\n\n## 约束\n\n${input.constraints.map(value => `- ${value}`).join('\n') || '无额外约束'}\n\n## 验证配置\n\n${entry.config.checks.map(check => `- ${check.id} / ${check.version}`).join('\n')}` }
     const workflowId = `task-engineering-reissue-${executionDigest([run.runId, requestId]).slice(0, 40)}`
-    const record = { workflowId, config: nextConfig, definitionVersion: '10' }
+    const record = { workflowId, config: nextConfig, definitionVersion: '15' }
     let next
     try {
       next = await build(record)
       const requirement = await artifacts.put(input), first = next.workflow.nodes[0]
       const firstInput = await artifacts.put({ workflowDigest: next.definition.digest, nodeId: first.id, nodeVersion: first.version,
-        requirementRef: requirement.ref, data: input })
+        requirementRef: requirement.ref, data: await first.mapInput({ requirement: input, previousOutput: null, dependencyOutputs: {} }) })
       await store.command({ id: `workflow:${next.definition.digest}`, kind: 'workflow.register', args: { ...record, digest: next.definition.digest } })
       await store.command({ id: `reissue-repository:${run.runId}:${next.definition.digest}`, kind: 'run.workflow.reissue-repository', args: {
         runId: run.runId, expectedRevision: state.run.revision, fromDigest: state.run.workflowDigest,
@@ -313,11 +613,56 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     await controller.recover({ commandId: `reissue-drive:${run.runId}:${next.definition.digest}`, runId: run.runId })
     return { taskId, runId: run.runId, generation: state.run.generation + 1, repositoryId }
   }
+  async function prepareRepairContext(state) {
+    const item = routes.get(state.run.runId)
+    if (!item || item.record.config.taskId !== state.run.taskId || !artifactStore) fail('ENGINEERING_REPAIR_CONTEXT_UNAVAILABLE')
+    const workspaceNode = state.nodes.find(node => node.nodeId === 'prepare-workspace' && node.outputRef)
+    if (!workspaceNode) fail('ENGINEERING_REPAIR_CONTEXT_UNAVAILABLE')
+    const output = await artifactStore.read(workspaceNode.outputRef)
+    const patchFailure = state.nodes.find(node => node.nodeId === 'apply-changes' && node.status === 'waiting' && engineeringPatchRepairReasons.includes(node.waitReason?.reference))
+    const patchAmbiguous = !!patchFailure
+    let candidate, workspaceSnapshotRef
+    if (patchAmbiguous) {
+      const expectedDirectory = join(item.root, `ws-${executionDigest({ runId: state.run.runId, generation: state.run.generation })}`, 'repository')
+      if (output.workspace.directory !== expectedDirectory || resolve(await realpath(expectedDirectory)).toLowerCase() !== resolve(expectedDirectory).toLowerCase()) fail('ENGINEERING_REPAIR_CONTEXT_UNAVAILABLE')
+      const config = configs.get(item.record.config.repoId).config
+      const paths = [...new Set((await git(expectedDirectory, ['ls-files', '--cached', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean))].sort()
+      const files = []; let total = 0
+      for (const path of paths) {
+        if (!config.discovery.allowedPrefixes.some(prefix => path.startsWith(prefix))) continue
+        if (/[\\:\0\r\n]/.test(path) || path.split('/').some(part => !part || ['.', '..', '.git'].includes(part.toLowerCase()))) fail('ENGINEERING_READ_PATH_INVALID')
+        const full = join(expectedDirectory, path)
+        if (!(await lstat(full)).isFile() || resolve(await realpath(full)).toLowerCase() !== resolve(full).toLowerCase()) fail('ENGINEERING_READ_PATH_INVALID')
+        const bytes = await readFile(full); total += bytes.length
+        if (total > 64 * 1024 * 1024 || files.length >= 20000) fail('ENGINEERING_REPAIR_CONTEXT_CAPACITY')
+        const artifact = await artifactStore.put({ data: bytes.toString('base64') })
+        files.push({ path, sha256: createHash('sha256').update(bytes).digest('hex'), ref: artifact.ref })
+      }
+      workspaceSnapshotRef = (await artifactStore.put({ runId: state.run.runId, generation: state.run.generation, directory: expectedDirectory,
+        baseCommit: output.workspace.baseCommit, files, filesDigest: executionDigest(files) })).ref
+    } else candidate = await freezeCandidate({ repository: output.workspace.directory, baseCommit: output.workspace.baseCommit,
+      generation: state.run.generation, requirementDigest: executionDigest(await artifactStore.read(state.run.requirementRef)) })
+    const refs = [...new Set(state.nodes.flatMap(node => node.status === 'waiting' ? node.evidenceRefs ?? []
+      : ['inspect-and-propose', 'propose-changes'].includes(node.nodeId) && node.outputRef ? [node.outputRef] : []))]
+    const materials = []
+    for (const ref of refs) {
+      const value = await artifactStore.read(ref)
+      if (value.kind === 'engineering-verification-failure') {
+        if (value.candidateDigest !== candidate.digest) fail('ENGINEERING_REPAIR_CANDIDATE_DRIFT')
+        materials.push({ ref, kind: value.kind, checkId: value.checkId, log: Buffer.from(value.data, 'base64').toString('utf8') })
+      } else materials.push({ ref, ...(patchAmbiguous ? { proposal: value } : {}), document: value.document ?? null, failure: value.failureCode ?? (patchAmbiguous ? patchFailure.waitReason.reference : null),
+        paths: [...(value.changes ?? []), ...(value.replacements ?? [])].map(change => change.path) })
+    }
+    if (JSON.stringify(materials).length > 64000) fail('ENGINEERING_REPAIR_CONTEXT_CAPACITY')
+    return artifactStore.put({ taskId: state.run.taskId, runId: state.run.runId, generation: state.run.generation,
+      ...(patchAmbiguous ? { sourceKind: 'workspace', workspaceSnapshotRef } : { candidate }), materials })
+  }
   return {
+    prepareRepairContext,
     deliveryOptions,
     repositoryInspect,
     async restore(controlStore, artifacts) {
-      store = controlStore
+      store = controlStore; artifactStore = artifacts
       const result = []
       for (const record of await store.query({ kind: 'workflow.list' })) {
         if (record.config?.kind !== 'engineering') continue
@@ -417,6 +762,6 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       preparing.set(key, { digest, promise }); return promise
     },
     reissueTask,
-    availableWorkflows: () => [...configs.values()].map(({ config }) => ({ id: 'task-engineering', repositoryId: config.id, editablePaths: [...config.editablePaths], ...(config.discovery ? { discovery: structuredClone(config.discovery) } : {}), purpose: config.purpose ?? '仅在配置范围内选择及修改文件，按固定检查验证并提交PR' })),
+    availableWorkflows: () => [...configs.values()].map(({ config }) => ({ id: 'task-engineering', repositoryId: config.id, editablePaths: [...config.editablePaths], ...(config.discovery ? { discovery: structuredClone(config.discovery) } : {}), purpose: config.purpose ?? '仅在配置范围内开发，业务验收后提交到用户明确指定的UAT分支；用户须明确uat1至uat9环境，由Host映射feature/uatN-base；缺少环境先询问，禁止提交main' })),
   }
 }

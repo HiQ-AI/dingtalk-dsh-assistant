@@ -1,3 +1,4 @@
+import { isTerminalUatBuildFailure } from './execution-delivery.js'
 import { setTimeout as delay } from 'node:timers/promises'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { canonicalExecutionJson, executionDigest, executionError } from './execution-artifacts.js'
@@ -186,6 +187,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
               if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : action === 'edit' ? 'workspace.edit' : action === 'pr' ? 'github.pr' : action === 'external' ? 'external.operation' : action === 'file' ? 'file.write' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
               abort.signal.throwIfAborted()
               const effect = await delivery.execute({ binding, action, prepared })
+              if (isTerminalUatBuildFailure(effect)) throw Object.assign(executionError('RELEASE_PIPELINE_FAILED'), { terminalEffect: effect })
               if (effect.state !== 'succeeded') throw executionError('DELIVERY_RECONCILIATION_REQUIRED')
               return effect.result.result // 对执行节点交接适配器产出，控制账回执仍单独留存。
             },
@@ -210,12 +212,15 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       if (failure || !submitted) {
         if (failure) errors.set(runId, failure)
         const evidenceRefs = []
-        if (nodeDefinition.executor === 'code' && ['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_ACCEPTANCE_FAILED'].includes(failure?.code) && failure.evidence !== undefined) {
+        const terminalDeliveryFailure = isTerminalUatBuildFailure(failure?.terminalEffect)
+        if (terminalDeliveryFailure) evidenceRefs.push((await artifacts.put(failure.terminalEffect.result.result)).ref)
+        if (nodeDefinition.executor === 'code' && (['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_ACCEPTANCE_FAILED'].includes(failure?.code)
+          || failure?.code?.startsWith('LOCAL_ACCEPTANCE_')) && failure.evidence !== undefined) {
           if (!Array.isArray(failure.evidence) || failure.evidence.length > 128) throw executionError('NODE_FAILURE_EVIDENCE_INVALID')
           for (const payload of failure.evidence) evidenceRefs.push((await artifacts.put(payload)).ref)
         }
         await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
-          ...identity, outcome: 'waiting', evidenceRefs, waitReason: { kind: 'recovery', reference: failure?.code ?? (failure ? 'NODE_EXECUTION_FAILED' : outcome?.reason ?? outcome?.status ?? 'NO_NODE_SUBMISSION') },
+          ...identity, outcome: terminalDeliveryFailure ? 'failed' : 'waiting', evidenceRefs, waitReason: { kind: 'recovery', reference: failure?.code ?? (failure ? 'NODE_EXECUTION_FAILED' : outcome?.reason ?? outcome?.status ?? 'NO_NODE_SUBMISSION') },
         })
         return
       }
@@ -374,12 +379,17 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         taskId: requireId(taskId), runId: requireId(runId), stageId: requireId(stageId),
       })
     },
-    async confirmTaskStage({ commandId, taskId, stageId, planRevision, expectedControlRevision, outputRef }) {
+    async continueRunBudget({ commandId, eventId }) {
+      if (closed) throw executionError('CONTROLLER_CLOSED')
+      return command(commandId, 'run.budget.continue', { eventId: requireId(eventId) })
+    },
+    async confirmTaskStage({ commandId, taskId, stageId, planRevision, expectedControlRevision, expectedRequirementRevision, outputRef }) {
       const plan = await store.query({ kind: 'task.plan', taskId: requireId(taskId) })
       if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
       return command(commandId, 'task.plan.confirm',
         { taskId, planRevision, expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision,
-          stageId: requireId(stageId), outputRef })
+          stageId: requireId(stageId), outputRef,
+          ...(expectedRequirementRevision === undefined ? {} : { expectedRequirementRevision }) })
     },
     async bindTaskStageInput({ commandId, taskId, planRevision, expectedControlRevision, stageId, predecessorOutputRef, input, workflowId }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
@@ -478,10 +488,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       }
       return { receipt, plan: await store.query({ kind: 'task.plan', taskId }) }
     },
-    async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision }) {
+    async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision, repair }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       const requirement = await artifacts.put(input)
-      const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref, ...(expectedRevision === undefined ? {} : { expectedRevision }) })
+      const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref, ...(expectedRevision === undefined ? {} : { expectedRevision }), ...(repair ? { repair } : {}) })
       if (!receipt.replayed && receipt.result.accepted !== false) { interrupt(runId); schedule(runId) }
       return receipt
     },

@@ -1,12 +1,37 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createTaskOwnerSessions } from './task-owner-session.js'
+import { readEngineeringDeliveryProof } from './workflow-engineering.js'
 
 const error = code => Object.assign(new Error(code), { code })
 const key = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 
+/** 只扩展经过同 Run 交付证明核验的原始节点引用，不改阶段或冻结工作流。 */
+export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, artifacts, store }) {
+  const result = []
+  for (const stage of stages.filter(item => item.status === 'succeeded' && item.outputRef)) {
+    const entry = { stageId: stage.stageId, outputRef: stage.outputRef, evidenceRefs: [...(stage.evidenceRefs ?? [])] }
+    if (stage.runId && stage.workflowId.startsWith('task-engineering-')) {
+      const state = await controller.state(stage.runId)
+      if (state?.run?.runId !== stage.runId || state.run.workflowId !== stage.workflowId
+        || !state.nodes.some(node => node.nodeId === 'finalize' && node.status === 'succeeded' && node.outputRef === stage.outputRef))
+        throw error('TASK_OWNER_ENGINEERING_STAGE_MISMATCH')
+      const proof = await readEngineeringDeliveryProof({ state, artifacts, store, taskId })
+      const labels = { 'verify-candidate': '构建与检查原始结果', 'define-local-acceptance': '本地验收要求与场景',
+        'finalize-local-acceptance': '本地业务验收结果与清理收据', 'business-acceptance': '业务验收原始结果' }
+      entry.completionEvidenceRefs = [...new Set([stage.outputRef, ...entry.evidenceRefs])]
+      entry.nodeArtifacts = state.nodes.filter(node => labels[node.nodeId] && node.status === 'succeeded'
+        && proof.evidenceRefs.includes(node.outputRef)).map(node => ({ nodeId: node.nodeId,
+        description: labels[node.nodeId], artifactRef: node.outputRef }))
+      entry.evidenceRefs = [...new Set([...entry.evidenceRefs, ...entry.nodeArtifacts.map(node => node.artifactRef)])]
+    }
+    result.push(entry)
+  }
+  return result
+}
+
 /** Task 事件唤醒、模型候选、Host 接纳和执行回执的唯一入口。 */
 export function createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig, advanceTask,
-  authorizeStages, authorizeCompletion = async () => true, prepareInitialStage,
+  authorizeStages, authorizeCompletion = async () => true, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
   capabilityCatalog = [], workflowCatalog = [], sessionRunner }) {
   if (!ctx || !store || !artifacts || !controller || typeof modelConfig !== 'function'
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
@@ -51,6 +76,10 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       await event({ taskId, eventKey: `stage-${key([taskId, plan.task.planRevision, stage.stageId, stage.status]).slice(0, 40)}`,
         eventType, payload })
     }
+    if (inspectCurrentExecution) {
+      const current = await inspectCurrentExecution(taskId, plan)
+      if (current?.waitingNodes?.length) await event({ taskId, eventKey: `engineering-wait:${key(current).slice(0, 48)}`, eventType: 'workflow.failed', payload: current })
+    }
     return plan
   }
 
@@ -74,9 +103,11 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     const acceptanceItems = await store.query({ kind: 'task.owner.acceptance', taskId })
     const result = { taskId, eventWatermark: claim.eventWatermark, goal,
       acceptanceItems, versions: claim.versions, task: plan.task, stages: plan.stages, events }
-    result.stageArtifacts = plan.stages.filter(stage => stage.status === 'succeeded' && stage.outputRef)
-      .map(stage => ({ stageId: stage.stageId, outputRef: stage.outputRef,
-        evidenceRefs: stage.evidenceRefs ?? [] }))
+    result.stageArtifacts = await readTaskOwnerStageArtifacts({ taskId, stages: plan.stages, controller, artifacts, store })
+    if (inspectCurrentExecution) {
+      result.currentExecution = await inspectCurrentExecution(taskId, plan)
+      if (result.currentExecution?.evidenceRefs?.length) result.stageArtifacts.push({ stageId: result.currentExecution.stageId, outputRef: null, evidenceRefs: result.currentExecution.evidenceRefs })
+    }
     result.capabilities = capabilityCatalog
     result.workflowCatalog = workflowCatalog
     if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 128 * 1024) {
@@ -112,6 +143,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     const flight = (async () => {
       const before = await store.query({ kind: 'task.owner', taskId })
       if (!before || before.status !== 'pending' || before.processedWatermark === before.eventWatermark) return null
+      if ((await controller.taskPlan(taskId))?.task.controlState !== 'active') return null
       const turnId = `turn-${randomUUID()}`
       const claim = (await command(`owner-claim:${turnId}`, 'task.owner.claim', {
         taskId, turnId, expectedLeaseEpoch: before.leaseEpoch,
@@ -122,7 +154,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         const input = await snapshot(taskId, claim)
         const unreadPages = new Set((input.eventPages ?? []).map(page => page.ref))
         const readableArtifacts = new Set(input.stageArtifacts.flatMap(stage =>
-          [stage.outputRef, ...stage.evidenceRefs]))
+          [stage.outputRef, ...stage.evidenceRefs].filter(Boolean)))
         const result = await sessions.run({ binding, input, ...modelConfig(),
           readPage: async pageRef => {
             if (!unreadPages.has(pageRef)) throw error('TASK_OWNER_PAGE_NOT_ALLOWED')
@@ -132,7 +164,9 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           },
           readArtifact: async artifactRef => {
             if (!readableArtifacts.has(artifactRef)) throw error('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
-            return artifacts.read(artifactRef)
+            const value = await artifacts.read(artifactRef)
+            return value.kind === 'engineering-verification-failure' && value.encoding === 'base64'
+              ? { ...value, text: Buffer.from(value.data, 'base64').toString('utf8') } : value
           },
           onSessionBound: () => command(`owner-bound:${turnId}`, 'task.owner.sessionBound', {
             taskId, turnId, leaseEpoch: claim.leaseEpoch, sessionId: claim.sessionId }),
@@ -179,7 +213,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           const requirementDelta = currentPlan.task.requirementRef ? 0 : 1
           const priorPlanReceipt = proposedStages?.length
             ? await store.query({ kind: 'receipt', commandId: `owner-plan:${turnId}` }) : null
-          if ((!priorPlanReceipt && (owner.eventWatermark !== action.eventWatermark
+          if (currentPlan.task.controlState !== 'active' || (!priorPlanReceipt && (owner.eventWatermark !== action.eventWatermark
               || owner.planRevision !== action.planRevision
               || owner.requirementRevision !== action.requirementRevision))
             || priorPlanReceipt && (owner.planRevision !== priorPlanReceipt.result?.planRevision
@@ -190,6 +224,10 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
             await command(`owner-discard:${turnId}`, 'task.owner.discard', {
               taskId, turnId, leaseEpoch: action.leaseEpoch })
             continue
+          }
+          if (decision.action === 'repairCurrentStage') {
+            if (typeof repairCurrentStage !== 'function') throw error('TASK_OWNER_REPAIR_UNAVAILABLE')
+            await repairCurrentStage({ taskId, decision, commandId: `owner-repair:${turnId}` })
           }
           if (decision.action === 'advance') {
             if (proposedStages?.length) {

@@ -2,6 +2,7 @@ import { executionDigest, executionError } from './execution-artifacts.js'
 import { createHash } from 'node:crypto'
 import { freezeCandidate, readCandidate, verifyCandidate } from './execution-candidate.js'
 import { describeVerificationChecks } from './execution-check-job.js'
+import { assertWorkspaceConflictsResolved } from './execution-workspace.js'
 export { createReadOnlyTaskWorkflows } from './task-readonly-workflows.js'
 export { createGeneralTaskWorkflow } from './task-general-workflow.js'
 
@@ -450,10 +451,235 @@ export function createEngineeringAcceptanceWorkflow(options) {
   return workflow
 }
 
+/** v11 将任务验收计划、候选本地运行及共享 UAT 数据清理纳入提交条件。 */
+export function createEngineeringLocalAcceptanceWorkflow(options) {
+  const workflow = createEngineeringDeliverableWorkflow(options), local = options.localAcceptance
+  workflow.version = '11'
+  // 新要求字段留在 Run 的 requirement 中；旧节点仍只接收其原有合同。
+  for (const node of workflow.nodes) {
+    const mapInput = node.mapInput
+    node.mapInput = ({ requirement, ...args }) => {
+      const { acceptanceCriteria, ...engineeringRequirement } = requirement
+      return mapInput({ ...args, requirement: engineeringRequirement })
+    }
+  }
+  const proposal = workflow.nodes.find(node => ['inspect-and-propose', 'propose-changes'].includes(node.id))
+  proposal.prompt += '\n方案须列出本地业务验收操作和预期结果，服务连接共享 UAT 数据；计划不等于已执行或通过。'
+  if (local?.instructions) proposal.prompt += `\n项目本地验收要求：\n${local.instructions}`
+  const object = { type: 'object' }
+  const planSchema = { type: 'object', properties: { cases: { type: 'array', items: {
+    type: 'object', properties: { criterionId: text, scenarioId: text, steps: { type: 'array', items: text }, expected: text, parameters: object },
+    required: ['criterionId', 'scenarioId', 'steps', 'expected', 'parameters'], additionalProperties: false,
+  } } }, required: ['cases'], additionalProperties: false }
+  const validatePlan = (plan, criteria) => {
+    const cases = plan?.cases
+    if (!Array.isArray(cases) || !cases.length || cases.length > 32 || Buffer.byteLength(JSON.stringify(plan)) > 24000
+      || new Set(cases.map(entry => entry.criterionId)).size !== cases.length
+      || criteria.some(item => !cases.some(entry => entry.criterionId === item.id))
+      || cases.some(entry => !criteria.some(item => item.id === entry.criterionId)
+        || !local.scenarios.some(item => item.id === entry.scenarioId)
+        || !entry.expected.trim() || entry.expected.length > 2000 || !entry.steps.length || entry.steps.length > 16
+        || entry.steps.some(step => !step.trim() || step.length > 2000))) throw executionError('LOCAL_ACCEPTANCE_PLAN_INVALID')
+  }
+  const localNodes = [
+    { id: 'define-local-acceptance', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: object, outputSchema: object,
+      mapInput: ({ requirement, previousOutput }) => ({ ...previousOutput, request: requirement.request, acceptanceCriteria: requirement.acceptanceCriteria ?? [] }),
+      execute: async ({ input }) => {
+        if (!local) throw executionError('LOCAL_ACCEPTANCE_CONFIG_REQUIRED')
+        if (!Array.isArray(input.acceptanceCriteria) || !input.acceptanceCriteria.length || input.acceptanceCriteria.length > 32
+          || input.acceptanceCriteria.some(value => typeof value !== 'string' || !value.trim() || value.length > 2000)) throw executionError('LOCAL_ACCEPTANCE_CRITERIA_REQUIRED')
+        return { ...input, localContext: { request: input.request, criteria: input.acceptanceCriteria.map((description, i) => ({ id: `criterion-${i + 1}`, description })),
+          scenarios: local.scenarios, uatEnvironment: options.project.uatEnvironment } }
+      } },
+    { id: 'plan-local-acceptance', version: '1', executor: 'agent', allowedEffects: ['pure'], inputSchema: object, outputSchema: planSchema,
+      mapInput: ({ previousOutput }) => previousOutput.localContext,
+      provider: options.provider, model: options.model, ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
+      allowedTools: [], maxSteps: 8, timeoutMs: 120000,
+      prompt: '为当前任务编写本地业务验收计划。逐个覆盖 criteria.id，只能从 scenarios 中选择能实际验证该条件的场景；给出 steps、expected 与场景要求的 parameters。服务在本地运行、数据连接共享 UAT 数据库。验收目标必须来自任务要求，不得弱化为启动成功、返回200或套用当前错误行为。不能执行命令或声称通过。缺少可执行场景时 cases 留空，不编造 scenarioId。使用 execution_node_submit 提交。' },
+    { id: 'prepare-local-acceptance', version: '1', executor: 'code', allowedEffects: ['workspace.prepare'], inputSchema: object, outputSchema: object,
+      inputDependencies: ['define-local-acceptance', 'plan-local-acceptance'],
+      mapInput: ({ previousOutput, dependencyOutputs }) => ({ build: previousOutput, criteria: dependencyOutputs['define-local-acceptance'].localContext.criteria, plan: dependencyOutputs['plan-local-acceptance'] }),
+      execute: async ({ input, taskId, runId, generation, signal }) => {
+        validatePlan(input.plan, input.criteria)
+        const localPrepared = await local.prepare({ candidate: input.build.candidate, plan: input.plan, taskId, runId, generation,
+          uatEnvironment: options.project.uatEnvironment, signal })
+        return { ...input.build, localPrepared }
+      } },
+    { id: 'run-local-acceptance', version: '1', executor: 'code', drainPolicy: 'external-process', allowedEffects: ['external.operation'],
+      inputSchema: object, outputSchema: object, mapInput: ({ previousOutput }) => previousOutput,
+      execute: async ({ input, taskId, runId, generation, requirementDigest, signal, perform }) => {
+        const prepared = { ...input.localPrepared, action: 'external', workflowKind: 'local-acceptance', taskId, runId, generation, requirementDigest,
+          resourceKey: local.resourceKey }
+        return { ...input, localPrepared: prepared, localAcceptance: await local.dispatch(prepared, perform, signal) }
+      } },
+    { id: 'finalize-local-acceptance', version: '1', executor: 'code', allowedEffects: ['read'], inputSchema: object, outputSchema: object,
+      mapInput: ({ previousOutput }) => previousOutput,
+      execute: async ({ input }) => { await local.assertPassed(input.localPrepared, input.localAcceptance); return input } },
+  ]
+  workflow.nodes.splice(workflow.nodes.findIndex(node => node.id === 'prepare-workspace'), 0, ...localNodes.slice(0, 2))
+  workflow.nodes.splice(workflow.nodes.findIndex(node => node.id === 'verify-candidate') + 1, 0, ...localNodes.slice(2))
+  const prepare = workflow.nodes.find(node => node.id === 'prepare-commit')
+  if (prepare) {
+    const execute = prepare.execute
+    prepare.execute = async context => {
+      if (context.input.localPrepared?.candidateDigest !== context.input.candidate?.digest) throw executionError('LOCAL_ACCEPTANCE_RECEIPT_INVALID')
+      await local.assertPassed(context.input.localPrepared, context.input.localAcceptance)
+      return execute(context)
+    }
+  }
+  const preparePr = workflow.nodes.find(node => node.id === 'prepare-pr')
+  if (preparePr) {
+    const mapInput = preparePr.mapInput, execute = preparePr.execute
+    preparePr.inputDependencies = [...(preparePr.inputDependencies ?? []), 'finalize-local-acceptance']
+    preparePr.mapInput = args => ({ ...mapInput(args), localEvidence: args.dependencyOutputs['finalize-local-acceptance'] })
+    preparePr.execute = async context => {
+      const evidence = context.input.localEvidence
+      await local.assertPassed(evidence.localPrepared, evidence.localAcceptance)
+      if (context.input.prepared.candidateDigest !== evidence.localAcceptance.candidateDigest) throw executionError('LOCAL_ACCEPTANCE_RECEIPT_INVALID')
+      const prepared = await execute(context), receipt = evidence.localAcceptance
+      const summary = receipt.checks.map(check => `- ${check.criterionId}：通过；预期 ${check.expected.slice(0, 500)}；实际 ${check.actual.slice(0, 500)}`).join('\n')
+      return (await options.deliveryPlan.prAdapterFor(prepared.repository)).prepare({ runId: context.runId, generation: context.generation,
+        requirementDigest: context.requirementDigest, commitId: prepared.commitId, title: prepared.title,
+        body: `${prepared.body}\n\n## 本地业务验收\n\n本地候选服务连接共享 UAT 数据，目标环境 ${receipt.uatEnvironment}。\n\n${summary}\n\n任务测试数据已清理，本地验收进程已停止。验收回执：\`${receipt.identity}\`。` })
+    }
+  }
+  for (const node of workflow.nodes) node.rulesDigest = executionDigest({ previous: node.rulesDigest ?? null, localAcceptance: local?.identity ?? null, planValidation: validatePlan.toString() })
+  return workflow
+}
+
+/** v12 明确记录独立目录使用的开发分支，保留 v11 冻结定义。 */
+export function createEngineeringBranchReuseWorkflow(options) {
+  const workflow = createEngineeringLocalAcceptanceWorkflow(options)
+  workflow.version = '12'
+  const workspace = workflow.nodes.find(node => node.id === 'prepare-workspace'), execute = workspace.execute
+  workspace.version = '3'
+  workspace.execute = async context => {
+    const output = await execute(context)
+    return { ...output, workspace: { ...output.workspace,
+      developmentBranch: options.project.developmentBranch,
+      branchDisposition: context.input.expectedRemoteSha ? 'reused' : options.project.branchDisposition,
+      targetBranch: options.project.targetBranch } }
+  }
+  return workflow
+}
+
+/** v13 在冻结 UAT 基线上验证待合并树；旧工厂与旧证据不变。 */
+export function createEngineeringUatBaselineWorkflow(options) {
+  if (!['targetCommit', 'taskBase'].every(key => /^[a-f0-9]{40}$/.test(options.project?.[key] ?? ''))) throw executionError('ENGINEERING_UAT_BASELINE_REQUIRED')
+  const workflow = createEngineeringBranchReuseWorkflow(options)
+  workflow.version = '13'
+  const prepare = context => options.workspaceAdapter.prepare({ runId: context.runId, generation: context.generation,
+    requirementDigest: context.requirementDigest, baseCommit: (context.input.requirement ?? context.input).baseCommit })
+  const workspace = workflow.nodes.find(node => node.id === 'prepare-workspace'), execute = workspace.execute
+  workspace.version = '4'
+  workspace.execute = async context => {
+    const prepared = await prepare(context)
+    if (prepared.targetCommit !== options.project.targetCommit || prepared.taskBase !== options.project.taskBase || !prepared.mergeTree || !Array.isArray(prepared.conflictPaths)) throw executionError('ENGINEERING_UAT_BASELINE_MISMATCH')
+    if (prepared.conflictPaths.some(path => options.discovery
+      ? !options.discovery.allowedPrefixes.some(prefix => path.startsWith(prefix)) : !context.input.editablePaths.includes(path))) throw executionError('WORKSPACE_CONFLICT_SCOPE_UNSUPPORTED')
+    const output = await execute(context)
+    return { ...output, workspace: { ...output.workspace, targetCommit: prepared.targetCommit, taskBase: prepared.taskBase,
+      mergeTree: prepared.mergeTree, conflictPaths: prepared.conflictPaths } }
+  }
+  const proposal = workflow.nodes.find(node => ['inspect-and-propose', 'propose-changes'].includes(node.id)), mapInput = proposal.mapInput
+  proposal.inputDependencies = [...new Set([...(proposal.inputDependencies ?? []), 'prepare-workspace'])]
+  proposal.inputSchema = { ...proposal.inputSchema, properties: { ...proposal.inputSchema.properties, baselineMerge: { type: 'object' } } }
+  proposal.mapInput = args => ({ ...mapInput(args), baselineMerge: args.dependencyOutputs['prepare-workspace'].workspace })
+  proposal.prompt += '\nHost 已将冻结 UAT 基线合入工作目录；非冲突变更不得整体回退。baselineMerge.conflictPaths 是必须逐个读取并解决的文本冲突；每个路径必须出现在 changes/replacements 和方案中，不得保留冲突标记。只修当前任务和这些明确冲突，不重写整份 UAT 差异。'
+  const apply = workflow.nodes.find(node => node.id === 'apply-changes'), originalApply = apply.execute
+  apply.execute = async context => {
+    const prepared = await prepare(context), paths = [...context.input.proposal.changes, ...(context.input.proposal.replacements ?? [])].map(item => item.path)
+    if (prepared.conflictPaths.some(path => !paths.includes(path))) throw executionError('ENGINEERING_CONFLICT_NOT_PROPOSED')
+    const proposedText = [...context.input.proposal.changes.map(item => item.content), ...(context.input.proposal.replacements ?? []).map(item => item.to)]
+    if (proposedText.some(value => typeof value === 'string' && /^(?:<{7}(?: |$)|={7}\r?$|>{7}(?: |$)|\|{7}(?: |$))/mu.test(value))) throw executionError('WORKSPACE_CONFLICT_UNRESOLVED')
+    if (options.discovery && prepared.conflictPaths.length) {
+      if (typeof options.assertConflictReads !== 'function') throw executionError('ENGINEERING_CONFLICT_NOT_READ')
+      await options.assertConflictReads({ runId: context.runId, generation: context.generation, requirementDigest: context.requirementDigest, paths: prepared.conflictPaths })
+    }
+    return originalApply(context)
+  }
+  const verify = workflow.nodes.find(node => node.id === 'verify-candidate'), originalVerify = verify.execute
+  verify.execute = async context => {
+    const prepared = await prepare(context)
+    await assertWorkspaceConflictsResolved(prepared)
+    return originalVerify(context)
+  }
+  for (const node of workflow.nodes) node.rulesDigest = executionDigest({ previous: node.rulesDigest, uatBaselineVersion: 2, targetCommit: options.project.targetCommit, taskBase: options.project.taskBase })
+  return workflow
+}
+
+/** v14 补齐按需检索路径的代际依赖；冻结 v13 工厂保持不变。 */
+export function createEngineeringMappedBaselineWorkflow(options) {
+  const workflow = createEngineeringUatBaselineWorkflow(options)
+  workflow.version = '14'
+  if (workflow.nodes.some(node => node.id === 'prepare-generation')) {
+    for (const id of ['inspect-and-propose', 'apply-changes']) {
+      const node = workflow.nodes.find(item => item.id === id)
+      if (!node || node.inputDependencies?.includes('prepare-generation')) continue
+      node.inputDependencies = ['prepare-generation', ...(node.inputDependencies ?? [])]
+      const mapInput = node.mapInput
+      node.mapInput = args => mapInput({ ...args, requirement: args.dependencyOutputs['prepare-generation'].requirement })
+      node.version = String(Number(node.version) + 1)
+    }
+  }
+  return workflow
+}
+
 /** 与factory共用Host scope解析器；不把任意仓库路径变成模型工具。 */
 export function createEngineeringDeliveryAdapters({ gitAdapterFor, prAdapterFor }) {
   return {
     adapter: Object.fromEntries(['executeCommit', 'reconcileCommit', 'executePush', 'reconcilePush'].map(method => [method, async prepared => (await gitAdapterFor(prepared.repository))[method](prepared)])),
     prAdapter: { execute: async prepared => (await prAdapterFor(prepared.repository)).execute(prepared), reconcile: async prepared => (await prAdapterFor(prepared.repository)).reconcile(prepared) },
   }
+}
+
+/** v15 明确支持已实现任务的重新验收；v14 的非空修改合同保持原样。 */
+export function createEngineeringRevalidationWorkflow(options) {
+  const workflow = createEngineeringMappedBaselineWorkflow(options)
+  workflow.version = '15'
+  const proposal = workflow.nodes.find(node => ['inspect-and-propose', 'propose-changes'].includes(node.id))
+  const schema = { ...proposal.outputSchema, properties: { ...proposal.outputSchema.properties,
+    changeDisposition: { type: 'string', enum: ['modify', 'no-change'] },
+    reviewedPaths: { type: 'array', items: text }, reason: text },
+  required: [...proposal.outputSchema.required, 'changeDisposition', 'reviewedPaths', 'reason'] }
+  proposal.outputSchema = schema
+  proposal.version = String(Number(proposal.version) + 1)
+  proposal.prompt += '\n先核实已有实现。若符合要求，changeDisposition=no-change，changes/replacements均为空，reviewedPaths列出本轮实际读取的实现与测试路径，reason和修改方案说明符合要求的依据；不得制造修改或同内容替换。若需修改则changeDisposition=modify。无需修改仍须执行后续构建、业务验收与交付，不能声称已验证。'
+  const validate = workflow.nodes.find(node => node.id === 'validate-proposal'), originalValidate = validate.execute
+  validate.inputSchema = schema; validate.outputSchema = schema; validate.version = '2'
+  validate.execute = async context => {
+    const value = context.input
+    if (!['modify', 'no-change'].includes(value.changeDisposition) || !value.reason?.trim()) throw executionError('ENGINEERING_CHANGE_DISPOSITION_INVALID')
+    if (value.changeDisposition === 'modify') {
+      if (value.changes.some(change => typeof change.content === 'string' && createHash('sha256').update(change.content).digest('hex') === change.expectedHash)
+        || (value.replacements ?? []).some(change => change.from === change.to)) throw executionError('ENGINEERING_NO_EFFECT_MODIFICATION')
+      return originalValidate(context)
+    }
+    if (value.changes.length || (value.replacements ?? []).length || !value.reviewedPaths.length
+      || new Set(value.reviewedPaths).size !== value.reviewedPaths.length || !value.document.markdown.trim()
+      || value.document.markdown.length > 24000 || value.reviewedPaths.some(path => !value.document.markdown.includes(path))) throw executionError('ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED')
+    return value
+  }
+  const apply = workflow.nodes.find(node => node.id === 'apply-changes'), originalApply = apply.execute
+  apply.inputSchema = { ...apply.inputSchema, properties: { ...apply.inputSchema.properties, proposal: schema } }
+  apply.version = String(Number(apply.version) + 1)
+  apply.execute = async context => {
+    const input = context.input.proposal
+    await validate.execute({ input })
+    if (input.changeDisposition === 'modify') return originalApply(context)
+    const workspace = await options.workspaceAdapter.prepare({ runId: context.runId, generation: context.generation,
+      requirementDigest: context.requirementDigest, baseCommit: context.input.requirement.baseCommit })
+    if ((await options.workspaceAdapter.reconcile(workspace)).status !== 'succeeded') throw executionError('WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED')
+    if (!Array.isArray(workspace.conflictPaths) || workspace.conflictPaths.length) throw executionError('ENGINEERING_CONFLICT_NOT_PROPOSED')
+    if (typeof options.assertConflictReads !== 'function') throw executionError('ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED')
+    await options.assertConflictReads({ runId: context.runId, generation: context.generation,
+      requirementDigest: context.requirementDigest, paths: input.reviewedPaths })
+    await assertWorkspaceConflictsResolved(workspace)
+    const candidate = await freezeCandidate({ repository: workspace.directory, baseCommit: context.input.requirement.baseCommit,
+      generation: context.generation, requirementDigest: context.requirementDigest })
+    if (candidate.tree !== workspace.mergeTree) throw executionError('ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT')
+    return { status: 'succeeded', changeDisposition: 'no-change', summary: '现有实现符合要求，无需修改源码；继续构建与验收',
+      reason: input.reason, reviewedPaths: input.reviewedPaths, candidateDigest: candidate.digest, tree: candidate.tree, files: [] }
+  }
+  return workflow
 }

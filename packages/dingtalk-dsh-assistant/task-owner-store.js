@@ -20,11 +20,17 @@ const exact = (value, allowed, required = allowed) => {
 }
 const json = value => JSON.stringify(value)
 const decision = value => {
-  exact(value, ['action', 'summary', 'evidenceRefs', 'appendStages', 'planChange', 'assessments'], ['action', 'summary', 'evidenceRefs'])
-  if (!['advance', 'wait', 'complete', 'block'].includes(value.action)
+  exact(value, ['action', 'summary', 'evidenceRefs', 'appendStages', 'planChange', 'assessments', 'repair'], ['action', 'summary', 'evidenceRefs'])
+  if (!['advance', 'wait', 'complete', 'block', 'repairCurrentStage'].includes(value.action)
     || typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 4000
     || !Array.isArray(value.evidenceRefs) || value.evidenceRefs.length > 128) fail('TASK_OWNER_DECISION_INVALID')
   value.evidenceRefs.forEach(ref)
+  if (value.action === 'repairCurrentStage') {
+    if (value.planChange || value.appendStages || value.assessments) fail('TASK_OWNER_DECISION_INVALID')
+    exact(value.repair, ['stageId', 'runId', 'generation', 'runRevision', 'requirementRevision'])
+    id(value.repair.stageId); id(value.repair.runId)
+    for (const key of ['generation', 'runRevision', 'requirementRevision']) revision(value.repair[key])
+  } else if (value.repair !== undefined) fail('TASK_OWNER_DECISION_INVALID')
   if (value.planChange !== undefined) {
     if (value.action !== 'advance' || value.appendStages !== undefined) fail('TASK_OWNER_DECISION_INVALID')
     exact(value.planChange, ['kind', 'stages', 'affectedFrom'], ['kind', 'stages'])
@@ -239,6 +245,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     exact(a, ['taskId', 'turnId', 'expectedLeaseEpoch', 'snapshotRef'], ['taskId', 'turnId', 'expectedLeaseEpoch'])
     const o = owner(db, a.taskId); id(a.turnId); revision(a.expectedLeaseEpoch)
     if (a.snapshotRef !== undefined && a.snapshotRef !== null) ref(a.snapshotRef)
+    if (task(db, a.taskId).control_state !== 'active') fail('TASK_OWNER_NOT_CLAIMABLE')
     if (o.lease_epoch !== a.expectedLeaseEpoch || o.status === 'running' || o.status === 'blocked'
       || o.processed_watermark === o.event_watermark) fail('TASK_OWNER_NOT_CLAIMABLE')
     const v = versions(db, o), epoch = o.lease_epoch + 1
@@ -382,11 +389,12 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     if (!['running', 'candidate'].includes(t.status)) fail('TASK_OWNER_RELEASE_CONFLICT')
     if (a.reason !== undefined && (typeof a.reason !== 'string' || !a.reason || a.reason.length > 200))
       fail('TASK_OWNER_ARGUMENT_INVALID')
-    const counted = a.reason && a.reason !== 'TASK_OWNER_CANDIDATE_STALE'
+    const active = task(db, a.taskId).control_state === 'active'
+    const counted = active && a.reason && a.reason !== 'TASK_OWNER_CANDIDATE_STALE'
     const failures = o.failure_count + (counted ? 1 : 0)
     db.prepare("UPDATE task_owner_turns SET status='released',updated_at=? WHERE turn_id=?").run(now, t.turn_id)
     db.prepare("UPDATE task_owners SET status=?,failure_count=?,last_failure=?,current_turn_id=NULL,revision=revision+1,updated_at=? WHERE task_id=?")
-      .run(failures >= 3 ? 'blocked' : 'pending', failures, a.reason ?? null, now, o.task_id)
+      .run(!active ? 'idle' : failures >= 3 ? 'blocked' : 'pending', failures, active ? a.reason ?? null : null, now, o.task_id)
     return { status: failures >= 3 ? 'blocked' : 'released', taskId: o.task_id, failureCount: failures }
   }
   return null
@@ -416,7 +424,9 @@ export function queryTaskOwner(db, query) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || !Number.isSafeInteger(before) || before < 1)
       fail('TASK_OWNER_ARGUMENT_INVALID')
     return db.prepare(`SELECT rowid AS sequence_id,* FROM task_owners WHERE rowid<?
-      AND status='pending' AND processed_watermark<event_watermark ORDER BY rowid DESC LIMIT ?`)
+      AND status='pending' AND processed_watermark<event_watermark
+      AND EXISTS (SELECT 1 FROM task_controls c WHERE c.task_id=task_owners.task_id AND c.state='active')
+      ORDER BY rowid DESC LIMIT ?`)
       .all(before, limit).map(row => ({ ...ownerDto(db, row), sequenceId: row.sequence_id }))
   }
   if (query?.kind === 'task.owner.actions.pending') {

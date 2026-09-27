@@ -1,4 +1,5 @@
 import { executionDigest, executionError } from './execution-artifacts.js'
+import { isUatBranch } from './workflow-engineering.js'
 
 const text = { type: 'string' }
 const requirementSchema = { type: 'object', properties: {
@@ -29,7 +30,7 @@ const resultSchema = { type: 'object', properties: {
 const validSha = value => typeof value === 'string' && /^[a-f0-9]{40}$/u.test(value)
 
 /** UAT PR 合并是独立外部效果，Owner 只提出目标；Host 核验对象、检查和人工审批。 */
-export function createUatPrMergeTaskWorkflow({ adapter }) {
+export function createLegacyUatPrMergeTaskWorkflow({ adapter }) {
   if (!adapter || typeof adapter.inspect !== 'function' || typeof adapter.prepareOperation !== 'function'
     || typeof adapter.id !== 'string' || typeof adapter.version !== 'string'
     || !/^[a-f0-9]{64}$/u.test(adapter.rulesDigest ?? '')) throw executionError('UAT_MERGE_ADAPTER_REQUIRED')
@@ -98,4 +99,84 @@ export function createUatPrMergeTaskWorkflow({ adapter }) {
     adapterRulesDigest: adapter.rulesDigest, nodes: nodes.map(node => node.id) })
   for (const node of nodes) node.rulesDigest = rulesDigest
   return { id: 'task-uat-pr-merge', version: '1', nodes }
+}
+
+
+export function createUatPrMergeTaskWorkflowV2(options) {
+  const workflow = createLegacyUatPrMergeTaskWorkflow(options), freeze = workflow.nodes[0], execute = freeze.execute
+  workflow.version = '2'
+  freeze.execute = async context => {
+    if (!isUatBranch(context.input.baseBranch)) throw executionError('UAT_MERGE_BRANCH_INVALID')
+    return execute(context)
+  }
+  for (const node of workflow.nodes) node.rulesDigest = executionDigest({ previous: node.rulesDigest, uatBranchPolicy: isUatBranch.toString() })
+  return workflow
+}
+
+export function createUatPrMergeTaskWorkflow(options) {
+  const workflow = createUatPrMergeTaskWorkflowV2(options)
+  workflow.version = '3'
+  const extend = schema => {
+    if (schema === requirementSchema) return { ...schema, properties: { ...schema.properties, localEvidence: { type: 'object' } }, required: [...schema.required, 'localEvidence'] }
+    if (!schema || typeof schema !== 'object') return schema
+    return Array.isArray(schema) ? schema.map(extend) : Object.fromEntries(Object.entries(schema).map(([key, value]) => [key, extend(value)]))
+  }
+  for (const node of workflow.nodes) {
+    node.inputSchema = extend(node.inputSchema); node.outputSchema = extend(node.outputSchema)
+    node.rulesDigest = executionDigest({ previous: node.rulesDigest, localEvidenceVersion: 1 })
+  }
+  workflow.nodes[0].execute = async ({ input }) => {
+    if (!isUatBranch(input.baseBranch)) throw executionError('UAT_MERGE_BRANCH_INVALID')
+    if (!input.request?.trim() || !input.targetId?.trim() || !validSha(input.headCommitSha)
+      || !Number.isInteger(input.pullRequestNumber) || input.pullRequestNumber < 1
+      || !Array.isArray(input.requiredChecks) || !input.localEvidence
+      || !Array.isArray(input.evidenceRefs) || !input.evidenceRefs.length) throw executionError('UAT_MERGE_REQUIREMENT_INVALID')
+    return input
+  }
+  const inspect = workflow.nodes.find(node => node.id === 'inspect-preflight'), original = inspect.execute
+  inspect.execute = async context => {
+    const result = await original(context)
+    if (result.observation.facts.localAcceptancePassed !== true) throw executionError('UAT_LOCAL_EVIDENCE_REQUIRED')
+    return result
+  }
+  return workflow
+}
+
+/** main 合并是独立上线任务，不能复用开发 PR 的目标和通过状态。 */
+export function createMainPrMergeTaskWorkflow({ adapter }) {
+  const workflow = createLegacyUatPrMergeTaskWorkflow({ adapter }), freeze = workflow.nodes[0], originalFreeze = freeze.execute
+  workflow.id = 'task-main-pr-merge'
+  freeze.execute = async context => {
+    if (context.input.baseBranch !== 'main') throw executionError('MAIN_MERGE_BRANCH_INVALID')
+    return originalFreeze(context)
+  }
+  workflow.nodes.find(node => node.id === 'inspect-preflight').execute = async ({ input, signal }) => {
+    signal?.throwIfAborted()
+    const observation = await adapter.inspect({ phase: 'preflight', requirement: structuredClone(input) })
+    signal?.throwIfAborted()
+    const facts = observation?.facts
+    if (observation?.status !== 'confirmed' || !observation.evidenceRefs?.length
+      || ['headTreeVerified', 'checksPassed', 'baseBound', 'uatVerified', 'businessAcceptancePassed', 'humanApproved'].some(key => facts?.[key] !== true)
+      || !/^[a-f0-9]{64}$/.test(facts.approvalReceiptDigest ?? '')) throw executionError('MAIN_MERGE_PREFLIGHT_UNCONFIRMED')
+    return { requirement: input, observation }
+  }
+  workflow.nodes.find(node => node.id === 'prepare-merge').execute = async ({ input, runId, generation, requirementDigest, signal }) => {
+    signal?.throwIfAborted()
+    const prepared = await adapter.prepareOperation({ requirement: structuredClone(input.requirement), observation: structuredClone(input.observation), runId, generation, requirementDigest })
+    signal?.throwIfAborted()
+    if (prepared?.action !== 'external' || prepared.workflowKind !== 'main-pr-merge' || prepared.operation !== 'merge-main-pr'
+      || prepared.runId !== runId || prepared.generation !== generation || prepared.requirementDigest !== requirementDigest
+      || prepared.targetDigest !== executionDigest(input.requirement) || prepared.expected?.baseBranch !== 'main'
+      || prepared.expected?.headCommitSha !== input.requirement.headCommitSha || prepared.expected?.pullRequestNumber !== input.requirement.pullRequestNumber
+      || prepared.expected?.approvalReceiptDigest !== input.observation.facts.approvalReceiptDigest) throw executionError('MAIN_MERGE_OPERATION_IDENTITY_INVALID')
+    return { state: input, prepared }
+  }
+  const verify = workflow.nodes.find(node => node.id === 'verify-source'), originalVerify = verify.execute
+  verify.execute = async context => {
+    const result = await originalVerify(context)
+    if (result.baseBranch !== 'main' || result.pullRequestNumber !== context.input.prepared.expected.pullRequestNumber) throw executionError('MAIN_MERGE_READBACK_UNCONFIRMED')
+    return result
+  }
+  for (const node of workflow.nodes) node.rulesDigest = executionDigest({ previous: node.rulesDigest, workflowKind: 'main-pr-merge' })
+  return workflow
 }

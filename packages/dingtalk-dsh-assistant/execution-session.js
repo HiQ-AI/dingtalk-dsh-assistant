@@ -111,10 +111,10 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect }) {
       })
       if (definition.allowedTools.includes('engineering_repo_inspect')) agentCtx.tools.register({
         name: 'engineering_repo_inspect',
-        description: '在本任务受管仓库中按需列出路径、搜索文本或分段读取文件；返回完整文件 SHA256 用于修改校验。',
+        description: '在本任务受管仓库中列出路径、搜索文本或分段读取文件；read 的 limit 最大16000字符，list/search 最大200条，按 nextOffset 分页。返回完整文件 SHA256 用于修改校验。status=not_found 或 invalid_limit 时按 suggestedCall 纠正后继续，不代表节点失败。',
         parameters: { type: 'object', properties: {
-          operation: { type: 'string', enum: ['list', 'search', 'read'] }, query: { type: 'string' }, path: { type: 'string' },
-          offset: { type: 'integer' }, limit: { type: 'integer' },
+          operation: { type: 'string', enum: ['list', 'search', 'read', 'repair'] }, query: { type: 'string' }, path: { type: 'string' },
+          source: { type: 'string', enum: ['current', 'previous'] }, offset: { type: 'integer' }, limit: { type: 'integer' },
         }, required: ['operation'], additionalProperties: false },
         output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
         async execute(args, exec) {

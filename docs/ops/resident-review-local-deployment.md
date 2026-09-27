@@ -1,5 +1,7 @@
 # 常驻通知修复本地部署
 
+工程只读工具分页上限为read 16000字符、list/search 200条。超限返回可纠正参数结果；部署后须检查真实会话能够缩小分页继续读取，不能仅凭工具注册成功判断。已停止的旧会话保留失败记录，重新执行走正式任务入口。
+
 工程发现流程 v6 将文件定位和读取合入 `inspect-and-propose`，通过受管仓库的只读工具按需列路径、搜正文、分段读文件，不再向模型灌入整仓目录清单。旧 v5 任务保留原定义运行；仅当 `apply-changes` 因 `EDIT_PREPARED_INVALID` 等待、节点均已排空、前置准备成功且没有文件修改或交付效果时，启动时事务性重编排同一运行的新代次，保留旧节点历史，并一次性补足新节点的有限领取次数。已产生编辑效果的任务不得重编排。切换后回读运行定义版本、当前节点顺序、旧节点历史、领取上限与实际执行进展；只见迁移回执或 Task 显示运行中不算完成。若迁移门禁拒绝，保留原运行和存储，先排查原因，不手工改 SQLite 或重复创建 Task。
 
 工程目录的 `purpose` 和 `routingTerms` 向意图节点说明各仓库职责，且不改变旧运行冻结的执行配置摘要。唯一关键词命中其它仓库时，新任务接纳和仓库重发均拒绝。v7 对空 `changes` 给出 `ENGINEERING_NO_CHANGES_PROPOSED`；v8 支持精确局部替换，由 Host 校验原文件 SHA256、唯一原文并合成完整文件；v6/v7 历史定义保持原样。对无编辑及交付效果、节点排空且等待在空方案的旧工程运行，可由本机同源 Web 操作者调用 `POST /tasks/<taskId>/reissue-repository`，正文为 `{"repositoryId":"dataset","requestId":"唯一重发请求标识"}`。入口按 `workflow.webActorId` 和任务访问权限校验，事务保留原任务和节点历史，新增代次从准备节点执行；同仓库仅允许 v6/v7 空方案升级一次到 v8，重复 requestId 幂等。先核对目标仓库已准入、实际等待原因及效果账，再调用一次；调用后回读任务 ID、代次、版本、当前节点及仓库读取工具结果。业务代码只能由插件任务流修改，本部署流程不得替它编辑业务仓库。
@@ -186,3 +188,79 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 方案编写及方案检查节点只显示实际方案工件路径，不展示正文、文件数量、展开或下载入口。当前文档与补丁持久化在 JSON 工件中，因此显示真实 JSON 路径，不虚构独立 Markdown 文件路径；其余节点保持原展示。
 
 新工程流程 v10 将“构建检查”和“业务验收”拆成两个节点。构建成功只允许进入业务验收；缺少受信验收用例、没有实际值或实际与预期不符时，业务验收保持等待，阻止后续提交，不自动循环重试。验收通过展示验收项、预期、实际和结论。既有 v1–v9 记录保持原定义，不补造历史业务验收节点；v10 用于新任务与受管重发。部署仍需双包更新、备份及独立回读，无 schema 迁移。
+
+## 本机重新执行已交付的工程任务
+
+`POST /tasks/<原taskId>/rerun` 用于本机同源 Web 操作者将已结束任务接入最新流程。需配置 workflow.webActorId，且对原任务有权限。请求包含 requestId、expectedRunId（原任务当前最新运行）、objective、acceptanceCriteria、repositoryId、uatEnvironment，以及 stages 固定为 task-engineering / task-uat-pr-merge / task-uat-deployment、mergeTargetId、deployTargetId；constraints 可选。目标必须在受信白名单中。
+
+Host 原子保存新的 taskId、真实 Web 来源和 rerunOfTaskId，保留旧运行及外部效果。相同操作者、原任务、requestId 的相同正文幂等，正文冲突拒绝；原任务仍活动或 expectedRunId 已变化则拒绝。开发分支从原任务可信记录复用，任务身份不等于新建开发分支。
+
+新的任务只在 Web 留下进展与结果，不继承钉钉通知来源；补充、取消及重启恢复通过正式任务控制事件处理。入口接纳并不代表工程、业务验收或 UAT 提测已完成，需逐阶段回读。
+
+### 工程输入依赖修复后的重执行
+
+新工程 v14 显式声明方案、应用修改节点读取的 prepare-generation 依赖，旧 v13 冻结定义不改写。已因映射输入错误等待且尚无编辑/推送效果的运行，应通过任务 cancel 正式入口停止，回读控制状态 cancelled、所有运行终态和无未决效果后安装新包；再从原任务以新 requestId 发起完整重执行，保留原分支和 PR 身份。不得直接修改控制数据库或将原失败节点改成成功。
+
+C 盘空间不足时，本轮保留计划任务定义，以原 start-web.ps1 和进程级 D 盘 TEMP/TMP 启动。安装回读必须分别报告 Web/control 与钉钉监听；degraded 不能记为整体健康通过。直接启动不等于计划任务配置已更新，空间恢复后仍需另行核对计划任务启动。
+
+取消回读需同时检查 Task controlState=cancelled、执行节点 drained，以及任务投影 state=completed / outcome=cancelled 且无 waitingReason；旧 Owner blocked 记录保留审计但不再调度。controlState=cancelling 只代表请求已接纳，仍须等待排空。
+
+
+## Owner 修复版本受控部署
+
+使用验收目录 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1`，先 `-Check`，参数必须提供精确新包 `-Package`、双项目配置 `-Bundle`、合并策略 `-MergePolicy`、当前 profile 摘要 `-ExpectedProfileSha256`、包摘要 `-ExpectedPackageSha256`、新的 `docs/tmp/` 证据目录 `-EvidenceDirectory`。自检不创建证据目录，不改配置或启动实例。去掉 `-Check` 才部署；仅维护人员执行。
+
+允许已排空的 waiting 任务留待新版本恢复，但 running 节点/Owner、未排空节点或 starting/executing/unknown 效果一律阻断。准备失败遗留 unknown 先按专用单次对账规程处理，不能靠部署放宽门禁。脚本要求原实例具备正式维护接口；已离线或尚无维护接口的旧实例拒绝使用此自动部署路径，须先完成独立停机与恢复方案，不能退回“读取排空后强停”的有竞争路径。
+
+部署锁定精确双端口进程身份，离线取得原生 owner SQLite 独占锁后备份控制库、工件、Domain 与 profile；逐一对比完整源/备份清单，生成包含 WAL 最新状态的一致 SQLite 备份 verified-control.sqlite，并独立执行 integrity_check、foreign_key_check、逐表逻辑摘要与工件引用闭包校验。恢复使用 verified-control.sqlite；不得只复制旧主库而遗漏 WAL。输入包与配置摘要漂移拒绝继续。原生 CLI 安装后比较包内全部源码、工作区源码与安装内容，原生 CAS 工具更新配置。启动沿用原 `scripts/start-web.ps1`，仅该进程树使用 D 盘 TEMP，不修改计划任务。重新核对新 PID、双端口、在线 Task 身份、旧节点/终态 Run/legacy 任务摘要与配置；等待任务恢复后的新进展允许改变，旧历史必须保留。部署回读不代表业务验收或 UAT 提测通过。
+
+## 前端审查草稿专项检查补入（单次配置修订）
+
+`docs/acceptance/topic-context-completeness/scripts/configure-frontend-review-checks.mjs` 仅修改 `dataset-web` 的 `dataset-build.steps`：锁定 Node 22，在原 yarn install 后、build 前执行三个文件：`review-opinion-draft-persistence.test.cjs`、`audit-review-draft-storage.test.cjs`、`audit-reviewer-enhancements.test.cjs`（均在 `tests/`）。测试失败立即阻断该检查。原检查版本与其他字段、dataset 后端、`!!js` 和其他原文保持不变；新工程任务冻结更新后的完整 checks，旧终态不恢复。
+
+先计算当前 profile SHA256，再执行零写检查：
+
+```powershell
+$profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowerInvariant()
+& D:/soft/node-v24.19.0/node.exe docs/acceptance/topic-context-completeness/scripts/configure-frontend-review-checks.mjs --check --expected-sha256 $profileSha
+```
+
+维护人员等待后端安全排空、停止实例后，使用同一预期摘要将 `--check` 改为 `--apply`。脚本需要原生 owner SQLite 独占锁，拒绝运行中/未排空节点与 Owner 或未知效果；共享 profile 更新锁、CAS、备份、原子替换和独立回读均须成功。摘要变化必须重新审查并 check，不能用旧结果直接写。重复相同配置幂等。禁止为了此配置更新停止仍在执行的后端。
+
+2026-09-27：隔离测试 `test/configure-frontend-review-checks.test.js` 2/2 通过（原文稳定、幂等、零写、备份、锁冲突、并发摘要漂移）；真实 `--check` 通过，未 apply。
+
+启动等待默认 `-WaitSeconds 300`，允许 1–600 秒。超出本次等待仍未就绪返回 `status=pending / ready=false / restartAttempted=false`，保存启动 PID、时间、包/profile 摘要与日志摘要，不宣称部署失败且不重启。使用原全部参数加 `-Readback` 接续；此模式只读取已有 `launch.json` 和控制快照、实时双端口及进程父子身份、HTTP、安装内容和历史，零写且不再安装/应用配置/启动。端口已监听但 HTTP 尚未完成也保持 pending；身份或证据不符则明确拒绝。旧工具没有 launch.json 的部署不能伪造此记录接续，使用原部署证据人工审查。
+
+部署前按实际备份范围统计空间，要求 D 盘至少容纳备份体积 + 包体积×10 + 1 GiB 余量；空间不足拒绝，不删文件。2026-09-27 本轮只读测量备份约 553 MB、D 剩余约 3.42 GB，未含新包时基线所需约 1.63 GB；新包准备后仍须执行完整 `-Check`。启动回读隔离测试 `pwsh -NoProfile -File test/deploy-owner-repair.test.ps1` 2/2 通过。
+
+### 维护屏障与部署许可
+
+正式部署先通过 `POST /runtime/maintenance` 开启持久维护模式，阻止节点、Owner、效果、消息执行及通知的新领取；入站仍可落队列。已开始的操作允许收口，未知外部效果必须先对账。排空后通过 `/runtime/maintenance/seal` 原子封存停机许可；此后旧进程不能退出维护，避免最后快照与停机之间重新派发。封存后遇到错误保持维护，不自动重复停机或重启。
+
+新实例默认继承维护模式。完成安装内容、旧账、恢复问题数和认证 Web 回读后，才通过 `/runtime/maintenance/resume` 恢复派发；Host 自己校验进程身份已改变，调用者不能指定进程身份。`-Readback` 始终零写，返回 ready 也可能仍在维护；需要恢复时以相同输入执行 `-Resume`，该模式先完整回读再恢复。原始配置摘要及所有输入必须匹配 launch.json，不能换包或换配置接续。
+
+`GET /health` 的 HTTP 200 不是充分条件：必须 recoveryIssueCount=0，Web 需完成令牌交换并以签名 Cookie 回读页面。报告分别记录控制面和 inboundProcessing；已知钉钉降级不能写成整体健康。
+
+### 本轮新定义与旧运行的部署边界
+
+2026-09-27 的 R1–R10 修复改变本地验收 runner 实现身份及 UAT adapter 规则摘要。前端 waiting Run 与两条待提测 plan 仍绑定旧冻结定义，直接升级会拒绝恢复，不能改写其 digest 或把旧业务回执当新门禁已通过。正式切换前须通过任务控制入口取消旧待执行计划并排空，保留旧成功节点和回执；新配置、新 requestId 重新接纳开发及 UAT 链，复用原开发分支和原 PR，重新生成新门禁证据。
+
+当前旧安装包没有维护接口；磁盘余量须每次预检实时核对，本轮后续回查 D 盘已恢复空间。本轮源码验证并不代表已经完成首次切换。不得因此降低磁盘门禁、删除已有文件、伪造维护许可或热改旧冻结配置。
+## 首次升级旧版：Bootstrap 维护切换
+
+仅当旧实例 `/runtime/maintenance` 明确返回 404 时使用部署脚本 `-Bootstrap`。网络失败、502 或已支持维护接口均不允许降级到此路径。先通过正式任务入口取消本轮旧任务并读回；仍有活动/未知操作时不升级。所有本机 HTTP 使用 `-NoProxy`。
+
+部署参数在既有包、bundle、merge policy、双 SHA、证据目录之外，必须包含 `-ChecksProposal <ABS>`；其摘要同样参与预检、安装和 `-Readback`/`-Resume` 接续校验。先以同参数加 `-Bootstrap -Check` 运行零写检查，执行时去掉 `-Check`。
+
+1. 核对旧 PID、创建时间和 3080/18998 归属。备份原 profile 到本次证据目录，以 SHA CAS 追加固定 `disabled:true` patch，保留其他配置及 `!!js` 原文；与 configure 工具共用 `.local-acceptance.lock`。
+2. 由现有 DSH live profile reload 正式卸载 Resident。等待 18998 关闭且 3080 仍属于旧 PID，再持续取得 `control.sqlite.owner.sqlite` 的 SQLite EXCLUSIVE 锁。端口关闭本身不是排空证明。锁内核验控制账 busy=0，核对旧 PID 后停止旧 DSH；至备份、安装、配置及哈希验证完成一直持锁。
+3. 保持 Resident profile 禁用。释放外部 guard 后，通过已安装新版 `openExecutionStore` 正式命令依次 enter、seal；该 CLI 自身取得 owner 锁、持有真实进程 nonce，并在 `finally` 关闭。此为首次升级的离线维护记录，不声称旧 Host 取得过 seal，也不 SQL 修改运行库。
+4. 仅精确移除本工具追加的禁用块，保留新配置，启动新 Host。持久维护状态使恢复与领取保持禁止；新进程健康、历史、安装包和本次 `start.stdout.log` 中认证 Web 入口核验后，按既有 `/resume` 正式恢复。
+
+任一步失败保持对应禁用或停机状态，不自动还原配置、不重复安装/启动。副本备份中的 profile 含禁用块，原始未修改 profile 另在证据目录 `profile-original.yml`；恢复时必须逐项核对哈希并先证明没有另一个 Host。离线 seal CLI 仅供此受控部署路径使用，不作为在线维护接口；其 `--check` 不模拟或签发许可，整体零写预检由部署 `-Bootstrap -Check` 提供。禁止对旧 DSH 发送 SIGTERM 后把退出当排空证明：其 disposer 有 5 秒强退上限。
+
+### Bootstrap 完整卸载见证补充
+
+独占工作流 owner 锁只能证明 `workflow.close()` 已完成，旧 Resident 随后仍会等待 `runtime.close()` 排空遗留叶子、通知和存储。因此首次切换先添加受信临时 witness 插件并回读 `bootstrap-ready.json`（本次 nonce、旧 PID、精确 entryId）；再追加 Resident 禁用 patch。见证器只接纳原生 Loader 在 `await fiber.dispose()` 完成后发出的 `loader/partial-dispose`，且必须匹配指定模块、disabled=true、fiber 已移除、disposing=0。`bootstrap-disposed.json` 成立后才取得 owner 锁并停止旧 Host。任意其他 entry、仍在 dispose、旧 nonce/PID 均不能作为许可。
+
+现有 `pluginInventory/list` 不能替代此见证：Loader 在 await 前就先清空 `entry.fiber`，因此 `fiberPhase=null` 可能仍在排空。见证器仅记录生命周期证明，不读取业务数据或派发任务。安装与配置更新完成后，仅删除工具生成的两个精确末尾块（witness + disabled），不还原旧配置。就绪或完整退出回执超时，保持原状态等待人工核对，绝不强停。

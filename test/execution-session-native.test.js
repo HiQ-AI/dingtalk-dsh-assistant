@@ -47,7 +47,15 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
       requests.push(JSON.parse(JSON.stringify(options)))
       const next = typeof script === 'function' ? script(requests.length) : script[requests.length - 1]
       if (!next) throw new Error('unexpected model continuation')
-      if (next.name) {
+      if (Array.isArray(next)) {
+        for(const [index,call] of next.entries()) {
+          const id=`call-${requests.length}-${index}`,args=JSON.stringify(call.args??{})
+          yield {type:'block-start',index,blockType:'tool-call'}
+          yield {type:'tool-call-delta',index,id,name:call.name,argumentsDelta:args}
+          yield {type:'block-end',index,block:{type:'tool-call',id,name:call.name,arguments:args}}
+        }
+        yield {type:'finish',reason:{kind:'tool-calls'}}
+      } else if (next.name) {
         const id = 'call-' + requests.length, args = JSON.stringify(next.args ?? {})
         yield { type: 'block-start', index: 0, blockType: 'tool-call' }
         yield { type: 'tool-call-delta', index: 0, id, name: next.name, argumentsDelta: args }
@@ -86,6 +94,48 @@ async function processPhase(root, phase) {
 if (process.argv[2] === '--execution-session-child') {
   await processPhase(process.argv[3], process.argv[4])
 } else {
+  test('原生工具缺失路径为结构化结果，不停止queued读取；模型list纠正后能提交', async t => {
+    const calls=[],inspect=args=>({name:'engineering_repo_inspect',args})
+    const h=await host({script:[[inspect({operation:'read',path:'src/components/Panel.vue'}),inspect({operation:'read',path:'src/other.vue'})],
+      inspect({operation:'list',query:'Panel.vue'}),inspect({operation:'read',path:'src/views/review/components/Panel.vue'}),submit('corrected')],
+      repositoryInspect:async(_binding,args)=>{
+        calls.push(args)
+        if(args.path==='src/components/Panel.vue')return {status:'not_found',code:'ENGINEERING_READ_NOT_FOUND',path:args.path,suggestedCall:{operation:'list',query:'Panel.vue'}}
+        if(args.operation==='list')return {paths:['src/views/review/components/Panel.vue'],total:1,nextOffset:null}
+        return {path:args.path,text:'verified source',expectedHash:'a'.repeat(64),nextOffset:null}
+      }})
+    t.after(()=>h.close())
+    const result=await drive(h,{definition:definition({allowedTools:['engineering_repo_inspect']})})
+    assert.equal(result.status,'submitted');assert.equal(result.output.answer,'corrected');assert.equal(calls.length,4)
+    assert.equal(calls[1].path,'src/other.vue')
+    const serialized=JSON.stringify((await h.ctx.sessionPersistence.inspect(binding().sessionId)).events)
+    assert.ok(serialized.includes('ENGINEERING_READ_NOT_FOUND'));assert.ok(!serialized.includes('execution_attempt_stopped'))
+  })
+  test('原生工具安全门禁及普通异常仍停止会话和queued读取，不白名单泛化错误',async t=>{
+    for(const code of ['ENGINEERING_READ_SCOPE_INVALID','ENGINEERING_READ_PATH_INVALID','WORKSPACE_LINK_UNSUPPORTED','EACCES','ENGINEERING_READ_STALE']){
+      let calls=0
+      const h=await host({script:[[{name:'engineering_repo_inspect',args:{operation:'read',path:'src/x'}},{name:'engineering_repo_inspect',args:{operation:'read',path:'src/y'}}],submit('must not submit')],repositoryInspect:async()=>{calls++;throw Object.assign(Error(code),{code})}})
+      t.after(()=>h.close())
+      const result=await drive(h,{definition:definition({allowedTools:['engineering_repo_inspect']})})
+      assert.deepEqual(result,{status:'no_submission',reason:'execution_tool_failed'});assert.equal(calls,1);assert.equal(h.requests.length,1)
+    }
+  })
+  test('原生读取超限提示后可在同会话缩小分页并提交', async t => {
+    const calls = []
+    const h = await host({ script: [
+      { name: 'engineering_repo_inspect', args: { operation: 'read', path: 'src/value.txt', limit: 19000 } },
+      { name: 'engineering_repo_inspect', args: { operation: 'read', path: 'src/value.txt', limit: 16000 } }, submit('corrected-limit')],
+      repositoryInspect: async (_binding, args) => {
+        calls.push(args)
+        return args.limit > 16000 ? { status: 'invalid_limit', code: 'ENGINEERING_READ_LIMIT_EXCEEDED', maxLimit: 16000,
+          suggestedCall: { ...args, limit: 16000 } } : { text: 'source', nextOffset: null, expectedHash: 'a'.repeat(64) }
+      } })
+    t.after(() => h.close())
+    const result = await drive(h, { definition: definition({ allowedTools: ['engineering_repo_inspect'] }) })
+    assert.equal(result.status, 'submitted'); assert.equal(result.output.answer, 'corrected-limit')
+    assert.deepEqual(calls.map(args => args.limit), [19000, 16000])
+    assert.ok(JSON.stringify(h.requests[1]).includes('ENGINEERING_READ_LIMIT_EXCEEDED'))
+  })
   test('工程只读工具在原生节点会话中可用并绑定当前运行身份', async t => {
     const calls = []
     const h = await host({ script: [{ name: 'engineering_repo_inspect', args: { operation: 'list', query: 'value' } }, submit('done')],

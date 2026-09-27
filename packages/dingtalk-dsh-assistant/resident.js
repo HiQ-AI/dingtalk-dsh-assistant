@@ -202,6 +202,10 @@ export async function apply(ctx, config = {}) {
     runtime.getWorkflowTopicContext = args => workflow.topicContext(args)
     runtime.getWorkflowCatalog = () => workflow.catalog()
     runtime.isWorkflowTask = taskId => workflow.isTask(taskId)
+    runtime.getWorkflowMaintenance = () => workflow.maintenance()
+    runtime.changeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.sealWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'seal')
+    runtime.resumeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'resume')
     runtime.submitWorkflowTask = args => {
       if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
       return workflow.submitWebTask(args, { channel: 'web', actorId: workflowConfig.webActorId })

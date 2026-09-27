@@ -16,6 +16,52 @@ import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/exec
 import { createGitDelivery } from '../packages/dingtalk-dsh-assistant/execution-git.js'
 import { createGithubPullRequests } from '../packages/dingtalk-dsh-assistant/execution-pr.js'
 import { readEngineeringDeliveryProof } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
+import { createEngineeringBranchReuseWorkflow, createEngineeringUatBaselineWorkflow, createEngineeringMappedBaselineWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
+
+test('v13冻结目标树并强制冲突在范围内、被实际读取和纳入修改',async()=>{
+  const targetCommit='b'.repeat(40),mergeTree='c'.repeat(40),baseCommit='a'.repeat(40)
+  let conflictPaths=['src/value.js'],didRead=false
+  const workflow=createEngineeringUatBaselineWorkflow({provider:'test',model:'test',discovery:{allowedPrefixes:['src/']},
+    project:{targetCommit,taskBase:baseCommit,targetBranch:'feature/uat3-base',developmentBranch:'codex/existing',branchDisposition:'reused'},
+    workspaceAdapter:{prepare:async value=>({...value,targetCommit,taskBase:baseCommit,mergeTree,conflictPaths,directory:'/isolated',sourceRepository:'/source'}),reconcile:async()=>({status:'succeeded'})},
+    editAdapter:{prepare:async()=>({action:'edit'})},assertConflictReads:async()=>{if(!didRead)throw Error('ENGINEERING_CONFLICT_NOT_READ')},
+    checks:[{id:'check',version:'1',run:async()=>({passed:true})}],adapterIdentity:'test'})
+  assert.equal(workflow.version,'13');assert.ok(defineExecutionWorkflow(workflow).digest)
+  const requirement={request:'修复',baseCommit,constraints:[],editablePaths:[],expectedRemoteSha:baseCommit}
+  const context={input:requirement,runId:'r',generation:1,requirementDigest:'a'.repeat(64),perform:async({prepared})=>({status:'succeeded',directory:prepared.directory,baseCommit})}
+  const node=id=>workflow.nodes.find(item=>item.id===id)
+  const output=await node('prepare-workspace').execute(context)
+  assert.deepEqual(output.workspace.conflictPaths,conflictPaths)
+  const input=node('inspect-and-propose').mapInput({requirement,dependencyOutputs:{'prepare-workspace':output}})
+  assert.equal(input.baselineMerge.mergeTree,mergeTree)
+  await assert.rejects(node('apply-changes').execute({...context,input:{requirement,proposal:{changes:[],replacements:[]}}}),/CONFLICT_NOT_PROPOSED/)
+  const proposed={changes:[{path:'src/value.js',expectedHash:'a'.repeat(64),content:'resolved'}],replacements:[]}
+  await assert.rejects(node('apply-changes').execute({...context,input:{requirement,proposal:proposed}}),/CONFLICT_NOT_READ/)
+  didRead=true;await node('apply-changes').execute({...context,input:{requirement,proposal:proposed}})
+  conflictPaths=['outside.js']
+  await assert.rejects(node('prepare-workspace').execute(context),/CONFLICT_SCOPE_UNSUPPORTED/)
+})
+
+test('v12 工作目录产出区分已有开发分支与提测目标', async () => {
+  for (const branchDisposition of ['reused', 'created']) {
+    const workflow = createEngineeringBranchReuseWorkflow({ provider: 'test', model: 'test', discovery: { allowedPrefixes: ['src/'] },
+      project: { developmentBranch: 'codex/existing', branchDisposition, targetBranch: 'feature/uat2-base' },
+      workspaceAdapter: { prepare: async input => ({ ...input, directory: '/isolated', sourceRepository: '/source' }) },
+      editAdapter: {}, checks: [{ id: 'check', version: '1', run: async () => ({ passed: true, log: '' }) }], adapterIdentity: 'test' })
+    assert.equal(workflow.version, '12')
+    assert.ok(defineExecutionWorkflow(workflow).digest)
+    const output = await workflow.nodes.find(node => node.id === 'prepare-workspace').execute({
+      input: { request: '修改内容', constraints: [], editablePaths: [], baseCommit: 'a'.repeat(40) }, perform: async ({ prepared }) => ({ status: 'succeeded', directory: prepared.directory, baseCommit: prepared.baseCommit }) })
+    assert.equal(output.workspace.developmentBranch, 'codex/existing')
+    assert.equal(output.workspace.branchDisposition, branchDisposition)
+    assert.equal(output.workspace.targetBranch, 'feature/uat2-base')
+    assert.equal(output.workspace.kind, 'independent-git-repository')
+    const continued = await workflow.nodes.find(node => node.id === 'prepare-workspace').execute({
+      input: { request: '继续修改', constraints: [], editablePaths: [], baseCommit: 'b'.repeat(40), expectedRemoteSha: 'b'.repeat(40) },
+      perform: async ({ prepared }) => ({ status: 'succeeded', directory: prepared.directory, baseCommit: prepared.baseCommit }) })
+    assert.equal(continued.workspace.branchDisposition, 'reused')
+  }
+})
 
 test('新工程节点保存起点、目录回执和方案文档，缺失覆盖的方案不得进入修改', async () => {
   const project = { repository: 'org/repo', sourceRepository: '/source', workBranch: 'codex/task', targetBranch: 'main' }
@@ -260,4 +306,101 @@ test('业务验收独立于构建，缺用例或实际结果不匹配时阻止�
   await writeFile(join(source, 'value.txt'), '0.001 t')
   const changed = await build(restarted)
   await assert.rejects(accept(restarted, { ...changed, acceptance: accepted.acceptance }), /ENGINEERING_ACCEPTANCE_FAILED/)
+})
+
+
+test('v14真实controller按需检索依次进入方案和应用，v13冻结合同不改', { timeout: 120000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-discovery-mapping-')), source = join(directory, 'source')
+  await mkdir(join(source, 'src'), { recursive: true })
+  const exec = promisify(execFile), git = async (...args) => (await exec('git', ['-C', source, ...args], { windowsHide: true })).stdout.trim()
+  await git('init', '-b', 'main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid')
+  await writeFile(join(source, 'src/value.txt'), 'old'); await git('add', '.'); await git('commit', '-m', 'base')
+  const baseCommit = await git('rev-parse', 'HEAD')
+  for (const version of ['13', '14']) {
+    const root = join(directory, version)
+    await mkdir(join(root, 'workspace'), { recursive: true })
+    const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'mapping', initialize: true })
+    t.after(() => store.close())
+    const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+    const workspaceAdapter = await createManagedWorkspaces({ root: join(root, 'workspace'), sourceRepository: source, targetCommit: baseCommit, taskBase: baseCommit })
+    const editAdapter = createManagedEdits({ workspaceAdapter })
+    const options = { provider: 'test', model: 'test', discovery: { allowedPrefixes: ['src/'] },
+      prepareGeneration: async ({ input }) => ({ ...input, request: '派生要求' }),
+      project: { targetCommit: baseCommit, taskBase: baseCommit, targetBranch: 'feature/uat2-base', uatEnvironment: 'uat2', developmentBranch: 'codex/test', branchDisposition: 'created' },
+      workspaceAdapter, editAdapter, checks: [{ id: 'check', version: '1', run: async () => ({ passed: true }) }], adapterIdentity: 'mapping',
+      localAcceptance: { scenarios: [{ id: 'value', description: '读取值' }] } }
+    const previousDigest = defineExecutionWorkflow(createEngineeringUatBaselineWorkflow(options)).digest
+    const workflow = (version === '14' ? createEngineeringMappedBaselineWorkflow : createEngineeringUatBaselineWorkflow)(options)
+    assert.equal(defineExecutionWorkflow(createEngineeringUatBaselineWorkflow(options)).digest, previousDigest)
+    // 保留真实顺序和所有输入映射，结束于 apply；本用例不运行验收服务或外部交付。
+    workflow.nodes = workflow.nodes.slice(0, workflow.nodes.findIndex(node => node.id === 'apply-changes') + 1)
+    const apply = workflow.nodes.at(-1), applyExecute = apply.execute
+    apply.execute = context => { assert.equal(context.input.requirement.request, '派生要求'); return applyExecute(context) }
+    let proposals = 0
+    const sessions = { async run({ input, onSessionBound, onResult }) {
+      await onSessionBound()
+      if (input.criteria) return onResult({ cases: input.criteria.map(item => ({ criterionId: item.id, scenarioId: 'value', steps: ['读取'], expected: 'new', parameters: {} })) })
+      proposals++
+      assert.equal(input.request, '派生要求'); assert.equal(input.baseCommit, baseCommit)
+      assert.equal(input.baselineMerge.taskBase, baseCommit)
+      const { createHash } = await import('node:crypto')
+      onResult({ document: { name: '修改方案.md', markdown: '修改 src/value.txt 并核对其内容。' },
+        changes: [{ path: 'src/value.txt', expectedHash: createHash('sha256').update('old').digest('hex'), content: 'new' }], replacements: [] })
+    }, async cancel() {}, async close() {} }
+    const delivery = createExecutionDelivery({ store, artifacts, workspaceAdapter, editAdapter, authorize: async () => ({ principalId: 'test', authorizationRef: 'test' }) })
+    const controller = createExecutionController({ store, artifacts, sessions, delivery, readTools: ['engineering_repo_inspect'], workflows: [workflow] })
+    try {
+      await controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: workflow.id,
+        input: { request: '修改', constraints: [], baseCommit, editablePaths: [], acceptanceCriteria: ['值更新'] } })
+      if (version === '13') {
+        await assert.rejects(controller.whenIdle('run'), /reading 'requirement'/)
+        assert.equal(proposals, 0)
+      } else {
+        const state = await controller.whenIdle('run')
+        assert.equal(state.run.status, 'succeeded', JSON.stringify(await controller.state('run')))
+        assert.equal(proposals, 1)
+        for (const id of ['prepare-workspace', 'inspect-and-propose', 'validate-proposal', 'apply-changes']) assert.equal(state.nodes.find(node => node.nodeId === id).status, 'succeeded')
+        const output = await artifacts.read(state.nodes.find(node => node.nodeId === 'prepare-workspace').outputRef)
+        assert.equal(await readFile(join(output.workspace.directory, 'src/value.txt'), 'utf8'), 'new')
+      }
+    } finally { await controller.close(); await store.close() }
+  }
+})
+
+test('v15无需修改保留源码并重新检查；缺读取、冲突、工作树漂移均阻断，v14仍拒绝空方案', async t => {
+  const { createEngineeringRevalidationWorkflow } = await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+  const { describeTaskNodeOutput } = await import('../packages/dingtalk-dsh-assistant/workflow-service.js')
+  const root=await mkdtemp(join(tmpdir(),'dsh-no-change-')),source=join(root,'source')
+  await mkdir(join(source,'src'),{recursive:true});await mkdir(join(root,'work'))
+  const exec=promisify(execFile),git=async(...args)=>(await exec('git',['-C',source,...args],{windowsHide:true})).stdout.trim()
+  await git('init','-b','main');await git('config','user.name','Test');await git('config','user.email','test@example.invalid')
+  await writeFile(join(source,'src/value.txt'),'already correct');await git('add','.');await git('commit','-m','base')
+  const baseCommit=await git('rev-parse','HEAD'),workspaceAdapter=await createManagedWorkspaces({root:join(root,'work'),sourceRepository:source,targetCommit:baseCommit,taskBase:baseCommit})
+  const scope={runId:'run',generation:1,requirementDigest:'a'.repeat(64),baseCommit},workspace=await workspaceAdapter.prepare(scope)
+  await workspaceAdapter.execute(workspace)
+  let read=false,checks=0,edits=0
+  const options={provider:'test',model:'test',discovery:{allowedPrefixes:['src/']},project:{targetCommit:baseCommit,taskBase:baseCommit},workspaceAdapter,
+    editAdapter:{prepare(){edits++;throw Error('must not edit')}},assertConflictReads:async({paths})=>{assert.deepEqual(paths,['src/value.txt']);if(!read)throw Error('ENGINEERING_CONFLICT_NOT_READ')},
+    checks:[{id:'build',version:'1',run:async()=>{checks++;return{passed:true,log:'build passed'}}}],adapterIdentity:'no-change'}
+  const oldDigest=defineExecutionWorkflow(createEngineeringMappedBaselineWorkflow(options)).digest
+  const workflow=createEngineeringRevalidationWorkflow(options),node=id=>workflow.nodes.find(n=>n.id===id)
+  assert.equal(workflow.version,'15');assert.equal(defineExecutionWorkflow(createEngineeringMappedBaselineWorkflow(options)).digest,oldDigest)
+  const proposal={changeDisposition:'no-change',changes:[],replacements:[],reviewedPaths:['src/value.txt'],reason:'已读取，现有实现满足要求',document:{name:'修改方案.md',markdown:'src/value.txt 现有实现正确，重新构建验收'}}
+  const context={...scope,input:{requirement:{baseCommit},proposal},perform:()=>{throw Error('must not perform edit')}}
+  await assert.rejects(node('apply-changes').execute(context),/ENGINEERING_CONFLICT_NOT_READ/)
+  read=true;const result=await node('apply-changes').execute(context)
+  assert.equal(result.changeDisposition,'no-change');assert.equal(edits,0);assert.deepEqual(result.files,[])
+  assert.match(describeTaskNodeOutput({nodeId:'apply-changes'},result).overview,/无需修改源码；继续构建与验收/)
+  await node('verify-candidate').execute({...scope,input:{baseCommit}});assert.equal(checks,1)
+  assert.ok(node('run-local-acceptance'));assert.ok(node('finalize-local-acceptance'))
+  const oldValidate=createEngineeringMappedBaselineWorkflow(options).nodes.find(n=>n.id==='validate-proposal')
+  await assert.rejects(oldValidate.execute({input:proposal}),{code:'ENGINEERING_PROPOSAL_DOCUMENT_INVALID'})
+  await assert.rejects(node('validate-proposal').execute({input:{...proposal,reviewedPaths:[]}}),{code:'ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED'})
+  await assert.rejects(node('validate-proposal').execute({input:{...proposal,changes:[{path:'src/value.txt'}]}}),{code:'ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED'})
+  await assert.rejects(node('validate-proposal').execute({input:{...proposal,changeDisposition:'modify',replacements:[{path:'src/value.txt',from:'same',to:'same'}]}}),{code:'ENGINEERING_NO_EFFECT_MODIFICATION'})
+  const conflicted=createEngineeringRevalidationWorkflow({...options,workspaceAdapter:{...workspaceAdapter,
+    prepare:async()=>({...workspace,conflictPaths:['src/value.txt']}),reconcile:async()=>({status:'succeeded'})}})
+  await assert.rejects(conflicted.nodes.find(n=>n.id==='apply-changes').execute(context),{code:'ENGINEERING_CONFLICT_NOT_PROPOSED'})
+  await writeFile(join(workspace.directory,'src/value.txt'),'drift')
+  await assert.rejects(node('apply-changes').execute(context),{code:'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT'})
 })

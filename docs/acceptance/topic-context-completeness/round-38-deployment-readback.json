@@ -1,0 +1,64 @@
+{
+  "history": {
+    "verified": true,
+    "tasks": 16,
+    "oldNodes": 76,
+    "oldRuns": 21,
+    "legacy": 68
+  },
+  "dispatchResumed": true,
+  "businessAcceptancePassed": false,
+  "maintenance": {
+    "active": false,
+    "phase": "inactive",
+    "revision": 24,
+    "maintenanceId": "deploy-88124574-ff14-463f-9aef-629b225c6807",
+    "actorId": "DOii4iiLKtZz5A91yyWlCtDQU7Ba43QHb0t",
+    "reason": "新实例部署回读通过，恢复派发",
+    "changedAt": "2026-09-27T10:24:08.623Z",
+    "sealedIncarnation": "19944:77f68688-1020-41df-899a-22e2b49d8146",
+    "resumedIncarnation": "20848:d2a20a1d-b77a-4440-8af0-eb0cd5033cf6",
+    "busy": {
+      "nodes": 0,
+      "owners": 0,
+      "effects": 0,
+      "messages": 0
+    },
+    "drained": true,
+    "processIncarnation": "20848:d2a20a1d-b77a-4440-8af0-eb0cd5033cf6",
+    "stopPermitted": false,
+    "resumePermitted": false
+  },
+  "launcherPid": 25404,
+  "pid": 20848,
+  "status": "ready",
+  "scheduledTaskChanged": false,
+  "web": {
+    "recoveryIssueCount": 0,
+    "authenticatedWebStatus": 200,
+    "tokenExchangeStatus": 303,
+    "controlHealth": "degraded",
+    "inboundProcessing": false,
+    "credentialPrinted": false
+  },
+  "logs": [
+    {
+      "bytes": 82,
+      "live": true,
+      "lastWriteTimeUtc": "2026-09-27T10:23:59.2810729Z",
+      "name": "start.stdout.log"
+    },
+    {
+      "bytes": 0,
+      "live": true,
+      "lastWriteTimeUtc": "2026-09-27T10:23:47.0720970Z",
+      "name": "start.stderr.log"
+    }
+  ],
+  "ready": true,
+  "tasks": 84,
+  "package": {
+    "verifiedFiles": 84,
+    "sha256": "097027050846ac5147a1cbd3ebc2362c6f14fed02fa95471c73c0c149ba322d4"
+  }
+}

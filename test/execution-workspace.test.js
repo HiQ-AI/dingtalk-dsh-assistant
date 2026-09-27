@@ -5,8 +5,9 @@ import { promisify } from 'node:util'
 import { mkdtemp, mkdir, writeFile, readFile, unlink, readdir, symlink } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createManagedWorkspaces } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
-import { freezeCandidate, readCandidate } from '../packages/dingtalk-dsh-assistant/execution-candidate.js'
+import { createManagedWorkspaces, assertWorkspaceConflictsResolved } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
+import { freezeCandidate, readCandidate, verifyCandidate } from '../packages/dingtalk-dsh-assistant/execution-candidate.js'
+import { createGitDelivery } from '../packages/dingtalk-dsh-assistant/execution-git.js'
 
 const exec = promisify(execFile)
 const git = async (directory, ...args) => (await exec('git', ['-C', directory, ...args], { windowsHide: true })).stdout.trim()
@@ -22,7 +23,7 @@ async function setup() {
 }
 
 test('Windows深目录超过MAX_PATH仍能提取固定基线并冻结读取候选', { skip: process.platform !== 'win32' }, async () => {
-  const f = await setup(), root = join(f.directory, 'nested-' + 'x'.repeat(90))
+  const f = await setup(), root = join(f.directory, 'nested-' + 'x'.repeat(Math.max(1, 245 - f.directory.length - 87)))
   await mkdir(root)
   const adapter = await createManagedWorkspaces({ root, sourceRepository: f.sourceRepository })
   const prepared = await adapter.prepare(f.input)
@@ -90,4 +91,111 @@ test('base tree的symlink/gitlink在任何目的写入之前拒绝', async () =>
   const baseCommit = await git(f.sourceRepository, 'rev-parse', 'HEAD')
   await assert.rejects(f.adapter.prepare({ ...f.input, baseCommit }), { code: 'WORKSPACE_ENTRY_UNSUPPORTED' })
   assert.deepEqual(await readdir(f.root), [])
+})
+
+test('v13原生合并树保留UAT新增删除，解决文本冲突后双父提交保持被测树', async () => {
+  const f=await setup(), initial=f.input.baseCommit
+  await writeFile(join(f.sourceRepository,'value.txt'),'development\n')
+  await git(f.sourceRepository,'add','.');await git(f.sourceRepository,'commit','-m','development')
+  const development=await git(f.sourceRepository,'rev-parse','HEAD')
+  await git(f.sourceRepository,'checkout','-b','uat',initial)
+  await writeFile(join(f.sourceRepository,'value.txt'),'uat\n');await writeFile(join(f.sourceRepository,'uat-only.txt'),'must preserve\n')
+  await unlink(join(f.sourceRepository,'deleted.txt'))
+  await git(f.sourceRepository,'add','-A');await git(f.sourceRepository,'commit','-m','uat changes')
+  const targetCommit=await git(f.sourceRepository,'rev-parse','HEAD'),sourceIndex=await readFile(join(f.sourceRepository,'.git/index'))
+  const adapter=await createManagedWorkspaces({root:f.root,sourceRepository:f.sourceRepository,targetCommit,taskBase:initial})
+  const prepared=await adapter.prepare({...f.input,baseCommit:development})
+  assert.equal(prepared.version,2);assert.deepEqual(prepared.conflictPaths,['value.txt'])
+  await adapter.execute(prepared)
+  assert.equal(await git(prepared.directory,'rev-parse','HEAD'),development)
+  assert.equal(await git(prepared.directory,'write-tree'),prepared.mergeTree)
+  assert.equal(await readFile(join(prepared.directory,'uat-only.txt'),'utf8'),'must preserve\n')
+  await assert.rejects(readFile(join(prepared.directory,'deleted.txt')),/ENOENT/)
+  await assert.rejects(assertWorkspaceConflictsResolved(prepared),/WORKSPACE_CONFLICT_UNRESOLVED/)
+  await writeFile(join(prepared.directory,'value.txt'),'resolved business result\n')
+  await assertWorkspaceConflictsResolved(prepared)
+  const candidate=await freezeCandidate({repository:prepared.directory,baseCommit:development,generation:1,requirementDigest:f.input.requirementDigest})
+  const checks=[{id:'business',version:'1',run:async ({readFile})=>({passed:(await readFile('value.txt')).toString()==='resolved business result\n',log:'验证合并后的候选字节'})}]
+  const verification=await verifyCandidate({candidate,checks})
+  const remote=join(f.directory,'remote.git');await mkdir(remote);await git(remote,'init','--bare')
+  const delivery=await createGitDelivery({repository:prepared.directory,remote,branch:'delivery',author:{name:'Test',email:'test@example.invalid'},mergeParent:targetCommit})
+  const commit=await delivery.prepareCommit({candidate,verification,requiredChecks:[{id:'business',version:'1'}],message:'resolved merge',date:'1790150400 +0000'})
+  assert.deepEqual(commit.changedPaths,['value.txt']);assert.equal(commit.changeBaseCommit,targetCommit)
+  await delivery.executeCommit(commit)
+  assert.equal(await git(prepared.directory,'show','-s','--format=%P',commit.commitId),`${development} ${targetCommit}`)
+  assert.equal(await git(prepared.directory,'rev-parse',`${commit.commitId}^{tree}`),candidate.tree)
+  assert.equal((await git(prepared.directory,'merge-tree','--write-tree',targetCommit,commit.commitId)).split(/\s/)[0],candidate.tree)
+  assert.equal(await git(f.sourceRepository,'rev-parse','HEAD'),targetCommit)
+  assert.deepEqual(await readFile(join(f.sourceRepository,'.git/index')),sourceIndex)
+  assert.equal((await adapter.reconcile(prepared)).status,'succeeded')
+})
+
+test('v13拒绝删除重命名和二进制冲突，包括二进制add/add，不生成可交付工作目录',async()=>{
+  for(const kind of ['binary-add','binary','delete','rename','rename-add']){
+    const binary=kind.startsWith('binary'),f=await setup(),initial=f.input.baseCommit,path=['binary-add','rename-add'].includes(kind)?'new.txt':'value.txt'
+    if(kind==='delete')await unlink(join(f.sourceRepository,path))
+    else if(kind==='rename' || kind==='rename-add')await git(f.sourceRepository,'mv','value.txt',kind==='rename-add'?'new.txt':'development.txt')
+    else await writeFile(join(f.sourceRepository,path),binary?Buffer.from([0,1,2]):'development\n')
+    await git(f.sourceRepository,'add','.');await git(f.sourceRepository,'commit','-m','dev')
+    const development=await git(f.sourceRepository,'rev-parse','HEAD')
+    await git(f.sourceRepository,'checkout','-b','uat',initial)
+    if(kind==='rename')await git(f.sourceRepository,'mv','value.txt','uat.txt')
+    else await writeFile(join(f.sourceRepository,path),binary?Buffer.from([0,3,4]):'uat\n')
+    await git(f.sourceRepository,'add','.');await git(f.sourceRepository,'commit','-m','uat')
+    const targetCommit=await git(f.sourceRepository,'rev-parse','HEAD')
+    const adapter=await createManagedWorkspaces({root:f.root,sourceRepository:f.sourceRepository,targetCommit,taskBase:initial})
+    await assert.rejects(adapter.prepare({...f.input,baseCommit:development}),/WORKSPACE_CONFLICT_UNSUPPORTED/)
+    assert.deepEqual(await readdir(f.root),[])
+  }
+})
+
+test('双方独立新增同路径UTF8冲突保留原生marker，解决前不得交付且源checkout不变',async()=>{
+  const f=await setup(),taskBase=f.input.baseCommit,path='new-calculator.java'
+  await writeFile(join(f.sourceRepository,path),'class Calculator { int value = 1; }\n')
+  await git(f.sourceRepository,'add','.');await git(f.sourceRepository,'commit','-m','development calculator')
+  const development=await git(f.sourceRepository,'rev-parse','HEAD')
+  await git(f.sourceRepository,'checkout','-b','uat',taskBase)
+  await writeFile(join(f.sourceRepository,path),'class Calculator { int value = 1000; }\n')
+  await git(f.sourceRepository,'add','.');await git(f.sourceRepository,'commit','-m','uat calculator')
+  const targetCommit=await git(f.sourceRepository,'rev-parse','HEAD'),sourceIndex=await readFile(join(f.sourceRepository,'.git/index'))
+  const adapter=await createManagedWorkspaces({root:f.root,sourceRepository:f.sourceRepository,targetCommit,taskBase})
+  const prepared=await adapter.prepare({...f.input,baseCommit:development})
+  assert.deepEqual(prepared.conflictPaths,[path]);await adapter.execute(prepared)
+  const content=await readFile(join(prepared.directory,path),'utf8')
+  assert.match(content,/^<<<<<<< /m);assert.match(content,/^=======/m);assert.match(content,/^>>>>>>> /m)
+  assert.match(content,/value = 1;/);assert.match(content,/value = 1000;/)
+  await assert.rejects(assertWorkspaceConflictsResolved(prepared),/WORKSPACE_CONFLICT_UNRESOLVED/)
+  await writeFile(join(prepared.directory,path),'class Calculator { int value = 1; }\n')
+  await assertWorkspaceConflictsResolved(prepared)
+  assert.equal(await git(f.sourceRepository,'rev-parse','HEAD'),targetCommit)
+  assert.deepEqual(await readFile(join(f.sourceRepository,'.git/index')),sourceIndex)
+  assert.equal(await readFile(join(f.sourceRepository,path),'utf8'),'class Calculator { int value = 1000; }\n')
+})
+
+test('v13只重放可信任务起点之后差异，不把main继承内容带到UAT；缺起点或非祖先拒绝',async()=>{
+  const f=await setup(),initial=f.input.baseCommit
+  await writeFile(join(f.sourceRepository,'unrelated-main.txt'),'must not ship\n')
+  await git(f.sourceRepository,'add','.');await git(f.sourceRepository,'commit','-m','unrelated main history')
+  const taskBase=await git(f.sourceRepository,'rev-parse','HEAD')
+  await writeFile(join(f.sourceRepository,'value.txt'),'task fix\n')
+  await git(f.sourceRepository,'add','.');await git(f.sourceRepository,'commit','-m','task fix')
+  await writeFile(join(f.sourceRepository,'later-user.txt'),'keep later branch commit\n')
+  await git(f.sourceRepository,'add','.');await git(f.sourceRepository,'commit','-m','user follow-up')
+  const development=await git(f.sourceRepository,'rev-parse','HEAD')
+  await git(f.sourceRepository,'checkout','-b','uat',initial)
+  await writeFile(join(f.sourceRepository,'uat-only.txt'),'keep UAT\n')
+  await git(f.sourceRepository,'add','.');await git(f.sourceRepository,'commit','-m','uat')
+  const targetCommit=await git(f.sourceRepository,'rev-parse','HEAD')
+  await assert.rejects(createManagedWorkspaces({root:f.root,sourceRepository:f.sourceRepository,targetCommit}),/WORKSPACE_TARGET_INVALID/)
+  const invalid=await createManagedWorkspaces({root:f.root,sourceRepository:f.sourceRepository,targetCommit,taskBase:targetCommit})
+  await assert.rejects(invalid.prepare({...f.input,baseCommit:development}),/TASK_BASE_NOT_ANCESTOR/)
+  const adapter=await createManagedWorkspaces({root:f.root,sourceRepository:f.sourceRepository,targetCommit,taskBase})
+  const prepared=await adapter.prepare({...f.input,baseCommit:development})
+  assert.deepEqual(prepared.conflictPaths,[])
+  await adapter.execute(prepared)
+  await assert.rejects(readFile(join(prepared.directory,'unrelated-main.txt')),/ENOENT/)
+  assert.equal(await readFile(join(prepared.directory,'uat-only.txt'),'utf8'),'keep UAT\n')
+  assert.equal(await readFile(join(prepared.directory,'later-user.txt'),'utf8'),'keep later branch commit\n')
+  assert.equal(await readFile(join(prepared.directory,'value.txt'),'utf8'),'task fix\n')
+  assert.deepEqual((await git(prepared.directory,'diff','--name-only',targetCommit,prepared.mergeTree)).split('\n'),['later-user.txt','value.txt'])
 })

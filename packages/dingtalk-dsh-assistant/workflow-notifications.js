@@ -23,6 +23,8 @@ export function formatGroupReply(text, responsibility = '') {
 }
 export function sendWorkflowNotification(adapter, notification) {
   const payload = notification.payload
+  if (payload.reportChannel === 'web' || payload.externalMessaging === false
+    || notification.disclosure?.authorizationRef?.startsWith('web-rerun:')) throw new Error('WORKFLOW_WEB_NOTIFICATION_FORBIDDEN')
   const base = { groupId: payload.conversationId, text: payload.text, idempotencyKey: notification.id }
   return payload.sourceMessageId && payload.actorId
     ? adapter.sendGroupReply({ ...base, replyToMessageId: payload.sourceMessageId, replyToSenderOpenDingTalkId: payload.actorId })
@@ -66,6 +68,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
   let flight, beforeSequenceId, preparedCursor = 0, readbackCursor = 0
   const command = (kind, args, id) => store.command({ id, kind, args })
   async function prepare(run, action, phase, text) {
+    if (run.channel === 'web' || run.externalMessaging === false) return
     const eventKey=phase.startsWith('owner:') ? `task.owner.report:${phase.slice(6)}`
       : phase.startsWith('terminal:') ? `task.result:${action.result.runId}:${phase}`
       : ['create','reopen'].includes(action.kind) && action.result?.runId ? `task.accepted:${action.result.runId}`
@@ -91,6 +94,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
     const page = await store.query({ kind: 'message.list', limit: 200, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
     beforeSequenceId = page.length === 200 ? page.at(-1).sequenceId : undefined
     for (const run of page) {
+      if (run.channel === 'web' || run.externalMessaging === false) continue
       const state = await store.query({ kind: 'message.run', runId: run.runId })
       for (const request of state.requests.filter(item => item.status === 'pending' && item.kind === 'needs_clarification')) {
         const notificationId = `clarify-${executionDigest([run.runId, request.id, request.revision])}`
@@ -139,6 +143,8 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
     preparedCursor = prepared.length === 100 ? prepared.at(-1).sequenceId : 0
     readbackCursor = readbacks.length === 100 ? readbacks.at(-1).sequenceId : 0
     for (const notification of [...prepared, ...readbacks]) {
+      if (notification.payload?.reportChannel === 'web' || notification.payload?.externalMessaging === false
+        || notification.disclosure?.authorizationRef?.startsWith('web-rerun:')) continue
       // 同群来源也不替代当前披露校验；群已撤销或配置变化时不外发内容。
       if (!await adapter.canDisclose(notification)) continue
       let current = notification

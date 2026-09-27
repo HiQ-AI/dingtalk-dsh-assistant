@@ -43,7 +43,8 @@ async function admit(repository, bare) {
   if (hooks.some(name => !name.endsWith('.sample'))) fail('GIT_HOOKS_UNSUPPORTED')
 }
 
-export async function createGitDelivery({ repository, remote, branch, author }) {
+export async function createGitDelivery({ repository, remote, branch, author, mergeParent }) {
+  if (mergeParent !== undefined && !oid(mergeParent)) fail('GIT_MERGE_PARENT_INVALID')
   if (!isAbsolute(repository ?? '') || typeof remote !== 'string' || !remote || /[\0\r\n]/.test(repository + remote)) fail('GIT_LOCAL_SCOPE_REQUIRED')
   const localRemote = isAbsolute(remote)
   if (!localRemote) {
@@ -82,7 +83,8 @@ export async function createGitDelivery({ repository, remote, branch, author }) 
   }
   const validate = (prepared, action) => {
     checkPreparedSize(prepared)
-    if (!prepared || prepared.action !== action || prepared.version !== 1 || prepared.repository !== repository || prepared.remote !== remote || prepared.ref !== ref || executionDigest(prepared.author) !== executionDigest(author)) fail('GIT_PREPARED_SCOPE_MISMATCH')
+    if (!prepared || prepared.action !== action || prepared.version !== (mergeParent ? 2 : 1) || prepared.repository !== repository || prepared.remote !== remote || prepared.ref !== ref || executionDigest(prepared.author) !== executionDigest(author)
+      || (mergeParent && prepared.mergeParent !== mergeParent)) fail('GIT_PREPARED_SCOPE_MISMATCH')
     const { digest, ...body } = prepared
     if (executionDigest(body) !== digest || !oid(prepared.commitId)) fail('GIT_PREPARED_INVALID')
     if (!Number.isSafeInteger(prepared.generation) || prepared.generation < 1 || !/^[a-f0-9]{64}$/.test(prepared.requirementDigest ?? '')) fail('GIT_PREPARED_INVALID')
@@ -99,12 +101,14 @@ export async function createGitDelivery({ repository, remote, branch, author }) 
     if (expectedLocalSha !== null && expectedLocalSha !== candidate.baseCommit) fail('GIT_LOCAL_CONFLICT')
     await command(repository, ['cat-file', '-e', `${candidate.tree}^{tree}`])
     await command(repository, ['cat-file', '-e', `${candidate.baseCommit}^{commit}`])
+    if (mergeParent) await command(repository, ['cat-file', '-e', `${mergeParent}^{commit}`])
     message = `${message.trimEnd()}\n`
     const identity = `${author.name} <${author.email}> ${date}`
-    const raw = `tree ${candidate.tree}\nparent ${candidate.baseCommit}\nauthor ${identity}\ncommitter ${identity}\n\n${message}`
+    const parents = `parent ${candidate.baseCommit}\n${mergeParent && mergeParent !== candidate.baseCommit ? `parent ${mergeParent}\n` : ''}`
+    const raw = `tree ${candidate.tree}\n${parents}author ${identity}\ncommitter ${identity}\n\n${message}`
     const commitId = await command(repository, ['hash-object', '-t', 'commit', '--stdin'], { input: raw })
-    const changedPaths = (await command(repository, ['diff', '--name-only', '-z', candidate.baseCommit, candidate.tree, '--'])).split('\0').filter(Boolean)
-    const body = { version: 1, action: 'commit', ...scope, candidateDigest: candidate.digest, generation: candidate.generation, requirementDigest: candidate.requirementDigest, tree: candidate.tree, baseCommit: candidate.baseCommit, expectedLocalSha, date, message, commitId, changedPaths, verification: structuredClone(verification) }
+    const changedPaths = (await command(repository, ['diff', '--name-only', '-z', mergeParent ?? candidate.baseCommit, candidate.tree, '--'])).split('\0').filter(Boolean)
+    const body = { version: mergeParent ? 2 : 1, action: 'commit', ...scope, ...(mergeParent ? { mergeParent, changeBaseCommit: mergeParent } : {}), candidateDigest: candidate.digest, generation: candidate.generation, requirementDigest: candidate.requirementDigest, tree: candidate.tree, baseCommit: candidate.baseCommit, expectedLocalSha, date, message, commitId, changedPaths, verification: structuredClone(verification) }
     const prepared = { ...body, digest: executionDigest(body) }
     // 与节点工件一致的64KiB上限；完整验证日志超限时拒绝，不能截断审计证据。
     checkPreparedSize(prepared)
@@ -114,14 +118,15 @@ export async function createGitDelivery({ repository, remote, branch, author }) 
     validate(prepared, 'commit')
     const localSha = await currentLocal()
     const object = await git(repository, ['cat-file', '-p', prepared.commitId])
-    const expectedHeader = `tree ${prepared.tree}\nparent ${prepared.baseCommit}\n`
+    const expectedHeader = `tree ${prepared.tree}\nparent ${prepared.baseCommit}\n${mergeParent && mergeParent !== prepared.baseCommit ? `parent ${mergeParent}\n` : ''}`
     return { status: localSha === prepared.commitId && object.code === 0 && object.stdout.startsWith(expectedHeader) ? 'succeeded' : 'unknown', commitId: prepared.commitId, localSha }
   }
   async function executeCommit(prepared) {
     validate(prepared, 'commit'); await check()
     if (await currentLocal() !== prepared.expectedLocalSha) fail('GIT_LOCAL_CONFLICT')
     const env = { GIT_AUTHOR_NAME: author.name, GIT_AUTHOR_EMAIL: author.email, GIT_COMMITTER_NAME: author.name, GIT_COMMITTER_EMAIL: author.email, GIT_AUTHOR_DATE: prepared.date, GIT_COMMITTER_DATE: prepared.date }
-    const commitId = await command(repository, ['commit-tree', prepared.tree, '-p', prepared.baseCommit, '-F', '-'], { input: prepared.message, env })
+    const commitId = await command(repository, ['commit-tree', prepared.tree, '-p', prepared.baseCommit,
+      ...(mergeParent && mergeParent !== prepared.baseCommit ? ['-p', mergeParent] : []), '-F', '-'], { input: prepared.message, env })
     if (commitId !== prepared.commitId) fail('GIT_COMMIT_ID_MISMATCH')
     await command(repository, ['update-ref', ref, commitId, prepared.expectedLocalSha ?? '0'.repeat(40)])
     return reconcileCommit(prepared)
@@ -133,7 +138,7 @@ export async function createGitDelivery({ repository, remote, branch, author }) 
     if ((await reconcileCommit(commit)).status !== 'succeeded') fail('GIT_COMMIT_NOT_DELIVERED')
     if (await currentRemote() !== expectedRemoteSha) fail('GIT_REMOTE_CONFLICT')
     if (expectedRemoteSha && (await git(repository, ['merge-base', '--is-ancestor', expectedRemoteSha, commit.commitId])).code !== 0) fail('GIT_NON_FAST_FORWARD')
-    const body = { version: 1, action: 'push', ...scope, commitId: commit.commitId, expectedRemoteSha, candidateDigest: commit.candidateDigest, generation: commit.generation, requirementDigest: commit.requirementDigest, verificationDigest: commit.verification.digest, verification: commit.verification, changedPaths: commit.changedPaths }
+    const body = { version: mergeParent ? 2 : 1, action: 'push', ...scope, ...(mergeParent ? { mergeParent, changeBaseCommit: mergeParent } : {}), commitId: commit.commitId, expectedRemoteSha, candidateDigest: commit.candidateDigest, generation: commit.generation, requirementDigest: commit.requirementDigest, verificationDigest: commit.verification.digest, verification: commit.verification, changedPaths: commit.changedPaths }
     return freeze({ ...body, digest: executionDigest(body) })
   }
   async function reconcilePush(prepared) {

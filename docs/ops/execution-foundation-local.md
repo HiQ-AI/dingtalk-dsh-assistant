@@ -144,6 +144,12 @@ await controller.changeInput({
 
 本批没有落实 v2 全部 token 预算和性能目标。预算耗尽会留下等待/恢复原因，不通过 Goal 续轮、换代或重新批准偷偷清零。调整参数属于受信 Host 配置变更，不能由 Agent 修改。
 
+### Run 领取预算显式续行
+
+当前任务投影 `budgetContinuation` 非空时，可由已配置 `webActorId` 的受信本机 Web 用户明确调用 `POST /tasks/{taskId}/continue-budget`，提交该绑定、唯一 `requestId` 与 `continuationText`。见[接口合同](../api/workflow-node-contracts.md#web-run-预算续行接口)。不要编辑控制库或自行填追加额度。
+
+Host 只允许同 Run 一次续行，按剩余节点数 × 3 增加上限；累计 `claimCount`、generation、已成功节点、候选及验收凭证保持原值。存在待处理输入、未知效果、未排空执行或状态漂移时拒绝。再次耗尽需明确停止，不自动向模型申请扩额。202 仅代表命令接纳；须继续回读实际预算回执、Run 状态与后续证据。续行不会绕过构建及候选核验，也不等于合并或部署成功。
+
 ## 5. 停止、重启与显式恢复
 
 ```js
@@ -455,3 +461,19 @@ acceptanceChecks: [{
 上例仅说明协议，不代表项目已提供该脚本。脚本须调用实际业务实现并输出计算结果；本轮没有为 dataset 配置或伪造业务用例。未配置时新任务停在 `ENGINEERING_ACCEPTANCE_REQUIRED`；用例失败或缺实际值为 `ENGINEERING_ACCEPTANCE_FAILED`，完整失败日志沿用 evidenceRefs 工件保存。准备提交前复用同进程可信票据，重启后重新实跑；验收记录绑定冻结候选摘要。修改候选、需求或代次后旧结果不可放行。
 
 Host 配置属于冻结定义身份。已有等待任务不能通过热改配置绕过漂移保护；为补充配置后的工作建立新的受管任务。旧任务保留原验收范围，不自动插入节点或重放外部动作。切换前后分别检查旧 v9 摘要、双包安装文件、健康状态及历史节点读取。
+
+## 当前工程阶段失败修复
+
+`repairCurrentStage` 复用现有命令账与 `controller.changeInput`，无需数据库迁移。部署后沿正式 Web 补充入口提供修复要求；Owner 必须明确提交修复动作，等待摘要不等于已调度。回读 `engineering.repair.accepted`、同一 Run 的递增 generation 和新节点，才能确认修复已启动。
+
+仅允许工程构建或业务验收明确失败，或 `apply-changes` 明确报告 `ENGINEERING_PATCH_AMBIGUOUS`，且全部节点排空、无待应用输入、所有外部效果已明确成功或失败的任务。未知清理与未完成效果仍阻断，不能通过重试覆盖。修复保留原冻结仓库配置、开发分支、UAT 和 taskBase，旧失败候选及日志保留；新代重新修改并取得验收证据。补丁歧义在文件写入前发生，尚无候选：Host 保存完整旧方案及受管旧代工作区的文件 hash/不可变工件，`operation=repair` 明示 `sourceKind=workspace`，`source=previous` 仅允许读取这些受控文件并核对未漂移。模型必须修订唯一定位原文；不会放宽替换规则或改成全局替换。失败材料超过容量时明确阻断。
+
+可信修复材料保留完整失败正文及原工件引用，总量超过 64,000 字符时明确返回 `ENGINEERING_REPAIR_CONTEXT_CAPACITY`，不静默截断。此时应检查原始失败工件并处理容量阻断，不能把未读日志视作已掌握。恢复时复用已持久接纳的命令回执，不再次创建代次。
+## Web 阶段确认与恢复
+
+仅在收到用户明确确认后，回读当前 Web 任务的 requirementRevision、controlRevision、planRevision、runSequence、等待确认 stageId 和前序 outputRef，通过正式 `POST /tasks/{id}/confirm-stage` 提交，正文合同见 [API 说明](../api/workflow-node-contracts.md)。不得直接操作控制库或借用 IM reopen 冒充用户。
+
+确认仅把当前阶段变为 ready，并发布 `approval.resolved` 唤醒 Owner；UAT 合并确认不等于后续部署确认，也不自动授予其他外发权限。回读事件 accepted、阶段状态及 Owner 后续决定；只有真实新 Run 和效果回执才能称已执行。重复请求须复用同 requestId 和正文，重启会恢复 pending Web 事件并复用原生确认命令回执。旧版本、取消、计划变化或前序产物变化会拒绝；失败后重新回读并取得针对当前状态的确认，不能篡改已接纳请求。
+# 本地验收候选完整性
+
+准备命令完成后、全部业务验收及清理结束后，以及提交前核对票据时，重新校验原始 snapshot manifest 的每个文件路径、非符号链接属性和 SHA256。任何原始文件被修改、删除或替换都拒绝 PASS；Host 冻结的 generatedOutputDirectories 才允许新增生成物，默认无排除。前端明确 node_modules/dist，后端 target；根目录、穿越路径、绝对路径与重复路径拒绝。排除目录本身不能是符号链接，原始已存在文件即使处在该目录也须保持不变；在 src 等非生成目录增加文件同样拒绝。模型不能指定生成目录。构建脚本如需生成源码，应先将所需源码作为正式候选修改，不得验收一个与交付候选不同的源码树。

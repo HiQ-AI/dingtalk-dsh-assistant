@@ -13,18 +13,19 @@ async function noLinks(path) {
     if ((await lstat(current)).isSymbolicLink()) fail('WORKSPACE_LINK_UNSUPPORTED')
   }
 }
-function git(directory, args) {
+function git(directory, args, { allowConflict = false, input } = {}) {
   return new Promise((resolve, reject) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
     Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' })
-    const child = spawn('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.longpaths=true', '-C', directory, ...args], { env, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.longpaths=true', '-C', directory, ...args], { env, windowsHide: true, shell: false, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
+    if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input) }
     const chunks = []; let size = 0, errorText = '', failure
     const stop = code => { failure ??= executionError(code); child.kill() }
     const timer = setTimeout(() => stop('WORKSPACE_GIT_TIMEOUT'), 30000)
     child.stdout.on('data', bytes => { size += bytes.length; if (size > 64 * 1024 * 1024) stop('WORKSPACE_GIT_LIMIT'); else chunks.push(bytes) })
     child.stderr.on('data', bytes => { errorText = (errorText + bytes).slice(0, 2048) })
     child.on('error', error => { clearTimeout(timer); reject(error) })
-    child.on('close', code => { clearTimeout(timer); if (failure) reject(failure); else if (code) reject(executionError('WORKSPACE_GIT_FAILED', errorText)); else resolve(Buffer.concat(chunks)) })
+    child.on('close', code => { clearTimeout(timer); if (failure) reject(failure); else if (code && !(allowConflict && code === 1)) reject(executionError('WORKSPACE_GIT_FAILED', errorText)); else resolve(Buffer.concat(chunks)) })
   })
 }
 const text = async (directory, args) => (await git(directory, args)).toString('utf8').trim()
@@ -45,9 +46,9 @@ async function admit(repository) {
     try { await lstat(join(gitDirectory, path)); fail('WORKSPACE_UNSUPPORTED_OBJECT_SOURCE') } catch (error) { if (error.code !== 'ENOENT') throw error }
   }
 }
-async function manifest(repository, baseCommit) {
-  if (await text(repository, ['cat-file', '-t', baseCommit]) !== 'commit') fail('WORKSPACE_BASE_INVALID')
-  const tree = await text(repository, ['rev-parse', `${baseCommit}^{tree}`])
+async function manifest(repository, baseCommit, treeInput = false) {
+  if (await text(repository, ['cat-file', '-t', baseCommit]) !== (treeInput ? 'tree' : 'commit')) fail('WORKSPACE_BASE_INVALID')
+  const tree = treeInput ? baseCommit : await text(repository, ['rev-parse', `${baseCommit}^{tree}`])
   const records = (await git(repository, ['ls-tree', '-rz', '--long', tree])).toString('utf8').split('\0').filter(Boolean)
   if (records.length > 10000) fail('WORKSPACE_FILE_LIMIT')
   let size = 0; const names = new Set()
@@ -63,6 +64,54 @@ async function manifest(repository, baseCommit) {
     return { path, oid: match[2], size: Number(match[3]) }
   })
   return { tree, files }
+}
+async function mergeBaseline(repository, baseCommit, targetCommit, taskBase) {
+  const target = await manifest(repository, targetCommit), development = await manifest(repository, baseCommit)
+  const ancestor = await manifest(repository, taskBase)
+  try { await git(repository, ['merge-base', '--is-ancestor', taskBase, baseCommit]) } catch { fail('WORKSPACE_TASK_BASE_NOT_ANCESTOR') }
+  // Git 2.39 没有 merge-tree --merge-base；用确定性虚拟共同父表达精确三方输入。
+  // 只创建对象、不移动任何 ref，最终交付父链仍为真实 dev + UAT。
+  const virtual = async tree => (await git(repository, ['hash-object', '-w', '-t', 'commit', '--stdin'], {
+    input: `tree ${tree}\nparent ${taskBase}\nauthor UAT baseline <uat-baseline@localhost> 946684800 +0000\ncommitter UAT baseline <uat-baseline@localhost> 946684800 +0000\n\nTrusted task delta baseline\n`,
+  })).toString().trim()
+  const developmentVirtual = await virtual(development.tree), targetVirtual = await virtual(target.tree)
+  const output = (await git(repository, ['merge-tree', '--write-tree', '--no-messages', '-z', developmentVirtual, targetVirtual], { allowConflict: true })).toString('utf8').split('\0')
+  const mergeTree = output.shift()?.trim(), stages = new Map()
+  if (!oid(mergeTree)) fail('WORKSPACE_MERGE_INVALID')
+  for (const entry of output.filter(Boolean)) {
+    const match = /^(100644|100755) ([a-f0-9]{40}) ([123])\t(.+)$/u.exec(entry)
+    if (!match) fail('WORKSPACE_CONFLICT_UNSUPPORTED')
+    const entries = stages.get(match[4]) ?? []
+    entries.push({ mode: match[1], oid: match[2], stage: match[3] }); stages.set(match[4], entries)
+  }
+  const merged = await manifest(repository, mergeTree, true)
+  let addedByBoth
+  const addedPaths = async commit => {
+    const records = (await git(repository, ['diff', '--name-status', '-z', '--find-renames', taskBase, commit, '--'])).toString('utf8').split('\0').filter(Boolean)
+    const added = new Set()
+    for (let index = 0; index < records.length;) {
+      const status = records[index++], path = records[index++]
+      if (status === 'A') added.add(path)
+      else if (/^[RC]\d+$/.test(status)) index++
+    }
+    return added
+  }
+  for (const [path, entries] of stages) {
+    // 同路径modify/modify及双方独立add/add保留Git冲突标记；删除/rename/二进制仍阻断。
+    const stageSet = entries.map(item => item.stage).sort().join('')
+    if (stageSet === '23') {
+      addedByBoth ??= await Promise.all([addedPaths(baseCommit), addedPaths(targetCommit)])
+      if (ancestor.files.some(file => file.path === path) || !addedByBoth.every(paths => paths.has(path))) fail('WORKSPACE_CONFLICT_UNSUPPORTED')
+    }
+    if (!['123', '23'].includes(stageSet)
+      || new Set(entries.map(item => item.mode)).size !== 1 || !merged.files.some(file => file.path === path)) fail('WORKSPACE_CONFLICT_UNSUPPORTED')
+    for (const entry of entries) {
+      const bytes = await git(repository, ['cat-file', 'blob', entry.oid])
+      if (bytes.includes(0)) fail('WORKSPACE_CONFLICT_UNSUPPORTED')
+      try { new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { fail('WORKSPACE_CONFLICT_UNSUPPORTED') }
+    }
+  }
+  return { mergeTree, conflictPaths: [...stages.keys()].sort() }
 }
 async function writeExclusive(path, value) {
   const file = await open(path, 'wx')
@@ -81,8 +130,18 @@ async function checkedPaths(directory, prefix = '') {
   return paths
 }
 
+export async function assertWorkspaceConflictsResolved(workspace) {
+  for (const path of workspace.conflictPaths ?? []) {
+    const full = join(workspace.directory, path)
+    try { await noLinks(full) } catch (error) { if (error.code === 'ENOENT') continue; throw error }
+    const content = new TextDecoder('utf-8', { fatal: true }).decode(await readFile(full))
+    if (/^(?:<{7}(?: |$)|={7}\r?$|>{7}(?: |$)|\|{7}(?: |$))/mu.test(content)) fail('WORKSPACE_CONFLICT_UNRESOLVED')
+  }
+}
+
 // 受信Host专用：execute只能由控制账一次性permit后调用，不是模型工具。
-export async function createManagedWorkspaces({ root, sourceRepository }) {
+export async function createManagedWorkspaces({ root, sourceRepository, targetCommit, taskBase }) {
+  if ((targetCommit !== undefined && (!oid(targetCommit) || !oid(taskBase))) || (targetCommit === undefined && taskBase !== undefined)) fail('WORKSPACE_TARGET_INVALID')
   for (const value of [root, sourceRepository]) if (typeof value !== 'string' || !isAbsolute(value) || /[\0\r\n]/.test(value)) fail('WORKSPACE_SCOPE_INVALID')
   await noLinks(root); await noLinks(sourceRepository)
   root = await realpath(root); sourceRepository = await realpath(sourceRepository)
@@ -91,18 +150,24 @@ export async function createManagedWorkspaces({ root, sourceRepository }) {
   await admit(sourceRepository)
   const destination = (runId, generation) => join(root, `ws-${executionDigest({ runId, generation })}`, 'repository')
   function validate(prepared) {
-    if (!prepared || Object.keys(prepared).sort().join(',') !== 'action,baseCommit,baseTree,digest,directory,generation,requirementDigest,root,runId,sourceRepository,version') fail('WORKSPACE_PREPARED_INVALID')
+    const keys = 'action,baseCommit,baseTree,digest,directory,generation,requirementDigest,root,runId,sourceRepository,version'.split(',')
+    if (targetCommit) keys.push('targetCommit', 'taskBase', 'mergeTree', 'conflictPaths')
+    if (!prepared || Object.keys(prepared).sort().join(',') !== keys.sort().join(',')) fail('WORKSPACE_PREPARED_INVALID')
     const { digest, ...body } = prepared
-    if (digest !== executionDigest(body) || prepared.version !== 1 || prepared.action !== 'workspace' || prepared.root !== root || prepared.sourceRepository !== sourceRepository || typeof prepared.runId !== 'string' || !prepared.runId || prepared.runId.length > 256 || !Number.isSafeInteger(prepared.generation) || prepared.generation < 1 || !/^[a-f0-9]{64}$/.test(prepared.requirementDigest) || !oid(prepared.baseCommit) || !oid(prepared.baseTree) || prepared.directory !== destination(prepared.runId, prepared.generation)) fail('WORKSPACE_PREPARED_INVALID')
+    if (digest !== executionDigest(body) || prepared.version !== (targetCommit ? 2 : 1) || prepared.action !== 'workspace' || prepared.root !== root || prepared.sourceRepository !== sourceRepository || typeof prepared.runId !== 'string' || !prepared.runId || prepared.runId.length > 256 || !Number.isSafeInteger(prepared.generation) || prepared.generation < 1 || !/^[a-f0-9]{64}$/.test(prepared.requirementDigest) || !oid(prepared.baseCommit) || !oid(prepared.baseTree) || prepared.directory !== destination(prepared.runId, prepared.generation)) fail('WORKSPACE_PREPARED_INVALID')
+    if (targetCommit && (prepared.targetCommit !== targetCommit || prepared.taskBase !== taskBase || !oid(prepared.mergeTree) || !Array.isArray(prepared.conflictPaths))) fail('WORKSPACE_PREPARED_INVALID')
   }
   async function prepare({ runId, generation, requirementDigest, baseCommit }) {
-    const body = { version: 1, action: 'workspace', root, sourceRepository, runId, generation, requirementDigest, baseCommit, baseTree: '0'.repeat(40), directory: destination(runId, generation) }
+    const body = { version: targetCommit ? 2 : 1, action: 'workspace', root, sourceRepository, runId, generation, requirementDigest, baseCommit, baseTree: '0'.repeat(40), directory: destination(runId, generation),
+      ...(targetCommit ? { targetCommit, taskBase, mergeTree: '0'.repeat(40), conflictPaths: [] } : {}) }
     validate({ ...body, digest: executionDigest(body) })
     await admit(sourceRepository)
     body.baseTree = (await manifest(sourceRepository, baseCommit)).tree
+    if (targetCommit) Object.assign(body, await mergeBaseline(sourceRepository, baseCommit, targetCommit, taskBase))
     return Object.freeze({ ...body, digest: executionDigest(body) })
   }
-  const success = prepared => ({ status: 'succeeded', directory: prepared.directory, baseCommit: prepared.baseCommit, baseTree: prepared.baseTree, preparedDigest: prepared.digest })
+  const success = prepared => ({ status: 'succeeded', directory: prepared.directory, baseCommit: prepared.baseCommit, baseTree: prepared.baseTree, preparedDigest: prepared.digest,
+    ...(targetCommit ? { targetCommit, taskBase, mergeTree: prepared.mergeTree, conflictPaths: prepared.conflictPaths } : {}) })
   async function reconcile(prepared) {
     validate(prepared)
     try {
@@ -113,6 +178,7 @@ export async function createManagedWorkspaces({ root, sourceRepository }) {
       }
       await admit(prepared.directory)
       if (await text(prepared.directory, ['rev-parse', 'HEAD']) !== prepared.baseCommit || await text(prepared.directory, ['rev-parse', 'HEAD^{tree}']) !== prepared.baseTree) fail('WORKSPACE_BASE_CONFLICT')
+      if (targetCommit && await text(prepared.directory, ['write-tree']) !== prepared.mergeTree) fail('WORKSPACE_MERGE_INDEX_CONFLICT')
       return success(prepared)
     } catch (error) { if (error.code === 'ENOENT') return { status: 'unknown', directory: prepared.directory, reason: 'workspace_initialization_incomplete' }; throw error }
   }
@@ -130,9 +196,17 @@ export async function createManagedWorkspaces({ root, sourceRepository }) {
     await git(prepared.directory, ['config', 'core.longpaths', 'true'])
     await git(prepared.directory, ['fetch', '--no-tags', '--', sourceRepository, prepared.baseCommit])
     await git(prepared.directory, ['-c', 'core.autocrlf=false', 'checkout', '--detach', prepared.baseCommit])
+    let checkout = base
+    if (targetCommit) {
+      await git(prepared.directory, ['fetch', '--no-tags', '--', sourceRepository, targetCommit])
+      const merged = await mergeBaseline(prepared.directory, prepared.baseCommit, targetCommit, taskBase)
+      if (executionDigest(merged) !== executionDigest({ mergeTree: prepared.mergeTree, conflictPaths: prepared.conflictPaths })) fail('WORKSPACE_MERGE_DRIFT')
+      await git(prepared.directory, ['-c', 'core.autocrlf=false', 'read-tree', '--reset', '-u', prepared.mergeTree])
+      checkout = await manifest(prepared.directory, prepared.mergeTree, true)
+    }
     if (await text(prepared.directory, ['rev-parse', 'HEAD']) !== prepared.baseCommit) fail('WORKSPACE_BASE_CONFLICT')
-    if (canonicalExecutionJson((await checkedPaths(prepared.directory)).sort()) !== canonicalExecutionJson(base.files.map(file => file.path).sort())) fail('WORKSPACE_CHECKOUT_MISMATCH')
-    for (const file of base.files) {
+    if (canonicalExecutionJson((await checkedPaths(prepared.directory)).sort()) !== canonicalExecutionJson(checkout.files.map(file => file.path).sort())) fail('WORKSPACE_CHECKOUT_MISMATCH')
+    for (const file of checkout.files) {
       const path = join(prepared.directory, file.path); await noLinks(path)
       const bytes = await readFile(path)
       if (bytes.length !== file.size || createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex') !== file.oid) fail('WORKSPACE_CHECKOUT_MISMATCH')
