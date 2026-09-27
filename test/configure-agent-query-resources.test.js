@@ -27,6 +27,15 @@ test('显式数据库及表列按批准owner/group登记，不读凭据也不连
   assert.ok(a.updated.includes("storage: !!js dshHomePath('state')"))
   assert.equal((await planAgentQueryResources(a.updated, p)).changed, false)
 })
+test('现有UAT账号须显式声明受信只读事务模式，生产环境不能声明', async () => {
+  const p = databaseProposal()
+  p.directQueries.databases[0] = { ...p.directQueries.databases[0], environment: 'uat', identityPolicy: 'host-enforced-readonly' }
+  const planned = await planAgentQueryResources(source, p)
+  assert.ok(planned.updated.includes('identityPolicy: host-enforced-readonly'))
+  assert.equal((await planAgentQueryResources(planned.updated, p)).changed, false)
+  p.directQueries.databases[0].environment = 'production'
+  await assert.rejects(planAgentQueryResources(source, p), /QUERY_CONFIG_DATABASE_INVALID/)
+})
 test('数据库拒绝缺凭据路径、隐式凭据、宽泛表列、重复资源及扩大授权', async () => {
   for (const mutate of [p=>delete p.directQueries.credentialsPath, p=>p.directQueries.credentialsPath='relative.json',
     p=>p.directQueries.password='must-not-appear', p=>p.directQueries.databases[0].password='must-not-appear',

@@ -19,11 +19,13 @@ export async function planAgentQueryResources(source, proposal) {
     || !Array.isArray(q.grants) || q.grants.length !== 1) fail('QUERY_CONFIG_PROPOSAL_INVALID')
   for (const r of q.resources) if (!keys(r, r.kind === 'repository' ? ['id','kind','root','commit','paths'] : ['id','kind','root','paths'])) fail('QUERY_CONFIG_RESOURCE_INVALID')
   for (const r of q.statusResources) if (!keys(r,r.kind === 'kubernetes' ? ['id','kind','kubeconfig','server','namespace','deployment','skipTlsVerify'] : ['id','url','fields'])) fail('QUERY_CONFIG_RESOURCE_INVALID')
-  // 配置登记不读取凭据、不连接数据库；真实角色权限由运行时每次查询检查。
+  // 配置登记不读取凭据、不连接数据库；运行时按资源身份策略检查事务及角色。
   if (q.databases.length && (typeof q.credentialsPath !== 'string' || !isAbsolute(q.credentialsPath) || q.credentialsPath.includes('\0'))) fail('QUERY_CONFIG_CREDENTIALS_PATH_INVALID')
   for (const r of q.databases) {
-    if (!keys(r, ['id','connectionId','tables']) || typeof r.id !== 'string' || !r.id.trim()
+    if (!keys(r, ['id','connectionId','tables', ...(r.environment === undefined ? [] : ['environment']), ...(r.identityPolicy === undefined ? [] : ['identityPolicy'])]) || typeof r.id !== 'string' || !r.id.trim()
       || typeof r.connectionId !== 'string' || !r.connectionId.trim() || !Array.isArray(r.tables)
+      || (r.identityPolicy !== undefined && (r.identityPolicy !== 'host-enforced-readonly' || r.environment !== 'uat'))
+      || (r.environment !== undefined && r.environment !== 'uat')
       || r.tables.some(t => !keys(t, ['schema','table','columns']) || !Array.isArray(t.columns) || new Set(t.columns).size !== t.columns.length)
       || new Set(r.tables.map(t => `${t.schema}.${t.table}`)).size !== r.tables.length) fail('QUERY_CONFIG_DATABASE_INVALID')
   }

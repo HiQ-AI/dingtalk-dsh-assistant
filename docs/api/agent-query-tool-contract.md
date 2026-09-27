@@ -7,7 +7,7 @@
 ## 已实现能力
 
 - `query_project_resource`：登记的文件根与路径、或指定 Git 提交。list、search、read；没有终端/任意命令；目录不跟随链接、拒绝 .git/.secrets/.env/私钥路径。read 上限16000字符，search每页最多200文件/4MiB，nextOffset 为文件序号；truncatedFile 表示需继续 read 该文件。仅常见凭据字段做遮盖，Host 仍必须登记可读范围，不能以遮盖代替敏感数据授权；最终对外回复遵循业务数据红线，不直接转发源码或日志。
-- `query_readonly_database`：登记逻辑连接、schema/table/columns；结构化 tables、columns、select 与参数化条件，不接受 SQL/表达式/连接串。每次检查真实角色、目标 schema CREATE/表写权限与数据库侧只读事务；8秒语句超时、最多100行/24KiB，最终 rollback。连接配置仅Host从本机 secrets 读取。
+- `query_readonly_database`：登记逻辑连接、schema/table/columns；结构化 tables、columns、select 与参数化条件，不接受 SQL/表达式/连接串。默认每次检查真实角色、目标 schema CREATE/表写权限与数据库侧只读事务。显式 `environment: uat` 加 `identityPolicy: host-enforced-readonly` 时，可由 Host 使用用户指定的现有 UAT 账号，仍逐次验证只读事务；其他环境不得启用该模式。两种模式都限定8秒语句超时、最多100行/24KiB，最终 rollback。连接配置仅Host从本机 secrets 读取。
 - `query_runtime_status`：Host 固定GET URL及标量字段白名单，不接受模型URL、禁止重定向，5秒/64KiB限制。日志/配置文本由明确登记的 file 资源读取；不要登记含凭据的完整 profile。
 
 ## 配置与授权
@@ -16,7 +16,7 @@
 
 内置查询能力通过 `available(scope)` 声明当前授权范围是否包含实际登记的资源，消息 Host 用它选择会话工具。该方法仅控制工具可见性，每次调用仍必须执行 authorize 和权限变化核对。消息问答及调查阶段的 context 同时提供授权后的资料、数据库和运行状态目录，资料列出逻辑标识、说明、代码版本及允许读取的相对路径，不传宿主根目录、连接凭据或端点地址。Agent 在登记路径内定位文件；范围内文件不存在可纠正，越出登记路径仍拒绝，不能因用户猜测路径扩大权限。
 
-现场已验证资料、固定提交搜索/读取及状态查询；不满足只读权限要求的数据库身份被工具拒绝。拒绝高权限身份只证明权限门禁生效，数据库实际查询仍须使用经批准的最小只读身份单独验收。
+现场已验证资料、固定提交搜索/读取及状态查询。数据库实际查询须对正式配置的目标资源单独验收；已有 UAT 账号的本地只读事务探针不等于 Agent 会话与渠道验收。
 
 ## Kubernetes运行资源
 

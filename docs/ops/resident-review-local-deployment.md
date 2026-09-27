@@ -14,14 +14,14 @@ Resident 关闭会依次尝试 HTTP、同步服务、监听、工作流及 Runti
 
 ### 问答 Agent 与调查流程切换
 
-仅部署问答查询配置时，既有 `deploy-owner-repair.ps1` 使用 `-DirectQueriesProposal <绝对JSON>`，与 `-Bundle/-MergePolicy/-ChecksProposal` 互斥，禁止Bootstrap；不更新工程验收配置。可同时提供 `-ObserverPackage/-ExpectedObserverPackageSha256`，两包各自校验后由同一次原生 plugin add 安装，容量按两包计算，回读/Resume再次核对两包。先 `-Check`，保留原维护、封存、完整备份、owner锁和恢复门禁。配置器 `scripts/configure-agent-query-resources.mjs --check/--apply --profile <绝对YAML> --proposal <绝对JSON> --expected-sha256 <SHA>` 只接受当前已订阅群owner的明确资料/固定提交/status授权，数据库需已批准的只读连接，提案显式提供 `credentialsPath`（绝对文件路径）与 `databases: [{id, connectionId, tables: [{schema, table, columns}]}]`；grant 的 `databaseIds` 必须逐项对应全部登记数据库。表列仅接受明确标识符，拒绝通配及重复。可只登记数据库而将资料/status数组设为空。配置器不读取凭据、不连接数据库、不创建角色；check 零写，apply 保留原文并按 SHA 执行 CAS。真实只读角色及权限仍由查询时独立校验，登记成功不代表数据库验收通过。凭据不得写入提案，配置器只接受路径。提案包含 `expectedProfileSha256`、固定 `target=dingtalk-dsh-assistant.config.workflow.directQueries` 及完整 `directQueries`；部署方保存含真实主体与环境路径的提案及原始证据，不提交公开仓库。
+仅部署问答查询配置时，既有 `deploy-owner-repair.ps1` 使用 `-DirectQueriesProposal <绝对JSON>`，与 `-Bundle/-MergePolicy/-ChecksProposal` 互斥，禁止Bootstrap；不更新工程验收配置。可同时提供 `-ObserverPackage/-ExpectedObserverPackageSha256`，两包各自校验后由同一次原生 plugin add 安装，容量按两包计算，回读/Resume再次核对两包。先 `-Check`，保留原维护、封存、完整备份、owner锁和恢复门禁。配置器 `scripts/configure-agent-query-resources.mjs --check/--apply --profile <绝对YAML> --proposal <绝对JSON> --expected-sha256 <SHA>` 只接受当前已订阅群owner的明确资料/固定提交/status授权；数据库提案显式提供 `credentialsPath`（绝对文件路径）与 `databases: [{id, connectionId, tables: [{schema, table, columns}]}]`。使用现有 UAT 账号时，仅目标数据库资源显式追加 `environment: uat` 和 `identityPolicy: host-enforced-readonly`；其他环境不允许该模式。grant 的 `databaseIds` 必须逐项对应全部登记数据库。表列仅接受明确标识符，拒绝通配及重复。可只登记数据库而将资料/status数组设为空。配置器不读取凭据、不连接数据库、不创建角色；check 零写，apply 保留原文并按 SHA 执行 CAS。默认严格检查只读角色；显式 UAT 模式由 Host 限定结构化查询并逐次核验只读事务。登记成功不代表数据库验收通过。凭据不得写入提案，配置器只接受路径。提案包含 `expectedProfileSha256`、固定 `target=dingtalk-dsh-assistant.config.workflow.directQueries` 及完整 `directQueries`；部署方保存含真实主体与环境路径的提案及原始证据，不提交公开仓库。
 
 
 本轮改动把 `answer.text` 替换为 `answer.objective`，并将旧只读材料编排合并为带工具的调查阶段。切换不是运行库历史迁移：已完成记录和工件保留，活动旧定义必须在安装前排空；启动遇到 `WORKFLOW_CUTOVER_ACTIVE_REFERENCES` 时停止切换并核对具体活动引用，不自动重排或改写历史。
 
 1. 在本次检出运行 `node docs/acceptance/agent-direct-execution/scripts/inventory-legacy-workflows.mjs --check --db <控制库路径> --instance <实例ID>`；不传 `--output` 只读输出，保存证据时使用全新 `--output <路径>`（拒绝覆盖）。正式维护排空后再次执行，保存两次清点。确认旧流程活动运行、当前阶段、未排空节点及未确认效果为零。旧 `answer.text` 未完成命令须在旧合同下收尾或明确停止，不能交给新 Agent 猜测其含义。
 2. 按下文备份、打包、安装流程部署 Assistant 与 Observer。正式 profile 的 `workflow.directQueries` 可登记 `resources`、`databases`、`statusResources`、`credentialsPath` 与 `grants`。每个 grant 必须包含精确 `actorId`、`conversationId` 及对应 `resourceIds` / `databaseIds` / `statusIds`；没有默认 owner 资源权限。凭据只放受保护的仓库外文件，配置和工件不得包含密码。
-3. 仓库资源冻结完整提交；状态资源限定固定 GET URL 和返回字段；数据库资源限定表、列并使用专用只读账号。使用真实资源预检，禁止为了通过验收把高权限账号交给模型。尚无合格只读账号时标记数据库验收未完成。
+3. 仓库资源冻结完整提交；状态资源限定固定 GET URL 和返回字段；数据库资源限定表、列。默认使用专用只读账号；用户明确指定使用现有 UAT 账号时，配置 UAT 专属 Host 强制只读事务模式，并实测写入拒绝。账号凭据始终只由 Host 读取，不交给模型，也不登记生产连接。
 4. 安装后独立回读包摘要、进程、健康、流程目录及旧历史。新目录只有统一调查入口，工程与外部交付仍可按原权限发起；旧成功任务可读且没有重放通知。
 5. 在已授权的独立测试群分别验证材料问答、真实资料/代码/数据库读取、调查交付、补充、取消、重启和权限反例。核对真实工具工件、会话、Task 增量与钉钉独立回读；健康正常及原生本地会话通过不能代替渠道验收。
 

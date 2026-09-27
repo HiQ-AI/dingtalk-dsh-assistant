@@ -67,3 +67,7 @@ message-workflow-full,1,controlled-integration,FAIL,docs/tmp/message-workflow-cu
 message-workflow-full,2,controlled-integration,PASS,docs/tmp/message-workflow-current-full-r2.log
 message-workflow-full,3,controlled-integration,PASS,docs/tmp/message-workflow-current-full-r3.log
 workflow-service-full,1,controlled-integration,PASS,docs/tmp/workflow-service-current-full-r1.log
+deployment,6,installed-runtime,PASS,docs/tmp/agent-fifth-deployment-resume.log
+existing-uat-transaction,1,live-readonly,PASS,docs/tmp/existing-uat-readonly-probe.json
+existing-uat-capability,1,live-readonly,PASS,docs/tmp/agent-existing-uat-probe.json
+existing-uat-contract,1,controlled-integration,PASS,docs/tmp/existing-uat-agent-db-tests-r1.log

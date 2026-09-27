@@ -47,6 +47,12 @@ test('数据库工具拒绝SQL与高权限身份；结构化条件值使用参�
  const client={query:async q=>{calls.push(q);const text=typeof q==='string'?q:q.text;if(text.includes('FROM pg_roles'))return{rows:[{rolsuper:privileged,rolcreaterole:false,rolcreatedb:false,rolreplication:false,rolbypassrls:false}]};if(text.includes('schema_write'))return{rows:[{schema_write:false,data_write:false}]};if(text==='SHOW transaction_read_only')return{rows:[{transaction_read_only:'on'}]};return{rows:[{id:1,name:'read'}]}},end:async()=>{}}
  const capability=createAgentDatabaseReadCapability({resources:[resource],connectDatabase:async()=>client}),scope={databaseIds:['uat']},input={resourceId:'uat',operation:'select',table:'public.sample',columns:['id'],filters:[{column:'name',operator:'eq',value:"'; DELETE FROM sample; --"}]}
  await assert.rejects(capability.execute({input,scope}),{code:'QUERY_DATABASE_IDENTITY_NOT_READONLY'})
+ const uat=createAgentDatabaseReadCapability({resources:[{...resource,environment:'uat',identityPolicy:'host-enforced-readonly'}],connectDatabase:async()=>client})
+ const uatResult=await uat.execute({input,scope});assert.equal(uatResult.transactionReadOnly,true)
+ assert.equal(calls.at(-1),'ROLLBACK')
+ assert.throws(()=>createAgentDatabaseReadCapability({resources:[{...resource,environment:'production',identityPolicy:'host-enforced-readonly'}],connectDatabase:async()=>client}),{code:'QUERY_DATABASE_CONFIG_INVALID'})
+ await assert.rejects(uat.execute({input:{...input,operation:'delete'},scope}),{code:'QUERY_ARGUMENT_INVALID'})
+ await assert.rejects(uat.execute({input:{...input,table:'public.other'},scope}),{code:'QUERY_SCOPE_DENIED'})
  privileged=false;const result=await capability.execute({input,scope});assert.equal(result.transactionReadOnly,true)
  const sql=calls.find(c=>typeof c==='object'&&c.text.startsWith('SELECT "id"'));assert.ok(sql);assert.doesNotMatch(sql.text,/DELETE/);assert.match(sql.values[0],/DELETE/);assert.equal(calls.at(-1),'ROLLBACK')
  await assert.rejects(capability.execute({input:{...input,columns:['password']},scope}),{code:'QUERY_SCOPE_DENIED'})
