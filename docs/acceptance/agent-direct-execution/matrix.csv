@@ -71,3 +71,7 @@ deployment,6,installed-runtime,PASS,docs/tmp/agent-fifth-deployment-resume.log
 existing-uat-transaction,1,live-readonly,PASS,docs/tmp/existing-uat-readonly-probe.json
 existing-uat-capability,1,live-readonly,PASS,docs/tmp/agent-existing-uat-probe.json
 existing-uat-contract,1,controlled-integration,PASS,docs/tmp/existing-uat-agent-db-tests-r1.log
+deployment,7,installed-runtime,PASS,docs/tmp/agent-sixth-deployment-resume.log
+existing-uat-real-channel,1,real-channel,PASS,docs/tmp/channel-uat-db-control-audit.json
+investigation-document,6,real-channel,PASS,docs/tmp/channel-document-verification.json
+session-list-latency,1,installed-runtime,FAIL,docs/tmp/agent-live-browser/post-sixth-session-list.json
