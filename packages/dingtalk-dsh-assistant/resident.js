@@ -94,7 +94,7 @@ export async function apply(ctx, config = {}) {
       await verifyWorkflowActivation(store, control, workflowConfig.groupIds)
       for (const groupId of workflowConfig.groupIds) {
         const group = await control.query({ kind: 'message.group', conversationId: groupId })
-        if (group.legacySealRef !== seal.sealRef) throw new Error('workflow_group_seal_mismatch')
+        if (group.legacySealRef !== (seal.sealRefs?.[groupId] ?? seal.sealRef)) throw new Error('workflow_group_seal_mismatch')
       }
     } finally { await control.close() }
   }

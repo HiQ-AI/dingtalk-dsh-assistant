@@ -45,6 +45,49 @@ function notificationFactDigest(db,n){
 }
 const unitMeaning=u=>Object.fromEntries(Object.entries(u).filter(([k])=>!['id','runId','revision','status','corrections','preservedUnitId','topicId'].includes(k)))
 
+const unfinishedEchoNode = node => node.status === 'running' || node.status === 'waiting'
+  || node.status === 'failed' && node.error === 'process_interrupted'
+function echoReconciliation(db, r, sealed = true) {
+  const rejected = reason => ({ eligible: false, reason, runId: r.runId })
+  if (sealed && (r.status !== 'superseded' || r.reason !== 'outbound_echo')) return rejected('MESSAGE_ECHO_NOT_QUARANTINED')
+  const sourceMessageId = r.context?.sourceMessageId
+  if (!sourceMessageId) return rejected('MESSAGE_ECHO_PROOF_REQUIRED')
+  const outbound = db.prepare(`SELECT i.body,source.body AS source FROM message_items i JOIN message_runs source ON source.run_id=i.run_id
+    WHERE i.kind='notification' AND json_extract(source.body,'$.conversationId')=?
+    AND json_extract(i.body,'$.status')='delivered' AND json_extract(i.body,'$.evidence.messageId')=?`)
+    .all(r.conversationId, sourceMessageId).map(row => ({ notification: JSON.parse(row.body), source: JSON.parse(row.source) }))
+    .filter(item => item.notification.payload?.conversationId === r.conversationId && item.notification.evidence?.conversationId === r.conversationId)
+  if (outbound.length !== 1) return rejected('MESSAGE_ECHO_PROOF_REQUIRED')
+  const { notification, source } = outbound[0], barriers = rows(db,r.runId,'barrier').filter(item => item.status === 'pending')
+  if (barriers.some(barrier => barrier.ownerRunId !== r.runId || barrier.previousOwnerRunId || barrier.targetTaskId
+    || barrier.targetSourceKey !== source.sourceKey || barrier.id !== `fence-${digest([r.sourceKey,r.sourceVersion,barrier.targetSourceKey])}`
+    || !r.barriers?.some(original => original.barrierId === barrier.id && original.targetSourceKey === barrier.targetSourceKey && !original.targetTaskId)
+    || !r.context?.quoteRefs?.some(ref => ref.sourceKey === barrier.targetSourceKey && ref.messageId === notification.payload.sourceMessageId))) return rejected('MESSAGE_ECHO_BARRIER_MISMATCH')
+  if (['command','notification','notification-operation','notification-replacement'].some(kind => rows(db,r.runId,kind).length)
+    || db.prepare('SELECT 1 FROM execution_effects WHERE run_id=? LIMIT 1').get(r.runId)
+    || db.prepare('SELECT 1 FROM execution_runs WHERE run_id=? LIMIT 1').get(r.runId)) return rejected('MESSAGE_ECHO_EFFECT_PRESENT')
+  const nodes = rows(db,r.runId,'node').filter(unfinishedEchoNode)
+  return { eligible: true, runId: r.runId, expectedDigest: digest({ run: r, nodes, barriers, notification, source }),
+    notificationId: notification.id, sourceMessageId, nodeRunIds: nodes.map(node => node.nodeRunId), barrierIds: barriers.map(barrier => barrier.id),
+    runningNodeRunIds: nodes.filter(node => node.status === 'running').map(node => node.nodeRunId), alreadyReconciled: nodes.length === 0 && barriers.length === 0 }
+}
+function finishEchoNodes(db, r, now) {
+  const nodeRunIds = []
+  for (const node of rows(db,r.runId,'node').filter(unfinishedEchoNode)) {
+    node.priorStatus = node.status; node.status = 'superseded'; node.reason = 'outbound_echo'; node.completedAt = now; node.retryAt = null
+    put(db,r.runId,'node',node); nodeRunIds.push(node.nodeRunId)
+  }
+  return nodeRunIds
+}
+function finishEchoBarriers(db, r, now) {
+  const barrierIds = []
+  for (const barrier of rows(db,r.runId,'barrier').filter(item => item.status === 'pending')) {
+    barrier.status = 'resolved'; barrier.resolution = 'outbound_echo'; barrier.resolvedAt = now
+    put(db,r.runId,'barrier',barrier); barrierIds.push(barrier.id)
+  }
+  return barrierIds
+}
+
 export function installMessageSchema(db) {
   db.exec(`CREATE TABLE message_meta(version INTEGER NOT NULL CHECK(version=1)) STRICT;
     INSERT INTO message_meta VALUES(1);
@@ -456,6 +499,15 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     r.routingStatus='routing_complete';r.intentStatus='processed';r.foldedIntoRunId=target.runId;save(db,r)
     return {result:{run:r,topicId:topics[0].topic_id,bound:!bound}}
   }
+  if(kind==='message.echo.reconcile') {
+    if(!a||Object.keys(a).some(key=>!['runId','expectedDigest'].includes(key)))fail('MESSAGE_INVALID_ARGUMENT')
+    const r=run(db,a.runId),check=echoReconciliation(db,r)
+    if(!check.eligible)fail(check.reason)
+    if(str(a.expectedDigest)!==check.expectedDigest)fail('MESSAGE_ECHO_RECONCILE_STALE')
+    const nodeRunIds=finishEchoNodes(db,r,now),barrierIds=finishEchoBarriers(db,r,now)
+    return {result:{runId:r.runId,status:nodeRunIds.length||barrierIds.length?'reconciled':'already-reconciled',nodeRunIds,barrierIds,
+      notificationId:check.notificationId,sourceMessageId:check.sourceMessageId}}
+  }
   const r=run(db,a.runId);current(db,r,a.expectedRevision)
   if(kind==='message.quiet') {
     const original=str(a.body)
@@ -480,13 +532,12 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   }
   if(kind==='message.attention') {r.status='needs_attention';r.reason=a.reason;if(r.routingStatus!=='routing_complete')r.routingStatus='routing_blocked';else r.intentStatus='intent_blocked';save(db,r);return {result:{run:r}}}
   if(kind==='message.echo.quarantine') {
-    const id=r.context?.sourceMessageId
-    const outbound=id&&db.prepare("SELECT 1 FROM message_items i JOIN message_runs source ON source.run_id=i.run_id WHERE i.kind='notification' AND json_extract(source.body,'$.conversationId')=? AND json_extract(i.body,'$.evidence.messageId')=? LIMIT 1").get(r.conversationId,id)
-    if(!outbound||rows(db,r.runId,'command').length)fail('MESSAGE_ECHO_QUARANTINE_FORBIDDEN')
-    if(r.status==='superseded')return {result:{run:r}}
+    const check=echoReconciliation(db,r,false)
+    if(!check.eligible)fail('MESSAGE_ECHO_QUARANTINE_FORBIDDEN')
     for(const request of rows(db,r.runId,'request').filter(item=>item.status==='pending')) {request.status='superseded';put(db,r.runId,'request',request)}
+    const nodeRunIds=finishEchoNodes(db,r,now),barrierIds=finishEchoBarriers(db,r,now)
     r.status='superseded';r.reason='outbound_echo';save(db,r)
-    return {result:{run:r}}
+    return {result:{run:r,nodeRunIds,barrierIds,notificationId:check.notificationId}}
   }
   if(kind==='message.activate') {
     if(r.status!=='pending'||r.activatedAt)return {result:{run:r}}
@@ -777,7 +828,7 @@ export function queryMessages(db,a) {
       .all(after,json(states),...(a.runId?[str(a.runId)]:[]),limit).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
   }
   if(a.kind==='message.group') {const row=db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(str(a.conversationId));return row?JSON.parse(row.body):null}
-  if(a.kind==='message.task-candidates') {const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER;if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT');return db.prepare("SELECT i.rowid AS seq,r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') AND json_extract(r.body,'$.conversationId')=? AND i.rowid<? ORDER BY i.rowid DESC LIMIT ?").all(str(a.conversationId),before,limit).map(x=>({run:JSON.parse(x.run),command:JSON.parse(x.command),sequenceId:x.seq}))}
+  if(a.kind==='message.task-candidates') {const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER;if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT');return db.prepare("SELECT i.rowid AS seq,r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') AND json_type(i.body,'$.args.taskId')='text' AND length(json_extract(i.body,'$.args.taskId'))>0 AND json_extract(r.body,'$.conversationId')=? AND i.rowid<? ORDER BY i.rowid DESC LIMIT ?").all(str(a.conversationId),before,limit).map(x=>({run:JSON.parse(x.run),command:JSON.parse(x.command),sequenceId:x.seq}))}
   if(a.kind==='message.list') {
     const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER
     if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT')
@@ -786,6 +837,16 @@ export function queryMessages(db,a) {
   }
   if(a.kind==='message.task') {const row=db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=? AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') ORDER BY i.rowid LIMIT 1").get(str(a.taskId));return row?{run:JSON.parse(row.run),command:JSON.parse(row.command)}:null}
   if(a.kind==='message.task.latest') {const row=db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=? AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') AND json_extract(i.body,'$.status')='applied' ORDER BY i.rowid DESC LIMIT 1").get(str(a.taskId));return row?{run:JSON.parse(row.run),command:JSON.parse(row.command)}:null}
+  if(a.kind==='message.echo.reconciliation')return echoReconciliation(db,run(db,a.runId))
+  if(a.kind==='message.echo.unreconciled') {
+    const limit=a.limit??100
+    if(!Number.isSafeInteger(limit)||limit<1||limit>200)fail('MESSAGE_INVALID_LIMIT')
+    return db.prepare(`SELECT r.body FROM message_runs r WHERE json_extract(r.body,'$.status')='superseded'
+      AND json_extract(r.body,'$.reason')='outbound_echo' AND EXISTS (SELECT 1 FROM message_items i WHERE i.run_id=r.run_id
+        AND ((i.kind='node' AND (json_extract(i.body,'$.status') IN ('running','waiting') OR (json_extract(i.body,'$.status')='failed' AND json_extract(i.body,'$.error')='process_interrupted')))
+          OR (i.kind='barrier' AND json_extract(i.body,'$.status')='pending')))
+      ORDER BY r.rowid LIMIT ?`).all(limit).map(row=>echoReconciliation(db,JSON.parse(row.body)))
+  }
   if(a.kind==='message.source') {const row=db.prepare('SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=r.source_version WHERE r.source_key=?').get(str(a.sourceKey));return row?JSON.parse(row.body):null}
   if(a.kind==='message.pending')return db.prepare("SELECT r.body FROM message_runs r WHERE json_extract(r.body,'$.status') NOT IN ('settled','superseded','buffered','alias') OR (json_extract(r.body,'$.status')='settled' AND EXISTS (SELECT 1 FROM message_items i WHERE i.run_id=r.run_id AND i.kind='barrier' AND json_extract(i.body,'$.status')='pending')) ORDER BY r.rowid").all().map(x=>JSON.parse(x.body))
   if(a.kind==='message.command')return get(db,'command',a.commandId)

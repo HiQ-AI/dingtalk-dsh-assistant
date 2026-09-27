@@ -44,7 +44,7 @@ function statusFollowup(snapshot) {
 /** 无常驻模型会话。每个判断独立、无工具；数据库是恢复和派发的唯一事实源。 */
 export function createMessageWorkflow({ store, judge, context = {}, handlers = {}, policy = {}, clock = Date.now }) {
   if (!store?.command || !store?.query || typeof judge !== 'function') throw new Error('MESSAGE_DEPENDENCIES_REQUIRED')
-  const config = { ...defaultMessagePolicy, ...policy }, flights = new Map(), routingTails = new Map(), topicFlights = new Map(), topicSchedules = new Set(), controllers = new Set(), queue = []
+  const config = { ...defaultMessagePolicy, ...policy }, flights = new Map(), routingTails = new Map(), topicFlights = new Map(), topicSchedules = new Set(), controllers = new Map(), queue = []
   let closed = false, occupied = 0, legacyTail = Promise.resolve(), quietReconciled = false
   const cmd = async (kind, args, id = `${kind}:${randomUUID()}`) => (await store.command({ id, kind, args })).result
   const state = runId => store.query({ kind: 'message.run', runId })
@@ -165,7 +165,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const claimed = await cmd('message.node.claim', { runId, unitId, nodeId: stage, expectedRevision: rev, estimatedInputTokens: prepared ? inputBytes + 256 : 0, maxOutputTokens: prepared ? outputLimit : 0, input: prepared ? { ...input, inputBytes, inputHash: prepared.inputHash, inputReadyAt: clock() } : { deterministic: true, ...(input.contextHash ? { contextHash: input.contextHash } : {}), inputHash: digest(input), inputReadyAt: clock() } })
       binding = claimed?.node
       if (!binding) return null
-      if (prepared) { controller = new AbortController(); controllers.add(controller) }
+      if (prepared) { controller = new AbortController(); controllers.set(binding.nodeRunId, controller) }
       const timeout = prepared ? new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('MESSAGE_NODE_TIMEOUT')) }, Math.min(config.attemptMs, remaining)) }) : null
       const response = fixedOutput ? { output: fixedOutput, usage: { inputTokens: 0, outputTokens: 0 } } : await Promise.race([judge({ stage, input, prepared, schema: messageSchemas[stage], signal: controller.signal, maxOutputTokens: outputLimit }), timeout])
       const output = messageSchemas[stage].parse(response.output ?? response)
@@ -186,7 +186,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       else if (error.code === 'MESSAGE_BUDGET_EXHAUSTED') await cmd('message.attention', { runId, reason: `MESSAGE_BUDGET_EXHAUSTED:${stage}:${unitId}` })
       else if (!['MESSAGE_NODE_NOT_READY', 'MESSAGE_RETRY_NOT_DUE', 'MESSAGE_DEADLINE_EXCEEDED', 'MESSAGE_STALE'].includes(error.code)) throw error
       return null
-    } finally { clearTimeout(timer); if (controller) { controller.abort(); controllers.delete(controller) }; release?.() }
+    } finally { clearTimeout(timer); if (controller) { controller.abort(); controllers.delete(binding.nodeRunId) }; release?.() }
   }
   async function unitDrive(runId, unit) {
     if (closed) return
@@ -336,7 +336,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const topic = await context.topicFor?.({ run: data.run, unit, binding, intent, facts })
     if (topic) binding.topicId = topic.topicId
     if (facts.topic?.facts) base.constraints = [...new Set([...base.constraints, ...facts.topic.facts.filter(fact => fact.kind === 'constraint' && fact.status !== 'invalidated').map(fact => fact.text)])]
-    const commands = intent.actions.every(action => action.intent === 'no_action') ? [] : intent.actions.map((action, index) => { const commandId = `${runId}:${unit.unitId}:${revision(data)}:${index}`; return { commandId, kind: action.intent, args: { taskId: binding.target?.taskId ?? (['create', 'research', 'answer'].includes(action.intent) ? `task-${digest(commandId).slice(0, 32)}` : null), arguments: action.arguments, binding, constraints: [...base.constraints, ...base.sharedConstraints, ...intent.constraints], requiredExecutionMaterials: intent.requiredExecutionMaterials, replyPolicy: intent.replyPolicy }, dependsOn: action.dependsOn.map(dep => `${runId}:${unit.unitId}:${revision(data)}:${dep}`) } })
+    const commands = intent.actions.every(action => action.intent === 'no_action') ? [] : intent.actions.map((action, index) => { const commandId = `${runId}:${unit.unitId}:${revision(data)}:${index}`; return { commandId, kind: action.intent, args: { taskId: action.intent === 'answer' ? null : binding.target?.taskId ?? (['create', 'research'].includes(action.intent) ? `task-${digest(commandId).slice(0, 32)}` : null), arguments: action.arguments, binding, constraints: [...base.constraints, ...base.sharedConstraints, ...intent.constraints], requiredExecutionMaterials: intent.requiredExecutionMaterials, replyPolicy: intent.replyPolicy }, dependsOn: action.dependsOn.map(dep => `${runId}:${unit.unitId}:${revision(data)}:${dep}`) } })
     await cmd('message.accept', { runId, unitId: unit.unitId, expectedRevision: revision(data), commands, ...(topic ? { topic } : {}), ...(commands.length ? {} : { outcome: 'ignored' }) }, `accept:${runId}:${unit.unitId}:${revision(data)}`)
     await dispatch(runId)
   }
@@ -488,7 +488,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const commands = intent.actions.every(action => action.intent === 'no_action') ? [] : intent.actions.flatMap((action, index) => {
         const commandId = actionIds[index]
         if (usedPrior.has(commandId)) return []
-        return [{ commandId, kind: action.intent, args: { taskId: priorityControls?.find(control => control.unitId === item.unit.id)?.taskId ?? actionBinding.target?.taskId ?? (['create', 'research', 'answer'].includes(action.intent) ? `task-${digest(commandId).slice(0, 32)}` : null), arguments: action.arguments, binding: actionBinding, constraints, requiredExecutionMaterials: intent.requiredExecutionMaterials, replyPolicy: intent.replyPolicy }, dependsOn: action.dependsOn.map(dep => actionIds[dep]) }]
+        return [{ commandId, kind: action.intent, args: { taskId: action.intent === 'answer' ? null : priorityControls?.find(control => control.unitId === item.unit.id)?.taskId ?? actionBinding.target?.taskId ?? (['create', 'research'].includes(action.intent) ? `task-${digest(commandId).slice(0, 32)}` : null), arguments: action.arguments, binding: actionBinding, constraints, requiredExecutionMaterials: intent.requiredExecutionMaterials, replyPolicy: intent.replyPolicy }, dependsOn: action.dependsOn.map(dep => actionIds[dep]) }]
       })
       const sourceRefs = [{ sourceKey: item.run.sourceKey, sourceVersion: item.run.sourceVersion, text: item.run.body }]
       const topicFacts = [...intent.constraints.map(text => ({ kind: 'constraint', text, sourceRefs })), ...intent.actions.filter(action => action.intent === 'fact').map(action => ({ kind: action.arguments.kind, text: action.arguments.text, sourceRefs }))]
@@ -644,6 +644,14 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   async function recover() {
     const pending = await store.query({ kind: 'message.pending' })
     const results = []
+    for (const check of await store.query({ kind: 'message.echo.unreconciled', limit: 200 })) {
+      if (!check.eligible) continue
+      try {
+        const repaired = await cmd('message.echo.reconcile', { runId: check.runId, expectedDigest: check.expectedDigest }, `echo-reconcile:${check.runId}:${check.expectedDigest}`)
+        for (const nodeRunId of repaired.nodeRunIds) controllers.get(nodeRunId)?.abort()
+        results.push(repaired)
+      } catch (error) { if (error.code !== 'MESSAGE_ECHO_RECONCILE_STALE') throw error }
+    }
     for (const run of pending) {
       results.push(await recoverOne(run))
     }
@@ -662,7 +670,10 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   }
   async function recoverOne(run) {
       if (run.context?.sourceMessageId && await store.query({ kind: 'message.outboundByMessage', conversationId: run.conversationId, messageId: run.context.sourceMessageId })) {
-        try { await cmd('message.echo.quarantine', { runId: run.runId }, `echo-quarantine:${run.runId}`) }
+        try {
+          const quarantined = await cmd('message.echo.quarantine', { runId: run.runId }, `echo-quarantine:${run.runId}`)
+          for (const nodeRunId of quarantined.nodeRunIds ?? []) controllers.get(nodeRunId)?.abort()
+        }
         catch (error) { if (error.code !== 'MESSAGE_ECHO_QUARANTINE_FORBIDDEN') throw error }
         return
       }
@@ -700,6 +711,6 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       return process(run.runId)
   }
   async function resume(input) { const result = await cmd('message.wake', input, `wake:${input.eventId}`); if (result?.run?.runId) { await process(result.run.runId); await waitForTopicFlight(result.run.runId) } return result }
-  async function close() { closed = true; for (const controller of controllers) controller.abort(); for (const item of queue.splice(0)) item.reject(new Error('MESSAGE_WORKFLOW_CLOSED')); await Promise.allSettled([...flights.values(), ...topicFlights.values(), ...topicSchedules]) }
+  async function close() { closed = true; for (const controller of controllers.values()) controller.abort(); for (const item of queue.splice(0)) item.reject(new Error('MESSAGE_WORKFLOW_CLOSED')); await Promise.allSettled([...flights.values(), ...topicFlights.values(), ...topicSchedules]) }
   return { receive, reprocess, process, recover, resume, state, close }
 }

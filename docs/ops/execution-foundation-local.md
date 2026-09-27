@@ -483,3 +483,13 @@ Host 配置属于冻结定义身份。已有等待任务不能通过热改配置
 # 本地验收候选完整性
 
 准备命令完成后、全部业务验收及清理结束后，以及提交前核对票据时，重新校验原始 snapshot manifest 的每个文件路径、非符号链接属性和 SHA256。任何原始文件被修改、删除或替换都拒绝 PASS；Host 冻结的 generatedOutputDirectories 才允许新增生成物，默认无排除。前端明确 node_modules/dist，后端 target；根目录、穿越路径、绝对路径与重复路径拒绝。排除目录本身不能是符号链接，原始已存在文件即使处在该目录也须保持不变；在 src 等非生成目录增加文件同样拒绝。模型不能指定生成目录。构建脚本如需生成源码，应先将所需源码作为正式候选修改，不得验收一个与交付候选不同的源码树。
+
+### 已封存实例接入全新空群
+
+使用同一个 CLI 增加 `--enroll-empty-group --profile <绝对profile路径> --expected-profile-sha256 <变更前SHA256>`，并提供上述全部参数；`--group` 只能出现一次。先 `--check` 再 `--execute`，两次都保留原始 profile SHA，便于中断后幂等恢复。推荐通过 `deploy-owner-repair.ps1 -EnrollmentProposal` 完成正式维护、原生订阅、停机、备份和安装编排；新群激活前不得发测试输入。
+
+接入只允许已订阅且完全没有消息、话题、Outbox、路由历史、任务和控制账消息的新群；仅“已排空”不足以接入。原始群列表、快照和 sealRef 保持不变；每次接入保存独立 enrollment 快照，新群启动核验自己的 sealRef。CLI 自取控制库独占锁，要求 maintenance 已 stopping 且 drained；部署脚本必须先释放自己的 owner 锁。
+
+强制停机若留下 WAL，部署脚本在持 owner 锁、备份前调用 `checkpointDeploymentDatabase`，通过 SQLite 原生 checkpoint 收口；前后所有表逻辑摘要必须相同。接入 `--check` 使用 immutable 只读模式且拒绝非空 WAL，保证不会创建 WAL/SHM，也不会漏读未 checkpoint 数据。
+
+profile 只修改唯一 instanceId/dbPath 对应的 workflow.groupIds，保留 !!js 及无关配置原文。journal 绑定前后 SHA；接管或 profile 更新后中断时，pending enrollment 阻止启动和旧引擎入站。保留现场，以相同参数重跑，不手工改 journal、profile 或控制库。激活后恢复计划任务并按正常维护 resume 流程启动，最后独立验收真实消息链路。

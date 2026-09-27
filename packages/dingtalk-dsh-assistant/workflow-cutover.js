@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile, open, rename, mkdir, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { openExecutionStore } from './execution-store.js'
 import { openExecutionArtifacts } from './execution-artifacts.js'
+import { maintenanceStatus } from './execution-maintenance.js'
 
 const fail = (code, details) => { throw Object.assign(new Error(code), { code, details }) }
 const digest = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -54,7 +56,11 @@ export async function readWorkflowSeal({ sealPath, conversationId }) {
   const journal = await optionalJson(absolute(sealPath))
   if (!journal) return null
   if (journal.version !== 1 || !['sealed', 'active'].includes(journal.phase) || !Array.isArray(journal.groupIds)) fail('CUTOVER_SEAL_INVALID')
-  if (conversationId && !journal.groupIds.includes(conversationId)) return null
+  const enrollments = journal.enrollments ?? []
+  if (!Array.isArray(enrollments) || enrollments.some(e => !e || !['sealed', 'active'].includes(e.phase) || typeof e.conversationId !== 'string')) fail('CUTOVER_SEAL_INVALID')
+  const allGroups = [...journal.groupIds, ...enrollments.map(e => e.conversationId)]
+  if (new Set(allGroups).size !== allGroups.length) fail('CUTOVER_SEAL_INVALID')
+  if (conversationId && !allGroups.includes(conversationId)) return null
   const snapshotPath = absolute(journal.snapshotPath)
   const stamp = async () => { const s = await stat(snapshotPath); return `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}` }
   const identity = await stamp(), key = `${snapshotPath}:${journal.legacySha256}:${JSON.stringify(journal.groupIds)}`
@@ -64,6 +70,18 @@ export async function readWorkflowSeal({ sealPath, conversationId }) {
     const report = inspectLegacyDrain(JSON.parse(snapshot), journal.groupIds)
     if (!report.ready) fail('CUTOVER_SEAL_NOT_DRAINED', report)
     verifiedSnapshots.set(key, identity)
+  }
+  if (enrollments.length) {
+    const sealRefs = Object.fromEntries(journal.groupIds.map(id => [id, `sha256:${journal.legacySha256}`]))
+    for (const enrollment of enrollments) {
+      const bytes = await readFile(absolute(enrollment.snapshotPath))
+      if (digest(bytes) !== enrollment.legacySha256) fail('CUTOVER_SNAPSHOT_MISMATCH')
+      inspectEmptyLegacyGroup(JSON.parse(bytes), enrollment.conversationId)
+      sealRefs[enrollment.conversationId] = `sha256:${enrollment.legacySha256}`
+    }
+    return { blockLegacy: true, phase: journal.phase === 'active' && enrollments.every(e => e.phase === 'active') ? 'active' : 'sealed',
+      conversationId, groupIds: allGroups, instanceId: journal.instanceId, dbPath: journal.dbPath,
+      sealRef: conversationId ? sealRefs[conversationId] : `sha256:${journal.legacySha256}`, sealRefs, journalId: journal.journalId }
   }
   return { blockLegacy: true, phase: journal.phase, conversationId, groupIds: journal.groupIds, instanceId: journal.instanceId,
     dbPath: journal.dbPath, sealRef: `sha256:${journal.legacySha256}`, journalId: journal.journalId }
@@ -124,5 +142,98 @@ export async function cutoverWorkflow({ legacyPath, journalPath, dbPath, artifac
     await durableWrite(journalPath, JSON.stringify(journal, null, 2))
     const verified = await readWorkflowSeal({ sealPath: journalPath, conversationId: groupIds[0] })
     return { status: 'ACTIVATED', seal: verified, groupIds, legacySha256 }
+  } finally { await store.close() }
+}
+
+/** 新群接入不承担历史迁移；即使消息已结束，也必须拒绝。 */
+export function inspectEmptyLegacyGroup(document, conversationId) {
+  const report = inspectLegacyDrain(document, [conversationId])
+  const group = values(document.tables.groups).find(g => g.groupId === conversationId)
+  const collections = ['messages', 'outbox', 'topics', 'taskReservations', 'coordinationRequests', 'routeHistory']
+  if (!report.ready || !group || collections.some(key => values(group[key]).length)
+    || (group.nextSequence ?? 1) !== 1 || (group.routingRevision ?? 0) !== 0
+    || values(document.tables.tasks).some(t => t.groupId === conversationId)) fail('CUTOVER_NEW_GROUP_NOT_EMPTY', report)
+  return report
+}
+
+/** 现有 seal 的受控扩展。planProfile 是 CLI 注入的纯 YAML 变换，不读取或执行配置代码。 */
+export async function enrollEmptyWorkflowGroup({ legacyPath, journalPath, dbPath, artifactDirectory, instanceId,
+  groupIds, profilePath, expectedProfileSha256, planProfile, check, probeStopped }) {
+  legacyPath = absolute(legacyPath); journalPath = absolute(journalPath); dbPath = absolute(dbPath)
+  artifactDirectory = absolute(artifactDirectory); profilePath = absolute(profilePath)
+  if (journalPath !== workflowSealPath(legacyPath) || groupIds?.length !== 1 || !groupIds[0]
+    || !/^[a-f0-9]{64}$/.test(expectedProfileSha256 ?? '') || typeof planProfile !== 'function') fail('CUTOVER_INVALID_ARGUMENT')
+  const conversationId = groupIds[0]
+  const stopped = await probeStopped()
+  const assertStopped = value => { if (!value?.stopped || value.pidPresent !== false || value.listenerPresent !== false || value.autostartDisabled !== true) fail('CUTOVER_RUNTIME_NOT_STOPPED', value) }
+  assertStopped(stopped)
+  const journalBytes = await readFile(journalPath), journal = JSON.parse(journalBytes)
+  const seal = await readWorkflowSeal({ sealPath: journalPath })
+  if (!seal || journal.phase !== 'active' || journal.instanceId !== instanceId || journal.dbPath !== dbPath
+    || journal.legacyPath !== legacyPath || journal.artifactDirectory !== artifactDirectory) fail('CUTOVER_JOURNAL_CONFLICT')
+  let enrollment = journal.enrollments?.find(e => e.conversationId === conversationId)
+  if (journal.groupIds.includes(conversationId) || journal.enrollments?.some(e => e.phase !== 'active' && e !== enrollment)) fail('CUTOVER_ENROLLMENT_CONFLICT')
+  const bytes = await readFile(legacyPath), legacySha256 = digest(bytes)
+  inspectEmptyLegacyGroup(JSON.parse(bytes), conversationId)
+  const source = await readFile(profilePath, 'utf8'), profileHash = digest(source)
+  let updated
+  if (enrollment) {
+    if (enrollment.profilePath !== profilePath || enrollment.profileBeforeSha256 !== expectedProfileSha256
+      || enrollment.legacySha256 !== legacySha256) fail('CUTOVER_ENROLLMENT_CONFLICT')
+    if (profileHash === enrollment.profileAfterSha256) updated = source
+    else if (profileHash === enrollment.profileBeforeSha256) updated = planProfile(source, seal.groupIds.filter(id => id !== conversationId), conversationId)
+    else fail('CUTOVER_PROFILE_CHANGED')
+    if (digest(updated) !== enrollment.profileAfterSha256) fail('CUTOVER_PROFILE_CHANGED')
+  } else {
+    if (profileHash !== expectedProfileSha256) fail('CUTOVER_PROFILE_CHANGED')
+    updated = planProfile(source, seal.groupIds, conversationId)
+  }
+  // 停机后必须已 checkpoint；immutable 避免只读预检创建 WAL/SHM。
+  try { if ((await stat(`${dbPath}-wal`)).size > 0) fail('CUTOVER_DATABASE_NOT_CHECKPOINTED') } catch (e) { if (e.code !== 'ENOENT') throw e }
+  const dbUrl = pathToFileURL(dbPath); dbUrl.searchParams.set('immutable', '1')
+  const db = new DatabaseSync(dbUrl.href, { readOnly: true })
+  let maintenance
+  try {
+    if (db.prepare('SELECT instance_id FROM execution_meta WHERE singleton=1').get()?.instance_id !== instanceId) fail('CUTOVER_INSTANCE_MISMATCH')
+    maintenance = maintenanceStatus(db)
+    if (!maintenance.active || maintenance.phase !== 'stopping' || !maintenance.drained) fail('CUTOVER_MAINTENANCE_REQUIRED')
+    if (db.prepare("SELECT count(*) n FROM message_runs WHERE json_extract(body,'$.conversationId')=?").get(conversationId).n) fail('CUTOVER_NATIVE_GROUP_NOT_EMPTY')
+    const native = db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(conversationId)
+    if (!enrollment && native) fail('CUTOVER_NATIVE_GROUP_EXISTS')
+  } finally { db.close() }
+  if (check) return { status: 'CHECK_PASS', writes: 0, conversationId, legacySha256, profileBeforeSha256: expectedProfileSha256,
+    profileAfterSha256: digest(updated), maintenanceId: maintenance.maintenanceId, enrollmentPhase: enrollment?.phase ?? null }
+  const store = await openExecutionStore({ dbPath, instanceId })
+  try {
+    const status = await store.query({ kind: 'runtime.maintenance' })
+    if (!status.active || status.phase !== 'stopping' || !status.drained || status.maintenanceId !== maintenance.maintenanceId) fail('CUTOVER_MAINTENANCE_REQUIRED')
+    assertStopped(await probeStopped())
+    if (digest(await readFile(legacyPath)) !== legacySha256 || digest(await readFile(journalPath)) !== digest(journalBytes)
+      || digest(await readFile(profilePath)) !== profileHash) fail('CUTOVER_INPUT_CHANGED')
+    let group = await store.query({ kind: 'message.group', conversationId })
+    if (!enrollment && group) fail('CUTOVER_NATIVE_GROUP_EXISTS')
+    if (!enrollment) {
+      const enrollmentId = randomUUID(), snapshotPath = `${journalPath}.enrollment-${enrollmentId}.json`
+      await durableWrite(snapshotPath, bytes, true)
+      enrollment = { enrollmentId, conversationId, phase: 'sealed', snapshotPath, legacySha256, profilePath,
+        profileBeforeSha256: expectedProfileSha256, profileAfterSha256: digest(updated), maintenanceId: maintenance.maintenanceId,
+        sealedAt: new Date().toISOString() }
+      journal.enrollments = [...(journal.enrollments ?? []), enrollment]
+      await durableWrite(journalPath, JSON.stringify(journal, null, 2))
+    }
+    const legacySealRef = `sha256:${legacySha256}`
+    if (group?.engine !== 'workflow') {
+      const args = { conversationId, expectedEpoch: 0, legacySealRef }
+      await store.command({ id: `${enrollment.enrollmentId}:begin`, kind: 'message.group.begin', args })
+      await store.command({ id: `${enrollment.enrollmentId}:activate`, kind: 'message.group.activate', args })
+      group = await store.query({ kind: 'message.group', conversationId })
+    }
+    if (group.state !== 'active' || group.engine !== 'workflow' || group.epoch !== 1 || group.legacySealRef !== legacySealRef) fail('CUTOVER_GROUP_READBACK_FAILED')
+    if (digest(await readFile(profilePath)) !== profileHash) fail('CUTOVER_PROFILE_CHANGED')
+    if (source !== updated) await durableWrite(profilePath, updated)
+    if (digest(await readFile(profilePath)) !== enrollment.profileAfterSha256) fail('CUTOVER_PROFILE_CHANGED')
+    enrollment.phase = 'active'; enrollment.activatedAt ??= new Date().toISOString()
+    await durableWrite(journalPath, JSON.stringify(journal, null, 2))
+    return { status: 'ACTIVATED', conversationId, seal: await readWorkflowSeal({ sealPath: journalPath }), profileSha256: enrollment.profileAfterSha256 }
   } finally { await store.close() }
 }

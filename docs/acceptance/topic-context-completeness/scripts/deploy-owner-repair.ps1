@@ -4,6 +4,7 @@ param(
   [switch]$Resume,
   [switch]$Bootstrap,
   [switch]$HoldMaintenance,
+  [string]$EnrollmentProposal,
   [string]$ContinueMaintenanceId,
   [Nullable[int]]$ExpectedMaintenanceRevision,
   [ValidateRange(1,600)][int]$WaitSeconds=300,
@@ -27,7 +28,10 @@ $installed="$profile/node_modules/@zzusp/dingtalk-dsh-assistant"
 $tempDirectory="$runtime/local-acceptance/temp"
 $domain='D:/dsh_home/storages/dingtalk-dsh-assistant-v9-pr116'
 $starter='D:/project/dingtalk-dsh-assistant/scripts/start-web.ps1'
-foreach($path in @($Package,$Bundle,$MergePolicy,$ChecksProposal)) {
+$enrollmentTaskName='DSH Web Local'
+$deploymentInputs=@($Package,$Bundle,$MergePolicy,$ChecksProposal)
+if($EnrollmentProposal){$deploymentInputs+= $EnrollmentProposal}
+foreach($path in $deploymentInputs) {
  if(-not [IO.Path]::IsPathFullyQualified($path) -or -not(Test-Path -LiteralPath $path -PathType Leaf)){throw '输入文件须为存在的绝对路径'}
 }
 if(-not [IO.Path]::IsPathFullyQualified($EvidenceDirectory) -or ((Test-Path -LiteralPath $EvidenceDirectory) -and -not ($Readback -or $Resume))){throw '证据目录须为新的绝对路径'}
@@ -64,6 +68,35 @@ function Instance {
  return $proc
 }
 function Same-Hash([string]$Left,[string]$Right){if((Get-FileHash -LiteralPath $Left).Hash-ne(Get-FileHash -LiteralPath $Right).Hash){throw '文件哈希不一致'}}
+function Read-EnrollmentProposal {
+ $value=Get-Content -LiteralPath $EnrollmentProposal -Raw|ConvertFrom-Json
+ $keys=@($value.PSObject.Properties.Name|Sort-Object)
+ if(($keys-join ',')-ne 'groupId,name,responsibility' -or
+    @(@($value.groupId,$value.name,$value.responsibility)|Where-Object {$_ -isnot [string] -or -not $_.Trim()}).Count){throw '新群提案必须且仅包含非空 groupId/name/responsibility'}
+ return $value
+}
+function Ensure-EnrollmentSubscription($proposal) {
+ $groups=Invoke-RestMethod http://127.0.0.1:18998/state/groups -NoProxy -TimeoutSec 20
+ $current=@($groups|Where-Object groupId -eq $proposal.groupId)
+ if($current.Count-gt 1){throw '新群订阅不唯一'}
+ if($current.Count){
+  if($current[0].name-ne $proposal.name -or $current[0].responsibility-ne $proposal.responsibility -or $current[0].messages.Count -or $current[0].outbox.Count){throw '新群订阅已变化或非空'}
+  return
+ }
+ $body=$proposal|ConvertTo-Json -Compress
+ $null=Invoke-RestMethod http://127.0.0.1:18998/config/groups -Method Post -ContentType 'application/json' -Headers @{Origin='http://127.0.0.1:3080'} -Body $body -NoProxy -TimeoutSec 20
+ $groups=Invoke-RestMethod http://127.0.0.1:18998/state/groups -NoProxy -TimeoutSec 20
+ $verified=@($groups|Where-Object groupId -eq $proposal.groupId)
+ if($verified.Count-ne 1 -or $verified[0].name-ne $proposal.name -or $verified[0].responsibility-ne $proposal.responsibility -or $verified[0].messages.Count -or $verified[0].outbox.Count){throw '新群原生订阅回读不一致'}
+}
+function Restore-EnrollmentAutostart($record) {
+ if($record.enrollmentAutostartRestore){
+  $task=@(Get-ScheduledTask -TaskName $enrollmentTaskName -ErrorAction Stop)
+  if($task.Count-ne 1){throw '接入后自启任务身份不唯一'}
+  if([string]$task[0].State-eq 'Disabled'){$null=Enable-ScheduledTask -TaskName $enrollmentTaskName}
+  if([string](Get-ScheduledTask -TaskName $enrollmentTaskName).State-eq 'Disabled'){throw '接入后自启任务未恢复'}
+ }
+}
 function Acquire-OwnerLock {
  $deadline=(Get-Date).AddSeconds($WaitSeconds)
  do {
@@ -129,7 +162,7 @@ function Change-MaintenancePhase($state,[string]$operation,[string]$maintenanceI
 function Assert-LaunchInputs($launchRecord) {
  if($ExpectedPackageSha256-ne $launchRecord.packageSha256 -or $ExpectedProfileSha256-ne $launchRecord.sourceProfileSha256){throw '接续参数与原部署输入不一致'}
  if((Get-FileHash -LiteralPath $Package).Hash-ne $launchRecord.packageSha256){throw '接续部署包摘要不匹配'}
- foreach($path in @($Bundle,$MergePolicy,$ChecksProposal)){
+ foreach($path in (@($Bundle,$MergePolicy,$ChecksProposal)+@($EnrollmentProposal|Where-Object {$_}))){
   if($path-notin $launchRecord.inputPaths -or (Get-FileHash -LiteralPath $path).Hash-ne $launchRecord.inputHashes.$path){throw '接续配置输入漂移'}
  }
 }
@@ -144,6 +177,7 @@ function Resume-Deployment($result,$launchRecord) {
  $after=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -NoProxy -TimeoutSec 20
  if($after.active -or $after.maintenanceId-ne $launchRecord.maintenanceId){throw '恢复派发回读失败'}
  $result.maintenance=$after;$result.dispatchResumed=$true
+ Restore-EnrollmentAutostart $launchRecord
  return $result
 }
 function Read-Deployment($launchRecord) {
@@ -178,7 +212,7 @@ function Read-Deployment($launchRecord) {
  $webProof=Run-Node @($checker,'web',"$EvidenceDirectory/start.stdout.log")|ConvertFrom-Json
  $maintenance=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -NoProxy -TimeoutSec 20
  if($maintenance.maintenanceId-ne $launchRecord.maintenanceId){throw '启动后维护许可漂移'}
- return @{status='ready';ready=$true;pid=$fresh.ProcessId;launcherPid=$launchRecord.launcherPid;tasks=$tasks.Count;history=$history;package=$packageReadback;web=$webProof;maintenance=$maintenance;dispatchResumed=(-not $maintenance.active);logs=@($logs);scheduledTaskChanged=$false;businessAcceptancePassed=$false}
+ return @{status='ready';ready=$true;pid=$fresh.ProcessId;launcherPid=$launchRecord.launcherPid;tasks=$tasks.Count;history=$history;package=$packageReadback;web=$webProof;maintenance=$maintenance;dispatchResumed=(-not $maintenance.active);logs=@($logs);scheduledTaskChanged=[bool]$launchRecord.enrollmentAutostartRestore;businessAcceptancePassed=$false}
 }
 if($Readback -or $Resume){
  if($Check -or ($Readback -and $Resume)){throw 'Readback、Resume和Check不可同时使用'}
@@ -190,6 +224,8 @@ if($Readback -or $Resume){
  exit 0
 }
 Assert-InputHashes
+if($EnrollmentProposal -and $Bootstrap){throw '新群接入要求已有正式维护接口'}
+$enrollment=if($EnrollmentProposal){Read-EnrollmentProposal}else{$null}
 if(($ContinueMaintenanceId -and $null-eq $ExpectedMaintenanceRevision) -or
    (-not $ContinueMaintenanceId -and $null-ne $ExpectedMaintenanceRevision) -or
    ($Bootstrap -and ($ContinueMaintenanceId -or $HoldMaintenance))){throw '维护接续须同时提供ID与revision，且不能用于Bootstrap'}
@@ -199,7 +235,7 @@ $requiredBytes=[long]$backupBytes+([long](Get-Item -LiteralPath $Package).Length
 $freeBytes=(Get-PSDrive D).Free
 if($freeBytes-lt $requiredBytes){throw "D盘空间不足：可用 $freeBytes，所需 $requiredBytes"}
 $inputHashes=@{}
-foreach($path in @($Package,$Bundle,$MergePolicy,$ChecksProposal)){$inputHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
+foreach($path in $deploymentInputs){$inputHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
 $packageProof=Run-Node @($checker,'package',$Package,$source)
 $configArgs=@("$workspace/scripts/configure-project-local-acceptance.mjs",'--profile',"$profile/cordis.patch.yml",'--bundle',$Bundle,'--merge-policy',$MergePolicy,'--checks-proposal',$ChecksProposal,'--expected-sha256',$ExpectedProfileSha256)
 $configProof=Run-Node ($configArgs+@('--check'))
@@ -228,6 +264,7 @@ if($Check){@{mode='check';writes=0;online=[bool]$old;disk=@{freeBytes=$freeBytes
 New-Item -ItemType Directory -Path $EvidenceDirectory|Out-Null
 $maintenanceId=if($ContinueMaintenanceId){$ContinueMaintenanceId}else{'deploy-'+[guid]::NewGuid().ToString()}
 $lockProcess=$null
+$enrollmentAutostartRestore=$false
 try {
 if($Bootstrap){
  Copy-Item -LiteralPath "$profile/cordis.patch.yml" -Destination "$EvidenceDirectory/profile-original.yml"
@@ -249,6 +286,7 @@ $entered=if($ContinueMaintenanceId){
  @{state=$currentMaintenance}
 }else{Change-Maintenance $maintenanceBefore $true $maintenanceId}
 $entered|ConvertTo-Json -Depth 8|Set-Content -LiteralPath "$EvidenceDirectory/maintenance.json" -Encoding utf8
+if($enrollment){Ensure-EnrollmentSubscription $enrollment}
 try {$snapshot=Wait-DrainedSnapshot}catch{
  if($ContinueMaintenanceId){throw '维护接续排空失败，保留原维护状态，本次未停机'}
  [void](Change-Maintenance $entered.state $false $maintenanceId)
@@ -276,6 +314,14 @@ if($old){
   exit 2
  }
  if($Bootstrap){Wait-BootstrapResidentClosed $old;if($lockProcess.HasExited){throw '首次切换独占锁已丢失'}}
+ if($enrollment){
+  $scheduled=@(Get-ScheduledTask -TaskName $enrollmentTaskName -ErrorAction Stop)
+  if($scheduled.Count-ne 1){throw '新群接入自启任务身份不唯一'}
+  $enrollmentAutostartRestore=[string]$scheduled[0].State-ne 'Disabled'
+  if($enrollmentAutostartRestore){$null=Disable-ScheduledTask -TaskName $enrollmentTaskName}
+  if([string](Get-ScheduledTask -TaskName $enrollmentTaskName).State-ne 'Disabled'){throw '新群接入前自启任务未禁用'}
+  @{taskName=$enrollmentTaskName;restore=$enrollmentAutostartRestore}|ConvertTo-Json|Set-Content "$EvidenceDirectory/enrollment-autostart.json"
+ }
  Stop-Process -Id $old.ProcessId -Force
  foreach($child in $children){$current=Get-CimInstance Win32_Process -Filter "ProcessId=$($child.ProcessId)";if($current -and $current.CreationDate-eq $child.CreationDate){Stop-Process -Id $child.ProcessId -Force}}
 }
@@ -286,6 +332,7 @@ if($stableSnapshot-ne $snapshot){throw '停机期间状态变化，请重新chec
  if(-not $lockProcess){$lockProcess=Acquire-OwnerLock}
  if(@(Listeners).Count){throw '取得锁后发现实例监听'}
  if((Run-Node @($checker,'snapshot'))-ne $snapshot){throw '取得锁后控制账漂移'}
+if($enrollment){Run-Node @($checker,'checkpoint',[string]$old.ProcessId)|Set-Content "$EvidenceDirectory/enrollment-checkpoint.json"}
 $backup='D:/dsh_home/backups/owner-repair-'+(Get-Date -Format yyyyMMdd-HHmmss-fff)
 New-Item -ItemType Directory -Path $backup,"$backup/runtime","$backup/profile"|Out-Null
 Copy-Item -LiteralPath $domain -Destination "$backup/domain" -Recurse
@@ -311,6 +358,12 @@ Run-Node @($checker,'package',$Package,$source,$installed)|Set-Content "$Evidenc
  $lockProcess.Dispose()
  }
 }
+if($enrollment){
+ $profileHash=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash.ToLowerInvariant()
+ $enrollArgs=@("$workspace/scripts/cutover-message-workflow.mjs",'--enroll-empty-group','--legacy',"$domain/dingtalk_dsh_assistant.json",'--journal',"$domain/dingtalk_dsh_assistant.workflow-seal.json",'--db',"$runtime/control.sqlite",'--artifacts',"$runtime/artifacts",'--instance','dsh-web-runtime-v2-20260924','--group',$enrollment.groupId,'--profile',"$profile/cordis.patch.yml",'--expected-profile-sha256',$profileHash,'--runtime-pid',[string]$old.ProcessId,'--runtime-port','18998','--scheduled-task',$enrollmentTaskName)
+ Run-Node ($enrollArgs+@('--check'))|Set-Content "$EvidenceDirectory/enrollment-check.json"
+ Run-Node ($enrollArgs+@('--execute'))|Set-Content "$EvidenceDirectory/enrollment-applied.json"
+}
 if($Bootstrap){
  if(@(Listeners).Count -or (Get-CimInstance Win32_Process -Filter "ProcessId=$($old.ProcessId)" -ErrorAction SilentlyContinue)){throw '离线维护前发现旧实例'}
  $disabledHash=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash.ToLowerInvariant()
@@ -320,7 +373,7 @@ if($Bootstrap){
 # 用既有启动脚本，不创建或改写计划任务；仅当前进程树使用D盘TEMP。
 $env:PATH=(Split-Path -Parent $node)+';'+$env:PATH
 $launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
-$launchRecord=@{mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=@($Bundle,$MergePolicy,$ChecksProposal);inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId}
+$launchRecord=@{mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId;enrollmentAutostartRestore=$enrollmentAutostartRestore}
 $launchRecord|ConvertTo-Json|Set-Content -LiteralPath "$EvidenceDirectory/launch.json" -Encoding utf8
 $result=Read-Deployment $launchRecord
 if($result.ready -and -not $HoldMaintenance){$result=Resume-Deployment $result $launchRecord}

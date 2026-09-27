@@ -76,6 +76,10 @@ flowchart TD
 
 Task Owner 可以有持续会话，但每个 Agent 节点按 NodeRun/租约绑定会话，靠显式输入和工件交接上下文。新流程不要依赖“前一个 Agent 应该记得”。话题意图按批次独立判断，不为每个话题新建永久执行会话。
 
+普通答复由消息动作 `answer` 承接，参数仅为非空 `arguments.text`；它不创建 Task、Run 或任务候选，也不代表已经执行调查。需要调查或执行的目标使用 `research/create`，已有任务状态使用 `status/result`。答复复用通知账本，按原消息引用、当前披露权限和 `replyPolicy` 发送并回读；发送结果未知时只核对原通知，不重发。旧版本已经创建的 answer 任务仍按原来源记录读取，新普通答复不延用这种任务语义。
+
+收到自身通知的回声时，必须匹配同群通知的独立送达证据才可封存；ACK 本身不能授权封存。封存会同步结束尚在处理的模型节点并撤销本机调用，迟到结果不得重新生效，累计预算保留。旧版已封存但遗留活动节点或引用屏障的消息由 `message.echo.reconciliation` 只读预检、`message.echo.reconcile` 按 `expectedDigest` 接纳修复，日常恢复扫描也使用同一入口；只处理 `superseded/outbound_echo`，若存在业务命令、通知或外部效果则拒绝。仅释放该回声自己创建、与原通知来源及明确引用一致的消息屏障；跨所有者、指向 Task 或不匹配引用的屏障拒绝修复，不修改被引用来源或业务任务。
+
 入口代码：[消息与目录](message-context.js)、[Host 装配](workflow-service.js)、[Owner](task-owner-controller.js)、[Controller](execution-controller.js)、[控制账](execution-store.js)。旧 Resident 的 domain v9 / Task contractVersion 2 与原生 `workflow-v2` 的 SQLite 控制账是不同边界；不能把旧 `task_plan_prepare` / 报告工具当作新 Node 提交接口。兼容查询仍可能同时展示旧历史和新任务。
 
 ## 5. 在编码前写清合同

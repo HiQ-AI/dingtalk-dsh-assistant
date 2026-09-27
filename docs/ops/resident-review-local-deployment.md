@@ -210,6 +210,10 @@ C 盘空间不足时，本轮保留计划任务定义，以原 start-web.ps1 和
 
 ## Owner 修复版本受控部署
 
+新增空群可随本次部署提供 `-EnrollmentProposal <绝对 JSON 路径>`，内容只包含非空 `groupId`、`name`、`responsibility`。先确认真实群身份和成员，再执行零写 `-Check`。执行阶段进入正式维护后通过原生订阅接口登记空群，随后排空、封存、停机、备份和安装；释放部署 owner 锁后，由原生 `cutover-message-workflow.mjs --enroll-empty-group` 再次检查停机及锁，先检查后接管并 CAS 更新 profile。接入保留原封存快照和旧群历史。新实例回读并恢复派发之前不发送测试输入。
+
+该路径临时禁用精确的 `DSH Web Local` 自启任务，原来已禁用则保持禁用；只有新实例验证和恢复派发完成后才恢复原来的启用状态。接入或启动失败保留停机/维护及证据，按 `enrollment-autostart.json` 和原生接入 journal 恢复，禁止删除 journal 后重来。`-HoldMaintenance` 会保留维护及临时禁用状态，后续使用原部署参数 `-Resume` 完成回读、恢复派发和自启。
+
 使用验收目录 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1`，先 `-Check`，参数必须提供精确新包 `-Package`、双项目配置 `-Bundle`、合并策略 `-MergePolicy`、当前 profile 摘要 `-ExpectedProfileSha256`、包摘要 `-ExpectedPackageSha256`、新的 `docs/tmp/` 证据目录 `-EvidenceDirectory`。自检不创建证据目录，不改配置或启动实例。去掉 `-Check` 才部署；仅维护人员执行。
 
 允许已排空的 waiting 任务留待新版本恢复，但 running 节点/Owner、未排空节点或 starting/executing/unknown 效果一律阻断。准备失败遗留 unknown 先按专用单次对账规程处理，不能靠部署放宽门禁。脚本要求原实例具备正式维护接口；已离线或尚无维护接口的旧实例拒绝使用此自动部署路径，须先完成独立停机与恢复方案，不能退回“读取排空后强停”的有竞争路径。
@@ -274,3 +278,9 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 独占工作流 owner 锁只能证明 `workflow.close()` 已完成，旧 Resident 随后仍会等待 `runtime.close()` 排空遗留叶子、通知和存储。因此首次切换先添加受信临时 witness 插件并回读 `bootstrap-ready.json`（本次 nonce、旧 PID、精确 entryId）；再追加 Resident 禁用 patch。见证器只接纳原生 Loader 在 `await fiber.dispose()` 完成后发出的 `loader/partial-dispose`，且必须匹配指定模块、disabled=true、fiber 已移除、disposing=0。`bootstrap-disposed.json` 成立后才取得 owner 锁并停止旧 Host。任意其他 entry、仍在 dispose、旧 nonce/PID 均不能作为许可。
 
 现有 `pluginInventory/list` 不能替代此见证：Loader 在 await 前就先清空 `entry.fiber`，因此 `fiberPhase=null` 可能仍在排空。见证器仅记录生命周期证明，不读取业务数据或派发任务。安装与配置更新完成后，仅删除工具生成的两个精确末尾块（witness + disabled），不还原旧配置。就绪或完整退出回执超时，保持原状态等待人工核对，绝不强停。
+
+### 已隔离自身回声遗留模型节点的部署排空恢复
+
+本轮固定事故工具 `docs/acceptance/topic-context-completeness/scripts/recover-quarantined-echo.ps1` 只处理已证明为自身出站回声、运行已 superseded 且无业务效果的残留节点；不接收任意 run/命令。使用新的 `docs/tmp/` 证据目录和当前 profile SHA，先 `-Check` 再同参数执行。它进入正式维护、通过 bootstrap witness 证明 Resident 完整 dispose、取得独占锁备份、原生修复并回读，再恢复精确原 profile。最终输出 `ContinueMaintenanceId`、`ExpectedMaintenanceRevision` 给正常部署脚本。
+
+如中断，保留现场并同参数加 `-Resume`。未取得完整 disposed 见证时禁止强停 Host；端口关闭不算完成退出。备份已有 manifest 仍会重新校验范围及每个文件/一致 SQLite 副本哈希。任何 profile、PID、维护水位或非目标忙项变化均停止，不能为继续部署清空其它工作。

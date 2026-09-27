@@ -4,16 +4,157 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { DatabaseSync } from 'node:sqlite'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
+import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { createMessageWorkflow } from '../packages/dingtalk-dsh-assistant/message-workflow.js'
 import { executeNotificationOperation } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 async function fixture(t) {
  const dir=await mkdtemp(join(tmpdir(),'message-ledger-'));const options={dbPath:join(dir,'control.sqlite'),instanceId:randomUUID()}
  let store=await openExecutionStore({...options,initialize:true})
  t.after(async()=>{await store.close();await rm(dir,{recursive:true,force:true})})
- return {get store(){return store},call:(kind,args,id=randomUUID())=>store.command({id,kind:'message.'+kind,args}),reopen:async()=>{await store.close();store=await openExecutionStore(options)}}
+ return {get store(){return store},call:(kind,args,id=randomUUID())=>store.command({id,kind:'message.'+kind,args}),reopen:async()=>{await store.close();store=await openExecutionStore(options)},
+  editSnapshot:async edit=>{await store.close();const offline=new DatabaseSync(options.dbPath);try{edit(offline)}finally{offline.close()};store=await openExecutionStore(options)}}
 }
 const receive=(runId='m',extra={})=>({runId,sourceKey:runId,sourceVersion:1,conversationId:'g',actorId:'a',body:'do this',...extra})
 const bad=(p,code)=>assert.rejects(p,e=>e.code===code)
+
+async function echoFixture(t, { acknowledgedOnly = false, evidenceGroup = 'g', barrier = false } = {}) {
+ const f=await fixture(t)
+ await f.call('receive',receive('outbound'));await f.call('split',{runId:'outbound',units:[{unitId:'out-unit'}]})
+ await f.call('accept',{runId:'outbound',unitId:'out-unit',commands:[{commandId:'out-command',kind:'answer',args:{}}]})
+ const claim=(await f.call('command.claim',{commandId:'out-command'})).result.command
+ await f.call('command.complete',{commandId:'out-command',leaseEpoch:claim.leaseEpoch,result:{reply:'已收到'}})
+ await f.call('notification.prepare',{runId:'outbound',notificationId:'out-notice',commandId:'out-command',payload:{text:'已收到',conversationId:'g',sourceMessageId:'source-original'},disclosure:{conversationId:'g',authorizationRef:'outbound'}})
+ const notice=(await f.call('notification.claim',{notificationId:'out-notice'})).result.notification
+ await f.call('notification.sent',{notificationId:'out-notice',leaseEpoch:notice.leaseEpoch,ack:{messageId:'out-1'}})
+ if(!acknowledgedOnly)await f.call('notification.readback',{notificationId:'out-notice',leaseEpoch:notice.leaseEpoch,evidence:{messageId:'out-1',conversationId:evidenceGroup}})
+ await f.call('receive',receive('echo',{context:{sourceMessageId:'out-1',...(barrier==='matching'?{quoteRefs:[{sourceKey:'outbound',messageId:'source-original'}]}:{})},policy:{initialWindowMs:45000},
+  ...(barrier?{barriers:[{barrierId:barrier==='matching'?`fence-${executionDigest(['echo',1,'outbound'])}`:'edit-fence',targetSourceKey:'outbound'}]}:{})}))
+ const node=(await f.call('node.claim',{runId:'echo',unitId:'$',nodeId:'S',input:{},estimatedInputTokens:20,maxOutputTokens:10})).result.node
+ return {...f,node, get store(){return f.store}}
+}
+
+test('回声隔离同步封存模型节点，迟到成功和失败均不得恢复节点或退还累计预算', async t => {
+ const f=await echoFixture(t), before=await f.store.query({kind:'message.run',runId:'echo'})
+ const result=await f.call('echo.quarantine',{runId:'echo'},'echo-original-quarantine')
+ assert.deepEqual(result.result.nodeRunIds,[f.node.nodeRunId])
+ const after=await f.store.query({kind:'message.run',runId:'echo'})
+ assert.equal(after.run.status,'superseded');assert.equal(after.run.reason,'outbound_echo')
+ assert.equal(after.nodes[0].status,'superseded');assert.equal(after.nodes[0].priorStatus,'running')
+ assert.ok(after.nodes[0].completedAt);assert.equal(after.nodes[0].reason,'outbound_echo')
+ assert.deepEqual(after.budget,before.budget)
+ for(const kind of ['node.complete','node.fail']) await bad(f.call(kind,{runId:'echo',nodeRunId:f.node.nodeRunId,leaseEpoch:f.node.leaseEpoch,output:{},error:'late'}),'MESSAGE_STALE')
+ assert.equal((await f.store.query({kind:'runtime.maintenance'})).busy.messages,0)
+})
+
+for(const invalid of ['ack-only','foreign-proof','command','notice','barrier'])test(`回声隔离拒绝 ${invalid}，不吞业务命令或发送效果`,async t=>{
+ const f=await echoFixture(t,{acknowledgedOnly:invalid==='ack-only',evidenceGroup:invalid==='foreign-proof'?'other':'g',barrier:invalid==='barrier'})
+ if(invalid==='command'){
+  await f.call('split',{runId:'echo',units:[{unitId:'echo-unit'}]})
+  await f.call('accept',{runId:'echo',unitId:'echo-unit',commands:[{commandId:'echo-command',kind:'create',args:{taskId:'business'}}]})
+ }
+ if(invalid==='notice'){
+  await f.call('wait',{runId:'echo',unitId:'$',nodeId:'S',expectedRevision:0,reason:'clarify',request:{requestId:'echo-request',kind:'needs_clarification',question:'请确认',permittedActors:['a']}})
+  await f.call('notification.prepare',{runId:'echo',notificationId:'echo-notice',requestId:'echo-request',payload:{text:'已外发候选',conversationId:'g'},disclosure:{conversationId:'g',authorizationRef:'echo'}})
+ }
+ await bad(f.call('echo.quarantine',{runId:'echo'}),'MESSAGE_ECHO_QUARANTINE_FORBIDDEN')
+ assert.notEqual((await f.store.query({kind:'message.run',runId:'echo'})).run.status,'superseded')
+ await bad(f.call('echo.reconcile',{runId:'echo',expectedDigest:'invented'}),'MESSAGE_ECHO_NOT_QUARANTINED')
+})
+
+async function reopenLegacyEcho(f, mutate = () => {}) {
+ await f.call('echo.quarantine',{runId:'echo'},'echo-original-quarantine')
+ // 仅在已关闭的一次性测试库恢复旧版本遗留形状；生产修复必须走原生命令。
+ await f.editSnapshot(db=>{
+  const body=JSON.parse(db.prepare("SELECT body FROM message_items WHERE item_id=?").get(`node:${f.node.nodeRunId}`).body)
+  body.status='running';delete body.priorStatus;delete body.reason;delete body.completedAt
+  db.prepare('UPDATE message_items SET body=? WHERE item_id=?').run(JSON.stringify(body),`node:${f.node.nodeRunId}`)
+  for(const row of db.prepare("SELECT item_id,body FROM message_items WHERE run_id='echo' AND kind='barrier'").all()){
+   const barrier=JSON.parse(row.body);barrier.status='pending';delete barrier.resolution;delete barrier.resolvedAt
+   db.prepare('UPDATE message_items SET body=? WHERE item_id=?').run(JSON.stringify(barrier),row.item_id)
+  }
+  mutate(db)
+ })
+}
+
+test('旧封存回声以精确证明 CAS 原生修复，旧 quarantine receipt 不掩盖遗留节点',async t=>{
+ const f=await echoFixture(t);await reopenLegacyEcho(f)
+ assert.equal((await f.store.query({kind:'message.run',runId:'echo'})).nodes[0].error,'process_interrupted')
+ await f.call('echo.quarantine',{runId:'echo'},'echo-original-quarantine')
+ assert.equal((await f.store.query({kind:'message.run',runId:'echo'})).nodes[0].status,'failed')
+ const check=await f.store.query({kind:'message.echo.reconciliation',runId:'echo'})
+ assert.equal(check.eligible,true);assert.equal(check.alreadyReconciled,false);assert.equal(check.notificationId,'out-notice')
+ await bad(f.call('echo.reconcile',{runId:'echo',expectedDigest:'stale'}),'MESSAGE_ECHO_RECONCILE_STALE')
+ const args={runId:'echo',expectedDigest:check.expectedDigest},id=`echo-reconcile:echo:${check.expectedDigest}`
+ const repaired=await f.call('echo.reconcile',args,id), repeated=await f.call('echo.reconcile',args,id)
+ assert.equal(repaired.result.status,'reconciled');assert.deepEqual(repaired.result.nodeRunIds,[f.node.nodeRunId])
+ assert.equal(repeated.replayed,true);assert.deepEqual(repeated.result,repaired.result)
+ await bad(f.call('echo.reconcile',args),'MESSAGE_ECHO_RECONCILE_STALE')
+ const after=await f.store.query({kind:'message.echo.reconciliation',runId:'echo'})
+ assert.equal(after.alreadyReconciled,true)
+ assert.equal((await f.call('echo.reconcile',{runId:'echo',expectedDigest:after.expectedDigest})).result.status,'already-reconciled')
+ assert.deepEqual(await f.store.query({kind:'message.echo.unreconciled'}),[])
+})
+
+test('恢复扫描包含已 superseded 的旧回声，跨重启仅收口原节点且不调用模型',async t=>{
+ const f=await echoFixture(t);await reopenLegacyEcho(f)
+ assert.equal((await f.store.query({kind:'message.pending'})).some(run=>run.runId==='echo'),false)
+ assert.equal((await f.store.query({kind:'message.echo.unreconciled'})).length,1)
+ const workflow=createMessageWorkflow({store:f.store,judge:async()=>{throw Error('ECHO_MUST_NOT_REJUDGE')}})
+ try {await workflow.recover();await workflow.recover()} finally {await workflow.close()}
+ const state=await f.store.query({kind:'message.run',runId:'echo'})
+ assert.equal(state.run.status,'superseded');assert.equal(state.nodes[0].status,'superseded')
+ assert.equal(state.nodes[0].priorStatus,'failed');assert.equal(state.commands.length,0)
+ assert.equal((await f.store.query({kind:'runtime.maintenance'})).busy.messages,0)
+})
+
+for(const barrierOnly of [false,true])test(`旧回声${barrierOnly?'仅遗留屏障':'同时遗留节点和屏障'}原生释放自身引用 fence，被引用来源不变`,async t=>{
+ const f=await echoFixture(t,{barrier:'matching'}),source=await f.store.query({kind:'message.run',runId:'outbound'})
+ await reopenLegacyEcho(f,db=>{
+  if(barrierOnly)db.prepare("UPDATE message_items SET body=json_set(body,'$.status','superseded') WHERE item_id=?").run(`node:${f.node.nodeRunId}`)
+ })
+ const check=await f.store.query({kind:'message.echo.reconciliation',runId:'echo'})
+ assert.equal(check.eligible,true);assert.equal(check.alreadyReconciled,false)
+ assert.equal(check.nodeRunIds.length,barrierOnly?0:1);assert.equal(check.barrierIds.length,1)
+ assert.equal((await f.store.query({kind:'message.echo.unreconciled'})).length,1)
+ const repaired=await f.call('echo.reconcile',{runId:'echo',expectedDigest:check.expectedDigest})
+ assert.deepEqual(repaired.result.barrierIds,check.barrierIds)
+ const after=await f.store.query({kind:'message.run',runId:'echo'})
+ assert.equal(after.barriers[0].status,'resolved');assert.equal(after.barriers[0].resolution,'outbound_echo')
+ assert.equal(after.run.status,'superseded');assert.equal(after.run.reason,'outbound_echo')
+ assert.deepEqual(await f.store.query({kind:'message.run',runId:'outbound'}),source)
+ assert.equal((await f.store.query({kind:'message.echo.reconciliation',runId:'echo'})).alreadyReconciled,true)
+})
+
+for(const invalid of ['other-owner','target-task','missing-quote','different-source'])test(`旧回声拒绝不匹配屏障 ${invalid}，不修改被引用来源`,async t=>{
+ const f=await echoFixture(t,{barrier:'matching'})
+ await reopenLegacyEcho(f,db=>{
+  if(invalid==='missing-quote')db.prepare("UPDATE message_runs SET body=json_set(body,'$.context.quoteRefs',json('[]')) WHERE run_id='echo'").run()
+  else {
+   const field=invalid==='other-owner'?'ownerRunId':invalid==='target-task'?'targetTaskId':'targetSourceKey'
+   db.prepare(`UPDATE message_items SET body=json_set(body,'$.${field}','foreign') WHERE run_id='echo' AND kind='barrier'`).run()
+  }
+ })
+ const before=await f.store.query({kind:'message.run',runId:'echo'}),check=await f.store.query({kind:'message.echo.reconciliation',runId:'echo'})
+ assert.equal(check.eligible,false);assert.equal(check.reason,'MESSAGE_ECHO_BARRIER_MISMATCH')
+ await bad(f.call('echo.reconcile',{runId:'echo',expectedDigest:'forged'}),'MESSAGE_ECHO_BARRIER_MISMATCH')
+ assert.deepEqual(await f.store.query({kind:'message.run',runId:'echo'}),before)
+})
+
+test('历史 answer 任务仍可回读来源，新普通答复不进入任务候选', async t => {
+ const f=await fixture(t)
+ for (const [runId,taskId] of [['old','historical-task'],['reply',null]]) {
+  await f.call('receive',receive(runId))
+  await f.call('split',{runId,units:[{unitId:`${runId}-unit`}]})
+  await f.call('accept',{runId,unitId:`${runId}-unit`,commands:[{commandId:`${runId}-command`,kind:'answer',args:{taskId,arguments:taskId?{objective:'旧答复任务'}:{text:'已收到'}}}]})
+  const claimed=await f.call('command.claim',{commandId:`${runId}-command`})
+  await f.call('command.complete',{commandId:`${runId}-command`,leaseEpoch:claimed.result.command.leaseEpoch,result:taskId?{taskId}:{status:'answered',reply:'已收到'}})
+ }
+ assert.equal((await f.store.query({kind:'message.task',taskId:'historical-task'})).command.kind,'answer')
+ assert.equal((await f.store.query({kind:'message.task.latest',taskId:'historical-task'})).run.runId,'old')
+ assert.deepEqual((await f.store.query({kind:'message.task-candidates',conversationId:'g'})).map(item=>item.command.args.taskId),['historical-task'])
+})
 test('人工重处理仅允许无业务命令的旧消息，保留旧请求并生成有序新版本',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{context:{sourceMessageId:'original'}}))
  await f.call('wait',{runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,reason:'old context',request:{requestId:'q',kind:'needs_clarification',question:'old?',permittedActors:['a']}})

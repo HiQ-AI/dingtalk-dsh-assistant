@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { createMessageWorkflow } from '../packages/dingtalk-dsh-assistant/message-workflow.js'
-import { prepareMessageContext, splitContext, intentContext, candidateCards } from '../packages/dingtalk-dsh-assistant/message-context.js'
+import { prepareMessageContext, splitContext, intentContext, candidateCards, messageSchemas } from '../packages/dingtalk-dsh-assistant/message-context.js'
 import { createMessageModel, prepareMessageRequest } from '../packages/dingtalk-dsh-assistant/message-model.js'
 import { messageSystem } from '../packages/dingtalk-dsh-assistant/message-model.js'
 
@@ -21,6 +21,52 @@ const source = { sourceKey: 'channel:account:group:m1', sourceVersion: 1, conver
 const split = { kind: 'split', units: [{ spans: [{ start: 0, end: 2 }], goalText: '查A', constraints: [], contextNeeds: [] }, { spans: [{ start: 3, end: 5 }], goalText: '查B', constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: 5, role: 'unit' }], sharedConstraints: [] }
 const binding = { kind: 'binding', disposition: 'conversation', candidateId: null, evidence: ['source'] }
 const intent = { kind: 'intent', actions: [{ intent: 'status', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
+
+test('普通 answer 在 I 与 IB 使用同一正文合同，schema 和模型说明均不接受任务参数', () => {
+  for (const stage of ['I', 'IB']) {
+    const envelope = args => {
+      const answer = { ...intent, actions: [{ intent: 'answer', arguments: args, dependsOn: [] }] }
+      return stage === 'I' ? answer : { kind: 'topic_intents', decisions: [{ unitId: 'u', intent: answer }] }
+    }
+    assert.equal(messageSchemas[stage].safeParse(envelope({ text: '已收到' })).success, true)
+    for (const args of [{}, { text: '  ' }, { answer: '已收到' }, { objective: '答复材料' },
+      { text: '已收到', workflowId: 'task-analysis' }, { text: '已收到', repositoryId: 'repo' },
+      { text: '已收到', runId: 'run' }, { text: '已收到', requestId: 'approval', decision: 'approved' }]) {
+      assert.equal(messageSchemas[stage].safeParse(envelope(args)).success, false, `${stage}: ${JSON.stringify(args)}`)
+    }
+    const system = messageSystem(stage)
+    assert.match(system, /普通答复用answer，arguments仅填非空text正文/u)
+    const schema = JSON.parse(system.split('只返回以下schema的JSON：\n')[1])
+    const actions = stage === 'I' ? schema.anyOf[1].properties.actions : schema.anyOf[1].properties.decisions.items.properties.intent.anyOf[0].properties.actions
+    const answer = actions.items.anyOf.find(item => item.properties.intent.const === 'answer')
+    assert.deepEqual(answer.properties.arguments.required, ['text'])
+    assert.deepEqual(Object.keys(answer.properties.arguments.properties), ['text'])
+    assert.equal(answer.properties.arguments.additionalProperties, false)
+  }
+})
+
+for (const topicBatch of [false, true]) test(`普通 answer ${topicBatch ? 'IB' : 'I'} 关联已有任务也不分配 taskId 或生成任务候选`, async t => {
+  const answer = { ...intent, actions: [{ intent: 'answer', arguments: { text: '已收到' }, dependsOn: [] }] }
+  const { workflow, store } = await fixture(t, {
+    context: { candidates: async () => [{ candidateId: 'existing', taskId: 'existing-task', topicId: 'topic', engine: 'workflow', title: '已有任务', goal: '已有任务', state: 'completed' }],
+      ...(topicBatch ? { bindTopic: async ({ run, unit }) => ({ topicId: 'topic', conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.unitId, title: '已有任务', facts: [] }) } : {}) },
+    judge: async ({ stage, input }) => stage === 'S' ? { ...split, units: [split.units[0]], coverage: [{ start: 0, end: 2, role: 'unit' }] }
+      : stage === 'R' ? { kind: 'binding', disposition: 'existing', candidateId: 'existing', evidence: ['来源'] }
+        : stage === 'IB' ? { kind: 'topic_intents', decisions: input.units.map(unit => ({ unitId: unit.unitId, intent: answer })) } : answer,
+    handlers: { answer: async action => ({ status: 'answered', reply: action.arguments.text }) },
+  })
+  const { runId } = await workflow.receive({ ...source, body: '查A' }, { process: false })
+  await workflow.process(runId)
+  for (let i = 0; i < 100 && !(await workflow.state(runId)).commands.length; i++) await new Promise(resolve => setTimeout(resolve, 10))
+  await workflow.process(runId)
+  const state = await workflow.state(runId)
+  assert.equal(state.commands.length, 1)
+  assert.equal(state.commands[0].status, 'applied')
+  assert.equal(state.commands[0].args.taskId, null)
+  assert.equal(state.commands[0].args.binding.target.taskId, 'existing-task')
+  assert.deepEqual(await store.query({ kind: 'message.task-candidates', conversationId: source.conversationId }), [])
+  assert.deepEqual(await store.query({ kind: 'run.list' }), [])
+})
 
 test('短指代保留原文进入 R，不在 S 扩写旧话题', async t => {
   let routed
