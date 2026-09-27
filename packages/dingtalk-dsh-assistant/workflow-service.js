@@ -2226,6 +2226,14 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   return {
     ingest, resumeRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, submitWebTask, mailboxes, topics, topicContext,
     maintenance: () => store.query({ kind: 'runtime.maintenance' }),
+    completedObservations: taskId => store.query({ kind: 'task.owner.completed-observations', taskId }),
+    async reconcileCompletedObservations(request, identity) {
+      if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId) throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')
+      const { requestId, ...args } = request
+      if (typeof requestId !== 'string' || !requestId.trim() || requestId.length > 200) throw executionError('OWNER_COMPLETED_OBSERVATIONS_INVALID')
+      const receipt = await store.command({ id: `owner-completed-observations:${requestId}`, kind: 'task.owner.reconcile-completed-observations', args: { ...args, actorId: identity.actorId } })
+      return { receipt, owner: await store.query({ kind: 'task.owner', taskId: args.taskId }) }
+    },
     async changeMaintenance(request, identity, operation = 'change') {
       if (!['change','seal','resume'].includes(operation)) throw executionError('RUNTIME_MAINTENANCE_INVALID')
       if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId) throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')

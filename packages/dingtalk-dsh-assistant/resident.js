@@ -203,6 +203,8 @@ export async function apply(ctx, config = {}) {
     runtime.getWorkflowCatalog = () => workflow.catalog()
     runtime.isWorkflowTask = taskId => workflow.isTask(taskId)
     runtime.getWorkflowMaintenance = () => workflow.maintenance()
+    runtime.getCompletedWorkflowObservations = taskId => workflow.completedObservations(taskId)
+    runtime.reconcileCompletedWorkflowObservations = args => workflow.reconcileCompletedObservations(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.changeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.sealWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'seal')
     runtime.resumeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'resume')

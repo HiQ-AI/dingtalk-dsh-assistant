@@ -214,7 +214,7 @@ async function databaseProbe(config) {
   })
 }
 
-async function dataOperation(mode, config, ledger) {
+export async function dataOperation(mode, config, ledger) {
   return new Promise((accept, reject) => {
     const child = execFile(config.pythonExecutable, ['-c', dataProgram], { windowsHide: true, timeout: 45000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
       if (error) { reject(Object.assign(new Error('data'), { code: 'MERGE_ACCEPTANCE_DATA_OPERATION_FAILED' })); return }

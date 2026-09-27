@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto'
+import { maintenanceStatus } from './execution-maintenance.js'
+
 // Task Owner 的事件、租约和决定与执行账共用 SQLite 单写事务。
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const id = value => {
@@ -116,6 +119,49 @@ const turn = (db, args) => {
   return { owner: o, turn: t }
 }
 
+// 仅消化升级曾误发的成功阶段重复观察，复用已接纳决定，不重新判定业务完成。
+function completedObservationRecovery(db, taskId) {
+  const o = owner(db, taskId), current = task(db, taskId), v = versions(db, o)
+  const maintenance = maintenanceStatus(db)
+  if (!maintenance.active || !maintenance.drained) fail('TASK_OWNER_RECOVERY_REQUIRES_MAINTENANCE')
+  const complete = db.prepare("SELECT rowid AS sequence_id,* FROM task_owner_turns WHERE task_id=? AND status='accepted' ORDER BY rowid DESC LIMIT 1").get(taskId)
+  if (!complete || complete.application_status !== 'applied' || JSON.parse(complete.decision_json ?? '{}').action !== 'complete'
+    || current.plan_status !== 'succeeded' || current.control_state !== 'active'
+    || current.plan_requirement_revision !== current.requirement_revision
+    || v.requirementRevision !== complete.requirement_revision || v.planRevision !== complete.plan_revision
+    || v.controlRevision !== complete.control_revision || v.authorizationRevision !== complete.authorization_revision
+    || v.inputFenceRevision !== complete.input_fence_revision || o.current_turn_id || o.status === 'running'
+    || o.processed_watermark !== complete.event_watermark) fail('TASK_OWNER_RECOVERY_COMPLETION_CHANGED')
+  const laterTurns = db.prepare('SELECT * FROM task_owner_turns WHERE task_id=? AND rowid>?').all(taskId, complete.sequence_id)
+  if (laterTurns.some(row => !['released', 'superseded'].includes(row.status) || row.decision_json || row.application_status))
+    fail('TASK_OWNER_RECOVERY_ACTION_CHANGED')
+  const stages = db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? ORDER BY position').all(taskId, current.plan_revision)
+  if (!stages.length || stages.some(stage => stage.status !== 'succeeded' || !stage.output_ref || !stage.run_id))
+    fail('TASK_OWNER_RECOVERY_STAGE_CHANGED')
+  const originalEvents = stages.map(stage => {
+    const digest = createHash('sha256').update(JSON.stringify([[taskId, current.plan_revision, stage.stage_id, stage.status]])).digest('hex')
+    return db.prepare("SELECT * FROM task_events WHERE task_id=? AND event_key=? AND event_type='workflow.succeeded' AND seq<=? AND handled_at IS NOT NULL").get(taskId, `stage-${digest.slice(0, 40)}`, complete.event_watermark)
+  })
+  if (originalEvents.some(row => !row?.payload_ref)) fail('TASK_OWNER_RECOVERY_ORIGINAL_EVENT_MISSING')
+  const events = db.prepare('SELECT * FROM task_events WHERE task_id=? AND seq>? ORDER BY seq').all(taskId, complete.event_watermark)
+  if (!events.length || events.at(-1).seq !== o.event_watermark || events.some(row => row.event_type !== 'workflow.succeeded'
+    || !/^stage-[a-f0-9]{40}$/.test(row.event_key) || row.handled_at || row.turn_id
+    || !originalEvents.some(original => original.payload_ref === row.payload_ref))) fail('TASK_OWNER_RECOVERY_EVENT_CHANGED')
+  const runs = db.prepare('SELECT * FROM execution_runs WHERE task_id=?').all(taskId)
+  if (stages.some(stage => !runs.some(run => run.run_id === stage.run_id && run.status === 'succeeded'
+      && run.workflow_id === stage.workflow_id && run.workflow_digest === stage.workflow_digest))
+    || runs.some(run => !['succeeded', 'failed', 'cancelled'].includes(run.status) || run.updated_at > complete.updated_at)
+    || db.prepare(`SELECT 1 FROM execution_nodes n JOIN execution_runs r ON r.run_id=n.run_id WHERE r.task_id=?
+      AND (n.drained=0 OR n.status='running') LIMIT 1`).get(taskId)
+    || db.prepare(`SELECT 1 FROM execution_effects e JOIN execution_runs r ON r.run_id=e.run_id WHERE r.task_id=?
+      AND (e.state NOT IN ('succeeded','failed') OR e.updated_at>?) LIMIT 1`).get(taskId, complete.updated_at))
+    fail('TASK_OWNER_RECOVERY_EXECUTION_CHANGED')
+  return { taskId, completeTurnId: complete.turn_id, expectedOwnerRevision: o.revision,
+    expectedEventWatermark: o.event_watermark, previousWatermark: complete.event_watermark,
+    duplicateEventSequences: events.map(row => row.seq), maintenanceId: maintenance.maintenanceId,
+    expectedMaintenanceRevision: maintenance.revision, actorId: maintenance.actorId }
+}
+
 export function installTaskOwnerSchema(db) {
   db.exec(`
     CREATE TABLE task_owners(task_id TEXT PRIMARY KEY REFERENCES business_tasks(task_id),
@@ -174,6 +220,18 @@ export function validateTaskOwnerSchema(db) {
 
 export function reduceTaskOwnerCommand(db, command, { now }) {
   const a = command.args
+  if (command.kind === 'task.owner.reconcile-completed-observations') {
+    exact(a, ['taskId', 'completeTurnId', 'expectedOwnerRevision', 'expectedEventWatermark',
+      'maintenanceId', 'expectedMaintenanceRevision', 'actorId', 'reason'])
+    if (typeof a.reason !== 'string' || !a.reason.trim() || a.reason.length > 2000) fail('TASK_OWNER_ARGUMENT_INVALID')
+    const proof = completedObservationRecovery(db, a.taskId)
+    if (Object.keys(a).some(field => field !== 'reason' && a[field] !== proof[field])) fail('TASK_OWNER_RECOVERY_STALE')
+    db.prepare('UPDATE task_events SET handled_at=?,turn_id=? WHERE task_id=? AND seq>? AND seq<=?')
+      .run(now, proof.completeTurnId, a.taskId, proof.previousWatermark, proof.expectedEventWatermark)
+    db.prepare("UPDATE task_owners SET status='idle',processed_watermark=event_watermark,failure_count=0,last_failure=NULL,lease_epoch=lease_epoch+1,revision=revision+1,updated_at=? WHERE task_id=?")
+      .run(now, a.taskId)
+    return { status: 'reconciled', ...proof, reason: a.reason }
+  }
   if (command.kind === 'task.owner.init') {
     exact(a, ['taskId', 'sessionId', 'criteria', 'sourceKey']); task(db, a.taskId); id(a.sessionId); id(a.sourceKey)
     if (!Array.isArray(a.criteria) || !a.criteria.length || a.criteria.length > 16
@@ -401,6 +459,10 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
 }
 
 export function queryTaskOwner(db, query) {
+  if (query?.kind === 'task.owner.completed-observations') {
+    exact(query, ['kind', 'taskId'])
+    return completedObservationRecovery(db, query.taskId)
+  }
   if (query?.kind === 'task.owner.acceptance') {
     exact(query, ['kind', 'taskId'])
     return db.prepare('SELECT item_id,criterion,source_key FROM task_acceptance_items WHERE task_id=? AND active=1 ORDER BY rowid')

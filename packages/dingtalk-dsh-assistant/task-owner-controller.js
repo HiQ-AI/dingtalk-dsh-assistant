@@ -91,8 +91,10 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         ...(problemNodes.length ? { diagnostics: problemNodes.map(node => ({ nodeId: node.nodeId,
           nodeRunId: node.nodeRunId, generation: node.generation, leaseEpoch: node.leaseEpoch,
           status: node.status, drained: node.drained, waitReason: node.waitReason, evidenceRefs: node.evidenceRefs })) } : {}),
-        ...(currentExecution?.stageId === stage.stageId ? { currentExecution } : {}) }
-      await event({ taskId, eventKey: `stage-${key(payload).slice(0, 40)}`,
+        ...(stage.status === 'running' && currentExecution?.stageId === stage.stageId ? { currentExecution } : {}) }
+      // 终态阶段沿用既有身份；只有运行中诊断需要按执行代际和失败内容再次唤醒。
+      const eventIdentity = stage.status === 'running' ? payload : [taskId, plan.task.planRevision, stage.stageId, stage.status]
+      await event({ taskId, eventKey: `stage-${key(eventIdentity).slice(0, 40)}`,
         eventType, payload })
     }
     return plan

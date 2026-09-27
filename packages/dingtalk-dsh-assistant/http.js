@@ -132,6 +132,21 @@ async function submitWebTask(request, response, runtime, kind, taskId) {
 export async function handleRequest(request, response, store, { testApiEnabled = false, transport = 'fake-dws', outboundAuthorized = false, modelMode = 'fake', checkForUpdatesImpl = checkForUpdates } = {}) {
   applyResidentCorsHeaders(request, response)
   const url = new URL(request.url ?? '/', 'http://localhost')
+  const completedObservations = /^\/runtime\/maintenance\/tasks\/([^/]+)\/completed-observations$/u.exec(url.pathname)
+  if (completedObservations) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.getCompletedWorkflowObservations || !store.reconcileCompletedWorkflowObservations) return send(response, 404, { error: 'workflow_maintenance_unavailable' })
+    try {
+      const taskId = decodeURIComponent(completedObservations[1])
+      if (request.method === 'GET') return send(response, 200, await store.getCompletedWorkflowObservations(taskId))
+      if (request.method !== 'POST') return send(response, 405, { error: 'method_not_allowed' })
+      const body = z.strictObject({ requestId: requiredText.max(200), completeTurnId: requiredText.max(200),
+        expectedOwnerRevision: z.number().int().nonnegative(), expectedEventWatermark: z.number().int().nonnegative(),
+        maintenanceId: requiredText.max(200), expectedMaintenanceRevision: z.number().int().nonnegative(), reason: requiredText.max(2000) }).parse(await readJson(request))
+      return send(response, 200, await store.reconcileCompletedWorkflowObservations({ ...body, taskId }))
+    } catch (error) { return send(response, /FORBIDDEN/.test(error.message) ? 403 : /STALE|CONFLICT|NOT_DRAINED/.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
   if (['/runtime/maintenance','/runtime/maintenance/seal','/runtime/maintenance/resume'].includes(url.pathname)) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
       || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })

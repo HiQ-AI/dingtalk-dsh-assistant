@@ -3,6 +3,9 @@ param(
   [switch]$Readback,
   [switch]$Resume,
   [switch]$Bootstrap,
+  [switch]$HoldMaintenance,
+  [string]$ContinueMaintenanceId,
+  [Nullable[int]]$ExpectedMaintenanceRevision,
   [ValidateRange(1,600)][int]$WaitSeconds=300,
   [Parameter(Mandatory)][string]$Package,
   [Parameter(Mandatory)][string]$Bundle,
@@ -13,7 +16,7 @@ param(
   [Parameter(Mandatory)][string]$EvidenceDirectory
 )
 $ErrorActionPreference='Stop'
-$workspace='D:/project/worktrees/dingtalk-topic-context-completeness'
+$workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../../..')).Replace('\','/').TrimEnd('/')
 $profile='D:/dsh_home/profiles/web'
 $runtime='D:/dsh_home/workflows/runtime-v2'
 $node='D:/soft/node-v24.19.0/node.exe'
@@ -112,6 +115,12 @@ function Change-Maintenance($state,[bool]$active,[string]$maintenanceId) {
  $body=@{requestId=[guid]::NewGuid().ToString();active=$active;expectedRevision=$state.revision;maintenanceId=$maintenanceId;reason=if($active){'受控本地部署，停止新派发'}else{'部署回读通过，恢复派发'}}|ConvertTo-Json
  return Invoke-RestMethod -Uri http://127.0.0.1:18998/runtime/maintenance -Method Post -ContentType 'application/json' -Headers @{Origin='http://127.0.0.1:3080'} -Body $body -NoProxy -TimeoutSec 20
 }
+function Assert-MaintenanceContinuation($state,$old) {
+ if(-not $ContinueMaintenanceId -or $null-eq $ExpectedMaintenanceRevision -or
+    -not $state.active -or $state.phase-ne 'draining' -or -not $state.drained -or
+    $state.maintenanceId-ne $ContinueMaintenanceId -or $state.revision-ne $ExpectedMaintenanceRevision -or
+    $state.processIncarnation-notmatch ('^'+[regex]::Escape([string]$old.ProcessId)+':')){throw '接续维护许可身份、版本或排空状态不匹配'}
+}
 function Change-MaintenancePhase($state,[string]$operation,[string]$maintenanceId) {
  if($operation -notin @('seal','resume')){throw '维护操作无效'}
  $body=@{requestId=[guid]::NewGuid().ToString();expectedRevision=$state.revision;maintenanceId=$maintenanceId;reason=if($operation-eq 'seal'){'排空完成，封存停机许可'}else{'新实例部署回读通过，恢复派发'}}|ConvertTo-Json
@@ -181,6 +190,9 @@ if($Readback -or $Resume){
  exit 0
 }
 Assert-InputHashes
+if(($ContinueMaintenanceId -and $null-eq $ExpectedMaintenanceRevision) -or
+   (-not $ContinueMaintenanceId -and $null-ne $ExpectedMaintenanceRevision) -or
+   ($Bootstrap -and ($ContinueMaintenanceId -or $HoldMaintenance))){throw '维护接续须同时提供ID与revision，且不能用于Bootstrap'}
 # 留出备份实际体积、安装扩展及至少1GiB余量；不足时停止，不清理任何文件。
 $backupBytes=(@(Get-ChildItem -LiteralPath $domain,"$runtime/artifacts" -File -Recurse)+@(Get-ChildItem -LiteralPath $runtime,$profile -File)|Measure-Object Length -Sum).Sum
 $requiredBytes=[long]$backupBytes+([long](Get-Item -LiteralPath $Package).Length*10)+1GB
@@ -203,7 +215,8 @@ if($Bootstrap){
  $null=Run-Node ($witnessArgs+@('--check'))
 }else{
  $maintenanceBefore=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -NoProxy -TimeoutSec 20
- if($maintenanceBefore.active){throw '实例已有维护操作，请先核对其许可与部署记录'}
+ if($ContinueMaintenanceId){Assert-MaintenanceContinuation $maintenanceBefore $old}
+ elseif($maintenanceBefore.active){throw '实例已有维护操作，请先核对其许可与部署记录'}
 }
 $beforeTasks=if($old){Invoke-RestMethod http://127.0.0.1:18998/state/tasks -NoProxy -TimeoutSec 20}else{$null}
 $children=if($old){@(Get-CimInstance Win32_Process|Where-Object {$_.ParentProcessId-eq $old.ProcessId -and $_.Name-eq 'dws.exe'})}else{@()}
@@ -213,7 +226,7 @@ $snapshot=Wait-DrainedSnapshot
 if($Check){@{mode='check';writes=0;online=[bool]$old;disk=@{freeBytes=$freeBytes;requiredBytes=$requiredBytes;backupBytes=$backupBytes};package=($packageProof|ConvertFrom-Json);tasks=($snapshot|ConvertFrom-Json).tasks.Count}|ConvertTo-Json -Depth 4;exit 0}
 # 只有所有预检通过后才开始写证据和停止精确已核实进程。
 New-Item -ItemType Directory -Path $EvidenceDirectory|Out-Null
-$maintenanceId='deploy-'+[guid]::NewGuid().ToString()
+$maintenanceId=if($ContinueMaintenanceId){$ContinueMaintenanceId}else{'deploy-'+[guid]::NewGuid().ToString()}
 $lockProcess=$null
 try {
 if($Bootstrap){
@@ -230,9 +243,14 @@ if($Bootstrap){
  $snapshot=Wait-DrainedSnapshot
  $configArgs[$configArgs.Count-1]=$disabled.afterSha256
 }else{
-$entered=Change-Maintenance $maintenanceBefore $true $maintenanceId
+$entered=if($ContinueMaintenanceId){
+ $currentMaintenance=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -NoProxy -TimeoutSec 20
+ Assert-MaintenanceContinuation $currentMaintenance $old
+ @{state=$currentMaintenance}
+}else{Change-Maintenance $maintenanceBefore $true $maintenanceId}
 $entered|ConvertTo-Json -Depth 8|Set-Content -LiteralPath "$EvidenceDirectory/maintenance.json" -Encoding utf8
 try {$snapshot=Wait-DrainedSnapshot}catch{
+ if($ContinueMaintenanceId){throw '维护接续排空失败，保留原维护状态，本次未停机'}
  [void](Change-Maintenance $entered.state $false $maintenanceId)
  throw '维护排空未完成，已恢复原实例派发，本次未停机'
 }
@@ -305,6 +323,6 @@ $launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',
 $launchRecord=@{mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=@($Bundle,$MergePolicy,$ChecksProposal);inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId}
 $launchRecord|ConvertTo-Json|Set-Content -LiteralPath "$EvidenceDirectory/launch.json" -Encoding utf8
 $result=Read-Deployment $launchRecord
-if($result.ready){$result=Resume-Deployment $result $launchRecord}
+if($result.ready -and -not $HoldMaintenance){$result=Resume-Deployment $result $launchRecord}
 $result|ConvertTo-Json -Depth 10|Set-Content -LiteralPath "$EvidenceDirectory/readback.json" -Encoding utf8
 $result|ConvertTo-Json -Depth 10

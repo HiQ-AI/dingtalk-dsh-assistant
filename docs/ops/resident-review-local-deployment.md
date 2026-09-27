@@ -1,5 +1,7 @@
 # 常驻通知修复本地部署
 
+`deploy-owner-repair.ps1` 按脚本所在仓库解析源码及 `docs/tmp` 证据目录，不绑定历史 worktree。必须从本次已核对的检出运行，包内文件仍须与该检出逐字节一致。
+
 工程只读工具分页上限为read 16000字符、list/search 200条。超限返回可纠正参数结果；部署后须检查真实会话能够缩小分页继续读取，不能仅凭工具注册成功判断。已停止的旧会话保留失败记录，重新执行走正式任务入口。
 
 工程发现流程 v6 将文件定位和读取合入 `inspect-and-propose`，通过受管仓库的只读工具按需列路径、搜正文、分段读文件，不再向模型灌入整仓目录清单。旧 v5 任务保留原定义运行；仅当 `apply-changes` 因 `EDIT_PREPARED_INVALID` 等待、节点均已排空、前置准备成功且没有文件修改或交付效果时，启动时事务性重编排同一运行的新代次，保留旧节点历史，并一次性补足新节点的有限领取次数。已产生编辑效果的任务不得重编排。切换后回读运行定义版本、当前节点顺序、旧节点历史、领取上限与实际执行进展；只见迁移回执或 Task 显示运行中不算完成。若迁移门禁拒绝，保留原运行和存储，先排查原因，不手工改 SQLite 或重复创建 Task。
@@ -238,6 +240,14 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 正式部署先通过 `POST /runtime/maintenance` 开启持久维护模式，阻止节点、Owner、效果、消息执行及通知的新领取；入站仍可落队列。已开始的操作允许收口，未知外部效果必须先对账。排空后通过 `/runtime/maintenance/seal` 原子封存停机许可；此后旧进程不能退出维护，避免最后快照与停机之间重新派发。封存后遇到错误保持维护，不自动重复停机或重启。
 
 新实例默认继承维护模式。完成安装内容、旧账、恢复问题数和认证 Web 回读后，才通过 `/runtime/maintenance/resume` 恢复派发；Host 自己校验进程身份已改变，调用者不能指定进程身份。`-Readback` 始终零写，返回 ready 也可能仍在维护；需要恢复时以相同输入执行 `-Resume`，该模式先完整回读再恢复。原始配置摘要及所有输入必须匹配 launch.json，不能换包或换配置接续。
+
+若因部署回归已主动进入维护，接续部署须显式提供 `-ContinueMaintenanceId <现有ID> -ExpectedMaintenanceRevision <当前版本>`，并先运行同参数 `-Check`。仅接纳原进程、active、draining、drained 的精确许可；不能接管其他维护或已封存许可。接续失败保持维护，不恢复有缺陷的旧代码。需要在新实例中完成受控数据对账时加 `-HoldMaintenance`，新进程回读就绪后仍停止派发；对账完成后使用原部署输入与 `-Resume`。
+
+### 已完成 Owner 的重复观察对账
+
+仅用于阶段事件身份变更造成的同内容成功事件重复，不是通用状态修复。维护已排空时，`GET /runtime/maintenance/tasks/:taskId/completed-observations` 返回原完成决定、重复事件序号和 CAS 版本。逐任务审阅后 POST 同路径，参数为 requestId、completeTurnId、expectedOwnerRevision、expectedEventWatermark、maintenanceId、expectedMaintenanceRevision、reason；actor 由受信 Web 配置注入，禁止请求指定。仅本机受信 Origin 可调用。
+
+原生命令在单事务内重新核对原完成决定、所有输入版本、阶段/执行终态、重复事件内容和维护许可。只将严格重复事件归入原完成决定并恢复 Owner 空闲；失败回合和审计保留。发生新输入、新决定、执行变化或许可漂移时拒绝。取消任务不适用；不得以此重新判定旧合同或业务验收。完成后独立回读任务仍 completed、Owner idle/complete 且水位相等，再正式恢复派发。
 
 `GET /health` 的 HTTP 200 不是充分条件：必须 recoveryIssueCount=0，Web 需完成令牌交换并以签名 Cookie 回读页面。报告分别记录控制面和 inboundProcessing；已知钉钉降级不能写成整体健康。
 

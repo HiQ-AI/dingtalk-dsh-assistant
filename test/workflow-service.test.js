@@ -54,6 +54,46 @@ test('维护HTTP仅受信本机身份可改，严格参数、幂等与过期许�
   assert.equal((await call('seal',transition)).status,200)
   assert.equal((await (await fetch(url)).json()).stopPermitted,true)
 })
+test('完成观察维护HTTP复用原生完成证明，拒绝跨源和伪造身份并校验CAS', async t => {
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { config: { webActorId: 'owner' } })
+  const accepted = await service.ingest(message), state = await service.messages.process(accepted.runId)
+  await execution.controller.whenIdle(state.commands[0].result.runId)
+  assert.deepEqual((await service.recover()).failures, [])
+  const taskId = (await service.tasks())[0].taskId
+  const before = await execution.store.query({ kind: 'task.owner', taskId })
+  assert.equal(before.decision.action, 'complete')
+  const original = (await execution.store.query({ kind: 'task.owner.events', taskId })).find(event => event.eventType === 'workflow.succeeded')
+  await execution.store.command({ id: 'duplicate-completion', kind: 'task.owner.event', args: { taskId,
+    eventKey: `stage-${'d'.repeat(40)}`, eventType: original.eventType, payloadRef: original.payloadRef } })
+  const identity = { channel: 'web', actorId: 'owner' }
+  await service.changeMaintenance({ requestId: 'enter-recovery', active: true, expectedRevision: 0,
+    maintenanceId: 'recovery', reason: '验证恢复' }, identity)
+  await service.changeMaintenance({ requestId: 'seal-recovery', expectedRevision: 1,
+    maintenanceId: 'recovery', reason: '验证封存后恢复' }, identity, 'seal')
+  const runtime = { getCompletedWorkflowObservations: taskId => service.completedObservations(taskId),
+    reconcileCompletedWorkflowObservations: request => service.reconcileCompletedObservations(request, identity) }
+  const server = createServer((req, res) => handleRequest(req, res, runtime))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)))
+  const url = `http://127.0.0.1:${server.address().port}/runtime/maintenance/tasks/${taskId}/completed-observations`
+  assert.equal((await fetch(url, { headers: { origin: 'https://evil.invalid' } })).status, 403)
+  const proofResponse = await fetch(url); assert.equal(proofResponse.status, 200)
+  const proof = await proofResponse.json()
+  const body = { requestId: 'restore-completion', completeTurnId: proof.completeTurnId,
+    expectedOwnerRevision: proof.expectedOwnerRevision, expectedEventWatermark: proof.expectedEventWatermark,
+    maintenanceId: proof.maintenanceId, expectedMaintenanceRevision: proof.expectedMaintenanceRevision, reason: '处理重复成功观察' }
+  const post = value => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:3080' }, body: JSON.stringify(value) })
+  assert.equal((await post({ ...body, actorId: 'owner' })).status, 400)
+  assert.equal((await post({ ...body, taskId: 'other' })).status, 400)
+  assert.equal((await post({ ...body, expectedMaintenanceRevision: 0 })).status, 409)
+  await assert.rejects(service.reconcileCompletedObservations({ ...body, taskId }, { channel: 'web', actorId: 'other' }), /FORBIDDEN/)
+  const response = await post(body); assert.equal(response.status, 200)
+  const result = await response.json(); assert.equal(result.owner.status, 'idle')
+  assert.deepEqual(result.owner.decision, before.decision)
+  const repeated = await post(body); assert.equal(repeated.status, 200); assert.equal((await repeated.json()).receipt.replayed, true)
+  assert.equal((await service.maintenance()).phase, 'stopping')
+  assert.equal((await execution.store.query({ kind: 'task.owner', taskId })).processedWatermark, proof.expectedEventWatermark)
+})
+
 test('service真实恢复入口不重派确定性错误，只有明确暂态可有限重试', async t => {
   for (const [nodeId, code, skipped] of [['apply-changes', 'ENGINEERING_PATCH_AMBIGUOUS', true],
     ['analyze', 'ENGINEERING_PATCH_AMBIGUOUS', true], ['apply-changes', 'ENGINEERING_PATCH_BASE_CONFLICT', true],
