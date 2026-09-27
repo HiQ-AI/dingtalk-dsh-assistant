@@ -30,3 +30,5 @@ UAT3 首次脚本将 preview 发到页面路径，未进入正确 API，返回�
 - C59 PASS：现有 UAT2 的 `d1e447787201212140a2732b798d336965ddfaa7`（PR #368，原 pipeline 320），独立 Edge 添加自定义维度和意见，保存、离开、重进后逐字回显。浏览器存储已清空，浏览器及会话关闭，业务写入为零。证据 `docs/tmp/round43-uat/frontend-business.json`。
 - 验收前后精确提交、Registry 镜像、Ready Pod 和 HTTP 身份一致；新后端及首次失败命名空间延迟独立回读四类资源均为零。审计记录按契约保留。证据 `docs/tmp/round43-uat/final-independent-cleanup.json`；原本地入口边界 35 项测试通过。
 - 本轮没有重新构建部署 UAT 流水线、修改原开发分支、发送新的流水线通知。业务验收已完成，凭据轮换仍是未闭环事项（C60 FAIL），不生成全绿报告。
+
+修复与验收代码提交 `babe07022dd8cd9a58b480c11666a7f13775968c`，PR #127 已独立回读 OPEN、base main、head worktree-framework-uat-recheck。远程路径断言另有 3/3 通过；部署的产品源码与此提交一致，末次补记仅更新文档。
