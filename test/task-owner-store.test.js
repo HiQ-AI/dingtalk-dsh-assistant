@@ -285,3 +285,34 @@ test('已完成计划缺少追加阶段或新意图时拒绝再次 advance', () 
     } finally { f.db.close() }
   }
 })
+
+
+test('取消或暂停不再调度 Owner，恢复后保留未读事件', () => {
+  for (const state of ['cancelled', 'cancelling', 'paused', 'pausing']) {
+    const f = fixture()
+    try {
+      f.send('task.owner.event', { taskId: 'task-1', eventKey: 'created', eventType: 'task.created' })
+      f.db.prepare('UPDATE task_controls SET state=?').run(state)
+      f.send('task.owner.event', { taskId: 'task-1', eventKey: 'control', eventType: 'control.changed' })
+      assert.deepEqual(queryTaskOwner(f.db, { kind: 'task.owners.pending' }), [])
+      assert.throws(() => f.send('task.owner.claim', { taskId: 'task-1', turnId: 'stopped', expectedLeaseEpoch: 0 }), { code: 'TASK_OWNER_NOT_CLAIMABLE' })
+      f.db.prepare("UPDATE task_controls SET state='active'").run()
+      assert.equal(queryTaskOwner(f.db, { kind: 'task.owners.pending' }).length, 1)
+      assert.equal(f.send('task.owner.claim', { taskId: 'task-1', turnId: 'resumed', expectedLeaseEpoch: 0 }).eventWatermark, 2)
+    } finally { f.db.close() }
+  }
+})
+
+test('Owner 执行途中取消，释放后不累计失败或再次唤醒', () => {
+  const f = fixture()
+  try {
+    f.send('task.owner.event', { taskId: 'task-1', eventKey: 'created', eventType: 'task.created' })
+    f.send('task.owner.claim', { taskId: 'task-1', turnId: 'turn', expectedLeaseEpoch: 0 })
+    f.db.prepare("UPDATE task_controls SET state='cancelled'").run()
+    f.send('task.owner.release', { taskId: 'task-1', turnId: 'turn', leaseEpoch: 1, reason: 'TASK_OWNER_CONTROL_BLOCKED' })
+    assert.equal(f.read('task.owner').status, 'idle')
+    assert.equal(f.read('task.owner').failureCount, 0)
+    assert.equal(f.read('task.owner').lastFailure, null)
+    assert.deepEqual(queryTaskOwner(f.db, { kind: 'task.owners.pending' }), [])
+  } finally { f.db.close() }
+})

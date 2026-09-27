@@ -144,6 +144,12 @@ await controller.changeInput({
 
 本批没有落实 v2 全部 token 预算和性能目标。预算耗尽会留下等待/恢复原因，不通过 Goal 续轮、换代或重新批准偷偷清零。调整参数属于受信 Host 配置变更，不能由 Agent 修改。
 
+### Run 领取预算显式续行
+
+当前任务投影 `budgetContinuation` 非空时，可由已配置 `webActorId` 的受信本机 Web 用户明确调用 `POST /tasks/{taskId}/continue-budget`，提交该绑定、唯一 `requestId` 与 `continuationText`。见[接口合同](../api/workflow-node-contracts.md#web-run-预算续行接口)。不要编辑控制库或自行填追加额度。
+
+Host 只允许同 Run 一次续行，按剩余节点数 × 3 增加上限；累计 `claimCount`、generation、已成功节点、候选及验收凭证保持原值。存在待处理输入、未知效果、未排空执行或状态漂移时拒绝。再次耗尽需明确停止，不自动向模型申请扩额。202 仅代表命令接纳；须继续回读实际预算回执、Run 状态与后续证据。续行不会绕过构建及候选核验，也不等于合并或部署成功。
+
 ## 5. 停止、重启与显式恢复
 
 ```js
@@ -324,7 +330,7 @@ Web 操作验收需使用配置明确映射的 `workflow.webActorId`。新任务
 
 本地 Resident 在加载时必须声明对 `dingtalkTaskWorkflowPlatformClients` 的服务依赖；先由 `platform-host` 提供该服务，再加载 Resident。缺少这个依赖声明时，Cordis 会隐藏兄弟插件提供的服务，即使 profile 已配置平台客户端也会在启动时触发 `RELEASE_PLATFORM_CLIENT_REQUIRED`。该实例已配置受信平台工作流，停机升级前需核对 `platform-host` 入口存在且先于 Resident 加载。
 
-原业务 Task 计划引入 schema v2；当前 Task 负责会话要求 schema v3。服务启动不会自动升级旧库。停掉持有控制库的 Runtime、入站桥接和计划任务后，确认对应进程及 `.owner.sqlite` 写者已经退出，保留控制库与工件目录原始备份，再用绝对路径执行零写自检：
+原业务 Task 计划引入 schema v2，Task 负责会话引入 schema v3；当前版本要求 schema v5。服务启动不会自动升级旧库。旧库依次经过下列历史迁移步骤，已完成的版本不重复执行。停掉持有控制库的 Runtime、入站桥接和计划任务后，确认对应进程及 `.owner.sqlite` 写者已经退出，保留控制库与工件目录原始备份，再用绝对路径执行零写自检：
 
 ```powershell
 $controlDb = '<本实例执行数据目录的 control.sqlite 绝对路径>'
@@ -349,12 +355,43 @@ node scripts/migrate-task-owner-store.mjs --execute $controlDb
 
 若检查输出有未确认外部效果或待审批记录，先逐项核对；迁移不会把它们视为已成功。v3 启动后先回读 `PRAGMA user_version`、`execution_meta.schema_version`、Task 数量与备份，定向验证同一 Task 的会话恢复、补充意图、暂停取消、后续阶段与最终报告，再开放群入站。只读 `--check` 针对 v2，成功迁移后再调用会因来源版本不符而拒绝，不能用其代替 v3 回读。
 
-当前 Task Owner 独占编排要求 schema v4。已有 v3 实例须停掉所有控制库写者并保留数据库与工件备份，先只读检查未来阶段定义、未终态 Run、未知效果、审批和通知账；`--check` 不写库。执行后核对脚本输出的备份路径、`schemaReadback:4`、原 Task/Run/效果/通知计数与摘要，以及零阶段 Task 的恢复状态。v3 迁移留下的空 `requirement_ref` 在旧任务恢复或续办时，从原任务命令和首阶段材料重建要求，原子绑定要求及 Owner 事件；来源缺失、已替换或版本漂移时明确报错，不伪造目标。不可仅换回 v3 程序继续写已升级的库。
+Task Owner 独占编排引入 schema v4。已有 v3 实例须停掉所有控制库写者并保留数据库与工件备份，先只读检查未来阶段定义、未终态 Run、未知效果、审批和通知账；`--check` 不写库。执行后核对脚本输出的备份路径、`schemaReadback:4`、原 Task/Run/效果/通知计数与摘要，以及零阶段 Task 的恢复状态。v3 迁移留下的空 `requirement_ref` 在旧任务恢复或续办时，从原任务命令和首阶段材料重建要求，原子绑定要求及 Owner 事件；来源缺失、已替换或版本漂移时明确报错，不伪造目标。不可仅换回 v3 程序继续写已升级的库。
 
 ```powershell
 node scripts/migrate-task-workflow-v4.mjs --check $controlDb
 node scripts/migrate-task-workflow-v4.mjs --execute $controlDb
 ```
+
+### 话题事实 v4 → v5 离线迁移
+
+schema v5 将 `message_topics.body.facts` 移到规范化表 `message_topic_facts`，按话题、状态和稳定游标读取；原 `factId`（存储字段 `id`）、来源版本、文本与状态保留，话题元信息增加 `contextRevision`。迁移不重建 Task、Run、命令、通知或 Owner 身份，不重新派发已接纳动作。新库直接初始化为 v5；已有 v4 库必须离线迁移，正常启动不隐式建表。
+
+先禁用本实例入站与自启计划任务，停掉 Runtime、桥接及所有控制库写者，并核对实际进程已经退出。保留数据库、工件和 Session 的同一停机检查点备份。执行迁移必须先取得 `<db>.owner.sqlite` 的 `BEGIN EXCLUSIVE` 锁，并持有到校验完成；活动 Runtime 即使暂未写主库也会阻止迁移。脚本不会代为停止 Runtime，主库当前可取得写锁也不能证明实例已停机。只读 `--check` 不打开或创建 owner 锁库。先在独立备份副本完成自检与迁移回读，再对已确认的目标使用绝对路径执行：
+
+```powershell
+$controlDb = '<本实例执行数据目录的 control.sqlite 绝对路径>'
+node scripts/migrate-message-topic-facts.js --check $controlDb
+```
+
+`--check` 以只读方式打开 v4 库，核对 application ID、两处 schema 版本、完整性、外键、话题结构及话题内事实 ID 唯一性，输出 `mode:"check"`、`fromVersion:4`、`toVersion:5`、`topics`、`facts`、`unknownEffects`、`pendingApprovals`、逐表 `baseline` 和 `writable:false`。`baseline` 包含消息运行/事项、业务 Task/阶段、执行 Run/效果/审批的行数及 SHA256。该步骤不建立事实表或备份；未知效果和待审批数量必须逐项对账，迁移不会将其置为成功。来源不是 v4、存在冲突表或事实结构不合法时，先处理明确错误，不能在线补表或跳过事实。
+
+```powershell
+node scripts/migrate-message-topic-facts.js --execute $controlDb
+```
+
+取得 owner 锁后，执行先用 `VACUUM INTO` 创建唯一的 `pre-topic-facts-v5-<uuid>.sqlite` 备份并回读版本、话题计数、完整性及逐表摘要；事务内再次核对来源未变，再复制逐条事实、移除 JSON 内 facts 并同时更新 `PRAGMA user_version` 与 `execution_meta.schema_version` 为 5。每条事实按话题和 ID 回读完整 body/状态，保留表的计数和 SHA256 在迁移前、备份及迁移后必须一致。成功输出 `mode:"execute"`、`fromVersion:4`、`toVersion:5`、`topics`、`facts`、`unknownEffects`、`pendingApprovals`、`baseline` 和 `backupPath`。保留完整输出及备份文件。成功后不要再用仅接受 v4 的 `--check` 验证 v5，应独立只读回读：
+
+```powershell
+node --input-type=module -e 'import { DatabaseSync } from "node:sqlite"; const db = new DatabaseSync(process.argv[1], { readOnly: true }); console.log(JSON.stringify({ version: db.prepare("PRAGMA user_version").get(), meta: db.prepare("SELECT instance_id,schema_version FROM execution_meta WHERE singleton=1").get(), topics: db.prepare("SELECT COUNT(*) AS count FROM message_topics").get(), facts: db.prepare("SELECT COUNT(*) AS count FROM message_topic_facts").get(), integrity: db.prepare("PRAGMA integrity_check").all(), foreignKeys: db.prepare("PRAGMA foreign_key_check").all() })); db.close();' $controlDb
+```
+
+两处版本均须为 5，实例身份保持原值，话题和事实计数与自检相同，完整性为 `ok` 且外键结果为空。抽查同一话题原有效/失效事实的 ID、文本和来源版本；通过 `message.topic.facts` 分页核对长期话题。`message.topic` 只提供前 256 条当前有效事实的受限视图，`hasMoreFacts:true` 表示必须继续分页，不能据此认定完整上下文。
+
+新程序仍保持停用入站启动，回读版本、实例身份及恢复状态，验收来源编辑使事实失效、过期 `contextRevision` 拒绝接纳、历史分页与已有任务恢复后，再开放入站。确定性容量阻塞保留原判断及缺口，不修改库内容来强行放行。
+
+回退仅允许在升级后尚未接收新消息、产生新审批/效果/通知或其他业务写入，并完成停机对账时，把同一检查点的 v4 数据库、工件与 Session 配合原程序恢复。禁止让 v4 程序写 v5 库，禁止单独恢复主库而丢弃升级后的事实；已经产生新事实时保留 v5 库并前向修复。失败时保全原库、备份和日志，先只读核对实际 schema 与事务结果，不删除 WAL、事实表或重新初始化。
+
+隔离测试入口：`node --test test/message-ledger.test.js test/execution-store.test.js`。本轮用例覆盖 1,000 条事实分页、跨话题隔离、重启保留和迁移备份读回；测试通过不代表真实运行库已迁移或渠道业务验证完成。
 
 默认日常流程只读已授权话题来源及本任务前序产物，并可按当前原文生成可回读的 Markdown 摘录。Resident 可由受信插件提供 `dingtalkTaskGeneralCapabilities` 数组；每项需有固定 `id/identity/description/effectClass`（当前仅接纳 `effectClass: 'read'`）及 `authorize/execute/verify`，其中 `verify` 必须回读结果并返回 `passed:true`、实际 `outputDigest` 和非空 `sourceRefs`。对非默认纯原文整理目标，还须同时提供 `dingtalkTaskGeneralCompletionCheck` 与 `dingtalkTaskGeneralCompletionIdentity`，验收器逐项核对 acceptanceCriteria 与证据后返回 `status:'satisfied'`、`resultVerified:true` 和相同顺序的 `criteria`。未配齐时流程显示证据不足，不把读取聊天误当作数据库调查或外部处理。
 
@@ -404,3 +441,39 @@ Owner 可用 `task_owner_read_artifact` 按引用读取当前 Task 已成功阶�
 受控外部效果只允许 code 节点声明 `external.operation`。受信适配器须提供当前只读快照、精确准备对象、发送和独立回读；prepared 必须绑定 run/generation/requirementDigest、workflowKind、目标资源键和平台操作身份。网关在同一控制账检查停止、输入修订、撤权、资源占用及批准，再发放一次发送资格。生产批准绑定一个精确 effect 请求；Web 或钉钉认证入口的首个有效终态由控制账记录，尚未接入两端审批 UI 与真实通知前，不得打开生产准入。unknown 效果只读对账，不重试发送。
 
 隔离验证可运行 `node --test test/task-readonly-workflows.test.js test/task-release-workflows.test.js test/workflow-data-change.test.js test/execution-external-delivery.test.js test/workflow-service.test.js`。合成适配器通过仅证明编排合同，不证明 Woodpecker、Bytebase、Registry、Kubernetes、真实数据库或渠道投递。完整迁移状态见[第 27 轮](../acceptance/runtime-redesign/round-27.md)。
+
+早期 v4 的事实可能未写 status；迁移按准确来源版本补充状态：仍为最新来源则 active，来源已换版则 invalidated，并记录 migrationReason=v4-implicit-status。显式状态原样保留，缺失来源或非法状态仍拒绝迁移。
+
+
+### 工程业务验收配置（v10）
+
+仓库 `checks` 仅表示构建/技术检查；新增可选 `acceptanceChecks`，每项包含检查器原有的 id/version/executable/args 或 steps/timeoutMs，以及必填 `criterion`（业务验收项）与 `expected`（精确预期字符串）。最多32项，ID不得与构建项重复。使用同一冻结候选的独立副本执行，末步 stdout 必须为 JSON `{"actual":"实际结果"}`；Host 检查全部步骤退出成功且 actual 与 expected 精确相等才放行。不能输出空回执或仅声明 passed:true。命令、验收项、预期由 Host 配置提供，消息和模型不能覆盖；Host 应只配置能够覆盖目标需求的实际回归用例，不能把通用构建或空命令标为业务验收。
+
+```js
+acceptanceChecks: [{
+  id: 'normalization-result', version: '1',
+  criterion: '固定业务输入的归一化结果', expected: '1 t',
+  executable: trustedNodePath, args: ['tools/accept-normalization.mjs'],
+  timeoutMs: 120000,
+}]
+```
+
+上例仅说明协议，不代表项目已提供该脚本。脚本须调用实际业务实现并输出计算结果；本轮没有为 dataset 配置或伪造业务用例。未配置时新任务停在 `ENGINEERING_ACCEPTANCE_REQUIRED`；用例失败或缺实际值为 `ENGINEERING_ACCEPTANCE_FAILED`，完整失败日志沿用 evidenceRefs 工件保存。准备提交前复用同进程可信票据，重启后重新实跑；验收记录绑定冻结候选摘要。修改候选、需求或代次后旧结果不可放行。
+
+Host 配置属于冻结定义身份。已有等待任务不能通过热改配置绕过漂移保护；为补充配置后的工作建立新的受管任务。旧任务保留原验收范围，不自动插入节点或重放外部动作。切换前后分别检查旧 v9 摘要、双包安装文件、健康状态及历史节点读取。
+
+## 当前工程阶段失败修复
+
+`repairCurrentStage` 复用现有命令账与 `controller.changeInput`，无需数据库迁移。部署后沿正式 Web 补充入口提供修复要求；Owner 必须明确提交修复动作，等待摘要不等于已调度。回读 `engineering.repair.accepted`、同一 Run 的递增 generation 和新节点，才能确认修复已启动。
+
+仅允许工程构建或业务验收明确失败，或 `apply-changes` 明确报告 `ENGINEERING_PATCH_AMBIGUOUS`，且全部节点排空、无待应用输入、所有外部效果已明确成功或失败的任务。未知清理与未完成效果仍阻断，不能通过重试覆盖。修复保留原冻结仓库配置、开发分支、UAT 和 taskBase，旧失败候选及日志保留；新代重新修改并取得验收证据。补丁歧义在文件写入前发生，尚无候选：Host 保存完整旧方案及受管旧代工作区的文件 hash/不可变工件，`operation=repair` 明示 `sourceKind=workspace`，`source=previous` 仅允许读取这些受控文件并核对未漂移。模型必须修订唯一定位原文；不会放宽替换规则或改成全局替换。失败材料超过容量时明确阻断。
+
+可信修复材料保留完整失败正文及原工件引用，总量超过 64,000 字符时明确返回 `ENGINEERING_REPAIR_CONTEXT_CAPACITY`，不静默截断。此时应检查原始失败工件并处理容量阻断，不能把未读日志视作已掌握。恢复时复用已持久接纳的命令回执，不再次创建代次。
+## Web 阶段确认与恢复
+
+仅在收到用户明确确认后，回读当前 Web 任务的 requirementRevision、controlRevision、planRevision、runSequence、等待确认 stageId 和前序 outputRef，通过正式 `POST /tasks/{id}/confirm-stage` 提交，正文合同见 [API 说明](../api/workflow-node-contracts.md)。不得直接操作控制库或借用 IM reopen 冒充用户。
+
+确认仅把当前阶段变为 ready，并发布 `approval.resolved` 唤醒 Owner；UAT 合并确认不等于后续部署确认，也不自动授予其他外发权限。回读事件 accepted、阶段状态及 Owner 后续决定；只有真实新 Run 和效果回执才能称已执行。重复请求须复用同 requestId 和正文，重启会恢复 pending Web 事件并复用原生确认命令回执。旧版本、取消、计划变化或前序产物变化会拒绝；失败后重新回读并取得针对当前状态的确认，不能篡改已接纳请求。
+# 本地验收候选完整性
+
+准备命令完成后、全部业务验收及清理结束后，以及提交前核对票据时，重新校验原始 snapshot manifest 的每个文件路径、非符号链接属性和 SHA256。任何原始文件被修改、删除或替换都拒绝 PASS；Host 冻结的 generatedOutputDirectories 才允许新增生成物，默认无排除。前端明确 node_modules/dist，后端 target；根目录、穿越路径、绝对路径与重复路径拒绝。排除目录本身不能是符号链接，原始已存在文件即使处在该目录也须保持不变；在 src 等非生成目录增加文件同样拒绝。模型不能指定生成目录。构建脚本如需生成源码，应先将所需源码作为正式候选修改，不得验收一个与交付候选不同的源码树。

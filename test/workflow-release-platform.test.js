@@ -248,3 +248,21 @@ test('生产机械预检不依赖业务布尔证明，审批回执只授权冻�
     requirement: prodRequirement, effect: { prepared: tag, receipt: { status: 'succeeded' } } }),
   { code: 'RELEASE_PLATFORM_BUILD_DIGEST_UNCONFIRMED' })
 })
+
+for (const status of ['failure', 'error', 'killed', 'declined', 'canceled', 'skipped']) test(`普通 UAT 构建 ${status} 完整只读扫描收口明确失败`, async () => {
+  const {platform,state}=fixture();const observation={phase:'preflight',status:'confirmed',targetDigest:executionDigest(requirement.target),evidenceRefs:['github:branch:1']}
+  const prepared=await platform.releaseAdapters['uat-deployment'].prepareOperation({kind:'uat-deployment',operation:'build',requirement,observation,runId:'r',generation:1,requirementDigest:executionDigest(requirement),expected:{commitSha,previousPhase:'preflight',previousEvidenceDigest:executionDigest(observation.evidenceRefs)}})
+  const row={number:319,commitSha,branch:target.branch,status};state.pipeline=[row]
+  const receipt=await platform.operationAdapter.reconcile(prepared)
+  assert.equal(receipt.status,'failed');assert.equal(receipt.reason,'RELEASE_PIPELINE_FAILED');assert.equal(receipt.pipelineNumber,319);assert.equal(receipt.pipelineStatus,status);assert.equal(receipt.commitSha,commitSha);assert.equal(receipt.operationKey,prepared.operationKey);assert.ok(receipt.evidenceRef);assert.equal(state.calls.length,0)
+  for(const active of ['created','pending','running','blocked']){state.pipeline=[row,{...row,number:320,status:active}];assert.equal((await platform.operationAdapter.reconcile(prepared)).status,'unknown')}
+  state.pipeline=[row,{...row,number:320,status:'success'}];assert.equal((await platform.operationAdapter.reconcile(prepared)).status,'succeeded')
+  for(const patch of [{commitSha:'b'.repeat(40)},{branch:'feature/uat1-base'}]){state.pipeline=[{...row,...patch}];assert.equal((await platform.operationAdapter.reconcile(prepared)).status,'unknown')}
+  state.pipeline=[{...row,status:'unrecognized'}];await assert.rejects(platform.operationAdapter.reconcile(prepared),/PIPELINE_LIST_INCOMPLETE/)
+})
+
+test('重建的旧失败仍是unknown且规则digest不变',async()=>{
+ const {clients,state}=fixture();const rebuildTarget={...target,kind:'uat-rebuild'};const platform=createReleasePlatform({targets:[rebuildTarget],clients});const observation={phase:'preflight',status:'confirmed',targetDigest:executionDigest(requirement.target),evidenceRefs:['proof']};
+ const prepared=await platform.releaseAdapters['uat-rebuild'].prepareOperation({kind:'uat-rebuild',operation:'rebuild',requirement,observation,runId:'r',generation:1,requirementDigest:executionDigest(requirement),expected:{commitSha,previousPhase:'preflight',previousEvidenceDigest:executionDigest(observation.evidenceRefs)}})
+ state.pipeline=[{number:319,commitSha,branch:target.branch,status:'killed'}];assert.equal((await platform.operationAdapter.reconcile(prepared)).status,'unknown');assert.equal(state.calls.length,0)
+})

@@ -133,16 +133,16 @@ test('按需检索支持路径缩小范围与四千字符读取，拒绝越权�
   const exec = promisify(execFile), git = async (...args) => (await exec('git', ['-C', source, ...args], { windowsHide: true })).stdout.trim()
   await git('init', '-b', 'main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid')
   await writeFile(join(source, 'src/value.txt'), 'v'.repeat(5000)); await writeFile(join(source, 'outside.txt'), 'hidden')
-  await git('add', '.'); await git('commit', '-m', 'base')
+  await git('add', '.'); await git('commit', '-m', 'base'); await git('branch', 'feature/uat1-base')
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'inspect', initialize: true }); t.after(() => store.close())
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
   const registry = createEngineeringRegistry({ ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }),
     author: { name: 'Test', email: 'test@example.invalid' }, repositories: [{ id: 'repo', sourceRepository: source, managedRoot: root,
-      remote: 'https://github.com/example/repo.git', githubRepository: 'example/repo', baseRef: 'main', editablePaths: [], discovery: { allowedPrefixes: ['src/'] },
+      remote: source, githubRepository: 'example/repo', baseRef: 'main', editablePaths: [], discovery: { allowedPrefixes: ['src/'] },
       checks: [{ id: 'check', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }] }] })
   await registry.restore(store, artifacts)
   let workflow
-  const task = await registry.prepareTask({ taskId: 'task', arguments: { objective: 'update', repositoryId: 'repo' } },
+  const task = await registry.prepareTask({ taskId: 'task', arguments: { objective: 'update', repositoryId: 'repo', uatEnvironment: 'uat1' } },
     { run: { actorId: 'owner' }, commandId: 'command', unit: { constraints: [], sharedConstraints: [] } }, { registerWorkflow(value) { workflow = value } })
   const definition = defineExecutionWorkflow(workflow), requirement = await artifacts.put(task.input)
   const first = await artifacts.put({ workflowDigest: definition.digest, nodeId: workflow.nodes[0].id,
@@ -151,16 +151,31 @@ test('按需检索支持路径缩小范围与四千字符读取，拒绝越权�
     workflowDigest: definition.digest, requirementRef: requirement.ref,
     nodes: workflow.nodes.map((node, index) => ({ nodeId: node.id, nodeVersion: node.version, executor: node.executor,
       inputRef: index ? null : first.ref, inputDigest: index ? null : first.digest })) } })
-  const workspaceAdapter = await createManagedWorkspaces({ root, sourceRepository: source })
+  const saved = (await store.query({kind:'workflow.list'})).find(record=>record.config?.runId===task.runId).config
+  const workspaceAdapter = await createManagedWorkspaces({ root, sourceRepository: source, targetCommit:saved.targetCommit, taskBase:saved.taskBase })
   const prepared = await workspaceAdapter.prepare({ runId: task.runId, generation: 1, requirementDigest: executionDigest(task.input), baseCommit: task.input.baseCommit })
   await workspaceAdapter.execute(prepared)
   const binding = { runId: task.runId, taskId: task.taskId, generation: 1, inputDigest: first.digest, requirementDigest: executionDigest(task.input) }
   const listed = await registry.repositoryInspect(binding, { operation: 'list', path: 'src/', query: 'value' }, undefined, task.input)
   assert.deepEqual(listed.paths, ['src/value.txt'])
+  const missing = await registry.repositoryInspect(binding, { operation: 'read', path: 'src/components/Value.vue' }, undefined, task.input)
+  assert.equal(missing.status, 'not_found');assert.equal(missing.code, 'ENGINEERING_READ_NOT_FOUND')
+  assert.deepEqual(missing.suggestedCall, {operation:'list',query:'Value.vue',source:'current'})
   const read = await registry.repositoryInspect(binding, { operation: 'read', path: 'src/value.txt', limit: 4000 }, undefined, task.input)
   assert.equal(read.text.length, 4000); assert.equal(read.nextOffset, 4000)
+  for (const operation of ['read', 'list', 'search']) {
+    const invalid = await registry.repositoryInspect(binding, { operation, path: 'src/value.txt', limit: 19000 }, undefined, task.input)
+    assert.equal(invalid.status, 'invalid_limit'); assert.equal(invalid.text, undefined); assert.equal(invalid.expectedHash, undefined)
+    assert.equal(invalid.maxLimit, operation === 'read' ? 16000 : 200)
+    const corrected = await registry.repositoryInspect(binding, invalid.suggestedCall, undefined, task.input)
+    assert.ok(operation === 'read' ? corrected.text.length === 5000 : corrected.paths.includes('src/value.txt'))
+  }
+  await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', path: 'outside.txt', limit: 19000 }, undefined, task.input), { code: 'ENGINEERING_READ_PATH_INVALID' })
+  for (const limit of [0, -1, 1.5]) await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', path: 'src/value.txt', limit }, undefined, task.input), { code: 'ENGINEERING_READ_ARGUMENT_INVALID' })
   await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', path: 'outside.txt' }, undefined, task.input), { code: 'ENGINEERING_READ_PATH_INVALID' })
   await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', path: '../outside.txt' }, undefined, task.input), { code: 'ENGINEERING_READ_ARGUMENT_INVALID' })
+  for(const path of ['', '/src/value.txt', 'src//value.txt', 'src/'])await assert.rejects(registry.repositoryInspect(binding,{operation:'read',path},undefined,task.input),{code:'ENGINEERING_READ_ARGUMENT_INVALID'})
+  await assert.rejects(registry.repositoryInspect({...binding,taskId:'other'}, {operation:'read',path:'src/missing.vue'},undefined,task.input),{code:'ENGINEERING_READ_SCOPE_INVALID'})
 })
 
 for (const escalate of [false, true]) test(`发现选择流程：${escalate ? '后续Agent不能篡改已持久选择范围' : 'Host索引选择后读取，允许计划中新文件'}`, { timeout: 120000 }, async t => {

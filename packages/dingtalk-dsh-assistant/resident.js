@@ -185,6 +185,11 @@ export async function apply(ctx, config = {}) {
     }
     runtime.listTaskView = async () => [...runtime.listTasks(), ...await workflow.tasks()]
     runtime.getWorkflowState = runId => workflow.state(runId)
+    runtime.getWorkflowMessageTrace = (runId, page) => workflow.messageTrace(runId, page)
+    runtime.getWorkflowMessageEvidence = (runId, resourceRef, page) => workflow.messageEvidence(runId, resourceRef, page)
+    runtime.getWorkflowTopicState = (topicId, page) => workflow.workflowTopicContext(topicId, page)
+    runtime.getWorkflowTaskRuns = (taskId, page) => workflow.taskRuns(taskId, page)
+    runtime.getWorkflowTaskNodeOutput = (taskId, runId, nodeRunId, page) => workflow.taskNodeOutput(taskId, runId, nodeRunId, page)
     runtime.reprocessWorkflowMessage = runId => {
       if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')
       return workflow.reprocessMessage(runId, { channel: 'web', actorId: workflowConfig.webActorId })
@@ -197,6 +202,10 @@ export async function apply(ctx, config = {}) {
     runtime.getWorkflowTopicContext = args => workflow.topicContext(args)
     runtime.getWorkflowCatalog = () => workflow.catalog()
     runtime.isWorkflowTask = taskId => workflow.isTask(taskId)
+    runtime.getWorkflowMaintenance = () => workflow.maintenance()
+    runtime.changeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.sealWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'seal')
+    runtime.resumeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'resume')
     runtime.submitWorkflowTask = args => {
       if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
       return workflow.submitWebTask(args, { channel: 'web', actorId: workflowConfig.webActorId })

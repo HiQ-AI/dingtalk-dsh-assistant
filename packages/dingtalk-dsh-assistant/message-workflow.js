@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, unitContext, candidateCards, intentContext, projectMaterialText } from './message-context.js'
+import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, unitContext, candidateCards, intentContext } from './message-context.js'
 import { prepareMessageRequest } from './message-model.js'
 import { isPassiveTaskProgress, isQuietGroupMessage } from './message-ledger.js'
+import { wholeTopicFactRevision } from './message-topics.js'
 
-export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.3', initialWindowMs: 45000, linkedWindowMs: 30000, attemptMs: 20000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, maxInputTokens: 64000, maxOutputTokens: 12000, nodeInputByteLimits: { S: 8000, R: 14000, I: 18000, IB: 32000 }, recoveryDelaysMs: [5000, 30000] })
-const limits = { S: [8000, 2000], R: [14000, 1000], I: [18000, 1500], IB: [32000, 4000] }
+export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.4', initialWindowMs: 45000, linkedWindowMs: 30000, attemptMs: 20000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, maxInputTokens: 64000, maxOutputTokens: 12000, nodeInputByteLimits: { S: 8000, R: 14000, I: 18000, IB: 32000, material: 8000 }, recoveryDelaysMs: [5000, 30000] })
+const limits = { S: [8000, 2000], R: [14000, 1000], I: [18000, 1500], IB: [32000, 4000], material: [8000, 1000] }
 const statusQuestion = text => /(?:完成|改完|进度|状态|部署).*[吗？?]/u.test(text) && /(?:审核|任务|问题)/u.test(text)
 const investigationConfirmation = request => request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
   || (['I','IB'].includes(request.nodeId) && request.kind === 'needs_clarification'
@@ -15,18 +16,21 @@ function projectMaterial(value) {
   if (Array.isArray(value)) return value.map(projectMaterial)
   const result = { ...value }
   if (typeof value.text === 'string') {
-    const projected = projectMaterialText(value.text)
-    if (projected.capacityExceeded) return projected
-    result.text = projected.text
-    if (projected.restrictions.length) result.restrictions = projected.restrictions
-    if (!projected.complete) result.projection = { complete: false, originalBytes: projected.originalBytes, resourceHash: projected.resourceHash, excerpts: projected.excerpts }
+    if (Buffer.byteLength(value.text) > 12000) return { capacityExceeded: true, reason: 'MATERIAL_FULL_TEXT_TOO_LARGE', originalBytes: Buffer.byteLength(value.text), resourceHash: digest(value.text) }
+    result.text = value.text
+    result.coverage = value.coverage ?? { complete: true, resourceHash: digest(value.text), totalBytes: Buffer.byteLength(value.text), ranges: [{ start: 0, end: value.text.length }] }
   }
   if (Array.isArray(value.resources)) result.resources = value.resources.map(projectMaterial)
   return result
 }
-function resolvedMaterialEvidence(requests, unitId) {
-  return requests.filter(request => request.unitId === unitId && request.nodeId === 'R' && request.kind === 'needs_context' && request.status === 'resolved')
-    .map(request => ({ requestId: request.id, needs: request.needs, answer: projectMaterial(request.answer) }))
+function incompleteMaterial(value) {
+  if (!value || typeof value !== 'object') return false
+  if (Array.isArray(value)) return value.some(incompleteMaterial)
+  return Boolean(value.capacityExceeded || value.projection?.complete === false || Object.values(value).some(incompleteMaterial))
+}
+function pendingMaterial(value) {
+  if (!value || typeof value !== 'object') return false
+  return Array.isArray(value) ? value.some(pendingMaterial) : Boolean(value.materialPending || Object.values(value).some(pendingMaterial))
 }
 function statusFollowup(snapshot) {
   const body = snapshot.source.text.trim()
@@ -79,17 +83,70 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     }
     return cmd('message.wait', { runId: data.run.runId, unitId, nodeId: stage, expectedRevision: revision(data), reason: output.reason, request: { requestId, kind: output.kind, question: output.question ?? output.reason, needs, permittedActors: [data.run.actorId] } })
   }
+  async function prepareMaterial(data, unitId, value) {
+    if (!value || typeof value !== 'object') return value
+    if (Array.isArray(value)) return Promise.all(value.map(item => prepareMaterial(data, unitId, item)))
+    const result = { ...value }
+    if (Array.isArray(value.resources)) result.resources = await Promise.all(value.resources.map(item => prepareMaterial(data, unitId, item)))
+    if (typeof value.text !== 'string' || Buffer.byteLength(value.text) <= 12000) return projectMaterial(result)
+    const resourceHash = digest(value.text), pages = []
+    let start = 0
+    while (start < value.text.length) {
+      let end = start, bytes = 0
+      for (const character of value.text.slice(start)) {
+        if (bytes + Buffer.byteLength(character) > 3600) break
+        bytes += Buffer.byteLength(character); end += character.length
+      }
+      pages.push({ start, end, text: value.text.slice(start, end) })
+      if (end === value.text.length) break
+      start = Math.max(start + 1, end - 80)
+      if (/[\uDC00-\uDFFF]/u.test(value.text[start])) start++
+    }
+    const facts = [], coverage = []
+    for (const [pageIndex, page] of pages.entries()) {
+      const output = await invoke(await state(data.run.runId), unitId, 'material', {
+        resourceRef: value.resourceRef ?? null, resourceHash, pageIndex, pageCount: pages.length, start: page.start, end: page.end,
+        purpose: data.units.find(unit => (unit.id ?? unit.unitId) === unitId)?.goalText ?? data.run.body, text: page.text,
+        contextHash: digest([resourceHash, pageIndex, data.run.body]) })
+      if (!output) {
+        const latest = await state(data.run.runId)
+        const failure = latest.nodes.findLast(node => node.nodeId === 'material' && node.input?.resourceHash === resourceHash && node.input?.pageIndex === pageIndex)?.error
+        return failure?.startsWith('MESSAGE_MATERIAL_QUOTE_INVALID') || failure?.startsWith('MESSAGE_SCHEMA_INVALID')
+          ? { capacityExceeded: true, reason: failure, resourceHash, pageIndex }
+          : { materialPending: true, resourceHash, pageIndex }
+      }
+      if (!output.complete || output.facts.some(fact => !page.text.includes(fact.quote))) return { capacityExceeded: true, reason: 'MATERIAL_PAGE_INCOMPLETE', resourceHash, pageIndex }
+      for (const fact of output.facts) {
+        const quoteStart = page.start + page.text.indexOf(fact.quote)
+        if (!facts.some(item => item.start === quoteStart && item.quote === fact.quote)) facts.push({ ...fact, start: quoteStart, end: quoteStart + fact.quote.length })
+      }
+      coverage.push({ start: page.start, end: page.end })
+    }
+    const text = facts.map(fact => fact.quote).join('\n')
+    if (facts.some(fact => fact.kind === 'uncertain') || Buffer.byteLength(text) > 12000) return { capacityExceeded: true, reason: 'MATERIAL_FACTS_UNRESOLVED_OR_TOO_LARGE', resourceHash }
+    return { ...result, text, extractedFacts: facts, coverage: { complete: true, mode: 'model_extraction', resourceHash, totalBytes: Buffer.byteLength(value.text), ranges: coverage },
+      restrictions: facts.filter(fact => ['restriction', 'condition'].includes(fact.kind)).map(fact => fact.quote) }
+  }
+  async function resolvedEvidenceFor(data, unitId) {
+    return Promise.all(data.requests.filter(request => request.unitId === unitId && request.nodeId === 'R' && request.kind === 'needs_context' && request.status === 'resolved')
+      .map(async request => ({ requestId: request.id, needs: request.needs, answer: await prepareMaterial(data, unitId, request.answer) })))
+  }
   async function invoke(data, unitId, stage, input, fixedOutput) {
     const runId = data.run.runId, rev = revision(data)
-    const prior = data.nodes.find(node => node.unitId === unitId && node.nodeId === stage && ['completed', 'succeeded'].includes(node.status) && (node.revision ?? rev) === rev && (stage !== 'IB' || node.input?.topicInputRevision === input.topicInputRevision))
+    const prior = data.nodes.find(node => node.unitId === unitId && node.nodeId === stage && ['completed', 'succeeded'].includes(node.status) && (node.revision ?? rev) === rev && node.input?.contextHash === input.contextHash && (stage !== 'IB' || node.input?.topicInputRevision === input.topicInputRevision))
     if (prior) return prior.output?.output ?? prior.output
     if (data.requests.some(request => request.unitId === unitId && request.nodeId === stage && request.status === 'pending')) return null
-    const answers = data.requests.filter(request => request.unitId === unitId && request.nodeId === stage && request.status === 'resolved').map(request => ({ requestId: request.id, question: request.question, answer: projectMaterial(request.answer) }))
+    const answers = await Promise.all(data.requests.filter(request => request.unitId === unitId && request.nodeId === stage && request.status === 'resolved').map(async request => ({ requestId: request.id, question: request.question, answer: await prepareMaterial(data, unitId, request.answer) })))
+    if (pendingMaterial(answers) || pendingMaterial(input)) return null
     if (answers.some(answer => answer.answer?.resources?.some(resource => resource.capacityExceeded) || answer.answer?.capacityExceeded)) {
       await cmd('message.attention', { runId, reason: `MESSAGE_MATERIAL_CAPACITY:${stage}:${unitId}` }); return null
     }
     const previousFailure = data.nodes.findLast(node => node.unitId === unitId && node.nodeId === stage && node.status === 'failed')?.error
     input = { ...input, ...(answers.length ? { clarificationAnswers: answers } : {}), ...(previousFailure ? { previousFailure } : {}) }
+    if (incompleteMaterial(input.material) || incompleteMaterial(input.resolvedEvidence) || incompleteMaterial(input.clarificationAnswers)
+      || input.units?.some(unit => incompleteMaterial(unit.input?.resolvedEvidence) || incompleteMaterial(unit.input?.clarificationAnswers))) {
+      await cmd('message.attention', { runId, reason: `MESSAGE_MATERIAL_CAPACITY:${stage}:${unitId}` }); return null
+    }
     const inputLimit = data.run.policy.nodeInputByteLimits?.[stage] ?? limits[stage][0]
     const outputLimit = stage === 'IB' ? Math.min(4000, 1500 + Math.max(0, input.units.length - 1) * 600) : limits[stage][1]
     // 代码已确定的产出只留节点账和schema校验，不领取模型容量或并发槽。
@@ -105,7 +162,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const deadline = current.run.deadline
       const remaining = stage === 'IB' ? config.attemptMs : deadline ? Number(new Date(deadline)) - clock() - config.commitReserveMs : config.attemptMs
       if (remaining <= 0) { await cmd('message.attention', { runId, reason: `MESSAGE_DEADLINE_BEFORE_CLAIM:${stage}:${unitId}` }); return null }
-      const claimed = await cmd('message.node.claim', { runId, unitId, nodeId: stage, expectedRevision: rev, estimatedInputTokens: prepared ? inputBytes + 256 : 0, maxOutputTokens: prepared ? outputLimit : 0, input: prepared ? { ...input, inputBytes, inputHash: prepared.inputHash, inputReadyAt: clock() } : { deterministic: true, inputHash: digest(input), inputReadyAt: clock() } })
+      const claimed = await cmd('message.node.claim', { runId, unitId, nodeId: stage, expectedRevision: rev, estimatedInputTokens: prepared ? inputBytes + 256 : 0, maxOutputTokens: prepared ? outputLimit : 0, input: prepared ? { ...input, inputBytes, inputHash: prepared.inputHash, inputReadyAt: clock() } : { deterministic: true, ...(input.contextHash ? { contextHash: input.contextHash } : {}), inputHash: digest(input), inputReadyAt: clock() } })
       binding = claimed?.node
       if (!binding) return null
       if (prepared) { controller = new AbortController(); controllers.add(controller) }
@@ -113,6 +170,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const response = fixedOutput ? { output: fixedOutput, usage: { inputTokens: 0, outputTokens: 0 } } : await Promise.race([judge({ stage, input, prepared, schema: messageSchemas[stage], signal: controller.signal, maxOutputTokens: outputLimit }), timeout])
       const output = messageSchemas[stage].parse(response.output ?? response)
       if (stage === 'S') validateSplit(output, current.run.body)
+      if (stage === 'material' && output.facts.some(fact => !input.text.includes(fact.quote))) throw new Error('MESSAGE_MATERIAL_QUOTE_INVALID')
       if (stage === 'R' && output.kind === 'binding' && output.candidateId !== null && !input.candidates.some(card => card.candidateId === output.candidateId)) throw new Error('MESSAGE_UNKNOWN_TARGET')
       if (stage === 'I' && output.kind === 'intent' && output.actions.some((action, index) => action.dependsOn.some(dep => dep >= index))) throw new Error('MESSAGE_ACTION_DEPENDENCY_INVALID')
       const usage = response.usage && Number.isSafeInteger(response.usage.inputTokens) && Number.isSafeInteger(response.usage.outputTokens) ? response.usage : undefined
@@ -143,8 +201,9 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const needs = unit.contextNeeds.map(need => ({ ...need, resourceRef: aliases.get(need.resourceRef) ?? need.resourceRef }))
       const material = await context.material?.({ run: data.run, unit, nodeId: 'R', needs })
       if (!material?.ready) { await waiting(data, unit.unitId, 'R', { kind: 'needs_context', reason: 'UNIT_MATERIAL_PENDING', needs: unit.contextNeeds }); return }
-      base.material = projectMaterial(material.data)
-      if (base.material?.resources?.some(resource => resource.capacityExceeded)) { await cmd('message.attention', { runId, reason: `MESSAGE_MATERIAL_CAPACITY:R:${unit.unitId}` }); return }
+      base.material = await prepareMaterial(data, unit.unitId, material.data)
+      if (pendingMaterial(base.material)) return
+      if (incompleteMaterial(base.material)) { await cmd('message.attention', { runId, reason: `MESSAGE_MATERIAL_CAPACITY:R:${unit.unitId}` }); return }
     }
     const candidateStartedAt = clock()
     const followup = statusFollowup(snapshot)
@@ -157,16 +216,20 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       ...card, ...(recentSourceKey && rawCandidates[index].sourceRefs?.includes(recentSourceKey) ? { recentSourceMatch: true } : {}),
     }))
     const priorTopic = followup && rawCandidates.find(card => card.topicId && card.sourceRefs?.includes(followup.sourceKey))
-    const relationCandidates = [...candidates].sort((left, right) =>
+    const orderedCandidates = [...candidates].sort((left, right) =>
       Number(Boolean(right.explicitReferenceMatches?.length)) - Number(Boolean(left.explicitReferenceMatches?.length))
       || Number(Boolean(right.recentSourceMatch)) - Number(Boolean(left.recentSourceMatch)))
     if (priorTopic) {
-      const index = relationCandidates.findIndex(card => card.candidateId === priorTopic.candidateId)
-      if (index > 0) relationCandidates.unshift(...relationCandidates.splice(index, 1))
+      const index = orderedCandidates.findIndex(card => card.candidateId === priorTopic.candidateId)
+      if (index > 0) orderedCandidates.unshift(...orderedCandidates.splice(index, 1))
     }
+    const protectedIds = new Set(orderedCandidates.filter(card => card.explicitReferenceMatches?.length || card.candidateId === priorTopic?.candidateId).map(card => card.candidateId))
+    let relationCandidates = orderedCandidates.filter((card, index) => index < 8 || protectedIds.has(card.candidateId))
+    const deferredCandidates = orderedCandidates.filter(card => !relationCandidates.includes(card))
     const relationInput = { ...base, candidates: relationCandidates,
       recentMessages: snapshot.history.slice(-3).map(item => ({ sourceKey: item.sourceKey, actorId: item.actorId, text: item.text?.slice(0, 600) })),
-      candidatePreparationMs: clock() - candidateStartedAt, omittedCandidateCount: Array.isArray(retrieved) ? 0 : Math.max(0, retrieved.total - rawCandidates.length) }
+      candidatePreparationMs: clock() - candidateStartedAt, omittedCandidateCount: deferredCandidates.length + (Array.isArray(retrieved) ? 0 : Math.max(0, retrieved.total - rawCandidates.length)),
+      catalogRevision: retrieved.catalogRevision ?? digest(rawCandidates), candidatePage: 0 }
     const answers = data.requests.filter(request => request.unitId === unit.unitId && request.nodeId === 'R' && request.status === 'resolved')
       .map(request => ({ requestId: request.id, question: request.question, answer: projectMaterial(request.answer) }))
     const previousFailure = data.nodes.findLast(node => node.unitId === unit.unitId && node.nodeId === 'R' && node.status === 'failed')?.error
@@ -176,12 +239,34 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     while (relationCandidates.length > 1 && prepareMessageRequest('R', projectedInput).inputBytes > relationLimit - 500) {
       const removable = relationCandidates.findLastIndex(card => !card.explicitReferenceMatches?.length && card.candidateId !== priorTopic?.candidateId)
       if (removable < 0) break
-      relationCandidates.splice(removable, 1)
+      deferredCandidates.unshift(...relationCandidates.splice(removable, 1))
       relationInput.omittedCandidateCount++
     }
-    const linked = await invoke(data, unit.unitId, 'R', relationInput, followup ? { kind: 'binding', disposition: 'conversation', candidateId: priorTopic?.candidateId ?? null, evidence: ['前文任务状态问句的范围补充'] } : undefined)
+    let linked
+    for (;;) {
+      relationInput.contextHash = digest([relationInput.catalogRevision, relationInput.candidatePage, relationCandidates.map(card => card.candidateId)])
+      linked = await invoke(await state(runId), unit.unitId, 'R', relationInput, followup ? { kind: 'binding', disposition: 'conversation', candidateId: priorTopic?.candidateId ?? null, evidence: ['前文任务状态问句的范围补充'] } : undefined)
+      if (linked?.kind !== 'binding' || linked.disposition !== 'new' || !deferredCandidates.length) break
+      const resolvedDetails = new Set(data.requests.filter(request => request.unitId === unit.unitId && request.nodeId === 'R' && request.status === 'resolved').flatMap(request => request.needs?.map(need => need.resourceRef) ?? []))
+      if (relationCandidates.some(card => card.explicitReferenceMatches?.length && card.omissions?.some(item => item.resourceRef && !resolvedDetails.has(item.resourceRef)))) break
+      relationCandidates = deferredCandidates.splice(0, 8)
+      relationInput.candidates = relationCandidates
+      relationInput.candidatePage++
+      relationInput.omittedCandidateCount = deferredCandidates.length
+      const nextInput = { ...relationInput, ...(answers.length ? { clarificationAnswers: answers } : {}) }
+      while (relationCandidates.length > 1 && prepareMessageRequest('R', nextInput).inputBytes > relationLimit - 500) {
+        deferredCandidates.unshift(relationCandidates.pop())
+        relationInput.omittedCandidateCount++
+      }
+    }
     if (!linked) return
     if (linked.kind !== 'binding' || linked.disposition === 'unresolved') { await waiting(data, unit.unitId, 'R', linked.kind === 'binding' ? { kind: 'needs_clarification', reason: 'MESSAGE_TARGET_UNRESOLVED' } : linked); return }
+    const confirmedIndependent = data.requests.some(request => request.unitId === unit.unitId && request.reason === 'MESSAGE_CANDIDATE_CATALOG_INCOMPLETE'
+      && request.status === 'resolved' && /独立新事项|新增独立任务/u.test(String(request.answer)))
+    if (linked.disposition === 'new' && relationInput.omittedCandidateCount > 0 && !confirmedIndependent) {
+      await waiting(data, unit.unitId, 'R', { kind: 'needs_clarification', reason: 'MESSAGE_CANDIDATE_CATALOG_INCOMPLETE', question: `仍有 ${relationInput.omittedCandidateCount} 个旧事项未进入本次候选判断，请明确是否为独立新事项或提供原消息引用。`, needs: [] })
+      return
+    }
     const detailRefs = [...new Set(relationCandidates.filter(card => card.candidateId === linked.candidateId || linked.disposition === 'new' && card.explicitReferenceMatches?.length)
       .flatMap(card => card.omissions?.map(omission => omission.resourceRef).filter(Boolean) ?? []))]
     const resolvedRefs = new Set(data.requests.filter(request => request.unitId === unit.unitId && request.nodeId === 'R' && request.status === 'resolved').flatMap(request => request.needs?.map(need => need.resourceRef) ?? []))
@@ -197,7 +282,8 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       await cmd('message.topic.bind', { runId, unitId: unit.unitId, expectedRevision: revision(data), binding: { ...binding, topicId: topic.topicId }, topic }, `topic-bind:${runId}:${unit.unitId}:${revision(data)}`)
       return
     }
-    const resolvedEvidence = resolvedMaterialEvidence(data.requests, unit.unitId)
+    const resolvedEvidence = await resolvedEvidenceFor(data, unit.unitId)
+    if (pendingMaterial(resolvedEvidence)) return
     const fixedIntent = followup ? { kind: 'intent', actions: followup.kind === 'count'
       ? [{ intent: 'fact', arguments: { kind: 'fact', text: base.text }, dependsOn: [] }]
       : [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: followup.kind === 'count' ? 'none' : 'result' } : undefined
@@ -308,14 +394,25 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const base = unitContext(run.snapshot, unit)
       const priorActions = data.commands.filter(command => command.unitId === unit.id && ['applied', 'running', 'unknown', 'superseded'].includes(command.status))
         .map(command => ({ commandId: command.commandId, intent: command.kind, arguments: command.args?.arguments ?? {}, status: command.status, priorStatus: command.priorStatus ?? null, taskId: command.args?.taskId ?? null }))
-      const answers = data.requests.filter(request => request.unitId === unit.id && request.nodeId === 'IB' && request.status === 'resolved')
-        .map(request => ({ requestId: request.id, question: request.question, answer: projectMaterial(request.answer) }))
+      const answers = await Promise.all(data.requests.filter(request => request.unitId === unit.id && request.nodeId === 'IB' && request.status === 'resolved')
+        .map(async request => ({ requestId: request.id, question: request.question, answer: await prepareMaterial(data, unit.id, request.answer) })))
       const priorityControl = priorityControls?.find(control => control.unitId === unit.id)
-      return { run, unit, data, binding, facts, base, priorActions, input: { ...intentContext(base, binding, facts, run.snapshot.policy, [], resolvedMaterialEvidence(data.requests, unit.id)), ...(priorActions.length ? { priorActions } : {}), ...(priorityControl ? { authorizedControl: priorityControl } : {}), ...(answers.length ? { clarificationAnswers: answers } : {}) } }
+      return { run, unit, data, binding, facts, base, priorActions, input: { ...intentContext(base, binding, facts, run.snapshot.policy, [], await resolvedEvidenceFor(data, unit.id), { sharedTopic: true }), ...(priorActions.length ? { priorActions } : {}), ...(priorityControl ? { authorizedControl: priorityControl } : {}), ...(answers.length ? { clarificationAnswers: answers } : {}) } }
     }))
+    const sharedTopics = prepared.map(item => item.facts.topic).filter(Boolean)
+    const sharedTopic = sharedTopics[0] ?? null
+    if (sharedTopics.some(value => digest(value) !== digest(sharedTopic))) throw Object.assign(new Error('MESSAGE_TOPIC_STALE'), { code: 'MESSAGE_TOPIC_STALE' })
     // 本次最新来源承担一次 IB 调用账；连续补充不反复消耗最早消息的预算。
     const first = prepared.at(-1)
-    const input = { intentRunId: `intent:${topicId}:${topic.inputRevision}`, topicId, topicInputRevision: topic.inputRevision, units: prepared.map(item => ({ unitId: item.unit.id, runId: item.run.runId, actorId: item.run.actorId, input: item.input })) }
+    const contextHash = digest(prepared.map(item => item.facts))
+    const taskFactVersions = [...new Map(prepared.flatMap(item => [item.facts.task, ...(item.facts.tasks ?? []), ...(item.facts.topicTasks?.tasks ?? [])])
+      .filter(task => task?.factVersion).map(task => [task.taskId, task.factVersion])).values()]
+    const sourceManifest = [...new Map([...prepared.map(item => ({ sourceKey: item.run.sourceKey, sourceVersion: item.run.sourceVersion, text: item.run.body })), ...(sharedTopic?.sources ?? [])]
+      .map(ref => [`${ref.sourceKey}:${ref.sourceVersion}`, { sourceKey: ref.sourceKey, sourceVersion: ref.sourceVersion, required: true,
+        ...(typeof ref.text === 'string' ? { hash: digest(ref.text), coverage: [{ start: 0, end: ref.text.length }] } : { coverage: null }) }])).values()]
+    const input = { intentRunId: `intent:${topicId}:${topic.inputRevision}:${contextHash.slice(0, 12)}`, topicId, topicInputRevision: topic.inputRevision, contextHash, contextRevision: sharedTopic?.contextRevision ?? topic.contextRevision, sourceManifest,
+      taskFactVersions,
+      ...(sharedTopic ? { sharedTopic } : {}), units: prepared.map(item => ({ unitId: item.unit.id, runId: item.run.runId, actorId: item.run.actorId, input: item.input })) }
     const preserved = first.data.nodes.findLast(node => node.nodeId === 'IB' && node.status === 'succeeded'
       && node.input?.intentRunId === input.intentRunId && node.output?.output?.kind === 'topic_intents')
     const output = preserved?.output.output ?? await invoke(first.data, first.unit.id, 'IB', input)
@@ -331,6 +428,17 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         || decision.intent.actions[0].intent !== control.action
     })) return 'WAIT_ROUTING'
     const accepted = []
+    const supersededFactIds = new Set()
+    for (const decision of decisions) for (const change of decision.intent.factRevisions ?? []) {
+      const item = prepared.find(item => item.unit.id === decision.unitId)
+      const fact = item.facts.topic?.facts.find(fact => fact.id === change.factId)
+      if (!fact || fact.actorId !== item.run.actorId || !item.run.body.includes(change.sourceQuote)
+        || !/改为|修改|不再|取消|撤销|替换|现在允许/u.test(change.sourceQuote) || !wholeTopicFactRevision(item.run.body, change)) {
+        await waiting(item.data, item.unit.id, 'IB', { kind: 'needs_clarification', reason: 'TOPIC_FACT_REVISION_UNCONFIRMED', question: '请由原条件提出人明确说明要取消或替换的条件及适用范围。', needs: [] })
+        return
+      }
+      supersededFactIds.add(change.factId)
+    }
     for (const item of prepared) {
       let intent = decisions.find(decision => decision.unitId === item.unit.id).intent
       if (intent.kind === 'needs_relink') { await cmd('message.relink', { runId: item.run.runId, unitId: item.unit.id, expectedRevision: revision(item.data), reason: intent.reason }); void process(item.run.runId); return }
@@ -370,7 +478,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         if (!material?.ready) { await waiting(item.data, item.unit.id, 'execute', { kind: 'needs_context', reason: 'REQUIRED_EXECUTION_MATERIAL_PENDING', needs }); return }
       }
       const constraints = [...new Set([...item.base.constraints, ...item.base.sharedConstraints,
-        ...(item.facts.topic?.facts ?? []).filter(fact => fact.kind === 'constraint' && fact.status !== 'invalidated').map(fact => fact.text), ...intent.constraints])]
+        ...(item.facts.topic?.facts ?? []).filter(fact => fact.kind === 'constraint' && fact.status !== 'invalidated' && !supersededFactIds.has(fact.id)).map(fact => fact.text), ...intent.constraints])]
       const usedPrior = new Set(), actionIds = intent.actions.map((action, index) => {
         const prior = item.priorActions.find(command => command.status === 'applied' && !usedPrior.has(command.commandId)
           && command.intent === action.intent && digest(command.arguments) === digest(action.arguments))
@@ -384,9 +492,13 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       })
       const sourceRefs = [{ sourceKey: item.run.sourceKey, sourceVersion: item.run.sourceVersion, text: item.run.body }]
       const topicFacts = [...intent.constraints.map(text => ({ kind: 'constraint', text, sourceRefs })), ...intent.actions.filter(action => action.intent === 'fact').map(action => ({ kind: action.arguments.kind, text: action.arguments.text, sourceRefs }))]
-      accepted.push({ unitId: item.unit.id, expectedRevision: revision(item.data), commands, ...(commands.length ? {} : { outcome: usedPrior.size ? 'applied' : 'ignored' }), topicFacts })
+      accepted.push({ unitId: item.unit.id, expectedRevision: revision(item.data), commands, ...(commands.length ? {} : { outcome: usedPrior.size ? 'applied' : 'ignored' }), topicFacts, factRevisions: intent.factRevisions ?? [] })
     }
-    const result = await cmd('message.topic.intent.accept', { runId: first.run.runId, topicId, conversationId: topic.conversationId, inputRevision: topic.inputRevision, decisions: accepted,
+    for (const item of prepared) {
+      const currentFacts = await context.facts?.({ run: item.run, snapshot: item.run.snapshot, unit: item.unit, binding: item.binding }) ?? {}
+      if (digest(currentFacts) !== digest(item.facts)) return 'CONTEXT_CHANGED'
+    }
+    const result = await cmd('message.topic.intent.accept', { runId: first.run.runId, topicId, conversationId: topic.conversationId, inputRevision: topic.inputRevision, contextRevision: sharedTopic?.contextRevision ?? topic.contextRevision, taskFactVersions, decisions: accepted,
       ...(priorityControls ? { priorityControls } : {}) }, `topic-intent-accept:${topicId}:${topic.inputRevision}:${randomUUID()}`)
     if (result.status === 'accepted') await Promise.all(prepared.map(item => dispatch(item.run.runId)))
     return result.status
@@ -406,9 +518,9 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const snapshots = await Promise.all(entries.map(item => state(item.run.runId)))
       if (snapshots.some(data => data.run.status === 'needs_attention' || data.requests.some(request => request.status === 'pending' && entries.some(item => item.unit.id === request.unitId)))) continue
       let retry = false
-      const flight = topicDrive(topic.topicId).then(status => { retry = status === 'WAIT_ROUTING' }).catch(async error => {
-        retry = ['MESSAGE_TOPIC_STALE', 'MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)
-        if (!closed && !['MESSAGE_TOPIC_STALE', 'MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)) {
+      const flight = topicDrive(topic.topicId).then(status => { retry = ['WAIT_ROUTING', 'CONTEXT_CHANGED'].includes(status) }).catch(async error => {
+        retry = ['MESSAGE_TOPIC_STALE', 'MESSAGE_TOPIC_CONTEXT_STALE', 'MESSAGE_TASK_FACTS_STALE', 'MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)
+        if (!closed && !['MESSAGE_TOPIC_STALE', 'MESSAGE_TOPIC_CONTEXT_STALE', 'MESSAGE_TASK_FACTS_STALE', 'MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)) {
           const entries = await store.query({ kind: 'message.topic.units', topicId: topic.topicId })
           if (entries[0]) await cmd('message.attention', { runId: entries[0].run.runId, reason: `MESSAGE_TOPIC_INTENT_FAILED:${error.code ?? error.message}` })
         }

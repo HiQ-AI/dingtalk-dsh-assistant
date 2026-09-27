@@ -1,0 +1,1 @@
+{"ok":true,"mode":"read-only","domainVersion":9,"tableCounts":{"groups":1,"scheduler":374,"tasks":68,"alerts":115,"activities":18750},"invalidRecords":0,"strippedFields":0,"unknownTables":0,"issueCodes":{},"extensions":{"activityProjection":43,"stagePlan":31,"coordinationRequests":505,"reportEvents":2003}}

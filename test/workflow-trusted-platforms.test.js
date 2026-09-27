@@ -152,7 +152,7 @@ test('UAT 合并目标只来自受信白名单，授权不要求真人审批', a
     entryUrl: 'https://uat.example.test/health' }
   const clients = { release: {
     github: Object.fromEntries(['readBranch', 'resolveApprovedPullRequest', 'readPullRequest', 'readCommit',
-      'readChecks', 'mergePullRequest'].map(name => [name, async () => ({})])),
+      'readChecks', 'readRequiredChecks', 'mergePullRequest'].map(name => [name, async () => ({})])),
     woodpecker: Object.fromEntries(['listPipelines', 'readBuildEvidence', 'triggerBuild']
       .map(name => [name, async () => ({})])),
     kubernetes: Object.fromEntries(['readDeployment', 'readPods', 'readEntry']
@@ -160,14 +160,13 @@ test('UAT 合并目标只来自受信白名单，授权不要求真人审批', a
     registry: { readManifest: async () => ({}) },
   } }
   const config = { release: { targets: [releaseTarget] },
-    uatMerge: { targets: [{ targetId: 'dataset-uat', requiredChecks: ['unit'] }] } }
+    uatMerge: { targets: [{ targetId: 'dataset-uat', requiredChecks: ['unit'], requiredScenarioIds: ['business'] }] } }
   const platform = createTrustedWorkflowPlatforms({ config, clients, ownerActorId: 'owner' })
   assert.ok(platform.uatMergeAdapter)
   assert.ok(platform.availableTargets.some(item => item.workflowId === 'task-uat-pr-merge'))
-  const input = await platform.prepareRequirement({ workflowId: 'task-uat-pr-merge',
+  await assert.rejects(platform.prepareRequirement({ workflowId: 'task-uat-pr-merge',
     action: { arguments: { objective: '合入 UAT', targetId: 'dataset-uat',
-      pullRequestNumber: 42, headCommitSha: 'a'.repeat(40) } }, materials: [] })
-  assert.deepEqual(input.requiredChecks, ['unit'])
+      pullRequestNumber: 42, headCommitSha: 'a'.repeat(40) } }, materials: [] }), { code: 'UAT_LOCAL_EVIDENCE_REQUIRED' })
   const prepared = { workflowKind: 'uat-pr-merge', operation: 'merge-uat-pr', runId: 'run-1', generation: 1,
     expected: { targetId: 'dataset-uat' } }
   const grant = await platform.authorizeExternal({ binding: { runId: 'run-1', nodeRunId: 'node-1', generation: 1 }, prepared })

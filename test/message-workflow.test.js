@@ -84,7 +84,7 @@ test('三条同话题先全部关联，再一次 IB 只创建一个业务任务'
   const gate = new Promise(resolve => { releaseLast = resolve })
   const started = new Promise(resolve => { lastStarted = resolve })
   const calls = [], created = []
-  const { workflow } = await fixture(t, {
+  const { workflow, store } = await fixture(t, {
     context: { bindTopic: async ({ run, unit }) => ({ topicId: 'topic-three', conversationId: run.conversationId,
       sourceRunId: run.runId, unitId: unit.unitId, title: '一项任务', facts: [] }), facts: async () => ({}),
       validateAction: async () => ({ allowed: true }) },
@@ -109,6 +109,10 @@ test('三条同话题先全部关联，再一次 IB 只创建一个业务任务'
   for (let attempt = 0; attempt < 100 && created.length < 1; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
   assert.deepEqual(created, ['one'])
   assert.equal(calls.filter(stage => stage === 'IB').length, 1)
+  const traces = await Promise.all(items.map(item => store.query({ kind: 'message.intent.runs', runId: item.runId })))
+  assert.ok(traces.every(trace => trace.length === 1))
+  assert.equal(new Set(traces.map(trace => trace[0].nodeRunId)).size, 1)
+  assert.equal(traces[0][0].input.sourceManifest.length, 3)
 })
 
 test('同群待关联消息阻止意图判断；归类完成后同话题只判断一次且各来源独立派发', async t => {
@@ -499,7 +503,7 @@ test('R明确引用候选不因容量被删除；超出保护集合时留可见�
 test('R补取的长材料尾部限制进入I与效果命令，原文引用保留', async t => {
   let intentInput, applied
   const restriction = '禁止生产写入，仅验证UAT2'
-  const { workflow } = await fixture(t, { context: { material: async () => ({ ready: true, data: { resources: [{ resourceRef: 'history:audit', text: '历史描述'.repeat(1000) + `。${restriction}` }], constraints: [restriction] } }) }, judge: async ({ stage, input }) => {
+  const { workflow } = await fixture(t, { context: { material: async () => ({ ready: true, data: { resources: [{ resourceRef: 'history:audit', text: '历史描述'.repeat(300) + `。${restriction}` }], constraints: [restriction] } }) }, judge: async ({ stage, input }) => {
     if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.source.text.length }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.source.text.length, role: 'unit' }], sharedConstraints: [] }
     if (stage === 'R') return input.clarificationAnswers ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['材料已取回'] } : { kind: 'needs_context', reason: '查历史', needs: [{ resourceRef: 'history:audit', reason: '核对目标' }] }
     intentInput = input
@@ -511,6 +515,38 @@ test('R补取的长材料尾部限制进入I与效果命令，原文引用保留
   assert.ok(applied.constraints.includes(restriction))
   assert.ok(applied.requiredExecutionMaterials.includes('history:audit'))
   assert.equal((await workflow.state(runId)).run.status, 'settled')
+})
+
+test('长材料中段对象与日期保留全文', async t => {
+  const important = '本次处理对象是乙租户，验收日期为十一月十五日。'
+  let seen = false
+  const content = '背景记录。'.repeat(100) + important + '继续记录。'.repeat(100) + '禁止生产写入。'
+  const { workflow } = await fixture(t, { handlers: { status: async () => ({}) }, context: { material: async () => ({ ready: true, data: { resources: [{ resourceRef: 'history:middle', text: content }] } }) }, judge: async ({ stage, input }) => {
+    if (stage === 'S') return split
+    if (stage === 'R') {
+      if (!input.clarificationAnswers) return { kind: 'needs_context', reason: '读取材料', needs: [{ resourceRef: 'history:middle', reason: '核对对象和日期' }] }
+      seen = JSON.stringify(input.clarificationAnswers).includes(important)
+      return binding
+    }
+    return intent
+  } })
+  const { runId } = await workflow.receive(source, { process: false }); await workflow.process(runId); await workflow.recover()
+  assert.equal(seen, true)
+  assert.equal((await workflow.state(runId)).run.status, 'settled')
+})
+
+test('必要材料超限时不使用首尾预览派发效果', async t => {
+  let effects = 0
+  const { workflow } = await fixture(t, { handlers: { status: async () => { effects++; return {} } },
+    context: { material: async () => ({ ready: true, data: { resources: [{ resourceRef: 'history:large', text: '长材料内容'.repeat(2000) }] } }) },
+    judge: async ({ stage }) => stage === 'S' ? split : stage === 'R'
+      ? { kind: 'needs_context', reason: '完整材料必需', needs: [{ resourceRef: 'history:large', reason: '核对全部条件' }] } : intent })
+  const { runId } = await workflow.receive(source, { process: false }); await workflow.process(runId); await workflow.recover()
+  const state = await workflow.state(runId)
+  assert.equal(state.run.status, 'needs_attention')
+  assert.match(state.run.reason, /MESSAGE_MATERIAL_CAPACITY/)
+  assert.equal(effects, 0)
+  assert.equal(state.commands.length, 0)
 })
 
 test('确定性S跳过模型容量及调用账，后继R仍受自己的容量约束', async t => {
@@ -638,6 +674,22 @@ test('Host预检拒绝在claim前收口，并拒绝依赖动作且从不进入ha
   assert.equal(calls, 0)
 })
 
+test('IB 有效条件本身超过输入预算时零派发且记录容量原因', async t => {
+  let effects = 0
+  const { workflow } = await fixture(t, { context: {
+    bindTopic: async ({ run, unit }) => ({ topicId: 'oversize-topic', conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.unitId, title: '大条件集', facts: [] }),
+    facts: async () => ({ topic: { topicId: 'oversize-topic', facts: [{ kind: 'constraint', text: '有效且不可删除的条件'.repeat(4000) }], sources: [] } }),
+  }, judge: async ({ stage, input }) => stage === 'S' ? { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }], sharedConstraints: [] } : binding,
+  handlers: { create: async () => { effects++; return {} } } })
+  const { runId } = await workflow.receive({ ...source, body: '处理条件' }, { process: false }); await workflow.process(runId)
+  let state = await workflow.state(runId)
+  for (let attempt = 0; attempt < 100 && state.run.status === 'pending'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await workflow.state(runId) }
+  assert.equal(state.run.status, 'needs_attention')
+  assert.match(state.run.reason, /MESSAGE_CONTEXT_CAPACITY:IB/)
+  assert.equal(state.commands.length, 0)
+  assert.equal(effects, 0)
+})
+
 test('I投影去除Host目标副本，完整保留身份材料权限和约束',()=>{
   const target={candidateId:'c',taskId:'t',runId:'r',goal:'完整目标',sourceRefs:['source'],distinguishingFacts:['权限和目标判别事实'],versions:{requirement:3}}
   const binding={...target,disposition:'existing',evidence:['引用'],target}
@@ -646,6 +698,9 @@ test('I投影去除Host目标副本，完整保留身份材料权限和约束',(
   const projected=intentContext(base,binding,facts)
   assert.deepEqual(projected,{...base,binding:{...target,disposition:'existing',evidence:['引用']},facts})
   assert.ok(Buffer.byteLength(JSON.stringify(projected))<Buffer.byteLength(JSON.stringify({...base,binding,facts})))
+  const shared = intentContext(base, binding, { ...facts, topic: { ...facts.topic, topicId: 'topic-shared', contextRevision: 4 } }, '', [], [], { sharedTopic: true })
+  assert.deepEqual(shared.facts.topic, { topicId: 'topic-shared', contextRevision: 4 })
+  assert.ok(!JSON.stringify(shared.facts).includes('不得删除'))
   assert.equal(binding.target,target)
 })
 test('编辑失效的旧话题约束不再进入意图上下文',()=>{
@@ -708,4 +763,196 @@ test('同群消息按接收顺序逐条处理，后一条不越过正在执行�
  await creating
  await Promise.all(later)
  assert.deepEqual(effects,['created','status','cancel'])
+})
+
+test('R 候选分页在第九项命中后只派发一次', async t => {
+  const pages = []
+  let dispatched = 0
+  const { workflow } = await fixture(t, {
+    context: { candidates: async () => Array.from({ length: 9 }, (_, index) => ({ candidateId: `page-${index + 1}`, taskId: `task-${index + 1}`, goal: `候选任务 ${index + 1}`, sourceRefs: [], explicitReferenceMatches: [] })) },
+    judge: async ({ stage, input }) => {
+      if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: 2 }], goalText: '查A', constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: 2, role: 'unit' }] }
+      if (stage === 'R') {
+        pages.push(input.candidates.map(item => item.candidateId))
+        return input.candidates.some(item => item.candidateId === 'page-9')
+          ? { kind: 'binding', disposition: 'existing', candidateId: 'page-9', evidence: ['第九项是对应任务'] }
+          : { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['本页没有对应任务'] }
+      }
+      return intent
+    }, handlers: { status: async () => { dispatched++; return { ok: true } } },
+  })
+  await workflow.receive({ ...source, runId: 'candidate-nine', body: '查A' })
+  const state = await workflow.process('candidate-nine')
+  assert.equal(pages.length, 2, JSON.stringify(state))
+  assert.deepEqual(pages[0], Array.from({ length: 8 }, (_, index) => `page-${index + 1}`))
+  assert.deepEqual(pages[1], ['page-9'])
+  assert.equal(state.commands[0].args.binding.candidateId, 'page-9')
+  assert.equal(state.run.status, 'settled')
+  assert.equal(dispatched, 1)
+  await workflow.process('candidate-nine')
+  assert.equal(dispatched, 1)
+})
+
+test('R 候选分页将第一与第九项明确引用同时保护在首页', async t => {
+  const pages = []
+  const { workflow } = await fixture(t, {
+    context: { candidates: async () => Array.from({ length: 9 }, (_, index) => ({ candidateId: `protected-${index + 1}`, taskId: `task-${index + 1}`, goal: `候选 ${index + 1}`, sourceRefs: [`ref-${index + 1}`], explicitReferenceMatches: index === 0 || index === 8 ? [`ref-${index + 1}`] : [] })) },
+    judge: async ({ stage, input }) => {
+      if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: 2 }], goalText: '查A', constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: 2, role: 'unit' }] }
+      if (stage === 'R') {
+        pages.push(input.candidates.map(item => item.candidateId))
+        return { kind: 'binding', disposition: 'existing', candidateId: 'protected-9', evidence: ['两个引用已同时核对'] }
+      }
+      return intent
+    }, handlers: { status: async () => ({ ok: true }) },
+  })
+  await workflow.receive({ ...source, runId: 'protected-nine', body: '查A' })
+  const state = await workflow.process('protected-nine')
+  assert.equal(pages.length, 1, JSON.stringify(state))
+  assert.ok(pages[0].includes('protected-1'))
+  assert.ok(pages[0].includes('protected-9'))
+  assert.equal(state.commands[0].args.binding.candidateId, 'protected-9')
+  assert.equal(state.run.status, 'settled')
+})
+
+test('IB 判断期间任务语义事实改变，旧动作零派发且新状态只派发一次', { timeout: 5000 }, async t => {
+  let releaseFirst, releaseSecond, startFirst, startSecond, finish
+  const firstGate = new Promise(resolve => { releaseFirst = resolve })
+  const secondGate = new Promise(resolve => { releaseSecond = resolve })
+  const firstStarted = new Promise(resolve => { startFirst = resolve })
+  const secondStarted = new Promise(resolve => { startSecond = resolve })
+  const dispatched = new Promise(resolve => { finish = resolve })
+  let taskStatus = 'running'
+  const observed = [], effects = []
+  const { workflow } = await fixture(t, {
+    context: {
+      bindTopic: async ({ run, unit }) => ({ topicId: 'semantic-topic', conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.id ?? unit.unitId, title: '任务状态', facts: [] }),
+      facts: async () => ({ task: { taskId: 'semantic-task', status: taskStatus } }),
+    },
+    judge: async ({ stage, input }) => {
+      if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }] }
+      if (stage === 'R') return binding
+      assert.equal(stage, 'IB')
+      const status = input.units[0].input.facts.task.status
+      observed.push(status)
+      if (observed.length === 1) { startFirst(); await firstGate }
+      else if (observed.length === 2) { startSecond(); await secondGate }
+      else throw new Error('unexpected repeated IB')
+      return { kind: 'topic_intents', decisions: input.units.map(item => ({ unitId: item.unitId, intent })) }
+    },
+    handlers: { status: async () => { effects.push(observed.at(-1)); finish(); return { ok: true } } },
+  })
+  const received = await workflow.receive({ ...source, sourceKey: 'semantic-change', body: '查询任务进度' }, { process: false })
+  try {
+    await workflow.process(received.runId)
+    await firstStarted
+    taskStatus = 'succeeded'
+    releaseFirst()
+    const retried = await Promise.race([secondStarted.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 1000))])
+    assert.equal(retried, true, JSON.stringify(await workflow.state(received.runId)))
+    assert.deepEqual(observed, ['running', 'succeeded'])
+    assert.deepEqual(effects, [])
+    assert.equal((await workflow.state(received.runId)).commands.length, 0)
+    releaseSecond()
+    await dispatched
+    await workflow.process(received.runId)
+    assert.deepEqual(effects, ['succeeded'])
+  } finally { releaseFirst(); releaseSecond() }
+})
+
+test('长材料分块逐页留证，中段对象日期和末段限制进入 I 且只派发一次', async t => {
+ const important='处理对象是乙租户，验收日期为十一月十五日。', restriction='禁止生产写入，仅允许在 UAT 验证。'
+ const text='background '.repeat(580)+important+'continuation '.repeat(490)+restriction
+ assert.ok(Buffer.byteLength(text)>12000)
+ const pages=[],effects=[];let intentInput
+ const {workflow}=await fixture(t,{context:{material:async()=>({ready:true,data:{resources:[{resourceRef:'material:long',text}]}})},judge:async({stage,input})=>{
+  let output
+  if(stage==='S')output={kind:'split',units:[{spans:[{start:0,end:input.sourceLength}],goalText:input.source.text,constraints:[],contextNeeds:[]}],sharedConstraints:[],coverage:[{start:0,end:input.sourceLength,role:'unit'}]}
+  else if(stage==='R')output=input.clarificationAnswers?{kind:'binding',disposition:'new',candidateId:null,evidence:['材料已逐页核对']}:{kind:'needs_context',reason:'读取完整材料',needs:[{resourceRef:'material:long',reason:'核对对象日期及限制'}]}
+  else if(stage==='material'){
+   pages.push(input)
+   const facts=[]
+   if(input.text.includes(important))facts.push({quote:important,kind:'object'})
+   if(input.text.includes(restriction))facts.push({quote:restriction,kind:'restriction'})
+   output={kind:'material_facts',complete:true,facts,reason:'本页已覆盖'}
+  }else {assert.equal(stage,'I');intentInput=input;output={kind:'intent',actions:[{intent:'create',arguments:{objective:'按材料验证',workflowId:'task-analysis'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}
+  return {output,usage:{inputTokens:100,outputTokens:100}}
+ },handlers:{create:async action=>{effects.push(action);return{accepted:true}}}})
+ const {runId}=await workflow.receive({...source,sourceKey:'paged-material',body:'按材料办理'},{process:false})
+ await workflow.process(runId);await workflow.recover()
+ const state=await workflow.state(runId)
+ assert.equal(state.run.status,'settled',JSON.stringify(state))
+ assert.equal(effects.length,1)
+ assert.ok(pages.length>=4)
+ assert.equal(state.nodes.filter(node=>node.nodeId==='material'&&node.status==='succeeded').length,pages.length)
+ assert.equal(pages[0].start,0);assert.equal(pages.at(-1).end,text.length)
+ for(let i=1;i<pages.length;i++)assert.ok(pages[i].start<=pages[i-1].end)
+ assert.ok(JSON.stringify(intentInput.resolvedEvidence).includes(important))
+ assert.ok(JSON.stringify(intentInput.resolvedEvidence).includes(restriction))
+ assert.ok(effects[0].constraints.includes(restriction))
+ const calls=pages.length
+ await workflow.process(runId)
+ assert.equal(pages.length,calls);assert.equal(effects.length,1)
+})
+
+test('材料分块伪造引文或未完整覆盖时零派发', async t => {
+ for(const mode of ['forged','incomplete']){
+  let effects=0,materialCalls=0
+  const text='材料背景。'.repeat(900)
+  const {workflow}=await fixture(t,{context:{material:async()=>({ready:true,data:{resources:[{resourceRef:'material:invalid',text}]}})},judge:async({stage,input})=>{
+   let output
+   if(stage==='S')output={kind:'split',units:[{spans:[{start:0,end:input.sourceLength}],goalText:input.source.text,constraints:[],contextNeeds:[]}],sharedConstraints:[],coverage:[{start:0,end:input.sourceLength,role:'unit'}]}
+   else if(stage==='R')output={kind:'needs_context',reason:'读取材料',needs:[{resourceRef:'material:invalid',reason:'完整条件必需'}]}
+   else if(stage==='material'){materialCalls++;output={kind:'material_facts',complete:mode!=='incomplete',facts:[{quote:mode==='forged'?'原文不存在的伪造租户':input.text.slice(0,6),kind:'fact'}],reason:'测试覆盖检查'}}
+   else throw new Error('incomplete evidence must not reach intent')
+   return {output,usage:{inputTokens:100,outputTokens:100}}
+  },handlers:{create:async()=>{effects++;return{}}}})
+  const {runId}=await workflow.receive({...source,sourceKey:`invalid-page-${mode}`,body:'按材料办理'},{process:false})
+  await workflow.process(runId);await workflow.recover()
+  const state=await workflow.state(runId)
+  assert.equal(materialCalls,1);assert.equal(effects,0);assert.equal(state.commands.length,0)
+  assert.equal(state.run.status,'needs_attention');assert.match(state.run.reason,/MESSAGE_MATERIAL_CAPACITY/)
+ }
+})
+
+test('C09 材料临时失败在重建 workflow 后续读且复用成功页', async t => {
+  const text = '完整材料背景。'.repeat(1100)
+  const calls = []
+  let allowRetry = false, effects = 0
+  const options = { policy: { recoveryDelaysMs: [0, 0] }, context: { material: async () => ({ ready: true, data: { resources: [{ resourceRef: 'material:resume', text }] } }) },
+    judge: async ({ stage, input }) => {
+      let output
+      if (stage === 'S') output = { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }] }
+      else if (stage === 'R') output = input.clarificationAnswers ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['材料已完整读取'] } : { kind: 'needs_context', reason: '读取材料', needs: [{ resourceRef: 'material:resume', reason: '完整依据' }] }
+      else if (stage === 'material') {
+        calls.push(input.pageIndex)
+        if (input.pageIndex === 1 && !allowRetry) throw new Error('TEMPORARY_PAGE_FAILURE')
+        output = { kind: 'material_facts', complete: true, facts: [], reason: '本页核对完成' }
+      } else output = { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '按材料处理', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+      return { output, usage: { inputTokens: 100, outputTokens: 100 } }
+    }, handlers: { create: async () => { effects++; return { accepted: true } } } }
+  assert.ok(Buffer.byteLength(text) > 12000)
+  const { workflow, store } = await fixture(t, options)
+  const { runId } = await workflow.receive({ ...source, sourceKey: 'material-resume', body: '按材料办理' }, { process: false })
+  await workflow.process(runId); await workflow.recover()
+  const before = await workflow.state(runId)
+  assert.equal(effects, 0)
+  assert.equal(before.run.status, 'pending', JSON.stringify(before))
+  assert.equal(calls.filter(index => index === 0).length, 1)
+  assert.ok(before.nodes.some(node => node.nodeId === 'material' && node.input.pageIndex === 0 && node.status === 'succeeded'))
+  assert.ok(before.nodes.some(node => node.nodeId === 'material' && node.input.pageIndex === 1 && node.status === 'failed'))
+  await workflow.close()
+  allowRetry = true
+  const resumed = createMessageWorkflow({ store, ...options })
+  try {
+    await resumed.recover(); await resumed.process(runId)
+    const after = await resumed.state(runId)
+    assert.equal(after.run.status, 'settled', JSON.stringify(after))
+    assert.equal(calls.filter(index => index === 0).length, 1)
+    assert.equal(calls.filter(index => index === 1).length, 2)
+    assert.ok(calls.some(index => index > 1))
+    assert.equal(effects, 1)
+    await resumed.process(runId)
+    assert.equal(effects, 1)
+  } finally { await resumed.close() }
 })

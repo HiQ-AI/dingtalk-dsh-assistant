@@ -4,6 +4,7 @@ import { createReleasePlatform } from './workflow-release-platform.js'
 import { createUatMergePlatform } from './workflow-uat-merge-platform.js'
 import { createBytebaseDataChangePlatform } from './workflow-bytebase-platform.js'
 import { readEngineeringDeliveryProof } from './workflow-engineering.js'
+import { isTerminalUatBuildFailure } from './execution-delivery.js'
 
 const requireText = (value, code) => {
   if (typeof value !== 'string' || !value.trim() || value !== value.trim()) throw executionError(code)
@@ -53,32 +54,41 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       throw executionError('UAT_REBUILD_NEWER_PIPELINE_UNRESOLVED')
     const previous = relevant.filter(row => row.number < failure.number && row.status === 'success')
       .sort((a, b) => b.number - a.number)[0]
-    if (!previous) throw executionError('UAT_REBUILD_RUNTIME_BASELINE_UNRESOLVED')
-    const build = await woodpecker.readBuildEvidence({ baseUrl: selected.woodpecker.baseUrl,
-      repositoryId: selected.woodpecker.repositoryId, pipelineNumber: previous.number })
-    if (build.pipelineNumber !== previous.number || build.commitSha !== previous.commitSha
-      || !/^sha256:[a-f0-9]{64}$/u.test(build.imageDigest ?? '')
-      || !build.image?.startsWith(`${selected.registry.image}:`) || !build.evidenceRef)
-      throw executionError('UAT_REBUILD_RUNTIME_BASELINE_UNRESOLVED')
-    const [manifest, deployment] = await Promise.all([
-      registry.readManifest({ image: selected.registry.image, digest: build.imageDigest }),
-      kubernetes.readDeployment(selected.kubernetes),
-    ])
+    const deployment = await kubernetes.readDeployment(selected.kubernetes)
     const pods = await kubernetes.readPods({ ...selected.kubernetes, deploymentUid: deployment.uid })
-    if (manifest.digest !== build.imageDigest || !Array.isArray(manifest.platformDigests)
-      || !manifest.platformDigests.length || deployment.ready !== true
-      || deployment.readyReplicas !== deployment.desiredReplicas || deployment.desiredReplicas < 1
+    if (deployment.ready !== true || deployment.readyReplicas !== deployment.desiredReplicas || deployment.desiredReplicas < 1
       || deployment.observedGeneration < deployment.generation || pods.complete !== true
       || pods.deploymentUid !== deployment.uid || pods.pods?.length !== deployment.desiredReplicas
-      || pods.pods.some(pod => pod.ready !== true || pod.deploymentUid !== deployment.uid
-        || !manifest.platformDigests.includes(pod.imageDigest))
-      || ![build, manifest, deployment, pods].every(item => item.evidenceRef))
-      throw executionError('UAT_REBUILD_NEWER_RUNTIME_UNRESOLVED')
-    return { facts: { failurePipelineVerified: true, branchHeadMatches: true,
-      noNewerRuntimeVersion: true, sourcePackageSupported: true },
-      evidenceRef: `uat-rebuild-proof:${executionDigest({ target, failure: failure.number,
-        baseline: previous.number, refs: [branch, commit, scan, build, manifest, deployment, pods]
-          .map(item => item.evidenceRef) })}` }
+      || pods.pods.some(pod => pod.ready !== true || pod.deploymentUid !== deployment.uid)
+      || ![deployment, pods].every(item => item.evidenceRef)) throw executionError('UAT_REBUILD_NEWER_RUNTIME_UNRESOLVED')
+    // 旧成功版本或本次失败流水线已成功构建的同提交制品，都不属于更新版本；必须完整对应全部 Pod。
+    for (const source of [failure, previous].filter(Boolean)) {
+      const failedSource = source === failure
+      let build
+      try {
+        build = await woodpecker.readBuildEvidence({ baseUrl: selected.woodpecker.baseUrl,
+          repositoryId: selected.woodpecker.repositoryId, pipelineNumber: source.number,
+          ...(failedSource ? { expectedPipelineStatus: failure.status } : {}) })
+      } catch (error) {
+        if (failedSource && ['WOODPECKER_BUILD_UNCONFIRMED', 'WOODPECKER_BUILD_STEP_UNCONFIRMED', 'WOODPECKER_BUILD_LOG_INVALID', 'WOODPECKER_BUILD_DIGEST_UNCONFIRMED'].includes(error.code ?? error.message)) continue
+        throw error
+      }
+      if (build.pipelineNumber !== source.number || build.commitSha !== source.commitSha
+        || !/^sha256:[a-f0-9]{64}$/u.test(build.imageDigest ?? '')
+        || !build.image?.startsWith(`${selected.registry.image}:`) || !build.evidenceRef
+        || failedSource && (build.pipelineStatus !== failure.status || build.buildStepStatus !== 'success' || build.buildStepExitCode !== 0))
+        throw executionError(failedSource ? 'UAT_REBUILD_NEWER_RUNTIME_UNRESOLVED' : 'UAT_REBUILD_RUNTIME_BASELINE_UNRESOLVED')
+      const manifest = await registry.readManifest({ image: selected.registry.image, digest: build.imageDigest })
+      if (manifest.digest !== build.imageDigest || !Array.isArray(manifest.platformDigests)
+        || !manifest.platformDigests.length || !manifest.evidenceRef) throw executionError('UAT_REBUILD_NEWER_RUNTIME_UNRESOLVED')
+      if (pods.pods.some(pod => !manifest.platformDigests.includes(pod.imageDigest))) continue
+      return { facts: { failurePipelineVerified: true, branchHeadMatches: true,
+        noNewerRuntimeVersion: true, sourcePackageSupported: true },
+        evidenceRef: `uat-rebuild-proof:${executionDigest({ target, failure: failure.number,
+          baseline: source.number, refs: [branch, commit, scan, build, manifest, deployment, pods]
+            .map(item => item.evidenceRef) })}` }
+    }
+    throw executionError('UAT_REBUILD_NEWER_RUNTIME_UNRESOLVED')
   }
   async function readUatAttestation({ kind, target }) {
     if (kind !== 'uat-rebuild') throw executionError('UAT_PROOF_UNAVAILABLE')
@@ -159,9 +169,28 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     ? createReleasePlatform({ targets: config.release.targets.map(({ id, ...target }) => target),
       clients: { ...clients?.release, attestations: { read: readUatAttestation } } })
     : null
+  async function readLocalEvidence(requirement) {
+    if (!execution) throw executionError('UAT_EXECUTION_BINDING_INVALID')
+    const source = requirement.localEvidence
+    if (!source?.taskId || !source.runId) throw executionError('UAT_LOCAL_EVIDENCE_REQUIRED')
+    const proof = await readEngineeringDeliveryProof({ state: await execution.controller.state(source.runId),
+      artifacts: execution.artifacts, store: execution.store, taskId: source.taskId })
+    if (!proof.localEvidence || proof.pullRequest.repository !== requirement.repository
+      || proof.pullRequest.base !== requirement.baseBranch || proof.pullRequest.number !== requirement.pullRequestNumber
+      || proof.commitSha !== requirement.headCommitSha
+      || executionDigest(proof.localEvidence) !== executionDigest(source)) throw executionError('UAT_LOCAL_EVIDENCE_MISMATCH')
+    const policy = config.uatMerge.targets.find(item => item.targetId === requirement.targetId)
+    if (!policy?.requiredScenarioIds?.length || policy.requiredScenarioIds.some(id => !proof.localEvidence.scenarioIds.includes(id)))
+      throw executionError('UAT_LOCAL_SCENARIO_REQUIRED')
+    return { ...proof.localEvidence, evidenceRef: `uat-local-evidence:${executionDigest(proof.localEvidence)}` }
+  }
   const uatMerge = config?.uatMerge?.targets?.length
     ? createUatMergePlatform({ targets: config.release?.targets ?? [],
-      policies: config.uatMerge.targets, github: clients?.release?.github }) : null
+      policies: config.uatMerge.targets, github: clients?.release?.github, readLocalEvidence }) : null
+  if (uatMerge && config.uatMerge.targets.every(policy => policy.requiredChecks.length)) {
+    uatMerge.adapter.legacyAdapter = createUatMergePlatform({ targets: config.release?.targets ?? [],
+      policies: config.uatMerge.targets.map(({ targetId, requiredChecks }) => ({ targetId, requiredChecks })), github: clients?.release?.github }).adapter
+  }
   let boundStore = null
   async function readDataApproval({ runId, generation, requirementDigest, resourceKey,
     scopeDigest, issueId, planId, sheetId, target, sheetSha256, packageDigest, requestId }) {
@@ -212,6 +241,39 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       throw executionError('UAT_EXECUTION_BINDING_INVALID')
     execution = value
   }
+  async function prepareUatRebuildFromFailure({ taskId, runId, mergeRunId }) {
+    if (!execution || !release) throw executionError('UAT_REBUILD_SOURCE_UNCONFIRMED')
+    const state = await execution.controller.state(runId)
+    const run = state?.run, node = state?.nodes?.find(item => item.nodeId === 'execute-build')
+    if (run?.runId !== runId || run.taskId !== taskId || run.workflowId !== 'task-uat-deployment'
+      || run.status !== 'failed' || state.nodes.some(item => !item.drained)
+      || node?.status !== 'failed' || node.waitReason?.reference !== 'RELEASE_PIPELINE_FAILED')
+      throw executionError('UAT_REBUILD_SOURCE_UNCONFIRMED')
+    const requirement = await execution.artifacts.read(run.requirementRef)
+    if (!requirement.evidenceRefs?.includes(`uat-merge-task:${taskId}:${mergeRunId}`))
+      throw executionError('UAT_REBUILD_SOURCE_UNCONFIRMED')
+    const effects = await execution.store.query({ kind: 'effect.list', runId })
+    const failed = effects.filter(item => item.nodeRunId === node.nodeRunId && isTerminalUatBuildFailure(item))
+    const effect = failed[0], prepared = effect?.definition.payload
+    if (effects.some(item => !['succeeded', 'failed'].includes(item.state)) || failed.length !== 1
+      || effect.runId !== runId || effect.generation !== run.generation || effect.inputDigest !== node.inputDigest
+      || prepared.runId !== runId || prepared.generation !== run.generation
+      || prepared.requirementDigest !== executionDigest(requirement)
+      || prepared.targetDigest !== executionDigest(requirement.target)
+      || prepared.expected.commitSha !== requirement.target.commitSha)
+      throw executionError('UAT_REBUILD_SOURCE_UNCONFIRMED')
+    const original = [...releaseTargets.values()].filter(item => item.kind === 'uat-deployment'
+      && item.repository === requirement.target.repository && item.service === requirement.target.service
+      && item.environment === requirement.target.environment && item.runbookId === requirement.target.runbookId)
+    const fields = ['repository', 'environment', 'service', 'branch', 'woodpecker', 'kubernetes', 'registry', 'entryUrl']
+    const identity = item => Object.fromEntries(fields.map(field => [field, item[field]]))
+    const matches = original.length === 1 ? [...releaseTargets.values()].filter(item => item.kind === 'uat-rebuild'
+      && executionDigest(identity(item)) === executionDigest(identity(original[0]))) : []
+    if (matches.length !== 1) throw executionError('UAT_REBUILD_TARGET_UNRESOLVED')
+    return prepareRequirement({ workflowId: 'task-uat-rebuild', action: { taskId,
+      arguments: { objective: requirement.request, targetId: matches[0].id, commitSha: requirement.target.commitSha },
+      constraints: requirement.constraints }, materials: [{ resourceRef: `uat-failed-task:${taskId}:${runId}` }] })
+  }
   async function prepareRequirement({ workflowId, action, materials }) {
     const request = requireText(action.arguments?.objective, 'EXTERNAL_OBJECTIVE_REQUIRED')
     const constraints = [...new Set(action.constraints ?? [])]
@@ -227,10 +289,20 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       if (!Number.isInteger(pullRequestNumber) || pullRequestNumber < 1
         || !/^[a-f0-9]{40}$/u.test(headCommitSha ?? ''))
         throw executionError('UAT_MERGE_PR_IDENTITY_REQUIRED')
-      return { request, targetId, repository: selected.repository, service: selected.service,
+      const markers = (materials ?? []).filter(item => /^engineering-task:[^:]+:[^:]+$/u.test(item.resourceRef ?? ''))
+      if (markers.length !== 1 || !action.taskId || markers[0].resourceRef.split(':')[1] !== action.taskId)
+        throw executionError('UAT_LOCAL_EVIDENCE_REQUIRED')
+      if (!execution) throw executionError('UAT_EXECUTION_BINDING_INVALID')
+      const runId = markers[0].resourceRef.split(':')[2]
+      const proof = await readEngineeringDeliveryProof({ state: await execution.controller.state(runId),
+        artifacts: execution.artifacts, store: execution.store, taskId: action.taskId })
+      const requirement = { request, targetId, repository: selected.repository, service: selected.service,
         baseBranch: selected.branch, pullRequestNumber, headCommitSha,
         requiredChecks: [...policy.requiredChecks],
+        localEvidence: proof.localEvidence,
         evidenceRefs: (materials ?? []).map(item => item.resourceRef).filter(Boolean).concat(`uat-target:${targetId}`) }
+      await readLocalEvidence(requirement)
+      return requirement
     }
     if (release && workflowId !== 'task-data-change') {
       const kind = workflowId.slice('task-'.length)
@@ -384,10 +456,12 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
   return { releaseAdapters: release?.releaseAdapters ?? {},
     ...(uatMerge ? { uatMergeAdapter: uatMerge.adapter } : {}),
     ...(bytebase ? { dataChangeAdapter: bytebase.workflowAdapter } : {}),
-    operationAdapter, authorizeExternal, prepareRequirement, bindStore, bindExecution,
+    operationAdapter, authorizeExternal, prepareRequirement, prepareUatRebuildFromFailure, bindStore, bindExecution,
     availableTargets: [
-      ...[...releaseTargets].map(([targetId, target]) => ({ targetId, workflowId: `task-${target.kind}` })),
-      ...(uatMerge ? uatMerge.configuredTargetIds.map(targetId => ({ targetId, workflowId: 'task-uat-pr-merge' })) : []),
+      ...[...releaseTargets].map(([targetId, target]) => ({ targetId, workflowId: `task-${target.kind}`,
+        ...(target.kind === 'uat-deployment' ? { repository: target.repository, branch: target.branch } : {}) })),
+      ...(uatMerge ? uatMerge.configuredTargetIds.map(targetId => ({ targetId, workflowId: 'task-uat-pr-merge',
+        repository: releaseTargets.get(targetId).repository, branch: releaseTargets.get(targetId).branch })) : []),
       ...[...databaseTargets.keys()].map(targetId => ({ targetId, workflowId: 'task-data-change' })),
     ] }
 }

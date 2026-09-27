@@ -645,7 +645,7 @@ test('v1 迁移先零副作用检查，再备份升级并独立读回版本', as
   } })
   await store.close()
   const raw = new DatabaseSync(dbPath)
-  raw.exec(`DROP TABLE task_reports; DROP TABLE task_owner_turns; DROP TABLE task_acceptance_items; DROP TABLE task_events;
+  raw.exec(`DROP TABLE message_topic_facts; DROP TABLE task_reports; DROP TABLE task_owner_turns; DROP TABLE task_acceptance_items; DROP TABLE task_events;
     DROP TABLE task_owners; DROP TABLE task_plan_stages; DROP TABLE task_controls;
     DROP TABLE business_tasks; PRAGMA user_version=1;`)
   raw.prepare('UPDATE execution_meta SET schema_version=1 WHERE singleton=1').run()
@@ -672,8 +672,15 @@ test('v1 迁移先零副作用检查，再备份升级并独立读回版本', as
   const v4Result = JSON.parse((await runFile(process.execPath, [v4Migration, '--execute', dbPath])).stdout)
   assert.equal(v4Result.schemaReadback, 4)
   assert.ok(v4Result.backupPath)
+  const v5Migration = fileURLToPath(new URL('../scripts/migrate-message-topic-facts.js', import.meta.url))
+  const v5Check = JSON.parse((await runFile(process.execPath, [v5Migration, '--check', dbPath])).stdout)
+  assert.equal(v5Check.writable, false)
+  assert.equal(v5Check.fromVersion, 4)
+  const v5Result = JSON.parse((await runFile(process.execPath, [v5Migration, '--execute', dbPath])).stdout)
+  assert.equal(v5Result.toVersion, 5)
+  assert.ok(v5Result.backupPath)
   const reopened = await openExecutionStore({ dbPath, instanceId })
-  assert.equal(reopened.info.schemaVersion, 4)
+  assert.equal(reopened.info.schemaVersion, 5)
   assert.equal((await reopened.query({ kind: 'run', runId: 'historical-run' })).run.taskId, 'historical')
   await reopened.close()
 })

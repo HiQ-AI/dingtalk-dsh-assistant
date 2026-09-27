@@ -1,0 +1,225 @@
+✖ 消息、话题与任务详情只展示有绑定的会话并支持历史分页 (5.1212ms)
+✔ 判断轨迹区分未知用量与确定性处理，并展示容量受阻原因 (5.382ms)
+✔ 收信箱区分话题关联等待与意图重判，任务详情展示业务计划阶段 (1.4365ms)
+✔ 运行看板保留左侧菜单并替换右侧整体内容 (7.8174ms)
+✔ 任务卡不请求或展示执行轮次耗时统计 (1.1741ms)
+✔ 运行看板提供统一视觉尺度、响应式布局和可见键盘焦点 (0.6304ms)
+✔ Agent配置页面提供叶子任务并行上限且默认值为5 (0.4951ms)
+✔ 发件状态按实际投递环节展示，pending不会伪装为已回读 (1.2435ms)
+✔ 处理步骤直接展示事项、关联对象和动作结论，未知结构不编造结果 (1.6052ms)
+✔ 默认日常能力按当前原文生成 Markdown，并拒绝把排查目标当整理完成 (2.3622ms)
+✔ 平台附件只读能力绑定当前 Task 消息、附件 ID 与来源版本，并独立二次回读 (0.8334ms)
+✔ 平台附件变更、跨群回读和二次内容漂移均不能成为通用任务证据 (0.7508ms)
+✔ 短指代消息优先呈现紧邻来源的话题，显式引用仍优先 (8.1047ms)
+✔ 明确交办与问题报告分开准入 (0.3386ms)
+✔ 内置进展查询限制本群与八项候选，流程结果可审计 (4.288ms)
+✔ 渠道回读仅归一化空白，正文差异仍阻止送达 (0.4745ms)
+✔ DWS 发送 ACK 的实际 result.openTaskId 可用于独立回读 (0.1452ms)
+✔ 群职责指定的日常代答署名在通知准备时固化且不会重复附加 (0.3108ms)
+✔ 群职责贯穿即时进展查询的持久通知正文与引用来源 (173.4768ms)
+✔ 群职责调整后已送达通知保留原正文，新通知仍可继续发送 (201.237ms)
+✔ 工作流通知引用来源消息，缺来源才发送普通群消息 (0.3053ms)
+✔ I 只能提交目标：Task 与 Owner 原子接纳，Owner 未建计划前没有业务 Run (134.7752ms)
+✔ 真实同库消息接纳→固定Task执行→看板结果；重复入站不重复创建 (204.7872ms)
+✔ 流程成功后由同一Task负责人验收并只汇报一次最终结果 (218.1587ms)
+✔ 最终报告领取前新增目标使旧完成通知失效，已完成流程不重跑 (168.0564ms)
+✔ 同一任务承接与最终报告并存时只按精确通知身份纠正最终报告 (200.4542ms)
+✔ 仅把已完成任务报告改成中文只唤醒Owner，不重跑排查或新增Run (268.0816ms)
+✔ Owner长事件积压分页读取全部内容后才推进同一Task水位 (369.1362ms)
+✔ 账号问题与“这不是让你去查吗”回到同一Task，不重建或丢失原上下文 (233.6793ms)
+✔ 同一话题含两个Task时按明确目标绑定短追问，不默认最近执行Run (249.6934ms)
+✔ 模型要求为非本人创建Task仍被Host拒绝，未受权群也拒绝 (119.8303ms)
+✔ 无可信消息编辑版本不能把变更正文当重复消息或新授权 (77.1512ms)
+✔ Web与IM引用同一澄清首终态生效，无权拒绝且答复不新建消息或重跑S (120.7794ms)
+✔ 纯话题事实同库沉淀，后续任务读取原文并强制继承话题约束 (182.5666ms)
+✔ 旧完成Task只读候选返回旧结果，不调用新controller或恢复旧引擎 (99.6502ms)
+✔ 群集合查询不要求单个Task身份 (113.5687ms)
+✔ 必需附件正文进入Task固定输入且保留意图约束 (142.0006ms)
+✔ 通知ACK丢失只回查不重发；当前披露不允许时零发送 (178.8807ms)
+✔ 同文高版本编辑复用原Task且别名重投回原run (145.9843ms)
+✔ 群职责允许明确点名交办创建任务，普通问题报告仍无创建权 (197.5257ms)
+✔ 本机操作者逐条重处理旧澄清，旧请求失效且有命令消息拒绝重跑 (151.4105ms)
+✔ 无引用的先别管它静默收束，不追问也不创建任务 (74.0791ms)
+✔ 第三方任务已创建进展同步即使含@也静默，不生成澄清或业务任务 (74.6107ms)
+✔ 已送达回复引用可将第三方进展静默绑定到唯一话题，且旧消息可确定性补录 (134.8159ms)
+✔ 已完成的纯排查任务再次收到相同问题反馈时提出修复授权问题 (114.8663ms)
+✔ 旧任务缺标题且长目标进入R候选时仍能计算材料摘要 (1660.9807ms)
+✔ 旧排查任务的肯定答复只授权同一消息继续准入，随后可创建新工作流任务 (170.597ms)
+✔ 本人可答复他人旧排查澄清，其他群成员不能冒用且不阻断消息接收 (248.0401ms)
+✔ 明确问小小鹏审核问题是否部署时即使I误判无动作也回读群任务 (125.003ms)
+✔ 审核状态问句、两个任务说明和引用问题清单归为同一话题，不误建三个任务 (171.2418ms)
+✔ 恢复扫描先重试一次无回执只读查询，再完成原命令 (89.8431ms)
+✔ 已回读的自身澄清通知不再作为新消息入站，收发信箱分别投影 (97.679ms)
+✔ 受管撤回逐条核验负责人原消息，回读后补发保留原通知 (192.6928ms)
+✔ 群职责进入 I 而不占用 S/R；任务历史可由固定材料键读取 (118.7021ms)
+✔ 群成员可核对本群旧任务摘要和UAT2交付状态，跨群历史不可读取 (100.0217ms)
+✔ 旧群历史缺发送人字段时仍能写入快照 (78.6277ms)
+✔ I 的流程提示不直接派发；专业目录供 Owner 选择，缺适配器不执行外部效果 (601.2153ms)
+✔ 受信外部适配器齐备时目录可见，I 仍不能直接启动外部效果 (426.1637ms)
+✔ 原消息否定编辑取消原Task，不发第二个任务且屏障释放 (195.3841ms)
+✔ 运行中原消息修订更新 Task 要求并保持旧 Run 输入冻结 (257.3534ms)
+✔ 新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入不执行，暂停不恢复 (297.6923ms)
+✔ Controller未排空错误投影等待原因，不能显示正常执行 (167.8046ms)
+✔ Web事件已准备后中断由恢复通路接纳一次，后续恢复不重复输入 (203.743ms)
+✔ C01 媒体连接器挂起不阻durable接收和独立SQLite读回 (145.3801ms)
+✔ 只关联话题时意图仍读到已执行Task及结果限制，运行成功不冒充目标达成 (259.5456ms)
+✔ 方案阶段完成后等待确认，确认沿用业务Task并只启动下一阶段 (312.3415ms)
+✔ UAT 缺受信适配器时已完成分析保留，Owner 后续阶段明确受阻 (200.9106ms)
+✔ 阶段间取消后经原发送人重新授权，只替换未完成后缀 (394.7337ms)
+✔ 已绑定Owner会话确实缺失时换代并在原Task恢复，旧任务命令不重复创建 (160.8273ms)
+✔ 专业分析后在同一 Task 读取前序产物，不依赖 general intake (236.2443ms)
+✔ Owner 可在零阶段 Task 首先选择一项受信能力并完成原文整理 (179.0655ms)
+✔ 执行中收到追加阶段意图时保留当前Run，完成后从核验产物启动后继 (302.8242ms)
+✔ 纯排查完成后续办仍用原业务Task，原Run成功证据不重跑 (274.8931ms)
+✔ C13 渠道读回挂起时新业务和取消继续，ACK不冒充送达 (227.5318ms)
+✔ 只读轨迹 API 回读真实节点、话题批次与已绑定 Owner，并隔离其他群 (151.2161ms)
+✔ 只读历史执行 API 不把预留 Owner 身份伪装成已绑定会话 (127.6432ms)
+✔ 消息证据 API 仅回读绑定原文并以 hash 固定分页版本 (290.372ms)
+✔ 超过 200 个话题时明确引用仍找回最早话题且不建新 Task (1104.4771ms)
+✔ 同话题一千条相同事实在 IB 合并投影，跨发送人或不同约束不合并 (8778.2315ms)
+✔ 原发送人撤销仅排查条件可替换历史，另一发送人不得替换或派发 (272.6014ms)
+✔ 局部撤销范围及模型误报整话题均保留其他任务限制且零派发 (228.2647ms)
+✔ answer 创建的任务可回读来源及历史执行 (175.8813ms)
+ℹ tests 82
+ℹ suites 0
+ℹ pass 81
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 23734.196
+
+✖ failing tests:
+
+test at test\observer-client.test.js:6:1
+✖ 消息、话题与任务详情只展示有绑定的会话并支持历史分页 (5.1212ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /不能据此判定没有缺口/. Input:
+
+  'window.__ModuleLoader__.load({\r\n' +
+    "  id: '@zzusp/dingtalk-dsh-observer',\r\n" +
+    '  factory: (require) => {\r\n' +
+    '    const module = { exports: {} }\r\n' +
+    "    const React = require('react')\r\n" +
+    "    const { Button, IconChecklistOutline14, IconChevronDownOutline14, IconChevronUpOutline14, Menu, Pill, StateDot } = require('@deepseek-ai/dsh-client-ui-primitives')\r\n" +
+    '    const { useCallback, useEffect, useState } = React\r\n' +
+    "    const ENDPOINT = 'http://127.0.0.1:18998'\r\n" +
+    '    const colors = {\r\n' +
+    "      surface: 'var(--dsw-alias-bg-base, #fff)',\r\n" +
+    "      surface2: 'var(--dsw-alias-bg-layer-1, #f7f7f8)',\r\n" +
+    "      cardSurface: 'var(--dsw-alias-bg-layer-1, #fff)',\r\n" +
+    "      border: 'var(--dsw-alias-border-l2, rgba(127,127,127,.25))',\r\n" +
+    "      muted: 'var(--dsw-alias-label-secondary, #737373)',\r\n" +
+    "      accent: 'var(--dsw-alias-brand-primary, #4d6bfe)',\r\n" +
+    "      danger: 'var(--dsw-alias-state-error-primary, #c33)',\r\n" +
+    "      warning: 'var(--dsw-alias-state-warn-primary, #a56500)'\r\n" +
+    '    }\r\n' +
+    '    let open = false\r\n' +
+    '    let selectedSessionSnapshot\r\n' +
+    '    const openListeners = new Set()\r\n' +
+    '    const clearSessionSelection = () => {\r\n' +
+    `      const element = document.querySelector('[role="treeitem"][aria-selected="true"]')\r\n` +
+    '      if (!element) return\r\n' +
+    "      const selectedClasses = [...element.classList].filter((name) => name.endsWith('_selected'))\r\n" +
+    '      selectedSessionSnapshot = { element, selectedClasses }\r\n' +
+    "      document.documentElement.style.setProperty('--dingtalk-dsh-observer-selected-bg', getComputedStyle(element).backgroundColor)\r\n" +
+    "      element.setAttribute('aria-selected', 'false')\r\n" +
+    '      for (const name of selectedClasses) element.classList.remove(name)\r\n' +
+    '    }\r\n' +
+    '    const restoreSessionSelection = () => {\r\n' +
+    '      const snapshot = selectedSessionSnapshot\r\n' +
+    '      selectedSessionSnapshot = undefined\r\n' +
+    '      if (!snapshot?.element?.isConnected) return\r\n' +
+    "      snapshot.element.setAttribute('aria-selected', 'true')\r\n" +
+    '      for (const name of snapshot.selectedClasses) snapshot.element.classList.add(name)\r\n' +
+    '    }\r\n' +
+    '    const setOpen = (value) => {\r\n' +
+    '      if (value === open) return\r\n' +
+    '      if (value) clearSessionSelection()\r\n' +
+    '      else restoreSessionSelection()\r\n' +
+    '      open = value\r\n' +
+    '      for (const listener of openListeners) listener(value)\r\n' +
+    '    }\r\n' +
+    '    const useOpen = () => {\r\n' +
+    '      const [value, setValue] = useState(open)\r\n' +
+    '      useEffect(() => { openListeners.add(setValue); return () => openListeners.delete(setValue) }, [])\r\n' +
+    '      return value\r\n' +
+    '    }\r\n' +
+    "    const fmt = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'\r\n" +
+    "    const fmtTime = (value) => value ? new Date(value).toLocaleTimeString('zh-CN', { hour12: false }) : '—'\r\n" +
+    '    const fmtDuration = (value) => { const seconds = Math.max(0, Math.floor(value / 1000)); if (seconds < 60) return `${seconds}秒`; const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes}分${seconds % 60}秒`; const hours = Math.floor(minutes / 60); return `${hours}小时${minutes % 60}分` }\r\n' +
+    "    const checkpointDuration = (checkpoint, events, now) => { let startedAt; for (const event of events) { const submittedAt = Date.parse(event.submittedAt); const remainingItems = event.remainingItems || []; if (startedAt === undefined && remainingItems[0] === checkpoint && Number.isFinite(submittedAt)) startedAt = submittedAt; if (startedAt !== undefined && !remainingItems.includes(checkpoint) && Number.isFinite(submittedAt)) return fmtDuration(submittedAt - startedAt) } return startedAt === undefined ? '—' : fmtDuration(now - startedAt) }\r\n" +
+    "    const short = (value) => value ? String(value).replace(/^session-/, '').slice(0, 14) : '—'\r\n" +
+    '    const outboxDelivery = (message) => {\r\n' +
+    "      if (message.recallStatus === 'recalled') return { id: 'recalled', label: '已撤回', state: 'neutral' }\r\n" +
+    "      if (message.recallStatus === 'failed') return { id: 'recall-failed', label: '撤回待处理', state: 'warning', detail: message.recallError === 'replacement_delivery_unknown' ? '已停止旧意图发送；历史是否送达仍未知，等待核验' : `旧消息撤回失败${message.recallRetryAt ? '，将有限重试' : '，需核验后处理'}：${message.recallError || '原因未记录'}` }\r\n" +
+    "      if (message.supersededByOutboundId || message.status === 'superseded') return { id: 'superseded', label: '已替代', state: 'neutral', detail: message.deliveredMessageId ? '已记录送达，等待替换通知送达后撤回' : '已停止旧意图发送；未声称历史消息未送达' }\r\n" +
+    "      if (message.status === 'sent') return { id: 'confirmed', label: message.deliveredMessageId ? '已回读' : '已发送', state: 'done' }\r\n" +
+    "      if (message.deliveryBlockedAt) return { id: 'failed', label: '发送待处理', state: 'error', detail: '服务端已拒绝发送，停止自动重试；需核验失败原因' }\r\n" +
+    '      const reason = message.deliveryPendingReason\r\n' +
+    '      const details = {\r\n' +
+    "        preflight_history_partial: '发送前检查：历史消息不完整，本次未发送',\r\n" +
+    "        preflight_failed: '发送前检查失败，本次未发送',\r\n" +
+    "        send_failed: '发送调用失败，尚未确认送达',\r\n" +
+    "        delivery_unknown: '发送结果未知，等待确认',\r\n" +
+    "        postflight_history_partial: '发送后回读：历史消息不完整',\r\n" +
+    "        postflight_failed: '发送后回读失败',\r\n" +
+    "        message_not_observed: '已调用发送，回读尚未找到对应消息',\r\n" +
+    '      }\r\n' +
+    "      const detail = details[reason] || reason || (message.deliveryError ? '投递异常' : '')\r\n" +
+    "      if (['delivery_unknown', 'postflight_history_partial', 'postflight_failed', 'message_not_observed'].includes(reason)) return { id: 'waiting', label: '待回读', state: 'warning', detail }\r\n" +
+    "      if (reason === 'preflight_failed' || reason === 'preflight_history_partial') return { id: 'failed', label: '发送受阻', state: 'error', detail }\r\n" +
+    "      if (message.deliveryError || reason === 'send_failed') return { id: 'failed', label: '投递异常', state: 'error', detail }\r\n" +
+    "      return { id: 'queued', label: '待发送', state: 'ongoing', detail }\r\n" +
+    '    }\r\n' +
+    '    const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }\r\n' +
+    '    const observerCss = `\r\n' +
+    '      [data-dingtalk-observer] :is(button, input, select, textarea, summary, [tabindex]):focus-visible {\r\n' +
+    '        outline: 2px solid var(--dsw-alias-brand-primary, #4d6bfe) !important;\r\n' +
+    '        outline-offset: 2px !important;\r\n' +
+    '      }\r\n' +
+    '      @media (max-width: 960px) {\r\n' +
+    '        [data-dingtalk-observer] .observer-main { padding: 16px !important; }\r\n' +
+    '        [data-dingtalk-observer] .observer-topics-layout { display: grid !important; grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr); }\r\n' +
+    '        [data-dingtalk-observer] .observer-topic-list { max-width: none !important; }\r\n' +
+    '        [data-dingtalk-observer] .observer-task-board { grid-template-columns: repeat(2, minmax(280px, 1fr)) !important; }\r\n' +
+    '      }\r\n' +
+    '      @media (max-width: 720px) {\r\n' +
+    '        [data-dingtalk-observer] .observer-main { padding: 12px !important; }\r\n' +
+    '        [data-dingtalk-observer] .observer-topics-layout,\r\n' +
+    '        [data-dingtalk-observer] .observer-task-board { grid-template-columns: minmax(0, 1fr) !important; }\r\n' +
+    '        [data-dingtalk-observer] .observer-topic-detail { min-height: 320px !important; }\r\n' +
+    '        [data-dingtalk-observer] .observer-toolbar { align-items: stretch !important; }\r\n' +
+    '      }\r\n' +
+    '    `\r\n' +
+    "    const pill = (tone) => ({ display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: `${ui.space1}px ${ui.space2}px`, fontSize: ui.textSm, color: tone, background: `color-mix(in srgb, ${tone} 12%, transparent)` })\r\n" +
+    '    const card = { border: `1px solid ${colors.border}`, borderRadius: ui.radiusMd, background: colors.cardSurface, padding: ui.space4 }\r\n' +
+    "    const tableFrame = { border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, overflow: 'hidden' }\r\n" +
+    "    const tableHeadCell = { height: 42, boxSizing: 'border-box', padding: `0 ${ui.space4}px`, color: colors.muted, fontSize: ui.textSm, fontWeight: 600, verticalAlign: 'middle' }\r\n" +
+    "    const tableBodyCell = { padding: `${ui.space3}px ${ui.space4}px`, borderTop: `1px solid ${colors.border}`, fontSize: ui.textMd, lineHeight: 1.55, verticalAlign: 'middle' }\r\n" +
+    "    const tableBodyContent = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }\r\n" +
+    "    const clampTableContent = (...children) => React.createElement('div', { style: tableBodyContent }, ...children)\r\n" +
+    "    const singleLineTableContent = (...children) => React.createElement('div', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, ...children)\r\n" +
+    "    const tableFooter = { minHeight: 48, boxSizing: 'border-box', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, padding: '8px 12px', borderTop: `1px solid ${colors.border}`, background: colors.surface2 }\r\n" +
+    "    const toolbar = { minHeight: 48, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', borderBottom: `1px solid ${colors.border}`, background: colors.cardSurface }\r\n" +
+    "    const navigationTabStyle = (selected, { paddingBottom = 12 } = {}) => ({ position: 'relative', boxSizing: 'border-box', border: 0, borderBottom: selected ? `2px solid ${colors.accent}` : '2px solid transparent', borderRadius: 0, padding: `0 0 ${paddingBottom}px`, cursor: 'pointer', font: 'inherit', fontSize: ui.textMd, fontWeight: 500, lineHeight: '20px', color: selected ? colors.accent : colors.muted, background: 'transparent', whiteSpace: 'nowrap' })\r\n" +
+    '    const statusTone = {\r\n' +
+    "      done: 'var(--dsw-alias-state-success-primary, #248a3d)',\r\n" +
+    "      warning: 'var(--dsw-alias-state-warn-primary, #a56500)',\r\n" +
+    "      ongoing: 'var(--dsw-alias-brand-primary, #4d6bfe)',\r\n" +
+    "      error: 'var(--dsw-alias-state-error-primary, #c33)'\r\n" +
+    '    }\r\n' +
+    "    const CheckpointDoneIcon = ({ size = 12 }) => React.createElement('svg', { width: size, height: size, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, React.createElement('circle', { cx: 8, cy: 8, r: 6.25 }), React.createElement('path', { d: 'M5 8.1 7.05 10 11.2 5.9' }))\r\n" +
+    '    const statusTag = (label, state, { borderless = false, fontSize = 11, fontWeight = 500 } = {}) => {\r\n' +
+    '      const tone = statusTone[state] || colors.muted\r\n' +
+    '      return React'... 111910 more characters
+
+      at TestContext.<anonymous> (file:///D:/project/worktrees/dingtalk-topic-context-completeness/test/observer-client.test.js:20:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'window.__ModuleLoader__.load({\r\n  id: \'@zzusp/dingtalk-dsh-observer\',\r\n  factory: (require) => {\r\n    const module = { exports: {} }\r\n    const React = require(\'react\')\r\n    const { Button, IconChecklistOutline14, IconChevronDownOutline14, IconChevronUpOutline14, Menu, Pill, StateDot } = require(\'@deepseek-ai/dsh-client-ui-primitives\')\r\n    const { useCallback, useEffect, useState } = React\r\n    const ENDPOINT = \'http://127.0.0.1:18998\'\r\n    const colors = {\r\n      surface: \'var(--dsw-alias-bg-base, #fff)\',\r\n      surface2: \'var(--dsw-alias-bg-layer-1, #f7f7f8)\',\r\n      cardSurface: \'var(--dsw-alias-bg-layer-1, #fff)\',\r\n      border: \'var(--dsw-alias-border-l2, rgba(127,127,127,.25))\',\r\n      muted: \'var(--dsw-alias-label-secondary, #737373)\',\r\n      accent: \'var(--dsw-alias-brand-primary, #4d6bfe)\',\r\n      danger: \'var(--dsw-alias-state-error-primary, #c33)\',\r\n      warning: \'var(--dsw-alias-state-warn-primary, #a56500)\'\r\n    }\r\n    let open = false\r\n    let selectedSessionSnapshot\r\n    const openListeners = new Set()\r\n    const clearSessionSelection = () => {\r\n      const element = document.querySelector(\'[role="treeitem"][aria-selected="true"]\')\r\n      if (!element) return\r\n      const selectedClasses = [...element.classList].filter((name) => name.endsWith(\'_selected\'))\r\n      selectedSessionSnapshot = { element, selectedClasses }\r\n      document.documentElement.style.setProperty(\'--dingtalk-dsh-observer-selected-bg\', getComputedStyle(element).backgroundColor)\r\n      element.setAttribute(\'aria-selected\', \'false\')\r\n      for (const name of selectedClasses) element.classList.remove(name)\r\n    }\r\n    const restoreSessionSelection = () => {\r\n      const snapshot = selectedSessionSnapshot\r\n      selectedSessionSnapshot = undefined\r\n      if (!snapshot?.element?.isConnected) return\r\n      snapshot.element.setAttribute(\'aria-selected\', \'true\')\r\n      for (const name of snapshot.selectedClasses) snapshot.element.classList.add(name)\r\n    }\r\n    const setOpen = (value) => {\r\n      if (value === open) return\r\n      if (value) clearSessionSelection()\r\n      else restoreSessionSelection()\r\n      open = value\r\n      for (const listener of openListeners) listener(value)\r\n    }\r\n    const useOpen = () => {\r\n      const [value, setValue] = useState(open)\r\n      useEffect(() => { openListeners.add(setValue); return () => openListeners.delete(setValue) }, [])\r\n      return value\r\n    }\r\n    const fmt = (value) => value ? new Date(value).toLocaleString(\'zh-CN\', { hour12: false }) : \'—\'\r\n    const fmtTime = (value) => value ? new Date(value).toLocaleTimeString(\'zh-CN\', { hour12: false }) : \'—\'\r\n    const fmtDuration = (value) => { const seconds = Math.max(0, Math.floor(value / 1000)); if (seconds < 60) return `${seconds}秒`; const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes}分${seconds % 60}秒`; const hours = Math.floor(minutes / 60); return `${hours}小时${minutes % 60}分` }\r\n    const checkpointDuration = (checkpoint, events, now) => { let startedAt; for (const event of events) { const submittedAt = Date.parse(event.submittedAt); const remainingItems = event.remainingItems || []; if (startedAt === undefined && remainingItems[0] === checkpoint && Number.isFinite(submittedAt)) startedAt = submittedAt; if (startedAt !== undefined && !remainingItems.includes(checkpoint) && Number.isFinite(submittedAt)) return fmtDuration(submittedAt - startedAt) } return startedAt === undefined ? \'—\' : fmtDuration(now - startedAt) }\r\n    const short = (value) => value ? String(value).replace(/^session-/, \'\').slice(0, 14) : \'—\'\r\n    const outboxDelivery = (message) => {\r\n      if (message.recallStatus === \'recalled\') return { id: \'recalled\', label: \'已撤回\', state: \'neutral\' }\r\n      if (message.recallStatus === \'failed\') return { id: \'recall-failed\', label: \'撤回待处理\', state: \'warning\', detail: message.recallError === \'replacement_delivery_unknown\' ? \'已停止旧意图发送；历史是否送达仍未知，等待核验\' : `旧消息撤回失败${message.recallRetryAt ? \'，将有限重试\' : \'，需核验后处理\'}：${message.recallError || \'原因未记录\'}` }\r\n      if (message.supersededByOutboundId || message.status === \'superseded\') return { id: \'superseded\', label: \'已替代\', state: \'neutral\', detail: message.deliveredMessageId ? \'已记录送达，等待替换通知送达后撤回\' : \'已停止旧意图发送；未声称历史消息未送达\' }\r\n      if (message.status === \'sent\') return { id: \'confirmed\', label: message.deliveredMessageId ? \'已回读\' : \'已发送\', state: \'done\' }\r\n      if (message.deliveryBlockedAt) return { id: \'failed\', label: \'发送待处理\', state: \'error\', detail: \'服务端已拒绝发送，停止自动重试；需核验失败原因\' }\r\n      const reason = message.deliveryPendingReason\r\n      const details = {\r\n        preflight_history_partial: \'发送前检查：历史消息不完整，本次未发送\',\r\n        preflight_failed: \'发送前检查失败，本次未发送\',\r\n        send_failed: \'发送调用失败，尚未确认送达\',\r\n        delivery_unknown: \'发送结果未知，等待确认\',\r\n        postflight_history_partial: \'发送后回读：历史消息不完整\',\r\n        postflight_failed: \'发送后回读失败\',\r\n        message_not_observed: \'已调用发送，回读尚未找到对应消息\',\r\n      }\r\n      const detail = details[reason] || reason || (message.deliveryError ? \'投递异常\' : \'\')\r\n      if ([\'delivery_unknown\', \'postflight_history_partial\', \'postflight_failed\', \'message_not_observed\'].includes(reason)) return { id: \'waiting\', label: \'待回读\', state: \'warning\', detail }\r\n      if (reason === \'preflight_failed\' || reason === \'preflight_history_partial\') return { id: \'failed\', label: \'发送受阻\', state: \'error\', detail }\r\n      if (message.deliveryError || reason === \'send_failed\') return { id: \'failed\', label: \'投递异常\', state: \'error\', detail }\r\n      return { id: \'queued\', label: \'待发送\', state: \'ongoing\', detail }\r\n    }\r\n    const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }\r\n    const observerCss = `\r\n      [data-dingtalk-observer] :is(button, input, select, textarea, summary, [tabindex]):focus-visible {\r\n        outline: 2px solid var(--dsw-alias-brand-primary, #4d6bfe) !important;\r\n        outline-offset: 2px !important;\r\n      }\r\n      @media (max-width: 960px) {\r\n        [data-dingtalk-observer] .observer-main { padding: 16px !important; }\r\n        [data-dingtalk-observer] .observer-topics-layout { display: grid !important; grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr); }\r\n        [data-dingtalk-observer] .observer-topic-list { max-width: none !important; }\r\n        [data-dingtalk-observer] .observer-task-board { grid-template-columns: repeat(2, minmax(280px, 1fr)) !important; }\r\n      }\r\n      @media (max-width: 720px) {\r\n        [data-dingtalk-observer] .observer-main { padding: 12px !important; }\r\n        [data-dingtalk-observer] .observer-topics-layout,\r\n        [data-dingtalk-observer] .observer-task-board { grid-template-columns: minmax(0, 1fr) !important; }\r\n        [data-dingtalk-observer] .observer-topic-detail { min-height: 320px !important; }\r\n        [data-dingtalk-observer] .observer-toolbar { align-items: stretch !important; }\r\n      }\r\n    `\r\n    const pill = (tone) => ({ display: \'inline-flex\', alignItems: \'center\', borderRadius: 999, padding: `${ui.space1}px ${ui.space2}px`, fontSize: ui.textSm, color: tone, background: `color-mix(in srgb, ${tone} 12%, transparent)` })\r\n    const card = { border: `1px solid ${colors.border}`, borderRadius: ui.radiusMd, background: colors.cardSurface, padding: ui.space4 }\r\n    const tableFrame = { border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, overflow: \'hidden\' }\r\n    const tableHeadCell = { height: 42, boxSizing: \'border-box\', padding: `0 ${ui.space4}px`, color: colors.muted, fontSize: ui.textSm, fontWeight: 600, verticalAlign: \'middle\' }\r\n    const tableBodyCell = { padding: `${ui.space3}px ${ui.space4}px`, borderTop: `1px solid ${colors.border}`, fontSize: ui.textMd, lineHeight: 1.55, verticalAlign: \'middle\' }\r\n    const tableBodyContent = { display: \'-webkit-box\', WebkitLineClamp: 2, WebkitBoxOrient: \'vertical\', overflow: \'hidden\', overflowWrap: \'anywhere\' }\r\n    const clampTableContent = (...children) => React.createElement(\'div\', { style: tableBodyContent }, ...children)\r\n    const singleLineTableContent = (...children) => React.createElement(\'div\', { style: { overflow: \'hidden\', textOverflow: \'ellipsis\', whiteSpace: \'nowrap\' } }, ...children)\r\n    const tableFooter = { minHeight: 48, boxSizing: \'border-box\', display: \'flex\', justifyContent: \'flex-end\', alignItems: \'center\', gap: 8, padding: \'8px 12px\', borderTop: `1px solid ${colors.border}`, background: colors.surface2 }\r\n    const toolbar = { minHeight: 48, boxSizing: \'border-box\', display: \'flex\', alignItems: \'center\', justifyContent: \'space-between\', gap: 12, padding: \'8px 12px\', borderBottom: `1px solid ${colors.border}`, background: colors.cardSurface }\r\n    const navigationTabStyle = (selected, { paddingBottom = 12 } = {}) => ({ position: \'relative\', boxSizing: \'border-box\', border: 0, borderBottom: selected ? `2px solid ${colors.accent}` : \'2px solid transparent\', borderRadius: 0, padding: `0 0 ${paddingBottom}px`, cursor: \'pointer\', font: \'inherit\', fontSize: ui.textMd, fontWeight: 500, lineHeight: \'20px\', color: selected ? colors.accent : colors.muted, background: \'transparent\', whiteSpace: \'nowrap\' })\r\n    const statusTone = {\r\n      done: \'var(--dsw-alias-state-success-primary, #248a3d)\',\r\n      warning: \'var(--dsw-alias-state-warn-primary, #a56500)\',\r\n      ongoing: \'var(--dsw-alias-brand-primary, #4d6bfe)\',\r\n      error: \'var(--dsw-alias-state-error-primary, #c33)\'\r\n    }\r\n    const CheckpointDoneIcon = ({ size = 12 }) => React.createElement(\'svg\', { width: size, height: size, viewBox: \'0 0 16 16\', fill: \'none\', stroke: \'currentColor\', strokeWidth: 1.5, strokeLinecap: \'round\', strokeLinejoin: \'round\', \'aria-hidden\': true }, React.createElement(\'circle\', { cx: 8, cy: 8, r: 6.25 }), React.createElement(\'path\', { d: \'M5 8.1 7.05 10 11.2 5.9\' }))\r\n    const statusTag = (label, state, { borderless = false, fontSize = 11, fontWeight = 500 } = {}) => {\r\n      const tone = statusTone[state] || colors.muted\r\n      return React'... 111910 more characters,
+    expected: /不能据此判定没有缺口/,
+    operator: 'match',
+    diff: 'simple'
+  }

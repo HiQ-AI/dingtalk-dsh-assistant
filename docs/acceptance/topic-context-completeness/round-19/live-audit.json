@@ -1,0 +1,312 @@
+{
+  "checkedAt": "2026-09-26T09:18:28.698Z",
+  "mode": "live",
+  "tasks": 73,
+  "nodes": 37,
+  "nodeTypes": 20,
+  "passed": true,
+  "rows": [
+    {
+      "nodeId": "prepare",
+      "outputRef": "sha256-210ff607a9a32e0b2c2d1b924af1372a9142b89586a29cb3c7e0b14d0a5fa648.json",
+      "textLength": 219,
+      "overview": "",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "analyze",
+      "outputRef": "sha256-d0e641e4869f75d0c20487a265ff0d91e896067e8fedd5fc18444f2c2c3dd6c3.json",
+      "textLength": 161,
+      "overview": "",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "validate-result",
+      "outputRef": "sha256-d0e641e4869f75d0c20487a265ff0d91e896067e8fedd5fc18444f2c2c3dd6c3.json",
+      "textLength": 161,
+      "overview": "",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare-generation",
+      "outputRef": "sha256-c55d43524bb490d5abd4ef1d0d1626406413809731121553640c001aaccd2d31.json",
+      "textLength": 140,
+      "overview": "从项目起始版本开始本轮修改",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare-workspace",
+      "outputRef": "sha256-c55d43524bb490d5abd4ef1d0d1626406413809731121553640c001aaccd2d31.json",
+      "textLength": 246,
+      "overview": "已创建独立 Git 工作目录",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "index-files",
+      "outputRef": "sha256-a1d76610f9e42f8e7ab4b0ba18f07491f7e7b57a08c83c2c9bcc2e5370833239.json",
+      "textLength": 30755,
+      "overview": "已索引 826 个文件；排除 99 个文件",
+      "pages": 26,
+      "passed": true
+    },
+    {
+      "nodeId": "select-files",
+      "outputRef": "sha256-6e99fef99ea66d9f1177d8b97e24aa8b0d1e8b35985c3021f9d55bd562a137bb.json",
+      "textLength": 534,
+      "overview": "选择已有 11 个文件；计划新建 1 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "validate-selection",
+      "outputRef": "sha256-7362841842426d2a2d93584d04358189f4d18c7ebf34c6ee458421b4c9ff22ce.json",
+      "textLength": 528,
+      "overview": "已选择 12 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "read-files",
+      "outputRef": "sha256-50812d4557204c1a871f384c6ca70f7e23a9e816dd8cb3006c864a44da27f43e.json",
+      "textLength": 819,
+      "overview": "已读取 11 个文件；尚不存在 1 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "propose-changes",
+      "outputRef": "sha256-8e5097ff9342c458b7dbd4509ed200f31f7185abd5fdc1f3d6fdf371d6133fbf.json",
+      "textLength": 14943,
+      "overview": "修改记录.md（原节点未保存方案说明）；修改方案涉及 2 个文件",
+      "documentName": "修改记录.md",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "apply-changes",
+      "outputRef": "sha256-3955249a3e2035dc4f96efd2b8614eca893c23d93e00aad060ad898ab172df9b.json",
+      "textLength": 88,
+      "overview": "已修改 2 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "verify-candidate",
+      "outputRef": "sha256-7141e4720ae70ae75558aa0cda130fc6f86435d0d8fc0a2093d8c58c5e80bb45.json",
+      "textLength": 59,
+      "overview": "安装项目依赖、构建项目通过",
+      "documentName": "构建检查报告.md",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare-commit",
+      "outputRef": "sha256-dfbc415dd300d6aef611994aae09fed35afd1ad77d80774b1939e87eea1f8e5b.json",
+      "textLength": 373,
+      "overview": "已生成提交计划；待提交 2 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "commit",
+      "outputRef": "sha256-02e154e52ad0fd8f4249807ec8ddffc7b42da6c18ff2f634f171db8f4edba812.json",
+      "textLength": 339,
+      "overview": "已创建本地提交；已提交 2 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare-push",
+      "outputRef": "sha256-8f84e642154e5560e1c12cecae9fd0c1fd8e7454b9fede226f3c6166babeb6f8.json",
+      "textLength": 279,
+      "overview": "已生成推送计划；待推送 2 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "push",
+      "outputRef": "sha256-5e87f67b8683fc5cf4e0d7567e6462d44764a56fd9bca74b49cab65bdb636a57.json",
+      "textLength": 244,
+      "overview": "已推送至远端；已推送 2 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare-pr",
+      "outputRef": "sha256-4aab6ede87bc522baa70dcccd7cd5e1625c723a67c08f73ef8b9f3a04a202dd9.json",
+      "textLength": 28047,
+      "overview": "已生成 PR 草稿",
+      "documentName": "合并请求.md",
+      "pages": 24,
+      "passed": true
+    },
+    {
+      "nodeId": "create-pr",
+      "outputRef": "sha256-aebd9062ad7aceeb0a5596c2022aa2121c31732cc176c925a91d1f5d9c234ebb.json",
+      "textLength": 283,
+      "overview": "已创建 PR #368",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "finalize",
+      "outputRef": "sha256-bcfec02ae10e60e50daf3fbff04edeb8d88b4f63194d58a37dc8dd19e2f469a4.json",
+      "textLength": 269,
+      "overview": "已回读 PR #368",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare-generation",
+      "outputRef": "sha256-5062a0c4cf915f7ef2efdb511b4384b69073e672ea0e7d097c52e069ea469f36.json",
+      "textLength": 136,
+      "overview": "从项目起始版本开始本轮修改",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare-workspace",
+      "outputRef": "sha256-5062a0c4cf915f7ef2efdb511b4384b69073e672ea0e7d097c52e069ea469f36.json",
+      "textLength": 238,
+      "overview": "已创建独立 Git 工作目录",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "inspect-and-propose",
+      "outputRef": "sha256-4f75f6e7927d365fe5198991a57fa8555b34f6e182980270b87761782a8eacc0.json",
+      "textLength": 1713,
+      "overview": "修改记录.md（原节点未保存方案说明）；修改方案涉及 1 个文件",
+      "documentName": "修改记录.md",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "apply-changes",
+      "outputRef": "sha256-1a11abdca2398df6f35a294f04ef362c2cdff8b6dad62e5c49000873aac24017.json",
+      "textLength": 86,
+      "overview": "已修改 1 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "verify-candidate",
+      "outputRef": "sha256-4ef78636e3145eba407e19ae165a94129745e86131d8a180d0a7bd43f638edd5.json",
+      "textLength": 85,
+      "overview": "Java 项目打包（跳过测试）通过",
+      "documentName": "构建检查报告.md",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare-commit",
+      "outputRef": "sha256-a70e0db37b9f3daa290c0dd4c0b510ff4343f3cdac5cdab88ca6f33f550ab56f.json",
+      "textLength": 384,
+      "overview": "已生成提交计划；待提交 1 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "commit",
+      "outputRef": "sha256-fba4bcd06ef529b7a1bb51c4a07b4ee25d3d6e4c38f440f0d3fe957c2d19ee68.json",
+      "textLength": 346,
+      "overview": "已创建本地提交；已提交 1 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare-push",
+      "outputRef": "sha256-5f90adae7c668e993c4deb3d9d5d34f8b9d46af44b386c877654641ed5e880ae.json",
+      "textLength": 277,
+      "overview": "已生成推送计划；待推送 1 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "push",
+      "outputRef": "sha256-ea6300cf9eb22e91df74ece2628351486a1bb0280df409e70f6e285b3dec6231.json",
+      "textLength": 238,
+      "overview": "已推送至远端；已推送 1 个文件",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare-pr",
+      "outputRef": "sha256-263f9b7f8d8567095040a8ae2c5e5120d731eb675b53b0be228d42f356930c38.json",
+      "textLength": 1557,
+      "overview": "已生成 PR 草稿",
+      "documentName": "合并请求.md",
+      "pages": 2,
+      "passed": true
+    },
+    {
+      "nodeId": "create-pr",
+      "outputRef": "sha256-eb49328c35f446df0263842a9c95fe2a6bf310c8f952ac4a43782eaf0bd66c56.json",
+      "textLength": 288,
+      "overview": "已创建 PR #371",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "finalize",
+      "outputRef": "sha256-af74c4371838a90716532e2e957aa1ff6e9ca90aff8171716be80c83a4103c0f.json",
+      "textLength": 257,
+      "overview": "已回读 PR #371",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare",
+      "outputRef": "sha256-ecceafbcab42cbd32f5edbf0af432f74b1f6d83edcac1b416ba1cf76fef4ea83.json",
+      "textLength": 45,
+      "overview": "",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "analyze",
+      "outputRef": "sha256-7ba78e459fb6b7d9b2f92faefbe4c3644fc28fd40b53c7954a4d35713562bee2.json",
+      "textLength": 22,
+      "overview": "",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "validate-result",
+      "outputRef": "sha256-7ba78e459fb6b7d9b2f92faefbe4c3644fc28fd40b53c7954a4d35713562bee2.json",
+      "textLength": 22,
+      "overview": "",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "prepare",
+      "outputRef": "sha256-e701736e5365066785b2a90804e3d6fda42b8500a4aa48c68b0945de71f56e8f.json",
+      "textLength": 152,
+      "overview": "",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "analyze",
+      "outputRef": "sha256-82612d08d425bb65450f81fd7b57d11dac10b036321cd02e35507886a0a46ae4.json",
+      "textLength": 71,
+      "overview": "",
+      "pages": 1,
+      "passed": true
+    },
+    {
+      "nodeId": "validate-result",
+      "outputRef": "sha256-82612d08d425bb65450f81fd7b57d11dac10b036321cd02e35507886a0a46ae4.json",
+      "textLength": 71,
+      "overview": "",
+      "pages": 1,
+      "passed": true
+    }
+  ]
+}

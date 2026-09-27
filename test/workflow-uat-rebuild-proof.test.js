@@ -17,8 +17,8 @@ function fixture({ podDigest = imageDigest, newer = false } = {}) {
     github: { readBranch: async () => ({ commitSha: currentSha, evidenceRef: 'branch' }),
       readCommit: async ({ commitSha }) => ({ commitSha, treeSha: 'e'.repeat(40), evidenceRef: 'commit' }) },
     woodpecker: { listPipelines: async () => ({ complete: true, hasMore: false, pipelines, evidenceRef: 'scan' }),
-      readBuildEvidence: async () => ({ pipelineNumber: 19, commitSha: previousSha, imageDigest,
-        image: `${target.registry.image}:old`, evidenceRef: 'build' }), triggerBuild: async () => ({}) },
+      readBuildEvidence: async ({pipelineNumber}) => { if(pipelineNumber===20)throw Error('WOODPECKER_BUILD_STEP_UNCONFIRMED');return { pipelineNumber: 19, commitSha: previousSha, imageDigest,
+        image: `${target.registry.image}:old`, evidenceRef: 'build' } }, triggerBuild: async () => ({}) },
     registry: { readManifest: async () => ({ digest: imageDigest, platformDigests: [imageDigest], evidenceRef: 'manifest' }) },
     kubernetes: { readDeployment: async () => ({ uid: 'deployment-1', generation: 2, observedGeneration: 2,
       desiredReplicas: 1, readyReplicas: 1, ready: true, evidenceRef: 'deployment' }),
@@ -30,7 +30,7 @@ function fixture({ podDigest = imageDigest, newer = false } = {}) {
   const requirement = { request: '同 SHA 重建', constraints: [], evidenceRefs: ['source'],
     target: { repository: target.repository, environment: 'uat', service: target.service,
       runbookId: target.runbookId, commitSha: currentSha } }
-  return { platform, requirement }
+  return { platform, requirement, clients }
 }
 
 test('UAT 重建证明直接读回失败流水线和当前 Pod 的旧成功制品', async () => {
@@ -47,4 +47,16 @@ test('Pod 制品不符或有更新在途流水线时阻断重建', async () => {
     await assert.rejects(platform.releaseAdapters['uat-rebuild'].inspect({ phase: 'preflight', requirement }),
       { code: scenario.newer ? 'UAT_REBUILD_NEWER_PIPELINE_UNRESOLVED' : 'UAT_REBUILD_NEWER_RUNTIME_UNRESOLVED' })
   }
+})
+
+for (const bad of [null,'build-step','commit','pipeline','mixed-pods','unknown-digest','incomplete-pods']) test(`同提交失败流水线部分部署证明 ${bad ?? 'success'}`,async()=>{
+ const currentDigest=`sha256:${'f'.repeat(64)}`,unknownDigest=`sha256:${'9'.repeat(64)}`
+ const {platform,requirement,clients}=fixture({podDigest:bad==='unknown-digest'?unknownDigest:currentDigest})
+ const requests=[]
+ clients.release.woodpecker.readBuildEvidence=async args=>{requests.push(args);return args.pipelineNumber===19?{pipelineNumber:19,commitSha:previousSha,imageDigest,image:`${target.registry.image}:old`,evidenceRef:'old-build'}:{pipelineNumber:bad==='pipeline'?21:20,commitSha:bad==='commit'?previousSha:currentSha,imageDigest:currentDigest,image:`${target.registry.image}:uat`,evidenceRef:'current-build',pipelineStatus:'failure',buildStepStatus:bad==='build-step'?'killed':'success',buildStepExitCode:0}}
+ clients.release.registry.readManifest=async({digest})=>({digest,platformDigests:[digest],evidenceRef:'manifest:'+digest})
+ if(bad==='mixed-pods'){clients.release.kubernetes.readDeployment=async()=>({uid:'deployment-1',generation:2,observedGeneration:2,desiredReplicas:2,readyReplicas:2,ready:true,evidenceRef:'deployment'});clients.release.kubernetes.readPods=async()=>({complete:true,deploymentUid:'deployment-1',pods:[currentDigest,imageDigest].map(imageDigest=>({deploymentUid:'deployment-1',ready:true,imageDigest})),evidenceRef:'pods'})}
+ if(bad==='incomplete-pods')clients.release.kubernetes.readPods=async()=>({complete:false,deploymentUid:'deployment-1',pods:[],evidenceRef:'pods'})
+ if(bad)await assert.rejects(platform.releaseAdapters['uat-rebuild'].inspect({phase:'preflight',requirement}),/UAT_REBUILD_NEWER_RUNTIME_UNRESOLVED/)
+ else{const result=await platform.releaseAdapters['uat-rebuild'].inspect({phase:'preflight',requirement});assert.equal(result.facts.noNewerRuntimeVersion,true);assert.equal(requests[0].expectedPipelineStatus,'failure')}
 })

@@ -302,6 +302,14 @@ export function createReleasePlatform({ targets, clients }) {
       const scan = await pipelines(target, prepared.expected.commitSha)
       observation = { evidenceRef: scan.evidenceRef,
         confirmed: scan.same.some(row => row.status === 'success') }
+      // 仅普通 UAT 构建可据完整同提交扫描收口；重建不能把旧失败误认为本次新触发失败。
+      if (!observation.confirmed && prepared.workflowKind === 'uat-deployment' && prepared.operation === 'build'
+        && scan.same.length && scan.same.every(row => ['failure', 'error', 'killed', 'declined', 'canceled', 'skipped'].includes(row.status))) {
+        const failed = [...scan.same].sort((a, b) => b.number - a.number)[0]
+        return { status: 'failed', reason: 'RELEASE_PIPELINE_FAILED', operationKey: prepared.operationKey,
+          commitSha: prepared.expected.commitSha, pipelineNumber: failed.number, pipelineStatus: failed.status,
+          evidenceRef: scan.evidenceRef }
+      }
     } else if (kind === 'tag') {
       const tag = await read('github', 'readTag', { repository: target.repository, tag: prepared.expected.tag })
       observation = { evidenceRef: tag.evidenceRef, confirmed: tag.commitSha === prepared.expected.commitSha }

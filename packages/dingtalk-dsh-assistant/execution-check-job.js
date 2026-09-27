@@ -3,6 +3,27 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { join, dirname, isAbsolute } from 'node:path'
 import { executionDigest, executionError } from './execution-artifacts.js'
 
+/** 只解释已保存的执行记录，不把检查器内部名称当作业务结论。 */
+export function describeVerificationChecks(verification) {
+  return (verification?.checks ?? []).map((check, index) => {
+    let log
+    try { log = JSON.parse(check.log) } catch { /* 自定义检查器可能只保存纯文本。 */ }
+    const steps = (Array.isArray(log?.steps) ? log.steps : []).map((step, stepIndex) => {
+      const args = Array.isArray(step.args) ? step.args : []
+      const skippedTests = args.some(arg => /^-D(?:skipTests|maven\.test\.skip)(?:=true)?$/.test(arg))
+      const title = args.includes('package') ? 'Java 项目打包'
+        : args.includes('install') || args.includes('ci') ? '安装项目依赖'
+          : args.includes('build') ? '构建项目'
+            : args.includes('test') ? '执行项目测试' : `执行配置检查 ${stepIndex + 1}`
+      return { title: skippedTests ? `${title}（跳过测试）` : title, passed: step.exitCode === 0 && !step.reason, elapsedMs: step.elapsedMs,
+        ...(skippedTests ? { limitation: '此命令跳过了测试，不能作为测试通过的证据' } : {}) }
+    })
+    return { title: steps.length ? steps.map(step => step.title).join('、') : `配置检查 ${index + 1}`,
+      passed: check.passed === true, steps,
+      limitation: steps.length ? '以上仅代表已执行命令的结果；业务验收须有对应验证记录' : '历史记录没有检查内容说明，无法确定验证范围' }
+  })
+}
+
 const encodeOutput = bytes => {
   const value = bytes.toString('utf8')
   // 可读文本JSON比base64更大时使用base64，保留原始字节并限制编码膨胀。
@@ -78,5 +99,22 @@ export function createVerificationJobCheck({ id, version, root, executable, args
     const result = results.at(-1)
     return { passed: results.length === commands.length && results.every(result => result.exitCode === 0 && result.reason === null),
       log: JSON.stringify({ candidateDigest: snapshot.candidateDigest, directory, exitCode: result.exitCode, reason: result.reason, timeoutScope: result.timeoutScope, startedAt, elapsedMs: Date.now() - start, timeoutMs, steps: results }) }
+  } }
+}
+
+/** Host 固定验收项；命令退出成功且实际值匹配预期才通过。 */
+export function createBusinessAcceptanceCheck({ criterion, expected, ...config }) {
+  if (![criterion, expected].every(value => typeof value === 'string' && value.trim() && value.length <= 2000)) throw executionError('ENGINEERING_ACCEPTANCE_CONFIG_INVALID')
+  const check = createVerificationJobCheck(config)
+  return { ...check, configurationDigest: executionDigest({ command: check.configurationDigest, implementation: check.run.toString(), criterion, expected }), async run(snapshot, context) {
+    const result = await check.run(snapshot, context), log = JSON.parse(result.log), step = log.steps.at(-1)
+    let actual = null
+    try {
+      const parsed = JSON.parse(step.stdoutEncoding === 'base64' ? Buffer.from(step.stdout, 'base64').toString('utf8') : step.stdout)
+      if (typeof parsed.actual === 'string' && parsed.actual.length <= 2000) actual = parsed.actual
+    } catch { /* 无结构化实际值时验收不通过。 */ }
+    const passed = result.passed && actual !== null && actual === expected
+    log.acceptance = { criterion, expected, actual, passed }
+    return { passed, log: JSON.stringify(log) }
   } }
 }

@@ -14,7 +14,7 @@ test('Host 仅从本机路径装配凭据并只提供客户端对象', async () 
       kubernetes: { readDeployment: () => {}, readPods: () => {}, readEntry: () => {} } } },
   })
   assert.deepEqual(Object.keys(clients), ['release'])
-  assert.deepEqual(observed[5][1].sort(), ['githubToken', 'woodpeckerToken', 'kubeconfig', 'kubeServer', 'kubeSkipTlsVerify', 'registryDockerCliEnabled', 'githubTagWritesEnabled'].sort())
+  assert.deepEqual(observed[5][1].sort(), ['githubToken', 'woodpeckerToken', 'kubeconfig', 'kubeServer', 'kubeSkipTlsVerify', 'registryDockerCliEnabled', 'githubTagWritesEnabled', 'githubMergeWritesEnabled'].sort())
   assert.deepEqual(observed[6][1], ['kubeconfig'])
   assert.deepEqual(observed[2][2].slice(0, 5), ['--kubeconfig', 'C:\\secret-home\\k3s\\kubeconfig-uat.yml',
     '--server', 'https://192.168.8.8:6443', '--insecure-skip-tls-verify'])

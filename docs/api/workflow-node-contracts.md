@@ -58,3 +58,78 @@ task-actions 仅接受 Host 固定注册的适配器，每个适配器实现参�
 ## 数据切换
 
 见[迁移 runbook](../ops/workflow-storage-migration.md)。v8 活动 Task 保存原快照、递增输入版本、分配新叶子会话并设置 migrationReview:required。显式 resumeTask 清除该门禁、保存 workflow-migration-resumed 事件、清除当前旧检查点，要求新结构化计划；启动不得自行恢复旧会话。历史事实留在迁移快照和审计事件中。
+
+## workflow-v2 上下文只读接口
+
+以下接口复用 Resident 的本地只读访问边界，不注册为模型写工具；对象必须属于当前配置的 workflow 群。不存在或跨群返回 404，非法参数与版本失效返回 400，错误码写入 `error`。
+
+| GET 路径 | 参数与结果 |
+| --- | --- |
+| `/state/workflows/:runId/trace` | `cursor` 为记录偏移，`limit` 默认50、最大100；返回 `status/reason/revision/items/nextCursor/total`。包含由其他 MessageRun 承载、但涵盖当前消息的共享 IB；每项保存 `carrierRunId/sourceRunIds/input/output/usage`。 |
+| `/state/workflows/topics/:topicId/context` | 事实 `cursor` 与批次 `intentCursor` 独立；`revision` 为首屏返回的上下文版本，续页据此拒绝混入新版本。返回当前事实、`intentRuns`、`nextCursor/intentNextCursor`。批次固定每页50条，末尾可能需要读取空页确认结束。 |
+| `/state/workflows/:runId/evidence/:ref` | `ref` URL编码。仅允许当前消息已绑定的快照来源或持久材料，不读取任意路径/URL。`cursor` 为UTF-16原文坐标，`limit`默认2000、范围2–8000；续页必须携带首屏 `hash`。返回 `text/start/end/totalLength/totalBytes/hash/nextCursor`，不切断代理项字符。 |
+| `/state/tasks/:taskId/runs` | `cursor` 为上一页返回的Run序号，`limit`默认20、最大100；返回 Owner 与历史 Run/节点。Owner `sessionBound=false` 时，`sessionId`仅为预留身份。`total=null`表示未执行全量计数。 |
+
+`sourceManifest` 记录 IB 使用的来源版本及范围，`taskFactVersions` 记录事务接纳用的语义版本。材料节点的 `coverage.mode=model_extraction` 表示模型已处理各页并返回通过原文匹配的引文；不代表所有语义事实都被正确提取。历史没有记录的字段保持缺失，不回填虚构的读取证明。
+
+IB 可返回 `factRevisions: [{ factId, sourceQuote, scope }]`。Host 只接受原发送人当前原文明示的整条撤销或替换，scope只接受“当前话题”或“整条条件”；存在局部范围、其余条件保持等证据时保留原条件并请求澄清，不把局部变更扩大到其他事项。数据库再次校验话题、原提出人、引文与当前版本。旧事实保存为 `superseded`，保留替代来源；不会按时间新旧自动删除条件。
+
+消息 trace 只读响应补充 message.text/receivedAt；记录含 startedAt、completedAt、attempt，意图记录含 topicTitle 与 sourceMessages（同群原文、发送者名称、时间及 current 标记）。耗时采用本次领取开始至完成，不以记录创建时间代替；历史缺失字段视为未知。
+
+消息 trace 的步骤展示现在使用 summary={title,conclusion,rows:[{label,value}]}；响应不再包含 input、output、usage、evidenceRefs、deterministic。业务摘要在服务端从原持久记录投影，前端不展开或 stringify 全量模型上下文。原文证据读取仍由内部原始记录进行范围校验，不依赖精简后的展示响应。
+
+
+### 任务节点产出与文档
+
+`GET /state/tasks/:taskId/runs/:runId/nodes/:nodeRunId/output?ref=:outputRef` 返回 `text/overview/nextCursor/totalLength`，有文档时附 `documentName`；cursor 默认 0，limit 默认 1200、上限 8000。对应 `/document?ref=:outputRef` 按需下载 UTF-8 Markdown，响应为 attachment、Cache-Control=no-store。两条路径均核对当前配置群、Task/Run/节点和准确输出引用；文档不存在或跨范围返回 404，引用变化拒绝读取。文档正文不放进列表。
+
+新工程方案是节点实际保存的 Markdown 文档工件；历史补丁导出的修改记录明确标注未保存方案说明。旧工作目录仅从同一 nodeRunId、同一 generation 的成功 workspace 效果回执读取，不挪用其他轮次的目录。
+
+方案编写及方案检查节点只显示实际方案工件路径，不展示正文、文件数量、展开或下载入口。当前文档与补丁持久化在 JSON 工件中，因此显示真实 JSON 路径，不虚构独立 Markdown 文件路径；其余节点保持原展示。
+# Web 当前阶段确认接口
+
+`POST /tasks/{taskId}/confirm-stage` 仅允许受信本机 Web 来源及已配置 `webActorId`；请求不能自行声明 actor。当前仅支持正式 Web 来源任务。
+
+先从 `GET /state/tasks` 的目标任务读取 `stageConfirmation`。仅当前 active 的 Web 任务处于合法 `waiting_confirmation` 且全部前序成功时返回绑定对象（下方除 requestId、confirmationText 的全部字段），其他情况为 null。runSequence 使用该任务全部运行计数，不受任务列表分页影响。调用者原样提交绑定并补充唯一 requestId、用户确认正文；无需读取控制库。读取后状态变化仍由 POST 的事务版本校验拒绝。
+
+```json
+{
+  "requestId": "confirm-uat-merge-1",
+  "requirementRevision": 1,
+  "controlRevision": 1,
+  "planRevision": 1,
+  "runSequence": 1,
+  "stageId": "stage-2",
+  "outputRef": "sha256-实际前序产物摘要.json",
+  "confirmationText": "用户针对当前阶段的明确确认正文"
+}
+```
+
+所有版本和产物必须来自当前任务状态，示例不能直接执行。接纳时核对当前唯一等待确认阶段及其已成功前序产物；应用时原生确认事务再次核对要求、控制、计划和产物。202 表示耐久接纳成功；相同 requestId 和完整请求重放返回原结果，不新增确认；内容变更返回409。过期版本、非当前阶段或错产物返回409；非本机来源或错误actor返回403，非法字段返回400。
+
+确认不增加任务要求版本，不修改冻结流程，不启动外部操作。接纳后的 `approval.resolved` 事件保留 actor、确认正文和精确阶段身份，唤醒 Owner 决定是否推进；每个后续 confirmation 阶段必须单独确认。任何未收到的用户回复都不能构造为确认请求。
+
+## Web Run 预算续行接口
+
+`POST /tasks/{taskId}/continue-budget` 沿用阶段确认的本机来源和受信 `webActorId`，通过 `submitWorkflowTask` 耐久接纳。请求是严格对象，仅允许：
+
+| 字段 | 约束 |
+| --- | --- |
+| requestId | 非空字符串，最多 200 字符 |
+| continuationText | 用户明确续行正文，非空字符串，最多 16000 字符 |
+| budgetBinding | 原样提交当前任务投影的 `budgetContinuation`，严格对象 |
+
+`budgetBinding` 必须包含非空字符串 `taskId`、`controlState`、`stageId`、`runId`、`workflowDigest`、`nodeRunId`、`nodeId`（每项最多 200 字符）；正整数 `requirementRevision`、`planRevision`、`generation`、`maxClaims`；非负整数 `controlRevision`、`runRevision`、`leaseEpoch`、`claimCount`。主体 taskId 取自 URL，服务与控制账校验绑定 taskId 一致。客户端不得传入 actor 或任意追加额度，也不能拼造不存在的用户授权。
+
+Host 按剩余节点数 × 3 计算额度，同 Run 只准一次，保留原累计次数、候选与已完成验收。重复相同请求读回原回执；内容冲突、过期绑定、已续行、非预算等待或其他续行门禁失败返回 409（`RUN_BUDGET_CONTINUATION_*`）；受信来源或 actor 失败返回 403；非法字段和正文返回 400。202 代表接纳，不代表后续节点成功。再次预算耗尽不自动续费。
+
+## 本地部署维护与原子停机许可
+
+这些接口仅接受本机连接及现有可信 Web Origin，写入身份由 Host `webActorId` 注入，不能从请求体提供。
+
+- `GET /runtime/maintenance`：返回 `active`、`phase`（`inactive|draining|stopping`）、`revision`、`maintenanceId`、`busy`、`drained`、`processIncarnation`、`stopPermitted`、`resumePermitted`。`processIncarnation` 为 Host 启动时生成的 `PID:UUID`；同进程开库或模块重载不会改变，HTTP/Store options 不能设置。
+- `POST /runtime/maintenance`：`{requestId,active,expectedRevision,maintenanceId,reason}`。进入 `draining` 后阻断新领取，允许已开始的操作排空。普通 `active:false` 只能退出未封存维护。
+- `POST /runtime/maintenance/seal`：`{requestId,expectedRevision,maintenanceId,reason}`。在同一控制账事务中核验版本、维护身份、可信 actor、零活动节点/Owner/效果/消息发送，然后保存 `stopping`、`sealedIncarnation` 并递增版本。只有封存进程的 `stopPermitted` 为真，单独 `active+drained` 不再构成停机许可。
+- `POST /runtime/maintenance/resume`：同 seal 请求字段。仅当当前受信 Host 进程身份与封存身份不同且仍排空，才递增版本并退出维护。旧进程不能通过普通 leave 或 resume 撤销停机许可；不得通过改变调用参数伪造新身份。
+
+写接口返回 `{receipt,state}`；同 `requestId` 同载荷幂等，不同载荷冲突。过期版本、已封存或未排空返回 409，额外身份字段返回 400。许可与维护事件持久化，重启不会自动解除。外部只读 SQLite 检查器没有 Host incarnation，只核对持久 `phase/maintenanceId/revision`，不得自行签发 `stopPermitted`。部署脚本必须先取得并核验 seal 回执，再停止其绑定的旧 PID；新实例健康与恢复核验后调用 resume。

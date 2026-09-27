@@ -1,6 +1,9 @@
 import { promisify } from 'node:util'
 import { execFile as execFileCallback } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { join, resolve, dirname, basename } from 'node:path'
+import { tmpdir } from 'node:os'
 import { executionDigest } from './execution-artifacts.js'
 import { narrowVerificationSql } from './workflow-postgres-uat-host.js'
 
@@ -18,15 +21,22 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
   githubTagWritesEnabled = false, githubMergeWritesEnabled = false, registryDockerCliEnabled = false,
   fetchImpl = fetch, execFileImpl = execFile, attestations } = {}) {
   async function request(url, token, options = {}) {
+    const { allowUnprotected = false, ...fetchOptions } = options
     if (!url.startsWith('https://')) fail('PLATFORM_HTTPS_REQUIRED')
     let response
     try {
-      response = await fetchImpl(url, { ...options, headers: {
+      response = await fetchImpl(url, { ...fetchOptions, headers: {
         Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...options.headers,
       }, signal: AbortSignal.timeout(30000) })
     } catch { fail('PLATFORM_REQUEST_FAILED') }
-    if (!response.ok) fail(`PLATFORM_HTTP_${response.status}`)
+    if (!response.ok) {
+      if (allowUnprotected && response.status === 404) {
+        let body; try { body = await response.json() } catch { fail('PLATFORM_RESPONSE_INVALID') }
+        if (body?.message === 'Branch not protected') return {}
+      }
+      fail(`PLATFORM_HTTP_${response.status}`)
+    }
     if (response.status === 204) return {}
     try { return await response.json() } catch { fail('PLATFORM_RESPONSE_INVALID') }
   }
@@ -57,6 +67,35 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
     return `https://api.github.com/repos/${repository}/${suffix}`
   }
   const github = {
+    async readRequiredChecks({ repository, branch }) {
+      if (!safePath(branch)) fail('GITHUB_BRANCH_INVALID')
+      const path = encodeURIComponent(branch), checks = []
+      const row = await request(githubUrl(repository, `branches/${path}`), githubToken)
+      if (!sha(row?.commit?.sha) || typeof row.protected !== 'boolean') fail('GITHUB_RULES_UNCONFIRMED')
+      const append = (name, appId) => {
+        if (typeof name !== 'string' || !name.trim() || (appId != null && !Number.isInteger(appId))) fail('GITHUB_RULES_INVALID')
+        if (!checks.some(item => item.name === name && item.appId === appId)) checks.push({ name, ...(appId == null ? {} : { appId }) })
+      }
+      if (row.protected) {
+        const protection = await request(githubUrl(repository, `branches/${path}/protection`), githubToken, { allowUnprotected: true })
+        const required = protection?.required_status_checks
+        if (required) {
+          if (!Array.isArray(required.contexts) || !Array.isArray(required.checks)) fail('GITHUB_RULES_INVALID')
+          for (const check of required.checks) append(check.context, check.app_id)
+          for (const name of required.contexts) if (!required.checks.some(check => check.context === name)) append(name)
+        }
+      }
+      for (let page = 1; page <= 100; page++) {
+        const rules = await request(githubUrl(repository, `rules/branches/${path}?per_page=100&page=${page}`), githubToken)
+        if (!Array.isArray(rules)) fail('GITHUB_RULES_INVALID')
+        for (const rule of rules.filter(item => item.type === 'required_status_checks')) {
+          if (!Array.isArray(rule.parameters?.required_status_checks)) fail('GITHUB_RULES_INVALID')
+          for (const check of rule.parameters.required_status_checks) append(check.context, check.integration_id)
+        }
+        if (rules.length < 100) return { complete: true, checks, evidenceRef: evidence('github-required-checks', executionDigest(checks)) }
+      }
+      fail('GITHUB_RULES_INCOMPLETE')
+    },
     async readBranch({ repository, branch }) {
       if (!safePath(branch)) fail('GITHUB_BRANCH_INVALID')
       const row = await request(githubUrl(repository, `branches/${branch.split('/').map(encodeURIComponent).join('/')}`), githubToken)
@@ -72,7 +111,7 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
         baseCommitSha: row.base?.sha, mergeCommitSha: row.merge_commit_sha,
         evidenceRef: evidence('github-pr', `${repository}:${number}:${row.updated_at}`) }
     },
-    async readChecks({ repository, commitSha }) {
+    async readChecks({ repository, commitSha, includeStatuses = false }) {
       if (!sha(commitSha)) fail('GITHUB_CHECK_SHA_INVALID')
       const checks = [], seen = new Set()
       for (let page = 1; page <= 100; page++) {
@@ -83,10 +122,32 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
         for (const check of row.check_runs) {
           if (!Number.isInteger(check.id) || seen.has(check.id) || typeof check.name !== 'string') fail('GITHUB_CHECK_LIST_INVALID')
           seen.add(check.id)
-          checks.push({ id: check.id, name: check.name, status: check.status, conclusion: check.conclusion })
+          if (includeStatuses && check.head_sha !== commitSha) fail('GITHUB_CHECK_SHA_MISMATCH')
+          checks.push({ id: check.id, name: check.name, status: check.status, conclusion: check.conclusion,
+            ...(includeStatuses ? { appId: check.app?.id, source: 'check-run' } : {}) })
         }
-        if (checks.length === row.total_count) return { complete: true, checks,
+        if (checks.length === row.total_count) {
+          if (includeStatuses) {
+            const contexts = new Set()
+            let complete = false
+            for (let statusPage = 1; statusPage <= 100; statusPage++) {
+              const statuses = await request(githubUrl(repository, `commits/${commitSha}/statuses?per_page=100&page=${statusPage}`), githubToken)
+              if (!Array.isArray(statuses)) fail('GITHUB_STATUS_LIST_INVALID')
+              // GitHub returns newest first; only the latest status per context is current.
+              for (const status of statuses) {
+                if (typeof status.context !== 'string' || !status.context || !Number.isInteger(status.id)) fail('GITHUB_STATUS_LIST_INVALID')
+                if (contexts.has(status.context)) continue
+                contexts.add(status.context)
+                checks.push({ id: status.id, name: status.context, source: 'commit-status',
+                  status: status.state === 'pending' ? 'in_progress' : 'completed', conclusion: status.state })
+              }
+              if (statuses.length < 100) { complete = true; break }
+            }
+            if (!complete) fail('GITHUB_STATUS_LIST_INCOMPLETE')
+          }
+          return { complete: true, checks,
           evidenceRef: evidence('github-checks', `${repository}:${commitSha}:${checks.map(item => `${item.id}:${item.conclusion}`).join(',')}`) }
+        }
         if (row.check_runs.length !== 100 || checks.length > row.total_count) fail('GITHUB_CHECK_LIST_INCOMPLETE')
       }
       fail('GITHUB_CHECK_LIST_INCOMPLETE')
@@ -150,13 +211,49 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
     if (after.commitSha !== commitSha) fail('GITHUB_TAG_READBACK_MISMATCH')
     return after
   }
-  if (githubMergeWritesEnabled) github.mergePullRequest = async ({ repository, number, headCommitSha }) => {
-    if (!Number.isInteger(number) || number < 1 || !sha(headCommitSha)) fail('GITHUB_MERGE_INPUT_INVALID')
-    const row = await request(githubUrl(repository, `pulls/${number}/merge`), githubToken,
-      { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sha: headCommitSha, merge_method: 'merge' }) })
-    if (row.merged !== true || !sha(row.sha)) fail('GITHUB_MERGE_DISPATCH_UNCONFIRMED')
-    return { mergeCommitSha: row.sha, evidenceRef: evidence('github-merge-dispatch', `${repository}:${number}:${row.sha}`) }
+  if (githubMergeWritesEnabled) {
+    github.readAtomicPushPolicy = async ({ repository, branch }) => {
+      // repository由上层Host已选中的target绑定；此处只拒绝非UAT ref。
+      if (!/^feature\/uat[1-9]-base$/.test(branch)) fail('UAT_ATOMIC_TARGET_INVALID')
+      const current = await request(githubUrl(repository, `branches/${encodeURIComponent(branch)}`), githubToken)
+      const rules = await request(githubUrl(repository, `rules/branches/${encodeURIComponent(branch)}?per_page=100&page=1`), githubToken)
+      if (typeof current.protected !== 'boolean' || !Array.isArray(rules) || rules.length >= 100) fail('UAT_ATOMIC_PUSH_POLICY_UNSUPPORTED')
+      const protection = current.protected ? await request(githubUrl(repository, `branches/${encodeURIComponent(branch)}/protection`), githubToken, { allowUnprotected: true }) : {}
+      // 不借管理员豁免越过PR/direct-push限制。只承接已核验checks与FF可满足的规则。
+      if (protection.required_pull_request_reviews || protection.restrictions || protection.lock_branch?.enabled || protection.required_signatures?.enabled
+        || rules.some(rule => !['required_status_checks', 'non_fast_forward', 'deletion'].includes(rule.type))) fail('UAT_ATOMIC_PUSH_POLICY_UNSUPPORTED')
+      return { allowed: true, evidenceRef: evidence('github-atomic-policy', executionDigest({ repository, branch, protection, rules })) }
+    }
+    github.atomicFastForward = async ({ repository, branch, number, headCommitSha, expectedBase, expectedTree }) => {
+      if (!Number.isInteger(number) || number < 1 || ![headCommitSha, expectedBase, expectedTree].every(sha)) fail('GITHUB_MERGE_INPUT_INVALID')
+      await github.readAtomicPushPolicy({ repository, branch })
+      const pr = await github.readPullRequest({ repository, number })
+      if (pr.merged || pr.state !== 'open' || pr.draft || pr.baseBranch !== branch || pr.baseRepository !== repository
+        || pr.headRepository !== repository || pr.headCommitSha !== headCommitSha || pr.baseCommitSha !== expectedBase) fail('UAT_ATOMIC_PR_DRIFT')
+      const directory = await mkdtemp(join(tmpdir(), 'dsh-uat-atomic-'))
+      const remote = `https://github.com/${repository}.git`, ref = `refs/heads/${branch}`
+      const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+        GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+        GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${githubToken}`).toString('base64')}`,
+        GIT_CONFIG_KEY_1: 'core.hooksPath', GIT_CONFIG_VALUE_1: process.platform === 'win32' ? 'NUL' : '/dev/null' }
+      const git = async args => (await execFileImpl('git', ['-C', directory, ...args], { env, windowsHide: true, timeout: 120000, maxBuffer: 1024 * 1024 })).stdout.trim()
+      try {
+        await git(['init', '--bare'])
+        await git(['fetch', '--no-tags', '--no-write-fetch-head', '--', remote, expectedBase, headCommitSha])
+        await git(['merge-base', '--is-ancestor', expectedBase, headCommitSha])
+        if (await git(['rev-parse', `${headCommitSha}^{tree}`]) !== expectedTree) fail('UAT_ATOMIC_TREE_MISMATCH')
+        await github.readAtomicPushPolicy({ repository, branch })
+        await git(['push', '--porcelain', `--force-with-lease=${ref}:${expectedBase}`, '--', remote, `${headCommitSha}:${ref}`])
+        return { mergeCommitSha: headCommitSha, evidenceRef: evidence('git-atomic-uat', `${repository}:${branch}:${expectedBase}:${headCommitSha}`) }
+      } catch (error) {
+        // 不泄漏Git凭据、CLI输出；不重试push，不切换其他写通道。
+        if (error.message === 'UAT_ATOMIC_TREE_MISMATCH') throw error
+        fail('UAT_ATOMIC_PUSH_UNCONFIRMED')
+      } finally {
+        if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('dsh-uat-atomic-')) fail('UAT_ATOMIC_TEMP_PATH_INVALID')
+        await rm(directory, { recursive: true, force: true })
+      }
+    }
   }
   const woodpeckerUrl = (baseUrl, suffix) => {
     if (baseUrl !== 'https://woodpecker.hiqdat.dev') fail('WOODPECKER_ENDPOINT_NOT_ALLOWED')
@@ -182,12 +279,13 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       }
       fail('WOODPECKER_LIST_INCOMPLETE')
     },
-    async readBuildEvidence({ baseUrl, repositoryId, pipelineNumber }) {
+    async readBuildEvidence({ baseUrl, repositoryId, pipelineNumber, expectedPipelineStatus = 'success' }) {
       if (!Number.isInteger(repositoryId) || repositoryId < 1
-        || !Number.isInteger(pipelineNumber) || pipelineNumber < 1) fail('WOODPECKER_PIPELINE_INVALID')
+        || !Number.isInteger(pipelineNumber) || pipelineNumber < 1
+        || !['success', 'failure', 'error', 'killed'].includes(expectedPipelineStatus)) fail('WOODPECKER_PIPELINE_INVALID')
       const pipeline = await request(woodpeckerUrl(baseUrl,
         `repos/${repositoryId}/pipelines/${pipelineNumber}`), woodpeckerToken)
-      if (pipeline.number !== pipelineNumber || !sha(pipeline.commit) || pipeline.status !== 'success'
+      if (pipeline.number !== pipelineNumber || !sha(pipeline.commit) || pipeline.status !== expectedPipelineStatus
         || !Array.isArray(pipeline.workflows)) fail('WOODPECKER_BUILD_UNCONFIRMED')
       const steps = pipeline.workflows.flatMap(workflow => Array.isArray(workflow.children) ? workflow.children : [])
         .filter(step => step.name === 'buildkit-build-and-push')
@@ -209,6 +307,7 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       if (exported.length !== 1 || pushed.length !== 1 || exported[0] !== pushed[0][2])
         fail('WOODPECKER_BUILD_DIGEST_UNCONFIRMED')
       return { pipelineNumber, commitSha: pipeline.commit, image: pushed[0][1], imageDigest: pushed[0][2],
+        pipelineStatus: pipeline.status, buildStepStatus: steps[0].state, buildStepExitCode: steps[0].exit_code,
         evidenceRef: evidence('woodpecker-build', `${repositoryId}:${pipelineNumber}:${steps[0].id}:${pushed[0][2]}`) }
     },
     async triggerBuild({ target, commitSha }) {

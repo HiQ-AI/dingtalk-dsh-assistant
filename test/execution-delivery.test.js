@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
-import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
+import { createExecutionDelivery, isTerminalUatBuildFailure } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 
 async function fixture(t, overrides = {}) {
@@ -91,4 +91,10 @@ test('历史目录创建成功后路径丢失不能靠重投回执继续认领�
   assert.equal((await f.gateway.execute(request)).state, 'succeeded')
   await assert.rejects(f.gateway.execute(request), { code: 'WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED' })
   assert.equal(creates, 1)
+})
+
+test('UAT终态失败必须是同一冻结普通build的完整可信收据',()=>{
+ const effect={state:'failed',definition:{action:'external',adapterId:'external-operation',adapterVersion:'1',payload:{workflowKind:'uat-deployment',operation:'build',operationKey:'a'.repeat(64),expected:{commitSha:'b'.repeat(40)}}},result:{result:{status:'failed',reason:'RELEASE_PIPELINE_FAILED',operationKey:'a'.repeat(64),commitSha:'b'.repeat(40),pipelineNumber:319,pipelineStatus:'killed',evidenceRef:'woodpecker:list:319'}}}
+ assert.equal(isTerminalUatBuildFailure(effect),true)
+ for(const change of [e=>e.state='unknown',e=>e.definition.adapterId='other',e=>e.definition.payload.workflowKind='uat-rebuild',e=>e.definition.payload.operation='rebuild',e=>e.result.result.reason='READ_FAILED',e=>e.result.result.operationKey='c'.repeat(64),e=>e.result.result.commitSha='d'.repeat(40),e=>e.result.result.pipelineNumber=0,e=>e.result.result.pipelineStatus='running',e=>e.result.result.evidenceRef='']){const bad=structuredClone(effect);change(bad);assert.equal(isTerminalUatBuildFailure(bad),false)}
 })
