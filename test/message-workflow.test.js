@@ -22,38 +22,38 @@ const split = { kind: 'split', units: [{ spans: [{ start: 0, end: 2 }], goalText
 const binding = { kind: 'binding', disposition: 'conversation', candidateId: null, evidence: ['source'] }
 const intent = { kind: 'intent', actions: [{ intent: 'status', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
 
-test('普通 answer 在 I 与 IB 使用同一正文合同，schema 和模型说明均不接受任务参数', () => {
+test('普通 answer 在 I 与 IB 使用同一目标合同，schema 和模型说明均不接受正文或任务参数', () => {
   for (const stage of ['I', 'IB']) {
     const envelope = args => {
       const answer = { ...intent, actions: [{ intent: 'answer', arguments: args, dependsOn: [] }] }
       return stage === 'I' ? answer : { kind: 'topic_intents', decisions: [{ unitId: 'u', intent: answer }] }
     }
-    assert.equal(messageSchemas[stage].safeParse(envelope({ text: '已收到' })).success, true)
-    for (const args of [{}, { text: '  ' }, { answer: '已收到' }, { objective: '答复材料' },
-      { text: '已收到', workflowId: 'task-analysis' }, { text: '已收到', repositoryId: 'repo' },
-      { text: '已收到', runId: 'run' }, { text: '已收到', requestId: 'approval', decision: 'approved' }]) {
+    assert.equal(messageSchemas[stage].safeParse(envelope({ objective: '答复材料' })).success, true)
+    for (const args of [{}, { objective: '  ' }, { answer: '已收到' }, { text: '已收到' },
+      { objective: '答复材料', workflowId: 'task-investigation' }, { objective: '答复材料', repositoryId: 'repo' },
+      { objective: '答复材料', runId: 'run' }, { objective: '答复材料', requestId: 'approval', decision: 'approved' }]) {
       assert.equal(messageSchemas[stage].safeParse(envelope(args)).success, false, `${stage}: ${JSON.stringify(args)}`)
     }
     const system = messageSystem(stage)
-    assert.match(system, /普通答复用answer，arguments仅填非空text正文/u)
+    assert.match(system, /arguments仅填objective描述用户要解决的问题，不生成答复正文/u)
     const schema = JSON.parse(system.split('只返回以下schema的JSON：\n')[1])
     const actions = stage === 'I' ? schema.anyOf[1].properties.actions : schema.anyOf[1].properties.decisions.items.properties.intent.anyOf[0].properties.actions
     const answer = actions.items.anyOf.find(item => item.properties.intent.const === 'answer')
-    assert.deepEqual(answer.properties.arguments.required, ['text'])
-    assert.deepEqual(Object.keys(answer.properties.arguments.properties), ['text'])
+    assert.deepEqual(answer.properties.arguments.required, ['objective'])
+    assert.deepEqual(Object.keys(answer.properties.arguments.properties), ['objective'])
     assert.equal(answer.properties.arguments.additionalProperties, false)
   }
 })
 
 for (const topicBatch of [false, true]) test(`普通 answer ${topicBatch ? 'IB' : 'I'} 关联已有任务也不分配 taskId 或生成任务候选`, async t => {
-  const answer = { ...intent, actions: [{ intent: 'answer', arguments: { text: '已收到' }, dependsOn: [] }] }
+  const answer = { ...intent, actions: [{ intent: 'answer', arguments: { objective: '答复当前问题' }, dependsOn: [] }] }
   const { workflow, store } = await fixture(t, {
     context: { candidates: async () => [{ candidateId: 'existing', taskId: 'existing-task', topicId: 'topic', engine: 'workflow', title: '已有任务', goal: '已有任务', state: 'completed' }],
       ...(topicBatch ? { bindTopic: async ({ run, unit }) => ({ topicId: 'topic', conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.unitId, title: '已有任务', facts: [] }) } : {}) },
     judge: async ({ stage, input }) => stage === 'S' ? { ...split, units: [split.units[0]], coverage: [{ start: 0, end: 2, role: 'unit' }] }
       : stage === 'R' ? { kind: 'binding', disposition: 'existing', candidateId: 'existing', evidence: ['来源'] }
         : stage === 'IB' ? { kind: 'topic_intents', decisions: input.units.map(unit => ({ unitId: unit.unitId, intent: answer })) } : answer,
-    handlers: { answer: async action => ({ status: 'answered', reply: action.arguments.text }) },
+    handlers: { answer: async action => { assert.equal(action.arguments.objective, '答复当前问题'); return { status: 'answered', reply: '执行后答复' } } },
   })
   const { runId } = await workflow.receive({ ...source, body: '查A' }, { process: false })
   await workflow.process(runId)
@@ -140,7 +140,7 @@ test('三条同话题先全部关联，再一次 IB 只创建一个业务任务'
       if (stage === 'R') { if (input.sourceKey === 'three') { lastStarted(); await gate }; return binding }
       if (stage === 'IB') return { kind: 'topic_intents', decisions: input.units.map((item, index) => ({ unitId: item.unitId,
         intent: { kind: 'intent', actions: [index === 0
-          ? { intent: 'create', arguments: { objective: '合并办理', workflowId: 'task-analysis' }, dependsOn: [] }
+          ? { intent: 'create', arguments: { objective: '合并办理', workflowId: 'task-investigation' }, dependsOn: [] }
           : { intent: 'no_action', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' } })) }
       throw new Error(`unexpected stage ${stage}`)
     },
@@ -696,9 +696,9 @@ test('I参数命名错误不派发，字段校验反馈只重试I', async t => {
   const { workflow } = await fixture(t, { policy: { recoveryDelaysMs: [0] }, judge: async ({ stage, input }) => {
     if (stage === 'S') return split
     if (stage === 'R') return binding
-    if (wrong) return { ...intent, actions: [{ intent: 'create', arguments: { goal: '错误别名', workflowId: 'task-analysis' }, dependsOn: [] }] }
+    if (wrong) return { ...intent, actions: [{ intent: 'create', arguments: { goal: '错误别名', workflowId: 'task-investigation' }, dependsOn: [] }] }
     sawFailure ||= input.previousFailure.includes('MESSAGE_SCHEMA_INVALID')
-    return { ...intent, actions: [{ intent: 'create', arguments: { objective: '正确字段', workflowId: 'task-analysis' }, dependsOn: [] }] }
+    return { ...intent, actions: [{ intent: 'create', arguments: { objective: '正确字段', workflowId: 'task-investigation' }, dependsOn: [] }] }
   }, handlers: { create: async () => { sent++; return {} } } })
   const { runId } = await workflow.receive(source, { process: false }); await workflow.process(runId)
   assert.equal(sent, 0)
@@ -798,7 +798,7 @@ test('C02 共享材料连接器暂停时所有相关事项均不接纳，独立�
 
 test('同群消息按接收顺序逐条处理，后一条不越过正在执行的消息',{timeout:5000},async t=>{
  let release,started;const gate=new Promise(r=>release=r),began=new Promise(r=>started=r);const effects=[]
- const {workflow}=await fixture(t,{judge:async({stage,input})=>stage==='S'?{kind:'split',units:[{spans:[{start:0,end:input.source.text.length}],goalText:input.source.text,constraints:[],contextNeeds:[]}],sharedConstraints:[],coverage:[{start:0,end:input.source.text.length,role:'unit'}]}:stage==='R'?binding:{...intent,actions:[{intent:input.text==='启动'?'create':input.text==='查询'?'status':'cancel',arguments:input.text==='启动'?{objective:'任务',workflowId:'task-analysis'}:{},dependsOn:[]}]},handlers:{create:async()=>{started();await gate;effects.push('created');return{}},status:async()=>{effects.push('status');return{}},cancel:async()=>{effects.push('cancel');return{}}}})
+ const {workflow}=await fixture(t,{judge:async({stage,input})=>stage==='S'?{kind:'split',units:[{spans:[{start:0,end:input.source.text.length}],goalText:input.source.text,constraints:[],contextNeeds:[]}],sharedConstraints:[],coverage:[{start:0,end:input.source.text.length,role:'unit'}]}:stage==='R'?binding:{...intent,actions:[{intent:input.text==='启动'?'create':input.text==='查询'?'status':'cancel',arguments:input.text==='启动'?{objective:'任务',workflowId:'task-investigation'}:{},dependsOn:[]}]},handlers:{create:async()=>{started();await gate;effects.push('created');return{}},status:async()=>{effects.push('status');return{}},cancel:async()=>{effects.push('cancel');return{}}}})
  const first=await workflow.receive({...source,body:'启动'},{process:false});const creating=workflow.process(first.runId)
  await began
  const later=[]
@@ -974,7 +974,7 @@ test('C09 材料临时失败在重建 workflow 后续读且复用成功页', asy
         calls.push(input.pageIndex)
         if (input.pageIndex === 1 && !allowRetry) throw new Error('TEMPORARY_PAGE_FAILURE')
         output = { kind: 'material_facts', complete: true, facts: [], reason: '本页核对完成' }
-      } else output = { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '按材料处理', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+      } else output = { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '按材料处理', workflowId: 'task-investigation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
       return { output, usage: { inputTokens: 100, outputTokens: 100 } }
     }, handlers: { create: async () => { effects++; return { accepted: true } } } }
   assert.ok(Buffer.byteLength(text) > 12000)

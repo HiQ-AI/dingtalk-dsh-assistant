@@ -63,3 +63,6 @@ material-reference-context,2,controlled-integration,PASS,docs/tmp/material-refer
 investigation-document,5,isolated-real-model,PASS,docs/tmp/agent-native-document-round-4/result.json
 investigation-material-final,1,controlled-integration,PASS,docs/tmp/investigation-material-final-tests.log
 deployment,5,installed-runtime,BLOCKED,docs/tmp/agent-fifth-deployment-check.log
+message-workflow-full,1,controlled-integration,FAIL,docs/tmp/message-workflow-current-full-r1.log
+message-workflow-full,2,controlled-integration,PASS,docs/tmp/message-workflow-current-full-r2.log
+message-workflow-full,3,controlled-integration,PASS,docs/tmp/message-workflow-current-full-r3.log
