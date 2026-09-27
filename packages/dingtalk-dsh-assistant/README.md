@@ -279,9 +279,13 @@ export function createEvidenceSummaryWorkflow() {
 
 ### 查询能力与证据交接
 
+意图输入中的 `executionMaterialRefs` 由 Host 列举当前事项可依赖的来源与附件引用。`requiredExecutionMaterials` 只能从该集合选择，I/IB 落账前逐事项校验；误填查询资源 ID 会在原节点预算内反馈纠正。真实附件未就绪仍由材料链路等待。项目、仓库、数据库及状态资源属于后续查询目标，不作为未取得的启动材料。
+
 查询工具使用 [共享 Agent 查询工具合同](../../docs/api/agent-query-tool-contract.md)，由 Host 注册参数 schema、逻辑资源及能力身份，并按当前主体、群和项目范围选择工具。资源已登记不等于群已授权；每次调用仍依次执行 authorize、execute、verify。模型不能提供任意 SQL、连接串、URL 或终端命令，也不能选择未注册工具扩权。
 
 工具返回 `{evidenceRef,result,sourceRefs}`。最终 `evidenceRefs` 应引用真实 `evidenceRef` 工件；`sourceRefs` 是业务来源标识，不能替代工具证据。Host 核对工件内容摘要、能力身份、当前授权范围以及实际执行 binding。历史查询只有在持久账证明该输入版本和租约真实执行过时才可复用；不得忽略 lease，也不得接受模型提交的 allowedBindings。工程新 generation 不因此继承旧验证有效性。
+
+调查 v5 的 completed 仅表示取证、分析和结论产物完成；原始整体要求仍保留。保存文档、修复和提测由 Owner 安排后续已授权阶段，不能因调查会话没有写工具而阻塞已完成的调查，也不能把阶段成功当成整体交付。调查本身缺少必要资料或能力仍须等待或受阻。
 
 文档阶段复用前序调查的正式产物与证据，不要求再次调查同一事实。Host 绑定前序输出、核对写入范围和来源，写后独立读回路径及内容摘要；调查结论已生成、文档已保存、消息已送达是三个不同事实。
 
@@ -388,7 +392,7 @@ code execute 抛出普通业务错误，目前一般进入 waiting/recovery；�
 
 已冻结但尚未创建 Run 的 Stage 与既有 Run 一样，按原 digest 解析定义；未绑定的新运行使用当前定义。原定义缺失时明确阻塞。
 
-当前共享调查为 `task-investigation@4`，文档写能力为 `task-general-capability@4`；旧 analysis/只读材料骨架已退出新入口及执行工厂，终态历史仍保留。工程及外部流程仍按各自冻结定义恢复；外部流程配置记录 `ownerContractVersion: '1'`。原无合同定义保持原 digest，不自动套新合同，旧终态仍可读取。升级前先让旧活动任务在原版本完成，或通过正式取消/重执行入口建立新任务；否则旧任务到 Owner 完成/修复入口会明确阻塞。不要手改 digest 或工件补合同。本次没有 schema 迁移。
+当前共享调查为 `task-investigation@5`，文档写能力为 `task-general-capability@4`；旧 analysis/只读材料骨架已退出新入口及执行工厂，终态历史仍保留。工程及外部流程仍按各自冻结定义恢复；外部流程配置记录 `ownerContractVersion: '1'`。原无合同定义保持原 digest，不自动套新合同，旧终态仍可读取。升级前先让旧活动任务在原版本完成，或通过正式取消/重执行入口建立新任务；否则旧任务到 Owner 完成/修复入口会明确阻塞。不要手改 digest 或工件补合同。本次没有 schema 迁移。
 
 旧流程退役前，在正式维护窗口重新清点非终态 Run、当前待执行 Stage、消息命令、未排空节点和未确认效果。`assertRetiredWorkflowsDrained` 发现旧流程活动引用会以 `WORKFLOW_CUTOVER_ACTIVE_REFERENCES` 拒绝启动；必须用原包收尾或明确授权的正式终止路径处理，不能套用新定义。终态历史、原摘要、会话及工件保留，不删除运行账来制造零引用。安装后独立核对新目录、旧历史可读及无旧命令重放；先前清点为零不能替代切换时检查。
 

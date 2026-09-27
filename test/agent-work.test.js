@@ -35,7 +35,10 @@ test('调查只有一个自主Agent阶段及受信接纳，Owner不能将needs_i
   let verified = 0
   const workflow = defineExecutionWorkflow(createInvestigationWorkflow({ provider: 'fixture', model: 'fixture', allowedTools: ['query'], capabilityIdentity: 'query-v1',
     verifyResult: async ({ result: value }) => { verified++; return validateAgentWorkResult(value, { verifyEvidence: async () => true }) } }))
-  assert.equal(workflow.id, 'task-investigation'); assert.equal(workflow.version, '4')
+  assert.equal(workflow.id, 'task-investigation'); assert.equal(workflow.version, '5')
+  assert.match(workflow.nodes[0].prompt, /completed 仅表示调查阶段完成/)
+  assert.match(workflow.nodes[0].prompt, /缺少调查本身所需/)
+  assert.doesNotMatch(workflow.nodes[0].prompt, /本次执行职责是回答当前消息/)
   assert.equal(workflow.nodes[0].allowInputContinuation, true)
   assert.deepEqual(workflow.nodes.map(node => node.executor), ['agent', 'code'])
   assert.deepEqual(workflow.nodes[0].allowedTools, ['query'])
@@ -51,6 +54,8 @@ test('调查只有一个自主Agent阶段及受信接纳，Owner不能将needs_i
 
 test('共享执行保留规划、审查、数据和复盘的专业约束，禁止重复工具声明', () => {
   const definition = agentWorkDefinition({ provider: 'fixture', model: 'fixture', allowedTools: ['query'] })
+  assert.match(definition.prompt, /本次执行职责是回答当前消息/)
+  assert.doesNotMatch(definition.prompt, /completed 仅表示调查阶段完成/)
   for (const guidance of ['方案分析', 'PR审查', '数据问题', '复盘', '故障与性能分析', '不得创建业务任务']) assert.ok(definition.prompt.includes(guidance))
   assert.throws(() => agentWorkDefinition({ provider: 'fixture', model: 'fixture', allowedTools: ['query', 'query'] }), { code: 'AGENT_WORK_CONFIG_INVALID' })
 })

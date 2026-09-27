@@ -8,6 +8,22 @@ import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
+import { intentContext, validateExecutionMaterialRefs } from '../packages/dingtalk-dsh-assistant/message-context.js'
+
+test('启动材料引用由Host列举，查询资源和其他事项引用不能进入材料等待', () => {
+  const input = intentContext({ sourceKey: 'source-a', executionMaterialRefs: ['attachment-a'],
+    referenceSources: [{ sourceKey: 'quote-a' }] }, { disposition: 'new' }, {})
+  const intent = refs => ({ kind: 'intent', requiredExecutionMaterials: refs })
+  assert.deepEqual(input.executionMaterialRefs, ['source-a', 'attachment-a', 'quote-a'])
+  assert.doesNotThrow(() => validateExecutionMaterialRefs('I', intent(['attachment-a']), input))
+  assert.doesNotThrow(() => validateExecutionMaterialRefs('I', intent([]), input))
+  assert.throws(() => validateExecutionMaterialRefs('I', intent(['registered-code-resource']), input), /MESSAGE_EXECUTION_MATERIAL_REF_INVALID/)
+  const batch = { units: [{ unitId: 'a', input }, { unitId: 'b', input: { executionMaterialRefs: ['source-b'] } }] }
+  assert.throws(() => validateExecutionMaterialRefs('IB', { kind: 'topic_intents', decisions: [
+    { unitId: 'a', intent: intent(['source-b']) }] }, batch), /MESSAGE_EXECUTION_MATERIAL_REF_INVALID/)
+  assert.doesNotThrow(() => validateExecutionMaterialRefs('IB', { kind: 'topic_intents', decisions: [
+    { unitId: 'a', intent: intent(['source-a']) }, { unitId: 'b', intent: intent(['source-b']) }] }, batch))
+})
 
 const answer = summary => ({ outcome: 'completed', summary, evidenceRefs: [], limitations: [], question: '' })
 async function fixture(t, execute = async () => answer('已回答'), options = {}) {
@@ -27,7 +43,7 @@ async function fixture(t, execute = async () => answer('已回答'), options = {
   const notifications = options.notifications ?? { canDisclose: async () => true, send: async notice => { sent.push(notice); return { messageId: `reply-${sent.length}` } }, readback: async notice => ({ messageId: notice.ack.messageId, conversationId: 'g' }) }
   const taskOwnerSessions = { async run() { throw new Error('ORDINARY_ANSWER_MUST_NOT_CREATE_TASK') }, async close() {} }
   const messageAgentSessions = { run(options) { const flight = (async () => { calls.push(options); await options.onSessionBound(); const result = await execute(options, calls.length); await options.onResult(result); return { status: 'submitted', output: result } })(); flights.add(flight); void flight.then(() => flights.delete(flight), () => flights.delete(flight)); return flight }, async cancel() {}, async close() { await Promise.all([...flights]) } }
-  const open = () => openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', webActorId: 'owner', ...options.config }, legacy, judge, execution, notifications, taskOwnerSessions, messageAgentSessions })
+  const open = () => openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', webActorId: 'owner', ...options.config }, legacy, judge: options.judge ? request => options.judge(request, judge) : judge, execution, notifications, taskOwnerSessions, messageAgentSessions })
   let service
   t.after(async () => { await service?.close(); await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
   service = await open()
@@ -74,6 +90,29 @@ test('慢查询不堵塞其他消息判断和独立Agent执行', async t => {
   assert.equal((await h.service.state(first.runId)).executions[0].status, 'running')
   release.resolve(); await h.settle(first.runId)
   assert.equal(h.calls.length, 2)
+})
+
+test('错误查询资源引用在意图落账前纠正，不生成材料等待或重复执行', async t => {
+  let attempts = 0, correction
+  const h = await fixture(t, undefined, { config: { policy: { recoveryDelaysMs: [0, 0] } },
+    judge: async (request, fallback) => {
+      const output = await fallback(request)
+      if (request.stage === 'IB') {
+        attempts++
+        if (attempts === 1) output.decisions[0].intent.requiredExecutionMaterials = ['query-resource']
+        else correction = request.input.previousFailure
+      }
+      return output
+    } })
+  const received = await h.receive('invalid-material-ref')
+  const state = await h.settle(received.runId)
+  assert.equal(attempts, 2)
+  assert.match(correction, /MESSAGE_EXECUTION_MATERIAL_REF_INVALID/)
+  assert.equal(state.requests.length, 0)
+  assert.equal(state.commands.length, 1)
+  assert.equal(h.calls.length, 1)
+  assert.equal(state.executions[0].status, 'succeeded')
+  assert.equal(state.nodes.find(node => node.nodeId === 'IB').leaseEpoch, 2)
 })
 
 test('异步问答完成即派发后继，不依赖再次process或恢复轮询', async t => {

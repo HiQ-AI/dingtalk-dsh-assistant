@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, unitContext, candidateCards, intentContext } from './message-context.js'
+import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, validateExecutionMaterialRefs, unitContext, candidateCards, intentContext } from './message-context.js'
 import { prepareMessageRequest } from './message-model.js'
 import { isPassiveTaskProgress, isQuietGroupMessage } from './message-ledger.js'
 import { wholeTopicFactRevision } from './message-topics.js'
@@ -169,6 +169,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const timeout = prepared ? new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('MESSAGE_NODE_TIMEOUT')) }, Math.min(config.attemptMs, remaining)) }) : null
       const response = fixedOutput ? { output: fixedOutput, usage: { inputTokens: 0, outputTokens: 0 } } : await Promise.race([judge({ stage, input, prepared, schema: messageSchemas[stage], signal: controller.signal, maxOutputTokens: outputLimit }), timeout])
       const output = messageSchemas[stage].parse(response.output ?? response)
+      validateExecutionMaterialRefs(stage, output, input)
       if (stage === 'S') validateSplit(output, current.run.body)
       if (stage === 'material' && output.facts.some(fact => !input.text.includes(fact.quote))) throw new Error('MESSAGE_MATERIAL_QUOTE_INVALID')
       if (stage === 'R' && output.kind === 'binding' && output.candidateId !== null && !input.candidates.some(card => card.candidateId === output.candidateId)) throw new Error('MESSAGE_UNKNOWN_TARGET')

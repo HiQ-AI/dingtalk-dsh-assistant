@@ -319,3 +319,7 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 执行复用正式维护、完整Resident ready/disposed见证、配置fence、owner独占及完整备份核验。仅通过原生 `message.notification.readback` 接纳独立送达证据，不重发、不SQL修改状态、不用端口关闭替代完整退出。结果未知时回读原通知；已delivered且证据一致的接续不会再次执行命令。失败保留维护/fence，不能删除备份、手改恢复阶段或强停绕过。
 
 恢复旧Resident后保持维护，独立确认drained及原许可身份，输出 `ContinueMaintenanceId` 与 `ExpectedMaintenanceRevision` 供标准部署脚本接续；恢复工具本身不解除维护或安装新包。部分备份未生成manifest时，Resume保留原目录并选择全新的backup-attempt-NNN重新完整备份；容量按仍需完整备份计算。存在唯一manifest时复用该目录并重新验证全部内容，损坏不会自动跳过；多份manifest明确拒绝。首次delivery-evidence/repair-readback保留原名，后续回读以唯一后缀追加，不能覆盖原生命令receipt。
+
+## 调查阶段完成职责 v5
+
+调查 v5 区分阶段完成与整体交付。部署前使用正式任务视图和控制账盘点 v4 活动及待执行引用；本次因报告保存要求而失败的测试任务保留产物，通过正式取消入口结束后再切换。不得改写旧定义摘要或将失败改为成功。新包独立输入重验调查与受信文档保存，核对实际路径、内容摘要及最终通知；旧终态历史保持可读。本次不迁移 schema。

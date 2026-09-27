@@ -28,6 +28,13 @@ test('新的共享调查和授权写阶段可以原身份恢复',()=>{
  assert.doesNotThrow(()=>assertRetiredWorkflowsDrained({records,currentDefinitions:records.map(record=>({id:record.workflowId,version:record.definitionVersion})),activeDefinitions:new Set(['task-investigation:i','task-general-capability:w'])}))
 })
 
+test('调查v5切换拒绝v4活动引用，终态历史无需套用新完成合同',()=>{
+ const records=[{workflowId:'task-investigation',definitionVersion:'4',digest:'old'}]
+ const currentDefinitions=[{id:'task-investigation',version:'5'}]
+ assert.throws(()=>assertRetiredWorkflowsDrained({records,currentDefinitions,activeDefinitions:new Set(['task-investigation:old'])}),{code:'WORKFLOW_CUTOVER_ACTIVE_REFERENCES'})
+ assert.doesNotThrow(()=>assertRetiredWorkflowsDrained({records,currentDefinitions,activeDefinitions:new Set()}))
+})
+
 test('正式Host启动遇到旧待执行阶段时拒绝切换，保留原冻结计划且不执行节点',async t=>{
  const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path')
  const {openExecutionStore}=await import('../packages/dingtalk-dsh-assistant/execution-store.js')

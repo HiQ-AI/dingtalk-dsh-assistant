@@ -110,7 +110,7 @@ export function validateSplit(output, text) {
   return output
 }
 export function unitContext(snapshot, unit) {
-  return { snapshotId: snapshot.snapshotId, sourceEdit: snapshot.sourceEdit, actorId: snapshot.source.actorId, conversationId: snapshot.source.conversationId, sourceKey: snapshot.source.sourceKey, sourceVersion: snapshot.source.sourceVersion, text: unit.spans.map(span => snapshot.source.text.slice(span.start, span.end)).join('\n'), sourceSpans: unit.spans, goalText: unit.goalText, constraints: unit.constraints, sharedConstraints: unit.sharedConstraints ?? [], referenceSources: snapshot.quotes }
+  return { snapshotId: snapshot.snapshotId, sourceEdit: snapshot.sourceEdit, actorId: snapshot.source.actorId, conversationId: snapshot.source.conversationId, sourceKey: snapshot.source.sourceKey, sourceVersion: snapshot.source.sourceVersion, text: unit.spans.map(span => snapshot.source.text.slice(span.start, span.end)).join('\n'), sourceSpans: unit.spans, goalText: unit.goalText, constraints: unit.constraints, sharedConstraints: unit.sharedConstraints ?? [], referenceSources: snapshot.quotes, executionMaterialRefs: [...(snapshot.attachments ?? []).map(item => item.resourceRef), ...(unit.contextNeeds ?? []).map(item => item.resourceRef)] }
 }
 export function candidateCards(candidates) {
   if (candidates.length > 10000) throw new Error('MESSAGE_CANDIDATE_CAPACITY')
@@ -156,5 +156,25 @@ export function intentContext(base, binding, facts, responsibility = '', candida
   const summaries = candidates.slice(0,4).map(item => pick(item,['candidateId','engine','taskId','title','state','relevantTime']))
   const effectiveFacts = facts?.topic?.facts ? { ...facts, topic: { ...facts.topic, facts: facts.topic.facts.filter(fact => fact.status !== 'invalidated') } } : facts
   const scopedFacts = sharedTopic && effectiveFacts?.topic ? { ...effectiveFacts, topic: { topicId: effectiveFacts.topic.topicId, contextRevision: effectiveFacts.topic.contextRevision ?? effectiveFacts.topic.revision } } : effectiveFacts
-  return { ...base, binding: { ...target, ...identity }, facts: scopedFacts, ...(resolvedEvidence.length ? { resolvedEvidence } : {}), ...(binding.disposition === 'conversation' ? { candidates: summaries } : {}), ...(responsibility ? { groupResponsibility: responsibility } : {}) }
+  const executionMaterialRefs = [...new Set([base.sourceKey, ...(base.executionMaterialRefs ?? []),
+    ...(base.referenceSources ?? []).map(item => item.sourceKey),
+    ...(base.material?.resources ?? []).map(item => item.resourceRef),
+    ...resolvedEvidence.flatMap(item => (item.needs ?? []).map(need => need.resourceRef)),
+    binding.historyRef, binding.detailRef, target?.historyRef, target?.detailRef,
+    ...(effectiveFacts?.topic?.facts ?? []).flatMap(fact => (fact.sourceRefs ?? []).map(ref => ref.sourceKey)),
+  ].filter(ref => typeof ref === 'string' && ref.length > 0))]
+  return { ...base, executionMaterialRefs, binding: { ...target, ...identity }, facts: scopedFacts, ...(resolvedEvidence.length ? { resolvedEvidence } : {}), ...(binding.disposition === 'conversation' ? { candidates: summaries } : {}), ...(responsibility ? { groupResponsibility: responsibility } : {}) }
+}
+
+// 材料引用由 Host 提供；模型描述的查询目标不能变成启动前依赖。
+export function validateExecutionMaterialRefs(stage, output, input) {
+  const validate = (intent, context) => {
+    if (intent.kind !== 'intent') return
+    const known = new Set(context?.executionMaterialRefs ?? [])
+    if (intent.requiredExecutionMaterials.some(ref => !known.has(ref)))
+      throw new Error('MESSAGE_EXECUTION_MATERIAL_REF_INVALID:requiredExecutionMaterials只能选当前事项executionMaterialRefs；查询资源及待取得证据写入目标或acceptanceCriteria')
+  }
+  if (stage === 'I') validate(output, input)
+  if (stage === 'IB' && output.kind === 'topic_intents') for (const decision of output.decisions)
+    validate(decision.intent, input.units.find(unit => unit.unitId === decision.unitId)?.input)
 }

@@ -487,7 +487,7 @@ test('必要上下文超限进入可见attention，投影异常不形成静默pe
 test('执行材料未齐不接纳，ready事件只检查材料不重跑I', async t => {
   let ready = false, iCalls = 0, sends = 0
   const { workflow } = await fixture(t, { context: { material: async () => ({ ready, data: { resources: ['attachment'] } }) }, judge: async ({ stage }) => { if (stage === 'S') return split; if (stage === 'R') return binding; iCalls++; return { ...intent, requiredExecutionMaterials: ['attachment'] } }, handlers: { status: async () => { sends++; return {} } } })
-  const { runId } = await workflow.receive(source, { process: false }); await workflow.process(runId)
+  const { runId } = await workflow.receive({ ...source, context: { attachments: [{ resourceRef: 'attachment', state: 'pending' }] } }, { process: false }); await workflow.process(runId)
   assert.equal(sends, 0)
   ready = true; await workflow.recover()
   assert.equal(sends, 2)
@@ -553,7 +553,7 @@ test('R补取的长材料尾部限制进入I与效果命令，原文引用保留
     if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.source.text.length }], goalText: input.source.text, constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.source.text.length, role: 'unit' }], sharedConstraints: [] }
     if (stage === 'R') return input.clarificationAnswers ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['材料已取回'] } : { kind: 'needs_context', reason: '查历史', needs: [{ resourceRef: 'history:audit', reason: '核对目标' }] }
     intentInput = input
-    return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '验证问题', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+    return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '验证问题', workflowId: 'task-investigation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
   }, handlers: { create: async action => { applied = action; return { accepted: true } } } })
   const { runId } = await workflow.receive(source, { process: false }); await workflow.process(runId); await workflow.recover()
   assert.ok(JSON.stringify(intentInput.resolvedEvidence).includes(restriction))
@@ -742,7 +742,7 @@ test('I投影去除Host目标副本，完整保留身份材料权限和约束',(
   const base={text:'修改目标',constraints:['禁止生产写入'],sharedConstraints:['保留旧记录'],referenceSources:[{sourceKey:'source',text:'完整来源原文',readScope:['owner']}]}
   const facts={topic:{actorId:'owner',facts:[{kind:'constraint',text:'不得删除',sourceRefs:[{sourceKey:'source',text:'完整来源原文'}]}]}}
   const projected=intentContext(base,binding,facts)
-  assert.deepEqual(projected,{...base,binding:{...target,disposition:'existing',evidence:['引用']},facts})
+  assert.deepEqual(projected,{...base,executionMaterialRefs:['source'],binding:{...target,disposition:'existing',evidence:['引用']},facts})
   assert.ok(Buffer.byteLength(JSON.stringify(projected))<Buffer.byteLength(JSON.stringify({...base,binding,facts})))
   const shared = intentContext(base, binding, { ...facts, topic: { ...facts.topic, topicId: 'topic-shared', contextRevision: 4 } }, '', [], [], { sharedTopic: true })
   assert.deepEqual(shared.facts.topic, { topicId: 'topic-shared', contextRevision: 4 })
@@ -921,7 +921,7 @@ test('长材料分块逐页留证，中段对象日期和末段限制进入 I �
    if(input.text.includes(important))facts.push({quote:important,kind:'object'})
    if(input.text.includes(restriction))facts.push({quote:restriction,kind:'restriction'})
    output={kind:'material_facts',complete:true,facts,reason:'本页已覆盖'}
-  }else {assert.equal(stage,'I');intentInput=input;output={kind:'intent',actions:[{intent:'create',arguments:{objective:'按材料验证',workflowId:'task-analysis'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}
+  }else {assert.equal(stage,'I');intentInput=input;output={kind:'intent',actions:[{intent:'create',arguments:{objective:'按材料验证',workflowId:'task-investigation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}
   return {output,usage:{inputTokens:100,outputTokens:100}}
  },handlers:{create:async action=>{effects.push(action);return{accepted:true}}}})
  const {runId}=await workflow.receive({...source,sourceKey:'paged-material',body:'按材料办理'},{process:false})
