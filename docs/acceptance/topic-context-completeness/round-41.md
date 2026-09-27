@@ -68,3 +68,7 @@ python docs/acceptance/topic-context-completeness/round-41/verify-package.py
 ## 未验证边界
 
 尚未在活动实例安装此版本，未重跑真实开发/UAT 业务链，未发送通知。旧无合同活动任务不能自动取得新合同；正式部署前应在原版本完成或通过正式入口结束后重执行，不改写旧数据。本轮没有 schema 迁移。
+
+## 交付
+
+功能提交 `42f7e320d222fec4ff8d49200f557fec7301d68e` 已推送至现有 [PR #126](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/126)，独立回读为 OPEN，目标 main、来源 worktree-workflow-authoring-guide，标题及完整中文正文与本轮文件一致。PR 未合并，本轮未部署。
