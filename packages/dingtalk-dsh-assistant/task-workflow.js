@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { freezeCandidate, readCandidate, verifyCandidate } from './execution-candidate.js'
 import { describeVerificationChecks } from './execution-check-job.js'
 import { assertWorkspaceConflictsResolved } from './execution-workspace.js'
+import { readOnlyWorkflowOwnerContract } from './task-readonly-workflows.js'
 export { createReadOnlyTaskWorkflows } from './task-readonly-workflows.js'
 export { createGeneralTaskWorkflow } from './task-general-workflow.js'
 
@@ -29,7 +30,7 @@ const resultSchema = { type: 'object', properties: {
 }, required: ['summary', 'evidenceIds', 'limitations'], additionalProperties: false }
 
 /** 有界材料分析流程。只分析显式材料，不拥有工程写入、SQL或发布能力。 */
-export function createAnalysisTaskWorkflow({ provider, model, reasoningEffort }) {
+export function createLegacyAnalysisTaskWorkflow({ provider, model, reasoningEffort }) {
   return { id: 'task-analysis', version: '1', nodes: [
     { id: 'prepare', version: '1', executor: 'code', allowedEffects: ['pure'],
       inputSchema: requirementSchema, outputSchema: requirementSchema,
@@ -60,6 +61,10 @@ export function createAnalysisTaskWorkflow({ provider, model, reasoningEffort })
       },
     },
   ] }
+}
+
+export function createAnalysisTaskWorkflow(options) {
+  return { ...createLegacyAnalysisTaskWorkflow(options), version: '2', ownerContract: readOnlyWorkflowOwnerContract }
 }
 
 /** 工程候选链：文件白名单和检查器由Host明确提供；Agent只产数据。 */

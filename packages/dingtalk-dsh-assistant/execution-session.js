@@ -76,6 +76,20 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect }) {
       agentCtx.tools.guard(exec => {
         if (!allowed.has(exec.name)) { halt(entry, 'execution_tool_not_allowed'); return 'execution_tool_not_allowed' }
         if (closed || entry.cancelled || entry.stale || entry.haltCode || entry.attempted) return 'execution_attempt_stopped'
+        // 仅在工具体尚未执行时反馈已注册参数合同的错误；执行/权限/对账错误仍停止。
+        if (exec.name === SUBMIT && exec.arguments && [...identityKeys, 'leaseEpoch'].some(key => Object.hasOwn(exec.arguments, key))) {
+          halt(entry, 'execution_output_invalid')
+          return 'execution_output_invalid: execution identity is supplied by Host'
+        }
+        const schema = agentCtx.tools.get(exec.name, exec.agent)?.parameters
+        if (schema) {
+          const problems = validateJsonSchemaValue(schema, exec.arguments)
+          if (problems.length) {
+            const feedback = `execution_arguments_invalid: ${problems.join('; ').slice(0, 2000)}`
+            entry.correctableCalls.set(exec.token, feedback)
+            return feedback
+          }
+        }
       })
       agentCtx.on('agent/pre-step', async (_event, next) => {
         if (!await current(entry) || entry.attempted || entry.haltCode) return { kind: 'reject' }
@@ -88,20 +102,24 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect }) {
         return next()
       })
       agentCtx.on('tools/result', (exec, result) => {
-        if (result.isError) halt(entry, exec.name === SUBMIT ? 'execution_submission_rejected' : 'execution_tool_failed')
+        const feedback = entry.correctableCalls.get(exec.token)
+        entry.correctableCalls.delete(exec.token)
+        if (result.isError && !(feedback && result.error?.message === feedback && !entry.attempted
+          && !entry.haltCode && !entry.stale && !entry.cancelled && !exec.signal.aborted))
+          halt(entry, exec.name === SUBMIT ? 'execution_submission_rejected' : 'execution_tool_failed')
         if (exec.name === SUBMIT && exec.callId === entry.submissionCallId && !result.isError) entry.accepted = true
       })
       agentCtx.tools.register({
         name: SUBMIT,
-        description: '提交此节点的业务输出；一次提交结束本次执行，不传任务、代际或租约身份。',
+        description: '提交此节点的业务输出；参数错误可按反馈修正，合法提交结束本次执行，不传任务、代际或租约身份。',
         parameters: { type: 'object', properties: { output: definition.outputSchema }, required: ['output'], additionalProperties: false },
         output: { schema: { type: 'object', properties: { received: { type: 'boolean' } }, required: ['received'], additionalProperties: false }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
         async execute(args, exec) {
-          entry.attempted = true
           const problems = validateJsonSchemaValue({ type: 'object', properties: { output: definition.outputSchema }, required: ['output'], additionalProperties: false }, args)
           if (problems.length) { halt(entry, 'execution_output_invalid'); throw failure('execution_output_invalid', problems.join('; ')) }
           if (!await current(entry)) throw failure('execution_binding_stale')
           exec.signal.throwIfAborted()
+          entry.attempted = true
           entry.output = copy(args.output)
           entry.submissionCallId = exec.callId
           // 不在工具栈内调用 Controller：原生工具结果与 post-execute 必须先排空。
@@ -140,7 +158,8 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect }) {
       if (entries.has(binding.runId) || sessions.has(binding.sessionId)) throw notDrained('execution_run_busy')
     } catch (error) { return Promise.reject(error) }
     binding = Object.freeze(copy(binding))
-    const entry = { binding, input: copy(input), cancelled: false, stale: false, attempted: false, accepted: false, steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
+    const entry = { binding, input: copy(input), cancelled: false, stale: false, attempted: false, accepted: false,
+      correctableCalls: new Map(), steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
     // 定义还可含 Controller 的 mapper/checker 函数；此边界只快照模型实际需要的字段。
     const fixedDefinition = copy({ provider: definition.provider, model: definition.model, ...(definition.reasoningEffort === undefined ? {} : { reasoningEffort: definition.reasoningEffort }), prompt: definition.prompt, allowedTools: definition.allowedTools, outputSchema: definition.outputSchema, maxSteps: definition.maxSteps ?? 32, timeoutMs: definition.timeoutMs ?? 120000 })
     entries.set(binding.runId, entry); sessions.set(binding.sessionId, entry)

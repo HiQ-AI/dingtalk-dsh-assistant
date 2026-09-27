@@ -72,16 +72,16 @@ for (const ambiguous of [false, true]) test(`正式Owner修复同Run新代：${a
   const helpers = createEngineeringFailureRepair({ store, artifacts, controller, engineering: registry })
   const observed = await helpers.inspectCurrentExecution('task'); assert.equal(observed.repairable, true)
   if (ambiguous) for (const change of [{ nodeId: 'verify-candidate' }, { waitReason: { reference: 'EDIT_BASE_CONFLICT' } }]) {
-    const wrongStore = { query: async args => {
-      const value = await store.query(args)
-      return args.kind === 'run' ? { ...value, nodes: value.nodes.map(node => node.nodeId === 'apply-changes' ? { ...node, ...change } : node) } : value
+    const wrongController = { ...controller, state: async runId => {
+      const value = await controller.state(runId)
+      return { ...value, nodes: value.nodes.map(node => node.nodeId === 'apply-changes' ? { ...node, ...change } : node) }
     } }
-    assert.equal((await createEngineeringFailureRepair({ store: wrongStore, artifacts, controller, engineering: registry }).inspectCurrentExecution('task')).repairable, false)
+    assert.equal((await createEngineeringFailureRepair({ store, artifacts, controller: wrongController, engineering: registry }).inspectCurrentExecution('task')).repairable, false)
   }
   const decision = { action: 'repairCurrentStage', summary: '修复bad并保留有效改动', repair: observed.repairBinding, evidenceRefs: observed.evidenceRefs }
   for (const field of ['generation', 'runRevision', 'requirementRevision']) await assert.rejects(helpers.repairCurrentStage({ taskId: 'task', decision: { ...decision, repair: { ...decision.repair, [field]: decision.repair[field] + 1 } }, commandId: `stale-${field}` }), /REPAIR_NOT_ADMITTED/)
   const contextRef = (await artifacts.put({ test: 'transaction-gate' })).ref
-  for (const [field, expected] of [['generation', 'ENGINEERING_REPAIR_NOT_ADMITTED'], ['requirementRevision', 'ENGINEERING_REPAIR_NOT_ADMITTED'], ['runRevision', 'ENGINEERING_REPAIR_NOT_ADMITTED']]) {
+  for (const [field, expected] of [['generation', 'WORKFLOW_REPAIR_NOT_ADMITTED'], ['requirementRevision', 'WORKFLOW_REPAIR_NOT_ADMITTED'], ['runRevision', 'WORKFLOW_REPAIR_NOT_ADMITTED']]) {
     await assert.rejects(controller.changeInput({ commandId: `atomic-${field}`, runId, inputId: `atomic-${field}`, sourceKey: `atomic-${field}`,
       input: prepared.input, expectedRevision: first.run.revision,
       repair: { ...decision.repair, [field]: decision.repair[field] + 1, taskId: 'task', contextRef } }), { code: expected })

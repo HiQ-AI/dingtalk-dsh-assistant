@@ -1,0 +1,53 @@
+{
+  "baseline": "89df536",
+  "rows": [
+    {
+      "id": "task-analysis",
+      "version": "1",
+      "digest": "b5c04e41b4e34dc4ade50b4565178b278a398257d93feaaaf9f721bbc44c5a18",
+      "same": true
+    },
+    {
+      "id": "task-investigation",
+      "version": "1",
+      "digest": "32e704db013d01434d2fe390dddc901d77989c2eff5dc5229ce45cebb6868f62",
+      "same": true
+    },
+    {
+      "id": "task-planning",
+      "version": "1",
+      "digest": "b2b14fe5593949d81f0ae621880599ec16ff1b2697ee466fc3bd152eb9ec5308",
+      "same": true
+    },
+    {
+      "id": "task-pr-review",
+      "version": "1",
+      "digest": "f93e4f2ce3b8c08e408fe5dbcf6bbb2a427160af72a306bd23cd84de485f0831",
+      "same": true
+    },
+    {
+      "id": "task-data-query",
+      "version": "1",
+      "digest": "336f9a539d5f54b8b37e4ef9a3ab0ed49d851728b8a07e6897a469de4e0a8fa7",
+      "same": true
+    },
+    {
+      "id": "task-retrospective",
+      "version": "1",
+      "digest": "e10b1fb08c9e6d4badcfd67380070144b5a27789c8e91dac15436edde1bafc81",
+      "same": true
+    },
+    {
+      "id": "task-general-capability",
+      "version": "2",
+      "digest": "855eee5f81f18b224b27aad5fc2897cfc2cb27df8a430496093703495e28ae92",
+      "same": true
+    },
+    {
+      "id": "engineering-registry",
+      "version": "15",
+      "digest": "e3346e96e1460c9a25578cb4c66348ceeb5a611dfcc0798f0dbd10f2c78714a6",
+      "same": true
+    }
+  ]
+}

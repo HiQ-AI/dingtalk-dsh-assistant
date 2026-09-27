@@ -6,12 +6,32 @@ import { join } from 'node:path'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
+import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
 
 const number = { type: 'number' }
 const workflow = execute => ({ id: 'synthetic', version: '1', nodes: [
   { id: 'calculate', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: number, outputSchema: number, mapInput: ({ requirement }) => requirement, execute: execute ?? (async ({ input }) => input + 1) },
   { id: 'verify', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: number, outputSchema: number, mapInput: ({ previousOutput }) => previousOutput, execute: async ({ input }) => input * 2 },
 ] })
+
+test('未知业务失败也保存诊断，非法失败材料不能让已排空节点残留 running', async t => {
+  for (const invalid of [false, true]) await t.test(invalid ? '非法材料' : '第三类业务材料', async child => {
+    const evidence = invalid ? [new Map([['key', 'value']])] : [{ kind: 'inventory-discrepancy', expected: 2, actual: 1 }]
+    const { controller, artifacts } = await setup(child, workflow(async () => {
+      throw Object.assign(new Error('库存核对不一致'), { code: 'INVENTORY_CHECK_FAILED', evidence })
+    }))
+    await controller.createRun({ commandId: 'create', taskId: 'task', runId: 'run', workflowId: 'synthetic', input: 1 })
+    const state = await controller.whenIdle('run'), node = state.nodes[0]
+    assert.equal(state.run.status, 'waiting'); assert.equal(node.drained, true)
+    assert.equal(state.nodes[1].leaseEpoch, 0)
+    const values = await Promise.all(node.evidenceRefs.map(ref => artifacts.read(ref)))
+    assert.equal(values.at(-1).kind, 'execution-failure')
+    assert.equal(values.at(-1).phase, invalid ? 'failure-evidence' : 'execution')
+    assert.equal(values.at(-1).nodeRunId, node.nodeRunId)
+    if (invalid) assert.equal(values.length, 1)
+    else assert.deepEqual(values[0], evidence[0])
+  })
+})
 
 test('相同函数跨 LF/CRLF 打包保持定义身份，旧 CRLF 摘要可恢复', async t => {
   const body = 'async ({ input }) => {\n return input + 1\n}'
@@ -186,6 +206,146 @@ test('无效输出不能让下游获得执行租约', async t => {
   const state = await controller.whenIdle('run')
   assert.equal(state.run.status, 'failed')
   assert.equal(state.nodes[1].leaseEpoch, 0)
+})
+
+test('产出和后继纯映射错误统一持久交接，保留有效产物且下游不执行', async t => {
+  for (const [name, value, mapper, expectedPhase] of [
+    ['date', new Date(), null, 'output-validation'],
+    ['map', new Map(), null, 'output-validation'],
+    ['undefined', undefined, null, 'output-validation'],
+    ['mapper', 2, () => { throw new TypeError('missing requirement') }, 'input-mapping'],
+    ['next-schema', 2, () => 'wrong', 'input-validation'],
+  ]) await t.test(name, async t => {
+    const definition = workflow(async () => value)
+    if (mapper) definition.nodes[1].mapInput = mapper
+    const { controller, artifacts, store } = await setup(t, definition)
+    await controller.createRun({ commandId: 'create', taskId: 'task', runId: 'run', workflowId: definition.id, input: 1 })
+    await controller.whenIdle('run')
+    const state = await store.query({ kind: 'run', runId: 'run' })
+    assert.equal(state.run.status, 'failed')
+    assert.equal(state.nodes[0].drained, true)
+    assert.equal(state.nodes[1].leaseEpoch, 0)
+    const diagnosis = await artifacts.read(state.nodes[0].evidenceRefs.at(-1))
+    assert.equal(diagnosis.kind, 'execution-failure')
+    assert.equal(diagnosis.phase, expectedPhase)
+    assert.equal(diagnosis.nodeRunId, state.nodes[0].nodeRunId)
+    if (mapper) {
+      assert.equal(diagnosis.targetNodeId, 'verify')
+      assert.equal(await artifacts.read(diagnosis.producedOutputRef), 2)
+    }
+  })
+})
+
+test('结果落盘响应未知时读取原提交继续，不写失败或重做已完成节点', async t => {
+  let executions = 0
+  const definition = workflow(async () => { executions++; return 2 })
+  const { controller: initial, store, artifacts } = await setup(t, definition)
+  await initial.close()
+  let lost = false
+  const controller = createExecutionController({ artifacts, workflows: [definition], store: { query: store.query, command: async command => {
+    const receipt = await store.command(command)
+    if (!lost && command.kind === 'node.commit' && command.args.outcome === 'succeeded') {
+      lost = true
+      throw Object.assign(new Error('receipt unknown'), { code: 'COMMIT_ACK_UNKNOWN' })
+    }
+    return receipt
+  } } })
+  t.after(() => controller.close())
+  await controller.createRun({ commandId: 'create', taskId: 'task', runId: 'run', workflowId: 'synthetic', input: 1 })
+  await controller.whenIdle('run')
+  const committed = await store.query({ kind: 'run', runId: 'run' })
+  assert.equal(lost, true)
+  assert.equal(committed.run.status, 'succeeded')
+  assert.equal(committed.nodes[0].status, 'succeeded')
+  assert.equal(committed.nodes[1].status, 'succeeded')
+  await controller.recover({ commandId: 'recover', runId: 'run' })
+  assert.equal((await controller.whenIdle('run')).run.status, 'succeeded')
+  assert.equal(executions, 1)
+})
+
+test('工件磁盘写失败不伪造契约失败，不派发下游', async t => {
+  const { controller, artifacts, store } = await setup(t, workflow(async () => 42))
+  const put = artifacts.put
+  artifacts.put = value => value === 42 ? Promise.reject(Object.assign(new Error('disk full'), { code: 'ENOSPC' })) : put(value)
+  await controller.createRun({ commandId: 'create', taskId: 'task', runId: 'run', workflowId: 'synthetic', input: 1 })
+  await assert.rejects(controller.whenIdle('run'), { code: 'ENOSPC' })
+  const state = await store.query({ kind: 'run', runId: 'run' })
+  assert.equal(state.nodes[0].drained, true)
+  assert.equal(state.nodes[0].status, 'running')
+  assert.equal(state.nodes[1].leaseEpoch, 0)
+  assert.equal((await controller.state('run')).controllerError, 'ENOSPC')
+  assert.equal(await store.query({ kind: 'receipt', commandId: `invalid-result:${state.nodes[0].nodeRunId}:1` }), null)
+})
+
+test('冻结待启动阶段在重启升级后按原摘要运行，合同也随摘要固定', async t => {
+  const old = workflow(), current = workflow(async ({ input }) => input + 10)
+  current.version = '2'
+  current.ownerContract = { id: 'sample', version: '1', validateCompletion: async () => true }
+  const { controller, store, artifacts, dbPath, instanceId } = await setup(t, old)
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: [{ stageId: 'one', workflowId: old.id, input: 2 }] })
+  const oldDigest = (await controller.taskPlan('task')).stages[0].workflowDigest
+  await controller.close(); await store.close()
+  const reopened = await openExecutionStore({ dbPath, instanceId })
+  const unavailable = createExecutionController({ store: reopened, artifacts, workflows: [current] })
+  await assert.rejects(unavailable.advanceTaskPlan('task'), { code: 'WORKFLOW_VERSION_UNAVAILABLE' })
+  assert.equal((await unavailable.taskPlan('task')).stages[0].runId, null)
+  await unavailable.close()
+  const upgraded = createExecutionController({ store: reopened, artifacts, workflows: [current], historicalWorkflows: [old] })
+  t.after(async () => { await upgraded.close(); await reopened.close() })
+  const plan = await upgraded.advanceTaskPlan('task')
+  const state = await upgraded.whenIdle(plan.stages[0].runId)
+  assert.equal(state.run.workflowDigest, oldDigest)
+  assert.equal(await artifacts.read(state.nodes.at(-1).outputRef), 6)
+  assert.equal(upgraded.workflowDefinition(old.id, oldDigest).ownerContract, undefined)
+  assert.equal(upgraded.workflowDefinition(current.id).ownerContract.version, '1')
+  assert.notEqual(defineExecutionWorkflow(current).digest, defineExecutionWorkflow({ ...current,
+    ownerContract: { ...current.ownerContract, validateCompletion: async () => false } }).digest)
+})
+
+test('失败结果在Owner唤醒前重启仍可读取，重复观察不重复事件或业务执行', async t => {
+  let executions = 0
+  const definition = workflow(async () => {
+    executions++
+    throw Object.assign(new Error('custom domain failure'), { code: 'CUSTOM_DOMAIN_FAILURE', evidence: [{ actual: 'failed' }] })
+  })
+  const { controller, store, artifacts, dbPath, instanceId } = await setup(t, definition)
+  const turns = []
+  const createOwner = (controller, store) => createTaskOwnerController({ ctx: {}, store, artifacts, controller,
+    modelConfig: () => ({}), authorizeStages: async () => false, advanceTask: async () => {},
+    sessionRunner: { async run({ input, onSessionBound, onCandidate, readArtifact }) {
+      await onSessionBound()
+      turns.push(input)
+      for (const stage of input.stageArtifacts) {
+        assert.deepEqual(stage.completionEvidenceRefs, [])
+        const materials = await Promise.all(stage.evidenceRefs.map(readArtifact))
+        assert.ok(materials.some(value => value.actual === 'failed'))
+        assert.ok(materials.some(value => value.code === 'CUSTOM_DOMAIN_FAILURE'))
+      }
+      await assert.rejects(readArtifact('sha256-' + 'f'.repeat(64) + '.json'), { code: 'TASK_OWNER_ARTIFACT_NOT_ALLOWED' })
+      const decision = { action: 'wait', summary: '已读失败原因，等待所需能力', evidenceRefs: [] }
+      await onCandidate(decision)
+      return { status: 'submitted', decision }
+    }, async close() {} } })
+  let owner = createOwner(controller, store)
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: [{ stageId: 'one', workflowId: definition.id, input: 1 }] })
+  await owner.ensure({ taskId: 'task', sourceKey: 'source', criteria: ['交付结果'], origin: {} })
+  await owner.drive('task')
+  const plan = await controller.advanceTaskPlan('task')
+  await controller.whenIdle(plan.stages[0].runId)
+  await owner.close(); await controller.close(); await store.close()
+  const reopened = await openExecutionStore({ dbPath, instanceId })
+  const resumed = createExecutionController({ store: reopened, artifacts, workflows: [definition] })
+  owner = createOwner(resumed, reopened)
+  t.after(async () => { await owner.close(); await resumed.close(); await reopened.close() })
+  await owner.observe('task')
+  const before = await reopened.query({ kind: 'task.owner', taskId: 'task' })
+  await owner.observe('task')
+  assert.equal((await reopened.query({ kind: 'task.owner', taskId: 'task' })).eventWatermark, before.eventWatermark)
+  assert.deepEqual(await owner.recover(), [])
+  const received = turns.at(-1)
+  assert.equal(received.stageArtifacts[0].diagnostics[0].waitReason.reference, 'CUSTOM_DOMAIN_FAILURE')
+  assert.ok(received.events.some(event => event.eventType === 'workflow.failed'))
+  assert.equal(executions, 1)
 })
 
 test('工件坏字节拒绝读取；正常读不会悄悄修复内容', async t => {

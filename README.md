@@ -380,7 +380,7 @@ Task 创建和重开时即生成稳定 `stagePlan`，主会话查询与叶子输
 
 ## 开发与测试
 
-新增或组合任务流程，请先阅读[新任务流程编排建设手册](packages/dingtalk-dsh-assistant/README.md)，按职责、业务阶段和验收合同设计，再查附录接入当前接口。框架后续建设以[职责与结果交接方案](docs/spec/workflow-session-responsibility.md)为准；[round-39](docs/acceptance/topic-context-completeness/round-39.md)保留已复现问题，三项运行时缺陷仍待修复。
+新增或组合任务流程，请先阅读[新任务流程编排建设手册](packages/dingtalk-dsh-assistant/README.md)，按职责、业务阶段和验收合同设计，再查附录接入当前接口。领域合同随 Workflow digest 冻结，Owner 可以读取失败诊断；原会话可修正未执行的参数错误。设计依据见[职责与结果交接方案](docs/spec/workflow-session-responsibility.md)，实施证据见 [round-41](docs/acceptance/topic-context-completeness/round-41.md)。升级前需按运维说明核对旧无合同活动任务。
 
 ```powershell
 pnpm install

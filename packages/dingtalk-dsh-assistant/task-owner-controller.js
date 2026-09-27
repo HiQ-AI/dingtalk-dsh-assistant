@@ -1,28 +1,40 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createTaskOwnerSessions } from './task-owner-session.js'
-import { readEngineeringDeliveryProof } from './workflow-engineering.js'
 
 const error = code => Object.assign(new Error(code), { code })
 const key = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 
-/** 只扩展经过同 Run 交付证明核验的原始节点引用，不改阶段或冻结工作流。 */
-export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, artifacts, store }) {
+/** 当前阶段的成功证明和诊断引用分开；领域扩展只来自冻结定义的受信合同。 */
+export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, plan, readStageArtifacts }) {
   const result = []
-  for (const stage of stages.filter(item => item.status === 'succeeded' && item.outputRef)) {
-    const entry = { stageId: stage.stageId, outputRef: stage.outputRef, evidenceRefs: [...(stage.evidenceRefs ?? [])] }
-    if (stage.runId && stage.workflowId.startsWith('task-engineering-')) {
-      const state = await controller.state(stage.runId)
-      if (state?.run?.runId !== stage.runId || state.run.workflowId !== stage.workflowId
-        || !state.nodes.some(node => node.nodeId === 'finalize' && node.status === 'succeeded' && node.outputRef === stage.outputRef))
-        throw error('TASK_OWNER_ENGINEERING_STAGE_MISMATCH')
-      const proof = await readEngineeringDeliveryProof({ state, artifacts, store, taskId })
-      const labels = { 'verify-candidate': '构建与检查原始结果', 'define-local-acceptance': '本地验收要求与场景',
-        'finalize-local-acceptance': '本地业务验收结果与清理收据', 'business-acceptance': '业务验收原始结果' }
-      entry.completionEvidenceRefs = [...new Set([stage.outputRef, ...entry.evidenceRefs])]
-      entry.nodeArtifacts = state.nodes.filter(node => labels[node.nodeId] && node.status === 'succeeded'
-        && proof.evidenceRefs.includes(node.outputRef)).map(node => ({ nodeId: node.nodeId,
-        description: labels[node.nodeId], artifactRef: node.outputRef }))
-      entry.evidenceRefs = [...new Set([...entry.evidenceRefs, ...entry.nodeArtifacts.map(node => node.artifactRef)])]
+  for (const stage of stages.filter(item => item.status !== 'invalidated')) {
+    const state = stage.runId ? await controller.state(stage.runId) : null
+    if (state && (state.run?.taskId !== taskId || state.run.runId !== stage.runId
+      || state.run.workflowId !== stage.workflowId || state.run.workflowDigest !== stage.workflowDigest))
+      throw error('TASK_OWNER_STAGE_RUN_MISMATCH')
+    const succeeded = stage.status === 'succeeded' && stage.outputRef
+    const problemNodes = (state?.nodes ?? []).filter(node => ['waiting', 'failed'].includes(node.status))
+    if (!succeeded && !problemNodes.length) continue
+    const entry = { stageId: stage.stageId, status: stage.status, outputRef: succeeded ? stage.outputRef : null,
+      evidenceRefs: succeeded ? [...(stage.evidenceRefs ?? [])] : [],
+      completionEvidenceRefs: succeeded ? [...new Set([stage.outputRef, ...(stage.evidenceRefs ?? [])])] : [] }
+    if (succeeded && readStageArtifacts) {
+      const extension = await readStageArtifacts({ taskId, stage, state, plan })
+      const known = new Set([stage.outputRef, ...(stage.evidenceRefs ?? []),
+        ...(state?.nodes ?? []).flatMap(node => [node.outputRef, ...(node.evidenceRefs ?? [])].filter(Boolean))])
+      if ([...(extension?.evidenceRefs ?? []), ...(extension?.completionEvidenceRefs ?? []),
+        ...(extension?.nodeArtifacts ?? []).map(node => node.artifactRef)].some(ref => !known.has(ref)))
+        throw error('TASK_OWNER_ARTIFACT_SCOPE_MISMATCH')
+      if (extension?.nodeArtifacts) entry.nodeArtifacts = extension.nodeArtifacts
+      entry.evidenceRefs = [...new Set([...entry.evidenceRefs, ...(extension?.evidenceRefs ?? [])])]
+      if (extension?.completionEvidenceRefs) entry.completionEvidenceRefs = extension.completionEvidenceRefs
+    }
+    if (problemNodes.length) {
+      entry.diagnostics = problemNodes.map(node => ({ nodeId: node.nodeId, nodeRunId: node.nodeRunId,
+        status: node.status, generation: node.generation, leaseEpoch: node.leaseEpoch, drained: node.drained,
+        waitReason: node.waitReason, evidenceRefs: [...(node.evidenceRefs ?? [])] }))
+      entry.evidenceRefs = [...new Set([...entry.evidenceRefs,
+        ...(state.nodes ?? []).flatMap(node => [node.outputRef, ...(['waiting', 'failed'].includes(node.status) ? node.evidenceRefs ?? [] : [])].filter(Boolean))])]
     }
     result.push(entry)
   }
@@ -32,7 +44,7 @@ export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, 
 /** Task 事件唤醒、模型候选、Host 接纳和执行回执的唯一入口。 */
 export function createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig, advanceTask,
   authorizeStages, authorizeCompletion = async () => true, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
-  capabilityCatalog = [], workflowCatalog = [], sessionRunner }) {
+  readStageArtifacts, capabilityCatalog = [], workflowCatalog = [], sessionRunner }) {
   if (!ctx || !store || !artifacts || !controller || typeof modelConfig !== 'function'
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
   let closed = false
@@ -66,19 +78,22 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     const owner = await store.query({ kind: 'task.owner', taskId })
     if (owner?.eventWatermark === 0) await event({ taskId,
       eventKey: `task-recovered-${key(taskId).slice(0, 40)}`, eventType: 'task.created' })
+    const currentExecution = await inspectCurrentExecution?.(taskId, plan)
     for (const stage of plan.stages) {
-      if (!['succeeded', 'blocked', 'waiting_confirmation'].includes(stage.status)) continue
+      const state = stage.status === 'running' && stage.runId ? await controller.state(stage.runId) : null
+      const problemNodes = (state?.nodes ?? []).filter(node => ['waiting', 'failed'].includes(node.status))
+      if (!['succeeded', 'blocked', 'waiting_confirmation'].includes(stage.status) && !problemNodes.length) continue
       const eventType = stage.status === 'waiting_confirmation' ? 'workflow.confirmation.required'
-        : stage.status === 'blocked' ? 'workflow.failed' : 'workflow.succeeded'
+        : stage.status === 'blocked' || problemNodes.length ? 'workflow.failed' : 'workflow.succeeded'
       const payload = { taskId, planRevision: plan.task.planRevision, stageId: stage.stageId,
         workflowId: stage.workflowId, status: stage.status, runId: stage.runId,
-        outputRef: stage.outputRef, evidenceRefs: stage.evidenceRefs }
-      await event({ taskId, eventKey: `stage-${key([taskId, plan.task.planRevision, stage.stageId, stage.status]).slice(0, 40)}`,
+        outputRef: stage.outputRef, evidenceRefs: stage.evidenceRefs,
+        ...(problemNodes.length ? { diagnostics: problemNodes.map(node => ({ nodeId: node.nodeId,
+          nodeRunId: node.nodeRunId, generation: node.generation, leaseEpoch: node.leaseEpoch,
+          status: node.status, drained: node.drained, waitReason: node.waitReason, evidenceRefs: node.evidenceRefs })) } : {}),
+        ...(currentExecution?.stageId === stage.stageId ? { currentExecution } : {}) }
+      await event({ taskId, eventKey: `stage-${key(payload).slice(0, 40)}`,
         eventType, payload })
-    }
-    if (inspectCurrentExecution) {
-      const current = await inspectCurrentExecution(taskId, plan)
-      if (current?.waitingNodes?.length) await event({ taskId, eventKey: `engineering-wait:${key(current).slice(0, 48)}`, eventType: 'workflow.failed', payload: current })
     }
     return plan
   }
@@ -103,7 +118,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     const acceptanceItems = await store.query({ kind: 'task.owner.acceptance', taskId })
     const result = { taskId, eventWatermark: claim.eventWatermark, goal,
       acceptanceItems, versions: claim.versions, task: plan.task, stages: plan.stages, events }
-    result.stageArtifacts = await readTaskOwnerStageArtifacts({ taskId, stages: plan.stages, controller, artifacts, store })
+    result.stageArtifacts = await readTaskOwnerStageArtifacts({ taskId, stages: plan.stages, controller, plan, readStageArtifacts })
     if (inspectCurrentExecution) {
       result.currentExecution = await inspectCurrentExecution(taskId, plan)
       if (result.currentExecution?.evidenceRefs?.length) result.stageArtifacts.push({ stageId: result.currentExecution.stageId, outputRef: null, evidenceRefs: result.currentExecution.evidenceRefs })
@@ -165,7 +180,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           readArtifact: async artifactRef => {
             if (!readableArtifacts.has(artifactRef)) throw error('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
             const value = await artifacts.read(artifactRef)
-            return value.kind === 'engineering-verification-failure' && value.encoding === 'base64'
+            return value?.encoding === 'base64' && typeof value.data === 'string'
               ? { ...value, text: Buffer.from(value.data, 'base64').toString('utf8') } : value
           },
           onSessionBound: () => command(`owner-bound:${turnId}`, 'task.owner.sessionBound', {

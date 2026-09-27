@@ -1,10 +1,10 @@
 # 新任务流程编排建设手册
 
-适用对象：为本项目新增、组合或升级任务流程的开发者与维护者。当前实现依据：2026-09-27 的 `89df536`（PR #125 合并后）源码。正文先说明职责、阶段和建设方法，附录提供当前接口。标注“拟调整”的能力尚未实现，不代表所有平台已配置或所有流程已完成真实环境验收。
+适用对象：为本项目新增、组合或升级任务流程的开发者与维护者。正文说明职责、阶段和建设方法，附录提供当前分支接口。框架实施与隔离验证记录见 [round-41](../../docs/acceptance/topic-context-completeness/round-41.md)；部署和真实业务验收仍需独立回读。
 
-审查发现及修复建议见 [round-39](../../docs/acceptance/topic-context-completeness/round-39.md)。当前存在“节点结果接纳异常未收口”“只读阶段非空 limitations 一律阻止完成”和“升级后尚未建 Run 的旧阶段无法使用历史定义”三项已复现问题；建设流程时须覆盖相关反例，不能把本手册视为框架无缺陷的证明。
+历史审查见 [round-39](../../docs/acceptance/topic-context-completeness/round-39.md)。其结果接纳、调查完成和旧阶段版本解析三个反例作为框架回归项保留。新增流程还须覆盖自身产物、失败和恢复合同。
 
-调整后的框架方案见[职责与结果交接](../../docs/spec/workflow-session-responsibility.md)：复用 Owner、执行会话、工件和效果账本，先补统一交接，再整理业务合同；三个缺陷作为验收案例，不逐个扩展中心服务的业务特判。
+设计依据见[职责与结果交接方案](../../docs/spec/workflow-session-responsibility.md)。实现复用 Owner、执行会话、工件和效果账本，通过冻结定义的 `ownerContract` 提供领域产物读取、完成判断与受信修复。
 
 ## 1. 先明确职责
 
@@ -19,9 +19,9 @@
 
 Owner 的语义判断和 Host 的可信证据检查共同决定完成。调查可以以有证据的“无法确认”结束；修复缺少必需验收时仍不能结束。不能把所有未知都交给用户，也不能由会话自行宣布缺少的证据已经成立。
 
-**当前实现边界**：执行会话绑定 Agent NodeRun/租约，只能使用 `pure/read` 工具。工程修改和平台写入由受信 code 节点及 Delivery 执行。下文“会话处理问题”均以实际配置的能力为前提；统一失败材料交接与业务合同归位属于拟调整能力，详见方案。
+**当前实现边界**：执行会话绑定 Agent NodeRun/租约，只能使用 `pure/read` 工具。工程修改和平台写入由受信 code 节点及 Delivery 执行。会话处理问题以实际配置的能力为前提；Owner 能读取当前成功阶段的正式证明及失败/等待节点的诊断，两类证据分别使用。
 
-普通工具错误的本轮修正也需要实施：当前 `tools/result.isError` 会停止会话，提交尝试后的格式纠正尚未开放。拟按受信工具合同区分可修正反馈与必须停止的控制错误，复用现有步数和时间预算。确定性操作继续用 code 执行器，不为每个节点增加模型会话。
+工具执行前按已注册参数 schema 核验，未进入工具体的格式错误反馈给原会话修正；合法提交后不允许覆盖结果。权限拒绝、身份失效、取消、执行体异常及未知错误继续停止。纠错共用本次执行的步数与时间预算，不重领节点或重置额度。确定性操作由 code 执行器承担。
 
 ## 2. 按交付与恢复边界划分阶段
 
@@ -115,7 +115,7 @@ Task Owner 可以有持续会话，但每个 Agent 节点按 NodeRun/租约绑�
 | 外部结果未知或执行器未排空 | 框架与适配器先对账/排空，相关操作暂不重发 |
 | 状态持久化或框架程序异常 | 阻止推进并暴露原因；实现修复不属于执行会话的隐含权限 |
 
-交接要可持久读取，不能只在日志里打印错误。当前仍存在 R1 结果接纳缺口，Owner 的一般阶段工件读取也主要面向成功阶段；统一失败材料和事件交接是拟调整方案的第一步。当前建设者仍须按附录 E 的实际接口验证，不得假设已经自动兜住所有错误。
+交接要可持久读取。Controller 为执行失败、未提交及结果合同错误保存诊断；受信执行器还可在异常的 `evidence` 数组提供 JSON 事实（最多 126 项）。Owner 通过持久事件及阶段状态重新发现失败，读取允许范围内的工件。失败材料不会进入成功阶段的 `completionEvidenceRefs`；磁盘或控制账不可写时仍须恢复原存储后核对，不能伪造已经交接。
 
 ## 7. 建设顺序与完成判据
 
@@ -126,7 +126,7 @@ Task Owner 可以有持续会话，但每个 Agent 节点按 NodeRun/租约绑�
 5. 验证正常执行和错误处理：问题能被会话处理或明确交接，缺证据不能完成，重启不能重复效果。
 6. 按附录 H/I 完成独立回读与交付，分别报告实现、部署和真实业务结果。
 
-评价框架扩展是否合理：新增流程应主要增加自身合同和能力接入。若每增加一个领域都要改 Controller/Store 的业务判断，应回查职责划分。当前 Host 中的业务完成/修复分支拟逐步迁到流程接入处；手册不会把这一目标描述为已提供的自动扩展机制。
+评价框架扩展是否合理：新增流程应主要增加自身合同和能力接入。若每增加一个领域都要改 Controller/Store 的业务判断，应回查职责划分。领域完成与修复规则由 `ownerContract` 承载；目录、受信适配器和持久注册仍需显式接入。
 
 ---
 
@@ -154,6 +154,20 @@ Task Owner 可以有持续会话，但每个 Agent 节点按 NodeRun/租约绑�
 
 输入映射保持纯转换，禁止网络调用或写文件。首节点从 `requirement` 取输入；紧邻前序可用 `previousOutput`；需要较早的产物时声明 `inputDependencies`。不要连续扩展 `{...previousOutput}`，然后假定几十步以后所有字段还存在。为每条依赖单独校验形状，尤其要覆盖分支、无需修改、修复新 generation 和旧定义恢复。
 
+业务 Owner 使用的 Workflow 还须提供 `ownerContract`。独立 Controller 执行可不提供，接入业务完成或修复时缺失则明确报 `WORKFLOW_OWNER_CONTRACT_UNAVAILABLE`。
+
+| 合同字段 | 作用 |
+| --- | --- |
+| `id / version / rulesDigest` | 身份及导入规则版本；回调函数字符串和这些字段进入 Workflow digest |
+| `validateCompletion(context)` | 必填，核对该领域必需证明，只有严格返回 `true` 才能完成 |
+| `readArtifacts(context)` | 可选，提供当前 Run 已登记的原始节点引用和正式完成证据；不能扩大到其他任务工件 |
+| `inspectRepair(context)` | 可选，给出可修复条件、失败证据及绑定当前版本的修复身份 |
+| `prepareRepair(context)` | 可选，准备新输入及修复材料引用；由 Host 正式接纳输入，不能直接改控制账 |
+
+通用分发位于 [task-workflow-contracts.js](task-workflow-contracts.js)，上下文包含 Task/Stage/Run、计划及只读工件/控制账接口。领域函数引用的外部规则仍须纳入 `rulesDigest` 并保留历史版本。框架的身份、权限、排空、效果对账和验收引用校验不由领域回调解除。
+
+`prepareRepair` 返回 `{ input, contextRef }`；修复材料必须带当前 `taskId/runId/generation`。Host 将准备结果与冻结定义绑定，再由 Controller 独立回查，Store 在事务内核对版本、排空及效果状态。直接构造 `changeInput({ repair: ... })` 不能取得修复准入。接纳事件为 `workflow.repair.accepted`；工程材料读取保留对既有 `engineering.repair.accepted` 历史事件的读取，不改写旧记录。
+
 Agent 只能声明 `pure/read`。结果通过 `execution_node_submit` 提交，由适配器提供，不放入 `allowedTools`。普通最终聊天文本不能推进节点；提交之后仍需 Host 核对租约、版本、schema、工件及后继输入。
 
 ### 可运行的最小例子
@@ -176,7 +190,14 @@ export function createEvidenceSummaryWorkflow() {
     }, required: ['summary', 'evidenceIds'], additionalProperties: false,
   }
   const rulesDigest = executionDigest({ rulesVersion: '1', maxBytes: 8000 })
-  return { id: 'task-evidence-summary', version: '1', nodes: [
+  return { id: 'task-evidence-summary', version: '1', ownerContract: {
+    id: 'evidence-summary', version: '1',
+    async validateCompletion({ output, state, artifacts }) {
+      const source = await artifacts.read(state.run.requirementRef)
+      return output.summary === source.text.trim() && output.evidenceIds.length === 1
+        && output.evidenceIds[0] === source.sourceId
+    },
+  }, nodes: [
     { id: 'prepare', version: '1', executor: 'code', allowedEffects: ['pure'],
       rulesDigest, inputSchema, outputSchema: inputSchema,
       mapInput: ({ requirement }) => requirement,
@@ -231,12 +252,12 @@ export function createEvidenceSummaryWorkflow() {
 | 目录展示与可用性 | 同文件 `visibleDefinitions/workflowCatalogState` | 目录可见不等于可执行；缺仓库、目标或适配器时显示不可用原因 |
 | Owner 可选流程及能力 | 同文件创建 `createTaskOwnerController` 的目录参数 | Owner 只能选择已接入、已准入的流程；用户限制必须进入当前要求 |
 | 首阶段与后续阶段输入 | 同文件 `prepareInitialStage/advanceBusinessTask` | 两条路径都处理新类型；后续阶段绑定当前前序产物，不能仅复制模型给出的 ID |
-| 阶段及最终准入 | 同文件 `authorizeStages/authorizeCompletion` | 授权、环境、版本、验收条件与证据范围逐项核对；声明业务结束条件 |
+| 阶段及最终准入 | 同文件 `authorizeStages/authorizeCompletion`、[合同分发](task-workflow-contracts.js) | 公共授权与版本门禁保留在 Host，领域必需验收放入冻结的 ownerContract |
 | 外部操作 | 同文件 `createExternalRegistry`、[workflow-trusted-platforms.js](workflow-trusted-platforms.js)、[platform-host.js](platform-host.js) | 当前外部注册按受信种类显式装配；新种类要补 requirement、execute/reconcile 分发和配置 schema，不能只加目录行 |
 | 产出和状态展示 | 同文件 `describeTaskNodeOutput`、[Observer](../dingtalk-dsh-observer/web-client.js) 的 `nodeTitle` | 增加用户名称、实际产物摘要、详情投影；核对等待和失败时也能读懂 |
 | 完成与通知 | [task-owner-controller.js](task-owner-controller.js)、[workflow-notifications.js](workflow-notifications.js) | 完成引用来自当前成功阶段；通知失败恢复原意图，不重做业务 |
 
-新增只读材料类型可优先扩充 `task-readonly-workflows.js` 的定义列表：现有工厂和目录已联动，但中文 label、最终完成类型检查和展示映射仍要核对。新 capability 按 `task-general-workflow.js` 的 `id/effectClass/identity/authorize/verify` 合同接入：`read` 还需 `execute`，`file.write` 还需 `prepare`，由 Delivery 执行准备好的写操作；不能只提供一个执行函数。当前 Owner 步骤只接受受信 `read/file.write` 能力，工程和平台写操作走专用流程。
+新增只读材料类型可优先扩充 `task-readonly-workflows.js` 的定义列表：现有工厂和目录已联动，复用来源结果合同；中文 label 和展示映射仍要核对。新 capability 按 `task-general-workflow.js` 的 `id/effectClass/identity/authorize/verify` 合同接入：`read` 还需 `execute`，`file.write` 还需 `prepare`，由 Delivery 执行准备好的写操作；不能只提供一个执行函数。当前 Owner 步骤只接受受信 `read/file.write` 能力，工程和平台写操作走专用流程。
 
 当前 `file.write.prepare` 必须同步返回 prepared，不能返回 Promise。`verify` 必须返回 `passed: true`、与 `executionDigest(output)` 相同的 `outputDigest`，以及非空且每项为非空字符串的 `sourceRefs` 数组；只返回 `{ passed: true }` 会被拒绝。授权与 verify 都要检查 scope，不能把调用者给出的来源当作已获授权。
 
@@ -308,13 +329,13 @@ export function createEvidenceSummaryWorkflow() {
 | 新输入或失败修复 | 通过正式 Controller/Owner 入口建立新 generation 或失效后缀，保留原证据与已消耗预算 |
 | 定义缺失或摘要变化 | 报 `WORKFLOW_VERSION_UNAVAILABLE` / 定义漂移；不得强改数据库 digest 或套用新代码 |
 
-`whenIdle()` 返回只说明当前调度结束；必须再看 Run、节点、等待原因和工件。结构校验通常在提交时拒绝；**当前仍有已确认缺陷**：非普通 JSON 对象、后继 mapper 抛出的未分类异常可能使节点停留 running，见 round-39 的 R1。新流程验证须覆盖；发生时保留现场并修控制器错误归类，不能人工把状态改成成功。
+`whenIdle()` 返回只说明当前调度结束；必须再看 Run、节点、等待原因和工件。非普通 JSON 产出、后继 mapper 与输入 schema 错误在纯结果处理边界转为持久失败，保留失败位置及已经合法保存的产物。工件 I/O、控制账提交异常不套用这个分类；提交回执未知时回查原记录，不重做已经完成的操作。磁盘不可写时可能仍保留 running 和 Controller 错误，不能把无法落盘包装成确定失败。
 
 code execute 抛出普通业务错误，目前一般进入 waiting/recovery；不能假设 throw 会自动产生最终 failed。如新领域需要明确终态失败，须设计受信错误分类与控制账接纳路径，并用反例证明不会把存储未知误判为业务失败。
 
 ## 附录 F：现有开发与交付流程
 
-当前新工程定义为 v15，旧工厂保留用于历史恢复。按职责理解节点即可，不应复制 v6–v15 的层层包装来建设无关业务流程。
+当前新工程定义为 v16，包含冻结的工程交付合同；旧工厂保留用于历史执行恢复。按职责理解节点即可，不应复制工程历史工厂来建设无关业务流程。
 
 1. 明确仓库、验收条件、UAT 环境；UAT 编号由请求/已授权来源确定。映射固定为 `uatN → feature/uatN-base`，N 为 1～9。缺失就询问，不能推断默认 UAT 或 main。
 2. 核对已有开发分支；存在则复用远端最新提交，在独立目录开发。冻结目标 UAT 和任务起点，合并树/冲突处理属于验收对象。
@@ -333,7 +354,9 @@ code execute 抛出普通业务错误，目前一般进入 waiting/recovery；�
 
 定义版本与工件是历史证据。行为、schema、依赖或规则身份改变后，必须用新定义，新运行选新定义；活跃旧 Run/待运行 Stage 仍需要原 digest 的工厂和适配器。源码注册、`workflow.register` 的持久配置和启动恢复三者要一致。当前没有为任意新类型自动保存所有旧函数版本的机制。
 
-当前还存在 R3：即使注册了 `historicalWorkflows`，已冻结旧定义但尚未创建 Run 的 Stage，在升级后启动时仍可能被 `createRun` 拒绝；已有 Run 的按 digest 恢复与这个入口行为不同。保留旧工厂是必要条件，当前尚不足以保证所有待启动阶段续行。升级评估必须包含这些计划；修复方案是按阶段绑定的摘要选历史定义，而不是篡改阶段的摘要。
+已冻结但尚未创建 Run 的 Stage 与既有 Run 一样，按原 digest 解析定义；未绑定的新运行使用当前定义。原定义缺失时明确阻塞。
+
+合同接入后的版本是只读/analysis v2、工程 v16、通用能力阶段 v3；外部流程配置记录 `ownerContractVersion: '1'`。原无合同定义保持原 digest，不自动套新合同，旧终态仍可读取。升级前先让旧活动任务在原版本完成，或通过正式取消/重执行入口建立新任务；否则旧任务到 Owner 完成/修复入口会明确阻塞。不要手改 digest 或工件补合同。本次没有 schema 迁移。
 
 升级前列出在途任务所需定义、未排空节点和未对账效果；若不能重建旧定义，写明受控结束旧运行和新建执行的方案，保留历史身份与业务分支。不能靠覆盖已有记录绕过版本检查。
 
@@ -349,7 +372,7 @@ code execute 抛出普通业务错误，目前一般进入 waiting/recovery；�
 | 输入 | 首阶段和后续阶段；缺字段、跨范围引用、过期版本、容量超限都明确停止 |
 | 正常执行 | 每个节点实际产物；最终业务条件；运行成功与任务完成分别读取 |
 | 模型结果 | 普通聊天不能代替提交；结构错误、伪造证据和空产物不通过 |
-| 业务完成 | 真正缺少必需证据保持等待；仅范围说明不会把已完成调查永久挂起（当前 R2 待修） |
+| 业务完成 | 真正缺少必需证据不能完成；仅范围说明不会把已完成调查永久挂起 |
 | 输入变化 | 旧输出失效、无重复效果、保留可用前缀和原证据 |
 | 暂停取消 | 副作用之前/执行中/已生效三个时点；停止与排空分开 |
 | 恢复 | 同 ID 重放、结果未知、明确失败、暂态上限、进程重启和定义不匹配 |

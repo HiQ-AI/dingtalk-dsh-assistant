@@ -2,6 +2,7 @@ import { isTerminalUatBuildFailure } from './execution-delivery.js'
 import { setTimeout as delay } from 'node:timers/promises'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { canonicalExecutionJson, executionDigest, executionError } from './execution-artifacts.js'
+import { validateWorkflowRepairAdmission } from './task-workflow-contracts.js'
 
 const identifier = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)
 const requireId = value => { if (!identifier(value)) throw executionError('INVALID_IDENTIFIER'); return value }
@@ -18,9 +19,34 @@ const freeze = value => {
   return value
 }
 
+// 仅标记纯结果处理边界。工件 I/O 和控制账提交异常不得被转成确定业务失败。
+class ResultAdmissionError extends Error {
+  constructor(cause, phase, nodeId) {
+    super(String(cause?.message ?? cause).slice(0, 2000), { cause })
+    this.code = typeof cause?.code === 'string' && cause.code.trim() ? cause.code.slice(0, 200) : 'NODE_RESULT_CONTRACT_INVALID'
+    this.phase = phase
+    this.nodeId = nodeId
+  }
+}
+async function admitResult(phase, nodeId, operation) {
+  try { return await operation() }
+  catch (cause) { throw new ResultAdmissionError(cause, phase, nodeId) }
+}
+
 /** 随插件发布的固定顺序定义；函数仅来自受信模块，不接受用户/模型生成代码。 */
 export function defineExecutionWorkflow(definition) {
   requireId(definition.id); requireId(definition.version)
+  let ownerContract
+  if (definition.ownerContract !== undefined) {
+    const contract = definition.ownerContract
+    if (!contract || !identifier(contract.id) || !identifier(contract.version)
+      || typeof contract.validateCompletion !== 'function'
+      || ['readArtifacts', 'inspectRepair', 'prepareRepair'].some(key => contract[key] !== undefined && typeof contract[key] !== 'function')
+      || Object.keys(contract).some(key => !['id', 'version', 'rulesDigest', 'readArtifacts', 'validateCompletion', 'inspectRepair', 'prepareRepair'].includes(key)))
+      throw executionError('WORKFLOW_OWNER_CONTRACT_INVALID')
+    if (contract.rulesDigest !== undefined) canonicalExecutionJson(contract.rulesDigest)
+    ownerContract = freeze({ ...contract, ...(contract.rulesDigest === undefined ? {} : { rulesDigest: structuredClone(contract.rulesDigest) }) })
+  }
   if (!Array.isArray(definition.nodes) || !definition.nodes.length || definition.nodes.length > 32) throw executionError('WORKFLOW_NODE_LIMIT')
   const ids = new Set()
   const nodes = definition.nodes.map(node => {
@@ -39,7 +65,12 @@ export function defineExecutionWorkflow(definition) {
     assertSupportedJsonSchema(node.inputSchema); assertSupportedJsonSchema(node.outputSchema)
     return freeze({ ...node, allowedEffects: [...node.allowedEffects], ...(node.allowedTools ? { allowedTools: [...node.allowedTools] } : {}), inputSchema: structuredClone(node.inputSchema), outputSchema: structuredClone(node.outputSchema) })
   })
-  const digestInput = normalizeSource => ({ id: definition.id, version: definition.version, nodes: nodes.map(n => ({
+  const digestInput = normalizeSource => ({ id: definition.id, version: definition.version,
+    ...(ownerContract ? { ownerContract: { id: ownerContract.id, version: ownerContract.version,
+      rulesDigest: ownerContract.rulesDigest ?? null,
+      ...Object.fromEntries(['readArtifacts', 'validateCompletion', 'inspectRepair', 'prepareRepair']
+        .map(key => [key, ownerContract[key] ? normalizeSource(ownerContract[key].toString()) : null])) } } : {}),
+    nodes: nodes.map(n => ({
     id: n.id, version: n.version, executor: n.executor, allowedEffects: n.allowedEffects,
     inputSchema: n.inputSchema, outputSchema: n.outputSchema, mapper: normalizeSource(n.mapInput.toString()),
     implementation: n.execute ? normalizeSource(n.execute.toString()) : null, provider: n.provider ?? null, model: n.model ?? null,
@@ -53,6 +84,7 @@ export function defineExecutionWorkflow(definition) {
   const legacyDigests = [executionDigest(digestInput(source => source)),
     executionDigest(digestInput(source => source.replace(/\r\n?|\n/g, '\r\n')))].filter(value => value !== digest)
   return Object.freeze({ id: definition.id, version: definition.version, nodes: Object.freeze(nodes), digest,
+    ...(ownerContract ? { ownerContract } : {}),
     legacyDigests: Object.freeze([...new Set(legacyDigests)]) })
 }
 
@@ -85,7 +117,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   }
   async function prepareInput(definition, node, requirementRef, previousOutput, dependencyOutputs = {}) {
     const requirement = await artifacts.read(requirementRef)
-    const data = validate(node.inputSchema, await node.mapInput({ requirement, previousOutput, dependencyOutputs }))
+    const data = await admitResult('input-mapping', node.id,
+      () => node.mapInput({ requirement, previousOutput, dependencyOutputs }))
+    await admitResult('input-validation', node.id, () => validate(node.inputSchema, data))
     return artifacts.put({ workflowDigest: definition.digest, nodeId: node.id, nodeVersion: node.version, requirementRef, data })
   }
   async function isCurrent(binding) {
@@ -214,26 +248,36 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         const evidenceRefs = []
         const terminalDeliveryFailure = isTerminalUatBuildFailure(failure?.terminalEffect)
         if (terminalDeliveryFailure) evidenceRefs.push((await artifacts.put(failure.terminalEffect.result.result)).ref)
-        if (nodeDefinition.executor === 'code' && (['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_ACCEPTANCE_FAILED'].includes(failure?.code)
-          || failure?.code?.startsWith('LOCAL_ACCEPTANCE_')) && failure.evidence !== undefined) {
-          if (!Array.isArray(failure.evidence) || failure.evidence.length > 128) throw executionError('NODE_FAILURE_EVIDENCE_INVALID')
-          for (const payload of failure.evidence) evidenceRefs.push((await artifacts.put(payload)).ref)
+        if (failure?.evidence !== undefined) {
+          // 受信执行器可以提供失败证据，框架不按领域错误码决定是否保存。
+          try {
+            if (!Array.isArray(failure.evidence) || failure.evidence.length > 126) throw executionError('NODE_FAILURE_EVIDENCE_INVALID')
+            for (const payload of failure.evidence) canonicalExecutionJson(payload)
+          } catch (cause) { failure = new ResultAdmissionError(cause, 'failure-evidence', ready.nodeId) }
+          if (!(failure instanceof ResultAdmissionError))
+            for (const payload of failure.evidence) evidenceRefs.push((await artifacts.put(payload)).ref)
         }
+        const reportedReason = failure?.code ?? (failure ? 'NODE_EXECUTION_FAILED' : outcome?.reason ?? outcome?.status)
+        const reason = typeof reportedReason === 'string' && reportedReason.trim() ? reportedReason.slice(0, 200) : 'NO_NODE_SUBMISSION'
+        evidenceRefs.push((await artifacts.put({ kind: 'execution-failure', ...identity, nodeRunId: binding.nodeRunId,
+          phase: failure?.phase ?? 'execution', targetNodeId: failure?.nodeId ?? ready.nodeId,
+          code: reason, message: String(failure?.message ?? reason).slice(0, 2000) })).ref)
         await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
-          ...identity, outcome: terminalDeliveryFailure ? 'failed' : 'waiting', evidenceRefs, waitReason: { kind: 'recovery', reference: failure?.code ?? (failure ? 'NODE_EXECUTION_FAILED' : outcome?.reason ?? outcome?.status ?? 'NO_NODE_SUBMISSION') },
+          ...identity, outcome: terminalDeliveryFailure ? 'failed' : 'waiting', evidenceRefs, waitReason: { kind: 'recovery', reference: reason },
         })
         return
       }
+      let result
       try {
-        validate(nodeDefinition.outputSchema, output)
-        const result = await artifacts.put(output)
+        await admitResult('output-validation', ready.nodeId, () => validate(nodeDefinition.outputSchema, output))
+        result = await artifacts.put(output)
         const next = definition.nodes[ready.position + 1]
         const dependencies = {}
         for (const id of next?.inputDependencies ?? []) {
           if (id === ready.nodeId) dependencies[id] = output
           else {
             const source = state.nodes.find(node => node.nodeId === id && node.status === 'succeeded' && node.outputRef)
-            if (!source) throw executionError('NODE_DEPENDENCY_UNAVAILABLE')
+            if (!source) throw new ResultAdmissionError(executionError('NODE_DEPENDENCY_UNAVAILABLE'), 'input-dependencies', next.id)
             dependencies[id] = await artifacts.read(source.outputRef)
           }
         }
@@ -245,8 +289,13 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       } catch (error) {
         // 已接纳变更/取消使提交失效，由下一轮处理屏障；存储不可用不能派生新动作。
         if (!(await isCurrent(binding))) continue
-        if (['NODE_SCHEMA_INVALID', 'ARTIFACT_TOO_LARGE', 'INVALID_JSON_VALUE'].includes(error.code)) {
-          await command(`invalid-result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', { ...identity, outcome: 'failed', evidenceRefs: [], waitReason: { kind: 'recovery', reference: error.code } })
+        if (error instanceof ResultAdmissionError) {
+          const diagnosis = await artifacts.put({ kind: 'execution-failure', ...identity, nodeRunId: binding.nodeRunId, phase: error.phase,
+            targetNodeId: error.nodeId, code: error.code, message: error.message,
+            ...(result ? { producedOutputRef: result.ref } : {}) })
+          await command(`invalid-result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
+            ...identity, outcome: 'failed', evidenceRefs: [...(result ? [result.ref] : []), diagnosis.ref],
+            waitReason: { kind: 'recovery', reference: error.code } })
           return
         }
         throw error
@@ -255,6 +304,12 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   }
   return {
     isCurrent,
+    workflowDefinition(workflowId, digest) {
+      if (digest !== undefined) return definitionOf({ workflowId, workflowDigest: digest })
+      const definition = definitions.get(workflowId)
+      if (!definition) throw executionError('WORKFLOW_NOT_FOUND')
+      return definition
+    },
     registerWorkflow(input) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       const definition = registerDefinition(input, false, true)
@@ -263,16 +318,16 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     async createRun({ commandId, taskId, runId = `run-${executionDigest(commandId)}`, workflowId, input, stageBinding }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId); requireId(runId)
-      let definition = definitions.get(workflowId)
-      if (!definition) throw executionError('WORKFLOW_NOT_FOUND')
+      let definition
       if (stageBinding) {
         const plan = await store.query({ kind: 'task.plan', taskId })
         const stage = plan?.task.planRevision === stageBinding.planRevision
           ? plan.stages.find(item => item.stageId === stageBinding.stageId) : null
-        if (!stage || stage.workflowId !== workflowId || ![definition.digest, ...definition.legacyDigests].includes(stage.workflowDigest))
+        if (!stage || stage.workflowId !== workflowId)
           throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
-        if (stage.workflowDigest !== definition.digest) definition = { ...definition, digest: stage.workflowDigest }
-      }
+        definition = definitionOf(stage)
+      } else definition = definitions.get(workflowId)
+      if (!definition) throw executionError('WORKFLOW_NOT_FOUND')
       const requirement = await artifacts.put(input)
       const first = await prepareInput(definition, definition.nodes[0], requirement.ref)
       const receipt = await command(commandId, 'run.create', { taskId, runId, workflowId, workflowDigest: definition.digest, requirementRef: requirement.ref,
@@ -488,8 +543,15 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       }
       return { receipt, plan: await store.query({ kind: 'task.plan', taskId }) }
     },
-    async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision, repair }) {
+    async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision, repair, repairAdmission }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
+      if (repair) {
+        const state = await query(runId)
+        const plan = await store.query({ kind: 'task.plan', taskId: repair.taskId })
+        const workflowDigest = await validateWorkflowRepairAdmission({ state, plan,
+          definition: definitionOf(state.run), repair, input, expectedRevision, store, artifacts, repairAdmission })
+        repair = { ...repair, workflowDigest }
+      }
       const requirement = await artifacts.put(input)
       const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref, ...(expectedRevision === undefined ? {} : { expectedRevision }), ...(repair ? { repair } : {}) })
       if (!receipt.replayed && receipt.result.accepted !== false) { interrupt(runId); schedule(runId) }

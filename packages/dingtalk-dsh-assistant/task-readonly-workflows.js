@@ -64,7 +64,7 @@ function validateResult(input) {
 }
 
 /** 五类只读任务共享来源约束，各自固定语义合同；模型没有仓库、数据库和外部写入工具。 */
-export function createReadOnlyTaskWorkflows({ provider, model, reasoningEffort }) {
+export function createLegacyReadOnlyTaskWorkflows({ provider, model, reasoningEffort }) {
   if (!provider || !model) throw executionError('TASK_MODEL_REQUIRED')
   return definitions.map(({ id, purpose, prompt }) => ({ id, version: '1', nodes: [
     { id: 'prepare', version: '1', executor: 'code', allowedEffects: ['pure'],
@@ -83,4 +83,21 @@ export function createReadOnlyTaskWorkflows({ provider, model, reasoningEffort }
       mapInput: ({ requirement, previousOutput }) => ({ requirement, result: previousOutput }),
       execute: async ({ input }) => validateResult(input) },
   ] }))
+}
+
+/** 范围说明不是统一阻塞条件；目标是否已回答由 Owner 的逐项验收决定。 */
+export const readOnlyWorkflowOwnerContract = Object.freeze({
+  id: 'material-result', version: '1',
+  async validateCompletion({ state, output, artifacts }) {
+    const requirement = await artifacts.read(state.run.requirementRef)
+    const known = new Set((requirement.materials ?? []).map(item => item.id))
+    return typeof output?.summary === 'string' && !!output.summary.trim()
+      && Array.isArray(output.evidenceIds) && output.evidenceIds.length > 0
+      && output.evidenceIds.every(ref => known.has(ref))
+      && output.outcome !== 'blocked' && output.status !== 'unverified'
+  },
+})
+
+export function createReadOnlyTaskWorkflows(options) {
+  return createLegacyReadOnlyTaskWorkflows(options).map(workflow => ({ ...workflow, version: '2', ownerContract: readOnlyWorkflowOwnerContract }))
 }

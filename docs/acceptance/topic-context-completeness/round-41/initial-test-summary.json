@@ -1,0 +1,37 @@
+[
+  {
+    "path": "docs/tmp/framework-first-tests.log",
+    "sha256": "72b75ba0fedd8293be801e85b27e8c1187301494ad8eab3afb1401c6863d74cc",
+    "tests": 70,
+    "pass": 63,
+    "fail": 7
+  },
+  {
+    "path": "docs/tmp/framework-controller-second.log",
+    "sha256": "1d054d36de269ee65793fe0be6c28b4e3bb12066abeeb5e14b689313353df6af",
+    "tests": 29,
+    "pass": 28,
+    "fail": 1
+  },
+  {
+    "path": "docs/tmp/framework-tests/sg21/first-targeted.log",
+    "sha256": "5c864809ff691888922d0ee87c4ebea8c7be473b4cbb1b65e5e53cf642fa6cf6",
+    "tests": 51,
+    "pass": 46,
+    "fail": 5
+  },
+  {
+    "path": "docs/tmp/framework-tests/sg21/service-first.log",
+    "sha256": "8a855902b40620de37fbc22ab7d21a0720551e359df526cba86b5eb531cec85c",
+    "tests": 114,
+    "pass": 102,
+    "fail": 12
+  },
+  {
+    "path": "docs/tmp/framework-tests/sg21/service-second.log",
+    "sha256": "da47401ea866939e8ffd04735c859bfee01b43dd23abbfa21931254b48c4f703",
+    "tests": 114,
+    "pass": 113,
+    "fail": 1
+  }
+]

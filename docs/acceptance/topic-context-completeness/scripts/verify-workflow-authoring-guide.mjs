@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import { readFile, writeFile, mkdir, mkdtemp, stat } from 'node:fs/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { resolve, dirname, join } from 'node:path'
+import { parseArgs } from 'node:util'
 import { openExecutionStore } from '../../../../packages/dingtalk-dsh-assistant/execution-store.js'
-import { openExecutionArtifacts } from '../../../../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { executionDigest, openExecutionArtifacts } from '../../../../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController } from '../../../../packages/dingtalk-dsh-assistant/execution-controller.js'
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url))
+const { values } = parseArgs({ options: { output: { type: 'string', default: 'docs/tmp/workflow-authoring-guide/guide-validation.json' } } })
 const manual = join(root, 'packages/dingtalk-dsh-assistant/README.md')
 const text = await readFile(manual, 'utf8')
 const section = text.split('<!-- workflow-authoring-example:start -->')[1]?.split('<!-- workflow-authoring-example:end -->')[0]
@@ -51,7 +53,8 @@ for (const kind of ['valid', 'invalid-schema', 'foreign-evidence']) {
   } finally { await controller.close(); await store.close() }
 }
 
-const documents = ['packages/dingtalk-dsh-assistant/README.md', 'docs/acceptance/topic-context-completeness/round-39.md']
+const documents = ['packages/dingtalk-dsh-assistant/README.md', 'docs/ops/execution-foundation-local.md',
+  'docs/spec/workflow-session-responsibility.md', 'docs/acceptance/topic-context-completeness/round-41.md']
 let linkCount = 0
 for (const document of documents) {
   const content = await readFile(join(root, document), 'utf8')
@@ -64,6 +67,8 @@ for (const document of documents) {
     linkCount++
   }
 }
-const report = { testedAt: new Date().toISOString(), baseline: '89df536', source: '从手册原文提取示例，不维护第二份示例源码', results, localLinks: { checked: linkCount, status: 'PASS' } }
-await writeFile(join(root, 'docs/acceptance/topic-context-completeness/round-39/guide-validation.json'), JSON.stringify(report, null, 2) + '\n')
+const report = { testedAt: new Date().toISOString(), sourceDigest: executionDigest(snippet), source: '从当前工作区手册原文提取示例，不维护第二份示例源码', results, localLinks: { checked: linkCount, status: 'PASS' } }
+const outputPath = resolve(root, values.output)
+await mkdir(dirname(outputPath), { recursive: true })
+await writeFile(outputPath, JSON.stringify(report, null, 2) + '\n')
 console.log(JSON.stringify(report, null, 2))

@@ -232,7 +232,9 @@ test('失败工程检查以有界工件保留完整日志，节点仍waiting且�
   const state=await controller.whenIdle('run'),node=state.nodes[0]
   assert.equal(state.run.status,'waiting');assert.equal(node.status,'waiting');assert.equal(node.outputRef,null);assert.equal(node.waitReason.reference,'ENGINEERING_VERIFICATION_FAILED');assert.equal(nextCalls,0);assert.equal(state.nodes[1].status,'blocked')
   assert.ok(node.evidenceRefs.length>1);assert.ok(node.evidenceRefs.length<=128)
-  const chunks=await Promise.all(node.evidenceRefs.map(ref=>artifacts.read(ref)))
+  const evidence=await Promise.all(node.evidenceRefs.map(ref=>artifacts.read(ref)))
+  assert.equal(evidence.filter(item=>item.kind==='execution-failure'&&item.code==='ENGINEERING_VERIFICATION_FAILED').length,1)
+  const chunks=evidence.filter(item=>item.kind==='engineering-verification-failure')
   assert.ok(chunks.every(c=>c.kind==='engineering-verification-failure'&&c.passed===false&&Buffer.byteLength(JSON.stringify(c))<65536))
   const bytes=Buffer.concat(chunks.sort((a,b)=>a.part-b.part).map(c=>Buffer.from(c.data,'base64')))
   assert.equal(bytes.toString('utf8'),log);assert.equal(createHash('sha256').update(bytes).digest('hex'),chunks[0].logSha256)
@@ -353,7 +355,11 @@ test('v14真实controller按需检索依次进入方案和应用，v13冻结合�
       await controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: workflow.id,
         input: { request: '修改', constraints: [], baseCommit, editablePaths: [], acceptanceCriteria: ['值更新'] } })
       if (version === '13') {
-        await assert.rejects(controller.whenIdle('run'), /reading 'requirement'/)
+        const state=await controller.whenIdle('run')
+        assert.equal(state.run.status,'failed')
+        const failed=state.nodes.find(node=>node.status==='failed')
+        const evidence=await Promise.all(failed.evidenceRefs.map(ref=>artifacts.read(ref)))
+        assert.ok(evidence.some(item=>item.kind==='execution-failure'&&item.phase==='input-mapping'&&/reading 'requirement'/.test(item.message)))
         assert.equal(proposals, 0)
       } else {
         const state = await controller.whenIdle('run')
