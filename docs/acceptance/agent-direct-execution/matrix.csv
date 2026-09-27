@@ -66,3 +66,4 @@ deployment,5,installed-runtime,BLOCKED,docs/tmp/agent-fifth-deployment-check.log
 message-workflow-full,1,controlled-integration,FAIL,docs/tmp/message-workflow-current-full-r1.log
 message-workflow-full,2,controlled-integration,PASS,docs/tmp/message-workflow-current-full-r2.log
 message-workflow-full,3,controlled-integration,PASS,docs/tmp/message-workflow-current-full-r3.log
+workflow-service-full,1,controlled-integration,PASS,docs/tmp/workflow-service-current-full-r1.log
