@@ -198,6 +198,56 @@ if (process.argv[2] === '--execution-session-child') {
     }
   })
 
+  test('受信工具参数与提交格式可在原会话修正，失败调用不进入工具体', async t => {
+    const h = await host({ script: [
+      { name: 'lookup_record', args: { key: 7 } },
+      { name: 'lookup_record', args: { key: 'record-1' } },
+      { name: 'execution_node_submit', args: { output: { answer: 42 } } },
+      submit('corrected'),
+    ] })
+    t.after(() => h.close())
+    let executed = 0, submitted = 0
+    h.ctx.tools.register({ name: 'lookup_record', description: '读取受信记录',
+      parameters: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'], additionalProperties: false },
+      output, execute: args => { executed++; return { key: args.key, value: 'known' } } })
+    const result = await drive(h, { definition: definition({ allowedTools: ['lookup_record'], maxSteps: 4 }),
+      onResult: async () => { submitted++ } })
+    assert.deepEqual(result, { status: 'submitted', output: { answer: 'corrected' } })
+    assert.equal(executed, 1)
+    assert.equal(submitted, 1)
+    assert.equal(h.requests.length, 4)
+    assert.ok(JSON.stringify(h.requests[1]).includes('execution_arguments_invalid'))
+    assert.ok(JSON.stringify(h.requests[3]).includes('execution_arguments_invalid'))
+    const history = await h.ctx.sessionPersistence.inspect(binding().sessionId)
+    assert.deepEqual(leases(history.events), [1])
+    assert.ok(JSON.stringify(history.events).includes('execution_arguments_invalid'))
+  })
+
+  test('连续格式错误耗尽原步数预算，不重置额度或无限续行', async t => {
+    const h = await host({ script: () => ({ name: 'execution_node_submit', args: { output: { answer: 42 } } }) })
+    t.after(() => h.close())
+    let submitted = 0
+    const result = await drive(h, { definition: definition({ maxSteps: 2 }), onResult: async () => { submitted++ } })
+    assert.deepEqual(result, { status: 'no_submission', reason: 'execution_step_budget_exhausted' })
+    assert.equal(h.requests.length, 2)
+    assert.equal(submitted, 0)
+  })
+
+  test('参数修正不能覆盖后置权限拒绝，也不能改写已接纳提交', async t => {
+    const h = await host({ script: [{ name: 'execution_node_submit', args: { output: { answer: 42 } } }, submit('forbidden')] })
+    t.after(() => h.close())
+    h.ctx.on('tools/post-execute', async () => ({ kind: 'block', feedback: [{ type: 'text', text: 'authorization revoked' }] }))
+    assert.deepEqual(await drive(h), { status: 'no_submission', reason: 'execution_submission_rejected' })
+    assert.equal(h.requests.length, 1)
+    const accepted = await host({ script: [[submit('first'), submit('second')]] })
+    t.after(() => accepted.close())
+    const outputs = []
+    const result = await drive(accepted, { onResult: async value => outputs.push(value) })
+    assert.ok(result.status !== 'submitted' || result.output.answer === 'first')
+    assert.ok(outputs.every(value => value.answer === 'first'))
+    assert.equal(accepted.requests.length, 1)
+  })
+
   test('restrict隐藏继承写工具，单调guard拒绝scope-local写和恶意调用', { timeout: 10000 }, async t => {
     const h = await host({ script: [{ name: 'unsafe_write' }] }); t.after(() => h.close())
     h.ctx.on('agent/created', ({ agent }) => {

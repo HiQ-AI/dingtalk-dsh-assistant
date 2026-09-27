@@ -7,7 +7,8 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createEngineeringRegistry, readEngineeringDeliveryProof, readEngineeringRemoteRefs, uatBranchFor, isUatBranch } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
+import { createEngineeringRegistry, readEngineeringDeliveryProof, readEngineeringRemoteRefs, uatBranchFor, isUatBranch, engineeringWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
+import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
@@ -149,15 +150,18 @@ test('工程交付证明复用同一 Run 工件并要求显式业务 E2E 检查'
   const localProof=await readEngineeringDeliveryProof({state,artifacts,store,taskId:'t'})
   assert.deepEqual(localProof.localEvidence.scenarioIds,['business'])
   assert.equal(localProof.localEvidence.commitSha,commitId)
-  const stage = {stageId:'engineering',status:'succeeded',runId:'r',workflowId:state.run.workflowId,outputRef:'artifact:finalize',evidenceRefs:[]}
-  const ownerArgs = {taskId:'t',stages:[stage],controller:{state:async()=>state},artifacts,store}
+  state.nodes = [...state.nodes.filter(node=>node.nodeId!=='finalize'),state.nodes.find(node=>node.nodeId==='finalize')]
+  const stage = {stageId:'engineering',status:'succeeded',runId:'r',workflowId:state.run.workflowId,workflowDigest:state.run.workflowDigest,outputRef:'artifact:finalize',evidenceRefs:[]}
+  const controller = {state:async()=>state,workflowDefinition:()=>({ownerContract:engineeringWorkflowOwnerContract})}
+  const ownerArgs = {taskId:'t',stages:[stage],controller,readStageArtifacts:createTaskWorkflowContracts({controller,artifacts,store}).readStageArtifacts}
   const ownerArtifacts = await readTaskOwnerStageArtifacts(ownerArgs)
+  assert.equal(await engineeringWorkflowOwnerContract.validateCompletion({taskId:'t',state,artifacts,store}),true)
   assert.deepEqual(ownerArtifacts[0].nodeArtifacts.map(item=>item.nodeId).sort(),['define-local-acceptance','finalize-local-acceptance','verify-candidate'])
   assert.ok(ownerArtifacts[0].nodeArtifacts.every(item=>item.description && ownerArtifacts[0].evidenceRefs.includes(item.artifactRef)))
   assert.ok(!ownerArtifacts[0].evidenceRefs.includes('artifact:prepare-push'))
   assert.deepEqual(ownerArtifacts[0].completionEvidenceRefs,['artifact:finalize'])
-  await assert.rejects(readTaskOwnerStageArtifacts({...ownerArgs,taskId:'other'}),/ENGINEERING_DELIVERY_PROOF_UNAVAILABLE/)
-  await assert.rejects(readTaskOwnerStageArtifacts({...ownerArgs,stages:[{...stage,outputRef:'artifact:other'}]}),/TASK_OWNER_ENGINEERING_STAGE_MISMATCH/)
+  await assert.rejects(readTaskOwnerStageArtifacts({...ownerArgs,taskId:'other'}),/TASK_OWNER_STAGE_RUN_MISMATCH/)
+  await assert.rejects(readTaskOwnerStageArtifacts({...ownerArgs,stages:[{...stage,outputRef:'artifact:other'}]}),/WORKFLOW_OWNER_STAGE_MISMATCH/)
 
   for(const mutate of [
     ()=>{localPrepared.taskId='other'},
@@ -169,6 +173,7 @@ test('工程交付证明复用同一 Run 工件并要求显式业务 E2E 检查'
     mutate()
     await assert.rejects(readEngineeringDeliveryProof({state,artifacts,store,taskId:'t'}),{code:'ENGINEERING_ACCEPTANCE_PROOF_REQUIRED'})
     await assert.rejects(readTaskOwnerStageArtifacts(ownerArgs),{code:'ENGINEERING_ACCEPTANCE_PROOF_REQUIRED'})
+    await assert.rejects(engineeringWorkflowOwnerContract.validateCompletion({taskId:'t',state,artifacts,store}),{code:'ENGINEERING_ACCEPTANCE_PROOF_REQUIRED'})
     Object.assign(localPrepared,savedLocal.localPrepared)
     output['finalize-local-acceptance']={...savedLocal,localPrepared};output['define-local-acceptance']=savedDefine
   }

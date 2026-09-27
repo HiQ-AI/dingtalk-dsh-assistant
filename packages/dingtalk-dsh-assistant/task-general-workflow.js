@@ -185,7 +185,7 @@ export function createGeneralTaskWorkflow({ provider, model, reasoningEffort, ca
 }
 
 /** Task Owner 选定一步后使用的受信执行载体；本流程不做全局规划或最终报告。 */
-export function createGeneralCapabilityStepWorkflow({ capabilities }) {
+export function createLegacyGeneralCapabilityStepWorkflow({ capabilities }) {
   if (!Array.isArray(capabilities) || !capabilities.length) throw executionError('GENERAL_CONFIG_INVALID')
   const byId = new Map()
   for (const capability of capabilities) {
@@ -234,7 +234,29 @@ export function createGeneralCapabilityStepWorkflow({ capabilities }) {
   }] }
 }
 
-/** 只供 v3 中已建立的只读 Run 恢复；新 Run 使用 version 2。 */
+export function createGeneralCapabilityStepWorkflow({ capabilities, completionCheck, completionIdentity = 'completion-unconfigured' }) {
+  const workflow = createLegacyGeneralCapabilityStepWorkflow({ capabilities })
+  return { ...workflow, version: '3', ownerContract: {
+    id: 'general-capability-result', version: '1', rulesDigest: executionDigest({ completionIdentity }),
+    async validateCompletion({ output, requirement, decision, stages, stage }) {
+      if (output?.verification?.passed !== true || output.verification.outputDigest !== executionDigest(output.output)) return false
+      if (stages.some(item => item.contractId !== 'general-capability-result')) return true
+      if (stage.stageId !== stages[0].stage.stageId) return true
+      if (typeof completionCheck !== 'function') return false
+      const evidence = stages.map(item => ({ evidenceId: item.stage.outputRef, ...item.output }))
+      const assessment = await completionCheck({ request: requirement.request, acceptanceCriteria: requirement.acceptanceCriteria,
+        constraints: requirement.constraints, scope: requirement.scope, evidence,
+        report: { summary: decision.summary, evidenceIds: decision.evidenceRefs, limitations: [] } })
+      return assessment?.status === 'satisfied' && assessment.resultVerified === true
+        && Array.isArray(assessment.criteria) && assessment.criteria.length === requirement.acceptanceCriteria.length
+        && assessment.criteria.every((item, index) => item.criterion === requirement.acceptanceCriteria[index]
+          && item.passed === true && item.evidenceIds?.length
+          && item.evidenceIds.every(ref => decision.evidenceRefs.includes(ref)))
+    },
+  } }
+}
+
+/** 只供已建立的只读 Run 恢复；新 Owner 单步 Run 使用 version 3。 */
 export function createHistoricalGeneralCapabilityStepWorkflow({ capabilities }) {
   if (!Array.isArray(capabilities) || !capabilities.length) throw executionError('GENERAL_CONFIG_INVALID')
   const byId = new Map()

@@ -11,7 +11,7 @@ import { installMessageSchema, validateMessageSchema, reduceMessageCommand, reco
 import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, queryTaskPlan, bindRunToTaskStage } from './execution-task-plan.js'
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
-import { engineeringPatchRepairReasons, transientRecoveryReasons, recoveryRetryLimit, recoveryRetryDelayMs } from './execution-recovery-policy.js'
+import { transientRecoveryReasons, recoveryRetryLimit, recoveryRetryDelayMs } from './execution-recovery-policy.js'
 
 const SCHEMA_VERSION = 5
 const APPLICATION_ID = 0x44534845
@@ -258,20 +258,18 @@ function coreCommand(command, now) {
     if (a.expectedRevision !== undefined && r.revision !== integer(a.expectedRevision, 'expectedRevision')) fail('REVISION_CONFLICT')
     if (a.expectedRevision !== undefined && pendingInputs(a.runId).length) fail('INPUT_PENDING')
     if (a.repair) {
-      object(a.repair, ['taskId', 'stageId', 'runId', 'generation', 'runRevision', 'requirementRevision', 'contextRef'])
+      object(a.repair, ['taskId', 'stageId', 'runId', 'generation', 'runRevision', 'requirementRevision', 'contextRef', 'workflowDigest'])
       ref(a.repair.contextRef, 'contextRef')
+      digest(a.repair.workflowDigest, 'workflowDigest')
       const task = db.prepare('SELECT t.requirement_revision,t.plan_revision,c.state FROM business_tasks t JOIN task_controls c USING(task_id) WHERE t.task_id=?').get(a.repair.taskId)
       const stage = task && db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND stage_id=?').get(a.repair.taskId, task.plan_revision, a.repair.stageId)
-      const waiting = nodes(r.run_id).filter(node => node.status === 'waiting')
       if (a.expectedRevision !== a.repair.runRevision || pendingInputs(r.run_id).length || !task || task.state !== 'active' || task.requirement_revision !== a.repair.requirementRevision
         || r.task_id !== a.repair.taskId || r.run_id !== a.repair.runId || r.generation !== a.repair.generation || r.revision !== a.repair.runRevision
         || r.status !== 'waiting' || !stage || stage.status !== 'running' || stage.run_id !== r.run_id
-        || !stage.workflow_id.startsWith('task-engineering-') || waiting.length !== 1
-        || !(['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_ACCEPTANCE_FAILED', 'LOCAL_ACCEPTANCE_FAILED'].includes(JSON.parse(waiting[0].wait_reason ?? 'null')?.reference)
-          || (waiting[0].node_id === 'apply-changes' && engineeringPatchRepairReasons.includes(JSON.parse(waiting[0].wait_reason ?? 'null')?.reference)))
+        || stage.workflow_id !== r.workflow_id || stage.workflow_digest !== r.workflow_digest || a.repair.workflowDigest !== r.workflow_digest
         || nodes(r.run_id).some(node => !node.drained)
-        || db.prepare("SELECT effect_id FROM execution_effects WHERE run_id=? AND state NOT IN ('succeeded','failed') LIMIT 1").get(r.run_id)) fail('ENGINEERING_REPAIR_NOT_ADMITTED')
-      emitEvent(command.id, 'engineering.repair.accepted', { ...a.repair, runId: r.run_id, nextGeneration: r.generation + 1 }, now)
+        || db.prepare("SELECT effect_id FROM execution_effects WHERE run_id=? AND state NOT IN ('succeeded','failed') LIMIT 1").get(r.run_id)) fail('WORKFLOW_REPAIR_NOT_ADMITTED')
+      emitEvent(command.id, 'workflow.repair.accepted', { ...a.repair, runId: r.run_id, nextGeneration: r.generation + 1 }, now)
       db.prepare('UPDATE business_tasks SET plan_requirement_revision=requirement_revision WHERE task_id=?').run(a.repair.taskId)
     }
     if (db.prepare('SELECT input_id FROM execution_inputs WHERE run_id=? AND input_id=?').get(a.runId, a.inputId)) fail('INPUT_ID_CONFLICT')
@@ -535,7 +533,7 @@ function coreCommand(command, now) {
       || !apply || apply.status !== 'waiting' || !['ENGINEERING_EDIT_SCOPE_MISMATCH', 'ENGINEERING_NO_CHANGES_PROPOSED'].includes(JSON.parse(apply.wait_reason ?? 'null')?.reference)
       || current.some(n => !n.drained) || pendingInputs(r.run_id).length
       || db.prepare("SELECT effect_id FROM execution_effects WHERE run_id=? AND node_id<>'prepare-workspace' LIMIT 1").get(r.run_id)) fail('WORKFLOW_REISSUE_UNSAFE')
-    const reissuePrefix = ['11', '12', '13', '14', '15'].includes(JSON.parse(nextRecord.body).definitionVersion)
+    const reissuePrefix = ['11', '12', '13', '14', '15', '16'].includes(JSON.parse(nextRecord.body).definitionVersion)
       ? ['prepare-generation', 'define-local-acceptance', 'plan-local-acceptance', 'prepare-workspace', 'inspect-and-propose']
       : ['prepare-generation', 'prepare-workspace', 'inspect-and-propose']
     if (!Array.isArray(a.nodes) || a.nodes.length <= reissuePrefix.length || a.nodes.length > 32
@@ -804,8 +802,8 @@ function webTaskEvent(eventId) {
 function query(value) {
   if (value?.kind === 'runtime.maintenance') return maintenanceStatus(db, workerData.processIncarnation)
   if (value?.kind === 'run.budget-continuation') return budgetContinuation(value.runId)
-  if (value?.kind === 'engineering.repair.context') {
-    const row = db.prepare("SELECT payload FROM execution_events WHERE kind='engineering.repair.accepted' AND json_extract(payload,'$.runId')=? AND json_extract(payload,'$.nextGeneration')=? ORDER BY seq DESC LIMIT 1").get(value.runId, value.generation)
+  if (['workflow.repair.context', 'engineering.repair.context'].includes(value?.kind)) {
+    const row = db.prepare("SELECT payload FROM execution_events WHERE kind IN ('workflow.repair.accepted','engineering.repair.accepted') AND json_extract(payload,'$.runId')=? AND json_extract(payload,'$.nextGeneration')=? ORDER BY seq DESC LIMIT 1").get(value.runId, value.generation)
     return row ? JSON.parse(row.payload) : null
   }
   if (value?.kind === 'task.web-input') return webTaskEvent(value.eventId)

@@ -75,6 +75,12 @@ export function apply(ctx) {
 
 工作流 digest 覆盖固定定义、mapper/实现、schema、模型、提示和工具清单。修改规则或实现时更新定义版本，并保留在途任务需要的原版本；恢复找不到相同 workflow digest 时会报错，不可把同名新定义冒充旧定义。不要在不改版本的情况下改变函数依赖的外部可变配置。
 
+业务 Owner 合同接入后，`ownerContract` 的身份、规则摘要与回调也进入 Workflow digest。新只读/analysis 为 v2、工程为 v16、能力阶段为 v3；外部流程持久配置新增 `ownerContractVersion: '1'`。此升级不修改 schema，也不替旧定义补合同。待启动的冻结 Stage 和已有 Run 都按原 digest 执行；无合同旧任务的历史产物仍可读，但 Owner 完成/修复写入口报告 `WORKFLOW_OWNER_CONTRACT_UNAVAILABLE`。
+
+正式升级前，使用旧实例的任务列表及执行记录核对未完成任务的冻结定义。先让这些任务在旧版本完成；不能完成的，通过已有取消/重执行入口明确结束旧执行、保留审计后再安排新版本。未知 Effect 仍先对账并排空，不因重执行而清除。完成这项核对后才进入第 9 节维护、备份和切换；禁止手工修改 digest、状态或工件来补合同。若升级后遇到上述阻塞，应按维护流程回退匹配旧定义的包，或正式结束并重执行，不能靠反复恢复改变定义。
+
+结果接纳异常会在当前节点登记 `execution-failure` 工件，包含阶段、目标节点、执行身份和可保存的产物引用。存储 I/O/提交回执未知仍需回读原记录；磁盘不可写导致状态无法更新时，先恢复存储条件，再按原 Run 核对，不批量重跑。Owner 的 `diagnostics` 为失败材料，`completionEvidenceRefs` 为正式完成依据，二者不能互换。
+
 ### 在隔离 Host 中显式装配
 
 Host 必须已经提供 `agents`、`agentLoop`、`sessions`、`sessionPersistence`、`sessionProjections`、`llm`、`tools` 和 `systemPrompt`。定义插件先提供 `executionWorkflows`，再注册包的 `./execution` 入口。下面展示对应的受信装配调用；它不是群命令或 Web API：

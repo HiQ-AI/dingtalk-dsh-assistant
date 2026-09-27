@@ -1,5 +1,14 @@
 import { executionDigest, executionError } from './execution-artifacts.js'
 
+/** 平台流程已在最终节点核验平台事实；冻结此前 Host 的结果拒绝条件。 */
+export const externalWorkflowOwnerContract = Object.freeze({
+  id: 'external-result', version: '1',
+  validateCompletion({ output }) {
+    return !!output && !(Array.isArray(output.limitations) && output.limitations.length)
+      && output.outcome !== 'blocked' && output.status !== 'unverified'
+  },
+})
+
 const text = { type: 'string' }
 const sha = { type: 'string' }
 const nonempty = value => typeof value === 'string' && value.trim() === value && value.length > 0

@@ -12,7 +12,9 @@ import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
-import { createEngineeringRegistry } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
+import { createEngineeringRegistry, engineeringWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
+import { readOnlyWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/task-readonly-workflows.js'
+import { externalWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createSourceDossierCapability, createTaskMessageResourceCapability, isDirectedTaskRequest, openWorkflowService,
@@ -297,7 +299,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
   const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'test', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
   const delivery = options.deliveryOptions ? createExecutionDelivery({ store, artifacts, ...options.deliveryOptions }) : undefined
-  const controller = createExecutionController({ store, artifacts, ...(delivery ? { delivery } : options.external ? { delivery: { execute: async () => { throw new Error('EXTERNAL_EFFECT_NOT_EXPECTED') } } } : {}), workflows: [{ id: 'task-analysis', version: 'test', nodes: [
+  const controller = createExecutionController({ store, artifacts, ...(delivery ? { delivery } : options.external ? { delivery: { execute: async () => { throw new Error('EXTERNAL_EFFECT_NOT_EXPECTED') } } } : {}), workflows: [{ id: 'task-analysis', version: 'test', ownerContract: readOnlyWorkflowOwnerContract, nodes: [
     { id: options.nodeId ?? 'analyze', version: '1', executor: 'code', allowedEffects: options.allowedEffects ?? ['pure'], inputSchema: schema, outputSchema: schema,
       mapInput: ({ requirement }) => requirement, execute: options.execute ?? (async ({ input }) => ({ summary: `已分析：${input.request}`, evidenceIds: input.materials.map(item => item.id), limitations: [] })) },
     ...(options.extraNodes ?? []),
@@ -2566,9 +2568,9 @@ test('任务投影只在真实等待时显示原因，完成后隐藏遗留原�
     const value = await query(request)
     return staleReadback && request.kind === 'run.list' ? value.map(run => ({ ...run,
       recoveryReason: 'DELIVERY_RECONCILIATION_REQUIRED' })) : value
-  }, execute: async () => {
+  }, execute: async ({ input }) => {
     if (!succeed) throw Object.assign(new Error('DELIVERY_RECONCILIATION_REQUIRED'), { code: 'DELIVERY_RECONCILIATION_REQUIRED' })
-    return { summary: '已核对完成', evidenceIds: ['verified'], limitations: [] }
+    return { summary: '已核对完成', evidenceIds: input.materials.map(item=>item.id), limitations: [] }
   } })
   const accepted = await service.ingest(message); await service.messages.process(accepted.runId)
   const task = (await service.state(accepted.runId)).commands[0].result
@@ -2635,12 +2637,12 @@ test('真实Owner路径保留工程本地验收与合并前缀，失败第三阶
     'create-pr':{prepared:{commitId:commitSha},receipt:{status:'succeeded',number:368,url:'https://github.com/HiQ-AI/dataset-web/pull/368'}},
     finalize:{deliveryStatus:'pr_verified',commitId:commitSha,number:368,url:'https://github.com/HiQ-AI/dataset-web/pull/368',repo:target.repository,head:'codex/existing',base:'feature/uat2-base',state:'OPEN'},
   }
-  const engineeringWorkflow={id:workflowId,version:'12',nodes:Object.entries(outputs).map(([id,value])=>({id,version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,
+  const engineeringWorkflow={id:workflowId,version:'12',ownerContract:engineeringWorkflowOwnerContract,nodes:Object.entries(outputs).map(([id,value])=>({id,version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,
     mapInput:({requirement})=>requirement,execute:async()=>value}))}
   execution.controller.registerWorkflow(engineeringWorkflow)
   await execution.store.command({id:'owner-proof-record',kind:'workflow.register',args:{workflowId,definitionVersion:'12',digest:defineExecutionWorkflow(engineeringWorkflow).digest,
     config:{kind:'engineering',taskId,runId:engineeringRun,sourceCommandId}}})
-  execution.controller.registerWorkflow({id:'task-uat-pr-merge',version:'fixture',nodes:[{id:'verify-source',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,
+  execution.controller.registerWorkflow({id:'task-uat-pr-merge',version:'fixture',ownerContract:externalWorkflowOwnerContract,nodes:[{id:'verify-source',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,
     mapInput:({requirement})=>requirement,execute:async()=>({status:'confirmed',mergeCommitSha:commitSha,baseBranch:'feature/uat2-base',evidenceRefs:['merge-proof']})}]})
   const goal=await execution.artifacts.put({request:'开发并提测',constraints:[],explicitStages:[],authorization:{channel:'web'},reportChannel:'web',externalMessaging:false})
   await execution.store.command({id:'owner-rebuild-origin',kind:'task.web-rerun.accept',args:{taskId,rerunOfTaskId:original.taskId,actorId:'owner',

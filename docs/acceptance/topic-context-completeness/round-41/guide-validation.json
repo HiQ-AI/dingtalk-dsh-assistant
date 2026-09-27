@@ -1,0 +1,32 @@
+{
+  "testedAt": "2026-09-27T13:13:24.769Z",
+  "sourceDigest": "1fb3f147b9f3e3117d32d5aa3a092c16fdd1004bee6e136f1903fb2b79d4220a",
+  "source": "从当前工作区手册原文提取示例，不维护第二份示例源码",
+  "results": [
+    {
+      "case": "valid",
+      "status": "PASS",
+      "observation": "3 节点成功、工件独立读回、相同接纳请求重放不重复创建节点",
+      "output": {
+        "evidenceIds": [
+          "source-1"
+        ],
+        "summary": "合成材料"
+      }
+    },
+    {
+      "case": "invalid-schema",
+      "status": "PASS",
+      "observation": "非法输入拒绝且未创建 Run"
+    },
+    {
+      "case": "foreign-evidence",
+      "status": "PASS",
+      "observation": "结构合法但引用错误的产物被业务校验阻断"
+    }
+  ],
+  "localLinks": {
+    "checked": 43,
+    "status": "PASS"
+  }
+}
