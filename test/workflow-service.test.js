@@ -1244,6 +1244,44 @@ test('恢复扫描先重试一次无回执只读查询，再完成原命令',asy
   assert.equal(state.commands[0].readonlyRetryCount,1)
 })
 
+test('回声先启动模型而通知随后读回时，隔离取消原调用且迟到结果不影响 drained', { timeout: 10000 }, async t => {
+  let releaseSend, sendStarted, releaseEcho, echoStarted, echoSignal, modelCalls = 0
+  const sendGate = new Promise(resolve => { releaseSend = resolve }), sending = new Promise(resolve => { sendStarted = resolve })
+  const echoGate = new Promise(resolve => { releaseEcho = resolve }), judgingEcho = new Promise(resolve => { echoStarted = resolve })
+  t.after(() => { releaseSend(); releaseEcho() })
+  const notifications = { canDisclose: async () => true,
+    send: async () => { sendStarted(); await sendGate; return { messageId: 'racing-outbound' } },
+    readback: async () => ({ messageId: 'racing-outbound', conversationId: 'g' }) }
+  const { service, execution, message } = await fixture(t, 'owner', notifications, { judge: async ({ stage, input, signal }) => {
+    modelCalls++
+    if (stage === 'S' && input.source.text === '已收到测试消息') {
+      echoSignal = signal; echoStarted(); await echoGate
+      return splitOne(input.source.text)
+    }
+    if (stage === 'S') return splitOne(input.source.text)
+    if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
+    return { kind: 'intent', actions: [{ intent: 'answer', arguments: { text: '已收到测试消息' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
+  } })
+  const original = await service.ingest(message); await service.messages.process(original.runId)
+  const notifying = service.flushNotifications(); await sending
+  const echo = await service.ingest({ ...message, messageId: 'racing-outbound', text: '已收到测试消息', quotedMessage: { messageId: message.messageId, content: message.text } })
+  const processing = service.messages.process(echo.runId); await judgingEcho
+  const before = await service.state(echo.runId)
+  assert.equal(before.nodes[0].status, 'running')
+  releaseSend(); await notifying
+  await service.messages.recover()
+  assert.equal(echoSignal.aborted, true)
+  releaseEcho(); await processing
+  const after = await service.state(echo.runId)
+  assert.equal(after.run.status, 'superseded'); assert.equal(after.run.reason, 'outbound_echo')
+  assert.equal(after.nodes[0].status, 'superseded'); assert.equal(after.commands.length, 0)
+  assert.equal(after.barriers.length, 1); assert.equal(after.barriers[0].status, 'resolved')
+  assert.equal(after.budget.claims, before.budget.claims)
+  assert.equal((await execution.store.query({ kind: 'runtime.maintenance' })).busy.messages, 0)
+  assert.deepEqual((await service.recover()).failures, [])
+  assert.equal(modelCalls, 4)
+})
+
 test('已回读的自身澄清通知不再作为新消息入站，收发信箱分别投影', async t => {
   const sent = []
   const notifications = { canDisclose: async () => true, send: async notice => { const item = { messageId: 'out-1', text: notice.payload.text }; sent.push(item); return { messageId: item.messageId } }, readback: async () => ({ messageId: 'out-1', conversationId: 'g' }) }
@@ -2269,19 +2307,130 @@ test('局部撤销范围及模型误报整话题均保留其他任务限制且�
  }
 })
 
-test('answer 创建的任务可回读来源及历史执行', async t => {
-  const {service,message,execution}=await fixture(t,'owner',undefined,{judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'
-    ?{kind:'binding',disposition:'new',candidateId:null,evidence:['新消息']}
-    :{kind:'intent',actions:[{intent:'answer',arguments:{objective:'回答当前材料'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}})
-  const received=await service.ingest(message)
-  const state=await service.messages.process(received.runId)
-  const command=state.commands.find(item=>item.kind==='answer')
-  assert.equal(command.status,'applied')
-  const origin=await execution.store.query({kind:'message.task',taskId:command.result.taskId})
-  assert.equal(origin.run.conversationId,message.groupId)
-  assert.equal((await execution.store.query({kind:'message.task.latest',taskId:command.result.taskId})).command.kind,'answer')
-  assert.ok((await execution.store.query({kind:'message.task-candidates',conversationId:message.groupId})).some(item=>item.command.args.taskId===command.result.taskId))
-  assert.equal((await service.taskRuns(command.result.taskId)).taskId,command.result.taskId)
+const ordinaryAnswerJudge = (text = '已收到', replyPolicy = 'result') => async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
+  : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新消息'] }
+    : { kind: 'intent', actions: [{ intent: 'answer', arguments: { text }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy }
+
+test('普通 answer 的 Host 门禁拒绝已排队的旧参数与任务参数，且不豁免创建权限', async t => {
+  const { service, execution } = await fixture(t, 'participant', undefined, { judge: async () => { throw new Error('QUEUED_COMMAND_MUST_NOT_REJUDGE') } })
+  const cases = [
+    { intent: 'answer', arguments: { answer: '已收到' } },
+    { intent: 'answer', arguments: { objective: '旧材料任务' } },
+    { intent: 'answer', arguments: { text: '已收到', workflowId: 'task-engineering', repositoryId: 'repo' } },
+    { intent: 'create', arguments: { objective: '创建任务', workflowId: 'task-analysis' } },
+  ]
+  for (const [index, action] of cases.entries()) {
+    const runId = `queued-answer-${index}`, commandId = `${runId}-command`, unitId = `${runId}-unit`
+    const command = (kind, args) => execution.store.command({ id: `${runId}:${kind}`, kind: `message.${kind}`, args })
+    await command('receive', { runId, sourceKey: runId, sourceVersion: 1, actorId: 'participant', conversationId: 'g', body: '请回复这条消息', policy: { initialWindowMs: 45000 } })
+    await command('split', { runId, units: [{ unitId }] })
+    await command('accept', { runId, unitId, commands: [{ commandId, kind: action.intent,
+      args: { arguments: action.arguments, binding: { disposition: 'new' }, taskId: null, replyPolicy: 'none' }, dependsOn: [] }] })
+    const state = await service.messages.process(runId)
+    assert.equal(state.commands[0].status, 'rejected', JSON.stringify({ run: state.run, command: state.commands[0] }))
+    assert.match(state.commands[0].result.reply, action.intent === 'answer' ? /普通回复仅接受非空 text/u : /没有创建业务任务的权限/u)
+  }
+  assert.deepEqual(await service.tasks(), [])
+  assert.deepEqual(await execution.store.query({ kind: 'run.list' }), [])
+})
+
+test('普通 answer 回复原任务消息的编辑，不被误当新增事项也不修改原任务', async t => {
+  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text) : stage === 'R'
+    ? { kind: 'binding', disposition: input.sourceEdit ? 'existing' : 'new', candidateId: input.sourceEdit ? input.candidates.find(item => item.taskId)?.candidateId : null, evidence: ['source'] }
+    : { kind: 'intent', actions: [input.sourceEdit ? { intent: 'answer', arguments: { text: '已收到补充说明' }, dependsOn: [] }
+      : { intent: 'create', arguments: { objective: '整理材料', workflowId: 'task-analysis' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
+  const first = await service.ingest(message), initial = (await service.messages.process(first.runId)).commands[0]
+  await execution.controller.whenIdle(initial.result.runId)
+  const original = await execution.controller.taskPlan(initial.result.taskId)
+  const edited = await service.ingest({ ...message, text: '整理材料，附注只是说明；请回复收到', messageVersion: 2 })
+  const state = await service.messages.process(edited.runId)
+  assert.equal(state.commands[0]?.kind, 'answer', JSON.stringify(state))
+  assert.equal(state.commands[0].status, 'applied')
+  assert.equal(state.commands[0].args.taskId, null)
+  assert.equal(state.requests.filter(request => request.status === 'pending').length, 0)
+  assert.ok(state.barriers.every(barrier => barrier.status === 'resolved'))
+  const after = await execution.controller.taskPlan(initial.result.taskId)
+  assert.equal(after.task.requirementRef, original.task.requirementRef)
+  assert.equal(after.task.requirementRevision, original.task.requirementRevision)
+  assert.equal((await execution.store.query({ kind: 'run.list' })).length, 1)
+  assert.deepEqual((await execution.store.query({ kind: 'message.task-candidates', conversationId: 'g' })).map(item => item.command.args.taskId), [initial.result.taskId])
+})
+
+test('普通 answer 对旧任务仅允许本群只读答复，跨群仍拒绝', async t => {
+  const { service, execution } = await fixture(t, 'participant', undefined, { judge: async () => { throw new Error('QUEUED_COMMAND_MUST_NOT_REJUDGE') },
+    legacy: { getTask: taskId => ({ taskId, groupId: taskId === 'same-group' ? 'g' : 'foreign' }) } })
+  for (const taskId of ['same-group', 'other-group']) {
+    const runId = `legacy-answer-${taskId}`, unitId = `${runId}-unit`, commandId = `${runId}-command`
+    const command = (kind, args) => execution.store.command({ id: `${runId}:${kind}`, kind: `message.${kind}`, args })
+    await command('receive', { runId, sourceKey: runId, sourceVersion: 1, actorId: 'participant', conversationId: 'g', body: '回复原消息', policy: { initialWindowMs: 45000 } })
+    await command('split', { runId, units: [{ unitId }] })
+    await command('accept', { runId, unitId, commands: [{ commandId, kind: 'answer', args: { taskId: null, arguments: { text: '已收到' },
+      binding: { engine: 'legacy', taskId, disposition: 'existing' }, replyPolicy: 'none' }, dependsOn: [] }] })
+    const state = await service.messages.process(runId)
+    assert.equal(state.commands[0].status, taskId === 'same-group' ? 'applied' : 'rejected', JSON.stringify(state.run))
+    assert.equal(state.commands[0].result.reply, taskId === 'same-group' ? '已收到' : '请求未执行：无权读取该旧任务')
+  }
+  assert.deepEqual(await execution.store.query({ kind: 'run.list' }), [])
+})
+
+for (const actor of ['owner', 'participant']) test(`普通 answer 可向 ${actor} 引用回复，重复处理不重发且不创建任务`, async t => {
+  const sent = [], notifications = { canDisclose: async () => true,
+    send: notice => sendWorkflowNotification({ sendGroupReply: async request => { sent.push(request); return { messageId: 'reply' } }, sendGroup: async () => { throw new Error('MUST_REPLY_TO_SOURCE') } }, notice),
+    readback: async notice => ({ messageId: notice.ack.messageId, conversationId: 'g' }) }
+  const { service, message, execution } = await fixture(t, actor, notifications, { judge: ordinaryAnswerJudge('已收到 E2E-0927-2212'),
+    legacy: { getGroup: groupId => ({ groupId, responsibility: '引用回复；小小鹏代回；只处理本人交办事项', messages: [] }) } })
+  const received = await service.ingest(message), state = await service.messages.process(received.runId)
+  assert.equal(state.commands[0].status, 'applied')
+  assert.equal(state.commands[0].args.taskId, null)
+  assert.deepEqual(state.commands[0].result, { status: 'answered', reply: '已收到 E2E-0927-2212' })
+  await service.flushNotifications()
+  assert.equal((await service.ingest(message)).duplicate, true)
+  await service.messages.process(received.runId); await service.recover(); await service.flushNotifications()
+  assert.deepEqual(await service.tasks(), [])
+  assert.deepEqual(await execution.store.query({ kind: 'run.list' }), [])
+  assert.deepEqual(await execution.store.query({ kind: 'message.task-candidates', conversationId: 'g' }), [])
+  assert.equal(sent.length, 1)
+  assert.deepEqual({ ...sent[0], idempotencyKey: undefined }, { groupId: 'g', text: '已收到 E2E-0927-2212\n\n- 小小鹏代回', replyToMessageId: 'm', replyToSenderOpenDingTalkId: actor, idempotencyKey: undefined })
+  const notices = await execution.store.query({ kind: 'message.notifications', states: ['delivered'] })
+  assert.equal(notices.length, 1)
+  assert.equal(notices[0].id, sent[0].idempotencyKey)
+  assert.equal(notices[0].disclosure.authorizationRef, state.run.sourceKey)
+})
+
+for (const policy of ['none', 'denied']) test(`普通 answer 保留 ${policy} 通知门禁`, async t => {
+  let sends = 0, reads = 0
+  const notifications = { canDisclose: async () => false, send: async () => { sends++; return { messageId: 'forbidden' } }, readback: async () => { reads++; return null } }
+  const { service, execution, message } = await fixture(t, 'participant', notifications, { judge: ordinaryAnswerJudge('已收到', policy === 'none' ? 'none' : 'result') })
+  const received = await service.ingest(message); await service.messages.process(received.runId)
+  await service.flushNotifications(); await service.recover(); await service.flushNotifications()
+  assert.equal(sends, 0); assert.equal(reads, 0)
+  assert.equal((await execution.store.query({ kind: 'message.notifications' })).length, policy === 'none' ? 0 : 1)
+  assert.deepEqual(await service.tasks(), [])
+})
+
+test('普通 answer 发送结果未知后重启只补读原通知，不重复派发', async t => {
+  let sends = 0, reads = 0, delivered = false
+  const notifications = { canDisclose: async () => true, send: async () => { sends++; throw new Error('CONNECTION_LOST_AFTER_SEND') },
+    readback: async () => { reads++; return delivered ? { messageId: 'actual-reply', conversationId: 'g' } : null } }
+  const { service, execution, message } = await fixture(t, 'owner', notifications, { judge: ordinaryAnswerJudge() })
+  const received = await service.ingest(message); await service.messages.process(received.runId); await service.flushNotifications()
+  const unknown = await execution.store.query({ kind: 'message.notifications', states: ['unknown'] })
+  assert.equal(unknown.length, 1); assert.equal(sends, 1)
+  await service.close()
+  const restarted = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner' },
+    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test' }), getGroup: groupId => ({ groupId, responsibility: '', messages: [] }) },
+    execution, notifications, judge: async () => { throw new Error('SETTLED_ANSWER_MUST_NOT_REJUDGE') } })
+  t.after(() => restarted.close())
+  await restarted.recover(); await restarted.flushNotifications()
+  assert.equal(sends, 1); assert.ok(reads >= 2)
+  delivered = true
+  await restarted.flushNotifications(); await restarted.flushNotifications()
+  assert.equal(sends, 1)
+  const settled = await execution.store.query({ kind: 'message.notifications', states: ['delivered'] })
+  assert.equal(settled.length, 1); assert.equal(settled[0].id, unknown[0].id)
+  assert.equal(settled[0].evidence.messageId, 'actual-reply')
+  assert.deepEqual(await restarted.tasks(), [])
 })
 
 

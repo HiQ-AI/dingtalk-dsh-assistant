@@ -14,7 +14,7 @@ import { createTaskMarkdownFileAdapter } from './task-markdown-file.js'
 import { createMessageWorkflow } from './message-workflow.js'
 import { isPassiveTaskProgress } from './message-ledger.js'
 import { createMessageModel } from './message-model.js'
-import { taskWorkflowCatalog } from './message-context.js'
+import { taskWorkflowCatalog, messageAnswerArguments } from './message-context.js'
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText } from './workflow-notifications.js'
 import { createEngineeringRegistry, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
 import { createDataChangeTaskWorkflow } from './workflow-data-change.js'
@@ -1201,7 +1201,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   }
   async function createTask(action, info) {
     const ownerConfirmed = await ownerConfirmedPriorTask(action, info)
-    if (!await mayCreate(info.run, action.arguments.workflowId, info.binding) && !ownerConfirmed && action.intent !== 'answer') throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+    if (!await mayCreate(info.run, action.arguments.workflowId, info.binding) && !ownerConfirmed) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
     info = { ...info, ownerConfirmed }
     if (info.run.context.editOf) {
       const original = await messages.state(info.run.context.editOf.sourceRunId)
@@ -1371,7 +1371,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   }
   handlers.create = createTask
   handlers.research = createTask
-  handlers.answer = (action, info) => createTask({ ...action, arguments: { ...action.arguments, workflowId: 'task-analysis', objective: action.arguments.objective ?? info.unit.goalText } }, info)
+  handlers.answer = async action => ({ status: 'answered', reply: messageAnswerArguments.parse(action.arguments).text })
   handlers.fact = async (action, info) => {
     const topic = await store.query({ kind: 'message.topic', topicId: action.binding.topicId })
     const taskId = info.binding.taskId ?? action.taskId
@@ -1465,15 +1465,16 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       },
       async validateAction(action, info) {
         const reject = reason => ({ allowed: false, reason })
+        if (action.intent === 'answer' && !messageAnswerArguments.safeParse(action.arguments).success) return reject('普通回复仅接受非空 text 正文，不接受任务参数')
         if (info.binding.engine === 'legacy') {
           const task = legacy.getTask?.(info.binding.taskId)
           if (!task || task.groupId !== info.run.conversationId) return reject('无权读取该旧任务')
-          return ['status', 'result', 'no_action', 'fact'].includes(action.intent) ? { allowed: true } : reject('旧任务只读，请明确发起新工作流任务')
+          return ['status', 'result', 'no_action', 'fact', 'answer'].includes(action.intent) ? { allowed: true } : reject('旧任务只读，请明确发起新工作流任务')
         }
         if (!handlers[action.intent] && action.intent !== 'no_action') return reject(`尚未提供 ${action.intent} 处理流程`)
         if (['create', 'research', 'reopen'].includes(action.intent) && !await mayCreate(info.run, action.arguments.workflowId, info.binding)
           && !await ownerConfirmedPriorTask(action, info)) return reject('当前消息发送人没有创建业务任务的权限')
-        if (['create', 'research', 'answer', 'reopen'].includes(action.intent)
+        if (['create', 'research', 'reopen'].includes(action.intent)
           && !action.arguments.objective?.trim()) return reject('任务目标未明确')
         if (['pause', 'cancel', 'resume', 'revise', 'status', 'result'].includes(action.intent) && info.binding.disposition !== 'conversation') {
           const taskId = info.binding.taskId ?? action.taskId
@@ -1654,8 +1655,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         const previous = original.commands.filter(item => item.args?.taskId && ['create', 'research', 'answer', 'reopen'].includes(item.kind))
         if (!previous.length) return { kind: 'accepted' }
         const confirmedNew = requests.some(request => request.unitId === unit.unitId && request.reason === 'SOURCE_EDIT_NEW_MATTER' && request.status === 'resolved' && request.answer === '新增独立任务')
-        if (intent.actions.some(action => ['create', 'research', 'answer', 'reopen'].includes(action.intent)) && !confirmedNew) return { kind: 'needs_clarification', reason: 'SOURCE_EDIT_NEW_MATTER', question: '原消息已有任务。本次是修改原任务，还是新增独立事项？若确需新增，请回复“新增独立任务”；否则说明要修改或取消哪个原任务。', needs: [] }
-        if (confirmedNew && intent.actions.some(action => ['create', 'research', 'answer', 'reopen'].includes(action.intent)) && binding.taskId) return { kind: 'needs_clarification', reason: 'SOURCE_EDIT_NEW_MATTER_BINDING', question: '新增事项仍关联原任务，请明确新事项的独立目标。', needs: [] }
+        if (intent.actions.some(action => ['create', 'research', 'reopen'].includes(action.intent)) && !confirmedNew) return { kind: 'needs_clarification', reason: 'SOURCE_EDIT_NEW_MATTER', question: '原消息已有任务。本次是修改原任务，还是新增独立事项？若确需新增，请回复“新增独立任务”；否则说明要修改或取消哪个原任务。', needs: [] }
+        if (confirmedNew && intent.actions.some(action => ['create', 'research', 'reopen'].includes(action.intent)) && binding.taskId) return { kind: 'needs_clarification', reason: 'SOURCE_EDIT_NEW_MATTER_BINDING', question: '新增事项仍关联原任务，请明确新事项的独立目标。', needs: [] }
         if (intent.actions.some(action => ['revise', 'cancel', 'pause', 'resume'].includes(action.intent)) && !previous.some(item => item.args.taskId === binding.taskId)) return { kind: 'needs_clarification', reason: 'SOURCE_EDIT_TARGET_UNRESOLVED', question: '请指定本次编辑要修订、暂停或取消的原任务。', needs: [] }
         if (intent.actions.every(action => action.intent === 'no_action')) return { kind: 'needs_clarification', reason: 'SOURCE_EDIT_CONTROL_UNRESOLVED', question: '原消息已有任务。此次编辑是取消原任务，还是仅修改说明并继续原任务？', needs: [] }
         return { kind: 'accepted' }

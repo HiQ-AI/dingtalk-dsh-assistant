@@ -527,3 +527,5 @@ Web 明确指定的“开发 → UAT 合并 → UAT 部署”任务，若第三�
 任务列表与详情的顶层等待原因、阶段确认和预算续行入口只在当前任务确实等待时展示。已完成、执行中或排队任务不显示历史恢复原因；原始运行与节点记录仍保留，可在执行历史中查阅。
 
 工程远端引用读取（仅 `git ls-remote`）对明确网络暂态最多尝试三次，每次 15 秒、间隔 250/500 毫秒。耗尽后显示 `ENGINEERING_REMOTE_READ_TRANSIENT`，受原有三次持久化退避限制；认证、权限、证书及不存在的分支不自动重试。其它 Git 命令没有新增重试。历史通用 `NODE_EXECUTION_FAILED` 不自动归类为网络错误，须按具体证据恢复。
+
+已封存工作流接入全新空群使用 `scripts/cutover-message-workflow.mjs --enroll-empty-group`；它保留旧群封存记录，独立保存新群快照并 CAS 更新 profile 的工作流群列表。维护、停机、checkpoint 与中断恢复要求见 [本地执行基础运维](docs/ops/execution-foundation-local.md#已封存实例接入全新空群)。

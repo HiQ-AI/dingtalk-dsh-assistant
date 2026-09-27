@@ -80,7 +80,7 @@ try {Assert-InputHashes}catch{$failed=$_.Exception.Message-eq 'profile CAS不匹
 if(-not $failed){throw '配置摘要错误必须在零写阶段拒绝'}
 Write-Output 'PASS 3/3: 双摘要正确通过；包摘要错误拒绝；配置摘要错误拒绝'
 
-foreach($name in @('Change-MaintenancePhase','Resume-Deployment','Assert-LaunchInputs')){
+foreach($name in @('Change-MaintenancePhase','Resume-Deployment','Assert-LaunchInputs','Restore-EnrollmentAutostart','Read-EnrollmentProposal','Ensure-EnrollmentSubscription')){
  $fn=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq $name},$true)
  Invoke-Expression $fn.Extent.Text
 }
@@ -124,3 +124,32 @@ $failed=$false
 try {Wait-BootstrapResidentClosed $old}catch{$failed=$_.Exception.Message-eq '首次切换旧进程身份漂移'}
 if(-not $failed){throw 'bootstrap不能接受复用PID'}
 Write-Output 'PASS 3/3: bootstrap Resident退出；3080归属漂移拒绝；PID复用拒绝'
+
+$EnrollmentProposal='proposal.json'
+function Get-Content {param($LiteralPath,[switch]$Raw) '{"groupId":"test-group","name":"测试群","responsibility":"仅测试"}'}
+$proposal=Read-EnrollmentProposal
+if($proposal.groupId-ne 'test-group'){throw '新群提案解析错误'}
+function Get-Content {param($LiteralPath,[switch]$Raw) '{"groupId":"test-group","name":"测试群","responsibility":"仅测试","command":"unexpected"}'}
+$failed=$false;try{Read-EnrollmentProposal}catch{$failed=$true}
+if(-not $failed){throw '新群提案不得接受额外执行参数'}
+$script:groupRead=@();$script:subscriptions=0
+function Invoke-RestMethod {
+ param($Uri,$Method,$ContentType,$Headers,$Body,$TimeoutSec,[switch]$NoProxy)
+ if($Method-eq 'Post'){$script:subscriptions++;$script:groupRead=@(($Body|ConvertFrom-Json));return}
+ Write-Output -NoEnumerate $script:groupRead
+}
+Ensure-EnrollmentSubscription $proposal
+Ensure-EnrollmentSubscription $proposal
+if($script:subscriptions-ne 1){throw '重复检查不得重新订阅'}
+$script:groupRead[0].name='changed'
+$failed=$false;try{Ensure-EnrollmentSubscription $proposal}catch{$failed=$true}
+if(-not $failed -or $script:subscriptions-ne 1){throw '已有群配置漂移必须拒绝'}
+$enrollmentTaskName='test-task';$script:taskState='Disabled';$script:enabled=0
+function Get-ScheduledTask {param($TaskName) @{State=$script:taskState}}
+function Enable-ScheduledTask {param($TaskName) $script:enabled++;$script:taskState='Ready'}
+Restore-EnrollmentAutostart @{enrollmentAutostartRestore=$false}
+if($script:enabled){throw '原先禁用的任务不得启用'}
+Restore-EnrollmentAutostart @{enrollmentAutostartRestore=$true}
+Restore-EnrollmentAutostart @{enrollmentAutostartRestore=$true}
+if($script:enabled-ne 1){throw '只恢复一次原有自启'}
+Write-Output 'PASS 6/6: 新群提案精确字段、订阅幂等/漂移拒绝、原自启状态保留与幂等恢复'

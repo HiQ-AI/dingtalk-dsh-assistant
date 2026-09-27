@@ -3,13 +3,21 @@ import { readFileSync,readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { maintenanceStatus } from '../../../../packages/dingtalk-dsh-assistant/execution-maintenance.js'
-import { verifyDeploymentBackup, verifyDeploymentWeb } from '../../../../scripts/deployment-integrity.mjs'
+import { verifyDeploymentBackup, verifyDeploymentWeb, checkpointDeploymentDatabase } from '../../../../scripts/deployment-integrity.mjs'
 const root='D:/dsh_home/workflows/runtime-v2',db=new DatabaseSync(root+'/control.sqlite',{readOnly:true})
 const hash=b=>createHash('sha256').update(b).digest('hex'),digest=v=>hash(JSON.stringify(v))
 const [mode,arg,source,installed]=process.argv.slice(2)
 try {
- if(mode==='backup-verify'){
+ if(mode==='checkpoint'){
+  const probe = () => {
+   const result=spawnSync('pwsh',['-NoProfile','-File',fileURLToPath(new URL('../../../../scripts/check-workflow-quiescence.ps1',import.meta.url)),'-RuntimePid',arg,'-RuntimePort','18998','-ScheduledTaskName','DSH Web Local'],{encoding:'utf8',windowsHide:true})
+   if(result.status!==0)throw Error('CHECKPOINT_STOP_PROBE_FAILED')
+   return JSON.parse(result.stdout)
+  }
+  console.log(JSON.stringify(await checkpointDeploymentDatabase({dbPath:root+'/control.sqlite',instanceId:'dsh-web-runtime-v2-20260924',probeStopped:probe})))
+ }else if(mode==='backup-verify'){
   console.log(JSON.stringify(await verifyDeploymentBackup({ runtime:root,domain:'D:/dsh_home/storages/dingtalk-dsh-assistant-v9-pr116',profile:'D:/dsh_home/profiles/web',backupRoot:arg })))
  }else if(mode==='web'){
   console.log(JSON.stringify(await verifyDeploymentWeb(arg)))

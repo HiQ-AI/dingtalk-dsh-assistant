@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { DatabaseSync, backup } from 'node:sqlite'
 import { stripVTControlCharacters } from 'node:util'
+import { maintenanceStatus } from '../packages/dingtalk-dsh-assistant/execution-maintenance.js'
 
 const fail = code => { throw new Error(code) }
 const hash = value => createHash('sha256').update(value).digest('hex')
@@ -62,6 +63,24 @@ function databaseProof(db) {
     proofs.push({ name, rows: rows.length, digest: hash(JSON.stringify(rows.map(row => JSON.stringify(row)).sort())) })
   }
   return { tables: proofs, refs: [...refs].sort() }
+}
+
+/** 部署脚本持有原生 owner 锁期间调用；只做 SQLite checkpoint，业务表全量摘要前后必须相同。 */
+export async function checkpointDeploymentDatabase({ dbPath, instanceId, probeStopped }) {
+  const stopped = await probeStopped()
+  if (!stopped?.stopped || stopped.pidPresent !== false || stopped.listenerPresent !== false || stopped.autostartDisabled !== true) fail('CHECKPOINT_RUNTIME_NOT_STOPPED')
+  const db = new DatabaseSync(dbPath)
+  try {
+    if (db.prepare('SELECT instance_id FROM execution_meta WHERE singleton=1').get()?.instance_id !== instanceId) fail('CHECKPOINT_INSTANCE_MISMATCH')
+    const state = maintenanceStatus(db)
+    if (!state.active || state.phase !== 'stopping' || !state.drained) fail('CHECKPOINT_MAINTENANCE_REQUIRED')
+    const before = databaseProof(db)
+    const rows = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').all()
+    if (rows.length !== 1 || rows[0].busy !== 0 || rows[0].log !== 0 || rows[0].checkpointed !== 0) fail('CHECKPOINT_BUSY')
+    const after = databaseProof(db)
+    if (JSON.stringify(before) !== JSON.stringify(after)) fail('CHECKPOINT_DATABASE_CHANGED')
+    return { checkpointed: true, maintenanceId: state.maintenanceId, logicalSha256: hash(JSON.stringify(after)), tables: after.tables }
+  } finally { db.close() }
 }
 
 /** 只写本轮备份目录内的一致SQLite副本；源文件及运行库均只读。 */
