@@ -1,0 +1,35 @@
+{
+  "baseline": "89df536",
+  "status": "FAIL",
+  "cause": "系统 C 盘空闲 0 字节，测试 SQLite 和 Git 临时仓库创建/写入失败",
+  "tests": 175,
+  "passed": 46,
+  "failed": 129,
+  "skipped": 0,
+  "durationMs": 15434.4044,
+  "errorCodeCounts": {
+    "gitExit128": 1,
+    "ENOSPC": 123,
+    "ERR_SQLITE_ERROR": 5
+  },
+  "representativeErrors": [
+    "ENOSPC: no space left on device, open .../control.db",
+    "Error: database or disk is full",
+    "git init: fatal: cannot copy .../hooks/commit-msg.sample: No space left on device"
+  ],
+  "rawEvidence": {
+    "bytes": 130349,
+    "localFile": "docs/acceptance/topic-context-completeness/round-39/targeted-tests.log",
+    "sha256": "0e263729fcfcddcd9d7f4715b60fbd88a8a0468484c03904208fd429b1de7bb2",
+    "retention": "原始日志本地原样保留，仓库记录摘要与复跑配方"
+  },
+  "rerun": {
+    "tests": 175,
+    "passed": 175,
+    "file": "targeted-tests-d-drive.log",
+    "skipped": 0,
+    "temporaryDirectory": "docs/tmp/workflow-authoring-tests/",
+    "durationMs": 108452.0877,
+    "failed": 0
+  }
+}

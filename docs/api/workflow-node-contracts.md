@@ -1,5 +1,7 @@
 # 工作流节点契约
 
+新增流程的建设步骤与 `workflow-v2` Node 定义见[框架建设手册](../../packages/dingtalk-dsh-assistant/README.md)。本页前半部分的 domain v9、Task contractVersion 2 和报告工具属于 Resident Task 合同；后面的原生工作流只读、Web 确认及维护接口另有对应范围。原生节点使用 `execution_node_submit`，不要混用旧叶子任务的计划/报告工具。
+
 本页描述当前源码接口。持久化 domain v9，新增 Task 的 contractVersion 为 2；历史终态可以没有 contractVersion，outcome 为 legacy-unknown 时不得投影为成功。
 
 ## 所有权与节点产出

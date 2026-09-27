@@ -1,0 +1,11 @@
+{
+  "observedAt": "2026-09-27T11:43:05.693Z",
+  "baseline": "89df536",
+  "advanceError": "WORKFLOW_VERSION_UNAVAILABLE",
+  "historicalWorkflowRegistered": true,
+  "oldDigest": "ad8e1ae6ded0b74931c25dc07027e29df3d5d4bc188bab0878a63177630434d9",
+  "newDigest": "322e76ae681062fa479ada82972d80f180ccc57cc264aff52fb116e2f777ace5",
+  "frozenDigest": "ad8e1ae6ded0b74931c25dc07027e29df3d5d4bc188bab0878a63177630434d9",
+  "stageStatus": "ready",
+  "runId": null
+}

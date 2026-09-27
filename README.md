@@ -380,6 +380,8 @@ Task 创建和重开时即生成稳定 `stagePlan`，主会话查询与叶子输
 
 ## 开发与测试
 
+新增或组合任务流程，请先阅读[新任务流程编排建设手册](packages/dingtalk-dsh-assistant/README.md)。手册覆盖当前框架职责、节点合同、完整接入清单、产物与验收、外部效果、恢复和版本升级；本次审查的问题及具体修改建议见 [round-39](docs/acceptance/topic-context-completeness/round-39.md)。
+
 ```powershell
 pnpm install
 pnpm test
@@ -397,11 +399,11 @@ pnpm test
 - [钉钉人工介入回复实时生效](docs/spec/approval-reply-live-events.md)
 - [运行看板](docs/spec/dingtalk-resident-observer.md)
 
-## 实验性执行底座
+## 原生流程执行底座
 
-独立入口 `@zzusp/dingtalk-dsh-assistant/execution` 提供 M1 的 SQLite 控制账与受信顺序节点，默认不加载。离线初始化、Host 服务注入、恢复及当前能力边界见[执行底座本地运维](docs/ops/execution-foundation-local.md)；现阶段不用于生产任务、shell 或旧 resident 数据迁移。
+独立入口 `@zzusp/dingtalk-dsh-assistant/execution` 提供 SQLite 控制账与受信顺序节点；消息业务由 `workflow-service.js` 装配 Task Owner、阶段计划、流程定义和交付适配器。独立 Host 注入与业务目录接入是不同步骤，详见[新任务流程编排建设手册](packages/dingtalk-dsh-assistant/README.md)和[执行底座本地运维](docs/ops/execution-foundation-local.md)。
 
-M2 已增加固定 Git tree 候选验证与显式注册的本地 Git 交付环节，包含控制账发送许可、条件更新及未知结果对账。真实项目 shell、远程平台 PR 和完整业务迁移尚未接入。
+当前实现已包含候选冻结、构建检查、本地业务验收、受控 Git/PR 交付及 UAT 平台适配，依赖显式受信配置。真实业务覆盖与运行配置须分别回读；这些能力不等于任意 shell/平台开放，也不代表生产发布已经真实验收。
 
 受管代际目录从固定基线独立创建，新补充不会自动继承旧代的删除或未跟踪文件；目录归属和未知初始化结果通过同一控制账对账，保留旧目录及用户修改。
 

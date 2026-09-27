@@ -1,0 +1,47 @@
+{
+  "observedAt": "2026-09-27T11:36:49.093Z",
+  "baseline": "89df536",
+  "observations": [
+    {
+      "kind": "plain",
+      "idleError": null,
+      "idleErrorName": null,
+      "recoveryError": null,
+      "runStatus": "succeeded",
+      "nodeStatus": "succeeded",
+      "drained": true,
+      "outputRef": "sha256-4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93.json",
+      "waitReason": null,
+      "controllerError": null
+    },
+    {
+      "kind": "date",
+      "idleError": "INVALID_JSON_OBJECT",
+      "idleErrorName": "Error",
+      "recoveryError": "RUN_NOT_RECOVERING",
+      "runStatus": "running",
+      "nodeStatus": "running",
+      "drained": true,
+      "outputRef": null,
+      "waitReason": null,
+      "controllerError": "INVALID_JSON_OBJECT"
+    },
+    {
+      "kind": "mapper-error",
+      "idleError": "Cannot read properties of undefined (reading 'value')",
+      "idleErrorName": "TypeError",
+      "recoveryError": "RUN_NOT_RECOVERING",
+      "runStatus": "running",
+      "nodeStatus": "running",
+      "drained": true,
+      "outputRef": null,
+      "waitReason": null,
+      "controllerError": "Cannot read properties of undefined (reading 'value')"
+    }
+  ],
+  "closureObservation": {
+    "sameDigest": true,
+    "firstOutput": 1,
+    "secondOutput": 2
+  }
+}

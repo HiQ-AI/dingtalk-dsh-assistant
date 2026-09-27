@@ -1,2 +1,4 @@
 # 浏览器截图由 scripts/verify-observer-browser.mjs 再生成，二进制不入库。
 round-*/*.png
+# 本轮 C 盘满的原始堆栈保留本地，提交摘要/哈希与 D 盘复跑结果。
+round-39/targeted-tests.log

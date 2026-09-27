@@ -1,0 +1,15 @@
+{
+  "scope": "当前完成回调的隔离决策检查；不是实际账号或真实 Task 重放",
+  "results": [
+    {
+      "limitations": [],
+      "authorized": true
+    },
+    {
+      "limitations": [
+        "当前材料未提供创建人，不能确认账号由谁创建。"
+      ],
+      "authorized": false
+    }
+  ]
+}
