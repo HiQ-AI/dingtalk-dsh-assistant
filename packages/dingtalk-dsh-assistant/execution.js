@@ -11,20 +11,35 @@ export { createManagedWorkspaces } from './execution-workspace.js'
 export const name = 'dingtalk-execution-foundation'
 export const inject = ['executionWorkflows', 'agents', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'llm', 'tools', 'systemPrompt']
 
+/** 按依赖顺序尝试全部清理；失败必须保留，不能让前项异常跳过数据库解锁。 */
+export async function closeExecutionResources(resources) {
+  const errors = []
+  for (const [name, close] of resources) {
+    try { await close() }
+    catch (cause) { errors.push(new Error(`RESOURCE_CLOSE_FAILED:${name}`, { cause })) }
+  }
+  if (errors.length) throw new AggregateError(errors, 'EXECUTION_RESOURCE_CLOSE_FAILED')
+}
+
 /** 独立入口；不读取、写回或迁移旧resident的Task账。 */
-export async function openExecutionRuntime({ ctx, dbPath, instanceId, artifactDirectory, initialize = false, workflows, historicalWorkflows = [], deliveryOptions, readTools = [], repositoryInspect, maxConcurrentRuns = 4, changeQuietMs, maxChangeDelayMs }) {
+export async function openExecutionRuntime({ ctx, dbPath, instanceId, artifactDirectory, initialize = false, workflows, historicalWorkflows = [], deliveryOptions, readTools = [], repositoryInspect, tools = [], getWorkspaceDir, maxConcurrentRuns = 4, changeQuietMs, maxChangeDelayMs }) {
   const store = await openExecutionStore({ dbPath, instanceId, initialize })
   let sessions, controller
   try {
     const artifacts = await openExecutionArtifacts({ directory: artifactDirectory, initialize })
     const delivery = deliveryOptions ? createExecutionDelivery({ ...deliveryOptions, store, artifacts }) : undefined
-    sessions = createExecutionSessions({ ctx, isCurrent: binding => controller.isCurrent(binding), repositoryInspect })
+    const registeredTools = typeof tools === 'function' ? await tools({ store, artifacts }) : tools
+    sessions = createExecutionSessions({ ctx, isCurrent: binding => controller.isCurrent(binding), repositoryInspect, tools: registeredTools, getWorkspaceDir })
     const definitions = typeof workflows === 'function' ? await workflows(store, artifacts) : { workflows, historicalWorkflows }
     controller = createExecutionController({ store, artifacts, sessions, delivery, ...definitions, readTools, maxConcurrentRuns,
       ...(changeQuietMs === undefined ? {} : { changeQuietMs }), ...(maxChangeDelayMs === undefined ? {} : { maxChangeDelayMs }),
     })
-    return { controller, store, artifacts, delivery, async close() { await controller.close(); await store.close() } }
-  } catch (error) { await sessions?.close(); await store.close(); throw error }
+    return { controller, store, artifacts, delivery, async close() { await closeExecutionResources([['controller', () => controller.close()], ['store', () => store.close()]]) } }
+  } catch (error) {
+    try { await closeExecutionResources([['sessions', () => sessions?.close()], ['store', () => store.close()]]) }
+    catch (cleanup) { throw new AggregateError([error, cleanup], 'EXECUTION_OPEN_CLEANUP_FAILED') }
+    throw error
+  }
 }
 
 export async function apply(ctx, config) {

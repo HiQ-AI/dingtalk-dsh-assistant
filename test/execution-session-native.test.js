@@ -30,7 +30,7 @@ const leases = events => [...new Set(events.flatMap(event => event.type === 'din
 async function temp() { await mkdir(artifacts, { recursive: true }); return mkdtemp(join(artifacts, 'run-')) }
 
 // 只有 LlmAdapter 为脚本；每次 Host 都用真实原生 Loop、Tools、文件 JSONL 后端。
-async function host({ root, script = [submit('done')], isCurrent = async () => true, repositoryInspect } = {}) {
+async function host({ root, script = [submit('done')], isCurrent = async () => true, repositoryInspect, tools, getWorkspaceDir } = {}) {
   root ??= await temp()
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
@@ -74,7 +74,7 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
     async execute(_args, exec) { const text = await readFile(join(root, 'fixture.txt'), { encoding: 'utf8', signal: exec.signal }); reads.push(exec.agent.session.id); return { text } },
   })
   ctx.tools.register({ name: 'unsafe_write', description: '用于拒绝测试的副作用', parameters: { type: 'object' }, output, execute() { effects.push('root-write'); return {} } })
-  const manager = createExecutionSessions({ ctx, isCurrent, repositoryInspect })
+  const manager = createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools, getWorkspaceDir })
   return { ctx, root, manager, requests, reads, effects, handles, async close() { await manager.close(); await ctx.fiber.dispose() } }
 }
 
@@ -431,4 +431,178 @@ if (process.argv[2] === '--execution-session-child') {
     assert.equal(h.manager.assertDrained(binding()), true)
     assert.equal(h.manager.assertDrained({ runId: 'code-run', sessionId: null }), true)
   })
+}
+
+if (process.argv[2] !== '--execution-session-child') {
+const messageBinding = (extra = {}) => ({ kind: 'message-unit', runId: 'message-run', unitId: 'unit-1', inputVersion: 1,
+  inputDigest: 'message-digest', sessionId: 'message-session', sessionBound: false, leaseEpoch: 1, ...extra })
+
+test('消息原生会话：查询纠正、提交和跨Host补充恢复，无虚假任务身份', async t => {
+  const root = await temp(), seen = []
+  const tool = { name: 'project_query', description: 'query project', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false },
+    async execute({ binding, args }) { seen.push(binding); if (args.path === 'missing') throw Object.assign(Error('choose another path'), { code: 'NOT_FOUND' }); return { text: 'source evidence' } },
+    classifyError: error => error.code === 'NOT_FOUND' ? 'correctable' : 'fatal' }
+  const h = await host({ root, tools: [tool], script: [{ name: 'project_query', args: { path: 'missing' } }, { name: 'project_query', args: { path: 'real' } }, submit('verified')] })
+  const result = await drive(h, { binding: messageBinding(), definition: definition({ allowedTools: ['project_query'] }) })
+  assert.equal(result.status, 'submitted'); assert.equal(seen.length, 2)
+  assert.ok(seen.every(value => value.kind === 'message-unit' && !Object.hasOwn(value, 'taskId')))
+  assert.ok(JSON.stringify(h.requests[1]).includes('correctable_error'))
+  const first = await h.ctx.sessionPersistence.inspect('message-session')
+  assert.equal(first.events[0].data.version, 2)
+  await h.close()
+  const next = await host({ root, tools: [tool], script: [submit('continued')] }); t.after(() => next.close())
+  const resumed = messageBinding({ sessionBound: true, leaseEpoch: 2, inputVersion: 2, inputDigest: 'clarified-input' })
+  assert.equal((await drive(next, { binding: resumed, definition: definition({ allowedTools: ['project_query'] }) })).status, 'submitted')
+  const history = await next.ctx.sessionPersistence.inspect('message-session')
+  assert.deepEqual(history.events.slice(0, first.events.length), first.events)
+  await assert.rejects(drive(next, { binding: messageBinding({ taskId: 'fake' }) }), { code: 'execution_binding_invalid' })
+  await assert.rejects(drive(next, { binding: messageBinding({ leaseEpoch: 3 }) }), { code: 'execution_session_identity_mismatch' })
+})
+
+test('受信工具安全失败中止queued调用', async t => {
+  let calls = 0
+  const h = await host({ tools: [{ name: 'query', description: 'query', parameters: { type: 'object' }, execute() { calls++; throw Object.assign(Error('denied'), { code: 'DENIED' }) }, classifyError: () => 'fatal' }],
+    script: [[{ name: 'query' }, { name: 'query' }], submit('forbidden')] })
+  t.after(() => h.close())
+  assert.deepEqual(await drive(h, { binding: messageBinding(), definition: definition({ allowedTools: ['query'] }) }), { status: 'no_submission', reason: 'execution_tool_failed' })
+  assert.equal(calls, 1); assert.equal(h.requests.length, 1)
+})
+
+test('消息原生恢复保持step预算；不能借新lease或新预算重置', async t => {
+  const h = await host(); t.after(() => h.close())
+  const d = definition({ allowedTools: [], maxSteps: 1 })
+  assert.equal((await drive(h, { binding: messageBinding(), definition: d })).status, 'submitted')
+  assert.deepEqual(await drive(h, { binding: messageBinding({ sessionBound: true, leaseEpoch: 2 }), definition: d }), { status: 'no_submission', reason: 'execution_step_budget_exhausted' })
+  assert.equal(h.requests.length, 1)
+  await assert.rejects(drive(h, { binding: messageBinding({ sessionBound: true, leaseEpoch: 3 }), definition: { ...d, maxSteps: 2 } }), { code: 'execution_budget_changed' })
+})
+
+
+test('消息取消会排空受信工具并拒绝迟到产出，工具不能软化取消', async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let completed = 0, classified = 0
+  const h = await host({ tools: [{ name: 'slow_query', description: 'slow query', parameters: { type: 'object' },
+    async execute() { entered.resolve(); await release.promise; return { value: 'late' } }, classifyError() { classified++; return 'correctable' } }],
+    script: [{ name: 'slow_query' }, submit('late')] })
+  t.after(async () => { release.resolve(); await h.close() })
+  const running = drive(h, { binding: messageBinding(), definition: definition({ allowedTools: ['slow_query'] }), onResult() { completed++ } })
+  await entered.promise
+  const cancelling = h.manager.cancel(messageBinding())
+  assert.throws(() => h.manager.assertDrained(messageBinding()), { code: 'execution_run_busy' })
+  release.resolve(); await cancelling
+  assert.equal((await running).status, 'cancelled'); assert.equal(completed, 0); assert.equal(classified, 0)
+  assert.equal(h.manager.assertDrained(messageBinding()), true)
+})
+
+test('消息恢复累计timeout，完成后的等待时间不占执行预算', async t => {
+  const root = await temp()
+  const h = await host({ root, tools: [{ name: 'slow_query', description: 'slow query', parameters: { type: 'object' }, async execute() { await delay(100); return {} } }],
+    script: [{ name: 'slow_query' }, submit('first')] })
+  const d = definition({ allowedTools: ['slow_query'], timeoutMs: 2000 })
+  assert.equal((await drive(h, { binding: messageBinding(), definition: d })).status, 'submitted')
+  await h.close()
+  await delay(2100)
+  const next = await host({ root, tools: [{ name: 'slow_query', description: 'slow query', parameters: { type: 'object' }, async execute() { return {} } }], script: [submit('after-wait')] }); t.after(() => next.close())
+  assert.equal((await drive(next, { binding: messageBinding({ leaseEpoch: 2, sessionBound: true }), definition: d })).status, 'submitted')
+  assert.equal(next.requests.length, 1)
+})
+
+
+test('消息续接不能重置已消耗timeout', async t => {
+  const slow = { name: 'slow_query', description: 'slow query', parameters: { type: 'object' }, async execute({ signal }) { await delay(1200, undefined, { signal }); return {} } }
+  const root = await temp(), d = definition({ allowedTools: ['slow_query'], timeoutMs: 2000 })
+  const first = await host({ root, tools: [slow], script: [{ name: 'slow_query' }, submit('first')] })
+  assert.equal((await drive(first, { binding: messageBinding(), definition: d })).status, 'submitted')
+  await first.close()
+  const next = await host({ root, tools: [slow], script: [{ name: 'slow_query' }, submit('must not finish')] }); t.after(() => next.close())
+  const result = await drive(next, { binding: messageBinding({ leaseEpoch: 2, sessionBound: true }), definition: d })
+  assert.deepEqual(result, { status: 'no_submission', reason: 'execution_timeout' }); assert.equal(next.requests.length, 1)
+})
+
+
+test('显式调查节点同Session补充：Host历史逐项匹配，任务身份及代际不变', async t => {
+  const h = await host({ script: [submit('need environment'), submit('answered with UAT2')] }); t.after(() => h.close())
+  const first = binding({ kind: 'task-node', inputVersion: 1, inputHistory: [] })
+  assert.equal((await drive(h, { binding: first })).status, 'submitted')
+  const prior = await h.ctx.sessionPersistence.inspect(first.sessionId)
+  const second = { ...first, inputVersion: 2, inputDigest: 'input-with-environment', inputHistory: [{ inputVersion: 1, inputDigest: first.inputDigest }], leaseEpoch: 2, sessionBound: true }
+  assert.equal((await drive(h, { binding: second, input: { environment: 'uat2' } })).status, 'submitted')
+  const resumed = await h.ctx.sessionPersistence.inspect(first.sessionId)
+  assert.deepEqual(resumed.events.slice(0, prior.events.length), prior.events)
+  const turns = resumed.events.filter(event => event.type === 'user/message').map(event => event.data.source.executionSession)
+  assert.deepEqual(turns.map(turn => [turn.inputVersion, turn.inputDigest, turn.leaseEpoch]), [[1, 'input-R1', 1], [2, 'input-with-environment', 2]])
+  assert.ok(JSON.stringify(h.requests[1]).includes('need environment'))
+  for (const changed of [{ generation: 2 }, { nodeRunId: 'different-node' }, { taskId: 'different-task' }, { inputDigest: 'unauthorized-same-version' }, { inputHistory: [{ inputVersion: 1, inputDigest: 'forged-prior' }] }])
+    await assert.rejects(drive(h, { binding: { ...second, ...changed, leaseEpoch: 3 } }), { code: 'execution_session_identity_mismatch' })
+})
+
+test('普通工程session不能借添加补充合同更改digest，调查不能删除合同或跳过历史版本', async t => {
+  const h = await host(); t.after(() => h.close())
+  const ordinary = binding({ kind: 'task-node' })
+  await drive(h, { binding: ordinary })
+  await assert.rejects(drive(h, { binding: { ...ordinary, inputVersion: 2, inputHistory: [{ inputVersion: 1, inputDigest: ordinary.inputDigest }], inputDigest: 'new', leaseEpoch: 2 } }), { code: 'execution_session_identity_mismatch' })
+  await assert.rejects(drive(h, { binding: binding({ inputVersion: 1, inputHistory: [] }) }), { code: 'execution_binding_invalid' })
+  await assert.rejects(drive(h, { binding: { ...ordinary, inputVersion: 3, inputHistory: [{ inputVersion: 1, inputDigest: ordinary.inputDigest }], leaseEpoch: 2 } }), { code: 'execution_binding_invalid' })
+  const fresh = await host(); t.after(() => fresh.close())
+  await drive(fresh, { binding: binding({ kind: 'task-node', inputVersion: 1, inputHistory: [] }) })
+  await assert.rejects(drive(fresh, { binding: binding({ kind: 'task-node', leaseEpoch: 2 }) }), { code: 'execution_session_identity_mismatch' })
+})
+
+test('调查补充不会重置原生step预算', async t => {
+  const h = await host(); t.after(() => h.close())
+  const first = binding({ kind: 'task-node', inputVersion: 1, inputHistory: [] }), d = definition({ maxSteps: 1 })
+  await drive(h, { binding: first, definition: d })
+  assert.deepEqual(await drive(h, { binding: { ...first, leaseEpoch: 2, inputVersion: 2, inputDigest: 'supplemented', inputHistory: [{ inputVersion: 1, inputDigest: first.inputDigest }] }, definition: d }), { status: 'no_submission', reason: 'execution_step_budget_exhausted' })
+  assert.equal(h.requests.length, 1)
+})
+
+
+test('Host输出语义校验可纠正错误在conclude前反馈，修正才接纳且不泄露路径', async t => {
+  const h = await host({ script: [submit('sourceRefs'), submit('evidenceRef')] }); t.after(() => h.close())
+  const checked = [], accepted = []
+  const result = await drive(h, { validateOutput(value) { checked.push(value.answer); if (value.answer === 'sourceRefs') throw Object.assign(new Error('secret/path.json'), { code: 'BAD_REF' }) },
+    classifyOutputError: error => error.code === 'BAD_REF' ? 'correctable' : 'fatal', onResult: value => accepted.push(value) })
+  assert.equal(result.status, 'submitted'); assert.deepEqual(checked, ['sourceRefs', 'evidenceRef']); assert.deepEqual(accepted, [{ answer: 'evidenceRef' }])
+  const feedback = JSON.stringify(h.requests[1]); assert.ok(feedback.includes('execution_output_needs_correction')); assert.ok(!feedback.includes('secret/path.json'))
+})
+
+test('Host输出校验默认fatal，校验期间失效的lease不可软化', async t => {
+  for (const stale of [false, true]) {
+    let current = true, classified = 0, accepted = 0
+    const h = await host({ isCurrent: async () => current, script: [submit('invalid'), submit('should not run')] }); t.after(() => h.close())
+    const result = await drive(h, { validateOutput() { if (stale) current = false; throw new Error('invalid') },
+      ...(stale ? { classifyOutputError() { classified++; return 'correctable' } } : {}), onResult() { accepted++ } })
+    assert.notEqual(result.status, 'submitted'); assert.equal(h.requests.length, 1); assert.equal(accepted, 0); assert.equal(classified, 0)
+  }
+})
+
+
+test('新原生会话使用Host工作区meta，模型input不能覆盖；恢复保持原metadata', async t => {
+  const root = await temp(), workspace = resolve(root), h = await host({ root, getWorkspaceDir: () => workspace, script: [submit('first'), submit('second')] }); t.after(() => h.close())
+  await drive(h, { input: { cwd: resolve('docs'), workspaceDir: resolve('test') } })
+  const initial = await h.ctx.sessionPersistence.inspect(binding().sessionId)
+  assert.equal(initial.meta.cwd, workspace)
+  await drive(h, { binding: binding({ leaseEpoch: 2, sessionBound: true }) })
+  assert.equal((await h.ctx.sessionPersistence.inspect(binding().sessionId)).meta.cwd, workspace)
+  const invalid = await host({ getWorkspaceDir: () => 'relative/path' }); t.after(() => invalid.close())
+  await assert.rejects(drive(invalid), { code: 'execution_workspace_invalid' })
+  assert.equal(invalid.requests.length, 0)
+})
+
+test('同消息不同unit原生并行且取消只排空目标unit',async t=>{
+ const entered=Promise.withResolvers(),release=Promise.withResolvers()
+ const h=await host({tools:[{name:'hold',description:'hold',parameters:{type:'object',properties:{}},execute:async()=>{entered.resolve();await release.promise;return {ok:true}}}],script:n=>n===1?{name:'hold',args:{}}:submit('second')});t.after(()=>h.close())
+ const first=drive(h,{binding:messageBinding(),definition:definition({allowedTools:['hold']})})
+ await entered.promise
+ const secondBinding=messageBinding({unitId:'unit-2',sessionId:'message-session-2'})
+ const second=await drive(h,{binding:secondBinding,definition:definition({allowedTools:['hold']})})
+ assert.equal(second.status,'submitted')
+ await assert.rejects(drive(h,{binding:messageBinding({sessionId:'duplicate-unit-session'})}),{code:'execution_run_busy'})
+ const cancelling=h.manager.cancel(messageBinding());release.resolve();await cancelling
+ assert.equal((await first).status,'cancelled')
+ assert.equal(h.manager.assertDrained(messageBinding()),true)
+ assert.equal(h.manager.assertDrained(secondBinding),true)
+ assert.ok((await h.ctx.sessionPersistence.inspect(secondBinding.sessionId)).events.some(e=>e.type==='tool/result'))
+})
+
 }

@@ -19,7 +19,7 @@
 
 Owner 的语义判断和 Host 的可信证据检查共同决定完成。调查可以以有证据的“无法确认”结束；修复缺少必需验收时仍不能结束。不能把所有未知都交给用户，也不能由会话自行宣布缺少的证据已经成立。
 
-**当前实现边界**：执行会话绑定 Agent NodeRun/租约，只能使用 `pure/read` 工具。工程修改和平台写入由受信 code 节点及 Delivery 执行。会话处理问题以实际配置的能力为前提；Owner 能读取当前成功阶段的正式证明及失败/等待节点的诊断，两类证据分别使用。
+**当前实现边界**：消息执行会话绑定消息事项、输入版本与租约；持久调查会话绑定 Agent NodeRun/租约。两者共用执行底座，只能使用 `pure/read` 工具。工程修改和平台写入由受信 code 节点及 Delivery 执行。会话处理问题以实际配置的能力为前提；Owner 能读取当前成功阶段的正式证明及失败/等待节点的诊断，两类证据分别使用。
 
 工具执行前按已注册参数 schema 核验，未进入工具体的格式错误反馈给原会话修正；合法提交后不允许覆盖结果。权限拒绝、身份失效、取消、执行体异常及未知错误继续停止。纠错共用本次执行的步数与时间预算，不重领节点或重置额度。确定性操作由 code 执行器承担。
 
@@ -36,8 +36,9 @@ Owner 的语义判断和 Host 的可信证据检查共同决定完成。调查�
 | 需求 | 优先选择 | 需要改动的层 |
 | --- | --- | --- |
 | 同一目标需要先调查、再方案、再开发、再提测 | 一个业务 Task 的多个 Stage，复用现有流程 | 阶段输入、证据交接、授权和完成判据 |
-| 新的材料分析类型，输入输出和权限与现有只读流程一致 | 复用只读工厂，增加明确语义合同 | 目录、模板、结果校验、展示 |
-| 已有受信能力的一次读文件、读材料或写报告 | 复用 `task-general-capability`，交由 Owner 安排步骤 | 能力目录、授权、执行与核验 |
+| 一次问答、查资料或查数据后回复即可结束 | 消息 `answer` 直接执行，不建 Task 或 Workflow | 查询能力、主体授权、结果与通知核验 |
+| 明确需要持续跟进、交付调查结论或服务后续开发的目标 | 一个 `task-investigation` 阶段内持续查询与判断 | 专业指引、输入、证据与完成合同 |
+| 将已核验调查结果保存为正式文档 | Owner 安排受信 `task-general-capability` 写阶段 | `file.write` 授权、实际路径、内容摘要与独立回读 |
 | 新的重复业务操作，产物和失败路径有独立合同 | 新增固定 Workflow | 定义、Host 接入、恢复、产物与验证 |
 | 同一种部署方式增加仓库或环境 | 复用平台适配器，增加受信目标配置 | 配置验证和平台回读 |
 | 新的外部平台或写入种类 | 新平台适配器 + 对应流程 | 受信 Host、效果账本、授权、对账、恢复 |
@@ -50,7 +51,9 @@ Owner 的语义判断和 Host 的可信证据检查共同决定完成。调查�
 flowchart TD
   M[消息持久接纳与来源版本] --> R[拆分事项与关联话题]
   R --> I[同话题批次意图判断与版本复核]
-  I --> T[业务 Task 与验收条件]
+  I --> D[普通问答：消息事项执行会话]
+  D --> Q[通知意图、发送与送达回读]
+  I --> T[需持续交付：业务 Task 与验收条件]
   T --> O[Task Owner 按事件审阅与安排阶段]
   O --> P[TaskPlan：有序 Stage 和确认门禁]
   P --> W[每个阶段绑定 Workflow / Run]
@@ -76,7 +79,9 @@ flowchart TD
 
 Task Owner 可以有持续会话，但每个 Agent 节点按 NodeRun/租约绑定会话，靠显式输入和工件交接上下文。新流程不要依赖“前一个 Agent 应该记得”。话题意图按批次独立判断，不为每个话题新建永久执行会话。
 
-普通答复由消息动作 `answer` 承接，参数仅为非空 `arguments.text`；它不创建 Task、Run 或任务候选，也不代表已经执行调查。需要调查或执行的目标使用 `research/create`，已有任务状态使用 `status/result`。答复复用通知账本，按原消息引用、当前披露权限和 `replyPolicy` 发送并回读；发送结果未知时只核对原通知，不重发。旧版本已经创建的 answer 任务仍按原来源记录读取，新普通答复不延用这种任务语义。
+普通问答由消息动作 `answer` 承接，参数为非空 `arguments.objective`。判断会话只交接目标，不能把自己生成的答案冒充执行结果。Host 异步启动消息事项的执行会话，持久记录 command、输入版本、会话、租约和结果，不创建 Task，也不占用路由等待整段执行。需要持续交付的目标才进入 `research/create` 与 Task Owner；一次查询不应拆成多个 Workflow 或 capability Stage。
+
+执行结果先持久化，再完成消息命令；重启发现已有结果时使用当前命令租约接纳缓存，不重跑调查。未证明只读的旧命令结果未知仍须对账。答复复用通知账本，按原消息引用、当前披露权限和 `replyPolicy` 发送并独立回读；发送结果未知时核对原通知，不重发。消息事项取消须匹配受信来源、同发送者同群及明确事项；多个候选通过现有澄清请求选择，Host 复核版本，不能凭模糊取消指令批量结束执行。
 
 收到自身通知的回声时，必须匹配同群通知的独立送达证据才可封存；ACK 本身不能授权封存。封存会同步结束尚在处理的模型节点并撤销本机调用，迟到结果不得重新生效，累计预算保留。旧版已封存但遗留活动节点或引用屏障的消息由 `message.echo.reconciliation` 只读预检、`message.echo.reconcile` 按 `expectedDigest` 接纳修复，日常恢复扫描也使用同一入口；只处理 `superseded/outbound_echo`，若存在业务命令、通知或外部效果则拒绝。仅释放该回声自己创建、与原通知来源及明确引用一致的消息屏障；跨所有者、指向 Task 或不匹配引用的屏障拒绝修复，不修改被引用来源或业务任务。
 
@@ -151,6 +156,9 @@ Task Owner 可以有持续会话，但每个 Agent 节点按 NodeRun/租约绑�
 | `execute` | code 必填；接收 `input, signal, taskId, runId, nodeRunId, generation, requirementDigest, perform` |
 | `provider, model, prompt, allowedTools` | agent 必填；模型来自受信配置，工具必须属于 Host 准入清单 |
 | `maxSteps, timeoutMs` | Agent 默认 32 步 / 120000 ms；**code 的 timeoutMs 不会自动中止 execute**，须由实现自行管控 |
+| `validateOutput / classifyOutputError` | 可选纯提交校验与受信错误分类；只有显式 correctable 允许会话修正，最终仍独立核验 |
+| `admitOutput` | 可选受信结果接纳，将业务结果映射为成功、等待或失败，不能以 schema 合法替代业务完成 |
+| `allowInputContinuation` | 显式 Agent 同节点输入续行合同；版本历史与原会话身份须由 Host 持久验证 |
 | `drainPolicy` | 可选且当前只接受 code 的 `external-process`；表示恢复需核对真实进程排空，并不会自动提供进程托管 |
 | `rulesDigest` | 把闭包配置、适配器身份、检查规则和导入助手的规则版本纳入定义身份 |
 
@@ -176,7 +184,7 @@ Agent 只能声明 `pure/read`。结果通过 `execution_node_submit` 提交，�
 
 ### 可运行的最小例子
 
-以下是一个纯 code 的材料整理流程，用于理解接口。它保留来源 ID 并做独立产物检查，不调用模型或外部服务。工厂可放入包内的新流程模块；完成附录 B 接入前，它不会自动出现在业务目录。
+以下是一个纯 code 的材料整理流程，仅用于演示定义接口，不是普通问答或新增调查领域的推荐产品结构。它保留来源 ID 并做独立产物检查，不调用模型或外部服务。工厂可放入包内的新流程模块；完成附录 B 接入前，它不会自动出现在业务目录。
 
 <!-- workflow-authoring-example:start -->
 ```javascript
@@ -251,7 +259,7 @@ export function createEvidenceSummaryWorkflow() {
 | 接入点 | 代码位置 | 必须完成的事项 |
 | --- | --- | --- |
 | 业务目录与消息参数 | [message-context.js](message-context.js) 的 `taskWorkflowCatalog/actionArguments` | 增加 ID、中文名、目的、mode；新参数加入严格 schema，用户材料不能带任意执行函数或命令 |
-| Workflow 工厂 | [task-readonly-workflows.js](task-readonly-workflows.js)、[task-workflow.js](task-workflow.js) 等 | 定义节点、schema、业务校验、规则身份；选最近的现有实现复用 |
+| Workflow 工厂 | [agent-work.js](agent-work.js)、[task-workflow.js](task-workflow.js) 等 | 定义节点、schema、业务校验、规则身份；选最近的现有实现复用 |
 | 定义注册、持久配置、历史恢复 | [workflow-service.js](workflow-service.js) 的 `workflows`、`historicalWorkflows`、`suppliedExecution` 分支 | 当前定义与历史定义都能按原 digest 找回；`workflow.register` 保存可重建的受信配置，不能把函数存成用户数据再执行 |
 | 目录展示与可用性 | 同文件 `visibleDefinitions/workflowCatalogState` | 目录可见不等于可执行；缺仓库、目标或适配器时显示不可用原因 |
 | Owner 可选流程及能力 | 同文件创建 `createTaskOwnerController` 的目录参数 | Owner 只能选择已接入、已准入的流程；用户限制必须进入当前要求 |
@@ -261,13 +269,31 @@ export function createEvidenceSummaryWorkflow() {
 | 产出和状态展示 | 同文件 `describeTaskNodeOutput`、[Observer](../dingtalk-dsh-observer/web-client.js) 的 `nodeTitle` | 增加用户名称、实际产物摘要、详情投影；核对等待和失败时也能读懂 |
 | 完成与通知 | [task-owner-controller.js](task-owner-controller.js)、[workflow-notifications.js](workflow-notifications.js) | 完成引用来自当前成功阶段；通知失败恢复原意图，不重做业务 |
 
-新增只读材料类型可优先扩充 `task-readonly-workflows.js` 的定义列表：现有工厂和目录已联动，复用来源结果合同；中文 label 和展示映射仍要核对。新 capability 按 `task-general-workflow.js` 的 `id/effectClass/identity/authorize/verify` 合同接入：`read` 还需 `execute`，`file.write` 还需 `prepare`，由 Delivery 执行准备好的写操作；不能只提供一个执行函数。当前 Owner 步骤只接受受信 `read/file.write` 能力，工程和平台写操作走专用流程。
+新增调查领域应扩充共享 Agent 的专业指引与产物约束，不再复制 prepare/assess/validate 材料骨架。查询通过共享工具在同一会话内执行；Owner 不安排只读 capabilityStep。`task-general-capability@4` 仅承担受信 `file.write`：按 `id/effectClass/identity/authorize/prepare/verify` 合同准备写入，再经 Delivery 执行与对账；不能只提供一个写文件函数。工程和平台写操作继续走专用流程。
 
 当前 `file.write.prepare` 必须同步返回 prepared，不能返回 Promise。`verify` 必须返回 `passed: true`、与 `executionDigest(output)` 相同的 `outputDigest`，以及非空且每项为非空字符串的 `sourceRefs` 数组；只返回 `{ passed: true }` 会被拒绝。授权与 verify 都要检查 scope，不能把调用者给出的来源当作已获授权。
 
 同一业务的多个阶段保留一个 Task。阶段由 Host 绑定准确前序输出；目标或约束改变时，TaskPlan 修订负责保留有效前缀、失效受影响后缀。Run 的 `changeInput` 接口则是整份要求替换，排空后从首节点建立新 generation；它不是任意字段补丁，也不会自动复活已完成 Run。
 
 阶段容量受入口约束：控制账最多 32 个阶段，Owner 准入每次至多 16 个，消息 `explicitStages` 至多 8 项；不能把底层上限当作所有入口的可用上限。动态阶段定义解析当前专用于工程流程，任意新类型需要显式接入。
+
+### 查询能力与证据交接
+
+查询工具使用 [共享 Agent 查询工具合同](../../docs/api/agent-query-tool-contract.md)，由 Host 注册参数 schema、逻辑资源及能力身份，并按当前主体、群和项目范围选择工具。资源已登记不等于群已授权；每次调用仍依次执行 authorize、execute、verify。模型不能提供任意 SQL、连接串、URL 或终端命令，也不能选择未注册工具扩权。
+
+工具返回 `{evidenceRef,result,sourceRefs}`。最终 `evidenceRefs` 应引用真实 `evidenceRef` 工件；`sourceRefs` 是业务来源标识，不能替代工具证据。Host 核对工件内容摘要、能力身份、当前授权范围以及实际执行 binding。历史查询只有在持久账证明该输入版本和租约真实执行过时才可复用；不得忽略 lease，也不得接受模型提交的 allowedBindings。工程新 generation 不因此继承旧验证有效性。
+
+文档阶段复用前序调查的正式产物与证据，不要求再次调查同一事实。Host 绑定前序输出、核对写入范围和来源，写后独立读回路径及内容摘要；调查结论已生成、文档已保存、消息已送达是三个不同事实。
+
+### 提交纠正与输入续行
+
+共享会话在 schema 通过后、最终接纳前执行纯 `validateOutput`。只有 Host 的 `classifyOutputError` 明确分类为 correctable 的格式或证据引用错误才反馈原会话修正，仍消耗原会话预算；默认错误、越权、身份失效和取消不软化。最终节点接纳及后续 `accept-result` 仍独立核验，模型说“完成”不足以通过。
+
+持久调查的 `needs_input` 保存问题和产物，将节点置为 waiting，不执行下游；`blocked` 保存证据并失败交给 Owner，不伪装阶段成功。有证据的“无法确认”若已满足用户询问目标，可以作为 completed 结论，而不是机械等待补充。
+
+调查补充复用现有请求提交入口。IM 核对原群及发起人/Owner，Web 核对配置主体；页面 `investigationRequest.canAnswer` 决定是否提供输入框。Host 校验 request、当前输出、输入版本和事件身份，通过 `continueNode` 将答案追加为新输入版本，保留同一 node、generation 和 session；重领产生新租约，预算不重置。同事件改写、过期请求和跨群越权拒绝。仅显式 `allowInputContinuation` 合同适用，普通工程输入变更仍走新 generation。
+
+消息问答等待使用同一套请求与来源核验，补充增加输入版本并续原会话。等待须先真实排空，取消或失效后迟到结果不得生效；不能仅发出 abort 就把 maintenance 判为已排空。
 
 ## 附录 C：产物与展示合同
 
@@ -319,6 +345,8 @@ export function createEvidenceSummaryWorkflow() {
 
 ## 附录 E：超时、排空、错误与恢复
 
+关闭资源时按依赖顺序尝试全部清理，并保留各项原始错误；会话关闭异常不能跳过控制库或 Runtime 的关闭。`closeExecutionResources` 汇总错误后仍向调用者抛出，调用者不能将“已尝试关闭”记为成功。宿主的插件卸载事件可能在捕获异常后发出，部署须继续核验原生执行、资源锁及进程状态。
+
 新 code 节点若启动进程或请求平台，必须把 `signal` 传到底层，设置有限超时，等待退出，并核对自己创建的进程/资源。Windows 进程身份使用 PID 与创建时间，避免 PID 复用误杀。Abort 请求只是停止意图，`node.drained` 表示 Host 已确认执行器真正结算；不能提前返回一个 Promise.race 超时就报告清理完成。
 
 | 情况 | 当前处理与建设要求 |
@@ -339,7 +367,7 @@ code execute 抛出普通业务错误，目前一般进入 waiting/recovery；�
 
 ## 附录 F：现有开发与交付流程
 
-当前新工程定义为 v16，包含冻结的工程交付合同；旧工厂保留用于历史执行恢复。按职责理解节点即可，不应复制工程历史工厂来建设无关业务流程。
+当前新工程定义为 v17，包含冻结的工程交付合同；旧工厂保留用于历史执行恢复。调查后进入工程时，Host 核对同任务紧邻的成功调查阶段、Run 和最终工件，将原目标、完整结论、证据引用及未解决项固定到工程方案节点的输入工件。伪造或跨任务引用拒绝；调查建议仍须按当前代码基线核实，不能视为已实现或验收通过。按职责理解节点即可，不应复制工程历史工厂来建设无关业务流程。
 
 1. 明确仓库、验收条件、UAT 环境；UAT 编号由请求/已授权来源确定。映射固定为 `uatN → feature/uatN-base`，N 为 1～9。缺失就询问，不能推断默认 UAT 或 main。
 2. 核对已有开发分支；存在则复用远端最新提交，在独立目录开发。冻结目标 UAT 和任务起点，合并树/冲突处理属于验收对象。
@@ -360,7 +388,9 @@ code execute 抛出普通业务错误，目前一般进入 waiting/recovery；�
 
 已冻结但尚未创建 Run 的 Stage 与既有 Run 一样，按原 digest 解析定义；未绑定的新运行使用当前定义。原定义缺失时明确阻塞。
 
-合同接入后的版本是只读/analysis v2、工程 v16、通用能力阶段 v3；外部流程配置记录 `ownerContractVersion: '1'`。原无合同定义保持原 digest，不自动套新合同，旧终态仍可读取。升级前先让旧活动任务在原版本完成，或通过正式取消/重执行入口建立新任务；否则旧任务到 Owner 完成/修复入口会明确阻塞。不要手改 digest 或工件补合同。本次没有 schema 迁移。
+当前共享调查为 `task-investigation@4`，文档写能力为 `task-general-capability@4`；旧 analysis/只读材料骨架已退出新入口及执行工厂，终态历史仍保留。工程及外部流程仍按各自冻结定义恢复；外部流程配置记录 `ownerContractVersion: '1'`。原无合同定义保持原 digest，不自动套新合同，旧终态仍可读取。升级前先让旧活动任务在原版本完成，或通过正式取消/重执行入口建立新任务；否则旧任务到 Owner 完成/修复入口会明确阻塞。不要手改 digest 或工件补合同。本次没有 schema 迁移。
+
+旧流程退役前，在正式维护窗口重新清点非终态 Run、当前待执行 Stage、消息命令、未排空节点和未确认效果。`assertRetiredWorkflowsDrained` 发现旧流程活动引用会以 `WORKFLOW_CUTOVER_ACTIVE_REFERENCES` 拒绝启动；必须用原包收尾或明确授权的正式终止路径处理，不能套用新定义。终态历史、原摘要、会话及工件保留，不删除运行账来制造零引用。安装后独立核对新目录、旧历史可读及无旧命令重放；先前清点为零不能替代切换时检查。
 
 升级前列出在途任务所需定义、未排空节点和未对账效果；若不能重建旧定义，写明受控结束旧运行和新建执行的方案，保留历史身份与业务分支。不能靠覆盖已有记录绕过版本检查。
 

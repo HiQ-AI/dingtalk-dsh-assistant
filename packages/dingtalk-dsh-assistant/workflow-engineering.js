@@ -10,7 +10,7 @@ import { createManagedEdits } from './execution-edit.js'
 import { createGitDelivery } from './execution-git.js'
 import { createGithubPullRequests } from './execution-pr.js'
 import { createVerificationJobCheck, createBusinessAcceptanceCheck } from './execution-check-job.js'
-import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow, createEngineeringScopedWorkflow, createEngineeringPatchWorkflow, createEngineeringDeliverableWorkflow, createEngineeringAcceptanceWorkflow, createEngineeringLocalAcceptanceWorkflow, createEngineeringBranchReuseWorkflow, createEngineeringUatBaselineWorkflow, createEngineeringMappedBaselineWorkflow, createEngineeringRevalidationWorkflow } from './task-workflow.js'
+import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow, createEngineeringScopedWorkflow, createEngineeringPatchWorkflow, createEngineeringDeliverableWorkflow, createEngineeringAcceptanceWorkflow, createEngineeringLocalAcceptanceWorkflow, createEngineeringBranchReuseWorkflow, createEngineeringUatBaselineWorkflow, createEngineeringMappedBaselineWorkflow, createEngineeringRevalidationWorkflow, createEngineeringInvestigationHandoffWorkflow } from './task-workflow.js'
 import { createLocalAcceptanceRunner } from './execution-local-acceptance.js'
 import { freezeCandidate, readCandidate } from './execution-candidate.js'
 import { engineeringPatchRepairReasons } from './execution-recovery-policy.js'
@@ -141,7 +141,7 @@ export async function readEngineeringDeliveryProof({ state, artifacts, store, ta
     acceptance.checks.forEach(check => checks.add(check.id))
   }
   let localEvidence
-  if (['11', '12', '13', '14', '15', '16'].includes(record.definitionVersion)) {
+  if (['11', '12', '13', '14', '15', '16', '17'].includes(record.definitionVersion)) {
     const node = state.nodes.find(node => node.nodeId === 'finalize-local-acceptance' && node.status === 'succeeded' && node.outputRef)
     const acceptance = node && (await artifacts.read(node.outputRef))?.localAcceptance
     if (!acceptance?.passed || acceptance.candidateDigest !== verified.candidate.digest || !acceptance.cleanup?.dataCleaned
@@ -173,7 +173,7 @@ export async function readEngineeringDeliveryProof({ state, artifacts, store, ta
       planDigest: prepared.planDigest, uatEnvironment: prepared.uatEnvironment,
       criteriaDigest: executionDigest(criteria), scenarioIds: cases.map(item => item.scenarioId),
       receiptDigest: executionDigest(acceptance), evidenceRefs: [definitionNode.outputRef, node.outputRef] }
-    if (['13', '14', '15', '16'].includes(record.definitionVersion)) {
+    if (['13', '14', '15', '16', '17'].includes(record.definitionVersion)) {
       const workspaceNode = state.nodes.find(item => item.nodeId === 'prepare-workspace' && item.status === 'succeeded' && item.outputRef)
       const workspace = workspaceNode && (await artifacts.read(workspaceNode.outputRef))?.workspace
       if (!hex40(saved.targetCommit) || !hex40(saved.taskBase) || workspace?.taskBase !== saved.taskBase
@@ -231,7 +231,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     const saved = record.config, entry = configs.get(saved.repoId)
     if (saved.kind !== 'engineering' || saved.registryVersion !== '1' || !entry || saved.repositoryDigest !== entry.digest || saved.ownerActorId !== ownerActorId) fail('ENGINEERING_DEFINITION_CONFIG_DRIFT')
     const config = entry.config
-    const baseline = !record.definitionVersion || ['13', '14', '15', '16'].includes(record.definitionVersion)
+    const baseline = !record.definitionVersion || ['13', '14', '15', '16', '17'].includes(record.definitionVersion)
     if (baseline && !/^[a-f0-9]{40}$/.test(saved.targetCommit ?? '')) fail('ENGINEERING_UAT_BASELINE_REQUIRED')
     if (baseline && !/^[a-f0-9]{40}$/.test(saved.taskBase ?? '')) fail('ENGINEERING_TASK_BASE_REQUIRED')
     const targetOptions = baseline ? { targetCommit: saved.targetCommit, taskBase: saved.taskBase } : {}
@@ -310,7 +310,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       return { ...input, baseCommit: prior?.commitId ?? saved.input.baseCommit, expectedRemoteSha }
     }
     const checks = config.checks.map(check => createVerificationJobCheck({ ...check, root: join(config.managedRoot, 'checks') }))
-    const runner = ['11', '12', '13', '14', '15', '16'].includes(record.definitionVersion) || !record.definitionVersion
+    const runner = ['11', '12', '13', '14', '15', '16', '17'].includes(record.definitionVersion) || !record.definitionVersion
       ? createLocalAcceptanceRunner({ root: join(config.managedRoot, 'local-acceptance'), config: saved.localAcceptanceConfig }) : undefined
     const signals = new Map(), drainFailures = new Map()
     const localAcceptance = runner && { ...runner, resourceKey: 'external:local-acceptance:shared-uat',
@@ -326,11 +326,11 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
         }
         finally { signals.delete(prepared.identity) }
       } }
-    const workflowFactory = !record.definitionVersion || ['15', '16'].includes(record.definitionVersion) ? createEngineeringRevalidationWorkflow : record.definitionVersion === '14' ? createEngineeringMappedBaselineWorkflow : record.definitionVersion === '13' ? createEngineeringUatBaselineWorkflow : record.definitionVersion === '12' ? createEngineeringBranchReuseWorkflow : record.definitionVersion === '11' ? createEngineeringLocalAcceptanceWorkflow : record.definitionVersion === '10' ? createEngineeringAcceptanceWorkflow : record.definitionVersion === '9' ? createEngineeringDeliverableWorkflow : !config.discovery ? createEngineeringTaskWorkflow
+    const workflowFactory = !record.definitionVersion || record.definitionVersion === '17' ? createEngineeringInvestigationHandoffWorkflow : ['15', '16'].includes(record.definitionVersion) ? createEngineeringRevalidationWorkflow : record.definitionVersion === '14' ? createEngineeringMappedBaselineWorkflow : record.definitionVersion === '13' ? createEngineeringUatBaselineWorkflow : record.definitionVersion === '12' ? createEngineeringBranchReuseWorkflow : record.definitionVersion === '11' ? createEngineeringLocalAcceptanceWorkflow : record.definitionVersion === '10' ? createEngineeringAcceptanceWorkflow : record.definitionVersion === '9' ? createEngineeringDeliverableWorkflow : !config.discovery ? createEngineeringTaskWorkflow
       : record.definitionVersion === '6' ? createEngineeringDirectWorkflow
         : record.definitionVersion === '7' ? createEngineeringScopedWorkflow
           : !record.definitionVersion || record.definitionVersion === '8' ? createEngineeringPatchWorkflow : createEngineeringTaskWorkflow
-    const workflowOptions = { workflowId: record.workflowId, provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort,
+    const workflowOptions = { investigationHandoff: saved.investigationHandoff, workflowId: record.workflowId, provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort,
       workspaceAdapter, editAdapter, checks, prepareGeneration: saved.branchSource ? async context => {
         if (context.runId !== saved.runId) fail('ENGINEERING_DELIVERY_SCOPE_INVALID')
         if (await previousPush(context.generation)) return prepareGeneration(context)
@@ -340,8 +340,8 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       } : prepareGeneration, adapterIdentity: saved.repositoryDigest, discovery: config.discovery, localAcceptance,
       acceptanceChecks: (config.acceptanceChecks ?? []).map(check => createBusinessAcceptanceCheck({ ...check, root: join(config.managedRoot, 'acceptance') })),
       project: { repository: config.githubRepository, sourceRepository: config.sourceRepository, workBranch: saved.head, targetBranch: saved.uatBranch ?? config.baseBranch,
-        ...(!record.definitionVersion || ['11', '12', '13', '14', '15', '16'].includes(record.definitionVersion) ? { uatEnvironment: saved.uatEnvironment } : {}),
-        ...(!record.definitionVersion || ['12', '13', '14', '15', '16'].includes(record.definitionVersion) ? { developmentBranch: saved.head, branchDisposition: saved.branchSource ? 'reused' : 'created' } : {}),
+        ...(!record.definitionVersion || ['11', '12', '13', '14', '15', '16', '17'].includes(record.definitionVersion) ? { uatEnvironment: saved.uatEnvironment } : {}),
+        ...(!record.definitionVersion || ['12', '13', '14', '15', '16', '17'].includes(record.definitionVersion) ? { developmentBranch: saved.head, branchDisposition: saved.branchSource ? 'reused' : 'created' } : {}),
         ...(baseline ? { targetCommit: saved.targetCommit, taskBase: saved.taskBase } : {}) },
       deliveryPlan: { identity: executionDigest(saved), gitAdapterFor, prAdapterFor, date: saved.date, title: saved.title, body: saved.body, commitMessage: saved.title, expectedRemoteSha: null } }
     if (baseline) {
@@ -358,7 +358,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       }
     }
     const workflow = workflowFactory(workflowOptions)
-    if (!record.definitionVersion || record.definitionVersion === '16') { workflow.version = '16'; workflow.ownerContract = engineeringWorkflowOwnerContract }
+    if (!record.definitionVersion || ['16', '17'].includes(record.definitionVersion)) { workflow.version = record.definitionVersion ?? '17'; workflow.ownerContract = engineeringWorkflowOwnerContract }
     const definition = defineExecutionWorkflow(workflow)
     const sameDefinition = !record.digest || [definition.digest, ...definition.legacyDigests].includes(record.digest)
     if (!sameDefinition && !allowDefinitionMigration) fail('ENGINEERING_DEFINITION_DRIFT')
@@ -374,7 +374,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
   }
   async function repositoryInspect(binding, args, signal, input) {
     const item = routes.get(binding.runId), saved = item?.record.config, config = configs.get(saved?.repoId)?.config
-    if (!saved || !config?.discovery || !['6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16'].includes(item.record.definitionVersion) || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
+    if (!saved || !config?.discovery || !['6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17'].includes(item.record.definitionVersion) || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
     const { operation, query = '', path, offset = 0, source = 'current', limit = operation === 'read' ? 8000 : 100 } = args
     let repairContext
     if (source === 'previous' || operation === 'repair') {
@@ -438,7 +438,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
         suggestedCall: { operation: 'list', query: path.split('/').at(-1), source } }
       const bytes = await snapshot.readFile(path), content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
       const text = content.slice(offset, offset + limit)
-      if (source === 'current' && ['13', '14', '15', '16'].includes(item.record.definitionVersion) && text.length) {
+      if (source === 'current' && ['13', '14', '15', '16', '17'].includes(item.record.definitionVersion) && text.length) {
         const readKey = `${binding.runId}:${binding.generation}:${binding.requirementDigest}`
         if (!conflictReads.has(readKey)) conflictReads.set(readKey, new Set())
         conflictReads.get(readKey).add(path)
@@ -455,7 +455,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
   }
   function localRoute(prepared) {
     const item = routes.get(prepared?.runId), saved = item?.record.config
-    if (!item?.runner || !['11', '12', '13', '14', '15', '16'].includes(item.record.definitionVersion) || prepared.workflowKind !== 'local-acceptance'
+    if (!item?.runner || !['11', '12', '13', '14', '15', '16', '17'].includes(item.record.definitionVersion) || prepared.workflowKind !== 'local-acceptance'
       || prepared.action !== 'external' || prepared.taskId !== saved.taskId || prepared.uatEnvironment !== saved.uatEnvironment
       || prepared.resourceKey !== item.localAcceptance.resourceKey) fail('LOCAL_ACCEPTANCE_RECEIPT_INVALID')
     return item
@@ -494,6 +494,29 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       return { principalId: ownerActorId, authorizationRef: `task-grant:${executionDigest({ taskId: saved.taskId, sourceCommandId: saved.sourceCommandId, ownerActorId })}` }
     },
   }
+  async function readInvestigationHandoff(taskId, identity, currentWorkflowId) {
+    if (!identity) return null
+    if (!artifactStore || !identity.outputRef || !identity.stageId || !identity.predecessorStageId) fail('ENGINEERING_INVESTIGATION_HANDOFF_INVALID')
+    const plan = await store.query({ kind: 'task.plan', taskId })
+    const index = plan?.stages.findIndex(stage => stage.stageId === identity.stageId) ?? -1
+    const previous = index > 0 ? plan.stages[index - 1] : null
+    if (plan?.task.planRevision !== identity.planRevision || !['task-engineering', currentWorkflowId].includes(plan.stages[index]?.workflowId)
+      || previous?.stageId !== identity.predecessorStageId || previous.workflowId !== 'task-investigation'
+      || previous.status !== 'succeeded' || previous.outputRef !== identity.outputRef || !previous.runId)
+      fail('ENGINEERING_INVESTIGATION_HANDOFF_INVALID')
+    const state = await store.query({ kind: 'run', runId: previous.runId })
+    if (!state.run || state.run.taskId !== taskId || state.run.status !== 'succeeded'
+      || state.nodes.at(-1)?.status !== 'succeeded' || state.nodes.at(-1)?.outputRef !== identity.outputRef)
+      fail('ENGINEERING_INVESTIGATION_HANDOFF_INVALID')
+    const result = await artifactStore.read(identity.outputRef)
+    const requirement = await artifactStore.read(state.run.requirementRef)
+    if (result.outcome !== 'completed' || typeof result.summary !== 'string' || !result.summary.trim()
+      || !Array.isArray(result.evidenceRefs) || !Array.isArray(result.limitations) || result.question !== '')
+      fail('ENGINEERING_INVESTIGATION_HANDOFF_INVALID')
+    return { source: { taskId, planRevision: identity.planRevision, stageId: previous.stageId,
+      runId: previous.runId, outputRef: identity.outputRef, requirementRef: state.run.requirementRef },
+      objective: requirement.request, result }
+  }
   async function prepareTask(action, info, controller) {
     if (!store) fail('ENGINEERING_REGISTRY_NOT_RESTORED')
     if (info.run.actorId !== ownerActorId && info.authorizedGroupRequest !== true) fail('WORKFLOW_ACTION_FORBIDDEN')
@@ -501,6 +524,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     const workflowId = `task-engineering-${executionDigest(commandId).slice(0, 40)}`
     const runId = info.stageRunId ? text(info.stageRunId, 'WORKFLOW_RUN_ID_REQUIRED') : `run-${executionDigest(commandId).slice(0, 40)}`
     const request = text(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
+    const investigationHandoff = await readInvestigationHandoff(taskId, info.investigationHandoff, workflowId)
     const repoId = text(action.arguments.repositoryId, 'ENGINEERING_REPOSITORY_REQUIRED'), entry = configs.get(repoId)
     if (!entry) fail('ENGINEERING_REPOSITORY_NOT_ADMITTED')
     const uatEnvironment = action.arguments.uatEnvironment, uatBranch = uatBranchFor(uatEnvironment)
@@ -516,6 +540,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     const acceptanceCriteria = action.arguments.acceptanceCriteria ?? []
     if (!Array.isArray(acceptanceCriteria) || acceptanceCriteria.length > 32 || acceptanceCriteria.some(value => typeof value !== 'string' || !value.trim() || value.length > 2000)) fail('LOCAL_ACCEPTANCE_CRITERIA_REQUIRED')
     const fingerprint = executionDigest({ taskId, request, constraints, repoId, uatEnvironment, uatBranch, acceptanceCriteria,
+      ...(investigationHandoff ? { investigationHandoff } : {}),
       ...(info.rerunOfTaskId ? { rerunOfTaskId: text(info.rerunOfTaskId, 'ENGINEERING_BRANCH_SOURCE_INVALID') } : {}) })
     let item = routes.get(runId)
     if (!item) {
@@ -582,7 +607,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       }
       const selected = modelConfig(), selectedAuthor = author ?? { name: await git(config.sourceRepository, ['config', 'user.name']), email: await git(config.sourceRepository, ['config', 'user.email']) }
       const saved = { kind: 'engineering', registryVersion: '1', repoId, uatEnvironment, uatBranch, targetCommit, taskBase, repositoryIdentity, localAcceptanceConfig: config.localAcceptance ?? null, repositoryDigest: entry.digest, runId, taskId, sourceCommandId: commandId, ownerActorId,
-        fingerprint, provider: selected.provider, model: selected.model, ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }), input: { request, constraints, baseCommit, editablePaths: entry.config.editablePaths, acceptanceCriteria },
+        fingerprint, ...(investigationHandoff ? { investigationHandoff } : {}), provider: selected.provider, model: selected.model, ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }), input: { request, constraints, baseCommit, editablePaths: entry.config.editablePaths, acceptanceCriteria },
         head, ...(branchSource ? { branchSource } : {}), ...(previousPullRequest ? { previousPullRequest } : {}), date: `${Math.floor(Date.now() / 1000)} +0000`,
         title: request.replace(/[\r\n\0]+/g, ' ').slice(0, 120), body: `## 任务\n\n${request}\n\n## 约束\n\n${constraints.map(value => `- ${value}`).join('\n') || '无额外约束'}\n\n## 验证配置\n\n${config.checks.map(check => `- ${check.id} / ${check.version}`).join('\n')}`, author: selectedAuthor }
       const { definition } = await build({ workflowId, config: saved })

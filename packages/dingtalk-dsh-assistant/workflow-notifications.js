@@ -9,8 +9,10 @@ export function sameDeliveredText(observed, expected, quoted = false) {
   const normalize = text => typeof text === 'string' ? text.replace(/\s+/gu, ' ').trim() : null
   const actual = normalize(observed), wanted = normalize(expected)
   if (actual === null || wanted === null) return false
-  if (actual === wanted) return true
-  return quoted && wanted.length >= 24 && actual.replace(/\s+/gu, '').includes(wanted.replace(/\s+/gu, ''))
+  // 钉钉回读把单行 inline-code 表示成粗体；只变换期望的成对单反引号，保留正文。
+  const rendered = normalize(typeof expected === 'string' ? expected.replace(/(^|[^`])`([^`\r\n]+)`(?!`)/gu, '$1**$2**') : expected)
+  return [wanted, rendered].some(candidate => actual === candidate
+    || quoted && candidate.length >= 24 && actual.replace(/\s+/gu, '').includes(candidate.replace(/\s+/gu, '')))
 }
 export function notificationOpenTaskId(ack) {
   return ack?.sendReceipt?.openTaskId ?? ack?.result?.openTaskId ?? ack?.result?.result?.openTaskId

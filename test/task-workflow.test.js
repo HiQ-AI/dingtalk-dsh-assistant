@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
-import { createAnalysisTaskWorkflow, createEngineeringTaskWorkflow, createEngineeringDeliveryAdapters, createEngineeringDeliverableWorkflow, createEngineeringAcceptanceWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
+import { createEngineeringTaskWorkflow, createEngineeringDeliveryAdapters, createEngineeringDeliverableWorkflow, createEngineeringAcceptanceWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
 import { describeVerificationChecks, createBusinessAcceptanceCheck } from '../packages/dingtalk-dsh-assistant/execution-check-job.js'
 import { createManagedWorkspaces } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
 import { createManagedEdits } from '../packages/dingtalk-dsh-assistant/execution-edit.js'
@@ -112,32 +112,6 @@ test('工程读取节点可交接超过旧 48KB 限额的完整文件材料', as
   assert.equal(result.files[0].text, content)
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
   assert.equal((await artifacts.read((await artifacts.put(result)).ref)).files[0].text, content)
-})
-
-for (const wrongEvidence of [false, true]) test(`固定分析工作流：真实控制账和工件交接，${wrongEvidence ? '拒绝未知证据' : '完成三个节点'}`, async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'dsh-task-workflow-'))
-  const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'analysis', initialize: true })
-  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
-  let calls = 0
-  const sessions = {
-    async run({ input, definition, onSessionBound, onResult }) {
-      calls++
-      assert.deepEqual(definition.allowedTools, [])
-      assert.equal(input.materials[0].text, 'alpha is active')
-      await onSessionBound()
-      onResult({ summary: 'alpha is active', evidenceIds: [wrongEvidence ? 'unknown' : 'source-1'], limitations: [] })
-    }, async cancel() {}, async close() {},
-  }
-  const controller = createExecutionController({ store, artifacts, sessions, workflows: [createAnalysisTaskWorkflow({ provider: 'test', model: 'synthetic' })] })
-  t.after(async () => { await controller.close(); await store.close() })
-  await controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: 'task-analysis', input: {
-    request: 'summarize', constraints: [], materials: [{ id: 'source-1', text: 'alpha is active' }],
-  } })
-  const state = await controller.whenIdle('run')
-  assert.equal(calls, 1)
-  assert.equal(state.run.status, wrongEvidence ? 'waiting' : 'succeeded')
-  if (wrongEvidence) assert.equal(state.nodes[2].waitReason.reference, 'TASK_EVIDENCE_UNKNOWN')
-  else assert.deepEqual(await artifacts.read(state.nodes[2].outputRef), { summary: 'alpha is active', evidenceIds: ['source-1'], limitations: [] })
 })
 
 for (const publish of [false, true]) test(`固定工程流程实跑：受管clone→结构化修改→冻结验证${publish ? '→commit/push→PR独立回读' : ''}`, { timeout: 120000 }, async t => {

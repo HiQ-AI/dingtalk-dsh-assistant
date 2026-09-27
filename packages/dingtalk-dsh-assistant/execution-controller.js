@@ -60,6 +60,9 @@ export function defineExecutionWorkflow(definition) {
     if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push', 'github.pr', 'workspace.prepare', 'workspace.edit', 'external.operation', 'file.write'].includes(e))
       || (node.executor === 'agent' && node.allowedEffects.some(e => !['pure', 'read'].includes(e)))) throw executionError('EFFECT_NOT_ADMITTED')
     if (typeof node.mapInput !== 'function') throw executionError('INPUT_MAPPER_REQUIRED')
+    if (node.allowInputContinuation !== undefined && (node.allowInputContinuation !== true || node.executor !== 'agent' || typeof node.admitOutput !== 'function')) throw executionError('NODE_CONTINUATION_INVALID')
+    if (node.admitOutput !== undefined && typeof node.admitOutput !== 'function') throw executionError('NODE_ADMISSION_INVALID')
+    if (['validateOutput', 'classifyOutputError'].some(key => node[key] !== undefined && typeof node[key] !== 'function')) throw executionError('NODE_ADMISSION_INVALID')
     if (node.executor === 'code' && typeof node.execute !== 'function') throw executionError('CODE_EXECUTOR_REQUIRED')
     if (node.executor === 'agent' && (![node.provider, node.model, node.prompt].every(v => typeof v === 'string' && v.length) || !Array.isArray(node.allowedTools))) throw executionError('AGENT_DEFINITION_INVALID')
     assertSupportedJsonSchema(node.inputSchema); assertSupportedJsonSchema(node.outputSchema)
@@ -76,6 +79,8 @@ export function defineExecutionWorkflow(definition) {
     implementation: n.execute ? normalizeSource(n.execute.toString()) : null, provider: n.provider ?? null, model: n.model ?? null,
     ...(n.reasoningEffort === undefined ? {} : { reasoningEffort: n.reasoningEffort }),
     ...(n.drainPolicy === undefined ? {} : { drainPolicy: n.drainPolicy }),
+    ...(n.admitOutput ? { admitOutput: normalizeSource(n.admitOutput.toString()), allowInputContinuation: n.allowInputContinuation === true } : {}),
+    ...(n.validateOutput ? { validateOutput: normalizeSource(n.validateOutput.toString()), classifyOutputError: n.classifyOutputError ? normalizeSource(n.classifyOutputError.toString()) : null } : {}),
     prompt: n.prompt ?? null, allowedTools: n.allowedTools ?? [], rulesDigest: n.rulesDigest ?? null,
     ...(n.inputDependencies ? { inputDependencies: n.inputDependencies } : {}),
     maxSteps: n.maxSteps ?? 32, timeoutMs: n.timeoutMs ?? 120000,
@@ -205,6 +210,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       if (receipt.result.status === 'budget_exhausted') return
       const binding = { ...receipt.result.binding, taskId: state.run.taskId,
         requirementDigest: executionDigest(await artifacts.read(state.run.requirementRef)) }
+      if (nodeDefinition.allowInputContinuation) {
+        const history=await store.query({ kind: 'node.input-history', nodeRunId: binding.nodeRunId })
+        Object.assign(binding, { kind: 'task-node', inputVersion: history.inputVersion, inputHistory: history.inputHistory })
+      }
       const abort = new AbortController(); active.set(runId, abort)
       let output, submitted = false, failure, outcome
       try {
@@ -231,6 +240,8 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           if (!sessions) throw executionError('SESSION_ADAPTER_UNAVAILABLE')
           const agentDefinition = Object.fromEntries(['provider', 'model', 'reasoningEffort', 'prompt', 'allowedTools', 'outputSchema', 'maxSteps', 'timeoutMs'].filter(key => nodeDefinition[key] !== undefined).map(key => [key, nodeDefinition[key]]))
           outcome = await sessions.run({ binding, input: input.data, definition: agentDefinition,
+            ...(nodeDefinition.validateOutput ? { validateOutput: value => nodeDefinition.validateOutput({ output: value, input: input.data, binding }),
+              classifyOutputError: nodeDefinition.classifyOutputError } : {}),
             onSessionBound: () => command(`bound:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.sessionBound', {
               runId, nodeId: ready.nodeId, generation: binding.generation, leaseEpoch: binding.leaseEpoch, sessionId: binding.sessionId,
             }),
@@ -271,6 +282,17 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       try {
         await admitResult('output-validation', ready.nodeId, () => validate(nodeDefinition.outputSchema, output))
         result = await artifacts.put(output)
+        if (nodeDefinition.admitOutput) {
+          const input = await artifacts.read(binding.inputRef)
+          const disposition = await admitResult('output-admission', ready.nodeId, () => nodeDefinition.admitOutput({ output,
+            input: input.data, binding, signal: abort.signal }))
+          if (disposition && ['waiting', 'failed'].includes(disposition.outcome)) {
+            await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', { ...identity,
+              outcome: disposition.outcome, outputRef: result.ref, evidenceRefs: [result.ref], waitReason: disposition.waitReason })
+            return
+          }
+          if (disposition?.outcome !== 'succeeded') throw executionError('NODE_ADMISSION_INVALID')
+        }
         const next = definition.nodes[ready.position + 1]
         const dependencies = {}
         for (const id of next?.inputDependencies ?? []) {
@@ -542,6 +564,26 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         await this.advanceTaskPlan(taskId)
       }
       return { receipt, plan: await store.query({ kind: 'task.plan', taskId }) }
+    },
+    async continueNode({ commandId, runId, nodeRunId, expectedInputVersion, expectedInputDigest, expectedOutputRef, answer }) {
+      const replay=await store.query({kind:'receipt',commandId})
+      if(replay){
+        if(replay.result.answerDigest!==executionDigest(answer)||replay.result.expectedOutputRef!==expectedOutputRef)throw executionError('NODE_CONTINUATION_CONFLICT')
+        schedule(runId);return replay
+      }
+      if(closed||flights.has(runId))throw executionError('EXECUTOR_STILL_ACTIVE')
+      const state=await query(runId),node=state.nodes.find(item=>item.nodeRunId===nodeRunId),definition=definitionOf(state.run)
+      if(!node||!definition.nodes[node.position].allowInputContinuation||node.inputDigest!==expectedInputDigest
+        ||node.outputRef!==expectedOutputRef||node.waitReason?.reference!=='AGENT_WORK_NEEDS_INPUT')throw executionError('NODE_CONTINUATION_STALE')
+      if(!answer||typeof answer.eventId!=='string'||!answer.eventId||typeof answer.answer!=='string'||!answer.answer.trim())throw executionError('NODE_CONTINUATION_INVALID')
+      const previous=await artifacts.read(node.inputRef)
+      const next={...previous,data:{...previous.data,clarificationAnswers:[...(previous.data.clarificationAnswers??[]),answer]}}
+      validate(definition.nodes[node.position].inputSchema,next.data)
+      const saved=await artifacts.put(next)
+      const receipt=await command(commandId,'node.continue',{runId,nodeId:node.nodeId,generation:node.generation,
+        leaseEpoch:node.leaseEpoch,inputDigest:expectedInputDigest,expectedInputVersion,inputRef:saved.ref,nextInputDigest:saved.digest,
+        expectedOutputRef,eventId:answer.eventId,answerDigest:executionDigest(answer)})
+      schedule(runId);return receipt
     },
     async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision, repair, repairAdmission }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')

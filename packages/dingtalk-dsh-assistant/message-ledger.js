@@ -146,10 +146,41 @@ function settle(db,r) {
   save(db,r)
 }
 function revoke(db,r,unitIds) {
+  for(const execution of rows(db,r.runId,'agent-execution')) {
+    if(unitIds && !unitIds.includes(execution.unitId))continue
+    if(['cancelled','superseded'].includes(execution.status))continue
+    execution.priorStatus=execution.status;execution.status='superseded';execution.error='input_superseded'
+    put(db,r.runId,'agent-execution',execution)
+  }
   for(const kind of ['node','command']) for(const i of rows(db,r.runId,kind)) {
     if(unitIds && !unitIds.includes(i.unitId)) continue
     if((kind==='node'&&i.status!=='superseded')||['ready','running','pending','waiting','failed'].includes(i.status)) { i.priorStatus=i.status;i.status=kind==='command' && i.status==='running'?'unknown':'superseded'; put(db,r.runId,kind,i) }
   }
+}
+function agentEffectsPresent(db,r,command) {
+  return rows(db,r.runId,'notification').some(item=>item.commandId===command.id)
+    || rows(db,r.runId,'notification-operation').some(item=>item.commandId===command.id)
+    || db.prepare('SELECT 1 FROM execution_effects WHERE run_id=? LIMIT 1').get(r.runId)
+    || db.prepare('SELECT 1 FROM execution_runs WHERE run_id=? LIMIT 1').get(r.runId)
+}
+function agentCommandSettled(db,r,c) {
+  put(db,r.runId,'command',c)
+  const unit=get(db,'unit',c.unitId)
+  if(rows(db,r.runId,'command').filter(item=>item.unitId===unit.id).every(item=>['applied','cancelled','rejected'].includes(item.status))){unit.status='applied';put(db,r.runId,'unit',unit)}
+  settle(db,r)
+}
+function agentIdentity(execution,a) {
+  if(execution.leaseEpoch!==a.leaseEpoch || execution.commandLeaseEpoch!==a.commandLeaseEpoch
+    || execution.inputVersion!==a.inputVersion || execution.inputDigest!==a.inputDigest || execution.sessionId!==a.sessionId)fail('MESSAGE_AGENT_STALE')
+}
+function agentInput(a) {
+  if(!Number.isSafeInteger(a.inputVersion)||a.inputVersion<1||!/^[a-f0-9]{64}$/.test(a.inputDigest??''))fail('MESSAGE_AGENT_INPUT_INVALID')
+  str(a.inputRef);str(a.sessionId)
+}
+function rememberAgentBinding(execution) {
+  const binding={inputVersion:execution.inputVersion,inputDigest:execution.inputDigest,sessionId:execution.sessionId,leaseEpoch:execution.leaseEpoch}
+  execution.bindingHistory??=[]
+  if(!execution.bindingHistory.some(item=>json(item)===json(binding)))execution.bindingHistory.push(binding)
 }
 export function recoverMessages(db) {
   for(const row of db.prepare('SELECT body FROM message_runs').all()) {
@@ -158,9 +189,103 @@ export function recoverMessages(db) {
     for(const n of rows(db,r.runId,'notification'))if(n.status==='sending'){n.status='unknown';put(db,r.runId,'notification',n)}
     for(const operation of rows(db,r.runId,'notification-operation'))if(operation.status==='in_flight'){operation.status='unknown';operation.error='process_interrupted';put(db,r.runId,'notification-operation',operation)}
     for(const c of rows(db,r.runId,'command')) if(c.status==='running') { c.status='unknown'; put(db,r.runId,'command',c) }
+    for(const execution of rows(db,r.runId,'agent-execution')) {
+      const command=get(db,'command',execution.commandId)
+      if(execution.drained===false){execution.drained=true;execution.interruptedAt=new Date().toISOString();execution.error='process_interrupted'
+        if(execution.status==='cancelling'){execution.status='cancelled';command.status='cancelled';agentCommandSettled(db,r,command)}
+        else if(execution.status==='running')execution.status='interrupted'
+        put(db,r.runId,'agent-execution',execution)
+      }
+      const source=db.prepare('SELECT current_version FROM message_sources WHERE source_key=?').get(r.sourceKey)
+      if(command.status==='unknown' && r.status!=='superseded' && source?.current_version===(r.validSourceVersion??r.sourceVersion)
+        && command.revision===r.revision && execution.runRevision===r.revision && command.kind==='answer' && !command.args?.taskId
+        && execution.mode==='read-only' && /^[a-f0-9]{64}$/.test(execution.toolPolicyDigest??'')
+        && ['interrupted','succeeded','failed'].includes(execution.status) && !agentEffectsPresent(db,r,command)) {
+        command.status='pending';command.error=null;put(db,r.runId,'command',command)
+      }
+    }
   }
 }
 export function reduceMessageCommand(db,{kind,args:a},ctx) {
+  if(kind.startsWith('message.agent.')) {
+    const c=get(db,'command',a.commandId),r=run(db,c.runId),now=ctx.now
+    const row=db.prepare("SELECT body FROM message_items WHERE item_id=?").get('agent-execution:'+c.id)
+    let execution=row?JSON.parse(row.body):null
+    if(kind==='message.agent.drained') {
+      if(!execution||execution.leaseEpoch!==a.leaseEpoch||execution.sessionId!==a.sessionId)fail('MESSAGE_AGENT_STALE')
+      execution.drained=true;execution.drainedAt=now
+      if(execution.status==='cancelling'){execution.status='cancelled';c.status='cancelled';c.completedAt=now;agentCommandSettled(db,r,c)}
+      else if(execution.status==='running'){execution.status='interrupted';execution.error='session_interrupted'}
+      put(db,r.runId,'agent-execution',execution);return {result:{execution,command:c}}
+    }
+    current(db,r,c.revision)
+    if(kind==='message.agent.begin') {
+      agentInput(a)
+      if(c.kind!=='answer'||c.args?.taskId||c.status!=='running'||c.leaseEpoch!==a.commandLeaseEpoch
+        ||a.mode!=='read-only'||!/^[a-f0-9]{64}$/.test(a.toolPolicyDigest??'')||agentEffectsPresent(db,r,c))fail('MESSAGE_AGENT_BEGIN_FORBIDDEN')
+      if(execution){
+        if(execution.inputVersion!==a.inputVersion||execution.inputDigest!==a.inputDigest||execution.inputRef!==a.inputRef
+          ||execution.sessionId!==a.sessionId||execution.toolPolicyDigest!==a.toolPolicyDigest)fail('MESSAGE_AGENT_INPUT_CONFLICT')
+        if(['succeeded','failed'].includes(execution.status))return {result:{execution,cached:true}}
+        if(execution.status==='running'&&execution.commandLeaseEpoch===c.leaseEpoch)return {result:{execution,cached:false}}
+        if(!['ready','interrupted'].includes(execution.status)||!execution.drained)fail('MESSAGE_AGENT_NOT_READY')
+        if(execution.status==='interrupted')rememberAgentBinding(execution)
+        execution.leaseEpoch++
+      }else{
+        if(db.prepare("SELECT 1 FROM message_items WHERE kind='agent-execution' AND json_extract(body,'$.sessionId')=?").get(a.sessionId))fail('MESSAGE_AGENT_SESSION_CONFLICT')
+        execution={id:c.id,commandId:c.id,runId:r.runId,unitId:c.unitId,kind:'message-unit',mode:a.mode,toolPolicyDigest:a.toolPolicyDigest,
+          runRevision:r.revision,sourceVersion:r.sourceVersion,inputVersion:a.inputVersion,inputDigest:a.inputDigest,inputRef:a.inputRef,
+          sessionId:a.sessionId,sessionBound:false,leaseEpoch:1,createdAt:now,inputHistory:[],bindingHistory:[]}
+      }
+      execution.commandLeaseEpoch=c.leaseEpoch;execution.status='running';execution.drained=false;execution.startedAt=now;execution.error=null
+      put(db,r.runId,'agent-execution',execution);return {result:{execution,cached:false}}
+    }
+    if(!execution)fail('MESSAGE_AGENT_NOT_FOUND')
+    if(kind==='message.agent.cancel') {
+      if(execution.leaseEpoch!==a.expectedLeaseEpoch)fail('MESSAGE_AGENT_STALE')
+      if(execution.status==='cancelled')return {result:{execution,command:c}}
+      if(['succeeded','failed','superseded'].includes(execution.status))fail('MESSAGE_AGENT_TERMINAL')
+      execution.cancelReason=str(a.reason);execution.status=execution.drained?'cancelled':'cancelling'
+      for(const request of rows(db,r.runId,'request').filter(q=>q.commandId===c.id&&q.status==='pending')){request.status='superseded';put(db,r.runId,'request',request)}
+      if(execution.drained){c.status='cancelled';c.completedAt=now;agentCommandSettled(db,r,c)}
+      put(db,r.runId,'agent-execution',execution);return {result:{execution,command:c}}
+    }
+    if(kind==='message.agent.resume') {
+      const q=get(db,'request',a.requestId)
+      if(q.runId!==r.runId||q.commandId!==c.id||q.nodeId!=='message-agent'||q.revision!==r.revision
+        ||a.conversationId!==r.conversationId||!q.permittedActors.includes(a.actorId))fail('MESSAGE_AGENT_RESUME_FORBIDDEN')
+      if(q.status==='resolved'&&q.eventId===a.eventId&&q.answer===a.answer&&execution.inputVersion===a.inputVersion&&execution.inputDigest===a.inputDigest&&execution.inputRef===a.inputRef)return {result:{execution,command:c,request:q}}
+      if(q.status!=='pending'||execution.status!=='waiting_user'||c.status!=='waiting'||!execution.drained)fail('MESSAGE_AGENT_NOT_WAITING')
+      agentInput({...a,sessionId:execution.sessionId})
+      if(a.inputVersion!==execution.inputVersion+1)fail('MESSAGE_AGENT_INPUT_VERSION_INVALID')
+      rememberAgentBinding(execution)
+      execution.inputHistory.push({inputVersion:execution.inputVersion,inputDigest:execution.inputDigest,inputRef:execution.inputRef,requestId:q.id,eventId:str(a.eventId)})
+      execution.inputVersion=a.inputVersion;execution.inputDigest=a.inputDigest;execution.inputRef=a.inputRef;execution.status='ready';execution.updatedAt=now
+      q.status='resolved';q.answer=str(a.answer);q.eventId=a.eventId;q.resolvedAt=now;put(db,r.runId,'request',q)
+      c.status='pending';put(db,r.runId,'command',c);r.status='pending';r.intentStatus='processed';save(db,r)
+      put(db,r.runId,'agent-execution',execution);return {result:{execution,command:c,request:q}}
+    }
+    agentIdentity(execution,a)
+    if(execution.status!=='running'||c.status!=='running'||c.leaseEpoch!==a.commandLeaseEpoch)fail('MESSAGE_AGENT_NOT_RUNNING')
+    if(kind==='message.agent.bind'){execution.sessionBound=true;put(db,r.runId,'agent-execution',execution);return {result:{execution}}}
+    if(!['message.agent.complete','message.agent.fail','message.agent.wait'].includes(kind))fail('MESSAGE_UNKNOWN_COMMAND')
+    if(a.drained!==true)fail('MESSAGE_AGENT_NOT_DRAINED')
+    execution.drained=true;execution.drainedAt=now;execution.completedAt=now
+    if(kind==='message.agent.wait') {
+      if(a.conversationId!==r.conversationId||!a.request||!Array.isArray(a.request.permittedActors)||!a.request.permittedActors.length
+        ||a.request.permittedActors.some(actor=>typeof actor!=='string'||!actor))fail('MESSAGE_AGENT_WAIT_FORBIDDEN')
+      const id=str(a.request.requestId)
+      if(db.prepare('SELECT 1 FROM message_items WHERE item_id=?').get('request:'+id))fail('MESSAGE_REQUEST_EXISTS')
+      const q={id,requestId:id,kind:'needs_clarification',question:str(a.request.question),permittedActors:[...new Set(a.request.permittedActors)],
+        runId:r.runId,unitId:c.unitId,nodeId:'message-agent',commandId:c.id,revision:r.revision,inputVersion:execution.inputVersion,inputDigest:execution.inputDigest,status:'pending',createdAt:now}
+      execution.status='waiting_user';execution.requestId=id;c.status='waiting';put(db,r.runId,'request',q);put(db,r.runId,'command',c)
+      r.status='waiting';r.intentStatus='intent_blocked';save(db,r);put(db,r.runId,'agent-execution',execution);return {result:{execution,command:c,request:q}}
+    }
+    execution.status=kind.endsWith('complete')?'succeeded':'failed'
+    if(execution.status==='succeeded'){execution.resultRef=str(a.resultRef);if(!a.result||typeof a.result!=='object')fail('MESSAGE_AGENT_RESULT_REQUIRED');execution.result=a.result}
+    else {execution.error=str(a.error);execution.resultRef=a.resultRef??null;execution.result=a.result??null}
+    put(db,r.runId,'agent-execution',execution);return {result:{execution}}
+  }
   if(kind==='message.web-task.prepare') {
     const old=queryMessages(db,{kind:'message.web-task',eventId:a.eventId})
     if(old){if(json(canonical(old.request))!==json(canonical(a.request))||old.actorId!==a.actorId)fail('MESSAGE_WEB_EVENT_CONFLICT');return {result:{event:old}}}
@@ -451,6 +576,8 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     }
     if(c.status!=='running'||c.leaseEpoch!==a.leaseEpoch)fail('MESSAGE_COMMAND_STALE')
     if(!['message.command.complete','message.command.fail'].includes(kind))fail('MESSAGE_UNKNOWN_COMMAND')
+    const agent=rows(db,r.runId,'agent-execution').find(e=>e.commandId===c.id)
+    if(agent&&(!agent.drained||!['succeeded','failed'].includes(agent.status)))fail('MESSAGE_AGENT_NOT_DRAINED')
     c.status=kind.endsWith('fail')?'unknown':'applied';c.result=a.result??null;c.error=a.error??null;c.completedAt=now;put(db,r.runId,'command',c)
     const u=get(db,'unit',c.unitId)
     if(rows(db,r.runId,'command').filter(x=>x.unitId===u.id).every(x=>x.status==='applied')) {u.status='applied';put(db,r.runId,'unit',u)}
@@ -734,6 +861,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   if(kind==='message.wake'||kind==='message.request.resolve') {
     const q=get(db,'request',a.requestId)
     if(q.runId!==r.runId||q.revision!==r.revision)fail('MESSAGE_REQUEST_STALE')
+    if(q.nodeId==='message-agent')fail('MESSAGE_AGENT_RESUME_REQUIRED')
     if(q.permittedActors?.length&&!q.permittedActors.includes(a.actorId)
       &&!(q.kind==='needs_clarification'&&a.ownerAnswer===true))fail('MESSAGE_ACTOR_FORBIDDEN')
     if(q.status!=='pending')return {result:{request:q,run:r}}
@@ -747,6 +875,8 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   fail('MESSAGE_UNKNOWN_COMMAND')
 }
 export function queryMessages(db,a) {
+  if(a.kind==='message.agent.execution'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('agent-execution:'+str(a.commandId));return row?JSON.parse(row.body):null}
+  if(a.kind==='message.agent.executions')return rows(db,str(a.runId),'agent-execution')
   if(a.kind==='message.clarifications.unlinked') {
     const limit=a.limit??100
     if(!Number.isSafeInteger(limit)||limit<1||limit>200)fail('MESSAGE_INVALID_LIMIT')
@@ -850,7 +980,7 @@ export function queryMessages(db,a) {
   if(a.kind==='message.source') {const row=db.prepare('SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=r.source_version WHERE r.source_key=?').get(str(a.sourceKey));return row?JSON.parse(row.body):null}
   if(a.kind==='message.pending')return db.prepare("SELECT r.body FROM message_runs r WHERE json_extract(r.body,'$.status') NOT IN ('settled','superseded','buffered','alias') OR (json_extract(r.body,'$.status')='settled' AND EXISTS (SELECT 1 FROM message_items i WHERE i.run_id=r.run_id AND i.kind='barrier' AND json_extract(i.body,'$.status')='pending')) ORDER BY r.rowid").all().map(x=>JSON.parse(x.body))
   if(a.kind==='message.command')return get(db,'command',a.commandId)
-  if(a.kind==='message.run') {const r=run(db,a.runId);return {run:r,units:rows(db,r.runId,'unit'),nodes:rows(db,r.runId,'node'),commands:rows(db,r.runId,'command'),requests:rows(db,r.runId,'request'),barriers:rows(db,r.runId,'barrier'),budget:db.prepare('SELECT claims,corrections,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(r.sourceKey)}}
+  if(a.kind==='message.run') {const r=run(db,a.runId);return {run:r,units:rows(db,r.runId,'unit'),nodes:rows(db,r.runId,'node'),commands:rows(db,r.runId,'command'),requests:rows(db,r.runId,'request'),executions:rows(db,r.runId,'agent-execution'),barriers:rows(db,r.runId,'barrier'),budget:db.prepare('SELECT claims,corrections,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(r.sourceKey)}}
   return undefined
 }
 

@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { readOnlyTaskCatalog } from './task-readonly-workflows.js'
 
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const materialRestriction = /禁止|不得|不能|不允许|仅限|只准|必须|除非|未经|不要|暂停|取消/u
@@ -45,12 +44,10 @@ const span = z.strictObject({ start: z.number().int().nonnegative(), end: z.numb
 const need = z.strictObject({ resourceRef: z.string().min(1), reason: z.string().min(1) })
 const wait = z.strictObject({ kind: z.enum(['needs_context', 'needs_clarification']), reason: z.string().min(1), needs: z.array(need).default([]), question: z.string().optional() })
 const argumentText = z.string().trim().min(1)
-export const messageAnswerArguments = z.strictObject({ text: argumentText })
+export const messageAnswerArguments = z.strictObject({ objective: argumentText })
 export const taskWorkflowCatalog = Object.freeze([
-  { id: 'task-analysis', label: '材料分析', purpose: '已给材料分析', mode: 'read-only' },
-  ...readOnlyTaskCatalog.map(({ id, purpose }) => ({ id, label: ({ 'task-investigation': '问题排查', 'task-planning': '方案设计', 'task-pr-review': 'PR 评审', 'task-data-query': '数据口径审查', 'task-retrospective': '任务复盘' })[id], purpose, mode: 'read-only' })),
+  { id: 'task-investigation', label: '调查与分析', purpose: '自主使用授权查询能力，交付调查、分析、评审或方案；按目标核对证据', mode: 'read-only' },
   { id: 'task-engineering', label: '代码开发', purpose: '开发并向明确指定的uat1至uat9环境提交PR，由Host映射分支；未指定先询问，禁止main', mode: 'engineering' },
-  { id: 'task-general', label: '通用任务', purpose: '受控的未固化任务', mode: 'general' },
   { id: 'task-uat-deployment', label: 'UAT 部署', purpose: '将已合入UAT分支的精确提交部署到UAT环境', mode: 'external' },
   { id: 'task-main-pr-merge', label: '上线合并 main', purpose: 'UAT及业务验收完成并获上线批准后，独立合并精确PR至main', mode: 'external' },
   { id: 'task-uat-pr-merge', label: 'UAT PR 合并', purpose: '核验精确 PR 和必要检查后合并至 UAT 分支并回读来源', mode: 'external' },
@@ -65,6 +62,7 @@ const taskActionSchema = z.strictObject({ intent: z.enum(['no_action', 'fact', '
   for (const key of required) if (!action.arguments[key]) ctx.addIssue({ code: 'custom', path: ['arguments', key], message: `${action.intent} requires ${key}` })
 })
 const actionSchema = z.union([
+  z.strictObject({ intent: z.literal('cancel_answer'), arguments: z.strictObject({ commandId: argumentText }), dependsOn: z.array(z.number().int().nonnegative()) }),
   z.strictObject({ intent: z.literal('answer'), arguments: messageAnswerArguments, dependsOn: z.array(z.number().int().nonnegative()) }),
   taskActionSchema,
 ])

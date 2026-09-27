@@ -18,7 +18,7 @@ const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-lo
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
 
-async function host(root, pageRef = null, artifactRef = null) {
+async function host(root, pageRef = null, artifactRef = null, candidate = decision) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
@@ -34,7 +34,7 @@ async function host(root, pageRef = null, artifactRef = null) {
         ? 'task_owner_read_events' : artifactRef && requests.length === 1
           ? 'task_owner_read_artifact' : 'task_owner_submit'
       const args = JSON.stringify(name === 'task_owner_read_events' ? { pageRef }
-        : name === 'task_owner_read_artifact' ? { artifactRef } : { decision })
+        : name === 'task_owner_read_artifact' ? { artifactRef } : { decision: candidate })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } }
@@ -131,4 +131,20 @@ test('会话存储读故障原样阻断，不能伪装为可重建的缺失', as
     provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
     onCandidate: async () => {} }), { code: 'EIO' })
   await sessions.close()
+})
+
+
+test('Owner新增能力阶段只接纳已登记写能力，调查读取不能逐次编排', async t => {
+  for (const effectClass of ['read', 'file.write']) {
+    const root = await mkdtemp(join(tmpdir(), 'task-owner-capability-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const candidate = { ...decision, planChange: { kind: 'initialize', stages: [{ workflowId: 'task-general-capability', gate: 'none', capabilityStep: { capabilityId: 'cap', input: {}, expectedEvidence: 'artifact' } }] } }
+    const h = await host(root, null, null, candidate); t.after(() => h.close())
+    let accepted = 0
+    const outcome = await h.sessions.run({ binding: { taskId: 'task-1', sessionId: 'owner-capability', turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+      input: { taskId: 'task-1', capabilities: [{ id: 'cap', effectClass }] }, provider: 'owner-fixture', model: 'scripted',
+      onSessionBound: async () => {}, onCandidate: async () => { accepted++ } })
+    assert.equal(outcome.status, effectClass === 'read' ? 'no_submission' : 'submitted')
+    assert.equal(accepted, effectClass === 'read' ? 0 : 1)
+  }
 })

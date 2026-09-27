@@ -8,9 +8,8 @@ import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution
 import { openExecutionArtifacts, executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
-import { createReadOnlyTaskWorkflows, createLegacyReadOnlyTaskWorkflows } from '../packages/dingtalk-dsh-assistant/task-readonly-workflows.js'
-import { createAnalysisTaskWorkflow, createLegacyAnalysisTaskWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
-import { createGeneralCapabilityStepWorkflow, createLegacyGeneralCapabilityStepWorkflow } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
+import { readOnlyWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/task-readonly-workflows.js'
+import { createGeneralCapabilityStepWorkflow } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
 import { externalWorkflowOwnerContract, createReleaseTaskWorkflow } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 
@@ -48,7 +47,7 @@ async function fixture(t, workflow, input, sessions) {
 }
 
 test('只读调查范围说明不阻塞完成，未知来源和未满足验收仍被拒绝', async t => {
-  const workflow = createReadOnlyTaskWorkflows({ provider: 'test', model: 'test' })[0]
+  const workflow = { id:'historical-material-fixture',version:'1',ownerContract:readOnlyWorkflowOwnerContract,nodes:[{id:'result',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,mapInput:({requirement})=>requirement,execute:async()=>({summary:'现有记录无法确认创建人，调查结果已经说明。',evidenceIds:['message'],limitations:['材料没有账号创建人的审计记录']})}] }
   const input = { request: requirement.request, constraints: [], materials: [{ id: 'message', text: '同事询问账号是否由小小鹏创建，现有记录无法确认创建人。' }] }
   const sessions = { async run({ onSessionBound, onResult }) {
     await onSessionBound()
@@ -115,19 +114,13 @@ test('未绑定合同的旧定义保留产出读取，但完成和修复不得�
   await assert.rejects(unloaded.authorizeCompletion(completed), /WORKFLOW_OWNER_CONTRACT_UNAVAILABLE/)
 })
 
-test('current 工厂升级不改变旧无合同工厂，新 capability 冻结结果检查身份', () => {
-  const config = { provider: 'test', model: 'test' }
-  for (const [current, legacy] of [[createAnalysisTaskWorkflow(config), createLegacyAnalysisTaskWorkflow(config)],
-    ...createReadOnlyTaskWorkflows(config).map((item, i) => [item, createLegacyReadOnlyTaskWorkflows(config)[i]])]) {
-    assert.equal(current.version, '2'); assert.equal(legacy.version, '1'); assert.equal(legacy.ownerContract, undefined)
-    assert.notEqual(defineExecutionWorkflow(current).digest, defineExecutionWorkflow(legacy).digest)
-    assert.deepEqual(current.nodes.map(node => node.execute?.toString()), legacy.nodes.map(node => node.execute?.toString()))
-  }
-  const capabilities = [{ id: 'lookup', identity: 'lookup-v1', effectClass: 'read', authorize: () => true, execute: async () => ({}), verify: () => ({}) }]
-  const one = createGeneralCapabilityStepWorkflow({ capabilities, completionCheck: () => true, completionIdentity: 'one' })
-  const two = createGeneralCapabilityStepWorkflow({ capabilities, completionCheck: () => true, completionIdentity: 'two' })
-  assert.equal(one.version, '3'); assert.equal(createLegacyGeneralCapabilityStepWorkflow({ capabilities }).version, '2')
-  assert.notEqual(defineExecutionWorkflow(one).digest, defineExecutionWorkflow(two).digest)
+test('保留写效果流程冻结验收身份，不再导出旧只读执行工厂', async () => {
+  const old=await import('../packages/dingtalk-dsh-assistant/task-readonly-workflows.js')
+  assert.equal(old.createReadOnlyTaskWorkflows,undefined)
+  const capabilities=[{id:'write-file',identity:'write-v1',effectClass:'file.write',authorize:()=>true,prepare:()=>({}),verify:()=>({})}]
+  const one=createGeneralCapabilityStepWorkflow({capabilities,completionCheck:()=>true,completionIdentity:'one'})
+  const two=createGeneralCapabilityStepWorkflow({capabilities,completionCheck:()=>true,completionIdentity:'two'})
+  assert.equal(one.version,'4');assert.notEqual(defineExecutionWorkflow(one).digest,defineExecutionWorkflow(two).digest)
 })
 
 test('平台流程绑定既有外部结果合同，未验证和受阻结果不能完成', () => {
@@ -167,7 +160,7 @@ test('公共修复屏障不依赖领域合同自律，不确定效果、暂停�
 })
 
 test('通用能力合同仍按同一产物摘要与完整验收条件检查目标', async () => {
-  const capabilities = [{ id: 'lookup', identity: 'lookup-v1', effectClass: 'read', authorize: () => true, execute: async () => ({}), verify: () => ({}) }]
+  const capabilities = [{ id: 'lookup', identity: 'lookup-v1', effectClass: 'file.write', authorize: () => true, prepare: () => ({}), verify: () => ({}) }]
   let calls = 0
   const { ownerContract } = createGeneralCapabilityStepWorkflow({ capabilities, completionIdentity: 'test-v1',
     completionCheck: async ({ acceptanceCriteria, evidence }) => { calls++; return { status: 'satisfied', resultVerified: true,
@@ -241,13 +234,12 @@ test('第三种流程经真实 Controller/Store 修复，同一合同准备票�
   assert.equal(preparations, 1)
 })
 
-test('正式 Host 启动恢复只读旧定义和外部旧/新定义，待执行阶段不套最新合同', async t => {
+test('正式 Host 继续恢复外部旧/新定义，待执行阶段不套最新合同', async t => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-contract-host-')), model = { provider: 'test', model: 'test' }
   const dbPath = join(root, 'control.db'), artifactDirectory = join(root, 'artifacts')
   const store = await openExecutionStore({ dbPath, instanceId: 'contract-host', initialize: true })
   t.after(() => store.close())
   const artifacts = await openExecutionArtifacts({ directory: artifactDirectory, initialize: true })
-  const readonly = createLegacyReadOnlyTaskWorkflows(model)[0]
   const adapter = { id: 'local-fixture', version: '1', rulesDigest: 'a'.repeat(64),
     inspect: async () => { throw Error('UNEXPECTED_EXTERNAL_CALL') }, prepareOperation: async () => { throw Error('UNEXPECTED_EXTERNAL_CALL') } }
   const release = createReleaseTaskWorkflow({ kind: 'uat-deployment', adapter })
@@ -255,12 +247,12 @@ test('正式 Host 启动恢复只读旧定义和外部旧/新定义，待执行�
     operationAdapter: { execute: async () => { throw Error('UNEXPECTED_EXTERNAL_CALL') }, reconcile: async () => { throw Error('UNEXPECTED_EXTERNAL_CALL') } },
     authorizeExternal: async () => false, prepareRequirement: async () => { throw Error('UNEXPECTED_EXTERNAL_CALL') } }
   const externalConfig = { kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version, rulesDigest: adapter.rulesDigest }
-  const previous = createExecutionController({ store, artifacts, workflows: [readonly, release],
+  const previous = createExecutionController({ store, artifacts, workflows: [release],
     delivery: { execute: async () => { throw Error('UNEXPECTED_EXTERNAL_CALL') } } })
-  for (const workflow of [readonly, release]) {
+  for (const workflow of [release]) {
     const definition = defineExecutionWorkflow(workflow)
     await store.command({ id: `workflow:${definition.digest}`, kind: 'workflow.register', args: { workflowId: workflow.id,
-      definitionVersion: workflow.version, config: workflow === readonly ? model : externalConfig, digest: definition.digest } })
+      definitionVersion: workflow.version, config: externalConfig, digest: definition.digest } })
     await previous.createTaskPlan({ commandId: `plan:${workflow.id}`, taskId: workflow.id,
       stages: [{ stageId: 'first', workflowId: workflow.id, input: {} }] })
   }
@@ -270,7 +262,7 @@ test('正式 Host 启动恢复只读旧定义和外部旧/新定义，待执行�
     taskOwnerSessions: { async close() {} } }
   let service = await openWorkflowService(options)
   t.after(() => service.close())
-  for (const workflow of [readonly, release]) {
+  for (const workflow of [release]) {
     const digest = defineExecutionWorkflow(workflow).digest
     const definition = service.execution.controller.workflowDefinition(workflow.id, digest)
     assert.equal(definition.digest, digest); assert.equal(definition.ownerContract, undefined)

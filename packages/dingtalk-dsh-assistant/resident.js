@@ -11,6 +11,7 @@ import { createTaskSheetSyncService } from './task-sheet-sync.js'
 import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
 import { tmpdir } from 'node:os'
 import { openExecutionStore } from './execution-store.js'
+import { closeExecutionResources } from './execution.js'
 import { openWorkflowService } from './workflow-service.js'
 import { createTrustedWorkflowPlatforms } from './workflow-trusted-platforms.js'
 import { notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from './workflow-notifications.js'
@@ -311,12 +312,18 @@ export async function apply(ctx, config = {}) {
 
   ctx.effect(() => {
     return async () => {
-      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-      await taskSheetSync.close()
-      await stopDws()
       if (workflowTimer) clearInterval(workflowTimer)
-      await workflow?.close()
-      await runtime.close()
+      try {
+        await closeExecutionResources([
+          ['server', () => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))],
+          ['taskSheetSync', () => taskSheetSync.close()], ['dws', () => stopDws()],
+          ['workflow', () => workflow?.close()], ['runtime', () => runtime.close()],
+        ])
+      } catch (error) {
+        // Host可能捕获dispose异常；显式记录原始cause，不能把partial-dispose当成功关闭证明。
+        ctx.logger.error(error)
+        throw error
+      }
     }
   })
 }

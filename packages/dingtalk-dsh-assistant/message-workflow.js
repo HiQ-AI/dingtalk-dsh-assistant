@@ -543,7 +543,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   }
   async function dispatch(runId) {
     const data = await state(runId)
-    await Promise.all(data.commands.filter(command => !['applied', 'rejected', 'unknown', 'failed', 'running', 'superseded'].includes(command.status)).map(async command => {
+    await Promise.all(data.commands.filter(command => !['applied', 'rejected', 'unknown', 'failed', 'running', 'waiting', 'cancelled', 'superseded'].includes(command.status)).map(async command => {
       const action = { intent: command.kind, ...command.args }
       const info = { run: data.run, unit: data.units.find(unit => unit.unitId === command.unitId), binding: command.args.binding, commandId: command.commandId }
       const blocked = command.dependsOn?.find(id => data.commands.find(item => item.commandId === id)?.status === 'rejected')
@@ -565,7 +565,9 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (!receipt.dispatchEligible || !receipt.result?.command) return
       const claimed = receipt.result.command
       try {
-        const result = await handler(action, info)
+        const result = await handler(action, { ...info, commandLeaseEpoch: claimed.leaseEpoch })
+        // Agent 的持久执行自行提交结果；路由队列不能等待一次长查询结束。
+        if (result?.executionPending === true) return
         await cmd('message.command.complete', { commandId: command.commandId, leaseEpoch: claimed.leaseEpoch, result })
       } catch (error) { await cmd('message.command.fail', { commandId: command.commandId, leaseEpoch: claimed.leaseEpoch, error: error.code ?? error.message }); return }
       // 回执提交即唤醒其已就绪后继，不能等待同批其它慢动作或下一次恢复轮询。
@@ -701,6 +703,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         return process(run.runId)
       }
       if (context.bindTopic && pendingState.run.routingStatus === 'routing_complete') {
+        await dispatch(run.runId)
         await scheduleTopics(run.conversationId)
         return pendingState
       }
@@ -712,5 +715,5 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   }
   async function resume(input) { const result = await cmd('message.wake', input, `wake:${input.eventId}`); if (result?.run?.runId) { await process(result.run.runId); await waitForTopicFlight(result.run.runId) } return result }
   async function close() { closed = true; for (const controller of controllers.values()) controller.abort(); for (const item of queue.splice(0)) item.reject(new Error('MESSAGE_WORKFLOW_CLOSED')); await Promise.allSettled([...flights.values(), ...topicFlights.values(), ...topicSchedules]) }
-  return { receive, reprocess, process, recover, resume, state, close }
+  return { receive, reprocess, process, recover, resume, state, commandSettled: dispatch, close }
 }

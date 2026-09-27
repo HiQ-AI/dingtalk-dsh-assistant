@@ -1,67 +1,50 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
-import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
-import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
-import { createReadOnlyTaskWorkflows } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
-import { readOnlyTaskCatalog } from '../packages/dingtalk-dsh-assistant/task-readonly-workflows.js'
+import { assertRetiredWorkflowsDrained,readOnlyWorkflowOwnerContract,retiredWorkflowIds } from '../packages/dingtalk-dsh-assistant/task-readonly-workflows.js'
 
-const ids = ['task-investigation', 'task-planning', 'task-pr-review', 'task-data-query', 'task-retrospective']
-const input = { request: '分析这份已提供的材料', constraints: [], materials: [{ id: 'source-1', text: '本次提供的可核材料' }] }
-
-test('五类只读流程均为固定三节点，无读写工具及外部副作用能力', () => {
-  const definitions = createReadOnlyTaskWorkflows({ provider: 'test', model: 'synthetic' })
-  assert.deepEqual(definitions.map(item => item.id), ids)
-  assert.deepEqual(readOnlyTaskCatalog.map(item => item.id), ids)
-  assert.ok(Object.isFrozen(readOnlyTaskCatalog) && readOnlyTaskCatalog.every(Object.isFrozen))
-  for (const item of definitions) {
-    assert.equal(defineExecutionWorkflow(item).id, item.id)
-    assert.deepEqual(item.nodes.map(node => node.id), ['prepare', 'assess', 'validate-result'])
-    assert.ok(item.nodes.every(node => node.allowedEffects.every(effect => effect === 'pure')))
-    assert.deepEqual(item.nodes[1].allowedTools, [])
-    assert.match(item.nodes[1].prompt, /execution_node_submit/)
-  }
+test('旧可执行流程全部退出；历史材料产物读取合同仍保留',async()=>{
+ const readonly=await import('../packages/dingtalk-dsh-assistant/task-readonly-workflows.js')
+ const general=await import('../packages/dingtalk-dsh-assistant/task-general-workflow.js')
+ const task=await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+ for(const key of ['createReadOnlyTaskWorkflows','createLegacyReadOnlyTaskWorkflows'])assert.equal(readonly[key],undefined)
+ for(const key of ['createGeneralTaskWorkflow','createGeneralIntakeWorkflow','createHistoricalGeneralCapabilityStepWorkflow','createLegacyGeneralCapabilityStepWorkflow'])assert.equal(general[key],undefined)
+ for(const key of ['createAnalysisTaskWorkflow','createLegacyAnalysisTaskWorkflow'])assert.equal(task[key],undefined)
+ assert.equal(typeof task.createEngineeringTaskWorkflow,'function')
+ assert.equal(typeof general.createGeneralMarkdownWriteCapability,'function')
+ const context={state:{run:{requirementRef:'old'}},artifacts:{read:async()=>({materials:[{id:'source'}]})},output:{summary:'无法确认创建人',evidenceIds:['source'],limitations:['审计材料不足']}}
+ assert.equal(await readOnlyWorkflowOwnerContract.validateCompletion(context),true)
+ assert.equal(await readOnlyWorkflowOwnerContract.validateCompletion({...context,output:{...context.output,evidenceIds:['invented']}}),false)
+})
+test('存量已终态定义不影响启动，但任何旧活动引用阻止切换',()=>{
+ for(const workflowId of [...retiredWorkflowIds,'task-investigation','task-general-capability']){
+  const record={workflowId,definitionVersion:'1',digest:'d'}
+  assert.doesNotThrow(()=>assertRetiredWorkflowsDrained({records:[record],activeDefinitions:new Set()}))
+  assert.throws(()=>assertRetiredWorkflowsDrained({records:[record],activeDefinitions:new Set([`${workflowId}:d`])}),{code:'WORKFLOW_CUTOVER_ACTIVE_REFERENCES'})
+ }
+ assert.throws(()=>assertRetiredWorkflowsDrained({records:[],activeDefinitions:new Set(),pendingStages:[{workflowId:'task-general-intake',workflowDigest:null}]}),{code:'WORKFLOW_CUTOVER_ACTIVE_REFERENCES'})
+})
+test('新的共享调查和授权写阶段可以原身份恢复',()=>{
+ const records=[{workflowId:'task-investigation',definitionVersion:'3',digest:'i'},{workflowId:'task-general-capability',definitionVersion:'4',digest:'w'}]
+ assert.doesNotThrow(()=>assertRetiredWorkflowsDrained({records,currentDefinitions:records.map(record=>({id:record.workflowId,version:record.definitionVersion})),activeDefinitions:new Set(['task-investigation:i','task-general-capability:w'])}))
 })
 
-for (const workflowId of ids) for (const invalid of [false, true]) test(`${workflowId}：真实控制账${invalid ? '拒绝伪造来源引用' : '记录验证后的证据产出'}`, async t => {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-readonly-workflow-'))
-  const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: workflowId, initialize: true })
-  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
-  let calls = 0
-  const sessions = { async run({ input: received, definition, onSessionBound, onResult }) {
-    calls++
-    assert.deepEqual(received, input)
-    assert.deepEqual(definition.allowedTools, [])
-    await onSessionBound()
-    const evidenceId = invalid ? 'source-not-provided' : 'source-1'
-    onResult({ summary: '材料仅支持此结论', findings: [{ statement: '可回查事实', evidenceIds: [evidenceId] }], evidenceIds: [evidenceId], limitations: ['未直接访问仓库或数据库'] })
-  }, async cancel() {}, async close() {} }
-  const controller = createExecutionController({ store, artifacts, sessions, workflows: createReadOnlyTaskWorkflows({ provider: 'test', model: 'synthetic' }) })
-  t.after(async () => { await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
-  await controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId, input })
-  const state = await controller.whenIdle('run')
-  assert.equal(calls, 1)
-  assert.equal(state.run.status, invalid ? 'waiting' : 'succeeded')
-  assert.equal(state.nodes[2].status, invalid ? 'waiting' : 'succeeded')
-  if (invalid) assert.equal(state.nodes[2].waitReason.reference, 'TASK_READONLY_EVIDENCE_INVALID')
-  else assert.deepEqual(await artifacts.read(state.nodes[2].outputRef), { summary: '材料仅支持此结论', findings: [{ statement: '可回查事实', evidenceIds: ['source-1'] }], evidenceIds: ['source-1'], limitations: ['未直接访问仓库或数据库'] })
-  assert.deepEqual(await store.query({ kind: 'effect.list', runId: 'run' }), [])
-})
-
-test('缺少材料的只读流程停在准备节点，Agent 不启动', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-readonly-empty-'))
-  const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'empty', initialize: true })
-  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
-  let called = false
-  const sessions = { async run() { called = true }, async cancel() {}, async close() {} }
-  const controller = createExecutionController({ store, artifacts, sessions, workflows: createReadOnlyTaskWorkflows({ provider: 'test', model: 'synthetic' }) })
-  t.after(async () => { await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
-  await controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: 'task-investigation', input: { ...input, materials: [] } })
-  const state = await controller.whenIdle('run')
-  assert.equal(state.run.status, 'waiting')
-  assert.equal(state.nodes[0].waitReason.reference, 'TASK_READONLY_REQUIREMENT_INVALID')
-  assert.equal(called, false)
+test('正式Host启动遇到旧待执行阶段时拒绝切换，保留原冻结计划且不执行节点',async t=>{
+ const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path')
+ const {openExecutionStore}=await import('../packages/dingtalk-dsh-assistant/execution-store.js')
+ const {openExecutionArtifacts}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+ const {createExecutionController,defineExecutionWorkflow}=await import('../packages/dingtalk-dsh-assistant/execution-controller.js')
+ const {openWorkflowService}=await import('../packages/dingtalk-dsh-assistant/workflow-service.js')
+ const root=await mkdtemp(join(tmpdir(),'retired-workflow-gate-')),dbPath=join(root,'control.db'),artifactDirectory=join(root,'artifacts')
+ t.after(()=>rm(root,{recursive:true,force:true}))
+ const store=await openExecutionStore({dbPath,instanceId:'retired-test',initialize:true}),artifacts=await openExecutionArtifacts({directory:artifactDirectory,initialize:true})
+ const frozen={id:'task-analysis',version:'1',nodes:[{id:'old',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:{type:'object'},outputSchema:{type:'object'},mapInput:({requirement})=>requirement,execute:async()=>{throw Error('OLD_EXECUTION_MUST_NOT_RUN')}}]}
+ const controller=createExecutionController({store,artifacts,workflows:[frozen]})
+ const definition=defineExecutionWorkflow(frozen)
+ await store.command({id:'definition',kind:'workflow.register',args:{workflowId:frozen.id,definitionVersion:'1',config:{provider:'test',model:'test'},digest:definition.digest}})
+ await controller.createTaskPlan({commandId:'plan',taskId:'old-task',stages:[{stageId:'first',workflowId:frozen.id,input:{}}]})
+ const before=await store.query({kind:'task.plan',taskId:'old-task'})
+ await controller.close();await store.close()
+ await assert.rejects(openWorkflowService({ctx:{},config:{groupIds:['g'],ownerActorId:'owner',dbPath,artifactDirectory,instanceId:'retired-test'},legacy:{getAgentConfig:()=>({provider:'test',model:'test'})},judge:async()=>{throw Error('MODEL_MUST_NOT_RUN')},taskOwnerSessions:{async close(){}}}),{code:'WORKFLOW_CUTOVER_ACTIVE_REFERENCES'})
+ const readback=await openExecutionStore({dbPath,instanceId:'retired-test'})
+ try{assert.deepEqual(await readback.query({kind:'task.plan',taskId:'old-task'}),before);assert.equal((await readback.query({kind:'run.list',limit:200})).length,0)}finally{await readback.close()}
 })
