@@ -15,6 +15,23 @@ const text = value => { if (typeof value !== 'string' || !value.trim()) fail('CU
 const absolute = value => { if (!isAbsolute(text(value))) fail('CUTOVER_ABSOLUTE_PATH_REQUIRED'); return resolve(value) }
 export const workflowSealPath = legacyPath => join(dirname(absolute(legacyPath)), 'dingtalk_dsh_assistant.workflow-seal.json')
 async function optionalJson(path) { try { return JSON.parse(await readFile(path, 'utf8')) } catch (e) { if (e.code === 'ENOENT') return null; throw e } }
+async function verifySnapshot(snapshotPath, expectedDigest, scope, validate) {
+  const stamp = async () => { const s = await stat(snapshotPath); return `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}` }
+  const identity = await stamp(), key = JSON.stringify([snapshotPath, expectedDigest, scope])
+  const cached = verifiedSnapshots.get(key)
+  if (cached?.identity === identity) return cached.verified
+  const entry = { identity, verified: undefined }
+  entry.verified = (async () => {
+    const bytes = await readFile(snapshotPath)
+    if (digest(bytes) !== expectedDigest || await stamp() !== identity) fail('CUTOVER_SNAPSHOT_MISMATCH')
+    validate(JSON.parse(bytes))
+  })()
+  verifiedSnapshots.set(key, entry)
+  try { await entry.verified } catch (error) {
+    if (verifiedSnapshots.get(key) === entry) verifiedSnapshots.delete(key)
+    throw error
+  }
+}
 async function durableWrite(path, bytes, exclusive = false) {
   const target = exclusive ? path : `${path}.${randomUUID()}.tmp`
   const file = await open(target, 'wx')
@@ -62,21 +79,15 @@ export async function readWorkflowSeal({ sealPath, conversationId }) {
   if (new Set(allGroups).size !== allGroups.length) fail('CUTOVER_SEAL_INVALID')
   if (conversationId && !allGroups.includes(conversationId)) return null
   const snapshotPath = absolute(journal.snapshotPath)
-  const stamp = async () => { const s = await stat(snapshotPath); return `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}` }
-  const identity = await stamp(), key = `${snapshotPath}:${journal.legacySha256}:${JSON.stringify(journal.groupIds)}`
-  if (verifiedSnapshots.get(key) !== identity) {
-    const snapshot = await readFile(snapshotPath)
-    if (digest(snapshot) !== journal.legacySha256 || await stamp() !== identity) fail('CUTOVER_SNAPSHOT_MISMATCH')
-    const report = inspectLegacyDrain(JSON.parse(snapshot), journal.groupIds)
+  await verifySnapshot(snapshotPath, journal.legacySha256, journal.groupIds, document => {
+    const report = inspectLegacyDrain(document, journal.groupIds)
     if (!report.ready) fail('CUTOVER_SEAL_NOT_DRAINED', report)
-    verifiedSnapshots.set(key, identity)
-  }
+  })
   if (enrollments.length) {
     const sealRefs = Object.fromEntries(journal.groupIds.map(id => [id, `sha256:${journal.legacySha256}`]))
     for (const enrollment of enrollments) {
-      const bytes = await readFile(absolute(enrollment.snapshotPath))
-      if (digest(bytes) !== enrollment.legacySha256) fail('CUTOVER_SNAPSHOT_MISMATCH')
-      inspectEmptyLegacyGroup(JSON.parse(bytes), enrollment.conversationId)
+      await verifySnapshot(absolute(enrollment.snapshotPath), enrollment.legacySha256, enrollment.conversationId,
+        document => inspectEmptyLegacyGroup(document, enrollment.conversationId))
       sealRefs[enrollment.conversationId] = `sha256:${enrollment.legacySha256}`
     }
     return { blockLegacy: true, phase: journal.phase === 'active' && enrollments.every(e => e.phase === 'active') ? 'active' : 'sealed',

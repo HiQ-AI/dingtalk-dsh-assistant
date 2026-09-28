@@ -19,6 +19,12 @@ const blockedReservationsOnly = (group, taskId) => {
 export function reconcileReplacementGraph(outbox) {
   const byId = new Map(outbox.map(item => [item.outboundId, item]))
   if (byId.size !== outbox.length) throw new Error('outbox_identity_duplicate')
+  const successorsById = new Map()
+  for (const candidate of outbox) for (const target of candidate.replacesOutboundIds ?? []) {
+    const successors = successorsById.get(target) ?? new Set()
+    successors.add(candidate.outboundId)
+    successorsById.set(target, successors)
+  }
   const visiting = new Set(), visited = new Set()
   const visit = id => {
     if (visiting.has(id)) throw new Error('outbox_replacement_cycle')
@@ -34,7 +40,7 @@ export function reconcileReplacementGraph(outbox) {
   const reaches = (from, target) => (byId.get(from).replacesOutboundIds ?? []).some(id => id === target || reaches(id, target))
   const now = new Date().toISOString()
   return outbox.map(item => {
-    const successors = outbox.filter(candidate => candidate.replacesOutboundIds?.includes(item.outboundId)).map(candidate => candidate.outboundId)
+    const successors = [...(successorsById.get(item.outboundId) ?? [])]
     if (item.supersededByOutboundId) {
       if (!byId.has(item.supersededByOutboundId) || !reaches(item.supersededByOutboundId, item.outboundId)) throw new Error('outbox_replacement_successor_invalid')
       successors.push(item.supersededByOutboundId)

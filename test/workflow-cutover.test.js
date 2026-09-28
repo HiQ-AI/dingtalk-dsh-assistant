@@ -96,7 +96,10 @@ test('空群接入 check 零写；独立 sealRef/旧 snapshot不变/配置只更
  await enrollEmptyWorkflowGroup(f.options)
  assert.equal((JSON.parse(await readFile(f.options.journalPath,'utf8'))).enrollments.length,1)
  assert.equal((await readWorkflowSeal({sealPath:f.options.journalPath,conversationId:'new'})).sealRef,result.seal.sealRefs.new)
+ const concurrent = await Promise.all(Array.from({length:12},()=>readWorkflowSeal({sealPath:f.options.journalPath,conversationId:'new'})))
+ assert.ok(concurrent.every(seal=>seal.sealRef===result.seal.sealRefs.new))
  await writeFile(enrollments[0].snapshotPath,'{}')
+ await assert.rejects(readWorkflowSeal({sealPath:f.options.journalPath}),{code:'CUTOVER_SNAPSHOT_MISMATCH'})
  await assert.rejects(readWorkflowSeal({sealPath:f.options.journalPath}),{code:'CUTOVER_SNAPSHOT_MISMATCH'})
 })
 test('接入拒绝历史空壳、profile漂移、在线、控制库持锁；不写journal',async t=>{
