@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFile, mkdtemp, rm } from 'node:fs/promises'
+import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -55,6 +55,11 @@ test('完成通知签名由 Agent 工作区规则决定且插件不写死身份'
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /签名、口吻和身份声明由 Agent 自身工作区规则决定/)
   assert.doesNotMatch(source, /小小鹏|孙鹏/u)
+  const root=new URL('../packages/',import.meta.url)
+  const files=await readdir(root,{recursive:true})
+  for(const file of files.filter(name=>name.endsWith('.js'))){
+    assert.doesNotMatch(await readFile(new URL(file.replaceAll('\\','/'),root),'utf8'),/小小鹏|孙鹏/u,file)
+  }
 })
 
 test('resident重启通过Topic协调器恢复归类和已接受决策', async () => {

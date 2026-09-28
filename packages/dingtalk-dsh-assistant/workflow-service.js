@@ -336,7 +336,9 @@ export const describeMessageTraceItem = (item) => {
 }
 
 const sourceKey = (profile, groupId, messageId) => `dws:${executionDigest([profile, groupId, messageId])}`
-export const isDirectedTaskRequest = body => typeof body === 'string' && /(?:小小鹏|@孙鹏(?:\(孙鹏\))?).{0,50}(?:需要(?:你|我)?(?:修复|处理|排查)|请(?:你|帮忙)?(?:修复|处理|排查)|帮(?:我|忙)?(?:修复|处理|排查))/su.test(body)
+export const isDirectedTaskRequest = (body, agentNames = []) => typeof body === 'string' && agentNames
+  .filter(name => typeof name === 'string' && name.trim())
+  .some(name => new RegExp(`@?${RegExp.escape(name.trim())}(?:\\([^)]*\\))?.{0,50}(?:需要(?:你|我)?(?:修复|处理|排查)|请(?:你|帮忙)?(?:修复|处理|排查)|帮(?:我|忙)?(?:修复|处理|排查))`, 'su').test(body))
 const requireText = (value, code) => { if (typeof value !== 'string' || !value.trim()) throw executionError(code); return value }
 const terminal = status => ['succeeded', 'failed', 'cancelled'].includes(status)
 const catalogById = new Map(taskWorkflowCatalog.map(item => [item.id, item]))
@@ -837,6 +839,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     } })).result.operation
   }
   const legacyGroup = id => legacy.getGroup?.(id)
+  const agentNames = () => legacy.getAgentConfig?.().agentNames ?? []
   const investigationConfirmation = request => request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
     || (request.nodeId === 'I' && request.kind === 'needs_clarification'
       && /此前对应任务仅授权排查分析/u.test(String(request.reason)))
@@ -844,7 +847,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (run.channel === 'web') return run.actorId === config.webActorId && run.externalMessaging === false
     if (run.actorId === ownerActorId) return true
     if (!/任务准入/u.test(legacyGroup(run.conversationId)?.responsibility ?? '')) return false
-    if (isDirectedTaskRequest(run.body)) return true
+    if (isDirectedTaskRequest(run.body, agentNames())) return true
     const state = await store.query({ kind: 'message.run', runId: run.runId })
     return state.requests.some(request => investigationConfirmation(request)
       && request.status === 'resolved' && /^(?:是|需要|请|好|可以|同意|继续|修复)/u.test(String(request.answer).trim()))
@@ -1734,6 +1737,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   }
   const messages = createMessageWorkflow({ store, judge: messageJudge, policy: config.policy, handlers,
     context: {
+      agentNames,
       passiveTopic,
       async authorizePriorityControl({ run, unit, binding }) {
         const taskId = binding?.taskId ?? binding?.target?.taskId

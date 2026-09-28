@@ -41,8 +41,15 @@ export function formatGroupReply(text, responsibility = '') {
   if (typeof text !== 'string' || !text.trim()) throw new Error('WORKFLOW_REPLY_TEXT_REQUIRED')
   assertGroupReply(text)
   const body = text.trim()
-  if (!responsibility.includes('小小鹏代回') || /(?:^|\n)\s*- 小小鹏代回\s*$/u.test(body)) return body
-  return `${body}\n\n- 小小鹏代回`
+  const signatures = [...new Set([
+    ...[...responsibility.matchAll(/-[ \t]*([^\r\n，,；;。！!？?`"'“”「」]{1,80}?代回)/gu)].map(match => match[1].trim()),
+    ...responsibility.split(/[\r\n；;]/u).map(part => part.trim()).filter(part => /^[^\s，,。！!？?`"'“”「」]{1,40}代回$/u.test(part)),
+  ])]
+  if (signatures.length > 1) throw new Error('WORKFLOW_REPLY_SIGNATURE_AMBIGUOUS')
+  if (!signatures.length || body.split(/\r?\n/u).some(line => line.trim() === `- ${signatures[0]}`)) return body
+  const formatted = `${body}\n\n- ${signatures[0]}`
+  assertGroupReply(formatted)
+  return formatted
 }
 export function sendWorkflowNotification(adapter, notification) {
   const payload = notification.payload
