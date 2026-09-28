@@ -646,8 +646,8 @@ test('必要材料超限时不使用首尾预览派发效果', async t => {
 
 test('确定性S跳过模型容量及调用账，后继R仍受自己的容量约束', async t => {
   let calls = 0
-  const { workflow } = await fixture(t, { judge: async () => { calls++; return binding } })
-  const body = '小小鹏，审核任务都部署了吗？' + '补充说明'.repeat(800)
+  const { workflow } = await fixture(t, { context: { agentNames: () => ['资料助理'] }, judge: async () => { calls++; return binding } })
+  const body = '资料助理，审核任务都部署了吗？' + '补充说明'.repeat(800)
   const { runId } = await workflow.receive({ ...source, body }, { process: false }); await workflow.process(runId)
   const state = await workflow.state(runId)
   assert.equal(state.nodes.find(node => node.nodeId === 'S').usage.input, 0)

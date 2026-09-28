@@ -3,6 +3,7 @@ import { digest, messageSchemas, prepareMessageContext, splitContext, validateSp
 import { prepareMessageRequest } from './message-model.js'
 import { isPassiveTaskProgress, isQuietGroupMessage } from './message-ledger.js'
 import { wholeTopicFactRevision } from './message-topics.js'
+import { isNamedAgentDirection } from './decision.js'
 
 export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.4', initialWindowMs: 45000, linkedWindowMs: 30000, attemptMs: 20000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, maxInputTokens: 64000, maxOutputTokens: 12000, nodeInputByteLimits: { S: 8000, R: 14000, I: 18000, IB: 32000, material: 8000 }, recoveryDelaysMs: [5000, 30000] })
 const limits = { S: [8000, 2000], R: [14000, 1000], I: [18000, 1500], IB: [32000, 4000], material: [8000, 1000] }
@@ -10,7 +11,6 @@ const statusQuestion = text => /(?:完成|改完|进度|状态|部署).*[吗？?
 const investigationConfirmation = request => request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
   || (['I','IB'].includes(request.nodeId) && request.kind === 'needs_clarification'
     && /此前对应任务仅授权排查分析/u.test(String(request.reason)))
-const directedStatusQuestion = text => /小小鹏/u.test(text) && statusQuestion(text)
 function projectMaterial(value) {
   if (!value || typeof value !== 'object') return value
   if (Array.isArray(value)) return value.map(projectMaterial)
@@ -32,10 +32,10 @@ function pendingMaterial(value) {
   if (!value || typeof value !== 'object') return false
   return Array.isArray(value) ? value.some(pendingMaterial) : Boolean(value.materialPending || Object.values(value).some(pendingMaterial))
 }
-function statusFollowup(snapshot) {
+function statusFollowup(snapshot, agentNames) {
   const body = snapshot.source.text.trim()
   const previous = snapshot.history.slice(-6).findLast(item => statusQuestion(item.text))
-  if (!previous || /^(?:请|帮我|小小鹏).*(?:修复|处理|排查|部署)/u.test(body)) return null
+  if (!previous || (/^(?:请|帮我)/u.test(body) || isNamedAgentDirection(body, agentNames)) && /(?:修复|处理|排查|部署)/u.test(body)) return null
   if (/匹配到.{0,8}(?:个|项)任务/u.test(body)) return { kind: 'count', sourceKey: previous.sourceKey }
   if (snapshot.quotes.length && (body.match(/问题/gu) ?? []).length >= 2) return { kind: 'scope', sourceKey: previous.sourceKey }
   return null
@@ -45,6 +45,9 @@ function statusFollowup(snapshot) {
 export function createMessageWorkflow({ store, judge, context = {}, handlers = {}, policy = {}, clock = Date.now }) {
   if (!store?.command || !store?.query || typeof judge !== 'function') throw new Error('MESSAGE_DEPENDENCIES_REQUIRED')
   const config = { ...defaultMessagePolicy, ...policy }, flights = new Map(), routingTails = new Map(), topicFlights = new Map(), topicSchedules = new Set(), controllers = new Map(), queue = []
+  const agentNames = () => context.agentNames?.() ?? []
+  const directedToAgent = text => isNamedAgentDirection(text, agentNames())
+  const directedStatusQuestion = text => directedToAgent(text) && statusQuestion(text)
   let closed = false, occupied = 0, legacyTail = Promise.resolve(), quietReconciled = false
   const cmd = async (kind, args, id = `${kind}:${randomUUID()}`) => (await store.command({ id, kind, args })).result
   const state = runId => store.query({ kind: 'message.run', runId })
@@ -207,7 +210,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (incompleteMaterial(base.material)) { await cmd('message.attention', { runId, reason: `MESSAGE_MATERIAL_CAPACITY:R:${unit.unitId}` }); return }
     }
     const candidateStartedAt = clock()
-    const followup = statusFollowup(snapshot)
+    const followup = statusFollowup(snapshot, agentNames())
     const retrieved = await context.candidates?.({ run: data.run, snapshot, unit, explicitSourceKeys: followup ? [followup.sourceKey] : [] }) ?? []
     const rawCandidates = Array.isArray(retrieved) ? retrieved : retrieved.cards
     if (!Array.isArray(rawCandidates) || retrieved.explicitOverflow) { await cmd('message.attention', { runId, reason: `MESSAGE_REFERENCED_CANDIDATES_CAPACITY:R:${unit.unitId}` }); return }
@@ -299,7 +302,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const investigationMatched = binding.engine === 'legacy' && binding.state === 'completed'
       && /仅授权排查分析/u.test(binding.goal ?? '')
       && /(?:依然|仍然|还是|再次|又).*(?:问题|没有|未显示|失败)|(?:问题|没有|未显示|失败).*(?:依然|仍然|还是|再次|又)/u.test(data.run.body)
-      && /@孙鹏|小小鹏/u.test(data.run.body)
+      && directedToAgent(data.run.body)
     if (intent.kind !== 'intent') { await waiting(data, unit.unitId, 'I', intent); return }
     if (intent.actions.some(action => ['create', 'research', 'answer', 'reopen', 'revise', 'pause', 'cancel', 'resume'].includes(action.intent))) {
       intent.requiredExecutionMaterials = [...new Set([...intent.requiredExecutionMaterials, ...resolvedEvidence.flatMap(item => item.needs.map(need => need.resourceRef))])]
@@ -307,7 +310,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       intent.constraints = [...new Set([...intent.constraints, ...constraints])]
     }
     if (binding.disposition === 'conversation' && intent.actions.every(action => action.intent === 'no_action')
-      && /小小鹏/u.test(data.run.body) && /(?:审核|任务).*(?:完成|改完|进度|状态|部署)/u.test(data.run.body)
+      && directedToAgent(data.run.body) && /(?:审核|任务).*(?:完成|改完|进度|状态|部署)/u.test(data.run.body)
       && /[吗？?]/u.test(data.run.body)) {
       intent.actions = [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }]
       intent.replyPolicy = 'result'
@@ -445,17 +448,17 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (intent.kind === 'needs_relink') { await cmd('message.relink', { runId: item.run.runId, unitId: item.unit.id, expectedRevision: revision(item.data), reason: intent.reason }); void process(item.run.runId); return }
       if (intent.kind === 'needs_resegmentation') { await resegment(item.run.runId, intent.reason); return }
       if (intent.kind !== 'intent') { await waiting(item.data, item.unit.id, 'IB', intent); return }
-      const followup = statusFollowup(item.run.snapshot)
+      const followup = statusFollowup(item.run.snapshot, agentNames())
       if (followup) intent = { kind: 'intent', actions: followup.kind === 'count'
         ? [{ intent: 'fact', arguments: { kind: 'fact', text: item.base.text }, dependsOn: [] }]
         : [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: followup.kind === 'count' ? 'none' : 'result' }
       if (item.binding.disposition === 'conversation' && intent.actions.every(action => action.intent === 'no_action')
-        && /小小鹏/u.test(item.run.body) && /(?:审核|任务).*(?:完成|改完|进度|状态|部署)/u.test(item.run.body)
+        && directedToAgent(item.run.body) && /(?:审核|任务).*(?:完成|改完|进度|状态|部署)/u.test(item.run.body)
         && /[吗？?]/u.test(item.run.body)) intent = { ...intent, actions: [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }], replyPolicy: 'result' }
       const investigationMatched = item.binding.engine === 'legacy' && item.binding.state === 'completed'
         && /仅授权排查分析/u.test(item.binding.goal ?? '')
         && /(?:依然|仍然|还是|再次|又).*(?:问题|没有|未显示|失败)|(?:问题|没有|未显示|失败).*(?:依然|仍然|还是|再次|又)/u.test(item.run.body)
-        && /@孙鹏|小小鹏/u.test(item.run.body)
+        && directedToAgent(item.run.body)
       if (investigationMatched && !/(?:需要|请|帮忙).{0,20}(?:修复|处理)/u.test(item.run.body)
         && !item.data.requests.some(request => request.unitId === item.unit.id && investigationConfirmation(request))) {
         await waiting(item.data, item.unit.id, 'IB', { kind: 'needs_clarification', reason: 'COMPLETED_INVESTIGATION_REPORTED_AGAIN',
@@ -599,7 +602,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       data = await state(runId)
     }
     if (!data.units.length) {
-      const followup = statusFollowup(data.run.snapshot)
+      const followup = statusFollowup(data.run.snapshot, agentNames())
       const text = data.run.body
       const shortReference = text.length <= 40 && /^这不是让你(?:去)?查/u.test(text.trim())
       const fixed = followup?.kind === 'scope' || directedStatusQuestion(text) || shortReference ? { kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: followup ? `前文状态问句：${data.run.snapshot.history.findLast(item=>item.sourceKey===followup.sourceKey)?.text ?? ''}；补充的问题范围：${text}` : text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] } : undefined

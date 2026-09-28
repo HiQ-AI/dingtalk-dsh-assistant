@@ -262,9 +262,53 @@ test('短指代消息优先呈现紧邻来源的话题，显式引用仍优先',
   assert.equal(rankMessageCandidates(cards, '这不是让你去查吗', 'previous')[0].candidateId, 'old-1')
 })
 test('明确交办与问题报告分开准入',()=>{
-  assert.equal(isDirectedTaskRequest('@孙鹏(孙鹏) 小小鹏 数据集合并出现的这个问题需要修复'),true)
-  assert.equal(isDirectedTaskRequest('@孙鹏(孙鹏) 修复又引入了归一化计算问题：当前得到 0.001 t。'),false)
-  assert.equal(isDirectedTaskRequest('@孙鹏 任务已创建，开始处理。'),false)
+  const names=['小助手','用户']
+  assert.equal(isDirectedTaskRequest('@用户(用户) 小助手 数据集合并出现的这个问题需要修复',names),true)
+  assert.equal(isDirectedTaskRequest('@用户(用户) 修复又引入了归一化计算问题：当前得到 0.001 t。',names),false)
+  assert.equal(isDirectedTaskRequest('@用户 任务已创建，开始处理。',names),false)
+  assert.equal(isDirectedTaskRequest('资料助理，请修复这个错误',['资料助理']),true)
+  assert.equal(isDirectedTaskRequest('客服(乙)，请处理这个错误',['客服(乙)']),true)
+  assert.equal(isDirectedTaskRequest('OpsX，请修复这个错误',['Ops.*']),false)
+  assert.equal(isDirectedTaskRequest('Ops.*，请修复这个错误',['Ops.*']),true)
+  assert.equal(isDirectedTaskRequest('资料助理，请修复这个错误'),false)
+  assert.equal(isDirectedTaskRequest('cc: 请修复这个错误',['资料助理']),false)
+})
+
+test('群回复署名只取唯一明确职责，不默认身份，不重复或注入内部信息',()=>{
+ const link='请查看 [PR #42](https://example.invalid/pull/42)。'
+ assert.equal(formatGroupReply(link,'日常代答末尾空一行附 - 资料助理代回'),`${link}\n\n- 资料助理代回`)
+ assert.equal(formatGroupReply('收到。','客服(乙)代回'),'收到。\n\n- 客服(乙)代回')
+ assert.equal(formatGroupReply('收到。\n\n- 资料助理代回','署名 - 资料助理代回'),'收到。\n\n- 资料助理代回')
+ assert.equal(formatGroupReply(link,'回答本群问题'),link)
+ assert.throws(()=>formatGroupReply('收到。','署名 - 资料助理代回；署名 - 客服代回'),/WORKFLOW_REPLY_SIGNATURE_AMBIGUOUS/)
+ assert.throws(()=>formatGroupReply('收到。','署名 - 任务会话代回'),/GROUP_REPLY_INTERNAL_DETAILS/)
+})
+
+test('状态问句支持任意配置名称及别名，改名和清空后不保留旧身份捷径',async t=>{
+ let names=['资料助理','客服(乙)'],splitCalls=0
+ const task={taskId:'old',groupId:'g',title:'审核草稿保存问题',objective:'修复审核问题',state:'completed',result:'已修复'}
+ const {service,message}=await fixture(t,'participant',undefined,{legacy:{
+  getAgentConfig:()=>({provider:'test',model:'test',agentNames:names}),listTasks:()=>[task],
+ },judge:async({stage,input})=>{
+  if(stage==='S'){splitCalls++;return splitOne(input.source.text)}
+  if(stage==='R')return {kind:'binding',disposition:'conversation',candidateId:null,evidence:['本群任务']}
+  return {kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
+ }})
+ const ask=async(id,name)=>{
+  const input=await service.ingest({...message,messageId:id,text:`${name}，我审核的问题都改完部署到uat2了吗？`})
+  return service.messages.process(input.runId)
+ }
+ assert.equal((await ask('name','资料助理')).commands[0].kind,'status')
+ assert.equal((await ask('alias','客服(乙)')).commands[0].kind,'status')
+ assert.equal(splitCalls,0)
+ names=['流程助手']
+ assert.equal((await ask('old-name','资料助理')).commands.length,0)
+ assert.equal(splitCalls,1)
+ assert.equal((await ask('new-name','流程助手')).commands[0].kind,'status')
+ names=[]
+ assert.equal((await ask('unset','流程助手')).commands.length,0)
+ assert.equal(splitCalls,2)
+ assert.equal((await service.tasks()).length,0)
 })
 test('内置进展查询限制本群与八项候选，流程结果可审计',()=>{
   const legacyTasks=Array.from({length:10},(_,index)=>({taskId:`t-${index}`,groupId:'g',title:`审核草稿保存 ${index}`,objective:'修复审核草稿保存',state:'completed'}))
@@ -295,21 +339,21 @@ test('DWS 发送 ACK 的实际 result.openTaskId 可用于独立回读',()=>{
   assert.equal(notificationOpenTaskId({success:true,result:{openTaskId:'task-1'}}),'task-1')
 })
 test('群职责指定的日常代答署名在通知准备时固化且不会重复附加',()=>{
-  const rule='针对消息必须引用回复；日常代答末尾空一行附 - 小小鹏代回'
-  assert.equal(formatGroupReply('任务状态已核对。',rule),'任务状态已核对。\n\n- 小小鹏代回')
-  assert.equal(formatGroupReply('任务状态已核对。\n\n- 小小鹏代回',rule),'任务状态已核对。\n\n- 小小鹏代回')
+  const rule='针对消息必须引用回复；日常代答末尾空一行附 - 小助手代回'
+  assert.equal(formatGroupReply('任务状态已核对。',rule),'任务状态已核对。\n\n- 小助手代回')
+  assert.equal(formatGroupReply('任务状态已核对。\n\n- 小助手代回',rule),'任务状态已核对。\n\n- 小助手代回')
   assert.equal(formatGroupReply('任务状态已核对。','普通群'),'任务状态已核对。')
 })
 test('群职责贯穿即时进展查询的持久通知正文与引用来源',async t=>{
   const sent=[]
   const notifications={canDisclose:async()=>true,send:async notice=>{sent.push(notice);return{messageId:'reply-1'}},readback:async()=>({messageId:'reply-1',conversationId:'g'})}
   const task={taskId:'review-1',groupId:'g',title:'审核草稿保存',objective:'修复审核草稿保存',state:'completed'}
-  const {service,message}=await fixture(t,'participant',notifications,{legacy:{listTasks:()=>[task],getGroup:id=>({groupId:id,responsibility:'日常代答末尾空一行附 - 小小鹏代回；针对消息必须引用回复',messages:[]})},judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'conversation',candidateId:null,evidence:['本群任务']}:{kind:'intent',actions:[{intent:'status',arguments:{scope:'conversation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'result'}})
+  const {service,message}=await fixture(t,'participant',notifications,{legacy:{listTasks:()=>[task],getGroup:id=>({groupId:id,responsibility:'日常代答末尾空一行附 - 小助手代回；针对消息必须引用回复',messages:[]})},judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'conversation',candidateId:null,evidence:['本群任务']}:{kind:'intent',actions:[{intent:'status',arguments:{scope:'conversation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'result'}})
   const received=await service.ingest({...message,text:'审核草稿保存进度如何？'})
   await service.messages.process(received.runId)
   await service.flushNotifications()
   assert.equal(sent.length,1)
-  assert.match(sent[0].payload.text,/\n\n- 小小鹏代回$/u)
+  assert.match(sent[0].payload.text,/\n\n- 小助手代回$/u)
   assert.equal(sent[0].payload.sourceMessageId,message.messageId)
   assert.equal(sent[0].status,'sending')
 })
@@ -323,12 +367,12 @@ test('群职责调整后已送达通知保留原正文，新通知仍可继续�
     :{kind:'intent',actions:[{intent:'status',arguments:{scope:'conversation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'result'}})
   const first=await service.ingest({...message,messageId:'first',text:'审核草稿进度如何？'})
   await service.messages.process(first.runId);await service.flushNotifications()
-  responsibility='日常代答末尾空一行附 - 小小鹏代回'
+  responsibility='日常代答末尾空一行附 - 小助手代回'
   const second=await service.ingest({...message,messageId:'second',text:'审核草稿现在什么状态？'})
   await service.messages.process(second.runId);await service.flushNotifications()
   assert.equal(sent.length,2)
-  assert.doesNotMatch(sent[0],/小小鹏代回/u)
-  assert.match(sent[1],/\n\n- 小小鹏代回$/u)
+  assert.doesNotMatch(sent[0],/小助手代回/u)
+  assert.match(sent[1],/\n\n- 小助手代回$/u)
 })
 test('工作流通知引用来源消息，缺来源才发送普通群消息',async()=>{
   const sent=[]
@@ -358,7 +402,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
   const controller = createExecutionController({ store, artifacts, sessions: options.executionSessions ?? investigationSessions, readTools: ['read-topic-sources', 'read-predecessor-artifact', 'organize-topic-sources', 'read-task-message-resource'], ...(delivery ? { delivery } : options.external ? { delivery: { execute: async () => { throw new Error('EXTERNAL_EFFECT_NOT_EXPECTED') } } } : {}), workflows: [] })
   const execution = { store: options.storeQuery ? { ...store, query: request => options.storeQuery(request, store.query) } : store,
     artifacts, controller, ...(delivery ? { delivery } : {}) }
-  const legacy = { getAgentConfig: () => ({ provider: 'test', model: 'test' }), getGroup: id => ({ groupId: id, responsibility: '处理本人交办事项', messages: [] }), ...options.legacy }
+  const legacy = { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'] }), getGroup: id => ({ groupId: id, responsibility: '处理本人交办事项', messages: [] }), ...options.legacy }
   const judge = async ({ stage, input }) => {
     if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.source.text.length }], goalText: input.source.text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.source.text.length, role: 'unit' }] }
     if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
@@ -581,7 +625,7 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   await service.close()
   const restarted = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', ...config },
     judge: async () => { throw new Error('UNEXPECTED_MESSAGE') },
-    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test' }), getGroup: groupId => ({ groupId, messages: [] }) },
+    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'] }), getGroup: groupId => ({ groupId, messages: [] }) },
     execution, external, notifications: notices, taskOwnerSessions: { async run({ input, onSessionBound, onCandidate }) {
       if (input.task.controlState !== 'active' || input.stages.length) throw new Error('OWNER_WAITING')
       await onSessionBound()
@@ -861,7 +905,7 @@ test('账号问题与“这不是让你去查吗”回到同一Task，不重建�
   }
   const { service, execution, message } = await fixture(t, 'owner', undefined, { judge })
   const first = await service.ingest({ ...message, messageId: 'synthetic-account-question',
-    text: 'test3 account@example.invalid 示例研究院 小小鹏，这个账号是你创建的测试账号吗？为什么创建时间是空的呢？从什么渠道创建的账号时间会空呢？' })
+    text: 'test3 account@example.invalid 示例研究院 小助手，这个账号是你创建的测试账号吗？为什么创建时间是空的呢？从什么渠道创建的账号时间会空呢？' })
   const firstState = await service.messages.process(first.runId)
   const taskId = firstState.commands[0].result.taskId
   await execution.controller.whenIdle(firstState.commands[0].result.runId)
@@ -1054,11 +1098,16 @@ test('群职责允许明确点名交办创建任务，普通问题报告仍无�
   const judge=async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'
     ?{kind:'binding',disposition:'new',candidateId:null,evidence:['新事项']}
     :{kind:'intent',actions:[{intent:'create',arguments:{objective:'核对归一化回归',workflowId:'task-investigation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'receipt'}
-  const {service,message,execution}=await fixture(t,'participant',undefined,{judge,legacy:{getGroup:id=>({groupId:id,responsibility:'## 任务准入\n消息明确要求“小小鹏”处理时可以创建任务。',messages:[]})}})
-  const passive=await service.ingest({...message,messageId:'report',text:'@孙鹏(孙鹏) 修复又引入了归一化计算问题：当前得到 0.001 t。'})
+  const {service,message,execution}=await fixture(t,'participant',undefined,{judge,legacy:{
+    getAgentConfig:()=>({provider:'test',model:'test',agentNames:['资料助理','客服(乙)']}),
+    getGroup:id=>({groupId:id,responsibility:'## 任务准入\n消息明确要求当前 Agent 处理时可以创建任务。',messages:[]}),
+  }})
+  const passive=await service.ingest({...message,messageId:'report',text:'@用户(用户) 修复又引入了归一化计算问题：当前得到 0.001 t。'})
   await service.messages.process(passive.runId)
   assert.equal((await service.state(passive.runId)).commands[0].status,'rejected')
-  const directed=await service.ingest({...message,messageId:'request',text:'@孙鹏(孙鹏) 小小鹏 数据集合并出现的这个问题需要修复'})
+  const unconfigured=await service.ingest({...message,messageId:'unconfigured',text:'小助手，请修复这个问题'})
+  assert.equal((await service.messages.process(unconfigured.runId)).commands[0].status,'rejected')
+  const directed=await service.ingest({...message,messageId:'request',text:'客服(乙)，数据集合并出现的这个问题需要修复'})
   await service.messages.process(directed.runId)
   assert.equal((await service.state(directed.runId)).commands[0].status,'applied')
   assert.equal((await execution.store.query({kind:'run.list'})).length,1)
@@ -1095,7 +1144,7 @@ test('无引用的先别管它静默收束，不追问也不创建任务',async 
 })
 test('第三方任务已创建进展同步即使含@也静默，不生成澄清或业务任务',async t=>{
   const {service,message,execution}=await fixture(t,'owner',undefined,{judge:async()=>{throw new Error('PROGRESS_SYNC_MUST_NOT_CALL_MODEL')}})
-  const received=await service.ingest({...message,text:'@孙鹏  任务已创建，开始处理。 任务：dingtalk_at_xcm:20260924130713-437 — 小煤球',quotedMessage:{messageId:'old-reply',content:'此前话题的回复'}})
+  const received=await service.ingest({...message,text:'@用户  任务已创建，开始处理。 任务：dingtalk_at_xcm:20260924130713-437 — 小煤球',quotedMessage:{messageId:'old-reply',content:'此前话题的回复'}})
   await service.messages.process(received.runId)
   const state=await service.state(received.runId)
   assert.equal(state.run.reason,'message_quiet')
@@ -1117,7 +1166,7 @@ test('已送达回复引用可将第三方进展静默绑定到唯一话题，�
   await service.messages.process(origin.runId)
   const topic=(await service.topics('g'))[0]
   assert.ok(topic)
-  const progress={...message,messageId:'progress-1',text:'@孙鹏  任务已创建，开始处理。 任务：external-1 — 小煤球',quotedMessage:{messageId:'reply-1',content:'审核问题已核对'}}
+  const progress={...message,messageId:'progress-1',text:'@用户  任务已创建，开始处理。 任务：external-1 — 小煤球',quotedMessage:{messageId:'reply-1',content:'审核问题已核对'}}
   const received=await service.ingest(progress)
   await service.messages.process(received.runId)
   assert.equal((await service.mailboxes()).messages.find(item=>item.messageId==='progress-1').routingStatus,'pending')
@@ -1138,7 +1187,7 @@ test('已完成的纯排查任务再次收到相同问题反馈时提出修复�
   const {service,message,execution}=await fixture(t,'participant',undefined,{legacy:{listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'
     ?{kind:'binding',disposition:'existing',candidateId:'legacy:old-draft',evidence:['同一现象']}
     :{kind:'intent',actions:[{intent:'fact',arguments:{kind:'fact',text:'问题仍然存在'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'receipt'}})
-  const received=await service.ingest({...message,text:'@孙鹏(孙鹏) 审核草稿保存依然有问题，填写评审意见点击保存草稿后，再次进入没有显示草稿内容'})
+  const received=await service.ingest({...message,text:'@用户(用户) 审核草稿保存依然有问题，填写评审意见点击保存草稿后，再次进入没有显示草稿内容'})
   await service.messages.process(received.runId)
   const state=await service.state(received.runId)
   assert.equal(state.run.status,'waiting')
@@ -1168,7 +1217,7 @@ test('旧排查任务的肯定答复只授权同一消息继续准入，随后�
       ?{kind:'intent',actions:[{intent:'create',arguments:{objective:'核验草稿未回显新反馈',workflowId:'task-investigation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
       :{kind:'intent',actions:[{intent:'fact',arguments:{kind:'fact',text:'问题仍然存在'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
   const {service,message,execution}=await fixture(t,'participant',undefined,{legacy:{getGroup:id=>({groupId:id,responsibility:'任务准入：肯定答复后准入',messages:[]}),listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge})
-  const received=await service.ingest({...message,text:'@孙鹏(孙鹏) 草稿未回显依然有问题'})
+  const received=await service.ingest({...message,text:'@用户(用户) 草稿未回显依然有问题'})
   await service.messages.process(received.runId)
   const request=(await service.state(received.runId)).requests[0]
   await service.messages.resume({runId:received.runId,requestId:request.id,eventId:'confirm-1',actorId:'participant',answer:'需要，请继续修复'})
@@ -1187,7 +1236,7 @@ test('本人可答复他人旧排查澄清，其他群成员不能冒用且不�
       :{kind:'needs_clarification',reason:'消息未明确授权；此前对应任务仅授权排查分析，不能据此实施修改。',question:'继续排查还是修复？',needs:[]}
   const notifications={canDisclose:async()=>true,send:async()=>({messageId:'clarify-sent'}),readback:async()=>({messageId:'clarify-sent',conversationId:'g'})}
   const {service,message,execution}=await fixture(t,'participant',notifications,{legacy:{getGroup:id=>({groupId:id,responsibility:'任务准入',messages:[]}),listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge})
-  const received=await service.ingest({...message,text:'@孙鹏(孙鹏) 审核草稿保存依然有问题，评审意见再次进入未回显'})
+  const received=await service.ingest({...message,text:'@用户(用户) 审核草稿保存依然有问题，评审意见再次进入未回显'})
   await service.messages.process(received.runId)
   const request=(await service.state(received.runId)).requests[0]
   await service.flushNotifications()
@@ -1216,11 +1265,11 @@ test('本人可答复他人旧排查澄清，其他群成员不能冒用且不�
     .map(topic=>topic.topicId),[origin.units[0].topicId])
 })
 
-test('明确问小小鹏审核问题是否部署时即使I误判无动作也回读群任务',async t=>{
+test('明确问小助手审核问题是否部署时即使I误判无动作也回读群任务',async t=>{
   const task={taskId:'old-review',groupId:'g',title:'审核草稿与撤回通知',objective:'修复审核草稿与撤回通知',state:'completed',result:{delivery:{uat2Status:'deployed-and-handed-to-testing'}}}
   const {service,message}=await fixture(t,'participant',undefined,{legacy:{listTasks:()=>[task],getTask:id=>id===task.taskId?task:null},judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'conversation',candidateId:null,evidence:['群审核任务']}:{kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}})
   assert.deepEqual(service.catalog().builtInWorkflows[0].nodes.map(node=>node.id),['scope','candidates','readback','reply'])
-  const received=await service.ingest({...message,text:'小小鹏，我审核的问题都改完部署到uat2了吗？'})
+  const received=await service.ingest({...message,text:'小助手，我审核的问题都改完部署到uat2了吗？'})
   await service.messages.process(received.runId)
   const state=await service.state(received.runId)
   assert.equal(state.run.status,'settled')
@@ -1236,12 +1285,12 @@ test('审核状态问句、两个任务说明和引用问题清单归为同一�
     {taskId:'draft-unknown',groupId:'g',title:'排查审核草稿保存',objective:'核对审核草稿保存现象',state:'completed'},
   ]
   const {service,message,execution}=await fixture(t,'participant',undefined,{legacy:{listTasks:()=>tasks,getTask:id=>tasks.find(task=>task.taskId===id)},judge:async({stage,input})=>{
-    if(stage==='S' && input.source.text.includes('小小鹏'))throw new Error('STATUS_SPLIT_SHOULD_USE_HOST_RULE')
+    if(stage==='S' && input.source.text.includes('小助手'))throw new Error('STATUS_SPLIT_SHOULD_USE_HOST_RULE')
     if(stage==='S')return splitOne(input.source.text)
     if(stage==='R')return{kind:'binding',disposition:'conversation',candidateId:null,evidence:['群任务']}
     return{kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
   }})
-  const first=await service.ingest({...message,messageId:'review-question',text:'小小鹏，我审核的问题都改完部署到uat2了吗？'})
+  const first=await service.ingest({...message,messageId:'review-question',text:'小助手，我审核的问题都改完部署到uat2了吗？'})
   await service.messages.process(first.runId)
   const firstState=await service.state(first.runId)
   assert.equal(firstState.commands[0].kind,'status')
@@ -1270,9 +1319,9 @@ test('恢复扫描先重试一次无回执只读查询，再完成原命令',asy
   const task={taskId:'old-review',groupId:'g',title:'审核草稿保存',objective:'修复审核草稿保存',state:'completed',outcome:'succeeded'}
   const {service,execution}=await fixture(t,'participant',undefined,{legacy:{listTasks:()=>[task],getTask:id=>id===task.taskId?task:null}})
   const command=(kind,args)=>execution.store.command({id:`test-${kind}`,kind:`message.${kind}`,args})
-  await command('receive',{runId:'recover-status',sourceKey:'recover-status',sourceVersion:1,conversationId:'g',actorId:'participant',body:'小小鹏，审核草稿保存的问题完成了吗？',policy:{initialWindowMs:45000}})
-  await command('snapshot',{runId:'recover-status',snapshot:{snapshotId:'test-snapshot',source:{sourceKey:'recover-status',sourceVersion:1,text:'小小鹏，审核草稿保存的问题完成了吗？',actorId:'participant',conversationId:'g'},history:[],quotes:[],attachments:[],omissions:[],policy:'',actorPermissions:[]}})
-  await command('split',{runId:'recover-status',units:[{unitId:'recover-unit',goalText:'小小鹏，审核草稿保存的问题完成了吗？',spans:[{start:0,end:22}],constraints:[],contextNeeds:[],sharedConstraints:[]}]})
+  await command('receive',{runId:'recover-status',sourceKey:'recover-status',sourceVersion:1,conversationId:'g',actorId:'participant',body:'小助手，审核草稿保存的问题完成了吗？',policy:{initialWindowMs:45000}})
+  await command('snapshot',{runId:'recover-status',snapshot:{snapshotId:'test-snapshot',source:{sourceKey:'recover-status',sourceVersion:1,text:'小助手，审核草稿保存的问题完成了吗？',actorId:'participant',conversationId:'g'},history:[],quotes:[],attachments:[],omissions:[],policy:'',actorPermissions:[]}})
+  await command('split',{runId:'recover-status',units:[{unitId:'recover-unit',goalText:'小助手，审核草稿保存的问题完成了吗？',spans:[{start:0,end:22}],constraints:[],contextNeeds:[],sharedConstraints:[]}]})
   await command('accept',{runId:'recover-status',unitId:'recover-unit',commands:[{commandId:'recover-command',kind:'status',args:{taskId:null,arguments:{scope:'conversation'},binding:{disposition:'conversation'},replyPolicy:'none'}}]})
   const claimed=(await command('command.claim',{commandId:'recover-command'})).result.command
   await command('command.fail',{commandId:'recover-command',leaseEpoch:claimed.leaseEpoch,error:'INVALID_ARGUMENT'})
@@ -2070,7 +2119,7 @@ test('只读轨迹 API 回读真实节点、话题批次与已绑定 Owner，并
   await assert.rejects(service.taskNodeOutput(command.result.taskId, command.result.runId, outputNode.nodeRunId, { outputRef: 'wrong', document: true }), /TASK_OUTPUT_CHANGED/)
   assert.equal(await service.taskNodeOutput('other-task', command.result.runId, outputNode.nodeRunId, { ...outputArgs, document: true }), null)
   const other = await openWorkflowService({ ctx: {}, config: { groupIds: ['other'], ownerActorId: 'owner' },
-    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test' }), getGroup: () => ({ messages: [] }) },
+    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'] }), getGroup: () => ({ messages: [] }) },
     execution, judge: async () => { throw new Error('UNEXPECTED_MODEL_CALL') },
     taskOwnerSessions: { async run() { throw new Error('UNEXPECTED_OWNER_CALL') }, async close() {} } })
   try {
@@ -2416,7 +2465,7 @@ for (const actor of ['owner', 'participant']) test(`普通 answer 可向 ${actor
     send: notice => sendWorkflowNotification({ sendGroupReply: async request => { sent.push(request); return { messageId: 'reply' } }, sendGroup: async () => { throw new Error('MUST_REPLY_TO_SOURCE') } }, notice),
     readback: async notice => ({ messageId: notice.ack.messageId, conversationId: 'g' }) }
   const { service, message, execution } = await fixture(t, actor, notifications, { judge: ordinaryAnswerJudge('已收到 E2E-0927-2212'),
-    legacy: { getGroup: groupId => ({ groupId, responsibility: '引用回复；小小鹏代回；只处理本人交办事项', messages: [] }) } })
+    legacy: { getGroup: groupId => ({ groupId, responsibility: '引用回复；小助手代回；只处理本人交办事项', messages: [] }) } })
   const received = await service.ingest(message), state = await service.messages.process(received.runId)
   assert.equal(state.commands[0].status, 'applied')
   assert.equal(state.commands[0].args.taskId, null)
@@ -2429,7 +2478,7 @@ for (const actor of ['owner', 'participant']) test(`普通 answer 可向 ${actor
   assert.deepEqual(await execution.store.query({ kind: 'run.list' }), [])
   assert.deepEqual(await execution.store.query({ kind: 'message.task-candidates', conversationId: 'g' }), [])
   assert.equal(sent.length, 1)
-  assert.deepEqual({ ...sent[0], idempotencyKey: undefined }, { groupId: 'g', text: '已收到 E2E-0927-2212\n\n- 小小鹏代回', replyToMessageId: 'm', replyToSenderOpenDingTalkId: actor, idempotencyKey: undefined })
+  assert.deepEqual({ ...sent[0], idempotencyKey: undefined }, { groupId: 'g', text: '已收到 E2E-0927-2212\n\n- 小助手代回', replyToMessageId: 'm', replyToSenderOpenDingTalkId: actor, idempotencyKey: undefined })
   const notices = await execution.store.query({ kind: 'message.notifications', states: ['delivered'] })
   assert.equal(notices.length, 1)
   assert.equal(notices[0].id, sent[0].idempotencyKey)
@@ -2457,7 +2506,7 @@ test('普通 answer 发送结果未知后重启只补读原通知，不重复派
   assert.equal(unknown.length, 1); assert.equal(sends, 1)
   await service.close()
   const restarted = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner' },
-    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test' }), getGroup: groupId => ({ groupId, responsibility: '', messages: [] }) },
+    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'] }), getGroup: groupId => ({ groupId, responsibility: '', messages: [] }) },
     execution, notifications, judge: async () => { throw new Error('SETTLED_ANSWER_MUST_NOT_REJUDGE') } })
   t.after(() => restarted.close())
   await restarted.recover(); await restarted.flushNotifications()
@@ -2965,8 +3014,8 @@ test('调查成功产物经真实Service与工程准备进入方案节点输入�
 
 test('渠道inline-code转换可独立回读，值变化仍拒绝',async()=>{
   const reply='按您选择的中文答复：example-project 登记代码版本 0123456789abcdef0123456789abcdef01234567 的根目录 pom.xml 第 20 行配置 `<java.version>11</java.version>`；Maven 编译配置的 source、target、release 均引用 `${java.version}`（第 363—365 行），即配置为 Java 11。'
-  const observed={text:'按您选择的中文答复：example-project 登记代码版本 0123456789abcdef0123456789abcdef01234567 的根目录 pom.xml 第 20 行配置 **<java.version>11</java.version>**；Maven 编译配置的 source、target、release 均引用 **${java.version}**（第 363—365 行），即配置为 Java 11。  \n- 小小鹏代回'}
-  const expected=formatGroupReply(reply,'小小鹏代回')
+  const observed={text:'按您选择的中文答复：example-project 登记代码版本 0123456789abcdef0123456789abcdef01234567 的根目录 pom.xml 第 20 行配置 **<java.version>11</java.version>**；Maven 编译配置的 source、target、release 均引用 **${java.version}**（第 363—365 行），即配置为 Java 11。  \n- 小助手代回'}
+  const expected=formatGroupReply(reply,'小助手代回')
   assert.equal(sameDeliveredText(observed.text,expected,true),true)
   assert.equal(sameDeliveredText(observed.text.replace('<java.version>11','<java.version>17'),expected,true),false)
 })

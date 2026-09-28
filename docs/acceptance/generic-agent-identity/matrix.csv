@@ -1,0 +1,7 @@
+case,round,status,evidence
+production-source-has-no-local-identity,1,PASS,round-1.md
+configured-name-and-alias,1,PASS,round-1.md
+rename-and-empty-configuration,1,PASS,round-1.md
+unconfigured-name-cannot-authorize-task,1,PASS,round-1.md
+generic-signature-link-preservation,1,PASS,round-1.md
+immutable-notification-and-recovery,1,PASS,round-1.md

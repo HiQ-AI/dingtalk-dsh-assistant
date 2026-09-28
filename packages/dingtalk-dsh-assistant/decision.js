@@ -278,8 +278,12 @@ function mainMessageTime(value) {
 
 export function isExplicitAgentDirection(message, names = []) {
   if (/^\s*cc\s*:/iu.test(message)) return true
+  return isNamedAgentDirection(message, names)
+}
+
+export function isNamedAgentDirection(message, names = []) {
   return names.filter((name) => typeof name === 'string' && name.trim() !== '').some((name) => {
-    const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+    const escaped = RegExp.escape(name.trim())
     return new RegExp(`@?${escaped}(?:\\([^)]*\\))?`, 'u').test(message)
   })
 }
