@@ -493,3 +493,7 @@ Host 配置属于冻结定义身份。已有等待任务不能通过热改配置
 强制停机若留下 WAL，部署脚本在持 owner 锁、备份前调用 `checkpointDeploymentDatabase`，通过 SQLite 原生 checkpoint 收口；前后所有表逻辑摘要必须相同。接入 `--check` 使用 immutable 只读模式且拒绝非空 WAL，保证不会创建 WAL/SHM，也不会漏读未 checkpoint 数据。
 
 profile 只修改唯一 instanceId/dbPath 对应的 workflow.groupIds，保留 !!js 及无关配置原文。journal 绑定前后 SHA；接管或 profile 更新后中断时，pending enrollment 阻止启动和旧引擎入站。保留现场，以相同参数重跑，不手工改 journal、profile 或控制库。激活后恢复计划任务并按正常维护 resume 流程启动，最后独立验收真实消息链路。
+
+## 群聊正文校验
+
+通知或恢复正文触发 `GROUP_REPLY_INTERNAL_DETAILS` 时，在内部记录定位生成来源，改为业务进展后重新准备回复。不要绕过校验或修改已可能发送的正文；unknown/acknowledged 仍只回读，不重发。此改动不修改内部任务和会话标识，无配置或数据迁移要求。

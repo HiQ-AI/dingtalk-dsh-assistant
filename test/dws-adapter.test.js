@@ -271,3 +271,14 @@ test('outbox 可识别钉钉补充@、移除Markdown并附加Agent签名后的�
   assert.deepEqual(result, { status: 'sent', messageId: 'rendered-id', deduplicated: true })
   assert.equal(sends, 0)
 })
+
+
+test('历史待发正文在领取前拒绝内部机制，已发送记录仍可回读', async () => {
+ let sends=0,claims=0
+ const outbound={outboundId:'out-public',text:'执行会话已启动'}
+ const adapter={readGroup:async()=>({complete:true,messages:[]}),sendGroup:async()=>{sends++}}
+ await assert.rejects(dispatchOutbox({adapter,groupId:'g',outbound,beforeSend:async()=>{claims++;return true}}),error=>error.code==='GROUP_REPLY_INTERNAL_DETAILS' && error.deliveryPendingReason==='preflight_failed')
+ assert.equal(sends,0);assert.equal(claims,0)
+ const delivered={...adapter,readGroup:async()=>({complete:true,messages:[{messageId:'m',outboundId:'out-public',text:outbound.text}]})}
+ assert.equal((await dispatchOutbox({adapter:delivered,groupId:'g',outbound})).deduplicated,true)
+})

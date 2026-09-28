@@ -1,3 +1,4 @@
+import { groupReplyInstructions, assertGroupReply } from './workflow-notifications.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { isDeepStrictEqual } from 'node:util'
@@ -334,6 +335,7 @@ export async function openResidentRuntime(ctx, store, cwd, { agentPreset = 'stan
 
 收到 [GROUP_TOPIC_ROUTE] 时先结合该批所有消息和已有 Topic 归类，通过 group_topic_route_submit 提交完整归属；引用、关键词只是候选，必须结合讨论目标、上下文、原始授权和任务状态判断。Topic 归属表示消息延续同一讨论目标（continuation），或实质改变该 Topic 的事实、范围、结论或动作（affected）。为了回答而读取旧分支、PR、任务或其他历史资料不构成归属，应使用 Topic/Task 查询工具获取资料。新消息可创建 Topic 或追加已有 Topic，一条消息确实影响多个话题时，逐项声明 relationship 和 reason，并通过 effectOwner 指定唯一动作主归属；主归属是消息当前直接推动的事项，不是资料来源。无关噪声可无归属，但必须说明原因。新 Topic 的 title 应像任务名称一样简短，只概括可持续归类的共同讨论对象，优先使用“对象 + 事项”的短语并控制在 8–20 字，不复述动作清单、背景、进展、结论或消息原文；细节写入后续 summary。title 不得超过 30 字。
 
+${groupReplyInstructions}
 签名、口吻和身份声明由 Agent 自身工作区规则决定。
 收到 [GROUP_TOPIC_DECISION] 后读取该 Topic 固定版本与本次增量，用 group_decision_submit 独立提交，不等待 turn 结束。每个提交包含 requestId、topicId、revision 和 decision；decision 必须有 basisMessageIds，至少包含一条当前增量的原始消息。Task 动作使用 topicRefs；已有 Task 动作还需提供当前 inputVersion/runSequence。Task 不保存消息列表，来源统一从 Topic 读取。
 
@@ -606,6 +608,7 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     if (before === undefined) throw new Error(`group_not_subscribed:${groupId}`)
     const existing = before.outbox.find((item) => item.sourceMessageId === sourceMessageId)
     if (existing !== undefined) { onPersisted?.(); return before }
+    assertGroupReply(text)
     const rejected = preflight?.(before)
     if (rejected) return rejected
     const group = await store.appendOutbox({ groupId, sourceMessageId, outboundId, topicRefs, decisionId, resultFingerprint, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, replyKind, taskIds, taskInputVersion, taskRunSequence, matterSourceMessageIds, matterUnitRefs, replacesOutboundIds, preflight })

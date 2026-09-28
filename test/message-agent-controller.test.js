@@ -227,3 +227,17 @@ test('清理链前项失败仍依次关闭后续资源和真实Store，原始错
  assert.deepEqual(order,['messageAgent','messages','taskOwner','controller','store','runtime'])
  const reopened=await openExecutionStore(options);await reopened.query({kind:'runtime.maintenance'});await reopened.close()
 })
+
+
+test('问答公开正文不能携带内部绑定，校验失败后可提交业务答复且内部记录保留', async t => {
+ const f=await fixture(t),c=f.controller()
+ await c.start({},await f.claim())
+ const call=f.sessions.calls[0]
+ const bad=result({summary:`已查询 ${call.binding.sessionId}`})
+ await assert.rejects(call.validateOutput(bad), error=>error.code==='GROUP_REPLY_INTERNAL_DETAILS' && call.classifyOutputError(error)==='correctable')
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).executions[0].status,'running')
+ await f.sessions.submit(result({summary:'查询已完成，结果如下。'}));await c.idle()
+ const state=await f.store.query({kind:'message.run',runId:'m'})
+ assert.equal(state.commands[0].result.reply,'查询已完成，结果如下。')
+ assert.equal(state.executions[0].sessionId,call.binding.sessionId)
+})

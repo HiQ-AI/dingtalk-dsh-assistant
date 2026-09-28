@@ -17,7 +17,7 @@ import { createMessageWorkflow } from './message-workflow.js'
 import { isPassiveTaskProgress } from './message-ledger.js'
 import { createMessageModel } from './message-model.js'
 import { taskWorkflowCatalog, messageAnswerArguments } from './message-context.js'
-import { createWorkflowNotifications, executeNotificationOperation, workflowResultText } from './workflow-notifications.js'
+import { createWorkflowNotifications, executeNotificationOperation, workflowResultText, groupStatusText, groupActionText } from './workflow-notifications.js'
 import { createEngineeringRegistry, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
 import { createDataChangeTaskWorkflow } from './workflow-data-change.js'
 import { createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract } from './task-release-workflows.js'
@@ -1457,8 +1457,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const result = await createPlannedTask({ action, info })
     return { taskId: result.taskId, runId: result.runId, status: 'accepted',
       reply: result.planningError
-        ? `任务已接纳；执行会话规划受阻：${result.planningError}。请在任务页查看并处理。`
-        : '任务已接纳，执行会话将按目标和授权安排后续步骤。' }
+        ? '已收到要求，目前暂时无法开始处理，需要先排查原因。'
+        : '收到，我会按你的要求处理。' }
   }
   async function taskAction(action, info) {
     if (info.binding.disposition === 'conversation' && ['status', 'result'].includes(action.intent)) {
@@ -1490,7 +1490,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         payload: { intent: action.intent, sourceRunId: info.run.runId,
           controlRevision: controlled.plan.task.controlRevision } })
       return { taskId, runId: controlled.plan.stages.findLast(stage => stage.runId)?.runId ?? null,
-        status: controlled.plan.task.status, reply: `已记录任务${action.intent}请求；当前状态：${controlled.plan.task.status}` }
+        status: controlled.plan.task.status, reply: `已收到${groupActionText(action.intent)}要求；目前${groupStatusText(controlled.plan.task.status)}。` }
     }
     if (action.intent === 'report') {
       if (!currentPlan || currentPlan.task.status !== 'succeeded'
@@ -1527,7 +1527,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         await taskOwner.drive(taskId)
         const failures = await taskOwner.applyPending()
         if (failures.length) throw executionError(failures[0].code)
-        return { taskId, status: 'accepted', reply: '已记录对当前方案的确认，执行会话将继续安排后续步骤。' }
+        return { taskId, status: 'accepted', reply: '已收到你的确认，会继续处理后续工作。' }
       }
       const previous = await artifacts.read(plan.task.requirementRef)
       const objective = requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
@@ -1560,20 +1560,20 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         planningError = failures[0]?.code ?? null
       } catch (cause) { planningError = cause.code ?? cause.message }
       return { taskId, status: 'accepted', reply: planningError
-        ? `已更新当前任务要求；执行会话规划受阻：${planningError}。请在任务页查看并处理。`
-        : '已更新当前任务要求，执行会话将核对受影响的步骤。' }
+        ? '已更新要求，目前暂时无法继续处理，需要先排查原因。'
+        : '已按你的补充更新要求，会核对需要调整的工作。' }
     }
     const existingRuns = await store.query({ kind: 'run.list', taskId, limit: 200 })
     if (!existingRuns.length) {
       if (['status', 'result'].includes(action.intent)) return singleTaskProgressResult({ taskId,
         status: currentPlan?.task.status ?? origin.command.status, beforeStart: true,
-        reply: `任务尚未开始执行；当前状态：${currentPlan?.task.status ?? origin.command.status}` })
+        reply: `任务尚未开始执行；当前状态：${groupStatusText(currentPlan?.task.status ?? origin.command.status)}` })
       if (!['cancel', 'pause', 'resume', 'revise'].includes(action.intent)) throw executionError('WORKFLOW_ACTION_NOT_ADMITTED')
       const receipt = await store.command({ id: `prestart:${info.commandId}`, kind: 'message.task.control', args: {
         taskId, action: action.intent, actorId: info.run.actorId, sourceRunId: info.run.runId,
         ...(action.intent === 'revise' ? { arguments: { ...origin.command.args.arguments, ...action.arguments }, constraints: [...new Set([...(origin.command.args.constraints ?? []), ...(action.constraints ?? [])])] } : {}),
       } })
-      return { taskId, status: receipt.result.command.status, beforeStart: true, reply: `任务执行前已记录${action.intent}，未启动旧请求。` }
+      return { taskId, status: receipt.result.command.status, beforeStart: true, reply: `任务执行前已记录${groupActionText(action.intent)}要求，尚未开始处理。` }
     }
     const state = await currentTask(taskId, action.arguments.runId ?? info.binding.runId)
     const args = { commandId: `dispatch:${info.commandId}`, runId: state.run.runId }
@@ -1588,7 +1588,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       return singleTaskProgressResult({ taskId, runId: state.run.runId, status, observedAt: new Date().toISOString(), output,
         reply: action.intent === 'result' && workflowResultText(output)
           ? `${taskComplete ? '任务结果' : '当前流程结果'}：${workflowResultText(output)}`
-          : `任务状态：${status}${state.run.recoveryReason ? `；等待原因：${state.run.recoveryReason}` : ''}` })
+          : `目前${groupStatusText(status)}。` })
     }
     if (action.intent === 'cancel') await controller.stop({ ...args, reason: info.unit.goalText })
     else if (action.intent === 'pause') await controller.pause({ ...args, reason: info.unit.goalText })
@@ -1602,7 +1602,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       if (currentPlan) await recordIntent()
     } else throw executionError('WORKFLOW_ACTION_NOT_ADMITTED')
     const observed = await controller.state(state.run.runId)
-    return { taskId, runId: state.run.runId, status: observed.run.status, reply: `已记录${action.intent}请求；当前状态：${observed.run.status}` }
+    return { taskId, runId: state.run.runId, status: observed.run.status, reply: `已收到${groupActionText(action.intent)}要求；目前${groupStatusText(observed.run.status)}。` }
   }
   async function cancellableAnswers(run) {
     const answers = []
@@ -1652,7 +1652,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const task = legacy.getTask?.(info.binding.taskId)
     if (!task || task.groupId !== info.run.conversationId) throw executionError('WORKFLOW_TASK_FORBIDDEN')
     return singleTaskProgressResult({ taskId: task.taskId, engine: 'legacy', status: task.state, outcome: task.outcome, observedAt: new Date().toISOString(),
-      reply: info.run.actorId === ownerActorId && intent === 'result' ? (typeof task.result === 'string' ? task.result : task.result?.summary ?? task.completion ?? '旧任务没有保存可读取的结果正文。') : `旧任务状态：${task.state}${task.outcome ? `；结果：${task.outcome}` : ''}${task.result?.delivery?.uat2Status ? `；UAT2：${task.result.delivery.uat2Status}` : '；UAT2：未见部署回执'}` })
+      reply: info.run.actorId === ownerActorId && intent === 'result' ? (typeof task.result === 'string' ? task.result : task.result?.summary ?? task.completion ?? '旧任务没有保存可读取的结果正文。') : `之前的事项目前${groupStatusText(task.state)}${task.outcome ? `（${groupStatusText(task.outcome)}）` : ''}；UAT2：${task.result?.delivery?.uat2Status ? groupStatusText(task.result.delivery.uat2Status) : '尚未核验部署结果'}。` })
   }
   handlers.create = createTask
   handlers.research = createTask
@@ -1754,7 +1754,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           return await selectedAnswerCancellation(action, info.run, info.unit.id ?? info.unit.unitId)
             ? { allowed: true } : reject('请引用本人要停止的原问题，并明确唯一事项；不能取消他人或不明确的问答')
         }
-        if (action.intent === 'answer' && !messageAnswerArguments.safeParse(action.arguments).success) return reject('问答需要明确问题目标，答复由执行会话产生')
+        if (action.intent === 'answer' && !messageAnswerArguments.safeParse(action.arguments).success) return reject('请说明需要回答的具体问题')
         if (info.binding.engine === 'legacy') {
           const task = legacy.getTask?.(info.binding.taskId)
           if (!task || task.groupId !== info.run.conversationId) return reject('无权读取该旧任务')

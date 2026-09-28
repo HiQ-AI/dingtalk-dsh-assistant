@@ -1,3 +1,4 @@
+import { groupReplyInstructions } from './workflow-notifications.js'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { executionDigest, executionError } from './execution-artifacts.js'
 
@@ -31,6 +32,7 @@ ${agentWorkProfessionalGuidance}
 最终调用 execution_node_submit 提交 outcome、summary、evidenceRefs、limitations、question。`
 
 export const agentWorkPrompt = `${agentWorkInstructions}
+${groupReplyInstructions}
 本次执行职责是回答当前消息。completed 表示本次用户目标已得到答复，不代表所有疑点已消除；合理查询后仍无法确认可说明已查范围并交付。若用户明确要求查明或修复，尚未完成必要工作不得宣称完成。`
 
 const investigationStagePrompt = `${agentWorkInstructions}
@@ -48,7 +50,7 @@ export function agentWorkDefinition({ provider, model, reasoningEffort, allowedT
 }
 
 export function classifyAgentWorkOutputError(error) {
-  return ['AGENT_WORK_RESULT_INVALID', 'AGENT_WORK_EVIDENCE_INVALID', 'ARTIFACT_REFERENCE_INVALID', 'QUERY_EVIDENCE_INVALID']
+  return ['GROUP_REPLY_INTERNAL_DETAILS', 'AGENT_WORK_RESULT_INVALID', 'AGENT_WORK_EVIDENCE_INVALID', 'ARTIFACT_REFERENCE_INVALID', 'QUERY_EVIDENCE_INVALID']
     .includes(error?.code) ? 'correctable' : 'fatal'
 }
 
