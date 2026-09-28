@@ -1,0 +1,10 @@
+{
+  "controlHealth": "degraded",
+  "recoveryIssueCount": 0,
+  "pid": 35256,
+  "ready": true,
+  "cDriveFreeBytes": 0,
+  "inboundProcessing": false,
+  "dispatchResumed": true,
+  "authenticatedWebStatus": 200
+}

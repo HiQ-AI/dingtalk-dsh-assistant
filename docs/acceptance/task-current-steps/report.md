@@ -15,3 +15,5 @@ PR [#140](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/140) 已独立�
 追加元信息轮已完成：标题最多32字符、完整目标展开、3/2/3工作流分组及63真实开始时间；非归档卡片14条中文步骤与精确本次耗时通过。最终正式46详情/97正文GET全部200、错误与失败0，1440/390宽度无溢出。初轮7详情计数为上一轮证据，最新正式检查见round-4.md与browser-summary.md。
 
 Web重执行群名第五轮完成：可读取原群sourceGroupId只供卡片显示，groupId仍为Web。本轮135服务/18前端测试通过，新PID38412独立Readback和派发恢复；两张正式卡片1440/390群名检查通过，业务写入0。详见round-5.md和group-label-summary.json。
+
+话题恢复最终第七轮：持久消息单元绑定恢复9/10卡片（无绑定不猜测），含两张Web任务；三张真实卡片1440点击/390键盘及话题关联任务检查通过，135服务/19Observer通过。当前PID35256、安装回读及派发恢复。独立健康degraded/收信false，C盘Free=0，因果未确认；页面验证不代表收信正常，详见round-7.md和topic-runtime-summary.json。

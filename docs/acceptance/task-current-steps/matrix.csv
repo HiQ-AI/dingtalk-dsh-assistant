@@ -29,3 +29,7 @@ metadata-original-structural-checks,4,PASS,round-4.md
 web-rerun-group-origin,5,PASS,round-5.md
 web-rerun-group-permission,5,PASS,round-5.md
 web-rerun-group-live-card,5,PASS,group-label-summary.json
+task-topic-live-web-inheritance,6,FAIL,round-6.md
+task-topic-live-web-inheritance,7,PASS,round-7.md
+task-topic-click-keyboard-related,7,PASS,topic-label-summary.json
+task-topic-group-permission,7,PASS,round-7.md

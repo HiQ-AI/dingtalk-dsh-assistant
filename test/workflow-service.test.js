@@ -3120,6 +3120,8 @@ test('同任务汇总卡片并分页历次执行：取消保留阶段成果、�
   await service.recoverExecutionTasks()
   const rootView = (await service.tasks({ taskId: original.taskId }))[0]
   assert.equal(rootView.state, 'completed')
+  assert.equal(rootView.topicRefs.length, 1)
+  assert.equal(rootView.topicRefs[0].groupId, message.groupId)
   const add = async (taskId, parent, expectedRunId) => {
     const goal = await execution.artifacts.put({ request: `目标 ${taskId}`, acceptanceCriteria: ['正确'], constraints: [],
       scope: { conversationId: 'web:owner' }, authorization: {}, reportChannel: 'web', externalMessaging: false })
@@ -3149,7 +3151,7 @@ test('同任务汇总卡片并分页历次执行：取消保留阶段成果、�
   assert.equal(physical.length, 3); assert.equal(board.length, 1)
   const latest = physical.find(task => task.taskId === 'history-3')
   for (const [key, value] of Object.entries(latest)) {
-    if (key === 'executionTiming') {
+    if (key === 'topicRefs') { assert.deepEqual(board[0].topicRefs, rootView.topicRefs) } else if (key === 'executionTiming') {
       const { sampledAt, ...timing } = value
       const { sampledAt: boardSample, ...boardTiming } = board[0][key]
       assert.ok(Date.parse(sampledAt) && Date.parse(boardSample)); assert.deepEqual(boardTiming, timing)
@@ -3186,6 +3188,7 @@ test('同任务汇总卡片并分页历次执行：取消保留阶段成果、�
   assert.deepEqual(visible.executions.map(item => item.executionNumber), [2, 1])
   assert.equal((await scoped.boardTasks())[0].executionCount, 2)
   assert.equal((await scoped.boardTasks())[0].sourceGroupId, null)
+  assert.deepEqual((await scoped.boardTasks())[0].topicRefs, [])
   const server = createServer((req, res) => handleRequest(req, res, {
     getWorkflowTaskDetail: id => scoped.taskDetail(id), getWorkflowTaskExecutions: (id, page) => scoped.taskExecutions(id, page) }))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)))

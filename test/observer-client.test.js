@@ -573,3 +573,21 @@ test('Web重执行卡片显示原群名，缺少可读群来源时不暴露Web�
   assert.equal(label({ groupId: 'g' }), '工程群')
   assert.match(source, /title: task.sourceChannel === 'web' \? `\$\{groupLabel\} · Web 重新执行`/u)
 })
+
+test('Web任务话题按钮和键盘均使用原话题群聊，话题页能反查关联任务', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const fragment = source.match(/\.\.\.(\(task\.topicRefs \|\| \[\]\)\.map\(\(ref\) => \{[\s\S]*?label\) \}\))/u)[1]
+  const targets = [], pages = []
+  const [button] = runInNewContext(`(() => { return ${fragment} })()`, {
+    task: { groupId: 'web:actor', sourceGroupId: 'g', topicRefs: [{ groupId: 'g', topicId: 'topic', revision: 2, title: '真实话题' }] },
+    topicsById: new Map(), React: { createElement: (type, props, ...children) => ({ type, props, children }) },
+    colors: { accent: 'blue' }, pill: () => ({}), short: v => v,
+    setTopicTarget: v => targets.push(v), setActivePage: v => pages.push(v),
+  })
+  assert.equal(button.children[0], '真实话题')
+  button.props.onClick({ stopPropagation() {} })
+  button.props.onKeyDown({ key: 'Enter', preventDefault() {}, stopPropagation() {} })
+  assert.deepEqual(targets.map(t => t.groupId), ['g', 'g'])
+  assert.deepEqual(pages, ['topics', 'topics'])
+  assert.match(source, /ref\.groupId \|\| task\.sourceGroupId \|\| task\.groupId\) === selection\?\.groupId/u)
+})

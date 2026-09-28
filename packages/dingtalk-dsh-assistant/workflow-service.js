@@ -44,8 +44,10 @@ export function groupTaskExecutions(physical, families) {
     // 既有并发分叉不能被后来的终态遮住：优先保留活动执行在看板上。
     const active = members.filter(task => task.state !== 'completed')
     const displayed = active.at(-1) ?? latest
+    const source = members.find(task => task.groupId && !task.groupId.startsWith('web:'))
     return [{ ...displayed, logicalTaskId: members[0].taskId, latestTaskId: latest.taskId,
-      sourceGroupId: members.find(task => task.groupId && !task.groupId.startsWith('web:'))?.groupId ?? null,
+      sourceGroupId: source?.groupId ?? null,
+      topicRefs: displayed.topicRefs?.length ? displayed.topicRefs : source?.topicRefs ?? [],
       executionCount: members.length, executionNumber: members.indexOf(displayed) + 1,
       activeExecutionCount: active.length,
       archivedAt: members.every(task => task.archivedAt) ? latest.archivedAt : undefined }]
@@ -2280,9 +2282,17 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   async function tasks({ taskId: selectedTaskId, readableOnly = false, completePlan = false } = {}) {
     const archives = new Map((await store.query({ kind: 'task.archives' })).map(item => [item.taskId, item.archivedAt]))
     const catalog = await store.query({ kind: 'task.catalog', ...(selectedTaskId ? { taskId: selectedTaskId } : {}) })
+    const topicBindings = new Map()
     const project = async ({ taskId, runs: taskRuns }) => {
       const origin = await store.query({ kind: 'task.origin', taskId })
       if (readableOnly && !readableTaskOrigin(origin)) return null
+      const groupId = origin?.run.conversationId
+      if (origin?.command.unitId && !topicBindings.has(groupId))
+        topicBindings.set(groupId, store.query({ kind: 'message.topic.bindings', conversationId: groupId }))
+      const topic = origin?.command.unitId
+        ? (await topicBindings.get(groupId)).find(item => item.unitId === origin.command.unitId && item.sourceKey === origin.run.sourceKey)?.topic : null
+      const topicRefs = topic && topic.conversationId === origin.run.conversationId
+        ? [{ groupId: topic.conversationId, topicId: topic.topicId, revision: topic.revision, title: topic.title }] : []
       const plan = await controller.taskPlan(taskId)
       const currentStage = plan?.stages.find(stage => !['succeeded', 'invalidated'].includes(stage.status)) ?? plan?.stages.at(-1)
       const run = taskRuns.find(item => item.runId === currentStage?.runId) ?? taskRuns[0]
@@ -2328,7 +2338,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           ?? state?.controllerError ?? run?.recoveryReason ?? state?.nodes.find(node => node.status === 'waiting')?.waitReason?.reference,
         taskRunId: run?.runId ?? null,
         ...(origin?.channel === 'web' ? { sourceChannel: 'web', reportChannel: 'web', rerunOfTaskId: origin.rerunOfTaskId } : {}),
-        stageTasks: state?.nodes.map(node => node.nodeId) ?? [], topicRefs: [], checkpoints: [],
+        stageTasks: state?.nodes.map(node => node.nodeId) ?? [], topicRefs, checkpoints: [],
         executionNodes: completePlan && plan ? await currentPlanNodes(taskId, plan)
           : await Promise.all((state?.nodes ?? []).map(async node => ({ ...node,
             ...(completePlan ? { stepKey: `${taskId}:${state.run.workflowId}:${node.nodeId}` } : {}),

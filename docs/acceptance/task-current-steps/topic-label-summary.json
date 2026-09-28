@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "workflowCards": 10,
+  "cardsWithTopics": 9,
+  "checkedCards": 3,
+  "topicClickAndKeyboardNavigation": true,
+  "allResolvedToNamedGroups": true,
+  "originalWebSourcePreserved": true,
+  "widths": [
+    1440,
+    390
+  ],
+  "errors": 0,
+  "businessWrites": 0
+}

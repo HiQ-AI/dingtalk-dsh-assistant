@@ -152,3 +152,5 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 写接口返回 `{receipt,state}`；同 `requestId` 同载荷幂等，不同载荷冲突。过期版本、已封存或未排空返回 409，额外身份字段返回 400。许可与维护事件持久化，重启不会自动解除。外部只读 SQLite 检查器没有 Host incarnation，只核对持久 `phase/maintenanceId/revision`，不得自行签发 `stopPermitted`。部署脚本必须先取得并核验 seal 回执，再停止其绑定的旧 PID；新实例健康与恢复核验后调用 resume。
 
 任务汇总GET /state/tasks的sourceGroupId是可读取关联链内的原群聊ID，无可用来源为null；仅供卡片群名展示，不替换本次groupId、授权与报告渠道。Web重新执行的groupId仍为web:actorId。
+
+任务投影topicRefs由创建命令的消息单元unitId和sourceKey对应持久话题绑定解析当前话题，包含groupId/topicId/revision/title，校验话题群与执行来源一致。汇总卡片在本次无绑定时继承可读取原群任务的topicRefs；不改本次执行groupId。无真实绑定返回空数组，不可读取原任务不得继承其话题。
