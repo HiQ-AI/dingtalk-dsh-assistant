@@ -1399,6 +1399,13 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const origin=await store.query({kind:'task.origin',taskId:request.taskId})
     if(!origin)throw executionError('WORKFLOW_TASK_NOT_FOUND')
     await taskAccess(request.taskId,identity.actorId,origin.run.conversationId)
+    if (request.action === 'archive') {
+      const task = (await tasks()).find(item => item.taskId === request.taskId)
+      if (!task || task.state !== 'completed') throw executionError('TASK_ARCHIVE_NOT_COMPLETED')
+      const receipt = await store.command({ id: `task-archive:${executionDigest([identity.actorId, request.taskId])}`,
+        kind: 'task.archive', args: { taskId: request.taskId, actorId: identity.actorId } })
+      return { ...task, archivedAt: receipt.result.archivedAt }
+    }
     if (request.action === 'rerun') return rerunWebTask(request, identity, origin)
     if (origin.channel === 'web') {
       if (!['context', 'cancel', 'confirm-stage', 'continue-budget'].includes(request.action)) throw executionError('WORKFLOW_WEB_ACTION_UNSUPPORTED')
@@ -2209,6 +2216,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     return effect?.result?.evidenceRef ?? null
   }
   async function tasks() {
+    const archives = new Map((await store.query({ kind: 'task.archives' })).map(item => [item.taskId, item.archivedAt]))
     const runs = await store.query({ kind: 'run.list', limit: 200 })
     const byTask = new Map()
     for (const run of runs) {
@@ -2244,7 +2252,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         || planState === 'succeeded' ? 'waiting' : !run ? 'queued'
         : terminal(run.status) && !plan ? 'completed' : state.controllerError ? 'waiting'
           : run.status === 'running' ? 'running' : run.status === 'queued' ? 'queued' : 'waiting'
-      return { taskId, engine: 'workflow-v2', workflowId: run?.workflowId ?? currentStage?.workflowId,
+      return { taskId, archivedAt: archives.get(taskId), engine: 'workflow-v2', workflowId: run?.workflowId ?? currentStage?.workflowId,
         workflowVersion: run?.definitionVersion, groupId: origin?.run.conversationId,
         title: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
         objective: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,

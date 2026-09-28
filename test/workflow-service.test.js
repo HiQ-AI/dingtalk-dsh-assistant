@@ -473,7 +473,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
     const plan = await controller.advanceTaskPlan(taskId)
     return { taskId, runId: plan.stages[0].runId }
   }
-  return { service, execution, message, startCodeTask }
+  return { service, execution, message, startCodeTask, root }
 }
 
 test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、恢复只留 Web 且拒绝越权阶段', async t => {
@@ -3018,4 +3018,82 @@ test('渠道inline-code转换可独立回读，值变化仍拒绝',async()=>{
   const expected=formatGroupReply(reply,'小助手代回')
   assert.equal(sameDeliveredText(observed.text,expected,true),true)
   assert.equal(sameDeliveredText(observed.text.replace('<java.version>11','<java.version>17'),expected,true),false)
+})
+
+
+test('新版任务真实HTTP归档仅完成可用，幂等持久且不改变节点产物或发送消息', async t => {
+  let sends = 0
+  const notices = { canDisclose: async () => true, send: async () => { sends++; return { messageId: 'archive-notice' } },
+    readback: async () => ({ messageId: 'archive-notice', conversationId: 'g' }) }
+  const { service, execution, message, root } = await fixture(t, 'owner', notices, { config: { webActorId: 'owner' } })
+  const received = await service.ingest(message), state = await service.messages.process(received.runId)
+  await execution.controller.whenIdle(state.commands[0].result.runId)
+  assert.deepEqual((await service.recover()).failures, [])
+  await service.flushNotifications()
+  const task = (await service.tasks())[0]
+  assert.equal(task.state, 'completed')
+  const planBefore = await execution.controller.taskPlan(task.taskId)
+  const stateBefore = await execution.controller.state(state.commands[0].result.runId)
+  const outputs = await Promise.all(planBefore.stages.map(stage => execution.artifacts.read(stage.outputRef)))
+  const noticesBefore = await execution.store.query({ kind: 'message.notifications' }), sendsBefore = sends
+  const identity = { channel: 'web', actorId: 'owner' }
+  await assert.rejects(service.submitWebTask({ action: 'archive', taskId: task.taskId }, { channel: 'web', actorId: 'attacker' }), /FORBIDDEN/)
+  let legacyCalls = 0
+  const runtime = { isWorkflowTask: service.isTask, listTaskView: () => service.tasks(),
+    submitWorkflowTask: request => service.submitWebTask(request, identity), archiveTask: () => { legacyCalls++; throw new Error('LEGACY_NOT_ALLOWED') } }
+  const server = createServer((req, res) => handleRequest(req, res, runtime))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise(resolve => server.close(resolve)))
+  const base = `http://127.0.0.1:${server.address().port}`
+  const post = (body, origin = 'http://127.0.0.1:3080') => fetch(`${base}/tasks/${task.taskId}/archive`, {
+    method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify(body) })
+  assert.equal((await post({}, 'https://evil.invalid')).status, 403)
+  assert.equal((await post({ actorId: 'owner' })).status, 400)
+  assert.equal((await post({ taskId: 'another' })).status, 400)
+  const first = await post({}); assert.equal(first.status, 200, await first.clone().text())
+  const archived = await first.json()
+  assert.ok(Number.isFinite(Date.parse(archived.archivedAt)))
+  const second = await post({}); assert.equal(second.status, 200)
+  assert.equal((await second.json()).archivedAt, archived.archivedAt)
+  const listed = await (await fetch(`${base}/state/tasks`)).json()
+  assert.equal(listed.find(item => item.taskId === task.taskId).archivedAt, archived.archivedAt)
+  assert.deepEqual(await execution.controller.taskPlan(task.taskId), planBefore)
+  assert.deepEqual(await execution.controller.state(state.commands[0].result.runId), stateBefore)
+  assert.deepEqual(await Promise.all(planBefore.stages.map(stage => execution.artifacts.read(stage.outputRef))), outputs)
+  assert.deepEqual(await execution.store.query({ kind: 'message.notifications' }), noticesBefore)
+  assert.equal(sends, sendsBefore); assert.equal(legacyCalls, 0)
+  await service.close(); await execution.controller.close(); await execution.store.close()
+  const reopened = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'test', initialize: false })
+  try {
+    assert.deepEqual(await reopened.query({ kind: 'task.archives' }), [{ taskId: task.taskId, archivedAt: archived.archivedAt, actorId: 'owner' }])
+  } finally { await reopened.close() }
+})
+
+test('新版任务归档拒绝运行中与等待中任务且不记录归档事件', async t => {
+  let started, release
+  const began = new Promise(resolve => started = resolve), gate = new Promise(resolve => release = resolve)
+  t.after(() => release())
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { config: { webActorId: 'owner' },
+    execute: async () => { started(); await gate; return { summary: '等待后的结果' } } })
+  const received = await service.ingest(message); await service.messages.process(received.runId); await began
+  const task = (await service.state(received.runId)).commands[0].result
+  const request = { action: 'archive', taskId: task.taskId }, identity = { channel: 'web', actorId: 'owner' }
+  assert.equal((await service.tasks())[0].state, 'running')
+  await assert.rejects(execution.store.command({ id: 'archive-running-direct', kind: 'task.archive', args: { taskId: task.taskId, actorId: 'owner' } }), /NOT_COMPLETED|NOT_DRAINED/)
+  await assert.rejects(service.submitWebTask(request, identity), /NOT_COMPLETED/)
+  await execution.controller.pause({ commandId: 'archive-pause', runId: task.runId, reason: '暂停等待确认' })
+  release(); await execution.controller.whenIdle(task.runId)
+  assert.equal((await service.tasks())[0].state, 'waiting')
+  await assert.rejects(execution.store.command({ id: 'archive-waiting-direct', kind: 'task.archive', args: { taskId: task.taskId, actorId: 'owner' } }), /NOT_COMPLETED|NOT_DRAINED/)
+  await assert.rejects(service.submitWebTask(request, identity), /NOT_COMPLETED/)
+  assert.deepEqual(await execution.store.query({ kind: 'task.archives' }), [])
+  const waiting = (await service.tasks())[0]
+  await service.submitWebTask({ action: 'cancel', taskId: task.taskId, requestId: 'archive-cancel-waiting',
+    inputVersion: waiting.inputVersion, runSequence: 1, reason: '结束测试任务' }, identity)
+  await execution.controller.whenIdle(task.runId)
+  assert.deepEqual((await service.recover()).failures, [])
+  const cancelled = (await service.tasks())[0]
+  assert.equal(cancelled.state, 'completed'); assert.equal(cancelled.outcome, 'cancelled')
+  const archived = await service.submitWebTask(request, identity)
+  assert.ok(Number.isFinite(Date.parse(archived.archivedAt)))
 })

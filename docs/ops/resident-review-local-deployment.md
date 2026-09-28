@@ -349,3 +349,7 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 Owner 在 `task-general-capability` 阶段选择 `import-task-file`，`capabilityStep.input` 严格为 `{role,fileName,relativePath}`。来源必须同时在 Host `readablePaths` 和当前任务 `scope.readableFiles` 中，交付角色/文件名匹配 `scope.artifactFiles`；实际扩展名保持一致。准备环节只读取并冻结真实大小/SHA-256，模型不提供摘要或根路径；效果执行时再核对原字节才复制登记。路径、junction、身份变化和超容量均拒绝，不向群发送半包。
 
 登记成功后，文件交付及恢复只读取受管快照；原源文件后续修改或删除不会改变已登记版本。准备后、登记前源文件变化则拒绝执行，不能偷偷改用新内容。独立验收覆盖准备零写、源变化拒绝、双重白名单、扩展名变换拒绝，以及登记后源删除仍可恢复；这证明导入与传输原字节，不证明 Office/PDF 内容质量或提供新文件生成器。
+
+## 工作流任务归档入口修复
+
+本轮只需更新 Assistant。`POST /tasks/<taskId>/archive` 使用现有空 JSON 对象，Web 仅受信本机身份可调用。新版在控制账事务检查完成/取消、运行和 Owner 收口、执行租约与效果排空，再追加 `task.archive` 事件和幂等回执；没有控制库 schema 迁移。部署后真实调用并回读 `archivedAt` 与任务产物，归档不会调用模型、群通知或删除工程目录。旧版 Runtime 仍按 `localWorktrees` 实际清理；不能绕过脏代码、未推送、未知文件或跨任务占用检查。测试任务应从明确测试群或来源验收标记识别，不把业务问题中的“测试账号”当作测试任务。

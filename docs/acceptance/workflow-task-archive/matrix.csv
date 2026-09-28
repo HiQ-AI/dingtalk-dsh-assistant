@@ -1,0 +1,8 @@
+case,round-1,evidence
+HTTP归档正常及严格参数,PASS,http.test.js / workflow-service.test.js
+持久化与幂等及产物不变,PASS,workflow-service.test.js
+非法身份及活动状态拒绝,PASS,workflow-service.test.js
+正式取消后归档,PASS,归档定向测试
+控制库与任务计划回归,PASS,control-tests.log 45/45
+效果排空与旧版工作目录安全,PASS,effects-worktrees.log 22/22
+本地部署与真实批量归档,PENDING,交付后现场回读
