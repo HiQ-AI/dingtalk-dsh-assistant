@@ -33,7 +33,7 @@
 
 消息处理详情显示“查询与答复”的状态、耗时和会话；结果正文与依据按需分页读取。取消问答时引用本人原问题；同一原消息有多个未完成事项时，先澄清选择，再核对身份和输入版本取消选定执行。
 
-只读资源通过 `workflow.directQueries` 登记，并按 `actorId + conversationId` 显式授权。资源目录不等于授权：未授权主体看不到对应查询工具，每次调用仍重新校验权限。数据库默认使用低权限只读身份；用户明确指定使用现有 UAT 账号时，仅对显式登记的 UAT 资源启用 Host 强制只读事务模式。模型始终不能获得连接凭据或提交任意 SQL。配置合同见 [Agent 查询工具](docs/api/agent-query-tool-contract.md)，切换步骤见 [本地部署说明](docs/ops/resident-review-local-deployment.md)。
+只读资源通过 `workflow.directQueries` 登记，由 `permissions` 显式声明 Agent 自身的资源授权，与发送者身份无关。不同群成员使用同一 Agent 职责范围，每次调用仍重新校验资源权限。数据库默认使用低权限只读身份；用户明确指定使用现有 UAT 账号时，仅对显式登记的 UAT 资源启用 Host 强制只读事务模式。模型始终不能获得连接凭据或提交任意 SQL。配置合同见 [Agent 查询工具](docs/api/agent-query-tool-contract.md)，切换步骤见 [本地部署说明](docs/ops/resident-review-local-deployment.md)。
 
 旧材料分析、固定规划/执行循环及逐次只读能力阶段退出新入口；切换前必须确认没有活动引用。历史记录继续按原状态读取，不重放旧命令。以下常驻主会话与叶子 Goal 说明适用于尚未切换的旧 Resident 群。
 

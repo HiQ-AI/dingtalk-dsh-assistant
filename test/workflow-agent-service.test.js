@@ -242,18 +242,22 @@ test('消息trace只返回Agent摘要、耗时和绑定会话，长产出按需�
   assert.ok((await h.service.messageEvidence(received.runId, first.evidenceRefs[0])).text.includes('项目'))
 })
 
-test('Agent可用工具和资源目录跟随当前发送者授权，不沿用前一发送者范围', async t => {
+test('Agent资源权限独立于发送者，各发送者使用相同职责范围', async t => {
   const h = await fixture(t, undefined, { config: { directQueries: {
-    resources: [{ id: 'docs', kind: 'files', root: process.cwd(), paths: ['README.md'], description: '项目文档' }],
+    resources: [{ id: 'docs', kind: 'files', root: process.cwd(), paths: ['README.md'], description: '项目文档' },
+      { id: 'outside', kind: 'files', root: process.cwd(), paths: ['AGENTS.md'], description: '未授权资料' }],
     statusResources: [{ id: 'runtime', url: 'http://127.0.0.1:19999/health', fields: ['status'], description: '运行状态' }],
-    grants: [{ actorId: 'owner', conversationId: 'g', resourceIds: ['docs'], statusIds: ['runtime'] }],
+    permissions: { resourceIds: ['docs'], databaseIds: [], statusIds: ['runtime'] },
   } } })
   for (const actor of ['owner', 'participant']) { const received = await h.receive(actor, '查询项目资料及运行状态', actor); await h.settle(received.runId) }
   const first = h.calls[0], second = h.calls[1]
   assert.ok(first.definition.allowedTools.includes('query_project_resource')); assert.ok(first.definition.allowedTools.includes('query_runtime_status'))
-  assert.ok(!second.definition.allowedTools.includes('query_project_resource')); assert.ok(!second.definition.allowedTools.includes('query_runtime_status'))
+  assert.ok(second.definition.allowedTools.includes('query_project_resource')); assert.ok(second.definition.allowedTools.includes('query_runtime_status'))
   assert.equal(first.input.context.resources[0].id, 'docs'); assert.equal(first.input.context.statusResources[0].id, 'runtime')
   assert.deepEqual(first.input.context.resources[0].paths, ['README.md'])
   assert.equal(Object.hasOwn(first.input.context.resources[0], 'root'), false)
-  assert.deepEqual(second.input.context.resources, []); assert.deepEqual(second.input.context.statusResources, [])
+  assert.deepEqual(second.input.context.resources, first.input.context.resources); assert.deepEqual(second.input.context.statusResources, first.input.context.statusResources)
+  assert.equal(first.input.scope.actorId, 'owner'); assert.equal(second.input.scope.actorId, 'participant')
+  assert.deepEqual(second.input.scope.resourceIds, ['docs'])
+  assert.equal(second.input.context.resources.some(resource => resource.id === 'outside'), false)
 })

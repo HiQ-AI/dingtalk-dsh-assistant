@@ -466,7 +466,11 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     ? createTaskMarkdownFileAdapter({ root: config.taskOutputDirectory ?? config.artifactDirectory }) : null
   const markdownWrite = markdownFileAdapter ? createGeneralMarkdownWriteCapability({ fileAdapter: markdownFileAdapter }) : null
   const capabilities = [sourceRead, predecessorRead, sourceDossier, ...(messageResourceRead ? [messageResourceRead] : []), ...(fileRead ? [fileRead] : []), ...(markdownWrite ? [markdownWrite] : []), ...generalCapabilities]
-  const queryConfig = config.directQueries ?? { resources: [], databases: [], grants: [] }
+  const queryConfig = config.directQueries ?? { resources: [], databases: [] }
+  if (Object.hasOwn(queryConfig, 'grants')) throw executionError('QUERY_CONFIG_MEMBER_GRANTS_REMOVED')
+  if (queryConfig.permissions && (Object.keys(queryConfig.permissions).some(key => !['resourceIds', 'databaseIds', 'statusIds'].includes(key))
+    || ['resourceIds', 'databaseIds', 'statusIds'].some(key => !Array.isArray(queryConfig.permissions[key])
+      || queryConfig.permissions[key].some(id => typeof id !== 'string' || !id)))) throw executionError('QUERY_CONFIG_PERMISSIONS_INVALID')
   const queryCapabilities = [...capabilities.filter(item => item.effectClass === 'read' && item.parameters),
     ...(queryConfig.resources?.length ? [createAgentResourceReadCapability({ resources: queryConfig.resources })] : []),
     ...(queryConfig.statusResources?.length ? [createAgentStatusReadCapability({ resources: queryConfig.statusResources })] : []),
@@ -475,10 +479,10 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const queryToolNames = queryCapabilities.map(item => item.id)
   const queryCapabilityIdentity = executionDigest(queryCapabilities.map(item => ({ id: item.id, identity: item.identity })))
   function queryScope(base) {
-    const grants = (queryConfig.grants ?? []).filter(grant => grant.actorId === base.actorId && grant.conversationId === base.conversationId)
-    return { ...base, resourceIds: [...new Set(grants.flatMap(grant => grant.resourceIds ?? []))],
-      databaseIds: [...new Set(grants.flatMap(grant => grant.databaseIds ?? []))],
-      statusIds: [...new Set(grants.flatMap(grant => grant.statusIds ?? []))] }
+    const permissions = queryConfig.permissions ?? {}
+    return { ...base, resourceIds: [...new Set(permissions.resourceIds ?? [])],
+      databaseIds: [...new Set(permissions.databaseIds ?? [])],
+      statusIds: [...new Set(permissions.statusIds ?? [])] }
   }
   async function resolveQueryScope({ binding, input }) {
     const scope = input.scope

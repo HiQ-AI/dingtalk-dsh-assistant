@@ -14,9 +14,9 @@ export async function planAgentQueryResources(source, proposal) {
   if (!keys(proposal, ['expectedProfileSha256','target','directQueries']) || proposal.target !== 'dingtalk-dsh-assistant.config.workflow.directQueries'
     || !/^[a-f0-9]{64}$/.test(proposal.expectedProfileSha256)) fail('QUERY_CONFIG_PROPOSAL_INVALID')
   const q = proposal.directQueries
-  if (!keys(q, ['resources','databases','statusResources','grants', ...(q?.databases?.length ? ['credentialsPath'] : [])]) || !Array.isArray(q.databases)
+  if (!keys(q, ['resources','databases','statusResources','permissions', ...(q?.databases?.length ? ['credentialsPath'] : [])]) || !Array.isArray(q.databases)
     || !Array.isArray(q.resources) || !Array.isArray(q.statusResources) || !(q.resources.length + q.databases.length + q.statusResources.length)
-    || !Array.isArray(q.grants) || q.grants.length !== 1) fail('QUERY_CONFIG_PROPOSAL_INVALID')
+    || !keys(q.permissions, ['resourceIds','databaseIds','statusIds'])) fail('QUERY_CONFIG_PROPOSAL_INVALID')
   for (const r of q.resources) if (!keys(r, r.kind === 'repository' ? ['id','kind','root','commit','paths'] : ['id','kind','root','paths'])) fail('QUERY_CONFIG_RESOURCE_INVALID')
   for (const r of q.statusResources) if (!keys(r,r.kind === 'kubernetes' ? ['id','kind','kubeconfig','server','namespace','deployment','skipTlsVerify'] : ['id','url','fields'])) fail('QUERY_CONFIG_RESOURCE_INVALID')
   // 配置登记不读取凭据、不连接数据库；运行时按资源身份策略检查事务及角色。
@@ -86,10 +86,8 @@ export async function planAgentQueryResources(source, proposal) {
       .split('\n').map(line => ' '.repeat(indent) + line).join(newline) + newline
     insertions.push({ at, end, fragment })
   }
-  const g=q.grants[0], w=before.workflow
-  if (!keys(g,['actorId','conversationId','resourceIds','databaseIds','statusIds']) || g.actorId !== w.ownerActorId
-    || !w.groupIds?.includes(g.conversationId) || !g.actorId || !g.conversationId
-    || !isDeepStrictEqual(g.databaseIds, q.databases.map(r=>r.id))
+  const g=q.permissions, w=before.workflow
+  if (!isDeepStrictEqual(g.databaseIds, q.databases.map(r=>r.id))
     || !isDeepStrictEqual(g.resourceIds, q.resources.map(r=>r.id)) || !isDeepStrictEqual(g.statusIds,q.statusResources.map(r=>r.id))) fail('QUERY_CONFIG_GRANT_INVALID')
   for(const r of q.resources) if(!await resources.authorize({input:{resourceId:r.id},scope:g})) fail('QUERY_CONFIG_AUTHORIZATION_FAILED')
   for(const r of q.databases) if(!await databases.authorize({input:{resourceId:r.id},scope:g})) fail('QUERY_CONFIG_AUTHORIZATION_FAILED')

@@ -81,3 +81,5 @@ deployment,8,installed-runtime,PASS,docs/tmp/session-contention-deployment-resum
 session-list-latency,2,installed-runtime,PASS,docs/tmp/agent-live-browser/post-contention-session-list-r1.json
 session-list-latency,3,installed-runtime,PASS,docs/tmp/agent-live-browser/post-contention-session-list-r2.json
 session-list-browser,1,installed-runtime,PASS,docs/tmp/agent-live-browser/post-contention-browser-list.json
+permission-boundary-audit,2,controlled-integration,PASS,docs/tmp/agent-permission-audit-r1.log
+agent-owned-permissions,1,controlled-integration,PASS,docs/tmp/agent-owned-permissions-tests-r2.log
