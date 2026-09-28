@@ -172,14 +172,14 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
     if (!store.submitWorkflowTask) return send(response, 404, { error: 'workflow_disabled' })
     try {
-      const body = z.strictObject({ requestId: requiredText.max(200), expectedRunId: requiredText.max(200),
+      const body = z.strictObject({ requestId: requiredText.max(200), expectedRunId: requiredText.max(200).nullable(),
         objective: requiredText.max(12000), acceptanceCriteria: z.array(requiredText.max(2000)).min(1).max(32),
         constraints: z.array(requiredText.max(2000)).max(32).optional(), repositoryId: requiredText.max(64),
         uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']),
         stages: z.tuple([z.literal('task-engineering'), z.literal('task-uat-pr-merge'), z.literal('task-uat-deployment')]),
         mergeTargetId: requiredText.max(200), deployTargetId: requiredText.max(200) }).parse(await readJson(request))
       return send(response, 202, await store.submitWorkflowTask({ ...body, action: 'rerun', taskId: decodeURIComponent(workflowRerun[1]) }))
-    } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|CHANGED|ACTIVE/u.test(error.message) ? 409 : 400, { error: error.message }) }
+    } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|CHANGED|ACTIVE|STALE|TASK_RERUN_SOURCE_/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
   const workflowTaskAction = /^\/tasks\/([^/]+)\/(context|cancel|confirm-stage|continue-budget|reopen|archive|title)$/u.exec(url.pathname)
   if (workflowTaskAction && ['POST', 'PUT'].includes(request.method) && await store.isWorkflowTask?.(decodeURIComponent(workflowTaskAction[1]))) {
@@ -314,6 +314,17 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       }
       return send(response, value ? 200 : 404, value ?? { error: 'output_not_found' }) }
     catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
+  const workflowTaskHistory = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/(detail|executions)$/u.exec(url.pathname)
+  if (workflowTaskHistory) {
+    const detail = workflowTaskHistory[2] === 'detail'
+    const method = detail ? 'getWorkflowTaskDetail' : 'getWorkflowTaskExecutions'
+    if (!store[method]) return send(response, 404, { error: 'workflow_disabled' })
+    try {
+      const value = await store[method](decodeURIComponent(workflowTaskHistory[1]),
+        detail ? undefined : { offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100) })
+      return send(response, value ? 200 : 404, value ?? { error: 'task_not_found' })
+    } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
   }
   const workflowTaskRuns = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/runs$/u.exec(url.pathname)
   if (workflowTaskRuns) {

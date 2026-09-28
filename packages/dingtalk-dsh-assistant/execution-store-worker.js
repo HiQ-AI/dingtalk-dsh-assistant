@@ -668,27 +668,12 @@ function command(value) {
       const origin = taskOrigin(taskId)
       if (!origin) fail('WORKFLOW_TASK_NOT_FOUND')
       if (origin.channel === 'web' && origin.run.actorId !== actorId) fail('WORKFLOW_TASK_FORBIDDEN')
-      const prior = db.prepare("SELECT payload FROM execution_events WHERE kind='task.archive' AND json_extract(payload,'$.taskId')=? ORDER BY seq DESC LIMIT 1").get(taskId)
-      if (prior) combined = JSON.parse(prior.payload)
-      else {
-        const task = db.prepare('SELECT t.*,c.state AS control_state FROM business_tasks t JOIN task_controls c USING(task_id) WHERE task_id=?').get(taskId)
-        const owner = db.prepare('SELECT task_id FROM task_owners WHERE task_id=?').get(taskId)
-          ? queryTaskOwner(db, { kind: 'task.owner', taskId }) : null
-        const ownerComplete = owner?.decision?.action === 'complete' && owner.applicationStatus === 'applied'
-          && task?.plan_requirement_revision === task?.requirement_revision
-          && owner.eventWatermark === owner.processedWatermark
-        const runs = db.prepare('SELECT run_id,status FROM execution_runs WHERE task_id=?').all(taskId)
-        const completed = task ? task.control_state === 'cancelled'
-          || task.control_state === 'active' && (owner ? ownerComplete : task.status === 'succeeded')
-          : runs.length > 0 && runs.every(run => ['succeeded', 'failed', 'cancelled'].includes(run.status))
-        if (owner?.status === 'running' || !completed) fail('TASK_ARCHIVE_NOT_COMPLETED')
-        for (const run of runs) {
-          if (!['succeeded', 'failed', 'cancelled'].includes(run.status)
-            || db.prepare("SELECT 1 FROM execution_nodes WHERE run_id=? AND (status='running' OR (lease_epoch>0 AND drained=0)) LIMIT 1").get(run.run_id)) fail('TASK_ARCHIVE_NOT_DRAINED')
-          assertRunEffectsDrained(db, run.run_id)
-        }
-        combined = { taskId, archivedAt: now, actorId }
-      }
+      const family = taskFamily(taskId)
+      if (!family) fail('WORKFLOW_TASK_NOT_FOUND')
+      for (const member of family.taskIds) assertTaskDrained(member, actorId, 'TASK_ARCHIVE')
+      const prior = db.prepare("SELECT payload FROM execution_events WHERE kind='task.archive' ORDER BY seq DESC").all()
+        .map(row => JSON.parse(row.payload)).find(event => canonical(event.taskIds ?? [event.taskId]) === canonical(family.taskIds))
+      combined = prior ?? { taskId, taskIds: family.taskIds, archivedAt: now, actorId }
     } else if (value.kind === 'task.web-input.prepare') {
       object(value.args, ['eventId', 'actorId', 'request', 'input'])
       const { eventId, actorId, request, input } = value.args
@@ -699,6 +684,7 @@ function command(value) {
       } else {
         const origin = taskOrigin(request.taskId)
         if (origin?.channel !== 'web' || origin.run.actorId !== actorId) fail('WORKFLOW_TASK_FORBIDDEN')
+        if (taskFamily(request.taskId)?.latestTaskId !== request.taskId) fail('TASK_EXECUTION_STALE')
         if (!['context', 'cancel', 'confirm-stage', 'continue-budget'].includes(request.action)) fail('WORKFLOW_WEB_ACTION_UNSUPPORTED')
         const task = db.prepare('SELECT * FROM business_tasks WHERE task_id=?').get(request.taskId)
         const count = db.prepare('SELECT COUNT(*) AS n FROM execution_runs WHERE task_id=?').get(request.taskId).n
@@ -739,10 +725,14 @@ function command(value) {
       if (taskId === rerunOfTaskId || !sourceKey.startsWith('web-rerun:')) fail('TASK_WEB_SOURCE_INVALID')
       const priorOrigin = taskOrigin(rerunOfTaskId)
       if (!priorOrigin) fail('WORKFLOW_TASK_NOT_FOUND')
+      const family = taskFamily(rerunOfTaskId)
+      if (family?.latestTaskId !== rerunOfTaskId) fail('TASK_EXECUTION_STALE')
+      for (const member of family.taskIds) assertTaskDrained(member, actorId, 'TASK_RERUN_SOURCE')
       const previousRuns = db.prepare('SELECT run_id,status FROM execution_runs WHERE task_id=? ORDER BY rowid DESC').all(rerunOfTaskId)
       const previousTask = db.prepare('SELECT t.status,c.state FROM business_tasks t JOIN task_controls c ON c.task_id=t.task_id WHERE t.task_id=?').get(rerunOfTaskId)
-      if (!previousRuns.length || previousRuns[0].run_id !== request.expectedRunId
-        || previousTask && previousTask.status !== 'succeeded' && previousTask.state !== 'cancelled'
+      if (previousRuns.length ? previousRuns[0].run_id !== request.expectedRunId
+        : request.expectedRunId !== null || previousTask?.state !== 'cancelled') fail('TASK_RERUN_SOURCE_CHANGED')
+      if (previousTask && previousTask.status !== 'succeeded' && previousTask.state !== 'cancelled'
         || previousRuns.some(run => !['succeeded', 'failed', 'cancelled'].includes(run.status))) fail('TASK_RERUN_SOURCE_CHANGED')
       const created = reduceTaskPlanCommand(db, { kind: 'task.plan.accept', args: { taskId, requirementRef, requirementRevision: 1 } }, context(value.id, now))
       const sessionId = `owner-${createHash('sha256').update(taskId).digest('hex').slice(0, 40)}`
@@ -844,7 +834,61 @@ function webTaskEvent(eventId) {
   const row = db.prepare("SELECT payload FROM execution_events WHERE kind IN ('task.web-input.prepare','task.web-input.finish') AND json_extract(payload,'$.event.id')=? ORDER BY seq DESC LIMIT 1").get(eventId)
   return row ? JSON.parse(row.payload).event : null
 }
+// 从持久接受事件解析完整重执行关系，不能由最近一页 run 推断任务归属。
+function taskFamilies() {
+  const ids = db.prepare('SELECT task_id FROM business_tasks UNION SELECT task_id FROM task_owners UNION SELECT task_id FROM execution_runs').all().map(row => row.task_id)
+  const known = new Set(ids), parents = new Map(), accepted = new Map()
+  for (const row of db.prepare("SELECT seq,payload FROM execution_events WHERE kind='task.web-rerun.accept' ORDER BY seq").all()) {
+    const event = JSON.parse(row.payload)
+    if (!known.has(event.taskId) || !known.has(event.rerunOfTaskId) || parents.has(event.taskId)) fail('TASK_FAMILY_INVALID')
+    parents.set(event.taskId, event.rerunOfTaskId); accepted.set(event.taskId, row.seq)
+  }
+  const groups = new Map()
+  for (const taskId of ids) {
+    const visited = new Set(); let root = taskId
+    while (parents.has(root)) {
+      if (visited.has(root)) fail('TASK_FAMILY_INVALID')
+      visited.add(root); root = parents.get(root)
+    }
+    if (!groups.has(root)) groups.set(root, [])
+    groups.get(root).push(taskId)
+  }
+  return [...groups].map(([rootTaskId, members]) => {
+    const taskIds = members.sort((a, b) => a === rootTaskId ? -1 : b === rootTaskId ? 1 : accepted.get(a) - accepted.get(b))
+    return { rootTaskId, taskIds, latestTaskId: taskIds.at(-1) }
+  })
+}
+function taskFamily(taskId) {
+  return taskFamilies().find(family => family.taskIds.includes(taskId)) ?? null
+}
+function assertTaskDrained(taskId, actorId, code) {
+  const origin = taskOrigin(taskId)
+  if (!origin) fail('WORKFLOW_TASK_NOT_FOUND')
+  if (origin.channel === 'web' && origin.run.actorId !== actorId) fail('WORKFLOW_TASK_FORBIDDEN')
+  const task = db.prepare('SELECT t.*,c.state AS control_state FROM business_tasks t JOIN task_controls c USING(task_id) WHERE task_id=?').get(taskId)
+  const owner = db.prepare('SELECT task_id FROM task_owners WHERE task_id=?').get(taskId)
+    ? queryTaskOwner(db, { kind: 'task.owner', taskId }) : null
+  const ownerComplete = owner?.decision?.action === 'complete' && owner.applicationStatus === 'applied'
+    && task?.plan_requirement_revision === task?.requirement_revision && owner.eventWatermark === owner.processedWatermark
+  const runs = db.prepare('SELECT run_id,status FROM execution_runs WHERE task_id=?').all(taskId)
+  const completed = task ? task.control_state === 'cancelled'
+    || task.control_state === 'active' && (owner ? ownerComplete : task.status === 'succeeded')
+    : runs.length > 0 && runs.every(run => ['succeeded', 'failed', 'cancelled'].includes(run.status))
+  if (owner?.status === 'running' || !completed) fail(`${code}_NOT_COMPLETED`)
+  for (const run of runs) {
+    if (!['succeeded', 'failed', 'cancelled'].includes(run.status)
+      || db.prepare("SELECT 1 FROM execution_nodes WHERE run_id=? AND (status='running' OR (lease_epoch>0 AND drained=0)) LIMIT 1").get(run.run_id)) fail(`${code}_NOT_DRAINED`)
+    assertRunEffectsDrained(db, run.run_id)
+  }
+}
 function query(value) {
+  if (value?.kind === 'task.family') return taskFamily(text(value.taskId, 'taskId'))
+  if (value?.kind === 'task.families') return taskFamilies()
+  if (value?.kind === 'task.catalog') return db.prepare('SELECT task_id FROM business_tasks UNION SELECT task_id FROM task_owners UNION SELECT task_id FROM execution_runs').all()
+    .filter(row => value.taskId === undefined || row.task_id === text(value.taskId, 'taskId')).map(row => ({
+    taskId: row.task_id, runs: db.prepare('SELECT rowid AS sequence_id,* FROM execution_runs WHERE task_id=? ORDER BY rowid DESC').all(row.task_id)
+      .map(run => ({ ...runDto(run), sequenceId: run.sequence_id }))
+  }))
   if(value?.kind==='node.input-history')return nodeInputHistory(text(value.nodeRunId,'nodeRunId'))
   if(value?.kind==='node.binding-history')return db.prepare("SELECT payload FROM execution_events WHERE kind='node.claim' AND json_extract(payload,'$.binding.nodeRunId')=? ORDER BY seq").all(text(value.nodeRunId,'nodeRunId')).map(row=>JSON.parse(row.payload).binding)
   if (value?.kind === 'runtime.maintenance') return maintenanceStatus(db, workerData.processIncarnation)
@@ -853,7 +897,10 @@ function query(value) {
     const row = db.prepare("SELECT payload FROM execution_events WHERE kind IN ('workflow.repair.accepted','engineering.repair.accepted') AND json_extract(payload,'$.runId')=? AND json_extract(payload,'$.nextGeneration')=? ORDER BY seq DESC LIMIT 1").get(value.runId, value.generation)
     return row ? JSON.parse(row.payload) : null
   }
-  if (value?.kind === 'task.archives') return db.prepare("SELECT payload FROM execution_events WHERE kind='task.archive' ORDER BY seq").all().map(row => JSON.parse(row.payload))
+  if (value?.kind === 'task.archives') return db.prepare("SELECT payload FROM execution_events WHERE kind='task.archive' ORDER BY seq").all().flatMap(row => {
+    const event = JSON.parse(row.payload)
+    return (event.taskIds ?? [event.taskId]).map(taskId => ({ taskId, archivedAt: event.archivedAt, actorId: event.actorId }))
+  })
   if (value?.kind === 'task.web-input') return webTaskEvent(value.eventId)
   if (value?.kind === 'task.stageConfirmation') {
     if (taskOrigin(value.taskId)?.channel !== 'web') return null

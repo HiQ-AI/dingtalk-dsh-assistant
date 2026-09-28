@@ -42,6 +42,91 @@ async function fixture(t, args = creation()) {
 }
 const rejects = (promise, code) => assert.rejects(promise, e => e.code === code)
 
+async function seedTaskFamily(f, links) {
+  await f.store.close()
+  const database = new DatabaseSync(f.dbPath)
+  try {
+    database.prepare('INSERT INTO message_runs(run_id,source_key,source_version,body) VALUES(?,?,?,?)')
+      .run('family-source', 'family-source', 1, JSON.stringify({ runId: 'family-source', status: 'settled', actorId: 'owner' }))
+    database.prepare('INSERT INTO message_items(item_id,run_id,kind,body) VALUES(?,?,?,?)')
+      .run('family-source-command', 'family-source', 'command', JSON.stringify({ kind: 'create', args: { taskId: 'root' } }))
+    for (const [taskId, rerunOfTaskId] of links) database.prepare('INSERT INTO execution_events(kind,payload,created_at) VALUES(?,?,?)')
+      .run('task.web-rerun.accept', JSON.stringify({ taskId, rerunOfTaskId, source: { actorId: 'owner', sourceKey: taskId, request: { objective: taskId } } }), new Date().toISOString())
+  } finally { database.close() }
+  await f.open()
+}
+
+test('任务家族全量关系与目录不受最近200条run截断，阶段run仍属于同一次执行', async t => {
+  const f = await fixture(t, null)
+  for (let index = 0; index < 203; index++) {
+    const taskId = index === 0 ? 'root' : index === 1 ? 'second' : 'latest'
+    const runId = `family-run-${index}`
+    await f.store.command(command('run.create', creation([plan()], { runId, taskId })))
+    await f.store.command(command('run.stop', { runId, reason: 'test' }))
+    await f.store.command(command('run.stopped', { runId }))
+  }
+  await seedTaskFamily(f, [['second', 'root'], ['latest', 'second']])
+  const expected = { rootTaskId: 'root', taskIds: ['root', 'second', 'latest'], latestTaskId: 'latest' }
+  assert.deepEqual(await f.store.query({ kind: 'task.family', taskId: 'second' }), expected)
+  assert.deepEqual(await f.store.query({ kind: 'task.families' }), [expected])
+  const catalog = await f.store.query({ kind: 'task.catalog' })
+  assert.equal(catalog.reduce((n, task) => n + task.runs.length, 0), 203)
+  const latest = await f.store.query({ kind: 'task.catalog', taskId: 'latest' })
+  assert.equal(latest.length, 1); assert.equal(latest[0].runs.length, 201)
+  assert.equal(latest[0].runs[0].runId, 'family-run-202')
+  await rejects(f.store.command(command('task.web-input.prepare', { eventId: 'stale', actorId: 'owner', request: { taskId: 'second' }, input: null })), 'TASK_EXECUTION_STALE')
+  await rejects(f.store.command(command('task.web-input.prepare', { eventId: 'unauthorized-stale', actorId: 'attacker', request: { taskId: 'second' }, input: null })), 'WORKFLOW_TASK_FORBIDDEN')
+  await rejects(f.store.command(command('task.web-rerun.accept', { taskId: 'fourth', rerunOfTaskId: 'root', actorId: 'owner', request: {}, requirementRef: 'sha256/new.json', criteria: ['通过'], sourceKey: 'web-rerun:fourth' })), 'TASK_EXECUTION_STALE')
+  const result = (await f.store.command(command('task.archive', { taskId: 'latest', actorId: 'owner' }))).result
+  assert.deepEqual(result.taskIds, expected.taskIds)
+  const replay = (await f.store.command(command('task.archive', { taskId: 'root', actorId: 'owner' }))).result
+  assert.equal(replay.archivedAt, result.archivedAt)
+  assert.equal(new Set((await f.store.query({ kind: 'task.archives' })).map(item => item.taskId)).size, 3)
+  await rejects(f.store.command(command('task.archive', { taskId: 'latest', actorId: 'attacker' })), 'WORKFLOW_TASK_FORBIDDEN')
+})
+
+test('损坏的重执行祖先或循环关系封闭拒绝，不拆成正常卡片', async t => {
+  for (const links of [[['root', 'missing']], [['root', 'root']]]) {
+    const f = await fixture(t, creation([plan()], { taskId: 'root' }))
+    await seedTaskFamily(f, links)
+    await rejects(f.store.query({ kind: 'task.families' }), 'TASK_FAMILY_INVALID')
+  }
+})
+
+test('家族历史仍活动时禁止整体归档与重执行，事务不留下部分归档', async t => {
+  const f = await fixture(t, creation([plan()], { runId: 'root-run', taskId: 'root' }))
+  await f.store.command(command('run.create', creation([plan()], { runId: 'second-run', taskId: 'second' })))
+  await f.store.command(command('run.stop', { runId: 'second-run', reason: 'test' }))
+  await f.store.command(command('run.stopped', { runId: 'second-run' }))
+  await seedTaskFamily(f, [['second', 'root']])
+  await rejects(f.store.command(command('task.archive', { taskId: 'second', actorId: 'owner' })), 'TASK_ARCHIVE_NOT_COMPLETED')
+  assert.deepEqual(await f.store.query({ kind: 'task.archives' }), [])
+  await rejects(f.store.command(command('task.web-rerun.accept', { taskId: 'third', rerunOfTaskId: 'second', actorId: 'owner',
+    request: { expectedRunId: 'second-run' }, requirementRef: 'sha256/new.json', criteria: ['通过'], sourceKey: 'web-rerun:third' })), 'TASK_RERUN_SOURCE_NOT_COMPLETED')
+  assert.equal(await f.store.query({ kind: 'task.family', taskId: 'third' }), null)
+})
+
+test('首次run开始前取消的最新执行可用明确null重执行，旧成员与缺失绑定仍拒绝', async t => {
+  const f = await fixture(t, creation([plan()], { runId: 'root-run', taskId: 'root' }))
+  await f.store.command(command('run.stop', { runId: 'root-run', reason: 'test' }))
+  await f.store.command(command('run.stopped', { runId: 'root-run' }))
+  await seedTaskFamily(f, [])
+  const rerun = (taskId, rerunOfTaskId, expectedRunId) => command('task.web-rerun.accept', { taskId, rerunOfTaskId, actorId: 'owner',
+    request: { expectedRunId, objective: '验证未开始执行的取消' }, requirementRef: 'sha256/new.json', criteria: ['通过'], sourceKey: `web-rerun:${taskId}` })
+  await f.store.command(rerun('second', 'root', 'root-run'))
+  assert.deepEqual(await f.store.query({ kind: 'task.catalog', taskId: 'second' }), [{ taskId: 'second', runs: [] }])
+  await f.store.command(command('task.control.cancel', { taskId: 'second', expectedControlRevision: 1 }))
+  const missingBinding = rerun('missing-binding', 'second', null)
+  delete missingBinding.args.request.expectedRunId
+  await rejects(f.store.command(missingBinding), 'TASK_RERUN_SOURCE_CHANGED')
+  await rejects(f.store.command(rerun('wrong-binding', 'second', 'root-run')), 'TASK_RERUN_SOURCE_CHANGED')
+  await f.store.command(rerun('third', 'second', null))
+  assert.deepEqual(await f.store.query({ kind: 'task.family', taskId: 'third' }), {
+    rootTaskId: 'root', taskIds: ['root', 'second', 'third'], latestTaskId: 'third'
+  })
+  await rejects(f.store.command(rerun('old-source', 'second', null)), 'TASK_EXECUTION_STALE')
+})
+
 test('维护屏障与领取同事务，重启保留且旧许可不能恢复派发', async t => {
   const f = await fixture(t)
   const args = { active: true, expectedRevision: 0, maintenanceId: 'deploy-one', actorId: 'owner', reason: '部署排空' }

@@ -483,10 +483,52 @@ window.__ModuleLoader__.load({
         React.createElement('summary', { style: { cursor: 'pointer', color: colors.muted } }, overview, React.createElement('span', { style: { marginLeft: 12, color: colors.accent, fontSize: 12 } }, expanded ? '收起产出' : '查看产出')),
         expanded ? React.createElement('div', { style: { marginTop: 8 } }, content) : null) : content, documentLink)
     }
+    const linkedTaskText = text => {
+        const content = String(text), parts = []
+        let offset = 0
+        for (const match of content.matchAll(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"）。，；]+)/g)) {
+          const href = (match[2] || match[3]).replace(/[.,;!?]+$/, '')
+          parts.push(content.slice(offset, match.index), React.createElement('a', { key: match.index, href, target: '_blank', rel: 'noopener noreferrer', style: { color: colors.accent } }, match[1] || href))
+          if (!match[2]) parts.push(match[3].slice(href.length))
+          offset = match.index + match[0].length
+        }
+        parts.push(content.slice(offset))
+        return parts
+      }
+    function TaskExecutionHistory({ task, updatedAt, onSelect }) {
+      const [expanded, setExpanded] = useState(false)
+      const [offset, setOffset] = useState(0)
+      const [offsetHistory, setOffsetHistory] = useState([])
+      const [page, setPage] = useState()
+      const [loading, setLoading] = useState(false)
+      const [error, setError] = useState('')
+      const [retry, setRetry] = useState(0)
+      const rootTaskId = task.logicalTaskId || task.taskId
+      useEffect(() => {
+        if (!expanded) return
+        let active = true
+        setLoading(true); setError(''); setPage(undefined)
+        get(`/state/tasks/${encodeURIComponent(rootTaskId)}/executions?offset=${offset}&limit=20`).then(value => { if (active) setPage(value) }, cause => { if (active) setError(cause.message) }).finally(() => { if (active) setLoading(false) })
+        return () => { active = false }
+      }, [rootTaskId, expanded, offset, retry, updatedAt])
+      const status = execution => ({ succeeded: '已完成', failed: '执行失败', cancelled: '已取消' }[execution.outcome]) || ({ completed: '已结束', running: '执行中', waiting: '等待处理', queued: '待执行' }[execution.state]) || '状态未记录'
+      return React.createElement('details', { onToggle: event => setExpanded(event.currentTarget.open), style: { margin: '16px 0', borderTop: `1px solid ${colors.border}`, paddingTop: 14 } },
+        React.createElement('summary', { style: { cursor: 'pointer', fontSize: 14, fontWeight: 600 } }, `执行历史（${task.executionCount || 1} 次）`),
+        expanded ? React.createElement('div', { style: { display: 'grid', gap: 10, paddingTop: 12 } },
+          loading ? React.createElement('span', { role: 'status', style: { color: colors.muted, fontSize: 12 } }, '正在读取执行历史…') : null,
+          error ? React.createElement('div', { role: 'alert', style: { color: colors.danger, fontSize: 12 } }, `执行历史读取失败：${error}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setRetry(value => value + 1) }, '重试读取历史')) : null,
+          ...(!loading && !error ? page?.executions || [] : []).map(execution => React.createElement('article', { key: execution.taskId, style: { display: 'grid', gap: 6, padding: '10px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 12 } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 } }, React.createElement('strong', null, `第 ${execution.executionNumber} 次 · ${status(execution)}`), React.createElement('span', { style: { color: colors.muted } }, fmt(execution.createdAt)), execution.archivedAt ? React.createElement('span', { style: { color: colors.muted } }, '已归档') : null,
+              React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: execution.taskId === task.taskId, onClick: () => onSelect(execution.taskId) }, execution.taskId === task.taskId ? '正在查看' : '查看此次执行')),
+            execution.result ? React.createElement('div', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '4.5em', overflow: 'hidden', color: colors.muted } }, ...linkedTaskText(execution.result)) : null,
+            execution.stageOutcomes?.length ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '4px 12px', color: colors.muted } }, ...execution.stageOutcomes.map((stage, index) => React.createElement('span', { key: index }, `${stage.title} · ${{ succeeded: '已完成', failed: '失败', cancelled: '已取消', running: '执行中', waiting: '等待处理', ready: '待执行', waiting_confirmation: '等待人工确认', blocked: '受阻', invalidated: '需重新执行' }[stage.status] || '状态未记录'}`))) : null)),
+          page && !loading && !error && !page.executions?.length ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '暂无执行历史') : null,
+          React.createElement('div', { style: { display: 'flex', gap: 8 } }, offsetHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setOffset(offsetHistory.at(-1)); setOffsetHistory(items => items.slice(0, -1)) } }, '上一页') : null, !error && page?.nextOffset != null ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setOffsetHistory(items => [...items, offset]); setOffset(page.nextOffset) } }, '下一页') : null)) : null)
+    }
     function TaskHistoryDisclosure({ task, onOpenSession }) {
       const [expanded, setExpanded] = useState(false)
       return React.createElement('details', { onToggle: (event) => setExpanded(event.currentTarget.open), style: { borderTop: `1px solid ${colors.border}`, paddingTop: 16 } },
-        React.createElement('summary', { style: { cursor: 'pointer', fontSize: 14, fontWeight: 600 } }, '查看历史执行与会话'),
+        React.createElement('summary', { style: { cursor: 'pointer', fontSize: 14, fontWeight: 600 } }, '查看本次执行过程与会话'),
         expanded ? React.createElement(TaskRunHistory, { task, onOpenSession }) : null)
     }
     function TaskRunHistory({ task, onOpenSession }) {
@@ -503,12 +545,12 @@ window.__ModuleLoader__.load({
         return () => { active = false }
       }, [task.taskId, cursor, retry])
       const sessionAction = (sessionId, label) => sessionId ? React.createElement('button', { type: 'button', onClick: () => onOpenSession(sessionId), style: { justifySelf: 'start', border: 0, padding: 0, background: 'transparent', color: colors.accent, font: 'inherit', cursor: 'pointer' } }, label) : React.createElement('span', { style: { color: colors.muted } }, '会话尚未创建或历史未绑定')
-      return React.createElement('section', { 'aria-label': '任务负责人和历史执行', style: { display: 'grid', gap: 10, borderTop: `1px solid ${colors.border}`, paddingTop: 14, fontSize: 12 } },
-        React.createElement('strong', { style: { fontSize: 13 } }, '任务负责人会话与历史执行'),
-        loading ? React.createElement('span', { role: 'status' }, '正在读取历史执行…') : error ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `历史执行读取失败：${error}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setRetry((value) => value + 1) }, '重试')) : page ? React.createElement(React.Fragment, null,
+      return React.createElement('section', { 'aria-label': '本次执行过程与会话', style: { display: 'grid', gap: 10, borderTop: `1px solid ${colors.border}`, paddingTop: 14, fontSize: 12 } },
+        React.createElement('strong', { style: { fontSize: 13 } }, '本次执行过程与会话'),
+        loading ? React.createElement('span', { role: 'status' }, '正在读取本次执行过程…') : error ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `本次执行过程读取失败：${error}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setRetry((value) => value + 1) }, '重试')) : page ? React.createElement(React.Fragment, null,
           React.createElement('div', { style: { display: 'grid', gap: 4 } }, React.createElement('strong', null, '任务负责人'), sessionAction(page.taskOwner?.sessionBound === true ? page.taskOwner.sessionId : null, '查看任务负责人会话')),
           ...(page.runs || []).map((run, index) => React.createElement('details', { key: run.runId || index, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 8 } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, `${fmt(run.startedAt)} · ${{ succeeded: '已完成', failed: '执行失败', cancelled: '已取消', running: '执行中', waiting: '等待处理', queued: '待执行' }[run.status] || '状态未记录'}`), React.createElement('div', { style: { display: 'grid', gap: 9, padding: '9px 0 3px 16px' } }, ...(run.nodes || []).map((node, nodeIndex) => React.createElement('div', { key: node.nodeRunId || node.nodeId || nodeIndex, style: { display: 'grid', gap: 3 } }, React.createElement('strong', null, `${node.title || node.label || node.nodeId || '节点'} · ${{ succeeded: '已完成', failed: '失败', running: '执行中', waiting: '等待处理', ready: '待执行', skipped: '已跳过', cancelled: '已取消' }[node.status] || '状态未记录'}`), sessionAction(node.sessionId, '查看此节点会话记录'))), !(run.nodes || []).length ? React.createElement('span', { style: { color: colors.muted } }, '此执行没有节点会话记录') : null))),
-          !(page.runs || []).length ? React.createElement('span', { style: { color: colors.muted } }, '暂无历史执行') : null,
+          !(page.runs || []).length ? React.createElement('span', { style: { color: colors.muted } }, '暂无执行过程') : null,
           React.createElement('div', { style: { display: 'flex', gap: 8 } }, cursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setCursor(cursorHistory.at(-1)); setCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, page.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setCursorHistory((items) => [...items, cursor]); setCursor(page.nextCursor) } }, '下一页') : null)) : React.createElement('span', { style: { color: colors.muted } }, '历史未记录'))
     }
     function ObserverContent({ openSession }) {
@@ -528,6 +570,9 @@ window.__ModuleLoader__.load({
       const [hoveredTaskId, setHoveredTaskId] = useState('')
       const [expandedCheckpointTaskId, setExpandedCheckpointTaskId] = useState('')
       const [selectedWorkflowTaskId, setSelectedWorkflowTaskId] = useState('')
+      const [workflowTaskDetail, setWorkflowTaskDetail] = useState()
+      const [workflowDetailError, setWorkflowDetailError] = useState('')
+      const [workflowDetailRetry, setWorkflowDetailRetry] = useState(0)
       const [selectedMessageRunId, setSelectedMessageRunId] = useState('')
       const [copiedId, setCopiedId] = useState('')
       const [navigatingSessionId, setNavigatingSessionId] = useState('')
@@ -552,6 +597,13 @@ window.__ModuleLoader__.load({
         setRefreshState('done')
         window.setTimeout(() => setRefreshState('idle'), 1200)
       }, [refresh, refreshState])
+      useEffect(() => {
+        if (!selectedWorkflowTaskId) { setWorkflowTaskDetail(undefined); setWorkflowDetailError(''); return }
+        let active = true
+        setWorkflowDetailError('')
+        get(`/state/tasks/${encodeURIComponent(selectedWorkflowTaskId)}/detail`).then(value => { if (active) setWorkflowTaskDetail(value) }, cause => { if (active) setWorkflowDetailError(cause.message) })
+        return () => { active = false }
+      }, [selectedWorkflowTaskId, updatedAt, workflowDetailRetry])
       useEffect(() => {
         refresh()
         const timer = window.setInterval(refresh, 5000)
@@ -816,7 +868,8 @@ window.__ModuleLoader__.load({
           React.createElement('tbody', null, ...(outboxRows.length ? outboxRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 5, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, '暂无符合条件的 Agent 发件记录'))])))),
         React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredOutbox.length} 条 · 每页 ${outboxPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage <= 1, onClick: () => setOutboxPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentOutboxPage} / ${outboxPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage >= outboxPageCount, onClick: () => setOutboxPage((page) => Math.min(outboxPageCount, page + 1)) }, '下一页')))
       const groupsPage = selectedMessageRunId ? React.createElement(TraceDetail, { runId: selectedMessageRunId, onOpenSession: navigate, onBack: () => setSelectedMessageRunId('') }) : React.createElement('section', null, React.createElement('div', { style: tableFrame }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
-      const selectedWorkflowTask = (data?.tasks || []).find(task => task.taskId === selectedWorkflowTaskId && task.engine === 'workflow-v2')
+      const selectedWorkflowTask = workflowTaskDetail?.taskId === selectedWorkflowTaskId ? workflowTaskDetail : undefined
+      const historicalExecution = selectedWorkflowTask && selectedWorkflowTask.taskId !== selectedWorkflowTask.latestTaskId
       const nodeState = { succeeded: '已完成', running: '执行中', ready: '待执行', waiting: '等待处理', failed: '失败', pending: '未开始', cancelled: '已取消', skipped: '已跳过' }
       const planStageState = { ready: '待执行', waiting_confirmation: '等待人工确认', running: '执行中', succeeded: '已完成', invalidated: '需重新执行', blocked: '受阻' }
       const nodeTitle = { 'prepare-workspace': '创建独立工作目录', 'read-files': '读取相关文件', 'propose-changes': '编写修改方案', 'inspect-and-propose': '编写修改方案', 'validate-proposal': '检查修改方案', 'apply-changes': '按方案修改文件', 'verify-candidate': '构建检查', 'business-acceptance': '业务验收', 'define-local-acceptance': '核对本地验收条件', 'plan-local-acceptance': '编写本地验收用例', 'prepare-local-acceptance': '准备本地验收环境', 'run-local-acceptance': '启动服务并执行本地验收', 'finalize-local-acceptance': '核对验收与清理结果', 'index-files': '索引可修改文件', 'select-files': '选择改动文件', 'validate-selection': '检查文件范围', 'prepare-commit': '检查提交条件', commit: '提交代码', 'prepare-push': '检查推送条件', push: '推送代码', 'prepare-pr': '编写合并请求', 'create-pr': '创建合并请求', 'prepare-generation': '确认项目与修改起点', prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '校验结果', 'inspect-preflight': '核对合并条件', 'prepare-merge': '准备合并', 'execute-merge': '执行合并', 'verify-source': '回读合并结果', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'prepare-rehearsal': '核对 UAT 演练条件', 'run-rehearsal': '在 UAT 数据库演练', 'readback-rehearsal': '回读 UAT 演练', 'prepare-issue': '准备工单', 'create-issue': '提交工单', 'readback-issue': '回读工单', 'approval-gate': '等待真人审批', 'prepare-execute': '准备执行', 'execute-task': '执行受控任务', 'readback-production': '生产只读回查', finalize: '核对交付结果' }
@@ -830,6 +883,9 @@ window.__ModuleLoader__.load({
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, fontSize: 12, color: colors.muted } },
           React.createElement('span', null, '任务看板 / 任务详情'),
           React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedWorkflowTaskId('') }, '返回看板')),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 16, fontSize: 12, color: colors.muted } }, React.createElement('span', null, `第 ${selectedWorkflowTask.executionNumber || 1} 次执行${historicalExecution ? ' · 历史记录' : ' · 最新执行'}`), historicalExecution ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedWorkflowTaskId(selectedWorkflowTask.latestTaskId) }, '返回最新执行') : null),
+        workflowDetailError ? React.createElement('div', { role: 'alert', style: { marginTop: 12, color: colors.danger, fontSize: 12 } }, `此次执行刷新失败：${workflowDetailError}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setWorkflowDetailRetry(value => value + 1) }, '重试读取详情')) : null,
+        React.createElement(TaskExecutionHistory, { key: selectedWorkflowTask.logicalTaskId || selectedWorkflowTask.taskId, task: selectedWorkflowTask, updatedAt, onSelect: setSelectedWorkflowTaskId }),
         React.createElement('header', { className: 'observer-task-overview', style: { borderBottom: `1px solid ${colors.border}`, marginBottom: 16 } },
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12, fontSize: 12 } },
             React.createElement('span', { style: { ...pill(taskTone), fontWeight: 600 } }, taskStatus),
@@ -841,7 +897,7 @@ window.__ModuleLoader__.load({
             React.createElement(TaskTotalElapsed, { key: selectedWorkflowTask.taskId, task: selectedWorkflowTask }))),
         selectedWorkflowTask.objective && selectedWorkflowTask.objective !== selectedWorkflowTask.title ? React.createElement('p', { style: { margin: '0 0 16px', color: colors.muted, fontSize: 14, lineHeight: 1.7 } }, selectedWorkflowTask.objective) : null,
         selectedWorkflowTask.waitingReason ? React.createElement('div', { role: 'status', style: { marginBottom: 16, padding: '14px 18px', borderLeft: `3px solid ${colors.warning}`, background: colors.surface2, fontSize: 14, lineHeight: 1.7 } }, traceReason(selectedWorkflowTask.waitingReason)) : null,
-        selectedWorkflowTask.investigationRequest ? React.createElement(WorkflowClarification, { key: selectedWorkflowTask.investigationRequest.requestId, request: selectedWorkflowTask.investigationRequest, onSubmitted: manualRefresh }) : null,
+        !historicalExecution && selectedWorkflowTask.investigationRequest ? React.createElement(WorkflowClarification, { key: selectedWorkflowTask.investigationRequest.requestId, request: selectedWorkflowTask.investigationRequest, onSubmitted: manualRefresh }) : null,
         selectedWorkflowTask.plan?.stages?.length ? React.createElement('div', { 'aria-label': '任务阶段', style: { display: 'flex', flexWrap: 'wrap', gap: '8px 24px', marginBottom: 16, fontSize: 12, color: colors.muted } }, ...selectedWorkflowTask.plan.stages.map((stage, index) => React.createElement('span', { key: stage.stageId }, `${String(index + 1).padStart(2, '0')} · ${stage.title || '任务阶段'} · ${planStageState[stage.status] || '状态未记录'}`))) : null,
         React.createElement('section', { 'aria-label': '执行步骤' },
           React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 12 } },
@@ -865,11 +921,12 @@ window.__ModuleLoader__.load({
           }))),
         React.createElement('section', { 'aria-label': '最新产出', style: { marginTop: 24, padding: '24px 0', borderTop: `1px solid ${colors.border}` } },
           React.createElement('h2', { style: { margin: '0 0 12px', fontSize: 16, fontWeight: 650 } }, '最新产出'),
-          React.createElement('div', { style: { fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, selectedWorkflowTask.result || '暂未记录产出'),
+          React.createElement('div', { style: { fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, ...linkedTaskText(selectedWorkflowTask.result || '暂未记录产出')),
           selectedWorkflowTask.result ? React.createElement('p', { style: { margin: '16px 0 0', color: colors.muted, fontSize: 12 } }, '送达情况请查看发件记录。') : null),
         React.createElement(TaskHistoryDisclosure, { key: selectedWorkflowTask.taskId, task: selectedWorkflowTask, onOpenSession: navigate }))
         : null
-      const tasksPage = workflowDetail || React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns)
+      const workflowDetailPending = selectedWorkflowTaskId && !selectedWorkflowTask ? React.createElement('section', { 'aria-label': '任务详情读取', style: { display: 'grid', gap: 12 } }, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedWorkflowTaskId('') }, '返回看板'), workflowDetailError ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `任务详情读取失败：${workflowDetailError}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setWorkflowDetailRetry(value => value + 1) }, '重试读取详情')) : React.createElement('span', { role: 'status' }, '正在读取此次执行…')) : null
+      const tasksPage = workflowDetailPending || workflowDetail || React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns)
       const authorizationStatus = {
         'pending-send': { label: '待发送', state: 'warning' },
         'waiting-reply': { label: '等待处理', state: 'warning' },

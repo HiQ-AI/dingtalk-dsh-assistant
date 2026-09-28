@@ -125,6 +125,20 @@ IB 可返回 `factRevisions: [{ factId, sourceQuote, scope }]`。Host 只接受�
 
 Host 按剩余节点数 × 3 计算额度，同 Run 只准一次，保留原累计次数、候选与已完成验收。重复相同请求读回原回执；内容冲突、过期绑定、已续行、非预算等待或其他续行门禁失败返回 409（`RUN_BUDGET_CONTINUATION_*`）；受信来源或 actor 失败返回 403；非法字段和正文返回 400。202 代表接纳，不代表后续节点成功。再次预算耗尽不自动续费。
 
+## 任务汇总与执行历史查询
+
+`GET /state/tasks` 对原生工作流任务按持久化的 `task.web-rerun.accept` 关联树汇总，每项只返回一张卡片；已有卡片字段来自最新可读执行。已有历史并发分叉仍取活动执行，避免隐藏未结束工作。仅分析任务及同标题但无明确关联的任务保持独立。旧版任务沿用原有记录模型。
+
+- `GET /state/tasks/{taskId}/detail`：返回指定单次执行的详情，保留原目标、执行步骤和产物；增加 `logicalTaskId`、`latestTaskId`、`executionNumber` 和 `executionCount`。
+- `GET /state/tasks/{taskId}/executions?offset=0&limit=20`：按执行接受顺序倒序分页，返回 `{rootTaskId,latestTaskId,total,executions,nextOffset}`。每项含 `taskId`、`executionNumber`、状态、目标、时间、结果、归档时间及 `stageOutcomes`。阶段结果来自该次全部运行，失败后重建不会覆盖失败记录。结束时 `nextOffset=null`。
+- 原有 `/state/tasks/{taskId}/runs` 仍为单次执行内部的运行历史，不等于整项任务的历次执行。
+
+offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 400。请求的执行不可读或不存在返回 404。先按配置群范围和 Web 身份过滤，再编号、计数及分页，不通过祖先信息泄露不可读记录。
+
+历史详情只读。新的追加、取消、重执行及归档从最新执行发起，旧入口返回 409 `TASK_EXECUTION_STALE`；同一已接纳请求仍可幂等回读。重执行核对整个关联任务的终态、租约和外部效果。最新执行在首个运行前取消时，重执行请求必须显式传 `expectedRunId:null`；存在运行时必须传精确最新 runId，省略该字段不合法。开发分支从已登记的明确祖先继承，不创建猜测来源。
+
+归档在原生事务中核对全部关联执行均已完成或取消，Owner 完成已应用、运行终态、租约及效果排空后，一次记录全部成员；任一成员不满足条件则整项失败，不部分归档。历史和产物不删除，不迁移 schema。
+
 ## 本地部署维护与原子停机许可
 
 这些接口仅接受本机连接及现有可信 Web Origin，写入身份由 Host `webActorId` 注入，不能从请求体提供。
