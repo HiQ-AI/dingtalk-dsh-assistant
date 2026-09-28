@@ -3156,6 +3156,8 @@ test('同任务汇总卡片并分页历次执行：取消保留阶段成果、�
     } else assert.deepEqual(board[0][key], value)
   }
   assert.equal(board[0].executionCount, 3); assert.equal(board[0].outcome, 'cancelled')
+  assert.equal(board[0].sourceGroupId, original.groupId ?? message.groupId)
+  assert.match(board[0].groupId, /^web:/u)
   const first = await service.taskExecutions('history-2', { limit: 2 })
   assert.deepEqual(first.executions.map(item => item.executionNumber), [3, 2])
   assert.equal(first.total, 3); assert.equal(first.nextOffset, 2)
@@ -3183,6 +3185,7 @@ test('同任务汇总卡片并分页历次执行：取消保留阶段成果、�
   assert.equal(visible.total, 2); assert.equal(visible.rootTaskId, 'history-2')
   assert.deepEqual(visible.executions.map(item => item.executionNumber), [2, 1])
   assert.equal((await scoped.boardTasks())[0].executionCount, 2)
+  assert.equal((await scoped.boardTasks())[0].sourceGroupId, null)
   const server = createServer((req, res) => handleRequest(req, res, {
     getWorkflowTaskDetail: id => scoped.taskDetail(id), getWorkflowTaskExecutions: (id, page) => scoped.taskExecutions(id, page) }))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)))

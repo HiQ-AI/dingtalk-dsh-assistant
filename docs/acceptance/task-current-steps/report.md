@@ -13,3 +13,5 @@ PR [#140](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/140) 已独立�
 全部敏感快照、正文、截图、启动凭据日志只保存在docs/tmp且不提交。源码测试、副本、隔离页面、正式安装/API/页面各自证据独立，不能互相替代。
 
 追加元信息轮已完成：标题最多32字符、完整目标展开、3/2/3工作流分组及63真实开始时间；非归档卡片14条中文步骤与精确本次耗时通过。最终正式46详情/97正文GET全部200、错误与失败0，1440/390宽度无溢出。初轮7详情计数为上一轮证据，最新正式检查见round-4.md与browser-summary.md。
+
+Web重执行群名第五轮完成：可读取原群sourceGroupId只供卡片显示，groupId仍为Web。本轮135服务/18前端测试通过，新PID38412独立Readback和派发恢复；两张正式卡片1440/390群名检查通过，业务写入0。详见round-5.md和group-label-summary.json。

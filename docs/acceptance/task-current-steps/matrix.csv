@@ -26,3 +26,6 @@ metadata-controlled-deployment,4,PASS,round-4.md
 metadata-live-browser,4,PASS,round-4.md
 metadata-pr-readback,4,PASS,round-4.md
 metadata-original-structural-checks,4,PASS,round-4.md
+web-rerun-group-origin,5,PASS,round-5.md
+web-rerun-group-permission,5,PASS,round-5.md
+web-rerun-group-live-card,5,PASS,group-label-summary.json

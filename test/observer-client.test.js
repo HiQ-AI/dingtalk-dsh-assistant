@@ -563,3 +563,13 @@ test('卡片原生步骤复用中文名称和本次节点耗时，不从历史�
   assert.match(source, /node \? React.createElement\(TaskStepElapsed, \{ node, fontSize: 10.5 \}\)/)
   assert.match(source, /const checkpointLabel = id => nodeTitle\[id\]/)
 })
+
+test('Web重执行卡片显示原群名，缺少可读群来源时不暴露Web标识', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const fragment = source.slice(source.indexOf('const sourceGroup ='), source.indexOf('const waitingNotice ='))
+  const label = task => runInNewContext(`(() => { ${fragment}; return groupLabel })()`, { task, groupsById: new Map([['g', { name: '工程群' }]]) })
+  assert.equal(label({ groupId: 'web:actor', sourceGroupId: 'g' }), '工程群')
+  assert.equal(label({ groupId: 'web:actor', sourceGroupId: null }), 'Web 任务')
+  assert.equal(label({ groupId: 'g' }), '工程群')
+  assert.match(source, /title: task.sourceChannel === 'web' \? `\$\{groupLabel\} · Web 重新执行`/u)
+})

@@ -45,6 +45,7 @@ export function groupTaskExecutions(physical, families) {
     const active = members.filter(task => task.state !== 'completed')
     const displayed = active.at(-1) ?? latest
     return [{ ...displayed, logicalTaskId: members[0].taskId, latestTaskId: latest.taskId,
+      sourceGroupId: members.find(task => task.groupId && !task.groupId.startsWith('web:'))?.groupId ?? null,
       executionCount: members.length, executionNumber: members.indexOf(displayed) + 1,
       activeExecutionCount: active.length,
       archivedAt: members.every(task => task.archivedAt) ? latest.archivedAt : undefined }]

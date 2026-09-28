@@ -150,3 +150,5 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 - `POST /runtime/maintenance/resume`：同 seal 请求字段。仅当当前受信 Host 进程身份与封存身份不同且仍排空，才递增版本并退出维护。旧进程不能通过普通 leave 或 resume 撤销停机许可；不得通过改变调用参数伪造新身份。
 
 写接口返回 `{receipt,state}`；同 `requestId` 同载荷幂等，不同载荷冲突。过期版本、已封存或未排空返回 409，额外身份字段返回 400。许可与维护事件持久化，重启不会自动解除。外部只读 SQLite 检查器没有 Host incarnation，只核对持久 `phase/maintenanceId/revision`，不得自行签发 `stopPermitted`。部署脚本必须先取得并核验 seal 回执，再停止其绑定的旧 PID；新实例健康与恢复核验后调用 resume。
+
+任务汇总GET /state/tasks的sourceGroupId是可读取关联链内的原群聊ID，无可用来源为null；仅供卡片群名展示，不替换本次groupId、授权与报告渠道。Web重新执行的groupId仍为web:actorId。
