@@ -37,3 +37,17 @@
 网络独立记录：7 次详情 GET、97 次正文 GET 均为 HTTP 200；三个任务各自自动刷新期间仅一种 detailRevision，正文未反复取消。控制 API requestfailed 为 0，pageerror 为 0。拒绝的 12 次非 GET 均属于 DSH 外壳只读初始化 RPC（settings/describe、credentials/describe、session/list、modelCatalog、agentPresets/list、dynamicCordisRunner inventory/manifest）；任务、工作流、授权等业务写请求为 0。没有执行归档、重跑或外发。
 
 脚本初轮发现两类验收自身问题并修正后重跑：动态 summary 列表使用 nth 遍历漏开后续正文；迟到产出生成的新 summary 未展开。另正式 DSH 延迟显示版本提醒弹层遮挡返回，脚本通过“稍后提醒”和键盘返回完成；未修改 observer 或正式配置。最终独立结果 `docs/tmp/task-current-steps/live-browser/results.json` 为 passed=true、tasks=3。截图、失败诊断和原始网络记录只保存在 docs/tmp，不提交；本节仅保存匿名计数及检查结论。
+
+## 追加元信息验收轮（2026-09-29）
+
+本轮对应用户追加的简短标题、工作流分组、实际开始时间、卡片中文名称与耗时要求。原始证据独立放 `docs/tmp/task-current-steps/metadata-browser/`，不覆盖前轮，也不提交。最终源码 SHA-256：`a2585746a4793791da1f1d2dd7f6c78e3aad84a4437709c027a9c25381d1158c`。
+
+真实快照及只读正式卡片列表重放 PASS：3 个任务节点 30/3/30、工作流分组 3/2/3，63 个 `<time datetime>` 与对应节点真实 startedAt 一一相等；卡片和详情标题均 ≤32 个字符，任务目标折叠展开后完整匹配原 objective。非归档任务 1、3 的卡片各展开 7 条步骤，均为中文名称，未渲染原英文节点 ID；14 条耗时按真实对应 nativeNode.startedAt/completedAt 计算，精确核对毫秒/秒/分/小时及重试次数展示，逐条相等，未显示横杠或“耗时未记录”；归档任务 2 按原规则隐藏卡片任务列表。展开卡片和详情在 1440px/390px 均无横向溢出。
+
+原有正文默认、完整长文续读（14/6/57 次）、当前结果、无历史入口、键盘操作及 7 项模拟变化检查全部继续通过。页面错误 0、写请求 0。重放使用元信息轮单独保存的 `replay-cards.json` 真实 `/state/tasks` 只读列表，因为详情快照没有 workflowProgress，不能冒充真实任务卡片接口。
+
+部署第 3 轮后正式浏览器核验 PASS：新 PID 36216，日志 `deployment-round-3/start.stdout.log`。3 个任务的节点 30/3/30、组 3/2/3、63 个 datetime、≤32 字标题、完整 objective 全部通过；非归档卡片 14 条中文名称及基于真实 nativeNode 时间计算的耗时精确相等，未渲染原英文节点 ID。归档卡片列表项为不适用，未修改既有隐藏规则。展开卡片和详情在 1440px/390px 无横向溢出，窄屏截图目视可读开始时间与工作流分组。
+
+正式长文续读 5/2/27 次到所有非空真实正文尾段，当前结果、无历史、键盘操作保留通过。最终网络独立回读：46 次详情 GET 和 97 次正文 GET 全部 HTTP 200，3 个任务各自 detailRevision 只有一种，requestfailed=0、pageerror=0；保持正式五秒自动刷新。12 次拒绝非 GET 仍为 DSH 只读初始化 RPC，业务操作 0。原始最终结果在 `metadata-browser/live/results.json`，passed=true、tasks=3。
+
+本轮正式接口明显较慢，前一无阶段日志的执行被误判为停滞并中断；随后脚本增加十秒匿名网络计数、summary 展开上限及分页进展，保持原单定位 30 秒超时，没有放宽断言或冻结正式刷新。最终有界完整结束，来源 hash/分段与网络日志已保留；没有因慢请求修改产品源码。元信息轮快照与正式轮均有单独截图/结果目录，不覆盖前轮记录。

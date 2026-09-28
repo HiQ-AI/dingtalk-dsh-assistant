@@ -135,11 +135,11 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /style: \{ color: 'inherit', display: '-webkit-box'/)
   assert.match(source, /StateDot, \{ state: 'ongoing', size: 10 \}/)
   assert.match(source, /checkpointDuration\(checkpointLabel\(checkpoint\), currentCheckpointEvents, Date\.now\(\)\)/)
-  assert.match(source, /title: `执行时长 \$\{duration\}`/)
-  assert.match(source, /gridTemplateColumns: '12px minmax\(0,1fr\) 64px'/)
+  assert.match(source, /title: node \? '本次执行耗时' : `执行时长 \$\{duration\}`/)
+  assert.match(source, /gridTemplateColumns: '12px minmax\(0,1fr\) max-content'/)
   assert.match(source, /const CheckpointDoneIcon = \(\{ size = 12 \}\)/)
   assert.match(source, /completed \? React\.createElement\(CheckpointDoneIcon, \{ size: 12 \}\)/)
-  assert.match(source, /width: 64, color: colors\.muted, textAlign: 'right'/)
+  assert.match(source, /color: colors\.muted, textAlign: 'right', whiteSpace: 'nowrap'/)
   assert.match(source, /'aria-label': '最后活动时间'/)
   assert.match(source, /marginTop: 0, paddingTop: 6, borderTop:/)
   assert.match(source, /'aria-label': '任务目标'/)
@@ -454,7 +454,7 @@ test('任务详情只展示当前步骤，支持旧详情别名并保持稳定�
   const future = progress({ plan: { stepsResolved: true }, executionNodes: [{ stepKey: 'stage-a:analyze', stageId: 'stage-a', nodeId: 'analyze', status: 'succeeded' }, { stepKey: 'stage-b:analyze', stageId: 'stage-b', nodeId: 'analyze', status: 'pending' }] })
   assert.equal(future.completedSteps, 1)
   assert.equal(future.stepProgress, 50)
-  assert.match(source, /node.stageTitle \? React.createElement/)
+  assert.match(source, /groupTaskSteps\(taskNodes\)/)
   assert.match(source, /累计执行时长/)
   assert.match(source, /累计总耗时/)
 
@@ -519,4 +519,47 @@ test('阅读步骤移除后定位相邻步骤，未移除步骤不改变阅读�
   assert.match(source, /正在阅读的步骤已从当前计划移除/)
   assert.match(source, /'aria-live': 'polite'/)
   assert.match(source, /getBoundingClientRect/)
+})
+
+test('简短任务标题保留可读首句，完整目标仍可展开且不写回原任务', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const fragment = source.slice(source.indexOf('    const taskDisplayTitle ='), source.indexOf('    const taskStepStart ='))
+  const title = runInNewContext(`${fragment}; taskDisplayTitle`)
+  assert.equal(title({ title: '核对部署结果' }), '核对部署结果')
+  const task = { title: '核对当前服务部署结果。' + '补充验收条件'.repeat(30), objective: '完整目标' }
+  assert.equal(title(task), '核对当前服务部署结果')
+  assert.ok(Array.from(title({ title: '发布并部署'.repeat(30) })).length <= 32)
+  assert.equal(title({ title: '   ' }), '未命名任务')
+  assert.equal(task.objective, '完整目标')
+  assert.match(source, /'summary'.*'任务目标'/)
+  assert.match(source, /selectedWorkflowTask.objective\)\) : null/)
+})
+
+test('工作流分组保留全局顺序和跨工作流同名步骤，开始时间不借用任务创建时间', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const fragment = source.slice(source.indexOf('    const taskStepStart ='), source.indexOf('    function TaskStepElapsed('))
+  const { group, start } = runInNewContext(`${fragment}; ({ group: groupTaskSteps, start: taskStepStart })`, { fmt: value => `格式化(${value})` })
+  const groups = group([{ stageId: 'a', stageTitle: '开发与验证', nodeId: 'prepare', startedAt: '2026-09-29T00:00:00Z', status: 'succeeded' },
+    { stageId: 'a', stageTitle: '开发与验证', nodeId: 'verify', status: 'succeeded' },
+    { stageId: 'b', stageTitle: '部署UAT', nodeId: 'prepare', status: 'pending' }])
+  assert.deepEqual(Array.from(groups, item => item.title), ['开发与验证', '部署UAT'])
+  assert.deepEqual(Array.from(groups, item => Array.from(item.steps, step => step.index)), [[0, 1], [2]])
+  assert.equal(groups[0].steps[0].node.nodeId, groups[1].steps[0].node.nodeId)
+  assert.equal(start(groups[0].steps[0].node), '开始 格式化(2026-09-29T00:00:00Z)')
+  assert.equal(start({ status: 'pending', createdAt: '2026-09-29T00:00:00Z' }), '未开始')
+  assert.equal(start({ status: 'succeeded' }), '开始时间未记录')
+  assert.equal(start({ status: 'failed', startedAt: 'invalid' }), '开始时间未记录')
+  assert.match(source, /'time', \{ dateTime: node.startedAt \}/)
+})
+
+test('卡片原生步骤复用中文名称和本次节点耗时，不从历史检查点猜测', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const fragment = source.match(/    const nodeTitle = (\{[^\n]+\})/)[1]
+  const titles = runInNewContext(`(${fragment})`)
+  assert.equal(titles['execute-build'], '执行构建')
+  assert.equal(titles['inspect-runtime'], '核对运行版本')
+  assert.equal(titles['accept-result'], '校验调查结果')
+  assert.match(source, /const node = \(task.executionNodes \|\| \[\]\).find/)
+  assert.match(source, /node \? React.createElement\(TaskStepElapsed, \{ node, fontSize: 10.5 \}\)/)
+  assert.match(source, /const checkpointLabel = id => nodeTitle\[id\]/)
 })

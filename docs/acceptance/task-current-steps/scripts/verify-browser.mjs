@@ -6,9 +6,21 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 
+
+function expectedStepElapsed(node) {
+  const duration = Date.parse(node.completedAt) - Date.parse(node.startedAt)
+  assert.ok(Number.isFinite(duration) && duration >= 0, 'actual_completed_node_timing_required')
+  assert.equal(node.status, 'succeeded')
+  const seconds = duration / 1000
+  const value = seconds < 1 ? `${Math.round(duration)} 毫秒` : seconds < 60 ? `${seconds.toFixed(1)} 秒`
+    : seconds < 3600 ? `${Math.floor(seconds / 60)} 分 ${Math.floor(seconds % 60)} 秒`
+      : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分 ${Math.floor(seconds % 60)} 秒`
+  return `耗时 ${value}${node.leaseEpoch > 1 ? `（第 ${node.leaseEpoch} 次处理）` : ''}`
+}
+
 const root = fileURLToPath(new URL('../../../../', import.meta.url)), require = createRequire(import.meta.url)
 const playwright = await import(process.argv[3] || 'file:///C:/Users/64554/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs')
-const output = path.join(root, 'docs/tmp/task-current-steps/browser')
+const output = path.join(root, 'docs/tmp/task-current-steps/metadata-browser/replay')
 await mkdir(output, { recursive: true })
 const reactPath = require.resolve('react/package.json'), reactVersion = JSON.parse(await readFile(reactPath, 'utf8')).version
 const domDirectory = (await readdir(path.join(root, 'node_modules/.pnpm'))).find(name => name.startsWith(`react-dom@${reactVersion}_`))
@@ -33,8 +45,8 @@ const url = `http://127.0.0.1:${server.address().port}`
 
 // 历史验收脚本硬编码执行切换；本脚本复用其真实 React 宿主，单独验证当前目录。
 const replay = JSON.parse((await readFile(process.argv[2] || path.join(root, 'docs/tmp/task-current-steps/completed-copy-3/replay-details.json'), 'utf8')).replace(/^\uFEFF/, ''))
-const cards = replay.map(item => item.detail), details = new Map(cards.map(task => [task.taskId, structuredClone(task)]))
-assert.deepEqual(cards.map(task => task.executionNodes.length), [30, 3, 30])
+const cards = JSON.parse(await readFile(path.join(root, 'docs/tmp/task-current-steps/metadata-browser/replay-cards.json'), 'utf8')), details = new Map(replay.map(item => [item.taskId, structuredClone(item.detail)]))
+assert.deepEqual(replay.map(item => item.detail.executionNodes.length), [30, 3, 30])
 const browser = await playwright.chromium.launch({ channel: 'msedge', headless: true })
 const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, locale: 'zh-CN', reducedMotion: 'reduce' })
 const page = await context.newPage(), errors = [], writes = [], reads = [], realChecks = [], mockChecks = []
@@ -71,9 +83,19 @@ await page.route('**/*', async route => {
 const region = () => page.getByRole('region', { name: '任务执行详情', exact: true })
 async function openCard(task) {
   await page.getByRole('button', { name: task.archivedAt ? '归档任务' : '任务看板', exact: true }).click()
-  const card = page.getByRole('button').filter({ has: page.locator('strong[title]').filter({ hasText: task.title }) })
+  const card = page.getByRole('button').filter({ has: page.locator(`strong[title=${JSON.stringify(task.title)}]`) })
+  assert.ok(Array.from(await card.locator('strong[title]').textContent()).length <= 32)
+  if (!task.archivedAt) {
+    await card.locator('[data-task-card-action="toggle-checkpoints"]').focus(); await page.keyboard.press('Enter')
+    const rows = card.locator('[title="本次执行耗时"]'); assert.equal(await rows.count(), task.workflowProgress.stages.length)
+    for (let index = 0; index < task.workflowProgress.stages.length; index++) { const stage = task.workflowProgress.stages[index], node = task.executionNodes.find(node => node.nodeId === stage.stageId); assert.ok(node); assert.equal(await rows.nth(index).textContent(), expectedStepElapsed(node)); assert.notEqual(await rows.nth(index).locator('..').getAttribute('title'), stage.stageId) }
+    const names = await card.locator('div[title]').evaluateAll(elements => elements.filter(element => element.querySelector('[title="本次执行耗时"]')).map(element => element.getAttribute('title')))
+    assert.ok(names.length > 0 && names.every(name => /[\u4e00-\u9fff]/.test(name)))
+    assert.equal(await card.evaluate(element => element.scrollWidth > element.clientWidth + 2), false)
+    await page.setViewportSize({ width: 390, height: 844 }); assert.equal(await card.evaluate(element => element.scrollWidth > element.clientWidth + 2), false); await page.setViewportSize({ width: 1440, height: 1100 })
+  }
   await card.focus(); await page.keyboard.press('Enter')
-  await page.getByRole('heading', { name: task.title, exact: true }).waitFor()
+  await region().locator('h1').waitFor()
 }
 async function back() { await page.getByRole('button', { name: '返回看板', exact: true }).focus(); await page.keyboard.press('Enter') }
 async function refresh() { await page.getByRole('button', { name: '刷新', exact: true }).click() }
@@ -83,6 +105,10 @@ try {
   await page.getByRole('button', { name: '任务看板', exact: true }).click()
   for (let i = 0; i < cards.length; i++) {
     const task = cards[i]; await openCard(task)
+    assert.ok(Array.from(await region().locator('h1').textContent()).length <= 32)
+    const objective = region().locator('details').filter({ has: page.locator('summary').filter({ hasText: /^任务目标$/ }) }); await objective.locator('summary').click(); assert.equal(await objective.locator('p').textContent(), replay[i].detail.objective)
+    assert.equal(await region().locator('section.observer-task-workflow').count(), [3, 2, 3][i])
+    assert.deepEqual(await region().locator('li.observer-task-step time').evaluateAll(elements => elements.map(element => element.getAttribute('datetime'))), replay[i].detail.executionNodes.map(node => node.startedAt))
     assert.equal(await region().locator('li.observer-task-step').count(), [30, 3, 30][i])
     await page.getByRole('region', { name: '当前结果', exact: true }).waitFor()
     assert.equal(await page.getByText(/执行历史|返回最新执行|查看本次执行过程与会话/).count(), 0)
@@ -103,10 +129,10 @@ try {
     await page.setViewportSize({ width: 390, height: 844 })
     assert.equal(await region().evaluate(element => element.scrollWidth > element.clientWidth + 2), false)
     await page.screenshot({ path: path.join(outputDirectory(), `task-${i + 1}-narrow.png`), fullPage: true })
-    realChecks.push({ taskIndex: i + 1, nodes: [30, 3, 30][i], pages, completeOutput: true, noHistory: true, noOverflow: true, keyboard: true })
+    realChecks.push({ taskIndex: i + 1, nodes: [30, 3, 30][i], pages, workflowGroups: [3, 2, 3][i], startedAtTimes: replay[i].detail.executionNodes.length, shortTitle: true, completeObjective: true, chineseCardLabelsAndTiming: !task.archivedAt, completeOutput: true, noHistory: true, noOverflow: true, keyboard: true })
     await back(); await page.setViewportSize({ width: 1440, height: 1100 })
   }
-  const task = cards[0]; await openCard(task)
+  const task = replay[0].detail; await openCard(cards[0])
   failDetail = true; await refresh()
   await page.getByRole('alert').filter({ hasText: '当前详情刷新失败' }).waitFor()
   assert.equal(await region().locator('li.observer-task-step').count(), 30)

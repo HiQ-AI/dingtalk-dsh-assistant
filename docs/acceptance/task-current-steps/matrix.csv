@@ -17,3 +17,12 @@ final-controlled-deployment,2,PASS,deployment-summary.json
 build-and-pr-readback,2,PASS,round-2.md
 initial-new-fixtures,2,PASS,round-2.md
 first-deployment-readback,2,PASS,deployment-summary.json
+metadata-original-structural-checks,3,FAIL,round-3.md
+short-title-full-objective,4,PASS,round-4.md
+workflow-groups-global-order,4,PASS,round-4.md
+actual-step-start-time,4,PASS,round-4.md
+card-chinese-node-duration,4,PASS,round-4.md
+metadata-controlled-deployment,4,PASS,round-4.md
+metadata-live-browser,4,PASS,round-4.md
+metadata-pr-readback,4,PENDING,round-4.md
+metadata-original-structural-checks,4,PASS,round-4.md
