@@ -1,3 +1,4 @@
+import { sessionWorkspace, nameSession } from './session-workspaces.js'
 import { groupReplyInstructions, assertGroupReply } from './workflow-notifications.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
@@ -625,7 +626,11 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
   async function recordTaskCoordinationEvent(taskId, event) {
     return serializeTasks(() => store.updateTask(taskId, (current) => ({ ...current, executionEvents: [...(current.executionEvents ?? []), event], updatedAt: new Date().toISOString() })))
   }
-  const createResident = async (_groupId, options) => ({ handle: await ctx.agents.create(options) })
+  const createResident = async (groupId, options) => {
+    const handle = await ctx.agents.create({ ...options, meta: { ...options.meta, cwd: await sessionWorkspace(options.meta.cwd, 'resident') } })
+    nameSession(ctx, handle.agent.session, 'resident', store.listGroups().find(group => group.groupId === groupId)?.name)
+    return { handle }
+  }
 
   function signalTaskCancellation(taskId) {
     cancellingTasks.add(taskId)
@@ -1616,11 +1621,12 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     if (parent === undefined) throw new Error(`resident_not_active:${task.groupId}`)
     const handle = await ctx.agents.create({
       sessionId: SessionId(task.childSessionId),
-      meta: { cwd: agentWorkspace, parentSession: parent.session.id, origin: 'subagent', delegationDepth: 1 },
+      meta: { cwd: await sessionWorkspace(agentWorkspace, 'execution'), parentSession: parent.session.id, origin: 'subagent', delegationDepth: 1 },
       agentOptions: agentOptions(), setup: leafSetup(task), signal: AbortSignal.timeout(resumeTimeoutMs),
     })
     try {
       if (runtimeClosing || store.getTask(task.taskId)?.state === 'completed') { handle.agent.cancel({ kind: 'user' }); return handle }
+      nameSession(ctx, handle.agent.session, 'execution', task.title ?? task.objective)
       ensureLeafDescriptor(handle, task); applyPermission(handle, 'danger-full-access'); await attachGoal(task, handle, true); return handle
     } catch (error) {
       leafHandles.delete(task.taskId); leafTaskBySession.delete(task.childSessionId); await handle.dispose(); throw error
@@ -2189,7 +2195,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const identity = { groupId: request.groupId, requestId: request.requestId, role,
         ...(request.task ? { taskId: request.task.taskId } : {}) }
       const handle = await ctx.agents.create({ sessionId: SessionId(sessionId),
-        meta: { cwd: agentWorkspace, parentSession: parent.session.id, origin: 'subagent', delegationDepth: 1, agentPreset },
+        meta: { cwd: await sessionWorkspace(agentWorkspace, role), parentSession: parent.session.id, origin: 'subagent', delegationDepth: 1, agentPreset },
         agentOptions: agentOptions(), signal: AbortSignal.timeout(resumeTimeoutMs), setup: async agentCtx => {
           if (agentPresets === undefined) throw new Error('agent_presets_required')
           const preset = await agentPresets.mount(agentCtx, agentPreset)
@@ -2203,6 +2209,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
           registerCoordinationMessageTool(agentCtx, entry)
           agentCtx.systemPrompt.section({ name: 'dingtalk-coordination-scope', order: 120, text: `当前仅处理 ${role} 请求 ${request.requestId}。业务提交仅限本请求，不能执行工程修改。引用消息恢复使用 group_message_get；该工具检查本请求引用身份和读取完整性，替代群主协议中的 pwsh 查询。缺失附件正文必须明确保留读取失败，不能猜测内容。group_resource_get 只解析图片与受支持文本；已确认精确资源身份但 xlsx 等格式不受支持，不等于文件缺失。用户已明确交办文件处理时，将文件引用和读取限制交给 Task，由叶子用适用工具解析；协调阶段不以先完成文件处理作为发起前提。若授权或资源身份不明确，仍先澄清。` })
         } })
+      nameSession(ctx, handle.agent.session, role, request.task?.title ?? request.task?.objective ?? request.title ?? store.listGroups().find(group => group.groupId === request.groupId)?.name)
       handle.agent.session.append('dingtalk/coordination', identity)
       registerPerformanceSession(sessionId, identity)
       applyPermission(handle, 'danger-full-access')

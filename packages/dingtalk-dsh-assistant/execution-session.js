@@ -1,3 +1,4 @@
+import { nameSession } from './session-workspaces.js'
 import { isAbsolute } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
@@ -290,7 +291,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         }
         if (!await current(entry)) return { status: entry.cancelled || closed ? 'cancelled' : 'stale' }
         const options = { agentOptions: { provider: fixedDefinition.provider, model: fixedDefinition.model, ...(fixedDefinition.reasoningEffort === undefined ? {} : { reasoningEffort: fixedDefinition.reasoningEffort }) }, setup: setup(entry, fixedDefinition), signal: entry.abort.signal }
-        const workspaceDir = !stored && getWorkspaceDir ? await getWorkspaceDir() : undefined
+        const workspaceDir = !stored && getWorkspaceDir ? await getWorkspaceDir({ binding: entry.binding, input: entry.input }) : undefined
         if (!stored && getWorkspaceDir && (typeof workspaceDir !== 'string' || !isAbsolute(workspaceDir))) throw failure('execution_workspace_invalid')
         entry.handle = stored
           ? await ctx.agents.resume({ ...options, resumeSessionId: binding.sessionId })
@@ -299,6 +300,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
             seed: [{ type: IDENTITY_EVENT, seq: 0, time: Date.now(), ignorable: true, data: { version: binding.kind ? 2 : 1, identity: identityOf(entry.binding), creationLease: binding.leaseEpoch, budget: { maxSteps: fixedDefinition.maxSteps, timeoutMs: fixedDefinition.timeoutMs } } }],
           })
         const session = entry.handle.agent.session
+        if (!stored) nameSession(ctx, session, binding.kind === 'message-unit' ? 'answer' : 'execution', entry.input.request ?? entry.input.objective)
         // prepare/resume 可能追加原生恢复事件；再次核对已发布句柄的同一历史身份。
         if (stored) validateHistory(session.snapshotEvents(), entry.binding)
         await ctx.sessions.flush(session)

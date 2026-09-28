@@ -1,3 +1,5 @@
+import SessionTitleService from '@deepseek-ai/dsh-session-title'
+import { sessionWorkspace } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn } from 'node:child_process'
@@ -34,6 +36,7 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
   root ??= await temp()
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
+  new SessionTitleService(ctx, { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 })
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
   new LlmRuntime(ctx); new ToolRuntime(ctx)
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false, compression: 'none', writeBatchMaxDelayMs: 1 })
@@ -578,12 +581,14 @@ test('Host输出校验默认fatal，校验期间失效的lease不可软化', asy
 
 
 test('新原生会话使用Host工作区meta，模型input不能覆盖；恢复保持原metadata', async t => {
-  const root = await temp(), workspace = resolve(root), h = await host({ root, getWorkspaceDir: () => workspace, script: [submit('first'), submit('second')] }); t.after(() => h.close())
-  await drive(h, { input: { cwd: resolve('docs'), workspaceDir: resolve('test') } })
+  const root = await temp(), workspace = await sessionWorkspace(resolve(root), 'execution'); let lookups = 0; const h = await host({ root, getWorkspaceDir: () => { lookups++; return workspace }, script: [submit('first'), submit('second')] }); t.after(() => h.close())
+  await drive(h, { input: { request: '核对草稿字段', cwd: resolve('docs'), workspaceDir: resolve('test') } })
   const initial = await h.ctx.sessionPersistence.inspect(binding().sessionId)
   assert.equal(initial.meta.cwd, workspace)
+  assert.equal(initial.events.findLast(event => event.type === 'session/title').data.title, '核对草稿字段 · 任务执行')
   await drive(h, { binding: binding({ leaseEpoch: 2, sessionBound: true }) })
   assert.equal((await h.ctx.sessionPersistence.inspect(binding().sessionId)).meta.cwd, workspace)
+  assert.equal(lookups, 1)
   const invalid = await host({ getWorkspaceDir: () => 'relative/path' }); t.after(() => invalid.close())
   await assert.rejects(drive(invalid), { code: 'execution_workspace_invalid' })
   assert.equal(invalid.requests.length, 0)

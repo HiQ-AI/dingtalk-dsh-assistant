@@ -1,3 +1,4 @@
+import { nameSession } from './session-workspaces.js'
 import { groupReplyInstructions, assertGroupReply } from './workflow-notifications.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
@@ -58,7 +59,7 @@ function validateHistory(events, binding) {
 }
 
 /** 原生会话只提出本任务的决定；计划、验收和外部效果由 Host 接纳。 */
-export function createTaskOwnerSessions({ ctx, isCurrent }) {
+export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
   if (typeof isCurrent !== 'function') throw fail('TASK_OWNER_CURRENT_CHECK_REQUIRED')
   const entries = new Map()
   let closed = false
@@ -211,14 +212,16 @@ export function createTaskOwnerSessions({ ctx, isCurrent }) {
       if (binding.sessionBound && !stored) throw fail('TASK_OWNER_SESSION_MISSING')
       if (stored) validateHistory(stored.events, binding)
       if (!await current(entry)) return { status: 'stale' }
+      const workspaceDir = !stored && getWorkspaceDir ? await getWorkspaceDir() : undefined
       const options = { agentOptions: { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
         setup: setup(entry, onCandidate, readPage, readArtifact), signal: entry.abort.signal }
       entry.handle = stored ? await ctx.agents.resume({ ...options, resumeSessionId: binding.sessionId })
-        : await ctx.agents.create({ ...options, sessionId: binding.sessionId, seed: [{ type: IDENTITY_EVENT,
+        : await ctx.agents.create({ ...options, sessionId: binding.sessionId, ...(workspaceDir ? { meta: { cwd: workspaceDir } } : {}), seed: [{ type: IDENTITY_EVENT,
           seq: 0, time: Date.now(), ignorable: true,
           data: { version: 1, taskId: binding.taskId, sessionId: binding.sessionId,
             ownerEpoch: binding.ownerEpoch, creationLease: binding.leaseEpoch } }] })
       if (stored) validateHistory(entry.handle.agent.session.snapshotEvents(), binding)
+      else nameSession(ctx, entry.handle.agent.session, 'owner', input.goal?.objective ?? input.goal?.request)
       await ctx.sessions.flush(entry.handle.agent.session)
       if (!await current(entry)) return { status: 'stale' }
       await onSessionBound(binding)

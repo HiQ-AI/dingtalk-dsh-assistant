@@ -44,12 +44,12 @@ export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, 
 /** Task 事件唤醒、模型候选、Host 接纳和执行回执的唯一入口。 */
 export function createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig, advanceTask,
   authorizeStages, authorizeCompletion = async () => true, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
-  readStageArtifacts, capabilityCatalog = [], workflowCatalog = [], sessionRunner }) {
+  readStageArtifacts, capabilityCatalog = [], workflowCatalog = [], sessionRunner, getWorkspaceDir }) {
   if (!ctx || !store || !artifacts || !controller || typeof modelConfig !== 'function'
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
   let closed = false
   const flights = new Map()
-  const sessions = sessionRunner ?? createTaskOwnerSessions({ ctx, isCurrent: async binding => {
+  const sessions = sessionRunner ?? createTaskOwnerSessions({ ctx, getWorkspaceDir, isCurrent: async binding => {
     const owner = await store.query({ kind: 'task.owner', taskId: binding.taskId })
     return !!owner && owner.status === 'running' && owner.turnId === binding.turnId
       && owner.leaseEpoch === binding.leaseEpoch && owner.sessionId === binding.sessionId
