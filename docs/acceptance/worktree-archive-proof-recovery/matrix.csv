@@ -1,0 +1,8 @@
+case,round,status,evidence
+remote-advance-or-branch-deleted,1,PASS,round-1.md
+unpublished-rewrite-dirty-and-unknown-refused,1,PASS,round-1.md
+removed-tracked-documents-exact-bytes,1,PASS,round-1.md
+zero-write-check-and-retry,1,PASS,round-1.md
+conflicting-target-and-missing-blob-refused,1,PASS,round-1.md
+runtime-owner-and-cleanup,1,PASS,round-1.md
+two-real-tasks-check-only,1,PASS,round-1.md

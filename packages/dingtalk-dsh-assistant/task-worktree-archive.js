@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { lstat, realpath, readFile, mkdir, copyFile, rm, access } from 'node:fs/promises'
+import { lstat, realpath, readFile, writeFile, mkdir, copyFile, rm, access } from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 
@@ -120,16 +120,55 @@ async function recoveredRemoval({ taskId, entry, workspaceDir, checkOnly, onProg
   assertInside(actualRoot, candidate)
   const listed = parseWorktreeList(await git(entry.repositoryRoot, 'worktree', 'list', '--porcelain'))
   if (listed.some(item => path.resolve(item.worktree) === candidate)) throw new Error('worktree_directory_missing_but_git_record_exists')
+  const documents = []
   for (const item of entry.documents ?? []) {
     const { category, relative } = documentSource(item.source)
     const expected = path.resolve(workspaceDir, 'docs', category, taskId, safeComponent(path.basename(entry.repositoryRoot), 'repository_key'), relative)
-    if (!item.archivePath || path.resolve(item.archivePath) !== expected || !item.sha256) throw new Error(`worktree_removed_document_unverified:${item.source}`)
+    if (item.archivePath && path.resolve(item.archivePath) !== expected) throw new Error(`worktree_removed_document_unverified:${item.source}`)
     await assertNoExistingLink(expected)
-    if (!(await exists(expected)) || await sha256(expected) !== item.sha256) throw new Error(`worktree_removed_document_unverified:${item.source}`)
+    if (item.archivePath && item.sha256) {
+      if (!(await exists(expected)) || await sha256(expected) !== item.sha256) throw new Error(`worktree_removed_document_unverified:${item.source}`)
+      documents.push(item)
+      continue
+    }
+    // 旧目录已清理时只认登记提交中的原字节，不能用同名工作区文档猜来源。
+    if (!/^[a-f0-9]{40,64}$/u.test(entry.head ?? '') || await git(entry.repositoryRoot, 'remote', 'get-url', 'origin') !== entry.originUrl)
+      throw new Error(`worktree_removed_document_unverified:${item.source}`)
+    const tree = await git(entry.repositoryRoot, 'ls-tree', entry.head, '--', item.source)
+    const blob = /^(?:100644|100755) blob ([a-f0-9]{40,64})\t/u.exec(tree)?.[1]
+    if (!blob) throw new Error(`worktree_removed_document_unverified:${item.source}`)
+    const { stdout: bytes } = await exec('git', ['-C', entry.repositoryRoot, 'cat-file', 'blob', blob], { encoding: 'buffer', maxBuffer: 16 * 1024 * 1024, windowsHide: true })
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    if (item.sha256 && item.sha256 !== digest) throw new Error(`worktree_removed_document_unverified:${item.source}`)
+    if (await exists(expected) && await sha256(expected) !== digest) throw new Error(`document_target_conflict:${item.source}`)
+    documents.push({ ...item, archivePath: expected, sha256: digest, bytes })
   }
-  const cleaned = { ...entry, status: 'cleaned', cleanedAt: new Date().toISOString() }
-  if (!checkOnly) await onProgress(cleaned)
+  const cleaned = { ...entry, documents: documents.map(({ bytes, ...item }) => item), status: 'cleaned', cleanedAt: new Date().toISOString() }
+  if (!checkOnly) {
+    for (const item of documents) if (item.bytes) {
+      if (!(await exists(item.archivePath))) {
+        await mkdir(path.dirname(item.archivePath), { recursive: true })
+        await writeFile(item.archivePath, item.bytes, { flag: 'wx' })
+      }
+      if (await sha256(item.archivePath) !== item.sha256) throw new Error(`document_copy_verification_failed:${item.source}`)
+    }
+    await onProgress(cleaned)
+  }
   return cleaned
+}
+
+async function assertRemoteContainsHead(actual) {
+  const heads = (await git(actual.path, 'ls-remote', '--heads', 'origin')).split(/\r?\n/).filter(Boolean)
+    .map(line => line.split(/\s+/)).filter(([sha, ref]) => /^[a-f0-9]{40,64}$/u.test(sha) && ref.startsWith('refs/heads/'))
+  if (heads.some(([sha]) => sha === actual.head)) return
+  const known = new Set((await git(actual.path, 'for-each-ref', '--format=%(refname)', '--contains', actual.head, 'refs/remotes/origin/'))
+    .split(/\r?\n/).map(ref => ref.replace('refs/remotes/origin/', 'refs/heads/')))
+  heads.sort(([, a], [, b]) => Number(known.has(b)) - Number(known.has(a)))
+  for (const [sha] of heads) {
+    try { await git(actual.path, 'merge-base', '--is-ancestor', actual.head, sha); return }
+    catch (error) { if (![1, 128].includes(error.code)) throw error }
+  }
+  throw new Error('worktree_unpushed_or_remote_changed')
 }
 
 async function prepare({ taskId, entry, workspaceDir }) {
@@ -145,8 +184,7 @@ async function prepare({ taskId, entry, workspaceDir }) {
   }
   const remoteRef = actual.branch ? `refs/heads/${actual.branch}` : null
   if (!remoteRef) throw new Error('worktree_detached_push_unverifiable')
-  const remote = await git(actual.path, 'ls-remote', 'origin', remoteRef)
-  if (remote.split(/\s+/)[0] !== actual.head) throw new Error('worktree_unpushed_or_remote_changed')
+  await assertRemoteContainsHead(actual)
   const repoKey = safeComponent(path.basename(actual.repositoryRoot), 'repository_key')
   const docs = []
   for (const item of entry.documents ?? []) {
