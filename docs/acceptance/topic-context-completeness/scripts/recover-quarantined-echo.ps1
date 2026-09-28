@@ -1,5 +1,7 @@
 param(
  [switch]$Check,[switch]$Resume,
+ [ValidateSet('echo','notification')][string]$Scope='echo',
+ [string]$IncidentManifest,
  [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedProfileSha256,
  [Parameter(Mandatory)][string]$EvidenceDirectory,
  [ValidateRange(1,600)][int]$WaitSeconds=180
@@ -11,6 +13,21 @@ $node='D:/soft/node-v24.19.0/node.exe'
 $helper=Join-Path $PSScriptRoot 'recover-quarantined-echo.mjs'
 $bootstrap=Join-Path $workspace 'scripts/bootstrap-workflow-maintenance.mjs'
 $runId='msg-92023445605d174a87e6028d94c579a24ca3012f'
+$initialRevision=30
+if($Scope-eq'notification'){
+ if(-not[IO.Path]::IsPathFullyQualified($IncidentManifest)-or-not[IO.Path]::GetFullPath($IncidentManifest).StartsWith((Join-Path $workspace 'docs/tmp')+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw '事故清单须为本工作树docs/tmp内绝对路径'}
+ $incident=Get-Content -LiteralPath $IncidentManifest -Raw|ConvertFrom-Json
+ $incidentHash=(Get-FileHash -LiteralPath $IncidentManifest).Hash
+ $runId=$incident.runId;$initialRevision=[int]$incident.initialRevision
+ $helper=Join-Path $PSScriptRoot 'recover-notification-readback.mjs'
+}
+function Helper([string]$Mode){
+ if($Scope-eq'notification'){
+  if((Get-FileHash -LiteralPath $IncidentManifest).Hash-ne$incidentHash){throw '事故清单漂移'}
+  return Node @($helper,$Mode,$IncidentManifest,$EvidenceDirectory)
+ }
+ return Node @($helper,$Mode,$EvidenceDirectory)
+}
 if(-not[IO.Path]::IsPathFullyQualified($EvidenceDirectory)-or-not[IO.Path]::GetFullPath($EvidenceDirectory).StartsWith((Join-Path $workspace 'docs/tmp')+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw '证据目录必须在当前工作树 docs/tmp 下'}
 function Node([string[]]$Arguments){$output=& $node @Arguments;if($LASTEXITCODE){throw '原生恢复工具失败；保持维护和fence，禁止启动/强停'};return (($output-join "`n")|ConvertFrom-Json)}
 function Hash { (Get-FileHash -LiteralPath $profile).Hash.ToLowerInvariant() }
@@ -31,8 +48,8 @@ function Wait-Witness([string]$kind){
 }
 if($Check){
  if((Hash)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'profile CAS不匹配'}
- $p=Instance;$native=Node @($helper,'check');$state=State
- if($state.active-or$state.revision-ne30-or$state.busy.messages-ne1){throw '事故初始状态已变化'}
+ $p=Instance;$native=Helper 'check';$state=State
+ if($state.active-or$state.revision-ne$initialRevision-or$state.busy.messages-ne1){throw '事故初始状态已变化'}
  Node @($bootstrap,'witness','--profile',$profile,'--expected-sha256',$ExpectedProfileSha256,'--evidence-directory',$EvidenceDirectory,'--expected-pid',[string]$p.ProcessId,'--nonce',([guid]::NewGuid().ToString()),'--check')|Out-Null
  @{status='CHECK_PASS';writes=0;runId=$runId;pid=$p.ProcessId;maintenanceRevision=$state.revision;repair=$native.check}|ConvertTo-Json -Depth 12
  return
@@ -40,21 +57,22 @@ if($Check){
 if($Resume){
  $record=Get-Content -LiteralPath "$EvidenceDirectory/recovery.json" -Raw|ConvertFrom-Json -AsHashtable
  if($record.originalSha256-ne$ExpectedProfileSha256.ToLowerInvariant()-or$record.runId-ne$runId){throw '接续身份不匹配'}
+ if($Scope-eq'notification'-and($record.scope-ne$Scope-or$record.incidentHash-ne$incidentHash)){throw '事故接续清单不匹配'}
  Assert-Host
 }else{
  if(Test-Path -LiteralPath $EvidenceDirectory){throw '证据目录必须全新，接续使用Resume'}
  if((Hash)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'profile CAS不匹配'}
- $p=Instance;$preflight=Node @($helper,'check');$state=State
- if($state.active-or$state.revision-ne30-or$state.busy.messages-ne1){throw '事故初始状态已变化'}
+ $p=Instance;$preflight=Helper 'check';$state=State
+ if($state.active-or$state.revision-ne$initialRevision-or$state.busy.messages-ne1){throw '事故初始状态已变化'}
  New-Item -ItemType Directory -Path $EvidenceDirectory|Out-Null
- $record=@{runId=$runId;instanceId='dsh-web-runtime-v2-20260924';pid=[int]$p.ProcessId;processCreatedAt=$p.CreationDate.ToUniversalTime().ToString('o');nonce=[guid]::NewGuid().ToString();originalSha256=$ExpectedProfileSha256.ToLowerInvariant();maintenanceId='deploy-'+[guid]::NewGuid().ToString();maintenanceRevision=31;phase='prepared'}
+ $record=@{runId=$runId;instanceId='dsh-web-runtime-v2-20260924';pid=[int]$p.ProcessId;processCreatedAt=$p.CreationDate.ToUniversalTime().ToString('o');nonce=[guid]::NewGuid().ToString();originalSha256=$ExpectedProfileSha256.ToLowerInvariant();maintenanceId='deploy-'+[guid]::NewGuid().ToString();maintenanceRevision=($initialRevision+1);scope=$Scope;incidentHash=$incidentHash;phase='prepared'}
  Save
  $preflight|ConvertTo-Json -Depth 20|Set-Content "$EvidenceDirectory/preflight.json" -Encoding utf8
  Copy-Item -LiteralPath $profile -Destination "$EvidenceDirectory/original-profile.yml"
 }
 if($record.phase-eq'prepared'){
  $state=State
- if(-not$state.active){if($state.revision-ne30){throw '维护水位变化'};$body=@{requestId=$record.maintenanceId;active=$true;expectedRevision=30;maintenanceId=$record.maintenanceId;reason='修复已确认自身回声遗留节点，停止派发'}|ConvertTo-Json;$null=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -Method Post -ContentType 'application/json' -Headers @{Origin='http://127.0.0.1:3080'} -Body $body -NoProxy -TimeoutSec 20;$state=State}
+ if(-not$state.active){if($state.revision-ne$initialRevision){throw '维护水位变化'};$body=@{requestId=$record.maintenanceId;active=$true;expectedRevision=$initialRevision;maintenanceId=$record.maintenanceId;reason=if($Scope-eq'notification'){'独立核对已送达通知，停止派发'}else{'修复已确认自身回声遗留节点，停止派发'}}|ConvertTo-Json;$null=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -Method Post -ContentType 'application/json' -Headers @{Origin='http://127.0.0.1:3080'} -Body $body -NoProxy -TimeoutSec 20;$state=State}
  if(-not$state.active-or$state.phase-ne'draining'-or$state.maintenanceId-ne$record.maintenanceId-or$state.revision-ne$record.maintenanceRevision){throw '维护身份变化'}
  $record.phase='maintenance';Save
 }
@@ -72,7 +90,7 @@ if($record.phase-eq'witness'){
 }
 if($record.phase-eq'disposed'){
  Assert-Host;Wait-Witness 'disposed'
- Node @($helper,'repair',$EvidenceDirectory)|Out-Null
+ Helper 'repair'|Out-Null
  $record.phase='repaired';Save
 }
 if($record.phase-eq'repaired'){

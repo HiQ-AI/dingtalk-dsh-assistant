@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
-import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
+import { openResidentStore, reconcileReplacementGraph } from '../packages/dingtalk-dsh-assistant/store.js'
 import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
 
 // 使用真实 DomainFacility 的验证与串行持久化链；只有介质写入被隔离为内存。
@@ -18,6 +18,13 @@ async function setup() {
   await store.subscribe({ groupId: 'g' })
   return { snapshot, storage, store }
 }
+test('无替换的大量发件只按线性次数读取邻接关系', () => {
+  let reads = 0
+  const outbox = Array.from({ length: 4000 }, (_, index) => ({ outboundId: `o-${index}`, status: 'sent',
+    get replacesOutboundIds() { reads++; return undefined } }))
+  assert.deepEqual(reconcileReplacementGraph(outbox), outbox)
+  assert.ok(reads <= outbox.length * 3, `读取邻接关系${reads}次`)
+})
 async function ingest(store, messageId, extra = {}) {
   return store.ingest({ groupId: 'g', messageId, text: messageId, occurredAt: '2026-09-07T00:00:00Z', senderName: '甲', senderOpenDingTalkId: 'od-a', ...extra })
 }

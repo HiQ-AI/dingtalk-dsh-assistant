@@ -308,7 +308,8 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.doesNotMatch(source, /打开常驻对话 \/ 轨迹/)
   assert.doesNotMatch(source, /打开对话 \/ 轨迹/)
   assert.match(source, /inject: \['slots', 'sessions'\]/)
-  assert.doesNotMatch(source, /useLayoutEffect|useRef/)
+  // 补充表单使用 ref 保留重试幂等标识及输入焦点；仍不依赖布局测量。
+  assert.doesNotMatch(source, /useLayoutEffect/)
   assert.doesNotMatch(source, /\/config\//)
   assert.match(source, /method: 'POST'/)
 })

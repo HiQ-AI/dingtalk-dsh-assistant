@@ -153,3 +153,17 @@ Restore-EnrollmentAutostart @{enrollmentAutostartRestore=$true}
 Restore-EnrollmentAutostart @{enrollmentAutostartRestore=$true}
 if($script:enabled-ne 1){throw '只恢复一次原有自启'}
 Write-Output 'PASS 6/6: 新群提案精确字段、订阅幂等/漂移拒绝、原自启状态保留与幂等恢复'
+
+$modeFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-DeploymentMode'},$true)
+Invoke-Expression $modeFunction.Extent.Text
+$DirectQueriesProposal='proposal.json';$Bundle='';$MergePolicy='';$ChecksProposal='';$Bootstrap=$false;$ObserverPackage='observer.tgz';$ExpectedObserverPackageSha256='c'*64
+Assert-DeploymentMode
+$Bundle='old.json';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw '模式必须互斥'}
+$Bundle='';$ExpectedObserverPackageSha256='';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw 'Observer摘要不可省略'}
+$ObserverPackage='';$DirectQueriesProposal='';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw '旧模式参数仍必填'}
+$DirectQueriesProposal='proposal.json';$ObserverPackage='observer.tgz';$ExpectedObserverPackageSha256='c'*64
+$Package='candidate.tgz';$ExpectedPackageSha256='b'*64;$ExpectedProfileSha256='a'*64
+function Get-FileHash {param($LiteralPath) @{Hash=if($LiteralPath-eq 'candidate.tgz'){'b'*64}elseif($LiteralPath-eq 'observer.tgz'){'c'*64}else{'a'*64}}}
+Assert-InputHashes
+$ExpectedObserverPackageSha256='d'*64;$rejected=$false;try{Assert-InputHashes}catch{$rejected=$true};if(-not $rejected){throw 'Observer摘要漂移必须拒绝'}
+Write-Output 'PASS 6/6: 查询模式、工程互斥、Observer配对、旧必填与Observer摘要门禁'

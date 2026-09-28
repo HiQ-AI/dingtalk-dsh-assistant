@@ -61,12 +61,12 @@ test('工程仓库重发仅接受本机同源严格参数并返回受管结果',
 })
 
 test('群收发信箱合并新工作流持久消息与通知，按 ID 去重且保留旧群记录', async () => {
-  const group = { groupId: 'g', messages: [{ messageId: 'old', text: '旧消息', sequence: 1, occurredAt: '2026-09-23T11:00:00Z' }], outbox: [{ outboundId: 'old-out', sourceMessageId: 'old', text: '旧回复', status: 'sent' }] }
+  const group = { groupId: 'g', messages: [{ messageId: 'old', text: '旧消息', senderName: '原发送者', attachments: [{ name: '参考.pdf' }], sequence: 1, occurredAt: '2026-09-23T11:00:00Z' }], outbox: [{ outboundId: 'old-out', sourceMessageId: 'old', text: '旧回复', status: 'sent' }] }
   const mailboxes = {
     messages: [
       { groupId: 'g', messageId: 'new', text: '新消息', sequence: 2, occurredAt: '2026-09-24T02:00:00Z', routingStatus: 'pending', topicRefs: [{topicId:'workflow-topic',revision:1,title:'新话题'}] },
-      { groupId: 'g', messageId: 'old', text: '不得覆盖旧记录', sequence: 2, occurredAt: '2026-09-24T02:01:00Z', routingStatus: 'routed' },
-      { groupId: 'elsewhere', messageId: 'other', text: '其他群', sequence: 3, occurredAt: '2026-09-24T02:02:00Z', routingStatus: 'routed' },
+      { groupId: 'g', messageId: 'old', text: '工作流当前消息', runId: 'native-run', workflowStatus: 'processed', senderName: undefined, topicRefs: [{ topicId: 'current-topic' }], sequence: 2, occurredAt: '2026-09-24T02:01:00Z', routingStatus: 'routed' },
+      { groupId: 'elsewhere', messageId: 'old', text: '其他群', sequence: 3, occurredAt: '2026-09-24T02:02:00Z', routingStatus: 'routed' },
     ],
     outbox: [
       { groupId: 'g', outboundId: 'new-out', sourceMessageId: 'new', text: '新通知', status: 'pending' },
@@ -77,7 +77,15 @@ test('群收发信箱合并新工作流持久消息与通知，按 ID 去重且�
   await withServer(false, async base => {
     const item = await (await fetch(base + '/state/groups?groupId=g')).json()
     assert.deepEqual(item.messages.map(message => message.messageId), ['old', 'new'])
-    assert.equal(item.messages[0].text, '旧消息')
+    assert.equal(item.messages[0].text, '工作流当前消息')
+    assert.equal(item.messages[0].runId, 'native-run')
+    assert.equal(item.messages[0].workflowStatus, 'processed')
+    assert.equal(item.messages[0].sourceKind, 'workflow-v2')
+    assert.equal(item.messages[0].senderName, '原发送者')
+    assert.deepEqual(item.messages[0].attachments, [{ name: '参考.pdf' }])
+    assert.deepEqual(item.messages[0].topicRefs, [{ topicId: 'current-topic' }])
+    assert.equal(group.messages[0].text, '旧消息')
+    assert.equal(group.messages[0].runId, undefined)
     assert.equal(item.messages[1].sourceKind, 'workflow-v2')
     assert.equal(item.messages[1].topicRefs[0].topicId,'workflow-topic')
     assert.deepEqual(item.outbox.map(message => message.outboundId), ['old-out', 'new-out'])

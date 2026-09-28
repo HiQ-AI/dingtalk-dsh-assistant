@@ -65,6 +65,10 @@ function nodeDto(n) {
 const getRun = runId => { text(runId, 'runId'); const r = db.prepare('SELECT * FROM execution_runs WHERE run_id=?').get(runId); if (!r) fail('RUN_NOT_FOUND'); return r }
 const nodes = runId => db.prepare('SELECT * FROM execution_nodes WHERE run_id=? AND current=1 ORDER BY position').all(runId)
 const pendingInputs = runId => db.prepare("SELECT * FROM execution_inputs WHERE run_id=? AND status='pending' ORDER BY seq").all(runId)
+function nodeInputHistory(nodeRunId) {
+  const row = db.prepare("SELECT payload FROM execution_events WHERE kind='node.continue' AND json_extract(payload,'$.nodeRunId')=? ORDER BY seq DESC LIMIT 1").get(nodeRunId)
+  return row ? JSON.parse(row.payload) : { inputVersion: 1, inputHistory: [] }
+}
 const terminalRun = r => ['succeeded', 'failed', 'cancelled'].includes(r.status)
 function budgetContinuation(runId) {
   const r = getRun(runId), current = nodes(runId), index = current.findIndex(n => n.status === 'waiting')
@@ -554,6 +558,19 @@ function coreCommand(command, now) {
       .run(a.toWorkflowId, a.toDigest, a.requirementRef, a.nodes.length * 3, now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
+  if (command.kind === 'node.continue') {
+    object(a, ['runId','nodeId','generation','leaseEpoch','inputDigest','expectedInputVersion','inputRef','nextInputDigest','expectedOutputRef','eventId','answerDigest'])
+    const r=activeRun(a),n=currentNode(a),history=nodeInputHistory(n.node_run_id)
+    ref(a.inputRef,'inputRef');digest(a.nextInputDigest,'nextInputDigest');text(a.eventId,'eventId');digest(a.answerDigest,'answerDigest')
+    if(r.status!=='waiting'||n.status!=='waiting'||n.executor!=='agent'||!n.session_bound||!n.drained
+      ||n.input_digest!==a.inputDigest||n.output_ref!==a.expectedOutputRef||history.inputVersion!==a.expectedInputVersion
+      ||JSON.parse(n.wait_reason??'null')?.reference!=='AGENT_WORK_NEEDS_INPUT'
+      ||pendingInputs(r.run_id).length||db.prepare('SELECT 1 FROM execution_effects WHERE run_id=? LIMIT 1').get(r.run_id))fail('NODE_CONTINUATION_STALE')
+    assertTaskDispatchAllowed(r)
+    db.prepare("UPDATE execution_nodes SET input_ref=?,input_digest=?,status='ready',wait_reason=NULL,output_ref=NULL,evidence_refs='[]' WHERE node_run_id=?").run(a.inputRef,a.nextInputDigest,n.node_run_id)
+    db.prepare("UPDATE execution_runs SET status='queued',revision=revision+1,recovery_reason=NULL,updated_at=? WHERE run_id=?").run(now,r.run_id)
+    return {nodeRunId:n.node_run_id,inputVersion:history.inputVersion+1,inputHistory:[...history.inputHistory,{inputVersion:history.inputVersion,inputDigest:n.input_digest}],eventId:a.eventId,answerDigest:a.answerDigest,expectedOutputRef:a.expectedOutputRef}
+  }
   if (command.kind === 'node.claim') {
     object(a, ['runId', 'nodeId', 'expectedGeneration', 'expectedLeaseEpoch'])
     const r = activeRun(a)
@@ -800,6 +817,8 @@ function webTaskEvent(eventId) {
   return row ? JSON.parse(row.payload).event : null
 }
 function query(value) {
+  if(value?.kind==='node.input-history')return nodeInputHistory(text(value.nodeRunId,'nodeRunId'))
+  if(value?.kind==='node.binding-history')return db.prepare("SELECT payload FROM execution_events WHERE kind='node.claim' AND json_extract(payload,'$.binding.nodeRunId')=? ORDER BY seq").all(text(value.nodeRunId,'nodeRunId')).map(row=>JSON.parse(row.payload).binding)
   if (value?.kind === 'runtime.maintenance') return maintenanceStatus(db, workerData.processIncarnation)
   if (value?.kind === 'run.budget-continuation') return budgetContinuation(value.runId)
   if (['workflow.repair.context', 'engineering.repair.context'].includes(value?.kind)) {

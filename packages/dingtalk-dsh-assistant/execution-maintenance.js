@@ -14,7 +14,7 @@ export function maintenanceStatus(db, processIncarnation) {
     nodes: count("SELECT count(*) n FROM execution_nodes WHERE current=1 AND (status='running' OR drained=0)"),
     owners: count("SELECT count(*) n FROM task_owners WHERE status='running'"),
     effects: count("SELECT count(*) n FROM execution_effects WHERE state IN ('starting','executing','unknown')"),
-    messages: count("SELECT count(*) n FROM message_items WHERE (kind IN ('node','command') AND json_extract(body,'$.status')='running') OR (kind='notification' AND json_extract(body,'$.status') IN ('sending','acknowledged','unknown')) OR (kind='notification-operation' AND json_extract(body,'$.status') IN ('in_flight','unknown'))"),
+    messages: count("SELECT count(*) n FROM message_items WHERE (kind IN ('node','command') AND json_extract(body,'$.status')='running') OR (kind='agent-execution' AND (json_extract(body,'$.status')='running' OR json_extract(body,'$.drained')=0)) OR (kind='notification' AND json_extract(body,'$.status') IN ('sending','acknowledged','unknown')) OR (kind='notification-operation' AND json_extract(body,'$.status') IN ('in_flight','unknown'))"),
   }
   const drained = Object.values(busy).every(value => value === 0)
   return { ...state, busy, drained, processIncarnation,
@@ -23,7 +23,7 @@ export function maintenanceStatus(db, processIncarnation) {
 }
 
 const dispatchCommands = new Set(['node.claim', 'task.owner.claim', 'effect.begin', 'run.recovery.admit',
-  'message.node.claim', 'message.command.claim', 'message.notification.claim', 'message.notification.operation.claim'])
+  'message.agent.begin', 'message.node.claim', 'message.command.claim', 'message.notification.claim', 'message.notification.operation.claim'])
 export function assertMaintenanceDispatch(db, kind) {
   if (dispatchCommands.has(kind) && maintenanceState(db).active) throw executionError('RUNTIME_MAINTENANCE_ACTIVE')
 }

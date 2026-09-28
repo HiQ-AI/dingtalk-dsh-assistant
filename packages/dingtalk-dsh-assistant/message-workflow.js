@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, unitContext, candidateCards, intentContext } from './message-context.js'
+import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, validateExecutionMaterialRefs, unitContext, candidateCards, intentContext } from './message-context.js'
 import { prepareMessageRequest } from './message-model.js'
 import { isPassiveTaskProgress, isQuietGroupMessage } from './message-ledger.js'
 import { wholeTopicFactRevision } from './message-topics.js'
@@ -169,6 +169,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const timeout = prepared ? new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('MESSAGE_NODE_TIMEOUT')) }, Math.min(config.attemptMs, remaining)) }) : null
       const response = fixedOutput ? { output: fixedOutput, usage: { inputTokens: 0, outputTokens: 0 } } : await Promise.race([judge({ stage, input, prepared, schema: messageSchemas[stage], signal: controller.signal, maxOutputTokens: outputLimit }), timeout])
       const output = messageSchemas[stage].parse(response.output ?? response)
+      validateExecutionMaterialRefs(stage, output, input)
       if (stage === 'S') validateSplit(output, current.run.body)
       if (stage === 'material' && output.facts.some(fact => !input.text.includes(fact.quote))) throw new Error('MESSAGE_MATERIAL_QUOTE_INVALID')
       if (stage === 'R' && output.kind === 'binding' && output.candidateId !== null && !input.candidates.some(card => card.candidateId === output.candidateId)) throw new Error('MESSAGE_UNKNOWN_TARGET')
@@ -543,7 +544,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   }
   async function dispatch(runId) {
     const data = await state(runId)
-    await Promise.all(data.commands.filter(command => !['applied', 'rejected', 'unknown', 'failed', 'running', 'superseded'].includes(command.status)).map(async command => {
+    await Promise.all(data.commands.filter(command => !['applied', 'rejected', 'unknown', 'failed', 'running', 'waiting', 'cancelled', 'superseded'].includes(command.status)).map(async command => {
       const action = { intent: command.kind, ...command.args }
       const info = { run: data.run, unit: data.units.find(unit => unit.unitId === command.unitId), binding: command.args.binding, commandId: command.commandId }
       const blocked = command.dependsOn?.find(id => data.commands.find(item => item.commandId === id)?.status === 'rejected')
@@ -565,7 +566,9 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (!receipt.dispatchEligible || !receipt.result?.command) return
       const claimed = receipt.result.command
       try {
-        const result = await handler(action, info)
+        const result = await handler(action, { ...info, commandLeaseEpoch: claimed.leaseEpoch })
+        // Agent 的持久执行自行提交结果；路由队列不能等待一次长查询结束。
+        if (result?.executionPending === true) return
         await cmd('message.command.complete', { commandId: command.commandId, leaseEpoch: claimed.leaseEpoch, result })
       } catch (error) { await cmd('message.command.fail', { commandId: command.commandId, leaseEpoch: claimed.leaseEpoch, error: error.code ?? error.message }); return }
       // 回执提交即唤醒其已就绪后继，不能等待同批其它慢动作或下一次恢复轮询。
@@ -701,6 +704,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         return process(run.runId)
       }
       if (context.bindTopic && pendingState.run.routingStatus === 'routing_complete') {
+        await dispatch(run.runId)
         await scheduleTopics(run.conversationId)
         return pendingState
       }
@@ -712,5 +716,5 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   }
   async function resume(input) { const result = await cmd('message.wake', input, `wake:${input.eventId}`); if (result?.run?.runId) { await process(result.run.runId); await waitForTopicFlight(result.run.runId) } return result }
   async function close() { closed = true; for (const controller of controllers.values()) controller.abort(); for (const item of queue.splice(0)) item.reject(new Error('MESSAGE_WORKFLOW_CLOSED')); await Promise.allSettled([...flights.values(), ...topicFlights.values(), ...topicSchedules]) }
-  return { receive, reprocess, process, recover, resume, state, close }
+  return { receive, reprocess, process, recover, resume, state, commandSettled: dispatch, close }
 }

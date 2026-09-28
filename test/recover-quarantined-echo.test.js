@@ -40,7 +40,7 @@ test('续接不能把manifest存在当备份通过：校验scope/所有文件/�
 })
 test('PowerShell恢复阶段使用profile CAS与完整退出见证，未包含强停/维护解除/任意hook',async()=>{
  const source=await readFile(new URL('../docs/acceptance/topic-context-completeness/scripts/recover-quarantined-echo.ps1',import.meta.url),'utf8')
- assert.ok(source.indexOf("Wait-Witness 'disposed'")<source.indexOf("Node @($helper,'repair'"))
+ assert.ok(source.indexOf("Wait-Witness 'disposed'")<source.indexOf("Helper 'repair'"))
  assert.ok(source.indexOf("$record.phase='repaired'")<source.indexOf("Node @($bootstrap,'enable'"))
  assert.match(source,/witnessSha256/);assert.match(source,/fencedSha256/);assert.match(source,/ContinueMaintenanceId/)
  assert.doesNotMatch(source,/Stop-Process|active=\$false|Invoke-Expression|ScriptBlock/)

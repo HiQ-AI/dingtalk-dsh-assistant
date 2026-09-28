@@ -51,3 +51,26 @@
 执行节点默认展示通过状态与验收项数量，展开后显示服务生命周期各阶段的状态、耗时，每项业务操作的预期、实际、结论，以及任务数据清理和进程停止结果；报告可下载为 `本地验收报告.md`。阶段耗时满 60 分钟换算小时。执行节点完成表示回执已保存，验收是否通过由报告及后续“核对验收与清理结果”节点共同体现。核对节点只有业务通过且清理确认后才允许提交。
 
 缺少环境配置、验收条件、方案覆盖不完整、执行中断待核对、业务未通过、清理未确认、回执不匹配分别使用可理解的等待原因。不得将构建通过、执行节点完成或服务就绪表述为业务验收通过。
+
+
+## 消息 Agent 查询与答复
+
+消息处理详情在判断和接纳后显示独立“查询与答复”步骤，复用现有编号序列、主题 token 和宿主 Button，耗时在步骤标题右侧。执行状态分别显示处理中、待补充、查询受阻、待恢复、已取消；“答复已生成”不表示已经送达。普通问答仍不进入任务看板。
+
+轨迹列表只返回 240 字答复摘要、依据数量、真实绑定会话及产出引用，不读取工件正文或工具日志。点击“查看答复与依据”后通过现有 evidence API 按页获取正文，依据逐条再次点击才读取。读取包含加载、错误重试、分页与过时请求丢弃；读取失败不影响其他步骤。会话跳转仅在 sessionBound 为真时出现。输出及依据只能从本消息已接纳引用读取，禁止以任意工件路径访问。
+
+此文件继续作为本项目 DESIGN/UX 约定的维护入口；依据用户项目产物归档规范，不在仓库根重复建立设计文档。页面原有宿主全局滚动与导航保持其所属组件的约定。
+
+
+## Canonical UI Map
+
+| Capability | Canonical owner | Source of truth | Allowed variants | Verification |
+| --- | --- | --- | --- | --- |
+| Read-only disclosure | TraceReadout and TaskStepOutput | 此文档与 evidence/output API | 按页读取答复、逐条读取依据 | verify-agent-trace-browser.mjs |
+| Session navigation | ObserverContent.navigate and host sessions | 宿主 DSH 会话导航、已绑定 sessionId | 消息执行与任务节点 | verify-agent-trace-browser.mjs |
+| Execution timing | traceElapsed | startedAt/completedAt 与持久执行状态 | 进行中计时、完成后冻结、满小时换算 | observer-client.test.js |
+| Message process | TraceDetail | messageTrace API | 编号步骤、业务摘要、按需产出 | workflow-agent-service.test.js |
+
+### 调查补充输入
+
+任务详情与消息处理步骤共用行内补充表单，显示 Host 提供的问题，仅 `canAnswer` 为真时允许提交。调用既有工作流补充入口，原生调查使用真实 execution runId。空输入就地提示，提交期间禁用，失败保留内容；相同内容重试保持 eventId，成功刷新处理状态。权限仍由服务端复核。

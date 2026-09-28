@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { readOnlyTaskCatalog } from './task-readonly-workflows.js'
 
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const materialRestriction = /禁止|不得|不能|不允许|仅限|只准|必须|除非|未经|不要|暂停|取消/u
@@ -45,12 +44,10 @@ const span = z.strictObject({ start: z.number().int().nonnegative(), end: z.numb
 const need = z.strictObject({ resourceRef: z.string().min(1), reason: z.string().min(1) })
 const wait = z.strictObject({ kind: z.enum(['needs_context', 'needs_clarification']), reason: z.string().min(1), needs: z.array(need).default([]), question: z.string().optional() })
 const argumentText = z.string().trim().min(1)
-export const messageAnswerArguments = z.strictObject({ text: argumentText })
+export const messageAnswerArguments = z.strictObject({ objective: argumentText })
 export const taskWorkflowCatalog = Object.freeze([
-  { id: 'task-analysis', label: '材料分析', purpose: '已给材料分析', mode: 'read-only' },
-  ...readOnlyTaskCatalog.map(({ id, purpose }) => ({ id, label: ({ 'task-investigation': '问题排查', 'task-planning': '方案设计', 'task-pr-review': 'PR 评审', 'task-data-query': '数据口径审查', 'task-retrospective': '任务复盘' })[id], purpose, mode: 'read-only' })),
+  { id: 'task-investigation', label: '调查与分析', purpose: '自主使用授权查询能力，交付调查、分析、评审或方案；按目标核对证据', mode: 'read-only' },
   { id: 'task-engineering', label: '代码开发', purpose: '开发并向明确指定的uat1至uat9环境提交PR，由Host映射分支；未指定先询问，禁止main', mode: 'engineering' },
-  { id: 'task-general', label: '通用任务', purpose: '受控的未固化任务', mode: 'general' },
   { id: 'task-uat-deployment', label: 'UAT 部署', purpose: '将已合入UAT分支的精确提交部署到UAT环境', mode: 'external' },
   { id: 'task-main-pr-merge', label: '上线合并 main', purpose: 'UAT及业务验收完成并获上线批准后，独立合并精确PR至main', mode: 'external' },
   { id: 'task-uat-pr-merge', label: 'UAT PR 合并', purpose: '核验精确 PR 和必要检查后合并至 UAT 分支并回读来源', mode: 'external' },
@@ -65,6 +62,7 @@ const taskActionSchema = z.strictObject({ intent: z.enum(['no_action', 'fact', '
   for (const key of required) if (!action.arguments[key]) ctx.addIssue({ code: 'custom', path: ['arguments', key], message: `${action.intent} requires ${key}` })
 })
 const actionSchema = z.union([
+  z.strictObject({ intent: z.literal('cancel_answer'), arguments: z.strictObject({ commandId: argumentText }), dependsOn: z.array(z.number().int().nonnegative()) }),
   z.strictObject({ intent: z.literal('answer'), arguments: messageAnswerArguments, dependsOn: z.array(z.number().int().nonnegative()) }),
   taskActionSchema,
 ])
@@ -112,7 +110,7 @@ export function validateSplit(output, text) {
   return output
 }
 export function unitContext(snapshot, unit) {
-  return { snapshotId: snapshot.snapshotId, sourceEdit: snapshot.sourceEdit, actorId: snapshot.source.actorId, conversationId: snapshot.source.conversationId, sourceKey: snapshot.source.sourceKey, sourceVersion: snapshot.source.sourceVersion, text: unit.spans.map(span => snapshot.source.text.slice(span.start, span.end)).join('\n'), sourceSpans: unit.spans, goalText: unit.goalText, constraints: unit.constraints, sharedConstraints: unit.sharedConstraints ?? [], referenceSources: snapshot.quotes }
+  return { snapshotId: snapshot.snapshotId, sourceEdit: snapshot.sourceEdit, actorId: snapshot.source.actorId, conversationId: snapshot.source.conversationId, sourceKey: snapshot.source.sourceKey, sourceVersion: snapshot.source.sourceVersion, text: unit.spans.map(span => snapshot.source.text.slice(span.start, span.end)).join('\n'), sourceSpans: unit.spans, goalText: unit.goalText, constraints: unit.constraints, sharedConstraints: unit.sharedConstraints ?? [], referenceSources: snapshot.quotes, executionMaterialRefs: [...(snapshot.attachments ?? []).map(item => item.resourceRef), ...(unit.contextNeeds ?? []).map(item => item.resourceRef)] }
 }
 export function candidateCards(candidates) {
   if (candidates.length > 10000) throw new Error('MESSAGE_CANDIDATE_CAPACITY')
@@ -158,5 +156,25 @@ export function intentContext(base, binding, facts, responsibility = '', candida
   const summaries = candidates.slice(0,4).map(item => pick(item,['candidateId','engine','taskId','title','state','relevantTime']))
   const effectiveFacts = facts?.topic?.facts ? { ...facts, topic: { ...facts.topic, facts: facts.topic.facts.filter(fact => fact.status !== 'invalidated') } } : facts
   const scopedFacts = sharedTopic && effectiveFacts?.topic ? { ...effectiveFacts, topic: { topicId: effectiveFacts.topic.topicId, contextRevision: effectiveFacts.topic.contextRevision ?? effectiveFacts.topic.revision } } : effectiveFacts
-  return { ...base, binding: { ...target, ...identity }, facts: scopedFacts, ...(resolvedEvidence.length ? { resolvedEvidence } : {}), ...(binding.disposition === 'conversation' ? { candidates: summaries } : {}), ...(responsibility ? { groupResponsibility: responsibility } : {}) }
+  const executionMaterialRefs = [...new Set([base.sourceKey, ...(base.executionMaterialRefs ?? []),
+    ...(base.referenceSources ?? []).map(item => item.sourceKey),
+    ...(base.material?.resources ?? []).map(item => item.resourceRef),
+    ...resolvedEvidence.flatMap(item => (item.needs ?? []).map(need => need.resourceRef)),
+    binding.historyRef, binding.detailRef, target?.historyRef, target?.detailRef,
+    ...(effectiveFacts?.topic?.facts ?? []).flatMap(fact => (fact.sourceRefs ?? []).map(ref => ref.sourceKey)),
+  ].filter(ref => typeof ref === 'string' && ref.length > 0))]
+  return { ...base, executionMaterialRefs, binding: { ...target, ...identity }, facts: scopedFacts, ...(resolvedEvidence.length ? { resolvedEvidence } : {}), ...(binding.disposition === 'conversation' ? { candidates: summaries } : {}), ...(responsibility ? { groupResponsibility: responsibility } : {}) }
+}
+
+// 材料引用由 Host 提供；模型描述的查询目标不能变成启动前依赖。
+export function validateExecutionMaterialRefs(stage, output, input) {
+  const validate = (intent, context) => {
+    if (intent.kind !== 'intent') return
+    const known = new Set(context?.executionMaterialRefs ?? [])
+    if (intent.requiredExecutionMaterials.some(ref => !known.has(ref)))
+      throw new Error('MESSAGE_EXECUTION_MATERIAL_REF_INVALID:requiredExecutionMaterials只能选当前事项executionMaterialRefs；查询资源及待取得证据写入目标或acceptanceCriteria')
+  }
+  if (stage === 'I') validate(output, input)
+  if (stage === 'IB' && output.kind === 'topic_intents') for (const decision of output.decisions)
+    validate(decision.intent, input.units.find(unit => unit.unitId === decision.unitId)?.input)
 }

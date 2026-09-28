@@ -77,8 +77,13 @@ function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
     }),
   }))
   const workflowMessages = (workflowMailboxes?.messages ?? []).filter((message) => message.groupId === group.groupId)
-  const existingMessageIds = new Set(summary.messages.map((message) => message.messageId))
-  summary.messages.push(...workflowMessages.filter((message) => !existingMessageIds.has(message.messageId)).map((message) => ({ ...message, sourceKind: 'workflow-v2' })))
+  const byMessageId = new Map(summary.messages.map(message => [message.messageId, message]))
+  for (const message of workflowMessages) {
+    // 补读的旧资料不能挡住原生控制账的会话入口和状态；缺省显示资料仍保留。
+    const defined = Object.fromEntries(Object.entries(message).filter(([, value]) => value !== undefined))
+    byMessageId.set(message.messageId, { ...byMessageId.get(message.messageId), ...defined, sourceKind: 'workflow-v2' })
+  }
+  summary.messages = [...byMessageId.values()]
   const existingOutboundIds = new Set((summary.outbox ?? []).map((message) => message.outboundId))
   summary.outbox = [...(summary.outbox ?? []), ...(workflowMailboxes?.outbox ?? []).filter((message) => message.groupId === group.groupId && !existingOutboundIds.has(message.outboundId))]
   const pendingUnits = new Set(topics.flatMap((topic) => topic.entries.filter((entry) => entry.revision > topic.processedRevision).map((entry) => entry.unitId ?? `legacy:${entry.messageId}`)))

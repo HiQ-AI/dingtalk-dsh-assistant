@@ -1,5 +1,7 @@
 # 常驻通知修复本地部署
 
+切换封存快照在初始群和追加群上统一按路径、摘要、验证范围及文件身份缓存核验；每次入站仍检查文件身份，变动或失败立即拒绝，不能删掉seal来恢复旧入口。部署回读会话列表时分别记录正式HTTP响应和隔离持久化读取时间，不能用后者替代正式页面性能。
+
 `deploy-owner-repair.ps1` 按脚本所在仓库解析源码及 `docs/tmp` 证据目录，不绑定历史 worktree。必须从本次已核对的检出运行，包内文件仍须与该检出逐字节一致。
 
 工程只读工具分页上限为read 16000字符、list/search 200条。超限返回可纠正参数结果；部署后须检查真实会话能够缩小分页继续读取，不能仅凭工具注册成功判断。已停止的旧会话保留失败记录，重新执行走正式任务入口。
@@ -9,6 +11,27 @@
 工程目录的 `purpose` 和 `routingTerms` 向意图节点说明各仓库职责，且不改变旧运行冻结的执行配置摘要。唯一关键词命中其它仓库时，新任务接纳和仓库重发均拒绝。v7 对空 `changes` 给出 `ENGINEERING_NO_CHANGES_PROPOSED`；v8 支持精确局部替换，由 Host 校验原文件 SHA256、唯一原文并合成完整文件；v6/v7 历史定义保持原样。对无编辑及交付效果、节点排空且等待在空方案的旧工程运行，可由本机同源 Web 操作者调用 `POST /tasks/<taskId>/reissue-repository`，正文为 `{"repositoryId":"dataset","requestId":"唯一重发请求标识"}`。入口按 `workflow.webActorId` 和任务访问权限校验，事务保留原任务和节点历史，新增代次从准备节点执行；同仓库仅允许 v6/v7 空方案升级一次到 v8，重复 requestId 幂等。先核对目标仓库已准入、实际等待原因及效果账，再调用一次；调用后回读任务 ID、代次、版本、当前节点及仓库读取工具结果。业务代码只能由插件任务流修改，本部署流程不得替它编辑业务仓库。
 
 ## 消息与任务工作流入口
+
+Resident 关闭会依次尝试 HTTP、同步服务、监听、工作流及 Runtime 的清理，保留并记录原始异常。宿主可能捕获插件卸载错误后继续报告卸载事件，因此该事件不能独立证明会话排空或控制库解锁；部署仍须执行下述维护、排空、owner 锁和进程回读。若旧版关闭短路导致占用残留，先保留维护并按实际原生句柄及控制账取证，不手工改写 drained。
+
+### 问答 Agent 与调查流程切换
+
+仅部署问答查询配置时，既有 `deploy-owner-repair.ps1` 使用 `-DirectQueriesProposal <绝对JSON>`，与 `-Bundle/-MergePolicy/-ChecksProposal` 互斥，禁止Bootstrap；不更新工程验收配置。可同时提供 `-ObserverPackage/-ExpectedObserverPackageSha256`，两包各自校验后由同一次原生 plugin add 安装，容量按两包计算，回读/Resume再次核对两包。先 `-Check`，保留原维护、封存、完整备份、owner锁和恢复门禁。配置器 `scripts/configure-agent-query-resources.mjs --check/--apply --profile <绝对YAML> --proposal <绝对JSON> --expected-sha256 <SHA>` 只接受 Agent 自身明确的资料/固定提交/status授权；数据库提案显式提供 `credentialsPath`（绝对文件路径）与 `databases: [{id, connectionId, tables: [{schema, table, columns}]}]`。使用现有 UAT 账号时，仅目标数据库资源显式追加 `environment: uat` 和 `identityPolicy: host-enforced-readonly`；其他环境不允许该模式。permissions 的 `databaseIds` 必须逐项对应全部登记数据库。表列仅接受明确标识符，拒绝通配及重复。可只登记数据库而将资料/status数组设为空。配置器不读取凭据、不连接数据库、不创建角色；check 零写，apply 保留原文并按 SHA 执行 CAS。默认严格检查只读角色；显式 UAT 模式由 Host 限定结构化查询并逐次核验只读事务。登记成功不代表数据库验收通过。凭据不得写入提案，配置器只接受路径。提案包含 `expectedProfileSha256`、固定 `target=dingtalk-dsh-assistant.config.workflow.directQueries` 及完整 `directQueries`；部署方保存含真实环境路径的提案及原始证据，不提交公开仓库。
+
+
+本轮改动把 `answer.text` 替换为 `answer.objective`，并将旧只读材料编排合并为带工具的调查阶段。切换不是运行库历史迁移：已完成记录和工件保留，活动旧定义必须在安装前排空；启动遇到 `WORKFLOW_CUTOVER_ACTIVE_REFERENCES` 时停止切换并核对具体活动引用，不自动重排或改写历史。
+
+1. 在本次检出运行 `node docs/acceptance/agent-direct-execution/scripts/inventory-legacy-workflows.mjs --check --db <控制库路径> --instance <实例ID>`；不传 `--output` 只读输出，保存证据时使用全新 `--output <路径>`（拒绝覆盖）。正式维护排空后再次执行，保存两次清点。确认旧流程活动运行、当前阶段、未排空节点及未确认效果为零。旧 `answer.text` 未完成命令须在旧合同下收尾或明确停止，不能交给新 Agent 猜测其含义。
+2. 按下文备份、打包、安装流程部署 Assistant 与 Observer。正式 profile 的 `workflow.directQueries` 可登记 `resources`、`databases`、`statusResources`、`credentialsPath` 与 `permissions`。permissions 包含 Agent 自身的 `resourceIds` / `databaseIds` / `statusIds`，与群成员无关。旧 grants 不再接受，部署必须提供保持原资源范围的新版 DirectQueriesProposal，经 Check 和 CAS 切换；不能只升级包而保留旧配置。凭据只放受保护的仓库外文件，配置和工件不得包含密码。
+3. 仓库资源冻结完整提交；状态资源限定固定 GET URL 和返回字段；数据库资源限定表、列。默认使用专用只读账号；用户明确指定使用现有 UAT 账号时，配置 UAT 专属 Host 强制只读事务模式，并实测写入拒绝。账号凭据始终只由 Host 读取，不交给模型，也不登记生产连接。
+4. 安装后独立回读包摘要、进程、健康、流程目录及旧历史。新目录只有统一调查入口，工程与外部交付仍可按原权限发起；旧成功任务可读且没有重放通知。
+5. 在已授权的独立测试群分别验证材料问答、真实资料/代码/数据库读取、调查交付、补充、取消、重启和权限反例。核对真实工具工件、会话、Task 增量与钉钉独立回读；健康正常及原生本地会话通过不能代替渠道验收。
+
+本地隔离原生查询脚本 `verify-native-query.mjs --check <profile> <DSH_HOME> <输出目录>` 先做零写预检，`--run` 使用实际配置的 Codex Connect、原生 AgentLoop 与查询工具；会话与工件写入指定的新目录，不接入业务控制库或钉钉，模型认证仍使用正式提供商服务。调用时原生启动环境的 DSH_HOME 必须与参数一致。该模式不覆盖消息分流、Task Owner 或数据库验收。
+
+同一脚本 `--message` 使用隔离控制库与真实模型执行消息拆分、关联、意图和问答 Agent；它断言问答命令成功、证据来自实际工具且业务 Task 为零，通知渠道明确禁用。因此该模式仍不能代替正式钉钉送达验收。
+
+`--investigate` 在隔离控制库中经真实意图判断和 Task Owner 创建一个调查任务，核对调查结果、真实查询工件和 Owner 最终验收。其输出目录必须不存在，父目录需已建立；失败后用新目录重跑，保留先前证据。
 
 S 节点只接收事项拆分所需的消息材料；群职责保留在持久快照，不进入 S 的 8 KiB 输入。背景预算遗漏项以来源键传给 S，指代需要时仍应请求相应材料。旧版因 S 输入容量被阻断、且尚无单元、节点、命令、请求或屏障的消息，启动恢复时只允许按 `s-compact-v1` 投影重试一次；部署后须逐条回读状态，不能将启动健康视作处理成功。
 R 节点身份卡只携带本次明确引用的来源键，其他来源保留在 Host 召回数据并向模型标注省略数量；目标或判别事实过长时保存完整材料引用，选中候选须补取详情。任务历史可通过 `task-history:<taskId>` 或 `workflow-task-history:<taskId>` 在相应读权限下按需读取。至多八张身份卡的输入保护值为 14 KiB；明确引用超过八项或保护证据超限时进入可见阻断。旧版 R 容量阻断在无业务副作用且目标单元的材料请求均已解决时可恢复原节点；未解决请求不得重试。
@@ -284,3 +307,21 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 本轮固定事故工具 `docs/acceptance/topic-context-completeness/scripts/recover-quarantined-echo.ps1` 只处理已证明为自身出站回声、运行已 superseded 且无业务效果的残留节点；不接收任意 run/命令。使用新的 `docs/tmp/` 证据目录和当前 profile SHA，先 `-Check` 再同参数执行。它进入正式维护、通过 bootstrap witness 证明 Resident 完整 dispose、取得独占锁备份、原生修复并回读，再恢复精确原 profile。最终输出 `ContinueMaintenanceId`、`ExpectedMaintenanceRevision` 给正常部署脚本。
 
 如中断，保留现场并同参数加 `-Resume`。未取得完整 disposed 见证时禁止强停 Host；端口关闭不算完成退出。备份已有 manifest 仍会重新校验范围及每个文件/一致 SQLite 副本哈希。任何 profile、PID、维护水位或非目标忙项变化均停止，不能为继续部署清空其它工作。
+
+### 原生查询会话目录
+
+新建消息问答和任务节点会话使用 Resident 已校验的 Agent 工作区作为原生 `meta.cwd`，不采用模型/消息中的目录。原生会话恢复保持原目录。此前已保存到 `_no-cwd` 的历史会话不迁移、不伪造 metadata；宿主 Session Controller 目录会排除这些已释放会话，因此历史看板会话入口不保证能打开，结果与依据仍可按需读取。验证新会话入口须在部署后创建新问答，不能用旧会话证明修复成功。
+
+### 已确认送达通知的单次对账恢复
+
+当唯一未排空事项是已ACK的通知，且发送状态与独立消息回读均证明送达，可使用既有 `recover-quarantined-echo.ps1 -Scope notification -IncidentManifest <本工作树docs/tmp内绝对JSON路径>`。事故清单绑定通知、原消息、群、ACK操作、租约、通知摘要及维护初始版本；仅保留本地，禁止将真实主体和渠道标识提交公开仓库。
+
+先加 `-Check -ExpectedProfileSha256 <实读SHA> -EvidenceDirectory <全新docs/tmp目录>`：实际只读DWS send-status及mget，核对操作→群/消息、正文、引用、唯一busy、容量和profile CAS，零写预检不创建恢复目录。确认通过后使用相同参数去掉 `-Check` 执行；中断后仅用同清单、同profile原摘要及原证据目录加 `-Resume`。清单或进程身份变化必须停止重新审查。
+
+执行复用正式维护、完整Resident ready/disposed见证、配置fence、owner独占及完整备份核验。仅通过原生 `message.notification.readback` 接纳独立送达证据，不重发、不SQL修改状态、不用端口关闭替代完整退出。结果未知时回读原通知；已delivered且证据一致的接续不会再次执行命令。失败保留维护/fence，不能删除备份、手改恢复阶段或强停绕过。
+
+恢复旧Resident后保持维护，独立确认drained及原许可身份，输出 `ContinueMaintenanceId` 与 `ExpectedMaintenanceRevision` 供标准部署脚本接续；恢复工具本身不解除维护或安装新包。部分备份未生成manifest时，Resume保留原目录并选择全新的backup-attempt-NNN重新完整备份；容量按仍需完整备份计算。存在唯一manifest时复用该目录并重新验证全部内容，损坏不会自动跳过；多份manifest明确拒绝。首次delivery-evidence/repair-readback保留原名，后续回读以唯一后缀追加，不能覆盖原生命令receipt。
+
+## 调查阶段完成职责 v5
+
+调查 v5 区分阶段完成与整体交付。部署前使用正式任务视图和控制账盘点 v4 活动及待执行引用；本次因报告保存要求而失败的测试任务保留产物，通过正式取消入口结束后再切换。不得改写旧定义摘要或将失败改为成功。新包独立输入重验调查与受信文档保存，核对实际路径、内容摘要及最终通知；旧终态历史保持可读。本次不迁移 schema。
