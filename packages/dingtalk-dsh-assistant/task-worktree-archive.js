@@ -58,9 +58,17 @@ export async function inspectTaskWorktree({ location, workspaceDir }) {
   return { path: actual, repositoryRoot, gitDir, head, branch, originUrl }
 }
 
-function sameIdentity(actual, entry) {
-  for (const key of ['path', 'repositoryRoot', 'gitDir', 'head', 'branch', 'originUrl']) {
+async function sameIdentity(actual, entry) {
+  for (const key of ['path', 'repositoryRoot', 'gitDir', 'branch', 'originUrl']) {
     if (actual[key] !== (entry[key] ?? null)) throw new Error(`worktree_identity_changed:${key}`)
+  }
+  if (actual.head !== entry.head) {
+    if (!/^[a-f0-9]{40,64}$/u.test(entry.head ?? '')) throw new Error('worktree_identity_changed:head')
+    try { await git(actual.path, 'merge-base', '--is-ancestor', entry.head, actual.head) }
+    catch (error) {
+      if (![1, 128].includes(error.code)) throw error
+      throw new Error('worktree_identity_changed:head')
+    }
   }
 }
 
@@ -175,7 +183,7 @@ async function prepare({ taskId, entry, workspaceDir }) {
   if (!entry?.createdByTask || entry.status !== 'registered') throw new Error('worktree_not_owned_or_registered')
   safeComponent(taskId, 'task_id')
   const actual = await inspectTaskWorktree({ location: entry.path, workspaceDir })
-  sameIdentity(actual, entry)
+  await sameIdentity(actual, entry)
   const status = await git(actual.path, 'status', '--porcelain=v1', '--untracked-files=all')
   const untracked = new Set()
   for (const line of status.split(/\r?\n/).filter(Boolean)) {
@@ -208,7 +216,7 @@ export async function archiveTaskWorktree({ taskId, entry, workspaceDir, checkOn
   if (recovered) return recovered
   const { actual, docs } = await prepare({ taskId, entry, workspaceDir })
   if (checkOnly) return { ...entry, documents: docs.map(({ sourcePath, untracked, ...item }) => item) }
-  let current = { ...entry, documents: [...(entry.documents ?? [])] }
+  let current = { ...entry, head: actual.head, documents: [...(entry.documents ?? [])] }
   for (const doc of docs) {
     if (!(await exists(doc.archivePath))) {
       await mkdir(path.dirname(doc.archivePath), { recursive: true })
@@ -218,7 +226,8 @@ export async function archiveTaskWorktree({ taskId, entry, workspaceDir, checkOn
     current = { ...current, documents: current.documents.map((item) => item.source === doc.source ? { ...item, archivePath: doc.archivePath, sha256: doc.sha256 } : item) }
     await onProgress(current)
   }
-  await prepare({ taskId, entry: current, workspaceDir })
+  const rechecked = await prepare({ taskId, entry: current, workspaceDir })
+  if (rechecked.actual.head !== actual.head) throw new Error('worktree_identity_changed:head')
   for (const doc of docs) if (doc.untracked) await rm(doc.sourcePath)
   await git(actual.repositoryRoot, 'worktree', 'remove', actual.path)
   if (await pathPresent(actual.path)) throw new Error('worktree_directory_remains_after_git_remove')

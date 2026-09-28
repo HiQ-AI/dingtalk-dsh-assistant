@@ -74,6 +74,59 @@ test('rejects main checkout and paths outside managed worktrees', async (t) => {
   await assert.rejects(inspectTaskWorktree({ location: path.join(workspaceDir, 'worktrees', '..', 'primary'), workspaceDir }), /outside_managed_root/)
 })
 
+test('registered start permits only published descendant commits and records the archived head', async (t) => {
+  const { workspaceDir, location } = await fixture(t)
+  const source = 'docs/spec/plan.md'
+  const entry = { ...await inspectTaskWorktree({ location, workspaceDir }), createdByTask: true, status: 'registered', documents: [{ source }] }
+  await mkdir(path.join(location, 'docs/spec'), { recursive: true })
+  await writeFile(path.join(location, source), 'latest accepted report\n')
+  await git(location, 'add', '.')
+  await git(location, 'commit', '-m', 'later task development')
+  const latestHead = await git(location, 'rev-parse', 'HEAD')
+  await assert.rejects(archiveTaskWorktree({ taskId: 'task-1', entry, workspaceDir, checkOnly: true }), /unpushed/)
+  await git(location, 'push', 'origin', 'feature')
+  await archiveTaskWorktree({ taskId: 'task-1', entry, workspaceDir, checkOnly: true })
+  const result = await archiveTaskWorktree({ taskId: 'task-1', entry, workspaceDir })
+  assert.equal(result.head, latestHead)
+  assert.equal(result.status, 'cleaned')
+  assert.equal(await readFile(result.documents[0].archivePath, 'utf8'), 'latest accepted report\n')
+})
+
+test('same branch with rewritten history cannot replace registered identity', async (t) => {
+  const { workspaceDir, location } = await fixture(t)
+  const entry = { ...await inspectTaskWorktree({ location, workspaceDir }), createdByTask: true, status: 'registered', documents: [] }
+  await git(location, 'checkout', '--orphan', 'rewritten')
+  await git(location, 'commit', '-m', 'unrelated root')
+  await git(location, 'branch', '-M', 'feature')
+  await git(location, 'push', '--force', 'origin', 'feature')
+  await assert.rejects(archiveTaskWorktree({ taskId: 'task-1', entry, workspaceDir, checkOnly: true }), /identity_changed:head/)
+  assert.equal((await lstat(location)).isDirectory(), true)
+})
+
+test('different branch still rejects even when head is unchanged', async (t) => {
+  const { workspaceDir, location } = await fixture(t)
+  const entry = { ...await inspectTaskWorktree({ location, workspaceDir }), createdByTask: true, status: 'registered', documents: [] }
+  await git(location, 'checkout', '-b', 'different')
+  await assert.rejects(archiveTaskWorktree({ taskId: 'task-1', entry, workspaceDir, checkOnly: true }), /identity_changed:branch/)
+  assert.equal((await lstat(location)).isDirectory(), true)
+})
+
+test('head advancement during document copy stops deletion even if already published', async (t) => {
+  const { workspaceDir, location } = await fixture(t)
+  const source = 'docs/spec/plan.md'
+  await mkdir(path.join(location, 'docs/spec'), { recursive: true })
+  await writeFile(path.join(location, source), 'report\n')
+  const entry = { ...await inspectTaskWorktree({ location, workspaceDir }), createdByTask: true, status: 'registered', documents: [{ source }] }
+  await assert.rejects(archiveTaskWorktree({ taskId: 'task-1', entry, workspaceDir, onProgress: async () => {
+    await writeFile(path.join(location, 'README.md'), 'development during archive\n')
+    await git(location, 'add', '.')
+    await git(location, 'commit', '-m', 'concurrent development')
+    await git(location, 'push', 'origin', 'feature')
+  } }), /identity_changed:head/)
+  assert.equal((await lstat(location)).isDirectory(), true)
+  assert.equal(await readFile(path.join(location, 'README.md'), 'utf8'), 'development during archive\n')
+})
+
 test('remote branch may advance or be deleted when the registered commit remains published', async (t) => {
   const { workspaceDir, primary, location } = await fixture(t)
   const entry = { ...await inspectTaskWorktree({ location, workspaceDir }), createdByTask: true, status: 'registered', documents: [] }

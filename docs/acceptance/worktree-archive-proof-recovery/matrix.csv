@@ -6,3 +6,8 @@ zero-write-check-and-retry,1,PASS,round-1.md
 conflicting-target-and-missing-blob-refused,1,PASS,round-1.md
 runtime-owner-and-cleanup,1,PASS,round-1.md
 two-real-tasks-check-only,1,PASS,round-1.md
+published-descendant-and-unpublished-refusal,2,PASS,round-2.md
+rewritten-history-and-branch-refusal,2,PASS,round-2.md
+head-advance-during-copy-refusal,2,PASS,round-2.md
+archive-regression-13-and-runtime,2,PASS,round-2.md
+unit-snapshot-task-check-only,2,PASS,round-2.md
