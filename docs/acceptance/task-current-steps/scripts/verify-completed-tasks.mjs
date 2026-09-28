@@ -88,5 +88,3 @@ await writeFile(join(evidence, 'private-readback.json'), JSON.stringify({ privat
 await writeFile(join(evidence, 'summary.json'), JSON.stringify(summary, null, 2))
 await writeFile(join(evidence, 'replay-details.json'), JSON.stringify(privateCases.map(item => ({ taskId: item.taskId, detail: item.detail, outputs: item.outputs })), null, 2))
 console.log(JSON.stringify(summary, null, 2))
-
-

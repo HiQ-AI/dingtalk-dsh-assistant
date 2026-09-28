@@ -12,6 +12,8 @@ output-current-membership-version,2,PASS,round-2.md
 observer-no-history-stable-steps,2,PASS,browser-summary.md
 reading-position-remove-and-refresh,2,PASS,browser-summary.md
 completed-task-live-api,2,PASS,live-api-summary.json
-completed-task-live-browser,2,PENDING,round-2.md
-final-controlled-deployment,2,PENDING,deployment-summary.json
-build-and-pr-readback,2,PENDING,round-2.md
+completed-task-live-browser,2,PASS,browser-summary.md
+final-controlled-deployment,2,PASS,deployment-summary.json
+build-and-pr-readback,2,PASS,round-2.md
+initial-new-fixtures,2,PASS,round-2.md
+first-deployment-readback,2,PASS,deployment-summary.json

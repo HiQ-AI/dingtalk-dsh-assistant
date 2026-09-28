@@ -11,3 +11,7 @@
 - 正式接口GET只读验收：三任务3/2/3阶段，30/3/30节点，共97页54267字符，所有正文与真实工件一致，3个过期正文请求均409；health=ok，recoveryIssueCount=0。未重跑业务、未发消息。见live-api-summary.json。
 
 正式浏览器和PR读回结果随独立实跑证据追加。源码定向测试、副本、快照浏览器、正式安装/API和正式浏览器各自独立，不相互替代。
+
+- 正式浏览器最终PASS：三任务30/3/30节点，正文完整尾段、当前结果、无历史入口、宽窄屏及键盘通过；7详情GET和97正文GET均200，自动5秒刷新版本稳定，pageerror/requestfailed为0。业务写0，外壳12个初始化POST被拦截。详见browser-summary.md。
+- PR #140独立gh回读：OPEN、isDraft=false，https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/140；正文包含上述真实证据。未合并、未发布。
+- 最终diff检查纠正goal Markdown尾随空格和验收脚本多余EOF空行后通过；无业务代码调整。
