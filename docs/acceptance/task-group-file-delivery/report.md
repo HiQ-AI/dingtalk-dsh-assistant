@@ -9,3 +9,5 @@
 边界：仅向原任务群按 user 身份发送文件附件；Office/PDF/图片生成器不在本次实现范围。已有这些文件可经 Host 白名单导入，但未做真实 Office/PDF 样例验收。真实渠道工作流与使用替身模型/渠道的业务 Task 集成分别验证；未在正式运行实例部署。
 
 交付包与七个关键源码摘要独立核对一致，详见第四轮。实施以 feature PR 交付，合并和正式部署属于后续动作。
+
+PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/130 。本轮独立 gh 回读 number=130、state=OPEN、base=main、head=worktree-task-group-file-delivery；暂无远端检查结果。
