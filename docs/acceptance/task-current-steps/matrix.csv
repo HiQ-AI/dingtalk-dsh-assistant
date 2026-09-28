@@ -24,5 +24,5 @@ actual-step-start-time,4,PASS,round-4.md
 card-chinese-node-duration,4,PASS,round-4.md
 metadata-controlled-deployment,4,PASS,round-4.md
 metadata-live-browser,4,PASS,round-4.md
-metadata-pr-readback,4,PENDING,round-4.md
+metadata-pr-readback,4,PASS,round-4.md
 metadata-original-structural-checks,4,PASS,round-4.md

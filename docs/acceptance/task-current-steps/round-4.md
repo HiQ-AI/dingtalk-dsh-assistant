@@ -9,3 +9,5 @@
 受控部署零写Check、排空封存、备份、精确双包安装和独立Readback通过；当前PID36216监听3080/18998，health=ok、认证页面200、派发恢复、配置未变，21物理任务/76旧节点/27终态run/68legacy保留。摘要metadata-deployment-summary.json。正式API97页54267字符与工件一致，旧版本请求409。
 
 交付状态以PR独立回读为准。未重跑真实任务、未发钉钉消息、未合并或发布。
+
+PR140正文和标题已更新，独立回读OPEN、非草稿、head=5ffd7a362e1927f32dbc8a9c2fca2faa58d6cd34；本轮代码提交已推送。
