@@ -1,0 +1,7 @@
+case,round-1,round-2,round-3,evidence
+角色目录和越界链接,PASS,PASS,PASS,session-workspaces.test.js
+原生执行会话标题及恢复,PASS,PASS,PASS,execution-session-native.test.js
+原生负责人目录及标题,PASS,PASS,PASS,task-owner-session-native.test.js
+Runtime目录断言和异步创建,FAIL,FAIL,PASS,runtime.test.js
+清理后会话清单及历史保留,PASS,PASS,PASS,本机独立回读记录
+原生根指引识别配置,NOT_RUN,NOT_RUN,PASS,原生loadBaselineInstructions对照检查

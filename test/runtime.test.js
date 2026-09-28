@@ -116,8 +116,17 @@ async function setup(t, options = {}) {
     const result = await owner.tools.get(name).execute(args, { agent: agent ?? owner.agent })
     if (requestId && result.status === 'accepted') owner.completeStep()
     if (name !== 'group_topic_route_submit' || result.status !== 'accepted') return result
-    await new Promise(resolve => setTimeout(resolve, 10))
     const receipt = store.getGroup(groupId).routeHistory.find((item) => item.routeId === args.requestId)
+    const changedTopics = [...Object.values(receipt?.topicIdsByKey ?? {}), ...args.routes.flatMap(route => (route.topics ?? []).map(topic => topic.topicId).filter(Boolean))]
+    await until(() => changedTopics.every(topicId => {
+      const topic = store.getTopic(groupId, topicId)
+      return topic?.processedRevision >= topic?.revision || h.messages(groupId).some(message => {
+        const text = message.content[0]?.text
+        if (!text?.startsWith('[GROUP_TOPIC_DECISION]')) return false
+        const input = JSON.parse(text.split('\n').find(line => line.startsWith('Topic 请求：')).slice('Topic 请求：'.length))
+        return input.topicId === topicId && input.revision === topic.revision
+      })
+    }))
     const delivered = h.messages(groupId).filter((message) => message.content[0]?.text.startsWith('[GROUP_TOPIC_DECISION]'))
       .map((message) => JSON.parse(message.content[0].text.split('\n').find((line) => line.startsWith('Topic 请求：')).slice('Topic 请求：'.length)))
     const pendingDecisions = delivered.filter((item) => {
@@ -595,6 +604,7 @@ test('入站持久接收立即返回，模型尚未提交时也能接收后续�
   assert.equal(first.accepted, true); assert.equal(second.accepted, true)
   assert.equal(h.store.getGroup('g').messages.length, 2)
   assert.equal(h.store.getGroup('g').outbox.length, 0)
+  await until(() => Boolean(h.envelope('[GROUP_TOPIC_ROUTE]')))
   assert.ok(h.envelope('[GROUP_TOPIC_ROUTE]'))
 })
 
@@ -668,7 +678,7 @@ test('Task 只保存固定 Topic 引用，叶子收到版本化原始上下文',
   assert.ok(leaf)
   assert.equal(h.goals.get(task.childSessionId).objective, task.objective)
   const call = h.calls.find((item) => item.sessionId === task.childSessionId)
-  assert.equal(call.input.meta.cwd, agentWorkspace)
+  assert.equal(call.input.meta.cwd, join(agentWorkspace, 'session-workspaces', '任务执行'))
   assert.equal(call.input.meta.parentSession, h.store.getGroup('g').residentSessionId)
   assert.equal(call.input.meta.origin, 'subagent')
   assert.ok(h.permissions.some(([sessionId, preset]) => sessionId === task.childSessionId && preset === 'danger-full-access'))
@@ -702,6 +712,7 @@ test('任务并发容量满时 FIFO 排队，取消释放名额并保留取消�
   assert.deepEqual([h.store.getTask(one.taskId).state, h.store.getTask(two.taskId).state, h.store.getTask(three.taskId).state], ['running', 'running', 'queued'])
   await h.runtime.cancelTask({ taskId: one.taskId, requestId: 'cancel-one', topicRefs: one.topicRefs, ...inputVersion(h.store.getTask(one.taskId)), reason: '用户取消' })
   assert.equal(h.store.getTask(one.taskId).state, 'completed')
+  await until(() => h.store.getTask(three.taskId).state === 'running')
   assert.equal(h.store.getTask(three.taskId).state, 'running')
   assert.equal(h.cancelled.filter(item => item.sessionId.startsWith('session-task-'))[0].sessionId, one.childSessionId)
 })
@@ -813,7 +824,7 @@ test('新群主会话具有完整工具权限，Topic 工具仍不能访问其�
   assert.equal(result.created, true)
   assert.equal(result.group.residentSessionId, residentSessionId('g'))
   assert.equal(h.calls[0].resumed, false)
-  assert.equal(h.calls[0].input.meta.cwd, agentWorkspace)
+  assert.equal(h.calls[0].input.meta.cwd, join(agentWorkspace, 'session-workspaces', '群聊常驻'))
   assert.deepEqual(h.permissions, [[residentSessionId('g'), 'danger-full-access']])
   assert.equal((await h.runtime.subscribe({ groupId: 'g' })).created, false)
   assert.equal(h.calls.length, 1)
@@ -828,7 +839,7 @@ test('工作区切换保留事件历史并重建 Resident，旧 Session 释放',
   assert.equal(result.workspaceDir, replacementWorkspace)
   assert.notEqual(h.store.getGroup('g').residentSessionId, oldId)
   const replacement = h.calls.at(-1)
-  assert.equal(replacement.input.meta.cwd, replacementWorkspace)
+  assert.equal(replacement.input.meta.cwd, join(replacementWorkspace, 'session-workspaces', '群聊常驻'))
   assert.deepEqual(h.permissions.at(-1), [h.store.getGroup('g').residentSessionId, 'danger-full-access'])
   assert.ok(replacement.input.seed.some((event) => event.type === 'turn/end'))
   assert.ok(h.disposed.includes(oldId))

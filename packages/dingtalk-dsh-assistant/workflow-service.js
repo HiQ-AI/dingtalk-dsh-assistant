@@ -1,3 +1,4 @@
+import { sessionWorkspace } from './session-workspaces.js'
 import { isTerminalUatBuildFailure } from './execution-delivery.js'
 import { join } from 'node:path'
 import { transientRecoveryReasons } from './execution-recovery-policy.js'
@@ -609,7 +610,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const visibleDefinitions = new Map([investigationWorkflow(modelConfig()), stepWorkflow, fileWorkflow, ...selectedExternal.workflows]
     .filter(Boolean).map(workflow => [workflow.id, workflow]))
   const execution = suppliedExecution ?? await openExecutionRuntime({
-    ctx, getWorkspaceDir: () => legacy.getAgentConfig().workspaceDir, dbPath: config.dbPath, instanceId: config.instanceId, artifactDirectory: config.artifactDirectory,
+    ctx, getWorkspaceDir: () => sessionWorkspace(legacy.getAgentConfig().workspaceDir, 'execution'), dbPath: config.dbPath, instanceId: config.instanceId, artifactDirectory: config.artifactDirectory,
     readTools: ['engineering_repo_inspect', ...queryToolNames], repositoryInspect: engineering.repositoryInspect,
     tools: ({ artifacts }) => queryTools(artifacts),
     deliveryOptions: { ...engineering.deliveryOptions,
@@ -747,7 +748,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   }
   const notifier = createWorkflowNotifications({ store, controller, artifacts, adapter: notifications,
     groupResponsibility: groupId => legacy.getGroup?.(groupId)?.responsibility ?? '' })
-  const messageAgent = createMessageAgentController({ ctx, store, artifacts, getWorkspaceDir: () => legacy.getAgentConfig().workspaceDir, tools: queryTools(artifacts), modelConfig,
+  const messageAgent = createMessageAgentController({ ctx, store, artifacts, getWorkspaceDir: () => sessionWorkspace(legacy.getAgentConfig().workspaceDir, 'answer'), tools: queryTools(artifacts), modelConfig,
     ownerActorId, ...(messageAgentSessions ? { sessionRunner: messageAgentSessions } : {}),
     onCommandSettled: runId => messages.commandSettled(runId),
     selectTools: input => queryCapabilities.filter(capability => !capability.available || capability.available(input.scope)).map(capability => capability.id),
@@ -1239,6 +1240,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const ownerContracts = createTaskWorkflowContracts({ store, artifacts, controller, prepareRepairContext: engineering.prepareRepairContext })
   const { inspectCurrentExecution, repairCurrentStage, readStageArtifacts } = ownerContracts
   taskOwner = createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig,
+    getWorkspaceDir: () => sessionWorkspace(legacy.getAgentConfig().workspaceDir, 'owner'),
     ...(taskOwnerSessions ? { sessionRunner: taskOwnerSessions } : {}),
     capabilityCatalog: stepCapabilities.filter(item => item.effectClass === 'file.write').map(item => ({ id: item.id, description: item.description,
       effectClass: item.effectClass })),

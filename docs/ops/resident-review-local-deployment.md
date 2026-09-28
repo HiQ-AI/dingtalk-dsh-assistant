@@ -310,7 +310,7 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 
 ### 原生查询会话目录
 
-新建消息问答和任务节点会话使用 Resident 已校验的 Agent 工作区作为原生 `meta.cwd`，不采用模型/消息中的目录。原生会话恢复保持原目录。此前已保存到 `_no-cwd` 的历史会话不迁移、不伪造 metadata；宿主 Session Controller 目录会排除这些已释放会话，因此历史看板会话入口不保证能打开，结果与依据仍可按需读取。验证新会话入口须在部署后创建新问答，不能用旧会话证明修复成功。
+新建会话使用 Resident 已校验的 Agent 工作区下 `session-workspaces/<职责>` 作为原生 `meta.cwd`，不采用模型/消息中的目录。职责为消息问答、任务负责、任务执行、群聊常驻、消息归类、话题决策、结果审阅；消息意图判断不产生原生会话。原生会话恢复保持原目录。部署前回读 `agent-instructions.projectRootMarkers`，确认配置根实际具有受支持标记；普通目录可使用 `AGENTS.md` 或 `CLAUDE.md`，不能仅凭目录创建成功断言指引继承。此前已保存到 `_no-cwd` 的历史会话不迁移、不伪造 metadata；宿主 Session Controller 目录会排除这些已释放会话，因此历史看板会话入口不保证能打开，结果与依据仍可按需读取。验证新会话入口须在部署后创建新问答，不能用旧会话证明修复成功。
 
 ### 已确认送达通知的单次对账恢复
 

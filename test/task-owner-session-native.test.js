@@ -1,3 +1,5 @@
+import { sessionWorkspace } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
+import SessionTitleService from '@deepseek-ai/dsh-session-title'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -21,6 +23,7 @@ const decision = { action: 'advance', summary: '启动已登记的第一阶段',
 async function host(root, pageRef = null, artifactRef = null, candidate = decision) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
+  new SessionTitleService(ctx, { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 })
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
   new LlmRuntime(ctx); new ToolRuntime(ctx)
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false,
@@ -43,7 +46,7 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
   }
   ctx.llm.registerAdapter(['owner-fixture'], new Scripted())
   let currentLease = 1
-  const sessions = createTaskOwnerSessions({ ctx, isCurrent: async binding => binding.leaseEpoch === currentLease })
+  const sessions = createTaskOwnerSessions({ ctx, getWorkspaceDir: () => sessionWorkspace(root, 'owner'), isCurrent: async binding => binding.leaseEpoch === currentLease })
   return { ctx, sessions, requests, setLease(value) { currentLease = value },
     async close() { await sessions.close(); await ctx.fiber.dispose() } }
 }
@@ -56,7 +59,7 @@ test('同一个业务 Task 的原生 Owner 会话跨唤醒复用并持久记录�
   const taskId = 'task-1', sessionId = 'owner-task-1', seen = []
   const run = leaseEpoch => h.sessions.run({ binding: { taskId, sessionId,
     turnId: `turn-${leaseEpoch}`, leaseEpoch, ownerEpoch: 1, sessionBound: leaseEpoch > 1 },
-    input: { taskId, eventWatermark: leaseEpoch }, provider: 'owner-fixture', model: 'scripted',
+    input: { taskId, eventWatermark: leaseEpoch, goal: { request: '整理任务交付报告' } }, provider: 'owner-fixture', model: 'scripted',
     onSessionBound: async () => { seen.push(`bound-${leaseEpoch}`) },
     onCandidate: async value => { seen.push(`candidate-${leaseEpoch}`); assert.deepEqual(value, decision) } })
   assert.equal((await run(1)).status, 'submitted')
@@ -65,6 +68,8 @@ test('同一个业务 Task 的原生 Owner 会话跨唤醒复用并持久记录�
   assert.deepEqual(seen, ['bound-1', 'candidate-1', 'bound-2', 'candidate-2'])
   const saved = await h.ctx.sessionPersistence.inspect(sessionId)
   assert.equal(saved.events.filter(event => event.type === 'dingtalk/task-owner-session').length, 1)
+  assert.equal(saved.meta.cwd, join(root, 'session-workspaces', '任务负责'))
+  assert.equal(saved.events.findLast(event => event.type === 'session/title').data.title, '整理任务交付报告 · 任务负责')
   assert.equal(saved.events.filter(event => event.type === 'user/message').length, 2)
   assert.equal(h.requests.length, 2)
   assert.ok(h.requests.every(request => request.tools.map(tool => tool.name).join(',') === 'task_owner_submit'))
