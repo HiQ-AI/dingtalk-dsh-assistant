@@ -185,8 +185,12 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (workflowTaskAction && ['POST', 'PUT'].includes(request.method) && await store.isWorkflowTask?.(decodeURIComponent(workflowTaskAction[1]))) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
     const action = workflowTaskAction[2]
-    if (request.method !== 'POST' || !['cancel', 'context', 'confirm-stage', 'continue-budget'].includes(action)) return send(response, 409, { error: 'WORKFLOW_WEB_ACTION_UNSUPPORTED' })
+    if (request.method !== 'POST' || !['cancel', 'context', 'confirm-stage', 'continue-budget', 'archive'].includes(action)) return send(response, 409, { error: 'WORKFLOW_WEB_ACTION_UNSUPPORTED' })
     try {
+      if (action === 'archive') {
+        z.strictObject({}).parse(await readJson(request))
+        return send(response, 200, await store.submitWorkflowTask({ action, taskId: decodeURIComponent(workflowTaskAction[1]) }))
+      }
       const fields = { requestId: requiredText, inputVersion: z.number().int().positive(), runSequence: z.number().int().nonnegative(), topicRefs: z.array(z.strictObject({ topicId: requiredText, revision: z.number().int().positive() })).optional() }
       const body = (action === 'continue-budget' ? continueBudgetInputSchema : action === 'confirm-stage' ? z.strictObject({ requestId: requiredText.max(200),
         requirementRevision: z.number().int().positive(), controlRevision: z.number().int().positive(),
@@ -195,7 +199,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
         : z.strictObject({ ...fields, ...(action === 'cancel' ? { reason: requiredText.max(16000) } : { context: requiredText.max(16000) }) })).parse(await readJson(request))
       const result = await store.submitWorkflowTask({ ...body, action, taskId: decodeURIComponent(workflowTaskAction[1]) })
       return send(response, 202, result)
-    } catch(error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|PENDING|TERMINAL|STALE|NOT_WAITING|RUN_BUDGET_CONTINUATION_/u.test(error.message) ? 409 : 400, { error: error.message }) }
+    } catch(error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|PENDING|TERMINAL|STALE|NOT_WAITING|TASK_ARCHIVE_|RUN_BUDGET_CONTINUATION_/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
   const workflowReply = /^\/workflows\/([^/]+)\/requests\/([^/]+)\/answer$/u.exec(url.pathname)
   const notificationOperation = /^\/workflows\/notifications\/operations(?:\/([^/]+)\/(execute|reconcile))?$/u.exec(url.pathname)

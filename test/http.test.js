@@ -397,3 +397,20 @@ test('节点文档下载沿用工件引用授权并以Markdown附件返回', asy
     return { name: '修改方案.md', content: '# 修改方案\n真实文档' }
   } } })
 })
+
+
+test('新版任务归档HTTP仅接受空对象并转交正式工作流，不走旧版归档', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    const post = (body, origin = 'http://127.0.0.1:3080') => fetch(`${base}/tasks/current/archive`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify(body) })
+    assert.equal((await post({}, 'https://evil.invalid')).status, 403)
+    for (const body of [{ actorId: 'owner' }, { taskId: 'other' }, [], null, { reason: '测试' }])
+      assert.equal((await post(body)).status, 400)
+    const response = await post({}); assert.equal(response.status, 200)
+    assert.equal((await response.json()).archivedAt, '2026-09-28T00:00:00.000Z')
+    assert.deepEqual(calls, [{ action: 'archive', taskId: 'current' }])
+  }, { overrides: { isWorkflowTask: async () => true,
+    submitWorkflowTask: async request => { calls.push(request); return { taskId: request.taskId, archivedAt: '2026-09-28T00:00:00.000Z' } },
+    archiveTask: () => { throw new Error('LEGACY_NOT_ALLOWED') } } })
+})

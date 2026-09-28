@@ -661,7 +661,35 @@ function command(value) {
     }
     assertMaintenanceDispatch(db, value.kind)
     let combined = reduceMaintenanceCommand(db, value, { ...context(value.id, now), processIncarnation: workerData.processIncarnation })
-    if (value.kind === 'task.web-input.prepare') {
+    if (value.kind === 'task.archive') {
+      object(value.args, ['taskId', 'actorId'])
+      const { taskId, actorId } = value.args
+      text(taskId, 'taskId'); text(actorId, 'actorId')
+      const origin = taskOrigin(taskId)
+      if (!origin) fail('WORKFLOW_TASK_NOT_FOUND')
+      if (origin.channel === 'web' && origin.run.actorId !== actorId) fail('WORKFLOW_TASK_FORBIDDEN')
+      const prior = db.prepare("SELECT payload FROM execution_events WHERE kind='task.archive' AND json_extract(payload,'$.taskId')=? ORDER BY seq DESC LIMIT 1").get(taskId)
+      if (prior) combined = JSON.parse(prior.payload)
+      else {
+        const task = db.prepare('SELECT t.*,c.state AS control_state FROM business_tasks t JOIN task_controls c USING(task_id) WHERE task_id=?').get(taskId)
+        const owner = db.prepare('SELECT task_id FROM task_owners WHERE task_id=?').get(taskId)
+          ? queryTaskOwner(db, { kind: 'task.owner', taskId }) : null
+        const ownerComplete = owner?.decision?.action === 'complete' && owner.applicationStatus === 'applied'
+          && task?.plan_requirement_revision === task?.requirement_revision
+          && owner.eventWatermark === owner.processedWatermark
+        const runs = db.prepare('SELECT run_id,status FROM execution_runs WHERE task_id=?').all(taskId)
+        const completed = task ? task.control_state === 'cancelled'
+          || task.control_state === 'active' && (owner ? ownerComplete : task.status === 'succeeded')
+          : runs.length > 0 && runs.every(run => ['succeeded', 'failed', 'cancelled'].includes(run.status))
+        if (owner?.status === 'running' || !completed) fail('TASK_ARCHIVE_NOT_COMPLETED')
+        for (const run of runs) {
+          if (!['succeeded', 'failed', 'cancelled'].includes(run.status)
+            || db.prepare("SELECT 1 FROM execution_nodes WHERE run_id=? AND (status='running' OR (lease_epoch>0 AND drained=0)) LIMIT 1").get(run.run_id)) fail('TASK_ARCHIVE_NOT_DRAINED')
+          assertRunEffectsDrained(db, run.run_id)
+        }
+        combined = { taskId, archivedAt: now, actorId }
+      }
+    } else if (value.kind === 'task.web-input.prepare') {
       object(value.args, ['eventId', 'actorId', 'request', 'input'])
       const { eventId, actorId, request, input } = value.args
       const old = webTaskEvent(eventId)
@@ -825,6 +853,7 @@ function query(value) {
     const row = db.prepare("SELECT payload FROM execution_events WHERE kind IN ('workflow.repair.accepted','engineering.repair.accepted') AND json_extract(payload,'$.runId')=? AND json_extract(payload,'$.nextGeneration')=? ORDER BY seq DESC LIMIT 1").get(value.runId, value.generation)
     return row ? JSON.parse(row.payload) : null
   }
+  if (value?.kind === 'task.archives') return db.prepare("SELECT payload FROM execution_events WHERE kind='task.archive' ORDER BY seq").all().map(row => JSON.parse(row.payload))
   if (value?.kind === 'task.web-input') return webTaskEvent(value.eventId)
   if (value?.kind === 'task.stageConfirmation') {
     if (taskOrigin(value.taskId)?.channel !== 'web') return null
