@@ -1,0 +1,15 @@
+case,round,status,evidence
+native-family-and-restart,2,PASS,round-2.md
+atomic-family-archive-and-drain,2,PASS,round-2.md
+latest-rerun-and-null-binding,2,PASS,round-2.md
+full-catalog-over-200-and-rpc-limit,2,PASS,round-2.md
+readable-family-pagination-and-http,2,PASS,round-2.md
+same-title-independent-and-active-branch,2,PASS,round-2.md
+real-cases-13-to-2-copy-unchanged,2,PASS,round-2.md
+card-and-step-display-preserved,1,PASS,round-1.md
+history-selection-and-safe-links,1,PASS,round-1.md
+failed-deploy-and-successful-rebuild,1,PASS,round-1.md
+cancelled-execution-stage-results,1,PASS,round-1.md
+retry-loading-and-stale-responses,1,PASS,round-1.md
+keyboard-and-narrow-layout,1,PASS,round-1.md
+directed-regression-and-package-readback,2,PASS,round-2.md

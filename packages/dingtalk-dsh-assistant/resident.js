@@ -188,12 +188,14 @@ export async function apply(ctx, config = {}) {
       if (currentSeal?.blockLegacy && !workflow.isGroup(message.groupId)) throw new Error('workflow_sealed_group_legacy_ingest_forbidden')
       return workflow.isGroup(message.groupId) ? workflow.ingest(message) : legacyIngest(message)
     }
-    runtime.listTaskView = async () => [...runtime.listTasks(), ...await workflow.tasks()]
+    runtime.listTaskView = async () => [...runtime.listTasks(), ...await workflow.boardTasks()]
     runtime.getWorkflowState = runId => workflow.state(runId)
     runtime.getWorkflowMessageTrace = (runId, page) => workflow.messageTrace(runId, page)
     runtime.getWorkflowMessageEvidence = (runId, resourceRef, page) => workflow.messageEvidence(runId, resourceRef, page)
     runtime.getWorkflowTopicState = (topicId, page) => workflow.workflowTopicContext(topicId, page)
     runtime.getWorkflowTaskRuns = (taskId, page) => workflow.taskRuns(taskId, page)
+    runtime.getWorkflowTaskDetail = taskId => workflow.taskDetail(taskId)
+    runtime.getWorkflowTaskExecutions = (taskId, page) => workflow.taskExecutions(taskId, page)
     runtime.getWorkflowTaskNodeOutput = (taskId, runId, nodeRunId, page) => workflow.taskNodeOutput(taskId, runId, nodeRunId, page)
     runtime.reprocessWorkflowMessage = runId => {
       if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')

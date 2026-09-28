@@ -83,6 +83,8 @@ DWS 群消息
 - `packages/dingtalk-dsh-assistant`：核心业务插件。负责 DWS 接入、群与 Session 绑定、消息处理、Task 调度、阻塞时的人工介入、可靠回复和配置页面。
 - 任务表格同步：可在插件设置中绑定钉钉在线电子表格的一个工作表，由 Resident 纯脚本每 3 分钟将全部未归档 Task 全量覆盖写入；同步不调用模型，状态与失败原因在设置页单独显示。
 - `packages/dingtalk-dsh-observer`：DSH Web 展示扩展。提供群聊会话、任务看板、归档任务、人工介入和告警页面。
+
+同一任务通过 Web 再次执行时，看板保持一张卡片，卡片显示及详情的执行步骤沿用原样。详情默认展示最新执行，可展开执行历史、切换查看每次目标、阶段结果和产物；历史中的链接可直接打开。关联以已保存的重执行事件为准，不按相似标题合并。历史详情只读，旧链接仍定位原执行；新的追加、取消、重执行和归档须从最新执行发起。归档会核对整项任务所有执行均已结束且操作已排空，保留历史。接口见[工作流节点契约](docs/api/workflow-node-contracts.md#任务汇总与执行历史查询)。
 - `.dsh/profiles/resident`：resident Runtime 的参考 profile 与 Cordis patch。
 - `.dsh/profiles/web`：Web contribution 的参考 profile。
 - `docs/spec`：关键状态机和工作流设计说明。
