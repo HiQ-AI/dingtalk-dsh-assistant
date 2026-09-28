@@ -36,6 +36,38 @@ function taskFactVersion(db, taskId) {
 const canonical=v=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v
 const textHash=v=>createHash('sha256').update(str(v)).digest('hex')
 const digest=v=>createHash('sha256').update(json(canonical(v))).digest('hex')
+// 文件效果仅提供只读投影；发送权和原文件验收仍由 Delivery 持有。
+function verifiedFileOutbound(db, conversationId, messageId) {
+  const effects=db.prepare(`SELECT effect_id,run_id,node_run_id,generation,state,definition_json,result_json FROM execution_effects
+    WHERE state IN ('succeeded','unknown') AND json_extract(definition_json,'$.action')='message'
+    AND json_extract(definition_json,'$.adapterId')='task-group-file' AND json_extract(definition_json,'$.adapterVersion')='1'
+    AND json_extract(definition_json,'$.payload.groupId')=?
+    ${messageId===undefined?'':"AND (json_extract(result_json,'$.result.result.messageId')=? OR json_extract(result_json,'$.result.result.sendMessageRef.messageId')=?)"}
+    ORDER BY rowid`).all(...(messageId===undefined?[conversationId]:[conversationId,messageId,messageId]))
+  return effects.flatMap(effect=>{
+    const prepared=JSON.parse(effect.definition_json).payload,receipt=JSON.parse(effect.result_json)?.result?.result
+    if(!receipt||prepared.runId!==effect.run_id||prepared.nodeRunId!==effect.node_run_id||prepared.generation!==effect.generation
+      ||typeof prepared.taskId!=='string'||!prepared.taskId||!/^[a-f0-9]{64}$/.test(prepared.deliveryKey??'')
+      ||prepared.resourceKey!==`message:${prepared.deliveryKey}`)return []
+    let evidence,status
+    if(effect.state==='unknown') {
+      const ref=receipt.sendMessageRef,ackId=receipt.ack?.sendReceipt?.openTaskId??receipt.ack?.result?.result?.openTaskId
+      if(!ref||ref.conversationId!==conversationId||typeof ref.messageId!=='string'||!ref.messageId
+        ||typeof ackId!=='string'||!ackId||ref.openTaskId!==ackId)return []
+      evidence={conversationId,messageId:ref.messageId,openTaskId:ackId};status='pending'
+    } else {
+      if(typeof receipt.messageId!=='string'||!receipt.messageId||receipt.groupId!==conversationId||receipt.conversationId!==conversationId
+        ||receipt.deliveryKey!==prepared.deliveryKey||receipt.taskId!==prepared.taskId
+        ||!/^[a-f0-9]{64}$/.test(receipt.sha256??'')||!Number.isSafeInteger(receipt.size)||receipt.size<1)return []
+      evidence={...receipt,conversationId};status='delivered'
+    }
+    const origin=queryMessages(db,{kind:'message.task',taskId:prepared.taskId})
+    const source=origin?.run?.conversationId===conversationId?origin.run:null
+    return [{id:effect.effect_id,effectId:effect.effect_id,taskId:prepared.taskId,runId:source?.runId??null,executionRunId:effect.run_id,
+      kind:'task-file',status,payload:{conversationId,sourceMessageId:source?.context?.sourceMessageId??null},
+      evidence,deliveredAt:status==='delivered'?receipt.verifiedAt??null:null}]
+  })
+}
 function notificationFactDigest(db,n){
   const replacements=db.prepare("SELECT body FROM message_items WHERE kind='notification-replacement' AND json_extract(body,'$.restoresNotificationId')=? ORDER BY rowid").all(n.id).map(row=>JSON.parse(row.body).messageId)
   const command=n.commandId?get(db,'command',n.commandId):null,request=n.requestId?get(db,'request',n.requestId):null
@@ -930,10 +962,12 @@ export function queryMessages(db,a) {
   if(a.kind==='message.outboundByMessage') {
     const messageId=str(a.messageId),conversationId=str(a.conversationId)
     const row=db.prepare("SELECT i.body FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='notification' AND json_extract(r.body,'$.conversationId')=? AND (json_extract(i.body,'$.evidence.messageId')=? OR json_extract(i.body,'$.ack.messageId')=? OR json_extract(i.body,'$.ack.result.messageId')=?) LIMIT 1").get(conversationId,messageId,messageId,messageId)
-    return row?JSON.parse(row.body):null
+    return row?JSON.parse(row.body):verifiedFileOutbound(db,conversationId,messageId)[0]??null
   }
   if(a.kind==='message.outboundIds') {
-    return db.prepare("SELECT json_extract(i.body,'$.evidence.messageId') AS message_id FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='notification' AND json_extract(r.body,'$.conversationId')=? AND json_extract(i.body,'$.evidence.messageId') IS NOT NULL").all(str(a.conversationId)).map(row=>row.message_id)
+    const conversationId=str(a.conversationId)
+    const notifications=db.prepare("SELECT json_extract(i.body,'$.evidence.messageId') AS message_id FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='notification' AND json_extract(r.body,'$.conversationId')=? AND json_extract(i.body,'$.evidence.messageId') IS NOT NULL").all(conversationId).map(row=>row.message_id)
+    return [...new Set([...notifications,...verifiedFileOutbound(db,conversationId).map(item=>item.evidence.messageId)])]
   }
   if(a.kind==='message.quiet.unbound') {
     const limit=a.limit??100

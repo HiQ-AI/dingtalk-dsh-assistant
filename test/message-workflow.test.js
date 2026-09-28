@@ -45,6 +45,26 @@ test('普通 answer 在 I 与 IB 使用同一目标合同，schema 和模型说�
   }
 })
 
+test('I与IB把明确群文件交付交给持久任务，保存原文与完整角色文件清单', () => {
+  const fileDelivery = { sourceQuote: '把调查报告和SQL文件发到本群',
+    files: [{ role: 'report', fileName: '调查报告.md' }, { role: 'migration-script', fileName: '查询.sql' }] }
+  for (const stage of ['I', 'IB']) {
+    const envelope = (type, argumentsValue) => {
+      const value = { ...intent, actions: [{ intent: type, arguments: argumentsValue, dependsOn: [] }] }
+      return stage === 'I' ? value : { kind: 'topic_intents', decisions: [{ unitId: 'u', intent: value }] }
+    }
+    for (const type of ['create', 'research']) {
+      assert.equal(messageSchemas[stage].safeParse(envelope(type, { objective: '调查并交付文件', fileDelivery })).success, true)
+      assert.equal(messageSchemas[stage].safeParse(envelope(type, { objective: '调查并交付文件', fileDelivery: { ...fileDelivery, groupId: 'other-group' } })).success, false)
+    }
+    assert.equal(messageSchemas[stage].safeParse(envelope('answer', { objective: '解释SQL', fileDelivery })).success, false)
+    const prompt = messageSystem(stage)
+    assert.match(prompt, /sourceQuote必须逐字连续引用当前消息/u)
+    assert.match(prompt, /files覆盖全部必交产物/u)
+    assert.match(prompt, /图片、Office、PDF必须由真实生成器产出/u)
+  }
+})
+
 for (const topicBatch of [false, true]) test(`普通 answer ${topicBatch ? 'IB' : 'I'} 关联已有任务也不分配 taskId 或生成任务候选`, async t => {
   const answer = { ...intent, actions: [{ intent: 'answer', arguments: { objective: '答复当前问题' }, dependsOn: [] }] }
   const { workflow, store } = await fixture(t, {

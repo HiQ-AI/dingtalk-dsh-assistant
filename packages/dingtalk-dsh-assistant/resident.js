@@ -144,6 +144,10 @@ export async function apply(ctx, config = {}) {
     generalCompletionIdentity: ctx.get?.('dingtalkTaskGeneralCompletionIdentity'),
     readMessage: (groupId, messageId) => dwsAdapter.readMessage(groupId, messageId),
     readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
+    fileTransport: { createAdapter: ({ directory, profile }) => createDwsAdapter({
+      enabled: dwsConfig.enabled === true, writesAuthorized: dwsConfig.writesAuthorized === true,
+      profile, runner: createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws', cwd: directory }),
+    }) },
     notifications: {
       canDisclose: async notification => workflowConfig.groupIds.includes(notification.payload.conversationId) && notification.disclosure.conversationId === notification.payload.conversationId,
       send: notification => sendWorkflowNotification(dwsAdapter, notification),

@@ -9,6 +9,8 @@ import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/exec
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { executionDigest, openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { createTaskArtifactFiles } from '../packages/dingtalk-dsh-assistant/task-artifact-files.js'
+import { createTaskArtifactWriteAdapter, createGeneralArtifactWriteCapability } from '../packages/dingtalk-dsh-assistant/task-artifact-write.js'
 
 test('受信文件读取只接受双重授权路径，独立回读能发现修改和链接逃逸', async t => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-general-files-'))
@@ -117,3 +119,59 @@ test('Task Markdown 写入经过效果账，重启对账不重放写入', async 
  const workflow = createGeneralCapabilityStepWorkflow({ capabilities: [] })
  await assert.rejects(workflow.nodes[0].execute({ input: { capabilityId: "unknown" } }), { code: "GENERAL_CAPABILITY_UNAVAILABLE" })
  })
+
+test('未启用产物能力保持v4原定义摘要，显式历史版本排除新能力', () => {
+  const fileAdapter = { prepare() {}, reconcile() {} }
+  const markdown = createGeneralMarkdownWriteCapability({ fileAdapter })
+  const artifact = createGeneralArtifactWriteCapability({ fileAdapter })
+  const original = createGeneralCapabilityStepWorkflow({ capabilities: [markdown] })
+  // 由修改前 HEAD 源码独立计算，包含 execute 和 ownerContract 的真实函数源码。
+  assert.equal(defineExecutionWorkflow(original).digest, 'a1e8261207cf153a2aa8e0b2eb3f49876884029685fc66ed0593017b1f0e0435')
+  const historical = createGeneralCapabilityStepWorkflow({ capabilities: [markdown, artifact], workflowVersion: '4' })
+  assert.equal(historical.version, '4')
+  assert.equal(defineExecutionWorkflow(historical).digest, defineExecutionWorkflow(original).digest)
+  const current = createGeneralCapabilityStepWorkflow({ capabilities: [markdown, artifact] })
+  assert.equal(current.version, '5')
+  assert.equal(current.nodes[0].version, '4')
+  assert.notEqual(defineExecutionWorkflow(current).digest, defineExecutionWorkflow(original).digest)
+  assert.throws(() => createGeneralCapabilityStepWorkflow({ capabilities: [], workflowVersion: '6' }), { code: 'GENERAL_WORKFLOW_VERSION_INVALID' })
+})
+
+test('新产物阶段派发artifact效果并容纳64KiB控制字符JSON膨胀', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-general-artifact-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const files = createTaskArtifactFiles({ root })
+  const fileAdapter = createTaskArtifactWriteAdapter({ files })
+  const capability = createGeneralArtifactWriteCapability({ fileAdapter })
+  const workflow = createGeneralCapabilityStepWorkflow({ capabilities: [capability] })
+  const input = { role: 'report', fileName: '验证 报告.txt', content: 'x' + '\u0001'.repeat(65535) }
+  const scope = { requirementRevision: 1, artifactFiles: [{ role: input.role, fileName: input.fileName }] }
+  const request = { capabilityId: capability.id, input, scope, expectedEvidence: '原文件摘要与大小一致' }
+  const binding = { taskId: 'task-1', runId: 'run-1', nodeRunId: 'node-1', generation: 0, requirementDigest: 'a'.repeat(64) }
+  let calls = 0
+  const output = await workflow.nodes[0].execute({ input: request, ...binding, perform: async ({ action, prepared }) => {
+    calls++
+    assert.equal(action, 'artifact')
+    return fileAdapter.execute(prepared)
+  } })
+  assert.equal(calls, 1)
+  assert.equal(output.verification.passed, true)
+  assert.equal(output.output.result.artifact.size, 65536)
+  await assert.rejects(workflow.nodes[0].execute({ input: { ...request, input: { ...input, content: input.content + 'x' } }, ...binding,
+    perform: async () => { calls++ } }), { code: 'GENERAL_SCOPE_NOT_ADMITTED' })
+  assert.equal(calls, 1)
+})
+
+test('v5保留Markdown请求限额与file效果，拒绝prepared跨action', async () => {
+  const output = { status: 'succeeded' }
+  const capability = { id: 'write-file', identity: 'write-v1', effectClass: 'file.write', authorize: async () => true,
+    prepare: () => ({ action: 'file' }), verify: async () => ({ passed: true, outputDigest: executionDigest(output), sourceRefs: ['receipt:file'] }) }
+  const definition = createGeneralCapabilityStepWorkflow({ capabilities: [capability], workflowVersion: '5' })
+  const request = { capabilityId: capability.id, input: {}, scope: {}, expectedEvidence: '文件回读' }
+  let calls = 0
+  await definition.nodes[0].execute({ input: request, perform: async ({ action }) => { assert.equal(action, 'file'); calls++; return output } })
+  await assert.rejects(definition.nodes[0].execute({ input: { ...request, input: { content: 'x'.repeat(16000) } }, perform: async () => { calls++ } }), { code: 'GENERAL_STEP_INVALID' })
+  const mismatch = createGeneralCapabilityStepWorkflow({ capabilities: [{ ...capability, action: 'artifact' }], workflowVersion: '5' })
+  await assert.rejects(mismatch.nodes[0].execute({ input: request, perform: async () => { calls++ } }), { code: 'GENERAL_ACTION_MISMATCH' })
+  assert.equal(calls, 1)
+})

@@ -1,0 +1,13 @@
+case,round,status,evidence
+channel-markdown,1,PASS,round-1.md
+channel-markdown,2,PASS,round-2.md
+channel-sql,2,PASS,round-2.md
+channel-png-bytes,2,PASS,round-2.md
+channel-png-valid,2,FAIL,round-2.md
+channel-png-valid,3,PASS,round-3.md
+managed-files,2,PASS,round-2.md
+effect-recovery,2,PASS,round-2.md
+related-regression,2,PASS,round-2.md
+task-business-pipeline,4,PASS,round-4.md
+binary-import,4,PASS,round-4.md
+packaging,4,PASS,round-4.md

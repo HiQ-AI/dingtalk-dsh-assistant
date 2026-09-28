@@ -118,8 +118,51 @@ function createWriteCapabilityStep({ capabilities }) {
   }] }
 }
 
-export function createGeneralCapabilityStepWorkflow({ capabilities, completionCheck, completionIdentity = 'completion-unconfigured' }) {
-  const workflow = createWriteCapabilityStep({ capabilities })
+// 保留 v4 函数源码和规则摘要，运行中的历史定义仍能按原摘要恢复。
+function createArtifactWriteCapabilityStep({ capabilities }) {
+  const legacy = createWriteCapabilityStep({ capabilities })
+  if (capabilities.some(item => item.action !== undefined && !['file', 'artifact'].includes(item.action)))
+    throw executionError('GENERAL_CAPABILITY_INVALID')
+  const byId = new Map(capabilities.map(item => [item.id, item]))
+  return { ...legacy, version: '5', nodes: [{ ...legacy.nodes[0], version: '4',
+    rulesDigest: executionDigest(capabilities.map(item => ({ id: item.id, identity: item.identity, action: item.action ?? 'file' }))),
+    async execute({ input: request, signal, perform, runId, taskId, nodeRunId, generation, requirementDigest }) {
+      const capability = byId.get(request.capabilityId)
+      if (!capability) throw executionError('GENERAL_CAPABILITY_UNAVAILABLE')
+      const action = capability.action ?? 'file'
+      // JSON 控制字符最多膨胀六倍，另留原有请求元数据额度；实际内容仍由能力独立限额。
+      const requestLimit = action === 'artifact' ? 65536 * 6 + 16000 : 16000
+      if (typeof request.expectedEvidence !== 'string' || !request.expectedEvidence.trim()
+        || Buffer.byteLength(JSON.stringify(request), 'utf8') > requestLimit)
+        throw executionError('GENERAL_STEP_INVALID')
+      const { input, scope } = request
+      if (await capability.authorize({ input, scope }) !== true) throw executionError('GENERAL_SCOPE_NOT_ADMITTED')
+      const binding = { runId, taskId, nodeRunId, generation, requirementDigest }
+      const prepared = await capability.prepare({ input, scope, binding })
+      if (prepared?.action !== action) throw executionError('GENERAL_ACTION_MISMATCH')
+      const output = await perform({ action, prepared })
+      const verification = await capability.verify({ input, scope, output,
+        expectedEvidence: request.expectedEvidence, signal, prepared })
+      if (!output || typeof output !== 'object' || Array.isArray(output)
+        || !verification || typeof verification !== 'object' || verification.passed !== true
+        || verification.outputDigest !== executionDigest(output)
+        || !Array.isArray(verification.sourceRefs) || !verification.sourceRefs.length
+        || verification.sourceRefs.some(ref => typeof ref !== 'string' || !ref.trim())
+        || Buffer.byteLength(JSON.stringify({ output, verification }), 'utf8') > 32000)
+        throw executionError('GENERAL_EVIDENCE_UNVERIFIED')
+      return { capabilityId: request.capabilityId,
+        inputDigest: executionDigest({ capabilityId: request.capabilityId, input, scope }), output, verification }
+    },
+  }] }
+}
+
+export function createGeneralCapabilityStepWorkflow({ capabilities, completionCheck, completionIdentity = 'completion-unconfigured', workflowVersion }) {
+  if (!Array.isArray(capabilities)) throw executionError('GENERAL_CONFIG_INVALID')
+  const version = workflowVersion ?? (capabilities.some(item => item.action === 'artifact') ? '5' : '4')
+  if (!['4', '5'].includes(version)) throw executionError('GENERAL_WORKFLOW_VERSION_INVALID')
+  const workflow = version === '4'
+    ? createWriteCapabilityStep({ capabilities: capabilities.filter(item => item.action !== 'artifact') })
+    : createArtifactWriteCapabilityStep({ capabilities })
   return { ...workflow, ownerContract: {
     id: 'general-capability-result', version: '1', rulesDigest: executionDigest({ completionIdentity }),
     async validateCompletion({ output, requirement, decision, stages, stage }) {
