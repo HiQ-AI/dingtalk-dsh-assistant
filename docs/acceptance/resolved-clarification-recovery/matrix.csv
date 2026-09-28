@@ -5,3 +5,9 @@ business-command-rejected,1,PASS,round-1.md
 answer-input-no-duplicate-effect,1,PASS,round-1.md
 web-im-permission-regression,1,PASS,round-1.md
 local-deployment-and-live-recovery,1,PENDING,round-1.md
+local-deployment-and-live-recovery,2,PASS,round-2.md
+original-notice-and-answer-preserved,2,PASS,round-2.md
+ordinary-answer-public-language,2,PASS,round-2.md
+clarification-public-language,2,PASS,round-2.md
+owner-report-public-language,2,PASS,round-2.md
+exactly-one-test-task-no-business-replay,2,PASS,round-2.md
