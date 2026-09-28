@@ -750,7 +750,7 @@ test('同一任务承接与最终报告并存时只按精确通知身份纠正�
   assert.deepEqual((await service.recover()).failures, [])
   await service.flushNotifications()
   const delivered = await execution.store.query({ kind: 'message.notifications', states: ['delivered'] })
-  const receipt = delivered.find(item => item.payload.text.includes('任务已接纳'))
+  const receipt = delivered.find(item => item.payload.text.includes('收到，我会按你的要求处理'))
   const final = delivered.find(item => item.payload.text.startsWith('任务已完成'))
   assert.ok(receipt && final && receipt.id !== final.id)
   const auth = await service.ingest({ ...message, messageId: 'correct-final-only',
@@ -1225,7 +1225,7 @@ test('明确问小小鹏审核问题是否部署时即使I误判无动作也回�
   const state=await service.state(received.runId)
   assert.equal(state.run.status,'settled')
   assert.equal(state.commands[0].kind,'status')
-  assert.match(state.commands[0].result.reply,/UAT2：deployed-and-handed-to-testing/)
+  assert.match(state.commands[0].result.reply,/UAT2：已部署并交付测试/)
 })
 test('审核状态问句、两个任务说明和引用问题清单归为同一话题，不误建三个任务',async t=>{
   const tasks=[
@@ -1258,8 +1258,8 @@ test('审核状态问句、两个任务说明和引用问题清单归为同一�
   const thirdState=await service.state(third.runId)
   assert.equal(thirdState.units.length,1)
   assert.deepEqual(thirdState.commands.map(item=>item.kind),['status'])
-  assert.match(thirdState.commands[0].result.reply,/UAT2：deployed-and-handed-to-testing/)
-  assert.match(thirdState.commands[0].result.reply,/cancelled/)
+  assert.match(thirdState.commands[0].result.reply,/UAT2：已部署并交付测试/)
+  assert.match(thirdState.commands[0].result.reply,/已取消/)
   assert.equal(thirdState.commands[0].result.items.length,2)
   assert.equal(thirdState.commands[0].result.flow.version,'task-progress-query@1')
   assert.equal((await execution.store.query({kind:'run.list'})).length,0)
@@ -1413,7 +1413,7 @@ test('群成员可核对本群旧任务摘要和UAT2交付状态，跨群历史�
   await service.messages.process(received.runId)
   const state=await service.state(received.runId)
   assert.equal(state.run.status,'settled')
-  assert.match(state.commands[0].result.reply,/UAT2：deployed-and-handed-to-testing/)
+  assert.match(state.commands[0].result.reply,/UAT2：已部署并交付测试/)
 })
 
 test('旧群历史缺发送人字段时仍能写入快照',async t=>{
@@ -1809,7 +1809,7 @@ test('已绑定Owner会话确实缺失时换代并在原Task恢复，旧任务�
   const received = await service.ingest(message)
   const attempted = await service.messages.process(received.runId)
   assert.equal(attempted.commands[0].status, 'applied')
-  assert.match(attempted.commands[0].result.reply, /规划受阻/u)
+  assert.match(attempted.commands[0].result.reply, /暂时无法开始处理/u)
   const before = (await execution.store.query({ kind: 'task.owners.list', limit: 10 }))[0]
   assert.equal(before.ownerEpoch, 2)
   assert.equal(before.status, 'pending')
@@ -2365,7 +2365,7 @@ test('普通 answer 的 Host 门禁拒绝已排队的旧参数与任务参数，
       args: { arguments: action.arguments, binding: { disposition: 'new' }, taskId: null, replyPolicy: 'none' }, dependsOn: [] }] })
     const state = await service.messages.process(runId)
     assert.equal(state.commands[0].status, 'rejected', JSON.stringify({ run: state.run, command: state.commands[0] }))
-    assert.match(state.commands[0].result.reply, action.intent === 'answer' ? /问答需要明确问题目标，答复由执行会话产生/u : /没有创建业务任务的权限/u)
+    assert.match(state.commands[0].result.reply, action.intent === 'answer' ? /请说明需要回答的具体问题/u : /没有创建业务任务的权限/u)
   }
   assert.deepEqual(await service.tasks(), [])
   assert.deepEqual(await execution.store.query({ kind: 'run.list' }), [])

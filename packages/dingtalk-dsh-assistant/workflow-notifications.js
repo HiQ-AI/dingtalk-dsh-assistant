@@ -1,8 +1,28 @@
 import { executionDigest } from './execution-artifacts.js'
 
+export const groupReplyInstructions = '发给群成员的回复、summary 和 question 使用直白的业务语言：说明做了什么、结果、实际限制、下一步和需要确认的问题。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
+
+// 只识别明确的插件运行标签与机制，避免把业务代码、普通编号当成内部数据。
+export function assertGroupReply(text, internalIds = []) {
+  if (typeof text !== 'string') return
+  if (internalIds.some(id => typeof id === 'string' && id.length >= 8 && text.includes(id))
+    || /(?:task|owner|run|session)-[a-f0-9]{32,}\b|(?:任务|会话|执行|流程)(?:编号|[ _-]?id)\s*[:：=]\s*\S+|(?:taskId|sessionId|runId|leaseEpoch|inputDigest)\s*[:：=]\s*\S+|任务会话|执行会话|叶子会话|平台机制|(?:Task Owner|Outbox|IntentRun)\s*(?:已|将|正在|等待|调度|提交|写入)/iu.test(text)) {
+    const error = new Error('GROUP_REPLY_INTERNAL_DETAILS: 请将公开正文改成群成员能理解的业务进展，不包含插件内部编号或机制。')
+    error.code = 'GROUP_REPLY_INTERNAL_DETAILS'
+    throw error
+  }
+}
+
+export function groupStatusText(status) {
+  return ({ 'deployed-and-handed-to-testing':'已部署并交付测试', verified:'已核验', awaiting_confirmation:'等待确认', accepted:'已收到', pending:'等待处理', planned:'等待处理', ready:'等待处理', running:'正在处理', active:'正在处理', waiting:'等待补充信息或确认', paused:'已暂停', succeeded:'已完成', completed:'已完成', failed:'未完成，需要排查原因', blocked:'暂时无法继续', cancelled:'已取消', cancelling:'正在取消', pausing:'正在暂停', unknown:'暂未确认' })[status] ?? '暂未确认'
+}
+export function groupActionText(intent) {
+  return ({cancel:'取消',pause:'暂停',resume:'继续处理',revise:'更新要求'})[intent] ?? '处理'
+}
+
 export function workflowResultText(output) {
   if (typeof output?.summary === 'string') return output.summary
-  if (output?.deliveryStatus === 'pr_verified' && typeof output.url === 'string') return `代码已验证并提交 PR${output.number ? ` #${output.number}` : ''}：${output.url}。当前状态：${output.state ?? '已回读'}。`
+  if (output?.deliveryStatus === 'pr_verified' && typeof output.url === 'string') return `代码已验证并提交 PR${output.number ? ` #${output.number}` : ''}：${output.url}。当前状态：${({ OPEN: '待合并', MERGED: '已合并', CLOSED: '已关闭' })[output.state] ?? '已核验'}。`
   return null
 }
 export function sameDeliveredText(observed, expected, quoted = false) {
@@ -19,6 +39,7 @@ export function notificationOpenTaskId(ack) {
 }
 export function formatGroupReply(text, responsibility = '') {
   if (typeof text !== 'string' || !text.trim()) throw new Error('WORKFLOW_REPLY_TEXT_REQUIRED')
+  assertGroupReply(text)
   const body = text.trim()
   if (!responsibility.includes('小小鹏代回') || /(?:^|\n)\s*- 小小鹏代回\s*$/u.test(body)) return body
   return `${body}\n\n- 小小鹏代回`
@@ -27,6 +48,7 @@ export function sendWorkflowNotification(adapter, notification) {
   const payload = notification.payload
   if (payload.reportChannel === 'web' || payload.externalMessaging === false
     || notification.disclosure?.authorizationRef?.startsWith('web-rerun:')) throw new Error('WORKFLOW_WEB_NOTIFICATION_FORBIDDEN')
+  assertGroupReply(payload.text)
   const base = { groupId: payload.conversationId, text: payload.text, idempotencyKey: notification.id }
   return payload.sourceMessageId && payload.actorId
     ? adapter.sendGroupReply({ ...base, replyToMessageId: payload.sourceMessageId, replyToSenderOpenDingTalkId: payload.actorId })
@@ -45,6 +67,7 @@ export async function executeNotificationOperation({ store, adapter, operationId
   if(type==='recall'&&(!adapter.recall||!adapter.readbackRecall))throw new Error('MESSAGE_NOTIFICATION_RECALL_ADAPTER_REQUIRED')
   if(type==='restore'&&(!adapter.send||!adapter.readback))throw new Error('MESSAGE_NOTIFICATION_SEND_ADAPTER_REQUIRED')
   const command=(kind,args,suffix)=>store.command({id:`notification-operation:${operationId}:${suffix}`,kind,args})
+  if(type==='restore')assertGroupReply(operation.snapshot.body)
   const claimed=await command('message.notification.operation.claim',{operationId,expectedFactDigest,authorizationRef},'claim')
   if(!claimed.dispatchEligible)throw new Error('MESSAGE_NOTIFICATION_OPERATION_STALE')
   const snapshot=claimed.result.operation.snapshot
@@ -134,8 +157,8 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         if (plan) continue
         const last = task.nodes.filter(node => node.outputRef).at(-1)
         const output = last ? await artifacts.read(last.outputRef) : null
-        const text = task.run.status === 'succeeded' ? workflowResultText(output) ?? '流程已完成，结果可在任务详情查看。'
-          : `流程${task.run.status === 'cancelled' ? '已取消' : '执行失败'}${task.run.recoveryReason ? `：${task.run.recoveryReason}` : ''}`
+        const text = task.run.status === 'succeeded' ? workflowResultText(output) ?? '已完成处理。'
+          : task.run.status === 'cancelled' ? '已取消处理。' : '这次处理没有完成，需要先排查原因。'
         await prepare(run, action, `terminal:${task.run.runId}:${task.run.revision}`, text)
       }
     }
@@ -151,6 +174,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
       if (!await adapter.canDisclose(notification)) continue
       let current = notification
       if (current.status === 'prepared') {
+        assertGroupReply(current.payload.text)
         const claimed = await command('message.notification.claim', { notificationId: current.id }, `claim:${current.id}`)
         if (!claimed.dispatchEligible) continue
         current = claimed.result.notification

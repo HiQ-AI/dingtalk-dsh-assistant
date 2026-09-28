@@ -34,7 +34,7 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
         ? 'task_owner_read_events' : artifactRef && requests.length === 1
           ? 'task_owner_read_artifact' : 'task_owner_submit'
       const args = JSON.stringify(name === 'task_owner_read_events' ? { pageRef }
-        : name === 'task_owner_read_artifact' ? { artifactRef } : { decision: candidate })
+        : name === 'task_owner_read_artifact' ? { artifactRef } : { decision: typeof candidate === 'function' ? candidate(requests.length) : candidate })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } }
@@ -155,4 +155,20 @@ test('Owner新增能力阶段只接纳已登记写能力，调查读取不能逐
     assert.equal(outcome.status, effectClass === 'read' ? 'no_submission' : 'submitted')
     assert.equal(accepted, effectClass === 'read' ? 0 : 1)
   }
+})
+
+
+test('原生Owner公开摘要含内部编号时工具反馈要求改写，记录仍保留绑定', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'task-owner-public-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const h = await host(root, null, null, turn => ({ ...decision, summary: turn === 1 ? '任务会话已启动；taskId=task-1' : '已开始整理资料。' }))
+  t.after(() => h.close())
+  const candidates = []
+  const result = await h.sessions.run({ binding: { taskId: 'task-1', sessionId: 'public-session', turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false }, input: { taskId: 'task-1' }, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {}, onCandidate: async value => candidates.push(value) })
+  assert.equal(result.status, 'submitted')
+  assert.equal(h.requests.length, 2)
+  assert.deepEqual(candidates.map(value => value.summary), ['已开始整理资料。'])
+  assert.match(h.requests[0].system, /发给群成员的回复/u)
+  assert.match(JSON.stringify(h.requests[1]), /GROUP_REPLY_INTERNAL_DETAILS/u)
+  assert.ok((await h.ctx.sessionPersistence.inspect('public-session')).events.length > 0)
 })

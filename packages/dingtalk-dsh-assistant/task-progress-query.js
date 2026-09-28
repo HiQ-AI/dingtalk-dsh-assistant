@@ -1,3 +1,4 @@
+import { groupStatusText } from './workflow-notifications.js'
 import { z } from 'zod'
 
 export const taskProgressQueryVersion = 'task-progress-query@1'
@@ -22,7 +23,7 @@ export function queryConversationTaskProgress({ queryText, conversationId, actor
   const candidateTasks = [
     ...workflowOrigins.filter(origin => origin.run.conversationId === conversationId && [origin.run.actorId, ownerActorId].includes(actorId))
       .map(origin => { const run = workflowRuns.find(value => value.taskId === origin.command.args.taskId); return { taskId: origin.command.args.taskId, title: origin.command.args.arguments.objective, objective: origin.command.args.arguments.objective, status: run?.status ?? origin.command.status, outcome: null, engine: 'workflow-v2', uat2Status: null, createdAt: origin.run.createdAt } }),
-    ...legacyTasks.filter(task => task.groupId === conversationId).map(task => ({ taskId: task.taskId, title: task.title ?? task.objective ?? task.taskId, objective: task.objective ?? '', status: task.state ?? 'unknown', outcome: task.outcome ?? null, engine: 'legacy', uat2Status: task.result?.delivery?.uat2Status ?? null, createdAt: task.createdAt })),
+    ...legacyTasks.filter(task => task.groupId === conversationId).map(task => ({ taskId: task.taskId, title: task.title ?? task.objective ?? '未命名事项', objective: task.objective ?? '', status: task.state ?? 'unknown', outcome: task.outcome ?? null, engine: 'legacy', uat2Status: task.result?.delivery?.uat2Status ?? null, createdAt: task.createdAt })),
   ]
   const ranked = candidateTasks.filter(task => (!task.createdAt || task.createdAt < occurredAt)
       && (!asksDelivery || !/(?:仅授权排查|不实施代码|不实施代码、配置|不实施代码、配置或数据)/u.test(task.objective))
@@ -33,7 +34,7 @@ export function queryConversationTaskProgress({ queryText, conversationId, actor
   steps.push(stepSchema.parse({ nodeId: 'candidates', status: 'completed', count: ranked.length }))
   const items = ranked.slice(0, 8).map(({ task: { objective: _objective, createdAt: _createdAt, ...task } }) => itemSchema.parse(task))
   steps.push(stepSchema.parse({ nodeId: 'readback', status: 'completed', count: items.length }))
-  const reply = items.length ? `${issueWords.length >= 2 ? '按补充的问题清单检索到以下候选任务；业务归属仍需核对：' : '找到以下可能相关的任务，是否属于你说的问题还需结合问题清单确认：'}\n${items.map(item => `${item.title}：${item.status}${item.outcome ? `（${item.outcome}）` : ''}${item.uat2Status ? `；UAT2：${item.uat2Status}` : '；UAT2：未见部署回执'}`).join('\n')}${ranked.length > 8 ? '\n候选超过 8 项，仅显示前 8 项。' : ''}` : '当前没有找到标题或目标明确匹配的本群任务。'
+  const reply = items.length ? `${issueWords.length >= 2 ? '按补充的问题清单检索到以下候选任务；业务归属仍需核对：' : '找到以下可能相关的任务，是否属于你说的问题还需结合问题清单确认：'}\n${items.map(item => `${item.title}：${groupStatusText(item.status)}${item.outcome ? `（${groupStatusText(item.outcome)}）` : ''}${item.uat2Status ? `；UAT2：${groupStatusText(item.uat2Status)}` : '；UAT2：尚未核验部署结果'}`).join('\n')}${ranked.length > 8 ? '\n候选超过 8 项，仅显示前 8 项。' : ''}` : '当前没有找到标题或目标明确匹配的本群任务。'
   steps.push(stepSchema.parse({ nodeId: 'reply', status: 'completed', count: items.length }))
   return { status: 'observed', observedAt: new Date().toISOString(), items, coverage: '本群任务标题和目标匹配的候选；未验证候选与提问的业务归属', reply, flow: { id: 'task-progress-query', version: taskProgressQueryVersion, steps } }
 }

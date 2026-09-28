@@ -1,3 +1,4 @@
+import { assertGroupReply } from './workflow-notifications.js'
 import { EventEmitter } from 'node:events'
 import { readFile, unlink, realpath, stat, mkdtemp, rm } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -137,6 +138,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     async sendGroup(request) {
       requireEnabled()
       if (!writesAuthorized) throw new Error('dws_write_not_authorized')
+      assertGroupReply(request.text)
       const result = await runner.run(this.compileGroupSend(request))
       if (result.exitCode !== 0) throw commandError('dws_send_failed', result)
       return parseJson(result.stdout, 'send')
@@ -188,6 +190,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     async sendGroupReply(request) {
       requireEnabled()
       if (!writesAuthorized) throw new Error('dws_write_not_authorized')
+      assertGroupReply(request.text)
       const result = await runner.run(this.compileGroupReply(request))
       if (result.exitCode !== 0) throw commandError('dws_reply_failed', result)
       return parseJson(result.stdout, 'reply')
@@ -364,6 +367,7 @@ export async function dispatchOutbox({ adapter, groupId, outbound, beforeSend, b
     const historical = typeof adapter.findOutboundMessage === 'function' ? await adapter.findOutboundMessage(groupId, outbound) : undefined
     if (historical !== undefined) return { status: 'sent', messageId: assertStableId(historical.messageId, 'outbox_message_id'), deduplicated: true }
 
+    assertGroupReply(outbound.text, outbound.taskIds ?? [])
     // 在完整预检后、实际外发前持久领取；替换提交可能已使旧快照失效。
     if (beforeSend && !(await beforeSend())) return { status: 'superseded' }
     phase = 'send'

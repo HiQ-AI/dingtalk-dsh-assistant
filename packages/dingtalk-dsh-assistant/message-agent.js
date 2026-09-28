@@ -1,3 +1,4 @@
+import { assertGroupReply } from './workflow-notifications.js'
 import { randomUUID } from 'node:crypto'
 import { createExecutionSessions } from './execution-session.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
@@ -25,10 +26,15 @@ export function createMessageAgentController({ ctx, store, artifacts, tools, mod
   }
   const sessions = sessionRunner ?? createExecutionSessions({ ctx, tools, isCurrent, getWorkspaceDir })
 
-  const validateOutput = (entry, input, result) => validateAgentWorkResult(result, {
+  const validateOutput = async (entry, input, result) => {
+    const accepted = await validateAgentWorkResult(result, {
       sourceRefs: input.sourceRefs ?? [],
       verifyEvidence: refs => verifyEvidence({ refs, entry, binding: bindingOf(entry), input }),
     })
+    assertGroupReply(accepted.summary, [entry.runId, entry.unitId, entry.sessionId])
+    assertGroupReply(accepted.question, [entry.runId, entry.unitId, entry.sessionId])
+    return accepted
+  }
   async function finish(entry, input, result) {
     const accepted = await validateOutput(entry, input, result)
     const saved = await artifacts.put(accepted)
