@@ -86,3 +86,4 @@ agent-owned-permissions,1,controlled-integration,PASS,docs/tmp/agent-owned-permi
 agent-owned-permissions-deployment,1,installed-runtime,PASS,docs/tmp/agent-owned-permissions-deployment-resume.log
 agent-owned-permissions-model,1,isolated-real-model,PASS,docs/tmp/agent-owned-native-message-r1/result.json
 agent-owned-permissions-channel,1,real-channel,PASS,docs/tmp/agent-owned-permissions-channel-final.json
+single-session-multisource-investigation,1,real-channel,PASS,docs/tmp/agent-multisource-final.json
