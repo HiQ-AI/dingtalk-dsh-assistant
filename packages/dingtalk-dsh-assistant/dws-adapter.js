@@ -2,9 +2,17 @@ import { EventEmitter } from 'node:events'
 import { readFile, unlink, realpath, stat, mkdtemp, rm } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 
 function assertStableId(value, label) {
   if (typeof value !== 'string' || value.trim() === '') throw new Error(`${label}_required`)
+  return value
+}
+
+function assertFileName(value) {
+  assertStableId(value, 'file_name')
+  if (value !== value.trim() || /[<>:"/\\|?*\u0000-\u001f\u007f]/u.test(value) || /[. ]$/u.test(value)
+    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(value)) throw new Error('dws_file_name_invalid')
   return value
 }
 
@@ -61,6 +69,11 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     },
     compileGroupSend({ groupId, text, idempotencyKey }) {
       const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--text', assertStableId(text, 'text'), '--idempotency-key', assertStableId(idempotencyKey, 'idempotency_key'), '--format', 'json']
+      if (writesAuthorized) args.push('--yes')
+      return withProfile(args)
+    },
+    compileGroupFileSend({ groupId, fileName, idempotencyKey }) {
+      const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--msg-type', 'file', '--file', `./${assertFileName(fileName)}`, '--idempotency-key', assertStableId(idempotencyKey, 'idempotency_key'), '--format', 'json']
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
@@ -127,6 +140,50 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       const result = await runner.run(this.compileGroupSend(request))
       if (result.exitCode !== 0) throw commandError('dws_send_failed', result)
       return parseJson(result.stdout, 'send')
+    },
+    async sendGroupFile(request) {
+      requireEnabled()
+      if (!writesAuthorized) throw new Error('dws_write_not_authorized')
+      const result = await runner.run(this.compileGroupFileSend(request))
+      if (result.exitCode !== 0) throw commandError('dws_file_send_failed', result)
+      return parseJson(result.stdout, 'file-send')
+    },
+    async querySendStatus(openTaskId) {
+      requireEnabled()
+      const result = await runner.run(this.compileSendStatus(openTaskId))
+      if (result.exitCode !== 0) throw commandError('dws_send_status_failed', result)
+      return parseJson(result.stdout, 'send-status')
+    },
+    async readMessageFile({ groupId, messageId, expected }) {
+      requireEnabled()
+      if (!expected || !Number.isSafeInteger(expected.size) || expected.size < 1 || !/^[a-f0-9]{64}$/u.test(expected.sha256 ?? '')) throw new Error('dws_file_expectation_required')
+      const message = await this.readMessage(groupId, messageId)
+      const refs = message.resourceRefs
+      if (!Array.isArray(refs) || refs.length !== 1 || !['mediaId', 'fileId'].includes(refs[0]?.type) || typeof refs[0].resourceId !== 'string' || !refs[0].resourceId) throw new Error('dws_file_resource_identity_invalid')
+      if (['messageType', 'msgType'].some(key => message[key] !== undefined && message[key] !== 'file')
+        || message.messageType === undefined && message.msgType === undefined && refs[0].type !== 'fileId') throw new Error('dws_file_message_type_mismatch')
+      const resourceRef = refs[0]
+      if (expected.resourceRef && (expected.resourceRef.type !== resourceRef.type || expected.resourceRef.resourceId !== resourceRef.resourceId)) throw new Error('dws_file_resource_identity_mismatch')
+      const downloadRoot = await mkdtemp(path.join(runner.cwd, 'file-readback-'))
+      try {
+        const args = this.compileMessageResourceDownload({ groupId, messageId, resourceId: resourceRef.resourceId, type: resourceRef.type })
+        const result = await runner.run([...args, '--output', `${path.relative(runner.cwd, downloadRoot)}/`])
+        if (result.exitCode !== 0) throw commandError('dws_file_download_failed', result)
+        const receipt = parseJson(result.stdout, 'file-download')
+        if (receipt.resourceId !== resourceRef.resourceId || receipt.resourceType !== resourceRef.type || receipt.messageId !== messageId
+          || !Number.isSafeInteger(receipt.sizeBytes) || receipt.sizeBytes !== expected.size || typeof receipt.localPath !== 'string' || !receipt.localPath
+          || receipt.complete === false || receipt.hasMore === true || receipt.failures?.length) throw new Error('dws_file_download_incomplete')
+        const root = await realpath(downloadRoot)
+        const localPath = await realpath(path.resolve(runner.cwd, receipt.localPath))
+        const relative = path.relative(root, localPath)
+        if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('dws_file_download_path_invalid')
+        const info = await stat(localPath)
+        if (!info.isFile() || info.size !== expected.size) throw new Error('dws_file_download_size_mismatch')
+        const data = await readFile(localPath)
+        const sha256 = createHash('sha256').update(data).digest('hex')
+        if (data.length !== expected.size || sha256 !== expected.sha256) throw new Error('dws_file_download_content_mismatch')
+        return { message, resourceRef, sha256, size: data.length, data: new Uint8Array(data), downloadReceipt: receipt }
+      } finally { await rm(downloadRoot, { recursive: true, force: true }) }
     },
     async sendGroupReply(request) {
       requireEnabled()

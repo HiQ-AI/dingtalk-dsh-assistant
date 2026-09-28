@@ -68,6 +68,14 @@ test('同一个业务 Task 的原生 Owner 会话跨唤醒复用并持久记录�
   assert.equal(saved.events.filter(event => event.type === 'user/message').length, 2)
   assert.equal(h.requests.length, 2)
   assert.ok(h.requests.every(request => request.tools.map(tool => tool.name).join(',') === 'task_owner_submit'))
+  assert.match(h.requests[0].system, /先完成必要调查，再用task-general-capability阶段/u)
+  assert.match(h.requests[0].system, /write-task-file/u)
+  assert.match(h.requests[0].system, /再安排task-group-file-delivery阶段/u)
+  assert.match(h.requests[0].system, /import-task-file/u)
+  assert.match(h.requests[0].system, /input严格含\{role,fileName,relativePath\}/u)
+  assert.match(h.requests[0].system, /Host只读来源后冻结大小和SHA256/u)
+  assert.match(h.requests[0].system, /二进制仅使用真实受信来源并已登记的artifactFiles/u)
+  assert.match(h.requests[0].system, /正文报告不能替代附件/u)
 })
 
 test('原生Owner会话必须读取积压事件页后才能提交候选', async t => {

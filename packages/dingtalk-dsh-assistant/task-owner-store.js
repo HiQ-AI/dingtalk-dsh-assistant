@@ -378,10 +378,13 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       const generalStep = chosen.appendStages?.length === 1
         && chosen.appendStages[0].workflowId === 'task-general-capability'
         && chosen.appendStages[0].capabilityStep
+      const fileDeliveryStep = chosen.appendStages?.length === 1
+        && chosen.appendStages[0].workflowId === 'task-group-file-delivery'
+        && !chosen.appendStages[0].capabilityStep
       const continuation = currentTask.plan_status === 'pending' && chosen.planChange?.kind === 'initialize'
         || chosen.planChange?.kind === 'replaceSuffix'
         || currentTask.plan_status === 'succeeded' && chosen.appendStages?.length
-        && (generalStep || db.prepare(`SELECT 1 FROM task_events WHERE task_id=? AND seq>? AND seq<=?
+        && (generalStep || fileDeliveryStep || db.prepare(`SELECT 1 FROM task_events WHERE task_id=? AND seq>? AND seq<=?
           AND event_type='intent.received' LIMIT 1`).get(o.task_id, o.processed_watermark, t.event_watermark))
       if (!continuation) fail('TASK_OWNER_ADVANCE_CONFLICT')
     } else if (chosen.action === 'wait' && currentTask.plan_status !== 'pending'

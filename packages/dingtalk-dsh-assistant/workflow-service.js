@@ -10,6 +10,9 @@ import { assertRetiredWorkflowsDrained } from './task-readonly-workflows.js'
 import { createTaskWorkflowContracts } from './task-workflow-contracts.js'
 export { createEngineeringFailureRepair } from './workflow-engineering.js'
 import { createTaskMarkdownFileAdapter } from './task-markdown-file.js'
+import { createTaskArtifactFiles } from './task-artifact-files.js'
+import { createTaskArtifactWriteAdapter, createGeneralArtifactWriteCapability, createTaskArtifactImportAdapter, createGeneralArtifactImportCapability } from './task-artifact-write.js'
+import { createTaskGroupFileAdapter, createTaskGroupFileDeliveryWorkflow } from './task-group-file-delivery.js'
 import { createMessageWorkflow } from './message-workflow.js'
 import { isPassiveTaskProgress } from './message-ledger.js'
 import { createMessageModel } from './message-model.js'
@@ -33,6 +36,56 @@ const readableNodeOutputRef = node => node.outputRef ?? (node.waitReason?.refere
 
 const isWebDevelopmentDelivery = origin => origin?.channel === 'web'
   && JSON.stringify(origin.run?.request?.stages) === JSON.stringify(['task-engineering', 'task-uat-pr-merge', 'task-uat-deployment'])
+
+export function bindFileDelivery(candidate, source) {
+  if (!candidate) return null
+  if (typeof source !== 'string' || typeof candidate.sourceQuote !== 'string') throw executionError('TASK_FILE_DELIVERY_AUTHORIZATION_REQUIRED')
+  const quote = candidate.sourceQuote.trim()
+  const clauses = source.split(/[。！？；\n]/u).filter(clause => clause.includes(quote))
+  if (!quote || !clauses.length || clauses.some(clause => /不要|不用|不必|不需|不(?:发送|发|传)|禁止|不得|取消|暂停|(?:另一个|其他|其它|别的)群/u.test(clause))
+    || !/(?:发送|发|上传|传到).*(?:群|群聊)|(?:群|群聊).*(?:发送|发|传)/u.test(quote)
+    || !/文件|文档|附件|markdown|sql|图片|\.(?:md|sql|pdf|docx|xlsx|pptx|png|jpe?g|webp)\b/iu.test(quote)) throw executionError('TASK_FILE_DELIVERY_AUTHORIZATION_REQUIRED')
+  const files = candidate.files
+  if (!Array.isArray(files) || !files.length || files.length > 20
+    || files.some(file => !file.role?.trim() || !file.fileName?.trim() || /[\\/\x00-\x1f<>:"|?*]/u.test(file.fileName))
+    || new Set(files.map(file => file.role)).size !== files.length
+    || new Set(files.map(file => file.fileName)).size !== files.length) throw executionError('TASK_FILE_DELIVERY_MANIFEST_INVALID')
+  return { sourceQuote: quote, files: files.map(file => ({ role: file.role, fileName: file.fileName })) }
+}
+
+export function selectTaskDeliveryFiles(outputs, { taskId, requirementRevision, fileDelivery }) {
+  const produced = outputs.flatMap(output => {
+    const descriptor = output?.output?.result?.artifact ?? output?.result?.artifact ?? output?.artifact
+    return [...(descriptor ? [descriptor] : []), ...(Array.isArray(output?.artifactFiles) ? output.artifactFiles : [])]
+  })
+  return fileDelivery.files.map(item => {
+    const candidates = produced.filter(file => file.taskId === taskId && file.requirementRevision === requirementRevision
+      && file.role === item.role && file.fileName === item.fileName)
+    if (candidates.length !== 1) throw executionError('TASK_REQUIRED_FILE_MISSING_OR_AMBIGUOUS')
+    return candidates[0]
+  })
+}
+
+export function verifyFileDeliveryOutput(output, { taskId, requirementRevision, groupId, profile, fileDelivery }) {
+  if (output?.deliveryStatus !== 'files_verified' || output.groupId !== groupId || output.profile !== profile
+    || output.requirementRevision !== requirementRevision || !Array.isArray(output.files) || !Array.isArray(output.receipts)
+    || output.files.length !== fileDelivery.files.length || output.receipts.length !== output.files.length) return false
+  return fileDelivery.files.every(item => {
+    const matches = output.files.map((file, index) => ({ file, observation: output.receipts[index] }))
+      .filter(({ file }) => file.role === item.role && file.fileName === item.fileName)
+    if (matches.length !== 1) return false
+    const { file, observation } = matches[0], receipt = observation?.result
+    return observation?.status === 'succeeded' && typeof observation.evidenceRef === 'string' && !!observation.evidenceRef
+      && file.taskId === taskId && file.requirementRevision === requirementRevision
+      && receipt?.role === item.role && receipt.fileName === item.fileName && receipt.taskId === taskId
+      && receipt.requirementRevision === requirementRevision && receipt.groupId === groupId && receipt.conversationId === groupId
+      && receipt.profile === profile && receipt.artifactId === file.artifactId && receipt.sha256 === file.sha256
+      && receipt.size === file.size && Number.isSafeInteger(receipt.size) && receipt.size > 0
+      && typeof receipt.messageId === 'string' && !!receipt.messageId && ['fileId', 'mediaId'].includes(receipt.resourceRef?.type)
+      && typeof receipt.resourceRef.resourceId === 'string' && !!receipt.resourceRef.resourceId
+      && /^[a-f0-9]{64}$/u.test(receipt.sha256) && /^[a-f0-9]{64}$/u.test(receipt.deliveryKey)
+  })
+}
 
 /** 只替换明确失败的部署后缀；成功工程与合并 Run 保持不变。 */
 export async function continueFailedUatStage({ taskId, plan, store, controller, external }) {
@@ -85,6 +138,13 @@ async function verifiedUatRebuildCompletion({ taskId, plan, origin, artifacts, e
 
 /** 将持久节点工件转换为可读产出；不推断未落盘的文件或外部执行结果。 */
 export function describeTaskNodeOutput(node, output, context = {}) {
+  if (output?.deliveryStatus === 'files_verified') {
+    const receipts = output.receipts ?? []
+    return { overview: `已核验送达 ${receipts.length} 个文件`, text: receipts.map(item => {
+      const receipt = item.result
+      return `${receipt.fileName}（${receipt.size} 字节）\nSHA-256：${receipt.sha256}\n消息 ID：${receipt.messageId}`
+    }).join('\n\n') }
+  }
   if (node.nodeId === 'apply-changes' && output?.changeDisposition === 'no-change' && output.status === 'succeeded') {
     return { overview: '现有实现符合要求，无需修改源码；继续构建与验收',
       text: `判断依据\n${output.reason}\n\n已核对文件\n${(output.reviewedPaths ?? []).join('\n')}` }
@@ -403,7 +463,7 @@ function createExternalRegistry(external, selected) {
   return { workflows, records, byId }
 }
 
-export async function openWorkflowService({ ctx, config, legacy, judge, readMessage, readResource, notifications, engineeringGhCommand, external, generalCapabilities = [], generalCompletionCheck, generalCompletionIdentity, execution: suppliedExecution, taskOwnerSessions, messageAgentSessions }) {
+export async function openWorkflowService({ ctx, config, legacy, judge, readMessage, readResource, notifications, fileTransport, engineeringGhCommand, external, generalCapabilities = [], generalCompletionCheck, generalCompletionIdentity, execution: suppliedExecution, taskOwnerSessions, messageAgentSessions }) {
   if (!Array.isArray(config.groupIds) || !config.groupIds.length || new Set(config.groupIds).size !== config.groupIds.length) throw executionError('WORKFLOW_GROUPS_REQUIRED')
   if (generalCompletionCheck && (!generalCompletionIdentity || typeof generalCompletionIdentity !== 'string')) throw executionError('GENERAL_COMPLETION_IDENTITY_REQUIRED')
   const groups = new Set(config.groupIds)
@@ -465,7 +525,22 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const markdownFileAdapter = config.taskOutputDirectory || config.artifactDirectory
     ? createTaskMarkdownFileAdapter({ root: config.taskOutputDirectory ?? config.artifactDirectory }) : null
   const markdownWrite = markdownFileAdapter ? createGeneralMarkdownWriteCapability({ fileAdapter: markdownFileAdapter }) : null
-  const capabilities = [sourceRead, predecessorRead, sourceDossier, ...(messageResourceRead ? [messageResourceRead] : []), ...(fileRead ? [fileRead] : []), ...(markdownWrite ? [markdownWrite] : []), ...generalCapabilities]
+  const effectiveArtifactDirectory = config.artifactDirectory ?? (fileTransport ? suppliedExecution?.artifacts?.root : undefined)
+  const managedFiles = effectiveArtifactDirectory ? createTaskArtifactFiles({ root: join(effectiveArtifactDirectory, 'task-files') }) : null
+  const artifactWriter = managedFiles ? createTaskArtifactWriteAdapter({ files: managedFiles }) : null
+  const artifactImporter = managedFiles && config.generalFileRead ? createTaskArtifactImportAdapter({ files: managedFiles,
+    sourceRoot: config.generalFileRead.root, readablePaths: config.generalFileRead.readablePaths }) : null
+  const artifactAdapter = artifactWriter ? {
+    execute: prepared => (prepared.kind === 'import' ? artifactImporter : artifactWriter)?.execute(prepared),
+    reconcile: prepared => (prepared.kind === 'import' ? artifactImporter : artifactWriter)?.reconcile(prepared),
+  } : null
+  const artifactWrite = artifactWriter ? createGeneralArtifactWriteCapability({ fileAdapter: artifactWriter }) : null
+  const artifactImport = artifactImporter ? createGeneralArtifactImportCapability({ fileAdapter: artifactImporter }) : null
+  const messageFileAdapter = managedFiles && fileTransport ? createTaskGroupFileAdapter({ files: managedFiles,
+    createAdapter: fileTransport.createAdapter, profile: config.profile,
+    canDisclose: async ({ prepared }) => config.groupIds.includes(prepared.groupId) && prepared.profile === config.profile }) : null
+  const fileWorkflow = messageFileAdapter ? createTaskGroupFileDeliveryWorkflow({ files: managedFiles, messageAdapter: messageFileAdapter }) : null
+  const capabilities = [sourceRead, predecessorRead, sourceDossier, ...(messageResourceRead ? [messageResourceRead] : []), ...(fileRead ? [fileRead] : []), ...(markdownWrite ? [markdownWrite] : []), ...(artifactWrite ? [artifactWrite] : []), ...(artifactImport ? [artifactImport] : []), ...generalCapabilities]
   const queryConfig = config.directQueries ?? { resources: [], databases: [] }
   if (Object.hasOwn(queryConfig, 'grants')) throw executionError('QUERY_CONFIG_MEMBER_GRANTS_REMOVED')
   if (queryConfig.permissions && (Object.keys(queryConfig.permissions).some(key => !['resourceIds', 'databaseIds', 'statusIds'].includes(key))
@@ -529,7 +604,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const completionCheck = generalCompletionCheck ?? verifyDefaultGeneralCompletion
   const stepWorkflow = stepCapabilities.length ? createGeneralCapabilityStepWorkflow({ capabilities: stepCapabilities, completionCheck,
     completionIdentity: generalCompletionIdentity ?? 'task-result-verification-v3' }) : null
-  const visibleDefinitions = new Map([investigationWorkflow(modelConfig()), stepWorkflow, ...selectedExternal.workflows]
+  const visibleDefinitions = new Map([investigationWorkflow(modelConfig()), stepWorkflow, fileWorkflow, ...selectedExternal.workflows]
     .filter(Boolean).map(workflow => [workflow.id, workflow]))
   const execution = suppliedExecution ?? await openExecutionRuntime({
     ctx, getWorkspaceDir: () => legacy.getAgentConfig().workspaceDir, dbPath: config.dbPath, instanceId: config.instanceId, artifactDirectory: config.artifactDirectory,
@@ -537,8 +612,23 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     tools: ({ artifacts }) => queryTools(artifacts),
     deliveryOptions: { ...engineering.deliveryOptions,
       ...(markdownFileAdapter ? { fileAdapter: markdownFileAdapter } : {}),
+      ...(artifactAdapter ? { artifactAdapter } : {}),
+      ...(messageFileAdapter ? { messageAdapter: messageFileAdapter } : {}),
+      authorizeMessage: async ({ binding, prepared }) => {
+        const plan = await generalStore.current.query({ kind: 'task.plan', taskId: binding.taskId })
+        const stage = plan?.stages.find(item => item.runId === binding.runId && item.workflowId === 'task-group-file-delivery')
+        if (!stage || stage.status !== 'running' || plan.task.controlState !== 'active'
+          || plan.task.planRequirementRevision !== plan.task.requirementRevision) return false
+        const requirement = await generalArtifacts.current.read(plan.task.requirementRef)
+        const input = await generalArtifacts.current.read(stage.requirementRef)
+        if (!requirement.fileDelivery || prepared.groupId !== requirement.scope.conversationId
+          || prepared.requirementRevision !== plan.task.requirementRevision || prepared.profile !== config.profile
+          || !input.files.some(file => file.artifactId === prepared.artifact.artifactId)
+          || !requirement.fileDelivery.files.some(file => file.role === prepared.artifact.role && file.fileName === prepared.artifact.fileName)) return false
+        return { principalId: requirement.scope.actorId, authorizationRef: plan.task.requirementRef }
+      },
       authorizeFile: async ({ binding, action, prepared }) => {
-        if (action !== 'file' || !binding?.taskId || prepared?.taskId !== binding.taskId
+        if (!['file', 'artifact'].includes(action) || !binding?.taskId || prepared?.taskId !== binding.taskId
           || prepared.runId !== binding.runId || prepared.nodeRunId !== binding.nodeRunId
           || prepared.generation !== binding.generation || prepared.requirementDigest !== binding.requirementDigest) return false
         const plan = await generalStore.current.query({ kind: 'task.plan', taskId: binding.taskId })
@@ -549,9 +639,12 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           || run.run.requirementRef !== stage.requirementRef || plan.task.controlState !== 'active') return false
         const current = await generalArtifacts.current.read(plan.task.requirementRef)
         const step = await generalArtifacts.current.read(stage.requirementRef)
-        const { predecessorOutputRef: _predecessorOutputRef, ...stepScope } = step.scope ?? {}
-        if (!current.scope?.writeMarkdown || !step.scope?.writeMarkdown
-          || executionDigest(current.scope) !== executionDigest(stepScope)) return false
+        const { predecessorOutputRef: _predecessorOutputRef, requirementRevision: _revision, ...stepScope } = step.scope ?? {}
+        if (executionDigest(current.scope) !== executionDigest(stepScope)) return false
+        if (action === 'artifact') {
+          if (prepared.requirementRevision !== plan.task.requirementRevision || !current.fileDelivery
+            || !current.scope.artifactFiles?.some(file => file.role === prepared.role && file.fileName === prepared.fileName)) return false
+        } else if (!current.scope?.writeMarkdown || !step.scope?.writeMarkdown) return false
         return { principalId: origin.run.actorId, authorizationRef: plan.task.requirementRef }
       },
       externalAdapter: {
@@ -564,7 +657,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     workflows: async (store, artifacts) => {
       generalStore.current = store
       const selected = modelConfig()
-      const workflows = [investigationWorkflow(selected), stepWorkflow].filter(Boolean)
+      const workflows = [investigationWorkflow(selected), stepWorkflow, fileWorkflow].filter(Boolean)
       const definitions = new Map(workflows.map(workflow => [workflow.id, defineExecutionWorkflow(workflow)]))
       const prior = await store.query({ kind: 'workflow.list' })
       const activeDefinitions = new Set(), pendingStages = []
@@ -596,7 +689,9 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       const historicalWorkflows = prior.filter(record => record.config?.kind !== 'engineering'
         && record.config?.kind !== 'external'
         && activeDefinitions.has(`${record.workflowId}:${record.digest}`)).map(record => {
-        const candidates = [investigationWorkflow(record.config), stepWorkflow].filter(Boolean)
+        const candidates = [investigationWorkflow(record.config), stepWorkflow, fileWorkflow,
+          stepCapabilities.length ? createGeneralCapabilityStepWorkflow({ capabilities: stepCapabilities, completionCheck,
+            completionIdentity: generalCompletionIdentity ?? 'task-result-verification-v3', workflowVersion: '4' }) : null].filter(Boolean)
           .filter(item => item.id === record.workflowId && item.version === record.definitionVersion)
         if (!candidates.length) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
         const previous = candidates.find(item => {
@@ -645,6 +740,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     for (const workflow of await engineering.restore(store, artifacts)) controller.registerWorkflow(workflow)
     controller.registerWorkflow(investigationWorkflow(modelConfig()))
     if (stepWorkflow) controller.registerWorkflow(stepWorkflow)
+    if (fileWorkflow) controller.registerWorkflow(fileWorkflow)
     for (const workflow of selectedExternal.workflows) controller.registerWorkflow(workflow)
   }
   const notifier = createWorkflowNotifications({ store, controller, artifacts, adapter: notifications,
@@ -921,7 +1017,10 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       needs: references.map(resourceRef => ({ resourceRef })) }) : { ready: true, data: { resources: [] } }
     if (!resolved.ready) throw executionError('WORKFLOW_REQUIRED_MATERIAL_NOT_READY')
     const objective = requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
+    const fileDelivery = bindFileDelivery(action.arguments.fileDelivery, info.run.body)
+    if (fileDelivery && !fileWorkflow) throw executionError('TASK_FILE_TRANSPORT_UNAVAILABLE')
     const requirement = { request: objective, objective,
+      ...(fileDelivery ? { fileDelivery } : {}),
       acceptanceCriteria: action.arguments.acceptanceCriteria ?? [objective],
       constraints: [...new Set(action.constraints ?? [...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])],
       explicitStages: action.arguments.explicitStages ?? [],
@@ -930,7 +1029,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         .filter(key => action.arguments[key] !== undefined).map(key => [key, action.arguments[key]])),
       scope: queryScope({ actorId: info.run.actorId, conversationId: info.run.conversationId, sourceKeys,
         sourceVersions: Object.fromEntries(sources.map(source => [source.sourceKey, source.sourceVersion])),
-        readableFiles, writeMarkdown: /(?:生成|创建|写入|输出|保存).{0,16}(?:Markdown|md文件|文档|文件)/iu.test(info.run.body) }),
+        readableFiles, ...(fileDelivery ? { artifactFiles: fileDelivery.files } : {}),
+        writeMarkdown: /(?:生成|创建|写入|输出|保存).{0,16}(?:Markdown|md文件|文档|文件)/iu.test(info.run.body) }),
       authorization: { actorId: info.run.actorId, sourceKey: info.run.sourceKey,
         sourceVersion: info.run.sourceVersion, commandId: info.commandId,
         ownerConfirmed: info.ownerConfirmed === true } }
@@ -984,6 +1084,25 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       eventKey: `task-legacy-recovered:${taskId}` } })
     return controller.taskPlan(taskId)
   }
+  async function prepareFileDeliveryInput(plan, requirement) {
+    if (!fileWorkflow || !requirement.fileDelivery) throw executionError('TASK_FILE_DELIVERY_NOT_AUTHORIZED')
+    const outputs = []
+    for (const stage of plan.stages.filter(stage => stage.status === 'succeeded' && stage.outputRef)) {
+      const output = await artifacts.read(stage.outputRef)
+      outputs.push(output)
+    }
+    const files = selectTaskDeliveryFiles(outputs, { taskId: plan.task.taskId, requirementRevision: plan.task.requirementRevision,
+      fileDelivery: requirement.fileDelivery })
+    await managedFiles.validateManifest(files, { taskId: plan.task.taskId, requirementRevision: plan.task.requirementRevision })
+    return { files, groupId: requirement.scope.conversationId, profile: config.profile, requirementRevision: plan.task.requirementRevision }
+  }
+  async function verifyRequiredFileDelivery(plan, requirement) {
+    const delivered = plan.stages.filter(stage => stage.workflowId === 'task-group-file-delivery' && stage.status === 'succeeded' && stage.outputRef)
+    if (delivered.length !== 1) return false
+    const output = await artifacts.read(delivered[0].outputRef)
+    return verifyFileDeliveryOutput(output, { taskId: plan.task.taskId, requirementRevision: plan.task.requirementRevision,
+      groupId: requirement.scope.conversationId, profile: config.profile, fileDelivery: requirement.fileDelivery })
+  }
   async function advanceBusinessTask(taskId, continuation) {
     let plan = await ensureLegacyTaskRequirement(taskId)
     plan = await controller.advanceTaskPlan(taskId)
@@ -994,6 +1113,12 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (!current || current.status !== 'ready' || current.unavailableReason || current.requirementRef) return plan
     const requirement = plan.task.requirementRef ? await artifacts.read(plan.task.requirementRef) : null
     if (!requirement?.request) return plan
+    if (current.workflowId === 'task-group-file-delivery') {
+      const input = await prepareFileDeliveryInput(plan, requirement)
+      await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`,
+        taskId, planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef, input })
+      return controller.advanceTaskPlan(taskId)
+    }
     if (current.workflowId === 'task-general-capability') {
       const step = continuation?.ownerStep
       if (!step)
@@ -1001,7 +1126,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`,
         taskId, planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef,
         input: { capabilityId: step.capabilityId, input: step.input,
-          scope: { ...requirement.scope, predecessorOutputRef }, expectedEvidence: step.expectedEvidence } })
+          scope: { ...requirement.scope, predecessorOutputRef, ...(['write-task-file', 'import-task-file'].includes(step.capabilityId) ? { requirementRevision: plan.task.requirementRevision } : {}) }, expectedEvidence: step.expectedEvidence } })
       return controller.advanceTaskPlan(taskId)
     }
     const origin = continuation?.command ? continuation : await store.query({ kind: 'task.origin', latest: true, taskId })
@@ -1076,11 +1201,12 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const origin = await store.query({ kind: 'task.origin', taskId })
     if (!origin || !requirement?.request) throw executionError('TASK_REQUIREMENT_MISSING')
     const args = { ...origin.command.args.arguments, ...requirement.target, objective: requirement.request }
+    if (stage.workflowId === 'task-group-file-delivery') return { input: await prepareFileDeliveryInput(plan, requirement) }
     if (stage.workflowId === 'task-general-capability') {
       const step = stage.capabilityStep ?? decision.appendStages?.[0]?.capabilityStep
       if (!step) throw executionError('GENERAL_STEP_NOT_BOUND')
       return { input: { capabilityId: step.capabilityId, input: step.input,
-        scope: { ...requirement.scope, predecessorOutputRef: null }, expectedEvidence: step.expectedEvidence } }
+        scope: { ...requirement.scope, predecessorOutputRef: null, ...(['write-task-file', 'import-task-file'].includes(step.capabilityId) ? { requirementRevision: plan.task.requirementRevision } : {}) }, expectedEvidence: step.expectedEvidence } }
     }
     if (stage.workflowId === 'task-engineering') {
       const prepared = await engineering.prepareTask({ taskId,
@@ -1115,7 +1241,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       effectClass: item.effectClass })),
     workflowCatalog: taskWorkflowCatalog.filter(item => !['task-general', 'task-analysis'].includes(item.id))
       .map(item => ({ id: item.id, purpose: item.purpose, mode: item.mode,
-        available: item.mode !== 'external' || selectedExternal.byId.has(item.id),
+        available: item.mode === 'delivery' ? Boolean(fileWorkflow) : item.mode !== 'external' || selectedExternal.byId.has(item.id),
         ...(externalWorkflows.find(entry => entry.id === item.id)?.targetIds
           ? { targetIds: externalWorkflows.find(entry => entry.id === item.id).targetIds } : {}) })),
     prepareInitialStage, inspectCurrentExecution, repairCurrentStage, readStageArtifacts,
@@ -1125,6 +1251,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       if (!plan?.stages.length || plan.task.status !== 'succeeded'
         || plan.task.planRequirementRevision !== plan.task.requirementRevision) return false
       const initial = await artifacts.read(plan.task.requirementRef)
+      if (initial.fileDelivery && !await verifyRequiredFileDelivery(plan, initial)) return false
       const source = await store.query({ kind: 'task.origin', taskId })
       if (source?.channel === 'web' && (plan.stages.length !== source.run.request.stages.length
         || plan.stages.some((stage, index) => (stage.workflowId.startsWith('task-engineering-') ? 'task-engineering' : stage.workflowId) !== source.run.request.stages[index]))
@@ -1148,7 +1275,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           const step = stage.capabilityStep
           const capability = stepCapabilities.find(item => item.id === step?.capabilityId)
           if (!step || !capability || capability.effectClass !== 'file.write' || stage.gate !== 'none' || !step.expectedEvidence?.trim()) return false
-          const scope = { ...requirement.scope, predecessorOutputRef: plan.stages.at(-1)?.outputRef ?? null }
+          const scope = { ...requirement.scope, predecessorOutputRef: plan.stages.at(-1)?.outputRef ?? null,
+            ...(['write-task-file', 'import-task-file'].includes(step.capabilityId) ? { requirementRevision: plan.task.requirementRevision } : {}) }
           if (!await capability.authorize({ input: step.input, scope })) return false
           const proposed = executionDigest({ capabilityId: step.capabilityId, input: step.input, scope: requirement.scope })
           for (const prior of plan.stages) if (prior.workflowId === 'task-general-capability' && prior.requirementRef) {
@@ -1158,6 +1286,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           continue
         }
         const item = catalogById.get(stage.workflowId)
+        if (stage.workflowId === 'task-group-file-delivery' && (!fileWorkflow || !requirement.fileDelivery
+          || plan.stages.some(previous => previous.workflowId === stage.workflowId && previous.status !== 'invalidated'))) return false
         if (!item || item.id === 'task-general' || item.mode === 'external' && !selectedExternal.byId.has(item.id)) return false
         if (item.mode === 'engineering' && (!requirement.target.repositoryId || !uatBranchFor(requirement.target.uatEnvironment))) return false
         if (item.mode === 'external' && !(requirement.stageTargets?.[item.id] ?? requirement.target.targetId)) return false
@@ -1403,13 +1533,16 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       const objective = requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
       const source = await store.query({ kind: 'task.source', sourceKey: info.run.sourceKey })
       if (!source || source.status === 'superseded') throw executionError('TASK_SOURCE_NOT_CURRENT')
-      const next = { ...previous, request: objective, objective,
+      const fileDelivery = action.arguments.fileDelivery ? bindFileDelivery(action.arguments.fileDelivery, info.run.body) : previous.fileDelivery
+      if (fileDelivery && !fileWorkflow) throw executionError('TASK_FILE_TRANSPORT_UNAVAILABLE')
+      const next = { ...previous, request: objective, objective, ...(fileDelivery ? { fileDelivery } : {}),
         acceptanceCriteria: action.arguments.acceptanceCriteria ?? previous.acceptanceCriteria,
         constraints: [...new Set([...(previous.constraints ?? []), ...(action.constraints ?? [])])],
         explicitStages: [...new Set([...(previous.explicitStages ?? []), ...(action.arguments.explicitStages ?? [])])],
         target: { ...previous.target, ...Object.fromEntries(['repositoryId', 'uatEnvironment', 'targetId', 'commitSha', 'releaseTag', 'changeRef', 'pullRequestNumber', 'headCommitSha']
           .filter(key => action.arguments[key] !== undefined).map(key => [key, action.arguments[key]])) },
         scope: { ...previous.scope, sourceKeys: [...new Set([...previous.scope.sourceKeys, info.run.sourceKey])],
+          ...(fileDelivery ? { artifactFiles: fileDelivery.files } : {}),
           sourceVersions: { ...previous.scope.sourceVersions, [info.run.sourceKey]: source.sourceVersion },
           writeMarkdown: previous.scope.writeMarkdown || /(?:生成|创建|写入|输出|保存).{0,16}(?:Markdown|md文件|文档|文件)/iu.test(info.run.body) },
         authorization: { actorId: info.run.actorId, sourceKey: info.run.sourceKey,

@@ -57,7 +57,7 @@ export function defineExecutionWorkflow(definition) {
     ids.add(node.id)
     if (!['code', 'agent'].includes(node.executor)) throw executionError('EXECUTOR_NOT_ADMITTED')
     if (node.drainPolicy !== undefined && (node.drainPolicy !== 'external-process' || node.executor !== 'code')) throw executionError('NODE_DRAIN_POLICY_INVALID')
-    if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push', 'github.pr', 'workspace.prepare', 'workspace.edit', 'external.operation', 'file.write'].includes(e))
+    if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push', 'github.pr', 'workspace.prepare', 'workspace.edit', 'external.operation', 'file.write', 'message.send'].includes(e))
       || (node.executor === 'agent' && node.allowedEffects.some(e => !['pure', 'read'].includes(e)))) throw executionError('EFFECT_NOT_ADMITTED')
     if (typeof node.mapInput !== 'function') throw executionError('INPUT_MAPPER_REQUIRED')
     if (node.allowInputContinuation !== undefined && (node.allowInputContinuation !== true || node.executor !== 'agent' || typeof node.admitOutput !== 'function')) throw executionError('NODE_CONTINUATION_INVALID')
@@ -227,7 +227,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           output = await nodeDefinition.execute({ input: structuredClone(input.data), signal: abort.signal, runId: binding.runId,
             taskId: binding.taskId, nodeRunId: binding.nodeRunId, generation: binding.generation, requirementDigest: binding.requirementDigest,
             perform: async ({ action, prepared }) => {
-              if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : action === 'edit' ? 'workspace.edit' : action === 'pr' ? 'github.pr' : action === 'external' ? 'external.operation' : action === 'file' ? 'file.write' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
+              if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : action === 'edit' ? 'workspace.edit' : action === 'pr' ? 'github.pr' : action === 'external' ? 'external.operation' : ['file', 'artifact'].includes(action) ? 'file.write' : action === 'message' ? 'message.send' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
               abort.signal.throwIfAborted()
               const effect = await delivery.execute({ binding, action, prepared })
               if (isTerminalUatBuildFailure(effect)) throw Object.assign(executionError('RELEASE_PIPELINE_FAILED'), { terminalEffect: effect })

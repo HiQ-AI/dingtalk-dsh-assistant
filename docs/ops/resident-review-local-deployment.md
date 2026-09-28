@@ -325,3 +325,27 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 ## 调查阶段完成职责 v5
 
 调查 v5 区分阶段完成与整体交付。部署前使用正式任务视图和控制账盘点 v4 活动及待执行引用；本次因报告保存要求而失败的测试任务保留产物，通过正式取消入口结束后再切换。不得改写旧定义摘要或将失败改为成功。新包独立输入重验调查与受信文档保存，核对实际路径、内容摘要及最终通知；旧终态历史保持可读。本次不迁移 schema。
+
+## 任务产物群聊文件交付切换与验收
+
+本节提供后续安装步骤与验收条件，不表示正式实例已经切换。继续沿用上文维护、排空、备份、精确包安装和独立启动回读流程；本轮实施不修改正式实例安装包或配置。
+
+文件出口要求现有 `workflow.artifactDirectory` 为受信绝对目录、来源群在 `workflow.groupIds`，且 `dws.enabled` 与 `dws.writesAuthorized` 均已授权。发送 profile 使用实际绑定账号，逐件 DWS runner 的 cwd 固定为核验过的快照目录，传相对文件名；不要让模型传绝对路径或调用全局 `process.chdir()`。原有 `workflow.taskOutputDirectory` 的 Markdown 写入路径保持独立，指定名称的群聊产物放在 `artifactDirectory/task-files`。当前 Resident 文件 runner 沿用 30 秒默认命令超时；Host API 可在构造 runner 时设置 runTimeoutMs，尚未暴露为新的 profile 配置键。大文件须现场确认能在此时限完成；超时进入未知结果对账，不自动重发。
+
+受管模块默认限制为 20 MiB/文件、50 MiB/批、20 文件；当前通用文本生成能力另外限制 UTF-8 64 KiB。默认值是 Host 的本地保护，实际租户限制需要现场验证；不要在 profile 中添加尚未暴露的容量配置键。快照及 descriptor.json 与现有工件目录一并备份，不手工编辑 descriptor、效果账或删除未知发送对应快照。当前没有自动清理器：保留所有活动、等待恢复和未知项；结束后的清理另走受管引用核对与零副作用预检，不按目录名猜所有权。
+
+1. 安装前盘点活动和待执行的 `task-general-capability`，新产物能力使用工作流 v5，历史 v4 按原定义恢复，不修改旧摘要。确认 DWS 登录/profile 和指定测试群唯一对应；真实发件只在该测试群已经获授权时执行。
+2. 在隔离控制库实跑相关回归：`node --test test/task-artifact-files.test.js test/task-artifact-write.test.js test/task-general-workflow.test.js test/task-group-file-delivery.test.js`。定向测试通过与正式安装、渠道送达分开记证据。
+3. 安装后回读精确包、进程和健康，再读 `GET /state/workflows/catalog`，确认 `task-group-file-delivery` 是实际可用流程，并从 Task Owner 的 Host 能力目录确认 `write-task-file`；缺少必要出口时保留不可发起状态，不绕到 Agent 直接执行 DWS。
+4. 新建明确要求向本群交付的测试 Task，覆盖中文含空格的 Markdown、SQL、图片及已生成文档。读取 `fileDelivery.sourceQuote` 与完整角色/名称清单，核对生产者、当前需求版本、受管原字节、逐件效果、真实 messageId/resourceRef 和下载 SHA-256。生成文件、上传 ACK 或 Pod/进程健康都不等于群交付通过。
+5. 另验无发送要求、Web-only、跨群/profile、旧版本、缺必交项、路径/junction、部分成功、ACK 后恢复与内容不匹配。权限负例须零外发；未知项只对账，成功项不能重发。文字完成摘要失败也不得重发文件。
+
+任务详情分别报告产物生成、逐件文件交付及完成摘要状态。必交文件缺失或待核验时不能完成。图片仅作为原文件附件；没有真实受信生成器时，Office/PDF/图片生成任务必须明确受阻。真实渠道验收记录保存在 `docs/acceptance/task-group-file-delivery/`，敏感群、账号及消息资源标识按现有证据脱敏规范保存。
+
+### 已有文件的受信导入
+
+登记已有文件使用现有 `workflow.generalFileRead: { root: '<受信绝对目录>', readablePaths: ['exports/报告.pdf', 'exports/图片.png'] }`。沿既有 profile 配置语法更新并走正式维护；这里只给合同，不修改正式配置。不要把整个工作区加入白名单，也不扫描目录自动打包。文件可来自已有受信产物，不需要另造外部生产者回执。
+
+Owner 在 `task-general-capability` 阶段选择 `import-task-file`，`capabilityStep.input` 严格为 `{role,fileName,relativePath}`。来源必须同时在 Host `readablePaths` 和当前任务 `scope.readableFiles` 中，交付角色/文件名匹配 `scope.artifactFiles`；实际扩展名保持一致。准备环节只读取并冻结真实大小/SHA-256，模型不提供摘要或根路径；效果执行时再核对原字节才复制登记。路径、junction、身份变化和超容量均拒绝，不向群发送半包。
+
+登记成功后，文件交付及恢复只读取受管快照；原源文件后续修改或删除不会改变已登记版本。准备后、登记前源文件变化则拒绝执行，不能偷偷改用新内容。独立验收覆盖准备零写、源变化拒绝、双重白名单、扩展名变换拒绝，以及登记后源删除仍可恢复；这证明导入与传输原字节，不证明 Office/PDF 内容质量或提供新文件生成器。

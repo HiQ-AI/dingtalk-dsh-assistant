@@ -33,6 +33,18 @@
 
 消息处理详情显示“查询与答复”的状态、耗时和会话；结果正文与依据按需分页读取。取消问答时引用本人原问题；同一原消息有多个未完成事项时，先澄清选择，再核对身份和输入版本取消选定执行。
 
+### 任务产物发送到群聊
+
+明确要求“处理完成后把报告、Markdown、SQL或图片文件发到本群”时，工作进入同一个持久 Task。意图保存逐字引用的发送要求与完整文件清单；Owner 先生成并登记产物，再安排 `task-group-file-delivery`。目标绑定任务来源群与配置的 DWS profile。普通问答、Web-only 任务以及只要求生成文件的任务，不因此自动外发附件。
+
+`write-task-file` 可生成精确授权名称的 `.md/.txt/.sql/.csv/.json` 文件，UTF-8 内容最多 64 KiB。图片、Office、PDF 等传输保留真实原字节，但必须先有真实来源及已登记的产物；传输能力不提供这些格式的生成器，不能把文字改扩展名当文档。图片首版以可下载文件附件发送，不承诺聊天气泡预览。SQL 脚本交付不执行 SQL。
+
+已有文件可通过 `import-task-file` 纳入当前 Task：Host 在 `workflow.generalFileRead` 配置固定 `root` 和精确 `readablePaths`，Owner 输入仅为 `{role,fileName,relativePath}`，同时受当前任务的角色/名称及 `readableFiles` 授权约束。Host 只读真实来源后冻结大小/SHA-256，执行时再次核对并复制原字节到受管快照；Owner 不提供绝对根或猜摘要。导入保留真实扩展名，不能靠改名转换格式。Office、PDF、图片已有可信文件时可直接登记交付；没有源文件时仍需实际生成器。
+
+受管快照位于 `workflow.artifactDirectory/task-files/<taskId>/<artifactId>/<fileName>`，保留中文可读名称、需求版本、生产者和 SHA-256；文件元数据独立读回，二进制不塞入 JSON。当前 Host 默认每文件 20 MiB、每批 50 MiB、20 件，这些是本地保护值，不能当作租户平台上限。全部文件先预检，再逐件通过效果账发送；ACK 后查询真实消息并下载核对大小和摘要，全部必交文件通过才允许完成。未知发送保持待对账，不能重发来消除等待。
+
+本节描述源码能力，正式实例须按[本地部署与文件验收说明](docs/ops/resident-review-local-deployment.md#任务产物群聊文件交付切换与验收)完成安装和真实渠道回读。本轮代码实施不代表已部署。
+
 只读资源通过 `workflow.directQueries` 登记，由 `permissions` 显式声明 Agent 自身的资源授权，与发送者身份无关。不同群成员使用同一 Agent 职责范围，每次调用仍重新校验资源权限。数据库默认使用低权限只读身份；用户明确指定使用现有 UAT 账号时，仅对显式登记的 UAT 资源启用 Host 强制只读事务模式。模型始终不能获得连接凭据或提交任意 SQL。配置合同见 [Agent 查询工具](docs/api/agent-query-tool-contract.md)，切换步骤见 [本地部署说明](docs/ops/resident-review-local-deployment.md)。
 
 旧材料分析、固定规划/执行循环及逐次只读能力阶段退出新入口；切换前必须确认没有活动引用。历史记录继续按原状态读取，不重放旧命令。以下常驻主会话与叶子 Goal 说明适用于尚未切换的旧 Resident 群。
