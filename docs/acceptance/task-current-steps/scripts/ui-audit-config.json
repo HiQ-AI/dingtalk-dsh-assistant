@@ -1,0 +1,4 @@
+{
+  "sourceRoots": ["packages/dingtalk-dsh-observer"],
+  "canonicalMap": "docs/manual/observer-design.md"
+}

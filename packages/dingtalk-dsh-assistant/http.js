@@ -307,13 +307,14 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     if (!store.getWorkflowTaskNodeOutput) return send(response, 404, { error: 'workflow_disabled' })
     try { const download = workflowNodeOutput[4] === 'document'
       const value = await store.getWorkflowTaskNodeOutput(...workflowNodeOutput.slice(1, 4).map(decodeURIComponent),
-        { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 1200, 8000), outputRef: url.searchParams.get('ref'), ...(download ? { document: true } : {}) })
+        { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 1200, 8000), outputRef: url.searchParams.get('ref'),
+          ...(url.searchParams.has('detailRevision') ? { detailRevision: url.searchParams.get('detailRevision') } : {}), ...(download ? { document: true } : {}) })
       if (download && value) {
         response.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="node-output.md"; filename*=UTF-8''${encodeURIComponent(value.name)}`, 'Cache-Control': 'no-store' })
         return response.end(value.content)
       }
       return send(response, value ? 200 : 404, value ?? { error: 'output_not_found' }) }
-    catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+    catch (error) { return send(response, error.code === 'TASK_OUTPUT_CHANGED' ? 409 : residentErrorStatus(error), { error: error.message }) }
   }
   const workflowTaskHistory = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/(detail|executions)$/u.exec(url.pathname)
   if (workflowTaskHistory) {
@@ -324,7 +325,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const value = await store[method](decodeURIComponent(workflowTaskHistory[1]),
         detail ? undefined : { offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100) })
       return send(response, value ? 200 : 404, value ?? { error: 'task_not_found' })
-    } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+    } catch (error) { return send(response, error.code === 'TASK_DETAIL_STALE' ? 409 : residentErrorStatus(error), { error: error.message }) }
   }
   const workflowTaskRuns = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/runs$/u.exec(url.pathname)
   if (workflowTaskRuns) {

@@ -882,6 +882,19 @@ function assertTaskDrained(taskId, actorId, code) {
   }
 }
 function query(value) {
+  if (value?.kind === 'task.viewRevision') {
+    object(value, ['kind', 'taskId'])
+    const taskId = text(value.taskId, 'taskId')
+    const plan = queryTaskPlan(db, { kind: 'task.plan', taskId })
+    const owner = queryTaskOwner(db, { kind: 'task.owner', taskId })
+    const currentRuns = plan && new Set(plan.stages.map(stage => stage.runId))
+    const runs = db.prepare('SELECT * FROM execution_runs WHERE task_id=? ORDER BY rowid').all(taskId)
+      .filter(row => !currentRuns || currentRuns.has(row.run_id))
+      .map(row => ({ ...runDto(row), nodes: nodes(row.run_id).map(nodeDto),
+        effects: queryEffects(db, { kind: 'effect.list', runId: row.run_id }) }))
+    // 单个原生查询内读取全部版本依据；不包含随时钟变化的累计耗时。
+    return createHash('sha256').update(canonical({ plan, owner, runs, family: taskFamily(taskId) })).digest('hex')
+  }
   if (value?.kind === 'task.family') return taskFamily(text(value.taskId, 'taskId'))
   if (value?.kind === 'task.families') return taskFamilies()
   if (value?.kind === 'task.catalog') return db.prepare('SELECT task_id FROM business_tasks UNION SELECT task_id FROM task_owners UNION SELECT task_id FROM execution_runs').all()

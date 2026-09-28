@@ -2247,7 +2247,36 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       && item.definition?.payload?.workflowKind === 'local-acceptance' && item.result?.result?.localAcceptance)
     return effect?.result?.evidenceRef ?? null
   }
-  async function tasks({ taskId: selectedTaskId, readableOnly = false } = {}) {
+  async function currentPlanNodes(taskId, plan) {
+    const result = []
+    const requirementCurrent = plan.task.planRequirementRevision === plan.task.requirementRevision
+    for (const stage of plan.stages) {
+      const stageTitle = taskWorkflowCatalog.find(item => item.id === stage.workflowId)?.label
+        ?? (stage.workflowId.startsWith('task-engineering') ? '开发与验证' : stage.stageId)
+      const context = { stageId: stage.stageId, stageTitle }
+      if (stage.runId) {
+        const state = await controller.state(stage.runId)
+        if (state.run?.taskId !== taskId) throw executionError('TASK_PLAN_RUN_INVALID')
+        for (const node of state.nodes) {
+          const current = requirementCurrent && stage.status !== 'invalidated' && state.pendingInputCount === 0
+          result.push({ ...node, ...context, stepKey: `${taskId}:${stage.stageId}:${state.run.workflowId}:${node.nodeId}`,
+            ...(current ? {} : { status: 'blocked', waitReason: { kind: 'input', reference: '需求已更新，等待重新确认执行方案' } }),
+            outputRef: current ? await taskNodeReadoutRef(node) : null })
+        }
+        continue
+      }
+      const definition = stage.workflowDigest ? controller.workflowDefinition(stage.workflowId, stage.workflowDigest) : null
+      const planned = definition?.nodes ?? [{ id: 'definition-pending' }]
+      for (const node of planned) result.push({ ...context,
+        stepKey: `${taskId}:${stage.stageId}:${stage.workflowId}:${node.id}`,
+        nodeId: node.id, nodeRunId: null, runId: null, outputRef: null, sessionId: null,
+        title: definition ? undefined : `${stageTitle}（步骤待确定）`, definitionPending: !definition,
+        status: plan.task.controlState === 'cancelled' ? 'cancelled' : 'pending',
+        ...(stage.unavailableReason ? { waitReason: { kind: 'capability', reference: stage.unavailableReason } } : {}) })
+    }
+    return result
+  }
+  async function tasks({ taskId: selectedTaskId, readableOnly = false, completePlan = false } = {}) {
     const archives = new Map((await store.query({ kind: 'task.archives' })).map(item => [item.taskId, item.archivedAt]))
     const catalog = await store.query({ kind: 'task.catalog', ...(selectedTaskId ? { taskId: selectedTaskId } : {}) })
     const project = async ({ taskId, runs: taskRuns }) => {
@@ -2266,7 +2295,10 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         : taskRuns.at(-1)
       const requirementRef = plan?.task.requirementRef ?? firstRun?.requirementRef ?? plan?.stages[0]?.requirementRef
       const requirement = requirementRef ? await artifacts.read(requirementRef) : null
-      const outputRef = currentStage?.outputRef ?? state?.nodes.filter(node => node.outputRef).at(-1)?.outputRef
+      const requirementCurrent = !plan || plan.task.planRequirementRevision === plan.task.requirementRevision
+      const currentRun = !plan || currentStage?.runId === state?.run.runId
+      const outputRef = requirementCurrent && !state?.pendingInputCount
+        ? currentStage?.outputRef ?? (currentRun ? state?.nodes.filter(node => node.outputRef).at(-1)?.outputRef : null) : null
       const output = outputRef ? await artifacts.read(outputRef) : null
       const planState = plan?.task.status
       // 无 Owner 的计划以持久终态为准；有 Owner 时仍须通过当前版本验收。
@@ -2296,10 +2328,17 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         taskRunId: run?.runId ?? null,
         ...(origin?.channel === 'web' ? { sourceChannel: 'web', reportChannel: 'web', rerunOfTaskId: origin.rerunOfTaskId } : {}),
         stageTasks: state?.nodes.map(node => node.nodeId) ?? [], topicRefs: [], checkpoints: [],
-        executionNodes: await Promise.all((state?.nodes ?? []).map(async node => ({ ...node, outputRef: await taskNodeReadoutRef(node) }))), childSessionId: owner?.sessionId ?? state?.nodes.findLast(node => node.sessionId)?.sessionId,
+        executionNodes: completePlan && plan ? await currentPlanNodes(taskId, plan)
+          : await Promise.all((state?.nodes ?? []).map(async node => ({ ...node,
+            ...(completePlan ? { stepKey: `${taskId}:${state.run.workflowId}:${node.nodeId}` } : {}),
+            ...(completePlan && state.pendingInputCount ? { status: 'blocked',
+              waitReason: { kind: 'input', reference: '输入已更新，等待重新执行' } } : {}),
+            outputRef: completePlan && state.pendingInputCount ? null : await taskNodeReadoutRef(node) }))), childSessionId: owner?.sessionId ?? state?.nodes.findLast(node => node.sessionId)?.sessionId,
         taskOwner: owner ? { sessionId: owner.sessionId, status: owner.status, decision: owner.decision?.action ?? null,
           eventWatermark: owner.eventWatermark, processedWatermark: owner.processedWatermark } : null,
-        ...(plan ? { plan: { version: plan.task.planRevision, currentStageId: currentStage?.stageId ?? null,
+        ...(plan ? { plan: { version: plan.task.planRevision, requirementRevision: plan.task.requirementRevision,
+          requirementCurrent, currentStageId: currentStage?.stageId ?? null,
+          ...(completePlan ? { stepsResolved: plan.stages.length > 0 && plan.stages.every(stage => stage.runId || stage.workflowDigest) } : {}),
           stages: plan.stages.map(stage => ({ stageId: stage.stageId,
             title: taskWorkflowCatalog.find(item => item.id === stage.workflowId)?.label ?? stage.stageId,
             status: stage.status, workflowId: stage.workflowId, runId: stage.runId, outputRef: stage.outputRef })) } } : {}),
@@ -2325,12 +2364,20 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     return groupTaskExecutions(physical, families)
   }
   async function taskDetail(taskId) {
-    const family = await readableTaskFamily(taskId)
-    if (!family) return null
-    const task = (await tasks({ taskId }))[0]
-    if (!task) return null
-    return { ...task, logicalTaskId: family.rootTaskId, latestTaskId: family.latestTaskId,
-      executionNumber: family.taskIds.indexOf(taskId) + 1, executionCount: family.taskIds.length }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const family = await readableTaskFamily(taskId)
+      if (!family) return null
+      const currentTaskId = family.latestTaskId
+      const before = await store.query({ kind: 'task.viewRevision', taskId: currentTaskId })
+      const task = (await tasks({ taskId: currentTaskId, readableOnly: true, completePlan: true }))[0]
+      if (!task) return null
+      const after = await store.query({ kind: 'task.viewRevision', taskId: currentTaskId })
+      const currentFamily = await readableTaskFamily(taskId)
+      if (before !== after || executionDigest(family) !== executionDigest(currentFamily)) continue
+      return { ...task, requestedTaskId: taskId, logicalTaskId: family.rootTaskId, latestTaskId: currentTaskId,
+        detailRevision: after, executionNumber: family.taskIds.length, executionCount: family.taskIds.length }
+    }
+    throw executionError('TASK_DETAIL_STALE')
   }
   async function taskExecutions(taskId, { offset = 0, limit = 20 } = {}) {
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
@@ -2660,14 +2707,20 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       totalBytes: Buffer.byteLength(material.text), start: offset, end, text: material.text.slice(offset, end),
       complete: offset === 0 && end === material.text.length, nextCursor: end < material.text.length ? end : null }
   }
-  async function taskNodeOutput(taskId, runId, nodeRunId, { offset = 0, limit = 1200, outputRef, document = false } = {}) {
+  async function taskNodeOutput(taskId, runId, nodeRunId, { offset = 0, limit = 1200, outputRef, detailRevision, document = false } = {}) {
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 2 || limit > 8000)
       throw executionError('TASK_OUTPUT_CURSOR_INVALID')
-    const origin = await store.query({ kind: 'task.origin', taskId })
-    if (!readableTaskOrigin(origin)) return null
-    const state = await store.query({ kind: 'run', runId, includeHistory: true })
-    if (!state.run || state.run.taskId !== taskId) return null
-    const node = state.nodeHistory.find(item => item.nodeRunId === nodeRunId)
+    const family = await readableTaskFamily(taskId)
+    if (!family || family.latestTaskId !== taskId) return null
+    const before = await store.query({ kind: 'task.viewRevision', taskId })
+    if (detailRevision !== undefined && detailRevision !== before) throw executionError('TASK_OUTPUT_CHANGED')
+    const plan = await controller.taskPlan(taskId)
+    const stage = plan?.stages.find(item => item.runId === runId)
+    if (plan && (!stage || stage.status === 'invalidated'
+      || plan.task.planRequirementRevision !== plan.task.requirementRevision)) return null
+    const state = await store.query({ kind: 'run', runId })
+    if (!state.run || state.run.taskId !== taskId || state.pendingInputCount) return null
+    const node = state.nodes.find(item => item.nodeRunId === nodeRunId)
     const readableRef = node && await taskNodeReadoutRef(node)
     if (!readableRef) return null
     if (outputRef !== readableRef) throw executionError('TASK_OUTPUT_CHANGED')
@@ -2684,6 +2737,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       if (record) context.startingPoint = { repository: record.config.repoId, workBranch: record.config.head }
     }
     const result = describeTaskNodeOutput(node, output, context), { text, overview } = result
+    // 工件读取期间发生修订也不能把旧正文交给当前页面。
+    if (before !== await store.query({ kind: 'task.viewRevision', taskId })) throw executionError('TASK_OUTPUT_CHANGED')
     if (document) return result.document ?? null
     if (['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId)) {
       const pathText = `方案工件路径\n${join(artifacts.root, node.outputRef)}`

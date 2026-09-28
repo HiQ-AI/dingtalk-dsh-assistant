@@ -4,15 +4,12 @@ import test from 'node:test'
 import { describeMessageTraceItem } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { runInNewContext } from 'node:vm'
 
-test('消息、话题与任务详情只展示有绑定的会话并支持历史分页', async () => {
+test('消息与话题详情只展示有绑定的会话并支持分页', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /message\.runId \? React\.createElement\(Button[\s\S]*'处理过程'/)
   assert.match(source, /\/state\/workflows\/\$\{encodeURIComponent\(runId\)\}\/trace/)
   assert.match(source, /\/state\/workflows\/topics\/\$\{encodeURIComponent\(selection\.topicId\)\}\/context/)
-  assert.match(source, /\/state\/tasks\/\$\{encodeURIComponent\(task\.taskId\)\}\/runs/)
   assert.match(source, /sessionId \? React\.createElement\('button'/)
-  assert.match(source, /会话尚未创建或历史未绑定/)
-  assert.match(source, /sessionAction\(page\.taskOwner\?\.sessionBound === true \? page\.taskOwner\.sessionId : null/)
   assert.match(source, /setCursorHistory\(\(items\) => \[\.\.\.items, cursor\]\)/)
   assert.match(source, /intentNextCursor/)
   assert.match(source, /判断批次分页/)
@@ -402,103 +399,124 @@ test('步骤耗时使用本次 startedAt，缺失或倒置时间不冒充零耗�
  assert.equal(elapsed({...step,status:'running'},Date.parse('2026-09-26T00:01:05Z')),'已用时 1 分 5 秒')
 })
 
-function executionHistoryHarness(source, props) {
-  const fragment = source.slice(source.indexOf('    const linkedTaskText ='), source.indexOf('    function TaskHistoryDisclosure('))
+function stepOutputHarness(source, props) {
+  const fragment = source.slice(source.indexOf('    function TaskStepOutputContent('), source.indexOf('    const linkedTaskText ='))
   const states = [], effects = [], scheduled = [], requests = []
   let cursor = 0
-  const component = runInNewContext(`${fragment}; TaskExecutionHistory`, {
+  const component = runInNewContext(`${fragment}; TaskStepOutputContent`, {
     useState(initial) {
       const index = cursor++
       if (!(index in states)) states[index] = initial
       return [states[index], value => { states[index] = typeof value === 'function' ? value(states[index]) : value }]
     },
+    useRef(initial) { const index = cursor++; if (!(index in states)) states[index] = { current: initial }; return states[index] },
     useEffect(fn, deps) {
       const index = cursor++, previous = effects[index]
       if (!previous || deps.some((value, position) => value !== previous.deps[position])) {
-        previous?.cleanup?.()
-        effects[index] = { deps }
+        previous?.cleanup?.(); effects[index] = { deps }
         scheduled.push(() => { effects[index].cleanup = fn() })
       }
     },
     React: { createElement: (type, properties, ...children) => ({ type, props: properties || {}, children: children.flat() }) },
-    Button: 'button', colors: {}, fmt: value => value,
+    Button: 'button', colors: {}, ENDPOINT: 'http://localhost',
     get(url) { return new Promise((resolve, reject) => requests.push({ url, resolve, reject })) },
   })
   return {
     requests,
-    render(next = props) {
-      props = next; cursor = 0
-      const tree = component(props)
-      scheduled.splice(0).forEach(effect => effect())
-      return tree
-    },
+    render(next = props) { props = next; cursor = 0; const tree = component(props); scheduled.splice(0).forEach(effect => effect()); return tree },
+    unmount() { effects.forEach(effect => effect?.cleanup?.()) },
   }
 }
 function flattenElements(tree) {
   if (!tree || typeof tree !== 'object') return []
   return [tree, ...(tree.children || []).flatMap(flattenElements)]
 }
-function findHistoryButton(tree, label) {
-  return flattenElements(tree).find(item => item.type === 'button' && item.children.includes(label))
-}
+const settle = () => new Promise(resolve => setImmediate(resolve))
 
- test('整项执行历史懒加载、按服务端游标翻页并切换物理执行', async () => {
+test('任务详情只展示当前步骤，支持旧详情别名并保持稳定步骤身份', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const selected = []
-  const props = { task: { taskId: 'latest', logicalTaskId: 'root', executionCount: 3 }, onSelect: value => selected.push(value) }
-  const view = executionHistoryHarness(source, props)
-  let tree = view.render()
-  assert.equal(view.requests.length, 0)
-  tree.props.onToggle({ currentTarget: { open: true } })
-  tree = view.render()
-  assert.equal(view.requests[0].url, '/state/tasks/root/executions?offset=0&limit=20')
-  view.requests[0].resolve({ executions: [{ taskId: 'latest', executionNumber: 3, outcome: 'succeeded' }, { taskId: 'old', executionNumber: 2, outcome: 'cancelled', result: '查看 [合并请求](https://example.test/pr/1) 和 https://example.test/report。 [不安全](javascript:alert(1))', stageOutcomes: [{ title: '工程', status: 'succeeded' }] }], nextOffset: 2 })
-  await new Promise(resolve => setImmediate(resolve))
-  tree = view.render()
-  assert.equal(findHistoryButton(tree, '正在查看').props.disabled, true)
-  findHistoryButton(tree, '查看此次执行').props.onClick()
-  assert.deepEqual(selected, ['old'])
-  const links = flattenElements(tree).filter(item => item.type === 'a')
-  assert.deepEqual(links.map(item => item.props.href), ['https://example.test/pr/1', 'https://example.test/report'])
-  assert.equal(links[0].children[0], '合并请求')
-  assert.ok(links.every(item => item.props.rel === 'noopener noreferrer'))
-  assert.ok(flattenElements(tree).some(item => item.children.includes('工程 · 已完成')))
-  findHistoryButton(tree, '下一页').props.onClick()
-  view.render()
-  assert.equal(view.requests[1].url, '/state/tasks/root/executions?offset=2&limit=20')
-  view.requests[1].reject(new Error('network'))
-  await new Promise(resolve => setImmediate(resolve))
-  tree = view.render()
-  assert.ok(flattenElements(tree).some(item => item.props.role === 'alert'))
-  findHistoryButton(tree, '重试读取历史').props.onClick()
-  view.render()
-  assert.equal(view.requests[2].url, view.requests[1].url)
-  view.requests[2].resolve({ executions: [], nextOffset: null })
-  await new Promise(resolve => setImmediate(resolve))
-  tree = view.render()
-  assert.equal(findHistoryButton(tree, '下一页'), undefined)
-  findHistoryButton(tree, '上一页').props.onClick()
-  view.render()
-  assert.equal(view.requests[3].url, '/state/tasks/root/executions?offset=0&limit=20')
+  assert.doesNotMatch(source, /TaskExecutionHistory|TaskHistoryDisclosure|TaskRunHistory|历史记录|返回最新执行|executionNumber/)
+  assert.match(source, /workflowTaskDetail\?\.requestedTaskId === selectedWorkflowTaskId/)
+  assert.match(source, /key: node\.stepKey/)
+  assert.match(source, /'当前结果'/)
+  assert.match(source, /当前详情刷新失败，以下内容尚未刷新/)
+  assert.match(source, /setWorkflowTaskDetail\(value\)/)
+  assert.match(source, /\[selectedWorkflowTaskId, updatedAt, workflowDetailRetry\]/)
+  const code = source.slice(source.indexOf('      const taskNodes ='), source.indexOf('      const taskTone ='))
+  const progress = task => runInNewContext(`${code}; ({ completedSteps, stepsResolved, stepProgress })`, { selectedWorkflowTask: task })
+  assert.equal(progress({ plan: { stepsResolved: false }, executionNodes: [{ status: 'succeeded' }] }).stepProgress, 99)
+  const pending = progress({ plan: { stepsResolved: false }, executionNodes: [{ status: 'succeeded' }, { definitionPending: true, status: 'succeeded' }] })
+  assert.equal(pending.completedSteps, 1)
+  assert.equal(pending.stepProgress, 50)
+  assert.equal(progress({ plan: { stepsResolved: true }, executionNodes: [{ status: 'succeeded' }] }).stepProgress, 100)
+  assert.equal(progress({ plan: { stepsResolved: false }, executionNodes: [] }).stepProgress, 0)
+  assert.match(source, /taskNodes.length \|\| !stepsResolved/)
+  const future = progress({ plan: { stepsResolved: true }, executionNodes: [{ stepKey: 'stage-a:analyze', stageId: 'stage-a', nodeId: 'analyze', status: 'succeeded' }, { stepKey: 'stage-b:analyze', stageId: 'stage-b', nodeId: 'analyze', status: 'pending' }] })
+  assert.equal(future.completedSteps, 1)
+  assert.equal(future.stepProgress, 50)
+  assert.match(source, /node.stageTitle \? React.createElement/)
+  assert.match(source, /累计执行时长/)
+  assert.match(source, /累计总耗时/)
+
 })
 
-test('旧历史响应不能覆盖新任务，刷新维持页码且详情历史禁用补充操作', async () => {
+test('任务正文分页绑定当前详情版本，失败保留正文且旧版本慢响应被隔离', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const props = { task: { taskId: 'latest', logicalTaskId: 'root', executionCount: 3 }, onSelect() {} }
-  const view = executionHistoryHarness(source, props)
-  view.render().props.onToggle({ currentTarget: { open: true } })
-  view.render()
-  view.render({ ...props, task: { taskId: 'newest', logicalTaskId: 'other', executionCount: 1 } })
-  view.requests[1].resolve({ executions: [{ taskId: 'newest', executionNumber: 1, outcome: 'succeeded' }], nextOffset: null })
-  await new Promise(resolve => setImmediate(resolve))
-  view.requests[0].resolve({ executions: [{ taskId: 'stale', executionNumber: 99, outcome: 'failed' }], nextOffset: null })
-  await new Promise(resolve => setImmediate(resolve))
-  const tree = view.render()
-  assert.ok(flattenElements(tree).some(item => item.children.includes('第 1 次 · 已完成')))
-  assert.ok(!flattenElements(tree).some(item => item.children.includes('第 99 次 · 执行失败')))
-  assert.match(source, /workflowTaskDetail\?\.taskId === selectedWorkflowTaskId \? workflowTaskDetail : undefined/)
-  assert.match(source, /!historicalExecution && selectedWorkflowTask\.investigationRequest/)
-  assert.match(source, /\/state\/tasks\/\$\{encodeURIComponent\(selectedWorkflowTaskId\)\}\/detail/)
-  assert.match(source, /\[selectedWorkflowTaskId, updatedAt, workflowDetailRetry\]/)
-  assert.match(source, /返回最新执行/)
+  const node = { runId: 'run', nodeRunId: 'node', outputRef: 'ref' }
+  const first = stepOutputHarness(source, { taskId: 'task', node, detailRevision: 'v1' })
+  first.render()
+  assert.match(first.requests[0].url, /cursor=0&detailRevision=v1$/)
+  first.requests[0].resolve({ text: '首段', nextCursor: 10, documentName: '结果.md' }); await settle()
+  let tree = first.render()
+  assert.match(flattenElements(tree).find(item => item.type === 'a').props.href, /detailRevision=v1$/)
+  flattenElements(tree).find(item => item.children.includes('继续阅读产出')).props.onClick()
+  first.render()
+  assert.match(first.requests[1].url, /cursor=10&detailRevision=v1$/)
+  first.requests[1].reject(new Error('network')); await settle()
+  tree = first.render()
+  assert.ok(flattenElements(tree).some(item => item.children.includes('首段')))
+  assert.ok(flattenElements(tree).some(item => item.props.role === 'alert'))
+  flattenElements(tree).find(item => item.children.includes('重试读取产出')).props.onClick(); first.render()
+  first.unmount()
+  const second = stepOutputHarness(source, { taskId: 'task', node: { ...node, outputRef: 'ref-v2' }, detailRevision: 'v2' })
+  tree = second.render()
+  assert.ok(!flattenElements(tree).some(item => item.children.includes('首段')))
+  assert.match(second.requests[0].url, /cursor=0&detailRevision=v2$/)
+  second.requests[0].resolve({ text: '当前正文', nextCursor: null }); await settle()
+  first.requests[2].resolve({ text: '过期追加', nextCursor: null }); await settle()
+  tree = second.render()
+  assert.ok(flattenElements(tree).some(item => item.children.includes('当前正文')))
+  assert.ok(!flattenElements(tree).some(item => item.children.includes('过期追加')))
+  assert.match(source, /key: `\$\{taskId\}:\$\{node\.runId\}:\$\{node\.nodeRunId\}:\$\{node\.outputRef\}`/)
+})
+
+test('未变产物的详情版本推进保留已读正文与分页，新页使用新版本', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const props = { taskId: 'task', node: { runId: 'run', nodeRunId: 'node', outputRef: 'ref' }, detailRevision: 'v1' }
+  const view = stepOutputHarness(source, props); view.render()
+  view.requests[0].resolve({ text: '保留正文', nextCursor: 6 }); await settle()
+  let tree = view.render({ ...props, detailRevision: 'v2' })
+  assert.equal(view.requests.length, 1)
+  assert.ok(flattenElements(tree).some(item => item.children.includes('保留正文')))
+  flattenElements(tree).find(item => item.children.includes('继续阅读产出')).props.onClick(); view.render({ ...props, detailRevision: 'v2' })
+  assert.match(view.requests[1].url, /cursor=6&detailRevision=v2$/)
+  view.render({ ...props, detailRevision: 'v3' })
+  assert.match(view.requests[2].url, /cursor=6&detailRevision=v3$/)
+  view.requests[1].resolve({ text: '过期页', nextCursor: null }); view.requests[2].resolve({ text: '当前页', nextCursor: null }); await settle()
+  tree = view.render()
+  assert.ok(flattenElements(tree).some(item => item.children.includes('保留正文当前页')))
+  assert.ok(!flattenElements(tree).some(item => item.children.includes('保留正文过期页')))
+})
+
+test('阅读步骤移除后定位相邻步骤，未移除步骤不改变阅读位置', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const fragment = source.slice(source.indexOf('    const adjacentCurrentStep ='), source.indexOf('    function ObserverContent('))
+  const adjacent = runInNewContext(`${fragment}; adjacentCurrentStep`)
+  assert.equal(adjacent(['a', 'b', 'c'], ['a', 'c', 'd'], 'b'), 'c')
+  assert.equal(adjacent(['a', 'b', 'c'], ['a', 'b'], 'c'), 'b')
+  assert.equal(adjacent(['a'], [], 'a'), '')
+  assert.equal(adjacent(['a', 'b'], ['a', 'b', 'c'], 'a'), null)
+  assert.match(source, /正在阅读的步骤已从当前计划移除/)
+  assert.match(source, /'aria-live': 'polite'/)
+  assert.match(source, /getBoundingClientRect/)
 })

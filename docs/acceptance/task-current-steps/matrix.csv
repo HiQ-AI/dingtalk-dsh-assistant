@@ -1,0 +1,17 @@
+case,round,status,evidence
+initial-new-fixtures,1,FAIL,round-1.md
+relevant-regression-228,1,PASS,round-1.md
+completed-task-readonly-copy,1,PASS,completed-tasks-summary.json
+first-deployment-readback,1,FAIL,round-1.md
+current-plan-all-stages,2,PASS,round-2.md
+retry-latest-generation-only,2,PASS,round-2.md
+plan-replace-remove-add,2,PASS,round-2.md
+upstream-invalidates-result,2,PASS,round-2.md
+old-link-current-execution,2,PASS,round-2.md
+output-current-membership-version,2,PASS,round-2.md
+observer-no-history-stable-steps,2,PASS,browser-summary.md
+reading-position-remove-and-refresh,2,PASS,browser-summary.md
+completed-task-live-api,2,PASS,live-api-summary.json
+completed-task-live-browser,2,PENDING,round-2.md
+final-controlled-deployment,2,PENDING,deployment-summary.json
+build-and-pr-readback,2,PENDING,round-2.md

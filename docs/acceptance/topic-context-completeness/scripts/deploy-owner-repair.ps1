@@ -220,7 +220,12 @@ function Read-Deployment($launchRecord) {
  } catch { return @{status='pending';ready=$false;pid=$fresh.ProcessId;launcherPid=$launchRecord.launcherPid;logs=@($logs);restartAttempted=$false;nextAction='端口已监听，HTTP回读尚未完成；使用 -Readback 继续核对'} }
  $snapshot=Get-Content -LiteralPath "$EvidenceDirectory/control-before.json" -Raw|ConvertFrom-Json
  $ids=@($tasks|ForEach-Object taskId)
- foreach($id in $snapshot.tasks){if($ids-notcontains $id){throw '在线Task身份缺失'}}
+ foreach($id in $snapshot.tasks){
+  if($ids -contains $id){continue}
+  # 看板按逻辑任务合并；原物理身份必须仍可通过详情别名读取当前完整任务。
+  $detail=Invoke-RestMethod "http://127.0.0.1:18998/state/tasks/$([uri]::EscapeDataString($id))/detail" -NoProxy -TimeoutSec 20
+  if($detail.requestedTaskId-ne $id -or -not $detail.logicalTaskId -or $detail.taskId-ne $detail.latestTaskId -or $detail.taskId-notin $ids){throw '在线Task身份缺失'}
+ }
  $history=Run-Node @($checker,'verify',"$EvidenceDirectory/control-before.json")|ConvertFrom-Json
  $packageReadback=Run-Node @($checker,'package',$Package,$source,$installed)|ConvertFrom-Json
  $observerReadback=if($ObserverPackage){Run-Node @($checker,'package',$ObserverPackage,$observerSource,$observerInstalled)|ConvertFrom-Json}else{$null}
