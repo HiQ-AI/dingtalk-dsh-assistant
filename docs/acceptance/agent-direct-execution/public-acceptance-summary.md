@@ -103,4 +103,4 @@
 
 ## Agent 自身资源权限修订
 
-查询配置由成员 grants 改为 Agent permissions，消息问答和调查统一使用 Agent 资源范围，不按发送者筛选。相关五文件38/38通过（agent-owned-permissions-tests-r2.log），包括不同发送者同一资源目录、未授权资源不可见、旧授权格式拒绝及配置零写/CAS。尚未部署此修订，正式配置需同步切换；平台原生内容不改。
+查询配置由成员 grants 改为 Agent permissions，消息问答和调查统一使用 Agent 资源范围，不按发送者筛选。相关五文件38/38通过（agent-owned-permissions-tests-r2.log），包括不同发送者同一资源目录、未授权资源不可见、旧授权格式拒绝及配置零写/CAS。本轮已受控部署此修订，正式配置同步切换为 Agent permissions。92 文件回读、新进程/维护恢复、历史保护通过；原生真实模型查询及独立群资料/数据库查询与引用送达通过，0 新任务。详见 round-3.md；平台原生内容不改。

@@ -83,3 +83,6 @@ session-list-latency,3,installed-runtime,PASS,docs/tmp/agent-live-browser/post-c
 session-list-browser,1,installed-runtime,PASS,docs/tmp/agent-live-browser/post-contention-browser-list.json
 permission-boundary-audit,2,controlled-integration,PASS,docs/tmp/agent-permission-audit-r1.log
 agent-owned-permissions,1,controlled-integration,PASS,docs/tmp/agent-owned-permissions-tests-r2.log
+agent-owned-permissions-deployment,1,installed-runtime,PASS,docs/tmp/agent-owned-permissions-deployment-resume.log
+agent-owned-permissions-model,1,isolated-real-model,PASS,docs/tmp/agent-owned-native-message-r1/result.json
+agent-owned-permissions-channel,1,real-channel,PASS,docs/tmp/agent-owned-permissions-channel-final.json
