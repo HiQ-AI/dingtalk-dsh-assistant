@@ -22,6 +22,35 @@ const split = { kind: 'split', units: [{ spans: [{ start: 0, end: 2 }], goalText
 const binding = { kind: 'binding', disposition: 'conversation', candidateId: null, evidence: ['source'] }
 const intent = { kind: 'intent', actions: [{ intent: 'status', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
 
+test('已答复澄清重处理把原答复交给S，不重发通知或创建业务任务',async t=>{
+ let answerSeen=false
+ const {store,workflow}=await fixture(t,{judge:async({stage,input})=>{
+  if(stage==='S'){
+   assert.equal(input.clarificationAnswers[0].question,'如何处理附件？')
+   assert.equal(input.clarificationAnswers[0].answer,'只是测试，不处理附件。')
+   answerSeen=true;return split
+  }
+  if(stage==='R')return binding
+  return {...intent,actions:[{intent:'no_action',arguments:{},dependsOn:[]}],replyPolicy:'none'}
+ }})
+ const command=(kind,args)=>store.command({id:randomUUID(),kind:'message.'+kind,args})
+ await workflow.receive({...source,runId:'old'},{process:false})
+ await command('wait',{runId:'old',unitId:'$',nodeId:'S',request:{requestId:'q',kind:'needs_clarification',question:'如何处理附件？',permittedActors:['user']}})
+ await command('notification.prepare',{runId:'old',notificationId:'n',requestId:'q',payload:{text:'如何处理附件？',conversationId:'group'},disclosure:{conversationId:'group',authorizationRef:'old'}})
+ const notice=(await command('notification.claim',{notificationId:'n'})).result.notification
+ await command('notification.sent',{notificationId:'n',leaseEpoch:notice.leaseEpoch,ack:{messageId:'out'}})
+ await command('notification.readback',{notificationId:'n',leaseEpoch:notice.leaseEpoch,evidence:{messageId:'out'}})
+ await command('wake',{runId:'old',requestId:'q',actorId:'user',eventId:'answer',answer:'只是测试，不处理附件。'})
+ await command('attention',{runId:'old',reason:'recovery_exhausted'})
+ const original=await store.query({kind:'message.notification',notificationId:'n'})
+ const result=await workflow.reprocess('old')
+ assert.equal(answerSeen,true)
+ assert.equal(result.run.status,'settled')
+ assert.equal((await store.query({kind:'message.notifications',runId:result.run.runId,states:['prepared','sending','acknowledged','unknown','delivered','superseded']})).length,0)
+ assert.equal(result.commands.length,0)
+ assert.deepEqual(await store.query({kind:'message.notification',notificationId:'n'}),original)
+})
+
 test('普通 answer 在 I 与 IB 使用同一目标合同，schema 和模型说明均不接受正文或任务参数', () => {
   for (const stage of ['I', 'IB']) {
     const envelope = args => {

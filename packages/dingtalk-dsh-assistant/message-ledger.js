@@ -500,7 +500,10 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(old.sourceVersion>=5 && !(old.sourceVersion===5 && old.reason==='recovery_exhausted' && !old.budgetBaseline) && !stalledContext)fail('MESSAGE_REPROCESS_EXHAUSTED')
     const oldUnits=rows(db,old.runId,'unit')
     const oldCommands=rows(db,old.runId,'command'),oldNotifications=rows(db,old.runId,'notification')
-    if(oldNotifications.some(item=>!['prepared','superseded'].includes(item.status)))fail('MESSAGE_REPROCESS_EFFECT_PENDING')
+    const resolvedSplitRequests=rows(db,old.runId,'request').filter(item=>item.status==='resolved'&&item.nodeId==='S'&&item.unitId==='$'&&item.kind==='needs_clarification')
+    const answeredNotice=item=>oldCommands.length===0&&item.status==='delivered'&&!item.commandId
+      &&item.payload?.conversationId===old.conversationId&&resolvedSplitRequests.some(request=>request.id===item.requestId)
+    if(oldNotifications.some(item=>!['prepared','superseded'].includes(item.status)&&!answeredNotice(item)))fail('MESSAGE_REPROCESS_EFFECT_PENDING')
     const rejectedFacts=old.status==='settled'&&oldUnits.length>0&&oldCommands.length>0
       && oldCommands.every(item=>item.kind==='fact'&&item.status==='rejected')
       && oldNotifications.every(item=>item.status==='prepared')
@@ -522,6 +525,10 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     delete next.activatedAt;delete next.reason;delete next.capacityRetryVersion
     db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(next.runId,next.sourceKey,next.sourceVersion,json(next))
     db.prepare('UPDATE message_sources SET current_version=? WHERE source_key=?').run(next.sourceVersion,next.sourceKey)
+    for(const request of resolvedSplitRequests){
+      const id=createHash('sha256').update(json([next.runId,request.id])).digest('hex')
+      put(db,next.runId,'request',{...request,id,requestId:id,runId:next.runId,revision:0})
+    }
     return {result:{run:next,previousRunId:old.runId}}
   }
   if(kind==='message.receive') {

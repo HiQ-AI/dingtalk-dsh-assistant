@@ -672,3 +672,52 @@ test('同批重复事实撤销幂等接纳，矛盾替代整批回滚且零命�
   if(conflict)assert.ok(state.units.every(unit=>unit.status==='pending'))
  }
 })
+
+
+async function deliveredAnsweredSplitClarification(t, { delivered=true, answered=true, nodeId='S', sending=false, unknown=false, conversationId='g' } = {}) {
+ const f=await fixture(t);await f.call('receive',receive('m'))
+ await f.call('wait',{runId:'m',unitId:'$',nodeId,request:{requestId:'q',kind:'needs_clarification',question:'如何处理附件？',permittedActors:['a']}})
+ await f.call('notification.prepare',{runId:'m',notificationId:'n',requestId:'q',payload:{text:'如何处理附件？',conversationId},disclosure:{conversationId,authorizationRef:'m'}})
+ const notice=(await f.call('notification.claim',{notificationId:'n'})).result.notification
+ if(unknown)await f.call('notification.fail',{notificationId:'n',leaseEpoch:notice.leaseEpoch,error:'发送结果未知'})
+ else if(!sending)await f.call('notification.sent',{notificationId:'n',leaseEpoch:notice.leaseEpoch,ack:{messageId:'out'}})
+ if(delivered&&!sending&&!unknown)await f.call('notification.readback',{notificationId:'n',leaseEpoch:notice.leaseEpoch,evidence:{messageId:'out'}})
+ if(answered)await f.call('wake',{runId:'m',requestId:'q',actorId:'a',eventId:'answer',answer:'只是测试，不处理附件。'})
+ await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+ return f
+}
+
+test('已送达且答复已接纳的全消息澄清可受控恢复，原通知不变，答复继承且重复命令幂等',async t=>{
+ const f=await deliveredAnsweredSplitClarification(t)
+ const original=await f.store.query({kind:'message.notification',notificationId:'n'})
+ const args={runId:'m',newRunId:'m-replay'}
+ const first=await f.call('reprocess',args,'recover-resolved')
+ assert.equal(first.result.run.sourceVersion,2)
+ const next=await f.store.query({kind:'message.run',runId:'m-replay'})
+ assert.equal(next.requests.length,1);assert.equal(next.requests[0].status,'resolved')
+ assert.equal(next.requests[0].answer,'只是测试，不处理附件。')
+ assert.notEqual(next.requests[0].id,'q');assert.equal(next.requests[0].runId,'m-replay')
+ assert.deepEqual(await f.store.query({kind:'message.notification',notificationId:'n'}),original)
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).requests[0].status,'resolved')
+ assert.equal((await f.call('reprocess',args,'recover-resolved')).replayed,true)
+ await f.reopen()
+ assert.equal((await f.store.query({kind:'message.run',runId:'m-replay'})).requests[0].answer,next.requests[0].answer)
+ await bad(f.call('notification.claim',{notificationId:'n'}),'MESSAGE_NOTIFICATION_NOT_READY')
+})
+
+test('仅ACK、发送中、结果未知、尚未答复或单元澄清均不能扩大重处理许可',async t=>{
+ for(const variant of [{delivered:false},{sending:true},{unknown:true},{answered:false},{nodeId:'R'}]){
+  const f=await deliveredAnsweredSplitClarification(t,variant)
+  await bad(f.call('reprocess',{runId:'m',newRunId:'m-replay'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+  assert.equal((await f.store.query({kind:'message.source',sourceKey:'m'})).runId,'m')
+ }
+})
+
+test('已答复澄清仍不能重放已有业务命令',async t=>{
+ const f=await deliveredAnsweredSplitClarification(t)
+ await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'answer',args:{}}]})
+ await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+ await bad(f.call('reprocess',{runId:'m',newRunId:'m-replay'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+ assert.equal((await f.store.query({kind:'message.source',sourceKey:'m'})).runId,'m')
+})
