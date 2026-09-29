@@ -25,3 +25,7 @@ real-model-group-file-delivery,7,FAIL,round-7.md
 maintenance-pause-resume,8,PASS,round-8.md
 real-model-group-file-delivery,8,FAIL,round-8.md
 file-delivery-original-quote-authorization,9,PASS,round-9.md
+real-model-group-file-delivery,10,PASS,round-10.md
+owner-single-capability-stage-contract,10,PASS,round-10.md
+real-owner-completion-gate,10,FAIL,round-10.md
+compound-item-bound-evidence-and-isolation,11,PASS,round-11.md

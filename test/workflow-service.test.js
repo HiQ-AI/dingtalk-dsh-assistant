@@ -3143,7 +3143,8 @@ test('真实Owner路径保留工程本地验收与合并前缀，失败第三阶
     generalCompletionCheck:async input=>{
       domainChecks.push(input)
       assert.deepEqual(input.acceptanceCriteria,[criteria[1]])
-      assert.equal(input.evidence.length,2)
+      assert.equal(input.evidence.length,1)
+      assert.equal(input.evidence.some(item=>item.mergeCommitSha),false)
       assert.equal(input.evidence.some(item=>item.deliveryStatus==='pr_verified'),false)
       const deployed=input.evidence.find(item=>item.workflowKind==='uat-rebuild')
       assert.equal(deployed?.status,'technical-delivery-confirmed')
