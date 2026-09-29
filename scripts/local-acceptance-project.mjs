@@ -110,7 +110,8 @@ export async function main(args = process.argv.slice(2), input = process.stdin, 
   const parsed = parseArguments(args), config = await readConfiguration(parsed.configPath, directory)
   let raw = ''; for await (const chunk of input) { raw += chunk; if (Buffer.byteLength(raw) > 65536) fail('PROJECT_CONTEXT_INVALID') }
   const context = validateContext(JSON.parse(raw), config.uatEnvironment)
-  const logs = join(dirname(parsed.configPath), 'logs', context.namespace)
+  if (context.evidenceRoot !== undefined && !isAbsolute(context.evidenceRoot)) fail('PROJECT_CONTEXT_INVALID')
+  const logs = join(context.evidenceRoot ?? join(dirname(parsed.configPath), 'logs'), context.namespace)
   await mkdir(logs, { recursive: true, mode: 0o700 }); await checked(logs, true)
   const fd = openSync(join(logs, `${parsed.command}-${process.pid}.log`), 'wx', 0o600)
   const env = { ...process.env, NODE_OPTIONS: '--openssl-legacy-provider', NODE_ENV: 'development', YARN_PRODUCTION: 'false' }

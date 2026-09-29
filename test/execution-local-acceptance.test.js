@@ -47,7 +47,7 @@ import {appendFile,writeFile,readFile,mkdir} from 'node:fs/promises';
 const role=process.argv[2], trace=process.env.ACCEPTANCE_TRACE;
 let raw=''; for await(const chunk of process.stdin) raw+=chunk;
 const input=JSON.parse(raw), params=input.case?.parameters??input.plan?.cases[0]?.parameters??{};
-await appendFile(trace,JSON.stringify({role,pid:process.pid,namespace:input.namespace})+'\\n');
+await appendFile(trace,JSON.stringify({role,pid:process.pid,namespace:input.namespace,temp:process.env.TEMP,tmp:process.env.TMP,tmpdir:process.env.TMPDIR,evidenceRoot:input.evidenceRoot})+'\\n');
 if(role==='prepare'&&params.mutatePrepare)await appendFile('fixture.mjs','\\n// changed by build');
 if(role==='prepare'&&params.generated){await mkdir('target');await writeFile('target/generated.txt','build artifact');}
 if(role==='prepare'&&params.extraSource){await mkdir('src');await writeFile('src/evil.js','new unverified source');}
@@ -77,7 +77,7 @@ if(role==='service'||role==='service-child') {
  console.log(JSON.stringify({namespace:input.namespace,empty:stopped&&cleaned===input.namespace&&!params.dirty,...(params.readonly?{mode:'read-only',createdResources:0}:{})}));
 }
 `
-async function setup(t, parameters = {}, companion = false) {
+async function setup(t, parameters = {}, companion = false, taskFiles = false) {
   const directory = await mkdtemp(join(tmpdir(), 'local-acceptance-test-')), source = join(directory, 'source'), trace = join(directory, 'trace.jsonl')
   t.after(async () => {
     assert.equal(dirname(resolve(directory)), resolve(tmpdir()))
@@ -102,7 +102,7 @@ async function setup(t, parameters = {}, companion = false) {
     config.companionServices = [{ id: 'dataset', executable: process.execPath, args: [artifactPath, 'service', '127.0.0.1', '{port}'], readyPath: '/ready', artifactPath,
       artifactSha256: createHash('sha256').update(fixtureScript).digest('hex') }]
   }
-  const options = { root: join(directory, 'runs'), config }, runner = createLocalAcceptanceRunner(options)
+  const options = { root: join(directory, 'runs'), config, ...(taskFiles ? { tempRoot: join(directory, 'task-tmp') } : {}) }, runner = taskFiles ? (await import('../packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js')).createTaskLocalAcceptanceRunner(options) : createLocalAcceptanceRunner(options)
   const request = { candidate, plan: { cases: [{ criterionId: 'criterion-1', scenarioId: 'fixture', steps: ['读取本地业务结果'], expected: 'actual-value', parameters }] },
     taskId: 'fixture-task', runId: 'fixture-run', generation: 1, uatEnvironment: 'uat4' }
   return { options, runner, prepared: await runner.prepare(request), trace, directory, request,
@@ -261,4 +261,50 @@ test('进程检查启动失败保留安全分类和阶段证据，不包含stder
     assert.ok(!JSON.stringify(result).includes('fixture-private-secret'))
     assert.ok(!(await fixture.events()).some(event => event.role.startsWith('service')))
   } finally { process.env.PATH = previousPath }
+})
+
+ test('任务目录验收直接服务PID通过，所有阶段使用任务临时目录和旁路证据根', windows, async t => {
+ const fixture = await setup(t, {}, true, true)
+ const result = await fixture.runner.execute(fixture.prepared)
+ assert.equal(result.passed, true, JSON.stringify(result))
+ const events = await fixture.events()
+ for (const event of events) {
+  assert.equal(dirname(event.temp), fixture.options.tempRoot)
+  assert.equal(event.tmp, event.temp); assert.equal(event.tmpdir, event.temp)
+  assert.equal(event.evidenceRoot, join(dirname(fixture.prepared.directory), 'evidence'))
+ }
+ const { createTaskLocalAcceptanceRunner } = await import('../packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js')
+ assert.deepEqual(await createTaskLocalAcceptanceRunner(fixture.options).readReceipt(fixture.prepared), result)
+})
+
+test('任务验收拒绝tmp和evidence祖先junction，外部零写入且无执行预约', windows, async t => {
+ const { symlink, readdir } = await import('node:fs/promises')
+ for (const area of ['tmp', 'evidence']) {
+  const fixture = await setup(t, {}, false, true), outside = join(fixture.directory, 'outside')
+  await mkdir(outside)
+  const target = area === 'tmp' ? fixture.options.tempRoot : join(dirname(fixture.prepared.directory), 'evidence')
+  await symlink(outside, target, 'junction')
+  await assert.rejects(fixture.runner.execute(fixture.prepared), /TASK_DIRECTORY_OUTSIDE_ROOT/)
+  assert.deepEqual(await readdir(outside), [])
+  await assert.rejects(readFile(join(dirname(fixture.prepared.directory), 'execution-reserved.json')), { code: 'ENOENT' })
+ }
+})
+
+test('新任务验收runner及依赖跨LF/CRLF打包身份一致，真实源码变化仍改变身份', async t => {
+ const { pathToFileURL } = await import('node:url')
+ const fixture = await setup(t), identities = []
+ const files = ['execution-task-local-acceptance.js', 'execution-local-acceptance.js', 'execution-artifacts.js', 'execution-candidate.js', 'session-workspaces.js']
+ for (const style of ['lf', 'crlf', 'changed']) {
+  const directory = join(fixture.directory, style); await mkdir(directory)
+  await writeFile(join(directory, 'package.json'), '{"type":"module"}')
+  for (const file of files) {
+   let source = (await readFile(new URL('../packages/dingtalk-dsh-assistant/' + file, import.meta.url), 'utf8')).replace(/\r\n/g, '\n')
+   if (style === 'crlf') source = source.replace(/\n/g, '\r\n')
+   if (style === 'changed' && file === 'execution-task-local-acceptance.js') source += '\n// deliberate implementation change\n'
+   await writeFile(join(directory, file), source)
+  }
+  const { createTaskLocalAcceptanceRunner } = await import(pathToFileURL(join(directory, files[0])).href)
+  identities.push(createTaskLocalAcceptanceRunner({ ...fixture.options, tempRoot: join(fixture.directory, 'tmp') }).identity)
+ }
+ assert.equal(identities[0], identities[1]); assert.notEqual(identities[0], identities[2])
 })

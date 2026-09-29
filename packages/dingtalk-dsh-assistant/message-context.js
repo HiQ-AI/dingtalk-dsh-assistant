@@ -60,8 +60,10 @@ export const taskWorkflowCatalog = Object.freeze([
   { id: 'task-uat-rebuild', label: 'UAT 同提交重建', purpose: 'UAT同提交重建', mode: 'external' },
 ])
 const actionArguments = z.strictObject({ fileDelivery: fileDeliveryArguments.optional(), objective: argumentText.optional(), workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)).optional(), repositoryId: argumentText.optional(), uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']).optional(), targetId: argumentText.optional(), commitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), pullRequestNumber: z.number().int().positive().optional(), headCommitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), releaseTag: z.string().regex(/^v\d{8}-[1-9]\d*$/).optional(), changeRef: argumentText.optional(), acceptanceCriteria: acceptanceCriteriaSchema.optional(), explicitStages: z.array(argumentText).max(8).optional(), runId: argumentText.optional(), scope: z.enum(['conversation', 'task']).optional(), resultRef: argumentText.optional(), requestId: argumentText.optional(), answer: argumentText.optional(), decision: z.enum(['approved', 'rejected']).optional(), language: z.enum(['zh-CN', 'en-US']).optional(), kind: z.enum(['fact', 'constraint']).optional(), text: argumentText.optional() })
+export const taskActionRequirements = Object.freeze({ create: ['objective'], research: ['objective'], reopen: ['objective'], revise: ['objective'],
+  report: ['language'], clarification: ['runId', 'requestId', 'answer'], approval: ['requestId', 'decision'] })
 const taskActionSchema = z.strictObject({ intent: z.enum(['no_action', 'fact', 'research', 'create', 'revise', 'report', 'pause', 'cancel', 'resume', 'status', 'result', 'reopen', 'approval', 'clarification']), arguments: actionArguments, dependsOn: z.array(z.number().int().nonnegative()) }).superRefine((action, ctx) => {
-  const required = ['create', 'research', 'reopen', 'revise'].includes(action.intent) ? ['objective'] : action.intent === 'report' ? ['language'] : action.intent === 'clarification' ? ['runId', 'requestId', 'answer'] : action.intent === 'approval' ? ['requestId', 'decision'] : []
+  const required = [...(taskActionRequirements[action.intent] ?? [])]
   if (action.arguments.workflowId === 'task-engineering') required.push('repositoryId')
   for (const key of required) if (!action.arguments[key]) ctx.addIssue({ code: 'custom', path: ['arguments', key], message: `${action.intent} requires ${key}` })
 })
@@ -168,6 +170,71 @@ export function intentContext(base, binding, facts, responsibility = '', candida
     ...(effectiveFacts?.topic?.facts ?? []).flatMap(fact => (fact.sourceRefs ?? []).map(ref => ref.sourceKey)),
   ].filter(ref => typeof ref === 'string' && ref.length > 0))]
   return { ...base, executionMaterialRefs, binding: { ...target, ...identity }, facts: scopedFacts, ...(resolvedEvidence.length ? { resolvedEvidence } : {}), ...(binding.disposition === 'conversation' ? { candidates: summaries } : {}), ...(responsibility ? { groupResponsibility: responsibility } : {}) }
+}
+
+// IB 共用完全相同的任务事实；每个事项只保留自身原有事实的引用。
+export function shareTopicContext(input) {
+  const sharedTasks = {}
+  const reference = task => {
+    if (!task || typeof task !== 'object' || !task.taskId) return task
+    const ref = `task-facts:${digest(task)}`
+    sharedTasks[ref] = task
+    return { taskId: task.taskId, ...(task.factVersion === undefined ? {} : { factVersion: task.factVersion }), ref }
+  }
+  const units = input.units.map(unit => {
+    const facts = unit.input.facts
+    if (!facts) return { ...unit, input: { ...unit.input } }
+    return { ...unit, input: { ...unit.input, facts: { ...facts,
+      ...(facts.task ? { task: reference(facts.task) } : {}),
+      ...(Array.isArray(facts.tasks) ? { tasks: facts.tasks.map(reference) } : {}),
+      ...(Array.isArray(facts.topicTasks?.tasks) ? { topicTasks: { ...facts.topicTasks, tasks: facts.topicTasks.tasks.map(reference) } } : {}),
+    } } }
+  })
+  const material = value => {
+    if (!value || typeof value !== 'object') return value
+    if (Array.isArray(value)) return value.map(material)
+    const result = { ...value }
+    if (Array.isArray(value.resources)) result.resources = value.resources.map(material)
+    if (typeof value.resourceRef === 'string' && value.resourceRef.startsWith('workflow-task-history:') && typeof value.text === 'string') {
+      try {
+        const task = JSON.parse(value.text), ref = `task-facts:${digest(task)}`
+        if (task?.taskId && value.resourceRef === `workflow-task-history:${task.taskId}`
+          && JSON.stringify(task) === value.text && Object.hasOwn(sharedTasks, ref)) {
+          delete result.text
+          result.taskFactsRef = ref
+        }
+      } catch { /* 非原生完整 JSON 保留原文。 */ }
+    }
+    return result
+  }
+  for (const unit of units) if (unit.input.resolvedEvidence) unit.input = { ...unit.input,
+    resolvedEvidence: unit.input.resolvedEvidence.map(evidence => ({ ...evidence, answer: material(evidence.answer) })) }
+  const topic = input.sharedTopic
+  const sharedTopic = topic?.facts ? { ...topic, facts: topic.facts.map(fact => {
+    const result = { ...fact }, sources = topic.sources ?? []
+    const matches = (fact.sourceRefs ?? []).map(ref => sources.flatMap((source, index) =>
+      source.sourceKey === ref.sourceKey && source.sourceVersion === ref.sourceVersion ? [index] : []))
+    if (matches.length === 1 && matches[0].length === 1 && typeof fact.text === 'string'
+      && sources[matches[0][0]].text === fact.text) { delete result.text; result.textFromSource = true }
+    if (matches.length && matches.every(indexes => indexes.length === 1)
+      && fact.sourceRefs.every(ref => Object.keys(ref).length === 2 && Object.hasOwn(ref, 'sourceKey') && Object.hasOwn(ref, 'sourceVersion'))) {
+      delete result.sourceRefs
+      result.sourceIndexes = matches.map(indexes => indexes[0])
+    }
+    if (typeof fact.actorId === 'string' && fact.actorId.length && fact.actorId === topic.actorId) {
+      delete result.actorId; result.actorFromTopic = true
+    }
+    return result
+  }) } : topic
+  const responsibility = units[0]?.input.groupResponsibility
+  const sharedResponsibility = typeof responsibility === 'string' && responsibility.length > 0 && units.every(unit => unit.input.groupResponsibility === responsibility)
+  const projected = units.map(unit => {
+    if (!sharedResponsibility) return unit
+    const { groupResponsibility, ...rest } = unit.input
+    return { ...unit, input: rest }
+  })
+  return { ...input, ...(Object.keys(sharedTasks).length ? { sharedTasks } : {}), units: projected,
+    ...(sharedTopic ? { sharedTopic } : {}), ...(sharedResponsibility ? { groupResponsibility: responsibility } : {}) }
 }
 
 // 材料引用由 Host 提供；模型描述的查询目标不能变成启动前依赖。

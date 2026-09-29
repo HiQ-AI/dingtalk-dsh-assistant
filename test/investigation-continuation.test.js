@@ -22,7 +22,9 @@ async function fixture(t,{blocked=false}={}) {
   bindings.push(binding);await onSessionBound()
   if(!evidenceRef)evidenceRef=(await read.execute({binding,input,args:{}})).evidenceRef
   const first=bindings.length===1
-  const output={outcome:blocked?'blocked':first?'needs_input':'completed',summary:first?'请补充环境':'已查询',question:!blocked&&first?'哪个环境':'',limitations:blocked?['没有所需能力']:[],evidenceRefs:[evidenceRef]}
+  const output={outcome:blocked?'blocked':first?'needs_input':'completed',summary:first?'请补充环境':'已查询',question:!blocked&&first?'哪个环境':'',limitations:blocked?['没有所需能力']:[],evidenceRefs:[evidenceRef],
+   findings:[{kind:'fact',statement:'已读到实际查询结果',evidenceRefs:[evidenceRef]}],openItems:[],
+   criterionReviews:input.acceptanceItems.map(item=>({itemId:item.itemId,status:blocked||first?'insufficient_evidence':'satisfied',reason:blocked?'没有所需能力':first?'等待补充环境':'已核对查询结果',evidenceRefs:[evidenceRef]}))}
   await assert.rejects(validateOutput({...output,evidenceRefs:['actual-source']}),error=>classifyOutputError(error)==='correctable')
   await validateOutput(output)
   await onResult(output)
@@ -34,7 +36,7 @@ async function fixture(t,{blocked=false}={}) {
  await command('message.receive',{runId:'source',sourceKey:'source',sourceVersion:1,actorId:'a',conversationId:'g',body:'调查问题',policy:{initialWindowMs:45000}})
  await command('message.split',{runId:'source',units:[{unitId:'source-unit'}]})
  await command('message.accept',{runId:'source',unitId:'source-unit',commands:[{commandId:'task-command',kind:'research',args:{taskId:'task',arguments:{objective:'调查问题'},binding:{disposition:'new'}}}]})
- const input={request:'调查问题',constraints:[],acceptanceCriteria:['答复'],scope:{actorId:'a',conversationId:'g',sourceKeys:['source'],resourceIds:[],databaseIds:[],statusIds:[]},context:{},materials:[{id:'source',text:'调查问题'}]}
+ const input={request:'调查问题',constraints:[],acceptanceCriteria:['答复'],acceptanceItems:[{itemId:'acceptance-1',criterion:'答复'}],scope:{actorId:'a',conversationId:'g',sourceKeys:['source'],resourceIds:[],databaseIds:[],statusIds:[]},context:{},materials:[{id:'source',text:'调查问题'}]}
  await controller.createTaskPlan({commandId:'plan',taskId:'task',stages:[{stageId:'investigation',workflowId:'task-investigation',input}]})
  const plan=await controller.advanceTaskPlan('task'),runId=plan.stages[0].runId
  await controller.whenIdle(runId)

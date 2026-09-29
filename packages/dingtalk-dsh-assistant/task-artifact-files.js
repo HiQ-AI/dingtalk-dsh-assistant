@@ -82,10 +82,17 @@ async function publish(path, bytes) {
 
 /** Host 提供根及授权来源；文件描述符只含元数据，原字节保存在受管目录。 */
 export function createTaskArtifactFiles({ root, maxFileBytes = 20 * 1024 * 1024,
-  maxBatchBytes = 50 * 1024 * 1024, maxFiles = 20 }) {
+  maxBatchBytes = 50 * 1024 * 1024, maxFiles = 20, getTaskDirectories }) {
   if (typeof root !== 'string' || !isAbsolute(root)
+    || getTaskDirectories !== undefined && typeof getTaskDirectories !== 'function'
     || [maxFileBytes, maxBatchBytes, maxFiles].some(value => !Number.isSafeInteger(value) || value <= 0)) fail('CONFIG_INVALID')
   const configuredRoot = resolve(root)
+  async function artifactDirectory(file) {
+    const directories = await getTaskDirectories?.(file.taskId)
+    const base = directories == null ? configuredRoot : directories.outputs
+    if (typeof base !== 'string' || !isAbsolute(base)) fail('CONFIG_INVALID')
+    return join(resolve(base), file.taskId, file.artifactId)
+  }
   function binding(input) {
     const { taskId, requirementRevision, producer, role, fileName } = input ?? {}
     if (!identity(taskId) || !Number.isSafeInteger(requirementRevision) || requirementRevision < 1
@@ -110,7 +117,7 @@ export function createTaskArtifactFiles({ root, maxFileBytes = 20 * 1024 * 1024,
     binding(file)
     if (!hex(file.artifactId) || !hex(file.sha256) || !Number.isSafeInteger(file.size)
       || file.size < 0 || file.size > maxFileBytes) fail('DESCRIPTOR_INVALID')
-    const directory = join(configuredRoot, file.taskId, file.artifactId)
+    const directory = await artifactDirectory(file)
     await checkedDirectory(directory)
     const stored = JSON.parse((await readRegular(join(directory, 'descriptor.json'), 16384)).toString('utf8'))
     if (canonicalExecutionJson(stored) !== canonicalExecutionJson(file)) fail('DESCRIPTOR_MISMATCH')
@@ -123,7 +130,7 @@ export function createTaskArtifactFiles({ root, maxFileBytes = 20 * 1024 * 1024,
     if (!Buffer.isBuffer(input.bytes) && !(input.bytes instanceof Uint8Array)) fail('BYTES_REQUIRED')
     const bytes = Buffer.from(input.bytes)
     if (bytes.length > maxFileBytes || bytes.length > maxBatchBytes) fail('CAPACITY_EXCEEDED')
-    const file = descriptor(input, bytes), directory = join(configuredRoot, file.taskId, file.artifactId)
+    const file = descriptor(input, bytes), directory = await artifactDirectory(file)
     await checkedDirectory(directory, true)
     await publish(join(directory, file.fileName), bytes)
     await publish(join(directory, 'descriptor.json'), Buffer.from(canonicalExecutionJson(file)))

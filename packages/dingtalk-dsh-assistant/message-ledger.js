@@ -970,7 +970,8 @@ export function queryMessages(db,a) {
   }
   if(a.kind==='message.routing.pending')return db.prepare(`SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=COALESCE(json_extract(r.body,'$.validSourceVersion'),r.source_version)
     WHERE json_extract(r.body,'$.conversationId')=? AND json_extract(r.body,'$.status') NOT IN ('buffered','alias','superseded')
-    AND NOT (json_extract(r.body,'$.status')='settled' AND json_extract(r.body,'$.reason')='message_quiet')
+    AND NOT (json_extract(r.body,'$.status')='settled' AND (json_extract(r.body,'$.reason')='message_quiet'
+      OR (json_extract(r.body,'$.routingStatus')='routing_complete' AND json_extract(r.body,'$.intentStatus')='processed')))
     AND (NOT EXISTS (SELECT 1 FROM message_items i WHERE i.run_id=r.run_id AND i.kind='unit')
       OR EXISTS (SELECT 1 FROM message_items i LEFT JOIN message_topic_bindings b ON b.unit_id=json_extract(i.body,'$.id')
         WHERE i.run_id=r.run_id AND i.kind='unit' AND json_extract(i.body,'$.status')!='superseded' AND b.unit_id IS NULL))

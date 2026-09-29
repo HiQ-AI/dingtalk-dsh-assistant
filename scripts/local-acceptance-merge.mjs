@@ -241,7 +241,8 @@ export async function executeMerge(mode, config, input, dependencies = {}) {
   if (!['initialize', 'execute', 'api', 'cleanup', 'verify-cleanup'].includes(mode) || !/^acceptance-[a-f0-9]{32}$/.test(input?.namespace ?? '')
     || input.uatEnvironment !== 'uat3' || !/^https:\/\/editor[1-9]\.hiqdat\.dev$/.test(config.ssoOrigin ?? '')
     || !['evidenceRoot', 'accountsFile', 'springConfigFile'].every(k => isAbsolute(config[k] ?? '')) || config.accountKey !== 'editor_uat_admin') fail('INPUT_INVALID')
-  const baseUrl = localOrigin(input.baseUrl), directory = join(config.evidenceRoot, input.namespace), ledgerPath = join(directory, 'merge-ledger.json')
+  if (input.evidenceRoot !== undefined && !isAbsolute(input.evidenceRoot)) fail('INPUT_INVALID')
+  const baseUrl = localOrigin(input.baseUrl), directory = join(input.evidenceRoot ?? config.evidenceRoot, input.namespace), ledgerPath = join(directory, 'merge-ledger.json')
   const operate = dependencies.dataOperation ?? dataOperation, fetcher = dependencies.fetch ?? fetch, precheck = dependencies.check ?? checkMerge
   await mkdir(directory, { recursive: true, mode: 0o700 })
   if ((await lstat(directory)).isSymbolicLink() || resolve(await realpath(directory)).toLowerCase() !== resolve(directory).toLowerCase()) fail('DIRECTORY_INVALID')

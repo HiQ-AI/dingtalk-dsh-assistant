@@ -1,5 +1,6 @@
 import { openExecutionStore } from './execution-store.js'
-import { openExecutionArtifacts } from './execution-artifacts.js'
+import { openExecutionArtifacts, parseArtifactReference } from './execution-artifacts.js'
+import { taskDirectories } from './session-workspaces.js'
 import { createExecutionController } from './execution-controller.js'
 import { createExecutionSessions } from './execution-session.js'
 import { createExecutionDelivery } from './execution-delivery.js'
@@ -10,6 +11,23 @@ export { createManagedWorkspaces } from './execution-workspace.js'
 
 export const name = 'dingtalk-execution-foundation'
 export const inject = ['executionWorkflows', 'agents', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'llm', 'tools', 'systemPrompt']
+
+/** 以已有持久工件引用区分布局；旧任务不会因升级或重启自动搬迁。 */
+export function createTaskDirectoryResolver({ store, workspaceRoot }) {
+  return async (taskId, { logicalTaskId } = {}) => {
+    const plan = await store.query({ kind: 'task.plan', taskId })
+    const reference = plan?.task.requirementRef ?? plan?.stages.find(stage => stage.requirementRef)?.requirementRef
+      ?? (await store.query({ kind: 'run.list', taskId, limit: 1 }))[0]?.requirementRef
+    if (reference) {
+      const storedId = parseArtifactReference(reference).logicalTaskId
+      if (!storedId) return null
+      if (logicalTaskId && logicalTaskId !== storedId) throw new Error('TASK_DIRECTORY_IDENTITY_CONFLICT')
+      logicalTaskId = storedId
+    } else if (plan) return null
+    logicalTaskId ??= (await store.query({ kind: 'task.family', taskId }))?.rootTaskId ?? taskId
+    return taskDirectories(workspaceRoot, logicalTaskId)
+  }
+}
 
 /** 按依赖顺序尝试全部清理；失败必须保留，不能让前项异常跳过数据库解锁。 */
 export async function closeExecutionResources(resources) {
@@ -22,11 +40,12 @@ export async function closeExecutionResources(resources) {
 }
 
 /** 独立入口；不读取、写回或迁移旧resident的Task账。 */
-export async function openExecutionRuntime({ ctx, dbPath, instanceId, artifactDirectory, initialize = false, workflows, historicalWorkflows = [], deliveryOptions, readTools = [], repositoryInspect, tools = [], getWorkspaceDir, maxConcurrentRuns = 4, changeQuietMs, maxChangeDelayMs }) {
+export async function openExecutionRuntime({ ctx, dbPath, instanceId, artifactDirectory, taskWorkspaceRoot, initialize = false, workflows, historicalWorkflows = [], deliveryOptions, readTools = [], repositoryInspect, tools = [], getWorkspaceDir, maxConcurrentRuns = 4, changeQuietMs, maxChangeDelayMs }) {
   const store = await openExecutionStore({ dbPath, instanceId, initialize })
   let sessions, controller
   try {
-    const artifacts = await openExecutionArtifacts({ directory: artifactDirectory, initialize })
+    const getTaskDirectories = taskWorkspaceRoot ? createTaskDirectoryResolver({ store, workspaceRoot: taskWorkspaceRoot }) : undefined
+    const artifacts = await openExecutionArtifacts({ directory: artifactDirectory, initialize, taskWorkspaceRoot, getTaskDirectories })
     const delivery = deliveryOptions ? createExecutionDelivery({ ...deliveryOptions, store, artifacts }) : undefined
     const registeredTools = typeof tools === 'function' ? await tools({ store, artifacts }) : tools
     sessions = createExecutionSessions({ ctx, isCurrent: binding => controller.isCurrent(binding), repositoryInspect, tools: registeredTools, getWorkspaceDir })

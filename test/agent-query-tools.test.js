@@ -114,3 +114,15 @@ test('真实Git批读取保持搜索文件分页、固定提交、遮盖及diges
  const abort=new AbortController();abort.abort(new Error('cancelled-test'))
  await assert.rejects(capability.execute({input,scope,signal:abort.signal}),/cancelled-test|aborted/)
 })
+
+
+test('查询证据使用受信任务绑定，普通消息查询不写入任务目录', async t => {
+ const f=await fixture(t), writes=[],put=f.artifacts.put
+ f.artifacts.put=async(value,options)=>{writes.push(options);return put(value,options)}
+ const [tool]=createAgentQueryTools({capabilities:[f.capability],resolveScope:async()=>({resourceIds:['docs']}),artifacts:f.artifacts})
+ await tool.execute({binding,args:{resourceId:'docs',operation:'list'}})
+ assert.equal(writes[0],undefined)
+ const taskBinding={kind:'task-node',taskId:'task',runId:'run',nodeRunId:'node',generation:1,inputDigest:'a'.repeat(64),sessionId:'session',leaseEpoch:1,inputRef:'sha256-'+ 'b'.repeat(64)+'.json'}
+ await tool.execute({binding:taskBinding,args:{resourceId:'docs',operation:'list'}})
+ assert.deepEqual(writes[1],{taskId:'task',reference:taskBinding.inputRef})
+})

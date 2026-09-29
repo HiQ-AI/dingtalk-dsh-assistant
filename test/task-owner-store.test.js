@@ -139,11 +139,13 @@ test('已接纳决定在应用回执前持续可查，重启后重放并幂等�
     assert.deepEqual(pending().map(item => item.turnId), ['turn-1'])
     assert.deepEqual([pending()[0].requirementRevision, pending()[0].planRevision, pending()[0].controlRevision], [1, 1, 1])
     assert.equal(f.read('task.owner').applicationStatus, 'pending')
+    assert.deepEqual(f.read('task.owner.planning').receipts, [])
     assert.deepEqual(recoverTaskOwners(f.db), { recovered: 0 })
     assert.deepEqual(pending().map(item => item.turnId), ['turn-1'])
     assert.equal(f.send('task.owner.applied', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 }).status, 'applied')
     assert.equal(f.send('task.owner.applied', { taskId: 'task-1', turnId: 'turn-1' }).status, 'applied')
     assert.deepEqual(pending(), [])
+    assert.deepEqual(f.read('task.owner.planning').receipts.map(x => [x.turnId,x.planChangeKind]), [['turn-1','appendStages']])
     validateTaskOwnerSchema(f.db)
   } finally { f.db.close() }
 })
@@ -163,7 +165,10 @@ test('complete 仅接纳当前计划全部阶段具有产物与证据的成功�
     assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 }),
       { code: 'TASK_OWNER_COMPLETION_UNPROVEN' })
     f.db.prepare("UPDATE task_plan_stages SET status='succeeded',output_ref='proof/output.json',evidence_refs='[\"proof/result.json\"]' WHERE task_id='task-1'").run()
-    assert.equal(f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 }).status, 'accepted')
+    assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
+      deliveryManifestRef: 'tasks/task-1/not-a-digest.json' }), { code: 'TASK_OWNER_DELIVERY_MANIFEST_INVALID' })
+    const deliveryManifestRef = `tasks/task-1/sha256-${'a'.repeat(64)}.json`
+    assert.equal(f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1, deliveryManifestRef }).status, 'accepted')
     assert.equal(f.read('task.owner').decision.action, 'complete')
   } finally { f.db.close() }
 })
@@ -379,5 +384,29 @@ test('Owner 累计验收第33项拒绝且零写，历史超限仍允许已有项
     assert.equal(f.send('task.owner.acceptance.extend', args(32)).status, 'existing')
     assert.equal(queryTaskOwner(f.db, { kind: 'task.owner.acceptance', taskId: 'task-1' }).length, 33)
     assert.throws(() => f.send('task.owner.acceptance.extend', args(34)), { code: 'TASK_OWNER_CRITERIA_INVALID' })
+  } finally { f.db.close() }
+})
+
+ test('规划证据只返回本任务已应用的 initialize/append，截断明确标记', () => {
+  const f = fixture()
+  try {
+    const insert = f.db.prepare(`INSERT INTO task_owner_turns(turn_id,task_id,lease_epoch,event_watermark,requirement_revision,plan_revision,control_revision,authorization_revision,input_fence_revision,status,application_status,candidate_json,decision_json,created_at,updated_at) VALUES(?, 'task-1',?,0,1,1,1,1,1,?,?, ?,?,?,?)`)
+    const decision = kind => JSON.stringify({ action: 'advance', planChange: { kind, stages: [{ workflowId: 'task-general' }] } })
+    insert.run('failed',1,'released',null,decision('initialize'),null,at,at)
+    insert.run('pending',2,'accepted','pending',decision('append'),decision('append'),at,at)
+    const noPlan = JSON.stringify({action:'advance',evidenceRefs:[]})
+    const replace = JSON.stringify({action:'advance',planChange:{kind:'replaceSuffix',stages:[{workflowId:'task-general'}]},appendStages:[{workflowId:'task-general'}]})
+    insert.run('no-plan',202,'accepted','applied',noPlan,noPlan,at,at)
+    insert.run('replace',203,'accepted','applied',replace,replace,at,at)
+    insert.run('first',3,'accepted','applied',decision('initialize'),decision('initialize'),at,at)
+    insert.run('second',4,'accepted','applied',decision('append'),decision('append'),at,at)
+    const result = f.read('task.owner.planning')
+    assert.equal(result.truncated, false)
+    assert.deepEqual(result.receipts.map(x => [x.turnId,x.planChangeKind,x.workflowIds]), [['first','initialize',['task-general']],['second','append',['task-general']]])
+    assert.deepEqual(queryTaskOwner(f.db,{kind:'task.owner.planning',taskId:'other'}), {receipts:[],truncated:false})
+    assert.throws(()=>queryTaskOwner(f.db,{kind:'task.owner.planning',taskId:'task-1',other:true}))
+    for(let i=0;i<199;i++) insert.run(`extra-${i}`,i+5,'accepted','applied',decision('append'),decision('append'),at,at)
+    assert.equal(f.read('task.owner.planning').truncated,true)
+    assert.equal(f.read('task.owner.planning').receipts.length,200)
   } finally { f.db.close() }
 })

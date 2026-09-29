@@ -1,11 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, cp, readFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, cp, readFile, readdir, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { verifyDeploymentBackup, reverifyDeploymentBackup, verifyDeploymentWeb, verifyArtifactClosure } from '../scripts/deployment-integrity.mjs'
+import { copyDeploymentTaskDirectory, checkDeploymentTaskDirectory, verifyDeploymentBackup, reverifyDeploymentBackup, verifyDeploymentWeb, verifyArtifactClosure } from '../scripts/deployment-integrity.mjs'
 
 async function fixture() {
   const root=await mkdtemp(join(tmpdir(),'deployment-proof-')),runtime=join(root,'runtime'),domain=join(root,'domain'),profile=join(root,'profile'),backupRoot=join(root,'backup')
@@ -80,4 +80,76 @@ test('HTTP正常但恢复报错或认证失败不得部署ready，凭据不出�
     assert.equal(options.headers.cookie,'dsh=secret-cookie');return new Response('<!doctype html><html></html>')
   })
   assert.equal(proof.authenticatedWebStatus,200);assert.equal(proof.inboundProcessing,false);assert.equal(JSON.stringify(proof).includes('secret'),false)
+})
+
+async function taskFixture(t) {
+ const f=await fixture();t.after(()=>f.db.close())
+ const taskDirectory=join(f.root,'workspace/tasks'),artifactDirectory=join(taskDirectory,'family-1/work/artifacts')
+ await mkdir(artifactDirectory,{recursive:true});await mkdir(join(taskDirectory,'family-1/outputs'),{recursive:true})
+ const bytes=Buffer.from(JSON.stringify({outputRef:f.ref})),name=`sha256-${createHash('sha256').update(bytes).digest('hex')}.json`,ref=`tasks/family-1/${name}`
+ await writeFile(join(artifactDirectory,name),bytes);await writeFile(join(taskDirectory,'family-1/outputs/report.md'),'交付物')
+ f.db.prepare('UPDATE records SET output_ref=?').run(ref)
+ await cp(f.runtime,join(f.backupRoot,'runtime'),{recursive:true});await cp(taskDirectory,join(f.backupRoot,'tasks'),{recursive:true})
+ return {...f,taskDirectory,taskRef:ref,name}
+}
+test('任务目录check拒绝漏参/错误根且不写业务数据或工件',async t=>{
+ const f=await taskFixture(t),dbPath=join(f.runtime,'control.sqlite')
+ const before=await readFile(dbPath),beforeWal=await readFile(`${dbPath}-wal`),entries=await readdir(f.taskDirectory,{recursive:true})
+ await assert.rejects(checkDeploymentTaskDirectory({dbPath}),/BACKUP_TASK_DIRECTORY_REQUIRED/)
+ await assert.rejects(checkDeploymentTaskDirectory({dbPath,taskDirectory:'relative'}),/BACKUP_TASK_DIRECTORY_INVALID/)
+ const wrongRoot=join(f.root,'wrong-tasks');await mkdir(wrongRoot)
+ await assert.rejects(checkDeploymentTaskDirectory({dbPath,taskDirectory:wrongRoot}),/BACKUP_ARTIFACT_MISSING/)
+ const result=await checkDeploymentTaskDirectory({dbPath,taskDirectory:f.taskDirectory})
+ assert.equal(result.writes,0);assert.equal(result.taskArtifactRefs,1)
+ assert.deepEqual(await readFile(dbPath),before);assert.deepEqual(await readFile(`${dbPath}-wal`),beforeWal)
+ assert.deepEqual(await readdir(f.taskDirectory,{recursive:true}),entries)
+})
+test('新旧引用闭包与全部任务交付物均进入备份，缺根不能静默成功',async t=>{
+ const f=await taskFixture(t)
+ await assert.rejects(verifyArtifactClosure(join(f.runtime,'artifacts'),[f.taskRef]),/BACKUP_TASK_DIRECTORY_REQUIRED/)
+ const proof=await verifyDeploymentBackup(f)
+ assert.equal(proof.database.artifactRefs,2)
+ assert.ok(proof.manifest.some(item=>item.path==='tasks/family-1/outputs/report.md'))
+ await writeFile(join(f.backupRoot,'manifest.json'),JSON.stringify(proof))
+ assert.equal((await reverifyDeploymentBackup(f)).writes,0)
+ await assert.rejects(reverifyDeploymentBackup({...f,taskDirectory:undefined}),/BACKUP_TASK_DIRECTORY_REQUIRED/)
+ await writeFile(join(f.taskDirectory,'family-1/outputs/new.md'),'新增')
+ await assert.rejects(reverifyDeploymentBackup(f),/BACKUP_SOURCE_FILE_SET_CHANGED/)
+})
+test('新任务引用不会被数据库采集忽略，缺少任务备份拒绝',async t=>{
+ const f=await taskFixture(t)
+ await assert.rejects(verifyDeploymentBackup({...f,taskDirectory:undefined}),/BACKUP_TASK_DIRECTORY_REQUIRED/)
+})
+test('任务根中的junction不纳入备份，任务ref不能穿越',async t=>{
+ const f=await taskFixture(t),outside=join(f.root,'outside')
+ await mkdir(outside);await symlink(outside,join(f.taskDirectory,'escape'),'junction')
+ await assert.rejects(checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory}),/BACKUP_LINK_UNSAFE/)
+ await assert.rejects(verifyArtifactClosure(join(f.runtime,'artifacts'),[`tasks/../${f.name}`],{taskDirectory:f.taskDirectory}),/BACKUP_ARTIFACT_INVALID/)
+})
+
+test('工程源码副本的node_modules明确排除，复制不遍历链接且其他文件完整核验',async t=>{
+ const f=await taskFixture(t),repo=join(f.taskDirectory,'family-1/work/engineering','a'.repeat(24),`ws-${'b'.repeat(64)}`,'repository')
+ const modules=join(repo,'node_modules'),outside=join(f.root,'external-dependencies')
+ await mkdir(modules,{recursive:true});await mkdir(outside)
+ await writeFile(join(outside,'not-a-task.txt'),'不能复制的共享依赖')
+ await symlink(outside,join(modules,'dependency'),'junction')
+ await writeFile(join(repo,'package.json'),'{}');await writeFile(join(repo,'source.js'),'source')
+ const nested=join(repo,'packages/web');await mkdir(nested,{recursive:true});await symlink(outside,join(nested,'node_modules'),'junction')
+ const checked=await checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory})
+ assert.equal(checked.taskBackupExclusions.length,1)
+ const backupRoot=join(f.root,'filtered-backup');await mkdir(backupRoot)
+ for(const name of ['runtime','domain','profile'])await cp(f[name],join(backupRoot,name),{recursive:true})
+ const copied=await copyDeploymentTaskDirectory({taskDirectory:f.taskDirectory,destination:join(backupRoot,'tasks')})
+ assert.deepEqual(copied.taskBackupExclusions,checked.taskBackupExclusions)
+ const paths=await readdir(join(backupRoot,'tasks'),{recursive:true})
+ assert.equal(paths.some(path=>path.includes('node_modules')),false)
+ assert.equal(paths.some(path=>path.endsWith('source.js')),true)
+ const proof=await verifyDeploymentBackup({...f,backupRoot})
+ assert.deepEqual(proof.taskBackupExclusions,checked.taskBackupExclusions)
+ await writeFile(join(backupRoot,'manifest.json'),JSON.stringify(proof))
+ await writeFile(join(outside,'dependency-change.txt'),'可再生依赖变化')
+ assert.equal((await reverifyDeploymentBackup({...f,backupRoot})).verified,true)
+ await mkdir(join(f.taskDirectory,'family-1/outputs/node_modules'))
+ await symlink(outside,join(f.taskDirectory,'family-1/outputs/node_modules/unsafe'),'junction')
+ await assert.rejects(checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory}),/BACKUP_LINK_UNSAFE/)
 })

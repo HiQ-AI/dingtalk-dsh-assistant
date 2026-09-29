@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
@@ -299,4 +299,86 @@ test('正式 Host 继续恢复外部旧/新定义，待执行阶段不套最新�
   assert.equal(service.execution.controller.workflowDefinition(release.id, current.digest).ownerContract.id, 'external-result')
   const restored = await service.execution.controller.taskPlan('current-external')
   assert.equal(restored.stages[0].workflowDigest, current.digest)
+})
+
+
+test('复合验收只共享该条显式绑定的当前阶段证据，领域效果仍独立核验', async t => {
+  const base = join(process.cwd(), 'docs/tmp/task-unified-file-storage')
+  await mkdir(base, { recursive: true })
+  const root = await mkdtemp(join(base, 'domain-evidence-'))
+  const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'domain-evidence', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const seen = []
+  const general = createGeneralCapabilityStepWorkflow({ capabilities: [{ id: 'write', identity: 'write-v1', effectClass: 'file.write', authorize: () => true, prepare: () => ({}), verify: () => ({}) }],
+    completionIdentity: 'test-v1', completionCheck: async () => { throw Error('原冻结合同内置验收不应重复执行') } }).ownerContract
+  const workflows = ['write', 'delivery', 'unrelated'].map(domain => ({ ...synthetic({ id: domain, version: '1',
+    async validateCompletion(context) {
+      assert.ok(context.stages.every(item => item.contractId === domain))
+      assert.equal(context.output.total, domain === 'unrelated' ? 3 : 2)
+      assert.equal(context.output.hostExecution, undefined)
+      return !context.acceptanceItems.length || await context.verifyAcceptance(context)
+    } }), id: `task-${domain}`, nodes: [{ ...synthetic().nodes[0], execute: async ({ input }) => ({ domain, total: input.items.length }) }] }))
+  workflows[0].ownerContract = general
+  workflows[0].nodes[0].execute = async () => ({ output: { written: true }, verification: { passed: true, outputDigest: executionDigest({ written: true }) } })
+  const digests = workflows.map(workflow => defineExecutionWorkflow(workflow).digest)
+  let controller = createExecutionController({ store, artifacts, workflows })
+  t.after(async () => { await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: workflows.map((workflow, i) => ({ stageId: `stage-${i}`, workflowId: workflow.id, ...(i === 0 ? { input: { items: ['a', 'b'] } } : {}) })) })
+  await store.command({ id: 'owner', kind: 'task.owner.init', args: { taskId: 'task', sessionId: 'owner', sourceKey: 'source', criteria: ['生成文件并发送本群'] } })
+  let plan
+  for (let i = 0; i < workflows.length; i++) {
+    if (i) {
+      plan = await controller.advanceTaskPlan('task')
+      await controller.bindTaskStageInput({ commandId: `bind-${i}`, taskId: 'task', planRevision: plan.task.planRevision, stageId: `stage-${i}`, predecessorOutputRef: plan.stages[i - 1].outputRef, input: { items: ['a', 'b', ...(i === 2 ? ['c'] : [])] } })
+    }
+    plan = await controller.advanceTaskPlan('task')
+    await controller.whenIdle(plan.stages[i].runId)
+  }
+  plan = await controller.advanceTaskPlan('task')
+  await controller.close()
+  controller = createExecutionController({ store, artifacts, workflows })
+  for (const stage of plan.stages) await controller.recover({ commandId: `recover-${stage.stageId}`, runId: stage.runId })
+  assert.deepEqual(workflows.map(workflow => defineExecutionWorkflow(workflow).digest), digests)
+  assert.deepEqual(plan.stages.map(stage => stage.workflowDigest), digests)
+  const [item] = await store.query({ kind: 'task.owner.acceptance', taskId: 'task' })
+  const refs = plan.stages.slice(0, 2).map(stage => stage.outputRef)
+  const decision = { action: 'complete', summary: '生成并发送', evidenceRefs: refs,
+    assessments: [{ itemId: item.itemId, status: 'satisfied', evidenceRefs: refs }] }
+  const helpers = createTaskWorkflowContracts({ store, artifacts, controller, verifyAcceptance: async context => {
+    seen.push(context)
+    return context.acceptanceItems[0].evidenceRefs.length === 2
+      && context.stages.map(item => item.contractId).sort().join(',') === 'delivery,general-capability-result'
+  } })
+  assert.equal(await helpers.authorizeCompletion({ taskId: 'task', plan, requirement, decision }), true)
+  assert.equal(seen.length, 2)
+  for (const context of seen) {
+    assert.deepEqual(context.acceptanceItems[0].evidenceRefs, refs)
+    for (const item of context.stages) {
+      const host = item.output.hostExecution
+      assert.equal(host.taskId, 'task')
+      assert.equal(host.stageId, item.stage.stageId)
+      assert.equal(host.runId, item.stage.runId)
+      assert.equal(host.predecessorOutputRef, item.stage.predecessorOutputRef)
+      assert.ok(host.run.createdAt <= host.run.updatedAt)
+      assert.ok(host.nodes.every(node => node.status === 'succeeded'))
+      assert.deepEqual(host.planning, { receipts: [], truncated: false })
+    }
+  }
+  const completed = { taskId: 'task', plan, requirement, decision }
+  const truncated = createTaskWorkflowContracts({ store: { query: query => query.kind === 'task.owner.planning'
+    ? { receipts: [], truncated: true } : store.query(query) }, artifacts, controller,
+    verifyAcceptance: () => { throw Error('截断规划不能进入语义判断') } })
+  assert.equal(await truncated.authorizeCompletion(completed), false)
+  for (const verifyAcceptance of [undefined, async () => false]) {
+    const rejected = createTaskWorkflowContracts({ store, artifacts, controller, verifyAcceptance })
+    assert.equal(await rejected.authorizeCompletion(completed), false)
+  }
+  for (const bad of ['invented', 'tasks/other-task/sha256-' + 'a'.repeat(64) + '.json']) {
+    const invalid = { ...decision, evidenceRefs: [...refs, bad], assessments: [{ ...decision.assessments[0], evidenceRefs: [...refs, bad] }] }
+    assert.equal(await helpers.authorizeCompletion({ ...completed, decision: invalid }), false)
+  }
+  // 即便有写入和投递效果，业务语义校验不接受时也不得完成。
+  const business = createTaskWorkflowContracts({ store, artifacts, controller, verifyAcceptance: async ({ stages }) =>
+    stages.some(item => item.output.productionRepairVerified === true) })
+  assert.equal(await business.authorizeCompletion({ ...completed, requirement: { ...requirement, request: '修复生产故障' } }), false)
 })

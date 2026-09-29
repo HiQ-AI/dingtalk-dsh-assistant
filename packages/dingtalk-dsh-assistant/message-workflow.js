@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, validateExecutionMaterialRefs, unitContext, candidateCards, intentContext } from './message-context.js'
+import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, validateExecutionMaterialRefs, unitContext, candidateCards, intentContext, shareTopicContext } from './message-context.js'
 import { prepareMessageRequest } from './message-model.js'
 import { isPassiveTaskProgress, isQuietGroupMessage } from './message-ledger.js'
 import { wholeTopicFactRevision } from './message-topics.js'
@@ -182,6 +182,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (committed?.status === 'stale') return null
       return output
     } catch (error) {
+      if (!binding && error.code === 'RUNTIME_MAINTENANCE_ACTIVE') throw error
       if (binding) {
         const failure = error.issues ? `MESSAGE_SCHEMA_INVALID:${JSON.stringify(error.issues.slice(0, 8).map(issue => ({ path: issue.path, message: issue.message }))).slice(0, 1200)}` : error.code ?? error.message
         try { await cmd('message.node.fail', { runId, nodeRunId: binding.nodeRunId, leaseEpoch: binding.leaseEpoch, expectedRevision: rev, error: failure, retryAt: new Date(clock() + config.recoveryDelaysMs[0]).toISOString() }) }
@@ -415,9 +416,9 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const sourceManifest = [...new Map([...prepared.map(item => ({ sourceKey: item.run.sourceKey, sourceVersion: item.run.sourceVersion, text: item.run.body })), ...(sharedTopic?.sources ?? [])]
       .map(ref => [`${ref.sourceKey}:${ref.sourceVersion}`, { sourceKey: ref.sourceKey, sourceVersion: ref.sourceVersion, required: true,
         ...(typeof ref.text === 'string' ? { hash: digest(ref.text), coverage: [{ start: 0, end: ref.text.length }] } : { coverage: null }) }])).values()]
-    const input = { intentRunId: `intent:${topicId}:${topic.inputRevision}:${contextHash.slice(0, 12)}`, topicId, topicInputRevision: topic.inputRevision, contextHash, contextRevision: sharedTopic?.contextRevision ?? topic.contextRevision, sourceManifest,
+    const input = shareTopicContext({ intentRunId: `intent:${topicId}:${topic.inputRevision}:${contextHash.slice(0, 12)}`, topicId, topicInputRevision: topic.inputRevision, contextHash, contextRevision: sharedTopic?.contextRevision ?? topic.contextRevision, sourceManifest,
       taskFactVersions,
-      ...(sharedTopic ? { sharedTopic } : {}), units: prepared.map(item => ({ unitId: item.unit.id, runId: item.run.runId, actorId: item.run.actorId, input: item.input })) }
+      ...(sharedTopic ? { sharedTopic } : {}), units: prepared.map(item => ({ unitId: item.unit.id, runId: item.run.runId, actorId: item.run.actorId, input: item.input })) })
     const preserved = first.data.nodes.findLast(node => node.nodeId === 'IB' && node.status === 'succeeded'
       && node.input?.intentRunId === input.intentRunId && node.output?.output?.kind === 'topic_intents')
     const output = preserved?.output.output ?? await invoke(first.data, first.unit.id, 'IB', input)
@@ -522,23 +523,24 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (routingPending && !await authorizedPriorityControls(entries)) continue
       const snapshots = await Promise.all(entries.map(item => state(item.run.runId)))
       if (snapshots.some(data => data.run.status === 'needs_attention' || data.requests.some(request => request.status === 'pending' && entries.some(item => item.unit.id === request.unitId)))) continue
-      let retry = false
+      let retry = false, paused = false
       const flight = topicDrive(topic.topicId).then(status => { retry = ['WAIT_ROUTING', 'CONTEXT_CHANGED'].includes(status) }).catch(async error => {
+        paused = error.code === 'RUNTIME_MAINTENANCE_ACTIVE'
         retry = ['MESSAGE_TOPIC_STALE', 'MESSAGE_TOPIC_CONTEXT_STALE', 'MESSAGE_TASK_FACTS_STALE', 'MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)
-        if (!closed && !['MESSAGE_TOPIC_STALE', 'MESSAGE_TOPIC_CONTEXT_STALE', 'MESSAGE_TASK_FACTS_STALE', 'MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)) {
+        if (!closed && !paused && !['MESSAGE_TOPIC_STALE', 'MESSAGE_TOPIC_CONTEXT_STALE', 'MESSAGE_TASK_FACTS_STALE', 'MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)) {
           const entries = await store.query({ kind: 'message.topic.units', topicId: topic.topicId })
           if (entries[0]) await cmd('message.attention', { runId: entries[0].run.runId, reason: `MESSAGE_TOPIC_INTENT_FAILED:${error.code ?? error.message}` })
         }
       }).finally(async () => {
         try {
-          if (closed) return
+          if (closed || paused) return
           const latest = await store.query({ kind: 'message.topic', topicId: topic.topicId })
           topicFlights.delete(topic.topicId)
           if (retry || latest?.inputRevision !== topic.inputRevision) {
             const scheduled = scheduleTopics(conversationId)
             topicSchedules.add(scheduled)
             void scheduled.catch(async error => {
-              if (!closed && entries[0]) await cmd('message.attention', { runId: entries[0].run.runId, reason: `MESSAGE_TOPIC_SCHEDULE_FAILED:${error.code ?? error.message}` })
+              if (!closed && error.code !== 'RUNTIME_MAINTENANCE_ACTIVE' && entries[0]) await cmd('message.attention', { runId: entries[0].run.runId, reason: `MESSAGE_TOPIC_SCHEDULE_FAILED:${error.code ?? error.message}` })
             }).finally(() => topicSchedules.delete(scheduled))
           }
         } finally { topicFlights.delete(topic.topicId) }
@@ -642,7 +644,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         routingTails.set(conversationId, routed)
         try { return await routed } finally { if (routingTails.get(conversationId) === routed) routingTails.delete(conversationId) }
       }).catch(async error => {
-      if (!closed && !['MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)) await cmd('message.attention', { runId, reason: `MESSAGE_CONTEXT_OR_DISPATCH_FAILED:${error.code ?? error.message}` })
+      if (!closed && !['MESSAGE_STALE', 'MESSAGE_NODE_STALE', 'RUNTIME_MAINTENANCE_ACTIVE'].includes(error.code)) await cmd('message.attention', { runId, reason: `MESSAGE_CONTEXT_OR_DISPATCH_FAILED:${error.code ?? error.message}` })
       return state(runId)
       }).finally(() => flights.delete(runId))
       flights.set(runId, flight)

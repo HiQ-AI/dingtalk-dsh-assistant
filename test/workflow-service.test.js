@@ -9,6 +9,7 @@ import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { DatabaseSync, backup } from 'node:sqlite'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
+import { createTaskDirectoryResolver } from '../packages/dingtalk-dsh-assistant/execution.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
@@ -442,7 +443,8 @@ function investigationResult(input, result) {
 async function fixture(t, actor = 'owner', notifications, options = {}) {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'workflow-service-'))
   const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'test', initialize: true })
-  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true,
+    ...(options.taskFiles ? { taskWorkspaceRoot: root, getTaskDirectories: createTaskDirectoryResolver({ store, workspaceRoot: root }) } : {}) })
   const delivery = options.delivery ?? (options.deliveryOptions ? createExecutionDelivery({ store, artifacts, ...options.deliveryOptions }) : undefined)
   let codeMode = false
   const investigationSessions = { async run({ input, binding, onSessionBound, onResult }) {
@@ -457,19 +459,44 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
   const controller = createExecutionController({ store, artifacts, sessions: options.executionSessions ?? investigationSessions, readTools: ['read-topic-sources', 'read-predecessor-artifact', 'organize-topic-sources', 'read-task-message-resource'], ...(delivery ? { delivery } : options.external ? { delivery: { execute: async () => { throw new Error('EXTERNAL_EFFECT_NOT_EXPECTED') } } } : {}), workflows: [] })
   const execution = { store: options.storeQuery ? { ...store, query: request => options.storeQuery(request, store.query) } : store,
     artifacts, controller, ...(delivery ? { delivery } : {}) }
-  const legacy = { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'] }), getGroup: id => ({ groupId: id, responsibility: '处理本人交办事项', messages: [] }), ...options.legacy }
+  const legacy = { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'], ...(options.taskFiles ? { workspaceDir: root } : {}) }), getGroup: id => ({ groupId: id, responsibility: '处理本人交办事项', messages: [] }), ...options.legacy }
   const judge = async ({ stage, input }) => {
     if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.source.text.length }], goalText: input.source.text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.source.text.length, role: 'unit' }] }
     if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
     return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '整理本条材料', workflowId: 'task-investigation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
   }
   const legacyJudge = options.judge ?? judge
-  const batchJudge = async request => request.stage === 'IB'
-    ? { kind: 'topic_intents', decisions: await Promise.all(request.input.units.map(async unit => ({
-      unitId: unit.unitId, intent: await legacyJudge({ ...request, stage: 'I', input: { ...unit.input,
-        facts: { ...unit.input.facts, ...(request.input.sharedTopic ? { topic: request.input.sharedTopic } : {}) } } }),
-    }))) }
-    : legacyJudge(request)
+  const batchJudge = async request => {
+    if (request.stage !== 'IB') return legacyJudge(request)
+    const shared = request.input
+    const resolveTask = task => task?.ref ? shared.sharedTasks[task.ref] : task
+    const resolveMaterial = value => {
+      if (!value || typeof value !== 'object') return value
+      if (Array.isArray(value)) return value.map(resolveMaterial)
+      const { taskFactsRef, ...rest } = value
+      return { ...rest, ...(taskFactsRef ? { text: JSON.stringify(shared.sharedTasks[taskFactsRef]) } : {}),
+        ...(value.resources ? { resources: value.resources.map(resolveMaterial) } : {}) }
+    }
+    const topic = shared.sharedTopic && { ...shared.sharedTopic, facts: shared.sharedTopic.facts.map(fact => {
+      if (fact.sourceIndexes) { const { sourceIndexes, ...rest } = fact; fact = { ...rest, sourceRefs: sourceIndexes.map(index => {
+        const { sourceKey, sourceVersion } = shared.sharedTopic.sources[index]; return { sourceKey, sourceVersion }
+      }) } }
+      if (fact.actorFromTopic) { const { actorFromTopic, ...rest } = fact; fact = { ...rest, actorId: shared.sharedTopic.actorId } }
+      if (!fact.textFromSource) return fact
+      const ref = fact.sourceRefs[0], { textFromSource, ...rest } = fact
+      return { ...rest, text: shared.sharedTopic.sources.find(source => source.sourceKey === ref.sourceKey && source.sourceVersion === ref.sourceVersion).text }
+    }) }
+    return { kind: 'topic_intents', decisions: await Promise.all(shared.units.map(async unit => {
+      const facts = unit.input.facts
+      return { unitId: unit.unitId, intent: await legacyJudge({ ...request, stage: 'I', input: { ...unit.input,
+        sharedTasks: shared.sharedTasks, groupResponsibility: unit.input.groupResponsibility ?? shared.groupResponsibility,
+        ...(unit.input.resolvedEvidence ? { resolvedEvidence: unit.input.resolvedEvidence.map(evidence => ({ ...evidence, answer: resolveMaterial(evidence.answer) })) } : {}),
+        facts: { ...facts, ...(facts.task ? { task: resolveTask(facts.task) } : {}),
+          ...(facts.tasks ? { tasks: facts.tasks.map(resolveTask) } : {}),
+          ...(facts.topicTasks ? { topicTasks: { ...facts.topicTasks, tasks: facts.topicTasks.tasks.map(resolveTask) } } : {}),
+          ...(topic ? { topic } : {}) } } }) }
+    })) }
+  }
   const taskOwnerSessions = { async run({ input, onSessionBound, onCandidate }) {
     await onSessionBound()
     const needsPlan = input.stages.length === 0
@@ -553,13 +580,22 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   let sent = 0
   const notices = { canDisclose: async () => true, send: async () => { sent++; return { messageId: `notice-${sent}` } },
     readback: async notice => ({ messageId: notice.ack.messageId, evidenceRef: 'readback' }) }
-  const { service, execution, message } = await fixture(t, 'owner', notices, { config, external })
+  const { service, execution, message, root } = await fixture(t, 'owner', notices, { config, external, taskFiles: true })
   const received = await service.ingest(message), processed = await service.messages.process(received.runId)
   const original = processed.commands[0].result
   await execution.controller.whenIdle(original.runId)
   await service.recoverExecutionTasks(); await service.flushNotifications()
+  const ownerState = await execution.store.query({ kind: 'task.owner', taskId: original.taskId })
+  assert.equal(ownerState.decision?.action, 'complete', JSON.stringify(ownerState))
   const originalState = await execution.store.query({ kind: 'run', runId: original.runId })
   assert.equal(originalState.run.status, 'succeeded')
+  const artifactPrefix = `tasks/${original.taskId}/`
+  assert.ok(originalState.run.requirementRef.startsWith(artifactPrefix))
+  for (const node of originalState.nodes) {
+    assert.ok(node.inputRef.startsWith(artifactPrefix))
+    assert.ok(node.outputRef.startsWith(artifactPrefix))
+    for (const reference of node.evidenceRefs) assert.ok(reference.startsWith(artifactPrefix))
+  }
   const originalRegistry = createEngineeringRegistry({ repositories: config.repositories, ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }) })
   await originalRegistry.restore(execution.store, execution.artifacts)
   await originalRegistry.prepareTask({ taskId: original.taskId, arguments: { objective: '原开发任务', repositoryId: 'dataset', uatEnvironment: 'uat3', acceptanceCriteria: ['归一化结果为 1 t'] } },
@@ -593,11 +629,16 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   assert.equal((await post({ ...body, objective: '冲突修改' })).status, 409)
   const origin = await execution.store.query({ kind: 'task.origin', taskId: accepted.taskId })
   assert.equal(origin.channel, 'web'); assert.equal(origin.rerunOfTaskId, original.taskId)
+  const family = await execution.store.query({ kind: 'task.family', taskId: accepted.taskId })
+  assert.equal(family.rootTaskId, original.taskId)
   assert.equal(origin.run.externalMessaging, false); assert.equal(origin.run.context.sourceMessageId, undefined)
   assert.equal(await execution.store.query({ kind: 'message.task', taskId: accepted.taskId }), null)
   assert.deepEqual(await execution.store.query({ kind: 'message.list', limit: 200 }), beforeMessages)
   assert.deepEqual(await execution.store.query({ kind: 'run', runId: original.runId }), originalState)
   const plan = await execution.controller.taskPlan(accepted.taskId), requirement = await execution.artifacts.read(plan.task.requirementRef)
+  assert.ok(plan.task.requirementRef.startsWith(artifactPrefix))
+  const requirementFile = join(root, 'tasks', original.taskId, 'work', 'artifacts', plan.task.requirementRef.split('/').at(-1))
+  assert.deepEqual(JSON.parse(await readFile(requirementFile, 'utf8')), requirement)
   assert.deepEqual(requirement.stageTargets, { 'task-uat-pr-merge': 'merge-uat3', 'task-uat-deployment': 'deploy-uat3' })
   assert.equal(requirement.scope.conversationId, 'web:owner')
   assert.equal((await service.taskRuns(accepted.taskId)).taskId, accepted.taskId)
@@ -607,6 +648,7 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   await assert.rejects(service.submitWebTask({ ...supplement, context: '冲突' }, identity), /CONFLICT/)
   const updated = await execution.controller.taskPlan(accepted.taskId)
   assert.equal(updated.task.requirementRevision, 2)
+  assert.ok(updated.task.requirementRef.startsWith(artifactPrefix))
   const updatedRequirement = await execution.artifacts.read(updated.task.requirementRef)
   assert.match(updatedRequirement.request, /补充检查单位換算边界|补充检查单位换算边界/)
   assert.equal(updatedRequirement.reportChannel, 'web'); assert.equal(updatedRequirement.externalMessaging, false)
@@ -691,7 +733,7 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   await service.close()
   const restarted = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', ...config },
     judge: async () => { throw new Error('UNEXPECTED_MESSAGE') },
-    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'] }), getGroup: groupId => ({ groupId, messages: [] }) },
+    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'], workspaceDir: root }), getGroup: groupId => ({ groupId, messages: [] }) },
     execution, external, notifications: notices, taskOwnerSessions: { async run({ input, onSessionBound, onCandidate }) {
       if (input.task.controlState !== 'active' || input.stages.length) throw new Error('OWNER_WAITING')
       await onSessionBound()
@@ -723,6 +765,13 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   assert.equal(newRecord.config.head, originalRecord.config.head)
   assert.equal(newRecord.config.branchSource.taskId, original.taskId)
   assert.equal(newRecord.config.input.baseCommit, await git('rev-parse', 'HEAD'))
+  assert.equal((await execution.store.query({ kind: 'task.family', taskId: development.taskId })).rootTaskId, original.taskId)
+  assert.equal(newRecord.config.taskFiles.logicalTaskId, original.taskId)
+  assert.equal(newRecord.config.taskFiles.root, join(root, 'tasks', original.taskId))
+  for (const area of ['work', 'tmp', 'outputs']) assert.equal(newRecord.config.taskFiles[area], join(root, 'tasks', original.taskId, area))
+  const developmentPlan = await execution.controller.taskPlan(development.taskId)
+  assert.ok(developmentPlan.task.requirementRef.startsWith(artifactPrefix))
+  assert.ok(developmentPlan.stages[0].requirementRef.startsWith(artifactPrefix))
   assert.equal((await execution.controller.taskPlan(development.taskId)).stages.length, 3)
   const view = (await restarted.tasks()).find(task => task.taskId === development.taskId)
   await assert.rejects(restarted.submitWebTask({ ...request, taskId: development.taskId, expectedRunId: development.runId,
@@ -1901,7 +1950,7 @@ test('只关联话题时意图仍读到已执行Task及结果限制，运行成�
         : { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新问题'] }
     }
     if (input.text === '继续查这个账号') {
-      observed = input.facts
+      observed = { ...input.facts, sharedTasks: input.sharedTasks }
       return { kind: 'intent', actions: [{ intent: 'no_action', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
     }
     return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '查 test3 账号创建记录', workflowId: 'task-investigation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
@@ -1917,7 +1966,8 @@ test('只关联话题时意图仍读到已执行Task及结果限制，运行成�
   await service.recover()
   const second = await service.ingest({ ...message, messageId: 'followup', text: '继续查这个账号' })
   await service.messages.process(second.runId)
-  const task = observed?.tasks?.find(item => item.taskId === taskId) ?? observed?.topicTasks?.tasks?.find(item => item.taskId === taskId)
+  const taskReference = observed?.tasks?.find(item => item.taskId === taskId) ?? observed?.topicTasks?.tasks?.find(item => item.taskId === taskId)
+  const task = taskReference
   assert.ok(task, JSON.stringify(observed))
   assert.ok(routingCard.distinguishingFacts.some(item => item.includes('执行状态：blocked')), JSON.stringify({routingCard,task}))
   assert.equal(task.run.status, 'failed')
@@ -3119,7 +3169,8 @@ test('真实Owner路径保留工程本地验收与合并前缀，失败第三阶
     generalCompletionCheck:async input=>{
       domainChecks.push(input)
       assert.deepEqual(input.acceptanceCriteria,[criteria[1]])
-      assert.equal(input.evidence.length,2)
+      assert.equal(input.evidence.length,1)
+      assert.equal(input.evidence.some(item=>item.mergeCommitSha),false)
       assert.equal(input.evidence.some(item=>item.deliveryStatus==='pr_verified'),false)
       const deployed=input.evidence.find(item=>item.workflowKind==='uat-rebuild')
       assert.equal(deployed?.status,'technical-delivery-confirmed')

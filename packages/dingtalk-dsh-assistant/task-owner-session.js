@@ -8,7 +8,7 @@ const SUBMIT = 'task_owner_submit'
 const fail = code => Object.assign(new Error(code), { code })
 const notDrained = code => Object.assign(fail(code), { taskOwnerDrained: false })
 const copy = value => structuredClone(value)
-const ownerFileDeliveryInstructions = '若goal含fileDelivery，必须逐项完成其中files的角色、名称和格式，并核对当前requirementRevision。文件交付仍属于同一个业务Task。尚无产物时，先完成必要调查，再用task-general-capability阶段的capabilityStep指定write-task-file，input仅含{role,fileName,content}，按Host提供的scope.artifactFiles精确授权生成真实UTF-8文本；仅支持md/txt/sql/csv/json，最多64KiB。每件产物均需真实登记及读回证明，不用write-task-markdown的哈希名称代替指定文件。已成功阶段提供完整artifact描述符后，再安排task-group-file-delivery阶段；Host会从当前任务已核验阶段选择产物、绑定来源群与账号，Owner不得指定任意本地路径或改群。已有图片、Office、PDF等二进制可先用task-general-capability阶段的import-task-file登记，input严格含{role,fileName,relativePath}；relativePath必须在Host generalFileRead.root/readablePaths与当前scope.readableFiles的双重白名单内，文件名保留真实扩展名。Host只读来源后冻结大小和SHA256，不由Owner猜摘要或提供sourceRoot；登记回读后的artifactFiles才交发送阶段。这不是生成器：未有真实源文件时须用可用生成器产出或明确缺能力。二进制仅使用真实受信来源并已登记的artifactFiles，不能用文字换扩展名伪造，也不能编造artifactId；缺少真实生成或受信导入路径、或缺少登记证明时block并说明缺少哪件产物。产物已生成、发送ACK、文字通知和文件消息送达是不同事实；只有每个必交文件都取得精确消息及下载大小/SHA256核验，才能complete，正文报告不能替代附件。未知发送或部分送达先等待原效果对账，不重建交付阶段、不换身份重发；已发文件不因完成摘要失败再发。'
+const ownerFileDeliveryInstructions = '若goal含fileDelivery，必须逐项完成其中files的角色、名称和格式，并核对当前requirementRevision。文件交付仍属于同一个业务Task。尚无产物时，先完成必要调查，再用task-general-capability阶段的capabilityStep指定write-task-file，input仅含{role,fileName,content}，按Host提供的scope.artifactFiles精确授权生成真实UTF-8文本；仅支持md/txt/sql/csv/json，最多64KiB。含capabilityStep时，本轮planChange.stages只能有一个阶段（appendStages同样只能一项）；已有计划的前序阶段必须全部成功，不得将写入或导入与发送放在同轮计划中。生成或导入成功并核验证据后，下一轮才追加群文件交付阶段，保留各阶段的gate。每件产物均需真实登记及读回证明，不用write-task-markdown的哈希名称代替指定文件。已成功阶段提供完整artifact描述符后，再安排task-group-file-delivery阶段；Host会从当前任务已核验阶段选择产物、绑定来源群与账号，Owner不得指定任意本地路径或改群。已有图片、Office、PDF等二进制可先用task-general-capability阶段的import-task-file登记，input严格含{role,fileName,relativePath}；relativePath必须在Host generalFileRead.root/readablePaths与当前scope.readableFiles的双重白名单内，文件名保留真实扩展名。Host只读来源后冻结大小和SHA256，不由Owner猜摘要或提供sourceRoot；登记回读后的artifactFiles才交发送阶段。这不是生成器：未有真实源文件时须用可用生成器产出或明确缺能力。二进制仅使用真实受信来源并已登记的artifactFiles，不能用文字换扩展名伪造，也不能编造artifactId；缺少真实生成或受信导入路径、或缺少登记证明时block并说明缺少哪件产物。产物已生成、发送ACK、文字通知和文件消息送达是不同事实；只有每个必交文件都取得精确消息及下载大小/SHA256核验，才能complete，正文报告不能替代附件。未知发送或部分送达先等待原效果对账，不重建交付阶段、不换身份重发；已发文件不因完成摘要失败再发。'
 
 const stageSchema = { type: 'object', properties: {
   workflowId: { type: 'string' }, gate: { type: 'string', enum: ['none', 'confirmation'] },
@@ -212,7 +212,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
       if (binding.sessionBound && !stored) throw fail('TASK_OWNER_SESSION_MISSING')
       if (stored) validateHistory(stored.events, binding)
       if (!await current(entry)) return { status: 'stale' }
-      const workspaceDir = !stored && getWorkspaceDir ? await getWorkspaceDir() : undefined
+      const workspaceDir = !stored && getWorkspaceDir ? await getWorkspaceDir({ binding: entry.binding }) : undefined
       const options = { agentOptions: { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
         setup: setup(entry, onCandidate, readPage, readArtifact), signal: entry.abort.signal }
       entry.handle = stored ? await ctx.agents.resume({ ...options, resumeSessionId: binding.sessionId })

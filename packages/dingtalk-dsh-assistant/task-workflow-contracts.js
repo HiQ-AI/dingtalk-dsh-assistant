@@ -285,6 +285,17 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
             && assessment.evidenceRefs.every(ref => known.has(ref) && decision.evidenceRefs.includes(ref))))) return false
       const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision })
       if (!manifest.complete) return false
+      const planning = await store.query({ kind: 'task.owner.planning', taskId })
+      if (!planning || planning.truncated) return false
+      const semanticStages = contexts.map(({ stage, state, output, input, contract }) => ({ stage, input, contractId: contract.id,
+        output: { ...output, hostExecution: { taskId, stageId: stage.stageId, runId: stage.runId,
+          workflowId: stage.workflowId, workflowDigest: stage.workflowDigest, position: stage.position,
+          predecessorOutputRef: stage.predecessorOutputRef, planning,
+          run: { status: state.run.status, generation: state.run.generation,
+            createdAt: state.run.createdAt, updatedAt: state.run.updatedAt },
+          nodes: state.nodes.map(node => ({ nodeId: node.nodeId, executor: node.executor,
+            position: node.position, generation: node.generation, status: node.status,
+            inputRef: node.inputRef, outputRef: node.outputRef })) } } }))
       const stages = contexts.map(context => ({ stage: context.stage, output: context.output,
         input: context.input, contractId: context.contract.id }))
       const receipts = []
@@ -301,13 +312,25 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
           evidenceRefs: decision.evidenceRefs.filter(ref => domainRefs.has(ref)),
           assessments: acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: item.evidenceRefs })) }
         const domainRequirement = { ...requirement, acceptanceCriteria: acceptanceItems.map(item => item.criterion), acceptanceItems }
+        const sharedItems = acceptanceItems.map(item => ({ ...item,
+          evidenceRefs: decision.assessments.find(value => value.itemId === item.itemId).evidenceRefs }))
+        const sharedRefs = new Set(sharedItems.flatMap(item => item.evidenceRefs))
+        const sharedContext = { requirement: { ...domainRequirement, acceptanceItems: sharedItems },
+          decision: { ...domainDecision, evidenceRefs: [...sharedRefs], assessments: sharedItems.map(item => ({
+            itemId: item.itemId, status: 'satisfied', evidenceRefs: item.evidenceRefs })) },
+          stages: semanticStages.filter(item => [item.stage.outputRef, ...(item.stage.evidenceRefs ?? [])].some(ref => sharedRefs.has(ref))),
+          acceptanceItems: sharedItems }
         let domainVerification
         const verifyDomain = typeof verifyAcceptance === 'function'
-          ? context => domainVerification ??= Promise.resolve().then(() => verifyAcceptance(context)) : undefined
+          ? () => domainVerification ??= Promise.resolve().then(() => verifyAcceptance(sharedContext)) : undefined
         for (const context of contexts.filter(item => item.contract.id === contractId)) {
           const policy = completionPolicy(context.contract)
+          const general = policy?.id === 'general-capability-result' && policy.version === '2'
           if (!policy || await policy.validateCompletion({ ...context, requirement: domainRequirement,
-            decision: domainDecision, stages: domainStages, acceptanceItems, verifyAcceptance: verifyDomain }) !== true) return false
+            decision: domainDecision, stages: domainStages, acceptanceItems: general ? [] : acceptanceItems,
+            verifyAcceptance: verifyDomain }) !== true) return false
+          // 已冻结的通用合同内置领域验收；保留其效果检查，在此用显式绑定证据完成语义验收。
+          if (general && acceptanceItems.length && (!verifyDomain || await verifyDomain() !== true)) return false
         }
         for (const item of acceptanceItems) receipts.push({ ...item, validators: domainStages.map(value => {
           const contract = completionPolicy(contexts.find(context => context.stage.stageId === value.stage.stageId).contract)

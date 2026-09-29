@@ -1,6 +1,7 @@
 import { acceptanceCriteriaSchema, acceptanceCriterionSchema } from './task-input-contract.js'
 import { createHash } from 'node:crypto'
 import { maintenanceStatus } from './execution-maintenance.js'
+import { parseArtifactReference } from './execution-artifacts.js'
 
 // Task Owner 的事件、租约和决定与执行账共用 SQLite 单写事务。
 const fail = code => { throw Object.assign(new Error(code), { code }) }
@@ -347,8 +348,9 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     const chosen = JSON.parse(t.candidate_json)
     if (a.deliveryManifestRef !== undefined) {
       ref(a.deliveryManifestRef)
-      if (chosen.action !== 'complete' || !/^sha256-[a-f0-9]{64}\.json$/.test(a.deliveryManifestRef))
-        fail('TASK_OWNER_DELIVERY_MANIFEST_INVALID')
+      if (chosen.action !== 'complete') fail('TASK_OWNER_DELIVERY_MANIFEST_INVALID')
+      try { parseArtifactReference(a.deliveryManifestRef) }
+      catch { fail('TASK_OWNER_DELIVERY_MANIFEST_INVALID') }
     }
     const currentTask = task(db, o.task_id)
     const activeStage = db.prepare(`SELECT status FROM task_plan_stages WHERE task_id=? AND plan_revision=?
@@ -472,6 +474,17 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
 }
 
 export function queryTaskOwner(db, query) {
+  if (query?.kind === 'task.owner.planning') {
+    exact(query, ['kind', 'taskId'])
+    const rows = db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND application_status='applied' AND json_extract(decision_json,'$.action')='advance' AND (json_extract(decision_json,'$.planChange.kind') IN ('initialize','append') OR (json_extract(decision_json,'$.planChange') IS NULL AND json_type(decision_json,'$.appendStages')='array' AND json_array_length(decision_json,'$.appendStages')>0)) ORDER BY lease_epoch LIMIT 201").all(id(query.taskId))
+    return { truncated: rows.length > 200, receipts: rows.slice(0, 200).map(row => {
+      const decision = JSON.parse(row.decision_json)
+      const change = decision.planChange ?? { kind: 'appendStages', stages: decision.appendStages }
+      return { turnId: row.turn_id, leaseEpoch: row.lease_epoch, createdAt: row.created_at, updatedAt: row.updated_at,
+        requirementRevision: row.requirement_revision, planRevision: row.plan_revision,
+        planChangeKind: change.kind, workflowIds: change.stages.map(stage => stage.workflowId) }
+    }) }
+  }
   if (query?.kind === 'task.owner.delivery-manifest') {
     exact(query, ['kind', 'taskId'])
     const current = task(db, query.taskId)

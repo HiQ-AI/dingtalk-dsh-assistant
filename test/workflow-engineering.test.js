@@ -23,7 +23,8 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
   await writeFile(join(source, 'value.txt'), 'base'); await git('add', '.'); await git('commit', '-m', 'base')
   await git('init', '--bare', remote); await git('push', remote, 'HEAD:refs/heads/feature/uat2-base')
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'branches', initialize: true }); t.after(() => store.close())
-  const options = { ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }), author: { name: 'Test', email: 'test@example.invalid' },
+  const taskFiles = { work: join(directory, 'tasks', 'original', 'work'), tmp: join(directory, 'tasks', 'original', 'tmp') }
+  const options = { getTaskDirectories: async taskId => taskId === 'new-task' ? taskFiles : null, ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }), author: { name: 'Test', email: 'test@example.invalid' },
     repositories: [{ id: 'repo', sourceRepository: source, managedRoot: join(directory, 'managed'), remote, baseRef: 'main', githubRepository: 'example/repo', editablePaths: ['value.txt'],
       checks: [{ id: 'check', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }] }] }
   const registry = createEngineeringRegistry(options); await registry.restore(store)
@@ -31,6 +32,14 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
   const controller = { registerWorkflow(value) { workflow = value } }
   const prepare = (taskId, commandId, rerunOfTaskId) => registry.prepareTask({ taskId, arguments: { repositoryId: 'repo', uatEnvironment: 'uat2', objective: '修改代码' } },
     { commandId, ...(rerunOfTaskId ? { rerunOfTaskId } : {}), run: { actorId: 'owner' }, unit: {} }, controller)
+  const { symlink, readdir } = await import('node:fs/promises')
+  const outside = join(directory, 'outside'), linkedWork = join(directory, 'linked-work')
+  await mkdir(outside); await symlink(outside, linkedWork, process.platform === 'win32' ? 'junction' : 'dir')
+  const unsafeRegistry = createEngineeringRegistry({ ...options, getTaskDirectories: async () => ({ ...taskFiles, work: join(linkedWork, 'must-not-exist') }) })
+  await unsafeRegistry.restore(store)
+  await assert.rejects(unsafeRegistry.prepareTask({ taskId: 'unsafe-task', arguments: { repositoryId: 'repo', uatEnvironment: 'uat2', objective: '修改代码' } },
+    { commandId: 'unsafe-command', run: { actorId: 'owner' }, unit: {} }, controller), /TASK_DIRECTORY_OUTSIDE_ROOT/)
+  assert.deepEqual(await readdir(outside), [])
   const original = await prepare('original', 'first')
   const oldRecord = (await store.query({ kind: 'workflow.list' }))[0], head = oldRecord.config.head
   await git('push', remote, `HEAD:refs/heads/${head}`)
@@ -50,6 +59,9 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
   const workspaceContext = { input: output.requirement, runId: rerun.runId, generation: 1, requirementDigest: 'a'.repeat(64),
     perform: effect => registry.deliveryOptions.workspaceAdapter.execute(effect.prepared) }
   const workspaceOutput = await workspaceNode.execute(workspaceContext)
+  assert.ok(workspaceOutput.workspace.directory.startsWith(taskFiles.work))
+  assert.deepEqual(record.config.taskFiles, taskFiles)
+  assert.equal(oldRecord.config.taskFiles, undefined)
   assert.equal(workspaceOutput.workspace.developmentBranch, head)
   assert.equal(workspaceOutput.workspace.branchDisposition, 'reused')
   assert.equal(workspaceOutput.workspace.targetBranch, 'feature/uat2-base')

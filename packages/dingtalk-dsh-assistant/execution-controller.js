@@ -137,7 +137,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     const data = await admitResult('input-mapping', node.id,
       () => node.mapInput({ requirement, previousOutput, dependencyOutputs }))
     await admitResult('input-validation', node.id, () => validate(node.inputSchema, data))
-    return artifacts.put({ workflowDigest: definition.digest, nodeId: node.id, nodeVersion: node.version, requirementRef, data })
+    return artifacts.put({ workflowDigest: definition.digest, nodeId: node.id, nodeVersion: node.version, requirementRef, data }, { reference: requirementRef })
   }
   async function isCurrent(binding) {
     if (closed) return false
@@ -172,7 +172,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     }
   }
   async function drained(node, reason) {
-    const evidence = await artifacts.put({ nodeRunId: node.nodeRunId, leaseEpoch: node.leaseEpoch, reason })
+    const evidence = await artifacts.put({ nodeRunId: node.nodeRunId, leaseEpoch: node.leaseEpoch, reason }, { reference: node.inputRef })
     await command(`drained:${node.nodeRunId}:${node.leaseEpoch}`, 'node.drained', {
       runId: node.runId, nodeId: node.nodeId, generation: node.generation, leaseEpoch: node.leaseEpoch, evidenceRef: evidence.ref,
     })
@@ -270,7 +270,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         if (failure) errors.set(runId, failure)
         const evidenceRefs = []
         const terminalDeliveryFailure = isTerminalUatBuildFailure(failure?.terminalEffect)
-        if (terminalDeliveryFailure) evidenceRefs.push((await artifacts.put(failure.terminalEffect.result.result)).ref)
+        if (terminalDeliveryFailure) evidenceRefs.push((await artifacts.put(failure.terminalEffect.result.result, { reference: binding.inputRef })).ref)
         if (failure?.evidence !== undefined) {
           // 受信执行器可以提供失败证据，框架不按领域错误码决定是否保存。
           try {
@@ -278,14 +278,14 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             for (const payload of failure.evidence) canonicalExecutionJson(payload)
           } catch (cause) { failure = new ResultAdmissionError(cause, 'failure-evidence', ready.nodeId) }
           if (!(failure instanceof ResultAdmissionError))
-            for (const payload of failure.evidence) evidenceRefs.push((await artifacts.put(payload)).ref)
+            for (const payload of failure.evidence) evidenceRefs.push((await artifacts.put(payload, { reference: binding.inputRef })).ref)
         }
         const reportedReason = failure?.code ?? (failure ? 'NODE_EXECUTION_FAILED' : outcome?.reason ?? outcome?.status)
         const reason = typeof reportedReason === 'string' && reportedReason.trim() ? reportedReason.slice(0, 200) : 'NO_NODE_SUBMISSION'
         evidenceRefs.push((await artifacts.put({ kind: 'execution-failure', ...identity, nodeRunId: binding.nodeRunId,
           phase: failure?.phase ?? 'execution', targetNodeId: failure?.nodeId ?? ready.nodeId,
           code: reason, message: String(failure?.message ?? reason).slice(0, 2000),
-          recovery: classifyExecutionFailure({ code: reason, phase: failure?.phase }) })).ref)
+          recovery: classifyExecutionFailure({ code: reason, phase: failure?.phase }) }, { reference: binding.inputRef })).ref)
         await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
           ...identity, outcome: terminalDeliveryFailure ? 'failed' : 'waiting', evidenceRefs, waitReason: { kind: 'recovery', reference: reason },
         })
@@ -294,7 +294,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       let result
       try {
         await admitResult('output-validation', ready.nodeId, () => validate(nodeDefinition.outputSchema, output))
-        result = await artifacts.put(output)
+        result = await artifacts.put(output, { reference: binding.inputRef })
         if (nodeDefinition.admitOutput) {
           const input = await artifacts.read(binding.inputRef)
           const disposition = await admitResult('output-admission', ready.nodeId, () => nodeDefinition.admitOutput({ output,
@@ -303,7 +303,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             const code = disposition.waitReason?.reference ?? 'NODE_RESULT_CONTRACT_INVALID'
             const diagnosis = await artifacts.put({ kind: 'execution-failure', ...identity, nodeRunId: binding.nodeRunId,
               phase: 'output-admission', targetNodeId: ready.nodeId, code, message: code,
-              producedOutputRef: result.ref, recovery: classifyExecutionFailure({ code, phase: 'output-admission' }) })
+              producedOutputRef: result.ref, recovery: classifyExecutionFailure({ code, phase: 'output-admission' }) }, { reference: binding.inputRef })
             await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', { ...identity,
               outcome: disposition.outcome, outputRef: result.ref, evidenceRefs: [result.ref, diagnosis.ref], waitReason: disposition.waitReason })
             return
@@ -332,7 +332,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           const diagnosis = await artifacts.put({ kind: 'execution-failure', ...identity, nodeRunId: binding.nodeRunId, phase: error.phase,
             targetNodeId: error.nodeId, code: error.code, message: error.message,
             recovery: classifyExecutionFailure({ code: error.code, phase: error.phase }),
-            ...(result ? { producedOutputRef: result.ref } : {}) })
+            ...(result ? { producedOutputRef: result.ref } : {}) }, { reference: binding.inputRef })
           await command(`invalid-result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
             ...identity, outcome: 'failed', evidenceRefs: [...(result ? [result.ref] : []), diagnosis.ref],
             waitReason: { kind: 'recovery', reference: error.code } })
@@ -358,7 +358,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     async createRun({ commandId, taskId, runId = `run-${executionDigest(commandId)}`, workflowId, input, stageBinding }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId); requireId(runId)
-      let definition
+      let definition, requirementReference
       if (stageBinding) {
         const plan = await store.query({ kind: 'task.plan', taskId })
         const stage = plan?.task.planRevision === stageBinding.planRevision
@@ -366,9 +366,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         if (!stage || stage.workflowId !== workflowId)
           throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
         definition = definitionOf(stage)
+        requirementReference = stage.requirementRef
       } else definition = definitions.get(workflowId)
       if (!definition) throw executionError('WORKFLOW_NOT_FOUND')
-      const requirement = await artifacts.put(input)
+      const requirement = await artifacts.put(input, { taskId, reference: requirementReference })
       const first = await prepareInput(definition, definition.nodes[0], requirement.ref)
       const receipt = await command(commandId, 'run.create', { taskId, runId, workflowId, workflowDigest: definition.digest, requirementRef: requirement.ref,
         ...(stageBinding ? { stageBinding } : {}),
@@ -386,7 +387,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         const dynamic = index > 0 && stage.workflowId === 'task-engineering' && !stage.unavailableReason
         if (!definition && !(index > 0 && stage.unavailableReason) && !dynamic) throw executionError('WORKFLOW_NOT_FOUND')
         if ((index === 0) !== Object.hasOwn(stage, 'input')) throw executionError('TASK_STAGE_INPUT_NOT_BOUND')
-        const requirement = index === 0 ? await artifacts.put(stage.input) : null
+        const requirement = index === 0 ? await artifacts.put(stage.input, { taskId }) : null
         stored.push({ stageId: requireId(stage.stageId), workflowId: definition?.id ?? requireId(stage.workflowId),
           workflowDigest: stage.unavailableReason || dynamic ? null : definition.digest, unavailableReason: stage.unavailableReason ?? null,
           requirementRef: requirement?.ref ?? null, gate: stage.gate ?? 'none' })
@@ -407,7 +408,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         const dynamic = index > 0 && stage.workflowId === 'task-engineering' && !stage.unavailableReason
         if (!definition && !(index > 0 && stage.unavailableReason) && !dynamic) throw executionError('WORKFLOW_NOT_FOUND')
         if ((index === 0) !== Object.hasOwn(stage, 'input')) throw executionError('TASK_STAGE_INPUT_NOT_BOUND')
-        const requirement = index === 0 ? await artifacts.put(stage.input) : null
+        const requirement = index === 0 ? await artifacts.put(stage.input, { taskId, reference: plan.task.requirementRef }) : null
         stored.push({ stageId: requireId(stage.stageId), workflowId: definition?.id ?? requireId(stage.workflowId),
           workflowDigest: stage.unavailableReason || dynamic ? null : definition.digest,
           unavailableReason: stage.unavailableReason ?? null, requirementRef: requirement?.ref ?? null,
@@ -433,7 +434,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         if (!retained && !definition && !(index > 0 && stage.unavailableReason) && !dynamic) throw executionError('WORKFLOW_NOT_FOUND')
         if (retained && (retained.stageId !== stage.stageId || retained.workflowId !== stage.workflowId)) throw executionError('TASK_PLAN_PREFIX_INVALID')
         const requirement = index < affectedFrom ? { ref: previous.stages[index]?.requirementRef }
-          : index === 0 ? await artifacts.put(stage.input) : null
+          : index === 0 ? await artifacts.put(stage.input, { taskId, reference: previous.task.requirementRef ?? previous.stages[0]?.requirementRef }) : null
         stored.push({ stageId: requireId(stage.stageId), workflowId: retained?.workflowId ?? definition?.id ?? requireId(stage.workflowId),
           workflowDigest: retained ? retained.workflowDigest : stage.unavailableReason || dynamic ? null : definition.digest,
           unavailableReason: retained?.unavailableReason ?? stage.unavailableReason ?? null,
@@ -490,7 +491,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       if (closed) throw executionError('CONTROLLER_CLOSED')
       const plan = await store.query({ kind: 'task.plan', taskId: requireId(taskId) })
       if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
-      const requirement = await artifacts.put(input)
+      const requirement = await artifacts.put(input, { taskId, reference: plan.task.requirementRef ?? plan.stages[0]?.requirementRef })
       const definition = workflowId ? definitions.get(workflowId) : null
       if (workflowId && !definition) throw executionError('WORKFLOW_NOT_FOUND')
       return command(commandId, 'task.stage.input.bind', {
@@ -597,7 +598,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const previous=await artifacts.read(node.inputRef)
       const next={...previous,data:{...previous.data,clarificationAnswers:[...(previous.data.clarificationAnswers??[]),answer]}}
       validate(definition.nodes[node.position].inputSchema,next.data)
-      const saved=await artifacts.put(next)
+      const saved=await artifacts.put(next, { reference: node.inputRef })
       const receipt=await command(commandId,'node.continue',{runId,nodeId:node.nodeId,generation:node.generation,
         leaseEpoch:node.leaseEpoch,inputDigest:expectedInputDigest,expectedInputVersion,inputRef:saved.ref,nextInputDigest:saved.digest,
         expectedOutputRef,eventId:answer.eventId,answerDigest:executionDigest(answer)})
@@ -605,14 +606,14 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     },
     async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision, repair, repairAdmission }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
+      const state = await query(runId)
       if (repair) {
-        const state = await query(runId)
         const plan = await store.query({ kind: 'task.plan', taskId: repair.taskId })
         const workflowDigest = await validateWorkflowRepairAdmission({ state, plan,
           definition: definitionOf(state.run), repair, input, expectedRevision, store, artifacts, repairAdmission })
         repair = { ...repair, workflowDigest }
       }
-      const requirement = await artifacts.put(input)
+      const requirement = await artifacts.put(input, { reference: state.run.requirementRef })
       const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref, ...(expectedRevision === undefined ? {} : { expectedRevision }), ...(repair ? { repair } : {}) })
       if (!receipt.replayed && receipt.result.accepted !== false) { interrupt(runId); schedule(runId) }
       return receipt

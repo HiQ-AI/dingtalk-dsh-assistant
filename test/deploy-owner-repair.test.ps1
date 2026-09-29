@@ -198,3 +198,131 @@ foreach($change in @(@{active=$false},@{phase='draining'},@{drained=$false},@{re
  if(-not $rejected){throw '离线修复必须拒绝封存许可变化'}
 }
 Write-Output 'PASS 8/8: 原封存许可通过；active/phase/drained/revision/ID/incarnation/busy变化拒绝'
+
+# TaskDirectory 检查通过正式只读 checker 传递；拒绝时不进入备份写入。
+$taskProofAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$taskDirectoryProof'},$true)
+$TaskDirectory='D:/fixture-agent/tasks';$checker='checker.mjs';$script:taskCheckCalls=0
+function Run-Node([string[]]$Arguments){
+ $script:taskCheckCalls++
+ if(($Arguments -join '|')-ne 'checker.mjs|task-directory-check|D:/fixture-agent/tasks'){throw '任务目录检查参数不匹配'}
+ '{"taskDirectory":"D:/fixture-agent/tasks","taskArtifactRefs":1,"writes":0}'
+}
+Invoke-Expression $taskProofAssignment.Extent.Text
+if($script:taskCheckCalls-ne 1 -or $taskDirectoryProof.writes-ne 0){throw '任务目录须经只读检查'}
+function Run-Node([string[]]$Arguments){throw 'BACKUP_TASK_DIRECTORY_REQUIRED'}
+$failed=$false
+try{Invoke-Expression $taskProofAssignment.Extent.Text}catch{$failed=$_.Exception.Message-eq 'BACKUP_TASK_DIRECTORY_REQUIRED'}
+if(-not $failed){throw '任务目录漏参不得继续备份'}
+Write-Output 'PASS 2/2: 显式任务目录进入只读检查；缺目录失败阻断编排'
+
+$migrationFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Invoke-TaskFileMigration'},$true)
+Invoke-Expression $migrationFunction.Extent.Text
+$backup='D:/fixture/backup'
+$TaskMigrationPlan='D:/fixture/plan.json';$workspace='D:/fixture/repo';$EvidenceDirectory='D:/fixture/evidence'
+$migrationToolSha256='expected'
+$inputHashes=@{'D:/fixture/plan.json'='expected';'D:/fixture/repo/scripts/migrate-task-file-links.mjs'='expected'};$lockProcess=@{HasExited=$false}
+$script:migrationCalls=@();$script:migrationWrites=0;$script:migrationJournalExists=$true
+function Run-Node([string[]]$Arguments){$script:migrationCalls+=,$Arguments;'{"verified":true}'}
+function Set-Content {param($LiteralPath,[Parameter(ValueFromPipeline)]$Value) process {$script:migrationWrites++}}
+function Test-Path {param($LiteralPath,$PathType) $script:migrationJournalExists}
+function Get-FileHash {param($LiteralPath) @{Hash='expected'}}
+function Listeners {@()}
+[void](Invoke-TaskFileMigration 'check')
+if($script:migrationWrites-ne 0 -or $script:migrationCalls.Count-ne 1 -or $script:migrationCalls[0][1]-ne '--check' -or $script:migrationCalls[0].Count-ne 3){throw '迁移Check必须只读且不提供journal路径'}
+$script:migrationCalls=@();[void](Invoke-TaskFileMigration 'execute')
+if($script:migrationCalls[0][3]-ne 'D:/fixture/backup-task-migration-source'){throw '迁移源副本必须独立于完整backup文件集合'}
+if($script:migrationWrites-ne 4 -or ($script:migrationCalls|ForEach-Object {$_[1]})-join ',' -ne '--backup,--verify-backup,--execute,--verify'){throw '迁移必须先备份独立核验、再执行独立核验并保存证据'}
+$script:migrationCalls=@();$script:migrationWrites=0
+[void](Invoke-TaskFileMigration 'verify' 'expected' $backup 'expected')
+if($script:migrationWrites-ne 0 -or $script:migrationCalls.Count-ne 2 -or ($script:migrationCalls|ForEach-Object {$_[1]})-join ',' -ne '--verify-backup,--verify'){throw '接续迁移只读验证不能重演execute'}
+$lockProcess.HasExited=$true;$failed=$false
+try{Invoke-TaskFileMigration 'execute'}catch{$failed=$true}
+if(-not $failed){throw '迁移不能丢失owner锁'}
+$lockProcess.HasExited=$false;$inputHashes[$TaskMigrationPlan]='changed';$failed=$false
+try{Invoke-TaskFileMigration 'execute'}catch{$failed=$true}
+if(-not $failed){throw '迁移不能接受计划摘要漂移'}
+$inputHashes[$TaskMigrationPlan]='expected';$script:migrationJournalExists=$false;$failed=$false
+try{Invoke-TaskFileMigration 'verify' 'expected' $backup 'expected'}catch{$failed=$true}
+if(-not $failed){throw '接续不能遗漏journal'}
+$script:migrationJournalExists=$true;$script:migrationCalls=@()
+function Run-Node([string[]]$Arguments){$script:migrationCalls+=,$Arguments;throw 'MIGRATION_FAILED'}
+$failed=$false;try{Invoke-TaskFileMigration 'execute'}catch{$failed=$true}
+if(-not $failed -or $script:migrationCalls.Count-ne 1){throw '迁移失败必须中断不能继续verify或安装'}
+Write-Output 'PASS 7/7: 迁移check零写、锁内执行独立核验、接续只verify；锁丢失/计划漂移/journal缺失/执行失败拒绝'
+
+$migrationToolSha256='different'
+foreach($mode in @('check','execute','verify')) {
+ $failed=$false
+ try{Invoke-TaskFileMigration $mode 'expected'}catch{$failed=$_.Exception.Message-eq '任务迁移工具摘要漂移'}
+ if(-not $failed){throw "迁移工具漂移未阻断 $mode"}
+}
+$migrationToolSha256='expected';$inputHashes['D:/fixture/repo/scripts/migrate-task-file-links.mjs']='different'
+$failed=$false
+try{Invoke-TaskFileMigration 'execute'}catch{$failed=$_.Exception.Message-eq '任务迁移工具冻结摘要不一致'}
+if(-not $failed){throw '迁移工具与冻结输入摘要不一致未阻断'}
+Write-Output 'PASS 4/4: 迁移工具Check/Execute/Verify实时摘要漂移与冻结输入不一致均拒绝'
+
+$inputHashes['D:/fixture/repo/scripts/migrate-task-file-links.mjs']='expected'
+$failed=$false
+try{Invoke-TaskFileMigration 'verify' 'expected' $backup 'wrong'}catch{$failed=$_.Exception.Message-eq '任务迁移源备份清单摘要漂移'}
+if(-not $failed){throw '接续不能接受迁移源备份清单摘要漂移'}
+Write-Output 'PASS 2/2: 迁移源备份使用sibling目录；接续拒绝备份清单摘要漂移'
+
+# 以下用真实本地文件与原生JSON解析验证，不替换文件系统实现。
+foreach($name in @('Test-Path','Get-FileHash','Set-Content','Get-Content')){Remove-Item -LiteralPath "Function:$name" -ErrorAction SilentlyContinue}
+foreach($name in @('Assert-LocalPackageSources','Read-StoppedRepairRecord')){
+ $fn=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq $name},$true)
+ Invoke-Expression $fn.Extent.Text
+}
+$workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'));$node=(Get-Command node.exe).Source
+$fixture=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot ('../docs/tmp/sealed-install-check-'+[guid]::NewGuid())))
+[IO.Directory]::CreateDirectory($fixture)|Out-Null
+[IO.File]::WriteAllText("$fixture/package.json",'{"dependencies":{"observer":"file:missing.tgz"}}')
+[IO.File]::WriteAllText("$fixture/package-lock.json",'{"packages":{}}')
+$beforeFiles=@(Get-ChildItem -LiteralPath $fixture -File|ForEach-Object {(Get-FileHash -LiteralPath $_.FullName).Hash}) -join ','
+$failed=$false;try{Assert-LocalPackageSources $fixture}catch{$failed=$_.Exception.Message.StartsWith('profile本地依赖源不存在:')}
+if(-not $failed -or (@(Get-ChildItem -LiteralPath $fixture -File|ForEach-Object {(Get-FileHash -LiteralPath $_.FullName).Hash}) -join ',')-ne $beforeFiles){throw '缺本地tgz须零写拒绝'}
+[IO.File]::WriteAllText("$fixture/missing.tgz",'fixture')
+Assert-LocalPackageSources $fixture
+[IO.File]::WriteAllText("$fixture/package-lock.json",'{"packages":{"node_modules/old":{"resolved":"file:lock-only-missing.tgz"}}}')
+$failed=$false;try{Assert-LocalPackageSources $fixture}catch{$failed=$_.Exception.Message.StartsWith('profile本地依赖源不存在:')}
+if(-not $failed){throw '锁内独立file源缺失也必须拒绝'}
+Write-Output 'PASS 3/3: package.json缺源零写拒绝、恢复文件通过、lock独立缺源拒绝'
+$origin=Join-Path $fixture 'origin';$backupRoot=Join-Path $fixture 'backup'
+[IO.Directory]::CreateDirectory($origin)|Out-Null
+[IO.Directory]::CreateDirectory("$backupRoot/profile")|Out-Null
+[IO.File]::WriteAllText("$backupRoot/profile/cordis.patch.yml",'same-profile')
+$ExpectedProfileSha256=(Get-FileHash -LiteralPath "$backupRoot/profile/cordis.patch.yml").Hash
+$ExpectedPackageSha256='same-package';$DirectQueriesProposal=''
+$backupRecord=[pscustomobject]@{backup=$backupRoot;packageSha256=$ExpectedPackageSha256;oldPid=123}
+$record=Read-StoppedRepairRecord "$origin/maintenance-sealed.json" $sealed $backupRecord
+Assert-StoppedRepairPermit $record $sealed $before $backupRecord $state
+if($record.checkpoint-ne 'sealed-before-launch' -or (Test-Path "$origin/launch.json")){throw '真实封存内存记录不能伪造launch'}
+foreach($name in @('launch.json','config-applied.json','task-file-migration-execute.json')){
+ [IO.File]::WriteAllText("$origin/$name",'{}');$failed=$false
+ try{Read-StoppedRepairRecord "$origin/maintenance-sealed.json" $sealed $backupRecord}catch{$failed=$true}
+ if(-not $failed){throw '已跨阶段证据必须拒绝'}
+ [IO.File]::Delete("$origin/$name")
+}
+$ExpectedPackageSha256='other';$failed=$false
+try{Read-StoppedRepairRecord "$origin/maintenance-sealed.json" $sealed $backupRecord}catch{$failed=$true}
+if(-not $failed){throw 'beforelaunch不能更换原包'}
+Write-Output 'PASS 5/5: 封存未launch检查点通过且不造文件；launch/config/迁移存在及包变化拒绝'
+
+
+$ExpectedPackageSha256='same-package'
+[IO.File]::WriteAllText("$fixture/package.json",'{"dependencies":{"@zzusp/dingtalk-dsh-observer":"file:old-observer.tgz"}}')
+[IO.File]::WriteAllText("$fixture/pnpm-lock.yaml", "lockfileVersion: '9.0'`nimporters:`n  .:`n    dependencies:`n      '@zzusp/dingtalk-dsh-observer':`n        specifier: file:old-observer.tgz`npackages:`n  '@zzusp/dingtalk-dsh-observer@file:old-observer.tgz':`n    resolution: {tarball: 'file:old-observer.tgz'}`n")
+Assert-LocalPackageSources $fixture "$fixture/missing.tgz"
+[IO.File]::AppendAllText("$fixture/pnpm-lock.yaml", "  'unrelated@file:missing-other.tgz':`n    resolution: {tarball: 'file:missing-other.tgz'}`n")
+$failed=$false;try{Assert-LocalPackageSources $fixture "$fixture/missing.tgz"}catch{$failed=$_.Exception.Message.StartsWith('profile本地依赖源不存在:')}
+if(-not $failed){throw 'Observer替代不能掩盖其他锁依赖缺失'}
+Write-Output 'PASS 2/2: 原生pnpm锁精确Observer替代通过；其他缺源仍拒绝'
+
+$installAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$repairPackages'},$true)
+$Package='D:/candidate.tgz';$ObserverPackage='D:/packages/observer recovered.tgz'
+Invoke-Expression $installAssignment.Extent.Text
+if($repairPackages.Count-ne 2 -or $repairPackages[0]-ne $Package -or $repairPackages[1]-ne '@zzusp/dingtalk-dsh-observer@file:D:/packages/observer recovered.tgz'){throw '恢复Observer须明确包名覆盖缺源依赖'}
+$ObserverPackage='';Invoke-Expression $installAssignment.Extent.Text
+if($repairPackages.Count-ne 1 -or $repairPackages[0]-ne $Package){throw '未指定Observer时不得添加空包参数'}
+Write-Output 'PASS 2/2: Observer恢复用明确包名file参数；不恢复Observer时只安装Assistant'

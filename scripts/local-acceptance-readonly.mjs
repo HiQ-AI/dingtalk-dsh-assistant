@@ -91,7 +91,8 @@ export async function executeReadOnly(mode, config, input) {
   if (!operations.has(mode) || !plain(config) || config.uatEnvironment !== 'uat2' || config.ssoOrigin !== 'https://editor2.hiqdat.dev'
     || !['evidenceRoot', 'accountsFile', 'playwrightModule'].every(key => isAbsolute(config[key] ?? '')) || config.accountKey !== 'editor_uat_admin') fail('CONFIG_INVALID')
   if (!plain(input) || input.uatEnvironment !== config.uatEnvironment || !/^acceptance-[a-f0-9]{32}$/.test(input.namespace ?? '')) fail('INPUT_INVALID')
-  const baseUrl = localOrigin(input.baseUrl), directory = join(config.evidenceRoot, input.namespace)
+  if (input.evidenceRoot !== undefined && !isAbsolute(input.evidenceRoot)) fail('INPUT_INVALID')
+  const baseUrl = localOrigin(input.baseUrl), directory = join(input.evidenceRoot ?? config.evidenceRoot, input.namespace)
   await privateDirectory(directory)
   const ledgerPath = join(directory, 'ledger.json'), sessionPath = join(directory, 'session.json')
   let ledger = await maybeJson(ledgerPath)

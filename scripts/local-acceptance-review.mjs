@@ -31,7 +31,8 @@ export async function executeReview(mode, config, input) {
   if (input.uatEnvironment !== 'uat2' || !/^acceptance-[a-f0-9]{32}$/.test(input.namespace ?? '')) fail('INPUT_INVALID')
   const fixture = config.reviewFixture
   if (!fixture || !/^[a-zA-Z0-9-]+$/.test(fixture.applicationId ?? '') || !/^[a-zA-Z0-9-]+$/.test(fixture.processId ?? '')) fail('FIXTURE_REQUIRED')
-  const origin = localOrigin(input.baseUrl), directory = join(config.evidenceRoot, input.namespace)
+  if (input.evidenceRoot !== undefined && !isAbsolute(input.evidenceRoot)) fail('INPUT_INVALID')
+  const origin = localOrigin(input.baseUrl), directory = join(input.evidenceRoot ?? config.evidenceRoot, input.namespace)
   await mkdir(directory, { recursive: true })
   const path = join(directory, 'review-ledger.json')
   let ledger

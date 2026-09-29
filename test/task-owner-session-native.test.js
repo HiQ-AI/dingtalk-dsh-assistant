@@ -1,10 +1,10 @@
-import { sessionWorkspace } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
+import { sessionWorkspace, taskDirectories, taskFilePath } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
 import { Context } from '@deepseek-ai/cordis'
 import { AgentRegistry } from '@deepseek-ai/dsh-agent'
@@ -20,7 +20,7 @@ const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-lo
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
 
-async function host(root, pageRef = null, artifactRef = null, candidate = decision) {
+async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner')) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SessionTitleService(ctx, { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 })
@@ -46,7 +46,7 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
   }
   ctx.llm.registerAdapter(['owner-fixture'], new Scripted())
   let currentLease = 1
-  const sessions = createTaskOwnerSessions({ ctx, getWorkspaceDir: () => sessionWorkspace(root, 'owner'), isCurrent: async binding => binding.leaseEpoch === currentLease })
+  const sessions = createTaskOwnerSessions({ ctx, getWorkspaceDir, isCurrent: async binding => binding.leaseEpoch === currentLease })
   return { ctx, sessions, requests, setLease(value) { currentLease = value },
     async close() { await sessions.close(); await ctx.fiber.dispose() } }
 }
@@ -75,6 +75,9 @@ test('同一个业务 Task 的原生 Owner 会话跨唤醒复用并持久记录�
   assert.ok(h.requests.every(request => request.tools.map(tool => tool.name).join(',') === 'task_owner_submit'))
   assert.match(h.requests[0].system, /先完成必要调查，再用task-general-capability阶段/u)
   assert.match(h.requests[0].system, /write-task-file/u)
+  assert.match(h.requests[0].system, /含capabilityStep时，本轮planChange.stages只能有一个阶段/u)
+  assert.match(h.requests[0].system, /已有计划的前序阶段必须全部成功/u)
+  assert.match(h.requests[0].system, /下一轮才追加群文件交付阶段，保留各阶段的gate/u)
   assert.match(h.requests[0].system, /再安排task-group-file-delivery阶段/u)
   assert.match(h.requests[0].system, /import-task-file/u)
   assert.match(h.requests[0].system, /input严格含\{role,fileName,relativePath\}/u)
@@ -176,4 +179,42 @@ test('原生Owner公开摘要含内部编号时工具反馈要求改写，记录
   assert.match(h.requests[0].system, /发给群成员的回复/u)
   assert.match(JSON.stringify(h.requests[1]), /GROUP_REPLY_INTERNAL_DETAILS/u)
   assert.ok((await h.ctx.sessionPersistence.inspect('public-session')).events.length > 0)
+})
+
+
+test('Owner原生工作目录使用受信任务绑定，重启保持cwd及宿主日志根', async t => {
+  const base = resolve('docs/tmp/task-owner-session-native')
+  await mkdir(base, { recursive: true })
+  const root = await mkdtemp(join(base, 'run-')), selected = []
+  const h = await host(root, null, null, decision, async ({ binding }) => {
+    selected.push(structuredClone(binding))
+    return (await taskDirectories(root, binding.taskId)).work
+  })
+  t.after(() => h.close())
+  const run = (host, taskId, leaseEpoch = 1) => host.sessions.run({
+    binding: { taskId, sessionId: `owner-${taskId}`, turnId: `turn-${leaseEpoch}`, leaseEpoch, ownerEpoch: 1, sessionBound: leaseEpoch > 1 },
+    input: { taskId: 'forged', cwd: root }, provider: 'owner-fixture', model: 'scripted',
+    onSessionBound: async () => {}, onCandidate: async () => {} })
+  const locations = []
+  for (const taskId of ['task-a', 'task-b']) {
+    assert.equal((await run(h, taskId)).status, 'submitted')
+    const saved = await h.ctx.sessionPersistence.inspect(`owner-${taskId}`)
+    assert.equal(saved.meta.cwd, taskFilePath(root, taskId, 'work'))
+    const location = h.ctx.sessionPersistence.locate(saved.meta).path
+    assert.ok(location.startsWith(join(root, 'sessions') + sep))
+    assert.ok(!location.startsWith(join(root, 'tasks') + sep))
+    assert.match(await readFile(location, 'utf8'), /dingtalk\/task-owner-session/)
+    locations.push(location)
+  }
+  assert.deepEqual(selected.map(binding => binding.taskId), ['task-a', 'task-b'])
+  assert.deepEqual(selected.map(binding => binding.sessionId), ['owner-task-a', 'owner-task-b'])
+  assert.notEqual(locations[0], locations[1])
+  await h.close()
+  const resumed = await host(root, null, null, decision, () => { throw new Error('must not reselect persisted cwd') })
+  t.after(() => resumed.close()); resumed.setLease(2)
+  assert.equal((await run(resumed, 'task-a', 2)).status, 'submitted')
+  const saved = await resumed.ctx.sessionPersistence.inspect('owner-task-a')
+  assert.equal(saved.meta.cwd, taskFilePath(root, 'task-a', 'work'))
+  assert.equal(resumed.ctx.sessionPersistence.locate(saved.meta).path, locations[0])
+  assert.equal(saved.events.filter(event => event.type === 'user/message').length, 2)
 })

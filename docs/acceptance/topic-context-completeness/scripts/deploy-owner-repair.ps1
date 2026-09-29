@@ -5,6 +5,8 @@ param(
   [switch]$Bootstrap,
   [switch]$HoldMaintenance,
   [string]$RepairStoppedLaunch,
+  [string]$TaskDirectory,
+  [string]$TaskMigrationPlan,
   [string]$EnrollmentProposal,
   [string]$ContinueMaintenanceId,
   [Nullable[int]]$ExpectedMaintenanceRevision,
@@ -35,7 +37,10 @@ $starter='D:/project/dingtalk-dsh-assistant/scripts/start-web.ps1'
 $enrollmentTaskName='DSH Web Local'
 function Assert-DeploymentMode {
  if($RepairStoppedLaunch){
-  if($Bundle -or $MergePolicy -or $ChecksProposal -or $Bootstrap -or $EnrollmentProposal -or $ObserverPackage -or $ContinueMaintenanceId -or $null-ne $ExpectedMaintenanceRevision){throw '离线修复只允许更换Assistant包，沿用原封存许可'}
+  if($TaskMigrationPlan){throw '离线修复不能新增任务文件迁移；须走完整备份部署'}
+  if($ObserverPackage -and (Split-Path -Leaf $RepairStoppedLaunch)-ne 'maintenance-sealed.json'){throw '已launch离线修复不得改变Observer'}
+  if([bool]$ObserverPackage-ne [bool]$ExpectedObserverPackageSha256){throw 'Observer包及摘要须同时提供'}
+  if($Bundle -or $MergePolicy -or $ChecksProposal -or $Bootstrap -or $EnrollmentProposal -or $ContinueMaintenanceId -or $null-ne $ExpectedMaintenanceRevision){throw '离线修复只允许更换Assistant包，沿用原封存许可'}
   return
  }
  if($DirectQueriesProposal){
@@ -46,8 +51,12 @@ function Assert-DeploymentMode {
 Assert-DeploymentMode
 $observerSource="$workspace/packages/dingtalk-dsh-observer"
 $observerInstalled="$profile/node_modules/@zzusp/dingtalk-dsh-observer"
-$deploymentInputs=@($Package)+@(@($Bundle,$MergePolicy,$ChecksProposal,$DirectQueriesProposal,$ObserverPackage)|Where-Object {$_})
+$observerSourceReplacement=if($RepairStoppedLaunch -and (Split-Path -Leaf $RepairStoppedLaunch)-eq 'maintenance-sealed.json'){$ObserverPackage}else{''}
+if($observerSourceReplacement){$observerSource=$observerInstalled}
+$deploymentInputs=@($Package)+@(@($Bundle,$MergePolicy,$ChecksProposal,$DirectQueriesProposal,$ObserverPackage,$TaskMigrationPlan)|Where-Object {$_})
 if($EnrollmentProposal){$deploymentInputs+= $EnrollmentProposal}
+if($TaskMigrationPlan){$deploymentInputs+="$workspace/scripts/migrate-task-file-links.mjs"}
+$migrationToolSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath "$workspace/scripts/migrate-task-file-links.mjs").Hash}else{''}
 foreach($path in $deploymentInputs) {
  if(-not [IO.Path]::IsPathFullyQualified($path) -or -not(Test-Path -LiteralPath $path -PathType Leaf)){throw '输入文件须为存在的绝对路径'}
 }
@@ -59,6 +68,9 @@ function Run-Node([string[]]$Arguments){
  if($LASTEXITCODE){throw 'Node命令失败，停止部署'}
  return ($result -join "`n")
 }
+# 显式指定 Agent 工作区的 tasks 目录；检查仅只读，存在任务引用时缺参即拒绝。
+$taskDirectoryProof=Run-Node @($checker,'task-directory-check',$TaskDirectory)|ConvertFrom-Json
+if($taskDirectoryProof.taskDirectory){$TaskDirectory=$taskDirectoryProof.taskDirectory}
 function Wait-DrainedSnapshot {
  $deadline=(Get-Date).AddSeconds(60)
  do {
@@ -162,6 +174,32 @@ function Assert-InputHashes {
  if((Get-FileHash -LiteralPath $Package).Hash.ToLowerInvariant()-ne $ExpectedPackageSha256.ToLowerInvariant()){throw 'package SHA不匹配'}
  if((Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash.ToLowerInvariant()-ne $ExpectedProfileSha256.ToLowerInvariant()){throw 'profile CAS不匹配'}
 }
+function Invoke-TaskFileMigration([string]$Mode,[string]$ExpectedJournalSha256='',[string]$BackupRoot=$backup,[string]$ExpectedBackupSha256='') {
+ if(-not $TaskMigrationPlan){return}
+ $tool="$workspace/scripts/migrate-task-file-links.mjs"
+ $journal="$EvidenceDirectory/task-file-migration.json"
+ if((Get-FileHash -LiteralPath $tool).Hash-ne $migrationToolSha256){throw '任务迁移工具摘要漂移'}
+ if($Mode-ne 'check' -and $inputHashes -and $inputHashes.ContainsKey($tool) -and $inputHashes[$tool]-ne $migrationToolSha256){throw '任务迁移工具冻结摘要不一致'}
+ if($Mode-eq 'check'){return Run-Node @($tool,'--check',$TaskMigrationPlan)}
+ if($Mode-eq 'execute'){
+  if(-not $lockProcess -or $lockProcess.HasExited -or @(Listeners).Count){throw '任务文件迁移要求停机且持有owner独占锁'}
+  if((Get-FileHash -LiteralPath $TaskMigrationPlan).Hash-ne $inputHashes[$TaskMigrationPlan]){throw '任务迁移计划摘要漂移'}
+  if(-not $BackupRoot){throw '任务迁移源备份目录缺失'}
+  Run-Node @($tool,'--backup',$TaskMigrationPlan,"${BackupRoot}-task-migration-source")|Set-Content "$EvidenceDirectory/task-file-migration-backup.json"
+  Run-Node @($tool,'--verify-backup',"${BackupRoot}-task-migration-source/backup-manifest.json")|Set-Content "$EvidenceDirectory/task-file-migration-backup-verified.json"
+  Run-Node @($tool,'--execute',$TaskMigrationPlan,$journal)|Set-Content "$EvidenceDirectory/task-file-migration-execute.json"
+ }elseif($Mode-ne 'verify'){throw '任务文件迁移模式无效'}
+ if($Mode-eq 'verify'){
+  if(-not $BackupRoot -or -not(Test-Path -LiteralPath "${BackupRoot}-task-migration-source/backup-manifest.json" -PathType Leaf)){throw '任务迁移源备份清单缺失'}
+  if(-not $ExpectedBackupSha256 -or (Get-FileHash -LiteralPath "${BackupRoot}-task-migration-source/backup-manifest.json").Hash-ne $ExpectedBackupSha256){throw '任务迁移源备份清单摘要漂移'}
+  [void](Run-Node @($tool,'--verify-backup',"${BackupRoot}-task-migration-source/backup-manifest.json"))
+ }
+ if(-not(Test-Path -LiteralPath $journal -PathType Leaf)){throw '任务文件迁移journal缺失'}
+ if($ExpectedJournalSha256 -and (Get-FileHash -LiteralPath $journal).Hash-ne $ExpectedJournalSha256){throw '任务文件迁移journal摘要漂移'}
+ $proof=Run-Node @($tool,'--verify',$journal)
+ if($Mode-eq 'execute'){$proof|Set-Content "$EvidenceDirectory/task-file-migration-verified.json"}
+ return $proof
+}
 function Change-Maintenance($state,[bool]$active,[string]$maintenanceId) {
  $body=@{requestId=[guid]::NewGuid().ToString();active=$active;expectedRevision=$state.revision;maintenanceId=$maintenanceId;reason=if($active){'受控本地部署，停止新派发'}else{'部署回读通过，恢复派发'}}|ConvertTo-Json
  return Invoke-RestMethod -Uri http://127.0.0.1:18998/runtime/maintenance -Method Post -ContentType 'application/json' -Headers @{Origin='http://127.0.0.1:3080'} -Body $body -NoProxy -TimeoutSec 20
@@ -178,6 +216,7 @@ function Change-MaintenancePhase($state,[string]$operation,[string]$maintenanceI
  return Invoke-RestMethod -Uri "http://127.0.0.1:18998/runtime/maintenance/$operation" -Method Post -ContentType 'application/json' -Headers @{Origin='http://127.0.0.1:3080'} -Body $body -NoProxy -TimeoutSec 20
 }
 function Assert-LaunchInputs($launchRecord) {
+ if([string]$TaskMigrationPlan-ne [string]$launchRecord.taskMigrationPlan){throw '接续任务迁移计划漂移'}
  if($ExpectedPackageSha256-ne $launchRecord.packageSha256 -or $ExpectedProfileSha256-ne $launchRecord.sourceProfileSha256){throw '接续参数与原部署输入不一致'}
  if((Get-FileHash -LiteralPath $Package).Hash-ne $launchRecord.packageSha256){throw '接续部署包摘要不匹配'}
  if([string]$ObserverPackage-ne [string]$launchRecord.observerPackage -or [string]$ExpectedObserverPackageSha256-ne [string]$launchRecord.observerPackageSha256 -or [string]$DirectQueriesProposal-ne [string]$launchRecord.directQueriesProposal){throw '接续部署模式或Observer身份漂移'}
@@ -200,6 +239,10 @@ function Resume-Deployment($result,$launchRecord) {
  return $result
 }
 function Read-Deployment($launchRecord) {
+ if($TaskMigrationPlan){
+  if($launchRecord.taskMigrationBackupManifest-ne "$($launchRecord.backup)-task-migration-source/backup-manifest.json"){throw '任务迁移源备份清单路径漂移'}
+  [void](Invoke-TaskFileMigration 'verify' $launchRecord.taskMigrationJournalSha256 $launchRecord.backup $launchRecord.taskMigrationBackupSha256)
+ }
  $deadline=(Get-Date).AddSeconds($WaitSeconds);$fresh=$null
  do {
   if(@(Listeners).Count-eq 2){
@@ -239,11 +282,54 @@ function Read-Deployment($launchRecord) {
  if($maintenance.maintenanceId-ne $launchRecord.maintenanceId){throw '启动后维护许可漂移'}
  return @{status='ready';ready=$true;pid=$fresh.ProcessId;launcherPid=$launchRecord.launcherPid;tasks=$tasks.Count;history=$history;package=$packageReadback;observer=$observerReadback;web=$webProof;maintenance=$maintenance;dispatchResumed=(-not $maintenance.active);logs=@($logs);scheduledTaskChanged=[bool]$launchRecord.enrollmentAutostartRestore;businessAcceptancePassed=$false}
 }
+function Assert-LocalPackageSources([string]$ProfileRoot,[string]$ObserverReplacement='') {
+ $code=@'
+const fs=require('node:fs'),path=require('node:path'),{fileURLToPath}=require('node:url'),{createRequire}=require('node:module');
+try {
+ const [root,workspace,replacement]=process.argv.slice(1),entries=[];
+ const add=(name,spec)=>{if(typeof spec==='string'&&spec.startsWith('file:'))entries.push({name,spec})};
+ const manifest=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
+ for(const section of ['dependencies','devDependencies','optionalDependencies'])for(const [name,spec]of Object.entries(manifest[section]||{}))add(name,spec);
+ const pnpm=path.join(root,'pnpm-lock.yaml');
+ if(fs.existsSync(pnpm)){
+  const yaml=createRequire(path.join(workspace,'package.json'))('js-yaml'),lock=yaml.load(fs.readFileSync(pnpm,'utf8'));
+  for(const importer of Object.values(lock.importers||{}))for(const section of ['dependencies','devDependencies','optionalDependencies'])for(const [name,value]of Object.entries(importer[section]||{}))add(name,value.specifier);
+  for(const [key,value]of Object.entries(lock.packages||{}))add(key.split('@file:')[0],value.resolution?.tarball);
+ }else{
+  const lock=JSON.parse(fs.readFileSync(path.join(root,'package-lock.json'),'utf8'));
+  for(const [key,value]of Object.entries(lock.packages||{}))add(key.replace(/^node_modules\//,''),value.resolved);
+  for(const [name,value]of Object.entries(lock.dependencies||{}))add(name,value.resolved);
+ }
+ for(const {name,spec}of entries){
+  const value=replacement&&name==='@zzusp/dingtalk-dsh-observer'?'file:'+replacement:spec;
+  const target=value.startsWith('file://')?fileURLToPath(value):path.resolve(root,decodeURIComponent(value.slice(5)));
+  if(!fs.existsSync(target)||!fs.statSync(target).isFile())throw Error('profile本地依赖源不存在: '+target);
+ }
+}catch(error){console.log(error.message);process.exitCode=1}
+'@
+ $result=& $node -e $code $ProfileRoot $workspace $ObserverReplacement
+ if($LASTEXITCODE){throw ($result -join "`n")}
+}
+function Read-StoppedRepairRecord([string]$Path,$sealed,$backupRecord) {
+ if((Split-Path -Leaf $Path)-eq 'launch.json'){return Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json}
+ if((Split-Path -Leaf $Path)-ne 'maintenance-sealed.json'){throw '离线检查点必须为launch.json或maintenance-sealed.json'}
+ $origin=Split-Path -Parent $Path
+ foreach($name in @('launch.json','config-applied.json','enrollment-autostart.json','task-file-migration-execute.json','task-file-migration.json','task-file-migration-backup.json')){
+  if(Test-Path -LiteralPath "$origin/$name"){throw '封存安装检查点已进入其他部署阶段'}
+ }
+ if($DirectQueriesProposal -or $backupRecord.taskMigrationBackupManifest -or $backupRecord.taskMigrationBackupSha256){throw '封存安装续接不允许配置提案或任务迁移'}
+ if(-not [IO.Path]::IsPathFullyQualified($backupRecord.backup) -or $backupRecord.packageSha256-ne $ExpectedPackageSha256){throw '封存安装仅可重试原备份绑定的包'}
+ $originalProfileHash=(Get-FileHash -LiteralPath "$($backupRecord.backup)/profile/cordis.patch.yml").Hash
+ if($originalProfileHash-ne $ExpectedProfileSha256){throw '原备份profile摘要不匹配'}
+ return [pscustomobject]@{checkpoint='sealed-before-launch';mode='maintenance';backup=$backupRecord.backup;
+  packageSha256=$backupRecord.packageSha256;sourceProfileSha256=$originalProfileHash;profileSha256=$originalProfileHash;
+  maintenanceId=$sealed.state.maintenanceId;directQueriesProposal='';inputPaths=@();inputHashes=@{};launcherPid=$null}
+}
 function Assert-StoppedRepairPermit($record,$sealed,$before,$backupRecord,$current) {
- if($record.mode-ne 'maintenance' -or $record.enrollmentAutostartRestore -or $record.observerPackage -or
+ if($record.mode-ne 'maintenance' -or $record.enrollmentAutostartRestore -or ($record.observerPackage -and $record.checkpoint-ne 'sealed-before-launch') -or
     $record.sourceProfileSha256-ne $ExpectedProfileSha256 -or $record.profileSha256-ne $ExpectedProfileSha256 -or
     $backupRecord.backup-ne $record.backup -or $backupRecord.packageSha256-ne $record.packageSha256 -or
-    $record.packageSha256-eq $ExpectedPackageSha256 -or $record.directQueriesProposal.Replace('\','/')-ne $DirectQueriesProposal.Replace('\','/')){throw '原部署记录不允许本次离线修复'}
+    ($record.checkpoint-ne 'sealed-before-launch' -and $record.packageSha256-eq $ExpectedPackageSha256) -or ([string]$record.directQueriesProposal).Replace('\','/')-ne ([string]$DirectQueriesProposal).Replace('\','/')){throw '原部署记录不允许本次离线修复'}
  foreach($state in @($sealed.state,$before.maintenance,$current)){
   if(-not $state.active -or $state.phase-ne 'stopping' -or -not $state.drained -or
      $state.maintenanceId-ne $record.maintenanceId -or $state.revision-ne $sealed.state.revision -or
@@ -256,7 +342,7 @@ function Assert-StoppedRepairPermit($record,$sealed,$before,$backupRecord,$curre
 function Assert-StoppedRepairProcesses($record,$backupRecord) {
  if(@(Listeners).Count){throw '离线修复要求双端口均无监听'}
  $live=@(Get-CimInstance Win32_Process|Where-Object {
-  $_.ProcessId-in @($record.launcherPid,$backupRecord.oldPid) -or $_.ParentProcessId-eq $record.launcherPid -or
+  $_.ProcessId-eq $backupRecord.oldPid -or ($record.launcherPid -and ($_.ProcessId-eq $record.launcherPid -or $_.ParentProcessId-eq $record.launcherPid)) -or
   ($_.Name-eq 'node.exe' -and $_.CommandLine -and $_.CommandLine.Replace('\','/').Contains("$profile/node_modules/@deepseek-ai/dsh/"))
  })
  if($live.Count){throw '原进程、launcher或profile进程仍存在'}
@@ -271,28 +357,38 @@ if($Readback -or $Resume){
  exit 0
 }
 Assert-InputHashes
+Assert-LocalPackageSources $profile $observerSourceReplacement
+if($TaskMigrationPlan){$taskMigrationCheck=Invoke-TaskFileMigration 'check'|ConvertFrom-Json}
 if($RepairStoppedLaunch){
  if(-not [IO.Path]::IsPathFullyQualified($RepairStoppedLaunch)){throw '原launch必须为绝对路径'}
  $origin=Split-Path -Parent $RepairStoppedLaunch
- $record=Get-Content -LiteralPath $RepairStoppedLaunch -Raw|ConvertFrom-Json
  $sealed=Get-Content -LiteralPath "$origin/maintenance-sealed.json" -Raw|ConvertFrom-Json
  $before=Get-Content -LiteralPath "$origin/control-before.json" -Raw|ConvertFrom-Json
  $backupRecord=Get-Content -LiteralPath "$origin/backup.json" -Raw|ConvertFrom-Json
+ $record=Read-StoppedRepairRecord $RepairStoppedLaunch $sealed $backupRecord
  $evidenceHashes=@{}
  foreach($path in @($RepairStoppedLaunch,"$origin/maintenance-sealed.json","$origin/control-before.json","$origin/backup.json","$($record.backup)/manifest.json")+$deploymentInputs){$evidenceHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
  if($record.inputPaths-contains $Package){throw '修复包必须使用新的唯一路径'}
  if($DirectQueriesProposal -and (Get-FileHash -LiteralPath $DirectQueriesProposal).Hash-ne $record.inputHashes.($record.directQueriesProposal)){throw '原查询配置提案已变化'}
  function Test-StoppedRepair {
   Assert-InputHashes
+  Assert-LocalPackageSources $profile $observerSourceReplacement
   foreach($path in $evidenceHashes.Keys){if((Get-FileHash -LiteralPath $path).Hash-ne $evidenceHashes[$path]){throw '修复输入或原证据已变化'}}
   Assert-StoppedRepairProcesses $record $backupRecord
   $current=Run-Node @($checker,'maintenance')|ConvertFrom-Json
   Assert-StoppedRepairPermit $record $sealed $before $backupRecord $current
   $history=Run-Node @($checker,'verify',"$origin/control-before.json")|ConvertFrom-Json
-  $backupProof=Run-Node @($checker,'backup-reverify',$record.backup)|ConvertFrom-Json
+  $backupProof=Run-Node @($checker,'backup-reverify',$record.backup,$TaskDirectory)|ConvertFrom-Json
   $packageProof=Run-Node @($checker,'package',$Package,$source)|ConvertFrom-Json
+  $observerProof=$null
+  if($ObserverPackage){
+   $originalDependencies=Get-Content -LiteralPath "$($record.backup)/profile/package.json" -Raw|ConvertFrom-Json
+   $currentObserver=Get-Content -LiteralPath "$observerInstalled/package.json" -Raw|ConvertFrom-Json
+   if(-not $originalDependencies.dependencies.'@zzusp/dingtalk-dsh-observer' -or $currentObserver.name-ne '@zzusp/dingtalk-dsh-observer'){throw 'Observer原依赖身份缺失'}
+   $observerProof=Run-Node @($checker,'package',$ObserverPackage,$observerInstalled,$observerInstalled)|ConvertFrom-Json
+  }
   if((Get-PSDrive D).Free-lt ((Get-Item -LiteralPath $Package).Length*10+1GB)){throw '修复安装空间不足'}
-  return @{history=$history;backup=$backupProof;package=$packageProof;maintenance=$current}
+  return @{history=$history;backup=$backupProof;package=$packageProof;observer=$observerProof;maintenance=$current}
  }
  $proof=Test-StoppedRepair
  if($Check){@{mode='repair-stopped-check';writes=0;ownerLock='required-at-execution';proof=$proof}|ConvertTo-Json -Depth 10;exit 0}
@@ -304,7 +400,8 @@ if($RepairStoppedLaunch){
   Copy-Item -LiteralPath "$origin/control-before.json","$origin/maintenance-sealed.json","$origin/backup.json" -Destination $EvidenceDirectory
   $env:DSH_HOME='D:/dsh_home';$env:TEMP=$tempDirectory;$env:TMP=$tempDirectory
   if($lockProcess.HasExited){throw '安装前独占锁已丢失'}
-  & $node "$profile/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add $Package *> "$EvidenceDirectory/install.log"
+  $repairPackages=@($Package)+@(if($ObserverPackage){"@zzusp/dingtalk-dsh-observer@file:$ObserverPackage"})
+  & $node "$profile/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add @repairPackages *> "$EvidenceDirectory/install.log"
   if($LASTEXITCODE){throw '修复安装失败，保持封存停机'}
   Run-Node @($checker,'package',$Package,$source,$installed)|Set-Content "$EvidenceDirectory/installed.json"
   Assert-InputHashes
@@ -319,7 +416,7 @@ if($RepairStoppedLaunch){
  $env:PATH=(Split-Path -Parent $node)+';'+$env:PATH
  $launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
  $inputHashes=@{};foreach($path in $deploymentInputs){$inputHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
- $launchRecord=@{repairOfLaunch=$RepairStoppedLaunch;repairOfLaunchSha256=$evidenceHashes[$RepairStoppedLaunch];observerPackage='';observerPackageSha256='';directQueriesProposal=$DirectQueriesProposal;mode='maintenance';launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=$ExpectedPackageSha256;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=$ExpectedProfileSha256;backup=$record.backup;maintenanceId=$record.maintenanceId;enrollmentAutostartRestore=$false}
+ $launchRecord=@{repairOfLaunch=$RepairStoppedLaunch;repairOfLaunchSha256=$evidenceHashes[$RepairStoppedLaunch];observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode='maintenance';launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=$ExpectedPackageSha256;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=$ExpectedProfileSha256;backup=$record.backup;maintenanceId=$record.maintenanceId;enrollmentAutostartRestore=$false}
  $launchRecord|ConvertTo-Json|Set-Content "$EvidenceDirectory/launch.json"
  $result=Read-Deployment $launchRecord
  $result|ConvertTo-Json -Depth 10|Set-Content "$EvidenceDirectory/readback.json"
@@ -332,10 +429,13 @@ if(($ContinueMaintenanceId -and $null-eq $ExpectedMaintenanceRevision) -or
    (-not $ContinueMaintenanceId -and $null-ne $ExpectedMaintenanceRevision) -or
    ($Bootstrap -and ($ContinueMaintenanceId -or $HoldMaintenance))){throw '维护接续须同时提供ID与revision，且不能用于Bootstrap'}
 # 留出备份实际体积、安装扩展及至少1GiB余量；不足时停止，不清理任何文件。
-$backupBytes=(@(Get-ChildItem -LiteralPath $domain,"$runtime/artifacts" -File -Recurse)+@(Get-ChildItem -LiteralPath $runtime,$profile -File)|Measure-Object Length -Sum).Sum
+$backupSources=@($domain,"$runtime/artifacts")
+# 任务目录容量沿用零写检查的相同排除规则，不遍历依赖链接。
+$backupBytes=(@(Get-ChildItem -LiteralPath $backupSources -File -Recurse)+@(Get-ChildItem -LiteralPath $runtime,$profile -File)|Measure-Object Length -Sum).Sum
+$backupBytes+=[long]$taskDirectoryProof.taskBytes
 $packageBytes=[long](Get-Item -LiteralPath $Package).Length
 if($ObserverPackage){$packageBytes+=[long](Get-Item -LiteralPath $ObserverPackage).Length}
-$requiredBytes=[long]$backupBytes+($packageBytes*10)+1GB
+$requiredBytes=[long]$backupBytes+([long]$taskMigrationCheck.bytes)+($packageBytes*10)+1GB
 $freeBytes=(Get-PSDrive D).Free
 if($freeBytes-lt $requiredBytes){throw "D盘空间不足：可用 $freeBytes，所需 $requiredBytes"}
 $inputHashes=@{}
@@ -445,15 +545,21 @@ New-Item -ItemType Directory -Path $backup,"$backup/runtime","$backup/profile"|O
 Copy-Item -LiteralPath $domain -Destination "$backup/domain" -Recurse
 Get-ChildItem -LiteralPath $runtime -File|Copy-Item -Destination "$backup/runtime"
 Copy-Item -LiteralPath "$runtime/artifacts" -Destination "$backup/runtime/artifacts" -Recurse
+if($TaskDirectory){Run-Node @($checker,'task-directory-copy',$TaskDirectory,"$backup/tasks")|Out-Null}
 foreach($name in @('cordis.patch.yml','cordis.yml','package.json','package-lock.json','settings.yaml','pnpm-lock.yaml')){if(Test-Path -LiteralPath "$profile/$name"){Copy-Item -LiteralPath "$profile/$name" -Destination "$backup/profile/$name";Same-Hash "$profile/$name" "$backup/profile/$name"}}
 Same-Hash "$runtime/control.sqlite" "$backup/runtime/control.sqlite"
 Same-Hash "$domain/dingtalk_dsh_assistant.json" "$backup/domain/dingtalk_dsh_assistant.json"
-$backupProof=Run-Node @($checker,'backup-verify',$backup)
+$backupProof=Run-Node @($checker,'backup-verify',$backup,$TaskDirectory)
 $backupProof|Set-Content -LiteralPath "$backup/manifest.json" -Encoding utf8
 @{backup=$backup;oldPid=$old.ProcessId;packageSha256=(Get-FileHash -LiteralPath $Package).Hash}|ConvertTo-Json|Set-Content "$EvidenceDirectory/backup.json"
 $env:DSH_HOME='D:/dsh_home';$env:TEMP=$tempDirectory;$env:TMP=$tempDirectory
 foreach($path in $inputHashes.Keys){if((Get-FileHash -LiteralPath $path).Hash-ne $inputHashes[$path]){throw '部署输入文件已变化'}}
 if($lockProcess.HasExited){throw '安装前独占锁已丢失'}
+if($TaskMigrationPlan){[void](Invoke-TaskFileMigration 'execute')}
+$migrationBackupManifest=if($TaskMigrationPlan){"${backup}-task-migration-source/backup-manifest.json"}else{''}
+$migrationBackupSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath $migrationBackupManifest).Hash}else{''}
+@{backup=$backup;oldPid=$old.ProcessId;packageSha256=(Get-FileHash -LiteralPath $Package).Hash;taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256}|ConvertTo-Json|Set-Content "$EvidenceDirectory/backup.json"
+Assert-LocalPackageSources $profile $observerSourceReplacement
 $installPackages=@($Package)+@($ObserverPackage|Where-Object {$_})
 & $node "$profile/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add @installPackages *> "$EvidenceDirectory/install.log"
 if($LASTEXITCODE){throw '安装失败，保持停机并保留备份'}
@@ -482,7 +588,7 @@ if($Bootstrap){
 # 用既有启动脚本，不创建或改写计划任务；仅当前进程树使用D盘TEMP。
 $env:PATH=(Split-Path -Parent $node)+';'+$env:PATH
 $launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
-$launchRecord=@{observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId;enrollmentAutostartRestore=$enrollmentAutostartRestore}
+$launchRecord=@{taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256;taskMigrationPlan=$TaskMigrationPlan;taskMigrationJournalSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath "$EvidenceDirectory/task-file-migration.json").Hash}else{''};observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId;enrollmentAutostartRestore=$enrollmentAutostartRestore}
 $launchRecord|ConvertTo-Json|Set-Content -LiteralPath "$EvidenceDirectory/launch.json" -Encoding utf8
 $result=Read-Deployment $launchRecord
 if($result.ready -and -not $HoldMaintenance){$result=Resume-Deployment $result $launchRecord}

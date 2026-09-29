@@ -318,7 +318,29 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 
 ### 原生查询会话目录
 
-新建会话使用 Resident 已校验的 Agent 工作区下 `session-workspaces/<职责>` 作为原生 `meta.cwd`，不采用模型/消息中的目录。职责为消息问答、任务负责、任务执行、群聊常驻、消息归类、话题决策、结果审阅；消息意图判断不产生原生会话。原生会话恢复保持原目录。部署前回读 `agent-instructions.projectRootMarkers`，确认配置根实际具有受支持标记；普通目录可使用 `AGENTS.md` 或 `CLAUDE.md`，不能仅凭目录创建成功断言指引继承。此前已保存到 `_no-cwd` 的历史会话不迁移、不伪造 metadata；宿主 Session Controller 目录会排除这些已释放会话，因此历史看板会话入口不保证能打开，结果与依据仍可按需读取。验证新会话入口须在部署后创建新问答，不能用旧会话证明修复成功。
+新任务的 Owner 和执行会话使用 Resident 已校验的 Agent 工作区下 `tasks/<logicalTaskId>/work/<内部taskId>/<owner或execution>/<sessionId>` 作为原生 `meta.cwd`；其他新会话和已有任务仍使用 `session-workspaces/<职责>`。目录不采用模型/消息中的路径，消息意图判断不产生原生会话。原生会话恢复保持原目录；DSH 原始日志存储根及后端保持不变。部署前回读 `agent-instructions.projectRootMarkers`，确认配置根实际具有受支持标记；普通目录可使用 `AGENTS.md` 或 `CLAUDE.md`，不能仅凭目录创建成功断言指引继承。此前已保存到 `_no-cwd` 的历史会话不迁移、不伪造 metadata；宿主 Session Controller 目录会排除这些已释放会话，因此历史看板会话入口不保证能打开，结果与依据仍可按需读取。验证新会话入口须在部署后创建新问答和任务，不能用旧会话证明新路径生效。
+
+### 任务文件统一目录的部署与备份
+
+本次无需 schema 迁移或新增 profile 配置。新任务文件根由已配置 Agent 工作区确定，为 `tasks/<logicalTaskId>/{work,tmp,outputs}`。新任务引用携带逻辑任务身份，旧引用保留旧位置；正式重执行的新内部任务复用原逻辑任务根。不要移动已有工程回执绑定的绝对路径，也不要改写引用。
+
+正常部署脚本 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1` 增加显式参数 `-TaskDirectory <Agent工作区绝对路径>/tasks`。升级后已出现新引用时，该参数为必填；沿既有部署流程，先以完整参数加 `-Check` 零写预检，核对目录、容量和引用闭包后再执行。尚未有新任务且目录不存在时可暂不传；不要为自检创建虚假根。`-Resume`、`-Readback` 及部署复核须沿用原任务根。
+
+备份将任务文件复制到 `backup/tasks`，清单绑定源任务根并校验文件摘要；闭包检查直接查找限定引用，不扫描猜归属。唯一依赖排除规则为 `<logicalTaskId>/work/engineering/<24-hex>/ws-<64-hex>/repository/**/node_modules`，包括仓库根和嵌套依赖目录，显式保存于 `taskBackupExclusions`。容量统计、复制和源清单校验共用该规则，复制不进入依赖链接；备份目标意外出现额外文件仍拒绝。恢复后按源码锁文件重新安装依赖，不声称恢复了依赖缓存。
+
+控制库、共享工件、Session 和任务根必须来自同一停稳检查点。缺根、坏摘要或排除范围外的链接均停止；不能仅备份原 `artifactDirectory` 后声称可恢复。恢复时保留原 Agent 工作区绝对路径，先验证完整备份再启动唯一写者。启用 workflow 后在线修改工作区会返回 `workflow_task_workspace_change_requires_offline_migration`，配置不写入；同根更新与模型修改仍可用。不要绕过此保护仅修改磁盘根配置，已有相对任务引用会失去原位置；换根须另行设计包含工程绝对路径绑定的停机迁移，本轮不迁移。
+
+旧任务继续使用原检查器及验收 runner 的冻结身份。新任务使用任务目录版本的验收 runner，以保留服务直接子进程 PID 的核验，并单独给检查/验收子进程设置 TEMP/TMP/TMPDIR；不修改 Host 全局环境。新引用产生后，旧版本无法读取新布局，不能只降级包继续写新账；回退需按既有维护流程核对新增效果并恢复一致检查点。
+
+切换后分别验证新普通文件任务、工程检查/验收、Web 重执行、重启后的文件下载和历史任务读取。核对原始 JSONL 仍在宿主 Session 根；本地定向测试不代表正式实例或真实钉钉送达已经验证。
+
+### 用户指定终态任务的文件收纳
+
+只有用户指定的已完成任务才能使用 `-TaskMigrationPlan <绝对JSON路径>`；计划逐项列出 source/destination 及可再生缓存排除，冻结已审阅 manifest 摘要。`scripts/migrate-task-file-links.mjs --check <plan>` 零写检查普通文件、同卷、全部祖先无链接、目标不存在、源 SHA 和文件身份；工具不自行判断业务终态，部署前从实际控制库及 API 确认身份、终态和所有代次。
+
+部署完整参数先加 `-Check`。执行时维护排空、停止原实例、持 Owner 独占锁，在原完整备份外另存去重迁移源普通文件到备份同级目录，逐项 SHA 核验。计划、工具、包及配置摘要均冻结；随后落 fsync journal，rename 到任务根并在旧路径建立同文件硬链接，独立核对摘要、inode、device。中断按 journal 回退，冲突拒绝；Readback/Resume 只验证原 journal、独立迁移备份及原完整备份，不能重执行计划。
+
+这是两个入口指向同文件的收纳；旧绝对路径、candidate 冻结身份及历史引用保持有效，不改任务状态或原始会话日志。原地写会同时改变两入口，原子替换会分叉，故仅处理终态旧执行，后续重执行用新布局。缺失的历史会话文件必须记录 missing，不能声称已保全。迁移不含共享凭据、公共源仓库、固定工具或日志；node_modules 排除仅按审核计划显式列出。恢复先独立核验迁移源备份清单及摘要，再在停机锁内按 journal 恢复原路径，确认完整控制账检查点与工程身份后启动。
 
 ### 已确认送达通知的单次对账恢复
 
@@ -372,7 +394,7 @@ Web重执行群名修复：不迁移数据。安装后只读核对/state/tasks�
 
 闲聊话题规则修改后运行topic-runtime、topic-store、decision、group-decision-contract定向测试。双包受控安装后核对Assistant源码和新PID，隔离工具测试不代表真实模型语义或真实收信验证；不得为验证清理已有话题。
 
-消息工作流的拆分节点允许以语义判断 `no_action` 结束无待办消息（闲聊、问候、无执行请求的收信测试等），必须完整覆盖原文并有成功节点记录，不创建话题、任务或澄清通知。明确的测试操作请求仍走正常事项流程。收信箱等待状态细分为“等待澄清”“等待补充材料”，提示显示当前待补充问题；真正失败仍显示“关联受阻”。
+消息工作流的拆分节点允许以语义判断 `no_action` 结束无待办消息（闲聊、问候、无执行请求的收信测试等），必须完整覆盖原文并有成功节点记录，不创建话题、任务或澄清通知。明确的测试操作请求仍走正常事项流程。合法终态 `no_action` 不再占用未归类屏障；后续新消息可继续派发，真正尚未归类的消息仍阻断话题执行，无需改写历史状态。收信箱等待状态细分为“等待澄清”“等待补充材料”，提示显示当前待补充问题；真正失败仍显示“关联受阻”。
 
 ### 封存后启动失败的离线修复
 
@@ -381,3 +403,33 @@ Web重执行群名修复：不迁移数据。安装后只读核对/state/tasks�
 先运行以上参数加 `-Check`：零写核对原 launch/封存记录/backup/control-before、当前维护 ID/revision/incarnation、全部历史记录、原完整备份的清单/摘要/SQLite 全表与工件闭包、当前业务文件和工件全集以及源码与包字节。原生安装改变的 profile 依赖文件不与安装前备份比较，但原 profile 配置 SHA 必须不变。备份一致性副本仅允许原只读连接留下的空 WAL 与固定 32768 字节 SHM，其他新增文件拒绝。
 
 Check 通过后去掉 `-Check` 执行。执行分支持有 EXCLUSIVE owner 锁，重新完成预检后调用原生 `plugin --profile web add`，持续持锁至安装包与历史再次核验完成；不执行 SQL 修复、不回滚数据库、不应用配置、不解除维护。旧证据保留，新证据目录继承 control-before 并生成新的 launch.json。启动后无论 ready 与否均保持维护；后续以本次相同参数加 `-Readback` 回读，业务验证通过后才明确执行 `-Resume`。Check 不获取写锁，执行时锁竞争仍会明确拒绝。
+
+维护期间消息节点领取被拒绝时保留正常暂停，不标记永久失败、不立即反复派发；解除维护后恢复原消息。旧版已误标失败的消息须从现有 Web 重处理入口恢复，先确认没有已生效的外发效果，不直接改控制库。
+
+文件交付授权引用可逐字包含句末标点或跨句；Host按精确引用覆盖的完整源句核验否定与其他群限制，仍要求原文明确向群发送文件。误拒后未知命令保留证据，不自动回放；修复部署后用新的唯一专用验收请求验证，不手工改账或替换授权引用。
+
+Owner安排带capabilityStep的通用阶段时，planChange本轮只能包含一个阶段，前序需成功；写入/导入产物核验后下一轮再追加群交付。提示明确该合同，存储约束保持。blocked的已有任务可由真实群补充约束事件恢复；尚未建立Run时Webcontext入口未覆盖，不声称此入口可用。
+
+复合验收项按Owner显式绑定的当前任务已成功阶段联合语义核验；未绑定的其他阶段不进入。领域自己的结构、效果和执行输入约束仍独立验证。已冻结general v2合同保持源码身份，由验收协调层分别做原效果检查与必须通过的联合语义验收，缺校验器或结果不足不能完成。
+
+IB共享判断仅合并完全相同的任务事实副本，各事项保留原权限范围内的引用；相同原生任务历史和话题来源全文仅通过精确引用复用，全部内容可完整还原；原文、约束及补读材料不裁剪，容量上限保持不变。已有无命令、无通知效果的容量失败消息可经现有 `/workflows/<runId>/reprocess` 原生重处理，执行前核对原消息版本和效果账；部署健康不代表该话题或Owner完成，需独立读回IB接纳及任务完成门禁。不得编辑SQLite或重发已确认交付的附件来制造验收通过。
+
+I/IB动作条件必填字段与Host校验共用规则；例如report缺language仍拒绝。遇到该错误先核对正式包提示与校验的一致性，再走原生reprocess，不写默认参数或业务账。
+
+### 完成验收的顺序证据
+
+若任务要求“先生成读回、后续轮次再投递”，仅有两个成功产物不足以证明轮次和顺序。完成验收会从内部只读查询 `task.owner.planning` 取当前 Task 已应用的 initialize/append 及原生 appendStages 回执（后者仅标明原始类型，不推断模式），结合当前已验阶段的前驱引用、Run 时间及节点状态提供给领域语义校验；released 候选、待应用决定及其他 Task 记录不进入该证据。规划历史超过 200 条明确拒绝完成，不采用不完整历史。此查询不新增外部 API，也不迁移表或改写历史记录。
+
+排障时分别检查结构门禁、真实顺序记录和模型判断。一次模型超时不能推断所有拒绝均由超时引起；不得通过删除验收条目或重发附件规避缺证据。现有文件、附件及原始会话日志保持原位置。
+
+### 已封存但安装失败、尚无 launch.json
+
+此时不要伪造启动记录。`-RepairStoppedLaunch` 可传原证据目录中的 `maintenance-sealed.json` 绝对路径：必须同时存在原 `backup.json`、`control-before.json` 与完整备份，原目录无 launch、配置应用、接入群自启变更或迁移记录。该入口仅重试 backup.json 绑定的同 SHA Assistant 包，`ExpectedProfileSha256` 必须等于当前配置和备份原配置；不传 DirectQueriesProposal，不再次备份、迁移或应用配置。先 `-Check`，再由同一参数执行；仍核对停止状态、维护许可、全部历史和备份，并在执行期间持有原 owner EXCLUSIVE 锁。
+
+如果失败原因是 Observer 的本地 tgz 源丢失，可另外提供 `ObserverPackage` 与 `ExpectedObserverPackageSha256`，指向已有持久包目录中的恢复包。Check 和锁内执行均以当前已安装 Observer 为源码逐文件核验包（包含 package.json 的名称和版本），并核对原备份中存在该依赖；仅允许相同内容恢复源，不允许升级。归档 tgz 的摘要可以不同，不能伪造旧完整性摘要；原生 `plugin add` 同时接纳 Assistant 和此 Observer 包，自行更新依赖路径及锁。原来已有 launch.json 的修复入口仍禁止 Observer 变更。
+
+所有部署的零写预检及安装前都解析 profile 的 package.json 和原生 pnpm-lock.yaml（无 pnpm 锁时读 package-lock.json），检查本地 file: tgz 存在。仅上述已核验 Observer 恢复可精确替代该包名对应的旧源；其他缺源仍拒绝。正式启动成功前保持 stopping 封存，后续仍按 Readback/Resume 门禁处理。
+
+恢复 Observer 时脚本使用显式 `@zzusp/dingtalk-dsh-observer@file:<恢复包绝对路径>` 参数。pnpm 10.13.1 在旧 file: 源缺失时，传裸 tgz 会先解析旧源而失败；带包名的原生 add 能先确定被替换的依赖。隔离临时 profile 已实跑：裸包 ENOENT，命名参数成功且 package.json 由 pnpm 更新。不能通过手改 profile 或完整性摘要绕过此解析问题。
+
+IB 话题来源身份使用无损引用：`sourceIndexes` 按原顺序指向 sharedTopic.sources 中唯一匹配的 sourceKey/sourceVersion；额外字段或歧义匹配不投影。`actorFromTopic` 仅代表该事实发送者与 sharedTopic.actorId 完全相等，不代表所有消息同一发送者，也不赋予权限。容量失败先核验当前真实完整输入和可逆性；不删除事实或提高上限。若原失败消息无已生效命令/通知，使用原生重处理恢复该消息，避免为唤醒反复新增话题历史。
