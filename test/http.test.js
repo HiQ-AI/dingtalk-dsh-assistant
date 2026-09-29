@@ -363,16 +363,28 @@ test('上下文只读 HTTP 路径完整传递分页与版本参数', async () =>
   const calls = []
   const record = name => async (...args) => { calls.push({ name, args }); return { ok: true } }
   await withServer(false, async base => {
-    const paths = ['/state/workflows/run%3A1/trace?cursor=2&limit=3', '/state/workflows/topics/topic%3A1/context?cursor=4&limit=5&intentCursor=6&revision=7', '/state/workflows/run%3A1/evidence/source%3A1?cursor=8&limit=9&hash=abc', '/state/tasks/task%3A1/runs?cursor=10&limit=11', '/state/tasks/task%3A1/runs/run%3A1/nodes/node%3A1/output?ref=abc&cursor=12&limit=13']
+    const paths = ['/state/workflows/run%3A1/trace?cursor=2&limit=3', '/state/workflows/topics/topic%3A1/context?cursor=4&limit=5&intentCursor=6&revision=7', '/state/workflows/run%3A1/evidence/source%3A1?cursor=8&limit=9&hash=abc', '/state/tasks/task%3A1/runs?cursor=10&limit=11', '/state/tasks/task%3A1/runs/run%3A1/nodes/node%3A1/output?ref=abc&cursor=12&limit=13&detailRevision=current']
     for (const path of paths) assert.equal((await fetch(base + path)).status, 200)
     assert.deepEqual(calls, [
       { name: 'trace', args: ['run:1', { offset: 2, limit: 3 }] },
       { name: 'topic', args: ['topic:1', { offset: 4, limit: 5, intentCursor: 6, expectedRevision: 7 }] },
       { name: 'evidence', args: ['run:1', 'source:1', { offset: 8, limit: 9, hash: 'abc' }] },
       { name: 'runs', args: ['task:1', { offset: 10, limit: 11 }] },
-      { name: 'output', args: ['task:1', 'run:1', 'node:1', { offset: 12, limit: 13, outputRef: 'abc' }] },
+      { name: 'output', args: ['task:1', 'run:1', 'node:1', { offset: 12, limit: 13, outputRef: 'abc', detailRevision: 'current' }] },
     ])
   }, { overrides: { getWorkflowMessageTrace: record('trace'), getWorkflowTopicState: record('topic'), getWorkflowMessageEvidence: record('evidence'), getWorkflowTaskRuns: record('runs'), getWorkflowTaskNodeOutput: record('output') } })
+})
+
+test('当前任务详情与正文过期版本返回409，文档也不能绕过版本校验', async () => {
+  const reject = code => async () => { throw Object.assign(new Error(code), { code }) }
+  await withServer(false, async base => {
+    assert.equal((await fetch(`${base}/state/tasks/t/detail`)).status, 409)
+    for (const kind of ['output', 'document']) {
+      const response = await fetch(`${base}/state/tasks/t/runs/r/nodes/n/${kind}?ref=old&detailRevision=old`)
+      assert.equal(response.status, 409)
+      assert.deepEqual(await response.json(), { error: 'TASK_OUTPUT_CHANGED' })
+    }
+  }, { overrides: { getWorkflowTaskDetail: reject('TASK_DETAIL_STALE'), getWorkflowTaskNodeOutput: reject('TASK_OUTPUT_CHANGED') } })
 })
 
 test('上下文只读 HTTP 对未启用接口和不存在资源返回404', async () => {

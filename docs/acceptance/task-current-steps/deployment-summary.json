@@ -1,0 +1,12 @@
+{
+  "controlHealth": "ok",
+  "pid": 32480,
+  "webStatus": 200,
+  "assistant": "9bfba52ec2ac5d453e9f14645f1bd216669fe3eb915025aeaa88f3f4a04f02d0",
+  "observer": "3e7d7e917af54df7cdfd706366ee71e484f2e0b0dbfe247257358371c83a0039",
+  "oldRuns": 27,
+  "tasks": 21,
+  "ready": true,
+  "dispatchResumed": true,
+  "oldNodes": 76
+}

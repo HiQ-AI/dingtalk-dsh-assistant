@@ -92,7 +92,7 @@ export function resolveRouteBatch(latest, { groupId, routeId, routes }) {
     if (!message) throw new Error(`message_not_found:${route.messageId}`)
     if (message.messageVersion !== route.messageVersion) throw new Error('topic_message_version_stale')
     const routeUnits = route.units ?? [{ unitKey: 'whole-message', summary: message.text.slice(0, 240) || '附件事项', sourceRefs: [...(message.text ? [{ quote: message.text }] : []), ...(message.imageRefs ?? []).map((ref) => ({ imageRefId: attachmentRefId(ref) })), ...(message.mediaUnavailable ?? []).map((value) => ({ imageRefId: String(value).split(':', 1)[0] }))], contextRefs: [], topics: route.topics, effectOwner: route.effectOwner, reason: route.reason }]
-    if (!Array.isArray(routeUnits) || routeUnits.length === 0) throw new Error('topic_route_units_required')
+    if (!Array.isArray(routeUnits) || routeUnits.length === 0 && !route.ignoredRefs?.length) throw new Error('topic_route_units_required')
     if (new Set(routeUnits.map((unit) => unit.unitKey)).size !== routeUnits.length) throw new Error('topic_route_unit_key_duplicate')
     const readRange = (ref, field, code) => {
       try { return resolveSourceRef(message.text, ref, code) }

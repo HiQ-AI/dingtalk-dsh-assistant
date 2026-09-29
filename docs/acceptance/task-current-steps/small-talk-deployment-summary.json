@@ -1,0 +1,11 @@
+{
+  "pid": 21480,
+  "authenticatedWebStatus": 200,
+  "inboundProcessing": false,
+  "recoveryIssueCount": 0,
+  "assistantSha256": "5b4061ea59a72cc41f1ef7c70faace3d00a9f663a85a225f11267329e8a2292b",
+  "dispatchResumed": true,
+  "ready": true,
+  "controlHealth": "degraded",
+  "verifiedAssistantFiles": 96
+}

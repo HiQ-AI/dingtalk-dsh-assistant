@@ -83,7 +83,7 @@ IB 可返回 `factRevisions: [{ factId, sourceQuote, scope }]`。Host 只接受�
 
 ### 任务节点产出与文档
 
-`GET /state/tasks/:taskId/runs/:runId/nodes/:nodeRunId/output?ref=:outputRef` 返回 `text/overview/nextCursor/totalLength`，有文档时附 `documentName`；cursor 默认 0，limit 默认 1200、上限 8000。对应 `/document?ref=:outputRef` 按需下载 UTF-8 Markdown，响应为 attachment、Cache-Control=no-store。两条路径均核对当前配置群、Task/Run/节点和准确输出引用；文档不存在或跨范围返回 404，引用变化拒绝读取。文档正文不放进列表。
+`GET /state/tasks/:taskId/runs/:runId/nodes/:nodeRunId/output?ref=:outputRef&detailRevision=:detailRevision` 返回 `text/overview/nextCursor/totalLength`，有文档时附 `documentName`；cursor 默认 0，limit 默认 1200、上限 8000。对应 `/document?ref=:outputRef&detailRevision=:detailRevision` 按需下载 UTF-8 Markdown，响应为 attachment、Cache-Control=no-store。详情客户端的所有分页和下载均传入同一 `detailRevision`；引用或版本变化返回 409 `TASK_OUTPUT_CHANGED`。两条路径核对当前配置群、最新物理 Task、当前计划阶段、Run 当前有效节点及准确输出引用；旧执行、移除阶段、旧代节点、失效结果、文档不存在或跨范围返回 404。省略详情版本的内部只读调用仍须通过全部当前归属校验；不允许借此读历史。工件读取前后再次核对版本。文档正文不放进列表。
 
 新工程方案是节点实际保存的 Markdown 文档工件；历史补丁导出的修改记录明确标注未保存方案说明。旧工作目录仅从同一 nodeRunId、同一 generation 的成功 workspace 效果回执读取，不挪用其他轮次的目录。
 
@@ -125,17 +125,18 @@ IB 可返回 `factRevisions: [{ factId, sourceQuote, scope }]`。Host 只接受�
 
 Host 按剩余节点数 × 3 计算额度，同 Run 只准一次，保留原累计次数、候选与已完成验收。重复相同请求读回原回执；内容冲突、过期绑定、已续行、非预算等待或其他续行门禁失败返回 409（`RUN_BUDGET_CONTINUATION_*`）；受信来源或 actor 失败返回 403；非法字段和正文返回 400。202 代表接纳，不代表后续节点成功。再次预算耗尽不自动续费。
 
-## 任务汇总与执行历史查询
+## 任务汇总与当前完整详情
 
 `GET /state/tasks` 对原生工作流任务按持久化的 `task.web-rerun.accept` 关联树汇总，每项只返回一张卡片；已有卡片字段来自最新可读执行。已有历史并发分叉仍取活动执行，避免隐藏未结束工作。仅分析任务及同标题但无明确关联的任务保持独立。旧版任务沿用原有记录模型。
 
-- `GET /state/tasks/{taskId}/detail`：返回指定单次执行的详情，保留原目标、执行步骤和产物；增加 `logicalTaskId`、`latestTaskId`、`executionNumber` 和 `executionCount`。
+- `GET /state/tasks/{taskId}/detail`：旧链接和当前链接均返回最新可读执行，`requestedTaskId` 为请求的入口，`taskId/latestTaskId` 为当前物理执行，`logicalTaskId` 为可读逻辑任务。`executionNodes` 按当前计划全部阶段及节点顺序返回；每步带稳定 `stepKey`、`stageId/stageTitle` 和真实执行/产物引用。仅取各运行当前有效节点，不拼历史代次；计划移除的阶段不再出现。尚未绑定定义的阶段返回 `definitionPending=true` 占位，`plan.stepsResolved=false`；无计划或尚未初始化时没有杜撰步骤。
+- 详情带 `detailRevision`，依据计划、需求、Owner、运行/当前节点及效果账生成，累计时钟不改变版本。投影前后版本变化重读，持续变化返回 409 `TASK_DETAIL_STALE`。需求尚未被当前计划接纳时，`plan.requirementCurrent=false`，旧步骤显示待确认且不暴露旧结果正文；后续未执行阶段也不会将前段旧成功作为当前结果。
 - `GET /state/tasks/{taskId}/executions?offset=0&limit=20`：按执行接受顺序倒序分页，返回 `{rootTaskId,latestTaskId,total,executions,nextOffset}`。每项含 `taskId`、`executionNumber`、状态、目标、时间、结果、归档时间及 `stageOutcomes`。阶段结果来自该次全部运行，失败后重建不会覆盖失败记录。结束时 `nextOffset=null`。
 - 原有 `/state/tasks/{taskId}/runs` 仍为单次执行内部的运行历史，不等于整项任务的历次执行。
 
 offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 400。请求的执行不可读或不存在返回 404。先按配置群范围和 Web 身份过滤，再编号、计数及分页，不通过祖先信息泄露不可读记录。
 
-历史详情只读。新的追加、取消、重执行及归档从最新执行发起，旧入口返回 409 `TASK_EXECUTION_STALE`；同一已接纳请求仍可幂等回读。重执行核对整个关联任务的终态、租约和外部效果。最新执行在首个运行前取消时，重执行请求必须显式传 `expectedRunId:null`；存在运行时必须传精确最新 runId，省略该字段不合法。开发分支从已登记的明确祖先继承，不创建猜测来源。
+`executions` 和 `runs` 保留为内部只读恢复/排错接口，任务详情不加载或展示它们。新的追加、取消、重执行及归档从最新执行发起，陈旧操作身份返回 409 `TASK_EXECUTION_STALE`；旧详情链接的映射不替陈旧写请求换身份。同一已接纳请求仍可幂等回读。重执行核对整个关联任务的终态、租约和外部效果。最新执行在首个运行前取消时，重执行请求必须显式传 `expectedRunId:null`；存在运行时必须传精确最新 runId，省略该字段不合法。开发分支从已登记的明确祖先继承，不创建猜测来源。
 
 归档在原生事务中核对全部关联执行均已完成或取消，Owner 完成已应用、运行终态、租约及效果排空后，一次记录全部成员；任一成员不满足条件则整项失败，不部分归档。历史和产物不删除，不迁移 schema。
 
@@ -149,3 +150,11 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 - `POST /runtime/maintenance/resume`：同 seal 请求字段。仅当当前受信 Host 进程身份与封存身份不同且仍排空，才递增版本并退出维护。旧进程不能通过普通 leave 或 resume 撤销停机许可；不得通过改变调用参数伪造新身份。
 
 写接口返回 `{receipt,state}`；同 `requestId` 同载荷幂等，不同载荷冲突。过期版本、已封存或未排空返回 409，额外身份字段返回 400。许可与维护事件持久化，重启不会自动解除。外部只读 SQLite 检查器没有 Host incarnation，只核对持久 `phase/maintenanceId/revision`，不得自行签发 `stopPermitted`。部署脚本必须先取得并核验 seal 回执，再停止其绑定的旧 PID；新实例健康与恢复核验后调用 resume。
+
+任务汇总GET /state/tasks的sourceGroupId是可读取关联链内的原群聊ID，无可用来源为null；仅供卡片群名展示，不替换本次groupId、授权与报告渠道。Web重新执行的groupId仍为web:actorId。
+
+任务投影topicRefs由创建命令的消息单元unitId和sourceKey对应持久话题绑定解析当前话题，包含groupId/topicId/revision/title，校验话题群与执行来源一致。汇总卡片在本次无绑定时继承可读取原群任务的topicRefs；不改本次执行groupId。无真实绑定返回空数组，不可读取原任务不得继承其话题。
+
+话题路由纯闲聊可提交units=[]和非空ignoredRefs；每条忽略记录必须有逐字原文quote和非空reason，Host继续验证原文完整覆盖。空事项且无忽略记录、仅覆盖部分原文、未声明如何替换已有事项均拒绝，不创建Topic。
+
+消息S节点支持 `{kind: "no_action", reason, coverage: [{start,end}]}`：仅用于无待办的语义判断，Host核对全文覆盖与成功S节点后结束；不建立事项、话题、任务或通知。message.no_action不接受有事项/命令/待补请求/屏障或修订的运行。收信箱`workflowStatus`新增`waiting_clarification`、`waiting_context`，`workflowStatusDetail`为待补问题或原因，真正失败仍为`routing_blocked`。

@@ -354,7 +354,8 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const current = await state(runId)
     const result = await invoke(current, '$', 'S', { ...splitContext(current.run.snapshot), correctionEvidence: reason })
     if (!result) return
-    if (result.kind !== 'split') { await waiting(current, '$', 'S', result); return }
+    if (result.kind === 'no_action') { await cmd('message.attention', { runId, reason: 'MESSAGE_NO_ACTION_CORRECTION_FORBIDDEN' }); return }
+      if (result.kind !== 'split') { await waiting(current, '$', 'S', result); return }
     const semantic = unit => ({ spans: unit.spans, goalText: unit.goalText, constraints: unit.constraints, contextNeeds: unit.contextNeeds, sharedConstraints: unit.sharedConstraints })
     const used = new Set()
     const units = result.units.map((unit, index) => {
@@ -608,6 +609,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const fixed = followup?.kind === 'scope' || directedStatusQuestion(text) || shortReference ? { kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: followup ? `前文状态问句：${data.run.snapshot.history.findLast(item=>item.sourceKey===followup.sourceKey)?.text ?? ''}；补充的问题范围：${text}` : text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] } : undefined
       const result = await invoke(data, '$', 'S', splitContext(data.run.snapshot), fixed)
       if (!result) return state(runId)
+      if (result.kind === 'no_action') { await cmd('message.no_action', { runId, expectedRevision: revision(data) }, `no-action:${runId}:${revision(data)}`); return state(runId) }
       if (result.kind !== 'split') { await waiting(data, '$', 'S', result); return state(runId) }
       await cmd('message.split', { runId, expectedRevision: revision(data), units: result.units.map((unit, index) => ({ ...unit, unitId: `${runId}:u${index}`, sharedConstraints: result.sharedConstraints })) }, `split:${runId}:${revision(data)}`)
       data = await state(runId)

@@ -84,11 +84,12 @@ export const topicRouteSubmissionSchema = z.strictObject({
         if (!unit.effectOwner) ctx.addIssue({ code: 'custom', message: '多 Topic 归属必须指定唯一动作主归属', path: ['effectOwner'] })
       }
       if (unit.effectOwner && !unit.topics.some((topic) => sameRouteTarget(unit.effectOwner, topic))) ctx.addIssue({ code: 'custom', message: '动作主归属必须属于当前 Topic 集合', path: ['effectOwner'] })
-    })).min(1).optional(),
+    })).optional(),
     topics: z.array(topicRouteTargetSchema).optional(), effectOwner: topicRouteOwnerSchema.optional(),
     reason: z.string().trim().min(1).optional(),
   }).superRefine((route, ctx) => {
     if (Boolean(route.units) === Boolean(route.topics)) ctx.addIssue({ code: 'custom', message: '必须且只能提交 units 或单事项旧 topics', path: ['units'] })
+    if (route.units?.length === 0 && !route.ignoredRefs.length) ctx.addIssue({ code: 'custom', message: '空事项必须提供完整原文忽略记录及原因', path: ['ignoredRefs'] })
     if (route.topics && route.topics.length === 0 && !route.reason) ctx.addIssue({ code: 'custom', message: '无 Topic 归属必须说明原因', path: ['reason'] })
     if (route.topics?.length > 1) {
       if (route.topics.some((topic) => !topic.relationship || !topic.reason)) ctx.addIssue({ code: 'custom', message: '多 Topic 归属必须逐项声明关系和理由', path: ['topics'] })

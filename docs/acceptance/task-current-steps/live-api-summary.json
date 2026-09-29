@@ -1,0 +1,32 @@
+{
+  "passed": true,
+  "cases": [
+    {
+      "stages": 3,
+      "nodes": 30,
+      "pages": 35,
+      "characters": 12410,
+      "staleStatus": 409
+    },
+    {
+      "stages": 2,
+      "nodes": 3,
+      "pages": 5,
+      "characters": 3636,
+      "staleStatus": 409
+    },
+    {
+      "stages": 3,
+      "nodes": 30,
+      "pages": 57,
+      "characters": 38221,
+      "staleStatus": 409
+    }
+  ],
+  "health": {
+    "status": "ok",
+    "recoveryIssueCount": 0
+  },
+  "writes": 0,
+  "boundary": "正式安装实例GET接口只读，未重跑任务或发送消息"
+}

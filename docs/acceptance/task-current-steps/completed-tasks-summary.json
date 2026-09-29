@@ -1,0 +1,48 @@
+{
+  "verified": true,
+  "cases": [
+    {
+      "case": 1,
+      "stages": 3,
+      "nodes": 30,
+      "readableNodes": 30,
+      "pages": 35,
+      "characters": 12410,
+      "familyLinksChecked": 6,
+      "complete": true,
+      "outputOwnershipChecked": true
+    },
+    {
+      "case": 2,
+      "stages": 2,
+      "nodes": 3,
+      "readableNodes": 3,
+      "pages": 5,
+      "characters": 3636,
+      "familyLinksChecked": 1,
+      "complete": true,
+      "outputOwnershipChecked": true
+    },
+    {
+      "case": 3,
+      "stages": 3,
+      "nodes": 30,
+      "readableNodes": 30,
+      "pages": 57,
+      "characters": 38221,
+      "familyLinksChecked": 7,
+      "complete": true,
+      "outputOwnershipChecked": true
+    }
+  ],
+  "blockedMutationAttempts": 0,
+  "artifactReads": 131,
+  "copyBusinessTablesUnchanged": true,
+  "liveBusinessTablesUnchanged": true,
+  "liveBusinessChangedTables": [],
+  "liveChangedTables": [
+    "execution_events",
+    "execution_receipts"
+  ],
+  "limitation": "真实数据的一致 SQLite 副本与当前分支服务投影；正式实例仅只读，不代表正式部署或重新执行业务"
+}

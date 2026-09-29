@@ -1,0 +1,13 @@
+{
+  "physicalTasks": 21,
+  "controlHealth": "ok",
+  "legacy": 68,
+  "oldNodes": 76,
+  "ready": true,
+  "dispatchResumed": true,
+  "oldRuns": 27,
+  "webStatus": 200,
+  "observer": "5f300e32d422740cd481c767c11a297279272e177e7e708030a5fa12ade18500",
+  "assistant": "9bfba52ec2ac5d453e9f14645f1bd216669fe3eb915025aeaa88f3f4a04f02d0",
+  "pid": 36216
+}

@@ -167,3 +167,20 @@ function Get-FileHash {param($LiteralPath) @{Hash=if($LiteralPath-eq 'candidate.
 Assert-InputHashes
 $ExpectedObserverPackageSha256='d'*64;$rejected=$false;try{Assert-InputHashes}catch{$rejected=$true};if(-not $rejected){throw 'Observer摘要漂移必须拒绝'}
 Write-Output 'PASS 6/6: 查询模式、工程互斥、Observer配对、旧必填与Observer摘要门禁'
+
+# 看板已按逻辑任务合并：旧物理ID必须指向看板内的当前任务，不能只放宽身份检查。
+$identityLoop=$function.Body.Find({param($item) $item -is [System.Management.Automation.Language.ForEachStatementAst] -and $item.Variable.VariablePath.UserPath-eq 'id'},$true)
+if(-not $identityLoop){throw '缺少任务身份校验'}
+$script:aliasResponse=@{requestedTaskId='old';logicalTaskId='logical';taskId='latest';latestTaskId='latest'}
+$script:aliasReads=0
+function Invoke-RestMethod {param($Uri,[switch]$NoProxy,$TimeoutSec) $script:aliasReads++;$script:aliasResponse}
+$snapshot=@{tasks=@('latest','old')};$ids=@('latest')
+Invoke-Expression $identityLoop.Extent.Text
+if($script:aliasReads-ne 1){throw '只核对看板未直接返回的旧身份'}
+foreach($change in @(@{requestedTaskId='wrong'},@{logicalTaskId=''},@{taskId='other'},@{latestTaskId='other'},@{taskId='missing';latestTaskId='missing'})){
+ $script:aliasResponse=@{requestedTaskId='old';logicalTaskId='logical';taskId='latest';latestTaskId='latest'}
+ foreach($key in $change.Keys){$script:aliasResponse[$key]=$change[$key]}
+ $rejected=$false;try{Invoke-Expression $identityLoop.Extent.Text}catch{$rejected=$_.Exception.Message-eq '在线Task身份缺失'}
+ if(-not $rejected){throw '旧身份别名错配必须拒绝'}
+}
+Write-Output 'PASS 6/6: 看板合并后的旧身份别名通过；请求/逻辑/当前/最新/看板身份错配拒绝'
