@@ -37,3 +37,9 @@ small-talk-empty-units-contract,8,FAIL,round-8.md
 small-talk-empty-units-contract,9,PASS,round-9.md
 small-talk-mixed-and-followup,9,PASS,round-9.md
 small-talk-controlled-install,9,PASS,small-talk-deployment-summary.json
+message-no-action-contract,10,FAIL,round-10.md
+message-no-action-contract,11,PASS,round-11.md
+message-waiting-status,11,PASS,round-11.md
+message-no-action-real-model,11,PASS,round-11.md
+message-no-action-live-ui,11,PASS,round-11.md
+message-no-action-controlled-install,11,PASS,round-11.md

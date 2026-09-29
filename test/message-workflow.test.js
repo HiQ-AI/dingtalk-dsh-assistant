@@ -1051,3 +1051,24 @@ test('C09 材料临时失败在重建 workflow 后续读且复用成功页', asy
     assert.equal(effects, 1)
   } finally { await resumed.close() }
 })
+
+
+test('无待办语义完整覆盖后静默结束，不关联话题、不追问也不建任务', async t => {
+  const stages=[];
+  const {store,workflow}=await fixture(t,{judge:async({stage,input})=>{
+    stages.push(stage);assert.equal(stage,'S');return {kind:'no_action',reason:'仅收信测试，没有待办请求',coverage:[{start:0,end:input.sourceLength}]};
+  }});
+  const received=await workflow.receive({...source,body:'收信验证0929'},{process:false});
+  const result=await workflow.process(received.runId);
+  assert.deepEqual(stages,['S']);assert.equal(result.run.status,'settled',JSON.stringify(result.nodes));assert.equal(result.run.intentStatus,'processed');
+  assert.equal(result.units.length,0);assert.equal(result.requests.length,0);assert.equal(result.commands.length,0);
+  assert.deepEqual(await store.query({kind:'message.notifications',runId:received.runId,states:['prepared','delivered']}),[]);
+});
+
+test('无待办判断不能跳过原文覆盖或绕过模型记录', async t => {
+  const {store,workflow}=await fixture(t,{judge:async()=>({kind:'no_action',reason:'无待办',coverage:[{start:0,end:1}]})});
+  const received=await workflow.receive({...source,body:'测试后请查询任务状态'},{process:false});
+  await assert.rejects(store.command({id:randomUUID(),kind:'message.no_action',args:{runId:received.runId}}),/MESSAGE_NO_ACTION_NOT_ALLOWED/);
+  const result=await workflow.process(received.runId);
+  assert.notEqual(result.run.status,'settled');assert.equal(result.units.length,0);
+});

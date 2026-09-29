@@ -2558,11 +2558,13 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         for (const run of page) {
           if (outboundIds.has(run.context?.sourceMessageId) || run.reason === 'message_reprocessed') continue
           const topicRefs = topicRefsBySource.get(run.sourceKey) ?? []
-          const workflowStatus = ['routing_blocked', 'intent_blocked'].includes(run.routingStatus) || run.intentStatus === 'intent_blocked' ? 'routing_blocked'
-            : run.routingStatus === 'routing_pending' ? 'routing' : run.intentStatus ?? (run.status === 'needs_attention' ? 'routing_blocked' : run.status === 'settled' ? 'processed' : 'routing')
+          const pendingRequest = run.status === 'waiting' ? (await store.query({ kind: 'message.run', runId: run.runId })).requests.find(item => item.status === 'pending') : null
+          const waitingStatus = pendingRequest?.kind === 'needs_clarification' ? 'waiting_clarification' : pendingRequest?.kind === 'needs_context' ? 'waiting_context' : null
+          const workflowStatus = waitingStatus ?? (['routing_blocked', 'intent_blocked'].includes(run.routingStatus) || run.intentStatus === 'intent_blocked' ? 'routing_blocked'
+            : run.routingStatus === 'routing_pending' ? 'routing' : run.intentStatus ?? (run.status === 'needs_attention' ? 'routing_blocked' : run.status === 'settled' ? 'processed' : 'routing'))
           messages.push({ groupId, messageId: run.context?.sourceMessageId, runId: run.runId, sourceVersion: run.sourceVersion, text: run.body, senderOpenDingTalkId: run.actorId,
             senderName: run.context?.senderName ?? senderNames.get(run.actorId), occurredAt: run.context?.occurredAt ?? run.createdAt, sequence: run.sequenceId,
-            topicRefs, workflowStatus, ...(run.reason ? { workflowStatusDetail: run.reason } : {}),
+            topicRefs, workflowStatus, ...(pendingRequest?.question || pendingRequest?.reason || run.reason ? { workflowStatusDetail: pendingRequest?.question ?? pendingRequest?.reason ?? run.reason } : {}),
             routingStatus: run.status === 'needs_attention' ? 'failed' : run.reason === 'message_quiet' && isPassiveTaskProgress(run.body) && !topicRefs.length ? 'pending' : ['settled', 'superseded'].includes(run.status) ? 'routed' : 'pending' })
         }
         if (page.length < 200) break

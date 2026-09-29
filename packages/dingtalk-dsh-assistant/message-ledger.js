@@ -675,6 +675,18 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       notificationId:check.notificationId,sourceMessageId:check.sourceMessageId}}
   }
   const r=run(db,a.runId);current(db,r,a.expectedRevision)
+  if(kind==='message.no_action') {
+    const node=rows(db,r.runId,'node').findLast(item=>item.nodeId==='S'&&item.revision===r.revision&&item.status==='succeeded')
+    const output=node?.output?.output??node?.output
+    if(output?.kind!=='no_action'||typeof output.reason!=='string'||!output.reason.trim()
+      ||!['pending','waiting'].includes(r.status)||r.correction||rows(db,r.runId,'unit').length
+      ||rows(db,r.runId,'command').length||rows(db,r.runId,'request').some(item=>item.status==='pending')||rows(db,r.runId,'barrier').some(item=>item.status==='pending'))fail('MESSAGE_NO_ACTION_NOT_ALLOWED')
+    const covered=new Uint8Array(r.body.length)
+    for(const span of output.coverage??[]){if(!Number.isInteger(span.start)||!Number.isInteger(span.end)||span.start<0||span.end>r.body.length||span.start>=span.end)fail('MESSAGE_SOURCE_SPAN_INVALID');covered.fill(1,span.start,span.end)}
+    if(covered.some(value=>!value))fail('MESSAGE_SOURCE_COVERAGE_INCOMPLETE')
+    r.status='settled';r.routingStatus='routing_complete';r.intentStatus='processed';r.reason=output.reason;save(db,r)
+    return {result:{run:r}}
+  }
   if(kind==='message.quiet') {
     const original=str(a.body)
     if(r.body!==original||(r.context?.quoteRefs?.length&&!isPassiveTaskProgress(original))||rows(db,r.runId,'command').length||!['pending','waiting'].includes(r.status))fail('MESSAGE_QUIET_NOT_ALLOWED')

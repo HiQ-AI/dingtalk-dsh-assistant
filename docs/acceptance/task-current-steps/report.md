@@ -19,3 +19,5 @@ Web重执行群名第五轮完成：可读取原群sourceGroupId只供卡片显�
 话题恢复最终第七轮：持久消息单元绑定恢复9/10卡片（无绑定不猜测），含两张Web任务；三张真实卡片1440点击/390键盘及话题关联任务检查通过，135服务/19Observer通过。当前PID35256、安装回读及派发恢复。独立健康degraded/收信false，C盘Free=0，因果未确认；页面验证不代表收信正常，详见round-7.md和topic-runtime-summary.json。
 
 闲聊话题规则第九轮：先判断具体事项，纯闲聊不建Topic，任务反馈复用原话题；修复空事项内部契约，165项定向验证通过。新PID21480及精确包96源码文件回读通过、派发恢复。实际模型语义/真实钉钉入站未验证，当前收信仍异常，见round-9.md。
+
+本地精确双包安装与独立Readback：PID38536，Assistant96/Observer4文件一致，21任务、76旧节点、27旧终态运行保留，ready=true/dispatchResumed=true，health=ok/inboundProcessing=true。原测试消息因已送达澄清通知，直接reprocess被MESSAGE_REPROCESS_EFFECT_PENDING拒绝；保留门禁，按已知收信验证目的通过原生请求答复入口补充无业务请求。真实S输出no_action/full coverage，原run settled/routing_complete/processed，0事项/命令/话题；仅保留原先1条已送达澄清通知，无新增通知。Edge独立只读1440/390验证补充前等待澄清、补充后已处理，pageerror=0、业务写入0。授权后的真实消息由定时补拉接收，实时推送仍未验证；本轮模型验收包含明确补充答复，不宣称所有未来闲聊均已真实模型验证。

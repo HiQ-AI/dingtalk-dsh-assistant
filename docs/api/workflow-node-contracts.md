@@ -156,3 +156,5 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 任务投影topicRefs由创建命令的消息单元unitId和sourceKey对应持久话题绑定解析当前话题，包含groupId/topicId/revision/title，校验话题群与执行来源一致。汇总卡片在本次无绑定时继承可读取原群任务的topicRefs；不改本次执行groupId。无真实绑定返回空数组，不可读取原任务不得继承其话题。
 
 话题路由纯闲聊可提交units=[]和非空ignoredRefs；每条忽略记录必须有逐字原文quote和非空reason，Host继续验证原文完整覆盖。空事项且无忽略记录、仅覆盖部分原文、未声明如何替换已有事项均拒绝，不创建Topic。
+
+消息S节点支持 `{kind: "no_action", reason, coverage: [{start,end}]}`：仅用于无待办的语义判断，Host核对全文覆盖与成功S节点后结束；不建立事项、话题、任务或通知。message.no_action不接受有事项/命令/待补请求/屏障或修订的运行。收信箱`workflowStatus`新增`waiting_clarification`、`waiting_context`，`workflowStatusDetail`为待补问题或原因，真正失败仍为`routing_blocked`。

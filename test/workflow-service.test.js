@@ -3347,3 +3347,17 @@ test('完整任务目录超过200条运行仍保留旧任务，投影不超过�
   assert.equal(board.length, 1); assert.equal(board[0].taskId, original.taskId)
   assert.equal((await service.taskDetail(original.taskId)).executionCount, 1)
 })
+
+
+test('待澄清和待材料有各自状态及原因，真正失败仍为关联受阻',async t=>{
+  const {service,message,execution}=await fixture(t,'owner');
+  const received=await service.ingest(message);
+  for(const [kind,status] of [['needs_clarification','waiting_clarification'],['needs_context','waiting_context']]){
+    await execution.store.command({id:'wait-'+kind,kind:'message.wait',args:{runId:received.runId,unitId:'$',nodeId:'S',request:{requestId:kind,kind,question:'请补充目标',permittedActors:['owner']}}});
+    const mailbox=(await service.mailboxes()).messages.find(item=>item.runId===received.runId);
+    assert.equal(mailbox.workflowStatus,status);assert.equal(mailbox.workflowStatusDetail,'请补充目标');
+    await execution.store.command({id:'wake-'+kind,kind:'message.wake',args:{runId:received.runId,requestId:kind,actorId:'owner',eventId:kind,answer:'已补充'}});
+  }
+  await execution.store.command({id:'fail-status',kind:'message.attention',args:{runId:received.runId,reason:'recovery_exhausted'}});
+  assert.equal((await service.mailboxes()).messages.find(item=>item.runId===received.runId).workflowStatus,'routing_blocked');
+});

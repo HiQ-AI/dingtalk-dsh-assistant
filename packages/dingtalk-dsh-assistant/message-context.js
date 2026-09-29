@@ -72,7 +72,7 @@ const actionSchema = z.union([
 const factRevisions = z.array(z.strictObject({ factId: z.string().min(1), sourceQuote: z.string().min(1), scope: z.string().min(1) })).max(32).optional()
 export const messageSchemas = {
   material: z.strictObject({ kind: z.literal('material_facts'), complete: z.boolean(), facts: z.array(z.strictObject({ quote: z.string().min(1), kind: z.enum(['object', 'time', 'quantity', 'condition', 'restriction', 'revision', 'fact', 'uncertain']) })).max(24), reason: z.string() }),
-  S: z.union([wait, z.strictObject({ kind: z.literal('split'), units: z.array(z.strictObject({ spans: z.array(span).min(1), goalText: z.string().min(1), constraints: z.array(z.string()), contextNeeds: z.array(need) })).min(1).max(8), sharedConstraints: z.array(z.string()), coverage: z.array(z.strictObject({ start: z.number().int().nonnegative(), end: z.number().int().positive(), role: z.enum(['unit', 'constraint', 'background', 'no_action']) })).min(1) })]),
+  S: z.union([wait, z.strictObject({ kind: z.literal('no_action'), reason: z.string().min(1), coverage: z.array(span).min(1) }), z.strictObject({ kind: z.literal('split'), units: z.array(z.strictObject({ spans: z.array(span).min(1), goalText: z.string().min(1), constraints: z.array(z.string()), contextNeeds: z.array(need) })).min(1).max(8), sharedConstraints: z.array(z.string()), coverage: z.array(z.strictObject({ start: z.number().int().nonnegative(), end: z.number().int().positive(), role: z.enum(['unit', 'constraint', 'background', 'no_action']) })).min(1) })]),
   R: z.union([wait, z.strictObject({ kind: z.literal('binding'), disposition: z.enum(['existing', 'new', 'context-only', 'conversation', 'unresolved']), candidateId: z.string().nullable(), evidence: z.array(z.string()).min(1) })]),
   I: z.union([wait, z.strictObject({ kind: z.literal('intent'), actions: z.array(actionSchema).min(1).max(8), constraints: z.array(z.string()), requiredExecutionMaterials: z.array(z.string()), replyPolicy: z.enum(['none', 'receipt', 'result']) }), z.strictObject({ kind: z.enum(['needs_relink', 'needs_resegmentation']), reason: z.string().min(1) })]),
   IB: z.union([wait, z.strictObject({ kind: z.literal('topic_intents'), decisions: z.array(z.strictObject({ unitId: z.string().min(1), intent: z.union([z.strictObject({ kind: z.literal('intent'), actions: z.array(actionSchema).min(1).max(8), constraints: z.array(z.string()), factRevisions, requiredExecutionMaterials: z.array(z.string()), replyPolicy: z.enum(['none', 'receipt', 'result']) }), z.strictObject({ kind: z.enum(['needs_relink', 'needs_resegmentation']), reason: z.string().min(1) }), wait]) })).min(1).max(32) })]),
@@ -103,9 +103,9 @@ export function splitContext(snapshot) {
   return { snapshotId: snapshot.snapshotId, source: snapshot.source, sourceEdit: snapshot.sourceEdit, sourceLength: snapshot.source.text.length, segments, background: snapshot.history.map(item => ({ ...item, sourceKey: historyIds.get(item.sourceKey) ?? item.sourceKey })), quotes: snapshot.quotes, attachments: snapshot.attachments.map(item => pick(item, ['resourceRef', 'name', 'purpose', 'state'])), actorPermissions: snapshot.actorPermissions, omissions: omitted }
 }
 export function validateSplit(output, text) {
-  if (output.kind !== 'split') return output
+  if (!['split', 'no_action'].includes(output.kind)) return output
   const covered = new Uint8Array(text.length)
-  for (const range of [...output.coverage, ...output.units.flatMap(unit => unit.spans)]) {
+  for (const range of [...output.coverage, ...(output.units ?? []).flatMap(unit => unit.spans)]) {
     if (range.end > text.length || range.start >= range.end) throw new Error('MESSAGE_SOURCE_SPAN_INVALID')
   }
   for (const range of output.coverage) covered.fill(1, range.start, range.end)
