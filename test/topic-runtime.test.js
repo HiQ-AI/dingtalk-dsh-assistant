@@ -1987,3 +1987,57 @@ test('重判与旧 not-applied 恢复并发时旧恢复 CAS 不得复活已拒�
   assert.equal(h.store.getTopic('g', request.topicId).decisions[0].status, 'rejected')
   assert.equal(h.store.getGroup('g').outbox.length, 0)
 })
+
+test('纯闲聊完整归类收口但不新建话题或触发业务决策', async t => {
+  const h = await setup(t)
+  const text = '早上好，今天不聊任务，午饭吃什么？'
+  await ingest(h, 'small-talk', { text })
+  await h.coordinator.schedule('g')
+  const prompt = h.sent.findLast(value => value.startsWith('[GROUP_TOPIC_ROUTE]'))
+  assert.match(prompt, /日常寒暄、随口聊天/u)
+  assert.match(prompt, /纯闲聊提交 units=\[\]/u)
+  assert.match(prompt, /不能当作闲聊丢掉/u)
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const empty = await h.rawCall('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'small-talk', messageVersion: 1, units: [], ignoredRefs: [] }] })
+  assert.equal(empty.status, 'invalid-arguments')
+  const partial = await h.rawCall('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'small-talk', messageVersion: 1, units: [], ignoredRefs: [{ quote: '早上好', reason: '日常寒暄' }] }] })
+  assert.equal(partial.status, 'invalid-arguments')
+  assert.ok(partial.issues.some(issue => issue.code === 'topic_route_uncovered_text'))
+  assert.equal(h.store.getGroup('g').topics.length, 0)
+  const result = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{
+    messageId: 'small-talk', messageVersion: 1, units: [], ignoredRefs: [{ quote: text, reason: '日常闲聊，无具体事项' }],
+  }] })
+  assert.equal(result.status, 'accepted', JSON.stringify(result))
+  assert.equal(h.store.getGroup('g').topics.length, 0)
+  assert.deepEqual(result.pendingDecisions, [])
+  assert.equal(h.store.getGroup('g').messages[0].agentDeliveryStatus, 'delivered')
+})
+
+test('混合消息只为具体事项建话题，闲聊片段保留在忽略范围', async t => {
+  const h = await setup(t)
+  const greeting = '早上好！'
+  const matter = '请排查登录页保存失败的问题。'
+  await ingest(h, 'mixed-matter', { text: greeting + matter })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const result = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{
+    messageId: 'mixed-matter', messageVersion: 1,
+    ignoredRefs: [{ quote: greeting, reason: '日常寒暄' }],
+    units: [{ unitKey: 'login-save', summary: '排查登录页保存失败', replacesUnitIds: [],
+      sourceRefs: [{ quote: matter }], topics: [{ newTopicKey: 'login-save', title: '登录页保存失败排查' }] }],
+  }] })
+  assert.equal(result.status, 'accepted')
+  assert.equal(h.store.getGroup('g').topics.length, 1)
+  assert.equal(result.pendingDecisions.length, 1)
+  const topicId = result.pendingDecisions[0].topicId
+  await ingest(h, 'matter-feedback', { text: '谢谢，那个保存问题修好了。' })
+  await h.coordinator.schedule('g')
+  const followup = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const routed = await h.call('group_topic_route_submit', { requestId: followup.requestId, routes: [{
+    messageId: 'matter-feedback', messageVersion: 1, ignoredRefs: [],
+    units: [{ unitKey: 'save-feedback', summary: '保存问题已修复反馈', replacesUnitIds: [],
+      sourceRefs: [{ quote: '谢谢，那个保存问题修好了。' }], topics: [{ topicId }] }],
+  }] })
+  assert.equal(routed.status, 'accepted')
+  assert.equal(h.store.getGroup('g').topics.length, 1)
+})

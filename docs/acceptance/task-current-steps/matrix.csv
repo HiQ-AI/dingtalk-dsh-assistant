@@ -33,3 +33,7 @@ task-topic-live-web-inheritance,6,FAIL,round-6.md
 task-topic-live-web-inheritance,7,PASS,round-7.md
 task-topic-click-keyboard-related,7,PASS,topic-label-summary.json
 task-topic-group-permission,7,PASS,round-7.md
+small-talk-empty-units-contract,8,FAIL,round-8.md
+small-talk-empty-units-contract,9,PASS,round-9.md
+small-talk-mixed-and-followup,9,PASS,round-9.md
+small-talk-controlled-install,9,PASS,small-talk-deployment-summary.json

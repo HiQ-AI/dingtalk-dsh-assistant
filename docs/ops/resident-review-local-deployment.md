@@ -369,3 +369,5 @@ Owner 在 `task-general-capability` 阶段选择 `import-task-file`，`capabilit
 Web重执行群名修复：不迁移数据。安装后只读核对/state/tasks的sourceGroupId匹配原任务群聊且groupId仍为web来源；页面群标签应匹配groups中的名称，权限不可读取原任务时不展示其群来源。
 
 卡片话题恢复不迁移数据。安装后只读检查/state/tasks的topicRefs及真实绑定，Web重执行引用原话题群；验证卡片话题入口、键盘打开和话题页关联任务。不要为验证新建或重跑真实任务。
+
+闲聊话题规则修改后运行topic-runtime、topic-store、decision、group-decision-contract定向测试。双包受控安装后核对Assistant源码和新PID，隔离工具测试不代表真实模型语义或真实收信验证；不得为验证清理已有话题。

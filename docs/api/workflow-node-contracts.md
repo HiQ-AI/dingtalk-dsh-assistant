@@ -154,3 +154,5 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 任务汇总GET /state/tasks的sourceGroupId是可读取关联链内的原群聊ID，无可用来源为null；仅供卡片群名展示，不替换本次groupId、授权与报告渠道。Web重新执行的groupId仍为web:actorId。
 
 任务投影topicRefs由创建命令的消息单元unitId和sourceKey对应持久话题绑定解析当前话题，包含groupId/topicId/revision/title，校验话题群与执行来源一致。汇总卡片在本次无绑定时继承可读取原群任务的topicRefs；不改本次执行groupId。无真实绑定返回空数组，不可读取原任务不得继承其话题。
+
+话题路由纯闲聊可提交units=[]和非空ignoredRefs；每条忽略记录必须有逐字原文quote和非空reason，Host继续验证原文完整覆盖。空事项且无忽略记录、仅覆盖部分原文、未声明如何替换已有事项均拒绝，不创建Topic。
