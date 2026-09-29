@@ -1072,3 +1072,41 @@ test('无待办判断不能跳过原文覆盖或绕过模型记录', async t => 
   const result=await workflow.process(received.runId);
   assert.notEqual(result.run.status,'settled');assert.equal(result.units.length,0);
 });
+
+
+test('已完成无待办消息不阻塞后续明确任务，真正未归类消息仍保留屏障', async t => {
+  for (const pending of [false, true]) await t.test(pending ? '未归类消息保持屏障' : '无待办终态允许后续派发', async child => {
+    const dispatched = [], calls = []
+    const { store, workflow } = await fixture(child, {
+      context: { bindTopic: async ({ run, unit }) => ({ topicId: 'topic-after-no-action', conversationId: run.conversationId,
+        sourceRunId: run.runId, unitId: unit.id ?? unit.unitId, title: '后续明确任务', facts: [] }), facts: async () => ({}) },
+      judge: async ({ stage, input }) => {
+        calls.push(stage)
+        if (stage === 'S') return input.source.text === '收信验证'
+          ? { kind: 'no_action', reason: '只是验证收信，无需处理任何事项', coverage: [{ start: 0, end: input.sourceLength }] }
+          : { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text,
+            constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }], sharedConstraints: [] }
+        if (stage === 'R') return binding
+        assert.equal(stage, 'IB')
+        return { kind: 'topic_intents', decisions: input.units.map(item => ({ unitId: item.unitId,
+          intent: { ...intent, actions: [{ intent: 'create', arguments: { objective: '整理验收报告', workflowId: 'task-investigation' }, dependsOn: [] }] } })) }
+      },
+      handlers: { create: async (_, info) => { dispatched.push(info.run.sourceKey); return { taskId: 'task-after-no-action' } } },
+    })
+    const ignored = await workflow.receive({ ...source, sourceKey: 'no-action-before-task', body: '收信验证' }, { process: false })
+    await workflow.process(ignored.runId)
+    const ignoredState = await workflow.state(ignored.runId)
+    assert.equal(ignoredState.run.status, 'settled')
+    assert.equal(ignoredState.run.routingStatus, 'routing_complete')
+    assert.equal(ignoredState.run.intentStatus, 'processed')
+    assert.notEqual(ignoredState.run.reason, 'message_quiet')
+    assert.equal(ignoredState.units.length, 0)
+    const unrouted = pending ? await workflow.receive({ ...source, sourceKey: 'still-unrouted', body: '尚待归类内容' }, { process: false }) : null
+    const next = await workflow.receive({ ...source, sourceKey: 'task-after-no-action', body: '请建立任务整理验收报告' }, { process: false })
+    await workflow.process(next.runId)
+    if (!pending) for (let attempt = 0; attempt < 100 && !dispatched.length; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+    assert.deepEqual(dispatched, pending ? [] : ['task-after-no-action'])
+    assert.deepEqual((await store.query({ kind: 'message.routing.pending', conversationId: source.conversationId })).map(run => run.runId), pending ? [unrouted.runId] : [])
+    assert.equal(calls.filter(stage => stage === 'IB').length, pending ? 0 : 1)
+  })
+})

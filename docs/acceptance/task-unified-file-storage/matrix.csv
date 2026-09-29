@@ -14,3 +14,10 @@ file-symlink-environment-permission,2,SKIP,round-2.md
 full-repository-suite,3,FAIL,round-3.md
 full-repository-suite,4,PASS,round-4.md
 real-spring-candidate-background,4,PASS,round-4.md
+completed-task-link-migration,5,PASS,round-5.md
+migration-source-independent-backup,5,PASS,round-5.md
+old-candidate-and-history-readback,5,PASS,round-5.md
+exact-install-and-browser,5,PASS,round-5.md
+original-session-directory-preserved,5,PASS,round-5.md
+real-model-group-file-delivery,6,FAIL,round-6.md
+no-action-routing-and-active-barrier,7,PASS,round-7.md
