@@ -62,7 +62,12 @@ export function bindFileDelivery(candidate, source) {
   if (!candidate) return null
   if (typeof source !== 'string' || typeof candidate.sourceQuote !== 'string') throw executionError('TASK_FILE_DELIVERY_AUTHORIZATION_REQUIRED')
   const quote = candidate.sourceQuote.trim()
-  const clauses = source.split(/[。！？；\n]/u).filter(clause => clause.includes(quote))
+  const ranges = []
+  if (quote) for (let start = source.indexOf(quote); start !== -1; start = source.indexOf(quote, start + 1)) ranges.push([start, start + quote.length])
+  // 校验引用覆盖的完整源句，保留引用之外的否定与群范围上下文。
+  const clauses = [...source.matchAll(/[^。！？；\n]+[。！？；\n]?/gu)]
+    .filter(match => ranges.some(([start, end]) => match.index < end && match.index + match[0].length > start))
+    .map(match => match[0])
   if (!quote || !clauses.length || clauses.some(clause => /不要|不用|不必|不需|不(?:发送|发|传)|禁止|不得|取消|暂停|(?:另一个|其他|其它|别的)群/u.test(clause))
     || !/(?:发送|发|上传|传到).*(?:群|群聊)|(?:群|群聊).*(?:发送|发|传)/u.test(quote)
     || !/文件|文档|附件|markdown|sql|图片|\.(?:md|sql|pdf|docx|xlsx|pptx|png|jpe?g|webp)\b/iu.test(quote)) throw executionError('TASK_FILE_DELIVERY_AUTHORIZATION_REQUIRED')

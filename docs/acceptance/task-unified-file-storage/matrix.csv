@@ -23,3 +23,5 @@ real-model-group-file-delivery,6,FAIL,round-6.md
 no-action-routing-and-active-barrier,7,PASS,round-7.md
 real-model-group-file-delivery,7,FAIL,round-7.md
 maintenance-pause-resume,8,PASS,round-8.md
+real-model-group-file-delivery,8,FAIL,round-8.md
+file-delivery-original-quote-authorization,9,PASS,round-9.md

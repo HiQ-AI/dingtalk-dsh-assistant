@@ -29,9 +29,24 @@ test('仅原文明确群发授权可绑定文件，禁止否定授权和路径',
   assert.throws(() => bindFileDelivery(other, other.sourceQuote), { code: 'TASK_FILE_DELIVERY_AUTHORIZATION_REQUIRED' })
 })
 
+test('附件授权接受带标点和跨句的精确原文，仍检查完整源句上下文', () => {
+  const quotes = ['完成后把文件发到本群。', '根据以下合成数据生成 Markdown 报告，并把文件附件发送到本群。文件名为“任务文件收纳上线验收-20260929.md”。', '生成文件。\n把附件发送到本群。']
+  for (const sourceQuote of quotes) {
+    const candidate = { ...fileDelivery, sourceQuote }
+    assert.deepEqual(bindFileDelivery(candidate, `请${sourceQuote}仅用于验收。`), candidate)
+    for (const source of [`不要${sourceQuote}`, `禁止${sourceQuote}`])
+      assert.throws(() => bindFileDelivery(candidate, source), { code: 'TASK_FILE_DELIVERY_AUTHORIZATION_REQUIRED' })
+  }
+  for (const sourceQuote of ['生成文件。把附件发送到另一个群。', '把文件发到本群。其他群也发送。'])
+    assert.throws(() => bindFileDelivery({ ...fileDelivery, sourceQuote }, sourceQuote), { code: 'TASK_FILE_DELIVERY_AUTHORIZATION_REQUIRED' })
+  assert.throws(() => bindFileDelivery({ ...fileDelivery, sourceQuote: '生成文件。把附件发送到本群。' }, '生成文件。请把附件发送到本群。'), { code: 'TASK_FILE_DELIVERY_AUTHORIZATION_REQUIRED' })
+  assert.throws(() => bindFileDelivery({ ...fileDelivery, sourceQuote: '把文件发到本群。' }, '其他群需要把文件发到本群。'), { code: 'TASK_FILE_DELIVERY_AUTHORIZATION_REQUIRED' })
+})
+
 for (const mode of ['write', 'omitted', 'import']) test(`真实消息与Owner业务交付闭环：${mode}`, async t => {
   const omitDelivery = mode === 'omitted', importing = mode === 'import'
-  const expectedDelivery = importing ? { ...fileDelivery, files: [{ role: 'image', fileName: '已有图片.png' }] } : fileDelivery
+  const expectedDelivery = importing ? { ...fileDelivery, files: [{ role: 'image', fileName: '已有图片.png' }] }
+    : mode === 'write' ? { ...fileDelivery, sourceQuote: '生成SQL报告，完成后把文件发到本群。文件名为报告.sql。' } : fileDelivery
   const root = await mkdtemp(join(tmpdir(), 'dsh-owner-file-'))
   const config = { groupIds: ['group'], ownerActorId: 'owner', profile: 'test', instanceId: 'owner-file',
     dbPath: join(root, 'control.db'), artifactDirectory: join(root, 'artifacts') }
@@ -88,7 +103,7 @@ for (const mode of ['write', 'omitted', 'import']) test(`真实消息与Owner业
   })
   t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }) })
   const received = await service.ingest({ groupId: 'group', messageId: 'user-request', senderOpenDingTalkId: 'owner',
-    text: '生成SQL报告，完成后把文件发到本群。' })
+    text: '生成SQL报告，完成后把文件发到本群。文件名为报告.sql。' })
   await service.messages.process(received.runId)
   let taskId
   for (let attempt = 0; attempt < 40; attempt++) {
