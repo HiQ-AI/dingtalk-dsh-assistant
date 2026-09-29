@@ -1,8 +1,8 @@
 # 任务文件统一收纳
 
-> 状态：ACTIVE
+> 状态：COMPLETE
 > Goal ID：task-unified-file-storage
-> 最近维护：2026-09-29T14:57:01+08:00
+> 最近维护：2026-09-29T14:58:47+08:00
 > 权威目标：D:/codex/worktrees/task-unified-files/dingtalk-dsh-assistant/docs/acceptance/task-unified-file-storage/goal.md
 
 ## 总目标
@@ -30,13 +30,13 @@
 | SG2 | 会话及文件出口接入 | 新任务 cwd、Markdown、文件输出与下载同根；历史恢复不变 | 完成 | round-1.md |
 | SG3 | 工程及验证接入 | 源码副本、检查、验收与子进程临时文件同根 | 完成 | round-1.md |
 | SG4 | 集成与回归 | 普通/工程/重跑/重启/隔离反例通过 | 完成 | matrix.csv、round-2.md；文件 symlink 为环境限制 |
-| SG5 | 文档与 PR | README/runbook 更新，提交与 PR 独立读回 | 进行中 | README 与部署说明已更新；PR 待创建 |
+| SG5 | 文档与 PR | README/runbook 更新，提交与 PR 独立读回 | 完成 | PR #142 OPEN；main ← worktree-task-unified-files |
 
 ## 当前检查点
 
 - 当前子目标：SG5
-- 唯一下一步：提交已验证代码及文档，创建 PR 并独立回读。
-- 未闭环项：PR 创建与独立回读。部署、合并及真实渠道验收不属于本轮。
+- 唯一下一步：本轮实施已完成，无待执行步骤。
+- 未闭环项：本轮范围内无；文件 symlink 因 Windows EPERM 跳过并已披露。部署、合并及真实渠道验收不属于本轮。
 
 ## 进展
 
@@ -57,3 +57,5 @@
 
 
 - 独立审查闭环：workflow 在线换根零写拒绝；备份显式排除受管工程 node_modules，复制不遍历链接，其他链接仍拒绝。
+
+- 交付：代码提交 3afd2ad，PR https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/142 已独立回读 OPEN、MERGEABLE，base main，head worktree-task-unified-files，无自动检查结果（未声称 CI 通过）。本轮实施与 PR 交付完成，原始会话目录及正式实例未动。
