@@ -830,6 +830,19 @@ test('新群主会话具有完整工具权限，Topic 工具仍不能访问其�
   assert.equal(h.calls.length, 1)
 })
 
+test('workflow 启用时在线换工作区零写拒绝，同根及模型修改仍可用', async t => {
+  const h = await setup(t, { workflowGroupIds: ['g'] })
+  const before = h.runtime.getAgentConfig(), calls = h.calls.length
+  await assert.rejects(h.runtime.updateAgentConfig({ workspaceDir: replacementWorkspace, model: 'other' }),
+    /workflow_task_workspace_change_requires_offline_migration/)
+  assert.deepEqual(h.runtime.getAgentConfig(), before)
+  assert.equal(h.calls.length, calls)
+  assert.equal(h.store.getAgentWorkspaceDir(), agentWorkspace)
+  const updated = await h.runtime.updateAgentConfig({ workspaceDir: agentWorkspace, model: 'other' })
+  assert.equal(updated.workspaceDir, agentWorkspace)
+  assert.equal(updated.model, 'other')
+})
+
 test('工作区切换保留事件历史并重建 Resident，旧 Session 释放', async (t) => {
   const h = await setup(t), oldId = h.store.getGroup('g').residentSessionId
   assert.deepEqual(h.permissions, [[oldId, 'danger-full-access']])

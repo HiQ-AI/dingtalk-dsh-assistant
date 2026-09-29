@@ -9,6 +9,7 @@ import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { DatabaseSync, backup } from 'node:sqlite'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
+import { createTaskDirectoryResolver } from '../packages/dingtalk-dsh-assistant/execution.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
@@ -442,7 +443,8 @@ function investigationResult(input, result) {
 async function fixture(t, actor = 'owner', notifications, options = {}) {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'workflow-service-'))
   const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'test', initialize: true })
-  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true,
+    ...(options.taskFiles ? { taskWorkspaceRoot: root, getTaskDirectories: createTaskDirectoryResolver({ store, workspaceRoot: root }) } : {}) })
   const delivery = options.delivery ?? (options.deliveryOptions ? createExecutionDelivery({ store, artifacts, ...options.deliveryOptions }) : undefined)
   let codeMode = false
   const investigationSessions = { async run({ input, binding, onSessionBound, onResult }) {
@@ -457,7 +459,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
   const controller = createExecutionController({ store, artifacts, sessions: options.executionSessions ?? investigationSessions, readTools: ['read-topic-sources', 'read-predecessor-artifact', 'organize-topic-sources', 'read-task-message-resource'], ...(delivery ? { delivery } : options.external ? { delivery: { execute: async () => { throw new Error('EXTERNAL_EFFECT_NOT_EXPECTED') } } } : {}), workflows: [] })
   const execution = { store: options.storeQuery ? { ...store, query: request => options.storeQuery(request, store.query) } : store,
     artifacts, controller, ...(delivery ? { delivery } : {}) }
-  const legacy = { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'] }), getGroup: id => ({ groupId: id, responsibility: '处理本人交办事项', messages: [] }), ...options.legacy }
+  const legacy = { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'], ...(options.taskFiles ? { workspaceDir: root } : {}) }), getGroup: id => ({ groupId: id, responsibility: '处理本人交办事项', messages: [] }), ...options.legacy }
   const judge = async ({ stage, input }) => {
     if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.source.text.length }], goalText: input.source.text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.source.text.length, role: 'unit' }] }
     if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
@@ -553,13 +555,22 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   let sent = 0
   const notices = { canDisclose: async () => true, send: async () => { sent++; return { messageId: `notice-${sent}` } },
     readback: async notice => ({ messageId: notice.ack.messageId, evidenceRef: 'readback' }) }
-  const { service, execution, message } = await fixture(t, 'owner', notices, { config, external })
+  const { service, execution, message, root } = await fixture(t, 'owner', notices, { config, external, taskFiles: true })
   const received = await service.ingest(message), processed = await service.messages.process(received.runId)
   const original = processed.commands[0].result
   await execution.controller.whenIdle(original.runId)
   await service.recoverExecutionTasks(); await service.flushNotifications()
+  const ownerState = await execution.store.query({ kind: 'task.owner', taskId: original.taskId })
+  assert.equal(ownerState.decision?.action, 'complete', JSON.stringify(ownerState))
   const originalState = await execution.store.query({ kind: 'run', runId: original.runId })
   assert.equal(originalState.run.status, 'succeeded')
+  const artifactPrefix = `tasks/${original.taskId}/`
+  assert.ok(originalState.run.requirementRef.startsWith(artifactPrefix))
+  for (const node of originalState.nodes) {
+    assert.ok(node.inputRef.startsWith(artifactPrefix))
+    assert.ok(node.outputRef.startsWith(artifactPrefix))
+    for (const reference of node.evidenceRefs) assert.ok(reference.startsWith(artifactPrefix))
+  }
   const originalRegistry = createEngineeringRegistry({ repositories: config.repositories, ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }) })
   await originalRegistry.restore(execution.store, execution.artifacts)
   await originalRegistry.prepareTask({ taskId: original.taskId, arguments: { objective: '原开发任务', repositoryId: 'dataset', uatEnvironment: 'uat3', acceptanceCriteria: ['归一化结果为 1 t'] } },
@@ -593,11 +604,16 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   assert.equal((await post({ ...body, objective: '冲突修改' })).status, 409)
   const origin = await execution.store.query({ kind: 'task.origin', taskId: accepted.taskId })
   assert.equal(origin.channel, 'web'); assert.equal(origin.rerunOfTaskId, original.taskId)
+  const family = await execution.store.query({ kind: 'task.family', taskId: accepted.taskId })
+  assert.equal(family.rootTaskId, original.taskId)
   assert.equal(origin.run.externalMessaging, false); assert.equal(origin.run.context.sourceMessageId, undefined)
   assert.equal(await execution.store.query({ kind: 'message.task', taskId: accepted.taskId }), null)
   assert.deepEqual(await execution.store.query({ kind: 'message.list', limit: 200 }), beforeMessages)
   assert.deepEqual(await execution.store.query({ kind: 'run', runId: original.runId }), originalState)
   const plan = await execution.controller.taskPlan(accepted.taskId), requirement = await execution.artifacts.read(plan.task.requirementRef)
+  assert.ok(plan.task.requirementRef.startsWith(artifactPrefix))
+  const requirementFile = join(root, 'tasks', original.taskId, 'work', 'artifacts', plan.task.requirementRef.split('/').at(-1))
+  assert.deepEqual(JSON.parse(await readFile(requirementFile, 'utf8')), requirement)
   assert.deepEqual(requirement.stageTargets, { 'task-uat-pr-merge': 'merge-uat3', 'task-uat-deployment': 'deploy-uat3' })
   assert.equal(requirement.scope.conversationId, 'web:owner')
   assert.equal((await service.taskRuns(accepted.taskId)).taskId, accepted.taskId)
@@ -607,6 +623,7 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   await assert.rejects(service.submitWebTask({ ...supplement, context: '冲突' }, identity), /CONFLICT/)
   const updated = await execution.controller.taskPlan(accepted.taskId)
   assert.equal(updated.task.requirementRevision, 2)
+  assert.ok(updated.task.requirementRef.startsWith(artifactPrefix))
   const updatedRequirement = await execution.artifacts.read(updated.task.requirementRef)
   assert.match(updatedRequirement.request, /补充检查单位換算边界|补充检查单位换算边界/)
   assert.equal(updatedRequirement.reportChannel, 'web'); assert.equal(updatedRequirement.externalMessaging, false)
@@ -691,7 +708,7 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   await service.close()
   const restarted = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', ...config },
     judge: async () => { throw new Error('UNEXPECTED_MESSAGE') },
-    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'] }), getGroup: groupId => ({ groupId, messages: [] }) },
+    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'], workspaceDir: root }), getGroup: groupId => ({ groupId, messages: [] }) },
     execution, external, notifications: notices, taskOwnerSessions: { async run({ input, onSessionBound, onCandidate }) {
       if (input.task.controlState !== 'active' || input.stages.length) throw new Error('OWNER_WAITING')
       await onSessionBound()
@@ -723,6 +740,13 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   assert.equal(newRecord.config.head, originalRecord.config.head)
   assert.equal(newRecord.config.branchSource.taskId, original.taskId)
   assert.equal(newRecord.config.input.baseCommit, await git('rev-parse', 'HEAD'))
+  assert.equal((await execution.store.query({ kind: 'task.family', taskId: development.taskId })).rootTaskId, original.taskId)
+  assert.equal(newRecord.config.taskFiles.logicalTaskId, original.taskId)
+  assert.equal(newRecord.config.taskFiles.root, join(root, 'tasks', original.taskId))
+  for (const area of ['work', 'tmp', 'outputs']) assert.equal(newRecord.config.taskFiles[area], join(root, 'tasks', original.taskId, area))
+  const developmentPlan = await execution.controller.taskPlan(development.taskId)
+  assert.ok(developmentPlan.task.requirementRef.startsWith(artifactPrefix))
+  assert.ok(developmentPlan.stages[0].requirementRef.startsWith(artifactPrefix))
   assert.equal((await execution.controller.taskPlan(development.taskId)).stages.length, 3)
   const view = (await restarted.tasks()).find(task => task.taskId === development.taskId)
   await assert.rejects(restarted.submitWebTask({ ...request, taskId: development.taskId, expectedRunId: development.runId,

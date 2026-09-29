@@ -5,6 +5,7 @@ param(
   [switch]$Bootstrap,
   [switch]$HoldMaintenance,
   [string]$RepairStoppedLaunch,
+  [string]$TaskDirectory,
   [string]$EnrollmentProposal,
   [string]$ContinueMaintenanceId,
   [Nullable[int]]$ExpectedMaintenanceRevision,
@@ -59,6 +60,9 @@ function Run-Node([string[]]$Arguments){
  if($LASTEXITCODE){throw 'Node命令失败，停止部署'}
  return ($result -join "`n")
 }
+# 显式指定 Agent 工作区的 tasks 目录；检查仅只读，存在任务引用时缺参即拒绝。
+$taskDirectoryProof=Run-Node @($checker,'task-directory-check',$TaskDirectory)|ConvertFrom-Json
+if($taskDirectoryProof.taskDirectory){$TaskDirectory=$taskDirectoryProof.taskDirectory}
 function Wait-DrainedSnapshot {
  $deadline=(Get-Date).AddSeconds(60)
  do {
@@ -289,7 +293,7 @@ if($RepairStoppedLaunch){
   $current=Run-Node @($checker,'maintenance')|ConvertFrom-Json
   Assert-StoppedRepairPermit $record $sealed $before $backupRecord $current
   $history=Run-Node @($checker,'verify',"$origin/control-before.json")|ConvertFrom-Json
-  $backupProof=Run-Node @($checker,'backup-reverify',$record.backup)|ConvertFrom-Json
+  $backupProof=Run-Node @($checker,'backup-reverify',$record.backup,$TaskDirectory)|ConvertFrom-Json
   $packageProof=Run-Node @($checker,'package',$Package,$source)|ConvertFrom-Json
   if((Get-PSDrive D).Free-lt ((Get-Item -LiteralPath $Package).Length*10+1GB)){throw '修复安装空间不足'}
   return @{history=$history;backup=$backupProof;package=$packageProof;maintenance=$current}
@@ -332,7 +336,10 @@ if(($ContinueMaintenanceId -and $null-eq $ExpectedMaintenanceRevision) -or
    (-not $ContinueMaintenanceId -and $null-ne $ExpectedMaintenanceRevision) -or
    ($Bootstrap -and ($ContinueMaintenanceId -or $HoldMaintenance))){throw '维护接续须同时提供ID与revision，且不能用于Bootstrap'}
 # 留出备份实际体积、安装扩展及至少1GiB余量；不足时停止，不清理任何文件。
-$backupBytes=(@(Get-ChildItem -LiteralPath $domain,"$runtime/artifacts" -File -Recurse)+@(Get-ChildItem -LiteralPath $runtime,$profile -File)|Measure-Object Length -Sum).Sum
+$backupSources=@($domain,"$runtime/artifacts")
+# 任务目录容量沿用零写检查的相同排除规则，不遍历依赖链接。
+$backupBytes=(@(Get-ChildItem -LiteralPath $backupSources -File -Recurse)+@(Get-ChildItem -LiteralPath $runtime,$profile -File)|Measure-Object Length -Sum).Sum
+$backupBytes+=[long]$taskDirectoryProof.taskBytes
 $packageBytes=[long](Get-Item -LiteralPath $Package).Length
 if($ObserverPackage){$packageBytes+=[long](Get-Item -LiteralPath $ObserverPackage).Length}
 $requiredBytes=[long]$backupBytes+($packageBytes*10)+1GB
@@ -445,10 +452,11 @@ New-Item -ItemType Directory -Path $backup,"$backup/runtime","$backup/profile"|O
 Copy-Item -LiteralPath $domain -Destination "$backup/domain" -Recurse
 Get-ChildItem -LiteralPath $runtime -File|Copy-Item -Destination "$backup/runtime"
 Copy-Item -LiteralPath "$runtime/artifacts" -Destination "$backup/runtime/artifacts" -Recurse
+if($TaskDirectory){Run-Node @($checker,'task-directory-copy',$TaskDirectory,"$backup/tasks")|Out-Null}
 foreach($name in @('cordis.patch.yml','cordis.yml','package.json','package-lock.json','settings.yaml','pnpm-lock.yaml')){if(Test-Path -LiteralPath "$profile/$name"){Copy-Item -LiteralPath "$profile/$name" -Destination "$backup/profile/$name";Same-Hash "$profile/$name" "$backup/profile/$name"}}
 Same-Hash "$runtime/control.sqlite" "$backup/runtime/control.sqlite"
 Same-Hash "$domain/dingtalk_dsh_assistant.json" "$backup/domain/dingtalk_dsh_assistant.json"
-$backupProof=Run-Node @($checker,'backup-verify',$backup)
+$backupProof=Run-Node @($checker,'backup-verify',$backup,$TaskDirectory)
 $backupProof|Set-Content -LiteralPath "$backup/manifest.json" -Encoding utf8
 @{backup=$backup;oldPid=$old.ProcessId;packageSha256=(Get-FileHash -LiteralPath $Package).Hash}|ConvertTo-Json|Set-Content "$EvidenceDirectory/backup.json"
 $env:DSH_HOME='D:/dsh_home';$env:TEMP=$tempDirectory;$env:TMP=$tempDirectory

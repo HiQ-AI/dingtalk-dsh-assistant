@@ -13,14 +13,15 @@ async function fixture(t, overrides = {}) {
   const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'delivery', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
   t.after(() => store.close())
-  await store.command({ id: 'create', kind: 'run.create', args: { runId: 'run', taskId: 'task', workflowId: 'git', workflowDigest: 'a'.repeat(64), requirementRef: 'requirement.json', nodes: [{ nodeId: 'commit', nodeVersion: '1', executor: 'code', inputRef: 'input.json', inputDigest: 'b'.repeat(64) }] } })
+  const requirementRef = (await artifacts.put({ request: 'synthetic delivery' })).ref
+  await store.command({ id: 'create', kind: 'run.create', args: { runId: 'run', taskId: 'task', workflowId: 'git', workflowDigest: 'a'.repeat(64), requirementRef, nodes: [{ nodeId: 'commit', nodeVersion: '1', executor: 'code', inputRef: 'input.json', inputDigest: 'b'.repeat(64) }] } })
   const { result: { binding } } = await store.command({ id: 'claim', kind: 'node.claim', args: { runId: 'run', nodeId: 'commit', expectedGeneration: 1, expectedLeaseEpoch: 0 } })
   let sent = 0, authorized = 0
   const adapter = { executeCommit: async () => { sent++; return { status: 'succeeded', commitId: 'c'.repeat(40) } }, reconcileCommit: async () => ({ status: 'succeeded', commitId: 'c'.repeat(40) }), ...overrides.adapter }
   const authorize = overrides.authorize ?? (async () => { authorized++; return { principalId: 'synthetic', authorizationRef: 'task-grant' } })
   const gateway = createExecutionDelivery({ store, artifacts, adapter, workspaceAdapter: overrides.workspaceAdapter, authorize })
   const request = { binding: { ...binding, requirementDigest: 'a'.repeat(64) }, action: 'commit', prepared: { action: 'commit', generation: 1, requirementDigest: 'a'.repeat(64), repository: 'synthetic-repo', remote: 'synthetic-remote', ref: 'refs/heads/task', candidateDigest: 'd'.repeat(64) } }
-  return { store, artifacts, gateway, request, counts: () => ({ sent, authorized }) }
+  return { store, artifacts, gateway, request, requirementRef, counts: () => ({ sent, authorized }) }
 }
 
 test('效果网关同操作并发/重投只执行一次，授权不逐步骤重复索取', async t => {
@@ -97,4 +98,13 @@ test('UAT终态失败必须是同一冻结普通build的完整可信收据',()=>
  const effect={state:'failed',definition:{action:'external',adapterId:'external-operation',adapterVersion:'1',payload:{workflowKind:'uat-deployment',operation:'build',operationKey:'a'.repeat(64),expected:{commitSha:'b'.repeat(40)}}},result:{result:{status:'failed',reason:'RELEASE_PIPELINE_FAILED',operationKey:'a'.repeat(64),commitSha:'b'.repeat(40),pipelineNumber:319,pipelineStatus:'killed',evidenceRef:'woodpecker:list:319'}}}
  assert.equal(isTerminalUatBuildFailure(effect),true)
  for(const change of [e=>e.state='unknown',e=>e.definition.adapterId='other',e=>e.definition.payload.workflowKind='uat-rebuild',e=>e.definition.payload.operation='rebuild',e=>e.result.result.reason='READ_FAILED',e=>e.result.result.operationKey='c'.repeat(64),e=>e.result.result.commitSha='d'.repeat(40),e=>e.result.result.pipelineNumber=0,e=>e.result.result.pipelineStatus='running',e=>e.result.result.evidenceRef='']){const bad=structuredClone(effect);change(bad);assert.equal(isTerminalUatBuildFailure(bad),false)}
+})
+
+
+test('交付回执按持久 run 归属保存，不接受适配器结果伪造任务归属', async t => {
+  const f = await fixture(t, { adapter: { executeCommit: async () => ({ status: 'succeeded', taskId: 'forged-task' }) } })
+  const writes = [], put = f.artifacts.put
+  f.artifacts.put = async (value, options) => { writes.push(options); return put(value, options) }
+  assert.equal((await f.gateway.execute(f.request)).state, 'succeeded')
+  assert.deepEqual(writes, [{ taskId: 'task', reference: f.requirementRef }])
 })

@@ -101,3 +101,15 @@ test('非完成决定不会存正式清单，不完整或旧版本清单不能�
     assert.equal(await f.store.query({ kind: 'task.owner.delivery-manifest', taskId: 'task' }), null)
   }
 })
+
+
+test('Owner事件、清单快照和正式清单使用当前任务归属', async t => {
+  const f = await fixture(t), writes = [], put = f.artifacts.put
+  f.artifacts.put = async (value, options) => { writes.push({ value, options }); return put(value, options) }
+  await f.owner.event({ taskId: 'task', eventKey: 'routing', eventType: 'task.created', payload: { marker: 'routing' } })
+  await f.owner.drive('task')
+  assert.ok(writes.some(entry => entry.value?.marker === 'routing'))
+  assert.ok(writes.some(entry => entry.value?.kind === 'task-delivery-manifest' && entry.value.complete === false))
+  assert.ok(writes.some(entry => entry.value?.kind === 'task-delivery-manifest' && entry.value.complete === true))
+  for (const entry of writes) assert.deepEqual(entry.options, { taskId: 'task' })
+})

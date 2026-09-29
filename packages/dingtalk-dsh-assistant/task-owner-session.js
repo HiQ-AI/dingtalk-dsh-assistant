@@ -212,7 +212,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
       if (binding.sessionBound && !stored) throw fail('TASK_OWNER_SESSION_MISSING')
       if (stored) validateHistory(stored.events, binding)
       if (!await current(entry)) return { status: 'stale' }
-      const workspaceDir = !stored && getWorkspaceDir ? await getWorkspaceDir() : undefined
+      const workspaceDir = !stored && getWorkspaceDir ? await getWorkspaceDir({ binding: entry.binding }) : undefined
       const options = { agentOptions: { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
         setup: setup(entry, onCandidate, readPage, readArtifact), signal: entry.abort.signal }
       entry.handle = stored ? await ctx.agents.resume({ ...options, resumeSessionId: binding.sessionId })

@@ -1,5 +1,5 @@
 import { acceptanceCriteriaSchema } from './task-input-contract.js'
-import { sessionWorkspace } from './session-workspaces.js'
+import { sessionWorkspace, taskFilePath, checkedTaskDirectory } from './session-workspaces.js'
 import { isTerminalUatBuildFailure } from './execution-delivery.js'
 import { join } from 'node:path'
 import { transientRecoveryReasons } from './execution-recovery-policy.js'
@@ -463,7 +463,15 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     const value = legacy.getAgentConfig()
     return { provider: value.provider, model: value.model, ...(value.reasoningEffort ? { reasoningEffort: value.reasoningEffort } : {}) }
   }
-  const engineering = createEngineeringRegistry({ repositories: config.repositories ?? [], ownerActorId, modelConfig, author: config.gitAuthor, ghCommand: engineeringGhCommand })
+  const getTaskDirectories = (taskId, options) => generalArtifacts.current?.getTaskDirectories?.(taskId, options) ?? null
+  async function taskSessionWorkspace(purpose, binding) {
+    const root = legacy.getAgentConfig().workspaceDir
+    const directories = binding?.taskId ? await getTaskDirectories(binding.taskId) : null
+    if (!directories) return sessionWorkspace(root, purpose)
+    return checkedTaskDirectory(taskFilePath(root, directories.logicalTaskId, 'work', binding.taskId,
+      purpose, binding.sessionId), true)
+  }
+  const engineering = createEngineeringRegistry({ repositories: config.repositories ?? [], ownerActorId, modelConfig, author: config.gitAuthor, ghCommand: engineeringGhCommand, getTaskDirectories })
   const selectedExternal = createExternalRegistry(external, modelConfig())
   const externalWorkflows = [...selectedExternal.byId.keys()].map(id => ({ id, purpose: externalLabels[id],
     ...(external?.availableTargets ? { targetIds: external.availableTargets.filter(item => item.workflowId === id).map(item => item.targetId) } : {}) }))
@@ -514,10 +522,10 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const readableFiles = config.generalFileRead?.readablePaths ?? []
   const fileRead = config.generalFileRead ? createGeneralFileReadCapability(config.generalFileRead) : null
   const markdownFileAdapter = config.taskOutputDirectory || config.artifactDirectory
-    ? createTaskMarkdownFileAdapter({ root: config.taskOutputDirectory ?? config.artifactDirectory }) : null
+    ? createTaskMarkdownFileAdapter({ root: config.taskOutputDirectory ?? config.artifactDirectory, getTaskDirectories }) : null
   const markdownWrite = markdownFileAdapter ? createGeneralMarkdownWriteCapability({ fileAdapter: markdownFileAdapter }) : null
   const effectiveArtifactDirectory = config.artifactDirectory ?? (fileTransport ? suppliedExecution?.artifacts?.root : undefined)
-  const managedFiles = effectiveArtifactDirectory ? createTaskArtifactFiles({ root: join(effectiveArtifactDirectory, 'task-files') }) : null
+  const managedFiles = effectiveArtifactDirectory ? createTaskArtifactFiles({ root: join(effectiveArtifactDirectory, 'task-files'), getTaskDirectories }) : null
   const artifactWriter = managedFiles ? createTaskArtifactWriteAdapter({ files: managedFiles }) : null
   const artifactImporter = managedFiles && config.generalFileRead ? createTaskArtifactImportAdapter({ files: managedFiles,
     sourceRoot: config.generalFileRead.root, readablePaths: config.generalFileRead.readablePaths }) : null
@@ -613,7 +621,9 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const visibleDefinitions = new Map([investigationWorkflow(modelConfig()), stepWorkflow, fileWorkflow, ...selectedExternal.workflows]
     .filter(Boolean).map(workflow => [workflow.id, workflow]))
   const execution = suppliedExecution ?? await openExecutionRuntime({
-    ctx, getWorkspaceDir: () => sessionWorkspace(legacy.getAgentConfig().workspaceDir, 'execution'), dbPath: config.dbPath, instanceId: config.instanceId, artifactDirectory: config.artifactDirectory,
+    ctx, getWorkspaceDir: ({ binding }) => taskSessionWorkspace('execution', binding),
+    taskWorkspaceRoot: legacy.getAgentConfig().workspaceDir,
+    dbPath: config.dbPath, instanceId: config.instanceId, artifactDirectory: config.artifactDirectory,
     readTools: ['engineering_repo_inspect', ...queryToolNames], repositoryInspect: engineering.repositoryInspect,
     tools: ({ artifacts }) => queryTools(artifacts),
     deliveryOptions: { ...engineering.deliveryOptions,
@@ -662,6 +672,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     },
     workflows: async (store, artifacts) => {
       generalStore.current = store
+      generalArtifacts.current = artifacts
       const selected = modelConfig()
       const workflows = [investigationWorkflow(selected), stepWorkflow, fileWorkflow].filter(Boolean)
       const definitions = new Map(workflows.map(workflow => [workflow.id, defineExecutionWorkflow(workflow)]))
@@ -1061,7 +1072,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       authorization: { actorId: info.run.actorId, sourceKey: info.run.sourceKey,
         sourceVersion: info.run.sourceVersion, commandId: info.commandId,
         ownerConfirmed: info.ownerConfirmed === true } }
-    const saved = await artifacts.put(requirement)
+    const saved = await artifacts.put(requirement, { taskId })
     await store.command({ id: `task-accept:${info.commandId}`, kind: 'task.accept', args: {
       taskId, requirementRef: saved.ref, requirementRevision: 1,
       sessionId: `owner-${executionDigest(taskId).slice(0, 40)}`,
@@ -1103,7 +1114,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         readableFiles, writeMarkdown: false },
       authorization: { actorId: origin.run.actorId, sourceKey,
         sourceVersion: origin.run.sourceVersion, commandId: origin.commandId } }
-    const saved = await artifacts.put(requirement)
+    const saved = await artifacts.put(requirement, { taskId })
     await store.command({ id: `task-legacy-bind:${taskId}`, kind: 'task.requirement.bind-legacy', args: {
       taskId, expectedRequirementRevision: plan.task.requirementRevision, requirementRef: saved.ref,
       sessionId: `owner-${executionDigest(taskId).slice(0, 40)}`,
@@ -1188,7 +1199,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     validateFiles: (files, scope) => managedFiles.validateManifest(files, scope), verifyFileDelivery: verifyRequiredFileDelivery })
   const { inspectCurrentExecution, repairCurrentStage, readStageArtifacts } = ownerContracts
   taskOwner = createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig,
-    getWorkspaceDir: () => sessionWorkspace(legacy.getAgentConfig().workspaceDir, 'owner'),
+    getWorkspaceDir: ({ binding }) => taskSessionWorkspace('owner', binding),
     ...(taskOwnerSessions ? { sessionRunner: taskOwnerSessions } : {}),
     capabilityCatalog: stepCapabilities.filter(item => item.effectClass === 'file.write').map(item => ({ id: item.id, description: item.description,
       effectClass: item.effectClass })),
@@ -1275,7 +1286,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           if (!event.input?.request?.trim() || !Array.isArray(event.input.acceptanceCriteria)
             || !event.input.scope?.sourceKeys?.length || !event.input.authorization)
             throw executionError('TASK_WEB_REQUIREMENT_INVALID')
-          const saved = await artifacts.put(event.input)
+          const saved = await artifacts.put(event.input, { taskId: event.request.taskId })
           await store.command({ id: commandId, kind: 'task.requirement.update', args: {
             taskId: event.request.taskId, expectedRequirementRevision: event.request.inputVersion - 1,
             requirementRef: saved.ref, eventKey: `web:${event.id}` } })
@@ -1345,7 +1356,9 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         scope: { conversationId: `web:${identity.actorId}`, sourceKeys: [sourceKey], sourceVersions: { [sourceKey]: 1 }, readableFiles, writeMarkdown: false },
         authorization: { channel: 'web', actorId: identity.actorId, sourceKey, sourceVersion: 1, requestId: request.requestId, commandId: sourceKey },
         rerunOfTaskId: request.taskId, reportChannel: 'web', externalMessaging: false }
-      const saved = await artifacts.put(requirement)
+      const family = await store.query({ kind: 'task.family', taskId: request.taskId })
+      if (!family) throw executionError('TASK_FAMILY_INVALID')
+      const saved = await artifacts.put(requirement, { taskId, logicalTaskId: family.rootTaskId })
       await store.command({ id: sourceKey, kind: 'task.web-rerun.accept', args: { taskId, rerunOfTaskId: request.taskId,
         actorId: identity.actorId, request, requirementRef: saved.ref, criteria: requirement.acceptanceCriteria, sourceKey } })
     }
@@ -1498,7 +1511,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       if (action.intent === 'reopen' && wasCancelled) {
         const authorization = await artifacts.put({ taskId, sourceKey: info.run.sourceKey,
           actorId: info.run.actorId, conversationId: info.run.conversationId,
-          intent: action.intent, commandId: info.commandId })
+          intent: action.intent, commandId: info.commandId }, { taskId })
         await controller.controlTask({ commandId: `task-reopen:${info.commandId}`, taskId, intent: 'reopen',
           expectedControlRevision: plan.task.controlRevision,
           requirementRevision: plan.task.requirementRevision, authorizationRef: authorization.ref })
@@ -1534,7 +1547,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           writeMarkdown: previous.scope.writeMarkdown || /(?:生成|创建|写入|输出|保存).{0,16}(?:Markdown|md文件|文档|文件)/iu.test(info.run.body) },
         authorization: { actorId: info.run.actorId, sourceKey: info.run.sourceKey,
           sourceVersion: info.run.sourceVersion, commandId: info.commandId } }
-      const saved = await artifacts.put(next)
+      const saved = await artifacts.put(next, { taskId })
       await store.command({ id: `task-requirement:${info.commandId}`, kind: 'task.requirement.update', args: {
         taskId, expectedRequirementRevision: plan.task.requirementRevision, requirementRef: saved.ref,
         eventKey: `intent:${info.commandId}`,
@@ -2697,7 +2710,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (before !== await store.query({ kind: 'task.viewRevision', taskId })) throw executionError('TASK_OUTPUT_CHANGED')
     if (document) return result.document ?? null
     if (['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId)) {
-      const pathText = `方案工件路径\n${join(artifacts.root, node.outputRef)}`
+      const pathText = `方案工件路径\n${artifacts.locate ? artifacts.locate(node.outputRef) : join(artifacts.root, node.outputRef)}`
       return { text: pathText, overview: '', nextCursor: null, totalLength: pathText.length }
     }
     if (offset > text.length || offset > 0 && /[\uDC00-\uDFFF]/u.test(text[offset] ?? '')) throw executionError('TASK_OUTPUT_CURSOR_INVALID')

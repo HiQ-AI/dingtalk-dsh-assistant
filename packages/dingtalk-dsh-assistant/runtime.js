@@ -2761,6 +2761,8 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       }
       if (nextSelection.model === '') throw new Error('agent_model_required')
       const workspaceChanged = nextWorkspace !== agentWorkspace
+      // workflow 的任务文件根在启动时固定；在线换根会把会话与持久工件拆到两个目录。
+      if (workspaceChanged && workflowGroups.size) throw new Error('workflow_task_workspace_change_requires_offline_migration')
       const selectionChanged = nextSelection.model !== selection.model || nextSelection.reasoningEffort !== selection.reasoningEffort
       const nextProxyUrl = proxyUrl === undefined ? (store.getProxyUrl?.() ?? '') : proxyUrl.trim()
       if (nextProxyUrl !== '' && !/^https?:\/\//i.test(nextProxyUrl)) throw new Error('agent_proxy_url_invalid')

@@ -36,7 +36,9 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
   }
   async function observe(effectId, observation) {
     if (!['succeeded', 'failed', 'unknown'].includes(observation?.status)) throw executionError('DELIVERY_OBSERVATION_INVALID')
-    const artifact = await artifacts.put(observation)
+    const effect = await lookup(effectId)
+    const state = await store.query({ kind: 'run', runId: effect.runId })
+    const artifact = await artifacts.put(observation, { taskId: state.run.taskId, reference: state.run.requirementRef })
     await command(`observe:${effectId}:${artifact.digest}`, 'effect.observe', {
       effectId, receiptId: `receipt:${effectId}:${artifact.digest}`, status: observation.status,
       evidenceRef: artifact.ref, result: observation,

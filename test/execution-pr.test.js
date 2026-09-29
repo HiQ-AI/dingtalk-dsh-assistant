@@ -74,21 +74,24 @@ test('受信验证job只跑固定argv并记录真实exit和日志，失败不能
 
 test('验证取消和超时均终止真实父子进程，后续step不执行', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-check-cancel-'))
-  for (const mode of ['cancel', 'timeout']) {
+  for (const mode of ['cancel', 'timeout', 'task-cancel']) {
     const pidFile = join(root, `${mode}.json`), forbidden = join(root, `${mode}-later.txt`)
     const code = `const {spawn}=require('node:child_process'); const fs=require('node:fs'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});fs.writeFileSync(${JSON.stringify(pidFile)},JSON.stringify([process.pid,child.pid]));setInterval(()=>{},1000)`
     const abort = new AbortController()
+    const { fileURLToPath } = await import('node:url'), { createHash } = await import('node:crypto')
+    const launcher = fileURLToPath(new URL('../packages/dingtalk-dsh-assistant/execution-task-command.js', import.meta.url))
+    const digest = createHash('sha256').update((await readFile(launcher, 'utf8')).replace(/\r\n/g, '\n')).digest('hex')
     const check = createVerificationJobCheck({ id: mode, version: '1', root, timeoutMs: mode === 'timeout' ? 1200 : 30000, steps: [
-      { executable: process.execPath, args: ['-e', code] },
+      { executable: process.execPath, args: mode === 'task-cancel' ? [launcher, digest, join(root, 'tmp'), process.execPath, '-e', code] : ['-e', code] },
       { executable: process.execPath, args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(forbidden)},'bad')`] },
     ] })
     const started = Date.now(), promise = check.run({candidateDigest:'a'.repeat(64),files:[]},{signal:abort.signal})
     let pids
     for(let i=0;i<100;i++){try{pids=JSON.parse(await readFile(pidFile,'utf8'));break}catch{await new Promise(r=>setTimeout(r,20))}}
     assert.ok(pids)
-    if(mode==='cancel')abort.abort()
+    if(mode!=='timeout')abort.abort()
     const result=await promise
-    assert.equal(result.passed,false);assert.equal(JSON.parse(result.log).reason,mode==='cancel'?'cancelled':'timeout')
+    assert.equal(result.passed,false);assert.equal(JSON.parse(result.log).reason,mode!=='timeout'?'cancelled':'timeout')
     assert.ok(Date.now()-started<10000)
     for(const pid of pids)assert.throws(()=>process.kill(pid,0))
     await assert.rejects(readFile(forbidden),{code:'ENOENT'})
@@ -207,4 +210,30 @@ console.log(JSON.stringify(a[0]==='api'?{object:{sha:'a'.repeat(40)}}:[]));`)
   const legacy = fresh.prepare({ ...failed, runId: 'old-effect' })
   assert.equal((await fresh.reconcile(legacy)).status, 'unknown')
   assert.deepEqual(await readdir(join(directory, 'fresh')), ['repo'])
+})
+
+test('任务检查命令真实写入任务tmp，重复检查临时目录隔离且父环境不变', async () => {
+  const { fileURLToPath } = await import('node:url'), { createHash } = await import('node:crypto')
+  const root = await mkdtemp(join(tmpdir(), 'task-check-')), taskTmp = join(root, 'tmp')
+  const launcher = fileURLToPath(new URL('../packages/dingtalk-dsh-assistant/execution-task-command.js', import.meta.url))
+  const digest = createHash('sha256').update((await readFile(launcher, 'utf8')).replace(/\r\n/g, '\n')).digest('hex'), prior = process.env.TEMP
+  const check = createVerificationJobCheck({ id: 'task', version: '1', root: join(root, 'work'), executable: process.execPath,
+    args: [launcher, digest, taskTmp, process.execPath, '-e', `const fs=require('node:fs'),p=require('node:path'),os=require('node:os'); if(process.env.TEMP!==process.env.TMP||process.env.TMP!==process.env.TMPDIR)throw Error('env');fs.writeFileSync(p.join(os.tmpdir(),'actual.tmp'),'task');console.log(os.tmpdir())`] })
+  const snapshot = { candidateDigest: 'a'.repeat(64), files: [], readFile: async () => Buffer.alloc(0) }
+  const outputs = await Promise.all([check.run(snapshot), check.run(snapshot)])
+  const directories = outputs.map(value => { assert.equal(value.passed, true, value.log); return JSON.parse(value.log).steps[0].stdout.trim() })
+  assert.notEqual(directories[0], directories[1])
+  for (const directory of directories) { assert.ok(directory.startsWith(taskTmp)); assert.equal(await readFile(join(directory, 'actual.tmp'), 'utf8'), 'task') }
+  assert.equal(process.env.TEMP, prior)
+})
+
+test('任务检查拒绝tmp祖先junction，外部目录零新增', async () => {
+ const { symlink, mkdir, readdir } = await import('node:fs/promises'), { fileURLToPath } = await import('node:url'), { createHash } = await import('node:crypto')
+ const root = await mkdtemp(join(tmpdir(), 'task-check-link-')), outside = join(root, 'outside'), link = join(root, 'link')
+ await mkdir(outside); await symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir')
+ const launcher = fileURLToPath(new URL('../packages/dingtalk-dsh-assistant/execution-task-command.js', import.meta.url))
+ const digest = createHash('sha256').update((await readFile(launcher, 'utf8')).replace(/\r\n/g, '\n')).digest('hex')
+ const check = createVerificationJobCheck({ id: 'link', version: '1', root: join(root, 'work'), executable: process.execPath, args: [launcher, digest, join(link, 'must-not-exist'), process.execPath, '-e', 'process.exit(0)'] })
+ const result = await check.run({ files: [], candidateDigest: 'a'.repeat(64) })
+ assert.equal(result.passed, false); assert.deepEqual(await readdir(outside), [])
 })

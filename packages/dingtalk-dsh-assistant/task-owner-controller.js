@@ -58,7 +58,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
 
   async function event({ taskId, eventKey, eventType, payload }) {
     if (closed) throw error('TASK_OWNER_CONTROLLER_CLOSED')
-    const artifact = payload === undefined ? null : await artifacts.put(payload)
+    const artifact = payload === undefined ? null : await artifacts.put(payload, { taskId })
     return command(`owner-event:${eventKey}`, 'task.owner.event', {
       taskId, eventKey, eventType, ...(artifact ? { payloadRef: artifact.ref } : {}),
     })
@@ -123,7 +123,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     result.stageArtifacts = await readTaskOwnerStageArtifacts({ taskId, stages: plan.stages, controller, plan, readStageArtifacts })
     if (readDeliveryManifest) {
       const manifest = await readDeliveryManifest({ taskId, plan, requirement: goal })
-      result.deliveryManifest = { ref: (await artifacts.put(manifest)).ref, complete: manifest.complete,
+      result.deliveryManifest = { ref: (await artifacts.put(manifest, { taskId })).ref, complete: manifest.complete,
         missing: manifest.missing, validation: manifest.validation }
     }
     if (inspectCurrentExecution) {
@@ -139,7 +139,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         const next = [...batch, item]
         if (Buffer.byteLength(JSON.stringify(next), 'utf8') > 24 * 1024) {
           if (!batch.length) throw error('TASK_OWNER_EVENT_CAPACITY')
-          const artifact = await artifacts.put(batch)
+          const artifact = await artifacts.put(batch, { taskId })
           pages.push({ ref: artifact.ref, firstSeq: batch[0].eventSeq,
             lastSeq: batch.at(-1).eventSeq, count: batch.length })
           batch = [item]
@@ -147,7 +147,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       }
       if (batch.length) {
         if (Buffer.byteLength(JSON.stringify(batch), 'utf8') > 24 * 1024) throw error('TASK_OWNER_EVENT_CAPACITY')
-        const artifact = await artifacts.put(batch)
+        const artifact = await artifacts.put(batch, { taskId })
         pages.push({ ref: artifact.ref, firstSeq: batch[0].eventSeq,
           lastSeq: batch.at(-1).eventSeq, count: batch.length })
       }
@@ -214,7 +214,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
               || manifest.businessValidation?.status !== 'accepted'
             || manifest.taskId !== taskId || manifest.requirementRevision !== plan.task.requirementRevision
             || manifest.planRevision !== plan.task.planRevision) throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
-          deliveryManifestRef = (await artifacts.put(manifest)).ref
+          deliveryManifestRef = (await artifacts.put(manifest, { taskId })).ref
         }
         const accepted = (await command(`owner-accept:${turnId}`, 'task.owner.accept', {
           taskId, turnId, leaseEpoch: claim.leaseEpoch, ...(deliveryManifestRef ? { deliveryManifestRef } : {}) })).result

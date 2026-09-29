@@ -51,9 +51,19 @@ Owner 完成前核对当前成功阶段、逐项证据及必交文件清单。Ho
 
 已有文件可通过 `import-task-file` 纳入当前 Task：Host 在 `workflow.generalFileRead` 配置固定 `root` 和精确 `readablePaths`，Owner 输入仅为 `{role,fileName,relativePath}`，同时受当前任务的角色/名称及 `readableFiles` 授权约束。Host 只读真实来源后冻结大小/SHA-256，执行时再次核对并复制原字节到受管快照；Owner 不提供绝对根或猜摘要。导入保留真实扩展名，不能靠改名转换格式。Office、PDF、图片已有可信文件时可直接登记交付；没有源文件时仍需实际生成器。
 
-受管快照位于 `workflow.artifactDirectory/task-files/<taskId>/<artifactId>/<fileName>`，保留中文可读名称、需求版本、生产者和 SHA-256；文件元数据独立读回，二进制不塞入 JSON。当前 Host 默认每文件 20 MiB、每批 50 MiB、20 件，这些是本地保护值，不能当作租户平台上限。全部文件先预检，再逐件通过效果账发送；ACK 后查询真实消息并下载核对大小和摘要，全部必交文件通过才允许完成。未知发送保持待对账，不能重发来消除等待。
+新任务的受管快照位于 `<Agent工作区>/tasks/<logicalTaskId>/outputs/<taskId>/<artifactId>/<fileName>`；升级前已有任务仍使用 `workflow.artifactDirectory/task-files/<taskId>/<artifactId>/<fileName>`。快照保留中文可读名称、需求版本、生产者和 SHA-256；文件元数据独立读回，二进制不塞入 JSON。当前 Host 默认每文件 20 MiB、每批 50 MiB、20 件，这些是本地保护值，不能当作租户平台上限。全部文件先预检，再逐件通过效果账发送；ACK 后查询真实消息并下载核对大小和摘要，全部必交文件通过才允许完成。未知发送保持待对账，不能重发来消除等待。
 
 本节描述源码能力，正式实例须按[本地部署与文件验收说明](docs/ops/resident-review-local-deployment.md#任务产物群聊文件交付切换与验收)完成安装和真实渠道回读。本轮代码实施不代表已部署。
+
+### 一个任务一个文件目录
+
+新任务统一使用 `<Agent工作区>/tasks/<logicalTaskId>/`：`work/` 保存会话工作文件、JSON 工件、工程副本与验证记录，`tmp/` 保存受管检查和验收子进程的临时文件，`outputs/` 保存正式文件。逻辑任务 ID 复用现有任务关系；Web 重执行沿用同一个根目录，内部任务、节点及执行代次各自隔离。工程旁路证据位于源码副本之外。
+
+DSH 原始会话日志和公共附件仍由宿主管理。历史任务、工件及会话原路径恢复，不自动迁移；消息问答等非任务会话仍使用原职责目录。新 JSON 引用携带 `tasks/<logicalTaskId>/` 前缀，直接定位 `work/artifacts/`，无需额外索引。文件下载、发送和完成验收继续核对原有 descriptor、摘要和授权。目录约定覆盖插件受管入口；外部工具显式写入的其他绝对路径与公共缓存不因此被重定向。
+
+升级后备份必须同时保留控制库、原工件/会话目录和 Agent 工作区的 `tasks/`；部署参数与回退边界见[任务目录部署说明](docs/ops/resident-review-local-deployment.md#任务文件统一目录的部署与备份)。
+
+启用 workflow 后，在线切换 Agent 工作区会被拒绝，避免会话和工件落到不同根；同根配置及模型设置仍可更新。需要换根时先停稳并制定完整迁移方案，本次不提供自动迁移。任务备份明确排除受管工程源码副本中的可再生 `node_modules`，恢复后按锁文件重新安装依赖。
 
 只读资源通过 `workflow.directQueries` 登记，由 `permissions` 显式声明 Agent 自身的资源授权，与发送者身份无关。不同群成员使用同一 Agent 职责范围，每次调用仍重新校验资源权限。数据库默认使用低权限只读身份；用户明确指定使用现有 UAT 账号时，仅对显式登记的 UAT 资源启用 Host 强制只读事务模式。模型始终不能获得连接凭据或提交任意 SQL。配置合同见 [Agent 查询工具](docs/api/agent-query-tool-contract.md)，切换步骤见 [本地部署说明](docs/ops/resident-review-local-deployment.md)。
 

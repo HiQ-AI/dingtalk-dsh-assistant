@@ -93,3 +93,34 @@ test('并发重复登记不覆盖且均可独立回读', async t => {
   for (const file of results) assert.deepEqual(file, results[0])
   await files.resolve(results[0])
 })
+
+test('任务交付目录按受信任务布局选择，重启回读、旧任务保留且新目录缺文件不回退', async t => {
+  const { root, files: legacy } = await fixture(t)
+  const oldFile = await legacy.register(input())
+  const outputs = join(root, 'tasks', 'family-1', 'outputs')
+  const getTaskDirectories = async taskId => taskId === 'task-1' ? null : { outputs }
+  const create = () => createTaskArtifactFiles({ root: join(root, 'managed'), getTaskDirectories })
+  const files = create()
+  assert.deepEqual(await readFile((await files.resolve(oldFile)).path), input().bytes)
+  const newInput = { ...input(), taskId: 'task-2' }
+  // 旧位置存在同身份文件也不允许掩盖新位置缺失。
+  const shadow = await legacy.register(newInput)
+  await assert.rejects(files.resolve(shadow), { code: 'ENOENT' })
+  const current = await files.register(newInput)
+  assert.equal((await create().resolve(current)).path, join(outputs, 'task-2', current.artifactId, current.fileName))
+  const rerun = await files.register({ ...newInput, taskId: 'task-3' })
+  assert.notEqual((await files.resolve(rerun)).path, (await files.resolve(current)).path)
+  const broken = createTaskArtifactFiles({ root: join(root, 'managed'), getTaskDirectories: async () => { throw new Error('lookup failed') } })
+  await assert.rejects(broken.resolve(oldFile), /lookup failed/)
+})
+
+test('任务输出根拒绝相对目录和祖先 junction', async t => {
+  const { root } = await fixture(t)
+  const invalid = createTaskArtifactFiles({ root, getTaskDirectories: async () => ({ outputs: '../escape' }) })
+  await assert.rejects(invalid.register(input()), { code: 'TASK_ARTIFACT_CONFIG_INVALID' })
+  const outside = join(root, 'outside'), link = join(root, 'link')
+  await mkdir(outside)
+  await symlink(outside, link, 'junction')
+  const linked = createTaskArtifactFiles({ root, getTaskDirectories: async () => ({ outputs: join(link, 'outputs') }) })
+  await assert.rejects(linked.register(input()), { code: 'TASK_ARTIFACT_SCOPE_DENIED' })
+})

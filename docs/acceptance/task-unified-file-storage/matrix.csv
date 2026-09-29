@@ -1,0 +1,13 @@
+case,round,status,evidence
+new-old-storage-restart,1,PASS,round-1.md
+native-session-cwd-and-original-log,1,PASS,round-1.md
+web-rerun-and-owner-completion,1,FAIL,round-1.md
+new-old-storage-restart,2,PASS,round-2.md
+native-session-cwd-and-original-log,2,PASS,round-2.md
+web-rerun-and-owner-completion,2,PASS,round-2.md
+markdown-file-download-isolation,2,PASS,round-2.md
+engineering-temp-evidence-and-cancellation,2,PASS,round-2.md
+junction-no-external-write,2,PASS,round-2.md
+workspace-change-zero-write,2,PASS,round-2.md
+backup-closure-and-dependency-exclusion,2,PASS,round-2.md
+file-symlink-environment-permission,2,SKIP,round-2.md

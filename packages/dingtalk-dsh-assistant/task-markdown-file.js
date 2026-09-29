@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { link, lstat, mkdir, open, realpath, unlink } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { executionDigest, executionError } from './execution-artifacts.js'
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -10,8 +10,9 @@ const identity = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._
 const hex = value => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value)
 
 /** 由 Host 固定根目录；模型仅提供 Markdown 内容，文件名由 Task 和节点身份派生。 */
-export function createTaskMarkdownFileAdapter({ root }) {
-  if (typeof root !== 'string' || !isAbsolute(root)) throw executionError('TASK_MARKDOWN_CONFIG_INVALID')
+export function createTaskMarkdownFileAdapter({ root, getTaskDirectories }) {
+  if (typeof root !== 'string' || !isAbsolute(root)
+    || getTaskDirectories !== undefined && typeof getTaskDirectories !== 'function') throw executionError('TASK_MARKDOWN_CONFIG_INVALID')
   const configuredRoot = resolve(root)
   function validate(prepared) {
     const { digest, ...body } = prepared ?? {}
@@ -26,21 +27,24 @@ export function createTaskMarkdownFileAdapter({ root }) {
       || body.resourceKey !== `file:${body.taskId}:${body.operationId}` || digest !== executionDigest(body))
       throw executionError('TASK_MARKDOWN_PREPARED_INVALID')
   }
-  async function directory(taskId, create = false) {
-    if (create) await mkdir(configuredRoot, { recursive: true })
-    const rootStat = await lstat(configuredRoot).catch(error => { if (error.code === 'ENOENT') return null; throw error })
-    if (!rootStat) return null
-    if (rootStat.isSymbolicLink()) throw executionError('TASK_MARKDOWN_ROOT_INVALID')
-    const base = await realpath(configuredRoot)
-    const stat = await lstat(base)
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw executionError('TASK_MARKDOWN_ROOT_INVALID')
-    const taskDirectory = join(base, taskId)
-    if (create) await mkdir(taskDirectory).catch(error => { if (error.code !== 'EEXIST') throw error })
-    const taskStat = await lstat(taskDirectory).catch(error => { if (error.code === 'ENOENT') return null; throw error })
-    if (!taskStat) return null
-    if (!taskStat.isDirectory() || taskStat.isSymbolicLink() || relative(base, taskDirectory).startsWith('..'))
+  async function checkedDirectory(path, create) {
+    const parent = dirname(path)
+    if (parent !== path && !await checkedDirectory(parent, create)) return null
+    let stat = await lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error })
+    if (!stat && create) {
+      await mkdir(path).catch(error => { if (error.code !== 'EEXIST') throw error })
+      stat = await lstat(path)
+    }
+    if (!stat) return null
+    if (!stat.isDirectory() || stat.isSymbolicLink() || relative(path, await realpath(path)) !== '')
       throw executionError('TASK_MARKDOWN_SCOPE_DENIED')
-    return taskDirectory
+    return path
+  }
+  async function directory(taskId, create = false) {
+    const directories = await getTaskDirectories?.(taskId)
+    const base = directories == null ? configuredRoot : directories.outputs
+    if (typeof base !== 'string' || !isAbsolute(base)) throw executionError('TASK_MARKDOWN_CONFIG_INVALID')
+    return checkedDirectory(join(resolve(base), taskId), create)
   }
   async function current(prepared) {
     validate(prepared)

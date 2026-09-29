@@ -318,7 +318,21 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 
 ### 原生查询会话目录
 
-新建会话使用 Resident 已校验的 Agent 工作区下 `session-workspaces/<职责>` 作为原生 `meta.cwd`，不采用模型/消息中的目录。职责为消息问答、任务负责、任务执行、群聊常驻、消息归类、话题决策、结果审阅；消息意图判断不产生原生会话。原生会话恢复保持原目录。部署前回读 `agent-instructions.projectRootMarkers`，确认配置根实际具有受支持标记；普通目录可使用 `AGENTS.md` 或 `CLAUDE.md`，不能仅凭目录创建成功断言指引继承。此前已保存到 `_no-cwd` 的历史会话不迁移、不伪造 metadata；宿主 Session Controller 目录会排除这些已释放会话，因此历史看板会话入口不保证能打开，结果与依据仍可按需读取。验证新会话入口须在部署后创建新问答，不能用旧会话证明修复成功。
+新任务的 Owner 和执行会话使用 Resident 已校验的 Agent 工作区下 `tasks/<logicalTaskId>/work/<内部taskId>/<owner或execution>/<sessionId>` 作为原生 `meta.cwd`；其他新会话和已有任务仍使用 `session-workspaces/<职责>`。目录不采用模型/消息中的路径，消息意图判断不产生原生会话。原生会话恢复保持原目录；DSH 原始日志存储根及后端保持不变。部署前回读 `agent-instructions.projectRootMarkers`，确认配置根实际具有受支持标记；普通目录可使用 `AGENTS.md` 或 `CLAUDE.md`，不能仅凭目录创建成功断言指引继承。此前已保存到 `_no-cwd` 的历史会话不迁移、不伪造 metadata；宿主 Session Controller 目录会排除这些已释放会话，因此历史看板会话入口不保证能打开，结果与依据仍可按需读取。验证新会话入口须在部署后创建新问答和任务，不能用旧会话证明新路径生效。
+
+### 任务文件统一目录的部署与备份
+
+本次无需 schema 迁移或新增 profile 配置。新任务文件根由已配置 Agent 工作区确定，为 `tasks/<logicalTaskId>/{work,tmp,outputs}`。新任务引用携带逻辑任务身份，旧引用保留旧位置；正式重执行的新内部任务复用原逻辑任务根。不要移动已有工程回执绑定的绝对路径，也不要改写引用。
+
+正常部署脚本 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1` 增加显式参数 `-TaskDirectory <Agent工作区绝对路径>/tasks`。升级后已出现新引用时，该参数为必填；沿既有部署流程，先以完整参数加 `-Check` 零写预检，核对目录、容量和引用闭包后再执行。尚未有新任务且目录不存在时可暂不传；不要为自检创建虚假根。`-Resume`、`-Readback` 及部署复核须沿用原任务根。
+
+备份将任务文件复制到 `backup/tasks`，清单绑定源任务根并校验文件摘要；闭包检查直接查找限定引用，不扫描猜归属。唯一依赖排除规则为 `<logicalTaskId>/work/engineering/<24-hex>/ws-<64-hex>/repository/**/node_modules`，包括仓库根和嵌套依赖目录，显式保存于 `taskBackupExclusions`。容量统计、复制和源清单校验共用该规则，复制不进入依赖链接；备份目标意外出现额外文件仍拒绝。恢复后按源码锁文件重新安装依赖，不声称恢复了依赖缓存。
+
+控制库、共享工件、Session 和任务根必须来自同一停稳检查点。缺根、坏摘要或排除范围外的链接均停止；不能仅备份原 `artifactDirectory` 后声称可恢复。恢复时保留原 Agent 工作区绝对路径，先验证完整备份再启动唯一写者。启用 workflow 后在线修改工作区会返回 `workflow_task_workspace_change_requires_offline_migration`，配置不写入；同根更新与模型修改仍可用。不要绕过此保护仅修改磁盘根配置，已有相对任务引用会失去原位置；换根须另行设计包含工程绝对路径绑定的停机迁移，本轮不迁移。
+
+旧任务继续使用原检查器及验收 runner 的冻结身份。新任务使用任务目录版本的验收 runner，以保留服务直接子进程 PID 的核验，并单独给检查/验收子进程设置 TEMP/TMP/TMPDIR；不修改 Host 全局环境。新引用产生后，旧版本无法读取新布局，不能只降级包继续写新账；回退需按既有维护流程核对新增效果并恢复一致检查点。
+
+切换后分别验证新普通文件任务、工程检查/验收、Web 重执行、重启后的文件下载和历史任务读取。核对原始 JSONL 仍在宿主 Session 根；本地定向测试不代表正式实例或真实钉钉送达已经验证。
 
 ### 已确认送达通知的单次对账恢复
 

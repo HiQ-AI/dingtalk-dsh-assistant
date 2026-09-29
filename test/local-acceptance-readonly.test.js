@@ -133,3 +133,13 @@ test('独立清理验证拒绝活动浏览器或篡改的业务写入ledger', as
   await writeFile(join(directory, 'ledger.json'), JSON.stringify(ledger))
   await assert.rejects(executeReadOnly('verify-cleanup', f.config, f.input), { code: 'READONLY_ACCEPTANCE_LEDGER_REQUEST_INVALID' })
 })
+
+test('任务证据根保存旁路ledger，旧配置根不产生任务文件', async () => {
+  const f = await fixture(), evidenceRoot = join(f.config.evidenceRoot, '..', 'task-work'), input = { ...f.input, evidenceRoot }
+  const directory = join(evidenceRoot, input.namespace)
+  await mkdir(directory, { recursive: true })
+  await writeFile(join(directory, 'ledger.json'), JSON.stringify({ namespace: input.namespace, baseUrl: input.baseUrl, uatEnvironment: 'uat2', mode: 'read-only', createdResources: 0, sessionState: 'none', browserState: 'closed', requests: [] }))
+  assert.equal((await executeReadOnly('verify-cleanup', f.config, input)).empty, true)
+  await assert.rejects(readFile(join(f.config.evidenceRoot, input.namespace, 'ledger.json')), { code: 'ENOENT' })
+  await assert.rejects(executeReadOnly('verify-cleanup', f.config, { ...input, evidenceRoot: 'relative' }), { code: 'READONLY_ACCEPTANCE_INPUT_INVALID' })
+})

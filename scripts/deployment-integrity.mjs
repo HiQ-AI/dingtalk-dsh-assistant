@@ -1,5 +1,5 @@
-import { readFile, readdir, lstat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readFile, readdir, lstat, mkdir, copyFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { DatabaseSync, backup } from 'node:sqlite'
 import { stripVTControlCharacters } from 'node:util'
@@ -7,12 +7,15 @@ import { maintenanceStatus } from '../packages/dingtalk-dsh-assistant/execution-
 
 const fail = code => { throw new Error(code) }
 const hash = value => createHash('sha256').update(value).digest('hex')
-const artifactName = /^sha256-[a-f0-9]{64}\.json$/
+const artifactName = /^(?:tasks\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\/)?sha256-[a-f0-9]{64}\.json$/
+const taskRef = ref => ref.startsWith('tasks/')
+const taskBackupExclusions = Object.freeze(['<logicalTaskId>/work/engineering/<24-hex>/ws-<64-hex>/repository/**/node_modules'])
+const excludedTaskDependency = path => /^[^/]+\/work\/engineering\/[a-f0-9]{24}\/ws-[a-f0-9]{64}\/repository\/(?:[^/]+\/)*node_modules$/.test(path)
 function collectArtifactRefs(value, refs, key = '', parent = null, depth = 0) {
   if (depth > 128) fail('BACKUP_ARTIFACT_CAPACITY')
   if (typeof value === 'string') {
     const referenceField = /(?:Ref|Refs|_ref|_refs)$/.test(key) || key === 'evidenceIds'
-      || key === 'ref' && parent?.digest === value.slice(7, -5)
+      || key === 'ref' && parent?.digest === basename(value).slice(7, -5)
     if (referenceField && artifactName.test(value)) refs.add(value)
     // 控制账的JSON容器及序列化引用列；正文/日志/用户文本不解析为引用。
     else if (/^(?:body|payload|args|result|config)$|_refs$/.test(key) && /^[\[{]/.test(value)) {
@@ -22,35 +25,78 @@ function collectArtifactRefs(value, refs, key = '', parent = null, depth = 0) {
   } else if (Array.isArray(value)) for (const child of value) collectArtifactRefs(child, refs, key, parent, depth + 1)
   else if (value && typeof value === 'object') for (const [childKey, child] of Object.entries(value)) collectArtifactRefs(child, refs, childKey, value, depth + 1)
 }
-export async function verifyArtifactClosure(directory, initialRefs, { maxArtifacts = 100000, maxBytes = 256 * 1024 * 1024 } = {}) {
+export async function verifyArtifactClosure(directory, initialRefs, { maxArtifacts = 100000, maxBytes = 256 * 1024 * 1024, taskDirectory } = {}) {
   const pending = new Set(initialRefs), visited = new Set(); let bytesRead = 0
   for (const ref of pending) {
     if (visited.has(ref)) continue
     if (!artifactName.test(ref)) fail('BACKUP_ARTIFACT_INVALID')
     if (visited.size >= maxArtifacts) fail('BACKUP_ARTIFACT_CAPACITY')
-    const path = join(directory, ref)
-    let info; try { info = await lstat(path) } catch { fail('BACKUP_ARTIFACT_MISSING') }
+    if (taskRef(ref) && !taskDirectory) fail('BACKUP_TASK_DIRECTORY_REQUIRED')
+    const path = taskRef(ref) ? join(taskDirectory, ref.split('/')[1], 'work/artifacts', basename(ref)) : join(directory, ref)
+    let info
+    try { await checkedDirectory(dirname(path)); info = await lstat(path) }
+    catch (error) { if (error.code === 'ENOENT') fail('BACKUP_ARTIFACT_MISSING'); throw error }
     if (!info.isFile() || info.isSymbolicLink()) fail('BACKUP_ARTIFACT_INVALID')
     if (bytesRead + info.size > maxBytes) fail('BACKUP_ARTIFACT_CAPACITY')
     const bytes = await readFile(path); bytesRead += bytes.length
     if (bytesRead > maxBytes) fail('BACKUP_ARTIFACT_CAPACITY')
-    if (`sha256-${hash(bytes)}.json` !== ref) fail('BACKUP_ARTIFACT_INVALID')
+    if (`sha256-${hash(bytes)}.json` !== basename(ref)) fail('BACKUP_ARTIFACT_INVALID')
     let value; try { value = JSON.parse(bytes.toString('utf8')) } catch { fail('BACKUP_ARTIFACT_INVALID') }
     visited.add(ref); collectArtifactRefs(value, pending)
   }
   return { artifactRefs: visited.size, artifactBytes: bytesRead }
 }
+async function checkedDirectory(path) {
+  if (typeof path !== 'string' || !isAbsolute(path)) fail('BACKUP_TASK_DIRECTORY_INVALID')
+  const parent = dirname(path)
+  if (parent !== path) await checkedDirectory(parent)
+  const info = await lstat(path)
+  if (!info.isDirectory() || info.isSymbolicLink()) fail('BACKUP_LINK_UNSAFE')
+}
+
+/** 部署零写检查：任务工件存在时必须明确纳入任务根，禁止默默漏备份。 */
+export async function checkDeploymentTaskDirectory({ dbPath, taskDirectory }) {
+  const db = new DatabaseSync(dbPath, { readOnly: true })
+  let refs
+  try { refs = databaseProof(db).refs.filter(taskRef) } finally { db.close() }
+  if (refs.length && !taskDirectory) fail('BACKUP_TASK_DIRECTORY_REQUIRED')
+  let taskBytes = 0
+  if (taskDirectory) {
+    await checkedDirectory(taskDirectory)
+    for (const path of await files(taskDirectory, '', true)) taskBytes += (await lstat(join(taskDirectory, path))).size
+    await verifyArtifactClosure(join(dirname(dbPath), 'artifacts'), refs, { taskDirectory })
+  }
+  return { taskDirectory: taskDirectory ? resolve(taskDirectory) : null, taskArtifactRefs: refs.length, taskBytes, taskBackupExclusions: taskDirectory ? taskBackupExclusions : [], writes: 0 }
+}
 const profileFiles = ['cordis.patch.yml','cordis.yml','package.json','package-lock.json','settings.yaml','pnpm-lock.yaml']
-async function files(root, prefix = '') {
+async function files(root, prefix = '', excludeTaskDependencies = false) {
   const result = []
   for (const entry of await readdir(join(root, prefix), { withFileTypes: true })) {
     const path = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (excludeTaskDependencies && excludedTaskDependency(path) && (entry.isDirectory() || entry.isSymbolicLink())) continue
     if (entry.isSymbolicLink()) fail('BACKUP_LINK_UNSAFE')
-    if (entry.isDirectory()) result.push(...await files(root, path))
+    if (entry.isDirectory()) result.push(...await files(root, path, excludeTaskDependencies))
     else if (entry.isFile()) result.push(path)
     else fail('BACKUP_FILE_UNSAFE')
   }
   return result.sort()
+}
+/** 只复制已枚举普通文件；在进入 node_modules 之前裁剪，绝不遍历其链接目标。 */
+export async function copyDeploymentTaskDirectory({ taskDirectory, destination }) {
+  await checkedDirectory(taskDirectory)
+  if (!isAbsolute(destination ?? '')) fail('BACKUP_TASK_DIRECTORY_INVALID')
+  await checkedDirectory(dirname(destination))
+  const selected = await files(taskDirectory, '', true)
+  await mkdir(destination)
+  for (const path of selected) {
+    const source = join(taskDirectory, path), target = join(destination, path)
+    await checkedDirectory(dirname(source))
+    const info = await lstat(source)
+    if (!info.isFile() || info.isSymbolicLink()) fail('BACKUP_FILE_UNSAFE')
+    await mkdir(dirname(target), { recursive: true })
+    await copyFile(source, target)
+  }
+  return { copiedFiles: selected.length, taskBackupExclusions }
 }
 function databaseProof(db) {
   if (db.prepare('PRAGMA integrity_check').all().some(row => Object.values(row)[0] !== 'ok')
@@ -84,7 +130,8 @@ export async function checkpointDeploymentDatabase({ dbPath, instanceId, probeSt
 }
 
 /** 只写本轮备份目录内的一致SQLite副本；源文件及运行库均只读。 */
-export async function verifyDeploymentBackup({ runtime, domain, profile, backupRoot }) {
+export async function verifyDeploymentBackup({ runtime, domain, profile, backupRoot, taskDirectory }) {
+  if (taskDirectory) await checkedDirectory(taskDirectory)
   const manifest = []
   async function compare(source, target, label) {
     if (!(await lstat(source)).isFile() || !(await lstat(target)).isFile()) fail('BACKUP_FILE_UNSAFE')
@@ -92,8 +139,8 @@ export async function verifyDeploymentBackup({ runtime, domain, profile, backupR
     if (hash(sourceBytes) !== hash(targetBytes)) fail('BACKUP_COPY_MISMATCH')
     manifest.push({ path: label, bytes: sourceBytes.length, sha256: hash(sourceBytes) })
   }
-  for (const [source, target, label] of [[domain,join(backupRoot,'domain'),'domain'], [join(runtime,'artifacts'),join(backupRoot,'runtime/artifacts'),'runtime/artifacts']]) {
-    const sourceFiles = await files(source), targetFiles = await files(target)
+  for (const [source, target, label] of [[domain,join(backupRoot,'domain'),'domain'], [join(runtime,'artifacts'),join(backupRoot,'runtime/artifacts'),'runtime/artifacts'], ...(taskDirectory ? [[taskDirectory,join(backupRoot,'tasks'),'tasks']] : [])]) {
+    const sourceFiles = await files(source, '', label === 'tasks'), targetFiles = await files(target)
     if (JSON.stringify(sourceFiles) !== JSON.stringify(targetFiles)) fail('BACKUP_FILE_SET_MISMATCH')
     for (const path of sourceFiles) await compare(join(source,path),join(target,path),`${label}/${path}`)
   }
@@ -110,24 +157,28 @@ export async function verifyDeploymentBackup({ runtime, domain, profile, backupR
   let restored
   try { restored = databaseProof(restoredDb) } finally { restoredDb.close() }
   if (JSON.stringify(original) !== JSON.stringify(restored)) fail('BACKUP_DATABASE_READBACK_MISMATCH')
-  const closure = await verifyArtifactClosure(join(backupRoot,'runtime/artifacts'), restored.refs)
-  return { verified: true, manifest, database: { restoreFile: 'runtime/verified-control.sqlite',
+  const closure = await verifyArtifactClosure(join(backupRoot,'runtime/artifacts'), restored.refs, { taskDirectory: taskDirectory ? join(backupRoot, 'tasks') : undefined })
+  return { verified: true, ...(taskDirectory ? { taskDirectory: resolve(taskDirectory), taskBackupExclusions } : {}), manifest, database: { restoreFile: 'runtime/verified-control.sqlite',
     sha256: hash(await readFile(restoredPath)), tables: restored.tables, ...closure } }
 }
 
 /** 失败启动后只读复核原备份；安装后的 profile 依赖文件不再与安装前备份比较。 */
-export async function reverifyDeploymentBackup({ backupRoot, domain, runtime }) {
+export async function reverifyDeploymentBackup({ backupRoot, domain, runtime, taskDirectory }) {
   const proof = JSON.parse(await readFile(join(backupRoot, 'manifest.json'), 'utf8'))
   if (proof.verified !== true || !Array.isArray(proof.manifest) || proof.database?.restoreFile !== 'runtime/verified-control.sqlite') fail('BACKUP_MANIFEST_INVALID')
+  if (proof.taskDirectory && JSON.stringify(proof.taskBackupExclusions) !== JSON.stringify(taskBackupExclusions)) fail('BACKUP_MANIFEST_INVALID')
+  if (proof.taskDirectory && (!taskDirectory || relative(resolve(taskDirectory), proof.taskDirectory) !== '')) fail('BACKUP_TASK_DIRECTORY_REQUIRED')
+  if (taskDirectory) await checkedDirectory(taskDirectory)
   const expected = new Set(['manifest.json', proof.database.restoreFile])
   for (const item of proof.manifest) {
-    if (!/^(domain|runtime|profile)\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\\]+$/.test(item.path) || expected.has(item.path)) fail('BACKUP_MANIFEST_INVALID')
+    if (!/^(domain|runtime|profile|tasks)\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\\]+$/.test(item.path) || expected.has(item.path)) fail('BACKUP_MANIFEST_INVALID')
     expected.add(item.path)
     const bytes = await readFile(join(backupRoot, item.path))
     if (bytes.length !== item.bytes || hash(bytes) !== item.sha256) fail('BACKUP_COPY_MISMATCH')
     // 原业务文件必须仍然一致；控制账通过原 control-before 和逻辑历史核对。
-    if (item.path.startsWith('domain/') || item.path.startsWith('runtime/artifacts/')) {
-      const current = item.path.startsWith('domain/') ? join(domain, item.path.slice(7)) : join(runtime, item.path.slice(8))
+    if (item.path.startsWith('domain/') || item.path.startsWith('runtime/artifacts/') || item.path.startsWith('tasks/')) {
+      if (item.path.startsWith('tasks/') && !taskDirectory) fail('BACKUP_TASK_DIRECTORY_REQUIRED')
+      const current = item.path.startsWith('tasks/') ? join(taskDirectory, item.path.slice(6)) : item.path.startsWith('domain/') ? join(domain, item.path.slice(7)) : join(runtime, item.path.slice(8))
       if (hash(await readFile(current)) !== item.sha256) fail('BACKUP_SOURCE_CHANGED')
     }
   }
@@ -140,9 +191,9 @@ export async function reverifyDeploymentBackup({ backupRoot, domain, runtime }) 
     expected.add(wal); expected.add(shm)
   }
   if (JSON.stringify(actual) !== JSON.stringify([...expected].sort())) fail('BACKUP_FILE_SET_MISMATCH')
-  for (const [prefix, current] of [['domain/', domain], ['runtime/artifacts/', join(runtime, 'artifacts')]]) {
+  for (const [prefix, current] of [['domain/', domain], ['runtime/artifacts/', join(runtime, 'artifacts')], ...(proof.taskDirectory ? [['tasks/', taskDirectory]] : [])]) {
     const recorded = proof.manifest.filter(item => item.path.startsWith(prefix)).map(item => item.path.slice(prefix.length)).sort()
-    if (JSON.stringify(await files(current)) !== JSON.stringify(recorded)) fail('BACKUP_SOURCE_FILE_SET_CHANGED')
+    if (JSON.stringify(await files(current, '', prefix === 'tasks/')) !== JSON.stringify(recorded)) fail('BACKUP_SOURCE_FILE_SET_CHANGED')
   }
   const restoredPath = join(backupRoot, proof.database.restoreFile)
   if (hash(await readFile(restoredPath)) !== proof.database.sha256) fail('BACKUP_DATABASE_READBACK_MISMATCH')
@@ -150,7 +201,7 @@ export async function reverifyDeploymentBackup({ backupRoot, domain, runtime }) 
   let restored
   try { restored = databaseProof(db) } finally { db.close() }
   if (JSON.stringify(restored.tables) !== JSON.stringify(proof.database.tables)) fail('BACKUP_DATABASE_READBACK_MISMATCH')
-  const closure = await verifyArtifactClosure(join(backupRoot, 'runtime/artifacts'), restored.refs)
+  const closure = await verifyArtifactClosure(join(backupRoot, 'runtime/artifacts'), restored.refs, { taskDirectory: proof.taskDirectory ? join(backupRoot, 'tasks') : undefined })
   return { verified: true, files: proof.manifest.length, tables: restored.tables.length, ...closure, writes: 0 }
 }
 

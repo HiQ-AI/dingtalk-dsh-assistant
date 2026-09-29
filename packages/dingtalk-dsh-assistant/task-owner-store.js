@@ -1,6 +1,7 @@
 import { acceptanceCriteriaSchema, acceptanceCriterionSchema } from './task-input-contract.js'
 import { createHash } from 'node:crypto'
 import { maintenanceStatus } from './execution-maintenance.js'
+import { parseArtifactReference } from './execution-artifacts.js'
 
 // Task Owner 的事件、租约和决定与执行账共用 SQLite 单写事务。
 const fail = code => { throw Object.assign(new Error(code), { code }) }
@@ -347,8 +348,9 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     const chosen = JSON.parse(t.candidate_json)
     if (a.deliveryManifestRef !== undefined) {
       ref(a.deliveryManifestRef)
-      if (chosen.action !== 'complete' || !/^sha256-[a-f0-9]{64}\.json$/.test(a.deliveryManifestRef))
-        fail('TASK_OWNER_DELIVERY_MANIFEST_INVALID')
+      if (chosen.action !== 'complete') fail('TASK_OWNER_DELIVERY_MANIFEST_INVALID')
+      try { parseArtifactReference(a.deliveryManifestRef) }
+      catch { fail('TASK_OWNER_DELIVERY_MANIFEST_INVALID') }
     }
     const currentTask = task(db, o.task_id)
     const activeStage = db.prepare(`SELECT status FROM task_plan_stages WHERE task_id=? AND plan_revision=?

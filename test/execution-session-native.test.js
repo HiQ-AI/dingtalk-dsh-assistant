@@ -1,11 +1,11 @@
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
-import { sessionWorkspace } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
+import { sessionWorkspace, taskDirectories, taskFilePath } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
@@ -608,6 +608,48 @@ test('同消息不同unit原生并行且取消只排空目标unit',async t=>{
  assert.equal(h.manager.assertDrained(messageBinding()),true)
  assert.equal(h.manager.assertDrained(secondBinding),true)
  assert.ok((await h.ctx.sessionPersistence.inspect(secondBinding.sessionId)).events.some(e=>e.type==='tool/result'))
+})
+
+
+test('任务原生节点工作目录隔离，宿主重启恢复原cwd且原始日志仍位于sessions根', async t => {
+  const root = await temp(), selected = []
+  const identities = [binding({ taskId: 'task-a', runId: 'run-a', nodeRunId: 'node-a', sessionId: 'session-a' }),
+    binding({ taskId: 'task-a', runId: 'run-a2', nodeRunId: 'node-b', sessionId: 'session-b' }),
+    binding({ taskId: 'task-b', runId: 'run-b', nodeRunId: 'node-a', sessionId: 'session-c' })]
+  const h = await host({ root, script: () => submit('isolated'), getWorkspaceDir: async ({ binding: current, input }) => {
+    selected.push({ taskId: current.taskId, nodeRunId: current.nodeRunId, input })
+    await taskDirectories(root, current.taskId)
+    const directory = taskFilePath(root, current.taskId, 'work', current.nodeRunId)
+    await mkdir(directory, { recursive: true })
+    return directory
+  } })
+  t.after(() => h.close())
+  const locations = []
+  for (const identity of identities) {
+    assert.equal((await drive(h, { binding: identity, input: { request: '目录隔离', taskId: 'forged', cwd: root } })).status, 'submitted')
+    const saved = await h.ctx.sessionPersistence.inspect(identity.sessionId)
+    const expected = taskFilePath(root, identity.taskId, 'work', identity.nodeRunId)
+    assert.equal(saved.meta.cwd, expected)
+    await writeFile(join(expected, 'draft.txt'), identity.sessionId)
+    const location = h.ctx.sessionPersistence.locate(saved.meta).path
+    assert.ok(location.startsWith(join(root, 'sessions') + sep))
+    assert.ok(!(location.startsWith(join(root, 'tasks') + sep)))
+    assert.match(await readFile(location, 'utf8'), /dingtalk\/execution-session/)
+    locations.push(location)
+  }
+  assert.deepEqual(selected.map(({ taskId, nodeRunId }) => ({ taskId, nodeRunId })),
+    identities.map(({ taskId, nodeRunId }) => ({ taskId, nodeRunId })))
+  assert.equal(new Set(locations).size, 3)
+  for (const identity of identities)
+    assert.equal(await readFile(join(taskFilePath(root, identity.taskId, 'work', identity.nodeRunId), 'draft.txt'), 'utf8'), identity.sessionId)
+  await h.close()
+  const resumed = await host({ root, getWorkspaceDir: () => { throw new Error('must not reselect persisted cwd') } })
+  t.after(() => resumed.close())
+  assert.equal((await drive(resumed, { binding: { ...identities[0], leaseEpoch: 2, sessionBound: true } })).status, 'submitted')
+  const saved = await resumed.ctx.sessionPersistence.inspect(identities[0].sessionId)
+  assert.equal(saved.meta.cwd, taskFilePath(root, 'task-a', 'work', 'node-a'))
+  assert.equal(resumed.ctx.sessionPersistence.locate(saved.meta).path, locations[0])
+  assert.deepEqual(leases(saved.events), [1, 2])
 })
 
 }

@@ -163,7 +163,10 @@ test('complete 仅接纳当前计划全部阶段具有产物与证据的成功�
     assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 }),
       { code: 'TASK_OWNER_COMPLETION_UNPROVEN' })
     f.db.prepare("UPDATE task_plan_stages SET status='succeeded',output_ref='proof/output.json',evidence_refs='[\"proof/result.json\"]' WHERE task_id='task-1'").run()
-    assert.equal(f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 }).status, 'accepted')
+    assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
+      deliveryManifestRef: 'tasks/task-1/not-a-digest.json' }), { code: 'TASK_OWNER_DELIVERY_MANIFEST_INVALID' })
+    const deliveryManifestRef = `tasks/task-1/sha256-${'a'.repeat(64)}.json`
+    assert.equal(f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1, deliveryManifestRef }).status, 'accepted')
     assert.equal(f.read('task.owner').decision.action, 'complete')
   } finally { f.db.close() }
 })

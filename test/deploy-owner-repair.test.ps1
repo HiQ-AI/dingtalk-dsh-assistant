@@ -198,3 +198,19 @@ foreach($change in @(@{active=$false},@{phase='draining'},@{drained=$false},@{re
  if(-not $rejected){throw '离线修复必须拒绝封存许可变化'}
 }
 Write-Output 'PASS 8/8: 原封存许可通过；active/phase/drained/revision/ID/incarnation/busy变化拒绝'
+
+# TaskDirectory 检查通过正式只读 checker 传递；拒绝时不进入备份写入。
+$taskProofAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$taskDirectoryProof'},$true)
+$TaskDirectory='D:/fixture-agent/tasks';$checker='checker.mjs';$script:taskCheckCalls=0
+function Run-Node([string[]]$Arguments){
+ $script:taskCheckCalls++
+ if(($Arguments -join '|')-ne 'checker.mjs|task-directory-check|D:/fixture-agent/tasks'){throw '任务目录检查参数不匹配'}
+ '{"taskDirectory":"D:/fixture-agent/tasks","taskArtifactRefs":1,"writes":0}'
+}
+Invoke-Expression $taskProofAssignment.Extent.Text
+if($script:taskCheckCalls-ne 1 -or $taskDirectoryProof.writes-ne 0){throw '任务目录须经只读检查'}
+function Run-Node([string[]]$Arguments){throw 'BACKUP_TASK_DIRECTORY_REQUIRED'}
+$failed=$false
+try{Invoke-Expression $taskProofAssignment.Extent.Text}catch{$failed=$_.Exception.Message-eq 'BACKUP_TASK_DIRECTORY_REQUIRED'}
+if(-not $failed){throw '任务目录漏参不得继续备份'}
+Write-Output 'PASS 2/2: 显式任务目录进入只读检查；缺目录失败阻断编排'

@@ -555,3 +555,26 @@ test('外部检查未排空跨Store重启保留屏障，真实存活父子进程
   await promisify(execFile)('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true})
   for(const pid of pids)assert.throws(()=>process.kill(pid,0));child=null
 })
+
+
+test('任务新输入按任务归属写入，执行输出和失败证据沿用持久输入引用', async t => {
+  for (const failed of [false, true]) await t.test(failed ? '失败证据及新输入' : '成功输出', async child => {
+    const { controller, artifacts } = await setup(child, workflow(failed ? async () => {
+      throw Object.assign(new Error('synthetic'), { evidence: [{ detail: 'failure proof' }] })
+    } : undefined))
+    const writes = [], put = artifacts.put
+    artifacts.put = async (value, options) => { writes.push({ value, options }); return put(value, options) }
+    await controller.createRun({ commandId: 'create-routing', taskId: 'task-routing', runId: 'run-routing', workflowId: 'synthetic', input: 2 })
+    let state = await controller.whenIdle('run-routing')
+    assert.equal(writes[0].options.taskId, 'task-routing')
+    for (const entry of writes.slice(1)) assert.match(entry.options.reference, /^sha256-/)
+    if (failed) {
+      assert.ok(writes.some(entry => entry.value?.detail === 'failure proof'))
+      assert.ok(writes.some(entry => entry.value?.kind === 'execution-failure'))
+      const before = writes.length
+      await controller.changeInput({ commandId: 'change-routing', runId: 'run-routing', inputId: 'input-routing', sourceKey: 'source-routing', input: 3 })
+      await controller.whenIdle('run-routing')
+      assert.equal(writes[before].options.reference, state.run.requirementRef)
+    }
+  })
+})

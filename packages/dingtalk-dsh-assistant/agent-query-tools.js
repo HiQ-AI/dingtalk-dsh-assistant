@@ -42,7 +42,7 @@ export function createAgentQueryTools({ capabilities, resolveScope, artifacts })
         const evidence = { kind: 'agent-query-evidence', execution, scopeDigest, capabilityId: capability.id,
           capabilityIdentity: capability.identity, inputDigest: executionDigest(args), result: output, verification: { sourceRefs: verification.sourceRefs, outputDigest: executionDigest(output) },
           observedAt: new Date().toISOString() }
-        const stored = await artifacts.put(evidence)
+        const stored = await artifacts.put(evidence, execution.kind === 'message-unit' ? undefined : { taskId: execution.taskId, reference: binding.inputRef })
         return { evidenceRef: stored.ref, result: output, sourceRefs: verification.sourceRefs }
       },
     }
