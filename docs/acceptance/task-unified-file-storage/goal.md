@@ -2,7 +2,7 @@
 
 > 状态：ACTIVE
 > Goal ID：task-unified-file-storage
-> 最近维护：2026-09-29T18:57:19+08:00
+> 最近维护：2026-09-29T19:49:49+08:00
 > 权威目标：D:/codex/worktrees/task-unified-files/dingtalk-dsh-assistant/docs/acceptance/task-unified-file-storage/goal.md
 
 ## 总目标
@@ -32,15 +32,15 @@
 | SG4 | 集成与回归 | 普通/工程/重跑/重启/隔离反例通过 | 完成 | matrix.csv、round-2.md；文件 symlink 为环境限制 |
 | SG5 | 文档与 PR | README/runbook 更新，提交与 PR 独立读回 | 完成 | PR #142 OPEN；main ← worktree-task-unified-files |
 
-| SG6 | 上线验收 | 精确安装、进程/健康/业务读回通过 | 进行中 | PID9152，精确包99文件/真实群下载/实际重启及旧任务读回通过；Owner收口待验 |
+| SG6 | 上线验收 | 精确安装、进程/健康/业务读回通过 | 进行中 | PID8080，r14精确包99文件/真实群下载/实际重启及旧任务读回通过；Owner完成候选被语义路径拒绝待定位 |
 | SG7 | 两个完成任务迁移 | 明确身份、备份、自检、迁移后文件与历史可读 | 完成 | round-5.md；18368文件双路径SHA/inode；候选及API读回 |
 
-| SG8 | 真实验收关联阻塞闭环 | 合法no_action不阻塞后续任务，未归类消息仍阻断；重新部署续跑原验收消息 | 进行中 | round-6.md；只读SQL唯一合法终态阻塞者 |
+| SG8 | 真实验收关联阻塞闭环 | 合法no_action不阻塞后续任务，未归类消息仍阻断；重新部署续跑原验收消息 | 完成 | round-7/8/13/14.md；原生IB恢复且命令applied/settled，Owner独立完成门禁归SG6 |
 
 ## 当前检查点
 
 - 当前子目标：SG6
-- 唯一下一步：正式安装与实际重启、群附件及迁移任务读回已通过；修复IB完全相同任务事实重复占用，恢复同一任务Owner完成。
+- 唯一下一步：r14正式部署、IB及原生fact均通过；Owner完成候选结构门禁通过，独立重放语义路径定位拒绝原因，恢复同一任务完成。
 - 未闭环项：新验收Task的Owner完成门禁；正式群文件交付、重启恢复和两个完成任务迁移已独立验证，文件 symlink 环境限制保留披露。
 
 ## 进展

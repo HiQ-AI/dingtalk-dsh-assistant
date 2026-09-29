@@ -36,3 +36,8 @@ ib-task-only-sharing-budget,12,FAIL,round-12.md
 ib-lossless-budget-and-references,13,PASS,round-13.md
 ib-lossless-service-regression,13,PASS,round-13.md
 real-owner-completion-gate,13,FAIL,round-13.md
+message-required-arguments-contract,14,PASS,round-14.md
+formal-restart-and-file-readback,14,PASS,round-14.md
+migrated-task-restart-readback,14,PASS,round-14.md
+real-shared-topic-recovery,14,PASS,round-14.md
+real-owner-completion-gate,14,FAIL,round-14.md
