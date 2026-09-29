@@ -140,6 +140,9 @@ DSH 根据 Session 的 Agent 工作目录发现项目级 Skill，同时加载用
 
 ## 安装到 DSH
 
+从 0.5.x 升级到 1.0.0 前，先阅读[大版本升级边界](docs/ops/npm-release.md#100-升级边界)和[更新日志](CHANGELOG.md)。旧存储需要独立检查，不能仅替换包后直接打开。
+
+
 推荐让 Web、resident Runtime 和看板运行在同一个 DSH Web 进程中，避免两个进程同时写同一份 Session JSONL 和 storage domain。
 
 正式版本发布后，使用 DSH 原生插件命令安装根发行包；它会把 Assistant Runtime、Observer 看板和对应 bundle patch 一并装入 `web` profile。生产或验收环境建议固定版本：

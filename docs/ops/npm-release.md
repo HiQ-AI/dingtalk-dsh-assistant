@@ -46,3 +46,11 @@ gh release view v<version> --json tagName,url,assets
 ```
 
 OIDC 发布失败时依次核对：workflow 使用 GitHub 托管 runner；权限含 `id-token: write`；npm CLI 不低于 11.5.1；三个包的 Trusted Publisher 均精确匹配组织、仓库、`release.yml` 和 `NPM_PUBLISH`；三个 `package.json` 的 `repository.url` 精确指向当前公开仓库。`npm whoami` 不会显示 OIDC 身份，不能用它判断 Trusted Publishing 是否生效。
+
+## 1.0.0 升级边界
+
+1.0.0 汇总 0.5.15 之后的 workflow-v2、Task Owner、领域业务验收、文件投递及任务目录变化。升级前先按[本地部署说明](resident-review-local-deployment.md)确认运行实例和在途任务，保留控制库、Domain、原工件/会话目录、profile 与 Agent 工作区 `tasks/` 的完整备份。
+
+产品版本不决定存储迁移：只有旧 JSON domain v8 才执行[工作流存储迁移](workflow-storage-migration.md)，v6/v7 先经[Topic 迁移](topic-storage-migration.md)到 v8；已切换 v9 / workflow-v2 的实例不得重复迁移。历史冻结工作流按原摘要恢复，旧任务文件默认原路径读取；终态任务收纳只按明确计划操作，DSH 原始会话目录保持原位。
+
+新数据或外部效果发生后不能直接恢复旧快照；先停止派发和对账，再制定保留新增事实的回退或前向修复方案。包发布、实例升级、业务完成和真实渠道送达分别回读，npm 发布成功不代表任何实例已升级。
