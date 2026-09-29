@@ -334,6 +334,14 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 
 切换后分别验证新普通文件任务、工程检查/验收、Web 重执行、重启后的文件下载和历史任务读取。核对原始 JSONL 仍在宿主 Session 根；本地定向测试不代表正式实例或真实钉钉送达已经验证。
 
+### 用户指定终态任务的文件收纳
+
+只有用户指定的已完成任务才能使用 `-TaskMigrationPlan <绝对JSON路径>`；计划逐项列出 source/destination 及可再生缓存排除，冻结已审阅 manifest 摘要。`scripts/migrate-task-file-links.mjs --check <plan>` 零写检查普通文件、同卷、全部祖先无链接、目标不存在、源 SHA 和文件身份；工具不自行判断业务终态，部署前从实际控制库及 API 确认身份、终态和所有代次。
+
+部署完整参数先加 `-Check`。执行时维护排空、停止原实例、持 Owner 独占锁，在原完整备份外另存去重迁移源普通文件到备份同级目录，逐项 SHA 核验。计划、工具、包及配置摘要均冻结；随后落 fsync journal，rename 到任务根并在旧路径建立同文件硬链接，独立核对摘要、inode、device。中断按 journal 回退，冲突拒绝；Readback/Resume 只验证原 journal、独立迁移备份及原完整备份，不能重执行计划。
+
+这是两个入口指向同文件的收纳；旧绝对路径、candidate 冻结身份及历史引用保持有效，不改任务状态或原始会话日志。原地写会同时改变两入口，原子替换会分叉，故仅处理终态旧执行，后续重执行用新布局。缺失的历史会话文件必须记录 missing，不能声称已保全。迁移不含共享凭据、公共源仓库、固定工具或日志；node_modules 排除仅按审核计划显式列出。恢复先独立核验迁移源备份清单及摘要，再在停机锁内按 journal 恢复原路径，确认完整控制账检查点与工程身份后启动。
+
 ### 已确认送达通知的单次对账恢复
 
 当唯一未排空事项是已ACK的通知，且发送状态与独立消息回读均证明送达，可使用既有 `recover-quarantined-echo.ps1 -Scope notification -IncidentManifest <本工作树docs/tmp内绝对JSON路径>`。事故清单绑定通知、原消息、群、ACK操作、租约、通知摘要及维护初始版本；仅保留本地，禁止将真实主体和渠道标识提交公开仓库。
@@ -395,3 +403,4 @@ Web重执行群名修复：不迁移数据。安装后只读核对/state/tasks�
 先运行以上参数加 `-Check`：零写核对原 launch/封存记录/backup/control-before、当前维护 ID/revision/incarnation、全部历史记录、原完整备份的清单/摘要/SQLite 全表与工件闭包、当前业务文件和工件全集以及源码与包字节。原生安装改变的 profile 依赖文件不与安装前备份比较，但原 profile 配置 SHA 必须不变。备份一致性副本仅允许原只读连接留下的空 WAL 与固定 32768 字节 SHM，其他新增文件拒绝。
 
 Check 通过后去掉 `-Check` 执行。执行分支持有 EXCLUSIVE owner 锁，重新完成预检后调用原生 `plugin --profile web add`，持续持锁至安装包与历史再次核验完成；不执行 SQL 修复、不回滚数据库、不应用配置、不解除维护。旧证据保留，新证据目录继承 control-before 并生成新的 launch.json。启动后无论 ready 与否均保持维护；后续以本次相同参数加 `-Readback` 回读，业务验证通过后才明确执行 `-Resume`。Check 不获取写锁，执行时锁竞争仍会明确拒绝。
+

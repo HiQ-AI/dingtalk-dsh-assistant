@@ -214,3 +214,56 @@ $failed=$false
 try{Invoke-Expression $taskProofAssignment.Extent.Text}catch{$failed=$_.Exception.Message-eq 'BACKUP_TASK_DIRECTORY_REQUIRED'}
 if(-not $failed){throw '任务目录漏参不得继续备份'}
 Write-Output 'PASS 2/2: 显式任务目录进入只读检查；缺目录失败阻断编排'
+
+$migrationFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Invoke-TaskFileMigration'},$true)
+Invoke-Expression $migrationFunction.Extent.Text
+$backup='D:/fixture/backup'
+$TaskMigrationPlan='D:/fixture/plan.json';$workspace='D:/fixture/repo';$EvidenceDirectory='D:/fixture/evidence'
+$migrationToolSha256='expected'
+$inputHashes=@{'D:/fixture/plan.json'='expected';'D:/fixture/repo/scripts/migrate-task-file-links.mjs'='expected'};$lockProcess=@{HasExited=$false}
+$script:migrationCalls=@();$script:migrationWrites=0;$script:migrationJournalExists=$true
+function Run-Node([string[]]$Arguments){$script:migrationCalls+=,$Arguments;'{"verified":true}'}
+function Set-Content {param($LiteralPath,[Parameter(ValueFromPipeline)]$Value) process {$script:migrationWrites++}}
+function Test-Path {param($LiteralPath,$PathType) $script:migrationJournalExists}
+function Get-FileHash {param($LiteralPath) @{Hash='expected'}}
+function Listeners {@()}
+[void](Invoke-TaskFileMigration 'check')
+if($script:migrationWrites-ne 0 -or $script:migrationCalls.Count-ne 1 -or $script:migrationCalls[0][1]-ne '--check' -or $script:migrationCalls[0].Count-ne 3){throw '迁移Check必须只读且不提供journal路径'}
+$script:migrationCalls=@();[void](Invoke-TaskFileMigration 'execute')
+if($script:migrationCalls[0][3]-ne 'D:/fixture/backup-task-migration-source'){throw '迁移源副本必须独立于完整backup文件集合'}
+if($script:migrationWrites-ne 4 -or ($script:migrationCalls|ForEach-Object {$_[1]})-join ',' -ne '--backup,--verify-backup,--execute,--verify'){throw '迁移必须先备份独立核验、再执行独立核验并保存证据'}
+$script:migrationCalls=@();$script:migrationWrites=0
+[void](Invoke-TaskFileMigration 'verify' 'expected' $backup 'expected')
+if($script:migrationWrites-ne 0 -or $script:migrationCalls.Count-ne 2 -or ($script:migrationCalls|ForEach-Object {$_[1]})-join ',' -ne '--verify-backup,--verify'){throw '接续迁移只读验证不能重演execute'}
+$lockProcess.HasExited=$true;$failed=$false
+try{Invoke-TaskFileMigration 'execute'}catch{$failed=$true}
+if(-not $failed){throw '迁移不能丢失owner锁'}
+$lockProcess.HasExited=$false;$inputHashes[$TaskMigrationPlan]='changed';$failed=$false
+try{Invoke-TaskFileMigration 'execute'}catch{$failed=$true}
+if(-not $failed){throw '迁移不能接受计划摘要漂移'}
+$inputHashes[$TaskMigrationPlan]='expected';$script:migrationJournalExists=$false;$failed=$false
+try{Invoke-TaskFileMigration 'verify' 'expected' $backup 'expected'}catch{$failed=$true}
+if(-not $failed){throw '接续不能遗漏journal'}
+$script:migrationJournalExists=$true;$script:migrationCalls=@()
+function Run-Node([string[]]$Arguments){$script:migrationCalls+=,$Arguments;throw 'MIGRATION_FAILED'}
+$failed=$false;try{Invoke-TaskFileMigration 'execute'}catch{$failed=$true}
+if(-not $failed -or $script:migrationCalls.Count-ne 1){throw '迁移失败必须中断不能继续verify或安装'}
+Write-Output 'PASS 7/7: 迁移check零写、锁内执行独立核验、接续只verify；锁丢失/计划漂移/journal缺失/执行失败拒绝'
+
+$migrationToolSha256='different'
+foreach($mode in @('check','execute','verify')) {
+ $failed=$false
+ try{Invoke-TaskFileMigration $mode 'expected'}catch{$failed=$_.Exception.Message-eq '任务迁移工具摘要漂移'}
+ if(-not $failed){throw "迁移工具漂移未阻断 $mode"}
+}
+$migrationToolSha256='expected';$inputHashes['D:/fixture/repo/scripts/migrate-task-file-links.mjs']='different'
+$failed=$false
+try{Invoke-TaskFileMigration 'execute'}catch{$failed=$_.Exception.Message-eq '任务迁移工具冻结摘要不一致'}
+if(-not $failed){throw '迁移工具与冻结输入摘要不一致未阻断'}
+Write-Output 'PASS 4/4: 迁移工具Check/Execute/Verify实时摘要漂移与冻结输入不一致均拒绝'
+
+$inputHashes['D:/fixture/repo/scripts/migrate-task-file-links.mjs']='expected'
+$failed=$false
+try{Invoke-TaskFileMigration 'verify' 'expected' $backup 'wrong'}catch{$failed=$_.Exception.Message-eq '任务迁移源备份清单摘要漂移'}
+if(-not $failed){throw '接续不能接受迁移源备份清单摘要漂移'}
+Write-Output 'PASS 2/2: 迁移源备份使用sibling目录；接续拒绝备份清单摘要漂移'

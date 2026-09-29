@@ -6,6 +6,7 @@ param(
   [switch]$HoldMaintenance,
   [string]$RepairStoppedLaunch,
   [string]$TaskDirectory,
+  [string]$TaskMigrationPlan,
   [string]$EnrollmentProposal,
   [string]$ContinueMaintenanceId,
   [Nullable[int]]$ExpectedMaintenanceRevision,
@@ -36,6 +37,7 @@ $starter='D:/project/dingtalk-dsh-assistant/scripts/start-web.ps1'
 $enrollmentTaskName='DSH Web Local'
 function Assert-DeploymentMode {
  if($RepairStoppedLaunch){
+  if($TaskMigrationPlan){throw '离线修复不能新增任务文件迁移；须走完整备份部署'}
   if($Bundle -or $MergePolicy -or $ChecksProposal -or $Bootstrap -or $EnrollmentProposal -or $ObserverPackage -or $ContinueMaintenanceId -or $null-ne $ExpectedMaintenanceRevision){throw '离线修复只允许更换Assistant包，沿用原封存许可'}
   return
  }
@@ -47,8 +49,10 @@ function Assert-DeploymentMode {
 Assert-DeploymentMode
 $observerSource="$workspace/packages/dingtalk-dsh-observer"
 $observerInstalled="$profile/node_modules/@zzusp/dingtalk-dsh-observer"
-$deploymentInputs=@($Package)+@(@($Bundle,$MergePolicy,$ChecksProposal,$DirectQueriesProposal,$ObserverPackage)|Where-Object {$_})
+$deploymentInputs=@($Package)+@(@($Bundle,$MergePolicy,$ChecksProposal,$DirectQueriesProposal,$ObserverPackage,$TaskMigrationPlan)|Where-Object {$_})
 if($EnrollmentProposal){$deploymentInputs+= $EnrollmentProposal}
+if($TaskMigrationPlan){$deploymentInputs+="$workspace/scripts/migrate-task-file-links.mjs"}
+$migrationToolSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath "$workspace/scripts/migrate-task-file-links.mjs").Hash}else{''}
 foreach($path in $deploymentInputs) {
  if(-not [IO.Path]::IsPathFullyQualified($path) -or -not(Test-Path -LiteralPath $path -PathType Leaf)){throw '输入文件须为存在的绝对路径'}
 }
@@ -166,6 +170,32 @@ function Assert-InputHashes {
  if((Get-FileHash -LiteralPath $Package).Hash.ToLowerInvariant()-ne $ExpectedPackageSha256.ToLowerInvariant()){throw 'package SHA不匹配'}
  if((Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash.ToLowerInvariant()-ne $ExpectedProfileSha256.ToLowerInvariant()){throw 'profile CAS不匹配'}
 }
+function Invoke-TaskFileMigration([string]$Mode,[string]$ExpectedJournalSha256='',[string]$BackupRoot=$backup,[string]$ExpectedBackupSha256='') {
+ if(-not $TaskMigrationPlan){return}
+ $tool="$workspace/scripts/migrate-task-file-links.mjs"
+ $journal="$EvidenceDirectory/task-file-migration.json"
+ if((Get-FileHash -LiteralPath $tool).Hash-ne $migrationToolSha256){throw '任务迁移工具摘要漂移'}
+ if($Mode-ne 'check' -and $inputHashes -and $inputHashes.ContainsKey($tool) -and $inputHashes[$tool]-ne $migrationToolSha256){throw '任务迁移工具冻结摘要不一致'}
+ if($Mode-eq 'check'){return Run-Node @($tool,'--check',$TaskMigrationPlan)}
+ if($Mode-eq 'execute'){
+  if(-not $lockProcess -or $lockProcess.HasExited -or @(Listeners).Count){throw '任务文件迁移要求停机且持有owner独占锁'}
+  if((Get-FileHash -LiteralPath $TaskMigrationPlan).Hash-ne $inputHashes[$TaskMigrationPlan]){throw '任务迁移计划摘要漂移'}
+  if(-not $BackupRoot){throw '任务迁移源备份目录缺失'}
+  Run-Node @($tool,'--backup',$TaskMigrationPlan,"${BackupRoot}-task-migration-source")|Set-Content "$EvidenceDirectory/task-file-migration-backup.json"
+  Run-Node @($tool,'--verify-backup',"${BackupRoot}-task-migration-source/backup-manifest.json")|Set-Content "$EvidenceDirectory/task-file-migration-backup-verified.json"
+  Run-Node @($tool,'--execute',$TaskMigrationPlan,$journal)|Set-Content "$EvidenceDirectory/task-file-migration-execute.json"
+ }elseif($Mode-ne 'verify'){throw '任务文件迁移模式无效'}
+ if($Mode-eq 'verify'){
+  if(-not $BackupRoot -or -not(Test-Path -LiteralPath "${BackupRoot}-task-migration-source/backup-manifest.json" -PathType Leaf)){throw '任务迁移源备份清单缺失'}
+  if(-not $ExpectedBackupSha256 -or (Get-FileHash -LiteralPath "${BackupRoot}-task-migration-source/backup-manifest.json").Hash-ne $ExpectedBackupSha256){throw '任务迁移源备份清单摘要漂移'}
+  [void](Run-Node @($tool,'--verify-backup',"${BackupRoot}-task-migration-source/backup-manifest.json"))
+ }
+ if(-not(Test-Path -LiteralPath $journal -PathType Leaf)){throw '任务文件迁移journal缺失'}
+ if($ExpectedJournalSha256 -and (Get-FileHash -LiteralPath $journal).Hash-ne $ExpectedJournalSha256){throw '任务文件迁移journal摘要漂移'}
+ $proof=Run-Node @($tool,'--verify',$journal)
+ if($Mode-eq 'execute'){$proof|Set-Content "$EvidenceDirectory/task-file-migration-verified.json"}
+ return $proof
+}
 function Change-Maintenance($state,[bool]$active,[string]$maintenanceId) {
  $body=@{requestId=[guid]::NewGuid().ToString();active=$active;expectedRevision=$state.revision;maintenanceId=$maintenanceId;reason=if($active){'受控本地部署，停止新派发'}else{'部署回读通过，恢复派发'}}|ConvertTo-Json
  return Invoke-RestMethod -Uri http://127.0.0.1:18998/runtime/maintenance -Method Post -ContentType 'application/json' -Headers @{Origin='http://127.0.0.1:3080'} -Body $body -NoProxy -TimeoutSec 20
@@ -182,6 +212,7 @@ function Change-MaintenancePhase($state,[string]$operation,[string]$maintenanceI
  return Invoke-RestMethod -Uri "http://127.0.0.1:18998/runtime/maintenance/$operation" -Method Post -ContentType 'application/json' -Headers @{Origin='http://127.0.0.1:3080'} -Body $body -NoProxy -TimeoutSec 20
 }
 function Assert-LaunchInputs($launchRecord) {
+ if([string]$TaskMigrationPlan-ne [string]$launchRecord.taskMigrationPlan){throw '接续任务迁移计划漂移'}
  if($ExpectedPackageSha256-ne $launchRecord.packageSha256 -or $ExpectedProfileSha256-ne $launchRecord.sourceProfileSha256){throw '接续参数与原部署输入不一致'}
  if((Get-FileHash -LiteralPath $Package).Hash-ne $launchRecord.packageSha256){throw '接续部署包摘要不匹配'}
  if([string]$ObserverPackage-ne [string]$launchRecord.observerPackage -or [string]$ExpectedObserverPackageSha256-ne [string]$launchRecord.observerPackageSha256 -or [string]$DirectQueriesProposal-ne [string]$launchRecord.directQueriesProposal){throw '接续部署模式或Observer身份漂移'}
@@ -204,6 +235,10 @@ function Resume-Deployment($result,$launchRecord) {
  return $result
 }
 function Read-Deployment($launchRecord) {
+ if($TaskMigrationPlan){
+  if($launchRecord.taskMigrationBackupManifest-ne "$($launchRecord.backup)-task-migration-source/backup-manifest.json"){throw '任务迁移源备份清单路径漂移'}
+  [void](Invoke-TaskFileMigration 'verify' $launchRecord.taskMigrationJournalSha256 $launchRecord.backup $launchRecord.taskMigrationBackupSha256)
+ }
  $deadline=(Get-Date).AddSeconds($WaitSeconds);$fresh=$null
  do {
   if(@(Listeners).Count-eq 2){
@@ -275,6 +310,7 @@ if($Readback -or $Resume){
  exit 0
 }
 Assert-InputHashes
+if($TaskMigrationPlan){$taskMigrationCheck=Invoke-TaskFileMigration 'check'|ConvertFrom-Json}
 if($RepairStoppedLaunch){
  if(-not [IO.Path]::IsPathFullyQualified($RepairStoppedLaunch)){throw '原launch必须为绝对路径'}
  $origin=Split-Path -Parent $RepairStoppedLaunch
@@ -342,7 +378,7 @@ $backupBytes=(@(Get-ChildItem -LiteralPath $backupSources -File -Recurse)+@(Get-
 $backupBytes+=[long]$taskDirectoryProof.taskBytes
 $packageBytes=[long](Get-Item -LiteralPath $Package).Length
 if($ObserverPackage){$packageBytes+=[long](Get-Item -LiteralPath $ObserverPackage).Length}
-$requiredBytes=[long]$backupBytes+($packageBytes*10)+1GB
+$requiredBytes=[long]$backupBytes+([long]$taskMigrationCheck.bytes)+($packageBytes*10)+1GB
 $freeBytes=(Get-PSDrive D).Free
 if($freeBytes-lt $requiredBytes){throw "D盘空间不足：可用 $freeBytes，所需 $requiredBytes"}
 $inputHashes=@{}
@@ -462,6 +498,10 @@ $backupProof|Set-Content -LiteralPath "$backup/manifest.json" -Encoding utf8
 $env:DSH_HOME='D:/dsh_home';$env:TEMP=$tempDirectory;$env:TMP=$tempDirectory
 foreach($path in $inputHashes.Keys){if((Get-FileHash -LiteralPath $path).Hash-ne $inputHashes[$path]){throw '部署输入文件已变化'}}
 if($lockProcess.HasExited){throw '安装前独占锁已丢失'}
+if($TaskMigrationPlan){[void](Invoke-TaskFileMigration 'execute')}
+$migrationBackupManifest=if($TaskMigrationPlan){"${backup}-task-migration-source/backup-manifest.json"}else{''}
+$migrationBackupSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath $migrationBackupManifest).Hash}else{''}
+@{backup=$backup;oldPid=$old.ProcessId;packageSha256=(Get-FileHash -LiteralPath $Package).Hash;taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256}|ConvertTo-Json|Set-Content "$EvidenceDirectory/backup.json"
 $installPackages=@($Package)+@($ObserverPackage|Where-Object {$_})
 & $node "$profile/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add @installPackages *> "$EvidenceDirectory/install.log"
 if($LASTEXITCODE){throw '安装失败，保持停机并保留备份'}
@@ -490,7 +530,7 @@ if($Bootstrap){
 # 用既有启动脚本，不创建或改写计划任务；仅当前进程树使用D盘TEMP。
 $env:PATH=(Split-Path -Parent $node)+';'+$env:PATH
 $launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
-$launchRecord=@{observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId;enrollmentAutostartRestore=$enrollmentAutostartRestore}
+$launchRecord=@{taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256;taskMigrationPlan=$TaskMigrationPlan;taskMigrationJournalSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath "$EvidenceDirectory/task-file-migration.json").Hash}else{''};observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId;enrollmentAutostartRestore=$enrollmentAutostartRestore}
 $launchRecord|ConvertTo-Json|Set-Content -LiteralPath "$EvidenceDirectory/launch.json" -Encoding utf8
 $result=Read-Deployment $launchRecord
 if($result.ready -and -not $HoldMaintenance){$result=Resume-Deployment $result $launchRecord}

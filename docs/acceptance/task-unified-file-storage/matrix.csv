@@ -11,3 +11,6 @@ junction-no-external-write,2,PASS,round-2.md
 workspace-change-zero-write,2,PASS,round-2.md
 backup-closure-and-dependency-exclusion,2,PASS,round-2.md
 file-symlink-environment-permission,2,SKIP,round-2.md
+full-repository-suite,3,FAIL,round-3.md
+full-repository-suite,4,PASS,round-4.md
+real-spring-candidate-background,4,PASS,round-4.md
