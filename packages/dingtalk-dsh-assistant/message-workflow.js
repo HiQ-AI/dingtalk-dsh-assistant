@@ -182,6 +182,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (committed?.status === 'stale') return null
       return output
     } catch (error) {
+      if (!binding && error.code === 'RUNTIME_MAINTENANCE_ACTIVE') throw error
       if (binding) {
         const failure = error.issues ? `MESSAGE_SCHEMA_INVALID:${JSON.stringify(error.issues.slice(0, 8).map(issue => ({ path: issue.path, message: issue.message }))).slice(0, 1200)}` : error.code ?? error.message
         try { await cmd('message.node.fail', { runId, nodeRunId: binding.nodeRunId, leaseEpoch: binding.leaseEpoch, expectedRevision: rev, error: failure, retryAt: new Date(clock() + config.recoveryDelaysMs[0]).toISOString() }) }
@@ -522,23 +523,24 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (routingPending && !await authorizedPriorityControls(entries)) continue
       const snapshots = await Promise.all(entries.map(item => state(item.run.runId)))
       if (snapshots.some(data => data.run.status === 'needs_attention' || data.requests.some(request => request.status === 'pending' && entries.some(item => item.unit.id === request.unitId)))) continue
-      let retry = false
+      let retry = false, paused = false
       const flight = topicDrive(topic.topicId).then(status => { retry = ['WAIT_ROUTING', 'CONTEXT_CHANGED'].includes(status) }).catch(async error => {
+        paused = error.code === 'RUNTIME_MAINTENANCE_ACTIVE'
         retry = ['MESSAGE_TOPIC_STALE', 'MESSAGE_TOPIC_CONTEXT_STALE', 'MESSAGE_TASK_FACTS_STALE', 'MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)
-        if (!closed && !['MESSAGE_TOPIC_STALE', 'MESSAGE_TOPIC_CONTEXT_STALE', 'MESSAGE_TASK_FACTS_STALE', 'MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)) {
+        if (!closed && !paused && !['MESSAGE_TOPIC_STALE', 'MESSAGE_TOPIC_CONTEXT_STALE', 'MESSAGE_TASK_FACTS_STALE', 'MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)) {
           const entries = await store.query({ kind: 'message.topic.units', topicId: topic.topicId })
           if (entries[0]) await cmd('message.attention', { runId: entries[0].run.runId, reason: `MESSAGE_TOPIC_INTENT_FAILED:${error.code ?? error.message}` })
         }
       }).finally(async () => {
         try {
-          if (closed) return
+          if (closed || paused) return
           const latest = await store.query({ kind: 'message.topic', topicId: topic.topicId })
           topicFlights.delete(topic.topicId)
           if (retry || latest?.inputRevision !== topic.inputRevision) {
             const scheduled = scheduleTopics(conversationId)
             topicSchedules.add(scheduled)
             void scheduled.catch(async error => {
-              if (!closed && entries[0]) await cmd('message.attention', { runId: entries[0].run.runId, reason: `MESSAGE_TOPIC_SCHEDULE_FAILED:${error.code ?? error.message}` })
+              if (!closed && error.code !== 'RUNTIME_MAINTENANCE_ACTIVE' && entries[0]) await cmd('message.attention', { runId: entries[0].run.runId, reason: `MESSAGE_TOPIC_SCHEDULE_FAILED:${error.code ?? error.message}` })
             }).finally(() => topicSchedules.delete(scheduled))
           }
         } finally { topicFlights.delete(topic.topicId) }
@@ -642,7 +644,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         routingTails.set(conversationId, routed)
         try { return await routed } finally { if (routingTails.get(conversationId) === routed) routingTails.delete(conversationId) }
       }).catch(async error => {
-      if (!closed && !['MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(error.code)) await cmd('message.attention', { runId, reason: `MESSAGE_CONTEXT_OR_DISPATCH_FAILED:${error.code ?? error.message}` })
+      if (!closed && !['MESSAGE_STALE', 'MESSAGE_NODE_STALE', 'RUNTIME_MAINTENANCE_ACTIVE'].includes(error.code)) await cmd('message.attention', { runId, reason: `MESSAGE_CONTEXT_OR_DISPATCH_FAILED:${error.code ?? error.message}` })
       return state(runId)
       }).finally(() => flights.delete(runId))
       flights.set(runId, flight)

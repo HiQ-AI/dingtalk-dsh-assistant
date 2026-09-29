@@ -13,7 +13,7 @@ import { messageSystem } from '../packages/dingtalk-dsh-assistant/message-model.
 async function fixture(t, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'message-workflow-'))
   const store = await openExecutionStore({ dbPath: join(dir, 'control.sqlite'), instanceId: 'test', initialize: true })
-  const workflow = createMessageWorkflow({ store, ...options })
+  const workflow = createMessageWorkflow({ store: options.wrapStore?.(store) ?? store, ...options })
   t.after(async () => { await workflow.close(); await store.close(); await rm(dir, { recursive: true, force: true }) })
   return { store, workflow }
 }
@@ -1108,5 +1108,62 @@ test('已完成无待办消息不阻塞后续明确任务，真正未归类消�
     assert.deepEqual(dispatched, pending ? [] : ['task-after-no-action'])
     assert.deepEqual((await store.query({ kind: 'message.routing.pending', conversationId: source.conversationId })).map(run => run.runId), pending ? [unrouted.runId] : [])
     assert.equal(calls.filter(stage => stage === 'IB').length, pending ? 0 : 1)
+  })
+})
+
+
+test('维护模式阻断领取时保留原消息，解除后继续且不转人工或自旋', async t => {
+  for (const boundary of ['S', 'IB', 'command']) await t.test(boundary, async child => {
+    const calls = [], effects = [], entered = Promise.withResolvers()
+    let intercept
+    const { store, workflow } = await fixture(child, {
+      wrapStore: current => ({ ...current, command: request => intercept ? intercept(request) : current.command(request) }),
+      context: { bindTopic: async ({ run, unit }) => ({ topicId: 'maintenance-topic', conversationId: run.conversationId,
+        sourceRunId: run.runId, unitId: unit.id ?? unit.unitId, title: '维护续行', facts: [] }), facts: async () => ({}) },
+      judge: async ({ stage, input }) => {
+        calls.push(stage)
+        if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text,
+          constraints: [], contextNeeds: [] }], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }], sharedConstraints: [] }
+        if (stage === 'R') return binding
+        assert.equal(stage, 'IB')
+        return { kind: 'topic_intents', decisions: input.units.map(item => ({ unitId: item.unitId, intent })) }
+      },
+      handlers: { status: async (_, info) => { effects.push(info.run.runId); return { ok: true } } },
+    })
+    const command = store.command.bind(store)
+    let armed = true, attempts = 0
+    intercept = async request => {
+      const targeted = boundary === 'command' ? request.kind === 'message.command.claim'
+        : request.kind === 'message.node.claim' && request.args.nodeId === boundary
+      if (targeted) {
+        attempts++
+        if (armed) {
+          armed = false
+          await command({ id: randomUUID(), kind: 'runtime.maintenance.change', args: {
+            active: true, expectedRevision: 0, maintenanceId: 'maintenance-test', actorId: 'owner', reason: '部署窗口' } })
+          entered.resolve()
+        }
+      }
+      return command(request)
+    }
+    const received = await workflow.receive({ ...source, body: '请查询当前任务状态' }, { process: false })
+    await workflow.process(received.runId); await entered.promise
+    await new Promise(resolve => setTimeout(resolve, 30))
+    const paused = await workflow.state(received.runId)
+    assert.notEqual(paused.run.status, 'needs_attention', paused.run.reason)
+    assert.ok(!paused.nodes.some(node => node.status === 'failed'))
+    assert.deepEqual(effects, [])
+    const pausedAttempts = attempts
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(attempts, pausedAttempts)
+    if (boundary === 'S') assert.deepEqual(calls, [])
+    else assert.deepEqual(calls, boundary === 'IB' ? ['S', 'R'] : ['S', 'R', 'IB'])
+    await command({ id: randomUUID(), kind: 'runtime.maintenance.change', args: {
+      active: false, expectedRevision: 1, maintenanceId: 'maintenance-test', actorId: 'owner', reason: '部署完成' } })
+    await workflow.process(received.runId)
+    for (let attempt = 0; attempt < 100 && !effects.length; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+    assert.deepEqual(effects, [received.runId])
+    assert.equal((await workflow.state(received.runId)).run.status, 'settled')
+    assert.deepEqual(calls, ['S', 'R', 'IB'])
   })
 })

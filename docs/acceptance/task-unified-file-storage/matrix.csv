@@ -21,3 +21,5 @@ exact-install-and-browser,5,PASS,round-5.md
 original-session-directory-preserved,5,PASS,round-5.md
 real-model-group-file-delivery,6,FAIL,round-6.md
 no-action-routing-and-active-barrier,7,PASS,round-7.md
+real-model-group-file-delivery,7,FAIL,round-7.md
+maintenance-pause-resume,8,PASS,round-8.md
