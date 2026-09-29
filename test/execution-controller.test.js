@@ -7,12 +7,69 @@ import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
+import { classifyExecutionFailure } from '../packages/dingtalk-dsh-assistant/execution-recovery-policy.js'
 
 const number = { type: 'number' }
 const workflow = execute => ({ id: 'synthetic', version: '1', nodes: [
   { id: 'calculate', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: number, outputSchema: number, mapInput: ({ requirement }) => requirement, execute: execute ?? (async ({ input }) => input + 1) },
   { id: 'verify', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: number, outputSchema: number, mapInput: ({ previousOutput }) => previousOutput, execute: async ({ input }) => input * 2 },
 ] })
+
+test('失败分类仅使用精确白名单，输出错误不扩散到输入和未知故障', () => {
+  for (const [code, category] of [
+    ['ENGINEERING_ACCEPTANCE_FAILED', 'business-validation'], ['AGENT_WORK_NEEDS_INPUT', 'missing-input'],
+    ['AGENT_WORK_BLOCKED', 'task-blocked'],
+    ['ENGINEERING_UAT_ENVIRONMENT_REQUIRED', 'missing-environment'],
+    ['DELIVERY_RECONCILIATION_REQUIRED', 'external-uncertain'], ['ECONNRESET', 'transient-execution'],
+    ['NOT_ECONNRESET', 'implementation-error'], ['CUSTOM_ACCEPTANCE_FAILED', 'implementation-error'],
+    ['NODE_SCHEMA_INVALID', 'implementation-error'], [undefined, 'implementation-error'],
+  ]) assert.equal(classifyExecutionFailure({ code }).category, category)
+  assert.deepEqual(classifyExecutionFailure({ code: 'NODE_SCHEMA_INVALID', phase: 'output-validation' }), {
+    category: 'correctable-output', responsibleParty: 'node-executor', nextAction: 'correct-output-within-budget',
+  })
+  for (const phase of ['output-validation', 'output-admission'])
+    assert.equal(classifyExecutionFailure({ code: 'AGENT_WORK_RESULT_INVALID', phase }).category, 'correctable-output')
+  for (const code of ['AGENT_WORK_RESULT_INVALID', 'CUSTOM_AGENT_WORK_RESULT_INVALID'])
+    assert.equal(classifyExecutionFailure({ code, phase: 'input-validation' }).category, 'implementation-error')
+  assert.equal(classifyExecutionFailure({ code: 'CUSTOM_AGENT_WORK_RESULT_INVALID', phase: 'output-admission' }).category, 'implementation-error')
+})
+
+test('执行失败保存恢复责任，未知故障和外部未知结果不自动重放', async t => {
+  for (const [code, category, nextAction] of [
+    ['ENGINEERING_ACCEPTANCE_FAILED', 'business-validation', 'repair-artifact-and-revalidate'],
+    ['ENGINEERING_UAT_ENVIRONMENT_REQUIRED', 'missing-environment', 'restore-required-environment'],
+    ['DELIVERY_RECONCILIATION_REQUIRED', 'external-uncertain', 'reconcile-before-replay'],
+    ['CUSTOM_ACCEPTANCE_FAILED', 'implementation-error', 'inspect-and-fix-implementation'],
+  ]) await t.test(code, async child => {
+    let calls = 0
+    const { controller, artifacts } = await setup(child, workflow(async () => {
+      calls++; throw Object.assign(new Error(code), { code })
+    }))
+    await controller.createRun({ commandId: 'create', taskId: 'task', runId: 'run', workflowId: 'synthetic', input: 1 })
+    const state = await controller.whenIdle('run')
+    const diagnosis = await artifacts.read(state.nodes[0].evidenceRefs.at(-1))
+    assert.equal(state.run.status, 'waiting')
+    assert.equal(diagnosis.recovery.category, category)
+    assert.equal(diagnosis.recovery.nextAction, nextAction)
+    assert.equal(calls, 1)
+    assert.equal(state.nodes[1].leaseEpoch, 0)
+  })
+})
+
+test('缺资料等待保存分类和原始产物，不改变续行协议', async t => {
+  const definition = workflow()
+  definition.nodes[0].admitOutput = () => ({ outcome: 'waiting', waitReason: { kind: 'input', reference: 'AGENT_WORK_NEEDS_INPUT' } })
+  const { controller, artifacts } = await setup(t, definition)
+  await controller.createRun({ commandId: 'create', taskId: 'task', runId: 'run', workflowId: 'synthetic', input: 1 })
+  const state = await controller.whenIdle('run'), node = state.nodes[0]
+  const diagnosis = await artifacts.read(node.evidenceRefs.at(-1))
+  assert.equal(state.run.status, 'waiting')
+  assert.equal(await artifacts.read(node.outputRef), 2)
+  assert.equal(diagnosis.producedOutputRef, node.outputRef)
+  assert.equal(diagnosis.recovery.category, 'missing-input')
+  assert.equal(diagnosis.recovery.responsibleParty, 'requester')
+  assert.deepEqual(node.waitReason, { kind: 'input', reference: 'AGENT_WORK_NEEDS_INPUT' })
+})
 
 test('未知业务失败也保存诊断，非法失败材料不能让已排空节点残留 running', async t => {
   for (const invalid of [false, true]) await t.test(invalid ? '非法材料' : '第三类业务材料', async child => {
@@ -228,6 +285,7 @@ test('产出和后继纯映射错误统一持久交接，保留有效产物且�
     const diagnosis = await artifacts.read(state.nodes[0].evidenceRefs.at(-1))
     assert.equal(diagnosis.kind, 'execution-failure')
     assert.equal(diagnosis.phase, expectedPhase)
+    assert.equal(diagnosis.recovery.category, mapper ? 'implementation-error' : 'correctable-output')
     assert.equal(diagnosis.nodeRunId, state.nodes[0].nodeRunId)
     if (mapper) {
       assert.equal(diagnosis.targetNodeId, 'verify')
@@ -320,6 +378,9 @@ test('失败结果在Owner唤醒前重启仍可读取，重复观察不重复事
         const materials = await Promise.all(stage.evidenceRefs.map(readArtifact))
         assert.ok(materials.some(value => value.actual === 'failed'))
         assert.ok(materials.some(value => value.code === 'CUSTOM_DOMAIN_FAILURE'))
+        assert.deepEqual(materials.find(value => value.code === 'CUSTOM_DOMAIN_FAILURE').recovery, {
+          category: 'implementation-error', responsibleParty: 'maintainer', nextAction: 'inspect-and-fix-implementation',
+        })
       }
       await assert.rejects(readArtifact('sha256-' + 'f'.repeat(64) + '.json'), { code: 'TASK_OWNER_ARTIFACT_NOT_ALLOWED' })
       const decision = { action: 'wait', summary: '已读失败原因，等待所需能力', evidenceRefs: [] }

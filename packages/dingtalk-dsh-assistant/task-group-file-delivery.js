@@ -78,6 +78,10 @@ export function createTaskGroupFileAdapter({ files, createAdapter, profile, canD
 }
 
 const objectSchema = { type: 'object' }
+export function createFileDeliveryStageContract({ prepareFiles }) {
+  return { id: 'task-group-file-delivery', version: '1',
+    prepare: async ({ plan, requirement }) => ({ input: await prepareFiles(plan, requirement) }) }
+}
 function assertReceipts(input) {
   if (!Array.isArray(input.files) || !input.files.length || !Array.isArray(input.receipts)
     || input.receipts.length !== input.files.length) fail('RECEIPTS_INCOMPLETE')
@@ -95,7 +99,7 @@ function assertReceipts(input) {
 }
 
 /** 固定三个 code 节点；每件独立效果，未知项中断后续发送。 */
-export function createTaskGroupFileDeliveryWorkflow({ files, messageAdapter }) {
+export function createLegacyTaskGroupFileDeliveryWorkflow({ files, messageAdapter }) {
   if (typeof files?.validateManifest !== 'function' || typeof messageAdapter?.prepare !== 'function') fail('WORKFLOW_CONFIG_INVALID')
   const rulesDigest = executionDigest({ contract: 'task-group-file-delivery-v1' })
   return { id: 'task-group-file-delivery', version: '1', nodes: [
@@ -137,4 +141,53 @@ export function createTaskGroupFileDeliveryWorkflow({ files, messageAdapter }) {
     validateCompletion: async ({ output }) => {
       try { assertReceipts(output); return output.deliveryStatus === 'files_verified' } catch { return false }
     } } }
+}
+
+/** 投递回执只证明交付，承担业务条目时仍须由 Host 独立验证其内容与范围。 */
+export function createTaskGroupFileDeliveryWorkflow(options) {
+  const legacy = createLegacyTaskGroupFileDeliveryWorkflow(options)
+  return { ...legacy, version: '2', ownerContract: {
+    id: legacy.ownerContract.id, version: '2',
+    rulesDigest: executionDigest({ delivery: legacy.ownerContract.rulesDigest, acceptanceScope: 'domain-items-v1' }),
+    async validateCompletion({ output, requirement, decision, stages, acceptanceItems, verifyAcceptance }) {
+      if (!await legacy.ownerContract.validateCompletion({ output }) || !Array.isArray(acceptanceItems)) return false
+      if (!acceptanceItems.length) return true
+      return typeof verifyAcceptance === 'function'
+        && await verifyAcceptance({ requirement, decision, stages, acceptanceItems }) === true
+    },
+  } }
+}
+
+export function selectTaskDeliveryFiles(outputs, { taskId, requirementRevision, fileDelivery }) {
+  const produced = outputs.flatMap(output => {
+    const descriptor = output?.output?.result?.artifact ?? output?.result?.artifact ?? output?.artifact
+    return [...(descriptor ? [descriptor] : []), ...(Array.isArray(output?.artifactFiles) ? output.artifactFiles : [])]
+  })
+  return fileDelivery.files.map(item => {
+    const candidates = produced.filter(file => file.taskId === taskId && file.requirementRevision === requirementRevision
+      && file.role === item.role && file.fileName === item.fileName)
+    if (candidates.length !== 1) throw executionError('TASK_REQUIRED_FILE_MISSING_OR_AMBIGUOUS')
+    return candidates[0]
+  })
+}
+
+export function verifyFileDeliveryOutput(output, { taskId, requirementRevision, groupId, profile, fileDelivery }) {
+  if (output?.deliveryStatus !== 'files_verified' || output.groupId !== groupId || output.profile !== profile
+    || output.requirementRevision !== requirementRevision || !Array.isArray(output.files) || !Array.isArray(output.receipts)
+    || output.files.length !== fileDelivery.files.length || output.receipts.length !== output.files.length) return false
+  return fileDelivery.files.every(item => {
+    const matches = output.files.map((file, index) => ({ file, observation: output.receipts[index] }))
+      .filter(({ file }) => file.role === item.role && file.fileName === item.fileName)
+    if (matches.length !== 1) return false
+    const { file, observation } = matches[0], receipt = observation?.result
+    return observation?.status === 'succeeded' && typeof observation.evidenceRef === 'string' && !!observation.evidenceRef
+      && file.taskId === taskId && file.requirementRevision === requirementRevision
+      && receipt?.role === item.role && receipt.fileName === item.fileName && receipt.taskId === taskId
+      && receipt.requirementRevision === requirementRevision && receipt.groupId === groupId && receipt.conversationId === groupId
+      && receipt.profile === profile && receipt.artifactId === file.artifactId && receipt.sha256 === file.sha256
+      && receipt.size === file.size && Number.isSafeInteger(receipt.size) && receipt.size > 0
+      && typeof receipt.messageId === 'string' && !!receipt.messageId && ['fileId', 'mediaId'].includes(receipt.resourceRef?.type)
+      && typeof receipt.resourceRef.resourceId === 'string' && !!receipt.resourceRef.resourceId
+      && /^[a-f0-9]{64}$/u.test(receipt.sha256) && /^[a-f0-9]{64}$/u.test(receipt.deliveryKey)
+  })
 }

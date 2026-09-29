@@ -1,0 +1,12 @@
+PASS 1/1: 部署工作区由脚本位置解析，不绑定历史worktree
+PASS 8/8: 接续许可匹配通过；版本/ID/排空/阶段/active/PID漂移及缺少revision拒绝
+PASS 2/2: pending零写无重启；双端口进程身份错配拒绝
+PASS 2/2: 精确排空错误重试；其他错误立即失败
+PASS 1/1: stdout/stderr独占写句柄不阻断元信息回读
+PASS 3/3: 双摘要正确通过；包摘要错误拒绝；配置摘要错误拒绝
+PASS 4/4: 旧进程不得恢复；新进程经resume恢复；接续输入匹配；接续输入漂移拒绝
+PASS 3/3: bootstrap Resident退出；3080归属漂移拒绝；PID复用拒绝
+PASS 6/6: 新群提案精确字段、订阅幂等/漂移拒绝、原自启状态保留与幂等恢复
+PASS 6/6: 查询模式、工程互斥、Observer配对、旧必填与Observer摘要门禁
+PASS 6/6: 看板合并后的旧身份别名通过；请求/逻辑/当前/最新/看板身份错配拒绝
+PASS 8/8: 原封存许可通过；active/phase/drained/revision/ID/incarnation/busy变化拒绝

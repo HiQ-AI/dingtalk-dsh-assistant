@@ -373,3 +373,11 @@ Web重执行群名修复：不迁移数据。安装后只读核对/state/tasks�
 闲聊话题规则修改后运行topic-runtime、topic-store、decision、group-decision-contract定向测试。双包受控安装后核对Assistant源码和新PID，隔离工具测试不代表真实模型语义或真实收信验证；不得为验证清理已有话题。
 
 消息工作流的拆分节点允许以语义判断 `no_action` 结束无待办消息（闲聊、问候、无执行请求的收信测试等），必须完整覆盖原文并有成功节点记录，不创建话题、任务或澄清通知。明确的测试操作请求仍走正常事项流程。收信箱等待状态细分为“等待澄清”“等待补充材料”，提示显示当前待补充问题；真正失败仍显示“关联受阻”。
+
+### 封存后启动失败的离线修复
+
+仅在原部署已取得 `stopping` 封存许可、原进程及 launcher 已退出、3080/18998 均无监听时，使用同一脚本的 `-RepairStoppedLaunch <原 launch.json 绝对路径>`。必须提供新的唯一修复 tgz、该包 SHA、原 profile SHA、新 `EvidenceDirectory`，以及原 `DirectQueriesProposal`（原部署使用时）；禁止同时改变工程配置、Observer、接入群或维护许可。
+
+先运行以上参数加 `-Check`：零写核对原 launch/封存记录/backup/control-before、当前维护 ID/revision/incarnation、全部历史记录、原完整备份的清单/摘要/SQLite 全表与工件闭包、当前业务文件和工件全集以及源码与包字节。原生安装改变的 profile 依赖文件不与安装前备份比较，但原 profile 配置 SHA 必须不变。备份一致性副本仅允许原只读连接留下的空 WAL 与固定 32768 字节 SHM，其他新增文件拒绝。
+
+Check 通过后去掉 `-Check` 执行。执行分支持有 EXCLUSIVE owner 锁，重新完成预检后调用原生 `plugin --profile web add`，持续持锁至安装包与历史再次核验完成；不执行 SQL 修复、不回滚数据库、不应用配置、不解除维护。旧证据保留，新证据目录继承 control-before 并生成新的 launch.json。启动后无论 ready 与否均保持维护；后续以本次相同参数加 `-Readback` 回读，业务验证通过后才明确执行 `-Resume`。Check 不获取写锁，执行时锁竞争仍会明确拒绝。

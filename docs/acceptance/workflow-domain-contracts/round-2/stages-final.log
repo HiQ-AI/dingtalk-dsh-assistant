@@ -1,0 +1,14 @@
+✔ 交接绑定当前计划、Run、digest、generation与必交字段 (1.9538ms)
+✔ 领域准备前后都核验材料角色、容量，并以冻结输入Schema拒绝错型 (1.5105ms)
+✔ 后阶段准备获得真实交接和冻结历史定义版本 (0.2736ms)
+✔ 正式 Host 重启恢复 v5 成功前序：后续待确认 (359.6605ms)
+✔ 正式 Host 重启恢复 v5 成功前序：阶段全成功但 Owner 未完成 (335.8901ms)
+✔ 产物声明拒绝未知字段和重复必交字段，声明变化进入 workflow digest (1.5072ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1036.2764

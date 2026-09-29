@@ -44,7 +44,7 @@ export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, 
 /** Task 事件唤醒、模型候选、Host 接纳和执行回执的唯一入口。 */
 export function createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig, advanceTask,
   authorizeStages, authorizeCompletion = async () => true, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
-  readStageArtifacts, capabilityCatalog = [], workflowCatalog = [], sessionRunner, getWorkspaceDir }) {
+  readStageArtifacts, readDeliveryManifest, capabilityCatalog = [], workflowCatalog = [], sessionRunner, getWorkspaceDir }) {
   if (!ctx || !store || !artifacts || !controller || typeof modelConfig !== 'function'
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
   let closed = false
@@ -121,6 +121,11 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     const result = { taskId, eventWatermark: claim.eventWatermark, goal,
       acceptanceItems, versions: claim.versions, task: plan.task, stages: plan.stages, events }
     result.stageArtifacts = await readTaskOwnerStageArtifacts({ taskId, stages: plan.stages, controller, plan, readStageArtifacts })
+    if (readDeliveryManifest) {
+      const manifest = await readDeliveryManifest({ taskId, plan, requirement: goal })
+      result.deliveryManifest = { ref: (await artifacts.put(manifest)).ref, complete: manifest.complete,
+        missing: manifest.missing, validation: manifest.validation }
+    }
     if (inspectCurrentExecution) {
       result.currentExecution = await inspectCurrentExecution(taskId, plan)
       if (result.currentExecution?.evidenceRefs?.length) result.stageArtifacts.push({ stageId: result.currentExecution.stageId, outputRef: null, evidenceRefs: result.currentExecution.evidenceRefs })
@@ -172,6 +177,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         const unreadPages = new Set((input.eventPages ?? []).map(page => page.ref))
         const readableArtifacts = new Set(input.stageArtifacts.flatMap(stage =>
           [stage.outputRef, ...stage.evidenceRefs].filter(Boolean)))
+        if (input.deliveryManifest) readableArtifacts.add(input.deliveryManifest.ref)
         const result = await sessions.run({ binding, input, ...modelConfig(),
           readPage: async pageRef => {
             if (!unreadPages.has(pageRef)) throw error('TASK_OWNER_PAGE_NOT_ALLOWED')
@@ -199,8 +205,19 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           throw error('TASK_OWNER_STAGE_NOT_AUTHORIZED')
         if (result.decision.action === 'complete' && !await authorizeCompletion({ taskId, decision: result.decision }))
           throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
+        let deliveryManifestRef
+        if (result.decision.action === 'complete' && readDeliveryManifest) {
+          const plan = await controller.taskPlan(taskId)
+          const requirement = await artifacts.read(plan.task.requirementRef)
+          const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision: result.decision })
+          if (manifest?.kind !== 'task-delivery-manifest' || manifest.version !== 1 || manifest.complete !== true
+              || manifest.businessValidation?.status !== 'accepted'
+            || manifest.taskId !== taskId || manifest.requirementRevision !== plan.task.requirementRevision
+            || manifest.planRevision !== plan.task.planRevision) throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
+          deliveryManifestRef = (await artifacts.put(manifest)).ref
+        }
         const accepted = (await command(`owner-accept:${turnId}`, 'task.owner.accept', {
-          taskId, turnId, leaseEpoch: claim.leaseEpoch })).result
+          taskId, turnId, leaseEpoch: claim.leaseEpoch, ...(deliveryManifestRef ? { deliveryManifestRef } : {}) })).result
         return accepted
       } catch (cause) {
         await command(`owner-release:${turnId}`, 'task.owner.release', {

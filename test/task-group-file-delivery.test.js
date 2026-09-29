@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createTaskGroupFileAdapter, createTaskGroupFileDeliveryWorkflow } from '../packages/dingtalk-dsh-assistant/task-group-file-delivery.js'
+import { createTaskGroupFileAdapter, createTaskGroupFileDeliveryWorkflow, createLegacyTaskGroupFileDeliveryWorkflow } from '../packages/dingtalk-dsh-assistant/task-group-file-delivery.js'
+import { defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
+import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
+import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
+import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const file = { taskId: 'task', requirementRevision: 1, artifactId: 'a'.repeat(64), sha256: 'b'.repeat(64), size: 10, fileName: '报告.sql', role: 'script' }
 const binding = { taskId: 'task', runId: 'run', nodeRunId: 'node', generation: 0, requirementDigest: 'c'.repeat(64) }
@@ -70,10 +78,55 @@ test('固定三节点通过逐件效果与验收收口，未确认项阻止后�
   } })
   const result = await workflow.nodes[2].execute({ input: sent, taskId: 'task' })
   assert.equal(result.deliveryStatus, 'files_verified')
-  assert.equal(await workflow.ownerContract.validateCompletion({ output: result }), true)
-  assert.equal(await workflow.ownerContract.validateCompletion({ output: { ...result, receipts: [] } }), false)
+  assert.equal(await workflow.ownerContract.validateCompletion({ output: result, acceptanceItems: [] }), true)
+  assert.equal(await workflow.ownerContract.validateCompletion({ output: result }), false)
+  const acceptanceItems = [{ itemId: 'repair', criterion: '生产故障已经修复', evidenceRefs: ['delivered'] }]
+  assert.equal(await workflow.ownerContract.validateCompletion({ output: result, acceptanceItems }), false)
+  assert.equal(await workflow.ownerContract.validateCompletion({ output: result, acceptanceItems, verifyAcceptance: async () => false }), false)
+  assert.equal(await workflow.ownerContract.validateCompletion({ output: result, acceptanceItems, verifyAcceptance: async args => {
+    assert.deepEqual(args.acceptanceItems, acceptanceItems); return true
+  } }), true)
+  assert.equal(await workflow.ownerContract.validateCompletion({ output: { ...result, receipts: [] }, acceptanceItems: [], verifyAcceptance: async () => true }), false)
   let attempts = 0
   await assert.rejects(workflow.nodes[1].execute({ input: { ...prepared, files: [file, file] }, ...binding,
     perform: async () => { attempts++; return { status: 'unknown' } } }), /DELIVERY_UNCONFIRMED/u)
   assert.equal(attempts, 1)
+})
+
+test('文件投递历史 v1 与新 v2 分别冻结，业务验收变更不改旧效果定义', () => {
+  const h = harness(), options = { files: h.files, messageAdapter: h.adapter }
+  const previous = createLegacyTaskGroupFileDeliveryWorkflow(options), current = createTaskGroupFileDeliveryWorkflow(options)
+  assert.equal(previous.version, '1'); assert.equal(previous.ownerContract.version, '1')
+  assert.equal(defineExecutionWorkflow(previous).digest, '63292d0c2e3d0e4703cae7477e652b2f7c43b2d0a52c007b1458f4bfae7b6eab')
+  assert.equal(current.version, '2'); assert.equal(current.ownerContract.version, '2')
+  assert.notEqual(defineExecutionWorkflow(previous).digest, defineExecutionWorkflow(current).digest)
+  assert.deepEqual(previous.nodes.map(node => node.version), current.nodes.map(node => node.version))
+})
+
+test('正式 Host 重启保留待执行文件投递 v1 的冻结定义，当前目录使用 v2', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'file-delivery-contract-restart-'))
+  const config = { groupIds: ['group'], ownerActorId: 'owner', profile: 'test', instanceId: 'file-contract-restart',
+    dbPath: join(root, 'control.db'), artifactDirectory: join(root, 'artifacts') }
+  const model = { provider: 'test', model: 'test' }
+  const store = await openExecutionStore({ dbPath: config.dbPath, instanceId: config.instanceId, initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: config.artifactDirectory, initialize: true })
+  const h = harness(), workflow = createLegacyTaskGroupFileDeliveryWorkflow({ files: h.files, messageAdapter: h.adapter })
+  const definition = defineExecutionWorkflow(workflow)
+  const controller = createExecutionController({ store, artifacts, workflows: [workflow],
+    delivery: { execute: async () => { throw Error('UNEXPECTED_DELIVERY') } } })
+  let service
+  t.after(async () => { await service?.close(); await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
+  await store.command({ id: 'register-file-v1', kind: 'workflow.register', args: { workflowId: workflow.id,
+    definitionVersion: workflow.version, digest: definition.digest, config: model } })
+  await controller.createTaskPlan({ commandId: 'file-plan', taskId: 'task', stages: [{ stageId: 'delivery', workflowId: workflow.id, input: {} }] })
+  await controller.close(); await store.close()
+  service = await openWorkflowService({ ctx: {}, config, legacy: { getAgentConfig: () => model },
+    judge: async () => { throw Error('UNEXPECTED_MODEL') }, taskOwnerSessions: { async close() {} },
+    fileTransport: { createAdapter: () => { throw Error('UNEXPECTED_DELIVERY') } } })
+  const restored = service.execution.controller.workflowDefinition(workflow.id, definition.digest)
+  assert.equal(restored.version, '1'); assert.equal(restored.digest, definition.digest)
+  assert.equal(service.execution.controller.workflowDefinition(workflow.id).version, '2')
+  const plan = await service.execution.controller.taskPlan('task')
+  assert.equal(plan.stages[0].workflowDigest, definition.digest)
+  assert.equal(h.sends(), 0)
 })

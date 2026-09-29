@@ -41,7 +41,7 @@ test('通用效果阶段只接受授权写能力，读取能力必须留在Agent
   assert.throws(() => createGeneralCapabilityStepWorkflow({ capabilities: [{ id:'lookup',identity:'lookup-v1',effectClass:'read',authorize:()=>true,execute:async()=>({}),verify:()=>({}) }] }), {code:'GENERAL_CAPABILITY_INVALID'})
   const output={value:'verified'},capability={id:'write-file',identity:'write-v1',effectClass:'file.write',authorize:async({scope})=>scope.write===true,prepare:()=>({content:'body'}),verify:async()=>({passed:true,outputDigest:executionDigest(output),sourceRefs:['receipt:file']})}
   const definition=createGeneralCapabilityStepWorkflow({capabilities:[capability]})
-  assert.equal(definition.version,'4');assert.deepEqual(definition.nodes[0].allowedEffects,['file.write'])
+  assert.equal(definition.version,'6');assert.deepEqual(definition.nodes[0].allowedEffects,['file.write'])
   const request={capabilityId:'write-file',input:{},scope:{write:true},expectedEvidence:'回读文件'}
   let calls=0
   const result=await definition.nodes[0].execute({input:request,perform:async()=>{calls++;return output}})
@@ -120,21 +120,25 @@ test('Task Markdown 写入经过效果账，重启对账不重放写入', async 
  await assert.rejects(workflow.nodes[0].execute({ input: { capabilityId: "unknown" } }), { code: "GENERAL_CAPABILITY_UNAVAILABLE" })
  })
 
-test('未启用产物能力保持v4原定义摘要，显式历史版本排除新能力', () => {
+test('显式v4保持原定义摘要，v5可恢复且新运行使用v6验收策略', () => {
   const fileAdapter = { prepare() {}, reconcile() {} }
   const markdown = createGeneralMarkdownWriteCapability({ fileAdapter })
   const artifact = createGeneralArtifactWriteCapability({ fileAdapter })
-  const original = createGeneralCapabilityStepWorkflow({ capabilities: [markdown] })
+  const original = createGeneralCapabilityStepWorkflow({ capabilities: [markdown], workflowVersion: '4' })
   // 由修改前 HEAD 源码独立计算，包含 execute 和 ownerContract 的真实函数源码。
   assert.equal(defineExecutionWorkflow(original).digest, 'a1e8261207cf153a2aa8e0b2eb3f49876884029685fc66ed0593017b1f0e0435')
   const historical = createGeneralCapabilityStepWorkflow({ capabilities: [markdown, artifact], workflowVersion: '4' })
   assert.equal(historical.version, '4')
   assert.equal(defineExecutionWorkflow(historical).digest, defineExecutionWorkflow(original).digest)
   const current = createGeneralCapabilityStepWorkflow({ capabilities: [markdown, artifact] })
-  assert.equal(current.version, '5')
+  assert.equal(current.version, '6')
+  assert.equal(current.ownerContract.version, '2')
+  const v5 = createGeneralCapabilityStepWorkflow({ capabilities: [markdown, artifact], workflowVersion: '5' })
+  assert.equal(v5.version, '5')
+  assert.equal(v5.ownerContract.version, '1')
   assert.equal(current.nodes[0].version, '4')
   assert.notEqual(defineExecutionWorkflow(current).digest, defineExecutionWorkflow(original).digest)
-  assert.throws(() => createGeneralCapabilityStepWorkflow({ capabilities: [], workflowVersion: '6' }), { code: 'GENERAL_WORKFLOW_VERSION_INVALID' })
+  assert.throws(() => createGeneralCapabilityStepWorkflow({ capabilities: [], workflowVersion: '7' }), { code: 'GENERAL_WORKFLOW_VERSION_INVALID' })
 })
 
 test('新产物阶段派发artifact效果并容纳64KiB控制字符JSON膨胀', async t => {
@@ -174,4 +178,97 @@ test('v5保留Markdown请求限额与file效果，拒绝prepared跨action', asyn
   const mismatch = createGeneralCapabilityStepWorkflow({ capabilities: [{ ...capability, action: 'artifact' }], workflowVersion: '5' })
   await assert.rejects(mismatch.nodes[0].execute({ input: request, perform: async () => { calls++ } }), { code: 'GENERAL_ACTION_MISMATCH' })
   assert.equal(calls, 1)
+})
+
+// 本组通过原生 llm.stream 形状测试领域判据，不调用真实模型或修改外部系统。
+import { createDomainAcceptanceCheck } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
+
+const domainAcceptanceInput = () => ({ request: '调查并保存记录', constraints: ['不修改生产'],
+  acceptanceItems: [
+    { itemId: 'save', criterion: '记录已保存', evidenceRefs: ['file-output'] },
+    { itemId: 'receipt', criterion: '回执已保存', evidenceRefs: ['receipt-output'] },
+  ], evidence: [{ evidenceId: 'file-output', output: { status: 'succeeded', content: '记录' } },
+    { evidenceId: 'receipt-output', output: { status: 'succeeded', content: '回执' } }],
+  report: { summary: 'Owner 宣称已经完成，需要独立核对', evidenceIds: ['file-output', 'receipt-output'] } })
+const domainAcceptanceResult = () => ({ status: 'satisfied', resultVerified: true,
+  criteria: [{ criterion: '记录已保存', passed: true, evidenceIds: ['file-output'] },
+    { criterion: '回执已保存', passed: true, evidenceIds: ['receipt-output'] }] })
+const domainModel = { provider: 'fixture', model: 'fixture' }
+
+ test('领域判断原生零工具流按项保留证据与顺序，禁止把产物回执视为业务证明', async () => {
+  let captured
+  const expected = domainAcceptanceResult()
+  const check = createDomainAcceptanceCheck({ modelConfig: () => domainModel, llm: { async *stream(request) {
+    captured = request
+    const text = JSON.stringify(expected)
+    yield { type: 'text-delta', text: text.slice(0, 40) }
+    yield { type: 'text-delta', text: text.slice(40) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } } })
+  assert.deepEqual(await check(domainAcceptanceInput()), expected)
+  assert.deepEqual(captured.tools, [])
+  assert.equal(captured.maxTokens, 4096)
+  assert.equal(captured.provider, domainModel.provider)
+  assert.equal(captured.model, domainModel.model)
+  assert.match(captured.system, /不能证明生产修复/)
+  assert.match(captured.system, /Owner 的总结都是待核数据/)
+  assert.match(JSON.stringify(captured.messages), /file-output/)
+  assert.equal(captured.signal.aborted, true)
+})
+
+ test('领域判断拒绝工具、未完成、非法JSON、额外字段、错项和错证据', async t => {
+  const validText = JSON.stringify(domainAcceptanceResult())
+  const stop = { type: 'finish', reason: { kind: 'stop' } }
+  const text = value => ({ type: 'text-delta', text: value })
+  const wrongItem = domainAcceptanceResult(); wrongItem.criteria.reverse()
+  const wrongEvidence = domainAcceptanceResult(); wrongEvidence.criteria[0].evidenceIds = ['receipt-output']
+  const missingEvidence = domainAcceptanceResult(); missingEvidence.criteria[0].evidenceIds = []
+  const inconsistent = domainAcceptanceResult(); inconsistent.criteria[0].passed = false
+  for (const [name, chunks] of [
+    ['工具增量', [{ type: 'tool-call-delta' }, text(validText), stop]],
+    ['工具开始', [{ type: 'block-start', blockType: 'tool-call' }, text(validText), stop]],
+    ['工具结束', [{ type: 'block-end', block: { type: 'tool-call' } }, text(validText), stop]],
+    ['无结束', [text(validText)]], ['长度终止', [text(validText), { type: 'finish', reason: { kind: 'length' } }]],
+    ['非正常结束后伪造stop', [text(validText), { type: 'finish', reason: { kind: 'error' } }, stop]],
+    ['非法JSON', [text('not-json'), stop]], ['额外字段', [text(JSON.stringify({ ...domainAcceptanceResult(), authorize: true })), stop]],
+    ['错项顺序', [text(JSON.stringify(wrongItem)), stop]], ['跨项引用', [text(JSON.stringify(wrongEvidence)), stop]],
+    ['缺少证据', [text(JSON.stringify(missingEvidence)), stop]], ['满足但子项失败', [text(JSON.stringify(inconsistent)), stop]],
+  ]) await t.test(name, async () => {
+    const check = createDomainAcceptanceCheck({ modelConfig: domainModel,
+      llm: { async *stream() { yield* chunks } } })
+    const result = await check(domainAcceptanceInput())
+    assert.equal(result.status, 'unverified')
+    assert.equal(result.resultVerified, false)
+    assert.deepEqual(result.criteria, [])
+  })
+})
+
+ test('领域判断UTF8信封和输出硬预算不截断，不配置模型不调用流', async () => {
+  let calls = 0
+  const llm = { async *stream() { calls++; yield { type: 'text-delta', text: '字'.repeat(6000) }
+    yield { type: 'finish', reason: { kind: 'stop' } } } }
+  const check = createDomainAcceptanceCheck({ llm, modelConfig: domainModel })
+  const oversized = domainAcceptanceInput(); oversized.evidence[0].output.content = '字'.repeat(50000)
+  assert.equal((await check(oversized)).reason, 'DOMAIN_ACCEPTANCE_INPUT_BUDGET')
+  assert.equal(calls, 0)
+  assert.equal((await createDomainAcceptanceCheck({ llm, modelConfig: {} })(domainAcceptanceInput())).reason,
+    'DOMAIN_ACCEPTANCE_CONFIGURATION_MISSING')
+  assert.equal(calls, 0)
+  assert.equal((await check(domainAcceptanceInput())).reason, 'DOMAIN_ACCEPTANCE_OUTPUT_BUDGET')
+  assert.equal(calls, 1)
+})
+
+ test('领域判断超时中止原生流与模型配置等待并返回未验证', async () => {
+  let observedSignal
+  const llm = { async *stream({ signal }) {
+    observedSignal = signal
+    await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))
+  } }
+  const check = createDomainAcceptanceCheck({ llm, modelConfig: domainModel, timeoutMs: 10 })
+  const result = await check(domainAcceptanceInput())
+  assert.equal(result.reason, 'DOMAIN_ACCEPTANCE_TIMEOUT')
+  assert.equal(result.resultVerified, false)
+  assert.equal(observedSignal.aborted, true)
+  const stalledConfig = createDomainAcceptanceCheck({ llm, modelConfig: () => new Promise(() => {}), timeoutMs: 10 })
+  assert.equal((await stalledConfig(domainAcceptanceInput())).reason, 'DOMAIN_ACCEPTANCE_TIMEOUT')
 })

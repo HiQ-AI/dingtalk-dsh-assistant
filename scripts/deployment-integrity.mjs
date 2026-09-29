@@ -115,6 +115,45 @@ export async function verifyDeploymentBackup({ runtime, domain, profile, backupR
     sha256: hash(await readFile(restoredPath)), tables: restored.tables, ...closure } }
 }
 
+/** 失败启动后只读复核原备份；安装后的 profile 依赖文件不再与安装前备份比较。 */
+export async function reverifyDeploymentBackup({ backupRoot, domain, runtime }) {
+  const proof = JSON.parse(await readFile(join(backupRoot, 'manifest.json'), 'utf8'))
+  if (proof.verified !== true || !Array.isArray(proof.manifest) || proof.database?.restoreFile !== 'runtime/verified-control.sqlite') fail('BACKUP_MANIFEST_INVALID')
+  const expected = new Set(['manifest.json', proof.database.restoreFile])
+  for (const item of proof.manifest) {
+    if (!/^(domain|runtime|profile)\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\\]+$/.test(item.path) || expected.has(item.path)) fail('BACKUP_MANIFEST_INVALID')
+    expected.add(item.path)
+    const bytes = await readFile(join(backupRoot, item.path))
+    if (bytes.length !== item.bytes || hash(bytes) !== item.sha256) fail('BACKUP_COPY_MISMATCH')
+    // 原业务文件必须仍然一致；控制账通过原 control-before 和逻辑历史核对。
+    if (item.path.startsWith('domain/') || item.path.startsWith('runtime/artifacts/')) {
+      const current = item.path.startsWith('domain/') ? join(domain, item.path.slice(7)) : join(runtime, item.path.slice(8))
+      if (hash(await readFile(current)) !== item.sha256) fail('BACKUP_SOURCE_CHANGED')
+    }
+  }
+  // 原一致性副本的只读 WAL 连接会留下空 WAL/SHM；不允许其中携带任何事务。
+  const actual = await files(backupRoot)
+  const wal = `${proof.database.restoreFile}-wal`, shm = `${proof.database.restoreFile}-shm`
+  if (actual.includes(wal) || actual.includes(shm)) {
+    if (!actual.includes(wal) || !actual.includes(shm) || (await lstat(join(backupRoot, wal))).size !== 0
+      || (await lstat(join(backupRoot, shm))).size !== 32768) fail('BACKUP_DATABASE_SIDECAR_INVALID')
+    expected.add(wal); expected.add(shm)
+  }
+  if (JSON.stringify(actual) !== JSON.stringify([...expected].sort())) fail('BACKUP_FILE_SET_MISMATCH')
+  for (const [prefix, current] of [['domain/', domain], ['runtime/artifacts/', join(runtime, 'artifacts')]]) {
+    const recorded = proof.manifest.filter(item => item.path.startsWith(prefix)).map(item => item.path.slice(prefix.length)).sort()
+    if (JSON.stringify(await files(current)) !== JSON.stringify(recorded)) fail('BACKUP_SOURCE_FILE_SET_CHANGED')
+  }
+  const restoredPath = join(backupRoot, proof.database.restoreFile)
+  if (hash(await readFile(restoredPath)) !== proof.database.sha256) fail('BACKUP_DATABASE_READBACK_MISMATCH')
+  const db = new DatabaseSync(restoredPath, { readOnly: true })
+  let restored
+  try { restored = databaseProof(db) } finally { db.close() }
+  if (JSON.stringify(restored.tables) !== JSON.stringify(proof.database.tables)) fail('BACKUP_DATABASE_READBACK_MISMATCH')
+  const closure = await verifyArtifactClosure(join(backupRoot, 'runtime/artifacts'), restored.refs)
+  return { verified: true, files: proof.manifest.length, tables: restored.tables.length, ...closure, writes: 0 }
+}
+
 /** 凭据只在内存交换，错误不包含启动URL、cookie或日志内容。 */
 export async function verifyDeploymentWeb(logPath, fetchImpl = fetch) {
   const healthResponse = await fetchImpl('http://127.0.0.1:18998/health', { signal: AbortSignal.timeout(10000) })

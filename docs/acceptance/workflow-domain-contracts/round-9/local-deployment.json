@@ -1,0 +1,153 @@
+{
+  "web": {
+    "recoveryIssueCount": 0,
+    "authenticatedWebStatus": 200,
+    "tokenExchangeStatus": 303,
+    "controlHealth": "degraded",
+    "inboundProcessing": false,
+    "credentialPrinted": false
+  },
+  "online": {
+    "statuses": [
+      400,
+      400
+    ],
+    "taskCount": 78,
+    "taskDelta": 0,
+    "catalog": [
+      {
+        "id": "task-group-file-delivery",
+        "version": "2"
+      },
+      {
+        "id": "task-investigation",
+        "version": "6"
+      },
+      {
+        "id": "task-engineering",
+        "version": null
+      },
+      {
+        "id": "task-uat-deployment",
+        "version": "1"
+      },
+      {
+        "id": "task-main-pr-merge",
+        "version": null
+      },
+      {
+        "id": "task-uat-pr-merge",
+        "version": "3"
+      },
+      {
+        "id": "task-production-release",
+        "version": "2"
+      },
+      {
+        "id": "task-data-change",
+        "version": "3"
+      },
+      {
+        "id": "task-uat-rebuild",
+        "version": "1"
+      }
+    ],
+    "zeroCreatedTasks": true
+  },
+  "backup": {
+    "verified": true,
+    "files": 2374,
+    "tables": 28,
+    "artifactRefs": 815,
+    "artifactBytes": 4162704,
+    "writes": 0
+  },
+  "history": {
+    "verified": true,
+    "tasks": 21,
+    "oldNodes": 76,
+    "oldRuns": 27,
+    "legacy": 68
+  },
+  "package": {
+    "verifiedFiles": 97,
+    "sha256": "0407118f188537bb0f89e5ee7648e3bc0b7a5a2f37049266c66990614aac70be"
+  },
+  "pid": 13688,
+  "tempRecovery": {
+    "freeBytes": 66105344,
+    "filesDeleted": 0,
+    "movedDirectories": 346,
+    "verifiedFiles": 1267
+  },
+  "native": {
+    "installed": "D:\\dsh_home\\profiles\\web\\node_modules\\@zzusp\\dingtalk-dsh-assistant",
+    "model": {
+      "provider": "openai-codex",
+      "model": "gpt-6-sol",
+      "reasoningEffort": "low"
+    },
+    "providerSettings": "installed-defaults",
+    "results": [
+      {
+        "case": "unrelated-note",
+        "passed": true,
+        "completed": false,
+        "savedFileVerified": true,
+        "manifestRef": null
+      },
+      {
+        "case": "saved-document",
+        "passed": true,
+        "completed": true,
+        "savedFileVerified": true,
+        "manifestRef": "sha256-48070b5e9a06234427e323d2598dd7aee263e125363005f3c4f7355d16e09347.json"
+      }
+    ],
+    "checks": [
+      {
+        "criteria": [
+          "生产故障已修复并验证不再复现"
+        ],
+        "result": {
+          "status": "unsatisfied",
+          "resultVerified": false,
+          "criteria": [
+            {
+              "criterion": "生产故障已修复并验证不再复现",
+              "passed": false,
+              "evidenceIds": [
+                "sha256-b009d9977ca96374e8f6b066716e4dcd93763415ddcb7878e76d78ba73030dfc.json"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "criteria": [
+          "调查记录已保存为 Markdown 文档"
+        ],
+        "result": {
+          "status": "satisfied",
+          "resultVerified": true,
+          "criteria": [
+            {
+              "criterion": "调查记录已保存为 Markdown 文档",
+              "passed": true,
+              "evidenceIds": [
+                "sha256-3cee0f21ee7a81266493f14ddcd0937fae8d7647fa243d1185a5b13727ad9134.json"
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "realProvider": true,
+    "ownerAndInvestigation": "fixed-candidates",
+    "isolatedStorage": true,
+    "externalMessages": 0,
+    "businessDatabaseCalls": 0
+  },
+  "stage": "started-maintenance-held",
+  "profileSha256": "5D3E9C333EB33F9A38971E1485F2858EDE87E810F7ECE49DEF12C88701FC933F"
+}

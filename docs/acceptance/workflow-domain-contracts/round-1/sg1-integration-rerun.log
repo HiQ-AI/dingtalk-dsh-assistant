@@ -1,0 +1,297 @@
+✔ 历史成功阶段观察沿用旧事件身份，不唤醒已完成Owner (266.8954ms)
+✔ 原生维护恢复仅处理重复观察，重启保留原complete及错误回合与事件 (475.4627ms)
+✔ 完成观察恢复拒绝新业务事件 (461.7372ms)
+✔ 完成观察恢复拒绝不同产出 (473.0277ms)
+✔ 完成观察恢复拒绝权限变化 (478.3636ms)
+✔ 完成观察恢复拒绝要求变化 (460.1757ms)
+✔ 完成观察恢复拒绝计划变化 (420.3819ms)
+✔ 完成观察恢复拒绝新业务执行 (464.1752ms)
+✔ 完成观察恢复拒绝节点未排空 (420.7388ms)
+✔ 完成观察恢复拒绝阶段未成功 (422.0787ms)
+✔ 完成观察恢复拒绝原完成证明未应用 (394.9519ms)
+✔ 完成观察恢复拒绝完成后接纳业务决定 (367.7373ms)
+✔ 完成观察恢复拒绝不确定外部效果 (355.6782ms)
+✔ 启动材料引用由Host列举，查询资源和其他事项引用不能进入材料等待 (2.4839ms)
+✔ answer objective进入消息Agent并持久产出、零Task，补读及重启不重执行或重发 (340.3949ms)
+✔ 慢查询不堵塞其他消息判断和独立Agent执行 (342.3276ms)
+✔ 错误查询资源引用在意图落账前纠正，不生成材料等待或重复执行 (306.3895ms)
+✔ 异步问答完成即派发后继，不依赖再次process或恢复轮询 (322.7709ms)
+✔ 同话题后续问题读取既有话题，但创建独立消息会话和发送者范围 (371.7888ms)
+✔ 需要补充创建message request，授权答复沿用会话递增输入版本 (361.6055ms)
+✔ 新目录统一调查入口，旧材料流程不再可选 (186.1843ms)
+✔ 能力受阻如实结束为blocked，伪造工具证据不能成为回答 (481.8158ms)
+✔ 通知发送未知后重启只补读原通知，不重复Agent执行与外发 (305.7418ms)
+✖ 已排队旧answer.text明确拒绝，不由新Agent猜测旧合同 (220.1735ms)
+✔ 消息trace只返回Agent摘要、耗时和绑定会话，长产出按需分页且不允许跨消息工件 (277.5357ms)
+✔ Agent资源权限独立于发送者，各发送者使用相同职责范围 (282.5439ms)
+✖ 单Task恢复失败和正在执行Task不能阻止其它恢复与通知扫描 (8.2974ms)
+✔ 大量unknown通知不能挤掉新prepared；对账游标可到下一页 (1008.3721ms)
+✔ 旧活动Task不会被超过200条新终态任务挤出恢复索引 (1091.0988ms)
+✔ 维护HTTP仅受信本机身份可改，严格参数、幂等与过期许可均校验 (439.0978ms)
+✔ 完成观察维护HTTP复用原生完成证明，拒绝跨源和伪造身份并校验CAS (519.796ms)
+✔ service真实恢复入口不重派确定性错误，只有明确暂态可有限重试 (4532.925ms)
+✔ 预算续行真实HTTP与Controller保留54次消耗、验收一次、旧失败领取及阶段门禁 (2224.3249ms)
+✔ 默认日常能力按当前原文生成 Markdown，并拒绝把排查目标当整理完成 (0.8011ms)
+✔ 平台附件只读能力绑定当前 Task 消息、附件 ID 与来源版本，并独立二次回读 (0.5767ms)
+✔ 平台附件变更、跨群回读和二次内容漂移均不能成为通用任务证据 (0.3296ms)
+✔ 短指代消息优先呈现紧邻来源的话题，显式引用仍优先 (6.7306ms)
+✔ 明确交办与问题报告分开准入 (0.6919ms)
+✔ 群回复署名只取唯一明确职责，不默认身份，不重复或注入内部信息 (0.5568ms)
+✔ 状态问句支持任意配置名称及别名，改名和清空后不保留旧身份捷径 (343.2306ms)
+✔ 内置进展查询限制本群与八项候选，流程结果可审计 (0.7618ms)
+✔ 渠道回读归一化空白及已观察inline-code样式，正文差异仍阻止送达 (0.3706ms)
+✔ DWS 发送 ACK 的实际 result.openTaskId 可用于独立回读 (0.0743ms)
+✔ 群职责指定的日常代答署名在通知准备时固化且不会重复附加 (0.0775ms)
+✔ 群职责贯穿即时进展查询的持久通知正文与引用来源 (198.9837ms)
+✔ 群职责调整后已送达通知保留原正文，新通知仍可继续发送 (252.5951ms)
+✔ 工作流通知引用来源消息，缺来源才发送普通群消息 (0.5135ms)
+✖ 正式 Web 重执行新建独立任务，持久幂等、原任务不变、恢复只留 Web 且拒绝越权阶段 (4229.7122ms)
+✔ I 只能提交目标：Task 与 Owner 原子接纳，Owner 未建计划前没有业务 Run (218.8575ms)
+✔ 真实同库消息接纳→固定Task执行→看板结果；重复入站不重复创建 (295.7134ms)
+✔ 没有 Owner 的已成功问答计划显示完成，结果中的未知不制造等待；确认阶段仍等待 (255.5869ms)
+✔ 流程成功后由同一Task负责人验收并只汇报一次最终结果 (294.2217ms)
+✔ 最终报告领取前新增目标使旧完成通知失效，已完成流程不重跑 (289.2402ms)
+✔ 同一任务承接与最终报告并存时只按精确通知身份纠正最终报告 (322.3456ms)
+✔ 仅把已完成任务报告改成中文只唤醒Owner，不重跑排查或新增Run (423.2406ms)
+✔ Owner长事件积压分页读取全部内容后才推进同一Task水位 (519.5545ms)
+✔ 账号问题与“这不是让你去查吗”回到同一Task，不重建或丢失原上下文 (374.2842ms)
+✔ 同一话题含两个Task时按明确目标绑定短追问，不默认最近执行Run (344.3551ms)
+✔ 模型要求为非本人创建Task仍被Host拒绝，未受权群也拒绝 (181.284ms)
+✔ 无可信消息编辑版本不能把变更正文当重复消息或新授权 (158.371ms)
+✔ Web与IM引用同一澄清首终态生效，无权拒绝且答复不新建消息或重跑S (211.5189ms)
+✔ 纯话题事实同库沉淀，后续任务读取原文并强制继承话题约束 (280.6259ms)
+✔ 旧完成Task只读候选返回旧结果，不调用新controller或恢复旧引擎 (214.4284ms)
+✔ 群集合查询不要求单个Task身份 (213.7313ms)
+✔ 必需附件正文进入Task固定输入且保留意图约束 (321.0441ms)
+✔ 通知ACK丢失只回查不重发；当前披露不允许时零发送 (260.8725ms)
+✔ 同文高版本编辑复用原Task且别名重投回原run (258.541ms)
+✔ 群职责允许明确点名交办创建任务，普通问题报告仍无创建权 (357.004ms)
+✔ 本机操作者逐条重处理旧澄清，旧请求失效且有命令消息拒绝重跑 (293.5569ms)
+✔ 无引用的先别管它静默收束，不追问也不创建任务 (162.9844ms)
+✔ 第三方任务已创建进展同步即使含@也静默，不生成澄清或业务任务 (161.7866ms)
+✔ 已送达回复引用可将第三方进展静默绑定到唯一话题，且旧消息可确定性补录 (234.5279ms)
+✔ 已完成的纯排查任务再次收到相同问题反馈时提出修复授权问题 (188.0329ms)
+✔ 旧任务缺标题且长目标进入R候选时仍能计算材料摘要 (1747.5441ms)
+✔ 旧排查任务的肯定答复只授权同一消息继续准入，随后可创建新工作流任务 (292.0222ms)
+✔ 本人可答复他人旧排查澄清，其他群成员不能冒用且不阻断消息接收 (402.6778ms)
+✔ 明确问小助手审核问题是否部署时即使I误判无动作也回读群任务 (220.5219ms)
+✔ 审核状态问句、两个任务说明和引用问题清单归为同一话题，不误建三个任务 (281.4604ms)
+✔ 恢复扫描先重试一次无回执只读查询，再完成原命令 (167.5575ms)
+✔ 回声先启动模型而通知随后读回时，隔离取消原调用且迟到结果不影响 drained (200.9532ms)
+✔ 已回读的自身澄清通知不再作为新消息入站，收发信箱分别投影 (175.7338ms)
+✔ 受管撤回逐条核验负责人原消息，回读后补发保留原通知 (291.0499ms)
+✔ 群职责进入 I 而不占用 S/R；任务历史可由固定材料键读取 (200.1896ms)
+✔ 群成员可核对本群旧任务摘要和UAT2交付状态，跨群历史不可读取 (198.9551ms)
+✔ 旧群历史缺发送人字段时仍能写入快照 (162.9245ms)
+✔ I 的流程提示不直接派发；专业目录供 Owner 选择，缺适配器不执行外部效果 (482.3497ms)
+✔ 受信外部适配器齐备时目录可见，I 仍不能直接启动外部效果 (551.6164ms)
+✔ 原消息否定编辑取消原Task，不发第二个任务且屏障释放 (355.4752ms)
+✔ 运行中原消息修订更新 Task 要求并保持旧 Run 输入冻结 (362.5539ms)
+✔ 新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入不执行，暂停不恢复 (360.995ms)
+✔ Controller未排空错误投影等待原因，不能显示正常执行 (253.5678ms)
+✔ Web事件已准备后中断由恢复通路接纳一次，后续恢复不重复输入 (321.9994ms)
+✔ C01 媒体连接器挂起不阻durable接收和独立SQLite读回 (265.3448ms)
+✔ 只关联话题时意图仍读到已执行Task及结果限制，运行成功不冒充目标达成 (342.4884ms)
+✔ 方案阶段完成后等待确认，确认沿用业务Task并只启动下一阶段 (526.0054ms)
+✔ UAT 缺受信适配器时已完成分析保留，Owner 后续阶段明确受阻 (276.5476ms)
+✔ 阶段间取消后经原发送人重新授权，只替换未完成后缀 (552.7363ms)
+✔ 已绑定Owner会话确实缺失时换代并在原Task恢复，旧任务命令不重复创建 (256.8079ms)
+✖ 专业分析后在同一 Task 读取前序产物，不依赖 general intake (500.986ms)
+✔ Owner 可在零阶段 Task 选择共享调查并按来源完成原文整理 (407.5756ms)
+✔ 执行中收到追加阶段意图时保留当前Run，完成后从核验产物启动后继 (583.3405ms)
+✔ 纯排查完成后续办仍用原业务Task，原Run成功证据不重跑 (598.12ms)
+✖ C13 渠道读回挂起时新业务和取消继续，ACK不冒充送达 (359.0393ms)
+✔ 只读轨迹 API 回读真实节点、话题批次与已绑定 Owner，并隔离其他群 (294.7939ms)
+✔ 步骤产出只投影业务正文及限制，不泄露任意对象字段 (372.2363ms)
+✔ 当前工程和分析节点逐类投影，数量去重且准备态不冒充执行 (2.3835ms)
+✔ 只有局部替换的工程方案仍展示真实产出，分页不丢修改前后内容 (327.8211ms)
+✔ 只读历史执行 API 不把预留 Owner 身份伪装成已绑定会话 (239.3349ms)
+✔ 消息证据 API 仅回读绑定原文并以 hash 固定分页版本 (412.9927ms)
+✔ 超过 200 个话题时明确引用仍找回最早话题且不建新 Task (1234.3576ms)
+✖ 同话题一千条相同事实在 IB 合并投影，跨发送人或不同约束不合并 (7757.8292ms)
+✔ 原发送人撤销仅排查条件可替换历史，另一发送人不得替换或派发 (460.0545ms)
+✔ 局部撤销范围及模型误报整话题均保留其他任务限制且零派发 (385.1341ms)
+✔ 普通 answer 的 Host 门禁拒绝已排队的旧参数与任务参数，且不豁免创建权限 (175.8126ms)
+✔ 普通 answer 回复原任务消息的编辑，不被误当新增事项也不修改原任务 (323.747ms)
+✔ 普通 answer 对旧任务仅允许本群只读答复，跨群仍拒绝 (199.3287ms)
+✔ 普通 answer 可向 owner 引用回复，重复处理不重发且不创建任务 (213.8809ms)
+✔ 普通 answer 可向 participant 引用回复，重复处理不重发且不创建任务 (222.4581ms)
+✔ 普通 answer 保留 none 通知门禁 (207.6443ms)
+✔ 普通 answer 保留 denied 通知门禁 (200.016ms)
+✔ 普通 answer 发送结果未知后重启只补读原通知，不重复派发 (211.6453ms)
+✔ 方案节点仅返回真实工件路径，不附正文、摘要或下载名称 (320.3113ms)
+✔ 业务验收产出独立显示验收项、预期和实际结果 (0.3611ms)
+✔ 开发目标缺失或不明确先询问具体UAT：修复合并问题/undefined (180.3129ms)
+✔ 开发目标缺失或不明确先询问具体UAT：修复合并问题/uat1 (194.2938ms)
+✔ 开发目标缺失或不明确先询问具体UAT：提交到uat1或uat2/uat1 (172.2801ms)
+✔ 开发目标缺失或不明确先询问具体UAT：提交到uat1～9/uat1 (199.8221ms)
+✔ UAT澄清回答绑定同一请求并进入任务目标，不猜环境或重新拆消息 (256.798ms)
+✔ 本地验收产出：条件、方案与目录准确展示且不泄漏执行参数 (1.161ms)
+✔ 本地验收产出：阶段耗时、预期实际与清理结果进入同一报告 (0.9488ms)
+✔ 只读本地验收明确没有业务数据写入，不冒充删除数据 (0.1872ms)
+✔ 本地验收产出：dataCleaned未确认不能显示整体通过 (0.1768ms)
+✔ 本地验收产出：processStopped未确认不能显示整体通过 (0.0788ms)
+✔ 本地验收产出：业务失败和缺失实际结果不伪装通过 (0.2031ms)
+✔ 本地验收产出：执行中、未知状态及空回执明确标记未确认 (0.1465ms)
+✔ 暂态恢复三次上限与退避持久化 ECONNRESET，重开控制账不能重置额度 (4121.0347ms)
+✔ 暂态恢复三次上限与退避持久化 ENGINEERING_REMOTE_READ_TRANSIENT，重开控制账不能重置额度 (3982.0633ms)
+✔ 交付只读恢复 succeeded：既有效果不重发且仅成功恢复原节点 (435.3787ms)
+✔ 交付只读恢复 unknown：既有效果不重发且仅成功恢复原节点 (392.8019ms)
+✔ 交付只读恢复 failed：既有效果不重发且仅成功恢复原节点 (359.3599ms)
+✔ 交付只读恢复 throws：既有效果不重发且仅成功恢复原节点 (347.7956ms)
+✔ 交付只读恢复屏障 maintenance (358.5651ms)
+✔ 交付只读恢复屏障 pause (338.8359ms)
+✔ 交付只读恢复屏障 stop (344.9947ms)
+✔ 交付只读恢复屏障 input (332.0679ms)
+✔ 交付只读恢复屏障 maintenance-during-read (321.7917ms)
+✔ UAT Web 审批完整请求ID uat-deployment/approved：可见、授权、首终态与Owner事件幂等 (409.8262ms)
+✔ UAT Web 审批完整请求ID uat-deployment/rejected：可见、授权、首终态与Owner事件幂等 (352.62ms)
+✔ UAT Web 审批完整请求ID uat-rebuild/approved：可见、授权、首终态与Owner事件幂等 (359.7809ms)
+✔ 普通UAT构建失败收口 receipt=true：单次发送、保留失败证据且不反复恢复 (444.33ms)
+✔ 普通UAT构建失败收口 receipt=false：单次发送、保留失败证据且不反复恢复 (374.3858ms)
+✔ 普通UAT构建失败收口 receipt=observed：单次发送、保留失败证据且不反复恢复 (361.7282ms)
+✔ 任务投影只在真实等待时显示原因，完成后隐藏遗留原因且不改历史 (285.9722ms)
+✔ 真实Owner路径保留工程本地验收与合并前缀，失败第三阶段重建后可结案 (1096.9715ms)
+✖ 调查成功产物经真实Service与工程准备进入方案节点输入，伪造前序引用拒绝 (966.5684ms)
+✔ 渠道inline-code转换可独立回读，值变化仍拒绝 (0.5755ms)
+✔ 新版任务真实HTTP归档仅完成可用，幂等持久且不改变节点产物或发送消息 (505.8028ms)
+✔ 新版任务归档拒绝运行中与等待中任务且不记录归档事件 (323.4646ms)
+✔ 同任务汇总卡片并分页历次执行：取消保留阶段成果、旧详情与权限隔离 (436.1098ms)
+✔ 当前完整详情保留已成功前段，替换删除新增后段并隔离同名步骤 (552.6461ms)
+✔ 当前完整详情只取最新节点代次，需求更新后旧结果及正文立即失效 (2415.0671ms)
+✔ 当前完整详情拒绝持续变化的版本，不交付混合计划快照 (346.8407ms)
+✔ 历史并发分叉保持一张活动卡片，相同标题的独立任务不合并 (0.42ms)
+✔ 完整任务目录超过200条运行仍保留旧任务，投影不超过原生RPC队列 (4320.3198ms)
+✔ 待澄清和待材料有各自状态及原因，真正失败仍为关联受阻 (170.9278ms)
+ℹ tests 165
+ℹ suites 0
+ℹ pass 158
+ℹ fail 7
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 71560.3984
+
+✖ failing tests:
+
+test at test\workflow-agent-service.test.js:211:1
+✖ 已排队旧answer.text明确拒绝，不由新Agent猜测旧合同 (220.1735ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /明确问题目标/. Input:
+
+  '请求未执行：请说明需要回答的具体问题'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-agent-service.test.js:220:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '请求未执行：请说明需要回答的具体问题',
+    expected: /明确问题目标/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test\workflow-recovery.test.js:9:1
+✖ 单Task恢复失败和正在执行Task不能阻止其它恢复与通知扫描 (8.2974ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + []
+  - [
+  -   'bad',
+  -   'good'
+  - ]
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-recovery.test.js:14:51)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'bad', 'good' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:490:1
+✖ 正式 Web 重执行新建独立任务，持久幂等、原任务不变、恢复只留 Web 且拒绝越权阶段 (4229.7122ms)
+  Error: missing required property "value.acceptanceItems"
+      at admitResult (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-controller.js:34:25)
+      at prepareInput (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-controller.js:139:11)
+      ... 4 lines matching cause stack trace ...
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'NODE_SCHEMA_INVALID',
+    phase: 'input-validation',
+    nodeId: 'investigate',
+    [cause]: Error: missing required property "value.acceptanceItems"
+        at executionError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-artifacts.js:5:76)
+        at validate (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-controller.js:15:28)
+        at file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-controller.js:139:58
+        at admitResult (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-controller.js:33:22)
+        at prepareInput (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-controller.js:139:11)
+        at async Object.createRun (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-controller.js:372:21)
+        at async Object.advanceTaskPlan (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-controller.js:559:7)
+        at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:585:22)
+        at async Test.run (node:internal/test_runner/test:1389:7)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+      code: 'NODE_SCHEMA_INVALID'
+    }
+  }
+
+test at test\workflow-service.test.js:1895:1
+✖ 专业分析后在同一 Task 读取前序产物，不依赖 general intake (500.986ms)
+  Error: ARTIFACT_REFERENCE_INVALID
+      at executionError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-artifacts.js:5:76)
+      at target (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-artifacts.js:34:57)
+      at Object.read (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-artifacts.js:38:34)
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:1940:47)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'ARTIFACT_REFERENCE_INVALID'
+  }
+
+test at test\workflow-service.test.js:2078:1
+✖ C13 渠道读回挂起时新业务和取消继续，ACK不冒充送达 (359.0393ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'failed'
+  - 'succeeded'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:2088:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'failed',
+    expected: 'succeeded',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:2325:1
+✖ 同话题一千条相同事实在 IB 合并投影，跨发送人或不同约束不合并 (7757.8292ms)
+  Error: database or disk is full
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'ERR_SQLITE_ERROR',
+    sqliteCode: 13
+  }
+
+test at test\workflow-service.test.js:2963:1
+✖ 调查成功产物经真实Service与工程准备进入方案节点输入，伪造前序引用拒绝 (966.5684ms)
+  AssertionError [ERR_ASSERTION]: {"plan":{"task":{"taskId":"task-71e54999f9b9b94b994120d935103bd4","requirementRevision":1,"planRevision":1,"requirementRef":"sha256-e214fdf932f184f8bb171125b5ba9b9fde404e589cee2a03aed0a8df8fe89b05.json","planRequirementRevision":1,"controlRevision":1,"controlState":"active","status":"blocked","planStatus":"blocked","createdAt":"2026-09-29T01:25:01.897Z","updatedAt":"2026-09-29T01:25:01.949Z"},"stages":[{"stageId":"stage-1","position":0,"workflowId":"task-investigation","workflowDigest":"87bcd508a1ade08e99d8880de889aa10563fe00b0bf49e952344c2bb81bcab57","unavailableReason":null,"requirementRef":"sha256-b524600d6117f0a6002c5ec1fff99197ac888b65f0c148057c6081c4f197c788.json","predecessorOutputRef":null,"gate":"none","status":"blocked","attempt":1,"runId":"run-a8485300b9729276f8b2204adae1084e7f5c2031810a73cbb47e704452cf275a","outputRef":null,"evidenceRefs":[],"confirmedOutputRef":null},{"stageId":"stage-2","position":1,"workflowId":"task-engineering","workflowDigest":null,"unavailableReason":null,"requirementRef":null,"predecessorOutputRef":null,"gate":"none","status":"blocked","attempt":1,"runId":null,"outputRef":null,"evidenceRefs":[],"confirmedOutputRef":null}]},"state":null}
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:3014:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

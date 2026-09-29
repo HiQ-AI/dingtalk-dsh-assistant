@@ -1,3 +1,4 @@
+import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { checkForUpdates } from './version-check.js'
 import { z } from 'zod'
 import { taskContextImpactFields } from './decision.js'
@@ -101,9 +102,9 @@ const requiredText = z.string().trim().min(1)
 const topicRefsSchema = z.array(z.strictObject({ topicId: requiredText, revision: z.number().int().positive() })).min(1)
 const taskInputFields = {
   requestId: requiredText, context: requiredText, topicRefs: topicRefsSchema,
-  title: requiredText.max(120).optional(), objective: requiredText.optional(), acceptanceCriteria: z.array(requiredText).min(1).optional(), stageTasks: z.array(requiredText).min(1).optional(),
+  title: requiredText.max(120).optional(), objective: requiredText.optional(), acceptanceCriteria: acceptanceCriteriaSchema.optional(), stageTasks: z.array(requiredText).min(1).optional(),
 }
-const createTaskInputSchema = z.strictObject({ ...taskInputFields, groupId: requiredText, title: requiredText, objective: requiredText, acceptanceCriteria: z.array(requiredText).min(1), topicRefs: topicRefsSchema.optional() })
+const createTaskInputSchema = z.strictObject({ ...taskInputFields, groupId: requiredText, title: requiredText, objective: requiredText, acceptanceCriteria: acceptanceCriteriaSchema, topicRefs: topicRefsSchema.optional() })
 const updateTaskInputSchema = z.strictObject({ ...taskInputFields, inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() })
 const contextTaskInputSchema = updateTaskInputSchema.extend(taskContextImpactFields)
 const cancelTaskInputSchema = z.strictObject({ requestId: requiredText, reason: requiredText, inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), topicRefs: topicRefsSchema })
@@ -173,7 +174,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     if (!store.submitWorkflowTask) return send(response, 404, { error: 'workflow_disabled' })
     try {
       const body = z.strictObject({ requestId: requiredText.max(200), expectedRunId: requiredText.max(200).nullable(),
-        objective: requiredText.max(12000), acceptanceCriteria: z.array(requiredText.max(2000)).min(1).max(32),
+        objective: requiredText.max(12000), acceptanceCriteria: acceptanceCriteriaSchema,
         constraints: z.array(requiredText.max(2000)).max(32).optional(), repositoryId: requiredText.max(64),
         uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']),
         stages: z.tuple([z.literal('task-engineering'), z.literal('task-uat-pr-merge'), z.literal('task-uat-deployment')]),

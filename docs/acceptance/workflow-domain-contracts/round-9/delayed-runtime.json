@@ -1,0 +1,25 @@
+{
+  "pid": 13688,
+  "ports": [
+    3080,
+    18998
+  ],
+  "node": "D:\\soft\\node-v24.19.0\\node.exe",
+  "maintenanceActive": false,
+  "recoveryIssueCount": 0,
+  "status": "ok",
+  "humanReplies": "ready",
+  "inboundProcessing": true,
+  "createdAt": "2026-09-29T11:44:45.8714630+08:00",
+  "freeCBytes": 38653952,
+  "groupBackfills": [
+    "ok",
+    "ok"
+  ],
+  "checkedAt": "2026-09-29T12:01:02.6387590+08:00",
+  "groupListeners": [
+    "ready",
+    "ready"
+  ],
+  "secondsAfterResume": 27.6
+}

@@ -61,6 +61,73 @@ task-actions 仅接受 Host 固定注册的适配器，每个适配器实现参�
 
 见[迁移 runbook](../ops/workflow-storage-migration.md)。v8 活动 Task 保存原快照、递增输入版本、分配新叶子会话并设置 migrationReview:required。显式 resumeTask 清除该门禁、保存 workflow-migration-resumed 事件、清除当前旧检查点，要求新结构化计划；启动不得自行恢复旧会话。历史事实留在迁移快照和审计事件中。
 
+## workflow-v2 领域准备与交付合同
+
+本节适用于原生 Task Owner → Stage → Run 编排，不改变前述 Resident domain v9 的版本号。
+
+### 入参和阶段准备
+
+新接纳的 `acceptanceCriteria` 共用 `task-input-contract.js`：数组含 1–32 条，每条为字符串、原始长度不超过 2000 个 UTF-16 字符，trim 后非空；空数组、显式 null、类型错误和超限均拒绝。消息可省略该字段并沿用目标作为默认验收，工程准备也仅在字段未提供时使用 `[request]`。历史持久记录读取不套用新数量限制；Owner 追加验收同时限制当前有效项合计不超过 32 条；修订/重开在写入需求前整批预检，避免部分追加。已存在项的幂等重放不增加计数，历史累计项不裁剪。
+
+首阶段和后续阶段统一调用 `createTaskStageContracts().prepare()`。各领域声明准备函数，按其声明核对材料角色、必需/单份约束、数量及序列化字节容量，准备后再校验实际冻结定义的首节点输入。未注册合同、材料越界或字段不合法均阻止启动，公共服务不从材料正文猜执行参数。
+
+后续阶段的 `handoff` 为 `kind: workflow-stage-result`，包含 `contract:{id,version}`、`taskId`、`requirementRevision`、`planRevision`、`stageId`、`runId`、`workflowDigest`、`outputRef` 和 `value`。Host 核对当前计划与需求版本、同一 Task 的成功 Stage/Run、当前代最终节点及准确输出引用后构造交接。实际消费前序领域结果的准备合同声明 `consumes:[{id,versions}]` 白名单，Host 在调用准备函数前检查，不支持的类型或版本报 `TASK_STAGE_HANDOFF_UNSUPPORTED`。工程入口只接受 `agent-investigation-result@1` 与 `investigation-result@2`；原始材料独立保留，引用存在不等于类型受支持。
+
+阶段目录的 `resultContract` 从对应 Workflow 的权威 `ownerContract.resultContract` 派生；未声明独立结果合同时使用 Owner 合同的 ID/版本。实际交接读取生产 Run 的冻结定义，目录不替代冻结合同。移除独立的 `requiredOutputs` 说明，避免维护第二套输出真相；必交文件仍由任务 `scope.artifactFiles/fileDelivery.files` 决定。
+
+### 领域受理规范与职责
+
+任务目标和当前有效验收项是本轮承诺的依据，领域执行规则及产物合同随 Workflow 定义摘要冻结。完成准入采用当前修正后的领域规则，并在接纳回执记录实际 policyDigest；它与生产 Run 的冻结 workflowDigest 分开保存，不借修正规则重跑历史执行。模型不能增加授权、发明专业阈值或自行修改规则；材料只提供事实，不成为执行指令。Schema 约束字段和容量，Host 约束身份、版本和状态，领域 validator 判断业务证据，提示词提供分析方法和表达指导。
+
+| 领域 | 受理与权威输入 | 拒收或等待边界 | 合法产出与修复责任 |
+| --- | --- | --- | --- |
+| 调查 | 冻结任务、当前验收项 ID、已绑定材料及受信证据 | 无证据不能把事实或验收项标为满足；缺失信息保留 openItems/不足意见 | 输出事实、判断、建议及逐项意见；调查结束不承诺修复完成。Owner 安排补料或后续领域处理，调查仅修正自己的结果 |
+| 工程 | 已配置仓库、明确目标与验收条件、受支持的调查交接、冻结执行配置 | 缺受信业务验收配置、实际结果、代码/方案绑定或清理证明时阻止交付 | 按冻结原需求与实际业务用例回执匹配验收项；失败按既有 `repairCurrentStage` 门禁创建新代，修复后重新构建和验收 |
+| 发布/外部操作 | 已配置受信适配器、精确目标、必要批准及效果账 | 适配器未配置、准入不符或外部结果未知时不得当作完成 | 先核对实际效果，再检查本领域承担的验收项；未知效果由执行层对账原操作，不能另发一次代替核实 |
+| 通用能力 | 已注册能力、授权 scope、当前分派给本领域的验收项及已核实效果 | 工具成功不证明业务满足；缺少适用检查、证据不足或检查异常均不放行 | 每次效果先核实，再检查本领域验收项；失败由能力/检查器责任方处理，不替工程或发布出结论 |
+| 文件投递 | 当前必交文件、有效登记和原发送身份 | 成功发送无关文件不能满足业务项；结果未知先回读 | 核实实际投递，再检查分派的验收项；渠道仅恢复原投递，不重跑已确认业务操作 |
+
+默认通用检查保留消息/材料整理的确定性快速路径，核对来源覆盖、报告正文和限制。其他分派项使用 `createDomainAcceptanceCheck`：通过原生 `llm.stream` 对当前领域的验收项和证据作限定判断，零工具，不新增全案总审会话；外部操作和文件投递也必须验证其分派项，不能仅凭效果成功接纳。调查使用显式 `criterionReviews`，工程使用冻结原需求和实际业务用例回执，不将这些已有领域判据替换成自由判断。存在多个工程阶段时，各阶段仅核对评估引用指向自身的条目；保留的成功前缀不承担后续新增条目，但其交付证明仍须有效。
+
+模型检查全信封上限 128 KiB、输出上限 16 KiB / 4096 tokens、超时 30 秒；Host 独立核对返回 schema、逐项覆盖和证据引用。未配置模型、容量超限、格式非法、流未正常结束、出现工具调用或证据不足均拒绝接纳。扩展 `generalCompletionCheck` 仍须提供稳定的 `generalCompletionIdentity`，其身份参与规则摘要；不能用统一返回 true 的检查器扩大受理范围。夹具验证只能证明协议门禁，不能证明真实模型对业务语义判断正确。
+
+| 责任方 | 权威职责 | 不得代替的职责 |
+| --- | --- | --- |
+| 业务负责人/用户 | 明确目标、判据及授权范围 | 模型不能替其放宽验收条件 |
+| Task Owner | 编排已注册领域，以证据引用分派验收项，汇总已接纳结果，安排补料/返修 | 引用只表示责任分派，不能凭总结把不足改成满足 |
+| 领域 Workflow/validator | 专业输入输出合同、证据有效性、合法结局及修复影响范围 | 不接管其他领域判据或渠道状态 |
+| 节点 Agent | 在给定范围内分析、执行获准调用并产生候选 | 不能接纳自己的候选或修改合同 |
+| Host/Controller/工具执行层 | 身份与版本绑定、状态转换、效果核实、调用领域检查并保存接纳回执 | 不用文件存在、HTTP 成功或工具成功替代专业结论 |
+| UI/钉钉渠道 | 收集输入，投影权威状态，保存实际通知/文件投递回执 | 不另建完成判断；投递成功不能补齐业务验收 |
+
+当前任务整体 `complete` 仍要求全部有效验收项满足；没有新增部分成功终态。调查可以成功产出不足意见，但若任务承诺尚未满足，Owner 必须继续处理或按既有等待/阻塞路径说明原因。
+
+### 调查 v6 与历史定义
+
+新 `task-investigation` 使用版本 6；输入 `acceptanceItems:[{itemId,criterion}]` 来自 Owner 的当前有效验收项，不能按位置自行生成 ID。输出保留 `outcome/summary/evidenceRefs/limitations/question`，并要求：
+
+- `findings`：最多 64 项 `{kind:fact|judgment|recommendation,statement,evidenceRefs}`；fact 必须有证据。
+- `openItems`：最多 32 项 `{description,reason,evidenceRefs}`，记录未知项和未执行工作。
+- `criterionReviews`：逐一覆盖输入的 itemId，禁止缺项、重复及额外项；每项为 `{itemId,status,reason,evidenceRefs}`，status 只允许 `satisfied/insufficient_evidence/not_applicable`，satisfied 必须有证据。
+
+嵌套证据引用必须包含于顶层证据，来源仍经过当前 Task/Run/代及受信前序引用校验。completed 调查须有证据和至少一项 finding 或 openItem。调查明确标记不足或不适用的验收项，不能由 Owner 单独改口为已满足：后续领域必须接纳同一验收项的证据；只增加备忘录或无关文件不能补齐缺口。
+
+旧 v5 定义继续按冻结摘要注册和恢复，不把历史结果补造成 v6 结构，不静默升级已有 Run。新版本与旧版本的输入、输出合同分别验证。
+
+### 正式交付清单与恢复诊断
+
+`readDeliveryManifest` 从当前需求版本的成功阶段生成清单，包含阶段/Run/冻结定义、结果合同、产物引用及验收项与阶段证据的对应关系。必交文件来自 `scope.artifactFiles` 和 `fileDelivery.files`，按角色与文件名去重；核对当前需求版本、成功生产节点、登记文件及实际字节，并要求文件生产阶段具有验收证据关联。缺项、歧义、旧代文件或无法验证的文件阻止完成；要求外发的文件继续沿用独立发送回读。
+
+完成接纳事件保存清单引用；`taskDetail.deliveryManifest` 只返回 `null` 或 `{ref,taskId,turnId,requirementRevision,planRevision}`，不展开清单全文。引用从已接纳的 complete 事件回读；与当前需求或计划版本不符时返回 null，不把旧完成清单投影为当前交付。
+
+清单的 `complete` 仅表示结构与证据绑定通过，业务验收另存于 `businessValidation`。Host 按 `ownerContract.id` 分组，将 Owner 对每项引用的证据映射到生产领域，向该领域 `validateCompletion` 传入裁剪后的 `acceptanceItems`、`requirement`、`decision` 和领域阶段；跨领域引用不能触发跳过检查。同一项引用多个领域时，各被引用领域均须通过；没有分派验收项的阶段仍核对自己的有效输出。
+
+所有领域检查通过后，Host 生成 `businessValidation:{status:'accepted',policy:'domain-items-v1',items}`，记录验收项、证据及 validator 的阶段/Run/冻结定义/合同版本和实际验收 `policyDigest`。实际准入规则摘要与生产 Run 的 `workflowDigest` 分开保留。回执绑定本次 decision 和结构清单摘要，候选或清单变化后不能沿用；未经过本次检查时状态为 `unverified`。Owner 完成接纳要求已接受回执，并随最终清单持久化；模型不能自行填写回执取得许可。
+
+新通用阶段使用 Workflow v6 / Owner 合同 v2，外部操作使用 Owner 合同 v2，文件投递使用 Workflow/Owner 合同 v2。每个效果仍独立核实，同领域只检查其分派的验收项，不要求整理材料阶段验证整个工程目标，也不因计划含其他领域而跳过。旧工厂保留原定义和摘要以恢复已冻结 Run；Host 仅在完成准入时采用当前修正规则，不改写历史执行/产物、不重跑副作用。结构清单、领域业务接纳和实际渠道投递是三份独立证据，PR、HTTP 成功或非空文字本身不是业务验收结论。
+
+持久 `execution-failure` 工件增加 `recovery:{category,responsibleParty,nextAction}`。类别包括输出可修正、业务校验、任务受阻、缺输入、缺环境、外部结果未知、暂态执行和实现错误；未知错误归实现维护。Schema 错误仅在输出校验边界归为结果修正，输入映射错误不能据此让模型重试。分类只指明责任和下一步，自动重领仍受既有错误白名单、预算、退避、控制状态及效果账限制；外部结果未知先对账。旧诊断缺少 recovery 字段仍可读取，不补造历史分类。
+
 ## workflow-v2 上下文只读接口
 
 以下接口复用 Resident 的本地只读访问边界，不注册为模型写工具；对象必须属于当前配置的 workflow 群。不存在或跨群返回 404，非法参数与版本失效返回 400，错误码写入 `error`。

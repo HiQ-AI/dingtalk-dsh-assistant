@@ -1,0 +1,65 @@
+✔ 启动材料引用由Host列举，查询资源和其他事项引用不能进入材料等待 (3.2647ms)
+✔ answer objective进入消息Agent并持久产出、零Task，补读及重启不重执行或重发 (314.5655ms)
+✔ 慢查询不堵塞其他消息判断和独立Agent执行 (307.2047ms)
+✔ 错误查询资源引用在意图落账前纠正，不生成材料等待或重复执行 (248.696ms)
+✔ 异步问答完成即派发后继，不依赖再次process或恢复轮询 (271.4162ms)
+✔ 同话题后续问题读取既有话题，但创建独立消息会话和发送者范围 (292.5382ms)
+✔ 需要补充创建message request，授权答复沿用会话递增输入版本 (276.8429ms)
+✔ 新目录统一调查入口，旧材料流程不再可选 (183.617ms)
+✔ 能力受阻如实结束为blocked，伪造工具证据不能成为回答 (422.4069ms)
+✔ 通知发送未知后重启只补读原通知，不重复Agent执行与外发 (227.9326ms)
+✖ 已排队旧answer.text明确拒绝，不由新Agent猜测旧合同 (199.3975ms)
+✔ 消息trace只返回Agent摘要、耗时和绑定会话，长产出按需分页且不允许跨消息工件 (255.2303ms)
+✔ Agent资源权限独立于发送者，各发送者使用相同职责范围 (327.5597ms)
+✖ 单Task恢复失败和正在执行Task不能阻止其它恢复与通知扫描 (8.8665ms)
+✔ 大量unknown通知不能挤掉新prepared；对账游标可到下一页 (873.145ms)
+✔ 旧活动Task不会被超过200条新终态任务挤出恢复索引 (932.5696ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 14
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3805.9982
+
+✖ failing tests:
+
+test at test\workflow-agent-service.test.js:211:1
+✖ 已排队旧answer.text明确拒绝，不由新Agent猜测旧合同 (199.3975ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /明确问题目标/. Input:
+
+  '请求未执行：请说明需要回答的具体问题'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-agent-service.test.js:220:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '请求未执行：请说明需要回答的具体问题',
+    expected: /明确问题目标/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test\workflow-recovery.test.js:9:1
+✖ 单Task恢复失败和正在执行Task不能阻止其它恢复与通知扫描 (8.8665ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + []
+  - [
+  -   'bad',
+  -   'good'
+  - ]
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-recovery.test.js:14:51)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'bad', 'good' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

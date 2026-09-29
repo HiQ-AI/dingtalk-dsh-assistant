@@ -217,7 +217,7 @@ test('已排队旧answer.text明确拒绝，不由新Agent猜测旧合同', asyn
   await command('accept', { runId, unitId, commands: [{ commandId, kind: 'answer', args: { taskId: null, arguments: { text: '原正文' }, binding: { disposition: 'new' }, replyPolicy: 'none' }, dependsOn: [] }] })
   const state = await h.settle(runId, state => state.commands[0]?.status === 'rejected')
   assert.equal(state.commands[0].status, 'rejected'); assert.equal(h.calls.length, 0)
-  assert.match(state.commands[0].result.reply, /明确问题目标/)
+  assert.match(state.commands[0].result.reply, /请说明需要回答的具体问题/)
 })
 
 

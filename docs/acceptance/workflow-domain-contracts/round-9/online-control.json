@@ -1,0 +1,53 @@
+{
+  "checkedAt": "2026-09-29T03:54:57.010Z",
+  "base": "http://127.0.0.1:18998",
+  "cases": [
+    "acceptance-criteria-over-32",
+    "acceptance-criterion-blank"
+  ],
+  "statuses": [
+    400,
+    400
+  ],
+  "taskCount": 78,
+  "taskDelta": 0,
+  "catalog": [
+    {
+      "id": "task-group-file-delivery",
+      "version": "2"
+    },
+    {
+      "id": "task-investigation",
+      "version": "6"
+    },
+    {
+      "id": "task-engineering",
+      "version": null
+    },
+    {
+      "id": "task-uat-deployment",
+      "version": "1"
+    },
+    {
+      "id": "task-main-pr-merge",
+      "version": null
+    },
+    {
+      "id": "task-uat-pr-merge",
+      "version": "3"
+    },
+    {
+      "id": "task-production-release",
+      "version": "2"
+    },
+    {
+      "id": "task-data-change",
+      "version": "3"
+    },
+    {
+      "id": "task-uat-rebuild",
+      "version": "1"
+    }
+  ],
+  "zeroCreatedTasks": true
+}

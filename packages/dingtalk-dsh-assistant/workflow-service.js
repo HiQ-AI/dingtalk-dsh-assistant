@@ -1,3 +1,4 @@
+import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { sessionWorkspace } from './session-workspaces.js'
 import { isTerminalUatBuildFailure } from './execution-delivery.js'
 import { join } from 'node:path'
@@ -6,28 +7,28 @@ import { openExecutionRuntime, closeExecutionResources } from './execution.js'
 import { createTaskOwnerController } from './task-owner-controller.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
-import { createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability } from './task-general-workflow.js'
+import { createGeneralCapabilityStageContract, createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability, createDomainAcceptanceCheck, verifyTaskAcceptance } from './task-general-workflow.js'
 import { assertRetiredWorkflowsDrained } from './task-readonly-workflows.js'
-import { createTaskWorkflowContracts } from './task-workflow-contracts.js'
+import { createTaskStageContracts, createTaskWorkflowContracts } from './task-workflow-contracts.js'
 export { createEngineeringFailureRepair } from './workflow-engineering.js'
 import { createTaskMarkdownFileAdapter } from './task-markdown-file.js'
 import { createTaskArtifactFiles } from './task-artifact-files.js'
 import { createTaskArtifactWriteAdapter, createGeneralArtifactWriteCapability, createTaskArtifactImportAdapter, createGeneralArtifactImportCapability } from './task-artifact-write.js'
-import { createTaskGroupFileAdapter, createTaskGroupFileDeliveryWorkflow } from './task-group-file-delivery.js'
+import { createFileDeliveryStageContract, createTaskGroupFileAdapter, createTaskGroupFileDeliveryWorkflow, createLegacyTaskGroupFileDeliveryWorkflow, selectTaskDeliveryFiles, verifyFileDeliveryOutput } from './task-group-file-delivery.js'
 import { createMessageWorkflow } from './message-workflow.js'
 import { isPassiveTaskProgress } from './message-ledger.js'
 import { createMessageModel } from './message-model.js'
 import { taskWorkflowCatalog, messageAnswerArguments } from './message-context.js'
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText, groupStatusText, groupActionText } from './workflow-notifications.js'
-import { createEngineeringRegistry, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
+import { createEngineeringStageContract, createEngineeringRegistry, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
 import { createDataChangeTaskWorkflow } from './workflow-data-change.js'
-import { createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract } from './task-release-workflows.js'
+import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract } from './task-release-workflows.js'
 import { createUatPrMergeTaskWorkflow, createUatPrMergeTaskWorkflowV2, createLegacyUatPrMergeTaskWorkflow, createMainPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
 import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
 import { describeVerificationChecks } from './execution-check-job.js'
 import { createMessageAgentController } from './message-agent.js'
-import { createInvestigationWorkflow, validateAgentWorkResult } from './agent-work.js'
+import { createInvestigationStageContract, createLegacyInvestigationWorkflow, createInvestigationWorkflow, createLegacyInvestigationCompletionPolicy, validateAgentWorkResult } from './agent-work.js'
 import { createAgentQueryTools, verifyAgentEvidence } from './agent-query-tools.js'
 import { createAgentResourceReadCapability } from './agent-query-resources.js'
 import { createAgentDatabaseReadCapability, createRegisteredPostgresConnector } from './agent-query-database.js'
@@ -73,39 +74,7 @@ export function bindFileDelivery(candidate, source) {
   return { sourceQuote: quote, files: files.map(file => ({ role: file.role, fileName: file.fileName })) }
 }
 
-export function selectTaskDeliveryFiles(outputs, { taskId, requirementRevision, fileDelivery }) {
-  const produced = outputs.flatMap(output => {
-    const descriptor = output?.output?.result?.artifact ?? output?.result?.artifact ?? output?.artifact
-    return [...(descriptor ? [descriptor] : []), ...(Array.isArray(output?.artifactFiles) ? output.artifactFiles : [])]
-  })
-  return fileDelivery.files.map(item => {
-    const candidates = produced.filter(file => file.taskId === taskId && file.requirementRevision === requirementRevision
-      && file.role === item.role && file.fileName === item.fileName)
-    if (candidates.length !== 1) throw executionError('TASK_REQUIRED_FILE_MISSING_OR_AMBIGUOUS')
-    return candidates[0]
-  })
-}
-
-export function verifyFileDeliveryOutput(output, { taskId, requirementRevision, groupId, profile, fileDelivery }) {
-  if (output?.deliveryStatus !== 'files_verified' || output.groupId !== groupId || output.profile !== profile
-    || output.requirementRevision !== requirementRevision || !Array.isArray(output.files) || !Array.isArray(output.receipts)
-    || output.files.length !== fileDelivery.files.length || output.receipts.length !== output.files.length) return false
-  return fileDelivery.files.every(item => {
-    const matches = output.files.map((file, index) => ({ file, observation: output.receipts[index] }))
-      .filter(({ file }) => file.role === item.role && file.fileName === item.fileName)
-    if (matches.length !== 1) return false
-    const { file, observation } = matches[0], receipt = observation?.result
-    return observation?.status === 'succeeded' && typeof observation.evidenceRef === 'string' && !!observation.evidenceRef
-      && file.taskId === taskId && file.requirementRevision === requirementRevision
-      && receipt?.role === item.role && receipt.fileName === item.fileName && receipt.taskId === taskId
-      && receipt.requirementRevision === requirementRevision && receipt.groupId === groupId && receipt.conversationId === groupId
-      && receipt.profile === profile && receipt.artifactId === file.artifactId && receipt.sha256 === file.sha256
-      && receipt.size === file.size && Number.isSafeInteger(receipt.size) && receipt.size > 0
-      && typeof receipt.messageId === 'string' && !!receipt.messageId && ['fileId', 'mediaId'].includes(receipt.resourceRef?.type)
-      && typeof receipt.resourceRef.resourceId === 'string' && !!receipt.resourceRef.resourceId
-      && /^[a-f0-9]{64}$/u.test(receipt.sha256) && /^[a-f0-9]{64}$/u.test(receipt.deliveryKey)
-  })
-}
+export { selectTaskDeliveryFiles, verifyFileDeliveryOutput } from './task-group-file-delivery.js'
 
 /** 只替换明确失败的部署后缀；成功工程与合并 Run 保持不变。 */
 export async function continueFailedUatStage({ taskId, plan, store, controller, external }) {
@@ -469,7 +438,7 @@ function createExternalRegistry(external, selected) {
     if (catalogById.get(workflow.id)?.mode !== 'external' || byId.has(workflow.id)) throw executionError('EXTERNAL_WORKFLOW_CATALOG_MISMATCH')
     workflow = { ...workflow, ownerContract: externalWorkflowOwnerContract }
     const definition = defineExecutionWorkflow(workflow)
-    const config = { ownerContractVersion: '1', kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
+    const config = { ownerContractVersion: externalWorkflowOwnerContract.version, kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
       rulesDigest: adapter.rulesDigest, ...(modelConfig ? { modelConfig } : {}) }
     workflows.push(workflow); records.set(workflow.id, { workflowId: workflow.id, definitionVersion: workflow.version, digest: definition.digest, config })
     byId.set(workflow.id, { workflow, adapter })
@@ -562,6 +531,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     createAdapter: fileTransport.createAdapter, profile: config.profile,
     canDisclose: async ({ prepared }) => config.groupIds.includes(prepared.groupId) && prepared.profile === config.profile }) : null
   const fileWorkflow = messageFileAdapter ? createTaskGroupFileDeliveryWorkflow({ files: managedFiles, messageAdapter: messageFileAdapter }) : null
+  const legacyFileWorkflow = messageFileAdapter ? createLegacyTaskGroupFileDeliveryWorkflow({ files: managedFiles, messageAdapter: messageFileAdapter }) : null
   const capabilities = [sourceRead, predecessorRead, sourceDossier, ...(messageResourceRead ? [messageResourceRead] : []), ...(fileRead ? [fileRead] : []), ...(markdownWrite ? [markdownWrite] : []), ...(artifactWrite ? [artifactWrite] : []), ...(artifactImport ? [artifactImport] : []), ...generalCapabilities]
   const queryConfig = config.directQueries ?? { resources: [], databases: [] }
   if (Object.hasOwn(queryConfig, 'grants')) throw executionError('QUERY_CONFIG_MEMBER_GRANTS_REMOVED')
@@ -615,17 +585,31 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       sessionId: node.sessionId, leaseEpoch: node.leaseEpoch }
     await resolveQueryScope({ binding, input: requirement })
     const history = await generalStore.current.query({ kind: 'node.binding-history', nodeRunId: node.nodeRunId })
-    return validateAgentWorkResult(result, { sourceRefs: requirement.materials.map(item => item.id),
+    return validateAgentWorkResult(result, { sourceRefs: [...requirement.materials.map(item => item.id),
+      ...(requirement.handoff?.outputRef && requirement.handoff.outputRef === requirement.scope.predecessorOutputRef
+        ? [requirement.handoff.outputRef] : [])],
       verifyEvidence: async refs => { await verifyAgentEvidence({ artifacts: generalArtifacts.current, refs, binding,
         allowedBindings: history.map(previous => ({ taskId, runId, nodeRunId: previous.nodeRunId, generation: previous.generation,
           inputDigest: previous.inputDigest, sessionId: previous.sessionId, leaseEpoch: previous.leaseEpoch })), scope: requirement.scope }); return true } })
   }
   const investigationWorkflow = selected => createInvestigationWorkflow({ ...selected, allowedTools: queryToolNames,
     capabilityIdentity: queryCapabilityIdentity, verifyResult: verifyInvestigationResult })
+  const legacyInvestigationWorkflow = selected => createLegacyInvestigationWorkflow({ ...selected, allowedTools: queryToolNames,
+    capabilityIdentity: queryCapabilityIdentity, verifyResult: verifyInvestigationResult })
   const stepCapabilities = capabilities.filter(item => item.effectClass === 'file.write')
-  const completionCheck = generalCompletionCheck ?? verifyDefaultGeneralCompletion
+  const acceptanceModel = modelConfig()
+  const domainAcceptanceCheck = createDomainAcceptanceCheck({ llm: ctx.llm, modelConfig: acceptanceModel })
+  const completionCheck = generalCompletionCheck ?? (async input => {
+    const deterministic = await verifyDefaultGeneralCompletion(input)
+    return deterministic.status === 'satisfied' ? deterministic : domainAcceptanceCheck(input)
+  })
+  const completionIdentity = generalCompletionIdentity ?? executionDigest({ policy: 'domain-items-v1', model: acceptanceModel,
+    native: createDomainAcceptanceCheck.toString(), deterministic: verifyDefaultGeneralCompletion.toString() })
   const stepWorkflow = stepCapabilities.length ? createGeneralCapabilityStepWorkflow({ capabilities: stepCapabilities, completionCheck,
-    completionIdentity: generalCompletionIdentity ?? 'task-result-verification-v3' }) : null
+    completionIdentity }) : null
+  const legacyStepWorkflows = ['4', '5'].map(workflowVersion => stepCapabilities.length
+    ? createGeneralCapabilityStepWorkflow({ capabilities: stepCapabilities, completionCheck,
+      completionIdentity: generalCompletionIdentity ?? 'task-result-verification-v3', workflowVersion }) : null).filter(Boolean)
   const visibleDefinitions = new Map([investigationWorkflow(modelConfig()), stepWorkflow, fileWorkflow, ...selectedExternal.workflows]
     .filter(Boolean).map(workflow => [workflow.id, workflow]))
   const execution = suppliedExecution ?? await openExecutionRuntime({
@@ -682,7 +666,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       const workflows = [investigationWorkflow(selected), stepWorkflow, fileWorkflow].filter(Boolean)
       const definitions = new Map(workflows.map(workflow => [workflow.id, defineExecutionWorkflow(workflow)]))
       const prior = await store.query({ kind: 'workflow.list' })
-      const activeDefinitions = new Set(), pendingStages = []
+      const activeDefinitions = new Set(), requiredDefinitions = new Set(), pendingStages = []
       let beforeSequenceId
       for (;;) {
         const page = await store.query({ kind: 'run.list', limit: 200,
@@ -698,22 +682,41 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           ...(beforeSequenceId ? { beforeSequenceId } : {}) })
         for (const task of page) {
           const plan = await store.query({ kind: 'task.plan', taskId: task.taskId })
-          for (const stage of plan.stages) if (!['succeeded', 'invalidated'].includes(stage.status)) {
-            pendingStages.push(stage)
-            if (stage.workflowDigest) activeDefinitions.add(`${stage.workflowId}:${stage.workflowDigest}`)
+          for (const stage of plan.stages) if (stage.status !== 'invalidated') {
+            if (stage.status !== 'succeeded') {
+              pendingStages.push(stage)
+              if (stage.workflowDigest) activeDefinitions.add(`${stage.workflowId}:${stage.workflowDigest}`)
+            }
+            if (stage.workflowDigest) requiredDefinitions.add(`${stage.workflowId}:${stage.workflowDigest}`)
           }
         }
         if (page.length < 200) break
         beforeSequenceId = page.at(-1).sequenceId
       }
-      assertRetiredWorkflowsDrained({ records: prior, activeDefinitions, pendingStages, currentDefinitions: workflows })
+      // 成功前序仍是交接和 Owner 验收的输入，不能只恢复正在运行的定义。
+      beforeSequenceId = undefined
+      for (;;) {
+        const page = await store.query({ kind: 'task.owners.list', limit: 100,
+          ...(beforeSequenceId ? { beforeSequenceId } : {}) })
+        for (const owner of page) {
+          if (owner.decision?.action === 'complete' && owner.applicationStatus === 'applied' && owner.status === 'idle') continue
+          const plan = await store.query({ kind: 'task.plan', taskId: owner.taskId })
+          // 已取消任务只保留历史，不会再交接或验收；暂停任务仍需要冻结定义以便恢复。
+          if (plan?.task.controlState === 'cancelled') continue
+          for (const stage of plan?.stages ?? []) if (stage.status !== 'invalidated' && stage.workflowDigest)
+            requiredDefinitions.add(`${stage.workflowId}:${stage.workflowDigest}`)
+        }
+        if (page.length < 100) break
+        beforeSequenceId = page.at(-1).sequenceId
+      }
+      assertRetiredWorkflowsDrained({ records: prior, activeDefinitions, pendingStages,
+        currentDefinitions: [...workflows, legacyInvestigationWorkflow(selected), ...legacyStepWorkflows, ...(legacyFileWorkflow ? [legacyFileWorkflow] : [])] })
       const engineeringWorkflows = await engineering.restore(store, artifacts)
       const historicalWorkflows = prior.filter(record => record.config?.kind !== 'engineering'
         && record.config?.kind !== 'external'
-        && activeDefinitions.has(`${record.workflowId}:${record.digest}`)).map(record => {
-        const candidates = [investigationWorkflow(record.config), stepWorkflow, fileWorkflow,
-          stepCapabilities.length ? createGeneralCapabilityStepWorkflow({ capabilities: stepCapabilities, completionCheck,
-            completionIdentity: generalCompletionIdentity ?? 'task-result-verification-v3', workflowVersion: '4' }) : null].filter(Boolean)
+        && (activeDefinitions.has(`${record.workflowId}:${record.digest}`) || requiredDefinitions.has(`${record.workflowId}:${record.digest}`))).map(record => {
+        const candidates = [investigationWorkflow(record.config), legacyInvestigationWorkflow(record.config), stepWorkflow, fileWorkflow, legacyFileWorkflow,
+          ...legacyStepWorkflows].filter(Boolean)
           .filter(item => item.id === record.workflowId && item.version === record.definitionVersion)
         if (!candidates.length) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
         const previous = candidates.find(item => {
@@ -724,7 +727,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         return previous
       }).filter(item => ![definitions.get(item.id)?.digest, ...(definitions.get(item.id)?.legacyDigests ?? [])].includes(defineExecutionWorkflow(item).digest))
       for (const record of prior.filter(item => item.config?.kind === 'external'
-        && activeDefinitions.has(`${item.workflowId}:${item.digest}`))) {
+        && (activeDefinitions.has(`${item.workflowId}:${item.digest}`) || requiredDefinitions.has(`${item.workflowId}:${item.digest}`)))) {
         const route = selectedExternal.byId.get(record.workflowId), saved = record.config
         const adapter = [route?.adapter, route?.adapter?.legacyAdapter].find(item => item && saved.adapterId === item.id
           && saved.adapterVersion === item.version && saved.rulesDigest === item.rulesDigest)
@@ -735,7 +738,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
             ? (record.definitionVersion === '1' ? createLegacyUatPrMergeTaskWorkflow : record.definitionVersion === '2' ? createUatPrMergeTaskWorkflowV2 : createUatPrMergeTaskWorkflow)({ adapter })
           : record.workflowId === 'task-main-pr-merge' ? createMainPrMergeTaskWorkflow({ adapter })
           : (record.definitionVersion === '1' ? createLegacyReleaseTaskWorkflow : createReleaseTaskWorkflow)({ kind: record.workflowId.slice(5), adapter })
-        if (saved.ownerContractVersion === '1') previous = { ...previous, ownerContract: externalWorkflowOwnerContract }
+        if (saved.ownerContractVersion === '1') previous = { ...previous, ownerContract: legacyExternalWorkflowOwnerContract }
+        else if (saved.ownerContractVersion === '2') previous = { ...previous, ownerContract: externalWorkflowOwnerContract }
         else if (saved.ownerContractVersion !== undefined) throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
         if (previous.version !== record.definitionVersion || ![defineExecutionWorkflow(previous).digest, ...defineExecutionWorkflow(previous).legacyDigests].includes(record.digest))
           throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
@@ -1126,137 +1130,62 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     return verifyFileDeliveryOutput(output, { taskId: plan.task.taskId, requirementRevision: plan.task.requirementRevision,
       groupId: requirement.scope.conversationId, profile: config.profile, fileDelivery: requirement.fileDelivery })
   }
+  const stageContracts = createTaskStageContracts({ controller, artifacts,
+    readOwnerContract: id => id === 'task-engineering' ? engineeringWorkflowOwnerContract
+      : visibleDefinitions.has(id) ? controller.workflowDefinition(id).ownerContract : null,
+    contracts: [
+    createInvestigationStageContract({ queryScope, queryCatalog,
+      readAcceptanceItems: taskId => store.query({ kind: 'task.owner.acceptance', taskId }),
+      readSources: async requirement => Promise.all(requirement.scope.sourceKeys.map(async key => {
+        const source = await store.query({ kind: 'task.source', sourceKey: key })
+        if (!source || source.status === 'superseded') throw executionError('TASK_SOURCE_NOT_CURRENT')
+        return { id: source.sourceKey, text: source.body }
+      })) }),
+    createEngineeringStageContract({ engineering, controller, mayCreate, engineeringSourceTaskId }),
+    createGeneralCapabilityStageContract(),
+    createFileDeliveryStageContract({ prepareFiles: prepareFileDeliveryInput }),
+    ...createExternalStageContracts({ workflowIds: [...selectedExternal.byId.keys()], external,
+      readEngineeringProof: async (taskId, stage) => readEngineeringDeliveryProof({
+        state: await controller.state(stage.runId), artifacts, store, taskId }),
+      readArtifact: ref => artifacts.read(ref) }),
+  ] })
   async function advanceBusinessTask(taskId, continuation) {
     let plan = await ensureLegacyTaskRequirement(taskId)
     plan = await controller.advanceTaskPlan(taskId)
     plan = await continueFailedUatStage({ taskId, plan, store, controller, external })
-    const currentIndex = plan.stages.findIndex(stage => !['succeeded', 'invalidated'].includes(stage.status))
-    const current = plan.stages[currentIndex]
-    const predecessorOutputRef = plan.stages[currentIndex - 1]?.outputRef ?? null
-    if (!current || current.status !== 'ready' || current.unavailableReason || current.requirementRef) return plan
+    const stageIndex = plan.stages.findIndex(stage => !['succeeded', 'invalidated'].includes(stage.status))
+    const stage = plan.stages[stageIndex]
+    if (!stage || stage.status !== 'ready' || stage.unavailableReason || stage.requirementRef) return plan
     const requirement = plan.task.requirementRef ? await artifacts.read(plan.task.requirementRef) : null
-    if (!requirement?.request) return plan
-    if (current.workflowId === 'task-group-file-delivery') {
-      const input = await prepareFileDeliveryInput(plan, requirement)
-      await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`,
-        taskId, planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef, input })
-      return controller.advanceTaskPlan(taskId)
-    }
-    if (current.workflowId === 'task-general-capability') {
-      const step = continuation?.ownerStep
-      if (!step)
-        throw executionError('GENERAL_STEP_NOT_BOUND')
-      await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`,
-        taskId, planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef,
-        input: { capabilityId: step.capabilityId, input: step.input,
-          scope: { ...requirement.scope, predecessorOutputRef, ...(['write-task-file', 'import-task-file'].includes(step.capabilityId) ? { requirementRevision: plan.task.requirementRevision } : {}) }, expectedEvidence: step.expectedEvidence } })
-      return controller.advanceTaskPlan(taskId)
-    }
+    if (!requirement?.request) throw executionError('TASK_REQUIREMENT_MISSING')
     const origin = continuation?.command ? continuation : await store.query({ kind: 'task.origin', latest: true, taskId })
       ?? await store.query({ kind: 'task.origin', taskId })
-    if (!origin) return plan
-    const previous = predecessorOutputRef ? await artifacts.read(predecessorOutputRef) : null
-    const args = origin.command.args
-    const objective = requirement.request
-    const targetArgs = { ...args.arguments, ...requirement.target, objective,
-      ...(requirement.stageTargets?.[current.workflowId] ? { targetId: requirement.stageTargets[current.workflowId] } : {}) }
-    const input = current.workflowId === 'task-investigation'
-      ? { request: objective, acceptanceCriteria: requirement.acceptanceCriteria, constraints: requirement.constraints,
-        scope: queryScope({ ...requirement.scope, actorId: origin.run.actorId, predecessorOutputRef }),
-        context: { target: requirement.target, predecessor: previous,
-          ...queryCatalog(queryScope({ ...requirement.scope, actorId: origin.run.actorId })) },
-        materials: [...(requirement.materials ?? []), ...(predecessorOutputRef ? [{ id: predecessorOutputRef, text: JSON.stringify(previous) }] : [])] }
-      : current.workflowId === 'task-general'
-      ? { request: objective, acceptanceCriteria: requirement.acceptanceCriteria,
-        constraints: requirement.constraints, scope: { ...requirement.scope, predecessorOutputRef } }
-      : { request: objective, constraints: requirement.constraints,
-        materials: [...(requirement.materials ?? []), ...(predecessorOutputRef ? [{ id: predecessorOutputRef, text: JSON.stringify(previous) }] : [])] }
-    if (current.workflowId === 'task-engineering') {
-      const action = { taskId, arguments: { ...targetArgs, acceptanceCriteria: requirement.acceptanceCriteria, workflowId: 'task-engineering' }, constraints: requirement.constraints }
-      const source = { run: origin.run, unit: { constraints: [], sharedConstraints: [] },
-        ...(plan.stages[currentIndex - 1]?.workflowId === 'task-investigation' ? { investigationHandoff: {
-          planRevision: plan.task.planRevision, stageId: current.stageId,
-          predecessorStageId: plan.stages[currentIndex - 1].stageId, outputRef: predecessorOutputRef } } : {}),
-        ...(origin.channel === 'web' ? { rerunOfTaskId: await engineeringSourceTaskId(origin.rerunOfTaskId, targetArgs.repositoryId) } : {}),
-        commandId: `stage:${taskId}:${plan.task.planRevision}:${current.stageId}`,
-        stageRunId: controller.plannedTaskStageRunId({ taskId, planRevision: plan.task.planRevision, stageId: current.stageId, attempt: current.attempt }),
-        authorizedGroupRequest: await mayCreate(origin.run, 'task-engineering') }
-      const prepared = await engineering.prepareTask(action, source, controller)
-      await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`, taskId,
-        planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef,
-        input: prepared.input, workflowId: prepared.workflowId })
-    } else if (current.workflowId === 'task-uat-deployment' || current.workflowId === 'task-uat-pr-merge') {
-      if (!selectedExternal.byId.has(current.workflowId)) throw executionError('EXTERNAL_WORKFLOW_UNAVAILABLE')
-      const completed = plan.stages.slice(0, currentIndex).filter(stage => stage.status === 'succeeded')
-      const merged = [...completed].reverse().find(stage => stage.workflowId === 'task-uat-pr-merge' && stage.outputRef)
-      const engineered = [...completed].reverse().find(stage => stage.runId && stage.workflowId.startsWith('task-engineering-'))
-      let engineeringProof
-      if (engineered) engineeringProof = await readEngineeringDeliveryProof({ state: await controller.state(engineered.runId), artifacts, store, taskId })
-      const mergedProof = merged ? await artifacts.read(merged.outputRef) : null
-      if (mergedProof && (mergedProof.baseBranch === undefined || mergedProof.mergeCommitSha === undefined))
-        throw executionError('UAT_MERGE_SOURCE_INVALID')
-      const action = { taskId, arguments: { ...targetArgs, workflowId: current.workflowId,
-        ...(current.workflowId === 'task-uat-pr-merge' && engineeringProof ? {
-          pullRequestNumber: engineeringProof.pullRequest.number,
-          headCommitSha: engineeringProof.pullRequest.commitSha } : {}),
-        ...(current.workflowId === 'task-uat-deployment' && mergedProof ? { commitSha: mergedProof.mergeCommitSha } : {}) },
-        constraints: requirement.constraints }
-      const materials = current.workflowId === 'task-uat-deployment' && mergedProof
-        ? [{ resourceRef: `uat-merge-task:${taskId}:${merged.runId}` }]
-        : engineeringProof && ['task-uat-deployment', 'task-uat-pr-merge'].includes(current.workflowId)
-          ? [{ resourceRef: `engineering-task:${taskId}:${engineered.runId}` }] : []
-      const input = await external.prepareRequirement({ workflowId: current.workflowId, action, materials })
-      await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`,
-        taskId, planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef, input })
-    } else if (selectedExternal.byId.has(current.workflowId)) {
-      const action = { taskId, arguments: { ...targetArgs, workflowId: current.workflowId }, constraints: requirement.constraints }
-      const input = await external.prepareRequirement({ workflowId: current.workflowId, action, materials: [] })
-      await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`,
-        taskId, planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef, input })
-    } else if (visibleDefinitions.has(current.workflowId)) {
-      await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${current.stageId}`, taskId,
-        planRevision: plan.task.planRevision, stageId: current.stageId, predecessorOutputRef, input })
-    }
+    if (!origin) throw executionError('TASK_REQUIREMENT_MISSING')
+    const prepared = await stageContracts.prepare({ taskId, stage, stageIndex, plan, requirement, origin, continuation })
+    await controller.bindTaskStageInput({ commandId: `stage-input:${taskId}:${plan.task.planRevision}:${stage.stageId}`,
+      taskId, planRevision: plan.task.planRevision, stageId: stage.stageId,
+      predecessorOutputRef: plan.stages[stageIndex - 1]?.outputRef ?? null,
+      input: prepared.input, ...(prepared.workflowId ? { workflowId: prepared.workflowId } : {}) })
     return controller.advanceTaskPlan(taskId)
   }
   async function prepareInitialStage({ taskId, stage, decision, plan }) {
     const requirement = await artifacts.read(plan.task.requirementRef)
     const origin = await store.query({ kind: 'task.origin', taskId })
     if (!origin || !requirement?.request) throw executionError('TASK_REQUIREMENT_MISSING')
-    const args = { ...origin.command.args.arguments, ...requirement.target, objective: requirement.request }
-    if (stage.workflowId === 'task-group-file-delivery') return { input: await prepareFileDeliveryInput(plan, requirement) }
-    if (stage.workflowId === 'task-general-capability') {
-      const step = stage.capabilityStep ?? decision.appendStages?.[0]?.capabilityStep
-      if (!step) throw executionError('GENERAL_STEP_NOT_BOUND')
-      return { input: { capabilityId: step.capabilityId, input: step.input,
-        scope: { ...requirement.scope, predecessorOutputRef: null, ...(['write-task-file', 'import-task-file'].includes(step.capabilityId) ? { requirementRevision: plan.task.requirementRevision } : {}) }, expectedEvidence: step.expectedEvidence } }
-    }
-    if (stage.workflowId === 'task-engineering') {
-      const prepared = await engineering.prepareTask({ taskId,
-        arguments: { ...args, acceptanceCriteria: requirement.acceptanceCriteria, workflowId: 'task-engineering' }, constraints: requirement.constraints }, {
-        run: origin.run, unit: { constraints: [], sharedConstraints: [] },
-        ...(origin.channel === 'web' ? { rerunOfTaskId: await engineeringSourceTaskId(origin.rerunOfTaskId, args.repositoryId) } : {}),
-        commandId: `stage:${taskId}:1:stage-1`, stageRunId: stageRunId(taskId, 1, 'stage-1'),
-        authorizedGroupRequest: await mayCreate(origin.run, 'task-engineering'),
-      }, controller)
-      return { input: prepared.input, workflowId: prepared.workflowId }
-    }
-    if (selectedExternal.byId.has(stage.workflowId)) return { input: await external.prepareRequirement({
-      workflowId: stage.workflowId,
-      action: { taskId, arguments: { ...args, workflowId: stage.workflowId }, constraints: requirement.constraints },
-      materials: [],
-    }) }
-    const sources = await Promise.all(requirement.scope.sourceKeys.map(key => store.query({ kind: 'task.source', sourceKey: key })))
-    if (stage.workflowId === 'task-investigation') return { input: {
-      request: requirement.request, constraints: requirement.constraints, acceptanceCriteria: requirement.acceptanceCriteria,
-      scope: queryScope({ ...requirement.scope, actorId: origin.run.actorId }),
-      context: { target: requirement.target, ...queryCatalog(queryScope({ ...requirement.scope, actorId: origin.run.actorId })) },
-      materials: [...sources.map(source => ({ id: source.sourceKey, text: source.body })), ...(requirement.materials ?? [])],
-    } }
-    return { input: { request: requirement.request, constraints: requirement.constraints,
-      materials: [...sources.map(source => ({ id: source.sourceKey, text: source.body })), ...(requirement.materials ?? [])] } }
+    return stageContracts.prepare({ taskId, stage: { ...stage, stageId: 'stage-1' }, stageIndex: 0,
+      executionPlanRevision: plan.task.planRevision + 1, decision, plan, requirement, origin })
   }
-  const ownerContracts = createTaskWorkflowContracts({ store, artifacts, controller, prepareRepairContext: engineering.prepareRepairContext })
+  const withAcceptanceIdentity = policy => ({ ...policy,
+    rulesDigest: executionDigest({ domain: policy.rulesDigest ?? null, acceptanceVerifier: completionIdentity,
+      binding: verifyTaskAcceptance.toString() }) })
+  const completionPolicies = new Map([stepWorkflow?.ownerContract, createEngineeringCompletionPolicy(),
+    withAcceptanceIdentity(externalWorkflowOwnerContract), fileWorkflow && withAcceptanceIdentity(fileWorkflow.ownerContract)]
+    .filter(Boolean).map(policy => [policy.id, policy]))
+  const ownerContracts = createTaskWorkflowContracts({ store, artifacts, controller, prepareRepairContext: engineering.prepareRepairContext,
+    completionPolicy: contract => contract.id === 'agent-investigation-result' && contract.version === '1'
+      ? withAcceptanceIdentity(createLegacyInvestigationCompletionPolicy(contract)) : completionPolicies.get(contract.id) ?? contract,
+    verifyAcceptance: context => verifyTaskAcceptance({ ...context, check: completionCheck }),
+    validateFiles: (files, scope) => managedFiles.validateManifest(files, scope), verifyFileDelivery: verifyRequiredFileDelivery })
   const { inspectCurrentExecution, repairCurrentStage, readStageArtifacts } = ownerContracts
   taskOwner = createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig,
     getWorkspaceDir: () => sessionWorkspace(legacy.getAgentConfig().workspaceDir, 'owner'),
@@ -1265,10 +1194,13 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       effectClass: item.effectClass })),
     workflowCatalog: taskWorkflowCatalog.filter(item => !['task-general', 'task-analysis'].includes(item.id))
       .map(item => ({ id: item.id, purpose: item.purpose, mode: item.mode,
+        ...(stageContracts.descriptors.find(contract => contract.id === item.id)
+          ? { contract: stageContracts.descriptors.find(contract => contract.id === item.id) } : {}),
         available: item.mode === 'delivery' ? Boolean(fileWorkflow) : item.mode !== 'external' || selectedExternal.byId.has(item.id),
         ...(externalWorkflows.find(entry => entry.id === item.id)?.targetIds
           ? { targetIds: externalWorkflows.find(entry => entry.id === item.id).targetIds } : {}) })),
     prepareInitialStage, inspectCurrentExecution, repairCurrentStage, readStageArtifacts,
+    readDeliveryManifest: ownerContracts.readDeliveryManifest,
     advanceTask: advanceBusinessTask,
     authorizeCompletion: async ({ taskId, decision }) => {
       const plan = await controller.taskPlan(taskId)
@@ -1383,8 +1315,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     for (const key of ['requestId', 'objective', 'repositoryId', 'mergeTargetId', 'deployTargetId']) requireText(request[key], 'TASK_RERUN_REQUEST_INVALID')
     if (request.expectedRunId !== null) requireText(request.expectedRunId, 'TASK_RERUN_REQUEST_INVALID')
     if (request.objective.length > 12000 || !uatBranchFor(request.uatEnvironment)
-      || !Array.isArray(request.acceptanceCriteria) || !request.acceptanceCriteria.length || request.acceptanceCriteria.length > 32
-      || request.acceptanceCriteria.some(value => typeof value !== 'string' || !value.trim() || value.length > 2000)
+      || !acceptanceCriteriaSchema.safeParse(request.acceptanceCriteria).success
       || request.constraints !== undefined && (!Array.isArray(request.constraints) || request.constraints.length > 32
         || request.constraints.some(value => typeof value !== 'string' || !value.trim() || value.length > 2000))
       || !Array.isArray(request.stages) || executionDigest(request.stages) !== executionDigest(['task-engineering', 'task-uat-pr-merge', 'task-uat-deployment'])) throw executionError('TASK_RERUN_REQUEST_INVALID')
@@ -1555,6 +1486,15 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       if (!currentPlan) throw executionError('TASK_PLAN_NOT_FOUND')
       let plan = currentPlan
       const wasCancelled = plan.task.controlState === 'cancelled'
+      // 确认已有阶段不追加验收；其余修订在改需求/解除取消前整批检查，不能半批落账。
+      if (!(action.intent === 'reopen' && !wasCancelled && plan.stages.some(stage => stage.status === 'waiting_confirmation'))) {
+        const criteria = action.arguments.acceptanceCriteria === undefined ? [action.arguments.objective] : action.arguments.acceptanceCriteria
+        if (!acceptanceCriteriaSchema.safeParse(criteria).success) throw executionError('TASK_OWNER_CRITERIA_INVALID')
+        const active = await store.query({ kind: 'task.owner.acceptance', taskId })
+        const added = criteria.filter((criterion, index) => !active.some(item => item.itemId === `acceptance-${executionDigest([info.commandId, index]).slice(0, 32)}`))
+        if (added.length && !acceptanceCriteriaSchema.safeParse([...active.map(item => item.criterion), ...added]).success)
+          throw executionError('TASK_OWNER_CRITERIA_INVALID')
+      }
       if (action.intent === 'reopen' && wasCancelled) {
         const authorization = await artifacts.put({ taskId, sourceKey: info.run.sourceKey,
           actorId: info.run.actorId, conversationId: info.run.conversationId,
@@ -2382,10 +2322,13 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       const before = await store.query({ kind: 'task.viewRevision', taskId: currentTaskId })
       const task = (await tasks({ taskId: currentTaskId, readableOnly: true, completePlan: true }))[0]
       if (!task) return null
+      const deliveryManifest = task.taskOwner
+        ? await store.query({ kind: 'task.owner.delivery-manifest', taskId: currentTaskId }) : null
       const after = await store.query({ kind: 'task.viewRevision', taskId: currentTaskId })
       const currentFamily = await readableTaskFamily(taskId)
       if (before !== after || executionDigest(family) !== executionDigest(currentFamily)) continue
       return { ...task, requestedTaskId: taskId, logicalTaskId: family.rootTaskId, latestTaskId: currentTaskId,
+        deliveryManifest,
         detailRevision: after, executionNumber: family.taskIds.length, executionCount: family.taskIds.length }
     }
     throw executionError('TASK_DETAIL_STALE')

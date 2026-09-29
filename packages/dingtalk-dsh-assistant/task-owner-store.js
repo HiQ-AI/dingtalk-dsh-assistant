@@ -1,3 +1,4 @@
+import { acceptanceCriteriaSchema, acceptanceCriterionSchema } from './task-input-contract.js'
 import { createHash } from 'node:crypto'
 import { maintenanceStatus } from './execution-maintenance.js'
 
@@ -234,8 +235,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
   }
   if (command.kind === 'task.owner.init') {
     exact(a, ['taskId', 'sessionId', 'criteria', 'sourceKey']); task(db, a.taskId); id(a.sessionId); id(a.sourceKey)
-    if (!Array.isArray(a.criteria) || !a.criteria.length || a.criteria.length > 16
-      || a.criteria.some(item => typeof item !== 'string' || !item.trim() || item.length > 2000)) fail('TASK_OWNER_CRITERIA_INVALID')
+    if (!acceptanceCriteriaSchema.safeParse(a.criteria).success) fail('TASK_OWNER_CRITERIA_INVALID')
     const existing = db.prepare('SELECT * FROM task_owners WHERE task_id=?').get(a.taskId)
     if (existing) {
       if (existing.session_id !== a.sessionId) fail('TASK_OWNER_SESSION_CONFLICT')
@@ -251,13 +251,16 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
   if (command.kind === 'task.owner.acceptance.extend') {
     exact(a, ['taskId', 'itemId', 'criterion', 'sourceKey', 'eventKey'])
     owner(db, a.taskId); id(a.itemId); id(a.sourceKey); id(a.eventKey)
-    if (typeof a.criterion !== 'string' || !a.criterion.trim() || a.criterion.length > 2000)
+    if (!acceptanceCriterionSchema.safeParse(a.criterion).success)
       fail('TASK_OWNER_CRITERIA_INVALID')
     const prior = db.prepare('SELECT * FROM task_acceptance_items WHERE task_id=? AND item_id=?').get(a.taskId, a.itemId)
     if (prior) {
       if (prior.criterion !== a.criterion || prior.source_key !== a.sourceKey) fail('TASK_OWNER_ACCEPTANCE_CONFLICT')
       return { status: 'existing', itemId: a.itemId }
     }
+    const active = db.prepare('SELECT criterion FROM task_acceptance_items WHERE task_id=? AND active=1').all(a.taskId)
+    if (!acceptanceCriteriaSchema.safeParse([...active.map(item => item.criterion), a.criterion]).success)
+      fail('TASK_OWNER_CRITERIA_INVALID')
     db.prepare('INSERT INTO task_acceptance_items(task_id,item_id,criterion,source_key) VALUES(?,?,?,?)')
       .run(a.taskId, a.itemId, a.criterion, a.sourceKey)
     const eventSeq = Number(db.prepare(`INSERT INTO task_events(task_id,event_key,event_type,payload_ref,created_at)
@@ -333,7 +336,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     return { status: 'received', turnId: t.turn_id }
   }
   if (command.kind === 'task.owner.accept') {
-    exact(a, ['taskId', 'turnId', 'leaseEpoch'])
+    exact(a, ['taskId', 'turnId', 'leaseEpoch', 'deliveryManifestRef'], ['taskId', 'turnId', 'leaseEpoch'])
     const { owner: o, turn: t } = turn(db, a)
     if (t.status !== 'candidate' || !t.candidate_json || !o.session_bound) fail('TASK_OWNER_ACCEPT_CONFLICT')
     const v = versions(db, o)
@@ -342,6 +345,11 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       || v.authorizationRevision !== t.authorization_revision || v.inputFenceRevision !== t.input_fence_revision)
       fail('TASK_OWNER_CANDIDATE_STALE')
     const chosen = JSON.parse(t.candidate_json)
+    if (a.deliveryManifestRef !== undefined) {
+      ref(a.deliveryManifestRef)
+      if (chosen.action !== 'complete' || !/^sha256-[a-f0-9]{64}\.json$/.test(a.deliveryManifestRef))
+        fail('TASK_OWNER_DELIVERY_MANIFEST_INVALID')
+    }
     const currentTask = task(db, o.task_id)
     const activeStage = db.prepare(`SELECT status FROM task_plan_stages WHERE task_id=? AND plan_revision=?
       AND status<>'succeeded' AND status<>'invalidated' ORDER BY position LIMIT 1`)
@@ -403,6 +411,8 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     db.prepare('INSERT INTO task_reports(report_id,task_id,turn_id,report_type,facts_json,created_at) VALUES(?,?,?,?,?,?)')
       .run(`owner:${t.turn_id}`, o.task_id, t.turn_id, chosen.action, json({ summary: chosen.summary, evidenceRefs: chosen.evidenceRefs }), now)
     return { status: 'accepted', taskId: o.task_id, turnId: t.turn_id, decision: chosen,
+      ...(a.deliveryManifestRef ? { deliveryManifestRef: a.deliveryManifestRef,
+        requirementRevision: t.requirement_revision, planRevision: t.plan_revision } : {}),
       eventWatermark: t.event_watermark, reportId: `owner:${t.turn_id}`, applicationStatus: 'pending' }
   }
   if (command.kind === 'task.owner.applied') {
@@ -462,6 +472,16 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
 }
 
 export function queryTaskOwner(db, query) {
+  if (query?.kind === 'task.owner.delivery-manifest') {
+    exact(query, ['kind', 'taskId'])
+    const current = task(db, query.taskId)
+    const row = db.prepare("SELECT payload FROM execution_events WHERE kind='task.owner.accept' AND json_extract(payload,'$.taskId')=? AND json_extract(payload,'$.deliveryManifestRef') IS NOT NULL ORDER BY seq DESC LIMIT 1").get(query.taskId)
+    const saved = row ? JSON.parse(row.payload) : null
+    if (!saved || saved.requirementRevision !== current.requirement_revision || saved.planRevision !== current.plan_revision)
+      return null
+    return { ref: saved.deliveryManifestRef, taskId: query.taskId, turnId: saved.turnId,
+      requirementRevision: saved.requirementRevision, planRevision: saved.planRevision }
+  }
   if (query?.kind === 'task.owner.completed-observations') {
     exact(query, ['kind', 'taskId'])
     return completedObservationRecovery(db, query.taskId)

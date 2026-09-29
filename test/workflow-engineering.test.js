@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createEngineeringRegistry, readEngineeringDeliveryProof, readEngineeringRemoteRefs, uatBranchFor, isUatBranch, engineeringWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
+import { createEngineeringRegistry, readEngineeringDeliveryProof, readEngineeringRemoteRefs, uatBranchFor, isUatBranch, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
@@ -156,6 +156,30 @@ test('工程交付证明复用同一 Run 工件并要求显式业务 E2E 检查'
   const ownerArgs = {taskId:'t',stages:[stage],controller,readStageArtifacts:createTaskWorkflowContracts({controller,artifacts,store}).readStageArtifacts}
   const ownerArtifacts = await readTaskOwnerStageArtifacts(ownerArgs)
   assert.equal(await engineeringWorkflowOwnerContract.validateCompletion({taskId:'t',state,artifacts,store}),true)
+  const admission = createEngineeringCompletionPolicy()
+  state.run.requirementRef = 'artifact:frozen-requirement'
+  output['frozen-requirement'] = { acceptanceCriteria: ['业务结果正确'] }
+  const admissionContext = { taskId: 't', state, stage, artifacts, store,
+    acceptanceItems: [{ itemId: 'current-item', criterion: '业务结果正确', evidenceRefs: ['artifact:finalize'] }] }
+  assert.equal(await admission.validateCompletion(admissionContext), true)
+  assert.equal(await admission.validateCompletion({ ...admissionContext,
+    acceptanceItems: [{ itemId: 'other', criterion: '另一项未经该工程执行验收的要求', evidenceRefs: ['artifact:finalize'] }] }), false)
+  assert.equal(await admission.validateCompletion({ ...admissionContext, acceptanceItems: [] }), true)
+  const dividedItems = [...admissionContext.acceptanceItems,
+    { itemId: 'later-item', criterion: '后续追加的业务要求', evidenceRefs: ['artifact:later-finalize'] }]
+  assert.equal(await admission.validateCompletion({ ...admissionContext, acceptanceItems: dividedItems }), true,
+    '当前工程仅负责自身产物引用的条目，不能被迫证明后续工程负责的新增要求')
+  assert.equal(await admission.validateCompletion({ ...admissionContext, acceptanceItems: dividedItems.slice(1) }), true)
+  output['verify-candidate'].verification.passed = false
+  await assert.rejects(admission.validateCompletion({ ...admissionContext, acceptanceItems: dividedItems.slice(1) }),
+    { code: 'ENGINEERING_DELIVERY_PROOF_MISMATCH' })
+  output['verify-candidate'].verification.passed = true
+  for (const changed of [{ stage: undefined }, { stage: { ...stage, runId: 'foreign-run' } },
+    { stage: { ...stage, outputRef: 'foreign-output' } },
+    { acceptanceItems: [{ itemId: 'invalid', criterion: '非法条目', evidenceRefs: null }] },
+    { acceptanceItems: [{ itemId: 'invalid', criterion: '', evidenceRefs: ['artifact:finalize'] }] }])
+    assert.equal(await admission.validateCompletion({ ...admissionContext, ...changed }), false)
+  delete output['frozen-requirement']; delete state.run.requirementRef
   assert.deepEqual(ownerArtifacts[0].nodeArtifacts.map(item=>item.nodeId).sort(),['define-local-acceptance','finalize-local-acceptance','verify-candidate'])
   assert.ok(ownerArtifacts[0].nodeArtifacts.every(item=>item.description && ownerArtifacts[0].evidenceRefs.includes(item.artifactRef)))
   assert.ok(!ownerArtifacts[0].evidenceRefs.includes('artifact:prepare-push'))
@@ -298,7 +322,10 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   const info = { commandId: 'command', run: { actorId: 'owner' }, unit: { constraints: [], sharedConstraints: [] } }
   for (const uatEnvironment of [null, 'uat0', 'uat10', 'main']) await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, uatEnvironment } }, info, controller), /ENGINEERING_UAT_ENVIRONMENT_REQUIRED/)
   await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, uatEnvironment: 'uat9' } }, info, controller), /ENGINEERING_UAT_BRANCH_NOT_FOUND/)
+  for (const acceptanceCriteria of [Array(33).fill('条件'), [], [' '], ['x'.repeat(2001)], [42], '条件', null])
+    await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, acceptanceCriteria } }, info, controller), { code: 'LOCAL_ACCEPTANCE_CRITERIA_REQUIRED' })
   const prepared = await registry.prepareTask(action, info, controller)
+  assert.deepEqual(prepared.input.acceptanceCriteria, ['修改value'])
   assert.deepEqual(prepared.input.editablePaths, ['value.txt'])
   assert.deepEqual(prepared.input.constraints, ['I节点新增限制'])
   assert.deepEqual(await registry.prepareTask(action, info, controller), prepared)
