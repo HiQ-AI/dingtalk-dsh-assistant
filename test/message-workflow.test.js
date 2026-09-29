@@ -1267,8 +1267,9 @@ test('IB无损复用仅原生同版本任务材料、唯一精确来源与共同
   assert.equal(JSON.stringify(projected.sharedTasks[material.taskFactsRef]), current.text)
   assert.deepEqual(material.coverage, current.coverage)
   assert.deepEqual(received.answer.resources.slice(1), resources.slice(1))
-  assert.deepEqual(projected.sharedTopic.facts[0], { id: 'exact', actorId: 'user', status: 'active', sourceRefs: [ref], textFromSource: true })
-  assert.deepEqual(projected.sharedTopic.facts.slice(1), facts.slice(1))
+  assert.deepEqual(projected.sharedTopic.facts[0], { id: 'exact', actorId: 'user', status: 'active', sourceIndexes: [0], textFromSource: true })
+  assert.deepEqual(projected.sharedTopic.facts[1], { id: 'constraint', text: '不重发', sourceIndexes: [0] })
+  assert.deepEqual(projected.sharedTopic.facts.slice(2), facts.slice(2))
   assert.deepEqual(projected.sharedTopic.sources, input.sharedTopic.sources)
   const different = structuredClone(input)
   different.units[1].input.groupResponsibility = '另一规则'
@@ -1294,4 +1295,17 @@ test('I与IB提示包含Host的report必填字段且工程条件不污染普通�
   assert.equal(messageSchemas.I.safeParse(create({ objective: '普通调查' })).success, true)
   assert.deepEqual(taskActionRequirements.create, ['objective'])
   assert.deepEqual(taskActionRequirements.report, ['language'])
+})
+
+test('IB来源索引保序且仅共享唯一完整身份，发送者必须严格相同', () => {
+  const a={sourceKey:'a',sourceVersion:1}, b={sourceKey:'b',sourceVersion:2}
+  const input={units:[],sharedTopic:{actorId:'owner',sources:[{...a,text:'甲'},{...b,text:'乙'},{sourceKey:'dup',sourceVersion:1},{sourceKey:'dup',sourceVersion:1}],facts:[
+    {actorId:'owner',sourceRefs:[b,a],text:'约束'}, {actorId:'other',sourceRefs:[{...a,permission:false}],text:'保留'},
+    {sourceRefs:[{sourceKey:'dup',sourceVersion:1}]},{sourceRefs:[{sourceKey:'missing',sourceVersion:1}]},{}]}}
+  const before=structuredClone(input),out=shareTopicContext(input)
+  assert.deepEqual(input,before)
+  assert.deepEqual(out.sharedTopic.facts[0],{text:'约束',sourceIndexes:[1,0],actorFromTopic:true})
+  assert.deepEqual(out.sharedTopic.facts.slice(1),input.sharedTopic.facts.slice(1))
+  assert.ok(prepareMessageRequest('IB',out).system.includes('sourceIndexes'))
+  assert.ok(prepareMessageRequest('IB',out).system.includes('actorFromTopic'))
 })

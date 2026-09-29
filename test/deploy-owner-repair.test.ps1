@@ -267,3 +267,62 @@ $failed=$false
 try{Invoke-TaskFileMigration 'verify' 'expected' $backup 'wrong'}catch{$failed=$_.Exception.Message-eq '任务迁移源备份清单摘要漂移'}
 if(-not $failed){throw '接续不能接受迁移源备份清单摘要漂移'}
 Write-Output 'PASS 2/2: 迁移源备份使用sibling目录；接续拒绝备份清单摘要漂移'
+
+# 以下用真实本地文件与原生JSON解析验证，不替换文件系统实现。
+foreach($name in @('Test-Path','Get-FileHash','Set-Content','Get-Content')){Remove-Item -LiteralPath "Function:$name" -ErrorAction SilentlyContinue}
+foreach($name in @('Assert-LocalPackageSources','Read-StoppedRepairRecord')){
+ $fn=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq $name},$true)
+ Invoke-Expression $fn.Extent.Text
+}
+$workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'));$node=(Get-Command node.exe).Source
+$fixture=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot ('../docs/tmp/sealed-install-check-'+[guid]::NewGuid())))
+[IO.Directory]::CreateDirectory($fixture)|Out-Null
+[IO.File]::WriteAllText("$fixture/package.json",'{"dependencies":{"observer":"file:missing.tgz"}}')
+[IO.File]::WriteAllText("$fixture/package-lock.json",'{"packages":{}}')
+$beforeFiles=@(Get-ChildItem -LiteralPath $fixture -File|ForEach-Object {(Get-FileHash -LiteralPath $_.FullName).Hash}) -join ','
+$failed=$false;try{Assert-LocalPackageSources $fixture}catch{$failed=$_.Exception.Message.StartsWith('profile本地依赖源不存在:')}
+if(-not $failed -or (@(Get-ChildItem -LiteralPath $fixture -File|ForEach-Object {(Get-FileHash -LiteralPath $_.FullName).Hash}) -join ',')-ne $beforeFiles){throw '缺本地tgz须零写拒绝'}
+[IO.File]::WriteAllText("$fixture/missing.tgz",'fixture')
+Assert-LocalPackageSources $fixture
+[IO.File]::WriteAllText("$fixture/package-lock.json",'{"packages":{"node_modules/old":{"resolved":"file:lock-only-missing.tgz"}}}')
+$failed=$false;try{Assert-LocalPackageSources $fixture}catch{$failed=$_.Exception.Message.StartsWith('profile本地依赖源不存在:')}
+if(-not $failed){throw '锁内独立file源缺失也必须拒绝'}
+Write-Output 'PASS 3/3: package.json缺源零写拒绝、恢复文件通过、lock独立缺源拒绝'
+$origin=Join-Path $fixture 'origin';$backupRoot=Join-Path $fixture 'backup'
+[IO.Directory]::CreateDirectory($origin)|Out-Null
+[IO.Directory]::CreateDirectory("$backupRoot/profile")|Out-Null
+[IO.File]::WriteAllText("$backupRoot/profile/cordis.patch.yml",'same-profile')
+$ExpectedProfileSha256=(Get-FileHash -LiteralPath "$backupRoot/profile/cordis.patch.yml").Hash
+$ExpectedPackageSha256='same-package';$DirectQueriesProposal=''
+$backupRecord=[pscustomobject]@{backup=$backupRoot;packageSha256=$ExpectedPackageSha256;oldPid=123}
+$record=Read-StoppedRepairRecord "$origin/maintenance-sealed.json" $sealed $backupRecord
+Assert-StoppedRepairPermit $record $sealed $before $backupRecord $state
+if($record.checkpoint-ne 'sealed-before-launch' -or (Test-Path "$origin/launch.json")){throw '真实封存内存记录不能伪造launch'}
+foreach($name in @('launch.json','config-applied.json','task-file-migration-execute.json')){
+ [IO.File]::WriteAllText("$origin/$name",'{}');$failed=$false
+ try{Read-StoppedRepairRecord "$origin/maintenance-sealed.json" $sealed $backupRecord}catch{$failed=$true}
+ if(-not $failed){throw '已跨阶段证据必须拒绝'}
+ [IO.File]::Delete("$origin/$name")
+}
+$ExpectedPackageSha256='other';$failed=$false
+try{Read-StoppedRepairRecord "$origin/maintenance-sealed.json" $sealed $backupRecord}catch{$failed=$true}
+if(-not $failed){throw 'beforelaunch不能更换原包'}
+Write-Output 'PASS 5/5: 封存未launch检查点通过且不造文件；launch/config/迁移存在及包变化拒绝'
+
+
+$ExpectedPackageSha256='same-package'
+[IO.File]::WriteAllText("$fixture/package.json",'{"dependencies":{"@zzusp/dingtalk-dsh-observer":"file:old-observer.tgz"}}')
+[IO.File]::WriteAllText("$fixture/pnpm-lock.yaml", "lockfileVersion: '9.0'`nimporters:`n  .:`n    dependencies:`n      '@zzusp/dingtalk-dsh-observer':`n        specifier: file:old-observer.tgz`npackages:`n  '@zzusp/dingtalk-dsh-observer@file:old-observer.tgz':`n    resolution: {tarball: 'file:old-observer.tgz'}`n")
+Assert-LocalPackageSources $fixture "$fixture/missing.tgz"
+[IO.File]::AppendAllText("$fixture/pnpm-lock.yaml", "  'unrelated@file:missing-other.tgz':`n    resolution: {tarball: 'file:missing-other.tgz'}`n")
+$failed=$false;try{Assert-LocalPackageSources $fixture "$fixture/missing.tgz"}catch{$failed=$_.Exception.Message.StartsWith('profile本地依赖源不存在:')}
+if(-not $failed){throw 'Observer替代不能掩盖其他锁依赖缺失'}
+Write-Output 'PASS 2/2: 原生pnpm锁精确Observer替代通过；其他缺源仍拒绝'
+
+$installAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$repairPackages'},$true)
+$Package='D:/candidate.tgz';$ObserverPackage='D:/packages/observer recovered.tgz'
+Invoke-Expression $installAssignment.Extent.Text
+if($repairPackages.Count-ne 2 -or $repairPackages[0]-ne $Package -or $repairPackages[1]-ne '@zzusp/dingtalk-dsh-observer@file:D:/packages/observer recovered.tgz'){throw '恢复Observer须明确包名覆盖缺源依赖'}
+$ObserverPackage='';Invoke-Expression $installAssignment.Extent.Text
+if($repairPackages.Count-ne 1 -or $repairPackages[0]-ne $Package){throw '未指定Observer时不得添加空包参数'}
+Write-Output 'PASS 2/2: Observer恢复用明确包名file参数；不恢复Observer时只安装Assistant'

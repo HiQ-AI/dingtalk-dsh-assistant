@@ -478,6 +478,10 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
         ...(value.resources ? { resources: value.resources.map(resolveMaterial) } : {}) }
     }
     const topic = shared.sharedTopic && { ...shared.sharedTopic, facts: shared.sharedTopic.facts.map(fact => {
+      if (fact.sourceIndexes) { const { sourceIndexes, ...rest } = fact; fact = { ...rest, sourceRefs: sourceIndexes.map(index => {
+        const { sourceKey, sourceVersion } = shared.sharedTopic.sources[index]; return { sourceKey, sourceVersion }
+      }) } }
+      if (fact.actorFromTopic) { const { actorFromTopic, ...rest } = fact; fact = { ...rest, actorId: shared.sharedTopic.actorId } }
       if (!fact.textFromSource) return fact
       const ref = fact.sourceRefs[0], { textFromSource, ...rest } = fact
       return { ...rest, text: shared.sharedTopic.sources.find(source => source.sourceKey === ref.sourceKey && source.sourceVersion === ref.sourceVersion).text }

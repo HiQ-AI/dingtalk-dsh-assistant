@@ -41,3 +41,17 @@ formal-restart-and-file-readback,14,PASS,round-14.md
 migrated-task-restart-readback,14,PASS,round-14.md
 real-shared-topic-recovery,14,PASS,round-14.md
 real-owner-completion-gate,14,FAIL,round-14.md
+host-order-planning-and-domain-regression,15,PASS,round-15.md
+native-owner-semantic-replay,15,PASS,round-15.md
+formal-package-installation,15,FAIL,round-15.md
+sealed-install-bare-package,16,FAIL,round-16.md
+sealed-install-named-package,16,PASS,round-16.md
+formal-restart-and-file-readback,16,PASS,round-16.md
+migrated-task-restart-readback,16,PASS,round-16.md
+real-shared-topic-fact-capacity,16,FAIL,round-16.md
+ib-topic-identity-lossless-and-regression,17,PASS,round-17.md
+formal-package-installation,17,PASS,round-17.md
+real-shared-topic-fact-capacity,17,PASS,round-17.md
+real-owner-completion-gate,17,PASS,round-17.md
+formal-restart-and-file-readback,17,PASS,round-17.md
+migrated-task-restart-readback,17,PASS,round-17.md

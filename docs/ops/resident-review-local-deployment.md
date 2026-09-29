@@ -421,3 +421,15 @@ I/IB动作条件必填字段与Host校验共用规则；例如report缺language�
 若任务要求“先生成读回、后续轮次再投递”，仅有两个成功产物不足以证明轮次和顺序。完成验收会从内部只读查询 `task.owner.planning` 取当前 Task 已应用的 initialize/append 及原生 appendStages 回执（后者仅标明原始类型，不推断模式），结合当前已验阶段的前驱引用、Run 时间及节点状态提供给领域语义校验；released 候选、待应用决定及其他 Task 记录不进入该证据。规划历史超过 200 条明确拒绝完成，不采用不完整历史。此查询不新增外部 API，也不迁移表或改写历史记录。
 
 排障时分别检查结构门禁、真实顺序记录和模型判断。一次模型超时不能推断所有拒绝均由超时引起；不得通过删除验收条目或重发附件规避缺证据。现有文件、附件及原始会话日志保持原位置。
+
+### 已封存但安装失败、尚无 launch.json
+
+此时不要伪造启动记录。`-RepairStoppedLaunch` 可传原证据目录中的 `maintenance-sealed.json` 绝对路径：必须同时存在原 `backup.json`、`control-before.json` 与完整备份，原目录无 launch、配置应用、接入群自启变更或迁移记录。该入口仅重试 backup.json 绑定的同 SHA Assistant 包，`ExpectedProfileSha256` 必须等于当前配置和备份原配置；不传 DirectQueriesProposal，不再次备份、迁移或应用配置。先 `-Check`，再由同一参数执行；仍核对停止状态、维护许可、全部历史和备份，并在执行期间持有原 owner EXCLUSIVE 锁。
+
+如果失败原因是 Observer 的本地 tgz 源丢失，可另外提供 `ObserverPackage` 与 `ExpectedObserverPackageSha256`，指向已有持久包目录中的恢复包。Check 和锁内执行均以当前已安装 Observer 为源码逐文件核验包（包含 package.json 的名称和版本），并核对原备份中存在该依赖；仅允许相同内容恢复源，不允许升级。归档 tgz 的摘要可以不同，不能伪造旧完整性摘要；原生 `plugin add` 同时接纳 Assistant 和此 Observer 包，自行更新依赖路径及锁。原来已有 launch.json 的修复入口仍禁止 Observer 变更。
+
+所有部署的零写预检及安装前都解析 profile 的 package.json 和原生 pnpm-lock.yaml（无 pnpm 锁时读 package-lock.json），检查本地 file: tgz 存在。仅上述已核验 Observer 恢复可精确替代该包名对应的旧源；其他缺源仍拒绝。正式启动成功前保持 stopping 封存，后续仍按 Readback/Resume 门禁处理。
+
+恢复 Observer 时脚本使用显式 `@zzusp/dingtalk-dsh-observer@file:<恢复包绝对路径>` 参数。pnpm 10.13.1 在旧 file: 源缺失时，传裸 tgz 会先解析旧源而失败；带包名的原生 add 能先确定被替换的依赖。隔离临时 profile 已实跑：裸包 ENOENT，命名参数成功且 package.json 由 pnpm 更新。不能通过手改 profile 或完整性摘要绕过此解析问题。
+
+IB 话题来源身份使用无损引用：`sourceIndexes` 按原顺序指向 sharedTopic.sources 中唯一匹配的 sourceKey/sourceVersion；额外字段或歧义匹配不投影。`actorFromTopic` 仅代表该事实发送者与 sharedTopic.actorId 完全相等，不代表所有消息同一发送者，也不赋予权限。容量失败先核验当前真实完整输入和可逆性；不删除事实或提高上限。若原失败消息无已生效命令/通知，使用原生重处理恢复该消息，避免为唤醒反复新增话题历史。

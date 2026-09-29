@@ -1,0 +1,5 @@
+# IB话题来源与发送者无损引用
+
+正式重建33493/32000：相比旧31552，facts从8增至17、sources从4增至6，话题部分增加5860字节；任务共享未回归。仅剩完全重复的sourceKey/sourceVersion和actorId可复用现有sharedTopic。
+
+sourceIndexes仅替换每一引用对象恰有sourceKey/sourceVersion两键且唯一匹配现有sources的非空数组，索引保序；额外字段、缺匹配、多匹配原样保留。actorFromTopic仅非空字符串actorId严格相等时替代，其他发送者不变。不改变I、权限、原始prepared数据或32000上限；提示明确还原。私有初测含旧system31385，实施后按新system重新计量并逐字段逆还原。

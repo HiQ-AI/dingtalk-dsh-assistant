@@ -13,3 +13,5 @@
 关联首轮 184 项中 183 PASS / 1 FAIL：新增规划查询遗漏当前仍合法的 appendStages 候选。已保留原生 appendStages 用例及既有断言，查询纳入已应用 advance 的非空 appendStages，来源类型原样记 appendStages，不猜 initialize/append/replaceSuffix。显式 replaceSuffix 的归一化 appendStages 不混入；无规划 advance 不进入。此为同因缺证据修复，不改正式记录。
 
 最终关联复跑：`node --test test/task-owner-store.test.js test/task-workflow-contracts.test.js test/workflow-service.test.js test/task-delivery-manifest.test.js`，184/184 PASS，0 FAIL / 0 SKIP，100910.8744 毫秒，日志 `docs/tmp/task-unified-file-storage/host-order-regression-rerun.log`。补充无规划/replaceSuffix 排除测试后独立 query 文件 20/20 PASS，日志 `host-order-query-final.log`。原 `task-general-workflow.js` 未修改，SHA256 `1E22A7988D54D9E33883DD46E04C959F8AAEA13C66D66B6D73D0FBC8C55DBF92`。
+
+正式部署保留失败事实：完整备份 owner-repair-20260929-200540-321 与 stopping 封存成功，旧 PID8080 已退出；安装因 Observer 原 file: tgz 源目录缺失而停止，尚未启动。实例双端口无监听，完整备份保留。恢复 tgz 与正式已安装 Observer 四文件逐一相同，35556字节，SHA256 2a47c7af59dde689eb0b0dfff2eaa03a3d60c299584a8b778c2477ec5c344b52；它是同内容重新打包，不能宣称原 tar 字节相同。等待受控停机续接验证。

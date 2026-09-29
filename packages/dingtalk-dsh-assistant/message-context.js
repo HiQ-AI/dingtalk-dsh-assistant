@@ -211,11 +211,20 @@ export function shareTopicContext(input) {
     resolvedEvidence: unit.input.resolvedEvidence.map(evidence => ({ ...evidence, answer: material(evidence.answer) })) }
   const topic = input.sharedTopic
   const sharedTopic = topic?.facts ? { ...topic, facts: topic.facts.map(fact => {
-    if (fact.sourceRefs?.length !== 1 || typeof fact.text !== 'string') return fact
-    const ref = fact.sourceRefs[0], sources = (topic.sources ?? []).filter(source => source.sourceKey === ref.sourceKey && source.sourceVersion === ref.sourceVersion)
-    if (sources.length !== 1 || sources[0].text !== fact.text) return fact
-    const { text, ...identity } = fact
-    return { ...identity, textFromSource: true }
+    const result = { ...fact }, sources = topic.sources ?? []
+    const matches = (fact.sourceRefs ?? []).map(ref => sources.flatMap((source, index) =>
+      source.sourceKey === ref.sourceKey && source.sourceVersion === ref.sourceVersion ? [index] : []))
+    if (matches.length === 1 && matches[0].length === 1 && typeof fact.text === 'string'
+      && sources[matches[0][0]].text === fact.text) { delete result.text; result.textFromSource = true }
+    if (matches.length && matches.every(indexes => indexes.length === 1)
+      && fact.sourceRefs.every(ref => Object.keys(ref).length === 2 && Object.hasOwn(ref, 'sourceKey') && Object.hasOwn(ref, 'sourceVersion'))) {
+      delete result.sourceRefs
+      result.sourceIndexes = matches.map(indexes => indexes[0])
+    }
+    if (typeof fact.actorId === 'string' && fact.actorId.length && fact.actorId === topic.actorId) {
+      delete result.actorId; result.actorFromTopic = true
+    }
+    return result
   }) } : topic
   const responsibility = units[0]?.input.groupResponsibility
   const sharedResponsibility = typeof responsibility === 'string' && responsibility.length > 0 && units.every(unit => unit.input.groupResponsibility === responsibility)
