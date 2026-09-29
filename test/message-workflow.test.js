@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { createMessageWorkflow } from '../packages/dingtalk-dsh-assistant/message-workflow.js'
-import { prepareMessageContext, splitContext, intentContext, shareTopicContext, candidateCards, messageSchemas } from '../packages/dingtalk-dsh-assistant/message-context.js'
+import { prepareMessageContext, splitContext, intentContext, shareTopicContext, candidateCards, messageSchemas, taskActionRequirements } from '../packages/dingtalk-dsh-assistant/message-context.js'
 import { createMessageModel, prepareMessageRequest } from '../packages/dingtalk-dsh-assistant/message-model.js'
 import { messageSystem } from '../packages/dingtalk-dsh-assistant/message-model.js'
 
@@ -1275,4 +1275,23 @@ test('IB无损复用仅原生同版本任务材料、唯一精确来源与共同
   const separate = shareTopicContext(different)
   assert.equal(separate.groupResponsibility, undefined)
   assert.deepEqual(separate.units.map(unit => unit.input.groupResponsibility), ['同一规则', '另一规则'])
+})
+
+
+test('I与IB提示包含Host的report必填字段且工程条件不污染普通动作', () => {
+  for (const stage of ['I', 'IB']) {
+    assert.ok(prepareMessageRequest(stage, {}).system.includes('"report":["language"]'))
+    const output = args => {
+      const value = { ...intent, actions: [{ intent: 'report', arguments: args, dependsOn: [] }] }
+      return stage === 'I' ? value : { kind: 'topic_intents', decisions: [{ unitId: 'u', intent: value }] }
+    }
+    assert.equal(messageSchemas[stage].safeParse(output({})).success, false)
+    assert.equal(messageSchemas[stage].safeParse(output({ language: 'zh-CN' })).success, true)
+  }
+  const create = args => ({ ...intent, actions: [{ intent: 'create', arguments: args, dependsOn: [] }] })
+  assert.equal(messageSchemas.I.safeParse(create({ objective: '开发', workflowId: 'task-engineering' })).success, false)
+  assert.equal(messageSchemas.I.safeParse(create({ objective: '开发', workflowId: 'task-engineering', repositoryId: 'repo' })).success, true)
+  assert.equal(messageSchemas.I.safeParse(create({ objective: '普通调查' })).success, true)
+  assert.deepEqual(taskActionRequirements.create, ['objective'])
+  assert.deepEqual(taskActionRequirements.report, ['language'])
 })

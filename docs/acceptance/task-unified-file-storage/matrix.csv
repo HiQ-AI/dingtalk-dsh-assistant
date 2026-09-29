@@ -35,3 +35,4 @@ real-owner-completion-gate,11,FAIL,round-11.md
 ib-task-only-sharing-budget,12,FAIL,round-12.md
 ib-lossless-budget-and-references,13,PASS,round-13.md
 ib-lossless-service-regression,13,PASS,round-13.md
+real-owner-completion-gate,13,FAIL,round-13.md

@@ -297,6 +297,8 @@ Topic 的 `title` 是对齐 Task 名称的 8–20 字短语，最多 30 字，�
 
 `group_decision_submit` 每次提交一个 Topic 的决策，绑定 topicId、revision 和持久 decisionId。决策及每个 Task action 都携带 `basisUnitRefs`，Host 按事项逐动作校验 owner、当前增量和执行版本；接受一个事项不会消费同消息的其他事项。Task 仍只保存 topicRefs，固定版本读取只投影本事项的来源与共享背景。任何 Task 动作都必须带非空确认；确认先可靠写入 Outbox，再创建、续接或重开 Task，但单独确认不消费后续业务动作资格。取消仍优先发送止损信号。决策接受后保留动作回执，按固定 operationId 恢复，不通过重建 ID 重复执行。Topic 工具参数错误返回精简的 `invalid-arguments` 字段问题；归类请求过期时返回当前请求，已落盘的重复提交从 RouteHistory 恢复原回执，Resident 不猜测或盲目重放未知请求。
 
+动作的条件必填字段由同一份规则生成 I/IB 提示和 Host 校验，例如 `report` 必须提供 `language`；缺参仍拒绝，不补默认值。
+
 历史主会话回复候选按 Topic 决策或 Task 通知绑定并有界读取，不随全群历史重复注入。Resident 准备回复时调用 `group_reply_review_get`，完整审阅绑定快照；Topic ID、引用 ID 或关键词不能替代语义判断。重启后从持久的归类进度、Topic 未处理版本和已接受决策恢复；已归类话题的失败只阻塞该话题及共享 Task 的关联操作。
 
 图片及其紧邻短消息在归类阶段共同理解；附件读取失败不能据标题或缩略图猜测正文并启动 Task。原始消息保存附件与事实版本，Topic 固定版本解析相应原始事实，重启后仍能追溯输入。
