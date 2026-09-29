@@ -29,3 +29,9 @@ real-model-group-file-delivery,10,PASS,round-10.md
 owner-single-capability-stage-contract,10,PASS,round-10.md
 real-owner-completion-gate,10,FAIL,round-10.md
 compound-item-bound-evidence-and-isolation,11,PASS,round-11.md
+formal-restart-and-file-readback,11,PASS,round-11.md
+migrated-task-restart-readback,11,PASS,round-11.md
+real-owner-completion-gate,11,FAIL,round-11.md
+ib-task-only-sharing-budget,12,FAIL,round-12.md
+ib-lossless-budget-and-references,13,PASS,round-13.md
+ib-lossless-service-regression,13,PASS,round-13.md

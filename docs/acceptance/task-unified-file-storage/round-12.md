@@ -1,0 +1,16 @@
+# 第十二轮：IB任务事实重复占用与原任务收口
+
+真实失败：较早事实消息IB容量32081/32000，原生重处理后两个待处理事项合并达46073/32000，均无命令/通知效果。当前routing.pending只读查询为空；同话题needs_attention使后续短事实不进入IB，Owner未唤醒。不是未归类消息屏障。
+
+根因：绑定任务的facts同时包含task和topicTasks.tasks同一详情，IB又在各事项完整复制。仅IB将完整digest相同的任务事实共享一次，各事项保留自己原有引用；同taskId/版本而内容不同不会合并。原文、发送者、权限、补读证据和输入上限不改，单项I不改。
+
+真实createMessageWorkflow集成：双事项带大任务事实，完整模型输入（含system）去重前48974字节、后22380字节，两命令applied、消息settled。首轮fixture伪造factVersion导致原生事务拒绝，保留失败日志；去除伪版本后通过，不绕过真实版本门禁。helper另覆盖不同版本/内容及权限引用反例。
+
+旧状态变化fixture直读facts.task.status因引用投影失败，改为按ref读取sharedTasks后保留running/succeeded原断言。message+ledger首轮127/127回归通过；含新增真实接入的最终回归及服务回归进行中。尚未宣称正式Owner完成。
+消息及账本最终回归128/128 PASS，0fail/skip，13168ms，包含真实接入用例；服务及manifest相关回归仍在进行。
+服务/manifest首轮153/154，唯一旧fixture读取完整task字段因共享引用失败；改为按ref解出同一完整事实，保留failed/insufficient_evidence及不能冒充目标达成断言。定向1/1及最终完整154/154 PASS，0fail/skip，98992ms。
+安装包f1d9c1a1ff7a7ca2986b3876a89ff9dad143d4a21fb7868cd576d23bbb5d9ca7（611527字节）Check零写、99文件匹配，但未Execute：只读量化发现单份任务事实约2800字节，仅此去重可能仍不能使正式46073字节输入低于32000，需要先精确重建正式IB输入并消除另外的完全相同副本。
+
+私有只读重建旧正式IB输入预算46073，与正式失败reason精确一致。最终无损投影含完整新system31258<32000：复用sharedTasks引用canonical且内容相同的原生任务历史；逐字相同话题正文引用其唯一原来源；同一群规则共享一次。不同历史/非原生/非法或非canonical JSON、多义来源、部分约束、不同规则均保留。
+
+独立逆投影（非实现自身的还原函数）逐字段deepEqual原IB输入，sourceUnchanged=true、exactRestoration=true；当前新system下原输入46486、投影31258。没有修改正式库、提高上限或共享绑定推理。此预算是只读重建的本次输入，不能保证未来任意新增材料都在上限内。

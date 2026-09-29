@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { createMessageWorkflow } from '../packages/dingtalk-dsh-assistant/message-workflow.js'
-import { prepareMessageContext, splitContext, intentContext, candidateCards, messageSchemas } from '../packages/dingtalk-dsh-assistant/message-context.js'
+import { prepareMessageContext, splitContext, intentContext, shareTopicContext, candidateCards, messageSchemas } from '../packages/dingtalk-dsh-assistant/message-context.js'
 import { createMessageModel, prepareMessageRequest } from '../packages/dingtalk-dsh-assistant/message-model.js'
 import { messageSystem } from '../packages/dingtalk-dsh-assistant/message-model.js'
 
@@ -928,7 +928,7 @@ test('IB 判断期间任务语义事实改变，旧动作零派发且新状态�
       if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.sourceLength }], goalText: input.source.text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.sourceLength, role: 'unit' }] }
       if (stage === 'R') return binding
       assert.equal(stage, 'IB')
-      const status = input.units[0].input.facts.task.status
+      const status = input.sharedTasks[input.units[0].input.facts.task.ref].status
       observed.push(status)
       if (observed.length === 1) { startFirst(); await firstGate }
       else if (observed.length === 2) { startSecond(); await secondGate }
@@ -1166,4 +1166,113 @@ test('维护模式阻断领取时保留原消息，解除后继续且不转人�
     assert.equal((await workflow.state(received.runId)).run.status, 'settled')
     assert.deepEqual(calls, ['S', 'R', 'IB'])
   })
+})
+
+
+test('IB任务事实按完整内容共享，保留事项权限且I原样', () => {
+  const task = { taskId: 'task', factVersion: 'v1', acceptance: '验收事实'.repeat(600) }
+  const changed = { ...task, status: 'different' }
+  const unit = (id, value) => ({ unitId: id, actorId: id, input: intentContext({ text: id, constraints: ['不重发'], sourceKey: id },
+    { taskId: value.taskId }, { task: value, topicTasks: { tasks: [value], total: 1 }, actorMayCreate: id === 'a' }, '', [], [{ answer: '不可裁剪材料' }]) })
+  const original = { units: [unit('a', task), unit('b', task), unit('c', changed)] }
+  const saved = structuredClone(original)
+  const projected = shareTopicContext(original)
+  assert.deepEqual(original, saved)
+  assert.equal(Object.keys(projected.sharedTasks).length, 2)
+  assert.equal(projected.units[0].input.facts.task.ref, projected.units[1].input.facts.task.ref)
+  assert.notEqual(projected.units[0].input.facts.task.ref, projected.units[2].input.facts.task.ref)
+  for (const [index, value] of projected.units.entries()) {
+    const ref = value.input.facts.task.ref
+    assert.deepEqual(projected.sharedTasks[ref], original.units[index].input.facts.task)
+    assert.equal(value.input.facts.topicTasks.tasks[0].ref, ref)
+    assert.equal(value.input.facts.actorMayCreate, index === 0)
+    assert.deepEqual(value.input.resolvedEvidence, original.units[index].input.resolvedEvidence)
+    assert.deepEqual(value.input.constraints, original.units[index].input.constraints)
+    assert.equal(value.input.text, original.units[index].input.text)
+  }
+  const before = prepareMessageRequest('IB', original).inputBytes
+  const after = prepareMessageRequest('IB', projected).inputBytes
+  assert.ok(before > 32000 && after < 32000, `${before}/${after}`)
+  assert.deepEqual(intentContext({ text: 'I' }, {}, { task }), { text: 'I', executionMaterialRefs: [], binding: {}, facts: { task } })
+  assert.match(messageSystem('IB'), /按ref读取sharedTasks/u)
+})
+
+
+test('真实IB调度共享大任务事实后在32000预算内接纳并完成命令', async t => {
+  const task = { taskId: 'large-task', acceptance: '完整验收事实'.repeat(500) }
+  let budget, effects = 0
+  const { workflow } = await fixture(t, {
+    context: {
+      bindTopic: async ({ run, unit }) => ({ topicId: 'large-topic', conversationId: run.conversationId, sourceRunId: run.runId, unitId: unit.id ?? unit.unitId, title: '共享事实', facts: [] }),
+      facts: async () => ({ task, topicTasks: { tasks: [task], total: 1 }, actorMayCreate: false }),
+    },
+    judge: async ({ stage, input }) => {
+      if (stage === 'S') return split
+      if (stage === 'R') return binding
+      assert.equal(stage, 'IB')
+      assert.equal(Object.keys(input.sharedTasks).length, 1)
+      for (const unit of input.units) {
+        assert.deepEqual(input.sharedTasks[unit.input.facts.task.ref], task)
+        assert.equal(unit.input.facts.actorMayCreate, false)
+        assert.ok(['查A', '查B'].includes(unit.input.text))
+        assert.equal(unit.input.sourceKey, source.sourceKey)
+      }
+      const original = { ...input, units: input.units.map(unit => ({ ...unit, input: { ...unit.input,
+        facts: { ...unit.input.facts, task, topicTasks: { tasks: [task], total: 1 } } } })) }
+      delete original.sharedTasks
+      budget = { before: prepareMessageRequest('IB', original).inputBytes, after: prepareMessageRequest('IB', input).inputBytes }
+      assert.ok(budget.before > 32000 && budget.after < 32000, JSON.stringify(budget))
+      return { kind: 'topic_intents', decisions: input.units.map(unit => ({ unitId: unit.unitId, intent: { ...intent, replyPolicy: 'none' } })) }
+    },
+    handlers: { status: async () => { effects++; return { ok: true } } },
+  })
+  const received = await workflow.receive(source, { process: false })
+  await workflow.process(received.runId)
+  let state
+  for (let i = 0; i < 100; i++) {
+    state = await workflow.state(received.runId)
+    if (state.run.status === 'settled' || state.run.status === 'needs_attention') break
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  assert.equal(state.run.status, 'settled', JSON.stringify(state.run))
+  assert.equal(effects, 2)
+  assert.ok(state.commands.every(command => command.status === 'applied'))
+  t.diagnostic(`实际合成IB输入预算 ${budget.before} -> ${budget.after} bytes（含system）`)
+})
+
+
+test('IB无损复用仅原生同版本任务材料、唯一精确来源与共同规则', () => {
+  const task = { taskId: 't', factVersion: { hash: 'current' }, status: 'succeeded' }
+  const current = { resourceRef: 'workflow-task-history:t', text: JSON.stringify(task), coverage: { complete: true, resourceHash: 'hash' } }
+  const resources = [current, { ...current, text: JSON.stringify({ ...task, status: 'old' }) },
+    { ...current, text: 'not json' }, { ...current, text: ' ' + current.text },
+    { ...current, resourceRef: 'other:t' }, { ...current, resourceRef: 'workflow-task-history:other' }]
+  const ref = { sourceKey: 'source', sourceVersion: 1 }, other = { sourceKey: 'other', sourceVersion: 1 }
+  const facts = [{ id: 'exact', actorId: 'user', status: 'active', text: '原文，不重发', sourceRefs: [ref] },
+    { id: 'constraint', text: '不重发', sourceRefs: [ref] },
+    { id: 'multiple', text: '原文，不重发', sourceRefs: [ref, other] },
+    { id: 'ambiguous', text: '有歧义', sourceRefs: [other] }]
+  const make = actorMayCreate => ({ unitId: String(actorMayCreate), input: { text: '原文', constraints: ['不重发'],
+    groupResponsibility: '同一规则', facts: { task, actorMayCreate }, resolvedEvidence: [{ needs: [{ resourceRef: current.resourceRef }], answer: { resources } }] } })
+  const input = { units: [make(true), make(false)], sharedTopic: { facts, sources: [{ ...ref, text: '原文，不重发' }, { ...other, text: '有歧义' }, { ...other, text: '有歧义' }] } }
+  const original = structuredClone(input), projected = shareTopicContext(input)
+  assert.deepEqual(input, original)
+  assert.equal(projected.groupResponsibility, '同一规则')
+  assert.equal(projected.units[0].input.groupResponsibility, undefined)
+  assert.equal(projected.units[1].input.facts.actorMayCreate, false)
+  const received = projected.units[0].input.resolvedEvidence[0]
+  assert.deepEqual(received.needs, input.units[0].input.resolvedEvidence[0].needs)
+  const material = received.answer.resources[0]
+  assert.equal(material.text, undefined)
+  assert.equal(JSON.stringify(projected.sharedTasks[material.taskFactsRef]), current.text)
+  assert.deepEqual(material.coverage, current.coverage)
+  assert.deepEqual(received.answer.resources.slice(1), resources.slice(1))
+  assert.deepEqual(projected.sharedTopic.facts[0], { id: 'exact', actorId: 'user', status: 'active', sourceRefs: [ref], textFromSource: true })
+  assert.deepEqual(projected.sharedTopic.facts.slice(1), facts.slice(1))
+  assert.deepEqual(projected.sharedTopic.sources, input.sharedTopic.sources)
+  const different = structuredClone(input)
+  different.units[1].input.groupResponsibility = '另一规则'
+  const separate = shareTopicContext(different)
+  assert.equal(separate.groupResponsibility, undefined)
+  assert.deepEqual(separate.units.map(unit => unit.input.groupResponsibility), ['同一规则', '另一规则'])
 })

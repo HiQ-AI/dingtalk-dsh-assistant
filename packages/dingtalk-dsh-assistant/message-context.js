@@ -170,6 +170,62 @@ export function intentContext(base, binding, facts, responsibility = '', candida
   return { ...base, executionMaterialRefs, binding: { ...target, ...identity }, facts: scopedFacts, ...(resolvedEvidence.length ? { resolvedEvidence } : {}), ...(binding.disposition === 'conversation' ? { candidates: summaries } : {}), ...(responsibility ? { groupResponsibility: responsibility } : {}) }
 }
 
+// IB 共用完全相同的任务事实；每个事项只保留自身原有事实的引用。
+export function shareTopicContext(input) {
+  const sharedTasks = {}
+  const reference = task => {
+    if (!task || typeof task !== 'object' || !task.taskId) return task
+    const ref = `task-facts:${digest(task)}`
+    sharedTasks[ref] = task
+    return { taskId: task.taskId, ...(task.factVersion === undefined ? {} : { factVersion: task.factVersion }), ref }
+  }
+  const units = input.units.map(unit => {
+    const facts = unit.input.facts
+    if (!facts) return { ...unit, input: { ...unit.input } }
+    return { ...unit, input: { ...unit.input, facts: { ...facts,
+      ...(facts.task ? { task: reference(facts.task) } : {}),
+      ...(Array.isArray(facts.tasks) ? { tasks: facts.tasks.map(reference) } : {}),
+      ...(Array.isArray(facts.topicTasks?.tasks) ? { topicTasks: { ...facts.topicTasks, tasks: facts.topicTasks.tasks.map(reference) } } : {}),
+    } } }
+  })
+  const material = value => {
+    if (!value || typeof value !== 'object') return value
+    if (Array.isArray(value)) return value.map(material)
+    const result = { ...value }
+    if (Array.isArray(value.resources)) result.resources = value.resources.map(material)
+    if (typeof value.resourceRef === 'string' && value.resourceRef.startsWith('workflow-task-history:') && typeof value.text === 'string') {
+      try {
+        const task = JSON.parse(value.text), ref = `task-facts:${digest(task)}`
+        if (task?.taskId && value.resourceRef === `workflow-task-history:${task.taskId}`
+          && JSON.stringify(task) === value.text && Object.hasOwn(sharedTasks, ref)) {
+          delete result.text
+          result.taskFactsRef = ref
+        }
+      } catch { /* 非原生完整 JSON 保留原文。 */ }
+    }
+    return result
+  }
+  for (const unit of units) if (unit.input.resolvedEvidence) unit.input = { ...unit.input,
+    resolvedEvidence: unit.input.resolvedEvidence.map(evidence => ({ ...evidence, answer: material(evidence.answer) })) }
+  const topic = input.sharedTopic
+  const sharedTopic = topic?.facts ? { ...topic, facts: topic.facts.map(fact => {
+    if (fact.sourceRefs?.length !== 1 || typeof fact.text !== 'string') return fact
+    const ref = fact.sourceRefs[0], sources = (topic.sources ?? []).filter(source => source.sourceKey === ref.sourceKey && source.sourceVersion === ref.sourceVersion)
+    if (sources.length !== 1 || sources[0].text !== fact.text) return fact
+    const { text, ...identity } = fact
+    return { ...identity, textFromSource: true }
+  }) } : topic
+  const responsibility = units[0]?.input.groupResponsibility
+  const sharedResponsibility = typeof responsibility === 'string' && responsibility.length > 0 && units.every(unit => unit.input.groupResponsibility === responsibility)
+  const projected = units.map(unit => {
+    if (!sharedResponsibility) return unit
+    const { groupResponsibility, ...rest } = unit.input
+    return { ...unit, input: rest }
+  })
+  return { ...input, ...(Object.keys(sharedTasks).length ? { sharedTasks } : {}), units: projected,
+    ...(sharedTopic ? { sharedTopic } : {}), ...(sharedResponsibility ? { groupResponsibility: responsibility } : {}) }
+}
+
 // 材料引用由 Host 提供；模型描述的查询目标不能变成启动前依赖。
 export function validateExecutionMaterialRefs(stage, output, input) {
   const validate = (intent, context) => {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, validateExecutionMaterialRefs, unitContext, candidateCards, intentContext } from './message-context.js'
+import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, validateExecutionMaterialRefs, unitContext, candidateCards, intentContext, shareTopicContext } from './message-context.js'
 import { prepareMessageRequest } from './message-model.js'
 import { isPassiveTaskProgress, isQuietGroupMessage } from './message-ledger.js'
 import { wholeTopicFactRevision } from './message-topics.js'
@@ -416,9 +416,9 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const sourceManifest = [...new Map([...prepared.map(item => ({ sourceKey: item.run.sourceKey, sourceVersion: item.run.sourceVersion, text: item.run.body })), ...(sharedTopic?.sources ?? [])]
       .map(ref => [`${ref.sourceKey}:${ref.sourceVersion}`, { sourceKey: ref.sourceKey, sourceVersion: ref.sourceVersion, required: true,
         ...(typeof ref.text === 'string' ? { hash: digest(ref.text), coverage: [{ start: 0, end: ref.text.length }] } : { coverage: null }) }])).values()]
-    const input = { intentRunId: `intent:${topicId}:${topic.inputRevision}:${contextHash.slice(0, 12)}`, topicId, topicInputRevision: topic.inputRevision, contextHash, contextRevision: sharedTopic?.contextRevision ?? topic.contextRevision, sourceManifest,
+    const input = shareTopicContext({ intentRunId: `intent:${topicId}:${topic.inputRevision}:${contextHash.slice(0, 12)}`, topicId, topicInputRevision: topic.inputRevision, contextHash, contextRevision: sharedTopic?.contextRevision ?? topic.contextRevision, sourceManifest,
       taskFactVersions,
-      ...(sharedTopic ? { sharedTopic } : {}), units: prepared.map(item => ({ unitId: item.unit.id, runId: item.run.runId, actorId: item.run.actorId, input: item.input })) }
+      ...(sharedTopic ? { sharedTopic } : {}), units: prepared.map(item => ({ unitId: item.unit.id, runId: item.run.runId, actorId: item.run.actorId, input: item.input })) })
     const preserved = first.data.nodes.findLast(node => node.nodeId === 'IB' && node.status === 'succeeded'
       && node.input?.intentRunId === input.intentRunId && node.output?.output?.kind === 'topic_intents')
     const output = preserved?.output.output ?? await invoke(first.data, first.unit.id, 'IB', input)

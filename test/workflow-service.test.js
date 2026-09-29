@@ -466,12 +466,33 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
     return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '整理本条材料', workflowId: 'task-investigation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
   }
   const legacyJudge = options.judge ?? judge
-  const batchJudge = async request => request.stage === 'IB'
-    ? { kind: 'topic_intents', decisions: await Promise.all(request.input.units.map(async unit => ({
-      unitId: unit.unitId, intent: await legacyJudge({ ...request, stage: 'I', input: { ...unit.input,
-        facts: { ...unit.input.facts, ...(request.input.sharedTopic ? { topic: request.input.sharedTopic } : {}) } } }),
-    }))) }
-    : legacyJudge(request)
+  const batchJudge = async request => {
+    if (request.stage !== 'IB') return legacyJudge(request)
+    const shared = request.input
+    const resolveTask = task => task?.ref ? shared.sharedTasks[task.ref] : task
+    const resolveMaterial = value => {
+      if (!value || typeof value !== 'object') return value
+      if (Array.isArray(value)) return value.map(resolveMaterial)
+      const { taskFactsRef, ...rest } = value
+      return { ...rest, ...(taskFactsRef ? { text: JSON.stringify(shared.sharedTasks[taskFactsRef]) } : {}),
+        ...(value.resources ? { resources: value.resources.map(resolveMaterial) } : {}) }
+    }
+    const topic = shared.sharedTopic && { ...shared.sharedTopic, facts: shared.sharedTopic.facts.map(fact => {
+      if (!fact.textFromSource) return fact
+      const ref = fact.sourceRefs[0], { textFromSource, ...rest } = fact
+      return { ...rest, text: shared.sharedTopic.sources.find(source => source.sourceKey === ref.sourceKey && source.sourceVersion === ref.sourceVersion).text }
+    }) }
+    return { kind: 'topic_intents', decisions: await Promise.all(shared.units.map(async unit => {
+      const facts = unit.input.facts
+      return { unitId: unit.unitId, intent: await legacyJudge({ ...request, stage: 'I', input: { ...unit.input,
+        sharedTasks: shared.sharedTasks, groupResponsibility: unit.input.groupResponsibility ?? shared.groupResponsibility,
+        ...(unit.input.resolvedEvidence ? { resolvedEvidence: unit.input.resolvedEvidence.map(evidence => ({ ...evidence, answer: resolveMaterial(evidence.answer) })) } : {}),
+        facts: { ...facts, ...(facts.task ? { task: resolveTask(facts.task) } : {}),
+          ...(facts.tasks ? { tasks: facts.tasks.map(resolveTask) } : {}),
+          ...(facts.topicTasks ? { topicTasks: { ...facts.topicTasks, tasks: facts.topicTasks.tasks.map(resolveTask) } } : {}),
+          ...(topic ? { topic } : {}) } } }) }
+    })) }
+  }
   const taskOwnerSessions = { async run({ input, onSessionBound, onCandidate }) {
     await onSessionBound()
     const needsPlan = input.stages.length === 0
@@ -1925,7 +1946,7 @@ test('只关联话题时意图仍读到已执行Task及结果限制，运行成�
         : { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新问题'] }
     }
     if (input.text === '继续查这个账号') {
-      observed = input.facts
+      observed = { ...input.facts, sharedTasks: input.sharedTasks }
       return { kind: 'intent', actions: [{ intent: 'no_action', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
     }
     return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '查 test3 账号创建记录', workflowId: 'task-investigation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
@@ -1941,7 +1962,8 @@ test('只关联话题时意图仍读到已执行Task及结果限制，运行成�
   await service.recover()
   const second = await service.ingest({ ...message, messageId: 'followup', text: '继续查这个账号' })
   await service.messages.process(second.runId)
-  const task = observed?.tasks?.find(item => item.taskId === taskId) ?? observed?.topicTasks?.tasks?.find(item => item.taskId === taskId)
+  const taskReference = observed?.tasks?.find(item => item.taskId === taskId) ?? observed?.topicTasks?.tasks?.find(item => item.taskId === taskId)
+  const task = taskReference
   assert.ok(task, JSON.stringify(observed))
   assert.ok(routingCard.distinguishingFacts.some(item => item.includes('执行状态：blocked')), JSON.stringify({routingCard,task}))
   assert.equal(task.run.status, 'failed')
