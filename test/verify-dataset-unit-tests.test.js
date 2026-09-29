@@ -6,7 +6,8 @@ import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { testArguments } from '../scripts/verify-dataset-unit-tests.mjs'
 
-const java='D:/soft/jdk-11.0.2/bin/java.exe',javac='D:/soft/jdk-11.0.2/bin/javac.exe'
+const bin=process.env.JAVA_HOME?join(process.env.JAVA_HOME,'bin'):''
+const java=join(bin,process.platform==='win32'?'java.exe':'java'),javac=join(bin,process.platform==='win32'?'javac.exe':'javac')
 test('专项检查显式运行两类并禁止跳过，报告目录独立',()=>{
  const args=testArguments('D:/maven','plexus-classworlds-2.7.jar','D:/candidate','host-unit-00000000-0000-0000-0000-000000000000')
  assert.ok(args.includes('-DskipTests=false'));assert.ok(args.includes('-Dmaven.test.skip=false'))

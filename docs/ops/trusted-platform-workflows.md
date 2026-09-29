@@ -100,7 +100,7 @@ Dataset 服务使用 `local` profile、仓库外 Spring 连接配置与 `--app.b
 
 1. 核对外部 runtime JSON 的 UAT2、工具路径、已授权账户与外部 Spring 配置；准备包含后台总开关的 UAT2 后端候选及 JAR。使用 `docs/acceptance/topic-context-completeness/scripts/prepare-uat2-project-configuration.mjs` 固化两个运行脚本和后端 JAR，生成仅含 `dataset`、`dataset-web` 两键的外部 bundle；记录输出路径及 JAR 摘要。此步不修改运行 profile。
 2. 用 `run-uat2-project-acceptance.mjs <project> <bundle绝对路径> <输出绝对目录>` 分别实跑两个项目的真实 runner。每次冻结候选、准备目录、启动、场景读取、停止及清理，保存准备工件和最终回执。工程编排在本地验收前已单独构建；前端准备阶段只安装冻结依赖，由 Vue CLI 启动时编译当前候选，避免重复静态构建。脚本内单位分页、登录页与单位列表是接入验收用例，仅证明对应条件，不代替任意开发任务的功能验收。
-3. 对正式 profile 执行以下零写校验。脚本使用目标 profile 自带 `js-yaml` 并保留 `!!js` 代码字符串；既有配置更新必须携带已审阅的 profile SHA256。剥除明确允许更新的字段后，配置须与原文深比较一致。
+3. 对正式 profile 执行以下零写校验。脚本使用仓库声明的 `js-yaml` 并保留 `!!js` 代码字符串；既有配置更新必须携带已审阅的 profile SHA256。剥除明确允许更新的字段后，配置须与原文深比较一致。
 
    ```powershell
    node scripts/configure-project-local-acceptance.mjs --profile D:/dsh_home/profiles/web/cordis.patch.yml --bundle <bundle绝对路径> --check

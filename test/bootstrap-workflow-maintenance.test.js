@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, writeFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createRequire } from 'node:module'
+import yaml from 'js-yaml'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
@@ -11,7 +11,6 @@ import { bootstrapProfile, changeBootstrapProfile, sealBootstrapStore, apply } f
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { planProjectLocalAcceptance } from '../scripts/configure-project-local-acceptance.mjs'
 
-const yaml=createRequire(import.meta.url)('D:/dsh_home/profiles/web/node_modules/js-yaml')
 const hash=v=>createHash('sha256').update(v).digest('hex')
 const source='# private bytes retained\r\n- insert:\r\n    - id: dingtalk-dsh-assistant\r\n      name: "@zzusp/dingtalk-dsh-assistant/resident"\r\n      config:\r\n        private: opaque-fixture\r\n        root: !!js dshHomePath("example")\r\n'
 
@@ -85,8 +84,8 @@ test('完整dispose见证必须ready后精确nonce/PID/entry且确已完成，�
 })
 
 test('真实Cordis Loader等待完整disposer后才发指定entry见证',async t=>{
- const {Context}=await import('file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/cordis/lib/index.js')
- const {default:Loader}=await import('file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js')
+ const {Context}=await import('@deepseek-ai/cordis')
+ const {default:Loader}=await import('@deepseek-ai/cordis-plugin-loader')
  const {default:witness}=await import('../scripts/bootstrap-workflow-maintenance.mjs')
  const evidenceDirectory=await mkdtemp(join(tmpdir(),'bootstrap-native-')),ctx=new Context()
  await ctx.plugin(Loader)

@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, unlink } from 'node:fs/promises'
-import { createRequire } from 'node:module'
-import { isAbsolute, dirname, join } from 'node:path'
+import yaml from 'js-yaml'
+import { isAbsolute } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID, createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
@@ -158,9 +158,7 @@ export async function configureProjectLocalAcceptance({ profile, bundle, mode, e
   if ((expectedSha256 !== undefined && !/^[a-f0-9]{64}$/.test(expectedSha256))
     || (mode === 'apply' && !expectedSha256) || (mergePolicy !== undefined && !isAbsolute(mergePolicy))
     || (checksProposal !== undefined && (!isAbsolute(checksProposal) || !expectedSha256))) fail('LOCAL_CONFIG_EXPECTED_HASH_REQUIRED')
-  let yaml, supplied
-  try { yaml = createRequire(pathToFileURL(profile))(join(dirname(profile), 'node_modules/js-yaml')) }
-  catch { fail('LOCAL_CONFIG_PROFILE_YAML_MODULE_MISSING') }
+  let supplied
   const source = await readFile(profile, 'utf8')
   if (expectedSha256 !== undefined && hash(source) !== expectedSha256) fail('LOCAL_CONFIG_PROFILE_CHANGED')
   try { supplied = JSON.parse(await readFile(bundle, 'utf8')) } catch { fail('LOCAL_CONFIG_BUNDLE_JSON_INVALID') }

@@ -1,13 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
+import yaml from 'js-yaml'
 import { createHash } from 'node:crypto'
 import { mkdtemp,writeFile,readFile,readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { planFrontendChecks,configureFrontendChecks,testStep } from '../docs/acceptance/topic-context-completeness/scripts/configure-frontend-review-checks.mjs'
-const yaml=createRequire(import.meta.url)('D:/dsh_home/profiles/web/node_modules/js-yaml')
 const hash=s=>createHash('sha256').update(s).digest('hex')
 const steps=[{executable:testStep.executable,args:['D:/soft/node-v16.20.2/node_global/node_modules/yarn/bin/yarn.js','install','--frozen-lockfile','--non-interactive','--silent'],timeoutMs:600000},{executable:testStep.executable,args:['D:/soft/node-v16.20.2/node_global/node_modules/yarn/bin/yarn.js','run','build'],timeoutMs:1800000}]
 const source='# 原配置\ncode: !!js "ctx => ctx.value"\nrepositories:\n  - id: dataset-web\n    checks:\n      - steps:\n'+yaml.dump(steps,{lineWidth:-1}).split('\n').filter(Boolean).map(s=>'          '+s).join('\n')+'\n        id: dataset-build\n        version: "1"\n  - id: dataset\n    checks: [{id: java, steps: [{executable: java, args: [package]}]}]\n# 原尾注释\n'

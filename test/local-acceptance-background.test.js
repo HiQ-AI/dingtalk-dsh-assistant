@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 const candidate=process.env.HOST_BACKGROUND_TEST_JAR
-const bin='D:/soft/jdk-11.0.2/bin'
+const bin=process.env.JAVA_HOME?join(process.env.JAVA_HOME,'bin'):''
 test('真实Spring候选上下文：正常开关通过，注释伪控制与新增消费者拒绝', {skip:!candidate},async()=>{
  const root=await mkdtemp(join(tmpdir(),'host-background-proof-')),classes=join(root,'probe'),bad=join(root,'bad'),fresh=join(root,'fresh')
  for(const dir of [classes,bad,fresh])await mkdir(dir)
- const exec=(name,args)=>spawnSync(join(bin,name+'.exe'),args,{encoding:'utf8',windowsHide:true,timeout:30000})
+ const exec=(name,args)=>spawnSync(join(bin,name+(process.platform==='win32'?'.exe':'')),args,{encoding:'utf8',windowsHide:true,timeout:30000})
  assert.equal(exec('javac',['-encoding','UTF-8','-d',classes,resolve('scripts/LocalAcceptanceBackground.java')]).status,0)
  const run=(extra='',scan=candidate)=>exec('java',[`-Dloader.path=${extra?extra+',':''}${classes}`,'-Dloader.main=LocalAcceptanceBackground','-cp',candidate,'org.springframework.boot.loader.PropertiesLauncher',scan])
  const good=run();assert.equal(good.status,0,good.stderr);assert.match(good.stdout,/HOST_BACKGROUND_PROOF:/)

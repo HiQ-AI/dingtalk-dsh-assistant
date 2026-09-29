@@ -52,6 +52,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.3",
     "@deepseek-ai/dsh-agent": "0.1.2-rc.1",
     "@deepseek-ai/dsh-agent-instructions": "0.1.2-rc.1",
     "@deepseek-ai/dsh-agent-loop": "0.1.2-rc.1",
