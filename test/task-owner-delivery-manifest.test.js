@@ -68,6 +68,9 @@ test('Owner允许读取清单快照，最终完成清单独立持久化且重启
   const manifest = await f.artifacts.read(saved.ref)
   assert.equal(manifest.complete, true)
   assert.equal(manifest.acceptance[0].status, 'satisfied')
+  assert.equal(manifest.businessValidation.status, 'accepted')
+  assert.equal(manifest.businessValidation.items[0].itemId, manifest.acceptance[0].itemId)
+  assert.match(manifest.businessValidation.items[0].validators[0].policyDigest, /^[a-f0-9]{64}$/)
   await f.owner.close(); await f.store.close()
   const reopened = await openExecutionStore({ dbPath: f.dbPath, instanceId: 'manifest' })
   try { assert.deepEqual(await reopened.query({ kind: 'task.owner.delivery-manifest', taskId: 'task' }), saved) }
@@ -90,7 +93,9 @@ test('非完成决定不会存正式清单，不完整或旧版本清单不能�
   for (const mutateFinal of [value => ({ ...value, complete: false }),
     value => ({ ...value, complete: 'yes' }), value => ({ ...value, requirementRevision: 0 }),
     value => ({ ...value, planRevision: 0 }), value => ({ ...value, taskId: 'foreign' }),
-    value => ({ ...value, kind: 'other' }), value => ({ ...value, version: 2 })]) {
+    value => ({ ...value, kind: 'other' }), value => ({ ...value, version: 2 }),
+    value => ({ ...value, businessValidation: undefined }),
+    value => ({ ...value, businessValidation: { status: 'unverified' } })]) {
     const f = await fixture(t, { mutateFinal })
     await assert.rejects(f.owner.drive('task'), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
     assert.equal(await f.store.query({ kind: 'task.owner.delivery-manifest', taskId: 'task' }), null)

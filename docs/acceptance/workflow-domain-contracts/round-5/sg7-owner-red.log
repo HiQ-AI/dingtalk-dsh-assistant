@@ -1,0 +1,28 @@
+✖ 真实Owner路径保留工程本地验收与合并前缀，失败第三阶段重建后可结案 (1228.7541ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1621.6271
+
+✖ failing tests:
+
+test at test\workflow-service.test.js:3052:1
+✖ 真实Owner路径保留工程本地验收与合并前缀，失败第三阶段重建后可结案 (1228.7541ms)
+  AssertionError [ERR_ASSERTION]: {"taskId":"owner-uat-rebuild","sessionId":"owner-3e89ae146c9915721127c4461eed9b4ea30aa6cd","sessionBound":true,"ownerEpoch":1,"status":"blocked","leaseEpoch":4,"eventWatermark":6,"processedWatermark":5,"revision":13,"failureCount":3,"lastFailure":"TASK_OWNER_COMPLETION_UNVERIFIED","requirementRevision":1,"planRevision":2,"controlRevision":1,"authorizationRevision":1,"inputFenceRevision":0,"turnId":null,"candidate":{"action":"wait","summary":"已核对阶段证据","evidenceRefs":["sha256-3c6356bf678c9da8bca47ba4af971f7f25eda047dbb334e5268b2da574a1bcc3.json","sha256-821e5eedf710095d614a11575d774205f3bf62c46e9ccbc231c14d1d80c080a2.json"]},"decision":{"action":"wait","summary":"已核对阶段证据","evidenceRefs":["sha256-3c6356bf678c9da8bca47ba4af971f7f25eda047dbb334e5268b2da574a1bcc3.json","sha256-821e5eedf710095d614a11575d774205f3bf62c46e9ccbc231c14d1d80c080a2.json"]},"applicationStatus":"applied"}
+
+  'wait' !== 'complete'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:3120:78)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'wait',
+    expected: 'complete',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

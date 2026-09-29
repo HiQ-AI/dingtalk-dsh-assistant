@@ -1,0 +1,79 @@
+✔ 受信文件读取只接受双重授权路径，独立回读能发现修改和链接逃逸 (23.9383ms)
+✖ 通用效果阶段只接受授权写能力，读取能力必须留在Agent会话内 (1.2525ms)
+✔ Task Markdown 文件仅落在 Host 根目录，回读核验原字节且冲突不覆盖 (28.5466ms)
+✔ Task Markdown 写入经过效果账，重启对账不重放写入 (414.6619ms)
+✔ 无写能力配置仍可启动但不能执行任何能力 (0.4021ms)
+✖ 未启用产物能力保持v4原定义摘要，显式历史版本排除新能力 (0.8851ms)
+✔ 新产物阶段派发artifact效果并容纳64KiB控制字符JSON膨胀 (116.7127ms)
+✔ v5保留Markdown请求限额与file效果，拒绝prepared跨action (0.8445ms)
+✔ 领域判断原生零工具流按项保留证据与顺序，禁止把产物回执视为业务证明 (10.3791ms)
+▶ 领域判断拒绝工具、未完成、非法JSON、额外字段、错项和错证据
+  ✔ 工具增量 (1.9813ms)
+  ✔ 工具开始 (1.3326ms)
+  ✔ 工具结束 (0.9447ms)
+  ✔ 无结束 (1.1942ms)
+  ✔ 长度终止 (1.1047ms)
+  ✔ 非正常结束后伪造stop (0.9961ms)
+  ✔ 非法JSON (1.0167ms)
+  ✔ 额外字段 (1.6135ms)
+  ✔ 错项顺序 (0.9136ms)
+  ✔ 跨项引用 (0.8359ms)
+  ✔ 缺少证据 (0.9498ms)
+  ✔ 满足但子项失败 (2.1604ms)
+✔ 领域判断拒绝工具、未完成、非法JSON、额外字段、错项和错证据 (16.3477ms)
+✔ 领域判断UTF8信封和输出硬预算不截断，不配置模型不调用流 (3.5957ms)
+✔ 领域判断超时中止原生流与模型配置等待并返回未验证 (28.4515ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 22
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 880.359
+
+✖ failing tests:
+
+test at test\task-general-workflow.test.js:40:1
+✖ 通用效果阶段只接受授权写能力，读取能力必须留在Agent会话内 (1.2525ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  '6' !== '4'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/task-general-workflow.test.js:44:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '6',
+    expected: '4',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-general-workflow.test.js:123:1
+✖ 未启用产物能力保持v4原定义摘要，显式历史版本排除新能力 (0.8851ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'ea3240681746e188b0aa25a4dfd7b8cacbb583bea5d03a6d7b62b5fb9b3769df'
+  - 'a1e8261207cf153a2aa8e0b2eb3f49876884029685fc66ed0593017b1f0e0435'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/task-general-workflow.test.js:129:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'ea3240681746e188b0aa25a4dfd7b8cacbb583bea5d03a6d7b62b5fb9b3769df',
+    expected: 'a1e8261207cf153a2aa8e0b2eb3f49876884029685fc66ed0593017b1f0e0435',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

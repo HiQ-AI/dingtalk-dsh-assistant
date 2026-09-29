@@ -5,7 +5,8 @@ $testFiles = switch ($Suite) {
   all { @('execution-controller', 'agent-work', 'investigation-domain-contract', 'task-delivery-manifest',
     'task-workflow-contracts', 'task-group-file-delivery', 'task-group-file-runtime', 'workflow-file-delivery-integration',
     'workflow-engineering', 'decision', 'http', 'topic-runtime', 'execution-session-native', 'task-owner-session-native', 'task-workflow',
-    'workflow-recovery', 'workflow-agent-service', 'workflow-service', 'task-owner-recovery', 'task-stage-contracts', 'task-owner-store', 'task-owner-delivery-manifest') }
+    'workflow-recovery', 'workflow-agent-service', 'workflow-service', 'task-owner-recovery', 'task-stage-contracts', 'task-owner-store', 'task-owner-delivery-manifest',
+    'task-general-workflow', 'task-release-workflows') }
   contracts { @('execution-controller', 'agent-work', 'investigation-domain-contract', 'task-delivery-manifest',
     'task-workflow-contracts', 'task-group-file-delivery', 'task-group-file-runtime', 'workflow-file-delivery-integration',
     'workflow-engineering', 'decision', 'http', 'topic-runtime', 'execution-session-native', 'task-owner-session-native', 'task-workflow') }

@@ -79,7 +79,7 @@ export function createTaskGroupFileAdapter({ files, createAdapter, profile, canD
 
 const objectSchema = { type: 'object' }
 export function createFileDeliveryStageContract({ prepareFiles }) {
-  return { id: 'task-group-file-delivery', version: '1', requiredOutputs: ['task-group-file-delivery-result'],
+  return { id: 'task-group-file-delivery', version: '1',
     prepare: async ({ plan, requirement }) => ({ input: await prepareFiles(plan, requirement) }) }
 }
 function assertReceipts(input) {
@@ -99,7 +99,7 @@ function assertReceipts(input) {
 }
 
 /** 固定三个 code 节点；每件独立效果，未知项中断后续发送。 */
-export function createTaskGroupFileDeliveryWorkflow({ files, messageAdapter }) {
+export function createLegacyTaskGroupFileDeliveryWorkflow({ files, messageAdapter }) {
   if (typeof files?.validateManifest !== 'function' || typeof messageAdapter?.prepare !== 'function') fail('WORKFLOW_CONFIG_INVALID')
   const rulesDigest = executionDigest({ contract: 'task-group-file-delivery-v1' })
   return { id: 'task-group-file-delivery', version: '1', nodes: [
@@ -141,6 +141,21 @@ export function createTaskGroupFileDeliveryWorkflow({ files, messageAdapter }) {
     validateCompletion: async ({ output }) => {
       try { assertReceipts(output); return output.deliveryStatus === 'files_verified' } catch { return false }
     } } }
+}
+
+/** 投递回执只证明交付，承担业务条目时仍须由 Host 独立验证其内容与范围。 */
+export function createTaskGroupFileDeliveryWorkflow(options) {
+  const legacy = createLegacyTaskGroupFileDeliveryWorkflow(options)
+  return { ...legacy, version: '2', ownerContract: {
+    id: legacy.ownerContract.id, version: '2',
+    rulesDigest: executionDigest({ delivery: legacy.ownerContract.rulesDigest, acceptanceScope: 'domain-items-v1' }),
+    async validateCompletion({ output, requirement, decision, stages, acceptanceItems, verifyAcceptance }) {
+      if (!await legacy.ownerContract.validateCompletion({ output }) || !Array.isArray(acceptanceItems)) return false
+      if (!acceptanceItems.length) return true
+      return typeof verifyAcceptance === 'function'
+        && await verifyAcceptance({ requirement, decision, stages, acceptanceItems }) === true
+    },
+  } }
 }
 
 export function selectTaskDeliveryFiles(outputs, { taskId, requirementRevision, fileDelivery }) {

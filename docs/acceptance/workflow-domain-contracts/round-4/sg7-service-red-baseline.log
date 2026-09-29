@@ -1,0 +1,24 @@
+基线证据：从本轮主代理修复落盘前的真实工具输出摘录；不是修复后重新执行旧源码的日志。
+命令：node --test --test-name-pattern='混合调查与写入通过真实服务Owner门禁' test/workflow-service.test.js
+工具结果 chunk_id：f542c6
+退出码：1
+
+✖ 混合调查与写入通过真实服务Owner门禁：无关备忘录不能证明生产修复 (471.9864ms)
+✖ 混合调查与写入通过真实服务Owner门禁：同项有效保存完成 (416.3683ms)
+✔ 混合调查与写入通过真实服务Owner门禁：引用调查不足产物不能完成保存项 (401.4051ms)
+✖ 混合调查与写入通过真实服务Owner门禁：业务检查返回错项不能完成 (457.5356ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 1
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2182.4554
+
+失败断言摘录：
+无关备忘录不能证明生产修复：owner.decision.action 已为 complete；预期 false，实际 true。
+同项有效保存完成：AssertionError 混合流程必须执行所属验收项的业务检查；semanticChecks.length 为 0。
+业务检查返回错项不能完成：owner.decision.action 已为 complete；预期 false，实际 true。
+
+两个错误完成用例的 owner.applicationStatus 均为 applied，failureCount 为 0，service.recover().failures 为空。

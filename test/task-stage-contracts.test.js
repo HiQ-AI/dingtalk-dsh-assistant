@@ -9,6 +9,7 @@ import { openExecutionArtifacts, executionDigest } from '../packages/dingtalk-ds
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createLegacyInvestigationWorkflow, validateAgentWorkResult } from '../packages/dingtalk-dsh-assistant/agent-work.js'
 import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
+import { createEngineeringStageContract, engineeringWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
 
 function fixture() {
   const stage = { stageId: 'first', runId: 'run', workflowId: 'domain', workflowDigest: 'digest', status: 'succeeded', outputRef: 'output' }
@@ -71,6 +72,60 @@ test('后阶段准备获得真实交接和冻结历史定义版本', async () =>
   assert.equal(received.definitionVersion, '5'); assert.equal(received.handoff.outputRef, 'output')
   f.plan.task.planRequirementRevision = 1
   await assert.rejects(registry.prepare({ ...f, stage: next, requirement: {} }), { code: 'TASK_STAGE_REQUIREMENT_STALE' })
+})
+
+test('工程消费者仅接受声明的调查类型和版本，未知交接在领域准备前拒绝', async () => {
+  const f = fixture(), next = { stageId: 'engineering', workflowId: 'task-engineering', status: 'pending' }
+  f.plan.stages.push(next)
+  let calls = 0, received
+  f.controller.plannedTaskStageRunId = () => 'engineering-run'
+  const contract = createEngineeringStageContract({ controller: f.controller, mayCreate: async () => true,
+    engineering: { async prepareTask(_action, context) { calls++; received = context; return { input: { request: '工程' } } } } })
+  const registry = createTaskStageContracts({ ...f, contracts: [contract] })
+  const context = { ...f, stage: next, requirement: {}, origin: { command: { args: { arguments: {} } }, run: {} } }
+  for (const producer of [{ id: 'investigation-result', version: '999' }, { id: 'foreign-result', version: '2' }]) {
+    f.definition.ownerContract.resultContract = { ...producer, requiredFields: ['summary'] }
+    await assert.rejects(registry.prepare(context), { code: 'TASK_STAGE_HANDOFF_UNSUPPORTED' })
+    assert.equal(calls, 0)
+  }
+  for (const producer of [{ id: 'investigation-result', version: '2' }, { id: 'agent-investigation-result', version: '1' }]) {
+    f.definition.ownerContract.resultContract = { ...producer, requiredFields: ['summary'] }
+    await registry.prepare(context)
+    assert.deepEqual(received.investigationHandoff, { planRevision: 3, stageId: 'engineering', predecessorStageId: 'first', outputRef: 'output' })
+  }
+  assert.equal(calls, 2)
+  await registry.prepare({ ...context, stageIndex: 0 })
+  assert.equal(calls, 3)
+  assert.equal(received.investigationHandoff, undefined)
+})
+
+test('消费者声明拒绝空版本和重复条目', () => {
+  const f = fixture()
+  for (const consumes of [[], [{ id: 'result', versions: [] }], [{ id: 'result', versions: [''] }],
+    [{ id: 'result', versions: ['2', '2'] }], [{ id: 'result', versions: ['1'] }, { id: 'result', versions: ['2'] }]]) {
+    assert.throws(() => createTaskStageContracts({ ...f, contracts: [{ id: 'domain', version: '1', consumes, prepare() {} }] }),
+      { code: 'TASK_STAGE_CONTRACT_INVALID' })
+  }
+})
+
+test('目录由当前权威结果合同派生，历史冻结交接仍使用生产时版本', async () => {
+  const f = fixture(), current = { ...f.definition, ownerContract: { ...f.definition.ownerContract,
+    resultContract: { id: 'result', version: '3', requiredFields: ['summary', 'evidenceRefs'] } } }
+  f.controller.workflowDefinition = (_id, digest) => digest ? f.definition : current
+  const registry = createTaskStageContracts({ ...f, contracts: [{ id: 'domain', version: '1',
+    consumes: [{ id: 'result', versions: ['2'] }], prepare() {} }] })
+  assert.deepEqual(registry.descriptors[0], { id: 'domain', version: '1', consumes: [{ id: 'result', versions: ['2'] }],
+    resultContract: current.ownerContract.resultContract })
+  assert.equal(Object.hasOwn(registry.descriptors[0], 'requiredOutputs'), false)
+  registry.descriptors[0].resultContract.requiredFields.push('not-authoritative')
+  assert.deepEqual(current.ownerContract.resultContract.requiredFields, ['summary', 'evidenceRefs'])
+  assert.deepEqual((await readTaskStageHandoff(f)).contract, { id: 'result', version: '2' })
+  current.ownerContract.resultContract.version = '4'
+  assert.equal(registry.descriptors[0].resultContract.version, '4')
+  const engineering = createTaskStageContracts({ ...f, readOwnerContract: () => engineeringWorkflowOwnerContract,
+    contracts: [{ id: 'task-engineering', version: '1', prepare() {} }] })
+  assert.deepEqual(engineering.descriptors[0].resultContract,
+    { id: engineeringWorkflowOwnerContract.id, version: engineeringWorkflowOwnerContract.version })
 })
 
 

@@ -211,6 +211,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           const requirement = await artifacts.read(plan.task.requirementRef)
           const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision: result.decision })
           if (manifest?.kind !== 'task-delivery-manifest' || manifest.version !== 1 || manifest.complete !== true
+              || manifest.businessValidation?.status !== 'accepted'
             || manifest.taskId !== taskId || manifest.requirementRevision !== plan.task.requirementRevision
             || manifest.planRevision !== plan.task.planRevision) throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
           deliveryManifestRef = (await artifacts.put(manifest)).ref

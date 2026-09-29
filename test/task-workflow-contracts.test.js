@@ -10,7 +10,7 @@ import { createExecutionController, defineExecutionWorkflow } from '../packages/
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { readOnlyWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/task-readonly-workflows.js'
 import { createGeneralCapabilityStepWorkflow } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
-import { externalWorkflowOwnerContract, createReleaseTaskWorkflow } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
+import { externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, createReleaseTaskWorkflow } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 
 const schema = { type: 'object' }
@@ -120,13 +120,27 @@ test('保留写效果流程冻结验收身份，不再导出旧只读执行工�
   const capabilities=[{id:'write-file',identity:'write-v1',effectClass:'file.write',authorize:()=>true,prepare:()=>({}),verify:()=>({})}]
   const one=createGeneralCapabilityStepWorkflow({capabilities,completionCheck:()=>true,completionIdentity:'one'})
   const two=createGeneralCapabilityStepWorkflow({capabilities,completionCheck:()=>true,completionIdentity:'two'})
-  assert.equal(one.version,'4');assert.notEqual(defineExecutionWorkflow(one).digest,defineExecutionWorkflow(two).digest)
+  assert.equal(one.version,'6');assert.notEqual(defineExecutionWorkflow(one).digest,defineExecutionWorkflow(two).digest)
 })
 
-test('平台流程绑定既有外部结果合同，未验证和受阻结果不能完成', () => {
-  assert.equal(externalWorkflowOwnerContract.validateCompletion({ output: { status: 'confirmed' } }), true)
+test('平台技术效果不能冒充业务验收，领域条目须独立核验且缺校验器拒绝', async () => {
+  const output = { status: 'uat-deployed', boundaries: ['仅确认 UAT 版本，业务验收尚需独立证明'] }
+  const acceptanceItems = [{ itemId: 'repair', criterion: '生产故障已经修复', evidenceRefs: ['uat-output'] }]
+  assert.equal(await externalWorkflowOwnerContract.validateCompletion({ output }), false)
+  assert.equal(await externalWorkflowOwnerContract.validateCompletion({ output, acceptanceItems: [] }), true)
+  assert.equal(await externalWorkflowOwnerContract.validateCompletion({ output, acceptanceItems }), false)
+  assert.equal(await externalWorkflowOwnerContract.validateCompletion({ output, acceptanceItems, verifyAcceptance: async () => false }), false)
+  let calls = 0
+  const context = { output, acceptanceItems, requirement: { request: '部署 UAT' },
+    decision: { evidenceRefs: ['uat-output'] }, stages: [{ output }] }
+  assert.equal(await externalWorkflowOwnerContract.validateCompletion({ ...context, verifyAcceptance: async received => {
+    calls++; assert.deepEqual(received, { requirement: context.requirement, decision: context.decision,
+      stages: context.stages, acceptanceItems }); return true
+  } }), true)
+  assert.equal(calls, 1)
   for (const output of [null, { outcome: 'blocked' }, { status: 'unverified' }, { limitations: ['尚未回读'] }])
-    assert.equal(externalWorkflowOwnerContract.validateCompletion({ output }), false)
+    assert.equal(await externalWorkflowOwnerContract.validateCompletion({ output, acceptanceItems: [], verifyAcceptance: async () => true }), false)
+  assert.equal(legacyExternalWorkflowOwnerContract.validateCompletion({ output }), true)
 })
 
 test('公共修复屏障不依赖领域合同自律，不确定效果、暂停、待处理输入与未排空均不得准备修复', async () => {
@@ -167,7 +181,8 @@ test('通用能力合同仍按同一产物摘要与完整验收条件检查目�
       criteria: acceptanceCriteria.map(criterion => ({ criterion, passed: true, evidenceIds: [evidence[0].evidenceId] })) } } })
   const output = { capabilityId: 'lookup', output: { value: '已读回' }, verification: { passed: true, outputDigest: executionDigest({ value: '已读回' }) } }
   const stage = { stageId: 'first', outputRef: 'result' }, decision = { summary: '完成', evidenceRefs: ['result'] }
-  const args = { output, stage, decision, requirement, stages: [{ stage, output, contractId: ownerContract.id }] }
+  const args = { output, stage, decision, requirement, stages: [{ stage, output, contractId: ownerContract.id }],
+    acceptanceItems: requirement.acceptanceCriteria.map((criterion, index) => ({ itemId: `item-${index}`, criterion, evidenceRefs: ['result'] })) }
   assert.equal(await ownerContract.validateCompletion(args), true)
   assert.equal(await ownerContract.validateCompletion({ ...args, output: { ...output, verification: { passed: true, outputDigest: 'wrong' } } }), false)
   assert.equal(await ownerContract.validateCompletion({ ...args, decision: { ...decision, evidenceRefs: ['other'] } }), false)
@@ -247,13 +262,19 @@ test('正式 Host 继续恢复外部旧/新定义，待执行阶段不套最新�
     operationAdapter: { execute: async () => { throw Error('UNEXPECTED_EXTERNAL_CALL') }, reconcile: async () => { throw Error('UNEXPECTED_EXTERNAL_CALL') } },
     authorizeExternal: async () => false, prepareRequirement: async () => { throw Error('UNEXPECTED_EXTERNAL_CALL') } }
   const externalConfig = { kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version, rulesDigest: adapter.rulesDigest }
-  const previous = createExecutionController({ store, artifacts, workflows: [release],
+  const legacyOwned = { ...release, ownerContract: legacyExternalWorkflowOwnerContract }
+  let previous = createExecutionController({ store, artifacts, workflows: [release],
     delivery: { execute: async () => { throw Error('UNEXPECTED_EXTERNAL_CALL') } } })
-  for (const workflow of [release]) {
+  for (const [index, workflow] of [release, legacyOwned].entries()) {
+    if (index) {
+      await previous.close()
+      previous = createExecutionController({ store, artifacts, workflows: [workflow],
+        delivery: { execute: async () => { throw Error('UNEXPECTED_EXTERNAL_CALL') } } })
+    }
     const definition = defineExecutionWorkflow(workflow)
     await store.command({ id: `workflow:${definition.digest}`, kind: 'workflow.register', args: { workflowId: workflow.id,
-      definitionVersion: workflow.version, config: externalConfig, digest: definition.digest } })
-    await previous.createTaskPlan({ commandId: `plan:${workflow.id}`, taskId: workflow.id,
+      definitionVersion: workflow.version, config: { ...externalConfig, ...(index ? { ownerContractVersion: '1' } : {}) }, digest: definition.digest } })
+    await previous.createTaskPlan({ commandId: `plan:${index}`, taskId: `old-external-${index}`,
       stages: [{ stageId: 'first', workflowId: workflow.id, input: {} }] })
   }
   await previous.close(); await store.close()
@@ -262,15 +283,15 @@ test('正式 Host 继续恢复外部旧/新定义，待执行阶段不套最新�
     taskOwnerSessions: { async close() {} } }
   let service = await openWorkflowService(options)
   t.after(() => service.close())
-  for (const workflow of [release]) {
+  for (const workflow of [release, legacyOwned]) {
     const digest = defineExecutionWorkflow(workflow).digest
     const definition = service.execution.controller.workflowDefinition(workflow.id, digest)
-    assert.equal(definition.digest, digest); assert.equal(definition.ownerContract, undefined)
+    assert.equal(definition.digest, digest); assert.equal(definition.ownerContract?.version, workflow.ownerContract?.version)
   }
   const current = service.execution.controller.workflowDefinition(release.id)
   assert.equal(current.ownerContract.id, 'external-result')
   const currentRecord = (await service.execution.store.query({ kind: 'workflow.list' })).find(record => record.digest === current.digest)
-  assert.equal(currentRecord.config.ownerContractVersion, '1')
+  assert.equal(currentRecord.config.ownerContractVersion, '2')
   await service.execution.controller.createTaskPlan({ commandId: 'current-external', taskId: 'current-external',
     stages: [{ stageId: 'first', workflowId: release.id, input: {} }] })
   await service.close()

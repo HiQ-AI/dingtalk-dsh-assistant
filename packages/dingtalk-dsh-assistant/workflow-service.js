@@ -7,28 +7,28 @@ import { openExecutionRuntime, closeExecutionResources } from './execution.js'
 import { createTaskOwnerController } from './task-owner-controller.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
-import { createGeneralCapabilityStageContract, createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability } from './task-general-workflow.js'
+import { createGeneralCapabilityStageContract, createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability, createDomainAcceptanceCheck, verifyTaskAcceptance } from './task-general-workflow.js'
 import { assertRetiredWorkflowsDrained } from './task-readonly-workflows.js'
 import { createTaskStageContracts, createTaskWorkflowContracts } from './task-workflow-contracts.js'
 export { createEngineeringFailureRepair } from './workflow-engineering.js'
 import { createTaskMarkdownFileAdapter } from './task-markdown-file.js'
 import { createTaskArtifactFiles } from './task-artifact-files.js'
 import { createTaskArtifactWriteAdapter, createGeneralArtifactWriteCapability, createTaskArtifactImportAdapter, createGeneralArtifactImportCapability } from './task-artifact-write.js'
-import { createFileDeliveryStageContract, createTaskGroupFileAdapter, createTaskGroupFileDeliveryWorkflow, selectTaskDeliveryFiles, verifyFileDeliveryOutput } from './task-group-file-delivery.js'
+import { createFileDeliveryStageContract, createTaskGroupFileAdapter, createTaskGroupFileDeliveryWorkflow, createLegacyTaskGroupFileDeliveryWorkflow, selectTaskDeliveryFiles, verifyFileDeliveryOutput } from './task-group-file-delivery.js'
 import { createMessageWorkflow } from './message-workflow.js'
 import { isPassiveTaskProgress } from './message-ledger.js'
 import { createMessageModel } from './message-model.js'
 import { taskWorkflowCatalog, messageAnswerArguments } from './message-context.js'
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText, groupStatusText, groupActionText } from './workflow-notifications.js'
-import { createEngineeringStageContract, createEngineeringRegistry, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
+import { createEngineeringStageContract, createEngineeringRegistry, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
 import { createDataChangeTaskWorkflow } from './workflow-data-change.js'
-import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract } from './task-release-workflows.js'
+import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract } from './task-release-workflows.js'
 import { createUatPrMergeTaskWorkflow, createUatPrMergeTaskWorkflowV2, createLegacyUatPrMergeTaskWorkflow, createMainPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
 import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
 import { describeVerificationChecks } from './execution-check-job.js'
 import { createMessageAgentController } from './message-agent.js'
-import { createInvestigationStageContract, createLegacyInvestigationWorkflow, createInvestigationWorkflow, validateAgentWorkResult } from './agent-work.js'
+import { createInvestigationStageContract, createLegacyInvestigationWorkflow, createInvestigationWorkflow, createLegacyInvestigationCompletionPolicy, validateAgentWorkResult } from './agent-work.js'
 import { createAgentQueryTools, verifyAgentEvidence } from './agent-query-tools.js'
 import { createAgentResourceReadCapability } from './agent-query-resources.js'
 import { createAgentDatabaseReadCapability, createRegisteredPostgresConnector } from './agent-query-database.js'
@@ -438,7 +438,7 @@ function createExternalRegistry(external, selected) {
     if (catalogById.get(workflow.id)?.mode !== 'external' || byId.has(workflow.id)) throw executionError('EXTERNAL_WORKFLOW_CATALOG_MISMATCH')
     workflow = { ...workflow, ownerContract: externalWorkflowOwnerContract }
     const definition = defineExecutionWorkflow(workflow)
-    const config = { ownerContractVersion: '1', kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
+    const config = { ownerContractVersion: externalWorkflowOwnerContract.version, kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
       rulesDigest: adapter.rulesDigest, ...(modelConfig ? { modelConfig } : {}) }
     workflows.push(workflow); records.set(workflow.id, { workflowId: workflow.id, definitionVersion: workflow.version, digest: definition.digest, config })
     byId.set(workflow.id, { workflow, adapter })
@@ -531,6 +531,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     createAdapter: fileTransport.createAdapter, profile: config.profile,
     canDisclose: async ({ prepared }) => config.groupIds.includes(prepared.groupId) && prepared.profile === config.profile }) : null
   const fileWorkflow = messageFileAdapter ? createTaskGroupFileDeliveryWorkflow({ files: managedFiles, messageAdapter: messageFileAdapter }) : null
+  const legacyFileWorkflow = messageFileAdapter ? createLegacyTaskGroupFileDeliveryWorkflow({ files: managedFiles, messageAdapter: messageFileAdapter }) : null
   const capabilities = [sourceRead, predecessorRead, sourceDossier, ...(messageResourceRead ? [messageResourceRead] : []), ...(fileRead ? [fileRead] : []), ...(markdownWrite ? [markdownWrite] : []), ...(artifactWrite ? [artifactWrite] : []), ...(artifactImport ? [artifactImport] : []), ...generalCapabilities]
   const queryConfig = config.directQueries ?? { resources: [], databases: [] }
   if (Object.hasOwn(queryConfig, 'grants')) throw executionError('QUERY_CONFIG_MEMBER_GRANTS_REMOVED')
@@ -596,9 +597,19 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
   const legacyInvestigationWorkflow = selected => createLegacyInvestigationWorkflow({ ...selected, allowedTools: queryToolNames,
     capabilityIdentity: queryCapabilityIdentity, verifyResult: verifyInvestigationResult })
   const stepCapabilities = capabilities.filter(item => item.effectClass === 'file.write')
-  const completionCheck = generalCompletionCheck ?? verifyDefaultGeneralCompletion
+  const acceptanceModel = modelConfig()
+  const domainAcceptanceCheck = createDomainAcceptanceCheck({ llm: ctx.llm, modelConfig: acceptanceModel })
+  const completionCheck = generalCompletionCheck ?? (async input => {
+    const deterministic = await verifyDefaultGeneralCompletion(input)
+    return deterministic.status === 'satisfied' ? deterministic : domainAcceptanceCheck(input)
+  })
+  const completionIdentity = generalCompletionIdentity ?? executionDigest({ policy: 'domain-items-v1', model: acceptanceModel,
+    native: createDomainAcceptanceCheck.toString(), deterministic: verifyDefaultGeneralCompletion.toString() })
   const stepWorkflow = stepCapabilities.length ? createGeneralCapabilityStepWorkflow({ capabilities: stepCapabilities, completionCheck,
-    completionIdentity: generalCompletionIdentity ?? 'task-result-verification-v3' }) : null
+    completionIdentity }) : null
+  const legacyStepWorkflows = ['4', '5'].map(workflowVersion => stepCapabilities.length
+    ? createGeneralCapabilityStepWorkflow({ capabilities: stepCapabilities, completionCheck,
+      completionIdentity: generalCompletionIdentity ?? 'task-result-verification-v3', workflowVersion }) : null).filter(Boolean)
   const visibleDefinitions = new Map([investigationWorkflow(modelConfig()), stepWorkflow, fileWorkflow, ...selectedExternal.workflows]
     .filter(Boolean).map(workflow => [workflow.id, workflow]))
   const execution = suppliedExecution ?? await openExecutionRuntime({
@@ -696,14 +707,14 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         if (page.length < 100) break
         beforeSequenceId = page.at(-1).sequenceId
       }
-      assertRetiredWorkflowsDrained({ records: prior, activeDefinitions, pendingStages, currentDefinitions: [...workflows, legacyInvestigationWorkflow(selected)] })
+      assertRetiredWorkflowsDrained({ records: prior, activeDefinitions, pendingStages,
+        currentDefinitions: [...workflows, legacyInvestigationWorkflow(selected), ...legacyStepWorkflows, ...(legacyFileWorkflow ? [legacyFileWorkflow] : [])] })
       const engineeringWorkflows = await engineering.restore(store, artifacts)
       const historicalWorkflows = prior.filter(record => record.config?.kind !== 'engineering'
         && record.config?.kind !== 'external'
         && (activeDefinitions.has(`${record.workflowId}:${record.digest}`) || requiredDefinitions.has(`${record.workflowId}:${record.digest}`))).map(record => {
-        const candidates = [investigationWorkflow(record.config), legacyInvestigationWorkflow(record.config), stepWorkflow, fileWorkflow,
-          stepCapabilities.length ? createGeneralCapabilityStepWorkflow({ capabilities: stepCapabilities, completionCheck,
-            completionIdentity: generalCompletionIdentity ?? 'task-result-verification-v3', workflowVersion: '4' }) : null].filter(Boolean)
+        const candidates = [investigationWorkflow(record.config), legacyInvestigationWorkflow(record.config), stepWorkflow, fileWorkflow, legacyFileWorkflow,
+          ...legacyStepWorkflows].filter(Boolean)
           .filter(item => item.id === record.workflowId && item.version === record.definitionVersion)
         if (!candidates.length) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
         const previous = candidates.find(item => {
@@ -725,7 +736,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
             ? (record.definitionVersion === '1' ? createLegacyUatPrMergeTaskWorkflow : record.definitionVersion === '2' ? createUatPrMergeTaskWorkflowV2 : createUatPrMergeTaskWorkflow)({ adapter })
           : record.workflowId === 'task-main-pr-merge' ? createMainPrMergeTaskWorkflow({ adapter })
           : (record.definitionVersion === '1' ? createLegacyReleaseTaskWorkflow : createReleaseTaskWorkflow)({ kind: record.workflowId.slice(5), adapter })
-        if (saved.ownerContractVersion === '1') previous = { ...previous, ownerContract: externalWorkflowOwnerContract }
+        if (saved.ownerContractVersion === '1') previous = { ...previous, ownerContract: legacyExternalWorkflowOwnerContract }
+        else if (saved.ownerContractVersion === '2') previous = { ...previous, ownerContract: externalWorkflowOwnerContract }
         else if (saved.ownerContractVersion !== undefined) throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
         if (previous.version !== record.definitionVersion || ![defineExecutionWorkflow(previous).digest, ...defineExecutionWorkflow(previous).legacyDigests].includes(record.digest))
           throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
@@ -1116,7 +1128,10 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     return verifyFileDeliveryOutput(output, { taskId: plan.task.taskId, requirementRevision: plan.task.requirementRevision,
       groupId: requirement.scope.conversationId, profile: config.profile, fileDelivery: requirement.fileDelivery })
   }
-  const stageContracts = createTaskStageContracts({ controller, artifacts, contracts: [
+  const stageContracts = createTaskStageContracts({ controller, artifacts,
+    readOwnerContract: id => id === 'task-engineering' ? engineeringWorkflowOwnerContract
+      : visibleDefinitions.has(id) ? controller.workflowDefinition(id).ownerContract : null,
+    contracts: [
     createInvestigationStageContract({ queryScope, queryCatalog,
       readAcceptanceItems: taskId => store.query({ kind: 'task.owner.acceptance', taskId }),
       readSources: async requirement => Promise.all(requirement.scope.sourceKeys.map(async key => {
@@ -1158,7 +1173,16 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     return stageContracts.prepare({ taskId, stage: { ...stage, stageId: 'stage-1' }, stageIndex: 0,
       executionPlanRevision: plan.task.planRevision + 1, decision, plan, requirement, origin })
   }
+  const withAcceptanceIdentity = policy => ({ ...policy,
+    rulesDigest: executionDigest({ domain: policy.rulesDigest ?? null, acceptanceVerifier: completionIdentity,
+      binding: verifyTaskAcceptance.toString() }) })
+  const completionPolicies = new Map([stepWorkflow?.ownerContract, createEngineeringCompletionPolicy(),
+    withAcceptanceIdentity(externalWorkflowOwnerContract), fileWorkflow && withAcceptanceIdentity(fileWorkflow.ownerContract)]
+    .filter(Boolean).map(policy => [policy.id, policy]))
   const ownerContracts = createTaskWorkflowContracts({ store, artifacts, controller, prepareRepairContext: engineering.prepareRepairContext,
+    completionPolicy: contract => contract.id === 'agent-investigation-result' && contract.version === '1'
+      ? withAcceptanceIdentity(createLegacyInvestigationCompletionPolicy(contract)) : completionPolicies.get(contract.id) ?? contract,
+    verifyAcceptance: context => verifyTaskAcceptance({ ...context, check: completionCheck }),
     validateFiles: (files, scope) => managedFiles.validateManifest(files, scope), verifyFileDelivery: verifyRequiredFileDelivery })
   const { inspectCurrentExecution, repairCurrentStage, readStageArtifacts } = ownerContracts
   taskOwner = createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig,

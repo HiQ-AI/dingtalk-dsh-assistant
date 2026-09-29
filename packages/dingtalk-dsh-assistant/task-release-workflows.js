@@ -2,7 +2,7 @@ import { executionDigest, executionError } from './execution-artifacts.js'
 
 /** 平台领域决定前序证明的消费规则，公共服务不再拼装各平台参数。 */
 export function createExternalStageContracts({ workflowIds, external, readEngineeringProof, readArtifact }) {
-  return workflowIds.map(id => ({ id, version: '1', requiredOutputs: ['external-result'],
+  return workflowIds.map(id => ({ id, version: '1',
     async prepare({ taskId, stage, plan, stageIndex, requirement, origin }) {
       const args = { ...origin.command.args.arguments, ...requirement.target, objective: requirement.request,
         ...(requirement.stageTargets?.[id] ? { targetId: requirement.stageTargets[id] } : {}) }
@@ -28,11 +28,23 @@ export function createExternalStageContracts({ workflowIds, external, readEngine
 }
 
 /** 平台流程已在最终节点核验平台事实；冻结此前 Host 的结果拒绝条件。 */
-export const externalWorkflowOwnerContract = Object.freeze({
+export const legacyExternalWorkflowOwnerContract = Object.freeze({
   id: 'external-result', version: '1',
   validateCompletion({ output }) {
     return !!output && !(Array.isArray(output.limitations) && output.limitations.length)
       && output.outcome !== 'blocked' && output.status !== 'unverified'
+  },
+})
+
+/** 技术效果与逐项业务满足分别核验；版本 1 仅用于恢复其冻结定义。 */
+export const externalWorkflowOwnerContract = Object.freeze({
+  id: 'external-result', version: '2',
+  rulesDigest: executionDigest({ acceptanceScope: 'domain-items-v1' }),
+  async validateCompletion({ output, requirement, decision, stages, acceptanceItems, verifyAcceptance }) {
+    if (!legacyExternalWorkflowOwnerContract.validateCompletion({ output }) || !Array.isArray(acceptanceItems)) return false
+    if (!acceptanceItems.length) return true
+    return typeof verifyAcceptance === 'function'
+      && await verifyAcceptance({ requirement, decision, stages, acceptanceItems }) === true
   },
 })
 

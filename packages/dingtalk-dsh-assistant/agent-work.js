@@ -124,6 +124,18 @@ export function createLegacyInvestigationWorkflow({ provider, model, reasoningEf
   ] }
 }
 
+/** v5 没有逐项结论；保留原执行定义，完成准入独立核对当前分派项。 */
+export function createLegacyInvestigationCompletionPolicy(contract) {
+  return { ...contract, version: 'legacy-v5-admission-2',
+    rulesDigest: executionDigest({ previous: contract.rulesDigest, acceptanceScope: 'domain-items-v1' }),
+    async validateCompletion(context) {
+      if (!Array.isArray(context.acceptanceItems) || await contract.validateCompletion(context) !== true) return false
+      return !context.acceptanceItems.length || typeof context.verifyAcceptance === 'function'
+        && await context.verifyAcceptance(context) === true
+    },
+  }
+}
+
 const findingSchema = { type: 'object', additionalProperties: false, properties: {
   kind: { type: 'string', enum: ['fact', 'judgment', 'recommendation'] }, statement: text, evidenceRefs: texts,
 }, required: ['kind', 'statement', 'evidenceRefs'] }

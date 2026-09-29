@@ -44,7 +44,9 @@ export const isUatBranch = branch => /^feature\/uat[1-9]-base$/.test(branch ?? '
 
 /** 工程领域统一处理首阶段、调查交接和重执行来源。 */
 export function createEngineeringStageContract({ engineering, controller, mayCreate, engineeringSourceTaskId }) {
-  return { id: 'task-engineering', version: '1', requiredOutputs: ['engineering-delivery'],
+  return { id: 'task-engineering', version: '1', consumes: [
+    { id: 'agent-investigation-result', versions: ['1'] }, { id: 'investigation-result', versions: ['2'] },
+  ],
     async prepare({ taskId, stage, plan, requirement, origin, handoff, executionPlanRevision = plan.task.planRevision }) {
       const args = { ...origin.command.args.arguments, ...requirement.target, objective: requirement.request }
       const investigation = handoff && ['agent-investigation-result', 'investigation-result'].includes(handoff.contract.id)
@@ -100,6 +102,31 @@ export const engineeringWorkflowOwnerContract = Object.freeze({
         '本轮是明确失败后的修复。先用engineering_repo_inspect operation=repair读取Host失败材料和旧方案，再用source=previous读取上一代实际文件；sourceKind=workspace表示补丁未应用且不存在失败候选。歧义replacement必须重读原文并补足唯一定位上下文，禁止全局替换。当前目录仍为冻结基线，请重新应用完整有效修改并修复失败。expectedHash以source=current为准。构建、本地业务验收与清理必须重新执行，不复用旧通过结论。'])] } }
   },
 })
+
+/** 完成准入复用工程实际用例回执，并限制在该 Run 真正冻结的验收要求内。 */
+export function createEngineeringCompletionPolicy() {
+  return { ...engineeringWorkflowOwnerContract, version: '2',
+    rulesDigest: executionDigest({ previous: engineeringWorkflowOwnerContract.rulesDigest, acceptanceScope: 'stage-assigned-engineering-criteria-v1' }),
+    async validateCompletion(context) {
+      const { stage, state, acceptanceItems } = context
+      if (!stage || stage.runId !== state?.run?.runId || !stage.outputRef
+        || stage.outputRef !== state.nodes?.at(-1)?.outputRef
+        || stage.evidenceRefs !== undefined && !Array.isArray(stage.evidenceRefs)
+        || !Array.isArray(acceptanceItems) || acceptanceItems.some(item => !item
+          || typeof item.itemId !== 'string' || !item.itemId.trim()
+          || typeof item.criterion !== 'string' || !item.criterion.trim()
+          || !Array.isArray(item.evidenceRefs) || !item.evidenceRefs.length
+          || item.evidenceRefs.some(ref => typeof ref !== 'string' || !ref.trim()))
+        || await engineeringWorkflowOwnerContract.validateCompletion(context) !== true) return false
+      const refs = new Set([stage.outputRef, ...(stage.evidenceRefs ?? [])])
+      const assigned = acceptanceItems.filter(item => item.evidenceRefs.some(ref => refs.has(ref)))
+      if (!assigned.length) return true
+      const input = await context.artifacts.read(context.state.run.requirementRef)
+      return Array.isArray(input?.acceptanceCriteria)
+        && assigned.every(item => input.acceptanceCriteria.includes(item.criterion))
+    },
+  }
+}
 
 export function createEngineeringFailureRepair({ store, artifacts, controller, engineering }) {
   return createTaskWorkflowContracts({ store, artifacts, controller, prepareRepairContext: engineering.prepareRepairContext })

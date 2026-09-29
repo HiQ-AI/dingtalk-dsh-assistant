@@ -1,0 +1,28 @@
+✖ 工程交付证明复用同一 Run 工件并要求显式业务 E2E 检查 (6.04ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 243.2261
+
+✖ failing tests:
+
+test at test\workflow-engineering.test.js:97:1
+✖ 工程交付证明复用同一 Run 工件并要求显式业务 E2E 检查 (6.04ms)
+  AssertionError [ERR_ASSERTION]: 当前工程仅负责自身产物引用的条目，不能被迫证明后续工程负责的新增要求
+
+  false !== true
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-engineering.test.js:170:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

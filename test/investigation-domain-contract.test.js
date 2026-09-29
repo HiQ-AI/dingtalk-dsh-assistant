@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import { createInvestigationWorkflow, createLegacyInvestigationWorkflow, validateInvestigationResult, validateAgentWorkResult, createInvestigationStageContract } from '../packages/dingtalk-dsh-assistant/agent-work.js'
 import { defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
+import { createGeneralCapabilityStepWorkflow, verifyTaskAcceptance } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
+import { externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
+import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 
 const requirement = { acceptanceCriteria: ['查明原因', '完成修复部署'],
   acceptanceItems: [{ itemId: 'acceptance-1', criterion: '查明原因' }, { itemId: 'acceptance-2', criterion: '完成修复部署' }] }
@@ -134,4 +137,105 @@ test('修订后的真实 hash 验收 ID 冻结交接，拒绝按序号冒充及�
   const legacy = (await contract.prepare({ ...args, definitionVersion: '5', handoff })).input
   assert.equal('acceptanceItems' in legacy, false); assert.equal('handoff' in legacy, false)
   assert.deepEqual(legacy.context.predecessor, handoff.value)
+})
+
+function mixedFixture({ verdict = true, legacy = false, external = false } = {}) {
+  const goal = structuredClone(requirement)
+  goal.request = '查明原因并保存调查记录'
+  goal.acceptanceCriteria[1] = '保存调查记录'
+  goal.acceptanceItems[1].criterion = '保存调查记录'
+  const investigation = result(), calls = []
+  investigation.openItems[0] = { description: '保存记录', reason: '尚未写入', evidenceRefs: [] }
+  const written = { status: 'written', content: '配置缺失；已保存调查记录' }
+  const note = external ? { status: 'uat-deployed', boundaries: ['只确认UAT部署'], evidenceRefs: ['uat-readback'] }
+    : { capabilityId: 'write-note', output: written, verification: { passed: true, outputDigest: executionDigest(written) } }
+  const check = async input => {
+    calls.push(structuredClone(input))
+    return { status: verdict ? 'satisfied' : 'unsatisfied', resultVerified: verdict,
+      criteria: input.acceptanceCriteria.map(criterion => ({ criterion, passed: verdict, evidenceIds: ['out-2'] })) }
+  }
+  const current = createGeneralCapabilityStepWorkflow({ capabilities: [], completionCheck: check }).ownerContract
+  const second = external ? legacy ? legacyExternalWorkflowOwnerContract : externalWorkflowOwnerContract
+    : legacy ? createGeneralCapabilityStepWorkflow({ capabilities: [], workflowVersion: '4', completionCheck: check }).ownerContract : current
+  const contracts = [createInvestigationWorkflow(options).ownerContract, second]
+  const stages = contracts.map((contract, index) => ({ stageId: `stage-${index + 1}`, runId: `run-${index + 1}`,
+    workflowId: `workflow-${index + 1}`, workflowDigest: `frozen-${index + 1}`, status: 'succeeded', outputRef: `out-${index + 1}` }))
+  const plan = { task: { taskId: 'task', status: 'succeeded', requirementRevision: 1, planRequirementRevision: 1, planRevision: 1 }, stages }
+  const states = stages.map(stage => ({ run: { ...stage, taskId: 'task', status: 'succeeded', generation: 0, revision: 1,
+    requirementRef: `input-${stage.stageId}` }, nodes: [{ status: 'succeeded', outputRef: stage.outputRef, generation: 0 }], pendingInputCount: 0 }))
+  const decision = { summary: '调查和保存均完成', evidenceRefs: ['out-1', 'out-2'],
+    assessments: goal.acceptanceItems.map((item, index) => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: [`out-${index + 1}`] })) }
+  const helpers = createTaskWorkflowContracts({
+    controller: { state: async id => states[stages.findIndex(stage => stage.runId === id)],
+      workflowDefinition: id => ({ ownerContract: contracts[stages.findIndex(stage => stage.workflowId === id)] }) },
+    artifacts: { read: async ref => ref === 'out-1' ? investigation : ref === 'out-2' ? note : goal },
+    store: { query: async () => goal.acceptanceItems },
+    completionPolicy: contract => contract === second ? external ? externalWorkflowOwnerContract : current : contract,
+    verifyAcceptance: context => verifyTaskAcceptance({ ...context, check }),
+  })
+  return { goal, investigation, note, calls, stages, states, helpers,
+    args: { taskId: 'task', plan, requirement: goal, decision } }
+}
+
+test('混合领域只核验实际承担条目，无关写入拒绝且有效保存不必再次证明调查', async () => {
+  const rejected = mixedFixture({ verdict: false })
+  assert.equal(await rejected.helpers.authorizeCompletion(rejected.args), false)
+  assert.equal((await rejected.helpers.readDeliveryManifest(rejected.args)).businessValidation.status, 'unverified')
+  assert.deepEqual(rejected.calls[0].acceptanceCriteria, ['保存调查记录'])
+  assert.deepEqual(rejected.calls[0].acceptanceItems.map(item => item.itemId), ['acceptance-2'])
+  assert.deepEqual(rejected.calls[0].evidence.map(item => item.evidenceId), ['out-2'])
+  const accepted = mixedFixture()
+  assert.equal(await accepted.helpers.authorizeCompletion(accepted.args), true)
+  const receipt = (await accepted.helpers.readDeliveryManifest(accepted.args)).businessValidation
+  assert.equal(receipt.status, 'accepted')
+  assert.deepEqual(receipt.items.map(item => [item.itemId, item.validators[0].contract.id]),
+    [['acceptance-1', 'agent-investigation-result'], ['acceptance-2', 'general-capability-result']])
+  assert.equal(accepted.calls.length, 1)
+})
+
+test('验收回执仅跟随实际已验决定，序列化伪造、产物/运行/计划/决定变化均失效', async () => {
+  for (const mutate of [f => { f.args.decision = structuredClone(f.args.decision) },
+    f => { f.note.output.content = '另一份内容' }, f => { f.states[1].run.revision++ },
+    f => { f.args.plan.task.planRevision++ }, f => { f.args.decision.summary = '修改结论' }]) {
+    const f = mixedFixture()
+    assert.equal(await f.helpers.authorizeCompletion(f.args), true)
+    assert.equal((await f.helpers.readDeliveryManifest(f.args)).businessValidation.status, 'accepted')
+    mutate(f)
+    assert.equal((await f.helpers.readDeliveryManifest(f.args)).businessValidation.status, 'unverified')
+  }
+})
+
+test('历史通用阶段无承担条目时只核验效果，承担条目时仍执行当前领域门禁', async () => {
+  const f = mixedFixture({ legacy: true })
+  f.goal.acceptanceItems.pop(); f.goal.acceptanceCriteria.pop(); f.investigation.criterionReviews.pop()
+  f.args.decision.assessments.pop()
+  assert.equal(await f.helpers.authorizeCompletion(f.args), true)
+  assert.equal(f.calls.length, 0)
+  const assigned = mixedFixture({ legacy: true, verdict: false })
+  assert.equal(await assigned.helpers.authorizeCompletion(assigned.args), false)
+  assert.equal(assigned.calls.length, 1)
+})
+
+test('旧新平台效果都不能作为生产修复的逐项接纳，当前域判据必须通过', async () => {
+  for (const legacy of [false, true]) {
+    const f = mixedFixture({ external: true, legacy, verdict: false })
+    f.goal.acceptanceItems[1].criterion = f.goal.acceptanceCriteria[1] = '生产故障已修复'
+    assert.equal(await f.helpers.authorizeCompletion(f.args), false)
+    assert.deepEqual(f.calls[0].acceptanceCriteria, ['生产故障已修复'])
+    assert.equal((await f.helpers.readDeliveryManifest(f.args)).businessValidation.status, 'unverified')
+  }
+})
+
+test('验收输入身份不能被产物同名字段覆盖，跨项引用不能借总证据集合混入', async () => {
+  const input = { source: 'Host冻结输入' }, output = { evidenceId: 'forged', executedInput: { source: 'forged' } }
+  const context = { requirement: { request: '验证两项' }, decision: { summary: '候选', evidenceRefs: ['a', 'b'] },
+    stages: [{ stage: { outputRef: 'a' }, input, output }],
+    acceptanceItems: [{ itemId: 'one', criterion: '第一项', evidenceRefs: ['a'] }] }
+  assert.equal(await verifyTaskAcceptance({ ...context, check: async request => {
+    assert.equal(request.evidence[0].evidenceId, 'a')
+    assert.deepEqual(request.evidence[0].executedInput, input)
+    return { status: 'satisfied', resultVerified: true, criteria: [{ criterion: '第一项', passed: true, evidenceIds: ['a'] }] }
+  } }), true)
+  assert.equal(await verifyTaskAcceptance({ ...context, check: async () => ({ status: 'satisfied', resultVerified: true,
+    criteria: [{ criterion: '第一项', passed: true, evidenceIds: ['b'] }] }) }), false)
 })

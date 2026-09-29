@@ -1,0 +1,3 @@
+{"case":"mixed-investigation-and-unrelated-note","authorized":true,"semanticCalls":0,"manifestComplete":true,"validation":"structure-and-evidence-binding"}
+{"counterexamples":"investigation-only and general-only rejected","semanticCalls":1}
+{"case":"consumer-version-gap","producerContractVersion":"999","prepared":"engineered","investigationHandoffAccepted":true,"requiredOutputs":["engineering-delivery"]}

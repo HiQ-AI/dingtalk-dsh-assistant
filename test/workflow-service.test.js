@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
@@ -17,6 +17,10 @@ import { readOnlyWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistan
 import { externalWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
+import { createTaskMarkdownFileAdapter } from '../packages/dingtalk-dsh-assistant/task-markdown-file.js'
+import { createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
+import { createTaskArtifactFiles } from '../packages/dingtalk-dsh-assistant/task-artifact-files.js'
+import { createTaskArtifactWriteAdapter, createGeneralArtifactWriteCapability } from '../packages/dingtalk-dsh-assistant/task-artifact-write.js'
 import { createSourceDossierCapability, createTaskMessageResourceCapability, isDirectedTaskRequest, openWorkflowService,
   rankMessageCandidates, verifyDefaultGeneralCompletion, describeTaskNodeOutput } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { messageSchemas, taskWorkflowCatalog } from '../packages/dingtalk-dsh-assistant/message-context.js'
@@ -395,7 +399,7 @@ function investigationResult(input, result) {
       reason: result.evidenceRefs.length ? '已核对本测试提供的当前来源材料' : '本测试未提供可验证证据', evidenceRefs: result.evidenceRefs })) }
 }
 async function fixture(t, actor = 'owner', notifications, options = {}) {
-  const root = await mkdtemp(join(tmpdir(), 'workflow-service-'))
+  const root = options.root ?? await mkdtemp(join(tmpdir(), 'workflow-service-'))
   const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'test', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
   const delivery = options.delivery ?? (options.deliveryOptions ? createExecutionDelivery({ store, artifacts, ...options.deliveryOptions }) : undefined)
@@ -439,7 +443,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
     await onCandidate(decision)
     return { status: 'submitted', decision }
   }, async close() {} }
-  const service = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', ...options.config }, legacy, judge: batchJudge, execution, notifications, readResource: options.readResource, external: options.external,
+  const service = await openWorkflowService({ ctx: options.ctx ?? {}, config: { groupIds: ['g'], ownerActorId: 'owner', ...options.config }, legacy, judge: batchJudge, execution, notifications, readResource: options.readResource, external: options.external,
     ...(options.generalCompletionCheck ? { generalCompletionCheck: options.generalCompletionCheck,
       generalCompletionIdentity: 'test-general-completion-v1' } : {}),
     messageAgentSessions: { async run({ input, onSessionBound, onResult }) {
@@ -761,6 +765,164 @@ test('没有 Owner 的已成功问答计划显示完成，结果中的未知不�
     assert.deepEqual(await execution.store.query({ kind: 'run.list', taskId }), before)
     if (!confirmation) assert.match(task.result, /无法确认/)
   }
+})
+
+for (const [scenario, validWrite, expectedComplete, native = false] of [
+  ['无关备忘录不能证明生产修复', false, false], ['同项有效保存完成', true, true],
+  ['引用调查不足产物不能完成保存项', true, false], ['业务检查返回错项不能完成', true, false],
+  ['默认原生领域检查拒绝备忘录冒充生产修复', false, false, true], ['默认原生领域检查接纳有效保存并持久化凭证', true, true, true],
+]) test(`混合调查与写入通过真实服务Owner门禁：${scenario}`, async t => {
+  const temporary = join(process.cwd(), 'docs', 'tmp')
+  await mkdir(temporary, { recursive: true })
+  const root = await mkdtemp(join(temporary, 'workflow-mixed-acceptance-'))
+  const criterion = validWrite ? '调查记录已保存为 Markdown 文档' : '生产故障已修复并验证不再复现'
+  const objective = validWrite ? '调查故障并保存 Markdown 文档' : '修复生产故障并保存 Markdown 文档'
+  const content = '# 调查备忘录\n\n故障仍存在，尚未实施生产修复。\n'
+  const semanticChecks = [], failures = []
+  const sessions = { async run({ input, onSessionBound, onResult }) {
+    await onSessionBound()
+    const refs = input.materials.map(item => item.id)
+    await onResult({ outcome: 'completed', summary: '调查已结束，后续任务尚未实施', evidenceRefs: refs,
+      limitations: ['尚未实施后续任务'], question: '',
+      findings: [{ kind: 'fact', statement: '故障仍存在', evidenceRefs: refs }],
+      openItems: [{ description: criterion, reason: '调查阶段尚未实施', evidenceRefs: [] }],
+      criterionReviews: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'insufficient_evidence',
+        reason: '尚无后续实施证据', evidenceRefs: [] })) })
+    return { status: 'submitted' }
+  }, async cancel() {}, async close() {} }
+  const ownerSessions = { async run({ input, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    const initialize = !input.stages.length, stagesDone = !initialize && input.stages.every(stage => stage.status === 'succeeded')
+    const appendWrite = stagesDone && input.stages.length === 1, complete = stagesDone && input.stages.length === 2
+    const evidenceRefs = complete ? [scenario === '引用调查不足产物不能完成保存项' ? input.stages[0].outputRef : input.stages.at(-1).outputRef]
+      : input.stages.flatMap(stage => stage.evidenceRefs ?? [])
+    const decision = { action: initialize || appendWrite || input.stages.some(stage => stage.status === 'ready') ? 'advance' : complete ? 'complete' : 'wait',
+      summary: complete ? '声明目标已完成' : '推进调查及写入', evidenceRefs,
+      ...(initialize ? { planChange: { kind: 'initialize', stages: [
+        { workflowId: 'task-investigation', gate: 'none' },
+      ] } } : {}),
+      ...(appendWrite ? { appendStages: [
+        { workflowId: 'task-general-capability', gate: 'none', capabilityStep: {
+          capabilityId: 'write-task-markdown', input: { content }, expectedEvidence: '独立回读 Markdown 文档' } },
+      ] } : {}),
+      ...(complete ? { assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs })) } : {}) }
+    await onCandidate(decision)
+    return { status: 'submitted', decision }
+  }, async close() {} }
+  const assess = async input => {
+    semanticChecks.push(input)
+    assert.deepEqual(input.acceptanceItems.map(item => item.criterion), [criterion])
+    assert.equal(input.acceptanceItems[0].itemId, 'acceptance-1')
+    assert.equal(input.evidence.length, 1)
+    assert.deepEqual(input.acceptanceItems[0].evidenceRefs, [input.evidence[0].evidenceId])
+    assert.equal(await readFile(input.evidence[0].output.result.path, 'utf8'), content)
+    return { status: validWrite ? 'satisfied' : 'unsatisfied', resultVerified: validWrite,
+      criteria: [{ criterion: scenario === '业务检查返回错项不能完成' ? '另一项未经委托的标准' : criterion,
+        passed: validWrite, evidenceIds: [input.evidence[0].evidenceId] }] }
+  }
+  const nativeLlm = { async *stream(request) {
+    assert.deepEqual(request.tools, [])
+    assert.equal(request.maxTokens, 4096)
+    assert.match(request.system, /不能证明生产修复/)
+    const input = JSON.parse(request.messages[0].content[0].text)
+    assert.equal(input.request, objective)
+    yield { type: 'text-delta', text: JSON.stringify(await assess(input)) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, {
+    root, executionSessions: sessions, taskOwnerSessions: ownerSessions, config: { taskOutputDirectory: join(root, 'files') },
+    deliveryOptions: { fileAdapter: createTaskMarkdownFileAdapter({ root: join(root, 'files') }), authorize: async () => null,
+      authorizeFile: async ({ binding, prepared }) => binding.taskId === prepared.taskId
+        ? { principalId: 'owner', authorizationRef: 'fixture-write-grant' } : null },
+    judge: async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
+      : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
+      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective, acceptanceCriteria: [criterion] }, dependsOn: [] }],
+        constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' },
+    ...(native ? { ctx: { llm: nativeLlm } } : { generalCompletionCheck: assess }),
+  })
+  const accepted = await service.ingest({ ...message, text: objective })
+  const state = await service.messages.process(accepted.runId)
+  assert.equal(state.commands[0].status, 'applied', JSON.stringify(state.commands[0]))
+  const taskId = state.commands[0].result.taskId
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const plan = await execution.controller.taskPlan(taskId)
+    for (const stage of plan.stages) if (stage.runId) await execution.controller.whenIdle(stage.runId)
+    failures.push(...(await service.recover()).failures)
+    const owner = await execution.store.query({ kind: 'task.owner', taskId })
+    if (owner.decision?.action === 'complete' || failures.some(item => item.code === 'TASK_OWNER_COMPLETION_UNVERIFIED')) break
+  }
+  const plan = await execution.controller.taskPlan(taskId)
+  assert.equal(plan.stages.length, 2, JSON.stringify({ plan, failures, owner: await execution.store.query({ kind: 'task.owner', taskId }) }))
+  assert.ok(plan.stages.every(stage => stage.status === 'succeeded'), JSON.stringify({ plan, failures }))
+  const investigation = await execution.artifacts.read(plan.stages[0].outputRef)
+  assert.equal(investigation.criterionReviews[0].status, 'insufficient_evidence')
+  const output = await execution.artifacts.read(plan.stages[1].outputRef)
+  assert.equal(output.verification.passed, true)
+  assert.equal(await readFile(output.output.result.path, 'utf8'), content)
+  const owner = await execution.store.query({ kind: 'task.owner', taskId })
+  assert.equal(owner.decision?.action === 'complete', expectedComplete, JSON.stringify({ owner, failures }))
+  if (scenario !== '引用调查不足产物不能完成保存项') assert.ok(semanticChecks.length > 0, '混合流程必须执行所属验收项的业务检查')
+  const manifestRecord = await execution.store.query({ kind: 'task.owner.delivery-manifest', taskId })
+  if (expectedComplete) {
+    assert.deepEqual(failures, [])
+    assert.ok(manifestRecord?.ref)
+    const manifest = await execution.artifacts.read(manifestRecord.ref)
+    assert.equal(manifest.businessValidation.status, 'accepted')
+    assert.equal(manifest.businessValidation.policy, 'domain-items-v1')
+    assert.equal(manifest.businessValidation.items.length, 1)
+    assert.equal(manifest.businessValidation.items[0].itemId, 'acceptance-1')
+  } else {
+    assert.ok(failures.some(item => item.code === 'TASK_OWNER_COMPLETION_UNVERIFIED'), JSON.stringify(failures))
+    assert.equal(manifestRecord, null)
+  }
+})
+
+for (const workflowVersion of ['4', '5']) test(`正式服务重启恢复通用 v${workflowVersion} 成功前序且新任务使用 v6`, async t => {
+  const temporary = join(process.cwd(), 'docs', 'tmp')
+  await mkdir(temporary, { recursive: true })
+  const root = await mkdtemp(join(temporary, 'general-version-restart-'))
+  const dbPath = join(root, 'control.db'), artifactDirectory = join(root, 'artifacts'), taskOutputDirectory = join(root, 'files')
+  const model = { provider: 'test', model: 'test' }
+  const store = await openExecutionStore({ dbPath, instanceId: 'general-restart', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: artifactDirectory, initialize: true })
+  const fileAdapter = createTaskMarkdownFileAdapter({ root: taskOutputDirectory })
+  const artifactAdapter = createTaskArtifactWriteAdapter({ files: createTaskArtifactFiles({ root: join(artifactDirectory, 'task-files') }) })
+  const workflow = createGeneralCapabilityStepWorkflow({ capabilities: [createGeneralMarkdownWriteCapability({ fileAdapter }),
+    createGeneralArtifactWriteCapability({ fileAdapter: artifactAdapter })],
+    completionIdentity: 'task-result-verification-v3', workflowVersion })
+  const definition = defineExecutionWorkflow(workflow)
+  const delivery = createExecutionDelivery({ store, artifacts, fileAdapter, authorize: async () => null,
+    authorizeFile: async ({ binding, prepared }) => binding.taskId === prepared.taskId
+      ? { principalId: 'owner', authorizationRef: 'fixture-write-grant' } : null })
+  const controller = createExecutionController({ store, artifacts, delivery, workflows: [workflow] })
+  let service
+  t.after(async () => { await service?.close(); await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
+  await store.command({ id: 'old-definition', kind: 'workflow.register', args: { workflowId: workflow.id,
+    definitionVersion: workflowVersion, digest: definition.digest, config: model } })
+  const content = `# v${workflowVersion} 已保存产物\n`
+  await controller.createTaskPlan({ commandId: 'old-plan', taskId: 'old-task', stages: [{ stageId: 'write', workflowId: workflow.id,
+    input: { capabilityId: 'write-task-markdown', input: { content }, scope: { writeMarkdown: true }, expectedEvidence: '文件回读' } }] })
+  await store.command({ id: 'old-owner', kind: 'task.owner.init', args: { taskId: 'old-task', sessionId: 'old-owner', sourceKey: 'old-source', criteria: ['产物已保存'] } })
+  const started = await controller.advanceTaskPlan('old-task')
+  const runId = started.stages[0].runId
+  await controller.whenIdle(runId)
+  const before = await controller.advanceTaskPlan('old-task')
+  assert.equal(before.stages[0].status, 'succeeded')
+  const output = await artifacts.read(before.stages[0].outputRef)
+  assert.equal(await readFile(output.output.result.path, 'utf8'), content)
+  const effectsBefore = await store.query({ kind: 'effect.list', runId })
+  await controller.close(); await store.close()
+  service = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', dbPath, artifactDirectory,
+    taskOutputDirectory, instanceId: 'general-restart' }, legacy: { getAgentConfig: () => model },
+    judge: async () => { throw Error('UNEXPECTED_MODEL') }, taskOwnerSessions: { async close() {} } })
+  const restored = service.execution.controller.workflowDefinition(workflow.id, definition.digest)
+  assert.equal(restored.version, workflowVersion)
+  assert.equal(restored.digest, definition.digest)
+  assert.equal(service.execution.controller.workflowDefinition(workflow.id).version, '6')
+  assert.deepEqual(await service.execution.controller.taskPlan('old-task'), before)
+  assert.deepEqual(await service.execution.artifacts.read(before.stages[0].outputRef), output)
+  assert.deepEqual(await service.execution.store.query({ kind: 'effect.list', runId }), effectsBefore)
+  assert.equal(await readFile(output.output.result.path, 'utf8'), content)
 })
 
 test('流程成功后由同一Task负责人验收并只汇报一次最终结果', async t => {
@@ -2889,7 +3051,8 @@ test('任务投影只在真实等待时显示原因，完成后隐藏遗留原�
 
 test('真实Owner路径保留工程本地验收与合并前缀，失败第三阶段重建后可结案', async t => {
   const commitSha='a'.repeat(40), candidateDigest='b'.repeat(64), verificationDigest='c'.repeat(64), tree='d'.repeat(40)
-  let rebuilds=0, deploymentSends=0;const ownerInputs=[]
+  let rebuilds=0, deploymentSends=0;const ownerInputs=[], domainChecks=[]
+  const criteria=['保存草稿成功','版本已部署UAT']
   const target={repository:'HiQ-AI/dataset-web',environment:'uat',service:'dataset-web',runbookId:'deploy-uat2',commitSha}
   const releaseAdapter=kind=>({id:`fixture-${kind}`,version:'1',rulesDigest:'e'.repeat(64),
     inspect:async({phase,requirement,effect})=>({phase,targetDigest:executionDigest(requirement.target),status:'confirmed',evidenceRefs:[`proof-${phase}`],facts:phase==='preflight'
@@ -2907,10 +3070,23 @@ test('真实Owner路径保留工程本地验收与合并前缀，失败第三阶
     const evidenceRefs=input.stages.map(stage=>stage.outputRef).filter(Boolean)
     const decision={action:input.stages.length===0?'advance':done?'complete':'wait',summary:'已核对阶段证据',evidenceRefs,
       ...(input.stages.length===0?{planChange:{kind:'initialize',stages:[{workflowId:'task-investigation',gate:'none'}]}}:{}),
-      ...(done?{assessments:input.acceptanceItems.map(item=>({itemId:item.itemId,status:'satisfied',evidenceRefs}))}:{})}
+      ...(done?{assessments:input.acceptanceItems.map(item=>({itemId:item.itemId,status:'satisfied',evidenceRefs:
+        input.taskId==='owner-uat-rebuild'?[input.stages[item.criterion===criteria[0]?0:2].outputRef]:evidenceRefs}))}:{})}
     await onCandidate(decision);return{status:'submitted',decision}
   },async close(){}}
-  const {service,execution,message}=await fixture(t,'owner',undefined,{config:{webActorId:'owner'},external,taskOwnerSessions:sessions,deliveryOptions:{authorize:async()=>false,
+  const {service,execution,message}=await fixture(t,'owner',undefined,{config:{webActorId:'owner'},external,taskOwnerSessions:sessions,
+    generalCompletionCheck:async input=>{
+      domainChecks.push(input)
+      assert.deepEqual(input.acceptanceCriteria,[criteria[1]])
+      assert.equal(input.evidence.length,2)
+      assert.equal(input.evidence.some(item=>item.deliveryStatus==='pr_verified'),false)
+      const deployed=input.evidence.find(item=>item.workflowKind==='uat-rebuild')
+      assert.equal(deployed?.status,'technical-delivery-confirmed')
+      assert.equal(deployed.commitSha,commitSha)
+      assert.deepEqual(deployed.evidenceRefs,['proof-runtime'])
+      assert.deepEqual(input.acceptanceItems[0].evidenceRefs,[deployed.evidenceId])
+      return{status:'satisfied',resultVerified:true,criteria:[{criterion:criteria[1],passed:true,evidenceIds:[deployed.evidenceId]}]}
+    },deliveryOptions:{authorize:async()=>false,
     authorizeExternal:async()=>({principalId:'owner',authorizationRef:'isolated-test'}),externalAdapter:{
       execute:async prepared=>{if(prepared.operation==='rebuild'){rebuilds++;return{status:'succeeded'}}deploymentSends++;return{status:'failed',reason:'RELEASE_PIPELINE_FAILED',
         operationKey:prepared.operationKey,commitSha,pipelineNumber:319,pipelineStatus:'killed',evidenceRef:'pipeline-319'}},reconcile:async()=>({status:'unknown'})}}})
@@ -2938,11 +3114,11 @@ test('真实Owner路径保留工程本地验收与合并前缀，失败第三阶
     config:{kind:'engineering',taskId,runId:engineeringRun,sourceCommandId}}})
   execution.controller.registerWorkflow({id:'task-uat-pr-merge',version:'fixture',ownerContract:externalWorkflowOwnerContract,nodes:[{id:'verify-source',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,
     mapInput:({requirement})=>requirement,execute:async()=>({status:'confirmed',mergeCommitSha:commitSha,baseBranch:'feature/uat2-base',evidenceRefs:['merge-proof']})}]})
-  const goal=await execution.artifacts.put({request:'开发并提测',constraints:[],explicitStages:[],authorization:{channel:'web'},reportChannel:'web',externalMessaging:false})
+  const goal=await execution.artifacts.put({request:'开发并提测',acceptanceCriteria:criteria,constraints:[],explicitStages:[],authorization:{channel:'web'},reportChannel:'web',externalMessaging:false})
   await execution.store.command({id:'owner-rebuild-origin',kind:'task.web-rerun.accept',args:{taskId,rerunOfTaskId:original.taskId,actorId:'owner',
-    request:{expectedRunId:original.runId,objective:'开发并提测',stages:['task-engineering','task-uat-pr-merge','task-uat-deployment']},requirementRef:goal.ref,criteria:['保存并部署'],sourceKey:'web-rerun:owner-rebuild'}})
+    request:{expectedRunId:original.runId,objective:'开发并提测',stages:['task-engineering','task-uat-pr-merge','task-uat-deployment']},requirementRef:goal.ref,criteria,sourceKey:'web-rerun:owner-rebuild'}})
   await execution.controller.initializeTaskPlan({commandId:'owner-rebuild-plan',taskId,expectedPlanRevision:0,expectedRequirementRevision:1,stages:[
-    {stageId:'stage-1',workflowId,input:{}},{stageId:'stage-2',workflowId:'task-uat-pr-merge',gate:'none'},{stageId:'stage-3',workflowId:'task-uat-deployment',gate:'none'}]})
+    {stageId:'stage-1',workflowId,input:{request:'实现保存草稿',acceptanceCriteria:[criteria[0]]}},{stageId:'stage-2',workflowId:'task-uat-pr-merge',gate:'none'},{stageId:'stage-3',workflowId:'task-uat-deployment',gate:'none'}]})
   let plan=await execution.controller.advanceTaskPlan(taskId);await execution.controller.whenIdle(plan.stages[0].runId);plan=await execution.controller.advanceTaskPlan(taskId)
   await execution.controller.bindTaskStageInput({commandId:'owner-bind-merge',taskId,planRevision:1,stageId:'stage-2',predecessorOutputRef:plan.stages[0].outputRef,input:{}})
   plan=await execution.controller.advanceTaskPlan(taskId);await execution.controller.whenIdle(plan.stages[1].runId);plan=await execution.controller.advanceTaskPlan(taskId)
@@ -2955,12 +3131,15 @@ test('真实Owner路径保留工程本地验收与合并前缀，失败第三阶
   assert.equal(plan.task.planRevision,2);assert.equal(plan.task.status,'succeeded');assert.equal(plan.stages[2].workflowId,'task-uat-rebuild')
   assert.deepEqual(plan.stages.slice(0,2),prefix);assert.equal(deploymentSends,1);assert.equal(rebuilds,1)
   assert.equal((await execution.controller.state(failedRun)).run.status,'failed')
-  const owner=await execution.store.query({kind:'task.owner',taskId});assert.equal(owner.decision.action,'complete')
+  const owner=await execution.store.query({kind:'task.owner',taskId});assert.equal(owner.decision.action,'complete',JSON.stringify(owner))
+  assert.equal(domainChecks.length,1)
   const detail = await service.taskDetail(taskId)
   const manifestBinding = await execution.store.query({ kind: 'task.owner.delivery-manifest', taskId })
   assert.deepEqual(detail.deliveryManifest, manifestBinding)
   const manifest = await execution.artifacts.read(manifestBinding.ref)
   assert.equal(manifest.complete, true); assert.equal(manifest.taskId, taskId)
+  assert.equal(manifest.businessValidation.status,'accepted')
+  assert.deepEqual(manifest.businessValidation.items.map(item=>item.criterion),criteria)
   assert.equal(manifest.planRevision, 2); assert.equal(manifest.artifacts.length, 3)
   const completedInput=ownerInputs.find(input=>input.taskId===taskId&&input.task.planRevision===2&&input.stages.every(stage=>stage.status==='succeeded'))
   assert.ok(completedInput.stageArtifacts[0].nodeArtifacts.some(node=>node.nodeId==='finalize-local-acceptance'))
