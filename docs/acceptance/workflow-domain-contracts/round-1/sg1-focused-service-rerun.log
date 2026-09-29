@@ -1,0 +1,10 @@
+✔ 正式 Web 重执行新建独立任务，持久幂等、原任务不变、恢复只留 Web 且拒绝越权阶段 (7255.4556ms)
+✔ 专业分析后在同一 Task 读取前序产物，不依赖 general intake (451.5544ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8324.7207

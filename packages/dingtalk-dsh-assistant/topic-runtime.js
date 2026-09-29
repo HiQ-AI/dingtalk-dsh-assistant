@@ -1,3 +1,4 @@
+import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { randomUUID } from 'node:crypto'
 import { coordinationRole, coordinationTools } from './coordination-sessions.js'
 import { z } from 'zod'
@@ -129,7 +130,7 @@ const completionReviewSchema = z.union([
 const checkpointReviewSchema = z.strictObject({ decision: z.enum(['acknowledge', 'guidance', 'reject']), reason: z.string().trim().min(1), guidance: z.string().trim().min(1).optional() })
 const waitingReviewSchema = z.union([
   z.strictObject({ decision: z.enum(['approve-wait', 'continue']), reason: z.string().trim().min(1) }),
-  z.strictObject({ decision: z.literal('revise-scope'), reason: z.string().trim().min(1), basisMessageIds: z.array(z.string().trim().min(1)).min(1), affectedStageIds: z.array(z.string().trim().min(1)).min(1), title: z.string().trim().min(1).max(120), objective: z.string().trim().min(1), acceptanceCriteria: z.array(z.string().trim().min(1)).min(1), stageTasks: z.array(z.string().trim().min(1)).min(1) }),
+  z.strictObject({ decision: z.literal('revise-scope'), reason: z.string().trim().min(1), basisMessageIds: z.array(z.string().trim().min(1)).min(1), affectedStageIds: z.array(z.string().trim().min(1)).min(1), title: z.string().trim().min(1).max(120), objective: z.string().trim().min(1), acceptanceCriteria: acceptanceCriteriaSchema, stageTasks: z.array(z.string().trim().min(1)).min(1) }),
 ])
 const reviewSchemas = { completion: completionReviewSchema, checkpoint: checkpointReviewSchema, waiting: waitingReviewSchema }
 const reviewSubmissionSchema = (kind) => z.strictObject({

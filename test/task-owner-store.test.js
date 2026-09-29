@@ -68,6 +68,19 @@ test('同一任务连续事件复用稳定会话，eventKey 重放不会多次�
   } finally { f.db.close() }
 })
 
+test('非完成候选不得提交正式清单引用', () => {
+  const f = fixture()
+  try {
+    f.send('task.owner.event', { taskId: 'task-1', eventKey: 'created', eventType: 'task.created' })
+    f.send('task.owner.claim', { taskId: 'task-1', turnId: 'turn-1', expectedLeaseEpoch: 0 })
+    f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1, sessionId: 'session-1' })
+    f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
+      decision: { action: 'wait', summary: '等待执行', evidenceRefs: [] } })
+    assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
+      deliveryManifestRef: `sha256-${'a'.repeat(64)}.json` }), { code: 'TASK_OWNER_DELIVERY_MANIFEST_INVALID' })
+  } finally { f.db.close() }
+})
+
 test('新事件和版本变化使旧候选失效，旧租约不能提交', () => {
   const f = fixture()
   try {
@@ -314,5 +327,57 @@ test('Owner 执行途中取消，释放后不累计失败或再次唤醒', () =>
     assert.equal(f.read('task.owner').failureCount, 0)
     assert.equal(f.read('task.owner').lastFailure, null)
     assert.deepEqual(queryTaskOwner(f.db, { kind: 'task.owners.pending' }), [])
+  } finally { f.db.close() }
+})
+
+test('新接纳验收合同在消息入口与 Owner 一致，16/17/32 成功且非法字段拒绝', async () => {
+  const { messageSchemas } = await import('../packages/dingtalk-dsh-assistant/message-context.js')
+  const intent = acceptanceCriteria => ({ kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '完成目标', acceptanceCriteria }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' })
+  for (const criteria of [16, 17, 32].map(count => Array.from({ length: count }, (_, i) => `验收 ${i + 1}`))) {
+    assert.equal(messageSchemas.I.safeParse(intent(criteria)).success, true)
+    const f = fixture()
+    try {
+      f.db.prepare('DELETE FROM task_acceptance_items').run()
+      f.db.prepare('DELETE FROM task_owners').run()
+      const result = f.send('task.owner.init', { taskId: 'task-1', sessionId: 'session-1', sourceKey: 'source-1', criteria })
+      assert.equal(result.status, 'applied')
+      assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM task_acceptance_items').get().count, criteria.length)
+      validateTaskOwnerSchema(f.db)
+      assert.equal(f.read('task.owner').sessionId, 'session-1')
+    } finally { f.db.close() }
+  }
+  for (const criteria of [Array(33).fill('条件'), [], [' '], ['x'.repeat(2001)], [' '.repeat(2000) + 'x'], [42], '条件', null]) {
+    assert.equal(messageSchemas.I.safeParse(intent(criteria)).success, false, JSON.stringify(criteria))
+    const f = fixture()
+    try {
+      assert.throws(() => f.send('task.owner.init', { taskId: 'task-1', sessionId: 'session-1', sourceKey: 'source-1', criteria }), { code: 'TASK_OWNER_CRITERIA_INVALID' })
+    } finally { f.db.close() }
+  }
+})
+
+test('历史 Owner 验收记录读取不套用新接纳数量或长度限制', () => {
+  const f = fixture()
+  try {
+    for (let index = 2; index <= 40; index++) f.db.prepare('INSERT INTO task_acceptance_items(task_id,item_id,criterion,source_key) VALUES(?,?,?,?)')
+      .run('task-1', `acceptance-${index}`, '历史要求'.repeat(600), 'source-1')
+    validateTaskOwnerSchema(f.db)
+    assert.equal(f.read('task.owner').sessionId, 'session-1')
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM task_acceptance_items').get().count, 40)
+  } finally { f.db.close() }
+})
+
+test('Owner 累计验收第33项拒绝且零写，历史超限仍允许已有项幂等回读', () => {
+  const f = fixture()
+  const args = index => ({ taskId: 'task-1', itemId: `acceptance-${index}`, criterion: `条件${index}`, sourceKey: 'source-1', eventKey: `add-${index}` })
+  try {
+    for (let index = 2; index <= 32; index++) f.send('task.owner.acceptance.extend', args(index))
+    const before = f.read('task.owner')
+    assert.throws(() => f.send('task.owner.acceptance.extend', args(33)), { code: 'TASK_OWNER_CRITERIA_INVALID' })
+    assert.deepEqual(f.read('task.owner'), before)
+    assert.equal(queryTaskOwner(f.db, { kind: 'task.owner.acceptance', taskId: 'task-1' }).length, 32)
+    f.db.prepare('INSERT INTO task_acceptance_items(task_id,item_id,criterion,source_key) VALUES(?,?,?,?)').run('task-1', 'historical-extra', '历史超限', 'source-1')
+    assert.equal(f.send('task.owner.acceptance.extend', args(32)).status, 'existing')
+    assert.equal(queryTaskOwner(f.db, { kind: 'task.owner.acceptance', taskId: 'task-1' }).length, 33)
+    assert.throws(() => f.send('task.owner.acceptance.extend', args(34)), { code: 'TASK_OWNER_CRITERIA_INVALID' })
   } finally { f.db.close() }
 })

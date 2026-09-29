@@ -298,7 +298,10 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   const info = { commandId: 'command', run: { actorId: 'owner' }, unit: { constraints: [], sharedConstraints: [] } }
   for (const uatEnvironment of [null, 'uat0', 'uat10', 'main']) await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, uatEnvironment } }, info, controller), /ENGINEERING_UAT_ENVIRONMENT_REQUIRED/)
   await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, uatEnvironment: 'uat9' } }, info, controller), /ENGINEERING_UAT_BRANCH_NOT_FOUND/)
+  for (const acceptanceCriteria of [Array(33).fill('条件'), [], [' '], ['x'.repeat(2001)], [42], '条件', null])
+    await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, acceptanceCriteria } }, info, controller), { code: 'LOCAL_ACCEPTANCE_CRITERIA_REQUIRED' })
   const prepared = await registry.prepareTask(action, info, controller)
+  assert.deepEqual(prepared.input.acceptanceCriteria, ['修改value'])
   assert.deepEqual(prepared.input.editablePaths, ['value.txt'])
   assert.deepEqual(prepared.input.constraints, ['I节点新增限制'])
   assert.deepEqual(await registry.prepareTask(action, info, controller), prepared)

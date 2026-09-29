@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { canonicalExecutionJson, executionDigest, executionError } from './execution-artifacts.js'
 import { validateWorkflowRepairAdmission } from './task-workflow-contracts.js'
+import { classifyExecutionFailure } from './execution-recovery-policy.js'
 
 const identifier = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)
 const requireId = value => { if (!identifier(value)) throw executionError('INVALID_IDENTIFIER'); return value }
@@ -42,10 +43,20 @@ export function defineExecutionWorkflow(definition) {
     if (!contract || !identifier(contract.id) || !identifier(contract.version)
       || typeof contract.validateCompletion !== 'function'
       || ['readArtifacts', 'inspectRepair', 'prepareRepair'].some(key => contract[key] !== undefined && typeof contract[key] !== 'function')
-      || Object.keys(contract).some(key => !['id', 'version', 'rulesDigest', 'readArtifacts', 'validateCompletion', 'inspectRepair', 'prepareRepair'].includes(key)))
+      || Object.keys(contract).some(key => !['id', 'version', 'rulesDigest', 'resultContract', 'readArtifacts', 'validateCompletion', 'inspectRepair', 'prepareRepair'].includes(key)))
       throw executionError('WORKFLOW_OWNER_CONTRACT_INVALID')
+    if (contract.resultContract !== undefined) {
+      const result = contract.resultContract
+      if (!result || !identifier(result.id) || !identifier(result.version)
+        || Object.keys(result).some(key => !['id', 'version', 'requiredFields'].includes(key))
+        || !Array.isArray(result.requiredFields) || !result.requiredFields.length
+        || result.requiredFields.some(field => !identifier(field))
+        || new Set(result.requiredFields).size !== result.requiredFields.length)
+        throw executionError('WORKFLOW_RESULT_CONTRACT_INVALID')
+    }
     if (contract.rulesDigest !== undefined) canonicalExecutionJson(contract.rulesDigest)
-    ownerContract = freeze({ ...contract, ...(contract.rulesDigest === undefined ? {} : { rulesDigest: structuredClone(contract.rulesDigest) }) })
+    ownerContract = freeze({ ...contract, ...(contract.rulesDigest === undefined ? {} : { rulesDigest: structuredClone(contract.rulesDigest) }),
+      ...(contract.resultContract ? { resultContract: structuredClone(contract.resultContract) } : {}) })
   }
   if (!Array.isArray(definition.nodes) || !definition.nodes.length || definition.nodes.length > 32) throw executionError('WORKFLOW_NODE_LIMIT')
   const ids = new Set()
@@ -71,6 +82,7 @@ export function defineExecutionWorkflow(definition) {
   const digestInput = normalizeSource => ({ id: definition.id, version: definition.version,
     ...(ownerContract ? { ownerContract: { id: ownerContract.id, version: ownerContract.version,
       rulesDigest: ownerContract.rulesDigest ?? null,
+      ...(ownerContract.resultContract ? { resultContract: ownerContract.resultContract } : {}),
       ...Object.fromEntries(['readArtifacts', 'validateCompletion', 'inspectRepair', 'prepareRepair']
         .map(key => [key, ownerContract[key] ? normalizeSource(ownerContract[key].toString()) : null])) } } : {}),
     nodes: nodes.map(n => ({
@@ -272,7 +284,8 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         const reason = typeof reportedReason === 'string' && reportedReason.trim() ? reportedReason.slice(0, 200) : 'NO_NODE_SUBMISSION'
         evidenceRefs.push((await artifacts.put({ kind: 'execution-failure', ...identity, nodeRunId: binding.nodeRunId,
           phase: failure?.phase ?? 'execution', targetNodeId: failure?.nodeId ?? ready.nodeId,
-          code: reason, message: String(failure?.message ?? reason).slice(0, 2000) })).ref)
+          code: reason, message: String(failure?.message ?? reason).slice(0, 2000),
+          recovery: classifyExecutionFailure({ code: reason, phase: failure?.phase }) })).ref)
         await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
           ...identity, outcome: terminalDeliveryFailure ? 'failed' : 'waiting', evidenceRefs, waitReason: { kind: 'recovery', reference: reason },
         })
@@ -287,8 +300,12 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           const disposition = await admitResult('output-admission', ready.nodeId, () => nodeDefinition.admitOutput({ output,
             input: input.data, binding, signal: abort.signal }))
           if (disposition && ['waiting', 'failed'].includes(disposition.outcome)) {
+            const code = disposition.waitReason?.reference ?? 'NODE_RESULT_CONTRACT_INVALID'
+            const diagnosis = await artifacts.put({ kind: 'execution-failure', ...identity, nodeRunId: binding.nodeRunId,
+              phase: 'output-admission', targetNodeId: ready.nodeId, code, message: code,
+              producedOutputRef: result.ref, recovery: classifyExecutionFailure({ code, phase: 'output-admission' }) })
             await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', { ...identity,
-              outcome: disposition.outcome, outputRef: result.ref, evidenceRefs: [result.ref], waitReason: disposition.waitReason })
+              outcome: disposition.outcome, outputRef: result.ref, evidenceRefs: [result.ref, diagnosis.ref], waitReason: disposition.waitReason })
             return
           }
           if (disposition?.outcome !== 'succeeded') throw executionError('NODE_ADMISSION_INVALID')
@@ -314,6 +331,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         if (error instanceof ResultAdmissionError) {
           const diagnosis = await artifacts.put({ kind: 'execution-failure', ...identity, nodeRunId: binding.nodeRunId, phase: error.phase,
             targetNodeId: error.nodeId, code: error.code, message: error.message,
+            recovery: classifyExecutionFailure({ code: error.code, phase: error.phase }),
             ...(result ? { producedOutputRef: result.ref } : {}) })
           await command(`invalid-result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
             ...identity, outcome: 'failed', evidenceRefs: [...(result ? [result.ref] : []), diagnosis.ref],

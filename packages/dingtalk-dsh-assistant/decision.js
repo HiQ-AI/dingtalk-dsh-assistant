@@ -1,10 +1,11 @@
+import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { z } from 'zod'
 import { toToolJsonSchema } from './tool-schema.js'
 import { resolveTopicMessages, topicRefSchema } from './topic-model.js'
 
 export const TOPIC_TITLE_MAX_CHARS = 30
 
-const runPlan = { acceptanceCriteria: z.array(z.string().min(1)).optional(), stageTasks: z.array(z.string().min(1)).optional() }
+const runPlan = { acceptanceCriteria: acceptanceCriteriaSchema.optional(), stageTasks: z.array(z.string().min(1)).optional() }
 export { topicRefSchema }
 const unitRefSchema = z.strictObject({ unitId: z.string().min(1), unitRevision: z.number().int().positive() })
 const taskSources = { topicRefs: z.array(topicRefSchema).min(1), basisUnitRefs: z.array(unitRefSchema).min(1).optional() }
@@ -21,7 +22,7 @@ const dispatchAssessmentSchema = z.strictObject({
   workflowRefs: z.array(z.strictObject({ id: z.string().min(1), revision: z.number().int().positive() })),
   workflowReason: z.string().trim().min(1),
 })
-const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: z.array(z.string().min(1)).min(1), stageTasks: z.array(z.string().min(1)).optional(), dispatchAssessment: dispatchAssessmentSchema.optional(), ...taskSources })
+const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: acceptanceCriteriaSchema, stageTasks: z.array(z.string().min(1)).optional(), dispatchAssessment: dispatchAssessmentSchema.optional(), ...taskSources })
 const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...taskContextImpactFields, ...runPlan, ...taskSources })
 const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
 const taskCancel = z.strictObject({ kind: z.literal('task-cancel'), taskId: z.string().min(1), ...taskVersion, reason: z.string().min(1), ...taskSources })

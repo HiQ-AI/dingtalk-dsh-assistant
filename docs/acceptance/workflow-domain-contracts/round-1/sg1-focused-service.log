@@ -1,0 +1,46 @@
+✖ 正式 Web 重执行新建独立任务，持久幂等、原任务不变、恢复只留 Web 且拒绝越权阶段 (4332.8213ms)
+✖ 专业分析后在同一 Task 读取前序产物，不依赖 general intake (443.6767ms)
+✔ C13 渠道读回挂起时新业务和取消继续，ACK不冒充送达 (444.5213ms)
+✔ 调查成功产物经真实Service与工程准备进入方案节点输入，伪造前序引用拒绝 (16144.2281ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 2
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 21897.0866
+
+✖ failing tests:
+
+test at test\workflow-service.test.js:490:1
+✖ 正式 Web 重执行新建独立任务，持久幂等、原任务不变、恢复只留 Web 且拒绝越权阶段 (4332.8213ms)
+  TypeError: Cannot read properties of undefined (reading 'map')
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:582:212)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at test\workflow-service.test.js:1896:1
+✖ 专业分析后在同一 Task 读取前序产物，不依赖 general intake (443.6767ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + [
+  +   {
+  +     code: 'TASK_OWNER_ADVANCE_CONFLICT',
+  +     scope: 'owner',
+  +     taskId: 'task-71e54999f9b9b94b994120d935103bd4'
+  +   }
+  + ]
+  - []
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:1933:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ { scope: 'owner', taskId: 'task-71e54999f9b9b94b994120d935103bd4', code: 'TASK_OWNER_ADVANCE_CONFLICT' } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

@@ -1,5 +1,32 @@
 import { executionDigest, executionError } from './execution-artifacts.js'
 
+/** 平台领域决定前序证明的消费规则，公共服务不再拼装各平台参数。 */
+export function createExternalStageContracts({ workflowIds, external, readEngineeringProof, readArtifact }) {
+  return workflowIds.map(id => ({ id, version: '1', requiredOutputs: ['external-result'],
+    async prepare({ taskId, stage, plan, stageIndex, requirement, origin }) {
+      const args = { ...origin.command.args.arguments, ...requirement.target, objective: requirement.request,
+        ...(requirement.stageTargets?.[id] ? { targetId: requirement.stageTargets[id] } : {}) }
+      let materials = []
+      if (['task-uat-deployment', 'task-uat-pr-merge'].includes(id)) {
+        const completed = plan.stages.slice(0, Math.max(0, stageIndex)).filter(item => item.status === 'succeeded')
+        const merged = completed.findLast(item => item.workflowId === 'task-uat-pr-merge' && item.outputRef)
+        const engineered = completed.findLast(item => item.runId && item.workflowId.startsWith('task-engineering-'))
+        const proof = engineered ? await readEngineeringProof(taskId, engineered) : null
+        const mergedProof = merged ? await readArtifact(merged.outputRef) : null
+        if (mergedProof && (mergedProof.baseBranch === undefined || mergedProof.mergeCommitSha === undefined))
+          throw executionError('UAT_MERGE_SOURCE_INVALID')
+        if (id === 'task-uat-pr-merge' && proof) Object.assign(args, {
+          pullRequestNumber: proof.pullRequest.number, headCommitSha: proof.pullRequest.commitSha })
+        if (id === 'task-uat-deployment' && mergedProof) args.commitSha = mergedProof.mergeCommitSha
+        materials = id === 'task-uat-deployment' && mergedProof
+          ? [{ resourceRef: `uat-merge-task:${taskId}:${merged.runId}` }]
+          : proof ? [{ resourceRef: `engineering-task:${taskId}:${engineered.runId}` }] : []
+      }
+      return { input: await external.prepareRequirement({ workflowId: stage.workflowId,
+        action: { taskId, arguments: { ...args, workflowId: id }, constraints: requirement.constraints }, materials }) }
+    } }))
+}
+
 /** 平台流程已在最终节点核验平台事实；冻结此前 Host 的结果拒绝条件。 */
 export const externalWorkflowOwnerContract = Object.freeze({
   id: 'external-result', version: '1',

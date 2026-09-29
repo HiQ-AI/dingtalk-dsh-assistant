@@ -74,7 +74,7 @@ export async function validateAgentWorkResult(result, { sourceRefs = [], verifyE
 }
 
 /** 一个调查交付阶段：会话内部自主查询，Host 接纳有来源的产物。 */
-export function createInvestigationWorkflow({ provider, model, reasoningEffort, allowedTools,
+export function createLegacyInvestigationWorkflow({ provider, model, reasoningEffort, allowedTools,
   capabilityIdentity, verifyResult }) {
   if (typeof verifyResult !== 'function' || !capabilityIdentity) throw executionError('AGENT_WORK_VERIFIER_REQUIRED')
   const inputSchema = { type: 'object', properties: {
@@ -122,4 +122,143 @@ export function createInvestigationWorkflow({ provider, model, reasoningEffort, 
       },
     },
   ] }
+}
+
+const findingSchema = { type: 'object', additionalProperties: false, properties: {
+  kind: { type: 'string', enum: ['fact', 'judgment', 'recommendation'] }, statement: text, evidenceRefs: texts,
+}, required: ['kind', 'statement', 'evidenceRefs'] }
+const openItemSchema = { type: 'object', additionalProperties: false, properties: {
+  description: text, reason: text, evidenceRefs: texts,
+}, required: ['description', 'reason', 'evidenceRefs'] }
+const criterionReviewSchema = { type: 'object', additionalProperties: false, properties: {
+  itemId: text, status: { type: 'string', enum: ['satisfied', 'insufficient_evidence', 'not_applicable'] },
+  reason: text, evidenceRefs: texts,
+}, required: ['itemId', 'status', 'reason', 'evidenceRefs'] }
+export const investigationResultSchema = { ...agentWorkResultSchema, properties: {
+  ...agentWorkResultSchema.properties,
+  findings: { type: 'array', items: findingSchema }, openItems: { type: 'array', items: openItemSchema },
+  criterionReviews: { type: 'array', items: criterionReviewSchema },
+}, required: [...agentWorkResultSchema.required, 'findings', 'openItems', 'criterionReviews'] }
+
+// 先复用现有来源/权限核验，再核验领域结构；非空文字不等于业务语义已被证明。
+export async function validateInvestigationResult(result, { requirement, verifyResult, ...binding } = {}) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) throw executionError('AGENT_WORK_RESULT_INVALID')
+  const { findings, openItems, criterionReviews, ...base } = result
+  if (typeof verifyResult === 'function') await verifyResult({ ...binding, result: base, requirement })
+  await validateAgentWorkResult(base, { sourceRefs: base.evidenceRefs ?? [] })
+  const invalid = () => { throw executionError('AGENT_WORK_RESULT_INVALID') }
+  if (validateJsonSchemaValue(investigationResultSchema, result).length
+    || findings.length > 64 || openItems.length > 32 || criterionReviews.length > 32) invalid()
+  const bounded = value => typeof value === 'string' && value.trim() && value.length <= 4000
+  const refsValid = refs => refs.length <= 64 && new Set(refs).size === refs.length
+    && refs.every(ref => result.evidenceRefs.includes(ref))
+  if (findings.some(item => !bounded(item.statement) || !refsValid(item.evidenceRefs)
+    || (item.kind === 'fact' && !item.evidenceRefs.length))
+    || openItems.some(item => !bounded(item.description) || !bounded(item.reason) || !refsValid(item.evidenceRefs))
+    || criterionReviews.some(item => !bounded(item.reason) || !refsValid(item.evidenceRefs)
+      || (item.status === 'satisfied' && !item.evidenceRefs.length))) invalid()
+  const items = requirement?.acceptanceItems
+  if (!validAcceptanceItems(items)
+    || criterionReviews.length !== items.length
+    || new Set(criterionReviews.map(item => item.itemId)).size !== criterionReviews.length
+    || criterionReviews.some(item => !items.some(expected => item.itemId === expected.itemId))
+    || (result.outcome === 'completed' && (!result.evidenceRefs.length || (!findings.length && !openItems.length)))) invalid()
+  return structuredClone(result)
+}
+
+/** v5 保留历史摘要；新增领域交接只用于 v6 新运行。 */
+export function createInvestigationWorkflow(options) {
+  const legacy = createLegacyInvestigationWorkflow(options)
+  const inputSchema = structuredClone(legacy.nodes[0].inputSchema)
+  inputSchema.properties.acceptanceItems = { type: 'array', items: { type: 'object', additionalProperties: false,
+    properties: { itemId: text, criterion: text }, required: ['itemId', 'criterion'] } }
+  inputSchema.required.push('acceptanceItems')
+  inputSchema.properties.handoff = { type: 'object', additionalProperties: false, properties: {
+    kind: { type: 'string', enum: ['workflow-stage-result'] },
+    contract: { type: 'object', properties: { id: text, version: text }, required: ['id', 'version'], additionalProperties: false },
+    taskId: text, requirementRevision: { type: 'integer' }, planRevision: { type: 'integer' },
+    stageId: text, runId: text, workflowDigest: text, outputRef: text, value: { type: 'object' },
+  }, required: ['kind', 'contract', 'taskId', 'requirementRevision', 'planRevision', 'stageId', 'runId', 'workflowDigest', 'outputRef', 'value'] }
+  const rulesDigest = executionDigest({ capabilityIdentity: options.capabilityIdentity, resultContract: 'investigation-result-v2', completionScope: 'investigation-stage-v1', criterionEvidenceBinding: 'v1' })
+  const verify = args => validateInvestigationResult(args.result, { ...args, verifyResult: options.verifyResult })
+  return { id: legacy.id, version: '6', ownerContract: {
+    id: 'agent-investigation-result', version: '2', rulesDigest,
+    resultContract: { id: 'investigation-result', version: '2', requiredFields: [...investigationResultSchema.required] },
+    async validateCompletion({ output, state, artifacts, stage, stages, decision }) {
+      try {
+        const requirement = await artifacts.read(state.run.requirementRef)
+        await validateInvestigationResult(output, { requirement })
+        if (output.outcome !== 'completed' || !Array.isArray(decision?.assessments) || !Array.isArray(stages)) return false
+        const index = stages.findIndex(item => item.stage.stageId === stage?.stageId && item.stage.runId === state.run.runId)
+        if (index < 0) return false
+        // 调查结束不代表整体要求满足。显式不足只能由随后阶段的新证据补齐，不能仅改 Owner 评价。
+        for (const review of output.criterionReviews.filter(item => item.status !== 'satisfied')) {
+          const assessment = decision.assessments.find(item => item.itemId === review.itemId)
+          if (assessment?.status !== 'satisfied') continue
+          const supported = stages.slice(index + 1).some(item => {
+            const refs = [item.stage.outputRef, ...(item.stage.evidenceRefs ?? [])]
+            if (!assessment.evidenceRefs?.some(ref => refs.includes(ref))) return false
+            return item.contractId !== 'agent-investigation-result'
+              || item.output.criterionReviews?.some(value => value.itemId === review.itemId && value.status === 'satisfied')
+          })
+          if (!supported) return false
+        }
+        return true
+      }
+      catch { return false }
+    },
+  }, nodes: [
+    { ...legacy.nodes[0], version: '2', inputSchema, outputSchema: investigationResultSchema, rulesDigest,
+      prompt: `${investigationStagePrompt}\n本版本最终提交还须包含 findings、openItems、criterionReviews。findings 是最多64项的 {kind:fact|judgment|recommendation,statement,evidenceRefs}；事实须有证据。openItems 是最多32项的 {description,reason,evidenceRefs}，记录未知项及尚未执行的后续交付。criterionReviews 必须逐项覆盖 Host 提供的 acceptanceItems，原样使用每项 itemId，不得按序号生成、缺失或重复；每项包含 status:satisfied|insufficient_evidence|not_applicable、具体 reason 和 evidenceRefs。satisfied 必须有当前证据；尚未编码、部署或验收的整体要求用 insufficient_evidence，不能因调查完成声称满足。not_applicable 需说明为何不属于调查职责。所有嵌套 evidenceRefs 必须出现在顶层 evidenceRefs。handoff 是 Host 已核验的前序阶段产物及版本引用，不得自行修改或补造身份。`,
+      validateOutput: ({ output, input, binding }) => verify({ result: output, requirement: input,
+        runId: binding.runId, taskId: binding.taskId, generation: binding.generation }),
+      async admitOutput({ output, input, binding }) {
+        await verify({ result: output, requirement: input, runId: binding.runId, taskId: binding.taskId, generation: binding.generation })
+        return output.outcome === 'needs_input'
+          ? { outcome: 'waiting', waitReason: { kind: 'input', reference: 'AGENT_WORK_NEEDS_INPUT' } }
+          : output.outcome === 'blocked'
+          ? { outcome: 'failed', waitReason: { kind: 'recovery', reference: 'AGENT_WORK_BLOCKED' } }
+          : { outcome: 'succeeded' }
+      },
+    },
+    { ...legacy.nodes[1], version: '2', rulesDigest,
+      inputSchema: { type: 'object', properties: { requirement: inputSchema, result: investigationResultSchema }, required: ['requirement', 'result'], additionalProperties: false },
+      outputSchema: investigationResultSchema,
+      async execute({ input, runId, taskId, generation, signal }) {
+        signal.throwIfAborted()
+        const result = await verify({ result: input.result, requirement: input.requirement, runId, taskId, generation, signal })
+        signal.throwIfAborted()
+        return result
+      },
+    },
+  ] }
+}
+
+/** 领域输入只消费 Host 核验的前序引用，原始材料保持独立。 */
+function validAcceptanceItems(items) {
+  return Array.isArray(items) && items.length > 0 && items.length <= 32
+    && items.every(item => item && typeof item.itemId === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(item.itemId)
+      && typeof item.criterion === 'string' && item.criterion.trim() && item.criterion.length <= 2000)
+    && new Set(items.map(item => item.itemId)).size === items.length
+}
+
+export function createInvestigationStageContract({ queryScope, queryCatalog, readSources, readAcceptanceItems }) {
+  return { id: 'task-investigation', version: '1', materialPolicy: {
+    roles: ['source', 'supplemental'], required: [], singleton: [], maxCount: 256, maxBytes: 262144,
+  }, async prepare({ taskId, requirement, origin, handoff, definitionVersion = '6' }) {
+    const scope = queryScope({ ...requirement.scope, actorId: origin.run.actorId, predecessorOutputRef: handoff?.outputRef ?? null })
+    const unique = new Map()
+    for (const material of [...await readSources(requirement), ...(requirement.materials ?? [])]) {
+      const prior = unique.get(material.id)
+      if (prior && executionDigest(prior) !== executionDigest(material)) throw executionError('WORKFLOW_MATERIAL_ID_CONFLICT')
+      unique.set(material.id, material)
+    }
+    const legacy = definitionVersion === '5'
+    const acceptanceItems = legacy ? null : await readAcceptanceItems(taskId)
+    if (!legacy && !validAcceptanceItems(acceptanceItems)) throw executionError('INVESTIGATION_ACCEPTANCE_ITEMS_INVALID')
+    return { input: { request: requirement.request, constraints: requirement.constraints,
+      acceptanceCriteria: requirement.acceptanceCriteria, scope,
+      context: { target: requirement.target, ...(legacy && handoff ? { predecessor: handoff.value } : {}), ...queryCatalog(scope) }, materials: [...unique.values()],
+      ...(!legacy ? { acceptanceItems: acceptanceItems.map(({ itemId, criterion }) => ({ itemId, criterion })), ...(handoff ? { handoff } : {}) } : {}) } }
+  } }
 }

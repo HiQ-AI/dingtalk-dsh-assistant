@@ -1,0 +1,966 @@
+✔ 历史成功阶段观察沿用旧事件身份，不唤醒已完成Owner (278.6283ms)
+✔ 原生维护恢复仅处理重复观察，重启保留原complete及错误回合与事件 (461.4793ms)
+✔ 完成观察恢复拒绝新业务事件 (466.9943ms)
+✔ 完成观察恢复拒绝不同产出 (489.3877ms)
+✔ 完成观察恢复拒绝权限变化 (449.1364ms)
+✔ 完成观察恢复拒绝要求变化 (518.7262ms)
+✔ 完成观察恢复拒绝计划变化 (441.9238ms)
+✔ 完成观察恢复拒绝新业务执行 (471.2855ms)
+✔ 完成观察恢复拒绝节点未排空 (379.3566ms)
+✔ 完成观察恢复拒绝阶段未成功 (366.4488ms)
+✔ 完成观察恢复拒绝原完成证明未应用 (353.6839ms)
+✔ 完成观察恢复拒绝完成后接纳业务决定 (339.1335ms)
+✔ 完成观察恢复拒绝不确定外部效果 (345.6546ms)
+✔ 启动材料引用由Host列举，查询资源和其他事项引用不能进入材料等待 (2.0288ms)
+✔ answer objective进入消息Agent并持久产出、零Task，补读及重启不重执行或重发 (349.0467ms)
+✔ 慢查询不堵塞其他消息判断和独立Agent执行 (348.2048ms)
+✔ 错误查询资源引用在意图落账前纠正，不生成材料等待或重复执行 (304.979ms)
+✔ 异步问答完成即派发后继，不依赖再次process或恢复轮询 (325.7445ms)
+✔ 同话题后续问题读取既有话题，但创建独立消息会话和发送者范围 (316.8503ms)
+✔ 需要补充创建message request，授权答复沿用会话递增输入版本 (334.7205ms)
+✔ 新目录统一调查入口，旧材料流程不再可选 (217.1652ms)
+✔ 能力受阻如实结束为blocked，伪造工具证据不能成为回答 (533.7542ms)
+✔ 通知发送未知后重启只补读原通知，不重复Agent执行与外发 (294.0051ms)
+✖ 已排队旧answer.text明确拒绝，不由新Agent猜测旧合同 (212.1466ms)
+✔ 消息trace只返回Agent摘要、耗时和绑定会话，长产出按需分页且不允许跨消息工件 (252.4682ms)
+✔ Agent资源权限独立于发送者，各发送者使用相同职责范围 (275.9593ms)
+✖ 单Task恢复失败和正在执行Task不能阻止其它恢复与通知扫描 (9.5958ms)
+✔ 大量unknown通知不能挤掉新prepared；对账游标可到下一页 (1051.9759ms)
+✔ 旧活动Task不会被超过200条新终态任务挤出恢复索引 (1112.0022ms)
+✔ 维护HTTP仅受信本机身份可改，严格参数、幂等与过期许可均校验 (394.076ms)
+✖ 完成观察维护HTTP复用原生完成证明，拒绝跨源和伪造身份并校验CAS (436.1733ms)
+✖ service真实恢复入口不重派确定性错误，只有明确暂态可有限重试 (374.2625ms)
+✖ 预算续行真实HTTP与Controller保留54次消耗、验收一次、旧失败领取及阶段门禁 (337.759ms)
+✔ 默认日常能力按当前原文生成 Markdown，并拒绝把排查目标当整理完成 (1.1526ms)
+✔ 平台附件只读能力绑定当前 Task 消息、附件 ID 与来源版本，并独立二次回读 (0.7649ms)
+✔ 平台附件变更、跨群回读和二次内容漂移均不能成为通用任务证据 (0.4101ms)
+✔ 短指代消息优先呈现紧邻来源的话题，显式引用仍优先 (8.7207ms)
+✔ 明确交办与问题报告分开准入 (0.9525ms)
+✔ 群回复署名只取唯一明确职责，不默认身份，不重复或注入内部信息 (1.1949ms)
+✔ 状态问句支持任意配置名称及别名，改名和清空后不保留旧身份捷径 (533.3108ms)
+✔ 内置进展查询限制本群与八项候选，流程结果可审计 (1.6484ms)
+✔ 渠道回读归一化空白及已观察inline-code样式，正文差异仍阻止送达 (0.8428ms)
+✔ DWS 发送 ACK 的实际 result.openTaskId 可用于独立回读 (0.1742ms)
+✔ 群职责指定的日常代答署名在通知准备时固化且不会重复附加 (0.2086ms)
+✔ 群职责贯穿即时进展查询的持久通知正文与引用来源 (267.4825ms)
+✔ 群职责调整后已送达通知保留原正文，新通知仍可继续发送 (346.474ms)
+✔ 工作流通知引用来源消息，缺来源才发送普通群消息 (0.8069ms)
+✖ 正式 Web 重执行新建独立任务，持久幂等、原任务不变、恢复只留 Web 且拒绝越权阶段 (1513.8596ms)
+✔ I 只能提交目标：Task 与 Owner 原子接纳，Owner 未建计划前没有业务 Run (222.0642ms)
+✖ 真实同库消息接纳→固定Task执行→看板结果；重复入站不重复创建 (254.9361ms)
+✔ 没有 Owner 的已成功问答计划显示完成，结果中的未知不制造等待；确认阶段仍等待 (233.8989ms)
+✖ 流程成功后由同一Task负责人验收并只汇报一次最终结果 (263.6554ms)
+✔ 最终报告领取前新增目标使旧完成通知失效，已完成流程不重跑 (240.593ms)
+✖ 同一任务承接与最终报告并存时只按精确通知身份纠正最终报告 (261.3065ms)
+✖ 仅把已完成任务报告改成中文只唤醒Owner，不重跑排查或新增Run (1956.8819ms)
+✖ Owner长事件积压分页读取全部内容后才推进同一Task水位 (443.0262ms)
+✔ 账号问题与“这不是让你去查吗”回到同一Task，不重建或丢失原上下文 (344.9417ms)
+✔ 同一话题含两个Task时按明确目标绑定短追问，不默认最近执行Run (320.8627ms)
+✔ 模型要求为非本人创建Task仍被Host拒绝，未受权群也拒绝 (165.5659ms)
+✔ 无可信消息编辑版本不能把变更正文当重复消息或新授权 (151.2384ms)
+✔ Web与IM引用同一澄清首终态生效，无权拒绝且答复不新建消息或重跑S (201.5807ms)
+✔ 纯话题事实同库沉淀，后续任务读取原文并强制继承话题约束 (249.2248ms)
+✔ 旧完成Task只读候选返回旧结果，不调用新controller或恢复旧引擎 (196.4988ms)
+✔ 群集合查询不要求单个Task身份 (200.8927ms)
+✔ 必需附件正文进入Task固定输入且保留意图约束 (280.0709ms)
+✔ 通知ACK丢失只回查不重发；当前披露不允许时零发送 (260.8996ms)
+✔ 同文高版本编辑复用原Task且别名重投回原run (228.8478ms)
+✔ 群职责允许明确点名交办创建任务，普通问题报告仍无创建权 (387.1476ms)
+✔ 本机操作者逐条重处理旧澄清，旧请求失效且有命令消息拒绝重跑 (278.89ms)
+✔ 无引用的先别管它静默收束，不追问也不创建任务 (146.0869ms)
+✔ 第三方任务已创建进展同步即使含@也静默，不生成澄清或业务任务 (143.3424ms)
+✔ 已送达回复引用可将第三方进展静默绑定到唯一话题，且旧消息可确定性补录 (215.3283ms)
+✔ 已完成的纯排查任务再次收到相同问题反馈时提出修复授权问题 (176.5375ms)
+✔ 旧任务缺标题且长目标进入R候选时仍能计算材料摘要 (1774.3115ms)
+✔ 旧排查任务的肯定答复只授权同一消息继续准入，随后可创建新工作流任务 (294.5769ms)
+✔ 本人可答复他人旧排查澄清，其他群成员不能冒用且不阻断消息接收 (374.8195ms)
+✔ 明确问小助手审核问题是否部署时即使I误判无动作也回读群任务 (217.2542ms)
+✔ 审核状态问句、两个任务说明和引用问题清单归为同一话题，不误建三个任务 (272.8592ms)
+✔ 恢复扫描先重试一次无回执只读查询，再完成原命令 (153.8086ms)
+✔ 回声先启动模型而通知随后读回时，隔离取消原调用且迟到结果不影响 drained (207.9713ms)
+✔ 已回读的自身澄清通知不再作为新消息入站，收发信箱分别投影 (181.3892ms)
+✔ 受管撤回逐条核验负责人原消息，回读后补发保留原通知 (277.8557ms)
+✔ 群职责进入 I 而不占用 S/R；任务历史可由固定材料键读取 (193.3951ms)
+✔ 群成员可核对本群旧任务摘要和UAT2交付状态，跨群历史不可读取 (198.1265ms)
+✔ 旧群历史缺发送人字段时仍能写入快照 (159.0082ms)
+✔ I 的流程提示不直接派发；专业目录供 Owner 选择，缺适配器不执行外部效果 (515.7309ms)
+✔ 受信外部适配器齐备时目录可见，I 仍不能直接启动外部效果 (694.2886ms)
+✔ 原消息否定编辑取消原Task，不发第二个任务且屏障释放 (372.1885ms)
+✔ 运行中原消息修订更新 Task 要求并保持旧 Run 输入冻结 (452.957ms)
+✔ 新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入不执行，暂停不恢复 (387.2939ms)
+✔ Controller未排空错误投影等待原因，不能显示正常执行 (232.6733ms)
+✔ Web事件已准备后中断由恢复通路接纳一次，后续恢复不重复输入 (280.6069ms)
+✔ C01 媒体连接器挂起不阻durable接收和独立SQLite读回 (253.4758ms)
+✔ 只关联话题时意图仍读到已执行Task及结果限制，运行成功不冒充目标达成 (321.5369ms)
+✖ 方案阶段完成后等待确认，确认沿用业务Task并只启动下一阶段 (299.0775ms)
+✖ UAT 缺受信适配器时已完成分析保留，Owner 后续阶段明确受阻 (320.5318ms)
+✖ 阶段间取消后经原发送人重新授权，只替换未完成后缀 (272.6443ms)
+✔ 已绑定Owner会话确实缺失时换代并在原Task恢复，旧任务命令不重复创建 (246.4815ms)
+✖ 专业分析后在同一 Task 读取前序产物，不依赖 general intake (269.402ms)
+✖ Owner 可在零阶段 Task 选择共享调查并按来源完成原文整理 (265.8907ms)
+✖ 执行中收到追加阶段意图时保留当前Run，完成后从核验产物启动后继 (384.0161ms)
+✖ 纯排查完成后续办仍用原业务Task，原Run成功证据不重跑 (298.2195ms)
+✖ C13 渠道读回挂起时新业务和取消继续，ACK不冒充送达 (345.9914ms)
+✖ 只读轨迹 API 回读真实节点、话题批次与已绑定 Owner，并隔离其他群 (268.7355ms)
+✖ 步骤产出只投影业务正文及限制，不泄露任意对象字段 (291.496ms)
+✔ 当前工程和分析节点逐类投影，数量去重且准备态不冒充执行 (3.4607ms)
+✖ 只有局部替换的工程方案仍展示真实产出，分页不丢修改前后内容 (277.3381ms)
+✔ 只读历史执行 API 不把预留 Owner 身份伪装成已绑定会话 (225.0444ms)
+✔ 消息证据 API 仅回读绑定原文并以 hash 固定分页版本 (418.2528ms)
+✔ 超过 200 个话题时明确引用仍找回最早话题且不建新 Task (1162.8243ms)
+✖ 同话题一千条相同事实在 IB 合并投影，跨发送人或不同约束不合并 (7928.8383ms)
+✔ 原发送人撤销仅排查条件可替换历史，另一发送人不得替换或派发 (441.9452ms)
+✔ 局部撤销范围及模型误报整话题均保留其他任务限制且零派发 (395.4041ms)
+✔ 普通 answer 的 Host 门禁拒绝已排队的旧参数与任务参数，且不豁免创建权限 (170.6637ms)
+✔ 普通 answer 回复原任务消息的编辑，不被误当新增事项也不修改原任务 (269.2768ms)
+✔ 普通 answer 对旧任务仅允许本群只读答复，跨群仍拒绝 (184.8838ms)
+✔ 普通 answer 可向 owner 引用回复，重复处理不重发且不创建任务 (205.2636ms)
+✔ 普通 answer 可向 participant 引用回复，重复处理不重发且不创建任务 (188.9791ms)
+✔ 普通 answer 保留 none 通知门禁 (178.337ms)
+✔ 普通 answer 保留 denied 通知门禁 (187.5572ms)
+✔ 普通 answer 发送结果未知后重启只补读原通知，不重复派发 (185.263ms)
+✖ 方案节点仅返回真实工件路径，不附正文、摘要或下载名称 (230.2562ms)
+✔ 业务验收产出独立显示验收项、预期和实际结果 (0.5035ms)
+✔ 开发目标缺失或不明确先询问具体UAT：修复合并问题/undefined (184.2676ms)
+✔ 开发目标缺失或不明确先询问具体UAT：修复合并问题/uat1 (183.615ms)
+✔ 开发目标缺失或不明确先询问具体UAT：提交到uat1或uat2/uat1 (181.2716ms)
+✔ 开发目标缺失或不明确先询问具体UAT：提交到uat1～9/uat1 (189.5902ms)
+✔ UAT澄清回答绑定同一请求并进入任务目标，不猜环境或重新拆消息 (277.8917ms)
+✔ 本地验收产出：条件、方案与目录准确展示且不泄漏执行参数 (0.4322ms)
+✔ 本地验收产出：阶段耗时、预期实际与清理结果进入同一报告 (0.2636ms)
+✔ 只读本地验收明确没有业务数据写入，不冒充删除数据 (0.0786ms)
+✔ 本地验收产出：dataCleaned未确认不能显示整体通过 (0.0794ms)
+✔ 本地验收产出：processStopped未确认不能显示整体通过 (0.037ms)
+✔ 本地验收产出：业务失败和缺失实际结果不伪装通过 (0.0688ms)
+✔ 本地验收产出：执行中、未知状态及空回执明确标记未确认 (0.0583ms)
+✖ 暂态恢复三次上限与退避持久化 ECONNRESET，重开控制账不能重置额度 (264.1249ms)
+✖ 暂态恢复三次上限与退避持久化 ENGINEERING_REMOTE_READ_TRANSIENT，重开控制账不能重置额度 (240.0464ms)
+✖ 交付只读恢复 succeeded：既有效果不重发且仅成功恢复原节点 (244.7834ms)
+✖ 交付只读恢复 unknown：既有效果不重发且仅成功恢复原节点 (244.9707ms)
+✖ 交付只读恢复 failed：既有效果不重发且仅成功恢复原节点 (275.1005ms)
+✖ 交付只读恢复 throws：既有效果不重发且仅成功恢复原节点 (225.0583ms)
+✖ 交付只读恢复屏障 maintenance (229.6792ms)
+✖ 交付只读恢复屏障 pause (228.5796ms)
+✖ 交付只读恢复屏障 stop (229.1771ms)
+✖ 交付只读恢复屏障 input (227.7138ms)
+✖ 交付只读恢复屏障 maintenance-during-read (231.2635ms)
+✖ UAT Web 审批完整请求ID uat-deployment/approved：可见、授权、首终态与Owner事件幂等 (235.599ms)
+✖ UAT Web 审批完整请求ID uat-deployment/rejected：可见、授权、首终态与Owner事件幂等 (257.3306ms)
+✖ UAT Web 审批完整请求ID uat-rebuild/approved：可见、授权、首终态与Owner事件幂等 (250.9295ms)
+✖ 普通UAT构建失败收口 receipt=true：单次发送、保留失败证据且不反复恢复 (263.6351ms)
+✖ 普通UAT构建失败收口 receipt=false：单次发送、保留失败证据且不反复恢复 (269.89ms)
+✖ 普通UAT构建失败收口 receipt=observed：单次发送、保留失败证据且不反复恢复 (261.5427ms)
+✖ 任务投影只在真实等待时显示原因，完成后隐藏遗留原因且不改历史 (291.7763ms)
+✖ 真实Owner路径保留工程本地验收与合并前缀，失败第三阶段重建后可结案 (280.9541ms)
+✖ 调查成功产物经真实Service与工程准备进入方案节点输入，伪造前序引用拒绝 (1016.3407ms)
+✔ 渠道inline-code转换可独立回读，值变化仍拒绝 (0.7604ms)
+✖ 新版任务真实HTTP归档仅完成可用，幂等持久且不改变节点产物或发送消息 (280.55ms)
+✔ 新版任务归档拒绝运行中与等待中任务且不记录归档事件 (318.4759ms)
+✖ 同任务汇总卡片并分页历次执行：取消保留阶段成果、旧详情与权限隔离 (222.9399ms)
+✖ 当前完整详情保留已成功前段，替换删除新增后段并隔离同名步骤 (231.9753ms)
+✖ 当前完整详情只取最新节点代次，需求更新后旧结果及正文立即失效 (247.8316ms)
+✖ 当前完整详情拒绝持续变化的版本，不交付混合计划快照 (260.3292ms)
+✔ 历史并发分叉保持一张活动卡片，相同标题的独立任务不合并 (0.4799ms)
+✔ 完整任务目录超过200条运行仍保留旧任务，投影不超过原生RPC队列 (5210.6526ms)
+✔ 待澄清和待材料有各自状态及原因，真正失败仍为关联受阻 (217.4601ms)
+ℹ tests 165
+ℹ suites 0
+ℹ pass 116
+ℹ fail 49
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 50077.8995
+
+✖ failing tests:
+
+test at test\workflow-agent-service.test.js:211:1
+✖ 已排队旧answer.text明确拒绝，不由新Agent猜测旧合同 (212.1466ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /明确问题目标/. Input:
+
+  '请求未执行：请说明需要回答的具体问题'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-agent-service.test.js:220:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '请求未执行：请说明需要回答的具体问题',
+    expected: /明确问题目标/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test\workflow-recovery.test.js:9:1
+✖ 单Task恢复失败和正在执行Task不能阻止其它恢复与通知扫描 (9.5958ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + []
+  - [
+  -   'bad',
+  -   'good'
+  - ]
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-recovery.test.js:14:51)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'bad', 'good' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:58:1
+✖ 完成观察维护HTTP复用原生完成证明，拒绝跨源和伪造身份并校验CAS (436.1733ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'block'
+  - 'complete'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:65:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'block',
+    expected: 'complete',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:98:1
+✖ service真实恢复入口不重派确定性错误，只有明确暂态可有限重试 (374.2625ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:125:1
+✖ 预算续行真实HTTP与Controller保留54次消耗、验收一次、旧失败领取及阶段门禁 (337.759ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:482:1
+✖ 正式 Web 重执行新建独立任务，持久幂等、原任务不变、恢复只留 Web 且拒绝越权阶段 (1513.8596ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'failed'
+  - 'succeeded'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:509:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'failed',
+    expected: 'succeeded',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:708:1
+✖ 真实同库消息接纳→固定Task执行→看板结果；重复入站不重复创建 (254.9361ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'waiting'
+  - 'completed'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:724:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'waiting',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:757:1
+✖ 流程成功后由同一Task负责人验收并只汇报一次最终结果 (263.6554ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  0 !== 1
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:770:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:794:1
+✖ 同一任务承接与最终报告并存时只按精确通知身份纠正最终报告 (261.3065ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+    assert.ok(receipt && final && receipt.id !== final.id)
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:812:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:826:1
+✖ 仅把已完成任务报告改成中文只唤醒Owner，不重跑排查或新增Run (1956.8819ms)
+  AssertionError [ERR_ASSERTION]: {"commandId":"topic-3ddb919fddc09394bf98f92d2de90ea7:2:msg-6db7214000136cb8a520d8c7bcdd6ce8166ceee7:u0:0","kind":"report","args":{"taskId":"task-71e54999f9b9b94b994120d935103bd4","arguments":{"language":"zh-CN"},"binding":{"kind":"binding","disposition":"existing","candidateId":"run-a8485300b9729276f8b2204adae1084e7f5c2031810a73cbb47e704452cf275a","evidence":["原任务"],"topicId":"topic-3ddb919fddc09394bf98f92d2de90ea7","taskId":"task-71e54999f9b9b94b994120d935103bd4","runId":"run-a8485300b9729276f8b2204adae1084e7f5c2031810a73cbb47e704452cf275a","goal":"排查已给材料","historyRef":"workflow-task-history:task-71e54999f9b9b94b994120d935103bd4","state":"failed","relevantTime":"2026-09-29T01:23:19.691Z","explicitReferenceMatches":[],"distinguishingFacts":["执行状态：blocked；业务目标：insufficient_evidence"],"sourceRefs":[],"versions":{"requirement":0},"omissions":[{"field":"sourceRefs","count":1}],"recentSourceMatch":true,"target":{"candidateId":"run-a8485300b9729276f8b2204adae1084e7f5c2031810a73cbb47e704452cf275a","topicId":"topic-3ddb919fddc09394bf98f92d2de90ea7","taskId":"task-71e54999f9b9b94b994120d935103bd4","runId":"run-a8485300b9729276f8b2204adae1084e7f5c2031810a73cbb47e704452cf275a","goal":"排查已给材料","historyRef":"workflow-task-history:task-71e54999f9b9b94b994120d935103bd4","state":"failed","relevantTime":"2026-09-29T01:23:19.691Z","explicitReferenceMatches":[],"distinguishingFacts":["执行状态：blocked；业务目标：insufficient_evidence"],"sourceRefs":[],"versions":{"requirement":0},"omissions":[{"field":"sourceRefs","count":1}],"recentSourceMatch":true}},"constraints":[],"requiredExecutionMaterials":[],"replyPolicy":"receipt"},"dependsOn":[],"id":"topic-3ddb919fddc09394bf98f92d2de90ea7:2:msg-6db7214000136cb8a520d8c7bcdd6ce8166ceee7:u0:0","runId":"msg-6db7214000136cb8a520d8c7bcdd6ce8166ceee7","unitId":"msg-6db7214000136cb8a520d8c7bcdd6ce8166ceee7:u0","revision":0,"topicId":"topic-3ddb919fddc09394bf98f92d2de90ea7","topicInputRevision":2,"status":"unknown","leaseEpoch":1,"createdAt":"2026-09-29T01:23:19.764Z","startedAt":"2026-09-29T01:23:19.767Z","result":null,"error":"TASK_REPORT_NOT_READY","completedAt":"2026-09-29T01:23:19.769Z"}
+  + actual - expected
+
+  + 'unknown'
+  - 'applied'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:851:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'unknown',
+    expected: 'applied',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:865:1
+✖ Owner长事件积压分页读取全部内容后才推进同一Task水位 (443.0262ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + [
+  +   {
+  +     code: 'TASK_OWNER_ADVANCE_CONFLICT',
+  +     scope: 'owner',
+  +     taskId: 'task-71e54999f9b9b94b994120d935103bd4'
+  +   }
+  + ]
+  - []
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:895:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ { scope: 'owner', taskId: 'task-71e54999f9b9b94b994120d935103bd4', code: 'TASK_OWNER_ADVANCE_CONFLICT' } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:1718:1
+✖ 方案阶段完成后等待确认，确认沿用业务Task并只启动下一阶段 (299.0775ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + [
+  +   {
+  +     code: 'TASK_OWNER_WAIT_CONFLICT',
+  +     scope: 'owner',
+  +     taskId: 'task-71e54999f9b9b94b994120d935103bd4'
+  +   }
+  + ]
+  - []
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:1755:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ { scope: 'owner', taskId: 'task-71e54999f9b9b94b994120d935103bd4', code: 'TASK_OWNER_WAIT_CONFLICT' } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:1774:1
+✖ UAT 缺受信适配器时已完成分析保留，Owner 后续阶段明确受阻 (320.5318ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'blocked'
+  - 'succeeded'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:1799:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'blocked',
+    expected: 'succeeded',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:1804:1
+✖ 阶段间取消后经原发送人重新授权，只替换未完成后缀 (272.6443ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + [
+  +   {
+  +     code: 'TASK_OWNER_WAIT_CONFLICT',
+  +     scope: 'owner',
+  +     taskId: 'task-71e54999f9b9b94b994120d935103bd4'
+  +   }
+  + ]
+  - []
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:1836:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ { scope: 'owner', taskId: 'task-71e54999f9b9b94b994120d935103bd4', code: 'TASK_OWNER_WAIT_CONFLICT' } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:1887:1
+✖ 专业分析后在同一 Task 读取前序产物，不依赖 general intake (269.402ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + [
+  +   {
+  +     code: 'TASK_OWNER_ADVANCE_CONFLICT',
+  +     scope: 'owner',
+  +     taskId: 'task-71e54999f9b9b94b994120d935103bd4'
+  +   }
+  + ]
+  - []
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:1924:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ { scope: 'owner', taskId: 'task-71e54999f9b9b94b994120d935103bd4', code: 'TASK_OWNER_ADVANCE_CONFLICT' } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:1936:1
+✖ Owner 可在零阶段 Task 选择共享调查并按来源完成原文整理 (265.8907ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + [
+  +   {
+  +     code: 'TASK_OWNER_WAIT_CONFLICT',
+  +     scope: 'owner',
+  +     taskId: 'task-71e54999f9b9b94b994120d935103bd4'
+  +   }
+  + ]
+  - []
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:1963:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ { scope: 'owner', taskId: 'task-71e54999f9b9b94b994120d935103bd4', code: 'TASK_OWNER_WAIT_CONFLICT' } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:1968:1
+✖ 执行中收到追加阶段意图时保留当前Run，完成后从核验产物启动后继 (384.0161ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + [
+  +   {
+  +     code: 'TASK_OWNER_WAIT_CONFLICT',
+  +     scope: 'owner',
+  +     taskId: 'task-71e54999f9b9b94b994120d935103bd4'
+  +   }
+  + ]
+  - []
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:2015:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ { scope: 'owner', taskId: 'task-71e54999f9b9b94b994120d935103bd4', code: 'TASK_OWNER_WAIT_CONFLICT' } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:2024:1
+✖ 纯排查完成后续办仍用原业务Task，原Run成功证据不重跑 (298.2195ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + [
+  +   {
+  +     code: 'TASK_OWNER_WAIT_CONFLICT',
+  +     scope: 'owner',
+  +     taskId: 'task-71e54999f9b9b94b994120d935103bd4'
+  +   }
+  + ]
+  - []
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:2055:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ { scope: 'owner', taskId: 'task-71e54999f9b9b94b994120d935103bd4', code: 'TASK_OWNER_WAIT_CONFLICT' } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:2070:1
+✖ C13 渠道读回挂起时新业务和取消继续，ACK不冒充送达 (345.9914ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'failed'
+  - 'succeeded'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:2080:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'failed',
+    expected: 'succeeded',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:2089:1
+✖ 只读轨迹 API 回读真实节点、话题批次与已绑定 Owner，并隔离其他群 (268.7355ms)
+  TypeError: Cannot read properties of null (reading 'text')
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:2124:24)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test\workflow-service.test.js:2147:1
+✖ 步骤产出只投影业务正文及限制，不泄露任意对象字段 (291.496ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2222:1
+✖ 只有局部替换的工程方案仍展示真实产出，分页不丢修改前后内容 (277.3381ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2317:1
+✖ 同话题一千条相同事实在 IB 合并投影，跨发送人或不同约束不合并 (7928.8383ms)
+  Error: database or disk is full
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'ERR_SQLITE_ERROR',
+    sqliteCode: 13
+  }
+
+test at test\workflow-service.test.js:2537:1
+✖ 方案节点仅返回真实工件路径，不附正文、摘要或下载名称 (230.2562ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2686:81
+✖ 暂态恢复三次上限与退避持久化 ECONNRESET，重开控制账不能重置额度 (264.1249ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2686:81
+✖ 暂态恢复三次上限与退避持久化 ENGINEERING_REMOTE_READ_TRANSIENT，重开控制账不能重置额度 (240.0464ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2716:69
+✖ 交付只读恢复 succeeded：既有效果不重发且仅成功恢复原节点 (244.7834ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2716:69
+✖ 交付只读恢复 unknown：既有效果不重发且仅成功恢复原节点 (244.9707ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2716:69
+✖ 交付只读恢复 failed：既有效果不重发且仅成功恢复原节点 (275.1005ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2716:69
+✖ 交付只读恢复 throws：既有效果不重发且仅成功恢复原节点 (225.0583ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2744:90
+✖ 交付只读恢复屏障 maintenance (229.6792ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2744:90
+✖ 交付只读恢复屏障 pause (228.5796ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2744:90
+✖ 交付只读恢复屏障 stop (229.1771ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2744:90
+✖ 交付只读恢复屏障 input (227.7138ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2744:90
+✖ 交付只读恢复屏障 maintenance-during-read (231.2635ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2774:140
+✖ UAT Web 审批完整请求ID uat-deployment/approved：可见、授权、首终态与Owner事件幂等 (235.599ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2774:140
+✖ UAT Web 审批完整请求ID uat-deployment/rejected：可见、授权、首终态与Owner事件幂等 (257.3306ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2774:140
+✖ UAT Web 审批完整请求ID uat-rebuild/approved：可见、授权、首终态与Owner事件幂等 (250.9295ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2837:44
+✖ 普通UAT构建失败收口 receipt=true：单次发送、保留失败证据且不反复恢复 (263.6351ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2837:44
+✖ 普通UAT构建失败收口 receipt=false：单次发送、保留失败证据且不反复恢复 (269.89ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2837:44
+✖ 普通UAT构建失败收口 receipt=observed：单次发送、保留失败证据且不反复恢复 (261.5427ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2849:1
+✖ 任务投影只在真实等待时显示原因，完成后隐藏遗留原因且不改历史 (291.7763ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'waiting'
+  - 'completed'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:2874:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'waiting',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:2881:1
+✖ 真实Owner路径保留工程本地验收与合并前缀，失败第三阶段重建后可结案 (280.9541ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:2955:1
+✖ 调查成功产物经真实Service与工程准备进入方案节点输入，伪造前序引用拒绝 (1016.3407ms)
+  AssertionError [ERR_ASSERTION]: {"plan":{"task":{"taskId":"task-71e54999f9b9b94b994120d935103bd4","requirementRevision":1,"planRevision":1,"requirementRef":"sha256-e214fdf932f184f8bb171125b5ba9b9fde404e589cee2a03aed0a8df8fe89b05.json","planRequirementRevision":1,"controlRevision":1,"controlState":"active","status":"blocked","planStatus":"blocked","createdAt":"2026-09-29T01:23:56.074Z","updatedAt":"2026-09-29T01:23:56.171Z"},"stages":[{"stageId":"stage-1","position":0,"workflowId":"task-investigation","workflowDigest":"87bcd508a1ade08e99d8880de889aa10563fe00b0bf49e952344c2bb81bcab57","unavailableReason":null,"requirementRef":"sha256-b524600d6117f0a6002c5ec1fff99197ac888b65f0c148057c6081c4f197c788.json","predecessorOutputRef":null,"gate":"none","status":"blocked","attempt":1,"runId":"run-a8485300b9729276f8b2204adae1084e7f5c2031810a73cbb47e704452cf275a","outputRef":null,"evidenceRefs":[],"confirmedOutputRef":null},{"stageId":"stage-2","position":1,"workflowId":"task-engineering","workflowDigest":null,"unavailableReason":null,"requirementRef":null,"predecessorOutputRef":null,"gate":"none","status":"blocked","attempt":1,"runId":null,"outputRef":null,"evidenceRefs":[],"confirmedOutputRef":null}]},"state":null}
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:3006:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:3038:1
+✖ 新版任务真实HTTP归档仅完成可用，幂等持久且不改变节点产物或发送消息 (280.55ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'waiting'
+  - 'completed'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:3048:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'waiting',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:3115:1
+✖ 同任务汇总卡片并分页历次执行：取消保留阶段成果、旧详情与权限隔离 (222.9399ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'waiting'
+  - 'completed'
+
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:3122:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'waiting',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:3209:1
+✖ 当前完整详情保留已成功前段，替换删除新增后段并隔离同名步骤 (231.9753ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:3263:1
+✖ 当前完整详情只取最新节点代次，需求更新后旧结果及正文立即失效 (247.8316ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }
+
+test at test\workflow-service.test.js:3302:1
+✖ 当前完整详情拒绝持续变化的版本，不交付混合计划快照 (260.3292ms)
+  Error: TASK_RERUN_SOURCE_NOT_COMPLETED
+      at deserializeError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-store.js:64:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_RERUN_SOURCE_NOT_COMPLETED',
+    sqliteCode: null
+  }

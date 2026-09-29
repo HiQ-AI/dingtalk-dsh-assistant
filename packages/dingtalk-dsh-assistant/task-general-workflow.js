@@ -70,6 +70,19 @@ export function createGeneralMarkdownWriteCapability({ fileAdapter }) {
 
 const string = { type: 'string' }
 const object = { type: 'object' }
+
+export function createGeneralCapabilityStageContract() {
+  return { id: 'task-general-capability', version: '1', requiredOutputs: ['general-capability-result'],
+    async prepare({ stage, decision, continuation, requirement, plan, handoff }) {
+      const step = stage.capabilityStep ?? continuation?.ownerStep
+        ?? decision?.planChange?.stages?.[0]?.capabilityStep ?? decision?.appendStages?.[0]?.capabilityStep
+      if (!step) throw executionError('GENERAL_STEP_NOT_BOUND')
+      return { input: { capabilityId: step.capabilityId, input: step.input,
+        scope: { ...requirement.scope, predecessorOutputRef: handoff?.outputRef ?? null,
+          ...(['write-task-file', 'import-task-file'].includes(step.capabilityId)
+            ? { requirementRevision: plan.task.requirementRevision } : {}) }, expectedEvidence: step.expectedEvidence } }
+    } }
+}
 /** Task Owner 选定一步后使用的受信执行载体；本流程不做全局规划或最终报告。 */
 function createWriteCapabilityStep({ capabilities }) {
   if (!Array.isArray(capabilities)) throw executionError('GENERAL_CONFIG_INVALID')

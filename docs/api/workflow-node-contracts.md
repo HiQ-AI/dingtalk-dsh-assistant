@@ -61,6 +61,40 @@ task-actions 仅接受 Host 固定注册的适配器，每个适配器实现参�
 
 见[迁移 runbook](../ops/workflow-storage-migration.md)。v8 活动 Task 保存原快照、递增输入版本、分配新叶子会话并设置 migrationReview:required。显式 resumeTask 清除该门禁、保存 workflow-migration-resumed 事件、清除当前旧检查点，要求新结构化计划；启动不得自行恢复旧会话。历史事实留在迁移快照和审计事件中。
 
+## workflow-v2 领域准备与交付合同
+
+本节适用于原生 Task Owner → Stage → Run 编排，不改变前述 Resident domain v9 的版本号。
+
+### 入参和阶段准备
+
+新接纳的 `acceptanceCriteria` 共用 `task-input-contract.js`：数组含 1–32 条，每条为字符串、原始长度不超过 2000 个 UTF-16 字符，trim 后非空；空数组、显式 null、类型错误和超限均拒绝。消息可省略该字段并沿用目标作为默认验收，工程准备也仅在字段未提供时使用 `[request]`。历史持久记录读取不套用新数量限制；Owner 追加验收同时限制当前有效项合计不超过 32 条；修订/重开在写入需求前整批预检，避免部分追加。已存在项的幂等重放不增加计数，历史累计项不裁剪。
+
+首阶段和后续阶段统一调用 `createTaskStageContracts().prepare()`。各领域声明准备函数，按其声明核对材料角色、必需/单份约束、数量及序列化字节容量，准备后再校验实际冻结定义的首节点输入。未注册合同、材料越界或字段不合法均阻止启动，公共服务不从材料正文猜执行参数。
+
+后续阶段的 `handoff` 为 `kind: workflow-stage-result`，包含 `contract:{id,version}`、`taskId`、`requirementRevision`、`planRevision`、`stageId`、`runId`、`workflowDigest`、`outputRef` 和 `value`。Host 核对当前计划与需求版本、同一 Task 的成功 Stage/Run、当前代最终节点及准确输出引用后构造交接。原始材料独立保留；引用存在不等于前序成功或类型正确。领域准备函数负责消费相应业务结果，不授予模型修改身份或执行授权的能力。
+
+### 调查 v6 与历史定义
+
+新 `task-investigation` 使用版本 6；输入 `acceptanceItems:[{itemId,criterion}]` 来自 Owner 的当前有效验收项，不能按位置自行生成 ID。输出保留 `outcome/summary/evidenceRefs/limitations/question`，并要求：
+
+- `findings`：最多 64 项 `{kind:fact|judgment|recommendation,statement,evidenceRefs}`；fact 必须有证据。
+- `openItems`：最多 32 项 `{description,reason,evidenceRefs}`，记录未知项和未执行工作。
+- `criterionReviews`：逐一覆盖输入的 itemId，禁止缺项、重复及额外项；每项为 `{itemId,status,reason,evidenceRefs}`，status 只允许 `satisfied/insufficient_evidence/not_applicable`，satisfied 必须有证据。
+
+嵌套证据引用必须包含于顶层证据，来源仍经过当前 Task/Run/代及受信前序引用校验。completed 调查须有证据和至少一项 finding 或 openItem。调查明确标记不足或不适用的验收项，不能由 Owner 单独改口为已满足：整体完成需要绑定后续阶段的新证据；后续仍为调查时，其对应意见也须为 satisfied。
+
+旧 v5 定义继续按冻结摘要注册和恢复，不把历史结果补造成 v6 结构，不静默升级已有 Run。新版本与旧版本的输入、输出合同分别验证。
+
+### 正式交付清单与恢复诊断
+
+`readDeliveryManifest` 从当前需求版本的成功阶段生成清单，包含阶段/Run/冻结定义、结果合同、产物引用及验收项与阶段证据的对应关系。必交文件来自 `scope.artifactFiles` 和 `fileDelivery.files`，按角色与文件名去重；核对当前需求版本、成功生产节点、登记文件及实际字节，并要求文件生产阶段具有验收证据关联。缺项、歧义、旧代文件或无法验证的文件阻止完成；要求外发的文件继续沿用独立发送回读。
+
+完成接纳事件保存清单引用；`taskDetail.deliveryManifest` 只返回 `null` 或 `{ref,taskId,turnId,requirementRevision,planRevision}`，不展开清单全文。引用从已接纳的 complete 事件回读；与当前需求或计划版本不符时返回 null，不把旧完成清单投影为当前交付。
+
+清单的有效性表示结构与证据绑定通过，不表示自然语言目标已自动证明。最终仍执行各领域完成合同与 Owner 的业务审阅；PR、HTTP 成功或非空文字本身不是业务验收结论。
+
+持久 `execution-failure` 工件增加 `recovery:{category,responsibleParty,nextAction}`。类别包括输出可修正、业务校验、任务受阻、缺输入、缺环境、外部结果未知、暂态执行和实现错误；未知错误归实现维护。Schema 错误仅在输出校验边界归为结果修正，输入映射错误不能据此让模型重试。分类只指明责任和下一步，自动重领仍受既有错误白名单、预算、退避、控制状态及效果账限制；外部结果未知先对账。旧诊断缺少 recovery 字段仍可读取，不补造历史分类。
+
 ## workflow-v2 上下文只读接口
 
 以下接口复用 Resident 的本地只读访问边界，不注册为模型写工具；对象必须属于当前配置的 workflow 群。不存在或跨群返回 404，非法参数与版本失效返回 400，错误码写入 `error`。

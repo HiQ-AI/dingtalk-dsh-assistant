@@ -1,3 +1,4 @@
+import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
@@ -40,6 +41,26 @@ const git = async (directory, args) => args[0] === 'ls-remote' ? readEngineering
   : (await exec('git', ['-C', directory, ...args], { windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024 })).stdout.trim()
 export const uatBranchFor = environment => /^uat[1-9]$/.test(environment ?? '') ? `feature/${environment}-base` : null
 export const isUatBranch = branch => /^feature\/uat[1-9]-base$/.test(branch ?? '')
+
+/** 工程领域统一处理首阶段、调查交接和重执行来源。 */
+export function createEngineeringStageContract({ engineering, controller, mayCreate, engineeringSourceTaskId }) {
+  return { id: 'task-engineering', version: '1', requiredOutputs: ['engineering-delivery'],
+    async prepare({ taskId, stage, plan, requirement, origin, handoff, executionPlanRevision = plan.task.planRevision }) {
+      const args = { ...origin.command.args.arguments, ...requirement.target, objective: requirement.request }
+      const investigation = handoff && ['agent-investigation-result', 'investigation-result'].includes(handoff.contract.id)
+      return engineering.prepareTask({ taskId, arguments: { ...args,
+        acceptanceCriteria: requirement.acceptanceCriteria, workflowId: 'task-engineering' }, constraints: requirement.constraints }, {
+        run: origin.run, unit: { constraints: [], sharedConstraints: [] },
+        ...(investigation ? { investigationHandoff: { planRevision: plan.task.planRevision, stageId: stage.stageId,
+          predecessorStageId: handoff.stageId, outputRef: handoff.outputRef } } : {}),
+        ...(origin.channel === 'web' ? { rerunOfTaskId: await engineeringSourceTaskId(origin.rerunOfTaskId, args.repositoryId) } : {}),
+        commandId: `stage:${taskId}:${executionPlanRevision}:${stage.stageId}`,
+        stageRunId: controller.plannedTaskStageRunId({ taskId, planRevision: executionPlanRevision,
+          stageId: stage.stageId, attempt: stage.attempt ?? 1 }),
+        authorizedGroupRequest: await mayCreate(origin.run, 'task-engineering'),
+      }, controller)
+    } }
+}
 
 export const engineeringWorkflowOwnerContract = Object.freeze({
   id: 'engineering-delivery', version: '1',
@@ -537,8 +558,8 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (matches.length === 1 && matches[0].config.id !== repoId) fail('ENGINEERING_REPOSITORY_SCOPE_MISMATCH')
     const constraints = [...new Set([...(action.constraints ?? []), ...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])]
     if (constraints.length > 32 || constraints.some(item => typeof item !== 'string') || Buffer.byteLength(request) > 12000) fail('ENGINEERING_INPUT_LIMIT')
-    const acceptanceCriteria = action.arguments.acceptanceCriteria ?? []
-    if (!Array.isArray(acceptanceCriteria) || acceptanceCriteria.length > 32 || acceptanceCriteria.some(value => typeof value !== 'string' || !value.trim() || value.length > 2000)) fail('LOCAL_ACCEPTANCE_CRITERIA_REQUIRED')
+    const acceptanceCriteria = action.arguments.acceptanceCriteria === undefined ? [request] : action.arguments.acceptanceCriteria
+    if (!acceptanceCriteriaSchema.safeParse(acceptanceCriteria).success) fail('LOCAL_ACCEPTANCE_CRITERIA_REQUIRED')
     const fingerprint = executionDigest({ taskId, request, constraints, repoId, uatEnvironment, uatBranch, acceptanceCriteria,
       ...(investigationHandoff ? { investigationHandoff } : {}),
       ...(info.rerunOfTaskId ? { rerunOfTaskId: text(info.rerunOfTaskId, 'ENGINEERING_BRANCH_SOURCE_INVALID') } : {}) })
