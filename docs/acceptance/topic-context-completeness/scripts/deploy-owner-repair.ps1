@@ -4,6 +4,7 @@ param(
   [switch]$Resume,
   [switch]$Bootstrap,
   [switch]$HoldMaintenance,
+  [string]$RepairStoppedLaunch,
   [string]$EnrollmentProposal,
   [string]$ContinueMaintenanceId,
   [Nullable[int]]$ExpectedMaintenanceRevision,
@@ -33,6 +34,10 @@ $domain='D:/dsh_home/storages/dingtalk-dsh-assistant-v9-pr116'
 $starter='D:/project/dingtalk-dsh-assistant/scripts/start-web.ps1'
 $enrollmentTaskName='DSH Web Local'
 function Assert-DeploymentMode {
+ if($RepairStoppedLaunch){
+  if($Bundle -or $MergePolicy -or $ChecksProposal -or $Bootstrap -or $EnrollmentProposal -or $ObserverPackage -or $ContinueMaintenanceId -or $null-ne $ExpectedMaintenanceRevision){throw '离线修复只允许更换Assistant包，沿用原封存许可'}
+  return
+ }
  if($DirectQueriesProposal){
   if($Bundle -or $MergePolicy -or $ChecksProposal -or $Bootstrap){throw '查询配置模式与工程配置及Bootstrap互斥'}
  }elseif(-not $Bundle -or -not $MergePolicy -or -not $ChecksProposal){throw '工程模式需要Bundle、MergePolicy和ChecksProposal'}
@@ -234,6 +239,28 @@ function Read-Deployment($launchRecord) {
  if($maintenance.maintenanceId-ne $launchRecord.maintenanceId){throw '启动后维护许可漂移'}
  return @{status='ready';ready=$true;pid=$fresh.ProcessId;launcherPid=$launchRecord.launcherPid;tasks=$tasks.Count;history=$history;package=$packageReadback;observer=$observerReadback;web=$webProof;maintenance=$maintenance;dispatchResumed=(-not $maintenance.active);logs=@($logs);scheduledTaskChanged=[bool]$launchRecord.enrollmentAutostartRestore;businessAcceptancePassed=$false}
 }
+function Assert-StoppedRepairPermit($record,$sealed,$before,$backupRecord,$current) {
+ if($record.mode-ne 'maintenance' -or $record.enrollmentAutostartRestore -or $record.observerPackage -or
+    $record.sourceProfileSha256-ne $ExpectedProfileSha256 -or $record.profileSha256-ne $ExpectedProfileSha256 -or
+    $backupRecord.backup-ne $record.backup -or $backupRecord.packageSha256-ne $record.packageSha256 -or
+    $record.packageSha256-eq $ExpectedPackageSha256 -or $record.directQueriesProposal.Replace('\','/')-ne $DirectQueriesProposal.Replace('\','/')){throw '原部署记录不允许本次离线修复'}
+ foreach($state in @($sealed.state,$before.maintenance,$current)){
+  if(-not $state.active -or $state.phase-ne 'stopping' -or -not $state.drained -or
+     $state.maintenanceId-ne $record.maintenanceId -or $state.revision-ne $sealed.state.revision -or
+     $state.sealedIncarnation-ne $sealed.state.sealedIncarnation -or
+     -not $state.sealedIncarnation.StartsWith("$($backupRecord.oldPid):") -or
+     @($state.busy.PSObject.Properties|Where-Object Value -ne 0).Count){throw '原维护封存许可已变化'}
+ }
+ if(-not $sealed.state.stopPermitted){throw '原部署缺少停止许可'}
+}
+function Assert-StoppedRepairProcesses($record,$backupRecord) {
+ if(@(Listeners).Count){throw '离线修复要求双端口均无监听'}
+ $live=@(Get-CimInstance Win32_Process|Where-Object {
+  $_.ProcessId-in @($record.launcherPid,$backupRecord.oldPid) -or $_.ParentProcessId-eq $record.launcherPid -or
+  ($_.Name-eq 'node.exe' -and $_.CommandLine -and $_.CommandLine.Replace('\','/').Contains("$profile/node_modules/@deepseek-ai/dsh/"))
+ })
+ if($live.Count){throw '原进程、launcher或profile进程仍存在'}
+}
 if($Readback -or $Resume){
  if($Check -or ($Readback -and $Resume)){throw 'Readback、Resume和Check不可同时使用'}
  $launchRecord=Get-Content -LiteralPath "$EvidenceDirectory/launch.json" -Raw|ConvertFrom-Json
@@ -244,6 +271,61 @@ if($Readback -or $Resume){
  exit 0
 }
 Assert-InputHashes
+if($RepairStoppedLaunch){
+ if(-not [IO.Path]::IsPathFullyQualified($RepairStoppedLaunch)){throw '原launch必须为绝对路径'}
+ $origin=Split-Path -Parent $RepairStoppedLaunch
+ $record=Get-Content -LiteralPath $RepairStoppedLaunch -Raw|ConvertFrom-Json
+ $sealed=Get-Content -LiteralPath "$origin/maintenance-sealed.json" -Raw|ConvertFrom-Json
+ $before=Get-Content -LiteralPath "$origin/control-before.json" -Raw|ConvertFrom-Json
+ $backupRecord=Get-Content -LiteralPath "$origin/backup.json" -Raw|ConvertFrom-Json
+ $evidenceHashes=@{}
+ foreach($path in @($RepairStoppedLaunch,"$origin/maintenance-sealed.json","$origin/control-before.json","$origin/backup.json","$($record.backup)/manifest.json")+$deploymentInputs){$evidenceHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
+ if($record.inputPaths-contains $Package){throw '修复包必须使用新的唯一路径'}
+ if($DirectQueriesProposal -and (Get-FileHash -LiteralPath $DirectQueriesProposal).Hash-ne $record.inputHashes.($record.directQueriesProposal)){throw '原查询配置提案已变化'}
+ function Test-StoppedRepair {
+  Assert-InputHashes
+  foreach($path in $evidenceHashes.Keys){if((Get-FileHash -LiteralPath $path).Hash-ne $evidenceHashes[$path]){throw '修复输入或原证据已变化'}}
+  Assert-StoppedRepairProcesses $record $backupRecord
+  $current=Run-Node @($checker,'maintenance')|ConvertFrom-Json
+  Assert-StoppedRepairPermit $record $sealed $before $backupRecord $current
+  $history=Run-Node @($checker,'verify',"$origin/control-before.json")|ConvertFrom-Json
+  $backupProof=Run-Node @($checker,'backup-reverify',$record.backup)|ConvertFrom-Json
+  $packageProof=Run-Node @($checker,'package',$Package,$source)|ConvertFrom-Json
+  if((Get-PSDrive D).Free-lt ((Get-Item -LiteralPath $Package).Length*10+1GB)){throw '修复安装空间不足'}
+  return @{history=$history;backup=$backupProof;package=$packageProof;maintenance=$current}
+ }
+ $proof=Test-StoppedRepair
+ if($Check){@{mode='repair-stopped-check';writes=0;ownerLock='required-at-execution';proof=$proof}|ConvertTo-Json -Depth 10;exit 0}
+ $lockProcess=Acquire-OwnerLock
+ try {
+  $proof=Test-StoppedRepair
+  New-Item -ItemType Directory -Path $EvidenceDirectory|Out-Null
+  $proof|ConvertTo-Json -Depth 10|Set-Content "$EvidenceDirectory/repair-preflight.json"
+  Copy-Item -LiteralPath "$origin/control-before.json","$origin/maintenance-sealed.json","$origin/backup.json" -Destination $EvidenceDirectory
+  $env:DSH_HOME='D:/dsh_home';$env:TEMP=$tempDirectory;$env:TMP=$tempDirectory
+  if($lockProcess.HasExited){throw '安装前独占锁已丢失'}
+  & $node "$profile/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add $Package *> "$EvidenceDirectory/install.log"
+  if($LASTEXITCODE){throw '修复安装失败，保持封存停机'}
+  Run-Node @($checker,'package',$Package,$source,$installed)|Set-Content "$EvidenceDirectory/installed.json"
+  Assert-InputHashes
+  $null=Test-StoppedRepair
+  if($lockProcess.HasExited){throw '安装核验期间独占锁丢失'}
+ }finally{
+  $lockProcess.StandardInput.Close()
+  if(-not $lockProcess.WaitForExit(10000)){throw '离线独占锁尚未释放，禁止启动'}
+  $lockProcess.Dispose()
+ }
+ Assert-StoppedRepairProcesses $record $backupRecord
+ $env:PATH=(Split-Path -Parent $node)+';'+$env:PATH
+ $launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
+ $inputHashes=@{};foreach($path in $deploymentInputs){$inputHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
+ $launchRecord=@{repairOfLaunch=$RepairStoppedLaunch;repairOfLaunchSha256=$evidenceHashes[$RepairStoppedLaunch];observerPackage='';observerPackageSha256='';directQueriesProposal=$DirectQueriesProposal;mode='maintenance';launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=$ExpectedPackageSha256;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=$ExpectedProfileSha256;backup=$record.backup;maintenanceId=$record.maintenanceId;enrollmentAutostartRestore=$false}
+ $launchRecord|ConvertTo-Json|Set-Content "$EvidenceDirectory/launch.json"
+ $result=Read-Deployment $launchRecord
+ $result|ConvertTo-Json -Depth 10|Set-Content "$EvidenceDirectory/readback.json"
+ $result|ConvertTo-Json -Depth 10
+ exit 0
+}
 if($EnrollmentProposal -and $Bootstrap){throw '新群接入要求已有正式维护接口'}
 $enrollment=if($EnrollmentProposal){Read-EnrollmentProposal}else{$null}
 if(($ContinueMaintenanceId -and $null-eq $ExpectedMaintenanceRevision) -or

@@ -184,3 +184,17 @@ foreach($change in @(@{requestedTaskId='wrong'},@{logicalTaskId=''},@{taskId='ot
  if(-not $rejected){throw '旧身份别名错配必须拒绝'}
 }
 Write-Output 'PASS 6/6: 看板合并后的旧身份别名通过；请求/逻辑/当前/最新/看板身份错配拒绝'
+
+$permitFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-StoppedRepairPermit'},$true)
+Invoke-Expression $permitFunction.Extent.Text
+$ExpectedProfileSha256='profile';$ExpectedPackageSha256='new';$DirectQueriesProposal='D:/query.json'
+$record=[pscustomobject]@{mode='maintenance';profileSha256='profile';sourceProfileSha256='profile';backup='backup';packageSha256='old';directQueriesProposal='D:\query.json';maintenanceId='maintenance'}
+$state=[pscustomobject]@{active=$true;phase='stopping';drained=$true;maintenanceId='maintenance';revision=110;sealedIncarnation='123:identity';stopPermitted=$true;busy=[pscustomobject]@{nodes=0;owners=0;effects=0;messages=0}}
+$sealed=[pscustomobject]@{state=$state};$before=[pscustomobject]@{maintenance=$state};$backupRecord=[pscustomobject]@{backup='backup';packageSha256='old';oldPid=123}
+Assert-StoppedRepairPermit $record $sealed $before $backupRecord $state
+foreach($change in @(@{active=$false},@{phase='draining'},@{drained=$false},@{revision=111},@{maintenanceId='other'},@{sealedIncarnation='124:other'},@{busy=[pscustomobject]@{nodes=1;owners=0;effects=0;messages=0}})){
+ $current=$state.PSObject.Copy();foreach($key in $change.Keys){$current.$key=$change[$key]}
+ $rejected=$false;try{Assert-StoppedRepairPermit $record $sealed $before $backupRecord $current}catch{$rejected=$true}
+ if(-not $rejected){throw '离线修复必须拒绝封存许可变化'}
+}
+Write-Output 'PASS 8/8: 原封存许可通过；active/phase/drained/revision/ID/incarnation/busy变化拒绝'

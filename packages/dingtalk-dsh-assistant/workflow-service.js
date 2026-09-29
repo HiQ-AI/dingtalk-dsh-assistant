@@ -701,6 +701,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         for (const owner of page) {
           if (owner.decision?.action === 'complete' && owner.applicationStatus === 'applied' && owner.status === 'idle') continue
           const plan = await store.query({ kind: 'task.plan', taskId: owner.taskId })
+          // 已取消任务只保留历史，不会再交接或验收；暂停任务仍需要冻结定义以便恢复。
+          if (plan?.task.controlState === 'cancelled') continue
           for (const stage of plan?.stages ?? []) if (stage.status !== 'invalidated' && stage.workflowDigest)
             requiredDefinitions.add(`${stage.workflowId}:${stage.workflowDigest}`)
         }

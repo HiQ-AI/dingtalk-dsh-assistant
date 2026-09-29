@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { verifyDeploymentBackup, verifyDeploymentWeb, verifyArtifactClosure } from '../scripts/deployment-integrity.mjs'
+import { verifyDeploymentBackup, reverifyDeploymentBackup, verifyDeploymentWeb, verifyArtifactClosure } from '../scripts/deployment-integrity.mjs'
 
 async function fixture() {
   const root=await mkdtemp(join(tmpdir(),'deployment-proof-')),runtime=join(root,'runtime'),domain=join(root,'domain'),profile=join(root,'profile'),backupRoot=join(root,'backup')
@@ -24,6 +24,20 @@ test('备份验证包含WAL最新提交、全文件清单、完整性及工件�
   try{assert.equal(restored.prepare('SELECT output_ref FROM records WHERE id=1').get().output_ref,f.ref)}finally{restored.close()}
   assert.ok(proof.manifest.some(item=>item.path.endsWith('control.sqlite-wal')))
 })
+for (const change of ['none','profile','backup','domain','new-domain','new-artifact','wal']) test(`失败启动只读复核原备份：${change}`,async t=>{
+  const f=await fixture();t.after(()=>f.db.close())
+  const proof=await verifyDeploymentBackup(f)
+  await writeFile(join(f.backupRoot,'manifest.json'),JSON.stringify(proof))
+  if(change==='profile')await writeFile(join(f.profile,'package.json'),'{"new":"installation"}')
+  if(change==='backup')await writeFile(join(f.backupRoot,'profile/cordis.patch.yml'),'changed')
+  if(change==='domain')await writeFile(join(f.domain,'domain.json'),'changed')
+  if(change==='new-domain')await writeFile(join(f.domain,'new.json'),'{}')
+  if(change==='new-artifact')await writeFile(join(f.runtime,'artifacts/new.json'),'{}')
+  if(change==='wal')await writeFile(join(f.backupRoot,'runtime/verified-control.sqlite-wal'),'transaction')
+  if(['none','profile'].includes(change))assert.equal((await reverifyDeploymentBackup(f)).writes,0)
+  else await assert.rejects(reverifyDeploymentBackup(f),/BACKUP_(COPY_MISMATCH|SOURCE_CHANGED|SOURCE_FILE_SET_CHANGED|DATABASE_SIDECAR_INVALID)/)
+})
+
 test('备份WAL破损和工件缺失均拒绝',async t=>{
   const f=await fixture();t.after(()=>f.db.close())
   await writeFile(join(f.backupRoot,'runtime','control.sqlite-wal'),'corrupt')

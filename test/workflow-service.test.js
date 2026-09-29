@@ -20,6 +20,47 @@ import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/exec
 import { createTaskMarkdownFileAdapter } from '../packages/dingtalk-dsh-assistant/task-markdown-file.js'
 import { createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
 import { createTaskArtifactFiles } from '../packages/dingtalk-dsh-assistant/task-artifact-files.js'
+
+for (const control of ['cancelled', 'active', 'paused']) test(`Host恢复已退役调查定义按任务控制状态处理：${control}`, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'retired-owner-control-'))
+  const model = { provider: 'fixture', model: 'fixture' }
+  const config = { groupIds: ['group'], ownerActorId: 'owner', instanceId: 'retired-owner-control',
+    dbPath: join(root, 'control.db'), artifactDirectory: join(root, 'artifacts') }
+  const store = await openExecutionStore({ dbPath: config.dbPath, instanceId: config.instanceId, initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: config.artifactDirectory, initialize: true })
+  const historical = { id: 'task-investigation', version: '4', nodes: [{ id: 'historical', version: '1',
+    executor: 'code', allowedEffects: ['pure'], inputSchema: { type: 'object' }, outputSchema: { type: 'object' },
+    mapInput: ({ requirement }) => requirement, execute: async () => { throw Error('RETIRED_EXECUTION_FORBIDDEN') } }] }
+  const definition = defineExecutionWorkflow(historical)
+  const controller = createExecutionController({ store, artifacts, workflows: [historical] })
+  let service
+  t.after(async () => { await service?.close(); await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
+  await store.command({ id: 'register-retired', kind: 'workflow.register', args: {
+    workflowId: historical.id, definitionVersion: historical.version, digest: definition.digest, config: model } })
+  await controller.createTaskPlan({ commandId: 'retired-plan', taskId: 'task', stages: [{ stageId: 'first', workflowId: historical.id, input: {} }] })
+  await store.command({ id: 'retired-owner', kind: 'task.owner.init', args: {
+    taskId: 'task', sessionId: 'retired-owner', sourceKey: 'source', criteria: ['历史调查'] } })
+  if (control !== 'active') {
+    const plan = await controller.taskPlan('task')
+    await controller.controlTask({ commandId: 'retired-control', taskId: 'task', intent: control === 'cancelled' ? 'cancel' : 'pause',
+      expectedControlRevision: plan.task.controlRevision })
+  }
+  const before = await controller.taskPlan('task')
+  assert.equal(before.task.controlState, control)
+  await controller.close(); await store.close()
+  const open = () => openWorkflowService({ ctx: {}, config, legacy: { getAgentConfig: () => model },
+    judge: async () => { throw Error('UNEXPECTED_MODEL') }, taskOwnerSessions: { async close() {} } })
+  if (control !== 'cancelled') {
+    await assert.rejects(open(), { code: control === 'active' ? 'WORKFLOW_CUTOVER_ACTIVE_REFERENCES' : 'WORKFLOW_VERSION_UNAVAILABLE' })
+    return
+  }
+  service = await open()
+  assert.deepEqual(await service.execution.controller.taskPlan('task'), before)
+  const saved = (await service.execution.store.query({ kind: 'workflow.list' })).find(item => item.digest === definition.digest)
+  assert.equal(saved.definitionVersion, '4'); assert.deepEqual(saved.config, model)
+  assert.equal(service.execution.controller.workflowDefinition(historical.id).version, '6')
+  assert.throws(() => service.execution.controller.workflowDefinition(historical.id, definition.digest), { code: 'WORKFLOW_VERSION_UNAVAILABLE' })
+})
 import { createTaskArtifactWriteAdapter, createGeneralArtifactWriteCapability } from '../packages/dingtalk-dsh-assistant/task-artifact-write.js'
 import { createSourceDossierCapability, createTaskMessageResourceCapability, isDirectedTaskRequest, openWorkflowService,
   rankMessageCandidates, verifyDefaultGeneralCompletion, describeTaskNodeOutput } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
