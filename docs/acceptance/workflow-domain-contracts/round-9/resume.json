@@ -1,0 +1,26 @@
+{
+  "sourceCommit": "4fb37030aeeb0b6269500ccff6d68ae0ed4ad113",
+  "pid": 13688,
+  "history": {
+    "verified": true,
+    "tasks": 21,
+    "oldNodes": 76,
+    "oldRuns": 27,
+    "legacy": 68
+  },
+  "maintenanceActive": false,
+  "package": {
+    "verifiedFiles": 97,
+    "sha256": "0407118f188537bb0f89e5ee7648e3bc0b7a5a2f37049266c66990614aac70be"
+  },
+  "resumedAt": "2026-09-29T12:00:35.5552733+08:00",
+  "web": {
+    "recoveryIssueCount": 0,
+    "authenticatedWebStatus": 200,
+    "tokenExchangeStatus": 303,
+    "controlHealth": "ok",
+    "inboundProcessing": true,
+    "credentialPrinted": false
+  },
+  "dispatchResumed": true
+}

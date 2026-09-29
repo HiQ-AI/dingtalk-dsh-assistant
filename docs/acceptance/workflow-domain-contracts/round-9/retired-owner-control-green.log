@@ -1,0 +1,11 @@
+✔ Host恢复已退役调查定义按任务控制状态处理：cancelled (333.0589ms)
+✔ Host恢复已退役调查定义按任务控制状态处理：active (290.6379ms)
+✔ Host恢复已退役调查定义按任务控制状态处理：paused (277.3698ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1281.7098

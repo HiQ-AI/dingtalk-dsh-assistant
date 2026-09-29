@@ -1,0 +1,28 @@
+✖ Host恢复已退役调查定义按任务控制状态处理：cancelled (295.4831ms)
+✔ Host恢复已退役调查定义按任务控制状态处理：active (279.8216ms)
+✔ Host恢复已退役调查定义按任务控制状态处理：paused (304.3621ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 2
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1250.1876
+
+✖ failing tests:
+
+test at test\workflow-service.test.js:24:58
+✖ Host恢复已退役调查定义按任务控制状态处理：cancelled (295.4831ms)
+  Error: WORKFLOW_VERSION_UNAVAILABLE
+      at executionError (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution-artifacts.js:5:76)
+      at file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/workflow-service.js:719:39
+      at Array.map (<anonymous>)
+      at workflows (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/workflow-service.js:715:146)
+      at async openExecutionRuntime (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/execution.js:33:59)
+      at async openWorkflowService (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/packages/dingtalk-dsh-assistant/workflow-service.js:615:42)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/test/workflow-service.test.js:57:13)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    code: 'WORKFLOW_VERSION_UNAVAILABLE'
+  }
