@@ -47,7 +47,7 @@ node scripts/configure-project-local-acceptance.mjs --profile D:/dsh_home/profil
 node scripts/configure-project-local-acceptance.mjs --profile D:/dsh_home/profiles/web/cordis.patch.yml --bundle <绝对bundle路径> --apply
 ```
 
-脚本使用目标 profile 自带 `node_modules/js-yaml`，识别 `!!js` 但保留原 YAML 代码字符串、注释与其他字节。两个配置经 runner 原生配置校验后插入，并在剥除这两项后比较完整配置，防止改变其他内容。应用前生成唯一备份，原子替换并独立读回；相同配置重复执行不写入，已有不同配置直接拒绝，不能自动覆盖。脚本不负责启动服务或把配置接入等同于业务验收通过。
+脚本使用仓库声明的 `js-yaml`，识别 `!!js` 但保留原 YAML 代码字符串、注释与其他字节。两个配置经 runner 原生配置校验后插入，并在剥除这两项后比较完整配置，防止改变其他内容。应用前生成唯一备份，原子替换并独立读回；相同配置重复执行不写入，已有不同配置直接拒绝，不能自动覆盖。脚本不负责启动服务或把配置接入等同于业务验收通过。
 
 ## UAT2 正式 Runner 接入结果
 

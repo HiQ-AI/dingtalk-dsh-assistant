@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, unlink } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { createRequire } from 'node:module'
-import { dirname, join, isAbsolute } from 'node:path'
+import yaml from 'js-yaml'
+import { join, isAbsolute } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 
@@ -99,7 +99,6 @@ async function main(){
   if(positionals.length!==1 || !['witness','disable','enable','seal-offline'].includes(mode) || !isAbsolute(values.profile??'') || !/^[a-f0-9]{64}$/i.test(values['expected-sha256']??''))fail('BOOTSTRAP_ARGUMENT_INVALID')
   const profile=values.profile, source=await readFile(profile,'utf8')
   if(hash(source)!==values['expected-sha256'].toLowerCase())fail('BOOTSTRAP_PROFILE_CAS')
-  const yaml=createRequire(pathToFileURL(profile))(join(dirname(profile),'node_modules/js-yaml'))
   if(mode!=='seal-offline')return console.log(JSON.stringify(await changeBootstrapProfile({profile,expectedSha256:values['expected-sha256'].toLowerCase(),mode,check:!!values.check,yaml,witness:{evidenceDirectory:values['evidence-directory'],expectedPid:Number(values['expected-pid']),nonce:values.nonce}})))
   if(values.check || !isAbsolute(values.installed??'') || !/^deploy-[a-f0-9-]+$/i.test(values['maintenance-id']??''))fail('BOOTSTRAP_ARGUMENT_INVALID')
   bootstrapProfile(source,'enable',yaml)

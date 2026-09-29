@@ -1,8 +1,7 @@
 import { readFile,writeFile,rename,unlink } from 'node:fs/promises'
 import { createHash,randomUUID } from 'node:crypto'
-import { createRequire } from 'node:module'
+import defaultYaml from 'js-yaml'
 import { pathToFileURL } from 'node:url'
-import { dirname,join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { DatabaseSync } from 'node:sqlite'
 const fail=code=>{throw Error(code)},hash=v=>createHash('sha256').update(v).digest('hex')
@@ -43,7 +42,7 @@ export function planFrontendChecks(source,yaml){
 }
 export async function configureFrontendChecks({mode,expectedSha256,profile='D:/dsh_home/profiles/web/cordis.patch.yml',dbPath='D:/dsh_home/workflows/runtime-v2/control.sqlite',yaml}){
  if(!['check','apply'].includes(mode)||! /^[a-f0-9]{64}$/.test(expectedSha256??''))fail('FRONTEND_CHECK_ARGUMENT_INVALID')
- yaml??=createRequire(pathToFileURL(profile))(join(dirname(profile),'node_modules/js-yaml'))
+ yaml??=defaultYaml
  const source=await readFile(profile,'utf8')
  if(hash(source)!==expectedSha256)fail('FRONTEND_CHECK_PROFILE_CHANGED')
  const plan=planFrontendChecks(source,yaml),result={mode,changed:plan.changed,beforeSha256:hash(source),afterSha256:hash(plan.updated),writes:0,repository:'dataset-web',checkId:'dataset-build',testFiles:testStep.args.slice(1)}

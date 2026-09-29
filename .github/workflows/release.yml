@@ -32,6 +32,20 @@ jobs:
       - uses: pnpm/action-setup@v6
         with:
           version: 10.13.1
+      - name: 准备 Node22 前端验收执行器
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.13.0
+          package-manager-cache: false
+      - name: 保存 Node22 精确路径
+        shell: pwsh
+        run: |
+          "NODE22_EXECUTABLE=$((Get-Command node).Source)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: 准备真实 JDK11 验收工具
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '11'
       - uses: actions/setup-node@v7
         with:
           node-version: 24.19.0
@@ -64,7 +78,25 @@ jobs:
           if ($changelog -notmatch "(?m)^\[$escapedVersion\]: $([regex]::Escape($releaseUrl))\r?$") {
             throw "changelog_release_link_missing_$tagVersion"
           }
+      - name: 准备独立物理测试目录
+        shell: pwsh
+        run: |
+          $testDirectory = Join-Path $env:SystemDrive 'dsh-release-tests'
+          New-Item -ItemType Directory -Force -Path $testDirectory | Out-Null
+          $current = Get-Item -LiteralPath $testDirectory
+          while ($null -ne $current) {
+            if ($current.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'test_directory_must_not_use_reparse_points' }
+            $current = $current.Parent
+          }
+          "TEMP=$testDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$testDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          node --input-type=module -e "import {lstat,realpath} from 'node:fs/promises'; const p=process.argv[1]; const s=await lstat(p); console.log(JSON.stringify({testDirectory:p,realpath:await realpath(p),symlink:s.isSymbolicLink(),dev:s.dev,ino:s.ino}));" $testDirectory
       - run: pnpm install --frozen-lockfile
+      - name: 构建真实 Spring 验收夹具
+        shell: pwsh
+        run: |
+          mvn -B -f test/fixtures/local-acceptance-spring/pom.xml package
+          if ($LASTEXITCODE -ne 0) { throw 'spring_test_fixture_build_failed' }
       - name: 构建并测试
         shell: pwsh
         run: |

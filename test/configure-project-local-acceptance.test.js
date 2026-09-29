@@ -1,15 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, symlink, readFile, writeFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createRequire } from 'node:module'
+import yaml from 'js-yaml'
 import { createHash } from 'node:crypto'
 import { configureProjectLocalAcceptance, planProjectLocalAcceptance } from '../scripts/configure-project-local-acceptance.mjs'
 
-// 本机 Host 集成验证：生产脚本刻意从目标 profile 读取其自带 YAML 实现。
-const yamlRoot = 'D:/dsh_home/profiles/web/node_modules/js-yaml'
-const yaml = createRequire(import.meta.url)(yamlRoot)
 const hash = value => createHash('sha256').update(value).digest('hex')
 const command = { executable: process.execPath, args: ['-e', 'process.exit(0)'] }
 const configuration = root => ({ version: 'test-v1', sharedDataProfilePath: join(root, 'shared.json'), prepareSteps: [command], service: { executable: process.execPath, args: ['server.js', '--host', '127.0.0.1', '--port', '{port}'], readyPath: '/ready' }, scenarios: [{ ...command, id: 'read-only', description: '读取任务数据' }], cleanup: command, verifyCleanup: command, timeoutMs: 1000 })
@@ -34,8 +31,6 @@ test('后端专项检查精确CAS：check零写、apply保留构建和其他仓�
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'local-profile-config-'))
   t.after(() => rm(root, { recursive: true, force: true }))
-  await mkdir(join(root, 'node_modules'))
-  await symlink(yamlRoot, join(root, 'node_modules/js-yaml'), 'junction')
   const profile = join(root, 'cordis.patch.yml'), bundle = join(root, 'bundle.json')
   const source = `# 保留注释\n- insert:\n    - config:\n        hook: !!js |\n          ({ code: '保持原文' })\n        workflow:\n          repositories:\n            - id: dataset-web\n              managedRoot: ${JSON.stringify(root)}\n              untouched: original\n            - id: dataset\n              managedRoot: ${JSON.stringify(root)}\n              untouched: original\n            - id: other\n              localAcceptance: {keep: true}\n`
   const supplied = { dataset: configuration(root), 'dataset-web': configuration(root) }

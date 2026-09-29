@@ -4,11 +4,14 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promis
 import { join, dirname, basename, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createServer } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { parseArguments, readConfiguration, validateContext, proxyConfiguration, datasetArguments } from '../scripts/local-acceptance-project.mjs'
 
-const companionArtifact = { path: 'D:/dsh_home/workflows/runtime-v2/local-acceptance/artifacts/ffe45c7c29d8723ef171877cc025a1e53596c57c508a92db3db29f9157035d8b/jimudataset.jar', sha256: 'ffe45c7c29d8723ef171877cc025a1e53596c57c508a92db3db29f9157035d8b' }
+const companionPath = fileURLToPath(new URL('../docs/tmp/task-unified-file-storage/release-1.0.0/spring-fixture/local-acceptance-spring.jar', import.meta.url))
+const companionArtifact = { path: companionPath, sha256: createHash('sha256').update(await readFile(companionPath)).digest('hex') }
+const javaExecutable = join(process.env.JAVA_HOME, 'bin', process.platform === 'win32' ? 'java.exe' : 'java')
 const script = fileURLToPath(new URL('../scripts/local-acceptance-project.mjs', import.meta.url))
 const context = { namespace: 'fixture-uat2', uatEnvironment: 'uat2', baseUrl: 'http://127.0.0.1:19999', plan: { cases: [] },
   services: { dataset: { baseUrl: 'http://127.0.0.1:19998', artifactSha256: 'a'.repeat(64) } } }
@@ -57,9 +60,9 @@ test('后端UAT3配置独立读取，执行环境不符在运行命令前拒绝'
   assert.match(result.stderr, /PROJECT_CONTEXT_INVALID/)
   await assert.rejects(readFile(f.trace), { code: 'ENOENT' })
 })
-test('真实固定伴随JAR后台关闭无效，准备阶段阻断且未安装依赖', async t => {
+test('真实Spring夹具伴随JAR后台关闭无效，准备阶段阻断且未安装依赖', async t => {
   const f = await fixture(t)
-  await writeFile(f.configPath, JSON.stringify({ ...f.config, javaExecutable: 'D:/soft/jdk-11.0.2/bin/java.exe', companionArtifact }))
+  await writeFile(f.configPath, JSON.stringify({ ...f.config, javaExecutable, companionArtifact }))
   const result = await execute(process.execPath, [script, 'prepare-web', '--config', f.configPath], f.cwd, context)
   assert.equal(result.code, 1); assert.match(result.stderr, /PROJECT_COMMAND_FAILED/)
   await assert.rejects(readFile(f.trace), { code: 'ENOENT' })
@@ -82,7 +85,7 @@ test('后端准备逐项要求后台写入开关，再构造固定Java/Maven arg
   await assert.rejects(datasetArguments(f.config, f.cwd), { code: 'PROJECT_BACKGROUND_CONTROL_REQUIRED' })
 })
 test('serve-web同进程启动VueCLI并覆盖传入环境中的UAT1代理', { skip: process.platform !== 'win32', timeout: 30000 }, async t => {
-  const f = await fixture(t), node22 = 'D:/soft/node-v22.13.0/node.exe'
+  const f = await fixture(t), node22 = process.env.NODE22_EXECUTABLE
   f.config.nodeExecutable = node22; await writeFile(f.configPath, JSON.stringify(f.config))
   const cli = join(f.cwd, 'node_modules/@vue/cli-service/bin/vue-cli-service.js'); await mkdir(dirname(cli), { recursive: true })
   await writeFile(join(f.cwd, 'vue.config.js'), `module.exports={devServer:{proxy:{'/api/dataset':{target:JSON.parse(process.env.LOCAL_HTTP_API_PROXY)[0][1],onProxyRes(response){response.headers['original-hook']='kept'}}}}}`)
@@ -109,7 +112,7 @@ test('serve-web同进程启动VueCLI并覆盖传入环境中的UAT1代理', { sk
 test('前端缺少伴随身份或SHA错误时，在依赖安装前失败', async t => {
  for (const artifact of [undefined, { ...companionArtifact, sha256: '0'.repeat(64) }]) {
   const f = await fixture(t)
-  await writeFile(f.configPath, JSON.stringify({ ...f.config, javaExecutable: 'D:/soft/jdk-11.0.2/bin/java.exe', companionArtifact: artifact }))
+  await writeFile(f.configPath, JSON.stringify({ ...f.config, javaExecutable, companionArtifact: artifact }))
   const result = await execute(process.execPath, [script, 'prepare-web', '--config', f.configPath], f.cwd, context)
   assert.equal(result.code, 1); assert.match(result.stderr, /PROJECT_COMPANION_IDENTITY_(REQUIRED|INVALID)/)
   await assert.rejects(readFile(f.trace), { code: 'ENOENT' })
