@@ -7,3 +7,5 @@
 保留现有 Task Owner/Stage/Run 底座、原外部效果账与重试规则；没有数据库迁移，没有新增依赖，不涉及沙箱或网关。README、API 合同和迁移边界已同步。
 
 真实模型语义验收、钉钉外发、共享 UAT 和本地正式部署不在本次验证结论内。交付到 PR，不自动合并或部署。
+
+PR：[#141](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/141)，独立回读 OPEN，main ← worktree-workflow-domain-contracts；实现提交 d4a04de。

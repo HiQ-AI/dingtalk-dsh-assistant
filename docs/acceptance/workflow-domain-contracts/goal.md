@@ -1,8 +1,8 @@
 # 工作流领域合同收敛
 
-> 状态：ACTIVE
+> 状态：DONE
 > Goal ID：workflow-domain-contracts
-> 最近维护：2026-09-29T09:34:15.4441297+08:00
+> 最近维护：2026-09-29T09:50:42.7868835+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant-workflow-domain-contracts/docs/acceptance/workflow-domain-contracts/goal.md
 
 ## 总目标
@@ -30,19 +30,21 @@
 | SG3 | 明确阶段交接 | 成功阶段类型、引用和版本绑定，错型与陈旧结果拒绝 | 已完成 | round-3.md；504/504 |
 | SG4 | 逐项验收和正式产物 | 验收覆盖与必交产物核验，不以结构代替语义 | 已完成 | round-3.md；504/504 |
 | SG5 | 失败恢复分类 | 诊断分类持久化，未知结果不重放，旧状态可读 | 已完成 | round-3.md；504/504 |
-| SG6 | 集成与交付 | 定向测试、独立复审、文档和 PR 回读 | 进行中 | round-3.md；待 PR |
+| SG6 | 集成与交付 | 定向测试、独立复审、文档和 PR 回读 | 已完成 | round-3.md；PR #141 OPEN |
 
 ## 当前检查点
 
 - 当前子目标：SG6
-- 唯一下一步：提交代码、创建中文 PR 并独立回读。
-- 未闭环项：PR 创建及回读。
+- 唯一下一步：无；本次实施、验证和 PR 交付已完成。
+- 未闭环项：无（真实部署和渠道验证不在本次交付范围）。
 
 ## 进展
 
 - 2026-09-29：读取当前代码及历史审查，建立新 worktree，pnpm install --frozen-lockfile 成功。
 
 - 2026-09-29：最终 22 文件 504/504 通过，矩阵第三轮全绿；新增累计容量前置预检，代码和文档已冻结。
+
+- 2026-09-29：提交 d4a04de，PR #141 已创建并回读 OPEN，main ← worktree-workflow-domain-contracts。链接：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/141 。
 
 ## 重大决策
 
@@ -54,3 +56,4 @@
 - 默认交付为 PR；用户本轮未要求合并或本地部署。
 
 - 2026-09-29：SG1–SG5 已实现，四文件服务集成 165/165 通过；独立复审修复调查不足被覆盖、合并材料容量绕过和成功历史前序未恢复。C盘临时空间不足后改用本 worktree 的 D 盘测试目录，未清理用户文件。
+- 本 worktree 的 docs/tmp 测试临时文件未提交；清理命令被自动审批规则拦截（blocked by policy），已保留。
