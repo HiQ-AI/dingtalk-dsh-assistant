@@ -2,7 +2,7 @@
 
 > 状态：COMPLETE
 > Goal ID：task-unified-file-storage
-> 最近维护：2026-09-29T21:00:35+08:00
+> 最近维护：2026-09-29T21:21:36+08:00
 > 权威目标：D:/codex/worktrees/task-unified-files/dingtalk-dsh-assistant/docs/acceptance/task-unified-file-storage/goal.md
 
 ## 总目标
@@ -18,7 +18,7 @@
 
 ## 范围与约束
 
-- 用户新增授权：上线验收及迁移两个已完成任务。保护主检出已有文件；维护、备份和回退按 runbook；不改原始会话日志、任务完成状态或外部业务结果。
+- 用户新增授权：上线验收、迁移两个已完成任务，以及合并 PR、部署本地。保护主检出已有文件；维护、备份和回退按 runbook；不改原始会话日志、任务完成状态或外部业务结果。
 - 不增加 task.json、交付索引和新存储平台；复用现有任务关系、工件 descriptor、效果账及受管目录校验。
 - 原始日志和公共附件保留宿主存储；已有任务保留原路径恢复。
 
@@ -30,17 +30,17 @@
 | SG2 | 会话及文件出口接入 | 新任务 cwd、Markdown、文件输出与下载同根；历史恢复不变 | 完成 | round-1.md |
 | SG3 | 工程及验证接入 | 源码副本、检查、验收与子进程临时文件同根 | 完成 | round-1.md |
 | SG4 | 集成与回归 | 普通/工程/重跑/重启/隔离反例通过 | 完成 | matrix.csv、round-2.md；文件 symlink 为环境限制 |
-| SG5 | 文档与 PR | README/runbook 更新，提交与 PR 独立读回 | 完成 | PR #142 OPEN；main ← worktree-task-unified-files |
+| SG5 | 文档与 PR | README/runbook 更新，提交与 PR 独立读回 | 完成 | PR #142 MERGED；合并提交402db4f；report.md |
 
-| SG6 | 上线验收 | 精确安装、进程/健康/业务读回通过 | 完成 | round-17.md；PID39624，99文件/健康/Web；真实Task completed/succeeded、Owner complete/applied、业务accepted、水位137一致 |
+| SG6 | 上线验收 | 精确安装、进程/健康/业务读回通过 | 完成 | round-17.md及report.md合并后复核；PID38472，99文件/健康/Web；真实Task completed/succeeded、Owner complete/applied、业务accepted、水位137一致 |
 | SG7 | 两个完成任务迁移 | 明确身份、备份、自检、迁移后文件与历史可读 | 完成 | round-5.md；18368文件双路径SHA/inode；候选及API读回 |
 
 | SG8 | 真实验收关联阻塞闭环 | 合法no_action不阻塞后续任务，未归类消息仍阻断；重新部署续跑原验收消息 | 完成 | round-7/8/13/14.md；原生IB恢复且命令applied/settled，Owner独立完成门禁归SG6 |
 
 ## 当前检查点
 
-- 当前子目标：SG6
-- 唯一下一步：无；目标已完成，PR #142 保持 OPEN，合并不在本轮明确授权中。
+- 当前子目标：全部完成
+- 唯一下一步：无；用户追加合并与本地部署授权后，PR #142 已合并，合并版本已部署并独立复核通过。
 - 未闭环项：无目标内业务阻塞；Windows 文件 symlink 环境限制、历史6个指定日志原本缺失、原未知命令未重放均在 report.md 披露。
 
 ## 进展
@@ -64,3 +64,5 @@
 - 独立审查闭环：workflow 在线换根零写拒绝；备份显式排除受管工程 node_modules，复制不遍历链接，其他链接仍拒绝。
 
 - 交付：代码提交 3afd2ad，PR https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/142 已独立回读 OPEN、MERGEABLE，base main，head worktree-task-unified-files，无自动检查结果（未声称 CI 通过）。本轮实施与 PR 交付完成，原始会话目录及正式实例未动。
+
+- 2026-09-29 合并后交付：PR #142 独立回读 MERGED，合并提交402db4f27980f415ef193a79112fa2df68cb4ed2；源码树与02b9957一致。正式备份、安装、重启后PID38472、99文件、健康和Web通过，派发恢复；两个旧任务结果及18368文件核验通过，真实验收任务仍completed/succeeded、Owner complete/applied。前述OPEN和正式实例未动为初次交付时记录，当前状态以本条及report.md为准。
