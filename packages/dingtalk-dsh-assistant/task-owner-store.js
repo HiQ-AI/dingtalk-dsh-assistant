@@ -474,6 +474,17 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
 }
 
 export function queryTaskOwner(db, query) {
+  if (query?.kind === 'task.owner.planning') {
+    exact(query, ['kind', 'taskId'])
+    const rows = db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND application_status='applied' AND json_extract(decision_json,'$.action')='advance' AND (json_extract(decision_json,'$.planChange.kind') IN ('initialize','append') OR (json_extract(decision_json,'$.planChange') IS NULL AND json_type(decision_json,'$.appendStages')='array' AND json_array_length(decision_json,'$.appendStages')>0)) ORDER BY lease_epoch LIMIT 201").all(id(query.taskId))
+    return { truncated: rows.length > 200, receipts: rows.slice(0, 200).map(row => {
+      const decision = JSON.parse(row.decision_json)
+      const change = decision.planChange ?? { kind: 'appendStages', stages: decision.appendStages }
+      return { turnId: row.turn_id, leaseEpoch: row.lease_epoch, createdAt: row.created_at, updatedAt: row.updated_at,
+        requirementRevision: row.requirement_revision, planRevision: row.plan_revision,
+        planChangeKind: change.kind, workflowIds: change.stages.map(stage => stage.workflowId) }
+    }) }
+  }
   if (query?.kind === 'task.owner.delivery-manifest') {
     exact(query, ['kind', 'taskId'])
     const current = task(db, query.taskId)

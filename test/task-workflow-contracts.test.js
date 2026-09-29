@@ -315,6 +315,7 @@ test('复合验收只共享该条显式绑定的当前阶段证据，领域效�
     async validateCompletion(context) {
       assert.ok(context.stages.every(item => item.contractId === domain))
       assert.equal(context.output.total, domain === 'unrelated' ? 3 : 2)
+      assert.equal(context.output.hostExecution, undefined)
       return !context.acceptanceItems.length || await context.verifyAcceptance(context)
     } }), id: `task-${domain}`, nodes: [{ ...synthetic().nodes[0], execute: async ({ input }) => ({ domain, total: input.items.length }) }] }))
   workflows[0].ownerContract = general
@@ -350,8 +351,24 @@ test('复合验收只共享该条显式绑定的当前阶段证据，领域效�
   } })
   assert.equal(await helpers.authorizeCompletion({ taskId: 'task', plan, requirement, decision }), true)
   assert.equal(seen.length, 2)
-  for (const context of seen) assert.deepEqual(context.acceptanceItems[0].evidenceRefs, refs)
+  for (const context of seen) {
+    assert.deepEqual(context.acceptanceItems[0].evidenceRefs, refs)
+    for (const item of context.stages) {
+      const host = item.output.hostExecution
+      assert.equal(host.taskId, 'task')
+      assert.equal(host.stageId, item.stage.stageId)
+      assert.equal(host.runId, item.stage.runId)
+      assert.equal(host.predecessorOutputRef, item.stage.predecessorOutputRef)
+      assert.ok(host.run.createdAt <= host.run.updatedAt)
+      assert.ok(host.nodes.every(node => node.status === 'succeeded'))
+      assert.deepEqual(host.planning, { receipts: [], truncated: false })
+    }
+  }
   const completed = { taskId: 'task', plan, requirement, decision }
+  const truncated = createTaskWorkflowContracts({ store: { query: query => query.kind === 'task.owner.planning'
+    ? { receipts: [], truncated: true } : store.query(query) }, artifacts, controller,
+    verifyAcceptance: () => { throw Error('截断规划不能进入语义判断') } })
+  assert.equal(await truncated.authorizeCompletion(completed), false)
   for (const verifyAcceptance of [undefined, async () => false]) {
     const rejected = createTaskWorkflowContracts({ store, artifacts, controller, verifyAcceptance })
     assert.equal(await rejected.authorizeCompletion(completed), false)

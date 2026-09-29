@@ -285,6 +285,17 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
             && assessment.evidenceRefs.every(ref => known.has(ref) && decision.evidenceRefs.includes(ref))))) return false
       const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision })
       if (!manifest.complete) return false
+      const planning = await store.query({ kind: 'task.owner.planning', taskId })
+      if (!planning || planning.truncated) return false
+      const semanticStages = contexts.map(({ stage, state, output, input, contract }) => ({ stage, input, contractId: contract.id,
+        output: { ...output, hostExecution: { taskId, stageId: stage.stageId, runId: stage.runId,
+          workflowId: stage.workflowId, workflowDigest: stage.workflowDigest, position: stage.position,
+          predecessorOutputRef: stage.predecessorOutputRef, planning,
+          run: { status: state.run.status, generation: state.run.generation,
+            createdAt: state.run.createdAt, updatedAt: state.run.updatedAt },
+          nodes: state.nodes.map(node => ({ nodeId: node.nodeId, executor: node.executor,
+            position: node.position, generation: node.generation, status: node.status,
+            inputRef: node.inputRef, outputRef: node.outputRef })) } } }))
       const stages = contexts.map(context => ({ stage: context.stage, output: context.output,
         input: context.input, contractId: context.contract.id }))
       const receipts = []
@@ -307,7 +318,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
         const sharedContext = { requirement: { ...domainRequirement, acceptanceItems: sharedItems },
           decision: { ...domainDecision, evidenceRefs: [...sharedRefs], assessments: sharedItems.map(item => ({
             itemId: item.itemId, status: 'satisfied', evidenceRefs: item.evidenceRefs })) },
-          stages: stages.filter(item => [item.stage.outputRef, ...(item.stage.evidenceRefs ?? [])].some(ref => sharedRefs.has(ref))),
+          stages: semanticStages.filter(item => [item.stage.outputRef, ...(item.stage.evidenceRefs ?? [])].some(ref => sharedRefs.has(ref))),
           acceptanceItems: sharedItems }
         let domainVerification
         const verifyDomain = typeof verifyAcceptance === 'function'
