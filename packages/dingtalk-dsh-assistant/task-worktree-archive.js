@@ -43,15 +43,13 @@ function parseWorktreeList(value) {
 
 export async function inspectTaskWorktree({ location, workspaceDir }) {
   const actual = await assertPhysicalPath(location, workspaceDir)
-  const top = await realpath(await git(actual, 'rev-parse', '--show-toplevel'))
+  const [topPath, gitPath, commonPath, head] = (await git(actual, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--absolute-git-dir', '--git-common-dir', 'HEAD')).split(/\r?\n/)
+  const [top, gitDir, commonDir] = await Promise.all([topPath, gitPath, commonPath].map(location => realpath(location)))
   if (top !== actual) throw new Error('worktree_path_not_root')
-  const gitDir = await realpath(await git(actual, 'rev-parse', '--absolute-git-dir'))
-  const commonDir = await realpath(await git(actual, 'rev-parse', '--git-common-dir'))
   if (gitDir === commonDir) throw new Error('worktree_main_checkout_forbidden')
   const list = parseWorktreeList(await git(actual, 'worktree', 'list', '--porcelain'))
   if (!list.some((item) => path.resolve(item.worktree) === actual && !item.bare)) throw new Error('worktree_not_registered_with_git')
   const repositoryRoot = path.dirname(commonDir)
-  const head = await git(actual, 'rev-parse', 'HEAD')
   const branchRef = await git(actual, 'symbolic-ref', '-q', 'HEAD').catch(() => '')
   const branch = branchRef.startsWith('refs/heads/') ? branchRef.slice('refs/heads/'.length) : null
   const originUrl = await git(actual, 'remote', 'get-url', 'origin')

@@ -664,13 +664,14 @@ task-cancel 成功时只需用一句短句确认任务已停止，不得继续�
     if (first.archivedAt) return first
     try {
       await leafDisposalsByTask.get(taskId)
-      const entries = first.localWorktrees ?? []
-      for (const entry of entries.filter(item => item.status === 'registered' && item.createdByTask)) {
+      const entries = (first.localWorktrees ?? []).filter(item => item.status === 'registered' && item.createdByTask)
+      for (const entry of entries) {
         if (entry.ownerTaskId !== taskId) throw new Error(`worktree_owner_mismatch:${entry.path}`)
         if (store.listTasks().some(other => other.taskId !== taskId && !other.archivedAt && (other.localWorktrees ?? []).some(item => item.status === 'registered' && item.path === entry.path))) throw new Error(`worktree_in_use_by_other_task:${entry.path}`)
-        await archiveTaskWorktree({ taskId, entry, workspaceDir: agentWorkspace, checkOnly: true })
+        // 多目录先全部预检，避免后续目录失败时已经清理前面的目录；单目录由执行入口直接预检。
+        if (entries.length > 1) await archiveTaskWorktree({ taskId, entry, workspaceDir: agentWorkspace, checkOnly: true })
       }
-      for (const entry of entries.filter(item => item.status === 'registered' && item.createdByTask)) {
+      for (const entry of entries) {
         await archiveTaskWorktree({ taskId, entry, workspaceDir: agentWorkspace, onProgress: async progress => {
           await serializeTasks(() => store.updateTask(taskId, current => ({ ...current,
             localWorktrees: current.localWorktrees.map(item => item.path === progress.path ? progress : item), updatedAt: new Date().toISOString(),
