@@ -126,7 +126,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   let closed = false, running = 0
   const queue = [], flights = new Map(), active = new Map(), errors = new Map(), dirty = new Set()
   const query = runId => store.query({ kind: 'run', runId })
-  const command = (id, kind, args) => store.command({ id, kind, args })
+  const command = (id, kind, args, context = {}) => store.command({ id, kind, args, ...context })
   function definitionOf(run) {
     const definition = byDigest.get(run.workflowDigest)
     if (!definition || definition.id !== run.workflowId) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
@@ -355,7 +355,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const definition = registerDefinition(input, false, true)
       return { id: definition.id, version: definition.version, digest: definition.digest }
     },
-    async createRun({ commandId, taskId, runId = `run-${executionDigest(commandId)}`, workflowId, input, stageBinding }) {
+    async createRun({ ownerTurnId, commandId, taskId, runId = `run-${executionDigest(commandId)}`, workflowId, input, stageBinding }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId); requireId(runId)
       let definition, requirementReference
@@ -374,8 +374,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const receipt = await command(commandId, 'run.create', { taskId, runId, workflowId, workflowDigest: definition.digest, requirementRef: requirement.ref,
         ...(stageBinding ? { stageBinding } : {}),
         nodes: definition.nodes.map((node, index) => ({ nodeId: node.id, nodeVersion: node.version, executor: node.executor, inputRef: index ? null : first.ref, inputDigest: index ? null : first.digest })),
-      })
-      schedule(runId); return { runId, receipt }
+      }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
+      if (!ownerTurnId) schedule(runId)
+      return { runId, receipt }
     },
     async createTaskPlan({ commandId, taskId, requirementRevision = 1, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
@@ -390,11 +391,11 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         const requirement = index === 0 ? await artifacts.put(stage.input, { taskId }) : null
         stored.push({ stageId: requireId(stage.stageId), workflowId: definition?.id ?? requireId(stage.workflowId),
           workflowDigest: stage.unavailableReason || dynamic ? null : definition.digest, unavailableReason: stage.unavailableReason ?? null,
-          requirementRef: requirement?.ref ?? null, gate: stage.gate ?? 'none' })
+          requirementRef: requirement?.ref ?? null, gate: stage.gate ?? 'none', ...(stage.sourceCondition ? { sourceCondition: stage.sourceCondition } : {}) })
       }
       return command(commandId, 'task.plan.create', { taskId, requirementRevision, stages: stored })
     },
-    async initializeTaskPlan({ commandId, taskId, expectedPlanRevision = 0, expectedRequirementRevision,
+    async initializeTaskPlan({ ownerTurnId, commandId, taskId, expectedPlanRevision = 0, expectedRequirementRevision,
       expectedControlRevision, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId)
@@ -412,13 +413,13 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         stored.push({ stageId: requireId(stage.stageId), workflowId: definition?.id ?? requireId(stage.workflowId),
           workflowDigest: stage.unavailableReason || dynamic ? null : definition.digest,
           unavailableReason: stage.unavailableReason ?? null, requirementRef: requirement?.ref ?? null,
-          gate: stage.gate ?? 'none' })
+          gate: stage.gate ?? 'none', ...(stage.sourceCondition ? { sourceCondition: stage.sourceCondition } : {}) })
       }
       return command(commandId, 'task.plan.initialize', { taskId, expectedPlanRevision,
         expectedRequirementRevision, expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision,
-        stages: stored })
+        stages: stored }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
     },
-    async reviseTaskPlan({ commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, affectedFrom, stages }) {
+    async reviseTaskPlan({ ownerTurnId, commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, affectedFrom, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId)
       const previous = await store.query({ kind: 'task.plan', taskId })
@@ -439,13 +440,13 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           workflowDigest: retained ? retained.workflowDigest : stage.unavailableReason || dynamic ? null : definition.digest,
           unavailableReason: retained?.unavailableReason ?? stage.unavailableReason ?? null,
           requirementRef: requirement?.ref ?? null,
-          gate: retained?.gate ?? stage.gate ?? 'none' })
+          gate: retained?.gate ?? stage.gate ?? 'none', ...((retained?.sourceCondition ?? stage.sourceCondition) ? { sourceCondition: retained?.sourceCondition ?? stage.sourceCondition } : {}) })
       }
       return command(commandId, 'task.plan.revise',
         { taskId, expectedPlanRevision, expectedControlRevision: expectedControlRevision ?? previous.task.controlRevision,
-          requirementRevision, affectedFrom, stages: stored })
+          requirementRevision, affectedFrom, stages: stored }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
     },
-    async extendTaskPlan({ commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, stages }) {
+    async extendTaskPlan({ ownerTurnId, commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId)
       if (!Array.isArray(stages) || !stages.length) throw executionError('TASK_PLAN_STAGES_INVALID')
@@ -455,12 +456,12 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         if (!definition && !stage.unavailableReason && !dynamic) throw executionError('WORKFLOW_NOT_FOUND')
         return { stageId: requireId(stage.stageId), workflowId: requireId(stage.workflowId),
           workflowDigest: stage.unavailableReason || dynamic ? null : definition.digest,
-          unavailableReason: stage.unavailableReason ?? null, requirementRef: null, gate: stage.gate ?? 'none' }
+          unavailableReason: stage.unavailableReason ?? null, requirementRef: null, gate: stage.gate ?? 'none', ...(stage.sourceCondition ? { sourceCondition: stage.sourceCondition } : {}) }
       })
       const plan = await store.query({ kind: 'task.plan', taskId })
       if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
       return command(commandId, 'task.plan.extend', { taskId, expectedPlanRevision,
-        expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision, requirementRevision, stages: stored })
+        expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision, requirementRevision, stages: stored }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
     },
     async taskPlan(taskId) { return store.query({ kind: 'task.plan', taskId: requireId(taskId) }) },
     async pendingTaskPlans({ limit = 100, beforeSequenceId } = {}) {
@@ -479,15 +480,15 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       if (closed) throw executionError('CONTROLLER_CLOSED')
       return command(commandId, 'run.budget.continue', { eventId: requireId(eventId) })
     },
-    async confirmTaskStage({ commandId, taskId, stageId, planRevision, expectedControlRevision, expectedRequirementRevision, outputRef }) {
+    async confirmTaskStage({ inputCommandId, commandId, taskId, stageId, planRevision, expectedControlRevision, expectedRequirementRevision, outputRef, confirmation }) {
       const plan = await store.query({ kind: 'task.plan', taskId: requireId(taskId) })
       if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
       return command(commandId, 'task.plan.confirm',
         { taskId, planRevision, expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision,
-          stageId: requireId(stageId), outputRef,
-          ...(expectedRequirementRevision === undefined ? {} : { expectedRequirementRevision }) })
+          stageId: requireId(stageId), outputRef, ...(confirmation ? { confirmation } : {}),
+          ...(expectedRequirementRevision === undefined ? {} : { expectedRequirementRevision }) }, { ...(inputCommandId ? { inputCommandId } : {}) })
     },
-    async bindTaskStageInput({ commandId, taskId, planRevision, expectedControlRevision, stageId, predecessorOutputRef, input, workflowId }) {
+    async bindTaskStageInput({ ownerTurnId, commandId, taskId, planRevision, expectedControlRevision, stageId, predecessorOutputRef, input, workflowId }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       const plan = await store.query({ kind: 'task.plan', taskId: requireId(taskId) })
       if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
@@ -499,9 +500,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         stageId: requireId(stageId),
         predecessorOutputRef, requirementRef: requirement.ref,
         ...(definition ? { workflowId: definition.id, workflowDigest: definition.digest } : {}),
-      })
+      }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
     },
-    async advanceTaskPlan(taskId) {
+    async advanceTaskPlan(taskId, { ownerTurnId } = {}) {
       requireId(taskId)
       const plan = await store.query({ kind: 'task.plan', taskId })
       if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
@@ -535,7 +536,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       if (stage.status === 'running') {
         const state = await query(stage.runId)
         if (state.run?.status === 'queued') {
-          schedule(stage.runId)
+          if (!ownerTurnId) schedule(stage.runId)
           return plan
         }
         if (state.run?.status === 'waiting' && state.run.recoveryReason === 'controller-restarted') {
@@ -559,7 +560,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const input = await artifacts.read(stage.requirementRef)
       await this.createRun({
         commandId: `stage-start:${taskId}:${plan.task.planRevision}:${stage.stageId}:${stage.attempt}`,
-        taskId, runId, workflowId: stage.workflowId, input,
+        taskId, runId, workflowId: stage.workflowId, input, ownerTurnId,
         stageBinding: { planRevision: plan.task.planRevision, stageId: stage.stageId,
           attempt: stage.attempt, expectedControlRevision: plan.task.controlRevision },
       })

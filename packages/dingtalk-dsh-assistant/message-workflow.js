@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto'
-import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, validateExecutionMaterialRefs, unitContext, candidateCards, intentContext, shareTopicContext } from './message-context.js'
-import { prepareMessageRequest } from './message-model.js'
+import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, validateExecutionMaterialRefs, validateContextRequests, unitContext, candidateCards, intentContext, shareTopicContext } from './message-context.js'
+import { prepareMessageRequest, messageProjectionVersion } from './message-model.js'
 import { isPassiveTaskProgress, isQuietGroupMessage } from './message-ledger.js'
 import { wholeTopicFactRevision } from './message-topics.js'
 import { isNamedAgentDirection } from './decision.js'
 
-export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.4', initialWindowMs: 45000, linkedWindowMs: 30000, attemptMs: 20000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, maxInputTokens: 64000, maxOutputTokens: 12000, nodeInputByteLimits: { S: 8000, R: 14000, I: 18000, IB: 32000, material: 8000 }, recoveryDelaysMs: [5000, 30000] })
-const limits = { S: [8000, 2000], R: [14000, 1000], I: [18000, 1500], IB: [32000, 4000], material: [8000, 1000] }
-const statusQuestion = text => /(?:完成|改完|进度|状态|部署).*[吗？?]/u.test(text) && /(?:审核|任务|问题)/u.test(text)
+export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.5', initialWindowMs: 90000, linkedWindowMs: 90000, attemptMs: 60000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, recoveryDelaysMs: [5000, 30000] })
+const outputLimits = { S: 2000, R: 1800, I: 1500, IB: 4000, material: 1000 }
+const statusQuestion = text => /(?:完成|改完|进度|状态|部署).*[吗？?]/u.test(text) && /任务/u.test(text)
 const investigationConfirmation = request => request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
   || (['I','IB'].includes(request.nodeId) && request.kind === 'needs_clarification'
     && /此前对应任务仅授权排查分析/u.test(String(request.reason)))
@@ -16,7 +16,6 @@ function projectMaterial(value) {
   if (Array.isArray(value)) return value.map(projectMaterial)
   const result = { ...value }
   if (typeof value.text === 'string') {
-    if (Buffer.byteLength(value.text) > 12000) return { capacityExceeded: true, reason: 'MATERIAL_FULL_TEXT_TOO_LARGE', originalBytes: Buffer.byteLength(value.text), resourceHash: digest(value.text) }
     result.text = value.text
     result.coverage = value.coverage ?? { complete: true, resourceHash: digest(value.text), totalBytes: Buffer.byteLength(value.text), ranges: [{ start: 0, end: value.text.length }] }
   }
@@ -44,7 +43,7 @@ function statusFollowup(snapshot, agentNames) {
 /** 无常驻模型会话。每个判断独立、无工具；数据库是恢复和派发的唯一事实源。 */
 export function createMessageWorkflow({ store, judge, context = {}, handlers = {}, policy = {}, clock = Date.now }) {
   if (!store?.command || !store?.query || typeof judge !== 'function') throw new Error('MESSAGE_DEPENDENCIES_REQUIRED')
-  const config = { ...defaultMessagePolicy, ...policy }, flights = new Map(), routingTails = new Map(), topicFlights = new Map(), topicSchedules = new Set(), controllers = new Map(), queue = []
+  const config = { ...defaultMessagePolicy, ...policy }, flights = new Map(), topicFlights = new Map(), topicSchedules = new Set(), controllers = new Map(), queue = []
   const agentNames = () => context.agentNames?.() ?? []
   const directedToAgent = text => isNamedAgentDirection(text, agentNames())
   const directedStatusQuestion = text => directedToAgent(text) && statusQuestion(text)
@@ -66,7 +65,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const previous=await state(runId)
     const nextVersion=previous.run.sourceVersion+1
     const newRunId=`msg-replay-${digest([previous.run.sourceKey,nextVersion]).slice(0,40)}`
-    const result=await cmd('message.reprocess',{runId,newRunId},`reprocess:${runId}:${newRunId}`)
+    const result=await cmd('message.reprocess',{runId,newRunId,policy:config},`reprocess:${runId}:${newRunId}`)
     await process(result.run.runId)
     await waitForTopicFlight(result.run.runId)
     return state(result.run.runId)
@@ -74,7 +73,6 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   async function waitForTopicFlight(runId) {
     if (!context.bindTopic) return
     const data = await state(runId)
-    if ((await store.query({ kind: 'message.routing.pending', conversationId: data.run.conversationId })).length) return
     await Promise.all([...new Set(data.units.map(unit => unit.topicId).filter(Boolean))].map(topicId => topicFlights.get(topicId)).filter(Boolean))
   }
   async function waiting(data, unitId, stage, output) {
@@ -82,59 +80,34 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const needs = (output.needs ?? []).map(need => ({ ...need, resourceRef: aliases.get(need.resourceRef) ?? need.resourceRef }))
     const requestId = digest([data.run.runId, unitId, stage, revision(data), { ...output, needs }])
     if (data.requests.some(request => request.id === requestId && request.status === 'resolved')) {
-      return cmd('message.attention', { runId: data.run.runId, reason: `MESSAGE_CONTEXT_UNCHANGED:${stage}:${unitId}` })
+      return cmd('message.attention', { runId: data.run.runId, unitId, reason: `MESSAGE_CONTEXT_UNCHANGED:${stage}:${unitId}` })
     }
     return cmd('message.wait', { runId: data.run.runId, unitId, nodeId: stage, expectedRevision: revision(data), reason: output.reason, request: { requestId, kind: output.kind, question: output.question ?? output.reason, needs, permittedActors: [data.run.actorId] } })
   }
   async function prepareMaterial(data, unitId, value) {
-    if (!value || typeof value !== 'object') return value
-    if (Array.isArray(value)) return Promise.all(value.map(item => prepareMaterial(data, unitId, item)))
-    const result = { ...value }
-    if (Array.isArray(value.resources)) result.resources = await Promise.all(value.resources.map(item => prepareMaterial(data, unitId, item)))
-    if (typeof value.text !== 'string' || Buffer.byteLength(value.text) <= 12000) return projectMaterial(result)
-    const resourceHash = digest(value.text), pages = []
-    let start = 0
-    while (start < value.text.length) {
-      let end = start, bytes = 0
-      for (const character of value.text.slice(start)) {
-        if (bytes + Buffer.byteLength(character) > 3600) break
-        bytes += Buffer.byteLength(character); end += character.length
-      }
-      pages.push({ start, end, text: value.text.slice(start, end) })
-      if (end === value.text.length) break
-      start = Math.max(start + 1, end - 80)
-      if (/[\uDC00-\uDFFF]/u.test(value.text[start])) start++
-    }
-    const facts = [], coverage = []
-    for (const [pageIndex, page] of pages.entries()) {
-      const output = await invoke(await state(data.run.runId), unitId, 'material', {
-        resourceRef: value.resourceRef ?? null, resourceHash, pageIndex, pageCount: pages.length, start: page.start, end: page.end,
-        purpose: data.units.find(unit => (unit.id ?? unit.unitId) === unitId)?.goalText ?? data.run.body, text: page.text,
-        contextHash: digest([resourceHash, pageIndex, data.run.body]) })
-      if (!output) {
-        const latest = await state(data.run.runId)
-        const failure = latest.nodes.findLast(node => node.nodeId === 'material' && node.input?.resourceHash === resourceHash && node.input?.pageIndex === pageIndex)?.error
-        return failure?.startsWith('MESSAGE_MATERIAL_QUOTE_INVALID') || failure?.startsWith('MESSAGE_SCHEMA_INVALID')
-          ? { capacityExceeded: true, reason: failure, resourceHash, pageIndex }
-          : { materialPending: true, resourceHash, pageIndex }
-      }
-      if (!output.complete || output.facts.some(fact => !page.text.includes(fact.quote))) return { capacityExceeded: true, reason: 'MATERIAL_PAGE_INCOMPLETE', resourceHash, pageIndex }
-      for (const fact of output.facts) {
-        const quoteStart = page.start + page.text.indexOf(fact.quote)
-        if (!facts.some(item => item.start === quoteStart && item.quote === fact.quote)) facts.push({ ...fact, start: quoteStart, end: quoteStart + fact.quote.length })
-      }
-      coverage.push({ start: page.start, end: page.end })
-    }
-    const text = facts.map(fact => fact.quote).join('\n')
-    if (facts.some(fact => fact.kind === 'uncertain') || Buffer.byteLength(text) > 12000) return { capacityExceeded: true, reason: 'MATERIAL_FACTS_UNRESOLVED_OR_TOO_LARGE', resourceHash }
-    return { ...result, text, extractedFacts: facts, coverage: { complete: true, mode: 'model_extraction', resourceHash, totalBytes: Buffer.byteLength(value.text), ranges: coverage },
-      restrictions: facts.filter(fact => ['restriction', 'condition'].includes(fact.kind)).map(fact => fact.quote) }
+    // 完整保留读取结果及原有覆盖证明，容量交由实际模型提供方报告。
+    return projectMaterial(value)
   }
   async function resolvedEvidenceFor(data, unitId) {
     return Promise.all(data.requests.filter(request => request.unitId === unitId && request.nodeId === 'R' && request.kind === 'needs_context' && request.status === 'resolved')
       .map(async request => ({ requestId: request.id, needs: request.needs, answer: await prepareMaterial(data, unitId, request.answer) })))
   }
   async function invoke(data, unitId, stage, input, fixedOutput) {
+    for (let correction = 0; correction <= config.maxCorrections; correction++) {
+      const previousNodes = new Set(data.nodes.map(node => `${node.nodeRunId}:${node.leaseEpoch}`))
+      const result = await invokeAttempt(data, unitId, stage, input, fixedOutput)
+      if (result) return result
+      data = await state(data.run.runId)
+      const failure = data.nodes.findLast(node => !previousNodes.has(`${node.nodeRunId}:${node.leaseEpoch}`) && node.unitId === unitId && node.nodeId === stage && node.status === 'failed')
+      if (!failure || !/^MESSAGE_(?:CONTEXT_(?:REF|RESOURCE)|RESOURCE_REF|CANDIDATE_CONTINUATION|CONVERSATION_SCOPE|IMPACT_ASSESSMENT|SCOPE_PROOF|STAGE_AUTHORIZATION|UNKNOWN_TARGET)/u.test(failure.error ?? '')) return null
+      if (correction === config.maxCorrections) {
+        await cmd('message.attention', { runId: data.run.runId, unitId, reason: `MESSAGE_PROTOCOL_CORRECTION_EXHAUSTED:${stage}:${unitId}:${failure.error}` })
+        return null
+      }
+    }
+    return null
+  }
+  async function invokeAttempt(data, unitId, stage, input, fixedOutput) {
     const runId = data.run.runId, rev = revision(data)
     const prior = data.nodes.find(node => node.unitId === unitId && node.nodeId === stage && ['completed', 'succeeded'].includes(node.status) && (node.revision ?? rev) === rev && node.input?.contextHash === input.contextHash && (stage !== 'IB' || node.input?.topicInputRevision === input.topicInputRevision))
     if (prior) return prior.output?.output ?? prior.output
@@ -142,20 +115,18 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const answers = await Promise.all(data.requests.filter(request => request.unitId === unitId && request.nodeId === stage && request.status === 'resolved').map(async request => ({ requestId: request.id, question: request.question, answer: await prepareMaterial(data, unitId, request.answer) })))
     if (pendingMaterial(answers) || pendingMaterial(input)) return null
     if (answers.some(answer => answer.answer?.resources?.some(resource => resource.capacityExceeded) || answer.answer?.capacityExceeded)) {
-      await cmd('message.attention', { runId, reason: `MESSAGE_MATERIAL_CAPACITY:${stage}:${unitId}` }); return null
+      await cmd('message.attention', { runId, unitId, reason: `MESSAGE_MATERIAL_CAPACITY:${stage}:${unitId}` }); return null
     }
     const previousFailure = data.nodes.findLast(node => node.unitId === unitId && node.nodeId === stage && node.status === 'failed')?.error
     input = { ...input, ...(answers.length ? { clarificationAnswers: answers } : {}), ...(previousFailure ? { previousFailure } : {}) }
     if (incompleteMaterial(input.material) || incompleteMaterial(input.resolvedEvidence) || incompleteMaterial(input.clarificationAnswers)
       || input.units?.some(unit => incompleteMaterial(unit.input?.resolvedEvidence) || incompleteMaterial(unit.input?.clarificationAnswers))) {
-      await cmd('message.attention', { runId, reason: `MESSAGE_MATERIAL_CAPACITY:${stage}:${unitId}` }); return null
+      await cmd('message.attention', { runId, unitId, reason: `MESSAGE_MATERIAL_CAPACITY:${stage}:${unitId}` }); return null
     }
-    const inputLimit = data.run.policy.nodeInputByteLimits?.[stage] ?? limits[stage][0]
-    const outputLimit = stage === 'IB' ? Math.min(4000, 1500 + Math.max(0, input.units.length - 1) * 600) : limits[stage][1]
+    const outputLimit = stage === 'IB' ? Math.min(4000, 1500 + Math.max(0, input.units.length - 1) * 600) : outputLimits[stage]
     // 代码已确定的产出只留节点账和schema校验，不领取模型容量或并发槽。
     const prepared = fixedOutput ? null : prepareMessageRequest(stage, input)
     const inputBytes = prepared?.inputBytes ?? 0
-    if (prepared && inputBytes > inputLimit) { await cmd('message.attention', { runId, reason: `MESSAGE_CONTEXT_CAPACITY:${stage}:${unitId}:${inputBytes}/${inputLimit}` }); return null }
     const release = fixedOutput ? null : await slot()
     let binding, timer, controller
     try {
@@ -164,7 +135,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (revision(current) !== rev) return null
       const deadline = current.run.deadline
       const remaining = stage === 'IB' ? config.attemptMs : deadline ? Number(new Date(deadline)) - clock() - config.commitReserveMs : config.attemptMs
-      if (remaining <= 0) { await cmd('message.attention', { runId, reason: `MESSAGE_DEADLINE_BEFORE_CLAIM:${stage}:${unitId}` }); return null }
+      if (remaining <= 0) { await cmd('message.attention', { runId, unitId, reason: `MESSAGE_DEADLINE_BEFORE_CLAIM:${stage}:${unitId}` }); return null }
       const claimed = await cmd('message.node.claim', { runId, unitId, nodeId: stage, expectedRevision: rev, estimatedInputTokens: prepared ? inputBytes + 256 : 0, maxOutputTokens: prepared ? outputLimit : 0, input: prepared ? { ...input, inputBytes, inputHash: prepared.inputHash, inputReadyAt: clock() } : { deterministic: true, ...(input.contextHash ? { contextHash: input.contextHash } : {}), inputHash: digest(input), inputReadyAt: clock() } })
       binding = claimed?.node
       if (!binding) return null
@@ -173,9 +144,16 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const response = fixedOutput ? { output: fixedOutput, usage: { inputTokens: 0, outputTokens: 0 } } : await Promise.race([judge({ stage, input, prepared, schema: messageSchemas[stage], signal: controller.signal, maxOutputTokens: outputLimit }), timeout])
       const output = messageSchemas[stage].parse(response.output ?? response)
       validateExecutionMaterialRefs(stage, output, input)
+      validateContextRequests(stage, output, input)
       if (stage === 'S') validateSplit(output, current.run.body)
       if (stage === 'material' && output.facts.some(fact => !input.text.includes(fact.quote))) throw new Error('MESSAGE_MATERIAL_QUOTE_INVALID')
-      if (stage === 'R' && output.kind === 'binding' && output.candidateId !== null && !input.candidates.some(card => card.candidateId === output.candidateId)) throw new Error('MESSAGE_UNKNOWN_TARGET')
+      if (stage === 'R' && output.kind === 'binding') {
+        if (output.candidateId !== null && !input.candidates.some(card => card.candidateId === output.candidateId && !card.unboundSource)) throw new Error('MESSAGE_UNKNOWN_TARGET')
+        const relations = new Map((input.accumulatedEvidence ?? []).flatMap(page => page.assessments ?? []).map(item => [item.candidateId, item.relation]))
+        for (const assessment of output.assessments ?? []) relations.set(assessment.candidateId, assessment.relation)
+        if (output.disposition === 'new' && [...relations].some(([id, relation]) => relation === 'related' && !input.candidates.find(card => card.candidateId === id)?.unboundSource))
+          throw new Error('MESSAGE_SCOPE_PROOF_INVALID:此前相关候选未明确排除，不能新建事项')
+      }
       if (stage === 'I' && output.kind === 'intent' && output.actions.some((action, index) => action.dependsOn.some(dep => dep >= index))) throw new Error('MESSAGE_ACTION_DEPENDENCY_INVALID')
       const usage = response.usage && Number.isSafeInteger(response.usage.inputTokens) && Number.isSafeInteger(response.usage.outputTokens) ? response.usage : undefined
       const committed = await cmd('message.node.complete', { runId, nodeRunId: binding.nodeRunId, leaseEpoch: binding.leaseEpoch, expectedRevision: rev, ...(usage ? { usage } : {}), output: { output, usage: response.usage ?? {}, inputBytes, resultReadyAt: clock() } })
@@ -185,10 +163,11 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (!binding && error.code === 'RUNTIME_MAINTENANCE_ACTIVE') throw error
       if (binding) {
         const failure = error.issues ? `MESSAGE_SCHEMA_INVALID:${JSON.stringify(error.issues.slice(0, 8).map(issue => ({ path: issue.path, message: issue.message }))).slice(0, 1200)}` : error.code ?? error.message
-        try { await cmd('message.node.fail', { runId, nodeRunId: binding.nodeRunId, leaseEpoch: binding.leaseEpoch, expectedRevision: rev, error: failure, retryAt: new Date(clock() + config.recoveryDelaysMs[0]).toISOString() }) }
+        const protocolError = /^MESSAGE_(?:CONTEXT_(?:REF|RESOURCE)|RESOURCE_REF|CANDIDATE_CONTINUATION|CONVERSATION_SCOPE|IMPACT_ASSESSMENT|SCOPE_PROOF|STAGE_AUTHORIZATION|UNKNOWN_TARGET)/u.test(failure)
+        try { await cmd('message.node.fail', { runId, nodeRunId: binding.nodeRunId, leaseEpoch: binding.leaseEpoch, expectedRevision: rev, error: failure, retryAt: new Date(clock() + (protocolError ? 0 : config.recoveryDelaysMs[0])).toISOString() }) }
         catch (failure) { if (!['MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(failure.code)) throw failure }
       }
-      else if (error.code === 'MESSAGE_BUDGET_EXHAUSTED') await cmd('message.attention', { runId, reason: `MESSAGE_BUDGET_EXHAUSTED:${stage}:${unitId}` })
+      else if (error.code === 'MESSAGE_BUDGET_EXHAUSTED') await cmd('message.attention', { runId, unitId, reason: `MESSAGE_BUDGET_EXHAUSTED:${stage}:${unitId}` })
       else if (!['MESSAGE_NODE_NOT_READY', 'MESSAGE_RETRY_NOT_DUE', 'MESSAGE_DEADLINE_EXCEEDED', 'MESSAGE_STALE'].includes(error.code)) throw error
       return null
     } finally { clearTimeout(timer); if (controller) { controller.abort(); controllers.delete(binding.nodeRunId) }; release?.() }
@@ -196,30 +175,42 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   async function unitDrive(runId, unit) {
     if (closed) return
     let data = await state(runId)
+    if (data.units.find(item => item.unitId === unit.unitId)?.blockedReason) return
     if (unit.status && ['accepted', 'applied', 'ignored', 'rejected', 'superseded'].includes(unit.status)) return
     if (context.bindTopic && unit.topicId && unit.routingBinding) return
     if (data.requests.some(request => request.unitId === unit.unitId && request.status === 'pending')) return
     const snapshot = data.run.snapshot
     const base = unitContext(snapshot, unit)
+    let unresolvedMaterials
     if (unit.contextNeeds?.length) {
       const aliases = new Map((snapshot.historyManifest ?? []).map((item, index) => [`h${index + 1}`, item.sourceKey]))
       const needs = unit.contextNeeds.map(need => ({ ...need, resourceRef: aliases.get(need.resourceRef) ?? need.resourceRef }))
       const material = await context.material?.({ run: data.run, unit, nodeId: 'R', needs })
-      if (!material?.ready) { await waiting(data, unit.unitId, 'R', { kind: 'needs_context', reason: 'UNIT_MATERIAL_PENDING', needs: unit.contextNeeds }); return }
-      base.material = await prepareMaterial(data, unit.unitId, material.data)
-      if (pendingMaterial(base.material)) return
-      if (incompleteMaterial(base.material)) { await cmd('message.attention', { runId, reason: `MESSAGE_MATERIAL_CAPACITY:R:${unit.unitId}` }); return }
+      if (!material?.ready) {
+        unresolvedMaterials = needs
+        base.pendingMaterialNeeds = needs
+      } else {
+        base.material = await prepareMaterial(data, unit.unitId, material.data)
+        if (pendingMaterial(base.material)) return
+        if (incompleteMaterial(base.material)) { await cmd('message.attention', { runId, unitId: unit.unitId, reason: `MESSAGE_MATERIAL_CAPACITY:R:${unit.unitId}` }); return }
+      }
     }
     const candidateStartedAt = clock()
     const followup = statusFollowup(snapshot, agentNames())
     const retrieved = await context.candidates?.({ run: data.run, snapshot, unit, explicitSourceKeys: followup ? [followup.sourceKey] : [] }) ?? []
     const rawCandidates = Array.isArray(retrieved) ? retrieved : retrieved.cards
-    if (!Array.isArray(rawCandidates) || retrieved.explicitOverflow) { await cmd('message.attention', { runId, reason: `MESSAGE_REFERENCED_CANDIDATES_CAPACITY:R:${unit.unitId}` }); return }
+    if (!Array.isArray(rawCandidates) || retrieved.explicitOverflow) { await cmd('message.attention', { runId, unitId: unit.unitId, reason: `MESSAGE_REFERENCED_CANDIDATES_CAPACITY:R:${unit.unitId}` }); return }
+    const impact = context.bindTopic ? await store.query({ kind: 'message.impact', runId }) : null
     const nearest = snapshot.history.at(-1)
     const recentSourceKey = nearest?.actorId === data.run.actorId && !data.run.context?.quoteRefs?.length ? nearest.sourceKey : null
     const candidates = candidateCards(rawCandidates).map((card, index) => ({
       ...card, ...(recentSourceKey && rawCandidates[index].sourceRefs?.includes(recentSourceKey) ? { recentSourceMatch: true } : {}),
     }))
+    if (context.bindTopic) for (const sibling of data.units.filter(item => item.unitId !== unit.unitId && !item.topicId && !['ignored', 'rejected', 'superseded'].includes(item.status))) {
+      candidates.push({ candidateId: `unbound:${runId}:${sibling.unitId}`, unboundSource: { runId, unitId: sibling.unitId },
+        goal: sibling.spans.map(span => data.run.body.slice(span.start, span.end)).join('\n'),
+        sharedConstraints: base.sharedConstraints ?? [], state: 'awaiting_relation' })
+    }
     const priorTopic = followup && rawCandidates.find(card => card.topicId && card.sourceRefs?.includes(followup.sourceKey))
     const orderedCandidates = [...candidates].sort((left, right) =>
       Number(Boolean(right.explicitReferenceMatches?.length)) - Number(Boolean(left.explicitReferenceMatches?.length))
@@ -232,67 +223,78 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     let relationCandidates = orderedCandidates.filter((card, index) => index < 8 || protectedIds.has(card.candidateId))
     const deferredCandidates = orderedCandidates.filter(card => !relationCandidates.includes(card))
     const relationInput = { ...base, candidates: relationCandidates,
-      recentMessages: snapshot.history.slice(-3).map(item => ({ sourceKey: item.sourceKey, actorId: item.actorId, text: item.text?.slice(0, 600) })),
+      recentMessages: snapshot.history.slice(-3).map(item => ({ sourceKey: item.sourceKey, ...(item.actorId ? { actorId: item.actorId } : {}), ...(typeof item.text === 'string' ? { text: item.text.slice(0, 600) } : {}) })),
       candidatePreparationMs: clock() - candidateStartedAt, omittedCandidateCount: deferredCandidates.length + (Array.isArray(retrieved) ? 0 : Math.max(0, retrieved.total - rawCandidates.length)),
-      catalogRevision: retrieved.catalogRevision ?? digest(rawCandidates), candidatePage: 0 }
-    const answers = data.requests.filter(request => request.unitId === unit.unitId && request.nodeId === 'R' && request.status === 'resolved')
-      .map(request => ({ requestId: request.id, question: request.question, answer: projectMaterial(request.answer) }))
-    const previousFailure = data.nodes.findLast(node => node.unitId === unit.unitId && node.nodeId === 'R' && node.status === 'failed')?.error
-    const projectedInput = { ...relationInput, ...(answers.length ? { clarificationAnswers: answers } : {}), ...(previousFailure ? { previousFailure } : {}) }
-    // R 的补取材料作为 clarificationAnswers 在 invoke 才合并；按完整输入计量，保留高优先身份卡。
-    const relationLimit = data.run.policy.nodeInputByteLimits?.R ?? limits.R[0]
-    while (relationCandidates.length > 1 && prepareMessageRequest('R', projectedInput).inputBytes > relationLimit - 500) {
-      const removable = relationCandidates.findLastIndex(card => !card.explicitReferenceMatches?.length && card.candidateId !== priorTopic?.candidateId)
-      if (removable < 0) break
-      deferredCandidates.unshift(...relationCandidates.splice(removable, 1))
-      relationInput.omittedCandidateCount++
-    }
+      catalogRevision: retrieved.catalogRevision ?? digest(rawCandidates), candidatePage: 0, accumulatedEvidence: [] }
     let linked
+    const seenCandidates = [...relationCandidates]
     for (;;) {
-      relationInput.contextHash = digest([relationInput.catalogRevision, relationInput.candidatePage, relationCandidates.map(card => card.candidateId)])
-      linked = await invoke(await state(runId), unit.unitId, 'R', relationInput, followup ? { kind: 'binding', disposition: 'conversation', candidateId: priorTopic?.candidateId ?? null, evidence: ['前文任务状态问句的范围补充'] } : undefined)
-      if (linked?.kind !== 'binding' || linked.disposition !== 'new' || !deferredCandidates.length) break
+      relationInput.candidateContinuation = deferredCandidates.length ? { catalogRevision: relationInput.catalogRevision, nextPage: relationInput.candidatePage + 1 } : null
+      relationInput.contextHash = digest([relationInput.catalogRevision, relationInput.candidatePage, seenCandidates.map(card => card.candidateId), relationInput.accumulatedEvidence])
+      linked = await invoke(await state(runId), unit.unitId, 'R', relationInput)
+      if (!linked || !['binding', 'continue_candidates'].includes(linked.kind)) break
+      const pageEvidence = { page: relationInput.candidatePage, candidateIds: relationCandidates.map(card => card.candidateId),
+        evidence: linked.evidence, assessments: linked.assessments ?? [] }
+      relationInput.accumulatedEvidence = [...relationInput.accumulatedEvidence, pageEvidence]
+      if (impact && linked.assessments?.length) {
+        const assessments = linked.assessments.flatMap(assessment => {
+          const card = seenCandidates.find(candidate => candidate.candidateId === assessment.candidateId)
+          if (!card?.topicId || !impact.candidateTopics.some(topic => topic.topicId === card.topicId)) return []
+          const ref = [{ sourceKey: data.run.sourceKey, sourceVersion: data.run.sourceVersion, text: data.run.body }, ...snapshot.quotes]
+            .find(source => typeof source.text === 'string' && source.text.includes(assessment.sourceQuote))
+          if (!ref) return []
+          return [{ topicId: card.topicId, relation: assessment.relation, reason: assessment.reason,
+            sourceRefs: [...unit.spans.map(span => ({ sourceKey: data.run.sourceKey, sourceVersion: data.run.sourceVersion, text: data.run.body.slice(span.start, span.end) })),
+              ...(ref.sourceKey === data.run.sourceKey ? [] : [{ sourceKey: ref.sourceKey, sourceVersion: ref.sourceVersion, text: assessment.sourceQuote }])] }]
+        })
+        if (assessments.length) await cmd('message.impact.resolve', { runId, expectedRevision: revision(data), unitId: unit.unitId,
+          catalogRevision: impact.catalogRevision, assessments })
+      }
+      if (linked.kind === 'binding' && linked.disposition !== 'new' || !deferredCandidates.length) break
       const resolvedDetails = new Set(data.requests.filter(request => request.unitId === unit.unitId && request.nodeId === 'R' && request.status === 'resolved').flatMap(request => request.needs?.map(need => need.resourceRef) ?? []))
       if (relationCandidates.some(card => card.explicitReferenceMatches?.length && card.omissions?.some(item => item.resourceRef && !resolvedDetails.has(item.resourceRef)))) break
       relationCandidates = deferredCandidates.splice(0, 8)
-      relationInput.candidates = relationCandidates
+      seenCandidates.push(...relationCandidates)
+      relationInput.candidates = [...seenCandidates]
       relationInput.candidatePage++
       relationInput.omittedCandidateCount = deferredCandidates.length
-      const nextInput = { ...relationInput, ...(answers.length ? { clarificationAnswers: answers } : {}) }
-      while (relationCandidates.length > 1 && prepareMessageRequest('R', nextInput).inputBytes > relationLimit - 500) {
-        deferredCandidates.unshift(relationCandidates.pop())
-        relationInput.omittedCandidateCount++
-      }
     }
     if (!linked) return
     if (linked.kind !== 'binding' || linked.disposition === 'unresolved') { await waiting(data, unit.unitId, 'R', linked.kind === 'binding' ? { kind: 'needs_clarification', reason: 'MESSAGE_TARGET_UNRESOLVED' } : linked); return }
-    const confirmedIndependent = data.requests.some(request => request.unitId === unit.unitId && request.reason === 'MESSAGE_CANDIDATE_CATALOG_INCOMPLETE'
-      && request.status === 'resolved' && /独立新事项|新增独立任务/u.test(String(request.answer)))
-    if (linked.disposition === 'new' && relationInput.omittedCandidateCount > 0 && !confirmedIndependent) {
-      await waiting(data, unit.unitId, 'R', { kind: 'needs_clarification', reason: 'MESSAGE_CANDIDATE_CATALOG_INCOMPLETE', question: `仍有 ${relationInput.omittedCandidateCount} 个旧事项未进入本次候选判断，请明确是否为独立新事项或提供原消息引用。`, needs: [] })
+    if (linked.disposition === 'new' && relationInput.omittedCandidateCount > 0) {
+      await cmd('message.attention', { runId, unitId: unit.unitId, reason: 'MESSAGE_CANDIDATE_CATALOG_INCOMPLETE' })
       return
     }
-    const detailRefs = [...new Set(relationCandidates.filter(card => card.candidateId === linked.candidateId || linked.disposition === 'new' && card.explicitReferenceMatches?.length)
+    const detailRefs = [...new Set(seenCandidates.filter(card => card.candidateId === linked.candidateId || linked.disposition === 'new' && card.explicitReferenceMatches?.length)
       .flatMap(card => card.omissions?.map(omission => omission.resourceRef).filter(Boolean) ?? []))]
     const resolvedRefs = new Set(data.requests.filter(request => request.unitId === unit.unitId && request.nodeId === 'R' && request.status === 'resolved').flatMap(request => request.needs?.map(need => need.resourceRef) ?? []))
     const missingDetails = detailRefs.filter(ref => !resolvedRefs.has(ref))
     if (missingDetails.length) { await waiting(data, unit.unitId, 'R', { kind: 'needs_context', reason: 'CANDIDATE_DETAIL_REQUIRED', needs: missingDetails.map(resourceRef => ({ resourceRef, reason: '核对候选完整目标与判别事实' })) }); return }
-    const target = relationCandidates.find(card => card.candidateId === linked.candidateId) ?? null
-    let binding = { ...linked, ...target, target }
+    const target = seenCandidates.find(card => card.candidateId === linked.candidateId) ?? null
+    let binding = { ...linked, ...target, target, routingEvidence: relationInput.accumulatedEvidence, catalogRevision: relationInput.catalogRevision }
     data = await state(runId)
     const facts = await context.facts?.({ run: data.run, snapshot, unit, binding }) ?? {}
     if (context.bindTopic) {
       const topic = await context.bindTopic({ run: data.run, unit, binding, facts })
       if (!topic) { await cmd('message.attention', { runId, reason: `MESSAGE_TOPIC_BINDING_MISSING:${unit.unitId}` }); return }
       await cmd('message.topic.bind', { runId, unitId: unit.unitId, expectedRevision: revision(data), binding: { ...binding, topicId: topic.topicId }, topic }, `topic-bind:${runId}:${unit.unitId}:${revision(data)}`)
+      // S 拆分不等于事项独立；只采用 R 对当前未归属单元作出的显式双向独立证明。
+      const siblingAssessments = new Map(relationInput.accumulatedEvidence.flatMap(page => page.assessments).map(item => [item.candidateId, item]))
+      for (const card of seenCandidates.filter(item => item.unboundSource)) {
+        const assessment = siblingAssessments.get(card.candidateId)
+        if (assessment?.relation !== 'independent') continue
+        const latestImpact = await store.query({ kind: 'message.impact', runId })
+        await cmd('message.impact.resolve', { runId, expectedRevision: revision(data), unitId: card.unboundSource.unitId,
+          catalogRevision: latestImpact.catalogRevision, assessments: [{ topicId: topic.topicId, relation: 'independent', reason: assessment.reason,
+            sourceRefs: [{ sourceKey: data.run.sourceKey, sourceVersion: data.run.sourceVersion, text: data.run.body }] }] })
+      }
+      if (unresolvedMaterials) await waiting(await state(runId), unit.unitId, 'R', { kind: 'needs_context', reason: 'UNIT_MATERIAL_PENDING', needs: unresolvedMaterials })
       return
     }
+    if (unresolvedMaterials) { await waiting(data, unit.unitId, 'R', { kind: 'needs_context', reason: 'UNIT_MATERIAL_PENDING', needs: unresolvedMaterials }); return }
     const resolvedEvidence = await resolvedEvidenceFor(data, unit.unitId)
     if (pendingMaterial(resolvedEvidence)) return
-    const fixedIntent = followup ? { kind: 'intent', actions: followup.kind === 'count'
-      ? [{ intent: 'fact', arguments: { kind: 'fact', text: base.text }, dependsOn: [] }]
-      : [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: followup.kind === 'count' ? 'none' : 'result' } : undefined
-    const intent = await invoke(data, unit.unitId, 'I', intentContext(base, binding, facts, snapshot.policy, candidates, resolvedEvidence), fixedIntent)
+    const intent = await invoke(data, unit.unitId, 'I', intentContext(base, binding, facts, snapshot.policy, candidates, resolvedEvidence))
     if (!intent) return
     if (intent.kind === 'needs_relink') {
       const result = await cmd('message.relink', { runId, unitId: unit.unitId, expectedRevision: revision(data), reason: intent.reason })
@@ -309,12 +311,6 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       intent.requiredExecutionMaterials = [...new Set([...intent.requiredExecutionMaterials, ...resolvedEvidence.flatMap(item => item.needs.map(need => need.resourceRef))])]
       const constraints = resolvedEvidence.flatMap(item => [...(item.answer?.constraints ?? []), ...(item.answer?.restrictions ?? []), ...(item.answer?.resources?.flatMap(resource => resource.restrictions ?? []) ?? [])])
       intent.constraints = [...new Set([...intent.constraints, ...constraints])]
-    }
-    if (binding.disposition === 'conversation' && intent.actions.every(action => action.intent === 'no_action')
-      && directedToAgent(data.run.body) && /(?:审核|任务).*(?:完成|改完|进度|状态|部署)/u.test(data.run.body)
-      && /[吗？?]/u.test(data.run.body)) {
-      intent.actions = [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }]
-      intent.replyPolicy = 'result'
     }
     if (investigationMatched && !/(?:需要|请|帮忙).{0,20}(?:修复|处理)/u.test(data.run.body)
       && !data.requests.some(request => request.unitId === unit.unitId && investigationConfirmation(request))) {
@@ -383,7 +379,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   async function topicDrive(topicId) {
     const topic = await store.query({ kind: 'message.topic', topicId })
     if (!topic) return
-    const routingPending = (await store.query({ kind: 'message.routing.pending', conversationId: topic.conversationId })).length > 0
+    const routingPending = (await store.query({ kind: 'message.routing.pending', conversationId: topic.conversationId, topicId })).length > 0
     let entries = await store.query({ kind: 'message.topic.units', topicId })
     if (!entries.length) return
     const priorityControls = routingPending ? await authorizedPriorityControls(entries) : null
@@ -392,6 +388,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       ...(priorityControls ? { priorityControls } : {}) }, `topic-refresh:${topicId}:${topic.inputRevision}`)
     if (refreshed.status !== 'ready') return refreshed.status
     entries = await store.query({ kind: 'message.topic.units', topicId })
+    if (!entries.length) return
     const prepared = await Promise.all(entries.map(async ({ run, unit }) => {
       const data = await state(run.runId)
       const binding = unit.routingBinding
@@ -450,13 +447,6 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (intent.kind === 'needs_relink') { await cmd('message.relink', { runId: item.run.runId, unitId: item.unit.id, expectedRevision: revision(item.data), reason: intent.reason }); void process(item.run.runId); return }
       if (intent.kind === 'needs_resegmentation') { await resegment(item.run.runId, intent.reason); return }
       if (intent.kind !== 'intent') { await waiting(item.data, item.unit.id, 'IB', intent); return }
-      const followup = statusFollowup(item.run.snapshot, agentNames())
-      if (followup) intent = { kind: 'intent', actions: followup.kind === 'count'
-        ? [{ intent: 'fact', arguments: { kind: 'fact', text: item.base.text }, dependsOn: [] }]
-        : [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: followup.kind === 'count' ? 'none' : 'result' }
-      if (item.binding.disposition === 'conversation' && intent.actions.every(action => action.intent === 'no_action')
-        && directedToAgent(item.run.body) && /(?:审核|任务).*(?:完成|改完|进度|状态|部署)/u.test(item.run.body)
-        && /[吗？?]/u.test(item.run.body)) intent = { ...intent, actions: [{ intent: 'status', arguments: { scope: 'conversation' }, dependsOn: [] }], replyPolicy: 'result' }
       const investigationMatched = item.binding.engine === 'legacy' && item.binding.state === 'completed'
         && /仅授权排查分析/u.test(item.binding.goal ?? '')
         && /(?:依然|仍然|还是|再次|又).*(?:问题|没有|未显示|失败)|(?:问题|没有|未显示|失败).*(?:依然|仍然|还是|再次|又)/u.test(item.run.body)
@@ -511,7 +501,6 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   }
   async function scheduleTopics(conversationId) {
     if (!context.bindTopic || closed) return
-    const routingPending = (await store.query({ kind: 'message.routing.pending', conversationId })).length > 0
     for (const topic of await store.query({ kind: 'message.topic.pending', conversationId })) {
       if (topicFlights.has(topic.topicId)) {
         const scheduled = topicFlights.get(topic.topicId).then(() => closed ? undefined : scheduleTopics(conversationId))
@@ -520,9 +509,10 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         continue
       }
       const entries = await store.query({ kind: 'message.topic.units', topicId: topic.topicId })
+      const routingPending = (await store.query({ kind: 'message.routing.pending', conversationId, topicId: topic.topicId })).length > 0
       if (routingPending && !await authorizedPriorityControls(entries)) continue
       const snapshots = await Promise.all(entries.map(item => state(item.run.runId)))
-      if (snapshots.some(data => data.run.status === 'needs_attention' || data.requests.some(request => request.status === 'pending' && entries.some(item => item.unit.id === request.unitId)))) continue
+      if (snapshots.some(data => data.requests.some(request => ['pending', 'blocked'].includes(request.status) && (request.unitId === '$' || entries.some(item => item.unit.id === request.unitId))))) continue
       let retry = false, paused = false
       const flight = topicDrive(topic.topicId).then(status => { retry = ['WAIT_ROUTING', 'CONTEXT_CHANGED'].includes(status) }).catch(async error => {
         paused = error.code === 'RUNTIME_MAINTENANCE_ACTIVE'
@@ -571,12 +561,14 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       catch (error) { if (['MESSAGE_COMMAND_NOT_READY', 'MESSAGE_DEPENDENCY_PENDING', 'MESSAGE_INPUT_PENDING', 'MESSAGE_STALE'].includes(error.code)) return; throw error }
       if (!receipt.dispatchEligible || !receipt.result?.command) return
       const claimed = receipt.result.command
+      let result
       try {
-        const result = await handler(action, { ...info, commandLeaseEpoch: claimed.leaseEpoch })
+        result = await handler(action, { ...info, commandLeaseEpoch: claimed.leaseEpoch })
         // Agent 的持久执行自行提交结果；路由队列不能等待一次长查询结束。
         if (result?.executionPending === true) return
         await cmd('message.command.complete', { commandId: command.commandId, leaseEpoch: claimed.leaseEpoch, result })
       } catch (error) { await cmd('message.command.fail', { commandId: command.commandId, leaseEpoch: claimed.leaseEpoch, error: error.code ?? error.message }); return }
+      await context.onCommandApplied?.(action, info, result)
       // 回执提交即唤醒其已就绪后继，不能等待同批其它慢动作或下一次恢复轮询。
       await dispatch(runId)
     }))
@@ -591,7 +583,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
   async function drive(runId) {
     if (closed) return state(runId)
     let data = await state(runId)
-    if (!data?.run || ['superseded', 'needs_attention', 'buffered'].includes(data.run.status)) return data
+    if (!data?.run || ['superseded', 'buffered'].includes(data.run.status) || data.run.status === 'needs_attention' && !data.units.length) return data
     if (data.run.status === 'settled') { await dispatch(runId); return state(runId) }
     if ((!data.run.context?.quoteRefs?.length || isPassiveTaskProgress(data.run.body)) && isQuietGroupMessage(data.run.body)) {
       const topic = isPassiveTaskProgress(data.run.body) ? await context.passiveTopic?.(data.run) : null
@@ -634,17 +626,13 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
           legacyTail = routed.catch(() => {})
           return routed
         }
-        const prior = routingTails.get(conversationId) ?? Promise.resolve()
-        const routed = prior.catch(() => {}).then(async () => {
-          if (data.run.status === 'pending' && !data.run.activatedAt) await cmd('message.activate', { runId }, `activate:${runId}`)
-          const result = await drive(runId)
-          await scheduleTopics(conversationId)
-          return result
-        })
-        routingTails.set(conversationId, routed)
-        try { return await routed } finally { if (routingTails.get(conversationId) === routed) routingTails.delete(conversationId) }
+        // 来源登记与提交由控制事务保护；模型等待不能占住全群路由队列。
+        if (data.run.status === 'pending' && !data.run.activatedAt) await cmd('message.activate', { runId }, `activate:${runId}`)
+        const result = await drive(runId)
+        await scheduleTopics(conversationId)
+        return result
       }).catch(async error => {
-      if (!closed && !['MESSAGE_STALE', 'MESSAGE_NODE_STALE', 'RUNTIME_MAINTENANCE_ACTIVE'].includes(error.code)) await cmd('message.attention', { runId, reason: `MESSAGE_CONTEXT_OR_DISPATCH_FAILED:${error.code ?? error.message}` })
+      if (!closed && !['MESSAGE_STALE', 'MESSAGE_NODE_STALE', 'MESSAGE_IMPACT_CATALOG_STALE', 'MESSAGE_IMPACT_EVIDENCE_STALE', 'RUNTIME_MAINTENANCE_ACTIVE'].includes(error.code)) await cmd('message.attention', { runId, reason: `MESSAGE_CONTEXT_OR_DISPATCH_FAILED:${error.code ?? error.message}` })
       return state(runId)
       }).finally(() => flights.delete(runId))
       flights.set(runId, flight)
@@ -695,9 +683,12 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       }
       if (run.status === 'needs_attention') {
         const stage = run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:S:$:') ? 'S' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:R:') ? 'R' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:I:') ? 'I' : null
-        const version = stage === 'S' ? 's-compact-v1' : stage === 'R' ? 'r-bounded-cards-v2' : stage === 'I' ? 'i-bounded-facts-v1' : null
-        if (!version || run.capacityRetryVersion === version) return
-        const retried = await cmd('message.capacity.retry', { runId: run.runId, projectionVersion: version }, `capacity-retry:${run.runId}:${version}`)
+        const version = stage ? `${messageProjectionVersion}:${stage}:${digest([run.sourceVersion, run.snapshot?.snapshotId, prepareMessageRequest(stage, {}).system]).slice(0, 16)}` : null
+        if (!version || run.capacityRetryVersion === version) {
+          if (run.attentionScope === 'unit') return process(run.runId)
+          return
+        }
+        const retried = await cmd('message.capacity.retry', { runId: run.runId, projectionVersion: version, policy: config }, `capacity-retry:${run.runId}:${version}`)
         if (!retried?.retry) return
         return process(run.runId)
       }
@@ -705,8 +696,19 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (pendingState.requests.some(request => request.status === 'pending')) {
         const data = pendingState
         for (const request of data.requests.filter(item => context.material && item.status === 'pending' && item.kind === 'needs_context')) {
-          const material = await context.material({ run, unit: data.units.find(unit => unit.unitId === request.unitId), nodeId: request.nodeId, needs: request.needs })
+          if (request.blocked || request.retryAt && Date.parse(request.retryAt) > clock()) continue
+          // 旧版本落下的假内部目录没有合法读取器；封存旧请求，交新版 R 有界纠正。
+          if (request.needs?.some(need => need.resourceRef.startsWith('candidate-catalog:'))) {
+            await cmd('message.request.supersede', { runId: run.runId, requestId: request.id, reason: 'MESSAGE_CONTEXT_RESOURCE_REF_INVALID' })
+            continue
+          }
+          let material
+          try { material = await context.material({ run, unit: data.units.find(unit => unit.unitId === request.unitId), nodeId: request.nodeId, needs: request.needs }) }
+          catch (error) { material = { ready: false, reason: error.code ?? error.message } }
           if (material?.ready) await cmd('message.wake', { runId: run.runId, requestId: request.id, eventId: `material:${request.id}:${digest(material.data ?? {})}`, actorId: run.actorId, answer: material.data ?? {} })
+          else await cmd('message.request.retry', { runId: run.runId, requestId: request.id,
+            error: material?.reason ?? 'MATERIAL_UNAVAILABLE', retryAt: new Date(clock() + config.recoveryDelaysMs[Math.min(request.attempts ?? 0, config.recoveryDelaysMs.length - 1)]).toISOString(),
+            maxAttempts: 3, contractVersion: 'material-v2' })
         }
         return process(run.runId)
       }

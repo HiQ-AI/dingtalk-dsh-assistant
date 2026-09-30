@@ -3,6 +3,9 @@ $errors=$null;$tokens=$null
 $path=Join-Path $PSScriptRoot '../docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1'
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw '脚本解析失败'}
+$MigrateMessageImpact=$false
+$impactReadbackFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-MessageImpactReadback'},$true)
+Invoke-Expression $impactReadbackFunction.Extent.Text
 $workspaceAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$workspace'},$true)
 $deployedScriptRoot=Split-Path -Parent ([IO.Path]::GetFullPath($path))
 $resolvedWorkspace=Invoke-Expression ($workspaceAssignment.Right.Extent.Text.Replace('$PSScriptRoot','$deployedScriptRoot'))
@@ -346,3 +349,37 @@ $installAssignment=$ast.Find({param($item) $item -is [System.Management.Automati
 $ObserverPackage='D:/packages/observer recovered.tgz';Invoke-Expression $installAssignment.Extent.Text
 if($installPackages.Count-ne 2 -or $installPackages[0]-ne '@zzusp/dingtalk-dsh-assistant@file:D:/candidate.tgz' -or $installPackages[1]-ne '@zzusp/dingtalk-dsh-observer@file:D:/packages/observer recovered.tgz'){throw '普通部署安装须精确指定两个包名与源'}
 Write-Output 'PASS 3/3: 修复与普通安装均用精确包名覆盖旧file依赖'
+
+# schema6只允许持锁固定动作；真实临时证明文件用于摘要漂移门禁。
+Remove-Item Function:Get-FileHash -ErrorAction SilentlyContinue
+$impactFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Invoke-MessageImpactMigration'},$true)
+Invoke-Expression $impactFunction.Extent.Text
+$EvidenceDirectory=Join-Path $PSScriptRoot ('../docs/tmp/impact-deploy-fixture-'+[guid]::NewGuid())
+$MigrateMessageImpact=$true;$inputHashes=@{}
+function Listeners {@()}
+$lockProcess=@{HasExited=$true}
+$failed=$false;try{Invoke-MessageImpactMigration}catch{$failed=$true}
+if(-not $failed -or (Test-Path -LiteralPath $EvidenceDirectory)){throw '丢锁时必须零写拒绝'}
+[IO.Directory]::CreateDirectory($EvidenceDirectory)|Out-Null
+$writer=[IO.StringWriter]::new()
+$lockProcess=@{HasExited=$false;StandardInput=$writer;StandardOutput=[IO.StringReader]::new('{"version":6,"verified":true,"baseline":{"message_runs":{"count":1,"sha256":"original"}}}')}
+$receiptHash=Invoke-MessageImpactMigration
+if($writer.ToString().Trim()-ne 'migrate-message-impact' -or -not $receiptHash){throw '只允许固定迁移动作并保存证明'}
+$script:impactVerifyCalls=0
+function Run-Node([string[]]$Arguments){
+ if($Arguments[1]-ne 'message-impact-verify'){throw '错误回读动作'}
+ $script:impactVerifyCalls++;'{"verified":true,"version":6}'
+}
+$record=@{messageImpactMigrationSha256=$receiptHash}
+$proof=Assert-MessageImpactReadback $record
+if(-not $proof.verified -or $script:impactVerifyCalls-ne 1){throw '必须独立回读schema'}
+Add-Content "$EvidenceDirectory/message-impact-migration.json" ' '
+$failed=$false;try{Assert-MessageImpactReadback $record}catch{$failed=$true}
+if(-not $failed -or $script:impactVerifyCalls-ne 1){throw '证明漂移必须在启动或恢复前拒绝'}
+$MigrateMessageImpact=$false
+$failed=$false;try{Assert-MessageImpactReadback $record}catch{$failed=$true}
+if(-not $failed){throw '接续不允许丢失迁移标志'}
+$launchGate=$ast.Extent.Text.IndexOf('[void](Assert-MessageImpactReadback @{messageImpactMigrationSha256=')
+$start=$ast.Extent.Text.IndexOf('$launch=Start-Process', $launchGate)
+if($launchGate-lt 0 -or $start-le $launchGate){throw '启动前必须存在迁移回读门禁'}
+Write-Output 'PASS 6/6: schema迁移丢锁零写、固定锁内动作、独立回读、摘要漂移、模式漂移、启动前门禁'

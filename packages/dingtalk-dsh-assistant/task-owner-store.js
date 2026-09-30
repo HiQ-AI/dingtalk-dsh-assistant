@@ -63,7 +63,15 @@ const decision = value => {
     if (value.action !== 'advance' || !Array.isArray(value.appendStages) || !value.appendStages.length || value.appendStages.length > 32)
       fail('TASK_OWNER_DECISION_INVALID')
     for (const stage of value.appendStages) {
-      exact(stage, ['workflowId', 'gate', 'capabilityStep'], ['workflowId', 'gate'])
+      exact(stage, ['workflowId', 'gate', 'capabilityStep', 'sourceCondition'], ['workflowId', 'gate'])
+      if (stage.sourceCondition !== undefined) {
+        const condition = stage.sourceCondition
+        exact(condition, ['sourceKey', 'sourceVersion', 'sourceQuote', 'objective', 'requiredActorId'], ['sourceKey', 'sourceVersion', 'sourceQuote', 'objective'])
+        if (!Number.isSafeInteger(condition.sourceVersion) || condition.sourceVersion < 1
+          || ['sourceKey', 'sourceQuote', 'objective'].some(key => typeof condition[key] !== 'string' || !condition[key].trim())
+          || !condition.sourceQuote.includes(condition.objective)
+          || condition.requiredActorId !== undefined && (typeof condition.requiredActorId !== 'string' || !condition.requiredActorId.trim())) fail('TASK_OWNER_DECISION_INVALID')
+      }
       id(stage.workflowId)
       if (!['none', 'confirmation'].includes(stage.gate)) fail('TASK_OWNER_DECISION_INVALID')
       if (stage.capabilityStep !== undefined) {

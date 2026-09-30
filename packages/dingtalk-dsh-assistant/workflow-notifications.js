@@ -37,6 +37,22 @@ export function sameDeliveredText(observed, expected, quoted = false) {
 export function notificationOpenTaskId(ack) {
   return ack?.sendReceipt?.openTaskId ?? ack?.result?.openTaskId ?? ack?.result?.result?.openTaskId
 }
+
+// 只把明确指向助手沟通的原文作为静默依据；“不发审核消息”等业务限制不扩张。
+export function notificationSilence(run, phase) {
+  const text = run.body ?? run.snapshot?.source?.text ?? ''
+  const all = text.match(/(?:不要|不用|无需)(?:再)?(?:给我|向我)?回复(?:我)?(?:消息)?[。！!，,；;\s]|(?:不要|不用|无需)回复$/u)
+  const lifecycle = text.match(/(?:不要|不用|无需)(?:再)?(?:给我|向我)(?:发送|发|汇报|报告|同步)(?:任务)?(进度|处理结果|结果|状态)(?:消息|通知)?/u)
+  const scope = lifecycle?.[1] === '进度' || lifecycle?.[1] === '状态' ? 'assistant_progress' : 'assistant_result'
+  const applies = scope === 'assistant_progress' ? phase === 'progress' : phase === 'result' || phase.startsWith('terminal:')
+  const quote = all?.[0] ?? (applies ? lifecycle?.[0] : null)
+  return quote ? { sourceKey: run.sourceKey, sourceVersion: run.sourceVersion, sourceQuote: quote, scope: all ? 'assistant_all' : scope } : null
+}
+
+function systemWaitText(reason = '') {
+  if (reason.startsWith('MESSAGE_CONTEXT_CAPACITY:')) return '已收到，整理消息和引用材料时遇到容量问题，尚未开始处理。目前需要先修复该问题，你暂时不需要重复发送。'
+  return '已收到，目前处理遇到系统问题，尚未完成，需要先排查恢复。你暂时不需要重复提交或补充内部资料。'
+}
 export function formatGroupReply(text, responsibility = '') {
   if (typeof text !== 'string' || !text.trim()) throw new Error('WORKFLOW_REPLY_TEXT_REQUIRED')
   assertGroupReply(text)
@@ -99,36 +115,89 @@ export async function executeNotificationOperation({ store, adapter, operationId
 export function createWorkflowNotifications({ store, artifacts, controller, adapter, groupResponsibility = () => '' }) {
   let flight, beforeSequenceId, preparedCursor = 0, readbackCursor = 0
   const command = (kind, args, id) => store.command({ id, kind, args })
-  async function prepare(run, action, phase, text) {
+  async function prepare(run, action, phase, text, communicationPhase = phase) {
     if (run.channel === 'web' || run.externalMessaging === false) return
+    if (notificationSilence(run, communicationPhase)) return
     const eventKey=phase.startsWith('owner:') ? `task.owner.report:${phase.slice(6)}`
       : phase.startsWith('terminal:') ? `task.result:${action.result.runId}:${phase}`
-      : ['create','reopen'].includes(action.kind) && action.result?.runId ? `task.accepted:${action.result.runId}`
+      : ['create','reopen'].includes(action.kind) && action.result?.taskId ? `task.accepted:${action.result.taskId}:${run.sourceVersion}:${action.commandId}`
       : action.status==='rejected' ? `action.rejected:${action.commandId}` : `action.reply:${action.commandId}:${phase}`
-    const notificationId = `notice-${executionDigest([action.commandId, phase])}`
+    const notificationId = `notice-${executionDigest(phase.startsWith('owner:') ? eventKey : [action.commandId, phase])}`
     const existing = await store.query({ kind: 'message.notification', notificationId })
+      ?? (phase.startsWith('owner:') ? await store.query({ kind: 'message.notification', notificationId: `notice-${executionDigest([action.commandId, phase])}` }) : null)
     if (existing) {
-      if (existing.runId !== run.runId || existing.commandId !== action.commandId) throw new Error('MESSAGE_NOTIFICATION_CONFLICT')
+      if (phase.startsWith('owner:') ? existing.eventKey !== eventKey
+        : existing.runId !== run.runId || existing.commandId !== action.commandId) throw new Error('MESSAGE_NOTIFICATION_CONFLICT')
       return
     }
     const latest = phase.startsWith('owner:') && action.result?.taskId
       ? await store.query({ kind: 'message.task.latest', taskId: action.result.taskId }) : null
     const sourceRun = latest?.run?.conversationId === run.conversationId ? latest.run : run
+    if (notificationSilence(sourceRun, communicationPhase)) return
     const responsibility = groupResponsibility(run.conversationId)
     if (responsibility.includes('引用回复') && (!sourceRun.context?.sourceMessageId || !sourceRun.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
     await command('message.notification.prepare', { runId: run.runId, commandId: action.commandId, notificationId, eventKey,
       payload: { text: formatGroupReply(text, responsibility), phase, conversationId: run.conversationId,
-        sourceMessageId: sourceRun.context?.sourceMessageId, actorId: sourceRun.actorId },
+        sourceMessageId: sourceRun.context?.sourceMessageId, actorId: sourceRun.actorId,
+        fact: { sourceVersion: run.sourceVersion, runRevision: run.revision, ...(action.result?.taskId ? { taskId: action.result.taskId } : {}) } },
       disclosure: { conversationId: run.conversationId, authorizationRef: sourceRun.sourceKey },
+    }, `prepare:${notificationId}`)
+  }
+  async function prepareState(run, phase, text, request) {
+    if (notificationSilence(run, phase)) return
+    const stateFact = { revision: run.revision, status: run.status, reason: run.reason ?? null, intentStatus: run.intentStatus ?? null, phase }
+    const eventKey = request ? `request.${phase}:${request.id}:${request.revision}`
+      : `message.${phase}:${run.runId}:${run.sourceVersion}:${executionDigest(stateFact)}`
+    const notificationId = `notice-${executionDigest(eventKey)}`
+    if (await store.query({ kind: 'message.notification', notificationId })) return
+    const responsibility = groupResponsibility(run.conversationId)
+    if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
+    await command('message.notification.prepare', { runId: run.runId, ...(request ? { requestId: request.id } : { stateFact }), notificationId, eventKey,
+      payload: { text: formatGroupReply(text, responsibility), phase, conversationId: run.conversationId,
+        sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId,
+        fact: { sourceVersion: run.sourceVersion, runRevision: run.revision, ...(request ? { requestRevision: request.revision } : {}) } },
+      disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
+    }, `prepare:${notificationId}`)
+  }
+  async function prepareAcceptance(run, acceptance) {
+    if (notificationSilence(run, 'receipt')) return
+    const eventKey = `task.accepted:${acceptance.taskId}:${acceptance.requirementRevision}`
+    const notificationId = `notice-${executionDigest(eventKey)}`
+    if (await store.query({ kind: 'message.notification', notificationId })) return
+    // 升级后的承接责任不能让已经送达的同一原命令回执重新发送。
+    if (await store.query({ kind: 'message.notification', notificationId: `notice-${executionDigest([acceptance.commandId, 'receipt'])}` })) return
+    const responsibility = groupResponsibility(run.conversationId)
+    if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
+    await command('message.notification.prepare', { runId: run.runId, acceptanceId: acceptance.id, notificationId, eventKey,
+      payload: { text: formatGroupReply('已接收任务，执行条件仍在核对，尚不能确认已开始。', responsibility), phase: 'accepted', conversationId: run.conversationId,
+        sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId,
+        fact: { sourceVersion: acceptance.sourceVersion, runRevision: run.revision, taskId: acceptance.taskId, requirementRevision: acceptance.requirementRevision } },
+      disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
     }, `prepare:${notificationId}`)
   }
   async function drain() {
     const page = await store.query({ kind: 'message.list', limit: 200, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
     beforeSequenceId = page.length === 200 ? page.at(-1).sequenceId : undefined
-    for (const run of page) {
+    for (const listedRun of page) {
+      const state = await store.query({ kind: 'message.run', runId: listedRun.runId })
+      const run = state.run ?? listedRun
       if (run.channel === 'web' || run.externalMessaging === false) continue
-      const state = await store.query({ kind: 'message.run', runId: run.runId })
+      if (run.status === 'superseded') continue
+      const acceptances = await store.query({ kind: 'message.acceptances', runId: run.runId })
+      for (const acceptance of acceptances) await prepareAcceptance(run, acceptance)
+      if (run.status === 'needs_attention') await prepareState(run, 'attention', systemWaitText(run.reason))
+      if (run.intentStatus === 'waiting_routing_barrier' && Date.now() - Date.parse(run.createdAt) >= 60_000) {
+        await prepareState(run, 'routing_wait', '已收到，目前正在核对可能相关的补充要求，相关处理尚未开始；核对清楚后继续。你暂时不需要重复提交。')
+      }
+      if (run.status === 'settled' && (run.snapshot?.replyObligation ?? run.context?.replyObligation)?.required
+        && !state.commands.length && !state.requests.some(item => item.status === 'pending')) {
+        await prepareState(run, 'reply_obligation', /在不在|在[吗嘛么]/u.test(run.body ?? '') ? '在的，请说。' : '已收到。')
+      }
+      for (const request of state.requests.filter(item => item.status === 'pending' && item.kind === 'needs_context' && item.blocked)) {
+        await prepareState(run, 'system_wait', '已收到，读取所需材料时遇到问题，目前还无法继续。需要先恢复材料读取，你暂时不需要提供内部资料或重复提交。', request)
+      }
       for (const request of state.requests.filter(item => item.status === 'pending' && item.kind === 'needs_clarification')) {
+        if (notificationSilence(run, 'clarification')) continue
         const notificationId = `clarify-${executionDigest([run.runId, request.id, request.revision])}`
         const existing = await store.query({ kind: 'message.notification', notificationId })
         if (existing) {
@@ -142,9 +211,12 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
           disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
         }, `prepare:${notificationId}`)
       }
-      for (const action of state.commands.filter(item => ['applied', 'rejected'].includes(item.status) && (item.status === 'rejected' || item.args.replyPolicy !== 'none'))) {
-        if (action.result?.reply) await prepare(run, action, 'receipt', action.result.reply)
-        if (action.result?.taskId && ['create', 'research', 'answer'].includes(action.kind)) {
+      for (const action of state.commands.filter(item => ['applied', 'rejected'].includes(item.status))) {
+        const lifecycle = Boolean(action.result?.taskId) && ['create', 'research', 'answer', 'reopen', 'revise', 'pause', 'resume', 'cancel', 'confirm'].includes(action.kind)
+        const hasAcceptance = acceptances.some(item => item.commandId === action.commandId)
+        if (!hasAcceptance && action.result?.reply && (lifecycle || action.status === 'rejected' || action.args.replyPolicy !== 'none')) await prepare(run, action, 'receipt', action.result.reply)
+        else if (!hasAcceptance && lifecycle && ['create', 'reopen'].includes(action.kind)) await prepare(run, action, 'receipt', '已接收任务，正在核对执行条件；实际开始和处理结果会继续告知。')
+        if (lifecycle) {
           const reports = await store.query({ kind: 'task.owner.reports', taskId: action.result.taskId })
           for (const report of reports.filter(item => item.applicationStatus === 'applied'
             && (['complete', 'block'].includes(item.reportType)
@@ -154,7 +226,8 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
               : report.reportType === 'block' ? `任务需要处理：${report.facts.summary}`
                 : report.triggerTypes.includes('workflow.confirmation.required') ? `任务等待确认：${report.facts.summary}`
                   : `任务进展：${report.facts.summary}`
-            await prepare(run, action, `owner:${report.reportId}`, text)
+            await prepare(run, action, `owner:${report.reportId}`, text, report.reportType === 'complete' ? 'result'
+              : report.reportType === 'block' || report.triggerTypes.includes('workflow.confirmation.required') ? 'required_action' : 'progress')
           }
         }
         if (!['create', 'research', 'answer', 'reopen'].includes(action.kind) || !action.result?.runId) continue

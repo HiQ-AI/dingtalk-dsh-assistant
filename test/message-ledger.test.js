@@ -429,12 +429,12 @@ test('无回执只读状态查询的参数错误仅可受控重试一次，创�
  await f.call('command.fail',{commandId:'new-task',leaseEpoch:creation.leaseEpoch,error:'INVALID_ARGUMENT'})
  await bad(f.call('command.retry.readonly',{commandId:'new-task'}),'MESSAGE_READONLY_RETRY_FORBIDDEN')
 })
-test('token預留在失败与重启后不清零，未知usage保守计费',async t=>{
+test('token预留在失败与重启后持续计量，旧累计输入输出上限不再拒绝完整消息',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{policy:{maxInputTokens:100,maxOutputTokens:100}}))
  const n=(await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',input:{},estimatedInputTokens:80,maxOutputTokens:50})).result.node
  await f.call('node.fail',{runId:'m',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,error:'network'})
- await f.reopen();await bad(f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',input:{},estimatedInputTokens:80,maxOutputTokens:50}),'MESSAGE_BUDGET_EXHAUSTED')
- assert.equal((await f.store.query({kind:'message.run',runId:'m'})).budget.input_tokens,80)
+ await f.reopen();await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',input:{},estimatedInputTokens:80,maxOutputTokens:50})
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).budget.input_tokens,160)
 })
 test('切换水位后的消息缓冲，激活原子解缓冲，abort不双发',async t=>{
  const f=await fixture(t)
@@ -595,12 +595,13 @@ test('settled但屏障未释放的崩溃检查点仍进入恢复；编辑原子�
  assert.equal(old.barriers.length,0);assert.ok(next.barriers.some(b=>b.id==='b'&&b.ownerRunId==='B2'&&b.targetSourceKey==='A'&&b.previousOwnerRunId==='B'))
  await f.call('barrier.resolve',{runId:'B2',barrierId:'b',resolution:'new-version-control-applied'})
 })
-test('不可变材料首次落账后复用，TOCTOU正文变化与超限拒绝',async t=>{
+test('不可变材料首次落账后复用，大材料完整保留且TOCTOU正文变化拒绝',async t=>{
  const f=await fixture(t);await f.call('receive',receive());const args={runId:'m',resourceRef:'attachment',material:{text:'original',sourceVersion:1}}
  await f.call('material.record',args);await f.call('material.record',args)
  assert.deepEqual(await f.store.query({kind:'message.material',runId:'m',resourceRef:'attachment'}),args.material)
  await bad(f.call('material.record',{...args,material:{text:'changed',sourceVersion:1}}),'MESSAGE_MATERIAL_CONFLICT')
- await bad(f.call('material.record',{...args,resourceRef:'large',material:{text:'中'.repeat(30000)}}),'MESSAGE_MATERIAL_INVALID')
+ await f.call('material.record',{...args,resourceRef:'large',material:{text:'中'.repeat(30000)}})
+ assert.equal((await f.store.query({kind:'message.material',runId:'m',resourceRef:'large'})).text,'中'.repeat(30000))
 })
 test('话题归属和命令同事务接纳，跨群证据或归属冲突整次回滚',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',units:[{unitId:'u'},{unitId:'v'}]})

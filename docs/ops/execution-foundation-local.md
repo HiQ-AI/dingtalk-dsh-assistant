@@ -407,7 +407,7 @@ UAT PR 合并是单独的受控步骤 `task-uat-pr-merge`。受信 Host 需配�
 
 `read-task-message-resource` 仅对同时提供 DWS 精确消息回读与资源读取的 Host 可用：输入当前 Task 冻结的 `sourceKey`、附件 `type`（`mediaId` 或 `fileId`）及 `resourceId`，受信代码核对来源版本、原消息 ID、群 ID、正文和附件引用，再读取最多 12 KiB UTF-8 文本，独立重复回读一致后输出带来源键与内容摘要的 Markdown。任意 URL、未列入当前消息引用的附件、跨群消息及图片/二进制资源均拒绝；平台不返回完整资源引用或正文变化时明确阻塞。
 
-Task Owner 的单次输入若超过 128 KiB，会把当前事件按不超过 24 KiB 的内容地址页交给原生 `task_owner_read_events` 工具；Owner 必须读完全部事件页才能提交决定。页面过多或单条事件超出容量会明确阻塞，保留原 Task/事件水位供扩容与恢复，不截断消息后继续派发。
+Task Owner 完整接收当前来源与事件，不再按 128 KiB / 单事件 24 KiB 强制分页或拒绝；已授权的阶段产物读取也不设置固定 64 KiB 输入阈值。事件查询按水位和游标读全，阶段交接仍校验来源、版本、角色与数量。实际模型容量错误保留原 Task/水位和可恢复原因，不截断原文后继续派发。
 Owner 可用 `task_owner_read_artifact` 按引用读取当前 Task 已成功阶段的产物正文及证据，不能读取其它任务的任意工件。专业阶段含未解决的 `limitations`，或分析阶段无来源证据时，Host 拒绝整体完成；阶段成功与整体目标完成分别记录。
 
 工作流定义摘要先将受信函数源码的换行符归一为 LF；恢复时仅接受同一定义的旧原始换行摘要，并继续以旧摘要处理既有 Run/阶段。安装包必须与源文件逐项核对 SHA256，且在新进程中核对关键定义摘要；摘要兼容不等于允许实际实现变更绕过版本漂移检查。
@@ -497,3 +497,21 @@ profile 只修改唯一 instanceId/dbPath 对应的 workflow.groupIds，保留 !
 ## 群聊正文校验
 
 通知或恢复正文触发 `GROUP_REPLY_INTERNAL_DETAILS` 时，在内部记录定位生成来源，改为业务进展后重新准备回复。不要绕过校验或修改已可能发送的正文；unknown/acknowledged 仍只回读，不重发。此改动不修改内部任务和会话标识，无配置或数据迁移要求。
+
+
+## 事项影响 v5 → v6 离线迁移
+
+本次新增来源影响账、Task 承接责任和阶段来源条件；服务启动不自动迁移。先按常驻部署 runbook 进入维护、排空节点/Owner/未知效果，确认进程退出并完成控制库及配置备份。旧进程不能写 v6 库。
+
+对离线且已 checkpoint 的控制库先运行零写检查，再执行事务迁移：
+
+```powershell
+node scripts/migrate-message-impact.js --check D:/dsh_home/workflows/runtime-v2/control.sqlite
+node scripts/migrate-message-impact.js --execute D:/dsh_home/workflows/runtime-v2/control.sqlite
+```
+
+`--check` 使用 immutable 只读连接，存在未 checkpoint 的 WAL 时拒绝。`--execute` 获取原生 owner 独占锁，额外备份库，事务内注册影响账及 `source_condition`，比较原始来源/receipt/effect 等表的行数与摘要，再独立重开回读 schema 6。执行中断由 SQLite 回滚，不能手工改版本号。恢复旧包须在停机维护下恢复整份 v5 备份，不让旧 worker 写 v6。
+
+安装 Assistant/Observer 精确包后，保持维护状态核对包摘要、进程、schema、健康和消息只读投影，再决定恢复调度。原 #109—#115 的重处理须逐条核对当前来源版本、已有命令及通知，不批量重放。实际渠道外发和生产 SQL 的授权独立保留。
+
+输入处理不再设置 S/R/I/IB 固定字节或累计输入/输出额度上限；必要材料经材料账及内部 RPC 完整传递，保留来源/内容一致性校验和队列背压。默认调用超时 60 秒、节点窗口 90 秒；实际提供方容量错误、超时与无效协议仍记录并有限恢复，不能以扩大本地输入范围伪称模型理解完整。

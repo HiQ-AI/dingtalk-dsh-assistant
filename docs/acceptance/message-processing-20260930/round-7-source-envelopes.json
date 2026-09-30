@@ -1,0 +1,29 @@
+{
+  "checkedAt": "2026-09-30T11:20:56.908Z",
+  "mode": "source-read-only-pure-projections",
+  "envelopes": [
+    {
+      "sequence": 114,
+      "sourceVersion": 1,
+      "beforeBytes": 9012,
+      "afterBytes": 9012,
+      "bodyAndQuotesPreserved": true,
+      "fixedInputLimit": null,
+      "backgroundBefore": 6,
+      "backgroundAfter": 6
+    },
+    {
+      "sequence": 115,
+      "sourceVersion": 1,
+      "beforeBytes": 8549,
+      "afterBytes": 8549,
+      "bodyAndQuotesPreserved": true,
+      "fixedInputLimit": null,
+      "backgroundBefore": 2,
+      "backgroundAfter": 2
+    }
+  ],
+  "invalidCatalogReferenceRejected": true,
+  "modelCalls": 0,
+  "externalEffects": 0
+}

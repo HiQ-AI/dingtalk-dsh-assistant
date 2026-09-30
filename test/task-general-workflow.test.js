@@ -17,14 +17,15 @@ test('受信文件读取只接受双重授权路径，独立回读能发现修�
   const outside = await mkdtemp(join(tmpdir(), 'dsh-general-outside-'))
   t.after(async () => { await rm(root, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }) })
   await mkdir(join(root, 'docs'))
-  await writeFile(join(root, 'docs', 'note.md'), '核验材料', 'utf8')
+  const original='核验材料'.repeat(4000)+'完整末尾'
+  await writeFile(join(root, 'docs', 'note.md'), original, 'utf8')
   await writeFile(join(outside, 'secret.md'), '不可读取', 'utf8')
   const capability = createGeneralFileReadCapability({ root, readablePaths: ['docs/note.md', 'docs/link.md'] })
   const scope = { readableFiles: ['docs/note.md', 'docs/link.md'] }
   const input = { path: 'docs/note.md' }
   assert.equal(await capability.authorize({ input, scope }), true)
   const output = await capability.execute({ input })
-  assert.equal(output.content, '核验材料')
+  assert.equal(output.content, original)
   assert.equal((await capability.verify({ input, scope, output })).passed, true)
   await writeFile(join(root, 'docs', 'note.md'), '已经改变', 'utf8')
   assert.equal((await capability.verify({ input, scope, output })).passed, false)
@@ -243,19 +244,16 @@ const domainModel = { provider: 'fixture', model: 'fixture' }
   })
 })
 
- test('领域判断UTF8信封和输出硬预算不截断，不配置模型不调用流', async () => {
-  let calls = 0
-  const llm = { async *stream() { calls++; yield { type: 'text-delta', text: '字'.repeat(6000) }
-    yield { type: 'finish', reason: { kind: 'stop' } } } }
-  const check = createDomainAcceptanceCheck({ llm, modelConfig: domainModel })
-  const oversized = domainAcceptanceInput(); oversized.evidence[0].output.content = '字'.repeat(50000)
-  assert.equal((await check(oversized)).reason, 'DOMAIN_ACCEPTANCE_INPUT_BUDGET')
-  assert.equal(calls, 0)
-  assert.equal((await createDomainAcceptanceCheck({ llm, modelConfig: {} })(domainAcceptanceInput())).reason,
-    'DOMAIN_ACCEPTANCE_CONFIGURATION_MISSING')
-  assert.equal(calls, 0)
-  assert.equal((await check(domainAcceptanceInput())).reason, 'DOMAIN_ACCEPTANCE_OUTPUT_BUDGET')
-  assert.equal(calls, 1)
+ test('领域判断完整传入长信封，仍校验输出预算与模型配置', async () => {
+  let calls=0,captured
+  const llm={async *stream(request){calls++;captured=request;yield{type:'text-delta',text:'字'.repeat(6000)};yield{type:'finish',reason:{kind:'stop'}}}}
+  const check=createDomainAcceptanceCheck({llm,modelConfig:domainModel})
+  const oversized=domainAcceptanceInput();oversized.evidence[0].output.content='字'.repeat(50000)+'末尾必要限制'
+  assert.equal((await check(oversized)).reason,'DOMAIN_ACCEPTANCE_OUTPUT_BUDGET')
+  assert.equal(calls,1)
+  assert.ok(JSON.stringify(captured.messages).includes(oversized.evidence[0].output.content))
+  assert.equal((await createDomainAcceptanceCheck({llm,modelConfig:{}})(domainAcceptanceInput())).reason,'DOMAIN_ACCEPTANCE_CONFIGURATION_MISSING')
+  assert.equal(calls,1)
 })
 
  test('领域判断超时中止原生流与模型配置等待并返回未验证', async () => {

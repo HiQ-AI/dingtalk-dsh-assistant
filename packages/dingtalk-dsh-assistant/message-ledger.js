@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { sameDwsFileProjection } from './coordination-resources.js'
 import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic, invalidateMessageSourceTopics, unbindMessageUnit, wholeTopicFactRevision } from './message-topics.js'
 
 export function isPassiveTaskProgress(body) {
@@ -25,6 +26,10 @@ export function isQuietGroupMessage(body) {
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const str = v => { if (typeof v !== 'string' || !v.trim()) fail('MESSAGE_INVALID_ARGUMENT'); return v }
 const json = v => JSON.stringify(v)
+const currentWindowPolicy=policy=>Object.fromEntries(['initialWindowMs','linkedWindowMs'].filter(key=>policy?.[key]!==undefined).map(key=>{
+  if(!Number.isSafeInteger(policy[key])||policy[key]<1)fail('MESSAGE_INVALID_ARGUMENT')
+  return [key,policy[key]]
+}))
 function taskFactVersion(db, taskId) {
   const task = db.prepare('SELECT requirement_revision,requirement_ref,plan_revision,plan_requirement_revision,status FROM business_tasks WHERE task_id=?').get(str(taskId)) ?? null
   const control = db.prepare('SELECT * FROM task_controls WHERE task_id=?').get(taskId) ?? null
@@ -36,6 +41,72 @@ function taskFactVersion(db, taskId) {
 const canonical=v=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v
 const textHash=v=>createHash('sha256').update(str(v)).digest('hex')
 const digest=v=>createHash('sha256').update(json(canonical(v))).digest('hex')
+// 影响记录沿用消息账。未判定输入不是无关输入；只由可回查的引用或关联证明缩小范围。
+function impactCatalog(db, r) {
+  const candidateTopics=db.prepare('SELECT topic_id,body FROM message_topics WHERE conversation_id=? ORDER BY topic_id').all(r.conversationId).map(row=>{
+    const topic=JSON.parse(row.body)
+    const sourceRefs=db.prepare(`SELECT DISTINCT b.source_key AS sourceKey,b.source_version AS sourceVersion,r.body FROM message_topic_bindings b
+      JOIN message_runs r ON r.run_id=b.run_id WHERE b.topic_id=? ORDER BY b.source_key,b.source_version`).all(row.topic_id)
+      .map(ref=>({sourceKey:ref.sourceKey,sourceVersion:ref.sourceVersion,text:JSON.parse(ref.body).body}))
+    return {topicId:row.topic_id,inputRevision:topic.inputRevision??0,contextRevision:topic.contextRevision??0,sourceRefs}
+  })
+  return {candidateTopics,catalogRevision:digest(candidateTopics)}
+}
+export function registerMessageImpact(db,r,now) {
+  if(rows(db,r.runId,'impact').length)return
+  const refs=new Set([...(r.context?.quoteRefs??[]).map(ref=>ref.sourceKey).filter(Boolean),...(r.barriers??[]).map(b=>b.targetSourceKey).filter(Boolean)])
+  const directTaskIds=[...new Set((r.barriers??[]).map(b=>b.targetTaskId).filter(Boolean))]
+  const directTopicIds=new Set()
+  for(const key of refs)for(const b of db.prepare('SELECT DISTINCT topic_id FROM message_topic_bindings WHERE source_key=?').all(key))directTopicIds.add(b.topic_id)
+  for(const taskId of directTaskIds)for(const b of db.prepare(`SELECT DISTINCT b.topic_id FROM message_items i JOIN message_topic_bindings b ON b.unit_id=json_extract(i.body,'$.unitId')
+    WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=?`).all(taskId))directTopicIds.add(b.topic_id)
+  const catalog=impactCatalog(db,r)
+  put(db,r.runId,'impact',{id:r.runId,runId:r.runId,sourceVersion:r.sourceVersion,revision:0,status:'unknown',
+    directSourceKeys:[...refs],directTaskIds,directTopicIds:[...directTopicIds],candidateTopicIds:catalog.candidateTopics.map(t=>t.topicId),
+    catalogRevision:catalog.catalogRevision,assessments:[],createdAt:now})
+}
+export function registerMessageAcceptance(db,taskId,requirementRevision,now){
+  const origin=queryMessages(db,{kind:'message.task',taskId})
+  if(!origin)return
+  const id=`accepted:${taskId}:${requirementRevision}`
+  if(db.prepare('SELECT 1 FROM message_items WHERE item_id=?').get('acceptance:'+id))return
+  put(db,origin.run.runId,'acceptance',{id,runId:origin.run.runId,commandId:origin.command.id,taskId,requirementRevision,
+    sourceVersion:origin.run.sourceVersion,status:'pending',createdAt:now})
+}
+function registerRelatedTaskInput(db,r,u,now){
+  const targets=db.prepare(`SELECT DISTINCT o.task_id,t.requirement_ref FROM message_topic_bindings b JOIN message_items i ON i.run_id=b.run_id
+    AND i.kind='command' AND json_extract(i.body,'$.unitId')=b.unit_id
+    JOIN task_owners o ON o.task_id=json_extract(i.body,'$.args.taskId') JOIN business_tasks t ON t.task_id=o.task_id
+    WHERE b.topic_id=?`).all(u.topicId)
+  for(const target of targets){
+    const key='scope-'+digest([r.runId,r.sourceVersion,u.id,target.task_id])
+    if(db.prepare('SELECT 1 FROM task_events WHERE event_key=?').get(key))continue
+    const event=db.prepare("INSERT INTO task_events(task_id,event_key,event_type,payload_ref,created_at) VALUES(?,?,'source.related',?,?)")
+      .run(target.task_id,key,target.requirement_ref,now)
+    db.prepare(`UPDATE task_owners SET event_watermark=?,input_fence_revision=input_fence_revision+1,revision=revision+1,
+      status=CASE WHEN status IN ('idle','blocked') THEN 'pending' ELSE status END,updated_at=? WHERE task_id=?`)
+      .run(Number(event.lastInsertRowid),now,target.task_id)
+  }
+}
+function pendingAffectsTopic(db,r,topicId) {
+  const impact=rows(db,r.runId,'impact')[0]
+  if(!impact)return true // 旧账必须显式迁移，不把缺记录解释为独立。
+  const units=rows(db,r.runId,'unit').filter(u=>u.status!=='superseded')
+  const unresolved=units.filter(u=>!u.topicId||u.blockedReason)
+  const targets=unresolved.length?unresolved.map(u=>u.id):['$']
+  const topic=queryMessageTopics(db,{kind:'message.topic',topicId})
+  if(!topic)return true
+  return targets.some(unitId=>{
+    const unit=units.find(unit=>unit.id===unitId)
+    if(unit?.topicId&&unit.blockedReason)return unit.topicId===topicId
+    const proof=impact.assessments.find(p=>p.unitId===unitId&&p.topicId===topicId)
+    if(proof&&proof.targetInputRevision===topic.inputRevision&&proof.targetContextRevision===topic.contextRevision
+      &&proof.sourceRefs.every(ref=>db.prepare('SELECT current_version FROM message_sources WHERE source_key=?').get(ref.sourceKey)?.current_version===ref.sourceVersion))return proof.relation!=='independent'
+    // 引用只证明至少相关，不能证明只相关（同条消息还可能取消/修改其他事项）。
+    // 即使已记录 directTopicIds，未覆盖的目标也须保留未知，等待逐 Unit 的完整来源证明。
+    return true
+  })
+}
 // 文件效果仅提供只读投影；发送权和原文件验收仍由 Delivery 持有。
 function verifiedFileOutbound(db, conversationId, messageId) {
   const effects=db.prepare(`SELECT effect_id,run_id,node_run_id,generation,state,definition_json,result_json FROM execution_effects
@@ -74,6 +145,13 @@ function notificationFactDigest(db,n){
   return digest({id:n.id,eventKey:n.eventKey??null,status:n.status,payload:n.payload,evidenceMessageId:n.evidence?.messageId??null,recallStatus:n.recallStatus??null,replacements,
     command:command?{status:command.status,kind:command.kind,args:command.args,result:command.result}:null,
     request:request?{status:request.status,kind:request.kind,revision:request.revision}:null})
+}
+function notificationStateCurrent(source,fact){
+  if(fact.revision!==source.revision||fact.status!==source.status||(fact.reason??null)!==(source.reason??null)
+    ||(fact.intentStatus??null)!==(source.intentStatus??null))return false
+  if(fact.phase==='reply_obligation')return source.status==='settled'&&(source.snapshot?.replyObligation??source.context?.replyObligation)?.required===true
+  if(fact.phase==='attention')return source.status==='needs_attention'
+  return fact.phase==='routing_wait'&&source.intentStatus==='waiting_routing_barrier'
 }
 const unitMeaning=u=>Object.fromEntries(Object.entries(u).filter(([k])=>!['id','runId','revision','status','corrections','preservedUnitId','topicId'].includes(k)))
 
@@ -346,6 +424,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(db.prepare('SELECT 1 FROM message_topic_bindings WHERE unit_id=?').get(u.id))return {result:{topic:queryMessageTopics(db,{kind:'message.topic',topicId:u.topicId}),unit:u}}
     const result=reduceMessageTopic(db,{kind:'message.topic.upsert',args:a.topic},ctx)
     const bound=get(db,'unit',u.id);bound.routingBinding=a.binding;put(db,r.runId,'unit',bound)
+    registerRelatedTaskInput(db,r,bound,ctx.now)
     if(rows(db,r.runId,'unit').filter(item=>item.status!=='superseded').every(item=>db.prepare('SELECT 1 FROM message_topic_bindings WHERE unit_id=?').get(item.id))){r.routingStatus='routing_complete';r.intentStatus='waiting_routing_barrier';save(db,r)}
     return {result:{topic:result.result.topic,unit:bound}}
   }
@@ -406,16 +485,18 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     }
     if(kind==='message.notification.prepare') {
       const r=run(db,a.runId)
-      if(Boolean(a.commandId)===Boolean(a.requestId))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')
+      if([a.commandId,a.requestId,a.stateFact,a.acceptanceId].filter(Boolean).length!==1)fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')
       if(a.commandId){const c=get(db,'command',a.commandId);if(c.runId!==r.runId||!['applied','rejected'].includes(c.status))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')}
-      else {const q=get(db,'request',a.requestId);current(db,r,q.revision);if(q.runId!==r.runId||q.status!=='pending'||q.kind!=='needs_clarification')fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')}
+      else if(a.requestId){const q=get(db,'request',a.requestId);current(db,r,q.revision);if(q.runId!==r.runId||q.status!=='pending'||!(q.kind==='needs_clarification'||q.kind==='needs_context'&&q.blocked===true))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')}
+      else if(a.acceptanceId){const fact=get(db,'acceptance',a.acceptanceId);if(fact.runId!==r.runId||db.prepare('SELECT requirement_revision FROM business_tasks WHERE task_id=?').get(fact.taskId)?.requirement_revision!==fact.requirementRevision)fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')}
+      else if(!notificationStateCurrent(r,a.stateFact))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')
       if(!a.disclosure||a.disclosure.conversationId!==r.conversationId||!a.disclosure.authorizationRef)fail('MESSAGE_DISCLOSURE_REQUIRED')
       str(a.notificationId)
       const eventKey=str(a.eventKey??`${a.requestId?'request.clarification':'action.reply'}:${a.requestId??a.commandId}:${a.payload?.phase??'notice'}`)
       const sameEvent=db.prepare("SELECT body FROM message_items WHERE kind='notification' AND json_extract(body,'$.eventKey')=? LIMIT 1").get(eventKey)
       if(sameEvent){const old=JSON.parse(sameEvent.body);if(old.eventKey!==eventKey||json(canonical(old.payload))!==json(canonical(a.payload)))fail('MESSAGE_NOTIFICATION_EVENT_CONFLICT');return {result:{notification:old}}}
       if(db.prepare('SELECT 1 FROM message_items WHERE item_id=?').get('notification:'+a.notificationId)) {const old=get(db,'notification',a.notificationId);if(old.runId!==a.runId||old.commandId!==a.commandId||old.requestId!==a.requestId||json(canonical(old.payload))!==json(canonical(a.payload)))fail('MESSAGE_NOTIFICATION_CONFLICT');return {result:{notification:old}}}
-      const n={id:a.notificationId,eventKey,runId:r.runId,...(a.commandId?{commandId:a.commandId}:{requestId:a.requestId}),payload:a.payload,disclosure:a.disclosure,status:'prepared',leaseEpoch:0,createdAt:now};put(db,r.runId,'notification',n);return {result:{notification:n}}
+      const n={id:a.notificationId,eventKey,runId:r.runId,...(a.commandId?{commandId:a.commandId}:a.requestId?{requestId:a.requestId}:a.acceptanceId?{acceptanceId:a.acceptanceId}:{stateFact:a.stateFact}),payload:a.payload,disclosure:a.disclosure,status:'prepared',leaseEpoch:0,createdAt:now};put(db,r.runId,'notification',n);return {result:{notification:n}}
     }
     const n=get(db,'notification',a.notificationId)
     if(kind==='message.notification.recall.record') {
@@ -435,20 +516,27 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       return {result:{replacement}}
     }
     if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);if(source.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}
+      const version=n.payload?.fact
+      if(n.acceptanceId){const fact=get(db,'acceptance',n.acceptanceId);if(db.prepare('SELECT requirement_revision FROM business_tasks WHERE task_id=?').get(fact.taskId)?.requirement_revision!==fact.requirementRevision){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}
+      if(n.stateFact&&!notificationStateCurrent(source,n.stateFact)||version&&(version.sourceVersion!==source.sourceVersion||version.runRevision!==source.revision
+        ||version.taskId&&version.requirementRevision!==undefined&&db.prepare('SELECT requirement_revision FROM business_tasks WHERE task_id=?').get(version.taskId)?.requirement_revision!==version.requirementRevision)){
+        n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}
+      }
       if(n.payload?.phase?.startsWith('owner:')){
         const reportId=n.payload.phase.slice('owner:'.length)
-        const fact=db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.application_status,o.event_watermark,o.processed_watermark,
+        const fact=db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.application_status,t.requirement_revision AS report_requirement_revision,o.event_watermark,o.processed_watermark,
           b.requirement_revision,b.plan_requirement_revision
           FROM task_reports r JOIN task_owner_turns t ON t.turn_id=r.turn_id
           JOIN task_owners o ON o.task_id=r.task_id
           JOIN business_tasks b ON b.task_id=r.task_id WHERE r.report_id=?`).get(reportId)
         const latest=fact?db.prepare("SELECT turn_id FROM task_owner_turns WHERE task_id=? AND status='accepted' ORDER BY rowid DESC LIMIT 1").get(fact.task_id):null
-        if(!fact||fact.application_status!=='applied'||fact.report_type==='complete'
-          &&(fact.event_watermark!==fact.processed_watermark||latest?.turn_id!==fact.turn_id
-            ||fact.plan_requirement_revision!==fact.requirement_revision)){
+        if(!fact||fact.application_status!=='applied'||fact.event_watermark!==fact.processed_watermark||latest?.turn_id!==fact.turn_id
+            ||fact.report_requirement_revision!==fact.requirement_revision
+            ||fact.report_type==='complete'&&fact.plan_requirement_revision!==fact.requirement_revision){
           n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n)
           return {result:{notification:n},dispatchEligible:false}
         }
+        if(fact.report_type==='complete'||fact.report_type==='progress')assertMessageTaskUnfenced(db,fact.task_id)
       }
       n.status='sending';n.leaseEpoch++;n.startedAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:true}}
     if(a.leaseEpoch!==n.leaseEpoch)fail('MESSAGE_NOTIFICATION_STALE')
@@ -473,7 +561,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       const barriers=db.prepare("SELECT 1 FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='barrier' AND json_extract(i.body,'$.status')='pending' AND json_extract(r.body,'$.conversationId')=? AND r.rowid<=? LIMIT 1").get(a.conversationId,g.cutoffRowId)
       if(pending.length||active||barriers)fail('MESSAGE_GROUP_NOT_DRAINED')
       g.state='active';g.engine='workflow';g.epoch++
-      for(const item of db.prepare("SELECT body FROM message_runs WHERE json_extract(body,'$.conversationId')=? AND json_extract(body,'$.status')='buffered'").all(a.conversationId)){const r=JSON.parse(item.body);r.status='pending';r.engineEpoch=g.epoch;r.deadline=new Date(Date.parse(now)+30000).toISOString();save(db,r)}
+      for(const item of db.prepare("SELECT body FROM message_runs WHERE json_extract(body,'$.conversationId')=? AND json_extract(body,'$.status')='buffered'").all(a.conversationId)){const r=JSON.parse(item.body);r.status='pending';r.engineEpoch=g.epoch;r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)}
     } else if(kind==='message.group.abort') {
       if(g.state!=='draining')fail('MESSAGE_GROUP_TRANSITION_INVALID')
       g.state='active';g.engine=g.previousEngine;g.abortedAt=now
@@ -492,6 +580,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     delete alias.validSourceVersion
     db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(alias.runId,alias.sourceKey,alias.sourceVersion,json(alias))
     db.prepare('UPDATE message_sources SET current_version=? WHERE source_key=?').run(alias.sourceVersion,alias.sourceKey)
+    registerMessageImpact(db,alias,now)
     return {result:{run:original,alias}}
   }
   if(kind==='message.reprocess') {
@@ -521,10 +610,11 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     old.status='superseded';old.routingStatus='routing_superseded';old.reason='message_reprocessed';save(db,old);invalidateMessageSourceTopics(db,old.sourceKey,now)
     const next={...old,runId:a.newRunId,sourceVersion:old.sourceVersion+1,revision:0,status:'pending',routingStatus:'routing_pending',intentStatus:null,createdAt:now,
       context:{...old.context,occurredAt:old.context?.occurredAt??origin.context?.occurredAt??origin.createdAt,replayOf:origin.runId,replayOfSequenceId:sequence},snapshot:null,
-      budgetBaseline:spent,policy:{...old.policy,effectiveMaxClaims:undefined},deadline:new Date(Date.parse(now)+(old.policy.initialWindowMs??45000)).toISOString()}
-    delete next.activatedAt;delete next.reason;delete next.capacityRetryVersion
+      budgetBaseline:spent,policy:{...old.policy,...currentWindowPolicy(a.policy),effectiveMaxClaims:undefined},deadline:new Date(Date.parse(now)+(a.policy?.initialWindowMs??old.policy.initialWindowMs??45000)).toISOString()}
+    delete next.activatedAt;delete next.reason;delete next.capacityRetryVersion;delete next.attentionScope;delete next.attentionUnitIds
     db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(next.runId,next.sourceKey,next.sourceVersion,json(next))
     db.prepare('UPDATE message_sources SET current_version=? WHERE source_key=?').run(next.sourceVersion,next.sourceKey)
+    registerMessageImpact(db,next,now)
     for(const request of resolvedSplitRequests){
       const id=createHash('sha256').update(json([next.runId,request.id])).digest('hex')
       put(db,next.runId,'request',{...request,id,requestId:id,runId:next.runId,revision:0})
@@ -542,9 +632,10 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const inheritedBarriers=source?db.prepare("SELECT i.body FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE r.source_key=? AND i.kind='barrier' AND json_extract(i.body,'$.status')='pending'").all(a.sourceKey).map(x=>JSON.parse(x.body)):[]
     if(source){invalidateMessageSourceTopics(db,a.sourceKey,now);for(const row of db.prepare('SELECT body FROM message_runs WHERE source_key=?').all(a.sourceKey)) {const r=JSON.parse(row.body);revoke(db,r);r.status='superseded';r.routingStatus='routing_superseded';save(db,r)}}
     db.prepare('INSERT INTO message_sources(source_key,current_version) VALUES(?,?) ON CONFLICT(source_key) DO UPDATE SET current_version=excluded.current_version').run(a.sourceKey,a.sourceVersion)
-    const r={...a,revision:0,status:'pending',routingStatus:'routing_pending',intentStatus:null,createdAt:now,policy:{maxClaims:21,maxCorrections:2,...a.policy},snapshot:null,deadline:new Date(Date.parse(now)+(a.barriers?.length?30000:45000)).toISOString()}
+    const r={...a,revision:0,status:'pending',routingStatus:'routing_pending',intentStatus:null,createdAt:now,policy:{maxClaims:21,maxCorrections:2,...a.policy},snapshot:null,deadline:new Date(Date.parse(now)+(a.barriers?.length?(a.policy?.linkedWindowMs??30000):(a.policy?.initialWindowMs??45000))).toISOString()}
     const group=db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(a.conversationId);if(group){const g=JSON.parse(group.body);r.engineEpoch=g.epoch;if(g.state!=='active'||g.engine!=='workflow')r.status='buffered'}
     db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(a.runId,a.sourceKey,a.sourceVersion,json(r))
+    registerMessageImpact(db,r,now)
     for(const b of inheritedBarriers){b.previousOwnerRunId=b.ownerRunId;b.ownerRunId=r.runId;db.prepare('UPDATE message_items SET run_id=?,body=? WHERE item_id=?').run(r.runId,json(b),'barrier:'+b.id)}
     if(source)put(db,r.runId,'barrier',{id:'edit:'+r.runId,ownerRunId:r.runId,targetSourceKey:r.sourceKey,status:'pending',createdAt:now,reason:'source_edit'})
     for(const b of a.barriers??[]) {if(!b.targetSourceKey&&!b.targetTaskId)fail('MESSAGE_INVALID_BARRIER');put(db,r.runId,'barrier',{...b,id:str(b.barrierId),ownerRunId:r.runId,status:'pending',createdAt:now})}
@@ -586,14 +677,14 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       if(!['status','result'].includes(c.kind)||c.status!=='unknown'||c.error!=='INVALID_ARGUMENT'||(c.readonlyRetryCount??0)>=1||c.result!==null)fail('MESSAGE_READONLY_RETRY_FORBIDDEN')
       if(rows(db,r.runId,'notification').some(item=>item.commandId===c.commandId||item.commandId===c.id))fail('MESSAGE_READONLY_RETRY_FORBIDDEN')
       c.readonlyRetryCount=(c.readonlyRetryCount??0)+1;c.status='pending';c.error=null;c.result=null;put(db,r.runId,'command',c)
-      if(r.status==='needs_attention'&&r.reason==='recovery_exhausted'){r.status='pending';r.reason=null;r.deadline=new Date(Date.parse(now)+30000).toISOString();save(db,r)}
+      if(r.status==='needs_attention'&&r.reason==='recovery_exhausted'){r.status='pending';r.reason=null;r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)}
       return {result:{command:c,run:r}}
     }
     if(kind==='message.command.claim') {
       current(db,r,c.revision)
       if(c.status!=='pending') fail('MESSAGE_COMMAND_NOT_READY')
       if(c.topicId){
-        if(queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId}).length
+        if(queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId,topicId:c.topicId}).length
           && !authorizedPriorityControl(db,c.priorityControl,get(db,'unit',c.unitId),r))fail('MESSAGE_INPUT_PENDING')
         const topic=queryMessageTopics(db,{kind:'message.topic',topicId:c.topicId})
         if(!topic||topic.inputRevision!==c.topicInputRevision){
@@ -606,7 +697,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       }
       if(r.correction)fail('MESSAGE_CORRECTION_PENDING')
       if(r.status==='buffered')fail('MESSAGE_ENGINE_NOT_ACTIVE')
-    if(r.status==='needs_attention')fail('MESSAGE_NEEDS_ATTENTION')
+    if(get(db,'unit',c.unitId).blockedReason||r.status==='needs_attention'&&r.attentionScope!=='unit')fail('MESSAGE_NEEDS_ATTENTION')
       const fences=db.prepare("SELECT body FROM message_items WHERE kind='barrier'").all().map(x=>JSON.parse(x.body))
       if(fences.some(b=>b.status==='pending'&&b.ownerRunId!==c.runId&&((b.targetSourceKey===r.sourceKey&&(!b.unitIds||b.unitIds.includes(c.unitId)))||(b.targetTaskId&&b.targetTaskId===c.args?.taskId))))fail('MESSAGE_INPUT_PENDING')
       for(const id of c.dependsOn??[])if(get(db,'command',id).status!=='applied')fail('MESSAGE_DEPENDENCY_PENDING')
@@ -675,6 +766,67 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       notificationId:check.notificationId,sourceMessageId:check.sourceMessageId}}
   }
   const r=run(db,a.runId);current(db,r,a.expectedRevision)
+  if(kind==='message.source.enrich'){
+    const proof=a.independentReadback
+    const exactBody=proof?.body===r.body||sameDwsFileProjection({sourceKind:'dingtalk',text:r.body},{text:proof?.body,resourceRefs:proof?.resourceRefs})
+      ||sameDwsFileProjection({sourceKind:'dingtalk',text:proof?.body},{text:r.body,resourceRefs:proof?.resourceRefs})
+    if(a.sourceKey!==r.sourceKey||a.sourceVersion!==r.sourceVersion||a.actorId!==r.actorId||proof?.provider!=='dws'
+      ||proof.messageId!==r.context?.sourceMessageId||proof.conversationId!==r.conversationId||proof.actorId!==r.actorId||!exactBody
+      ||!Array.isArray(a.attachments)||!Array.isArray(proof.fileIds))fail('MESSAGE_SOURCE_ENRICH_PROOF_REQUIRED')
+    for(const attachment of a.attachments)if(!attachment.fileId||attachment.resourceRef!==attachment.fileId||!proof.fileIds.includes(attachment.fileId)
+      ||!proof.resourceRefs?.some(ref=>ref.type==='fileId'&&ref.resourceId===attachment.fileId))fail('MESSAGE_SOURCE_ENRICH_PROOF_REQUIRED')
+    r.context??={};const existing=r.context.attachments??[]
+    r.context.attachments=[...existing,...a.attachments.filter(item=>!existing.some(old=>old.fileId===item.fileId))]
+    r.resourceEnrichment={provider:proof.provider,messageId:proof.messageId,fileIds:proof.fileIds,verifiedAt:now}
+    save(db,r);return {result:{run:r,enriched:r.context.attachments.length-existing.length}}
+  }
+  if(kind==='message.impact.resolve') {
+    const catalog=impactCatalog(db,r)
+    if(a.catalogRevision!==catalog.catalogRevision)fail('MESSAGE_IMPACT_CATALOG_STALE')
+    const impact=rows(db,r.runId,'impact')[0];if(!impact)fail('MESSAGE_IMPACT_MISSING')
+    const unitId=a.unitId??'$'
+    if(unitId!=='$'&&get(db,'unit',unitId).runId!==r.runId)fail('MESSAGE_IMPACT_SCOPE_INVALID')
+    if(!Array.isArray(a.assessments)||!a.assessments.length)fail('MESSAGE_IMPACT_EVIDENCE_REQUIRED')
+    for(const assessment of a.assessments){
+      const target=catalog.candidateTopics.find(topic=>topic.topicId===assessment.topicId)
+      if(!target||!['related','independent'].includes(assessment.relation))fail('MESSAGE_IMPACT_SCOPE_INVALID')
+      str(assessment.reason)
+      if(!Array.isArray(assessment.sourceRefs)||!assessment.sourceRefs.length)fail('MESSAGE_IMPACT_EVIDENCE_REQUIRED')
+      for(const ref of assessment.sourceRefs){
+        const evidence=db.prepare('SELECT body FROM message_runs WHERE source_key=? AND source_version=?').get(str(ref.sourceKey),ref.sourceVersion)
+        const source=evidence?JSON.parse(evidence.body):null
+        if(!source||source.conversationId!==r.conversationId||!source.body.includes(str(ref.text))
+          ||db.prepare('SELECT current_version FROM message_sources WHERE source_key=?').get(ref.sourceKey)?.current_version!==ref.sourceVersion)fail('MESSAGE_IMPACT_EVIDENCE_STALE')
+      }
+      if(!assessment.sourceRefs.some(ref=>ref.sourceKey===r.sourceKey&&ref.sourceVersion===r.sourceVersion))fail('MESSAGE_IMPACT_EVIDENCE_REQUIRED')
+      impact.assessments=impact.assessments.filter(p=>p.unitId!==unitId||p.topicId!==assessment.topicId)
+      impact.assessments.push({...assessment,unitId,targetInputRevision:target.inputRevision,targetContextRevision:target.contextRevision})
+    }
+    impact.revision++;impact.catalogRevision=catalog.catalogRevision;impact.updatedAt=now;put(db,r.runId,'impact',impact)
+    return {result:{impact}}
+  }
+  if(kind==='message.request.retry'||kind==='message.request.retry.reset'||kind==='message.request.supersede') {
+    const q=get(db,'request',a.requestId)
+    if(q.runId!==r.runId||q.revision!==r.revision||q.kind!=='needs_context')fail('MESSAGE_REQUEST_STALE')
+    if(q.status!=='pending')return {result:{request:q,run:r}}
+    if(kind==='message.request.retry.reset'){
+      if(a.sourceVersion!==r.sourceVersion||q.blocked!==true)fail('MESSAGE_REQUEST_STALE')
+      str(a.reason);str(a.dependencyRevision)
+      if(q.dependencyRevision===a.dependencyRevision)fail('MESSAGE_REQUEST_DEPENDENCY_UNCHANGED')
+      q.retryHistory=[...(q.retryHistory??[]),{attempts:q.attempts,lastError:q.lastError,contractVersion:q.contractVersion,dependencyRevision:q.dependencyRevision??null,resetAt:now,reason:a.reason}]
+      q.dependencyRevision=a.dependencyRevision;q.attempts=0;q.blocked=false;q.responsibility='host';q.retryAt=null
+      if(q.unitId!=='$'){const u=get(db,'unit',q.unitId);delete u.blockedReason;delete u.blockedAt;put(db,r.runId,'unit',u)}
+    }else if(kind==='message.request.retry'){
+      if(!Number.isSafeInteger(a.maxAttempts)||a.maxAttempts<1||a.maxAttempts>10)fail('MESSAGE_INVALID_ARGUMENT')
+      q.attempts=(q.attempts??0)+1;q.lastError=str(a.error);q.contractVersion=str(a.contractVersion);q.retryAt=a.retryAt??null
+      q.blocked=q.attempts>=a.maxAttempts;q.responsibility=q.blocked?'system':'host';q.lastAttemptAt=now
+    }else{
+      q.status='superseded';q.reason=str(a.reason);q.resolvedAt=now
+      for(const n of rows(db,r.runId,'node').filter(n=>n.unitId===q.unitId&&n.nodeId===q.nodeId&&n.revision===r.revision)){n.status='superseded';put(db,r.runId,'node',n)}
+      r.status='pending';r.routingStatus='routing_pending';r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)
+    }
+    put(db,r.runId,'request',q);return {result:{request:q,run:r}}
+  }
   if(kind==='message.no_action') {
     const node=rows(db,r.runId,'node').findLast(item=>item.nodeId==='S'&&item.revision===r.revision&&item.status==='succeeded')
     const output=node?.output?.output??node?.output
@@ -703,12 +855,19 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   }
   if(kind==='message.material.record') {
     str(a.resourceRef)
-    if(!a.material||typeof a.material.text!=='string'||Buffer.byteLength(a.material.text)>65536)fail('MESSAGE_MATERIAL_INVALID')
+    if(!a.material||typeof a.material.text!=='string')fail('MESSAGE_MATERIAL_INVALID')
     const id=json([r.runId,a.resourceRef]),old=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('material:'+id)
     if(old){const material=JSON.parse(old.body).material;if(json(canonical(material))!==json(canonical(a.material)))fail('MESSAGE_MATERIAL_CONFLICT');return {result:{material}}}
     put(db,r.runId,'material',{id,runId:r.runId,resourceRef:a.resourceRef,material:a.material,recordedAt:now});return {result:{material:a.material}}
   }
-  if(kind==='message.attention') {r.status='needs_attention';r.reason=a.reason;if(r.routingStatus!=='routing_complete')r.routingStatus='routing_blocked';else r.intentStatus='intent_blocked';save(db,r);return {result:{run:r}}}
+  if(kind==='message.attention') {
+    if(a.unitId&&a.unitId!=='$'){
+      const u=get(db,'unit',a.unitId);if(u.runId!==r.runId)fail('MESSAGE_STALE')
+      u.blockedReason=str(a.reason);u.blockedAt=now;put(db,r.runId,'unit',u)
+      if(r.attentionScope!=='run'){r.attentionScope='unit';r.attentionUnitIds=[...new Set([...(r.attentionUnitIds??[]),u.id])]}
+    }else r.attentionScope='run'
+    r.status='needs_attention';r.reason=a.reason;if(r.routingStatus!=='routing_complete')r.routingStatus='routing_blocked';else r.intentStatus='intent_blocked';save(db,r);return {result:{run:r}}
+  }
   if(kind==='message.echo.quarantine') {
     const check=echoReconciliation(db,r,false)
     if(!check.eligible)fail('MESSAGE_ECHO_QUARANTINE_FORBIDDEN')
@@ -724,7 +883,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     return {result:{run:r}}
   }
   if(kind==='message.capacity.retry') {
-    const stage=['s-compact-v1','s-budget-v2'].includes(a.projectionVersion)?'S':['r-source-refs-v1','r-bounded-cards-v2','r-budget-v3'].includes(a.projectionVersion)?'R':['i-bounded-facts-v1','i-budget-v2'].includes(a.projectionVersion)?'I':null
+    const stage=/^message-input-unbounded-v1:(S|R|I|IB):[a-f0-9]{16}$/.exec(a.projectionVersion??'')?.[1]??null
     if(!stage||r.status!=='needs_attention'||!r.reason?.startsWith(`MESSAGE_CONTEXT_CAPACITY:${stage}:`))return {result:{run:r,retry:false}}
     current(db,r)
     if(!r.snapshot||r.correction)return {result:{run:r,retry:false}}
@@ -735,11 +894,13 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(stage==='R'&&!nodes.some(node=>node.nodeId==='S'&&['completed','succeeded'].includes(node.status)))return {result:{run:r,retry:false}}
     if(stage==='I'&&!nodes.some(node=>node.unitId===target.id&&node.nodeId==='R'&&['completed','succeeded'].includes(node.status)))return {result:{run:r,retry:false}}
     if(r.capacityRetryVersion===a.projectionVersion)return {result:{run:r,retry:false}}
+    r.policy={...r.policy,...currentWindowPolicy(a.policy)}
+    if(target){delete target.blockedReason;delete target.blockedAt;put(db,r.runId,'unit',target)}
     r.capacityRetryVersion=a.projectionVersion;r.status='pending';r.reason=null;r.deadline=new Date(Date.parse(now)+r.policy.initialWindowMs).toISOString();save(db,r)
     return {result:{run:r,retry:true}}
   }
   if(kind==='message.relink') {const u=get(db,'unit',a.unitId);if(u.runId!==r.runId)fail('MESSAGE_STALE');if(rows(db,r.runId,'command').some(c=>c.unitId===u.id&&['running','unknown','applied'].includes(c.status)))fail('MESSAGE_CORRECTION_EFFECT_PENDING');revoke(db,r,[u.id]);unbindMessageUnit(db,u.id,now);const s=db.prepare('SELECT corrections FROM message_sources WHERE source_key=?').get(r.sourceKey);db.prepare('UPDATE message_sources SET corrections=corrections+1 WHERE source_key=?').run(r.sourceKey);u.status='pending';delete u.topicId;delete u.routingBinding;r.routingStatus='routing_pending';r.intentStatus=null;u.corrections=(u.corrections??0)+1;put(db,r.runId,'unit',u);save(db,r);if(u.corrections>1||s.corrections>=r.policy.maxCorrections){r.status='needs_attention';r.reason='correction_budget_exhausted';r.routingStatus='routing_blocked';save(db,r);return {result:{run:r,unit:u}}}return {result:{run:r,unit:u}}}
-  if(kind==='message.recover') { if(r.status==='waiting'||r.status==='settled')fail('MESSAGE_NOT_RECOVERABLE'); if((r.recoveryWindows??0)>=2||Date.parse(now)-Date.parse(r.createdAt)>600000){r.status='needs_attention';r.reason='recovery_exhausted';save(db,r);return {result:{run:r}}}r.recoveryWindows=(r.recoveryWindows??0)+1;r.deadline=new Date(Date.parse(now)+30000).toISOString();r.status='pending';save(db,r);return {result:{run:r}} }
+  if(kind==='message.recover') { if(r.status==='waiting'||r.status==='settled')fail('MESSAGE_NOT_RECOVERABLE'); if((r.recoveryWindows??0)>=2||Date.parse(now)-Date.parse(r.createdAt)>600000){r.status='needs_attention';r.reason='recovery_exhausted';save(db,r);return {result:{run:r}}}r.recoveryWindows=(r.recoveryWindows??0)+1;r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();r.status='pending';save(db,r);return {result:{run:r}} }
   if(kind==='message.snapshot') {r.snapshot=a.snapshot;save(db,r);return {result:{run:r}}}
   if(kind==='message.correction.begin') {
     const s=db.prepare('SELECT corrections FROM message_sources WHERE source_key=?').get(r.sourceKey)
@@ -776,7 +937,8 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   }
   if(kind==='message.node.claim') {
     if(r.status==='buffered')fail('MESSAGE_ENGINE_NOT_ACTIVE')
-    if(r.status==='needs_attention')fail('MESSAGE_NEEDS_ATTENTION')
+    if(a.unitId!=='$'&&get(db,'unit',a.unitId).blockedReason)fail('MESSAGE_NEEDS_ATTENTION')
+    if(r.status==='needs_attention'&&(a.unitId==='$'||r.attentionScope!=='unit'))fail('MESSAGE_NEEDS_ATTENTION')
     if(!['S','R','I','IB','answer','material'].includes(a.nodeId))fail('MESSAGE_INVALID_NODE')
     if(a.unitId!=='$'&&get(db,'unit',a.unitId).runId!==r.runId)fail('MESSAGE_STALE')
     if(a.nodeId!=='IB'&&Date.parse(r.deadline)<=Date.parse(now))fail('MESSAGE_DEADLINE_EXCEEDED')
@@ -785,7 +947,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const deterministic=a.input?.deterministic===true
     if(deterministic&&(!a.input.inputHash||a.estimatedInputTokens!==0||a.maxOutputTokens!==0))fail('MESSAGE_INVALID_BUDGET')
     if(!deterministic&&s.claims-baseline.claims>=(r.policy.effectiveMaxClaims??r.policy.maxClaims))fail('MESSAGE_BUDGET_EXHAUSTED')
-    const reserve={input:a.estimatedInputTokens??0,output:a.maxOutputTokens??0};if(!Object.values(reserve).every(x=>Number.isSafeInteger(x)&&x>=0))fail('MESSAGE_INVALID_BUDGET');if(s.input_tokens-baseline.input_tokens+reserve.input>(r.policy.maxInputTokens??64000)||s.output_tokens-baseline.output_tokens+reserve.output>(r.policy.maxOutputTokens??12000))fail('MESSAGE_BUDGET_EXHAUSTED')
+    const reserve={input:a.estimatedInputTokens??0,output:a.maxOutputTokens??0};if(!Object.values(reserve).every(x=>Number.isSafeInteger(x)&&x>=0))fail('MESSAGE_INVALID_BUDGET')
     const previous=rows(db,r.runId,'node').find(n=>n.unitId===a.unitId&&n.nodeId===a.nodeId&&n.revision===r.revision&&n.input?.topicInputRevision===a.input?.topicInputRevision&&n.input?.contextHash===a.input?.contextHash&&n.status!=='superseded')
     if(previous&&['running','succeeded','waiting'].includes(previous.status))fail('MESSAGE_NODE_NOT_READY')
     if(previous?.retryAt&&Date.parse(previous.retryAt)>Date.parse(now))fail('MESSAGE_RETRY_NOT_DUE')
@@ -817,7 +979,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(topic.inputRevision!==a.inputRevision)fail('MESSAGE_TOPIC_STALE')
     if(a.contextRevision!==undefined&&topic.contextRevision!==a.contextRevision)fail('MESSAGE_TOPIC_CONTEXT_STALE')
     if(topic.processedRevision===a.inputRevision)return {result:{status:'accepted',topic,decisions:a.decisions}}
-    const pending=queryMessages(db,{kind:'message.routing.pending',conversationId:a.conversationId})
+    const pending=queryMessages(db,{kind:'message.routing.pending',conversationId:a.conversationId,topicId:a.topicId})
     const priority=pending.length?priorityTopicControls(db,topic,a.priorityControls):null
     if(pending.length&&(!priority||a.decisions?.some(decision=>{
       const control=priority.get(decision.unitId)
@@ -875,7 +1037,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   if(kind==='message.topic.refresh') {
     const topic=queryMessageTopics(db,{kind:'message.topic',topicId:a.topicId})
     if(!topic||topic.inputRevision!==a.inputRevision)fail('MESSAGE_TOPIC_STALE')
-    if(queryMessages(db,{kind:'message.routing.pending',conversationId:topic.conversationId}).length
+    if(queryMessages(db,{kind:'message.routing.pending',conversationId:topic.conversationId,topicId:topic.topicId}).length
       && !priorityTopicControls(db,topic,a.priorityControls))return {result:{status:'WAIT_ROUTING'}}
     let count=0
     for(const row of db.prepare("SELECT i.body FROM message_items i WHERE i.kind='command' AND json_extract(i.body,'$.topicId')=? AND json_extract(i.body,'$.status')='pending'").all(topic.topicId)){
@@ -896,12 +1058,12 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       ||rows(db,r.runId,'notification').some(n=>!['prepared','superseded'].includes(n.status)))fail('MESSAGE_INTENT_RETRY_EFFECT_PENDING')
     const topic=queryMessageTopics(db,{kind:'message.topic',topicId:u.topicId})
     if(!topic||topic.conversationId!==r.conversationId||topic.processedRevision>topic.inputRevision
-      ||queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId}).length)fail('MESSAGE_TOPIC_STALE')
+      ||queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId,topicId:u.topicId}).length)fail('MESSAGE_TOPIC_STALE')
     for(const request of rows(db,r.runId,'request').filter(item=>item.unitId===u.id&&item.status==='pending')){request.status='superseded';request.reason='intent_rejudging';put(db,r.runId,'request',request)}
     topic.inputRevision++;topic.updatedAt=now
     db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(json(Object.fromEntries(Object.entries(topic).filter(([key])=>!['facts','hasMoreFacts'].includes(key)))),topic.topicId)
     u.status='pending';put(db,r.runId,'unit',u)
-    r.status='pending';r.intentStatus='intent_rejudging';r.deadline=new Date(Date.parse(now)+30000).toISOString();save(db,r)
+    r.status='pending';r.intentStatus='intent_rejudging';r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)
     return {result:{run:r,unit:u,topic}}
   }
   if(kind==='message.wait'||kind==='message.request.open') {
@@ -918,7 +1080,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(q.status!=='pending')return {result:{request:q,run:r}}
     q.status='resolved';q.answer=a.answer;q.eventId=str(a.eventId);q.resolvedAt=now;put(db,r.runId,'request',q)
     for(const n of rows(db,r.runId,'node')) if(n.unitId===q.unitId&&n.nodeId===q.nodeId&&n.revision===r.revision) {n.status='superseded';put(db,r.runId,'node',n)}
-    r.status='pending';if(['S','R'].includes(q.nodeId))r.routingStatus='routing_pending';else r.intentStatus='intent_rejudging';r.deadline=new Date(Date.parse(now)+30000).toISOString();save(db,r);return {result:{request:q,run:r}}
+    r.status='pending';if(['S','R'].includes(q.nodeId))r.routingStatus='routing_pending';else r.intentStatus='intent_rejudging';r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r);return {result:{request:q,run:r}}
   }
   if(kind==='message.barrier.resolve') {
     const b=get(db,'barrier',a.barrierId);if(b.ownerRunId!==r.runId)fail('MESSAGE_BARRIER_OWNER');b.status='resolved';b.resolution=a.resolution;put(db,r.runId,'barrier',b);settle(db,r);return {result:{barrier:b}}
@@ -968,14 +1130,23 @@ export function queryMessages(db,a) {
       ) ORDER BY i.rowid DESC LIMIT ?`).all(before,str(a.runId),limit)
       .map(row=>({...JSON.parse(row.body),carrierRunId:JSON.parse(row.body).runId,sequenceId:row.seq}))
   }
+  if(a.kind==='message.acceptances')return (a.runId?rows(db,a.runId,'acceptance'):db.prepare("SELECT body FROM message_items WHERE kind='acceptance' ORDER BY rowid").all().map(row=>JSON.parse(row.body)))
+    .filter(fact=>db.prepare('SELECT requirement_revision FROM business_tasks WHERE task_id=?').get(fact.taskId)?.requirement_revision===fact.requirementRevision)
+  if(a.kind==='message.task.inputs')return db.prepare(`SELECT DISTINCT r.body FROM message_topic_bindings b JOIN message_runs r ON r.run_id=b.run_id
+    JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=COALESCE(json_extract(r.body,'$.validSourceVersion'),r.source_version)
+    WHERE b.topic_id IN (SELECT b2.topic_id FROM message_items i JOIN message_topic_bindings b2 ON b2.unit_id=json_extract(i.body,'$.unitId')
+      WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=?) AND json_extract(r.body,'$.status')!='superseded'
+    ORDER BY r.rowid`).all(str(a.taskId)).map(row=>{const r=JSON.parse(row.body);return {sourceKey:r.sourceKey,sourceVersion:r.sourceVersion,actorId:r.actorId,body:r.body,runId:r.runId}})
+  if(a.kind==='message.impact'){const r=run(db,a.runId);return {...impactCatalog(db,r),impact:rows(db,r.runId,'impact')[0]??null}}
   if(a.kind==='message.routing.pending')return db.prepare(`SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=COALESCE(json_extract(r.body,'$.validSourceVersion'),r.source_version)
     WHERE json_extract(r.body,'$.conversationId')=? AND json_extract(r.body,'$.status') NOT IN ('buffered','alias','superseded')
     AND NOT (json_extract(r.body,'$.status')='settled' AND (json_extract(r.body,'$.reason')='message_quiet'
       OR (json_extract(r.body,'$.routingStatus')='routing_complete' AND json_extract(r.body,'$.intentStatus')='processed')))
     AND (NOT EXISTS (SELECT 1 FROM message_items i WHERE i.run_id=r.run_id AND i.kind='unit')
       OR EXISTS (SELECT 1 FROM message_items i LEFT JOIN message_topic_bindings b ON b.unit_id=json_extract(i.body,'$.id')
-        WHERE i.run_id=r.run_id AND i.kind='unit' AND json_extract(i.body,'$.status')!='superseded' AND b.unit_id IS NULL))
-    ORDER BY r.rowid`).all(str(a.conversationId)).map(row=>JSON.parse(row.body))
+        WHERE i.run_id=r.run_id AND i.kind='unit' AND json_extract(i.body,'$.status')!='superseded'
+          AND (b.unit_id IS NULL OR json_extract(i.body,'$.blockedReason') IS NOT NULL)))
+    ORDER BY r.rowid`).all(str(a.conversationId)).map(row=>JSON.parse(row.body)).filter(r=>!a.topicId||pendingAffectsTopic(db,r,a.topicId))
   if(a.kind==='message.task.version')return taskFactVersion(db,a.taskId)
   if(a.kind==='message.material'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('material:'+json([str(a.runId),str(a.resourceRef)]));return row?JSON.parse(row.body).material:null}
   if(a.kind==='message.request')return get(db,'request',a.requestId)
@@ -1020,7 +1191,7 @@ export function queryMessages(db,a) {
     return db.prepare(sql).all(...(a.conversationId?[a.conversationId,before,limit]:[before,limit])).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
   }
   if(a.kind==='message.task') {const row=db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=? AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') ORDER BY i.rowid LIMIT 1").get(str(a.taskId));return row?{run:JSON.parse(row.run),command:JSON.parse(row.command)}:null}
-  if(a.kind==='message.task.latest') {const row=db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=? AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') AND json_extract(i.body,'$.status')='applied' ORDER BY i.rowid DESC LIMIT 1").get(str(a.taskId));return row?{run:JSON.parse(row.run),command:JSON.parse(row.command)}:null}
+  if(a.kind==='message.task.latest') {const row=db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=? AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen','revise','pause','resume','cancel','confirm') AND json_extract(i.body,'$.status')='applied' ORDER BY i.rowid DESC LIMIT 1").get(str(a.taskId));return row?{run:JSON.parse(row.run),command:JSON.parse(row.command)}:null}
   if(a.kind==='message.echo.reconciliation')return echoReconciliation(db,run(db,a.runId))
   if(a.kind==='message.echo.unreconciled') {
     const limit=a.limit??100
@@ -1039,9 +1210,56 @@ export function queryMessages(db,a) {
 }
 
 /** 屏障直接保护执行控制账；创建命令须在 accept 时固定 args.taskId。 */
-export function assertMessageTaskUnfenced(db,taskId) {
+export function assertMessageTaskUnfenced(db,taskId,{allowRelatedProcessing=false,inputCommandId,ownerTurnId}={}) {
+ const consuming=new Set(),consumingRuns=new Set(),consumingEvents=new Set()
+ let acceptedWatermark=0
+ const admit=command=>{
+   const source=run(db,command.runId);current(db,source,command.revision)
+   if(command.status!=='running'||command.args?.taskId!==taskId||!['revise','reopen','confirm','resume','pause','cancel','report'].includes(command.kind))fail('MESSAGE_INPUT_CONSUMPTION_INVALID')
+   if(command.topicId&&queryMessageTopics(db,{kind:'message.topic',topicId:command.topicId})?.inputRevision!==command.topicInputRevision)fail('MESSAGE_INPUT_CONSUMPTION_STALE')
+   consuming.add(command.id);consumingRuns.add(source.runId);consumingEvents.add('scope-'+digest([source.runId,source.sourceVersion,command.unitId,taskId]))
+ }
+ if(inputCommandId)admit(get(db,'command',inputCommandId))
+ if(ownerTurnId){
+   const turn=db.prepare(`SELECT t.*,o.input_fence_revision AS current_fence,o.authorization_revision AS current_authorization,o.lease_epoch AS current_lease FROM task_owner_turns t
+     JOIN task_owners o ON o.task_id=t.task_id WHERE t.turn_id=? AND t.task_id=?`).get(ownerTurnId,taskId)
+   if(!turn||!['running','candidate','accepted'].includes(turn.status)||turn.lease_epoch!==turn.current_lease
+     ||turn.input_fence_revision!==turn.current_fence||turn.authorization_revision!==turn.current_authorization)fail('TASK_OWNER_CANDIDATE_STALE')
+   if(turn.status==='accepted')acceptedWatermark=turn.event_watermark
+   const events=new Set(db.prepare("SELECT event_key FROM task_events WHERE task_id=? AND event_type='source.related' AND seq<=?").all(taskId,turn.event_watermark).map(e=>e.event_key))
+   for(const row of db.prepare("SELECT body FROM message_items WHERE kind='command' AND json_extract(body,'$.args.taskId')=? AND json_extract(body,'$.status')='running'").all(taskId)){
+     const command=JSON.parse(row.body),source=run(db,command.runId)
+     if(events.has('scope-'+digest([source.runId,source.sourceVersion,command.unitId,taskId])))admit(command)
+   }
+ }
+ const unconsumed=db.prepare(`SELECT e.seq,e.event_key,e.handled_at,t.status,t.application_status FROM task_events e LEFT JOIN task_owner_turns t ON t.turn_id=e.turn_id
+   WHERE e.task_id=? AND e.event_type='source.related' AND e.seq>COALESCE((SELECT MAX(event_watermark) FROM task_owner_turns
+     WHERE task_id=e.task_id AND status='accepted' AND application_status='applied'),0)`).all(taskId)
+   .filter(event=>!consumingEvents.has(event.event_key))
+ if(unconsumed.length&&allowRelatedProcessing!=='owner'
+   &&!(allowRelatedProcessing==='plan'&&unconsumed.every(event=>event.seq<=acceptedWatermark||event.handled_at&&event.status==='accepted')))fail('MESSAGE_INPUT_PENDING')
+ const origins=db.prepare(`SELECT DISTINCT r.body,b.topic_id FROM message_items i JOIN message_runs r ON r.run_id=i.run_id
+   LEFT JOIN message_topic_bindings b ON b.unit_id=json_extract(i.body,'$.unitId')
+   WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=?`).all(taskId)
+ for(const origin of origins){
+   const source=JSON.parse(origin.body)
+   if(!source.conversationId)continue
+   if(origin.topic_id&&db.prepare(`SELECT 1 FROM message_topic_bindings b JOIN message_items i ON i.item_id='unit:'||b.unit_id
+     JOIN message_runs r ON r.run_id=b.run_id WHERE b.topic_id=? AND json_extract(i.body,'$.status')='pending'
+     AND json_extract(r.body,'$.status')!='superseded' LIMIT 1`).get(origin.topic_id))fail('MESSAGE_INPUT_PENDING')
+   const pending=queryMessages(db,{kind:'message.routing.pending',conversationId:source.conversationId,topicId:origin.topic_id??undefined})
+     .filter(candidate=>candidate.runId!==source.runId)
+   if(pending.some(candidate=>{
+     if(origin.topic_id)return true
+     const scoped=rows(db,candidate.runId,'barrier').filter(b=>b.targetTaskId===taskId||b.targetSourceKey===source.sourceKey)
+     return !scoped.length||scoped.some(b=>b.status==='pending')
+   }))fail('MESSAGE_INPUT_PENDING')
+ }
+ if(db.prepare(`SELECT body FROM message_items WHERE kind='command' AND json_extract(body,'$.args.taskId')=?
+   AND json_extract(body,'$.kind') IN ('revise','pause','cancel','resume')
+   AND json_extract(body,'$.status') IN ('pending','running','unknown')`).all(taskId).some(row=>!consuming.has(JSON.parse(row.body).id)))fail('MESSAGE_INPUT_PENDING')
  const fences=db.prepare("SELECT body FROM message_items WHERE kind='barrier' AND json_extract(body,'$.status')='pending'").all().map(x=>JSON.parse(x.body))
  if(!fences.length)return
  const sources=db.prepare("SELECT r.source_key, json_extract(i.body,'$.unitId') AS unit_id FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=?").all(taskId)
- if(fences.some(b=>b.targetTaskId===taskId||sources.some(s=>s.source_key===b.targetSourceKey&&(!b.unitIds||b.unitIds.includes(s.unit_id)))))fail('MESSAGE_INPUT_PENDING')
+ if(fences.some(b=>!consumingRuns.has(b.ownerRunId)&&(b.targetTaskId===taskId||sources.some(s=>s.source_key===b.targetSourceKey&&(!b.unitIds||b.unitIds.includes(s.unit_id))))))fail('MESSAGE_INPUT_PENDING')
 }

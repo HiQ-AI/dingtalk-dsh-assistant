@@ -256,7 +256,7 @@ function validAcceptanceItems(items) {
 
 export function createInvestigationStageContract({ queryScope, queryCatalog, readSources, readAcceptanceItems }) {
   return { id: 'task-investigation', version: '1', materialPolicy: {
-    roles: ['source', 'supplemental'], required: [], singleton: [], maxCount: 256, maxBytes: 262144,
+    roles: ['source', 'supplemental'], required: [], singleton: [], maxCount: 256,
   }, async prepare({ taskId, requirement, origin, handoff, definitionVersion = '6' }) {
     const scope = queryScope({ ...requirement.scope, actorId: origin.run.actorId, predecessorOutputRef: handoff?.outputRef ?? null })
     const unique = new Map()

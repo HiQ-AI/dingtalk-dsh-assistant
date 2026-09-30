@@ -89,7 +89,7 @@ task-actions 仅接受 Host 固定注册的适配器，每个适配器实现参�
 
 默认通用检查保留消息/材料整理的确定性快速路径，核对来源覆盖、报告正文和限制。其他分派项使用 `createDomainAcceptanceCheck`：通过原生 `llm.stream` 对当前领域的验收项和证据作限定判断，零工具，不新增全案总审会话；外部操作和文件投递也必须验证其分派项，不能仅凭效果成功接纳。调查使用显式 `criterionReviews`，工程使用冻结原需求和实际业务用例回执，不将这些已有领域判据替换成自由判断。存在多个工程阶段时，各阶段仅核对评估引用指向自身的条目；保留的成功前缀不承担后续新增条目，但其交付证明仍须有效。
 
-模型检查全信封上限 128 KiB、输出上限 16 KiB / 4096 tokens、超时 30 秒；Host 独立核对返回 schema、逐项覆盖和证据引用。未配置模型、容量超限、格式非法、流未正常结束、出现工具调用或证据不足均拒绝接纳。扩展 `generalCompletionCheck` 仍须提供稳定的 `generalCompletionIdentity`，其身份参与规则摘要；不能用统一返回 true 的检查器扩大受理范围。夹具验证只能证明协议门禁，不能证明真实模型对业务语义判断正确。
+模型检查完整传入已核验信封，不设置固定输入字节上限；输出上限 16 KiB / 4096 tokens、超时 30 秒；Host 独立核对返回 schema、逐项覆盖和证据引用。未配置模型、提供方容量错误、输出超限、格式非法、流未正常结束、出现工具调用或证据不足均拒绝接纳。扩展 `generalCompletionCheck` 仍须提供稳定的 `generalCompletionIdentity`，其身份参与规则摘要；不能用统一返回 true 的检查器扩大受理范围。夹具验证只能证明协议门禁，不能证明真实模型对业务语义判断正确。
 
 | 责任方 | 权威职责 | 不得代替的职责 |
 | --- | --- | --- |
@@ -224,4 +224,38 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 话题路由纯闲聊可提交units=[]和非空ignoredRefs；每条忽略记录必须有逐字原文quote和非空reason，Host继续验证原文完整覆盖。空事项且无忽略记录、仅覆盖部分原文、未声明如何替换已有事项均拒绝，不创建Topic。
 
-消息S节点支持 `{kind: "no_action", reason, coverage: [{start,end}]}`：仅用于无待办的语义判断，Host核对全文覆盖与成功S节点后结束；不建立事项、话题、任务或通知。message.no_action不接受有事项/命令/待补请求/屏障或修订的运行。收信箱`workflowStatus`新增`waiting_clarification`、`waiting_context`，`workflowStatusDetail`为待补问题或原因，真正失败仍为`routing_blocked`。
+消息S节点支持 `{kind: "no_action", reason, coverage: [{start,end}]}`：仅用于无待办的语义判断，Host核对全文覆盖与成功S节点后结束；不建立事项、话题或任务。若冻结来源保存了 `replyObligation.required`，通知 Host 仍履行一次回应义务，不能把无任务等同无需回应。message.no_action不接受有事项/命令/待补请求/屏障或修订的运行。
+
+收信箱 `workflowStatus` 区分 `waiting_clarification`（用户需补充）、`waiting_context`（助手读取材料）、`waiting_system`（读取重试耗尽，需维护恢复）；真正处理失败仍为 `routing_blocked`。`waiting_routing_barrier` 仅表示当前事项的相关输入待核对，不表示全群排空。`workflowStatusDetail` 保留实际问题或原因。
+
+每条消息另外返回以下只读事实，不以通知是否送达改写业务处理状态：
+
+- `waiting[]`：`requestId/unitId/goalText/kind/responsibility/reason/blocked/attempts/retryAt/recoveryCondition`；系统故障及范围等待可无 requestId。事项局部失败包含 unitId 与 goalText，不把同一消息的独立事项列为全局故障。责任 `host/requester/system` 分别表示助手取证、请求人补充、维护排查；审批或验收责任沿请求中已有值保留。
+- `blockingSources[]`：当前事项待核对来源的 `runId/sourceKey/sourceVersion/messageId/text/reason/topicId`，由同一作用域查询给出，不将全群未关联消息一律列为阻挡。
+- `notifications[]`：`notificationId/phase/status/acknowledged/delivered`，状态保留 prepared、sending、acknowledged、unknown、delivered、superseded。ACK 不等于独立回读；unknown 只先回读，不能凭查询失败重新发送。空数组表示尚无记录，不等于已告知或无需告知。
+
+任务接纳与持久承接责任在同一事务保存；即使命令完成回执前中断，仍可从原 acceptance 事实恢复通知。模型 `replyPolicy=none` 只控制可选回应，不取消任务承接及 Owner 生命周期沟通。用户静默必须有当前来源原文且限定助手沟通及进度/结果范围；数据库方案“不发送消息”不扩张为助手永久静默。准备和领取均检查当前事实版本，过时 prepared 通知失效；已发送或结果 unknown 的通知仍保留原账等待回读。
+
+
+### 内部材料受管重试
+
+`POST /workflows/:runId/requests/:requestId/retry` 仅接受本机回环地址、允许的 Origin 与已配置 Web 操作者身份。请求体为 `{sourceVersion, reason, dependencyRevision}`，不得提交 actorId 或伪造材料正文。只可恢复当前来源版本下已耗尽自动尝试的内部 `needs_context`；业务澄清仍走原 `/answer`。
+
+`dependencyRevision` 记录本次能力修复或材料更新的明确版本，相同版本不重复清零。保留原 request 身份及 retryHistory，清除 blocked 后调用真实材料读取恢复；返回 request 的实际状态，重试不保证 ready、不重放 Task 或外部效果。不允许定时器自行更换版本无限清零。
+
+阶段 `sourceCondition` 保存来源键/版本/逐字引用、阶段 objective 和必要的 requiredActorId。同一 Task 的不同数据集合使用不同阶段目标；人工确认必须同时绑定条件摘要、当前要求版本、前阶段输出和指定发送人的当前消息来源。阶段规划许可不替代生产 adapter 的精确执行批准。
+
+
+### 完整消息材料输入
+
+消息 S/R/I/IB、Owner 来源事件与阶段材料交接不设置应用侧固定字节上限。已授权的材料正文、来源摘录和显式读取的 Task 历史完整传递；不再以 12/16/32 KiB 拒绝，也不强制先经模型摘要。候选卡仍可摘要，但明确材料读取返回完整原文。连接器报告不完整、来源或版本变化时仍不可作为执行依据；Owner保留完整来源及事件，事件目录仍按查询游标读全；材料角色、数量、来源版本与执行授权校验不变。实际模型提供方容量错误保留为可恢复的系统阻塞。
+
+旧消息冻结快照缺少新增 `replyObligation` 时省略该可选投影字段，不改写原快照、不伪造点名证据，仍可重新领取原 S 节点。
+
+
+`I/IB` 的 `stageAuthorizations.sourceQuote` 必须连续引用该事项当前原文，`objective` 必须是该 quote 的逐字连续子串。Host 在记录成功模型节点之前核对；改写或伪造返回 `MESSAGE_STAGE_AUTHORIZATION_INVALID`，本轮最多两次纠正，仍非法则可见阻断且不创建效果命令。服务准入继续独立核验来源，提前纠正不削弱最后防线。
+
+
+历史 `hN` 仅用于 S 的短引用。进入事项上下文时，Host 按冻结 `historyManifest` 解析成真实来源键；R 读取材料与 I/IB 的 `executionMaterialRefs`、Task 固定材料使用同一真实键，不把短别名留给后续连接器。
+
+`facts.actorMayCreate=true` 是 Host 已核验的任务准入事实。I/IB 仍判断原文动作意图，但不因同一交办没有再次点名而重复询问是否承接；准入不代替生产执行或审批授权。

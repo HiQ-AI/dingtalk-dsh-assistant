@@ -3,9 +3,37 @@ import { readFileSync,readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { createInterface } from 'node:readline'
+import { migrateMessageImpact, verifyMessageImpact } from '../../../../scripts/migrate-message-impact.js'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
 import { maintenanceStatus } from '../../../../packages/dingtalk-dsh-assistant/execution-maintenance.js'
 import { copyDeploymentTaskDirectory, checkDeploymentTaskDirectory, verifyDeploymentBackup, reverifyDeploymentBackup, verifyDeploymentWeb, checkpointDeploymentDatabase } from '../../../../scripts/deployment-integrity.mjs'
+export async function holdDeploymentOwnerLock({dbPath,input=process.stdin,writeLine=line=>console.log(line)}) {
+ const db=new DatabaseSync(dbPath,{readOnly:true})
+ try {
+  const owner=new DatabaseSync(dbPath+'.owner.sqlite')
+  try{
+   owner.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');writeLine('LOCKED')
+   let migrated=false
+   for await(const line of createInterface({input})){
+    if(line!=='migrate-message-impact'||migrated)throw Error('DEPLOY_LOCK_COMMAND_INVALID')
+    const state=maintenanceStatus(db)
+    if(!state.active||state.phase!=='stopping'||!state.drained)throw Error('MIGRATION_MAINTENANCE_REQUIRED')
+    const writeDb=new DatabaseSync(dbPath)
+    try{
+     const proof=migrateMessageImpact(writeDb,{path:dbPath,mode:'execute'})
+     const readback=new DatabaseSync(dbPath,{readOnly:true})
+     try{verifyMessageImpact(readback,{baseline:proof.baseline})}finally{readback.close()}
+     writeLine(JSON.stringify(proof));migrated=true
+    }finally{writeDb.close()}
+   }
+  }
+  finally{try{owner.exec('ROLLBACK')}catch{}owner.close()}
+
+ }finally{db.close()}
+}
+async function main(){
 const root='D:/dsh_home/workflows/runtime-v2',db=new DatabaseSync(root+'/control.sqlite',{readOnly:true})
 const hash=b=>createHash('sha256').update(b).digest('hex'),digest=v=>hash(JSON.stringify(v))
 const [mode,arg,source,installed]=process.argv.slice(2)
@@ -29,10 +57,12 @@ try {
   console.log(JSON.stringify(await verifyDeploymentWeb(arg)))
  }else if(mode==='maintenance'){
   db.exec('BEGIN');try{console.log(JSON.stringify(maintenanceStatus(db)))}finally{db.exec('ROLLBACK')}
+ }else if(mode==='message-impact-verify'){
+  const receipt=JSON.parse(readFileSync(arg,'utf8'))
+  if(!receipt.verified||receipt.version!==6||!receipt.baseline)throw Error('MIGRATION_RECEIPT_INVALID')
+  db.exec('BEGIN');try{console.log(JSON.stringify(verifyMessageImpact(db)))}finally{db.exec('ROLLBACK')}
  }else if(mode==='lock'){
-  const owner=new DatabaseSync(root+'/control.sqlite.owner.sqlite')
-  try{owner.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');console.log('LOCKED');process.stdin.resume();await new Promise(resolve=>process.stdin.once('end',resolve))}
-  finally{try{owner.exec('ROLLBACK')}catch{}owner.close()}
+  await holdDeploymentOwnerLock({dbPath:root+'/control.sqlite'})
  }else if(mode==='snapshot'||mode==='verify') {
   db.exec('BEGIN')
   const tasks=db.prepare('SELECT task_id FROM business_tasks UNION SELECT task_id FROM execution_runs ORDER BY task_id').all().map(x=>x.task_id)
@@ -69,3 +99,6 @@ try {
   console.log(JSON.stringify({verifiedFiles:files.length,sha256:hash(readFileSync(arg))}))
  }else throw Error('INVALID_MODE')
 }catch(error){console.error(error.message);process.exitCode=1}finally{db.close()}
+
+}
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)await main()

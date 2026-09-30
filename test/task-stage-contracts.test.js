@@ -42,9 +42,9 @@ test('交接绑定当前计划、Run、digest、generation与必交字段', asyn
   await assert.rejects(readTaskStageHandoff(f), { code: 'WORKFLOW_OWNER_CONTRACT_UNAVAILABLE' })
 })
 
-test('领域准备前后都核验材料角色、容量，并以冻结输入Schema拒绝错型', async () => {
+test('领域准备保留完整材料正文，核验数量角色并以冻结输入Schema拒绝错型', async () => {
   const f = fixture(); let calls = 0, prepared = { input: { request: '执行', materials: [{ id: 'a', role: 'source' }] } }
-  const contract = { id: 'domain', version: '1', materialPolicy: { roles: ['source'], required: ['source'], singleton: ['source'], maxCount: 2, maxBytes: 200 },
+  const contract = { id: 'domain', version: '1', materialPolicy: { roles: ['source'], required: ['source'], singleton: ['source'], maxCount: 2 },
     prepare: async () => { calls++; return prepared } }
   const registry = createTaskStageContracts({ ...f, contracts: [contract] })
   const context = { ...f, requirement: { materials: [{ id: 'a', role: 'source' }] } }
@@ -54,11 +54,12 @@ test('领域准备前后都核验材料角色、容量，并以冻结输入Schem
     await assert.rejects(registry.prepare({ ...context, requirement: { materials } }), { code: 'TASK_STAGE_MATERIAL_ROLE_INVALID' })
     assert.equal(calls, 1)
   }
-  await assert.rejects(registry.prepare({ ...context, requirement: { materials: [{ role: 'source', text: '长'.repeat(100) }] } }), { code: 'TASK_STAGE_MATERIAL_CAPACITY' })
+  await registry.prepare({ ...context, requirement: { materials: [{ role: 'source', text: '长'.repeat(100000) }] } })
+  await assert.rejects(registry.prepare({ ...context, requirement: { materials: [{role:'source'},{role:'source'},{role:'source'}] } }), { code: 'TASK_STAGE_MATERIAL_CAPACITY' })
   prepared = { input: { request: '执行', materials: [{ role: 'unknown' }] } }
   await assert.rejects(registry.prepare(context), { code: 'TASK_STAGE_MATERIAL_ROLE_INVALID' })
-  prepared = { input: { request: '执行', materials: [{ role: 'source', text: '长'.repeat(100) }] } }
-  await assert.rejects(registry.prepare(context), { code: 'TASK_STAGE_MATERIAL_CAPACITY' })
+  prepared = { input: { request: '执行', materials: [{ role: 'source', text: '长'.repeat(100000) }] } }
+  assert.deepEqual(await registry.prepare(context),prepared)
   prepared = { input: { request: 3, materials: [{ role: 'source' }] } }
   await assert.rejects(registry.prepare(context), { code: 'TASK_STAGE_INPUT_INVALID' })
 })

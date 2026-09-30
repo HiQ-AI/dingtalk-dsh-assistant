@@ -7,13 +7,13 @@ import { maintenanceStatus, assertMaintenanceDispatch, reduceMaintenanceCommand 
 import { installEffectsSchema, validateEffectsSchema, reduceEffectCommand, recoverEffects,
   queryEffects, assertRunEffectsDrained, assertNodeEffectsSettled } from './execution-effects.js'
 
-import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced } from './message-ledger.js'
+import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced, registerMessageAcceptance } from './message-ledger.js'
 import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, queryTaskPlan, bindRunToTaskStage } from './execution-task-plan.js'
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
 import { transientRecoveryReasons, recoveryRetryLimit, recoveryRetryDelayMs } from './execution-recovery-policy.js'
 
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 const APPLICATION_ID = 0x44534845
 let db, owner, healthy = true
 const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
@@ -92,11 +92,11 @@ function currentNode(a) {
   if (n.generation !== integer(a.generation, 'generation', 1) || n.lease_epoch !== integer(a.leaseEpoch, 'leaseEpoch')) fail('NODE_STALE')
   return n
 }
-function activeRun(a, { allowFence = false, allowPause = false } = {}) {
+function activeRun(a, { allowFence = false, allowPause = false, allowMessageFence = false } = {}) {
   const r = getRun(a.runId)
   if (r.stop_requested || terminalRun(r)) fail('RUN_NOT_ACTIVE')
   if (r.pause_requested && !allowPause) fail('RUN_PAUSED')
-  if (!allowFence) assertMessageTaskUnfenced(db, r.task_id)
+  if (!allowFence&&!allowMessageFence) assertMessageTaskUnfenced(db, r.task_id)
   if (!allowFence && pendingInputs(r.run_id).length) fail('INPUT_PENDING')
   return r
 }
@@ -189,7 +189,7 @@ function validate(connection) {
   if (bad.length) fail('STORE_INVARIANT_FAILED')
   validateEffectsSchema(connection)
   validateMessageSchema(connection)
-  validateTaskPlanSchema(connection)
+  validateTaskPlanSchema(connection,{sourceConditions:true})
   validateTaskOwnerSchema(connection)
 }
 function configure() {
@@ -221,11 +221,12 @@ function addNode(runId, plan, position, generation, status) {
   db.prepare(`INSERT INTO execution_nodes(node_run_id,run_id,node_id,node_version,executor,position,generation,input_ref,input_digest,status)
     VALUES(?,?,?,?,?,?,?,?,?,?)`).run(randomUUID(), runId, plan.nodeId, plan.nodeVersion, plan.executor, position, generation, plan.inputRef, plan.inputDigest, status)
 }
-function coreCommand(command, now) {
+function coreCommand(command, now, consumption = {}) {
   const a = command.args
   if (command.kind === 'run.create') {
     object(a, ['runId', 'taskId', 'workflowId', 'workflowDigest', 'requirementRef', 'nodes', 'maxClaims', 'stageBinding'], ['runId', 'taskId', 'workflowId', 'workflowDigest', 'requirementRef', 'nodes'])
     for (const key of ['runId', 'taskId', 'workflowId']) text(a[key], key)
+    assertMessageTaskUnfenced(db,a.taskId,{...consumption,allowRelatedProcessing:consumption.ownerTurnId?'plan':false})
     digest(a.workflowDigest, 'workflowDigest'); ref(a.requirementRef, 'requirementRef')
     if (!Array.isArray(a.nodes) || !a.nodes.length || a.nodes.length > 128) fail('INVALID_NODE_PLAN')
     const ids = new Set()
@@ -609,7 +610,8 @@ function coreCommand(command, now) {
   if (command.kind === 'node.commit') {
     object(a, ['runId', 'nodeId', 'generation', 'leaseEpoch', 'inputDigest', 'outcome', 'outputRef', 'evidenceRefs', 'waitReason', 'nextInput'],
       ['runId', 'nodeId', 'generation', 'leaseEpoch', 'inputDigest', 'outcome', 'evidenceRefs'])
-    const r = activeRun(a), n = currentNode(a)
+    // 已领取执行的真实结果按原 generation/input 入账；新消息只阻挡后继领取，不能制造重复执行。
+    const r = activeRun(a,{allowMessageFence:true}), n = currentNode(a)
     digest(a.inputDigest, 'inputDigest'); refs(a.evidenceRefs)
     if (!['succeeded', 'waiting', 'failed'].includes(a.outcome)) fail('INVALID_NODE_OUTCOME')
     if (n.status !== 'running' || n.input_digest !== a.inputDigest) fail('NODE_STALE')
@@ -645,11 +647,14 @@ function coreCommand(command, now) {
 
 function command(value) {
   if (!healthy) fail('STORE_UNAVAILABLE')
-  object(value, ['id', 'kind', 'args'])
+  object(value, ['id', 'kind', 'args','inputCommandId','ownerTurnId'],['id','kind','args'])
   text(value.id, 'command.id'); text(value.kind, 'command.kind')
   if (!value.args || Object.getPrototypeOf(value.args) !== Object.prototype) fail('INVALID_ARGUMENT')
   if (value.kind === 'task.plan.accept') fail('UNKNOWN_COMMAND')
-  const hash = createHash('sha256').update(canonical({ kind: value.kind, args: value.args })).digest('hex')
+  const consumption=Object.fromEntries(['inputCommandId','ownerTurnId'].filter(key=>value[key]!==undefined).map(key=>[key,text(value[key],key)]))
+  if(Object.keys(consumption).length&&!['run.create','task.owner.accept','task.owner.applied','task.plan.initialize','task.plan.extend','task.plan.create',
+    'task.plan.confirm','task.plan.revise','task.stage.input.bind'].includes(value.kind))fail('MESSAGE_INPUT_CONSUMPTION_FORBIDDEN')
+  const hash = createHash('sha256').update(canonical({ kind: value.kind, args: value.args,...consumption })).digest('hex')
   const now = new Date().toISOString()
   try {
     db.exec('BEGIN IMMEDIATE')
@@ -660,6 +665,20 @@ function command(value) {
       return { replayed: true, dispatchEligible: false, result: JSON.parse(prior.result) }
     }
     assertMaintenanceDispatch(db, value.kind)
+    // 与 message 的接纳和 command 领取使用同一持久输入守卫；读取和取消本身不被拦住。
+    if (['task.accept','task.owner.accept','task.owner.applied','task.plan.initialize','task.plan.extend',
+      'task.plan.create','task.plan.confirm','task.plan.revise','task.stage.input.bind','task.stage.complete'].includes(value.kind)) {
+      let taskId=value.args.taskId
+      if(!taskId&&value.args.turnId)taskId=db.prepare('SELECT task_id FROM task_owner_turns WHERE turn_id=?').get(value.args.turnId)?.task_id
+      if(value.kind==='task.owner.accept'){
+        const currentOwner=db.prepare('SELECT lease_epoch,current_turn_id FROM task_owners WHERE task_id=?').get(taskId)
+        if(currentOwner&&(currentOwner.lease_epoch!==value.args.leaseEpoch||currentOwner.current_turn_id!==value.args.turnId))fail('TASK_OWNER_LEASE_STALE')
+      }
+      const settlingStopped=value.kind==='task.stage.complete'&&db.prepare('SELECT state FROM task_controls WHERE task_id=?').get(taskId)?.state!=='active'
+      if(taskId&&!settlingStopped)assertMessageTaskUnfenced(db,taskId,{...consumption,
+        ...(['task.owner.accept','task.owner.applied'].includes(value.kind)?{ownerTurnId:value.args.turnId}:{}),
+        allowRelatedProcessing:['task.owner.accept','task.owner.applied'].includes(value.kind)?'owner':value.kind.startsWith('task.plan.')||value.kind==='task.stage.input.bind'&&consumption.ownerTurnId?'plan':false})
+    }
     let combined = reduceMaintenanceCommand(db, value, { ...context(value.id, now), processIncarnation: workerData.processIncarnation })
     if (value.kind === 'task.archive') {
       object(value.args, ['taskId', 'actorId'])
@@ -748,6 +767,7 @@ function command(value) {
       const created = reduceTaskPlanCommand(db, { kind: 'task.plan.accept', args: { taskId, requirementRef, requirementRevision } }, context(value.id, now))
       reduceTaskOwnerCommand(db, { kind: 'task.owner.init', args: { taskId, sessionId, criteria, sourceKey } }, context(value.id, now))
       const event = reduceTaskOwnerCommand(db, { kind: 'task.owner.event', args: { taskId, eventKey, eventType: 'task.created', payloadRef: requirementRef } }, context(value.id, now))
+      registerMessageAcceptance(db,taskId,requirementRevision,now)
       combined = { ...created, ownerSessionId: sessionId, eventSeq: event.eventSeq }
     } else if (value.kind === 'task.requirement.bind-legacy') {
       object(value.args, ['taskId', 'expectedRequirementRevision', 'requirementRef',
@@ -771,7 +791,7 @@ function command(value) {
       const event = reduceTaskOwnerCommand(db, { kind: 'task.owner.event', args: { taskId, eventKey, eventType: 'intent.received', payloadRef: payloadRef ?? requirementRef } }, context(value.id, now))
       combined = { ...updated, eventSeq: event.eventSeq }
     }
-    const core = combined ?? coreCommand(value, now)
+    const core = combined ?? coreCommand(value, now,consumption)
     const plan = core === null ? reduceTaskPlanCommand(db, value, context(value.id, now)) : null
     const ownerResult = core === null && plan === null ? reduceTaskOwnerCommand(db, value, context(value.id, now)) : null
     const effect = core === null && plan === null && ownerResult === null

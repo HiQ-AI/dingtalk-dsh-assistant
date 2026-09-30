@@ -112,15 +112,17 @@ test('Owner 仅能读取当前 Task 已成功阶段的产物正文', async t => 
   const h = await host(root, null, artifactRef)
   t.after(() => h.close())
   const read = []
+  const longArtifact='发现原因'.repeat(20000)+'最后条件'
   const result = await h.sessions.run({ binding: { taskId: 'task-1', sessionId: 'artifact-session',
     turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
   input: { taskId: 'task-1', stageArtifacts: [{ stageId: 'stage-1', outputRef: artifactRef,
     evidenceRefs: [] }] }, provider: 'owner-fixture', model: 'scripted',
   onSessionBound: async () => {}, readArtifact: async ref => {
-    read.push(ref); return { summary: '发现原因', limitations: [] }
+    read.push(ref); return { summary: longArtifact, limitations: [] }
   }, onCandidate: async value => assert.deepEqual(value, decision) })
   assert.equal(result.status, 'submitted')
   assert.deepEqual(read, [artifactRef])
+  assert.ok(JSON.stringify(h.requests).includes('最后条件'))
   assert.ok(h.requests.every(request => request.tools.some(tool => tool.name === 'task_owner_read_artifact')))
 })
 

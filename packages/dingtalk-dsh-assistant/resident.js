@@ -219,6 +219,7 @@ export async function apply(ctx, config = {}) {
       if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
       return workflow.submitWebTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
     }
+    runtime.retryWorkflowMaterialRequest = args => workflow.retryMaterialRequest(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.resumeWorkflowRequest = args => {
       if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')
       return workflow.resumeRequest(args, { channel: 'web', actorId: workflowConfig.webActorId })

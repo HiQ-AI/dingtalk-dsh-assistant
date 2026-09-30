@@ -38,8 +38,7 @@ export function createTaskStageContracts({ contracts, controller, artifacts,
       const policy = contract.materialPolicy
       const validateMaterials = materials => {
         if (!policy) return
-        if (!Array.isArray(materials) || materials.length > policy.maxCount
-          || Buffer.byteLength(JSON.stringify(materials), 'utf8') > policy.maxBytes)
+        if (!Array.isArray(materials) || materials.length > policy.maxCount)
           throw executionError('TASK_STAGE_MATERIAL_CAPACITY')
         const roles = materials.map(item => item?.role ?? 'supplemental')
         if (roles.some(role => !policy.roles.includes(role))
@@ -54,7 +53,8 @@ export function createTaskStageContracts({ contracts, controller, artifacts,
         && item.versions.includes(handoff.contract.version))) throw executionError('TASK_STAGE_HANDOFF_UNSUPPORTED')
       const definitionVersion = stage.workflowDigest
         ? controller.workflowDefinition(stage.workflowId, stage.workflowDigest).version : undefined
-      const prepared = await contract.prepare({ ...context, stageIndex: index, handoff, definitionVersion })
+      const stageRequirement = stage.sourceCondition ? { ...requirement, request: stage.sourceCondition.objective, objective: stage.sourceCondition.objective } : requirement
+      const prepared = await contract.prepare({ ...context, requirement: stageRequirement, stageIndex: index, handoff, definitionVersion })
       if (!prepared?.input || typeof prepared.input !== 'object') throw executionError('TASK_STAGE_INPUT_INVALID')
       if (prepared.input.materials !== undefined) validateMaterials(prepared.input.materials)
       const definition = controller.workflowDefinition(prepared.workflowId ?? stage.workflowId, stage.workflowDigest ?? undefined)

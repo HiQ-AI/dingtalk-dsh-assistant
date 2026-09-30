@@ -1,0 +1,29 @@
+case,round,status,scenario,evidence,boundary
+A01,17,PASS,原 #114/#115 snapshot，短正文长引用、多字节中文,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A02,17,PASS,R 返回不存在资源引用,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A03,17,PASS,79 候选、合法分页、跨页相似目标,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A04,17,PASS,Excel 审核状态与旧 Task 进度查询并存,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A05,17,PASS,数值时间/本地日期/ISO 混合、乱序回补,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A06,17,PARTIAL,文件→请求、引用文件、两份同系列表格,round-17.md; round-2/observer-waits-checks.json,隔离测试通过；真实Excel文件业务读取未验证
+A07,17,PASS,点名问候、普通闲聊、问候混合任务,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A08,17,PASS,内部等待、必要人工补充、容量失败、范围屏障,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A09,17,PASS,Task 已接纳但模型 replyPolicy=none,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A10,17,PASS,通知 ACK 丢失/进程重启/来源变化,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A11,17,PASS,连续无重新点名的补充、换人插话、第三方批准,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A12,17,PASS,#114→#115，先 2 条后 69 条,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A13,17,PASS,其他消息尚未归类、精准取消/审批回复,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A14,17,NOT_RUN,回查原七条消息,round-17.md; round-2/observer-waits-checks.json,真实源消息仅只读回查；恢复及渠道外发未执行
+A15,17,PASS,A 长期缺材料，B 被证据证明独立,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A16,17,PASS,同事项新补充在意图判断中到达,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A17,17,PASS,补充/取消与意图接纳、command claim、operation claim 并发,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A18,17,PASS,无引用且指代不明、可能涉及多个 Task,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A19,17,PASS,其他话题持续输入、内部 R 或模型故障,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A20,17,PASS,同一消息两个独立事项，其中一个缺材料,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A21,17,PASS,等待读取游标过程中重启,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A22,17,PASS,已回答缺口、随后无引用补充或多人插话,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A23,17,PASS,Task 落账前后进程中断、承接通知失败,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A24,17,PASS,用户明确静默与仅禁止业务通知,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A25,17,PASS,旧通知待发时收到任务修订/取消,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A26,17,PASS,无执行权参与者补充有效业务事实,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A27,17,PASS,当前目录变化、未知引用、多轮相关/无关判断变化,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A28,17,PARTIAL,现有记录升级、升级中断、运行版本错配,round-17.md; round-2/observer-waits-checks.json,迁移、强杀回滚与旧worker拒绝隔离通过；正式库未迁移

@@ -31,13 +31,26 @@ test('精简判断轨迹不包含技术详情，并展示容量受阻原因', as
 test('收信箱区分话题关联等待与意图重判，任务详情展示业务计划阶段', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /message\.workflowStatus/)
-  assert.match(source, /waiting_routing_barrier: \{ label: '已关联 · 等待其他消息'/)
+  assert.match(source, /waiting_routing_barrier: \{ label: '核对相关输入'/)
   assert.match(source, /intent_judging: \{ label: '话题意图判断中'/)
   assert.match(source, /intent_rejudging: \{ label: '新消息加入 · 重新判断'/)
   assert.match(source, /routing_blocked: \{ label: '关联受阻'/)
   assert.match(source, /selectedWorkflowTask\.plan\.stages\.map/)
   assert.match(source, /waiting_confirmation: '等待人工确认'/)
   assert.match(source, /'aria-label': '任务阶段'/)
+})
+
+test('收信箱分开表达材料读取责任及通知回读，详情可用键盘展开', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  assert.match(source, /waiting_context: \{ label: '正在读取材料'/)
+  assert.match(source, /waiting_clarification: \{ label: '等待用户补充'/)
+  assert.match(source, /waiting_system: \{ label: '材料读取受阻'/)
+  assert.match(source, /React\.createElement\('details'[\s\S]*React\.createElement\('summary'[\s\S]*'等待与通知'/)
+  assert.match(source, /message\.blockingSources/)
+  assert.match(source, /恢复条件/)
+  assert.match(source, /acknowledged: '已确认发送，待回读'/)
+  assert.match(source, /unknown: '发送结果待核对'/)
+  assert.match(source, /delivered: '已回读送达'/)
 })
 
 test('运行看板保留左侧菜单并替换右侧整体内容', async () => {

@@ -27,17 +27,16 @@ export function createGeneralFileReadCapability({ root, readablePaths }) {
     try {
       const opened = await handle.stat(), current = await lstat(target)
       if (!opened.isFile() || opened.dev !== current.dev || opened.ino !== current.ino) throw executionError('GENERAL_FILE_SCOPE_DENIED')
-      if (opened.size > 12000) throw executionError('GENERAL_FILE_CAPACITY')
       const data = await handle.readFile()
       const after = await lstat(target)
-      if (after.dev !== opened.dev || after.ino !== opened.ino || data.length > 12000) throw executionError('GENERAL_FILE_SCOPE_DENIED')
+      if (after.dev !== opened.dev || after.ino !== opened.ino) throw executionError('GENERAL_FILE_SCOPE_DENIED')
       const content = new TextDecoder('utf-8', { fatal: true }).decode(data)
       return { path, content, digest: executionDigest(content) }
     } finally { await handle.close() }
   }
   return {
     id: 'read-approved-file', effectClass: 'read', identity: `read-approved-file-v1:${executionDigest({ root, readablePaths: [...permitted].sort() })}`,
-    description: '读取受信 Host 在当前任务作用域明确列出的 UTF-8 文件，最多 12 KiB',
+    description: '读取受信 Host 在当前任务作用域明确列出的 UTF-8 文件，完整保留正文',
     authorize: async ({ input, scope }) => typeof input.path === 'string' && permitted.has(input.path)
       && Array.isArray(scope.readableFiles) && scope.readableFiles.includes(input.path),
     execute: async ({ input }) => load(input.path),
@@ -259,8 +258,6 @@ ${JSON.stringify(z.toJSONSchema(resultSchema, { io: 'input' }))}`
         return unverified('DOMAIN_ACCEPTANCE_INPUT_INVALID')
       const text = JSON.stringify({ request: input.request, constraints: input.constraints,
         acceptanceItems: items, evidence: input.evidence, report: input.report })
-      if (Buffer.byteLength(system, 'utf8') + Buffer.byteLength(text, 'utf8') > 128 * 1024)
-        return unverified('DOMAIN_ACCEPTANCE_INPUT_BUDGET')
       const generate = async () => {
         const config = typeof modelConfig === 'function' ? await modelConfig() : modelConfig
         if (controller.signal.aborted) throw executionError('DOMAIN_ACCEPTANCE_TIMEOUT')
