@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { readFileSync,readdirSync,realpathSync,mkdirSync,copyFileSync,writeFileSync } from 'node:fs'
+import { readFileSync,readdirSync,realpathSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { join, dirname } from 'node:path'
@@ -41,25 +41,6 @@ export function verifyAdapterPackage({packagePath,sourceRoot,profileRoot}) {
  }
  return {verified:true,packageName:adapterName,version:manifest.version,sha256:fileHash(readFileSync(packagePath)),verifiedFiles:names.length,...(installed?{resolution:installed}:{})}
 }
-export function backupAdapter({profileRoot,destination}) {
- const resolution=adapterResolution(profileRoot),files=[]
- const walk=(relative='')=>{for(const entry of readdirSync(join(resolution.root,relative),{withFileTypes:true})){
-  if(entry.name==='node_modules')continue
-  const name=relative?relative+'/'+entry.name:entry.name
-  if(entry.isDirectory())walk(name)
-  else if(entry.isFile())files.push(name)
-  else throw Error('ADAPTER_BACKUP_LINK_UNSUPPORTED')
- }}
- walk();mkdirSync(destination,{recursive:false})
- const manifest=files.map(name=>{
-  mkdirSync(dirname(join(destination,name)),{recursive:true});copyFileSync(join(resolution.root,name),join(destination,name))
-  const sha256=fileHash(readFileSync(join(resolution.root,name)))
-  if(sha256!==fileHash(readFileSync(join(destination,name))))throw Error('ADAPTER_BACKUP_MISMATCH')
-  return {name,sha256}
- })
- const proof={resolution,files:manifest};writeFileSync(join(destination,'backup-manifest.json'),JSON.stringify(proof,null,2))
- return {verified:true,...proof,manifestSha256:fileHash(readFileSync(join(destination,'backup-manifest.json')))}
-}
 export async function holdDeploymentOwnerLock({dbPath,input=process.stdin,writeLine=line=>console.log(line)}) {
  const db=new DatabaseSync(dbPath,{readOnly:true})
  try {
@@ -93,12 +74,6 @@ try {
   console.log(JSON.stringify(verifyAdapterPackage({packagePath:arg,sourceRoot:source,profileRoot:installed||undefined})))
  }else if(mode==='adapter-current'){
   console.log(JSON.stringify(adapterResolution(arg)))
- }else if(mode==='adapter-backup-verify'){
-  const proof=JSON.parse(readFileSync(join(arg,'backup-manifest.json'),'utf8'))
-  for(const item of proof.files){if(item.name.includes('..')||item.name.startsWith('/')||fileHash(readFileSync(join(arg,item.name)))!==item.sha256)throw Error('ADAPTER_BACKUP_MISMATCH')}
-  console.log(JSON.stringify({verified:true,files:proof.files.length}))
- }else if(mode==='adapter-backup'){
-  console.log(JSON.stringify(backupAdapter({profileRoot:arg,destination:source})))
  }else if(mode==='task-directory-check'){
   console.log(JSON.stringify(await checkDeploymentTaskDirectory({dbPath:root+'/control.sqlite',taskDirectory:arg||undefined})))
  }else if(mode==='task-directory-copy'){

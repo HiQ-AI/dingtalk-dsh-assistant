@@ -189,7 +189,7 @@ test('schema6部署在同一owner锁内迁移，其他owner拒绝且历史证明
 
 test('Adapter专用包检查零写并核对provider实际解析，旧副本与源漂移拒绝',async()=>{
   const {execFileSync}=await import('node:child_process')
-  const {verifyAdapterPackage,adapterResolution,backupAdapter}=await import('../docs/acceptance/topic-context-completeness/scripts/check-repair-deployment.mjs')
+  const {verifyAdapterPackage}=await import('../docs/acceptance/topic-context-completeness/scripts/check-repair-deployment.mjs')
   const root=await mkdtemp(join(tmpdir(),'adapter-deploy-')),staging=join(root,'staging'),source=join(root,'source'),profile=join(root,'profile')
   await mkdir(join(staging,'package/lib'),{recursive:true})
   const manifest={name:'@deepseek-ai/dsh-llm-pi-ai',version:'1.0.0',main:'lib/index.js'}
@@ -208,9 +208,6 @@ test('Adapter专用包检查零写并核对provider实际解析，旧副本与�
   await writeFile(join(profile,'node_modules/dsh-codex-connect/lib/index.js'),'')
   await cp(source,join(profile,'node_modules/@deepseek-ai/dsh-llm-pi-ai'),{recursive:true})
   assert.equal(verifyAdapterPackage({packagePath,sourceRoot:source,profileRoot:profile}).verified,true)
-  const backup=backupAdapter({profileRoot:profile,destination:join(root,'backup')})
-  assert.ok(backup.files.some(file=>file.name==='lib/index.js'))
-  assert.equal(backup.manifestSha256,createHash('sha256').update(await readFile(join(root,'backup/backup-manifest.json'))).digest('hex'))
   const nested=join(profile,'node_modules/dsh-codex-connect/node_modules/@deepseek-ai/dsh-llm-pi-ai')
   await cp(source,nested,{recursive:true});await writeFile(join(nested,'lib/index.js'),'export const nativeStop=false')
   // fresh process avoids Node resolver缓存，模拟全新启动后provider选择另一依赖副本。

@@ -469,12 +469,12 @@ IB 话题来源身份使用无损引用：`sourceIndexes` 按原顺序指向 sha
 
 受控 `/workflows/<runId>/reprocess` 不设来源版本次数上限；每次仍要求当前来源和无未确认业务效果。必须先只读核对命令/通知，再调用一次并独立回读新版本；重复或未知响应先查状态，不循环重发。历史模型调用计量保留，版本递增不等于授权重复任务。
 
-### 同批更换 PiAiAdapter 精确包
+### 本轮 PiAiAdapter 无备份续接
 
-适配器属于普通依赖，原生 `dsh plugin --profile web add` 会转发到 profile 内的 pnpm；无 `dsh.bundle` 只提示普通依赖，不加入 profile layer。因此本流程不修改模型 settings，也不替换 `dsh-codex-connect` provider 包。
+本轮按用户明确要求不再备份，也不复制旧 Adapter。已生成的目录保留，但中断的备份验证不作为完整备份证明。通用 `deploy-owner-repair.ps1` 未保留 Adapter 扩展；本次使用 `docs/tmp/message-processing-deploy/continue-without-backup.ps1` 接续已有封存停机状态，先核对维护许可、原实例退出和 owner 独占锁，再执行精确包安装。
 
-完整维护部署可同时指定 `-AdapterPackage <D:/dsh_home/packages中的精确tgz>`、`-AdapterSource <对应llm-pi-ai源码绝对目录>`、`-ExpectedAdapterPackageSha256 <完整SHA256>`，三者缺一拒绝，不能与 Bootstrap 或 RepairStoppedLaunch 混用。`-Check` 仅核候选包、源码和当前 provider 解析身份，不要求当前安装已等于候选、不写安装证明。专用校验按 tgz 实际清单核对 lib、README 等文件，LICENSE 按工作区根文件核对；包名、版本、入口必须匹配，不扫描未打包 src 文件。
+Adapter 为普通依赖，原生 `dsh plugin --profile web add` 支持安装，不加入 profile layer。本次首次安装后的回读发现 hoisted 同版本旧包仍被 provider 解析：仅顶层安装成功不足以证明生效。因此在 profile 通过原生 `npm pkg set` 将 `pnpm.overrides.@deepseek-ai/dsh-llm-pi-ai` 精确绑定到持久 tgz，再执行命名 file 包的原生 plugin add；没有修改模型 settings，没有更换 provider 包。
 
-停机持有 owner 锁并完成原有 profile/数据备份后，额外将 provider 当前解析的 adapter 普通文件复制至本轮备份的 `adapter/`，排除 node_modules 链接，保存并读回逐文件 SHA 清单。安装使用 `@deepseek-ai/dsh-llm-pi-ai@file:<精确tgz>`。安装后和 Readback 都从 `dsh-codex-connect` 实际入口解析 adapter，再逐项比较候选包内容；只在 profile 顶层出现新副本不足以通过。launch 记录 adapter 三项输入及旧包备份清单 SHA；Readback/Resume 必须提供同样参数且旧包备份清单和内容未漂移。
+精确包为 `D:/dsh_home/packages/deepseek-ai-dsh-llm-pi-ai-0.1.2-rc.1-native-stop-cbf6f3d68a6f.tgz`，SHA256 为 `cbf6f3d68a6ff708bb55ab301ae97fad735b43d60655fdde1bb2083b92719b79`。checker 保留只读 `adapter-package` 和 `adapter-current`：按 tgz 清单核对 17 个打包文件，不扫描未打包 src；从 `dsh-codex-connect` 实际入口解析 Adapter，再逐文件比对候选包，拒绝命中旧副本。LICENSE 对照工作区根文件，package.json 的工作区依赖转写以精确包摘要为身份依据。
 
-失败后保留维护封存、旧 profile 清单/锁文件、旧 adapter 文件及本轮日志，不自动回退或启动。需要回退时按既有离线恢复流程先确认停机与独占锁：从已验证的 `backup/adapter` 用原生 pnpm pack 重建旧包至持久包目录，核对包内每个旧文件与备份清单后，再用命名 file 参数安装旧 adapter；重新核对 provider 实际解析文件与原备份摘要。不要仅按相同版本号从 registry 重装（本轮候选可能同版本不同内容），不要直接覆盖 pnpm 链接目标。数据库和业务账不随适配器回退改写；恢复派发前仍需完成原部署历史、包、进程及维护许可回读。本节描述回退证据与操作边界，不代表已经执行回退。
+本次安装后新 PID 29924 已通过回读并恢复至维护 revision 177；这些是本轮历史事实，不作为以后部署的当前状态依据。包、进程及健康通过只证明部署成立，消息重放仍须独立核对当前来源版本、命令接纳、Task 状态与通知 ACK/独立回读；不得将恢复派发等同于业务处理完成。无备份意味着本轮没有新增可声称完整的回退副本，失败时仍应保持封存并以已有证据定位，不自动恢复或重装。

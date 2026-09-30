@@ -383,27 +383,3 @@ $launchGate=$ast.Extent.Text.IndexOf('[void](Assert-MessageImpactReadback @{mess
 $start=$ast.Extent.Text.IndexOf('$launch=Start-Process', $launchGate)
 if($launchGate-lt 0 -or $start-le $launchGate){throw '启动前必须存在迁移回读门禁'}
 Write-Output 'PASS 6/6: schema迁移丢锁零写、固定锁内动作、独立回读、摘要漂移、模式漂移、启动前门禁'
-
-# Adapter入口与在线Check隔离：执行原AST表达式，不允许预检调用installed或写证据。
-$AdapterPackage='adapter.tgz';$AdapterSource='D:/adapter-source';$ExpectedAdapterPackageSha256='d'*64
-$RepairStoppedLaunch='';$Bootstrap=$false;$TaskMigrationPlan='';$Bundle='';$MergePolicy='';$ChecksProposal='';$DirectQueriesProposal='query.json';$ObserverPackage='';$ExpectedObserverPackageSha256=''
-Assert-DeploymentMode
-$RepairStoppedLaunch='D:/sealed.json';$failed=$false;try{Assert-DeploymentMode}catch{$failed=$true}
-if(-not $failed){throw 'Adapter不可从简化修复入口换包'}
-$RepairStoppedLaunch='';$ExpectedAdapterPackageSha256='';$failed=$false;try{Assert-DeploymentMode}catch{$failed=$true}
-if(-not $failed){throw 'Adapter缺摘要必须拒绝'}
-$ExpectedAdapterPackageSha256='d'*64
-$configArgs=@('configure.mjs','--profile','test')
-$script:configCalls=@()
-function Run-Node([string[]]$Arguments){$script:configCalls+=,$Arguments;'{}'}
-$preflight=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$configProof'},$true)
-if($preflight.Extent.Text -match 'Set-Content|adapter-installed|adapter-package'){throw '配置预检不允许安装后校验或写入'}
-Invoke-Expression $preflight.Extent.Text
-if($script:configCalls.Count-ne 1 -or $script:configCalls[0][-1]-ne '--check'){throw '配置预检只能走原生零写check'}
-$adapterPreflight=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$adapterProof'},$true)
-$script:configCalls=@();Invoke-Expression $adapterPreflight.Extent.Text
-if($script:configCalls.Count-ne 1 -or $script:configCalls[0].Count-ne 4){throw 'Adapter预检仅核候选源码，不读取安装后身份'}
-$installAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$installPackages'},$true)
-Invoke-Expression $installAssignment.Extent.Text
-if($installPackages[-1]-ne '@deepseek-ai/dsh-llm-pi-ai@file:adapter.tgz'){throw 'Adapter安装须用精确命名file包'}
-Write-Output 'PASS 5/5: Adapter参数与修复入口拒绝、配置Check零写、候选Check不校验安装态、命名安装'
