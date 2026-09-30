@@ -157,6 +157,7 @@ test('replyPolicy none不丢Task承接及Owner阻塞事实，重新扫描幂等'
   const action = { commandId: 'c', status: 'applied', kind: 'create', args: { replyPolicy: 'none' }, result: { taskId: 'task', reply: '已收到要求，目前尚未开始。' } }
   const notices = new Map(); let reports = 0
   const store = { async query(q) {
+    if (q.kind === 'message.notification.diagnostics') return []
     if (q.kind === 'message.list') return [run]
     if (q.kind === 'message.run') return { run, requests: [], commands: [action] }
     if (q.kind === 'message.acceptances') return []
@@ -170,4 +171,54 @@ test('replyPolicy none不丢Task承接及Owner阻塞事实，重新扫描幂等'
   assert.equal(reports, 2); assert.equal(notices.size, 2)
   assert.ok([...notices.values()].some(n => n.payload.text.includes('尚未开始')))
   assert.ok([...notices.values()].some(n => n.payload.text.includes('审批')))
+})
+
+test('旧Owner报告跨command已送达，稳定eventKey复用且其他prepared正常投递', async t => {
+  const f=await fixture(t)
+  const send=(kind,args)=>f.store.command({id:randomUUID(),kind,args})
+  await send('task.accept',{taskId:'task',requirementRef:`sha256-${'a'.repeat(64)}.json`,requirementRevision:1,sessionId:'owner',criteria:['交付结果'],sourceKey:'source',eventKey:'created'})
+  await send('task.owner.claim',{taskId:'task',turnId:'turn',expectedLeaseEpoch:0})
+  await send('task.owner.sessionBound',{taskId:'task',turnId:'turn',leaseEpoch:1,sessionId:'owner'})
+  await send('task.owner.candidate',{taskId:'task',turnId:'turn',leaseEpoch:1,decision:{action:'block',summary:'等待审批',evidenceRefs:[]}})
+  await send('task.owner.accept',{taskId:'task',turnId:'turn',leaseEpoch:1})
+  await send('task.owner.applied',{taskId:'task',turnId:'turn',leaseEpoch:1})
+  const [report]=await f.store.query({kind:'task.owner.reports',taskId:'task'})
+  const eventKey=`task.owner.report:${report.reportId}`
+  await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+  await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'old-command',kind:'revise',args:{taskId:'task',replyPolicy:'none'}},{commandId:'c',kind:'revise',args:{taskId:'task',replyPolicy:'none'}}]})
+  const oldCommand=(await f.call('command.claim',{commandId:'old-command'})).result.command
+  await f.call('command.complete',{commandId:'old-command',leaseEpoch:oldCommand.leaseEpoch,result:{taskId:'task'}})
+  const c=(await f.call('command.claim',{commandId:'c'})).result.command
+  await f.call('command.complete',{commandId:'c',leaseEpoch:c.leaseEpoch,result:{taskId:'task'}})
+  const run=(await f.store.query({kind:'message.run',runId:'m'})).run
+  await f.call('notification.prepare',{runId:'m',commandId:'old-command',notificationId:'old-id-other-command',eventKey,payload:{phase:`owner:${report.reportId}`,text:'旧报告',conversationId:'g',sourceMessageId:'old-source'},disclosure:{conversationId:'g',authorizationRef:'old-source'}})
+  const old=(await f.call('notification.claim',{notificationId:'old-id-other-command'})).result.notification
+  await f.call('notification.sent',{notificationId:old.id,leaseEpoch:old.leaseEpoch,ack:{messageId:'old-out'}})
+  await f.call('notification.readback',{notificationId:old.id,leaseEpoch:old.leaseEpoch,evidence:{messageId:'old-out'}})
+  await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+  const store=f.store
+  let sends=0
+  await createWorkflowNotifications({store,adapter:{canDisclose:async()=>true,send:async()=>{sends++;return {messageId:'new-out'}},readback:async()=>({messageId:'new-out'})}}).flush()
+  assert.equal(sends,1)
+  assert.equal((await f.notices()).filter(n=>n.eventKey===eventKey).length,1)
+  assert.equal((await f.store.query({kind:'message.notification',eventKey})).id,'old-id-other-command')
+  assert.equal((await f.store.query({kind:'message.run',runId:run.runId})).notificationDiagnostics.length,0)
+})
+
+test('单条事实失败不阻断unknown回读，诊断可回读且相同错误不反复写账',async t=>{
+  const f=await fixture(t)
+  await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+  await f.flush({canDisclose:async()=>true,send:async()=>{throw Error('ACK_LOST')},readback:async()=>null})
+  let broken=true,diagnosticWrites=0,reads=0
+  const store={query:q=>{if(broken&&q.kind==='message.acceptances')throw Error('BROKEN_FACT');return f.store.query(q)},command:q=>{if(q.kind==='message.notification.diagnostic')diagnosticWrites++;return f.store.command(q)}}
+  const adapter={canDisclose:async()=>true,send:async()=>{throw Error('MUST_NOT_RESEND')},readback:async()=>{reads++;return null}}
+  const notifier=createWorkflowNotifications({store,adapter})
+  await assert.rejects(notifier.flush(),/BROKEN_FACT/)
+  await assert.rejects(notifier.flush(),/BROKEN_FACT/)
+  assert.equal(reads,2);assert.equal(diagnosticWrites,1)
+  let state=await f.store.query({kind:'message.run',runId:'m'})
+  assert.equal(state.notificationDiagnostics[0].status,'unresolved');assert.equal(state.notificationDiagnostics[0].error,'BROKEN_FACT')
+  broken=false;await notifier.flush()
+  state=await f.store.query({kind:'message.run',runId:'m'})
+  assert.equal(state.notificationDiagnostics[0].status,'resolved');assert.equal(diagnosticWrites,2)
 })

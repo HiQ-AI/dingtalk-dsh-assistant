@@ -259,3 +259,7 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 历史 `hN` 仅用于 S 的短引用。进入事项上下文时，Host 按冻结 `historyManifest` 解析成真实来源键；R 读取材料与 I/IB 的 `executionMaterialRefs`、Task 固定材料使用同一真实键，不把短别名留给后续连接器。
 
 `facts.actorMayCreate=true` 是 Host 已核验的任务准入事实。I/IB 仍判断原文动作意图，但不因同一交办没有再次点名而重复询问是否承接；准入不代替生产执行或审批授权。
+
+通知按稳定 `eventKey` 查询同一 Owner 报告已有账目，已有通知的原来源引用、发送及回读事实保持原样，不因后来 command 或投影字段变化重发。`message.notification` 查询须且仅须提供 `notificationId` 或 `eventKey`。
+
+通知扫描逐来源、请求、承接、命令、Owner 报告及投递事实隔离异常；准备失败不阻断其他 prepared 投递或 unknown/acknowledged 的只读回查。失败落在原 `message_items` 的 `notification-diagnostic`，通过现有 `message.run` 状态返回 `notificationDiagnostics`（id/runId/fact/error/status/attempts/createdAt/updatedAt/resolvedAt），并可用 `message.notification.diagnostics` 按 runId/status 查询。相同未解决错误不重复写账；事实恢复后标记 resolved。内部 flush 完成其余事实后仍汇总抛出诊断供既有恢复日志显示，不将失败冒充成功。

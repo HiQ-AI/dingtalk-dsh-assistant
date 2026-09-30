@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
 
 export const groupReplyInstructions = '发给群成员的回复、summary 和 question 使用直白的业务语言：说明做了什么、结果、实际限制、下一步和需要确认的问题。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
@@ -123,7 +124,8 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
       : ['create','reopen'].includes(action.kind) && action.result?.taskId ? `task.accepted:${action.result.taskId}:${run.sourceVersion}:${action.commandId}`
       : action.status==='rejected' ? `action.rejected:${action.commandId}` : `action.reply:${action.commandId}:${phase}`
     const notificationId = `notice-${executionDigest(phase.startsWith('owner:') ? eventKey : [action.commandId, phase])}`
-    const existing = await store.query({ kind: 'message.notification', notificationId })
+    const existing = (phase.startsWith('owner:') ? await store.query({ kind: 'message.notification', eventKey }) : null)
+      ?? await store.query({ kind: 'message.notification', notificationId })
       ?? (phase.startsWith('owner:') ? await store.query({ kind: 'message.notification', notificationId: `notice-${executionDigest([action.commandId, phase])}` }) : null)
     if (existing) {
       if (phase.startsWith('owner:') ? existing.eventKey !== eventKey
@@ -176,33 +178,59 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
     }, `prepare:${notificationId}`)
   }
   async function drain() {
+    const failures = []
+    const unresolved = new Map((await store.query({ kind: 'message.notification.diagnostics', status: 'unresolved' })).map(item => [item.id, item.error]))
+    const attempt = async (runId, fact, action) => {
+      const diagnosticId = `notice-diagnostic-${executionDigest([runId, fact])}`
+      try {
+        const result = await action()
+        if (unresolved.has(diagnosticId)) {
+          await command('message.notification.diagnostic', { runId, fact, diagnosticId, resolved: true }, `diagnostic:${randomUUID()}`)
+          unresolved.delete(diagnosticId)
+        }
+        return result
+      } catch (error) {
+        const code = error.code ?? error.message
+        failures.push({ runId, fact, code })
+        try {
+          if (unresolved.get(diagnosticId) !== code) {
+            await command('message.notification.diagnostic', { runId, fact, diagnosticId, error: code }, `diagnostic:${randomUUID()}`)
+            unresolved.set(diagnosticId, code)
+          }
+        }
+        catch (diagnosticError) { failures.push({ runId, fact: 'diagnostic', code: diagnosticError.code ?? diagnosticError.message }) }
+      }
+    }
+    const finish = () => { if (failures.length) throw new AggregateError(failures.map(f => new Error(`${f.runId}:${f.fact}:${f.code}`)), `MESSAGE_NOTIFICATION_SCAN_FAILED:${JSON.stringify(failures)}`) }
     const page = await store.query({ kind: 'message.list', limit: 200, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
     beforeSequenceId = page.length === 200 ? page.at(-1).sequenceId : undefined
     for (const listedRun of page) {
+      await attempt(listedRun.runId, 'source', async () => {
       const state = await store.query({ kind: 'message.run', runId: listedRun.runId })
       const run = state.run ?? listedRun
-      if (run.channel === 'web' || run.externalMessaging === false) continue
-      if (run.status === 'superseded') continue
+      if (run.channel === 'web' || run.externalMessaging === false) return
+      if (run.status === 'superseded') return
       const acceptances = await store.query({ kind: 'message.acceptances', runId: run.runId })
-      for (const acceptance of acceptances) await prepareAcceptance(run, acceptance)
-      if (run.status === 'needs_attention') await prepareState(run, 'attention', systemWaitText(run.reason))
+      for (const acceptance of acceptances) await attempt(run.runId, acceptance.id, () => prepareAcceptance(run, acceptance))
+      if (run.status === 'needs_attention') await attempt(run.runId, 'attention', () => prepareState(run, 'attention', systemWaitText(run.reason)))
       if (run.intentStatus === 'waiting_routing_barrier' && Date.now() - Date.parse(run.createdAt) >= 60_000) {
-        await prepareState(run, 'routing_wait', '已收到，目前正在核对可能相关的补充要求，相关处理尚未开始；核对清楚后继续。你暂时不需要重复提交。')
+        await attempt(run.runId, 'routing_wait', () => prepareState(run, 'routing_wait', '已收到，目前正在核对可能相关的补充要求，相关处理尚未开始；核对清楚后继续。你暂时不需要重复提交。'))
       }
       if (run.status === 'settled' && (run.snapshot?.replyObligation ?? run.context?.replyObligation)?.required
         && !state.commands.length && !state.requests.some(item => item.status === 'pending')) {
-        await prepareState(run, 'reply_obligation', /在不在|在[吗嘛么]/u.test(run.body ?? '') ? '在的，请说。' : '已收到。')
+        await attempt(run.runId, 'reply_obligation', () => prepareState(run, 'reply_obligation', /在不在|在[吗嘛么]/u.test(run.body ?? '') ? '在的，请说。' : '已收到。'))
       }
       for (const request of state.requests.filter(item => item.status === 'pending' && item.kind === 'needs_context' && item.blocked)) {
-        await prepareState(run, 'system_wait', '已收到，读取所需材料时遇到问题，目前还无法继续。需要先恢复材料读取，你暂时不需要提供内部资料或重复提交。', request)
+        await attempt(run.runId, `system_wait:${request.id}`, () => prepareState(run, 'system_wait', '已收到，读取所需材料时遇到问题，目前还无法继续。需要先恢复材料读取，你暂时不需要提供内部资料或重复提交。', request))
       }
       for (const request of state.requests.filter(item => item.status === 'pending' && item.kind === 'needs_clarification')) {
-        if (notificationSilence(run, 'clarification')) continue
+        await attempt(run.runId, request.id, async () => {
+        if (notificationSilence(run, 'clarification')) return
         const notificationId = `clarify-${executionDigest([run.runId, request.id, request.revision])}`
         const existing = await store.query({ kind: 'message.notification', notificationId })
         if (existing) {
           if (existing.runId !== run.runId || existing.requestId !== request.id) throw new Error('MESSAGE_NOTIFICATION_CONFLICT')
-          continue
+          return
         }
         const responsibility = groupResponsibility(run.conversationId)
         if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
@@ -210,8 +238,10 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
           payload: { text: formatGroupReply(request.question ?? request.reason, responsibility), phase: 'clarification', conversationId: run.conversationId, sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId },
           disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
         }, `prepare:${notificationId}`)
+        })
       }
       for (const action of state.commands.filter(item => ['applied', 'rejected'].includes(item.status))) {
+        await attempt(run.runId, action.commandId, async () => {
         const lifecycle = Boolean(action.result?.taskId) && ['create', 'research', 'answer', 'reopen', 'revise', 'pause', 'resume', 'cancel', 'confirm'].includes(action.kind)
         const hasAcceptance = acceptances.some(item => item.commandId === action.commandId)
         if (!hasAcceptance && action.result?.reply && (lifecycle || action.status === 'rejected' || action.args.replyPolicy !== 'none')) await prepare(run, action, 'receipt', action.result.reply)
@@ -226,37 +256,40 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
               : report.reportType === 'block' ? `任务需要处理：${report.facts.summary}`
                 : report.triggerTypes.includes('workflow.confirmation.required') ? `任务等待确认：${report.facts.summary}`
                   : `任务进展：${report.facts.summary}`
-            await prepare(run, action, `owner:${report.reportId}`, text, report.reportType === 'complete' ? 'result'
-              : report.reportType === 'block' || report.triggerTypes.includes('workflow.confirmation.required') ? 'required_action' : 'progress')
+            await attempt(run.runId, report.reportId, () => prepare(run, action, `owner:${report.reportId}`, text, report.reportType === 'complete' ? 'result'
+              : report.reportType === 'block' || report.triggerTypes.includes('workflow.confirmation.required') ? 'required_action' : 'progress'))
           }
         }
-        if (!['create', 'research', 'answer', 'reopen'].includes(action.kind) || !action.result?.runId) continue
+        if (!['create', 'research', 'answer', 'reopen'].includes(action.kind) || !action.result?.runId) return
         const task = await controller.state(action.result.runId)
-        if (!['succeeded', 'failed', 'cancelled'].includes(task.run.status)) continue
+        if (!['succeeded', 'failed', 'cancelled'].includes(task.run.status)) return
         const plan = await controller.taskPlan(task.run.taskId)
-        if (plan) continue
+        if (plan) return
         const last = task.nodes.filter(node => node.outputRef).at(-1)
         const output = last ? await artifacts.read(last.outputRef) : null
         const text = task.run.status === 'succeeded' ? workflowResultText(output) ?? '已完成处理。'
           : task.run.status === 'cancelled' ? '已取消处理。' : '这次处理没有完成，需要先排查原因。'
         await prepare(run, action, `terminal:${task.run.runId}:${task.run.revision}`, text)
+        })
       }
+      })
     }
-    if (!adapter) return
+    if (!adapter) { finish(); return }
     const prepared = await store.query({ kind: 'message.notifications', states: ['prepared'], afterSequenceId: preparedCursor, limit: 100 })
     const readbacks = await store.query({ kind: 'message.notifications', states: ['acknowledged', 'unknown'], afterSequenceId: readbackCursor, limit: 100 })
     preparedCursor = prepared.length === 100 ? prepared.at(-1).sequenceId : 0
     readbackCursor = readbacks.length === 100 ? readbacks.at(-1).sequenceId : 0
     for (const notification of [...prepared, ...readbacks]) {
+      await attempt(notification.runId, notification.id, async () => {
       if (notification.payload?.reportChannel === 'web' || notification.payload?.externalMessaging === false
-        || notification.disclosure?.authorizationRef?.startsWith('web-rerun:')) continue
+        || notification.disclosure?.authorizationRef?.startsWith('web-rerun:')) return
       // 同群来源也不替代当前披露校验；群已撤销或配置变化时不外发内容。
-      if (!await adapter.canDisclose(notification)) continue
+      if (!await adapter.canDisclose(notification)) return
       let current = notification
       if (current.status === 'prepared') {
         assertGroupReply(current.payload.text)
         const claimed = await command('message.notification.claim', { notificationId: current.id }, `claim:${current.id}`)
-        if (!claimed.dispatchEligible) continue
+        if (!claimed.dispatchEligible) return
         current = claimed.result.notification
         try {
           const ack = await adapter.send(current)
@@ -271,7 +304,9 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         const evidence = await adapter.readback(current)
         if (evidence) await command('message.notification.readback', { notificationId: current.id, leaseEpoch: current.leaseEpoch, evidence }, `delivered:${current.id}:${current.leaseEpoch}`)
       }
+      })
     }
+    finish()
   }
   return { flush() { return flight ??= drain().finally(() => { flight = undefined }) } }
 }

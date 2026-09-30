@@ -27,3 +27,6 @@ A25,17,PASS,旧通知待发时收到任务修订/取消,round-17.md; round-2/obs
 A26,17,PASS,无执行权参与者补充有效业务事实,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
 A27,17,PASS,当前目录变化、未知引用、多轮相关/无关判断变化,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
 A28,17,PARTIAL,现有记录升级、升级中断、运行版本错配,round-17.md; round-2/observer-waits-checks.json,迁移、强杀回滚与旧worker拒绝隔离通过；正式库未迁移
+A06,18,PARTIAL,两份Excel原消息附件身份,round-18.md,真实DWS回读已补齐；Excel内容读取待任务验证
+A14,18,FAIL,原七条受控恢复,round-18.md,四条已重处理但历史Owner通知事件冲突阻断发送；进入维护修复
+A28,18,PASS,正式schema6迁移及双包部署,round-18.md,备份迁移安装旧历史认证Web通过；业务重放另记A14

@@ -431,6 +431,15 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   if(kind==='workflow.register') { str(a.workflowId);str(a.definitionVersion);str(a.digest);const old=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.digest);if(old&&json(JSON.parse(old.body))!==json(a))fail('WORKFLOW_DEFINITION_CONFLICT');if(!old)db.prepare('INSERT INTO message_workflows VALUES(?,?)').run(a.digest,json(a));return {result:a} }
   if(!kind.startsWith('message.')) return null
   const now=ctx.now
+  if(kind==='message.notification.diagnostic') {
+    const r=run(db,a.runId),id=str(a.diagnosticId),fact=str(a.fact)
+    const previous=rows(db,r.runId,'notification-diagnostic').find(item=>item.id===id)
+    if(previous&&(previous.runId!==r.runId||previous.fact!==fact))fail('MESSAGE_NOTIFICATION_DIAGNOSTIC_CONFLICT')
+    if(a.resolved===true){if(!previous)return {result:{diagnostic:null}};previous.status='resolved';previous.resolvedAt=now;put(db,r.runId,'notification-diagnostic',previous);return {result:{diagnostic:previous}}}
+    if(previous?.status==='unresolved'&&previous.error===a.error)return {result:{diagnostic:previous}}
+    const diagnostic={id,runId:r.runId,fact,error:str(a.error),status:'unresolved',attempts:(previous?.attempts??0)+1,createdAt:previous?.createdAt??now,updatedAt:now}
+    put(db,r.runId,'notification-diagnostic',diagnostic);return {result:{diagnostic}}
+  }
   if(kind.startsWith('message.notification.')) {
     if(kind==='message.notification.operation.prepare') {
       const n=get(db,'notification',a.notificationId),type=str(a.type),operationId=str(a.operationId),reason=str(a.reason),authorizationRef=str(a.authorizationRef)
@@ -1113,7 +1122,8 @@ export function queryMessages(db,a) {
       ORDER BY answer.rowid LIMIT ?`).all(limit)
       .map(row=>({runId:row.run_id,targetRunId:row.target_run_id,requestId:row.request_id}))
   }
-  if(a.kind==='message.notification'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification:'+str(a.notificationId));return row?JSON.parse(row.body):null}
+  if(a.kind==='message.notification.diagnostics')return db.prepare("SELECT body FROM message_items WHERE kind='notification-diagnostic'").all().map(row=>JSON.parse(row.body)).filter(item=>(!a.runId||item.runId===a.runId)&&(!a.status||item.status===a.status))
+  if(a.kind==='message.notification'){if(Boolean(a.notificationId)===Boolean(a.eventKey))fail('MESSAGE_NOTIFICATION_QUERY_INVALID');const row=a.eventKey?db.prepare("SELECT body FROM message_items WHERE kind='notification' AND json_extract(body,'$.eventKey')=? LIMIT 1").get(str(a.eventKey)):db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification:'+str(a.notificationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationOperation'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-operation:'+str(a.operationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationReplacement'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-replacement:'+str(a.replacementId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationReplacements')return db.prepare("SELECT body FROM message_items WHERE kind='notification-replacement' AND json_extract(body,'$.restoresNotificationId')=? ORDER BY rowid").all(str(a.notificationId)).map(row=>JSON.parse(row.body))
@@ -1205,7 +1215,7 @@ export function queryMessages(db,a) {
   if(a.kind==='message.source') {const row=db.prepare('SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=r.source_version WHERE r.source_key=?').get(str(a.sourceKey));return row?JSON.parse(row.body):null}
   if(a.kind==='message.pending')return db.prepare("SELECT r.body FROM message_runs r WHERE json_extract(r.body,'$.status') NOT IN ('settled','superseded','buffered','alias') OR (json_extract(r.body,'$.status')='settled' AND EXISTS (SELECT 1 FROM message_items i WHERE i.run_id=r.run_id AND i.kind='barrier' AND json_extract(i.body,'$.status')='pending')) ORDER BY r.rowid").all().map(x=>JSON.parse(x.body))
   if(a.kind==='message.command')return get(db,'command',a.commandId)
-  if(a.kind==='message.run') {const r=run(db,a.runId);return {run:r,units:rows(db,r.runId,'unit'),nodes:rows(db,r.runId,'node'),commands:rows(db,r.runId,'command'),requests:rows(db,r.runId,'request'),executions:rows(db,r.runId,'agent-execution'),barriers:rows(db,r.runId,'barrier'),budget:db.prepare('SELECT claims,corrections,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(r.sourceKey)}}
+  if(a.kind==='message.run') {const r=run(db,a.runId);return {run:r,notificationDiagnostics:rows(db,r.runId,'notification-diagnostic'),units:rows(db,r.runId,'unit'),nodes:rows(db,r.runId,'node'),commands:rows(db,r.runId,'command'),requests:rows(db,r.runId,'request'),executions:rows(db,r.runId,'agent-execution'),barriers:rows(db,r.runId,'barrier'),budget:db.prepare('SELECT claims,corrections,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(r.sourceKey)}}
   return undefined
 }
 
