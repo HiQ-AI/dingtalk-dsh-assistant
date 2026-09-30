@@ -732,10 +732,10 @@ test('首次模型领取前维护排队不耗执行窗口，旧无节点超时�
  const state=await workflow.state('m');assert.equal(calls,1);assert.equal(state.run.status,'settled');assert.ok(Date.parse(state.run.executionStartedAt)>Date.parse('2025-01-01'));assert.equal(state.run.recoveryWindows??0,0)
 })
 
-test('已有模型领取的旧账从真实startedAt恢复年龄，不重置十分钟预算',async t=>{
+test('已有模型领取旧账保留真实startedAt，排队墙钟年龄不拒绝恢复',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0})
  await f.editSnapshot(db=>{const r=JSON.parse(db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('m').body);delete r.executionStartedAt;db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),'m');for(const row of db.prepare("SELECT rowid,body FROM message_items WHERE kind='node'").all()){const n=JSON.parse(row.body);n.startedAt='2020-01-01T00:00:00.000Z';db.prepare('UPDATE message_items SET body=? WHERE rowid=?').run(JSON.stringify(n),row.rowid)}})
- assert.equal((await f.call('recover',{runId:'m'})).result.run.reason,'recovery_exhausted')
+ const recovered=(await f.call('recover',{runId:'m'})).result.run;assert.equal(recovered.status,'pending');assert.equal(recovered.executionStartedAt,'2020-01-01T00:00:00.000Z')
 })
 
 test('无业务命令已送达纯状态通知允许重处理并保留旧回执',async t=>{
@@ -769,4 +769,50 @@ test('纯状态通知发送结果unknown仍禁止重处理',async t=>{
  const notice=(await f.call('notification.claim',{notificationId:'state'})).result.notification
  await f.call('notification.fail',{notificationId:'state',leaseEpoch:notice.leaseEpoch,error:'network'})
  await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+})
+
+test('失败模型长排队恢复按失败lease计数，重复扫描不耗次数，持续失败有界',async t=>{
+ const f=await fixture(t);await f.call('receive',receive())
+ const args={runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0}
+ for(let attempt=1;attempt<=3;attempt++){
+  const node=(await f.call('node.claim',args)).result.node
+  await f.call('node.fail',{runId:'m',nodeRunId:node.nodeRunId,leaseEpoch:node.leaseEpoch,expectedRevision:0,error:'MESSAGE_NODE_TIMEOUT'})
+  await f.editSnapshot(db=>{const r=JSON.parse(db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('m').body);r.deadline='2020-01-01T00:00:00.000Z';db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),'m')})
+  const recovered=(await f.call('recover',{runId:'m'})).result.run
+  if(attempt===3){assert.equal(recovered.reason,'recovery_exhausted');break}
+  assert.equal(recovered.recoveryWindows,attempt)
+  for(let scan=0;scan<3;scan++)assert.equal((await f.call('recover',{runId:'m'})).result.run.recoveryWindows,attempt)
+ }
+})
+
+test('R失败后领取前超时attention恢复同版本且复用已成功S',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{policy:{initialWindowMs:90000,attemptMs:60000}}))
+ let sCalls=0,rCalls=0
+ const workflow=createMessageWorkflow({store:f.store,judge:async({stage,input})=>{
+  if(stage==='S'){sCalls++;return {kind:'split',units:[{spans:[{start:0,end:input.sourceLength}],goalText:input.source.text,constraints:[],contextNeeds:[]}],sharedConstraints:[],coverage:[{start:0,end:input.sourceLength,role:'unit'}]}}
+  if(stage==='R'){rCalls++;if(rCalls===1)throw new Error('MESSAGE_NODE_TIMEOUT');return {kind:'binding',disposition:'new',candidateId:null,evidence:['独立事项']}}
+  return {kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
+ }})
+ t.after(()=>workflow.close());await workflow.process('m')
+ const before=await workflow.state('m');assert.ok(before.units.length,JSON.stringify(before));const unit=before.units[0]
+ await f.call('attention',{runId:'m',unitId:unit.id,reason:`MESSAGE_DEADLINE_BEFORE_CLAIM:R:${unit.id}`})
+ await f.editSnapshot(db=>{const r=JSON.parse(db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('m').body);r.deadline='2020-01-01T00:00:00.000Z';r.recoveryWindows=2;db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),'m');for(const row of db.prepare("SELECT rowid,body FROM message_items WHERE kind='node'").all()){const n=JSON.parse(row.body);if(n.status==='failed'){n.retryAt='2020-01-01T00:00:00.000Z';db.prepare('UPDATE message_items SET body=? WHERE rowid=?').run(JSON.stringify(n),row.rowid)}}})
+ // 离线编辑重开store后重新创建Host，模拟部署恢复。
+ await workflow.close()
+ const recovered=createMessageWorkflow({store:f.store,judge:async({stage})=>{assert.notEqual(stage,'S');if(stage==='R'){rCalls++;return {kind:'binding',disposition:'new',candidateId:null,evidence:['独立事项']}}return {kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}})
+ t.after(()=>recovered.close());await recovered.recover()
+ const after=await recovered.state('m');assert.equal(after.run.sourceVersion,1);assert.equal(after.run.status,'settled');assert.equal(sCalls,1);assert.equal(rCalls,2);assert.equal(after.units[0].blockedReason,undefined)
+})
+
+test('节点独立deadline保留提交余量，真实超时与旧lease仍拒绝',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{policy:{attemptMs:1,commitReserveMs:5}}))
+ const args={runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0}
+ const node=(await f.call('node.claim',args)).result.node
+ assert.equal(Date.parse(node.deadline)-Date.parse(node.startedAt),6)
+ await new Promise(resolve=>setTimeout(resolve,20))
+ await bad(f.call('node.complete',{runId:'m',nodeRunId:node.id,leaseEpoch:node.leaseEpoch,expectedRevision:0,output:{}}),'MESSAGE_DEADLINE_EXCEEDED')
+ await f.call('node.fail',{runId:'m',nodeRunId:node.id,leaseEpoch:node.leaseEpoch,expectedRevision:0,error:'MESSAGE_NODE_TIMEOUT'})
+ await f.call('recover',{runId:'m'})
+ const retry=(await f.call('node.claim',args)).result.node;assert.equal(retry.leaseEpoch,node.leaseEpoch+1)
+ await bad(f.call('node.complete',{runId:'m',nodeRunId:node.id,leaseEpoch:node.leaseEpoch,expectedRevision:0,output:{}}),'MESSAGE_NODE_STALE')
 })

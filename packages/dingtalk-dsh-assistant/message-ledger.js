@@ -923,8 +923,19 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   if(kind==='message.recover') {
     if(r.status==='waiting'||r.status==='settled')fail('MESSAGE_NOT_RECOVERABLE')
     const started=messageExecutionStartedAt(r,rows(db,r.runId,'node'))??(rows(db,r.runId,'command').length?r.createdAt:null)
-    if(started&&((r.recoveryWindows??0)>=2||Date.parse(now)-Date.parse(started)>600000)){r.status='needs_attention';r.reason='recovery_exhausted';save(db,r);return {result:{run:r}}}
-    if(started){r.executionStartedAt=started;r.recoveryWindows=(r.recoveryWindows??0)+1}
+    const failures=rows(db,r.runId,'node').filter(node=>node.status==='failed'&&node.input?.deterministic!==true)
+    // 历史 recoveryWindows 曾按扫描次数计费，不能作为模型失败证据。
+    // 原生事件保留被后续重试覆盖的失败 lease，避免仅看当前节点漏算真实失败。
+    const failedLeases=new Set([...db.prepare("SELECT payload FROM execution_events WHERE kind='message.node.fail' AND json_extract(payload,'$.node.runId')=?").all(r.runId)
+      .map(row=>JSON.parse(row.payload).node),...failures].filter(node=>node.input?.deterministic!==true).map(node=>`${node.id}:${node.leaseEpoch}`))
+    const recoveryCount=failedLeases.size||(rows(db,r.runId,'command').length>0?(r.recoveryWindows??0)+1:0)
+    if(recoveryCount>2){r.status='needs_attention';r.reason='recovery_exhausted';save(db,r);return {result:{run:r}}}
+    if(started)r.executionStartedAt=started
+    r.recoveryWindows=recoveryCount
+    for(const unit of rows(db,r.runId,'unit').filter(unit=>/^MESSAGE_DEADLINE_BEFORE_CLAIM:/u.test(unit.blockedReason??''))){delete unit.blockedReason;delete unit.blockedAt;put(db,r.runId,'unit',unit)}
+    const blocked=rows(db,r.runId,'unit').filter(unit=>unit.blockedReason)
+    if(blocked.length){r.attentionUnitIds=blocked.map(unit=>unit.id);r.attentionScope='unit';r.status='needs_attention';r.reason=blocked[0].blockedReason;save(db,r);return {result:{run:r}}}
+    delete r.attentionScope;delete r.attentionUnitIds
     r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();r.status='pending';r.reason=null;save(db,r);return {result:{run:r}}
   }
   if(kind==='message.snapshot') {r.snapshot=a.snapshot;save(db,r);return {result:{run:r}}}
@@ -968,7 +979,6 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(!['S','R','I','IB','answer','material'].includes(a.nodeId))fail('MESSAGE_INVALID_NODE')
     if(a.unitId!=='$'&&get(db,'unit',a.unitId).runId!==r.runId)fail('MESSAGE_STALE')
     const executionStarted=messageExecutionStartedAt(r,rows(db,r.runId,'node'))
-    if(executionStarted&&a.nodeId!=='IB'&&Date.parse(r.deadline)<=Date.parse(now))fail('MESSAGE_DEADLINE_EXCEEDED')
     const s=db.prepare('SELECT claims,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(r.sourceKey)
     const baseline=r.budgetBaseline??{claims:0,input_tokens:0,output_tokens:0}
     const deterministic=a.input?.deterministic===true
@@ -981,14 +991,15 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const n={id:previous?.id??randomUUID(),nodeRunId:previous?.id??null,runId:r.runId,unitId:a.unitId,nodeId:a.nodeId,revision:r.revision,leaseEpoch:(previous?.leaseEpoch??0)+1,status:'running',input:a.input,reservedTokens:reserve,createdAt:previous?.createdAt??now,startedAt:now};n.nodeRunId=n.id
     if(a.nodeId==='IB')topicRunsStatus(db,a.input.topicId,'intent_judging')
     db.prepare('UPDATE message_sources SET claims=claims+?,input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE source_key=?').run(deterministic?0:1,reserve.input,reserve.output,r.sourceKey)
-    if(!deterministic&&!executionStarted){r.executionStartedAt=now;r.deadline=new Date(Date.parse(now)+(r.policy.initialWindowMs??45000)).toISOString();save(db,r)}
+    n.deadline=new Date(Date.parse(now)+(r.policy.attemptMs??r.policy.initialWindowMs??45000)+(r.policy.commitReserveMs??500)).toISOString()
+    if(!deterministic){r.executionStartedAt=executionStarted??now;r.deadline=n.deadline;save(db,r)}
     put(db,r.runId,'node',n);return {result:{node:n}}
   }
   if(kind==='message.node.complete'||kind==='message.node.fail') {
     const n=get(db,'node',a.nodeRunId)
     if(n.runId!==r.runId||n.revision!==r.revision||n.leaseEpoch!==a.leaseEpoch||n.status!=='running')fail('MESSAGE_NODE_STALE')
     if(a.usage) { const used={input:a.usage.inputTokens,output:a.usage.outputTokens};if(!Object.values(used).every(x=>Number.isSafeInteger(x)&&x>=0))fail('MESSAGE_INVALID_BUDGET');db.prepare('UPDATE message_sources SET input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE source_key=?').run(used.input-n.reservedTokens.input,used.output-n.reservedTokens.output,r.sourceKey);n.usage=used }
-    if(kind.endsWith('complete')&&n.nodeId!=='IB'&&messageExecutionStartedAt(r,rows(db,r.runId,'node'))&&Date.parse(now)>Date.parse(r.deadline))fail('MESSAGE_DEADLINE_EXCEEDED')
+    if(kind.endsWith('complete')&&n.input?.deterministic!==true&&Date.parse(now)>Date.parse(n.deadline??r.deadline))fail('MESSAGE_DEADLINE_EXCEEDED')
     n.status=kind.endsWith('complete')?'succeeded':'failed';n.output=a.output??null;n.error=a.error??null;n.retryAt=a.retryAt??null;n.completedAt=now
     if(n.status==='succeeded'){r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)}
     put(db,r.runId,'node',n);return {result:{node:n}}
