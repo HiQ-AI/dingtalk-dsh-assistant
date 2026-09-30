@@ -13,3 +13,13 @@
 真实重放保留原版本、任务与通知回执；此轮不批准或执行生产SQL。原始模型输出、群消息和备份记录仅留本机docs/tmp/message-processing-deploy/。
 
 - 扩大集成：node --test --test-concurrency=2 test/message-ledger.test.js test/message-impact.test.js test/workflow-service.test.js test/http.test.js test/workflow-notification-obligations.test.js；290/290 PASS，0 fail、0 skipped，158488ms。零写部署预检通过。
+
+## 正式部署
+
+- 新PID17264，助手99文件与看板4文件均匹配精确包；健康ok、recoveryIssueCount=0，认证Web303/200。旧22 Task、76历史节点、29终态Run及68旧任务摘要全部一致。
+- Resume后maintenance revision165、active=false，定时启动恢复。
+- #114保持来源版本4，从needs_attention正常恢复pending并领取新R节点，旧S成功记录保留；未调用reprocess。其余来源版本不变。
+
+## 真实历史配置反证
+
+#114保持版本4恢复后，R两次调用分别因MESSAGE_DEADLINE_EXCEEDED被拒。只读节点证据显示本次lease只获得20.5秒，而当前Host实际允许60秒；旧run.policy.attemptMs=20000，现有currentWindowPolicy只更新initial/linked窗口，因而lease错误读取旧策略。两次真实失败事件仍保留，A14本轮FAIL。已维护revision166排空，继续将本次调用窗口显式传入领取事务，并补旧policy与当前Host不一致回归。

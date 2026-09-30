@@ -7,13 +7,14 @@ import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { reduceMessageCommand } from '../packages/dingtalk-dsh-assistant/message-ledger.js'
 import { createMessageWorkflow } from '../packages/dingtalk-dsh-assistant/message-workflow.js'
 import { executeNotificationOperation } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 async function fixture(t) {
  const dir=await mkdtemp(join(tmpdir(),'message-ledger-'));const options={dbPath:join(dir,'control.sqlite'),instanceId:randomUUID()}
  let store=await openExecutionStore({...options,initialize:true})
  t.after(async()=>{await store.close();await rm(dir,{recursive:true,force:true})})
- return {get store(){return store},call:(kind,args,id=randomUUID())=>store.command({id,kind:'message.'+kind,args}),reopen:async()=>{await store.close();store=await openExecutionStore(options)},
+ return {get store(){return store},call:(kind,args,id=randomUUID())=>store.command({id,kind:'message.'+kind,args:kind==='node.claim'?{leaseWindowMs:60500,...args}:args}),reopen:async()=>{await store.close();store=await openExecutionStore(options)},
   editSnapshot:async edit=>{await store.close();const offline=new DatabaseSync(options.dbPath);try{edit(offline)}finally{offline.close()};store=await openExecutionStore(options)}}
 }
 const receive=(runId='m',extra={})=>({runId,sourceKey:runId,sourceVersion:1,conversationId:'g',actorId:'a',body:'do this',...extra})
@@ -806,7 +807,7 @@ test('R失败后领取前超时attention恢复同版本且复用已成功S',asyn
 
 test('节点独立deadline保留提交余量，真实超时与旧lease仍拒绝',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{policy:{attemptMs:1,commitReserveMs:5}}))
- const args={runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0}
+ const args={leaseWindowMs:6,runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0}
  const node=(await f.call('node.claim',args)).result.node
  assert.equal(Date.parse(node.deadline)-Date.parse(node.startedAt),6)
  await new Promise(resolve=>setTimeout(resolve,20))
@@ -815,4 +816,19 @@ test('节点独立deadline保留提交余量，真实超时与旧lease仍拒绝'
  await f.call('recover',{runId:'m'})
  const retry=(await f.call('node.claim',args)).result.node;assert.equal(retry.leaseEpoch,node.leaseEpoch+1)
  await bad(f.call('node.complete',{runId:'m',nodeRunId:node.id,leaseEpoch:node.leaseEpoch,expectedRevision:0,output:{}}),'MESSAGE_NODE_STALE')
+})
+
+test('历史policy20秒不能缩短当前Host60秒窗口，30秒结果正常落账',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{policy:{initialWindowMs:90000,attemptMs:20000}}))
+ let captured
+ const workflow=createMessageWorkflow({store:{query:(...args)=>f.store.query(...args),command:async request=>{if(request.kind==='message.node.claim')captured=request.args;return f.store.command(request)}},judge:async({input})=>({kind:'no_action',reason:'无任务',coverage:[{start:0,end:input.sourceLength}]})})
+ t.after(()=>workflow.close());await workflow.process('m');assert.equal(captured.leaseWindowMs,60500)
+ await f.call('receive',receive('timed',{policy:{attemptMs:20000}}))
+ await f.editSnapshot(db=>{
+  const start=Date.parse('2026-09-30T00:00:00Z')
+  const call=(kind,args,offset)=>reduceMessageCommand(db,{kind:'message.'+kind,args},{now:new Date(start+offset).toISOString()})
+  const n=call('node.claim',{runId:'timed',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0,leaseWindowMs:captured.leaseWindowMs},0).result.node
+  assert.equal(Date.parse(n.deadline)-start,60500)
+  assert.equal(call('node.complete',{runId:'timed',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,expectedRevision:0,output:{}},30000).result.node.status,'succeeded')
+ })
 })

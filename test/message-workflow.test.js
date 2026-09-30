@@ -666,7 +666,7 @@ test('旧R容量阻断含已解决材料请求时恢复原节点且不重跑S', 
   const { runId } = await workflow.receive(source, { process: false })
   const snapshot = await prepareMessageContext(source, {})
   await store.command({ id: 'budget-snapshot', kind: 'message.snapshot', args: { runId, snapshot } })
-  const claimed = (await store.command({ id: 'budget-s-claim', kind: 'message.node.claim', args: { runId, unitId: '$', nodeId: 'S', input: {}, estimatedInputTokens: 0, maxOutputTokens: 0 } })).result.node
+  const claimed = (await store.command({ id: 'budget-s-claim', kind: 'message.node.claim', args: { leaseWindowMs:60500, runId, unitId: '$', nodeId: 'S', input: {}, estimatedInputTokens: 0, maxOutputTokens: 0 } })).result.node
   await store.command({ id: 'budget-s-complete', kind: 'message.node.complete', args: { runId, nodeRunId: claimed.nodeRunId, leaseEpoch: claimed.leaseEpoch, output: { output: split }, usage: { inputTokens: 0, outputTokens: 0 } } })
   await store.command({ id: 'budget-split', kind: 'message.split', args: { runId, units: split.units.map((unit, i) => ({ ...unit, unitId: `${runId}:u${i}` })) } })
   const requestId = 'resolved-budget-request'
@@ -722,7 +722,7 @@ test('R容量旧阻断仅在无命令、请求和副作用时重试', async t =>
   const { runId } = await workflow.receive(source, { process: false })
   const snapshot = await prepareMessageContext(source, {})
   await store.command({ id: 'snapshot-r', kind: 'message.snapshot', args: { runId, snapshot } })
-  const claimed = await store.command({ id: 'claim-s-before-r', kind: 'message.node.claim', args: { runId, unitId: '$', nodeId: 'S', input: {}, estimatedInputTokens: 0, maxOutputTokens: 0 } })
+  const claimed = await store.command({ id: 'claim-s-before-r', kind: 'message.node.claim', args: { leaseWindowMs:60500, runId, unitId: '$', nodeId: 'S', input: {}, estimatedInputTokens: 0, maxOutputTokens: 0 } })
   const node = claimed.result.node
   await store.command({ id: 'complete-s-before-r', kind: 'message.node.complete', args: { runId, nodeRunId: node.nodeRunId, leaseEpoch: node.leaseEpoch, output: { output: split }, usage: { inputTokens: 0, outputTokens: 0 } } })
   await store.command({ id: 'split-r', kind: 'message.split', args: { runId, units: split.units.map((unit, i) => ({ ...unit, unitId: `${runId}:u${i}` })), coverage: split.coverage } })

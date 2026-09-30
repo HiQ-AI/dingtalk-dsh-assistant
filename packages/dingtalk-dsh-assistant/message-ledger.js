@@ -991,7 +991,9 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const n={id:previous?.id??randomUUID(),nodeRunId:previous?.id??null,runId:r.runId,unitId:a.unitId,nodeId:a.nodeId,revision:r.revision,leaseEpoch:(previous?.leaseEpoch??0)+1,status:'running',input:a.input,reservedTokens:reserve,createdAt:previous?.createdAt??now,startedAt:now};n.nodeRunId=n.id
     if(a.nodeId==='IB')topicRunsStatus(db,a.input.topicId,'intent_judging')
     db.prepare('UPDATE message_sources SET claims=claims+?,input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE source_key=?').run(deterministic?0:1,reserve.input,reserve.output,r.sourceKey)
-    n.deadline=new Date(Date.parse(now)+(r.policy.attemptMs??r.policy.initialWindowMs??45000)+(r.policy.commitReserveMs??500)).toISOString()
+    const leaseWindowMs=a.leaseWindowMs
+    if(!Number.isSafeInteger(leaseWindowMs)||leaseWindowMs<=0)fail('MESSAGE_INVALID_LEASE_WINDOW')
+    n.leaseWindowMs=leaseWindowMs;n.deadline=new Date(Date.parse(now)+leaseWindowMs).toISOString()
     if(!deterministic){r.executionStartedAt=executionStarted??now;r.deadline=n.deadline;save(db,r)}
     put(db,r.runId,'node',n);return {result:{node:n}}
   }

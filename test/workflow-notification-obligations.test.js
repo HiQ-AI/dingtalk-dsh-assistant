@@ -31,7 +31,7 @@ test('需要排查的容量失败有真实状态通知，重启扫描不重复',
 
 test('点名问候无业务command仍有一次回应，发送未知只回读', async t => {
   const f = await fixture(t, '小小鹏在不在')
-  const node = (await f.call('node.claim', { runId: 'm', unitId: '$', nodeId: 'S', input: {} })).result.node
+  const node = (await f.call('node.claim', { runId: 'm', unitId: '$', nodeId: 'S', input: {}, leaseWindowMs: 60500 })).result.node
   await f.call('node.complete', { runId: 'm', nodeRunId: node.nodeRunId, leaseEpoch: node.leaseEpoch,
     output: { kind: 'no_action', reason: '问候', coverage: [{ start: 0, end: '小小鹏在不在'.length }] } })
   await f.call('no_action', { runId: 'm', reason: '问候' })

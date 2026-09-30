@@ -15,7 +15,7 @@ async function fixture(t){
   let store=await openExecutionStore({dbPath,instanceId,initialize:true})
   t.after(async()=>{await store.close();await rm(directory,{recursive:true,force:true})})
   const f={directory,dbPath,instanceId,get store(){return store},
-    call:(kind,args)=>store.command({id:randomUUID(),kind:kind.startsWith('message.')?kind:'message.'+kind,args}),
+    call:(kind,args)=>store.command({id:randomUUID(),kind:kind.startsWith('message.')?kind:'message.'+kind,args:kind==='node.claim'?{leaseWindowMs:60500,...args}:args}),
     reopen:async()=>{await store.close();store=await openExecutionStore({dbPath,instanceId})}}
   f.receive=(id,extra={})=>f.call('receive',{runId:id,sourceKey:id,sourceVersion:1,conversationId:'group',actorId:'actor',body:'来源 '+id,...extra})
   f.bind=async(id,topicId,unitId=id+'-unit')=>{

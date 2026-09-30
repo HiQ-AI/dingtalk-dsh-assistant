@@ -134,7 +134,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       const current = await state(runId)
       if (revision(current) !== rev) return null
       const remaining = config.attemptMs
-      const claimed = await cmd('message.node.claim', { runId, unitId, nodeId: stage, expectedRevision: rev, estimatedInputTokens: prepared ? inputBytes + 256 : 0, maxOutputTokens: prepared ? outputLimit : 0, input: prepared ? { ...input, inputBytes, inputHash: prepared.inputHash, inputReadyAt: clock() } : { deterministic: true, ...(input.contextHash ? { contextHash: input.contextHash } : {}), inputHash: digest(input), inputReadyAt: clock() } })
+      const claimed = await cmd('message.node.claim', { runId, unitId, nodeId: stage, expectedRevision: rev, leaseWindowMs: config.attemptMs + config.commitReserveMs, estimatedInputTokens: prepared ? inputBytes + 256 : 0, maxOutputTokens: prepared ? outputLimit : 0, input: prepared ? { ...input, inputBytes, inputHash: prepared.inputHash, inputReadyAt: clock() } : { deterministic: true, ...(input.contextHash ? { contextHash: input.contextHash } : {}), inputHash: digest(input), inputReadyAt: clock() } })
       binding = claimed?.node
       if (!binding) return null
       if (prepared) { controller = new AbortController(); controllers.set(binding.nodeRunId, controller) }
@@ -630,7 +630,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         await scheduleTopics(conversationId)
         return result
       }).catch(async error => {
-      if (!closed && !['MESSAGE_STALE', 'MESSAGE_NODE_STALE', 'MESSAGE_IMPACT_CATALOG_STALE', 'MESSAGE_IMPACT_EVIDENCE_STALE', 'RUNTIME_MAINTENANCE_ACTIVE'].includes(error.code)) await cmd('message.attention', { runId, reason: `MESSAGE_CONTEXT_OR_DISPATCH_FAILED:${error.code ?? error.message}` })
+      if (!closed && !['MESSAGE_NEEDS_ATTENTION', 'MESSAGE_STALE', 'MESSAGE_NODE_STALE', 'MESSAGE_IMPACT_CATALOG_STALE', 'MESSAGE_IMPACT_EVIDENCE_STALE', 'RUNTIME_MAINTENANCE_ACTIVE'].includes(error.code)) await cmd('message.attention', { runId, reason: `MESSAGE_CONTEXT_OR_DISPATCH_FAILED:${error.code ?? error.message}` })
       return state(runId)
       }).finally(() => flights.delete(runId))
       flights.set(runId, flight)
@@ -681,7 +681,8 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       }
       if (run.status === 'needs_attention') {
         if (/^MESSAGE_DEADLINE_BEFORE_CLAIM:/u.test(run.reason ?? '') || !messageExecutionStartedAt(run, readonly.nodes) && !readonly.commands.length && run.reason === 'recovery_exhausted') {
-          await cmd('message.recover', { runId: run.runId })
+          const recovered = await cmd('message.recover', { runId: run.runId })
+          if (recovered.run.status === 'needs_attention') return recovered
           return process(run.runId)
         }
         const stage = run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:S:$:') ? 'S' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:R:') ? 'R' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:I:') ? 'I' : null
@@ -720,7 +721,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         return pendingState
       }
       if (pendingState.nodes.some(node => node.status === 'failed')) {
-        try { await cmd('message.recover', { runId: run.runId }) }
+        try { const result = await cmd('message.recover', { runId: run.runId }); if (result.run.status === 'needs_attention') return result }
         catch (error) { if (['MESSAGE_RECOVERY_EXHAUSTED', 'MESSAGE_NOT_RECOVERABLE'].includes(error.code)) return; throw error }
       }
       return process(run.runId)

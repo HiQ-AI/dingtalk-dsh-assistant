@@ -80,7 +80,7 @@ test('旧持久snapshot缺replyObligation仍可通过Host领取S节点，不虚�
   await store.command({id:'snapshot',kind:'message.snapshot',args:{runId:run.runId,snapshot}})
   const input=splitContext(snapshot)
   assert.equal(Object.hasOwn(input,'replyObligation'),false)
-  const claimed=await store.command({id:'claim',kind:'message.node.claim',args:{runId:run.runId,unitId:'$',nodeId:'S',input,estimatedInputTokens:100,maxOutputTokens:100}})
+  const claimed=await store.command({id:'claim',kind:'message.node.claim',args:{leaseWindowMs:60500,runId:run.runId,unitId:'$',nodeId:'S',input,estimatedInputTokens:100,maxOutputTokens:100}})
   assert.equal(claimed.result.node.status,'running')
 })
 
