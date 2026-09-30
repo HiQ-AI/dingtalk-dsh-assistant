@@ -42,9 +42,14 @@ export function createMessageModel({ llm, modelConfig }) {
       if (chunk.type === 'text-delta') text += chunk.text
       if (Buffer.byteLength(text) > maxOutputTokens * 4) throw new Error('MESSAGE_OUTPUT_BUDGET')
       if (chunk.type === 'usage') usage = chunk.usage
-      if (chunk.type === 'finish') finish = chunk.reason.kind
+      if (chunk.type === 'finish') finish = chunk.reason
     }
-    if (finish !== 'stop') throw new Error('MESSAGE_MODEL_INCOMPLETE')
+    if (finish?.kind !== 'stop') {
+      const error = new Error('MESSAGE_MODEL_INCOMPLETE')
+      error.code = finish?.failure?.code === 'CONTEXT_WINDOW_EXCEEDED' ? 'MESSAGE_MODEL_CONTEXT_WINDOW_EXCEEDED' : 'MESSAGE_MODEL_INCOMPLETE'
+      error.diagnostics = { finish: finish ?? null, usage }
+      throw error
+    }
     return { output: messageSchemas[stage].parse(JSON.parse(text)), usage }
   }
 }

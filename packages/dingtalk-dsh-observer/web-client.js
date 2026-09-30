@@ -244,6 +244,7 @@ window.__ModuleLoader__.load({
     const traceReason = (reason) => {
       if (!reason) return null
       const text = typeof reason === 'string' ? reason : JSON.stringify(reason)
+      if (/MESSAGE_MODEL_CONTEXT_WINDOW_EXCEEDED/.test(text)) return '模型报告容量不足，已暂停处理；系统维护人员排查后继续，无需重复提交材料。'
       if (/MESSAGE_(?:CONTEXT|MATERIAL|REFERENCED_CANDIDATES)_CAPACITY|context_capacity_blocked/.test(text)) return '上下文容量受阻：必要材料未能完整提供，后续判断已停止。'
       return ({ LOCAL_ACCEPTANCE_CONFIG_REQUIRED: '尚未配置本地验收环境与固定验收命令，请补齐后继续', LOCAL_ACCEPTANCE_CRITERIA_REQUIRED: '缺少明确的业务验收条件，请补充预期结果', LOCAL_ACCEPTANCE_PLAN_INVALID: '验收方案未覆盖任务要求或包含无效用例，请修订方案', LOCAL_ACCEPTANCE_PENDING_RECONCILIATION: '上次本地验收结果待核对，暂停重试以避免重复写入共享 UAT 数据', LOCAL_ACCEPTANCE_FAILED: '本地业务验收未通过，请查看实际结果并修复', LOCAL_ACCEPTANCE_CLEANUP_UNCONFIRMED: '测试数据清理或本地服务停止尚未确认，后续提交已停止', LOCAL_ACCEPTANCE_RECEIPT_INVALID: '验收回执与当前代码或方案不一致，后续提交已停止', ENGINEERING_UAT_ENVIRONMENT_REQUIRED: '请明确指定 uat1～uat9 中的一个环境，不能默认选择', ENGINEERING_UAT_BRANCH_REQUIRED: '开发 PR 只能提交到明确指定的 UAT 分支，main 合并需独立上线任务', ENGINEERING_UAT_BRANCH_NOT_FOUND: '指定 UAT 环境对应的分支不存在，请核对', ENGINEERING_ACCEPTANCE_REQUIRED: '缺少业务验收用例与预期结果，后续提交已停止', ENGINEERING_ACCEPTANCE_FAILED: '业务验收未通过或未取得实际结果，后续提交已停止', ENGINEERING_VERIFICATION_FAILED: '构建检查未通过，后续步骤已停止' })[text] ?? text
     }
@@ -677,14 +678,14 @@ window.__ModuleLoader__.load({
           ? React.createElement('details', { style: { marginTop: 6, fontSize: 12, overflowWrap: 'anywhere' } },
             React.createElement('summary', { style: { cursor: 'pointer', color: colors.accent } }, '等待与通知'),
             ...(message.waiting || []).map((wait, index) => React.createElement('p', { key: `wait-${index}`, style: { margin: '6px 0' } },
-              `${wait.goalText ? `事项：${wait.goalText}；` : ''}${responsibilityLabels[wait.responsibility] || '责任待确认'}：${wait.reason || '原因待核对'}。恢复条件：${wait.recoveryCondition}`)),
+              `${wait.goalText ? `事项：${wait.goalText}；` : ''}${responsibilityLabels[wait.responsibility] || '责任待确认'}：${traceReason(wait.reason) || '原因待核对'}。恢复条件：${wait.recoveryCondition}`)),
             ...(message.blockingSources || []).map((source) => React.createElement('p', { key: source.runId, style: { margin: '6px 0' } }, `相关来源：${source.text || source.messageId || '来源正文未记录'}`)),
             React.createElement('p', { style: { margin: '6px 0' } }, '沟通状态独立于事项处理状态。'),
             ...(message.notifications || []).map((notice) => React.createElement('p', { key: notice.notificationId, style: { margin: '6px 0' } },
               `通知：${notificationLabels[notice.status] || '状态未记录'}`)),
             !message.notifications?.length ? React.createElement('p', null, '尚无通知记录') : null) : null
         return React.createElement('tr', { key: message.messageId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
-          React.createElement('td', { style: { ...tableBodyCell, width: 144 }, title: message.workflowStatusDetail || message.agentDeliveryError || '' }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
+          React.createElement('td', { style: { ...tableBodyCell, width: 144 }, title: traceReason(message.workflowStatusDetail || message.agentDeliveryError) || '' }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
           React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, clampTableContent(React.createElement('strong', { style: { fontSize: 14, fontWeight: 600 } }, message.senderName || message.senderOpenDingTalkId || '发送人未记录'), React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, fmt(message.occurredAt)))),
           React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, React.createElement('div', { style: { display: 'flex', gap: 4, minWidth: 0, overflow: 'hidden' } }, ...(message.topicRefs?.length ? message.topicRefs.map((ref) => React.createElement('button', { key: ref.topicId, type: 'button', title: ref.title, 'aria-label': `话题 ${ref.title}`, onClick: () => { setTopicTarget({ groupId: selectedGroup.groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', flex: '0 1 auto', minWidth: 0, maxWidth: 120, border: 0, padding: '2px 7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', fontFamily: 'inherit' } }, ref.title)) : [React.createElement('span', { key: 'unrouted', style: { color: colors.muted, fontSize: 12 } }, messageWorkflowState(message) === 'processed' ? '—' : '待归类')]))),
           React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）')),

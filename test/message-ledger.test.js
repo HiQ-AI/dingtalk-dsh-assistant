@@ -818,18 +818,19 @@ test('节点独立deadline保留提交余量，真实超时与旧lease仍拒绝'
  await bad(f.call('node.complete',{runId:'m',nodeRunId:node.id,leaseEpoch:node.leaseEpoch,expectedRevision:0,output:{}}),'MESSAGE_NODE_STALE')
 })
 
-test('历史policy20秒不能缩短当前Host60秒窗口，30秒结果正常落账',async t=>{
+test('历史policy20秒不能缩短当前Host180秒窗口，超过60秒结果正常落账',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{policy:{initialWindowMs:90000,attemptMs:20000}}))
  let captured
  const workflow=createMessageWorkflow({store:{query:(...args)=>f.store.query(...args),command:async request=>{if(request.kind==='message.node.claim')captured=request.args;return f.store.command(request)}},judge:async({input})=>({kind:'no_action',reason:'无任务',coverage:[{start:0,end:input.sourceLength}]})})
- t.after(()=>workflow.close());await workflow.process('m');assert.equal(captured.leaseWindowMs,60500)
+ t.after(()=>workflow.close());await workflow.process('m');assert.equal(captured.leaseWindowMs,180500)
  await f.call('receive',receive('timed',{policy:{attemptMs:20000}}))
  await f.editSnapshot(db=>{
   const start=Date.parse('2026-09-30T00:00:00Z')
   const call=(kind,args,offset)=>reduceMessageCommand(db,{kind:'message.'+kind,args},{now:new Date(start+offset).toISOString()})
   const n=call('node.claim',{runId:'timed',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0,leaseWindowMs:captured.leaseWindowMs},0).result.node
-  assert.equal(Date.parse(n.deadline)-start,60500)
-  assert.equal(call('node.complete',{runId:'timed',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,expectedRevision:0,output:{}},30000).result.node.status,'succeeded')
+  assert.equal(Date.parse(n.deadline)-start,180500)
+  assert.throws(()=>call('node.complete',{runId:'timed',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,expectedRevision:0,output:{}},180501),{code:'MESSAGE_DEADLINE_EXCEEDED'})
+  assert.equal(call('node.complete',{runId:'timed',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,expectedRevision:0,output:{}},90000).result.node.status,'succeeded')
  })
 })
 

@@ -5,7 +5,7 @@ import { isPassiveTaskProgress, isQuietGroupMessage, messageExecutionStartedAt }
 import { wholeTopicFactRevision } from './message-topics.js'
 import { isNamedAgentDirection } from './decision.js'
 
-export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.5', initialWindowMs: 90000, linkedWindowMs: 90000, attemptMs: 60000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, recoveryDelaysMs: [5000, 30000] })
+export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.5', initialWindowMs: 90000, linkedWindowMs: 90000, attemptMs: 180000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, recoveryDelaysMs: [5000, 30000] })
 const outputLimits = { S: 2000, R: 1800, I: 1500, IB: 4000, material: 1000 }
 const statusQuestion = text => /(?:完成|改完|进度|状态|部署).*[吗？?]/u.test(text) && /任务/u.test(text)
 const investigationConfirmation = request => request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
@@ -173,8 +173,9 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (binding) {
         const failure = error.issues ? `MESSAGE_SCHEMA_INVALID:${JSON.stringify(error.issues.slice(0, 8).map(issue => ({ path: issue.path, message: issue.message }))).slice(0, 1200)}` : error.code ?? error.message
         const protocolError = /^MESSAGE_(?:CONTEXT_(?:REF|RESOURCE)|RESOURCE_REF|CANDIDATE_CONTINUATION|CONVERSATION_SCOPE|IMPACT_ASSESSMENT|SCOPE_PROOF|STAGE_AUTHORIZATION|UNKNOWN_TARGET)/u.test(failure)
-        try { await cmd('message.node.fail', { runId, nodeRunId: binding.nodeRunId, leaseEpoch: binding.leaseEpoch, expectedRevision: rev, error: failure, retryAt: new Date(clock() + (protocolError ? 0 : config.recoveryDelaysMs[0])).toISOString() }) }
-        catch (failure) { if (!['MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(failure.code)) throw failure }
+        try { await cmd('message.node.fail', { runId, nodeRunId: binding.nodeRunId, leaseEpoch: binding.leaseEpoch, expectedRevision: rev, error: failure, ...(error.diagnostics ? { output: { diagnostics: error.diagnostics }, ...(Number.isSafeInteger(error.diagnostics.usage?.inputTokens) && Number.isSafeInteger(error.diagnostics.usage?.outputTokens) ? { usage: error.diagnostics.usage } : {}) } : {}), retryAt: new Date(clock() + (protocolError ? 0 : config.recoveryDelaysMs[0])).toISOString() }) }
+        catch (failure) { if (['MESSAGE_STALE', 'MESSAGE_NODE_STALE'].includes(failure.code)) return null; throw failure }
+        if (error.code === 'MESSAGE_MODEL_CONTEXT_WINDOW_EXCEEDED') await cmd('message.attention', { runId, unitId, reason: `${error.code}:${stage}:${unitId}` })
       }
       else if (error.code === 'MESSAGE_BUDGET_EXHAUSTED') await cmd('message.attention', { runId, unitId, reason: `MESSAGE_BUDGET_EXHAUSTED:${stage}:${unitId}` })
       else if (!['MESSAGE_NODE_NOT_READY', 'MESSAGE_RETRY_NOT_DUE', 'MESSAGE_DEADLINE_EXCEEDED', 'MESSAGE_STALE'].includes(error.code)) throw error

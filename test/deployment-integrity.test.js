@@ -186,3 +186,37 @@ test('schema6部署在同一owner锁内迁移，其他owner拒绝且历史证明
   input.end();await running
   rival.exec('BEGIN EXCLUSIVE; ROLLBACK');rival.close()
 })
+
+test('Adapter专用包检查零写并核对provider实际解析，旧副本与源漂移拒绝',async()=>{
+  const {execFileSync}=await import('node:child_process')
+  const {verifyAdapterPackage,adapterResolution,backupAdapter}=await import('../docs/acceptance/topic-context-completeness/scripts/check-repair-deployment.mjs')
+  const root=await mkdtemp(join(tmpdir(),'adapter-deploy-')),staging=join(root,'staging'),source=join(root,'source'),profile=join(root,'profile')
+  await mkdir(join(staging,'package/lib'),{recursive:true})
+  const manifest={name:'@deepseek-ai/dsh-llm-pi-ai',version:'1.0.0',main:'lib/index.js'}
+  await writeFile(join(staging,'package/package.json'),JSON.stringify(manifest))
+  await writeFile(join(staging,'package/lib/index.js'),'export const nativeStop=true')
+  await cp(join(staging,'package'),source,{recursive:true})
+  await writeFile(join(source,'not-packed.ts'),'源码不应进入打包清单对比')
+  const packagePath=join(root,'adapter.tgz')
+  execFileSync('tar',['-czf',packagePath,'-C',staging,'package/package.json','package/lib/index.js'],{windowsHide:true})
+  const before=await readdir(root,{recursive:true})
+  assert.equal(verifyAdapterPackage({packagePath,sourceRoot:source}).verified,true)
+  assert.deepEqual(await readdir(root,{recursive:true}),before)
+  await mkdir(join(profile,'node_modules/dsh-codex-connect/lib'),{recursive:true})
+  await writeFile(join(profile,'package.json'),'{}')
+  await writeFile(join(profile,'node_modules/dsh-codex-connect/package.json'),JSON.stringify({name:'dsh-codex-connect',main:'lib/index.js'}))
+  await writeFile(join(profile,'node_modules/dsh-codex-connect/lib/index.js'),'')
+  await cp(source,join(profile,'node_modules/@deepseek-ai/dsh-llm-pi-ai'),{recursive:true})
+  assert.equal(verifyAdapterPackage({packagePath,sourceRoot:source,profileRoot:profile}).verified,true)
+  const backup=backupAdapter({profileRoot:profile,destination:join(root,'backup')})
+  assert.ok(backup.files.some(file=>file.name==='lib/index.js'))
+  assert.equal(backup.manifestSha256,createHash('sha256').update(await readFile(join(root,'backup/backup-manifest.json'))).digest('hex'))
+  const nested=join(profile,'node_modules/dsh-codex-connect/node_modules/@deepseek-ai/dsh-llm-pi-ai')
+  await cp(source,nested,{recursive:true});await writeFile(join(nested,'lib/index.js'),'export const nativeStop=false')
+  // fresh process avoids Node resolver缓存，模拟全新启动后provider选择另一依赖副本。
+  const checker=new URL('../docs/acceptance/topic-context-completeness/scripts/check-repair-deployment.mjs',import.meta.url).href
+  const code=`import {verifyAdapterPackage} from ${JSON.stringify(checker)};verifyAdapterPackage(${JSON.stringify({packagePath,sourceRoot:source,profileRoot:profile})})`
+  assert.throws(()=>execFileSync(process.execPath,['--input-type=module','-e',code],{stdio:'pipe'}),/ADAPTER_PROVIDER_RESOLUTION_MISMATCH/)
+  await writeFile(join(source,'lib/index.js'),'source changed')
+  assert.throws(()=>verifyAdapterPackage({packagePath,sourceRoot:source}),/ADAPTER_SOURCE_MISMATCH/)
+})

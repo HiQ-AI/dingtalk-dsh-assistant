@@ -293,7 +293,7 @@ test('旧policy连续交办经大目录失败排队重启后完成IB派发与独
  store=await openExecutionStore({dbPath,instanceId:'chain'});workflow=create();await workflow.recover()
  await until(()=>effects.length===2,'关联恢复后未完成IB及真实handler派发')
  assert.equal(ibCalls,1);assert.deepEqual([...effects].sort(),['first','second']);assert.equal(pageCalls.filter(page=>page==='first:0').length,1,'重启应复用已经成功的R页');assert.equal(pageCalls.filter(page=>page==='first:1').length,2)
- assert.ok(windows.every(ms=>ms===60500),'所有阶段使用当前Host窗口，不使用旧20秒policy')
+ assert.ok(windows.every(ms=>ms===180500),'所有阶段使用当前Host窗口，不使用旧20秒policy')
  let sent=0,readbacks=0
  const notices=createWorkflowNotifications({store,controller:{},artifacts:{},adapter:{canDisclose:async()=>true,send:async()=>({messageId:`out-${++sent}`}),readback:async notification=>{readbacks++;return {messageId:notification.ack.messageId}}}})
  await notices.flush();await notices.flush()

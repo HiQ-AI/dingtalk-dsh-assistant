@@ -1303,3 +1303,21 @@ for (const repair of [true,false]) test(`阶段授权概括objective在本轮有
  if(repair) assert.equal(state.run.status,'settled',JSON.stringify(state))
  else assert.match(state.units[0].blockedReason??state.run.reason,/MESSAGE_PROTOCOL_CORRECTION_EXHAUSTED/)
 })
+
+test('容量失败保真落账且恢复扫描不重试；合法JSON不能吞提供方error',async t=>{
+ let calls=0
+ const diagnostics={finish:{kind:'error',failure:{code:'CONTEXT_WINDOW_EXCEEDED',message:'catalog capacity',detail:{limit:272000}}},usage:{inputTokens:290031,outputTokens:500,totalTokens:290531}}
+ const judge=createMessageModel({modelConfig:{provider:'test',model:'test'},llm:{async *stream(){calls++;yield{type:'text-delta',text:JSON.stringify({kind:'no_action',reason:'none',coverage:[{start:0,end:5}]})};yield{type:'usage',usage:diagnostics.usage};yield{type:'finish',reason:diagnostics.finish}}}})
+ const {store,workflow}=await fixture(t,{judge})
+ await workflow.receive({...source,runId:'capacity'})
+ await workflow.process('capacity')
+ let state=await store.query({kind:'message.run',runId:'capacity'})
+ assert.equal(state.run.status,'needs_attention')
+ assert.match(state.run.reason,/^MESSAGE_MODEL_CONTEXT_WINDOW_EXCEEDED:S:/u)
+ assert.deepEqual(state.nodes[0].output.diagnostics,diagnostics)
+ assert.equal(state.nodes[0].status,'failed')
+ await workflow.recover();await workflow.recover()
+ assert.equal(calls,1)
+ state=await store.query({kind:'message.run',runId:'capacity'})
+ assert.equal(state.nodes[0].leaseEpoch,1)
+})
