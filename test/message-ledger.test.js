@@ -329,21 +329,21 @@ test('人工重处理重新分配节点预算，旧版本消耗不阻断新版�
  const claim=(await f.call('node.claim',{runId:'m-replay',unitId:'u',nodeId:'R',estimatedInputTokens:80,maxOutputTokens:50,input:{}})).result.node
  assert.equal(claim.nodeId,'R')
 })
-test('旧版第五次重处理因预算耗尽时仅补一次无副作用恢复机会',async t=>{
+test('无业务效果的受管重处理不以来源版本充当次数上限',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{sourceVersion:5}))
  await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
  const next=(await f.call('reprocess',{runId:'m',newRunId:'m-replay'})).result.run
  assert.equal(next.sourceVersion,6)
  await f.call('attention',{runId:'m-replay',reason:'recovery_exhausted'})
- await bad(f.call('reprocess',{runId:'m-replay',newRunId:'m-replay-2'}),'MESSAGE_REPROCESS_EXHAUSTED')
+ assert.equal((await f.call('reprocess',{runId:'m-replay',newRunId:'m-replay-2'})).result.run.sourceVersion,7)
 })
-test('第六版只在S因上下文等待且无业务命令时允许一次确定性状态查询重处理',async t=>{
+test('材料等待重处理沿用统一效果守卫而非来源版本例外',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{sourceVersion:6}))
  const claim=(await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',input:{}})).result.node
  await f.call('node.complete',{runId:'m',nodeRunId:claim.nodeRunId,leaseEpoch:claim.leaseEpoch,output:{output:{kind:'needs_context',reason:'历史范围',needs:[]}}})
  await f.call('wait',{runId:'m',unitId:'$',nodeId:'S',reason:'历史范围',request:{requestId:'context',kind:'needs_context',needs:[]}})
  assert.equal((await f.call('reprocess',{runId:'m',newRunId:'m-replay'})).result.run.sourceVersion,7)
- await bad(f.call('reprocess',{runId:'m-replay',newRunId:'m-replay-2'}),'MESSAGE_REPROCESS_EXHAUSTED')
+ assert.equal((await f.call('reprocess',{runId:'m-replay',newRunId:'m-replay-2'})).result.run.sourceVersion,8)
 })
 test('消息账同库持久化、幂等、全部事项归宿和重启未知命令',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',expectedRevision:0,units:[{unitId:'u'},{unitId:'v'}]})
@@ -739,8 +739,8 @@ test('已有模型领取旧账保留真实startedAt，排队墙钟年龄不拒�
  const recovered=(await f.call('recover',{runId:'m'})).result.run;assert.equal(recovered.status,'pending');assert.equal(recovered.executionStartedAt,'2020-01-01T00:00:00.000Z')
 })
 
-test('无业务命令已送达纯状态通知允许重处理并保留旧回执',async t=>{
- const f=await fixture(t);await f.call('receive',receive());await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+test('高来源版本42无业务命令已送达纯状态通知允许重处理并保留旧回执',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{sourceVersion:42}));await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
  await f.call('notification.prepare',{runId:'m',notificationId:'state',stateFact:{revision:0,status:'needs_attention',reason:'recovery_exhausted',intentStatus:null,phase:'attention'},payload:{phase:'attention',conversationId:'g',text:'系统等待'},disclosure:{conversationId:'g',authorizationRef:'m'}})
  const notice=(await f.call('notification.claim',{notificationId:'state'})).result.notification
  await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
@@ -748,7 +748,7 @@ test('无业务命令已送达纯状态通知允许重处理并保留旧回执',
  await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
  await f.call('notification.readback',{notificationId:'state',leaseEpoch:notice.leaseEpoch,evidence:{messageId:'out'}})
  const before=await f.store.query({kind:'message.notification',notificationId:'state'})
- assert.equal((await f.call('reprocess',{runId:'m',newRunId:'next'})).result.run.sourceVersion,2)
+ assert.equal((await f.call('reprocess',{runId:'m',newRunId:'next'})).result.run.sourceVersion,43)
  assert.deepEqual(await f.store.query({kind:'message.notification',notificationId:'state'}),before)
 })
 
@@ -831,4 +831,14 @@ test('历史policy20秒不能缩短当前Host60秒窗口，30秒结果正常落�
   assert.equal(Date.parse(n.deadline)-start,60500)
   assert.equal(call('node.complete',{runId:'timed',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,expectedRevision:0,output:{}},30000).result.node.status,'succeeded')
  })
+})
+
+test('高来源版本42已有业务效果仍拒绝重处理，当前身份不被绕过',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('high',{sourceVersion:42}))
+ await f.call('split',{runId:'high',units:[{unitId:'high-u'}]})
+ await f.call('accept',{runId:'high',unitId:'high-u',commands:[{commandId:'high-c',kind:'create',args:{taskId:'business-task'}}]})
+ const claim=(await f.call('command.claim',{commandId:'high-c'})).result.command
+ await f.call('command.complete',{commandId:'high-c',leaseEpoch:claim.leaseEpoch,result:{taskId:'business-task'}})
+ await bad(f.call('reprocess',{runId:'high',newRunId:'again'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+ assert.equal((await f.store.query({kind:'message.source',sourceKey:'high'})).sourceVersion,42)
 })

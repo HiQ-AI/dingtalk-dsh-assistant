@@ -19,3 +19,9 @@
 - 第一次服务集成200/201通过；唯一失败为旧材料重试fixture缺少新的来源回读合同，补齐同群/同消息/同附件回读后11项定向及上述最终集成通过，生产来源校验未放宽。
 - `pnpm install --frozen-lockfile` 通过。Assistant包99文件与冻结源码一致，SHA256见round-23-packages.json；沿用Observer已验证包。
 - 正式部署零写预检通过：writes=0，原22个Task，要求空间约3.04GB，完整备份约1.96GB。维护revision169已排空，开始封存备份安装。
+
+## 正式安装与恢复门禁
+
+新PID35996、双包内容、旧历史、health=ok、recoveryIssueCount=0、认证Web303/200均已独立回读。正式安装目录的读取器再次下载两份原工作簿，原文件及投影摘要与部署前完全一致。
+
+原无业务命令的失败消息在受控重处理时被MESSAGE_REPROCESS_EXHAUSTED拒绝：仍有按sourceVersion>=5的固定次数上限及v5/v6例外。未改变任何原消息状态。业务重放本轮未通过，继续移除该次数上限，保留当前来源及效果对账门禁。

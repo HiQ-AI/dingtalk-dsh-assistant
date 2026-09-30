@@ -601,8 +601,6 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   }
   if(kind==='message.reprocess') {
     const old=run(db,str(a.runId));current(db,old)
-    const stalledContext=old.sourceVersion===6 && old.status==='waiting' && rows(db,old.runId,'node').some(node=>node.nodeId==='S'&&node.output?.output?.kind==='needs_context')
-    if(old.sourceVersion>=5 && !(old.sourceVersion===5 && old.reason==='recovery_exhausted' && !old.budgetBaseline) && !stalledContext)fail('MESSAGE_REPROCESS_EXHAUSTED')
     const oldUnits=rows(db,old.runId,'unit')
     const oldCommands=rows(db,old.runId,'command'),oldNotifications=rows(db,old.runId,'notification')
     const resolvedSplitRequests=rows(db,old.runId,'request').filter(item=>item.status==='resolved'&&item.nodeId==='S'&&item.unitId==='$'&&item.kind==='needs_clarification')
