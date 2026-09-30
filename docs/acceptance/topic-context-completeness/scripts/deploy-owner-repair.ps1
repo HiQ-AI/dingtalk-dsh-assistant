@@ -52,7 +52,23 @@ Assert-DeploymentMode
 $observerSource="$workspace/packages/dingtalk-dsh-observer"
 $observerInstalled="$profile/node_modules/@zzusp/dingtalk-dsh-observer"
 $observerSourceReplacement=if($RepairStoppedLaunch -and (Split-Path -Leaf $RepairStoppedLaunch)-eq 'maintenance-sealed.json'){$ObserverPackage}else{''}
-if($observerSourceReplacement){$observerSource=$observerInstalled}
+if($observerSourceReplacement){
+ $candidateManifest=(& tar -xOf $ObserverPackage 'package/package.json' | Out-String | ConvertFrom-Json)
+ $currentManifest=Get-Content -LiteralPath "$observerInstalled/package.json" -Raw|ConvertFrom-Json
+ if($candidateManifest.name-ne '@zzusp/dingtalk-dsh-observer'){throw 'Observer修复包身份不匹配'}
+ if($candidateManifest.version-eq $currentManifest.version){$observerSource=$observerInstalled}
+}
+function Assert-PersistentPackageSources([string]$Root,[string[]]$Paths) {
+ $directory=Get-Item -LiteralPath $Root -ErrorAction Stop
+ if(-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw '持久包目录无效'}
+ foreach($path in $Paths){
+  $item=Get-Item -LiteralPath $path -ErrorAction Stop
+  if($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+     -not [string]::Equals((Split-Path -Parent $item.FullName),$directory.FullName,[StringComparison]::OrdinalIgnoreCase)){
+   throw '部署包须直接存放在持久目录 D:/dsh_home/packages'
+  }
+ }
+}
 $deploymentInputs=@($Package)+@(@($Bundle,$MergePolicy,$ChecksProposal,$DirectQueriesProposal,$ObserverPackage,$TaskMigrationPlan)|Where-Object {$_})
 if($EnrollmentProposal){$deploymentInputs+= $EnrollmentProposal}
 if($TaskMigrationPlan){$deploymentInputs+="$workspace/scripts/migrate-task-file-links.mjs"}
@@ -60,6 +76,7 @@ $migrationToolSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath "$workspa
 foreach($path in $deploymentInputs) {
  if(-not [IO.Path]::IsPathFullyQualified($path) -or -not(Test-Path -LiteralPath $path -PathType Leaf)){throw '输入文件须为存在的绝对路径'}
 }
+if(-not ($Readback -or $Resume)){Assert-PersistentPackageSources 'D:/dsh_home/packages' (@($Package)+@($ObserverPackage|Where-Object {$_}))}
 if(-not [IO.Path]::IsPathFullyQualified($EvidenceDirectory) -or ((Test-Path -LiteralPath $EvidenceDirectory) -and -not ($Readback -or $Resume))){throw '证据目录须为新的绝对路径'}
 if(-not $EvidenceDirectory.Replace('\','/').StartsWith("$workspace/docs/tmp/",[StringComparison]::OrdinalIgnoreCase)){throw '证据目录必须在本工作区docs/tmp内'}
 if(-not(Test-Path -LiteralPath $tempDirectory -PathType Container)){throw 'D盘TEMP目录不存在'}
@@ -282,11 +299,11 @@ function Read-Deployment($launchRecord) {
  if($maintenance.maintenanceId-ne $launchRecord.maintenanceId){throw '启动后维护许可漂移'}
  return @{status='ready';ready=$true;pid=$fresh.ProcessId;launcherPid=$launchRecord.launcherPid;tasks=$tasks.Count;history=$history;package=$packageReadback;observer=$observerReadback;web=$webProof;maintenance=$maintenance;dispatchResumed=(-not $maintenance.active);logs=@($logs);scheduledTaskChanged=[bool]$launchRecord.enrollmentAutostartRestore;businessAcceptancePassed=$false}
 }
-function Assert-LocalPackageSources([string]$ProfileRoot,[string]$ObserverReplacement='') {
+function Assert-LocalPackageSources([string]$ProfileRoot,[string]$AssistantReplacement='', [string]$ObserverReplacement='') {
  $code=@'
 const fs=require('node:fs'),path=require('node:path'),{fileURLToPath}=require('node:url'),{createRequire}=require('node:module');
 try {
- const [root,workspace,replacement]=process.argv.slice(1),entries=[];
+ const [root,workspace,assistantReplacement,observerReplacement]=process.argv.slice(1),entries=[];
  const add=(name,spec)=>{if(typeof spec==='string'&&spec.startsWith('file:'))entries.push({name,spec})};
  const manifest=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
  for(const section of ['dependencies','devDependencies','optionalDependencies'])for(const [name,spec]of Object.entries(manifest[section]||{}))add(name,spec);
@@ -301,13 +318,14 @@ try {
   for(const [name,value]of Object.entries(lock.dependencies||{}))add(name,value.resolved);
  }
  for(const {name,spec}of entries){
-  const value=replacement&&name==='@zzusp/dingtalk-dsh-observer'?'file:'+replacement:spec;
+  const replacement=name==='@zzusp/dingtalk-dsh-assistant'?assistantReplacement:name==='@zzusp/dingtalk-dsh-observer'?observerReplacement:'';
+  const value=replacement?'file:'+replacement:spec;
   const target=value.startsWith('file://')?fileURLToPath(value):path.resolve(root,decodeURIComponent(value.slice(5)));
   if(!fs.existsSync(target)||!fs.statSync(target).isFile())throw Error('profile本地依赖源不存在: '+target);
  }
 }catch(error){console.log(error.message);process.exitCode=1}
 '@
- $result=& $node -e $code $ProfileRoot $workspace $ObserverReplacement
+ $result=& $node -e $code $ProfileRoot $workspace $AssistantReplacement $ObserverReplacement
  if($LASTEXITCODE){throw ($result -join "`n")}
 }
 function Read-StoppedRepairRecord([string]$Path,$sealed,$backupRecord) {
@@ -357,7 +375,7 @@ if($Readback -or $Resume){
  exit 0
 }
 Assert-InputHashes
-Assert-LocalPackageSources $profile $observerSourceReplacement
+Assert-LocalPackageSources $profile $Package $observerSourceReplacement
 if($TaskMigrationPlan){$taskMigrationCheck=Invoke-TaskFileMigration 'check'|ConvertFrom-Json}
 if($RepairStoppedLaunch){
  if(-not [IO.Path]::IsPathFullyQualified($RepairStoppedLaunch)){throw '原launch必须为绝对路径'}
@@ -372,7 +390,7 @@ if($RepairStoppedLaunch){
  if($DirectQueriesProposal -and (Get-FileHash -LiteralPath $DirectQueriesProposal).Hash-ne $record.inputHashes.($record.directQueriesProposal)){throw '原查询配置提案已变化'}
  function Test-StoppedRepair {
   Assert-InputHashes
-  Assert-LocalPackageSources $profile $observerSourceReplacement
+  Assert-LocalPackageSources $profile $Package $observerSourceReplacement
   foreach($path in $evidenceHashes.Keys){if((Get-FileHash -LiteralPath $path).Hash-ne $evidenceHashes[$path]){throw '修复输入或原证据已变化'}}
   Assert-StoppedRepairProcesses $record $backupRecord
   $current=Run-Node @($checker,'maintenance')|ConvertFrom-Json
@@ -385,7 +403,7 @@ if($RepairStoppedLaunch){
    $originalDependencies=Get-Content -LiteralPath "$($record.backup)/profile/package.json" -Raw|ConvertFrom-Json
    $currentObserver=Get-Content -LiteralPath "$observerInstalled/package.json" -Raw|ConvertFrom-Json
    if(-not $originalDependencies.dependencies.'@zzusp/dingtalk-dsh-observer' -or $currentObserver.name-ne '@zzusp/dingtalk-dsh-observer'){throw 'Observer原依赖身份缺失'}
-   $observerProof=Run-Node @($checker,'package',$ObserverPackage,$observerInstalled,$observerInstalled)|ConvertFrom-Json
+   $observerProof=Run-Node @($checker,'package',$ObserverPackage,$observerSource)|ConvertFrom-Json
   }
   if((Get-PSDrive D).Free-lt ((Get-Item -LiteralPath $Package).Length*10+1GB)){throw '修复安装空间不足'}
   return @{history=$history;backup=$backupProof;package=$packageProof;observer=$observerProof;maintenance=$current}
@@ -400,10 +418,11 @@ if($RepairStoppedLaunch){
   Copy-Item -LiteralPath "$origin/control-before.json","$origin/maintenance-sealed.json","$origin/backup.json" -Destination $EvidenceDirectory
   $env:DSH_HOME='D:/dsh_home';$env:TEMP=$tempDirectory;$env:TMP=$tempDirectory
   if($lockProcess.HasExited){throw '安装前独占锁已丢失'}
-  $repairPackages=@($Package)+@(if($ObserverPackage){"@zzusp/dingtalk-dsh-observer@file:$ObserverPackage"})
+  $repairPackages=@("@zzusp/dingtalk-dsh-assistant@file:$Package")+@(if($ObserverPackage){"@zzusp/dingtalk-dsh-observer@file:$ObserverPackage"})
   & $node "$profile/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add @repairPackages *> "$EvidenceDirectory/install.log"
   if($LASTEXITCODE){throw '修复安装失败，保持封存停机'}
   Run-Node @($checker,'package',$Package,$source,$installed)|Set-Content "$EvidenceDirectory/installed.json"
+  if($ObserverPackage){Run-Node @($checker,'package',$ObserverPackage,$observerSource,$observerInstalled)|Set-Content "$EvidenceDirectory/observer-installed.json"}
   Assert-InputHashes
   $null=Test-StoppedRepair
   if($lockProcess.HasExited){throw '安装核验期间独占锁丢失'}
@@ -559,8 +578,8 @@ if($TaskMigrationPlan){[void](Invoke-TaskFileMigration 'execute')}
 $migrationBackupManifest=if($TaskMigrationPlan){"${backup}-task-migration-source/backup-manifest.json"}else{''}
 $migrationBackupSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath $migrationBackupManifest).Hash}else{''}
 @{backup=$backup;oldPid=$old.ProcessId;packageSha256=(Get-FileHash -LiteralPath $Package).Hash;taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256}|ConvertTo-Json|Set-Content "$EvidenceDirectory/backup.json"
-Assert-LocalPackageSources $profile $observerSourceReplacement
-$installPackages=@($Package)+@($ObserverPackage|Where-Object {$_})
+Assert-LocalPackageSources $profile $Package $observerSourceReplacement
+$installPackages=@("@zzusp/dingtalk-dsh-assistant@file:$Package")+@(if($ObserverPackage){"@zzusp/dingtalk-dsh-observer@file:$ObserverPackage"})
 & $node "$profile/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add @installPackages *> "$EvidenceDirectory/install.log"
 if($LASTEXITCODE){throw '安装失败，保持停机并保留备份'}
 Run-Node ($configArgs+@('--apply'))|Set-Content "$EvidenceDirectory/config-applied.json"

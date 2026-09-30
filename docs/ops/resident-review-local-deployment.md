@@ -245,7 +245,9 @@ C 盘空间不足时，本轮保留计划任务定义，以原 start-web.ps1 和
 
 该路径临时禁用精确的 `DSH Web Local` 自启任务，原来已禁用则保持禁用；只有新实例验证和恢复派发完成后才恢复原来的启用状态。接入或启动失败保留停机/维护及证据，按 `enrollment-autostart.json` 和原生接入 journal 恢复，禁止删除 journal 后重来。`-HoldMaintenance` 会保留维护及临时禁用状态，后续使用原部署参数 `-Resume` 完成回读、恢复派发和自启。
 
-使用验收目录 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1`，先 `-Check`，参数必须提供精确新包 `-Package`、双项目配置 `-Bundle`、合并策略 `-MergePolicy`、当前 profile 摘要 `-ExpectedProfileSha256`、包摘要 `-ExpectedPackageSha256`、新的 `docs/tmp/` 证据目录 `-EvidenceDirectory`。自检不创建证据目录，不改配置或启动实例。去掉 `-Check` 才部署；仅维护人员执行。
+先把同一正式版本的 Assistant 与 Observer 发行 tgz 存入 `D:/dsh_home/packages`，文件名包含版本和摘要前缀；分别核对下载来源及完整 SHA-256，发现同名异内容立即停止，不能覆盖。该目录是 profile `file:` 依赖的持久来源，不能用工作树 `docs/tmp/` 包路径安装；只在确认 profile、锁文件和部署证据均不再引用后清理旧包。部署工具的预检拒绝不在该目录直接子级的包及链接。
+
+使用验收目录 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1`，先 `-Check`，参数必须提供上述持久目录中的精确新包 `-Package`、双项目配置 `-Bundle`、合并策略 `-MergePolicy`、当前 profile 摘要 `-ExpectedProfileSha256`、包摘要 `-ExpectedPackageSha256`、新的 `docs/tmp/` 证据目录 `-EvidenceDirectory`。自检不创建证据目录，不改配置或启动实例。去掉 `-Check` 才部署；仅维护人员执行。
 
 允许已排空的 waiting 任务留待新版本恢复，但 running 节点/Owner、未排空节点或 starting/executing/unknown 效果一律阻断。准备失败遗留 unknown 先按专用单次对账规程处理，不能靠部署放宽门禁。脚本要求原实例具备正式维护接口；已离线或尚无维护接口的旧实例拒绝使用此自动部署路径，须先完成独立停机与恢复方案，不能退回“读取排空后强停”的有竞争路径。
 
@@ -426,9 +428,9 @@ I/IB动作条件必填字段与Host校验共用规则；例如report缺language�
 
 此时不要伪造启动记录。`-RepairStoppedLaunch` 可传原证据目录中的 `maintenance-sealed.json` 绝对路径：必须同时存在原 `backup.json`、`control-before.json` 与完整备份，原目录无 launch、配置应用、接入群自启变更或迁移记录。该入口仅重试 backup.json 绑定的同 SHA Assistant 包，`ExpectedProfileSha256` 必须等于当前配置和备份原配置；不传 DirectQueriesProposal，不再次备份、迁移或应用配置。先 `-Check`，再由同一参数执行；仍核对停止状态、维护许可、全部历史和备份，并在执行期间持有原 owner EXCLUSIVE 锁。
 
-如果失败原因是 Observer 的本地 tgz 源丢失，可另外提供 `ObserverPackage` 与 `ExpectedObserverPackageSha256`，指向已有持久包目录中的恢复包。Check 和锁内执行均以当前已安装 Observer 为源码逐文件核验包（包含 package.json 的名称和版本），并核对原备份中存在该依赖；仅允许相同内容恢复源，不允许升级。归档 tgz 的摘要可以不同，不能伪造旧完整性摘要；原生 `plugin add` 同时接纳 Assistant 和此 Observer 包，自行更新依赖路径及锁。原来已有 launch.json 的修复入口仍禁止 Observer 变更。
+如果失败原因是 Observer 的本地 tgz 源丢失，可另外提供 `ObserverPackage` 与 `ExpectedObserverPackageSha256`，指向已有持久包目录中的恢复包。同版本恢复以当前已安装 Observer 为源码逐文件核验包（包含 package.json 的名称和版本），并核对原备份中存在该依赖；归档 tgz 的摘要可以不同，不能伪造旧完整性摘要。若首次安装在封存后、启动前失败，新版本 Observer 须与本次检出源码逐文件一致，且安装后再次核对；此时可与 Assistant 一同升级。已有 launch.json 的修复入口仍禁止 Observer 变更。
 
-所有部署的零写预检及安装前都解析 profile 的 package.json 和原生 pnpm-lock.yaml（无 pnpm 锁时读 package-lock.json），检查本地 file: tgz 存在。仅上述已核验 Observer 恢复可精确替代该包名对应的旧源；其他缺源仍拒绝。正式启动成功前保持 stopping 封存，后续仍按 Readback/Resume 门禁处理。
+所有部署的零写预检及安装前都解析 profile 的 package.json 和原生 pnpm-lock.yaml（无 pnpm 锁时读 package-lock.json），检查本地 file: tgz 存在。正在安装的 Assistant 包可精确替代该包名对应的旧源：先核对目标包摘要及与本次源码一致，原生 `plugin add` 使用明确的 `@zzusp/dingtalk-dsh-assistant@file:<绝对包路径>` 覆盖旧依赖，安装后再逐文件核对实际内容；缺失的旧归档不冒充为已恢复。上述已核验 Observer 恢复仍可精确替代该包名对应的旧源；封存后首次安装尚未成功时，Observer 新版包可按本次源码核验后与 Assistant 一同安装。其他缺源仍拒绝。正式启动成功前保持 stopping 封存，后续仍按 Readback/Resume 门禁处理。
 
 恢复 Observer 时脚本使用显式 `@zzusp/dingtalk-dsh-observer@file:<恢复包绝对路径>` 参数。pnpm 10.13.1 在旧 file: 源缺失时，传裸 tgz 会先解析旧源而失败；带包名的原生 add 能先确定被替换的依赖。隔离临时 profile 已实跑：裸包 ENOENT，命名参数成功且 package.json 由 pnpm 更新。不能通过手改 profile 或完整性摘要绕过此解析问题。
 
