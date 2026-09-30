@@ -270,13 +270,20 @@ Write-Output 'PASS 2/2: 迁移源备份使用sibling目录；接续拒绝备份�
 
 # 以下用真实本地文件与原生JSON解析验证，不替换文件系统实现。
 foreach($name in @('Test-Path','Get-FileHash','Set-Content','Get-Content')){Remove-Item -LiteralPath "Function:$name" -ErrorAction SilentlyContinue}
-foreach($name in @('Assert-LocalPackageSources','Read-StoppedRepairRecord')){
+foreach($name in @('Assert-LocalPackageSources','Assert-PersistentPackageSources','Read-StoppedRepairRecord')){
  $fn=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq $name},$true)
  Invoke-Expression $fn.Extent.Text
 }
 $workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'));$node=(Get-Command node.exe).Source
 $fixture=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot ('../docs/tmp/sealed-install-check-'+[guid]::NewGuid())))
 [IO.Directory]::CreateDirectory($fixture)|Out-Null
+$persistent=Join-Path $fixture 'packages';[IO.Directory]::CreateDirectory($persistent)|Out-Null
+[IO.File]::WriteAllText("$persistent/assistant.tgz",'fixture')
+[IO.File]::WriteAllText("$fixture/outside.tgz",'fixture')
+Assert-PersistentPackageSources $persistent @("$persistent/assistant.tgz")
+$failed=$false;try{Assert-PersistentPackageSources $persistent @("$fixture/outside.tgz")}catch{$failed=$true}
+if(-not $failed){throw '持久包门禁不得接受目录外路径'}
+Write-Output 'PASS 2/2: 持久目录内普通包通过；目录外包拒绝'
 [IO.File]::WriteAllText("$fixture/package.json",'{"dependencies":{"observer":"file:missing.tgz"}}')
 [IO.File]::WriteAllText("$fixture/package-lock.json",'{"packages":{}}')
 $beforeFiles=@(Get-ChildItem -LiteralPath $fixture -File|ForEach-Object {(Get-FileHash -LiteralPath $_.FullName).Hash}) -join ','

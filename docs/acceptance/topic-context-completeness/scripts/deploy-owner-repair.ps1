@@ -58,6 +58,17 @@ if($observerSourceReplacement){
  if($candidateManifest.name-ne '@zzusp/dingtalk-dsh-observer'){throw 'Observer修复包身份不匹配'}
  if($candidateManifest.version-eq $currentManifest.version){$observerSource=$observerInstalled}
 }
+function Assert-PersistentPackageSources([string]$Root,[string[]]$Paths) {
+ $directory=Get-Item -LiteralPath $Root -ErrorAction Stop
+ if(-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw '持久包目录无效'}
+ foreach($path in $Paths){
+  $item=Get-Item -LiteralPath $path -ErrorAction Stop
+  if($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+     -not [string]::Equals((Split-Path -Parent $item.FullName),$directory.FullName,[StringComparison]::OrdinalIgnoreCase)){
+   throw '部署包须直接存放在持久目录 D:/dsh_home/packages'
+  }
+ }
+}
 $deploymentInputs=@($Package)+@(@($Bundle,$MergePolicy,$ChecksProposal,$DirectQueriesProposal,$ObserverPackage,$TaskMigrationPlan)|Where-Object {$_})
 if($EnrollmentProposal){$deploymentInputs+= $EnrollmentProposal}
 if($TaskMigrationPlan){$deploymentInputs+="$workspace/scripts/migrate-task-file-links.mjs"}
@@ -65,6 +76,7 @@ $migrationToolSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath "$workspa
 foreach($path in $deploymentInputs) {
  if(-not [IO.Path]::IsPathFullyQualified($path) -or -not(Test-Path -LiteralPath $path -PathType Leaf)){throw '输入文件须为存在的绝对路径'}
 }
+if(-not ($Readback -or $Resume)){Assert-PersistentPackageSources 'D:/dsh_home/packages' (@($Package)+@($ObserverPackage|Where-Object {$_}))}
 if(-not [IO.Path]::IsPathFullyQualified($EvidenceDirectory) -or ((Test-Path -LiteralPath $EvidenceDirectory) -and -not ($Readback -or $Resume))){throw '证据目录须为新的绝对路径'}
 if(-not $EvidenceDirectory.Replace('\','/').StartsWith("$workspace/docs/tmp/",[StringComparison]::OrdinalIgnoreCase)){throw '证据目录必须在本工作区docs/tmp内'}
 if(-not(Test-Path -LiteralPath $tempDirectory -PathType Container)){throw 'D盘TEMP目录不存在'}

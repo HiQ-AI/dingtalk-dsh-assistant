@@ -245,7 +245,9 @@ C 盘空间不足时，本轮保留计划任务定义，以原 start-web.ps1 和
 
 该路径临时禁用精确的 `DSH Web Local` 自启任务，原来已禁用则保持禁用；只有新实例验证和恢复派发完成后才恢复原来的启用状态。接入或启动失败保留停机/维护及证据，按 `enrollment-autostart.json` 和原生接入 journal 恢复，禁止删除 journal 后重来。`-HoldMaintenance` 会保留维护及临时禁用状态，后续使用原部署参数 `-Resume` 完成回读、恢复派发和自启。
 
-使用验收目录 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1`，先 `-Check`，参数必须提供精确新包 `-Package`、双项目配置 `-Bundle`、合并策略 `-MergePolicy`、当前 profile 摘要 `-ExpectedProfileSha256`、包摘要 `-ExpectedPackageSha256`、新的 `docs/tmp/` 证据目录 `-EvidenceDirectory`。自检不创建证据目录，不改配置或启动实例。去掉 `-Check` 才部署；仅维护人员执行。
+先把同一正式版本的 Assistant 与 Observer 发行 tgz 存入 `D:/dsh_home/packages`，文件名包含版本和摘要前缀；分别核对下载来源及完整 SHA-256，发现同名异内容立即停止，不能覆盖。该目录是 profile `file:` 依赖的持久来源，不能用工作树 `docs/tmp/` 包路径安装；只在确认 profile、锁文件和部署证据均不再引用后清理旧包。部署工具的预检拒绝不在该目录直接子级的包及链接。
+
+使用验收目录 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1`，先 `-Check`，参数必须提供上述持久目录中的精确新包 `-Package`、双项目配置 `-Bundle`、合并策略 `-MergePolicy`、当前 profile 摘要 `-ExpectedProfileSha256`、包摘要 `-ExpectedPackageSha256`、新的 `docs/tmp/` 证据目录 `-EvidenceDirectory`。自检不创建证据目录，不改配置或启动实例。去掉 `-Check` 才部署；仅维护人员执行。
 
 允许已排空的 waiting 任务留待新版本恢复，但 running 节点/Owner、未排空节点或 starting/executing/unknown 效果一律阻断。准备失败遗留 unknown 先按专用单次对账规程处理，不能靠部署放宽门禁。脚本要求原实例具备正式维护接口；已离线或尚无维护接口的旧实例拒绝使用此自动部署路径，须先完成独立停机与恢复方案，不能退回“读取排空后强停”的有竞争路径。
 
