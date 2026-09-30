@@ -65,6 +65,23 @@ test('DWS历史图片消息保留可下载资源引用', () => {
   assert.deepEqual(normalized.resourceRefs, [{ type: 'mediaId', resourceId: 'media-1' }])
 })
 
+test('文件卡片事件恢复 fileId，历史投影保留同名资源及下载元数据', async () => {
+  const base = '[文件] 验收 报告.xlsx fileId: file-1'
+  let callback, received
+  const runtime = { listGroups: () => [{ groupId: 'g', messages: [] }], isWorkflowGroup: () => true,
+    onGroupSubscribed: () => () => {}, onOutboxAppended: () => () => {},
+    async ingest(message) { received = message; return { accepted: true } } }
+  const stop = startDwsBridge({ runtime, adapter: { startGroupSubscription(_id, handler) { callback = handler; return { done: Promise.resolve(), stop() {} } } },
+    logger: { warn(error) { throw error } }, groupBackfillIntervalMs: 0, humanPollIntervalMs: 0, outboxRetryIntervalMs: 0 })
+  try {
+    await callback({ conversation_id: 'g', message_id: 'm', content: `${base} 注意：如需下载使用dws drive download命令下载` })
+    assert.deepEqual(received.resourceRefs, [{ type: 'fileId', resourceId: 'file-1', name: '验收 报告.xlsx' }])
+    const resource = { ...received.resourceRefs[0], download: { ready: true } }
+    assert.deepEqual(normalizeHistoryMessage({ messageId: 'm', text: base, resourceRefs: [resource] }, 'g').resourceRefs, [resource])
+    assert.equal(normalizeHistoryMessage({ messageId: 'plain', text: `${base} 追加业务要求` }, 'g').resourceRefs, undefined)
+  } finally { await stop() }
+})
+
 test('补拉完成只证明可靠接收，未完成的 Topic 不阻塞同批后续消息', async () => {
   const group = { groupId: 'g', messages: [], topics: [{ topicId: 't', revision: 2, processedRevision: 0 }] }
   const received = [], snapshots = []

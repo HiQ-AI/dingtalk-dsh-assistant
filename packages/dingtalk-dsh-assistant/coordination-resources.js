@@ -37,7 +37,7 @@ const refsFor = message => {
 }
 
 // DWS 事件文件卡片带下载提示，精确消息回读不带；只接受同名、同 fileId 的这一种展示差异。
-const sameDwsFileProjection = (message, remote) => {
+export const sameDwsFileProjection = (message, remote) => {
   if (message.sourceKind !== 'dingtalk' || typeof remote.text !== 'string'
     || message.text !== `${remote.text} 注意：如需下载使用dws drive download命令下载`) return false
   const file = /^\[文件\] (.+) fileId: ([^\s]+)$/u.exec(remote.text)
