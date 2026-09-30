@@ -27,7 +27,7 @@ window.__ModuleLoader__.load({
         [data-dingtalk-assistant-settings] .assistant-inline-form > button { width: 100%; }
       }
     `
-    const UPDATE_COMMAND = 'dsh plugin --profile web add @zzusp/dingtalk-dsh-assistant@latest @zzusp/dingtalk-dsh-observer@latest --save-exact'
+    const UPDATE_PROMPT = '请按 https://github.com/HiQ-AI/dingtalk-dsh-assistant 的 docs/ops/npm-release.md 与 docs/ops/resident-review-local-deployment.md 升级本机 web profile。先核对当前安装形态、目标正式版本和在途任务；按规程完成零写预检、维护排空、安全停机与备份，再安装同一版本的精确包。重启后分别回读安装内容、进程、Runtime 与认证 Web；任何门禁失败即停止并报告。'
 
     function UpdateDot() {
       return React.createElement('span', { 'aria-hidden': true, style: { width: 7, height: 7, borderRadius: '50%', background: colors.danger, flex: 'none' } })
@@ -200,10 +200,10 @@ window.__ModuleLoader__.load({
                 overview?.version?.updateAvailable ? React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 22, boxSizing: 'border-box', padding: '2px 8px', border: `1px solid color-mix(in srgb, ${colors.danger} 28%, transparent)`, borderRadius: 999, color: colors.danger, background: `color-mix(in srgb, ${colors.danger} 10%, transparent)`, fontSize: 11, fontWeight: 500, lineHeight: 1.4, whiteSpace: 'nowrap' } }, React.createElement(UpdateDot), '可更新') : null,
                 overview?.version?.latestVersion === null ? '尚无正式 Release' : (overview?.version?.latestVersion ?? '检查中'))),
           React.createElement('div', { style: { display: 'grid', gap: 8, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } },
-            React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, '更新命令 · 执行后重启 DSH Web'),
+            React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, '升级提示词 · 复制给工程助手'),
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minHeight: 34, padding: '4px 4px 4px 10px', border: `1px solid ${colors.border}`, borderRadius: 8, background: 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,.06))' } },
-              React.createElement('code', { style: { minWidth: 0, flex: 1, fontSize: 11, lineHeight: 1.5, overflowWrap: 'anywhere', userSelect: 'all' } }, UPDATE_COMMAND),
-              React.createElement('button', { type: 'button', style: { ...button, padding: '5px 10px', whiteSpace: 'nowrap' }, onClick: async () => { try { await navigator.clipboard.writeText(UPDATE_COMMAND); setUpdateFeedback('更新命令已复制，执行后重启 DSH。') } catch { setUpdateFeedback(`请在终端执行：${UPDATE_COMMAND}`) } } }, '复制'))),
+              React.createElement('code', { style: { minWidth: 0, flex: 1, fontSize: 11, lineHeight: 1.5, overflowWrap: 'anywhere', userSelect: 'all' } }, UPDATE_PROMPT),
+              React.createElement('button', { type: 'button', style: { ...button, padding: '5px 10px', whiteSpace: 'nowrap' }, onClick: async () => { try { await navigator.clipboard.writeText(UPDATE_PROMPT); setUpdateFeedback('升级提示词已复制。') } catch { setUpdateFeedback(`请复制提示词：${UPDATE_PROMPT}`) } } }, '复制提示词'))),
           updateFeedback ? React.createElement('div', { role: 'status', style: { color: colors.muted, fontSize: 12, overflowWrap: 'anywhere' } }, updateFeedback) : null,
           overview?.version?.changelogUrl ? React.createElement('a', { href: overview.version.changelogUrl, target: '_blank', rel: 'noreferrer', style: { color: colors.accent } }, '查看 CHANGELOG') : null),
         React.createElement(Environment, { value: overview?.environment }),

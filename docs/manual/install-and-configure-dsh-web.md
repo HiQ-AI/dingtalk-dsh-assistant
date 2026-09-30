@@ -33,33 +33,36 @@ Node.js 必须为 `v24` 或更高版本。仅能执行 `dsh --help` 不代表 We
 
 ## 二、安装或升级正式版本
 
-固定安装当前版本：
+全新 profile 固定安装根发行包，以 1.0.0 为例：
 
 ```powershell
-dsh plugin --profile web add dingtalk-dsh-assistant@0.5.8
+dsh plugin --profile web add dingtalk-dsh-assistant@1.0.0 --save-exact
 ```
 
-如需安装 npm 上的最新版本，可省略版本号：
+如需升级到更新的正式版，先查询已发布版本，再将命令中的版本号替换为同一个精确版本；不要依赖执行时可能变化的 `@latest`：
 
 ```powershell
-dsh plugin --profile web add dingtalk-dsh-assistant
+npm view dingtalk-dsh-assistant dist-tags.latest --registry https://registry.npmjs.org
 ```
 
-该命令直接修改 `%USERPROFILE%\.dsh\profiles\web`，入口包会带入 Assistant、Observer 及其 Web bundle patch。普通安装不需要再手工编辑 `web/package.json` 添加两个内部包。
+查询命令只读；上面的 `dsh plugin add` 命令才会修改实际 `DSH_HOME` 下的 `profiles/web`。根入口包会带入 Assistant、Observer 及其 Web bundle patch；全新安装不需要手工添加两个内部包。
 
-升级已安装版本：
+已有 profile 升级前先按[发布与升级边界](../ops/npm-release.md#100-升级边界)及[本地部署规程](../ops/resident-review-local-deployment.md)核对在途任务、存储与备份，完成维护排空和停机。先查看 profile 的直接依赖；若直接依赖根包，使用根包精确版本命令。若只直接依赖两个内部包，使用同一版本的两个内部包，不能只添加根包而把旧直接依赖留在 profile。以 1.0.0 为例，后者的安装命令为：
 
 ```powershell
-dsh plugin --profile web add @zzusp/dingtalk-dsh-assistant@latest @zzusp/dingtalk-dsh-observer@latest --save-exact
+dsh plugin --profile web add @zzusp/dingtalk-dsh-assistant@1.0.0 @zzusp/dingtalk-dsh-observer@1.0.0 --save-exact
 ```
 
-DSH Web 会对比 GitHub 最新 Release。“设置 → 插件 → 钉钉个人助理”的“版本与更新”卡片显示版本状态，支持手动检查更新，并可直接查看、复制完整更新命令。该入口只复制上述 DSH 原生命令，不会在运行中覆盖宿主依赖；执行命令后仍需完全重启 DSH Web。
+DSH Web 会对比 GitHub 最新 Release。“设置 → 插件 → 钉钉个人助理”的“版本与更新”卡片显示版本状态，并提供可复制的升级提示词，由工程助手按实际安装形态及部署规程操作。提示词不是可直接执行的热更新命令。
 
 安装或升级后，先在 profile 中确认实际版本，再完全重启 DSH Web：
 
 ```powershell
-$profilePackage = Get-Content -Raw "$env:USERPROFILE\.dsh\profiles\web\package.json" | ConvertFrom-Json
+$dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } elseif ([Environment]::GetEnvironmentVariable('DSH_HOME', 'User')) { [Environment]::GetEnvironmentVariable('DSH_HOME', 'User') } else { Join-Path $env:USERPROFILE '.dsh' }
+$profilePackage = Get-Content -Raw (Join-Path $dshHome 'profiles/web/package.json') | ConvertFrom-Json
 $profilePackage.dependencies.'dingtalk-dsh-assistant'
+$profilePackage.dependencies.'@zzusp/dingtalk-dsh-assistant'
+$profilePackage.dependencies.'@zzusp/dingtalk-dsh-observer'
 ```
 
 正式版本与三个 tgz 也可从 [GitHub Releases](https://github.com/HiQ-AI/dingtalk-dsh-assistant/releases) 获取。只下载 tgz 不会自动修改 profile；优先使用 `dsh plugin`，避免手工依赖和 bundle 不一致。
