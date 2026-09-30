@@ -3,9 +3,11 @@ import { dispatchOutbox, matchesOutbound } from './dws-adapter.js'
 const meaningful = (value) => typeof value === 'string' && value.trim() !== '' && value.trim().toLowerCase() !== 'null'
 
 function normalizeResourceRefs(value, text) {
-  const supplied = Array.isArray(value) ? value.filter((item) => item?.type === 'mediaId' && typeof item.resourceId === 'string') : []
+  const supplied = Array.isArray(value) ? value.filter((item) => ['mediaId', 'fileId'].includes(item?.type) && typeof item.resourceId === 'string') : []
   const found = [...String(text ?? '').matchAll(/\[图片消息\]\(mediaId=([^\)]+)\)/gu)].map((match) => ({ type: 'mediaId', resourceId: match[1] }))
-  return [...new Map([...supplied, ...found].map((item) => [`${item.type}:${item.resourceId}`, item])).values()]
+  const file = /^\[文件\] (.+) fileId: ([^\s]+)(?: 注意：如需下载使用dws drive download命令下载)?$/u.exec(String(text ?? ''))
+  if (file) found.push({ type: 'fileId', resourceId: file[2], name: file[1] })
+  return [...new Map([...found, ...supplied].map((item) => [`${item.type}:${item.resourceId}`, item])).values()]
 }
 
 function normalizeEvent(event) {

@@ -1245,6 +1245,31 @@ test('无可信消息编辑版本不能把变更正文当重复消息或新授�
   await assert.rejects(service.ingest({ ...message, text: '先不要执行' }), /WORKFLOW_EDIT_VERSION_REQUIRED/)
 })
 
+for (const eventFirst of [true, false]) test(`文件卡片下载提示展示差异不生成新版本或重复执行：eventFirst=${eventFirst}`, async t => {
+  const { service, execution, message } = await fixture(t)
+  const base = '[文件] 验收.xlsx fileId: file-1'
+  const hint = ' 注意：如需下载使用dws drive download命令下载'
+  const resources = [{ type: 'fileId', resourceId: 'file-1', name: '验收.xlsx' }]
+  const first = { ...message, text: eventFirst ? base + hint : base, resourceRefs: resources }
+  const repeated = { ...first, text: eventFirst ? base : base + hint }
+  const accepted = await service.ingest(first)
+  assert.deepEqual(await service.ingest(repeated), { accepted: true, duplicate: true, runId: accepted.runId, processing: 'pending' })
+  const state = await service.state(accepted.runId)
+  assert.equal(state.run.body, first.text)
+  assert.equal(state.run.sourceVersion, 1)
+  assert.deepEqual(state.run.context.attachments.map(item => item.source), resources)
+  assert.deepEqual(await execution.store.query({ kind: 'run.list' }), [])
+  for (const changed of [
+    { ...repeated, senderOpenDingTalkId: 'other' },
+    { ...repeated, text: repeated.text.replace('验收.xlsx', '另一个.xlsx') },
+    { ...repeated, resourceRefs: [{ ...resources[0], resourceId: 'other' }] },
+    { ...repeated, resourceRefs: [{ ...resources[0], name: 'other.xlsx' }] },
+    { ...repeated, resourceRefs: [] },
+    { ...repeated, resourceRefs: [...resources, { type: 'fileId', resourceId: 'another', name: 'another.xlsx' }] },
+    { ...repeated, text: repeated.text + ' 追加要求' },
+  ]) await assert.rejects(service.ingest(changed), /WORKFLOW_EDIT_VERSION_REQUIRED/)
+})
+
 test('Web与IM引用同一澄清首终态生效，无权拒绝且答复不新建消息或重跑S', async t => {
   let splits = 0
   const notifications = { canDisclose: async () => true, send: async () => ({ messageId: 'question-message' }), readback: async () => ({ messageId: 'question-message', conversationId: 'g' }) }

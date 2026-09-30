@@ -33,6 +33,7 @@ import { createAgentQueryTools, verifyAgentEvidence } from './agent-query-tools.
 import { createAgentResourceReadCapability } from './agent-query-resources.js'
 import { createAgentDatabaseReadCapability, createRegisteredPostgresConnector } from './agent-query-database.js'
 import { createAgentStatusReadCapability } from './agent-query-status.js'
+import { sameDwsFileProjection } from './coordination-resources.js'
 
 const readableNodeOutputRef = node => node.outputRef ?? (node.waitReason?.reference?.startsWith('LOCAL_ACCEPTANCE_') ? node.evidenceRefs?.at(-1) : null)
 
@@ -2176,7 +2177,10 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     if (existing && sourceVersion < existing.sourceVersion)
       return { accepted: true, duplicate: true, runId: existing.aliasOf ?? existing.runId, processing: existing.status }
     if (existing && existing.sourceVersion === sourceVersion) {
-      if (existing.body !== message.text || existing.actorId !== actorId) throw executionError('WORKFLOW_EDIT_VERSION_REQUIRED')
+      // 事件文件卡片附带 DWS 下载提示；回补不带。只接受资源身份严格相同的这一项展示差异。
+      const sameFile = sameDwsFileProjection({ sourceKind: 'dingtalk', text: existing.body }, message)
+        || sameDwsFileProjection({ sourceKind: 'dingtalk', text: message.text }, { text: existing.body, resourceRefs: message.resourceRefs })
+      if (existing.actorId !== actorId || existing.body !== message.text && !sameFile) throw executionError('WORKFLOW_EDIT_VERSION_REQUIRED')
       return { accepted: true, duplicate: true, runId: existing.aliasOf ?? existing.runId, processing: existing.status }
     }
     if (existing && sourceVersion > existing.sourceVersion && existing.body === message.text && existing.actorId === actorId) {

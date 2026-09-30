@@ -1,0 +1,9 @@
+case,round,status,evidence
+baseline-file-projection-conflict,1,PASS,round-1.md
+bridge-and-coordination-47-cases,1,PASS,round-1.md
+workflow-file-and-edit-6-cases,1,PASS,round-1.md
+remote-exact-message-readback,1,PASS,round-1.md
+deployment-preflight,1,PASS,round-1.md
+installed-process-history-health,2,PENDING,round-2.md
+original-message-version-preserved,2,PENDING,round-2.md
+delayed-health-and-no-restart,2,PENDING,round-2.md
