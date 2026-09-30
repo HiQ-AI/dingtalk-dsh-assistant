@@ -35,9 +35,14 @@ test('设置页异步展示版本状态且版本检查不阻塞核心配置加�
   assert.match(source, /版本与更新/u)
   assert.match(source, /新版本检查失败/u)
   assert.match(source, /可更新/u)
-  assert.match(source, /dsh plugin --profile web add @zzusp\/dingtalk-dsh-assistant@latest @zzusp\/dingtalk-dsh-observer@latest --save-exact/u)
-  assert.match(source, /更新命令/u)
-  assert.match(source, /'复制'/u)
+  for (const file of ['client.js', 'web-client.js']) {
+    const ui = await readFile(new URL(`../packages/dingtalk-dsh-assistant/${file}`, import.meta.url), 'utf8')
+    assert.match(ui, /升级提示词/u)
+    assert.match(ui, /当前安装形态、目标正式版本和在途任务/u)
+    assert.match(ui, /维护排空、安全停机与备份/u)
+    assert.match(ui, /'复制提示词'/u)
+    assert.doesNotMatch(ui, /UPDATE_COMMAND|@latest @zzusp\/dingtalk-dsh-observer@latest/u)
+  }
   assert.doesNotMatch(source, /dingtalkPluginUpdate/u)
   assert.doesNotMatch(source, /sidebar\.footer\.action/u)
   assert.doesNotMatch(source, /IconDownloadOutline16/u)
