@@ -146,7 +146,7 @@ jobs:
             "@zzusp/dingtalk-dsh-assistant@$version",
             "dingtalk-dsh-assistant@$version"
           )
-          $maxAttempts = 12
+          $maxAttempts = 60
           $retryDelaySeconds = 10
           foreach ($package in $expected) {
             for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
@@ -161,4 +161,22 @@ jobs:
               Start-Sleep -Seconds $retryDelaySeconds
             }
           }
-          gh release create $env:RELEASE_TAG docs/tmp/packages/*.tgz --verify-tag --title $env:RELEASE_TAG --generate-notes
+          $releaseJson = gh release view $env:RELEASE_TAG --json tagName,isDraft,isPrerelease,assets 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:RELEASE_TAG docs/tmp/packages/*.tgz --verify-tag --title $env:RELEASE_TAG --generate-notes
+            if ($LASTEXITCODE -ne 0) { throw 'github_release_create_failed' }
+          }
+          $releaseJson = gh release view $env:RELEASE_TAG --json tagName,isDraft,isPrerelease,assets
+          if ($LASTEXITCODE -ne 0) { throw 'github_release_readback_failed' }
+          $release = $releaseJson | ConvertFrom-Json
+          $packages = @(Get-ChildItem -LiteralPath docs/tmp/packages -Filter '*.tgz')
+          if ($packages.Count -ne 3 -or $release.tagName -ne $env:RELEASE_TAG -or $release.isDraft -or $release.isPrerelease -or $release.assets.Count -ne $packages.Count) {
+            throw 'github_release_metadata_mismatch'
+          }
+          foreach ($file in $packages) {
+            $assetRows = @($release.assets | Where-Object { $_.name -eq $file.Name })
+            $sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($assetRows.Count -ne 1 -or $assetRows[0].size -ne $file.Length -or $assetRows[0].digest -ne "sha256:$sha256") {
+              throw "github_release_asset_mismatch_$($file.Name)"
+            }
+          }
