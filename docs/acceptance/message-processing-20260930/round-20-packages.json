@@ -1,0 +1,18 @@
+[
+  {
+    "package": "D:/dsh_home/packages/zzusp-dingtalk-dsh-assistant-1.0.0-message-clock-7ddd336d5c1d.tgz",
+    "proof": {
+      "verifiedFiles": 99,
+      "sha256": "7ddd336d5c1d113697f100f7212f97104ec07ec9db68b3dd6d669bce6b7834f7"
+    },
+    "bytes": 629733
+  },
+  {
+    "package": "D:\\dsh_home\\packages\\zzusp-dingtalk-dsh-observer-1.0.0-message-repair-69fc1d14e7ff.tgz",
+    "bytes": 36157,
+    "proof": {
+      "verifiedFiles": 4,
+      "sha256": "69fc1d14e7ff5fdf48d2d36a3b309766ed506784c0b647def68d4f2ed5d80d53"
+    }
+  }
+]

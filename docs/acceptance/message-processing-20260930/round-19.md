@@ -12,3 +12,10 @@
 ## 本机证据
 
 round-19-integration.log、round-19-notifications.log、round-19-deploy-check.log；docs/tmp/message-processing-deploy/notification-dryrun-summary.json与notification-evidence/。原始消息及模型输出不提交公开仓库。
+
+## 正式运行回读
+
+- 补充包已部署，新PID36676，双包文件一致，认证Web303/200、health=ok、recoveryIssueCount=0；正式Resume后maintenance revision159、active=false。
+- #111、#113的等待通知及#115的系统失败通知已独立回读为delivered，证明旧Owner报告冲突不再阻断通知。原始ACK/回读摘要留本机。
+- 重放暴露新的时钟缺陷：维护期reprocess已activate，#115尚无任何节点就因MESSAGE_DEADLINE_BEFORE_CLAIM:S:$被置为needs_attention。已进入维护revision160并排空，继续修复首次领取前不应消耗执行窗口的问题。
+- A14本轮仍FAIL；真实已送达的失败通知不等于成功承接。

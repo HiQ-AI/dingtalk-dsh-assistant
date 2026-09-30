@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { digest, messageSchemas, prepareMessageContext, splitContext, validateSplit, validateExecutionMaterialRefs, validateContextRequests, unitContext, candidateCards, intentContext, shareTopicContext } from './message-context.js'
 import { prepareMessageRequest, messageProjectionVersion } from './message-model.js'
-import { isPassiveTaskProgress, isQuietGroupMessage } from './message-ledger.js'
+import { isPassiveTaskProgress, isQuietGroupMessage, messageExecutionStartedAt } from './message-ledger.js'
 import { wholeTopicFactRevision } from './message-topics.js'
 import { isNamedAgentDirection } from './decision.js'
 
@@ -133,7 +133,7 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (closed) return null
       const current = await state(runId)
       if (revision(current) !== rev) return null
-      const deadline = current.run.deadline
+      const deadline = messageExecutionStartedAt(current.run, current.nodes) ? current.run.deadline : null
       const remaining = stage === 'IB' ? config.attemptMs : deadline ? Number(new Date(deadline)) - clock() - config.commitReserveMs : config.attemptMs
       if (remaining <= 0) { await cmd('message.attention', { runId, unitId, reason: `MESSAGE_DEADLINE_BEFORE_CLAIM:${stage}:${unitId}` }); return null }
       const claimed = await cmd('message.node.claim', { runId, unitId, nodeId: stage, expectedRevision: rev, estimatedInputTokens: prepared ? inputBytes + 256 : 0, maxOutputTokens: prepared ? outputLimit : 0, input: prepared ? { ...input, inputBytes, inputHash: prepared.inputHash, inputReadyAt: clock() } : { deterministic: true, ...(input.contextHash ? { contextHash: input.contextHash } : {}), inputHash: digest(input), inputReadyAt: clock() } })
@@ -682,6 +682,10 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         return process(run.runId)
       }
       if (run.status === 'needs_attention') {
+        if (!messageExecutionStartedAt(run, readonly.nodes) && !readonly.commands.length && /^(?:MESSAGE_DEADLINE_BEFORE_CLAIM:|recovery_exhausted$)/u.test(run.reason ?? '')) {
+          await cmd('message.recover', { runId: run.runId })
+          return process(run.runId)
+        }
         const stage = run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:S:$:') ? 'S' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:R:') ? 'R' : run.reason?.startsWith('MESSAGE_CONTEXT_CAPACITY:I:') ? 'I' : null
         const version = stage ? `${messageProjectionVersion}:${stage}:${digest([run.sourceVersion, run.snapshot?.snapshotId, prepareMessageRequest(stage, {}).system]).slice(0, 16)}` : null
         if (!version || run.capacityRetryVersion === version) {

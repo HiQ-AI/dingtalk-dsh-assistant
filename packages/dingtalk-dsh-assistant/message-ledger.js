@@ -2,6 +2,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { sameDwsFileProjection } from './coordination-resources.js'
 import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic, invalidateMessageSourceTopics, unbindMessageUnit, wholeTopicFactRevision } from './message-topics.js'
 
+// 排队和维护不算执行时间；旧账以真实模型领取时间推导，不能重置已用预算。
+export function messageExecutionStartedAt(run, nodes) {
+  const times = [run.executionStartedAt, ...nodes.filter(node => node.input?.deterministic !== true).map(node => node.startedAt)]
+    .map(value => Date.parse(value)).filter(Number.isFinite)
+  return times.length ? new Date(Math.min(...times)).toISOString() : null
+}
+
 export function isPassiveTaskProgress(body) {
   if (typeof body !== 'string') return false
   const text = body.trim()
@@ -601,7 +608,11 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const resolvedSplitRequests=rows(db,old.runId,'request').filter(item=>item.status==='resolved'&&item.nodeId==='S'&&item.unitId==='$'&&item.kind==='needs_clarification')
     const answeredNotice=item=>oldCommands.length===0&&item.status==='delivered'&&!item.commandId
       &&item.payload?.conversationId===old.conversationId&&resolvedSplitRequests.some(request=>request.id===item.requestId)
-    if(oldNotifications.some(item=>!['prepared','superseded'].includes(item.status)&&!answeredNotice(item)))fail('MESSAGE_REPROCESS_EFFECT_PENDING')
+    const deliveredState=item=>oldCommands.length===0&&item.status==='delivered'&&!item.commandId
+      &&item.payload?.conversationId===old.conversationId
+      &&['attention','routing_wait','system_wait'].includes(item.payload?.phase)
+      &&(item.stateFact?.phase===item.payload.phase||item.payload.phase==='system_wait'&&rows(db,old.runId,'request').some(request=>request.id===item.requestId&&request.kind==='needs_context'))
+    if(oldNotifications.some(item=>!['prepared','superseded'].includes(item.status)&&!answeredNotice(item)&&!deliveredState(item)))fail('MESSAGE_REPROCESS_EFFECT_PENDING')
     const rejectedFacts=old.status==='settled'&&oldUnits.length>0&&oldCommands.length>0
       && oldCommands.every(item=>item.kind==='fact'&&item.status==='rejected')
       && oldNotifications.every(item=>item.status==='prepared')
@@ -620,7 +631,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const next={...old,runId:a.newRunId,sourceVersion:old.sourceVersion+1,revision:0,status:'pending',routingStatus:'routing_pending',intentStatus:null,createdAt:now,
       context:{...old.context,occurredAt:old.context?.occurredAt??origin.context?.occurredAt??origin.createdAt,replayOf:origin.runId,replayOfSequenceId:sequence},snapshot:null,
       budgetBaseline:spent,policy:{...old.policy,...currentWindowPolicy(a.policy),effectiveMaxClaims:undefined},deadline:new Date(Date.parse(now)+(a.policy?.initialWindowMs??old.policy.initialWindowMs??45000)).toISOString()}
-    delete next.activatedAt;delete next.reason;delete next.capacityRetryVersion;delete next.attentionScope;delete next.attentionUnitIds
+    delete next.activatedAt;delete next.executionStartedAt;delete next.reason;delete next.capacityRetryVersion;delete next.attentionScope;delete next.attentionUnitIds
     db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(next.runId,next.sourceKey,next.sourceVersion,json(next))
     db.prepare('UPDATE message_sources SET current_version=? WHERE source_key=?').run(next.sourceVersion,next.sourceKey)
     registerMessageImpact(db,next,now)
@@ -909,7 +920,13 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     return {result:{run:r,retry:true}}
   }
   if(kind==='message.relink') {const u=get(db,'unit',a.unitId);if(u.runId!==r.runId)fail('MESSAGE_STALE');if(rows(db,r.runId,'command').some(c=>c.unitId===u.id&&['running','unknown','applied'].includes(c.status)))fail('MESSAGE_CORRECTION_EFFECT_PENDING');revoke(db,r,[u.id]);unbindMessageUnit(db,u.id,now);const s=db.prepare('SELECT corrections FROM message_sources WHERE source_key=?').get(r.sourceKey);db.prepare('UPDATE message_sources SET corrections=corrections+1 WHERE source_key=?').run(r.sourceKey);u.status='pending';delete u.topicId;delete u.routingBinding;r.routingStatus='routing_pending';r.intentStatus=null;u.corrections=(u.corrections??0)+1;put(db,r.runId,'unit',u);save(db,r);if(u.corrections>1||s.corrections>=r.policy.maxCorrections){r.status='needs_attention';r.reason='correction_budget_exhausted';r.routingStatus='routing_blocked';save(db,r);return {result:{run:r,unit:u}}}return {result:{run:r,unit:u}}}
-  if(kind==='message.recover') { if(r.status==='waiting'||r.status==='settled')fail('MESSAGE_NOT_RECOVERABLE'); if((r.recoveryWindows??0)>=2||Date.parse(now)-Date.parse(r.createdAt)>600000){r.status='needs_attention';r.reason='recovery_exhausted';save(db,r);return {result:{run:r}}}r.recoveryWindows=(r.recoveryWindows??0)+1;r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();r.status='pending';save(db,r);return {result:{run:r}} }
+  if(kind==='message.recover') {
+    if(r.status==='waiting'||r.status==='settled')fail('MESSAGE_NOT_RECOVERABLE')
+    const started=messageExecutionStartedAt(r,rows(db,r.runId,'node'))??(rows(db,r.runId,'command').length?r.createdAt:null)
+    if(started&&((r.recoveryWindows??0)>=2||Date.parse(now)-Date.parse(started)>600000)){r.status='needs_attention';r.reason='recovery_exhausted';save(db,r);return {result:{run:r}}}
+    if(started){r.executionStartedAt=started;r.recoveryWindows=(r.recoveryWindows??0)+1}
+    r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();r.status='pending';r.reason=null;save(db,r);return {result:{run:r}}
+  }
   if(kind==='message.snapshot') {r.snapshot=a.snapshot;save(db,r);return {result:{run:r}}}
   if(kind==='message.correction.begin') {
     const s=db.prepare('SELECT corrections FROM message_sources WHERE source_key=?').get(r.sourceKey)
@@ -950,7 +967,8 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(r.status==='needs_attention'&&(a.unitId==='$'||r.attentionScope!=='unit'))fail('MESSAGE_NEEDS_ATTENTION')
     if(!['S','R','I','IB','answer','material'].includes(a.nodeId))fail('MESSAGE_INVALID_NODE')
     if(a.unitId!=='$'&&get(db,'unit',a.unitId).runId!==r.runId)fail('MESSAGE_STALE')
-    if(a.nodeId!=='IB'&&Date.parse(r.deadline)<=Date.parse(now))fail('MESSAGE_DEADLINE_EXCEEDED')
+    const executionStarted=messageExecutionStartedAt(r,rows(db,r.runId,'node'))
+    if(executionStarted&&a.nodeId!=='IB'&&Date.parse(r.deadline)<=Date.parse(now))fail('MESSAGE_DEADLINE_EXCEEDED')
     const s=db.prepare('SELECT claims,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(r.sourceKey)
     const baseline=r.budgetBaseline??{claims:0,input_tokens:0,output_tokens:0}
     const deterministic=a.input?.deterministic===true
@@ -963,13 +981,14 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const n={id:previous?.id??randomUUID(),nodeRunId:previous?.id??null,runId:r.runId,unitId:a.unitId,nodeId:a.nodeId,revision:r.revision,leaseEpoch:(previous?.leaseEpoch??0)+1,status:'running',input:a.input,reservedTokens:reserve,createdAt:previous?.createdAt??now,startedAt:now};n.nodeRunId=n.id
     if(a.nodeId==='IB')topicRunsStatus(db,a.input.topicId,'intent_judging')
     db.prepare('UPDATE message_sources SET claims=claims+?,input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE source_key=?').run(deterministic?0:1,reserve.input,reserve.output,r.sourceKey)
+    if(!deterministic&&!executionStarted){r.executionStartedAt=now;r.deadline=new Date(Date.parse(now)+(r.policy.initialWindowMs??45000)).toISOString();save(db,r)}
     put(db,r.runId,'node',n);return {result:{node:n}}
   }
   if(kind==='message.node.complete'||kind==='message.node.fail') {
     const n=get(db,'node',a.nodeRunId)
     if(n.runId!==r.runId||n.revision!==r.revision||n.leaseEpoch!==a.leaseEpoch||n.status!=='running')fail('MESSAGE_NODE_STALE')
     if(a.usage) { const used={input:a.usage.inputTokens,output:a.usage.outputTokens};if(!Object.values(used).every(x=>Number.isSafeInteger(x)&&x>=0))fail('MESSAGE_INVALID_BUDGET');db.prepare('UPDATE message_sources SET input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE source_key=?').run(used.input-n.reservedTokens.input,used.output-n.reservedTokens.output,r.sourceKey);n.usage=used }
-    if(kind.endsWith('complete')&&n.nodeId!=='IB'&&Date.parse(now)>Date.parse(r.deadline))fail('MESSAGE_DEADLINE_EXCEEDED')
+    if(kind.endsWith('complete')&&n.nodeId!=='IB'&&messageExecutionStartedAt(r,rows(db,r.runId,'node'))&&Date.parse(now)>Date.parse(r.deadline))fail('MESSAGE_DEADLINE_EXCEEDED')
     n.status=kind.endsWith('complete')?'succeeded':'failed';n.output=a.output??null;n.error=a.error??null;n.retryAt=a.retryAt??null;n.completedAt=now
     if(n.status==='succeeded'){r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)}
     put(db,r.runId,'node',n);return {result:{node:n}}

@@ -722,3 +722,51 @@ test('已答复澄清仍不能重放已有业务命令',async t=>{
  await bad(f.call('reprocess',{runId:'m',newRunId:'m-replay'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
  assert.equal((await f.store.query({kind:'message.source',sourceKey:'m'})).runId,'m')
 })
+
+test('首次模型领取前维护排队不耗执行窗口，旧无节点超时正常恢复',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{policy:{initialWindowMs:90000}}));await f.call('activate',{runId:'m'})
+ await f.editSnapshot(db=>{const row=db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('m');const r=JSON.parse(row.body);r.createdAt='2020-01-01T00:00:00.000Z';r.deadline=r.createdAt;r.status='needs_attention';r.reason='MESSAGE_DEADLINE_BEFORE_CLAIM:S:$';db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),'m')})
+ let calls=0
+ const workflow=createMessageWorkflow({store:f.store,judge:async({input})=>{calls++;return {kind:'no_action',reason:'只有材料',coverage:[{start:0,end:input.sourceLength}]}}})
+ t.after(()=>workflow.close());await workflow.recover()
+ const state=await workflow.state('m');assert.equal(calls,1);assert.equal(state.run.status,'settled');assert.ok(Date.parse(state.run.executionStartedAt)>Date.parse('2025-01-01'));assert.equal(state.run.recoveryWindows??0,0)
+})
+
+test('已有模型领取的旧账从真实startedAt恢复年龄，不重置十分钟预算',async t=>{
+ const f=await fixture(t);await f.call('receive',receive());await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0})
+ await f.editSnapshot(db=>{const r=JSON.parse(db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('m').body);delete r.executionStartedAt;db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),'m');for(const row of db.prepare("SELECT rowid,body FROM message_items WHERE kind='node'").all()){const n=JSON.parse(row.body);n.startedAt='2020-01-01T00:00:00.000Z';db.prepare('UPDATE message_items SET body=? WHERE rowid=?').run(JSON.stringify(n),row.rowid)}})
+ assert.equal((await f.call('recover',{runId:'m'})).result.run.reason,'recovery_exhausted')
+})
+
+test('无业务命令已送达纯状态通知允许重处理并保留旧回执',async t=>{
+ const f=await fixture(t);await f.call('receive',receive());await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+ await f.call('notification.prepare',{runId:'m',notificationId:'state',stateFact:{revision:0,status:'needs_attention',reason:'recovery_exhausted',intentStatus:null,phase:'attention'},payload:{phase:'attention',conversationId:'g',text:'系统等待'},disclosure:{conversationId:'g',authorizationRef:'m'}})
+ const notice=(await f.call('notification.claim',{notificationId:'state'})).result.notification
+ await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+ await f.call('notification.sent',{notificationId:'state',leaseEpoch:notice.leaseEpoch,ack:{messageId:'out'}})
+ await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+ await f.call('notification.readback',{notificationId:'state',leaseEpoch:notice.leaseEpoch,evidence:{messageId:'out'}})
+ const before=await f.store.query({kind:'message.notification',notificationId:'state'})
+ assert.equal((await f.call('reprocess',{runId:'m',newRunId:'next'})).result.run.sourceVersion,2)
+ assert.deepEqual(await f.store.query({kind:'message.notification',notificationId:'state'}),before)
+})
+
+test('维护禁止首个模型领取且不启动执行钟，解除后过期排队来源可首次领取',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{policy:{initialWindowMs:90000}}));await f.call('activate',{runId:'m'})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'clock-test',actorId:'owner',reason:'测试维护排队'}})
+ const args={runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0}
+ await bad(f.call('node.claim',args),'RUNTIME_MAINTENANCE_ACTIVE')
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).run.executionStartedAt,undefined)
+ await f.editSnapshot(db=>{const r=JSON.parse(db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('m').body);r.createdAt='2020-01-01T00:00:00.000Z';r.deadline=r.createdAt;db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),'m')})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.change',args:{active:false,expectedRevision:1,maintenanceId:'clock-test',actorId:'owner',reason:'恢复'}})
+ assert.equal((await f.call('node.claim',args)).result.node.status,'running')
+ assert.ok((await f.store.query({kind:'message.run',runId:'m'})).run.executionStartedAt)
+})
+
+test('纯状态通知发送结果unknown仍禁止重处理',async t=>{
+ const f=await fixture(t);await f.call('receive',receive());await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+ await f.call('notification.prepare',{runId:'m',notificationId:'state',stateFact:{revision:0,status:'needs_attention',reason:'recovery_exhausted',intentStatus:null,phase:'attention'},payload:{phase:'attention',conversationId:'g',text:'系统等待'},disclosure:{conversationId:'g',authorizationRef:'m'}})
+ const notice=(await f.call('notification.claim',{notificationId:'state'})).result.notification
+ await f.call('notification.fail',{notificationId:'state',leaseEpoch:notice.leaseEpoch,error:'network'})
+ await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+})
