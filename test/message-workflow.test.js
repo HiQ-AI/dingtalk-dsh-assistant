@@ -553,7 +553,7 @@ test('R 节点把 S 的历史短引用还原为来源键后再取材料', async 
     :stage==='R'?binding:intent,handlers:{status:async()=>({})}})
   const {runId}=await workflow.receive({...source,body:'这个账号怎么回事'},{process:false})
   await workflow.process(runId)
-  assert.deepEqual(requested,['history-account'])
+  assert.deepEqual(requested,['history-account','history-account']) // R读取与最终派发均核验真实来源键
   assert.equal((await workflow.state(runId)).run.status,'settled')
 })
 
@@ -662,7 +662,7 @@ test('确定性S无模型调用账，长原文后继R继续进入实际判断', 
 
 test('旧R容量阻断含已解决材料请求时恢复原节点且不重跑S', async t => {
   let sCalls = 0
-  const { workflow, store } = await fixture(t, { judge: async ({ stage }) => { if (stage === 'S') { sCalls++; return split }; return stage === 'R' ? binding : intent }, handlers: { status: async () => ({ ok: true }) } })
+  const { workflow, store } = await fixture(t, { context: { material: async () => ({ ready: true, data: { resources: [{ resourceRef: 'history:a', text: '已核对' }] } }) }, judge: async ({ stage }) => { if (stage === 'S') { sCalls++; return split }; return stage === 'R' ? binding : intent }, handlers: { status: async () => ({ ok: true }) } })
   const { runId } = await workflow.receive(source, { process: false })
   const snapshot = await prepareMessageContext(source, {})
   await store.command({ id: 'budget-snapshot', kind: 'message.snapshot', args: { runId, snapshot } })

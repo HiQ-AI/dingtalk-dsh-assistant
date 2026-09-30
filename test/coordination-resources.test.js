@@ -1,10 +1,46 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, writeFile, access, rm } from 'node:fs/promises'
+import { mkdtemp, writeFile, access, rm, readdir } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createCoordinationResourceTools, readPublicResource } from '../packages/dingtalk-dsh-assistant/coordination-resources.js'
 import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+
+test('真实xlsx附件完整保留多sheet、Y列、空行位置与公式缓存且清理下载文件', async t => {
+  const ExcelJS = createRequire(new URL('../packages/dingtalk-dsh-assistant/package.json', import.meta.url))('exceljs')
+  const workbook = new ExcelJS.Workbook()
+  const first = workbook.addWorksheet('审核条目')
+  first.getCell('A1').value = '数据集'
+  first.getCell('A3').value = 'fixture-dataset'
+  first.getCell('Y3').value = 'expert@example.org'
+  first.getCell('B3').value = { formula: '1+2', result: 3 }
+  first.mergeCells('C3:D3'); first.getCell('C3').value = '审核中'
+  workbook.addWorksheet('说明', { state: 'hidden' }).getCell('A1').value = '行业记录保留'
+  let bytes = await workbook.xlsx.writeBuffer()
+  const cwd = await mkdtemp(path.join(tmpdir(), 'xlsx-resource-'))
+  t.after(() => rm(cwd, { recursive: true, force: true }))
+  const adapter = createDwsAdapter({ enabled: true, runner: { cwd, run: async args => {
+    const localPath = path.join(args[args.indexOf('--output') + 1], '审核.xlsx')
+    await writeFile(path.join(cwd, localPath), bytes)
+    return { exitCode: 0, stdout: JSON.stringify({ localPath, sizeBytes: bytes.length }) }
+  } } })
+  const result = await adapter.readMessageResource('g', 'm', { type: 'fileId', resourceId: 'file' })
+  const value = JSON.parse(result.text)
+  assert.equal(result.complete, true)
+  assert.equal(value.formulasRecalculated, false)
+  assert.equal(value.sheets.length, 2)
+  assert.deepEqual(value.sheets[0].rows.map(row => row.row), [1, 3])
+  const cells = value.sheets[0].rows[1].cells
+  assert.equal(cells.find(cell => cell.address === 'Y3').value, 'expert@example.org')
+  assert.deepEqual(cells.find(cell => cell.address === 'B3').value, { formula: '1+2', result: 3 })
+  assert.equal(cells.find(cell => cell.address === 'D3').mergedInto, 'C3')
+  assert.equal(value.sheets[1].state, 'hidden')
+  assert.deepEqual(await readdir(cwd), [])
+  bytes = Buffer.from('not a workbook')
+  await assert.rejects(adapter.readMessageResource('g', 'm', { type: 'fileId', resourceId: 'file' }))
+  assert.deepEqual(await readdir(cwd), [])
+})
 
 function harness(options = {}) {
   let active = true

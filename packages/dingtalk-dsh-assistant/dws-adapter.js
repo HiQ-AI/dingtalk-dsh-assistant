@@ -270,6 +270,26 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
         const extension = path.extname(localPath).toLowerCase()
         const imageTypes = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }
         if (imageTypes[extension]) return { image: { data, mediaType: imageTypes[extension], name: path.basename(localPath) } }
+        if (extension === '.xlsx') {
+          const { default: ExcelJS } = await import('exceljs')
+          const workbook = new ExcelJS.Workbook()
+          await workbook.xlsx.load(data)
+          if (workbook.model.media?.length) throw new Error('coordination_workbook_embedded_media_unsupported')
+          const sheets = workbook.worksheets.map(sheet => {
+            const rows = []
+            sheet.eachRow(row => {
+              const cells = []
+              row.eachCell(cell => cells.push({ address: cell.address, value: cell.value,
+                ...(cell.isMerged ? { mergedInto: cell.master.address } : {}) }))
+              rows.push({ row: row.number, cells })
+            })
+            return { name: sheet.name, state: sheet.state, rowCount: sheet.rowCount, columnCount: sheet.columnCount, rows }
+          })
+          return { text: JSON.stringify({ format: 'xlsx', name: path.basename(localPath),
+            sourceSha256: createHash('sha256').update(data).digest('hex'),
+            formulasRecalculated: false, formulaResults: '文件保存的缓存值，未执行公式或外链', sheets }),
+            mediaType: 'application/json', complete: true }
+        }
         if (!['.txt', '.md', '.json', '.csv', '.tsv', '.xml', '.html', '.log'].includes(extension)) throw new Error('coordination_resource_format_unsupported')
         return { text: new TextDecoder('utf-8', { fatal: true }).decode(data), mediaType: 'text/plain' }
       } finally { await unlink(localPath) }

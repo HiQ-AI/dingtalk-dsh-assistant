@@ -385,12 +385,13 @@ export function createTaskMessageResourceCapability({ store, readMessage, readRe
     const remote = await readMessage(scope.conversationId, source.context.sourceMessageId)
     if (!remote || remote.messageId !== source.context.sourceMessageId
       || (remote.conversationId ?? remote.groupId) !== scope.conversationId
-      || remote.text !== source.body || remote.complete === false || remote.hasMore === true
+      || (remote.text !== source.body && !sameDwsFileProjection({ sourceKind: 'dingtalk', text: source.body }, remote)) || remote.complete === false || remote.hasMore === true
       || remote.failures?.length || !Array.isArray(remote.resourceRefs)
       || !remote.resourceRefs.some(item => item.type === input.type && item.resourceId === input.resourceId))
       throw executionError('GENERAL_RESOURCE_SOURCE_CHANGED')
     const value = await readResource(scope.conversationId, remote.messageId, ref)
     if (!value || typeof value.text !== 'string' || value.complete === false || value.hasMore === true
+      || value.coverage?.complete === false || value.projection?.complete === false
       || value.failures?.length || value.mediaUnavailable?.length) throw executionError('GENERAL_RESOURCE_READ_INCOMPLETE')
     if (!await identify(input, scope)) throw executionError('GENERAL_RESOURCE_SOURCE_CHANGED')
     const markdown = `### ${input.sourceKey} / ${remote.messageId} / ${input.type}:${input.resourceId}\n\n${value.text.split('\n').map(line => `> ${line}`).join('\n')}`
@@ -398,7 +399,8 @@ export function createTaskMessageResourceCapability({ store, readMessage, readRe
       resource: { type: input.type, resourceId: input.resourceId }, contentDigest: executionDigest(value.text) }
   }
   return { id: 'read-task-message-resource', effectClass: 'read', identity: 'read-task-message-resource-v1',
-    description: '只读当前业务任务已冻结消息明确引用的 UTF-8 文本附件，完整保留正文；返回带精确来源和内容摘要的 Markdown',
+    parameters: { type: 'object', properties: { sourceKey: { type: 'string' }, type: { type: 'string', enum: ['mediaId', 'fileId'] }, resourceId: { type: 'string' } }, required: ['sourceKey', 'type', 'resourceId'], additionalProperties: false },
+    description: '只读当前业务任务已冻结消息明确引用的文本或工作簿附件，完整保留读取器提供的正文；返回带精确来源和内容摘要的 Markdown',
     authorize: async ({ input, scope }) => Boolean(await identify(input, scope)),
     execute: ({ input, scope }) => load(input, scope),
     async verify({ input, scope, output }) {
@@ -2056,7 +2058,42 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           await store.command({ id: `material:${run.runId}:${executionDigest([resourceRef, material])}`, kind: 'message.material.record', args: { runId: run.runId, resourceRef, material } })
           items.push({ resourceRef, ...(await store.query({ kind: 'message.material', runId: run.runId, resourceRef })) })
         }
-        for (const need of needs) {
+        for (let need of needs) {
+          const alias = /^h([1-9]\d*)$/u.exec(need.resourceRef)
+          const materialRef = alias ? run.snapshot?.historyManifest?.[Number(alias[1]) - 1]?.sourceKey : need.resourceRef
+          if (!materialRef) return { ready: false, responsibility: 'system', reason: 'MATERIAL_SOURCE_UNRESOLVED' }
+          let materialSource = await store.query({ kind: 'task.source', sourceKey: materialRef })
+          let selectedAttachments = materialSource?.context?.attachments
+          if (!materialSource) {
+            for (const key of [...new Set([run.sourceKey, ...(run.snapshot?.historyManifest ?? []).map(item => item.sourceKey), ...(run.context.quoteRefs ?? []).map(item => item.sourceKey)])]) {
+              const source = await store.query({ kind: 'task.source', sourceKey: key })
+              const attachment = source?.context?.attachments?.find(item => item.resourceRef === materialRef)
+              if (attachment) { materialSource = source; selectedAttachments = [attachment]; break }
+            }
+          }
+          if (materialSource?.context?.attachments?.length) {
+            if (materialSource.conversationId !== run.conversationId || materialSource.status === 'superseded') return { ready: false, responsibility: 'system', reason: 'MATERIAL_SOURCE_NOT_CURRENT' }
+            // 单独缓存真实附件投影，旧版仅存文件消息正文的缓存不能冒充附件已读取。
+            const cacheRef = `source-attachments:${executionDigest([materialSource.sourceKey, materialSource.sourceVersion, selectedAttachments])}`
+            let material = await store.query({ kind: 'message.material', runId: run.runId, resourceRef: cacheRef })
+            if (!material) {
+              if (!messageResourceRead) return { ready: false, responsibility: 'system', reason: 'MATERIAL_READER_UNAVAILABLE' }
+              try {
+                const contents = []
+                for (const attachment of selectedAttachments) {
+                  const ref = attachment.source
+                  if (!ref?.resourceId || !['fileId', 'mediaId'].includes(ref.type)) throw executionError('MATERIAL_RESOURCE_IDENTITY_REQUIRED')
+                  const output = await messageResourceRead.execute({ input: { sourceKey: materialSource.sourceKey, type: ref.type, resourceId: ref.resourceId },
+                    scope: { conversationId: run.conversationId, sourceKeys: [materialSource.sourceKey], sourceVersions: { [materialSource.sourceKey]: materialSource.sourceVersion } } })
+                  contents.push(output.markdown)
+                }
+                material = { text: `${materialSource.body}\n\n${contents.join('\n\n')}` }
+                await store.command({ id: `material:${run.runId}:${executionDigest([cacheRef, material])}`, kind: 'message.material.record', args: { runId: run.runId, resourceRef: cacheRef, material } })
+              } catch (error) { return { ready: false, responsibility: 'system', reason: `MATERIAL_READ_FAILED:${error.code ?? error.message}` } }
+            }
+            items.push({ resourceRef: materialRef, ...material }); continue
+          }
+          if (alias) need = { ...need, resourceRef: materialRef }
           const cached = await store.query({ kind: 'message.material', runId: run.runId, resourceRef: need.resourceRef })
           if (cached) { items.push({ resourceRef: need.resourceRef, ...cached }); continue }
           if (need.resourceRef.startsWith('task-history:')) {

@@ -257,3 +257,119 @@ test('A局部协议失败不阻止尚未关联的B，恢复不重复B效果', as
   assert.deepEqual(completed, ['查B'])
   assert.equal(state.units.find(unit => unit.goalText === '查B').status, 'applied')
 })
+
+test('旧policy连续交办经大目录失败排队重启后完成IB派发与独立通知回读',async t=>{
+ const {DatabaseSync}=await import('node:sqlite')
+ const {createWorkflowNotifications}=await import('../packages/dingtalk-dsh-assistant/workflow-notifications.js')
+ const directory=await mkdtemp(join(tmpdir(),'message-chain-')),dbPath=join(directory,'control.sqlite')
+ let store=await openExecutionStore({dbPath,instanceId:'chain',initialize:true}),workflow
+ t.after(async()=>{await workflow?.close();await store.close();await rm(directory,{recursive:true,force:true})})
+ const texts={first:'请分析69条审核数据的刷库方案，行业审核保留，脚本完成后先交负责人审批。',second:'补充：先用两条测试，刷完找我验证，验证通过再处理69条正式数据。'}
+ const pageCalls=[],effects=[],windows=[];let failed=false,ibCalls=0
+ const create=()=>createMessageWorkflow({store:{query:(...args)=>store.query(...args),command:request=>{if(request.kind==='message.node.claim')windows.push(request.args.leaseWindowMs);return store.command(request)}},
+  context:{candidates:async()=>Array.from({length:79},(_,i)=>({candidateId:`catalog-${i}`,goal:`其他历史事项${i}`})),
+   bindTopic:async({run,unit})=>({topicId:'audit-plan',conversationId:'group',sourceRunId:run.runId,unitId:unit.unitId,title:'审核数据方案',facts:[]})},
+  judge:async({stage,input})=>{
+   if(stage==='S')return split(input)
+   if(stage==='R'){
+    pageCalls.push(`${input.sourceKey}:${input.candidatePage}`)
+    if(input.sourceKey==='first'&&input.candidatePage===1&&!failed){failed=true;throw new Error('MESSAGE_NODE_TIMEOUT')}
+    return input.candidateContinuation?{kind:'continue_candidates',reason:'继续核对候选',evidence:['已核对当前页']} : independent
+   }
+   assert.equal(stage,'IB');ibCalls++;assert.equal(input.units.length,2)
+   const evidence=JSON.stringify(input);assert.ok(evidence.includes('行业审核保留'));assert.ok(evidence.includes('验证通过再处理69条'))
+   return {kind:'topic_intents',decisions:input.units.map(unit=>({unitId:unit.unitId,intent:answer}))}
+  },handlers:{answer:async(_,info)=>{effects.push(info.run.runId);return {reply:'已完成只读方案分析，生产操作等待既定审批和测试验证。'}}}})
+ workflow=create()
+ for(const [runId,body] of Object.entries(texts))await store.command({id:`receive-${runId}`,kind:'message.receive',args:{...source(runId,body),context:{sourceMessageId:`in-${runId}`},policy:{initialWindowMs:90000,linkedWindowMs:90000,attemptMs:20000,maxClaims:21,maxCorrections:2}}})
+ await workflow.process('first');assert.equal(effects.length,0)
+ await workflow.process('second');assert.equal(effects.length,0,'第一条关联未完成前不得派发第二条')
+ await workflow.close();await store.close()
+ const db=new DatabaseSync(dbPath)
+ try{
+  for(const row of db.prepare('SELECT run_id,body FROM message_runs').all()){const r=JSON.parse(row.body);r.createdAt='2020-01-01T00:00:00.000Z';r.executionStartedAt=r.createdAt;r.deadline=r.createdAt;db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),row.run_id)}
+  for(const row of db.prepare("SELECT rowid,body FROM message_items WHERE kind='node'").all()){const n=JSON.parse(row.body);if(n.status==='failed'){n.retryAt='2020-01-01T00:00:00.000Z';db.prepare('UPDATE message_items SET body=? WHERE rowid=?').run(JSON.stringify(n),row.rowid)}}
+ }finally{db.close()}
+ store=await openExecutionStore({dbPath,instanceId:'chain'});workflow=create();await workflow.recover()
+ await until(()=>effects.length===2,'关联恢复后未完成IB及真实handler派发')
+ assert.equal(ibCalls,1);assert.deepEqual([...effects].sort(),['first','second']);assert.equal(pageCalls.filter(page=>page==='first:0').length,1,'重启应复用已经成功的R页');assert.equal(pageCalls.filter(page=>page==='first:1').length,2)
+ assert.ok(windows.every(ms=>ms===60500),'所有阶段使用当前Host窗口，不使用旧20秒policy')
+ let sent=0,readbacks=0
+ const notices=createWorkflowNotifications({store,controller:{},artifacts:{},adapter:{canDisclose:async()=>true,send:async()=>({messageId:`out-${++sent}`}),readback:async notification=>{readbacks++;return {messageId:notification.ack.messageId}}}})
+ await notices.flush();await notices.flush()
+ assert.equal(sent,2);assert.equal(readbacks,2)
+ const delivered=await store.query({kind:'message.notifications',states:['delivered']});assert.equal(delivered.length,2)
+ for(const runId of Object.keys(texts)){const state=await workflow.state(runId);assert.equal(state.run.status,'settled');assert.equal(state.commands.length,1);assert.equal(state.commands[0].status,'applied');assert.equal(state.run.policy.attemptMs,20000)}
+})
+
+for(const failedStage of ['R','IB'])test('hN真实材料在'+failedStage+'读取失败等待恢复后贯穿R与IB并进入执行合同',async t=>{
+ const {createWorkflowNotifications}=await import('../packages/dingtalk-dsh-assistant/workflow-notifications.js')
+ let available=false,executed=0,ib=0
+ const material={resources:[{resourceRef:'original-file-source',text:'sheet1!Y2=new-reviewer；行业记录保留；先两条验证再69条'}]}
+ const {workflow,store}=await fixture(t,{policy:{recoveryDelaysMs:[0,0]},context:{
+  validateActions:async({intent})=>{assert.deepEqual(intent.requiredExecutionMaterials,['original-file-source']);return {kind:'accepted'}},
+  history:async()=>[{sourceKey:'original-file-source',actorId:'user',text:'文件审核条目.xlsx'}],
+  material:async({needs,nodeId})=>{assert.deepEqual(needs.map(item=>item.resourceRef),['original-file-source']);if(!available&&nodeId===failedStage)throw new Error('CONNECTOR_UNAVAILABLE');return {ready:true,data:material}},
+  bindTopic:async({run,unit})=>({topicId:'material-topic',conversationId:'group',sourceRunId:run.runId,unitId:unit.unitId,title:'审核方案',facts:[]})},
+  judge:async({stage,input})=>{
+   if(stage==='S'){const output=split(input);output.units[0].contextNeeds=[{resourceRef:'h1',reason:'读取审核表'}];return output}
+   if(stage==='R')return independent
+   assert.equal(stage,'IB');ib++;assert.ok(JSON.stringify(input).includes('sheet1!Y2=new-reviewer'))
+   return {kind:'topic_intents',decisions:input.units.map(unit=>({unitId:unit.unitId,intent:answer}))}
+  },handlers:{answer:async action=>{assert.deepEqual(action.requiredExecutionMaterials,['original-file-source']);executed++;return {reply:'已分析完整材料'}}}})
+ await workflow.receive({...source('material-chain','读取表格分析审核方案'),context:{sourceMessageId:'in'}},{process:false})
+ await workflow.process('material-chain');for(let i=0;i<4;i++)await workflow.recover()
+ let state=await workflow.state('material-chain');assert.equal(state.run.status,'waiting');assert.equal(state.requests[0].blocked,true);assert.equal(ib,0);assert.equal(executed,0)
+ const notifier=createWorkflowNotifications({store,controller:{},artifacts:{}});await notifier.flush()
+ const notices=await store.query({kind:'message.notifications',states:['prepared']});assert.ok(notices.some(notice=>notice.payload.phase==='system_wait'))
+ available=true
+ await store.command({id:'retry-material',kind:'message.request.retry.reset',args:{runId:'material-chain',requestId:state.requests[0].id,sourceVersion:1,reason:'连接器恢复',dependencyRevision:'connector-ready'}})
+ await workflow.recover();await until(()=>executed===1,'恢复后未执行带完整材料的命令')
+ state=await workflow.state('material-chain');assert.equal(state.run.status,'settled');assert.equal(ib,1);assert.equal(state.commands[0].args.requiredExecutionMaterials[0],'original-file-source')
+})
+
+test('恢复同时发起两个大目录run，FIFO模型槽使第一页交替推进',async t=>{
+ const calls=[]
+ const {workflow}=await fixture(t,{policy:{concurrency:1},context:{bindTopic:async({run,unit})=>({topicId:'fair-topic',conversationId:'group',sourceRunId:run.runId,unitId:unit.unitId,title:'并发事项',facts:[]}),candidates:async()=>Array.from({length:24},(_,i)=>({candidateId:`c${i}`,goal:`旧事项${i}`}))},judge:async({stage,input})=>{
+  if(stage==='S')return split(input)
+  if(stage==='R'){calls.push(`${input.sourceKey}:${input.candidatePage}`);await new Promise(resolve=>setTimeout(resolve,5));return input.candidateContinuation?{kind:'continue_candidates',reason:'继续',evidence:['核对当前页']}:independent}
+  return {kind:'topic_intents',decisions:input.units.map(unit=>({unitId:unit.unitId,intent:{...answer,actions:[{intent:'no_action',arguments:{},dependsOn:[]}]}}))}
+ }})
+ await workflow.receive(source('queue-a'),{process:false});await workflow.receive(source('queue-b'),{process:false});await workflow.recover()
+ assert.ok(calls.indexOf('queue-b:0')<calls.indexOf('queue-a:2'),JSON.stringify(calls))
+ await until(async()=> (await workflow.state('queue-a')).run.status==='settled','IB未完成');assert.equal((await workflow.state('queue-a')).run.status,'settled');assert.equal((await workflow.state('queue-b')).run.status,'settled')
+})
+
+test('重启后既有空材料pending命令在最终派发补齐合同，等待恢复前零领取',async t=>{
+ const {prepareMessageContext}=await import('../packages/dingtalk-dsh-assistant/message-context.js')
+ const directory=await mkdtemp(join(tmpdir(),'pending-material-')),dbPath=join(directory,'control.sqlite')
+ let store=await openExecutionStore({dbPath,instanceId:'pending-material',initialize:true}),workflow,available=false,executed=0
+ t.after(async()=>{await workflow?.close();await store.close();await rm(directory,{recursive:true,force:true})})
+ const run={...source('old-command','按表格分析审核方案'),context:{sourceMessageId:'in'},policy:{initialWindowMs:90000,linkedWindowMs:90000}}
+ const call=(kind,args)=>store.command({id:`prepare-${kind}`,kind:`message.${kind}`,args})
+ await call('receive',run)
+ const snapshot=await prepareMessageContext(run,{history:async()=>[{sourceKey:'file-origin',actorId:'user',text:'审核表.xlsx'}]})
+ await call('snapshot',{runId:run.runId,snapshot})
+ await call('split',{runId:run.runId,units:[{unitId:'u',spans:[{start:0,end:run.body.length}],goalText:run.body,constraints:[],sharedConstraints:[],contextNeeds:[{resourceRef:'h1',reason:'需审核表'}]}]})
+ await call('accept',{runId:run.runId,unitId:'u',commands:[{commandId:'pending-answer',kind:'answer',args:{taskId:null,arguments:{objective:'分析审核方案'},binding:independent,requiredExecutionMaterials:[],replyPolicy:'result'},dependsOn:[]}]})
+ await store.close();store=await openExecutionStore({dbPath,instanceId:'pending-material'})
+ workflow=createMessageWorkflow({store,policy:{recoveryDelaysMs:[0,0]},context:{material:async({needs})=>{assert.deepEqual(needs.map(need=>need.resourceRef),['file-origin']);return available?{ready:true,data:{resources:[{resourceRef:'file-origin',text:'sheet1!Y2=新专家'}]}}:{ready:false,reason:'MATERIAL_READ_FAILED:unavailable'}},validateAction:async action=>{assert.deepEqual(action.requiredExecutionMaterials,['file-origin']);return {allowed:true}}},judge:async()=>{throw new Error('不得重判已接纳命令')},handlers:{answer:async action=>{assert.deepEqual(action.requiredExecutionMaterials,['file-origin']);executed++;return {reply:'已按真实表格分析'}}}})
+ await workflow.recover();let state=await workflow.state(run.runId)
+ assert.equal(executed,0);assert.equal(state.commands[0].status,'pending');assert.equal(state.commands[0].leaseEpoch,0);assert.equal(state.requests[0].nodeId,'execute');assert.equal(state.run.status,'waiting')
+ available=true;await workflow.recover();state=await workflow.state(run.runId)
+ assert.equal(executed,1);assert.equal(state.commands[0].status,'applied');assert.equal(state.run.status,'settled');assert.equal(state.nodes.length,0)
+ await workflow.recover();assert.equal(executed,1)
+})
+
+for(const kind of ['pause','cancel'])test(`已有${kind}控制不继承无关材料，显式材料合同仍等待`,async t=>{
+ let reads=0,effects=0
+ const {workflow,store}=await fixture(t,{judge:async()=>{throw new Error('不应重判控制命令')},context:{material:async()=>{reads++;return {ready:false,reason:'FILE_UNAVAILABLE'}}},handlers:{[kind]:async(_,info)=>{assert.equal(info.unit.id,'u');effects++;return {ok:true}}}})
+ const setup=async(id,explicit)=>{
+  await workflow.receive(source(id),{process:false})
+  await store.command({id:`split-${id}`,kind:'message.split',args:{runId:id,units:[{unitId:id==='implicit'?'u':'v',spans:[{start:0,end:id.length}],goalText:id,constraints:[],contextNeeds:[{resourceRef:'file',reason:'原事项材料'}]}]}})
+  await store.command({id:`accept-${id}`,kind:'message.accept',args:{runId:id,unitId:id==='implicit'?'u':'v',commands:[{commandId:`command-${id}`,kind,args:{binding:independent,requiredExecutionMaterials:explicit?['file']:[],replyPolicy:'none'},dependsOn:[]}]}})
+  await workflow.commandSettled(id)
+ }
+ await setup('implicit',false);assert.equal(effects,1);assert.equal(reads,0)
+ await setup('explicit',true);assert.equal(effects,1);assert.equal(reads,1);assert.equal((await workflow.state('explicit')).requests[0].kind,'needs_context')
+})

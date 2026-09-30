@@ -89,8 +89,19 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     return projectMaterial(value)
   }
   async function resolvedEvidenceFor(data, unitId) {
-    return Promise.all(data.requests.filter(request => request.unitId === unitId && request.nodeId === 'R' && request.kind === 'needs_context' && request.status === 'resolved')
+    return Promise.all(data.requests.filter(request => request.unitId === unitId && request.kind === 'needs_context' && request.status === 'resolved')
       .map(async request => ({ requestId: request.id, needs: request.needs, answer: await prepareMaterial(data, unitId, request.answer) })))
+  }
+  function inheritedMaterialNeeds(data, unit) {
+    const aliases = new Map((data.run.snapshot?.historyManifest ?? []).map((item, index) => [`h${index + 1}`, item.sourceKey]))
+    const needs = [...(unit.contextNeeds ?? []), ...data.requests.filter(request => request.unitId === (unit.id ?? unit.unitId) && request.kind === 'needs_context' && request.status === 'resolved').flatMap(request => request.needs ?? [])]
+    return [...new Map(needs.map(need => { const resourceRef = aliases.get(need.resourceRef) ?? need.resourceRef; return [resourceRef, { ...need, resourceRef }] })).values()]
+  }
+  async function readMaterial(input) {
+    try {
+      const value = await context.material?.(input)
+      return value?.ready && !incompleteMaterial(value.data) ? value : { ready: false, reason: value?.reason ?? 'MATERIAL_UNAVAILABLE' }
+    } catch (error) { return { ready: false, reason: error.code ?? error.message } }
   }
   async function invoke(data, unitId, stage, input, fixedOutput) {
     for (let correction = 0; correction <= config.maxCorrections; correction++) {
@@ -179,13 +190,14 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     if (data.requests.some(request => request.unitId === unit.unitId && request.status === 'pending')) return
     const snapshot = data.run.snapshot
     const base = unitContext(snapshot, unit)
-    let unresolvedMaterials
-    if (unit.contextNeeds?.length) {
-      const aliases = new Map((snapshot.historyManifest ?? []).map((item, index) => [`h${index + 1}`, item.sourceKey]))
-      const needs = unit.contextNeeds.map(need => ({ ...need, resourceRef: aliases.get(need.resourceRef) ?? need.resourceRef }))
-      const material = await context.material?.({ run: data.run, unit, nodeId: 'R', needs })
+    let unresolvedMaterials, materialFailure
+    const inheritedNeeds = inheritedMaterialNeeds(data, unit)
+    if (inheritedNeeds.length) {
+      const needs = inheritedNeeds
+      const material = await readMaterial({ run: data.run, unit, nodeId: 'R', needs })
       if (!material?.ready) {
         unresolvedMaterials = needs
+        materialFailure = material?.reason
         base.pendingMaterialNeeds = needs
       } else {
         base.material = await prepareMaterial(data, unit.unitId, material.data)
@@ -286,10 +298,10 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
           catalogRevision: latestImpact.catalogRevision, assessments: [{ topicId: topic.topicId, relation: 'independent', reason: assessment.reason,
             sourceRefs: [{ sourceKey: data.run.sourceKey, sourceVersion: data.run.sourceVersion, text: data.run.body }] }] })
       }
-      if (unresolvedMaterials) await waiting(await state(runId), unit.unitId, 'R', { kind: 'needs_context', reason: 'UNIT_MATERIAL_PENDING', needs: unresolvedMaterials })
+      if (unresolvedMaterials) await waiting(await state(runId), unit.unitId, 'R', { kind: 'needs_context', reason: materialFailure ?? 'UNIT_MATERIAL_PENDING', needs: unresolvedMaterials })
       return
     }
-    if (unresolvedMaterials) { await waiting(data, unit.unitId, 'R', { kind: 'needs_context', reason: 'UNIT_MATERIAL_PENDING', needs: unresolvedMaterials }); return }
+    if (unresolvedMaterials) { await waiting(data, unit.unitId, 'R', { kind: 'needs_context', reason: materialFailure ?? 'UNIT_MATERIAL_PENDING', needs: unresolvedMaterials }); return }
     const resolvedEvidence = await resolvedEvidenceFor(data, unit.unitId)
     if (pendingMaterial(resolvedEvidence)) return
     const intent = await invoke(data, unit.unitId, 'I', intentContext(base, binding, facts, snapshot.policy, candidates, resolvedEvidence))
@@ -305,8 +317,8 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       && /(?:依然|仍然|还是|再次|又).*(?:问题|没有|未显示|失败)|(?:问题|没有|未显示|失败).*(?:依然|仍然|还是|再次|又)/u.test(data.run.body)
       && directedToAgent(data.run.body)
     if (intent.kind !== 'intent') { await waiting(data, unit.unitId, 'I', intent); return }
-    if (intent.actions.some(action => ['create', 'research', 'answer', 'reopen', 'revise', 'pause', 'cancel', 'resume'].includes(action.intent))) {
-      intent.requiredExecutionMaterials = [...new Set([...intent.requiredExecutionMaterials, ...resolvedEvidence.flatMap(item => item.needs.map(need => need.resourceRef))])]
+    if (intent.actions.some(action => ['create', 'research', 'answer', 'reopen', 'revise', 'resume'].includes(action.intent))) {
+      intent.requiredExecutionMaterials = [...new Set([...intent.requiredExecutionMaterials, ...inheritedNeeds.map(need => need.resourceRef)])]
       const constraints = resolvedEvidence.flatMap(item => [...(item.answer?.constraints ?? []), ...(item.answer?.restrictions ?? []), ...(item.answer?.resources?.flatMap(resource => resource.restrictions ?? []) ?? [])])
       intent.constraints = [...new Set([...intent.constraints, ...constraints])]
     }
@@ -325,10 +337,9 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     if (admission && admission.kind !== 'accepted') { await waiting(data, unit.unitId, 'I', admission); return }
     if (intent.requiredExecutionMaterials.length) {
       const needs = intent.requiredExecutionMaterials.map(resourceRef => ({ resourceRef, reason: 'required_execution_material' }))
-      const material = await context.material?.({ run: data.run, unit, nodeId: 'execute', needs })
+      const material = await readMaterial({ run: data.run, unit, nodeId: 'execute', needs })
       if (!material?.ready) {
-        if (material?.unsupported) await cmd('message.attention', { runId, reason: `MESSAGE_EXECUTION_MATERIAL_UNSUPPORTED:${material.reason ?? intent.requiredExecutionMaterials.join(',')}` })
-        else await waiting(data, unit.unitId, 'execute', { kind: 'needs_context', reason: 'REQUIRED_EXECUTION_MATERIAL_PENDING', needs })
+        await waiting(data, unit.unitId, 'execute', { kind: 'needs_context', reason: material?.reason ?? 'REQUIRED_EXECUTION_MATERIAL_PENDING', needs })
         return
       }
     }
@@ -393,13 +404,20 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
       if (!binding) throw new Error('MESSAGE_TOPIC_BINDING_MISSING')
       const facts = await context.facts?.({ run, snapshot: run.snapshot, unit, binding }) ?? {}
       const base = unitContext(run.snapshot, unit)
+      const priorityControl = priorityControls?.find(control => control.unitId === unit.id)
+      const inheritedNeeds = ['pause', 'cancel'].includes(priorityControl?.action) ? [] : inheritedMaterialNeeds(data, unit)
+      if (inheritedNeeds.length) {
+        const material = await readMaterial({ run, unit, nodeId: 'IB', needs: inheritedNeeds })
+        if (!material.ready) { await waiting(data, unit.id, 'IB', { kind: 'needs_context', reason: material.reason, needs: inheritedNeeds }); return null }
+        base.material = await prepareMaterial(data, unit.id, material.data)
+      }
       const priorActions = data.commands.filter(command => command.unitId === unit.id && ['applied', 'running', 'unknown', 'superseded'].includes(command.status))
         .map(command => ({ commandId: command.commandId, intent: command.kind, arguments: command.args?.arguments ?? {}, status: command.status, priorStatus: command.priorStatus ?? null, taskId: command.args?.taskId ?? null }))
       const answers = await Promise.all(data.requests.filter(request => request.unitId === unit.id && request.nodeId === 'IB' && request.status === 'resolved')
         .map(async request => ({ requestId: request.id, question: request.question, answer: await prepareMaterial(data, unit.id, request.answer) })))
-      const priorityControl = priorityControls?.find(control => control.unitId === unit.id)
-      return { run, unit, data, binding, facts, base, priorActions, input: { ...intentContext(base, binding, facts, run.snapshot.policy, [], await resolvedEvidenceFor(data, unit.id), { sharedTopic: true }), ...(priorActions.length ? { priorActions } : {}), ...(priorityControl ? { authorizedControl: priorityControl } : {}), ...(answers.length ? { clarificationAnswers: answers } : {}) } }
+      return { run, unit, data, binding, facts, base, inheritedNeeds, priorActions, input: { ...intentContext(base, binding, facts, run.snapshot.policy, [], await resolvedEvidenceFor(data, unit.id), { sharedTopic: true }), ...(priorActions.length ? { priorActions } : {}), ...(priorityControl ? { authorizedControl: priorityControl } : {}), ...(answers.length ? { clarificationAnswers: answers } : {}) } }
     }))
+    if (prepared.some(item => item === null)) return
     const sharedTopics = prepared.map(item => item.facts.topic).filter(Boolean)
     const sharedTopic = sharedTopics[0] ?? null
     if (sharedTopics.some(value => digest(value) !== digest(sharedTopic))) throw Object.assign(new Error('MESSAGE_TOPIC_STALE'), { code: 'MESSAGE_TOPIC_STALE' })
@@ -464,12 +482,13 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: [...(item.binding.evidence ?? []), `此前排查任务：${item.binding.taskId}`], priorTaskId: item.binding.taskId, topicId }
         : item.binding
       if (intent.actions.some((action, index) => action.dependsOn.some(dep => dep >= index))) throw new Error('MESSAGE_ACTION_DEPENDENCY_INVALID')
+      if (!intent.actions.every(action => ['pause', 'cancel'].includes(action.intent))) intent.requiredExecutionMaterials = [...new Set([...intent.requiredExecutionMaterials, ...item.inheritedNeeds.map(need => need.resourceRef)])]
       const admission = await context.validateActions?.({ run: item.run, unit: item.unit, binding: actionBinding, intent, facts: item.facts, requests: item.data.requests })
       if (admission && admission.kind !== 'accepted') { await waiting(item.data, item.unit.id, 'IB', admission); return }
       if (intent.requiredExecutionMaterials.length) {
         const needs = intent.requiredExecutionMaterials.map(resourceRef => ({ resourceRef, reason: 'required_execution_material' }))
-        const material = await context.material?.({ run: item.run, unit: item.unit, nodeId: 'execute', needs })
-        if (!material?.ready) { await waiting(item.data, item.unit.id, 'execute', { kind: 'needs_context', reason: 'REQUIRED_EXECUTION_MATERIAL_PENDING', needs }); return }
+        const material = await readMaterial({ run: item.run, unit: item.unit, nodeId: 'execute', needs })
+        if (!material?.ready) { await waiting(item.data, item.unit.id, 'execute', { kind: 'needs_context', reason: material?.reason ?? 'REQUIRED_EXECUTION_MATERIAL_PENDING', needs }); return }
       }
       const constraints = [...new Set([...item.base.constraints, ...item.base.sharedConstraints,
         ...(item.facts.topic?.facts ?? []).filter(fact => fact.kind === 'constraint' && fact.status !== 'invalidated' && !supersededFactIds.has(fact.id)).map(fact => fact.text), ...intent.constraints])]
@@ -540,7 +559,15 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
     const data = await state(runId)
     await Promise.all(data.commands.filter(command => !['applied', 'rejected', 'unknown', 'failed', 'running', 'waiting', 'cancelled', 'superseded'].includes(command.status)).map(async command => {
       const action = { intent: command.kind, ...command.args }
-      const info = { run: data.run, unit: data.units.find(unit => unit.unitId === command.unitId), binding: command.args.binding, commandId: command.commandId }
+      const info = { run: data.run, unit: data.units.find(unit => (unit.id ?? unit.unitId) === command.unitId), binding: command.args.binding, commandId: command.commandId }
+      const aliases = new Map((data.run.snapshot?.historyManifest ?? []).map((item, index) => [`h${index + 1}`, item.sourceKey]))
+      action.requiredExecutionMaterials = [...new Set([...(action.requiredExecutionMaterials ?? []).map(ref => aliases.get(ref) ?? ref), ...(['pause', 'cancel'].includes(command.kind) ? [] : inheritedMaterialNeeds(data, info.unit ?? {}).map(need => need.resourceRef))])]
+      if (action.requiredExecutionMaterials.length) {
+        if (data.requests.some(request => request.unitId === command.unitId && request.status === 'pending')) return
+        const needs = action.requiredExecutionMaterials.map(resourceRef => ({ resourceRef, reason: 'required_execution_material' }))
+        const material = await readMaterial({ run: data.run, unit: info.unit, nodeId: 'execute', needs })
+        if (!material.ready) { await waiting(data, command.unitId, 'execute', { kind: 'needs_context', reason: material.reason, needs }); return }
+      }
       const blocked = command.dependsOn?.find(id => data.commands.find(item => item.commandId === id)?.status === 'rejected')
       const validation = blocked ? { allowed: false, reason: '依赖动作已拒绝' } : await context.validateAction?.(action, info)
       if (validation?.allowed === false) {
@@ -648,8 +675,11 @@ export function createMessageWorkflow({ store, judge, context = {}, handlers = {
         results.push(repaired)
       } catch (error) { if (error.code !== 'MESSAGE_ECHO_RECONCILE_STALE') throw error }
     }
-    for (const run of pending) {
-      results.push(await recoverOne(run))
+    const recovered = await Promise.allSettled(pending.map(run => recoverOne(run)))
+    for (let index = 0; index < recovered.length; index++) {
+      const result = recovered[index]
+      if (result.status === 'fulfilled') results.push(result.value)
+      else if (result.reason?.code !== 'RUNTIME_MAINTENANCE_ACTIVE') await cmd('message.attention', { runId: pending[index].runId, reason: `MESSAGE_RECOVERY_FAILED:${result.reason?.code ?? result.reason?.message}` })
     }
     if (context.bindTopic) for (const conversationId of new Set(pending.map(run => run.conversationId))) await scheduleTopics(conversationId)
     if (!quietReconciled && context.passiveTopic) {

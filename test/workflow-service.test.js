@@ -277,6 +277,7 @@ test('平台附件只读能力绑定当前 Task 消息、附件 ID 与来源版�
   const message = { conversationId: 'g', messageId: 'm1', text: '附件见本条', resourceRefs: [{ type: 'fileId', resourceId: 'f1' }] }
   const capability = createTaskMessageResourceCapability({ store: { query: async () => source },
     readMessage: async () => message, readResource: async () => { reads++; return { text: resourceText } } })
+  assert.deepEqual(capability.parameters.required, ['sourceKey', 'type', 'resourceId'])
   assert.equal(await capability.authorize({ input, scope }), true)
   const output = await capability.execute({ input, scope })
   assert.ok(output.markdown.includes(resourceText))
@@ -1351,7 +1352,9 @@ test('必需附件正文进入Task固定输入且保留意图约束', async t =>
   const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
     : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新材料'] }
       : { kind: 'intent', actions: [{ intent: 'research', arguments: { objective: '分析附件', workflowId: 'task-investigation' }, dependsOn: [] }], constraints: ['不可执行SQL'], requiredExecutionMaterials: ['file-1'], replyPolicy: 'result' }
-  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge, readResource: async () => ({ text: ++reads === 1 ? originalText : '已被替换的正文' }) })
+  let remote
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge, readMessage: async()=>remote, readResource: async () => ({ text: ++reads === 1 ? originalText : '已被替换的正文' }) })
+  remote={...message,conversationId:'g',text:'分析附件',resourceRefs:[{type:'fileId',resourceId:'file-1'}]}
   const receipt = await service.ingest({ ...message, text: '分析附件', resourceRefs: [{ type: 'fileId', resourceId: 'file-1' }] })
   const state = await service.messages.process(receipt.runId)
   assert.equal(state.run.status, 'settled', JSON.stringify({reason:state.run.reason,commands:state.commands}))
@@ -1359,7 +1362,7 @@ test('必需附件正文进入Task固定输入且保留意图约束', async t =>
   const task = await execution.controller.whenIdle(state.commands[0].result.runId)
   const input = await execution.artifacts.read(task.run.requirementRef)
   assert.deepEqual(input.constraints, ['不可执行SQL'])
-  assert.deepEqual(input.materials.find(item => item.id === 'file-1'), { id: 'file-1', text: originalText })
+  assert.ok(input.materials.find(item => item.id === 'file-1').text.includes(originalText))
   assert.equal(reads, 1)
 })
 
@@ -1960,7 +1963,9 @@ test('Web事件已准备后中断由恢复通路接纳一次，后续恢复不�
 test('C01 媒体连接器挂起不阻durable接收和独立SQLite读回',{timeout:5000},async t=>{
  let release,started;const gate=new Promise(r=>release=r),began=new Promise(r=>started=r)
  const judge=async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'new',candidateId:null,evidence:['source']}:{kind:'intent',actions:[{intent:'create',arguments:{objective:'读取附件',workflowId:'task-investigation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:['file'],replyPolicy:'result'}
- const {service,execution,message}=await fixture(t,'owner',undefined,{judge,readResource:async()=>{started();await gate;return{text:'完整材料'}}})
+ let remote
+ const {service,execution,message}=await fixture(t,'owner',undefined,{judge,readMessage:async()=>remote,readResource:async()=>{started();await gate;return{text:'完整材料'}}})
+ remote={...message,conversationId:'g',resourceRefs:[{type:'fileId',resourceId:'file'}]}
  const received=await service.ingest({...message,resourceRefs:[{type:'fileId',resourceId:'file'}]})
  try{await began;const persisted=await execution.store.query({kind:'message.run',runId:received.runId});assert.equal(persisted.run.body,message.text);assert.equal(persisted.commands.length,0);assert.equal((await execution.store.query({kind:'run.list'})).length,0)}finally{release()}
  await service.messages.process(received.runId)
@@ -3822,7 +3827,9 @@ test('无引用回答通过合法待答候选语义选择恢复原请求，第�
 
 test('内部材料重试HTTP只由本机操作者恢复，保留原请求且真实读取失败不冒充ready', async t => {
   let reads = 0
-  const { service, execution } = await fixture(t, 'owner', undefined, { config: { webActorId: 'owner' }, readResource: async () => { reads++; return null } })
+  const { service, execution } = await fixture(t, 'owner', undefined, { config: { webActorId: 'owner' },
+    readMessage: async () => ({ conversationId: 'g', messageId: 'retry-message', text: '读取这个文件', resourceRefs: [{ type: 'fileId', resourceId: 'retry-file' }] }),
+    readResource: async () => { reads++; return null } })
   const source = await service.messages.receive({ sourceKey: 'retry-source', sourceVersion: 1, actorId: 'owner', conversationId: 'g', body: '读取这个文件',
     context: { sourceMessageId: 'retry-message', quoteRefs: [], attachments: [{ resourceRef: 'retry-file', source: { type: 'fileId', resourceId: 'retry-file' } }] } }, { process: false })
   await execution.store.command({ id: 'open-retry', kind: 'message.wait', args: { runId: source.runId, unitId: '$', nodeId: 'S', expectedRevision: 0,
@@ -3982,4 +3989,28 @@ test('S历史短引用经R读取后I只选择真实sourceKey，Task获得实际�
  const task=await execution.controller.whenIdle(state.commands[0].result.runId)
  const input=await execution.artifacts.read(task.run.requirementRef)
  assert.deepEqual(input.materials.find(item=>item.id===sourceKey),{id:sourceKey,text:original})
+})
+
+for(const failed of [false,true])test(`文件消息引用读取真实附件并拒用旧正文缓存：${failed?'系统等待':'进入执行材料'}`,async t=>{
+ let fileKey,readCount=0
+ const text='[文件] 审核.xlsx fileId: sheet-file',body='sheet:第一张; A2=dataset-1; Y2=expert@example.test'
+ const judge=async({stage,input})=>{
+  if(stage==='S') {if(input.source.text===text)return{kind:'no_action',reason:'文件材料',coverage:[{start:0,end:text.length}]};const out=splitOne(input.source.text);out.units[0].contextNeeds=[{resourceRef:'h1',reason:'读取工作簿'}];return out}
+  if(stage==='R'){if(input.material)assert.match(input.material.resources[0].text,/Y2=expert/);return{kind:'binding',disposition:'new',candidateId:null,evidence:['明确工作簿核查']}}
+  return{kind:'intent',actions:[{intent:'research',arguments:{objective:'核查工作簿',workflowId:'task-investigation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[fileKey],replyPolicy:'none'}
+ }
+ const {service,execution,message}=await fixture(t,'owner',undefined,{judge,
+  readMessage:async()=>({conversationId:'g',messageId:'sheet-source',text,resourceRefs:[{type:'fileId',resourceId:'sheet-file'}]}),
+  readResource:async()=>{readCount++;if(failed)throw Error('connector_unavailable');return{text:body,complete:true}}})
+ const file=await service.ingest({...message,messageId:'sheet-source',text,resourceRefs:[{type:'fileId',resourceId:'sheet-file'}]});await service.messages.process(file.runId)
+ fileKey=(await execution.store.query({kind:'message.run',runId:file.runId})).run.sourceKey
+ const request=await service.ingest({...message,messageId:'sheet-request',text:'核查工作簿'})
+ await execution.store.command({id:'old-material-cache',kind:'message.material.record',args:{runId:request.runId,resourceRef:fileKey,material:{text}}})
+ const state=await service.messages.process(request.runId)
+ assert.ok(readCount>0,JSON.stringify({run:state.run,nodes:state.nodes.map(n=>({stage:n.nodeId,error:n.error})),requests:state.requests}))
+ if(failed){assert.equal(state.commands.length,0);assert.ok(state.requests.some(r=>r.kind==='needs_context'&&r.status==='pending'));return}
+ assert.equal(state.run.status,'settled',JSON.stringify(state.run))
+ const task=await execution.controller.whenIdle(state.commands[0].result.runId)
+ const requirement=await execution.artifacts.read(task.run.requirementRef)
+ const actual=requirement.materials.find(item=>item.id===fileKey);assert.match(actual.text,/Y2=expert/);assert.ok(actual.text.includes(text))
 })
