@@ -63,11 +63,13 @@ test('Release 绑定受控环境并按依赖顺序发布，npm 回读后才创�
   const release = workflow.indexOf('gh release create')
   assert.ok(observer >= 0 && observer < assistant && assistant < distribution)
   assert.ok(distribution < readback && readback < release)
-  assert.match(workflow, /\$maxAttempts = 12/u)
+  assert.match(workflow, /\$maxAttempts = 60/u)
   assert.match(workflow, /\$retryDelaySeconds = 10/u)
   assert.match(workflow, /for \(\$attempt = 1; \$attempt -le \$maxAttempts; \$attempt\+\+\)/u)
   assert.match(workflow, /Start-Sleep -Seconds \$retryDelaySeconds/u)
   assert.match(workflow, /npm_readback_failed_\$package`_after_\$maxAttempts`_attempts/u)
+  assert.match(workflow, /gh release view \$env:RELEASE_TAG --json tagName,isDraft,isPrerelease,assets/u)
+  assert.match(workflow, /github_release_asset_mismatch_/u)
 })
 
 test('当前正式版本在 CHANGELOG 中有对应章节和 Release 链接', async () => {
