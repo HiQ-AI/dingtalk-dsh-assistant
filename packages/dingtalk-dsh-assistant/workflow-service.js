@@ -801,18 +801,35 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
         return { id: `command-result:${commandId}`, text: JSON.stringify(command.result) }
       })
       const topic = action.binding?.topicId ? await fullTopic(action.binding.topicId) : null
-      const sourceKeys = [...new Set([info.run.sourceKey, ...(topic?.sources ?? []).map(item => item.sourceKey)])]
+      const topicSourceKeys = topic ? await store.query({ kind: 'message.topic.sources', topicId: topic.topicId }) : []
+      const attachmentSources = []
+      for (const frozen of info.run.snapshot?.history ?? []) {
+        if (frozen.actorId !== info.run.actorId || !frozen.attachments?.length) continue
+        const current = await store.query({ kind: 'task.source', sourceKey: frozen.sourceKey })
+        if (!current || current.status === 'superseded' || current.conversationId !== info.run.conversationId
+          || current.actorId !== frozen.actorId || current.sourceVersion !== frozen.sourceVersion || current.body !== frozen.text) continue
+        const attachments = frozen.attachments.filter(attachment => attachment.source?.type && attachment.source?.resourceId
+          && current.context?.sourceMessageId === attachment.sourceMessageId
+          && current.context.attachments?.some(item => item.source?.type === attachment.source.type
+            && item.source.resourceId === attachment.source.resourceId && item.sourceMessageId === attachment.sourceMessageId))
+        if (attachments.length) attachmentSources.push({ source: current, attachments })
+      }
+      const sourceKeys = [...new Set([info.run.sourceKey, ...topicSourceKeys, ...attachmentSources.map(item => item.source.sourceKey)])]
       const sources = await Promise.all(sourceKeys.map(sourceKey => store.query({ kind: 'task.source', sourceKey })))
       const accessible = sources.filter(item => item && item.conversationId === info.run.conversationId && item.status !== 'superseded')
-      const resolved = action.requiredExecutionMaterials?.length ? await resolveMaterials({ run: info.run,
-        needs: action.requiredExecutionMaterials.map(resourceRef => ({ resourceRef })) }) : { ready: true, data: { resources: [] } }
+      const materialRefs = [...new Set(action.requiredExecutionMaterials ?? [])]
+      const resolved = materialRefs.length ? await resolveMaterials({ run: info.run,
+        needs: materialRefs.map(resourceRef => ({ resourceRef })) }) : { ready: true, data: { resources: [] } }
       if (!resolved.ready) throw executionError('WORKFLOW_REQUIRED_MATERIAL_NOT_READY')
       const materials = [...resolved.data.resources.map(item => ({ id: item.resourceRef, text: item.text })), ...dependencies]
       const scope = queryScope({ actorId: info.run.actorId, conversationId: info.run.conversationId,
         sourceKeys: accessible.map(item => item.sourceKey), sourceVersions: Object.fromEntries(accessible.map(item => [item.sourceKey, item.sourceVersion])) })
       return { request: args.objective, source: { text: info.run.body, sourceKey: info.run.sourceKey, actorId: info.run.actorId },
         constraints: action.constraints ?? [], materials, sourceRefs: [...scope.sourceKeys, ...materials.map(item => item.id)], scope,
-        context: { topic, history: info.run.snapshot?.history ?? [], ...queryCatalog(scope) } }
+        context: { topic, history: info.run.snapshot?.history ?? [],
+          readableMessageResources: attachmentSources.flatMap(({ source, attachments }) => attachments.map(attachment => ({
+            sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, type: attachment.source.type,
+            resourceId: attachment.source.resourceId, name: attachment.name ?? '' }))), ...queryCatalog(scope) } }
     },
     async verifyEvidence({ refs, entry, binding, input }) {
       const scope = await resolveQueryScope({ binding, input })
@@ -2248,6 +2265,49 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
       eventId: requireText(input.eventId, 'WORKFLOW_EVENT_REQUIRED'), actorId: identity.actorId, answer, ownerAnswer })
     return { accepted: true, runId: data.run.runId, requestId: request.id, status: result.request.status, answer: result.request.answer }
   }
+  async function retryOwner(input, identity) {
+    if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+    const taskId = requireText(input.taskId, 'WORKFLOW_TASK_REQUIRED')
+    const origin = await store.query({ kind: 'task.origin', taskId })
+    if (!origin) throw executionError('WORKFLOW_TASK_NOT_FOUND')
+    await taskAccess(taskId, identity.actorId, origin.run.conversationId)
+    const retryKey = requireText(input.retryKey, 'WORKFLOW_RETRY_KEY_REQUIRED')
+    const reason = requireText(input.reason, 'WORKFLOW_RETRY_REASON_REQUIRED')
+    const payload = { kind: 'owner-system-recovery', taskId, retryKey, reason, actorId: identity.actorId,
+      expectedOwnerRevision: input.expectedOwnerRevision, expectedLeaseEpoch: input.expectedLeaseEpoch,
+      expectedRequirementRevision: input.expectedRequirementRevision, expectedControlRevision: input.expectedControlRevision,
+      expectedLastFailure: input.expectedLastFailure }
+    const saved = await artifacts.put(payload, { taskId })
+    const eventKey = `owner-retry:${executionDigest([taskId, retryKey])}`
+    const receipt = await store.command({ id: eventKey, kind: 'task.owner.retry', args: { taskId, eventKey, payloadRef: saved.ref,
+      expectedOwnerRevision: input.expectedOwnerRevision, expectedLeaseEpoch: input.expectedLeaseEpoch,
+      expectedRequirementRevision: input.expectedRequirementRevision, expectedControlRevision: input.expectedControlRevision,
+      expectedLastFailure: input.expectedLastFailure } })
+    return { accepted: true, ...receipt.result }
+  }
+  async function retryReadonlyAnswer(input, identity) {
+    if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+    const data = await messages.state(requireText(input.runId, 'WORKFLOW_RUN_REQUIRED'))
+    if (!groups.has(data.run.conversationId)) throw executionError('WORKFLOW_GROUP_NOT_ADMITTED')
+    if (data.run.sourceVersion !== input.sourceVersion) throw executionError('MESSAGE_STALE')
+    const command = data.commands.find(item => item.commandId === input.commandId)
+    if (!command || command.kind !== 'answer') throw executionError('MESSAGE_READONLY_RETRY_FORBIDDEN')
+    const retryKey = requireText(input.retryKey, 'WORKFLOW_RETRY_KEY_REQUIRED')
+    const reason = requireText(input.reason, 'WORKFLOW_RETRY_REASON_REQUIRED')
+    const priorRetry = command.readonlyRetryHistory?.find(item => item.retryKey === retryKey)
+    if (priorRetry) {
+      const current = await store.query({ kind: 'task.source', sourceKey: data.run.sourceKey })
+      if (current.sourceVersion !== data.run.sourceVersion) throw executionError('MESSAGE_STALE')
+      if (priorRetry.reason !== reason) throw executionError('MESSAGE_READONLY_RETRY_CONFLICT')
+      return { runId: data.run.runId, commandId: command.commandId, inputVersion: data.executions.find(item => item.commandId === command.commandId)?.inputVersion, accepted: true, cached: true }
+    }
+    const action = { intent: command.kind, ...command.args }
+    const info = { run: data.run, unit: data.units.find(unit => (unit.id ?? unit.unitId) === command.unitId), binding: action.binding, commandId: command.commandId }
+    const args = await messageAgent.prepareRetry(action, info, { retryKey, reason })
+    const receipt = await store.command({ id: `answer-retry:${executionDigest([command.commandId, retryKey])}`, kind: 'message.command.retry.readonly', args })
+    await messages.process(data.run.runId)
+    return { runId: data.run.runId, commandId: command.commandId, inputVersion: receipt.result.execution.inputVersion, accepted: true }
+  }
   async function retryMaterialRequest(input, identity) {
     if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId)
       throw executionError('WORKFLOW_ACTION_FORBIDDEN')
@@ -2455,6 +2515,8 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
               waitReason: { kind: 'input', reference: '输入已更新，等待重新执行' } } : {}),
             outputRef: completePlan && state.pendingInputCount ? null : await taskNodeReadoutRef(node) }))), childSessionId: owner?.sessionId ?? state?.nodes.findLast(node => node.sessionId)?.sessionId,
         taskOwner: owner ? { sessionId: owner.sessionId, status: owner.status, decision: owner.decision?.action ?? null,
+          revision: owner.revision, leaseEpoch: owner.leaseEpoch, requirementRevision: owner.requirementRevision, controlRevision: owner.controlRevision,
+          failureCount: owner.failureCount, lastFailure: owner.lastFailure,
           eventWatermark: owner.eventWatermark, processedWatermark: owner.processedWatermark } : null,
         ...(plan ? { plan: { version: plan.task.planRevision, requirementRevision: plan.task.requirementRevision,
           requirementCurrent, currentStageId: currentStage?.stageId ?? null,
@@ -2692,12 +2754,15 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
           }
           if (blockingSources.size) waiting.push({ kind: 'scope', responsibility: 'host', blocked: true,
             reason: '核对相关输入对当前事项的影响', recoveryCondition: '相关输入已纳入当前要求，或已证明不影响当前事项' })
-          const workflowStatus = waitingStatus ?? (['routing_blocked', 'intent_blocked'].includes(run.routingStatus) || run.intentStatus === 'intent_blocked' ? 'routing_blocked'
+          const failedAnswer = state.commands.find(command => command.kind === 'answer' && command.status === 'applied' && command.result?.status === 'blocked')
+          if (failedAnswer) waiting.push({ kind: 'system', responsibility: 'system', blocked: true,
+            reason: failedAnswer.result.reply, recoveryCondition: '系统修复后对原只读答复安全重试，无需重复提交材料' })
+          const workflowStatus = waitingStatus ?? (failedAnswer ? 'waiting_system' : null) ?? (['routing_blocked', 'intent_blocked'].includes(run.routingStatus) || run.intentStatus === 'intent_blocked' ? 'routing_blocked'
             : run.routingStatus === 'routing_pending' ? 'routing' : run.intentStatus ?? (run.status === 'needs_attention' ? 'routing_blocked' : run.status === 'settled' ? 'processed' : 'routing'))
           messages.push({ groupId, messageId: run.context?.sourceMessageId, runId: run.runId, sourceVersion: run.sourceVersion, text: run.body, senderOpenDingTalkId: run.actorId,
             senderName: run.context?.senderName ?? senderNames.get(run.actorId), occurredAt: run.context?.occurredAt ?? run.createdAt, sequence: run.sequenceId,
             topicRefs, workflowStatus, waiting, blockingSources: [...blockingSources.values()],
-            ...(pendingRequest?.question || pendingRequest?.reason || run.reason ? { workflowStatusDetail: pendingRequest?.question ?? pendingRequest?.reason ?? run.reason } : {}),
+            ...(pendingRequest?.question || pendingRequest?.reason || failedAnswer || run.reason ? { workflowStatusDetail: pendingRequest?.question ?? pendingRequest?.reason ?? failedAnswer?.result.reply ?? run.reason } : {}),
             routingStatus: run.status === 'needs_attention' ? 'failed' : run.reason === 'message_quiet' && isPassiveTaskProgress(run.body) && !topicRefs.length ? 'pending' : ['settled', 'superseded'].includes(run.status) ? 'routed' : 'pending' })
         }
         if (page.length < 200) break
@@ -2914,7 +2979,7 @@ export async function openWorkflowService({ ctx, config, legacy, judge, readMess
     })), nextCursor: runs.length > limit ? selected.at(-1).sequenceId : null, total: null }
   }
   return {
-    ingest, resumeRequest, retryMaterialRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, submitWebTask, mailboxes, topics, topicContext,
+    ingest, resumeRequest, retryOwner, retryReadonlyAnswer, retryMaterialRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, submitWebTask, mailboxes, topics, topicContext,
     maintenance: () => store.query({ kind: 'runtime.maintenance' }),
     completedObservations: taskId => store.query({ kind: 'task.owner.completed-observations', taskId }),
     async reconcileCompletedObservations(request, identity) {

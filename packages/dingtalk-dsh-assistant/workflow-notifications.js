@@ -119,11 +119,14 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
   async function prepare(run, action, phase, text, communicationPhase = phase) {
     if (run.channel === 'web' || run.externalMessaging === false) return
     if (notificationSilence(run, communicationPhase)) return
-    const eventKey=phase.startsWith('owner:') ? `task.owner.report:${phase.slice(6)}`
+    // 正文与代次必须取同一个已完成命令快照，不能拿旧正文拼接新 execution 版本。
+    const answerReceipt = phase === 'receipt' && action.kind === 'answer'
+    const attemptVersion = answerReceipt && action.readonlyRetryHistory?.length ? action.result?.inputVersion : undefined
+    const eventKey=attemptVersion ? `action.reply:${action.commandId}:${phase}:input:${attemptVersion}` : phase.startsWith('owner:') ? `task.owner.report:${phase.slice(6)}`
       : phase.startsWith('terminal:') ? `task.result:${action.result.runId}:${phase}`
       : ['create','reopen'].includes(action.kind) && action.result?.taskId ? `task.accepted:${action.result.taskId}:${run.sourceVersion}:${action.commandId}`
       : action.status==='rejected' ? `action.rejected:${action.commandId}` : `action.reply:${action.commandId}:${phase}`
-    const notificationId = `notice-${executionDigest(phase.startsWith('owner:') ? eventKey : [action.commandId, phase])}`
+    const notificationId = `notice-${executionDigest(attemptVersion ? [action.commandId, phase, attemptVersion] : phase.startsWith('owner:') ? eventKey : [action.commandId, phase])}`
     const existing = (phase.startsWith('owner:') ? await store.query({ kind: 'message.notification', eventKey }) : null)
       ?? await store.query({ kind: 'message.notification', notificationId })
       ?? (phase.startsWith('owner:') ? await store.query({ kind: 'message.notification', notificationId: `notice-${executionDigest([action.commandId, phase])}` }) : null)
@@ -141,7 +144,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
     await command('message.notification.prepare', { runId: run.runId, commandId: action.commandId, notificationId, eventKey,
       payload: { text: formatGroupReply(text, responsibility), phase, conversationId: run.conversationId,
         sourceMessageId: sourceRun.context?.sourceMessageId, actorId: sourceRun.actorId,
-        fact: { sourceVersion: run.sourceVersion, runRevision: run.revision, ...(action.result?.taskId ? { taskId: action.result.taskId } : {}) } },
+        fact: { sourceVersion: run.sourceVersion, runRevision: run.revision, ...(answerReceipt ? { commandLeaseEpoch: action.leaseEpoch, ...(action.result?.inputVersion ? { commandInputVersion: action.result.inputVersion } : {}) } : {}), ...(action.result?.taskId ? { taskId: action.result.taskId } : {}) } },
       disclosure: { conversationId: run.conversationId, authorizationRef: sourceRun.sourceKey },
     }, `prepare:${notificationId}`)
   }

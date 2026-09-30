@@ -141,7 +141,15 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
           if (proposed.some(stage => stage.workflowId === 'task-general-capability' && !entry.writeCapabilities.has(stage.capabilityStep?.capabilityId))) throw fail('TASK_OWNER_CAPABILITY_STAGE_NOT_ALLOWED')
           if (!await current(entry)) throw fail('TASK_OWNER_STALE')
           exec.signal.throwIfAborted()
-          await onCandidate(copy(args.decision), entry.binding)
+          try { await onCandidate(copy(args.decision), entry.binding) }
+          catch (error) {
+            if (!await current(entry)) throw fail('TASK_OWNER_STALE')
+            exec.signal.throwIfAborted()
+            // 这些拒绝发生于候选事务写入之前；未知持久化错误不能当作可重试。
+            if (error.code !== 'TASK_OWNER_REF_INVALID') throw error
+            entry.attempted = false
+            return { received: false, feedback: 'TASK_OWNER_REF_INVALID：evidenceRefs 只接受 Host 提供的成果/证据 artifactRef，不接受 dws: 消息来源引用。首次只读调查计划尚无成果证据时可使用空数组；完成判断仍必须引用已核验成果。请修正后重新提交。' }
+          }
           entry.decision = copy(args.decision)
           entry.submissionCallId = exec.callId
           exec.concludeTurn()
@@ -192,7 +200,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
     if (closed) throw fail('TASK_OWNER_CLOSED')
     if (entries.has(binding.taskId)) throw notDrained('TASK_OWNER_BUSY')
     binding = Object.freeze(copy(binding))
-    const entry = { binding, cancelled: false, stale: false, attempted: false, accepted: false, steps: 0,
+    const entry = { binding, snapshots: new Map(), cancelled: false, stale: false, attempted: false, accepted: false, steps: 0,
       maxSteps: input.eventPages?.length ? 64 : 8,
       writeCapabilities: new Set((input.capabilities ?? []).filter(item => item.effectClass === 'file.write').map(item => item.id)),
       unreadPages: new Set((input.eventPages ?? []).map(page => page.ref)),
@@ -213,7 +221,15 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
         if (error.name !== 'SessionPersistenceNotFoundError' || error.sessionId !== binding.sessionId) throw error
       }
       if (binding.sessionBound && !stored) throw fail('TASK_OWNER_SESSION_MISSING')
-      if (stored) validateHistory(stored.events, binding)
+      if (stored) {
+        validateHistory(stored.events, binding)
+        for (const event of stored.events) {
+          if (event.type === 'user/message' && event.surfaceOp === 'append'
+            && event.data.source?.taskOwner?.taskId === binding.taskId
+            && event.data.source.taskOwner.sessionId === binding.sessionId)
+            entry.snapshots.set(event.seq, event.data)
+        }
+      }
       if (!await current(entry)) return { status: 'stale' }
       const workspaceDir = !stored && getWorkspaceDir ? await getWorkspaceDir({ binding: entry.binding }) : undefined
       const options = { agentOptions: { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
@@ -225,7 +241,17 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
             ownerEpoch: binding.ownerEpoch, creationLease: binding.leaseEpoch } }] })
       if (stored) validateHistory(entry.handle.agent.session.snapshotEvents(), binding)
       else nameSession(ctx, entry.handle.agent.session, 'owner', input.goal?.objective ?? input.goal?.request)
-      await ctx.sessions.flush(entry.handle.agent.session)
+      // 仅替换旧 Owner 输入的模型投影。原始日志不改写；当前完整快照替代旧输入，不替换模型结论或工具证据。
+      const session = entry.handle.agent.session
+      for (const sequenceId of [...session.surface.nodes]) {
+        const previous = entry.snapshots.get(sequenceId)
+        if (!previous) continue
+        session.append('user/message', createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text',
+          text: JSON.stringify({ historicalOwnerSnapshot: { sequenceId, turnId: previous.source.taskOwner.turnId },
+            instruction: 'superseded：此历史输入已由当前最后一条完整 Owner 快照替代；原文按 sequenceId 保留在会话审计日志中。' }) }] }),
+        { surfaceOp: { op: 'replace', start: sequenceId, end: sequenceId }, sourceEventSeqs: [sequenceId] })
+      }
+      await ctx.sessions.flush(session)
       if (!await current(entry)) return { status: 'stale' }
       await onSessionBound(binding)
       if (!await current(entry)) return { status: 'stale' }

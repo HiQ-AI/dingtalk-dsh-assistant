@@ -515,3 +515,13 @@ node scripts/migrate-message-impact.js --execute D:/dsh_home/workflows/runtime-v
 安装 Assistant/Observer 精确包后，保持维护状态核对包摘要、进程、schema、健康和消息只读投影，再决定恢复调度。原 #109—#115 的重处理须逐条核对当前来源版本、已有命令及通知，不批量重放。实际渠道外发和生产 SQL 的授权独立保留。
 
 输入处理不再设置 S/R/I/IB 固定字节或累计输入/输出额度上限；必要材料经材料账及内部 RPC 完整传递，保留来源/内容一致性校验和队列背压。默认调用超时 60 秒、节点窗口 90 秒；实际提供方容量错误、超时与无效协议仍记录并有限恢复，不能以扩大本地输入范围伪称模型理解完整。
+
+### 工具纠正与 Owner 快照
+
+只读 `QUERY_SCOPE_DENIED` 和 Owner 候选 `TASK_OWNER_REF_INVALID` 是模型可修正输入，不等同于权限放行：被拒绝动作不会执行，未知错误、旧租约和写效果失败保持阻断。已落账的 failed/waiting 不会因安装新包自动变为成功，应经对应受管恢复入口处理，禁止改 SQLite 状态。
+
+Owner 恢复通过原生 `surfaceOp: replace` 将旧输入投影标注为 superseded 并保留原 seq；完整原文仍在追加式会话审计日志，当前完整快照不裁剪。此措施消除重复输入，不承诺绕过真实服务端容量，亦不修改模型容量元数据或原生压缩配置。验收须区分原生 Loop 的投影测试与真实模型调用。
+
+Owner 首次规划失败、尚无 run 时，使用本地 `POST /tasks/:taskId/retry-owner`，正文为 `retryKey`、真实系统修复 `reason`、`expectedOwnerRevision`、`expectedLeaseEpoch`、`expectedRequirementRevision`、`expectedControlRevision`、`expectedLastFailure`。从当前任务详情 `taskOwner` 回读这些版本，失败码仅接纳 `TASK_OWNER_NO_DECISION` / `TASK_OWNER_TIMEOUT`。必须已经修复原因；不通过虚构用户补充或重发原 create 恢复。相同 retryKey 与完全相同正文幂等，参数变化拒绝。
+
+接口只记录同任务的 `system.recovery` 事件并将已阻塞 Owner 置为 pending，后续既有调度恢复；维护期间不会派发。需求、阶段、sessionId 和 ownerEpoch 不变。恢复沿原生 session resume 和输入投影，不清除 compaction 私有状态，不伪造会话缺失；真实模型/压缩继续报错则按真实错误保留失败状态。

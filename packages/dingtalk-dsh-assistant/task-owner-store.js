@@ -293,6 +293,25 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     db.prepare('UPDATE task_owners SET event_watermark=? WHERE task_id=?').run(eventSeq, o.task_id)
     return { status: 'replaced', taskId: o.task_id, sessionId: a.newSessionId, ownerEpoch: o.owner_epoch + 1 }
   }
+  if (command.kind === 'task.owner.retry') {
+    exact(a, ['taskId', 'eventKey', 'payloadRef', 'expectedOwnerRevision', 'expectedLeaseEpoch',
+      'expectedRequirementRevision', 'expectedControlRevision', 'expectedLastFailure'])
+    const o = owner(db, a.taskId), currentTask = task(db, a.taskId)
+    id(a.eventKey); ref(a.payloadRef)
+    for (const key of ['expectedOwnerRevision', 'expectedLeaseEpoch', 'expectedRequirementRevision', 'expectedControlRevision']) revision(a[key])
+    if (o.revision !== a.expectedOwnerRevision || o.lease_epoch !== a.expectedLeaseEpoch
+      || currentTask.requirement_revision !== a.expectedRequirementRevision || currentTask.control_revision !== a.expectedControlRevision
+      || o.last_failure !== a.expectedLastFailure) fail('TASK_OWNER_RETRY_STALE')
+    if (currentTask.control_state !== 'active' || o.status !== 'blocked' || o.failure_count < 3 || o.current_turn_id
+      || !['TASK_OWNER_NO_DECISION', 'TASK_OWNER_TIMEOUT'].includes(o.last_failure)
+      || db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked')) LIMIT 1").get(a.taskId))
+      fail('TASK_OWNER_RETRY_FORBIDDEN')
+    const eventSeq = Number(db.prepare("INSERT INTO task_events(task_id,event_key,event_type,payload_ref,created_at) VALUES(?,?,'system.recovery',?,?)")
+      .run(a.taskId, a.eventKey, a.payloadRef, now).lastInsertRowid)
+    db.prepare("UPDATE task_owners SET status='pending',failure_count=0,last_failure=NULL,event_watermark=?,revision=revision+1,updated_at=? WHERE task_id=?")
+      .run(eventSeq, now, a.taskId)
+    return { status: 'pending', taskId: a.taskId, eventSeq, ownerRevision: o.revision + 1, sessionId: o.session_id }
+  }
   if (command.kind === 'task.owner.event') {
     exact(a, ['taskId', 'eventKey', 'eventType', 'payloadRef'], ['taskId', 'eventKey', 'eventType'])
     const o = owner(db, a.taskId); id(a.eventKey); id(a.eventType)

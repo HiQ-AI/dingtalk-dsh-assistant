@@ -27,7 +27,7 @@ test('会话安装复用authorize execute verify，并拒绝写能力、权限�
  const f=await fixture(t),scope={resourceIds:[]}
  const [tool]=createAgentQueryTools({capabilities:[f.capability,{effectClass:'file.write'}],resolveScope:async()=>scope,artifacts:f.artifacts})
  await assert.rejects(tool.execute({binding,args:{resourceId:'docs',operation:'list'}}),{code:'QUERY_SCOPE_DENIED'})
- assert.equal(classifyAgentQueryError({code:'QUERY_NOT_FOUND'}),'correctable');assert.equal(classifyAgentQueryError({code:'QUERY_SCOPE_DENIED'}),'fatal')
+ assert.equal(classifyAgentQueryError({code:'QUERY_NOT_FOUND'}),'correctable');assert.equal(classifyAgentQueryError({code:'QUERY_SCOPE_DENIED'}),'correctable')
  assert.equal((await f.capability.verify({input:{resourceId:'docs'},scope:{resourceIds:['docs']},output:{sources:['fake']}})).passed,false)
 })
 test('内置工具可见性只由实际登记且授权的资源决定',async t=>{

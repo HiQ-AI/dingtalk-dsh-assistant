@@ -410,3 +410,49 @@ test('Owner 累计验收第33项拒绝且零写，历史超限仍允许已有项
     assert.equal(f.read('task.owner.planning').receipts.length,200)
   } finally { f.db.close() }
 })
+
+test('Owner受管恢复严格校验版本和已释放失败，不改Task及会话', () => {
+  const f = fixture()
+  try {
+    f.send('task.owner.event', { taskId: 'task-1', eventKey: 'create-retry', eventType: 'task.created' })
+    for (let lease = 1; lease <= 3; lease++) {
+      f.send('task.owner.claim', { taskId: 'task-1', turnId: `failed-${lease}`, expectedLeaseEpoch: lease - 1 })
+      f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: `failed-${lease}`, leaseEpoch: lease, sessionId: 'session-1' })
+      f.send('task.owner.release', { taskId: 'task-1', turnId: `failed-${lease}`, leaseEpoch: lease, reason: 'TASK_OWNER_NO_DECISION' })
+    }
+    const before = f.read('task.owner'), task = f.db.prepare('SELECT * FROM business_tasks').get()
+    const args = { taskId: 'task-1', eventKey: 'repair-v1', payloadRef: 'sha256-' + 'a'.repeat(64) + '.json',
+      expectedOwnerRevision: before.revision, expectedLeaseEpoch: before.leaseEpoch,
+      expectedRequirementRevision: before.requirementRevision, expectedControlRevision: before.controlRevision, expectedLastFailure: before.lastFailure }
+    assert.throws(() => f.send('task.owner.retry', { ...args, expectedOwnerRevision: before.revision - 1 }), { code: 'TASK_OWNER_RETRY_STALE' })
+    assert.throws(() => f.send('task.owner.retry', { ...args, expectedLastFailure: 'TASK_OWNER_TIMEOUT' }), { code: 'TASK_OWNER_RETRY_STALE' })
+    f.db.prepare("UPDATE task_controls SET state='paused'").run()
+    assert.throws(() => f.send('task.owner.retry', args), { code: 'TASK_OWNER_RETRY_FORBIDDEN' })
+    f.db.prepare("UPDATE task_controls SET state='active'").run()
+    assert.equal(f.send('task.owner.retry', args).status, 'pending')
+    const after = f.read('task.owner')
+    assert.equal(after.sessionId, before.sessionId); assert.equal(after.ownerEpoch, before.ownerEpoch)
+    assert.equal(after.failureCount, 0); assert.equal(after.lastFailure, null)
+    assert.deepEqual(f.db.prepare('SELECT * FROM business_tasks').get(), task)
+    assert.equal(f.db.prepare("SELECT event_type FROM task_events WHERE event_key='repair-v1'").get().event_type, 'system.recovery')
+    assert.throws(() => f.send('task.owner.retry', { ...args, expectedOwnerRevision: after.revision, expectedLastFailure: null }), { code: 'TASK_OWNER_RETRY_FORBIDDEN' })
+  } finally { f.db.close() }
+})
+
+test('Owner受管恢复拒绝未知错误和未应用候选', () => {
+ for (const scenario of ['unknown', 'candidate', 'applying', 'running']) {
+  const f = fixture()
+  try {
+   f.db.prepare("UPDATE task_owners SET status='blocked',failure_count=3,last_failure='TASK_OWNER_NO_DECISION'").run()
+   if (scenario === 'unknown') f.db.prepare("UPDATE task_owners SET last_failure='UNKNOWN_STORAGE_RESULT'").run()
+   if (scenario === 'running') f.db.prepare("UPDATE task_owners SET current_turn_id='live'").run()
+   if (['candidate','applying'].includes(scenario)) f.db.prepare(`INSERT INTO task_owner_turns(turn_id,task_id,lease_epoch,event_watermark,requirement_revision,plan_revision,control_revision,authorization_revision,input_fence_revision,status,application_status,created_at,updated_at)
+    VALUES('pending','task-1',1,0,1,1,1,1,0,?,?,?,?)`).run(scenario === 'candidate' ? 'candidate' : 'accepted', scenario === 'applying' ? 'pending' : null, at, at)
+   const owner = f.read('task.owner')
+   assert.throws(() => f.send('task.owner.retry', { taskId: 'task-1', eventKey: 'recovery', payloadRef: 'sha256-'+'a'.repeat(64)+'.json',
+    expectedOwnerRevision: owner.revision, expectedLeaseEpoch: owner.leaseEpoch, expectedRequirementRevision: owner.requirementRevision,
+    expectedControlRevision: owner.controlRevision, expectedLastFailure: owner.lastFailure }), { code: 'TASK_OWNER_RETRY_FORBIDDEN' })
+   assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_events').get().n, 0)
+  } finally { f.db.close() }
+ }
+})

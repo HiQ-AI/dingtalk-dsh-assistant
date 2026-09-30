@@ -275,7 +275,8 @@ function revoke(db,r,unitIds) {
   }
 }
 function agentEffectsPresent(db,r,command) {
-  return rows(db,r.runId,'notification').some(item=>item.commandId===command.id)
+  const retained=new Set((command.readonlyRetryHistory??[]).flatMap(item=>item.notificationIds??[]))
+  return rows(db,r.runId,'notification').some(item=>item.commandId===command.id&&!(retained.has(item.id)&&['delivered','superseded'].includes(item.status)))
     || rows(db,r.runId,'notification-operation').some(item=>item.commandId===command.id)
     || db.prepare('SELECT 1 FROM execution_effects WHERE run_id=? LIMIT 1').get(r.runId)
     || db.prepare('SELECT 1 FROM execution_runs WHERE run_id=? LIMIT 1').get(r.runId)
@@ -502,7 +503,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(kind==='message.notification.prepare') {
       const r=run(db,a.runId)
       if([a.commandId,a.requestId,a.stateFact,a.acceptanceId].filter(Boolean).length!==1)fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')
-      if(a.commandId){const c=get(db,'command',a.commandId);if(c.runId!==r.runId||!['applied','rejected'].includes(c.status))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')}
+      if(a.commandId){const c=get(db,'command',a.commandId);if(c.runId!==r.runId||!['applied','rejected'].includes(c.status))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED');const fact=a.payload?.fact;if(fact?.commandLeaseEpoch!==undefined&&(c.leaseEpoch!==fact.commandLeaseEpoch||fact.commandInputVersion!==undefined&&c.result?.inputVersion!==fact.commandInputVersion))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')}
       else if(a.requestId){const q=get(db,'request',a.requestId);current(db,r,q.revision);if(q.runId!==r.runId||q.status!=='pending'||!(q.kind==='needs_clarification'||q.kind==='needs_context'&&q.blocked===true))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')}
       else if(a.acceptanceId){const fact=get(db,'acceptance',a.acceptanceId);if(fact.runId!==r.runId||db.prepare('SELECT requirement_revision FROM business_tasks WHERE task_id=?').get(fact.taskId)?.requirement_revision!==fact.requirementRevision)fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')}
       else if(!notificationStateCurrent(r,a.stateFact))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')
@@ -538,6 +539,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
         ||version.taskId&&version.requirementRevision!==undefined&&db.prepare('SELECT requirement_revision FROM business_tasks WHERE task_id=?').get(version.taskId)?.requirement_revision!==version.requirementRevision)){
         n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}
       }
+      if(version?.commandLeaseEpoch!==undefined&&(()=>{const command=get(db,'command',n.commandId);return command.status!=='applied'||command.leaseEpoch!==version.commandLeaseEpoch||version.commandInputVersion!==undefined&&command.result?.inputVersion!==version.commandInputVersion})()){n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}
       if(n.payload?.phase?.startsWith('owner:')){
         const reportId=n.payload.phase.slice('owner:'.length)
         const fact=db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.application_status,t.requirement_revision AS report_requirement_revision,o.event_watermark,o.processed_watermark,
@@ -692,6 +694,41 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(kind==='message.command.reconcile') {if(c.status!=='unknown')fail('MESSAGE_COMMAND_NOT_UNKNOWN');if(!['applied','failed'].includes(a.status)||!a.evidenceRef)fail('MESSAGE_RECONCILE_EVIDENCE_REQUIRED');c.status=a.status;c.result=a.result??null;c.evidenceRef=a.evidenceRef;put(db,r.runId,'command',c);const u=get(db,'unit',c.unitId);if(rows(db,r.runId,'command').filter(x=>x.unitId===u.id).every(x=>x.status==='applied')){u.status='applied';put(db,r.runId,'unit',u)}settle(db,r);return {result:{command:c}}}
     if(kind==='message.command.retry.readonly') {
       current(db,r,c.revision)
+      if(c.kind==='answer') {
+        const execution=rows(db,r.runId,'agent-execution').find(item=>item.commandId===c.id)
+        const requestDigest=textHash(json(canonical(a))),prior=(c.readonlyRetryHistory??[]).find(item=>item.retryKey===a.retryKey)
+        if(prior){if(prior.requestDigest!==requestDigest)fail('MESSAGE_READONLY_RETRY_CONFLICT');return {result:{command:c,run:r,execution,cached:true}}}
+        if(c.status!=='applied'||c.result?.status!=='blocked'||c.result?.reason!=='execution_tool_failed'||c.args?.taskId||c.result?.taskId||c.result?.runId
+          ||!execution||execution.kind!=='message-unit'||execution.mode!=='read-only'||execution.status!=='failed'||execution.drained!==true||execution.error!=='execution_tool_failed'
+          ||execution.runRevision!==r.revision||execution.sourceVersion!==r.sourceVersion||a.sourceVersion!==r.sourceVersion||a.expectedRunRevision!==r.revision
+          ||a.expectedInputVersion!==execution.inputVersion||a.expectedInputDigest!==execution.inputDigest||a.expectedLeaseEpoch!==execution.leaseEpoch
+          ||!/^([a-f0-9]{64})$/.test(execution.toolPolicyDigest??'')||!/^([a-f0-9]{64})$/.test(a.toolPolicyDigest??''))fail('MESSAGE_READONLY_RETRY_FORBIDDEN')
+        agentInput(a);str(a.retryKey);str(a.reason)
+        if(a.inputVersion!==execution.inputVersion+1||a.sessionId===execution.sessionId
+          ||db.prepare("SELECT body FROM message_items WHERE kind='agent-execution'").all().some(row=>{const item=JSON.parse(row.body);return [item,...(item.bindingHistory??[]),...(item.attemptHistory??[])].some(prior=>prior.sessionId===a.sessionId)}))fail('MESSAGE_AGENT_INPUT_VERSION_INVALID')
+        if(c.topicId){const topic=queryMessageTopics(db,{kind:'message.topic',topicId:c.topicId});if(!topic||topic.inputRevision!==c.topicInputRevision
+          ||queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId,topicId:c.topicId}).length)fail('MESSAGE_INPUT_PENDING')}
+        const notices=rows(db,r.runId,'notification').filter(item=>item.commandId===c.id)
+        if(notices.some(item=>!['delivered','superseded','prepared'].includes(item.status))
+          ||rows(db,r.runId,'notification-operation').some(item=>notices.some(n=>n.id===item.notificationId)||item.commandId===c.id)
+          ||db.prepare('SELECT 1 FROM execution_effects WHERE run_id=? LIMIT 1').get(r.runId)
+          ||db.prepare('SELECT 1 FROM execution_runs WHERE run_id=? LIMIT 1').get(r.runId)
+          ||rows(db,r.runId,'request').some(item=>item.commandId===c.id&&item.status==='pending'))fail('MESSAGE_READONLY_RETRY_FORBIDDEN')
+        const previous={...execution};delete previous.attemptHistory
+        execution.attemptHistory=[...(execution.attemptHistory??[]),previous]
+        rememberAgentBinding(execution)
+        execution.inputHistory.push({inputVersion:execution.inputVersion,inputDigest:execution.inputDigest,inputRef:execution.inputRef,retryKey:a.retryKey})
+        c.readonlyRetryHistory=[...(c.readonlyRetryHistory??[]),{retryKey:a.retryKey,requestDigest,reason:a.reason,at:now,status:c.status,result:c.result,error:c.error,completedAt:c.completedAt,leaseEpoch:c.leaseEpoch,inputVersion:execution.inputVersion,notificationIds:notices.map(item=>item.id)}]
+        for(const notice of notices.filter(item=>item.status==='prepared')){notice.status='superseded';notice.supersededAt=now;put(db,r.runId,'notification',notice)}
+        Object.assign(execution,{inputVersion:a.inputVersion,inputDigest:a.inputDigest,inputRef:a.inputRef,sessionId:a.sessionId,toolPolicyDigest:a.toolPolicyDigest,
+          sessionBound:false,status:'ready',drained:true,result:null,resultRef:null,error:null,updatedAt:now})
+        delete execution.completedAt;delete execution.startedAt;delete execution.drainedAt
+        c.status='pending';c.result=null;c.error=null;delete c.completedAt
+        put(db,r.runId,'agent-execution',execution);put(db,r.runId,'command',c)
+        const unit=get(db,'unit',c.unitId);unit.status='accepted';put(db,r.runId,'unit',unit)
+        r.status='pending';r.intentStatus='processed';save(db,r)
+        return {result:{command:c,run:r,execution,cached:false}}
+      }
       if(!['status','result'].includes(c.kind)||c.status!=='unknown'||c.error!=='INVALID_ARGUMENT'||(c.readonlyRetryCount??0)>=1||c.result!==null)fail('MESSAGE_READONLY_RETRY_FORBIDDEN')
       if(rows(db,r.runId,'notification').some(item=>item.commandId===c.commandId||item.commandId===c.id))fail('MESSAGE_READONLY_RETRY_FORBIDDEN')
       c.readonlyRetryCount=(c.readonlyRetryCount??0)+1;c.status='pending';c.error=null;c.result=null;put(db,r.runId,'command',c)
@@ -726,7 +763,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(!['message.command.complete','message.command.fail'].includes(kind))fail('MESSAGE_UNKNOWN_COMMAND')
     const agent=rows(db,r.runId,'agent-execution').find(e=>e.commandId===c.id)
     if(agent&&(!agent.drained||!['succeeded','failed'].includes(agent.status)))fail('MESSAGE_AGENT_NOT_DRAINED')
-    c.status=kind.endsWith('fail')?'unknown':'applied';c.result=a.result??null;c.error=a.error??null;c.completedAt=now;put(db,r.runId,'command',c)
+    c.status=kind.endsWith('fail')?'unknown':'applied';c.result=a.result??null;if(agent&&c.kind==='answer'&&c.result)c.result={...c.result,inputVersion:agent.inputVersion};c.error=a.error??null;c.completedAt=now;put(db,r.runId,'command',c)
     const u=get(db,'unit',c.unitId)
     if(rows(db,r.runId,'command').filter(x=>x.unitId===u.id).every(x=>x.status==='applied')) {u.status='applied';put(db,r.runId,'unit',u)}
     settle(db,r);return {result:{command:c,run:r}}

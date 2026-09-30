@@ -263,3 +263,11 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 通知按稳定 `eventKey` 查询同一 Owner 报告已有账目，已有通知的原来源引用、发送及回读事实保持原样，不因后来 command 或投影字段变化重发。`message.notification` 查询须且仅须提供 `notificationId` 或 `eventKey`。
 
 通知扫描逐来源、请求、承接、命令、Owner 报告及投递事实隔离异常；准备失败不阻断其他 prepared 投递或 unknown/acknowledged 的只读回查。失败落在原 `message_items` 的 `notification-diagnostic`，通过现有 `message.run` 状态返回 `notificationDiagnostics`（id/runId/fact/error/status/attempts/createdAt/updatedAt/resolvedAt），并可用 `message.notification.diagnostics` 按 runId/status 查询。相同未解决错误不重复写账；事实恢复后标记 resolved。内部 flush 完成其余事实后仍汇总抛出诊断供既有恢复日志显示，不将失败冒充成功。
+
+### 只读问答原命令重试
+
+`POST /workflows/:runId/commands/:commandId/retry-readonly` 仅接受回环来源、允许的 Origin 及配置的 Web 操作者。请求体 `{sourceVersion, retryKey, reason}`，禁止传入 scope、输入 artifact 或执行身份。Host 重新核验当前话题与冻结附件的精确来源，准备新输入及新会话，再以旧输入版本、摘要和租约做原子 CAS。
+
+仅可重试已落账 blocked、实际执行 failed/drained/read-only 且原因为 `execution_tool_failed` 的 answer；来源过期、成功、未排空、未知效果及运行中通知拒绝。保留旧尝试、旧失败回执，原 commandId 不变，新执行增加 inputVersion 并生成独立结果通知。相同 retryKey/reason 返回已接受结果，不再次执行；更换 reason 必须使用新的明确操作键。维护期仍遵守现有执行领取门禁。返回 HTTP 202 `{runId, commandId, inputVersion, accepted, cached?}`；接纳重试不等于查询成功。
+
+只读answer完成事务将执行inputVersion固化于command.result.inputVersion。结果通知正文与版本来自同一命令结果快照；receipt fact携带commandLeaseEpoch，准备及领取均核对当前已完成命令的租约和inputVersion。旧失败快照不能占用新执行结果的通知身份。

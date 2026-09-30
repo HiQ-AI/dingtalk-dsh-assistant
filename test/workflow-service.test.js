@@ -476,6 +476,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
   const legacyJudge = options.judge ?? judge
   const batchJudge = async request => {
     if (request.stage !== 'IB') return legacyJudge(request)
+    if (options.batchJudge) return options.batchJudge(request)
     const shared = request.input
     const resolveTask = task => task?.ref ? shared.sharedTasks[task.ref] : task
     const resolveMaterial = value => {
@@ -522,7 +523,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
   const service = await openWorkflowService({ ctx: options.ctx ?? {}, config: { groupIds: ['g'], ownerActorId: 'owner', ...options.config }, legacy, judge: batchJudge, execution, notifications, readResource: options.readResource, readMessage: options.readMessage, external: options.external,
     ...(options.generalCompletionCheck ? { generalCompletionCheck: options.generalCompletionCheck,
       generalCompletionIdentity: 'test-general-completion-v1' } : {}),
-    messageAgentSessions: { async run({ input, onSessionBound, onResult }) {
+    messageAgentSessions: options.messageAgentSessions ?? { async run({ input, onSessionBound, onResult }) {
       await onSessionBound()
       await onResult({ outcome: 'completed', summary: input.request, evidenceRefs: [], limitations: [], question: '' })
       return { status: 'submitted' }
@@ -2711,6 +2712,24 @@ const ordinaryAnswerJudge = (text = '已收到', replyPolicy = 'result') => asyn
   : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['新消息'] }
     : { kind: 'intent', actions: [{ intent: 'answer', arguments: { objective: text }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy }
 
+test('答案失败已落账不能在收信箱显示业务已处理', async t => {
+  const { service, message } = await fixture(t, 'owner', undefined, {
+    judge: ordinaryAnswerJudge('查询附件'),
+    messageAgentSessions: { async run({ onSessionBound }) {
+      await onSessionBound()
+      throw Object.assign(new Error('execution_tool_failed'), { code: 'execution_tool_failed' })
+    }, async close() {}, async cancel() {} },
+  })
+  const received = await service.ingest(message)
+  const state = await service.messages.process(received.runId)
+  assert.equal(state.commands[0].status, 'applied')
+  assert.equal(state.commands[0].result.status, 'blocked')
+  const row = (await service.mailboxes()).messages.find(item => item.runId === received.runId)
+  assert.equal(row.workflowStatus, 'waiting_system')
+  assert.ok(row.waiting.some(item => item.responsibility === 'system' && /安全重试/.test(item.recoveryCondition)))
+  assert.equal(row.workflowStatusDetail, state.commands[0].result.reply)
+})
+
 test('普通 answer 的 Host 门禁拒绝已排队的旧参数与任务参数，且不豁免创建权限', async t => {
   const { service, execution } = await fixture(t, 'participant', undefined, { judge: async () => { throw new Error('QUEUED_COMMAND_MUST_NOT_REJUDGE') } })
   const cases = [
@@ -2783,7 +2802,7 @@ for (const actor of ['owner', 'participant']) test(`普通 answer 可向 ${actor
   const received = await service.ingest(message), state = await service.messages.process(received.runId)
   assert.equal(state.commands[0].status, 'applied')
   assert.equal(state.commands[0].args.taskId, null)
-  assert.deepEqual(state.commands[0].result, { status: 'answered', reply: '已收到 E2E-0927-2212', resultRef: state.commands[0].result.resultRef, evidenceRefs: [], limitations: [] })
+  assert.deepEqual(state.commands[0].result, { status: 'answered', reply: '已收到 E2E-0927-2212', resultRef: state.commands[0].result.resultRef, evidenceRefs: [], limitations: [], inputVersion: 1 })
   assert.equal((await execution.artifacts.read(state.commands[0].result.resultRef)).summary, '已收到 E2E-0927-2212')
   await service.flushNotifications()
   assert.equal((await service.ingest(message)).duplicate, true)
@@ -4013,4 +4032,130 @@ for(const failed of [false,true])test(`文件消息引用读取真实附件并�
  const task=await execution.controller.whenIdle(state.commands[0].result.runId)
  const requirement=await execution.artifacts.read(task.run.requirementRef)
  const actual=requirement.materials.find(item=>item.id===fileKey);assert.match(actual.text,/Y2=expert/);assert.ok(actual.text.includes(text))
+})
+
+test('问答冻结附件精确范围与只读失败原命令续跑：不要求重发、不扩大普通历史',async t=>{
+ const inputs=[],resourceReads=[];let attempts=0
+ const fileText='[文件] 审核.xlsx fileId: selected-file'
+ const readMessage=async(_group,messageId)=>({conversationId:'g',messageId,text:messageId==='provided-file'?fileText:'[文件] 无关失效.xlsx fileId: broken-file',resourceRefs:[{type:'fileId',resourceId:messageId==='provided-file'?'selected-file':'broken-file'}]})
+ const readResource=async(_group,_message,ref)=>{resourceReads.push(ref.resourceId);if(ref.resourceId==='broken-file')throw Error('UNRELATED_FILE_UNAVAILABLE');return{text:'完整工作簿内容',complete:true}}
+ const judge=async({stage,input})=>{
+  if(stage==='S')return input.source.text.startsWith('[文件]')||input.source.text==='普通历史'?{kind:'no_action',reason:'资料',coverage:[{start:0,end:input.source.text.length}]}:splitOne(input.source.text)
+  if(stage==='R')return{kind:'binding',disposition:'new',candidateId:null,evidence:['当前请求']}
+  return{kind:'intent',actions:[{intent:'answer',arguments:{objective:'检查这批数据'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'result'}
+ }
+ const {service,execution,message}=await fixture(t,'owner',undefined,{config:{webActorId:'owner'},judge,
+  readMessage,readResource,
+  messageAgentSessions:{async run({input,onSessionBound,onResult}){
+   inputs.push(input);await onSessionBound()
+   const resource=input.context.readableMessageResources.find(item=>item.resourceId==='selected-file')
+   const capability=createTaskMessageResourceCapability({store:execution.store,readMessage,readResource})
+   const args={sourceKey:resource.sourceKey,type:resource.type,resourceId:resource.resourceId}
+   assert.equal(await capability.authorize({input:{...args,sourceKey:input.source.sourceKey},scope:input.scope}),false)
+   assert.equal(await capability.authorize({input:args,scope:input.scope}),true)
+   assert.match((await capability.execute({input:args,scope:input.scope})).markdown,/完整工作簿内容/)
+   if(++attempts===1)throw Object.assign(Error('execution_tool_failed'),{code:'execution_tool_failed'})
+   await onResult({outcome:'completed',summary:'查询完成',evidenceRefs:[],limitations:[],question:''});return{status:'submitted'}
+  },async cancel(){},async close(){}}})
+ const file=await service.ingest({...message,messageId:'provided-file',text:fileText,resourceRefs:[{type:'fileId',resourceId:'selected-file'}]});await service.messages.process(file.runId)
+ const fileRun=(await service.messages.state(file.runId)).run
+ const ordinary=await service.ingest({...message,messageId:'ordinary-history',text:'普通历史'});await service.messages.process(ordinary.runId)
+ const unrelated=await service.ingest({...message,messageId:'other-file',senderOpenDingTalkId:'other',text:'[文件] other.xlsx fileId: other-file',resourceRefs:[{type:'fileId',resourceId:'other-file'}]});await service.messages.process(unrelated.runId)
+ const broken=await service.ingest({...message,messageId:'broken-file',text:'[文件] 无关失效.xlsx fileId: broken-file',resourceRefs:[{type:'fileId',resourceId:'broken-file'}]});await service.messages.process(broken.runId)
+ const forbiddenKeys=await Promise.all([ordinary,unrelated].map(async item=>(await service.messages.state(item.runId)).run.sourceKey))
+ const request=await service.ingest({...message,messageId:'question',text:'看看这批数据是否可行'})
+ let state=await service.messages.process(request.runId)
+ assert.equal(state.commands[0].result.reason,'execution_tool_failed')
+ assert.ok(inputs[0].scope.sourceKeys.includes(fileRun.sourceKey))
+ assert.ok(forbiddenKeys.every(key=>!inputs[0].scope.sourceKeys.includes(key)))
+ assert.equal(inputs[0].materials.length,0,'可见附件按需读取，不把无关失效附件变为启动前必需材料')
+ assert.deepEqual(inputs[0].context.readableMessageResources.find(item=>item.resourceId==='selected-file'),{sourceKey:fileRun.sourceKey,sourceVersion:1,type:'fileId',resourceId:'selected-file',name:''})
+ assert.ok(inputs[0].context.readableMessageResources.some(item=>item.resourceId==='broken-file'))
+ const commandId=state.commands[0].commandId,original=state.executions[0]
+ const retry={runId:request.runId,commandId,sourceVersion:1,retryKey:'fixed-scope',reason:'已修复精确附件范围'}
+ await assert.rejects(service.retryReadonlyAnswer(retry,{channel:'web',actorId:'other'}),/WORKFLOW_ACTION_FORBIDDEN/)
+ await service.retryReadonlyAnswer(retry,{channel:'web',actorId:'owner'})
+ state=await service.messages.process(request.runId)
+ assert.equal(attempts,2);assert.equal(state.commands[0].result.status,'answered')
+ assert.equal(state.executions[0].inputVersion,2);assert.notEqual(state.executions[0].sessionId,original.sessionId)
+ assert.equal(state.executions[0].attemptHistory[0].status,'failed')
+ assert.equal((await service.retryReadonlyAnswer(retry,{channel:'web',actorId:'owner'})).cached,true)
+ assert.equal(attempts,2)
+ assert.deepEqual(resourceReads,['selected-file','selected-file'])
+})
+
+test('同批IB一个目标只建一Task，补充fact在首次Owner前完整落账',async t=>{
+ const first='保留行业审核记录和状态，写脚本后由负责人审批，不改派单、不发业务通知、不改轮次。'
+ const second='先执行两条测试数据，更换审核人为指定专家；我验证通过后再处理69条正式数据。'
+ const observed=[]
+ const {service,execution,message}=await fixture(t,'owner',undefined,{judge:async({stage,input})=>{
+  if(stage==='S'){
+   if(input.source.text===second)for(let i=0;i<100;i++){if((await execution.store.query({kind:'message.topic.bindings',conversationId:'g'})).length)break;await new Promise(resolve=>setTimeout(resolve,5))}
+   return splitOne(input.source.text)
+  }
+  const candidate=input.candidates.find(item=>item.topicId)
+  return{kind:'binding',disposition:candidate?'existing':'new',candidateId:candidate?.candidateId??null,evidence:['同目标两阶段']}
+ },batchJudge:async({input})=>{
+  assert.equal(input.units.length,2)
+  return{kind:'topic_intents',decisions:input.units.map(unit=>({unitId:unit.unitId,intent:{kind:'intent',actions:[unit.input.text===second
+   ?{intent:'create',arguments:{objective:first+'\n'+second,workflowId:'task-investigation',explicitStages:[second],stageAuthorizations:[{workflowId:'task-data-change',sourceQuote:second,objective:'处理69条正式数据',gate:'confirmation'}]},dependsOn:[]}
+   :{intent:'fact',arguments:{kind:'constraint',text:first},dependsOn:[]}],constraints:[first,second],requiredExecutionMaterials:[],replyPolicy:'none'}}))}
+ },taskOwnerSessions:{async run({input,onSessionBound,onCandidate}){
+  observed.push(input);assert.equal(input.goal.sourceInstructions.length,2)
+  assert.deepEqual(new Set(input.goal.sourceInstructions.map(item=>item.text)),new Set([first,second]))
+  assert.ok(input.goal.constraints.includes(first));assert.ok(input.goal.constraints.includes(second))
+  const auth=input.goal.stageAuthorizations.find(item=>item.gate==='confirmation')
+  assert.equal(auth.sourceQuote,second);assert.equal(auth.requiredActorId,'owner')
+  await onSessionBound();const decision={action:'wait',summary:'保持只读分析，不执行生产阶段',evidenceRefs:[]};await onCandidate(decision);return{status:'submitted',decision}
+ },async close(){}}})
+ const a=await service.ingest({...message,messageId:'primary',text:first})
+ const b=await service.ingest({...message,messageId:'supplement',text:second,quotedMessage:{messageId:'primary',content:first}})
+ await service.messages.process(a.runId);await service.messages.process(b.runId)
+ await service.recoverExecutionTasks()
+ const states=await Promise.all([a,b].map(item=>service.messages.state(item.runId)))
+ const commands=states.flatMap(item=>item.commands)
+ assert.equal(commands.filter(item=>item.kind==='create').length,1,JSON.stringify(states.map(s=>({run:s.run,requests:s.requests,nodes:s.nodes.map(n=>({stage:n.nodeId,error:n.error,output:n.output?.output}))}))))
+ assert.equal(commands.filter(item=>item.kind==='fact').length,1)
+ assert.equal(commands.filter(item=>item.kind==='revise').length,0)
+ assert.ok(observed.length>0)
+ const taskId=commands.find(item=>item.kind==='create').args.taskId
+ const plan=await execution.controller.taskPlan(taskId)
+ assert.equal(plan.stages.length,0)
+})
+
+test('无run的blocked Owner可受管恢复且精确幂等，不改原需求与session', async t => {
+ let failOwner = true
+ const sessions = { async run({ onSessionBound, onCandidate }) {
+   await onSessionBound()
+   if (failOwner) return { status: 'no_submission' }
+   const decision = { action: 'wait', summary: '系统修复完成，保留原任务继续核对', evidenceRefs: [] }
+   await onCandidate(decision); return { status: 'submitted', decision }
+ }, async close() {} }
+ const { service, execution, message } = await fixture(t, 'owner', undefined, { config: { webActorId: 'owner' }, taskOwnerSessions: sessions })
+ const source = await service.ingest(message)
+ const processed = await service.messages.process(source.runId)
+ const taskId = processed.commands.find(c => c.kind === 'create').result.taskId
+ for (let i = 0; i < 3; i++) await service.recover()
+ const owner = await execution.store.query({ kind: 'task.owner', taskId })
+ assert.equal(owner.status, 'blocked')
+ const plan = await execution.controller.taskPlan(taskId)
+ assert.equal(plan.stages.length, 0)
+ const request = { taskId, retryKey: 'reference-contract-fixed', reason: '引用错误反馈修复完成',
+   expectedOwnerRevision: owner.revision, expectedLeaseEpoch: owner.leaseEpoch,
+   expectedRequirementRevision: owner.requirementRevision, expectedControlRevision: owner.controlRevision, expectedLastFailure: owner.lastFailure }
+ await assert.rejects(service.retryOwner(request, { channel: 'web', actorId: 'other' }), /WORKFLOW_ACTION_FORBIDDEN/u)
+ await assert.rejects(service.retryOwner({ ...request, expectedOwnerRevision: owner.revision - 1 }, { channel: 'web', actorId: 'owner' }), /TASK_OWNER_RETRY_STALE/u)
+ failOwner = false
+ const result = await service.retryOwner(request, { channel: 'web', actorId: 'owner' })
+ assert.equal(result.status, 'pending')
+ assert.deepEqual(await service.retryOwner(request, { channel: 'web', actorId: 'owner' }), result)
+ await assert.rejects(service.retryOwner({ ...request, reason: 'different' }, { channel: 'web', actorId: 'owner' }), /COMMAND_ID_CONFLICT/u)
+ await service.recover()
+ const after = await execution.store.query({ kind: 'task.owner', taskId })
+ assert.equal(after.sessionId, owner.sessionId); assert.equal(after.failureCount, 0)
+ assert.equal((await execution.controller.taskPlan(taskId)).task.requirementRef, plan.task.requirementRef)
+ const events = await execution.store.query({ kind: 'task.owner.events', taskId, limit: 200 })
+ const recovery = events.filter(e => e.eventType === 'system.recovery')
+ assert.equal(recovery.length, 1)
+ assert.equal((await execution.artifacts.read(recovery[0].payloadRef)).reason, request.reason)
 })

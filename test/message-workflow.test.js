@@ -1321,3 +1321,11 @@ test('容量失败保真落账且恢复扫描不重试；合法JSON不能吞提�
  state=await store.query({kind:'message.run',runId:'capacity'})
  assert.equal(state.nodes[0].leaseEpoch,1)
 })
+
+test('IB提示明确单目标唯一创建与逐字阶段授权，补充走既有fact',()=>{
+ const prompt=messageSystem('IB')
+ assert.match(prompt,/只能有一个create或research/)
+ assert.match(prompt,/其他补充事项用fact/)
+ assert.match(prompt,/objective必须直接复制sourceQuote内的逐字连续子串/)
+ assert.match(prompt,/此前测试阶段单独保留为gate=none/)
+})

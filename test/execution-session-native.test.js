@@ -653,3 +653,15 @@ test('任务原生节点工作目录隔离，宿主重启恢复原cwd且原始�
 })
 
 }
+
+test('只读范围拒绝保留拒绝后可调整合法查询，不终止整个调查', async t => {
+  const { classifyAgentQueryError } = await import('../packages/dingtalk-dsh-assistant/agent-query-tools.js')
+  const seen = []
+  const h = await host({ tools: [{ name: 'query', description: 'readonly', parameters: { type: 'object' }, classifyError: classifyAgentQueryError,
+    execute({ args }) { if (args.path === 'forbidden') throw Object.assign(Error('QUERY_SCOPE_DENIED'), { code: 'QUERY_SCOPE_DENIED' }); seen.push(args.path); return { text: 'verified' } } }],
+    script: [{ name: 'query', args: { path: 'forbidden' } }, { name: 'query', args: { path: 'allowed' } }, submit('done')] })
+  t.after(() => h.close())
+  assert.equal((await drive(h, { definition: definition({ allowedTools: ['query'] }) })).status, 'submitted')
+  assert.deepEqual(seen, ['allowed'])
+  assert.match(JSON.stringify(h.requests[1]), /QUERY_SCOPE_DENIED/u)
+})

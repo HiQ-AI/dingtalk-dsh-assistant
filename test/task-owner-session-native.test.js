@@ -70,7 +70,7 @@ test('同一个业务 Task 的原生 Owner 会话跨唤醒复用并持久记录�
   assert.equal(saved.events.filter(event => event.type === 'dingtalk/task-owner-session').length, 1)
   assert.equal(saved.meta.cwd, join(root, 'session-workspaces', '任务负责'))
   assert.equal(saved.events.findLast(event => event.type === 'session/title').data.title, '整理任务交付报告 · 任务负责')
-  assert.equal(saved.events.filter(event => event.type === 'user/message').length, 2)
+  assert.equal(saved.events.filter(event => event.type === 'user/message' && event.surfaceOp === 'append').length, 2)
   assert.equal(h.requests.length, 2)
   assert.ok(h.requests.every(request => request.tools.map(tool => tool.name).join(',') === 'task_owner_submit'))
   assert.match(h.requests[0].system, /先完成必要调查，再用task-general-capability阶段/u)
@@ -218,5 +218,60 @@ test('Owner原生工作目录使用受信任务绑定，重启保持cwd及宿主
   const saved = await resumed.ctx.sessionPersistence.inspect('owner-task-a')
   assert.equal(saved.meta.cwd, taskFilePath(root, 'task-a', 'work'))
   assert.equal(resumed.ctx.sessionPersistence.locate(saved.meta).path, locations[0])
-  assert.equal(saved.events.filter(event => event.type === 'user/message').length, 2)
+  assert.equal(saved.events.filter(event => event.type === 'user/message' && event.surfaceOp === 'append').length, 2)
+})
+
+test('Owner原生会话引用拒绝可修正，未知持久化错误仍终止', async t => {
+  for (const code of ['TASK_OWNER_REF_INVALID', 'TASK_OWNER_STORAGE_UNKNOWN']) {
+    const root = await mkdtemp(join(tmpdir(), 'task-owner-correction-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const h = await host(root, null, null, step => ({ ...decision, evidenceRefs: step === 1 ? ['dws:source'] : [] }))
+    t.after(() => h.close())
+    let calls = 0
+    const result = await h.sessions.run({ binding: { taskId: 'task-correction', sessionId: 'owner-correction', turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+      input: { goal: { request: '调查' } }, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+      onCandidate: async value => { calls++; if (value.evidenceRefs.length) throw Object.assign(Error(code), { code }) } })
+    assert.equal(result.status, code === 'TASK_OWNER_REF_INVALID' ? 'submitted' : 'no_submission')
+    assert.equal(calls, code === 'TASK_OWNER_REF_INVALID' ? 2 : 1)
+    if (calls === 2) assert.match(JSON.stringify(h.requests[1]), /TASK_OWNER_REF_INVALID/u)
+  }
+})
+
+test('Owner完整大材料重试只保留当前输入投影，原始快照审计不改写', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'task-owner-snapshot-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const h = await host(root); t.after(() => h.close())
+  const marker = 'WORKBOOK_FULL_BODY_4eb39'
+  const body = marker + '完整单元格正文'.repeat(70000)
+  let reject = true
+  const run = leaseEpoch => h.sessions.run({ binding: { taskId: 'task-snapshot', sessionId: 'owner-snapshot', turnId: `turn-${leaseEpoch}`,
+    leaseEpoch, ownerEpoch: 1, sessionBound: leaseEpoch > 1 }, input: { taskId: 'task-snapshot', goal: { materials: [{ text: body }] } },
+    provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+    onCandidate: async () => { if (reject) throw Object.assign(Error('UNKNOWN_STORAGE'), { code: 'UNKNOWN_STORAGE' }) } })
+  assert.equal((await run(1)).status, 'no_submission')
+  const first = await h.ctx.sessionPersistence.inspect('owner-snapshot')
+  reject = false; h.setLease(2)
+  assert.equal((await run(2)).status, 'submitted')
+  const request = JSON.stringify(h.requests[1])
+  assert.equal(request.split(marker).length - 1, 1)
+  assert.ok(request.includes(body))
+  assert.match(request, /superseded/u)
+  const after = await h.ctx.sessionPersistence.inspect('owner-snapshot')
+  assert.deepEqual(after.events.slice(0, first.events.length), first.events)
+  assert.equal(after.events.filter(e => e.type === 'user/message' && e.surfaceOp === 'append').length, 2)
+  assert.equal(after.events.filter(e => e.surfaceOp?.op === 'replace').length, 1)
+})
+
+test('Owner引用纠正不能越过旧lease且连续错误仍受步骤预算约束', async t => {
+  for (const stale of [false, true]) {
+    const root = await mkdtemp(join(tmpdir(), 'task-owner-ref-fence-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const h = await host(root); t.after(() => h.close())
+    let calls = 0
+    const result = await h.sessions.run({ binding: { taskId: 'task-ref', sessionId: 'owner-ref', turnId: 'turn-ref', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+      input: { goal: { request: '调查' } }, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+      onCandidate: async () => { calls++; if (stale) h.setLease(2); throw Object.assign(Error('bad ref'), { code: 'TASK_OWNER_REF_INVALID' }) } })
+    assert.equal(result.status, stale ? 'stale' : 'no_submission')
+    assert.equal(calls, stale ? 1 : 8)
+  }
 })

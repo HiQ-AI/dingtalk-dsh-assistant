@@ -202,6 +202,29 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 202, result)
     } catch(error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|PENDING|TERMINAL|STALE|NOT_WAITING|TASK_ARCHIVE_|RUN_BUDGET_CONTINUATION_/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
+  const ownerRetry = /^\/tasks\/([^/]+)\/retry-owner$/u.exec(url.pathname)
+  if (request.method === 'POST' && ownerRetry) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.retryWorkflowOwner) return send(response, 404, { error: 'workflow_disabled' })
+    try {
+      const body = z.strictObject({ retryKey: requiredText.max(200), reason: requiredText.max(16000),
+        expectedOwnerRevision: z.number().int().positive(), expectedLeaseEpoch: z.number().int().nonnegative(),
+        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
+        expectedLastFailure: z.enum(['TASK_OWNER_NO_DECISION', 'TASK_OWNER_TIMEOUT']) }).parse(await readJson(request))
+      return send(response, 202, await store.retryWorkflowOwner({ ...body, taskId: decodeURIComponent(ownerRetry[1]) }))
+    } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
+  const answerRetry = /^\/workflows\/([^/]+)\/commands\/([^/]+)\/retry-readonly$/u.exec(url.pathname)
+  if (request.method === 'POST' && answerRetry) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.retryWorkflowReadonlyAnswer) return send(response, 404, { error: 'workflow_disabled' })
+    try {
+      const body = z.strictObject({ sourceVersion: z.number().int().positive(), reason: requiredText.max(16000), retryKey: requiredText }).parse(await readJson(request))
+      return send(response, 202, await store.retryWorkflowReadonlyAnswer({ ...body, runId: decodeURIComponent(answerRetry[1]), commandId: decodeURIComponent(answerRetry[2]) }))
+    } catch (error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /STALE|CONFLICT/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
   const workflowRetry = /^\/workflows\/([^/]+)\/requests\/([^/]+)\/retry$/u.exec(url.pathname)
   if (request.method === 'POST' && workflowRetry) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)

@@ -439,3 +439,29 @@ test('Web 新任务验收入参接受 16/17/32 条并拒绝超限、空白、超
     assert.equal(received.length, 3)
   }, { overrides: { createTask: async value => { received.push(value); return { taskId: 'created' } } } })
 })
+
+test('只读问答重试仅接收本地精确来源与幂等键，不接受调用者scope',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const url=base+'/workflows/run/commands/answer/retry-readonly'
+  const post=(body,headers={})=>fetch(url,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)})
+  const request={sourceVersion:3,retryKey:'fixed-scope',reason:'读取合同已修复'}
+  assert.equal((await post(request,{origin:'https://untrusted.invalid'})).status,403)
+  assert.equal((await post({...request,scope:{sourceKeys:['other']}})).status,400)
+  assert.equal((await post(request)).status,202)
+  assert.deepEqual(calls,[{...request,runId:'run',commandId:'answer'}])
+ },{overrides:{retryWorkflowReadonlyAnswer:async value=>{calls.push(value);return{accepted:true}}}})
+})
+
+test('Owner恢复API仅接纳本地版本化系统修复请求，不接受新需求或会话',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const post=(body,headers={})=>fetch(base+'/tasks/t/retry-owner',{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)})
+  const request={retryKey:'fixed-reader',reason:'已修复引用反馈',expectedOwnerRevision:8,expectedLeaseEpoch:3,expectedRequirementRevision:1,expectedControlRevision:1,expectedLastFailure:'TASK_OWNER_NO_DECISION'}
+  assert.equal((await post(request,{origin:'https://untrusted.invalid'})).status,403)
+  assert.equal((await post({...request,requirement:{}})).status,400)
+  assert.equal((await post({...request,sessionId:'replacement'})).status,400)
+  assert.equal((await post(request)).status,202)
+  assert.deepEqual(calls,[{...request,taskId:'t'}])
+ },{overrides:{retryWorkflowOwner:async value=>{calls.push(value);return{accepted:true}}}})
+})
