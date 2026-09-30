@@ -313,16 +313,29 @@ Write-Output 'PASS 5/5: 封存未launch检查点通过且不造文件；launch/c
 $ExpectedPackageSha256='same-package'
 [IO.File]::WriteAllText("$fixture/package.json",'{"dependencies":{"@zzusp/dingtalk-dsh-observer":"file:old-observer.tgz"}}')
 [IO.File]::WriteAllText("$fixture/pnpm-lock.yaml", "lockfileVersion: '9.0'`nimporters:`n  .:`n    dependencies:`n      '@zzusp/dingtalk-dsh-observer':`n        specifier: file:old-observer.tgz`npackages:`n  '@zzusp/dingtalk-dsh-observer@file:old-observer.tgz':`n    resolution: {tarball: 'file:old-observer.tgz'}`n")
-Assert-LocalPackageSources $fixture "$fixture/missing.tgz"
+Assert-LocalPackageSources $fixture '' "$fixture/missing.tgz"
 [IO.File]::AppendAllText("$fixture/pnpm-lock.yaml", "  'unrelated@file:missing-other.tgz':`n    resolution: {tarball: 'file:missing-other.tgz'}`n")
-$failed=$false;try{Assert-LocalPackageSources $fixture "$fixture/missing.tgz"}catch{$failed=$_.Exception.Message.StartsWith('profile本地依赖源不存在:')}
+$failed=$false;try{Assert-LocalPackageSources $fixture '' "$fixture/missing.tgz"}catch{$failed=$_.Exception.Message.StartsWith('profile本地依赖源不存在:')}
 if(-not $failed){throw 'Observer替代不能掩盖其他锁依赖缺失'}
 Write-Output 'PASS 2/2: 原生pnpm锁精确Observer替代通过；其他缺源仍拒绝'
+
+[IO.File]::WriteAllText("$fixture/package.json",'{"dependencies":{"@zzusp/dingtalk-dsh-assistant":"file:old-assistant.tgz"}}')
+[IO.File]::WriteAllText("$fixture/pnpm-lock.yaml", "lockfileVersion: '9.0'`nimporters:`n  .:`n    dependencies:`n      '@zzusp/dingtalk-dsh-assistant':`n        specifier: file:old-assistant.tgz`npackages:`n  '@zzusp/dingtalk-dsh-assistant@file:old-assistant.tgz':`n    resolution: {tarball: 'file:old-assistant.tgz'}`n")
+Assert-LocalPackageSources $fixture "$fixture/missing.tgz"
+$failed=$false;try{Assert-LocalPackageSources $fixture "$fixture/absent.tgz"}catch{$failed=$_.Exception.Message.StartsWith('profile本地依赖源不存在:')}
+if(-not $failed){throw 'Assistant替代包本身缺失必须拒绝'}
+[IO.File]::AppendAllText("$fixture/pnpm-lock.yaml", "  'unrelated@file:missing-other.tgz':`n    resolution: {tarball: 'file:missing-other.tgz'}`n")
+$failed=$false;try{Assert-LocalPackageSources $fixture "$fixture/missing.tgz"}catch{$failed=$_.Exception.Message.StartsWith('profile本地依赖源不存在:')}
+if(-not $failed){throw 'Assistant替代不能掩盖其他锁依赖缺失'}
+Write-Output 'PASS 3/3: Assistant精确替代缺源通过；替代包缺失及其他缺源仍拒绝'
 
 $installAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$repairPackages'},$true)
 $Package='D:/candidate.tgz';$ObserverPackage='D:/packages/observer recovered.tgz'
 Invoke-Expression $installAssignment.Extent.Text
-if($repairPackages.Count-ne 2 -or $repairPackages[0]-ne $Package -or $repairPackages[1]-ne '@zzusp/dingtalk-dsh-observer@file:D:/packages/observer recovered.tgz'){throw '恢复Observer须明确包名覆盖缺源依赖'}
+if($repairPackages.Count-ne 2 -or $repairPackages[0]-ne '@zzusp/dingtalk-dsh-assistant@file:D:/candidate.tgz' -or $repairPackages[1]-ne '@zzusp/dingtalk-dsh-observer@file:D:/packages/observer recovered.tgz'){throw '修复安装须明确包名覆盖缺源依赖'}
 $ObserverPackage='';Invoke-Expression $installAssignment.Extent.Text
-if($repairPackages.Count-ne 1 -or $repairPackages[0]-ne $Package){throw '未指定Observer时不得添加空包参数'}
-Write-Output 'PASS 2/2: Observer恢复用明确包名file参数；不恢复Observer时只安装Assistant'
+if($repairPackages.Count-ne 1 -or $repairPackages[0]-ne '@zzusp/dingtalk-dsh-assistant@file:D:/candidate.tgz'){throw '未指定Observer时不得添加空包参数'}
+$installAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$installPackages'},$true)
+$ObserverPackage='D:/packages/observer recovered.tgz';Invoke-Expression $installAssignment.Extent.Text
+if($installPackages.Count-ne 2 -or $installPackages[0]-ne '@zzusp/dingtalk-dsh-assistant@file:D:/candidate.tgz' -or $installPackages[1]-ne '@zzusp/dingtalk-dsh-observer@file:D:/packages/observer recovered.tgz'){throw '普通部署安装须精确指定两个包名与源'}
+Write-Output 'PASS 3/3: 修复与普通安装均用精确包名覆盖旧file依赖'
