@@ -1,12 +1,38 @@
 import { readFile, writeFile, mkdir, rename, lstat, realpath } from 'node:fs/promises'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
+import { spawn } from 'node:child_process'
 import { isAbsolute, resolve, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createHash, randomUUID } from 'node:crypto'
 import { localOrigin } from './local-acceptance-readonly.mjs'
 
-const exec = promisify(execFile)
+export function runMergeCommand(executable, args, { cwd, signal, input } = {}) {
+  signal?.throwIfAborted()
+  return new Promise((accept, reject) => {
+    const child = spawn(executable, args, { cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    const chunks = []; let stderr = Buffer.alloc(0), launchError
+    const abort = () => {
+      if (process.platform === 'win32' && child.pid) {
+        const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+        killer.on('error', () => child.kill())
+      } else child.kill()
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    child.stdout.on('data', chunk => chunks.push(chunk))
+    child.stderr.on('data', chunk => { stderr = Buffer.concat([stderr, chunk]).subarray(-16384) })
+    child.on('error', error => { launchError = error })
+    child.stdin.on('error', error => { if (error.code !== 'EPIPE') launchError = error })
+    child.on('close', (code, terminationSignal) => {
+      signal?.removeEventListener('abort', abort)
+      if (signal?.aborted) { reject(signal.reason); return }
+      if (launchError) { reject(launchError); return }
+      if (code !== 0) { reject(Object.assign(new Error('MERGE_ACCEPTANCE_COMMAND_FAILED'), { code: 'MERGE_ACCEPTANCE_COMMAND_FAILED', exitCode: code, signal: terminationSignal, stderr: stderr.toString('utf8') })); return }
+      accept({ stdout: Buffer.concat(chunks).toString('utf8'), stderr: stderr.toString('utf8') })
+    })
+    child.stdin.end(input)
+    if (signal?.aborted) abort()
+  })
+}
+const exec = runMergeCommand
 const fail = code => { throw Object.assign(new Error(code), { code: `MERGE_ACCEPTANCE_${code}` }) }
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 // 有界十进制规范化，不经二进制浮点舍入；原始值仍单独保存到证据账。
@@ -204,24 +230,24 @@ export function assessMergePreflight(config, database, controller) {
     cleanupContract: { businessData: tables, snapshots: 'exact-owned-snapshot-id', auditLogs: 'retained', dataCleaned: false } }
 }
 
-async function databaseProbe(config) {
-  return new Promise((accept, reject) => {
-    const child = execFile(config.pythonExecutable, ['-c', probeProgram], { windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
-      if (error) { reject(Object.assign(new Error('probe'), { code: 'MERGE_ACCEPTANCE_DATABASE_PROBE_FAILED' })); return }
-      try { accept(JSON.parse(stdout)) } catch { reject(Object.assign(new Error('probe'), { code: 'MERGE_ACCEPTANCE_DATABASE_PROBE_FAILED' })) }
-    })
-    child.stdin.end(JSON.stringify({ ...config, tables }))
-  })
+async function databaseProbe(config, { signal } = {}) {
+  try {
+    const { stdout } = await exec(config.pythonExecutable, ['-c', probeProgram], { signal, input: JSON.stringify({ ...config, tables }) })
+    return JSON.parse(stdout)
+  } catch (error) {
+    signal?.throwIfAborted()
+    throw Object.assign(new Error('probe'), { code: 'MERGE_ACCEPTANCE_DATABASE_PROBE_FAILED', cause: error })
+  }
 }
 
-export async function dataOperation(mode, config, ledger) {
-  return new Promise((accept, reject) => {
-    const child = execFile(config.pythonExecutable, ['-c', dataProgram], { windowsHide: true, timeout: 45000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
-      if (error) { reject(Object.assign(new Error('data'), { code: 'MERGE_ACCEPTANCE_DATA_OPERATION_FAILED' })); return }
-      try { accept(JSON.parse(stdout)) } catch { reject(Object.assign(new Error('data'), { code: 'MERGE_ACCEPTANCE_DATA_OPERATION_FAILED' })) }
-    })
-    child.stdin.end(JSON.stringify({ ...config, mode, ledger }))
-  })
+export async function dataOperation(mode, config, ledger, { signal } = {}) {
+  try {
+    const { stdout } = await exec(config.pythonExecutable, ['-c', dataProgram], { signal, input: JSON.stringify({ ...config, mode, ledger }) })
+    return JSON.parse(stdout)
+  } catch (error) {
+    signal?.throwIfAborted()
+    throw Object.assign(new Error('data'), { code: 'MERGE_ACCEPTANCE_DATA_OPERATION_FAILED', cause: error })
+  }
 }
 
 export function confirmBody(preview) {
@@ -243,13 +269,18 @@ export async function executeMerge(mode, config, input, dependencies = {}) {
     || !['evidenceRoot', 'accountsFile', 'springConfigFile'].every(k => isAbsolute(config[k] ?? '')) || config.accountKey !== 'editor_uat_admin') fail('INPUT_INVALID')
   if (input.evidenceRoot !== undefined && !isAbsolute(input.evidenceRoot)) fail('INPUT_INVALID')
   const baseUrl = localOrigin(input.baseUrl), directory = join(input.evidenceRoot ?? config.evidenceRoot, input.namespace), ledgerPath = join(directory, 'merge-ledger.json')
-  const operate = dependencies.dataOperation ?? dataOperation, fetcher = dependencies.fetch ?? fetch, precheck = dependencies.check ?? checkMerge
+  const signal = dependencies.signal
+  signal?.throwIfAborted()
+  const operate = (...args) => { signal?.throwIfAborted(); return (dependencies.dataOperation ?? dataOperation)(...args, { signal }) }
+  const fetcher = dependencies.fetch ?? fetch
+  const precheck = config => { signal?.throwIfAborted(); return (dependencies.check ?? checkMerge)(config, { signal }) }
+  const requestSignal = milliseconds => signal ? AbortSignal.any([signal, AbortSignal.timeout(milliseconds)]) : AbortSignal.timeout(milliseconds)
   await mkdir(directory, { recursive: true, mode: 0o700 })
   if ((await lstat(directory)).isSymbolicLink() || resolve(await realpath(directory)).toLowerCase() !== resolve(directory).toLowerCase()) fail('DIRECTORY_INVALID')
   if (process.platform === 'win32') {
-    const { stdout } = await exec('whoami', ['/user', '/fo', 'csv', '/nh'], { windowsHide: true })
+    const { stdout } = await exec('whoami', ['/user', '/fo', 'csv', '/nh'], { signal })
     const sid = stdout.match(/S-1-[0-9-]+/)?.[0]; if (!sid) fail('ACL_INVALID')
-    await exec('icacls', [directory, '/inheritance:r', '/grant:r', `*${sid}:(OI)(CI)F`], { windowsHide: true })
+    await exec('icacls', [directory, '/inheritance:r', '/grant:r', `*${sid}:(OI)(CI)F`], { signal })
   }
   let ledger
   try { ledger = JSON.parse(await readFile(ledgerPath, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') throw e }
@@ -272,7 +303,7 @@ export async function executeMerge(mode, config, input, dependencies = {}) {
   if (ledger.sessionState === 'active' || ledger.sessionState === 'logout-pending') session = JSON.parse(await readFile(sessionPath, 'utf8'))
   const request = async (origin, path, body) => {
     ledger.requests.push({ path, method: body === undefined ? 'GET' : 'POST' }); await persist()
-    const response = await fetcher(origin + path, { method: body === undefined ? 'GET' : 'POST', redirect: 'error', signal: AbortSignal.timeout(60000),
+    const response = await fetcher(origin + path, { method: body === undefined ? 'GET' : 'POST', redirect: 'error', signal: requestSignal(60000),
       headers: { 'Content-Type': 'application/json', 'X-Site': '101', ...(session ? { Authorization: session.accessToken, userId: String(session.userId), Cookie: `accessToken=${session.accessToken}` } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
     const raw = await response.text(); if (raw.length > 4_000_000) fail('RESPONSE_TOO_LARGE')
@@ -318,7 +349,7 @@ export async function executeMerge(mode, config, input, dependencies = {}) {
   if (ledger.status === 'passed') return { namespace: input.namespace, baseUrl, actual: ledger.actual }
   if (ledger.status !== 'new') fail('RECOVERY_REQUIRES_CLEANUP')
   const preflight = await precheck(config); if (!preflight.ready) fail('PREFLIGHT_BLOCKED')
-  const ready = await fetcher(baseUrl + '/ready', { redirect: 'error', signal: AbortSignal.timeout(10000) }); if (!ready.ok || (await ready.json()).status !== 'UP') fail('CANDIDATE_NOT_READY')
+  const ready = await fetcher(baseUrl + '/ready', { redirect: 'error', signal: requestSignal(10000) }); if (!ready.ok || (await ready.json()).status !== 'UP') fail('CANDIDATE_NOT_READY')
   const account = JSON.parse(await readFile(config.accountsFile, 'utf8')).accounts?.[config.accountKey]; if (!account?.username || !account.password) fail('ACCOUNT_MISSING')
   ledger.sessionState = 'login-pending'; await persist()
   const login = await request(config.ssoOrigin, '/api/sso/auth/login', { username: account.username, password: account.password, grantType: 'PASSWORD' })
@@ -353,21 +384,22 @@ export async function executeMerge(mode, config, input, dependencies = {}) {
   return { namespace: input.namespace, baseUrl, actual: ledger.actual }
 }
 
-export async function checkMerge(config) {
+export async function checkMerge(config, { signal } = {}) {
+  signal?.throwIfAborted()
   validateMergeConfig(config)
   if (!['accountsFile', 'springConfigFile', 'evidenceRoot'].every(k => isAbsolute(config[k] ?? ''))
     || !/^https:\/\/editor[1-9]\.hiqdat\.dev$/.test(config.ssoOrigin ?? '') || config.accountKey !== 'editor_uat_admin') fail('RUNTIME_CONFIG_REQUIRED')
   for (const path of [config.accountsFile, config.springConfigFile, config.pythonExecutable, config.credentialsFile]) if (!(await lstat(path)).isFile()) fail('RUNTIME_FILE_INVALID')
   const result = await exec('git', ['show', `${config.sourceCommit}:src/main/java/com/ecdigit/ecdata/controller/DatasetMergeCommonController.java`], {
-    cwd: config.sourceRepository, windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024 })
+    cwd: config.sourceRepository, signal })
   if (!isAbsolute(config.kubeconfig ?? '')) fail('KUBECONFIG_REQUIRED')
-  const { stdout } = await exec('kubectl', ['--kubeconfig', config.kubeconfig, '-n', 'hiqlcd-app-uat2', 'get', 'pods', '-l', 'app=lca-search', '-o', 'json'], { windowsHide: true, timeout: 15000 })
+  const { stdout } = await exec('kubectl', ['--kubeconfig', config.kubeconfig, '-n', 'hiqlcd-app-uat2', 'get', 'pods', '-l', 'app=lca-search', '-o', 'json'], { signal })
   const pods = JSON.parse(stdout).items
   const images = pods.flatMap(p => p.status?.containerStatuses ?? []).map(c => c.imageID?.split('@')[1])
-  const database = await databaseProbe(config); database.consumerImage = images.length && images.every(i => i === reviewedConsumer) ? reviewedConsumer : null
-  const routeResult = await exec('kubectl', ['--kubeconfig', config.kubeconfig, 'get', '--raw', '/api/v1/namespaces/db/services/pg-kafka:8000/proxy/api/configs/process_editor/tables/tw_processes'], { windowsHide: true, timeout: 15000 })
+  const database = await databaseProbe(config, { signal }); database.consumerImage = images.length && images.every(i => i === reviewedConsumer) ? reviewedConsumer : null
+  const routeResult = await exec('kubectl', ['--kubeconfig', config.kubeconfig, 'get', '--raw', '/api/v1/namespaces/db/services/pg-kafka:8000/proxy/api/configs/process_editor/tables/tw_processes'], { signal })
   const route = JSON.parse(routeResult.stdout).table
-  const middleware = await exec('kubectl', ['--kubeconfig', config.kubeconfig, '-n', 'db', 'get', 'pods', '-l', 'app=pg-kafka', '-o', 'json'], { windowsHide: true, timeout: 15000 })
+  const middleware = await exec('kubectl', ['--kubeconfig', config.kubeconfig, '-n', 'db', 'get', 'pods', '-l', 'app=pg-kafka', '-o', 'json'], { signal })
   const middlewareImages = JSON.parse(middleware.stdout).items.flatMap(p => p.status?.containerStatuses ?? []).map(c => c.imageID?.split('@')[1])
   database.consumerRouteVerified = middlewareImages.length > 0 && middlewareImages.every(i => i === 'sha256:9eca9bfe0b03b4166ced27ef4a0463a380265bf79d41b8d1fd2ffebd6e38e07a')
     && route?.channel === 'editor_tw_processes_table_changes' && route.kafkaTopic === 'processes-editor-updates-dev'

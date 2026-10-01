@@ -25,7 +25,7 @@ export async function planAgentQueryResources(source, proposal) {
     if (!keys(r, ['id','connectionId','tables', ...(r.environment === undefined ? [] : ['environment']), ...(r.identityPolicy === undefined ? [] : ['identityPolicy'])]) || typeof r.id !== 'string' || !r.id.trim()
       || typeof r.connectionId !== 'string' || !r.connectionId.trim() || !Array.isArray(r.tables)
       || (r.identityPolicy !== undefined && (r.identityPolicy !== 'host-enforced-readonly' || r.environment !== 'uat'))
-      || (r.environment !== undefined && r.environment !== 'uat')
+      || (r.environment !== undefined && !['uat','production'].includes(r.environment))
       || r.tables.some(t => !keys(t, ['schema','table','columns']) || !Array.isArray(t.columns) || new Set(t.columns).size !== t.columns.length)
       || new Set(r.tables.map(t => `${t.schema}.${t.table}`)).size !== r.tables.length) fail('QUERY_CONFIG_DATABASE_INVALID')
   }

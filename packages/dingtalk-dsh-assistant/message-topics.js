@@ -113,6 +113,8 @@ export function queryMessageTopics(db,a){
  if(a.kind==='message.topic.units')return db.prepare(`SELECT i.body AS unit,r.body AS run FROM message_topic_bindings b
    JOIN message_items i ON i.item_id='unit:'||b.unit_id JOIN message_runs r ON r.run_id=b.run_id
    JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=COALESCE(json_extract(r.body,'$.validSourceVersion'),r.source_version)
-   WHERE b.topic_id=? AND json_extract(i.body,'$.status')='pending' ORDER BY r.rowid,i.rowid`).all(str(a.topicId)).map(row=>({unit:JSON.parse(row.unit),run:JSON.parse(row.run)}))
+   WHERE b.topic_id=? AND json_extract(i.body,'$.status')='pending' AND json_extract(i.body,'$.blockedReason') IS NULL
+     AND (json_extract(r.body,'$.status')!='needs_attention' OR json_extract(r.body,'$.attentionScope')='unit')
+   ORDER BY r.rowid,i.rowid`).all(str(a.topicId)).map(row=>({unit:JSON.parse(row.unit),run:JSON.parse(row.run)}))
  return undefined
 }

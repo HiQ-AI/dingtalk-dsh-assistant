@@ -3,6 +3,22 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+const argumentStrings = value => typeof value === 'string' ? [value]
+  : value && typeof value === 'object' ? Object.values(value).flatMap(argumentStrings) : []
+const referencesId = (value, id) => {
+  let offset = value.indexOf(id)
+  while (offset !== -1) {
+    if (!/[A-Za-z0-9_+/-]/u.test(value[offset - 1] ?? '') && !/[A-Za-z0-9_+/-]/u.test(value[offset + id.length] ?? '')) return true
+    offset = value.indexOf(id, offset + 1)
+  }
+  return false
+}
+// 仅匹配参数中实际写出的完整附件身份，不从业务语义推断材料依赖。
+export function referencedResourceIds(value, attachments) {
+  const strings = argumentStrings(value)
+  return [...new Set(attachments.flatMap(attachment => [attachment.resourceRef, attachment.fileId, attachment.source?.resourceId]
+    .filter(ref => typeof ref === 'string' && ref && strings.some(text => referencesId(text, ref)))))]
+}
 const materialRestriction = /禁止|不得|不能|不允许|仅限|只准|必须|除非|未经|不要|暂停|取消/u
 function takeUtf8(text, maxBytes) {
   let result = '', bytes = 0
@@ -59,7 +75,7 @@ export const taskWorkflowCatalog = Object.freeze([
   { id: 'task-data-change', label: '数据变更', purpose: '数据变更', mode: 'external' },
   { id: 'task-uat-rebuild', label: 'UAT 同提交重建', purpose: 'UAT同提交重建', mode: 'external' },
 ])
-const actionArguments = z.strictObject({ fileDelivery: fileDeliveryArguments.optional(), objective: argumentText.optional(), workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)).optional(), repositoryId: argumentText.optional(), uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']).optional(), targetId: argumentText.optional(), commitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), pullRequestNumber: z.number().int().positive().optional(), headCommitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), releaseTag: z.string().regex(/^v\d{8}-[1-9]\d*$/).optional(), changeRef: argumentText.optional(), acceptanceCriteria: acceptanceCriteriaSchema.optional(), explicitStages: z.array(argumentText).max(8).optional(), runId: argumentText.optional(), scope: z.enum(['conversation', 'task']).optional(), resultRef: argumentText.optional(), requestId: argumentText.optional(), answer: argumentText.optional(), decision: z.enum(['approved', 'rejected']).optional(), language: z.enum(['zh-CN', 'en-US']).optional(), kind: z.enum(['fact', 'constraint']).optional(), text: argumentText.optional() })
+const actionArguments = z.strictObject({ fileDelivery: fileDeliveryArguments.optional(), objective: argumentText.optional(), workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)).optional(), repositoryId: argumentText.optional(), uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']).optional(), targetId: argumentText.optional(), commitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), pullRequestNumber: z.number().int().positive().optional(), headCommitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), releaseTag: z.string().regex(/^v\d{8}-[1-9]\d*$/).optional(), changeRef: argumentText.optional(), acceptanceCriteria: acceptanceCriteriaSchema.optional(), explicitStages: z.array(argumentText).max(8).optional(), stageAuthorizations: z.array(z.strictObject({ workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)), sourceQuote: argumentText, objective: argumentText.optional(), gate: z.enum(['none', 'confirmation']).optional() })).max(8).optional(), runId: argumentText.optional(), scope: z.enum(['conversation', 'task']).optional(), resultRef: argumentText.optional(), requestId: argumentText.optional(), answer: argumentText.optional(), decision: z.enum(['approved', 'rejected']).optional(), language: z.enum(['zh-CN', 'en-US']).optional(), kind: z.enum(['fact', 'constraint']).optional(), text: argumentText.optional() })
 export const taskActionRequirements = Object.freeze({ create: ['objective'], research: ['objective'], reopen: ['objective'], revise: ['objective'],
   report: ['language'], clarification: ['runId', 'requestId', 'answer'], approval: ['requestId', 'decision'] })
 const taskActionSchema = z.strictObject({ intent: z.enum(['no_action', 'fact', 'research', 'create', 'revise', 'report', 'pause', 'cancel', 'resume', 'status', 'result', 'reopen', 'approval', 'clarification']), arguments: actionArguments, dependsOn: z.array(z.number().int().nonnegative()) }).superRefine((action, ctx) => {
@@ -76,7 +92,7 @@ const factRevisions = z.array(z.strictObject({ factId: z.string().min(1), source
 export const messageSchemas = {
   material: z.strictObject({ kind: z.literal('material_facts'), complete: z.boolean(), facts: z.array(z.strictObject({ quote: z.string().min(1), kind: z.enum(['object', 'time', 'quantity', 'condition', 'restriction', 'revision', 'fact', 'uncertain']) })).max(24), reason: z.string() }),
   S: z.union([wait, z.strictObject({ kind: z.literal('no_action'), reason: z.string().min(1), coverage: z.array(span).min(1) }), z.strictObject({ kind: z.literal('split'), units: z.array(z.strictObject({ spans: z.array(span).min(1), goalText: z.string().min(1), constraints: z.array(z.string()), contextNeeds: z.array(need) })).min(1).max(8), sharedConstraints: z.array(z.string()), coverage: z.array(z.strictObject({ start: z.number().int().nonnegative(), end: z.number().int().positive(), role: z.enum(['unit', 'constraint', 'background', 'no_action']) })).min(1) })]),
-  R: z.union([wait, z.strictObject({ kind: z.literal('binding'), disposition: z.enum(['existing', 'new', 'context-only', 'conversation', 'unresolved']), candidateId: z.string().nullable(), evidence: z.array(z.string()).min(1) })]),
+  R: z.union([wait, z.strictObject({ kind: z.literal('binding'), queryScope: z.literal('agent_tasks').optional(), assessments: z.array(z.strictObject({ candidateId: z.string().min(1), relation: z.enum(['related', 'independent']), reason: z.string().min(1), sourceQuote: z.string().min(1) })).optional(), disposition: z.enum(['existing', 'new', 'context-only', 'conversation', 'unresolved']), candidateId: z.string().nullable(), evidence: z.array(z.string()).min(1) }), z.strictObject({ kind: z.literal('continue_candidates'), reason: z.string().min(1), evidence: z.array(z.string()).min(1), assessments: z.array(z.strictObject({ candidateId: z.string().min(1), relation: z.enum(['related', 'independent']), reason: z.string().min(1), sourceQuote: z.string().min(1) })).optional() }), z.strictObject({ kind: z.literal('no_action'), reason: z.string().min(1), sourceQuote: z.string().min(1) })]),
   I: z.union([wait, z.strictObject({ kind: z.literal('intent'), actions: z.array(actionSchema).min(1).max(8), constraints: z.array(z.string()), requiredExecutionMaterials: z.array(z.string()), replyPolicy: z.enum(['none', 'receipt', 'result']) }), z.strictObject({ kind: z.enum(['needs_relink', 'needs_resegmentation']), reason: z.string().min(1) })]),
   IB: z.union([wait, z.strictObject({ kind: z.literal('topic_intents'), decisions: z.array(z.strictObject({ unitId: z.string().min(1), intent: z.union([z.strictObject({ kind: z.literal('intent'), actions: z.array(actionSchema).min(1).max(8), constraints: z.array(z.string()), factRevisions, requiredExecutionMaterials: z.array(z.string()), replyPolicy: z.enum(['none', 'receipt', 'result']) }), z.strictObject({ kind: z.enum(['needs_relink', 'needs_resegmentation']), reason: z.string().min(1) }), wait]) })).min(1).max(32) })]),
 }
@@ -90,11 +106,11 @@ export async function prepareMessageContext(run, context = {}) {
   const quotes = localQuotes.map(ref => {
     if (typeof ref === 'string') return { sourceKey: ref, missing: true }
     if (ref.conversationId && ref.conversationId !== run.conversationId && !ref.readScope?.includes(run.actorId)) return { sourceKey: ref.sourceKey, missing: true, reason: 'read_scope_denied' }
-    return { ...pick(ref, ['sourceKey', 'sourceVersion', 'text', 'bindings', 'readScope', 'disclosureScope']), missing: !ref.text }
+    return { ...pick(ref, ['sourceKey', 'sourceVersion', 'text', 'bindings', 'readScope', 'disclosureScope', 'attachments']), missing: !ref.text }
   })
   const approved = history.filter(item => item.conversationId === undefined || item.conversationId === run.conversationId || item.readScope?.includes(run.actorId))
   const necessary = await context.splitBackground?.({ run, history: approved })
-  const data = { source, sourceEdit: run.context?.editOf ?? null, historyManifest: approved.map(item => pick(item, ['sourceKey', 'sourceVersion', 'seq', 'bindings'])), history: Array.isArray(necessary) ? necessary : necessary?.messages ?? [], quotes, attachments: run.context?.attachments ?? [], policy: run.context?.compactPolicy ?? '', actorPermissions: run.context?.actorPermissions ?? [], omissions: necessary?.omissions ?? (necessary === undefined && approved.length ? [{ reason: 'background_not_projected', sourceKeys: approved.map(item => item.sourceKey) }] : []) }
+  const data = { source, sourceEdit: run.context?.editOf ?? null, historyManifest: approved.map(item => pick(item, ['sourceKey', 'sourceVersion', 'seq', 'bindings'])), history: Array.isArray(necessary) ? necessary : necessary?.messages ?? [], quotes, attachments: run.context?.attachments ?? [], policy: run.context?.compactPolicy ?? '', replyObligation: getReplyObligation(run), agentNames: context.agentNames?.() ?? run.context?.agentNames ?? [], actorPermissions: run.context?.actorPermissions ?? [], omissions: necessary?.omissions ?? (necessary === undefined && approved.length ? [{ reason: 'background_not_projected', sourceKeys: approved.map(item => item.sourceKey) }] : []) }
   return { ...data, snapshotId: digest(data) }
 }
 
@@ -102,8 +118,8 @@ export function splitContext(snapshot) {
   const segments = Array.from(snapshot.source.text.matchAll(/[^\n。！？；!?;]+[\n。！？；!?;]*|[\n。！？；!?;]+/gu), (match, index) => ({ id: `fragment-${index}`, start: match.index, end: match.index + match[0].length }))
   const historyIds = new Map(snapshot.historyManifest.map((item, index) => [item.sourceKey, `h${index + 1}`]))
   const omitted = snapshot.omissions.flatMap(item => item.reason === 'background_budget' ? [historyIds.get(item.sourceKey) ?? item.sourceKey] : item.reason === 'background_not_projected' ? item.sourceKeys.map(key => historyIds.get(key) ?? key) : [item])
-  // S 只拆分事项；群职责留在持久快照中，不占用拆分节点的输入预算。
-  return { snapshotId: snapshot.snapshotId, source: snapshot.source, sourceEdit: snapshot.sourceEdit, sourceLength: snapshot.source.text.length, segments, background: snapshot.history.map(item => ({ ...item, sourceKey: historyIds.get(item.sourceKey) ?? item.sourceKey })), quotes: snapshot.quotes, attachments: snapshot.attachments.map(item => pick(item, ['resourceRef', 'name', 'purpose', 'state'])), actorPermissions: snapshot.actorPermissions, omissions: omitted }
+  // S 接收最小回应责任；业务准入与执行授权由 Host 独立核验。
+  return { ...(snapshot.replyObligation ? { replyObligation: snapshot.replyObligation } : {}), snapshotId: snapshot.snapshotId, source: snapshot.source, sourceEdit: snapshot.sourceEdit, sourceLength: snapshot.source.text.length, segments, background: snapshot.history.map(item => ({ ...item, originalSourceKey: item.sourceKey, sourceKey: historyIds.get(item.sourceKey) ?? item.sourceKey })), quotes: snapshot.quotes, attachments: snapshot.attachments.map(item => pick(item, ['resourceRef', 'name', 'purpose', 'state'])), actorPermissions: snapshot.actorPermissions, omissions: omitted }
 }
 export function validateSplit(output, text) {
   if (!['split', 'no_action'].includes(output.kind)) return output
@@ -116,7 +132,10 @@ export function validateSplit(output, text) {
   return output
 }
 export function unitContext(snapshot, unit) {
-  return { snapshotId: snapshot.snapshotId, sourceEdit: snapshot.sourceEdit, actorId: snapshot.source.actorId, conversationId: snapshot.source.conversationId, sourceKey: snapshot.source.sourceKey, sourceVersion: snapshot.source.sourceVersion, text: unit.spans.map(span => snapshot.source.text.slice(span.start, span.end)).join('\n'), sourceSpans: unit.spans, goalText: unit.goalText, constraints: unit.constraints, sharedConstraints: unit.sharedConstraints ?? [], referenceSources: snapshot.quotes, executionMaterialRefs: [...(snapshot.attachments ?? []).map(item => item.resourceRef), ...(unit.contextNeeds ?? []).map(item => item.resourceRef)] }
+  const unitText = unit.spans.map(span => snapshot.source.text.slice(span.start, span.end)).join('\n')
+  const unitDirected = snapshot.replyObligation?.required === true && (unitText === snapshot.source.text || (snapshot.agentNames ?? []).some(name => name && unitText.includes(name)))
+  const aliases = new Map((snapshot.historyManifest ?? []).map((item, index) => [`h${index + 1}`, item.sourceKey]))
+  return { ...(snapshot.replyObligation ? { replyObligation: { ...snapshot.replyObligation, required: unitDirected } } : {}), agentNames: snapshot.agentNames ?? [], groupResponsibility: snapshot.policy ?? '', snapshotId: snapshot.snapshotId, sourceEdit: snapshot.sourceEdit, actorId: snapshot.source.actorId, conversationId: snapshot.source.conversationId, sourceKey: snapshot.source.sourceKey, sourceVersion: snapshot.source.sourceVersion, text: unit.spans.map(span => snapshot.source.text.slice(span.start, span.end)).join('\n'), sourceSpans: unit.spans, sourceSegments: unit.spans.map(span => snapshot.source.text.slice(span.start, span.end)), goalText: unit.goalText, constraints: unit.constraints, sharedConstraints: unit.sharedConstraints ?? [], referenceSources: snapshot.quotes, executionMaterialRefs: [...[...(snapshot.attachments ?? []), ...[...(snapshot.history ?? []), ...(snapshot.quotes ?? [])].flatMap(item => item.attachments ?? [])].map(item => item.resourceRef), ...(unit.contextNeeds ?? []).map(item => aliases.get(item.resourceRef) ?? item.resourceRef)] }
 }
 export function candidateCards(candidates) {
   if (candidates.length > 10000) throw new Error('MESSAGE_CANDIDATE_CAPACITY')
@@ -241,6 +260,12 @@ export function shareTopicContext(input) {
 export function validateExecutionMaterialRefs(stage, output, input) {
   const validate = (intent, context) => {
     if (intent.kind !== 'intent') return
+    const sourceTexts = context?.sourceSegments ?? [context?.text]
+    for (const action of intent.actions) for (const authorization of action.arguments.stageAuthorizations ?? []) {
+      if (!sourceTexts.some(text => typeof text === 'string' && text.includes(authorization.sourceQuote))
+        || authorization.objective && !authorization.sourceQuote.includes(authorization.objective))
+        throw new Error('MESSAGE_STAGE_AUTHORIZATION_INVALID:stageAuthorizations.sourceQuote必须逐字连续引用当前事项原文；objective必须逐字连续引用该sourceQuote中的片段，不得概括、改写或拼接')
+    }
     const known = new Set(context?.executionMaterialRefs ?? [])
     if (intent.requiredExecutionMaterials.some(ref => !known.has(ref)))
       throw new Error('MESSAGE_EXECUTION_MATERIAL_REF_INVALID:requiredExecutionMaterials只能选当前事项executionMaterialRefs；查询资源及待取得证据写入目标或acceptanceCriteria')
@@ -248,4 +273,33 @@ export function validateExecutionMaterialRefs(stage, output, input) {
   if (stage === 'I') validate(output, input)
   if (stage === 'IB' && output.kind === 'topic_intents') for (const decision of output.decisions)
     validate(decision.intent, input.units.find(unit => unit.unitId === decision.unitId)?.input)
+}
+
+// 点名只建立回应义务，不授予生产执行权限，也不要求创建 Task。
+export function getReplyObligation(run) {
+  const context = run.context ?? {}
+  return { required: context.directedToAgent === true, reason: context.directedToAgent === true ? 'direct_agent_address' : 'no_direct_address', sourceKey: run.sourceKey, sourceVersion: run.sourceVersion }
+}
+
+export function validateContextRequests(stage, output, input) {
+  if (!['S', 'R'].includes(stage)) return
+  const known = new Set([input.source?.sourceKey, input.sourceKey, ...(input.executionMaterialRefs ?? [])].filter(Boolean))
+  for (const key of ['quotes', 'referenceSources', 'background', 'recentMessages', 'attachments', 'candidates']) for (const item of input[key] ?? []) {
+    for (const field of ['sourceKey', 'resourceRef', 'historyRef', 'detailRef']) if (item[field]) known.add(item[field])
+    for (const resource of item.attachments ?? []) if (resource.resourceRef) known.add(resource.resourceRef)
+  }
+  for (const omitted of input.omissions ?? []) if (typeof omitted === 'string') known.add(omitted)
+  for (const ref of input.availableResourceRefs ?? []) known.add(ref)
+  const needs = [...(output.kind === 'needs_context' ? output.needs : []), ...(output.units ?? []).flatMap(unit => unit.contextNeeds ?? [])]
+  if (needs.some(need => !known.has(need.resourceRef))) throw new Error('MESSAGE_CONTEXT_RESOURCE_REF_INVALID:只能使用当前输入的精确资源键；候选翻页使用continue_candidates')
+  if (stage === 'R' && output.kind === 'no_action' && input.replyObligation?.required === true) throw new Error('MESSAGE_SCOPE_PROOF_INVALID:Host已确认当前消息明确指向助手，不可当作人际闲聊静默退出；请正常关联交办事项')
+  if (stage === 'R' && output.kind === 'no_action' && !(input.sourceSegments ?? [input.text]).some(text => text === output.sourceQuote)) throw new Error('MESSAGE_SCOPE_PROOF_INVALID:静默退出必须引用当前事项连续原文')
+  if (output.kind === 'continue_candidates' && !input.candidateContinuation) throw new Error('MESSAGE_CANDIDATE_CONTINUATION_UNAVAILABLE')
+  if (output.kind === 'binding' && output.disposition === 'conversation' && output.queryScope !== 'agent_tasks') throw new Error('MESSAGE_CONVERSATION_SCOPE_REQUIRED')
+  if (output.assessments) {
+    const ids = new Set((input.candidates ?? []).map(item => item.candidateId))
+    const texts = [...(input.sourceSegments ?? [input.text]), ...(input.referenceSources ?? []).map(item => item.text)].filter(text => typeof text === 'string')
+    if (new Set(output.assessments.map(item => item.candidateId)).size !== output.assessments.length
+      || output.assessments.some(item => !ids.has(item.candidateId) || !texts.some(text => text.includes(item.sourceQuote)))) throw new Error('MESSAGE_SCOPE_PROOF_INVALID')
+  }
 }

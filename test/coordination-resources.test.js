@@ -1,10 +1,46 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, writeFile, access, rm } from 'node:fs/promises'
+import { mkdtemp, writeFile, access, rm, readdir } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createCoordinationResourceTools, readPublicResource } from '../packages/dingtalk-dsh-assistant/coordination-resources.js'
 import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+
+test('真实xlsx附件完整保留多sheet、Y列、空行位置与公式缓存且清理下载文件', async t => {
+  const ExcelJS = createRequire(new URL('../packages/dingtalk-dsh-assistant/package.json', import.meta.url))('exceljs')
+  const workbook = new ExcelJS.Workbook()
+  const first = workbook.addWorksheet('审核条目')
+  first.getCell('A1').value = '数据集'
+  first.getCell('A3').value = 'fixture-dataset'
+  first.getCell('Y3').value = 'expert@example.org'
+  first.getCell('B3').value = { formula: '1+2', result: 3 }
+  first.mergeCells('C3:D3'); first.getCell('C3').value = '审核中'
+  workbook.addWorksheet('说明', { state: 'hidden' }).getCell('A1').value = '行业记录保留'
+  let bytes = await workbook.xlsx.writeBuffer()
+  const cwd = await mkdtemp(path.join(tmpdir(), 'xlsx-resource-'))
+  t.after(() => rm(cwd, { recursive: true, force: true }))
+  const adapter = createDwsAdapter({ enabled: true, runner: { cwd, run: async args => {
+    const localPath = path.join(args[args.indexOf('--output') + 1], '审核.xlsx')
+    await writeFile(path.join(cwd, localPath), bytes)
+    return { exitCode: 0, stdout: JSON.stringify({ localPath, sizeBytes: bytes.length }) }
+  } } })
+  const result = await adapter.readMessageResource('g', 'm', { type: 'fileId', resourceId: 'file' })
+  const value = JSON.parse(result.text)
+  assert.equal(result.complete, true)
+  assert.equal(value.formulasRecalculated, false)
+  assert.equal(value.sheets.length, 2)
+  assert.deepEqual(value.sheets[0].rows.map(row => row.row), [1, 3])
+  const cells = value.sheets[0].rows[1].cells
+  assert.equal(cells.find(cell => cell.address === 'Y3').value, 'expert@example.org')
+  assert.deepEqual(cells.find(cell => cell.address === 'B3').value, { formula: '1+2', result: 3 })
+  assert.equal(cells.find(cell => cell.address === 'D3').mergedInto, 'C3')
+  assert.equal(value.sheets[1].state, 'hidden')
+  assert.deepEqual(await readdir(cwd), [])
+  bytes = Buffer.from('not a workbook')
+  await assert.rejects(adapter.readMessageResource('g', 'm', { type: 'fileId', resourceId: 'file' }))
+  assert.deepEqual(await readdir(cwd), [])
+})
 
 function harness(options = {}) {
   let active = true
@@ -108,4 +144,26 @@ test('DWS 文件卡片只允许同名同 fileId 的精确下载尾注差异，�
   ]) await assert.rejects(make(changed).call('group_message_get', { messageId: 'a' }), /coordination_message_version_changed/)
   await assert.rejects(make({ ...remote, text: '原文', resourceRefs: [] }, { ...source, text: '原文 注意：如需下载使用dws drive download命令下载' }).call('group_message_get', { messageId: 'a' }), /coordination_message_version_changed/)
   await assert.rejects(make(remote, { ...source, text: `${source.text} 追加业务要求` }).call('group_message_get', { messageId: 'a' }), /coordination_message_version_changed/)
+})
+
+test('SQL附件经精确受管下载仅按UTF8读取，保留正文且拒绝坏编码并清理', async t => {
+  const cwd = await mkdtemp(path.join(tmpdir(), 'sql-resource-'))
+  t.after(() => rm(cwd, { recursive: true, force: true }))
+  const text = "-- 先两条测试，验证后执行正式数据\r\nBEGIN;\r\nUPDATE review SET expert = '新专家';\r\nROLLBACK;\r\n"
+  let bytes = Buffer.from(text), calls = 0
+  const adapter = createDwsAdapter({ enabled: true, profile: 'test-profile', runner: { cwd, async run(args) {
+    calls++
+    assert.ok(args.includes('+messages-resource-download'))
+    for (const [flag, value] of [['--profile', 'test-profile'], ['--open-conversation-id', 'g'], ['--message-id', 'm'], ['--resource-id', 'sql-file'], ['--type', 'fileId']])
+      assert.equal(args[args.indexOf(flag) + 1], value)
+    const localPath = path.join(args[args.indexOf('--output') + 1], '审核修复.SQL')
+    await writeFile(path.join(cwd, localPath), bytes)
+    return { exitCode: 0, stdout: JSON.stringify({ localPath, sizeBytes: bytes.length }) }
+  } } })
+  const result = await adapter.readMessageResource('g', 'm', { type: 'fileId', resourceId: 'sql-file' })
+  assert.equal(result.text, text); assert.equal(result.mediaType, 'text/plain'); assert.equal(calls, 1)
+  assert.deepEqual(await readdir(cwd), [])
+  bytes = Buffer.from([0xff, 0xfe, 0xff])
+  await assert.rejects(adapter.readMessageResource('g', 'm', { type: 'fileId', resourceId: 'sql-file' }), { code: 'ERR_ENCODING_INVALID_ENCODED_DATA' })
+  assert.equal(calls, 2); assert.deepEqual(await readdir(cwd), [])
 })

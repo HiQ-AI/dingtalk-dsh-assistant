@@ -2,12 +2,26 @@ import { dispatchOutbox, matchesOutbound } from './dws-adapter.js'
 
 const meaningful = (value) => typeof value === 'string' && value.trim() !== '' && value.trim().toLowerCase() !== 'null'
 
-function normalizeResourceRefs(value, text) {
+export function normalizeResourceRefs(value, text) {
   const supplied = Array.isArray(value) ? value.filter((item) => ['mediaId', 'fileId'].includes(item?.type) && typeof item.resourceId === 'string') : []
   const found = [...String(text ?? '').matchAll(/\[图片消息\]\(mediaId=([^\)]+)\)/gu)].map((match) => ({ type: 'mediaId', resourceId: match[1] }))
   const file = /^\[文件\] (.+) fileId: ([^\s]+)(?: 注意：如需下载使用dws drive download命令下载)?$/u.exec(String(text ?? ''))
   if (file) found.push({ type: 'fileId', resourceId: file[2], name: file[1] })
   return [...new Map([...found, ...supplied].map((item) => [`${item.type}:${item.resourceId}`, item])).values()]
+}
+
+// DWS 无时区的历史时间属于北京时间；不能依赖部署机器的本地时区。
+export function messageTimestamp(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : NaN
+  if (typeof value !== 'string' || !value.trim()) return NaN
+  const text = value.trim()
+  if (/^\d{13}$/u.test(text)) return Number(text)
+  return Date.parse(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/u.test(text) ? text.replace(' ', 'T') + '+08:00' : text)
+}
+export function normalizeMessageTime(value) {
+  const time = messageTimestamp(value)
+  if (!Number.isFinite(time)) throw new Error('DWS_MESSAGE_TIME_INVALID')
+  return new Date(time).toISOString()
 }
 
 function normalizeEvent(event) {
@@ -21,7 +35,8 @@ function normalizeEvent(event) {
     groupId,
     messageId,
     text,
-    occurredAt: event.event_time ?? event.create_time ?? event.timestamp ?? new Date().toISOString(),
+    occurredAt: normalizeMessageTime(event.event_time ?? event.create_time ?? event.timestamp ?? new Date().toISOString()),
+    rawOccurredAt: event.event_time ?? event.create_time ?? event.timestamp,
     senderName: meaningful(event.sender) ? event.sender : undefined,
     senderOpenDingTalkId: event.sender_open_dingtalk_id ?? event.sender_id ?? undefined,
     ...(resourceRefs.length > 0 ? { resourceRefs } : {}),
@@ -37,7 +52,7 @@ export function normalizeHistoryMessage(message, fallbackGroupId) {
   const text = message.text ?? ''
   const resourceRefs = normalizeResourceRefs(message.resourceRefs, text)
   return {
-    groupId, messageId, text, occurredAt: message.createTime ?? new Date().toISOString(),
+    groupId, messageId, text, occurredAt: normalizeMessageTime(message.createTime ?? new Date().toISOString()), rawOccurredAt: message.createTime,
     senderName: meaningful(message.sender ?? message.senderName) ? message.sender ?? message.senderName : undefined,
     senderOpenDingTalkId: message.senderOpenDingTalkId ?? message.sender_open_dingtalk_id ?? message.senderId ?? undefined,
     ...(resourceRefs.length > 0 ? { resourceRefs } : {}),
@@ -125,7 +140,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
   const currentGroup = (groupId) => runtime.getGroup?.(groupId) ?? runtime.listGroups().find((group) => group.groupId === groupId)
   const describeError = (error) => error instanceof Error ? error.message : String(error)
   const now = () => new Date().toISOString()
-  const asTimestamp = (value) => new Date(value).valueOf()
+  const asTimestamp = messageTimestamp
   const earlierIso = (left, right) => {
     const leftAt = asTimestamp(left), rightAt = asTimestamp(right)
     if (!Number.isFinite(leftAt)) return Number.isFinite(rightAt) ? new Date(rightAt).toISOString() : undefined

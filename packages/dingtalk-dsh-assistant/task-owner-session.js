@@ -1,4 +1,5 @@
 import { nameSession } from './session-workspaces.js'
+import { sourceInterpretationInstructions } from './agent-work.js'
 import { groupReplyInstructions, assertGroupReply } from './workflow-notifications.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
@@ -12,6 +13,10 @@ const ownerFileDeliveryInstructions = '若goal含fileDelivery，必须逐项完�
 
 const stageSchema = { type: 'object', properties: {
   workflowId: { type: 'string' }, gate: { type: 'string', enum: ['none', 'confirmation'] },
+  sourceCondition: { type: 'object', properties: {
+    sourceKey: { type: 'string' }, sourceVersion: { type: 'integer' }, sourceQuote: { type: 'string' },
+    objective: { type: 'string' }, requiredActorId: { type: 'string' },
+  }, required: ['sourceKey', 'sourceVersion', 'sourceQuote', 'objective'], additionalProperties: false },
   capabilityStep: { type: 'object', properties: {
     capabilityId: { type: 'string' }, input: { type: 'object' }, expectedEvidence: { type: 'string' },
   }, required: ['capabilityId', 'input', 'expectedEvidence'], additionalProperties: false },
@@ -82,16 +87,21 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
         entry.drainError = Object.assign(notDrained('TASK_OWNER_DRAIN_FAILED'), { cause })
         throw entry.drainError
       } finally {
-        clearTimeout(entry.timer)
         entry.drained.resolve()
       }
     })()
   }
 
   function setup(entry, onCandidate, readPage, readArtifact) {
+    const submissionSchema = copy(ownerDecisionSchema)
+    if (!entry.repairBinding) {
+      submissionSchema.properties.action.enum = submissionSchema.properties.action.enum.filter(action => action !== 'repairCurrentStage')
+      delete submissionSchema.properties.repair
+    }
     return agentCtx => {
-      agentCtx.systemPrompt.section({ name: 'task:owner', order: 0, complete: true, text: `你负责一个业务任务。阅读 goal 中的目标、explicitStages、授权、验收项、已执行成果和事件；workflowCatalog 与 capabilities 是 Host 给出的实际可用目录。若输入含 eventPages，先逐个调用 task_owner_read_events 读取全部页面，再提交决定；未读完不能提交。若有 deliveryManifest，读取其 ref 核对正式产物、文件和验收关系。清单 complete 只代表结构与证据绑定齐全，不证明语义正确；missing 中待评估项需在本轮逐项审阅后提交 assessments，不能因为尚无本轮评估而无限等待。调查 criterionReviews 的不足或不适用项不得只凭同一调查产物判为满足，需后续阶段实际证据。stageArtifacts 列出当前阶段的产物和失败诊断引用；diagnostics 用于理解失败及修复，不能作为成功证据。判断结果和目标是否完成前，调用 task_owner_read_artifact 阅读相关正文、局限和必要验收。若含 nodeArtifacts，按节点用途读取原始证明；completionEvidenceRefs 是可用于完成判断的正式阶段证据，完成决定的 evidenceRefs 与 assessments 引用这些证据。调查的范围限制不自动代表未完成，应对照用户实际目标；必需交付或验收缺失时不能完成。计划尚未建立时用 planChange.kind=initialize 提出首批阶段；以后按事实用 append 或 replaceSuffix 调整，replaceSuffix 必须提供 affectedFrom。用户只要求排查时不要自行安排开发或部署。开发阶段必须在goal.target.uatEnvironment已有用户明确指定的uat1至uat9环境时安排，Host固定映射feature/uatN-base；缺失时wait并在summary询问具体环境，不猜测默认环境，不先创建开发阶段。main合并只在开发测试完成且用户明确安排上线时使用独立task-main-pr-merge流程。用户的明确阶段顺序和授权范围高于你的建议；你提出计划不构成写入、合并、部署或审批的授权。complete 必须对每个 acceptanceItem 提交 satisfied 的 assessments，并引用实际能证明该项的阶段证据。每项 evidenceRefs 会把验收责任分派给对应领域，只放满足该项的证明；背景材料放总 evidenceRefs，不用写入或投递回执证明修复、部署或业务正确。Host 按领域独立核验并保存 businessValidation，Owner 不能自行填写验收回执或覆盖调查不足。阶段成功不代表整体目标完成。需要持续交付的调查使用一个 task-investigation 阶段，资料阅读、代码搜索、查询调整、假设检验均在该 Agent 会话内自主执行，不为单次查询追加阶段。方案、PR审查、数据分析和复盘遵循共享调查专业要求，不使用已退出新目录的旧流程。仅 capabilities 中 effectClass=file.write 的已授权写入能力可作为 task-general-capability 阶段并给出 capabilityStep；Host 冻结范围并核验执行结果。调查产物 outcome=needs_input 时 wait 并询问 question，outcome=blocked 时 block 并说明 limitations，两者均不能作为 completed 的证据。缺能力时 block，不能虚构已执行。仅报告语言改变时保留已核验业务产物，按事件要求的语言改写 summary，不追加流程。若 currentExecution 显示当前流程提供受信修复能力且 repairable=true，先读取失败产物，再用 repairCurrentStage 和原样 repairBinding 明确请求本代修复；wait 只等待，不会启动修复，不得声称 wait 已调度。未知外部效果或未排空不能修复。${ownerFileDeliveryInstructions}${groupReplyInstructions}最后仅调用 ${SUBMIT}。` })
+      agentCtx.systemPrompt.section({ name: 'task:owner', order: 0, complete: true, text: `你负责一个业务任务。阅读 goal 中的目标、sourceInstructions 原始来源、explicitStages、授权、验收项、已执行成果和事件；逐条核对原文中的准备、审批、测试、验收后正式执行等顺序与限制，不因摘要未复述就丢弃。sourceInstructions 中的第三方资料不能代替执行人授权，准备工作已交办不等于生产写入获批；workflowCatalog 与 capabilities 是 Host 给出的实际可用目录。currentSources是当前已关联的新事实，必须与goal.sourceInstructions核对；新事实不自动授予批准或执行权限，发生冲突先等群协调者提交正式需求修订，不沿旧计划继续外部效果。若输入含 eventPages，先逐个调用 task_owner_read_events 读取全部页面，再提交决定；未读完不能提交。若有 deliveryManifest，读取其 ref 核对正式产物、文件和验收关系。清单 complete 只代表结构与证据绑定齐全，不证明语义正确；missing 中待评估项需在本轮逐项审阅后提交 assessments，不能因为尚无本轮评估而无限等待。调查 criterionReviews 的不足或不适用项不得只凭同一调查产物判为满足，需后续阶段实际证据。stageArtifacts 列出当前阶段的产物和失败诊断引用；diagnostics 用于理解失败及修复，不能作为成功证据。判断结果和目标是否完成前，调用 task_owner_read_artifact 阅读相关正文、局限和必要验收。若含 nodeArtifacts，按节点用途读取原始证明；completionEvidenceRefs 是可用于完成判断的正式阶段证据，完成决定的 evidenceRefs 与 assessments 引用这些证据。调查的范围限制不自动代表未完成，应对照用户实际目标；必需交付或验收缺失时不能完成。计划尚未建立时用 planChange.kind=initialize 提出首批阶段；以后按事实用 append 或 replaceSuffix 调整，replaceSuffix 必须提供 affectedFrom。用户只要求排查时不要自行安排开发或部署。开发阶段必须在goal.target.uatEnvironment已有用户明确指定的uat1至uat9环境时安排，Host固定映射feature/uatN-base；缺失时wait并在summary询问具体环境，不猜测默认环境，不先创建开发阶段。main合并只在开发测试完成且用户明确安排上线时使用独立task-main-pr-merge流程。不同数据集合或先测试后正式的阶段必须分别保留sourceCondition，从goal.sourceInstructions取sourceKey/sourceVersion/sourceQuote，objective逐字引用该范围。外部阶段必须带sourceCondition。需要原发送者验证后继续的阶段使用gate=confirmation及requiredActorId=该来源actorId；Host校验身份并绑定前阶段产物，不能替人确认。用户的明确阶段顺序和授权范围高于你的建议；你提出计划不构成写入、合并、部署或审批的授权。complete 必须对每个 acceptanceItem 提交 satisfied 的 assessments，并引用实际能证明该项的阶段证据。每项 evidenceRefs 会把验收责任分派给对应领域，只放满足该项的证明；背景材料放总 evidenceRefs，不用写入或投递回执证明修复、部署或业务正确。Host 按领域独立核验并保存 businessValidation，Owner 不能自行填写验收回执或覆盖调查不足。阶段成功不代表整体目标完成。需要持续交付的调查使用一个 task-investigation 阶段，资料阅读、代码搜索、查询调整、假设检验均在该 Agent 会话内自主执行，不为单次查询追加阶段。方案、PR审查、数据分析和复盘遵循共享调查专业要求，不使用已退出新目录的旧流程。仅 capabilities 中 effectClass=file.write 的已授权写入能力可作为 task-general-capability 阶段并给出 capabilityStep；Host 冻结范围并核验执行结果。调查产物 outcome=needs_input 时 wait 并询问 question，outcome=blocked 时 block 并说明 limitations，两者均不能作为 completed 的证据。缺能力时 block，不能虚构已执行。仅报告语言改变时保留已核验业务产物，按事件要求的语言改写 summary，不追加流程。若 currentExecution 显示当前流程提供受信修复能力且 repairable=true，先读取失败产物，再用 repairCurrentStage 和原样 repairBinding 明确请求本代修复；wait 只等待，不会启动修复，不得声称 wait 已调度。未知外部效果或未排空不能修复。${ownerFileDeliveryInstructions}${sourceInterpretationInstructions}${groupReplyInstructions}最后仅调用 ${SUBMIT}。` })
       agentCtx.tools.restrict({ allow: [] })
+      agentCtx.systemPrompt.section({ name: 'task:owner-input', order: 1, text: 'goal 是当前权威需求；materials 中 artifactRef 指向完整材料，events 中 payloadRef 指向完整原始事件。对照当前 sourceInstructions 和 currentSources 判断变化，不反复展开事件内重复的旧需求。需要正文时调用 task_owner_read_artifact，按 nextOffset 继续到 null 才能称完整读取；没有读取不得声称核验过。材料和事件引用不是阶段成功证明。群聊进度只说当前处理状态和真正需要人工行动的事项，详细分析保留在阶段产物，不复述原文或说“已收到”。' })
       agentCtx.tools.guard(exec => {
         if (exec.name !== SUBMIT && exec.name !== 'task_owner_read_events'
           && exec.name !== 'task_owner_read_artifact') return 'task_owner_tool_not_allowed'
@@ -99,8 +109,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
         if (closed || entry.cancelled || entry.stale || entry.attempted) return 'task_owner_turn_stopped'
       })
       agentCtx.on('agent/pre-step', async (_event, next) => {
-        if (!await current(entry) || entry.attempted || entry.steps >= entry.maxSteps) return { kind: 'reject' }
-        entry.steps++
+        if (!await current(entry) || entry.attempted) return { kind: 'reject' }
         return next()
       })
       agentCtx.on('tools/pre-execute', async (_exec, next) => {
@@ -113,18 +122,23 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
       agentCtx.tools.register({
         name: SUBMIT,
         description: '持久提交当前任务负责人的候选决定；回执仅表示候选已收到，Host 稍后核验。',
-        parameters: { type: 'object', properties: { decision: ownerDecisionSchema }, required: ['decision'], additionalProperties: false },
+        parameters: { type: 'object', properties: { decision: submissionSchema }, required: ['decision'], additionalProperties: false },
         output: { schema: { type: 'object', properties: { received: { type: 'boolean' }, feedback: { type: 'string' } }, required: ['received'], additionalProperties: false },
           render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
         async execute(args, exec) {
           entry.attempted = true
+          if (args.decision?.action === 'repairCurrentStage' && (!entry.repairBinding
+            || Object.keys(args.decision.repair ?? {}).length !== Object.keys(entry.repairBinding).length
+            || Object.entries(entry.repairBinding).some(([key, value]) => args.decision.repair?.[key] !== value))) {
+            if (!await current(entry)) throw fail('TASK_OWNER_STALE')
+            exec.signal.throwIfAborted()
+            entry.attempted = false
+            return { received: false, feedback: 'TASK_OWNER_REPAIR_BINDING_INVALID：只能使用当前currentExecution.repairable=true及其完整repairBinding；不得猜测版本。计划需求版本落后时请用advance与planChange.replaceSuffix重评未完成阶段；无当前修复能力时不能提交repairCurrentStage。' }
+          }
           const problems = validateJsonSchemaValue({ type: 'object', properties: { decision: ownerDecisionSchema },
             required: ['decision'], additionalProperties: false }, args)
           if (problems.length) throw fail('TASK_OWNER_DECISION_INVALID')
           if (!args.decision.summary.trim() || args.decision.summary.length > 8000
-            || args.decision.evidenceRefs.length > 64 || args.decision.appendStages?.length > 16
-            || args.decision.planChange?.stages?.length > 16
-            || args.decision.assessments?.length > 32
             || args.decision.appendStages?.some(stage => !stage.workflowId.trim())
             || Buffer.byteLength(JSON.stringify(args.decision), 'utf8') > 16000) throw fail('TASK_OWNER_DECISION_INVALID')
           try { assertGroupReply(args.decision.summary, [entry.binding.taskId, entry.binding.sessionId]) }
@@ -137,7 +151,23 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
           if (proposed.some(stage => stage.workflowId === 'task-general-capability' && !entry.writeCapabilities.has(stage.capabilityStep?.capabilityId))) throw fail('TASK_OWNER_CAPABILITY_STAGE_NOT_ALLOWED')
           if (!await current(entry)) throw fail('TASK_OWNER_STALE')
           exec.signal.throwIfAborted()
-          await onCandidate(copy(args.decision), entry.binding)
+          try { await onCandidate(copy(args.decision), entry.binding) }
+          catch (error) {
+            if (!await current(entry)) throw fail('TASK_OWNER_STALE')
+            exec.signal.throwIfAborted()
+            // 这些拒绝发生于候选事务写入之前；未知持久化错误不能当作可重试。
+            if (error.code === 'TASK_OWNER_ADVANCE_CONFLICT') {
+              entry.attempted = false
+              return { received: false, feedback: 'TASK_OWNER_ADVANCE_CONFLICT：候选尚未落账。尚无计划（planRevision=0）时仅用planChange.kind=initialize；已有计划不能重新initialize。请核对当前task和stages后修正，不把首次计划当作replaceSuffix。' }
+            }
+            if (error.code === 'TASK_OWNER_REPAIR_BINDING_INVALID') {
+              entry.attempted = false
+              return { received: false, feedback: '当前阶段不支持此修复绑定。请按当前快照重新判断；需求版本落后的计划须用advance与replaceSuffix重评，不得编造修复绑定。' }
+            }
+            if (error.code !== 'TASK_OWNER_REF_INVALID') throw error
+            entry.attempted = false
+            return { received: false, feedback: 'TASK_OWNER_REF_INVALID：evidenceRefs 只接受 Host 提供的成果/证据 artifactRef，不接受 dws: 消息来源引用。首次只读调查计划尚无成果证据时可使用空数组；完成判断仍必须引用已核验成果。请修正后重新提交。' }
+          }
           entry.decision = copy(args.decision)
           entry.submissionCallId = exec.callId
           exec.concludeTurn()
@@ -162,45 +192,41 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
       })
       if (entry.readableArtifacts.size) agentCtx.tools.register({
         name: 'task_owner_read_artifact',
-        description: '读取本任务已成功阶段的真实产物或证据正文。',
-        parameters: { type: 'object', properties: { artifactRef: { type: 'string' } },
+        description: '按字符分页读取本任务已登记的原始材料、事件或阶段证据。返回nextOffset；完整阅读时继续读取直至null。',
+        parameters: { type: 'object', properties: { artifactRef: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 16000 } },
           required: ['artifactRef'], additionalProperties: false },
-        output: { schema: { type: 'object', properties: { artifact: { type: 'string' } },
-          required: ['artifact'], additionalProperties: false },
-          render: (_args, value) => [{ type: 'text', text: value.artifact }] },
-        async execute({ artifactRef }, exec) {
+        output: { schema: { type: 'object', properties: { artifact: { type: 'string' }, totalLength: { type: 'integer' }, nextOffset: { oneOf: [{ type: 'integer' }, { type: 'null' }] } },
+          required: ['artifact', 'totalLength', 'nextOffset'], additionalProperties: false },
+          render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+        async execute({ artifactRef, offset = 0, limit = 16000 }, exec) {
           if (!await current(entry) || !entry.readableArtifacts.has(artifactRef)) throw fail('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
           exec.signal.throwIfAborted()
           const artifact = JSON.stringify(await readArtifact(artifactRef))
-          if (Buffer.byteLength(artifact, 'utf8') > 64 * 1024) throw fail('TASK_OWNER_ARTIFACT_CAPACITY')
-          return { artifact }
+          return { artifact: artifact.slice(offset, offset + limit), totalLength: artifact.length,
+            nextOffset: offset + limit < artifact.length ? offset + limit : null }
         },
       })
     }
   }
 
   async function run({ binding, input, provider, model, reasoningEffort, onSessionBound, onCandidate,
-    readPage, readArtifact, timeoutMs = 120000 }) {
+    readPage, readArtifact }) {
     assertBinding(binding)
     if (!provider || !model || typeof onSessionBound !== 'function' || typeof onCandidate !== 'function'
       || input?.eventPages?.length && typeof readPage !== 'function'
-      || input?.stageArtifacts?.length && typeof readArtifact !== 'function'
-      || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 2147483647) throw fail('TASK_OWNER_RUN_INVALID')
+      || (input?.stageArtifacts?.length || input?.events?.some(event => event.payloadRef) || input?.goal?.materials?.some(material => material.artifactRef)) && typeof readArtifact !== 'function') throw fail('TASK_OWNER_RUN_INVALID')
     if (closed) throw fail('TASK_OWNER_CLOSED')
     if (entries.has(binding.taskId)) throw notDrained('TASK_OWNER_BUSY')
     binding = Object.freeze(copy(binding))
-    const entry = { binding, cancelled: false, stale: false, attempted: false, accepted: false, steps: 0,
-      maxSteps: input.eventPages?.length ? 64 : 8,
+    const entry = { binding, repairBinding: input.currentExecution?.repairable === true ? copy(input.currentExecution.repairBinding) : null,
+      snapshots: new Map(), cancelled: false, stale: false, attempted: false, accepted: false,
       writeCapabilities: new Set((input.capabilities ?? []).filter(item => item.effectClass === 'file.write').map(item => item.id)),
       unreadPages: new Set((input.eventPages ?? []).map(page => page.ref)),
-      readableArtifacts: new Set((input.stageArtifacts ?? []).flatMap(stage =>
-        [stage.outputRef, ...(stage.evidenceRefs ?? [])].filter(Boolean))),
+      readableArtifacts: new Set([...(input.stageArtifacts ?? []).flatMap(stage =>
+        [stage.outputRef, ...(stage.evidenceRefs ?? [])]), ...(input.events ?? []).map(event => event.payloadRef),
+        ...(input.goal?.materials ?? []).map(material => material.artifactRef), input.deliveryManifest?.ref].filter(Boolean)),
       abort: new AbortController(), drained: Promise.withResolvers() }
     entries.set(binding.taskId, entry)
-    entry.timer = setTimeout(() => {
-      entry.abort.abort(fail('TASK_OWNER_TIMEOUT'))
-      entry.handle?.agent.cancel({ kind: 'user' })
-    }, timeoutMs)
     try {
       if (!await current(entry)) return { status: 'stale' }
       if (ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) throw notDrained('TASK_OWNER_SESSION_ALREADY_LIVE')
@@ -210,7 +236,15 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
         if (error.name !== 'SessionPersistenceNotFoundError' || error.sessionId !== binding.sessionId) throw error
       }
       if (binding.sessionBound && !stored) throw fail('TASK_OWNER_SESSION_MISSING')
-      if (stored) validateHistory(stored.events, binding)
+      if (stored) {
+        validateHistory(stored.events, binding)
+        for (const event of stored.events) {
+          if (event.type === 'user/message' && event.surfaceOp === 'append'
+            && event.data.source?.taskOwner?.taskId === binding.taskId
+            && event.data.source.taskOwner.sessionId === binding.sessionId)
+            entry.snapshots.set(event.seq, event.data)
+        }
+      }
       if (!await current(entry)) return { status: 'stale' }
       const workspaceDir = !stored && getWorkspaceDir ? await getWorkspaceDir({ binding: entry.binding }) : undefined
       const options = { agentOptions: { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
@@ -222,7 +256,17 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
             ownerEpoch: binding.ownerEpoch, creationLease: binding.leaseEpoch } }] })
       if (stored) validateHistory(entry.handle.agent.session.snapshotEvents(), binding)
       else nameSession(ctx, entry.handle.agent.session, 'owner', input.goal?.objective ?? input.goal?.request)
-      await ctx.sessions.flush(entry.handle.agent.session)
+      // 仅替换旧 Owner 输入的模型投影。原始日志不改写；当前完整快照替代旧输入，不替换模型结论或工具证据。
+      const session = entry.handle.agent.session
+      for (const sequenceId of [...session.surface.nodes]) {
+        const previous = entry.snapshots.get(sequenceId)
+        if (!previous) continue
+        session.append('user/message', createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text',
+          text: JSON.stringify({ historicalOwnerSnapshot: { sequenceId, turnId: previous.source.taskOwner.turnId },
+            instruction: 'superseded：此历史输入已由当前最后一条完整 Owner 快照替代；原文按 sequenceId 保留在会话审计日志中。' }) }] }),
+        { surfaceOp: { op: 'replace', start: sequenceId, end: sequenceId }, sourceEventSeqs: [sequenceId] })
+      }
+      await ctx.sessions.flush(session)
       if (!await current(entry)) return { status: 'stale' }
       await onSessionBound(binding)
       if (!await current(entry)) return { status: 'stale' }
@@ -238,7 +282,6 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
       if (!entry.handle && (ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)))
         throw error.taskOwnerDrained === false ? error : Object.assign(notDrained('TASK_OWNER_SESSION_ALREADY_LIVE'), { cause: error })
       if (entry.cancelled || closed) return { status: 'cancelled' }
-      if (entry.abort.signal.aborted) return { status: 'no_submission', reason: 'TASK_OWNER_TIMEOUT' }
       throw error
     } finally {
       await drain(entry)

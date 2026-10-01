@@ -20,7 +20,7 @@ const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-lo
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
 
-async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner')) {
+async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner'), artifactPages = 1) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SessionTitleService(ctx, { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 })
@@ -34,10 +34,10 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
     async *stream(options) {
       requests.push(options)
       const id = `call-${requests.length}`, name = pageRef && requests.length === 1
-        ? 'task_owner_read_events' : artifactRef && requests.length === 1
+        ? 'task_owner_read_events' : artifactRef && requests.length <= artifactPages
           ? 'task_owner_read_artifact' : 'task_owner_submit'
       const args = JSON.stringify(name === 'task_owner_read_events' ? { pageRef }
-        : name === 'task_owner_read_artifact' ? { artifactRef } : { decision: typeof candidate === 'function' ? candidate(requests.length) : candidate })
+        : name === 'task_owner_read_artifact' ? { artifactRef, offset: (requests.length - 1) * 16000 } : { decision: typeof candidate === 'function' ? candidate(requests.length) : candidate })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } }
@@ -70,7 +70,7 @@ test('同一个业务 Task 的原生 Owner 会话跨唤醒复用并持久记录�
   assert.equal(saved.events.filter(event => event.type === 'dingtalk/task-owner-session').length, 1)
   assert.equal(saved.meta.cwd, join(root, 'session-workspaces', '任务负责'))
   assert.equal(saved.events.findLast(event => event.type === 'session/title').data.title, '整理任务交付报告 · 任务负责')
-  assert.equal(saved.events.filter(event => event.type === 'user/message').length, 2)
+  assert.equal(saved.events.filter(event => event.type === 'user/message' && event.surfaceOp === 'append').length, 2)
   assert.equal(h.requests.length, 2)
   assert.ok(h.requests.every(request => request.tools.map(tool => tool.name).join(',') === 'task_owner_submit'))
   assert.match(h.requests[0].system, /先完成必要调查，再用task-general-capability阶段/u)
@@ -109,18 +109,20 @@ test('Owner 仅能读取当前 Task 已成功阶段的产物正文', async t => 
   const root = await mkdtemp(join(tmpdir(), 'task-owner-artifact-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const artifactRef = `sha256-${'b'.repeat(64)}.json`
-  const h = await host(root, null, artifactRef)
+  const h = await host(root, null, artifactRef, decision, undefined, 6)
   t.after(() => h.close())
   const read = []
+  const longArtifact='发现原因'.repeat(20000)+'最后条件'
   const result = await h.sessions.run({ binding: { taskId: 'task-1', sessionId: 'artifact-session',
     turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
   input: { taskId: 'task-1', stageArtifacts: [{ stageId: 'stage-1', outputRef: artifactRef,
     evidenceRefs: [] }] }, provider: 'owner-fixture', model: 'scripted',
   onSessionBound: async () => {}, readArtifact: async ref => {
-    read.push(ref); return { summary: '发现原因', limitations: [] }
+    read.push(ref); return { summary: longArtifact, limitations: [] }
   }, onCandidate: async value => assert.deepEqual(value, decision) })
   assert.equal(result.status, 'submitted')
-  assert.deepEqual(read, [artifactRef])
+  assert.deepEqual(read, Array(6).fill(artifactRef))
+  assert.ok(JSON.stringify(h.requests).includes('最后条件'))
   assert.ok(h.requests.every(request => request.tools.some(tool => tool.name === 'task_owner_read_artifact')))
 })
 
@@ -216,5 +218,82 @@ test('Owner原生工作目录使用受信任务绑定，重启保持cwd及宿主
   const saved = await resumed.ctx.sessionPersistence.inspect('owner-task-a')
   assert.equal(saved.meta.cwd, taskFilePath(root, 'task-a', 'work'))
   assert.equal(resumed.ctx.sessionPersistence.locate(saved.meta).path, locations[0])
-  assert.equal(saved.events.filter(event => event.type === 'user/message').length, 2)
+  assert.equal(saved.events.filter(event => event.type === 'user/message' && event.surfaceOp === 'append').length, 2)
+})
+
+test('Owner原生会话引用拒绝可修正，未知持久化错误仍终止', async t => {
+  for (const code of ['TASK_OWNER_REF_INVALID', 'TASK_OWNER_STORAGE_UNKNOWN']) {
+    const root = await mkdtemp(join(tmpdir(), 'task-owner-correction-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const h = await host(root, null, null, step => ({ ...decision, evidenceRefs: step === 1 ? ['dws:source'] : [] }))
+    t.after(() => h.close())
+    let calls = 0
+    const result = await h.sessions.run({ binding: { taskId: 'task-correction', sessionId: 'owner-correction', turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+      input: { goal: { request: '调查' } }, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+      onCandidate: async value => { calls++; if (value.evidenceRefs.length) throw Object.assign(Error(code), { code }) } })
+    assert.equal(result.status, code === 'TASK_OWNER_REF_INVALID' ? 'submitted' : 'no_submission')
+    assert.equal(calls, code === 'TASK_OWNER_REF_INVALID' ? 2 : 1)
+    if (calls === 2) assert.match(JSON.stringify(h.requests[1]), /TASK_OWNER_REF_INVALID/u)
+  }
+})
+
+test('Owner完整大材料重试只保留当前输入投影，原始快照审计不改写', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'task-owner-snapshot-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const h = await host(root); t.after(() => h.close())
+  const marker = 'WORKBOOK_FULL_BODY_4eb39'
+  const body = marker + '完整单元格正文'.repeat(70000)
+  let reject = true
+  const run = leaseEpoch => h.sessions.run({ binding: { taskId: 'task-snapshot', sessionId: 'owner-snapshot', turnId: `turn-${leaseEpoch}`,
+    leaseEpoch, ownerEpoch: 1, sessionBound: leaseEpoch > 1 }, input: { taskId: 'task-snapshot', goal: { materials: [{ text: body }] } },
+    provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+    onCandidate: async () => { if (reject) throw Object.assign(Error('UNKNOWN_STORAGE'), { code: 'UNKNOWN_STORAGE' }) } })
+  assert.equal((await run(1)).status, 'no_submission')
+  const first = await h.ctx.sessionPersistence.inspect('owner-snapshot')
+  reject = false; h.setLease(2)
+  assert.equal((await run(2)).status, 'submitted')
+  const request = JSON.stringify(h.requests[1])
+  assert.equal(request.split(marker).length - 1, 1)
+  assert.ok(request.includes(body))
+  assert.match(request, /superseded/u)
+  const after = await h.ctx.sessionPersistence.inspect('owner-snapshot')
+  assert.deepEqual(after.events.slice(0, first.events.length), first.events)
+  assert.equal(after.events.filter(e => e.type === 'user/message' && e.surfaceOp === 'append').length, 2)
+  assert.equal(after.events.filter(e => e.surfaceOp?.op === 'replace').length, 1)
+})
+
+test('Owner引用可在第十步纠正提交，旧lease仍不能继续', async t => {
+  for (const stale of [false, true]) {
+    const root = await mkdtemp(join(tmpdir(), 'task-owner-ref-fence-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const h = await host(root); t.after(() => h.close())
+    let calls = 0
+    const result = await h.sessions.run({ binding: { taskId: 'task-ref', sessionId: 'owner-ref', turnId: 'turn-ref', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+      input: { goal: { request: '调查' } }, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+      onCandidate: async () => { calls++; if (stale) h.setLease(2); if (stale || calls < 10) throw Object.assign(Error('bad ref'), { code: 'TASK_OWNER_REF_INVALID' }) } })
+    assert.equal(result.status, stale ? 'stale' : 'submitted')
+    assert.equal(calls, stale ? 1 : 10)
+  }
+})
+
+test('Owner原生修复仅接受当前绑定，错误动作可在同轮纠正',async t=>{
+ for(const mode of ['absent','stale','valid']){
+  const root=await mkdtemp(join(tmpdir(),'owner-repair-binding-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const repair={stageId:'stage-1',runId:'run-1',generation:1,runRevision:0,requirementRevision:2}
+  const h=await host(root,null,null,step=>step===1?{action:'repairCurrentStage',repair:{...repair,runRevision:mode==='stale'?1:0},summary:'重查',evidenceRefs:[]}:decision)
+  t.after(()=>h.close());const submitted=[]
+  const result=await h.sessions.run({binding:{taskId:'task-repair',sessionId:'owner-repair',turnId:'turn-1',leaseEpoch:1,ownerEpoch:1,sessionBound:false},
+   input:{goal:{request:'调查'},currentExecution:mode==='absent'?null:{repairable:true,repairBinding:repair}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>submitted.push(value)})
+  assert.equal(result.status,'submitted');assert.equal(submitted.length,1)
+  assert.equal(submitted[0].action,mode==='valid'?'repairCurrentStage':decision.action)
+  assert.equal(h.requests.length,mode==='valid'?1:2)
+ }
+})
+
+test('Owner初始计划错误在同一原生turn内修正为initialize',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'owner-plan-correction-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const h=await host(root,null,null,step=>({action:'advance',summary:'先调查',evidenceRefs:[],planChange:step===1?{kind:'replaceSuffix',affectedFrom:0,stages:[{workflowId:'task-investigation',gate:'none'}]}:{kind:'initialize',stages:[{workflowId:'task-investigation',gate:'none'}]}}));t.after(()=>h.close())
+ let calls=0
+ const result=await h.sessions.run({binding:{taskId:'new-task',sessionId:'new-owner',turnId:'turn-1',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{task:{planRevision:0},stages:[],goal:{request:'调查'}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>{calls++;if(value.planChange.kind!=='initialize')throw Object.assign(Error('TASK_OWNER_ADVANCE_CONFLICT'),{code:'TASK_OWNER_ADVANCE_CONFLICT'})}})
+ assert.equal(result.status,'submitted');assert.equal(calls,2);assert.equal(result.decision.planChange.kind,'initialize');assert.match(JSON.stringify(h.requests[1]),/尚无计划/)
 })

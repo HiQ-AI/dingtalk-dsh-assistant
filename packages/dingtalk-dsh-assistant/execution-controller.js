@@ -58,7 +58,7 @@ export function defineExecutionWorkflow(definition) {
     ownerContract = freeze({ ...contract, ...(contract.rulesDigest === undefined ? {} : { rulesDigest: structuredClone(contract.rulesDigest) }),
       ...(contract.resultContract ? { resultContract: structuredClone(contract.resultContract) } : {}) })
   }
-  if (!Array.isArray(definition.nodes) || !definition.nodes.length || definition.nodes.length > 32) throw executionError('WORKFLOW_NODE_LIMIT')
+  if (!Array.isArray(definition.nodes) || !definition.nodes.length) throw executionError('WORKFLOW_NODES_REQUIRED')
   const ids = new Set()
   const nodes = definition.nodes.map(node => {
     requireId(node.id); requireId(node.version)
@@ -95,7 +95,6 @@ export function defineExecutionWorkflow(definition) {
     ...(n.validateOutput ? { validateOutput: normalizeSource(n.validateOutput.toString()), classifyOutputError: n.classifyOutputError ? normalizeSource(n.classifyOutputError.toString()) : null } : {}),
     prompt: n.prompt ?? null, allowedTools: n.allowedTools ?? [], rulesDigest: n.rulesDigest ?? null,
     ...(n.inputDependencies ? { inputDependencies: n.inputDependencies } : {}),
-    maxSteps: n.maxSteps ?? 32, timeoutMs: n.timeoutMs ?? 120000,
   })) })
   const digest = executionDigest(digestInput(source => source.replace(/\r\n?/g, '\n')))
   const legacyDigests = [executionDigest(digestInput(source => source)),
@@ -106,8 +105,8 @@ export function defineExecutionWorkflow(definition) {
 }
 
 /** 一个Controller拥有推进权；等待及状态查询不调用模型，所有身份由控制账产生。 */
-export function createExecutionController({ store, artifacts, sessions, delivery, workflows, historicalWorkflows = [], readTools = [], maxConcurrentRuns = 4, changeQuietMs = 2000, maxChangeDelayMs = 10000 }) {
-  if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1 || maxConcurrentRuns > 32 || !Number.isFinite(changeQuietMs) || changeQuietMs < 0 || maxChangeDelayMs < changeQuietMs) throw executionError('CONTROLLER_CONFIG_INVALID')
+export function createExecutionController({ store, artifacts, sessions, delivery, workflows, historicalWorkflows = [], readTools = [], maxConcurrentRuns = 4 }) {
+  if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1) throw executionError('CONTROLLER_CONFIG_INVALID')
   const definitions = new Map(), byDigest = new Map()
   function registerDefinition(input, historical = false, replay = false) {
     const definition = defineExecutionWorkflow(input)
@@ -126,7 +125,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   let closed = false, running = 0
   const queue = [], flights = new Map(), active = new Map(), errors = new Map(), dirty = new Set()
   const query = runId => store.query({ kind: 'run', runId })
-  const command = (id, kind, args) => store.command({ id, kind, args })
+  const command = (id, kind, args, context = {}) => store.command({ id, kind, args, ...context })
   function definitionOf(run) {
     const definition = byDigest.get(run.workflowDigest)
     if (!definition || definition.id !== run.workflowId) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
@@ -154,7 +153,6 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   function schedule(runId) {
     if (closed) return Promise.resolve()
     if (flights.has(runId)) { dirty.add(runId); return flights.get(runId) }
-    if (queue.length >= 256) throw executionError('EXECUTION_QUEUE_FULL')
     const deferred = Promise.withResolvers()
     flights.set(runId, deferred.promise); queue.push({ runId, deferred })
     deferred.promise.catch(error => errors.set(runId, error))
@@ -178,12 +176,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     })
   }
   async function applyPending(state, definition) {
-    // 先建立屏障并排空旧节点，再短暂合并完整替换输入；最长等待有界。
+    // 排空旧节点后立即消费当前持久输入；新补充进入下一批，不等待静默窗口。
     const pending = state.inputs.filter(input => input.status === 'pending')
     if (!pending.length) return false
-    const first = Date.parse(pending[0].acceptedAt), last = Date.parse(pending.at(-1).acceptedAt)
-    const wait = Math.min(last + changeQuietMs, first + maxChangeDelayMs) - Date.now()
-    if (wait > 0) { await delay(Math.min(wait, 250)); return true }
     // 为固定节点引用留出余量；按编码字节限制ID前缀，转义字符也计入预算。
     // 剩余pending仍持有屏障；中间批次不会启动执行器。
     const batch = []
@@ -219,7 +214,6 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const receipt = await command(`claim:${ready.nodeRunId}:${ready.leaseEpoch + 1}`, 'node.claim', {
         runId, nodeId: ready.nodeId, expectedGeneration: ready.generation, expectedLeaseEpoch: ready.leaseEpoch,
       })
-      if (receipt.result.status === 'budget_exhausted') return
       const binding = { ...receipt.result.binding, taskId: state.run.taskId,
         requirementDigest: executionDigest(await artifacts.read(state.run.requirementRef)) }
       if (nodeDefinition.allowInputContinuation) {
@@ -241,8 +235,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             perform: async ({ action, prepared }) => {
               if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : action === 'edit' ? 'workspace.edit' : action === 'pr' ? 'github.pr' : action === 'external' ? 'external.operation' : ['file', 'artifact'].includes(action) ? 'file.write' : action === 'message' ? 'message.send' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
               abort.signal.throwIfAborted()
-              const effect = await delivery.execute({ binding, action, prepared })
+              const effect = await delivery.execute({ binding, action, prepared }, { signal: abort.signal })
               if (isTerminalUatBuildFailure(effect)) throw Object.assign(executionError('RELEASE_PIPELINE_FAILED'), { terminalEffect: effect })
+              if (effect.unsentRecovery) throw executionError('PR_CONNECTION_FAILED')
               if (effect.state !== 'succeeded') throw executionError('DELIVERY_RECONCILIATION_REQUIRED')
               return effect.result.result // 对执行节点交接适配器产出，控制账回执仍单独留存。
             },
@@ -250,7 +245,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           abort.signal.throwIfAborted(); submitted = true
         } else {
           if (!sessions) throw executionError('SESSION_ADAPTER_UNAVAILABLE')
-          const agentDefinition = Object.fromEntries(['provider', 'model', 'reasoningEffort', 'prompt', 'allowedTools', 'outputSchema', 'maxSteps', 'timeoutMs'].filter(key => nodeDefinition[key] !== undefined).map(key => [key, nodeDefinition[key]]))
+          const agentDefinition = Object.fromEntries(['provider', 'model', 'reasoningEffort', 'prompt', 'allowedTools', 'outputSchema'].filter(key => nodeDefinition[key] !== undefined).map(key => [key, nodeDefinition[key]]))
           outcome = await sessions.run({ binding, input: input.data, definition: agentDefinition,
             ...(nodeDefinition.validateOutput ? { validateOutput: value => nodeDefinition.validateOutput({ output: value, input: input.data, binding }),
               classifyOutputError: nodeDefinition.classifyOutputError } : {}),
@@ -355,7 +350,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const definition = registerDefinition(input, false, true)
       return { id: definition.id, version: definition.version, digest: definition.digest }
     },
-    async createRun({ commandId, taskId, runId = `run-${executionDigest(commandId)}`, workflowId, input, stageBinding }) {
+    async createRun({ ownerTurnId, commandId, taskId, runId = `run-${executionDigest(commandId)}`, workflowId, input, stageBinding }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId); requireId(runId)
       let definition, requirementReference
@@ -374,8 +369,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const receipt = await command(commandId, 'run.create', { taskId, runId, workflowId, workflowDigest: definition.digest, requirementRef: requirement.ref,
         ...(stageBinding ? { stageBinding } : {}),
         nodes: definition.nodes.map((node, index) => ({ nodeId: node.id, nodeVersion: node.version, executor: node.executor, inputRef: index ? null : first.ref, inputDigest: index ? null : first.digest })),
-      })
-      schedule(runId); return { runId, receipt }
+      }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
+      if (!ownerTurnId) schedule(runId)
+      return { runId, receipt }
     },
     async createTaskPlan({ commandId, taskId, requirementRevision = 1, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
@@ -390,11 +386,11 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         const requirement = index === 0 ? await artifacts.put(stage.input, { taskId }) : null
         stored.push({ stageId: requireId(stage.stageId), workflowId: definition?.id ?? requireId(stage.workflowId),
           workflowDigest: stage.unavailableReason || dynamic ? null : definition.digest, unavailableReason: stage.unavailableReason ?? null,
-          requirementRef: requirement?.ref ?? null, gate: stage.gate ?? 'none' })
+          requirementRef: requirement?.ref ?? null, gate: stage.gate ?? 'none', ...(stage.sourceCondition ? { sourceCondition: stage.sourceCondition } : {}) })
       }
       return command(commandId, 'task.plan.create', { taskId, requirementRevision, stages: stored })
     },
-    async initializeTaskPlan({ commandId, taskId, expectedPlanRevision = 0, expectedRequirementRevision,
+    async initializeTaskPlan({ ownerTurnId, commandId, taskId, expectedPlanRevision = 0, expectedRequirementRevision,
       expectedControlRevision, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId)
@@ -412,13 +408,13 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         stored.push({ stageId: requireId(stage.stageId), workflowId: definition?.id ?? requireId(stage.workflowId),
           workflowDigest: stage.unavailableReason || dynamic ? null : definition.digest,
           unavailableReason: stage.unavailableReason ?? null, requirementRef: requirement?.ref ?? null,
-          gate: stage.gate ?? 'none' })
+          gate: stage.gate ?? 'none', ...(stage.sourceCondition ? { sourceCondition: stage.sourceCondition } : {}) })
       }
       return command(commandId, 'task.plan.initialize', { taskId, expectedPlanRevision,
         expectedRequirementRevision, expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision,
-        stages: stored })
+        stages: stored }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
     },
-    async reviseTaskPlan({ commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, affectedFrom, stages }) {
+    async reviseTaskPlan({ ownerTurnId, commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, affectedFrom, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId)
       const previous = await store.query({ kind: 'task.plan', taskId })
@@ -439,13 +435,13 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           workflowDigest: retained ? retained.workflowDigest : stage.unavailableReason || dynamic ? null : definition.digest,
           unavailableReason: retained?.unavailableReason ?? stage.unavailableReason ?? null,
           requirementRef: requirement?.ref ?? null,
-          gate: retained?.gate ?? stage.gate ?? 'none' })
+          gate: retained?.gate ?? stage.gate ?? 'none', ...((retained?.sourceCondition ?? stage.sourceCondition) ? { sourceCondition: retained?.sourceCondition ?? stage.sourceCondition } : {}) })
       }
       return command(commandId, 'task.plan.revise',
         { taskId, expectedPlanRevision, expectedControlRevision: expectedControlRevision ?? previous.task.controlRevision,
-          requirementRevision, affectedFrom, stages: stored })
+          requirementRevision, affectedFrom, stages: stored }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
     },
-    async extendTaskPlan({ commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, stages }) {
+    async extendTaskPlan({ ownerTurnId, commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       requireId(taskId)
       if (!Array.isArray(stages) || !stages.length) throw executionError('TASK_PLAN_STAGES_INVALID')
@@ -455,12 +451,12 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         if (!definition && !stage.unavailableReason && !dynamic) throw executionError('WORKFLOW_NOT_FOUND')
         return { stageId: requireId(stage.stageId), workflowId: requireId(stage.workflowId),
           workflowDigest: stage.unavailableReason || dynamic ? null : definition.digest,
-          unavailableReason: stage.unavailableReason ?? null, requirementRef: null, gate: stage.gate ?? 'none' }
+          unavailableReason: stage.unavailableReason ?? null, requirementRef: null, gate: stage.gate ?? 'none', ...(stage.sourceCondition ? { sourceCondition: stage.sourceCondition } : {}) }
       })
       const plan = await store.query({ kind: 'task.plan', taskId })
       if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
       return command(commandId, 'task.plan.extend', { taskId, expectedPlanRevision,
-        expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision, requirementRevision, stages: stored })
+        expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision, requirementRevision, stages: stored }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
     },
     async taskPlan(taskId) { return store.query({ kind: 'task.plan', taskId: requireId(taskId) }) },
     async pendingTaskPlans({ limit = 100, beforeSequenceId } = {}) {
@@ -475,19 +471,15 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         taskId: requireId(taskId), runId: requireId(runId), stageId: requireId(stageId),
       })
     },
-    async continueRunBudget({ commandId, eventId }) {
-      if (closed) throw executionError('CONTROLLER_CLOSED')
-      return command(commandId, 'run.budget.continue', { eventId: requireId(eventId) })
-    },
-    async confirmTaskStage({ commandId, taskId, stageId, planRevision, expectedControlRevision, expectedRequirementRevision, outputRef }) {
+    async confirmTaskStage({ inputCommandId, commandId, taskId, stageId, planRevision, expectedControlRevision, expectedRequirementRevision, outputRef, confirmation }) {
       const plan = await store.query({ kind: 'task.plan', taskId: requireId(taskId) })
       if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
       return command(commandId, 'task.plan.confirm',
         { taskId, planRevision, expectedControlRevision: expectedControlRevision ?? plan.task.controlRevision,
-          stageId: requireId(stageId), outputRef,
-          ...(expectedRequirementRevision === undefined ? {} : { expectedRequirementRevision }) })
+          stageId: requireId(stageId), outputRef, ...(confirmation ? { confirmation } : {}),
+          ...(expectedRequirementRevision === undefined ? {} : { expectedRequirementRevision }) }, { ...(inputCommandId ? { inputCommandId } : {}) })
     },
-    async bindTaskStageInput({ commandId, taskId, planRevision, expectedControlRevision, stageId, predecessorOutputRef, input, workflowId }) {
+    async bindTaskStageInput({ ownerTurnId, commandId, taskId, planRevision, expectedControlRevision, stageId, predecessorOutputRef, input, workflowId }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       const plan = await store.query({ kind: 'task.plan', taskId: requireId(taskId) })
       if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
@@ -499,9 +491,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         stageId: requireId(stageId),
         predecessorOutputRef, requirementRef: requirement.ref,
         ...(definition ? { workflowId: definition.id, workflowDigest: definition.digest } : {}),
-      })
+      }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
     },
-    async advanceTaskPlan(taskId) {
+    async advanceTaskPlan(taskId, { ownerTurnId } = {}) {
       requireId(taskId)
       const plan = await store.query({ kind: 'task.plan', taskId })
       if (!plan) throw executionError('TASK_PLAN_NOT_FOUND')
@@ -535,7 +527,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       if (stage.status === 'running') {
         const state = await query(stage.runId)
         if (state.run?.status === 'queued') {
-          schedule(stage.runId)
+          if (!ownerTurnId) schedule(stage.runId)
           return plan
         }
         if (state.run?.status === 'waiting' && state.run.recoveryReason === 'controller-restarted') {
@@ -559,7 +551,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const input = await artifacts.read(stage.requirementRef)
       await this.createRun({
         commandId: `stage-start:${taskId}:${plan.task.planRevision}:${stage.stageId}:${stage.attempt}`,
-        taskId, runId, workflowId: stage.workflowId, input,
+        taskId, runId, workflowId: stage.workflowId, input, ownerTurnId,
         stageBinding: { planRevision: plan.task.planRevision, stageId: stage.stageId,
           attempt: stage.attempt, expectedControlRevision: plan.task.controlRevision },
       })
@@ -604,7 +596,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         expectedOutputRef,eventId:answer.eventId,answerDigest:executionDigest(answer)})
       schedule(runId);return receipt
     },
-    async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision, repair, repairAdmission }) {
+    async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision, repair, repairAdmission, readonlyRecovery }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       const state = await query(runId)
       if (repair) {
@@ -614,7 +606,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         repair = { ...repair, workflowDigest }
       }
       const requirement = await artifacts.put(input, { reference: state.run.requirementRef })
-      const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref, ...(expectedRevision === undefined ? {} : { expectedRevision }), ...(repair ? { repair } : {}) })
+      const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref, ...(expectedRevision === undefined ? {} : { expectedRevision }), ...(repair ? { repair } : {}), ...(readonlyRecovery ? { readonlyRecovery } : {}) })
       if (!receipt.replayed && receipt.result.accepted !== false) { interrupt(runId); schedule(runId) }
       return receipt
     },

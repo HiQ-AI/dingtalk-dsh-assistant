@@ -57,7 +57,7 @@ test('旧工程失败节点仅在排空且无编辑效果时切换到新流程�
     await store.command({ id, kind: 'workflow.register', args: { workflowId: 'task-engineering-test', definitionVersion: version, digest, config: {} } })
   const names = ['prepare-generation', 'prepare-workspace', 'index-files', 'apply-changes']
   await store.command({ id: 'create', kind: 'run.create', args: { runId: 'run', taskId: 'task', workflowId: 'task-engineering-test', workflowDigest: oldDigest,
-    requirementRef: requirement.ref, maxClaims: 3, nodes: names.map((nodeId, index) => ({ nodeId, nodeVersion: '1', executor: 'code',
+    requirementRef: requirement.ref, nodes: names.map((nodeId, index) => ({ nodeId, nodeVersion: '1', executor: 'code',
       inputRef: index ? null : oldInput.ref, inputDigest: index ? null : oldInput.digest })) } })
   for (let index = 0; index < 3; index++) {
     const nodeId = names[index], claimed = (await store.command({ id: `claim-${index}`, kind: 'node.claim', args: {
@@ -77,7 +77,7 @@ test('旧工程失败节点仅在排空且无编辑效果时切换到新流程�
   } })
   const after = await store.query({ kind: 'run', runId: 'run', includeHistory: true })
   assert.equal(after.run.workflowDigest, newDigest)
-  assert.equal(after.run.maxClaims, 18)
+  assert.equal(after.run.maxClaims, undefined)
   assert.deepEqual(after.nodes.map(node => node.nodeId), ['prepare-generation', 'prepare-workspace', 'inspect-and-propose', 'apply-changes', 'verify-candidate'])
   assert.equal(after.nodes[0].status, 'ready')
   assert.equal(after.run.generation, 2)

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
@@ -11,6 +11,8 @@ import { createExecutionController } from '../packages/dingtalk-dsh-assistant/ex
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createGitDelivery } from '../packages/dingtalk-dsh-assistant/execution-git.js'
 import { freezeCandidate, verifyCandidate } from '../packages/dingtalk-dsh-assistant/execution-candidate.js'
+
+import { createGithubPullRequests } from '../packages/dingtalk-dsh-assistant/execution-pr.js'
 
 const exec = promisify(execFile)
 const git = async (cwd, ...args) => (await exec('git', ['-C', cwd, ...args], { windowsHide: true })).stdout.trim()
@@ -61,4 +63,46 @@ test('真实固定节点链：验证→commit丢回执→只读对账→续接pu
   assert.equal(await git(remote, 'rev-parse', 'refs/heads/delivery'), unknown.definition.payload.commitId)
   assert.equal(await git(repository, 'rev-parse', 'HEAD'), baseCommit)
   assert.equal((await store.query({ kind: 'effect.list', runId: 'run' })).every(effect => effect.state === 'succeeded'), true)
+})
+
+
+test('原生 PR 链：相同预检失败跨 Controller 重启，同 effect 新 lease 恢复且仅创建一次', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-pr-native-recovery-')), script = join(root, 'gh.cjs'), file = join(root, 'remote.json')
+  await writeFile(file, JSON.stringify({ network: false, creates: 0, reads: 0, sha: 'a'.repeat(40), pr: null }))
+  await writeFile(script, `const fs=require('node:fs'),[file,...args]=process.argv.slice(2),s=JSON.parse(fs.readFileSync(file));
+const value=x=>args[args.indexOf(x)+1];
+if(args[0]==='api'){s.reads++;fs.writeFileSync(file,JSON.stringify(s));if(!s.network){console.error('connection refused');process.exit(1)}
+if(args.includes('--paginate'))console.log(JSON.stringify([s.pr?[{number:1,html_url:s.pr.url,state:'open',head:{sha:s.sha,ref:'codex/test'},base:{ref:'main'},body:s.pr.body}]:[]]));else console.log(JSON.stringify({object:{sha:s.sha}}));}
+else if(args[1]==='view')console.log(JSON.stringify(s.pr));
+else if(args[1]==='create'){s.creates++;s.pr={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:s.sha,headRefName:'codex/test',baseRefName:'main',body:fs.readFileSync(value('--body-file'),'utf8')};fs.writeFileSync(file,JSON.stringify(s));console.log(s.pr.url)}else process.exit(2);`)
+  const storeOptions = { dbPath: join(root, 'control.db'), instanceId: 'pr-integration', initialize: true }
+  let store = await openExecutionStore(storeOptions), controller
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const adapter = createGithubPullRequests({ repository: root, repo: 'test/repo', base: 'main', head: 'codex/test', ghCommand: { executable: process.execPath, args: [script, file] } })
+  const makeController = () => {
+    const delivery = createExecutionDelivery({ store, artifacts, prAdapter: adapter, authorize: async () => ({ principalId: 'synthetic', authorizationRef: 'explicit-task' }) })
+    return createExecutionController({ store, artifacts, delivery, workflows: [{ id: 'pr', version: '1', nodes: [
+      { id: 'pr', version: '1', executor: 'code', allowedEffects: ['github.pr'], inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, mapInput: ({ requirement }) => requirement,
+        execute: async ({ runId, generation, requirementDigest, perform }) => perform({ action: 'pr', prepared: adapter.prepare({ runId, generation, requirementDigest, commitId: 'a'.repeat(40), title: 'Title', body: 'verified' }) }) },
+    ] }] })
+  }
+  controller = makeController()
+  t.after(async () => { await controller.close(); await store.close() })
+  await controller.createRun({ commandId: 'create', taskId: 'task', runId: 'run', workflowId: 'pr', input: { request: 'PR' } })
+  let state = await controller.whenIdle('run')
+  assert.equal(state.run.status, 'waiting'); assert.equal(state.nodes[0].waitReason.reference, 'PR_CONNECTION_FAILED')
+  const first = (await store.query({ kind: 'effect.list', runId: 'run' }))[0]
+  assert.equal(first.state, 'failed'); assert.equal(first.result.result.mutationAttempted, false)
+  await controller.recover({ commandId: 'second-attempt', runId: 'run' }); await controller.whenIdle('run')
+  const second = (await store.query({ kind: 'effect.list', runId: 'run' }))[0]
+  assert.equal(second.effectId, first.effectId); assert.equal(second.state, 'failed'); assert.ok(second.dispatchLeaseEpoch > first.dispatchLeaseEpoch)
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).creates, 0)
+  await controller.close(); await store.close()
+  store = await openExecutionStore({ ...storeOptions, initialize: false }); controller = makeController()
+  const remote = JSON.parse(await readFile(file, 'utf8')); remote.network = true; await writeFile(file, JSON.stringify(remote))
+  await controller.recover({ commandId: 'after-restart', runId: 'run' }); state = await controller.whenIdle('run')
+  assert.equal(state.run.status, 'succeeded')
+  const final = (await store.query({ kind: 'effect.list', runId: 'run' }))[0]
+  assert.equal(final.effectId, first.effectId); assert.equal(final.state, 'succeeded'); assert.ok(final.dispatchLeaseEpoch > second.dispatchLeaseEpoch)
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).creates, 1)
 })

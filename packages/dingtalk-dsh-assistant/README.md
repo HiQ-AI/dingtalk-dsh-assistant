@@ -155,7 +155,7 @@ Task Owner 可以有持续会话，但每个 Agent 节点按 NodeRun/租约绑�
 | `allowedEffects` | 非空集合；见附录 D。它约束 `perform` 准入，不是 Node.js 沙箱 |
 | `execute` | code 必填；接收 `input, signal, taskId, runId, nodeRunId, generation, requirementDigest, perform` |
 | `provider, model, prompt, allowedTools` | agent 必填；模型来自受信配置，工具必须属于 Host 准入清单 |
-| `maxSteps, timeoutMs` | Agent 默认 32 步 / 120000 ms；**code 的 timeoutMs 不会自动中止 execute**，须由实现自行管控 |
+| 持续执行 | Agent 与 code 不设插件层步数或总时长截止；code 响应 AbortSignal，取消后独立确认排空 |
 | `validateOutput / classifyOutputError` | 可选纯提交校验与受信错误分类；只有显式 correctable 允许会话修正，最终仍独立核验 |
 | `admitOutput` | 可选受信结果接纳，将业务结果映射为成功、等待或失败，不能以 schema 合法替代业务完成 |
 | `allowInputContinuation` | 显式 Agent 同节点输入续行合同；版本历史与原会话身份须由 Host 持久验证 |

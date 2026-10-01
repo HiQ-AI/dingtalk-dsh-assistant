@@ -81,3 +81,8 @@ CLI 从 stdin 接收 `{namespace,baseUrl,uatEnvironment:'uat3'}`，namespace 必
 新冻结配置的 `review-*.json` 包含受信 `companionArtifact: {path, sha256}`，由同一 bundle 的 dataset companion 身份生成。`prepare-web` 在依赖安装前对这一固定 JAR 执行 `LocalAcceptanceBackground` 编译级隔离校验，启动时 runner 仍独立复核 JAR SHA。缺少身份、摘要不符或存在未受控后台入口均阻断，不可借用其他候选的证明。
 
 本轮旧固定 `ffe45c7c…` JAR 实际被拒绝：`ApprovalNotificationOutboxTask` 字节码只有 `@Component`、定时 dispatch，无后台总开关注解，会读取并更新共享 outbox。当前新配置可通过结构检查，但不能将此记为业务验收通过；须经正式开发流程产出隔离正确的 UAT2 companion 后，再生成新冻结配置。
+
+
+Git、kubectl 和 Python 子进程不设置整进程执行截止或业务输出容量上限，等待真实退出后读取完整 stdout；stderr 仅保留末尾 16KiB 诊断。数据库连接、单条查询及 HTTP 请求仍保留协议等待时间。
+
+库调用支持显式取消：`checkMerge(config, { signal })`、`dataOperation(mode, config, ledger, { signal })`、`executeMerge(mode, config, input, { signal })`。取消会终止子进程（Windows 同时终止进程树），等待退出后传播原始取消原因；已落盘的请求和资源账本保留，外部写入结果仍须按原有读回与清理门禁核验，不能因取消直接判定无副作用。

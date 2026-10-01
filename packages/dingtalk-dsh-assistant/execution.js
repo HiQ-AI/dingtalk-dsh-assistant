@@ -40,7 +40,7 @@ export async function closeExecutionResources(resources) {
 }
 
 /** 独立入口；不读取、写回或迁移旧resident的Task账。 */
-export async function openExecutionRuntime({ ctx, dbPath, instanceId, artifactDirectory, taskWorkspaceRoot, initialize = false, workflows, historicalWorkflows = [], deliveryOptions, readTools = [], repositoryInspect, tools = [], getWorkspaceDir, maxConcurrentRuns = 4, changeQuietMs, maxChangeDelayMs }) {
+export async function openExecutionRuntime({ ctx, dbPath, instanceId, artifactDirectory, taskWorkspaceRoot, initialize = false, workflows, historicalWorkflows = [], deliveryOptions, readTools = [], repositoryInspect, tools = [], getWorkspaceDir, maxConcurrentRuns = 4 }) {
   const store = await openExecutionStore({ dbPath, instanceId, initialize })
   let sessions, controller
   try {
@@ -51,7 +51,6 @@ export async function openExecutionRuntime({ ctx, dbPath, instanceId, artifactDi
     sessions = createExecutionSessions({ ctx, isCurrent: binding => controller.isCurrent(binding), repositoryInspect, tools: registeredTools, getWorkspaceDir })
     const definitions = typeof workflows === 'function' ? await workflows(store, artifacts) : { workflows, historicalWorkflows }
     controller = createExecutionController({ store, artifacts, sessions, delivery, ...definitions, readTools, maxConcurrentRuns,
-      ...(changeQuietMs === undefined ? {} : { changeQuietMs }), ...(maxChangeDelayMs === undefined ? {} : { maxChangeDelayMs }),
     })
     return { controller, store, artifacts, delivery, async close() { await closeExecutionResources([['controller', () => controller.close()], ['store', () => store.close()]]) } }
   } catch (error) {

@@ -65,7 +65,7 @@ if(role==='service'||role==='service-child') {
  const response=await fetch(input.baseUrl+'/result'); const body=await response.json();
  if(input.services?.dataset) { const backend=await (await fetch(input.services.dataset.baseUrl+'/result')).json(); if(backend.actual!==body.actual)process.exit(5); }
  if(params.hang) await new Promise(()=>setInterval(()=>{},1000));
- console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual:params.mismatch?'wrong-value':body.actual}));
+ console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual:params.mismatch?'wrong-value':body.actual,...(params.largeOutput?{diagnostic:'x'.repeat(100000)}:{})}));
 } else if(role==='cleanup') {
  if(params.cleanupFailure) process.exit(3);
  if(!params.mutatePrepare&&!params.extraSource){const response=await fetch(input.baseUrl+'/cleanup'); if(!response.ok) process.exit(4);}
@@ -96,7 +96,7 @@ async function setup(t, parameters = {}, companion = false, taskFiles = false) {
   const config = { version: 'fixture-1', generatedOutputDirectories: ['target'], sharedDataProfilePath: profile, prepareSteps: [command('prepare')],
     service: { ...command('service'), args: ['fixture.mjs', 'service', '127.0.0.1', '{port}'], readyPath: '/ready' },
     scenarios: [{ ...command('scenario'), id: 'fixture', description: '仅本机回环服务及临时文件' }],
-    cleanup: command('cleanup'), verifyCleanup: command('verify'), timeoutMs: 60000 }
+    cleanup: command('cleanup'), verifyCleanup: command('verify') }
   if (companion) {
     const artifactPath = join(directory, 'trusted-backend.mjs'); await writeFile(artifactPath, fixtureScript)
     config.companionServices = [{ id: 'dataset', executable: process.execPath, args: [artifactPath, 'service', '127.0.0.1', '{port}'], readyPath: '/ready', artifactPath,
@@ -110,7 +110,7 @@ async function setup(t, parameters = {}, companion = false, taskFiles = false) {
 }
 
 test('本地验收真实进程全链通过，恢复只读收据且不重复业务写入', windows, async t => {
-  const fixture = await setup(t)
+  const fixture = await setup(t, { largeOutput: true })
   const result = await fixture.runner.execute(fixture.prepared)
   assert.equal(result.passed, true, JSON.stringify(result))
   assert.deepEqual(result.cleanup, { dataCleaned: true, processStopped: true })
@@ -264,7 +264,7 @@ test('进程检查启动失败保留安全分类和阶段证据，不包含stder
 })
 
  test('任务目录验收直接服务PID通过，所有阶段使用任务临时目录和旁路证据根', windows, async t => {
- const fixture = await setup(t, {}, true, true)
+ const fixture = await setup(t, { largeOutput: true }, true, true)
  const result = await fixture.runner.execute(fixture.prepared)
  assert.equal(result.passed, true, JSON.stringify(result))
  const events = await fixture.events()
@@ -307,4 +307,19 @@ test('新任务验收runner及依赖跨LF/CRLF打包身份一致，真实源码�
   identities.push(createTaskLocalAcceptanceRunner({ ...fixture.options, tempRoot: join(fixture.directory, 'tmp') }).identity)
  }
  assert.equal(identities[0], identities[1]); assert.notEqual(identities[0], identities[2])
+})
+
+for (const taskFiles of [false, true]) test('验收配置和方案不以数量或信封容量限制任务：'+(taskFiles?'任务目录':'候选目录'), windows, async t => {
+  const fixture=await setup(t, {}, true, taskFiles)
+  const config=structuredClone(fixture.options.config)
+  config.prepareSteps=Array.from({length:9},()=>structuredClone(config.prepareSteps[0]))
+  config.scenarios=Array.from({length:40},(_,index)=>({...config.scenarios[0],id:'scenario-'+index}))
+  config.companionServices=Array.from({length:5},(_,index)=>({...config.companionServices[0],id:'service-'+index}))
+  const options={...fixture.options,root:join(fixture.directory,'large-runs'),config}
+  const runner=taskFiles?(await import('../packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js')).createTaskLocalAcceptanceRunner(options):createLocalAcceptanceRunner(options)
+  const plan={cases:config.scenarios.map((scenario,index)=>({criterionId:'criterion-'+index,scenarioId:scenario.id,expected:'actual-value',steps:Array.from({length:40},(_,step)=>'操作'+step),parameters:{description:'必要业务背景'.repeat(1000)}}))}
+  assert.ok(Buffer.byteLength(JSON.stringify(plan))>65536)
+  const prepared=await runner.prepare({...fixture.request,plan})
+  assert.equal(prepared.plan.cases.length,40)
+  assert.equal(prepared.plan.cases[0].steps.length,40)
 })

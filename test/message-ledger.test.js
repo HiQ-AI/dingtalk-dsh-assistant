@@ -1,22 +1,35 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
-import { createMessageWorkflow } from '../packages/dingtalk-dsh-assistant/message-workflow.js'
+import { reduceMessageCommand } from '../packages/dingtalk-dsh-assistant/message-ledger.js'
 import { executeNotificationOperation } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 async function fixture(t) {
  const dir=await mkdtemp(join(tmpdir(),'message-ledger-'));const options={dbPath:join(dir,'control.sqlite'),instanceId:randomUUID()}
  let store=await openExecutionStore({...options,initialize:true})
  t.after(async()=>{await store.close();await rm(dir,{recursive:true,force:true})})
- return {get store(){return store},call:(kind,args,id=randomUUID())=>store.command({id,kind:'message.'+kind,args}),reopen:async()=>{await store.close();store=await openExecutionStore(options)},
+ return {get store(){return store},call:(kind,args,id=randomUUID())=>store.command({id,kind:'message.'+kind,args:kind==='node.claim'?{leaseWindowMs:60500,...args}:args}),reopen:async()=>{await store.close();store=await openExecutionStore(options)},
+  resumeInNewProcess:async args=>{await store.close();const script=join(dir,'resume.mjs');await writeFile(script,`import {openExecutionStore} from ${JSON.stringify(new URL('../packages/dingtalk-dsh-assistant/execution-store.js',import.meta.url).href)};const store=await openExecutionStore(${JSON.stringify(options)});try{await store.command({id:'resume',kind:'runtime.maintenance.resume',args:${JSON.stringify(args)}})}finally{await store.close()}`);const child=spawnSync(process.execPath,[script],{encoding:'utf8',windowsHide:true});assert.equal(child.status,0,child.stderr);store=await openExecutionStore(options)},
   editSnapshot:async edit=>{await store.close();const offline=new DatabaseSync(options.dbPath);try{edit(offline)}finally{offline.close()};store=await openExecutionStore(options)}}
 }
 const receive=(runId='m',extra={})=>({runId,sourceKey:runId,sourceVersion:1,conversationId:'g',actorId:'a',body:'do this',...extra})
+
+test('冻结能力元数据保持原定义摘要，CAS拒绝配置漂移、重复改写和非调查定义',async t=>{
+ const f=await fixture(t),config={provider:'test',model:'test'},digest='a'.repeat(64),call=(kind,args)=>f.store.command({id:randomUUID(),kind,args})
+ await call('workflow.register',{workflowId:'task-investigation',definitionVersion:'6',digest,config})
+ const args={digest,expectedConfigDigest:executionDigest(config),capabilityIdentity:'b'.repeat(64),allowedTools:['read-current-source']}
+ await assert.rejects(call('workflow.freezeCapabilities',{...args,expectedConfigDigest:'c'.repeat(64)}),{code:'WORKFLOW_DEFINITION_CONFLICT'})
+ await call('workflow.freezeCapabilities',args)
+ const record=(await f.store.query({kind:'workflow.list'})).find(r=>r.digest===digest)
+ assert.equal(record.digest,digest);assert.deepEqual(record.config,{...config,capabilityIdentity:args.capabilityIdentity,allowedTools:args.allowedTools})
+ await assert.rejects(call('workflow.freezeCapabilities',args),{code:'WORKFLOW_DEFINITION_CONFLICT'})
+})
 const bad=(p,code)=>assert.rejects(p,e=>e.code===code)
 
 async function echoFixture(t, { acknowledgedOnly = false, evidenceGroup = 'g', barrier = false } = {}) {
@@ -101,8 +114,7 @@ test('恢复扫描包含已 superseded 的旧回声，跨重启仅收口原节�
  const f=await echoFixture(t);await reopenLegacyEcho(f)
  assert.equal((await f.store.query({kind:'message.pending'})).some(run=>run.runId==='echo'),false)
  assert.equal((await f.store.query({kind:'message.echo.unreconciled'})).length,1)
- const workflow=createMessageWorkflow({store:f.store,judge:async()=>{throw Error('ECHO_MUST_NOT_REJUDGE')}})
- try {await workflow.recover();await workflow.recover()} finally {await workflow.close()}
+ for(let pass=0;pass<2;pass++)for(const item of await f.store.query({kind:'message.echo.unreconciled'})){const proof=await f.store.query({kind:'message.echo.reconciliation',runId:item.runId});await f.call('echo.reconcile',{runId:item.runId,expectedDigest:proof.expectedDigest})}
  const state=await f.store.query({kind:'message.run',runId:'echo'})
  assert.equal(state.run.status,'superseded');assert.equal(state.nodes[0].status,'superseded')
  assert.equal(state.nodes[0].priorStatus,'failed');assert.equal(state.commands.length,0)
@@ -328,21 +340,21 @@ test('人工重处理重新分配节点预算，旧版本消耗不阻断新版�
  const claim=(await f.call('node.claim',{runId:'m-replay',unitId:'u',nodeId:'R',estimatedInputTokens:80,maxOutputTokens:50,input:{}})).result.node
  assert.equal(claim.nodeId,'R')
 })
-test('旧版第五次重处理因预算耗尽时仅补一次无副作用恢复机会',async t=>{
+test('无业务效果的受管重处理不以来源版本充当次数上限',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{sourceVersion:5}))
  await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
  const next=(await f.call('reprocess',{runId:'m',newRunId:'m-replay'})).result.run
  assert.equal(next.sourceVersion,6)
  await f.call('attention',{runId:'m-replay',reason:'recovery_exhausted'})
- await bad(f.call('reprocess',{runId:'m-replay',newRunId:'m-replay-2'}),'MESSAGE_REPROCESS_EXHAUSTED')
+ assert.equal((await f.call('reprocess',{runId:'m-replay',newRunId:'m-replay-2'})).result.run.sourceVersion,7)
 })
-test('第六版只在S因上下文等待且无业务命令时允许一次确定性状态查询重处理',async t=>{
+test('材料等待重处理沿用统一效果守卫而非来源版本例外',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{sourceVersion:6}))
  const claim=(await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',input:{}})).result.node
  await f.call('node.complete',{runId:'m',nodeRunId:claim.nodeRunId,leaseEpoch:claim.leaseEpoch,output:{output:{kind:'needs_context',reason:'历史范围',needs:[]}}})
  await f.call('wait',{runId:'m',unitId:'$',nodeId:'S',reason:'历史范围',request:{requestId:'context',kind:'needs_context',needs:[]}})
  assert.equal((await f.call('reprocess',{runId:'m',newRunId:'m-replay'})).result.run.sourceVersion,7)
- await bad(f.call('reprocess',{runId:'m-replay',newRunId:'m-replay-2'}),'MESSAGE_REPROCESS_EXHAUSTED')
+ assert.equal((await f.call('reprocess',{runId:'m-replay',newRunId:'m-replay-2'})).result.run.sourceVersion,8)
 })
 test('消息账同库持久化、幂等、全部事项归宿和重启未知命令',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',expectedRevision:0,units:[{unitId:'u'},{unitId:'v'}]})
@@ -367,12 +379,12 @@ test('纠正begin立即撤权，旧结果和旧命令都不能继续',async t=>{
  await f.call('correction.publish',{runId:'m',expectedRevision:1,correctionId:'fix',units:[{unitId:'u2'}]})
  assert.equal((await f.store.query({kind:'message.run',runId:'m'})).units.find(u=>u.id==='u').status,'superseded')
 })
-test('累计预算跨编辑和重启保留，陈旧编辑不能覆盖',async t=>{
+test('累计统计跨编辑和重启保留，不限制新版本执行',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{policy:{maxClaims:1}}))
  await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{}})
  await f.call('receive',receive('m2',{sourceKey:'m',sourceVersion:2,policy:{maxClaims:1}}));await f.reopen()
- await bad(f.call('node.claim',{runId:'m2',unitId:'$',nodeId:'S',expectedRevision:0,input:{}}),'MESSAGE_BUDGET_EXHAUSTED')
- assert.equal((await f.store.query({kind:'message.run',runId:'m2'})).budget.claims,1)
+ await f.call('node.claim',{runId:'m2',unitId:'$',nodeId:'S',expectedRevision:0,input:{}})
+ assert.equal((await f.store.query({kind:'message.run',runId:'m2'})).budget.claims,2)
 })
 test('澄清请求身份、角色和首终态，重复答复不增加窗口',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('wait',{runId:'m',nodeId:'S',request:{requestId:'q',permittedActors:['a']}})
@@ -402,16 +414,16 @@ test('消息命令失败保持unknown不能冒充成功，有限历史查询和�
  await f.store.command({id:'w2',kind:'workflow.register',args:{...args,digest:'d2',config:{provider:'p',model:'new'}}});assert.equal((await f.store.query({kind:'workflow.list'})).length,2)
 })
 
-test('单元重关联不影响另一个单元，纠正额度耗尽撤权并待处理',async t=>{
+test('单元重关联不影响另一个单元，连续纠正仍可继续',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',units:[{unitId:'u'},{unitId:'v'}]})
  const n=(await f.call('node.claim',{runId:'m',unitId:'u',nodeId:'R',input:{}})).result.node
  await f.call('relink',{runId:'m',unitId:'u',expectedRevision:0,reason:'different target'})
  await bad(f.call('node.complete',{runId:'m',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,output:{}}),'MESSAGE_NODE_STALE')
  await f.call('accept',{runId:'m',unitId:'v',expectedRevision:0,commands:[],outcome:'ignored'})
  await f.call('relink',{runId:'m',unitId:'u',expectedRevision:0,reason:'again'})
- await bad(f.call('node.claim',{runId:'m',unitId:'u',nodeId:'R',input:{}}),'MESSAGE_NEEDS_ATTENTION')
+ await f.call('node.claim',{runId:'m',unitId:'u',nodeId:'R',input:{}})
 })
-test('无回执只读状态查询的参数错误仅可受控重试一次，创建命令不可重试',async t=>{
+test('无回执只读状态查询可持续受控修正，创建命令不可重试',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',units:[{unitId:'u'}]})
  await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'status',kind:'status',args:{}}]})
  const first=(await f.call('command.claim',{commandId:'status'})).result.command
@@ -422,19 +434,19 @@ test('无回执只读状态查询的参数错误仅可受控重试一次，创�
  const next=(await f.call('command.claim',{commandId:'status'})).result.command
  assert.equal(next.leaseEpoch,first.leaseEpoch+1)
  await f.call('command.fail',{commandId:'status',leaseEpoch:next.leaseEpoch,error:'INVALID_ARGUMENT'})
- await bad(f.call('command.retry.readonly',{commandId:'status'}),'MESSAGE_READONLY_RETRY_FORBIDDEN')
+ await f.call('command.retry.readonly',{commandId:'status'})
  await f.call('receive',receive('create'));await f.call('split',{runId:'create',units:[{unitId:'create-unit'}]})
  await f.call('accept',{runId:'create',unitId:'create-unit',commands:[{commandId:'new-task',kind:'create',args:{}}]})
  const creation=(await f.call('command.claim',{commandId:'new-task'})).result.command
  await f.call('command.fail',{commandId:'new-task',leaseEpoch:creation.leaseEpoch,error:'INVALID_ARGUMENT'})
  await bad(f.call('command.retry.readonly',{commandId:'new-task'}),'MESSAGE_READONLY_RETRY_FORBIDDEN')
 })
-test('token預留在失败与重启后不清零，未知usage保守计费',async t=>{
+test('token预留在失败与重启后持续计量，旧累计输入输出上限不再拒绝完整消息',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{policy:{maxInputTokens:100,maxOutputTokens:100}}))
  const n=(await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',input:{},estimatedInputTokens:80,maxOutputTokens:50})).result.node
  await f.call('node.fail',{runId:'m',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,error:'network'})
- await f.reopen();await bad(f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',input:{},estimatedInputTokens:80,maxOutputTokens:50}),'MESSAGE_BUDGET_EXHAUSTED')
- assert.equal((await f.store.query({kind:'message.run',runId:'m'})).budget.input_tokens,80)
+ await f.reopen();await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',input:{},estimatedInputTokens:80,maxOutputTokens:50})
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).budget.input_tokens,160)
 })
 test('切换水位后的消息缓冲，激活原子解缓冲，abort不双发',async t=>{
  const f=await fixture(t)
@@ -546,13 +558,13 @@ test('重拆保留严格相同已执行事项，不重复消费业务命令',asy
  await f.call('correction.publish',{runId:'m',expectedRevision:1,correctionId:'fix',units:[{unitId:'u',goal:'read',preservedUnitId:'u'},{unitId:'v2',goal:'changed'}]})
  const s=await f.store.query({kind:'message.run',runId:'m'});assert.equal(s.units.find(u=>u.id==='u').status,'applied');assert.equal(s.commands[0].status,'applied');assert.equal(s.commands.length,1)
 })
-test('在途命令撤权后的迟到完成不能覆盖unknown，超额恢复持久待处理',async t=>{
+test('在途命令撤权后的迟到完成不能覆盖unknown，恢复不设次数截止',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',units:[{unitId:'u'}]});await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'create',args:{}}]})
  const c=(await f.call('command.claim',{commandId:'c'})).result.command
  await f.call('correction.begin',{runId:'m',correctionId:'correction',reason:'bad target'})
  await bad(f.call('command.complete',{commandId:'c',leaseEpoch:c.leaseEpoch,result:{}}),'MESSAGE_COMMAND_STALE')
  assert.equal((await f.store.query({kind:'message.command',commandId:'c'})).status,'unknown')
- await f.call('recover',{runId:'m'});await f.call('recover',{runId:'m'});assert.equal((await f.call('recover',{runId:'m'})).result.run.status,'needs_attention')
+ await f.call('recover',{runId:'m'});await f.call('recover',{runId:'m'});assert.equal((await f.call('recover',{runId:'m'})).result.run.status,'pending');assert.equal((await f.store.query({kind:'message.command',commandId:'c'})).status,'unknown')
 })
 
 test('已解决澄清的冲突无权答复仍拒绝，不能读取终态后绕过actor检查',async t=>{
@@ -595,12 +607,13 @@ test('settled但屏障未释放的崩溃检查点仍进入恢复；编辑原子�
  assert.equal(old.barriers.length,0);assert.ok(next.barriers.some(b=>b.id==='b'&&b.ownerRunId==='B2'&&b.targetSourceKey==='A'&&b.previousOwnerRunId==='B'))
  await f.call('barrier.resolve',{runId:'B2',barrierId:'b',resolution:'new-version-control-applied'})
 })
-test('不可变材料首次落账后复用，TOCTOU正文变化与超限拒绝',async t=>{
+test('不可变材料首次落账后复用，大材料完整保留且TOCTOU正文变化拒绝',async t=>{
  const f=await fixture(t);await f.call('receive',receive());const args={runId:'m',resourceRef:'attachment',material:{text:'original',sourceVersion:1}}
  await f.call('material.record',args);await f.call('material.record',args)
  assert.deepEqual(await f.store.query({kind:'message.material',runId:'m',resourceRef:'attachment'}),args.material)
  await bad(f.call('material.record',{...args,material:{text:'changed',sourceVersion:1}}),'MESSAGE_MATERIAL_CONFLICT')
- await bad(f.call('material.record',{...args,resourceRef:'large',material:{text:'中'.repeat(30000)}}),'MESSAGE_MATERIAL_INVALID')
+ await f.call('material.record',{...args,resourceRef:'large',material:{text:'中'.repeat(30000)}})
+ assert.equal((await f.store.query({kind:'message.material',runId:'m',resourceRef:'large'})).text,'中'.repeat(30000))
 })
 test('话题归属和命令同事务接纳，跨群证据或归属冲突整次回滚',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',units:[{unitId:'u'},{unitId:'v'}]})
@@ -720,4 +733,401 @@ test('已答复澄清仍不能重放已有业务命令',async t=>{
  await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
  await bad(f.call('reprocess',{runId:'m',newRunId:'m-replay'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
  assert.equal((await f.store.query({kind:'message.source',sourceKey:'m'})).runId,'m')
+})
+
+test('首次模型领取前维护排队不耗执行窗口，旧无节点超时正常恢复',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{policy:{initialWindowMs:90000}}));await f.call('activate',{runId:'m'})
+ await f.editSnapshot(db=>{const row=db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('m');const r=JSON.parse(row.body);r.createdAt='2020-01-01T00:00:00.000Z';r.deadline=r.createdAt;r.status='needs_attention';r.reason='MESSAGE_DEADLINE_BEFORE_CLAIM:S:$';db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),'m')})
+ const recovered=(await f.call('recover',{runId:'m'})).result.run
+ assert.equal(recovered.status,'pending');assert.equal(recovered.recoveryWindows??0,0)
+ const node=(await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',input:{},estimatedInputTokens:0,maxOutputTokens:0})).result.node
+ assert.ok(Date.parse(node.startedAt)>Date.parse('2025-01-01'))
+})
+
+test('已有模型领取旧账保留真实startedAt，排队墙钟年龄不拒绝恢复',async t=>{
+ const f=await fixture(t);await f.call('receive',receive());await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0})
+ await f.editSnapshot(db=>{const r=JSON.parse(db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('m').body);delete r.executionStartedAt;db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),'m');for(const row of db.prepare("SELECT rowid,body FROM message_items WHERE kind='node'").all()){const n=JSON.parse(row.body);n.startedAt='2020-01-01T00:00:00.000Z';db.prepare('UPDATE message_items SET body=? WHERE rowid=?').run(JSON.stringify(n),row.rowid)}})
+ const recovered=(await f.call('recover',{runId:'m'})).result.run;assert.equal(recovered.status,'pending');assert.equal(recovered.executionStartedAt,'2020-01-01T00:00:00.000Z')
+})
+
+test('高来源版本42无业务命令已送达纯状态通知允许重处理并保留旧回执',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{sourceVersion:42}));await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+ await f.call('notification.prepare',{runId:'m',notificationId:'state',stateFact:{revision:0,status:'needs_attention',reason:'recovery_exhausted',intentStatus:null,phase:'attention'},payload:{phase:'attention',conversationId:'g',text:'系统等待'},disclosure:{conversationId:'g',authorizationRef:'m'}})
+ const notice=(await f.call('notification.claim',{notificationId:'state'})).result.notification
+ await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+ await f.call('notification.sent',{notificationId:'state',leaseEpoch:notice.leaseEpoch,ack:{messageId:'out'}})
+ await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+ await f.call('notification.readback',{notificationId:'state',leaseEpoch:notice.leaseEpoch,evidence:{messageId:'out'}})
+ const before=await f.store.query({kind:'message.notification',notificationId:'state'})
+ assert.equal((await f.call('reprocess',{runId:'m',newRunId:'next'})).result.run.sourceVersion,43)
+ assert.deepEqual(await f.store.query({kind:'message.notification',notificationId:'state'}),before)
+})
+
+test('维护禁止首个模型领取且不启动执行钟，解除后过期排队来源可首次领取',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{policy:{initialWindowMs:90000}}));await f.call('activate',{runId:'m'})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'clock-test',actorId:'owner',reason:'测试维护排队'}})
+ const args={runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0}
+ await bad(f.call('node.claim',args),'RUNTIME_MAINTENANCE_ACTIVE')
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).run.executionStartedAt,undefined)
+ await f.editSnapshot(db=>{const r=JSON.parse(db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('m').body);r.createdAt='2020-01-01T00:00:00.000Z';r.deadline=r.createdAt;db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),'m')})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.change',args:{active:false,expectedRevision:1,maintenanceId:'clock-test',actorId:'owner',reason:'恢复'}})
+ assert.equal((await f.call('node.claim',args)).result.node.status,'running')
+ assert.ok((await f.store.query({kind:'message.run',runId:'m'})).run.executionStartedAt)
+})
+
+test('纯状态通知发送结果unknown仍禁止重处理',async t=>{
+ const f=await fixture(t);await f.call('receive',receive());await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+ await f.call('notification.prepare',{runId:'m',notificationId:'state',stateFact:{revision:0,status:'needs_attention',reason:'recovery_exhausted',intentStatus:null,phase:'attention'},payload:{phase:'attention',conversationId:'g',text:'系统等待'},disclosure:{conversationId:'g',authorizationRef:'m'}})
+ const notice=(await f.call('notification.claim',{notificationId:'state'})).result.notification
+ await f.call('notification.fail',{notificationId:'state',leaseEpoch:notice.leaseEpoch,error:'network'})
+ await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+})
+
+test('失败模型恢复只统计真实失败lease，超过三次仍可继续',async t=>{
+ const f=await fixture(t);await f.call('receive',receive())
+ const args={runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0}
+ for(let attempt=1;attempt<=6;attempt++){
+  const node=(await f.call('node.claim',args)).result.node
+  await f.call('node.fail',{runId:'m',nodeRunId:node.nodeRunId,leaseEpoch:node.leaseEpoch,expectedRevision:0,error:'MESSAGE_NODE_TIMEOUT'})
+  await f.editSnapshot(db=>{const r=JSON.parse(db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('m').body);r.deadline='2020-01-01T00:00:00.000Z';db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),'m')})
+  const recovered=(await f.call('recover',{runId:'m'})).result.run
+  assert.equal(recovered.status,'pending')
+  assert.equal(recovered.recoveryWindows,attempt)
+  for(let scan=0;scan<3;scan++)assert.equal((await f.call('recover',{runId:'m'})).result.run.recoveryWindows,attempt)
+ }
+})
+
+test('旧局部判断失败改由协调入口消费同来源版本',async t=>{
+ const f=await fixture(t);await f.call('receive',receive())
+ await f.call('split',{runId:'m',units:[{unitId:'old-failed-unit'}]})
+ await f.call('attention',{runId:'m',unitId:'old-failed-unit',reason:'MESSAGE_DEADLINE_BEFORE_CLAIM:R:old-failed-unit'})
+ const binding=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'recovery-turn',sourceRuns:[{runId:'m',sourceVersion:1}]})).result.binding
+ await f.call('coordinator.commit',{conversationId:'g',turnId:binding.turnId,leaseEpoch:binding.leaseEpoch,decisions:[{runId:'m',sourceVersion:1,units:[]}]})
+ const after=await f.store.query({kind:'message.run',runId:'m'})
+ assert.equal(after.run.sourceVersion,1);assert.equal(after.run.status,'settled');assert.equal(after.units[0].status,'superseded')
+})
+
+test('节点超过原时长仍正常完成，旧lease仍拒绝',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{policy:{attemptMs:1,commitReserveMs:5}}))
+ const args={leaseWindowMs:6,runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0}
+ const node=(await f.call('node.claim',args)).result.node
+ assert.equal(Date.parse(node.deadline)-Date.parse(node.startedAt),6)
+ await new Promise(resolve=>setTimeout(resolve,20))
+ await f.call('node.fail',{runId:'m',nodeRunId:node.id,leaseEpoch:node.leaseEpoch,expectedRevision:0,error:'MESSAGE_NODE_TIMEOUT'})
+ await f.call('recover',{runId:'m'})
+ const retry=(await f.call('node.claim',args)).result.node;assert.equal(retry.leaseEpoch,node.leaseEpoch+1)
+ await bad(f.call('node.complete',{runId:'m',nodeRunId:node.id,leaseEpoch:node.leaseEpoch,expectedRevision:0,output:{}}),'MESSAGE_NODE_STALE')
+ await new Promise(resolve=>setTimeout(resolve,20))
+ await f.call('node.complete',{runId:'m',nodeRunId:retry.id,leaseEpoch:retry.leaseEpoch,expectedRevision:0,output:{}})
+})
+
+test('历史policy20秒不能缩短当前Host180秒窗口，超过60秒结果正常落账',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('m',{policy:{initialWindowMs:90000,attemptMs:20000}}))
+ const captured={leaseWindowMs:180500}
+ await f.call('receive',receive('timed',{policy:{attemptMs:20000}}))
+ await f.editSnapshot(db=>{
+  const start=Date.parse('2026-09-30T00:00:00Z')
+  const call=(kind,args,offset)=>reduceMessageCommand(db,{kind:'message.'+kind,args},{now:new Date(start+offset).toISOString()})
+  const n=call('node.claim',{runId:'timed',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0,leaseWindowMs:captured.leaseWindowMs},0).result.node
+  assert.equal(Date.parse(n.deadline)-start,180500)
+
+  assert.equal(call('node.complete',{runId:'timed',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,expectedRevision:0,output:{}},180501).result.node.status,'succeeded')
+ })
+})
+
+test('高来源版本42已有业务效果仍拒绝重处理，当前身份不被绕过',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('high',{sourceVersion:42}))
+ await f.call('split',{runId:'high',units:[{unitId:'high-u'}]})
+ await f.call('accept',{runId:'high',unitId:'high-u',commands:[{commandId:'high-c',kind:'create',args:{taskId:'business-task'}}]})
+ const claim=(await f.call('command.claim',{commandId:'high-c'})).result.command
+ await f.call('command.complete',{commandId:'high-c',leaseEpoch:claim.leaseEpoch,result:{taskId:'business-task'}})
+ await bad(f.call('reprocess',{runId:'high',newRunId:'again'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+ assert.equal((await f.store.query({kind:'message.source',sourceKey:'high'})).sourceVersion,42)
+})
+
+test('群协调事务保持群session，原子提交并封存旧判断，已提交命令不重判',async t=>{
+ const f=await fixture(t)
+ await f.call('receive',receive('coord-a'))
+ await f.call('receive',receive('coord-old'))
+ await f.call('split',{runId:'coord-old',units:[{unitId:'old-unit'}]})
+ await f.call('accept',{runId:'coord-old',unitId:'old-unit',commands:[{commandId:'old-command',kind:'answer',args:{}}]})
+ await f.call('wait',{runId:'coord-a',nodeId:'S',request:{requestId:'old-request',kind:'needs_context'}})
+ const before=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ assert.deepEqual(before.sources.map(r=>r.runId),['coord-a'])
+ const claimed=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'turn-a',sourceRuns:[{runId:'coord-a',sourceVersion:1}]})).result
+ const identity={conversationId:'g',turnId:'turn-a',leaseEpoch:claimed.binding.leaseEpoch}
+ await f.call('coordinator.bound',{...identity,sessionId:claimed.binding.sessionId})
+ await bad(f.call('coordinator.commit',{...identity,decisions:[{runId:'coord-a',sourceVersion:2,units:[]}]}),'MESSAGE_STALE')
+ assert.equal((await f.store.query({kind:'message.request',requestId:'old-request'})).status,'pending')
+ const committed=(await f.call('coordinator.commit',{...identity,decisions:[{runId:'coord-a',sourceVersion:1,units:[{unitId:'coord-unit',topic:{topicId:'coord-topic',title:'事项'},commands:[{commandId:'coord-command',kind:'answer',args:{}}]}]}]})).result
+ assert.equal(committed.binding.status,'committed')
+ assert.equal((await f.store.query({kind:'message.request',requestId:'old-request'})).status,'superseded')
+ await bad(f.call('coordinator.release',identity),'MESSAGE_COORDINATOR_NOT_DRAINED')
+ await f.call('coordinator.release',{...identity,drained:true})
+ await f.reopen()
+ const after=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ assert.equal(after.coordinator.sessionId,claimed.binding.sessionId)
+ assert.equal(after.coordinator.sessionBound,true)
+ assert.deepEqual(after.sources,[])
+ assert.equal((await f.store.query({kind:'message.run',runId:'coord-old'})).commands[0].status,'pending')
+})
+
+test('话题变化作废未执行命令后，同版本回到群协调重评并解除待处理单元',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('stale-command'))
+ const b=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'first',sourceRuns:[{runId:'stale-command',sourceVersion:1}]})).result.binding
+ await f.call('coordinator.commit',{...b,decisions:[{runId:'stale-command',sourceVersion:1,units:[{unitId:'first-unit',topic:{topicId:'stale-topic',title:'事项'},commands:[{commandId:'first-command',kind:'answer',args:{}}]}]}]})
+ await f.call('coordinator.release',{...b,drained:true})
+ await f.editSnapshot(db=>{const row=db.prepare('SELECT body FROM message_topics WHERE topic_id=?').get('stale-topic');const topic=JSON.parse(row.body);topic.inputRevision++;db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(JSON.stringify(topic),'stale-topic')})
+ assert.equal((await f.call('command.claim',{commandId:'first-command'})).dispatchEligible,false)
+ const state=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ assert.deepEqual(state.sources.map(r=>[r.runId,r.sourceVersion]),[['stale-command',1]])
+ const next=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:b.leaseEpoch,turnId:'second',sourceRuns:[{runId:'stale-command',sourceVersion:1}]})).result.binding
+ assert.equal(next.sessionId,b.sessionId)
+ await f.call('coordinator.commit',{...next,decisions:[{runId:'stale-command',sourceVersion:1,units:[],reason:'后续已明确推进，不另发催促回复'}]})
+ const after=await f.store.query({kind:'message.run',runId:'stale-command'})
+ assert.equal(after.run.status,'settled');assert.equal(after.units[0].status,'superseded')
+ assert.equal(after.commands.length,1);assert.equal(after.commands[0].status,'superseded')
+})
+
+test('群协调等待不重复消费，真实回答后重评且无动作可收口',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('coord-wait'))
+ const claim=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'wait-turn',sourceRuns:[{runId:'coord-wait',sourceVersion:1}]})).result.binding
+ const identity={conversationId:'g',turnId:claim.turnId,leaseEpoch:claim.leaseEpoch}
+ await f.call('coordinator.commit',{...identity,decisions:[{runId:'coord-wait',sourceVersion:1,units:[{unitId:'waiting-unit',commands:[],request:{requestId:'coord-request',kind:'needs_clarification',permittedActors:['a']}}]}]})
+ await f.call('coordinator.release',{...identity,drained:true})
+ assert.deepEqual((await f.store.query({kind:'message.coordinator',conversationId:'g'})).sources,[])
+ await f.call('request.resolve',{runId:'coord-wait',requestId:'coord-request',actorId:'a',answer:'不用处理',eventId:'answer'})
+ assert.equal((await f.store.query({kind:'message.coordinator',conversationId:'g'})).sources.length,1)
+ const next=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:1,turnId:'next',sourceRuns:[{runId:'coord-wait',sourceVersion:1}]})).result.binding
+ await f.call('coordinator.commit',{conversationId:'g',turnId:next.turnId,leaseEpoch:next.leaseEpoch,decisions:[{runId:'coord-wait',sourceVersion:1,units:[],reason:'已撤回请求'}]})
+ assert.equal((await f.store.query({kind:'message.run',runId:'coord-wait'})).run.status,'settled')
+})
+
+test('群协调重启撤销旧lease，同批连续来源共用话题最终版本',async t=>{
+ const f=await fixture(t)
+ for(const id of ['batch-a','batch-b'])await f.call('receive',receive(id))
+ const sourceRuns=['batch-a','batch-b'].map(runId=>({runId,sourceVersion:1}))
+ const first=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'interrupted',sourceRuns})).result.binding
+ await f.reopen()
+ await bad(f.call('coordinator.commit',{conversationId:'g',turnId:first.turnId,leaseEpoch:first.leaseEpoch,decisions:[]}),'MESSAGE_COORDINATOR_STALE')
+ const state=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ const next=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:state.coordinator.leaseEpoch,turnId:'batch',sourceRuns})).result.binding
+ const decisions=sourceRuns.map((s,i)=>({...s,units:[{unitId:'batch-unit-'+i,topic:{topicId:'batch-topic',title:'连续事项'},commands:[{commandId:'batch-command-'+i,kind:'answer',args:{}}]}]}))
+ const result=(await f.call('coordinator.commit',{conversationId:'g',turnId:next.turnId,leaseEpoch:next.leaseEpoch,decisions})).result
+ assert.equal(result.commands.length,2)
+ assert.deepEqual(result.commands.map(c=>c.topicInputRevision),[2,2])
+ assert.equal((await f.call('command.claim',{commandId:'batch-command-0'})).result.command.status,'running')
+})
+
+test('群协调维护等待已提交原生会话drain且禁止新claim',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('maintenance-coord'))
+ const b=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'maintenance-turn',sourceRuns:[{runId:'maintenance-coord',sourceVersion:1}]})).result.binding
+ const identity={conversationId:'g',turnId:b.turnId,leaseEpoch:b.leaseEpoch}
+ assert.equal((await f.store.query({kind:'runtime.maintenance'})).busy.messages,1)
+ const maintenance={expectedRevision:0,maintenanceId:'coord-maintenance',actorId:'operator',reason:'test drain'}
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.change',args:{...maintenance,active:true}})
+ await f.call('coordinator.commit',{...identity,decisions:[{runId:'maintenance-coord',sourceVersion:1,units:[]}]})
+ assert.equal((await f.store.query({kind:'runtime.maintenance'})).drained,false)
+ await bad(f.store.command({id:randomUUID(),kind:'runtime.maintenance.seal',args:{...maintenance,expectedRevision:1}}),'RUNTIME_MAINTENANCE_NOT_DRAINED')
+ await f.call('coordinator.release',{...identity,drained:true})
+ assert.equal((await f.store.query({kind:'runtime.maintenance'})).drained,true)
+ await bad(f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:1,turnId:'forbidden',sourceRuns:[]}),'RUNTIME_MAINTENANCE_ACTIVE')
+})
+
+test('群协调旧话题版本拒绝整批提交且不消费任何来源',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('topic-origin'))
+ await f.call('split',{runId:'topic-origin',units:[{unitId:'topic-origin-unit'}]})
+ await f.call('accept',{runId:'topic-origin',unitId:'topic-origin-unit',commands:[],outcome:'ignored',topic:{topicId:'existing-topic',title:'原事项',conversationId:'g',sourceRunId:'topic-origin',unitId:'topic-origin-unit',facts:[]}})
+ await f.call('receive',receive('topic-followup'))
+ const b=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'topic-turn',sourceRuns:[{runId:'topic-followup',sourceVersion:1}]})).result.binding
+ const args={conversationId:'g',turnId:b.turnId,leaseEpoch:b.leaseEpoch,decisions:[{runId:'topic-followup',sourceVersion:1,units:[{unitId:'topic-followup-unit',topic:{topicId:'existing-topic',title:'原事项'},commands:[],outcome:'ignored'}]}]}
+ await bad(f.call('coordinator.commit',{...args,topicVersions:[{topicId:'existing-topic',inputRevision:0,contextRevision:0}]}),'MESSAGE_TOPIC_STALE')
+ assert.equal((await f.store.query({kind:'message.run',runId:'topic-followup'})).units.length,0)
+ const topic=await f.store.query({kind:'message.topic',topicId:'existing-topic'})
+ await f.call('coordinator.commit',{...args,topicVersions:[{topicId:topic.topicId,inputRevision:topic.inputRevision,contextRevision:topic.contextRevision}]})
+ const current=await f.store.query({kind:'message.topic',topicId:'existing-topic'})
+ assert.equal(current.processedRevision,current.inputRevision)
+})
+
+test('精确消息清理要求全版本闭包并保留其他事项与原始审计',async t=>{
+ const f=await fixture(t)
+ await f.call('receive',receive('cleanup-v1',{sourceKey:'cleanup-source'}))
+ await f.call('receive',receive('cleanup-v2',{sourceKey:'cleanup-source',sourceVersion:2}))
+ await f.call('receive',receive('keep-source'))
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.change',args:{expectedRevision:0,maintenanceId:'cleanup',actorId:'operator',reason:'test',active:true}})
+ const args={runIds:['cleanup-v1','cleanup-v2'],sourceKeys:['cleanup-source'],taskIds:[],topicIds:[],maintenanceId:'cleanup',maintenanceRevision:2}
+ await bad(f.store.query({kind:'message.batch.cleanup.check',...args}),'MESSAGE_CLEANUP_MAINTENANCE_REQUIRED')
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.seal',args:{expectedRevision:1,maintenanceId:'cleanup',actorId:'operator',reason:'test'}})
+ await bad(f.store.query({kind:'message.batch.cleanup.check',...args,runIds:['cleanup-v2']}),'MESSAGE_CLEANUP_SOURCE_CLOSURE')
+ const check=await f.store.query({kind:'message.batch.cleanup.check',...args})
+ assert.equal((await f.store.query({kind:'message.run',runId:'cleanup-v1'})).run.runId,'cleanup-v1')
+ await bad(f.call('batch.cleanup',{...args,expectedDigest:check.expectedDigest,notificationAuditDigest:'bad'}),'MESSAGE_CLEANUP_AUDIT_STALE')
+ await f.call('batch.cleanup',{...args,expectedDigest:check.expectedDigest,notificationAuditDigest:check.notificationAuditDigest})
+ await bad(f.store.query({kind:'message.run',runId:'cleanup-v2'}),'MESSAGE_RUN_NOT_FOUND')
+ assert.equal((await f.store.query({kind:'message.run',runId:'keep-source'})).run.runId,'keep-source')
+})
+
+test('群协调纯Task事件按原群领取，重启和重复事件不产生动作',async t=>{
+ const f=await fixture(t)
+ await f.call('receive',receive('event-origin'))
+ await f.call('split',{runId:'event-origin',units:[{unitId:'event-unit'}]})
+ await f.call('accept',{runId:'event-origin',unitId:'event-unit',commands:[{commandId:'event-create',kind:'create',args:{taskId:'event-task'}}]})
+ // 一次性历史fixture，只构造已存在Task与事件；不使用运行库。
+ await f.editSnapshot(db=>{
+  db.prepare("INSERT INTO business_tasks(task_id,requirement_revision,plan_revision,plan_requirement_revision,status,created_at,updated_at) VALUES('event-task',1,1,1,'blocked','now','now')").run()
+  db.prepare("INSERT INTO task_controls(task_id,control_revision,state) VALUES('event-task',1,'active')").run()
+  db.prepare("INSERT INTO task_plan_stages(task_id,plan_revision,stage_id,position,workflow_id,gate,status,attempt) VALUES('event-task',1,'one',0,'test','none','blocked',1)").run()
+  db.prepare("INSERT INTO task_owners(task_id,session_id,status,updated_at) VALUES('event-task','owner-session','idle','now')").run()
+  for(const key of ['one','two'])db.prepare("INSERT INTO task_events(task_id,event_key,event_type,created_at) VALUES('event-task',?,'workflow.failed','now')").run(key)
+ })
+ const state=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ const refs=state.unconsumedTaskEvents.map(({taskId,eventSeq})=>({taskId,eventSeq}))
+ assert.equal(refs.length,2)
+ assert.deepEqual((await f.store.query({kind:'message.coordinator',conversationId:'other'})).unconsumedTaskEvents,[])
+ await bad(f.call('coordinator.claim',{conversationId:'other',expectedLeaseEpoch:0,turnId:'foreign',sourceRuns:[],taskEventRefs:refs}),'MESSAGE_COORDINATOR_EVENT_STALE')
+ await bad(f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'fake',sourceRuns:[],taskEventRefs:[{taskId:'event-task',eventSeq:999}]}),'MESSAGE_COORDINATOR_EVENT_STALE')
+ await bad(f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'gap',sourceRuns:[],taskEventRefs:[refs[1]]}),'MESSAGE_COORDINATOR_EVENT_GAP')
+ await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'interrupted',sourceRuns:[],taskEventRefs:refs})
+ await f.reopen()
+ const recovered=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ assert.equal(recovered.unconsumedTaskEvents.length,2)
+ const b=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:recovered.coordinator.leaseEpoch,turnId:'event-only',sourceRuns:[],taskEventRefs:refs})).result.binding
+ await bad(f.call('coordinator.commit',{conversationId:'g',turnId:b.turnId,leaseEpoch:b.leaseEpoch,decisions:[{runId:'invented',units:[]}]}),'MESSAGE_INVALID_DISPOSITION')
+ const result=(await f.call('coordinator.commit',{conversationId:'g',turnId:b.turnId,leaseEpoch:b.leaseEpoch,decisions:[]})).result
+ assert.deepEqual(result.commands,[])
+ await f.call('coordinator.release',{conversationId:'g',turnId:b.turnId,leaseEpoch:b.leaseEpoch,drained:true})
+ await f.reopen()
+ const consumed=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ assert.deepEqual(consumed.unconsumedTaskEvents,[])
+ await bad(f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:consumed.coordinator.leaseEpoch,turnId:'repeat',sourceRuns:[],taskEventRefs:refs}),'MESSAGE_COORDINATOR_EVENT_STALE')
+})
+test('协调约束更正复用原发送人整条范围合同，保留其他条件',async t=>{
+ const f=await fixture(t)
+ await f.call('receive',receive('constraint-origin',{body:'先审批，然后执行'}))
+ await f.call('split',{runId:'constraint-origin',units:[{unitId:'constraint-unit'}]})
+ await f.call('accept',{runId:'constraint-origin',unitId:'constraint-unit',commands:[],outcome:'ignored',topic:{topicId:'constraint-topic',title:'审批',conversationId:'g',sourceRunId:'constraint-origin',unitId:'constraint-unit',facts:[{kind:'constraint',text:'先审批',sourceRefs:[{sourceKey:'constraint-origin',sourceVersion:1,text:'先审批'}]},{kind:'constraint',text:'执行后验证',sourceRefs:[{sourceKey:'constraint-origin',sourceVersion:1,text:'执行'}]}]}})
+ const before=await f.store.query({kind:'message.topic',topicId:'constraint-topic'})
+ const fact=before.facts.find(f=>f.text==='先审批')
+ for(const [index,actorId,body,scope,allowed] of [[0,'other','整条条件改为主管审批','整条条件',false],[1,'a','仅对任务甲改为主管审批','整条条件',false],[2,'a','整条条件改为主管审批','整条条件',true]]){
+  const runId='constraint-change-'+index
+  await f.call('receive',receive(runId,{actorId,body}))
+  const state=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+  const b=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:state.coordinator.leaseEpoch,turnId:'fact-turn-'+index,sourceRuns:[{runId,sourceVersion:1}]})).result.binding
+  const topic=await f.store.query({kind:'message.topic',topicId:'constraint-topic'})
+  const args={conversationId:'g',turnId:b.turnId,leaseEpoch:b.leaseEpoch,topicVersions:[{topicId:topic.topicId,inputRevision:topic.inputRevision,contextRevision:topic.contextRevision}],decisions:[{runId,sourceVersion:1,units:[{unitId:'fact-change-unit-'+index,topic:{topicId:topic.topicId,title:topic.title,factRevisions:[{factId:fact.id,sourceQuote:body,scope}],facts:[]},commands:[],outcome:'ignored'}]}]}
+  if(allowed)await f.call('coordinator.commit',args)
+  else await bad(f.call('coordinator.commit',args),'MESSAGE_TOPIC_FACT_REVISION_FORBIDDEN')
+  await f.call('coordinator.release',{conversationId:'g',turnId:b.turnId,leaseEpoch:b.leaseEpoch,drained:true})
+ }
+ const after=await f.store.query({kind:'message.topic',topicId:'constraint-topic'})
+ assert.deepEqual(after.facts.map(f=>f.text),['执行后验证'])
+})
+
+test('离线原生重放十二来源保留业务原文且不提前派发',async t=>{
+ const {buildReplaySources,receiveReplaySources}=await import('../scripts/replay-message-sources.mjs')
+ const f=await fixture(t)
+ const sources=Array.from({length:12},(_,i)=>({sourceKey:'original-'+i,actorId:'sender',conversationId:'group',body:'业务原文 '+i,context:{occurredAt:12-i,sourceMessageId:'dws-message-'+i,compactPolicy:'送到意图节点',attachments:[{fileId:'file-'+i}]}}))
+ const runs=buildReplaySources(sources,'replay-test-round')
+ assert.deepEqual(runs.map(r=>r.context.occurredAt),Array.from({length:12},(_,i)=>i+1))
+ assert.equal(runs[0].context.compactPolicy,'送到协调输入')
+ assert.equal(sources[0].context.compactPolicy,'送到意图节点')
+ assert.throws(()=>buildReplaySources([...sources.slice(0,11),sources[0]],'replay-test-round'),{code:'REPLAY_SOURCE_MANIFEST_INVALID'})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.change',args:{expectedRevision:0,maintenanceId:'replay',actorId:'operator',reason:'test',active:true}})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.seal',args:{expectedRevision:1,maintenanceId:'replay',actorId:'operator',reason:'test'}})
+ await receiveReplaySources(f.store,runs)
+ assert.deepEqual(await f.store.query({kind:'task.catalog'}),[])
+ for(const run of runs){const state=await f.store.query({kind:'message.run',runId:run.runId});assert.equal(state.commands.length,0);assert.equal(state.nodes.length,0);assert.deepEqual(state.run.context.attachments,run.context.attachments)}
+})
+
+for(const status of ['pending','superseded','running','unknown'])test(`精确清理区分未创建Task预分配与未知执行：${status}`,async t=>{
+ const f=await fixture(t)
+ await f.call('receive',receive('planned'));await f.call('split',{runId:'planned',units:[{unitId:'planned-unit'}]})
+ await f.call('accept',{runId:'planned',unitId:'planned-unit',commands:[{commandId:'planned-command',kind:'create',args:{taskId:'phantom-task'}}]})
+ await f.call('receive',receive('unrelated'))
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.change',args:{expectedRevision:0,maintenanceId:'cleanup',actorId:'operator',reason:'test',active:true}})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.seal',args:{expectedRevision:1,maintenanceId:'cleanup',actorId:'operator',reason:'test'}})
+ if(status!=='pending')await f.editSnapshot(db=>{const row=db.prepare("SELECT body FROM message_items WHERE item_id='command:planned-command'").get();const c=JSON.parse(row.body);c.status=status;db.prepare("UPDATE message_items SET body=? WHERE item_id='command:planned-command'").run(JSON.stringify(c))})
+ const args={runIds:['planned'],sourceKeys:['planned'],taskIds:['phantom-task'],topicIds:[],maintenanceId:'cleanup',maintenanceRevision:2}
+ if(['running','unknown'].includes(status)){await bad(f.store.query({kind:'message.batch.cleanup.check',...args}),'MESSAGE_CLEANUP_COMMAND_PENDING');return}
+ const check=await f.store.query({kind:'message.batch.cleanup.check',...args})
+ assert.deepEqual(check.plannedTaskIds,['phantom-task']);assert.deepEqual(check.actualTaskIds,[])
+ await f.call('batch.cleanup',{...args,expectedDigest:check.expectedDigest,notificationAuditDigest:check.notificationAuditDigest})
+ await bad(f.store.query({kind:'message.run',runId:'planned'}),'MESSAGE_RUN_NOT_FOUND')
+ assert.equal((await f.store.query({kind:'message.run',runId:'unrelated'})).run.runId,'unrelated')
+ assert.equal(await f.store.query({kind:'task.deleted',taskId:'phantom-task'}),null)
+})
+
+test('真实Task接纳回执不能降级成预分配，未原生删除时拒绝批次清理',async t=>{
+ const f=await fixture(t)
+ await f.call('receive',receive('actual'));await f.call('split',{runId:'actual',units:[{unitId:'actual-unit'}]})
+ await f.call('accept',{runId:'actual',unitId:'actual-unit',commands:[{commandId:'actual-command',kind:'create',args:{taskId:'actual-task'}}]})
+ await f.store.command({id:randomUUID(),kind:'task.accept',args:{taskId:'actual-task',requirementRef:'sha256/requirement',requirementRevision:1,sessionId:'session',criteria:['核验'],sourceKey:'actual',eventKey:'accepted'}})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.change',args:{expectedRevision:0,maintenanceId:'cleanup',actorId:'operator',reason:'test',active:true}})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.seal',args:{expectedRevision:1,maintenanceId:'cleanup',actorId:'operator',reason:'test'}})
+ const args={runIds:['actual'],sourceKeys:['actual'],taskIds:['actual-task'],topicIds:[],maintenanceId:'cleanup',maintenanceRevision:2}
+ await bad(f.store.query({kind:'message.batch.cleanup.check',...args}),'MESSAGE_CLEANUP_TASK_DELETE_REQUIRED')
+})
+
+
+for(const evidence of ['event','receipt'])test(`清理仅剩历史${evidence}创建证据时仍要求真实删除审计`,async t=>{
+ const f=await fixture(t)
+ await f.call('receive',receive('historical'));await f.call('split',{runId:'historical',units:[{unitId:'historical-unit'}]})
+ await f.call('accept',{runId:'historical',unitId:'historical-unit',commands:[{commandId:'historical-command',kind:'create',args:{taskId:'historical-task'}}]})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.change',args:{expectedRevision:0,maintenanceId:'cleanup',actorId:'operator',reason:'test',active:true}})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.seal',args:{expectedRevision:1,maintenanceId:'cleanup',actorId:'operator',reason:'test'}})
+ await f.editSnapshot(db=>{
+  const result=JSON.stringify({status:'applied',taskId:'historical-task',requirementRevision:1,planRevision:0})
+  if(evidence==='event')db.prepare('INSERT INTO execution_events(kind,payload,created_at) VALUES(?,?,?)').run('task.accept',result,new Date().toISOString())
+  else db.prepare('INSERT INTO execution_receipts(command_id,payload_digest,result,created_at) VALUES(?,?,?,?)').run('historical-accept','a'.repeat(64),result,new Date().toISOString())
+ })
+ await bad(f.store.query({kind:'message.batch.cleanup.check',runIds:['historical'],sourceKeys:['historical'],taskIds:['historical-task'],topicIds:[],maintenanceId:'cleanup',maintenanceRevision:2}),'MESSAGE_CLEANUP_TASK_DELETE_REQUIRED')
+})
+
+test('精确清理轮换受影响群会话，保留其他来源群及Task水位并拒绝旧绑定',async t=>{
+ const f=await fixture(t)
+ const bindings={}
+ for(const [runId,conversationId] of [['reset-source','g'],['other-source','other']]){
+  await f.call('receive',receive(runId,{conversationId}))
+  const b=(await f.call('coordinator.claim',{conversationId,expectedLeaseEpoch:0,turnId:'turn-'+runId,sourceRuns:[{runId,sourceVersion:1}]})).result.binding
+  bindings[conversationId]=b
+  await f.call('coordinator.bound',b)
+  await f.call('coordinator.commit',{...b,decisions:[{runId,sourceVersion:1,units:[]}]})
+  await f.call('coordinator.release',{...b,drained:true})
+ }
+ await f.call('receive',receive('retained-source'))
+ await f.call('receive',receive('planned-reset'))
+ await f.call('split',{runId:'planned-reset',units:[{unitId:'planned-reset-unit'}]})
+ await f.call('accept',{runId:'planned-reset',unitId:'planned-reset-unit',commands:[{commandId:'planned-reset-command',kind:'create',args:{taskId:'planned-reset-task'}}]})
+ await f.editSnapshot(db=>{
+  const group=JSON.parse(db.prepare("SELECT body FROM message_groups WHERE conversation_id='g'").get().body)
+  group.coordinator.taskEventWatermarks={'planned-reset-task':10,'retained-task':20}
+  db.prepare("UPDATE message_groups SET body=? WHERE conversation_id='g'").run(JSON.stringify(group))
+ })
+ const before=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ const other=await f.store.query({kind:'message.coordinator',conversationId:'other'})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.change',args:{expectedRevision:0,maintenanceId:'cleanup',actorId:'operator',reason:'test',active:true}})
+ await f.store.command({id:randomUUID(),kind:'runtime.maintenance.seal',args:{expectedRevision:1,maintenanceId:'cleanup',actorId:'operator',reason:'test'}})
+ const args={runIds:['reset-source','planned-reset'],sourceKeys:['reset-source','planned-reset'],taskIds:['planned-reset-task'],topicIds:[],maintenanceId:'cleanup',maintenanceRevision:2}
+ const check=await f.store.query({kind:'message.batch.cleanup.check',...args})
+ const cleaned=(await f.call('batch.cleanup',{...args,expectedDigest:check.expectedDigest,notificationAuditDigest:check.notificationAuditDigest})).result
+ const after=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ assert.notEqual(after.coordinator.sessionId,before.coordinator.sessionId)
+ assert.equal(after.coordinator.sessionId,cleaned.coordinatorResets[0].sessionId)
+ assert.equal(after.coordinator.sessionBound,false)
+ assert.equal(after.coordinator.leaseEpoch,before.coordinator.leaseEpoch+1)
+ assert.equal(after.coordinator.turnId,null)
+ assert.equal(after.coordinator.status,'idle')
+ assert.deepEqual(after.coordinator.sources,[])
+ assert.deepEqual(after.coordinator.taskEventRefs,[])
+ assert.deepEqual(after.coordinator.taskEventWatermarks,{'retained-task':20})
+ assert.deepEqual(await f.store.query({kind:'message.coordinator',conversationId:'other'}),other)
+ assert.equal((await f.store.query({kind:'message.run',runId:'retained-source'})).run.runId,'retained-source')
+ await bad(f.call('coordinator.commit',{...bindings.g,decisions:[]}),'MESSAGE_COORDINATOR_STALE')
+ await f.resumeInNewProcess({expectedRevision:2,maintenanceId:'cleanup',actorId:'operator',reason:'test'})
+ assert.equal((await f.store.query({kind:'message.coordinator',conversationId:'g'})).coordinator.sessionId,after.coordinator.sessionId)
+ const next=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:after.coordinator.leaseEpoch,turnId:'new-context',sourceRuns:[{runId:'retained-source',sourceVersion:1}]})).result.binding
+ assert.equal(next.sessionId,after.coordinator.sessionId)
+ assert.equal(next.sessionBound,false)
+ await bad(f.call('coordinator.commit',{...bindings.g,decisions:[]}),'MESSAGE_COORDINATOR_STALE')
+ await f.call('coordinator.release',{...next,drained:true})
 })

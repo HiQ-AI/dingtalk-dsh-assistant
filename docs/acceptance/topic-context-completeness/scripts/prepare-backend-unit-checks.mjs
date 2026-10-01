@@ -8,7 +8,8 @@ export function prepareBackendChecks(checks, { toolsDirectory, nodeExecutable, j
   if(!Array.isArray(checks)||checks.filter(c=>c.id==='dataset-package').length!==1)throw Error('BACKEND_CHECK_TARGET_INVALID')
   for(const path of [toolsDirectory,nodeExecutable,javaExecutable,mavenHome])if(!isAbsolute(path))throw Error('BACKEND_CHECK_PATH_INVALID')
   const result=structuredClone(checks),check=result.find(c=>c.id==='dataset-package')
-  const step={executable:nodeExecutable,args:[join(toolsDirectory,'verify-dataset-unit-tests.mjs'),'--java',javaExecutable,'--maven-home',mavenHome],timeoutMs:1800000}
+  if(check.timeoutMs!==undefined||check.steps?.some(step=>step.timeoutMs!==undefined))throw Error('BACKEND_CHECK_EXISTING_STEPS_DIFFERENT')
+  const step={executable:nodeExecutable,args:[join(toolsDirectory,'verify-dataset-unit-tests.mjs'),'--java',javaExecutable,'--maven-home',mavenHome]}
   if(check.steps?.some(s=>s.args?.includes(step.args[0])))throw Error('BACKEND_CHECK_ALREADY_CONFIGURED')
   if(!Array.isArray(check.steps)||check.steps.length!==1||!check.steps[0].args?.includes('-DskipTests')||!check.steps[0].args?.includes('package'))throw Error('BACKEND_CHECK_EXISTING_STEPS_DIFFERENT')
   check.steps=[step,...check.steps];check.version=String(Number(check.version)+1)

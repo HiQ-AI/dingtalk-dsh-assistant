@@ -1,3 +1,4 @@
+import { scriptedCoordinator } from './fixtures/group-coordinator.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -31,7 +32,7 @@ async function fixture(t,{blocked=false}={}) {
   return {status:'submitted'}
  },async close(){},async cancel(){},assertDrained(){return true}}
  controller=createExecutionController({store,artifacts,sessions,delivery:{execute:async()=>{throw new Error('unexpected write')}},workflows:[],readTools:['read-topic-sources','read-predecessor-artifact','organize-topic-sources','read-task-message-resource']})
- service=await openWorkflowService({ctx:{},config:{groupIds:['g'],ownerActorId:'owner',webActorId:'owner',artifactDirectory:join(dir,'artifacts')},legacy:{getAgentConfig:()=>({provider:'p',model:'m'}),getGroup:id=>({groupId:id,messages:[]})},execution:{store,artifacts,controller},taskOwnerSessions:{async close(){}},messageAgentSessions:{async close(){}},judge:async()=>{throw new Error('unexpected judge')}})
+ service=await openWorkflowService({ctx:{},config:{groupIds:['g'],ownerActorId:'owner',webActorId:'owner',artifactDirectory:join(dir,'artifacts')},legacy:{getAgentConfig:()=>({provider:'p',model:'m'}),getGroup:id=>({groupId:id,messages:[]})},execution:{store,artifacts,controller},taskOwnerSessions:{async close(){}},messageAgentSessions:{async close(){}},coordinatorSessions: scriptedCoordinator()})
  const command=(kind,args)=>store.command({id:randomUUID(),kind,args})
  await command('message.receive',{runId:'source',sourceKey:'source',sourceVersion:1,actorId:'a',conversationId:'g',body:'调查问题',policy:{initialWindowMs:45000}})
  await command('message.split',{runId:'source',units:[{unitId:'source-unit'}]})

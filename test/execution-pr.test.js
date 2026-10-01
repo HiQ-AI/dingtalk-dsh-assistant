@@ -4,13 +4,15 @@ import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createGithubPullRequests } from '../packages/dingtalk-dsh-assistant/execution-pr.js'
-import { createVerificationJobCheck } from '../packages/dingtalk-dsh-assistant/execution-check-job.js'
+import { createVerificationJobCheck, createBusinessAcceptanceCheck } from '../packages/dingtalk-dsh-assistant/execution-check-job.js'
 
 test('受信旧 PR 原位改 UAT base，未知回执独立回读；身份、并发与歧义不改远端', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-pr-retarget-')), script = join(directory, 'gh.cjs'), state = join(directory, 'state.json')
   const oldKey = 'c'.repeat(64), sha = 'a'.repeat(40)
   await writeFile(script, `const fs=require('node:fs');const[file,...args]=process.argv.slice(2),s=JSON.parse(fs.readFileSync(file)),v=k=>args[args.indexOf(k)+1];
-if(args[0]==='api'){if(s.race)s.pr.baseRefName='feature/foreign';fs.writeFileSync(file,JSON.stringify(s));console.log(JSON.stringify({object:{sha:s.sha}}))}
+const rest=p=>({number:p.number,html_url:p.url,state:p.state.toLowerCase(),merged_at:p.state==='MERGED'?'date':null,head:{sha:p.headRefOid,ref:p.headRefName},base:{ref:p.baseRefName},body:p.body});
+if(args[0]==='api'&&args.includes('--paginate'))console.log(JSON.stringify([[s.pr,...(s.extra?[{...s.pr,number:99}]:[])].map(rest)]));
+else if(args[0]==='api'){if(s.race)s.pr.baseRefName='feature/foreign';fs.writeFileSync(file,JSON.stringify(s));console.log(JSON.stringify({object:{sha:s.sha}}))}
 else if(args[1]==='list')console.log(JSON.stringify([s.pr,...(s.extra?[{...s.pr,number:99}]:[])]));
 else if(args[1]==='view')console.log(JSON.stringify(s.pr));
 else if(args[1]==='edit'){s.edits++;s.pr.baseRefName=v('--base');s.pr.body=fs.readFileSync(v('--body-file'),'utf8');if(s.afterEdit)s.pr.headRefOid='d'.repeat(40);fs.writeFileSync(file,JSON.stringify(s));process.exit(1)}
@@ -43,7 +45,9 @@ test('PR create ACK丢失后list+view独立回读，重试不重复创建，head
   await writeFile(state, JSON.stringify({ count: 0, sha: 'a'.repeat(40), pr: null }))
   await writeFile(script, `const fs=require('node:fs'); const [file,...args]=process.argv.slice(2); const s=JSON.parse(fs.readFileSync(file));
 const value=x=>args[args.indexOf(x)+1];
-if(args[0]==='api') console.log(JSON.stringify({object:{sha:s.sha}}));
+const rest=p=>({number:p.number,html_url:p.url,state:p.state.toLowerCase(),head:{sha:p.headRefOid,ref:p.headRefName},base:{ref:p.baseRefName},body:p.body});
+if(args[0]==='api'&&args.includes('--paginate'))console.log(JSON.stringify([s.pr?[rest(s.pr)]:[]]));
+else if(args[0]==='api') console.log(JSON.stringify({object:{sha:s.sha}}));
 else if(args[1]==='list') console.log(JSON.stringify(s.pr?[s.pr]:[]));
 else if(args[1]==='view') console.log(JSON.stringify(s.pr));
 else if(args[1]==='create'){s.count++;s.pr={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:s.sha,headRefName:'codex/test',baseRefName:'main',body:fs.readFileSync(value('--body-file'),'utf8')};fs.writeFileSync(file,JSON.stringify(s));process.exit(1)}else process.exit(2);`)
@@ -72,16 +76,16 @@ test('受信验证job只跑固定argv并记录真实exit和日志，失败不能
   assert.equal(stepped.passed, true); assert.deepEqual(JSON.parse(stepped.log).steps.map(step => step.exitCode), [0, 0])
 })
 
-test('验证取消和超时均终止真实父子进程，后续step不执行', async () => {
+test('验证取消终止真实父子进程，后续step不执行', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-check-cancel-'))
-  for (const mode of ['cancel', 'timeout', 'task-cancel']) {
+  for (const mode of ['cancel', 'task-cancel']) {
     const pidFile = join(root, `${mode}.json`), forbidden = join(root, `${mode}-later.txt`)
     const code = `const {spawn}=require('node:child_process'); const fs=require('node:fs'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});fs.writeFileSync(${JSON.stringify(pidFile)},JSON.stringify([process.pid,child.pid]));setInterval(()=>{},1000)`
     const abort = new AbortController()
     const { fileURLToPath } = await import('node:url'), { createHash } = await import('node:crypto')
     const launcher = fileURLToPath(new URL('../packages/dingtalk-dsh-assistant/execution-task-command.js', import.meta.url))
     const digest = createHash('sha256').update((await readFile(launcher, 'utf8')).replace(/\r\n/g, '\n')).digest('hex')
-    const check = createVerificationJobCheck({ id: mode, version: '1', root, timeoutMs: mode === 'timeout' ? 1200 : 30000, steps: [
+    const check = createVerificationJobCheck({ id: mode, version: '1', root, steps: [
       { executable: process.execPath, args: mode === 'task-cancel' ? [launcher, digest, join(root, 'tmp'), process.execPath, '-e', code] : ['-e', code] },
       { executable: process.execPath, args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(forbidden)},'bad')`] },
     ] })
@@ -89,34 +93,24 @@ test('验证取消和超时均终止真实父子进程，后续step不执行', a
     let pids
     for(let i=0;i<100;i++){try{pids=JSON.parse(await readFile(pidFile,'utf8'));break}catch{await new Promise(r=>setTimeout(r,20))}}
     assert.ok(pids)
-    if(mode!=='timeout')abort.abort()
+    abort.abort()
     const result=await promise
-    assert.equal(result.passed,false);assert.equal(JSON.parse(result.log).reason,mode!=='timeout'?'cancelled':'timeout')
+    assert.equal(result.passed,false);assert.equal(JSON.parse(result.log).reason,'cancelled')
     assert.ok(Date.now()-started<10000)
     for(const pid of pids)assert.throws(()=>process.kill(pid,0))
     await assert.rejects(readFile(forbidden),{code:'ENOENT'})
   }
 })
 
-test('检查分步预算分别生效且总预算不可被后续step重置', async () => {
-  const root=await mkdtemp(join(tmpdir(),'dsh-step-budget-')),snapshot={candidateDigest:'a'.repeat(64),files:[]}
-  const step=(delay,timeoutMs)=>({executable:process.execPath,args:['-e',`setTimeout(()=>{},${delay})`],timeoutMs})
-  const cases=[
-    {id:'first',timeoutMs:5000,steps:[step(1600,500),step(1,500)],count:1,scope:'step'},
-    {id:'second',timeoutMs:5000,steps:[step(40,1500),step(1600,500)],count:2,scope:'step'},
-    {id:'total',timeoutMs:1000,steps:[step(200,2000),step(2000,2000)],count:2,scope:'check'},
-  ]
-  for(const item of cases){
-    const result=await createVerificationJobCheck({...item,version:'1',root}).run(snapshot),log=JSON.parse(result.log)
-    assert.equal(result.passed,false);assert.equal(log.steps.length,item.count);assert.equal(log.reason,'timeout');assert.equal(log.timeoutScope,item.scope)
-    assert.equal(log.steps.at(-1).timeoutScope,item.scope)
-    for(const value of log.steps){assert.ok(Number.isFinite(Date.parse(value.startedAt)));assert.ok(value.elapsedMs>0);assert.ok(value.budgetMs>0);assert.ok(value.budgetMs<=value.timeoutMs)}
-    if(item.id==='second'){assert.equal(log.steps[0].exitCode,0);assert.equal(log.steps[0].timeoutScope,null);assert.equal(log.steps[1].budgetMs,500)}
-    if(item.id==='total')assert.ok(log.steps[1].budgetMs<1000)
-  }
-  assert.throws(()=>createVerificationJobCheck({id:'bad-total',version:'1',root,timeoutMs:2400001,steps:[step(1,100)]}),{code:'VERIFY_JOB_CONFIG_INVALID'})
-  assert.throws(()=>createVerificationJobCheck({id:'bad-step',version:'1',root,timeoutMs:2400000,steps:[step(1,1800001)]}),{code:'VERIFY_JOB_CONFIG_INVALID'})
-  assert.ok(createVerificationJobCheck({id:'declared',version:'1',root,timeoutMs:2400000,steps:[step(1,600000),step(1,1800000)]}))
+test('检查持续运行至完成，旧时间预算配置拒绝接纳', async () => {
+  const root=await mkdtemp(join(tmpdir(),'dsh-continuous-check-')),snapshot={candidateDigest:'a'.repeat(64),files:[]}
+  const command={executable:process.execPath,args:['-e','setTimeout(()=>{},1200)']}
+  const result=await createVerificationJobCheck({id:'continuous',version:'1',root,steps:[command,command]}).run(snapshot)
+  assert.equal(result.passed,true); const log=JSON.parse(result.log)
+  assert.equal(log.steps.length,2); assert.ok(log.elapsedMs >= 2400)
+  assert.equal(log.timeoutMs,undefined); assert.equal(log.steps[0].budgetMs,undefined)
+  assert.throws(()=>createVerificationJobCheck({id:'old-total',version:'1',root,steps:[command],timeoutMs:100}),{code:'VERIFY_JOB_CONFIG_INVALID'})
+  assert.throws(()=>createVerificationJobCheck({id:'old-step',version:'1',root,steps:[{...command,timeoutMs:100}]}),{code:'VERIFY_JOB_CONFIG_INVALID'})
 })
 
 test('20KB真实控制字符与最坏文本转义日志有界无损，末步输出不在顶层重复', async () => {
@@ -133,7 +127,7 @@ test('20KB真实控制字符与最坏文本转义日志有界无损，末步输�
   assert.equal(Buffer.from(JSON.parse(text.log).steps[0].stdout,'base64').toString(),raw);assert.equal(JSON.parse(text.log).steps[0].stdoutEncoding,'base64')
 })
 
-test('实际约27KB安装构建输出通过；32KiB边界无损，超限仍停止并拒绝通过', async () => {
+test('实际约27KB安装构建输出通过；32KiB边界无损，诊断超量明确截断且不中断后续步骤', async () => {
   const root=await mkdtemp(join(tmpdir(),'dsh-32k-output-')),snapshot={candidateDigest:'a'.repeat(64),files:[]}
   const command=code=>({executable:process.execPath,args:['-e',code]})
   const real=await createVerificationJobCheck({id:'measured',version:'1',root,steps:[command('process.stdout.write(Buffer.alloc(1178,105))'),command('process.stdout.write(Buffer.alloc(22823,98));process.stderr.write(Buffer.alloc(2533,119))')]}).run(snapshot)
@@ -141,75 +135,53 @@ test('实际约27KB安装构建输出通过；32KiB边界无损，超限仍停�
   const limit=await createVerificationJobCheck({id:'boundary',version:'1',root,steps:[command('process.stdout.write(String.fromCharCode(34,92).repeat(16384))')]}).run(snapshot)
   assert.equal(limit.passed,true);assert.ok(Buffer.byteLength(limit.log)<65536)
   const step=JSON.parse(limit.log).steps[0];assert.equal(step.outputBytes,32768);assert.equal(step.stdoutEncoding,'base64');assert.equal(Buffer.from(step.stdout,'base64').toString(),String.fromCharCode(34,92).repeat(16384))
-  const over=await createVerificationJobCheck({id:'over',version:'1',root,steps:[command('process.stdout.write(Buffer.alloc(32769,120));setInterval(()=>{},1000)'),command('console.log("must not execute")')]}).run(snapshot)
-  assert.equal(over.passed,false);assert.equal(JSON.parse(over.log).reason,'output_limit');assert.equal(JSON.parse(over.log).steps.length,1);assert.ok(Buffer.byteLength(over.log)<65536)
+  const over=await createVerificationJobCheck({id:'over',version:'1',root,steps:[command('process.stdout.write(Buffer.alloc(200000,120))'),command('console.log("completed next step")')]}).run(snapshot)
+  assert.equal(over.passed,true);const overLog=JSON.parse(over.log);assert.equal(overLog.reason,null);assert.equal(overLog.steps.length,2);assert.equal(overLog.steps[0].outputTruncated,true);assert.equal(overLog.steps[0].observedOutputBytes,200000);assert.ok(Buffer.byteLength(over.log)<65536)
 })
 
-test('PR阶段日志绑定身份；读瞬态有界重试，发送后重启与损坏日志均不重发', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'dsh-pr-phases-')), repository = join(directory, 'repo')
-  const { mkdir, readdir } = await import('node:fs/promises')
-  await mkdir(repository)
-  const script = join(directory, 'gh.cjs'), state = join(directory, 'state.json')
-  await writeFile(script, `const fs=require('node:fs');const[file,...a]=process.argv.slice(2),s=JSON.parse(fs.readFileSync(file));
-if(a[1]==='create'){s.sends++;fs.writeFileSync(file,JSON.stringify(s));console.error('private stderr');process.exit(1)}
-s.reads++;fs.writeFileSync(file,JSON.stringify(s));if(s.fail || s.reads<=s.transient){console.error(s.auth?'HTTP 401':'TLS handshake timeout');process.exit(1)}
-console.log(JSON.stringify(a[0]==='api'?{object:{sha:'a'.repeat(40)}}:[]));`)
-  const config = { repository, repo: 'test/repo', base: 'feature/uat3-base', head: 'codex/test', ghCommand: { executable: process.execPath, args: [script, state] } }
-  const adapter = createGithubPullRequests(config)
-  const prepare = runId => adapter.prepare({ runId, generation: 1, requirementDigest: 'b'.repeat(64), commitId: 'a'.repeat(40), title: '验证', body: '测试' })
-  await writeFile(state, JSON.stringify({ reads: 0, sends: 0, fail: true }))
-  const failed = prepare('preflight'), outcome = await adapter.execute(failed)
-  assert.equal(outcome.status, 'failed'); assert.equal(outcome.mutationAttempted, false)
-  assert.equal(outcome.readAttempts, 3)
-  let saved = JSON.parse(await readFile(state, 'utf8')); assert.equal(saved.reads, 3); assert.equal(saved.sends, 0)
-  assert.equal((await adapter.execute(failed)).status, 'failed')
-  assert.equal(JSON.parse(await readFile(state, 'utf8')).reads, 3)
-  // 模拟已落 preflight-failed、尚未 delivery.observe 时重启，只走 reconcile。
-  const beforeRecovery = await readdir(join(directory, '.dsh-pr-journal'))
-  assert.deepEqual(await createGithubPullRequests(config).reconcile(failed), outcome)
-  assert.deepEqual(await readdir(join(directory, '.dsh-pr-journal')), beforeRecovery)
-  assert.equal(JSON.parse(await readFile(state, 'utf8')).reads, 3)
-  await writeFile(state, JSON.stringify({ reads: 0, sends: 0, fail: true, auth: true }))
-  await adapter.execute(prepare('auth')); assert.equal(JSON.parse(await readFile(state, 'utf8')).reads, 1)
-  await writeFile(state, JSON.stringify({ reads: 0, sends: 0, transient: 2 }))
-  const pending = prepare('pending'); assert.equal((await adapter.execute(pending)).status, 'unknown')
-  saved = JSON.parse(await readFile(state, 'utf8')); assert.equal(saved.sends, 1)
-  const reopened = createGithubPullRequests(config)
-  await reopened.execute(pending); assert.equal(JSON.parse(await readFile(state, 'utf8')).sends, 1)
-  const journal = join(directory, '.dsh-pr-journal')
-  const completed = JSON.parse(await readFile(join(journal, `${pending.operationKey}.send-complete.json`), 'utf8'))
-  assert.equal(completed.exitCode, 1); assert.equal(JSON.stringify(completed).includes('private'), false)
-  const crash = prepare('crash')
-  await writeFile(join(journal, `${crash.operationKey}.send-intent.json`), JSON.stringify({ version: 1, operationKey: crash.operationKey, preparedDigest: crash.digest, phase: 'send-intent' }))
-  await reopened.execute(crash); assert.equal(JSON.parse(await readFile(state, 'utf8')).sends, 1)
-  await writeFile(join(journal, `${crash.operationKey}.send-intent.json`), '{')
-  await assert.rejects(reopened.execute(crash), /PR_JOURNAL_INVALID/)
-  assert.equal(JSON.parse(await readFile(state, 'utf8')).sends, 1)
-  assert.ok((await readdir(journal)).some(name => name.endsWith('.preflight-failed.json')))
-  const before = await readdir(journal)
-  await adapter.reconcile(prepare('legacy-without-journal'))
-  assert.deepEqual(await readdir(journal), before)
-  const concurrent = prepare('concurrent')
-  await Promise.allSettled([adapter.execute(concurrent), reopened.execute(concurrent)])
-  assert.equal(JSON.parse(await readFile(state, 'utf8')).sends, 2)
-  const stopped = prepare('before-intent-crash')
-  await writeFile(join(journal, `${stopped.operationKey}.attempt-start.json`), JSON.stringify({ version: 1, operationKey: stopped.operationKey, preparedDigest: stopped.digest, phase: 'attempt-start' }))
-  await reopened.execute(stopped)
-  assert.equal(JSON.parse(await readFile(state, 'utf8')).sends, 2)
-  await writeFile(join(journal, `${stopped.operationKey}.attempt-start.json`), JSON.stringify({ version: 1, operationKey: stopped.operationKey, preparedDigest: 'wrong', phase: 'attempt-start' }))
-  await assert.rejects(reopened.execute(stopped), /PR_JOURNAL_INVALID/)
-  const failurePath = join(journal, `${failed.operationKey}.preflight-failed.json`)
-  const originalFailure = await readFile(failurePath, 'utf8')
-  await writeFile(failurePath, '{')
-  await assert.rejects(reopened.reconcile(failed), /PR_JOURNAL_INVALID/)
-  await writeFile(failurePath, originalFailure)
-  await writeFile(join(journal, `${failed.operationKey}.send-intent.json`), JSON.stringify({ version: 1, operationKey: failed.operationKey, preparedDigest: failed.digest, phase: 'send-intent' }))
-  assert.equal((await reopened.reconcile(failed)).status, 'unknown')
-  const freshRepository = join(directory, 'fresh', 'repo'); await mkdir(freshRepository, { recursive: true })
-  const fresh = createGithubPullRequests({ ...config, repository: freshRepository })
-  const legacy = fresh.prepare({ ...failed, runId: 'old-effect' })
-  assert.equal((await fresh.reconcile(legacy)).status, 'unknown')
-  assert.deepEqual(await readdir(join(directory, 'fresh')), ['repo'])
+test('PR暂态预检单次返回，恢复重试由调用方触发；发送后失败与重启只对账不重发', async () => {
+  const directory=await mkdtemp(join(tmpdir(),'dsh-pr-phases-')),repository=join(directory,'repo')
+  const {mkdir,readdir}=await import('node:fs/promises');await mkdir(repository)
+  const script=join(directory,'gh.cjs'),state=join(directory,'state.json')
+  await writeFile(script,`const fs=require('fs');const[file,...a]=process.argv.slice(2),s=JSON.parse(fs.readFileSync(file)),v=x=>a[a.indexOf(x)+1];
+const rest=p=>({number:p.number,html_url:p.url,state:'open',head:{sha:p.headRefOid,ref:p.headRefName},base:{ref:p.baseRefName},body:p.body});
+if(a[1]==='create'){s.sends++;s.pr={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:'a'.repeat(40),headRefName:'codex/test',baseRefName:'feature/uat3-base',body:fs.readFileSync(v('--body-file'),'utf8')};fs.writeFileSync(file,JSON.stringify(s));console.error('private stderr');process.exit(1)}
+s.reads++;fs.writeFileSync(file,JSON.stringify(s));if(s.fail||s.afterSendFail&&s.sends){console.error(s.auth?'HTTP 401':'TLS handshake timeout');process.exit(1)}
+console.log(JSON.stringify(a.includes('--paginate')?[s.pr?[rest(s.pr)]:[]]:a[0]==='api'?{object:{sha:'a'.repeat(40)}}:s.pr));`)
+  const config={repository,repo:'test/repo',base:'feature/uat3-base',head:'codex/test',ghCommand:{executable:process.execPath,args:[script,state]}}
+  const adapter=createGithubPullRequests(config),prepare=runId=>adapter.prepare({runId,generation:1,requirementDigest:'b'.repeat(64),commitId:'a'.repeat(40),title:'验证',body:'完整业务结果'.repeat(30000)})
+  await writeFile(state,JSON.stringify({reads:0,sends:0,fail:true}))
+  const failed=prepare('preflight'),outcome=await adapter.execute(failed)
+  assert.equal(outcome.status,'failed');assert.equal(outcome.reason,'PR_CONNECTION_FAILED');assert.equal(outcome.mutationAttempted,false);assert.equal(outcome.readAttempts,1)
+  assert.equal(JSON.parse(await readFile(state,'utf8')).reads,1)
+  await adapter.execute(failed);assert.equal(JSON.parse(await readFile(state,'utf8')).reads,2)
+  const known=await createGithubPullRequests(config).reconcile(failed)
+  assert.equal(known.reason,'PR_PREFLIGHT_NOT_SENT');assert.equal(known.mutationAttempted,false)
+  assert.equal(JSON.parse(await readFile(state,'utf8')).reads,2)
+  const proof=await createGithubPullRequests(config).recoverUnsent(failed)
+  assert.equal(proof.operationKey,failed.operationKey);assert.equal(proof.preparedDigest,failed.digest);assert.equal(proof.mutationAttempted,false)
+  assert.equal(JSON.parse(await readFile(proof.evidenceRef,'utf8')).preparedDigest,failed.digest)
+  assert.equal(await adapter.recoverUnsent(prepare('missing')),null)
+  await assert.rejects(adapter.recoverUnsent({...failed,digest:'0'.repeat(64)}),{code:'PR_PREPARED_INVALID'})
+  assert.ok(!(await readdir(join(directory,'.dsh-pr-journal'))).some(name=>name.endsWith('.preflight-failed.json')))
+  await writeFile(state,JSON.stringify({reads:0,sends:0,fail:true,auth:true}))
+  const auth=prepare('auth');assert.equal((await adapter.execute(auth)).reason,'PR_PERMISSION_DENIED')
+  await adapter.execute(auth);assert.equal(JSON.parse(await readFile(state,'utf8')).reads,1)
+  assert.equal(await adapter.recoverUnsent(auth),null)
+  await writeFile(state,JSON.stringify({reads:0,sends:0,afterSendFail:true}))
+  const pending=failed;assert.equal((await createGithubPullRequests(config).execute(pending)).status,'unknown')
+  const reopened=createGithubPullRequests(config);await reopened.execute(pending)
+  assert.equal(await reopened.recoverUnsent(pending),null)
+  assert.equal(JSON.parse(await readFile(state,'utf8')).sends,1)
+  const saved=JSON.parse(await readFile(state,'utf8'));saved.afterSendFail=false;await writeFile(state,JSON.stringify(saved))
+  assert.equal((await reopened.reconcile(pending)).status,'succeeded')
+  assert.equal((await reopened.execute(pending)).status,'succeeded');assert.equal(JSON.parse(await readFile(state,'utf8')).sends,1)
+  const journal=join(directory,'.dsh-pr-journal'),completed=JSON.parse(await readFile(join(journal,pending.operationKey+'.send-complete.json'),'utf8'))
+  assert.equal(completed.exitCode,1);assert.equal(JSON.stringify(completed).includes('private'),false)
+  await writeFile(join(journal,pending.operationKey+'.send-intent.json'),'{')
+  await assert.rejects(reopened.execute(pending),{code:'PR_JOURNAL_INVALID'})
+  await assert.rejects(reopened.recoverUnsent(pending),{code:'PR_JOURNAL_INVALID'})
+  assert.equal(JSON.parse(await readFile(state,'utf8')).sends,1)
 })
 
 test('任务检查命令真实写入任务tmp，重复检查临时目录隔离且父环境不变', async () => {
@@ -236,4 +208,42 @@ test('任务检查拒绝tmp祖先junction，外部目录零新增', async () => 
  const check = createVerificationJobCheck({ id: 'link', version: '1', root: join(root, 'work'), executable: process.execPath, args: [launcher, digest, join(link, 'must-not-exist'), process.execPath, '-e', 'process.exit(0)'] })
  const result = await check.run({ files: [], candidateDigest: 'a'.repeat(64) })
  assert.equal(result.passed, false); assert.deepEqual(await readdir(outside), [])
+})
+
+test('业务验收完整核对超过100KiB实际值，诊断截断不误判且损坏结果不放行', async () => {
+  const root=await mkdtemp(join(tmpdir(),'dsh-large-business-')),snapshot={candidateDigest:'a'.repeat(64),files:[]},expected='a'.repeat(120000)
+  const config={id:'business',version:'1',root,criterion:'实际值完整一致',expected,executable:process.execPath}
+  const passed=await createBusinessAcceptanceCheck({...config,args:['-e',"process.stdout.write(JSON.stringify({actual:'a'.repeat(120000)}))"]}).run(snapshot)
+  assert.equal(passed.passed,true);const log=JSON.parse(passed.log)
+  assert.equal(log.steps[0].outputTruncated,true);assert.equal(log.acceptance.actual,expected)
+  assert.equal(log.acceptance.expected,expected)
+  const invalid=await createBusinessAcceptanceCheck({...config,args:['-e',"process.stdout.write(JSON.stringify({actual:'a'.repeat(120000)}).slice(0,-1))"]}).run(snapshot)
+  assert.equal(invalid.passed,false);assert.equal(JSON.parse(invalid.log).acceptance.actual,null)
+  const cancelled=new AbortController()
+  const pending=createBusinessAcceptanceCheck({...config,args:['-e',"process.stdout.write(JSON.stringify({actual:'a'.repeat(120000)}));setInterval(()=>{},1000)"]}).run(snapshot,{signal:cancelled.signal})
+  setTimeout(()=>cancelled.abort(),500)
+  const result=await pending
+  assert.equal(result.passed,false);assert.equal(JSON.parse(result.log).reason,'cancelled')
+})
+
+test('PR完整读取超过100条历史和1MiB正文仍匹配后页目标，原生命令可明确取消', async () => {
+  const directory=await mkdtemp(join(tmpdir(),'dsh-pr-paged-')),script=join(directory,'gh.cjs'),state=join(directory,'state.json'),pidPath=join(directory,'pid.json')
+  await writeFile(script,`const fs=require('fs');const[file,...args]=process.argv.slice(2),s=JSON.parse(fs.readFileSync(file));
+if(s.hang){fs.writeFileSync(s.pidPath,JSON.stringify(process.pid));setInterval(()=>{},1000)}
+else if(args.includes('--paginate'))console.log(JSON.stringify(s.pages));
+else if(args[1]==='view')console.log(JSON.stringify(s.pr));else process.exit(2);`)
+  const adapter=createGithubPullRequests({repository:directory,repo:'test/repo',base:'main',head:'codex/test',ghCommand:{executable:process.execPath,args:[script,state]}})
+  const prepared=adapter.prepare({runId:'paged',generation:1,requirementDigest:'b'.repeat(64),commitId:'a'.repeat(40),title:'完整分页',body:'业务结果'.repeat(300000)})
+  const pr={number:151,url:'https://github.com/test/repo/pull/151',state:'OPEN',headRefOid:prepared.commitId,headRefName:'codex/test',baseRefName:'main',body:prepared.body+'\n<!-- dsh-operation:'+prepared.operationKey+' -->'}
+  const rest=p=>({number:p.number,html_url:p.url,state:p.state.toLowerCase(),head:{sha:p.headRefOid,ref:p.headRefName},base:{ref:p.baseRefName},body:p.body})
+  const history=Array.from({length:150},(_,index)=>rest({...pr,number:index+1,state:'CLOSED',body:'历史记录'}))
+  await writeFile(state,JSON.stringify({pr,pages:[history.slice(0,100),[...history.slice(100),rest(pr)]]}))
+  const actual=await adapter.reconcile(prepared);assert.equal(actual.status,'succeeded');assert.equal(actual.number,151)
+  await writeFile(state,JSON.stringify({hang:true,pidPath}))
+  const controller=new AbortController(),pending=adapter.reconcile(prepared,{signal:controller.signal})
+  let pid
+  for(let attempt=0;attempt<100;attempt++){try{pid=JSON.parse(await readFile(pidPath,'utf8'));break}catch{await new Promise(resolve=>setTimeout(resolve,20))}}
+  assert.ok(pid);controller.abort()
+  await assert.rejects(pending,{code:'PR_CANCELLED'})
+  assert.throws(()=>process.kill(pid,0))
 })

@@ -43,9 +43,10 @@ Resident 关闭会依次尝试 HTTP、同步服务、监听、工作流及 Runti
 
 `--investigate` 在隔离控制库中经真实意图判断和 Task Owner 创建一个调查任务，核对调查结果、真实查询工件和 Owner 最终验收。其输出目录必须不存在，父目录需已建立；失败后用新目录重跑，保留先前证据。
 
-S 节点只接收事项拆分所需的消息材料；群职责保留在持久快照，不进入 S 的 8 KiB 输入。背景预算遗漏项以来源键传给 S，指代需要时仍应请求相应材料。旧版因 S 输入容量被阻断、且尚无单元、节点、命令、请求或屏障的消息，启动恢复时只允许按 `s-compact-v1` 投影重试一次；部署后须逐条回读状态，不能将启动健康视作处理成功。
-R 节点身份卡只携带本次明确引用的来源键，其他来源保留在 Host 召回数据并向模型标注省略数量；目标或判别事实过长时保存完整材料引用，选中候选须补取详情。任务历史可通过 `task-history:<taskId>` 或 `workflow-task-history:<taskId>` 在相应读权限下按需读取。至多八张身份卡的输入保护值为 14 KiB；明确引用超过八项或保护证据超限时进入可见阻断。旧版 R 容量阻断在无业务副作用且目标单元的材料请求均已解决时可恢复原节点；未解决请求不得重试。
-I 节点接收完整群职责、事实、R 已解决的必要材料与限制，以及可用流程目录；输入保护值为 18 KiB。S/R/I 请求先冻结 system 与 message，再以实际请求字节检查本地保护值并复用同一内容发送；实际 token 仍以提供商 usage 回读。确定性节点不领取模型槽或模型额度。新消息先持久接收，再按控制账顺序一次处理一条；启动恢复沿用相同顺序，真正开始处理时才启动该消息的节点时间窗。渠道回读的自身发件按群和消息 ID 排除，不作为新业务消息；历史投影也排除这些回声。旧回声若没有业务命令，恢复时封存其等待请求，保留原记录。收发信箱合并新工作流账，只有通知独立回读后才显示已发送，撤回凭真实回执单独记录。
+S 保留完整当前消息和已提供背景，R 逐页累积候选及排除证据，I/IB 接收完整必要材料与限制。S/R/I/IB 不设固定字节或累计输入/输出 token 额度拒绝，实际请求字节和提供商 usage 仅用于计量；默认调用超时 180 秒，节点租约由同一调用窗口加提交余量确定，调用次数与有界协议纠正仍有效。节点失败保存真实结束原因、错误码及 usage；明确容量失败等待系统修复，不自动重复同一输入。模型提供方实际容量错误保持明确系统责任。旧容量失败只在当前来源、材料和无副作用条件满足时恢复，不能把部署健康视为处理成功。
+
+新消息先持久接收，再按事项影响范围协调；可能相关的效果保持等待，已证明独立的话题可以继续，材料失败不占整群模型锁。渠道自身发件按群和消息 ID 排除，收发信箱仅在独立渠道回读后显示已发送。当前版本 schema v6，部署前按[事项影响离线迁移](execution-foundation-local.md#事项影响-v5--v6-离线迁移)备份、停机检查和转换，禁止旧 worker 写新库。
+
 
 `workflow` 配置显式提供 `groupIds`、`dbPath`、`instanceId`、`artifactDirectory`、`ownerActorId`。控制库必须由独立初始化/迁移步骤建立；常规插件启动不建库、不自动封存旧群。
 
@@ -418,7 +419,7 @@ Owner安排带capabilityStep的通用阶段时，planChange本轮只能包含一
 
 复合验收项按Owner显式绑定的当前任务已成功阶段联合语义核验；未绑定的其他阶段不进入。领域自己的结构、效果和执行输入约束仍独立验证。已冻结general v2合同保持源码身份，由验收协调层分别做原效果检查与必须通过的联合语义验收，缺校验器或结果不足不能完成。
 
-IB共享判断仅合并完全相同的任务事实副本，各事项保留原权限范围内的引用；相同原生任务历史和话题来源全文仅通过精确引用复用，全部内容可完整还原；原文、约束及补读材料不裁剪，容量上限保持不变。已有无命令、无通知效果的容量失败消息可经现有 `/workflows/<runId>/reprocess` 原生重处理，执行前核对原消息版本和效果账；部署健康不代表该话题或Owner完成，需独立读回IB接纳及任务完成门禁。不得编辑SQLite或重发已确认交付的附件来制造验收通过。
+IB共享判断仅合并完全相同的任务事实副本，各事项保留原权限范围内的引用；相同原生任务历史和话题来源全文仅通过精确引用复用，全部内容可完整还原；原文、约束及补读材料不裁剪，本次移除固定输入容量上限。已有无命令、无通知效果的容量失败消息可经现有 `/workflows/<runId>/reprocess` 原生重处理，执行前核对原消息版本和效果账；部署健康不代表该话题或Owner完成，需独立读回IB接纳及任务完成门禁。不得编辑SQLite或重发已确认交付的附件来制造验收通过。
 
 I/IB动作条件必填字段与Host校验共用规则；例如report缺language仍拒绝。遇到该错误先核对正式包提示与校验的一致性，再走原生reprocess，不写默认参数或业务账。
 
@@ -438,4 +439,81 @@ I/IB动作条件必填字段与Host校验共用规则；例如report缺language�
 
 恢复 Observer 时脚本使用显式 `@zzusp/dingtalk-dsh-observer@file:<恢复包绝对路径>` 参数。pnpm 10.13.1 在旧 file: 源缺失时，传裸 tgz 会先解析旧源而失败；带包名的原生 add 能先确定被替换的依赖。隔离临时 profile 已实跑：裸包 ENOENT，命名参数成功且 package.json 由 pnpm 更新。不能通过手改 profile 或完整性摘要绕过此解析问题。
 
-IB 话题来源身份使用无损引用：`sourceIndexes` 按原顺序指向 sharedTopic.sources 中唯一匹配的 sourceKey/sourceVersion；额外字段或歧义匹配不投影。`actorFromTopic` 仅代表该事实发送者与 sharedTopic.actorId 完全相等，不代表所有消息同一发送者，也不赋予权限。容量失败先核验当前真实完整输入和可逆性；不删除事实或提高上限。若原失败消息无已生效命令/通知，使用原生重处理恢复该消息，避免为唤醒反复新增话题历史。
+IB 话题来源身份使用无损引用：`sourceIndexes` 按原顺序指向 sharedTopic.sources 中唯一匹配的 sourceKey/sourceVersion；额外字段或歧义匹配不投影。`actorFromTopic` 仅代表该事实发送者与 sharedTopic.actorId 完全相等，不代表所有消息同一发送者，也不赋予权限。容量失败先核验当前真实完整输入和可逆性；不删除事实；当前版本已取消固定输入容量门槛，仍须记录提供方实际错误。若原失败消息无已生效命令/通知，使用原生重处理恢复该消息，避免为唤醒反复新增话题历史。
+
+### schema 5 → 6 来源影响账迁移
+
+本次部署沿用上述 `deploy-owner-repair.ps1`，完整维护部署参数附加 `-MigrateMessageImpact`。不能与 `-Bootstrap` 或 `-RepairStoppedLaunch` 混用。`-Check` 保持零写，仅声明迁移须完成离线前置条件，不宣称已在线验证数据库迁移。
+
+实际执行先封存排空许可，保存并禁用 `DSH Web Local` 自启状态，停止原实例，获取原生 owner 独占锁，然后调用现有 checkpoint（验证停止、自启禁用、maintenance stopping/drained）、运行 immutable `--check`、完成原有全量备份及独立回读。checker 持锁进程只接受一次固定 `migrate-message-impact` 动作，直接调用迁移核心；不重新竞争锁、不暴露跳锁参数。迁移在事务中追加影响账及 schema 字段，独立连接核对全部原表 baseline；确认后才安装与启动。
+
+`message-impact-migration.json` 保存 schema 版本、来源数量、原表摘要及迁移备份路径；摘要进入 `launch.json`。启动前、`-Readback` 和 `-Resume` 均核对证明摘要、schema 6 结构与每条来源的影响账完整性；在线仍执行既有旧终态历史核验。离线全量历史不变证明与在线当前态校验是不同门禁：启动后维护事件及当前工作流状态可以合法变化，不用迁移前全表摘要误判这些状态。接续命令必须保留 `-MigrateMessageImpact`。
+
+迁移、安装或回读失败不自动恢复派发或自启，保留停机/维护状态与证据；禁止通过旧的简化离线修复入口跳过迁移证明。正常恢复只有通过 `-Resume` 门禁后才还原本次保存的自启状态。上述流程测试使用隔离库与模拟启动，不代表真实实例已部署。
+
+通知滞留排障：prepared 没有 claim 不等于模型恢复阻塞。检查该 run 的 `notificationDiagnostics` 及既有 recovery 诊断，核对同一 Owner 报告的稳定 eventKey 是否已有通知；不得重发旧已送达报告或删除旧通知。当前扫描隔离单条事实失败，保留可回读诊断，其他待发通知和 unknown 回查仍继续；同一错误不按定时器重复写账。
+
+### 消息首次领取与恢复时钟
+
+每次模型节点领取独立保存 lease deadline，实际模型调用仍受单次超时限制，落账另保留 commitReserveMs。维护、并发槽及失败后的重试排队均不消耗下一次调用窗口；恢复不按包含排队时间的十分钟墙钟年龄拒绝。真实失败按 nodeId/leaseEpoch 去重计入最多两次恢复，重复扫描不扣次数，maxClaims 继续限制总调用。历史领取前超时由正常 recover 清除同原因事项阻挡，复用成功节点，不重处理来源；其他阻挡和未知效果不被解除。旧执行起点仍从最早模型 startedAt 推导供审计使用。
+
+逐条重处理允许无业务命令、已独立确认送达的 `attention`、`routing_wait`、`system_wait` 纯状态通知，原送达记录保留在旧版本且不重发；发送中、仅 ACK、结果未知及业务回执仍阻止重处理。
+
+每次节点领取必须由当前 Host 明确提供 `leaseWindowMs`（当前调用超时加提交余量），节点保存该窗口供审计；旧消息 policy 不参与当前调用时限计算。恢复预算耗尽保留原始 `recovery_exhausted`，继续使用受控重处理入口，不抹去历史失败。
+
+## 文件材料与历史待执行指令核对
+
+SQL 附件沿同一受管下载路径严格按 UTF-8 只读解析，保留原文与群/消息/附件身份，不执行 SQL；坏编码继续明确失败。验证需覆盖原脚本文本、临时文件清理与失败后重新读取，不能以模型猜测替代材料。
+
+本次附件闭环无 schema 迁移，按上述完整维护部署安装 Assistant 及其锁定依赖 ExcelJS 4.4.0。先在隔离测试中核验真实 xlsx 解析、跨阶段材料继承、已有未领取命令的派发前核验，以及系统读取失败的等待和恢复。正式恢复前只读验证原附件消息身份和工作簿内容；分别记录工作表/行列覆盖，不把文件消息文本当正文，也不把表头计作业务数据。
+
+恢复后逐项回读连续消息归属、Task 实际创建、执行材料、审批及验证阶段条件和渠道独立送达。不同消息恢复复用 FIFO 模型队列，不绕过相关输入屏障；已有成功节点与已投递通知不重跑。仅确认为无业务效果的失败消息可用受控 reprocess；已接纳的待执行命令沿原身份恢复，不手工清库重放。工作簿公式使用文件内缓存值且明确未重算，不执行生产 SQL 来验证消息修复。
+
+受控 `/workflows/<runId>/reprocess` 不设来源版本次数上限；每次仍要求当前来源和无未确认业务效果。必须先只读核对命令/通知，再调用一次并独立回读新版本；重复或未知响应先查状态，不循环重发。历史模型调用计量保留，版本递增不等于授权重复任务。
+
+### 本轮 PiAiAdapter 无备份续接
+
+本轮按用户明确要求不再备份，也不复制旧 Adapter。已生成的目录保留，但中断的备份验证不作为完整备份证明。通用 `deploy-owner-repair.ps1` 未保留 Adapter 扩展；本次使用 `docs/tmp/message-processing-deploy/continue-without-backup.ps1` 接续已有封存停机状态，先核对维护许可、原实例退出和 owner 独占锁，再执行精确包安装。
+
+Adapter 为普通依赖，原生 `dsh plugin --profile web add` 支持安装，不加入 profile layer。本次首次安装后的回读发现 hoisted 同版本旧包仍被 provider 解析：仅顶层安装成功不足以证明生效。因此在 profile 通过原生 `npm pkg set` 将 `pnpm.overrides.@deepseek-ai/dsh-llm-pi-ai` 精确绑定到持久 tgz，再执行命名 file 包的原生 plugin add；没有修改模型 settings，没有更换 provider 包。
+
+精确包为 `D:/dsh_home/packages/deepseek-ai-dsh-llm-pi-ai-0.1.2-rc.1-native-stop-cbf6f3d68a6f.tgz`，SHA256 为 `cbf6f3d68a6ff708bb55ab301ae97fad735b43d60655fdde1bb2083b92719b79`。checker 保留只读 `adapter-package` 和 `adapter-current`：按 tgz 清单核对 17 个打包文件，不扫描未打包 src；从 `dsh-codex-connect` 实际入口解析 Adapter，再逐文件比对候选包，拒绝命中旧副本。LICENSE 对照工作区根文件，package.json 的工作区依赖转写以精确包摘要为身份依据。
+
+本次安装后新 PID 29924 已通过回读并恢复至维护 revision 177；这些是本轮历史事实，不作为以后部署的当前状态依据。包、进程及健康通过只证明部署成立，消息重放仍须独立核对当前来源版本、命令接纳、Task 状态与通知 ACK/独立回读；不得将恢复派发等同于业务处理完成。无备份意味着本轮没有新增可声称完整的回退副本，失败时仍应保持封存并以已有证据定位，不自动恢复或重装。
+
+### 已在维护中的双 ACK 对账（不备份）
+
+用户明确要求不备份时，且唯一忙项是已知成功发送的两条 ACK，使用 `docs/acceptance/topic-context-completeness/scripts/recover-notification-readback.mjs --check <私有manifest>`。此入口只读控制库及 DWS，不创建证据目录或备份。manifest 必须包含 dbPath、instanceId、expectedPid、dwsProfile、maintenanceId、maintenanceRevision、actorId、notices（恰好两项、不重复）。每项包含 notificationId、runId、leaseEpoch、openTaskId、messageId、conversationId、sourceMessageId、expectedNoticeDigest。摘要由当前通知 JSON 的 SHA256 得到。
+
+检查独立 send-status SUCCESS 与完整 mget：原 ACK 操作、消息与群身份、引用原消息、正文和通知摘要必须一致；任何其他 busy 或 unknown 拒绝。保存 stdout 为私有证据。此检查不授予强停权限，仍须按既有 Resident 完整 dispose/fence 流程退出旧进程，不可绕过未知效果。
+
+旧 expectedPid 已退出后，再使用相同清单运行 `batch-repair <私有manifest>`。工具先再次只读核对与 DWS 回读，通过原生 store owner 独占锁取得唯一写者后重查；仅执行 `message.notification.readback`，不写 SQL 状态、不重发、不复制数据。部分完成可按相同清单接续，已 delivered 的项核对同一证据后不再写。完成独立回读两条 delivered 与全局 drained。
+
+回读确认 drained 后，工具在同一原生 store 中执行 seal，将维护变为 stopping，输出递增 revision 和真实恢复进程 incarnation。工具退出后，标准部署以相同维护身份、新 revision、无监听及旧 PID 已退出接续；新进程原生 resume，不要求已封存的工具进程仍存活，不伪造原 Resident incarnation。批次工具测试通过不等于实际 DWS 已核验，正式 --check 和执行回读须分别留证。
+
+### 指定问题批次清理后重放
+
+使用 `scripts/cleanup-message-batch.mjs --check <manifest>` / `--execute <manifest>`；精确字段与顺序见 `docs/spec/message-conversation-coordinator.md` 的“用户授权问题批次精确清理”。检查零写；执行须 maintenance stopping/drained、旧 PID 已退出、原生 owner 独占。先按原生取消/删除语义处理指定 Task，保存已发送消息的独立撤回审计；不备份、不按群扩大删除。保留 DWS 原历史，使用新消息运行标识重放，不复用旧命令回执。清理事务为受影响群轮换唯一协调 sessionId，sessionBound=false、leaseEpoch 递增、轮次来源与事件引用清空；仅删除选定 Task 的水位，保留其他来源、Task 水位及其他群。旧原生会话文件仅留审计，新会话从当前持久状态重建，不再恢复旧承接记忆。执行后回读 coordinatorResets 和群绑定；新进程恢复后再次核验 sessionId 未回退，旧绑定迟到提交必须拒绝。
+
+### 已清理来源的离线原生重放
+
+`node scripts/replay-message-sources.mjs --check <manifest>` 零写检查；`--execute` 仅在原 PID 退出且 maintenance stopping/drained 时，通过原生 owner 独占取得 store 后再次检查。manifest 包含 dbPath、instanceId、expectedPid、maintenanceId、maintenanceRevision、batchId（8–80位字母数字连字符）、sourcesPath、sourcesSha256。sourcesPath 指向已独立保存的 12 条原始 source 数组；工具核 SHA、唯一 sourceKey、身份及 occurredAt，按真实发生时间排序。
+
+重放仅执行 message.receive，保留原 sourceKey/actor/body/context/附件；sourceVersion=1，runId 与 receive commandId 由 batchId+sourceKey 稳定派生，必须使用全新批次，禁止碰撞历史 receipt。策略使用当前 defaultMessagePolicy，过时 compactPolicy 提示中的“意图节点”替换为“协调输入”。不会调用模型、生成 Task、执行命令或发送通知；关闭 store 后另开只读连接核 12 当前来源、原 Task 集合不变、命令/节点/通知均零，再交标准部署启动和解除维护。
+
+执行中断不自动重新插入已有来源：相同清单检查报 SOURCE_NOT_CLEAN，须先只读核对已收到条目；不能更换批次掩盖半完成结果或重复创建来源。此工具不停止进程、不解除维护、不写 SQL、不备份。
+
+群协调来源合同修复不迁移 schema：保留原来源与常驻 session，经原生维护排空切换后重新读取材料。回读协调提交时核验非空单元覆盖完整 sourceLength、补充/材料来源以 fact 关联同一目标，以及调查目标未被伪造为 requiredExecutionMaterials。群协调不再另设 180 秒墙钟或 32 步上限；仍由原生 cancel/close 排空与租约权限保护，Task 和外部命令既有保护不变。
+
+常驻会话恢复时保留历史，但必须对照本轮来源 `processing` 和提交 `acceptance`：协调工具的 `received:true` 不证明 Task 创建或执行。来源历史摘要从当前控制账只读取得；预分配 taskId、superseded命令和旧成功回执不能替代 `taskExists`。验证重放需同一 session 同时保留旧回执，并确认新输入看见旧命令无Task及本轮真实创建事实。
+
+生产查询准入：directQueries.databases 明确登记 environment: production、现有只读副本 connectionId 和授权表列，并追加对应 permissions.databaseIds。每次读前核验实时副本及只读事务，生产主库拒绝；不配置 host-enforced-readonly。凭据由 Host 读取，不进入模型。配置登记、实际连接和 Task 读取分别验收；配置变化后通过 reassess-readonly 在原 Task 重评，由 Owner 创建使用当前能力的后续阶段，不能直接重跑冻结旧能力的 Run。用户明确要求不备份时，先用配置器 planAgentQueryResources 零副作用生成并核对唯一变更，再在原生维护停机及 owner 锁下按原文摘要 CAS 写入；不调用会生成 .bak 的 apply。
+
+
+资源配置变更前核对当前调查定义已冻结 capabilityIdentity 和 allowedTools。缺失时先在原配置下原生启动并重建原摘要；仅摘要完全一致才通过 workflow.freezeCapabilities CAS 补齐元数据，不修改原摘要、任务或阶段。独立回读后再启用新配置；旧阶段 scope 能力摘要与当前清单不一致时停止查询，Owner 按当前能力重评后续阶段。此过程不提供旧消息编排兼容，也不降低定义漂移保护。
+
+部署后分别检查真实健康和群回补。图片事件的下载提示与历史展示可不同，只有精确卡片与唯一 mediaId 相同才视为同源；资源或正文实际变更仍要求可信编辑版本。只读查询输出容量超限可在既有授权内缩列或分页纠正，不作权限缺失或致命故障。若群内已有结束/取消指令，恢复工具不得重新打开业务任务。补充消息只更新原任务，不逐条回复；发送前指向旧执行的状态回执作废，实际控制进度不带“已收到”前缀。
+
+群协调恢复按当前来源版本、有效任务事件、模型配置及协调实现摘要判定条件变化；内部失败、重试、领取事件不能反向触发同条件模型重启。明确网络/服务暂态遵循 Retry-After 或递增退避，不设恢复次数和总期限。协调实现或原生群会话实现变更的部署自动改变恢复条件；外围依赖修复则通过既有原生事件发布相关授权/能力恢复事实后唤醒，禁止仅循环扫描或直接篡改协调账模拟恢复。
+
+PR交付在预检网络故障时由原Controller按持久退避继续原节点；仅Host适配器只读核验完整、身份匹配的attempt-start日志且反复确认没有send-intent/send-complete后，才能以新节点lease经原生effect.rearmUnsent恢复同effect。失败观测和恢复证明都保留工件引用，观测收据按发送lease隔离。权限失败、损坏或缺失日志、发送后未知效果只待修复或独立对账，不重发；安全撤销、输入变更、审批撤销和旧lease仍阻止发送。

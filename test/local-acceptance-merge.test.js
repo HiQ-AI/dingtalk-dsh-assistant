@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
-import { assessMergePreflight, validateMergeConfig, confirmBody, executeMerge, exactDecimal } from '../scripts/local-acceptance-merge.mjs'
+import { assessMergePreflight, validateMergeConfig, confirmBody, executeMerge, exactDecimal, runMergeCommand } from '../scripts/local-acceptance-merge.mjs'
 
 test('十进制比较保留末位，拒绝浮点舍入伪通过', () => {
  for(const value of ['1','1.0','100e-2','+01.000'])assert.equal(exactDecimal(value),'1')
@@ -233,4 +233,25 @@ test('预览JSON数值词元保留精度，不先舍入为Number',async t=>{
  const deps={...h.dependencies,fetch:async url=>url.endsWith('/merge-preview')?new Response(`{"code":200,"data":{"snapshotId":"${first}","mergedItems":[{"mergeType":"REFERENCE_PRODUCT","sources":[{"sourceItemId":"${first}"},{"sourceItemId":"${second}"}],"result":{"resultValue":1.0000000000000001,"unitId":"${tonne}"}}],"unmergedItems":[]}}`):h.dependencies.fetch(url)}
  await executeMerge('initialize',h.runtime,h.input,deps)
  await assert.rejects(executeMerge('api',h.runtime,h.input,deps),/NORMALIZATION_MISMATCH/)
+})
+
+
+test('原生命令完整读取超过1MiB的业务输出并接收stdin', async () => {
+ const result = await runMergeCommand(process.execPath, ['-e', "let input='';process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({input,value:'x'.repeat(2*1024*1024)})))"], { input: 'fixture' })
+ const value = JSON.parse(result.stdout)
+ assert.equal(value.input, 'fixture'); assert.equal(value.value.length, 2*1024*1024)
+})
+
+test('显式取消原生命令等待进程退出后传播原始原因', async () => {
+ const root = await mkdtemp(join(tmpdir(), 'merge-cancel-')), marker = join(root, 'pid')
+ const controller = new AbortController(), reason = new Error('explicit cancellation')
+ try {
+  const pending = runMergeCommand(process.execPath, ['-e', "require('node:fs').writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)", marker], { signal: controller.signal })
+  let pid
+  while (!pid) { try { pid = Number(await readFile(marker, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error; await new Promise(resolve => setTimeout(resolve, 10)) } }
+  controller.abort(reason)
+  await assert.rejects(pending, error => error === reason)
+  assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH')
+  await assert.rejects(async () => runMergeCommand(process.execPath, [], { signal: controller.signal }), error => error === reason)
+ } finally { await rm(root, { recursive: true, force: true }) }
 })

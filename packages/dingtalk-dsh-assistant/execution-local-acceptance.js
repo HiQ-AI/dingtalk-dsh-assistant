@@ -106,14 +106,14 @@ export function acceptanceProcessesAlive(owned, current) {
 async function processSnapshot(launchedAt) {
   return JSON.parse(await powershell(`$ErrorActionPreference='Stop'; ConvertTo-Json -InputObject @(Get-CimInstance Win32_Process | Where-Object { !$_.CreationDate -or ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() -ge ${launchedAt} } | ForEach-Object { [pscustomobject]@{pid=[int]$_.ProcessId; parent=[int]$_.ParentProcessId; born=$(if($_.CreationDate){([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds()}else{$null})} }) -Compress`, 1024 * 1024))
 }
-function launch(command, { directory, env, input, signal, timeoutMs, service = false }) {
+function launch(command, { directory, env, input, signal, service = false }) {
   const launchedAt = Date.now()
   const child = spawn(command.executable, command.args, { cwd: directory, env, shell: false, windowsHide: true,
     detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })
-  let closed = false, closedAt = null, reason = null, bytes = 0, timer, stopPromise
+  let closed = false, closedAt = null, reason = null, stopPromise
   const chunks = []
-  let finish
-  const completion = new Promise(resolveDone => { finish = resolveDone })
+  let finish, rejectCompletion
+  const completion = new Promise((resolveDone, reject) => { finish = resolveDone; rejectCompletion = reject })
   const stop = () => stopPromise ??= (async () => {
     if (!child.pid) return closed
     // Windows 保留已退出父进程的 PID；复用同一个数值不能继承旧进程的子孙。
@@ -133,32 +133,31 @@ function launch(command, { directory, env, input, signal, timeoutMs, service = f
     if (!stopped || !closed) return false
     return gone()
   })()
-  const cancel = code => { reason ??= code; void stop().catch(() => {}) }
+  const cancel = code => {
+    reason ??= code
+    void stop().then(stopped => { if (!stopped) rejectCompletion(Object.assign(executionError(PREFIX + 'COMMAND_DRAIN_UNCONFIRMED'), { executionDrained: false })) }, error => rejectCompletion(error))
+  }
   const abort = () => cancel('CANCELLED')
   const complete = code => {
     if (closed) return
-    closed = true; closedAt = Date.now(); clearTimeout(timer); signal?.removeEventListener('abort', abort)
+    closed = true; closedAt = Date.now(); signal?.removeEventListener('abort', abort)
     finish({ code, reason, stdout: service ? '' : Buffer.concat(chunks).toString('utf8') })
   }
   child.once('error', () => { reason ??= 'COMMAND_FAILED'; complete(null) })
   child.once('close', complete)
   for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => {
-    // 常驻服务日志持续排空且不留存；输出上限只约束返回 JSON 的短命令。
-    if (service) return
-    bytes += chunk.length
-    if (bytes > 65536) cancel('OUTPUT_LIMIT')
-    else if (stream === child.stdout) chunks.push(chunk)
+    // 持续排空服务与诊断 stderr；业务 stdout 保留完整结果，不能因输出量终止命令。
+    if (!service && stream === child.stdout) chunks.push(chunk)
   })
   child.stdin.on('error', () => {})
   child.stdin.end(JSON.stringify(input) + '\n')
   signal?.addEventListener('abort', abort, { once: true })
   if (signal?.aborted) abort()
-  timer = setTimeout(() => cancel('TIMEOUT'), timeoutMs)
   return { child, completion, stop, get closed() { return closed }, get reason() { return reason } }
 }
 async function run(command, context) {
   const process = launch(command, context)
-  const result = await bounded(process.completion, context.timeoutMs + 22000)
+  const result = await process.completion
   if (!result) fail('COMMAND_DRAIN_UNCONFIRMED')
   // 即使命令正常退出，也回读子孙进程；不能让遗留写入越过清理收据。
   let stopped
@@ -176,24 +175,24 @@ export function createLocalAcceptanceRunner({ root, config }) {
   if (config === undefined || config === null) return undefined
   const settings = structuredClone(config)
   const generated = settings.generatedOutputDirectories ?? []
-  if (!Array.isArray(generated) || generated.length > 16 || generated.some(path => typeof path !== 'string'
+  if (!Array.isArray(generated) || generated.some(path => typeof path !== 'string'
     || !/^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*$/.test(path)
     || path.split('/').some(part => ['.', '..', '.git'].includes(part.toLowerCase())))
     || new Set(generated.map(path => path.toLowerCase())).size !== generated.length) fail('CONFIG_INVALID')
   const generatedNames = generated.map(path => path.toLowerCase())
   if (settings.instructions !== undefined && (typeof settings.instructions !== 'string' || settings.instructions.length > 8000)) fail('CONFIG_INVALID')
   if (!isAbsolute(root ?? '') || !plain(settings) || !text(settings.version) || !isAbsolute(settings.sharedDataProfilePath ?? '')
-    || !Array.isArray(settings.prepareSteps) || settings.prepareSteps.length > 8 || !settings.prepareSteps.every(commandValid)
+    || !Array.isArray(settings.prepareSteps) || !settings.prepareSteps.every(commandValid)
     || !commandValid(settings.service) || !settings.service.args.some(arg => arg.includes('{port}'))
     || !settings.service.args.some(arg => arg.includes('127.0.0.1')) || typeof settings.service.readyPath !== 'string'
     || !/^\/(?!\/)[^\r\n#]*$/.test(settings.service.readyPath) || settings.service.readyPath.includes('\\')
-    || !Array.isArray(settings.scenarios) || !settings.scenarios.length || settings.scenarios.length > 32
+    || !Array.isArray(settings.scenarios) || !settings.scenarios.length
     || settings.scenarios.some(item => !commandValid(item) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(item.id ?? '') || !text(item.description))
     || new Set(settings.scenarios.map(item => item.id)).size !== settings.scenarios.length
     || !commandValid(settings.cleanup) || !commandValid(settings.verifyCleanup)
-    || !Number.isSafeInteger(settings.timeoutMs) || settings.timeoutMs < 1000 || settings.timeoutMs > 2400000) fail('CONFIG_INVALID')
+    || settings.timeoutMs !== undefined) fail('CONFIG_INVALID')
   const companions = settings.companionServices ?? []
-  if (!Array.isArray(companions) || companions.length > 4 || new Set(companions.map(item => item?.id)).size !== companions.length
+  if (!Array.isArray(companions) || new Set(companions.map(item => item?.id)).size !== companions.length
     || companions.some(item => !commandValid(item) || !/^[a-z][a-z0-9-]{0,31}$/.test(item.id ?? '') || !isAbsolute(item.artifactPath ?? '')
       || !/^[a-f0-9]{64}$/.test(item.artifactSha256 ?? '') || !item.args.includes(item.artifactPath)
       || !item.args.some(arg => arg.includes('{port}')) || !item.args.some(arg => arg.includes('127.0.0.1'))
@@ -203,10 +202,10 @@ export function createLocalAcceptanceRunner({ root, config }) {
   const identity = executionDigest({ configuration: settings, implementation: readFileImplementation() })
   const roots = resolve(root)
   function validatePlan(plan) {
-    if (!plain(plan) || !Array.isArray(plan.cases) || !plan.cases.length || plan.cases.length > 32
+    if (!plain(plan) || !Array.isArray(plan.cases) || !plan.cases.length
       || plan.cases.some(item => !plain(item) || !text(item.criterionId) || !scenarios.some(scenario => scenario.id === item.scenarioId)
-        || !text(item.expected) || !Array.isArray(item.steps) || !item.steps.length || item.steps.length > 32 || !item.steps.every(text) || !plain(item.parameters))
-      || new Set(plan.cases.map(item => item.criterionId)).size !== plan.cases.length || Buffer.byteLength(JSON.stringify(plan)) > 65536) fail('PLAN_INVALID')
+        || !text(item.expected) || !Array.isArray(item.steps) || !item.steps.length || !item.steps.every(text) || !plain(item.parameters))
+      || new Set(plan.cases.map(item => item.criterionId)).size !== plan.cases.length) fail('PLAN_INVALID')
   }
   function paths(prepared) {
     if (!prepared || !/^[a-f0-9]{64}$/.test(prepared.identity ?? '')) fail('PREPARED_INVALID')
@@ -252,7 +251,7 @@ export function createLocalAcceptanceRunner({ root, config }) {
       if (!text(taskId) || !text(runId) || !Number.isSafeInteger(generation) || generation < 1 || !/^uat[1-9]$/.test(uatEnvironment ?? '')) fail('CONTEXT_INVALID')
       const profileDigest = executionDigest(await profile())
       for (const companion of companions) await checkCompanionArtifact(companion)
-      const snapshot = await readCandidate(candidate)
+      const snapshot = await readCandidate(candidate, { signal })
       if (candidate.generation !== generation) fail('CANDIDATE_MISMATCH')
       const planDigest = executionDigest(plan), runIdentity = executionDigest({ runner: identity, candidate: candidate.digest, planDigest, taskId, runId, generation, uatEnvironment })
       const manifest = []
@@ -302,27 +301,26 @@ export function createLocalAcceptanceRunner({ root, config }) {
         baseUrl: null, passed: false, checks: [], phases: [], cleanup: { dataCleaned: false, processStopped: true } }
       let service, environment, failure, context, cleanupCompleted = false
       const companionProcesses = []
-      const deadline = Date.now() + settings.timeoutMs
       const phase = async (id, title, work) => {
         const start = Date.now(), record = { id, title, status: 'failed', elapsedMs: 0 }; result.phases.push(record)
         try { const value = await work(); record.status = 'succeeded'; return value }
         catch (error) { if (error.inspectionFailure) { record.inspectionFailure = error.inspectionFailure; result.inspectionFailure = error.inspectionFailure } throw error }
         finally { record.elapsedMs = Date.now() - start }
       }
-      const remaining = () => { signal?.throwIfAborted(); const value = deadline - Date.now(); if (value <= 0) fail('TIMEOUT'); return value }
+      const checkCancellation = () => signal?.throwIfAborted()
       try {
         environment = await profile()
         if (executionDigest(environment) !== prepared.profileDigest) fail('DATA_PROFILE_CHANGED')
         const port = await freePort(); result.baseUrl = `http://127.0.0.1:${port}`
         context = { namespace: prepared.namespace, baseUrl: result.baseUrl, uatEnvironment: prepared.uatEnvironment, plan: prepared.plan }
         if (companions.length) { context.services = {}; result.services = context.services }
-        const commandContext = () => ({ directory: prepared.directory, env: { ...process.env, ...environment }, input: context, signal, timeoutMs: remaining() })
+        const commandContext = () => ({ directory: prepared.directory, env: { ...process.env, ...environment }, input: context, signal })
         const ready = async (process, port, readyPath) => {
           while (true) {
-            remaining()
+            checkCancellation()
             if (process.closed || process.reason) fail('SERVICE_EXITED')
             let response
-            try { response = await fetch(new URL(readyPath, `http://127.0.0.1:${port}`), { redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(Math.min(2000, remaining())), ...(signal ? [signal] : [])]) }) } catch { /* 就绪前只做无凭据 HTTP 轮询。 */ }
+            try { response = await fetch(new URL(readyPath, `http://127.0.0.1:${port}`), { redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(2000), ...(signal ? [signal] : [])]) }) } catch { /* 就绪前只做无凭据 HTTP 轮询。 */ }
             if (response) {
               await response.body?.cancel()
               if (response.ok) {
@@ -330,7 +328,7 @@ export function createLocalAcceptanceRunner({ root, config }) {
                 return
               }
             }
-            await pause(Math.min(250, remaining()))
+            await pause(250)
           }
         }
         await phase('prepare', '准备本地验收环境', async () => { for (const command of settings.prepareSteps) await run(command, commandContext()) })
@@ -339,13 +337,14 @@ export function createLocalAcceptanceRunner({ root, config }) {
           await phase(`start-${companion.id}`, `启动本地依赖服务 ${companion.id}`, async () => {
             await checkCompanionArtifact(companion)
             let companionPort
-            for (let attempt = 0; attempt < 8; attempt++) {
+            while (!companionPort) {
+              signal?.throwIfAborted()
               const allocated = await freePort()
-              if (allocated !== port && companionProcesses.every(item => item.port !== allocated)) { companionPort = allocated; break }
+              if (allocated !== port && companionProcesses.every(item => item.port !== allocated)) companionPort = allocated
+              else await pause(250)
             }
-            if (!companionPort) fail('SERVICE_PORT_UNAVAILABLE')
             const process = launch({ ...companion, args: companion.args.map(arg => arg.replaceAll('{port}', String(companionPort))) },
-              { ...commandContext(), signal: undefined, timeoutMs: remaining() + 120000, service: true })
+              { ...commandContext(), signal: undefined, service: true })
             companionProcesses.push({ id: companion.id, process, port: companionPort })
             result.cleanup.processStopped = false
             context.services[companion.id] = { baseUrl: `http://127.0.0.1:${companionPort}`, artifactSha256: companion.artifactSha256 }
@@ -355,7 +354,7 @@ export function createLocalAcceptanceRunner({ root, config }) {
         await phase('start', '启动本地候选服务', async () => {
           // 取消业务用例后仍给 finally 留出清理 API 的服务窗口；最终始终核对停止结果。
           service = launch({ ...settings.service, args: settings.service.args.map(arg => arg.replaceAll('{port}', String(port))) },
-            { ...commandContext(), signal: undefined, timeoutMs: remaining() + 120000, service: true })
+            { ...commandContext(), signal: undefined, service: true })
           result.cleanup.processStopped = false
           await ready(service, port, settings.service.readyPath)
         })
@@ -383,7 +382,7 @@ export function createLocalAcceptanceRunner({ root, config }) {
         if (environment && context) {
           try {
             await phase('cleanup', '清理任务验收数据', async () => {
-              const cleanupContext = { directory: prepared.directory, env: { ...process.env, ...environment }, input: context, timeoutMs: 30000 }
+              const cleanupContext = { directory: prepared.directory, env: { ...process.env, ...environment }, input: context }
               await run(settings.cleanup, cleanupContext)
               cleanupCompleted = true
             })
@@ -403,7 +402,7 @@ export function createLocalAcceptanceRunner({ root, config }) {
           try {
             await phase('verify-cleanup', '回读共享 UAT 数据清理结果', async () => {
               // 服务停止后直接读共享数据库，避免服务后台任务在清理核对后再次写入。
-              const raw = await run(settings.verifyCleanup, { directory: prepared.directory, env: { ...process.env, ...environment }, input: context, timeoutMs: 30000 })
+              const raw = await run(settings.verifyCleanup, { directory: prepared.directory, env: { ...process.env, ...environment }, input: context })
               let receipt; try { receipt = JSON.parse(raw) } catch { fail('CLEANUP_UNCONFIRMED') }
               if (receipt.namespace !== prepared.namespace || receipt.empty !== true) fail('CLEANUP_UNCONFIRMED')
               if (receipt.mode !== undefined || receipt.createdResources !== undefined) {

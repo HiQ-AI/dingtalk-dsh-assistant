@@ -176,7 +176,9 @@ export async function apply(ctx, config = {}) {
         }
         if (!messageId) return undefined
         const observed = await dwsAdapter.readMessage(notification.payload.conversationId, messageId)
-        if (!sameDeliveredText(observed.text, notification.payload.text, !!notification.payload.sourceMessageId) || (observed.conversationId && observed.conversationId !== notification.payload.conversationId)) return undefined
+        const quoted = notification.payload.sourceMessageId && observed.quotedMessage?.messageId === notification.payload.sourceMessageId
+          && observed.quotedMessage?.conversationId === notification.payload.conversationId ? observed.quotedMessage : null
+        if (!sameDeliveredText(observed.text, notification.payload.text, quoted) || (observed.conversationId && observed.conversationId !== notification.payload.conversationId)) return undefined
         return { messageId, conversationId: notification.payload.conversationId, observedAt: new Date().toISOString() }
       },
     },
@@ -219,6 +221,13 @@ export async function apply(ctx, config = {}) {
       if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
       return workflow.submitWebTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
     }
+    runtime.retryWorkflowInvestigation = args => workflow.retryInvestigation(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.repairWorkflowStageAuthorizations = args => workflow.repairStageAuthorizations(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.reassessWorkflowReadonly = args => workflow.reassessReadonly(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.retryWorkflowOwner = args => workflow.retryOwner(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.deleteWorkflowTask = args => workflow.deleteCancelledTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.retryWorkflowReadonlyAnswer = args => workflow.retryReadonlyAnswer(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.retryWorkflowMaterialRequest = args => workflow.retryMaterialRequest(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.resumeWorkflowRequest = args => {
       if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')
       return workflow.resumeRequest(args, { channel: 'web', actorId: workflowConfig.webActorId })

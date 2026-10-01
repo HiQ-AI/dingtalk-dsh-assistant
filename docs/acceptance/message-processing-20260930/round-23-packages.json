@@ -1,0 +1,17 @@
+[
+  {
+    "proof": {
+      "verifiedFiles": 99,
+      "sha256": "9f58016c52f46201155cbbbdd94eff19d7d9cd46754a31bca38fc1a5719f30ca"
+    },
+    "package": "D:/dsh_home/packages/zzusp-dingtalk-dsh-assistant-1.0.0-message-material-9f58016c52f4.tgz"
+  },
+  {
+    "package": "D:\\dsh_home\\packages\\zzusp-dingtalk-dsh-observer-1.0.0-message-repair-69fc1d14e7ff.tgz",
+    "bytes": 36157,
+    "proof": {
+      "verifiedFiles": 4,
+      "sha256": "69fc1d14e7ff5fdf48d2d36a3b309766ed506784c0b647def68d4f2ed5d80d53"
+    }
+  }
+]

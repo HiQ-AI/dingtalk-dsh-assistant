@@ -1,0 +1,55 @@
+case,round,status,scenario,evidence,boundary
+A01,17,PASS,原 #114/#115 snapshot，短正文长引用、多字节中文,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A02,17,PASS,R 返回不存在资源引用,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A03,17,PASS,79 候选、合法分页、跨页相似目标,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A04,17,PASS,Excel 审核状态与旧 Task 进度查询并存,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A05,17,PASS,数值时间/本地日期/ISO 混合、乱序回补,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A06,17,PARTIAL,文件→请求、引用文件、两份同系列表格,round-17.md; round-2/observer-waits-checks.json,隔离测试通过；真实Excel文件业务读取未验证
+A07,17,PASS,点名问候、普通闲聊、问候混合任务,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A08,17,PASS,内部等待、必要人工补充、容量失败、范围屏障,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A09,17,PASS,Task 已接纳但模型 replyPolicy=none,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A10,17,PASS,通知 ACK 丢失/进程重启/来源变化,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A11,17,PASS,连续无重新点名的补充、换人插话、第三方批准,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A12,17,PASS,#114→#115，先 2 条后 69 条,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A13,17,PASS,其他消息尚未归类、精准取消/审批回复,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A14,17,NOT_RUN,回查原七条消息,round-17.md; round-2/observer-waits-checks.json,真实源消息仅只读回查；恢复及渠道外发未执行
+A15,17,PASS,A 长期缺材料，B 被证据证明独立,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A16,17,PASS,同事项新补充在意图判断中到达,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A17,17,PASS,补充/取消与意图接纳、command claim、operation claim 并发,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A18,17,PASS,无引用且指代不明、可能涉及多个 Task,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A19,17,PASS,其他话题持续输入、内部 R 或模型故障,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A20,17,PASS,同一消息两个独立事项，其中一个缺材料,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A21,17,PASS,等待读取游标过程中重启,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A22,17,PASS,已回答缺口、随后无引用补充或多人插话,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A23,17,PASS,Task 落账前后进程中断、承接通知失败,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A24,17,PASS,用户明确静默与仅禁止业务通知,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A25,17,PASS,旧通知待发时收到任务修订/取消,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A26,17,PASS,无执行权参与者补充有效业务事实,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A27,17,PASS,当前目录变化、未知引用、多轮相关/无关判断变化,round-17.md; round-2/observer-waits-checks.json,隔离控制库/受控替身验证；真实渠道统一见A14
+A28,17,PARTIAL,现有记录升级、升级中断、运行版本错配,round-17.md; round-2/observer-waits-checks.json,迁移、强杀回滚与旧worker拒绝隔离通过；正式库未迁移
+A06,18,PARTIAL,两份Excel原消息附件身份,round-18.md,真实DWS回读已补齐；Excel内容读取待任务验证
+A14,18,FAIL,原七条受控恢复,round-18.md,四条已重处理但历史Owner通知事件冲突阻断发送；进入维护修复
+A28,18,PASS,正式schema6迁移及双包部署,round-18.md,备份迁移安装旧历史认证Web通过；业务重放另记A14
+A08,19,PASS,真实等待及系统失败告知,round-19.md,通知已独立回读送达；业务承接仍见A14
+A14,19,FAIL,继续原消息重放,round-19.md,首次模型领取前排队耗尽窗口；进入维护修复
+A14,20,FAIL,真实重放与重试调度,round-20.md,首次领取已修复；模型失败后排队仍耗尽下一次领取窗口
+A14,21,FAIL,历史配置下的原版本恢复,round-21.md,恢复已推进；lease误读旧20秒策略而Host60秒导致结果拒绝
+A14,22,FAIL,完整消息链路真实重放,round-22.md,当前Host时限生效；原xlsx读取不受支持阻断业务派发
+A14,23,FAIL,工作簿到执行链正式恢复,round-23.md,正式包读取原工作簿通过；恢复入口固定来源版本次数上限阻止原消息续跑
+A14,24,FAIL,完整原材料真实模型重放,round-24.md,受控恢复成功且工作簿正文入账；R连续不完整输出及超时后耗尽恢复，进入同输入隔离复现
+A14,25,FAIL,原生模型修复后的完整业务重放,round-25.md,完整R及1068972字节IB通过；只读答案附件范围拒绝且连续交办拆为两个Task待修
+A14,26,FAIL,附件与连续交办受控恢复,round-26.md,隔离合同通过；精确部署与原任务恢复及真实通知尚未完成
+A14,27,FAIL,Task调查完整附件范围,round-27.md,原Task已启动且工具可纠正；Task侧材料来源scope仍遗漏待修
+A14,28,FAIL,Owner当前材料事实与受管再评估,round-28.md,合同通过；实际附件读取和渠道验证受DWS登录态失效阻塞待复验
+A14,29,FAIL,Owner有效动作与应用失败等待通知,round-29.md,实际非法修复动作已定位；受管恢复及通知待验收
+A14,30,FAIL,群聊受话者与简洁进度及重复实体清理,round-30.md,主代理三组129/19/46定向回归通过及渠道清理已回读；真实启动定义漂移仍修复中
+A14,31,FAIL,常驻协调唯一入口与真实批次重放,round-31.md,189服务86账本172组合33原生协调通过；清理与上下文重置已部署；补充可选字段落账修复后PID33980恢复同批来源；新Task四材料及渠道实际验收中
+A06,32,PASS,原两Excel与后发SQL完整材料及同Task读取权限,round-32.md,真实四材料完整冻结及摘要核验；业务生产审批与写入未执行
+A14,36,FAIL,事项通知与真实业务停止,round-36.md,137组合及控制11通过；三错误回复撤回回读0；原业务被群内明确结束未取得完整验收
+A29,37,PASS,持续无步数时长次数截止与80节点完整Run,round-37.md,隔离实际控制账与会话测试；外部服务故障不保证零等待
+A30,37,PASS,同条件不高频重试与持久退避原节点恢复,round-37.md,原生控制账重开及自动调度；成功前缀不重复
+A31,37,PASS,大材料候选业务结果及验收计划完整接纳,round-37.md,17MiB真实Git文件与80标准40步骤及2MiB完整进程输出
+A32,37,PASS,取消和未发送PR恢复及未知效果禁止重放,round-37.md,真实子进程和受控CLI；未进行真实GitHub写入
+A33,37,PASS,schema7无备份离线升级及业务行摘要守恒,round-37.md,实际控制库独立完整性及原消息回读；无旧任务重建
+A34,37,PASS,精确包新进程认证Web及解除维护,round-37.md,121文件回读PID24384维护282健康0恢复问题；不是生产业务闭环
+A14,37,FAIL,原生产业务完整目标,round-37.md,原业务已被明确结束且历史任务已授权清理；本轮不重放生产操作

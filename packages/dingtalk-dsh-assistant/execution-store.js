@@ -8,7 +8,6 @@ if (!Object.hasOwn(process, incarnationKey)) Object.defineProperty(process, inca
 const processIncarnation = process[incarnationKey]
 
 const MAX_PENDING = 64
-const MAX_MESSAGE_BYTES = 256 * 1024
 const REQUEST_TIMEOUT_MS = 10_000
 const error = (code, message = code) => Object.assign(new Error(message), { code })
 const deserializeError = value => Object.assign(new Error(value.message), value)
@@ -36,21 +35,16 @@ export async function openExecutionStore(options) {
   const pending = new Map()
   const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject })
   const exited = new Promise(resolve => { resolveExit = resolve })
-  const startupTimer = setTimeout(() => {
-    unavailable(error('STORE_START_TIMEOUT'))
-    void worker.terminate()
-  }, REQUEST_TIMEOUT_MS)
+  // 启动等待 worker 的真实 ready/fatal/error/exit；完整性校验耗时不是提交结果未知。
 
   function unavailable(cause) {
     healthy = false
-    clearTimeout(startupTimer)
     rejectReady(cause)
     for (const item of pending.values()) { clearTimeout(item.timer); item.reject(cause) }
     pending.clear()
   }
   worker.on('message', message => {
     if (message.type === 'ready') {
-      clearTimeout(startupTimer)
       healthy = true
       info = Object.freeze(message.info)
       resolveReady()
@@ -80,9 +74,7 @@ export async function openExecutionStore(options) {
   async function rpc(action, value) {
     if (!healthy || closed || (closing && action !== 'close')) throw error('STORE_UNAVAILABLE')
     if (pending.size >= MAX_PENDING) throw error('STORE_QUEUE_FULL')
-    let bytes
-    try { bytes = Buffer.byteLength(JSON.stringify(value ?? null)) } catch { throw error('INVALID_REQUEST') }
-    if (bytes > MAX_MESSAGE_BYTES) throw error('STORE_REQUEST_TOO_LARGE')
+    try { JSON.stringify(value ?? null) } catch { throw error('INVALID_REQUEST') }
     const requestId = ++nextId
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {

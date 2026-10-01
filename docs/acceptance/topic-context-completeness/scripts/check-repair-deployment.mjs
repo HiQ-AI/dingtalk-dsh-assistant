@@ -1,16 +1,80 @@
 import { DatabaseSync } from 'node:sqlite'
-import { readFileSync,readdirSync } from 'node:fs'
+import { readFileSync,readdirSync,realpathSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join, dirname } from 'node:path'
+import { createRequire } from 'node:module'
+import { createInterface } from 'node:readline'
+import { migrateMessageImpact, verifyMessageImpact } from '../../../../scripts/migrate-message-impact.js'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
 import { maintenanceStatus } from '../../../../packages/dingtalk-dsh-assistant/execution-maintenance.js'
 import { copyDeploymentTaskDirectory, checkDeploymentTaskDirectory, verifyDeploymentBackup, reverifyDeploymentBackup, verifyDeploymentWeb, checkpointDeploymentDatabase } from '../../../../scripts/deployment-integrity.mjs'
+const adapterName='@deepseek-ai/dsh-llm-pi-ai'
+const fileHash=bytes=>createHash('sha256').update(bytes).digest('hex')
+export function adapterResolution(profileRoot) {
+ const profileRequire=createRequire(join(profileRoot,'package.json'))
+ const providerEntry=realpathSync(profileRequire.resolve('dsh-codex-connect'))
+ const adapterEntry=realpathSync(createRequire(providerEntry).resolve(adapterName))
+ const root=dirname(dirname(adapterEntry)),manifest=JSON.parse(readFileSync(join(root,'package.json'),'utf8'))
+ if(manifest.name!==adapterName||manifest.main!=='lib/index.js')throw Error('ADAPTER_IDENTITY_INVALID')
+ return {providerEntry,adapterEntry,root,version:manifest.version,entrySha256:fileHash(readFileSync(adapterEntry))}
+}
+export function verifyAdapterPackage({packagePath,sourceRoot,profileRoot}) {
+ const listing=spawnSync('tar',['-tf',packagePath],{encoding:'utf8',windowsHide:true})
+ if(listing.status!==0)throw Error('ADAPTER_PACKAGE_UNREADABLE')
+ const names=listing.stdout.trim().split(/\r?\n/)
+ if(new Set(names).size!==names.length||names.some(name=>!/^package\/(?:lib\/[\w./-]+|package\.json|README[\w.-]*|LICENSE)$/.test(name)||name.includes('..')))throw Error('ADAPTER_PACKAGE_FILE_INVALID')
+ if(!names.includes('package/lib/index.js')||!names.includes('package/package.json'))throw Error('ADAPTER_PACKAGE_ENTRY_MISSING')
+ const installed=profileRoot?adapterResolution(profileRoot):null
+ let manifest
+ for(const name of names){
+  const packed=spawnSync('tar',['-xOf',packagePath,name],{windowsHide:true,maxBuffer:32*1024*1024})
+  if(packed.status!==0)throw Error('ADAPTER_PACKAGE_EXTRACT_FAILED')
+  const relative=name.slice(8)
+  if(relative==='package.json'){
+   manifest=JSON.parse(packed.stdout)
+   const source=JSON.parse(readFileSync(join(sourceRoot,relative),'utf8'))
+   if(manifest.name!==adapterName||manifest.version!==source.version||manifest.name!==source.name||manifest.main!=='lib/index.js')throw Error('ADAPTER_PACKAGE_IDENTITY_MISMATCH')
+  }else if(fileHash(packed.stdout)!==fileHash(readFileSync(relative==='LICENSE'?resolve(sourceRoot,'../../..','LICENSE'):join(sourceRoot,relative))))throw Error('ADAPTER_SOURCE_MISMATCH:'+relative)
+  if(installed&&fileHash(packed.stdout)!==fileHash(readFileSync(join(installed.root,relative))))throw Error('ADAPTER_PROVIDER_RESOLUTION_MISMATCH:'+relative)
+ }
+ return {verified:true,packageName:adapterName,version:manifest.version,sha256:fileHash(readFileSync(packagePath)),verifiedFiles:names.length,...(installed?{resolution:installed}:{})}
+}
+export async function holdDeploymentOwnerLock({dbPath,input=process.stdin,writeLine=line=>console.log(line)}) {
+ const db=new DatabaseSync(dbPath,{readOnly:true})
+ try {
+  const owner=new DatabaseSync(dbPath+'.owner.sqlite')
+  try{
+   owner.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');writeLine('LOCKED')
+   let migrated=false
+   for await(const line of createInterface({input})){
+    if(line!=='migrate-message-impact'||migrated)throw Error('DEPLOY_LOCK_COMMAND_INVALID')
+    const state=maintenanceStatus(db)
+    if(!state.active||state.phase!=='stopping'||!state.drained)throw Error('MIGRATION_MAINTENANCE_REQUIRED')
+    const writeDb=new DatabaseSync(dbPath)
+    try{
+     const proof=migrateMessageImpact(writeDb,{path:dbPath,mode:'execute'})
+     const readback=new DatabaseSync(dbPath,{readOnly:true})
+     try{verifyMessageImpact(readback,{baseline:proof.baseline})}finally{readback.close()}
+     writeLine(JSON.stringify(proof));migrated=true
+    }finally{writeDb.close()}
+   }
+  }
+  finally{try{owner.exec('ROLLBACK')}catch{}owner.close()}
+
+ }finally{db.close()}
+}
+async function main(){
 const root='D:/dsh_home/workflows/runtime-v2',db=new DatabaseSync(root+'/control.sqlite',{readOnly:true})
 const hash=b=>createHash('sha256').update(b).digest('hex'),digest=v=>hash(JSON.stringify(v))
 const [mode,arg,source,installed]=process.argv.slice(2)
 try {
- if(mode==='task-directory-check'){
+ if(mode==='adapter-package'){
+  console.log(JSON.stringify(verifyAdapterPackage({packagePath:arg,sourceRoot:source,profileRoot:installed||undefined})))
+ }else if(mode==='adapter-current'){
+  console.log(JSON.stringify(adapterResolution(arg)))
+ }else if(mode==='task-directory-check'){
   console.log(JSON.stringify(await checkDeploymentTaskDirectory({dbPath:root+'/control.sqlite',taskDirectory:arg||undefined})))
  }else if(mode==='task-directory-copy'){
   console.log(JSON.stringify(await copyDeploymentTaskDirectory({taskDirectory:arg,destination:source})))
@@ -29,10 +93,12 @@ try {
   console.log(JSON.stringify(await verifyDeploymentWeb(arg)))
  }else if(mode==='maintenance'){
   db.exec('BEGIN');try{console.log(JSON.stringify(maintenanceStatus(db)))}finally{db.exec('ROLLBACK')}
+ }else if(mode==='message-impact-verify'){
+  const receipt=JSON.parse(readFileSync(arg,'utf8'))
+  if(!receipt.verified||receipt.version!==6||!receipt.baseline)throw Error('MIGRATION_RECEIPT_INVALID')
+  db.exec('BEGIN');try{console.log(JSON.stringify(verifyMessageImpact(db)))}finally{db.exec('ROLLBACK')}
  }else if(mode==='lock'){
-  const owner=new DatabaseSync(root+'/control.sqlite.owner.sqlite')
-  try{owner.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');console.log('LOCKED');process.stdin.resume();await new Promise(resolve=>process.stdin.once('end',resolve))}
-  finally{try{owner.exec('ROLLBACK')}catch{}owner.close()}
+  await holdDeploymentOwnerLock({dbPath:root+'/control.sqlite'})
  }else if(mode==='snapshot'||mode==='verify') {
   db.exec('BEGIN')
   const tasks=db.prepare('SELECT task_id FROM business_tasks UNION SELECT task_id FROM execution_runs ORDER BY task_id').all().map(x=>x.task_id)
@@ -69,3 +135,6 @@ try {
   console.log(JSON.stringify({verifiedFiles:files.length,sha256:hash(readFileSync(arg))}))
  }else throw Error('INVALID_MODE')
 }catch(error){console.error(error.message);process.exitCode=1}finally{db.close()}
+
+}
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)await main()

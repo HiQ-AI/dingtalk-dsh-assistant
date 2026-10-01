@@ -9,6 +9,18 @@ import { createAgentDatabaseReadCapability } from '../packages/dingtalk-dsh-assi
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 const binding={kind:'message-unit',runId:'r',unitId:'u',inputVersion:1,inputDigest:'a'.repeat(64),sessionId:'s',leaseEpoch:1,sessionBound:true}
 async function fixture(t){const root=await mkdtemp(join(tmpdir(),'agent-query-'));t.after(()=>rm(root,{recursive:true,force:true}));await mkdir(join(root,'docs'));await writeFile(join(root,'docs','a.md'),'hello project\npassword: hidden\n');const artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true});const capability=createAgentResourceReadCapability({resources:[{id:'docs',kind:'files',root,paths:['docs']}]});return{root,artifacts,capability}}
+test('生产查询只接受实时只读副本，角色目录权限不误判；主库和可写事务均拒绝',async()=>{
+ const resource={id:'production',connectionId:'slave',environment:'production',tables:[{schema:'public',table:'sample',columns:['id']}]}
+ let replica=true,readonly='on',businessReads=0
+ const client={async query(q){const text=typeof q==='string'?q:q.text;if(text.includes('pg_is_in_recovery'))return{rows:[{in_recovery:replica}]};if(text==='SHOW transaction_read_only')return{rows:[{transaction_read_only:readonly}]};if(typeof q==='object'){businessReads++;return{rows:[{id:1}]}}return{rows:[]}},async end(){}}
+ const capability=createAgentDatabaseReadCapability({resources:[resource],connectDatabase:async()=>client}),scope={databaseIds:['production']},input={resourceId:'production',operation:'select',table:'public.sample'}
+ assert.equal((await capability.execute({input,scope})).transactionReadOnly,true)
+ assert.equal(businessReads,1)
+ replica=false;await assert.rejects(capability.execute({input,scope}),{code:'QUERY_DATABASE_NOT_READONLY'})
+ replica=true;readonly='off';await assert.rejects(capability.execute({input,scope}),{code:'QUERY_DATABASE_NOT_READONLY'})
+ assert.equal(businessReads,1)
+})
+
 test('真实文件分页/搜索/红线与持久证据绑定；另一发送者/输入代际不可冒用',async t=>{
  const f=await fixture(t),scope={resourceIds:['docs'],subjectId:'person-a'}
  const tools=createAgentQueryTools({capabilities:[f.capability],resolveScope:async()=>scope,artifacts:f.artifacts}),tool=tools[0]
@@ -27,7 +39,8 @@ test('会话安装复用authorize execute verify，并拒绝写能力、权限�
  const f=await fixture(t),scope={resourceIds:[]}
  const [tool]=createAgentQueryTools({capabilities:[f.capability,{effectClass:'file.write'}],resolveScope:async()=>scope,artifacts:f.artifacts})
  await assert.rejects(tool.execute({binding,args:{resourceId:'docs',operation:'list'}}),{code:'QUERY_SCOPE_DENIED'})
- assert.equal(classifyAgentQueryError({code:'QUERY_NOT_FOUND'}),'correctable');assert.equal(classifyAgentQueryError({code:'QUERY_SCOPE_DENIED'}),'fatal')
+ assert.equal(classifyAgentQueryError({code:'QUERY_NOT_FOUND'}),'correctable');assert.equal(classifyAgentQueryError({code:'QUERY_SCOPE_DENIED'}),'correctable')
+ assert.equal(classifyAgentQueryError({code:'QUERY_CAPACITY'}),'correctable')
  assert.equal((await f.capability.verify({input:{resourceId:'docs'},scope:{resourceIds:['docs']},output:{sources:['fake']}})).passed,false)
 })
 test('内置工具可见性只由实际登记且授权的资源决定',async t=>{

@@ -19,7 +19,7 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
  if(!Array.isArray(resources)||typeof connectDatabase!=='function'||new Set(resources.map(r=>r.id)).size!==resources.length)fail('QUERY_DATABASE_CONFIG_INVALID')
  for(const r of resources)if(!r.id||!r.connectionId||!Array.isArray(r.tables)||!r.tables.length||r.tables.some(t=>!identifier(t.schema)||!identifier(t.table)||!Array.isArray(t.columns)||!t.columns.length||t.columns.some(c=>!identifier(c)))
   ||(r.identityPolicy!==undefined&&(r.identityPolicy!=='host-enforced-readonly'||r.environment!=='uat'))
-  ||(r.environment!==undefined&&r.environment!=='uat'))fail('QUERY_DATABASE_CONFIG_INVALID')
+  ||(r.environment!==undefined&&!['uat','production'].includes(r.environment)))fail('QUERY_DATABASE_CONFIG_INVALID')
  const registry=new Map(resources.map(r=>[r.id,structuredClone(r)])),produced=new WeakSet()
  const authorize=async({input,scope})=>registry.has(input.resourceId)&&scope.databaseIds?.includes(input.resourceId)===true
  return {id:'query_readonly_database',effectClass:'read',identity:'agent-db-read-v2:'+executionDigest(resources),description:'查询Host登记数据库的明确表/列，按结构化条件读取最多100行；不接受SQL、连接串或表达式。每次核验只读事务；默认检查只读角色，显式UAT资源由Host约束现有账号。',parameters:agentDatabaseParameters,authorize,
@@ -39,7 +39,10 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
     signal?.throwIfAborted();client=await connectDatabase(resource);signal?.addEventListener('abort',abort,{once:true});signal?.throwIfAborted()
     await client.query('BEGIN READ ONLY');await client.query("SET LOCAL statement_timeout='8000ms'")
     const schemas=[...new Set(resource.tables.map(t=>t.schema))]
-    if(resource.identityPolicy!=='host-enforced-readonly'){
+    // 生产副本的角色目录可保留主库权限；实际不可写性由副本身份和只读事务证明。
+    if(resource.environment==='production'){
+     if((await client.query('SELECT pg_is_in_recovery() AS in_recovery')).rows[0]?.in_recovery!==true)fail('QUERY_DATABASE_NOT_READONLY')
+    }else if(resource.identityPolicy!=='host-enforced-readonly'){
      const role=(await client.query("SELECT rolsuper,rolcreaterole,rolcreatedb,rolreplication,rolbypassrls FROM pg_roles WHERE rolname=current_user")).rows[0]
      if(!role||Object.values(role).some(v=>v===true))fail('QUERY_DATABASE_IDENTITY_NOT_READONLY')
      const rights=(await client.query({text:"SELECT EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname=ANY($1::text[]) AND has_schema_privilege(n.oid,'CREATE')) AS schema_write, EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=ANY($1::text[]) AND c.relkind IN ('r','p','v','f') AND (has_table_privilege(c.oid,'INSERT') OR has_table_privilege(c.oid,'UPDATE') OR has_table_privilege(c.oid,'DELETE') OR has_table_privilege(c.oid,'TRUNCATE') OR has_any_column_privilege(c.oid,'INSERT') OR has_any_column_privilege(c.oid,'UPDATE'))) AS data_write",values:[schemas]})).rows[0]

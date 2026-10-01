@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -36,7 +37,7 @@ test('拒绝伪造候选身份，失败和异常检查不能形成交付资格',
   const verification = await verifyCandidate({ candidate, checks: [{ id: 'failure', version: '1', run: async () => { throw new Error('fixture failure') } }] })
   assert.equal(verification.passed, false); assert.equal(verification.checks[0].log, 'fixture failure')
   await assert.rejects(assertVerifiedCandidate({ candidate, verification, requiredChecks: [{ id: 'failure', version: '1' }] }), { code: 'CANDIDATE_VERIFICATION_UNTRUSTED' })
-  await assert.rejects(verifyCandidate({ candidate, checks: [{ id: 'bad', version: '1', run: async () => ({ passed: true, log: 'x'.repeat(65537) }) }] }), { code: 'CANDIDATE_CHECK_RESULT_INVALID' })
+  await assert.rejects(verifyCandidate({ candidate, checks: [{ id: 'bad', version: '1', run: async () => ({ passed: true, log: { invalid: true } }) }] }), { code: 'CANDIDATE_CHECK_RESULT_INVALID' })
 })
 test('符号链接模式和子模块模式在实际 Git 索引中拒绝', async () => {
   for (const mode of ['120000', '160000']) {
@@ -53,7 +54,7 @@ test('存在执行过滤器或真实 hook 时拒绝准入，未调用其命令',
   await assert.rejects(freezeCandidate(hook), { code: 'CANDIDATE_HOOKS_UNSUPPORTED' })
 })
 
-test('Git batch保留空blob/重复blob/二进制及Unicode路径，返回字节不共享可变缓存', async () => {
+test('Git按需读取保留空blob/重复blob/二进制及Unicode路径，返回字节不共享可变缓存', async () => {
   const args=await fixture(),binary=Buffer.from([0,10,13,255,128,32,0])
   await writeFile(join(args.repository,'中文 空文件.txt'),Buffer.alloc(0));await writeFile(join(args.repository,'a.bin'),binary);await writeFile(join(args.repository,'b.bin'),binary)
   const candidate=await freezeCandidate(args),snapshot=await readCandidate(candidate)
@@ -158,4 +159,30 @@ test('迁移备份去重共享源并创建独立普通副本，源变化不改�
  await chmod(copy, 0o600)
  await writeFile(copy, 'corrupted')
  await assert.rejects(verifyMigrationBackup(result.manifestPath), /MIGRATION_FILE_CHANGED/)
+})
+
+test('候选真实核验超过32项和64KiB日志仍逐项完成且绑定收据身份', async () => {
+  const candidate=await freezeCandidate(await fixture()), executed=[]
+  const checks=Array.from({length:40},(_,index)=>({id:'check-'+index,version:'1',async run(view){
+    executed.push(index); assert.equal((await view.readFile('kept.txt')).toString(),'base')
+    return {passed:true,log:'业务核验记录'.repeat(15000)}
+  }}))
+  const verification=await verifyCandidate({candidate,checks})
+  assert.equal(verification.passed,true);assert.equal(verification.checks.length,40)
+  assert.deepEqual(executed,Array.from({length:40},(_,index)=>index))
+  assert.ok(Buffer.byteLength(verification.checks[0].log)>65536)
+  await assertVerifiedCandidate({candidate,verification,requiredChecks:checks})
+  await assert.rejects(verifyCandidate({candidate,checks:[checks[0],checks[0]]}),{code:'CANDIDATE_CHECKS_INVALID'})
+})
+
+test('超过16MiB文件可冻结且按需读取时独立核验完整blob摘要', async () => {
+  const args=await fixture(),bytes=Buffer.alloc(17*1024*1024,0xa5)
+  await writeFile(join(args.repository,'large.bin'),bytes)
+  const expected=createHash('sha256').update(bytes).digest('hex'),candidate=await freezeCandidate(args)
+  const view=await readCandidate(candidate),file=view.files.find(file=>file.path==='large.bin')
+  assert.equal(file.size,bytes.length)
+  const verification=await verifyCandidate({candidate,checks:[{id:'large',version:'1',async run(snapshot){const actual=await snapshot.readFile('large.bin');return{passed:createHash('sha256').update(actual).digest('hex')===expected,log:expected}}}]})
+  assert.equal(verification.passed,true)
+  const cancelled=new AbortController();cancelled.abort()
+  await assert.rejects(readCandidate(candidate,{signal:cancelled.signal}),{name:'AbortError'})
 })

@@ -1,0 +1,14 @@
+{
+  "checks": [
+    "waiting-responsibilities",
+    "scope-source",
+    "ack-vs-readback",
+    "keyboard-disclosure",
+    "narrow-viewport",
+    "reduced-motion",
+    "empty-refresh"
+  ],
+  "errors": [],
+  "writes": [],
+  "observerSha256": "82256531f5579747555d4f81d3e77f6fa7a63e5277c1087fbb71e52c88ce641b"
+}

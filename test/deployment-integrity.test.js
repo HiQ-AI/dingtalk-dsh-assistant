@@ -153,3 +153,67 @@ test('工程源码副本的node_modules明确排除，复制不遍历链接且�
  await symlink(outside,join(f.taskDirectory,'family-1/outputs/node_modules/unsafe'),'junction')
  await assert.rejects(checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory}),/BACKUP_LINK_UNSAFE/)
 })
+
+test('schema6部署在同一owner锁内迁移，其他owner拒绝且历史证明可独立回读',async t=>{
+  const { PassThrough }=await import('node:stream')
+  const { openExecutionStore }=await import('../packages/dingtalk-dsh-assistant/execution-store.js')
+  const { holdDeploymentOwnerLock }=await import('../docs/acceptance/topic-context-completeness/scripts/check-repair-deployment.mjs')
+  const { verifyMessageImpact }=await import('../scripts/migrate-message-impact.js')
+  const root=await mkdtemp(join(tmpdir(),'deploy-impact-')),dbPath=join(root,'control.sqlite')
+  const store=await openExecutionStore({dbPath,instanceId:'deploy-impact-test',initialize:true})
+  await store.command({id:'receive',kind:'message.receive',args:{runId:'source',sourceKey:'source',sourceVersion:1,conversationId:'g',actorId:'a',body:'原始消息不可改写'}})
+  await store.close()
+  const setup=new DatabaseSync(dbPath)
+  setup.exec("DELETE FROM message_items WHERE kind='impact'; PRAGMA user_version=5; UPDATE execution_meta SET schema_version=5")
+  setup.prepare('INSERT INTO execution_events(kind,payload,created_at) VALUES(?,?,?)').run('runtime.maintenance.changed',JSON.stringify({active:true,phase:'stopping',maintenanceId:'deploy-test'}),new Date().toISOString())
+  setup.close()
+  const input=new PassThrough(),lines=[]
+  let migrated
+  const ready=new Promise(resolve=>{migrated=resolve})
+  const running=holdDeploymentOwnerLock({dbPath,input,writeLine:line=>{lines.push(line);if(line!=='LOCKED')migrated()}})
+  assert.deepEqual(lines,['LOCKED'])
+  const rival=new DatabaseSync(dbPath+'.owner.sqlite')
+  assert.throws(()=>rival.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE'),/locked/)
+  await assert.rejects(holdDeploymentOwnerLock({dbPath,input:new PassThrough(),writeLine:()=>{}}),/locked/)
+  input.write('migrate-message-impact\n')
+  await ready
+  const proof=JSON.parse(lines[1]);assert.equal(proof.verified,true)
+  assert.throws(()=>rival.exec('BEGIN EXCLUSIVE'),/locked/)
+  const readback=new DatabaseSync(dbPath,{readOnly:true})
+  assert.equal(verifyMessageImpact(readback,{baseline:proof.baseline}).verified,true)
+  assert.match(readback.prepare('SELECT body FROM message_runs').get().body,/原始消息不可改写/)
+  readback.close()
+  input.end();await running
+  rival.exec('BEGIN EXCLUSIVE; ROLLBACK');rival.close()
+})
+
+test('Adapter专用包检查零写并核对provider实际解析，旧副本与源漂移拒绝',async()=>{
+  const {execFileSync}=await import('node:child_process')
+  const {verifyAdapterPackage}=await import('../docs/acceptance/topic-context-completeness/scripts/check-repair-deployment.mjs')
+  const root=await mkdtemp(join(tmpdir(),'adapter-deploy-')),staging=join(root,'staging'),source=join(root,'source'),profile=join(root,'profile')
+  await mkdir(join(staging,'package/lib'),{recursive:true})
+  const manifest={name:'@deepseek-ai/dsh-llm-pi-ai',version:'1.0.0',main:'lib/index.js'}
+  await writeFile(join(staging,'package/package.json'),JSON.stringify(manifest))
+  await writeFile(join(staging,'package/lib/index.js'),'export const nativeStop=true')
+  await cp(join(staging,'package'),source,{recursive:true})
+  await writeFile(join(source,'not-packed.ts'),'源码不应进入打包清单对比')
+  const packagePath=join(root,'adapter.tgz')
+  execFileSync('tar',['-czf',packagePath,'-C',staging,'package/package.json','package/lib/index.js'],{windowsHide:true})
+  const before=await readdir(root,{recursive:true})
+  assert.equal(verifyAdapterPackage({packagePath,sourceRoot:source}).verified,true)
+  assert.deepEqual(await readdir(root,{recursive:true}),before)
+  await mkdir(join(profile,'node_modules/dsh-codex-connect/lib'),{recursive:true})
+  await writeFile(join(profile,'package.json'),'{}')
+  await writeFile(join(profile,'node_modules/dsh-codex-connect/package.json'),JSON.stringify({name:'dsh-codex-connect',main:'lib/index.js'}))
+  await writeFile(join(profile,'node_modules/dsh-codex-connect/lib/index.js'),'')
+  await cp(source,join(profile,'node_modules/@deepseek-ai/dsh-llm-pi-ai'),{recursive:true})
+  assert.equal(verifyAdapterPackage({packagePath,sourceRoot:source,profileRoot:profile}).verified,true)
+  const nested=join(profile,'node_modules/dsh-codex-connect/node_modules/@deepseek-ai/dsh-llm-pi-ai')
+  await cp(source,nested,{recursive:true});await writeFile(join(nested,'lib/index.js'),'export const nativeStop=false')
+  // fresh process avoids Node resolver缓存，模拟全新启动后provider选择另一依赖副本。
+  const checker=new URL('../docs/acceptance/topic-context-completeness/scripts/check-repair-deployment.mjs',import.meta.url).href
+  const code=`import {verifyAdapterPackage} from ${JSON.stringify(checker)};verifyAdapterPackage(${JSON.stringify({packagePath,sourceRoot:source,profileRoot:profile})})`
+  assert.throws(()=>execFileSync(process.execPath,['--input-type=module','-e',code],{stdio:'pipe'}),/ADAPTER_PROVIDER_RESOLUTION_MISMATCH/)
+  await writeFile(join(source,'lib/index.js'),'source changed')
+  assert.throws(()=>verifyAdapterPackage({packagePath,sourceRoot:source}),/ADAPTER_SOURCE_MISMATCH/)
+})

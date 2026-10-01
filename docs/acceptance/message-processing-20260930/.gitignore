@@ -1,0 +1,5 @@
+# 公开仓库只保存脱敏摘要；原始群消息及模型/运行输出留在本机。
+*.log
+round-1-evidence.json
+round-*-model.json
+round-*-recovery-preflight.json

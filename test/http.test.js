@@ -427,15 +427,89 @@ test('新版任务归档HTTP仅接受空对象并转交正式工作流，不走�
     archiveTask: () => { throw new Error('LEGACY_NOT_ALLOWED') } } })
 })
 
-test('Web 新任务验收入参接受 16/17/32 条并拒绝超限、空白、超长和非法类型', async () => {
+test('Web 新任务验收入参接受 16/17/32/100 条并拒绝非法字段、空白、超长和非法类型', async () => {
   const received = []
   await withServer(false, async baseUrl => {
     const post = acceptanceCriteria => fetch(`${baseUrl}/tasks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'criteria-boundary', groupId: 'g', title: '验收边界', objective: '目标', context: '创建任务', acceptanceCriteria }) })
-    for (const count of [16, 17, 32]) {
+    for (const count of [16, 17, 32, 100]) {
       assert.equal((await post(Array.from({ length: count }, (_, i) => `条件 ${i}`))).status, 200)
       assert.equal(received.at(-1).acceptanceCriteria.length, count)
     }
-    for (const value of [Array(33).fill('条件'), [], [' '], ['x'.repeat(2001)], [' '.repeat(2000) + 'x'], [42], null, '条件']) assert.equal((await post(value)).status, 400)
-    assert.equal(received.length, 3)
+    for (const value of [[], [' '], ['x'.repeat(2001)], [' '.repeat(2000) + 'x'], [42], null, '条件']) assert.equal((await post(value)).status, 400)
+    assert.equal(received.length, 4)
   }, { overrides: { createTask: async value => { received.push(value); return { taskId: 'created' } } } })
+})
+
+test('只读问答重试仅接收本地精确来源与幂等键，不接受调用者scope',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const url=base+'/workflows/run/commands/answer/retry-readonly'
+  const post=(body,headers={})=>fetch(url,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)})
+  const request={sourceVersion:3,retryKey:'fixed-scope',reason:'读取合同已修复'}
+  assert.equal((await post(request,{origin:'https://untrusted.invalid'})).status,403)
+  assert.equal((await post({...request,scope:{sourceKeys:['other']}})).status,400)
+  assert.equal((await post(request)).status,202)
+  assert.deepEqual(calls,[{...request,runId:'run',commandId:'answer'}])
+ },{overrides:{retryWorkflowReadonlyAnswer:async value=>{calls.push(value);return{accepted:true}}}})
+})
+
+test('Owner恢复API仅接纳本地版本化系统修复请求，不接受新需求或会话',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const post=(body,headers={})=>fetch(base+'/tasks/t/retry-owner',{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)})
+  const request={retryKey:'fixed-reader',reason:'已修复引用反馈',expectedOwnerRevision:8,expectedLeaseEpoch:3,expectedRequirementRevision:1,expectedControlRevision:1,expectedLastFailure:'TASK_OWNER_NO_DECISION'}
+  assert.equal((await post(request,{origin:'https://untrusted.invalid'})).status,403)
+  assert.equal((await post({...request,requirement:{}})).status,400)
+  assert.equal((await post({...request,sessionId:'replacement'})).status,400)
+  assert.equal((await post(request)).status,202)
+  assert.deepEqual(calls,[{...request,taskId:'t'}])
+ },{overrides:{retryWorkflowOwner:async value=>{calls.push(value);return{accepted:true}}}})
+})
+
+test('只读调查恢复API拒绝外域和注入业务输入',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const post=(body,headers={})=>fetch(base+'/tasks/t/retry-investigation',{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)})
+  const request={retryKey:'fixed-scope',reason:'系统修复',runId:'r',nodeRunId:'n',generation:1,runRevision:0,inputDigest:'a'.repeat(64),requirementRevision:1,controlRevision:1,planRevision:1}
+  assert.equal((await post(request,{origin:'https://untrusted.invalid'})).status,403)
+  assert.equal((await post({...request,input:{scope:{sourceKeys:['other']}}})).status,400)
+  assert.equal((await post(request)).status,202)
+  assert.deepEqual(calls,[{...request,taskId:'t'}])
+ },{overrides:{retryWorkflowInvestigation:async value=>{calls.push(value);return{accepted:true}}}})
+})
+
+test('授权投影修复API拒绝外域和新需求字段，确认身份只能由原来源绑定',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const post=(body,headers={})=>fetch(base+'/tasks/t/repair-stage-authorizations',{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)})
+  const request={repairKey:'projection',reason:'修复遗漏投影',expectedRequirementRevision:1,expectedRequirementRef:'old-ref',stageAuthorizations:[{workflowId:'task-data-change',sourceKey:'source',sourceVersion:1,sourceQuote:'验证后执行',objective:'执行',gate:'confirmation'}]}
+  assert.equal((await post(request,{origin:'https://untrusted.invalid'})).status,403)
+  assert.equal((await post({...request,objective:'新需求'})).status,400)
+  assert.equal((await post({...request,stageAuthorizations:[{...request.stageAuthorizations[0],requiredActorId:'other'}]})).status,400)
+  assert.equal((await post(request)).status,202)
+  assert.deepEqual(calls,[{...request,taskId:'t'}])
+ },{overrides:{repairWorkflowStageAuthorizations:async value=>{calls.push(value);return{accepted:true}}}})
+})
+
+test('只读Owner再评估API只接受本机CAS，不接受调用者材料或授权',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const post=(body,headers={})=>fetch(base+'/tasks/t/reassess-readonly',{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)})
+  const request={recoveryKey:'materials',reason:'系统范围已修复',expectedOwnerRevision:3,expectedLeaseEpoch:1,expectedRequirementRevision:1,expectedControlRevision:1}
+  assert.equal((await post(request,{origin:'https://untrusted.invalid'})).status,403)
+  for(const extra of [{materialAccess:{}},{sourceKeys:['other']},{requirementRef:'new'},{actorId:'owner'}])assert.equal((await post({...request,...extra})).status,400)
+  assert.equal((await post(request)).status,202)
+  assert.deepEqual(calls,[{...request,taskId:'t'}])
+ },{overrides:{reassessWorkflowReadonly:async value=>{calls.push(value);return{accepted:true}}}})
+})
+
+test('删除Task接口强制本机身份和显式零写检查参数',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const remove=(body,origin)=>fetch(base+'/tasks/t',{method:'DELETE',headers:{'content-type':'application/json',...(origin?{origin}:{})},body:JSON.stringify(body)})
+  assert.equal((await remove({expectedControlRevision:3,checkOnly:true},'https://untrusted.invalid')).status,403)
+  assert.equal((await remove({expectedControlRevision:3,checkOnly:true,actorId:'other'})).status,409)
+  for(const checkOnly of [true,false])assert.equal((await remove({expectedControlRevision:3,checkOnly})).status,200)
+  assert.deepEqual(calls,[{taskId:'t',expectedControlRevision:3,checkOnly:true},{taskId:'t',expectedControlRevision:3,checkOnly:false}])
+ },{overrides:{deleteWorkflowTask:async value=>{calls.push(value);return{taskId:value.taskId}}}})
 })

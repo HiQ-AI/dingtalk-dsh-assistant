@@ -86,3 +86,19 @@ test('数据变更准备：来源摘要不符被拒绝，校验不触发演练',
   assert.equal(validated.run.status, 'succeeded')
   assert.equal(validated.nodes.length, 3)
 })
+
+test('数据变更来源和约束不按人工数量或总字节限制，摘要与唯一标识仍核验', async () => {
+  const adapter={id:'fixture',version:'1',rulesDigest:sha('fixture-rules'),async validate(input){return {passed:true,packageDigest:input.packageDigest,receiptId:'verified'}}}
+  const workflow=createDataChangePreparationWorkflow({provider:'test',model:'fixture',adapter})
+  const input=requirement()
+  input.sources=Array.from({length:20},(_,index)=>{const content='业务来源'+index+'字'.repeat(4000);return{id:'source-'+index,content,sha256:sha(content)}})
+  input.constraints=Array.from({length:40},(_,index)=>'保留业务约束'+index)
+  assert.ok(Buffer.byteLength(JSON.stringify(input))>48000)
+  assert.deepEqual(await workflow.nodes[0].execute({input}),input)
+  assert.equal(defineExecutionWorkflow(workflow).nodes[0].inputSchema.properties.sources.maxItems,undefined)
+  await assert.rejects(workflow.nodes[0].execute({input:{...input,sources:[input.sources[0],input.sources[0]]}}),{code:'DATA_CHANGE_INPUT_INVALID'})
+  const largeProposal={...proposal,applySql:proposal.applySql+'\n-- '+ '业务条件'.repeat(20000)}
+  const validated=await workflow.nodes[2].execute({input:{requirement:input,proposal:largeProposal}})
+  assert.equal(validated.applySql,largeProposal.applySql)
+  assert.equal(validated.validation.receiptId,'verified')
+})

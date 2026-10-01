@@ -226,14 +226,14 @@ if (process.argv[2] === '--execution-session-child') {
     assert.ok(JSON.stringify(history.events).includes('execution_arguments_invalid'))
   })
 
-  test('连续格式错误耗尽原步数预算，不重置额度或无限续行', async t => {
-    const h = await host({ script: () => ({ name: 'execution_node_submit', args: { output: { answer: 42 } } }) })
+  test('连续格式纠正超过旧步数上限后仍可提交', async t => {
+    const h = await host({ script: n => n <= 40 ? ({ name: 'execution_node_submit', args: { output: { answer: 42 } } }) : submit('corrected') })
     t.after(() => h.close())
     let submitted = 0
     const result = await drive(h, { definition: definition({ maxSteps: 2 }), onResult: async () => { submitted++ } })
-    assert.deepEqual(result, { status: 'no_submission', reason: 'execution_step_budget_exhausted' })
-    assert.equal(h.requests.length, 2)
-    assert.equal(submitted, 0)
+    assert.equal(result.status, 'submitted')
+    assert.equal(h.requests.length, 41)
+    assert.equal(submitted, 1)
   })
 
   test('参数修正不能覆盖后置权限拒绝，也不能改写已接纳提交', async t => {
@@ -375,30 +375,21 @@ if (process.argv[2] === '--execution-session-child') {
     assert.equal(resumed.result.status, 'submitted')
   })
 
-  test('重复合法工具读取受maxSteps约束；timeout取消后仍须等真实工具排空', { timeout: 20000 }, async t => {
-    const h = await host({ script: () => ({ name: 'read_fixture' }) }); t.after(() => h.close())
-    const result = await drive(h, { definition: definition({ maxSteps: 3 }) })
-    assert.deepEqual(result, { status: 'no_submission', reason: 'execution_step_budget_exhausted' })
-    assert.equal(h.requests.length, 3); assert.equal(h.reads.length, 3)
-    await delay(60); assert.equal(h.requests.length, 3)
-    const slow = await host({ script: [{ name: 'slow_tool' }] })
-    const entered = Promise.withResolvers(), release = Promise.withResolvers(), aborted = Promise.withResolvers()
-    t.after(async () => { release.resolve(); await slow.close() })
-    slow.ctx.tools.register({ name: 'slow_tool', description: '超时后仍排空', parameters: { type: 'object' }, output,
-      async execute(_args, exec) {
-        exec.signal.addEventListener('abort', () => aborted.resolve(), { once: true })
-        entered.resolve(); await release.promise; exec.signal.throwIfAborted(); return {}
-      },
-    })
+  test('超过旧步数限制持续读取，显式取消仍等待真实工具排空', { timeout: 20000 }, async t => {
+    const h = await host({ script: n => n <= 40 ? ({ name: 'read_fixture' }) : submit('complete') }); t.after(() => h.close())
+    const result = await drive(h)
+    assert.equal(result.status, 'submitted'); assert.equal(h.reads.length, 40)
+    const entered = Promise.withResolvers(), release = Promise.withResolvers()
+    const slow = await host({ script: [{ name: 'slow_tool' }] }); t.after(async () => { release.resolve(); await slow.close() })
+    slow.ctx.tools.register({ name: 'slow_tool', description: '取消后排空', parameters: { type: 'object' }, output,
+      async execute(_args, exec) { entered.resolve(); await release.promise; exec.signal.throwIfAborted(); return {} } })
     let completed = false
-    const active = drive(slow, { definition: definition({ allowedTools: ['slow_tool'], timeoutMs: 3000 }) }).then(value => { completed = true; return value })
-    // 原来的100ms包含JSONL启动耗时，高并发时会在进入工具前超时并永等entered。
-    await Promise.race([entered.promise, active.then(() => { throw new Error('timeout_before_tool_entered') })])
-    await aborted.promise
-    assert.equal(completed, false); assert.ok(slow.ctx.agents.get(binding().sessionId))
-    release.resolve()
-    assert.deepEqual(await active, { status: 'no_submission', reason: 'execution_timeout' })
-    assert.equal(slow.requests.length, 1)
+    const active = drive(slow, { definition: definition({ allowedTools: ['slow_tool'] }) }).then(value => { completed = true; return value })
+    await entered.promise
+    const cancelling = slow.manager.cancel(binding())
+    await delay(30); assert.equal(completed, false)
+    release.resolve(); await cancelling
+    assert.equal((await active).status, 'cancelled')
   })
 
   test('定义仅快照执行字段；排空持久化失败明确标记未证明排空并保留占位', { timeout: 10000 }, async t => {
@@ -471,13 +462,12 @@ test('受信工具安全失败中止queued调用', async t => {
   assert.equal(calls, 1); assert.equal(h.requests.length, 1)
 })
 
-test('消息原生恢复保持step预算；不能借新lease或新预算重置', async t => {
-  const h = await host(); t.after(() => h.close())
+test('消息原生恢复不受累计步数截止，仍保持会话身份', async t => {
+  const h = await host({ script: [submit('first'), submit('resumed')] }); t.after(() => h.close())
   const d = definition({ allowedTools: [], maxSteps: 1 })
   assert.equal((await drive(h, { binding: messageBinding(), definition: d })).status, 'submitted')
-  assert.deepEqual(await drive(h, { binding: messageBinding({ sessionBound: true, leaseEpoch: 2 }), definition: d }), { status: 'no_submission', reason: 'execution_step_budget_exhausted' })
-  assert.equal(h.requests.length, 1)
-  await assert.rejects(drive(h, { binding: messageBinding({ sessionBound: true, leaseEpoch: 3 }), definition: { ...d, maxSteps: 2 } }), { code: 'execution_budget_changed' })
+  assert.equal((await drive(h, { binding: messageBinding({ sessionBound: true, leaseEpoch: 2 }), definition: d })).status, 'submitted')
+  assert.equal(h.requests.length, 2)
 })
 
 
@@ -511,7 +501,7 @@ test('消息恢复累计timeout，完成后的等待时间不占执行预算', a
 })
 
 
-test('消息续接不能重置已消耗timeout', async t => {
+test('消息续接不受累计执行时长截止', async t => {
   const slow = { name: 'slow_query', description: 'slow query', parameters: { type: 'object' }, async execute({ signal }) { await delay(1200, undefined, { signal }); return {} } }
   const root = await temp(), d = definition({ allowedTools: ['slow_query'], timeoutMs: 2000 })
   const first = await host({ root, tools: [slow], script: [{ name: 'slow_query' }, submit('first')] })
@@ -519,7 +509,7 @@ test('消息续接不能重置已消耗timeout', async t => {
   await first.close()
   const next = await host({ root, tools: [slow], script: [{ name: 'slow_query' }, submit('must not finish')] }); t.after(() => next.close())
   const result = await drive(next, { binding: messageBinding({ leaseEpoch: 2, sessionBound: true }), definition: d })
-  assert.deepEqual(result, { status: 'no_submission', reason: 'execution_timeout' }); assert.equal(next.requests.length, 1)
+  assert.equal(result.status, 'submitted'); assert.equal(next.requests.length, 2)
 })
 
 
@@ -551,12 +541,12 @@ test('普通工程session不能借添加补充合同更改digest，调查不能�
   await assert.rejects(drive(fresh, { binding: binding({ kind: 'task-node', leaseEpoch: 2 }) }), { code: 'execution_session_identity_mismatch' })
 })
 
-test('调查补充不会重置原生step预算', async t => {
-  const h = await host(); t.after(() => h.close())
+test('调查补充保持同会话继续，不受累计步数截止', async t => {
+  const h = await host({ script: [submit('first'), submit('supplemented')] }); t.after(() => h.close())
   const first = binding({ kind: 'task-node', inputVersion: 1, inputHistory: [] }), d = definition({ maxSteps: 1 })
   await drive(h, { binding: first, definition: d })
-  assert.deepEqual(await drive(h, { binding: { ...first, leaseEpoch: 2, inputVersion: 2, inputDigest: 'supplemented', inputHistory: [{ inputVersion: 1, inputDigest: first.inputDigest }] }, definition: d }), { status: 'no_submission', reason: 'execution_step_budget_exhausted' })
-  assert.equal(h.requests.length, 1)
+  assert.equal((await drive(h, { binding: { ...first, leaseEpoch: 2, inputVersion: 2, inputDigest: 'supplemented', inputHistory: [{ inputVersion: 1, inputDigest: first.inputDigest }] }, definition: d })).status, 'submitted')
+  assert.equal(h.requests.length, 2)
 })
 
 
@@ -653,3 +643,15 @@ test('任务原生节点工作目录隔离，宿主重启恢复原cwd且原始�
 })
 
 }
+
+test('只读范围拒绝保留拒绝后可调整合法查询，不终止整个调查', async t => {
+  const { classifyAgentQueryError } = await import('../packages/dingtalk-dsh-assistant/agent-query-tools.js')
+  const seen = []
+  const h = await host({ tools: [{ name: 'query', description: 'readonly', parameters: { type: 'object' }, classifyError: classifyAgentQueryError,
+    execute({ args }) { if (args.path === 'forbidden') throw Object.assign(Error('QUERY_SCOPE_DENIED'), { code: 'QUERY_SCOPE_DENIED' }); seen.push(args.path); return { text: 'verified' } } }],
+    script: [{ name: 'query', args: { path: 'forbidden' } }, { name: 'query', args: { path: 'allowed' } }, submit('done')] })
+  t.after(() => h.close())
+  assert.equal((await drive(h, { definition: definition({ allowedTools: ['query'] }) })).status, 'submitted')
+  assert.deepEqual(seen, ['allowed'])
+  assert.match(JSON.stringify(h.requests[1]), /QUERY_SCOPE_DENIED/u)
+})

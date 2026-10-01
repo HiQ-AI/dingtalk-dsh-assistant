@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 
 // 受信 Host 内部 reducer：事务、命令回执及认证入口归 ControlStore/适配器。
-// 本模块只授予一次 dispatchEligible；不启动进程、不发网络请求、不声称 OS 隔离。
+// 每张许可只授予一次 dispatchEligible；可信未发送证明可在新lease恢复同效果。
+// 本模块不启动进程、不发网络请求、不声称 OS 隔离。
 const ACTIVE = ['starting', 'executing', 'unknown']
 const TERMINAL = ['succeeded', 'failed']
 const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
@@ -190,6 +191,34 @@ function begin(db, args, context) {
   return { result: { effect: effectDto(effectRow(db, row.effect_id)), started: true }, dispatchEligible: true }
 }
 
+function rearmUnsent(db, args, context) {
+  const row = effectRow(db, args.effectId), definition = JSON.parse(row.definition_json)
+  const observation = row.result_json && JSON.parse(row.result_json), proof = object(args.proof, 'proof')
+  text(args.proofRef, 'proofRef'); text(args.observationRef, 'observationRef')
+  if (row.state !== 'failed' || row.kind !== 'operation' || definition.adapterId !== 'github-pr'
+    || definition.adapterVersion !== '1' || definition.action !== 'pr'
+    || observation?.evidenceRef !== args.observationRef || observation.status !== 'failed'
+    || observation.result?.phase !== 'preflight' || observation.result.mutationAttempted !== false
+    || !['PR_CONNECTION_FAILED', 'PR_PREFLIGHT_NOT_SENT'].includes(observation.result.reason)
+    || proof.mutationAttempted !== false || proof.operationKey !== definition.payload.operationKey
+    || proof.preparedDigest !== definition.payload.digest || !['PR_CONNECTION_FAILED', 'PR_PREFLIGHT_NOT_SENT'].includes(proof.reason)) fail('effect_unsent_recovery_not_proven')
+  const { node } = context.assertDispatchAllowed({ runId: row.run_id, nodeId: row.node_id,
+    generation: row.generation, leaseEpoch: integer(args.leaseEpoch, 'leaseEpoch'), inputDigest: row.input_digest })
+  if (node.nodeRunId !== row.node_run_id || row.dispatch_lease_epoch >= args.leaseEpoch
+    || db.prepare('SELECT 1 FROM execution_resource_holds WHERE effect_id=?').get(row.effect_id)) fail('effect_unsent_recovery_not_proven')
+  const scopes = [['global', '*'], ['run', row.run_id], ['principal', definition.principalId],
+    ...JSON.parse(row.resource_keys_json).map(key => ['resource', key])]
+  if (scopes.some(([scope, key]) => db.prepare('SELECT 1 FROM execution_safety_fences WHERE scope=? AND scope_key=?').get(scope, key))) fail('effect_safety_revoked')
+  if (row.request_id) {
+    const approval = approvalRow(db, row.request_id)
+    if (approval.revoked || approval.decision !== 'approved') fail('effect_approval_required')
+  }
+  db.prepare("UPDATE execution_effects SET state='prepared',updated_at=? WHERE effect_id=?").run(context.now, row.effect_id)
+  context.emitEvent('effect.unsent-rearmed', { effectId: row.effect_id, runId: row.run_id,
+    leaseEpoch: args.leaseEpoch, observationRef: args.observationRef, proofRef: args.proofRef })
+  return changed({ effect: effectDto(effectRow(db, row.effect_id)), rearmed: true })
+}
+
 function recordIdentity(db, args, context) {
   const row = effectRow(db, args.effectId)
   if (row.kind !== 'job' || !ACTIVE.includes(row.state)) fail('job_identity_not_expected')
@@ -270,7 +299,7 @@ function revokeSafety(db, args, context) {
 /** command={id,kind,args}；必须由ControlStore在同一个同步写事务内调用。 */
 export function reduceEffectCommand(db, command, context) {
   const handlers = {
-    'effect.prepare': prepare, 'effect.begin': begin, 'effect.identity': recordIdentity, 'effect.observe': observe,
+    'effect.prepare': prepare, 'effect.begin': begin, 'effect.rearmUnsent': rearmUnsent, 'effect.identity': recordIdentity, 'effect.observe': observe,
     'approval.decide': (db, args, context) => approval(db, args, context, false),
     'approval.revoke': (db, args, context) => approval(db, args, context, true), 'safety.revoke': revokeSafety,
   }

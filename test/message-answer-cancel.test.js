@@ -9,9 +9,8 @@ import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execu
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { messageSchemas } from '../packages/dingtalk-dsh-assistant/message-context.js'
-import { messageSystem } from '../packages/dingtalk-dsh-assistant/message-model.js'
 
-async function fixture(t,{actor='a',group='g',quoted=true,count=1,queued=true,judge}={}) {
+async function fixture(t,{actor='a',group='g',quoted=true,count=1,queued=true,coordinatorSessions}={}) {
  const dir=await mkdtemp(join(tmpdir(),'answer-cancel-'))
  const store=await openExecutionStore({dbPath:join(dir,'control.sqlite'),instanceId:randomUUID(),initialize:true})
  const artifacts=await openExecutionArtifacts({directory:join(dir,'artifacts'),initialize:true})
@@ -20,8 +19,8 @@ async function fixture(t,{actor='a',group='g',quoted=true,count=1,queued=true,ju
  t.after(async()=>{await service?.close();await controller.close();await store.close();await rm(dir,{recursive:true,force:true})})
  service=await openWorkflowService({ctx:{},config:{groupIds:['g','other'],ownerActorId:'owner',artifactDirectory:join(dir,'artifacts')},
   legacy:{getAgentConfig:()=>({provider:'test',model:'test'}),getGroup:id=>({groupId:id,messages:[]})},
-  execution:{store,artifacts,controller},judge:judge??(async()=>{throw new Error('queued action needs no model')}),
-  taskOwnerSessions:{async close(){}},messageAgentSessions:{async close(){},async cancel(){throw new Error('waiting must not cancel live session')}}})
+  execution:{store,artifacts,controller},
+  coordinatorSessions:coordinatorSessions??{async close(){},async run(){throw new Error('预置命令无需语义重判')}},taskOwnerSessions:{async close(){}},messageAgentSessions:{async close(){},async cancel(){throw new Error('waiting must not cancel live session')}}})
 
  const call=(kind,args)=>store.command({id:randomUUID(),kind:'message.'+kind,args})
  await call('receive',{runId:'source',sourceKey:'source',sourceVersion:1,policy:{initialWindowMs:45000},actorId:'a',conversationId:'g',body:'查询记录'})
@@ -38,7 +37,7 @@ async function fixture(t,{actor='a',group='g',quoted=true,count=1,queued=true,ju
  if(queued)await call('accept',{runId:'cancel',unitId:'cancel-unit',commands:[{commandId:'cancel-command',kind:'cancel_answer',args:{arguments:{commandId:'answer0'},binding:{disposition:'new'},taskId:null,replyPolicy:'none'}}]})
  const process=service.messages.process.bind(service.messages)
  service.messages.process=async id=>{await process(id);for(let i=0;i<100;i++){const data=await store.query({kind:'message.run',runId:id});if(data.requests.some(q=>q.status==='pending')||data.commands.length&&data.commands.every(c=>['applied','rejected','unknown'].includes(c.status)))return data;await new Promise(resolve=>setTimeout(resolve,10))}return store.query({kind:'message.run',runId:id})}
- return {store,service}
+ return {store,service,artifacts,call}
 }
 
 test('同发送者同群明确引用唯一问答，取消原执行而不建Task',async t=>{
@@ -61,56 +60,77 @@ test('取消问答为严格独立合同，模型不得夹带任务或泛化范�
  const intent=arguments_=>({kind:'intent',actions:[{intent:'cancel_answer',arguments:arguments_,dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'result'})
  assert.equal(messageSchemas.I.safeParse(intent({commandId:'answer'})).success,true)
  for(const args of [{},{commandId:'answer',taskId:'task'},{commandId:'answer',scope:'conversation'}])assert.equal(messageSchemas.I.safeParse(intent(args)).success,false)
- assert.match(messageSystem('I'),/没有候选、多个候选尚未澄清或指代不清时needs_clarification/)
 })
 
-test('真实意图阶段拿到受信候选；多个事项转澄清且零取消效果',async t=>{
- const seen=[]
- const intent=input=>{seen.push(input.facts.cancellableAnswers);return {kind:'intent',actions:[{intent:'cancel_answer',arguments:{commandId:'answer0'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}
- const judge=async({stage,input})=>stage==='R'?{kind:'binding',disposition:'new',candidateId:null,evidence:['source']}
-  :stage==='IB'?{kind:'topic_intents',decisions:input.units.map(unit=>({unitId:unit.unitId,intent:intent(unit.input)}))}:intent(input)
- const f=await fixture(t,{count:2,queued:false,judge})
- const state=await f.service.messages.process('cancel')
- assert.equal(seen.length,1,JSON.stringify(state));assert.equal(seen[0].length,2)
- assert.equal(state.commands.length,0)
- assert.equal(state.requests[0].reason,'MESSAGE_AGENT_CANCEL_TARGET_REQUIRED')
+
+
+async function clarification(f) {
+ const state=await f.store.query({kind:'message.run',runId:'cancel'})
+ const targets=[]
+ for(const commandId of ['answer0','answer1']) {
+  const execution=await f.store.query({kind:'message.agent.execution',commandId})
+  targets.push({commandId,runId:'source',sourceVersion:1,inputVersion:execution.inputVersion,inputDigest:execution.inputDigest})
+ }
+ const snapshot=await f.artifacts.put({runId:'cancel',revision:state.run.revision,sourceVersion:1,actorId:state.run.actorId,conversationId:state.run.conversationId,unitId:'cancel-unit',targets})
+ await f.call('wait',{runId:'cancel',unitId:'cancel-unit',nodeId:'coordinator',reason:'MESSAGE_AGENT_CANCEL_TARGET_REQUIRED',request:{requestId:'choose',kind:'needs_clarification',reason:'MESSAGE_AGENT_CANCEL_TARGET_REQUIRED',question:'停止哪个查询？',permittedActors:['a'],needs:[{resourceRef:snapshot.ref,reason:'message-answer-cancel-snapshot'}]}})
+}
+async function selected(f) {
+ await f.call('accept',{runId:'cancel',unitId:'cancel-unit',commands:[{commandId:'cancel-selected',kind:'cancel_answer',args:{arguments:{commandId:'answer1'},binding:{disposition:'new'},taskId:null,replyPolicy:'none'}}]})
+ await f.service.messages.commandSettled('cancel')
+}
+
+test('多事项澄清的身份限制保留，选定一项仅取消该项，重派不重复',async t=>{
+ const f=await fixture(t,{count:2,queued:false})
+ await clarification(f)
+ for(const actorId of ['owner','other'])await assert.rejects(f.call('wake',{runId:'cancel',requestId:'choose',eventId:'bad-'+actorId,actorId,answer:'停止查询1'}))
+ await f.call('wake',{runId:'cancel',requestId:'choose',eventId:'choice',actorId:'a',answer:'停止查询1，查询0继续'})
+ await selected(f)
+ assert.equal((await f.store.query({kind:'message.agent.execution',commandId:'answer1'})).status,'cancelled')
  assert.equal((await f.store.query({kind:'message.agent.execution',commandId:'answer0'})).status,'waiting_user')
+ await f.service.messages.commandSettled('cancel')
+ const final=await f.store.query({kind:'message.run',runId:'cancel'})
+ assert.equal(final.commands.length,1);assert.equal(final.commands[0].status,'applied')
 })
 
-test('多事项澄清后原发送者选定一项，原生重判只取消该项且重放不重复',async t=>{
- let judgments=0
- const intent=input=>{judgments++;return {kind:'intent',actions:[{intent:'cancel_answer',arguments:{commandId:input.clarificationAnswers?.length?'answer1':'answer0'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}
- const judge=async({stage,input})=>stage==='R'?{kind:'binding',disposition:'new',candidateId:null,evidence:['source']}
-  :stage==='IB'?{kind:'topic_intents',decisions:input.units.map(unit=>({unitId:unit.unitId,intent:intent(unit.input)}))}:intent(input)
- const f=await fixture(t,{count:2,queued:false,judge})
- const state=await f.service.messages.process('cancel'),q=state.requests[0]
- const input={runId:'cancel',requestId:q.id,eventId:'choice',answer:'停止查询1，查询0继续'}
- for(const identity of [{channel:'im',actorId:'owner',conversationId:'g'},{channel:'im',actorId:'a',conversationId:'other'}])await assert.rejects(f.service.resumeRequest(input,identity),/FORBIDDEN/)
- const identity={channel:'im',actorId:'a',conversationId:'g'}
- await f.service.resumeRequest(input,identity)
+test('澄清期间目标输入版本变化，旧精确候选不能授权取消',async t=>{
+ const f=await fixture(t,{count:2,queued:false})
+ await clarification(f)
+ await f.call('agent.resume',{commandId:'answer1',requestId:'q1',eventId:'target-input-update',actorId:'a',conversationId:'g',answer:'uat2',inputVersion:2,inputDigest:'c'.repeat(64),inputRef:'new-input'})
+ await f.call('wake',{runId:'cancel',requestId:'choose',eventId:'choice',actorId:'a',answer:'停止查询1'})
+ await selected(f)
+ assert.equal((await f.store.query({kind:'message.run',runId:'cancel'})).commands[0].status,'rejected')
+ const target=await f.store.query({kind:'message.agent.execution',commandId:'answer1'})
+ assert.equal(target.status,'ready');assert.equal(target.inputVersion,2)
+})
+
+
+
+test('常驻协调跨turn澄清同群唤醒原取消事项，不自锁且精确取消已选项', {timeout:10000}, async t=>{
+ let question, turns=0
+ const coordinatorSessions={async close(){},async run(args){
+  turns++
+  await args.onSessionBound()
+  const decisions=args.input.sources.map(source=>{
+   const selected=source.requests.some(request=>request.status==='resolved')
+   const action=source.runId==='choice-source'
+    ? {intent:'clarification',arguments:{runId:'cancel',requestId:question.id,answer:source.body},dependsOn:[]}
+    : {intent:'cancel_answer',arguments:{commandId:selected?'answer1':'answer0'},dependsOn:[]}
+   return {runId:source.runId,reason:'取消指定问答',units:[{spans:[{start:0,end:source.body.length}],goalText:source.body,binding:{disposition:'new',candidateId:null},intent:{kind:'intent',actions:[action],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}]}
+  })
+  await args.onCandidate({decisions});return {status:'submitted'}
+ }}
+ const f=await fixture(t,{count:2,queued:false,coordinatorSessions})
+ const first=await f.service.messages.process('cancel')
+ question=first.requests.find(request=>request.status==='pending')
+ assert.equal(question.reason,'MESSAGE_AGENT_CANCEL_TARGET_REQUIRED')
+ assert.ok(question.needs.some(need=>need.reason==='message-answer-cancel-snapshot'))
+ await f.service.messages.receive({runId:'choice-source',sourceKey:'choice-source',sourceVersion:1,actorId:'a',conversationId:'g',body:'停止查询1，查询0继续',context:{quoteRefs:[]}},{process:false})
+ await f.service.messages.process('choice-source')
  await f.service.messages.process('cancel')
  assert.equal((await f.store.query({kind:'message.agent.execution',commandId:'answer1'})).status,'cancelled')
  assert.equal((await f.store.query({kind:'message.agent.execution',commandId:'answer0'})).status,'waiting_user')
- const final=await f.store.query({kind:'message.run',runId:'cancel'}),before=judgments
- assert.equal(final.commands.length,1);assert.equal(final.commands[0].args.arguments.commandId,'answer1')
- await f.service.resumeRequest(input,identity);await f.service.messages.process('cancel')
- assert.equal(judgments,before)
- assert.equal((await f.store.query({kind:'message.run',runId:'cancel'})).commands.length,1)
- await assert.rejects(f.service.resumeRequest({...input,answer:'改为取消查询0'},identity))
- assert.equal((await f.store.query({kind:'message.agent.execution',commandId:'answer0'})).status,'waiting_user')
-})
-
-test('澄清期间目标输入版本变更，旧候选许可失效并重新询问',async t=>{
- const intent=input=>({kind:'intent',actions:[{intent:'cancel_answer',arguments:{commandId:input.clarificationAnswers?.length?'answer1':'answer0'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'})
- const judge=async({stage,input})=>stage==='R'?{kind:'binding',disposition:'new',candidateId:null,evidence:['source']}
-  :stage==='IB'?{kind:'topic_intents',decisions:input.units.map(unit=>({unitId:unit.unitId,intent:intent(unit.input)}))}:intent(input)
- const f=await fixture(t,{count:2,queued:false,judge})
- const state=await f.service.messages.process('cancel'),q=state.requests[0]
- await f.store.command({id:randomUUID(),kind:'message.agent.resume',args:{commandId:'answer1',requestId:'q1',eventId:'target-input-update',actorId:'a',conversationId:'g',answer:'uat2',inputVersion:2,inputDigest:'c'.repeat(64),inputRef:'new-input'}})
- await f.service.resumeRequest({runId:'cancel',requestId:q.id,eventId:'choice',answer:'停止查询1'}, {channel:'im',actorId:'a',conversationId:'g'})
- const after=await f.service.messages.process('cancel')
- assert.equal(after.commands.length,0)
- assert.ok(after.requests.some(item=>item.status==='pending'&&item.reason==='MESSAGE_AGENT_CANCEL_TARGET_REQUIRED'))
- const target=await f.store.query({kind:'message.agent.execution',commandId:'answer1'})
- assert.equal(target.status,'ready');assert.equal(target.inputVersion,2)
+ const done=await f.service.messages.state('cancel')
+ assert.equal(done.commands.length,1);assert.equal(done.commands[0].status,'applied')
+ assert.equal(done.requests.find(request=>request.id===question.id).answer,'停止查询1，查询0继续')
+ assert.equal(turns,3)
 })

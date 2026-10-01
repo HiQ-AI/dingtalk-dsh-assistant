@@ -39,8 +39,8 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
     const effect = await lookup(effectId)
     const state = await store.query({ kind: 'run', runId: effect.runId })
     const artifact = await artifacts.put(observation, { taskId: state.run.taskId, reference: state.run.requirementRef })
-    await command(`observe:${effectId}:${artifact.digest}`, 'effect.observe', {
-      effectId, receiptId: `receipt:${effectId}:${artifact.digest}`, status: observation.status,
+    await command(`observe:${effectId}:${effect.dispatchLeaseEpoch}:${artifact.digest}`, 'effect.observe', {
+      effectId, receiptId: `receipt:${effectId}:${effect.dispatchLeaseEpoch}:${artifact.digest}`, status: observation.status,
       evidenceRef: artifact.ref, result: observation,
     })
     return lookup(effectId)
@@ -58,6 +58,12 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
       if ((await route.adapter.reconcile(effect.definition.payload))?.status !== 'succeeded')
         throw executionError(['file', 'artifact'].includes(effect.definition.action) ? 'TASK_MARKDOWN_CURRENT_IDENTITY_UNCONFIRMED' : 'EDIT_CURRENT_IDENTITY_UNCONFIRMED')
     }
+    if (effect.state === 'failed' && effect.definition.action === 'pr'
+      && effect.result?.result?.phase === 'preflight' && effect.result.result.mutationAttempted === false
+      && ['PR_CONNECTION_FAILED', 'PR_PREFLIGHT_NOT_SENT'].includes(effect.result.result.reason)) {
+      const proof = await route.adapter.recoverUnsent?.(effect.definition.payload)
+      if (proof) return { ...effect, unsentRecovery: proof }
+    }
     if (['succeeded', 'failed', 'prepared'].includes(effect.state)) return effect
     const { action, payload } = effect.definition
     if (!methods[action]) throw executionError('DELIVERY_ACTION_INVALID')
@@ -69,16 +75,26 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
     // 查询失败不能覆盖先前已持久化的受理身份；后续恢复仍需要同一 ACK。
     if (action === 'message' && observation?.status === 'unknown' && effect.result?.result?.result)
       observation = { ...observation, result: { ...effect.result.result.result, ...observation.result } }
-    return observe(effectId, observation)
+    const observed = await observe(effectId, observation)
+    return action === 'pr' && observed.state === 'failed' ? reconcile(effectId) : observed
   }
-  async function dispatch({ binding, action, prepared }, effectId) {
+  async function dispatch({ binding, action, prepared }, effectId, { signal } = {}) {
     const route = methods[action]
     let effect = await lookup(effectId)
     if (effect) {
       if (effect.runId !== binding.runId || effect.nodeRunId !== binding.nodeRunId || effect.generation !== binding.generation
         || effect.inputDigest !== binding.inputDigest || effect.definition.action !== action
         || executionDigest(effect.definition.payload) !== executionDigest(prepared)) throw executionError('DELIVERY_IDENTITY_CONFLICT')
-      if (effect.state !== 'prepared') return reconcile(effectId)
+      if (effect.state !== 'prepared') {
+        effect = await reconcile(effectId)
+        if (!effect.unsentRecovery) return effect
+        if (effect.dispatchLeaseEpoch >= binding.leaseEpoch) return effect
+        const proofArtifact = await artifacts.put(effect.unsentRecovery, { reference: effect.result.evidenceRef })
+        await command(`rearm:${effectId}:${binding.leaseEpoch}`, 'effect.rearmUnsent', {
+          effectId, leaseEpoch: binding.leaseEpoch, observationRef: effect.result.evidenceRef,
+          proof: effect.unsentRecovery, proofRef: proofArtifact.ref,
+        })
+      }
     } else {
       const grant = await (action === 'external' ? authorizeExternal : ['file', 'artifact'].includes(action) ? authorizeFile : action === 'message' ? authorizeMessage : authorize)?.({ binding: structuredClone(binding), action, prepared: structuredClone(prepared) })
       if (!grant || typeof grant.principalId !== 'string' || !grant.principalId
@@ -110,14 +126,15 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
     })
     if (!permit.dispatchEligible) return reconcile(effectId)
     let observation
-    try { observation = await route.adapter[route.execute](prepared) }
+    try { observation = await route.adapter[route.execute](prepared, { signal }) }
     catch (error) { observation = { status: 'unknown', reason: error.code ?? 'ADAPTER_EXECUTION_UNKNOWN' } }
     const observed = await observe(effectId, observation)
+    if (action === 'pr' && observed.state === 'failed') return reconcile(effectId)
     if (action === 'message' && observation.status === 'unknown' && observation.reason === 'MESSAGE_READBACK_REQUIRED') return reconcile(effectId)
     return observed
   }
   return {
-    execute(request) {
+    execute(request, context = {}) {
       // 在第一个await之前复制，调用方后续修改对象不能改变已授权的发送字节。
       const snapshot = structuredClone(request), { binding, action, prepared } = snapshot
       if (!methods[action]?.adapter || prepared?.action !== action || prepared.generation !== binding?.generation
@@ -132,7 +149,7 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
       const effectId = `${['workspace', 'edit', 'external', 'file', 'artifact', 'message'].includes(action) ? action : 'git'}-${executionDigest({ nodeRunId: binding.nodeRunId, action, ...(action === 'message' ? { deliveryKey: prepared.deliveryKey } : {}) })}`
       const digest = executionDigest(snapshot), existing = flights.get(effectId)
       if (existing) return existing.digest === digest ? existing.promise : Promise.reject(executionError('DELIVERY_IDENTITY_CONFLICT'))
-      const promise = dispatch(snapshot, effectId).finally(() => flights.delete(effectId))
+      const promise = dispatch(snapshot, effectId, context).finally(() => flights.delete(effectId))
       flights.set(effectId, { digest, promise })
       return promise
     },

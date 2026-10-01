@@ -1,3 +1,4 @@
+import { scriptedCoordinator } from './fixtures/group-coordinator.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createTaskGroupFileAdapter, createTaskGroupFileDeliveryWorkflow, createLegacyTaskGroupFileDeliveryWorkflow } from '../packages/dingtalk-dsh-assistant/task-group-file-delivery.js'

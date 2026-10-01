@@ -1,9 +1,11 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { realpath, lstat, mkdir, readdir, open, readFile, rename } from 'node:fs/promises'
 import { isAbsolute, join, dirname, relative, parse } from 'node:path'
 import { canonicalExecutionJson, executionDigest, executionError } from './execution-artifacts.js'
 
+const gitOperation = new AsyncLocalStorage()
 const fail = code => { throw executionError(code) }
 const oid = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value)
 async function noLinks(path) {
@@ -13,19 +15,26 @@ async function noLinks(path) {
     if ((await lstat(current)).isSymbolicLink()) fail('WORKSPACE_LINK_UNSUPPORTED')
   }
 }
-function git(directory, args, { allowConflict = false, input } = {}) {
+function git(directory, args, { allowConflict = false, input, signal = gitOperation.getStore()?.signal } = {}) {
+  signal?.throwIfAborted()
   return new Promise((resolve, reject) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
     Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' })
     const child = spawn('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.longpaths=true', '-C', directory, ...args], { env, windowsHide: true, shell: false, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
     if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input) }
-    const chunks = []; let size = 0, errorText = '', failure
-    const stop = code => { failure ??= executionError(code); child.kill() }
-    const timer = setTimeout(() => stop('WORKSPACE_GIT_TIMEOUT'), 30000)
-    child.stdout.on('data', bytes => { size += bytes.length; if (size > 64 * 1024 * 1024) stop('WORKSPACE_GIT_LIMIT'); else chunks.push(bytes) })
-    child.stderr.on('data', bytes => { errorText = (errorText + bytes).slice(0, 2048) })
-    child.on('error', error => { clearTimeout(timer); reject(error) })
-    child.on('close', code => { clearTimeout(timer); if (failure) reject(failure); else if (code && !(allowConflict && code === 1)) reject(executionError('WORKSPACE_GIT_FAILED', errorText)); else resolve(Buffer.concat(chunks)) })
+    const chunks = []; let errorText = '', failure, diagnosticBytes = 0
+    const stop = () => { failure ??= signal.reason; child.kill() }
+    signal?.addEventListener('abort', stop, { once: true })
+    if(signal?.aborted) stop()
+    child.stdout.on('data', bytes => chunks.push(bytes))
+    child.stderr.on('data', bytes => { diagnosticBytes += bytes.length; errorText = (errorText + bytes).slice(0, 2048) })
+    child.on('error', error => { failure ??= error })
+    child.on('close', code => {
+      signal?.removeEventListener('abort',stop)
+      if (failure) reject(failure)
+      else if (code && !(allowConflict && code === 1)) reject(Object.assign(executionError('WORKSPACE_GIT_FAILED',errorText),{diagnosticTruncated:diagnosticBytes>2048}))
+      else resolve(Buffer.concat(chunks))
+    })
   })
 }
 const text = async (directory, args) => (await git(directory, args)).toString('utf8').trim()
@@ -50,15 +59,14 @@ async function manifest(repository, baseCommit, treeInput = false) {
   if (await text(repository, ['cat-file', '-t', baseCommit]) !== (treeInput ? 'tree' : 'commit')) fail('WORKSPACE_BASE_INVALID')
   const tree = treeInput ? baseCommit : await text(repository, ['rev-parse', `${baseCommit}^{tree}`])
   const records = (await git(repository, ['ls-tree', '-rz', '--long', tree])).toString('utf8').split('\0').filter(Boolean)
-  if (records.length > 10000) fail('WORKSPACE_FILE_LIMIT')
-  let size = 0; const names = new Set()
+  const names = new Set()
   const files = records.map(record => {
     const match = /^(100644|100755) blob ([a-f0-9]{40})\s+(\d+)\t(.+)$/s.exec(record)
     if (!match) fail('WORKSPACE_ENTRY_UNSUPPORTED')
     const path = match[4], parts = path.split('/'), folded = path.toLowerCase()
     if (parts.some(part => !part || ['.', '..', '.git'].includes(part.toLowerCase()) || /[. ]$|[\\:\0-\x1f<>"|?*]/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)) || names.has(folded)) fail('WORKSPACE_PATH_UNSUPPORTED')
-    names.add(folded); size += Number(match[3])
-    if (Number(match[3]) > 16 * 1024 * 1024 || size > 64 * 1024 * 1024) fail('WORKSPACE_BYTE_LIMIT')
+    names.add(folded)
+    if (!Number.isSafeInteger(Number(match[3]))) fail('WORKSPACE_ENTRY_UNSUPPORTED')
     // 固定原始tree；不读取源工作目录，也不启动属性过滤器。
     if (parts.at(-1) === '.gitattributes') fail('WORKSPACE_ATTRIBUTES_UNSUPPORTED')
     return { path, oid: match[2], size: Number(match[3]) }
@@ -140,7 +148,7 @@ export async function assertWorkspaceConflictsResolved(workspace) {
 }
 
 // 受信Host专用：execute只能由控制账一次性permit后调用，不是模型工具。
-export async function createManagedWorkspaces({ root, sourceRepository, targetCommit, taskBase }) {
+async function createManagedWorkspacesImpl({ root, sourceRepository, targetCommit, taskBase }) {
   if ((targetCommit !== undefined && (!oid(targetCommit) || !oid(taskBase))) || (targetCommit === undefined && taskBase !== undefined)) fail('WORKSPACE_TARGET_INVALID')
   for (const value of [root, sourceRepository]) if (typeof value !== 'string' || !isAbsolute(value) || /[\0\r\n]/.test(value)) fail('WORKSPACE_SCOPE_INVALID')
   await noLinks(root); await noLinks(sourceRepository)
@@ -215,5 +223,7 @@ export async function createManagedWorkspaces({ root, sourceRepository, targetCo
     await writeExclusive(pending, prepared); await rename(pending, join(container, 'initialized.json'))
     return reconcile(prepared)
   }
-  return { prepare, execute, reconcile }
+  return Object.fromEntries(Object.entries({prepare,execute,reconcile}).map(([name,operation])=>[name,(input,context={})=>gitOperation.run(context,()=>operation(input))]))
 }
+
+export function createManagedWorkspaces(options, context = {}) { return gitOperation.run(context, () => createManagedWorkspacesImpl(options)) }

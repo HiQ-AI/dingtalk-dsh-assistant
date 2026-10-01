@@ -9,13 +9,13 @@ import { configureProjectLocalAcceptance, planProjectLocalAcceptance } from '../
 
 const hash = value => createHash('sha256').update(value).digest('hex')
 const command = { executable: process.execPath, args: ['-e', 'process.exit(0)'] }
-const configuration = root => ({ version: 'test-v1', sharedDataProfilePath: join(root, 'shared.json'), prepareSteps: [command], service: { executable: process.execPath, args: ['server.js', '--host', '127.0.0.1', '--port', '{port}'], readyPath: '/ready' }, scenarios: [{ ...command, id: 'read-only', description: '读取任务数据' }], cleanup: command, verifyCleanup: command, timeoutMs: 1000 })
+const configuration = root => ({ version: 'test-v1', sharedDataProfilePath: join(root, 'shared.json'), prepareSteps: [command], service: { executable: process.execPath, args: ['server.js', '--host', '127.0.0.1', '--port', '{port}'], readyPath: '/ready' }, scenarios: [{ ...command, id: 'read-only', description: '读取任务数据' }], cleanup: command, verifyCleanup: command })
 test('后端专项检查精确CAS：check零写、apply保留构建和其他仓库、重复零写及漂移拒绝',async t=>{
  const f=await fixture(t)
- const checks=[{id:'dataset-package',version:'1',timeoutMs:2400000,steps:[{executable:process.execPath,args:['-DskipTests','package'],timeoutMs:1800000}]}]
+ const checks=[{id:'dataset-package',version:'1',steps:[{executable:process.execPath,args:['-DskipTests','package']}]}]
  const source=f.source.replace('            - id: dataset\n','            - id: dataset\n'+yaml.dump({checks},{lineWidth:-1}).trimEnd().split('\n').map(line=>'              '+line).join('\n')+'\n')
  await writeFile(f.profile,source)
- const step={executable:process.execPath,args:[join(f.root,'verify-dataset-unit-tests.mjs'),'--java',join(f.root,'java.exe'),'--maven-home',join(f.root,'maven')],timeoutMs:1800000}
+ const step={executable:process.execPath,args:[join(f.root,'verify-dataset-unit-tests.mjs'),'--java',join(f.root,'java.exe'),'--maven-home',join(f.root,'maven')]}
  const proposal={repository:'dataset',sourceChecksSha256:hash(JSON.stringify(checks)),checks:[{...checks[0],version:'2',steps:[step,...checks[0].steps]}]}
  const checksProposal=join(f.root,'checks.json');await writeFile(checksProposal,JSON.stringify(proposal))
  const options={...f,checksProposal,expectedSha256:hash(source)}

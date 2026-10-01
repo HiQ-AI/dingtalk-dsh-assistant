@@ -349,3 +349,32 @@ test('正式worker同库：重投历史begin只回读，重开unknown阻止取�
   assert.equal(final.result.run.status, 'cancelled')
   assert.equal(store.healthy, true)
 })
+
+test('PR完整未发送收据仅在新lease允许同效果恢复，旧观察保留且安全围栏生效',()=>{
+ const f=fixture();const payload={operationKey:'a'.repeat(64),digest:'b'.repeat(64)}
+ f.command('effect.prepare',prepared('pr',{definition:{adapterId:'github-pr',adapterVersion:'1',principalId:'owner',action:'pr',payload}}))
+ f.command('effect.begin',beginArgs('pr'))
+ f.command('effect.observe',receipt('pr','failed',{result:{status:'failed',phase:'preflight',mutationAttempted:false,reason:'PR_CONNECTION_FAILED'}}))
+ const args={effectId:'pr',leaseEpoch:2,observationRef:'synthetic-observation:1',proofRef:'sha256/proof',proof:{operationKey:payload.operationKey,preparedDigest:payload.digest,mutationAttempted:false,reason:'PR_PREFLIGHT_NOT_SENT'}}
+ assert.throws(()=>f.command('effect.rearmUnsent',args),code('lease_stale'))
+ f.db.exec("UPDATE execution_nodes SET lease_epoch=2")
+ assert.throws(()=>f.command('effect.rearmUnsent',{...args,proof:{...args.proof,operationKey:'other'}}),code('effect_unsent_recovery_not_proven'))
+ assert.equal(f.command('effect.rearmUnsent',args).result.effect.state,'prepared')
+ assert.equal(f.command('effect.begin',beginArgs('pr',{leaseEpoch:2})).dispatchEligible,true)
+ f.command('effect.observe',receipt('pr','failed',{receiptId:'receipt-pr-next',result:{status:'failed',phase:'preflight',mutationAttempted:false,reason:'PR_CONNECTION_FAILED'}}))
+ f.db.exec("UPDATE execution_nodes SET lease_epoch=3")
+ f.command('safety.revoke',{scope:'run',key:'run',reason:'人工撤销'})
+ assert.throws(()=>f.command('effect.rearmUnsent',{...args,leaseEpoch:3}),code('effect_safety_revoked'))
+ assert.equal(f.get('pr').state,'failed');assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM execution_effect_observations').get().n,2)
+ f.db.close()
+})
+
+for(const scenario of ['unknown','sent','permission','foreign'])test(`PR不允许无可信未发送证明恢复：${scenario}`,()=>{
+ const f=fixture();const payload={operationKey:'a'.repeat(64),digest:'b'.repeat(64)}
+ f.command('effect.prepare',prepared('pr',{definition:{adapterId:'github-pr',adapterVersion:'1',principalId:'owner',action:'pr',payload}}))
+ f.command('effect.begin',beginArgs('pr'))
+ f.command('effect.observe',receipt('pr',scenario==='unknown'?'unknown':'failed',{result:{status:scenario==='unknown'?'unknown':'failed',phase:'preflight',mutationAttempted:scenario==='sent',reason:scenario==='permission'?'PR_PERMISSION_DENIED':'PR_CONNECTION_FAILED'}}))
+ f.db.exec("UPDATE execution_nodes SET lease_epoch=2")
+ assert.throws(()=>f.command('effect.rearmUnsent',{effectId:'pr',leaseEpoch:2,observationRef:scenario==='foreign'?'different':'synthetic-observation:1',proofRef:'sha256/proof',proof:{operationKey:payload.operationKey,preparedDigest:payload.digest,mutationAttempted:false,reason:'PR_PREFLIGHT_NOT_SENT'}}),code('effect_unsent_recovery_not_proven'))
+ assert.equal(f.get('pr').state,scenario==='unknown'?'unknown':'failed');f.db.close()
+})

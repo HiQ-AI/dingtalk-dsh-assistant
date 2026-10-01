@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { DatabaseSync } from 'node:sqlite'
 const fail=code=>{throw Error(code)},hash=v=>createHash('sha256').update(v).digest('hex')
-export const testStep=Object.freeze({executable:'D:/soft/node-v22.13.0/node.exe',args:['--test','tests/review-opinion-draft-persistence.test.cjs','tests/audit-review-draft-storage.test.cjs','tests/audit-reviewer-enhancements.test.cjs'],timeoutMs:120000})
+export const testStep=Object.freeze({executable:'D:/soft/node-v22.13.0/node.exe',args:['--test','tests/review-opinion-draft-persistence.test.cjs','tests/audit-review-draft-storage.test.cjs','tests/audit-reviewer-enhancements.test.cjs']})
 export function planFrontendChecks(source,yaml){
  const schema=yaml.DEFAULT_SCHEMA.extend([new yaml.Type('tag:yaml.org,2002:js',{kind:'scalar',construct:value=>value})])
  const parse=text=>{
@@ -19,8 +19,8 @@ export function planFrontendChecks(source,yaml){
  }
  const before=parse(source),old=before.check.steps
  if(!Array.isArray(old))fail('FRONTEND_CHECK_STEPS_INVALID')
- const install={executable:testStep.executable,args:['D:/soft/node-v16.20.2/node_global/node_modules/yarn/bin/yarn.js','install','--frozen-lockfile','--non-interactive','--silent'],timeoutMs:600000}
- const build={executable:testStep.executable,args:['D:/soft/node-v16.20.2/node_global/node_modules/yarn/bin/yarn.js','run','build'],timeoutMs:1800000}
+ const install={executable:testStep.executable,args:['D:/soft/node-v16.20.2/node_global/node_modules/yarn/bin/yarn.js','install','--frozen-lockfile','--non-interactive','--silent']}
+ const build={executable:testStep.executable,args:['D:/soft/node-v16.20.2/node_global/node_modules/yarn/bin/yarn.js','run','build']}
  const expected=[install,testStep,build]
  if(isDeepStrictEqual(old,expected))return{updated:source,changed:false}
  if(!isDeepStrictEqual(old,[install,build]))fail('FRONTEND_CHECK_EXISTING_STEPS_DIFFERENT')

@@ -414,9 +414,11 @@ test('排查、方案、真人确认、开发、UAT 四阶段沿用同一业务 
   const owner = createTaskOwnerController({ ctx: {}, store, artifacts, controller,
     modelConfig: () => ({}), advanceTask: id => controller.advanceTaskPlan(id),
     authorizeStages: async () => false,
-    sessionRunner: { async run({ binding, input, onSessionBound, onCandidate }) {
+    sessionRunner: { async run({ binding, input, onSessionBound, onCandidate, readArtifact }) {
       await onSessionBound()
-      turns.push({ binding, input })
+      const events = await Promise.all(input.events.map(async event => ({ ...event,
+        payload: event.payloadRef ? await readArtifact(event.payloadRef) : null })))
+      turns.push({ binding, input: { ...input, events } })
       const complete = input.stages.every(stage => stage.status === 'succeeded')
       const evidenceRefs = input.stages.flatMap(stage => stage.evidenceRefs ?? [])
       const decision = complete
@@ -477,7 +479,7 @@ test('排查、方案、真人确认、开发、UAT 四阶段沿用同一业务 
     assert.equal(ownerTurn.binding.taskId, taskId)
     assert.equal(ownerTurn.binding.sessionId, originalSessionId)
     assert.ok(ownerTurn.input.events.some(event => event.eventType === 'workflow.succeeded'
-      && event.payload.stageId === plan.stages[index].stageId
+      && event.payload?.stageId === plan.stages[index].stageId
       && event.payload.runId === runIds[index]
       && event.payload.outputRef === plan.stages[index].outputRef))
   }
@@ -679,8 +681,51 @@ test('v1 迁移先零副作用检查，再备份升级并独立读回版本', as
   const v5Result = JSON.parse((await runFile(process.execPath, [v5Migration, '--execute', dbPath])).stdout)
   assert.equal(v5Result.toVersion, 5)
   assert.ok(v5Result.backupPath)
-  const reopened = await openExecutionStore({ dbPath, instanceId })
-  assert.equal(reopened.info.schemaVersion, 5)
-  assert.equal((await reopened.query({ kind: 'run', runId: 'historical-run' })).run.taskId, 'historical')
-  await reopened.close()
+  const v6Migration = fileURLToPath(new URL('../scripts/migrate-message-impact.js', import.meta.url))
+  const v6Check = JSON.parse((await runFile(process.execPath, [v6Migration, '--check', dbPath])).stdout)
+  assert.equal(v6Check.writable, false)
+  await runFile(process.execPath, [v6Migration, '--execute', dbPath])
+  await assert.rejects(openExecutionStore({ dbPath, instanceId }), {code:'STORE_SCHEMA_MISMATCH'})
+  const inspected = new DatabaseSync(dbPath,{readOnly:true})
+  assert.equal(inspected.prepare('PRAGMA user_version').get().user_version,6)
+  assert.equal(inspected.prepare("SELECT task_id FROM execution_runs WHERE run_id='historical-run'").get().task_id,'historical')
+  inspected.close()
+})
+
+test('同Task两条测试后等待指定发送人验收，精确阶段条件与产物版本不可冒用', async t => {
+  const { controller, store, artifacts } = await setup(t)
+  const { executionDigest } = await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+  const body = '先执行两条测试数据，我验证通过后，再刷69条正式数据'
+  await store.command({ id: 'receive-stage-condition', kind: 'message.receive', args: { runId: 'stage-source', sourceKey: 'stage-source', sourceVersion: 1,
+    actorId: 'lichen', conversationId: 'group', body, context: {}, policy: {} } })
+  const condition = { sourceKey: 'stage-source', sourceVersion: 1, sourceQuote: body, objective: '刷69条正式数据', requiredActorId: 'lichen' }
+  await controller.createTaskPlan({ commandId: 'condition-plan', taskId: 'condition-task', stages: [
+    { stageId: 'test-two', workflowId: 'implement', input: 2, sourceCondition: { sourceKey: 'stage-source', sourceVersion: 1, sourceQuote: body, objective: '执行两条测试数据' } },
+    { stageId: 'formal-69', workflowId: 'implement', gate: 'confirmation', sourceCondition: condition },
+  ] })
+  let plan = await controller.advanceTaskPlan('condition-task')
+  await controller.whenIdle(plan.stages[0].runId)
+  plan = await controller.advanceTaskPlan('condition-task')
+  assert.deepEqual(plan.stages[1].sourceCondition, condition)
+  assert.equal(plan.stages[1].status, 'waiting_confirmation')
+  assert.equal(plan.stages[1].runId, null)
+  assert.equal((await store.query({ kind: 'run.list', taskId: 'condition-task' })).length, 1)
+  const confirm = { taskId: 'condition-task', planRevision: 1, stageId: 'formal-69', expectedRequirementRevision: 1, outputRef: plan.stages[0].outputRef }
+  await assert.rejects(controller.confirmTaskStage({ ...confirm, commandId: 'missing-source-confirm' }), { code: 'TASK_CONFIRMATION_SOURCE_REQUIRED' })
+  await store.command({ id: 'receive-wrong-confirm', kind: 'message.receive', args: { runId: 'wrong-confirm', sourceKey: 'wrong-confirm', sourceVersion: 1,
+    actorId: 'other', conversationId: 'group', body: '验证通过', context: {}, policy: {} } })
+  await assert.rejects(controller.confirmTaskStage({ ...confirm, commandId: 'wrong-actor-confirm', confirmation: { conditionDigest: executionDigest(condition), actorId: 'other', sourceKey: 'wrong-confirm', sourceVersion: 1 } }), { code: 'TASK_CONFIRMATION_SOURCE_REQUIRED' })
+  await store.command({ id: 'receive-good-confirm', kind: 'message.receive', args: { runId: 'good-confirm', sourceKey: 'good-confirm', sourceVersion: 1,
+    actorId: 'lichen', conversationId: 'group', body: '两条测试已验证通过，继续正式69条', context: {}, policy: {} } })
+  const confirmation = { conditionDigest: executionDigest(condition), actorId: 'lichen', sourceKey: 'good-confirm', sourceVersion: 1 }
+  await assert.rejects(controller.confirmTaskStage({ ...confirm, commandId: 'stale-condition-confirm', confirmation: { ...confirmation, conditionDigest: '0'.repeat(64) } }), { code: 'TASK_CONFIRMATION_SOURCE_REQUIRED' })
+  await assert.rejects(controller.confirmTaskStage({ ...confirm, commandId: 'stale-output-confirm', outputRef: 'sha256/wrong.json', confirmation }), { code: 'TASK_CONFIRMATION_OUTPUT_STALE' })
+  await controller.confirmTaskStage({ ...confirm, commandId: 'good-condition-confirm', confirmation })
+  await controller.bindTaskStageInput({ commandId: 'bind-69', taskId: 'condition-task', planRevision: 1, stageId: 'formal-69', predecessorOutputRef: plan.stages[0].outputRef, input: 69 })
+  plan = await controller.advanceTaskPlan('condition-task')
+  await controller.whenIdle(plan.stages[1].runId)
+  plan = await controller.advanceTaskPlan('condition-task')
+  assert.equal(plan.task.status, 'succeeded')
+  assert.equal(await artifacts.read(plan.stages[1].outputRef), 70)
+  assert.equal((await store.query({ kind: 'run.list', taskId: 'condition-task' })).length, 2)
 })

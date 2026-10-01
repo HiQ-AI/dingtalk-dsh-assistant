@@ -1,0 +1,21 @@
+import{DatabaseSync}from'node:sqlite';import{createHash}from'node:crypto';import{pathToFileURL}from'node:url';import{resolve,isAbsolute}from'node:path';import{maintenanceStatus}from'../packages/dingtalk-dsh-assistant/execution-maintenance.js';
+const fail=code=>{throw Error(code)};
+const audit=db=>Object.fromEntries(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(({name})=>{const hash=createHash('sha256');for(const row of db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()){if(name==='execution_meta')delete row.schema_version;if(name==='execution_runs')delete row.max_claims;hash.update(JSON.stringify(row));hash.update('\n')}return[name,hash.digest('hex')]}));
+const integrity=db=>{if(Object.values(db.prepare('PRAGMA integrity_check').get())[0]!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length)fail('MIGRATION_INTEGRITY_FAILED')};
+export function migrateContinuousExecution(db,{mode}={}){
+ if(!['check','execute'].includes(mode))fail('MIGRATION_MODE_INVALID');
+ const version=Object.values(db.prepare('PRAGMA user_version').get())[0];if(version!==db.prepare('SELECT schema_version FROM execution_meta WHERE singleton=1').get().schema_version||![6,7].includes(version))fail('MIGRATION_SCHEMA_MISMATCH');integrity(db);
+ const baseline=audit(db);if(version===7){if(db.prepare('PRAGMA table_info(execution_runs)').all().some(x=>x.name==='max_claims'))fail('MIGRATION_COLUMN_RETAINED');return{verified:true,version:7,alreadyMigrated:true,baseline}}
+ const sql=db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='execution_runs'").get().sql;
+ if(!sql.includes('max_claims')||!sql.includes('claim_count<=max_claims'))fail('MIGRATION_TABLE_UNEXPECTED');
+ if(mode==='check')return{writes:0,fromVersion:6,toVersion:7,baseline};
+ const maintenance=maintenanceStatus(db);if(!maintenance.active||maintenance.phase!=='stopping'||!maintenance.drained)fail('MIGRATION_REQUIRES_NATIVE_SEAL');
+ if(db.prepare("SELECT 1 FROM execution_nodes WHERE status='running' OR drained=0 LIMIT 1").get()||db.prepare("SELECT 1 FROM task_owners WHERE status='running' OR current_turn_id IS NOT NULL LIMIT 1").get())fail('MIGRATION_NOT_DRAINED');
+ const indexes=db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='execution_runs' AND sql IS NOT NULL").all();
+ const columns=db.prepare('PRAGMA table_info(execution_runs)').all().map(x=>x.name).filter(x=>x!=='max_claims').map(x=>'"'+x+'"').join(',');
+ const replacement=sql.replace(/CREATE TABLE ["']?execution_runs["']?/, 'CREATE TABLE continuous_execution_runs').replace(/max_claims INTEGER NOT NULL(?: DEFAULT \d+)? CHECK\(max_claims>0\),\s*/,'').replace('claim_count>=0 AND claim_count<=max_claims','claim_count>=0');
+ if(replacement.includes('max_claims'))fail('MIGRATION_SQL_UNEXPECTED');
+ db.exec('PRAGMA foreign_keys=OFF;BEGIN IMMEDIATE');try{db.exec(replacement);db.exec(`INSERT INTO continuous_execution_runs(${columns}) SELECT ${columns} FROM execution_runs;DROP TABLE execution_runs;ALTER TABLE continuous_execution_runs RENAME TO execution_runs`);for(const i of indexes)db.exec(i.sql);db.exec('PRAGMA user_version=7;UPDATE execution_meta SET schema_version=7 WHERE singleton=1');if(JSON.stringify(audit(db))!==JSON.stringify(baseline))fail('MIGRATION_DATA_CHANGED');integrity(db);db.exec('COMMIT')}catch(e){db.exec('ROLLBACK');throw e}finally{db.exec('PRAGMA foreign_keys=ON')}
+ integrity(db);return{verified:true,fromVersion:6,toVersion:7,baseline,backupCreated:false}
+}
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){const[mode,path,pid]=process.argv.slice(2);if(!['--check','--execute'].includes(mode)||!isAbsolute(path??''))fail('ARGUMENT_INVALID');let owner;const db=new DatabaseSync(path,{readOnly:mode==='--check'});try{if(mode==='--execute'){if(!Number.isSafeInteger(Number(pid))||Number(pid)<1)fail('EXPECTED_STOPPED_PID_REQUIRED');try{process.kill(Number(pid),0);fail('OLD_PROCESS_ALIVE')}catch(e){if(e.code!=='ESRCH')throw e}owner=new DatabaseSync(path+'.owner.sqlite');owner.exec('PRAGMA busy_timeout=0;BEGIN EXCLUSIVE')}console.log(JSON.stringify(migrateContinuousExecution(db,{mode:mode.slice(2)})))}finally{db.close();if(owner){owner.exec('ROLLBACK');owner.close()}}}

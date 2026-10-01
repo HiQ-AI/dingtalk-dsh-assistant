@@ -254,7 +254,7 @@ test('DWS bridge 将稳定事件交给 resident 并在真实回读后确认 outb
     onGroupSubscribed(listener) { subscribedListener = listener; return () => { subscribedListener = undefined } },
     onOutboxAppended(listener) { outboxListener = listener; return () => { outboxListener = undefined } },
     async ingest(message) {
-      assert.deepEqual(message, { groupId: 'cid-a', messageId: 'm1', text: 'hello', occurredAt: '2026-08-24T13:00:00+08:00', senderName: '张三', senderOpenDingTalkId: 'od-user-1' })
+      assert.deepEqual(message, { groupId: 'cid-a', messageId: 'm1', text: 'hello', occurredAt: '2026-08-24T05:00:00.000Z', rawOccurredAt: '2026-08-24T13:00:00+08:00', senderName: '张三', senderOpenDingTalkId: 'od-user-1' })
       await outboxListener({ groupId: 'cid-a', outbound: { outboundId: 'out-1', sourceMessageId: 'm1', text: 'reply' } })
       return { duplicate: false, group: { messages: [{ messageId: 'm1' }], outbox: [{ outboundId: 'out-1', sourceMessageId: 'm1', text: 'reply' }] } }
     },

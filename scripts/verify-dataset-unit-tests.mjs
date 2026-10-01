@@ -18,7 +18,7 @@ export async function main(args = process.argv.slice(2), directory = process.cwd
   const suffix='host-unit-'+randomUUID(),reports=join(directory,'target','surefire-reports'),proofDirectory=join(directory,'target',suffix),classes=join(proofDirectory,'verifier')
   await mkdir(classes,{recursive:true})
   const source=fileURLToPath(new URL('./LocalAcceptanceBackground.java',import.meta.url))
-  const run=(exe,argv)=>{const result=spawnSync(exe,argv,{cwd:directory,windowsHide:true,shell:false,stdio:'inherit',timeout:1800000});if(result.error||result.status!==0)throw Error('DATASET_TEST_COMMAND_FAILED')}
+  const run=(exe,argv)=>{const result=spawnSync(exe,argv,{cwd:directory,windowsHide:true,shell:false,stdio:'inherit'});if(result.error||result.status!==0)throw Error('DATASET_TEST_COMMAND_FAILED')}
   run(join(dirname(java),process.platform==='win32'?'javac.exe':'javac'),['-encoding','UTF-8','-d',classes,source])
   run(java,testArguments(maven,boot[0],directory,suffix))
   run(java,['-cp',classes,'LocalAcceptanceBackground','junit',reports,suffix])

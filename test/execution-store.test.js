@@ -224,27 +224,7 @@ test('工程索引容量等待仅在旧节点排空且下游未运行时切换�
   assert.equal(after.nodes[1].inputRef, args.inputRef)
   assert.equal(after.nodes[1].status, 'ready')
   await rejects(f.store.command(command('run.workflow.migrate-index', args)), 'WORKFLOW_MIGRATION_CONFLICT')
-  // 构造旧包已补额度却留下预算耗尽领取回执的快照。
-  await f.store.close()
-  const raw = new DatabaseSync(f.dbPath)
-  const oldNode = after.nodes[1]
-  const exhaustedClaim = `claim:${oldNode.nodeRunId}:${oldNode.leaseEpoch + 1}`
-  raw.prepare('INSERT INTO execution_receipts(command_id,payload_digest,result,created_at) VALUES(?,?,?,?)')
-    .run(exhaustedClaim, d, JSON.stringify({ status: 'budget_exhausted' }), new Date().toISOString())
-  raw.prepare('INSERT INTO execution_receipts(command_id,payload_digest,result,created_at) VALUES(?,?,?,?)')
-    .run(`index-budget:run:${changedDigest}`, d, JSON.stringify({ status: 'applied' }), new Date().toISOString())
-  raw.close(); await f.open(false)
-  await rejects(f.store.command(command('run.workflow.index-budget-lease', { runId: 'run', workflowDigest: changedDigest })), 'WORKFLOW_BUDGET_COMMAND_INVALID')
-  const leaseId = `index-budget-lease:run:${changedDigest}`
-  await f.store.command(command('run.workflow.index-budget-lease', { runId: 'run', workflowDigest: changedDigest }, leaseId))
-  const resumed = await f.query()
-  assert.equal(resumed.nodes[1].status, 'ready')
-  assert.equal(resumed.nodes[1].leaseEpoch, oldNode.leaseEpoch + 1)
-  const next = await f.store.command(command('node.claim', { runId: 'run', nodeId: 'index-files', expectedGeneration: resumed.nodes[1].generation,
-    expectedLeaseEpoch: resumed.nodes[1].leaseEpoch }, `claim:${resumed.nodes[1].nodeRunId}:${resumed.nodes[1].leaseEpoch + 1}`))
-  assert.equal(next.result.status, 'applied')
-  assert.equal(next.result.binding.nodeId, 'index-files')
-  assert.equal((await f.store.command(command('run.workflow.index-budget-lease', { runId: 'run', workflowDigest: changedDigest }, leaseId))).replayed, true)
+
 })
 test('工程读取节点仅在旧执行已排空且下游未开始时迁移定义', async t => {
   const names = ['prepare-workspace', 'index-files', 'select-files', 'validate-selection', 'read-files', 'propose-changes', 'apply-changes']
@@ -309,7 +289,7 @@ test('磁盘配置读回、显式初始化、正常开启及身份/schema严格�
   assert.equal((await f.query()).nodes[0].generation, 1)
   await f.store.close()
   const raw = new DatabaseSync(f.dbPath)
-  raw.exec('PRAGMA user_version=6')
+  raw.exec('PRAGMA user_version=8')
   raw.close()
   await rejects(f.open(), 'STORE_SCHEMA_MISMATCH')
 })
@@ -641,23 +621,20 @@ test('会话创建失败可落waiting/recovery，不能伪造sessionBound或提�
   assert.equal(next.sessionBound, false)
 })
 
-test('持久预算跨input generation保留，耗尽状态提交且receipt replay不扣额', async t => {
-  const f = await fixture(t, creation([plan()], { maxClaims: 1 }))
-  const n = await f.claim()
-  await f.drain(n)
-  await f.store.command(command('input.accept', { runId: 'run', inputId: 'i', sourceKey: 'm', requirementRef: 'sha256/r2.json' }))
-  await f.store.command(command('input.apply', { runId: 'run', inputIds: ['i'], expectedRevision: 0, requirementRef: 'sha256/r2.json',
-    nodes: [{ nodeId: 'one', inputRef: 'sha256/i2.json', inputDigest: changedDigest }] }))
-  const claim = command('node.claim', { runId: 'run', nodeId: 'one', expectedGeneration: 2, expectedLeaseEpoch: 0 }, 'exhausted')
-  assert.equal((await f.store.command(claim)).result.status, 'budget_exhausted')
-  await f.store.close()
-  await f.open()
-  const state = await f.query()
-  assert.equal(state.run.claimCount, 1)
-  assert.equal(state.run.status, 'waiting')
-  assert.equal(state.nodes[0].waitReason.reference, 'EXECUTION_BUDGET_EXHAUSTED')
-  await rejects(f.store.command(command('run.recover', { runId: 'run' })), 'EXECUTION_BUDGET_EXHAUSTED')
-  assert.equal((await f.store.command(claim)).replayed, true)
+test('领取统计跨重启保留，重复恢复不触发次数截止', async t => {
+  const f = await fixture(t)
+  for(let index=0;index<8;index++) {
+    const n=await f.claim('one',1,index)
+    await f.drain(n)
+    await f.store.command(command('node.commit',{...identity(n),inputDigest:n.inputDigest,evidenceRefs:[],outcome:'waiting',waitReason:{kind:'recovery',reference:'ECONNRESET'}}))
+    await f.store.command(command('run.recover',{runId:'run'}))
+  }
+  await f.store.close();await f.open()
+  assert.equal((await f.query()).run.claimCount,8)
+  const claim=command('node.claim',{runId:'run',nodeId:'one',expectedGeneration:1,expectedLeaseEpoch:8},'after-restart')
+  assert.equal((await f.store.command(claim)).result.status,'applied')
+  assert.equal((await f.store.command(claim)).replayed,true)
+  assert.equal((await f.query()).run.claimCount,9)
 })
 
 test('真实子进程COMMIT前强杀：状态及receipt共同回滚，独占锁随进程释放', async t => {
@@ -737,4 +714,43 @@ test('测试进程限额触发原生SQLITE_FULL：整条命令回滚且封闭写
   await f.open()
   assert.equal((await f.query()).run.stopRequested, false)
   assert.equal(await f.store.query({ kind: 'receipt', commandId: 'full-stop' }), null)
+})
+
+test('原生worker启动校验超过旧10秒仍等待ready，不消耗命令回执窗口', {timeout:25000}, async t=>{
+ const f=await fixture(t,null);await f.store.close()
+ const probe=child(t,`const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});const started=Date.now();const store=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});process.send({type:'ready',elapsed:Date.now()-started,healthy:store.healthy});await store.close()`,[f.dbPath,f.instanceId],
+  "import {isMainThread} from 'node:worker_threads';if(!isMainThread)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10500)")
+ const result=await probe.message('ready');assert.ok(result.elapsed>=10500);assert.equal(result.healthy,true);assert.equal((await probe.exited).code,0)
+})
+
+for(const mode of ['exit','error'])test(`原生worker在ready前${mode}仍明确拒绝，不永久等待`,async t=>{
+ const f=await fixture(t,null);await f.store.close()
+ const preload="import {isMainThread} from 'node:worker_threads';if(!isMainThread){"+(mode==='exit'?"process.exit(0)":"throw new Error('startup-worker-failure')")+'}'
+ const probe=child(t,`const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});try{await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});process.send({type:'result',unexpected:true})}catch(error){process.send({type:'result',code:error.code,message:error.message})}`,[f.dbPath,f.instanceId],preload)
+ const result=await probe.message('result');assert.equal(result.unexpected,undefined)
+ if(mode==='exit')assert.equal(result.code,'STORE_UNAVAILABLE');else assert.match(result.message,/startup-worker-failure/)
+ assert.equal((await probe.exited).code,0)
+})
+import { migrateContinuousExecution } from '../scripts/migrate-continuous-execution.mjs'
+
+test('v6到v7移除领取截止，检查零写并完整保留来源和执行数据', async t => {
+  const f = await fixture(t)
+  await f.store.command(command('runtime.maintenance.change', {active:true,expectedRevision:0,maintenanceId:'continuous',actorId:'owner',reason:'migration'}))
+  await f.store.command(command('runtime.maintenance.seal', {expectedRevision:1,maintenanceId:'continuous',actorId:'owner',reason:'seal'}))
+  await f.store.close()
+  const db=new DatabaseSync(f.dbPath)
+  const current=db.prepare("SELECT sql FROM sqlite_master WHERE name='execution_runs'").get().sql
+  const cols=db.prepare('PRAGMA table_info(execution_runs)').all().map(x=>'"'+x.name+'"').join(',')
+  const prior=current.replace('CREATE TABLE execution_runs','CREATE TABLE prior_runs').replace('claim_count INTEGER','max_claims INTEGER NOT NULL DEFAULT 3 CHECK(max_claims>0),claim_count INTEGER').replace('CHECK(claim_count>=0)','CHECK(claim_count>=0 AND claim_count<=max_claims)')
+  db.exec('PRAGMA foreign_keys=OFF;BEGIN IMMEDIATE');db.exec(prior)
+  db.exec(`INSERT INTO prior_runs(${cols}) SELECT ${cols} FROM execution_runs;DROP TABLE execution_runs;ALTER TABLE prior_runs RENAME TO execution_runs;CREATE UNIQUE INDEX execution_one_active_task ON execution_runs(task_id) WHERE status NOT IN ('succeeded','failed','cancelled');PRAGMA user_version=6;UPDATE execution_meta SET schema_version=6;COMMIT;PRAGMA foreign_keys=ON`)
+  const check=migrateContinuousExecution(db,{mode:'check'});assert.equal(check.writes,0)
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version,6)
+  const result=migrateContinuousExecution(db,{mode:'execute'});assert.equal(result.verified,true);assert.deepEqual(result.baseline,check.baseline)
+  assert.ok(!db.prepare('PRAGMA table_info(execution_runs)').all().some(x=>x.name==='max_claims'))
+  db.prepare('UPDATE execution_runs SET claim_count=500 WHERE run_id=?').run('run')
+  assert.equal(db.prepare('SELECT claim_count FROM execution_runs').get().claim_count,500)
+  assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[])
+  db.close()
+  await f.open();assert.equal((await f.query()).run.claimCount,500)
 })

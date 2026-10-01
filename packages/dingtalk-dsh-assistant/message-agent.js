@@ -75,7 +75,7 @@ export function createMessageAgentController({ ctx, store, artifacts, tools, mod
         await command('message.agent.drained', { commandId: entry.commandId, leaseEpoch: entry.leaseEpoch, sessionId: entry.sessionId })
         return
       }
-      const failure = { status: 'blocked', reply: '本次查询未完成，执行已停止。请在处理记录中查看原因。',
+      const failure = { status: 'blocked', reply: '本次查询因系统读取问题未完成，执行已停止，需要修复后继续。',
         reason: error.code ?? error.message }
       const saved = await artifacts.put(failure)
       await command('message.agent.fail', { ...commandBinding(entry), drained: true, error: failure.reason,
@@ -107,6 +107,21 @@ export function createMessageAgentController({ ctx, store, artifacts, tools, mod
     flight.promise = execute(entry, input, definition).catch(error => { flight.error = error })
       .finally(() => { if (!flight.error) flights.delete(info.commandId) })
     return { executionPending: true }
+  }
+
+  async function prepareRetry(action, info, { retryKey, reason }) {
+    const prior = await read(info.commandId)
+    if (!prior || prior.status !== 'failed' || !prior.drained || prior.error !== 'execution_tool_failed') throw executionError('MESSAGE_READONLY_RETRY_FORBIDDEN')
+    const input = await prepareInput(action, info)
+    const selected = await modelConfig({ stage: 'answer', input })
+    const allowedTools = selectTools ? await selectTools(input) : tools.map(tool => tool.name)
+    if (!Array.isArray(allowedTools) || allowedTools.some(name => !tools.some(tool => tool.name === name))) throw executionError('MESSAGE_AGENT_TOOLS_INVALID')
+    const definition = agentWorkDefinition({ ...selected, allowedTools })
+    return { commandId: info.commandId, expectedInputVersion: prior.inputVersion, expectedInputDigest: prior.inputDigest,
+      expectedLeaseEpoch: prior.leaseEpoch, sourceVersion: info.run.sourceVersion, expectedRunRevision: info.run.revision,
+      retryKey, reason, inputVersion: prior.inputVersion + 1, inputDigest: executionDigest(input), inputRef: (await artifacts.put(input)).ref,
+      sessionId: `answer-${executionDigest([info.commandId, retryKey, prior.inputVersion + 1]).slice(0, 40)}`,
+      toolPolicyDigest: executionDigest({ definition, scope: input.scope }) }
   }
 
   async function resume({ request, data, identity, eventId, answer }) {
@@ -146,7 +161,7 @@ export function createMessageAgentController({ ctx, store, artifacts, tools, mod
     return command('message.agent.drained', { commandId, leaseEpoch: entry.leaseEpoch, sessionId: entry.sessionId })
   }
 
-  return { start, resume, cancel, isCurrent,
+  return { start, prepareRetry, resume, cancel, isCurrent,
     async reconcile() {
       for (const flight of flights.values()) {
         if (flight.error) throw flight.error

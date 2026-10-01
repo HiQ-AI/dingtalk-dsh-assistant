@@ -1,3 +1,4 @@
+import { scriptedCoordinator, actionDecision } from './fixtures/group-coordinator.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -13,7 +14,7 @@ import { intentContext, validateExecutionMaterialRefs } from '../packages/dingta
 test('启动材料引用由Host列举，查询资源和其他事项引用不能进入材料等待', () => {
   const input = intentContext({ sourceKey: 'source-a', executionMaterialRefs: ['attachment-a'],
     referenceSources: [{ sourceKey: 'quote-a' }] }, { disposition: 'new' }, {})
-  const intent = refs => ({ kind: 'intent', requiredExecutionMaterials: refs })
+  const intent = refs => ({ kind: 'intent', actions: [], requiredExecutionMaterials: refs })
   assert.deepEqual(input.executionMaterialRefs, ['source-a', 'attachment-a', 'quote-a'])
   assert.doesNotThrow(() => validateExecutionMaterialRefs('I', intent(['attachment-a']), input))
   assert.doesNotThrow(() => validateExecutionMaterialRefs('I', intent([]), input))
@@ -34,16 +35,11 @@ async function fixture(t, execute = async () => answer('已回答'), options = {
   const calls = [], sent = [], flights = new Set()
   const execution = { store, artifacts, controller }
   const legacy = { getAgentConfig: () => ({ provider: 'test', model: 'test' }), getGroup: groupId => ({ groupId, responsibility: '答复项目问题', messages: [] }) }
-  const judge = async ({ stage, input }) => {
-    if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.source.text.length }], goalText: input.source.text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.source.text.length, role: 'unit' }] }
-    if (stage === 'R') { const candidate = input.candidates.find(item => item.topicId); return { kind: 'binding', disposition: candidate ? 'existing' : 'new', candidateId: candidate?.candidateId ?? null, evidence: ['同一项目'] } }
-    if (stage === 'IB') return { kind: 'topic_intents', decisions: input.units.map(unit => ({ unitId: unit.unitId, intent: { kind: 'intent', actions: options.actions ?? [{ intent: 'answer', arguments: { objective: '回答当前问题' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' } })) }
-    throw new Error(`UNEXPECTED_JUDGE_${stage}`)
-  }
+  const coordinatorSessions = scriptedCoordinator((source,input) => actionDecision(source, options.actions ?? [{ intent: 'answer', arguments: { objective: '回答当前问题' }, dependsOn: [] }], {candidate:input.candidates.find(item=>item.topicId)}), options.beforeSubmit)
   const notifications = options.notifications ?? { canDisclose: async () => true, send: async notice => { sent.push(notice); return { messageId: `reply-${sent.length}` } }, readback: async notice => ({ messageId: notice.ack.messageId, conversationId: 'g' }) }
   const taskOwnerSessions = { async run() { throw new Error('ORDINARY_ANSWER_MUST_NOT_CREATE_TASK') }, async close() {} }
   const messageAgentSessions = { run(options) { const flight = (async () => { calls.push(options); await options.onSessionBound(); const result = await execute(options, calls.length); await options.onResult(result); return { status: 'submitted', output: result } })(); flights.add(flight); void flight.then(() => flights.delete(flight), () => flights.delete(flight)); return flight }, async cancel() {}, async close() { await Promise.all([...flights]) } }
-  const open = () => openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', webActorId: 'owner', ...options.config }, legacy, judge: options.judge ? request => options.judge(request, judge) : judge, execution, notifications, taskOwnerSessions, messageAgentSessions })
+  const open = () => openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', webActorId: 'owner', ...options.config }, legacy, coordinatorSessions, execution, notifications, taskOwnerSessions, messageAgentSessions })
   let service
   t.after(async () => { await service?.close(); await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
   service = await open()
@@ -92,27 +88,19 @@ test('慢查询不堵塞其他消息判断和独立Agent执行', async t => {
   assert.equal(h.calls.length, 2)
 })
 
-test('错误查询资源引用在意图落账前纠正，不生成材料等待或重复执行', async t => {
-  let attempts = 0, correction
-  const h = await fixture(t, undefined, { config: { policy: { recoveryDelaysMs: [0, 0] } },
-    judge: async (request, fallback) => {
-      const output = await fallback(request)
-      if (request.stage === 'IB') {
-        attempts++
-        if (attempts === 1) output.decisions[0].intent.requiredExecutionMaterials = ['query-resource']
-        else correction = request.input.previousFailure
-      }
-      return output
-    } })
+test('原生协调读取虚构材料被工具拒绝，纠正后提交且只执行一次', async t => {
+  let rejected = 0
+  const h = await fixture(t, undefined, { beforeSubmit: async args => {
+    if (!args.input.sources.length) return
+    const read = args.readTools.find(tool => tool.name === 'group_coordinator_read_material')
+    await assert.rejects(read.execute({runId:args.input.sources[0].runId,resourceRef:'query-resource'}), error => error.code === 'GROUP_COORDINATOR_MATERIAL_FORBIDDEN')
+    rejected++
+  } })
   const received = await h.receive('invalid-material-ref')
   const state = await h.settle(received.runId)
-  assert.equal(attempts, 2)
-  assert.match(correction, /MESSAGE_EXECUTION_MATERIAL_REF_INVALID/)
-  assert.equal(state.requests.length, 0)
-  assert.equal(state.commands.length, 1)
-  assert.equal(h.calls.length, 1)
-  assert.equal(state.executions[0].status, 'succeeded')
-  assert.equal(state.nodes.find(node => node.nodeId === 'IB').leaseEpoch, 2)
+  assert.equal(rejected,1);assert.equal(state.requests.length,0)
+  assert.equal(state.commands.length,1);assert.equal(h.calls.length,1)
+  assert.equal(state.executions[0].status,'succeeded')
 })
 
 test('异步问答完成即派发后继，不依赖再次process或恢复轮询', async t => {

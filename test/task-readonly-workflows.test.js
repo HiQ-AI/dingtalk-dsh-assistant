@@ -1,3 +1,4 @@
+import { scriptedCoordinator } from './fixtures/group-coordinator.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { assertRetiredWorkflowsDrained,readOnlyWorkflowOwnerContract,retiredWorkflowIds } from '../packages/dingtalk-dsh-assistant/task-readonly-workflows.js'
@@ -51,7 +52,7 @@ test('正式Host启动遇到旧待执行阶段时拒绝切换，保留原冻结�
  await controller.createTaskPlan({commandId:'plan',taskId:'old-task',stages:[{stageId:'first',workflowId:frozen.id,input:{}}]})
  const before=await store.query({kind:'task.plan',taskId:'old-task'})
  await controller.close();await store.close()
- await assert.rejects(openWorkflowService({ctx:{},config:{groupIds:['g'],ownerActorId:'owner',dbPath,artifactDirectory,instanceId:'retired-test'},legacy:{getAgentConfig:()=>({provider:'test',model:'test'})},judge:async()=>{throw Error('MODEL_MUST_NOT_RUN')},taskOwnerSessions:{async close(){}}}),{code:'WORKFLOW_CUTOVER_ACTIVE_REFERENCES'})
+ await assert.rejects(openWorkflowService({ctx:{},config:{groupIds:['g'],ownerActorId:'owner',dbPath,artifactDirectory,instanceId:'retired-test'},legacy:{getAgentConfig:()=>({provider:'test',model:'test'})},coordinatorSessions: scriptedCoordinator(),taskOwnerSessions:{async close(){}}}),{code:'WORKFLOW_CUTOVER_ACTIVE_REFERENCES'})
  const readback=await openExecutionStore({dbPath,instanceId:'retired-test'})
  try{assert.deepEqual(await readback.query({kind:'task.plan',taskId:'old-task'}),before);assert.equal((await readback.query({kind:'run.list',limit:200})).length,0)}finally{await readback.close()}
 })
