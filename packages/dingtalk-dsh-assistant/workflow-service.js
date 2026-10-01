@@ -1085,7 +1085,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       || source.status === 'superseded'
       || (topic?.facts.flatMap(fact => fact.sourceRefs) ?? []).some(ref => ref.sourceKey === source.sourceKey && ref.sourceVersion !== source.sourceVersion))) throw executionError('TASK_SOURCE_NOT_CURRENT')
     const references = [...new Set([...(action.requiredExecutionMaterials ?? []),
-      ...referencedResourceIds(action.arguments, sources.flatMap(source => source.context?.attachments ?? []))])]
+      ...referencedResourceIds([action.arguments, ...(topic?.facts.map(fact => fact.text) ?? [])],
+        sources.flatMap(source => source.context?.attachments ?? []))])]
     const resolved = references.length ? await resolveMaterials({ run: info.run,
       needs: references.map(resourceRef => ({ resourceRef })) }) : { ready: true, data: { resources: [] } }
     if (!resolved.ready) throw executionError('WORKFLOW_REQUIRED_MATERIAL_NOT_READY')

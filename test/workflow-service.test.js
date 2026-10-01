@@ -4513,15 +4513,15 @@ test('收信箱只展示当前来源版本，旧材料阻塞与已发送审计�
  assert.equal((await f.execution.store.query({kind:'message.run',runId:'mailbox-old'})).requests[0].status,'pending')
 })
 
-test('创建目标精确引用四附件且无前置材料时，四来源fact授权保留且独立附件静默',async t=>{
+for(const requiredCount of [0,1])test(`创建目标仅含业务名称时，四附件正式fact保留材料权限且独立附件静默：前置${requiredCount}`,async t=>{
  const ids=['provided-file-a','provided-file-b','provided-file-c','provided-file-d'],seen=[],reads=[]
  const filename=id=>`${id}.${id==='provided-file-d'?'xlsx':'sql'}`
  const f=await fixture(t,'owner',undefined,{readMessage:async(_group,id)=>({conversationId:'g',messageId:id,text:`[文件] ${filename(id)} fileId: ${id}`,resourceRefs:[{type:'fileId',resourceId:id}]}),readResource:async(_group,_message,{resourceId})=>{reads.push(resourceId);return {text:resourceId==='provided-file-d'?'Sheet1\n审核人\t状态\n专家甲\t待审核':'SELECT 1;',complete:true}},coordinatorSessions:coordinatorFixtureSessions((source,input)=>{
   const target=input.sources.find(item=>item.body==='请调查四份附件')
   if(source.body.includes('unrelated-file'))return{runId:source.runId,reason:'无关独立附件',units:[]}
   const primary=source.runId===target.runId
-  const decision=coordinatorUnit(source,primary?'research':'fact',primary?{objective:`核对附件 ${ids.join('、')}；调查现状后提交方案`,workflowId:'task-investigation'}:{kind:'fact',text:source.body},primary?{disposition:'new',candidateId:null}:{disposition:'conversation',candidateId:`source:${target.runId}`})
-  assert.deepEqual(decision.units[0].intent.requiredExecutionMaterials,[])
+  const decision=coordinatorUnit(source,primary?'research':'fact',primary?{objective:'核对审核工作簿和配套脚本，调查现状后提交方案',workflowId:'task-investigation'}:{kind:'fact',text:source.body},primary?{disposition:'new',candidateId:null}:{disposition:'conversation',candidateId:`source:${target.runId}`})
+  if(primary)decision.units[0].intent.requiredExecutionMaterials=ids.slice(0,requiredCount)
   return decision
  }),taskOwnerSessions:{async run({input,onSessionBound,onCandidate}){
   seen.push(input);await onSessionBound();await onCandidate({action:'wait',summary:'按授权附件继续调查',evidenceRefs:[]});return{status:'submitted'}

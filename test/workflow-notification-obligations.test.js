@@ -92,8 +92,8 @@ test('Task已落账但command尚未完成仍有承接责任，完成后不重复
   await f.flush()
   const [notice] = await f.notices()
   assert.equal(notice.payload.phase, 'accepted')
+  assert.equal(notice.payload.text, '正在核对执行条件，处理尚未开始。')
   assert.equal(notice.payload.fact.requirementRevision, 1)
-  assert.match(notice.payload.text, /尚不能确认已开始/)
   await f.call('command.complete', { commandId: 'c', leaseEpoch: claim.leaseEpoch, result: { taskId: 'task', reply: '已收到' } })
   await f.flush(); assert.equal((await f.notices()).length, 1)
   await f.store.command({ id: 'task-update', kind: 'task.requirement.update', args: { taskId: 'task', expectedRequirementRevision: 1,

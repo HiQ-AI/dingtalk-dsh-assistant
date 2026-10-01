@@ -228,7 +228,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
     const responsibility = groupResponsibility(run.conversationId)
     if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
     await command('message.notification.prepare', { runId: run.runId, acceptanceId: acceptance.id, notificationId, eventKey,
-      payload: { text: formatGroupReply('已接收任务，执行条件仍在核对，尚不能确认已开始。', responsibility), phase: 'accepted', conversationId: run.conversationId,
+      payload: { text: formatGroupReply('正在核对执行条件，处理尚未开始。', responsibility), phase: 'accepted', conversationId: run.conversationId,
         sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId,
         fact: { sourceVersion: acceptance.sourceVersion, runRevision: run.revision, taskId: acceptance.taskId, requirementRevision: acceptance.requirementRevision } },
       disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
