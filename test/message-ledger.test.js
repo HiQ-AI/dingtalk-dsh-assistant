@@ -32,6 +32,31 @@ test('冻结能力元数据保持原定义摘要，CAS拒绝配置漂移、重�
 })
 const bad=(p,code)=>assert.rejects(p,e=>e.code===code)
 
+test('群协调目录迁移只接受已排空绑定CAS，保留来源及水位并拒绝旧绑定', async t => {
+ const f=await fixture(t)
+ await f.call('receive',receive('relocate',{sourceKey:'relocate-source'}))
+ const claimed=(await f.call('coordinator.claim',{conversationId:'g',turnId:'first',expectedLeaseEpoch:0,
+   sessionId:'old-session',sourceRuns:[{runId:'relocate',sourceVersion:1}],taskEventRefs:[]})).result.binding
+ await f.call('coordinator.bound',claimed)
+ const args={conversationId:'g',previousSessionId:'old-session',sessionId:'root-session',expectedLeaseEpoch:claimed.leaseEpoch}
+ await bad(f.call('coordinator.relocate',args),'MESSAGE_COORDINATOR_STALE')
+ await f.call('coordinator.release',{...claimed,drained:true})
+ const before=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ await bad(f.call('coordinator.relocate',{...args,expectedLeaseEpoch:0}),'MESSAGE_COORDINATOR_STALE')
+ const id='relocate-once',result=await f.call('coordinator.relocate',args,id)
+ assert.equal((await f.call('coordinator.relocate',args,id)).replayed,true)
+ const after=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ assert.deepEqual(after.sources,before.sources)
+ assert.equal(after.coordinator.consumedSequence,before.coordinator.consumedSequence)
+ assert.equal(after.coordinator.sessionId,'root-session')
+ assert.equal(after.coordinator.leaseEpoch,claimed.leaseEpoch+1)
+ assert.equal(after.coordinator.sessionBound,true)
+ assert.equal(after.coordinator.sessionHistory[0].sessionId,'old-session')
+ await bad(f.call('coordinator.relocate',args),'MESSAGE_COORDINATOR_STALE')
+ await bad(f.call('coordinator.bound',claimed),'MESSAGE_COORDINATOR_STALE')
+ assert.equal(result.result.binding.status,'idle')
+})
+
 async function echoFixture(t, { acknowledgedOnly = false, evidenceGroup = 'g', barrier = false } = {}) {
  const f=await fixture(t)
  await f.call('receive',receive('outbound'));await f.call('split',{runId:'outbound',units:[{unitId:'out-unit'}]})

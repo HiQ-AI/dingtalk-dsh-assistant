@@ -2243,7 +2243,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       },
   }
   const coordinator = createMessageCoordinator({ ctx, store, context: messageContext, modelConfig,
-    getWorkspaceDir: () => sessionWorkspace(legacy.getAgentConfig().workspaceDir, 'resident'), sessionRunner: coordinatorSessions })
+    getWorkspaceDir: () => legacy.getAgentConfig().workspaceDir,
+    getGroupName: groupId => legacyGroup(groupId)?.name, sessionRunner: coordinatorSessions })
   const messages = createMessageWorkflow({ store, coordinator, policy: config.policy, handlers, context: messageContext })
 
   async function investigationRequest(runId) {
@@ -2522,11 +2523,9 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     if (closed) throw executionError('WORKFLOW_SERVICE_CLOSED')
     if (!groups.has(message.groupId)) throw executionError('WORKFLOW_GROUP_NOT_ADMITTED')
     const actorId = requireText(message.senderOpenDingTalkId, 'WORKFLOW_AUTHENTICATED_ACTOR_REQUIRED')
-    // 只用独立回读的消息 ID 排除自身回声；不能等待通知 flush，否则慢回读会挡住新消息。
-    if (actorId === ownerActorId) {
-      if (await store.query({ kind: 'message.outboundByMessage', conversationId: message.groupId, messageId: message.messageId }))
-        return { accepted: true, duplicate: true, processing: 'outbound-echo' }
-    }
+    // 按同群已登记的外发消息ID识别回声，发送账号不等于业务任务所有者。
+    if (await store.query({ kind: 'message.outboundByMessage', conversationId: message.groupId, messageId: message.messageId }))
+      return { accepted: true, duplicate: true, processing: 'outbound-echo' }
     const clarification = await quotedClarification(message)
     if (clarification) return clarification
     // 切换前已可靠处理的消息属于旧引擎；渠道重叠补拉不能重新获得执行权。

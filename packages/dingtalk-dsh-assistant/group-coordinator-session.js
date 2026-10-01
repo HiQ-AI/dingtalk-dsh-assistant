@@ -1,16 +1,60 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { groupReplyInstructions } from './workflow-notifications.js'
+import { createHash } from 'node:crypto'
+import { realpath } from 'node:fs/promises'
+import { isAbsolute } from 'node:path'
 
 const IDENTITY = 'dingtalk/group-coordinator-session'
 const SUBMIT = 'group_coordinator_submit'
 const fail = code => Object.assign(new Error(code), { code })
 
+// 原始事件保持不变；下一轮只携带已结束轮次的来源，不累积失效的Host快照。
+function retainCoordinatorSources(session) {
+  const events = session.snapshotEvents()
+  for (const seq of [...session.surface.nodes]) {
+    const event = events[seq], source = event?.data?.source
+    if (event.type !== 'user/message' || !source?.groupCoordinator || source.groupCoordinatorHistory) continue
+    const input = JSON.parse(event.data.content.find(block => block.type === 'text').text)
+    if (!Array.isArray(input.sources)) continue
+    const history = { sources: input.sources.map(({ runId, sourceVersion, actorId, body, sourceKey, context }) => ({
+      runId, sourceVersion, actorId, body, sourceKey,
+      ...(context ? { quotes: context.quotes ?? [], attachments: context.attachments ?? [] } : {}),
+    })) }
+    session.append('user/message', createUserMessage({ source: { ...source, groupCoordinatorHistory: true },
+      content: [{ type: 'text', text: JSON.stringify(history) }] }),
+    { surfaceOp: { op: 'replace', start: seq, end: seq }, sourceEventSeqs: [seq] })
+  }
+}
+
 // 每群一个原生逻辑会话；Host负责来源、版本和动作接纳，本层没有任务或群消息写入工具。
-export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir }) {
+export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir, getGroupName }) {
   if (typeof isCurrent !== 'function') throw fail('GROUP_COORDINATOR_CURRENT_CHECK_REQUIRED')
   const entries = new Map()
   let closed = false
+  const checkedWorkspaces = new Map()
+  async function workspace(binding) {
+    if (!getWorkspaceDir) return undefined
+    const directory = await getWorkspaceDir({ binding })
+    if (!isAbsolute(directory ?? '')) throw fail('GROUP_COORDINATOR_WORKSPACE_REQUIRED')
+    return realpath(directory)
+  }
+  function permissions(handle) {
+    const service = handle.agent.ctx.get('permissionPresets')
+    if (!service) throw fail('GROUP_COORDINATOR_PERMISSION_PRESETS_REQUIRED')
+    service.set(handle.agent.session, 'danger-full-access')
+  }
+  function title(session, conversationId) {
+    const name = getGroupName?.(conversationId)
+    if (!name) return
+    const service = ctx.get('sessionTitle')
+    if (!service) throw fail('GROUP_COORDINATOR_SESSION_TITLE_REQUIRED')
+    service.rename(session, name)
+  }
+  async function inspect(sessionId) {
+    try { return await ctx.sessionPersistence.inspect(sessionId) }
+    catch (error) { if (error.name !== 'SessionPersistenceNotFoundError' || error.sessionId !== sessionId) throw error }
+  }
   const current = async entry => !closed && !entry.cancelled && await isCurrent(entry.binding)
   async function drain(entry) {
     return entry.draining ??= (async () => {
@@ -28,12 +72,52 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
   }
   function history(events, binding) {
     const ids = events.filter(e => e.type === IDENTITY)
-    if (ids.length !== 1 || ids[0].data.conversationId !== binding.conversationId
-      || ids[0].data.sessionId !== binding.sessionId || ids[0].data.version !== 1) throw fail('GROUP_COORDINATOR_SESSION_IDENTITY_MISMATCH')
-    const leases = [ids[0].data.creationLease, ...events.flatMap(e => e.type === 'user/message' ? [e.data]
+    const identity = ids.at(-1)
+    if (!identity || ids.some(event => event.data.conversationId !== binding.conversationId || event.data.version !== 1)
+      || ids.some((event, index) => index > 0 && (event.data.parentSessionId !== ids[index - 1].data.sessionId
+        || event.data.creationLease <= ids[index - 1].data.creationLease))
+      || identity.data.sessionId !== binding.sessionId) throw fail('GROUP_COORDINATOR_SESSION_IDENTITY_MISMATCH')
+    const leases = [identity.data.creationLease, ...events.flatMap(e => e.type === 'user/message' ? [e.data]
       : e.type === 'agent/inbox/spliced' ? e.data.inserted ?? [] : [])
       .filter(m => m.source?.groupCoordinator?.sessionId === binding.sessionId).map(m => m.source.groupCoordinator.leaseEpoch)]
     if (leases.some(n => !Number.isSafeInteger(n) || n < 1 || n >= binding.leaseEpoch)) throw fail('GROUP_COORDINATOR_SESSION_LEASE_NOT_ADVANCED')
+  }
+  async function prepare(binding) {
+    if (closed) throw fail('GROUP_COORDINATOR_CLOSED')
+    if (!binding.sessionId || !getWorkspaceDir) return null
+    const cwd = await workspace(binding)
+    const configuration = JSON.stringify([cwd, getGroupName?.(binding.conversationId) ?? null])
+    if (checkedWorkspaces.get(binding.sessionId) === configuration) return null
+    if (entries.has(binding.conversationId) || ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId))
+      throw fail('GROUP_COORDINATOR_SESSION_ALREADY_LIVE')
+    const stored = await inspect(binding.sessionId)
+    if (!stored) { if (binding.sessionBound) throw fail('GROUP_COORDINATOR_SESSION_MISSING'); return null }
+    history(stored.events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
+    const relocating = stored.meta.cwd !== cwd
+    const sessionId = relocating ? `coordinator-${createHash('sha256').update(JSON.stringify([binding.sessionId, cwd])).digest('hex').slice(0, 40)}` : binding.sessionId
+    const child = relocating ? await inspect(sessionId) : stored
+    if (child) {
+      if (child.meta.cwd !== cwd || relocating && child.meta.parentSession !== binding.sessionId) throw fail('GROUP_COORDINATOR_SESSION_IDENTITY_MISMATCH')
+      history(child.events, { ...binding, sessionId, leaseEpoch: binding.leaseEpoch + (relocating ? 2 : 1) })
+    }
+    const setup = agentCtx => {
+      agentCtx.tools.restrict({ allow: [] })
+      agentCtx.on('agent/pre-step', () => ({ kind: 'reject' }))
+    }
+    const handle = child ? await ctx.agents.resume({ resumeSessionId: sessionId, setup })
+      : await ctx.agents.create({ sessionId, meta: { cwd, parentSession: binding.sessionId, isSeeded: true },
+        setup,
+        inheritedEventCount: stored.events.length,
+        seed: [...stored.events, { type: IDENTITY, seq: stored.events.length, time: Date.now(), ignorable: true,
+          data: { version: 1, conversationId: binding.conversationId, sessionId, parentSessionId: binding.sessionId, creationLease: binding.leaseEpoch + 1 } }] })
+    try {
+      permissions(handle); title(handle.agent.session, binding.conversationId)
+      retainCoordinatorSources(handle.agent.session)
+      await handle.agent.whenIdle()
+      await ctx.sessions.flush(handle.agent.session)
+    } finally { await handle.dispose() }
+    checkedWorkspaces.set(sessionId, configuration)
+    return relocating ? { sessionId, previousSessionId: binding.sessionId, expectedLeaseEpoch: binding.leaseEpoch } : null
   }
   async function run({ binding, input, provider, model, reasoningEffort, decisionSchema, onSessionBound, onCandidate,
     readTools = [] }) {
@@ -111,17 +195,19 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     try {
       if (!await current(entry)) return { status: 'stale' }
       if (ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) throw Object.assign(fail('GROUP_COORDINATOR_SESSION_ALREADY_LIVE'), { coordinatorDrained: false })
-      let stored
-      try { stored = await ctx.sessionPersistence.inspect(binding.sessionId) }
-      catch (error) { if (error.name !== 'SessionPersistenceNotFoundError' || error.sessionId !== binding.sessionId) throw error }
+      const stored = await inspect(binding.sessionId)
       if (binding.sessionBound && !stored) throw fail('GROUP_COORDINATOR_SESSION_MISSING')
       if (stored) history(stored.events, binding)
-      const workspaceDir = !stored && getWorkspaceDir ? await getWorkspaceDir({ binding: entry.binding }) : undefined
+      const workspaceDir = !stored ? await workspace(entry.binding) : undefined
       const options = { agentOptions: { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) }, setup, signal: entry.abort.signal }
       entry.handle = stored ? await ctx.agents.resume({ ...options, resumeSessionId: binding.sessionId })
         : await ctx.agents.create({ ...options, sessionId: binding.sessionId, ...(workspaceDir ? { meta: { cwd: workspaceDir } } : {}),
           seed: [{ type: IDENTITY, seq: 0, time: Date.now(), ignorable: true, data: { version: 1, conversationId: binding.conversationId, sessionId: binding.sessionId, creationLease: binding.leaseEpoch } }] })
       if (stored) history(entry.handle.agent.session.snapshotEvents(), binding)
+      permissions(entry.handle)
+      title(entry.handle.agent.session, binding.conversationId)
+      retainCoordinatorSources(entry.handle.agent.session)
+      checkedWorkspaces.set(binding.sessionId, JSON.stringify([entry.handle.agent.session.header.cwd, getGroupName?.(binding.conversationId) ?? null]))
       await ctx.sessions.flush(entry.handle.agent.session)
       if (!await current(entry)) return { status: 'stale' }
       await onSessionBound(binding)
@@ -145,5 +231,5 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     await entry.drained.promise
     if (entry.drainError) throw entry.drainError
   }
-  return { run, cancel, async close() { closed = true; await Promise.all([...entries.keys()].map(cancel)) } }
+  return { prepare, run, cancel, async close() { closed = true; await Promise.all([...entries.keys()].map(cancel)) } }
 }

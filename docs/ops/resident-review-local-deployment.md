@@ -323,7 +323,7 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 
 ### 原生查询会话目录
 
-新任务的 Owner 和执行会话使用 Resident 已校验的 Agent 工作区下 `tasks/<logicalTaskId>/work/<内部taskId>/<owner或execution>/<sessionId>` 作为原生 `meta.cwd`；其他新会话和已有任务仍使用 `session-workspaces/<职责>`。目录不采用模型/消息中的路径，消息意图判断不产生原生会话。原生会话恢复保持原目录；DSH 原始日志存储根及后端保持不变。部署前回读 `agent-instructions.projectRootMarkers`，确认配置根实际具有受支持标记；普通目录可使用 `AGENTS.md` 或 `CLAUDE.md`，不能仅凭目录创建成功断言指引继承。此前已保存到 `_no-cwd` 的历史会话不迁移、不伪造 metadata；宿主 Session Controller 目录会排除这些已释放会话，因此历史看板会话入口不保证能打开，结果与依据仍可按需读取。验证新会话入口须在部署后创建新问答和任务，不能用旧会话证明新路径生效。
+新任务的 Owner 和执行会话使用 Resident 已校验的 Agent 工作区下 `tasks/<logicalTaskId>/work/<内部taskId>/<owner或execution>/<sessionId>` 作为原生 `meta.cwd`；群协调常驻会话直接使用 Agent 工作区根目录，其他非任务新会话和已有任务仍使用 `session-workspaces/<职责>`。目录不采用模型/消息中的路径，消息意图判断不产生原生会话。群常驻会话的旧职责目录在 idle 且 lease/session 绑定 CAS 成功后以原生 seed/inheritedEventCount/parentSession 派生到 Agent 根，完整继承旧日志并保留旧文件；其他原生会话恢复保持原目录。群常驻会话创建及恢复均回读 danger-full-access/never 和完整群名标题，群名变更由下一次恢复扫描同步；DSH 原始日志存储根及后端保持不变。部署前回读 `agent-instructions.projectRootMarkers`，确认配置根实际具有受支持标记；普通目录可使用 `AGENTS.md` 或 `CLAUDE.md`，不能仅凭目录创建成功断言指引继承。此前已保存到 `_no-cwd` 的历史会话不迁移、不伪造 metadata；宿主 Session Controller 目录会排除这些已释放会话，因此历史看板会话入口不保证能打开，结果与依据仍可按需读取。验证新会话入口须在部署后创建新问答和任务，不能用旧会话证明新路径生效。
 
 ### 任务文件统一目录的部署与备份
 

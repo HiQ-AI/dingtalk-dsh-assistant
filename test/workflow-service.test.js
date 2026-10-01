@@ -1469,7 +1469,7 @@ test('已送达通知回声准确关联原话题且不再次调用群协调',asy
  const original=await service.ingest({...message,text:'审核状态查询'})
  await service.messages.process(original.runId);await service.flushNotifications()
  const before=await service.state(original.runId),topics=await service.topics('g')
- const echo=await service.ingest({...message,messageId:'known-out',text:'审核状态已核对'})
+ const echo=await service.ingest({...message,senderOpenDingTalkId:'assistant-account',messageId:'known-out',text:'审核状态已核对'})
  assert.equal(echo.processing,'outbound-echo');await service.messages.recover()
  assert.equal(turns,1);assert.deepEqual(await service.topics('g'),topics)
  const notice=(await execution.store.query({kind:'message.notifications',states:['delivered']}))[0]
@@ -1606,7 +1606,7 @@ test('已回读的自身澄清通知不再作为新消息入站，收发信箱�
   await service.flushNotifications()
   const echo = await service.ingest({ ...message, messageId: 'out-1', text: sent[0].text })
   assert.equal(echo.processing, 'outbound-echo')
-  const genuine = await service.ingest({ ...message, messageId: 'manual-2', text: sent[0].text })
+  const genuine = await service.ingest({ ...message, senderOpenDingTalkId: 'human-colleague', messageId: 'manual-2', text: sent[0].text })
   assert.equal(genuine.duplicate, false)
   assert.equal((await execution.store.query({ kind: 'message.list', conversationId: 'g', limit: 30 })).length, 2)
   const mailboxes = await service.mailboxes()

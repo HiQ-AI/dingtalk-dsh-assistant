@@ -433,6 +433,13 @@ function reduceCoordinator(db,kind,a,ctx) {
   const {group,coordinator:c,sources,unconsumedTaskEvents}=coordinatorState(db,a.conversationId),now=ctx.now
   const binding=()=>({conversationId:a.conversationId,...c})
   const saveGroup=()=>{group.coordinator=c;db.prepare('INSERT INTO message_groups VALUES(?,?) ON CONFLICT(conversation_id) DO UPDATE SET body=excluded.body').run(a.conversationId,json(group))}
+  if(kind==='message.coordinator.relocate') {
+    if(group.state!=='active'||group.engine!=='workflow'||c.status!=='idle'||c.leaseEpoch!==a.expectedLeaseEpoch
+      ||c.sessionId!==a.previousSessionId||!c.sessionBound||str(a.sessionId)===c.sessionId)fail('MESSAGE_COORDINATOR_STALE')
+    c.sessionHistory=[...(c.sessionHistory??[]),{sessionId:c.sessionId,leaseEpoch:c.leaseEpoch,replacedAt:now}]
+    c.sessionId=a.sessionId;c.sessionBound=true;c.leaseEpoch++;c.turnId=null;c.recovery=null;c.error=null;c.retryAt=null
+    saveGroup();return {result:{binding:binding()}}
+  }
   if(kind==='message.coordinator.claim') {
     if(group.state!=='active'||group.engine!=='workflow')fail('MESSAGE_ENGINE_NOT_ACTIVE')
     if(c.status!=='idle'||c.leaseEpoch!==a.expectedLeaseEpoch)fail('MESSAGE_COORDINATOR_STALE')

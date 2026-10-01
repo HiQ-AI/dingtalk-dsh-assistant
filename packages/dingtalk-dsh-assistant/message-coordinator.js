@@ -43,14 +43,14 @@ const tool = (name, description, properties, execute) => ({ name, description, p
   effectClass: 'read', output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }, execute })
 
 /** 群原生会话是语义决策唯一入口；持久命令继续使用既有派发器。 */
-export function createMessageCoordinator({ ctx, store, context, modelConfig, getWorkspaceDir, sessionRunner, clock = Date.now }) {
+export function createMessageCoordinator({ ctx, store, context, modelConfig, getWorkspaceDir, getGroupName, sessionRunner, clock = Date.now }) {
   const flights = new Map()
   const implementationRevision = digest([createMessageCoordinator.toString(), createGroupCoordinatorSessions.toString(),
     transientFailure.toString(), retryDelay.toString()])
   let closed = false
   const state = conversationId => store.query({ kind: 'message.coordinator', conversationId })
   const command = async (kind, args) => (await store.command({ id: `${kind}:${randomUUID()}`, kind, args })).result
-  const sessions = sessionRunner ?? createGroupCoordinatorSessions({ ctx, getWorkspaceDir, isCurrent: async binding => {
+  const sessions = sessionRunner ?? createGroupCoordinatorSessions({ ctx, getWorkspaceDir, getGroupName, isCurrent: async binding => {
     const current = (await state(binding.conversationId)).coordinator
     return !closed && ['running', 'committed'].includes(current?.status) && current.turnId === binding.turnId
       && current.leaseEpoch === binding.leaseEpoch && current.sessionId === binding.sessionId
@@ -214,6 +214,11 @@ export function createMessageCoordinator({ ctx, store, context, modelConfig, get
   async function drive(conversationId, dispatch) {
     while (!closed) {
       const data = await state(conversationId)
+      const relocation = await sessions.prepare?.({ conversationId, ...data.coordinator })
+      if (relocation) {
+        await command('message.coordinator.relocate', { conversationId, ...relocation })
+        continue
+      }
       if (!data.sources.length && !data.unconsumedTaskEvents?.length) return
       const config = await modelConfig()
       const inputDigest = digest([data.sources.map(source => [source.runId, source.sourceVersion]),

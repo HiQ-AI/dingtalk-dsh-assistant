@@ -1,0 +1,11 @@
+case,round,status,evidence
+native-workspace,1,PASS,round-1.md
+full-access-and-title,1,PASS,round-1.md
+original-history-preserved,1,PASS,round-1.md
+history-input-reduced,1,PASS,round-1.md
+current-input-retained,1,PASS,round-1.md
+outbound-echo-account,1,PASS,round-1.md
+human-message-retained,1,PASS,round-1.md
+binding-cas-and-drain,1,PASS,round-1.md
+local-deployment,1,BLOCKED,round-1.md
+real-message-latency,1,NOT_RUN,round-1.md
