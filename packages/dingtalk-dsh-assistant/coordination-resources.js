@@ -36,10 +36,14 @@ const refsFor = message => {
   return [...new Map(refs.filter(ref => typeof ref.resourceId === 'string').map(ref => [ref.type + ':' + ref.resourceId, ref])).values()]
 }
 
-// DWS 事件文件卡片带下载提示，精确消息回读不带；只接受同名、同 fileId 的这一种展示差异。
+// DWS 事件资源卡片带下载提示，精确消息回读不带；必须核对同一资源身份。
 export const sameDwsFileProjection = (message, remote) => {
-  if (message.sourceKind !== 'dingtalk' || typeof remote.text !== 'string'
-    || message.text !== `${remote.text} 注意：如需下载使用dws drive download命令下载`) return false
+  if (message.sourceKind !== 'dingtalk' || typeof remote.text !== 'string') return false
+  const image = /^\[图片消息\]\(mediaId=([^\s)]+)\)$/u.exec(remote.text)
+  if (image) return message.text === `${remote.text} 注意：如需下载使用dws chat message download-media命令下载`
+    && Array.isArray(remote.resourceRefs) && remote.resourceRefs.length === 1
+    && remote.resourceRefs[0].type === 'mediaId' && remote.resourceRefs[0].resourceId === image[1]
+  if (message.text !== `${remote.text} 注意：如需下载使用dws drive download命令下载`) return false
   const file = /^\[文件\] (.+) fileId: ([^\s]+)$/u.exec(remote.text)
   const refs = remote.resourceRefs
   return Boolean(file && Array.isArray(refs) && refs.length === 1

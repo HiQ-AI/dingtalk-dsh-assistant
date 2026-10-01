@@ -20,7 +20,7 @@ const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-lo
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
 
-async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner')) {
+async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner'), artifactPages = 1) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SessionTitleService(ctx, { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 })
@@ -34,10 +34,10 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
     async *stream(options) {
       requests.push(options)
       const id = `call-${requests.length}`, name = pageRef && requests.length === 1
-        ? 'task_owner_read_events' : artifactRef && requests.length === 1
+        ? 'task_owner_read_events' : artifactRef && requests.length <= artifactPages
           ? 'task_owner_read_artifact' : 'task_owner_submit'
       const args = JSON.stringify(name === 'task_owner_read_events' ? { pageRef }
-        : name === 'task_owner_read_artifact' ? { artifactRef } : { decision: typeof candidate === 'function' ? candidate(requests.length) : candidate })
+        : name === 'task_owner_read_artifact' ? { artifactRef, offset: (requests.length - 1) * 16000 } : { decision: typeof candidate === 'function' ? candidate(requests.length) : candidate })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } }
@@ -109,7 +109,7 @@ test('Owner 仅能读取当前 Task 已成功阶段的产物正文', async t => 
   const root = await mkdtemp(join(tmpdir(), 'task-owner-artifact-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const artifactRef = `sha256-${'b'.repeat(64)}.json`
-  const h = await host(root, null, artifactRef)
+  const h = await host(root, null, artifactRef, decision, undefined, 6)
   t.after(() => h.close())
   const read = []
   const longArtifact='发现原因'.repeat(20000)+'最后条件'
@@ -121,7 +121,7 @@ test('Owner 仅能读取当前 Task 已成功阶段的产物正文', async t => 
     read.push(ref); return { summary: longArtifact, limitations: [] }
   }, onCandidate: async value => assert.deepEqual(value, decision) })
   assert.equal(result.status, 'submitted')
-  assert.deepEqual(read, [artifactRef])
+  assert.deepEqual(read, Array(6).fill(artifactRef))
   assert.ok(JSON.stringify(h.requests).includes('最后条件'))
   assert.ok(h.requests.every(request => request.tools.some(tool => tool.name === 'task_owner_read_artifact')))
 })
@@ -262,7 +262,7 @@ test('Owner完整大材料重试只保留当前输入投影，原始快照审计
   assert.equal(after.events.filter(e => e.surfaceOp?.op === 'replace').length, 1)
 })
 
-test('Owner引用纠正不能越过旧lease且连续错误仍受步骤预算约束', async t => {
+test('Owner引用可在第十步纠正提交，旧lease仍不能继续', async t => {
   for (const stale of [false, true]) {
     const root = await mkdtemp(join(tmpdir(), 'task-owner-ref-fence-'))
     t.after(() => rm(root, { recursive: true, force: true }))
@@ -270,9 +270,9 @@ test('Owner引用纠正不能越过旧lease且连续错误仍受步骤预算约�
     let calls = 0
     const result = await h.sessions.run({ binding: { taskId: 'task-ref', sessionId: 'owner-ref', turnId: 'turn-ref', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
       input: { goal: { request: '调查' } }, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
-      onCandidate: async () => { calls++; if (stale) h.setLease(2); throw Object.assign(Error('bad ref'), { code: 'TASK_OWNER_REF_INVALID' }) } })
-    assert.equal(result.status, stale ? 'stale' : 'no_submission')
-    assert.equal(calls, stale ? 1 : 8)
+      onCandidate: async () => { calls++; if (stale) h.setLease(2); if (stale || calls < 10) throw Object.assign(Error('bad ref'), { code: 'TASK_OWNER_REF_INVALID' }) } })
+    assert.equal(result.status, stale ? 'stale' : 'submitted')
+    assert.equal(calls, stale ? 1 : 10)
   }
 })
 

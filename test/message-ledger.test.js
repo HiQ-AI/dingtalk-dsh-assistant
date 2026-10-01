@@ -19,6 +19,17 @@ async function fixture(t) {
   editSnapshot:async edit=>{await store.close();const offline=new DatabaseSync(options.dbPath);try{edit(offline)}finally{offline.close()};store=await openExecutionStore(options)}}
 }
 const receive=(runId='m',extra={})=>({runId,sourceKey:runId,sourceVersion:1,conversationId:'g',actorId:'a',body:'do this',...extra})
+
+test('冻结能力元数据保持原定义摘要，CAS拒绝配置漂移、重复改写和非调查定义',async t=>{
+ const f=await fixture(t),config={provider:'test',model:'test'},digest='a'.repeat(64),call=(kind,args)=>f.store.command({id:randomUUID(),kind,args})
+ await call('workflow.register',{workflowId:'task-investigation',definitionVersion:'6',digest,config})
+ const args={digest,expectedConfigDigest:executionDigest(config),capabilityIdentity:'b'.repeat(64),allowedTools:['read-current-source']}
+ await assert.rejects(call('workflow.freezeCapabilities',{...args,expectedConfigDigest:'c'.repeat(64)}),{code:'WORKFLOW_DEFINITION_CONFLICT'})
+ await call('workflow.freezeCapabilities',args)
+ const record=(await f.store.query({kind:'workflow.list'})).find(r=>r.digest===digest)
+ assert.equal(record.digest,digest);assert.deepEqual(record.config,{...config,capabilityIdentity:args.capabilityIdentity,allowedTools:args.allowedTools})
+ await assert.rejects(call('workflow.freezeCapabilities',args),{code:'WORKFLOW_DEFINITION_CONFLICT'})
+})
 const bad=(p,code)=>assert.rejects(p,e=>e.code===code)
 
 async function echoFixture(t, { acknowledgedOnly = false, evidenceGroup = 'g', barrier = false } = {}) {
@@ -858,6 +869,23 @@ test('群协调事务保持群session，原子提交并封存旧判断，已提�
  assert.equal(after.coordinator.sessionBound,true)
  assert.deepEqual(after.sources,[])
  assert.equal((await f.store.query({kind:'message.run',runId:'coord-old'})).commands[0].status,'pending')
+})
+
+test('话题变化作废未执行命令后，同版本回到群协调重评并解除待处理单元',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('stale-command'))
+ const b=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'first',sourceRuns:[{runId:'stale-command',sourceVersion:1}]})).result.binding
+ await f.call('coordinator.commit',{...b,decisions:[{runId:'stale-command',sourceVersion:1,units:[{unitId:'first-unit',topic:{topicId:'stale-topic',title:'事项'},commands:[{commandId:'first-command',kind:'answer',args:{}}]}]}]})
+ await f.call('coordinator.release',{...b,drained:true})
+ await f.editSnapshot(db=>{const row=db.prepare('SELECT body FROM message_topics WHERE topic_id=?').get('stale-topic');const topic=JSON.parse(row.body);topic.inputRevision++;db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(JSON.stringify(topic),'stale-topic')})
+ assert.equal((await f.call('command.claim',{commandId:'first-command'})).dispatchEligible,false)
+ const state=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+ assert.deepEqual(state.sources.map(r=>[r.runId,r.sourceVersion]),[['stale-command',1]])
+ const next=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:b.leaseEpoch,turnId:'second',sourceRuns:[{runId:'stale-command',sourceVersion:1}]})).result.binding
+ assert.equal(next.sessionId,b.sessionId)
+ await f.call('coordinator.commit',{...next,decisions:[{runId:'stale-command',sourceVersion:1,units:[],reason:'后续已明确推进，不另发催促回复'}]})
+ const after=await f.store.query({kind:'message.run',runId:'stale-command'})
+ assert.equal(after.run.status,'settled');assert.equal(after.units[0].status,'superseded')
+ assert.equal(after.commands.length,1);assert.equal(after.commands[0].status,'superseded')
 })
 
 test('群协调等待不重复消费，真实回答后重评且无动作可收口',async t=>{

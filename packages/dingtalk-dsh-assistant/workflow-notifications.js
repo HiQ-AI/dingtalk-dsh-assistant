@@ -303,9 +303,19 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         if (action.result?.taskId && await store.query({ kind: 'task.deleted', taskId: action.result.taskId })) return
         const lifecycle = Boolean(action.result?.taskId) && ['create', 'research', 'answer', 'reopen', 'revise', 'pause', 'resume', 'cancel', 'confirm'].includes(action.kind)
         const hasAcceptance = acceptances.some(item => item.commandId === action.commandId)
-        if (!hasAcceptance && action.result?.reply && (lifecycle || action.status === 'rejected' || action.args.replyPolicy !== 'none')) await prepare(run, action, 'receipt', action.result.reply)
+        // 补充、更正只更新同一事项；其实际进展由 Owner 统一通知，不逐条承接。
+        if (!hasAcceptance && (action.kind !== 'revise' || action.status === 'rejected') && action.result?.reply && (lifecycle || action.status === 'rejected' || action.args.replyPolicy !== 'none')) await prepare(run, action, 'receipt', action.result.reply)
         else if (!hasAcceptance && lifecycle && ['create', 'reopen'].includes(action.kind)) await prepare(run, action, 'receipt', '已接收任务，正在核对执行条件；实际开始和处理结果会继续告知。')
         if (lifecycle) {
+          const plan = await controller?.taskPlan(action.result.taskId)
+          for (const stage of plan?.stages.filter(item => item.status === 'running') ?? []) {
+            if (!stage.runId || plan.task.controlState !== 'active') continue
+            const execution = await controller.state(stage.runId)
+            if (execution.run.status !== 'running' || execution.run.pauseRequested || execution.run.stopRequested
+              || !execution.nodes.some(node => node.status === 'running' && node.startedAt)) continue
+            await attempt(run.runId, `started:${stage.runId}`, () => prepare(run, action,
+              `owner:started:${stage.runId}`, '任务已开始处理。', 'progress'))
+          }
           if (await store.query({ kind: 'message.owner.released-wait', taskId: action.result.taskId }))
             await prepare(run, action, 'owner:application_wait:released', manualInterventionText, 'required_action')
           const reports = await store.query({ kind: 'task.owner.reports', taskId: action.result.taskId })
@@ -319,7 +329,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
               || item.triggerTypes.includes('workflow.succeeded') && item.facts.evidenceRefs.length
               || item.triggerTypes.includes('workflow.confirmation.required')))) {
             const text = report.reportType === 'complete' ? `任务已完成：${report.facts.summary}`
-              : report.reportType === 'block' ? `任务需要处理：${report.facts.summary}`
+              : report.reportType === 'block' ? '处理暂时受阻，需要人工介入。'
                 : report.triggerTypes.includes('workflow.confirmation.required') ? `任务等待确认：${report.facts.summary}`
                   : `任务进展：${report.facts.summary}`
             await attempt(run.runId, report.reportId, () => prepare(run, action, `owner:${report.reportId}`, text, report.reportType === 'complete' ? 'result'

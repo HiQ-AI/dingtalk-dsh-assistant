@@ -560,7 +560,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   const queryCapabilityIdentity = executionDigest(queryCapabilities.map(item => ({ id: item.id, identity: item.identity })))
   function queryScope(base) {
     const permissions = queryConfig.permissions ?? {}
-    return { ...base, resourceIds: [...new Set(permissions.resourceIds ?? [])],
+    return { ...base, queryCapabilityIdentity, resourceIds: [...new Set(permissions.resourceIds ?? [])],
       databaseIds: [...new Set(permissions.databaseIds ?? [])],
       statusIds: [...new Set(permissions.statusIds ?? [])] }
   }
@@ -605,10 +605,10 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         allowedBindings: history.map(previous => ({ taskId, runId, nodeRunId: previous.nodeRunId, generation: previous.generation,
           inputDigest: previous.inputDigest, sessionId: previous.sessionId, leaseEpoch: previous.leaseEpoch })), scope: requirement.scope }); return true } })
   }
-  const investigationWorkflow = selected => createInvestigationWorkflow({ ...selected, allowedTools: queryToolNames,
-    capabilityIdentity: queryCapabilityIdentity, verifyResult: verifyInvestigationResult })
-  const legacyInvestigationWorkflow = selected => createLegacyInvestigationWorkflow({ ...selected, allowedTools: queryToolNames,
-    capabilityIdentity: queryCapabilityIdentity, verifyResult: verifyInvestigationResult })
+  const investigationWorkflow = selected => createInvestigationWorkflow({ ...selected, allowedTools: selected.allowedTools ?? queryToolNames,
+    capabilityIdentity: selected.capabilityIdentity ?? queryCapabilityIdentity, verifyResult: verifyInvestigationResult })
+  const legacyInvestigationWorkflow = selected => createLegacyInvestigationWorkflow({ ...selected, allowedTools: selected.allowedTools ?? queryToolNames,
+    capabilityIdentity: selected.capabilityIdentity ?? queryCapabilityIdentity, verifyResult: verifyInvestigationResult })
   const stepCapabilities = capabilities.filter(item => item.effectClass === 'file.write')
   const acceptanceModel = modelConfig()
   const domainAcceptanceCheck = createDomainAcceptanceCheck({ llm: ctx.llm, modelConfig: acceptanceModel })
@@ -728,9 +728,10 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       assertRetiredWorkflowsDrained({ records: prior, activeDefinitions, pendingStages,
         currentDefinitions: [...workflows, legacyInvestigationWorkflow(selected), ...legacyStepWorkflows, ...(legacyFileWorkflow ? [legacyFileWorkflow] : [])] })
       const engineeringWorkflows = await engineering.restore(store, artifacts)
-      const historicalWorkflows = prior.filter(record => record.config?.kind !== 'engineering'
+      const historicalWorkflows = []
+      for (const record of prior.filter(record => record.config?.kind !== 'engineering'
         && record.config?.kind !== 'external'
-        && (activeDefinitions.has(`${record.workflowId}:${record.digest}`) || requiredDefinitions.has(`${record.workflowId}:${record.digest}`))).map(record => {
+        && (activeDefinitions.has(`${record.workflowId}:${record.digest}`) || requiredDefinitions.has(`${record.workflowId}:${record.digest}`)))) {
         const candidates = [investigationWorkflow(record.config), legacyInvestigationWorkflow(record.config), stepWorkflow, fileWorkflow, legacyFileWorkflow,
           ...legacyStepWorkflows].filter(Boolean)
           .filter(item => item.id === record.workflowId && item.version === record.definitionVersion)
@@ -740,8 +741,14 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           return [definition.digest, ...definition.legacyDigests].includes(record.digest)
         })
         if (!previous) throw executionError('WORKFLOW_DEFINITION_DRIFT')
-        return previous
-      }).filter(item => ![definitions.get(item.id)?.digest, ...(definitions.get(item.id)?.legacyDigests ?? [])].includes(defineExecutionWorkflow(item).digest))
+        if (record.workflowId === 'task-investigation' && !record.config.capabilityIdentity) {
+          await store.command({ id: `workflow-capabilities:${record.digest}`, kind: 'workflow.freezeCapabilities', args: {
+            digest: record.digest, expectedConfigDigest: executionDigest(record.config), capabilityIdentity: queryCapabilityIdentity, allowedTools: queryToolNames,
+          } })
+          record.config = { ...record.config, capabilityIdentity: queryCapabilityIdentity, allowedTools: queryToolNames }
+        }
+        if (![definitions.get(previous.id)?.digest, ...(definitions.get(previous.id)?.legacyDigests ?? [])].includes(defineExecutionWorkflow(previous).digest)) historicalWorkflows.push(previous)
+      }
       for (const record of prior.filter(item => item.config?.kind === 'external'
         && (activeDefinitions.has(`${item.workflowId}:${item.digest}`) || requiredDefinitions.has(`${item.workflowId}:${item.digest}`)))) {
         const route = selectedExternal.byId.get(record.workflowId), saved = record.config
@@ -763,8 +770,11 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       }
       for (const workflow of workflows) {
         const definition = definitions.get(workflow.id)
+        const existing = prior.find(record => record.digest === definition.digest)
+        if (existing) continue
         await store.command({ id: `workflow:${definition.digest}`, kind: 'workflow.register', args: {
-          workflowId: workflow.id, definitionVersion: workflow.version, config: selected, digest: definition.digest,
+          workflowId: workflow.id, definitionVersion: workflow.version,
+          config: workflow.id === 'task-investigation' ? { ...selected, capabilityIdentity: queryCapabilityIdentity, allowedTools: queryToolNames } : selected, digest: definition.digest,
         } })
       }
       for (const record of selectedExternal.records.values()) await store.command({ id: `workflow:${record.digest}`, kind: 'workflow.register', args: record })
@@ -818,7 +828,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const sources = await Promise.all(sourceKeys.map(sourceKey => store.query({ kind: 'task.source', sourceKey })))
       const accessible = sources.filter(item => item && item.conversationId === info.run.conversationId && item.status !== 'superseded')
       const materialRefs = [...new Set(action.requiredExecutionMaterials ?? [])]
-      const resolved = materialRefs.length ? await resolveMaterials({ run: info.run,
+      const resolved = materialRefs.length ? await resolveMaterials({ run: info.run, unit: info.unit,
         needs: materialRefs.map(resourceRef => ({ resourceRef })) }) : { ready: true, data: { resources: [] } }
       if (!resolved.ready) throw executionError('WORKFLOW_REQUIRED_MATERIAL_NOT_READY')
       const materials = [...resolved.data.resources.map(item => ({ id: item.resourceRef, text: item.text })), ...dependencies]
@@ -1087,7 +1097,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const references = [...new Set([...(action.requiredExecutionMaterials ?? []),
       ...referencedResourceIds([action.arguments, ...(topic?.facts.map(fact => fact.text) ?? [])],
         sources.flatMap(source => source.context?.attachments ?? []))])]
-    const resolved = references.length ? await resolveMaterials({ run: info.run,
+    const resolved = references.length ? await resolveMaterials({ run: info.run, unit: info.unit,
       needs: references.map(resourceRef => ({ resourceRef })) }) : { ready: true, data: { resources: [] } }
     if (!resolved.ready) throw executionError('WORKFLOW_REQUIRED_MATERIAL_NOT_READY')
     const objective = requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
@@ -1095,7 +1105,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     if (fileDelivery && !fileWorkflow) throw executionError('TASK_FILE_TRANSPORT_UNAVAILABLE')
     const requirement = { request: objective, objective,
       stageAuthorizations: [...(action.arguments.stageAuthorizations ?? []), ...(action.arguments.workflowId ? [{ workflowId: action.arguments.workflowId, sourceQuote: info.run.body }] : [])].map(item => ({ ...item, sourceKey: info.run.sourceKey, sourceVersion: info.run.sourceVersion, ...(item.gate === 'confirmation' ? { requiredActorId: info.run.actorId } : {}) })),
-      sourceInstructions: sources.map(source => ({ sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, text: source.body })),
+      sourceInstructions: sources.map(source => ({ sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, text: source.body, attachments: source.context?.attachments ?? [] })),
       ...(fileDelivery ? { fileDelivery } : {}),
       acceptanceCriteria: action.arguments.acceptanceCriteria ?? [objective],
       constraints: [...new Set(action.constraints ?? [...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])],
@@ -1181,7 +1191,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   }
   async function taskMessageResources(requirement, origin) {
     const run = origin.run, selected = new Map()
-    const frozenSources = [{ sourceKey: run.sourceKey, sourceVersion: run.sourceVersion, actorId: run.actorId, text: run.body, attachments: run.context?.attachments }, ...(run.snapshot?.history ?? [])]
+    const frozenSources = [{ sourceKey: run.sourceKey, sourceVersion: run.sourceVersion, actorId: run.actorId, text: run.body, attachments: run.context?.attachments }, ...(run.snapshot?.history ?? []), ...(requirement.sourceInstructions ?? [])]
     for (const material of requirement.materials ?? []) {
       for (const frozen of frozenSources) {
         const candidates = (frozen.attachments ?? []).filter(attachment => material.id === frozen.sourceKey
@@ -1559,9 +1569,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     }
     const result = await createPlannedTask({ action, info })
     return { taskId: result.taskId, runId: result.runId, status: 'accepted',
-      reply: result.planningError
-        ? '已收到要求，目前暂时无法开始处理，需要先排查原因。'
-        : '收到，我会按你的要求处理。' }
+      reply: '正在核对执行条件，处理尚未开始。' }
   }
   async function taskAction(action, info) {
     if (info.binding.disposition === 'conversation' && ['status', 'result'].includes(action.intent)) {
@@ -1593,7 +1601,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         payload: { intent: action.intent, sourceRunId: info.run.runId,
           controlRevision: controlled.plan.task.controlRevision } })
       return { taskId, runId: controlled.plan.stages.findLast(stage => stage.runId)?.runId ?? null,
-        status: controlled.plan.task.status, reply: `已收到${groupActionText(action.intent)}要求；目前${groupStatusText(controlled.plan.task.status)}。` }
+        status: controlled.plan.task.status, reply: `目前${groupStatusText(controlled.plan.task.status)}。` }
     }
     if (action.intent === 'report') {
       if (!currentPlan || currentPlan.task.status !== 'succeeded'
@@ -1642,7 +1650,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         await taskOwner.drive(taskId)
         const failures = await taskOwner.applyPending()
         if (failures.length) throw executionError(failures[0].code)
-        return { taskId, status: 'accepted', reply: '已收到你的确认，会继续处理后续工作。' }
+        return { taskId, status: 'accepted', reply: '验证已确认，等待后续处理。' }
       }
       const previous = await artifacts.read(plan.task.requirementRef)
       const objective = requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
@@ -1676,9 +1684,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         const failures = await taskOwner.applyPending()
         planningError = failures[0]?.code ?? null
       } catch (cause) { planningError = cause.code ?? cause.message }
-      return { taskId, status: 'accepted', reply: planningError
-        ? '已更新要求，目前暂时无法继续处理，需要先排查原因。'
-        : '已按你的补充更新要求，会核对需要调整的工作。' }
+      return { taskId, status: 'accepted', reply: '任务要求已更新，正在核对后续处理。' }
     }
     const existingRuns = await store.query({ kind: 'run.list', taskId, limit: 200 })
     if (!existingRuns.length) {
@@ -1719,7 +1725,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       if (currentPlan) await recordIntent()
     } else throw executionError('WORKFLOW_ACTION_NOT_ADMITTED')
     const observed = await controller.state(state.run.runId)
-    return { taskId, runId: state.run.runId, status: observed.run.status, reply: `已收到${groupActionText(action.intent)}要求；目前${groupStatusText(observed.run.status)}。` }
+    return { taskId, runId: state.run.runId, status: observed.run.status, reply: `目前${groupStatusText(observed.run.status)}。` }
   }
   async function cancellableAnswers(run) {
     const answers = []
@@ -2113,7 +2119,12 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           title: facts.topic?.title ?? sourceTopic?.title ?? unit.goalText, ...(facts.topic && facts.topic.topicId === topicId ? { expectedRevision: facts.topic.revision } : sourceTopic?.topicId===topicId ? {expectedRevision:sourceTopic.revision} : {}),
           facts: [{ kind: 'fact', text: unit.spans.map(span => run.body.slice(span.start, span.end)).join('\n'), sourceRefs }, ...constraints.map(text => ({ kind: 'constraint', text, sourceRefs }))] }
       },
-      material: resolveMaterials = async function ({ run, needs }) {
+      material: resolveMaterials = async function ({ run, unit, needs }) {
+        const topic = unit?.topicId ? await fullTopic(unit.topicId) : null
+        if (topic && topic.conversationId !== run.conversationId) return { ready: false, reason: 'MATERIAL_SOURCE_NOT_CURRENT' }
+        const linkedRefs = topic?.facts.flatMap(fact => fact.sourceRefs) ?? []
+        const sourceKeys = [...new Set([run.sourceKey, ...(run.snapshot?.historyManifest ?? []).map(item => item.sourceKey),
+          ...(run.context.quoteRefs ?? []).map(item => item.sourceKey), ...linkedRefs.map(ref => ref.sourceKey)])]
         const items = []
         const remember = async (resourceRef, text) => {
           const material = { text }
@@ -2127,9 +2138,10 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           let materialSource = await store.query({ kind: 'task.source', sourceKey: materialRef })
           let selectedAttachments = materialSource?.context?.attachments
           if (!materialSource) {
-            for (const key of [...new Set([run.sourceKey, ...(run.snapshot?.historyManifest ?? []).map(item => item.sourceKey), ...(run.context.quoteRefs ?? []).map(item => item.sourceKey)])]) {
+            for (const key of sourceKeys) {
               const source = await store.query({ kind: 'task.source', sourceKey: key })
               const attachment = source?.context?.attachments?.find(item => item.resourceRef === materialRef)
+              if (attachment && linkedRefs.some(ref => ref.sourceKey === key && ref.sourceVersion !== source.sourceVersion)) return { ready: false, reason: 'MATERIAL_SOURCE_NOT_CURRENT' }
               if (attachment) { materialSource = source; selectedAttachments = [attachment]; break }
             }
           }

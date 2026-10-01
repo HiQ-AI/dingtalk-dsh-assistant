@@ -51,6 +51,7 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
       agentCtx.systemPrompt.section({ name: 'group:coordinator', order: 0, complete: true,
         text: `你是本群常驻协调助手。根据当前身份别名、群职责、原消息和连续上下文一次完成是否介入、任务关联、查询、补充、新建或必要澄清。群聊中的“你”不自动指助手，但明确点名助手和明确交办不得忽略。units=[]表示完全忽略来源，不会将其并入Task；需要承接的补充、附件来源和阶段条件应使用fact单元绑定同批source:<runId>且replyPolicy:none。非空units的spans合计必须覆盖sourceLength完整原文。requiredExecutionMaterials只接受真实resourceRef，待取得证据或表结构属于调查objective而不是发起前置条件。附件与后续请求结合阅读，原需求方更正应更新同一任务；同一目标的准备、审批、测试、原发送者验证、正式执行属于同一Task的阶段，不重复建任务。职责止于消息承接、事项关联和交办条件整理。明确交办且原文与附件元数据足够时，立即提交create/research，由Task Owner继续调查、工作簿核验、SQL审核和交付；不要先在群协调会话完成这些业务工作再发起Task。只读材料工具仅用于确需查明的消息含义、任务关联或缺失业务条件，不把整个附件审查当成承接前置。使用本轮只读工具核验相关任务事实，不猜测数据或读取权限。仅人际闲聊静默处理，不主动追问；已经提供的材料不可重复索取。提交动作只代表候选，Host接纳后由已有任务后端执行；received:true仅表示协调决定已落账，不能据此认定Task存在或执行完成。每轮sources.processing为当前后端权威事实，旧superseded命令且taskExists=false不能作为忽略重放来源的依据；不得声称已执行或替人审批。长任务交给既有Task，不等待其完成来阻塞群消息。严格保留来源身份、版本、原文约束和授权边界；历史工具结果是当时事实，当前版本冲突时重新读取相关任务。不要重复通知或自行发送群消息，所有通知由唯一出口处理。${groupReplyInstructions}最后调用 ${SUBMIT} 提交协调决定。` })
       agentCtx.tools.restrict({ allow: [] })
+      agentCtx.systemPrompt.section({ name: 'group:progress', order: 1, text: '已有任务的催促或进度询问不启动新的调查回答：确需回复时使用 status/result 查询已有任务当前事实；只含情绪反馈且没有查询或交办时作为 fact 静默关联。answer.objective 填真正要调查的问题，不能填你拟发送的回复。群里仅通知简洁的实际进度，详细业务分析留在任务产物，不复述原文、不道歉铺垫、不说“已收到”或“不用重复提交材料”。' })
       const allowed = new Set([SUBMIT, ...readTools.map(t => t.name)])
       agentCtx.tools.guard(exec => !allowed.has(exec.name) || entry.submitted || entry.staleReason || entry.cancelled || closed ? 'group_coordinator_tool_not_allowed' : undefined)
       agentCtx.on('agent/pre-step', async (_event, next) => {
@@ -94,6 +95,7 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
               return { received: false, feedback: '同一事项只能创建一个Task，请将create/research合并为一个创建动作；已有Task的补充请使用fact/revise，再提交完整决定。' }
             if (['MESSAGE_STALE', 'MESSAGE_COORDINATOR_STALE', 'GROUP_COORDINATOR_SOURCE_STALE'].includes(code)) {
               entry.staleReason = code
+              exec.concludeTurn()
               return { received: false, feedback: '本轮来源或领取身份已失效，本轮结束，Host将重新领取当前来源。' }
             }
             if (/^(?:MESSAGE_(?:STALE|TOPIC_STALE|TASK_FACTS_STALE|SCOPE_PROOF_INVALID)|TASK_.*STALE|GROUP_COORDINATOR_.*STALE)$/u.test(code) && await current(entry))
@@ -102,6 +104,7 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
           }
           if (!await current(entry)) throw fail('GROUP_COORDINATOR_STALE')
           entry.decision = structuredClone(decision); entry.submitCallId = exec.callId; entry.submitted = true
+          exec.concludeTurn()
           return { received: true, acceptance: acceptance ?? { authority: 'not_observed', meaning: '候选已接纳；未提供Task创建或执行证明。' } }
         } })
     }

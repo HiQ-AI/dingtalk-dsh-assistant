@@ -506,3 +506,10 @@ Adapter 为普通依赖，原生 `dsh plugin --profile web add` 支持安装，�
 群协调来源合同修复不迁移 schema：保留原来源与常驻 session，经原生维护排空切换后重新读取材料。回读协调提交时核验非空单元覆盖完整 sourceLength、补充/材料来源以 fact 关联同一目标，以及调查目标未被伪造为 requiredExecutionMaterials。群协调不再另设 180 秒墙钟或 32 步上限；仍由原生 cancel/close 排空与租约权限保护，Task 和外部命令既有保护不变。
 
 常驻会话恢复时保留历史，但必须对照本轮来源 `processing` 和提交 `acceptance`：协调工具的 `received:true` 不证明 Task 创建或执行。来源历史摘要从当前控制账只读取得；预分配 taskId、superseded命令和旧成功回执不能替代 `taskExists`。验证重放需同一 session 同时保留旧回执，并确认新输入看见旧命令无Task及本轮真实创建事实。
+
+生产查询准入：directQueries.databases 明确登记 environment: production、现有只读副本 connectionId 和授权表列，并追加对应 permissions.databaseIds。每次读前核验实时副本及只读事务，生产主库拒绝；不配置 host-enforced-readonly。凭据由 Host 读取，不进入模型。配置登记、实际连接和 Task 读取分别验收；配置变化后通过 reassess-readonly 在原 Task 重评，由 Owner 创建使用当前能力的后续阶段，不能直接重跑冻结旧能力的 Run。用户明确要求不备份时，先用配置器 planAgentQueryResources 零副作用生成并核对唯一变更，再在原生维护停机及 owner 锁下按原文摘要 CAS 写入；不调用会生成 .bak 的 apply。
+
+
+资源配置变更前核对当前调查定义已冻结 capabilityIdentity 和 allowedTools。缺失时先在原配置下原生启动并重建原摘要；仅摘要完全一致才通过 workflow.freezeCapabilities CAS 补齐元数据，不修改原摘要、任务或阶段。独立回读后再启用新配置；旧阶段 scope 能力摘要与当前清单不一致时停止查询，Owner 按当前能力重评后续阶段。此过程不提供旧消息编排兼容，也不降低定义漂移保护。
+
+部署后分别检查真实健康和群回补。图片事件的下载提示与历史展示可不同，只有精确卡片与唯一 mediaId 相同才视为同源；资源或正文实际变更仍要求可信编辑版本。只读查询输出容量超限可在既有授权内缩列或分页纠正，不作权限缺失或致命故障。若群内已有结束/取消指令，恢复工具不得重新打开业务任务。补充消息只更新原任务，不逐条回复；发送前指向旧执行的状态回执作废，实际控制进度不带“已收到”前缀。

@@ -15,7 +15,7 @@ async function fixture(t, body = '请处理') {
   await call('receive', { runId: 'm', sourceKey: 'source', sourceVersion: 1, conversationId: 'g', actorId: 'a', body,
     context: { sourceMessageId: 'in', replyObligation: { required: true, sourceKey: 'source', sourceVersion: 1 } } })
   return { store, call, notices: () => store.query({ kind: 'message.notifications', states: ['prepared', 'sending', 'acknowledged', 'unknown', 'delivered', 'superseded'] }),
-    flush: adapter => createWorkflowNotifications({ store, controller: {}, artifacts: {}, adapter }).flush() }
+    flush: adapter => createWorkflowNotifications({ store, controller: { taskPlan: taskId => store.query({ kind: 'task.plan', taskId }) }, artifacts: {}, adapter }).flush() }
 }
 
 test('需要排查的容量失败有真实状态通知，重启扫描不重复', async t => {
@@ -170,7 +170,65 @@ test('replyPolicy none不丢Task承接及Owner阻塞事实，重新扫描幂等'
   await createWorkflowNotifications({ store }).flush()
   assert.equal(reports, 2); assert.equal(notices.size, 2)
   assert.ok([...notices.values()].some(n => n.payload.text.includes('尚未开始')))
-  assert.ok([...notices.values()].some(n => n.payload.text.includes('审批')))
+  const blocked = [...notices.values()].find(n => n.payload.phase.startsWith('owner:'))
+  assert.ok(blocked.payload.text.startsWith('处理暂时受阻，需要人工介入。'))
+  assert.equal(blocked.payload.text.includes('等待负责人审批'), false)
+})
+
+test('同一事项的多条补充不逐条回复，实际开始仍有一次通知', async () => {
+  const run={runId:'supplement',sourceKey:'source',sourceVersion:1,revision:0,conversationId:'g',actorId:'a',context:{sourceMessageId:'in'}}
+  const commands=['first','second'].map(commandId=>({commandId,status:'applied',kind:'revise',args:{replyPolicy:'receipt'},result:{taskId:'task',reply:'任务要求已更新，正在核对后续处理。'}}))
+  const notices=new Map()
+  const store={async query(q){
+    if(['message.notification.diagnostics','message.acceptances','task.owner.reports'].includes(q.kind))return []
+    if(q.kind==='message.list')return [run]
+    if(q.kind==='message.run')return {run,requests:[],commands}
+    if(q.kind==='message.notification')return q.eventKey?[...notices.values()].find(n=>n.eventKey===q.eventKey):notices.get(q.notificationId)
+    if(['message.task.latest','task.deleted','message.owner.released-wait'].includes(q.kind))return null
+    throw Error(q.kind)
+  },async command({args}){notices.set(args.notificationId,{...args,id:args.notificationId});return {}}}
+  const controller={taskPlan:async()=>({task:{controlState:'active'},stages:[{status:'running',runId:'run'}]}),state:async()=>({run:{status:'running'},nodes:[{status:'running',startedAt:'2026-10-01T00:00:00Z'}]})}
+  for(let n=0;n<2;n++)await createWorkflowNotifications({store,controller}).flush()
+  assert.equal(notices.size,1)
+  assert.equal([...notices.values()][0].payload.text,'任务已开始处理。')
+})
+
+test('只有节点真实开始才发开始进度，重复扫描沿用同一通知', async () => {
+ for(const mode of ['planned','created','started','paused']) {
+  const run={runId:'start-message',sourceKey:'source',sourceVersion:1,revision:0,conversationId:'g',actorId:'a',context:{sourceMessageId:'in'}}
+  const action={commandId:'start-command',status:'applied',kind:'create',args:{replyPolicy:'none'},result:{taskId:'task'}}
+  const notices=new Map()
+  const store={async query(q){
+   if(q.kind==='message.notification.diagnostics'||q.kind==='message.acceptances'||q.kind==='task.owner.reports')return[]
+   if(q.kind==='message.list')return[run]
+   if(q.kind==='message.run')return{run,requests:[],commands:[action]}
+   if(q.kind==='message.notification')return q.eventKey?[...notices.values()].find(n=>n.eventKey===q.eventKey):notices.get(q.notificationId)
+   if(['message.task.latest','task.deleted','message.owner.released-wait'].includes(q.kind))return null
+   throw Error(q.kind)
+  },async command({args}){notices.set(args.notificationId,{...args,id:args.notificationId});return{}}}
+  const controller={taskPlan:async()=>({task:{controlState:mode==='paused'?'paused':'active'},stages:[{status:mode==='planned'?'planned':'running',runId:'run'}]}),state:async()=>({run:{status:'running'},nodes:[{status:'running',startedAt:mode==='created'?null:'2026-10-01T00:00:00Z'}]})}
+  for(let n=0;n<2;n++)await createWorkflowNotifications({store,controller}).flush()
+  const starts=[...notices.values()].filter(n=>n.payload.phase.startsWith('owner:started:'))
+  assert.equal(starts.length,mode==='started'?1:0)
+  if(starts.length)assert.equal(starts[0].payload.text,'任务已开始处理。')
+ }
+})
+
+for (const started of [false, true]) test(`开始通知领取核对真实执行状态：${started}`, async t => {
+  const f = await fixture(t)
+  const send = (kind, args) => f.store.command({ id: randomUUID(), kind, args })
+  await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '任务' }] })
+  await f.call('accept', { runId: 'm', unitId: 'u', commands: [{ commandId: 'start-command', kind: 'create', args: { taskId: 'task' } }] })
+  const binding = (await f.call('command.claim', { commandId: 'start-command' })).result.command
+  await f.call('command.complete', { commandId: 'start-command', leaseEpoch: binding.leaseEpoch, result: { taskId: 'task' } })
+  await send('task.accept', { taskId: 'task', requirementRef: `sha256-${'a'.repeat(64)}.json`, requirementRevision: 1, sessionId: 'owner', criteria: ['结果'], sourceKey: 'source', eventKey: 'created' })
+  await send('task.plan.initialize', { taskId: 'task', expectedPlanRevision: 0, expectedRequirementRevision: 1, expectedControlRevision: 1, stages: [{ stageId: 'stage-1', workflowId: 'w', workflowDigest: 'a'.repeat(64), unavailableReason: null, requirementRef: 'sha256/in', gate: 'none' }] })
+  await send('run.create', { runId: 'business', taskId: 'task', workflowId: 'w', workflowDigest: 'a'.repeat(64), requirementRef: 'sha256/in', stageBinding: { planRevision: 1, stageId: 'stage-1', attempt: 1, expectedControlRevision: 1 }, nodes: [{ nodeId: 'n', nodeVersion: '1', executor: 'code', inputRef: 'sha256/in', inputDigest: 'a'.repeat(64) }] })
+  if (started) await send('node.claim', { runId: 'business', nodeId: 'n', expectedGeneration: 1, expectedLeaseEpoch: 0 })
+  await f.call('notification.prepare', { runId: 'm', commandId: 'start-command', notificationId: 'start', eventKey: 'task.owner.report:started:business', payload: { phase: 'owner:started:business', text: '任务已开始处理。', fact: { taskId: 'task', sourceVersion: 1, runRevision: 0 } }, disclosure: { conversationId: 'g', authorizationRef: 'source' } })
+  const claim = await f.call('notification.claim', { notificationId: 'start' })
+  assert.equal(claim.dispatchEligible, started)
+  assert.equal(claim.result.notification.status, started ? 'sending' : 'superseded')
 })
 
 test('旧Owner报告跨command已送达，稳定eventKey复用且其他prepared正常投递', async t => {

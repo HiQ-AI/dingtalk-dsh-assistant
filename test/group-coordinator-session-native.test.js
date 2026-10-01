@@ -48,6 +48,8 @@ test('原生群会话同轮读取材料后提交，跨轮恢复同一session并�
   t.after(() => rm(root, { recursive: true, force: true }))
   const h = await host(root); t.after(() => h.close())
   let reads = 0, candidates = 0
+  const terminalResults = []
+  h.ctx.on('tools/result', (exec, result) => { if (exec.name === 'group_coordinator_submit') terminalResults.push(result.concludesTurn === true) })
   const run = leaseEpoch => h.sessions.run({ binding: { conversationId: 'group', sessionId: 'group-session', turnId: `turn-${leaseEpoch}`, leaseEpoch, sessionBound: leaseEpoch > 1 },
     input: { messages: [{ actorId: 'user', text: '核对材料后按已有任务推进' }] }, provider: 'group-fixture', model: 'scripted', decisionSchema,
     onSessionBound: async () => {}, onCandidate: async value => { candidates++; assert.deepEqual(value, decision) },
@@ -58,6 +60,7 @@ test('原生群会话同轮读取材料后提交，跨轮恢复同一session并�
   h.setLease(2)
   assert.equal((await run(2)).status, 'submitted')
   assert.equal(reads, 1); assert.equal(candidates, 2)
+  assert.deepEqual(terminalResults, [true, true])
   const persisted = await h.ctx.sessionPersistence.inspect('group-session')
   assert.equal(persisted.events.filter(e => e.type === 'dingtalk/group-coordinator-session').length, 1)
   assert.equal(persisted.events.filter(e => e.type === 'user/message' && e.surfaceOp === 'append').length, 2)

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { executionDigest } from './execution-artifacts.js'
 import { sameDwsFileProjection } from './coordination-resources.js'
 import { maintenanceStatus } from './execution-maintenance.js'
 import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic, invalidateMessageSourceTopics, unbindMessageUnit, wholeTopicFactRevision } from './message-topics.js'
@@ -416,8 +417,11 @@ function coordinatorState(db, conversationId) {
   const sources=db.prepare(`SELECT r.rowid AS sequenceId,r.body FROM message_runs r JOIN message_sources s
     ON s.source_key=r.source_key AND s.current_version=COALESCE(json_extract(r.body,'$.validSourceVersion'),r.source_version)
     WHERE json_extract(r.body,'$.conversationId')=? AND json_extract(r.body,'$.status') NOT IN ('settled','superseded','alias','buffered')
-    AND json_extract(r.body,'$.coordinatorConsumed') IS NULL
-    AND NOT EXISTS(SELECT 1 FROM message_items i WHERE i.run_id=r.run_id AND i.kind='command') ORDER BY r.rowid`)
+    AND (json_extract(r.body,'$.coordinatorConsumed') IS NULL OR EXISTS(SELECT 1 FROM message_items i
+      WHERE i.run_id=r.run_id AND i.kind='command' AND json_extract(i.body,'$.status')='superseded'
+      AND json_extract(i.body,'$.priorStatus')='pending' AND json_extract(i.body,'$.reason')='topic_input_changed'))
+    AND NOT EXISTS(SELECT 1 FROM message_items i WHERE i.run_id=r.run_id AND i.kind='command'
+      AND json_extract(i.body,'$.status')!='superseded') ORDER BY r.rowid`)
     .all(conversationId).map(row=>({...JSON.parse(row.body),sequenceId:row.sequenceId}))
   const unconsumedTaskEvents=[]
   for(const task of db.prepare('SELECT task_id FROM business_tasks ORDER BY task_id').all()){
@@ -677,6 +681,16 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(rows(db,r.runId,'unit').filter(item=>item.status!=='superseded').every(item=>db.prepare('SELECT 1 FROM message_topic_bindings WHERE unit_id=?').get(item.id))){r.routingStatus='routing_complete';r.intentStatus='waiting_routing_barrier';save(db,r)}
     return {result:{topic:result.result.topic,unit:bound}}
   }
+  if(kind==='workflow.freezeCapabilities') {
+    const old=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(str(a.digest))
+    if(!old)fail('WORKFLOW_DEFINITION_CONFLICT')
+    const record=JSON.parse(old.body)
+    if(record.workflowId!=='task-investigation'||record.config.capabilityIdentity||executionDigest(record.config)!==a.expectedConfigDigest||!/^[a-f0-9]{64}$/.test(a.capabilityIdentity)
+      ||!Array.isArray(a.allowedTools)||a.allowedTools.some(tool=>typeof tool!=='string'||!tool)||new Set(a.allowedTools).size!==a.allowedTools.length)fail('WORKFLOW_DEFINITION_CONFLICT')
+    record.config={...record.config,capabilityIdentity:a.capabilityIdentity,allowedTools:a.allowedTools}
+    db.prepare('UPDATE message_workflows SET body=? WHERE digest=?').run(json(record),a.digest)
+    return {result:record}
+  }
   if(kind==='workflow.register') { str(a.workflowId);str(a.definitionVersion);str(a.digest);const old=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.digest);if(old&&json(JSON.parse(old.body))!==json(a))fail('WORKFLOW_DEFINITION_CONFLICT');if(!old)db.prepare('INSERT INTO message_workflows VALUES(?,?)').run(a.digest,json(a));return {result:a} }
   if(!kind.startsWith('message.')) return null
   const now=ctx.now
@@ -786,7 +800,27 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
         n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}
       }
       if(version?.commandLeaseEpoch!==undefined&&(()=>{const command=get(db,'command',n.commandId);return command.status!=='applied'||command.leaseEpoch!==version.commandLeaseEpoch||version.commandInputVersion!==undefined&&command.result?.inputVersion!==version.commandInputVersion})()){n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}
-      if(n.payload?.phase?.startsWith('owner:')){
+      if(n.commandId&&n.payload?.phase==='receipt'){
+        const action=get(db,'command',n.commandId)
+        const latest=taskId?db.prepare('SELECT run_id FROM execution_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(taskId):null
+        if(action.status==='applied'&&action.kind==='revise'||['status','result'].includes(action.kind)&&action.result?.runId&&latest&&latest.run_id!==action.result.runId){
+          n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}
+        }
+      }
+      if(n.payload?.phase?.startsWith('owner:started:')){
+        const executionRunId=n.payload.phase.slice('owner:started:'.length)
+        const execution=db.prepare('SELECT status,pause_requested,stop_requested FROM execution_runs WHERE run_id=? AND task_id=?').get(executionRunId,taskId)
+        const control=db.prepare('SELECT state AS control_state FROM task_controls WHERE task_id=?').get(taskId)
+        const started=db.prepare(`SELECT 1 FROM execution_nodes n JOIN execution_events e
+          ON e.kind='node.claim' AND json_extract(e.payload,'$.binding.nodeRunId')=n.node_run_id
+          AND json_extract(e.payload,'$.binding.leaseEpoch')=n.lease_epoch
+          WHERE n.run_id=? AND n.current=1 AND n.status='running' LIMIT 1`).get(executionRunId)
+        if(execution?.status!=='running'||execution.pause_requested||execution.stop_requested||control?.control_state!=='active'||!started){
+          n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}
+        }
+        assertMessageTaskUnfenced(db,taskId)
+      }
+      if(n.payload?.phase?.startsWith('owner:')&&!n.payload.phase.startsWith('owner:started:')){
         const applicationWait=n.payload.phase.startsWith('owner:application_wait:')
         const reportId=n.payload.phase.slice(applicationWait?'owner:application_wait:'.length:'owner:'.length)
         const releasedWait=n.payload.phase==='owner:application_wait:released'

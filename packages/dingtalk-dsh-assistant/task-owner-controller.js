@@ -109,8 +109,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       const page = await store.query({ kind: 'task.owner.events', taskId, afterSequenceId: cursor, limit: 200 })
       const selected = page.filter(item => item.eventSeq <= claim.eventWatermark)
       for (const item of selected) {
-        events.push({ eventSeq: item.eventSeq, eventType: item.eventType,
-          payload: item.payloadRef ? await artifacts.read(item.payloadRef) : null })
+        events.push({ eventSeq: item.eventSeq, eventType: item.eventType, payloadRef: item.payloadRef ?? null })
       }
       if (!page.length || page.at(-1).eventSeq >= claim.eventWatermark) break
       cursor = page.at(-1).eventSeq
@@ -118,7 +117,10 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     const goal = plan.task.requirementRef ? await artifacts.read(plan.task.requirementRef)
       : plan.stages[0]?.requirementRef ? await artifacts.read(plan.stages[0].requirementRef) : null
     const acceptanceItems = await store.query({ kind: 'task.owner.acceptance', taskId })
-    const result = { taskId, eventWatermark: claim.eventWatermark, goal,
+    const modelGoal = Array.isArray(goal?.materials) ? { ...goal, materials: await Promise.all(goal.materials.map(async material => ({
+      id: material.id, artifactRef: (await artifacts.put(material, { taskId })).ref,
+    }))) } : goal
+    const result = { taskId, eventWatermark: claim.eventWatermark, goal: modelGoal,
       ...(readCurrentSources ? { currentSources: await readCurrentSources({ taskId, plan }) } : {}),
       acceptanceItems, versions: claim.versions, task: plan.task, stages: plan.stages, events }
     if (plan.task.planRevision > 0 && plan.task.planRequirementRevision !== plan.task.requirementRevision) result.planReview = {
@@ -170,6 +172,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         const readableArtifacts = new Set(input.stageArtifacts.flatMap(stage =>
           [stage.outputRef, ...stage.evidenceRefs].filter(Boolean)))
         if (input.deliveryManifest) readableArtifacts.add(input.deliveryManifest.ref)
+        for (const ref of [...input.events.map(event => event.payloadRef), ...(input.goal?.materials ?? []).map(material => material.artifactRef)].filter(Boolean)) readableArtifacts.add(ref)
         const result = await sessions.run({ binding, input, ...modelConfig(),
           readPage: async pageRef => {
             if (!unreadPages.has(pageRef)) throw error('TASK_OWNER_PAGE_NOT_ALLOWED')
