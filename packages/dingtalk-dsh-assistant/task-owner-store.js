@@ -24,6 +24,15 @@ const exact = (value, allowed, required = allowed) => {
     || required.some(key => !Object.hasOwn(value, key))) fail('TASK_OWNER_ARGUMENT_INVALID')
 }
 const json = value => JSON.stringify(value)
+function validatePlanChange(chosen, currentTask) {
+    if (chosen.appendStages?.some(stage => stage.capabilityStep)
+      && (chosen.appendStages.length !== 1
+        || !['pending', 'succeeded'].includes(currentTask.plan_status))) fail('TASK_OWNER_ADVANCE_CONFLICT')
+    if (chosen.planChange?.kind === 'initialize' && (currentTask.plan_status !== 'pending'
+      || currentTask.plan_revision !== 0)) fail('TASK_OWNER_ADVANCE_CONFLICT')
+    if (chosen.planChange && chosen.planChange.kind !== 'initialize' && currentTask.plan_revision === 0)
+      fail('TASK_OWNER_ADVANCE_CONFLICT')
+}
 const decision = value => {
   exact(value, ['action', 'summary', 'evidenceRefs', 'appendStages', 'planChange', 'assessments', 'repair'], ['action', 'summary', 'evidenceRefs'])
   if (!['advance', 'wait', 'complete', 'block', 'repairCurrentStage'].includes(value.action)
@@ -303,9 +312,13 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       || currentTask.requirement_revision !== a.expectedRequirementRevision || currentTask.control_revision !== a.expectedControlRevision
       || o.last_failure !== a.expectedLastFailure) fail('TASK_OWNER_RETRY_STALE')
     if (currentTask.control_state !== 'active' || o.status !== 'blocked' || o.failure_count < 3 || o.current_turn_id
-      || !['TASK_OWNER_NO_DECISION', 'TASK_OWNER_TIMEOUT'].includes(o.last_failure)
+      || !['TASK_OWNER_NO_DECISION', 'TASK_OWNER_TIMEOUT', 'TASK_OWNER_ADVANCE_CONFLICT'].includes(o.last_failure)
       || db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked')) LIMIT 1").get(a.taskId))
       fail('TASK_OWNER_RETRY_FORBIDDEN')
+    if (o.last_failure === 'TASK_OWNER_ADVANCE_CONFLICT') {
+      const last = db.prepare('SELECT status,decision_json,application_status FROM task_owner_turns WHERE task_id=? AND lease_epoch=?').get(o.task_id, o.lease_epoch)
+      if (!last || last.status !== 'released' || last.decision_json !== null || last.application_status !== null) fail('TASK_OWNER_RETRY_FORBIDDEN')
+    }
     const eventSeq = Number(db.prepare("INSERT INTO task_events(task_id,event_key,event_type,payload_ref,created_at) VALUES(?,?,'system.recovery',?,?)")
       .run(a.taskId, a.eventKey, a.payloadRef, now).lastInsertRowid)
     db.prepare("UPDATE task_owners SET status='pending',failure_count=0,last_failure=NULL,event_watermark=?,revision=revision+1,updated_at=? WHERE task_id=?")
@@ -359,8 +372,10 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     exact(a, ['taskId', 'turnId', 'leaseEpoch', 'decision'])
     const { turn: t } = turn(db, a)
     if (t.status !== 'running') fail('TASK_OWNER_CANDIDATE_CONFLICT')
+    const chosen = decision(a.decision)
+    validatePlanChange(chosen, task(db, t.task_id))
     db.prepare("UPDATE task_owner_turns SET candidate_json=?,status='candidate',updated_at=? WHERE turn_id=?")
-      .run(json(decision(a.decision)), now, t.turn_id)
+      .run(json(chosen), now, t.turn_id)
     return { status: 'received', turnId: t.turn_id }
   }
   if (command.kind === 'task.owner.accept') {
@@ -384,13 +399,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       AND status<>'succeeded' AND status<>'invalidated' ORDER BY position LIMIT 1`)
       .get(o.task_id, currentTask.plan_revision)
     if (currentTask.control_state !== 'active') fail('TASK_OWNER_CONTROL_BLOCKED')
-    if (chosen.appendStages?.some(stage => stage.capabilityStep)
-      && (chosen.appendStages.length !== 1
-        || !['pending', 'succeeded'].includes(currentTask.plan_status))) fail('TASK_OWNER_ADVANCE_CONFLICT')
-    if (chosen.planChange?.kind === 'initialize' && (currentTask.plan_status !== 'pending'
-      || currentTask.plan_revision !== 0)) fail('TASK_OWNER_ADVANCE_CONFLICT')
-    if (chosen.planChange && chosen.planChange.kind !== 'initialize' && currentTask.plan_revision === 0)
-      fail('TASK_OWNER_ADVANCE_CONFLICT')
+    validatePlanChange(chosen, currentTask)
     if (chosen.action === 'complete') {
       if (currentTask.plan_status !== 'succeeded' || chosen.appendStages !== undefined
         || currentTask.plan_requirement_revision !== currentTask.requirement_revision) fail('TASK_OWNER_COMPLETION_UNPROVEN')
@@ -501,7 +510,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     if (a.reason !== undefined && (typeof a.reason !== 'string' || !a.reason || a.reason.length > 200))
       fail('TASK_OWNER_ARGUMENT_INVALID')
     const active = task(db, a.taskId).control_state === 'active'
-    const counted = active && a.reason && a.reason !== 'TASK_OWNER_CANDIDATE_STALE'
+    const counted = active && a.reason && !['TASK_OWNER_CANDIDATE_STALE', 'MESSAGE_INPUT_PENDING'].includes(a.reason)
     const failures = o.failure_count + (counted ? 1 : 0)
     db.prepare("UPDATE task_owner_turns SET status='released',updated_at=? WHERE turn_id=?").run(now, t.turn_id)
     db.prepare("UPDATE task_owners SET status=?,failure_count=?,last_failure=?,current_turn_id=NULL,revision=revision+1,updated_at=? WHERE task_id=?")

@@ -111,7 +111,7 @@ test('调查输入保留 Host handoff、材料按 ID 去重且拒绝冲突', asy
   const material = { id: 'source-a', text: '来源正文' }
   const contract = createInvestigationStageContract({ queryScope: value => value, queryCatalog: () => ({ queries: [] }), readSources: async () => [material], readAcceptanceItems: async () => requirement.acceptanceItems })
   const handoff = { outputRef: 'prior-ref', value: { summary: '前序结果' } }
-  const args = { requirement: { ...requirement, request: '调查', constraints: [], scope: {}, target: {}, materials: [material] }, origin: { run: { actorId: 'actor' } }, handoff }
+  const args = { requirement: { ...requirement, request: '调查', constraints: [], scope: { sourceKeys: [], sourceVersions: {} }, target: {}, materials: [material] }, origin: { run: { actorId: 'actor' } }, handoff }
   const { input } = await contract.prepare(args)
   assert.deepEqual(input.materials, [material]); assert.deepEqual(input.handoff, handoff)
   assert.equal(input.scope.predecessorOutputRef, 'prior-ref')
@@ -124,7 +124,7 @@ test('修订后的真实 hash 验收 ID 冻结交接，拒绝按序号冒充及�
   let currentItems = revisedItems
   const contract = createInvestigationStageContract({ queryScope: value => value, queryCatalog: () => ({}), readSources: async () => [],
     readAcceptanceItems: async taskId => { assert.equal(taskId, 'task'); return currentItems } })
-  const args = { taskId: 'task', requirement: { ...requirement, acceptanceCriteria: ['更新后的要求'], request: '调查', constraints: [], scope: {}, target: {} }, origin: { run: { actorId: 'actor' } } }
+  const args = { taskId: 'task', requirement: { ...requirement, acceptanceCriteria: ['更新后的要求'], request: '调查', constraints: [], scope: { sourceKeys: [], sourceVersions: {} }, target: {} }, origin: { run: { actorId: 'actor' } } }
   const { input } = await contract.prepare(args)
   assert.deepEqual(input.acceptanceItems, revisedItems)
   const value = result(); value.criterionReviews = [{ ...value.criterionReviews[0], itemId: revisedItems[0].itemId }]

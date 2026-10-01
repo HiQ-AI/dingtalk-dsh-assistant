@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
-import { createWorkflowNotifications, notificationSilence } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
+import { createWorkflowNotifications, notificationSilence, sameDeliveredText } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 
 async function fixture(t, body = '请处理') {
   const dir = await mkdtemp(join(tmpdir(), 'notice-obligation-'))
@@ -20,11 +20,11 @@ async function fixture(t, body = '请处理') {
 
 test('需要排查的容量失败有真实状态通知，重启扫描不重复', async t => {
   const f = await fixture(t)
-  await f.call('attention', { runId: 'm', reason: 'MESSAGE_CONTEXT_CAPACITY:S:$:8372/8000' })
+  await f.call('attention', { runId: 'm', reason: 'MESSAGE_MODEL_CONTEXT_WINDOW_EXCEEDED:S:$' })
   await f.flush(); await f.flush()
   const notices = await f.notices()
   assert.equal(notices.length, 1)
-  assert.match(notices[0].payload.text, /容量问题/)
+  assert.equal(notices[0].payload.text, '处理遇到系统问题，无法继续推进，需要人工介入。')
   assert.equal(notices[0].payload.fact.sourceVersion, 1)
   assert.equal(notices[0].status, 'prepared')
 })
@@ -64,7 +64,7 @@ test('内部读取短暂等待不催问，耗尽后告知；恢复后旧待发�
   await f.flush(); await f.flush()
   const [notice] = await f.notices()
   assert.equal(notice.payload.phase, 'system_wait')
-  assert.match(notice.payload.text, /不需要提供内部资料/)
+  assert.equal(notice.payload.text, '处理遇到系统问题，无法继续推进，需要人工介入。')
   await f.call('request.resolve', { runId: 'm', requestId: 'q', actorId: 'a', eventId: 'material-ready', answer: { ready: true } })
   const claim = await f.call('notification.claim', { notificationId: notice.id })
   assert.equal(claim.dispatchEligible, false)
@@ -73,7 +73,7 @@ test('内部读取短暂等待不催问，耗尽后告知；恢复后旧待发�
 
 test('来源更新使已准备的系统状态通知失效，零发送', async t => {
   const f = await fixture(t)
-  await f.call('attention', { runId: 'm', reason: 'recovery_exhausted' })
+  await f.call('attention', { runId: 'm', reason: 'MANUAL_RECOVERY_REQUIRED' })
   await f.flush()
   const [notice] = await f.notices()
   await f.call('receive', { runId: 'm2', sourceKey: 'source', sourceVersion: 2, conversationId: 'g', actorId: 'a', body: '修正要求' })
@@ -106,7 +106,7 @@ test('Task已落账但command尚未完成仍有承接责任，完成后不重复
 
 test('发送未知后来源更新仍回读旧通知，不删除效果或再次发送', async t => {
   const f = await fixture(t)
-  await f.call('attention', { runId: 'm', reason: 'recovery_exhausted' })
+  await f.call('attention', { runId: 'm', reason: 'MANUAL_RECOVERY_REQUIRED' })
   let sends = 0, reads = 0
   const adapter = { canDisclose: async () => true, send: async () => { sends++; throw new Error('unknown') },
     readback: async () => ++reads > 1 ? { messageId: 'out' } : null }
@@ -162,7 +162,7 @@ test('replyPolicy none不丢Task承接及Owner阻塞事实，重新扫描幂等'
     if (q.kind === 'message.run') return { run, requests: [], commands: [action] }
     if (q.kind === 'message.acceptances') return []
     if (q.kind === 'message.notification') return notices.get(q.notificationId)
-    if (q.kind === 'message.task.latest') return null
+    if (q.kind === 'message.task.latest' || q.kind === 'task.deleted' || q.kind === 'message.owner.released-wait') return null
     if (q.kind === 'task.owner.reports') { reports++; return [{ reportId: 'report', reportType: 'block', applicationStatus: 'applied', triggerTypes: [], facts: { summary: '等待负责人审批。' } }] }
     throw new Error(q.kind)
   }, async command({ kind, args }) { assert.equal(kind, 'message.notification.prepare'); notices.set(args.notificationId, { ...args, id: args.notificationId }); return {} } }
@@ -195,7 +195,7 @@ test('旧Owner报告跨command已送达，稳定eventKey复用且其他prepared�
   const old=(await f.call('notification.claim',{notificationId:'old-id-other-command'})).result.notification
   await f.call('notification.sent',{notificationId:old.id,leaseEpoch:old.leaseEpoch,ack:{messageId:'old-out'}})
   await f.call('notification.readback',{notificationId:old.id,leaseEpoch:old.leaseEpoch,evidence:{messageId:'old-out'}})
-  await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+  await f.call('attention',{runId:'m',reason:'MANUAL_RECOVERY_REQUIRED'})
   const store=f.store
   let sends=0
   await createWorkflowNotifications({store,adapter:{canDisclose:async()=>true,send:async()=>{sends++;return {messageId:'new-out'}},readback:async()=>({messageId:'new-out'})}}).flush()
@@ -207,7 +207,7 @@ test('旧Owner报告跨command已送达，稳定eventKey复用且其他prepared�
 
 test('单条事实失败不阻断unknown回读，诊断可回读且相同错误不反复写账',async t=>{
   const f=await fixture(t)
-  await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+  await f.call('attention',{runId:'m',reason:'MANUAL_RECOVERY_REQUIRED'})
   await f.flush({canDisclose:async()=>true,send:async()=>{throw Error('ACK_LOST')},readback:async()=>null})
   let broken=true,diagnosticWrites=0,reads=0
   const store={query:q=>{if(broken&&q.kind==='message.acceptances')throw Error('BROKEN_FACT');return f.store.query(q)},command:q=>{if(q.kind==='message.notification.diagnostic')diagnosticWrites++;return f.store.command(q)}}
@@ -230,7 +230,7 @@ test('逻辑来源等待跨原因和重放去重，不同来源独立告知', as
   const adapter = { canDisclose: async () => true, send: async () => ({ messageId: `out-${++sends}` }), readback: async n => ({ messageId: n.ack.messageId }) }
   await f.call('attention', { runId: 'm', reason: 'MESSAGE_NODE_TIMEOUT' })
   await f.flush(adapter)
-  await f.call('attention', { runId: 'm', reason: 'recovery_exhausted' })
+  await f.call('attention', { runId: 'm', reason: 'MANUAL_RECOVERY_REQUIRED' })
   await f.flush(adapter)
   assert.equal(sends, 1)
   await f.call('reprocess', { runId: 'm', newRunId: 'm2', reason: '修复后恢复' })
@@ -274,16 +274,16 @@ test('同来源正文修改是新请求，公开等待事实变化后可再次�
   assert.equal(sends, 2)
   await f.call('attention', { runId: 'edited', reason: 'MESSAGE_CONTEXT_CAPACITY:S' })
   await f.flush(adapter)
-  assert.equal(sends, 3)
+  assert.equal(sends, 2)
   await f.call('attention', { runId: 'edited', reason: 'FIRST' })
   await f.flush(adapter)
-  assert.equal(sends, 4)
+  assert.equal(sends, 2)
   await f.flush(adapter)
-  assert.equal(sends, 4)
+  assert.equal(sends, 2)
 })
 
 
-test('等待模板使用当前冻结目标，不复用误归类话题标题', async t => {
+test('等待通知仅显示进度，不复述原文或话题标题', async t => {
   const f = await fixture(t)
   await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '审核状态查询' }] })
   await f.call('topic.bind', { runId: 'm', unitId: 'u', expectedRevision: 0,
@@ -291,11 +291,11 @@ test('等待模板使用当前冻结目标，不复用误归类话题标题', as
     topic: { topicId: 'topic', conversationId: 'g', sourceRunId: 'm', unitId: 'u', title: '不相关的旧主题', facts: [] } })
   await f.call('attention', { runId: 'm', reason: 'FIRST' })
   await f.flush()
-  assert.match((await f.notices())[0].payload.text, /^关于“审核状态查询”：/)
+  assert.equal((await f.notices())[0].payload.text, '处理遇到系统问题，无法继续推进，需要人工介入。')
 })
 
 
-test('已送达无目标标签的等待通知，升级展示标签后不重发', async t => {
+test('已送达旧等待文案，简化为进度后不重发', async t => {
   const f = await fixture(t)
   await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '审核状态查询' }] })
   await f.call('attention', { runId: 'm', reason: 'OLD_TECHNICAL_REASON' })
@@ -335,7 +335,7 @@ for (const revised of [false, true]) test(`Owner决定应用失败系统告知�
   const notice = (await f.notices()).find(item => item.payload.phase.startsWith('owner:'))
   assert.ok(notice)
   assert.match(notice.payload.phase, /^owner:application_wait:/)
-  assert.match(notice.payload.text, /尚未继续/)
+  assert.match(notice.payload.text, /需要人工介入/)
   assert.doesNotMatch(notice.payload.text, /缺少读取生产状态|WORKFLOW_REPAIR/)
   await f.flush()
   assert.equal((await f.notices()).filter(n => n.payload.phase.startsWith('owner:application_wait:')).length, 1)
@@ -347,11 +347,110 @@ for (const revised of [false, true]) test(`Owner决定应用失败系统告知�
     assert.equal(stale.result.notification.status, 'superseded')
     return
   }
+  await f.call('notification.prepare',{runId:'m',commandId:'c',notificationId:'concurrent-owner-wait',eventKey:'concurrent-owner-wait',payload:notice.payload,disclosure:notice.disclosure})
   const preparedClaim = await f.call('notification.claim', { notificationId: notice.id })
   assert.equal(preparedClaim.dispatchEligible, true)
+  const concurrent=await f.call('notification.claim',{notificationId:'concurrent-owner-wait'})
+  assert.equal(concurrent.dispatchEligible,false)
+  assert.equal(concurrent.result.notification.status,'superseded')
   await f.call('notification.fail', { notificationId: notice.id, leaseEpoch: preparedClaim.result.notification.leaseEpoch, error: 'ack lost' })
   await send('task.requirement.update', { taskId: 'task', expectedRequirementRevision: 1,
     requirementRef: `sha256-${'b'.repeat(64)}.json`, eventKey: 'new-requirement' })
   await f.flush({ canDisclose: async () => true, send: async () => { throw new Error('no new send expected') }, readback: async () => ({ messageId: 'out' }) })
   assert.equal((await f.notices()).find(item => item.id === notice.id).status, 'delivered')
+  for (const epoch of [2,3]) {
+    if (epoch === 3) await send('task.owner.event',{taskId:'task',eventKey:'actual-success',eventType:'workflow.succeeded'})
+    await send('task.owner.claim',{taskId:'task',turnId:`turn-${epoch}`,expectedLeaseEpoch:epoch-1})
+    await send('task.owner.candidate',{taskId:'task',turnId:`turn-${epoch}`,leaseEpoch:epoch,decision:{action:'repairCurrentStage',repair:{stageId:'stage-1',runId:'r',generation:epoch,runRevision:0,requirementRevision:2},summary:'同一受阻条件',evidenceRefs:[]}})
+    await send('task.owner.accept',{taskId:'task',turnId:`turn-${epoch}`,leaseEpoch:epoch})
+    for(let i=0;i<3;i++)await send('task.owner.action.fail',{taskId:'task',turnId:`turn-${epoch}`,leaseEpoch:epoch,reason:'OTHER_TECHNICAL_ERROR'})
+    await f.flush()
+    assert.equal((await f.notices()).filter(n=>n.payload.phase.startsWith('owner:application_wait:')&&n.status!=='superseded').length,epoch===2?1:2)
+  }
+})
+
+test('标题更正遇到真实归类等待只给简洁进度，不复述原文或催重复材料',async t=>{
+ const f=await fixture(t,'表格的标题写错了，应该是新的LCA专家')
+ await f.call('split',{runId:'m',units:[{unitId:'u',goalText:'表格的标题写错了，应该是新的LCA专家'}]})
+ await f.call('topic.bind',{runId:'m',unitId:'u',expectedRevision:0,binding:{kind:'binding',disposition:'new',candidateId:null},topic:{topicId:'topic',conversationId:'g',sourceRunId:'m',unitId:'u',title:'标题更正',facts:[]}})
+ const oldNow=Date.now;Date.now=()=>oldNow()+61000
+ try{await f.flush()}finally{Date.now=oldNow}
+ const notice=(await f.notices()).find(n=>n.payload.phase==='routing_wait')
+ assert.ok(notice)
+ assert.equal(notice.payload.text,'目前正在核对可能相关的补充要求，相关处理尚未开始；核对清楚后继续。')
+ assert.doesNotMatch(notice.payload.text,/关于|已收到|重复提交|标题写错/)
+})
+
+
+test('Owner首次领取前有未定新输入，不取得lease或消耗失败预算', async t => {
+  const f = await fixture(t)
+  await f.call('split', { runId: 'm', units: [{ unitId: 'u' }] })
+  await f.call('accept', { runId: 'm', unitId: 'u', commands: [{ commandId: 'c', kind: 'create', args: { taskId: 'task' } }] })
+  const c = (await f.call('command.claim', { commandId: 'c' })).result.command
+  await f.store.command({ id: randomUUID(), kind: 'task.accept', args: { taskId: 'task', requirementRef: `sha256-${'a'.repeat(64)}.json`, requirementRevision: 1, sessionId: 'owner', criteria: ['交付'], sourceKey: 'source', eventKey: 'created' } })
+  await f.call('command.complete', { commandId: 'c', leaseEpoch: c.leaseEpoch, result: { taskId: 'task' } })
+  await f.call('receive', { runId: 'new-message', sourceKey: 'new-source', sourceVersion: 1, conversationId: 'g', actorId: 'a', body: '先别执行，我补充条件' })
+  for (let n = 0; n < 4; n++) await assert.rejects(f.store.command({ id: randomUUID(), kind: 'task.owner.claim', args: { taskId: 'task', turnId: `waiting-${n}`, expectedLeaseEpoch: 0 } }), /MESSAGE_INPUT_PENDING/)
+  const owner = await f.store.query({ kind: 'task.owner', taskId: 'task' })
+  assert.equal(owner.leaseEpoch, 0)
+  assert.equal(owner.failureCount, 0)
+  assert.equal(owner.status, 'pending')
+})
+
+for(const reason of ['MESSAGE_DEADLINE_BEFORE_CLAIM:S','MESSAGE_CONTEXT_CAPACITY:S:$:100/80','recovery_exhausted'])test(`自动恢复尚可推进时不发送系统错误：${reason}`,async t=>{
+ const f=await fixture(t);await f.call('attention',{runId:'m',reason});await f.flush();assert.equal((await f.notices()).length,0)
+})
+
+
+test('材料耗尽但仍有内部自动读取时不发人工介入',async t=>{
+ const f=await fixture(t)
+ await f.call('wait',{runId:'m',unitId:'$',nodeId:'R',reason:'读取',request:{requestId:'blocked',kind:'needs_context',needs:[]}})
+ await f.call('request.retry',{runId:'m',requestId:'blocked',maxAttempts:1,error:'READ_FAILED',contractVersion:'test-v1'})
+ await f.call('wait',{runId:'m',unitId:'$',nodeId:'S',reason:'自动读取',request:{requestId:'automatic',kind:'needs_context',needs:[]}})
+ await f.flush()
+ assert.equal((await f.notices()).length,0)
+})
+
+
+test('短引用通知只允许明确发送人前缀及完整正文匹配',()=>{
+ for(const body of ['已收到。\n\n- 小小鹏代回','目前正在核对相关要求。\n\n- 小小鹏代回']){
+  const observed=`@李辰  ${body}`
+  assert.equal(sameDeliveredText(observed,body,{sender:'李辰'}),true)
+  assert.equal(sameDeliveredText(observed,body,{sender:'王明'}),false)
+  assert.equal(sameDeliveredText(observed,body,null),false)
+  assert.equal(sameDeliveredText(observed+'额外内容',body,{sender:'李辰'}),false)
+  assert.equal(sameDeliveredText('其他文字 '+body,body,true),false)
+ }
+})
+
+for(const recoverBeforeClaim of [false,true])test(`Owner三次released后真实blocked无report仍告知，恢复边界：${recoverBeforeClaim}`,async t=>{
+ const f=await fixture(t),send=(kind,args)=>f.store.command({id:randomUUID(),kind,args})
+ await f.call('split',{runId:'m',units:[{unitId:'u',goalText:'核验'}]})
+ await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'create',args:{taskId:'task',replyPolicy:'none'}}]})
+ const claim=(await f.call('command.claim',{commandId:'c'})).result.command
+ await send('task.accept',{taskId:'task',requirementRef:`sha256-${'a'.repeat(64)}.json`,requirementRevision:1,sessionId:'owner',criteria:['核验'],sourceKey:'source',eventKey:'created'})
+ await f.call('command.complete',{commandId:'c',leaseEpoch:claim.leaseEpoch,result:{taskId:'task'}})
+ let epoch=0
+ const release=async()=>{const previous=epoch++;await send('task.owner.claim',{taskId:'task',turnId:`released-${epoch}`,expectedLeaseEpoch:previous});await send('task.owner.release',{taskId:'task',turnId:`released-${epoch}`,leaseEpoch:epoch,reason:'ADVANCE_CONFLICT'})}
+ await release();await f.flush()
+ assert.equal((await f.notices()).filter(n=>n.payload.phase.startsWith('owner:application_wait:')).length,0)
+ await release();await release();await f.flush();await f.flush()
+ assert.deepEqual(await f.store.query({kind:'task.owner.reports',taskId:'task'}),[])
+ const notices=(await f.notices()).filter(n=>n.payload.phase==='owner:application_wait:released')
+ assert.equal(notices.length,1);assert.equal(notices[0].payload.text,'处理遇到系统问题，无法继续推进，需要人工介入。')
+ if(recoverBeforeClaim){
+  await send('task.owner.event',{taskId:'task',eventKey:'recovered',eventType:'workflow.succeeded'})
+  const result=await f.call('notification.claim',{notificationId:notices[0].id})
+  assert.equal(result.dispatchEligible,false);assert.equal(result.result.notification.status,'superseded');return
+ }
+ let sends=0
+ const adapter={canDisclose:async()=>true,send:async()=>({messageId:`sent-${++sends}`}),readback:async n=>({messageId:n.ack.messageId})}
+ await f.flush(adapter);await f.flush(adapter)
+ assert.equal((await f.notices()).filter(n=>n.payload.phase==='owner:application_wait:released'&&n.status==='delivered').length,1)
+ const sentBefore=sends
+ await send('task.owner.event',{taskId:'task',eventKey:'actual-recovery',eventType:'workflow.succeeded'})
+ await release();await release();await release()
+ await f.flush(adapter);await f.flush(adapter)
+ assert.equal(sends,sentBefore+1)
+ assert.equal((await f.notices()).filter(n=>n.payload.phase==='owner:application_wait:released'&&n.status==='delivered').length,2)
 })

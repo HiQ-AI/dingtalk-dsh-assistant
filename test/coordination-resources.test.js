@@ -145,3 +145,25 @@ test('DWS 文件卡片只允许同名同 fileId 的精确下载尾注差异，�
   await assert.rejects(make({ ...remote, text: '原文', resourceRefs: [] }, { ...source, text: '原文 注意：如需下载使用dws drive download命令下载' }).call('group_message_get', { messageId: 'a' }), /coordination_message_version_changed/)
   await assert.rejects(make(remote, { ...source, text: `${source.text} 追加业务要求` }).call('group_message_get', { messageId: 'a' }), /coordination_message_version_changed/)
 })
+
+test('SQL附件经精确受管下载仅按UTF8读取，保留正文且拒绝坏编码并清理', async t => {
+  const cwd = await mkdtemp(path.join(tmpdir(), 'sql-resource-'))
+  t.after(() => rm(cwd, { recursive: true, force: true }))
+  const text = "-- 先两条测试，验证后执行正式数据\r\nBEGIN;\r\nUPDATE review SET expert = '新专家';\r\nROLLBACK;\r\n"
+  let bytes = Buffer.from(text), calls = 0
+  const adapter = createDwsAdapter({ enabled: true, profile: 'test-profile', runner: { cwd, async run(args) {
+    calls++
+    assert.ok(args.includes('+messages-resource-download'))
+    for (const [flag, value] of [['--profile', 'test-profile'], ['--open-conversation-id', 'g'], ['--message-id', 'm'], ['--resource-id', 'sql-file'], ['--type', 'fileId']])
+      assert.equal(args[args.indexOf(flag) + 1], value)
+    const localPath = path.join(args[args.indexOf('--output') + 1], '审核修复.SQL')
+    await writeFile(path.join(cwd, localPath), bytes)
+    return { exitCode: 0, stdout: JSON.stringify({ localPath, sizeBytes: bytes.length }) }
+  } } })
+  const result = await adapter.readMessageResource('g', 'm', { type: 'fileId', resourceId: 'sql-file' })
+  assert.equal(result.text, text); assert.equal(result.mediaType, 'text/plain'); assert.equal(calls, 1)
+  assert.deepEqual(await readdir(cwd), [])
+  bytes = Buffer.from([0xff, 0xfe, 0xff])
+  await assert.rejects(adapter.readMessageResource('g', 'm', { type: 'fileId', resourceId: 'sql-file' }), { code: 'ERR_ENCODING_INVALID_ENCODED_DATA' })
+  assert.equal(calls, 2); assert.deepEqual(await readdir(cwd), [])
+})

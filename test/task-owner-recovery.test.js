@@ -125,3 +125,26 @@ for (const [name, mutate, code] of unsafe) test(`完成观察恢复拒绝${name}
   const f = await fixture(t); await f.duplicate(); await f.maintain(); await f.reopen(mutate)
   await assert.rejects(f.proof(), { code })
 })
+
+test('新Task首轮输入不把未建立计划误判为需求过期，同turn纠正后接纳initialize',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'owner-initial-plan-'))
+ const store=await openExecutionStore({dbPath:join(directory,'control.sqlite'),instanceId:'initial',initialize:true})
+ const artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+ const controller=createExecutionController({store,artifacts,workflows:[]})
+ let owner
+ t.after(async()=>{await owner?.close();await controller.close();await store.close()})
+ const requirementRef=(await artifacts.put({request:'调查',acceptanceCriteria:['核实事实']})).ref
+ await store.command({id:'accept',kind:'task.accept',args:{taskId:'initial',requirementRef,requirementRevision:1,sessionId:'initial-session',criteria:['核实事实'],sourceKey:'source',eventKey:'created'}})
+ owner=createTaskOwnerController({ctx:{},store,artifacts,controller,advanceTask:async()=>{},modelConfig:()=>({}),authorizeStages:async()=>true,sessionRunner:{async close(){},async run({input,onSessionBound,onCandidate}){
+  assert.equal(input.task.planRevision,0);assert.equal(input.stages.length,0);assert.equal(input.planReview,undefined)
+  await onSessionBound()
+  await assert.rejects(onCandidate({action:'advance',summary:'调查',evidenceRefs:[],planChange:{kind:'replaceSuffix',affectedFrom:0,stages:[{workflowId:'task-investigation',gate:'none'}]}}),{code:'TASK_OWNER_ADVANCE_CONFLICT'})
+  const decision={action:'advance',summary:'调查',evidenceRefs:[],planChange:{kind:'initialize',stages:[{workflowId:'task-investigation',gate:'none'}]}}
+  await onCandidate(decision);return {status:'submitted',decision}
+ }}})
+ await owner.drive('initial')
+ const state=await store.query({kind:'task.owner',taskId:'initial'})
+ assert.equal(state.failureCount,0)
+ const actions=await store.query({kind:'task.owner.actions.pending'})
+ assert.equal(actions.length,1);assert.equal(actions[0].decision.planChange.kind,'initialize')
+})

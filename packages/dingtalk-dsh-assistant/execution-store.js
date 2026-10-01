@@ -35,21 +35,16 @@ export async function openExecutionStore(options) {
   const pending = new Map()
   const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject })
   const exited = new Promise(resolve => { resolveExit = resolve })
-  const startupTimer = setTimeout(() => {
-    unavailable(error('STORE_START_TIMEOUT'))
-    void worker.terminate()
-  }, REQUEST_TIMEOUT_MS)
+  // 启动等待 worker 的真实 ready/fatal/error/exit；完整性校验耗时不是提交结果未知。
 
   function unavailable(cause) {
     healthy = false
-    clearTimeout(startupTimer)
     rejectReady(cause)
     for (const item of pending.values()) { clearTimeout(item.timer); item.reject(cause) }
     pending.clear()
   }
   worker.on('message', message => {
     if (message.type === 'ready') {
-      clearTimeout(startupTimer)
       healthy = true
       info = Object.freeze(message.info)
       resolveReady()

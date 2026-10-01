@@ -28,3 +28,29 @@ test('重复恢复追加证据，首次原生receipt不被alreadyDelivered覆盖
  assert.notEqual(first,second);assert.deepEqual(JSON.parse(await readFile(first,'utf8')),{receipt:{command:'native'}})
  assert.equal((await readdir(dir)).length,2)
 })
+
+import { assertNoticeBatch } from '../docs/acceptance/topic-context-completeness/scripts/recover-notification-readback.mjs'
+test('双ACK批次只接受指定维护和完整allowlist，部分已送达可安全接续',()=>{
+ const manifest={maintenanceId:'batch',maintenanceRevision:193,actorId:'operator',notices:[{notificationId:'n1'},{notificationId:'n2'}]}
+ const state={active:true,phase:'draining',maintenanceId:'batch',revision:193,actorId:'operator',busy:{nodes:0,owners:0,effects:0,messages:2}}
+ const notices=[{id:'n1',status:'acknowledged'},{id:'n2',status:'acknowledged'}]
+ assertNoticeBatch(state,manifest,notices)
+ for(const field of ['nodes','owners','effects','messages'])assert.throws(()=>assertNoticeBatch({...state,busy:{...state.busy,[field]:state.busy[field]+1}},manifest,notices),/NOTICE_OTHER_WORK_ACTIVE/)
+ assert.throws(()=>assertNoticeBatch({...state,revision:194},manifest,notices),/NOTICE_MAINTENANCE_CHANGED/)
+ assert.throws(()=>assertNoticeBatch(state,{...manifest,notices:[manifest.notices[0],manifest.notices[0]]},notices),/NOTICE_BATCH_INVALID/)
+ assert.throws(()=>assertNoticeBatch(state,manifest,[notices[0],{id:'n2',status:'unknown'}]),/NOTICE_IDENTITY_CHANGED/)
+ assertNoticeBatch({...state,busy:{...state.busy,messages:1}},manifest,[{id:'n1',status:'delivered'},notices[1]])
+})
+
+test('批次回读仅移除准确引用发送人mention，错误人名或缺身份仍拒绝',()=>{
+ const value=structuredClone(m)
+ value.messages[0].quotedMessage.sender='李辰'
+ value.messages[0].text='@李辰 内容 **Code.java**'
+ assert.equal(verifyNoticeEvidence(n,c,status,value).messageId,'msg')
+ for(const sender of ['其他人',undefined]){
+  const changed=structuredClone(value);changed.messages[0].quotedMessage.sender=sender
+  assert.throws(()=>verifyNoticeEvidence(n,c,status,changed),/NOTICE_READBACK_MISMATCH/)
+ }
+ const wrongQuote=structuredClone(value);wrongQuote.messages[0].quotedMessage.messageId='another-source'
+ assert.throws(()=>verifyNoticeEvidence(n,c,status,wrongQuote),/NOTICE_READBACK_MISMATCH/)
+})

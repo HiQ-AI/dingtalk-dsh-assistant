@@ -1,4 +1,5 @@
 import { nameSession } from './session-workspaces.js'
+import { sourceInterpretationInstructions } from './agent-work.js'
 import { isAbsolute } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
@@ -125,7 +126,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
   function setup(entry, definition) {
     return agentCtx => {
       const allowed = new Set([...definition.allowedTools, SUBMIT])
-      agentCtx.systemPrompt.section({ name: 'execution:node', order: 0, text: definition.prompt, complete: true })
+      agentCtx.systemPrompt.section({ name: 'execution:node', order: 0, text: `${definition.prompt}\n${sourceInterpretationInstructions}`, complete: true })
       agentCtx.tools.restrict({ allow: definition.allowedTools.filter(name => name !== 'engineering_repo_inspect' && !registry.has(name)) })
       // restrict 只过滤继承工具；单调 guard 同时约束后来注册的 scope-local 工具。
       agentCtx.tools.guard(exec => {

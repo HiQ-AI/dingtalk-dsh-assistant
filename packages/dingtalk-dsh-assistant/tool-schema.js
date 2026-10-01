@@ -37,6 +37,12 @@ function union(branches) {
   return { description: '联合值；完整类型约束由执行时同源 Zod 校验。' }
 }
 function project(node) {
+  if (Array.isArray(node.type)) return union(node.type.map(type => {
+    const branch = { ...node, type }
+    if (type !== 'object') for (const key of ['properties', 'required', 'additionalProperties']) delete branch[key]
+    if (type !== 'array') delete branch.items
+    return branch
+  }))
   const branches = node.oneOf ?? node.anyOf
   if (branches) return union(branches)
   const output = Object.fromEntries(annotations.filter(key => key in node).map(key => [key, node[key]]))

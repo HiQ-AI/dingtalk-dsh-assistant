@@ -701,8 +701,22 @@ function command(value) {
         ...(['task.owner.accept','task.owner.applied'].includes(value.kind)?{ownerTurnId:value.args.turnId}:{}),
         allowRelatedProcessing:['task.owner.accept','task.owner.applied'].includes(value.kind)?'owner':value.kind.startsWith('task.plan.')||value.kind==='task.stage.input.bind'&&consumption.ownerTurnId?'plan':false})
     }
+    if (value.kind === 'task.owner.claim') assertMessageTaskUnfenced(db, value.args.taskId, { allowRelatedProcessing: 'owner' })
     let combined = reduceMaintenanceCommand(db, value, { ...context(value.id, now), processIncarnation: workerData.processIncarnation })
-    if (value.kind === 'task.archive') {
+    if (['task.accept','task.plan.create','run.create'].includes(value.kind) && taskDeleted(value.args.taskId)) fail('TASK_DELETED')
+    if (value.kind === 'task.delete') {
+      object(value.args, ['taskId','actorId','expectedControlRevision'])
+      const checked = inspectTaskDeletion(value.args)
+      for (const table of ['task_reports','task_owner_turns','task_events','task_acceptance_items','task_owners','task_plan_stages','task_controls'])
+        db.prepare(`DELETE FROM ${table} WHERE task_id=?`).run(value.args.taskId)
+      for (const runId of checked.runIds) {
+        db.prepare('DELETE FROM execution_inputs WHERE run_id=?').run(runId)
+        db.prepare('DELETE FROM execution_nodes WHERE run_id=?').run(runId)
+        db.prepare('DELETE FROM execution_runs WHERE run_id=?').run(runId)
+      }
+      db.prepare('DELETE FROM business_tasks WHERE task_id=?').run(value.args.taskId)
+      combined = { ...checked, deletedAt: now }
+    } else if (value.kind === 'task.archive') {
       object(value.args, ['taskId', 'actorId'])
       const { taskId, actorId } = value.args
       text(taskId, 'taskId'); text(actorId, 'actorId')
@@ -975,7 +989,37 @@ function assertTaskDrained(taskId, actorId, code) {
     assertRunEffectsDrained(db, run.run_id)
   }
 }
+function taskDeleted(taskId) {
+  if (!taskId) return null
+  return db.prepare("SELECT payload FROM execution_events WHERE kind='task.delete' ORDER BY seq DESC").all()
+    .map(row => JSON.parse(row.payload)).find(item => item.taskId === taskId) ?? null
+}
+function inspectTaskDeletion({ taskId, actorId, expectedControlRevision }) {
+  text(taskId,'taskId'); text(actorId,'actorId')
+  const task = db.prepare('SELECT * FROM business_tasks JOIN task_controls USING(task_id) WHERE task_id=?').get(taskId)
+  if (!task) fail('WORKFLOW_TASK_NOT_FOUND')
+  if (task.control_revision !== expectedControlRevision) fail('TASK_DELETE_STALE')
+  if (task.state !== 'cancelled') fail('TASK_DELETE_NOT_CANCELLED')
+  assertTaskDrained(taskId,actorId,'TASK_DELETE')
+  if (taskFamily(taskId)?.taskIds.length !== 1) fail('TASK_DELETE_DEPENDENCY')
+  if (db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(taskId)
+    || db.prepare("SELECT 1 FROM execution_inputs JOIN execution_runs USING(run_id) WHERE task_id=? AND execution_inputs.status='pending'").get(taskId)) fail('TASK_DELETE_NOT_DRAINED')
+  if (db.prepare('SELECT 1 FROM execution_effects JOIN execution_runs USING(run_id) WHERE task_id=?').get(taskId)) fail('TASK_DELETE_EFFECTS')
+  const commands = db.prepare("SELECT body FROM message_items WHERE kind='command'").all().map(row => JSON.parse(row.body))
+  const commandIds = new Set(commands.filter(command => command.result?.taskId === taskId || command.args?.taskId === taskId).map(command => command.commandId))
+  const notices = db.prepare("SELECT body FROM message_items WHERE kind='notification'").all().map(row => JSON.parse(row.body))
+  if (notices.some(notice => !['delivered','superseded','failed'].includes(notice.status)
+    && (commandIds.has(notice.commandId) || notice.payload?.fact?.taskId === taskId || notice.taskId === taskId))) fail('TASK_DELETE_NOTIFICATION_PENDING')
+  const prefix = `tasks/${taskId}/`
+  const references = db.prepare('SELECT requirement_ref AS ref FROM business_tasks WHERE task_id<>? UNION ALL SELECT requirement_ref FROM execution_runs WHERE task_id<>? UNION ALL SELECT predecessor_output_ref FROM task_plan_stages WHERE task_id<>? UNION ALL SELECT input_ref FROM execution_nodes JOIN execution_runs USING(run_id) WHERE task_id<>? UNION ALL SELECT execution_inputs.requirement_ref FROM execution_inputs JOIN execution_runs USING(run_id) WHERE task_id<>?').all(taskId,taskId,taskId,taskId,taskId)
+  if (references.some(row => row.ref?.startsWith(prefix))) fail('TASK_DELETE_DEPENDENCY')
+  return { taskId, actorId, controlRevision: expectedControlRevision,
+    runIds: db.prepare('SELECT run_id FROM execution_runs WHERE task_id=?').all(taskId).map(row => row.run_id),
+    retained: ['source-messages','command-receipts','audit-events','artifact-files','native-sessions'] }
+}
 function query(value) {
+  if (value?.kind === 'task.delete.check') return inspectTaskDeletion(value)
+  if (value?.kind === 'task.deleted') return taskDeleted(value.taskId)
   if (value?.kind === 'task.viewRevision') {
     object(value, ['kind', 'taskId'])
     const taskId = text(value.taskId, 'taskId')

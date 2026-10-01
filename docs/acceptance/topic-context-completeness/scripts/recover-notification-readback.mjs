@@ -38,7 +38,7 @@ export function verifyNoticeEvidence(n,c,status,mget){
  if(status.success!==true||status.openTaskId!==c.openTaskId||status.result?.sendStatus!=='SUCCESS'||status.messageRef?.openMessageId!==c.messageId||status.messageRef?.openConversationId!==c.conversationId)fail('NOTICE_SEND_STATUS_INVALID')
  if(mget.complete!==true||mget.hasMore||mget.partial||mget.failedCount!==0||mget.messages?.length!==1)fail('NOTICE_READBACK_INCOMPLETE')
  const m=mget.messages[0]
- if(m.messageId!==c.messageId||m.conversationId!==c.conversationId||m.quotedMessage?.messageId!==c.sourceMessageId||!sameDeliveredText(m.text,n.payload.text,true))fail('NOTICE_READBACK_MISMATCH')
+ if(m.messageId!==c.messageId||m.conversationId!==c.conversationId||m.quotedMessage?.messageId!==c.sourceMessageId||!sameDeliveredText(m.text,n.payload.text,{sender:m.quotedMessage.sender}))fail('NOTICE_READBACK_MISMATCH')
  if(n.status==='acknowledged'&&hash(JSON.stringify(n))!==c.expectedNoticeDigest)fail('NOTICE_CAS_CHANGED')
  if(n.status==='delivered'&&(n.evidence?.messageId!==c.messageId||n.evidence?.conversationId!==c.conversationId))fail('NOTICE_DELIVERY_CHANGED')
  return{messageId:c.messageId,conversationId:c.conversationId,observedAt:c.proofObservedAt}
@@ -48,7 +48,47 @@ export function assertNoticeMaintenance(state,c,record,n){
  if(record&&(!state.active||state.phase!=='draining'||state.maintenanceId!==record.maintenanceId||state.revision!==record.maintenanceRevision))fail('NOTICE_MAINTENANCE_CHANGED')
  if(!record&&(state.active||state.revision!==c.initialRevision))fail('NOTICE_INITIAL_CHANGED')
 }
+/** 批次只接纳明确列出的 ACK；不将其他未知效果归零。 */
+export function assertNoticeBatch(state,manifest,notices){
+ if(!Array.isArray(manifest.notices)||manifest.notices.length!==2||new Set(manifest.notices.map(n=>n.notificationId)).size!==2)fail('NOTICE_BATCH_INVALID')
+ if(!state.active||state.phase!=='draining'||state.maintenanceId!==manifest.maintenanceId||state.revision!==manifest.maintenanceRevision||state.actorId!==manifest.actorId)fail('NOTICE_MAINTENANCE_CHANGED')
+ if(notices.length!==2||notices.some((n,i)=>n.id!==manifest.notices[i].notificationId||!['acknowledged','delivered'].includes(n.status)))fail('NOTICE_IDENTITY_CHANGED')
+ if(state.busy.nodes||state.busy.owners||state.busy.effects||state.busy.messages!==notices.filter(n=>n.status==='acknowledged').length)fail('NOTICE_OTHER_WORK_ACTIVE')
+}
+async function batchMain(mode,manifestPath){
+ const c=JSON.parse(await readFile(manifestPath,'utf8'))
+ if(!Number.isSafeInteger(c.expectedPid)||c.expectedPid<1||!Number.isSafeInteger(c.maintenanceRevision)||!c.instanceId||!c.dbPath||!c.dwsProfile)fail('NOTICE_CONFIG_INVALID')
+ const alive=()=>{try{process.kill(c.expectedPid,0);return true}catch(e){if(e.code==='ESRCH')return false;throw e}}
+ if(mode==='batch-repair'&&alive())fail('NOTICE_OLD_PROCESS_ALIVE')
+ const inspect=()=>{const db=new DatabaseSync(c.dbPath,{readOnly:true});try{db.exec('BEGIN');if(db.prepare('SELECT instance_id FROM execution_meta WHERE singleton=1').get()?.instance_id!==c.instanceId)fail('NOTICE_INSTANCE_CHANGED');const notices=c.notices.map(n=>queryMessages(db,{kind:'message.notification',notificationId:n.notificationId}));const state=maintenanceStatus(db);assertNoticeBatch(state,c,notices);return{notices,state}}finally{db.close()}}
+ const proof=async(notices)=>Promise.all(notices.map(async(n,i)=>{
+  const item={...c.notices[i],proofObservedAt:new Date().toISOString()}
+  const run=async args=>{try{return JSON.parse((await exec('dws',[...args,'--profile',c.dwsProfile,'--format','json'],{windowsHide:true,timeout:30000,maxBuffer:1024*1024})).stdout)}catch{fail('NOTICE_DWS_READ_FAILED')}}
+  const status=await run(['chat','+messages-query-send-status','--open-task-id',item.openTaskId])
+  const message=await run(['chat','+messages-mget','--msg-ids',item.messageId])
+  return{notificationId:n.id,evidence:verifyNoticeEvidence(n,item,status,message)}
+ }))
+ const initial=inspect(),evidence=await proof(initial.notices)
+ if(mode==='--check'){console.log(JSON.stringify({eligible:true,writes:0,expectedPid:c.expectedPid,oldProcessAlive:alive(),maintenance:initial.state,notices:initial.notices.map(n=>({id:n.id,status:n.status,leaseEpoch:n.leaseEpoch,digest:hash(JSON.stringify(n))})),evidence}));return}
+ if(alive())fail('NOTICE_OLD_PROCESS_ALIVE')
+ // openExecutionStore 原生 owner 独占锁是唯一写入口；不打开 SQL 写连接。
+ const store=await openExecutionStore({dbPath:c.dbPath,instanceId:c.instanceId})
+ try{
+  const current=await Promise.all(c.notices.map(n=>store.query({kind:'message.notification',notificationId:n.notificationId})))
+  assertNoticeBatch(await store.query({kind:'runtime.maintenance'}),c,current)
+  const fresh=await proof(current),receipts=[]
+  for(let i=0;i<current.length;i++)if(current[i].status==='acknowledged')receipts.push(await store.command({id:`notice-delivery-recovery:${current[i].id}:${current[i].leaseEpoch}`,kind:'message.notification.readback',args:{notificationId:current[i].id,leaseEpoch:current[i].leaseEpoch,evidence:fresh[i].evidence}}))
+  const after=await Promise.all(c.notices.map(n=>store.query({kind:'message.notification',notificationId:n.notificationId})))
+  const state=await store.query({kind:'runtime.maintenance'});assertNoticeBatch(state,c,after)
+  if(!state.drained||after.some(n=>n.status!=='delivered'))fail('NOTICE_RECOVERY_NOT_DRAINED')
+  const sealed=await store.command({id:`notice-batch-seal:${c.maintenanceId}:${c.maintenanceRevision}`,kind:'runtime.maintenance.seal',args:{expectedRevision:c.maintenanceRevision,maintenanceId:c.maintenanceId,actorId:c.actorId,reason:'独立送达回读完成，封存已排空原生恢复进程'}})
+  const maintenance=await store.query({kind:'runtime.maintenance'})
+  if(maintenance.phase!=='stopping'||!maintenance.drained||maintenance.sealedIncarnation!==state.processIncarnation)fail('NOTICE_SEAL_INVALID')
+  console.log(JSON.stringify({recovered:true,receipts,sealed,maintenance,notices:after.map(n=>({id:n.id,status:n.status,evidence:n.evidence})),next:'关闭恢复工具后，由标准部署新进程以相同维护身份和新revision接续resume'}))
+ }finally{await store.close()}
+}
 async function main(){
+ if(['--check','batch-repair'].includes(process.argv[2]))return batchMain(process.argv[2],process.argv[3])
  const[mode,manifest,directory]=process.argv.slice(2),workspace=resolve(dirname(fileURLToPath(import.meta.url)),'../../../..'),tmp=join(workspace,'docs/tmp')+sep
  if(!['check','repair'].includes(mode)||!manifest||!resolve(manifest).startsWith(tmp)||!directory||!resolve(directory).startsWith(tmp))fail('NOTICE_ARGUMENTS_INVALID')
  const c=JSON.parse(await readFile(manifest,'utf8'))

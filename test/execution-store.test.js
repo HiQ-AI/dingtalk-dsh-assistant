@@ -738,3 +738,19 @@ test('测试进程限额触发原生SQLITE_FULL：整条命令回滚且封闭写
   assert.equal((await f.query()).run.stopRequested, false)
   assert.equal(await f.store.query({ kind: 'receipt', commandId: 'full-stop' }), null)
 })
+
+test('原生worker启动校验超过旧10秒仍等待ready，不消耗命令回执窗口', {timeout:25000}, async t=>{
+ const f=await fixture(t,null);await f.store.close()
+ const probe=child(t,`const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});const started=Date.now();const store=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});process.send({type:'ready',elapsed:Date.now()-started,healthy:store.healthy});await store.close()`,[f.dbPath,f.instanceId],
+  "import {isMainThread} from 'node:worker_threads';if(!isMainThread)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10500)")
+ const result=await probe.message('ready');assert.ok(result.elapsed>=10500);assert.equal(result.healthy,true);assert.equal((await probe.exited).code,0)
+})
+
+for(const mode of ['exit','error'])test(`原生worker在ready前${mode}仍明确拒绝，不永久等待`,async t=>{
+ const f=await fixture(t,null);await f.store.close()
+ const preload="import {isMainThread} from 'node:worker_threads';if(!isMainThread){"+(mode==='exit'?"process.exit(0)":"throw new Error('startup-worker-failure')")+'}'
+ const probe=child(t,`const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});try{await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});process.send({type:'result',unexpected:true})}catch(error){process.send({type:'result',code:error.code,message:error.message})}`,[f.dbPath,f.instanceId],preload)
+ const result=await probe.message('result');assert.equal(result.unexpected,undefined)
+ if(mode==='exit')assert.equal(result.code,'STORE_UNAVAILABLE');else assert.match(result.message,/startup-worker-failure/)
+ assert.equal((await probe.exited).code,0)
+})

@@ -33,3 +33,11 @@ Owner 每轮 snapshot 复用调查阶段同一严格材料来源核验，提供 
 
 ## Owner阶段修复候选校验（实施前）
 repairCurrentStage 仅在当前快照 repairable=true 且完整 repairBinding 逐字段相等时接纳。不支持或绑定不符必须在候选写入前给可纠正反馈；工具schema只在当前能力可用时展示该动作。计划需求版本落后时明确使用advance/replaceSuffix重评，不编造repairBinding，不绕过真实应用阶段校验。
+
+## 已取消重复 Task 的受管删除（实施前）
+
+现有 archive 只隐藏，不是删除。新增原生 task.delete，限定已取消、全部节点排空、无执行effects、无待应用Owner动作/输入、无跨Task执行引用或续跑家族。check通过只读query完成，零回执/事件写入。执行事务按外键顺序删除Owner和计划及执行实体，保留原消息/command/receipt以及删除事件作为防重凭证，拒绝同Task身份再accept/create。不修改规范Task；文件目录不在数据库事务内删除，本轮不自动清理session或共享artifact。删除前明确返回这些保留范围，避免把归档或文件清理当实体删除。
+
+## 通用专业指导与冻结定义边界（启动失败修复前）
+
+通用来源解释指导被直接拼入已有v5/v6节点prompt，导致历史定义digest漂移，原生启动正确拒绝。该指导不改变工作流拓扑、输入输出或结果验收契约，改由execution-session为当次模型请求注入独立systemPrompt section，与Owner共享；恢复已有冻结prompt原文。不伪造legacyDigests、不删除历史run定义、不关闭drift校验。历史定义启动及原生请求需分别验证。

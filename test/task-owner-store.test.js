@@ -481,3 +481,52 @@ for(const mode of ['known','unknown','pending','effect','running'])test(`原生d
   }else assert.throws(discard,/TASK_OWNER_ACTION_ALREADY_APPLIED|TASK_OWNER_ACTION_STILL_CURRENT|TASK_OWNER_DISCARD_UNSAFE/)
  }finally{f.db.close()}
 })
+
+
+test('新消息尚未归类时释放Owner不消耗失败预算', () => {
+  const f = fixture()
+  try {
+    f.send('task.owner.event', { taskId: 'task-1', eventKey: 'created', eventType: 'task.created' })
+    for (let n = 1; n <= 4; n++) {
+      f.send('task.owner.claim', { taskId: 'task-1', turnId: `waiting-${n}`, expectedLeaseEpoch: n - 1 })
+      const result = f.send('task.owner.release', { taskId: 'task-1', turnId: `waiting-${n}`, leaseEpoch: n, reason: 'MESSAGE_INPUT_PENDING' })
+      assert.equal(result.failureCount, 0)
+    }
+    assert.equal(f.read('task.owner').status, 'pending')
+  } finally { f.db.close() }
+})
+
+test('无计划的非法replaceSuffix在候选写入前拒绝，同turn可initialize且不消耗失败预算',()=>{
+ const f=fixture();try{
+  f.db.exec("DELETE FROM task_plan_stages; UPDATE business_tasks SET plan_revision=0,plan_requirement_revision=0,status='pending'")
+  f.send('task.owner.event',{taskId:'task-1',eventKey:'new',eventType:'task.created'})
+  const claim=f.send('task.owner.claim',{taskId:'task-1',turnId:'initial',expectedLeaseEpoch:0})
+  const binding={taskId:'task-1',turnId:'initial',leaseEpoch:claim.leaseEpoch}
+  f.send('task.owner.sessionBound',{...binding,sessionId:claim.sessionId})
+  const decision={action:'advance',summary:'先调查',evidenceRefs:[],planChange:{kind:'replaceSuffix',affectedFrom:0,stages:[{workflowId:'task-investigation',gate:'none'}]}}
+  assert.throws(()=>f.send('task.owner.candidate',{...binding,decision:structuredClone(decision)}),{code:'TASK_OWNER_ADVANCE_CONFLICT'})
+  const row=f.db.prepare('SELECT status,candidate_json FROM task_owner_turns WHERE turn_id=?').get('initial')
+  assert.equal(row.status,'running');assert.equal(row.candidate_json,null)
+  decision.planChange={kind:'initialize',stages:[{workflowId:'task-investigation',gate:'none'}]}
+  f.send('task.owner.candidate',{...binding,decision});f.send('task.owner.accept',binding)
+  assert.equal(f.read('task.owner').failureCount,0)
+ }finally{f.db.close()}
+})
+
+
+for(const mode of ['unaccepted','accepted','application'])test(`计划冲突受管恢复仅接受未接纳原轮：${mode}`,()=>{
+ const f=fixture();try{
+  f.send('task.owner.event',{taskId:'task-1',eventKey:'start',eventType:'task.created'})
+  for(let lease=1;lease<=3;lease++){
+   f.send('task.owner.claim',{taskId:'task-1',turnId:`conflict-${lease}`,expectedLeaseEpoch:lease-1})
+   f.send('task.owner.release',{taskId:'task-1',turnId:`conflict-${lease}`,leaseEpoch:lease,reason:'TASK_OWNER_ADVANCE_CONFLICT'})
+  }
+  if(mode==='accepted')f.db.exec("UPDATE task_owner_turns SET decision_json='{}' WHERE lease_epoch=3")
+  if(mode==='application')f.db.exec("UPDATE task_owner_turns SET application_status='applied' WHERE lease_epoch=3")
+  const before=f.read('task.owner'),turns=f.db.prepare('SELECT * FROM task_owner_turns').all()
+  const args={taskId:'task-1',eventKey:'retry',payloadRef:'sha256-'+'a'.repeat(64)+'.json',expectedOwnerRevision:before.revision,expectedLeaseEpoch:before.leaseEpoch,expectedRequirementRevision:before.requirementRevision,expectedControlRevision:before.controlRevision,expectedLastFailure:before.lastFailure}
+  if(mode==='unaccepted'){assert.equal(f.send('task.owner.retry',args).status,'pending');assert.equal(f.read('task.owner').sessionId,before.sessionId)}
+  else assert.throws(()=>f.send('task.owner.retry',args),{code:'TASK_OWNER_RETRY_FORBIDDEN'})
+  assert.deepEqual(f.db.prepare('SELECT * FROM task_owner_turns').all(),turns)
+ }finally{f.db.close()}
+})

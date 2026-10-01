@@ -1,3 +1,4 @@
+import { scriptedCoordinator } from './fixtures/group-coordinator.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createTaskStageContracts, readTaskStageHandoff } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'

@@ -121,7 +121,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     const result = { taskId, eventWatermark: claim.eventWatermark, goal,
       ...(readCurrentSources ? { currentSources: await readCurrentSources({ taskId, plan }) } : {}),
       acceptanceItems, versions: claim.versions, task: plan.task, stages: plan.stages, events }
-    if (plan.task.planRequirementRevision !== plan.task.requirementRevision) result.planReview = {
+    if (plan.task.planRevision > 0 && plan.task.planRequirementRevision !== plan.task.requirementRevision) result.planReview = {
       required: true, instruction: '当前计划尚未覆盖当前需求；继续任务须使用advance与planChange.kind=replaceSuffix重评未完成阶段。repairCurrentStage不能替代需求重评，不得编造repairBinding。' }
     if (readMaterialAccess) result.materialAccess = await readMaterialAccess({ taskId, plan, requirement: goal })
     const repairedStages = new Set(plan.stages.filter(stage => stage.status !== 'succeeded'
@@ -153,9 +153,15 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       if (!before || before.status !== 'pending' || before.processedWatermark === before.eventWatermark) return null
       if ((await controller.taskPlan(taskId))?.task.controlState !== 'active') return null
       const turnId = `turn-${randomUUID()}`
-      const claim = (await command(`owner-claim:${turnId}`, 'task.owner.claim', {
-        taskId, turnId, expectedLeaseEpoch: before.leaseEpoch,
-      })).result
+      let claim
+      try {
+        claim = (await command(`owner-claim:${turnId}`, 'task.owner.claim', {
+          taskId, turnId, expectedLeaseEpoch: before.leaseEpoch,
+        })).result
+      } catch (cause) {
+        if ((cause.code ?? cause.message) === 'MESSAGE_INPUT_PENDING') return null
+        throw cause
+      }
       const binding = { taskId, turnId, sessionId: claim.sessionId, leaseEpoch: claim.leaseEpoch,
         ownerEpoch: claim.ownerEpoch, sessionBound: claim.sessionBound }
       try {

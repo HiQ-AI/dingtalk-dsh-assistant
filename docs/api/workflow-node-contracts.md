@@ -1,5 +1,25 @@
 # 工作流节点契约
 
+## 群常驻协调入口（当前 Workflow 主链）
+
+消息语义的唯一入口是 `createMessageCoordinator` 驱动的原生群会话；`createMessageWorkflow` 仅负责来源接收、持久命令派发和执行恢复，必须提供 coordinator。不存在 S/R/I/IB 模型入口、judge 注入或失败后旧链回退。下文旧 Resident Topic/Goal 接口不属于这条消息主链。
+
+- 每轮来源携带 `processing`：只读 `message.source.processing(runId)` 核验当前来源后投影该来源历次版本、命令状态及真实 `business_tasks` 存在/删除/状态，不包含其他来源正文。历史已废弃命令和预分配 taskId 不能证明 Task 已接纳。
+- `group_coordinator_submit` 的 `received:true` 仅证明协调提交成功；`acceptance` 明确返回 `acceptedDecisions`、`executionPending`、命令/Task存在事实及后端权威说明。提交后尚未派发时 Task 通常尚不存在，模型须以新一轮 `processing` 或当前任务工具回读为准，不能凭旧回执忽略重放来源。
+- 协调输入提供 `sourceLength`。非空 `units` 的 spans 合计覆盖完整来源；`units=[]` 表示忽略，不会把来源带入 Task。要承接的材料、补充及阶段条件须用 `fact` 单元关联同批目标并设置 `replyPolicy:none`。
+- 创建任务依赖本批附件/原文时，包括创建参数中精确引用已提供的 resourceRef/fileId（即使 requiredExecutionMaterials 为空），该材料来源必须用 `fact` 单元关联同一目标；忽略或错绑来源返回 `GROUP_COORDINATOR_MATERIAL_SOURCE_UNBOUND`，整批不落账。协调提交在同一事务中解除已消费来源自身的 `source_edit` 屏障；未消费来源、跨来源或指定 Task 的屏障保持原状。
+- `requiredExecutionMaterials` 只接受本轮来源、附件、历史及任务候选中真实资源引用；待取得的证据或表结构属于调查目标，不是 Task 发起前置材料。覆盖不全或虚构引用返回可修正工具反馈，整份候选不落账，不生成假材料等待。
+- 群协调原生会话不设额外固定步数或墙钟超时；保留原生取消、关闭排空、当前租约和工具权限校验。Task及外部命令既有执行保护不变。
+- 同一消息的独立事项按单元分别建立稳定话题；首单元仍是 `source:<runId>` 的批次关联目标，后续单元按序号区分。显式已有候选或批次来源引用仍复用目标话题。
+- 同一事项每轮只允许一个 `create/research` 动作；同一单元包含多个创建动作、或同一话题重复创建，整份候选不落账。原生提交工具返回 `received:false` 和合并动作提示，模型可在同一会话轮次修正；不静默丢弃动作，也不重派已接纳命令。
+- `message.coordinator.claim/bound/commit/release` 复用群账，稳定 sessionId，按 turnId/leaseEpoch 排他领取。同群新消息先持久接收并在当前轮次结束后接续，不同群独立运行；长 Task 不占用协调轮次。
+- 原生只读工具读取当前候选、任务事实及精确来源材料。提交完整覆盖领取来源，并核验当前 sourceVersion、Task facts hash、topic input/context revision。来源编辑使旧领取失效；任务事实过期允许读取刷新后修正候选。
+- commit 原子保存 unit/topic/command/request。工具返回丢失不撤销已提交事实，派发继续以账本为准；unknown 外部效果只对账，不重派。
+- `message.coordinator` 返回本群可见 Task 的 `unconsumedTaskEvents`。Host 可领取 `sourceRuns=[]` 的本地事件轮，按真实 taskEventRefs 和 taskEventWatermarks 原子消费；此时 decisions 必须为空，不能把后台状态变成新的用户授权。事件已提交不重复投递，未提交重启后仍待消费。
+- 澄清保留 Host 生成的精确候选材料快照。答复经身份核验后回到同会话；同群澄清动作只登记后续唤醒，不等待包含自身的 flight。跨轮授权仅复用同来源、相同 spans 对应的已解决请求，不重写原快照。
+- 维护阻止新协调领取，running/committed 会话排空后才可封存。协调者不直接发群消息；承接、等待及结果仍走唯一持久通知出口。
+
+
 新增流程的建设步骤与 `workflow-v2` Node 定义见[框架建设手册](../../packages/dingtalk-dsh-assistant/README.md)。本页前半部分的 domain v9、Task contractVersion 2 和报告工具属于 Resident Task 合同；后面的原生工作流只读、Web 确认及维护接口另有对应范围。原生节点使用 `execution_node_submit`，不要混用旧叶子任务的计划/报告工具。
 
 本页描述当前源码接口。持久化 domain v9，新增 Task 的 contractVersion 为 2；历史终态可以没有 contractVersion，outcome 为 legacy-unknown 时不得投影为成功。
@@ -248,12 +268,12 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 ### 完整消息材料输入
 
-消息 S/R/I/IB、Owner 来源事件与阶段材料交接不设置应用侧固定字节上限。已授权的材料正文、来源摘录和显式读取的 Task 历史完整传递；不再以 12/16/32 KiB 拒绝，也不强制先经模型摘要。候选卡仍可摘要，但明确材料读取返回完整原文。连接器报告不完整、来源或版本变化时仍不可作为执行依据；Owner保留完整来源及事件，事件目录仍按查询游标读全；材料角色、数量、来源版本与执行授权校验不变。实际模型提供方容量错误保留为可恢复的系统阻塞。
+群常驻协调输入、Owner 来源事件与阶段材料交接不设置应用侧固定字节上限。已授权的材料正文、来源摘录和显式读取的 Task 历史完整传递；不再以 12/16/32 KiB 拒绝，也不强制先经模型摘要。候选卡仍可摘要，但明确材料读取返回完整原文。连接器报告不完整、来源或版本变化时仍不可作为执行依据；Owner保留完整来源及事件，事件目录仍按查询游标读全；材料角色、数量、来源版本与执行授权校验不变。实际模型提供方容量错误保留为可恢复的系统阻塞。
 
-旧消息冻结快照缺少新增 `replyObligation` 时省略该可选投影字段，不改写原快照、不伪造点名证据，仍可重新领取原 S 节点。
+来源快照中的 `replyObligation` 是可选证据；缺失时不能伪造点名或回应责任。当前来源由群常驻会话处理，不再领取旧 S 节点。
 
 
-`I/IB` 的 `stageAuthorizations.sourceQuote` 必须连续引用该事项当前原文，`objective` 必须是该 quote 的逐字连续子串。Host 在记录成功模型节点之前核对；改写或伪造返回 `MESSAGE_STAGE_AUTHORIZATION_INVALID`，本轮最多两次纠正，仍非法则可见阻断且不创建效果命令。服务准入继续独立核验来源，提前纠正不削弱最后防线。
+协调动作的 `stageAuthorizations.sourceQuote` 必须连续引用当前来源原文，`objective` 必须是该 quote 的逐字连续子串。Host 准入独立核验来源、身份和精确阶段合同，非法候选不得创建效果命令；生产执行仍需要既有 adapter 的精确批准。
 
 
 历史 `hN` 仅用于 S 的短引用。进入事项上下文时，Host 按冻结 `historyManifest` 解析成真实来源键；R 读取材料与 I/IB 的 `executionMaterialRefs`、Task 固定材料使用同一真实键，不把短别名留给后续连接器。
@@ -289,3 +309,11 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 仅 active 控制态、idle/blocked Owner 无在途决定、存在已失败/等待的只读调查、所有节点排空且无 pending input、外部阶段或 effect 可接受。事务 CAS 与来源摘要复查；同key同参数回读，异参冲突。保留 Task/session、requirement 和失败产物；Owner 接收新事实后正常决定计划与执行，不把系统恢复等同于新业务要求、测试确认或审批。
 
 `reassess-readonly` 可在同一事务中原生discard已知无效果的非法 `repairCurrentStage` 动作：仅当前租约的 application blocked 且 Owner 最后错误严格等于 `WORKFLOW_REPAIR_NOT_ADMITTED`。仍要求完整CAS、只读失败排空、无effects和其他在途动作。其他错误或pending动作拒绝；返回 `discardedTurnId`，原decision、应用失败次数、报告仍保留为discarded，再记录system.recovery。不修改requirement。
+
+系统错误通知仅在需要人工介入、自动恢复无法推进时发送，固定为“处理遇到系统问题，无法继续推进，需要人工介入。”，按群职责加代回署名。内部读取重试、可自动恢复的deadline/容量重试不发送该通知。同阻塞不因technical reason或消息版本变化重发；Owner应用受阻以同Task上一次已成功工作流事件分隔阻塞，不能靠重复Owner轮次再次发送。实际归类等待只给简洁核对进度，不复述来源正文或添加“无需重复提交”措辞。文案升级不补发历史通知。
+
+系统等待通知的准备与领取均检查仍可自动推进的命令、节点及材料请求；材料重试尚未耗尽或仍有在途工作时不发送人工介入提示。Owner 应用阻塞通知领取在同一事务内检查同 Task 自最近 workflow.succeeded 以来的 sending/unknown/acknowledged/delivered 通知，重复 prepared 不会再次外发；旧 report 仍须通过最新报告及需求版本校验。
+
+通知回读不再允许任意包含预期正文：完整正文须匹配，仅当引用消息 ID 和会话匹配原来源时，允许移除回读中的单个 `@引用发送人 ` 前缀；短正文同样适用，额外正文或错误发送人仍拒绝。已删除 Task 必须有 `task.deleted` 审计墓碑，扫描停止生成承接及生命周期通知，prepare 拒绝 TASK_DELETED，claim 将相关旧 prepared 标记 superseded；未知真实缺失不按删除处理。
+
+Owner连续释放失败而未产生report时，通知仍读取真实Owner阻塞事实：Owner须blocked、失败预算耗尽、无当前turn、最后turn为未接纳的released，Task控制仍active且无pending/ready/running阶段。通过现有owner:application_wait唯一出口使用固定人工介入正文；准备和领取均复核，不伪造Owner报告。暂态重试不告知，恢复前同阻塞只告知一次，实际成功后的新阻塞可开启新一次。

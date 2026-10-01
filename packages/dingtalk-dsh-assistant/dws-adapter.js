@@ -290,7 +290,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
             formulasRecalculated: false, formulaResults: '文件保存的缓存值，未执行公式或外链', sheets }),
             mediaType: 'application/json', complete: true }
         }
-        if (!['.txt', '.md', '.json', '.csv', '.tsv', '.xml', '.html', '.log'].includes(extension)) throw new Error('coordination_resource_format_unsupported')
+        if (!['.txt', '.md', '.sql', '.json', '.csv', '.tsv', '.xml', '.html', '.log'].includes(extension)) throw new Error('coordination_resource_format_unsupported')
         return { text: new TextDecoder('utf-8', { fatal: true }).decode(data), mediaType: 'text/plain' }
       } finally { await unlink(localPath) }
       } finally { await rm(downloadRoot, { recursive: true, force: true }) }

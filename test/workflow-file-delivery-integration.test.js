@@ -1,3 +1,4 @@
+import { scriptedCoordinator, actionDecision } from './fixtures/group-coordinator.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises'
@@ -79,16 +80,8 @@ for (const mode of ['write', 'omitted', 'import']) test(`真实消息与Owner业
     await onCandidate(decision)
     return { status: 'submitted', decision }
   }, async close() {} }
-  const judge = async ({ stage, input }) => {
-    if (stage === 'S') return { kind: 'split', units: [{ spans: [{ start: 0, end: input.source.text.length }], goalText: input.source.text,
-      constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.source.text.length, role: 'unit' }] }
-    if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
-    if (stage === 'IB') return { kind: 'topic_intents', decisions: input.units.map(unit => ({ unitId: unit.unitId,
-      intent: { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: importing ? '将已有图片发送本群' : '生成SQL报告并发送本群', fileDelivery: expectedDelivery }, dependsOn: [] }],
-        constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' } })) }
-    throw new Error(`Unexpected stage: ${stage}`)
-  }
-  const service = await openWorkflowService({ ctx: {}, config, judge,
+  const coordinatorSessions = scriptedCoordinator(source => actionDecision(source,[{intent:'create',arguments:{objective:importing?'将已有图片发送本群':'生成SQL报告并发送本群',fileDelivery:expectedDelivery},dependsOn:[]}],{replyPolicy:'none'}))
+  const service = await openWorkflowService({ ctx: {}, config, coordinatorSessions,
     legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test' }), getGroup: groupId => ({ groupId, messages: [] }) },
     taskOwnerSessions: ownerSessions,
     fileTransport: { createAdapter: ({ directory }) => ({

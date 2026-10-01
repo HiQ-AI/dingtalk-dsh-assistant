@@ -145,7 +145,7 @@ await controller.changeInput({
 | 整个 run 的 claim 次数 | 默认节点数 × 3，恢复和换 generation 不重置已用次数；不是每个节点各自无限重试 |
 | Agent 每次执行 | 默认最多 32 step、120 秒；maxSteps 允许 1—256 |
 | code 节点 | 没有上述 Agent 定时器，必须主动响应 AbortSignal 并使操作有界 |
-| Store RPC | 最多 64 个待回复请求，单请求 JSON 最多 256 KiB，启动/请求超时 10 秒 |
+| Store RPC | 最多 64 个待回复请求，无固定 JSON 字节上限；ready 后请求回执超时 10 秒，进入 COMMIT_ACK_UNKNOWN；启动校验等待真实 ready/fatal/error/exit，不设固定时限 |
 | 单个 JSON 工件 | 最多 64 KiB；完整落盘后登记内容地址，读取重新校验 hash |
 
 本批没有落实 v2 全部 token 预算和性能目标。预算耗尽会留下等待/恢复原因，不通过 Goal 续轮、换代或重新批准偷偷清零。调整参数属于受信 Host 配置变更，不能由 Agent 修改。
@@ -543,3 +543,19 @@ Task 调查的附件读取范围来自当前冻结材料与原消息快照、当
 Owner 原生提交工具按当前 currentExecution 开放阶段修复动作；缺能力或绑定不符不会写入候选，返回可纠正反馈。planReview 指示旧计划需经 advance/replaceSuffix 重评，运行态应用门禁仍独立校验。
 
 若旧Owner错误接纳了不支持的repairCurrentStage并在应用前以WORKFLOW_REPAIR_NOT_ADMITTED受阻，可通过同一reassess-readonly受管入口封存该明确未执行动作后再评估；必须回读当前CAS，其他未知错误和效果不允许用此路径恢复。不能直接改application_status或删除报告。
+
+调查和Owner提示词同步保留明示字段用途及原定审批顺序；这不是新增生产查询或写入授权，语义结果仍须通过实际受管调查回读验证。
+
+排查收信箱时区分 execution_blocked（答复已执行但目标受阻）与 waiting_system（材料请求受阻）；不能据通用 blocked 推断附件读取失败。
+
+### 删除已取消重复 Task
+
+本机 `DELETE /tasks/:taskId` 严格请求 `{expectedControlRevision,checkOnly}`；先以checkOnly=true只读核验，返回runIds和保留范围，再false执行同一事务检查与删除。拒绝未取消/未排空、效果、在途通知、Owner未应用动作、续跑家族和跨Task引用。删除执行及计划/Owner实体，原消息、command/receipt和删除事件留作防重凭证，同Task身份不能重建。此接口不清理artifact文件或原生session目录，不创建备份；目录清理必须另行核对绝对路径与共享引用，不手工删除数据库行。
+来源解释专业指导由execution-session在当次execution:node系统提示中追加，不进入冻结工作流定义digest；Owner使用同一共享指导。不得为提示词修复关闭历史定义漂移检查。原生DSH只允许一个complete系统提示段，不新增第二个complete段。
+
+
+### 控制库启动校验等待
+
+控制库启动先获取原生独占 owner 锁（busy_timeout=0），再核验真实库完整性、身份和schema，恢复后才发送ready。大库或CPU争用可能使校验超过10秒；Host不以等待时长终止worker。真实fatal、worker error或ready之前退出仍拒绝开库，不能降级或绕过校验。
+
+启动尚未ready、localhost尚无listener只表示未就绪，不能据此重复安装或另启第二个写者。检查原启动进程及stderr，等待其真实ready或明确失败；独占锁冲突仍立即失败。ready之后命令/查询回执的10秒COMMIT_ACK_UNKNOWN保护不变：禁止派生新效果，按原命令身份重开回读。维护状态在成功启动和独立回读前保持封存。

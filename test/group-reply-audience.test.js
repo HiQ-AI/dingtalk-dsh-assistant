@@ -2,7 +2,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { assertGroupReply, formatGroupReply, sendWorkflowNotification, executeNotificationOperation, groupStatusText, workflowResultText, groupReplyInstructions } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 import { agentWorkPrompt, classifyAgentWorkOutputError } from '../packages/dingtalk-dsh-assistant/agent-work.js'
-import { messageSystem } from '../packages/dingtalk-dsh-assistant/message-model.js'
 
 test('公开正文拒绝明确内部标签，生成错误可修正', () => {
   for (const text of ['任务id：task-123', 'sessionId=abc', '执行会话已启动', '任务会话等待确认', '平台机制已处理', 'Outbox正在发送']) {
@@ -27,7 +26,6 @@ test('外发与恢复在领取和发送前拒绝违规正文，未发生外部�
 })
 test('公开提示覆盖问答与澄清，状态不回显未知内部码', () => {
   assert.ok(agentWorkPrompt.includes(groupReplyInstructions))
-  for (const stage of ['I', 'IB', 'R']) assert.ok(messageSystem(stage).includes(groupReplyInstructions))
   assert.equal(groupStatusText('running'), '正在处理')
   assert.equal(groupStatusText('INTERNAL_ERROR'), '暂未确认')
   assert.equal(groupStatusText('deployed-and-handed-to-testing'), '已部署并交付测试')

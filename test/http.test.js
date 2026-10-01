@@ -502,3 +502,14 @@ test('只读Owner再评估API只接受本机CAS，不接受调用者材料或授
   assert.deepEqual(calls,[{...request,taskId:'t'}])
  },{overrides:{reassessWorkflowReadonly:async value=>{calls.push(value);return{accepted:true}}}})
 })
+
+test('删除Task接口强制本机身份和显式零写检查参数',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const remove=(body,origin)=>fetch(base+'/tasks/t',{method:'DELETE',headers:{'content-type':'application/json',...(origin?{origin}:{})},body:JSON.stringify(body)})
+  assert.equal((await remove({expectedControlRevision:3,checkOnly:true},'https://untrusted.invalid')).status,403)
+  assert.equal((await remove({expectedControlRevision:3,checkOnly:true,actorId:'other'})).status,409)
+  for(const checkOnly of [true,false])assert.equal((await remove({expectedControlRevision:3,checkOnly})).status,200)
+  assert.deepEqual(calls,[{taskId:'t',expectedControlRevision:3,checkOnly:true},{taskId:'t',expectedControlRevision:3,checkOnly:false}])
+ },{overrides:{deleteWorkflowTask:async value=>{calls.push(value);return{taskId:value.taskId}}}})
+})

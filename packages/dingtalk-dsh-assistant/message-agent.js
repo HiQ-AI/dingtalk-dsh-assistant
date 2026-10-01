@@ -75,7 +75,7 @@ export function createMessageAgentController({ ctx, store, artifacts, tools, mod
         await command('message.agent.drained', { commandId: entry.commandId, leaseEpoch: entry.leaseEpoch, sessionId: entry.sessionId })
         return
       }
-      const failure = { status: 'blocked', reply: '本次查询因系统读取问题未完成，执行已停止，需要修复后继续。你无需重复发送已提供的资料。',
+      const failure = { status: 'blocked', reply: '本次查询因系统读取问题未完成，执行已停止，需要修复后继续。',
         reason: error.code ?? error.message }
       const saved = await artifacts.put(failure)
       await command('message.agent.fail', { ...commandBinding(entry), drained: true, error: failure.reason,

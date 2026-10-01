@@ -182,6 +182,16 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 202, await store.submitWorkflowTask({ ...body, action: 'rerun', taskId: decodeURIComponent(workflowRerun[1]) }))
     } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|CHANGED|ACTIVE|STALE|TASK_RERUN_SOURCE_/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
+  const deleteTask = /^\/tasks\/([^/]+)$/u.exec(url.pathname)
+  if (request.method === 'DELETE' && deleteTask) {
+    if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response,403,{error:'workflow_local_identity_required'})
+    if (!store.deleteWorkflowTask) return send(response,404,{error:'workflow_disabled'})
+    try {
+      const body = z.strictObject({ expectedControlRevision:z.number().int().positive(),checkOnly:z.boolean() }).parse(await readJson(request))
+      return send(response,200,await store.deleteWorkflowTask({...body,taskId:decodeURIComponent(deleteTask[1])}))
+    } catch(error) { return send(response,/FORBIDDEN/.test(error.message)?403:409,{error:error.message}) }
+  }
   const workflowTaskAction = /^\/tasks\/([^/]+)\/(context|cancel|confirm-stage|continue-budget|reopen|archive|title)$/u.exec(url.pathname)
   if (workflowTaskAction && ['POST', 'PUT'].includes(request.method) && await store.isWorkflowTask?.(decodeURIComponent(workflowTaskAction[1]))) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })

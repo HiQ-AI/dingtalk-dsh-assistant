@@ -1,3 +1,6 @@
+import { z } from 'zod'
+import { toToolJsonSchema } from '../packages/dingtalk-dsh-assistant/tool-schema.js'
+import { coordinatorDecisionSchema } from '../packages/dingtalk-dsh-assistant/message-coordinator.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { assertSupportedJsonSchema, validateJsonSchemaValue as violations } from '@deepseek-ai/dsh-tools'
@@ -39,4 +42,29 @@ test('DSH wire要求新计划与阶段输出和完成验收字段，不接受仅
   const result = { inputVersion: 1, runSequence: 1, status: 'completed', summary: '完成', evidence: ['证明'] }
   assert.throws(() => validateJsonSchemaValue(taskResultJsonSchema, result))
   assert.throws(() => validateJsonSchemaValue(taskResultJsonSchema, { ...result, planRevision: 1 }))
+})
+
+test('完整协调工具契约经原生DSH校验，nullable候选仅允许字符串或null', () => {
+  const schema = toToolJsonSchema(coordinatorDecisionSchema)
+  assert.doesNotThrow(() => assertSupportedJsonSchema(schema))
+  const candidate = schema.properties.decisions.items.properties.units.items.properties.binding.properties.candidateId
+  for (const value of ['task-candidate', null]) assert.deepEqual(violations(candidate, value), [])
+  assert.ok(violations(candidate, 42).length)
+})
+
+test('JSON Schema type数组投影为DSH互斥类型分支，原Zod精确验证不变', () => {
+  // Zod 4.5以type数组表达nullable；用元信息固定该输入形态，避免测试依赖本地Zod版本。
+  const source = z.string().meta({ type: ['string', 'null'] })
+  assert.deepEqual(z.toJSONSchema(source).type, ['string', 'null'])
+  const schema = toToolJsonSchema(source)
+  assert.doesNotThrow(() => assertSupportedJsonSchema(schema))
+  assert.deepEqual(schema.oneOf.map(branch => branch.type), ['string', 'null'])
+  for (const value of ['candidate', null]) assert.deepEqual(violations(schema, value), [])
+  assert.ok(violations(schema, false).length)
+  assert.throws(() => source.parse(null))
+  const arraySchema = toToolJsonSchema(z.array(z.string()).meta({ type: ['array', 'null'] }))
+  assert.doesNotThrow(() => assertSupportedJsonSchema(arraySchema))
+  assert.deepEqual(violations(arraySchema, ['candidate']), [])
+  assert.deepEqual(violations(arraySchema, null), [])
+  assert.ok(violations(arraySchema, [42]).length)
 })

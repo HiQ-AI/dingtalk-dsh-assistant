@@ -463,6 +463,8 @@ IB 话题来源身份使用无损引用：`sourceIndexes` 按原顺序指向 sha
 
 ## 文件材料与历史待执行指令核对
 
+SQL 附件沿同一受管下载路径严格按 UTF-8 只读解析，保留原文与群/消息/附件身份，不执行 SQL；坏编码继续明确失败。验证需覆盖原脚本文本、临时文件清理与失败后重新读取，不能以模型猜测替代材料。
+
 本次附件闭环无 schema 迁移，按上述完整维护部署安装 Assistant 及其锁定依赖 ExcelJS 4.4.0。先在隔离测试中核验真实 xlsx 解析、跨阶段材料继承、已有未领取命令的派发前核验，以及系统读取失败的等待和恢复。正式恢复前只读验证原附件消息身份和工作簿内容；分别记录工作表/行列覆盖，不把文件消息文本当正文，也不把表头计作业务数据。
 
 恢复后逐项回读连续消息归属、Task 实际创建、执行材料、审批及验证阶段条件和渠道独立送达。不同消息恢复复用 FIFO 模型队列，不绕过相关输入屏障；已有成功节点与已投递通知不重跑。仅确认为无业务效果的失败消息可用受控 reprocess；已接纳的待执行命令沿原身份恢复，不手工清库重放。工作簿公式使用文件内缓存值且明确未重算，不执行生产 SQL 来验证消息修复。
@@ -478,3 +480,29 @@ Adapter 为普通依赖，原生 `dsh plugin --profile web add` 支持安装，�
 精确包为 `D:/dsh_home/packages/deepseek-ai-dsh-llm-pi-ai-0.1.2-rc.1-native-stop-cbf6f3d68a6f.tgz`，SHA256 为 `cbf6f3d68a6ff708bb55ab301ae97fad735b43d60655fdde1bb2083b92719b79`。checker 保留只读 `adapter-package` 和 `adapter-current`：按 tgz 清单核对 17 个打包文件，不扫描未打包 src；从 `dsh-codex-connect` 实际入口解析 Adapter，再逐文件比对候选包，拒绝命中旧副本。LICENSE 对照工作区根文件，package.json 的工作区依赖转写以精确包摘要为身份依据。
 
 本次安装后新 PID 29924 已通过回读并恢复至维护 revision 177；这些是本轮历史事实，不作为以后部署的当前状态依据。包、进程及健康通过只证明部署成立，消息重放仍须独立核对当前来源版本、命令接纳、Task 状态与通知 ACK/独立回读；不得将恢复派发等同于业务处理完成。无备份意味着本轮没有新增可声称完整的回退副本，失败时仍应保持封存并以已有证据定位，不自动恢复或重装。
+
+### 已在维护中的双 ACK 对账（不备份）
+
+用户明确要求不备份时，且唯一忙项是已知成功发送的两条 ACK，使用 `docs/acceptance/topic-context-completeness/scripts/recover-notification-readback.mjs --check <私有manifest>`。此入口只读控制库及 DWS，不创建证据目录或备份。manifest 必须包含 dbPath、instanceId、expectedPid、dwsProfile、maintenanceId、maintenanceRevision、actorId、notices（恰好两项、不重复）。每项包含 notificationId、runId、leaseEpoch、openTaskId、messageId、conversationId、sourceMessageId、expectedNoticeDigest。摘要由当前通知 JSON 的 SHA256 得到。
+
+检查独立 send-status SUCCESS 与完整 mget：原 ACK 操作、消息与群身份、引用原消息、正文和通知摘要必须一致；任何其他 busy 或 unknown 拒绝。保存 stdout 为私有证据。此检查不授予强停权限，仍须按既有 Resident 完整 dispose/fence 流程退出旧进程，不可绕过未知效果。
+
+旧 expectedPid 已退出后，再使用相同清单运行 `batch-repair <私有manifest>`。工具先再次只读核对与 DWS 回读，通过原生 store owner 独占锁取得唯一写者后重查；仅执行 `message.notification.readback`，不写 SQL 状态、不重发、不复制数据。部分完成可按相同清单接续，已 delivered 的项核对同一证据后不再写。完成独立回读两条 delivered 与全局 drained。
+
+回读确认 drained 后，工具在同一原生 store 中执行 seal，将维护变为 stopping，输出递增 revision 和真实恢复进程 incarnation。工具退出后，标准部署以相同维护身份、新 revision、无监听及旧 PID 已退出接续；新进程原生 resume，不要求已封存的工具进程仍存活，不伪造原 Resident incarnation。批次工具测试通过不等于实际 DWS 已核验，正式 --check 和执行回读须分别留证。
+
+### 指定问题批次清理后重放
+
+使用 `scripts/cleanup-message-batch.mjs --check <manifest>` / `--execute <manifest>`；精确字段与顺序见 `docs/spec/message-conversation-coordinator.md` 的“用户授权问题批次精确清理”。检查零写；执行须 maintenance stopping/drained、旧 PID 已退出、原生 owner 独占。先按原生取消/删除语义处理指定 Task，保存已发送消息的独立撤回审计；不备份、不按群扩大删除。保留 DWS 原历史，使用新消息运行标识重放，不复用旧命令回执。清理事务为受影响群轮换唯一协调 sessionId，sessionBound=false、leaseEpoch 递增、轮次来源与事件引用清空；仅删除选定 Task 的水位，保留其他来源、Task 水位及其他群。旧原生会话文件仅留审计，新会话从当前持久状态重建，不再恢复旧承接记忆。执行后回读 coordinatorResets 和群绑定；新进程恢复后再次核验 sessionId 未回退，旧绑定迟到提交必须拒绝。
+
+### 已清理来源的离线原生重放
+
+`node scripts/replay-message-sources.mjs --check <manifest>` 零写检查；`--execute` 仅在原 PID 退出且 maintenance stopping/drained 时，通过原生 owner 独占取得 store 后再次检查。manifest 包含 dbPath、instanceId、expectedPid、maintenanceId、maintenanceRevision、batchId（8–80位字母数字连字符）、sourcesPath、sourcesSha256。sourcesPath 指向已独立保存的 12 条原始 source 数组；工具核 SHA、唯一 sourceKey、身份及 occurredAt，按真实发生时间排序。
+
+重放仅执行 message.receive，保留原 sourceKey/actor/body/context/附件；sourceVersion=1，runId 与 receive commandId 由 batchId+sourceKey 稳定派生，必须使用全新批次，禁止碰撞历史 receipt。策略使用当前 defaultMessagePolicy，过时 compactPolicy 提示中的“意图节点”替换为“协调输入”。不会调用模型、生成 Task、执行命令或发送通知；关闭 store 后另开只读连接核 12 当前来源、原 Task 集合不变、命令/节点/通知均零，再交标准部署启动和解除维护。
+
+执行中断不自动重新插入已有来源：相同清单检查报 SOURCE_NOT_CLEAN，须先只读核对已收到条目；不能更换批次掩盖半完成结果或重复创建来源。此工具不停止进程、不解除维护、不写 SQL、不备份。
+
+群协调来源合同修复不迁移 schema：保留原来源与常驻 session，经原生维护排空切换后重新读取材料。回读协调提交时核验非空单元覆盖完整 sourceLength、补充/材料来源以 fact 关联同一目标，以及调查目标未被伪造为 requiredExecutionMaterials。群协调不再另设 180 秒墙钟或 32 步上限；仍由原生 cancel/close 排空与租约权限保护，Task 和外部命令既有保护不变。
+
+常驻会话恢复时保留历史，但必须对照本轮来源 `processing` 和提交 `acceptance`：协调工具的 `received:true` 不证明 Task 创建或执行。来源历史摘要从当前控制账只读取得；预分配 taskId、superseded命令和旧成功回执不能替代 `taskExists`。验证重放需同一 session 同时保留旧回执，并确认新输入看见旧命令无Task及本轮真实创建事实。

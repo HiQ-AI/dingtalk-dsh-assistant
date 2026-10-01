@@ -606,3 +606,16 @@ test('Web任务话题按钮和键盘均使用原话题群聊，话题页能反�
   assert.deepEqual(pages, ['topics', 'topics'])
   assert.match(source, /ref\.groupId \|\| task\.sourceGroupId \|\| task\.groupId\) === selection\?\.groupId/u)
 })
+
+test('已读取材料但执行受阻走实际状态分支与显示标签，不回落已处理',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+ const stateCode=source.slice(source.indexOf('const messageWorkflowState = ')+'const messageWorkflowState = '.length,source.indexOf('      const filteredMessages ='))
+ const state=runInNewContext(`(${stateCode})`,{selectedGroup:{topics:[]}})
+ const deliveryCode=source.slice(source.indexOf('const delivery = ')+'const delivery = '.length,source.indexOf('      const messageRows ='))
+ const delivery=runInNewContext(`(${deliveryCode})`)
+ const message={workflowStatus:'execution_blocked',routingStatus:'routed',sourceKind:'workflow-v2'}
+ assert.equal(state(message),'execution_blocked')
+ assert.equal(delivery[state(message)].label,'执行受阻')
+ assert.equal(delivery[state({...message,workflowStatus:'waiting_system'})].label,'材料读取受阻')
+ assert.equal([message].filter(item=>state(item)==='execution_blocked').length,1)
+})
