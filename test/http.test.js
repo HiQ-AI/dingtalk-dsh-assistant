@@ -465,3 +465,40 @@ test('Owner恢复API仅接纳本地版本化系统修复请求，不接受新需
   assert.deepEqual(calls,[{...request,taskId:'t'}])
  },{overrides:{retryWorkflowOwner:async value=>{calls.push(value);return{accepted:true}}}})
 })
+
+test('只读调查恢复API拒绝外域和注入业务输入',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const post=(body,headers={})=>fetch(base+'/tasks/t/retry-investigation',{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)})
+  const request={retryKey:'fixed-scope',reason:'系统修复',runId:'r',nodeRunId:'n',generation:1,runRevision:0,inputDigest:'a'.repeat(64),requirementRevision:1,controlRevision:1,planRevision:1}
+  assert.equal((await post(request,{origin:'https://untrusted.invalid'})).status,403)
+  assert.equal((await post({...request,input:{scope:{sourceKeys:['other']}}})).status,400)
+  assert.equal((await post(request)).status,202)
+  assert.deepEqual(calls,[{...request,taskId:'t'}])
+ },{overrides:{retryWorkflowInvestigation:async value=>{calls.push(value);return{accepted:true}}}})
+})
+
+test('授权投影修复API拒绝外域和新需求字段，确认身份只能由原来源绑定',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const post=(body,headers={})=>fetch(base+'/tasks/t/repair-stage-authorizations',{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)})
+  const request={repairKey:'projection',reason:'修复遗漏投影',expectedRequirementRevision:1,expectedRequirementRef:'old-ref',stageAuthorizations:[{workflowId:'task-data-change',sourceKey:'source',sourceVersion:1,sourceQuote:'验证后执行',objective:'执行',gate:'confirmation'}]}
+  assert.equal((await post(request,{origin:'https://untrusted.invalid'})).status,403)
+  assert.equal((await post({...request,objective:'新需求'})).status,400)
+  assert.equal((await post({...request,stageAuthorizations:[{...request.stageAuthorizations[0],requiredActorId:'other'}]})).status,400)
+  assert.equal((await post(request)).status,202)
+  assert.deepEqual(calls,[{...request,taskId:'t'}])
+ },{overrides:{repairWorkflowStageAuthorizations:async value=>{calls.push(value);return{accepted:true}}}})
+})
+
+test('只读Owner再评估API只接受本机CAS，不接受调用者材料或授权',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const post=(body,headers={})=>fetch(base+'/tasks/t/reassess-readonly',{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)})
+  const request={recoveryKey:'materials',reason:'系统范围已修复',expectedOwnerRevision:3,expectedLeaseEpoch:1,expectedRequirementRevision:1,expectedControlRevision:1}
+  assert.equal((await post(request,{origin:'https://untrusted.invalid'})).status,403)
+  for(const extra of [{materialAccess:{}},{sourceKeys:['other']},{requirementRef:'new'},{actorId:'owner'}])assert.equal((await post({...request,...extra})).status,400)
+  assert.equal((await post(request)).status,202)
+  assert.deepEqual(calls,[{...request,taskId:'t'}])
+ },{overrides:{reassessWorkflowReadonly:async value=>{calls.push(value);return{accepted:true}}}})
+})

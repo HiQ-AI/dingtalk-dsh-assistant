@@ -324,8 +324,8 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     }
     const eventSeq = Number(db.prepare('INSERT INTO task_events(task_id,event_key,event_type,payload_ref,created_at) VALUES(?,?,?,?,?)')
       .run(a.taskId, a.eventKey, a.eventType, a.payloadRef ?? null, now).lastInsertRowid)
-    const fence = ['intent.received', 'source.corrected', 'control.changed', 'approval.resolved'].includes(a.eventType) ? 1 : 0
-    const authorization = a.eventType === 'authorization.changed' ? 1 : 0
+    const fence = ['intent.received', 'source.corrected', 'control.changed', 'approval.resolved', 'authorization.projection.repaired'].includes(a.eventType) ? 1 : 0
+    const authorization = ['authorization.changed','authorization.projection.repaired'].includes(a.eventType) ? 1 : 0
     db.prepare("UPDATE task_owners SET event_watermark=?,status=CASE WHEN status IN ('idle','blocked') THEN 'pending' ELSE status END,failure_count=CASE WHEN status='blocked' THEN 0 ELSE failure_count END,last_failure=CASE WHEN status='blocked' THEN NULL ELSE last_failure END,revision=revision+1,input_fence_revision=input_fence_revision+?,authorization_revision=authorization_revision+?,updated_at=? WHERE task_id=?")
       .run(eventSeq, fence, authorization, now, o.task_id)
     return { status: 'applied', eventSeq }
@@ -455,13 +455,24 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     return { status: 'applied', taskId: a.taskId, turnId: a.turnId }
   }
   if (command.kind === 'task.owner.discard') {
-    exact(a, ['taskId', 'turnId', 'leaseEpoch'])
+    exact(a, ['taskId', 'turnId', 'leaseEpoch', 'reason'], ['taskId', 'turnId', 'leaseEpoch'])
     const t = db.prepare('SELECT * FROM task_owner_turns WHERE task_id=? AND turn_id=?').get(id(a.taskId), id(a.turnId))
     if (!t || t.status !== 'accepted' || revision(a.leaseEpoch) !== t.lease_epoch) fail('TASK_OWNER_ACTION_NOT_FOUND')
     if (t.application_status === 'discarded') return { status: 'discarded', taskId: a.taskId, turnId: a.turnId }
-    if (t.application_status !== 'pending') fail('TASK_OWNER_ACTION_ALREADY_APPLIED')
     const o = owner(db, a.taskId), v = versions(db, o)
-    if (o.event_watermark === t.event_watermark && v.requirementRevision === t.requirement_revision
+    const rejectedRepair = t.application_status === 'blocked' && a.reason === 'WORKFLOW_REPAIR_NOT_ADMITTED'
+      && o.status === 'blocked' && o.last_failure === a.reason && !o.current_turn_id && o.lease_epoch === t.lease_epoch
+      && JSON.parse(t.decision_json ?? '{}').action === 'repairCurrentStage'
+    if (t.application_status !== 'pending' && !rejectedRepair) fail('TASK_OWNER_ACTION_ALREADY_APPLIED')
+    if (rejectedRepair && (task(db, a.taskId).control_state !== 'active'
+      || db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,t.turn_id)
+      || !db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND workflow_id='task-investigation' AND status IN ('waiting','failed')").get(a.taskId)
+      || db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND (workflow_id<>'task-investigation' OR status NOT IN ('waiting','failed','succeeded'))").get(a.taskId)
+      || db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
+      || db.prepare("SELECT 1 FROM execution_inputs i JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND i.status='pending'").get(a.taskId)
+      || db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND workflow_id<>'task-investigation' AND status<>'invalidated'").get(a.taskId)
+      || db.prepare('SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').get(a.taskId))) fail('TASK_OWNER_DISCARD_UNSAFE')
+    if (!rejectedRepair && o.event_watermark === t.event_watermark && v.requirementRevision === t.requirement_revision
       && v.planRevision === t.plan_revision && v.controlRevision === t.control_revision
       && v.authorizationRevision === t.authorization_revision && v.inputFenceRevision === t.input_fence_revision)
       fail('TASK_OWNER_ACTION_STILL_CURRENT')

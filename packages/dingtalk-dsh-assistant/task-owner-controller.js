@@ -44,7 +44,7 @@ export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, 
 /** Task 事件唤醒、模型候选、Host 接纳和执行回执的唯一入口。 */
 export function createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig, advanceTask,
   authorizeStages, authorizeCompletion = async () => true, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
-  readStageArtifacts, readDeliveryManifest, readCurrentSources, capabilityCatalog = [], workflowCatalog = [], sessionRunner, getWorkspaceDir }) {
+  readStageArtifacts, readDeliveryManifest, readCurrentSources, readMaterialAccess, capabilityCatalog = [], workflowCatalog = [], sessionRunner, getWorkspaceDir }) {
   if (!ctx || !store || !artifacts || !controller || typeof modelConfig !== 'function'
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
   let closed = false
@@ -121,7 +121,16 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     const result = { taskId, eventWatermark: claim.eventWatermark, goal,
       ...(readCurrentSources ? { currentSources: await readCurrentSources({ taskId, plan }) } : {}),
       acceptanceItems, versions: claim.versions, task: plan.task, stages: plan.stages, events }
-    result.stageArtifacts = await readTaskOwnerStageArtifacts({ taskId, stages: plan.stages, controller, plan, readStageArtifacts })
+    if (plan.task.planRequirementRevision !== plan.task.requirementRevision) result.planReview = {
+      required: true, instruction: '当前计划尚未覆盖当前需求；继续任务须使用advance与planChange.kind=replaceSuffix重评未完成阶段。repairCurrentStage不能替代需求重评，不得编造repairBinding。' }
+    if (readMaterialAccess) result.materialAccess = await readMaterialAccess({ taskId, plan, requirement: goal })
+    const repairedStages = new Set(plan.stages.filter(stage => stage.status !== 'succeeded'
+      && result.materialAccess?.scopeRepairs?.some(repair => repair.runId === stage.runId
+        && repair.inputRef === stage.requirementRef)).map(stage => stage.stageId))
+    result.stageArtifacts = await readTaskOwnerStageArtifacts({ taskId,
+      stages: plan.stages.filter(stage => !repairedStages.has(stage.stageId)), controller, plan, readStageArtifacts })
+    if (repairedStages.size) result.invalidatedDiagnostics = [...repairedStages].map(stageId => ({ stageId,
+      reason: '旧调查输入的材料范围遗漏已由Host核验修复；旧失败诊断不再作为当前判断依据，必须用当前材料范围重新读取。' }))
     if (readDeliveryManifest) {
       const manifest = await readDeliveryManifest({ taskId, plan, requirement: goal })
       result.deliveryManifest = { ref: (await artifacts.put(manifest, { taskId })).ref, complete: manifest.complete,
@@ -129,7 +138,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     }
     if (inspectCurrentExecution) {
       result.currentExecution = await inspectCurrentExecution(taskId, plan)
-      if (result.currentExecution?.evidenceRefs?.length) result.stageArtifacts.push({ stageId: result.currentExecution.stageId, outputRef: null, evidenceRefs: result.currentExecution.evidenceRefs })
+      if (result.currentExecution?.evidenceRefs?.length && !repairedStages.has(result.currentExecution.stageId)) result.stageArtifacts.push({ stageId: result.currentExecution.stageId, outputRef: null, evidenceRefs: result.currentExecution.evidenceRefs })
     }
     result.capabilities = capabilityCatalog
     result.workflowCatalog = workflowCatalog
@@ -172,6 +181,13 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
             taskId, turnId, leaseEpoch: claim.leaseEpoch, sessionId: claim.sessionId }),
           onCandidate: decision => {
             if (unreadPages.size) throw error('TASK_OWNER_EVENTS_UNREAD')
+            if (decision.action === 'repairCurrentStage') {
+              const expected = input.currentExecution?.repairBinding
+              if (input.currentExecution?.repairable !== true || !expected
+                || Object.keys(decision.repair ?? {}).length !== Object.keys(expected).length
+                || Object.entries(expected).some(([key, value]) => decision.repair?.[key] !== value))
+                throw error('TASK_OWNER_REPAIR_BINDING_INVALID')
+            }
             return command(`owner-candidate:${turnId}`, 'task.owner.candidate', {
               taskId, turnId, leaseEpoch: claim.leaseEpoch, decision })
           },

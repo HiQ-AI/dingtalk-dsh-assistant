@@ -20,3 +20,16 @@
 现有 IM Task 的 Web context 入口要求已有执行 run，不能恢复尚未建立计划的 Owner。新增 POST /tasks/:taskId/retry-owner，只允许配置的本地 Web 执行人且原任务访问校验通过。请求携带 retryKey、reason、expectedOwnerRevision、expectedLeaseEpoch、expectedRequirementRevision、expectedControlRevision、expectedLastFailure。事务仅接纳 active Task、blocked Owner、至少三次已释放失败、无当前 turn、无未应用候选，且失败属于 NO_DECISION/TIMEOUT。所有版本和失败码精确匹配。
 
 恢复追加 system.recovery 事件，原因和执行人保存在原任务 artifact，清零失败并设 pending；不更新 requirement、阶段、Task 身份、Owner sessionId/epoch。相同请求走既有命令回执幂等，失败或版本变化不伪造恢复。通过现有 recover 调度同一原生会话，旧输入投影按上述契约更新；不伪造 SESSION_NOT_FOUND，也不重置原生 compaction 私有状态。真实压缩仍失败时保留事实并停在原生失败路径。
+
+## Task 调查附件范围增补（实施前）
+
+正式调查已收到工作簿全文，但 scope 仅含动作消息，工具回读对应文件消息被正确拒绝。复用既有 message.material 缓存和来源 snapshot：只对 requirement.materials 实际引用的文件消息/fileId，逐项核对同群、原快照 actor/version/body、当前附件身份及缓存正文一致，得到精确 sourceKey/version/resource 描述。调查 stage 输入补充这些来源范围及 readableMessageResources；不扩大数据库/写权限、不读取无关附件、不把附近所有文件纳入。
+
+已运行调查不直接改冻结输入；若已成功不覆盖产物。受管只读恢复应仅对已排空的失败/等待调查、无外部effects及当前需求/计划/代际作CAS，通过既有 input.accept/apply重新冻结同run下一代，保留旧节点和证据，不创建重复Task。
+
+## Owner 材料恢复事实
+
+Owner 每轮 snapshot 复用调查阶段同一严格材料来源核验，提供 materialAccess.readableMessageResources。仅已有材料账正文一致、来源版本/身份和附件标识仍有效的资源进入目录，不扩大群权限或预读无关附件。对于失败/等待调查，Host 对比旧冻结输入的 sourceKeys/sourceVersions，列出 scopeRepairs（旧 run/inputRef 和可重建的来源）；这证明旧范围遗漏可修复，不证明连接器已读取成功。旧失败产物保持原状，Owner 应据当前事实重新核验，不要求用户重发已有附件。
+
+## Owner阶段修复候选校验（实施前）
+repairCurrentStage 仅在当前快照 repairable=true 且完整 repairBinding 逐字段相等时接纳。不支持或绑定不符必须在候选写入前给可纠正反馈；工具schema只在当前能力可用时展示该动作。计划需求版本落后时明确使用advance/replaceSuffix重评，不编造repairBinding，不绕过真实应用阶段校验。

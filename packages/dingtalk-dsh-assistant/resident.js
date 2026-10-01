@@ -219,6 +219,9 @@ export async function apply(ctx, config = {}) {
       if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
       return workflow.submitWebTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
     }
+    runtime.retryWorkflowInvestigation = args => workflow.retryInvestigation(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.repairWorkflowStageAuthorizations = args => workflow.repairStageAuthorizations(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.reassessWorkflowReadonly = args => workflow.reassessReadonly(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowOwner = args => workflow.retryOwner(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowReadonlyAnswer = args => workflow.retryReadonlyAnswer(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowMaterialRequest = args => workflow.retryMaterialRequest(args, { channel: 'web', actorId: workflowConfig.webActorId })

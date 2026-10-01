@@ -116,11 +116,20 @@ export async function executeNotificationOperation({ store, adapter, operationId
 export function createWorkflowNotifications({ store, artifacts, controller, adapter, groupResponsibility = () => '' }) {
   let flight, beforeSequenceId, preparedCursor = 0, readbackCursor = 0
   const command = (kind, args, id) => store.command({ id, kind, args })
+  async function scopedStatusText(run, text) {
+    const state = await store.query({ kind: 'message.run', runId: run.runId })
+    const goals = [...new Set(state.units.map(unit => unit.goalText?.trim()).filter(Boolean))]
+    // 旧话题归属可能错误；只使用本消息已冻结的单一短目标，不猜测或截取原文。
+    if (goals.length !== 1 || goals[0].length > 80 || /[\r\n]/u.test(goals[0])) return text
+    const titled = `关于“${goals[0]}”：${text}`
+    try { assertGroupReply(titled); return titled } catch { return text }
+  }
   async function prepare(run, action, phase, text, communicationPhase = phase) {
     if (run.channel === 'web' || run.externalMessaging === false) return
     if (notificationSilence(run, communicationPhase)) return
     // 正文与代次必须取同一个已完成命令快照，不能拿旧正文拼接新 execution 版本。
     const answerReceipt = phase === 'receipt' && action.kind === 'answer'
+    if (answerReceipt && action.result?.status === 'blocked' && action.result?.reason === 'execution_tool_failed') text = await scopedStatusText(run, text)
     const attemptVersion = answerReceipt && action.readonlyRetryHistory?.length ? action.result?.inputVersion : undefined
     const eventKey=attemptVersion ? `action.reply:${action.commandId}:${phase}:input:${attemptVersion}` : phase.startsWith('owner:') ? `task.owner.report:${phase.slice(6)}`
       : phase.startsWith('terminal:') ? `task.result:${action.result.runId}:${phase}`
@@ -148,11 +157,37 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
       disclosure: { conversationId: run.conversationId, authorizationRef: sourceRun.sourceKey },
     }, `prepare:${notificationId}`)
   }
+  async function priorWaitUnchanged(run, phase, text, request, plainText) {
+    if (!['attention', 'routing_wait', 'system_wait'].includes(phase)) return {}
+    let afterSequenceId = 0, latest
+    do {
+      const page = await store.query({ kind: 'message.notifications', sourceKey: run.sourceKey,
+        states: ['sending', 'acknowledged', 'unknown', 'delivered'], afterSequenceId, limit: 200 })
+      for (const notice of page) if (notice.payload?.conversationId === run.conversationId) latest = notice
+      if (page.length < 200) break
+      afterSequenceId = page.at(-1).sequenceId
+    } while (true)
+    if (!latest) return {}
+    const nextEpisode = { episode: latest.id }
+    if (latest.payload.phase !== phase || ![text, plainText].some(body => latest.payload.text === formatGroupReply(body, groupResponsibility(run.conversationId)))) return nextEpisode
+    const previous = await store.query({ kind: 'message.run', runId: latest.runId })
+    if (previous.run.body !== run.body) return nextEpisode
+    if (phase === 'system_wait') {
+      const prior = previous.requests.find(item => item.id === latest.requestId)
+      const resources = item => [...new Set((item?.needs ?? []).map(need => need.resourceRef).filter(Boolean))].sort()
+      if (!prior || executionDigest(resources(prior)) !== executionDigest(resources(request))) return nextEpisode
+    }
+    return { unchanged: true }
+  }
   async function prepareState(run, phase, text, request) {
     if (notificationSilence(run, phase)) return
+    const plainText = text
+    if (['attention', 'routing_wait', 'system_wait'].includes(phase)) text = await scopedStatusText(run, text)
+    const wait = await priorWaitUnchanged(run, phase, text, request, plainText)
+    if (wait.unchanged) return
     const stateFact = { revision: run.revision, status: run.status, reason: run.reason ?? null, intentStatus: run.intentStatus ?? null, phase }
-    const eventKey = request ? `request.${phase}:${request.id}:${request.revision}`
-      : `message.${phase}:${run.runId}:${run.sourceVersion}:${executionDigest(stateFact)}`
+    const eventKey = (request ? `request.${phase}:${request.id}:${request.revision}`
+      : `message.${phase}:${run.runId}:${run.sourceVersion}:${executionDigest(stateFact)}`) + (wait.episode ? `:after:${wait.episode}` : '')
     const notificationId = `notice-${executionDigest(eventKey)}`
     if (await store.query({ kind: 'message.notification', notificationId })) return
     const responsibility = groupResponsibility(run.conversationId)
@@ -251,6 +286,11 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         else if (!hasAcceptance && lifecycle && ['create', 'reopen'].includes(action.kind)) await prepare(run, action, 'receipt', '已接收任务，正在核对执行条件；实际开始和处理结果会继续告知。')
         if (lifecycle) {
           const reports = await store.query({ kind: 'task.owner.reports', taskId: action.result.taskId })
+          for (const report of reports.filter(item => item.applicationStatus === 'blocked')) {
+            await attempt(run.runId, `application_wait:${report.reportId}`, () => prepare(run, action,
+              `owner:application_wait:${report.reportId}`,
+              '处理遇到系统问题，尚未继续，需要先恢复。你暂时不需要重复提交已有材料。', 'required_action'))
+          }
           for (const report of reports.filter(item => item.applicationStatus === 'applied'
             && (['complete', 'block'].includes(item.reportType)
               || item.triggerTypes.includes('workflow.succeeded') && item.facts.evidenceRefs.length

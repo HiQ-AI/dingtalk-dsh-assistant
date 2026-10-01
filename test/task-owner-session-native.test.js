@@ -275,3 +275,17 @@ test('Owner引用纠正不能越过旧lease且连续错误仍受步骤预算约�
     assert.equal(calls, stale ? 1 : 8)
   }
 })
+
+test('Owner原生修复仅接受当前绑定，错误动作可在同轮纠正',async t=>{
+ for(const mode of ['absent','stale','valid']){
+  const root=await mkdtemp(join(tmpdir(),'owner-repair-binding-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const repair={stageId:'stage-1',runId:'run-1',generation:1,runRevision:0,requirementRevision:2}
+  const h=await host(root,null,null,step=>step===1?{action:'repairCurrentStage',repair:{...repair,runRevision:mode==='stale'?1:0},summary:'重查',evidenceRefs:[]}:decision)
+  t.after(()=>h.close());const submitted=[]
+  const result=await h.sessions.run({binding:{taskId:'task-repair',sessionId:'owner-repair',turnId:'turn-1',leaseEpoch:1,ownerEpoch:1,sessionBound:false},
+   input:{goal:{request:'调查'},currentExecution:mode==='absent'?null:{repairable:true,repairBinding:repair}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>submitted.push(value)})
+  assert.equal(result.status,'submitted');assert.equal(submitted.length,1)
+  assert.equal(submitted[0].action,mode==='valid'?'repairCurrentStage':decision.action)
+  assert.equal(h.requests.length,mode==='valid'?1:2)
+ }
+})

@@ -254,11 +254,14 @@ function validAcceptanceItems(items) {
     && new Set(items.map(item => item.itemId)).size === items.length
 }
 
-export function createInvestigationStageContract({ queryScope, queryCatalog, readSources, readAcceptanceItems }) {
+export function createInvestigationStageContract({ queryScope, queryCatalog, readSources, readAcceptanceItems, readMessageResources = async () => [] }) {
   return { id: 'task-investigation', version: '1', materialPolicy: {
     roles: ['source', 'supplemental'], required: [], singleton: [], maxCount: 256,
   }, async prepare({ taskId, requirement, origin, handoff, definitionVersion = '6' }) {
-    const scope = queryScope({ ...requirement.scope, actorId: origin.run.actorId, predecessorOutputRef: handoff?.outputRef ?? null })
+    const readableMessageResources = await readMessageResources(requirement, origin)
+    const scope = queryScope({ ...requirement.scope, actorId: origin.run.actorId, predecessorOutputRef: handoff?.outputRef ?? null,
+      sourceKeys: [...new Set([...requirement.scope.sourceKeys, ...readableMessageResources.map(item => item.sourceKey)])],
+      sourceVersions: { ...requirement.scope.sourceVersions, ...Object.fromEntries(readableMessageResources.map(item => [item.sourceKey, item.sourceVersion])) } })
     const unique = new Map()
     for (const material of [...await readSources(requirement), ...(requirement.materials ?? [])]) {
       const prior = unique.get(material.id)
@@ -270,7 +273,7 @@ export function createInvestigationStageContract({ queryScope, queryCatalog, rea
     if (!legacy && !validAcceptanceItems(acceptanceItems)) throw executionError('INVESTIGATION_ACCEPTANCE_ITEMS_INVALID')
     return { input: { request: requirement.request, constraints: requirement.constraints,
       acceptanceCriteria: requirement.acceptanceCriteria, scope,
-      context: { target: requirement.target, ...(legacy && handoff ? { predecessor: handoff.value } : {}), ...queryCatalog(scope) }, materials: [...unique.values()],
+      context: { target: requirement.target, readableMessageResources, ...(legacy && handoff ? { predecessor: handoff.value } : {}), ...queryCatalog(scope) }, materials: [...unique.values()],
       ...(!legacy ? { acceptanceItems: acceptanceItems.map(({ itemId, criterion }) => ({ itemId, criterion })), ...(handoff ? { handoff } : {}) } : {}) } }
   } }
 }

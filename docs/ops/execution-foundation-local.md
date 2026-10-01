@@ -525,3 +525,21 @@ Owner 恢复通过原生 `surfaceOp: replace` 将旧输入投影标注为 supers
 Owner 首次规划失败、尚无 run 时，使用本地 `POST /tasks/:taskId/retry-owner`，正文为 `retryKey`、真实系统修复 `reason`、`expectedOwnerRevision`、`expectedLeaseEpoch`、`expectedRequirementRevision`、`expectedControlRevision`、`expectedLastFailure`。从当前任务详情 `taskOwner` 回读这些版本，失败码仅接纳 `TASK_OWNER_NO_DECISION` / `TASK_OWNER_TIMEOUT`。必须已经修复原因；不通过虚构用户补充或重发原 create 恢复。相同 retryKey 与完全相同正文幂等，参数变化拒绝。
 
 接口只记录同任务的 `system.recovery` 事件并将已阻塞 Owner 置为 pending，后续既有调度恢复；维护期间不会派发。需求、阶段、sessionId 和 ownerEpoch 不变。恢复沿原生 session resume 和输入投影，不清除 compaction 私有状态，不伪造会话缺失；真实模型/压缩继续报错则按真实错误保留失败状态。
+
+Task 调查的附件读取范围来自当前冻结材料与原消息快照、当前来源身份以及既有真实附件缓存的交叉核验；`context.readableMessageResources` 列出精确 sourceKey/version/type/resourceId。附近未选附件不会预读取或获得权限。
+
+系统修复后，可用本地 `POST /tasks/:taskId/retry-investigation` 恢复已排空的失败调查。请求包含 retryKey、reason、runId、nodeRunId、generation、runRevision、inputDigest、requirementRevision、controlRevision、planRevision。服务重新准备原需求对应的只读阶段输入，事务比对当前 Task/阶段/代际，拒绝任何外部 effects、未排空、成功阶段及成功节点；原失败产物保留，同 run 新一代继续。不修改原 Task 需求或生产授权，不能据此声称审批、测试及发送人验证门禁已补全。
+
+阶段授权投影存在历史遗漏时，可由本机受管 `repair-stage-authorizations` 入口从原已验证来源补足；先确认只读执行已停止排空、无外部效果，并保存当前requirement ref/revision和候选来源。不得伪造新消息或直接修改库。修复增加requirement版本，保留原Task与失败审计；必须由Owner按新要求正常重评计划，建立同Task的新阶段/新run。即使提交新requirementRevision，旧计划上的retry-investigation也会拒绝，不能绕过计划版本绑定。只有requirement未变化的纯读取范围修复才可原run受控重试。该修复不代表原发送人已验证测试，也不代表生产人工审批通过。原文和具体审批身份要求继续独立生效。
+
+授权投影修复递增 requirementRevision 后，旧 planRequirementRevision 尚未覆盖新需求，`retry-investigation` 必须拒绝；先由 Owner 按原生流程重评并建立覆盖新需求的计划，在同一 Task 下生成新 run。该入口仅用于需求版本未变的系统材料范围修复，不能用 CAS 新版本把旧计划强行升级。
+
+材料范围修复后，应通过受管系统恢复事件唤醒 Owner。Owner snapshot 的 materialAccess 使用与调查输入相同的来源校验；scopeRepairs 仅证明旧输入遗漏的范围可重建，不能作为实际读取成功或生产查询授权的证据。
+
+只读调查失败后如 Owner 仍依据旧材料缺口等待，可使用本机 `reassess-readonly` 入口，先回读当前Owner与Task四项CAS。恢复证据由Host生成，不手工填充材料或伪造用户消息；只触发同Task、同会话Owner再评估，保留原requirement及失败。远端数据查询仍须新调查实际验证，不能把scope修复回执当业务成功。
+
+范围修复证据须同时匹配旧 runId 与 inputRef，才从 Owner 当前 stageArtifacts 去除对应失败引用；invalidatedDiagnostics 明示旧判断失效。此操作不清理数据库或修改 artifact 审计，不能据此跳过重新读取。
+
+Owner 原生提交工具按当前 currentExecution 开放阶段修复动作；缺能力或绑定不符不会写入候选，返回可纠正反馈。planReview 指示旧计划需经 advance/replaceSuffix 重评，运行态应用门禁仍独立校验。
+
+若旧Owner错误接纳了不支持的repairCurrentStage并在应用前以WORKFLOW_REPAIR_NOT_ADMITTED受阻，可通过同一reassess-readonly受管入口封存该明确未执行动作后再评估；必须回读当前CAS，其他未知错误和效果不允许用此路径恢复。不能直接改application_status或删除报告。

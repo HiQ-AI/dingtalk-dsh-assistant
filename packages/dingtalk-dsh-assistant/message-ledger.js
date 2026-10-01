@@ -541,20 +541,21 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       }
       if(version?.commandLeaseEpoch!==undefined&&(()=>{const command=get(db,'command',n.commandId);return command.status!=='applied'||command.leaseEpoch!==version.commandLeaseEpoch||version.commandInputVersion!==undefined&&command.result?.inputVersion!==version.commandInputVersion})()){n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}
       if(n.payload?.phase?.startsWith('owner:')){
-        const reportId=n.payload.phase.slice('owner:'.length)
+        const applicationWait=n.payload.phase.startsWith('owner:application_wait:')
+        const reportId=n.payload.phase.slice(applicationWait?'owner:application_wait:'.length:'owner:'.length)
         const fact=db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.application_status,t.requirement_revision AS report_requirement_revision,o.event_watermark,o.processed_watermark,
-          b.requirement_revision,b.plan_requirement_revision
+          b.requirement_revision,b.plan_requirement_revision,c.control_revision,t.control_revision AS report_control_revision,o.status AS owner_status
           FROM task_reports r JOIN task_owner_turns t ON t.turn_id=r.turn_id
           JOIN task_owners o ON o.task_id=r.task_id
-          JOIN business_tasks b ON b.task_id=r.task_id WHERE r.report_id=?`).get(reportId)
+          JOIN business_tasks b ON b.task_id=r.task_id JOIN task_controls c ON c.task_id=r.task_id WHERE r.report_id=?`).get(reportId)
         const latest=fact?db.prepare("SELECT turn_id FROM task_owner_turns WHERE task_id=? AND status='accepted' ORDER BY rowid DESC LIMIT 1").get(fact.task_id):null
-        if(!fact||fact.application_status!=='applied'||fact.event_watermark!==fact.processed_watermark||latest?.turn_id!==fact.turn_id
+        if(!fact||(applicationWait ? fact.application_status!=='blocked'||fact.owner_status!=='blocked'||fact.report_control_revision!==fact.control_revision : fact.application_status!=='applied'||fact.event_watermark!==fact.processed_watermark)||latest?.turn_id!==fact.turn_id
             ||fact.report_requirement_revision!==fact.requirement_revision
             ||fact.report_type==='complete'&&fact.plan_requirement_revision!==fact.requirement_revision){
           n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n)
           return {result:{notification:n},dispatchEligible:false}
         }
-        if(fact.report_type==='complete'||fact.report_type==='progress')assertMessageTaskUnfenced(db,fact.task_id)
+        if(!applicationWait&&(fact.report_type==='complete'||fact.report_type==='progress'))assertMessageTaskUnfenced(db,fact.task_id)
       }
       n.status='sending';n.leaseEpoch++;n.startedAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:true}}
     if(a.leaseEpoch!==n.leaseEpoch)fail('MESSAGE_NOTIFICATION_STALE')
@@ -1255,9 +1256,9 @@ export function queryMessages(db,a) {
   if(a.kind==='message.notifications') {
     const limit=a.limit??100,after=a.afterSequenceId??0,states=a.states??['prepared','sending','acknowledged','unknown']
     if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(after)||after<0||!Array.isArray(states)||!states.length||states.some(s=>!['prepared','sending','acknowledged','unknown','delivered','superseded'].includes(s)))fail('MESSAGE_INVALID_LIMIT')
-    const scoped = a.runId ? ' AND run_id=?' : ''
+    const scoped = (a.runId ? ' AND run_id=?' : '') + (a.sourceKey ? ' AND run_id IN (SELECT run_id FROM message_runs WHERE source_key=?)' : '')
     return db.prepare(`SELECT rowid AS seq,body FROM message_items WHERE kind='notification' AND rowid>? AND json_extract(body,'$.status') IN (SELECT value FROM json_each(?))${scoped} ORDER BY rowid LIMIT ?`)
-      .all(after,json(states),...(a.runId?[str(a.runId)]:[]),limit).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
+      .all(after,json(states),...(a.runId?[str(a.runId)]:[]),...(a.sourceKey?[str(a.sourceKey)]:[]),limit).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
   }
   if(a.kind==='message.group') {const row=db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(str(a.conversationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.task-candidates') {const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER;if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT');return db.prepare("SELECT i.rowid AS seq,r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') AND json_type(i.body,'$.args.taskId')='text' AND length(json_extract(i.body,'$.args.taskId'))>0 AND json_extract(r.body,'$.conversationId')=? AND i.rowid<? ORDER BY i.rowid DESC LIMIT ?").all(str(a.conversationId),before,limit).map(x=>({run:JSON.parse(x.run),command:JSON.parse(x.command),sequenceId:x.seq}))}

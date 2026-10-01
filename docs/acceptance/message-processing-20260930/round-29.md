@@ -1,0 +1,17 @@
+# 第29轮：Owner动作合同与应用失败告知
+
+## 根因与方案
+
+真实event146的Owner快照已给正确附件目录并去除旧诊断，但选择repairCurrentStage时currentExecution=null且虚构版本。模型工具总advertise这个动作，Host接纳候选后才调用领域修复器拒绝，应用3次后blocked。通知只认可已应用报告，故同次系统阻塞没有用户告知。
+
+仅advertise当前实际支持的修复动作；候选前复核受信repairBinding并给可纠正反馈，旧planRequirementRevision明确通过advance/replaceSuffix重评。对已接纳但明确WORKFLOW_REPAIR_NOT_ADMITTED、无效果且排空的既有只读动作，用原生discard再reassess，不重设需求/会话。为应用blocked增加独立持久等待事实，只报告系统待恢复，不发送未执行summary，同次阻塞不重复，恢复后未发送通知失效。
+
+## 验证状态
+
+Owner原生会话12/12、恢复13/13通过；其他本轮定向与实际部署继续中。没有新备份或生产SQL。
+
+## 本地合同验证
+Owner联合52/52、只读再评估3/3、通知19/19通过；真实只读fixture中，应用blocked的prepared通知经原生discard后领取superseded且不派发。精确候选99文件，sha256=f8a5d60ab8ffe7d85568564b90c43b7e377c30c8bc9d789f9cec48ee0e79e77d。实际安装及原Task重评仍继续，不将合同通过冒充业务完成。
+
+## 正式读取
+无备份精确安装三包120文件、新PID25076、24任务身份和历史与认证Web/健康通过，维护189恢复。应用失败等待通知由DWS messages-mget独立核验complete=true/foundCount1/failedCount0，消息本轮系统等待消息（真实ID留本机证据）、投递lease1，正文明确无需重复提交材料。event147原生discard非法turn后，Owner沿原session成功advance+replaceSuffix0，原Task req2/plan2/planReq2，新run5294实际running、failure0；新input精确仅含109附件目录并保持UAT只读限制。当前调查实际知识/代码/只读库查询已执行，完整结果仍待验收。

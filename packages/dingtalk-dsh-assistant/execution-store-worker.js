@@ -252,16 +252,38 @@ function coreCommand(command, now, consumption = {}) {
     return { status: 'applied', run: runDto(getRun(a.runId)) }
   }
   if (command.kind === 'input.accept') {
-    object(a, ['runId', 'inputId', 'sourceKey', 'requirementRef', 'expectedRevision', 'repair'], ['runId', 'inputId', 'sourceKey', 'requirementRef'])
+    object(a, ['runId', 'inputId', 'sourceKey', 'requirementRef', 'expectedRevision', 'repair', 'readonlyRecovery'], ['runId', 'inputId', 'sourceKey', 'requirementRef'])
     text(a.inputId, 'inputId'); text(a.sourceKey, 'sourceKey'); ref(a.requirementRef, 'requirementRef')
     const old = db.prepare('SELECT * FROM execution_inputs WHERE run_id=? AND source_key=?').get(a.runId, a.sourceKey)
     if (old) {
       if (old.requirement_ref !== a.requirementRef) fail('INPUT_SOURCE_CONFLICT')
       return { status: 'applied', inputId: old.input_id, seq: old.seq, accepted: false }
     }
-    const r = activeRun(a, { allowFence: true, allowPause: true })
+    const r = a.readonlyRecovery ? getRun(a.runId) : activeRun(a, { allowFence: true, allowPause: true })
     if (a.expectedRevision !== undefined && r.revision !== integer(a.expectedRevision, 'expectedRevision')) fail('REVISION_CONFLICT')
     if (a.expectedRevision !== undefined && pendingInputs(a.runId).length) fail('INPUT_PENDING')
+    if (a.readonlyRecovery) {
+      const v = a.readonlyRecovery
+      object(v, ['taskId','stageId','nodeRunId','generation','inputDigest','requirementRevision','controlRevision','planRevision','reasonRef'])
+      ref(v.reasonRef, 'reasonRef')
+      const task = db.prepare('SELECT t.*,c.state,c.control_revision FROM business_tasks t JOIN task_controls c USING(task_id) WHERE t.task_id=?').get(v.taskId)
+      const stage = task && db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND stage_id=?').get(v.taskId, task.plan_revision, v.stageId)
+      const current = nodes(r.run_id), first = current[0]
+      if (a.repair || !task || task.state !== 'active' || task.plan_requirement_revision !== task.requirement_revision
+        || task.requirement_revision !== v.requirementRevision
+        || task.control_revision !== v.controlRevision || task.plan_revision !== v.planRevision
+        || !stage || !['running','blocked'].includes(stage.status) || stage.run_id !== r.run_id || stage.output_ref
+        || r.task_id !== v.taskId || r.workflow_id !== 'task-investigation' || !['waiting','failed'].includes(r.status) || r.stop_requested || r.pause_requested
+        || r.generation !== v.generation || r.revision !== a.expectedRevision || pendingInputs(r.run_id).length
+        || !first || first.node_run_id !== v.nodeRunId || first.input_digest !== v.inputDigest
+        || first.node_id !== 'investigate' || !['failed','waiting'].includes(first.status)
+        || current.some(n => !n.drained || n.status === 'succeeded')
+        || db.prepare('SELECT 1 FROM execution_effects WHERE run_id=? LIMIT 1').get(r.run_id)) fail('INVESTIGATION_RETRY_FORBIDDEN')
+      db.prepare("UPDATE execution_runs SET status='waiting' WHERE run_id=?").run(r.run_id)
+      db.prepare("UPDATE business_tasks SET status='active' WHERE task_id=?").run(v.taskId)
+      db.prepare("UPDATE task_plan_stages SET status='running' WHERE task_id=? AND plan_revision=? AND stage_id=?").run(v.taskId, v.planRevision, v.stageId)
+      emitEvent(command.id, 'investigation.retry.accepted', { ...v, runId: r.run_id, nextGeneration: r.generation + 1 }, now)
+    }
     if (a.repair) {
       object(a.repair, ['taskId', 'stageId', 'runId', 'generation', 'runRevision', 'requirementRevision', 'contextRef', 'workflowDigest'])
       ref(a.repair.contextRef, 'contextRef')
@@ -280,7 +302,7 @@ function coreCommand(command, now, consumption = {}) {
     if (db.prepare('SELECT input_id FROM execution_inputs WHERE run_id=? AND input_id=?').get(a.runId, a.inputId)) fail('INPUT_ID_CONFLICT')
     const inserted = db.prepare("INSERT INTO execution_inputs(run_id,input_id,source_key,requirement_ref,status,accepted_at) VALUES(?,?,?,?,'pending',?)")
       .run(a.runId, a.inputId, a.sourceKey, a.requirementRef, now)
-    return { status: 'applied', inputId: a.inputId, seq: Number(inserted.lastInsertRowid), accepted: true }
+    return { status: 'applied', inputId: a.inputId, seq: Number(inserted.lastInsertRowid), accepted: true, ...(a.readonlyRecovery ? { readonlyRecoveryReasonRef: a.readonlyRecovery.reasonRef } : {}) }
   }
   if (command.kind === 'input.apply') {
     object(a, ['runId', 'inputIds', 'expectedRevision', 'requirementRef', 'nodes'])
@@ -782,6 +804,58 @@ function command(value) {
       const event = reduceTaskOwnerCommand(db, { kind: 'task.owner.event', args: {
         taskId, eventKey, eventType: 'task.recovered', payloadRef: requirementRef } }, context(value.id, now))
       combined = { ...bound, eventSeq: event.eventSeq }
+    } else if (value.kind === 'task.owner.reassess') {
+      const a=object(value.args,['taskId','eventKey','payloadRef','expectedOwnerRevision','expectedLeaseEpoch','expectedRequirementRevision','expectedControlRevision','sources','requestDigest'])
+      const task=db.prepare('SELECT t.*,c.state,c.control_revision FROM business_tasks t JOIN task_controls c USING(task_id) WHERE task_id=?').get(a.taskId)
+      const owner=db.prepare('SELECT * FROM task_owners WHERE task_id=?').get(a.taskId)
+      if(!task||!owner||owner.revision!==a.expectedOwnerRevision||owner.lease_epoch!==a.expectedLeaseEpoch
+        ||task.requirement_revision!==a.expectedRequirementRevision||task.control_revision!==a.expectedControlRevision)fail('TASK_OWNER_REASSESS_STALE')
+      ref(a.payloadRef,'payloadRef');digest(a.requestDigest,'requestDigest')
+      const invalidRepair=owner.last_failure==='WORKFLOW_REPAIR_NOT_ADMITTED' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='repairCurrentStage'").get(a.taskId,owner.lease_epoch) : null
+      if(task.state!=='active'||task.status==='succeeded'||!['idle','blocked'].includes(owner.status)||owner.current_turn_id
+        ||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,invalidRepair?.turn_id??'')
+        ||!db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND workflow_id='task-investigation' AND status IN ('failed','waiting')").get(a.taskId)
+        ||db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND (workflow_id<>'task-investigation' OR status NOT IN ('failed','waiting','succeeded'))").get(a.taskId)
+        ||db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
+        ||db.prepare("SELECT 1 FROM execution_inputs i JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND i.status='pending'").get(a.taskId)
+        ||db.prepare('SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').get(a.taskId)
+        ||db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND workflow_id<>'task-investigation' AND status<>'invalidated'").get(a.taskId))fail('TASK_OWNER_REASSESS_FORBIDDEN')
+      if(!Array.isArray(a.sources)||!a.sources.length)fail('TASK_AUTHORIZATION_SOURCE_STALE')
+      for(const source of a.sources){
+        object(source,['sourceKey','sourceVersion','actorId','bodyDigest'])
+        const row=db.prepare('SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=r.source_version WHERE r.source_key=?').get(source.sourceKey)
+        const current=row&&JSON.parse(row.body)
+        if(!current||current.status==='superseded'||current.sourceVersion!==source.sourceVersion||current.actorId!==source.actorId
+          ||createHash('sha256').update(canonical(current.body)).digest('hex')!==source.bodyDigest)fail('TASK_AUTHORIZATION_SOURCE_STALE')
+      }
+      if(invalidRepair)reduceTaskOwnerCommand(db,{kind:'task.owner.discard',args:{taskId:a.taskId,turnId:invalidRepair.turn_id,leaseEpoch:invalidRepair.lease_epoch,reason:'WORKFLOW_REPAIR_NOT_ADMITTED'}},context(value.id,now))
+      const event=reduceTaskOwnerCommand(db,{kind:'task.owner.event',args:{taskId:a.taskId,eventKey:a.eventKey,eventType:'system.recovery',payloadRef:a.payloadRef}},context(value.id,now))
+      combined={status:'pending',taskId:a.taskId,eventSeq:event.eventSeq,ownerRevision:owner.revision+1+(invalidRepair?1:0),sessionId:owner.session_id,requestDigest:a.requestDigest,...(invalidRepair?{discardedTurnId:invalidRepair.turn_id}:{})}
+    } else if (value.kind === 'task.authorization.repair') {
+      const a = object(value.args, ['taskId','expectedRequirementRevision','expectedRequirementRef','requirementRef','eventKey','payloadRef','sources','requestDigest'])
+      const task = db.prepare('SELECT requirement_ref,requirement_revision FROM business_tasks WHERE task_id=?').get(a.taskId)
+      if (!task || task.requirement_ref !== a.expectedRequirementRef || task.requirement_revision !== a.expectedRequirementRevision) fail('TASK_REQUIREMENT_STALE')
+      ref(a.payloadRef, 'payloadRef'); digest(a.requestDigest, 'requestDigest')
+      if (!Array.isArray(a.sources) || !a.sources.length) fail('TASK_AUTHORIZATION_SOURCE_STALE')
+      for (const source of a.sources) {
+        object(source, ['sourceKey','sourceVersion','actorId','bodyDigest'])
+        const row = db.prepare('SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=r.source_version WHERE r.source_key=?').get(source.sourceKey)
+        const current = row && JSON.parse(row.body)
+        if (!current || current.status === 'superseded' || current.sourceVersion !== source.sourceVersion || current.actorId !== source.actorId
+          || createHash('sha256').update(canonical(current.body)).digest('hex') !== source.bodyDigest) fail('TASK_AUTHORIZATION_SOURCE_STALE')
+      }
+      if (db.prepare("SELECT 1 FROM task_owners WHERE task_id=? AND status='running'").get(a.taskId)
+        || db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND status='accepted' AND application_status='pending'").get(a.taskId)
+        || db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND (workflow_id<>'task-investigation' OR status NOT IN ('waiting','failed','succeeded'))").get(a.taskId)
+        || db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
+        || db.prepare("SELECT 1 FROM execution_inputs i JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND i.status='pending'").get(a.taskId)
+        || db.prepare('SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').get(a.taskId)
+        || db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND workflow_id<>'task-investigation' AND status<>'invalidated'").get(a.taskId)) fail('TASK_AUTHORIZATION_REPAIR_NOT_DRAINED')
+      const updated = reduceTaskPlanCommand(db, { kind: 'task.requirement.update', args: { taskId:a.taskId,
+        expectedRequirementRevision:a.expectedRequirementRevision, requirementRef:a.requirementRef } }, context(value.id, now))
+      const event = reduceTaskOwnerCommand(db, { kind: 'task.owner.event', args: { taskId:a.taskId, eventKey:a.eventKey,
+        eventType:'authorization.projection.repaired', payloadRef:a.payloadRef } }, context(value.id, now))
+      combined = { ...updated, eventSeq:event.eventSeq, oldRequirementRef:a.expectedRequirementRef, requestDigest:a.requestDigest }
     } else if (value.kind === 'task.requirement.update') {
       object(value.args, ['taskId', 'expectedRequirementRevision', 'requirementRef', 'eventKey', 'payloadRef'],
         ['taskId', 'expectedRequirementRevision', 'requirementRef', 'eventKey'])

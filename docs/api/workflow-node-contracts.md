@@ -271,3 +271,21 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 仅可重试已落账 blocked、实际执行 failed/drained/read-only 且原因为 `execution_tool_failed` 的 answer；来源过期、成功、未排空、未知效果及运行中通知拒绝。保留旧尝试、旧失败回执，原 commandId 不变，新执行增加 inputVersion 并生成独立结果通知。相同 retryKey/reason 返回已接受结果，不再次执行；更换 reason 必须使用新的明确操作键。维护期仍遵守现有执行领取门禁。返回 HTTP 202 `{runId, commandId, inputVersion, accepted, cached?}`；接纳重试不等于查询成功。
 
 只读answer完成事务将执行inputVersion固化于command.result.inputVersion。结果通知正文与版本来自同一命令结果快照；receipt fact携带commandLeaseEpoch，准备及领取均核对当前已完成命令的租约和inputVersion。旧失败快照不能占用新执行结果的通知身份。
+
+### 原来源阶段授权投影修复
+
+`POST /tasks/:taskId/repair-stage-authorizations` 仅接受本机 Web 身份。请求：`repairKey`、`reason`、`expectedRequirementRevision`、`expectedRequirementRef`、`stageAuthorizations[]`；每项必须有 `workflowId/sourceKey/sourceVersion/sourceQuote/objective/gate`，gate 为 `none` 或 `confirmation`。确认人由原来源 actor 绑定，调用者不能替换。
+
+入口只替换既有 requirement 的 stageAuthorizations；逐字核对当前原来源并在事务内复查版本、actor、正文摘要及旧 requirement CAS。只允许没有外部阶段/效果、运行或未排空执行的只读任务；旧Task、失败和回执保留。固定 `authorization.projection.repaired` 事件的 payloadRef 保存原/新requirement引用、来源摘要及修复原因。同repairKey同参数回读原结果，异参冲突。
+
+外部阶段的授权必须明确 objective 和 gate，二者与计划精确匹配。缺字段的历史授权不能作为通配授权；sourceInstructions 原文仍保留供只读调查及审计。这是遗漏投影修复，不是用户新要求或审批批准。
+
+授权投影修复使 requirementRevision 递增而旧 planRequirementRevision 保留。后续必须走 Owner 正常重评计划，保留失败旧run并建立同Task新阶段；`retry-investigation` 在两版本不等时拒绝，即使调用者携带新的CAS也不能复用旧计划。未改变requirement的纯读取范围修复仍可原run重试。
+
+### 只读 Owner 再评估
+
+`POST /tasks/:taskId/reassess-readonly` 仅本机 Web 身份且有任务访问权可调用。参数仅为 `recoveryKey/reason/expectedOwnerRevision/expectedLeaseEpoch/expectedRequirementRevision/expectedControlRevision`。禁止传入材料、权限、替代 requirement 或来源正文。Host 按当前 requirement 验证材料可读范围与旧 scope 缺口，记录固定 `system.recovery` 事件；这不证明远端查询成功。
+
+仅 active 控制态、idle/blocked Owner 无在途决定、存在已失败/等待的只读调查、所有节点排空且无 pending input、外部阶段或 effect 可接受。事务 CAS 与来源摘要复查；同key同参数回读，异参冲突。保留 Task/session、requirement 和失败产物；Owner 接收新事实后正常决定计划与执行，不把系统恢复等同于新业务要求、测试确认或审批。
+
+`reassess-readonly` 可在同一事务中原生discard已知无效果的非法 `repairCurrentStage` 动作：仅当前租约的 application blocked 且 Owner 最后错误严格等于 `WORKFLOW_REPAIR_NOT_ADMITTED`。仍要求完整CAS、只读失败排空、无effects和其他在途动作。其他错误或pending动作拒绝；返回 `discardedTurnId`，原decision、应用失败次数、报告仍保留为discarded，再记录system.recovery。不修改requirement。

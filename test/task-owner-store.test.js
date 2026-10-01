@@ -456,3 +456,28 @@ test('Owner受管恢复拒绝未知错误和未应用候选', () => {
   } finally { f.db.close() }
  }
 })
+
+for(const mode of ['known','unknown','pending','effect','running'])test(`原生discard仅封存明确未执行的blocked修复动作：${mode}`,()=>{
+ const f=fixture()
+ try{
+  f.db.exec("CREATE TABLE execution_runs(run_id TEXT,task_id TEXT,workflow_id TEXT,status TEXT); CREATE TABLE execution_nodes(run_id TEXT,drained INTEGER,status TEXT); CREATE TABLE execution_effects(run_id TEXT); CREATE TABLE execution_inputs(run_id TEXT,status TEXT)")
+  f.db.prepare("UPDATE task_plan_stages SET workflow_id='task-investigation' WHERE task_id='task-1'").run()
+  f.db.prepare("INSERT INTO execution_runs VALUES('r','task-1','task-investigation',?)").run(mode==='running'?'running':'failed')
+  f.db.prepare("INSERT INTO execution_nodes VALUES('r',?,?)").run(mode==='running'?0:1,mode==='running'?'running':'failed')
+  if(mode==='effect')f.db.prepare("INSERT INTO execution_effects VALUES('r')").run()
+  f.send('task.owner.event',{taskId:'task-1',eventKey:'created',eventType:'task.created'})
+  f.send('task.owner.claim',{taskId:'task-1',turnId:'turn-1',expectedLeaseEpoch:0})
+  f.send('task.owner.sessionBound',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1,sessionId:'session-1'})
+  const decision={action:'repairCurrentStage',summary:'非法阶段修复',evidenceRefs:[],repair:{stageId:'stage-1',runId:'r',generation:1,runRevision:0,requirementRevision:1}}
+  f.send('task.owner.candidate',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1,decision})
+  f.send('task.owner.accept',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1})
+  if(mode!=='pending')for(let n=0;n<3;n++)f.send('task.owner.action.fail',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1,reason:mode==='unknown'?'UNKNOWN_FAILURE':'WORKFLOW_REPAIR_NOT_ADMITTED'})
+  const discard=()=>f.send('task.owner.discard',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1,reason:'WORKFLOW_REPAIR_NOT_ADMITTED'})
+  if(mode==='known'){
+   assert.equal(discard().status,'discarded')
+   const turn=f.db.prepare("SELECT * FROM task_owner_turns WHERE turn_id='turn-1'").get()
+   assert.equal(turn.application_status,'discarded');assert.equal(turn.application_failures,3);assert.deepEqual(JSON.parse(turn.decision_json),decision)
+   assert.equal(f.read('task.owner').sessionId,'session-1')
+  }else assert.throws(discard,/TASK_OWNER_ACTION_ALREADY_APPLIED|TASK_OWNER_ACTION_STILL_CURRENT|TASK_OWNER_DISCARD_UNSAFE/)
+ }finally{f.db.close()}
+})

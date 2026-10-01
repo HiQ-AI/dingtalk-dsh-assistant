@@ -605,7 +605,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         expectedOutputRef,eventId:answer.eventId,answerDigest:executionDigest(answer)})
       schedule(runId);return receipt
     },
-    async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision, repair, repairAdmission }) {
+    async changeInput({ commandId, runId, inputId, sourceKey, input, expectedRevision, repair, repairAdmission, readonlyRecovery }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       const state = await query(runId)
       if (repair) {
@@ -615,7 +615,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         repair = { ...repair, workflowDigest }
       }
       const requirement = await artifacts.put(input, { reference: state.run.requirementRef })
-      const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref, ...(expectedRevision === undefined ? {} : { expectedRevision }), ...(repair ? { repair } : {}) })
+      const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref, ...(expectedRevision === undefined ? {} : { expectedRevision }), ...(repair ? { repair } : {}), ...(readonlyRecovery ? { readonlyRecovery } : {}) })
       if (!receipt.replayed && receipt.result.accepted !== false) { interrupt(runId); schedule(runId) }
       return receipt
     },
