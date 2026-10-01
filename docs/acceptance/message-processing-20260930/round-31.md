@@ -105,3 +105,9 @@ PID15560 重放12源均消费、十个fact同一话题、两条闲聊静默、�
 本轮只产生一个 pending 预分配任务 ID，维护期间未真正创建 Task，无执行效果和群通知。原生零副作用预检及精确清理完成：12源、12版本、36项、10关联，协调 session 原子轮换；原始12条重新接纳。角色指引修改后原生会话与协调测试31/31通过。
 
 无备份包 SHA256 `4cac4c95c048203fdd91d18d25b99690ef879936233d21784edd53da53bf9404`，新PID34992，121文件与保留历史回读通过，认证 Web 回读200，维护231解除。实际 Task、材料、通知验收继续进行，A14暂不改绿。原始消息/私人运行日志仅留本机 `docs/tmp/message-processing-deploy/round31-handoff-deployment/`。
+
+### 补充动作可选字段的落账一致性
+
+实际原生提交按当前 schema 省略 fact 的可选 kind，Zod 校验通过，但协调代码将 undefined 写入 topic.facts，持久事务的 JSON 校验报 INVALID_ARGUMENT，未创建 Task、未发送通知。协调提交现在对省略 kind 的 fact 按 fact 落账，显式 constraint 不变；命令与话题使用同一值。材料关联错误另明确返回创建来源和目标候选，避免模型将附件绑定自身后反复纠正。
+
+新增两项原生持久回归验证默认 fact 与显式 constraint 的事务接纳、派发和话题事实；完整原生会话及协调33/33通过。旧轮次经已认证原生 session.cancel 取消，独立维护回读确认零忙碌后封存233，未伪造排空。原进程停止后无备份精确包安装：SHA256 `1abeaae5d9ae091bd8a6c98e4cfa0e9073c26fedb0fed98327e1602efe148ddc`，新PID33980，121文件、保留历史与认证 Web 回读通过，维护234解除。原始12源保持同一版本及session，继续实际承接验收。

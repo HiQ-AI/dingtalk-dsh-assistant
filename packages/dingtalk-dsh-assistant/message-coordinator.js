@@ -157,10 +157,11 @@ export function createMessageCoordinator({ ctx, store, context, modelConfig, get
           if (action.intent === 'no_action') continue
           const taskId = ['create', 'research'].includes(action.intent) ? `task-${digest(ids[actionIndex]).slice(0, 32)}`
             : ['answer', 'cancel_answer', 'clarification', 'approval', 'no_action'].includes(action.intent) ? null : card?.taskId ?? null
-          commands.push({ commandId: ids[actionIndex], kind: action.intent, args: { taskId, arguments: action.arguments,
+          const actionArguments = action.intent === 'fact' ? { ...action.arguments, kind: action.arguments.kind ?? 'fact' } : action.arguments
+          commands.push({ commandId: ids[actionIndex], kind: action.intent, args: { taskId, arguments: actionArguments,
             binding: actionBinding, constraints, requiredExecutionMaterials: intent.requiredExecutionMaterials, replyPolicy: intent.replyPolicy },
             dependsOn: action.dependsOn.map(dep => ids[dep]) })
-          if (action.intent === 'fact') topic.facts.push({ kind: action.arguments.kind, text: action.arguments.text,
+          if (action.intent === 'fact') topic.facts.push({ kind: actionArguments.kind, text: actionArguments.text,
             sourceRefs: [{ sourceKey: run.sourceKey, sourceVersion: run.sourceVersion, text: run.body }] })
         }
         for (const constraint of intent.constraints) topic.facts.push({ kind: 'constraint', text: constraint,
@@ -179,7 +180,7 @@ export function createMessageCoordinator({ ctx, store, context, modelConfig, get
           if (owner.runId === decision.runId) continue
           const ownerDecision = decisions.find(item => item.runId === owner.runId)
           if (!ownerDecision.units.some(item => item.topic?.topicId === unit.topic?.topicId && item.commands.some(command => command.kind === 'fact')))
-            throw fail('GROUP_COORDINATOR_MATERIAL_SOURCE_UNBOUND', `resourceRef=${ref};sourceRunId=${owner.runId};需将材料来源作为fact关联创建目标，不能units=[]忽略。`)
+            throw fail('GROUP_COORDINATOR_MATERIAL_SOURCE_UNBOUND', `resourceRef=${ref};sourceRunId=${owner.runId};targetSourceRunId=${decision.runId};材料来源的fact必须关联创建动作所在事项；首单元创建时使用binding={disposition:conversation,candidateId:source:${decision.runId}}，不是绑定材料来源自身。`)
         }
       }
     }

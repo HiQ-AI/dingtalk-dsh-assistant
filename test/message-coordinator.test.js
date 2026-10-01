@@ -287,7 +287,8 @@ for (const mention of ['required', 'objective']) test(`同批引用附件来源�
     taskDecision.units[0].intent.actions=[{intent:'research',arguments:{objective:'核对生产现状',workflowId:'task-investigation'},dependsOn:[]}]
     taskDecision.units[0].intent.requiredExecutionMaterials=mention==='required'?['sql-file']:[]
     if(mention==='objective')taskDecision.units[0].intent.actions[0].arguments.objective='核对附件fileId=sql-file，调查生产现状'
-    await assert.rejects(args.onCandidate(candidate),{code:'GROUP_COORDINATOR_MATERIAL_SOURCE_UNBOUND'}); rejected++
+    await assert.rejects(args.onCandidate(candidate), error => error.code === 'GROUP_COORDINATOR_MATERIAL_SOURCE_UNBOUND'
+      && error.message.includes('targetSourceRunId=request') && error.message.includes('candidateId:source:request')); rejected++
     fileUnit.intent.actions=[{intent:'fact',arguments:{kind:'fact',text:file.body},dependsOn:[]}];fileUnit.intent.replyPolicy='none'
     fileDecision.units=[fileUnit]
     await assert.rejects(args.onCandidate(candidate),{code:'GROUP_COORDINATOR_MATERIAL_SOURCE_UNBOUND'}); rejected++
@@ -397,4 +398,23 @@ test('附件身份只匹配参数完整ID，嵌套字段可见且不把前缀或
  const attachments=[{resourceRef:'file-a',fileId:'file-a'},{source:{resourceId:'file-b'}},{resourceRef:'unrelated'}]
  assert.deepEqual(referencedResourceIds({objective:'引用 fileId=file-a，继续核对',nested:{constraints:['file-b']}},attachments),['file-a','file-b'])
  assert.deepEqual(referencedResourceIds({objective:'file-a-more prefixfile-b 与 ordinary'},attachments),[])
+})
+
+for (const kind of [undefined, 'constraint']) test(`补充动作的可选kind正常落账并派发：${kind ?? 'fact'}`, async t => {
+  let received
+  const f = await fixture(t, true, {
+    transformDecision(decision) {
+      const unit = decision.decisions[0].units[0]
+      unit.intent.actions = [{ intent: 'fact', arguments: { text: '原需求中的补充条件', ...(kind ? { kind } : {}) }, dependsOn: [] }]
+      unit.intent.replyPolicy = 'none'
+    },
+    handlers: { fact: async action => { received = action.arguments; return { status: 'completed' } } },
+  })
+  await f.receive(`fact-kind-${kind ?? 'default'}`, '原需求中的补充条件')
+  const state = await f.workflow.state(`fact-kind-${kind ?? 'default'}`)
+  assert.equal(state.commands[0].status, 'applied')
+  assert.equal(state.commands[0].args.arguments.kind, kind ?? 'fact')
+  assert.equal(received.kind, kind ?? 'fact')
+  const topic = await f.store.query({ kind: 'message.topic', topicId: state.units[0].topicId })
+  assert.ok(topic.facts.some(fact => fact.kind === (kind ?? 'fact') && fact.text === '原需求中的补充条件'))
 })
