@@ -262,7 +262,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
       // 旧终态仍可读原引用；未绑定合同不能套当前领域扩展。
       return context.contract?.readArtifacts ? context.contract.readArtifacts(context) : {}
     },
-    async authorizeCompletion({ taskId, decision, plan, requirement }) {
+    async authorizeCompletion({ taskId, decision, plan, requirement, signal }) {
       if (decision && typeof decision === 'object') verifiedDecisions.delete(decision)
       if (!plan?.stages.length || plan.task.status !== 'succeeded'
         || plan.task.planRequirementRevision !== plan.task.requirementRevision
@@ -315,7 +315,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
         const sharedItems = acceptanceItems.map(item => ({ ...item,
           evidenceRefs: decision.assessments.find(value => value.itemId === item.itemId).evidenceRefs }))
         const sharedRefs = new Set(sharedItems.flatMap(item => item.evidenceRefs))
-        const sharedContext = { requirement: { ...domainRequirement, acceptanceItems: sharedItems },
+        const sharedContext = { requirement: { ...domainRequirement, acceptanceItems: sharedItems, signal },
           decision: { ...domainDecision, evidenceRefs: [...sharedRefs], assessments: sharedItems.map(item => ({
             itemId: item.itemId, status: 'satisfied', evidenceRefs: item.evidenceRefs })) },
           stages: semanticStages.filter(item => [item.stage.outputRef, ...(item.stage.evidenceRefs ?? [])].some(ref => sharedRefs.has(ref))),
@@ -328,7 +328,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
           const general = policy?.id === 'general-capability-result' && policy.version === '2'
           if (!policy || await policy.validateCompletion({ ...context, requirement: domainRequirement,
             decision: domainDecision, stages: domainStages, acceptanceItems: general ? [] : acceptanceItems,
-            verifyAcceptance: verifyDomain }) !== true) return false
+            verifyAcceptance: verifyDomain, signal }) !== true) return false
           // 已冻结的通用合同内置领域验收；保留其效果检查，在此用显式绑定证据完成语义验收。
           if (general && acceptanceItems.length && (!verifyDomain || await verifyDomain() !== true)) return false
         }

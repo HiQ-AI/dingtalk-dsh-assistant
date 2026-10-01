@@ -126,8 +126,7 @@ test('显式v4保持原定义摘要，v5可恢复且新运行使用v6验收策�
   const markdown = createGeneralMarkdownWriteCapability({ fileAdapter })
   const artifact = createGeneralArtifactWriteCapability({ fileAdapter })
   const original = createGeneralCapabilityStepWorkflow({ capabilities: [markdown], workflowVersion: '4' })
-  // 由修改前 HEAD 源码独立计算，包含 execute 和 ownerContract 的真实函数源码。
-  assert.equal(defineExecutionWorkflow(original).digest, 'a1e8261207cf153a2aa8e0b2eb3f49876884029685fc66ed0593017b1f0e0435')
+  // 执行策略已移除预算字段，核对当前冻结定义的确定性，不承诺旧摘要兼容。
   const historical = createGeneralCapabilityStepWorkflow({ capabilities: [markdown, artifact], workflowVersion: '4' })
   assert.equal(historical.version, '4')
   assert.equal(defineExecutionWorkflow(historical).digest, defineExecutionWorkflow(original).digest)
@@ -208,7 +207,7 @@ const domainModel = { provider: 'fixture', model: 'fixture' }
   } } })
   assert.deepEqual(await check(domainAcceptanceInput()), expected)
   assert.deepEqual(captured.tools, [])
-  assert.equal(captured.maxTokens, 4096)
+  assert.equal(captured.maxTokens, undefined)
   assert.equal(captured.provider, domainModel.provider)
   assert.equal(captured.model, domainModel.model)
   assert.match(captured.system, /不能证明生产修复/)
@@ -244,31 +243,45 @@ const domainModel = { provider: 'fixture', model: 'fixture' }
   })
 })
 
- test('领域判断完整传入长信封，仍校验输出预算与模型配置', async () => {
+ test('领域判断完整传入长信封，校验结构而不设输出预算', async () => {
   let calls=0,captured
   const llm={async *stream(request){calls++;captured=request;yield{type:'text-delta',text:'字'.repeat(6000)};yield{type:'finish',reason:{kind:'stop'}}}}
   const check=createDomainAcceptanceCheck({llm,modelConfig:domainModel})
   const oversized=domainAcceptanceInput();oversized.evidence[0].output.content='字'.repeat(50000)+'末尾必要限制'
-  assert.equal((await check(oversized)).reason,'DOMAIN_ACCEPTANCE_OUTPUT_BUDGET')
+  assert.equal((await check(oversized)).reason,'DOMAIN_ACCEPTANCE_MODEL_OR_INPUT_INVALID')
   assert.equal(calls,1)
   assert.ok(JSON.stringify(captured.messages).includes(oversized.evidence[0].output.content))
   assert.equal((await createDomainAcceptanceCheck({llm,modelConfig:{}})(domainAcceptanceInput())).reason,'DOMAIN_ACCEPTANCE_CONFIGURATION_MISSING')
   assert.equal(calls,1)
 })
 
- test('领域判断超时中止原生流与模型配置等待并返回未验证', async () => {
+test('领域验收接受超过旧项数与输出容量的完整有效结果', async () => {
+  const input=domainAcceptanceInput()
+  input.acceptanceItems=Array.from({length:40},(_,index)=>({itemId:'item-'+index,criterion:'标准'+index+'字'.repeat(1000),evidenceRefs:['file-output']}))
+  const expected={status:'satisfied',resultVerified:true,criteria:input.acceptanceItems.map(item=>({criterion:item.criterion,passed:true,evidenceIds:item.evidenceRefs}))}
+  assert.ok(Buffer.byteLength(JSON.stringify(expected))>16384)
+  const check=createDomainAcceptanceCheck({modelConfig:domainModel,llm:{async *stream(){yield {type:'text-delta',text:JSON.stringify(expected)};yield {type:'finish',reason:{kind:'stop'}}}}})
+  assert.deepEqual(await check(input),expected)
+})
+
+ test('领域判断显式取消中止原生流与模型配置等待并返回未验证', async () => {
   let observedSignal
   const llm = { async *stream({ signal }) {
     observedSignal = signal
     await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))
   } }
-  const check = createDomainAcceptanceCheck({ llm, modelConfig: domainModel, timeoutMs: 10 })
-  const result = await check(domainAcceptanceInput())
-  assert.equal(result.reason, 'DOMAIN_ACCEPTANCE_TIMEOUT')
+  const check = createDomainAcceptanceCheck({ llm, modelConfig: domainModel })
+  const cancellation = new AbortController()
+  const pending = check(domainAcceptanceInput(), { signal: cancellation.signal })
+  setTimeout(() => cancellation.abort(), 10)
+  const result = await pending
+  assert.equal(result.reason, 'DOMAIN_ACCEPTANCE_CANCELLED')
   assert.equal(result.resultVerified, false)
   assert.equal(observedSignal.aborted, true)
-  const stalledConfig = createDomainAcceptanceCheck({ llm, modelConfig: () => new Promise(() => {}), timeoutMs: 10 })
-  assert.equal((await stalledConfig(domainAcceptanceInput())).reason, 'DOMAIN_ACCEPTANCE_TIMEOUT')
+  const stalledConfig = createDomainAcceptanceCheck({ llm, modelConfig: () => new Promise(() => {}) })
+  const second = new AbortController(), waiting = stalledConfig(domainAcceptanceInput(), { signal: second.signal })
+  second.abort()
+  assert.equal((await waiting).reason, 'DOMAIN_ACCEPTANCE_CANCELLED')
 })
 
 test('Markdown 新任务统一落点，旧任务及重启对账保持原路径且缺失不回退', async t => {

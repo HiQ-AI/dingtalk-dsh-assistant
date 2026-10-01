@@ -198,19 +198,9 @@ IB 可返回 `factRevisions: [{ factId, sourceQuote, scope }]`。Host 只接受�
 
 确认不增加任务要求版本，不修改冻结流程，不启动外部操作。接纳后的 `approval.resolved` 事件保留 actor、确认正文和精确阶段身份，唤醒 Owner 决定是否推进；每个后续 confirmation 阶段必须单独确认。任何未收到的用户回复都不能构造为确认请求。
 
-## Web Run 预算续行接口
+## 持续执行与取消
 
-`POST /tasks/{taskId}/continue-budget` 沿用阶段确认的本机来源和受信 `webActorId`，通过 `submitWorkflowTask` 耐久接纳。请求是严格对象，仅允许：
-
-| 字段 | 约束 |
-| --- | --- |
-| requestId | 非空字符串，最多 200 字符 |
-| continuationText | 用户明确续行正文，非空字符串，最多 16000 字符 |
-| budgetBinding | 原样提交当前任务投影的 `budgetContinuation`，严格对象 |
-
-`budgetBinding` 必须包含非空字符串 `taskId`、`controlState`、`stageId`、`runId`、`workflowDigest`、`nodeRunId`、`nodeId`（每项最多 200 字符）；正整数 `requirementRevision`、`planRevision`、`generation`、`maxClaims`；非负整数 `controlRevision`、`runRevision`、`leaseEpoch`、`claimCount`。主体 taskId 取自 URL，服务与控制账校验绑定 taskId 一致。客户端不得传入 actor 或任意追加额度，也不能拼造不存在的用户授权。
-
-Host 按剩余节点数 × 3 计算额度，同 Run 只准一次，保留原累计次数、候选与已完成验收。重复相同请求读回原回执；内容冲突、过期绑定、已续行、非预算等待或其他续行门禁失败返回 409（`RUN_BUDGET_CONTINUATION_*`）；受信来源或 actor 失败返回 403；非法字段和正文返回 400。202 代表接纳，不代表后续节点成功。再次预算耗尽不自动续费。
+Run 不设累计领取上限；`claimCount` 仅为统计。已删除 `continue-budget` 接口、`budgetContinuation` 投影与 `maxClaims`。正常执行持续至节点结束；暂态故障按持久依赖状态恢复，真实输入或权限等待不消耗失败机会。受信用户取消仍校验来源和当前版本，并取消 Owner 与节点会话、确认排空。
 
 ## 任务汇总与当前完整详情
 
@@ -246,7 +236,7 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 消息S节点支持 `{kind: "no_action", reason, coverage: [{start,end}]}`：仅用于无待办的语义判断，Host核对全文覆盖与成功S节点后结束；不建立事项、话题或任务。若冻结来源保存了 `replyObligation.required`，通知 Host 仍履行一次回应义务，不能把无任务等同无需回应。message.no_action不接受有事项/命令/待补请求/屏障或修订的运行。
 
-收信箱 `workflowStatus` 区分 `waiting_clarification`（用户需补充）、`waiting_context`（助手读取材料）、`waiting_system`（读取重试耗尽，需维护恢复）；真正处理失败仍为 `routing_blocked`。`waiting_routing_barrier` 仅表示当前事项的相关输入待核对，不表示全群排空。`workflowStatusDetail` 保留实际问题或原因。
+收信箱 `workflowStatus` 区分 `waiting_clarification`（用户需补充）、`waiting_context`（助手读取材料）、`waiting_system`（真实系统阻塞，需恢复依赖）；真正处理失败仍为 `routing_blocked`。`waiting_routing_barrier` 仅表示当前事项的相关输入待核对，不表示全群排空。`workflowStatusDetail` 保留实际问题或原因。
 
 每条消息另外返回以下只读事实，不以通知是否送达改写业务处理状态：
 
@@ -259,7 +249,7 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 ### 内部材料受管重试
 
-`POST /workflows/:runId/requests/:requestId/retry` 仅接受本机回环地址、允许的 Origin 与已配置 Web 操作者身份。请求体为 `{sourceVersion, reason, dependencyRevision}`，不得提交 actorId 或伪造材料正文。只可恢复当前来源版本下已耗尽自动尝试的内部 `needs_context`；业务澄清仍走原 `/answer`。
+`POST /workflows/:runId/requests/:requestId/retry` 仅接受本机回环地址、允许的 Origin 与已配置 Web 操作者身份。请求体为 `{sourceVersion, reason, dependencyRevision}`，不得提交 actorId 或伪造材料正文。只可恢复当前来源版本下处于 pending 且有真实读取失败的内部 `needs_context`；业务澄清仍走原 `/answer`。
 
 `dependencyRevision` 记录本次能力修复或材料更新的明确版本，相同版本不重复清零。保留原 request 身份及 retryHistory，清除 blocked 后调用真实材料读取恢复；返回 request 的实际状态，重试不保证 ready、不重放 Task 或外部效果。不允许定时器自行更换版本无限清零。
 
@@ -312,8 +302,10 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 系统错误通知仅在需要人工介入、自动恢复无法推进时发送，固定为“处理遇到系统问题，无法继续推进，需要人工介入。”，按群职责加代回署名。内部读取重试、可自动恢复的deadline/容量重试不发送该通知。同阻塞不因technical reason或消息版本变化重发；Owner应用受阻以同Task上一次已成功工作流事件分隔阻塞，不能靠重复Owner轮次再次发送。实际归类等待只给简洁核对进度，不复述来源正文或添加“无需重复提交”措辞。文案升级不补发历史通知。
 
-系统等待通知的准备与领取均检查仍可自动推进的命令、节点及材料请求；材料重试尚未耗尽或仍有在途工作时不发送人工介入提示。Owner 应用阻塞通知领取在同一事务内检查同 Task 自最近 workflow.succeeded 以来的 sending/unknown/acknowledged/delivered 通知，重复 prepared 不会再次外发；旧 report 仍须通过最新报告及需求版本校验。
+系统等待通知的准备与领取均检查仍可自动推进的命令、节点及材料请求；材料读取仍可自动推进或仍有在途工作时不发送人工介入提示。Owner 应用阻塞通知领取在同一事务内检查同 Task 自最近 workflow.succeeded 以来的 sending/unknown/acknowledged/delivered 通知，重复 prepared 不会再次外发；旧 report 仍须通过最新报告及需求版本校验。
 
 通知回读不再允许任意包含预期正文：完整正文须匹配，仅当引用消息 ID 和会话匹配原来源时，允许移除回读中的单个 `@引用发送人 ` 前缀；短正文同样适用，额外正文或错误发送人仍拒绝。已删除 Task 必须有 `task.deleted` 审计墓碑，扫描停止生成承接及生命周期通知，prepare 拒绝 TASK_DELETED，claim 将相关旧 prepared 标记 superseded；未知真实缺失不按删除处理。
 
-Owner连续释放失败而未产生report时，通知仍读取真实Owner阻塞事实：Owner须blocked、失败预算耗尽、无当前turn、最后turn为未接纳的released，Task控制仍active且无pending/ready/running阶段。通过现有owner:application_wait唯一出口使用固定人工介入正文；准备和领取均复核，不伪造Owner报告。暂态重试不告知，恢复前同阻塞只告知一次，实际成功后的新阻塞可开启新一次。
+Owner真实阻塞释放而未产生report时，通知仍读取真实Owner阻塞事实：Owner须blocked、无当前turn、最后turn为未接纳的released，Task控制仍active且无pending/ready/running阶段。通过现有owner:application_wait唯一出口使用固定人工介入正文；准备和领取均复核，不伪造Owner报告。暂态重试不告知，恢复前同阻塞只告知一次，实际成功后的新阻塞可开启新一次。
+
+PR预检暂态失败仅在Host适配器通过完整本地日志独立证明同一冻结操作从未发送时进入持久退避。原节点新lease恢复同effect，原生事务核对失败收据、冻结摘要、操作身份、权限、资源占用及安全屏障后重新取得发送许可。已有send-intent、结果未知或无完整证明时只对账，不重新发送；模型不能提交未发送证明。每次dispatch lease独立记录观察收据，避免重复失败结果被旧回执吞掉。

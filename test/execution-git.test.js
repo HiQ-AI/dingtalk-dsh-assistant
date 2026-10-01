@@ -52,8 +52,10 @@ test('没有真实验证ticket或要求版本不符时，提交准备失败且�
   const f = await setup()
   await assert.rejects(f.adapter.prepareCommit({ candidate: f.candidate, verification: structuredClone(f.verification), requiredChecks, date: '1790150400 +0000', message: 'fake' }), { code: 'CANDIDATE_VERIFICATION_UNTRUSTED' })
   await assert.rejects(f.adapter.prepareCommit({ candidate: f.candidate, verification: f.verification, requiredChecks: [{ id: 'content', version: '2' }], date: '1790150400 +0000', message: 'wrong' }), { code: 'CANDIDATE_REQUIRED_CHECKS_MISMATCH' })
-  const oversized = await verifyCandidate({ candidate: f.candidate, checks: [{ ...requiredChecks[0], run: async () => ({ passed: true, log: 'x'.repeat(65536) }) }] })
-  await assert.rejects(f.adapter.prepareCommit({ candidate: f.candidate, verification: oversized, requiredChecks, date: '1790150400 +0000', message: 'oversized evidence' }), { code: 'GIT_PREPARED_TOO_LARGE' })
+  const oversized = await verifyCandidate({ candidate: f.candidate, checks: [{ ...requiredChecks[0], run: async () => ({ passed: true, log: 'x'.repeat(120000) }) }] })
+  const prepared=await f.adapter.prepareCommit({ candidate: f.candidate, verification: oversized, requiredChecks, date: '1790150400 +0000', message: '完整验证证据' })
+  assert.equal(prepared.verification.checks[0].log,oversized.checks[0].log)
+  assert.ok(Buffer.byteLength(JSON.stringify(prepared))>65536)
   await assert.rejects(git(f.repository, 'show-ref', '--verify', 'refs/heads/delivery'))
 })
 test('准备后本地ref改变，CAS拒绝且保留外部ref', async () => {
@@ -91,4 +93,10 @@ test('仅准入Host显式HTTPS/SSH或本地remote，拒绝危险协议/hooks', a
   await writeFile(join(f.repository, '.git', 'hooks', 'pre-commit'), '# synthetic hook')
   await assert.rejects(f.adapter.executeCommit(prepared), { code: 'GIT_HOOKS_UNSUPPORTED' })
   await assert.rejects(git(f.repository, 'show-ref', '--verify', 'refs/heads/delivery'))
+})
+
+test('Git交付显式取消不建立ref，错误后仍保留独立回读能力', async () => {
+  const f=await setup(), controller=new AbortController();controller.abort()
+  await assert.rejects(f.adapter.prepareCommit({candidate:f.candidate,verification:f.verification,requiredChecks,date:'1790150400 +0000',message:'cancelled'}, {signal:controller.signal}), {name:'AbortError'})
+  await assert.rejects(git(f.repository,'show-ref','--verify','refs/heads/delivery'))
 })

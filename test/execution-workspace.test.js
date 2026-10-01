@@ -199,3 +199,17 @@ test('v13只重放可信任务起点之后差异，不把main继承内容带到U
   assert.equal(await readFile(join(prepared.directory,'value.txt'),'utf8'),'task fix\n')
   assert.deepEqual((await git(prepared.directory,'diff','--name-only',targetCommit,prepared.mergeTree)).split('\n'),['later-user.txt','value.txt'])
 })
+
+test('受管工作区完整提取超过16MiB的已授权基线文件，取消仍阻断', async () => {
+  const f=await setup(),bytes=Buffer.alloc(17*1024*1024,71)
+  await writeFile(join(f.sourceRepository,'large.bin'),bytes)
+  await git(f.sourceRepository,'add','.');await git(f.sourceRepository,'commit','-m','large fixture')
+  const baseCommit=await git(f.sourceRepository,'rev-parse','HEAD')
+  const prepared=await f.adapter.prepare({...f.input,baseCommit})
+  const aborted=new AbortController();aborted.abort(new Error('explicit-cancel'))
+  await assert.rejects(f.adapter.execute(prepared,{signal:aborted.signal}),/explicit-cancel/)
+  assert.equal((await f.adapter.execute(prepared)).status,'succeeded')
+  assert.deepEqual(await readFile(join(prepared.directory,'large.bin')),bytes)
+  const candidate=await freezeCandidate({repository:prepared.directory,baseCommit,generation:1,requirementDigest:f.input.requirementDigest})
+  assert.deepEqual(await(await readCandidate(candidate)).readFile('large.bin'),bytes)
+})

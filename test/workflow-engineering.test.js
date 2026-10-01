@@ -334,7 +334,7 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   const info = { commandId: 'command', run: { actorId: 'owner' }, unit: { constraints: [], sharedConstraints: [] } }
   for (const uatEnvironment of [null, 'uat0', 'uat10', 'main']) await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, uatEnvironment } }, info, controller), /ENGINEERING_UAT_ENVIRONMENT_REQUIRED/)
   await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, uatEnvironment: 'uat9' } }, info, controller), /ENGINEERING_UAT_BRANCH_NOT_FOUND/)
-  for (const acceptanceCriteria of [Array(33).fill('条件'), [], [' '], ['x'.repeat(2001)], [42], '条件', null])
+  for (const acceptanceCriteria of [[], [' '], ['x'.repeat(2001)], [42], '条件', null])
     await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, acceptanceCriteria } }, info, controller), { code: 'LOCAL_ACCEPTANCE_CRITERIA_REQUIRED' })
   const prepared = await registry.prepareTask(action, info, controller)
   assert.deepEqual(prepared.input.acceptanceCriteria, ['修改value'])
@@ -374,13 +374,13 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   await git(source,'init','-b','main');await git(source,'config','user.name','Test');await git(source,'config','user.email','test@example.invalid')
   await writeFile(join(source,'value.txt'),'old');await git(source,'add','.');await git(source,'commit','-m','base');await exec('git',['init','--bare',remote]);await git(source,'push',remote,'HEAD:refs/heads/feature/uat1-base')
   const head=`codex/task-${executionDigest('revision-command').slice(0,24)}`
-  await writeFile(script,`const fs=require('node:fs'),cp=require('node:child_process');const [file,remote,head,...args]=process.argv.slice(2);let s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;const sha=()=>cp.execFileSync('git',['ls-remote',remote,'refs/heads/'+head],{encoding:'utf8'}).trim().split(/\\s+/)[0];const value=x=>args[args.indexOf(x)+1];if(s)s.headRefOid=sha();if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(args[1]==='list')console.log(JSON.stringify(s?[s]:[]));else if(args[1]==='view')console.log(JSON.stringify(s));else if(['create','edit'].includes(args[1])){s={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:sha(),headRefName:head,baseRefName:'feature/uat1-base',body:fs.readFileSync(value('--body-file'),'utf8'),title:value('--title'),creates:(s?.creates??0)+(args[1]==='create'?1:0),edits:(s?.edits??0)+(args[1]==='edit'?1:0)};fs.writeFileSync(file,JSON.stringify(s));process.exit(1)}else process.exit(2)`)
+  await writeFile(script,`const fs=require('node:fs'),cp=require('node:child_process');const [file,remote,head,...args]=process.argv.slice(2);let s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;const sha=()=>cp.execFileSync('git',['ls-remote',remote,'refs/heads/'+head],{encoding:'utf8'}).trim().split(/\\s+/)[0];const value=x=>args[args.indexOf(x)+1];if(s)s.headRefOid=sha();const rest=p=>({number:p.number,html_url:p.url,state:p.state.toLowerCase(),merged_at:p.state==='MERGED'?'date':null,head:{sha:p.headRefOid,ref:p.headRefName},base:{ref:p.baseRefName},body:p.body});if(args[0]==='api'&&args.includes('--paginate'))console.log(JSON.stringify([s?[rest(s)]:[]]));else if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(args[1]==='list')console.log(JSON.stringify(s?[s]:[]));else if(args[1]==='view')console.log(JSON.stringify(s));else if(['create','edit'].includes(args[1])){s={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:sha(),headRefName:head,baseRefName:'feature/uat1-base',body:fs.readFileSync(value('--body-file'),'utf8'),title:value('--title'),creates:(s?.creates??0)+(args[1]==='create'?1:0),edits:(s?.edits??0)+(args[1]==='edit'?1:0)};fs.writeFileSync(file,JSON.stringify(s));process.exit(1)}else process.exit(2)`)
   const store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'revision',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true});t.after(()=>store.close())
   const profile = join(directory, 'uat-profile.json')
   await writeFile(profile, JSON.stringify({ environment: 'uat', env: { TEST_ACCEPTANCE_PROFILE: 'isolated-test-profile' } }))
   const readInput = "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',async()=>{const input=JSON.parse(s);"
   const command = code => ({ executable: process.execPath, args: ['-e', code] })
-  const localAcceptance = { version: '1', sharedDataProfilePath: profile, timeoutMs: 90000, prepareSteps: [],
+  const localAcceptance = { version: '1', sharedDataProfilePath: profile, prepareSteps: [],
     service: { ...command("require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])"), args: ['-e', "require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])", '{port}', '127.0.0.1'], readyPath: '/' },
     scenarios: [{ id: 'value', description: '读取候选服务业务值', ...command(readInput + "const actual=await(await fetch(input.baseUrl)).text();console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual}));});") }],
     cleanup: command(readInput + "console.log(JSON.stringify({namespace:input.namespace}));});"),
@@ -495,53 +495,63 @@ test('本地验收经 delivery 对共享 UAT 加锁，另一个 Run 在首个排
 })
 
 
-test('远端引用只读重试：超时后成功，命令身份与15秒边界保持', async () => {
-  const calls = [], waits = [], args = ['ls-remote', '--refs', '--', 'https://github.com/example/repo.git', 'refs/heads/feature/uat2-base']
-  const value = await readEngineeringRemoteRefs('D:/fixture', args, {
-    execImpl: async (file, received, options) => { calls.push({ file, received, options });
-      if (calls.length < 3) throw Object.assign(Error('private remote'), { code: null, killed: true, signal: 'SIGTERM' })
-      return { stdout: `${'a'.repeat(40)}\trefs/heads/feature/uat2-base\n` } }, delay: async ms => waits.push(ms),
-  })
-  assert.equal(value, `${'a'.repeat(40)}\trefs/heads/feature/uat2-base`)
-  assert.equal(calls.length, 3); assert.deepEqual(waits, [250, 500])
-  for (const call of calls) { assert.equal(call.file, 'git'); assert.deepEqual(call.received, ['-C', 'D:/fixture', ...args]); assert.equal(call.options.timeout, 15000) }
+test('远端引用单次读取，无总时长和输出容量截止且保留取消信号',async()=>{
+ const calls=[],args=['ls-remote','--refs','--','remote','refs/heads/a'],controller=new AbortController()
+ const value=await readEngineeringRemoteRefs('fixture',args,{signal:controller.signal,execImpl:async(file,received,options)=>{
+  calls.push({file,received,options});return{stdout:`${'a'.repeat(40)}\trefs/heads/a\n`}
+ }})
+ assert.equal(value,`${'a'.repeat(40)}\trefs/heads/a`);assert.equal(calls.length,1)
+ assert.equal(calls[0].file,'git');assert.deepEqual(calls[0].received,['-C','fixture',...args])
+ assert.equal(calls[0].options.signal,controller.signal);assert.equal(calls[0].options.timeout,undefined);assert.equal(calls[0].options.maxBuffer,undefined)
 })
 
-for (const failure of [
-  { code: null, killed: true, signal: 'SIGTERM' }, { code: 'ECONNRESET' }, { code: 'EAI_AGAIN' },
-  { code: 128, stderr: 'fatal: TLS handshake timeout secret-token' },
-  { code: 128, stderr: 'fatal: The requested URL returned error: 503 secret-token' },
-]) test(`远端引用只读重试耗尽明确暂态 ${JSON.stringify(failure)}`, async () => {
-  let calls = 0
-  await assert.rejects(readEngineeringRemoteRefs('fixture', ['ls-remote', '--refs', '--', 'remote', 'refs/heads/a'], {
-    execImpl: async () => { calls++; throw Object.assign(Error('secret-token'), failure) }, delay: async () => {},
-  }), error => error.code === 'ENGINEERING_REMOTE_READ_TRANSIENT' && !error.message.includes('secret-token'))
-  assert.equal(calls, 3)
+for(const failure of [{code:'ETIMEDOUT'},{code:'ECONNRESET'},{code:'EAI_AGAIN'},
+ {code:128,stderr:'fatal: TLS handshake timeout secret-token'},{code:128,stderr:'fatal: The requested URL returned error: 503 secret-token'},
+])test(`远端引用暂态单次交回持久退避 ${JSON.stringify(failure)}`,async()=>{
+ let calls=0
+ await assert.rejects(readEngineeringRemoteRefs('fixture',['ls-remote','--refs','--','remote','refs/heads/a'],{
+  execImpl:async()=>{calls++;throw Object.assign(Error('secret-token'),failure)},
+ }),error=>error.code==='ENGINEERING_REMOTE_READ_TRANSIENT'&&!error.message.includes('secret-token'))
+ assert.equal(calls,1)
 })
 
-for (const failure of [
-  { code: 128, stderr: 'Authentication failed secret-token' },
-  { code: 128, stderr: 'Permission denied (publickey).' },
-  { code: 128, stderr: 'repository not found' },
-  { code: 128, stderr: 'The requested URL returned error: 403' },
-  { code: 128, stderr: 'SSL certificate problem: unable to get local issuer certificate' },
-  { code: 'ENOENT' }, { code: 128, stderr: 'unknown failure' },
-  { code: 'ETIMEDOUT', stderr: 'Authentication failed' },
-]) test(`远端引用确定性失败不重试 ${JSON.stringify(failure)}`, async () => {
-  let calls = 0
-  await assert.rejects(readEngineeringRemoteRefs('fixture', ['ls-remote', '--refs', '--', 'remote', 'refs/heads/a'], {
-    execImpl: async () => { calls++; throw Object.assign(Error('secret-token'), failure) }, delay: async () => assert.fail('must not retry'),
-  }), error => error.code === 'ENGINEERING_REMOTE_READ_FAILED' && !error.message.includes('secret-token'))
-  assert.equal(calls, 1)
+for(const failure of [{code:128,stderr:'Authentication failed secret-token'},{code:128,stderr:'Permission denied (publickey).'},
+ {code:128,stderr:'repository not found'},{code:128,stderr:'The requested URL returned error: 403'},
+ {code:128,stderr:'SSL certificate problem: unable to get local issuer certificate'},{code:'ENOENT'},
+ {code:128,stderr:'unknown failure'},{code:'ETIMEDOUT',stderr:'Authentication failed'},
+ {code:null,killed:true,signal:'SIGTERM'},
+])test(`远端引用确定性失败不重试 ${JSON.stringify(failure)}`,async()=>{
+ let calls=0
+ await assert.rejects(readEngineeringRemoteRefs('fixture',['ls-remote','--refs','--','remote','refs/heads/a'],{
+  execImpl:async()=>{calls++;throw Object.assign(Error('secret-token'),failure)},
+ }),error=>error.code==='ENGINEERING_REMOTE_READ_FAILED'&&!error.message.includes('secret-token'))
+ assert.equal(calls,1)
 })
 
-test('远端引用分支不存在不重试，写命令不进入读取器', async () => {
-  let calls = 0
-  await assert.rejects(readEngineeringRemoteRefs('fixture', ['ls-remote', '--exit-code', 'remote', 'refs/heads/a'], {
-    execImpl: async () => { calls++; throw Object.assign(Error('missing'), { code: 2 }) }, delay: async () => assert.fail('must not retry'),
-  }), /ENGINEERING_UAT_BRANCH_NOT_FOUND/)
-  assert.equal(calls, 1)
-  for (const action of ['push', 'fetch', 'commit']) await assert.rejects(readEngineeringRemoteRefs('fixture', [action], {
-    execImpl: async () => assert.fail('write must not execute'),
-  }), /ENGINEERING_REMOTE_READ_ARGUMENT_INVALID/)
+test('远端引用分支不存在不重试，写命令不进入读取器',async()=>{
+ let calls=0
+ await assert.rejects(readEngineeringRemoteRefs('fixture',['ls-remote','--exit-code','remote','refs/heads/a'],{
+  execImpl:async()=>{calls++;throw Object.assign(Error('missing'),{code:2})},
+ }),/ENGINEERING_UAT_BRANCH_NOT_FOUND/)
+ assert.equal(calls,1)
+ for(const action of ['push','fetch','commit'])await assert.rejects(readEngineeringRemoteRefs('fixture',[action],{
+  execImpl:async()=>assert.fail('write must not execute'),
+ }),/ENGINEERING_REMOTE_READ_ARGUMENT_INVALID/)
+})
+
+test('真实本地Git引用超过1MiB仍完整读回，取消不会误分类暂态',async t=>{
+ const {rm}=await import('node:fs/promises')
+ const directory=await mkdtemp(join(tmpdir(),'engineering-large-refs-'))
+ t.after(()=>rm(directory,{recursive:true,force:true}))
+ const exec=promisify(execFile),git=async(...args)=>(await exec('git',['-C',directory,...args],{windowsHide:true})).stdout.trim()
+ await git('init','-b','main');await git('config','user.name','Test');await git('config','user.email','test@example.invalid')
+ await writeFile(join(directory,'value.txt'),'base');await git('add','.');await git('commit','-m','base')
+ const sha=await git('rev-parse','HEAD')
+ const refs=Array.from({length:9000},(_,i)=>`refs/heads/large-${String(i).padStart(5,'0')}-${'x'.repeat(100)}`)
+ await writeFile(join(directory,'.git','packed-refs'),refs.map(ref=>`${sha} ${ref}\n`).join(''))
+ const result=await readEngineeringRemoteRefs(directory,['ls-remote','--refs','--',directory,'refs/heads/large-*'])
+ assert.ok(Buffer.byteLength(result)>1024*1024);assert.deepEqual(result.split('\n').map(line=>line.split('\t')[1]),refs)
+ const controller=new AbortController(),reason=Object.assign(Error('requested cancel'),{code:'TASK_CANCELLED'})
+ controller.abort(reason)
+ await assert.rejects(readEngineeringRemoteRefs(directory,['ls-remote',directory],{signal:controller.signal}),error=>error===reason)
 })

@@ -11,9 +11,9 @@ import { installMessageSchema, validateMessageSchema, reduceMessageCommand, reco
 import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, queryTaskPlan, bindRunToTaskStage } from './execution-task-plan.js'
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
-import { transientRecoveryReasons, recoveryRetryLimit, recoveryRetryDelayMs } from './execution-recovery-policy.js'
+import { transientRecoveryReasons, recoveryRetryDelayMs } from './execution-recovery-policy.js'
 
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 const APPLICATION_ID = 0x44534845
 let db, owner, healthy = true
 const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
@@ -52,7 +52,7 @@ function canonical(value) {
 function runDto(r) {
   return r && { runId: r.run_id, taskId: r.task_id, workflowId: r.workflow_id, workflowDigest: r.workflow_digest,
     requirementRef: r.requirement_ref, revision: r.revision, generation: r.generation, status: r.status,
-    stopRequested: !!r.stop_requested, pauseRequested: !!r.pause_requested, recoveryReason: r.recovery_reason, maxClaims: r.max_claims, claimCount: r.claim_count,
+    stopRequested: !!r.stop_requested, pauseRequested: !!r.pause_requested, recoveryReason: r.recovery_reason, claimCount: r.claim_count,
     createdAt: r.created_at, updatedAt: r.updated_at }
 }
 function nodeDto(n) {
@@ -70,22 +70,6 @@ function nodeInputHistory(nodeRunId) {
   return row ? JSON.parse(row.payload) : { inputVersion: 1, inputHistory: [] }
 }
 const terminalRun = r => ['succeeded', 'failed', 'cancelled'].includes(r.status)
-function budgetContinuation(runId) {
-  const r = getRun(runId), current = nodes(runId), index = current.findIndex(n => n.status === 'waiting')
-  const task = db.prepare('SELECT t.*,c.state,c.control_revision FROM business_tasks t JOIN task_controls c USING(task_id) WHERE t.task_id=?').get(r.task_id)
-  const stage = task && db.prepare("SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND run_id=? AND status='running'").get(r.task_id, task.plan_revision, runId)
-  if (!task || !stage || task.state !== 'active' || task.status !== 'active' || task.plan_requirement_revision !== task.requirement_revision
-    || r.status !== 'waiting' || r.stop_requested || r.pause_requested || r.claim_count !== r.max_claims || index < 0
-    || JSON.parse(current[index].wait_reason ?? 'null')?.reference !== 'EXECUTION_BUDGET_EXHAUSTED'
-    || current.some(n => !n.drained) || current.slice(0,index).some(n => n.status !== 'succeeded')
-    || current.slice(index+1).some(n => n.status !== 'blocked' || n.lease_epoch !== 0) || pendingInputs(runId).length
-    || db.prepare("SELECT 1 FROM execution_effects WHERE run_id=? AND state NOT IN ('succeeded','failed') LIMIT 1").get(runId)
-    || db.prepare("SELECT 1 FROM execution_events WHERE kind='run.budget.continued' AND json_extract(payload,'$.runId')=? LIMIT 1").get(runId)) return null
-  return { taskId: r.task_id, controlState: task.state, controlRevision: task.control_revision, requirementRevision: task.requirement_revision,
-    planRevision: task.plan_revision, stageId: stage.stage_id, runId, runRevision: r.revision, generation: r.generation,
-    workflowDigest: r.workflow_digest, nodeRunId: current[index].node_run_id, nodeId: current[index].node_id,
-    leaseEpoch: current[index].lease_epoch, maxClaims: r.max_claims, claimCount: r.claim_count }
-}
 function currentNode(a) {
   const n = db.prepare('SELECT * FROM execution_nodes WHERE run_id=? AND node_id=? AND current=1').get(text(a.runId, 'runId'), text(a.nodeId, 'nodeId'))
   if (!n) fail('NODE_NOT_FOUND')
@@ -130,8 +114,8 @@ function install() {
       schema_version INTEGER NOT NULL, safety_epoch INTEGER NOT NULL DEFAULT 0) STRICT;
     CREATE TABLE execution_runs(run_id TEXT PRIMARY KEY,task_id TEXT NOT NULL,workflow_id TEXT NOT NULL,
       workflow_digest TEXT NOT NULL,requirement_ref TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,
-      generation INTEGER NOT NULL DEFAULT 1 CHECK(generation>0),max_claims INTEGER NOT NULL CHECK(max_claims>0),
-      claim_count INTEGER NOT NULL DEFAULT 0 CHECK(claim_count>=0 AND claim_count<=max_claims),
+      generation INTEGER NOT NULL DEFAULT 1 CHECK(generation>0),
+      claim_count INTEGER NOT NULL DEFAULT 0 CHECK(claim_count>=0),
       status TEXT NOT NULL CHECK(status IN ('queued','running','waiting','succeeded','failed','cancelling','cancelled')),
       stop_requested INTEGER NOT NULL DEFAULT 0 CHECK(stop_requested IN (0,1)),recovery_reason TEXT,
       pause_requested INTEGER NOT NULL DEFAULT 0 CHECK(pause_requested IN (0,1)),
@@ -175,7 +159,7 @@ function validate(connection) {
   if (integrity.length !== 1 || scalar(integrity[0]) !== 'ok') fail('STORE_INTEGRITY_FAILED')
   if (connection.prepare('PRAGMA foreign_key_check').all().length) fail('STORE_FOREIGN_KEY_FAILED')
   for (const sql of [
-    'SELECT run_id,task_id,workflow_id,workflow_digest,requirement_ref,revision,generation,max_claims,claim_count,status,stop_requested,pause_requested,recovery_reason,created_at,updated_at FROM execution_runs LIMIT 0',
+    'SELECT run_id,task_id,workflow_id,workflow_digest,requirement_ref,revision,generation,claim_count,status,stop_requested,pause_requested,recovery_reason,created_at,updated_at FROM execution_runs LIMIT 0',
     'SELECT node_run_id,run_id,node_id,node_version,executor,position,generation,lease_epoch,current,input_ref,input_digest,status,session_id,session_bound,drained,drain_evidence_ref,output_ref,evidence_refs,wait_reason FROM execution_nodes LIMIT 0',
     'SELECT seq,run_id,input_id,source_key,requirement_ref,status,accepted_at,applied_at FROM execution_inputs LIMIT 0',
     'SELECT command_id,payload_digest,result,created_at FROM execution_receipts LIMIT 0',
@@ -224,7 +208,7 @@ function addNode(runId, plan, position, generation, status) {
 function coreCommand(command, now, consumption = {}) {
   const a = command.args
   if (command.kind === 'run.create') {
-    object(a, ['runId', 'taskId', 'workflowId', 'workflowDigest', 'requirementRef', 'nodes', 'maxClaims', 'stageBinding'], ['runId', 'taskId', 'workflowId', 'workflowDigest', 'requirementRef', 'nodes'])
+    object(a, ['runId', 'taskId', 'workflowId', 'workflowDigest', 'requirementRef', 'nodes', 'stageBinding'], ['runId', 'taskId', 'workflowId', 'workflowDigest', 'requirementRef', 'nodes'])
     for (const key of ['runId', 'taskId', 'workflowId']) text(a[key], key)
     assertMessageTaskUnfenced(db,a.taskId,{...consumption,allowRelatedProcessing:consumption.ownerTurnId?'plan':false})
     digest(a.workflowDigest, 'workflowDigest'); ref(a.requirementRef, 'requirementRef')
@@ -245,9 +229,8 @@ function coreCommand(command, now, consumption = {}) {
       taskId: a.taskId, runId: a.runId, workflowId: a.workflowId,
       workflowDigest: a.workflowDigest, requirementRef: a.requirementRef,
     })
-    const maxClaims = integer(a.maxClaims ?? a.nodes.length * 3, 'maxClaims', 1)
-    db.prepare("INSERT INTO execution_runs(run_id,task_id,workflow_id,workflow_digest,requirement_ref,max_claims,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'queued',?,?)")
-      .run(a.runId, a.taskId, a.workflowId, a.workflowDigest, a.requirementRef, maxClaims, now, now)
+    db.prepare("INSERT INTO execution_runs(run_id,task_id,workflow_id,workflow_digest,requirement_ref,status,created_at,updated_at) VALUES(?,?,?,?,?,'queued',?,?)")
+      .run(a.runId, a.taskId, a.workflowId, a.workflowDigest, a.requirementRef, now, now)
     a.nodes.forEach((n, i) => addNode(a.runId, n, i, 1, i === 0 ? 'ready' : 'blocked'))
     return { status: 'applied', run: runDto(getRun(a.runId)) }
   }
@@ -392,43 +375,21 @@ function coreCommand(command, now, consumption = {}) {
     const key = createHash('sha256').update(canonical({runId:r.run_id,generation:r.generation,nodeRunId:n.node_run_id,inputDigest:n.input_digest,errorCode:a.errorCode})).digest('hex')
     const prior = db.prepare("SELECT payload FROM execution_events WHERE kind='run.recovery.admitted' AND json_extract(payload,'$.key')=? ORDER BY seq DESC LIMIT 1").get(key)
     const last = prior ? JSON.parse(prior.payload) : null, attempt = (last?.attempt ?? 0) + 1
-    if (attempt > recoveryRetryLimit) fail('RECOVERY_RETRY_LIMIT')
     if (last && Date.parse(now) < Date.parse(last.nextRetryAt)) fail('RECOVERY_RETRY_DEFERRED')
     const nextRetryAt = new Date(Date.parse(now) + recoveryRetryDelayMs(attempt)).toISOString()
     emitEvent(command.id, 'run.recovery.admitted', {...a,key,attempt,nextRetryAt}, now)
     return {admitted:true,attempt,nextRetryAt}
   }
-  if (command.kind === 'run.budget.continue') {
-    object(a, ['eventId'])
-    const event = webTaskEvent(a.eventId)
-    if (!event || event.channel !== 'web' || event.status !== 'pending' || event.request.action !== 'continue-budget') fail('RUN_BUDGET_CONTINUATION_NOT_AUTHORIZED')
-    const binding = event.request.budgetBinding, actual = budgetContinuation(binding.runId)
-    if (!actual || canonical(actual) !== canonical(binding)) fail('RUN_BUDGET_CONTINUATION_STALE')
-    const origin = taskOrigin(binding.taskId)
-    if (origin?.channel !== 'web' || origin.run.actorId !== event.actorId) fail('WORKFLOW_TASK_FORBIDDEN')
-    const current = nodes(binding.runId), index = current.findIndex(n => n.node_run_id === binding.nodeRunId), n = current[index]
-    const staleId = `claim:${n.node_run_id}:${n.lease_epoch + 1}`
-    const receipt = db.prepare('SELECT result FROM execution_receipts WHERE command_id=?').get(staleId)
-    if (JSON.parse(receipt?.result ?? 'null')?.status !== 'budget_exhausted') fail('RUN_BUDGET_CONTINUATION_LEASE_INVALID')
-    const additionalClaims = (current.length - index) * 3
-    db.prepare("UPDATE execution_nodes SET status='ready',wait_reason=NULL,lease_epoch=lease_epoch+1 WHERE node_run_id=?").run(n.node_run_id)
-    db.prepare("UPDATE execution_runs SET max_claims=max_claims+?,revision=revision+1,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?").run(additionalClaims, now, binding.runId)
-    emitEvent(command.id, 'run.budget.continued', { ...binding, actorId: event.actorId, eventId: event.id,
-      continuationText: event.request.continuationText, additionalClaims, nextMaxClaims: binding.maxClaims + additionalClaims, exhaustedClaimId: staleId }, now)
-    return { status: 'applied', run: runDto(getRun(binding.runId)), additionalClaims }
-  }
   if (command.kind === 'run.recover') {
     object(a, ['runId'])
     const r = activeRun(a)
-    if (r.claim_count >= r.max_claims) fail('EXECUTION_BUDGET_EXHAUSTED')
     const recovering = nodes(r.run_id).filter(n => n.status === 'waiting' && n.wait_reason && JSON.parse(n.wait_reason).kind === 'recovery')
     if (!recovering.length) fail('RUN_NOT_RECOVERING')
     if (recovering.some(n => !n.drained)) fail('NODE_NOT_DRAINED')
     assertRunEffectsDrained(db, r.run_id)
     for (const n of recovering) {
-      const exhausted = JSON.parse(n.wait_reason).reference === 'EXECUTION_BUDGET_EXHAUSTED'
-      db.prepare("UPDATE execution_nodes SET status='ready',wait_reason=NULL,lease_epoch=lease_epoch+? WHERE node_run_id=?")
-        .run(exhausted ? 1 : 0, n.node_run_id)
+      db.prepare("UPDATE execution_nodes SET status='ready',wait_reason=NULL WHERE node_run_id=?")
+        .run(n.node_run_id)
     }
     db.prepare("UPDATE execution_runs SET status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?").run(now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
@@ -449,8 +410,8 @@ function coreCommand(command, now, consumption = {}) {
     db.prepare("UPDATE execution_nodes SET node_version='2',input_ref=?,input_digest=?,status='ready',wait_reason=NULL WHERE node_run_id=?")
       .run(a.inputRef, a.inputDigest, a.nodeRunId)
     db.prepare("UPDATE execution_nodes SET node_version='2' WHERE run_id=? AND current=1 AND node_id IN ('select-files','validate-selection','read-files')").run(r.run_id)
-    db.prepare("UPDATE execution_runs SET workflow_digest=?,revision=revision+1,max_claims=max_claims+?,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
-      .run(a.toDigest, r.claim_count >= r.max_claims ? current.length * 3 : 0, now, r.run_id)
+    db.prepare("UPDATE execution_runs SET workflow_digest=?,revision=revision+1,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
+      .run(a.toDigest, now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
   if (command.kind === 'run.workflow.migrate-read') {
@@ -472,41 +433,6 @@ function coreCommand(command, now, consumption = {}) {
       .run(a.toDigest, now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
-  if (command.kind === 'run.workflow.index-budget') {
-    object(a, ['runId', 'workflowDigest'])
-    digest(a.workflowDigest, 'workflowDigest')
-    if (command.id !== `index-budget:${a.runId}:${a.workflowDigest}`) fail('WORKFLOW_BUDGET_COMMAND_INVALID')
-    const r = activeRun(a), current = nodes(r.run_id), index = current.findIndex(n => n.node_id === 'index-files')
-    const migrated = db.prepare('SELECT command_id FROM execution_receipts WHERE command_id=?').get(`migrate-index:${a.runId}:${a.workflowDigest}`)
-    if (!migrated || r.workflow_digest !== a.workflowDigest || r.claim_count !== r.max_claims || index < 0
-      || current[index].node_version !== '2' || current[index].status !== 'waiting' || !current[index].drained
-      || JSON.parse(current[index].wait_reason ?? 'null')?.reference !== 'EXECUTION_BUDGET_EXHAUSTED'
-      || current.slice(0, index).some(n => n.status !== 'succeeded') || current.slice(index + 1).some(n => n.status !== 'blocked' || n.lease_epoch !== 0)) fail('WORKFLOW_BUDGET_EXTENSION_UNSAFE')
-    assertRunEffectsDrained(db, r.run_id)
-    // 预算耗尽的领取命令已有持久回执；推进代次，避免下次领取复用其命令 ID。
-    db.prepare("UPDATE execution_nodes SET lease_epoch=lease_epoch+1,status='ready',wait_reason=NULL WHERE node_run_id=?").run(current[index].node_run_id)
-    db.prepare("UPDATE execution_runs SET max_claims=max_claims+?,revision=revision+1,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
-      .run(current.length * 3, now, r.run_id)
-    return { status: 'applied', run: runDto(getRun(r.run_id)) }
-  }
-  if (command.kind === 'run.workflow.index-budget-lease') {
-    object(a, ['runId', 'workflowDigest'])
-    digest(a.workflowDigest, 'workflowDigest')
-    if (command.id !== `index-budget-lease:${a.runId}:${a.workflowDigest}`) fail('WORKFLOW_BUDGET_COMMAND_INVALID')
-    const r = activeRun(a), current = nodes(r.run_id), index = current.findIndex(n => n.node_id === 'index-files')
-    const budget = db.prepare('SELECT result FROM execution_receipts WHERE command_id=?').get(`index-budget:${a.runId}:${a.workflowDigest}`)
-    const node = current[index]
-    const staleClaim = node && db.prepare('SELECT result FROM execution_receipts WHERE command_id=?')
-      .get(`claim:${node.node_run_id}:${node.lease_epoch + 1}`)
-    if (!budget || JSON.parse(budget.result)?.status !== 'applied' || !node || r.workflow_digest !== a.workflowDigest
-      || r.status !== 'queued' || r.claim_count >= r.max_claims || node.node_version !== '2' || node.status !== 'ready' || !node.drained
-      || JSON.parse(staleClaim?.result ?? 'null')?.status !== 'budget_exhausted'
-      || current.slice(0, index).some(n => n.status !== 'succeeded') || current.slice(index + 1).some(n => n.status !== 'blocked' || n.lease_epoch !== 0)) fail('WORKFLOW_BUDGET_LEASE_UNSAFE')
-    assertRunEffectsDrained(db, r.run_id)
-    db.prepare('UPDATE execution_nodes SET lease_epoch=lease_epoch+1 WHERE node_run_id=?').run(node.node_run_id)
-    db.prepare('UPDATE execution_runs SET revision=revision+1,updated_at=? WHERE run_id=?').run(now, r.run_id)
-    return { status: 'applied', run: runDto(getRun(r.run_id)) }
-  }
   if (command.kind === 'run.workflow.replan-direct') {
     object(a, ['runId', 'expectedRevision', 'fromDigest', 'toDigest', 'inputRef', 'inputDigest', 'nodes'])
     digest(a.fromDigest, 'fromDigest'); digest(a.toDigest, 'toDigest'); ref(a.inputRef, 'inputRef'); digest(a.inputDigest, 'inputDigest')
@@ -517,7 +443,7 @@ function coreCommand(command, now, consumption = {}) {
       || current.slice(0, 2).some(n => n.status !== 'succeeded') || current.slice(2).some(n => !n.drained)
       || !current.some(n => n.status === 'waiting' && JSON.parse(n.wait_reason ?? 'null')?.reference === 'EDIT_PREPARED_INVALID')
       || pendingInputs(r.run_id).length) fail('WORKFLOW_MIGRATION_UNSAFE')
-    if (!Array.isArray(a.nodes) || a.nodes.length < 4 || a.nodes.length > 32
+    if (!Array.isArray(a.nodes) || a.nodes.length < 4
       || a.nodes[0]?.nodeId !== 'prepare-generation' || a.nodes[1]?.nodeId !== 'prepare-workspace'
       || a.nodes[2]?.nodeId !== 'inspect-and-propose') fail('INVALID_NODE_PLAN')
     a.nodes.forEach((node, index) => {
@@ -533,9 +459,9 @@ function coreCommand(command, now, consumption = {}) {
     assertRunEffectsDrained(db, r.run_id)
     db.prepare("UPDATE execution_nodes SET current=0,status='superseded' WHERE run_id=? AND current=1").run(r.run_id)
     a.nodes.forEach((node, index) => addNode(r.run_id, node, index, r.generation + 1, index === 0 ? 'ready' : 'blocked'))
-    // 单次迁移补足新节点的领取次数，仍保留有限上限与原始 claim_count。
-    db.prepare("UPDATE execution_runs SET workflow_digest=?,revision=revision+1,generation=generation+1,max_claims=max_claims+?,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
-      .run(a.toDigest, a.nodes.length * 3, now, r.run_id)
+    // 重新编排保留实际领取统计，不限制新节点推进。
+    db.prepare("UPDATE execution_runs SET workflow_digest=?,revision=revision+1,generation=generation+1,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
+      .run(a.toDigest, now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
   if (command.kind === 'run.workflow.reissue-repository') {
@@ -563,7 +489,7 @@ function coreCommand(command, now, consumption = {}) {
     const reissuePrefix = ['11', '12', '13', '14', '15', '16'].includes(JSON.parse(nextRecord.body).definitionVersion)
       ? ['prepare-generation', 'define-local-acceptance', 'plan-local-acceptance', 'prepare-workspace', 'inspect-and-propose']
       : ['prepare-generation', 'prepare-workspace', 'inspect-and-propose']
-    if (!Array.isArray(a.nodes) || a.nodes.length <= reissuePrefix.length || a.nodes.length > 32
+    if (!Array.isArray(a.nodes) || a.nodes.length <= reissuePrefix.length
       || reissuePrefix.some((nodeId, index) => a.nodes[index]?.nodeId !== nodeId)
       || new Set(a.nodes.map(node => node.nodeId)).size !== a.nodes.length) fail('INVALID_NODE_PLAN')
     a.nodes.forEach((node, index) => {
@@ -577,8 +503,8 @@ function coreCommand(command, now, consumption = {}) {
     assertRunEffectsDrained(db, r.run_id)
     db.prepare("UPDATE execution_nodes SET current=0,status='superseded' WHERE run_id=? AND current=1").run(r.run_id)
     a.nodes.forEach((node, index) => addNode(r.run_id, node, index, r.generation + 1, index === 0 ? 'ready' : 'blocked'))
-    db.prepare("UPDATE execution_runs SET workflow_id=?,workflow_digest=?,requirement_ref=?,revision=revision+1,generation=generation+1,max_claims=max_claims+?,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
-      .run(a.toWorkflowId, a.toDigest, a.requirementRef, a.nodes.length * 3, now, r.run_id)
+    db.prepare("UPDATE execution_runs SET workflow_id=?,workflow_digest=?,requirement_ref=?,revision=revision+1,generation=generation+1,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
+      .run(a.toWorkflowId, a.toDigest, a.requirementRef, now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
   if (command.kind === 'node.continue') {
@@ -601,12 +527,6 @@ function coreCommand(command, now, consumption = {}) {
     const n = currentNode({ ...a, generation: a.expectedGeneration, leaseEpoch: a.expectedLeaseEpoch })
     if (n.status !== 'ready' || !n.drained || !n.input_ref || !n.input_digest) fail('NODE_NOT_READY')
     if (nodes(r.run_id).some(other => other.position < n.position && other.status !== 'succeeded')) fail('NODE_PREDECESSOR_INCOMPLETE')
-    if (r.claim_count >= r.max_claims) {
-      const waitReason = { kind: 'recovery', reference: 'EXECUTION_BUDGET_EXHAUSTED' }
-      db.prepare("UPDATE execution_nodes SET status='waiting',wait_reason=? WHERE node_run_id=?").run(JSON.stringify(waitReason), n.node_run_id)
-      db.prepare("UPDATE execution_runs SET status='waiting',recovery_reason='EXECUTION_BUDGET_EXHAUSTED',updated_at=? WHERE run_id=?").run(now, r.run_id)
-      return { status: 'budget_exhausted', run: runDto(getRun(r.run_id)) }
-    }
     const sessionId = n.executor === 'agent' ? (n.session_id ?? randomUUID()) : null
     db.prepare("UPDATE execution_nodes SET status='running',lease_epoch=lease_epoch+1,session_id=?,drained=0,drain_evidence_ref=NULL WHERE node_run_id=?").run(sessionId, n.node_run_id)
     db.prepare("UPDATE execution_runs SET status='running',claim_count=claim_count+1,updated_at=? WHERE run_id=?").run(now, r.run_id)
@@ -740,18 +660,11 @@ function command(value) {
         const origin = taskOrigin(request.taskId)
         if (origin?.channel !== 'web' || origin.run.actorId !== actorId) fail('WORKFLOW_TASK_FORBIDDEN')
         if (taskFamily(request.taskId)?.latestTaskId !== request.taskId) fail('TASK_EXECUTION_STALE')
-        if (!['context', 'cancel', 'confirm-stage', 'continue-budget'].includes(request.action)) fail('WORKFLOW_WEB_ACTION_UNSUPPORTED')
+        if (!['context', 'cancel', 'confirm-stage'].includes(request.action)) fail('WORKFLOW_WEB_ACTION_UNSUPPORTED')
         const task = db.prepare('SELECT * FROM business_tasks WHERE task_id=?').get(request.taskId)
         const count = db.prepare('SELECT COUNT(*) AS n FROM execution_runs WHERE task_id=?').get(request.taskId).n
         const control = db.prepare('SELECT * FROM task_controls WHERE task_id=?').get(request.taskId)
-        if (request.action === 'continue-budget') {
-          object(request, ['action','taskId','requestId','continuationText','budgetBinding'])
-          text(request.requestId, 'requestId')
-          if (typeof request.continuationText !== 'string' || !request.continuationText.trim() || request.continuationText.length > 16000) fail('INVALID_ARGUMENT')
-          if (input !== null || request.budgetBinding?.taskId !== request.taskId) fail('RUN_BUDGET_CONTINUATION_INVALID')
-          const binding = budgetContinuation(request.budgetBinding.runId)
-          if (!binding || canonical(binding) !== canonical(request.budgetBinding)) fail('RUN_BUDGET_CONTINUATION_STALE')
-        } else if (request.action === 'confirm-stage') {
+        if (request.action === 'confirm-stage') {
           object(request, ['action', 'taskId', 'requestId', 'requirementRevision', 'controlRevision', 'planRevision', 'runSequence', 'stageId', 'outputRef', 'confirmationText'])
           text(request.requestId, 'requestId'); text(request.confirmationText, 'confirmationText')
           if (request.confirmationText.length > 16000 || input !== null) fail('TASK_CONFIRMATION_INVALID')
@@ -1043,7 +956,6 @@ function query(value) {
   if(value?.kind==='node.input-history')return nodeInputHistory(text(value.nodeRunId,'nodeRunId'))
   if(value?.kind==='node.binding-history')return db.prepare("SELECT payload FROM execution_events WHERE kind='node.claim' AND json_extract(payload,'$.binding.nodeRunId')=? ORDER BY seq").all(text(value.nodeRunId,'nodeRunId')).map(row=>JSON.parse(row.payload).binding)
   if (value?.kind === 'runtime.maintenance') return maintenanceStatus(db, workerData.processIncarnation)
-  if (value?.kind === 'run.budget-continuation') return budgetContinuation(value.runId)
   if (['workflow.repair.context', 'engineering.repair.context'].includes(value?.kind)) {
     const row = db.prepare("SELECT payload FROM execution_events WHERE kind IN ('workflow.repair.accepted','engineering.repair.accepted') AND json_extract(payload,'$.runId')=? AND json_extract(payload,'$.nextGeneration')=? ORDER BY seq DESC LIMIT 1").get(value.runId, value.generation)
     return row ? JSON.parse(row.payload) : null

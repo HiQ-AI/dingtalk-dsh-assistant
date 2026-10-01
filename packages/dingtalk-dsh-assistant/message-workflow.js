@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { digest } from './message-context.js'
 
-export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.5', initialWindowMs: 90000, linkedWindowMs: 90000, attemptMs: 180000, commitReserveMs: 500, maxClaims: 21, maxCorrections: 2, concurrency: 2, recoveryDelaysMs: [5000, 30000] })
+export const defaultMessagePolicy = Object.freeze({ version: 'message-v2.6', concurrency: 2 })
 function incompleteMaterial(value) {
   if (!value || typeof value !== 'object') return false
   if (Array.isArray(value)) return value.some(incompleteMaterial)
@@ -123,7 +123,7 @@ export function createMessageWorkflow({ store, coordinator, context = {}, handle
         const material = await readMaterial({ run, unit: data.units.find(unit => unit.unitId === request.unitId), nodeId: request.nodeId, needs: request.needs })
         if (material.ready) await cmd('message.wake', { runId: run.runId, requestId: request.id, eventId: `material:${request.id}:${digest(material.data ?? {})}`, actorId: run.actorId, answer: material.data ?? {} })
         else await cmd('message.request.retry', { runId: run.runId, requestId: request.id, error: material.reason,
-          retryAt: new Date(clock() + config.recoveryDelaysMs[Math.min(request.attempts ?? 0, config.recoveryDelaysMs.length - 1)]).toISOString(), maxAttempts: 3, contractVersion: 'material-v2' })
+          retryAt: new Date(clock() + Math.min(30000 * 2 ** Math.min(request.attempts ?? 0, 17), 2147483647)).toISOString(), contractVersion: 'material-v2' })
       }
     }
     return coordinator.recover({ dispatch })

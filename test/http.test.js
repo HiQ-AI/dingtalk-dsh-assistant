@@ -427,16 +427,16 @@ test('新版任务归档HTTP仅接受空对象并转交正式工作流，不走�
     archiveTask: () => { throw new Error('LEGACY_NOT_ALLOWED') } } })
 })
 
-test('Web 新任务验收入参接受 16/17/32 条并拒绝超限、空白、超长和非法类型', async () => {
+test('Web 新任务验收入参接受 16/17/32/100 条并拒绝非法字段、空白、超长和非法类型', async () => {
   const received = []
   await withServer(false, async baseUrl => {
     const post = acceptanceCriteria => fetch(`${baseUrl}/tasks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'criteria-boundary', groupId: 'g', title: '验收边界', objective: '目标', context: '创建任务', acceptanceCriteria }) })
-    for (const count of [16, 17, 32]) {
+    for (const count of [16, 17, 32, 100]) {
       assert.equal((await post(Array.from({ length: count }, (_, i) => `条件 ${i}`))).status, 200)
       assert.equal(received.at(-1).acceptanceCriteria.length, count)
     }
-    for (const value of [Array(33).fill('条件'), [], [' '], ['x'.repeat(2001)], [' '.repeat(2000) + 'x'], [42], null, '条件']) assert.equal((await post(value)).status, 400)
-    assert.equal(received.length, 3)
+    for (const value of [[], [' '], ['x'.repeat(2001)], [' '.repeat(2000) + 'x'], [42], null, '条件']) assert.equal((await post(value)).status, 400)
+    assert.equal(received.length, 4)
   }, { overrides: { createTask: async value => { received.push(value); return { taskId: 'created' } } } })
 })
 

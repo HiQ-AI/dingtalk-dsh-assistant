@@ -5,9 +5,10 @@ const error = code => Object.assign(new Error(code), { code })
 const key = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 
 /** 当前阶段的成功证明和诊断引用分开；领域扩展只来自冻结定义的受信合同。 */
-export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, plan, readStageArtifacts }) {
+export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, plan, readStageArtifacts, signal }) {
   const result = []
   for (const stage of stages.filter(item => item.status !== 'invalidated')) {
+    signal?.throwIfAborted()
     const state = stage.runId ? await controller.state(stage.runId) : null
     if (state && (state.run?.taskId !== taskId || state.run.runId !== stage.runId
       || state.run.workflowId !== stage.workflowId || state.run.workflowDigest !== stage.workflowDigest))
@@ -19,7 +20,7 @@ export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, 
       evidenceRefs: succeeded ? [...(stage.evidenceRefs ?? [])] : [],
       completionEvidenceRefs: succeeded ? [...new Set([stage.outputRef, ...(stage.evidenceRefs ?? [])])] : [] }
     if (succeeded && readStageArtifacts) {
-      const extension = await readStageArtifacts({ taskId, stage, state, plan })
+      const extension = await readStageArtifacts({ taskId, stage, state, plan, signal })
       const known = new Set([stage.outputRef, ...(stage.evidenceRefs ?? []),
         ...(state?.nodes ?? []).flatMap(node => [node.outputRef, ...(node.evidenceRefs ?? [])].filter(Boolean))])
       if ([...(extension?.evidenceRefs ?? []), ...(extension?.completionEvidenceRefs ?? []),
@@ -49,6 +50,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
   let closed = false
   const flights = new Map()
+  const flightAborts = new Map()
   const sessions = sessionRunner ?? createTaskOwnerSessions({ ctx, getWorkspaceDir, isCurrent: async binding => {
     const owner = await store.query({ kind: 'task.owner', taskId: binding.taskId })
     return !!owner && owner.status === 'running' && owner.turnId === binding.turnId
@@ -100,7 +102,8 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     return plan
   }
 
-  async function snapshot(taskId, claim) {
+  async function snapshot(taskId, claim, signal) {
+    signal.throwIfAborted()
     const owner = await store.query({ kind: 'task.owner', taskId })
     const plan = await controller.taskPlan(taskId)
     const events = []
@@ -121,39 +124,46 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       id: material.id, artifactRef: (await artifacts.put(material, { taskId })).ref,
     }))) } : goal
     const result = { taskId, eventWatermark: claim.eventWatermark, goal: modelGoal,
-      ...(readCurrentSources ? { currentSources: await readCurrentSources({ taskId, plan }) } : {}),
+      ...(owner.lastFailure ? { correction: { reason: owner.lastFailure,
+        instruction: '此前动作未能执行；根据当前状态修正参数或计划后继续，不要原样重复失败动作。' } } : {}),
+      ...(readCurrentSources ? { currentSources: await readCurrentSources({ taskId, plan, signal }) } : {}),
       acceptanceItems, versions: claim.versions, task: plan.task, stages: plan.stages, events }
     if (plan.task.planRevision > 0 && plan.task.planRequirementRevision !== plan.task.requirementRevision) result.planReview = {
       required: true, instruction: '当前计划尚未覆盖当前需求；继续任务须使用advance与planChange.kind=replaceSuffix重评未完成阶段。repairCurrentStage不能替代需求重评，不得编造repairBinding。' }
-    if (readMaterialAccess) result.materialAccess = await readMaterialAccess({ taskId, plan, requirement: goal })
+    if (readMaterialAccess) result.materialAccess = await readMaterialAccess({ taskId, plan, requirement: goal, signal })
     const repairedStages = new Set(plan.stages.filter(stage => stage.status !== 'succeeded'
       && result.materialAccess?.scopeRepairs?.some(repair => repair.runId === stage.runId
         && repair.inputRef === stage.requirementRef)).map(stage => stage.stageId))
     result.stageArtifacts = await readTaskOwnerStageArtifacts({ taskId,
-      stages: plan.stages.filter(stage => !repairedStages.has(stage.stageId)), controller, plan, readStageArtifacts })
+      stages: plan.stages.filter(stage => !repairedStages.has(stage.stageId)), controller, plan, readStageArtifacts, signal })
     if (repairedStages.size) result.invalidatedDiagnostics = [...repairedStages].map(stageId => ({ stageId,
       reason: '旧调查输入的材料范围遗漏已由Host核验修复；旧失败诊断不再作为当前判断依据，必须用当前材料范围重新读取。' }))
     if (readDeliveryManifest) {
-      const manifest = await readDeliveryManifest({ taskId, plan, requirement: goal })
+      const manifest = await readDeliveryManifest({ taskId, plan, requirement: goal, signal })
       result.deliveryManifest = { ref: (await artifacts.put(manifest, { taskId })).ref, complete: manifest.complete,
         missing: manifest.missing, validation: manifest.validation }
     }
     if (inspectCurrentExecution) {
-      result.currentExecution = await inspectCurrentExecution(taskId, plan)
+      result.currentExecution = await inspectCurrentExecution(taskId, plan, { signal })
       if (result.currentExecution?.evidenceRefs?.length && !repairedStages.has(result.currentExecution.stageId)) result.stageArtifacts.push({ stageId: result.currentExecution.stageId, outputRef: null, evidenceRefs: result.currentExecution.evidenceRefs })
     }
     result.capabilities = capabilityCatalog
     result.workflowCatalog = workflowCatalog
+    signal.throwIfAborted()
     return result
   }
 
   async function drive(taskId) {
     if (closed) throw error('TASK_OWNER_CONTROLLER_CLOSED')
     if (flights.has(taskId)) return flights.get(taskId)
+    const abort = new AbortController(), signal = abort.signal
+    flightAborts.set(taskId, abort)
     const flight = (async () => {
       const before = await store.query({ kind: 'task.owner', taskId })
       if (!before || before.status !== 'pending' || before.processedWatermark === before.eventWatermark) return null
+      if (before.retryAt && Date.now() < Date.parse(before.retryAt)) return null
       if ((await controller.taskPlan(taskId))?.task.controlState !== 'active') return null
+      if (signal.aborted) return null
       const turnId = `turn-${randomUUID()}`
       let claim
       try {
@@ -167,13 +177,14 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       const binding = { taskId, turnId, sessionId: claim.sessionId, leaseEpoch: claim.leaseEpoch,
         ownerEpoch: claim.ownerEpoch, sessionBound: claim.sessionBound }
       try {
-        const input = await snapshot(taskId, claim)
+        signal.throwIfAborted()
+        const input = await snapshot(taskId, claim, signal)
         const unreadPages = new Set((input.eventPages ?? []).map(page => page.ref))
         const readableArtifacts = new Set(input.stageArtifacts.flatMap(stage =>
           [stage.outputRef, ...stage.evidenceRefs].filter(Boolean)))
         if (input.deliveryManifest) readableArtifacts.add(input.deliveryManifest.ref)
         for (const ref of [...input.events.map(event => event.payloadRef), ...(input.goal?.materials ?? []).map(material => material.artifactRef)].filter(Boolean)) readableArtifacts.add(ref)
-        const result = await sessions.run({ binding, input, ...modelConfig(),
+        const result = await sessions.run({ binding, input, ...modelConfig(), signal,
           readPage: async pageRef => {
             if (!unreadPages.has(pageRef)) throw error('TASK_OWNER_PAGE_NOT_ALLOWED')
             const page = await artifacts.read(pageRef)
@@ -201,36 +212,42 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
               taskId, turnId, leaseEpoch: claim.leaseEpoch, decision })
           },
         })
+        signal.throwIfAborted()
         if (result.status !== 'submitted') throw error(result.reason ?? 'TASK_OWNER_NO_DECISION')
         const proposedStages = result.decision.planChange?.stages ?? result.decision.appendStages
-        if (proposedStages && !await authorizeStages({ taskId, stages: proposedStages }))
+        if (proposedStages && !await authorizeStages({ taskId, stages: proposedStages, signal }))
           throw error('TASK_OWNER_STAGE_NOT_AUTHORIZED')
-        if (result.decision.action === 'complete' && !await authorizeCompletion({ taskId, decision: result.decision }))
+        if (result.decision.action === 'complete' && !await authorizeCompletion({ taskId, decision: result.decision, signal }))
           throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
+        signal.throwIfAborted()
         let deliveryManifestRef
         if (result.decision.action === 'complete' && readDeliveryManifest) {
           const plan = await controller.taskPlan(taskId)
           const requirement = await artifacts.read(plan.task.requirementRef)
-          const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision: result.decision })
+          const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision: result.decision, signal })
+          signal.throwIfAborted()
           if (manifest?.kind !== 'task-delivery-manifest' || manifest.version !== 1 || manifest.complete !== true
               || manifest.businessValidation?.status !== 'accepted'
             || manifest.taskId !== taskId || manifest.requirementRevision !== plan.task.requirementRevision
             || manifest.planRevision !== plan.task.planRevision) throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
           deliveryManifestRef = (await artifacts.put(manifest, { taskId })).ref
         }
+        signal.throwIfAborted()
         const accepted = (await command(`owner-accept:${turnId}`, 'task.owner.accept', {
           taskId, turnId, leaseEpoch: claim.leaseEpoch, ...(deliveryManifestRef ? { deliveryManifestRef } : {}) })).result
         return accepted
       } catch (cause) {
         await command(`owner-release:${turnId}`, 'task.owner.release', {
-          taskId, turnId, leaseEpoch: claim.leaseEpoch, reason: String(cause.code ?? cause.message).slice(0, 200) }).catch(() => {})
+          taskId, turnId, leaseEpoch: claim.leaseEpoch, reason: signal.aborted ? 'TASK_OWNER_CANDIDATE_STALE'
+            : String(cause.code ?? cause.message).slice(0, 200) }).catch(() => {})
+        if (signal.aborted) return null
         if (cause.code === 'TASK_OWNER_SESSION_MISSING') await command(`owner-replace:${turnId}`,
           'task.owner.replace-session', { taskId, expectedLeaseEpoch: claim.leaseEpoch,
             newSessionId: `owner-${key([taskId, claim.ownerEpoch + 1]).slice(0, 40)}`,
             reason: 'SESSION_NOT_FOUND' })
         throw cause
       }
-    })().finally(() => flights.delete(taskId))
+    })().finally(() => { flights.delete(taskId); flightAborts.delete(taskId) })
     flights.set(taskId, flight)
     return flight
   }
@@ -261,6 +278,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
               taskId, turnId, leaseEpoch: action.leaseEpoch })
             continue
           }
+          if (action.retryAt && Date.now() < Date.parse(action.retryAt)) continue
           if (decision.action === 'repairCurrentStage') {
             if (typeof repairCurrentStage !== 'function') throw error('TASK_OWNER_REPAIR_UNAVAILABLE')
             await repairCurrentStage({ taskId, decision, commandId: `owner-repair:${turnId}` })
@@ -338,8 +356,15 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     return failures
   }
 
-  return { ensure, event, observe, drive, recover, applyPending, async close() {
+  async function cancel(taskId) {
+    flightAborts.get(taskId)?.abort(error('TASK_OWNER_CANCELLED'))
+    await sessions.cancel?.(taskId)
+    await flights.get(taskId)
+  }
+
+  return { ensure, event, observe, drive, recover, applyPending, cancel, async close() {
     closed = true
+    for (const abort of flightAborts.values()) abort.abort(error('TASK_OWNER_CONTROLLER_CLOSED'))
     await sessions.close()
     await Promise.allSettled([...flights.values()])
   } }

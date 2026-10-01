@@ -192,7 +192,7 @@ test('目标验收项必须逐项绑定真实阶段证据，新增目标使旧�
   } finally { f.db.close() }
 })
 
-test('负责人连续三次无有效提交后可见阻塞，新输入重新开放而不重建Task', () => {
+test('负责人连续纠正不设次数上限，新输入立即解除退避', () => {
   const f = fixture()
   try {
     f.send('task.owner.event', { taskId: 'task-1', eventKey: 'created', eventType: 'task.created' })
@@ -202,8 +202,8 @@ test('负责人连续三次无有效提交后可见阻塞，新输入重新开�
         leaseEpoch: attempt, reason: 'TASK_OWNER_NO_DECISION' })
       assert.equal(result.failureCount, attempt)
     }
-    assert.equal(f.read('task.owner').status, 'blocked')
-    assert.deepEqual(queryTaskOwner(f.db, { kind: 'task.owners.pending' }), [])
+    assert.equal(f.read('task.owner').status, 'pending')
+    assert.ok(Date.parse(f.read('task.owner').retryAt) > Date.parse(at))
     f.send('task.owner.event', { taskId: 'task-1', eventKey: 'followup', eventType: 'intent.received' })
     assert.equal(f.read('task.owner').status, 'pending')
     assert.equal(f.read('task.owner').failureCount, 0)
@@ -250,7 +250,7 @@ test('只有已绑定会话被确认缺失后才能换代，原任务和事件�
   } finally { f.db.close() }
 })
 
-test('已接纳动作应用连续失败有界阻塞，不在恢复循环中无限重试', () => {
+test('已接纳动作实现错误立即等待修复，不原样重试', () => {
   const f = fixture()
   try {
     f.send('task.owner.event', { taskId: 'task-1', eventKey: 'created', eventType: 'task.created' })
@@ -259,7 +259,7 @@ test('已接纳动作应用连续失败有界阻塞，不在恢复循环中无�
     f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
       decision: { action: 'advance', summary: '推进', evidenceRefs: [] } })
     f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 })
-    for (let attempt = 1; attempt <= 3; attempt++)
+    for (let attempt = 1; attempt <= 1; attempt++)
       assert.equal(f.send('task.owner.action.fail', { taskId: 'task-1', turnId: 'turn-1',
         leaseEpoch: 1, reason: 'DOWNSTREAM_UNAVAILABLE' }).failureCount, attempt)
     assert.equal(f.read('task.owner').status, 'blocked')
@@ -335,10 +335,10 @@ test('Owner 执行途中取消，释放后不累计失败或再次唤醒', () =>
   } finally { f.db.close() }
 })
 
-test('新接纳验收合同在消息入口与 Owner 一致，16/17/32 成功且非法字段拒绝', async () => {
+test('新接纳验收合同在消息入口与 Owner 一致，16/17/32/100 成功且非法字段拒绝', async () => {
   const { messageSchemas } = await import('../packages/dingtalk-dsh-assistant/message-context.js')
   const intent = acceptanceCriteria => ({ kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '完成目标', acceptanceCriteria }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' })
-  for (const criteria of [16, 17, 32].map(count => Array.from({ length: count }, (_, i) => `验收 ${i + 1}`))) {
+  for (const criteria of [16, 17, 32, 100].map(count => Array.from({ length: count }, (_, i) => `验收 ${i + 1}`))) {
     assert.equal(messageSchemas.I.safeParse(intent(criteria)).success, true)
     const f = fixture()
     try {
@@ -351,7 +351,7 @@ test('新接纳验收合同在消息入口与 Owner 一致，16/17/32 成功且�
       assert.equal(f.read('task.owner').sessionId, 'session-1')
     } finally { f.db.close() }
   }
-  for (const criteria of [Array(33).fill('条件'), [], [' '], ['x'.repeat(2001)], [' '.repeat(2000) + 'x'], [42], '条件', null]) {
+  for (const criteria of [[], [' '], ['x'.repeat(2001)], [' '.repeat(2000) + 'x'], [42], '条件', null]) {
     assert.equal(messageSchemas.I.safeParse(intent(criteria)).success, false, JSON.stringify(criteria))
     const f = fixture()
     try {
@@ -371,20 +371,18 @@ test('历史 Owner 验收记录读取不套用新接纳数量或长度限制', (
   } finally { f.db.close() }
 })
 
-test('Owner 累计验收第33项拒绝且零写，历史超限仍允许已有项幂等回读', () => {
-  const f = fixture()
-  const args = index => ({ taskId: 'task-1', itemId: `acceptance-${index}`, criterion: `条件${index}`, sourceKey: 'source-1', eventKey: `add-${index}` })
-  try {
-    for (let index = 2; index <= 32; index++) f.send('task.owner.acceptance.extend', args(index))
-    const before = f.read('task.owner')
-    assert.throws(() => f.send('task.owner.acceptance.extend', args(33)), { code: 'TASK_OWNER_CRITERIA_INVALID' })
-    assert.deepEqual(f.read('task.owner'), before)
-    assert.equal(queryTaskOwner(f.db, { kind: 'task.owner.acceptance', taskId: 'task-1' }).length, 32)
-    f.db.prepare('INSERT INTO task_acceptance_items(task_id,item_id,criterion,source_key) VALUES(?,?,?,?)').run('task-1', 'historical-extra', '历史超限', 'source-1')
-    assert.equal(f.send('task.owner.acceptance.extend', args(32)).status, 'existing')
-    assert.equal(queryTaskOwner(f.db, { kind: 'task.owner.acceptance', taskId: 'task-1' }).length, 33)
-    assert.throws(() => f.send('task.owner.acceptance.extend', args(34)), { code: 'TASK_OWNER_CRITERIA_INVALID' })
-  } finally { f.db.close() }
+test('Owner累计验收超原32项仍完整保存，重复追加幂等，非法条件零写',()=>{
+ const f=fixture();const args=index=>({taskId:'task-1',itemId:`acceptance-${index}`,criterion:`条件${index}`,sourceKey:'source-1',eventKey:`add-${index}`})
+ try{
+  for(let index=2;index<=100;index++)f.send('task.owner.acceptance.extend',args(index))
+  assert.equal(queryTaskOwner(f.db,{kind:'task.owner.acceptance',taskId:'task-1'}).length,100)
+  const before=f.read('task.owner')
+  assert.equal(f.send('task.owner.acceptance.extend',args(100)).status,'existing')
+  assert.deepEqual(f.read('task.owner'),before)
+  assert.throws(()=>f.send('task.owner.acceptance.extend',{...args(101),criterion:' '}),{code:'TASK_OWNER_CRITERIA_INVALID'})
+  assert.deepEqual(f.read('task.owner'),before)
+  assert.equal(queryTaskOwner(f.db,{kind:'task.owner.acceptance',taskId:'task-1'}).length,100)
+ }finally{f.db.close()}
 })
 
  test('规划证据只返回本任务已应用的 initialize/append，截断明确标记', () => {
@@ -471,12 +469,12 @@ for(const mode of ['known','unknown','pending','effect','running'])test(`原生d
   const decision={action:'repairCurrentStage',summary:'非法阶段修复',evidenceRefs:[],repair:{stageId:'stage-1',runId:'r',generation:1,runRevision:0,requirementRevision:1}}
   f.send('task.owner.candidate',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1,decision})
   f.send('task.owner.accept',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1})
-  if(mode!=='pending')for(let n=0;n<3;n++)f.send('task.owner.action.fail',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1,reason:mode==='unknown'?'UNKNOWN_FAILURE':'WORKFLOW_REPAIR_NOT_ADMITTED'})
+  if(mode!=='pending')for(let n=0;n<1;n++)f.send('task.owner.action.fail',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1,reason:mode==='unknown'?'UNKNOWN_FAILURE':'WORKFLOW_REPAIR_NOT_ADMITTED'})
   const discard=()=>f.send('task.owner.discard',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1,reason:'WORKFLOW_REPAIR_NOT_ADMITTED'})
   if(mode==='known'){
    assert.equal(discard().status,'discarded')
    const turn=f.db.prepare("SELECT * FROM task_owner_turns WHERE turn_id='turn-1'").get()
-   assert.equal(turn.application_status,'discarded');assert.equal(turn.application_failures,3);assert.deepEqual(JSON.parse(turn.decision_json),decision)
+   assert.equal(turn.application_status,'discarded');assert.equal(turn.application_failures,1);assert.deepEqual(JSON.parse(turn.decision_json),decision)
    assert.equal(f.read('task.owner').sessionId,'session-1')
   }else assert.throws(discard,/TASK_OWNER_ACTION_ALREADY_APPLIED|TASK_OWNER_ACTION_STILL_CURRENT|TASK_OWNER_DISCARD_UNSAFE/)
  }finally{f.db.close()}
@@ -529,4 +527,31 @@ for(const mode of ['unaccepted','accepted','application'])test(`计划冲突受�
   else assert.throws(()=>f.send('task.owner.retry',args),{code:'TASK_OWNER_RETRY_FORBIDDEN'})
   assert.deepEqual(f.db.prepare('SELECT * FROM task_owner_turns').all(),turns)
  }finally{f.db.close()}
+})
+
+test('暂态动作超过原三次后仍可恢复且退避时间持久化', () => {
+ const f=fixture(); try {
+  f.send('task.owner.event',{taskId:'task-1',eventKey:'start-transient',eventType:'task.created'})
+  f.send('task.owner.claim',{taskId:'task-1',turnId:'transient',expectedLeaseEpoch:0})
+  f.send('task.owner.sessionBound',{taskId:'task-1',turnId:'transient',leaseEpoch:1,sessionId:'session-1'})
+  f.send('task.owner.candidate',{taskId:'task-1',turnId:'transient',leaseEpoch:1,decision:{action:'advance',summary:'继续执行',evidenceRefs:[]}})
+  f.send('task.owner.accept',{taskId:'task-1',turnId:'transient',leaseEpoch:1})
+  for(let count=1;count<=8;count++)assert.equal(f.send('task.owner.action.fail',{taskId:'task-1',turnId:'transient',leaseEpoch:1,reason:'ECONNRESET'}).failureCount,count)
+  const pending=queryTaskOwner(f.db,{kind:'task.owner.actions.pending'})
+  assert.equal(pending.length,1);assert.ok(Date.parse(pending[0].retryAt)>Date.parse(at));assert.equal(f.read('task.owner').status,'idle')
+ } finally {f.db.close()}
+})
+
+test('可纠正动作仅封存失败候选，当前Owner收到诊断继续', () => {
+ const f=fixture();try {
+  f.send('task.owner.event',{taskId:'task-1',eventKey:'start-correction',eventType:'task.created'})
+  f.send('task.owner.claim',{taskId:'task-1',turnId:'correctable',expectedLeaseEpoch:0})
+  f.send('task.owner.sessionBound',{taskId:'task-1',turnId:'correctable',leaseEpoch:1,sessionId:'session-1'})
+  f.send('task.owner.candidate',{taskId:'task-1',turnId:'correctable',leaseEpoch:1,decision:{action:'advance',summary:'继续执行',evidenceRefs:[]}})
+  f.send('task.owner.accept',{taskId:'task-1',turnId:'correctable',leaseEpoch:1})
+  assert.equal(f.send('task.owner.action.fail',{taskId:'task-1',turnId:'correctable',leaseEpoch:1,reason:'TASK_OWNER_ADVANCE_CONFLICT'}).status,'correct')
+  assert.equal(queryTaskOwner(f.db,{kind:'task.owner.actions.pending'}).length,0)
+  assert.equal(f.read('task.owner').status,'pending');assert.equal(f.read('task.owner').lastFailure,'TASK_OWNER_ADVANCE_CONFLICT')
+  assert.equal(f.read('task.owner').sessionId,'session-1')
+ } finally {f.db.close()}
 })

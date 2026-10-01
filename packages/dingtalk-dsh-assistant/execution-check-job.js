@@ -33,14 +33,16 @@ const encodeOutput = bytes => {
 }
 
 /** 固定Host检查命令；只把冻结候选物化到独立目录，不运行模型提供的argv。 */
-export function createVerificationJobCheck({ id, version, root, executable, args, steps, timeoutMs = 120000 }) {
+export function createVerificationJobCheck(config) { return verificationJobCheck(config) }
+
+function verificationJobCheck({ id, version, root, executable, args, steps, ...unsupported }, captureResult = false) {
   if (steps !== undefined && (executable !== undefined || args !== undefined)) throw executionError('VERIFY_JOB_CONFIG_INVALID')
   const commands = structuredClone(steps ?? [{ executable, args }])
-  if (![id, version].every(value => typeof value === 'string' && value) || !isAbsolute(root ?? '') || !Array.isArray(commands) || !commands.length || commands.length > 8
+  if (![id, version].every(value => typeof value === 'string' && value) || !isAbsolute(root ?? '') || !Array.isArray(commands) || !commands.length
     || commands.some(command => typeof command.executable !== 'string' || !command.executable || !Array.isArray(command.args) || command.args.some(value => typeof value !== 'string')
-      || (command.timeoutMs !== undefined && (!Number.isSafeInteger(command.timeoutMs) || command.timeoutMs < 1 || command.timeoutMs > 1800000)))
-    || Buffer.byteLength(JSON.stringify({ root, commands })) > 8000 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2400000) throw executionError('VERIFY_JOB_CONFIG_INVALID')
-  return { id, version, configurationDigest: executionDigest({ id, version, root, commands, timeoutMs }), async run(snapshot, { signal } = {}) {
+      || command.timeoutMs !== undefined)
+    || unsupported.timeoutMs !== undefined) throw executionError('VERIFY_JOB_CONFIG_INVALID')
+  return { id, version, configurationDigest: executionDigest({ id, version, root, commands, captureResult }), async run(snapshot, { signal } = {}) {
     signal?.throwIfAborted()
     await mkdir(root, { recursive: true })
     const directory = await mkdtemp(join(root, 'verify-'))
@@ -51,16 +53,13 @@ export function createVerificationJobCheck({ id, version, root, executable, args
       await writeFile(path, await snapshot.readFile(file.path), { flag: 'wx', mode: file.mode === '100755' ? 0o755 : 0o644 })
     }
     const startedAt = new Date().toISOString(), start = Date.now()
-    const results = []; let outputBytes = 0
+    const results = []; let outputBytes = 0, resultOutput
     for (const command of commands) {
       signal?.throwIfAborted()
-      const stepStart = Date.now(), stepStartedAt = new Date(stepStart).toISOString(), remainingMs = timeoutMs - (stepStart - start)
-      if (remainingMs <= 0) { results.push({ ...command, startedAt: stepStartedAt, elapsedMs: 0, budgetMs: 0, timeoutScope: 'check', exitCode: null, reason: 'timeout', stdout: '', stderr: '' }); break }
-      // 未声明单步预算时沿用原有共享总预算语义；显式单步预算不能借后续步骤延长。
-      const budgetMs = Math.min(command.timeoutMs ?? timeoutMs, remainingMs), timeoutScope = budgetMs === remainingMs ? 'check' : 'step'
+      const stepStart = Date.now(), stepStartedAt = new Date(stepStart).toISOString()
       const result = await new Promise((resolve, reject) => {
       const child = spawn(command.executable, command.args, { cwd: directory, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] })
-      const stdout = [], stderr = []
+      const stdout = [], stderr = [], completeStdout = []
       let bytes = 0, reason = null, terminationError = null, killPromise = Promise.resolve(), drainTimer
       const unconfirmed = () => {
         const error = executionError('VERIFY_JOB_DRAIN_UNCONFIRMED', terminationError ?? 'Process tree did not close after termination')
@@ -79,39 +78,42 @@ export function createVerificationJobCheck({ id, version, root, executable, args
       const onAbort = () => stop('cancelled')
       signal?.addEventListener('abort', onAbort, { once: true })
       if (signal?.aborted) onAbort()
-      const timer = setTimeout(() => stop('timeout'), Math.max(1, budgetMs - (Date.now() - stepStart)))
       for (const [stream, out] of [[child.stdout, true], [child.stderr, false]]) stream.on('data', chunk => {
         bytes += chunk.length
-        if (bytes + outputBytes > 32768) return stop('output_limit')
-        if (out) stdout.push(chunk); else stderr.push(chunk)
+        // 末步业务 JSON 独立完整采集；诊断截断不影响实际值核验。
+        if (captureResult && command === commands.at(-1) && out) completeStdout.push(chunk)
+        const retained = stdout.reduce((n, value) => n + value.length, 0) + stderr.reduce((n, value) => n + value.length, 0)
+        const available = Math.max(0, 32768 - outputBytes - retained)
+        if (available) { if (out) stdout.push(chunk.subarray(0, available)); else stderr.push(chunk.subarray(0, available)) }
       })
-      child.once('error', error => { clearTimeout(timer); clearTimeout(drainTimer); signal?.removeEventListener('abort', onAbort); reject(error) })
+      child.once('error', error => { clearTimeout(drainTimer); signal?.removeEventListener('abort', onAbort); reject(error) })
       child.once('close', async (exitCode, exitSignal) => {
-        clearTimeout(timer); signal?.removeEventListener('abort', onAbort); await killPromise; clearTimeout(drainTimer)
+        signal?.removeEventListener('abort', onAbort); await killPromise; clearTimeout(drainTimer)
         if (terminationError) return unconfirmed()
         const out = Buffer.concat(stdout), err = Buffer.concat(stderr), encodedOut = encodeOutput(out), encodedErr = encodeOutput(err)
-        resolve({ exitCode, signal: exitSignal, reason, terminationError, stdout: encodedOut.value, stdoutEncoding: encodedOut.encoding, stderr: encodedErr.value, stderrEncoding: encodedErr.encoding, outputBytes: out.length + err.length })
+        if (captureResult && command === commands.at(-1)) resultOutput = Buffer.concat(completeStdout).toString('utf8')
+        resolve({ exitCode, signal: exitSignal, reason, terminationError, stdout: encodedOut.value, stdoutEncoding: encodedOut.encoding, stderr: encodedErr.value, stderrEncoding: encodedErr.encoding, outputBytes: out.length + err.length, observedOutputBytes: bytes, outputTruncated: bytes > out.length + err.length })
       })
       })
-      results.push({ ...command, ...result, startedAt: stepStartedAt, elapsedMs: Date.now() - stepStart, budgetMs, timeoutScope: result.reason === 'timeout' ? timeoutScope : null }); outputBytes += result.outputBytes
+      results.push({ ...command, ...result, startedAt: stepStartedAt, elapsedMs: Date.now() - stepStart }); outputBytes += result.outputBytes
       if (result.exitCode !== 0 || result.reason !== null) break
     }
     const result = results.at(-1)
     return { passed: results.length === commands.length && results.every(result => result.exitCode === 0 && result.reason === null),
-      log: JSON.stringify({ candidateDigest: snapshot.candidateDigest, directory, exitCode: result.exitCode, reason: result.reason, timeoutScope: result.timeoutScope, startedAt, elapsedMs: Date.now() - start, timeoutMs, steps: results }) }
+      log: JSON.stringify({ candidateDigest: snapshot.candidateDigest, directory, exitCode: result.exitCode, reason: result.reason, startedAt, elapsedMs: Date.now() - start, steps: results }), ...(captureResult ? { resultOutput } : {}) }
   } }
 }
 
 /** Host 固定验收项；命令退出成功且实际值匹配预期才通过。 */
 export function createBusinessAcceptanceCheck({ criterion, expected, ...config }) {
-  if (![criterion, expected].every(value => typeof value === 'string' && value.trim() && value.length <= 2000)) throw executionError('ENGINEERING_ACCEPTANCE_CONFIG_INVALID')
-  const check = createVerificationJobCheck(config)
+  if (![criterion, expected].every(value => typeof value === 'string' && value.trim())) throw executionError('ENGINEERING_ACCEPTANCE_CONFIG_INVALID')
+  const check = verificationJobCheck(config, true)
   return { ...check, configurationDigest: executionDigest({ command: check.configurationDigest, implementation: check.run.toString(), criterion, expected }), async run(snapshot, context) {
-    const result = await check.run(snapshot, context), log = JSON.parse(result.log), step = log.steps.at(-1)
+    const result = await check.run(snapshot, context), log = JSON.parse(result.log)
     let actual = null
     try {
-      const parsed = JSON.parse(step.stdoutEncoding === 'base64' ? Buffer.from(step.stdout, 'base64').toString('utf8') : step.stdout)
-      if (typeof parsed.actual === 'string' && parsed.actual.length <= 2000) actual = parsed.actual
+      const parsed = JSON.parse(result.resultOutput)
+      if (typeof parsed.actual === 'string') actual = parsed.actual
     } catch { /* 无结构化实际值时验收不通过。 */ }
     const passed = result.passed && actual !== null && actual === expected
     log.acceptance = { criterion, expected, actual, passed }

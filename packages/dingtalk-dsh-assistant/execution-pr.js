@@ -1,21 +1,24 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawn } from 'node:child_process'
 import { mkdtemp, writeFile, unlink, rmdir, mkdir, lstat, open, readFile, realpath } from 'node:fs/promises'
 import { join, isAbsolute, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { executionDigest, executionError } from './execution-artifacts.js'
 
+const operation = new AsyncLocalStorage()
 function invoke(command, args, cwd) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command.executable, [...command.args, ...args], { cwd, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_PAGER: 'cat' } })
-    let stdout = '', stderr = '', size = 0, failure
-    const timer = setTimeout(() => { failure = executionError('PR_COMMAND_TIMEOUT'); child.kill() }, 30000)
+    const child = spawn(command.executable, [...command.args, ...args], { cwd, shell: false, windowsHide: true, signal: operation.getStore()?.signal, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_PAGER: 'cat' } })
+    const stdout = []; let stderr = '', stderrTruncated = false, failure
     for (const [stream, out] of [[child.stdout, true], [child.stderr, false]]) stream.on('data', bytes => {
-      size += bytes.length
-      if (size > 1024 * 1024) { failure = executionError('PR_OUTPUT_LIMIT'); child.kill(); return }
-      if (out) stdout += bytes; else stderr += bytes
+      if (out) stdout.push(bytes)
+      else { const value = stderr + bytes.toString('utf8'); stderrTruncated ||= value.length > 8192; stderr = value.slice(0, 8192) }
     })
-    child.once('error', error => { clearTimeout(timer); reject(error) })
-    child.once('close', code => { clearTimeout(timer); if (failure) reject(failure); else resolve({ code, stdout, stderr }) })
+    child.once('error', error => { failure = error })
+    child.once('close', code => {
+      if (failure) return reject(failure.name === 'AbortError' ? executionError('PR_CANCELLED') : failure)
+      resolve({ code, stdout: Buffer.concat(stdout).toString('utf8'), stderr: stderr + (stderrTruncated ? '\n[诊断输出已截断]' : '') })
+    })
   })
 }
 
@@ -53,8 +56,8 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
       if (Object.entries(identity).some(([key, expected]) => data[key] !== expected)) throw executionError('PR_JOURNAL_INVALID')
       if (phase === 'preflight-failed' && (data.observation?.status !== 'failed' || data.observation.phase !== 'preflight'
         || data.observation.mutationAttempted !== false || !Number.isSafeInteger(data.observation.readAttempts)
-        || data.observation.readAttempts < 1 || data.observation.readAttempts > 3
-        || !['PR_READBACK_FAILED', 'PR_READBACK_INVALID', 'PR_COMMAND_TIMEOUT', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN'].includes(data.observation.reason))) throw executionError('PR_JOURNAL_INVALID')
+        || data.observation.readAttempts !== 1
+        || !['PR_READBACK_FAILED', 'PR_READBACK_INVALID', 'PR_PERMISSION_DENIED'].includes(data.observation.reason))) throw executionError('PR_JOURNAL_INVALID')
       return data
     } catch (error) { if (error.code === 'ENOENT') return null; throw executionError('PR_JOURNAL_INVALID') }
   }
@@ -65,7 +68,7 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
       || !/^[a-f0-9]{40}$/.test(body.commitId ?? '') || !/^[a-f0-9]{64}$/.test(body.requirementDigest ?? '')
       || !Number.isSafeInteger(body.generation) || body.generation < 1 || typeof body.runId !== 'string' || !body.runId || typeof body.title !== 'string' || !body.title.trim() || /[\0\r\n]/.test(body.title) || typeof body.body !== 'string'
       || body.operationKey !== executionDigest({ ...scope, runId: body.runId, generation: body.generation, requirementDigest: body.requirementDigest, commitId: body.commitId })
-      || Buffer.byteLength(JSON.stringify(prepared)) > 60000) throw executionError('PR_PREPARED_INVALID')
+) throw executionError('PR_PREPARED_INVALID')
   }
   function prepare({ runId, generation, requirementDigest, commitId, title, body }) {
     const operationKey = executionDigest({ ...scope, runId, generation, requirementDigest, commitId })
@@ -74,21 +77,20 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
     return prepared
   }
   async function json(args) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      let result
-      try { result = await invoke(command, args, repository) }
-      catch (error) {
-        if (attempt < 2 && ['PR_COMMAND_TIMEOUT', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN'].includes(error.code)) { await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1))); continue }
-        error.readAttempts = attempt + 1; throw error
-      }
-      if (result.code === 0) {
-        try { return JSON.parse(result.stdout) } catch { throw executionError('PR_READBACK_INVALID') }
-      }
-      if (attempt < 2 && /\b(?:ECONNRESET|ETIMEDOUT|EAI_AGAIN)\b|TLS handshake timeout|connection reset|i\/o timeout|HTTP (?:429|502|503|504)\b/i.test(result.stderr)) { await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1))); continue }
-      throw Object.assign(executionError('PR_READBACK_FAILED'), { readAttempts: attempt + 1 })
+    let result
+    try { result = await invoke(command, args, repository) }
+    catch (error) {
+      if (['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ENETUNREACH', 'ECONNREFUSED'].includes(error.code)) throw Object.assign(executionError('PR_CONNECTION_FAILED'), { readAttempts: 1 })
+      throw error
     }
+    if (result.code === 0) {
+      try { return JSON.parse(result.stdout) } catch { throw executionError('PR_READBACK_INVALID') }
+    }
+    const connection = /\b(?:ECONNRESET|ETIMEDOUT|EAI_AGAIN)\b|TLS handshake timeout|connection reset|i\/o timeout|HTTP (?:429|502|503|504)\b|Could not resolve|connection refused|failed to connect|network is unreachable/i.test(result.stderr)
+    const permission = /HTTP (?:401|403)\b|authentication|not authenticated|permission denied|insufficient.*scope|authorization/i.test(result.stderr)
+    throw Object.assign(executionError(connection ? 'PR_CONNECTION_FAILED' : permission ? 'PR_PERMISSION_DENIED' : 'PR_READBACK_FAILED'), { readAttempts: 1 })
   }
-  async function reconcile(prepared, { allowHeadChange = false } = {}) {
+  async function reconcile(prepared, { allowHeadChange = false, preflight = false } = {}) {
     validate(prepared)
     // 仅回读已存在的完整未发送证据；不得为历史 unknown 创建日志。
     if (!await journal(prepared, 'send-intent')) {
@@ -97,11 +99,20 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
         if (!await journal(prepared, 'attempt-start') || await journal(prepared, 'send-complete')) throw executionError('PR_JOURNAL_INVALID')
         if (!await journal(prepared, 'send-intent')) return failure.observation
       }
+      if (!preflight && await journal(prepared, 'attempt-start') && !await journal(prepared, 'send-complete') && !await journal(prepared, 'send-intent')) {
+        return { status: 'failed', phase: 'preflight', mutationAttempted: false, reason: 'PR_PREFLIGHT_NOT_SENT', readAttempts: 1 }
+      }
     }
-    const list = await json(['pr', 'list', '--repo', repo, '--head', head, ...(previousPullRequest ? [] : ['--base', base]), '--state', 'all', '--limit', '100', '--json', 'number,url,state,headRefOid,headRefName,baseRefName,body'])
-    if (!Array.isArray(list)) throw executionError('PR_READBACK_INVALID')
+    const query = new URLSearchParams({ state: 'all', head: repo.split('/')[0] + ':' + head, ...(previousPullRequest ? {} : { base }), per_page: '100' })
+    const pages = await json(['api', '--paginate', '--slurp', 'repos/' + repo + '/pulls?' + query])
+    if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page))) throw executionError('PR_READBACK_INVALID')
+    const rows = pages.flat()
+    if (rows.some(item => !item || !Number.isSafeInteger(item.number) || typeof item.head?.ref !== 'string' || typeof item.base?.ref !== 'string')) throw executionError('PR_READBACK_INVALID')
+    const list = rows.map(item => ({ number: item.number, url: item.html_url, state: item.merged_at ? 'MERGED' : item.state?.toUpperCase(),
+      headRefOid: item.head.sha, headRefName: item.head.ref, baseRefName: item.base.ref, body: item.body }))
+      .filter(item => item.headRefName === head && (previousPullRequest || item.baseRefName === base))
     if (previousPullRequest) {
-      if (list.length >= 100 || list.some(item => item.state === 'OPEN' && item.number !== previousPullRequest.number)) throw executionError('PR_IDENTITY_AMBIGUOUS')
+      if (list.some(item => item.state === 'OPEN' && item.number !== previousPullRequest.number)) throw executionError('PR_IDENTITY_AMBIGUOUS')
       const current = await json(['pr', 'view', String(previousPullRequest.number), '--repo', repo, '--json', 'number,url,state,headRefOid,headRefName,baseRefName,body'])
       if (current.number !== previousPullRequest.number || current.headRefName !== head
         || typeof current.url !== 'string' || !/^https:\/\//.test(current.url)
@@ -129,11 +140,22 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
       || !['OPEN', 'MERGED'].includes(result.state) || !Number.isSafeInteger(result.number) || !/^https:\/\//.test(result.url ?? '')) throw executionError('PR_RESULT_CONFLICT')
     return { status: 'succeeded', number: result.number, url: result.url, state: result.state, commitId: result.headRefOid, repo, head, base }
   }
+  async function recoverUnsent(prepared) {
+    validate(prepared)
+    if (await journal(prepared, 'send-intent') || await journal(prepared, 'send-complete')) return null
+    const started = await journal(prepared, 'attempt-start')
+    if (!started) return null
+    const failure = await journal(prepared, 'preflight-failed')
+    if (failure && !['PR_CONNECTION_FAILED', 'PR_PREFLIGHT_NOT_SENT'].includes(failure.observation.reason)) return null
+    if (await journal(prepared, 'send-intent') || await journal(prepared, 'send-complete')) return null
+    return { operationKey: prepared.operationKey, preparedDigest: prepared.digest, mutationAttempted: false,
+      reason: failure?.observation.reason ?? 'PR_PREFLIGHT_NOT_SENT', evidenceRef: join(journalRoot, prepared.operationKey + '.attempt-start.json') }
+  }
   async function execute(prepared) {
     validate(prepared)
     if (await journal(prepared, 'send-intent')) {
-      try { return await reconcile(prepared) }
-      catch (error) { if (!['PR_READBACK_FAILED', 'PR_READBACK_INVALID', 'PR_COMMAND_TIMEOUT'].includes(error.code)) throw error; return { status: 'unknown', phase: 'after-send-intent', reason: error.code } }
+      try { return await operation.run({}, () => reconcile(prepared)) }
+      catch (error) { if (!['PR_READBACK_FAILED', 'PR_READBACK_INVALID', 'PR_PERMISSION_DENIED', 'PR_CONNECTION_FAILED', 'PR_CANCELLED'].includes(error.code)) throw error; return { status: 'unknown', phase: 'after-send-intent', reason: error.code } }
     }
     try { await journal(prepared, 'attempt-start', { createdAt: new Date().toISOString() }) }
     catch (error) {
@@ -141,22 +163,21 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
       if (!await journal(prepared, 'attempt-start')) throw executionError('PR_JOURNAL_INVALID')
       const failure = await journal(prepared, 'preflight-failed')
       if (failure) return failure.observation
-      return reconcile(prepared)
     }
     let existing
     try {
-      existing = await reconcile(prepared)
+      existing = await reconcile(prepared, { preflight: true })
       if (existing.status === 'succeeded') return existing
       const branch = await json(['api', `repos/${repo}/git/ref/heads/${head.split('/').map(encodeURIComponent).join('/')}`])
       if (branch.object?.sha !== prepared.commitId) throw executionError('PR_HEAD_CHANGED')
       if (previousPullRequest) {
-        const checked = await reconcile(prepared)
+        const checked = await reconcile(prepared, { preflight: true })
         if (checked.status === 'succeeded') return checked
       }
     } catch (error) {
-      if (['PR_READBACK_FAILED', 'PR_READBACK_INVALID', 'PR_COMMAND_TIMEOUT', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN'].includes(error.code)) {
+      if (['PR_READBACK_FAILED', 'PR_READBACK_INVALID', 'PR_PERMISSION_DENIED', 'PR_CONNECTION_FAILED', 'PR_CANCELLED'].includes(error.code)) {
         const observation = { status: 'failed', phase: 'preflight', mutationAttempted: false, reason: error.code, readAttempts: error.readAttempts ?? 1 }
-        await journal(prepared, 'preflight-failed', { observation })
+        if (!['PR_CONNECTION_FAILED', 'PR_CANCELLED'].includes(error.code)) await journal(prepared, 'preflight-failed', { observation })
         return observation
       }
       throw error
@@ -175,9 +196,10 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
         ...(previousPullRequest ? ['--base', base] : []), '--title', prepared.title, '--body-file', path] : ['pr', 'create', '--repo', repo, '--base', base, '--head', head, '--title', prepared.title, '--body-file', path], repository); completion = { exitCode: result.code } }
       catch (error) { completion = { reason: error.code ?? 'PR_SEND_UNKNOWN' } }
       await journal(prepared, 'send-complete', { completedAt: new Date().toISOString(), ...(completion ?? { returned: true }) })
-      try { return await reconcile(prepared) }
-      catch (error) { if (!['PR_READBACK_FAILED', 'PR_READBACK_INVALID', 'PR_COMMAND_TIMEOUT'].includes(error.code)) throw error; return { status: 'unknown', phase: 'after-send-intent', reason: error.code } }
+      try { return await operation.run({}, () => reconcile(prepared)) }
+      catch (error) { if (!['PR_READBACK_FAILED', 'PR_READBACK_INVALID', 'PR_PERMISSION_DENIED', 'PR_CONNECTION_FAILED', 'PR_CANCELLED'].includes(error.code)) throw error; return { status: 'unknown', phase: 'after-send-intent', reason: error.code } }
     } finally { await unlink(path).catch(error => { if (error.code !== 'ENOENT') throw error }); await rmdir(directory) }
   }
-  return { prepare, execute, reconcile }
+  return { prepare, recoverUnsent: async (prepared, context = {}) => { context.signal?.throwIfAborted(); const proof = await recoverUnsent(prepared); context.signal?.throwIfAborted(); return proof }, execute: (prepared, context = {}) => operation.run(context, () => execute(prepared)),
+    reconcile: (prepared, context = {}) => operation.run(context, () => reconcile(prepared, context)) }
 }

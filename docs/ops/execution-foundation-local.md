@@ -65,7 +65,7 @@ export function apply(ctx) {
       mapInput: ({ previousOutput }) => previousOutput,
       provider: '<已配置Provider ID>', model: '<已配置模型ID>',
       prompt: '概括输入文本。完成后调用 execution_node_submit，output 为含 summary 字符串的对象。',
-      allowedTools: [], maxSteps: 32, timeoutMs: 120000,
+      allowedTools: [],
     }],
   }])
 }
@@ -96,8 +96,6 @@ await installExecution(ctx, {
   artifactDirectory: '<与离线初始化一致的工件目录绝对路径>',
   readTools: [],
   maxConcurrentRuns: 4,
-  changeQuietMs: 2000,
-  maxChangeDelayMs: 10000,
 })
 
 const { controller, store, artifacts } = ctx.execution
@@ -132,29 +130,13 @@ await controller.changeInput({
 
 先持久接纳并建立屏障，再中止/排空旧执行，在合并窗口后使用最后一份完整输入建立新 generation。当前 Controller 从首节点重算整条链，不提供语义级补丁合并；每条已接纳输入仍留在账中。同一来源的重复输入不额外换代。不能用此接口自动重开已完成 run。
 
-`whenIdle(runId)` 等待当前调度结束并返回状态；`waiting`、预算耗尽或错误也可能让调度空闲，所以不能仅凭它返回就宣称任务成功。须核对 `run.status`、有效节点输出及对应证据。
+`whenIdle(runId)` 等待当前调度结束并返回状态；`waiting` 或错误也可能让调度空闲，所以不能仅凭它返回就宣称任务成功。须核对 `run.status`、有效节点输出及对应证据。
 
-## 4. 当前默认预算
+## 4. 持续执行与资源调度
 
-| 项目 | 默认值与实际边界 |
-| --- | --- |
-| 并发 run | 4；允许配置为 1—32 |
-| Controller 待调度队列 | 最多 256 项 |
-| 工作流 | 最多 32 个顺序节点，仅 code/agent；独立底座示例只用 pure/read，已准入的工程 code 节点可声明受控 Git/工作目录/PR 效果，外部流程 code 节点可声明 `external.operation`，均须相应受信适配器 |
-| 输入替换合并 | 静默 2 秒、首条起最长 10 秒；它是合并参数，不是业务完成时限 |
-| 整个 run 的 claim 次数 | 默认节点数 × 3，恢复和换 generation 不重置已用次数；不是每个节点各自无限重试 |
-| Agent 每次执行 | 默认最多 32 step、120 秒；maxSteps 允许 1—256 |
-| code 节点 | 没有上述 Agent 定时器，必须主动响应 AbortSignal 并使操作有界 |
-| Store RPC | 最多 64 个待回复请求，无固定 JSON 字节上限；ready 后请求回执超时 10 秒，进入 COMMIT_ACK_UNKNOWN；启动校验等待真实 ready/fatal/error/exit，不设固定时限 |
-| 单个 JSON 工件 | 最多 64 KiB；完整落盘后登记内容地址，读取重新校验 hash |
+任务、Owner、节点、验收不设累计步数、领取次数、失败次数或总墙钟截止；claimCount仅统计。并发run默认4，可配置任意正整数；持久任务排队后逐批领取，不因队列长度拒收。工作流节点数量不设人工上限。输入替换消费当前持久批次，不等待静默窗口，后续输入在下一批应用。
 
-本批没有落实 v2 全部 token 预算和性能目标。预算耗尽会留下等待/恢复原因，不通过 Goal 续轮、换代或重新批准偷偷清零。调整参数属于受信 Host 配置变更，不能由 Agent 修改。
-
-### Run 领取预算显式续行
-
-当前任务投影 `budgetContinuation` 非空时，可由已配置 `webActorId` 的受信本机 Web 用户明确调用 `POST /tasks/{taskId}/continue-budget`，提交该绑定、唯一 `requestId` 与 `continuationText`。见[接口合同](../api/workflow-node-contracts.md#web-run-预算续行接口)。不要编辑控制库或自行填追加额度。
-
-Host 只允许同 Run 一次续行，按剩余节点数 × 3 增加上限；累计 `claimCount`、generation、已成功节点、候选及验收凭证保持原值。存在待处理输入、未知效果、未排空执行或状态漂移时拒绝。再次耗尽需明确停止，不自动向模型申请扩额。202 仅代表命令接纳；须继续回读实际预算回执、Run 状态与后续证据。续行不会绕过构建及候选核验，也不等于合并或部署成功。
+原生权限、版本、取消与效果对账继续生效。Store RPC失联识别与进程终止确认属于协议控制，不是任务总截止；回执不明先核对实际持久状态。工件通过引用与分页读完，不把摘要当完整材料。
 
 ## 5. 停止、重启与显式恢复
 
@@ -174,7 +156,7 @@ await controller.recover({ commandId: 'demo-recover-001', runId: 'demo-run-001' 
 const recovered = await controller.whenIdle('demo-run-001')
 ```
 
-`recover` 不能覆盖停止、输入屏障、预算或 unknown 效果。已持久的输入替换和停止优先收口。原生会话的固定身份、历史租约和持久记录必须匹配；已绑定 Session 丢失、身份异常或旧句柄仍活跃时进入明确错误，不新建空会话伪装续接。
+`recover` 不能覆盖停止、输入屏障或 unknown 效果。已持久的输入替换和停止优先收口。原生会话的固定身份、历史租约和持久记录必须匹配；已绑定 Session 丢失、身份异常或旧句柄仍活跃时进入明确错误，不新建空会话伪装续接。
 
 ### 效果与审批边界
 
@@ -197,7 +179,7 @@ Web/钉钉首次审批决策在内部协议中平级：同 request 首个有效�
 | `COMMIT_ACK_UNKNOWN` / `STORE_UNAVAILABLE` | 停止派生效果，关闭后按原路径重开恢复，先以原 commandId 查询 receipt；超时不是未提交证明 |
 | `WORKFLOW_VERSION_UNAVAILABLE` | 恢复对应固定定义和版本；不将新同名定义套到旧 run |
 | `execution_session_missing` / `execution_session_identity_mismatch` | 核对原生 Session 持久目录、固定身份和包版本；不删记录或新建空 Session 绕过 |
-| `EXECUTION_BUDGET_EXHAUSTED` / `controllerError` / 节点 recovery 等待 | 读取具体原因与已有证据，修复实际问题后按契约恢复；预算耗尽没有自动续期 |
+| `controllerError` / 节点 recovery 等待 | 读取具体原因与已有证据，修复实际问题后按契约恢复 |
 | `run_effects_not_drained` / `node_effects_not_settled` | 检查未决操作/job、审批和资源持有者；完成独立对账前不能标任务结束 |
 
 回执只读查询示例：
@@ -220,7 +202,7 @@ await store.query({ kind: 'safety.get' })
 
 `freezeCandidate({repository,baseCommit,generation,requirementDigest})` 对受管仓库的 tracked/untracked 文件及删除生成完整 tree，使用临时 index，不创建临时 commit，不改用户 index 和工作文件。冻结前调用方必须持有写 lease 并排空写者；它不是对并发修改目录的原子拍照。新代应通过第 8 节从有效基线准备新受管目录，不能把失效旧目录直接再次冻结。
 
-`verifyCandidate({candidate,checks:[{id,version,run}]})` 的 run 只取得固定 tree 的文件列表及 readFile。日志和 passed 是显式结果；默认没有 shell 测试。检查函数来自受信插件，不构成操作系统沙箱。文件上限16 MiB、全部文件64 MiB、10000项；不支持符号链接、子模块或适用的执行型过滤器。
+`verifyCandidate({candidate,checks:[{id,version,run}]})` 的 run 只取得固定 tree 的文件列表及 readFile。日志和 passed 是显式结果；默认没有 shell 测试。检查函数来自受信插件，不构成操作系统沙箱。不设置单文件、文件总量或数量截止；不支持符号链接、子模块或适用的执行型过滤器。
 
 验证成功票据由本进程创建并冻结，复制出来的普通 JSON 不算可信票据。`prepareCommit` 要求这张真实票据和精确 requiredChecks；重启时尚未准备交付的候选需重新运行只读检查。已经持久准备的动作使用原 payload 对账，不能因票据不在内存就重发写操作。
 
@@ -242,7 +224,7 @@ ctx.provide('executionDelivery', {
 
 只有 code 节点可以声明 `allowedEffects:['git.commit']` 或 `['git.push']`；Agent 声明会被拒绝。受信 execute 回调取得 Host 的 generation、requirementDigest 和 `perform({action,prepared})`。candidate 必须使用这些身份；不能使用另一任务的同代候选。每个节点每种动作只有一个固定 operation 身份，需要多次不同动作应拆节点。
 
-顺序为：冻结 → 真实只读验证 → `adapter.prepareCommit({candidate,verification,requiredChecks,message,date})` → commit 节点 `perform` → `preparePush({commit,expectedRemoteSha})` → push 节点 `perform`。date 是首次计划时冻结的 Unix秒+时区字符串（例如 `1790150400 +0000`），必须持久复用，不能每次恢复取当前时间。prepared 含验证检查、版本和日志，仍受64 KiB节点工件上限约束；超限明确失败，不截断证据。
+顺序为：冻结 → 真实只读验证 → `adapter.prepareCommit({candidate,verification,requiredChecks,message,date})` → commit 节点 `perform` → `preparePush({commit,expectedRemoteSha})` → push 节点 `perform`。date 是首次计划时冻结的 Unix秒+时区字符串（例如 `1790150400 +0000`），必须持久复用，不能每次恢复取当前时间。prepared 含完整验证检查、版本和证据，不设置64KiB准备数据截止。
 
 ### Git 边界与恢复
 
@@ -280,7 +262,7 @@ async function prepareDirectory({ input, runId, generation, requirementDigest, p
 
 结果丢失时沿用第7节 `delivery.reconcile(effectId)` 后恢复：完整归属、完成标记及固定HEAD仍相符才能复用；之后用户对文件的正常编辑保留。目录不存在、初始化残缺、归属或HEAD冲突时不覆盖，保持恢复错误/unknown供定位。已记录创建成功的目录再次使用前也重新检查当前身份，旧receipt不是当前目录存在的证明。
 
-准入限制：SHA-1独立非bare源仓库；不支持源worktree共享对象、`.gitattributes`、链接、子模块、shallow、alternates/grafts、hook和执行型Git配置。初始化Git使用独立global/system配置边界；不运行项目脚本。文件上限与候选一致（单文件16MiB、合计64MiB、10000项）。独立仓库和元信息不构成OS权限/网络沙箱，不能因此开放任意shell。
+准入限制：SHA-1独立非bare源仓库；不支持源worktree共享对象、`.gitattributes`、链接、子模块、shallow、alternates/grafts、hook和执行型Git配置。初始化Git使用独立global/system配置边界；不运行项目脚本。工作区与候选按完整固定树提取，不按文件大小、总量或数量终结。独立仓库和元信息不构成OS权限/网络沙箱，不能因此开放任意shell。
 
 ## 9. 消息工作流按群离线切换
 
@@ -418,25 +400,25 @@ Owner 可用 `task_owner_read_artifact` 按引用读取当前 Task 已成功阶�
 
 ### 工程固定检查的阶段预算与失败证据
 
-`checks[].timeoutMs` 是整个检查的总执行预算，默认仍为 `120000`，允许范围 `1..2400000` 毫秒。每个 `steps[]` 可显式配置 `timeoutMs`，范围 `1..1800000`；省略时沿用共享总预算语义。实际单步 deadline 取自身预算与总剩余时间的较小值，不在下一步重置总时间。参数只能由 Host 配置提供，不由消息或模型延长。
+固定检查及候选/Git/PR执行不设置总时长或步骤时长截止；旧 timeoutMs 配置必须删除，构造器明确拒绝该字段。显式取消仍终止并核对实际进程排空。
 
-冷安装与构建各需独立预算的仓库，可明确写为：
+冷安装与构建按顺序配置为：
 
 ```js
 {
-  id: 'install-build', version: '1', timeoutMs: 2400000,
+  id: 'install-build', version: '1',
   steps: [
-    { executable: trustedNodePath, args: [trustedYarnCliPath, 'install', '--frozen-lockfile'], timeoutMs: 600000 },
-    { executable: trustedNodePath, args: [trustedYarnCliPath, 'build'], timeoutMs: 1800000 },
+    { executable: trustedNodePath, args: [trustedYarnCliPath, 'install', '--frozen-lockfile'] },
+    { executable: trustedNodePath, args: [trustedYarnCliPath, 'build'] },
   ],
 }
 ```
 
-示例不代表该仓库已经构建通过。必须用真实冻结候选完整实跑 PASS 后准入；不自动增加预算，不忽略超时或退出码。每步日志记录 `startedAt/elapsedMs/budgetMs/timeoutScope`，`timeoutScope` 为 `step`、`check` 或未超时的 `null`；elapsed 包括终止排空时间，可能略超过 deadline。总预算从开始执行检查步骤计时，保留原来不含候选物化时间的语义。
+示例不代表构建通过。必须用真实冻结候选完整实跑 PASS 后准入，核对退出码、实际业务结果和候选摘要。每步保留 startedAt/elapsedMs；取消仍确认进程排空。
 
-失败工程检查保持 `waiting/ENGINEERING_VERIFICATION_FAILED`，不发放交付资格。检查日志以最多 128 个内容地址工件保存到失败节点 `evidenceRefs`：每个日志按 16KiB 原始 UTF-8 字节分块、base64 编码，附检查 ID/版本/结果、part/parts、字节总数和日志 SHA256；重组按同一检查的 part 顺序拼接字节，再校验 SHA 并解码 UTF-8。每工件仍受 64KiB 上限约束。没有把日志丢在仅本轮可见的内存错误里，也不把失败节点标记成功。
+失败工程检查保持 `waiting/ENGINEERING_VERIFICATION_FAILED`，不发放交付资格。检查日志以最多 128 个内容地址工件保存到失败节点 `evidenceRefs`：每个日志按 16KiB 原始 UTF-8 字节分块、base64 编码，附检查 ID/版本/结果、part/parts、字节总数和日志 SHA256；重组按同一检查的 part 顺序拼接字节，再校验 SHA 并解码 UTF-8。工件按引用完整保存，分块用于读取。没有把日志丢在仅本轮可见的内存错误里，也不把失败节点标记成功。
 
-检查 job 日志只在 `steps[]` 保存 stdout/stderr，顶层只保留退出/超时摘要。各流带 `stdoutEncoding/stderrEncoding`：有效 UTF-8 普通文本在其 JSON 编码不长于 base64 时使用 `utf8`，其余输出使用 `base64`；读取时按该字段解码。32KiB 限制按所有步骤合计的原始输出字节计量，不按 base64 长度计量。固定命令与root的JSON配置共同受8KB上限约束，避免大配置挤掉64KiB结果的日志空间。没有静默删去已采集字节。
+检查 job 日志只在 `steps[]` 保存 stdout/stderr，顶层只保留退出/超时摘要。各流带 `stdoutEncoding/stderrEncoding`：有效 UTF-8 普通文本在其 JSON 编码不长于 base64 时使用 `utf8`，其余输出使用 `base64`；读取时按该字段解码。32KiB 限制按所有步骤合计的原始输出字节计量，不按 base64 长度计量。命令数量与配置总量不设人工上限。诊断日志达到采集容量时显式记录 outputTruncated，命令继续运行；业务结构化结果独立完整核对。没有静默删去已采集字节。
 
 业务工程检查的 Node 版本与 DSH Host 分开固定：本机 DSH 使用 Node 24；上述 dataset-web 基线 `.nvmrc/.node-version` 为 Node 20，生产 Dockerfile 的依赖与构建阶段为 Node 22，因此本地生产构建验证采用已安装的 `D:/soft/node-v22.13.0/node.exe`。不能因为 Host 要求 Node 24 就让业务工程自动使用 Node 24。Yarn CLI 也固定绝对路径和实际版本；需独立回读实际 Vue 构建子进程的 Node 路径，而不只核对启动脚本。
 
@@ -453,14 +435,13 @@ Owner 可用 `task_owner_read_artifact` 按引用读取当前 Task 已成功阶�
 
 ### 工程业务验收配置（v10）
 
-仓库 `checks` 仅表示构建/技术检查；新增可选 `acceptanceChecks`，每项包含检查器原有的 id/version/executable/args 或 steps/timeoutMs，以及必填 `criterion`（业务验收项）与 `expected`（精确预期字符串）。最多32项，ID不得与构建项重复。使用同一冻结候选的独立副本执行，末步 stdout 必须为 JSON `{"actual":"实际结果"}`；Host 检查全部步骤退出成功且 actual 与 expected 精确相等才放行。不能输出空回执或仅声明 passed:true。命令、验收项、预期由 Host 配置提供，消息和模型不能覆盖；Host 应只配置能够覆盖目标需求的实际回归用例，不能把通用构建或空命令标为业务验收。
+仓库 `checks` 仅表示构建/技术检查；新增可选 `acceptanceChecks`，每项包含检查器原有的 id/version/executable/args 或 steps/timeoutMs，以及必填 `criterion`（业务验收项）与 `expected`（精确预期字符串）。数量不设人工上限，ID不得与构建项重复。使用同一冻结候选的独立副本执行，末步 stdout 必须为 JSON `{"actual":"实际结果"}`；Host 检查全部步骤退出成功且 actual 与 expected 精确相等才放行。不能输出空回执或仅声明 passed:true。命令、验收项、预期由 Host 配置提供，消息和模型不能覆盖；Host 应只配置能够覆盖目标需求的实际回归用例，不能把通用构建或空命令标为业务验收。
 
 ```js
 acceptanceChecks: [{
   id: 'normalization-result', version: '1',
   criterion: '固定业务输入的归一化结果', expected: '1 t',
   executable: trustedNodePath, args: ['tools/accept-normalization.mjs'],
-  timeoutMs: 120000,
 }]
 ```
 
@@ -514,7 +495,7 @@ node scripts/migrate-message-impact.js --execute D:/dsh_home/workflows/runtime-v
 
 安装 Assistant/Observer 精确包后，保持维护状态核对包摘要、进程、schema、健康和消息只读投影，再决定恢复调度。原 #109—#115 的重处理须逐条核对当前来源版本、已有命令及通知，不批量重放。实际渠道外发和生产 SQL 的授权独立保留。
 
-输入处理不再设置 S/R/I/IB 固定字节或累计输入/输出额度上限；必要材料经材料账及内部 RPC 完整传递，保留来源/内容一致性校验和队列背压。默认调用超时 60 秒、节点窗口 90 秒；实际提供方容量错误、超时与无效协议仍记录并有限恢复，不能以扩大本地输入范围伪称模型理解完整。
+输入处理不再设置 S/R/I/IB 固定字节或累计输入/输出额度上限；必要材料经材料账及内部 RPC 完整传递，保留来源/内容一致性校验和队列背压。当前群常驻协调和任务执行不设置总调用或节点窗口；实际提供方容量错误、连接故障与无效协议按当前原因恢复，不能以扩大本地输入范围伪称模型理解完整。
 
 ### 工具纠正与 Owner 快照
 
@@ -559,3 +540,15 @@ Owner 原生提交工具按当前 currentExecution 开放阶段修复动作；�
 控制库启动先获取原生独占 owner 锁（busy_timeout=0），再核验真实库完整性、身份和schema，恢复后才发送ready。大库或CPU争用可能使校验超过10秒；Host不以等待时长终止worker。真实fatal、worker error或ready之前退出仍拒绝开库，不能降级或绕过校验。
 
 启动尚未ready、localhost尚无listener只表示未就绪，不能据此重复安装或另启第二个写者。检查原启动进程及stderr，等待其真实ready或明确失败；独占锁冲突仍立即失败。ready之后命令/查询回执的10秒COMMIT_ACK_UNKNOWN保护不变：禁止派生新效果，按原命令身份重开回读。维护状态在成功启动和独立回读前保持封存。
+
+## 持续执行 v6 → v7 离线升级
+
+本次删除 execution_runs.max_claims 及 claim_count 上限约束，schema 升至7。运行时只接受当前 schema，不自动升级。
+
+1. 对运行库先执行 `node scripts/migrate-continuous-execution.mjs --check <绝对库路径>`，确认零写及全表摘要。
+2. 经原生维护接口进入维护、等待排空并封存停机许可；仅按许可核对旧PID后停止实例。
+3. 用户本次明确要求不备份，执行 `node scripts/migrate-continuous-execution.mjs --execute <绝对库路径> <已停止PID>`；脚本独占原生 owner 锁，事务重建表、核对全部业务表摘要及外键完整性，数据不一致则回滚。脚本不创建备份。
+4. 删除 Host 检查与本地验收配置的 timeoutMs；安装精确候选包，独立核对源文件、包、安装文件摘要。前端检查、后端专项检查、UAT项目与项目本地验收配置生成器同步采用无执行截止字段的合同，旧字段直接拒绝，不透传兼容。
+5. 启动新进程，核对 schema7、维护许可、新PID和健康，再恢复派发。禁止重建旧任务来验证升级。
+
+暂态错误退避等待，不按次数终结；相同条件的实现错误等待修复或新事实。校验、授权、效果对账与业务验收仍必需。并发与分页是资源调度，不限制任务总量。

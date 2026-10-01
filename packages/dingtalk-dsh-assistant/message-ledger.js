@@ -35,10 +35,6 @@ export function isQuietGroupMessage(body) {
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const str = v => { if (typeof v !== 'string' || !v.trim()) fail('MESSAGE_INVALID_ARGUMENT'); return v }
 const json = v => JSON.stringify(v)
-const currentWindowPolicy=policy=>Object.fromEntries(['initialWindowMs','linkedWindowMs'].filter(key=>policy?.[key]!==undefined).map(key=>{
-  if(!Number.isSafeInteger(policy[key])||policy[key]<1)fail('MESSAGE_INVALID_ARGUMENT')
-  return [key,policy[key]]
-}))
 function taskFactVersion(db, taskId) {
   const task = db.prepare('SELECT requirement_revision,requirement_ref,plan_revision,plan_requirement_revision,status FROM business_tasks WHERE task_id=?').get(str(taskId)) ?? null
   const control = db.prepare('SELECT * FROM task_controls WHERE task_id=?').get(taskId) ?? null
@@ -457,7 +453,7 @@ function reduceCoordinator(db,kind,a,ctx) {
     c.sessionBound=true
   } else if(kind==='message.coordinator.release') {
     if(a.drained!==true)fail('MESSAGE_COORDINATOR_NOT_DRAINED')
-    c.status='idle';c.error=a.error??null;c.retryAt=a.retryAt??null;c.completedAt=now
+    c.status='idle';c.error=a.error??null;c.retryAt=a.retryAt??null;c.recovery=a.recovery??null;c.completedAt=now
   } else if(kind==='message.coordinator.commit') {
     if(c.status!=='running')fail('MESSAGE_COORDINATOR_STALE')
     if(!Array.isArray(a.decisions)||a.decisions.length!==c.sources.length||new Set(a.decisions.map(d=>d.runId)).size!==c.sources.length)fail('MESSAGE_INVALID_DISPOSITION')
@@ -530,7 +526,7 @@ function ownerReleasedWait(db,taskId) {
   const fact=db.prepare(`SELECT o.task_id,o.status AS owner_status,o.current_turn_id,o.failure_count,
     b.requirement_revision,b.plan_revision,b.status AS task_status,c.control_revision,c.state AS control_state
     FROM task_owners o JOIN business_tasks b ON b.task_id=o.task_id JOIN task_controls c ON c.task_id=o.task_id WHERE o.task_id=?`).get(taskId)
-  if(!fact||fact.owner_status!=='blocked'||fact.current_turn_id||fact.failure_count<3||!['pending','active'].includes(fact.task_status)||fact.control_state!=='active')return null
+  if(!fact||fact.owner_status!=='blocked'||fact.current_turn_id||!['pending','active'].includes(fact.task_status)||fact.control_state!=='active')return null
   const last=db.prepare('SELECT status,application_status FROM task_owner_turns WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(taskId)
   if(last?.status!=='released'||last.application_status!==null)return null
   if(db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND status IN ('pending','ready','running') LIMIT 1").get(taskId,fact.plan_revision))return null
@@ -866,7 +862,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       const barriers=db.prepare("SELECT 1 FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='barrier' AND json_extract(i.body,'$.status')='pending' AND json_extract(r.body,'$.conversationId')=? AND r.rowid<=? LIMIT 1").get(a.conversationId,g.cutoffRowId)
       if(pending.length||active||barriers)fail('MESSAGE_GROUP_NOT_DRAINED')
       g.state='active';g.engine='workflow';g.epoch++
-      for(const item of db.prepare("SELECT body FROM message_runs WHERE json_extract(body,'$.conversationId')=? AND json_extract(body,'$.status')='buffered'").all(a.conversationId)){const r=JSON.parse(item.body);r.status='pending';r.engineEpoch=g.epoch;r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)}
+      for(const item of db.prepare("SELECT body FROM message_runs WHERE json_extract(body,'$.conversationId')=? AND json_extract(body,'$.status')='buffered'").all(a.conversationId)){const r=JSON.parse(item.body);r.status='pending';r.engineEpoch=g.epoch;save(db,r)}
     } else if(kind==='message.group.abort') {
       if(g.state!=='draining')fail('MESSAGE_GROUP_TRANSITION_INVALID')
       g.state='active';g.engine=g.previousEngine;g.abortedAt=now
@@ -917,7 +913,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     old.status='superseded';old.routingStatus='routing_superseded';old.reason='message_reprocessed';save(db,old);invalidateMessageSourceTopics(db,old.sourceKey,now)
     const next={...old,runId:a.newRunId,sourceVersion:old.sourceVersion+1,revision:0,status:'pending',routingStatus:'routing_pending',intentStatus:null,createdAt:now,
       context:{...old.context,occurredAt:old.context?.occurredAt??origin.context?.occurredAt??origin.createdAt,replayOf:origin.runId,replayOfSequenceId:sequence},snapshot:null,
-      budgetBaseline:spent,policy:{...old.policy,...currentWindowPolicy(a.policy),effectiveMaxClaims:undefined},deadline:new Date(Date.parse(now)+(a.policy?.initialWindowMs??old.policy.initialWindowMs??45000)).toISOString()}
+      budgetBaseline:spent,policy:{...old.policy,...a.policy}}
     delete next.activatedAt;delete next.executionStartedAt;delete next.reason;delete next.capacityRetryVersion;delete next.attentionScope;delete next.attentionUnitIds;delete next.coordinatorConsumed
     db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(next.runId,next.sourceKey,next.sourceVersion,json(next))
     db.prepare('UPDATE message_sources SET current_version=? WHERE source_key=?').run(next.sourceVersion,next.sourceKey)
@@ -939,7 +935,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const inheritedBarriers=source?db.prepare("SELECT i.body FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE r.source_key=? AND i.kind='barrier' AND json_extract(i.body,'$.status')='pending'").all(a.sourceKey).map(x=>JSON.parse(x.body)):[]
     if(source){invalidateMessageSourceTopics(db,a.sourceKey,now);for(const row of db.prepare('SELECT body FROM message_runs WHERE source_key=?').all(a.sourceKey)) {const r=JSON.parse(row.body);revoke(db,r);r.status='superseded';r.routingStatus='routing_superseded';save(db,r)}}
     db.prepare('INSERT INTO message_sources(source_key,current_version) VALUES(?,?) ON CONFLICT(source_key) DO UPDATE SET current_version=excluded.current_version').run(a.sourceKey,a.sourceVersion)
-    const r={...a,revision:0,status:'pending',routingStatus:'routing_pending',intentStatus:null,createdAt:now,policy:{maxClaims:21,maxCorrections:2,...a.policy},snapshot:null,deadline:new Date(Date.parse(now)+(a.barriers?.length?(a.policy?.linkedWindowMs??30000):(a.policy?.initialWindowMs??45000))).toISOString()}
+    const r={...a,revision:0,status:'pending',routingStatus:'routing_pending',intentStatus:null,createdAt:now,policy:{...a.policy},snapshot:null}
     const group=db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(a.conversationId);if(group){const g=JSON.parse(group.body);r.engineEpoch=g.epoch;if(g.state!=='active'||g.engine!=='workflow')r.status='buffered'}
     db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(a.runId,a.sourceKey,a.sourceVersion,json(r))
     registerMessageImpact(db,r,now)
@@ -1016,10 +1012,10 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
         r.status='pending';r.intentStatus='processed';save(db,r)
         return {result:{command:c,run:r,execution,cached:false}}
       }
-      if(!['status','result'].includes(c.kind)||c.status!=='unknown'||c.error!=='INVALID_ARGUMENT'||(c.readonlyRetryCount??0)>=1||c.result!==null)fail('MESSAGE_READONLY_RETRY_FORBIDDEN')
+      if(!['status','result'].includes(c.kind)||c.status!=='unknown'||c.error!=='INVALID_ARGUMENT'||c.result!==null)fail('MESSAGE_READONLY_RETRY_FORBIDDEN')
       if(rows(db,r.runId,'notification').some(item=>item.commandId===c.commandId||item.commandId===c.id))fail('MESSAGE_READONLY_RETRY_FORBIDDEN')
       c.readonlyRetryCount=(c.readonlyRetryCount??0)+1;c.status='pending';c.error=null;c.result=null;put(db,r.runId,'command',c)
-      if(r.status==='needs_attention'&&r.reason==='recovery_exhausted'){r.status='pending';r.reason=null;r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)}
+      if(r.status==='needs_attention'&&r.reason==='recovery_exhausted'){r.status='pending';r.reason=null;save(db,r)}
       return {result:{command:c,run:r}}
     }
     if(kind==='message.command.claim') {
@@ -1152,20 +1148,19 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(q.runId!==r.runId||q.revision!==r.revision||q.kind!=='needs_context')fail('MESSAGE_REQUEST_STALE')
     if(q.status!=='pending')return {result:{request:q,run:r}}
     if(kind==='message.request.retry.reset'){
-      if(a.sourceVersion!==r.sourceVersion||q.blocked!==true)fail('MESSAGE_REQUEST_STALE')
+      if(a.sourceVersion!==r.sourceVersion||!q.lastError)fail('MESSAGE_REQUEST_STALE')
       str(a.reason);str(a.dependencyRevision)
       if(q.dependencyRevision===a.dependencyRevision)fail('MESSAGE_REQUEST_DEPENDENCY_UNCHANGED')
       q.retryHistory=[...(q.retryHistory??[]),{attempts:q.attempts,lastError:q.lastError,contractVersion:q.contractVersion,dependencyRevision:q.dependencyRevision??null,resetAt:now,reason:a.reason}]
       q.dependencyRevision=a.dependencyRevision;q.attempts=0;q.blocked=false;q.responsibility='host';q.retryAt=null
       if(q.unitId!=='$'){const u=get(db,'unit',q.unitId);delete u.blockedReason;delete u.blockedAt;put(db,r.runId,'unit',u)}
     }else if(kind==='message.request.retry'){
-      if(!Number.isSafeInteger(a.maxAttempts)||a.maxAttempts<1||a.maxAttempts>10)fail('MESSAGE_INVALID_ARGUMENT')
       q.attempts=(q.attempts??0)+1;q.lastError=str(a.error);q.contractVersion=str(a.contractVersion);q.retryAt=a.retryAt??null
-      q.blocked=q.attempts>=a.maxAttempts;q.responsibility=q.blocked?'system':'host';q.lastAttemptAt=now
+      q.blocked=false;q.responsibility='host';q.lastAttemptAt=now
     }else{
       q.status='superseded';q.reason=str(a.reason);q.resolvedAt=now
       for(const n of rows(db,r.runId,'node').filter(n=>n.unitId===q.unitId&&n.nodeId===q.nodeId&&n.revision===r.revision)){n.status='superseded';put(db,r.runId,'node',n)}
-      r.status='pending';r.routingStatus='routing_pending';r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)
+      r.status='pending';r.routingStatus='routing_pending';save(db,r)
     }
     put(db,r.runId,'request',q);return {result:{request:q,run:r}}
   }
@@ -1235,7 +1230,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   if(kind==='message.activate') {
     if(r.status!=='pending'||r.activatedAt)return {result:{run:r}}
     current(db,r)
-    r.activatedAt=now;r.deadline=new Date(Date.parse(now)+r.policy.initialWindowMs).toISOString();save(db,r)
+    r.activatedAt=now;save(db,r)
     return {result:{run:r}}
   }
   if(kind==='message.capacity.retry') {
@@ -1250,12 +1245,12 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(stage==='R'&&!nodes.some(node=>node.nodeId==='S'&&['completed','succeeded'].includes(node.status)))return {result:{run:r,retry:false}}
     if(stage==='I'&&!nodes.some(node=>node.unitId===target.id&&node.nodeId==='R'&&['completed','succeeded'].includes(node.status)))return {result:{run:r,retry:false}}
     if(r.capacityRetryVersion===a.projectionVersion)return {result:{run:r,retry:false}}
-    r.policy={...r.policy,...currentWindowPolicy(a.policy)}
+    r.policy={...r.policy,...a.policy}
     if(target){delete target.blockedReason;delete target.blockedAt;put(db,r.runId,'unit',target)}
-    r.capacityRetryVersion=a.projectionVersion;r.status='pending';r.reason=null;r.deadline=new Date(Date.parse(now)+r.policy.initialWindowMs).toISOString();save(db,r)
+    r.capacityRetryVersion=a.projectionVersion;r.status='pending';r.reason=null;save(db,r)
     return {result:{run:r,retry:true}}
   }
-  if(kind==='message.relink') {const u=get(db,'unit',a.unitId);if(u.runId!==r.runId)fail('MESSAGE_STALE');if(rows(db,r.runId,'command').some(c=>c.unitId===u.id&&['running','unknown','applied'].includes(c.status)))fail('MESSAGE_CORRECTION_EFFECT_PENDING');revoke(db,r,[u.id]);unbindMessageUnit(db,u.id,now);const s=db.prepare('SELECT corrections FROM message_sources WHERE source_key=?').get(r.sourceKey);db.prepare('UPDATE message_sources SET corrections=corrections+1 WHERE source_key=?').run(r.sourceKey);u.status='pending';delete u.topicId;delete u.routingBinding;r.routingStatus='routing_pending';r.intentStatus=null;u.corrections=(u.corrections??0)+1;put(db,r.runId,'unit',u);save(db,r);if(u.corrections>1||s.corrections>=r.policy.maxCorrections){r.status='needs_attention';r.reason='correction_budget_exhausted';r.routingStatus='routing_blocked';save(db,r);return {result:{run:r,unit:u}}}return {result:{run:r,unit:u}}}
+  if(kind==='message.relink') {const u=get(db,'unit',a.unitId);if(u.runId!==r.runId)fail('MESSAGE_STALE');if(rows(db,r.runId,'command').some(c=>c.unitId===u.id&&['running','unknown','applied'].includes(c.status)))fail('MESSAGE_CORRECTION_EFFECT_PENDING');revoke(db,r,[u.id]);unbindMessageUnit(db,u.id,now);const s=db.prepare('SELECT corrections FROM message_sources WHERE source_key=?').get(r.sourceKey);db.prepare('UPDATE message_sources SET corrections=corrections+1 WHERE source_key=?').run(r.sourceKey);u.status='pending';delete u.topicId;delete u.routingBinding;r.routingStatus='routing_pending';r.intentStatus=null;u.corrections=(u.corrections??0)+1;put(db,r.runId,'unit',u);save(db,r);return {result:{run:r,unit:u}}}
   if(kind==='message.recover') {
     if(r.status==='waiting'||r.status==='settled')fail('MESSAGE_NOT_RECOVERABLE')
     const started=messageExecutionStartedAt(r,rows(db,r.runId,'node'))??(rows(db,r.runId,'command').length?r.createdAt:null)
@@ -1265,14 +1260,13 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const failedLeases=new Set([...db.prepare("SELECT payload FROM execution_events WHERE kind='message.node.fail' AND json_extract(payload,'$.node.runId')=?").all(r.runId)
       .map(row=>JSON.parse(row.payload).node),...failures].filter(node=>node.input?.deterministic!==true).map(node=>`${node.id}:${node.leaseEpoch}`))
     const recoveryCount=failedLeases.size||(rows(db,r.runId,'command').length>0?(r.recoveryWindows??0)+1:0)
-    if(recoveryCount>2){r.status='needs_attention';r.reason='recovery_exhausted';save(db,r);return {result:{run:r}}}
     if(started)r.executionStartedAt=started
     r.recoveryWindows=recoveryCount
     for(const unit of rows(db,r.runId,'unit').filter(unit=>/^MESSAGE_DEADLINE_BEFORE_CLAIM:/u.test(unit.blockedReason??''))){delete unit.blockedReason;delete unit.blockedAt;put(db,r.runId,'unit',unit)}
     const blocked=rows(db,r.runId,'unit').filter(unit=>unit.blockedReason)
     if(blocked.length){r.attentionUnitIds=blocked.map(unit=>unit.id);r.attentionScope='unit';r.status='needs_attention';r.reason=blocked[0].blockedReason;save(db,r);return {result:{run:r}}}
     delete r.attentionScope;delete r.attentionUnitIds
-    r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();r.status='pending';r.reason=null;save(db,r);return {result:{run:r}}
+    r.status='pending';r.reason=null;save(db,r);return {result:{run:r}}
   }
   if(kind==='message.snapshot') {r.snapshot=a.snapshot;save(db,r);return {result:{run:r}}}
   if(kind==='message.correction.begin') {
@@ -1280,14 +1274,13 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     revoke(db,r,a.unitIds);r.correction={id:a.correctionId??randomUUID(),unitIds:a.unitIds??null,reason:a.reason,createdAt:now};r.revision++
     put(db,r.runId,'barrier',{id:'correction:'+r.correction.id,ownerRunId:r.runId,targetSourceKey:r.sourceKey,status:'pending',createdAt:now,reason:'correction',unitIds:r.correction.unitIds})
     db.prepare('UPDATE message_sources SET corrections=corrections+1 WHERE source_key=?').run(r.sourceKey)
-    r.status=s.corrections>=r.policy.maxCorrections?'needs_attention':'pending';save(db,r);return {result:{run:r}}
+    r.status='pending';save(db,r);return {result:{run:r}}
   }
   if(kind==='message.split'||kind==='message.correction.publish') {
-    if(!Array.isArray(a.units)||!a.units.length||a.units.length>8)fail('MESSAGE_INVALID_UNITS')
+    if(!Array.isArray(a.units)||!a.units.length)fail('MESSAGE_INVALID_UNITS')
     if(r.correction&&a.correctionId!==r.correction.id)fail('MESSAGE_CORRECTION_STALE')
     if(rows(db,r.runId,'unit').length&&!r.correction)fail('MESSAGE_SPLIT_ALREADY_PUBLISHED')
     const ids=a.units.map(u=>str(u.unitId));if(new Set(ids).size!==ids.length)fail('MESSAGE_INVALID_UNITS')
-    if(r.policy.effectiveMaxClaims===undefined)r.policy.effectiveMaxClaims=r.policy.maxClaims
     const previous=rows(db,r.runId,'unit'),preserved=new Set()
     for(const u of a.units)if(u.preservedUnitId) {
       const old=previous.find(x=>x.id===u.preservedUnitId)
@@ -1319,7 +1312,6 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const baseline=r.budgetBaseline??{claims:0,input_tokens:0,output_tokens:0}
     const deterministic=a.input?.deterministic===true
     if(deterministic&&(!a.input.inputHash||a.estimatedInputTokens!==0||a.maxOutputTokens!==0))fail('MESSAGE_INVALID_BUDGET')
-    if(!deterministic&&s.claims-baseline.claims>=(r.policy.effectiveMaxClaims??r.policy.maxClaims))fail('MESSAGE_BUDGET_EXHAUSTED')
     const reserve={input:a.estimatedInputTokens??0,output:a.maxOutputTokens??0};if(!Object.values(reserve).every(x=>Number.isSafeInteger(x)&&x>=0))fail('MESSAGE_INVALID_BUDGET')
     const previous=rows(db,r.runId,'node').find(n=>n.unitId===a.unitId&&n.nodeId===a.nodeId&&n.revision===r.revision&&n.input?.topicInputRevision===a.input?.topicInputRevision&&n.input?.contextHash===a.input?.contextHash&&n.status!=='superseded')
     if(previous&&['running','succeeded','waiting'].includes(previous.status))fail('MESSAGE_NODE_NOT_READY')
@@ -1337,9 +1329,8 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const n=get(db,'node',a.nodeRunId)
     if(n.runId!==r.runId||n.revision!==r.revision||n.leaseEpoch!==a.leaseEpoch||n.status!=='running')fail('MESSAGE_NODE_STALE')
     if(a.usage) { const used={input:a.usage.inputTokens,output:a.usage.outputTokens};if(!Object.values(used).every(x=>Number.isSafeInteger(x)&&x>=0))fail('MESSAGE_INVALID_BUDGET');db.prepare('UPDATE message_sources SET input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE source_key=?').run(used.input-n.reservedTokens.input,used.output-n.reservedTokens.output,r.sourceKey);n.usage=used }
-    if(kind.endsWith('complete')&&n.input?.deterministic!==true&&Date.parse(now)>Date.parse(n.deadline??r.deadline))fail('MESSAGE_DEADLINE_EXCEEDED')
     n.status=kind.endsWith('complete')?'succeeded':'failed';n.output=a.output??null;n.error=a.error??null;n.retryAt=a.retryAt??null;n.completedAt=now
-    if(n.status==='succeeded'){r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)}
+    if(n.status==='succeeded'){save(db,r)}
     put(db,r.runId,'node',n);return {result:{node:n}}
   }
   if(kind==='message.accept') {
@@ -1420,7 +1411,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     topic.inputRevision++;topic.updatedAt=now
     db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(json(Object.fromEntries(Object.entries(topic).filter(([key])=>!['facts','hasMoreFacts'].includes(key)))),topic.topicId)
     u.status='pending';put(db,r.runId,'unit',u)
-    r.status='pending';r.intentStatus='intent_rejudging';r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r)
+    r.status='pending';r.intentStatus='intent_rejudging';save(db,r)
     return {result:{run:r,unit:u,topic}}
   }
   if(kind==='message.wait'||kind==='message.request.open') {
@@ -1438,7 +1429,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     q.status='resolved';q.answer=a.answer;q.eventId=str(a.eventId);q.resolvedAt=now;put(db,r.runId,'request',q)
     if(q.nodeId==='coordinator')delete r.coordinatorConsumed
     for(const n of rows(db,r.runId,'node')) if(n.unitId===q.unitId&&n.nodeId===q.nodeId&&n.revision===r.revision) {n.status='superseded';put(db,r.runId,'node',n)}
-    r.status='pending';if(['S','R'].includes(q.nodeId))r.routingStatus='routing_pending';else r.intentStatus='intent_rejudging';r.deadline=new Date(Date.parse(now)+(r.policy.linkedWindowMs??30000)).toISOString();save(db,r);return {result:{request:q,run:r}}
+    r.status='pending';if(['S','R'].includes(q.nodeId))r.routingStatus='routing_pending';else r.intentStatus='intent_rejudging';save(db,r);return {result:{request:q,run:r}}
   }
   if(kind==='message.barrier.resolve') {
     const b=get(db,'barrier',a.barrierId);if(b.ownerRunId!==r.runId)fail('MESSAGE_BARRIER_OWNER');b.status='resolved';b.resolution=a.resolution;put(db,r.runId,'barrier',b);settle(db,r);return {result:{barrier:b}}

@@ -30,10 +30,24 @@ test('JDK原生报告校验拒绝零用例、跳过、失败、缺失和伪造su
 
 test('后端配置提案仅更换指定check版本与steps，不触碰其他仓库配置', async()=>{
  const {prepareBackendChecks}=await import('../docs/acceptance/topic-context-completeness/scripts/prepare-backend-unit-checks.mjs')
- const before=[{id:'dataset-package',version:'1',steps:[{executable:'java',args:['-DskipTests','package']}],timeoutMs:2400000},{id:'other',version:'9',steps:[]}]
+ const before=[{id:'dataset-package',version:'1',steps:[{executable:'java',args:['-DskipTests','package']}]},{id:'other',version:'9',steps:[]}]
  const options={toolsDirectory:'D:/trusted',nodeExecutable:'D:/node.exe',javaExecutable:'D:/java.exe',mavenHome:'D:/maven'}
  const after=prepareBackendChecks(before,options)
  assert.equal(before[0].steps.length,1);assert.equal(after[0].steps.length,2);assert.equal(after[0].version,'2')
  assert.deepEqual(after[1],before[1]);assert.deepEqual(after[0].steps[1],before[0].steps[0])
  assert.throws(()=>prepareBackendChecks(after,options),/ALREADY_CONFIGURED/)
+})
+
+test('后端检查提案可由当前构造器接纳，不透传旧执行上限',async()=>{
+ const {prepareBackendChecks}=await import('../docs/acceptance/topic-context-completeness/scripts/prepare-backend-unit-checks.mjs')
+ const {createVerificationJobCheck}=await import('../packages/dingtalk-dsh-assistant/execution-check-job.js')
+ const before=[{id:'dataset-package',version:'1',steps:[{executable:'java',args:['-DskipTests','package']}]}]
+ const options={toolsDirectory:tmpdir(),nodeExecutable:process.execPath,javaExecutable:java,mavenHome:tmpdir()}
+ // 路径授权来自Host；此处用当前机器绝对路径验证构造器合同，不执行构建。
+ options.javaExecutable=resolve(java)
+ const after=prepareBackendChecks(before,options)
+ assert.ok(createVerificationJobCheck({...after[0],root:tmpdir()}))
+ assert.equal(after[0].timeoutMs,undefined);assert.ok(after[0].steps.every(step=>step.timeoutMs===undefined))
+ for(const changed of [{...before[0],timeoutMs:1000},{...before[0],steps:[{...before[0].steps[0],timeoutMs:1000}]}])
+  assert.throws(()=>prepareBackendChecks([changed],options),/EXISTING_STEPS_DIFFERENT/)
 })

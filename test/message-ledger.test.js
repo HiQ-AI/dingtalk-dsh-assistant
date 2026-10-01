@@ -379,12 +379,12 @@ test('纠正begin立即撤权，旧结果和旧命令都不能继续',async t=>{
  await f.call('correction.publish',{runId:'m',expectedRevision:1,correctionId:'fix',units:[{unitId:'u2'}]})
  assert.equal((await f.store.query({kind:'message.run',runId:'m'})).units.find(u=>u.id==='u').status,'superseded')
 })
-test('累计预算跨编辑和重启保留，陈旧编辑不能覆盖',async t=>{
+test('累计统计跨编辑和重启保留，不限制新版本执行',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{policy:{maxClaims:1}}))
  await f.call('node.claim',{runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{}})
  await f.call('receive',receive('m2',{sourceKey:'m',sourceVersion:2,policy:{maxClaims:1}}));await f.reopen()
- await bad(f.call('node.claim',{runId:'m2',unitId:'$',nodeId:'S',expectedRevision:0,input:{}}),'MESSAGE_BUDGET_EXHAUSTED')
- assert.equal((await f.store.query({kind:'message.run',runId:'m2'})).budget.claims,1)
+ await f.call('node.claim',{runId:'m2',unitId:'$',nodeId:'S',expectedRevision:0,input:{}})
+ assert.equal((await f.store.query({kind:'message.run',runId:'m2'})).budget.claims,2)
 })
 test('澄清请求身份、角色和首终态，重复答复不增加窗口',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('wait',{runId:'m',nodeId:'S',request:{requestId:'q',permittedActors:['a']}})
@@ -414,16 +414,16 @@ test('消息命令失败保持unknown不能冒充成功，有限历史查询和�
  await f.store.command({id:'w2',kind:'workflow.register',args:{...args,digest:'d2',config:{provider:'p',model:'new'}}});assert.equal((await f.store.query({kind:'workflow.list'})).length,2)
 })
 
-test('单元重关联不影响另一个单元，纠正额度耗尽撤权并待处理',async t=>{
+test('单元重关联不影响另一个单元，连续纠正仍可继续',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',units:[{unitId:'u'},{unitId:'v'}]})
  const n=(await f.call('node.claim',{runId:'m',unitId:'u',nodeId:'R',input:{}})).result.node
  await f.call('relink',{runId:'m',unitId:'u',expectedRevision:0,reason:'different target'})
  await bad(f.call('node.complete',{runId:'m',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,output:{}}),'MESSAGE_NODE_STALE')
  await f.call('accept',{runId:'m',unitId:'v',expectedRevision:0,commands:[],outcome:'ignored'})
  await f.call('relink',{runId:'m',unitId:'u',expectedRevision:0,reason:'again'})
- await bad(f.call('node.claim',{runId:'m',unitId:'u',nodeId:'R',input:{}}),'MESSAGE_NEEDS_ATTENTION')
+ await f.call('node.claim',{runId:'m',unitId:'u',nodeId:'R',input:{}})
 })
-test('无回执只读状态查询的参数错误仅可受控重试一次，创建命令不可重试',async t=>{
+test('无回执只读状态查询可持续受控修正，创建命令不可重试',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',units:[{unitId:'u'}]})
  await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'status',kind:'status',args:{}}]})
  const first=(await f.call('command.claim',{commandId:'status'})).result.command
@@ -434,7 +434,7 @@ test('无回执只读状态查询的参数错误仅可受控重试一次，创�
  const next=(await f.call('command.claim',{commandId:'status'})).result.command
  assert.equal(next.leaseEpoch,first.leaseEpoch+1)
  await f.call('command.fail',{commandId:'status',leaseEpoch:next.leaseEpoch,error:'INVALID_ARGUMENT'})
- await bad(f.call('command.retry.readonly',{commandId:'status'}),'MESSAGE_READONLY_RETRY_FORBIDDEN')
+ await f.call('command.retry.readonly',{commandId:'status'})
  await f.call('receive',receive('create'));await f.call('split',{runId:'create',units:[{unitId:'create-unit'}]})
  await f.call('accept',{runId:'create',unitId:'create-unit',commands:[{commandId:'new-task',kind:'create',args:{}}]})
  const creation=(await f.call('command.claim',{commandId:'new-task'})).result.command
@@ -558,13 +558,13 @@ test('重拆保留严格相同已执行事项，不重复消费业务命令',asy
  await f.call('correction.publish',{runId:'m',expectedRevision:1,correctionId:'fix',units:[{unitId:'u',goal:'read',preservedUnitId:'u'},{unitId:'v2',goal:'changed'}]})
  const s=await f.store.query({kind:'message.run',runId:'m'});assert.equal(s.units.find(u=>u.id==='u').status,'applied');assert.equal(s.commands[0].status,'applied');assert.equal(s.commands.length,1)
 })
-test('在途命令撤权后的迟到完成不能覆盖unknown，超额恢复持久待处理',async t=>{
+test('在途命令撤权后的迟到完成不能覆盖unknown，恢复不设次数截止',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('split',{runId:'m',units:[{unitId:'u'}]});await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'create',args:{}}]})
  const c=(await f.call('command.claim',{commandId:'c'})).result.command
  await f.call('correction.begin',{runId:'m',correctionId:'correction',reason:'bad target'})
  await bad(f.call('command.complete',{commandId:'c',leaseEpoch:c.leaseEpoch,result:{}}),'MESSAGE_COMMAND_STALE')
  assert.equal((await f.store.query({kind:'message.command',commandId:'c'})).status,'unknown')
- await f.call('recover',{runId:'m'});await f.call('recover',{runId:'m'});assert.equal((await f.call('recover',{runId:'m'})).result.run.status,'needs_attention')
+ await f.call('recover',{runId:'m'});await f.call('recover',{runId:'m'});assert.equal((await f.call('recover',{runId:'m'})).result.run.status,'pending');assert.equal((await f.store.query({kind:'message.command',commandId:'c'})).status,'unknown')
 })
 
 test('已解决澄清的冲突无权答复仍拒绝，不能读取终态后绕过actor检查',async t=>{
@@ -783,15 +783,15 @@ test('纯状态通知发送结果unknown仍禁止重处理',async t=>{
  await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
 })
 
-test('失败模型长排队恢复按失败lease计数，重复扫描不耗次数，持续失败有界',async t=>{
+test('失败模型恢复只统计真实失败lease，超过三次仍可继续',async t=>{
  const f=await fixture(t);await f.call('receive',receive())
  const args={runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0}
- for(let attempt=1;attempt<=3;attempt++){
+ for(let attempt=1;attempt<=6;attempt++){
   const node=(await f.call('node.claim',args)).result.node
   await f.call('node.fail',{runId:'m',nodeRunId:node.nodeRunId,leaseEpoch:node.leaseEpoch,expectedRevision:0,error:'MESSAGE_NODE_TIMEOUT'})
   await f.editSnapshot(db=>{const r=JSON.parse(db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('m').body);r.deadline='2020-01-01T00:00:00.000Z';db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(r),'m')})
   const recovered=(await f.call('recover',{runId:'m'})).result.run
-  if(attempt===3){assert.equal(recovered.reason,'recovery_exhausted');break}
+  assert.equal(recovered.status,'pending')
   assert.equal(recovered.recoveryWindows,attempt)
   for(let scan=0;scan<3;scan++)assert.equal((await f.call('recover',{runId:'m'})).result.run.recoveryWindows,attempt)
  }
@@ -807,17 +807,18 @@ test('旧局部判断失败改由协调入口消费同来源版本',async t=>{
  assert.equal(after.run.sourceVersion,1);assert.equal(after.run.status,'settled');assert.equal(after.units[0].status,'superseded')
 })
 
-test('节点独立deadline保留提交余量，真实超时与旧lease仍拒绝',async t=>{
+test('节点超过原时长仍正常完成，旧lease仍拒绝',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{policy:{attemptMs:1,commitReserveMs:5}}))
  const args={leaseWindowMs:6,runId:'m',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0}
  const node=(await f.call('node.claim',args)).result.node
  assert.equal(Date.parse(node.deadline)-Date.parse(node.startedAt),6)
  await new Promise(resolve=>setTimeout(resolve,20))
- await bad(f.call('node.complete',{runId:'m',nodeRunId:node.id,leaseEpoch:node.leaseEpoch,expectedRevision:0,output:{}}),'MESSAGE_DEADLINE_EXCEEDED')
  await f.call('node.fail',{runId:'m',nodeRunId:node.id,leaseEpoch:node.leaseEpoch,expectedRevision:0,error:'MESSAGE_NODE_TIMEOUT'})
  await f.call('recover',{runId:'m'})
  const retry=(await f.call('node.claim',args)).result.node;assert.equal(retry.leaseEpoch,node.leaseEpoch+1)
  await bad(f.call('node.complete',{runId:'m',nodeRunId:node.id,leaseEpoch:node.leaseEpoch,expectedRevision:0,output:{}}),'MESSAGE_NODE_STALE')
+ await new Promise(resolve=>setTimeout(resolve,20))
+ await f.call('node.complete',{runId:'m',nodeRunId:retry.id,leaseEpoch:retry.leaseEpoch,expectedRevision:0,output:{}})
 })
 
 test('历史policy20秒不能缩短当前Host180秒窗口，超过60秒结果正常落账',async t=>{
@@ -829,8 +830,8 @@ test('历史policy20秒不能缩短当前Host180秒窗口，超过60秒结果正
   const call=(kind,args,offset)=>reduceMessageCommand(db,{kind:'message.'+kind,args},{now:new Date(start+offset).toISOString()})
   const n=call('node.claim',{runId:'timed',unitId:'$',nodeId:'S',expectedRevision:0,input:{},estimatedInputTokens:0,maxOutputTokens:0,leaseWindowMs:captured.leaseWindowMs},0).result.node
   assert.equal(Date.parse(n.deadline)-start,180500)
-  assert.throws(()=>call('node.complete',{runId:'timed',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,expectedRevision:0,output:{}},180501),{code:'MESSAGE_DEADLINE_EXCEEDED'})
-  assert.equal(call('node.complete',{runId:'timed',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,expectedRevision:0,output:{}},90000).result.node.status,'succeeded')
+
+  assert.equal(call('node.complete',{runId:'timed',nodeRunId:n.id,leaseEpoch:n.leaseEpoch,expectedRevision:0,output:{}},180501).result.node.status,'succeeded')
  })
 })
 

@@ -108,17 +108,6 @@ const createTaskInputSchema = z.strictObject({ ...taskInputFields, groupId: requ
 const updateTaskInputSchema = z.strictObject({ ...taskInputFields, inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() })
 const contextTaskInputSchema = updateTaskInputSchema.extend(taskContextImpactFields)
 const cancelTaskInputSchema = z.strictObject({ requestId: requiredText, reason: requiredText, inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), topicRefs: topicRefsSchema })
-const continueBudgetInputSchema = z.strictObject({
-  requestId: requiredText.max(200), continuationText: requiredText.max(16000),
-  budgetBinding: z.strictObject({
-    taskId: requiredText.max(200), controlState: requiredText.max(200),
-    controlRevision: z.number().int().nonnegative(), requirementRevision: z.number().int().positive(), planRevision: z.number().int().positive(),
-    stageId: requiredText.max(200), runId: requiredText.max(200), runRevision: z.number().int().nonnegative(),
-    generation: z.number().int().positive(), workflowDigest: requiredText.max(200),
-    nodeRunId: requiredText.max(200), nodeId: requiredText.max(200), leaseEpoch: z.number().int().nonnegative(),
-    maxClaims: z.number().int().positive(), claimCount: z.number().int().nonnegative(),
-  }),
-})
 
 export function residentErrorStatus(error) {
   const message = error instanceof Error ? error.message : String(error)
@@ -192,18 +181,18 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response,200,await store.deleteWorkflowTask({...body,taskId:decodeURIComponent(deleteTask[1])}))
     } catch(error) { return send(response,/FORBIDDEN/.test(error.message)?403:409,{error:error.message}) }
   }
-  const workflowTaskAction = /^\/tasks\/([^/]+)\/(context|cancel|confirm-stage|continue-budget|reopen|archive|title)$/u.exec(url.pathname)
+  const workflowTaskAction = /^\/tasks\/([^/]+)\/(context|cancel|confirm-stage|reopen|archive|title)$/u.exec(url.pathname)
   if (workflowTaskAction && ['POST', 'PUT'].includes(request.method) && await store.isWorkflowTask?.(decodeURIComponent(workflowTaskAction[1]))) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
     const action = workflowTaskAction[2]
-    if (request.method !== 'POST' || !['cancel', 'context', 'confirm-stage', 'continue-budget', 'archive'].includes(action)) return send(response, 409, { error: 'WORKFLOW_WEB_ACTION_UNSUPPORTED' })
+    if (request.method !== 'POST' || !['cancel', 'context', 'confirm-stage', 'archive'].includes(action)) return send(response, 409, { error: 'WORKFLOW_WEB_ACTION_UNSUPPORTED' })
     try {
       if (action === 'archive') {
         z.strictObject({}).parse(await readJson(request))
         return send(response, 200, await store.submitWorkflowTask({ action, taskId: decodeURIComponent(workflowTaskAction[1]) }))
       }
       const fields = { requestId: requiredText, inputVersion: z.number().int().positive(), runSequence: z.number().int().nonnegative(), topicRefs: z.array(z.strictObject({ topicId: requiredText, revision: z.number().int().positive() })).optional() }
-      const body = (action === 'continue-budget' ? continueBudgetInputSchema : action === 'confirm-stage' ? z.strictObject({ requestId: requiredText.max(200),
+      const body = (action === 'confirm-stage' ? z.strictObject({ requestId: requiredText.max(200),
         requirementRevision: z.number().int().positive(), controlRevision: z.number().int().positive(),
         planRevision: z.number().int().positive(), runSequence: z.number().int().nonnegative(),
         stageId: requiredText.max(128), outputRef: requiredText.max(4096), confirmationText: requiredText.max(16000) })

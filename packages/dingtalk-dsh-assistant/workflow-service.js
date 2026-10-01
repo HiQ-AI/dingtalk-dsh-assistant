@@ -612,9 +612,9 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   const stepCapabilities = capabilities.filter(item => item.effectClass === 'file.write')
   const acceptanceModel = modelConfig()
   const domainAcceptanceCheck = createDomainAcceptanceCheck({ llm: ctx.llm, modelConfig: acceptanceModel })
-  const completionCheck = generalCompletionCheck ?? (async input => {
+  const completionCheck = generalCompletionCheck ?? (async (input, context) => {
     const deterministic = await verifyDefaultGeneralCompletion(input)
-    return deterministic.status === 'satisfied' ? deterministic : domainAcceptanceCheck(input)
+    return deterministic.status === 'satisfied' ? deterministic : domainAcceptanceCheck(input, context)
   })
   const completionIdentity = generalCompletionIdentity ?? executionDigest({ policy: 'domain-items-v1', model: acceptanceModel,
     native: createDomainAcceptanceCheck.toString(), deterministic: verifyDefaultGeneralCompletion.toString() })
@@ -1311,7 +1311,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         text: source.body, runId: source.runId })),
     readDeliveryManifest: ownerContracts.readDeliveryManifest,
     advanceTask: advanceBusinessTask,
-    authorizeCompletion: async ({ taskId, decision }) => {
+    authorizeCompletion: async ({ taskId, decision, signal }) => {
       const plan = await controller.taskPlan(taskId)
       if (!plan?.stages.length || plan.task.status !== 'succeeded'
         || plan.task.planRequirementRevision !== plan.task.requirementRevision) return false
@@ -1321,11 +1321,11 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       if (source?.channel === 'web' && (plan.stages.length !== source.run.request.stages.length
         || plan.stages.some((stage, index) => (stage.workflowId.startsWith('task-engineering-') ? 'task-engineering' : stage.workflowId) !== source.run.request.stages[index]))
         && !await verifiedUatRebuildCompletion({ taskId, plan, origin: source, artifacts, external, controller })) return false
-      return ownerContracts.authorizeCompletion({ taskId, decision, plan, requirement: initial })
+      return ownerContracts.authorizeCompletion({ taskId, decision, plan, requirement: initial, signal })
     },
     authorizeStages: async ({ taskId, stages }) => {
       const plan = await controller.taskPlan(taskId)
-      if (!plan || !stages.length || stages.length > 16 || plan.task.controlState !== 'active') return false
+      if (!plan || !stages.length || plan.task.controlState !== 'active') return false
       const requirement = await artifacts.read(plan.task.requirementRef)
       const origin = await store.query({ kind: 'task.origin', taskId })
       if (!origin || !requirement?.authorization
@@ -1397,8 +1397,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           if (plan) await controller.controlTask({ commandId, taskId: event.request.taskId,
             intent: 'cancel', expectedControlRevision: event.expectedControlRevision ?? plan.task.controlRevision })
           else await controller.stop({commandId,runId:event.executionRunId,reason:event.request.reason})
-        } else if (event.request.action === 'continue-budget') {
-          await controller.continueRunBudget({ commandId, eventId: event.id })
+          await taskOwner.cancel(event.request.taskId)
         } else if (event.request.action === 'confirm-stage') {
           await controller.confirmTaskStage({ commandId, taskId: event.request.taskId,
             stageId: event.request.stageId, planRevision: event.request.planRevision,
@@ -1413,16 +1412,15 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
             taskId: event.request.taskId, expectedRequirementRevision: event.request.inputVersion - 1,
             requirementRef: saved.ref, eventKey: `web:${event.id}` } })
         }
-        if (['cancel', 'confirm-stage', 'continue-budget'].includes(event.request.action) && await store.query({ kind: 'task.owner', taskId: event.request.taskId }))
+        if (['cancel', 'confirm-stage'].includes(event.request.action) && await store.query({ kind: 'task.owner', taskId: event.request.taskId }))
           await taskOwner.event({ taskId: event.request.taskId, eventKey: `web:${event.id}`,
-            eventType: event.request.action === 'cancel' ? 'control.changed' : event.request.action === 'continue-budget' ? 'budget.continued' : 'approval.resolved',
+            eventType: event.request.action === 'cancel' ? 'control.changed' : 'approval.resolved',
             payload: { action: event.request.action, requestId: event.request.requestId,
               actorId: event.actorId, input: event.input,
-              ...(event.request.action === 'confirm-stage' ? { confirmation: event.request } : {}),
-              ...(event.request.action === 'continue-budget' ? { budgetContinuation: event.request } : {}) } })
+              ...(event.request.action === 'confirm-stage' ? { confirmation: event.request } : {}) } })
         event=(await store.command({id:`web-finish:${event.id}`,kind:finishKind,args:{eventId:event.id,result:{status:'accepted',taskId:event.request.taskId,requestId:event.request.requestId}}})).result.event
       } catch(error) {
-        if(!error.code?.startsWith('RUN_BUDGET_CONTINUATION_') && !['REVISION_CONFLICT','TASK_REQUIREMENT_STALE','RUN_TERMINAL','RUN_STOPPING','TASK_CONTROL_STALE','TASK_CONTROL_CONFLICT','TASK_PLAN_STALE','TASK_CONFIRMATION_NOT_WAITING','TASK_CONFIRMATION_OUTPUT_STALE'].includes(error.code))throw error
+        if(!['REVISION_CONFLICT','TASK_REQUIREMENT_STALE','RUN_TERMINAL','RUN_STOPPING','TASK_CONTROL_STALE','TASK_CONTROL_CONFLICT','TASK_PLAN_STALE','TASK_CONFIRMATION_NOT_WAITING','TASK_CONFIRMATION_OUTPUT_STALE'].includes(error.code))throw error
         event=(await store.command({id:`web-reject:${event.id}`,kind:finishKind,args:{eventId:event.id,error:error.code}})).result.event
       }
     }
@@ -1449,7 +1447,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     if (request.expectedRunId !== null) requireText(request.expectedRunId, 'TASK_RERUN_REQUEST_INVALID')
     if (request.objective.length > 12000 || !uatBranchFor(request.uatEnvironment)
       || !acceptanceCriteriaSchema.safeParse(request.acceptanceCriteria).success
-      || request.constraints !== undefined && (!Array.isArray(request.constraints) || request.constraints.length > 32
+      || request.constraints !== undefined && (!Array.isArray(request.constraints)
         || request.constraints.some(value => typeof value !== 'string' || !value.trim() || value.length > 2000))
       || !Array.isArray(request.stages) || executionDigest(request.stages) !== executionDigest(['task-engineering', 'task-uat-pr-merge', 'task-uat-deployment'])) throw executionError('TASK_RERUN_REQUEST_INVALID')
     const identityDigest = executionDigest([identity.actorId, request.taskId, request.requestId])
@@ -1507,7 +1505,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     }
     if (request.action === 'rerun') return rerunWebTask(request, identity, origin)
     if (origin.channel === 'web') {
-      if (!['context', 'cancel', 'confirm-stage', 'continue-budget'].includes(request.action)) throw executionError('WORKFLOW_WEB_ACTION_UNSUPPORTED')
+      if (!['context', 'cancel', 'confirm-stage'].includes(request.action)) throw executionError('WORKFLOW_WEB_ACTION_UNSUPPORTED')
       const eventId = `web-input:${executionDigest([identity.actorId, request.taskId, requireText(request.requestId, 'WORKFLOW_WEB_EVENT_REQUIRED')])}`
       const prior = await store.query({ kind: 'task.web-input', eventId })
       if (prior) {
@@ -1597,6 +1595,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     if (currentPlan && ['pause', 'cancel', 'resume'].includes(action.intent)) {
       const controlled = await controller.controlTask({ commandId: `task-control:${info.commandId}`, taskId,
         intent: action.intent, expectedControlRevision: currentPlan.task.controlRevision })
+      if (['pause', 'cancel'].includes(action.intent)) await taskOwner.cancel(taskId)
       await taskOwner.event({ taskId, eventKey: `control:${info.commandId}`, eventType: 'control.changed',
         payload: { intent: action.intent, sourceRunId: info.run.runId,
           controlRevision: controlled.plan.task.controlRevision } })
@@ -2486,7 +2485,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const data = await messages.state(requireText(input.runId, 'WORKFLOW_RUN_REQUIRED'))
     if (!groups.has(data.run.conversationId)) throw executionError('WORKFLOW_GROUP_NOT_ADMITTED')
     const request = data.requests.find(item => item.id === input.requestId)
-    if (!request || request.kind !== 'needs_context' || request.status !== 'pending' || !request.blocked)
+    if (!request || request.kind !== 'needs_context' || request.status !== 'pending' || !request.lastError
+      || request.dependencyRevision === input.dependencyRevision)
       throw executionError('MESSAGE_REQUEST_STALE')
     await store.command({ id: `material-retry:${executionDigest([input.runId, input.requestId, input.dependencyRevision])}`,
       kind: 'message.request.retry.reset', args: { runId: data.run.runId, requestId: request.id,
@@ -2668,7 +2668,6 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         objective: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
         inputVersion: (plan?.task.requirementRevision ?? run?.revision ?? 0) + 1, runSequence: taskRuns.length,
         stageConfirmation: taskState === 'waiting' && origin?.channel === 'web' ? await store.query({ kind: 'task.stageConfirmation', taskId }) : null,
-        budgetContinuation: taskState === 'waiting' && origin?.channel === 'web' && run ? await store.query({ kind: 'run.budget-continuation', runId: run.runId }) : null,
         investigationRequest: taskState === 'waiting' && run?.workflowId === 'task-investigation' ? await investigationRequest(run.runId) : null,
         state: taskState,
         outcome: taskCancelled ? 'cancelled' : taskComplete ? 'succeeded' : plan ? undefined : run && terminal(run.status) ? run.status : undefined,
@@ -2828,15 +2827,25 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
             const effects = await store.query({ kind: 'effect.list', runId: run.runId })
             const owned = effect => effect.kind === 'operation' && effect.nodeRunId === node.nodeRunId
               && effect.generation === state.run.generation && effect.inputDigest === node.inputDigest
+            const unsentCandidate = effect => owned(effect) && effect.state === 'failed'
+              && effect.definition.action === 'pr' && effect.definition.adapterId === 'github-pr'
+              && effect.result?.result?.phase === 'preflight' && effect.result.result.mutationAttempted === false
+              && ['PR_CONNECTION_FAILED', 'PR_PREFLIGHT_NOT_SENT'].includes(effect.result.result.reason)
             if (!effects.some(owned) || effects.some(effect => effect.state !== 'succeeded'
-              && !(owned(effect) && (effect.state === 'unknown' || isTerminalUatBuildFailure(effect))))) continue
+              && !(owned(effect) && (effect.state === 'unknown' || isTerminalUatBuildFailure(effect) || unsentCandidate(effect))))) continue
             // 只读适配器对账已有操作；绝不经 execute 重发未知写入。
             for (const effect of effects.filter(effect => effect.state === 'unknown')) {
               if (!await eligible(await store.query({ kind: 'run', runId: run.runId }))) break
               await execution.delivery.reconcile(effect.effectId)
             }
+            const currentEffects = await store.query({ kind: 'effect.list', runId: run.runId }), provenUnsent = new Set()
+            for (const effect of currentEffects.filter(unsentCandidate)) {
+              if (!await eligible(await store.query({ kind: 'run', runId: run.runId }))) break
+              if ((await execution.delivery.reconcile(effect.effectId)).unsentRecovery) provenUnsent.add(effect.effectId)
+            }
             if (!await eligible(await store.query({ kind: 'run', runId: run.runId }))
-              || (await store.query({ kind: 'effect.list', runId: run.runId })).some(effect => effect.state !== 'succeeded' && !(owned(effect) && isTerminalUatBuildFailure(effect)))) continue
+              || currentEffects.some(effect => effect.state !== 'succeeded' && !(owned(effect)
+                && (isTerminalUatBuildFailure(effect) || provenUnsent.has(effect.effectId))))) continue
           } else {
             if (!transientRecoveryReasons.includes(node.waitReason?.reference)) continue
             const effects = await store.query({kind:'effect.list',runId:run.runId})

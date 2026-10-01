@@ -120,6 +120,8 @@ export function planProjectLocalAcceptance(source, bundle, yaml, { allowUpdate =
     if (!allowUpdate || !plain(checksProposal) || Object.keys(checksProposal).some(key => !['repository','checks','sourceChecksSha256'].includes(key))
       || checksProposal.repository !== 'dataset' || !/^[a-f0-9]{64}$/.test(checksProposal.sourceChecksSha256 ?? '')
       || !Array.isArray(repo.checks) || !Array.isArray(checksProposal.checks)) fail('LOCAL_CONFIG_CHECKS_PROPOSAL_INVALID')
+    if (checksProposal.checks.some(check => check?.timeoutMs !== undefined
+      || check?.steps?.some(step => step?.timeoutMs !== undefined))) fail('LOCAL_CONFIG_CHECKS_PROPOSAL_INVALID')
     if (!isDeepStrictEqual(repo.checks, checksProposal.checks)) {
       if (hash(JSON.stringify(repo.checks)) !== checksProposal.sourceChecksSha256) fail('LOCAL_CONFIG_CHECKS_CHANGED')
       const old = repo.checks.find(item => item.id === 'dataset-package'), next = checksProposal.checks.find(item => item.id === 'dataset-package')
@@ -133,7 +135,7 @@ export function planProjectLocalAcceptance(source, bundle, yaml, { allowUpdate =
         || !/[\\/]verify-dataset-unit-tests\.mjs$/.test(next.steps[0].args[0])
         || next.steps[0].args[1] !== '--java' || !isAbsolute(next.steps[0].args[2])
         || next.steps[0].args[3] !== '--maven-home' || !isAbsolute(next.steps[0].args[4])
-        || next.steps[0].timeoutMs !== 1800000) fail('LOCAL_CONFIG_CHECKS_PROPOSAL_INVALID')
+        || next.timeoutMs !== undefined || next.steps.some(step => step.timeoutMs !== undefined)) fail('LOCAL_CONFIG_CHECKS_PROPOSAL_INVALID')
       replaceProperty(repo, 'checks', checksProposal.checks)
     }
   }

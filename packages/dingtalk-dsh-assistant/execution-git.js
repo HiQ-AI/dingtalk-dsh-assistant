@@ -1,36 +1,36 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawn } from 'node:child_process'
 import { realpath, readdir, stat } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
-import { canonicalExecutionJson, executionDigest, executionError } from './execution-artifacts.js'
+import { executionDigest, executionError } from './execution-artifacts.js'
 import { assertVerifiedCandidate } from './execution-candidate.js'
 
+const gitOperation = new AsyncLocalStorage()
 const oid = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value)
 const fail = code => { throw executionError(code) }
 const freeze = value => { for (const child of Object.values(value)) if (child && typeof child === 'object') freeze(child); return Object.freeze(value) }
-const checkPreparedSize = value => { if (Buffer.byteLength(canonicalExecutionJson(value)) > 65536) fail('GIT_PREPARED_TOO_LARGE') }
 
 // 只供受信Host效果网关调用；无shell、无凭据、无任意Git参数入口。
 function git(directory, args, { input = '', env = {} } = {}) {
   return new Promise((resolve, reject) => {
     const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
-    const child = spawn('git', ['--no-pager', '-c', 'core.longpaths=true', '-C', directory, ...args], { shell: false, windowsHide: true, env: { ...clean, GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0', ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
-    let stdout = '', stderr = '', size = 0, failure
-    const stop = code => { failure ??= executionError(code); child.kill() }
-    const timer = setTimeout(() => stop('GIT_TIMEOUT'), 15000)
+    const child = spawn('git', ['--no-pager', '-c', 'core.longpaths=true', '-C', directory, ...args], { shell: false, windowsHide: true, signal: gitOperation.getStore()?.signal, env: { ...clean, GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0', ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
+    const stdoutChunks = []; let stderr = '', stderrTruncated = false, spawnFailure
     for (const [stream, output] of [[child.stdout, true], [child.stderr, false]]) stream.on('data', chunk => {
-      size += chunk.length
-      if (size > 1024 * 1024) return stop('GIT_OUTPUT_LIMIT')
-      if (output) stdout += chunk.toString('utf8'); else stderr += chunk.toString('utf8')
+      if (output) stdoutChunks.push(chunk); else { const text = stderr + chunk.toString('utf8'); stderrTruncated ||= text.length > 8192; stderr = text.slice(0, 8192) }
     })
-    child.on('error', error => { clearTimeout(timer); reject(error) })
+    child.on('error', error => { spawnFailure = error })
     child.stdin.on('error', () => {})
-    child.on('close', code => { clearTimeout(timer); if (failure) reject(failure); else resolve({ code, stdout: stdout.trim(), stderr: stderr.trim() }) })
+    child.on('close', code => { if (spawnFailure) reject(spawnFailure); else resolve({ code, stdout: Buffer.concat(stdoutChunks).toString('utf8').trim(), stderr: stderr.trim() + (stderrTruncated ? '\n[诊断输出已截断]' : '') }) })
     child.stdin.end(input)
   })
 }
 async function command(directory, args, options) {
   const result = await git(directory, args, options)
-  if (result.code !== 0) throw executionError('GIT_COMMAND_FAILED', result.stderr || `git ${args[0]} failed`)
+  if (result.code !== 0) {
+    const connectionFailed = /Could not resolve (?:host|hostname)|Failed to connect|Connection refused|Connection timed out|Could not connect to server|Network is unreachable/i.test(result.stderr)
+    throw executionError(connectionFailed ? 'GIT_CONNECTION_FAILED' : 'GIT_COMMAND_FAILED', result.stderr || `git ${args[0]} failed`)
+  }
   return result.stdout
 }
 async function admit(repository, bare) {
@@ -43,7 +43,9 @@ async function admit(repository, bare) {
   if (hooks.some(name => !name.endsWith('.sample'))) fail('GIT_HOOKS_UNSUPPORTED')
 }
 
-export async function createGitDelivery({ repository, remote, branch, author, mergeParent }) {
+export function createGitDelivery(scope, context = {}) { return gitOperation.run(context, () => createGitDeliveryImpl(scope)) }
+
+async function createGitDeliveryImpl({ repository, remote, branch, author, mergeParent }) {
   if (mergeParent !== undefined && !oid(mergeParent)) fail('GIT_MERGE_PARENT_INVALID')
   if (!isAbsolute(repository ?? '') || typeof remote !== 'string' || !remote || /[\0\r\n]/.test(repository + remote)) fail('GIT_LOCAL_SCOPE_REQUIRED')
   const localRemote = isAbsolute(remote)
@@ -82,7 +84,6 @@ export async function createGitDelivery({ repository, remote, branch, author, me
     return parts[0]
   }
   const validate = (prepared, action) => {
-    checkPreparedSize(prepared)
     if (!prepared || prepared.action !== action || prepared.version !== (mergeParent ? 2 : 1) || prepared.repository !== repository || prepared.remote !== remote || prepared.ref !== ref || executionDigest(prepared.author) !== executionDigest(author)
       || (mergeParent && prepared.mergeParent !== mergeParent)) fail('GIT_PREPARED_SCOPE_MISMATCH')
     const { digest, ...body } = prepared
@@ -92,9 +93,9 @@ export async function createGitDelivery({ repository, remote, branch, author, me
     if (action === 'push' && prepared.expectedRemoteSha !== null && !oid(prepared.expectedRemoteSha)) fail('GIT_PREPARED_INVALID')
   }
   async function prepareCommit({ candidate, verification, requiredChecks, message, date }) {
-    await assertVerifiedCandidate({ candidate, verification, requiredChecks })
+    await assertVerifiedCandidate({ candidate, verification, requiredChecks, signal: gitOperation.getStore()?.signal })
     if (candidate.repository !== repository || !oid(candidate.tree) || !oid(candidate.baseCommit)) fail('GIT_CANDIDATE_SCOPE_MISMATCH')
-    if (typeof message !== 'string' || !message.trim() || message.includes('\0') || Buffer.byteLength(message) > 16384) fail('GIT_MESSAGE_INVALID')
+    if (typeof message !== 'string' || !message.trim() || message.includes('\0')) fail('GIT_MESSAGE_INVALID')
     if (typeof date !== 'string' || !/^\d{10} \+0000$/.test(date)) fail('GIT_FROZEN_DATE_REQUIRED')
     await check()
     const expectedLocalSha = await currentLocal()
@@ -110,8 +111,6 @@ export async function createGitDelivery({ repository, remote, branch, author, me
     const changedPaths = (await command(repository, ['diff', '--name-only', '-z', mergeParent ?? candidate.baseCommit, candidate.tree, '--'])).split('\0').filter(Boolean)
     const body = { version: mergeParent ? 2 : 1, action: 'commit', ...scope, ...(mergeParent ? { mergeParent, changeBaseCommit: mergeParent } : {}), candidateDigest: candidate.digest, generation: candidate.generation, requirementDigest: candidate.requirementDigest, tree: candidate.tree, baseCommit: candidate.baseCommit, expectedLocalSha, date, message, commitId, changedPaths, verification: structuredClone(verification) }
     const prepared = { ...body, digest: executionDigest(body) }
-    // 与节点工件一致的64KiB上限；完整验证日志超限时拒绝，不能截断审计证据。
-    checkPreparedSize(prepared)
     return freeze(prepared)
   }
   async function reconcileCommit(prepared) {
@@ -152,11 +151,12 @@ export async function createGitDelivery({ repository, remote, branch, author, me
     // lease仅实现精确旧值条件；上面的祖先检查禁止借此覆盖历史。
     try { await command(repository, ['push', '--porcelain', `--force-with-lease=${ref}:${prepared.expectedRemoteSha ?? ''}`, '--', remote, `${prepared.commitId}:${ref}`]) }
     catch (error) {
-      const observed = await reconcilePush(prepared)
+      const observed = await gitOperation.run({}, () => reconcilePush(prepared))
       if (observed.status === 'succeeded') return observed
       throw error
     }
     return reconcilePush(prepared)
   }
-  return Object.freeze({ prepareCommit, executeCommit, reconcileCommit, preparePush, executePush, reconcilePush })
+  return Object.freeze(Object.fromEntries(Object.entries({ prepareCommit, executeCommit, reconcileCommit, preparePush, executePush, reconcilePush })
+    .map(([name, method]) => [name, (request, context = {}) => gitOperation.run(context, () => method(request))])))
 }

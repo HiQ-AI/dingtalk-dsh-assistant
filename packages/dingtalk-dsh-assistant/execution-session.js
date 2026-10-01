@@ -119,7 +119,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         entry.drainError = Object.assign(failure('execution_session_drain_failed'), { executionDrained: false, cause: error })
         throw entry.drainError
       }
-      finally { clearTimeout(entry.timer); entry.drained.resolve() }
+      finally { entry.drained.resolve() }
     })()
   }
 
@@ -149,7 +149,6 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       })
       agentCtx.on('agent/pre-step', async (_event, next) => {
         if (!await current(entry) || entry.attempted || entry.haltCode) return { kind: 'reject' }
-        if (entry.steps >= definition.maxSteps) { halt(entry, 'execution_step_budget_exhausted'); return { kind: 'reject' } }
         entry.steps++
         return next()
       })
@@ -242,8 +241,6 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       validateBinding(binding)
       if (!definition || typeof definition.prompt !== 'string' || !definition.provider || !definition.model
         || !Array.isArray(definition.allowedTools) || definition.allowedTools.some(name => typeof name !== 'string' || !name || name === SUBMIT)) throw failure('execution_definition_invalid')
-      if (!Number.isSafeInteger(definition.maxSteps ?? 32) || (definition.maxSteps ?? 32) < 1 || (definition.maxSteps ?? 32) > 256
-        || !Number.isSafeInteger(definition.timeoutMs ?? 120000) || (definition.timeoutMs ?? 120000) < 1 || (definition.timeoutMs ?? 120000) > 2147483647) throw failure('execution_budget_invalid')
       assertSupportedJsonSchema(definition.outputSchema)
       if (typeof onSessionBound !== 'function' || typeof onResult !== 'function') throw failure('execution_callbacks_required')
       if ((validateOutput !== undefined && typeof validateOutput !== 'function') || (classifyOutputError !== undefined && typeof classifyOutputError !== 'function')) throw failure('execution_callbacks_invalid')
@@ -253,15 +250,8 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     const entry = { binding, input: copy(input), validateOutput, classifyOutputError, cancelled: false, stale: false, attempted: false, accepted: false,
       correctableCalls: new Map(), steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
     // 定义还可含 Controller 的 mapper/checker 函数；此边界只快照模型实际需要的字段。
-    const fixedDefinition = copy({ provider: definition.provider, model: definition.model, ...(definition.reasoningEffort === undefined ? {} : { reasoningEffort: definition.reasoningEffort }), prompt: definition.prompt, allowedTools: definition.allowedTools, outputSchema: definition.outputSchema, maxSteps: definition.maxSteps ?? 32, timeoutMs: definition.timeoutMs ?? 120000 })
+    const fixedDefinition = copy({ provider: definition.provider, model: definition.model, ...(definition.reasoningEffort === undefined ? {} : { reasoningEffort: definition.reasoningEffort }), prompt: definition.prompt, allowedTools: definition.allowedTools, outputSchema: definition.outputSchema })
     entries.set(executionKey(binding), entry); sessions.set(binding.sessionId, entry)
-    const startedAt = Date.now()
-    const expire = () => {
-      halt(entry, 'execution_timeout')
-      entry.abort.abort(failure('execution_timeout'))
-      entry.handle?.agent.cancel({ kind: 'user' })
-    }
-    entry.timer = setTimeout(expire, fixedDefinition.timeoutMs)
     return (async () => {
       try {
         if (!await current(entry)) return { status: entry.cancelled || closed ? 'cancelled' : 'stale' }
@@ -276,19 +266,6 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         if (stored) {
           validateHistory(stored.events, entry.binding)
           entry.steps = stored.events.filter(event => event.type === 'step/start').length
-          const initial = stored.events.find(event => event.type === IDENTITY_EVENT).data
-          if (initial.budget && (initial.budget.maxSteps !== fixedDefinition.maxSteps || initial.budget.timeoutMs !== fixedDefinition.timeoutMs)) throw failure('execution_budget_changed')
-          let consumedMs = 0, stepStart
-          for (const event of stored.events) {
-            if (event.type === 'step/start') stepStart = event.time
-            if (event.type === 'step/end' && stepStart !== undefined) { consumedMs += Math.max(0, event.time - stepStart); stepStart = undefined }
-          }
-          // A crashed in-flight step has no durable end; conservatively include its elapsed time.
-          if (stepStart !== undefined) consumedMs += Math.max(0, Date.now() - stepStart)
-          clearTimeout(entry.timer)
-          const remaining = fixedDefinition.timeoutMs - consumedMs - (Date.now() - startedAt)
-          if (remaining <= 0) { expire(); return { status: 'no_submission', reason: 'execution_timeout' } }
-          entry.timer = setTimeout(expire, remaining)
         }
         if (!await current(entry)) return { status: entry.cancelled || closed ? 'cancelled' : 'stale' }
         const options = { agentOptions: { provider: fixedDefinition.provider, model: fixedDefinition.model, ...(fixedDefinition.reasoningEffort === undefined ? {} : { reasoningEffort: fixedDefinition.reasoningEffort }) }, setup: setup(entry, fixedDefinition), signal: entry.abort.signal }
@@ -298,7 +275,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
           ? await ctx.agents.resume({ ...options, resumeSessionId: binding.sessionId })
           : await ctx.agents.create({ ...options, sessionId: binding.sessionId, ...(workspaceDir ? { meta: { cwd: workspaceDir } } : {}),
             // 当前原生 append 不提供 ignorable 参数；用受支持 seed 保留不参与原生投影的插件身份。
-            seed: [{ type: IDENTITY_EVENT, seq: 0, time: Date.now(), ignorable: true, data: { version: binding.kind ? 2 : 1, identity: identityOf(entry.binding), creationLease: binding.leaseEpoch, budget: { maxSteps: fixedDefinition.maxSteps, timeoutMs: fixedDefinition.timeoutMs } } }],
+            seed: [{ type: IDENTITY_EVENT, seq: 0, time: Date.now(), ignorable: true, data: { version: binding.kind ? 2 : 1, identity: identityOf(entry.binding), creationLease: binding.leaseEpoch } }],
           })
         const session = entry.handle.agent.session
         if (!stored) nameSession(ctx, session, binding.kind === 'message-unit' ? 'answer' : 'execution', entry.input.request ?? entry.input.objective)
@@ -324,7 +301,6 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
           throw error.executionDrained === false ? error : Object.assign(notDrained('execution_session_already_live'), { cause: error })
         }
         if (entry.cancelled || closed) return { status: 'cancelled' }
-        if (entry.haltCode === 'execution_timeout') return { status: 'no_submission', reason: entry.haltCode }
         throw error
       } finally {
         await drain(entry)

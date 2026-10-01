@@ -1,7 +1,6 @@
 import { acceptanceCriteriaSchema } from './task-input-contract.js'
-import { execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { promisify } from 'node:util'
 import { mkdir, realpath, lstat, readFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import { executionDigest, executionError } from './execution-artifacts.js'
@@ -20,28 +19,40 @@ import { freezeCandidate, readCandidate } from './execution-candidate.js'
 import { engineeringPatchRepairReasons } from './execution-recovery-policy.js'
 import { createTaskWorkflowContracts } from './task-workflow-contracts.js'
 
-const exec = promisify(execFile)
+// stdout 为完整业务结果；stderr 仅保留诊断尾部，不以输出容量或总时长终止 Git。
+const exec = (file, args, { signal } = {}) => new Promise((resolve, reject) => {
+  const child = spawn(file, args, { windowsHide: true, signal, stdio: ['ignore', 'pipe', 'pipe'] })
+  const output = []
+  let diagnostic = Buffer.alloc(0), failure
+  child.stdout.on('data', chunk => output.push(chunk))
+  child.stderr.on('data', chunk => { diagnostic = Buffer.concat([diagnostic, chunk]).subarray(-16 * 1024) })
+  child.on('error', cause => { failure = cause })
+  child.on('close', (code, exitSignal) => {
+    const stdout = Buffer.concat(output).toString('utf8'), stderr = diagnostic.toString('utf8')
+    if (failure || code !== 0) reject(Object.assign(failure ?? new Error('ENGINEERING_COMMAND_FAILED'),
+      { code: failure?.code ?? code, signal: exitSignal, stdout, stderr }))
+    else resolve({ stdout, stderr })
+  })
+})
 const fail = code => { throw executionError(code) }
 const text = (value, code) => { if (typeof value !== 'string' || !value.trim()) fail(code); return value }
-export async function readEngineeringRemoteRefs(directory, args, { execImpl = exec, delay = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+export async function readEngineeringRemoteRefs(directory, args, { execImpl = exec, signal } = {}) {
   if (args[0] !== 'ls-remote') fail('ENGINEERING_REMOTE_READ_ARGUMENT_INVALID')
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      return (await execImpl('git', ['-C', directory, ...args], { windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024 })).stdout.trim()
-    } catch (error) {
-      const detail = String(error.stderr ?? '')
-      const denied = /authentication failed|permission denied|access denied|repository not found|could not read username|returned error: (?:401|403)|certificate problem|host key verification failed/i.test(detail)
-      const transient = !denied && (['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'].includes(error.code)
-        || error.code == null && error.killed === true && error.signal === 'SIGTERM'
-        || /connection (?:timed out|reset)|operation timed out|tls handshake timeout|ssl connection timeout|temporary failure in name resolution|returned error: (?:429|502|503|504)|remote end hung up unexpectedly/i.test(detail))
-      if (!transient) fail(error.code === 2 && args.includes('--exit-code') ? 'ENGINEERING_UAT_BRANCH_NOT_FOUND' : 'ENGINEERING_REMOTE_READ_FAILED')
-      if (attempt === 2) fail('ENGINEERING_REMOTE_READ_TRANSIENT')
-      await delay(250 * (attempt + 1))
-    }
+  try {
+    signal?.throwIfAborted()
+    return (await execImpl('git', ['-C', directory, ...args], { windowsHide: true, signal })).stdout.trim()
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason
+    const detail = String(error.stderr ?? '')
+    const denied = /authentication failed|permission denied|access denied|repository not found|could not read username|returned error: (?:401|403)|certificate problem|host key verification failed/i.test(detail)
+    const transient = !denied && (['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'].includes(error.code)
+      || /connection (?:timed out|reset)|operation timed out|tls handshake timeout|ssl connection timeout|temporary failure in name resolution|returned error: (?:429|502|503|504)|remote end hung up unexpectedly/i.test(detail))
+    if (!transient) fail(error.code === 2 && args.includes('--exit-code') ? 'ENGINEERING_UAT_BRANCH_NOT_FOUND' : 'ENGINEERING_REMOTE_READ_FAILED')
+    fail('ENGINEERING_REMOTE_READ_TRANSIENT')
   }
 }
-const git = async (directory, args) => args[0] === 'ls-remote' ? readEngineeringRemoteRefs(directory, args)
-  : (await exec('git', ['-C', directory, ...args], { windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024 })).stdout.trim()
+const git = async (directory, args, { signal } = {}) => args[0] === 'ls-remote' ? readEngineeringRemoteRefs(directory, args, { signal })
+  : (await exec('git', ['-C', directory, ...args], { signal })).stdout.trim()
 export const uatBranchFor = environment => /^uat[1-9]$/.test(environment ?? '') ? `feature/${environment}-base` : null
 export const isUatBranch = branch => /^feature\/uat[1-9]-base$/.test(branch ?? '')
 
@@ -257,7 +268,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     config.editablePaths ??= []
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(config.id ?? '') || configs.has(config.id)
       || !isAbsolute(config.sourceRepository ?? '') || !isAbsolute(config.managedRoot ?? '') || !config.remote || !config.baseRef
-      || config.baseRef.startsWith('-') || /[\s\0]/.test(config.baseRef) || !Array.isArray(config.editablePaths) || config.editablePaths.length > 32
+      || config.baseRef.startsWith('-') || /[\s\0]/.test(config.baseRef) || !Array.isArray(config.editablePaths)
       || config.editablePaths.some(path => typeof path !== 'string' || !path || /[\\:\0\r\n]/.test(path) || path.split('/').some(part => !part || ['.', '..', '.git'].includes(part.toLowerCase())))
       || !Array.isArray(config.checks) || !config.checks.length) fail('ENGINEERING_REPOSITORY_INVALID')
     if (config.discovery && (!Array.isArray(config.discovery.allowedPrefixes) || !config.discovery.allowedPrefixes.length || config.discovery.allowedPrefixes.some(prefix => typeof prefix !== 'string' || (prefix !== '' && (!prefix.endsWith('/') || /[\\:\0\r\n]/.test(prefix) || prefix.slice(0, -1).split('/').some(part => !part || ['.', '..', '.git'].includes(part.toLowerCase()))))))) fail('ENGINEERING_DISCOVERY_CONFIG_INVALID')
@@ -268,7 +279,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     // 配置校验发生在任何消息进入前；真正执行时仍重新校验适配器。
     config.checks.forEach(check => createVerificationJobCheck({ ...check, root: join(config.managedRoot, 'checks') }))
     if (config.acceptanceChecks !== undefined && !Array.isArray(config.acceptanceChecks)) fail('ENGINEERING_ACCEPTANCE_CONFIG_INVALID')
-    if (config.acceptanceChecks && (config.acceptanceChecks.length > 32 || new Set([...config.checks, ...config.acceptanceChecks].map(check => check.id)).size !== config.checks.length + config.acceptanceChecks.length)) fail('ENGINEERING_ACCEPTANCE_CONFIG_INVALID')
+    if (config.acceptanceChecks && (new Set([...config.checks, ...config.acceptanceChecks].map(check => check.id)).size !== config.checks.length + config.acceptanceChecks.length)) fail('ENGINEERING_ACCEPTANCE_CONFIG_INVALID')
     config.acceptanceChecks?.forEach(check => createBusinessAcceptanceCheck({ ...check, root: join(config.managedRoot, 'acceptance') }))
     if (config.purpose !== undefined && (typeof config.purpose !== 'string' || !config.purpose.trim())) fail('ENGINEERING_REPOSITORY_INVALID')
     if (config.routingTerms !== undefined && (!Array.isArray(config.routingTerms) || config.routingTerms.some(term => typeof term !== 'string' || !term.trim()))) fail('ENGINEERING_REPOSITORY_INVALID')
@@ -601,7 +612,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     const matches = [...configs.values()].filter(item => item.config.routingTerms?.some(term => request.includes(term)))
     if (matches.length === 1 && matches[0].config.id !== repoId) fail('ENGINEERING_REPOSITORY_SCOPE_MISMATCH')
     const constraints = [...new Set([...(action.constraints ?? []), ...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])]
-    if (constraints.length > 32 || constraints.some(item => typeof item !== 'string') || Buffer.byteLength(request) > 12000) fail('ENGINEERING_INPUT_LIMIT')
+    if (constraints.some(item => typeof item !== 'string')) fail('ENGINEERING_INPUT_LIMIT')
     const acceptanceCriteria = action.arguments.acceptanceCriteria === undefined ? [request] : action.arguments.acceptanceCriteria
     if (!acceptanceCriteriaSchema.safeParse(acceptanceCriteria).success) fail('LOCAL_ACCEPTANCE_CRITERIA_REQUIRED')
     const fingerprint = executionDigest({ taskId, request, constraints, repoId, uatEnvironment, uatBranch, acceptanceCriteria,
@@ -874,18 +885,6 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
             runId: current.run.runId, expectedRevision: current.run.revision, fromDigest: record.digest, toDigest: definition.digest,
             nodeRunId: index.nodeRunId, inputRef: next.ref, inputDigest: next.digest,
           } })
-        } else if (record.definitionVersion === '5' && state.nodes.find(node => node.nodeId === 'index-files')?.waitReason?.reference === 'EXECUTION_BUDGET_EXHAUSTED') {
-          await store.command({ id: `index-budget:${record.config.runId}:${definition.digest}`, kind: 'run.workflow.index-budget', args: {
-            runId: record.config.runId, workflowDigest: definition.digest,
-          } })
-        } else if (record.definitionVersion === '5') {
-          const index = state.nodes.find(node => node.nodeId === 'index-files')
-          if (index?.status === 'ready'
-            && (await store.query({ kind: 'receipt', commandId: `claim:${index.nodeRunId}:${index.leaseEpoch + 1}` }))?.result?.status === 'budget_exhausted') {
-            await store.command({ id: `index-budget-lease:${record.config.runId}:${definition.digest}`, kind: 'run.workflow.index-budget-lease', args: {
-              runId: record.config.runId, workflowDigest: definition.digest,
-            } })
-          }
         }
         result.push(workflow)
       }

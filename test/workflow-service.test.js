@@ -189,7 +189,7 @@ test('service真实恢复入口不重派确定性错误，只有明确暂态可�
   }
 })
 
-test('预算续行真实HTTP与Controller保留54次消耗、验收一次、旧失败领取及阶段门禁', async t => {
+test('同Run超过旧54次领取仍完成、验收一次且保留真人阶段门禁', async t => {
   const { service, execution, message } = await fixture(t, 'owner', undefined, { config: { webActorId: 'owner' } })
   const received = await service.ingest(message); await service.messages.process(received.runId)
   const original = (await service.state(received.runId)).commands[0].result
@@ -214,51 +214,7 @@ test('预算续行真实HTTP与Controller保留54次消耗、验收一次、旧�
   await execution.controller.whenIdle(runId)
   for (let i = 0; i < 43; i++) { await execution.controller.recover({ commandId: `fixture-recover-${i}`, runId }); await execution.controller.whenIdle(runId) }
   const before = await execution.controller.state(runId)
-  assert.equal(before.run.claimCount, 54); assert.equal(before.run.maxClaims, 54); assert.equal(acceptances, 1)
-  const binding = (await service.tasks()).find(task => task.taskId === taskId).budgetContinuation
-  assert.equal(binding.nodeId, 'prepare-commit')
-  const identity = { channel: 'web', actorId: 'owner' }, body = { requestId: 'budget-continue', continuationText: '授权当前已验收候选有限续行一次', budgetBinding: binding }
-  // 独立复制本测试临时库，构造先授权后出现unknown的事务竞态；绝不连接运行库。
-  const cloneRoot = await mkdtemp(join(tmpdir(), 'budget-unknown-')), clonePath = join(cloneRoot, 'control.db')
-  t.after(() => rm(cloneRoot, { recursive:true,force:true }))
-  const sourceDb = new DatabaseSync(join(execution.artifacts.root, '..', 'control.db'), { readOnly:true })
-  try { await backup(sourceDb, clonePath) } finally { sourceDb.close() }
-  let clone = await openExecutionStore({ dbPath:clonePath,instanceId:'test' })
-  await clone.command({ id:'unknown-prepare',kind:'task.web-input.prepare',args:{eventId:'unknown-event',actorId:'owner',request:{...body,action:'continue-budget',taskId},input:null} })
-  await clone.close()
-  const offline = new DatabaseSync(clonePath)
-  try { offline.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('unknown-fixture','operation',?,?,?,?,?,'digest','{}','[]','fixture','unknown','now','now')")
-    .run(runId,binding.nodeRunId,binding.nodeId,binding.generation,before.nodes.find(n=>n.nodeId===binding.nodeId).inputDigest) } finally { offline.close() }
-  clone = await openExecutionStore({ dbPath:clonePath,instanceId:'test' })
-  try {
-    assert.equal(await clone.query({kind:'run.budget-continuation',runId}),null)
-    await assert.rejects(clone.command({id:'unknown-continue',kind:'run.budget.continue',args:{eventId:'unknown-event'}}),/RUN_BUDGET_CONTINUATION_STALE/)
-    assert.equal((await clone.query({kind:'run',runId})).run.maxClaims,54)
-  } finally { await clone.close() }
-  const runtime = { listTaskView:()=>service.tasks(), isWorkflowTask: async () => true, submitWorkflowTask: request => service.submitWebTask(request, identity) }
-  const server = createServer((req,res) => handleRequest(req,res,runtime)); await new Promise(resolve => server.listen(0,'127.0.0.1',resolve)); t.after(() => new Promise(resolve => server.close(resolve)))
-  const post = (value, origin) => fetch(`http://127.0.0.1:${server.address().port}/tasks/${taskId}/continue-budget`, { method: 'POST', headers: { 'content-type':'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(value) })
-  assert.deepEqual((await (await fetch(`http://127.0.0.1:${server.address().port}/state/tasks`)).json()).find(task=>task.taskId===taskId).budgetContinuation,binding)
-  assert.equal((await post(body,'https://evil.example')).status,403)
-  assert.equal((await post({ ...body, additionalClaims: 100 })).status,400)
-  assert.equal((await post({ ...body, continuationText: '' })).status,400)
-  await assert.rejects(service.submitWebTask({ ...body, action:'continue-budget', taskId }, { channel:'web',actorId:'attacker' }), /FORBIDDEN/)
-  for (const field of ['controlRevision','requirementRevision','planRevision','runRevision','generation','leaseEpoch']) {
-    assert.equal((await post({ ...body, requestId:`stale-${field}`, budgetBinding:{...binding,[field]:binding[field]+1} })).status,409)
-  }
-  await assert.rejects(execution.controller.continueRunBudget({ commandId:'untrusted-budget',eventId:'missing' }), /NOT_AUTHORIZED/)
-  const response = await post(body); assert.equal(response.status,202,await response.text())
-  const extended = await execution.controller.state(runId)
-  assert.equal(extended.run.claimCount,54); assert.equal(extended.run.maxClaims,75); assert.equal(extended.run.generation,before.run.generation)
-  assert.equal(extended.nodes.find(node=>node.nodeId==='prepare-commit').leaseEpoch,1)
-  assert.equal((await post(body)).status,202)
-  assert.equal((await post({ ...body,requestId:'second' })).status,409)
-  await service.recoverExecutionTasks(); await execution.controller.whenIdle(runId)
-  const after = await execution.controller.state(runId)
-  assert.equal(after.run.status,'succeeded'); assert.equal(after.run.claimCount,61); assert.equal(after.run.maxClaims,75); assert.equal(acceptances,1)
-  assert.equal(after.nodes.find(node=>node.nodeId==='prepare-commit').leaseEpoch,2)
-  assert.equal((await execution.store.query({kind:'receipt',commandId:`claim:${binding.nodeRunId}:1`})).result.status,'budget_exhausted')
-  assert.equal((await execution.store.query({kind:'receipt',commandId:`claim:${binding.nodeRunId}:2`})).result.status,'applied')
+  assert.equal(before.run.claimCount, 61); assert.equal(before.run.maxClaims, undefined); assert.equal(before.run.status,'succeeded'); assert.equal(acceptances, 1)
   const plan = await execution.controller.advanceTaskPlan(taskId)
   assert.equal(plan.stages[1].status,'waiting_confirmation')
   assert.equal(plan.stages[1].runId,null)
@@ -949,7 +905,7 @@ for (const [scenario, validWrite, expectedComplete, native = false] of [
   }
   const nativeLlm = { async *stream(request) {
     assert.deepEqual(request.tools, [])
-    assert.equal(request.maxTokens, 4096)
+    assert.equal(request.maxTokens, undefined)
     assert.match(request.system, /不能证明生产修复/)
     const input = JSON.parse(request.messages[0].content[0].text)
     assert.equal(input.request, objective)
@@ -2968,30 +2924,30 @@ test('本地验收产出：执行中、未知状态及空回执明确标记未�
   assert.match(result.text, /任务数据：未确认清理完成\n本地服务：未确认停止/)
 })
 
-for (const recoveryCode of ['ECONNRESET', 'ENGINEERING_REMOTE_READ_TRANSIENT']) test(`暂态恢复三次上限与退避持久化 ${recoveryCode}，重开控制账不能重置额度`, async t => {
+for (const recoveryCode of ['ECONNRESET', 'ENGINEERING_REMOTE_READ_TRANSIENT', 'PR_CONNECTION_FAILED']) test(`暂态恢复无次数上限且退避持久化 ${recoveryCode}，重开控制账不能跳过退避`, async t => {
   let executions=0
   const {service,execution,message,startCodeTask}=await fixture(t,'owner',undefined,{execute:async()=>{executions++;throw Object.assign(Error(recoveryCode),{code:recoveryCode})},extraNodes:[{
     id:'finish',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,mapInput:()=>({}),execute:async()=>({})
   }]})
   const task=await startCodeTask()
   await execution.controller.whenIdle(task.runId)
-  for(const delay of [0,1100,2100]) {
+  for(const delay of [0,1100,2100,4100]) {
     if(delay)await new Promise(resolve=>setTimeout(resolve,delay))
     await service.recoverExecutionTasks();await execution.controller.whenIdle(task.runId)
   }
-  assert.equal(executions,4)
-  await service.recoverExecutionTasks();await execution.controller.whenIdle(task.runId);assert.equal(executions,4)
+  assert.equal(executions,5)
+  await service.recoverExecutionTasks();await execution.controller.whenIdle(task.runId);assert.equal(executions,5)
   const state=await execution.controller.state(task.runId),node=state.nodes.find(n=>n.status==='waiting')
-  assert.equal(state.run.claimCount,4)
+  assert.equal(state.run.claimCount,5)
   const directory=await mkdtemp(join(tmpdir(),'recovery-reopen-')),dbPath=join(directory,'control.db')
   const db=new DatabaseSync(join(execution.artifacts.root,'..','control.db'),{readOnly:true})
   try {
     const events=db.prepare("SELECT payload FROM execution_events WHERE kind='run.recovery.admitted' ORDER BY seq").all().map(row=>JSON.parse(row.payload))
-    assert.deepEqual(events.map(event=>event.attempt),[1,2,3]);assert.equal(new Set(events.map(event=>event.key)).size,1)
+    assert.deepEqual(events.map(event=>event.attempt),[1,2,3,4]);assert.equal(new Set(events.map(event=>event.key)).size,1)
     await backup(db,dbPath)
   } finally {db.close()}
   const reopened=await openExecutionStore({dbPath,instanceId:'test',initialize:false})
-  try {await assert.rejects(reopened.command({id:'after-reopen',kind:'run.recovery.admit',args:{runId:task.runId,runRevision:state.run.revision,nodeRunId:node.nodeRunId,generation:state.run.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,errorCode:recoveryCode}}),/RECOVERY_RETRY_LIMIT/)} finally {await reopened.close()}
+  try {await assert.rejects(reopened.command({id:'after-reopen',kind:'run.recovery.admit',args:{runId:task.runId,runRevision:state.run.revision,nodeRunId:node.nodeRunId,generation:state.run.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,errorCode:recoveryCode}}),/RECOVERY_RETRY_DEFERRED/)} finally {await reopened.close()}
   const offline=new DatabaseSync(dbPath)
   try {offline.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('unknown-retry','operation',?,?,?,?,?,'digest','{}','[]','fixture','unknown','now','now')").run(task.runId,node.nodeRunId,node.nodeId,state.run.generation,node.inputDigest)} finally {offline.close()}
   const unknown=await openExecutionStore({dbPath,instanceId:'test',initialize:false})
@@ -3158,7 +3114,7 @@ test('任务投影只在真实等待时显示原因，完成后隐藏遗留原�
     const completed = (await service.tasks()).find(item => item.taskId === task.taskId)
     assert.equal(completed.state, 'completed'); assert.equal(completed.outcome, 'succeeded')
     assert.equal(completed.waitingReason, undefined)
-    assert.equal(completed.stageConfirmation, null); assert.equal(completed.budgetContinuation, null)
+    assert.equal(completed.stageConfirmation, null); assert.equal(completed.budgetContinuation, undefined)
     assert.deepEqual(await execution.store.query({ kind: 'run', runId: task.runId }), before)
   } finally { staleReadback = false }
 })
@@ -3270,7 +3226,7 @@ test('调查成功产物经真实Service与工程准备进入方案节点输入�
   await writeFile(join(source, 'value.txt'), 'base'); await git('add', '.'); await git('commit', '-m', 'base'); await git('branch', 'feature/uat2-base')
   const profile = join(directory, 'uat.json'); await writeFile(profile, JSON.stringify({ environment: 'uat', env: {} }))
   const command = { executable: process.execPath, args: ['-e', 'process.exit(0)'] }
-  const localAcceptance = { version: '1', sharedDataProfilePath: profile, timeoutMs: 90000, prepareSteps: [], service: { ...command, args: [...command.args, '{port}', '127.0.0.1'], readyPath: '/' }, scenarios: [{ id: 'value', description: '业务值', ...command }], cleanup: command, verifyCleanup: command }
+  const localAcceptance = { version: '1', sharedDataProfilePath: profile, prepareSteps: [], service: { ...command, args: [...command.args, '{port}', '127.0.0.1'], readyPath: '/' }, scenarios: [{ id: 'value', description: '业务值', ...command }], cleanup: command, verifyCleanup: command }
   const repositories = [{ id: 'repo', sourceRepository: source, managedRoot: join(directory, 'managed'), remote: source,
     baseRef: 'main', githubRepository: 'example/repo', editablePaths: ['value.txt'], localAcceptance,
     checks: [{ id: 'check', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }] }]
@@ -3673,7 +3629,7 @@ test('待澄清和待材料有各自状态及原因，真正失败仍为关联�
   assert.equal((await service.mailboxes()).messages.find(item=>item.runId===received.runId).workflowStatus,'routing_blocked');
 });
 
-for (const intent of ['revise', 'reopen']) test(`${intent} 整批追加超过累计32项时需求与验收均不写入`, async t => {
+for (const intent of ['revise', 'reopen']) test(`${intent} 整批追加超过原32项仍在同Task原子保存需求和验收`, async t => {
   const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
     : stage === 'R' ? input.candidates.length
       ? { kind: 'binding', disposition: 'existing', candidateId: input.candidates[0].candidateId, evidence: ['原任务'] }
@@ -3690,10 +3646,10 @@ for (const intent of ['revise', 'reopen']) test(`${intent} 整批追加超过累
   const second = await service.ingest({ ...message, messageId: 'overflow-addition', text: '追加两个条件' })
   const rejected = await service.messages.process(second.runId)
   assert.ok(rejected.commands[0], JSON.stringify(rejected))
-  assert.equal(rejected.commands[0].status, 'unknown')
-  assert.match(JSON.stringify(rejected.commands[0]), /TASK_OWNER_CRITERIA_INVALID/)
-  assert.deepEqual(await execution.controller.taskPlan(taskId), before)
-  assert.equal((await execution.store.query({ kind: 'task.owner.acceptance', taskId })).length, 31)
+  assert.equal(rejected.commands[0].status, 'applied')
+  assert.equal(rejected.commands[0].args.taskId,taskId)
+  assert.equal((await execution.controller.taskPlan(taskId)).task.requirementRevision,before.task.requirementRevision+1)
+  assert.equal((await execution.store.query({ kind: 'task.owner.acceptance', taskId })).length, 33)
 })
 
 test('明确查表和多阶段脚本交办保留来源原文，任务准入不等于生产批准', async t => {
@@ -3816,7 +3772,7 @@ test('内部材料重试HTTP只由本机操作者恢复，保留原请求且真�
     context: { sourceMessageId: 'retry-message', quoteRefs: [], attachments: [{ resourceRef: 'retry-file', source: { type: 'fileId', resourceId: 'retry-file' } }] } }, { process: false })
   const waiting=await service.messages.process(source.runId)
   const requestId=waiting.requests.find(r=>r.status==='pending').id
-  await execution.store.command({ id: 'exhaust-retry', kind: 'message.request.retry', args: { runId: source.runId, requestId, error: 'FILE_UNAVAILABLE', contractVersion: 'v1', maxAttempts: 1 } })
+  await execution.store.command({ id: 'record-material-failure', kind: 'message.request.retry', args: { runId: source.runId, requestId, error: 'FILE_UNAVAILABLE', contractVersion: 'v1' } })
   const runtime = { retryWorkflowMaterialRequest: args => service.retryMaterialRequest(args, { channel: 'web', actorId: 'owner' }) }
   const server = createServer((req, res) => handleRequest(req, res, runtime))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)))
@@ -4078,7 +4034,7 @@ test('同批群协调一个目标只建一Task，补充fact在首次Owner前完�
  assert.ok(requirement.materials.some(material=>material.text?.includes('SELECT 1;')))
 })
 
-test('无run的blocked Owner可受管恢复且精确幂等，不改原需求与session', async t => {
+test('无run的退避Owner可显式恢复且精确幂等，不改原需求与session', async t => {
  let failOwner = true
  const sessions = { async run({ onSessionBound, onCandidate }) {
    await onSessionBound()
@@ -4092,7 +4048,9 @@ test('无run的blocked Owner可受管恢复且精确幂等，不改原需求与s
  const taskId = processed.commands.find(c => c.kind === 'create').result.taskId
  for (let i = 0; i < 3; i++) await service.recover()
  const owner = await execution.store.query({ kind: 'task.owner', taskId })
- assert.equal(owner.status, 'blocked')
+ assert.equal(owner.status, 'pending')
+ assert.equal(owner.failureCount,1)
+ assert.ok(Date.parse(owner.retryAt)>Date.now())
  const plan = await execution.controller.taskPlan(taskId)
  assert.equal(plan.stages.length, 0)
  const request = { taskId, retryKey: 'reference-contract-fixed', reason: '引用错误反馈修复完成',
@@ -4288,7 +4246,7 @@ for(const recoveryMode of ['idle','blocked-repair','blocked-unknown'])test(`只�
   await send('claim',{turnId,expectedLeaseEpoch:old.leaseEpoch})
   await send('candidate',{turnId,leaseEpoch,decision:{action:'repairCurrentStage',summary:'旧版已接纳的非法修复',evidenceRefs:[],repair:{stageId:before.stages[0].stageId,runId,generation:1,runRevision:0,requirementRevision:before.task.requirementRevision}}})
   await send('accept',{turnId,leaseEpoch})
-  for(let n=0;n<3;n++)await execution.store.command({id:'fail-invalid-'+n,kind:'task.owner.action.fail',args:{taskId,turnId,leaseEpoch,reason:recoveryMode==='blocked-unknown'?'UNKNOWN_FAILURE':'WORKFLOW_REPAIR_NOT_ADMITTED'}})
+  for(let n=0;n<1;n++)await execution.store.command({id:'fail-invalid-'+n,kind:'task.owner.action.fail',args:{taskId,turnId,leaseEpoch,reason:recoveryMode==='blocked-unknown'?'UNKNOWN_FAILURE':'WORKFLOW_REPAIR_NOT_ADMITTED'}})
  }
  const owner=await execution.store.query({kind:'task.owner',taskId})
  const request={taskId,recoveryKey:'materials-fixed',reason:'Host读取范围已修复',expectedOwnerRevision:owner.revision,expectedLeaseEpoch:owner.leaseEpoch,expectedRequirementRevision:before.task.requirementRevision,expectedControlRevision:before.task.controlRevision}
@@ -4578,4 +4536,50 @@ for(const requestFirst of [false,true])for(const requiredCount of [0,1,4])test(`
  assert.deepEqual(new Set(reads),new Set(ids))
  assert.ok(seen.length)
  assert.deepEqual(new Set(seen[0].materialAccess.readableMessageResources.map(r=>r.resourceId)),new Set(ids))
+})
+
+test('PR网络恢复由服务自动调度，无新条件且保留成功前缀、原节点身份与持久退避',async t=>{
+ let prefix=0,attempts=0,suffix=0
+ const {service,execution,startCodeTask}=await fixture(t,'owner',undefined,{execute:async()=>{prefix++;return{}},extraNodes:[
+  {id:'pr-network',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,mapInput:()=>({}),execute:async()=>{if(++attempts<3)throw Object.assign(Error('network'),{code:'PR_CONNECTION_FAILED'});return{}}},
+  {id:'finish',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,mapInput:()=>({}),execute:async()=>{suffix++;return{}}}
+ ]})
+ const task=await startCodeTask();await execution.controller.whenIdle(task.runId)
+ const before=await execution.controller.state(task.runId)
+ assert.equal(before.nodes[0].status,'succeeded');assert.equal(attempts,1)
+ await service.recoverExecutionTasks();await execution.controller.whenIdle(task.runId);assert.equal(attempts,2)
+ await service.recoverExecutionTasks();await execution.controller.whenIdle(task.runId);assert.equal(attempts,2)
+ await new Promise(resolve=>setTimeout(resolve,1100))
+ await service.recoverExecutionTasks();await execution.controller.whenIdle(task.runId)
+ const after=await execution.controller.state(task.runId)
+ assert.equal(after.run.status,'succeeded');assert.equal(attempts,3);assert.equal(prefix,1);assert.equal(suffix,1)
+ assert.equal(after.run.generation,before.run.generation);assert.deepEqual(after.nodes.map(n=>n.nodeRunId),before.nodes.map(n=>n.nodeRunId))
+ const db=new DatabaseSync(join(execution.artifacts.root,'..','control.db'),{readOnly:true})
+ try{const events=db.prepare("SELECT payload FROM execution_events WHERE kind='run.recovery.admitted' ORDER BY seq").all().map(r=>JSON.parse(r.payload));assert.deepEqual(events.map(e=>e.attempt),[1,2]);assert.ok(events.every(e=>e.errorCode==='PR_CONNECTION_FAILED'));assert.equal(new Set(events.map(e=>e.key)).size,1)}finally{db.close()}
+})
+
+for(const proofState of ['verified-unsent','verified-failed','no-proof','sent'])test(`服务自动恢复PR未知预检 ${proofState}：仅可信未发送恢复原效果`,async t=>{
+ let attempts=0,mutations=0,reads=0
+ const {service,execution,startCodeTask}=await fixture(t,'owner',undefined,{
+  allowedEffects:['github.pr'],deliveryOptions:{authorize:async()=>({principalId:'owner',authorizationRef:'fixture-pr'}),prAdapter:{
+   execute:async()=>{if(++attempts===1)return proofState==='verified-failed'?{status:'failed',phase:'preflight',mutationAttempted:false,reason:'PR_CONNECTION_FAILED'}:{status:'unknown',reason:'PR_INTERRUPTED'};mutations++;return{status:'succeeded',url:'https://example.invalid/pr/1'}},
+   reconcile:async()=>{reads++;return proofState==='sent'?{status:'unknown',phase:'after-send-intent',reason:'PR_CONNECTION_FAILED'}:{status:'failed',phase:'preflight',mutationAttempted:false,reason:'PR_PREFLIGHT_NOT_SENT'}},
+   recoverUnsent:async prepared=>proofState.startsWith('verified-')?{operationKey:prepared.operationKey,preparedDigest:prepared.digest,mutationAttempted:false,reason:'PR_PREFLIGHT_NOT_SENT',evidenceRef:'verified-host-journal'}:null
+  }},execute:async({runId,generation,requirementDigest,perform})=>{
+   const data={action:'pr',repo:'test/repo',head:'test/head',runId,generation,requirementDigest,operationKey:'a'.repeat(64)}
+   return perform({action:'pr',prepared:{...data,digest:executionDigest(data)}})
+  }
+ })
+ const task=await startCodeTask();await execution.controller.whenIdle(task.runId)
+ const before=await execution.controller.state(task.runId)
+ assert.equal(before.nodes[0].waitReason.reference,proofState==='verified-failed'?'PR_CONNECTION_FAILED':'DELIVERY_RECONCILIATION_REQUIRED');assert.equal(attempts,1)
+ const original=(await execution.store.query({kind:'effect.list',runId:task.runId}))[0]
+ await service.recoverExecutionTasks();await execution.controller.whenIdle(task.runId)
+ const after=await execution.controller.state(task.runId),effects=await execution.store.query({kind:'effect.list',runId:task.runId})
+ assert.equal(after.run.status,proofState.startsWith('verified-')?'succeeded':'waiting')
+ assert.equal(mutations,proofState.startsWith('verified-')?1:0);assert.equal(attempts,proofState.startsWith('verified-')?2:1)
+ assert.equal(effects.length,1);assert.equal(effects[0].effectId,original.effectId);assert.equal(after.nodes[0].nodeRunId,before.nodes[0].nodeRunId)
+ await service.recoverExecutionTasks();await execution.controller.whenIdle(task.runId)
+ assert.equal(mutations,proofState.startsWith('verified-')?1:0);assert.equal(attempts,proofState.startsWith('verified-')?2:1)
+ if(proofState!=='verified-failed')assert.ok(reads>0)
 })

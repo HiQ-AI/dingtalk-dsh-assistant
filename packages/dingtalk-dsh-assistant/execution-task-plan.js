@@ -117,7 +117,7 @@ export function queryTaskPlan(db, query) {
 }
 
 function validateStages(stages, db) {
-  if (!Array.isArray(stages) || stages.length < 1 || stages.length > 32) fail('TASK_PLAN_STAGES_INVALID')
+  if (!Array.isArray(stages) || stages.length < 1) fail('TASK_PLAN_STAGES_INVALID')
   const ids = new Set()
   stages.forEach((stage, index) => {
     exact(stage, ['stageId', 'workflowId', 'workflowDigest', 'unavailableReason', 'requirementRef', 'gate', 'sourceCondition'])
@@ -268,7 +268,7 @@ export function reduceTaskPlanCommand(db, command, { now }) {
       || task.status === 'succeeded' && !task.requirement_ref
       || a.requirementRevision !== task.requirement_revision + (task.requirement_ref ? 0 : 1)) fail('TASK_PLAN_STALE')
     const old = stageRows(db, taskId, task.plan_revision)
-    if (!old.length || old.length + a.stages.length > 32) fail('TASK_PLAN_STAGES_INVALID')
+    if (!old.length) fail('TASK_PLAN_STAGES_INVALID')
     validateStages([...old.map(row => ({ stageId: row.stage_id, workflowId: row.workflow_id,
       workflowDigest: row.workflow_digest, unavailableReason: row.unavailable_reason,
       requirementRef: row.requirement_ref, gate: row.gate })), ...a.stages], db)

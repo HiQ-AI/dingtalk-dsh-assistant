@@ -56,7 +56,7 @@ test('bootstrap离线使用正式Store enter/seal，owner锁阻挡并发，新�
 test('正式configure修改验收配置仍完整保留末尾禁用屏障，只移除屏障不回滚新配置',()=>{
  const original=source+'        workflow:\r\n          repositories:\r\n            - id: dataset\r\n              managedRoot: D:/fixture\r\n            - id: dataset-web\r\n              managedRoot: D:/fixture\r\n'
  const command={executable:process.execPath,args:['-e','process.exit(0)']}
- const config={version:'test',sharedDataProfilePath:'D:/fixture/shared.json',prepareSteps:[command],service:{executable:process.execPath,args:['server.js','--host','127.0.0.1','--port','{port}'],readyPath:'/ready'},scenarios:[{...command,id:'fixture',description:'fixture'}],cleanup:command,verifyCleanup:command,timeoutMs:1000}
+ const config={version:'test',sharedDataProfilePath:'D:/fixture/shared.json',prepareSteps:[command],service:{executable:process.execPath,args:['server.js','--host','127.0.0.1','--port','{port}'],readyPath:'/ready'},scenarios:[{...command,id:'fixture',description:'fixture'}],cleanup:command,verifyCleanup:command}
  const witnessed=bootstrapProfile(original,'witness',yaml,{evidenceDirectory:'D:/fixture/evidence',expectedPid:123,nonce:randomUUID()})
  const disabled=bootstrapProfile(witnessed,'disable',yaml)
  const planned=planProjectLocalAcceptance(disabled,{dataset:config,'dataset-web':config},yaml)

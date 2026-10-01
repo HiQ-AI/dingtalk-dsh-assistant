@@ -54,7 +54,9 @@ async function fixture(t, action = false, hooks = {}) {
   let judges = 0, dispatched = 0, candidateReads = 0
   const context = { agentNames: () => ['小小鹏'], candidates: async () => { candidateReads++; return { cards: [], total: 0, catalogRevision: "empty" } }, facts: async () => ({}), validateActions: async () => ({ kind: 'accepted' }) }
   Object.assign(context, hooks.context?.(store) ?? {})
-  const coordinator = createMessageCoordinator({ ctx, store, context, sessionRunner: hooks.sessionRunner, modelConfig: async () => ({ provider: 'coordinator-fixture', model: 'scripted' }) })
+  const coordinatorStore = hooks.coordinatorQuery ? { command: store.command.bind(store), query: async args => hooks.coordinatorQuery(args, await store.query(args)) } : store
+  const coordinator = createMessageCoordinator({ ctx, store: coordinatorStore, context, sessionRunner: hooks.sessionRunner, clock: hooks.clock,
+    modelConfig: hooks.modelConfig ?? (async () => ({ provider: 'coordinator-fixture', model: 'scripted' })) })
   const workflow = createMessageWorkflow({ store, coordinator, context, judge: async () => { judges++; throw Error('旧阶段不得运行') }, handlers: { answer: async () => { dispatched++; return { status: 'completed', reply: '已核验' } }, ...hooks.handlers } })
   t.after(async () => { await workflow.close(); await store.close(); await ctx.fiber.dispose(); await rm(root, { recursive: true, force: true }) })
   const receive = async (runId, body) => { await workflow.receive({ runId, sourceKey: `source:${runId}`, sourceVersion: 1, conversationId: 'group', actorId: 'user', body, context: { compactPolicy: '本群助手负责核验', directedToAgent: action } }, { process: false }); await workflow.process(runId) }
@@ -417,4 +419,41 @@ for (const kind of [undefined, 'constraint']) test(`补充动作的可选kind正
   assert.equal(received.kind, kind ?? 'fact')
   const topic = await f.store.query({ kind: 'message.topic', topicId: state.units[0].topicId })
   assert.ok(topic.facts.some(fact => fact.kind === (kind ?? 'fact') && fact.text === '原需求中的补充条件'))
+})
+
+test('实现错误同条件不原样重启，新来源到达后继续原群', async t => {
+ let calls=0,failures=0,injectFailures=false
+ const f=await fixture(t,false,{coordinatorQuery(args,value){
+  if(injectFailures && args.kind==='message.coordinator')value.unconsumedTaskEvents.push({taskId:'task-existing',eventSeq:++failures,eventType:'owner.failed'})
+  return value
+ },sessionRunner:{async close(){},async run(args){
+  calls++
+  if(calls===1)throw Object.assign(Error('implementation_broken'),{code:'implementation_broken'})
+  await args.onSessionBound();await args.onCandidate({decisions:args.input.sources.map(s=>({runId:s.runId,reason:'背景',units:[]}))});return{status:'submitted'}
+ }}})
+ await assert.rejects(f.receive('broken','背景'),{code:'implementation_broken'})
+ for(let i=0;i<6;i++)await f.workflow.recover()
+ assert.equal(calls,1)
+ injectFailures=true
+ for(let i=0;i<6;i++)await f.workflow.recover()
+ assert.equal(calls,1,'内部失败事件不会触发同条件模型重启')
+ injectFailures=false
+ await f.receive('new-condition','新背景')
+ assert.equal(calls,2)
+ assert.equal((await f.store.query({kind:'message.coordinator',conversationId:'group'})).sources.length,0)
+})
+
+test('暂态探测递增退避，无次数上限，新来源无需等待旧退避', async t=>{
+ let now=Date.now(),calls=0
+ const f=await fixture(t,false,{clock:()=>now,sessionRunner:{async close(){},async run(){calls++;throw Object.assign(Error('temporary'),{code:'ECONNRESET'})}}})
+ await assert.rejects(f.receive('network','资料'),{code:'ECONNRESET'})
+ let delay=0
+ for(let i=0;i<6;i++){
+  const c=(await f.store.query({kind:'message.coordinator',conversationId:'group'})).coordinator
+  assert.ok(c.recovery.delayMs>delay);delay=c.recovery.delayMs
+  await f.workflow.recover();assert.equal(calls,i+1)
+  now=Date.parse(c.retryAt)+1;await f.workflow.recover();assert.equal(calls,i+2)
+ }
+ await assert.rejects(f.receive('network-new','新增资料'),{code:'ECONNRESET'})
+ assert.equal(calls,8)
 })

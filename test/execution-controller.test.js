@@ -7,7 +7,7 @@ import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
-import { classifyExecutionFailure } from '../packages/dingtalk-dsh-assistant/execution-recovery-policy.js'
+import { classifyExecutionFailure, recoveryRetryDelayMs } from '../packages/dingtalk-dsh-assistant/execution-recovery-policy.js'
 
 const number = { type: 'number' }
 const workflow = execute => ({ id: 'synthetic', version: '1', nodes: [
@@ -20,12 +20,12 @@ test('失败分类仅使用精确白名单，输出错误不扩散到输入和�
     ['ENGINEERING_ACCEPTANCE_FAILED', 'business-validation'], ['AGENT_WORK_NEEDS_INPUT', 'missing-input'],
     ['AGENT_WORK_BLOCKED', 'task-blocked'],
     ['ENGINEERING_UAT_ENVIRONMENT_REQUIRED', 'missing-environment'],
-    ['DELIVERY_RECONCILIATION_REQUIRED', 'external-uncertain'], ['ECONNRESET', 'transient-execution'],
+    ['DELIVERY_RECONCILIATION_REQUIRED', 'external-uncertain'], ['ECONNRESET', 'transient-execution'], ['GIT_CONNECTION_FAILED', 'transient-execution'],
     ['NOT_ECONNRESET', 'implementation-error'], ['CUSTOM_ACCEPTANCE_FAILED', 'implementation-error'],
     ['NODE_SCHEMA_INVALID', 'implementation-error'], [undefined, 'implementation-error'],
   ]) assert.equal(classifyExecutionFailure({ code }).category, category)
   assert.deepEqual(classifyExecutionFailure({ code: 'NODE_SCHEMA_INVALID', phase: 'output-validation' }), {
-    category: 'correctable-output', responsibleParty: 'node-executor', nextAction: 'correct-output-within-budget',
+    category: 'correctable-output', responsibleParty: 'node-executor', nextAction: 'correct-output-and-continue',
   })
   for (const phase of ['output-validation', 'output-admission'])
     assert.equal(classifyExecutionFailure({ code: 'AGENT_WORK_RESULT_INVALID', phase }).category, 'correctable-output')
@@ -577,4 +577,62 @@ test('任务新输入按任务归属写入，执行输出和失败证据沿用�
       assert.equal(writes[before].options.reference, state.run.requirementRef)
     }
   })
+})
+
+test('Owner恢复调用不热循环，输入条件变化立即唤醒同会话', async t => {
+ const {controller,store,artifacts}=await setup(t,workflow())
+ let attempts=0
+ const owner=createTaskOwnerController({ctx:{},store,artifacts,controller,modelConfig:()=>({}),advanceTask:async()=>{},authorizeStages:async()=>true,
+  sessionRunner:{async run(){attempts++;throw Object.assign(Error('ECONNRESET'),{code:'ECONNRESET'})},async close(){}}})
+ t.after(()=>owner.close())
+ await controller.createTaskPlan({commandId:'owner-backoff-plan',taskId:'owner-backoff',stages:[{stageId:'first',workflowId:'synthetic',input:1}]})
+ await owner.ensure({taskId:'owner-backoff',criteria:['完成'],sourceKey:'owner-backoff-source',origin:{}})
+ await assert.rejects(owner.drive('owner-backoff'),{code:'ECONNRESET'})
+ await owner.recover();await owner.recover();assert.equal(attempts,1)
+ const before=await store.query({kind:'task.owner',taskId:'owner-backoff'})
+ assert.ok(Date.parse(before.retryAt)>Date.now())
+ await owner.event({taskId:'owner-backoff',eventKey:'new-condition',eventType:'authorization.changed'})
+ await assert.rejects(owner.drive('owner-backoff'),{code:'ECONNRESET'})
+ const after=await store.query({kind:'task.owner',taskId:'owner-backoff'})
+ assert.equal(attempts,2);assert.equal(after.sessionId,before.sessionId)
+ assert.equal(recoveryRetryDelayMs(Number.MAX_SAFE_INTEGER),60_000)
+})
+for(const stop of ['cancel','close'])test(`Owner模型已排空后${stop}仍取消完成授权，未接纳完成且不累计失败`,async t=>{
+ const {controller,store,artifacts}=await setup(t,workflow())
+ const entered=Promise.withResolvers(),stopped=Promise.withResolvers()
+ let observedSignal
+ const owner=createTaskOwnerController({ctx:{},store,artifacts,controller,modelConfig:()=>({}),advanceTask:async()=>{},authorizeStages:async()=>true,
+  authorizeCompletion:async({signal})=>{
+   observedSignal=signal;entered.resolve()
+   await new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>{stopped.resolve();reject(signal.reason)},{once:true})})
+   return true
+  },
+  sessionRunner:{async run({onSessionBound,onCandidate}){
+   await onSessionBound()
+   const decision={action:'complete',summary:'等待实际业务验收',evidenceRefs:[]}
+   await onCandidate(decision);return{status:'submitted',decision}
+  },async cancel(){},async close(){}}})
+ t.after(()=>owner.close())
+ await controller.createTaskPlan({commandId:`cancel-owner-plan-${stop}`,taskId:`cancel-owner-${stop}`,stages:[{stageId:'first',workflowId:'synthetic',input:1}]})
+ await owner.ensure({taskId:`cancel-owner-${stop}`,criteria:['完成'],sourceKey:'cancel-owner-source',origin:{}})
+ const driving=owner.drive(`cancel-owner-${stop}`)
+ await entered.promise
+ if(stop==='cancel')await owner.cancel(`cancel-owner-${stop}`);else await owner.close()
+ await stopped.promise
+ assert.equal(await driving,null);assert.equal(observedSignal.aborted,true)
+ const state=await store.query({kind:'task.owner',taskId:`cancel-owner-${stop}`})
+ assert.equal(state.status,'pending');assert.equal(state.failureCount,0)
+ assert.notEqual(state.applicationStatus,'pending')
+})
+test('超过32个节点的完整Run持续执行并保留全部成功产物', async t => {
+  const definition={id:'many-nodes',version:'1',nodes:Array.from({length:80},(_,index)=>({
+    id:`step-${index}`,version:'1',executor:'code',allowedEffects:['pure'],inputSchema:number,outputSchema:number,
+    mapInput:({requirement,previousOutput})=>index?previousOutput:requirement,execute:async({input})=>input+1,
+  }))}
+  const {controller,artifacts}=await setup(t,definition)
+  await controller.createRun({commandId:'create-many',taskId:'many-task',runId:'many-run',workflowId:definition.id,input:0})
+  const result=await controller.whenIdle('many-run')
+  assert.equal(result.run.status,'succeeded');assert.equal(result.run.claimCount,80)
+  assert.equal(result.nodes.length,80);assert.ok(result.nodes.every(node=>node.status==='succeeded'&&node.outputRef))
+  assert.equal(await artifacts.read(result.nodes.at(-1).outputRef),80)
 })

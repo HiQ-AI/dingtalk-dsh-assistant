@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { planFrontendChecks,configureFrontendChecks,testStep } from '../docs/acceptance/topic-context-completeness/scripts/configure-frontend-review-checks.mjs'
 const hash=s=>createHash('sha256').update(s).digest('hex')
-const steps=[{executable:testStep.executable,args:['D:/soft/node-v16.20.2/node_global/node_modules/yarn/bin/yarn.js','install','--frozen-lockfile','--non-interactive','--silent'],timeoutMs:600000},{executable:testStep.executable,args:['D:/soft/node-v16.20.2/node_global/node_modules/yarn/bin/yarn.js','run','build'],timeoutMs:1800000}]
+const steps=[{executable:testStep.executable,args:['D:/soft/node-v16.20.2/node_global/node_modules/yarn/bin/yarn.js','install','--frozen-lockfile','--non-interactive','--silent']},{executable:testStep.executable,args:['D:/soft/node-v16.20.2/node_global/node_modules/yarn/bin/yarn.js','run','build']}]
 const source='# 原配置\ncode: !!js "ctx => ctx.value"\nrepositories:\n  - id: dataset-web\n    checks:\n      - steps:\n'+yaml.dump(steps,{lineWidth:-1}).split('\n').filter(Boolean).map(s=>'          '+s).join('\n')+'\n        id: dataset-build\n        version: "1"\n  - id: dataset\n    checks: [{id: java, steps: [{executable: java, args: [package]}]}]\n# 原尾注释\n'
 test('仅steps插入原生测试，!!js及其余原文稳定，重复幂等',()=>{
  const result=planFrontendChecks(source,yaml)
@@ -16,7 +16,7 @@ test('仅steps插入原生测试，!!js及其余原文稳定，重复幂等',()=
  assert.equal(result.updated.slice(0,source.indexOf('          - executable:')),source.slice(0,source.indexOf('          - executable:')))
  assert.equal(result.updated.slice(result.updated.indexOf('        id: dataset-build')),source.slice(source.indexOf('        id: dataset-build')))
  assert.equal(planFrontendChecks(result.updated,yaml).changed,false)
- assert.throws(()=>planFrontendChecks(source.replace('600000','1'),yaml),/EXISTING_STEPS_DIFFERENT/)
+ assert.throws(()=>planFrontendChecks(source.replace('run','unknown-command'),yaml),/EXISTING_STEPS_DIFFERENT/)
 })
 test('隔离配置check零写、apply备份回读、旧hash及并发锁拒绝',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'frontend-checks-')),profile=join(dir,'patch.yml'),dbPath=join(dir,'control.sqlite')
@@ -34,4 +34,15 @@ test('隔离配置check零写、apply备份回读、旧hash及并发锁拒绝',a
  assert.equal(await readFile(applied.backupPath,'utf8'),source)
  const updated=await readFile(profile,'utf8');assert.equal(hash(updated),applied.afterSha256)
  assert.equal((await configureFrontendChecks({...args,mode:'apply',expectedSha256:hash(updated)})).changed,false)
+})
+
+test('前端配置生成的全部步骤可由当前检查构造器接纳，旧执行上限拒绝',async()=>{
+ const {createVerificationJobCheck}=await import('../packages/dingtalk-dsh-assistant/execution-check-job.js')
+ const result=planFrontendChecks(source,yaml),schema=yaml.DEFAULT_SCHEMA.extend([new yaml.Type('tag:yaml.org,2002:js',{kind:'scalar',construct:value=>value})])
+ const check=yaml.load(result.updated,{schema}).repositories[0].checks[0]
+ assert.ok(createVerificationJobCheck({...check,root:tmpdir()}))
+ assert.ok(check.steps.every(step=>step.timeoutMs===undefined))
+ const oldSteps=steps.map(step=>({...step,timeoutMs:1000}))
+ const oldSource=source.replace(yaml.dump(steps,{lineWidth:-1}).split('\n').filter(Boolean).map(s=>'          '+s).join('\n'),yaml.dump(oldSteps,{lineWidth:-1}).split('\n').filter(Boolean).map(s=>'          '+s).join('\n'))
+ assert.throws(()=>planFrontendChecks(oldSource,yaml),/EXISTING_STEPS_DIFFERENT/)
 })

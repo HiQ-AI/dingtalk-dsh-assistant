@@ -18,6 +18,28 @@ import { createGithubPullRequests } from '../packages/dingtalk-dsh-assistant/exe
 import { readEngineeringDeliveryProof } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
 import { createEngineeringBranchReuseWorkflow, createEngineeringUatBaselineWorkflow, createEngineeringMappedBaselineWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
 
+test('本地验收规划完整接纳80条标准与超过旧窗口的计划，仍拒绝遗漏和不存在场景', async () => {
+  const { createEngineeringLocalAcceptanceWorkflow } = await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+  let captured
+  const workflow = createEngineeringLocalAcceptanceWorkflow({ provider: 'test', model: 'test', discovery: { allowedPrefixes: ['src/'] },
+    project: {}, workspaceAdapter: {}, editAdapter: {}, checks: [{ id: 'check', version: '1', run: async () => ({ passed: true }) }], adapterIdentity: 'test', localAcceptance: { scenarios: [{ id: 'value' }],
+      prepare: async value => { captured = value; return { admitted: true } } } })
+  const node = id => workflow.nodes.find(item => item.id === id)
+  const input = { acceptanceCriteria: Array.from({ length: 80 }, (_, index) => `标准${index}`) }
+  const defined = await node('define-local-acceptance').execute({ input })
+  const criteria = defined.localContext.criteria
+  const plan = { cases: criteria.map(item => ({ criterionId: item.id, scenarioId: 'value',
+    steps: Array.from({ length: 40 }, () => '核对真实业务结果'), expected: '完整预期'.repeat(600), parameters: {} })) }
+  const context = { input: { build: {}, criteria, plan }, taskId: 'task', runId: 'run', generation: 1 }
+  await node('prepare-local-acceptance').execute(context)
+  assert.equal(captured.plan.cases.length, 80)
+  assert.equal(captured.plan.cases[0].steps.length, 40)
+  await assert.rejects(node('prepare-local-acceptance').execute({ ...context, input: { ...context.input,
+    plan: { cases: plan.cases.slice(1) } } }), { code: 'LOCAL_ACCEPTANCE_PLAN_INVALID' })
+  await assert.rejects(node('prepare-local-acceptance').execute({ ...context, input: { ...context.input,
+    plan: { cases: plan.cases.map(item => ({ ...item, scenarioId: 'unknown' })) } } }), { code: 'LOCAL_ACCEPTANCE_PLAN_INVALID' })
+})
+
 test('v13冻结目标树并强制冲突在范围内、被实际读取和纳入修改',async()=>{
   const targetCommit='b'.repeat(40),mergeTree='c'.repeat(40),baseCommit='a'.repeat(40)
   let conflictPaths=['src/value.js'],didRead=false
@@ -131,7 +153,7 @@ for (const publish of [false, true]) test(`固定工程流程实跑：受管clon
     await exec('git', ['init', '--bare', remote], { windowsHide: true })
     await writeFile(script, `const fs=require('node:fs'), cp=require('node:child_process'); const [file,remote,...args]=process.argv.slice(2); const s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;
 const sha=()=>cp.execFileSync('git',['ls-remote',remote,'refs/heads/codex/test'],{encoding:'utf8'}).trim().split(/\\s+/)[0]; const value=x=>args[args.indexOf(x)+1];
-if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(args[1]==='list')console.log(JSON.stringify(s?[s]:[]));else if(args[1]==='view')console.log(JSON.stringify(s));else if(args[1]==='create'){const pr={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:sha(),headRefName:'codex/test',baseRefName:'main',body:fs.readFileSync(value('--body-file'),'utf8')};fs.writeFileSync(file,JSON.stringify(pr));process.exit(1)}else process.exit(2);`)
+const rest=p=>({number:p.number,html_url:p.url,state:p.state.toLowerCase(),merged_at:p.state==='MERGED'?'date':null,head:{sha:p.headRefOid,ref:p.headRefName},base:{ref:p.baseRefName},body:p.body});if(args[0]==='api'&&args.includes('--paginate'))console.log(JSON.stringify([s?[rest(s)]:[]]));else if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(args[1]==='list')console.log(JSON.stringify(s?[s]:[]));else if(args[1]==='view')console.log(JSON.stringify(s));else if(args[1]==='create'){const pr={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:sha(),headRefName:'codex/test',baseRefName:'main',body:fs.readFileSync(value('--body-file'),'utf8')};fs.writeFileSync(file,JSON.stringify(pr));process.exit(1)}else process.exit(2);`)
     const gitAdapterFor = repository => createGitDelivery({ repository, remote, branch: 'codex/test', author: { name: 'Test', email: 'test@example.invalid' } })
     const prAdapterFor = repository => createGithubPullRequests({ repository, repo: 'test/repo', base: 'main', head: 'codex/test', ghCommand: { executable: process.execPath, args: [script, state, remote] } })
     deliveryPlan = { identity: remote, gitAdapterFor, prAdapterFor, date: '1750000000 +0000', commitMessage: 'validated change', title: 'validated change', body: '真实文件检查通过', expectedRemoteSha: null }

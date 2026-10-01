@@ -56,19 +56,16 @@ test('仅禁止业务通知不限制助手生命周期；明确助手静默保�
   assert.equal(notificationSilence({ ...run, body: '不用回复我。' }, 'reply_obligation').scope, 'assistant_all')
 })
 
-test('内部读取短暂等待不催问，耗尽后告知；恢复后旧待发告知失效', async t => {
+test('内部读取失败不按次数制造人工告知；恢复后仍无多余回复', async t => {
   const f = await fixture(t)
   await f.call('wait', { runId: 'm', unitId: '$', nodeId: 'R', reason: '读取文件', request: { requestId: 'q', kind: 'needs_context', needs: [] } })
   await f.flush(); assert.equal((await f.notices()).length, 0)
-  await f.call('request.retry', { runId: 'm', requestId: 'q', maxAttempts: 1, error: 'READ_FAILED', contractVersion: 'test-v1' })
+  await f.call('request.retry', { runId: 'm', requestId: 'q', error: 'READ_FAILED', contractVersion: 'test-v1' })
   await f.flush(); await f.flush()
-  const [notice] = await f.notices()
-  assert.equal(notice.payload.phase, 'system_wait')
-  assert.equal(notice.payload.text, '处理遇到系统问题，无法继续推进，需要人工介入。')
+  assert.equal((await f.notices()).length, 0)
   await f.call('request.resolve', { runId: 'm', requestId: 'q', actorId: 'a', eventId: 'material-ready', answer: { ready: true } })
-  const claim = await f.call('notification.claim', { notificationId: notice.id })
-  assert.equal(claim.dispatchEligible, false)
-  assert.equal(claim.result.notification.status, 'superseded')
+  await f.flush()
+  assert.equal((await f.notices()).length, 0)
 })
 
 test('来源更新使已准备的系统状态通知失效，零发送', async t => {
@@ -388,7 +385,7 @@ for (const revised of [false, true]) test(`Owner决定应用失败系统告知�
   await send('task.owner.candidate', { taskId: 'task', turnId: 'turn', leaseEpoch: 1,
     decision: { action: 'repairCurrentStage', repair: { stageId: 'stage-1', runId: 'r', generation: 1, runRevision: 0, requirementRevision: 1 }, summary: '缺少读取生产状态的能力，尚未开始。', evidenceRefs: [] } })
   await send('task.owner.accept', { taskId: 'task', turnId: 'turn', leaseEpoch: 1 })
-  for (let i = 0; i < 3; i++) await send('task.owner.action.fail', { taskId: 'task', turnId: 'turn', leaseEpoch: 1, reason: 'WORKFLOW_REPAIR_NOT_ADMITTED' })
+  await send('task.owner.action.fail', { taskId: 'task', turnId: 'turn', leaseEpoch: 1, reason: 'WORKFLOW_REPAIR_NOT_ADMITTED' })
   await f.flush()
   const notice = (await f.notices()).find(item => item.payload.phase.startsWith('owner:'))
   assert.ok(notice)
@@ -421,7 +418,7 @@ for (const revised of [false, true]) test(`Owner决定应用失败系统告知�
     await send('task.owner.claim',{taskId:'task',turnId:`turn-${epoch}`,expectedLeaseEpoch:epoch-1})
     await send('task.owner.candidate',{taskId:'task',turnId:`turn-${epoch}`,leaseEpoch:epoch,decision:{action:'repairCurrentStage',repair:{stageId:'stage-1',runId:'r',generation:epoch,runRevision:0,requirementRevision:2},summary:'同一受阻条件',evidenceRefs:[]}})
     await send('task.owner.accept',{taskId:'task',turnId:`turn-${epoch}`,leaseEpoch:epoch})
-    for(let i=0;i<3;i++)await send('task.owner.action.fail',{taskId:'task',turnId:`turn-${epoch}`,leaseEpoch:epoch,reason:'OTHER_TECHNICAL_ERROR'})
+    await send('task.owner.action.fail',{taskId:'task',turnId:`turn-${epoch}`,leaseEpoch:epoch,reason:'OTHER_TECHNICAL_ERROR'})
     await f.flush()
     assert.equal((await f.notices()).filter(n=>n.payload.phase.startsWith('owner:application_wait:')&&n.status!=='superseded').length,epoch===2?1:2)
   }
@@ -481,7 +478,7 @@ test('短引用通知只允许明确发送人前缀及完整正文匹配',()=>{
  }
 })
 
-for(const recoverBeforeClaim of [false,true])test(`Owner三次released后真实blocked无report仍告知，恢复边界：${recoverBeforeClaim}`,async t=>{
+for(const recoverBeforeClaim of [false,true])test(`Owner真实实现阻塞首次released无report即告知，恢复边界：${recoverBeforeClaim}`,async t=>{
  const f=await fixture(t),send=(kind,args)=>f.store.command({id:randomUUID(),kind,args})
  await f.call('split',{runId:'m',units:[{unitId:'u',goalText:'核验'}]})
  await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'create',args:{taskId:'task',replyPolicy:'none'}}]})
@@ -490,9 +487,9 @@ for(const recoverBeforeClaim of [false,true])test(`Owner三次released后真实b
  await f.call('command.complete',{commandId:'c',leaseEpoch:claim.leaseEpoch,result:{taskId:'task'}})
  let epoch=0
  const release=async()=>{const previous=epoch++;await send('task.owner.claim',{taskId:'task',turnId:`released-${epoch}`,expectedLeaseEpoch:previous});await send('task.owner.release',{taskId:'task',turnId:`released-${epoch}`,leaseEpoch:epoch,reason:'ADVANCE_CONFLICT'})}
- await release();await f.flush()
+ await f.flush()
  assert.equal((await f.notices()).filter(n=>n.payload.phase.startsWith('owner:application_wait:')).length,0)
- await release();await release();await f.flush();await f.flush()
+ await release();await f.flush();await f.flush()
  assert.deepEqual(await f.store.query({kind:'task.owner.reports',taskId:'task'}),[])
  const notices=(await f.notices()).filter(n=>n.payload.phase==='owner:application_wait:released')
  assert.equal(notices.length,1);assert.equal(notices[0].payload.text,'处理遇到系统问题，无法继续推进，需要人工介入。')
@@ -507,7 +504,7 @@ for(const recoverBeforeClaim of [false,true])test(`Owner三次released后真实b
  assert.equal((await f.notices()).filter(n=>n.payload.phase==='owner:application_wait:released'&&n.status==='delivered').length,1)
  const sentBefore=sends
  await send('task.owner.event',{taskId:'task',eventKey:'actual-recovery',eventType:'workflow.succeeded'})
- await release();await release();await release()
+ await release()
  await f.flush(adapter);await f.flush(adapter)
  assert.equal(sends,sentBefore+1)
  assert.equal((await f.notices()).filter(n=>n.payload.phase==='owner:application_wait:released'&&n.status==='delivered').length,2)

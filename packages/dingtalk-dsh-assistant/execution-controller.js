@@ -58,7 +58,7 @@ export function defineExecutionWorkflow(definition) {
     ownerContract = freeze({ ...contract, ...(contract.rulesDigest === undefined ? {} : { rulesDigest: structuredClone(contract.rulesDigest) }),
       ...(contract.resultContract ? { resultContract: structuredClone(contract.resultContract) } : {}) })
   }
-  if (!Array.isArray(definition.nodes) || !definition.nodes.length || definition.nodes.length > 32) throw executionError('WORKFLOW_NODE_LIMIT')
+  if (!Array.isArray(definition.nodes) || !definition.nodes.length) throw executionError('WORKFLOW_NODES_REQUIRED')
   const ids = new Set()
   const nodes = definition.nodes.map(node => {
     requireId(node.id); requireId(node.version)
@@ -95,7 +95,6 @@ export function defineExecutionWorkflow(definition) {
     ...(n.validateOutput ? { validateOutput: normalizeSource(n.validateOutput.toString()), classifyOutputError: n.classifyOutputError ? normalizeSource(n.classifyOutputError.toString()) : null } : {}),
     prompt: n.prompt ?? null, allowedTools: n.allowedTools ?? [], rulesDigest: n.rulesDigest ?? null,
     ...(n.inputDependencies ? { inputDependencies: n.inputDependencies } : {}),
-    maxSteps: n.maxSteps ?? 32, timeoutMs: n.timeoutMs ?? 120000,
   })) })
   const digest = executionDigest(digestInput(source => source.replace(/\r\n?/g, '\n')))
   const legacyDigests = [executionDigest(digestInput(source => source)),
@@ -106,8 +105,8 @@ export function defineExecutionWorkflow(definition) {
 }
 
 /** 一个Controller拥有推进权；等待及状态查询不调用模型，所有身份由控制账产生。 */
-export function createExecutionController({ store, artifacts, sessions, delivery, workflows, historicalWorkflows = [], readTools = [], maxConcurrentRuns = 4, changeQuietMs = 2000, maxChangeDelayMs = 10000 }) {
-  if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1 || maxConcurrentRuns > 32 || !Number.isFinite(changeQuietMs) || changeQuietMs < 0 || maxChangeDelayMs < changeQuietMs) throw executionError('CONTROLLER_CONFIG_INVALID')
+export function createExecutionController({ store, artifacts, sessions, delivery, workflows, historicalWorkflows = [], readTools = [], maxConcurrentRuns = 4 }) {
+  if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1) throw executionError('CONTROLLER_CONFIG_INVALID')
   const definitions = new Map(), byDigest = new Map()
   function registerDefinition(input, historical = false, replay = false) {
     const definition = defineExecutionWorkflow(input)
@@ -154,7 +153,6 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   function schedule(runId) {
     if (closed) return Promise.resolve()
     if (flights.has(runId)) { dirty.add(runId); return flights.get(runId) }
-    if (queue.length >= 256) throw executionError('EXECUTION_QUEUE_FULL')
     const deferred = Promise.withResolvers()
     flights.set(runId, deferred.promise); queue.push({ runId, deferred })
     deferred.promise.catch(error => errors.set(runId, error))
@@ -178,12 +176,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     })
   }
   async function applyPending(state, definition) {
-    // 先建立屏障并排空旧节点，再短暂合并完整替换输入；最长等待有界。
+    // 排空旧节点后立即消费当前持久输入；新补充进入下一批，不等待静默窗口。
     const pending = state.inputs.filter(input => input.status === 'pending')
     if (!pending.length) return false
-    const first = Date.parse(pending[0].acceptedAt), last = Date.parse(pending.at(-1).acceptedAt)
-    const wait = Math.min(last + changeQuietMs, first + maxChangeDelayMs) - Date.now()
-    if (wait > 0) { await delay(Math.min(wait, 250)); return true }
     // 为固定节点引用留出余量；按编码字节限制ID前缀，转义字符也计入预算。
     // 剩余pending仍持有屏障；中间批次不会启动执行器。
     const batch = []
@@ -219,7 +214,6 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const receipt = await command(`claim:${ready.nodeRunId}:${ready.leaseEpoch + 1}`, 'node.claim', {
         runId, nodeId: ready.nodeId, expectedGeneration: ready.generation, expectedLeaseEpoch: ready.leaseEpoch,
       })
-      if (receipt.result.status === 'budget_exhausted') return
       const binding = { ...receipt.result.binding, taskId: state.run.taskId,
         requirementDigest: executionDigest(await artifacts.read(state.run.requirementRef)) }
       if (nodeDefinition.allowInputContinuation) {
@@ -241,8 +235,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             perform: async ({ action, prepared }) => {
               if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : action === 'edit' ? 'workspace.edit' : action === 'pr' ? 'github.pr' : action === 'external' ? 'external.operation' : ['file', 'artifact'].includes(action) ? 'file.write' : action === 'message' ? 'message.send' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
               abort.signal.throwIfAborted()
-              const effect = await delivery.execute({ binding, action, prepared })
+              const effect = await delivery.execute({ binding, action, prepared }, { signal: abort.signal })
               if (isTerminalUatBuildFailure(effect)) throw Object.assign(executionError('RELEASE_PIPELINE_FAILED'), { terminalEffect: effect })
+              if (effect.unsentRecovery) throw executionError('PR_CONNECTION_FAILED')
               if (effect.state !== 'succeeded') throw executionError('DELIVERY_RECONCILIATION_REQUIRED')
               return effect.result.result // 对执行节点交接适配器产出，控制账回执仍单独留存。
             },
@@ -250,7 +245,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           abort.signal.throwIfAborted(); submitted = true
         } else {
           if (!sessions) throw executionError('SESSION_ADAPTER_UNAVAILABLE')
-          const agentDefinition = Object.fromEntries(['provider', 'model', 'reasoningEffort', 'prompt', 'allowedTools', 'outputSchema', 'maxSteps', 'timeoutMs'].filter(key => nodeDefinition[key] !== undefined).map(key => [key, nodeDefinition[key]]))
+          const agentDefinition = Object.fromEntries(['provider', 'model', 'reasoningEffort', 'prompt', 'allowedTools', 'outputSchema'].filter(key => nodeDefinition[key] !== undefined).map(key => [key, nodeDefinition[key]]))
           outcome = await sessions.run({ binding, input: input.data, definition: agentDefinition,
             ...(nodeDefinition.validateOutput ? { validateOutput: value => nodeDefinition.validateOutput({ output: value, input: input.data, binding }),
               classifyOutputError: nodeDefinition.classifyOutputError } : {}),
@@ -475,10 +470,6 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       return command(commandId, 'task.plan.adopt', {
         taskId: requireId(taskId), runId: requireId(runId), stageId: requireId(stageId),
       })
-    },
-    async continueRunBudget({ commandId, eventId }) {
-      if (closed) throw executionError('CONTROLLER_CLOSED')
-      return command(commandId, 'run.budget.continue', { eventId: requireId(eventId) })
     },
     async confirmTaskStage({ inputCommandId, commandId, taskId, stageId, planRevision, expectedControlRevision, expectedRequirementRevision, outputRef, confirmation }) {
       const plan = await store.query({ kind: 'task.plan', taskId: requireId(taskId) })

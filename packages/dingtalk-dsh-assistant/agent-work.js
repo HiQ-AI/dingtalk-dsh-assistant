@@ -42,13 +42,13 @@ const investigationStagePrompt = `${agentWorkInstructions}
 保存文档、修改代码、业务验收、提测等后续交付由 Task Owner 安排已授权阶段并独立核验，不属于本调查节点的执行职责。调查已完成时在 summary 中交付可供后续阶段使用的完整结论、依据和建议，在 limitations 中明确尚未执行的交付；不要仅因本会话没有写入或部署工具而阻塞已完成的调查，也不得声称后续交付已经完成。
 缺少调查本身所需的资料、权限、环境或查询工具时，仍按真实情况 needs_input 或 blocked；用户要求查明原因而必要调查尚未完成时不能用阶段分工绕过。整体任务完成始终由 Owner 对照全部用户要求判断。`
 
-export function agentWorkDefinition({ provider, model, reasoningEffort, allowedTools, maxSteps = 64, timeoutMs = 1200000 }) {
+export function agentWorkDefinition({ provider, model, reasoningEffort, allowedTools }) {
   if (!provider || !model || !Array.isArray(allowedTools)
     || allowedTools.some(name => typeof name !== 'string' || !name)
     || new Set(allowedTools).size !== allowedTools.length) throw executionError('AGENT_WORK_CONFIG_INVALID')
   return { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     allowedTools: [...allowedTools], prompt: agentWorkPrompt,
-    outputSchema: agentWorkResultSchema, maxSteps, timeoutMs }
+    outputSchema: agentWorkResultSchema }
 }
 
 export function classifyAgentWorkOutputError(error) {

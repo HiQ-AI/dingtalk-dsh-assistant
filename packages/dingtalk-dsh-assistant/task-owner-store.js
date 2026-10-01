@@ -2,6 +2,7 @@ import { acceptanceCriteriaSchema, acceptanceCriterionSchema } from './task-inpu
 import { createHash } from 'node:crypto'
 import { maintenanceStatus } from './execution-maintenance.js'
 import { parseArtifactReference } from './execution-artifacts.js'
+import { transientRecoveryReasons, correctableOwnerReasons, ownerRetryableReason, recoveryRetryDelayMs } from './execution-recovery-policy.js'
 
 // Task Owner 的事件、租约和决定与执行账共用 SQLite 单写事务。
 const fail = code => { throw Object.assign(new Error(code), { code }) }
@@ -49,8 +50,7 @@ const decision = value => {
     if (value.action !== 'advance' || value.appendStages !== undefined) fail('TASK_OWNER_DECISION_INVALID')
     exact(value.planChange, ['kind', 'stages', 'affectedFrom'], ['kind', 'stages'])
     if (!['initialize', 'append', 'replaceSuffix'].includes(value.planChange.kind)
-      || !Array.isArray(value.planChange.stages) || !value.planChange.stages.length
-      || value.planChange.stages.length > 32) fail('TASK_OWNER_DECISION_INVALID')
+      || !Array.isArray(value.planChange.stages) || !value.planChange.stages.length) fail('TASK_OWNER_DECISION_INVALID')
     if (value.planChange.kind === 'replaceSuffix') {
       if (!Number.isSafeInteger(value.planChange.affectedFrom) || value.planChange.affectedFrom < 0)
         fail('TASK_OWNER_DECISION_INVALID')
@@ -58,7 +58,7 @@ const decision = value => {
     value.appendStages = value.planChange.stages
   }
   if (value.assessments !== undefined) {
-    if (value.action !== 'complete' || !Array.isArray(value.assessments) || !value.assessments.length || value.assessments.length > 32)
+    if (value.action !== 'complete' || !Array.isArray(value.assessments) || !value.assessments.length)
       fail('TASK_OWNER_DECISION_INVALID')
     for (const item of value.assessments) {
       exact(item, ['itemId', 'status', 'evidenceRefs'])
@@ -69,7 +69,7 @@ const decision = value => {
     }
   }
   if (value.appendStages !== undefined) {
-    if (value.action !== 'advance' || !Array.isArray(value.appendStages) || !value.appendStages.length || value.appendStages.length > 32)
+    if (value.action !== 'advance' || !Array.isArray(value.appendStages) || !value.appendStages.length)
       fail('TASK_OWNER_DECISION_INVALID')
     for (const stage of value.appendStages) {
       exact(stage, ['workflowId', 'gate', 'capabilityStep', 'sourceCondition'], ['workflowId', 'gate'])
@@ -118,6 +118,8 @@ const ownerDto = (db, row) => {
     status: row.status, leaseEpoch: row.lease_epoch, eventWatermark: row.event_watermark,
     processedWatermark: row.processed_watermark, revision: row.revision,
     failureCount: row.failure_count, lastFailure: row.last_failure,
+    retryAt: row.failure_count && row.last_failure && ownerRetryableReason(row.last_failure)
+      ? new Date(Date.parse(row.updated_at) + recoveryRetryDelayMs(row.failure_count)).toISOString() : null,
     requirementRevision: t.requirement_revision, planRevision: t.plan_revision,
     controlRevision: t.control_revision, authorizationRevision: row.authorization_revision,
     inputFenceRevision: row.input_fence_revision,
@@ -311,7 +313,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     if (o.revision !== a.expectedOwnerRevision || o.lease_epoch !== a.expectedLeaseEpoch
       || currentTask.requirement_revision !== a.expectedRequirementRevision || currentTask.control_revision !== a.expectedControlRevision
       || o.last_failure !== a.expectedLastFailure) fail('TASK_OWNER_RETRY_STALE')
-    if (currentTask.control_state !== 'active' || o.status !== 'blocked' || o.failure_count < 3 || o.current_turn_id
+    if (currentTask.control_state !== 'active' || !['pending', 'blocked'].includes(o.status) || o.current_turn_id
       || !['TASK_OWNER_NO_DECISION', 'TASK_OWNER_TIMEOUT', 'TASK_OWNER_ADVANCE_CONFLICT'].includes(o.last_failure)
       || db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked')) LIMIT 1").get(a.taskId))
       fail('TASK_OWNER_RETRY_FORBIDDEN')
@@ -339,7 +341,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       .run(a.taskId, a.eventKey, a.eventType, a.payloadRef ?? null, now).lastInsertRowid)
     const fence = ['intent.received', 'source.corrected', 'control.changed', 'approval.resolved', 'authorization.projection.repaired'].includes(a.eventType) ? 1 : 0
     const authorization = ['authorization.changed','authorization.projection.repaired'].includes(a.eventType) ? 1 : 0
-    db.prepare("UPDATE task_owners SET event_watermark=?,status=CASE WHEN status IN ('idle','blocked') THEN 'pending' ELSE status END,failure_count=CASE WHEN status='blocked' THEN 0 ELSE failure_count END,last_failure=CASE WHEN status='blocked' THEN NULL ELSE last_failure END,revision=revision+1,input_fence_revision=input_fence_revision+?,authorization_revision=authorization_revision+?,updated_at=? WHERE task_id=?")
+    db.prepare("UPDATE task_owners SET event_watermark=?,status=CASE WHEN status IN ('idle','blocked') THEN 'pending' ELSE status END,failure_count=0,last_failure=NULL,revision=revision+1,input_fence_revision=input_fence_revision+?,authorization_revision=authorization_revision+?,updated_at=? WHERE task_id=?")
       .run(eventSeq, fence, authorization, now, o.task_id)
     return { status: 'applied', eventSeq }
   }
@@ -497,11 +499,22 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       || typeof a.reason !== 'string' || !a.reason || a.reason.length > 200)
       fail('TASK_OWNER_ACTION_NOT_FOUND')
     const failures = t.application_failures + 1
+    // 参数/候选纠正交回同一个 Owner；已失败候选不再原样应用。
+    if (correctableOwnerReasons.includes(a.reason)) {
+      db.prepare("UPDATE task_owner_turns SET application_failures=?,application_status='discarded',updated_at=? WHERE turn_id=?")
+        .run(failures, now, t.turn_id)
+      const eventSeq = Number(db.prepare("INSERT INTO task_events(task_id,event_key,event_type,created_at) VALUES(?,?,'system.recovery',?)")
+        .run(a.taskId, `correct-${t.turn_id}`, now).lastInsertRowid)
+      db.prepare("UPDATE task_owners SET status='pending',last_failure=?,failure_count=failure_count+1,event_watermark=?,revision=revision+1,updated_at=? WHERE task_id=?")
+        .run(a.reason, eventSeq, now, a.taskId)
+      return { status: 'correct', failureCount: failures }
+    }
+    const retryable = transientRecoveryReasons.includes(a.reason)
     db.prepare('UPDATE task_owner_turns SET application_failures=?,application_status=?,updated_at=? WHERE turn_id=?')
-      .run(failures, failures >= 3 ? 'blocked' : 'pending', now, t.turn_id)
-    if (failures >= 3) db.prepare("UPDATE task_owners SET status='blocked',last_failure=?,revision=revision+1,updated_at=? WHERE task_id=?")
+      .run(failures, retryable ? 'pending' : 'blocked', now, t.turn_id)
+    if (!retryable) db.prepare("UPDATE task_owners SET status='blocked',last_failure=?,revision=revision+1,updated_at=? WHERE task_id=?")
       .run(a.reason, now, a.taskId)
-    return { status: failures >= 3 ? 'blocked' : 'retry', failureCount: failures }
+    return { status: retryable ? 'retry' : 'blocked', failureCount: failures }
   }
   if (command.kind === 'task.owner.release') {
     exact(a, ['taskId', 'turnId', 'leaseEpoch', 'reason'], ['taskId', 'turnId', 'leaseEpoch'])
@@ -514,8 +527,8 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     const failures = o.failure_count + (counted ? 1 : 0)
     db.prepare("UPDATE task_owner_turns SET status='released',updated_at=? WHERE turn_id=?").run(now, t.turn_id)
     db.prepare("UPDATE task_owners SET status=?,failure_count=?,last_failure=?,current_turn_id=NULL,revision=revision+1,updated_at=? WHERE task_id=?")
-      .run(!active ? 'idle' : failures >= 3 ? 'blocked' : 'pending', failures, active ? a.reason ?? null : null, now, o.task_id)
-    return { status: failures >= 3 ? 'blocked' : 'released', taskId: o.task_id, failureCount: failures }
+      .run(!active ? 'idle' : counted && !ownerRetryableReason(a.reason) ? 'blocked' : 'pending', failures, active ? a.reason ?? null : null, now, o.task_id)
+    return { status: active && counted && !ownerRetryableReason(a.reason) ? 'blocked' : 'released', taskId: o.task_id, failureCount: failures }
   }
   return null
 }
@@ -586,6 +599,7 @@ export function queryTaskOwner(db, query) {
         requirementRevision: row.requirement_revision, planRevision: row.plan_revision,
         controlRevision: row.control_revision, authorizationRevision: row.authorization_revision,
         inputFenceRevision: row.input_fence_revision,
+        retryAt: row.application_failures ? new Date(Date.parse(row.updated_at) + recoveryRetryDelayMs(row.application_failures)).toISOString() : null,
         decision: JSON.parse(row.decision_json), sequenceId: row.sequence_id }))
   }
   if (query?.kind === 'task.owner.events') {

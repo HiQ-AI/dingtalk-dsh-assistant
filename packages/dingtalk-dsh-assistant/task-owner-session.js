@@ -139,9 +139,6 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
             required: ['decision'], additionalProperties: false }, args)
           if (problems.length) throw fail('TASK_OWNER_DECISION_INVALID')
           if (!args.decision.summary.trim() || args.decision.summary.length > 8000
-            || args.decision.evidenceRefs.length > 64 || args.decision.appendStages?.length > 16
-            || args.decision.planChange?.stages?.length > 16
-            || args.decision.assessments?.length > 32
             || args.decision.appendStages?.some(stage => !stage.workflowId.trim())
             || Buffer.byteLength(JSON.stringify(args.decision), 'utf8') > 16000) throw fail('TASK_OWNER_DECISION_INVALID')
           try { assertGroupReply(args.decision.summary, [entry.binding.taskId, entry.binding.sessionId]) }

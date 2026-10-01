@@ -414,9 +414,11 @@ test('排查、方案、真人确认、开发、UAT 四阶段沿用同一业务 
   const owner = createTaskOwnerController({ ctx: {}, store, artifacts, controller,
     modelConfig: () => ({}), advanceTask: id => controller.advanceTaskPlan(id),
     authorizeStages: async () => false,
-    sessionRunner: { async run({ binding, input, onSessionBound, onCandidate }) {
+    sessionRunner: { async run({ binding, input, onSessionBound, onCandidate, readArtifact }) {
       await onSessionBound()
-      turns.push({ binding, input })
+      const events = await Promise.all(input.events.map(async event => ({ ...event,
+        payload: event.payloadRef ? await readArtifact(event.payloadRef) : null })))
+      turns.push({ binding, input: { ...input, events } })
       const complete = input.stages.every(stage => stage.status === 'succeeded')
       const evidenceRefs = input.stages.flatMap(stage => stage.evidenceRefs ?? [])
       const decision = complete
@@ -477,7 +479,7 @@ test('排查、方案、真人确认、开发、UAT 四阶段沿用同一业务 
     assert.equal(ownerTurn.binding.taskId, taskId)
     assert.equal(ownerTurn.binding.sessionId, originalSessionId)
     assert.ok(ownerTurn.input.events.some(event => event.eventType === 'workflow.succeeded'
-      && event.payload.stageId === plan.stages[index].stageId
+      && event.payload?.stageId === plan.stages[index].stageId
       && event.payload.runId === runIds[index]
       && event.payload.outputRef === plan.stages[index].outputRef))
   }
@@ -683,10 +685,11 @@ test('v1 迁移先零副作用检查，再备份升级并独立读回版本', as
   const v6Check = JSON.parse((await runFile(process.execPath, [v6Migration, '--check', dbPath])).stdout)
   assert.equal(v6Check.writable, false)
   await runFile(process.execPath, [v6Migration, '--execute', dbPath])
-  const reopened = await openExecutionStore({ dbPath, instanceId })
-  assert.equal(reopened.info.schemaVersion, 6)
-  assert.equal((await reopened.query({ kind: 'run', runId: 'historical-run' })).run.taskId, 'historical')
-  await reopened.close()
+  await assert.rejects(openExecutionStore({ dbPath, instanceId }), {code:'STORE_SCHEMA_MISMATCH'})
+  const inspected = new DatabaseSync(dbPath,{readOnly:true})
+  assert.equal(inspected.prepare('PRAGMA user_version').get().user_version,6)
+  assert.equal(inspected.prepare("SELECT task_id FROM execution_runs WHERE run_id='historical-run'").get().task_id,'historical')
+  inspected.close()
 })
 
 test('同Task两条测试后等待指定发送人验收，精确阶段条件与产物版本不可冒用', async t => {
