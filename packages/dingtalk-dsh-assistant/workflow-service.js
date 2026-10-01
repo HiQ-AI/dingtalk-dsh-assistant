@@ -1,6 +1,6 @@
 import { messageTimestamp, normalizeMessageTime, normalizeResourceRefs } from './dws-bridge.js'
 import { isNamedAgentDirection } from './decision.js'
-import { acceptanceCriteriaSchema } from './task-input-contract.js'
+import { acceptanceCriteriaSchema, taskTitle } from './task-input-contract.js'
 import { sessionWorkspace, taskFilePath, checkedTaskDirectory } from './session-workspaces.js'
 import { isTerminalUatBuildFailure } from './execution-delivery.js'
 import { join } from 'node:path'
@@ -585,7 +585,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         .map(item => ({ id: item.id, description: item.description ?? '', version: item.commit ?? null,
           paths: [...item.paths] })),
       databases: (queryConfig.databases ?? []).filter(item => scope.databaseIds.includes(item.id))
-        .map(item => ({ id: item.id, description: item.description ?? '' })),
+        .map(item => ({ id: item.id, description: item.description ?? '', environment: item.environment ?? null,
+          connectionId: item.connectionId, metadataSchemas: item.metadataSchemas ?? [], tables: item.tables })),
       statusResources: (queryConfig.statusResources ?? []).filter(item => scope.statusIds.includes(item.id))
         .map(item => ({ id: item.id, description: item.description ?? '' })),
     }
@@ -1103,7 +1104,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const objective = requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
     const fileDelivery = bindFileDelivery(action.arguments.fileDelivery, info.run.body)
     if (fileDelivery && !fileWorkflow) throw executionError('TASK_FILE_TRANSPORT_UNAVAILABLE')
-    const requirement = { request: objective, objective,
+    const requirement = { request: objective, objective, title: taskTitle(action.arguments.title ?? objective),
       stageAuthorizations: [...(action.arguments.stageAuthorizations ?? []), ...(action.arguments.workflowId ? [{ workflowId: action.arguments.workflowId, sourceQuote: info.run.body }] : [])].map(item => ({ ...item, sourceKey: info.run.sourceKey, sourceVersion: info.run.sourceVersion, ...(item.gate === 'confirmation' ? { requiredActorId: info.run.actorId } : {}) })),
       sourceInstructions: sources.map(source => ({ sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, text: source.body, attachments: source.context?.attachments ?? [] })),
       ...(fileDelivery ? { fileDelivery } : {}),
@@ -1149,7 +1150,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const first = plan.stages[0]?.requirementRef
       ? await artifacts.read(plan.stages[0].requirementRef) : null
     const objective = args.arguments.objective
-    const requirement = { request: objective, objective,
+    const requirement = { request: objective, objective, title: taskTitle(args.arguments.title ?? objective),
       acceptanceCriteria: args.arguments.acceptanceCriteria ?? [objective],
       constraints: args.constraints ?? first?.constraints ?? [],
       explicitStages: args.arguments.explicitStages ?? [],
@@ -1657,7 +1658,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       if (!source || source.status === 'superseded') throw executionError('TASK_SOURCE_NOT_CURRENT')
       const fileDelivery = action.arguments.fileDelivery ? bindFileDelivery(action.arguments.fileDelivery, info.run.body) : previous.fileDelivery
       if (fileDelivery && !fileWorkflow) throw executionError('TASK_FILE_TRANSPORT_UNAVAILABLE')
-      const next = { ...previous, request: objective, objective,
+      const next = { ...previous, request: objective, objective, title: taskTitle(action.arguments.title ?? objective),
         stageAuthorizations: [...(previous.stageAuthorizations ?? []), ...(action.arguments.stageAuthorizations ?? []).map(item => ({ ...item, sourceKey: info.run.sourceKey, sourceVersion: info.run.sourceVersion, ...(item.gate === 'confirmation' ? { requiredActorId: info.run.actorId } : {}) }))],
         sourceInstructions: [...(previous.sourceInstructions ?? []), { sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, text: source.body }], ...(fileDelivery ? { fileDelivery } : {}),
         acceptanceCriteria: action.arguments.acceptanceCriteria ?? previous.acceptanceCriteria,
@@ -1719,6 +1720,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const previous = await artifacts.read(state.run.requirementRef)
       await controller.changeInput({ ...args, inputId: info.commandId, sourceKey: info.run.sourceKey,
         input: { ...previous, request: requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED'),
+          title: taskTitle(action.arguments.title ?? action.arguments.objective),
           ...(Object.hasOwn(previous, 'acceptanceCriteria') ? { acceptanceCriteria: action.arguments.acceptanceCriteria ?? previous.acceptanceCriteria } : {}),
           constraints: [...new Set([...(previous.constraints ?? []), ...(action.constraints ?? [...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])])] } })
       if (currentPlan) await recordIntent()
@@ -2663,7 +2665,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           : run.status === 'running' ? 'running' : run.status === 'queued' ? 'queued' : 'waiting'
       return { taskId, archivedAt: archives.get(taskId), engine: 'workflow-v2', workflowId: run?.workflowId ?? currentStage?.workflowId,
         workflowVersion: run?.definitionVersion, groupId: origin?.run.conversationId,
-        title: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
+        title: taskTitle(requirement?.title ?? requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId),
         objective: requirement?.request ?? origin?.command.args.arguments?.objective ?? taskId,
         inputVersion: (plan?.task.requirementRevision ?? run?.revision ?? 0) + 1, runSequence: taskRuns.length,
         stageConfirmation: taskState === 'waiting' && origin?.channel === 'web' ? await store.query({ kind: 'task.stageConfirmation', taskId }) : null,

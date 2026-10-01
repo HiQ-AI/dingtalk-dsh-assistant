@@ -1,0 +1,11 @@
+case,round,status,evidence
+short-task-title,1,PASS,round-1.md
+objective-preserved,1,PASS,round-1.md
+metadata-connection-query,1,PASS,round-1.md
+production-replica-proof,1,PASS,round-1.md
+select-scope-unchanged,1,PASS,round-1.md
+blocked-summary-notification,1,PASS,round-1.md
+notification-idempotency,1,PASS,round-1.md
+configuration-zero-write,1,PASS,round-1.md
+formal-deployment,1,BLOCKED,round-1.md
+real-channel-notification,1,NOT_RUN,round-1.md

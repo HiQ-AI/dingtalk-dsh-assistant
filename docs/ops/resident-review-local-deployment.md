@@ -517,3 +517,7 @@ Adapter 为普通依赖，原生 `dsh plugin --profile web add` 支持安装，�
 群协调恢复按当前来源版本、有效任务事件、模型配置及协调实现摘要判定条件变化；内部失败、重试、领取事件不能反向触发同条件模型重启。明确网络/服务暂态遵循 Retry-After 或递增退避，不设恢复次数和总期限。协调实现或原生群会话实现变更的部署自动改变恢复条件；外围依赖修复则通过既有原生事件发布相关授权/能力恢复事实后唤醒，禁止仅循环扫描或直接篡改协调账模拟恢复。
 
 PR交付在预检网络故障时由原Controller按持久退避继续原节点；仅Host适配器只读核验完整、身份匹配的attempt-start日志且反复确认没有send-intent/send-complete后，才能以新节点lease经原生effect.rearmUnsent恢复同effect。失败观测和恢复证明都保留工件引用，观测收据按发送lease隔离。权限失败、损坏或缺失日志、发送后未知效果只待修复或独立对账，不重发；安全撤销、输入变更、审批撤销和旧lease仍阻止发送。
+
+### 生产只读结构调查配置
+
+`directQueries.databases` 中已登记的生产只读副本资源可增加 `metadataSchemas: [public]`，用于结构调查；仅添加精确 schema 名称。`tables` 的数据读取范围保持不变。先用 `scripts/configure-agent-query-resources.mjs --check` 核验提案，再按本 runbook 完成维护备份、安装包核验与配置应用，不能直接编辑在线 profile 绕过部署。运行后核验查询实际连接只读副本及 `transactionReadOnly=true`，再检查未登记表 `select` 仍拒绝。当前待应用提案只修改生产 Editor 只读连接的 public 元数据授权。

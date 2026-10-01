@@ -329,7 +329,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
               || item.triggerTypes.includes('workflow.succeeded') && item.facts.evidenceRefs.length
               || item.triggerTypes.includes('workflow.confirmation.required')))) {
             const text = report.reportType === 'complete' ? `任务已完成：${report.facts.summary}`
-              : report.reportType === 'block' ? '处理暂时受阻，需要人工介入。'
+              : report.reportType === 'block' ? `处理暂时受阻，需要人工介入。${Array.from(String(report.facts.summary ?? '').replace(/\s+/gu, ' ').trim()).slice(0, 160).join('')}`
                 : report.triggerTypes.includes('workflow.confirmation.required') ? `任务等待确认：${report.facts.summary}`
                   : `任务进展：${report.facts.summary}`
             await attempt(run.runId, report.reportId, () => prepare(run, action, `owner:${report.reportId}`, text, report.reportType === 'complete' ? 'result'

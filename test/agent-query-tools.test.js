@@ -139,3 +139,26 @@ test('查询证据使用受信任务绑定，普通消息查询不写入任务�
  await tool.execute({binding:taskBinding,args:{resourceId:'docs',operation:'list'}})
  assert.deepEqual(writes[1],{taskId:'task',reference:taskBinding.inputRef})
 })
+
+test('生产只读连接按显式schema调查未知表结构，数据读取仍保留表白名单',async()=>{
+ const calls=[];let connected=0,replica=true;
+ const resource={id:'production',connectionId:'slave',environment:'production',metadataSchemas:['public'],tables:[{schema:'public',table:'approved',columns:['id']}]};
+ const client={async query(q){calls.push(q);const sql=typeof q==='string'?q:q.text;
+  if(sql.includes('pg_is_in_recovery'))return{rows:[{in_recovery:replica}]};
+  if(sql==='SHOW transaction_read_only')return{rows:[{transaction_read_only:'on'}]};
+  if(sql.includes('information_schema.columns'))return{rows:[{column_name:'id',data_type:'character varying',is_nullable:'NO'}]};
+  if(sql.includes('information_schema.tables'))return{rows:[{table_schema:'public',table_name:'process_id_temp'},{table_schema:'private',table_name:'secret'}]};
+  return{rows:[]};},async end(){}};
+ const capability=createAgentDatabaseReadCapability({resources:[resource],connectDatabase:async()=>{connected++;return client}}),scope={databaseIds:['production']};
+ const input={resourceId:'production',operation:'columns',table:'public.process_id_temp'};
+ const result=await capability.execute({input,scope});assert.equal(result.rows[0].column_name,'id');
+ assert.equal((await capability.verify({input,scope,output:result})).passed,true);
+ assert.deepEqual(calls.find(q=>typeof q==='object'&&q.text.includes('information_schema.columns')).values,['public','process_id_temp']);
+ assert.equal((await capability.execute({input:{resourceId:'production',operation:'tables'},scope})).rows.length,1);
+ assert.equal(connected,2);
+ for(const input of [{resourceId:'production',operation:'select',table:'public.process_id_temp'},{resourceId:'production',operation:'columns',table:'private.secret'},{resourceId:'production',operation:'columns',table:'public.process_id_temp;DROP TABLE x'}])await assert.rejects(capability.execute({input,scope}),{code:'QUERY_SCOPE_DENIED'});
+ assert.equal(connected,2);
+ replica=false;await assert.rejects(capability.execute({input,scope}),{code:'QUERY_DATABASE_NOT_READONLY'});
+ assert.equal(calls.filter(q=>typeof q==='object'&&q.text.includes('information_schema.columns')).length,1);
+ assert.throws(()=>createAgentDatabaseReadCapability({resources:[{...resource,metadataSchemas:['public;DROP']}],connectDatabase:async()=>client}),{code:'QUERY_DATABASE_CONFIG_INVALID'});
+});

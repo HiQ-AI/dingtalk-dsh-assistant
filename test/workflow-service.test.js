@@ -441,7 +441,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
     await onResult(investigationResult(input, result))
     return { status: 'submitted' }
   }, async cancel() {}, async close() {} }
-  const controller = createExecutionController({ store, artifacts, sessions: options.executionSessions ?? investigationSessions, readTools: ['read-topic-sources', 'read-predecessor-artifact', 'organize-topic-sources', 'read-task-message-resource'], ...(delivery ? { delivery } : options.external ? { delivery: { execute: async () => { throw new Error('EXTERNAL_EFFECT_NOT_EXPECTED') } } } : {}), workflows: [] })
+  const controller = createExecutionController({ store, artifacts, sessions: options.executionSessions ?? investigationSessions, readTools: ['read-topic-sources', 'read-predecessor-artifact', 'organize-topic-sources', 'read-task-message-resource', ...(options.readTools ?? [])], ...(delivery ? { delivery } : options.external ? { delivery: { execute: async () => { throw new Error('EXTERNAL_EFFECT_NOT_EXPECTED') } } } : {}), workflows: [] })
   const execution = { store: options.storeQuery ? { ...store, query: request => options.storeQuery(request, store.query) } : store,
     artifacts, controller, ...(delivery ? { delivery } : {}) }
   const legacy = { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'], ...(options.taskFiles ? { workspaceDir: root } : {}) }), getGroup: id => ({ groupId: id, responsibility: '处理本人交办事项', messages: [] }), ...options.legacy }
@@ -4583,3 +4583,17 @@ for(const proofState of ['verified-unsent','verified-failed','no-proof','sent'])
  assert.equal(mutations,proofState.startsWith('verified-')?1:0);assert.equal(attempts,proofState.startsWith('verified-')?2:1)
  if(proofState!=='verified-failed')assert.ok(reads>0)
 })
+
+test('新Task短名称独立于完整调查目标，数据库目录提供真实连接和结构范围',async t=>{
+ const objective='调查生产环境Editor数据库process_id_temp表当前结构，并为新增name列准备受审批约束的变更方案。';
+ const database={id:'editor-production',connectionId:'tianyi_editor_slave',environment:'production',metadataSchemas:['public'],tables:[{schema:'public',table:'approved',columns:['id']}]};
+ let catalog;
+ const {service,message,execution}=await fixture(t,'owner',undefined,{readTools:['query_readonly_database'],config:{directQueries:{resources:[],databases:[database],statusResources:[],credentialsPath:'D:/never-read-test-credentials.json',permissions:{resourceIds:[],databaseIds:['editor-production'],statusIds:[]}}},
+  judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'new',candidateId:null,evidence:['source']}:{kind:'intent',actions:[{intent:'create',arguments:{title:'调查Editor临时表结构',objective,workflowId:'task-investigation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'result'},
+  execute:async({input})=>{catalog=input.context;return{outcome:'completed',summary:'目录核对完成',evidenceRefs:input.materials.map(m=>m.id),limitations:[]}}});
+ const received=await service.ingest(message);const state=await service.messages.process(received.runId);const result=state.commands[0].result;
+ await execution.controller.whenIdle(result.runId);await service.recoverExecutionTasks();
+ const task=(await service.tasks({taskId:result.taskId}))[0];assert.equal(task.title,'调查Editor临时表结构');assert.equal(task.objective,objective);
+ assert.equal(catalog.databases[0].connectionId,'tianyi_editor_slave');assert.deepEqual(catalog.databases[0].metadataSchemas,['public']);
+ assert.equal(catalog.databases[0].environment,'production');assert.equal(JSON.stringify(catalog).includes('credentialsPath'),false);
+});

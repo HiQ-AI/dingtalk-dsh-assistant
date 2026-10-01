@@ -22,7 +22,7 @@ export async function planAgentQueryResources(source, proposal) {
   // 配置登记不读取凭据、不连接数据库；运行时按资源身份策略检查事务及角色。
   if (q.databases.length && (typeof q.credentialsPath !== 'string' || !isAbsolute(q.credentialsPath) || q.credentialsPath.includes('\0'))) fail('QUERY_CONFIG_CREDENTIALS_PATH_INVALID')
   for (const r of q.databases) {
-    if (!keys(r, ['id','connectionId','tables', ...(r.environment === undefined ? [] : ['environment']), ...(r.identityPolicy === undefined ? [] : ['identityPolicy'])]) || typeof r.id !== 'string' || !r.id.trim()
+    if (!keys(r, ['id','connectionId','tables', ...(r.metadataSchemas === undefined ? [] : ['metadataSchemas']), ...(r.environment === undefined ? [] : ['environment']), ...(r.identityPolicy === undefined ? [] : ['identityPolicy'])]) || typeof r.id !== 'string' || !r.id.trim()
       || typeof r.connectionId !== 'string' || !r.connectionId.trim() || !Array.isArray(r.tables)
       || (r.identityPolicy !== undefined && (r.identityPolicy !== 'host-enforced-readonly' || r.environment !== 'uat'))
       || (r.environment !== undefined && !['uat','production'].includes(r.environment))

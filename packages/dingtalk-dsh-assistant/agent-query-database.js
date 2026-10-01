@@ -18,19 +18,22 @@ export function createRegisteredPostgresConnector({credentialsPath}){
 export function createAgentDatabaseReadCapability({resources,connectDatabase}){
  if(!Array.isArray(resources)||typeof connectDatabase!=='function'||new Set(resources.map(r=>r.id)).size!==resources.length)fail('QUERY_DATABASE_CONFIG_INVALID')
  for(const r of resources)if(!r.id||!r.connectionId||!Array.isArray(r.tables)||!r.tables.length||r.tables.some(t=>!identifier(t.schema)||!identifier(t.table)||!Array.isArray(t.columns)||!t.columns.length||t.columns.some(c=>!identifier(c)))
+  ||(r.metadataSchemas!==undefined&&(!Array.isArray(r.metadataSchemas)||!r.metadataSchemas.length||r.metadataSchemas.some(s=>!identifier(s))))
   ||(r.identityPolicy!==undefined&&(r.identityPolicy!=='host-enforced-readonly'||r.environment!=='uat'))
   ||(r.environment!==undefined&&!['uat','production'].includes(r.environment)))fail('QUERY_DATABASE_CONFIG_INVALID')
  const registry=new Map(resources.map(r=>[r.id,structuredClone(r)])),produced=new WeakSet()
  const authorize=async({input,scope})=>registry.has(input.resourceId)&&scope.databaseIds?.includes(input.resourceId)===true
- return {id:'query_readonly_database',effectClass:'read',identity:'agent-db-read-v2:'+executionDigest(resources),description:'查询Host登记数据库的明确表/列，按结构化条件读取最多100行；不接受SQL、连接串或表达式。每次核验只读事务；默认检查只读角色，显式UAT资源由Host约束现有账号。',parameters:agentDatabaseParameters,authorize,
+ return {id:'query_readonly_database',effectClass:'read',identity:'agent-db-read-v2:'+executionDigest(resources),description:'通过Host登记连接查询数据库：tables/columns可调查metadataSchemas授权的schema结构，select只读取登记表/列，按结构化条件读取最多100行；不接受SQL、连接串或表达式。每次核验只读事务；默认检查只读角色，显式UAT资源由Host约束现有账号。',parameters:agentDatabaseParameters,authorize,
   available: scope => resources.some(resource => scope?.databaseIds?.includes(resource.id)),
   async execute({input,scope,signal}){
    if(!await authorize({input,scope}))fail('QUERY_SCOPE_DENIED')
    if(!['tables','columns','select'].includes(input.operation))fail('QUERY_ARGUMENT_INVALID')
    const resource=registry.get(input.resourceId),limit=input.limit??30,offset=input.offset??0
    if(!Number.isInteger(limit)||limit<1||limit>100||!Number.isInteger(offset)||offset<0||offset>10000)fail('QUERY_LIMIT_INVALID')
+   const metadataTable=typeof input.table==='string'?input.table.split('.'):[]
+   const metadataAllowed=metadataTable.length===2&&metadataTable.every(identifier)&&resource.metadataSchemas?.includes(metadataTable[0])
    const table=resource.tables.find(t=>`${t.schema}.${t.table}`===input.table)
-   if(input.operation!=='tables'&&!table)fail('QUERY_SCOPE_DENIED')
+   if(input.operation!=='tables'&&!table&&!(input.operation==='columns'&&metadataAllowed))fail('QUERY_SCOPE_DENIED')
    const columns=input.columns??table?.columns
    if(input.operation==='select'&&(!columns?.length||columns.length>50||columns.some(c=>!table.columns.includes(c))||(input.filters??[]).length>20||(input.filters??[]).some(f=>!table.columns.includes(f.column))))fail('QUERY_SCOPE_DENIED')
    let client
@@ -38,7 +41,7 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
    try{
     signal?.throwIfAborted();client=await connectDatabase(resource);signal?.addEventListener('abort',abort,{once:true});signal?.throwIfAborted()
     await client.query('BEGIN READ ONLY');await client.query("SET LOCAL statement_timeout='8000ms'")
-    const schemas=[...new Set(resource.tables.map(t=>t.schema))]
+    const schemas=[...new Set([...resource.tables.map(t=>t.schema),...(resource.metadataSchemas??[])])]
     // 生产副本的角色目录可保留主库权限；实际不可写性由副本身份和只读事务证明。
     if(resource.environment==='production'){
      if((await client.query('SELECT pg_is_in_recovery() AS in_recovery')).rows[0]?.in_recovery!==true)fail('QUERY_DATABASE_NOT_READONLY')
@@ -50,8 +53,10 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
     }
     if((await client.query('SHOW transaction_read_only')).rows[0].transaction_read_only!=='on')fail('QUERY_DATABASE_NOT_READONLY')
     let rows
-    if(input.operation==='tables')rows=(await client.query({text:'SELECT table_schema,table_name,table_type FROM information_schema.tables WHERE table_schema=ANY($1::text[]) ORDER BY table_schema,table_name',values:[schemas]})).rows.filter(row=>resource.tables.some(t=>t.schema===row.table_schema&&t.table===row.table_name))
-    else if(input.operation==='columns')rows=(await client.query({text:'SELECT column_name,data_type,is_nullable FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 AND column_name=ANY($3::text[]) ORDER BY ordinal_position',values:[table.schema,table.table,table.columns]})).rows
+    if(input.operation==='tables')rows=(await client.query({text:'SELECT table_schema,table_name,table_type FROM information_schema.tables WHERE table_schema=ANY($1::text[]) ORDER BY table_schema,table_name',values:[schemas]})).rows.filter(row=>resource.metadataSchemas?.includes(row.table_schema)||resource.tables.some(t=>t.schema===row.table_schema&&t.table===row.table_name))
+    else if(input.operation==='columns')rows=(await client.query(metadataAllowed
+     ?{text:'SELECT column_name,data_type,is_nullable FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position',values:metadataTable}
+     :{text:'SELECT column_name,data_type,is_nullable FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 AND column_name=ANY($3::text[]) ORDER BY ordinal_position',values:[table.schema,table.table,table.columns]})).rows
     else{
      const values=[],ops={eq:'=',ne:'<>',lt:'<',lte:'<=',gt:'>',gte:'>=',like:'LIKE'}
      const filters=(input.filters??[]).map(f=>{if(!Object.hasOwn(ops,f.operator))fail('QUERY_ARGUMENT_INVALID');values.push(f.value);return `${quote(f.column)} ${ops[f.operator]} $${values.length}`})

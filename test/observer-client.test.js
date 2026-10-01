@@ -619,3 +619,15 @@ test('已读取材料但执行受阻走实际状态分支与显示标签，不�
  assert.equal(delivery[state({...message,workflowStatus:'waiting_system'})].label,'材料读取受阻')
  assert.equal([message].filter(item=>state(item)==='execution_blocked').length,1)
 })
+
+test('任务短名称合同拒绝超过30字，读模型回退截断不修改完整目标',async()=>{
+ const {taskTitle,taskTitleSchema}=await import('../packages/dingtalk-dsh-assistant/task-input-contract.js');
+ assert.equal(taskTitleSchema.safeParse('字'.repeat(30)).success,true);
+ assert.equal(taskTitleSchema.safeParse('字'.repeat(31)).success,false);
+ const objective='针对孙鹏要求在生产环境Editor数据库process_id_temp表新增name列，调查结构并准备DDL';
+ assert.equal(Array.from(taskTitle(objective)).length,30);
+ assert.equal(taskTitle('  核对Editor临时表结构  '),'核对Editor临时表结构');
+ assert.ok(objective.includes('准备DDL'));
+ const source=await readFile(new URL('../packages/dingtalk-dsh-assistant/workflow-service.js',import.meta.url),'utf8');
+ assert.match(source,/title: taskTitle\(requirement\?\.title/);
+});

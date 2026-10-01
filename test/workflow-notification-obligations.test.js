@@ -169,7 +169,7 @@ test('replyPolicy none不丢Task承接及Owner阻塞事实，重新扫描幂等'
   assert.ok([...notices.values()].some(n => n.payload.text.includes('尚未开始')))
   const blocked = [...notices.values()].find(n => n.payload.phase.startsWith('owner:'))
   assert.ok(blocked.payload.text.startsWith('处理暂时受阻，需要人工介入。'))
-  assert.equal(blocked.payload.text.includes('等待负责人审批'), false)
+  assert.equal(blocked.payload.text.includes('等待负责人审批'), true)
 })
 
 test('同一事项的多条补充不逐条回复，实际开始仍有一次通知', async () => {

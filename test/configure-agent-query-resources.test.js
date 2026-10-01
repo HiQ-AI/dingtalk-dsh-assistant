@@ -61,3 +61,10 @@ test('数据库check零写原文不变，apply仅隔离profile CAS且备份回�
   assert.equal(hash(await readFile(profile,'utf8')),result.afterSha256)
   await assert.rejects(configureAgentQueryResources({...args,mode:'apply'}),/PROFILE_CHANGED/)
 })
+
+test('生产元数据schema授权提案保留数据表范围，非法schema拒绝',async()=>{
+ const p=databaseProposal();const db=p.directQueries.databases[0];db.environment='production';db.metadataSchemas=['public'];
+ const result=await planAgentQueryResources(source,p);assert.equal(result.changed,true);
+ assert.deepEqual(p.directQueries.databases[0].tables,databaseProposal().directQueries.databases[0].tables);
+ db.metadataSchemas=['public;DROP'];await assert.rejects(planAgentQueryResources(source,p),/QUERY_CONFIG_RESOURCE_INVALID/);
+});
