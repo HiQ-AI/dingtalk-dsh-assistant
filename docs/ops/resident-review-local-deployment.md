@@ -521,3 +521,9 @@ PR交付在预检网络故障时由原Controller按持久退避继续原节点�
 ### 生产只读结构调查配置
 
 `directQueries.databases` 中已登记的生产只读副本资源可增加 `metadataSchemas: [public]`，用于结构调查；仅添加精确 schema 名称。`tables` 的数据读取范围保持不变。先用 `scripts/configure-agent-query-resources.mjs --check` 核验提案，再按本 runbook 完成维护备份、安装包核验与配置应用，不能直接编辑在线 profile 绕过部署。运行后核验查询实际连接只读副本及 `transactionReadOnly=true`，再检查未登记表 `select` 仍拒绝。当前待应用提案只修改生产 Editor 只读连接的 public 元数据授权。
+
+备份完整性验证识别控制账中reason=explicit-user-terminal-history-cleanup的明确终止历史清理事件，并要求该Task已不在business_tasks/execution_runs中。仅这些任务工件的文件缺失被记录为purgedArtifactRefs；数据库、历史引用及审计事件仍完整备份。普通task.delete的retained包含artifact-files，不属于已清理文件；无清理证明、当前任务文件缺失、已有文件损坏或链接均继续拒绝。检查、备份验证及失败启动复核采用同一规则，不修改在线控制账。
+
+历史回执的节点输入、历史消息候选快照也会保留已清理任务的引用。只在控制账的execution_receipts/message_items中，按上述Task清理记录排除对应对象的闭包根；节点回执仅含Run时，用原生plannedStageRunId及historyRemoved阶段启动回执确认归属。旧直派流程按已保留dispatch命令的原生executionDigest，同时核对Task的32位和Run的40位摘要，不用名称前缀猜测。完整控制账和已有文件仍逐字节备份，未知归属的缺失工件仍阻止部署。
+
+已应用查询配置及Observer但启动失败的launch恢复，ExpectedProfileSha256使用launch记录的profileSha256（当前已应用摘要）；原sourceProfileSha256独立匹配原备份profile。原Observer不得更换，恢复预检核对原tgz摘要、源码及已安装内容。不再次应用配置提案，仍核对原提案摘要、封存许可、原备份、当前控制账及精确新Assistant包。

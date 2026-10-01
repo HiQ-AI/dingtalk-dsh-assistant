@@ -7,7 +7,7 @@ import { classifyExecutionFailure } from './execution-recovery-policy.js'
 
 const identifier = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)
 const requireId = value => { if (!identifier(value)) throw executionError('INVALID_IDENTIFIER'); return value }
-const plannedStageRunId = (taskId, planRevision, stageId, attempt) =>
+export const plannedStageRunId = (taskId, planRevision, stageId, attempt) =>
   `run-${executionDigest({ taskId, planRevision, stageId, attempt })}`
 const validate = (schema, value) => {
   canonicalExecutionJson(value)

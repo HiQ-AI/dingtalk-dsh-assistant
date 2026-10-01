@@ -4595,5 +4595,5 @@ test('新Task短名称独立于完整调查目标，数据库目录提供真实�
  await execution.controller.whenIdle(result.runId);await service.recoverExecutionTasks();
  const task=(await service.tasks({taskId:result.taskId}))[0];assert.equal(task.title,'调查Editor临时表结构');assert.equal(task.objective,objective);
  assert.equal(catalog.databases[0].connectionId,'tianyi_editor_slave');assert.deepEqual(catalog.databases[0].metadataSchemas,['public']);
- assert.equal(catalog.databases[0].environment,'production');assert.equal(JSON.stringify(catalog).includes('credentialsPath'),false);
+ assert.match(catalog.databaseGuidance,/登记只读连接/);assert.equal(catalog.databases[0].environment,'production');assert.equal(JSON.stringify(catalog).includes('credentialsPath'),false);
 });

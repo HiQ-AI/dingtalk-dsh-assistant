@@ -9,3 +9,5 @@ human-message-retained,1,PASS,round-1.md
 binding-cas-and-drain,1,PASS,round-1.md
 local-deployment,1,BLOCKED,round-1.md
 real-message-latency,1,NOT_RUN,round-1.md
+formal-deployment,2,PASS,round-2.md
+resident-session-live-readback,2,PASS,round-2.md

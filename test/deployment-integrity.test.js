@@ -217,3 +217,58 @@ test('Adapter专用包检查零写并核对provider实际解析，旧副本与�
   await writeFile(join(source,'lib/index.js'),'source changed')
   assert.throws(()=>verifyAdapterPackage({packagePath,sourceRoot:source}),/ADAPTER_SOURCE_MISMATCH/)
 })
+
+for(const mode of ['purged','ordinary-delete','no-delete','live-task','live-run','corrupt'])test(`历史任务工件备份按明确清理记录校验：${mode}`,async t=>{
+ const f=await fixture();t.after(()=>f.db.close());
+ const taskDirectory=join(f.root,'tasks');await mkdir(taskDirectory);
+ const taskId='task-old',bytes=Buffer.from('{"old":true}'),ref=`tasks/${taskId}/sha256-${createHash('sha256').update(bytes).digest('hex')}.json`;
+ f.db.exec('CREATE TABLE execution_events(seq INTEGER PRIMARY KEY,kind TEXT,payload TEXT); CREATE TABLE business_tasks(task_id TEXT); CREATE TABLE execution_runs(task_id TEXT)');
+ f.db.prepare('UPDATE records SET output_ref=?').run(ref);
+ if(mode!=='no-delete')f.db.prepare('INSERT INTO execution_events VALUES(1,?,?)').run('task.delete',JSON.stringify({taskId,deletedAt:'2026-10-01T10:06:24.526Z',...(mode==='ordinary-delete'?{retained:['artifact-files']}:{reason:'explicit-user-terminal-history-cleanup'})}));
+ if(mode==='live-task')f.db.prepare('INSERT INTO business_tasks VALUES(?)').run(taskId);
+ if(mode==='live-run')f.db.prepare('INSERT INTO execution_runs VALUES(?)').run(taskId);
+ if(mode==='corrupt'){await mkdir(join(taskDirectory,taskId,'work/artifacts'),{recursive:true});await writeFile(join(taskDirectory,taskId,'work/artifacts',ref.split('/')[2]),'{}')}
+ const args={dbPath:join(f.runtime,'control.sqlite'),taskDirectory};
+ if(mode!=='purged')return assert.rejects(checkDeploymentTaskDirectory(args),mode.startsWith('live')?/BACKUP_PURGED_TASK_STILL_PRESENT/:mode==='corrupt'?/BACKUP_ARTIFACT_INVALID/:/BACKUP_ARTIFACT_MISSING/);
+ const check=await checkDeploymentTaskDirectory(args);assert.deepEqual(check.purgedTasks,[taskId]);assert.equal(check.writes,0);
+ await cp(f.runtime,join(f.backupRoot,'runtime'),{recursive:true});await cp(taskDirectory,join(f.backupRoot,'tasks'),{recursive:true});
+ const proof=await verifyDeploymentBackup({...f,taskDirectory});assert.deepEqual(proof.database.purgedArtifactRefs,[ref]);
+ await writeFile(join(f.backupRoot,'manifest.json'),JSON.stringify(proof));
+ const verified=await reverifyDeploymentBackup({...f,taskDirectory});assert.deepEqual(verified.purgedArtifactRefs,[ref]);assert.equal(verified.writes,0);
+});
+
+for(const known of [true,false])test(`已清理任务的原生阶段回执界定旧节点引用，不猜测run身份：${known}`,async t=>{
+ const {plannedStageRunId}=await import('../packages/dingtalk-dsh-assistant/execution-controller.js');const f=await fixture();t.after(()=>f.db.close());
+ f.db.exec('CREATE TABLE execution_events(seq INTEGER PRIMARY KEY,kind TEXT,payload TEXT);CREATE TABLE business_tasks(task_id TEXT);CREATE TABLE execution_runs(task_id TEXT);CREATE TABLE execution_receipts(command_id TEXT,result TEXT)');
+ const taskId='task-old';f.db.prepare('INSERT INTO execution_events VALUES(1,?,?)').run('task.delete',JSON.stringify({taskId,reason:'explicit-user-terminal-history-cleanup'}));
+ const runId=known?plannedStageRunId(taskId,1,'stage-1',1):'run-unknown';
+ f.db.prepare('INSERT INTO execution_receipts VALUES(?,?)').run(`stage-start:${taskId}:1:stage-1:1`,JSON.stringify({historyRemoved:true}));
+ const orphan='sha256-'+createHash('sha256').update('{"removed":true}').digest('hex')+'.json';
+ f.db.prepare('INSERT INTO execution_receipts VALUES(?,?)').run('node-claim-old',JSON.stringify({binding:{runId,inputRef:orphan}}));
+ await cp(f.runtime,join(f.backupRoot,'runtime'),{recursive:true});
+ if(!known)return assert.rejects(verifyDeploymentBackup(f),/BACKUP_ARTIFACT_MISSING/);
+ const proof=await verifyDeploymentBackup(f);assert.equal(proof.database.artifactRefs,1);
+ await writeFile(join(f.backupRoot,'manifest.json'),JSON.stringify(proof));assert.equal((await reverifyDeploymentBackup(f)).writes,0);
+});
+
+for(const known of [true,false])test(`已清理直派任务只接受同一命令摘要的Task与Run：${known}`,async t=>{
+ const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js');const f=await fixture();t.after(()=>f.db.close());
+ f.db.exec('CREATE TABLE execution_events(seq INTEGER PRIMARY KEY,kind TEXT,payload TEXT);CREATE TABLE business_tasks(task_id TEXT);CREATE TABLE execution_runs(task_id TEXT);CREATE TABLE execution_receipts(command_id TEXT,result TEXT)');
+ const digest=executionDigest('msg-source:u0:0:0'),taskId=`task-${digest.slice(0,32)}`;
+ f.db.prepare('INSERT INTO execution_events VALUES(1,?,?)').run('task.delete',JSON.stringify({taskId,reason:'explicit-user-terminal-history-cleanup'}));
+ f.db.prepare('INSERT INTO execution_receipts VALUES(?,?)').run('dispatch:msg-source:u0:0:0',JSON.stringify({historyRemoved:known}));
+ f.db.prepare('INSERT INTO execution_receipts VALUES(?,?)').run('node-claim-old',JSON.stringify({binding:{runId:`run-${digest.slice(0,40)}`,inputRef:'sha256-'+ 'f'.repeat(64)+'.json'}}));
+ await cp(f.runtime,join(f.backupRoot,'runtime'),{recursive:true});
+ if(!known)return assert.rejects(verifyDeploymentBackup(f),/BACKUP_ARTIFACT_MISSING/);
+ assert.equal((await verifyDeploymentBackup(f)).database.artifactRefs,1);
+});
+
+for(const purged of [true,false])test(`历史消息候选只按已清理Task排除工件根：${purged}`,async t=>{
+ const f=await fixture();t.after(()=>f.db.close());
+ f.db.exec('CREATE TABLE execution_events(seq INTEGER PRIMARY KEY,kind TEXT,payload TEXT);CREATE TABLE business_tasks(task_id TEXT);CREATE TABLE execution_runs(task_id TEXT);CREATE TABLE message_items(kind TEXT,body TEXT)');
+ if(purged)f.db.prepare('INSERT INTO execution_events VALUES(1,?,?)').run('task.delete',JSON.stringify({taskId:'task-old',reason:'explicit-user-terminal-history-cleanup'}));
+ f.db.prepare('INSERT INTO message_items VALUES(?,?)').run('node',JSON.stringify({input:{candidates:[{taskId:'task-old',resultRef:'sha256-'+ 'e'.repeat(64)+'.json'}]}}));
+ await cp(f.runtime,join(f.backupRoot,'runtime'),{recursive:true});
+ if(!purged)return assert.rejects(verifyDeploymentBackup(f),/BACKUP_ARTIFACT_MISSING/);
+ assert.equal((await verifyDeploymentBackup(f)).database.artifactRefs,1);
+});

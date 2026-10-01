@@ -369,8 +369,8 @@ function Read-StoppedRepairRecord([string]$Path,$sealed,$backupRecord) {
   maintenanceId=$sealed.state.maintenanceId;directQueriesProposal='';inputPaths=@();inputHashes=@{};launcherPid=$null}
 }
 function Assert-StoppedRepairPermit($record,$sealed,$before,$backupRecord,$current) {
- if($record.messageImpactMigrationSha256 -or $record.mode-ne 'maintenance' -or $record.enrollmentAutostartRestore -or ($record.observerPackage -and $record.checkpoint-ne 'sealed-before-launch') -or
-    $record.sourceProfileSha256-ne $ExpectedProfileSha256 -or $record.profileSha256-ne $ExpectedProfileSha256 -or
+ if($record.messageImpactMigrationSha256 -or $record.mode-ne 'maintenance' -or $record.enrollmentAutostartRestore -or
+     $record.sourceProfileSha256-ne (Get-FileHash -LiteralPath "$($record.backup)/profile/cordis.patch.yml").Hash -or $record.profileSha256-ne $ExpectedProfileSha256 -or
     $backupRecord.backup-ne $record.backup -or $backupRecord.packageSha256-ne $record.packageSha256 -or
     ($record.checkpoint-ne 'sealed-before-launch' -and $record.packageSha256-eq $ExpectedPackageSha256) -or ([string]$record.directQueriesProposal).Replace('\','/')-ne ([string]$DirectQueriesProposal).Replace('\','/')){throw '原部署记录不允许本次离线修复'}
  foreach($state in @($sealed.state,$before.maintenance,$current)){
@@ -423,6 +423,10 @@ if($RepairStoppedLaunch){
   $history=Run-Node @($checker,'verify',"$origin/control-before.json")|ConvertFrom-Json
   $backupProof=Run-Node @($checker,'backup-reverify',$record.backup,$TaskDirectory)|ConvertFrom-Json
   $packageProof=Run-Node @($checker,'package',$Package,$source)|ConvertFrom-Json
+  if($record.observerPackage -and $record.checkpoint-ne 'sealed-before-launch'){
+   if((Get-FileHash -LiteralPath $record.observerPackage).Hash-ne $record.observerPackageSha256){throw '原Observer包摘要漂移'}
+   $null=Run-Node @($checker,'package',$record.observerPackage,$observerSource,$observerInstalled)
+  }
   $observerProof=$null
   if($ObserverPackage){
    $originalDependencies=Get-Content -LiteralPath "$($record.backup)/profile/package.json" -Raw|ConvertFrom-Json

@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto'
 import { DatabaseSync, backup } from 'node:sqlite'
 import { stripVTControlCharacters } from 'node:util'
 import { maintenanceStatus } from '../packages/dingtalk-dsh-assistant/execution-maintenance.js'
+import { plannedStageRunId } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
+import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 
 const fail = code => { throw new Error(code) }
 const hash = value => createHash('sha256').update(value).digest('hex')
@@ -11,8 +13,9 @@ const artifactName = /^(?:tasks\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\/)?sha256-[a-f
 const taskRef = ref => ref.startsWith('tasks/')
 const taskBackupExclusions = Object.freeze(['<logicalTaskId>/work/engineering/<24-hex>/ws-<64-hex>/repository/**/node_modules'])
 const excludedTaskDependency = path => /^[^/]+\/work\/engineering\/[a-f0-9]{24}\/ws-[a-f0-9]{64}\/repository\/(?:[^/]+\/)*node_modules$/.test(path)
-function collectArtifactRefs(value, refs, key = '', parent = null, depth = 0) {
+function collectArtifactRefs(value, refs, key = '', parent = null, depth = 0, purgedTasks = new Set(), purgedRuns = new Set()) {
   if (depth > 128) fail('BACKUP_ARTIFACT_CAPACITY')
+  if (value && typeof value === 'object' && (purgedTasks.has(value.taskId) || purgedRuns.has(value.runId))) return
   if (typeof value === 'string') {
     const referenceField = /(?:Ref|Refs|_ref|_refs)$/.test(key) || key === 'evidenceIds'
       || key === 'ref' && parent?.digest === basename(value).slice(7, -5)
@@ -20,13 +23,13 @@ function collectArtifactRefs(value, refs, key = '', parent = null, depth = 0) {
     // 控制账的JSON容器及序列化引用列；正文/日志/用户文本不解析为引用。
     else if (/^(?:body|payload|args|result|config)$|_refs$/.test(key) && /^[\[{]/.test(value)) {
       let parsed; try { parsed = JSON.parse(value) } catch { return }
-      collectArtifactRefs(parsed, refs, key, parent, depth + 1)
+      collectArtifactRefs(parsed, refs, key, parent, depth + 1, purgedTasks, purgedRuns)
     }
-  } else if (Array.isArray(value)) for (const child of value) collectArtifactRefs(child, refs, key, parent, depth + 1)
-  else if (value && typeof value === 'object') for (const [childKey, child] of Object.entries(value)) collectArtifactRefs(child, refs, childKey, value, depth + 1)
+  } else if (Array.isArray(value)) for (const child of value) collectArtifactRefs(child, refs, key, parent, depth + 1, purgedTasks, purgedRuns)
+  else if (value && typeof value === 'object') for (const [childKey, child] of Object.entries(value)) collectArtifactRefs(child, refs, childKey, value, depth + 1, purgedTasks, purgedRuns)
 }
-export async function verifyArtifactClosure(directory, initialRefs, { maxArtifacts = 100000, maxBytes = 256 * 1024 * 1024, taskDirectory } = {}) {
-  const pending = new Set(initialRefs), visited = new Set(); let bytesRead = 0
+export async function verifyArtifactClosure(directory, initialRefs, { maxArtifacts = 100000, maxBytes = 256 * 1024 * 1024, taskDirectory, purgedTasks = [] } = {}) {
+  const pending = new Set(initialRefs), visited = new Set(), purged = new Set(purgedTasks), purgedArtifactRefs = []; let bytesRead = 0
   for (const ref of pending) {
     if (visited.has(ref)) continue
     if (!artifactName.test(ref)) fail('BACKUP_ARTIFACT_INVALID')
@@ -35,7 +38,12 @@ export async function verifyArtifactClosure(directory, initialRefs, { maxArtifac
     const path = taskRef(ref) ? join(taskDirectory, ref.split('/')[1], 'work/artifacts', basename(ref)) : join(directory, ref)
     let info
     try { await checkedDirectory(dirname(path)); info = await lstat(path) }
-    catch (error) { if (error.code === 'ENOENT') fail('BACKUP_ARTIFACT_MISSING'); throw error }
+    catch (error) {
+      if (error.code === 'ENOENT' && taskRef(ref) && purged.has(ref.split('/')[1])) {
+        visited.add(ref); purgedArtifactRefs.push(ref); continue
+      }
+      if (error.code === 'ENOENT') fail(`BACKUP_ARTIFACT_MISSING:${ref}`); throw error
+    }
     if (!info.isFile() || info.isSymbolicLink()) fail('BACKUP_ARTIFACT_INVALID')
     if (bytesRead + info.size > maxBytes) fail('BACKUP_ARTIFACT_CAPACITY')
     const bytes = await readFile(path); bytesRead += bytes.length
@@ -44,7 +52,7 @@ export async function verifyArtifactClosure(directory, initialRefs, { maxArtifac
     let value; try { value = JSON.parse(bytes.toString('utf8')) } catch { fail('BACKUP_ARTIFACT_INVALID') }
     visited.add(ref); collectArtifactRefs(value, pending)
   }
-  return { artifactRefs: visited.size, artifactBytes: bytesRead }
+  return { artifactRefs: visited.size - purgedArtifactRefs.length, artifactBytes: bytesRead, purgedArtifactRefs }
 }
 async function checkedDirectory(path) {
   if (typeof path !== 'string' || !isAbsolute(path)) fail('BACKUP_TASK_DIRECTORY_INVALID')
@@ -57,16 +65,16 @@ async function checkedDirectory(path) {
 /** 部署零写检查：任务工件存在时必须明确纳入任务根，禁止默默漏备份。 */
 export async function checkDeploymentTaskDirectory({ dbPath, taskDirectory }) {
   const db = new DatabaseSync(dbPath, { readOnly: true })
-  let refs
-  try { refs = databaseProof(db).refs.filter(taskRef) } finally { db.close() }
+  let refs, purgedTasks
+  try { const proof = databaseProof(db); refs = proof.refs.filter(taskRef); purgedTasks = proof.purgedTasks } finally { db.close() }
   if (refs.length && !taskDirectory) fail('BACKUP_TASK_DIRECTORY_REQUIRED')
   let taskBytes = 0
   if (taskDirectory) {
     await checkedDirectory(taskDirectory)
     for (const path of await files(taskDirectory, '', true)) taskBytes += (await lstat(join(taskDirectory, path))).size
-    await verifyArtifactClosure(join(dirname(dbPath), 'artifacts'), refs, { taskDirectory })
+    await verifyArtifactClosure(join(dirname(dbPath), 'artifacts'), refs, { taskDirectory, purgedTasks })
   }
-  return { taskDirectory: taskDirectory ? resolve(taskDirectory) : null, taskArtifactRefs: refs.length, taskBytes, taskBackupExclusions: taskDirectory ? taskBackupExclusions : [], writes: 0 }
+  return { taskDirectory: taskDirectory ? resolve(taskDirectory) : null, taskArtifactRefs: refs.length, purgedTasks, taskBytes, taskBackupExclusions: taskDirectory ? taskBackupExclusions : [], writes: 0 }
 }
 const profileFiles = ['cordis.patch.yml','cordis.yml','package.json','package-lock.json','settings.yaml','pnpm-lock.yaml']
 async function files(root, prefix = '', excludeTaskDependencies = false) {
@@ -102,13 +110,37 @@ function databaseProof(db) {
   if (db.prepare('PRAGMA integrity_check').all().some(row => Object.values(row)[0] !== 'ok')
     || db.prepare('PRAGMA foreign_key_check').all().length) fail('BACKUP_DATABASE_INVALID')
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
+  const names = new Set(tables.map(item => item.name)), purgedTasks = []
+  if (names.has('execution_events') && names.has('business_tasks') && names.has('execution_runs')) {
+    const deletions = new Map(db.prepare("SELECT payload FROM execution_events WHERE kind='task.delete' ORDER BY seq").all()
+      .map(row => { const value = JSON.parse(row.payload); return [value.taskId, value] }))
+    for (const [taskId, value] of deletions) {
+      if (value.reason !== 'explicit-user-terminal-history-cleanup' || value.retained?.includes('artifact-files')) continue
+      if (db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(taskId)
+        || db.prepare('SELECT 1 FROM execution_runs WHERE task_id=?').get(taskId)) fail('BACKUP_PURGED_TASK_STILL_PRESENT')
+      purgedTasks.push(taskId)
+    }
+  }
+  const purged = new Set(purgedTasks), purgedRuns = new Set()
+  // 旧直派流程使用同一原生命令摘要生成 Task/Run，必须同时匹配清理记录及已移除回执。
+  if (names.has('execution_receipts')) for (const row of db.prepare("SELECT command_id,result FROM execution_receipts WHERE command_id LIKE 'dispatch:%'").all()) {
+    const digest = executionDigest(row.command_id.slice('dispatch:'.length))
+    if (purged.has(`task-${digest.slice(0, 32)}`) && JSON.parse(row.result).historyRemoved === true)
+      purgedRuns.add(`run-${digest.slice(0, 40)}`)
+  }
+  if (names.has('execution_receipts')) for (const row of db.prepare("SELECT command_id,result FROM execution_receipts WHERE command_id LIKE 'stage-start:%'").all()) {
+    const match = /^stage-start:(task-[A-Za-z0-9._-]+):([1-9]\d*):([A-Za-z0-9_.:-]+):([1-9]\d*)$/.exec(row.command_id)
+    if (match && purged.has(match[1]) && JSON.parse(row.result).historyRemoved === true)
+      purgedRuns.add(plannedStageRunId(match[1], Number(match[2]), match[3], Number(match[4])))
+  }
   const refs = new Set(), proofs = []
   for (const { name } of tables) {
     const rows = db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all()
-    for (const row of rows) collectArtifactRefs(row, refs)
+    for (const row of rows) ['execution_receipts', 'message_items'].includes(name)
+      ? collectArtifactRefs(row, refs, '', null, 0, purged, purgedRuns) : collectArtifactRefs(row, refs)
     proofs.push({ name, rows: rows.length, digest: hash(JSON.stringify(rows.map(row => JSON.stringify(row)).sort())) })
   }
-  return { tables: proofs, refs: [...refs].sort() }
+  return { tables: proofs, refs: [...refs].sort(), purgedTasks: purgedTasks.sort(), purgedRuns: [...purgedRuns].sort() }
 }
 
 /** 部署脚本持有原生 owner 锁期间调用；只做 SQLite checkpoint，业务表全量摘要前后必须相同。 */
@@ -157,7 +189,7 @@ export async function verifyDeploymentBackup({ runtime, domain, profile, backupR
   let restored
   try { restored = databaseProof(restoredDb) } finally { restoredDb.close() }
   if (JSON.stringify(original) !== JSON.stringify(restored)) fail('BACKUP_DATABASE_READBACK_MISMATCH')
-  const closure = await verifyArtifactClosure(join(backupRoot,'runtime/artifacts'), restored.refs, { taskDirectory: taskDirectory ? join(backupRoot, 'tasks') : undefined })
+  const closure = await verifyArtifactClosure(join(backupRoot,'runtime/artifacts'), restored.refs, { taskDirectory: taskDirectory ? join(backupRoot, 'tasks') : undefined, purgedTasks: restored.purgedTasks })
   return { verified: true, ...(taskDirectory ? { taskDirectory: resolve(taskDirectory), taskBackupExclusions } : {}), manifest, database: { restoreFile: 'runtime/verified-control.sqlite',
     sha256: hash(await readFile(restoredPath)), tables: restored.tables, ...closure } }
 }
@@ -201,7 +233,7 @@ export async function reverifyDeploymentBackup({ backupRoot, domain, runtime, ta
   let restored
   try { restored = databaseProof(db) } finally { db.close() }
   if (JSON.stringify(restored.tables) !== JSON.stringify(proof.database.tables)) fail('BACKUP_DATABASE_READBACK_MISMATCH')
-  const closure = await verifyArtifactClosure(join(backupRoot, 'runtime/artifacts'), restored.refs, { taskDirectory: proof.taskDirectory ? join(backupRoot, 'tasks') : undefined })
+  const closure = await verifyArtifactClosure(join(backupRoot, 'runtime/artifacts'), restored.refs, { taskDirectory: proof.taskDirectory ? join(backupRoot, 'tasks') : undefined, purgedTasks: restored.purgedTasks })
   return { verified: true, files: proof.manifest.length, tables: restored.tables.length, ...closure, writes: 0 }
 }
 

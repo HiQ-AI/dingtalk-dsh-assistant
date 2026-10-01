@@ -581,6 +581,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   const queryTools = artifacts => createAgentQueryTools({ capabilities: queryCapabilities, resolveScope: resolveQueryScope, artifacts })
   function queryCatalog(scope) {
     return {
+      databaseGuidance: '需要生产数据库结构或数据事实时，使用context.databases中environment=production的登记只读连接，通过query_readonly_database查询；先用tables定位，再用columns核验结构。metadataSchemas是结构查询授权范围，数据select仍限tables内的列。QUERY_SCOPE_DENIED不等于数据库不可用，不得改走主库或将可自主查询的结构当作缺用户材料。',
       resources: (queryConfig.resources ?? []).filter(item => scope.resourceIds.includes(item.id))
         .map(item => ({ id: item.id, description: item.description ?? '', version: item.commit ?? null,
           paths: [...item.paths] })),
