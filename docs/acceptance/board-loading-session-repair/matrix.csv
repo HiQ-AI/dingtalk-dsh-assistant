@@ -35,3 +35,12 @@ native-precreated-task-readback,8,FAIL,round-8.md
 native-precreated-task-contract,9,PASS,round-9.md
 native-readback-recovery-controls,9,PASS,round-9.md
 native-proto-empty-taskruns,9,FAIL,round-9.md
+native-proto-empty-taskruns,10,PASS,round-10.md
+native-precreated-task-readback,10,PASS,round-10.md
+native-readback-recovery-controls,10,PASS,round-10.md
+same-task-live-submission,10,PASS,round-10.md
+native-approval-config-wait,10,PASS,round-10.md
+incorrect-wait-notice-recall,10,PASS,round-10.md
+notification-duplicate,10,PASS,round-10.md
+local-deployment-readback,10,PASS,round-10.md
+board-detail-final-readback,10,PASS,round-10.md
