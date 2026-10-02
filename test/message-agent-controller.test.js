@@ -34,15 +34,20 @@ async function fixture(t, overrides={}) {
  await call('split',{runId:'m',units:[{unitId:'u'}]})
  await call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'answer',args:{}}]})
  const controllers=[]
- const controller=(extra={})=>{const c=createMessageAgentController({store,artifacts,tools:[],modelConfig:async()=>({provider:'p',model:'m'}),prepareInput:async()=>({request:'查一下',sourceRefs:['source'],scope:{conversationId:'g',actorId:'a'}}),verifyEvidence:async()=>true,ownerActorId:'owner',sessionRunner:sessions,...overrides,...extra});controllers.push(c);return c}
+ const events=[]
+ const queryReceipt=ref=>{const seq=events.length,callId=`query-${seq}`;events.push(
+  {type:'tool/call',seq,data:{name:'query_fixture',callId}},
+  {type:'tool/result',seq:seq+1,sourceEventSeqs:[seq],data:{message:{source:{callId},content:[{type:'tool-result',toolCallId:callId,isError:false,content:[{type:'text',text:JSON.stringify({evidenceRef:ref})}]}]}}})}
+ const controller=(extra={})=>{const c=createMessageAgentController({ctx:{sessions:{get:()=>({snapshotEvents:()=>events})}},store,artifacts,tools:[{name:'query_fixture'}],modelConfig:async()=>({provider:'p',model:'m'}),prepareInput:async()=>({request:'查一下',sourceRefs:['source'],scope:{conversationId:'g',actorId:'a'}}),verifyEvidence:async()=>true,ownerActorId:'owner',sessionRunner:sessions,...overrides,...extra});controllers.push(c);return c}
  const claim=async()=>({commandId:'c',commandLeaseEpoch:(await call('command.claim',{commandId:'c'})).result.command.leaseEpoch})
  t.after(async()=>{for(const c of controllers)await c.close().catch(()=>{});await store.close();await rm(dir,{recursive:true,force:true})})
- return {dir,get store(){return store},call,artifacts,sessions,controller,claim,reopen:async()=>{await store.close();store=await openExecutionStore(options)}}
+ return {dir,get store(){return store},call,artifacts,sessions,events,queryReceipt,controller,claim,reopen:async()=>{await store.close();store=await openExecutionStore(options)}}
 }
 
 test('start 在会话未完成时返回，真实 ledger 承接结果与工具证据',async t=>{
  let verified=0
  const f=await fixture(t,{verifyEvidence:async({refs,binding})=>{verified++;assert.deepEqual(refs,['tool-evidence']);assert.equal(binding.kind,'message-unit');return true}}),c=f.controller()
+ f.queryReceipt('tool-evidence')
  assert.deepEqual(await c.start({},await f.claim()),{executionPending:true})
  assert.equal(f.sessions.calls.length,1)
  assert.equal(await c.isCurrent(f.sessions.calls[0].binding),true)
@@ -54,9 +59,49 @@ test('start 在会话未完成时返回，真实 ledger 承接结果与工具证
 
 test('verifyEvidence 未明确返回 true 则持久失败，不能冒充完成',async t=>{
  const f=await fixture(t,{verifyEvidence:async()=>undefined}),c=f.controller()
+ f.queryReceipt('unverified')
  await c.start({},await f.claim());await f.sessions.submit(result({evidenceRefs:['unverified']}));await c.idle()
  const state=await f.store.query({kind:'message.run',runId:'m'})
  assert.equal(state.executions[0].status,'failed');assert.equal(state.executions[0].error,'AGENT_WORK_EVIDENCE_INVALID')
+})
+
+test('问答截短或构造查询引用先反馈纠正，原样引用持久回执后同会话提交',async t=>{
+ let reads=0,inspected=0
+ const ref=`tasks/task-a/sha256-${'a'.repeat(64)}.json`
+ const f=await fixture(t,{verifyEvidence:async({refs})=>{reads++;assert.deepEqual(refs,[ref]);return true}})
+ f.queryReceipt(ref)
+ const c=f.controller({ctx:{sessions:{get:()=>null},sessionPersistence:{inspect:async id=>{inspected++;assert.equal(id,f.sessions.calls[0].binding.sessionId);return {events:f.events}}}}})
+ await c.start({},await f.claim())
+ const call=f.sessions.calls[0]
+ for(const invalid of [ref.split('/').at(-1),'invented-evidence']) {
+  await assert.rejects(call.validateOutput(result({evidenceRefs:[invalid]})),error=>error.code==='AGENT_WORK_EVIDENCE_INVALID'&&call.classifyOutputError(error)==='correctable')
+ }
+ assert.equal(reads,0)
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).executions[0].status,'running')
+ await f.sessions.submit(result({evidenceRefs:[ref]}));await c.idle()
+ assert.equal(inspected,3);assert.equal(reads,1)
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).executions[0].status,'succeeded')
+})
+
+test('问答不要求引用所有试探查询，未引用的旧查询不进入当前归属核验',async t=>{
+ let verified=0
+ const f=await fixture(t,{verifyEvidence:async()=>{verified++;return true}}),c=f.controller()
+ f.queryReceipt('old-input-query')
+ await c.start({},await f.claim());await f.sessions.submit(result());await c.idle()
+ assert.equal(verified,0)
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).executions[0].status,'succeeded')
+})
+
+test('问答真实查询回执的工件丢失仍按存储故障停止',async t=>{
+ const ref=`sha256-${'b'.repeat(64)}.json`,f=await fixture(t)
+ f.queryReceipt(ref)
+ const c=f.controller({verifyEvidence:async({refs})=>{await f.artifacts.read(refs[0]);return true}})
+ await c.start({},await f.claim())
+ const call=f.sessions.calls[0]
+ await assert.rejects(call.validateOutput(result({evidenceRefs:[ref]})),error=>error.code==='ENOENT'&&call.classifyOutputError(error)==='fatal')
+ await f.sessions.submit(result({evidenceRefs:[ref]}));await c.idle()
+ const state=await f.store.query({kind:'message.run',runId:'m'})
+ assert.equal(state.executions[0].status,'failed');assert.equal(state.executions[0].error,'ENOENT')
 })
 
 test('needs_input 补充沿用会话且递增版本，重复同事件不重复追加',async t=>{
@@ -129,7 +174,7 @@ test('真实原生 Loop 与持久会话完成等待补充后同 session 续行',
   }
  }
  ctx.llm.registerAdapter(['p'],new Scripted())
- const c=f.controller({ctx,sessionRunner:undefined})
+ const c=f.controller({ctx,tools:[],sessionRunner:undefined})
  try {
   await c.start({},await f.claim());await c.idle()
   const data=await f.store.query({kind:'message.run',runId:'m'})

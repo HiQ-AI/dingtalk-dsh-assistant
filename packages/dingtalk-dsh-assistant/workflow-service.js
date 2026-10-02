@@ -601,7 +601,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       sessionId: node.sessionId, leaseEpoch: node.leaseEpoch }
     await resolveQueryScope({ binding, input: requirement })
     const history = await generalStore.current.query({ kind: 'node.binding-history', nodeRunId: node.nodeRunId })
-    let executedQueryRefs = []
+    let executedQueryRefs
     if (requireExecutedQueryAccounting && node.sessionBound) {
       const live = ctx.sessions.get(node.sessionId)
       const events = live ? live.snapshotEvents() : (await ctx.sessionPersistence.inspect(node.sessionId)).events

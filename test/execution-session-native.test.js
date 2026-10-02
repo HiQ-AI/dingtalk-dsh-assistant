@@ -101,15 +101,15 @@ async function processPhase(root, phase) {
 if (process.argv[2] === '--execution-session-child') {
   await processPhase(process.argv[3], process.argv[4])
 } else {
-  test('原生成功查询不能只引用原消息省略调查证据，当前会话纠正且JSONL可重建查询集合', async t => {
-    const root=await temp(),artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true})
+  test('原生成功查询漏引用或截短任务证据时同会话纠正，JSONL仍可重建查询集合', async t => {
+    const root=await temp(),artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true,taskWorkspaceRoot:root,getTaskDirectories:async taskId=>({logicalTaskId:taskId})})
     const capability=createAgentResourceReadCapability({resources:[{id:'source',kind:'files',root,paths:['fixture.txt']}]})
     const scope={resourceIds:['source']},[tool]=createAgentQueryTools({capabilities:[capability],resolveScope:async()=>scope,artifacts})
     let queryRef,checks=0,accepted=0
     const query={...tool,execute:async args=>{const value=await tool.execute(args);queryRef=value.evidenceRef;return value}}
     const base={outcome:'completed',summary:'已读取文件事实',evidenceRefs:['dws-source'],limitations:[],question:''}
     const h=await host({root,tools:[query],script:n=>n===1?{name:tool.name,args:{resourceId:'source',operation:'read',path:'fixture.txt'}}
-      :{name:'execution_node_submit',args:{output:n===2?base:{...base,evidenceRefs:['dws-source',queryRef]}}}})
+      :{name:'execution_node_submit',args:{output:n===2?base:{...base,evidenceRefs:['dws-source',n===3?queryRef.split('/').at(-1):queryRef]}}}})
     t.after(()=>h.close())
     const d=definition({allowedTools:[tool.name],outputSchema:agentWorkResultSchema})
     const classifier=createInvestigationWorkflow({provider:'fixture',model:'fixture',allowedTools:[tool.name],capabilityIdentity:capability.identity,verifyResult:async()=>{}}).nodes[0].classifyOutputError
@@ -118,7 +118,9 @@ if (process.argv[2] === '--execution-session-child') {
       await validateAgentWorkResult(value,{sourceRefs:['dws-source'],requireCompleteCoverage:true,requireExecutedQueryAccounting:true,executedQueryRefs:refs,
         readEvidence:ref=>artifacts.read(ref),verifyEvidence:async values=>{await verifyAgentEvidence({refs:values,binding:binding(),scope,artifacts});return true}})
     },onResult:()=>{accepted++}})
-    assert.equal(run.status,'submitted');assert.equal(checks,2);assert.equal(accepted,1);assert.equal(h.requests.length,3)
+    assert.equal(run.status,'submitted');assert.equal(checks,3);assert.equal(accepted,1);assert.equal(h.requests.length,4)
+    assert.match(queryRef,/^tasks\/task\/sha256-/u)
+    assert.ok(JSON.stringify(h.requests[3]).includes('不可截短为文件名'))
     assert.deepEqual(readExecutedAgentQueryRefs((await h.ctx.sessionPersistence.inspect(binding().sessionId)).events,[tool.name]),[queryRef])
     assert.deepEqual(readExecutedAgentQueryRefs((await h.ctx.sessionPersistence.inspect(binding().sessionId)).events,['unrelated-tool']),[])
   })

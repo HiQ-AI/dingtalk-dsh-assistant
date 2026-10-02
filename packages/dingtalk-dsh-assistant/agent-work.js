@@ -57,7 +57,7 @@ export function classifyAgentWorkOutputError(error) {
 }
 
 export async function validateAgentWorkResult(result, { sourceRefs = [], verifyEvidence, readEvidence, requireCompleteCoverage = false,
-  requireExecutedQueryAccounting = false, executedQueryRefs = [] } = {}) {
+  requireExecutedQueryAccounting = false, executedQueryRefs } = {}) {
   const errors = validateJsonSchemaValue({ ...agentWorkResultSchema, properties: { ...agentWorkResultSchema.properties, coverageExclusions: coverageExclusionSchema } }, result)
   if (errors.length || !result.summary.trim() || result.summary.length > 24000
     || result.evidenceRefs.length > 64 || result.limitations.length > 32
@@ -69,8 +69,12 @@ export async function validateAgentWorkResult(result, { sourceRefs = [], verifyE
     || (result.outcome === 'blocked' && !result.limitations.length)) throw executionError('AGENT_WORK_RESULT_INVALID')
   const known = new Set(sourceRefs)
   const queried = result.evidenceRefs.filter(ref => !known.has(ref))
+  // 先区分模型拼造的引用与真实工件故障；未知引用不能进入文件读取。
+  const executed = executedQueryRefs ?? []
+  if ((executedQueryRefs !== undefined || requireExecutedQueryAccounting) && queried.some(ref => !executed.includes(ref)))
+    throw executionError('AGENT_WORK_EVIDENCE_INVALID')
   const exclusions = result.coverageExclusions ?? []
-  const allQueries = [...new Set([...queried, ...(requireExecutedQueryAccounting ? executedQueryRefs : [])])]
+  const allQueries = [...new Set([...queried, ...(requireExecutedQueryAccounting ? executed : [])])]
   if (exclusions.length > 32 || new Set(exclusions.map(item => item.evidenceRef)).size !== exclusions.length
     || exclusions.some(item => !allQueries.includes(item.evidenceRef) && !result.evidenceRefs.includes(item.evidenceRef) || !item.reason.trim() || item.reason.length > 4000)) throw executionError('AGENT_WORK_RESULT_INVALID')
   if (allQueries.length) {
@@ -78,7 +82,7 @@ export async function validateAgentWorkResult(result, { sourceRefs = [], verifyE
     if (await verifyEvidence(allQueries) !== true) throw executionError('AGENT_WORK_EVIDENCE_INVALID')
   }
   if (requireExecutedQueryAccounting && result.outcome === 'completed'
-    && executedQueryRefs.some(ref => !result.evidenceRefs.includes(ref) && !exclusions.some(item => item.evidenceRef === ref))) throw executionError('AGENT_WORK_COVERAGE_INCOMPLETE')
+    && executed.some(ref => !result.evidenceRefs.includes(ref) && !exclusions.some(item => item.evidenceRef === ref))) throw executionError('AGENT_WORK_COVERAGE_INCOMPLETE')
   if (requireCompleteCoverage && result.outcome === 'completed' && allQueries.length) {
     if (typeof readEvidence !== 'function') throw executionError('AGENT_WORK_EVIDENCE_UNAVAILABLE')
     await verifyInvestigationQueryCoverage({ refs: allQueries, exclusions, readEvidence })

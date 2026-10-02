@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createExecutionSessions } from './execution-session.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
 import { agentWorkDefinition, validateAgentWorkResult, classifyAgentWorkOutputError } from './agent-work.js'
+import { readExecutedAgentQueryRefs } from './agent-query-tools.js'
 
 const bindingOf = entry => ({ kind: 'message-unit', runId: entry.runId, unitId: entry.unitId,
   inputVersion: entry.inputVersion, inputDigest: entry.inputDigest, sessionId: entry.sessionId,
@@ -27,8 +28,11 @@ export function createMessageAgentController({ ctx, store, artifacts, tools, mod
   const sessions = sessionRunner ?? createExecutionSessions({ ctx, tools, isCurrent, getWorkspaceDir })
 
   const validateOutput = async (entry, input, result) => {
+    const live = ctx.sessions.get(entry.sessionId)
+    const events = live ? live.snapshotEvents() : (await ctx.sessionPersistence.inspect(entry.sessionId)).events
     const accepted = await validateAgentWorkResult(result, {
       sourceRefs: input.sourceRefs ?? [],
+      executedQueryRefs: readExecutedAgentQueryRefs(events, tools.map(tool => tool.name)),
       verifyEvidence: refs => verifyEvidence({ refs, entry, binding: bindingOf(entry), input }),
     })
     assertGroupReply(accepted.summary, [entry.runId, entry.unitId, entry.sessionId])

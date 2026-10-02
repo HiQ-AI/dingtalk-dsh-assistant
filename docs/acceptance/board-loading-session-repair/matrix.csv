@@ -84,3 +84,7 @@ notification-upgrade-queue-and-unknown,20,PASS,round-20.md
 notification-completion-and-private-approval,20,PASS,round-20.md
 task-notification-silence-deployment,20,FAIL,round-20.md
 task-notification-silence-deployment,21,PASS,round-21.md
+evidence-reference-native-correction,22,PASS,round-22.md
+message-reference-same-cause,22,PASS,round-22.md
+legacy-investigation-safe-retry,22,PASS,round-22.md
+evidence-recovery-deployment-and-native-retry,22,PASS,round-22.md

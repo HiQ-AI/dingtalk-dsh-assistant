@@ -180,7 +180,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
               if (!await current(entry)) throw failure('execution_binding_stale')
               exec.signal.throwIfAborted()
               if (entry.classifyOutputError?.(error) !== 'correctable') throw error
-              return { received: false, feedback: error.code === 'GROUP_REPLY_INTERNAL_DETAILS' ? error.message : 'execution_output_needs_correction: 请核对输出合同；证据引用必须使用当前工具返回的 evidenceRef，不可使用 sourceRefs、文件路径或自行构造的引用。修正后重新提交。' }
+              return { received: false, feedback: error.code === 'GROUP_REPLY_INTERNAL_DETAILS' ? error.message : 'execution_output_needs_correction: 请核对输出合同；证据引用必须原样复制当前工具返回的完整 evidenceRef，包括 tasks/.../ 前缀，不可截短为文件名、使用 sourceRefs 或自行构造引用。修正后重新提交。' }
             }
             if (!await current(entry)) throw failure('execution_binding_stale')
             exec.signal.throwIfAborted()
