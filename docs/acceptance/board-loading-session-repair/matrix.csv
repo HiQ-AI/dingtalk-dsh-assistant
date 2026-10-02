@@ -126,5 +126,5 @@ single-column-delete-unique-group-result,27,BLOCKED,round-27.md
 full-task-contract-admission,28,PASS,round-28.md
 completion-rejection-diagnostics,28,PASS,round-28.md
 continuous-execution-local-deployment,28,PASS,round-28.md
-single-column-delete-final-acceptance,28,IN_PROGRESS,round-28.md
-single-column-delete-unique-group-result,28,IN_PROGRESS,round-28.md
+single-column-delete-final-acceptance,28,PASS,round-28.md
+single-column-delete-unique-group-result,28,PASS,round-28.md
