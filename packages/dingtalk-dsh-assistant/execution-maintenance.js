@@ -23,7 +23,7 @@ export function maintenanceStatus(db, processIncarnation) {
     resumePermitted: state.active && state.phase === 'stopping' && drained && !!processIncarnation && state.sealedIncarnation !== processIncarnation }
 }
 
-const dispatchCommands = new Set(['node.claim', 'task.owner.claim', 'effect.begin', 'run.recovery.admit',
+const dispatchCommands = new Set(['node.claim', 'task.owner.claim', 'effect.begin', 'approval.notice.send', 'run.recovery.admit',
   'message.coordinator.claim', 'message.agent.begin', 'message.node.claim', 'message.command.claim', 'message.notification.claim', 'message.notification.operation.claim'])
 export function assertMaintenanceDispatch(db, kind) {
   if (dispatchCommands.has(kind) && maintenanceState(db).active) throw executionError('RUNTIME_MAINTENANCE_ACTIVE')

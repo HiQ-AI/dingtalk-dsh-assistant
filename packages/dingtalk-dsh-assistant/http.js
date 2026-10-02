@@ -504,6 +504,8 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     return send(response, 200, await store.decideAuthorization({ requestId, ...(await readJson(request)), source: 'web' }))
   }
   if (request.method === 'POST' && /^\/authorizations\/[^/]+\/reissue$/u.test(url.pathname)) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
     const requestId = decodeURIComponent(url.pathname.slice('/authorizations/'.length, -'/reissue'.length))
     return send(response, 200, await store.reissueAuthorization({ requestId, ...(await readJson(request)) }))
   }

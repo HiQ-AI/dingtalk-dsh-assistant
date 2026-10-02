@@ -7,6 +7,8 @@ $MigrateMessageImpact=$false
  $MigrateExecutionEventsIndex=$false
  $indexReadbackFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-ExecutionEventsIndexReadback'},$true)
  Invoke-Expression $indexReadbackFunction.Extent.Text
+ $controlReadbackFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-DeploymentControlRecord'},$true)
+ Invoke-Expression $controlReadbackFunction.Extent.Text
 $impactReadbackFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-MessageImpactReadback'},$true)
 Invoke-Expression $impactReadbackFunction.Extent.Text
 $workspaceAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$workspace'},$true)

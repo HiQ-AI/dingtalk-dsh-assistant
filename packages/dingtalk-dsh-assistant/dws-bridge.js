@@ -66,6 +66,12 @@ export function parseRedlineDecision(text) {
   if (/^(拒绝|不同意|不批准)(?:$|[：:，,。\s])/u.test(normalized)) return 'rejected'
   return 'approved'
 }
+export function parseWorkflowApprovalDecision(text) {
+  const normalized = String(text ?? '').trim()
+  if (/^(拒绝|不同意|不批准)(?:$|[：:，,。！？!?\s])/u.test(normalized)) return 'rejected'
+  if (/^(批准|同意)[。！!]?$/u.test(normalized)) return 'approved'
+  return undefined
+}
 
 export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentDwsUserName, humanPollIntervalMs = 30_000, groupBackfillIntervalMs = 10_000, groupBackfillOverlapMs = 30_000, outboxRetryIntervalMs = 10_000, listenerReconnectBaseMs = 1_000, listenerReconnectMaxMs = 30_000, listenerReadyTimeoutMs = 15_000, onHealthChange }) {
   const subscriptions = new Map()
@@ -400,6 +406,16 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     const existing = inflightHumanReplies.get(message.messageId)
     if (existing !== undefined) return existing
     const operation = (async () => {
+      const approvals = await runtime.listAuthorizationRequests?.() ?? []
+      const approval = approvals.find(item => item.kind === 'workflow-approval'
+        && item.notification?.status === 'waiting-reply' && item.notification.delivery?.messageId === quotedId)
+      if (approval) {
+        const decision = parseWorkflowApprovalDecision(reply)
+        if (!decision) return
+        await runtime.decideWorkflowApprovalReply({ requestId: approval.requestId, decision, comment: reply,
+          eventId: message.messageId, conversationId: message.groupId, quoteMessageId: quotedId, actorId: message.senderOpenDingTalkId })
+        return
+      }
       const task = (runtime.listTasks?.() ?? []).find((item) => item.state === 'waiting'
         && item.waitingKind === 'human-intervention'
         && item.humanBlocker?.status === 'waiting-reply'
@@ -421,6 +437,20 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     return operation
   }
   const recallInactiveAuthorization = async (authorization) => {
+    if (authorization?.kind === 'workflow-approval') {
+      const notice = await runtime.getWorkflowApprovalNotice(authorization.requestId)
+      if (notice?.status !== 'recall-required') return
+      const delivery = notice.delivery, range = { start: delivery.sentAt ?? notice.createdAt, end: new Date().toISOString() }
+      const exists = async () => (await adapter.readConversation(delivery.conversationId, range)).some(message => message.messageId === delivery.messageId)
+      if (await exists()) {
+        const ack = await adapter.recallMessage(delivery.messageId)
+        if ((ack?.recallStatus ?? ack?.result?.recallStatus) !== 'SUCCESS') throw new Error('dws_workflow_approval_recall_unconfirmed')
+        if (await exists()) throw new Error('dws_workflow_approval_recall_pending')
+      }
+      await runtime.recordWorkflowApprovalNoticeRecall({ requestId: notice.requestId, noticeDigest: notice.digest,
+        conversationId: delivery.conversationId, messageId: delivery.messageId })
+      return
+    }
     const shouldRecall = (authorization?.status === 'answered' && authorization.decisionSource === 'web') || authorization?.status === 'superseded'
     if (!shouldRecall || !authorization.messageId || authorization.recallStatus === 'recalled') return
     try {
@@ -431,13 +461,66 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       throw error
     }
   }
+  const processWorkflowApproval = async (authorization) => {
+    if (typeof humanUserId !== 'string' || !humanUserId.trim()) throw new Error('dws_human_user_id_required')
+    let notice = await runtime.getWorkflowApprovalNotice(authorization.requestId)
+    if (!notice) {
+      if (authorization.status === 'answered') return
+      notice = (await runtime.prepareWorkflowApprovalNotice({ requestId: authorization.requestId,
+        recipientUserId: humanUserId, text: authorization.text })).notice
+    }
+    if (notice.status === 'prepared') {
+        const sendRequest = { userId: notice.recipientUserId, text: notice.text, idempotencyKey: `workflow-approval:${notice.digest}` }
+        // 本地参数预检在领取发送前完成，零外发错误不进入unknown。
+        adapter.compileSelfSend?.(sendRequest)
+      const begun = await runtime.beginWorkflowApprovalNotice({ requestId: notice.requestId, noticeDigest: notice.digest })
+      notice = begun.notice
+      if (begun.dispatchEligible) {
+          let receipt
+          try {
+            receipt = await adapter.sendSelfIntent(sendRequest)
+          } catch (error) {
+            if (error.knownNotSent === true) await runtime.recordWorkflowApprovalNoticeUnsent({ requestId: notice.requestId, noticeDigest: notice.digest, proof: error.proof })
+            throw error
+          }
+        await runtime.recordWorkflowApprovalNoticeReceipt({ requestId: notice.requestId, noticeDigest: notice.digest, openTaskId: receipt.openTaskId })
+        notice = await runtime.getWorkflowApprovalNotice(notice.requestId)
+      }
+    }
+    if (notice.status === 'unknown') {
+      const delivery = notice.delivery?.openTaskId
+        ? await adapter.confirmSelfDelivery({ openTaskId: notice.delivery.openTaskId, recipientUserId: notice.recipientUserId, text: notice.text })
+        : await adapter.findWorkflowApprovalNotice({ requestId: notice.requestId, recipientUserId: notice.recipientUserId,
+          text: notice.text, conversationId: notice.delivery?.conversationId })
+      if (!delivery) return
+      await runtime.recordWorkflowApprovalNoticeDelivery({ requestId: notice.requestId, noticeDigest: notice.digest,
+        ...delivery, ...(delivery.sentAt ? { sentAt: normalizeMessageTime(delivery.sentAt) } : {}) })
+      notice = await runtime.getWorkflowApprovalNotice(notice.requestId)
+    }
+    if (notice.status === 'recall-required') { await recallInactiveAuthorization(authorization); return }
+    if (notice.status !== 'waiting-reply') return
+    const delivery = notice.delivery
+    const messages = await adapter.readConversation(delivery.conversationId, { start: delivery.sentAt ?? notice.createdAt, end: new Date().toISOString() })
+    for (const raw of messages) {
+      const reply = normalizeHistoryMessage(raw, delivery.conversationId), decision = parseWorkflowApprovalDecision(reply.text)
+      if (!decision || quotedMessageId(reply) !== delivery.messageId || reply.senderOpenDingTalkId !== notice.approverActorId) continue
+      await runtime.decideWorkflowApprovalReply({ requestId: notice.requestId, decision, comment: reply.text,
+        eventId: reply.messageId, conversationId: reply.groupId, quoteMessageId: delivery.messageId, actorId: reply.senderOpenDingTalkId })
+      break
+    }
+  }
   const processHumanBlockers = () => {
     humanPollTail = humanPollTail.then(async () => {
       if (stopping) return
-      const authorizations = runtime.listAuthorizationRequests?.() ?? (runtime.listTasks?.() ?? [])
+      const authorizations = await runtime.listAuthorizationRequests?.() ?? (runtime.listTasks?.() ?? [])
         .filter((task) => task.humanBlocker)
         .map((task) => ({ ...task.humanBlocker, taskId: task.taskId }))
-      for (const authorization of authorizations.filter((item) => item.status === 'pending-send' || item.status === 'waiting-reply')) {
+      for (const authorization of authorizations) {
+        if (authorization.kind === 'workflow-approval') {
+          try { await processWorkflowApproval(authorization) } catch (error) { logger.warn(error) }
+          continue
+        }
+        if (!['pending-send', 'waiting-reply'].includes(authorization.status)) continue
         const task = runtime.getTask?.(authorization.taskId) ?? (runtime.listTasks?.() ?? []).find((item) => item.taskId === authorization.taskId)
         if (task?.state !== 'waiting' || task.waitingKind !== 'human-intervention') continue
         const blocker = task.humanBlocker

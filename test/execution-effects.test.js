@@ -23,6 +23,7 @@ function fixture(file = ':memory:') {
     INSERT INTO execution_nodes VALUES('node-run','run','node',1,1,'input','running',1,0);
     CREATE TABLE execution_inputs(input_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, status TEXT NOT NULL);
     CREATE TABLE test_events(kind TEXT NOT NULL,payload TEXT NOT NULL);
+    CREATE TABLE execution_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,payload TEXT NOT NULL);
   `)
   installEffectsSchema(db)
   const context = contextFor(db)
@@ -51,7 +52,10 @@ function contextFor(db) {
       if (db.prepare("SELECT 1 FROM execution_inputs WHERE run_id=? AND status='pending'").get(runId)) reject('input_fenced')
       return { run, node: { nodeRunId: node.node_run_id } }
     },
-    emitEvent: (kind, payload) => db.prepare('INSERT INTO test_events VALUES(?,?)').run(kind, JSON.stringify(payload)),
+    emitEvent(kind, payload) {
+      db.prepare('INSERT INTO test_events VALUES(?,?)').run(kind, JSON.stringify(payload))
+      db.prepare('INSERT INTO execution_events(kind,payload) VALUES(?,?)').run(kind, JSON.stringify(payload))
+    },
   }
 }
 
@@ -72,6 +76,147 @@ const receipt = (effectId = 'operation', status = 'succeeded', extra = {}) => ({
 const request = id => ({ authorizationRef: undefined, approval: { requestId: id, approverIds: ['owner', 'reviewer'] } })
 const decide = (id, decision = 'approved', extra = {}) => ({ requestId: id, actorId: 'owner', source: 'web', decision, ...extra })
 const code = expected => error => error.code === expected
+
+const noticeArgs = { requestId: 'private-request', effectId: 'private-effect', recipientUserId: 'ding-user', approverActorId: 'owner', text: '请审核实际执行方案，引用此消息回复同意或拒绝。' }
+
+test('只有绑定通知摘要的明确平台uuid拒绝证明可恢复未发送通知', t => {
+  const f = fixture(); t.after(() => f.db.close())
+  const requestId = `external:${'c'.repeat(64)}`
+  f.command('effect.prepare', prepared('private-effect', request(requestId)))
+  const notice = f.command('approval.notice.prepare', { ...noticeArgs, requestId }).result.notice
+  const args = { requestId, noticeDigest: notice.digest }
+  const idempotencyKey = `workflow-approval:${requestId}:${notice.digest}`
+  const proof = { kind: 'dws-uuid-rejected', idempotencyKey, serverErrorCode: '1001', errorMessage: `sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is ${idempotencyKey.length}.`, traceId: '213126b217909445212943537e0564' }
+  f.command('approval.notice.send', args)
+  for (const badProof of [{ ...proof, serverErrorCode: '500' }, { ...proof, errorMessage: 'not found' }, { ...proof, traceId: '' }, { ...proof, idempotencyKey: `${idempotencyKey}x` }, { ...proof, kind: 'local-uuid-rejected' }])
+    assert.throws(() => f.command('approval.notice.unsent', { ...args, proof: badProof }), code('approval_notice_unsent_not_proven'))
+  assert.equal(f.command('approval.notice.unsent', { ...args, proof }).result.notice.status, 'prepared')
+  assert.deepEqual(queryEffects(f.db, { kind: 'approval.notice', requestId }).unsentProof, proof)
+  assert.equal(f.command('approval.notice.send', args).dispatchEligible, true)
+  assert.throws(() => f.command('approval.notice.unsent', { ...args, proof }), code('approval_notice_unsent_not_proven'))
+  f.command('approval.notice.receipt', { ...args, openTaskId: 'actual-send-receipt' })
+  assert.throws(() => f.command('approval.notice.unsent', { ...args, proof }), code('approval_notice_unsent_not_proven'))
+  assert.equal(queryEffects(f.db, { kind: 'approval.notice', requestId }).status, 'unknown')
+})
+
+test('私聊审批冻结真实请求和审批身份，只有持久发送意图首次允许外发', t => {
+  const f = fixture(); t.after(() => f.db.close())
+  f.command('effect.prepare', prepared('private-effect', request('private-request')))
+  assert.equal(queryEffects(f.db, { kind: 'approval.notice', requestId: 'private-request' }), null)
+  assert.throws(() => f.command('approval.notice.prepare', { ...noticeArgs, approverActorId: 'foreign' }), code('approval_notice_identity_conflict'))
+  assert.throws(() => f.command('approval.notice.prepare', { ...noticeArgs, effectId: 'foreign' }), code('approval_notice_identity_conflict'))
+  const notice = f.command('approval.notice.prepare', noticeArgs).result.notice
+  const args = { requestId: notice.requestId, noticeDigest: notice.digest }
+  assert.equal(notice.status, 'prepared')
+  assert.equal(f.command('approval.notice.prepare', noticeArgs).result.applied, false)
+  assert.throws(() => f.command('approval.notice.prepare', { ...noticeArgs, text: '替换方案' }), code('approval_notice_identity_conflict'))
+  const delivered = { ...args, conversationId: 'private-conversation', messageId: 'private-message' }
+  assert.throws(() => f.command('approval.notice.delivered', delivered), code('approval_notice_send_required'))
+  assert.equal(f.command('approval.notice.send', args).dispatchEligible, true)
+  assert.equal(f.command('approval.notice.send', args).dispatchEligible, false)
+  assert.equal(f.command('approval.notice.receipt', { ...args, openTaskId: 'open-task' }).result.notice.status, 'unknown')
+  assert.equal(f.command('approval.notice.receipt', { ...args, openTaskId: 'open-task' }).result.applied, false)
+  assert.throws(() => f.command('approval.notice.receipt', { ...args, openTaskId: 'different' }), code('approval_notice_delivery_conflict'))
+  assert.equal(f.command('approval.notice.delivered', delivered).result.notice.status, 'waiting-reply')
+  assert.equal(f.command('approval.notice.delivered', delivered).result.applied, false)
+  assert.throws(() => f.command('approval.notice.delivered', { ...delivered, messageId: 'different' }), code('approval_notice_delivery_conflict'))
+  assert.throws(() => f.command('approval.notice.recalled', delivered), code('approval_notice_recall_not_required'))
+  f.command('approval.decide', decide('private-request'))
+  assert.equal(queryEffects(f.db, { kind: 'approval.notice', requestId: 'private-request' }).status, 'recall-required')
+  assert.equal(f.command('approval.notice.recalled', delivered).result.notice.status, 'recalled')
+  assert.equal(f.command('approval.notice.recalled', delivered).result.applied, false)
+})
+
+test('Web决定与私聊发送竞争时保留真实回执并要求撤回，不重新发送', t => {
+  const f = fixture(); t.after(() => f.db.close())
+  f.command('effect.prepare', prepared('private-effect', request('private-request')))
+  const notice = f.command('approval.notice.prepare', noticeArgs).result.notice
+  const args = { requestId: notice.requestId, noticeDigest: notice.digest }
+  f.command('approval.notice.send', args)
+  f.command('approval.decide', decide('private-request', 'rejected'))
+  f.command('approval.notice.receipt', { ...args, openTaskId: 'open-task' })
+  const result = f.command('approval.notice.delivered', { ...args, conversationId: 'conversation', messageId: 'message' })
+  assert.equal(result.result.notice.status, 'recall-required')
+  assert.equal(result.result.notice.delivery.openTaskId, 'open-task')
+  assert.equal(f.command('approval.notice.send', args).dispatchEligible, false)
+  assert.equal(f.approvals('private-request').decision, 'rejected')
+})
+
+for (const lifecycle of ['pause','stop','generation']) test(`私聊通知生命周期围栏：${lifecycle}`, t => {
+  const f = fixture(); t.after(() => f.db.close())
+  f.command('effect.prepare', prepared('private-effect', request('private-request')))
+  const notice = f.command('approval.notice.prepare', noticeArgs).result.notice
+  const args = { requestId: notice.requestId, noticeDigest: notice.digest }
+  if (lifecycle === 'pause') { f.db.exec('ALTER TABLE execution_runs ADD COLUMN pause_requested INTEGER DEFAULT 0'); f.db.exec('UPDATE execution_runs SET pause_requested=1') }
+  else if (lifecycle === 'stop') f.db.exec('UPDATE execution_runs SET stop_requested=1')
+  else f.db.exec('UPDATE execution_runs SET generation=2')
+  assert.equal(f.command('approval.notice.send', args).dispatchEligible, false)
+  assert.equal(queryEffects(f.db, { kind: 'approval.notice', requestId: args.requestId }).status, 'prepared')
+  f.db.exec('UPDATE execution_runs SET generation=1,stop_requested=0')
+  if (lifecycle === 'pause') f.db.exec('UPDATE execution_runs SET pause_requested=0')
+  assert.equal(f.command('approval.notice.send', args).dispatchEligible, true)
+  f.db.exec('UPDATE execution_runs SET stop_requested=1')
+  f.command('approval.notice.receipt', { ...args, openTaskId: 'late-open-task' })
+  const delivered = { ...args, conversationId: 'conversation', messageId: 'message' }
+  assert.equal(f.command('approval.notice.delivered', delivered).result.notice.status, 'recall-required')
+  assert.equal(f.command('approval.notice.recalled', delivered).result.notice.status, 'recalled')
+})
+
+test('Task暂停保留已送私聊，取消要求撤回且保持真实回执', t => {
+  const f = fixture(); t.after(() => f.db.close())
+  f.db.exec(`ALTER TABLE execution_runs ADD COLUMN task_id TEXT;
+    UPDATE execution_runs SET task_id='task';
+    CREATE TABLE business_tasks(task_id TEXT PRIMARY KEY,status TEXT,plan_revision INTEGER);
+    INSERT INTO business_tasks VALUES('task','active',1);
+    CREATE TABLE task_controls(task_id TEXT PRIMARY KEY,state TEXT);
+    INSERT INTO task_controls VALUES('task','active');
+    CREATE TABLE task_plan_stages(task_id TEXT,plan_revision INTEGER,run_id TEXT,status TEXT);
+    INSERT INTO task_plan_stages VALUES('task',1,'run','running');`)
+  f.command('effect.prepare', prepared('private-effect', request('private-request')))
+  const notice = f.command('approval.notice.prepare', noticeArgs).result.notice
+  const args = { requestId: notice.requestId, noticeDigest: notice.digest }
+  f.db.exec("UPDATE task_controls SET state='paused'; UPDATE business_tasks SET status='paused'")
+  assert.equal(f.command('approval.notice.send', args).dispatchEligible, false)
+  f.db.exec("UPDATE task_controls SET state='active'; UPDATE business_tasks SET status='active'")
+  f.command('approval.notice.send', args)
+  const delivered = { ...args, conversationId: 'conversation', messageId: 'message' }
+  f.command('approval.notice.delivered', delivered)
+  f.db.exec("UPDATE task_controls SET state='paused'; UPDATE business_tasks SET status='paused'")
+  assert.equal(queryEffects(f.db, { kind: 'approval.notice', requestId: args.requestId }).status, 'waiting-reply')
+  f.db.exec("UPDATE task_controls SET state='cancelling'; UPDATE business_tasks SET status='cancelling'")
+  assert.equal(queryEffects(f.db, { kind: 'approval.notice', requestId: args.requestId }).status, 'recall-required')
+  assert.equal(f.command('approval.notice.recalled', delivered).result.notice.status, 'recalled')
+})
+
+test('正式worker私聊通知意图重启后保持unknown，同command回放与新command均不重派', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-execution-effects-'))
+  let store
+  t.after(async () => { await store?.close(); fs.rmSync(directory, { recursive: true, force: true }) })
+  const options = { dbPath: path.join(directory, 'control.sqlite'), instanceId: 'synthetic-notices' }
+  store = await openExecutionStore({ ...options, initialize: true })
+  const command = (id, kind, args) => store.command({ id, kind, args }).catch(error => { error.message = `${kind}: ${error.message}`; throw error })
+  const inputDigest = 'a'.repeat(64)
+  await command('create', 'run.create', { runId: 'run', taskId: 'task', workflowId: 'synthetic', workflowDigest: 'b'.repeat(64), requirementRef: 'synthetic/requirement.json', nodes: [{ nodeId: 'node', nodeVersion: '1', executor: 'code', inputRef: 'synthetic/input.json', inputDigest }] })
+  await command('claim', 'node.claim', { runId: 'run', nodeId: 'node', expectedGeneration: 1, expectedLeaseEpoch: 0 })
+  const effectArgs = prepared('private-effect', { ...request('private-request'), inputDigest })
+  delete effectArgs.authorizationRef
+  await command('effect', 'effect.prepare', effectArgs)
+  assert.equal(await store.query({ kind: 'approval.notice', requestId: 'private-request' }), null)
+  const notice = (await command('prepare', 'approval.notice.prepare', noticeArgs)).result.notice
+  const args = { requestId: notice.requestId, noticeDigest: notice.digest }
+  await command('maintenance-start', 'runtime.maintenance.change', { expectedRevision: 0, maintenanceId: 'test-maintenance', actorId: 'owner', reason: 'verify notice gate', active: true })
+  await assert.rejects(command('maintenance-send', 'approval.notice.send', args), code('RUNTIME_MAINTENANCE_ACTIVE'))
+  assert.equal((await store.query({ kind: 'approval.notice', requestId: args.requestId })).status, 'prepared')
+  await command('maintenance-end', 'runtime.maintenance.change', { expectedRevision: 1, maintenanceId: 'test-maintenance', actorId: 'owner', reason: 'verified', active: false })
+  assert.equal((await command('send', 'approval.notice.send', args)).dispatchEligible, true)
+  await command('receipt', 'approval.notice.receipt', { ...args, openTaskId: 'open-task' })
+  await store.close()
+  store = await openExecutionStore(options)
+  assert.equal((await store.query({ kind: 'approval.notice', requestId: 'private-request' })).delivery.openTaskId, 'open-task')
+  assert.equal((await command('send', 'approval.notice.send', args)).dispatchEligible, false)
+  assert.equal((await command('new-send', 'approval.notice.send', args)).dispatchEligible, false)
+  assert.equal((await command('delivered', 'approval.notice.delivered', { ...args, conversationId: 'conversation', messageId: 'message' })).result.notice.status, 'waiting-reply')
+})
 
 test('SQLite效果身份唯一、参数换序幂等、不同kind或payload不可复用ID', t => {
   const f = fixture(); t.after(() => f.db.close())

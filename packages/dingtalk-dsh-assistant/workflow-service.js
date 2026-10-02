@@ -961,10 +961,15 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   const readableTaskOrigin = origin => !!origin && (origin.channel === 'web'
     ? origin.run.actorId === config.webActorId && origin.run.reportChannel === 'web' && origin.run.externalMessaging === false
     : groups.has(origin.run.conversationId))
-  const approvals = createWorkflowApprovalService({ store, controller, authorizeTask: async ({ taskId, actorId, conversationId, channel }) => {
+  const approvals = createWorkflowApprovalService({ store, controller, authorizeTask: async ({ taskId, actorId, conversationId, channel, requestId, quoteMessageId }) => {
     const origin = await store.query({ kind: 'task.origin', taskId })
     if (!readableTaskOrigin(origin)) return false
     if (channel === 'web') return !!config.webActorId && actorId === config.webActorId
+    if (quoteMessageId) {
+      const notice = await store.query({ kind: 'approval.notice', requestId })
+      return notice?.delivery?.conversationId === conversationId && notice.delivery.messageId === quoteMessageId
+        && notice.approverActorId === actorId
+    }
     return conversationId === origin.run.conversationId
   } })
   async function isApprovalRequest(requestId) {
@@ -977,7 +982,14 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const prepared = item.effect.definition?.payload
     if (prepared?.workflowKind === 'production-release' && prepared.operation === 'approval-gate'
       || prepared?.workflowKind === 'data-change' && prepared.stage === 'approval-gate') {
-      if (identity?.channel !== 'web') throw executionError('WORKFLOW_APPROVAL_WEB_REQUIRED')
+      if (identity?.channel !== 'web' && !identity?.quoteMessageId) throw executionError('WORKFLOW_APPROVAL_PRIVATE_REPLY_REQUIRED')
+    }
+    if (identity?.channel === 'im' && identity.quoteMessageId) {
+      const notice = await store.query({ kind: 'approval.notice', requestId: input.requestId })
+      if (!notice?.delivery || item.approval.decision === 'pending' && notice.status !== 'waiting-reply'
+        || notice.effectId !== item.effect.effectId
+        || notice.delivery.conversationId !== identity.conversationId || notice.delivery.messageId !== identity.quoteMessageId
+        || notice.approverActorId !== identity.actorId) throw executionError('WORKFLOW_APPROVAL_FORBIDDEN')
     }
     const result = await approvals.decide(input, identity)
     const { applied: _applied, ...decision } = result
@@ -990,6 +1002,38 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           eventType: 'approval.resolved', payload: { requestId: input.requestId, decision } })
     }
     return result
+  }
+  async function prepareApprovalNotice({ requestId, recipientUserId, text }) {
+    const item = await approvals.get(requestId)
+    const origin = await store.query({ kind: 'task.origin', taskId: item.run.taskId })
+    if (!readableTaskOrigin(origin) || !config.approvalRecipientUserId || recipientUserId !== config.approvalRecipientUserId
+      || !item.approval.approverIds.includes(ownerActorId)) throw executionError('WORKFLOW_APPROVAL_FORBIDDEN')
+    const request = await getApprovalRequest(requestId)
+    if (!request || text !== request.text) throw executionError('WORKFLOW_APPROVAL_NOTICE_TEXT_INVALID')
+    const args = { requestId, effectId: item.effect.effectId, recipientUserId, approverActorId: ownerActorId, text }
+    const receipt = await store.command({ id: `approval-notice-prepare:${executionDigest(args)}`, kind: 'approval.notice.prepare', args })
+    return { ...receipt.result, dispatchEligible: receipt.dispatchEligible, notice: await store.query({ kind: 'approval.notice', requestId }) }
+  }
+  async function approvalNoticeCommand(operation, args) {
+    const item = await approvals.get(args.requestId)
+    const prior = operation === 'send' ? await store.query({ kind: 'approval.notice', requestId: args.requestId }) : null
+    const plan = operation === 'send' ? await controller.taskPlan(item.run.taskId) : null
+    const commandIdentity = operation === 'send'
+      ? [args, prior?.unsentProof ?? null, plan?.task.controlRevision ?? null, item.run.revision] : args
+    const receipt = await store.command({ id: `approval-notice-${operation}:${executionDigest(commandIdentity)}`, kind: `approval.notice.${operation}`, args })
+    return { ...receipt.result, dispatchEligible: receipt.dispatchEligible, notice: await store.query({ kind: 'approval.notice', requestId: args.requestId }) }
+  }
+  async function reissueApprovalNotice(input, identity) {
+    if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId) throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')
+    if (Object.keys(input).some(key => !['requestId','noticeDigest','proof'].includes(key))) throw executionError('WORKFLOW_APPROVAL_NOTICE_RECOVERY_INVALID')
+    const maintenance = await store.query({ kind: 'runtime.maintenance' })
+    if (!maintenance.active || !maintenance.drained) throw executionError('WORKFLOW_APPROVAL_NOTICE_MAINTENANCE_REQUIRED')
+    const request = await getApprovalRequest(input.requestId)
+    if (!request || request.decision !== 'pending') throw executionError('WORKFLOW_APPROVAL_FORBIDDEN')
+    return approvalNoticeCommand('unsent', input)
+  }
+  async function getApprovalRequest(requestId) {
+    return (await listApprovalRequests()).find(item => item.requestId === requestId) ?? null
   }
   async function listApprovalRequests() {
     const approvals = await store.query({ kind: 'approval.list', limit: 200 })
@@ -1008,7 +1052,9 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const goal = await artifacts.read(plan.task.requirementRef)
       const target = uatBuild ? (await artifacts.read(state.run.requirementRef)).target : null
       const uatAction = uatBuild ? `${prepared.operation === 'rebuild' ? '重新构建' : '构建提测'} UAT 目标 ${target.runbookId}（${target.repository} / ${target.service}），提交 ${prepared.expected.commitSha}` : null
-      return { requestId: approval.requestId, taskId: state.run.taskId, groupId: origin.run.conversationId,
+      const notification = await store.query({ kind: 'approval.notice', requestId: approval.requestId })
+      return { kind: 'workflow-approval', requestId: approval.requestId, taskId: state.run.taskId, groupId: origin.run.conversationId,
+        approverIds: approval.approverIds, notification,
         objective: goal.objective ?? origin.command.args.arguments?.objective ?? (uatBuild ? 'UAT 提测' : productionRelease ? '生产发布' : '数据变更'),
         requestedAction: uatBuild ? `审批 ${uatAction}` : productionRelease
           ? `审批生产发布 ${prepared.resourceKey}，提交 ${prepared.expected.commitSha}，标签 ${prepared.expected.tag}`
@@ -1019,11 +1065,16 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           ? [prepared.resourceKey, prepared.expected.commitSha, prepared.expected.tag]
           : [prepared.resourceKey, prepared.intent.issueId, prepared.target.database, prepared.intent.applySql ?? prepared.intent.sheetSha256,
             prepared.intent.sheetSha256, prepared.intent.packageDigest], attemptedActions: [],
-        createdAt: approval.createdAt, status: approval.decision === 'pending' ? 'waiting-reply' : 'answered',
+        createdAt: approval.createdAt, status: approval.decision === 'pending'
+          ? notification?.delivery?.messageId ? 'waiting-reply' : notification?.status === 'unknown' ? 'sending-unknown' : 'pending-send'
+          : 'answered',
         decision: approval.decision, decidedAt: approval.updatedAt, decisionSource: approval.decisionSource, reply: approval.comment ?? '',
         taskState: state.run.status }
     }))
-    return rows.filter(Boolean)
+    return rows.filter(Boolean).map(request => ({ ...request, text: [
+      '插件人工审批', request.objective, request.requestedAction, ...request.evidence,
+      '请引用本消息回复“批准”或“拒绝：原因”。', `审批请求 ID：${request.requestId}`
+    ].join('\n') }))
   }
   async function currentTask(taskId, selector) {
     const runs = await store.query({ kind: 'run.list', taskId, limit: 200 })
@@ -3375,7 +3426,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     })), nextCursor: runs.length > limit ? selected.at(-1).sequenceId : null, total: null }
   }
   return {
-    ingest, resumeRequest, handoffDataChangeApproval, reassessReadonly, repairStageAuthorizations, retryInvestigation, retryOwner, retryReadonlyAnswer, retryMaterialRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, submitWebTask, mailboxes, topics, topicContext,
+    ingest, resumeRequest, handoffDataChangeApproval, reassessReadonly, repairStageAuthorizations, retryInvestigation, retryOwner, retryReadonlyAnswer, retryMaterialRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, getApprovalRequest, prepareApprovalNotice, approvalNoticeCommand, reissueApprovalNotice,
+    getApprovalNotice: requestId => store.query({ kind: 'approval.notice', requestId }), submitWebTask, mailboxes, topics, topicContext,
     maintenance: () => store.query({ kind: 'runtime.maintenance' }),
     completedObservations: taskId => store.query({ kind: 'task.owner.completed-observations', taskId }),
     async reconcileCompletedObservations(request, identity) {

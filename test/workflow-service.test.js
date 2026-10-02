@@ -1,3 +1,4 @@
+import { startDwsBridge } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises'
@@ -3519,7 +3520,7 @@ for (const [firstDecision, workflowKind] of [['approved', 'uat-deployment'], ['r
   assert.equal((await execution.controller.state(runId)).run.requirementRef, frozenRun.run.requirementRef)
   assert.deepEqual(await execution.store.query({ kind: 'effect.get', effectId: frozenEffect.effectId }), frozenEffect)
   assert.match(visible[0].requestedAction, /HiQ-AI\/dataset/); assert.ok(visible[0].evidence.includes(commitSha))
-  assert.equal(visible[0].status, 'waiting-reply'); assert.equal(sends, 0)
+  assert.equal(visible[0].status, 'pending-send'); assert.equal(sends, 0)
   await assert.rejects(service.decideApproval({ requestId, decision: 'approved', eventId: 'bad-web' }, { channel: 'web', actorId: 'outsider' }), /WORKFLOW_WEB_ACTOR_FORBIDDEN/)
   await assert.rejects(service.decideApproval({ requestId, decision: 'approved', eventId: 'bad-im' }, { channel: 'im', actorId: 'outsider', conversationId: 'web:owner' }), /WORKFLOW_APPROVAL_FORBIDDEN/)
   assert.equal((await execution.store.query({ kind: 'approval.get', requestId })).decision, 'pending')
@@ -5223,4 +5224,139 @@ for (const ending of ['complete', 'cancelled']) test(`真正业务 ${ending} 后
   await assert.rejects(service.submitWebTask({ action: 'context', taskId: task.taskId, requestId: 'context-after-terminal',
     inputVersion: current.task.requirementRevision + 1, runSequence: 1, context: '追加要求', topicRefs: [] }, { channel: 'web', actorId: 'owner' }), /RUN_TERMINAL/)
   assert.equal((await execution.controller.taskPlan(task.taskId)).task.requirementRevision, current.task.requirementRevision)
+})
+
+
+for (const [firstDecision, workflowKind] of [['approved', 'uat-deployment'], ['rejected', 'uat-deployment'], ['approved', 'uat-rebuild'], ['approved', 'data-change'], ['rejected', 'data-change']]) test(`原生私聊审批实际服务完整请求ID ${workflowKind}/${firstDecision}：可见、授权、首终态与Owner事件幂等`, async t => {
+  const requestId = `external:${'a'.repeat(64)}`, commitSha = 'b'.repeat(40)
+  let sends = 0
+  const { service, execution, message } = await fixture(t, 'owner', undefined, {
+    config: { webActorId: 'owner', approvalRecipientUserId: 'human-user' },
+    deliveryOptions: { authorize: async () => false,
+      authorizeExternal: async () => ({ principalId: 'owner', approval: { requestId, approverIds: ['owner'] } }),
+      externalAdapter: { execute: async () => { sends++; return { status: 'succeeded' } }, reconcile: async () => ({ status: 'unknown' }) } },
+  })
+  const received = await service.ingest(message); await service.messages.process(received.runId)
+  const original = (await service.state(received.runId)).commands[0].result
+  await execution.controller.whenIdle(original.runId)
+  await service.recoverExecutionTasks()
+  const taskId = 'web-approval-fixture', target = { repository: 'HiQ-AI/dataset', environment: 'uat', service: 'dataset', commitSha, runbookId: 'dataset-uat3-deployment' }
+  const requirement = await execution.artifacts.put({ request: '验证UAT3提测', target })
+  await execution.store.command({ id: 'approval-web-origin', kind: 'task.web-rerun.accept', args: {
+    taskId, rerunOfTaskId: original.taskId, actorId: 'owner', request: { expectedRunId: original.runId, objective: '验证UAT3提测', uatEnvironment: 'uat3' },
+    requirementRef: requirement.ref, criteria: ['验证提测'], sourceKey: 'web-rerun:approval-fixture' } })
+  execution.controller.registerWorkflow({ id: 'approval-fixture', version: '1', nodes: [{
+    id: 'execute-build', version: '1', executor: 'code', allowedEffects: ['external.operation'], inputSchema: schema, outputSchema: schema,
+    mapInput: ({ requirement }) => requirement,
+    execute: async ({ runId, generation, requirementDigest, perform }) => perform({ action: 'external', prepared: {
+      action: 'external', workflowKind, operation: workflowKind === 'uat-rebuild' ? 'rebuild' : 'build', runId, generation, requirementDigest,
+      resourceKey: 'external:uat:HiQ-AI/dataset:dataset', expected: { commitSha },
+      ...(workflowKind === 'data-change' ? { stage: 'approval-gate', target: { database: 'production-editor' },
+        intent: { approvalSource: 'assistant', issueId: 'projects/flbn/issues/857', applySql: 'ALTER TABLE public.process_id_temp ADD COLUMN name character varying;', sheetSha256: 'c'.repeat(64), packageDigest: 'd'.repeat(64) } } : {}) } }),
+  }] })
+  await execution.controller.initializeTaskPlan({ commandId: 'approval-plan', taskId, expectedPlanRevision: 0, expectedRequirementRevision: 1,
+    stages: [{ stageId: 'uat', workflowId: 'approval-fixture', input: { request: '验证UAT3提测', target } }] })
+  const started = await execution.controller.advanceTaskPlan(taskId), runId = started.stages[0].runId
+  await execution.controller.whenIdle(runId)
+  const frozenRun = await execution.controller.state(runId)
+  const [frozenEffect] = await execution.store.query({ kind: 'effect.list', runId })
+  const currentObjective = '按当前明确要求验证 UAT3 提测结果'
+  const revisedGoal = await execution.artifacts.put({ request: currentObjective, objective: currentObjective, target, acceptanceCriteria: ['验证提测结果'] }, { taskId })
+  await execution.store.command({ id: 'approval-current-goal', kind: 'task.requirement.update', args: {
+    taskId, expectedRequirementRevision: 1, requirementRef: revisedGoal.ref, eventKey: 'approval-current-goal' } })
+  const visible = await service.listApprovalRequests()
+  assert.equal(visible.length, 1); assert.equal(visible[0].requestId, requestId)
+  assert.equal(visible[0].objective, currentObjective); assert.match(visible[0].requestedAction, workflowKind === 'data-change' ? /projects\/flbn\/issues\/857/ : /UAT 目标 dataset-uat3-deployment/)
+  assert.equal((await execution.controller.taskPlan(taskId)).task.requirementRevision, 2)
+  assert.equal((await execution.controller.state(runId)).run.requirementRef, frozenRun.run.requirementRef)
+  assert.deepEqual(await execution.store.query({ kind: 'effect.get', effectId: frozenEffect.effectId }), frozenEffect)
+  if (workflowKind !== 'data-change') { assert.match(visible[0].requestedAction, /HiQ-AI\/dataset/); assert.ok(visible[0].evidence.includes(commitSha)) }
+  else assert.match(visible[0].text, /ALTER TABLE public\.process_id_temp ADD COLUMN name character varying;/)
+  assert.equal(visible[0].status, 'pending-send'); assert.equal(sends, 0)
+  await assert.rejects(service.decideApproval({ requestId, decision: 'approved', eventId: 'bad-web' }, { channel: 'web', actorId: 'outsider' }), /WORKFLOW_WEB_ACTOR_FORBIDDEN/)
+  await assert.rejects(service.decideApproval({ requestId, decision: 'approved', eventId: 'bad-im' }, { channel: 'im', actorId: 'outsider', conversationId: 'web:owner' }), /WORKFLOW_APPROVAL_FORBIDDEN|WORKFLOW_APPROVAL_PRIVATE_REPLY_REQUIRED/)
+  assert.equal((await execution.store.query({ kind: 'approval.get', requestId })).decision, 'pending')
+  await assert.rejects(execution.store.command({ id: 'old-approval-event', kind: 'task.owner.event', args: {
+    taskId, eventKey: `approval:${requestId}:${'c'.repeat(64)}`, eventType: 'approval.resolved' } }), /TASK_OWNER_ID_INVALID/)
+  await assert.rejects(service.prepareApprovalNotice({ requestId, recipientUserId: 'outsider', text: visible[0].text }), /WORKFLOW_APPROVAL_FORBIDDEN/)
+  await assert.rejects(service.prepareApprovalNotice({ requestId, recipientUserId: 'human-user', text: '篡改审核内容' }), /WORKFLOW_APPROVAL_NOTICE_TEXT_INVALID/)
+  if (workflowKind === 'data-change') {
+    const notice = (await service.prepareApprovalNotice({ requestId, recipientUserId: 'human-user', text: visible[0].text })).notice
+    const noticeDigest = notice.digest
+    assert.equal((await service.approvalNoticeCommand('send', { requestId, noticeDigest })).dispatchEligible, true)
+    const idempotencyKey = `workflow-approval:${requestId}:${noticeDigest}`
+    const recovery = { requestId, noticeDigest, proof: { kind: 'dws-uuid-rejected', idempotencyKey, serverErrorCode: '1001',
+      errorMessage: `sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is ${idempotencyKey.length}.`, traceId: 'syntheticrejectiontrace1234' } }
+    await assert.rejects(service.reissueApprovalNotice(recovery, { channel: 'web', actorId: 'other' }), /WORKFLOW_WEB_ACTOR_FORBIDDEN/)
+    await assert.rejects(service.reissueApprovalNotice(recovery, { channel: 'web', actorId: 'owner' }), /WORKFLOW_APPROVAL_NOTICE_MAINTENANCE_REQUIRED/)
+    await execution.store.command({ id: 'notice-repair-maintenance', kind: 'runtime.maintenance.change', args: { expectedRevision: 0, maintenanceId: 'notice-repair', actorId: 'owner', reason: '验证明确未发送收据', active: true } })
+    assert.equal((await service.reissueApprovalNotice(recovery, { channel: 'web', actorId: 'owner' })).notice.status, 'prepared')
+    assert.equal((await service.reissueApprovalNotice(recovery, { channel: 'web', actorId: 'owner' })).dispatchEligible, false)
+    await execution.store.command({ id: 'notice-repair-resume', kind: 'runtime.maintenance.change', args: { expectedRevision: 1, maintenanceId: 'notice-repair', actorId: 'owner', reason: '验证完成', active: false } })
+  }
+  if (workflowKind === 'uat-rebuild') {
+    const notice = (await service.prepareApprovalNotice({ requestId, recipientUserId: 'human-user', text: visible[0].text })).notice
+    await execution.controller.pause({ commandId: 'pause-notice', runId, reason: '验证暂停发送' })
+    await execution.controller.whenIdle(runId)
+    assert.equal((await service.approvalNoticeCommand('send', { requestId, noticeDigest: notice.digest })).dispatchEligible, false)
+    assert.equal((await service.getApprovalNotice(requestId)).status, 'prepared')
+    await execution.controller.resume({ commandId: 'resume-notice', runId })
+    await execution.controller.whenIdle(runId)
+  }
+  let privateEvent, privateSends = 0
+  const bridgeWarnings = []
+  const bridgeRuntime = {
+    listGroups: () => [], listTasks: () => [], onGroupSubscribed: () => () => {}, onOutboxAppended: () => () => {},
+    listAuthorizationRequests: () => service.listApprovalRequests(),
+    getWorkflowApprovalRequest: id => service.getApprovalRequest(id), getWorkflowApprovalNotice: id => service.getApprovalNotice(id),
+    prepareWorkflowApprovalNotice: args => service.prepareApprovalNotice(args),
+    beginWorkflowApprovalNotice: args => service.approvalNoticeCommand('send', args),
+    recordWorkflowApprovalNoticeReceipt: args => service.approvalNoticeCommand('receipt', args),
+    recordWorkflowApprovalNoticeDelivery: args => service.approvalNoticeCommand('delivered', args),
+    recordWorkflowApprovalNoticeRecall: args => service.approvalNoticeCommand('recalled', args),
+    decideWorkflowApprovalReply: ({ actorId, conversationId, quoteMessageId, ...input }) => service.decideApproval(input, { channel: 'im', actorId, conversationId, quoteMessageId }),
+  }
+  const stopBridge = startDwsBridge({ runtime: bridgeRuntime, humanUserId: 'human-user', humanPollIntervalMs: 0,
+    groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, logger: { warn: value => bridgeWarnings.push(value) }, adapter: {
+      startHumanReplySubscription(handler) { privateEvent = handler; return { stop() {}, done: Promise.resolve() } },
+      async sendSelfIntent({ userId, text }) { privateSends++; assert.equal(userId, 'human-user'); assert.equal(text, visible[0].text); return { openTaskId: 'send-task' } },
+      async confirmSelfDelivery() { const notice = await service.getApprovalNotice(requestId); assert.equal(notice.delivery.openTaskId, 'send-task'); return { openTaskId: 'send-task', conversationId: 'private-human', messageId: 'approval-message' } },
+      async readConversation() { return [] },
+    } })
+  t.after(stopBridge)
+  for (let attempt = 0; attempt < 100 && (await service.listApprovalRequests())[0].status !== 'waiting-reply'; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal((await service.listApprovalRequests())[0].status, 'waiting-reply')
+  assert.equal(privateSends, 1); assert.deepEqual(bridgeWarnings, [])
+  assert.equal((await service.getApprovalNotice(requestId)).approverActorId, 'owner')
+  const privateIdentity = { channel: 'im', actorId: 'owner', conversationId: 'private-human', quoteMessageId: 'approval-message' }
+  for (const invalid of [{ ...privateIdentity, actorId: 'outsider' }, { ...privateIdentity, conversationId: 'g' }, { ...privateIdentity, quoteMessageId: 'other-message' }])
+    await assert.rejects(service.decideApproval({ requestId, decision: 'approved', eventId: 'invalid-private' }, invalid), /WORKFLOW_APPROVAL_FORBIDDEN/)
+  assert.equal((await execution.store.query({ kind: 'approval.get', requestId })).decision, 'pending')
+  await privateEvent({ conversation_id: 'private-human', message_id: 'ordinary', sender_open_dingtalk_id: 'owner', content: '看到了', quotedMessage: { messageId: 'approval-message' } })
+  assert.equal((await execution.store.query({ kind: 'approval.get', requestId })).decision, 'pending')
+  const privateComment = firstDecision === 'rejected' ? '拒绝：请修改目标' : '批准'
+  await privateEvent({ conversation_id: 'private-human', message_id: 'first', sender_open_dingtalk_id: 'owner', content: privateComment, quotedMessage: { messageId: 'approval-message' } })
+  assert.equal((await execution.store.query({ kind: 'approval.get', requestId })).decision, firstDecision)
+  const first = await service.decideApproval({ requestId, decision: firstDecision, eventId: 'first', comment: privateComment }, privateIdentity)
+  assert.equal(first.decision, firstDecision); assert.equal(first.applied, true)
+  await execution.controller.whenIdle(runId)
+  const exactReplay = await service.decideApproval({ requestId, decision: firstDecision, eventId: 'first', comment: privateComment }, privateIdentity)
+  assert.deepEqual(exactReplay, first)
+  const repeated = await service.decideApproval({ requestId, decision: firstDecision, eventId: 'repeat' }, { channel: 'web', actorId: 'owner' })
+  const opposite = await service.decideApproval({ requestId, decision: firstDecision === 'approved' ? 'rejected' : 'approved', eventId: 'opposite' }, privateIdentity)
+  assert.equal(repeated.applied, false); assert.equal(opposite.decision, firstDecision); assert.equal(opposite.applied, false)
+  assert.equal(sends, firstDecision === 'approved' ? 1 : 0)
+  const db = new DatabaseSync(join(execution.artifacts.root, '..', 'control.db'), { readOnly: true })
+  try {
+    const events = db.prepare("SELECT event_key FROM task_events WHERE task_id=? AND event_type='approval.resolved'").all(taskId)
+    assert.equal(events.length, 1); assert.ok(events[0].event_key.length <= 128)
+  } finally { db.close() }
+  assert.equal((await service.listApprovalRequests())[0].status, 'answered')
+  // 相同真实控制账用另一 Web 身份读取：不可见，也不能批准。
+  const hidden = await openWorkflowService({ ctx: {}, execution, judge: async () => { throw Error('UNEXPECTED_JUDGE') }, config: { groupIds: ['g'], ownerActorId: 'owner', webActorId: 'other' },
+    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test' }) } })
+  try {
+    assert.deepEqual(await hidden.listApprovalRequests(), [])
+    await assert.rejects(hidden.decideApproval({ requestId, decision: 'approved', eventId: 'hidden' }, { channel: 'web', actorId: 'other' }), /WORKFLOW_APPROVAL_FORBIDDEN/)
+  } finally { await hidden.close() }
 })

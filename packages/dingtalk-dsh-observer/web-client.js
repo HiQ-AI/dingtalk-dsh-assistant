@@ -958,12 +958,13 @@ window.__ModuleLoader__.load({
       const tasksPage = workflowDetailPending || workflowDetail || React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns)
       const authorizationStatus = {
         'pending-send': { label: '待发送', state: 'warning' },
+        'sending-unknown': { label: '投递待确认', state: 'warning' },
         'waiting-reply': { label: '等待处理', state: 'warning' },
         answered: { label: '已处理', state: 'done' },
         superseded: { label: '已失效', state: 'neutral' },
       }
       const authorizationDecision = { approved: { label: '已继续', state: 'done' }, rejected: { label: '不执行', state: 'error' } }
-      const isPendingAuthorization = (item) => item.status === 'pending-send' || item.status === 'waiting-reply'
+      const isPendingAuthorization = (item) => item.status === 'pending-send' || item.status === 'sending-unknown' || item.status === 'waiting-reply'
       const authorizationPresentation = (item) => item.status === 'answered'
         ? authorizationDecision[item.decision] || authorizationStatus.answered
         : authorizationStatus[item.status] || { label: '状态异常', state: 'error' }

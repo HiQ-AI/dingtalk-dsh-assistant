@@ -193,7 +193,7 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /approved: \{ label: '已继续'/)
   assert.match(source, /rejected: \{ label: '不执行'/)
   assert.match(source, /superseded: \{ label: '已失效', state: 'neutral' \}/)
-  assert.match(source, /const isPendingAuthorization = \(item\) => item\.status === 'pending-send' \|\| item\.status === 'waiting-reply'/)
+  assert.match(source, /const isPendingAuthorization = \(item\) => item\.status === 'pending-send' \|\| item\.status === 'sending-unknown' \|\| item\.status === 'waiting-reply'/)
   assert.match(source, /authorizationStatus\[item\.status\] \|\| \{ label: '状态异常', state: 'error' \}/)
   assert.match(source, /authorizationFilter === 'superseded' \? item\.status === 'superseded'/)
   assert.match(source, /selectedAuthorizationPending \? React\.createElement\('footer'/)
@@ -444,6 +444,47 @@ function flattenElements(tree) {
   if (!tree || typeof tree !== 'object') return []
   return [tree, ...(tree.children || []).flatMap(flattenElements)]
 }
+
+test('私聊投递待确认仍出现在待处理列表并可从详情批准或拒绝', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const fragment = source.slice(source.indexOf('      const authorizationStatus ='), source.indexOf('      const archivedTasks ='))
+  for (const [status, decision, label, pending] of [
+    ['pending-send', 'pending', '待发送', true],
+    ['sending-unknown', 'pending', '投递待确认', true],
+    ['waiting-reply', 'pending', '等待处理', true],
+    ['answered', 'approved', '已继续', false],
+    ['answered', 'rejected', '不执行', false],
+    ['superseded', 'pending', '已失效', false],
+  ]) {
+    const requests = []
+    const createElement = (type, props, ...children) => ({ type, props: props || {}, children: children.flat() })
+    const result = runInNewContext(`${fragment}; ({ rows: authorizationRows, detail: authorizationDetail })`, {
+      React: { createElement, Fragment: 'fragment' }, Button: 'button', SelectMenu: 'select',
+      colors: {}, tableFrame: {}, toolbar: {}, tableFooter: {},
+      statusTag: label => createElement('tag', null, label), tableStatusTag: label => createElement('tag', null, label), fmt: value => value || '',
+      data: { authorizations: [{ requestId: 'approval-857', status, decision, objective: '添加 name 列', requestedAction: '批准 DDL', groupId: 'group' }] },
+      authorizationFilter: 'pending', authorizationPage: 1, selectedAuthorizationId: 'approval-857',
+      groupsById: new Map(), authorizationComments: { 'approval-857': '已核对 SQL' }, decidingAuthorizationId: '',
+      setNavigationError() {}, setDecidingAuthorizationId() {}, refresh: async () => {},
+      post: async (path, body) => requests.push({ path, body }),
+    })
+    assert.equal(result.rows.length, pending ? 1 : 0, status)
+    const detail = flattenElements(result.detail)
+    assert.ok(detail.some(element => element.type === 'tag' && element.children.includes(label)), status)
+    const approve = detail.find(element => element.type === 'button' && element.children.includes('批准该事项并继续'))
+    const reject = detail.find(element => element.type === 'button' && element.children.includes('不执行'))
+    assert.equal(Boolean(approve), pending, status)
+    assert.equal(Boolean(reject), pending, status)
+    if (pending) {
+      await approve.props.onClick()
+      await reject.props.onClick()
+      assert.deepEqual(JSON.parse(JSON.stringify(requests)), [
+        { path: '/authorizations/approval-857/decision', body: { decision: 'approved', comment: '已核对 SQL' } },
+        { path: '/authorizations/approval-857/decision', body: { decision: 'rejected', comment: '已核对 SQL' } },
+      ])
+    }
+  }
+})
 const settle = () => new Promise(resolve => setImmediate(resolve))
 
 test('任务详情只展示当前步骤，支持旧详情别名并保持稳定步骤身份', async () => {

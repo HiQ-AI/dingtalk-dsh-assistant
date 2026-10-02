@@ -64,3 +64,7 @@ task-detail-latest-run-performance,12,PASS,round-12.md
 board-latest-run-performance,12,PASS,round-12.md
 plugin-approval-live-wait,12,PASS,round-12.md
 incorrect-native-approval-notice-recall,12,PASS,round-12.md
+private-approval-real-delivery,13,FAIL,round-13.md
+private-approval-real-delivery,14,PASS,round-14.md
+private-approval-native-lifecycle-and-replies,14,PASS,round-14.md
+local-deployment-without-history-backup,14,PASS,round-14.md

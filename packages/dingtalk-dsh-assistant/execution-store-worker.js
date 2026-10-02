@@ -1079,6 +1079,7 @@ function query(value) {
   const messageResult = queryMessages(db, value)
   if (messageResult !== undefined) return messageResult
   const result = queryEffects(db, value)
+  if (value?.kind === 'approval.notice') return result
   if (result !== null && ['approval.get', 'approval.list'].includes(value?.kind)) {
     const approvals = Array.isArray(result) ? result : [result]
     const comments = new Map()

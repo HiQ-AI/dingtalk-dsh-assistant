@@ -37,6 +37,11 @@ function comparableMessageText(value) {
   return String(value ?? '').replace(/[\p{P}\p{S}\s]/gu, '')
 }
 
+// DWS显示Markdown软换行时会替换为单空格；保留其他空格、标点与SQL字符。
+export function normalizeApprovalNoticeText(value) {
+  return typeof value === 'string' ? value.replace(/\r?\n/gu, ' ') : value
+}
+
 export function matchesOutbound(message, outbound) {
   const actual = comparableMessageText(message.text), expected = comparableMessageText(outbound.text)
   const quotedId = message.quotedMessage?.messageId ?? message.quotedMessage?.message_id
@@ -85,6 +90,8 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       return withProfile(args)
     },
     compileSelfSend({ userId, text, idempotencyKey }) {
+      assertStableId(idempotencyKey, 'idempotency_key')
+      if (idempotencyKey.length > 128) throw new Error('dws_self_send_uuid_too_long')
       const args = ['chat', '+messages-send', '--as', 'user', '--user', assertStableId(userId, 'human_user_id'), '--text', assertStableId(text, 'text'), '--idempotency-key', assertStableId(idempotencyKey, 'idempotency_key'), '--format', 'json']
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
@@ -196,13 +203,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       return parseJson(result.stdout, 'reply')
     },
     async sendSelf(request) {
-      requireEnabled()
-      if (!writesAuthorized) throw new Error('dws_write_not_authorized')
-      const sent = await runner.run(this.compileSelfSend(request))
-      if (sent.exitCode !== 0) throw new Error(`dws_self_send_failed:${sent.exitCode}`)
-      const receipt = parseJson(sent.stdout, 'self-send')
-      const openTaskId = receipt.sendReceipt?.openTaskId ?? receipt.result?.result?.openTaskId
-      if (typeof openTaskId !== 'string' || openTaskId === '') throw new Error('dws_self_send_task_id_missing')
+      const { openTaskId } = await this.sendSelfIntent(request)
       for (let attempt = 0; attempt < 10; attempt += 1) {
         if (attempt > 0) await delay(500)
         const statusResult = await runner.run(this.compileSendStatus(openTaskId))
@@ -213,6 +214,55 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
         if (status.result?.sendStatus === 'SUCCESS' && typeof conversationId === 'string' && typeof messageId === 'string') return { openTaskId, conversationId, messageId }
       }
       throw new Error('dws_self_send_not_confirmed')
+    },
+    async sendSelfIntent(request) {
+      requireEnabled()
+      if (!writesAuthorized) throw new Error('dws_write_not_authorized')
+      const sent = await runner.run(this.compileSelfSend(request))
+      if (sent.exitCode !== 0) {
+        const error = commandError('dws_self_send_failed', sent)
+        let payload, details
+        try { payload = JSON.parse(sent.stderr); details = payload?.error } catch {}
+        const errorMessage = details?.errorMsg ?? details?.error_message ?? details?.message
+        const match = /^sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is (\d+)\.$/u.exec(errorMessage ?? '')
+        const traceId = details?.trace_id ?? details?.traceId ?? payload?.trace_id ?? payload?.traceId
+        // 仅平台明确的uuid前置拒绝可证明未发送；网络错误及未知回执仍保持unknown。
+        if (String(error.serverErrorCode) === '1001' && match && Number(match[1]) === request.idempotencyKey.length && request.idempotencyKey.length > 128 && typeof traceId === 'string' && traceId.trim()) {
+          error.knownNotSent = true
+          error.proof = { kind: 'dws-uuid-rejected', idempotencyKey: request.idempotencyKey, serverErrorCode: '1001', errorMessage,
+            traceId }
+        }
+        throw error
+      }
+      const receipt = parseJson(sent.stdout, 'self-send')
+      const openTaskId = receipt.sendReceipt?.openTaskId ?? receipt.result?.result?.openTaskId
+      if (typeof openTaskId !== 'string' || openTaskId === '') throw new Error('dws_self_send_task_id_missing')
+      return { openTaskId }
+    },
+    async confirmSelfDelivery({ openTaskId, recipientUserId, text }) {
+      const status = await this.querySendStatus(openTaskId)
+      if (status.result?.sendStatus !== 'SUCCESS') return undefined
+      const conversationId = status.messageRef?.openConversationId ?? status.result?.openConversationId
+      const messageId = status.messageRef?.openMessageId ?? status.result?.openMessageId
+      if (!conversationId || !messageId) throw new Error('dws_self_delivery_identity_missing')
+      const message = await this.readMessage(conversationId, messageId)
+      if (normalizeApprovalNoticeText(message.text) !== normalizeApprovalNoticeText(text)
+        || message.recipientUserId !== undefined && message.recipientUserId !== recipientUserId) throw new Error('dws_self_delivery_content_mismatch')
+      return { openTaskId, conversationId, messageId, ...(message.createTime ? { sentAt: message.createTime } : {}) }
+    },
+    async findWorkflowApprovalNotice({ requestId, recipientUserId, text, conversationId }) {
+      requireEnabled()
+      const result = await runner.run(this.compileMessageSearch(requestId))
+      if (result.exitCode !== 0) throw commandError('dws_workflow_approval_search_failed', result)
+      const value = parseJson(result.stdout, 'workflow-approval-search')
+      if (!Array.isArray(value.messages) || value.complete !== true || value.hasMore === true || (value.failedCount ?? 0) !== 0) throw new Error('dws_workflow_approval_search_partial')
+      const matches = value.messages.filter(message => normalizeApprovalNoticeText(message.text) === normalizeApprovalNoticeText(text) && message.messageId && message.conversationId
+        && (conversationId ? message.conversationId === conversationId : message.recipientUserId === recipientUserId))
+      if (matches.length > 1) throw new Error('dws_workflow_approval_search_ambiguous')
+      if (!matches.length) return undefined
+      const message = await this.readMessage(matches[0].conversationId, matches[0].messageId)
+      if (normalizeApprovalNoticeText(message.text) !== normalizeApprovalNoticeText(text) || (!conversationId && message.recipientUserId !== recipientUserId)) throw new Error('dws_self_delivery_content_mismatch')
+      return { conversationId: message.conversationId, messageId: message.messageId, ...(message.createTime ? { sentAt: message.createTime } : {}) }
     },
     async readConversation(conversationId, range) {
       requireEnabled()

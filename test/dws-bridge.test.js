@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EventEmitter } from 'node:events'
 import { readFile } from 'node:fs/promises'
-import { normalizeHistoryMessage, parseRedlineDecision, startDwsBridge } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
+import { normalizeHistoryMessage, parseRedlineDecision, parseWorkflowApprovalDecision, startDwsBridge } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
 
 test('新消息工作流接收不等待图片连接器，保留资源交材料节点', async () => {
   let onEvent, received, downloads = 0
@@ -950,6 +950,114 @@ test('已补记错误恢复时间的阻塞单会改用原申请时间回读批�
   assert.equal(deliveries[0].sentAt, '2026-08-25 15:25:22')
   assert.equal(resolutions[0].decision, 'approved')
   assert.equal(task.state, 'running')
+})
+
+test('原生插件审批只接受明确批准或拒绝，普通文字保持未决', () => {
+  for (const text of ['批准', '同意', '批准。', '同意！']) assert.equal(parseWorkflowApprovalDecision(text), 'approved')
+  for (const text of ['拒绝：风险过高', '不同意', '不批准']) assert.equal(parseWorkflowApprovalDecision(text), 'rejected')
+  for (const text of ['好的', '按限定范围执行', '已看', '', '同意不同意再讨论', '同意：限定范围', '同意，但是不要执行', '批准，先别动生产', '批准？']) assert.equal(parseWorkflowApprovalDecision(text), undefined)
+})
+
+function nativeApprovalFixture() {
+  const state = { notice: undefined, sends: 0, calls: [], warnings: [], replies: [], answered: false, confirm: true }
+  const runtime = {
+    listGroups: () => [], listTasks: () => [],
+    onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
+    async listAuthorizationRequests() { return [{ kind: 'workflow-approval', requestId: 'approval-native', taskId: 'task-native', status: state.answered ? 'answered' : 'pending-send', text: '冻结审批内容', notification: state.notice }] },
+    async getWorkflowApprovalNotice() { return structuredClone(state.notice) },
+    async prepareWorkflowApprovalNotice({ requestId, recipientUserId, text }) {
+      state.notice = { requestId, recipientUserId, text, approverActorId: 'human-actor', digest: 'digest-native', createdAt: '2026-10-02T01:00:00Z', status: 'prepared', delivery: {} }
+      state.calls.push('prepare'); return { notice: structuredClone(state.notice) }
+    },
+    async beginWorkflowApprovalNotice() { state.calls.push('begin'); state.notice.status = 'unknown'; return { dispatchEligible: true, notice: structuredClone(state.notice) } },
+    async recordWorkflowApprovalNoticeReceipt({ openTaskId }) { state.calls.push('receipt'); state.notice.delivery.openTaskId = openTaskId },
+    async recordWorkflowApprovalNoticeDelivery(delivery) { state.calls.push('delivery'); state.notice.delivery = delivery; state.notice.status = state.answered ? 'recall-required' : 'waiting-reply' },
+    async recordWorkflowApprovalNoticeRecall() { state.calls.push('recalled'); state.notice.status = 'recalled' },
+    async decideWorkflowApprovalReply(reply) { state.calls.push('decision'); state.replies.push(reply); state.answered = true },
+  }
+  const adapter = {
+    async sendSelfIntent(request) { assert.equal(state.notice.status, 'unknown'); assert.equal(request.userId, 'human-user'); assert.equal(request.idempotencyKey, 'workflow-approval:digest-native'); state.calls.push('send'); state.sends++; return { openTaskId: 'open-native' } },
+    async confirmSelfDelivery({ openTaskId, text }) { assert.equal(state.notice.delivery.openTaskId, openTaskId); assert.equal(text, state.notice.text); state.calls.push('confirm'); return state.confirm ? { openTaskId, conversationId: 'private-native', messageId: 'notice-native', sentAt: '2026-10-02T01:00:01Z' } : undefined },
+    async findWorkflowApprovalNotice() { state.calls.push('search'); return undefined },
+    async readConversation() { return state.history ?? [] },
+  }
+  const run = async () => {
+    const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { state.warnings.push(error) } }, humanUserId: 'human-user', humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0 })
+    await new Promise(resolve => setImmediate(resolve)); await stop()
+  }
+  return { state, runtime, adapter, run }
+}
+
+test('异步原生审批列表无需旧humanBlocker，先登记intent和receipt再确认发送', async () => {
+  const { state, run } = nativeApprovalFixture()
+  await run()
+  assert.deepEqual(state.calls, ['prepare', 'begin', 'send', 'receipt', 'confirm', 'delivery'])
+  assert.equal(state.notice.status, 'waiting-reply')
+  assert.equal(state.sends, 1)
+  assert.deepEqual(state.warnings, [])
+})
+
+test('重启恢复unknown只查持久receipt，不重发且使用冻结正文', async () => {
+  const { state, runtime, run } = nativeApprovalFixture()
+  state.confirm = false; await run()
+  assert.equal(state.notice.status, 'unknown')
+  runtime.listAuthorizationRequests = async () => [{ kind: 'workflow-approval', requestId: 'approval-native', status: 'sending-unknown', text: '变化后的正文' }]
+  state.confirm = true; await run()
+  assert.equal(state.sends, 1)
+  assert.equal(state.notice.text, '冻结审批内容')
+  assert.equal(state.notice.status, 'waiting-reply')
+  assert.deepEqual(state.warnings, [])
+})
+
+test('发送回执丢失保持unknown，不能权威找到原消息时不盲重发', async () => {
+  const { state, adapter, run } = nativeApprovalFixture()
+  adapter.sendSelfIntent = async () => { state.sends++; throw new Error('network receipt lost') }
+  await run(); await run()
+  assert.equal(state.sends, 1)
+  assert.equal(state.notice.status, 'unknown')
+  assert.equal(state.notice.delivery.openTaskId, undefined)
+  assert.equal(state.calls.at(-1), 'search')
+})
+
+test('本地发送预检失败不领取发送，不进入unknown', async () => {
+  const { state, adapter, run } = nativeApprovalFixture()
+  adapter.compileSelfSend = () => { throw new Error('dws_self_send_uuid_too_long') }
+  await run()
+  assert.deepEqual(state.calls, ['prepare'])
+  assert.equal(state.notice.status, 'prepared')
+  assert.equal(state.sends, 0)
+})
+
+test('权威确定未发送的负回执落原生unsent，普通错误仍unknown', async () => {
+  const { state, runtime, adapter, run } = nativeApprovalFixture()
+  const proof = { kind: 'dws-uuid-rejected', idempotencyKey: 'legacy-key' }
+  runtime.recordWorkflowApprovalNoticeUnsent = async value => { assert.deepEqual(value.proof, proof); state.calls.push('unsent'); state.notice.status = 'prepared' }
+  adapter.sendSelfIntent = async () => { throw Object.assign(new Error('exact server rejection'), { knownNotSent: true, proof }) }
+  await run()
+  assert.equal(state.notice.status, 'prepared')
+  assert.equal(state.calls.at(-1), 'unsent')
+})
+
+test('私聊历史只采纳真实审批人对原通知的明确引用批复', async () => {
+  const { state, run } = nativeApprovalFixture()
+  const reply = (messageId, text, actor, quote = 'notice-native') => ({ messageId, conversationId: 'private-native', text, senderOpenDingTalkId: actor, quotedMessage: { messageId: quote } })
+  state.history = [reply('ordinary', '好的', 'human-actor'), reply('wrong-actor', '批准', 'stranger'), reply('wrong-quote', '批准', 'human-actor', 'another-notice'), reply('explicit', '拒绝：范围不清', 'human-actor')]
+  await run()
+  assert.deepEqual(state.replies, [{ requestId: 'approval-native', decision: 'rejected', comment: '拒绝：范围不清', eventId: 'explicit', conversationId: 'private-native', quoteMessageId: 'notice-native', actorId: 'human-actor' }])
+  assert.deepEqual(state.warnings, [])
+})
+
+test('原生发送时Web已批复，确认真实消息后撤回并回读才登记撤回', async () => {
+  const { state, adapter, run } = nativeApprovalFixture()
+  const send = adapter.sendSelfIntent
+  adapter.sendSelfIntent = async request => { const receipt = await send(request); state.answered = true; return receipt }
+  state.history = [{ messageId: 'notice-native', conversationId: 'private-native', text: '冻结审批内容' }]
+  adapter.recallMessage = async messageId => { assert.equal(messageId, 'notice-native'); state.calls.push('recall'); state.history = []; return { recallStatus: 'SUCCESS' } }
+  await run()
+  assert.equal(state.notice.status, 'recalled')
+  assert.deepEqual(state.calls.slice(-3), ['delivery', 'recall', 'recalled'])
+  assert.equal(state.sends, 1)
+  assert.deepEqual(state.warnings, [])
 })
 
 test('redline 阻塞将非空引用回复视为批复并保留明确拒绝语义', () => {

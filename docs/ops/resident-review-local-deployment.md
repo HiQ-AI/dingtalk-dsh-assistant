@@ -1,10 +1,20 @@
 # 常驻通知修复本地部署
 
+## 普通本地部署不备份历史副本
+
+当前无 schema 或历史文件迁移的本地部署直接使用 `deploy-owner-repair.ps1`，默认不复制控制数据库、任务目录、工件、Domain 或 profile 历史副本，也不遍历历史树计算备份容量。没有新增备份开关。仅保存此次精确包/profile 摘要、维护封存许可、控制历史只读快照和 `deployment-control.json`；这些是部署控制证据，不是业务数据恢复副本。
+
+本次 round14 沿现有参数：`-Package <D:/dsh_home/packages/唯一Assistant包>`、`-ExpectedPackageSha256 <包摘要>`、`-ExpectedProfileSha256 <当前profile摘要>`、`-DirectQueriesProposal <保持当前查询配置的既有提案>`、`-TaskDirectory <真实Agent任务根>`、`-EvidenceDirectory <当前worktree/docs/tmp/新目录>`；先加 `-Check`。通过后同参数去掉 `-Check` 执行，可用 `-HoldMaintenance` 保持维护待独立核验，再使用同参数 `-Readback` / `-Resume`。本轮不传任何迁移、Bootstrap、RepairStoppedLaunch 或 Observer 参数。
+
+仍要求原生维护排空/封存、精确旧PID退出、禁用并按原状态恢复计划任务自启、持续owner独占锁、停机checkpoint、源/包/安装文件比对、控制历史独立回读、新PID与健康核验后恢复派发。Launch 记录 `backupCreated=false`，绑定部署控制证据摘要；回读及恢复拒绝包/profile/证据身份漂移。
+
+已有 Bootstrap 首次数据接管、MessageImpact、ExecutionEventsIndex 和 TaskMigrationPlan 专用迁移沿原恢复合同保留其必要完整备份，不修改历史离线恢复规则。普通无备份部署失败保留封存现场与精确包/控制证据，不能使用原历史数据回滚入口，也不得把原库当成可丢弃的临时数据。
+
 文件消息回补修复无 schema 迁移：按本页受控流程安装 Assistant，保留消息正文和来源版本。部署后独立回读 `/health` 的每组 listener/backfill 及 `inboundProcessing`，核对原冲突文件消息仍为单个来源版本；只有 `health=ok` 才代表本次消息接收恢复，不能把双端口就绪或跳过回补当作通过。真实正文/发送者变化继续拒绝，不能手工提高版本。
 
 ## 任务卡片汇总切换核对
 
-当前完整步骤版本不迁移业务记录或 schema。沿用本页构建、双包校验及维护封存部署步骤；切换前保存原依赖和完整备份。部署后分别核对 `/state/tasks` 的一项一张卡片、详情按当前计划全部阶段展示、有效前段保留且被替换后段无重复、旧链接映射当前详情，以及正文的当前归属/版本拒绝。两个已确认三阶段完成任务应分别展示30个有效节点；数量必须与切换时当前计划和各Run的当前节点只读比对，不为验收重跑业务。页面不提供执行历史切换，底层运行和工件保留；卡片样式沿用现状。标题摘要应不超过32字符、完整目标可展开；三个已选完成任务的详情工作流组为3/2/3，63个步骤开始时间应逐项对应当前节点startedAt，卡片展开列表为中文且对应本次耗时。宽1440与窄390都不得因开始时间或长耗时横向溢出。
+当前完整步骤版本不迁移业务记录或 schema。沿用本页构建、双包校验及维护封存部署步骤；普通切换前保存精确包/profile控制摘要和维护历史校验快照，不备份历史副本。部署后分别核对 `/state/tasks` 的一项一张卡片、详情按当前计划全部阶段展示、有效前段保留且被替换后段无重复、旧链接映射当前详情，以及正文的当前归属/版本拒绝。两个已确认三阶段完成任务应分别展示30个有效节点；数量必须与切换时当前计划和各Run的当前节点只读比对，不为验收重跑业务。页面不提供执行历史切换，底层运行和工件保留；卡片样式沿用现状。标题摘要应不超过32字符、完整目标可展开；三个已选完成任务的详情工作流组为3/2/3，63个步骤开始时间应逐项对应当前节点startedAt，卡片展开列表为中文且对应本次耗时。宽1440与窄390都不得因开始时间或长耗时横向溢出。
 
 归档现在检查整个关联任务，存在活动执行、未排空租约或效果时必须拒绝；不要用真实未完成任务试写归档来验收。重执行、整项归档及旧请求拒绝先在隔离测试数据验证。只读副本和浏览器模拟接口测试不代表正式实例已切换，安装包、进程、健康和正式接口须分别回读。
 
@@ -26,7 +36,7 @@ Resident 关闭会依次尝试 HTTP、同步服务、监听、工作流及 Runti
 
 ### 问答 Agent 与调查流程切换
 
-仅部署问答查询配置时，既有 `deploy-owner-repair.ps1` 使用 `-DirectQueriesProposal <绝对JSON>`，与 `-Bundle/-MergePolicy/-ChecksProposal` 互斥，禁止Bootstrap；不更新工程验收配置。可同时提供 `-ObserverPackage/-ExpectedObserverPackageSha256`，两包各自校验后由同一次原生 plugin add 安装，容量按两包计算，回读/Resume再次核对两包。先 `-Check`，保留原维护、封存、完整备份、owner锁和恢复门禁。配置器 `scripts/configure-agent-query-resources.mjs --check/--apply --profile <绝对YAML> --proposal <绝对JSON> --expected-sha256 <SHA>` 只接受 Agent 自身明确的资料/固定提交/status授权；数据库提案显式提供 `credentialsPath`（绝对文件路径）与 `databases: [{id, connectionId, tables: [{schema, table, columns}]}]`。使用现有 UAT 账号时，仅目标数据库资源显式追加 `environment: uat` 和 `identityPolicy: host-enforced-readonly`；其他环境不允许该模式。permissions 的 `databaseIds` 必须逐项对应全部登记数据库。表列仅接受明确标识符，拒绝通配及重复。可只登记数据库而将资料/status数组设为空。配置器不读取凭据、不连接数据库、不创建角色；check 零写，apply 保留原文并按 SHA 执行 CAS。默认严格检查只读角色；显式 UAT 模式由 Host 限定结构化查询并逐次核验只读事务。登记成功不代表数据库验收通过。凭据不得写入提案，配置器只接受路径。提案包含 `expectedProfileSha256`、固定 `target=dingtalk-dsh-assistant.config.workflow.directQueries` 及完整 `directQueries`；部署方保存含真实环境路径的提案及原始证据，不提交公开仓库。
+仅部署问答查询配置时，既有 `deploy-owner-repair.ps1` 使用 `-DirectQueriesProposal <绝对JSON>`，与 `-Bundle/-MergePolicy/-ChecksProposal` 互斥，禁止Bootstrap；不更新工程验收配置。可同时提供 `-ObserverPackage/-ExpectedObserverPackageSha256`，两包各自校验后由同一次原生 plugin add 安装，容量按两包计算，回读/Resume再次核对两包。先 `-Check`，保留原维护、封存、owner锁和恢复门禁；普通无迁移部署不复制历史副本，已有历史迁移专用路径保留其必要备份。配置器 `scripts/configure-agent-query-resources.mjs --check/--apply --profile <绝对YAML> --proposal <绝对JSON> --expected-sha256 <SHA>` 只接受 Agent 自身明确的资料/固定提交/status授权；数据库提案显式提供 `credentialsPath`（绝对文件路径）与 `databases: [{id, connectionId, tables: [{schema, table, columns}]}]`。使用现有 UAT 账号时，仅目标数据库资源显式追加 `environment: uat` 和 `identityPolicy: host-enforced-readonly`；其他环境不允许该模式。permissions 的 `databaseIds` 必须逐项对应全部登记数据库。表列仅接受明确标识符，拒绝通配及重复。可只登记数据库而将资料/status数组设为空。配置器不读取凭据、不连接数据库、不创建角色；check 零写，apply 保留原文并按 SHA 执行 CAS。默认严格检查只读角色；显式 UAT 模式由 Host 限定结构化查询并逐次核验只读事务。登记成功不代表数据库验收通过。凭据不得写入提案，配置器只接受路径。提案包含 `expectedProfileSha256`、固定 `target=dingtalk-dsh-assistant.config.workflow.directQueries` 及完整 `directQueries`；部署方保存含真实环境路径的提案及原始证据，不提交公开仓库。
 
 
 本轮改动把 `answer.text` 替换为 `answer.objective`，并将旧只读材料编排合并为带工具的调查阶段。切换不是运行库历史迁移：已完成记录和工件保留，活动旧定义必须在安装前排空；启动遇到 `WORKFLOW_CUTOVER_ACTIVE_REFERENCES` 时停止切换并核对具体活动引用，不自动重排或改写历史。
@@ -254,7 +264,7 @@ C 盘空间不足时，本轮保留计划任务定义，以原 start-web.ps1 和
 
 允许已排空的 waiting 任务留待新版本恢复，但 running 节点/Owner、未排空节点或 starting/executing/unknown 效果一律阻断。准备失败遗留 unknown 先按专用单次对账规程处理，不能靠部署放宽门禁。脚本要求原实例具备正式维护接口；已离线或尚无维护接口的旧实例拒绝使用此自动部署路径，须先完成独立停机与恢复方案，不能退回“读取排空后强停”的有竞争路径。
 
-部署锁定精确双端口进程身份，离线取得原生 owner SQLite 独占锁后备份控制库、工件、Domain 与 profile；逐一对比完整源/备份清单，生成包含 WAL 最新状态的一致 SQLite 备份 verified-control.sqlite，并独立执行 integrity_check、foreign_key_check、逐表逻辑摘要与工件引用闭包校验。恢复使用 verified-control.sqlite；不得只复制旧主库而遗漏 WAL。输入包与配置摘要漂移拒绝继续。原生 CLI 安装后比较包内全部源码、工作区源码与安装内容，原生 CAS 工具更新配置。启动沿用原 `scripts/start-web.ps1`，仅该进程树使用 D 盘 TEMP，不修改计划任务。重新核对新 PID、双端口、在线 Task 身份、旧节点/终态 Run/legacy 任务摘要与配置；等待任务恢复后的新进展允许改变，旧历史必须保留。部署回读不代表业务验收或 UAT 提测通过。
+部署锁定精确双端口进程身份，离线取得原生 owner SQLite 独占锁后，普通无迁移部署仅保存控制证据、不复制历史副本；以下控制库、工件、Domain 与 profile 备份仅属于既有历史迁移专用路径：逐一对比完整源/备份清单，生成包含 WAL 最新状态的一致 SQLite 备份 verified-control.sqlite，并独立执行 integrity_check、foreign_key_check、逐表逻辑摘要与工件引用闭包校验。恢复使用 verified-control.sqlite；不得只复制旧主库而遗漏 WAL。输入包与配置摘要漂移拒绝继续。原生 CLI 安装后比较包内全部源码、工作区源码与安装内容，原生 CAS 工具更新配置。启动沿用原 `scripts/start-web.ps1`，仅该进程树使用 D 盘 TEMP，不修改计划任务。重新核对新 PID、双端口、在线 Task 身份、旧节点/终态 Run/legacy 任务摘要与配置；等待任务恢复后的新进展允许改变，旧历史必须保留。部署回读不代表业务验收或 UAT 提测通过。
 
 ## 前端审查草稿专项检查补入（单次配置修订）
 
@@ -273,7 +283,7 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 
 启动等待默认 `-WaitSeconds 300`，允许 1–600 秒。超出本次等待仍未就绪返回 `status=pending / ready=false / restartAttempted=false`，保存启动 PID、时间、包/profile 摘要与日志摘要，不宣称部署失败且不重启。使用原全部参数加 `-Readback` 接续；此模式只读取已有 `launch.json` 和控制快照、实时双端口及进程父子身份、HTTP、安装内容和历史，零写且不再安装/应用配置/启动。端口已监听但 HTTP 尚未完成也保持 pending；身份或证据不符则明确拒绝。旧工具没有 launch.json 的部署不能伪造此记录接续，使用原部署证据人工审查。
 
-部署前按实际备份范围统计空间，要求 D 盘至少容纳备份体积 + 包体积×10 + 1 GiB 余量；空间不足拒绝，不删文件。2026-09-27 本轮只读测量备份约 553 MB、D 剩余约 3.42 GB，未含新包时基线所需约 1.63 GB；新包准备后仍须执行完整 `-Check`。启动回读隔离测试 `pwsh -NoProfile -File test/deploy-owner-repair.test.ps1` 2/2 通过。
+历史迁移专用部署前按实际备份范围统计空间，要求 D 盘至少容纳备份体积 + 包体积×10 + 1 GiB 余量；空间不足拒绝，不删文件。2026-09-27 本轮只读测量备份约 553 MB、D 剩余约 3.42 GB，未含新包时基线所需约 1.63 GB；新包准备后仍须执行完整 `-Check`。启动回读隔离测试 `pwsh -NoProfile -File test/deploy-owner-repair.test.ps1` 2/2 通过。
 
 ### 维护屏障与部署许可
 

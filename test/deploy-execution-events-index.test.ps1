@@ -52,7 +52,7 @@ try {
  $text=[IO.File]::ReadAllText($helper)
  if($text.IndexOf('$executionEventsIndexMigrationSha256=Invoke-ExecutionEventsIndexMigration')-le $text.IndexOf('$backupProof=Run-Node @($checker,''backup-verify''')){throw '迁移必须在完整备份后'}
  if($text.IndexOf('executionEventsIndexMigrationSha256=$executionEventsIndexMigrationSha256')-lt 0){throw 'Launch必须持久绑定迁移回执'}
- if(-not $text.Contains('if($enrollment -or $MigrateMessageImpact -or $MigrateExecutionEventsIndex){')){throw '索引迁移必须纳入自启封存生命周期'}
+ if(-not $text.Contains('if(-not $Bootstrap){') -or -not $text.Contains('Disable-ScheduledTask -TaskName $enrollmentTaskName')){throw '维护部署必须纳入自启封存生命周期'}
  if(-not $text.Contains('if($Check -and $MigrateExecutionEventsIndex){$eventsIndexCheck=Run-Node')){throw '部署Check必须实跑零写迁移预检'}
  if($text.LastIndexOf("'execution-events-index-verify'")-gt $text.LastIndexOf('$launch=Start-Process')){throw '全表复核必须在启动前完成'}
  Write-Output 'PASS 5/5: 备份后执行、Launch绑定、自启封存、Check实跑、启动前全表复核'

@@ -254,6 +254,8 @@ Owner 快照复用同一成功工程 Run 的交付证明，将构建检查、验
 
 审批意见沿现有 approval.decided 审计事件与首终态决定同事务保存，重启后从原生批量投影读取；重复或晚到决定不能覆盖首个意见。数据变更驳回仅关闭尚未发送的插件审批门禁，原有未知写入仍先对账。
 
+审批私聊发送结果未知时，运行看板显示“投递待确认”，仍列入待处理并保留 Web 批准、拒绝入口；投递确认不代替审批决定。
+
 ### 旧原生审批观察阻止精确包切换
 
 若正式维护预检仅有旧v5原生approval-gate未知观察，仍不能忽略effects或强行停止Resident。使用scripts/recover-data-change-approval.ps1和scripts/reconcile-data-change-approval.mjs参数化交接；manifest位于私人docs/tmp，绑定当前包/profile/实例/Task/Run/effect/节点及版本，不复制凭据。--check为零写，返回绑定摘要；取得摘要后冻结manifest并用ExpectedManifestSha256约束每阶段。
@@ -261,3 +263,8 @@ Owner 快照复用同一成功工程 Run 的交付证明，将构建检查、验
 PowerShell Phase依次check、offline、reconcile、install、start、readback、resume-dispatch。offline先维护禁派发，见证完整dispose，取得owner锁，停止精确PID并完整备份包括任务工件；对账阶段释放外部锁后由原生Store自身独占，独立验证备份和无监听，只关闭唯一纯审批读取，不stop业务Run、修改Owner或批准DDL。效果failed且busy清零后原生seal，才安装精确包并恢复原profile。恢复自启和派发前独立回读新进程、包文件、完整profile、历史及HTTP。
 
 对账--readback用于中断续查，不重复未知操作。其它未知写效果、已执行TaskRun、SQL/目标/包/节点漂移、备份缺失或维护不符全部拒绝。正常新运行仍走普通部署runbook，不能把本领域范围扩成全局unknown豁免。安装后正式context纠正当前需求，再handoff同Task已有工单进入插件审批；旧闭合failed观察被幂等接受。
+
+
+插件私聊审批使用 `workflow-approval:<冻结通知摘要>` 作为82字符幂等键，发送前校验钉钉128字符上限。网络异常或缺回执保持 unknown；只有同一请求/摘要绑定的精确平台 UUID 长度拒绝、1001错误码及真实trace可登记明确未发送。现有 `POST /authorizations/:requestId/reissue` 对原生通知恢复要求本机同源、配置Web身份、维护已排空及 `noticeDigest/proof`；原请求和SQL保持，负回执不给生产执行许可。恢复后下一次发送使用新命令身份，重复恢复或重启不重新授予旧发送许可。
+
+钉钉消息回读会将文本软换行显示为空格，审批确认只归一 CRLF/LF 到单空格；其他空格、SQL及标点必须保持。已有 openTaskId 只查发送状态并读取原消息，显示差异不得触发重新发送。
