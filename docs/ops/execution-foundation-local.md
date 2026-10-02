@@ -568,3 +568,7 @@ schema8 增加唯一指定的非唯一、非部分索引 `execution_events_kind_
 ### 证据引用提交纠错恢复
 
 模型截短 evidenceRef 时，应先按原生成功查询回执拒绝未知身份，再由同会话纠正。不得复制工件到全局目录或将所有 ENOENT 改成可忽略。真实已返回的工件丢失仍是存储故障。无 schema 变更时沿普通本地部署；已记录 execution_submission_rejected 的原调查不会凭新包自动成功，回读 Task/run/节点版本后使用上文 retry-investigation 原生入口，同 run 新代次重新提交并验收。
+
+### 单列删除送审验收
+
+数据变更v7支持严格单列DROP候选，Host目录预检拒绝依赖、继承、identity/generated和非普通表。准确目录回查用rows空数组表示列消失，同时确认表仍存在。检查新工单、私聊不可恢复影响说明、精确插件批准与执行先后、TaskRun DONE和最终验收；旧加列工单及批准不能复用。无需新增数据库读取白名单、迁移或历史副本。原Task若持有模型追加的冗余前提，经既有Web context明确记录当前操作者的系统修正并由Owner重评，不伪造群消息或清除实际用户确认门禁。

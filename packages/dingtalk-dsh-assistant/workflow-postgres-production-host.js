@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
-import { simpleNullableColumnDefinition } from './workflow-data-change.js'
+import { simpleNullableColumnDefinition, simpleDroppedColumnDefinition } from './workflow-data-change.js'
 import { narrowSql, reviewUatSql, uatCatalogBaselineSql,
   uatCatalogBaselineCountSql, uatCatalogBaselineDigest } from './workflow-postgres-uat-host.js'
 
@@ -9,7 +9,7 @@ const databases = new Set(['hiq_editor', 'hiq_background_db', 'hiq_admin'])
 const sameTarget = (a, b) => a?.instance === b?.instance && a?.database === b?.database
   && a?.environment === b?.environment
 
-/** 加列验收只允许固定目录投影和三个精确名字，不开放任意 SELECT。 */
+/** 列变更验收只允许固定目录投影和三个精确名字，不开放任意 SELECT。 */
 export function columnVerificationScope(sql) {
   const match = /^SELECT\s+column_name\s*,\s*data_type\s*,\s*is_nullable\s*,\s*column_default\s*,\s*character_maximum_length\s+FROM\s+information_schema\.columns\s+WHERE\s+table_schema\s*=\s*'([a-z][a-z0-9_]*)'\s+AND\s+table_name\s*=\s*'([a-z][a-z0-9_]*)'\s+AND\s+column_name\s*=\s*'([a-z][a-z0-9_]*)'\s*;?$/iu.exec(sql ?? '')
   return match ? { schema: match[1], table: match[2], column: match[3] } : null
@@ -91,6 +91,33 @@ export function createProductionPostgresHost({ entries, Client }) {
     signal?.throwIfAborted()
     const entry = entryFor(project, target)
     const column = simpleNullableColumnDefinition(applySql), verification = columnVerificationScope(verificationSql)
+    const dropped = simpleDroppedColumnDefinition(applySql)
+    if (dropped) {
+      if (sha(applySql) !== applySqlSha256 || !verification
+        || dropped.schema !== verification.schema || dropped.table !== verification.table || dropped.column !== verification.column
+        || baseline?.scope && (baseline.scope.schema !== dropped.schema || baseline.scope.table !== dropped.table)) return { passed: false }
+      let expected
+      try { expected = JSON.parse(expectedChange) } catch { return { passed: false } }
+      if (executionDigest(expected) !== executionDigest({ rows: [] })) return { passed: false }
+      const client = await connect(entry.connection)
+      try {
+        const result = await client.query(`SELECT c.relkind AS relation_kind,
+          a.attidentity AS identity_kind, a.attgenerated AS generated_kind,
+          EXISTS (SELECT 1 FROM pg_inherits h WHERE h.inhparent = c.oid OR h.inhrelid = c.oid) AS has_inheritance,
+          EXISTS (SELECT 1 FROM pg_depend d WHERE d.refclassid = 'pg_class'::regclass
+            AND d.refobjid = c.oid AND d.refobjsubid = a.attnum) AS has_dependencies
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = $3 AND a.attnum > 0 AND NOT a.attisdropped
+          WHERE n.nspname = $1 AND c.relname = $2`, [dropped.schema, dropped.table, dropped.column])
+        signal?.throwIfAborted()
+        if (result.rows.length !== 1 || result.rows[0].relation_kind !== 'r'
+          || result.rows[0].identity_kind !== '' || result.rows[0].generated_kind !== ''
+          || result.rows[0].has_inheritance !== false || result.rows[0].has_dependencies !== false) return { passed: false }
+        const schemaProofDigest = executionDigest({ dropped, before: result.rows })
+        return { passed: true, target, sqlSha256: applySqlSha256, baselineEvidenceRef: baseline.evidenceRef,
+          schemaProofDigest, checkId: `postgres-production-drop-column-preconditions:${schemaProofDigest}` }
+      } finally { await client.end() }
+    }
     if (column) {
       if (baseline?.scope && (baseline.scope.schema !== column.schema || baseline.scope.table !== column.table)) return { passed: false }
       if (sha(applySql) !== applySqlSha256 || !verification
@@ -149,12 +176,31 @@ export function createProductionPostgresHost({ entries, Client }) {
     try { expected = JSON.parse(expectedChange) } catch { throw new Error('POSTGRES_COLUMN_VERIFICATION_INVALID') }
     const columns = ['column_name', 'data_type', 'is_nullable', 'column_default', 'character_maximum_length']
     if (!scope || !/^[a-f0-9]{64}$/u.test(packageDigest ?? '') || !taskRunId
-      || !Array.isArray(expected?.rows) || expected.rows.length !== 1
-      || executionDigest(Object.keys(expected.rows[0]).sort()) !== executionDigest([...columns].sort())
-      || expected.rows[0].column_name !== scope.column)
+      || !Array.isArray(expected?.rows) || expected.rows.length > 1
+      || expected.rows.length === 0 && executionDigest(expected) !== executionDigest({ rows: [] })
+      || expected.rows.length === 1 && (executionDigest(Object.keys(expected.rows[0]).sort()) !== executionDigest([...columns].sort())
+        || expected.rows[0].column_name !== scope.column))
       throw new Error('POSTGRES_COLUMN_VERIFICATION_INVALID')
     const client = await connect(entry.connection)
     try {
+      if (expected.rows.length === 0) {
+        // 同一目录快照核对表和列，整表缺失不能冒充单列删除成功。
+        const result = await client.query(`SELECT c.relkind AS relation_kind,
+          EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = $3
+            AND a.attnum > 0 AND NOT a.attisdropped) AS column_exists,
+          (SELECT COALESCE(json_agg(row_to_json(cols)), '[]'::json) FROM (
+            SELECT column_name, data_type, is_nullable, column_default, character_maximum_length
+            FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
+          ) cols) AS columns
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = $1 AND c.relname = $2`, [scope.schema, scope.table, scope.column])
+        signal?.throwIfAborted()
+        if (result.rows.length !== 1 || result.rows[0].relation_kind !== 'r' || result.rows[0].column_exists !== false
+          || executionDigest(result.rows[0].columns) !== executionDigest(expected.rows))
+          throw new Error('POSTGRES_COLUMN_VERIFICATION_UNCONFIRMED')
+        return { passed: true, target, packageDigest, observedChange: JSON.stringify(result.rows[0].columns),
+          readbackId: `postgres-production-column:${executionDigest({ taskRunId, target, scope, rows: result.rows[0].columns })}` }
+      }
       // 参数绑定只查询本次列；SQL正文经过固定结构识别后不直接执行。
       const result = await client.query(`SELECT column_name, data_type, is_nullable, column_default, character_maximum_length
         FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = $3`,

@@ -285,11 +285,21 @@ export function simpleNullableColumnDefinition(sql) {
 }
 export const isSimpleNullableColumnSql = sql => simpleNullableColumnDefinition(sql) !== null
 
+/** 单列删除只接受默认 RESTRICT 语义，不把 CASCADE 或多语句作为简单变更。 */
+export function simpleDroppedColumnDefinition(sql) {
+  const identifier = '(?:[A-Za-z_][A-Za-z0-9_]*|"[A-Za-z_][A-Za-z0-9_]*")'
+  const match = typeof sql === 'string' && new RegExp(`^\\s*ALTER\\s+TABLE\\s+(${identifier})\\.(${identifier})\\s+DROP\\s+COLUMN\\s+(${identifier})\\s*;?\\s*$`, 'i').exec(sql)
+  const name = value => value.startsWith('"') ? value.slice(1, -1) : value.toLowerCase()
+  return match ? { schema: name(match[1]), table: name(match[2]), column: name(match[3]) } : null
+}
+export const columnDeletionImpact = '永久删除该列及其中全部数据；重新添加同名列不能恢复原数据。'
+
 /** 后续工单/执行连接器必须用此精确身份核验；此函数本身不批准、提交或执行任何动作。 */
 export function assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan, approval }) {
   const pkg = prepared?.package, rehearsal = prepared?.rehearsal
   const { validation, ...body } = pkg ?? {}
-  if (!pkg || (!rehearsal && (!['assistant', 'bytebase'].includes(approval?.source) || !isSimpleNullableColumnSql(pkg.applySql)))
+  if (!pkg || (!rehearsal && (!['assistant', 'bytebase'].includes(approval?.source)
+    || !(isSimpleNullableColumnSql(pkg.applySql) || approval?.source === 'assistant' && simpleDroppedColumnDefinition(pkg.applySql))))
     || (rehearsal && (rehearsal.passed !== true || rehearsal.uat !== true || !nonempty(rehearsal.receiptId))) || !nonempty(validation?.receiptId)
     || validation?.packageDigest !== executionDigest(body)
     || (rehearsal && validation?.packageDigest !== rehearsal.packageDigest)
@@ -462,10 +472,17 @@ export function createDataChangeTaskWorkflowV5(options) {
 }
 
 /** 当前交办使用插件人工审批；历史Bytebase审批定义保持冻结。 */
-export function createDataChangeTaskWorkflow(options) {
+export function createDataChangeTaskWorkflowV6(options) {
   if (options.adapter.pluginApproval !== true) return createDataChangeTaskWorkflowV5(options)
   const workflow = createDataChangeTaskWorkflowV5({ ...options, adapter: { ...options.adapter, nativeApproval: true } })
   workflow.version = '6'
+  const validation = workflow.nodes.find(node => node.id === 'validate-package'), originalValidation = validation.execute
+  validation.execute = context => {
+    // 历史 v6 不因平台新增能力而获得新的免演练删除准入；v7 显式升级。
+    if (workflow.version === '6' && simpleDroppedColumnDefinition(context.input.proposal.applySql))
+      throw executionError('DATA_CHANGE_COLUMN_DELETE_REQUIRES_V7')
+    return originalValidation(context)
+  }
   const gate = workflow.nodes.find(node => node.id === 'approval-gate')
   const originalGate = gate.execute
   gate.version = '6'
@@ -492,11 +509,22 @@ export function createDataChangeTaskWorkflow(options) {
   return workflow
 }
 
+/** 新变更候选包含明确单列删除；既有 v6 及已有工单接续保持冻结。 */
+export function createDataChangeTaskWorkflow(options) {
+  const workflow = createDataChangeTaskWorkflowV6(options)
+  if (options.adapter.pluginApproval !== true) return workflow
+  workflow.version = '7'
+  const proposal = workflow.nodes.find(node => node.id === 'propose-sql')
+  proposal.version = '4'
+  proposal.prompt += ` 明确删除单列时使用单条 ALTER TABLE schema.table DROP COLUMN column;，禁止 CASCADE、IF EXISTS、多语句及附带其他变更。Host负责检查准确目标列、依赖及继承，不能假设列为空。${columnDeletionImpact} rollbackSql填写这一不可逆限制，不生成声称恢复数据的回滚SQL。verificationSql复用固定information_schema.columns的五列投影和准确schema/table/column条件，expectedChange必须为 {"rows":[]}。具体非空行数不是送审必需条件；按已知破坏性影响送本次独立插件真人审批，不能沿用历史加列工单或批准。`
+  return workflow
+}
+
 /** 仅从受管旧 Run 接续已有工单；Controller 没有中间节点起跑能力。 */
 export function createDataChangeApprovalResumeWorkflow(options) {
   if (options.adapter.pluginApproval !== true || typeof options.adapter.validateExistingIssue !== 'function')
     throw executionError('DATA_CHANGE_APPROVAL_RESUME_ADAPTER_REQUIRED')
-  const workflow = createDataChangeTaskWorkflow(options)
+  const workflow = createDataChangeTaskWorkflowV6(options)
   const nodes = workflow.nodes.slice(workflow.nodes.findIndex(node => node.id === 'prepare-approval'))
   const schema = nodes[0].inputSchema
   return { ...workflow, id: 'task-data-change-approval-resume', version: '1', nodes: [

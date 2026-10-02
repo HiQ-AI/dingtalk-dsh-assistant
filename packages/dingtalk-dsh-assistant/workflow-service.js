@@ -23,7 +23,7 @@ import { isPassiveTaskProgress } from './message-ledger.js'
 import { taskWorkflowCatalog, messageAnswerArguments, candidateCards, referencedResourceIds } from './message-context.js'
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText, groupStatusText, groupActionText, taskDecisionConditionText } from './workflow-notifications.js'
 import { createEngineeringStageContract, createEngineeringRegistry, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
-import { createDataChangeTaskWorkflow, createDataChangeApprovalResumeWorkflow, createDataChangeTaskWorkflowV5, createDataChangeTaskWorkflowV4, createLegacyDataChangeTaskWorkflow } from './workflow-data-change.js'
+import { createDataChangeTaskWorkflow, createDataChangeApprovalResumeWorkflow, createDataChangeTaskWorkflowV6, createDataChangeTaskWorkflowV5, createDataChangeTaskWorkflowV4, createLegacyDataChangeTaskWorkflow, simpleDroppedColumnDefinition, columnDeletionImpact } from './workflow-data-change.js'
 import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, nativeDataChangeOwnerContract, createNativeDataChangeCompletionPolicy } from './task-release-workflows.js'
 import { createUatPrMergeTaskWorkflow, createUatPrMergeTaskWorkflowV2, createLegacyUatPrMergeTaskWorkflow, createMainPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
@@ -336,6 +336,9 @@ const sourceKey = (profile, groupId, messageId) => `dws:${executionDigest([profi
 // 这里仅核对被点名的接收者；语义动作已经由 I/IB 判定，执行批准仍走阶段批准。
 export const isDirectedTaskRequest = (body, agentNames = []) => typeof body === 'string' && isNamedAgentDirection(body, agentNames)
 const requireText = (value, code) => { if (typeof value !== 'string' || !value.trim()) throw executionError(code); return value }
+// 目标摘要可用于展示；执行要求取已接纳事项的原文，避免模型附加的调查方法升级为交付前提。
+const taskSourceRequest = ({ run, unit }) => requireText(unit.spans.map(span => run.body.slice(span.start, span.end)).join('\n'), 'WORKFLOW_SOURCE_REQUEST_REQUIRED')
+const sourceRequestCriterion = '完成当前事项原文要求的交付'
 const terminal = status => ['succeeded', 'failed', 'cancelled'].includes(status)
 const catalogById = new Map(taskWorkflowCatalog.map(item => [item.id, item]))
 const readOnlyCatalog = taskWorkflowCatalog.filter(item => item.mode === 'read-only').map(({ id, purpose }) => ({ id, purpose }))
@@ -442,7 +445,7 @@ function createExternalRegistry(external, selected) {
   const workflows = [], records = new Map(), byId = new Map()
   const add = (workflow, adapter, modelConfig = null) => {
     if (catalogById.get(workflow.id)?.mode !== 'external' || byId.has(workflow.id)) throw executionError('EXTERNAL_WORKFLOW_CATALOG_MISMATCH')
-    workflow = { ...workflow, ownerContract: workflow.id === 'task-data-change-approval-resume' || workflow.id === 'task-data-change' && ['4', '5', '6'].includes(workflow.version) ? createNativeDataChangeCompletionPolicy(adapter) : externalWorkflowOwnerContract }
+    workflow = { ...workflow, ownerContract: workflow.id === 'task-data-change-approval-resume' || workflow.id === 'task-data-change' && ['4', '5', '6', '7'].includes(workflow.version) ? createNativeDataChangeCompletionPolicy(adapter) : externalWorkflowOwnerContract }
     const definition = defineExecutionWorkflow(workflow)
     const config = { ownerContractVersion: workflow.ownerContract.version, kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
       rulesDigest: adapter.rulesDigest, ...(modelConfig ? { modelConfig } : {}) }
@@ -795,7 +798,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         let previous = record.workflowId === 'task-data-change-approval-resume'
           ? createDataChangeApprovalResumeWorkflow({ ...saved.modelConfig, adapter })
           : record.workflowId === 'task-data-change'
-          ? (record.definitionVersion === '3' ? createLegacyDataChangeTaskWorkflow : record.definitionVersion === '4' ? createDataChangeTaskWorkflowV4 : record.definitionVersion === '5' ? createDataChangeTaskWorkflowV5 : createDataChangeTaskWorkflow)({ ...saved.modelConfig, adapter })
+          ? (record.definitionVersion === '3' ? createLegacyDataChangeTaskWorkflow : record.definitionVersion === '4' ? createDataChangeTaskWorkflowV4 : record.definitionVersion === '5' ? createDataChangeTaskWorkflowV5 : record.definitionVersion === '6' ? createDataChangeTaskWorkflowV6 : createDataChangeTaskWorkflow)({ ...saved.modelConfig, adapter })
           : record.workflowId === 'task-uat-pr-merge'
             ? (record.definitionVersion === '1' ? createLegacyUatPrMergeTaskWorkflow : record.definitionVersion === '2' ? createUatPrMergeTaskWorkflowV2 : createUatPrMergeTaskWorkflow)({ adapter })
           : record.workflowId === 'task-main-pr-merge' ? createMainPrMergeTaskWorkflow({ adapter })
@@ -1074,9 +1077,11 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const uatAction = uatBuild ? `${prepared.operation === 'rebuild' ? '重新构建' : '构建提测'} UAT 目标 ${target.runbookId}（${target.repository} / ${target.service}），提交 ${prepared.expected.commitSha}` : null
       const notification = await store.query({ kind: 'approval.notice', requestId: approval.requestId })
       const objective = goal.objective ?? origin.command.args.arguments?.objective ?? (uatBuild ? 'UAT 提测' : productionRelease ? '生产发布' : '数据变更')
+      const deletion = dataChange && simpleDroppedColumnDefinition(prepared.intent.applySql) !== null
       const details = dataChange ? [
         `**目标数据库：** ${prepared.target.database}`,
         `**Bytebase 工单：** ${prepared.intent.issueId}`,
+        ...(deletion ? [`**删除影响：** ${columnDeletionImpact}`] : []),
       ] : uatBuild ? [
         `**操作：** ${prepared.operation === 'rebuild' ? '重新构建' : '构建提测'}`,
         `**环境：** ${target.environment}`,
@@ -1098,7 +1103,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           ? `审批生产发布 ${prepared.resourceKey}，提交 ${prepared.expected.commitSha}，标签 ${prepared.expected.tag}`
           : `审批数据变更工单 ${prepared.intent.issueId}，目标 ${prepared.target.database}，SQL 摘要 ${prepared.intent.sheetSha256}`,
         waitingReason: uatBuild ? '等待批准本次 UAT 构建提测' : productionRelease ? '等待真人批准后创建生产 Tag' : '等待插件人工审批通过后执行 Bytebase 工单',
-        risk: uatBuild ? 'UAT 流水线可能更新对应环境服务并发送配置的提测通知' : productionRelease ? '生产发布会更新运行服务' : '生产数据库将执行工单中的 SQL',
+        risk: uatBuild ? 'UAT 流水线可能更新对应环境服务并发送配置的提测通知' : productionRelease ? '生产发布会更新运行服务' : deletion ? columnDeletionImpact : '生产数据库将执行工单中的 SQL',
         evidence: uatBuild ? [prepared.resourceKey, target.environment, target.runbookId, target.repository, target.service, prepared.expected.commitSha] : productionRelease
           ? [prepared.resourceKey, prepared.expected.commitSha, prepared.expected.tag]
           : [prepared.resourceKey, prepared.intent.issueId, prepared.target.database, prepared.intent.applySql ?? prepared.intent.sheetSha256,
@@ -1212,11 +1217,11 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const objective = requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
     const fileDelivery = bindFileDelivery(action.arguments.fileDelivery, info.run.body)
     if (fileDelivery && !fileWorkflow) throw executionError('TASK_FILE_TRANSPORT_UNAVAILABLE')
-    const requirement = { request: objective, objective, title: taskTitle(action.arguments.title ?? objective),
+    const requirement = { request: taskSourceRequest(info), objective, title: taskTitle(action.arguments.title ?? objective),
       stageAuthorizations: [...(action.arguments.stageAuthorizations ?? []), ...(action.arguments.workflowId ? [{ workflowId: action.arguments.workflowId, sourceQuote: info.run.body }] : [])].map(item => ({ ...item, sourceKey: info.run.sourceKey, sourceVersion: info.run.sourceVersion, ...(item.gate === 'confirmation' ? { requiredActorId: info.run.actorId } : {}) })),
       sourceInstructions: sources.map(source => ({ sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, text: source.body, attachments: source.context?.attachments ?? [] })),
       ...(fileDelivery ? { fileDelivery } : {}),
-      acceptanceCriteria: action.arguments.acceptanceCriteria ?? [objective],
+      acceptanceCriteria: action.arguments.acceptanceCriteria ?? [sourceRequestCriterion],
       constraints: [...new Set(action.constraints ?? [...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])],
       explicitStages: action.arguments.explicitStages ?? [],
       materials: resolved.data.resources.map(item => ({ id: item.resourceRef, text: item.text })),
@@ -1731,7 +1736,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       eventType: 'intent.received', payload: { action: action.intent, sourceRunId: info.run.runId,
         actorId: info.run.actorId, arguments: action.arguments, constraints: action.constraints } })
     const extendAcceptance = async () => {
-      const criteria = action.arguments.acceptanceCriteria ?? [action.arguments.objective]
+      const criteria = action.arguments.acceptanceCriteria ?? [sourceRequestCriterion]
       for (const [index, criterion] of criteria.entries()) await store.command({
         id: `acceptance:${info.commandId}:${index}`, kind: 'task.owner.acceptance.extend',
         args: { taskId, itemId: `acceptance-${executionDigest([info.commandId, index]).slice(0, 32)}`,
@@ -1767,7 +1772,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const wasCancelled = plan.task.controlState === 'cancelled'
       // 确认已有阶段不追加验收；其余修订在改需求/解除取消前整批检查，不能半批落账。
       if (!(action.intent === 'reopen' && !wasCancelled && plan.stages.some(stage => stage.status === 'waiting_confirmation'))) {
-        const criteria = action.arguments.acceptanceCriteria === undefined ? [action.arguments.objective] : action.arguments.acceptanceCriteria
+        const criteria = action.arguments.acceptanceCriteria === undefined ? [sourceRequestCriterion] : action.arguments.acceptanceCriteria
         if (!acceptanceCriteriaSchema.safeParse(criteria).success) throw executionError('TASK_OWNER_CRITERIA_INVALID')
         const active = await store.query({ kind: 'task.owner.acceptance', taskId })
         const added = criteria.filter((criterion, index) => !active.some(item => item.itemId === `acceptance-${executionDigest([info.commandId, index]).slice(0, 32)}`))
@@ -1804,7 +1809,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       if (!source || source.status === 'superseded') throw executionError('TASK_SOURCE_NOT_CURRENT')
       const fileDelivery = action.arguments.fileDelivery ? bindFileDelivery(action.arguments.fileDelivery, info.run.body) : previous.fileDelivery
       if (fileDelivery && !fileWorkflow) throw executionError('TASK_FILE_TRANSPORT_UNAVAILABLE')
-      const next = { ...previous, request: objective, objective, title: taskTitle(action.arguments.title ?? objective),
+      const next = { ...previous, request: taskSourceRequest(info), objective, title: taskTitle(action.arguments.title ?? objective),
         stageAuthorizations: [...(previous.stageAuthorizations ?? []), ...(action.arguments.stageAuthorizations ?? []).map(item => ({ ...item, sourceKey: info.run.sourceKey, sourceVersion: info.run.sourceVersion, ...(item.gate === 'confirmation' ? { requiredActorId: info.run.actorId } : {}) }))],
         sourceInstructions: [...(previous.sourceInstructions ?? []), { sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, text: source.body }], ...(fileDelivery ? { fileDelivery } : {}),
         acceptanceCriteria: action.arguments.acceptanceCriteria ?? previous.acceptanceCriteria,

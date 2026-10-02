@@ -9,7 +9,7 @@ import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execu
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createExternalStageContracts, nativeDataChangeOwnerContract } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
-import { createDataChangeTaskWorkflow, createDataChangeTaskWorkflowV4, simpleNullableColumnDefinition } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
+import { createDataChangeTaskWorkflow, createDataChangeTaskWorkflowV6, createDataChangeTaskWorkflowV4, simpleNullableColumnDefinition } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
 import { createTrustedWorkflowPlatforms } from '../packages/dingtalk-dsh-assistant/workflow-trusted-platforms.js'
 import { createProductionPostgresHost } from '../packages/dingtalk-dsh-assistant/workflow-postgres-production-host.js'
 import { createPlatformClients } from '../packages/dingtalk-dsh-assistant/workflow-platform-clients.js'
@@ -304,10 +304,10 @@ test('两轮驳回的后继阶段消费具体意见和旧工单身份，不重�
   }
 })
 
-for (const [automatic, precreated, decision = 'approved'] of [[false, false], [true, false], [false, true], [false, true, 'rejected']]) test(`真实 StageContract、生产 Host 和 Bytebase client 全路径插件审批 decision=${decision} auto=${automatic} precreated=${precreated}`, async t => {
+for (const [automatic, precreated, decision = 'approved', drop = false] of [[false, false], [true, false], [false, true], [false, true, 'rejected'], [false, true, 'approved', true], [false, true, 'rejected', true]]) test(`真实 StageContract、生产 Host 和 Bytebase client 全路径插件审批 decision=${decision} auto=${automatic} precreated=${precreated} drop=${drop}`, async t => {
   const project = 'projects/flbn', exactTarget = { instance: 'instances/flbnpguaf',
     database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
-  const applySql = 'ALTER TABLE public.process_id_temp ADD COLUMN name character varying;'
+  const applySql = drop ? 'ALTER TABLE public.process_id_temp DROP COLUMN name;' : 'ALTER TABLE public.process_id_temp ADD COLUMN name character varying;'
   const verificationSql = "SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema='public' AND table_name='process_id_temp' AND column_name='name';"
   const expectedRow = { column_name: 'name', data_type: 'character varying', is_nullable: 'YES', column_default: null, character_maximum_length: null }
   const queries = [], writes = [], catalog = [{ schema_name: 'public', table_name: 'process_id_temp', relation_kind: 'r',
@@ -319,6 +319,14 @@ for (const [automatic, precreated, decision = 'approved'] of [[false, false], [t
     async query(sql, values) {
       queries.push({ sql, values })
       if (sql.includes('pg_is_in_recovery()')) return { rows: [{ database_name: this.options.database, transaction_read_only: 'on', in_recovery: true }] }
+      if (sql.includes('AS has_dependencies')) {
+        assert.deepEqual(values, ['public', 'process_id_temp', 'name'])
+        return { rows: [{ relation_kind: 'r', identity_kind: '', generated_kind: '', has_inheritance: false, has_dependencies: false }] }
+      }
+      if (drop && sql.includes('AS columns')) {
+        assert.deepEqual(values, ['public', 'process_id_temp', 'name'])
+        return { rows: [{ relation_kind: 'r', column_exists: false, columns: [] }] }
+      }
       if (sql.includes('n.nspname = $1 AND c.relname = $2') && !sql.includes('AS column_exists')) {
         assert.deepEqual(values, ['public', 'process_id_temp'])
         return { rows: sql.startsWith('SELECT count(') ? [{ expected_rows: catalog.length }] : catalog }
@@ -388,14 +396,14 @@ for (const [automatic, precreated, decision = 'approved'] of [[false, false], [t
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
   external.bindStore(store)
   const workflow = createDataChangeTaskWorkflow({ provider: 'fixture', model: 'fixture', adapter: external.dataChangeAdapter })
-  assert.equal(workflow.version, '6')
+  assert.equal(workflow.version, '7')
   const delivery = createExecutionDelivery({ store, artifacts, authorize: async () => false,
     externalAdapter: external.operationAdapter, authorizeExternal: external.authorizeExternal })
   const controller = createExecutionController({ store, artifacts, delivery, workflows: [workflow], sessions: {
     async run({ input, onSessionBound, onResult }) {
       assert.ok(input.request.includes('process_id_temp')); assert.equal(input.sources[0].id, 'verified-investigation-output')
       await onSessionBound(); onResult({ applySql, rollbackSql: 'ALTER TABLE public.process_id_temp DROP COLUMN name;',
-        verificationSql, expectedChange: JSON.stringify({ rows: [expectedRow] }) })
+        verificationSql, expectedChange: JSON.stringify({ rows: drop ? [] : [expectedRow] }) })
     }, async close() {}, async cancel() {} } })
   t.after(async () => { await controller.close(); await store.close() })
   await controller.createRun({ commandId: 'real-contract-create', runId: 'real-contract-run', taskId: 'same-production-task',
@@ -406,14 +414,15 @@ for (const [automatic, precreated, decision = 'approved'] of [[false, false], [t
   assert.equal(Buffer.from(sheet.content, 'base64').toString('utf8'), applySql)
   assert.deepEqual(plan.specs[0].changeDatabaseConfig.targets, [exactTarget.database])
   assert.equal(issue.approvalStatus, precreated ? 'SKIPPED' : 'PENDING')
+  if (drop) assert.match(issue.description, /永久删除该列及其中全部数据/)
   const pluginApprovals = await store.query({ kind: 'approval.list' })
   assert.equal(pluginApprovals.length, 1)
   assert.equal(pluginApprovals[0].decision, 'pending')
-  assert.equal(queries.filter(item => item.sql.includes('AS column_exists')).length, 1)
+  assert.equal(queries.filter(item => item.sql.includes(drop ? 'AS has_dependencies' : 'AS column_exists')).length, 1)
   assert.equal(queries.some(item => /^\s*(ALTER|UPDATE|DELETE|INSERT)\b/i.test(item.sql)), false)
   const saved = await artifacts.read(state.nodes[2].outputRef)
   assert.deepEqual(saved.baseline.scope, { schema: 'public', table: 'process_id_temp' })
-  assert.deepEqual(JSON.parse(saved.expectedChange), { rows: [expectedRow] })
+  assert.deepEqual(JSON.parse(saved.expectedChange), { rows: drop ? [] : [expectedRow] })
   assert.equal(ran, false)
   await store.command({ id: 'plugin-approved', kind: 'approval.decide', args: { requestId: pluginApprovals[0].requestId, actorId: 'owner', source: 'web', decision, comment: '保留 character varying 类型，说明回滚方案后重新送审' } })
   const gate = (await store.query({ kind: 'effect.list', runId: 'real-contract-run' })).find(effect => effect.definition.payload.stage === 'approval-gate')
@@ -433,7 +442,7 @@ for (const [automatic, precreated, decision = 'approved'] of [[false, false], [t
   assert.equal(writes.filter(path => path.endsWith('/tasks:batchRun')).length, automatic ? 0 : 1)
   const result = await artifacts.read(completed.nodes.at(-1).outputRef)
   assert.equal(result.taskRunId, `${plan.name}/rollout/stages/prod/tasks/1/taskRuns/1`)
-  assert.deepEqual(JSON.parse(result.observedChange), [expectedRow])
+  assert.deepEqual(JSON.parse(result.observedChange), drop ? [] : [expectedRow])
   const executeEffect = (await store.query({ kind: 'effect.list', runId: 'real-contract-run' })).find(effect => effect.definition.payload.stage === 'execute-task')
   const identity = executeEffect.definition.payload.intent
   assert.deepEqual(identity.baseline.scope, saved.baseline.scope)
@@ -446,4 +455,15 @@ for (const [automatic, precreated, decision = 'approved'] of [[false, false], [t
     issueCreationOperationKey: identity.issueCreationOperationKey, executeOperationKey: identity.issueCreationOperationKey,
     approvalRequestId: executeEffect.definition.payload.approvalRequestId }), /BYTEBASE_TASK_NOT_READY/)
   assert.equal(writes.length, beforeWrites)
+})
+
+test('历史v6不获得新增删除准入，v7明确提供单列删除候选', async t => {
+  const f = await fixture(t, { native: true })
+  const options = { provider: 'fixture', model: 'fixture', adapter: { ...f.adapter, pluginApproval: true } }
+  const old = createDataChangeTaskWorkflowV6(options), current = createDataChangeTaskWorkflow(options)
+  assert.equal(old.version, '6'); assert.equal(current.version, '7')
+  const context = { input: { requirement: input(), proposal: { ...proposal, applySql: 'ALTER TABLE public.t DROP COLUMN name;' } } }
+  assert.throws(() => old.nodes.find(node => node.id === 'validate-package').execute(context), { code: 'DATA_CHANGE_COLUMN_DELETE_REQUIRES_V7' })
+  assert.equal((await current.nodes.find(node => node.id === 'validate-package').execute(context)).applySql, context.input.proposal.applySql)
+  assert.match(current.nodes.find(node => node.id === 'propose-sql').prompt, /重新添加同名列不能恢复原数据/)
 })

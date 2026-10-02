@@ -19,3 +19,5 @@
 部署完成：Check writes=0；Launch/独立Readback/Resume全部通过。正式包r22b SHA256=1c22a798fdea774e1acbf827d5305d67b1e1d3cbdfedc45311aba2298f780d7f，PID49432，health=ok，maintenance.active=false，DSH Web Local=Ready。无schema迁移、无历史备份副本。
 
 受管retry-investigation已接纳；独立详情回读同Task、同run、requirementRevision4/plan5，investigate进入generation2/running，原失败记录保留。此时只证明恢复执行，尚未证明调查成功或删除工单完成。
+
+原生第二代查询提交独立回读：完整tasks引用已接纳received=true，提交故障闭环。后续AGENT_WORK_BLOCKED是合成需求要求先查业务数据且范围不支持；并发现删除预检/空结果回查能力缺失，转SG23，不宣称本次删除已完成。

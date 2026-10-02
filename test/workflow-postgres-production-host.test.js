@@ -118,6 +118,86 @@ test('生产从库端口只提供目录及验收只读方法，并对每次连�
     /POSTGRES_PRODUCTION_TARGET_NOT_ALLOWED/u)
 })
 
+test('明确单列删除只读核对存在与依赖，拒绝自动依赖、继承及超出范围的 SQL', async () => {
+  const safe = { relation_kind: 'r', identity_kind: '', generated_kind: '', has_inheritance: false, has_dependencies: false }
+  let observed = [safe]
+  const queries = []
+  class Client {
+    constructor(options) { this.options = options }
+    async connect() {}
+    async end() {}
+    async query(sql, values) {
+      queries.push({ sql, values })
+      if (sql.includes('pg_is_in_recovery()')) return { rows: [{ database_name: this.options.database,
+        transaction_read_only: 'on', in_recovery: true }] }
+      assert.deepEqual(values, ['public', 't', 'label'])
+      assert.match(sql, /d\.refobjsubid = a\.attnum/)
+      assert.doesNotMatch(sql, /d\.deptype|COUNT\(|FROM public\./i)
+      assert.match(sql, /h\.inhparent = c\.oid OR h\.inhrelid = c\.oid/)
+      return { rows: observed }
+    }
+  }
+  const port = createProductionPostgresHost({ entries, Client })
+  const sql = 'ALTER TABLE public.t DROP COLUMN label;'
+  const args = { project: 'projects/flbn', target: target('hiq_editor'), baseline: { evidenceRef: 'baseline', scope: { schema: 'public', table: 't' } },
+    applySql: sql, applySqlSha256: sha(sql), expectedChange: '{"rows":[]}',
+    verificationSql: "SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 't' AND column_name = 'label'" }
+  const receipt = await port.checkPreconditions(args)
+  assert.equal(receipt.passed, true);assert.equal(receipt.baselineEvidenceRef, 'baseline')
+  assert.match(receipt.checkId, /^postgres-production-drop-column-preconditions:/)
+  for (const rows of [[], [safe, safe], ...[{ relation_kind: 'p' }, { identity_kind: 'a' }, { generated_kind: 's' },
+    { has_inheritance: true }, { has_dependencies: true }].map(change => [{ ...safe, ...change }])]) {
+    observed = rows
+    assert.equal((await port.checkPreconditions(args)).passed, false)
+  }
+  observed = [safe]
+  const before = queries.length
+  for (const change of [
+    { baseline: { ...args.baseline, scope: { schema: 'public', table: 'other' } } },
+    { applySqlSha256: 'a'.repeat(64) }, { expectedChange: '{"rows":[{}]}' },
+    { expectedChange: '{"rows":[],"columnEmpty":true}' },
+    { verificationSql: args.verificationSql.replace("column_name = 'label'", "column_name = 'other'") },
+    ...['ALTER TABLE public.t DROP COLUMN label CASCADE;', 'ALTER TABLE public.t DROP COLUMN IF EXISTS label;',
+      'ALTER TABLE public.t DROP COLUMN label; DROP TABLE public.t;'].map(applySql => ({ applySql, applySqlSha256: sha(applySql) })),
+  ]) assert.equal((await port.checkPreconditions({ ...args, ...change })).passed, false)
+  assert.equal(queries.length, before)
+})
+
+test('删除列验收同一只读目录快照确认表仍存在与列消失，拒绝整表消失', async () => {
+  let observed = [{ relation_kind: 'r', column_exists: false, columns: [] }]
+  const queries = []
+  class Client {
+    constructor(options) { this.options = options }
+    async connect() {}
+    async end() {}
+    async query(sql, values) {
+      queries.push(sql)
+      if (sql.includes('pg_is_in_recovery()')) return { rows: [{ database_name: this.options.database,
+        transaction_read_only: 'on', in_recovery: true }] }
+      assert.deepEqual(values, ['public', 't', 'label'])
+      assert.match(sql, /FROM information_schema\.columns/)
+      assert.match(sql, /FROM pg_class c JOIN pg_namespace/)
+      return { rows: observed }
+    }
+  }
+  const port = createProductionPostgresHost({ entries, Client })
+  const args = { project: 'projects/flbn', target: target('hiq_editor'), expectedChange: '{"rows":[]}',
+    packageDigest: 'a'.repeat(64), taskRunId: 'delete-task-run',
+    sql: "SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 't' AND column_name = 'label'" }
+  const receipt = await port.queryVerification(args)
+  assert.equal(receipt.passed, true);assert.equal(receipt.observedChange, '[]')
+  assert.equal(queries.length, 2)
+  for (const rows of [[], [{ relation_kind: 'v', column_exists: false, columns: [] }],
+    [{ relation_kind: 'r', column_exists: true, columns: [] }],
+    [{ relation_kind: 'r', column_exists: true, columns: [{ column_name: 'label' }] }]]) {
+    observed = rows
+    await assert.rejects(port.queryVerification(args), /POSTGRES_COLUMN_VERIFICATION_UNCONFIRMED/)
+  }
+  const before = queries.length
+  await assert.rejects(port.queryVerification({ ...args, sql: args.sql + '; DROP TABLE public.t;' }), /POSTGRES_COLUMN_VERIFICATION_INVALID/)
+  assert.equal(queries.length, before)
+})
+
 test('主库或读写会话身份不符时拒绝，且不读取基线', async () => {
   for (const override of [{ in_recovery: false }, { transaction_read_only: 'off' },
     { database_name: 'other' }]) {

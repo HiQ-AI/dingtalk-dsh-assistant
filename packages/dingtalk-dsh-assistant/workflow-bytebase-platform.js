@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { assertDataChangeExecutionIdentity, isSimpleNullableColumnSql, simpleNullableColumnDefinition } from './workflow-data-change.js'
+import { assertDataChangeExecutionIdentity, isSimpleNullableColumnSql, simpleNullableColumnDefinition, simpleDroppedColumnDefinition, columnDeletionImpact } from './workflow-data-change.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
 
 const sha = value => createHash('sha256').update(value, 'utf8').digest('hex')
@@ -28,6 +28,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
   const nativeApproval = approvalSource === 'bytebase' && typeof api?.getIssueApproval === 'function'
   const pluginApproval = approvalSource === 'assistant'
   const modern = nativeApproval || pluginApproval
+  const simpleChange = sql => isSimpleNullableColumnSql(sql) || pluginApproval && simpleDroppedColumnDefinition(sql) !== null
   const targets = config?.targets
   const names = ['getDatabase', 'createIssueBundle', 'activateRollout',
     'getIssueBundle', 'runTask', 'getTaskExecution', 'queryVerification',
@@ -184,10 +185,10 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
     return { status: 'succeeded', result: { scopeDigest: request.intent.scopeDigest, operationKey: request.intent.operationKey, approval } }
   }
   const adapter = {
-    nativeApproval, pluginApproval, requiresRehearsal: pkg => !modern || !isSimpleNullableColumnSql(pkg.applySql),
+    nativeApproval, pluginApproval, requiresRehearsal: pkg => !modern || !simpleChange(pkg.applySql),
     id: config.adapterId, version: config.adapterVersion, rulesDigest,
     async readBaselineForCandidate({ target, applySql, signal }) {
-      const entry = entryFor(target), column = simpleNullableColumnDefinition(applySql)
+      const entry = entryFor(target), column = simpleNullableColumnDefinition(applySql) ?? simpleDroppedColumnDefinition(applySql)
       const scope = column ? { schema: column.schema, table: column.table } : 'current'
       const baseline = await productionApi.readBaseline({ project: entry.project, target, scope, signal })
       assertBaseline(baseline, entry.project, target)
@@ -200,7 +201,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
       required(sha(applySql) === applySqlSha256 && nonempty(baseline?.snapshotId)
         && /^[a-f0-9]{64}$/.test(baseline?.sha256 ?? ''), 'BYTEBASE_PACKAGE_INVALID')
       if (baseline.scope) {
-        const column = simpleNullableColumnDefinition(applySql)
+        const column = simpleNullableColumnDefinition(applySql) ?? simpleDroppedColumnDefinition(applySql)
         required(column && same(baseline.scope, { schema: column.schema, table: column.table }),
           'BYTEBASE_BASELINE_SCOPE_UNCONFIRMED')
       }
@@ -214,7 +215,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
         && (!baseline.scope || same(actualBaseline.scope, baseline.scope)), 'BYTEBASE_BASELINE_UNCONFIRMED')
       const preconditions = await checkPreconditions({ project: entry.project, target, baseline: actualBaseline,
         pkg: { applySql, applySqlSha256, expectedChange, verificationSql }, signal })
-      if (modern && isSimpleNullableColumnSql(applySql)) return { passed: true, packageDigest, receiptId: preconditions.checkId }
+      if (modern && simpleChange(applySql)) return { passed: true, packageDigest, receiptId: preconditions.checkId }
       required(entry.uatTarget, 'BYTEBASE_UAT_TARGET_REQUIRED_FOR_COMPLEX_SQL')
       const result = await uatApi.validateSql({ project: entry.project, target: entry.uatTarget,
         sql: applySql, sqlSha256: applySqlSha256, verificationSql, signal })
@@ -266,14 +267,14 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
     },
     async prepareIssue({ prepared, runId, generation, requirementDigest }) {
       const pkg = prepared.package, entry = entryFor(pkg.target)
-      required((modern && isSimpleNullableColumnSql(pkg.applySql) && !prepared.rehearsal) || (prepared.rehearsal?.passed === true && prepared.rehearsal?.uat === true
+      required((modern && simpleChange(pkg.applySql) && !prepared.rehearsal) || (prepared.rehearsal?.passed === true && prepared.rehearsal?.uat === true
         && prepared.rehearsal.packageDigest === pkg.validation.packageDigest), 'BYTEBASE_REHEARSAL_REQUIRED')
       const request = { runId, generation, requirementDigest, packageDigest: pkg.validation.packageDigest,
         target: pkg.target }
       return { project: entry.project, target: pkg.target, ...(modern ? { approvalSource: nativeApproval ? 'bytebase' : 'assistant' } : {}), operationKey: issueKey(request),
         packageDigest: pkg.validation.packageDigest, applySqlSha256: pkg.applySqlSha256,
         applySql: pkg.applySql, expectedChange: pkg.expectedChange,
-        ...(modern ? { proposalSummary: `待真人审批的候选 SQL：${pkg.applySql}` } : {}),
+        ...(modern ? { proposalSummary: `待真人审批的候选 SQL：${pkg.applySql}${simpleDroppedColumnDefinition(pkg.applySql) ? `\n变更影响：${columnDeletionImpact}` : ''}` } : {}),
         ...(pkg.previousIssueId ? { previousIssueId: pkg.previousIssueId } : {}) }
     },
     async prepareApproval({ view, runId, generation, requirementDigest }) {

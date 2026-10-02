@@ -73,6 +73,8 @@ import { createWorkflowNotifications, formatGroupReply, notificationOpenTaskId, 
 import { queryConversationTaskProgress } from '../packages/dingtalk-dsh-assistant/task-progress-query.js'
 import { groupTaskExecutions } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { createInvestigationWorkflowV6, createInvestigationWorkflowV7, createInvestigationWorkflowV8 } from '../packages/dingtalk-dsh-assistant/agent-work.js'
+import { createDataChangeTaskWorkflowV6 } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
+import { createNativeDataChangeCompletionPolicy } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 
 const schema = { type: 'object', additionalProperties: true }
 const splitOne = text => ({ kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] })
@@ -127,6 +129,38 @@ for (const version of ['6', '7', '8']) test('调查合同升级保留v' + versio
   assert.equal(service.execution.controller.workflowDefinition(prior.id, definition.digest).version, version)
   assert.equal(service.execution.controller.workflowDefinition(prior.id).version, '9')
 })
+test('数据变更升级v7后重启保留v6冻结定义和旧计划', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'data-change-v6-restore-'))
+  const config = { groupIds: ['g'], ownerActorId: 'owner', dbPath: join(root, 'control.db'), artifactDirectory: join(root, 'artifacts'), instanceId: 'data-change-restore' }
+  const initial = await openExecutionStore({ dbPath: config.dbPath, instanceId: config.instanceId, initialize: true }); await initial.close()
+  await mkdir(config.artifactDirectory)
+  const unexpected = async () => { throw Error('EXTERNAL_EFFECT_NOT_EXPECTED') }
+  const adapter = { id: 'restore-data-change', version: '1', rulesDigest: 'a'.repeat(64), pluginApproval: true,
+    validate: unexpected, validateExistingIssue: unexpected, readBaselineForCandidate: unexpected, prepareRehearsal: unexpected, readbackRehearsal: unexpected,
+    inspect: unexpected, prepareIssue: unexpected, prepareApproval: unexpected, prepareExecute: unexpected, readback: unexpected }
+  const external = { dataChangeAdapter: adapter, operationAdapter: { execute: unexpected, reconcile: unexpected }, authorizeExternal: unexpected, prepareRequirement: unexpected }
+  const open = () => openWorkflowService({ ctx: {}, config, external, legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test' }) }, taskOwnerSessions: { async close() {} } })
+  let service = await open(), oldController, oldStore
+  t.after(async () => { await oldController?.close(); await oldStore?.close(); await service?.close(); await rm(root, { recursive: true, force: true }) })
+  const saved = (await service.execution.store.query({ kind: 'workflow.list' })).find(item => item.workflowId === 'task-data-change' && item.definitionVersion === '7')
+  assert.ok(saved)
+  await service.close()
+  oldStore = await openExecutionStore({ dbPath: config.dbPath, instanceId: config.instanceId })
+  const artifacts = await openExecutionArtifacts({ directory: config.artifactDirectory })
+  const prior = { ...createDataChangeTaskWorkflowV6({ ...saved.config.modelConfig, adapter }), ownerContract: createNativeDataChangeCompletionPolicy(adapter) }
+  const definition = defineExecutionWorkflow(prior)
+  oldController = createExecutionController({ store: oldStore, artifacts, delivery: { execute: unexpected }, workflows: [prior] })
+  await oldStore.command({ id: 'register-v6', kind: 'workflow.register', args: { workflowId: prior.id, definitionVersion: prior.version, config: saved.config, digest: definition.digest } })
+  await oldController.createTaskPlan({ commandId: 'old-plan', taskId: 'old-task', stages: [{ stageId: 'change', workflowId: prior.id,
+    input: { request: '旧加列变更', constraints: [], target: { instance: 'instance', database: 'editor', environment: 'production' },
+      sources: [{ id: 'original', content: '旧加列变更', sha256: createHash('sha256').update('旧加列变更').digest('hex') }] } }] })
+  const before = await oldController.taskPlan('old-task')
+  await oldController.close(); await oldStore.close(); service = await open()
+  assert.deepEqual(await service.execution.controller.taskPlan('old-task'), before)
+  assert.equal(service.execution.controller.workflowDefinition(prior.id, definition.digest).version, '6')
+  assert.equal(service.execution.controller.workflowDefinition(prior.id).version, '7')
+})
+
 test('维护HTTP仅受信本机身份可改，严格参数、幂等与过期许可均校验', async t => {
   const { service } = await fixture(t,'owner',undefined,{config:{webActorId:'owner'}})
   const runtime={getWorkflowMaintenance:()=>service.maintenance(),changeWorkflowMaintenance:request=>service.changeMaintenance(request,{channel:'web',actorId:'owner'}),
@@ -4374,6 +4408,59 @@ test('内部材料重试HTTP只由本机操作者恢复，保留原请求且真�
   assert.equal((await post(input)).status, 409)
 })
 
+test('多事项执行要求按各自原文span保存，模型摘要不成为默认验收前提', async t => {
+  const first = '删除生产Editor表的name列；', second = '整理本周报告', body = first + second
+  const judge = async ({ stage, input }) => stage === 'S'
+    ? { kind: 'split', units: [first, second].map((text, index) => ({ spans: [{ start: index ? first.length : 0, end: index ? body.length : first.length }], goalText: text, constraints: [], contextNeeds: [] })),
+      sharedConstraints: [], coverage: [{ start: 0, end: first.length, role: 'unit' }, { start: first.length, end: body.length, role: 'unit' }] }
+    : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['两个独立事项'] }
+      : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: input.goalText + '；先穷尽代码引用再处理', workflowId: 'task-investigation' }, dependsOn: [] }],
+        constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  const { service, message, execution } = await fixture(t, 'owner', undefined, { judge })
+  const received = await service.ingest({ ...message, text: body })
+  const state = await service.messages.process(received.runId)
+  assert.equal(state.commands.length, 2)
+  for (const [index, command] of state.commands.entries()) {
+    assert.equal(command.status, 'applied')
+    const plan = await execution.controller.taskPlan(command.args.taskId), requirement = await execution.artifacts.read(plan.task.requirementRef)
+    assert.equal(requirement.request, [first, second][index])
+    assert.match(requirement.objective, /先穷尽代码引用/)
+    assert.equal(requirement.sourceInstructions[0].text, body)
+    const criteria = await execution.store.query({ kind: 'task.owner.acceptance', taskId: command.args.taskId })
+    assert.deepEqual(criteria.map(item => item.criterion), ['完成当前事项原文要求的交付'])
+    assert.equal(criteria[0].sourceKey, requirement.authorization.sourceKey)
+  }
+})
+
+test('继续修订保存本次原文，不以摘要扩写覆盖原先真人确认条件', async t => {
+  const first = '先测试两条，我验证通过再执行剩余数据', second = '继续'
+  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
+    : stage === 'R' ? { kind: 'binding', disposition: input.candidates.length ? 'existing' : 'new', candidateId: input.candidates[0]?.candidateId ?? null, evidence: ['同一事项继续'] }
+      : { kind: 'intent', actions: [{ intent: input.text === second ? 'revise' : 'create', arguments: {
+        objective: input.text === second ? '先查询所有列数据再继续执行' : '执行分批变更', workflowId: 'task-investigation',
+        ...(input.text === first ? { stageAuthorizations: [{ workflowId: 'task-data-change', sourceQuote: first, objective: '执行剩余数据', gate: 'confirmation' }] } : {}) }, dependsOn: [] }],
+        constraints: input.text === first ? ['我验证通过再执行剩余数据'] : [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  const { service, message, execution } = await fixture(t, 'owner', undefined, { judge })
+  const started = await service.ingest({ ...message, text: first }), state = await service.messages.process(started.runId)
+  const taskId = state.commands[0].args.taskId
+  const continued = await service.ingest({ ...message, messageId: 'continue-original-gate', text: second })
+  const revised = await service.messages.process(continued.runId)
+  assert.equal(revised.commands[0].status, 'applied')
+  assert.equal(revised.commands[0].args.taskId, taskId)
+  const plan = await execution.controller.taskPlan(taskId), requirement = await execution.artifacts.read(plan.task.requirementRef)
+  assert.equal(requirement.request, second)
+  assert.equal(requirement.objective, '先查询所有列数据再继续执行')
+  assert.deepEqual(requirement.sourceInstructions.map(source => source.text), [first, second])
+  assert.ok(requirement.constraints.includes('我验证通过再执行剩余数据'))
+  const authorization = requirement.stageAuthorizations.find(item => item.workflowId === 'task-data-change')
+  assert.equal(authorization.gate, 'confirmation')
+  assert.equal(authorization.requiredActorId, 'owner')
+  assert.equal(authorization.sourceQuote, first)
+  const criteria = await execution.store.query({ kind: 'task.owner.acceptance', taskId })
+  assert.ok(criteria.every(item => !item.criterion.includes('查询所有列数据')))
+  assert.ok(criteria.some(item => item.sourceKey === requirement.authorization.sourceKey))
+})
+
 test('原114与115连续交办复用同Task并保存审批与先两条后69条原文条件', async t => {
   const firstText = '线上，工作区。这批数据69条的行业专家审核记录和状态保留，LCA审核人改成Y列专家，已做完LCA审核的记录清掉。写完脚本，让小鹏哥审批，再线上执行工单。不改派单，不发业务通知，不改审核轮次。'
   const secondText = '线上脚本先用这两条测试：11111111-1111-4111-8111-111111111111 22222222-2222-4222-8222-222222222222。刷完找我验证，我验证通过，再刷这69条正式数据。'
@@ -5300,7 +5387,7 @@ for (const [firstDecision, workflowKind] of [['approved', 'uat-deployment'], ['r
       action: 'external', workflowKind, operation: workflowKind === 'uat-rebuild' ? 'rebuild' : 'build', runId, generation, requirementDigest,
       resourceKey: 'external:uat:HiQ-AI/dataset:dataset', expected: { commitSha },
       ...(workflowKind === 'data-change' ? { stage: 'approval-gate', target: { database: 'production-editor' },
-        intent: { approvalSource: 'assistant', issueId: 'projects/flbn/issues/857', applySql: 'ALTER TABLE public.process_id_temp ADD COLUMN name character varying;', sheetSha256: 'c'.repeat(64), packageDigest: 'd'.repeat(64) } } : {}) } }),
+        intent: { approvalSource: 'assistant', issueId: 'projects/flbn/issues/857', applySql: firstDecision === 'approved' ? 'ALTER TABLE public.process_id_temp ADD COLUMN name character varying;' : 'ALTER TABLE public.process_id_temp DROP COLUMN name;', sheetSha256: 'c'.repeat(64), packageDigest: 'd'.repeat(64) } } : {}) } }),
   }] })
   await execution.controller.initializeTaskPlan({ commandId: 'approval-plan', taskId, expectedPlanRevision: 0, expectedRequirementRevision: 1,
     stages: [{ stageId: 'uat', workflowId: 'approval-fixture', input: { request: '验证UAT3提测', target } }] })
@@ -5326,6 +5413,10 @@ for (const [firstDecision, workflowKind] of [['approved', 'uat-deployment'], ['r
     assert.match(visible[0].text, /\*\*目标数据库：\*\* production-editor/)
     assert.ok(!visible[0].text.includes('c'.repeat(64)))
     assert.ok(!visible[0].text.includes('d'.repeat(64)))
+    if (firstDecision === 'rejected') {
+      assert.match(visible[0].text, /\*\*删除影响：\*\* 永久删除该列及其中全部数据；重新添加同名列不能恢复原数据。/)
+      assert.equal(visible[0].risk, '永久删除该列及其中全部数据；重新添加同名列不能恢复原数据。')
+    } else assert.ok(!visible[0].text.includes('删除影响'))
   }
   assert.match(visible[0].text, /^\*\*待审批：/)
   assert.ok(visible[0].text.includes(`**事项：** ${currentObjective}`))

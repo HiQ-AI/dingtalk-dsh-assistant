@@ -88,3 +88,7 @@ evidence-reference-native-correction,22,PASS,round-22.md
 message-reference-same-cause,22,PASS,round-22.md
 legacy-investigation-safe-retry,22,PASS,round-22.md
 evidence-recovery-deployment-and-native-retry,22,PASS,round-22.md
+single-column-delete-native-approval,23,PASS,round-23.md
+single-column-delete-production-readback,23,PASS,round-23.md
+user-source-request-and-prior-gates,23,PASS,round-23.md
+data-change-v6-frozen-recovery,23,PASS,round-23.md

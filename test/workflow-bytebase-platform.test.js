@@ -358,7 +358,8 @@ test('简单加列仅做生产只读前置核对，其他 SQL 继续演练', asy
   }
   for (const sql of ['ALTER TABLE public.t ADD COLUMN name text NOT NULL;',
     "ALTER TABLE public.t ADD COLUMN name text DEFAULT '';", 'UPDATE public.t SET v=2;',
-    'ALTER TABLE public.t ADD COLUMN name text; DROP TABLE public.t;']) {
+    'ALTER TABLE public.t ADD COLUMN name text; DROP TABLE public.t;', 'ALTER TABLE public.t DROP COLUMN name;', 'ALTER TABLE public.t DROP COLUMN name CASCADE;',
+    'ALTER TABLE public.t DROP COLUMN IF EXISTS name;', 'ALTER TABLE public.t DROP COLUMN name; DROP TABLE public.t;']) {
     assert.equal(f.workflowAdapter.requiresRehearsal({ applySql: sql }), true)
   }
   assert.equal(f.calls.includes('review'), false)
