@@ -22,6 +22,34 @@ const proof = { schema: 'public', table: 't', relationKind: 'r', rowSecurity: fa
 const applySql = 'UPDATE public.t SET v = 2 WHERE id = 1;'
 const verificationSql = 'SELECT v FROM public.t WHERE id = 1'
 
+test('精确表基线只读取参数化表目录，拒绝伪造范围及目录错表', async () => {
+  let wrongTable = false
+  const queries = [], scope = { schema: 'public', table: 't' }
+  class Client {
+    constructor(options) { this.options = options }
+    async connect() {}
+    async end() {}
+    async query(sql, values) {
+      queries.push({ sql, values })
+      if (sql.includes('pg_is_in_recovery()')) return { rows: [{ database_name: this.options.database,
+        transaction_read_only: 'on', in_recovery: true }] }
+      assert.deepEqual(values, ['public', 't'])
+      assert.ok(sql.includes('n.nspname = $1 AND c.relname = $2'))
+      if (sql.startsWith('SELECT count(')) return { rows: [{ expected_rows: 1 }] }
+      return { rows: wrongTable ? [{ ...catalog[0], table_name: 'other' }] : catalog }
+    }
+  }
+  const port = createProductionPostgresHost({ entries, Client }), args = { project: 'projects/flbn', target: target('hiq_editor'), scope }
+  const result = await port.readBaseline(args)
+  assert.deepEqual(result.scope, scope)
+  assert.equal(result.schemaVersion, 'pg-catalog-table-columns-v1')
+  assert.equal(queries.some(row => row.sql === uatCatalogBaselineSql() || row.sql === uatCatalogBaselineCountSql()), false)
+  await assert.rejects(port.readBaseline({ ...args, scope: { ...scope, column: 'name' } }), /POSTGRES_PRODUCTION_SCOPE_INVALID/)
+  await assert.rejects(port.readBaseline({ ...args, scope: { ...scope, table: 't;drop' } }), /POSTGRES_PRODUCTION_SCOPE_INVALID/)
+  wrongTable = true
+  await assert.rejects(port.readBaseline(args), /POSTGRES_PRODUCTION_SCOPE_UNCONFIRMED/)
+})
+
 test('简单加列只核对精确表列，真实从库回读完整列属性，拒绝已存在列和错误验收', async () => {
   const queries = [], expectedRow = { column_name: 'label', data_type: 'character varying', is_nullable: 'YES',
     column_default: null, character_maximum_length: null }

@@ -543,3 +543,5 @@ PR交付在预检网络故障时由原Controller按持久退避继续原节点�
 修复读取能力后沿既有 `POST /tasks/<taskId>/reassess-readonly` 接口恢复原 Task。先独立读取当前 Owner 与计划，提交 recoveryKey、reason、expectedOwnerRevision、expectedLeaseEpoch、expectedRequirementRevision、expectedControlRevision；本机身份必须匹配 webActorId。重评检查源消息身份和版本、当前需求与控制版本、执行排空及外部效果，不接受未知效果、正在执行、已取消或已应用 complete 的 Task。只有成功调查的计划但整体目标仍待定义或审批时可以重评；不直接写 SQL、伪造批准或重跑冻结旧 Run。相同 recoveryKey 与请求精确幂等，参数变化拒绝。
 
 重评审计保留 previousDecision（action、condition、applicationStatus、lastFailure）、当前源授权和材料读取依据。独立回读 system.recovery、新 Owner 水位及原成功阶段 outputRef，确认 Task/session 身份和旧证据保持；由新决定安排使用当前能力的调查。补充定义、审批或能力事实通过既有受管事件推进，不能只循环扫描。原生重评接纳不代表调查完成，也不授权生产 DDL。
+
+只读重评也可恢复因来源校验程序错误而拒绝的 advance：要求原决定版本和租约匹配、当前真实来源重新核验通过、仅有已排空的成功调查、没有外部效果或计划应用回执。拒绝决定保留审计并标记 discarded，由同一 Task/Owner 重新决策；不能用于重发已经执行的变更。Bytebase 创建工单键与执行幂等键分别冻结，执行仍核验原工单、计划、SQL、目标及包摘要。等待原因读取最新持久审批观测；审批流程未配置时明确显示 Bytebase 管理员配置要求。自动发布已有 TaskRun 时只读取既有执行，不重复提交。

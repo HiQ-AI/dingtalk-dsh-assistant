@@ -310,7 +310,7 @@ export function assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan
 }
 
 /** 原生审批沿用 Controller 的效果等待与对账；旧 v3 定义继续供持久任务恢复。 */
-export function createDataChangeTaskWorkflow(options) {
+export function createDataChangeTaskWorkflowV4(options) {
   const workflow = createLegacyDataChangeTaskWorkflow(options)
   const { adapter } = options
   if (adapter.nativeApproval !== true) return workflow
@@ -414,5 +414,49 @@ export function createDataChangeTaskWorkflow(options) {
     return { outcome: 'needs_revision', issueId: view.issue.id, planId: view.plan.id, sheetId: view.sheet.id,
       applySql: view.prepared.package.applySql, comment: view.approval.comment, evidenceRef: view.approval.evidenceRef }
   })() : originalFinal(context)
+  return workflow
+}
+
+/** 候选形成后由受信 Host 获取基线；简单加列只冻结准确表的目录。 */
+export function createDataChangeTaskWorkflow(options) {
+  const workflow = createDataChangeTaskWorkflowV4(options)
+  if (options.adapter.nativeApproval !== true) return workflow
+  if (typeof options.adapter.readBaselineForCandidate !== 'function') throw executionError('DATA_CHANGE_BASELINE_ADAPTER_REQUIRED')
+  workflow.version = '5'
+  const transform = value => {
+    if (!value || typeof value !== 'object') return value
+    if (Array.isArray(value)) return value.map(transform)
+    const copy = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, transform(item)]))
+    if (copy.properties?.request && copy.properties?.sources) copy.required = copy.required.filter(key => key !== 'baseline')
+    if (copy.properties?.snapshotId && copy.properties?.sha256) copy.properties.scope = {
+      type: 'object', properties: { schema: text, table: text }, required: ['schema', 'table'], additionalProperties: false }
+    return copy
+  }
+  for (const node of workflow.nodes) {
+    node.inputSchema = transform(node.inputSchema); node.outputSchema = transform(node.outputSchema)
+  }
+  const freeze = workflow.nodes.find(node => node.id === 'freeze-input')
+  freeze.version = '2'
+  freeze.execute = async ({ input }) => {
+    // 输入基线不用于候选或包身份；可信基线在 validate-package 中独立获取。
+    const { baseline: ignored, ...requirement } = input
+    if (!nonempty(requirement.request) || !['uat', 'production'].includes(requirement.target.environment)
+      || !nonempty(requirement.target.instance) || !nonempty(requirement.target.database)
+      || requirement.sources.length < 1 || new Set(requirement.sources.map(item => item.id)).size !== requirement.sources.length
+      || requirement.sources.some(item => !nonempty(item.id) || !isSha(item.sha256) || hash(item.content) !== item.sha256))
+      throw executionError('DATA_CHANGE_INPUT_INVALID')
+    return requirement
+  }
+  const proposal = workflow.nodes.find(node => node.id === 'propose-sql')
+  proposal.version = '3'
+  proposal.prompt += ' 输入不含生产基线；只依据准确 target 和来源形成候选，受信 Host 随后按候选 SQL 中的准确 schema/table 获取基线并验证。不要生成或声明 baseline、scope 或基线已确认。'
+  const validation = workflow.nodes.find(node => node.id === 'validate-package'), originalValidation = validation.execute
+  validation.version = '3'
+  validation.execute = async context => {
+    const baseline = await options.adapter.readBaselineForCandidate({ target: context.input.requirement.target,
+      applySql: context.input.proposal.applySql, signal: context.signal })
+    return originalValidation({ ...context, input: { ...context.input,
+      requirement: { ...context.input.requirement, baseline } } })
+  }
   return workflow
 }

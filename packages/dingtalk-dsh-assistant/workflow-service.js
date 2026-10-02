@@ -23,7 +23,7 @@ import { isPassiveTaskProgress } from './message-ledger.js'
 import { taskWorkflowCatalog, messageAnswerArguments, candidateCards, referencedResourceIds } from './message-context.js'
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText, groupStatusText, groupActionText, taskDecisionConditionText } from './workflow-notifications.js'
 import { createEngineeringStageContract, createEngineeringRegistry, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
-import { createDataChangeTaskWorkflow, createLegacyDataChangeTaskWorkflow } from './workflow-data-change.js'
+import { createDataChangeTaskWorkflow, createDataChangeTaskWorkflowV4, createLegacyDataChangeTaskWorkflow } from './workflow-data-change.js'
 import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, nativeDataChangeOwnerContract } from './task-release-workflows.js'
 import { createUatPrMergeTaskWorkflow, createUatPrMergeTaskWorkflowV2, createLegacyUatPrMergeTaskWorkflow, createMainPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
@@ -442,7 +442,7 @@ function createExternalRegistry(external, selected) {
   const workflows = [], records = new Map(), byId = new Map()
   const add = (workflow, adapter, modelConfig = null) => {
     if (catalogById.get(workflow.id)?.mode !== 'external' || byId.has(workflow.id)) throw executionError('EXTERNAL_WORKFLOW_CATALOG_MISMATCH')
-    workflow = { ...workflow, ownerContract: workflow.id === 'task-data-change' && workflow.version === '4' ? nativeDataChangeOwnerContract : externalWorkflowOwnerContract }
+    workflow = { ...workflow, ownerContract: workflow.id === 'task-data-change' && ['4', '5'].includes(workflow.version) ? nativeDataChangeOwnerContract : externalWorkflowOwnerContract }
     const definition = defineExecutionWorkflow(workflow)
     const config = { ownerContractVersion: workflow.ownerContract.version, kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
       rulesDigest: adapter.rulesDigest, ...(modelConfig ? { modelConfig } : {}) }
@@ -772,7 +772,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           && saved.adapterVersion === item.version && saved.rulesDigest === item.rulesDigest)
         if (!adapter || saved.registryVersion !== '1') throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
         let previous = record.workflowId === 'task-data-change'
-          ? (record.definitionVersion === '3' ? createLegacyDataChangeTaskWorkflow : createDataChangeTaskWorkflow)({ ...saved.modelConfig, adapter })
+          ? (record.definitionVersion === '3' ? createLegacyDataChangeTaskWorkflow : record.definitionVersion === '4' ? createDataChangeTaskWorkflowV4 : createDataChangeTaskWorkflow)({ ...saved.modelConfig, adapter })
           : record.workflowId === 'task-uat-pr-merge'
             ? (record.definitionVersion === '1' ? createLegacyUatPrMergeTaskWorkflow : record.definitionVersion === '2' ? createUatPrMergeTaskWorkflowV2 : createUatPrMergeTaskWorkflow)({ adapter })
           : record.workflowId === 'task-main-pr-merge' ? createMainPrMergeTaskWorkflow({ adapter })
@@ -2702,8 +2702,12 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         && ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'].includes(node.waitReason?.reference))
       if (approvalNode) {
         const approvalOutput = approvalNode.outputRef ? await artifacts.read(approvalNode.outputRef) : null
+        const approvalEffect = (await store.query({ kind: 'effect.list', runId: run.runId }))
+          .find(effect => effect.nodeRunId === approvalNode.nodeRunId && effect.definition.payload?.stage === 'approval-gate')
         const issueId = approvalOutput?.view?.issue?.id ?? approvalOutput?.view?.issue?.issueId ?? approvalOutput?.view?.issue?.name ?? '当前工单'
-        const unconfigured = approvalNode.waitReason.reference === 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'
+        const observedDecision = approvalEffect?.result?.result?.result?.approval?.decision
+        const unconfigured = observedDecision ? observedDecision === 'unconfigured'
+          : approvalNode.waitReason.reference === 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'
         waitingCondition = { kind: unconfigured ? 'capability' : 'approval',
           missing: unconfigured ? `Bytebase 工单 ${issueId} 未启用真人审批（SKIPPED）` : `Bytebase 工单 ${issueId} 的真人审批结果`,
           responsibleParty: unconfigured ? 'Bytebase 管理员' : 'Bytebase 审批人',

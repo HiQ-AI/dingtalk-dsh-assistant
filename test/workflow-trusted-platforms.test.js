@@ -72,7 +72,7 @@ test('数据变更工单在 Assistant 任务页审批，生产执行前重验精
     prepared: execute }), { code: 'BYTEBASE_APPROVAL_PROOF_REQUIRED' })
   const gateEffect = { effectId: 'effect-1', generation: 1, state: 'succeeded', requestId: 'request-1',
     definition: { action: 'external', payload: gate }, result: { status: 'succeeded',
-      result: { scopeDigest, operationKey: gate.intent.operationKey } } }
+      result: { status: 'succeeded', result: { scopeDigest, operationKey: gate.intent.operationKey } } } }
   const approval = { effectId: 'effect-1', decision: 'approved', decisionSource: 'web',
     decidedBy: 'owner', revoked: false }
   platform.bindStore({ query: async query => query.kind === 'effect.list' ? [gateEffect] : approval })

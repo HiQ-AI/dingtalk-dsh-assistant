@@ -61,18 +61,28 @@ export function createProductionPostgresHost({ entries, Client }) {
   }
   const readBaseline = async ({ project, target, scope = 'current', signal }) => {
     signal?.throwIfAborted()
-    if (scope !== 'current') throw new Error('POSTGRES_PRODUCTION_SCOPE_INVALID')
+    const scoped = scope !== 'current'
+    if (scoped && (!scope || Object.keys(scope).sort().join(',') !== 'schema,table'
+      || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(scope.schema ?? '')
+      || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(scope.table ?? ''))) throw new Error('POSTGRES_PRODUCTION_SCOPE_INVALID')
     const entry = entryFor(project, target)
     const client = await connect(entry.connection)
     try {
+      const sql = uatCatalogBaselineSql(scoped ? scope : undefined)
+      const values = scoped ? [scope.schema, scope.table] : undefined
+      const countSql = scoped ? uatCatalogBaselineSql(scope, true) : uatCatalogBaselineCountSql()
       const [catalog, count] = await Promise.all([
-        client.query(uatCatalogBaselineSql()), client.query(uatCatalogBaselineCountSql()),
+        client.query(sql, values), client.query(countSql, values),
       ])
       if (count.rows.length !== 1 || count.rows[0].expected_rows !== catalog.rows.length)
         throw new Error('POSTGRES_PRODUCTION_CATALOG_INCOMPLETE')
-      const schemaDigest = uatCatalogBaselineDigest(catalog.rows)
-      return { project, target, snapshotId: `pg-catalog-columns-v1:${entry.connection.database}:${schemaDigest}`,
-        sha256: schemaDigest, schemaVersion: 'pg-catalog-columns-v1', schemaDigest,
+      if (scoped && catalog.rows.some(row => row.schema_name !== scope.schema || row.table_name !== scope.table))
+        throw new Error('POSTGRES_PRODUCTION_SCOPE_UNCONFIRMED')
+      const catalogDigest = uatCatalogBaselineDigest(catalog.rows)
+      const schemaDigest = scoped ? executionDigest({ scope, catalogDigest }) : catalogDigest
+      const schemaVersion = scoped ? 'pg-catalog-table-columns-v1' : 'pg-catalog-columns-v1'
+      return { project, target, snapshotId: `${schemaVersion}:${entry.connection.database}:${schemaDigest}`,
+        sha256: schemaDigest, schemaVersion, schemaDigest, ...(scoped ? { scope } : {}),
         evidenceRef: `postgres-production-readonly:${target.database}:${schemaDigest}` }
     } finally { await client.end() }
   }
@@ -82,6 +92,7 @@ export function createProductionPostgresHost({ entries, Client }) {
     const entry = entryFor(project, target)
     const column = simpleNullableColumnDefinition(applySql), verification = columnVerificationScope(verificationSql)
     if (column) {
+      if (baseline?.scope && (baseline.scope.schema !== column.schema || baseline.scope.table !== column.table)) return { passed: false }
       if (sha(applySql) !== applySqlSha256 || !verification
         || column.schema !== verification.schema || column.table !== verification.table || column.column !== verification.column)
         return { passed: false }

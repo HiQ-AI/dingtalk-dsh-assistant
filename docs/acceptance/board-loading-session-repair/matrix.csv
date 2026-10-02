@@ -26,3 +26,5 @@ same-task-live-submission,5,FAIL,round-5.md
 explicit-requirement-owner-acceptance,6,PASS,round-6.md
 native-approval-automatic-reconcile,6,PASS,round-6.md
 same-task-live-submission,6,FAIL,round-6.md
+canonical-task-source,7,PASS,round-7.md
+same-task-live-submission,7,FAIL,round-7.md

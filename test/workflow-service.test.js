@@ -1889,7 +1889,7 @@ test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入�
  await execution.controller.whenIdle(original.runId);state=await execution.controller.state(original.runId);assert.equal(state.run.status,'cancelled');assert.equal(legacyCalls,0)
 })
 
-test('已有Task成功调查但Owner等待时经本机上下文修订目标和授权，保留原来源及冻结成果', async t => {
+for (const recoveryProof of ['clean', 'effects', 'external-stage', 'plan-receipt', 'unfixed-source']) test(`已有Task成功调查但Owner等待时经本机上下文修订目标和授权，保留原来源及冻结成果：${recoveryProof}`, async t => {
   let release, started
   const gate = new Promise(resolve => { release = resolve }), began = new Promise(resolve => { started = resolve })
   t.after(() => release())
@@ -1903,7 +1903,7 @@ test('已有Task成功调查但Owner等待时经本机上下文修订目标和�
   availableTargets: [{ workflowId: 'task-uat-deployment', targetId: 'uat-test' }, { workflowId: 'task-data-change', targetId: 'production-db' }],
   operationAdapter: { execute: async () => { throw Error('UNEXPECTED_EXTERNAL') }, reconcile: async () => ({ status: 'unknown' }) },
   authorizeExternal: async () => false, prepareRequirement: async () => { throw Error('UNEXPECTED_EXTERNAL') } }
-  const { service, execution, message } = await fixture(t, 'owner', undefined, {
+  const { service, execution, message, root } = await fixture(t, 'owner', undefined, {
     config: { webActorId: 'owner' }, external,
     taskOwnerSessions: { async close() {}, async run({ input, onSessionBound, onCandidate }) {
       await onSessionBound()
@@ -1967,12 +1967,55 @@ test('已有Task成功调查但Owner等待时经本机上下文修订目标和�
   assert.equal(revisedPlan.stages[0].status, 'succeeded')
   assert.equal((await post({ ...input, context: '其他指令' })).status, 409)
   await service.recover()
+  const priorOwner = await execution.store.query({ kind: 'task.owner', taskId: task.taskId })
+  const rejectedTurnId = `old-source-decision-${recoveryProof}`
+  await execution.store.command({ id: `source-recovery-event-${recoveryProof}`, kind: 'task.owner.event', args: {
+    taskId: task.taskId, eventKey: `source-recovery-event-${recoveryProof}`, eventType: 'system.recovery' } })
+  const claim = (await execution.store.command({ id: `source-recovery-claim-${recoveryProof}`, kind: 'task.owner.claim', args: {
+    taskId: task.taskId, turnId: rejectedTurnId, expectedLeaseEpoch: priorOwner.leaseEpoch } })).result
+  await execution.store.command({ id: recoveryProof === 'plan-receipt' ? `owner-plan:${rejectedTurnId}` : `source-recovery-bind-${recoveryProof}`,
+    kind: 'task.owner.sessionBound', args: { taskId: task.taskId, turnId: rejectedTurnId, leaseEpoch: claim.leaseEpoch, sessionId: priorOwner.sessionId } })
+  const failedCondition = { sourceKey: source.sourceKey, sourceVersion: 1, sourceQuote: revision.objective, objective: revision.objective }
+  if (recoveryProof === 'unfixed-source') failedCondition.sourceVersion = 2
+  await execution.store.command({ id: `source-recovery-candidate-${recoveryProof}`, kind: 'task.owner.candidate', args: {
+    taskId: task.taskId, turnId: rejectedTurnId, leaseEpoch: claim.leaseEpoch, decision: { action: 'advance', summary: '原来源解析拒绝的新计划',
+      evidenceRefs: [preservedOutput], planChange: { kind: 'replaceSuffix', affectedFrom: 1, stages: [
+        { workflowId: 'task-investigation', gate: 'none' }, { workflowId: 'task-data-change', gate: 'none', sourceCondition: failedCondition }] } } } })
+  await execution.store.command({ id: `source-recovery-accept-${recoveryProof}`, kind: 'task.owner.accept', args: {
+    taskId: task.taskId, turnId: rejectedTurnId, leaseEpoch: claim.leaseEpoch } })
+  await execution.store.command({ id: `source-recovery-fail-${recoveryProof}`, kind: 'task.owner.action.fail', args: {
+    taskId: task.taskId, turnId: rejectedTurnId, leaseEpoch: claim.leaseEpoch, reason: 'TASK_STAGE_SOURCE_CONDITION_INVALID' } })
+  if (recoveryProof === 'external-stage') await execution.controller.extendTaskPlan({ commandId: 'historical-external-stage', taskId: task.taskId,
+    expectedPlanRevision: revisedPlan.task.planRevision, requirementRevision: revisedPlan.task.requirementRevision,
+    stages: [{ stageId: 'external-already-planned', workflowId: 'task-data-change', gate: 'none', sourceCondition: { ...failedCondition } }] })
+  if (recoveryProof === 'effects') {
+    const state = await execution.controller.state(original.stages[0].runId), node = state.nodes[0]
+    const snapshot = new DatabaseSync(join(root, 'control.db'))
+    try {
+      snapshot.prepare(`INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,
+        definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES(?,'operation',?,?,?,?,?,?,?,?,'historical-test-grant','succeeded',?,?)`)
+        .run('historical-source-effect', state.run.runId, node.nodeRunId, node.nodeId, state.run.generation, 'a'.repeat(64), 'b'.repeat(64), '{}', '[]', new Date().toISOString(), new Date().toISOString())
+    } finally { snapshot.close() }
+  }
   const ownerBeforeReassess = await execution.store.query({ kind: 'task.owner', taskId: task.taskId })
   const reassessInput = { taskId: task.taskId, recoveryKey: 'accepted-web-context', reason: '按真实人工修订重新评估下一阶段',
     expectedOwnerRevision: ownerBeforeReassess.revision, expectedLeaseEpoch: ownerBeforeReassess.leaseEpoch,
     expectedRequirementRevision: revisedPlan.task.requirementRevision, expectedControlRevision: revisedPlan.task.controlRevision }
+  if (recoveryProof !== 'clean') {
+    await assert.rejects(service.reassessReadonly(reassessInput, { channel: 'web', actorId: 'owner' }), /TASK_OWNER_REASSESS_FORBIDDEN|TASK_OWNER_DISCARD_UNSAFE/)
+    const checked = new DatabaseSync(join(root, 'control.db'), { readOnly: true })
+    try { assert.equal(checked.prepare('SELECT application_status FROM task_owner_turns WHERE turn_id=?').get(rejectedTurnId).application_status, 'blocked') }
+    finally { checked.close() }
+    return
+  }
   const reassessed = await service.reassessReadonly(reassessInput, { channel: 'web', actorId: 'owner' })
   assert.equal(reassessed.accepted, true)
+  assert.equal(reassessed.discardedTurnId, rejectedTurnId)
+  const discardedReadback = new DatabaseSync(join(root, 'control.db'), { readOnly: true })
+  try {
+    assert.equal(discardedReadback.prepare('SELECT application_status FROM task_owner_turns WHERE turn_id=?').get(rejectedTurnId).application_status, 'discarded')
+    assert.equal(discardedReadback.prepare('SELECT event_type FROM task_events WHERE task_id=? AND seq=?').get(task.taskId, reassessed.eventSeq).event_type, 'system.recovery')
+  } finally { discardedReadback.close() }
   assert.deepEqual(await service.reassessReadonly(reassessInput, { channel: 'web', actorId: 'owner' }), reassessed)
   assert.equal((await execution.store.query({ kind: 'task.owner', taskId: task.taskId })).sessionId, ownerBeforeReassess.sessionId)
   const condition = { sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, sourceQuote: revision.objective, objective: revision.objective }
@@ -3131,7 +3174,7 @@ for (const outcome of ['succeeded', 'unknown', 'failed', 'throws']) test(`交付
 
 for (const reason of ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'])
   for (const decision of ['approved', 'rejected']) test(`Bytebase 原生审批 Service 自动对账 ${reason}/${decision}`, async t => {
-    let observed = false, sends = 0, reads = 0, production = 0
+    let observed = false, sends = 0, reads = 0, production = 0, waitingDecision = "pending"
     const { service, execution, startCodeTask } = await fixture(t, 'owner', undefined, {
       nodeId: 'approval-gate', allowedEffects: ['external.operation'],
       deliveryOptions: { authorize: async () => false,
@@ -3140,7 +3183,7 @@ for (const reason of ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_
           execute: async () => { sends++; return { status: 'unknown', reason } },
           reconcile: async () => { reads++; return observed
             ? { status: 'succeeded', result: { approval: { decision, source: 'bytebase', human: true } } }
-            : { status: 'unknown', reason } },
+            : { status: 'unknown', reason, result: { approval: { decision: waitingDecision } } } },
         } },
       execute: async ({ runId, generation, requirementDigest, perform }) => {
         try { return await perform({ action: 'external', prepared: { action: 'external', workflowKind: 'data-change',
@@ -3161,18 +3204,23 @@ for (const reason of ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_
     assert.deepEqual(await service.recoverExecutionTasks(), [])
     assert.equal((await execution.controller.whenIdle(task.runId)).run.status, 'waiting')
     assert.equal(reads, 1); assert.equal(sends, 1); assert.equal(production, 0)
+    waitingDecision = "unconfigured"
+    assert.deepEqual(await service.recoverExecutionTasks(), [])
+    assert.equal((await service.tasks())[0].waitingCondition.kind, "capability")
+    assert.match((await service.tasks())[0].waitingReason, /Bytebase 管理员/u)
+    assert.equal(production, 0); assert.equal(sends, 1)
     observed = true
     assert.deepEqual(await service.recoverExecutionTasks(), [])
     const after = await execution.controller.whenIdle(task.runId)
     assert.equal(after.run.status, 'succeeded', JSON.stringify(after.nodes.map(node => [node.nodeId, node.waitReason])))
     assert.equal(after.run.generation, before.run.generation)
     assert.equal(after.nodes[0].nodeRunId, before.nodes[0].nodeRunId)
-    assert.equal(reads, 2); assert.equal(sends, 1)
+    assert.equal(reads, 3); assert.equal(sends, 1)
     assert.equal(production, decision === 'approved' ? 1 : 0)
     assert.equal((await execution.store.query({ kind: 'effect.list', runId: task.runId })).length, 1)
     assert.equal((await execution.store.query({ kind: 'approval.list' })).length, 0)
     await service.recoverExecutionTasks(); await execution.controller.whenIdle(task.runId)
-    assert.equal(reads, 2); assert.equal(sends, 1)
+    assert.equal(reads, 3); assert.equal(sends, 1)
   })
 
 for (const gate of ['maintenance', 'pause', 'stop', 'input', 'maintenance-during-read']) test(`交付只读恢复屏障 ${gate}`, async t => {

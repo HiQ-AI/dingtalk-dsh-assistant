@@ -741,8 +741,11 @@ function command(value) {
         ||task.requirement_revision!==a.expectedRequirementRevision||task.control_revision!==a.expectedControlRevision)fail('TASK_OWNER_REASSESS_STALE')
       ref(a.payloadRef,'payloadRef');digest(a.requestDigest,'requestDigest')
       const invalidRepair=owner.last_failure==='WORKFLOW_REPAIR_NOT_ADMITTED' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='repairCurrentStage'").get(a.taskId,owner.lease_epoch) : null
+      const rejectedSourcePlan=owner.last_failure==='TASK_STAGE_SOURCE_CONDITION_INVALID' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='advance'").get(a.taskId,owner.lease_epoch) : null
+      const rejectedAction=invalidRepair??rejectedSourcePlan
       if(task.state!=='active'||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND requirement_revision=? AND plan_revision=? AND status='accepted' AND application_status='applied' AND json_extract(decision_json,'$.action')='complete' LIMIT 1").get(a.taskId,task.requirement_revision,task.plan_revision)||!['idle','blocked'].includes(owner.status)||owner.current_turn_id
-        ||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,invalidRepair?.turn_id??'')
+        ||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,rejectedAction?.turn_id??'')
+        ||rejectedSourcePlan&&db.prepare('SELECT 1 FROM execution_receipts WHERE command_id=?').get(`owner-plan:${rejectedSourcePlan.turn_id}`)
         ||!db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND workflow_id='task-investigation' AND status IN ('failed','waiting','succeeded')").get(a.taskId)
         ||db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND (workflow_id<>'task-investigation' OR status NOT IN ('failed','waiting','succeeded'))").get(a.taskId)
         ||db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
@@ -756,9 +759,9 @@ function command(value) {
         if(!current||current.status==='superseded'||current.sourceVersion!==source.sourceVersion||current.actorId!==source.actorId
           ||createHash('sha256').update(canonical(current.body)).digest('hex')!==source.bodyDigest)fail('TASK_AUTHORIZATION_SOURCE_STALE')
       }
-      if(invalidRepair)reduceTaskOwnerCommand(db,{kind:'task.owner.discard',args:{taskId:a.taskId,turnId:invalidRepair.turn_id,leaseEpoch:invalidRepair.lease_epoch,reason:'WORKFLOW_REPAIR_NOT_ADMITTED'}},context(value.id,now))
+      if(rejectedAction)reduceTaskOwnerCommand(db,{kind:'task.owner.discard',args:{taskId:a.taskId,turnId:rejectedAction.turn_id,leaseEpoch:rejectedAction.lease_epoch,reason:owner.last_failure}},context(value.id,now))
       const event=reduceTaskOwnerCommand(db,{kind:'task.owner.event',args:{taskId:a.taskId,eventKey:a.eventKey,eventType:'system.recovery',payloadRef:a.payloadRef}},context(value.id,now))
-      combined={status:'pending',taskId:a.taskId,eventSeq:event.eventSeq,ownerRevision:owner.revision+1+(invalidRepair?1:0),sessionId:owner.session_id,requestDigest:a.requestDigest,...(invalidRepair?{discardedTurnId:invalidRepair.turn_id}:{})}
+      combined={status:'pending',taskId:a.taskId,eventSeq:event.eventSeq,ownerRevision:owner.revision+1+(rejectedAction?1:0),sessionId:owner.session_id,requestDigest:a.requestDigest,...(rejectedAction?{discardedTurnId:rejectedAction.turn_id}:{})}
     } else if (value.kind === 'task.authorization.repair') {
       const a = object(value.args, ['taskId','expectedRequirementRevision','expectedRequirementRef','requirementRef','eventKey','payloadRef','sources','requestDigest'])
       const task = db.prepare('SELECT requirement_ref,requirement_revision FROM business_tasks WHERE task_id=?').get(a.taskId)

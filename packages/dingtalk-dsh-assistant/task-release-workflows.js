@@ -3,7 +3,7 @@ import { executionDigest, executionError } from './execution-artifacts.js'
 /** 平台领域决定前序证明的消费规则，公共服务不再拼装各平台参数。 */
 export function createExternalStageContracts({ workflowIds, external, readEngineeringProof, readArtifact }) {
   return workflowIds.map(id => ({ id, version: '1',
-    async prepare({ taskId, stage, plan, stageIndex, requirement, origin }) {
+    async prepare({ taskId, stage, plan, stageIndex, requirement, origin, definitionVersion }) {
       const args = { ...origin.command.args.arguments, ...requirement.target, objective: requirement.request,
         ...(requirement.stageTargets?.[id] ? { targetId: requirement.stageTargets[id] } : {}) }
       let materials = []
@@ -31,7 +31,7 @@ export function createExternalStageContracts({ workflowIds, external, readEngine
         if (source?.outcome === 'needs_revision') args.previousIssueId = source.issueId
         materials = [{ resourceRef: sourceRef, text: typeof source === 'string' ? source : JSON.stringify(source) }]
       }
-      return { input: await external.prepareRequirement({ workflowId: stage.workflowId,
+      return { input: await external.prepareRequirement({ workflowId: stage.workflowId, definitionVersion,
         action: { taskId, arguments: { ...args, workflowId: id }, constraints: requirement.constraints }, materials }) }
     } }))
 }

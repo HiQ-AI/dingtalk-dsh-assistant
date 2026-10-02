@@ -81,3 +81,7 @@ Agent工作区D:/baibu-agent，运行profile D:/dsh_home/profiles/web，API18998
 原Task真实revision2已接受，验收同步独立证明通过，Owner已正确advance数据变更。但落账TASK_STAGE_SOURCE_CONDITION_INVALID，根因Host/计划核验两套来源读取（只认DWS vs认真实Web）。现统一canonical来源读取并补上下文修订到计划落账的集成用例；不伪造群来源。
 
 统一来源集成已证明：真实HTTP修订 → 只读重评 → Controller追加task-data-change源条件可落账；篡改版本/操作者/引用及跨Task均拒绝。既有DWS条件回归通过；两项旧测试fixture按当前Owner准入合同调整，未放宽生产校验。待最终包部署后重评原Task，需求r2无需再次修订。
+
+第四包PID26212与100文件a7db1a263a0088cfa5f92848fbcf759dcf9549b1be68437b717a6cc91752b794独立回读/Resume通过。原Task恢复反证：拒绝旧accepted/blocked的未落账计划决定使readonly重评被TASK_OWNER_REASSESS_FORBIDDEN挡住；正在补已核验来源、零effects、仅调查与无计划receipt的审计恢复边界，需求r2保持。
+
+第八轮：已核验来源的零效果拒绝计划审计恢复回归通过；创建/执行身份与真实审批收据跨层修正45项通过，等待审批投影4项通过。审查发现简单加列全库基线仍为隐含前置，正在按明确候选目标表收敛；部署尚未开始，原Task r2保持，实际工单未提交。

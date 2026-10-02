@@ -99,6 +99,29 @@ test('Bytebase 必须显式配置生产与 UAT 精确目标', () => {
   assert.equal(f.workflowAdapter.id, 'bytebase')
 })
 
+test('候选基线只由受信 SQL 提取范围，错表回读及伪造包范围拒绝，复杂候选保持全库合同', async () => {
+  const scopes = []
+  let wrong = false
+  const f = fixture({ api: { async getIssueApproval() {} }, productionApi: {
+    async readBaseline(args) {
+      scopes.push(args.scope)
+      return { project: args.project, target: args.target, snapshotId: 'baseline-1', sha256: pkg.baseline.sha256,
+        schemaVersion: 'migration-42', schemaDigest: sha('schema'), evidenceRef: 'read-only-proof',
+        ...(args.scope === 'current' ? {} : { scope: wrong ? { schema: 'public', table: 'other' } : args.scope }) }
+    } } })
+  const sql = 'ALTER TABLE public.t ADD COLUMN name character varying;'
+  const baseline = await f.workflowAdapter.readBaselineForCandidate({ target, applySql: sql })
+  assert.deepEqual(baseline.scope, { schema: 'public', table: 't' })
+  assert.deepEqual(scopes, [{ schema: 'public', table: 't' }])
+  wrong = true
+  await assert.rejects(f.workflowAdapter.readBaselineForCandidate({ target, applySql: sql }), { code: 'BYTEBASE_BASELINE_SCOPE_UNCONFIRMED' })
+  await assert.rejects(f.workflowAdapter.validate({ ...packageBody, applySql: sql, applySqlSha256: sha(sql),
+    baseline: { ...baseline, scope: { schema: 'public', table: 'other' } } }), { code: 'BYTEBASE_BASELINE_SCOPE_UNCONFIRMED' })
+  const complex = await f.workflowAdapter.readBaselineForCandidate({ target, applySql })
+  assert.equal(complex.scope, undefined)
+  assert.equal(scopes.at(-1), 'current')
+})
+
 test('SQL Review 与 UAT 演练均核验精确摘要和同结构基线', async () => {
   const f = fixture()
   const validation = await f.workflowAdapter.validate({ ...packageBody,

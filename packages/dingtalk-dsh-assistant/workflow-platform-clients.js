@@ -631,14 +631,19 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       const issueId = bytebaseResource(project, issueRow?.name, 'issues')
       return this.getIssueBundle({ project, issueId })
     },
-    async activateRollout({ project, issueId, operationKey }) {
-      bytebaseTitle(operationKey)
+    async activateRollout({ project, issueId, issueCreationOperationKey, executeOperationKey, approvalRequestId,
+      planId, sheetId, target, applySqlSha256, packageDigest }) {
+      bytebaseTitle(issueCreationOperationKey)
+      bytebaseTitle(executeOperationKey)
       const bundle = await this.getIssueBundle({ project, issueId })
-      if (bundle.issue.operationKey !== operationKey) fail('BYTEBASE_ROLLOUT_IDENTITY_CHANGED')
+      if (bundle.issue.operationKey !== issueCreationOperationKey || !approvalRequestId
+        || bundle.plan.id !== planId || bundle.sheet.id !== sheetId || bundle.sheet.sha256 !== applySqlSha256
+        || bundle.issue.packageDigest !== packageDigest || executionDigest(bundle.sheet.target) !== executionDigest(target)
+        || executeOperationKey !== executionDigest({ stage: 'execute-task', packageDigest: bundle.issue.packageDigest,
+          issueId, approvalRequestId })) fail('BYTEBASE_ROLLOUT_IDENTITY_CHANGED')
       if (bundle.task) return bundle
-      if (bytebaseRolloutAttempts.has(operationKey)) fail('BYTEBASE_ROLLOUT_RESULT_UNKNOWN')
-      bytebaseRolloutAttempts.add(operationKey)
-      const planId = bundle.plan.id
+      if (bytebaseRolloutAttempts.has(executeOperationKey)) fail('BYTEBASE_ROLLOUT_RESULT_UNKNOWN')
+      bytebaseRolloutAttempts.add(executeOperationKey)
       await bytebaseRequest(`/v1/${planId}/rollout`, { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parent: planId, target: 'environments/prod' }) })
       const readback = await this.getIssueBundle({ project, issueId })
@@ -663,10 +668,16 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       return { task: bundle.task, taskRun: row ? { id: row.name, taskId,
         status: row.status } : null }
     },
-    async runTask({ project, issueId, taskId, operationKey }) {
-      bytebaseTitle(operationKey)
+    async runTask({ project, issueId, taskId, issueCreationOperationKey, executeOperationKey, approvalRequestId,
+      planId, sheetId, target, applySqlSha256, packageDigest }) {
+      bytebaseTitle(issueCreationOperationKey)
+      bytebaseTitle(executeOperationKey)
       const bundle = await this.getIssueBundle({ project, issueId })
-      if (bundle.issue.operationKey !== operationKey || bundle.task?.id !== taskId)
+      if (bundle.issue.operationKey !== issueCreationOperationKey || bundle.task?.id !== taskId || !approvalRequestId
+        || bundle.plan.id !== planId || bundle.sheet.id !== sheetId || bundle.sheet.sha256 !== applySqlSha256
+        || bundle.issue.packageDigest !== packageDigest || executionDigest(bundle.sheet.target) !== executionDigest(target)
+        || executeOperationKey !== executionDigest({ stage: 'execute-task', packageDigest: bundle.issue.packageDigest,
+          issueId, approvalRequestId }))
         fail('BYTEBASE_TASK_NOT_READY')
       const runs = await bytebaseReadTaskRuns(taskId, project)
       if (runs.length > 1) fail('BYTEBASE_TASK_RUN_NOT_UNIQUE')
@@ -676,8 +687,8 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
         return { taskId }
       }
       if (bundle.task.status !== 'NOT_STARTED') fail('BYTEBASE_TASK_NOT_READY')
-      if (bytebaseTaskAttempts.has(operationKey)) fail('BYTEBASE_TASK_RESULT_UNKNOWN')
-      bytebaseTaskAttempts.add(operationKey)
+      if (bytebaseTaskAttempts.has(executeOperationKey)) fail('BYTEBASE_TASK_RESULT_UNKNOWN')
+      bytebaseTaskAttempts.add(executeOperationKey)
       const stage = taskId.slice(0, taskId.lastIndexOf('/tasks/'))
       await bytebaseRequest(`/v1/${stage}/tasks:batchRun`, { method: 'POST',
         headers: { 'Content-Type': 'application/json' },

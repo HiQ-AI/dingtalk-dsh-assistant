@@ -9,7 +9,11 @@ import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execu
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createExternalStageContracts, nativeDataChangeOwnerContract } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
-import { createDataChangeTaskWorkflow, simpleNullableColumnDefinition } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
+import { createDataChangeTaskWorkflow, createDataChangeTaskWorkflowV4, simpleNullableColumnDefinition } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
+import { createTrustedWorkflowPlatforms } from '../packages/dingtalk-dsh-assistant/workflow-trusted-platforms.js'
+import { createProductionPostgresHost } from '../packages/dingtalk-dsh-assistant/workflow-postgres-production-host.js'
+import { createPlatformClients } from '../packages/dingtalk-dsh-assistant/workflow-platform-clients.js'
+import { uatCatalogBaselineSql, uatCatalogBaselineCountSql } from '../packages/dingtalk-dsh-assistant/workflow-postgres-uat-host.js'
 
 const sha = value => createHash('sha256').update(value).digest('hex')
 const sql = 'BEGIN; UPDATE t SET v=2 WHERE id=1 AND v=1; COMMIT;'
@@ -43,6 +47,7 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
   const adapter = {
     nativeApproval: native, requiresRehearsal: () => !native,
     id: 'synthetic-bytebase', version: '1', rulesDigest: sha('synthetic-bytebase-v1'),
+    async readBaselineForCandidate() { return input().baseline },
     async validate(args) { return { passed: true, packageDigest: args.packageDigest, receiptId: 'validate-1' } },
     async rehearse(args) { return { passed: true, uat: true, packageDigest: args.package.validation.packageDigest,
       receiptId: 'rehearse-1', observedChange: 'one row only' } },
@@ -123,9 +128,36 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
   assert.equal(defineExecutionWorkflow(workflow).nodes.length, 15)
   const controller = createExecutionController({ store, artifacts, sessions, delivery, workflows: [workflow] })
   t.after(async () => { await controller.close(); await store.close() })
-  return { store, artifacts, controller, delivery, workflow, sends, reconciles, issuePreparations,
+  return { store, artifacts, controller, delivery, workflow, adapter, sessions, sends, reconciles, issuePreparations,
     observeRehearsal() { rehearsalObserved = true }, setApproval(value) { approvalDecision = value } }
 }
+
+test('持久 v4 原生待审 Run 使用冻结定义恢复，v5 新定义不改其必填基线合同', async t => {
+  const f = await fixture(t, { native: true })
+  await f.controller.close()
+  const legacy = createDataChangeTaskWorkflowV4({ provider: 'test', model: 'synthetic', adapter: f.adapter })
+  const definition = defineExecutionWorkflow(legacy)
+  assert.equal(legacy.version, '4')
+  assert.ok(legacy.nodes[0].inputSchema.required.includes('baseline'))
+  const historicalController = createExecutionController({ store: f.store, artifacts: f.artifacts,
+    sessions: f.sessions, delivery: f.delivery, workflows: [legacy] })
+  await historicalController.createRun({ commandId: 'create-v4', runId: 'historical-v4', taskId: 'task-v4',
+    workflowId: legacy.id, input: input() })
+  assert.equal((await historicalController.whenIdle('historical-v4')).nodes[10].waitReason.reference, 'BYTEBASE_APPROVAL_PENDING')
+  await historicalController.close()
+  const oldAgain = createDataChangeTaskWorkflowV4({ provider: 'test', model: 'synthetic', adapter: f.adapter })
+  assert.equal(defineExecutionWorkflow(oldAgain).digest, definition.digest)
+  const restored = createExecutionController({ store: f.store, artifacts: f.artifacts,
+    sessions: f.sessions, delivery: f.delivery, workflows: [f.workflow], historicalWorkflows: [oldAgain] })
+  t.after(async () => restored.close())
+  const sends = f.sends.length
+  f.setApproval('approved')
+  const gate = (await f.store.query({ kind: 'effect.list', runId: 'historical-v4' })).find(effect => effect.definition.payload.stage === 'approval-gate')
+  await f.delivery.reconcile(gate.effectId)
+  await restored.recover({ commandId: 'recover-v4', runId: 'historical-v4' })
+  assert.equal((await restored.whenIdle('historical-v4')).run.status, 'succeeded')
+  assert.equal(f.sends.slice(sends).filter(stage => stage === 'create-issue').length, 0)
+})
 
 test('UAT 演练未知回执进入效果账等待，对账成功后同一 Run 继续且不重发', async t => {
   const f = await fixture(t, { unknownRehearsal: true })
@@ -270,4 +302,134 @@ test('两轮驳回的后继阶段消费具体意见和旧工单身份，不重�
     assert.notEqual(f.issuePreparations[0].prepared.package.applySql, rejected.applySql)
     assert.deepEqual(f.sends, ['create-issue', 'approval-gate'])
   }
+})
+
+for (const automatic of [false, true]) test(`真实 StageContract、生产 Host 和 Bytebase client 全路径送审、批准执行、列回读 auto=${automatic}`, async t => {
+  const project = 'projects/flbn', exactTarget = { instance: 'instances/flbnpguaf',
+    database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
+  const applySql = 'ALTER TABLE public.process_id_temp ADD COLUMN name character varying;'
+  const verificationSql = "SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema='public' AND table_name='process_id_temp' AND column_name='name';"
+  const expectedRow = { column_name: 'name', data_type: 'character varying', is_nullable: 'YES', column_default: null, character_maximum_length: null }
+  const queries = [], writes = [], catalog = [{ schema_name: 'public', table_name: 'process_id_temp', relation_kind: 'r',
+    column_name: 'id', data_type: 'character varying', not_null: true, default_expression: null }]
+  class Client {
+    constructor(options) { this.options = options }
+    async connect() {}
+    async end() {}
+    async query(sql, values) {
+      queries.push({ sql, values })
+      if (sql.includes('pg_is_in_recovery()')) return { rows: [{ database_name: this.options.database, transaction_read_only: 'on', in_recovery: true }] }
+      if (sql.includes('n.nspname = $1 AND c.relname = $2') && !sql.includes('AS column_exists')) {
+        assert.deepEqual(values, ['public', 'process_id_temp'])
+        return { rows: sql.startsWith('SELECT count(') ? [{ expected_rows: catalog.length }] : catalog }
+      }
+      if (sql.includes('FROM information_schema.columns')) { assert.deepEqual(values, ['public', 'process_id_temp', 'name']); return { rows: [expectedRow] } }
+      if (sql.includes('AS column_exists')) {
+        assert.deepEqual(values, ['public', 'process_id_temp', 'name'])
+        return { rows: [{ relation_kind: 'r', column_exists: false, has_children: false }] }
+      }
+      throw Error(`UNEXPECTED_PRODUCTION_QUERY:${sql}`)
+    }
+  }
+  const productionPostgres = createProductionPostgresHost({ Client, entries: ['hiq_editor','hiq_background_db','hiq_admin'].map(database => ({
+    project, target: { ...exactTarget, database: `instances/flbnpguaf/databases/${database}` },
+    connection: { host: '101.89.215.147', port: 5432, database, user: 'fixture', password: 'fixture' } })) })
+  let sheet, plan, issue, approved = false, ran = false
+  const response = value => ({ ok: true, json: async () => value })
+  const bytebase = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev', bytebaseToken: 'fixture',
+    fetchImpl: async (url, options = {}) => {
+      const path = new URL(url).pathname, body = options.body ? JSON.parse(options.body) : null
+      if (options.method === 'POST') {
+        writes.push(path)
+        if (path.endsWith('/sheets')) { sheet = { ...body, name: `${project}/sheets/900` }; return response(sheet) }
+        if (path.endsWith('/plans')) { plan = { ...body, name: `${project}/plans/900`, hasRollout: false }; return response(plan) }
+        if (path.endsWith('/issues')) { issue = { ...body, name: `${project}/issues/900`, status: 'OPEN', approvalStatus: 'PENDING' }; plan.issue = issue.name; return response(issue) }
+        if (path.endsWith('/rollout')) { plan.hasRollout = true; if (automatic) ran = true; return response({ name: `${plan.name}/rollout` }) }
+        if (path.endsWith('/tasks:batchRun')) { ran = true; return response({}) }
+        throw Error(`UNEXPECTED_BYTEBASE_WRITE:${path}`)
+      }
+      if (path === `/v1/${exactTarget.database}`) return response({ name: exactTarget.database, project,
+        instanceResource: { name: exactTarget.instance }, effectiveEnvironment: 'environments/prod' })
+      if (path === `/v1/${project}/issues`) return response({ issues: issue ? [issue] : [] })
+      if (path === `/v1/${project}/issues/900`) return response({ ...issue, approvalStatus: approved ? 'APPROVED' : 'PENDING',
+        approvers: approved ? [{ principal: 'users/reviewer', status: 'APPROVED' }] : [] })
+      if (path.endsWith('/issueComments')) return response({ issueComments: [{ name: `${issue.name}/issueComments/approval-1`,
+        creator: 'users/reviewer', createTime: '2026-10-02T01:00:00Z', approval: { status: 'APPROVED' }, comment: '同意新增 name' }] })
+      const taskId = `${project}/plans/900/rollout/stages/prod/tasks/1`
+      if (path.endsWith('/rollout')) return response({ name: `${plan.name}/rollout`, stages: [{ environment: 'environments/prod',
+        tasks: [{ name: taskId, specId: plan.specs[0].id, target: exactTarget.database, databaseUpdate: { sheet: sheet.name }, status: ran ? 'DONE' : 'NOT_STARTED' }] }] })
+      if (path.endsWith('/taskRuns')) return response({ taskRuns: ran ? [{ name: `${taskId}/taskRuns/1`, status: 'DONE' }] : [] })
+      if (path === `/v1/${project}/plans/900`) return response(plan)
+      if (path === `/v1/${project}/sheets/900`) return response(sheet)
+      throw Error(`UNEXPECTED_BYTEBASE_READ:${path}`)
+    } }).bytebase
+  bytebase.queryVerification = args => productionPostgres.queryVerification({ ...args, packageDigest: JSON.parse(issue.description).packageDigest })
+  const external = createTrustedWorkflowPlatforms({ ownerActorId: 'owner', config: { bytebase: {
+    adapterId: 'bytebase', adapterVersion: '1', targets: [{ id: 'editor-prod', project, target: exactTarget }] } },
+    clients: { bytebase, productionPostgres } })
+  const source = { summary: '生产 public.process_id_temp 只有 id 列；新增 name 使用待审批候选',
+    evidenceRefs: ['production-column-proof'], limitations: [] }
+  const [contract] = createExternalStageContracts({ workflowIds: ['task-data-change'], external, readArtifact: async ref => {
+    assert.equal(ref, 'verified-investigation-output'); return source
+  } })
+  const prepared = await contract.prepare({ taskId: 'same-production-task', stage: { workflowId: 'task-data-change' }, stageIndex: 1,
+    plan: { stages: [{ workflowId: 'task-investigation', status: 'succeeded', outputRef: 'verified-investigation-output' }] },
+    requirement: { request: '生产 Editor public.process_id_temp 新增 name，提交 Bytebase 真人审批后执行', constraints: [], stageTargets: { 'task-data-change': 'editor-prod' } },
+    origin: { command: { args: { arguments: {} } }, run: { body: 'process_id_temp新增name', sourceKey: 'original' } } })
+  assert.deepEqual(JSON.parse(prepared.input.sources[0].content), source)
+  assert.deepEqual(prepared.input.target, exactTarget)
+  assert.equal(prepared.input.baseline, undefined)
+  assert.equal(queries.length, 0, '候选形成前不得扫描生产目录')
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-simple-change-real-contract-'))
+  const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'real-contract', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  external.bindStore(store)
+  const workflow = createDataChangeTaskWorkflow({ provider: 'fixture', model: 'fixture', adapter: external.dataChangeAdapter })
+  assert.equal(workflow.version, '5')
+  const delivery = createExecutionDelivery({ store, artifacts, authorize: async () => false,
+    externalAdapter: external.operationAdapter, authorizeExternal: external.authorizeExternal })
+  const controller = createExecutionController({ store, artifacts, delivery, workflows: [workflow], sessions: {
+    async run({ input, onSessionBound, onResult }) {
+      assert.ok(input.request.includes('process_id_temp')); assert.equal(input.sources[0].id, 'verified-investigation-output')
+      await onSessionBound(); onResult({ applySql, rollbackSql: 'ALTER TABLE public.process_id_temp DROP COLUMN name;',
+        verificationSql, expectedChange: JSON.stringify({ rows: [expectedRow] }) })
+    }, async close() {}, async cancel() {} } })
+  t.after(async () => { await controller.close(); await store.close() })
+  await controller.createRun({ commandId: 'real-contract-create', runId: 'real-contract-run', taskId: 'same-production-task',
+    workflowId: workflow.id, input: prepared.input })
+  const state = await controller.whenIdle('real-contract-run')
+  assert.equal(state.nodes[10].waitReason?.reference, 'BYTEBASE_APPROVAL_PENDING', JSON.stringify(state.nodes.map(node => [node.nodeId,node.waitReason])))
+  assert.deepEqual(writes, [`/v1/${project}/sheets`, `/v1/${project}/plans`, `/v1/${project}/issues`])
+  assert.equal(Buffer.from(sheet.content, 'base64').toString('utf8'), applySql)
+  assert.deepEqual(plan.specs[0].changeDatabaseConfig.targets, [exactTarget.database])
+  assert.equal(issue.approvalStatus, 'PENDING')
+  assert.equal((await store.query({ kind: 'approval.list' })).length, 0)
+  assert.equal(queries.filter(item => item.sql.includes('AS column_exists')).length, 1)
+  assert.equal(queries.some(item => /^\s*(ALTER|UPDATE|DELETE|INSERT)\b/i.test(item.sql)), false)
+  const saved = await artifacts.read(state.nodes[2].outputRef)
+  assert.deepEqual(saved.baseline.scope, { schema: 'public', table: 'process_id_temp' })
+  assert.deepEqual(JSON.parse(saved.expectedChange), { rows: [expectedRow] })
+  approved = true
+  const gate = (await store.query({ kind: 'effect.list', runId: 'real-contract-run' })).find(effect => effect.definition.payload.stage === 'approval-gate')
+  assert.equal((await delivery.reconcile(gate.effectId)).state, 'succeeded')
+  await controller.recover({ commandId: 'real-contract-approved', runId: 'real-contract-run' })
+  const completed = await controller.whenIdle('real-contract-run')
+  assert.equal(completed.run.status, 'succeeded', JSON.stringify(completed.nodes.map(node => [node.nodeId,node.waitReason])))
+  assert.equal(writes.filter(path => path.endsWith('/rollout')).length, 1)
+  assert.equal(writes.filter(path => path.endsWith('/tasks:batchRun')).length, automatic ? 0 : 1)
+  const result = await artifacts.read(completed.nodes.at(-1).outputRef)
+  assert.equal(result.taskRunId, `${plan.name}/rollout/stages/prod/tasks/1/taskRuns/1`)
+  assert.deepEqual(JSON.parse(result.observedChange), [expectedRow])
+  const executeEffect = (await store.query({ kind: 'effect.list', runId: 'real-contract-run' })).find(effect => effect.definition.payload.stage === 'execute-task')
+  const identity = executeEffect.definition.payload.intent
+  assert.deepEqual(identity.baseline.scope, saved.baseline.scope)
+  assert.equal(queries.some(item => item.sql === uatCatalogBaselineSql() || item.sql === uatCatalogBaselineCountSql()), false)
+  assert.notEqual(identity.issueCreationOperationKey, identity.executeOperationKey)
+  const beforeWrites = writes.length
+  assert.equal((await external.operationAdapter.reconcile(executeEffect.definition.payload)).status, 'succeeded')
+  assert.equal(writes.length, beforeWrites)
+  await assert.rejects(bytebase.runTask({ project, issueId: issue.name, taskId: result.taskId,
+    issueCreationOperationKey: identity.issueCreationOperationKey, executeOperationKey: identity.issueCreationOperationKey,
+    approvalRequestId: executeEffect.definition.payload.approvalRequestId }), /BYTEBASE_TASK_NOT_READY/)
+  assert.equal(writes.length, beforeWrites)
 })

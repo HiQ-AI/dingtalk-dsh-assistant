@@ -212,18 +212,20 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       && effect.definition.payload.intent?.packageDigest === packageDigest
       && executionDigest(effect.definition.payload.target) === executionDigest(target))
     const nativeApproval = !legacy && typeof clients?.bytebase?.getIssueApproval === 'function'
+    const receipt = gates[0]?.result?.result
     if (gates.length !== 1 || gates[0].state !== 'succeeded'
       || (!nativeApproval && (!gates[0].requestId || (requestId && gates[0].requestId !== requestId)))
       || gates[0].result?.status !== 'succeeded'
-      || gates[0].result?.result?.scopeDigest !== scopeDigest
-      || gates[0].result?.result?.operationKey !== gates[0].definition.payload.intent.operationKey)
+      || receipt?.status !== 'succeeded'
+      || receipt.result?.scopeDigest !== scopeDigest
+      || receipt.result?.operationKey !== gates[0].definition.payload.intent.operationKey)
       throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
     if (nativeApproval) {
       const decision = await clients.bytebase.getIssueApproval({ project: [...databaseTargets.values()].find(item => executionDigest(item.target) === executionDigest(target))?.project,
         issueId, planId, sheetId, target, sheetSha256, packageDigest, scopeDigest })
       if (decision?.decision !== 'approved' || decision.source !== 'bytebase' || decision.human !== true
         || !decision.decidedBy || (requestId && decision.requestId !== requestId)
-        || gates[0].result.result.approval?.requestId !== decision.requestId) throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
+        || receipt.result.approval?.requestId !== decision.requestId) throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
       return decision
     }
     const approval = await boundStore.query({ kind: 'approval.get', requestId: gates[0].requestId })
@@ -291,7 +293,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       arguments: { objective: requirement.request, targetId: matches[0].id, commitSha: requirement.target.commitSha },
       constraints: requirement.constraints }, materials: [{ resourceRef: `uat-failed-task:${taskId}:${runId}` }] })
   }
-  async function prepareRequirement({ workflowId, action, materials }) {
+  async function prepareRequirement({ workflowId, action, materials, definitionVersion }) {
     const request = requireText(action.arguments?.objective, 'EXTERNAL_OBJECTIVE_REQUIRED')
     const constraints = [...new Set(action.constraints ?? [])]
     if (workflowId === 'task-uat-pr-merge') {
@@ -378,15 +380,16 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       const changeRef = requireText(action.arguments.changeRef, 'EXTERNAL_CHANGE_REF_REQUIRED')
       const source = materials.find(item => item.resourceRef === changeRef)
       if (!source?.text) throw executionError('EXTERNAL_MATERIAL_NOT_FOUND')
-      const snapshot = await clients.productionPostgres.readBaseline({ project: selected.project,
+      const currentNative = bytebase.workflowAdapter.nativeApproval && !['3', '4'].includes(definitionVersion)
+      const snapshot = currentNative ? null : await clients.productionPostgres.readBaseline({ project: selected.project,
         target: selected.target, scope: 'current' })
-      if (snapshot?.project !== selected.project || executionDigest(snapshot.target) !== executionDigest(selected.target)
+      if (!currentNative && (snapshot?.project !== selected.project || executionDigest(snapshot.target) !== executionDigest(selected.target)
         || typeof snapshot.snapshotId !== 'string' || !snapshot.snapshotId
         || !/^[a-f0-9]{64}$/.test(snapshot.sha256 ?? '') || typeof snapshot.evidenceRef !== 'string'
-        || !snapshot.evidenceRef) throw executionError('EXTERNAL_BASELINE_UNCONFIRMED')
+        || !snapshot.evidenceRef)) throw executionError('EXTERNAL_BASELINE_UNCONFIRMED')
       return { request, constraints, target: selected.target,
         sources: [{ id: changeRef, sha256: digestText(source.text), content: source.text }],
-        baseline: { snapshotId: snapshot.snapshotId, sha256: snapshot.sha256 },
+        ...(snapshot ? { baseline: { snapshotId: snapshot.snapshotId, sha256: snapshot.sha256 } } : {}),
         ...(action.arguments.previousIssueId ? { previousIssueId: action.arguments.previousIssueId } : {}) }
     }
     throw executionError('EXTERNAL_WORKFLOW_NOT_CONFIGURED')

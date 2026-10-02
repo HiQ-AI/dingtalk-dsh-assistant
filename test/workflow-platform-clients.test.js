@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
+import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createPlatformClients } from '../packages/dingtalk-dsh-assistant/workflow-platform-clients.js'
 
 const SHA = 'a'.repeat(40)
@@ -263,14 +264,19 @@ test('Bytebase 工单以 operationKey 唯一对账，执行前检查任务且独
     packageDigest, applySqlSha256, applySql })
   assert.deepEqual(same, createdBundle)
   assert.equal(writes.filter(path => path.endsWith('/issues')).length, 1)
-  const activatedBundle = await client.activateRollout({ project, issueId, operationKey })
+  const approvalRequestId = `${issueId}/issueComments/approval-1`
+  const executionIdentity = { issueCreationOperationKey: operationKey, approvalRequestId, planId, sheetId, target, applySqlSha256, packageDigest,
+    executeOperationKey: executionDigest({ stage: 'execute-task', packageDigest, issueId, approvalRequestId }) }
+  await assert.rejects(client.activateRollout({ project, issueId, ...executionIdentity, issueCreationOperationKey: 'c'.repeat(64) }), /BYTEBASE_ROLLOUT_IDENTITY_CHANGED/)
+  await assert.rejects(client.activateRollout({ project, issueId, ...executionIdentity, executeOperationKey: operationKey }), /BYTEBASE_ROLLOUT_IDENTITY_CHANGED/)
+  const activatedBundle = await client.activateRollout({ project, issueId, ...executionIdentity })
   assert.equal(activatedBundle.task.id, taskId)
   assert.equal(writes.filter(path => path.endsWith('/rollout')).length, 1)
-  assert.deepEqual(await client.activateRollout({ project, issueId, operationKey }), activatedBundle)
+  assert.deepEqual(await client.activateRollout({ project, issueId, ...executionIdentity }), activatedBundle)
   assert.equal(writes.filter(path => path.endsWith('/rollout')).length, 1)
-  await client.runTask({ project, issueId, taskId, operationKey })
+  await client.runTask({ project, issueId, taskId, ...executionIdentity })
   assert.equal(writes.filter(path => path.endsWith('/tasks:batchRun')).length, 1)
-  assert.deepEqual(await client.runTask({ project, issueId, taskId, operationKey }), { taskId })
+  assert.deepEqual(await client.runTask({ project, issueId, taskId, ...executionIdentity }), { taskId })
   assert.equal(writes.filter(path => path.endsWith('/tasks:batchRun')).length, 1)
   const execution = await client.getTaskExecution({ project, issueId, taskId })
   assert.equal(execution.taskRun.status, 'DONE')
@@ -321,8 +327,11 @@ test('Bytebase Rollout 提交结果未知时禁止重发，留给只读对账', 
         content: Buffer.from(applySql).toString('base64') })
       throw new Error(`unexpected ${path}`)
     } }).bytebase
-  await assert.rejects(client.activateRollout({ project, issueId, operationKey }), /PLATFORM_REQUEST_FAILED/)
-  await assert.rejects(client.activateRollout({ project, issueId, operationKey }), /BYTEBASE_ROLLOUT_RESULT_UNKNOWN/)
+  const approvalRequestId = `${issueId}/issueComments/approval-1`, executionIdentity = { issueCreationOperationKey: operationKey, approvalRequestId, planId, sheetId: `${project}/sheets/1`, target,
+    applySqlSha256: createHash('sha256').update(applySql).digest('hex'), packageDigest: 'b'.repeat(64),
+    executeOperationKey: executionDigest({ stage: 'execute-task', packageDigest: 'b'.repeat(64), issueId, approvalRequestId }) }
+  await assert.rejects(client.activateRollout({ project, issueId, ...executionIdentity }), /PLATFORM_REQUEST_FAILED/)
+  await assert.rejects(client.activateRollout({ project, issueId, ...executionIdentity }), /BYTEBASE_ROLLOUT_RESULT_UNKNOWN/)
   assert.equal(writes, 1)
 })
 
