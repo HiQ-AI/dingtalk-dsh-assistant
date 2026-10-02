@@ -83,3 +83,4 @@ task-global-notification-silence,20,PASS,round-20.md
 notification-upgrade-queue-and-unknown,20,PASS,round-20.md
 notification-completion-and-private-approval,20,PASS,round-20.md
 task-notification-silence-deployment,20,FAIL,round-20.md
+task-notification-silence-deployment,21,PASS,round-21.md

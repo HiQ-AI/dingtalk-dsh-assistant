@@ -8,6 +8,8 @@
 
 本次 round14 沿现有参数：`-Package <D:/dsh_home/packages/唯一Assistant包>`、`-ExpectedPackageSha256 <包摘要>`、`-ExpectedProfileSha256 <当前profile摘要>`、`-DirectQueriesProposal <保持当前查询配置的既有提案>`、`-TaskDirectory <真实Agent任务根>`、`-EvidenceDirectory <当前worktree/docs/tmp/新目录>`；先加 `-Check`。通过后同参数去掉 `-Check` 执行，可用 `-HoldMaintenance` 保持维护待独立核验，再使用同参数 `-Readback` / `-Resume`。本轮不传任何迁移、Bootstrap、RepairStoppedLaunch 或 Observer 参数。
 
+`-Resume` 先恢复原生派发，再恢复 Windows 自启；若后一步因磁盘空间等环境问题失败，应分别读取 `/runtime/maintenance` 与 `Get-ScheduledTask`，不要用恢复前的 Readback 快照判断当前派发。环境恢复后沿原参数再次 `-Resume`，现有入口会保持已恢复派发并补齐自启，无需重装或重跑任务。
+
 仍要求原生维护排空/封存、精确旧PID退出、禁用并按原状态恢复计划任务自启、持续owner独占锁、停机checkpoint、源/包/安装文件比对、控制历史独立回读、新PID与健康核验后恢复派发。Launch 记录 `backupCreated=false`，绑定部署控制证据摘要；回读及恢复拒绝包/profile/证据身份漂移。
 
 已有 Bootstrap 首次数据接管、MessageImpact、ExecutionEventsIndex 和 TaskMigrationPlan 专用迁移沿原恢复合同保留其必要完整备份，不修改历史离线恢复规则。普通无备份部署失败保留封存现场与精确包/控制证据，不能使用原历史数据回滚入口，也不得把原库当成可丢弃的临时数据。
