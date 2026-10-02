@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { DatabaseSync, backup } from 'node:sqlite'
+import { isBusinessTaskTerminal } from '../packages/dingtalk-dsh-assistant/message-ledger.js'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import { createTaskDirectoryResolver } from '../packages/dingtalk-dsh-assistant/execution.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
@@ -1886,7 +1887,7 @@ test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入�
  await execution.controller.whenIdle(original.runId);state=await execution.controller.state(original.runId);assert.equal(state.run.status,'cancelled');assert.equal(legacyCalls,0)
 })
 
-test('已有Task经本机上下文入口修订目标和阶段授权，保留原来源及冻结成果', async t => {
+test('已有Task成功调查但Owner等待时经本机上下文修订目标和授权，保留原来源及冻结成果', async t => {
   let release, started
   const gate = new Promise(resolve => { release = resolve }), began = new Promise(resolve => { started = resolve })
   t.after(() => release())
@@ -1897,12 +1898,28 @@ test('已有Task经本机上下文入口修订目标和阶段授权，保留原�
   authorizeExternal: async () => false, prepareRequirement: async () => { throw Error('UNEXPECTED_EXTERNAL') } }
   const { service, execution, message } = await fixture(t, 'owner', undefined, {
     config: { webActorId: 'owner' }, external,
-    execute: async ({ input }) => { started(); await gate; return { summary: input.request } } })
+    taskOwnerSessions: { async close() {}, async run({ input, onSessionBound, onCandidate }) {
+      await onSessionBound()
+      const first = !input.stages.length
+      const decision = { action: first ? 'advance' : 'wait', summary: first ? '启动调查' : '候选待审批，业务尚未完成',
+        evidenceRefs: input.stages.flatMap(stage => stage.evidenceRefs ?? []),
+        ...(first ? { planChange: { kind: 'initialize', stages: [{ workflowId: 'task-investigation', gate: 'none' }] } }
+          : { condition: { kind: 'approval', missing: '候选尚待批准', responsibleParty: '审批人', resumeWhen: '审批决定变化', evidenceRefs: input.stages.flatMap(stage => stage.evidenceRefs ?? []) } }) }
+      await onCandidate(decision)
+      return { status: 'submitted', decision }
+    } },
+    execute: async ({ input }) => { started(); await gate; return { summary: input.request, evidenceRefs: input.materials.map(item => item.id) } } })
   try {
   const received = await service.ingest(message); await service.messages.process(received.runId); await began
   const task = (await service.tasks())[0]
   const original = await execution.controller.taskPlan(task.taskId)
   const originalInput = await execution.artifacts.read(original.task.requirementRef)
+  release(); await execution.controller.whenIdle(original.stages[0].runId); await service.recover()
+  const completedStage = await execution.controller.taskPlan(task.taskId)
+  assert.equal(completedStage.stages[0].status, 'succeeded')
+  assert.equal((await execution.store.query({ kind: 'task.owner', taskId: task.taskId })).decision.action, 'wait')
+  const preservedOutput = completedStage.stages[0].outputRef
+  assert.ok(preservedOutput)
   const revision = { objective: '按批准方案部署至 UAT', acceptanceCriteria: ['UAT 版本独立回读'],
     stageTargets: { 'task-uat-deployment': 'uat-test' }, stageAuthorizations: [{
       workflowId: 'task-uat-deployment', sourceQuote: '按批准方案部署至 UAT', objective: '按批准方案部署至 UAT', gate: 'none' }] }
@@ -1927,6 +1944,8 @@ test('已有Task经本机上下文入口修订目标和阶段授权，保留原�
   assert.equal(source.body, input.context); assert.equal(source.actorId, 'owner'); assert.equal(source.channel, 'web')
   assert.equal((await execution.artifacts.read((await execution.controller.state(original.stages[0].runId)).run.requirementRef)).request, originalInput.request)
   assert.equal((await execution.store.query({ kind: 'run.list' })).length, 1)
+  assert.equal(revisedPlan.stages[0].outputRef, preservedOutput)
+  assert.equal(revisedPlan.stages[0].status, 'succeeded')
   assert.equal((await post({ ...input, context: '其他指令' })).status, 409)
   release(); await execution.controller.whenIdle(original.stages[0].runId)
   } finally { release() }
@@ -3065,6 +3084,52 @@ for (const outcome of ['succeeded', 'unknown', 'failed', 'throws']) test(`交付
   assert.equal(sends, 1)
   assert.equal(reads, ['unknown', 'throws'].includes(outcome) ? 2 : 1)
 })
+
+for (const reason of ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'])
+  for (const decision of ['approved', 'rejected']) test(`Bytebase 原生审批 Service 自动对账 ${reason}/${decision}`, async t => {
+    let observed = false, sends = 0, reads = 0, production = 0
+    const { service, execution, startCodeTask } = await fixture(t, 'owner', undefined, {
+      nodeId: 'approval-gate', allowedEffects: ['external.operation'],
+      deliveryOptions: { authorize: async () => false,
+        authorizeExternal: async () => ({ principalId: 'owner', authorizationRef: 'bytebase-approval-read' }),
+        externalAdapter: {
+          execute: async () => { sends++; return { status: 'unknown', reason } },
+          reconcile: async () => { reads++; return observed
+            ? { status: 'succeeded', result: { approval: { decision, source: 'bytebase', human: true } } }
+            : { status: 'unknown', reason } },
+        } },
+      execute: async ({ runId, generation, requirementDigest, perform }) => {
+        try { return await perform({ action: 'external', prepared: { action: 'external', workflowKind: 'data-change',
+          stage: 'approval-gate', resourceKey: 'external:fixture:bytebase', runId, generation, requirementDigest } }) }
+        catch (error) {
+          if (error.code === 'DELIVERY_RECONCILIATION_REQUIRED') throw Object.assign(Error(reason), { code: reason })
+          throw error
+        }
+      },
+      extraNodes: [{ id: 'consume-approval', version: '1', executor: 'code', allowedEffects: ['pure'],
+        inputSchema: schema, outputSchema: schema, mapInput: ({ previousOutput }) => previousOutput,
+        execute: async ({ input }) => { if (input.result.approval.decision === 'approved') production++; return {} } }],
+    })
+    const task = await startCodeTask()
+    const before = await execution.controller.whenIdle(task.runId)
+    assert.equal(before.nodes[0].waitReason.reference, reason)
+    assert.equal(sends, 1); assert.equal(production, 0)
+    assert.deepEqual(await service.recoverExecutionTasks(), [])
+    assert.equal((await execution.controller.whenIdle(task.runId)).run.status, 'waiting')
+    assert.equal(reads, 1); assert.equal(sends, 1); assert.equal(production, 0)
+    observed = true
+    assert.deepEqual(await service.recoverExecutionTasks(), [])
+    const after = await execution.controller.whenIdle(task.runId)
+    assert.equal(after.run.status, 'succeeded', JSON.stringify(after.nodes.map(node => [node.nodeId, node.waitReason])))
+    assert.equal(after.run.generation, before.run.generation)
+    assert.equal(after.nodes[0].nodeRunId, before.nodes[0].nodeRunId)
+    assert.equal(reads, 2); assert.equal(sends, 1)
+    assert.equal(production, decision === 'approved' ? 1 : 0)
+    assert.equal((await execution.store.query({ kind: 'effect.list', runId: task.runId })).length, 1)
+    assert.equal((await execution.store.query({ kind: 'approval.list' })).length, 0)
+    await service.recoverExecutionTasks(); await execution.controller.whenIdle(task.runId)
+    assert.equal(reads, 2); assert.equal(sends, 1)
+  })
 
 for (const gate of ['maintenance', 'pause', 'stop', 'input', 'maintenance-during-read']) test(`交付只读恢复屏障 ${gate}`, async t => {
   let sends = 0, reads = 0, executionRef
@@ -4783,3 +4848,54 @@ test('新Task短名称独立于完整调查目标，数据库目录提供真实�
  assert.equal(catalog.databases[0].connectionId,'tianyi_editor_slave');assert.deepEqual(catalog.databases[0].metadataSchemas,['public']);
  assert.match(catalog.databaseGuidance,/登记只读连接/);assert.equal(catalog.databases[0].environment,'production');assert.equal(JSON.stringify(catalog).includes('credentialsPath'),false);
 });
+
+test('没有Owner的历史业务Task仍按计划成功和取消判终态，不放开已完成上下文', () => {
+  const db = new DatabaseSync(':memory:')
+  try {
+    db.exec(`CREATE TABLE business_tasks(task_id TEXT,status TEXT,requirement_revision INTEGER,plan_revision INTEGER,plan_requirement_revision INTEGER);
+      CREATE TABLE task_controls(task_id TEXT,state TEXT,control_revision INTEGER);
+      CREATE TABLE task_owners(task_id TEXT);
+      INSERT INTO business_tasks VALUES('legacy','succeeded',1,1,1);
+      INSERT INTO task_controls VALUES('legacy','active',1);`)
+    assert.equal(isBusinessTaskTerminal(db, 'legacy'), true)
+    db.prepare("UPDATE business_tasks SET status='failed' WHERE task_id='legacy'").run()
+    assert.equal(isBusinessTaskTerminal(db, 'legacy'), false)
+    db.prepare("UPDATE task_controls SET state='cancelled' WHERE task_id='legacy'").run()
+    assert.equal(isBusinessTaskTerminal(db, 'legacy'), true)
+  } finally { db.close() }
+})
+
+for (const ending of ['complete', 'cancelled']) test(`真正业务 ${ending} 后上下文入口仍拒绝修订`, async t => {
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  t.after(() => release())
+  const waitingOwner = { async close() {}, async run({ input, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    const first = !input.stages.length
+    const decision = { action: first ? 'advance' : 'wait', summary: '业务尚待下一步', evidenceRefs: input.stages.flatMap(stage => stage.evidenceRefs ?? []),
+      ...(first ? { planChange: { kind: 'initialize', stages: [{ workflowId: 'task-investigation', gate: 'none' }] } }
+        : { condition: { kind: 'approval', missing: '尚待批准', responsibleParty: '审批人', resumeWhen: '审批变化', evidenceRefs: input.stages.flatMap(stage => stage.evidenceRefs ?? []) } }) }
+    await onCandidate(decision); return { status: 'submitted', decision }
+  } }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { config: { webActorId: 'owner' },
+    ...(ending === 'cancelled' ? { taskOwnerSessions: waitingOwner, execute: async ({ input }) => {
+      await gate; return { summary: '调查完成', evidenceRefs: input.materials.map(item => item.id) }
+    } } : {}) })
+  const received = await service.ingest(message); await service.messages.process(received.runId)
+  let task = (await service.tasks())[0]
+  const plan = await execution.controller.taskPlan(task.taskId)
+  if (ending === 'cancelled') {
+    await service.submitWebTask({ action: 'cancel', taskId: task.taskId, requestId: 'context-ending-cancel', inputVersion: plan.task.requirementRevision + 1, runSequence: 1, reason: '停止任务' }, { channel: 'web', actorId: 'owner' })
+    release(); await execution.controller.whenIdle(plan.stages[0].runId); await service.recover()
+  } else {
+    await execution.controller.whenIdle(plan.stages[0].runId); await service.recover()
+    const owner = await execution.store.query({ kind: 'task.owner', taskId: task.taskId })
+    assert.equal(owner.decision.action, 'complete'); assert.equal(owner.applicationStatus, 'applied')
+    assert.equal(owner.eventWatermark, owner.processedWatermark)
+  }
+  task = (await service.tasks())[0]
+  const current = await execution.controller.taskPlan(task.taskId)
+  await assert.rejects(service.submitWebTask({ action: 'context', taskId: task.taskId, requestId: 'context-after-terminal',
+    inputVersion: current.task.requirementRevision + 1, runSequence: 1, context: '追加要求', topicRefs: [] }, { channel: 'web', actorId: 'owner' }), /RUN_TERMINAL/)
+  assert.equal((await execution.controller.taskPlan(task.taskId)).task.requirementRevision, current.task.requirementRevision)
+})

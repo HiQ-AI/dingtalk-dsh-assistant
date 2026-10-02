@@ -4,6 +4,22 @@ import { sameDwsFileProjection } from './coordination-resources.js'
 import { maintenanceStatus } from './execution-maintenance.js'
 import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic, invalidateMessageSourceTopics, unbindMessageUnit, wholeTopicFactRevision } from './message-topics.js'
 
+// 阶段结束不代表业务结束；仅取消控制或当前需求/水位已应用的 Owner 完成决定封闭上下文修订。
+export function isBusinessTaskTerminal(db, taskId) {
+  const task = db.prepare('SELECT t.*,c.state AS control_state,c.control_revision FROM business_tasks t JOIN task_controls c USING(task_id) WHERE task_id=?').get(taskId)
+  if (!task) return false
+  if (['cancelling', 'cancelled'].includes(task.control_state)) return true
+  if (!db.prepare('SELECT 1 FROM task_owners WHERE task_id=?').get(taskId)) return task.status === 'succeeded'
+  return !!db.prepare(`SELECT 1 FROM task_owners o JOIN task_owner_turns r ON r.turn_id=(
+      SELECT turn_id FROM task_owner_turns WHERE task_id=o.task_id AND status='accepted' ORDER BY rowid DESC LIMIT 1)
+    WHERE o.task_id=? AND o.status='idle' AND o.current_turn_id IS NULL
+      AND o.event_watermark=o.processed_watermark AND r.event_watermark=o.processed_watermark
+      AND r.application_status='applied' AND json_extract(r.decision_json,'$.action')='complete'
+      AND r.requirement_revision=? AND r.plan_revision=? AND r.control_revision=?`).get(
+    taskId, task.requirement_revision, task.plan_revision, task.control_revision)
+    && task.plan_requirement_revision === task.requirement_revision
+}
+
 // 排队和维护不算执行时间；旧账以真实模型领取时间推导，不能重置已用预算。
 export function messageExecutionStartedAt(run, nodes) {
   const times = [run.executionStartedAt, ...nodes.filter(node => node.input?.deterministic !== true).map(node => node.startedAt)]
@@ -662,7 +678,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(!task||!businessTask?.requirement_ref||a.request.runSequence!==1
       ||a.request.inputVersion!==businessTask.requirement_revision+1)fail('REVISION_CONFLICT')
     if(!['cancel','context'].includes(a.request.action))fail('MESSAGE_WEB_ACTION_UNSUPPORTED')
-    if(a.request.action==='context'&&['succeeded','failed','cancelled'].includes(task.status))fail('RUN_TERMINAL')
+    if(a.request.action==='context'&&isBusinessTaskTerminal(db,a.request.taskId))fail('RUN_TERMINAL')
     const event={id:str(a.eventId),actorId:str(a.actorId),runId:origin.run.runId,executionRunId:task.run_id,request:a.request,input:a.input??null,status:'pending'}
     put(db,event.runId,'web-task',event);return {result:{event}}
   }

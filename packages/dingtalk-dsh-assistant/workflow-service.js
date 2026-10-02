@@ -2887,7 +2887,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           const waiting = state.nodes?.filter(node => node.status === 'waiting') ?? [], node = waiting[0]
           if (waiting.length !== 1) continue
           if (node.waitReason?.reference === 'AGENT_WORK_NEEDS_INPUT') { await ensureInvestigationMessageRequest(run.runId); continue }
-          if (node.waitReason?.reference === 'DELIVERY_RECONCILIATION_REQUIRED') {
+          if (['DELIVERY_RECONCILIATION_REQUIRED', 'BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'].includes(node.waitReason?.reference)) {
             const eligible = async current => {
               const plan = await store.query({ kind: 'task.plan', taskId: run.taskId })
               return !(await store.query({ kind: 'runtime.maintenance' })).active
@@ -2899,7 +2899,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
                 && current.nodes.filter(item => item.status === 'waiting').length === 1
                 && current.nodes.some(item => item.nodeRunId === node.nodeRunId && item.status === 'waiting'
                   && item.inputDigest === node.inputDigest && item.leaseEpoch === node.leaseEpoch
-                  && item.waitReason?.reference === 'DELIVERY_RECONCILIATION_REQUIRED')
+                  && item.waitReason?.reference === node.waitReason?.reference)
             }
             if (!execution.delivery?.reconcile || !await eligible(state)) continue
             const effects = await store.query({ kind: 'effect.list', runId: run.runId })

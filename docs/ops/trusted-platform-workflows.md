@@ -243,3 +243,7 @@ Owner 快照复用同一成功工程 Run 的交付证明，将构建检查、验
 ### 超时流水线已部分部署的同提交重建
 
 流水线整体 failure/error/killed 不代表构建步骤失败。重建预检可接受本次失败流水线的同提交制品已运行：Host 必须独立确认唯一 `buildkit-build-and-push` 步骤 success/exit0、该步骤日志中唯一且一致的export/push digest、Registry manifest，以及目标Deployment全部Ready副本的实际imageID。若该构建未成功，仍可用失败前成功流水线的旧制品证明；混合新旧副本、无来源digest、更新流水线和不完整Pod清单继续阻断。`readBuildEvidence` 默认仍要求整体成功；仅重建证明显式传入精确 `expectedPipelineStatus` 才允许检查失败流水线中的成功构建。
+
+### 数据变更原生审批的持续接续
+
+待审和未启用人工审批通过现有效果账只读轮询对账；收到真人批准或驳回后恢复原 Run，不需要手工重建 Task 或重复发工单。完成调查但 Owner 未完成的 Task 可经本机 context 修订下一步；成功调查成果保留，取消或已业务完成任务不能用此入口续办。

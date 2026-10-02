@@ -7,7 +7,7 @@ import { maintenanceStatus, assertMaintenanceDispatch, reduceMaintenanceCommand 
 import { installEffectsSchema, validateEffectsSchema, reduceEffectCommand, recoverEffects,
   queryEffects, assertRunEffectsDrained, assertNodeEffectsSettled } from './execution-effects.js'
 
-import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced, registerMessageAcceptance } from './message-ledger.js'
+import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced, registerMessageAcceptance, isBusinessTaskTerminal } from './message-ledger.js'
 import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, queryTaskPlan, bindRunToTaskStage } from './execution-task-plan.js'
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
@@ -677,7 +677,7 @@ function command(value) {
           if (!stage || stage.status !== 'waiting_confirmation' || stage.gate !== 'confirmation') fail('TASK_CONFIRMATION_NOT_WAITING')
           if (!previous.length || previous.some(item => item.status !== 'succeeded') || previous.at(-1).output_ref !== request.outputRef) fail('TASK_CONFIRMATION_OUTPUT_STALE')
         } else if (request.inputVersion !== task.requirement_revision + 1 || request.runSequence !== count) fail('REVISION_CONFLICT')
-        if (request.action === 'context' && (task.status === 'succeeded' || ['cancelling', 'cancelled'].includes(control.state))) fail('RUN_TERMINAL')
+        if (request.action === 'context' && isBusinessTaskTerminal(db, request.taskId)) fail('RUN_TERMINAL')
         combined = { event: { id: eventId, channel: 'web', actorId, request, input, status: 'pending', expectedControlRevision: control.control_revision } }
       }
     } else if (value.kind === 'task.web-input.finish') {

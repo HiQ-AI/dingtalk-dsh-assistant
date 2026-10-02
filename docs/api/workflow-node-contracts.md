@@ -317,3 +317,5 @@ PR预检暂态失败仅在Host适配器通过完整本地日志独立证明同�
 本机已有 `POST /tasks/:id/context` 可选传 `requirement: {objective, acceptanceCriteria, stageTargets, stageAuthorizations}`，与 `context`、`requestId`、`inputVersion`、`runSequence` 一起使用。objective 必须包含在实际 context 中；阶段授权包含 workflowId、sourceQuote、objective、gate。服务核验当前操作者和目标白名单，将本次真实 Web 指令记录为新来源，保留原始来源及已冻结运行，不伪造群成员发言。原请求的比较版本和幂等约束仍生效。该入口不构成生产 SQL 批准。
 
 `task-data-change` v4 的原生审批等待保留 `waitReason.kind=recovery` 以复用现有对账恢复机制；reference 为 `BYTEBASE_APPROVAL_PENDING` 或 `BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED`。投影展示真实等待事项、责任方及恢复条件。驳回产物为 `outcome=needs_revision`，携带工单、SQL、真实意见和证据，后继同 Task 的候选绑定 previousIssueId，必须重新取得审批。新默认调查合同为 v9，v8 及以前保持原摘要恢复。
+
+已有调查 Run 或全部调查阶段成功不封闭原 Task 的需求修订。取消控制或当前需求与事件水位已应用的 Owner complete 才拒绝 context；无 Owner 的历史 Task 仍按业务终态判断。原生审批的两个等待代码复用外部效果只读对账路由，未批准不恢复执行，批准/驳回后原 Run 接续，禁止重新发送未知写入。
