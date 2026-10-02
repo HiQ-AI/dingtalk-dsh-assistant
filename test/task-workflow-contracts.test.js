@@ -66,10 +66,10 @@ test('只读调查范围说明不阻塞完成，未知来源和未满足验收�
   const f = await fixture(t, workflow, input, sessions), completed = await f.finish()
   assert.equal(completed.plan.task.status, 'succeeded')
   assert.equal(await f.helpers.authorizeCompletion(completed), true)
-  assert.equal(await f.helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision, assessments: [] } }), false)
-  assert.equal(await f.helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision, evidenceRefs: ['invented'] } }), false)
-  assert.equal(await f.helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision,
-    assessments: [{ ...completed.decision.assessments[0], status: 'unsatisfied' }] } }), false)
+  await assert.rejects(f.helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision, assessments: [] } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
+  await assert.rejects(f.helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision, evidenceRefs: ['invented'] } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
+  await assert.rejects(f.helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision,
+    assessments: [{ ...completed.decision.assessments[0], status: 'unsatisfied' }] } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   const final = await f.artifacts.read(completed.plan.stages[0].outputRef)
   assert.equal(await workflow.ownerContract.validateCompletion({ state: await f.controller.state(completed.plan.stages[0].runId),
     output: { ...final, evidenceIds: ['unknown'] }, artifacts: f.artifacts }), false)
@@ -140,8 +140,8 @@ test('冻结合同的只读完成策略把原始节点正文同时交给Owner及
   assert.equal(observed.body.total, 2)
   assert.equal(f.controller.workflowDefinition(workflow.id, originalDigest).ownerContract.version, '3')
   assert.equal(stage.workflowDigest, originalDigest)
-  assert.equal(await helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision,
-    evidenceRefs: [nodeRef], assessments: [{ ...completed.decision.assessments[0], evidenceRefs: [nodeRef] }] } }), false)
+  await assert.rejects(helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision,
+    evidenceRefs: [nodeRef], assessments: [{ ...completed.decision.assessments[0], evidenceRefs: [nodeRef] }] } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   invalid = true
   await assert.rejects(helpers.readStageArtifacts({ taskId: 'task', stage, plan: completed.plan }), /TASK_OWNER_ARTIFACT_SCOPE_MISMATCH/)
   await assert.rejects(helpers.authorizeCompletion(completed), /TASK_OWNER_ARTIFACT_SCOPE_MISMATCH/)
@@ -192,7 +192,7 @@ test('同领域连续状态变更按当前验收逐阶段分派，历史证明�
   assert.equal(await helpers.authorizeCompletion({ ...completed, decision }), true)
   assert.ok(calls.some(item => item.stageId === add.stageId && !item.current))
   assert.ok(!calls.some(item => item.stageId === add.stageId && item.current))
-  assert.equal(await helpers.authorizeCompletion({ ...completed, decision: { ...decision, assessments: [] } }), false)
+  await assert.rejects(helpers.authorizeCompletion({ ...completed, decision: { ...decision, assessments: [] } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   await assert.rejects(helpers.authorizeCompletion(completed), /CURRENT_STATE_UNCONFIRMED/)
   corruptHistory = true
   await assert.rejects(helpers.authorizeCompletion({ ...completed, decision }), /HISTORICAL_EFFECT_INVALID/)
@@ -465,7 +465,7 @@ test('复合验收只共享该条显式绑定的当前阶段证据，领域效�
       && context.stages.map(item => item.contractId).sort().join(',') === 'delivery,general-capability-result'
   } })
   assert.equal(await helpers.authorizeCompletion({ taskId: 'task', plan, requirement, decision }), true)
-  assert.equal(seen.length, 2)
+  assert.equal(seen.length, 1)
   for (const context of seen) {
     assert.deepEqual(context.acceptanceItems[0].evidenceRefs, refs)
     for (const item of context.stages) {
@@ -483,17 +483,42 @@ test('复合验收只共享该条显式绑定的当前阶段证据，领域效�
   const truncated = createTaskWorkflowContracts({ store: { query: query => query.kind === 'task.owner.planning'
     ? { receipts: [], truncated: true } : store.query(query) }, artifacts, controller,
     verifyAcceptance: () => { throw Error('截断规划不能进入语义判断') } })
-  assert.equal(await truncated.authorizeCompletion(completed), false)
+  await assert.rejects(truncated.authorizeCompletion(completed), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   for (const verifyAcceptance of [undefined, async () => false]) {
     const rejected = createTaskWorkflowContracts({ store, artifacts, controller, verifyAcceptance })
-    assert.equal(await rejected.authorizeCompletion(completed), false)
+    await assert.rejects(rejected.authorizeCompletion(completed), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   }
   for (const bad of ['invented', 'tasks/other-task/sha256-' + 'a'.repeat(64) + '.json']) {
     const invalid = { ...decision, evidenceRefs: [...refs, bad], assessments: [{ ...decision.assessments[0], evidenceRefs: [...refs, bad] }] }
-    assert.equal(await helpers.authorizeCompletion({ ...completed, decision: invalid }), false)
+    await assert.rejects(helpers.authorizeCompletion({ ...completed, decision: invalid }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   }
   // 即便有写入和投递效果，业务语义校验不接受时也不得完成。
   const business = createTaskWorkflowContracts({ store, artifacts, controller, verifyAcceptance: async ({ stages }) =>
     stages.some(item => item.output.productionRepairVerified === true) })
-  assert.equal(await business.authorizeCompletion({ ...completed, requirement: { ...requirement, request: '修复生产故障' } }), false)
+  await assert.rejects(business.authorizeCompletion({ ...completed, requirement: { ...requirement, request: '修复生产故障' } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
+})
+
+
+test('完成拒绝沿原错误合同返回具体门禁、阶段及当前版本，不折叠原诊断异常', async t => {
+  const contract = { id: 'fixture-domain', version: '7', validateCompletion: async () => false }
+  const f = await fixture(t, synthetic(contract), { items: ['a','b'] }), completed = await f.finish()
+  await assert.rejects(f.helpers.authorizeCompletion(completed), error => {
+    assert.equal(error.code, 'TASK_OWNER_COMPLETION_UNVERIFIED')
+    assert.equal(error.completionGate.gate, 'domain-completion')
+    assert.equal(error.completionGate.stageId, completed.plan.stages[0].stageId)
+    assert.deepEqual(error.completionGate.contract, { id: 'fixture-domain', version: '7' })
+    assert.match(error.message, /domain-completion/)
+    return true
+  })
+  await assert.rejects(f.helpers.authorizeCompletion({ ...completed, plan: { ...completed.plan,
+    task: { ...completed.plan.task, planRequirementRevision: 0 } } }), error => {
+    assert.equal(error.completionGate.gate, 'plan-current-and-complete')
+    assert.equal(error.completionGate.planRequirementRevision, 0)
+    assert.equal(error.completionGate.requirementRevision, completed.plan.task.requirementRevision)
+    return true
+  })
+  const original = Object.assign(new Error('原始领域实际判定'), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED', diagnosticRef: 'trusted-original' })
+  const throwing = createTaskWorkflowContracts({ store: f.store, artifacts: f.artifacts, controller: f.controller,
+    completionPolicy: () => ({ ...contract, validateCompletion: async () => { throw original } }) })
+  await assert.rejects(throwing.authorizeCompletion(completed), error => error === original && error.diagnosticRef === 'trusted-original')
 })

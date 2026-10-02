@@ -46,7 +46,7 @@ test('正式清单绑定冻结产物身份及验收，计划成功不能代替�
   const pending = await f.helpers.readDeliveryManifest({ ...f.context, decision: undefined })
   assert.equal(pending.complete, false)
   assert.equal(pending.acceptance[0].status, 'pending')
-  assert.equal(await f.helpers.authorizeCompletion({ ...f.context, decision: { ...f.context.decision, assessments: [] } }), false)
+  await assert.rejects(f.helpers.authorizeCompletion({ ...f.context, decision: { ...f.context.decision, assessments: [] } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   f.context.decision.assessments[0].evidenceRefs = ['foreign']
   assert.equal((await f.helpers.readDeliveryManifest(f.context)).complete, false)
 })
@@ -56,7 +56,7 @@ test('缺字段、未成功阶段和旧需求清单不可完成，串换Run或�
     f => { f.plan.task.planRequirementRevision = 0 }]) {
     const f = await fixture(); mutate(f)
     assert.equal((await f.helpers.readDeliveryManifest(f.context)).complete, false)
-    assert.equal(await f.helpers.authorizeCompletion(f.context), false)
+    await assert.rejects(f.helpers.authorizeCompletion(f.context), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   }
   for (const mutate of [f => { f.state.run.runId = 'foreign' }, f => { f.state.nodes[0].generation = 1 }]) {
     const f = await fixture(); mutate(f)
@@ -73,7 +73,7 @@ test('必交文件由受管字节独立核验，缺失、旧版本、错误生�
   for (const mutate of [f => { f.output.artifactFiles = [] }, f => { f.file.requirementRevision = 2 }]) {
     const f = await fixture({ requiredFile: true }); mutate(f)
     assert.equal((await f.helpers.readDeliveryManifest(f.context)).complete, false)
-    assert.equal(await f.helpers.authorizeCompletion(f.context), false)
+    await assert.rejects(f.helpers.authorizeCompletion(f.context), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   }
   const wrong = await fixture({ requiredFile: true }); wrong.file.producer.runId = 'other'
   await assert.rejects(wrong.helpers.readDeliveryManifest(wrong.context), /TASK_DELIVERY_FILE_PRODUCER_MISMATCH/)
@@ -89,7 +89,7 @@ test('外发声明必须取得独立送达核验，文件生成不能替代送�
   assert.equal(manifest.files.length, 1)
   assert.equal(manifest.complete, false)
   assert.ok(manifest.missing.some(item => item.code === 'TASK_DELIVERY_FILE_RECEIPT_REQUIRED'))
-  assert.equal(await f.helpers.authorizeCompletion(f.context), false)
+  await assert.rejects(f.helpers.authorizeCompletion(f.context), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
 })
 
 test('文件验证回调缺失、false或篡改结果均不能授予完成', async () => {

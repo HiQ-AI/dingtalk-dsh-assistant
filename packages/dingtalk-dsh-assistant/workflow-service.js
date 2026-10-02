@@ -30,7 +30,7 @@ import { createWorkflowApprovalService } from './workflow-approval.js'
 import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
 import { describeVerificationChecks } from './execution-check-job.js'
 import { createMessageAgentController } from './message-agent.js'
-import { createInvestigationStageContract, createLegacyInvestigationWorkflow, createInvestigationWorkflow, createInvestigationWorkflowV6, createInvestigationWorkflowV7, createInvestigationWorkflowV8, createLegacyInvestigationCompletionPolicy, validateAgentWorkResult } from './agent-work.js'
+import { createInvestigationStageContract, createLegacyInvestigationWorkflow, createInvestigationWorkflow, createInvestigationWorkflowV6, createInvestigationWorkflowV7, createInvestigationWorkflowV8, createLegacyInvestigationCompletionPolicy, createInvestigationCompletionPolicy, validateAgentWorkResult } from './agent-work.js'
 import { createAgentQueryTools, verifyAgentEvidence, readExecutedAgentQueryRefs } from './agent-query-tools.js'
 import { createAgentResourceReadCapability } from './agent-query-resources.js'
 import { createAgentDatabaseReadCapability, createRegisteredPostgresConnector } from './agent-query-database.js'
@@ -1406,6 +1406,9 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       if (contract.id === 'external-result' && ['3', '4', '5'].includes(contract.version)
         && ['task-data-change', 'task-data-change-approval-resume'].includes(context?.state?.run?.workflowId))
         return withAcceptanceIdentity(createScopedNativeDataChangeCompletionPolicy(selectedExternal.byId.get(context.state.run.workflowId)?.adapter))
+      if (contract.id === 'agent-investigation-result'
+        && contract.resultContract?.id === 'investigation-result' && contract.resultContract.version === '2')
+        return withAcceptanceIdentity(createInvestigationCompletionPolicy(contract))
       return contract.id === 'agent-investigation-result' && contract.version === '1'
         ? withAcceptanceIdentity(createLegacyInvestigationCompletionPolicy(contract)) : completionPolicies.get(contract.id) ?? contract
     },

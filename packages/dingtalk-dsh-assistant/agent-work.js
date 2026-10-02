@@ -240,6 +240,20 @@ export async function validateInvestigationResult(result, { requirement, verifyR
   return structuredClone(result)
 }
 
+/** 当前 Host 验收组合显式绑定事实，不要求补证必须发生于调查之后。 */
+export function createInvestigationCompletionPolicy(contract) {
+  return { ...contract, version: 'current-admission-1',
+    rulesDigest: executionDigest({ previous: contract.rulesDigest, acceptanceScope: 'explicit-composite-evidence-v1' }),
+    async validateCompletion(context) {
+      const requirement = await context.artifacts.read(context.state.run.requirementRef)
+      await validateInvestigationResult(context.output, { requirement })
+      if (context.output.outcome !== 'completed' || !Array.isArray(context.acceptanceItems)) return false
+      return !context.acceptanceItems.length || typeof context.verifyAcceptance === 'function'
+        && await context.verifyAcceptance(context) === true
+    },
+  }
+}
+
 /** v5 保留历史摘要；新增领域交接只用于 v6 新运行。 */
 export function createInvestigationWorkflowV6(options) {
   const legacy = createLegacyInvestigationWorkflow(options)

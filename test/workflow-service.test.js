@@ -72,7 +72,7 @@ import { messageSchemas, taskWorkflowCatalog } from '../packages/dingtalk-dsh-as
 import { createWorkflowNotifications, formatGroupReply, notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 import { queryConversationTaskProgress } from '../packages/dingtalk-dsh-assistant/task-progress-query.js'
 import { groupTaskExecutions } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
-import { createInvestigationWorkflowV6, createInvestigationWorkflowV7, createInvestigationWorkflowV8 } from '../packages/dingtalk-dsh-assistant/agent-work.js'
+import { createInvestigationWorkflowV6, createInvestigationWorkflowV7, createInvestigationWorkflowV8, createInvestigationWorkflow } from '../packages/dingtalk-dsh-assistant/agent-work.js'
 import { createDataChangeTaskWorkflowV6 } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
 import { createNativeDataChangeCompletionPolicy } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 
@@ -986,10 +986,13 @@ for (const [scenario, validWrite, expectedComplete, native = false, expectedFail
     assert.equal(input.acceptanceItems[0].itemId, 'acceptance-1')
     assert.equal(input.evidence.length, 1)
     assert.deepEqual(input.acceptanceItems[0].evidenceRefs, [input.evidence[0].evidenceId])
-    assert.equal(await readFile(input.evidence[0].output.result.path, 'utf8'), content)
-    return { status: validWrite ? 'satisfied' : 'unsatisfied', resultVerified: validWrite,
+    const writtenPath = input.evidence[0].output?.result?.path
+    if (writtenPath) assert.equal(await readFile(writtenPath, 'utf8'), content)
+    else assert.equal(input.evidence[0].criterionReviews[0].status, 'insufficient_evidence')
+    const satisfied = validWrite && !!writtenPath
+    return { status: satisfied ? 'satisfied' : 'unsatisfied', resultVerified: satisfied,
       criteria: [{ criterion: scenario === '业务检查返回错项不能完成' ? '另一项未经委托的标准' : criterion,
-        passed: validWrite, evidenceIds: [input.evidence[0].evidenceId] }] }
+        passed: satisfied, evidenceIds: [input.evidence[0].evidenceId] }] }
   }
   const nativeLlm = { async *stream(request) {
     assert.deepEqual(request.tools, [])
@@ -2567,7 +2570,13 @@ test('纯排查完成后续办仍用原业务Task，原Run成功证据不重跑'
       : input.text.startsWith('继续')
         ? { kind: 'intent', actions: [{ intent: 'reopen', arguments: { objective: '继续分析', workflowId: 'task-investigation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
         : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '仅排查', workflowId: 'task-investigation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'receipt' }
-  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge, taskOwnerSessions: sessions })
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { judge, taskOwnerSessions: sessions,
+    generalCompletionCheck: async input => {
+      const proved = input.evidence.some(item => item.outcome === 'completed' && item.summary.includes(input.request)
+        && item.hostExecution.run.status === 'succeeded')
+      return { status: proved ? 'satisfied' : 'unverified', resultVerified: proved,
+        criteria: input.acceptanceItems.map(item => ({ criterion: item.criterion, passed: proved, evidenceIds: item.evidenceRefs })) }
+    } })
   const first = await service.ingest({ ...message, text: '仅排查' })
   const accepted = await service.messages.process(first.runId)
   const taskId = accepted.commands[0].result.taskId, firstRunId = accepted.commands[0].result.runId
@@ -5611,4 +5620,59 @@ test('新v5数据变更仍经过实际Host原生证明选择，缺原节点不�
   assert.ok(recovered.failures.some(item => item.code === 'DATA_CHANGE_COMPLETION_NODE_INVALID'
     || item.error?.code === 'DATA_CHANGE_COMPLETION_NODE_INVALID'), JSON.stringify(recovered))
   assert.equal((await execution.store.query({ kind: 'task.owner', taskId: 'v5-task' })).lastFailure, 'DATA_CHANGE_COMPLETION_NODE_INVALID')
+})
+
+
+for (const verdict of [true, false]) test(`真实Host调查v9原生合同v5与先前外部事实共同验收一次，末段不足意见不再要求新阶段：${verdict ? '接纳' : '事实不足拒绝'}`, async t => {
+  const criteria = ['精确执行并回查表存在且列不存在', '本次审批告知永久丢失数据']
+  const acceptanceItems = criteria.map((criterion, i) => ({ itemId: `acceptance-${i + 1}`, criterion }))
+  let checks = 0
+  const ownerSessions = { async run({ input, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    const refs = input.stages.map(stage => stage.outputRef)
+    const decision = { action: 'complete', summary: '先前执行与末段只读事实组合核验', evidenceRefs: refs,
+      assessments: acceptanceItems.map((item, i) => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: i === 0 ? refs : refs.slice(0, 1) })) }
+    await onCandidate(decision); return { status: 'submitted', decision }
+  }, async close() {} }
+  const { service, execution } = await fixture(t, 'owner', undefined, { taskOwnerSessions: ownerSessions,
+    generalCompletionCheck: async input => {
+      checks++
+      assert.deepEqual(input.acceptanceItems.map(item => item.itemId), ['acceptance-1','acceptance-2'])
+      assert.equal(input.evidence.length, 2)
+      assert.ok(input.evidence.every(item => item.hostExecution.taskId === 'composite-task'))
+      const ext = input.evidence.find(item => item.hostExecution.workflowId === 'fixture-external')
+      const investigation = input.evidence.find(item => item.hostExecution.workflowId === 'fixture-investigation')
+      assert.equal(ext.executed, true)
+      assert.equal(investigation.criterionReviews[0].status, 'insufficient_evidence')
+      return { status: verdict ? 'satisfied' : 'unsatisfied', resultVerified: verdict, criteria: input.acceptanceItems.map(item => ({
+        criterion: item.criterion, passed: verdict, evidenceIds: item.evidenceRefs })) }
+    } })
+  const contract = createInvestigationWorkflow({ provider: 'test', model: 'test', allowedTools: [], capabilityIdentity: 'fixture', verifyResult: async () => true }).ownerContract
+  assert.equal(contract.version, '5')
+  const code = (id, ownerContract, execute) => ({ id, version: 'fixture', ownerContract, nodes: [{ id: 'final', version: '1',
+    executor: 'code', allowedEffects: ['pure'], inputSchema: schema, outputSchema: schema, mapInput: ({ requirement }) => requirement, execute }] })
+  execution.controller.registerWorkflow(code('fixture-external', { id: 'external-result', version: '2', async validateCompletion(context) {
+    return context.output.executed === true && await context.verifyAcceptance(context)
+  } }, async () => ({ executed: true, summary: '执行与批准完成' })))
+  execution.controller.registerWorkflow(code('fixture-investigation', contract, async () => ({ outcome: 'completed', summary: '只读确认表存在列无',
+    evidenceRefs: ['source'], limitations: ['审批事实由前序负责'], question: '', findings: [{ kind: 'fact', statement: '表存在列无', evidenceRefs: ['source'] }],
+    openItems: [{ description: '完整执行审批链', reason: '前序负责', evidenceRefs: [] }], criterionReviews: acceptanceItems.map(item => ({
+      itemId: item.itemId, status: 'insufficient_evidence', reason: '本调查仅补回查', evidenceRefs: [] })) })))
+  const goal = await execution.artifacts.put({ request: '复合验收', acceptanceCriteria: criteria, acceptanceItems, sourceInstructions: [] })
+  await execution.store.command({ id: 'composite-accept', kind: 'task.accept', args: { taskId: 'composite-task', requirementRef: goal.ref,
+    requirementRevision: 1, sessionId: 'composite-owner', sourceKey: 'source', criteria, eventKey: 'created' } })
+  await execution.controller.initializeTaskPlan({ commandId: 'composite-plan', taskId: 'composite-task', expectedPlanRevision: 0,
+    expectedRequirementRevision: 1, expectedControlRevision: 1, stages: [{ stageId: 'execute', workflowId: 'fixture-external', input: {} },
+      { stageId: 'readback', workflowId: 'fixture-investigation' }] })
+  let plan = await execution.controller.advanceTaskPlan('composite-task')
+  await execution.controller.whenIdle(plan.stages[0].runId); plan = await execution.controller.advanceTaskPlan('composite-task')
+  await execution.controller.bindTaskStageInput({ commandId: 'composite-bind', taskId: 'composite-task', planRevision: plan.task.planRevision,
+    stageId: 'readback', predecessorOutputRef: plan.stages[0].outputRef, input: { acceptanceItems } })
+  plan = await execution.controller.advanceTaskPlan('composite-task')
+  await execution.controller.whenIdle(plan.stages[1].runId); await execution.controller.advanceTaskPlan('composite-task')
+  const recovered = await service.recover()
+  const owner = await execution.store.query({ kind: 'task.owner', taskId: 'composite-task' })
+  if (verdict) { assert.deepEqual(recovered.failures, []); assert.equal(owner.decision.action, 'complete') }
+  else { assert.ok(recovered.failures.some(item => item.code === 'TASK_OWNER_COMPLETION_UNVERIFIED')); assert.notEqual(owner.decision?.action, 'complete') }
+  assert.equal(checks, 1)
 })

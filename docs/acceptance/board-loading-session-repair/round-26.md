@@ -6,4 +6,4 @@
 
 `node --test test/execution-effects.test.js test/workflow-bytebase-platform.test.js test/workflow-postgres-production-host.test.js` 66/66通过：原始目录观测传递、批准前呈现、批准后撤回、缺失/过晚呈现不捏造，错审批人/摘要/消息拒绝。`test/task-release-workflows.test.js` 15/15保证冻结v4/v5相关回归，readCompletion函数体未改。新queryEffects对真实#858只读回查确认presentation存在、正文含永久数据丢失、投递早于批准且有原消息身份。
 
-包SHA256 `90f568351b8bff08a791e8ebd2480d10eea2f72f3431227bf780f1b2cbdd41da`；正式Check/部署及原Task最终验收待完成，状态以matrix.csv最新轮为准。
+包SHA256 `90f568351b8bff08a791e8ebd2480d10eea2f72f3431227bf780f1b2cbdd41da`；正式Check/部署/Readback/Resume通过，PID44112、health=ok、维护解除revision396、自启Ready。原Task readonly reassess event255后再次提交完成仍被拒绝：冻结调查合同要求缺失证据由后续阶段补齐，最后stage7不能引用前序stage6原生执行事实。全部7阶段成功且原始证据齐全仍失败，不能宣称业务完成。该反证由round-27修正。

@@ -291,16 +291,23 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
       return readPolicyArtifacts(context)
     },
     async authorizeCompletion({ taskId, decision, plan, requirement, signal }) {
+      const reject = (gate, context = {}) => {
+        const metadata = { taskId, gate, ...context }
+        throw Object.assign(executionError('TASK_OWNER_COMPLETION_UNVERIFIED',
+          `完成验收门禁未通过：${JSON.stringify(metadata)}`), { completionGate: metadata })
+      }
       if (decision && typeof decision === 'object') verifiedDecisions.delete(decision)
       if (!plan?.stages.length || plan.task.status !== 'succeeded'
         || plan.task.planRequirementRevision !== plan.task.requirementRevision
-        || plan.stages.some(stage => stage.status !== 'succeeded' || !stage.outputRef)) return false
+        || plan.stages.some(stage => stage.status !== 'succeeded' || !stage.outputRef)) reject('plan-current-and-complete', { taskStatus: plan?.task?.status, requirementRevision: plan?.task?.requirementRevision,
+          planRequirementRevision: plan?.task?.planRequirementRevision, incompleteStageIds: plan?.stages?.filter(stage => stage.status !== 'succeeded' || !stage.outputRef).map(stage => stage.stageId) ?? [] })
       const contexts = []
       for (const stage of plan.stages) {
         const context = await contextFor(taskId, stage, plan)
         requiredContract(context)
         const final = context.state.nodes.at(-1)
-        if (context.state.run.status !== 'succeeded' || final?.status !== 'succeeded' || final.outputRef !== stage.outputRef) return false
+        if (context.state.run.status !== 'succeeded' || final?.status !== 'succeeded' || final.outputRef !== stage.outputRef) reject('stage-final-binding', { stageId: stage.stageId, runId: stage.runId, runStatus: context.state.run.status,
+          finalStatus: final?.status, outputRefMatches: final?.outputRef === stage.outputRef })
         contexts.push({ ...context, output: await artifacts.read(stage.outputRef),
           ...(context.state.run.requirementRef ? { input: await artifacts.read(context.state.run.requirementRef) } : {}) })
       }
@@ -310,11 +317,11 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
         || !items.length || decision.assessments?.length !== items.length
         || !items.every(item => decision.assessments.some(assessment => assessment.itemId === item.itemId
           && assessment.status === 'satisfied' && assessment.evidenceRefs?.length
-            && assessment.evidenceRefs.every(ref => known.has(ref) && decision.evidenceRefs.includes(ref))))) return false
+            && assessment.evidenceRefs.every(ref => known.has(ref) && decision.evidenceRefs.includes(ref))))) reject('acceptance-evidence-binding', { itemIds: items.map(item => item.itemId) })
       const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision })
-      if (!manifest.complete) return false
+      if (!manifest.complete) reject('delivery-manifest', { missing: manifest.missing })
       const planning = await store.query({ kind: 'task.owner.planning', taskId })
-      if (!planning || planning.truncated) return false
+      if (!planning || planning.truncated) reject('planning-evidence-complete')
       for (const context of contexts) {
         const refs = new Set([context.stage.outputRef, ...(context.stage.evidenceRefs ?? [])])
         context.acceptanceItems = items.flatMap(item => {
@@ -336,7 +343,16 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
       const stages = contexts.map(context => ({ stage: context.stage, output: context.output,
         input: context.input, contractId: context.contract.id }))
       const receipts = []
-      // 引用只分派验收责任，不证明满足。各领域只收到自己负责的条目和证据。
+      const sharedItems = items.map(item => ({ itemId: item.itemId, criterion: item.criterion,
+        evidenceRefs: decision.assessments.find(value => value.itemId === item.itemId).evidenceRefs }))
+      const sharedRefs = new Set(sharedItems.flatMap(item => item.evidenceRefs))
+      const sharedContext = { requirement: { ...requirement, acceptanceItems: sharedItems, signal }, decision,
+        stages: semanticStages.filter(item => [item.stage.outputRef, ...(item.stage.evidenceRefs ?? [])].some(ref => sharedRefs.has(ref))),
+        acceptanceItems: sharedItems }
+      let sharedVerification
+      const verifyShared = typeof verifyAcceptance === 'function'
+        ? () => sharedVerification ??= Promise.resolve().then(() => verifyAcceptance(sharedContext)) : undefined
+      // 引用只分派验收责任，不证明满足。各领域核验本域事实，语义验收共享所有条目的显式绑定证据。
       for (const contractId of new Set(stages.map(item => item.contractId))) {
         const domainStages = stages.filter(item => item.contractId === contractId)
         const domainRefs = new Set(domainStages.flatMap(item => [item.stage.outputRef, ...(item.stage.evidenceRefs ?? [])]))
@@ -349,25 +365,18 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
           evidenceRefs: decision.evidenceRefs.filter(ref => domainRefs.has(ref)),
           assessments: acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: item.evidenceRefs })) }
         const domainRequirement = { ...requirement, acceptanceCriteria: acceptanceItems.map(item => item.criterion), acceptanceItems }
-        const sharedItems = acceptanceItems.map(item => ({ ...item,
-          evidenceRefs: decision.assessments.find(value => value.itemId === item.itemId).evidenceRefs }))
-        const sharedRefs = new Set(sharedItems.flatMap(item => item.evidenceRefs))
-        const sharedContext = { requirement: { ...domainRequirement, acceptanceItems: sharedItems, signal },
-          decision: { ...domainDecision, evidenceRefs: [...sharedRefs], assessments: sharedItems.map(item => ({
-            itemId: item.itemId, status: 'satisfied', evidenceRefs: item.evidenceRefs })) },
-          stages: semanticStages.filter(item => [item.stage.outputRef, ...(item.stage.evidenceRefs ?? [])].some(ref => sharedRefs.has(ref))),
-          acceptanceItems: sharedItems }
-        let domainVerification
-        const verifyDomain = typeof verifyAcceptance === 'function'
-          ? () => domainVerification ??= Promise.resolve().then(() => verifyAcceptance(sharedContext)) : undefined
+        const verifyDomain = verifyShared
         for (const context of contexts.filter(item => item.contract.id === contractId)) {
           const policy = completionPolicy(context.contract, context)
           const general = policy?.id === 'general-capability-result' && policy.version === '2'
           if (!policy || await policy.validateCompletion({ ...context, requirement: domainRequirement,
             decision: domainDecision, stages: domainStages, acceptanceItems: general ? [] : context.acceptanceItems,
-            verifyAcceptance: verifyDomain, signal }) !== true) return false
+            verifyAcceptance: verifyDomain, signal }) !== true) reject('domain-completion', { stageId: context.stage.stageId,
+              runId: context.stage.runId, contract: { id: context.contract.id, version: context.contract.version },
+              policy: { id: policy?.id, version: policy?.version }, itemIds: context.acceptanceItems.map(item => item.itemId) })
           // 已冻结的通用合同内置领域验收；保留其效果检查，在此用显式绑定证据完成语义验收。
-          if (general && acceptanceItems.length && (!verifyDomain || await verifyDomain() !== true)) return false
+          if (general && acceptanceItems.length && (!verifyDomain || await verifyDomain() !== true))
+            reject('shared-semantic-acceptance', { stageId: context.stage.stageId, itemIds: acceptanceItems.map(item => item.itemId) })
         }
         for (const item of acceptanceItems) receipts.push({ ...item, validators: domainStages.map(value => {
           const context = contexts.find(context => context.stage.stageId === value.stage.stageId)

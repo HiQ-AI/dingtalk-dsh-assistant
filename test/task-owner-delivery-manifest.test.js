@@ -60,9 +60,9 @@ async function fixture(t, { mutateFinal, action = 'complete', domainProof = fals
         assert.notEqual(nodeRef, outputRef)
         assert.deepEqual(await readArtifact(nodeRef), { taskRunId: '901' })
         await assert.rejects(readArtifact('foreign-task-ref'), /TASK_OWNER_ARTIFACT_NOT_ALLOWED/)
-        assert.equal(await helpers.authorizeCompletion({ taskId: 'task', requirement, plan: await controller.taskPlan('task'),
+        await assert.rejects(helpers.authorizeCompletion({ taskId: 'task', requirement, plan: await controller.taskPlan('task'),
           decision: { action: 'complete', summary: '已核验', evidenceRefs: [nodeRef],
-            assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: [nodeRef] })) } }), false)
+            assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: [nodeRef] })) } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
       }
       const decision = { action, summary: '处理当前任务', evidenceRefs: outputRef ? [outputRef] : [],
         ...(['wait', 'block'].includes(action) ? { condition: { kind: 'business-input', missing: '确认结论', responsibleParty: '需求方', resumeWhen: '确认结论后继续', evidenceRefs: outputRef ? [outputRef] : [] } } : {}),

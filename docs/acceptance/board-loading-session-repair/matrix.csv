@@ -113,7 +113,18 @@ continuous-execution-local-deployment,25,PASS,round-25.md
 single-column-delete-final-acceptance,25,FAIL,round-25.md
 single-column-delete-unique-group-result,25,BLOCKED,round-25.md
 
-raw-approval-and-production-proof,26,IN_PROGRESS,round-26.md
-continuous-execution-local-deployment,26,IN_PROGRESS,round-26.md
-single-column-delete-final-acceptance,26,IN_PROGRESS,round-26.md
-single-column-delete-unique-group-result,26,IN_PROGRESS,round-26.md
+raw-approval-and-production-proof,26,PASS,round-26.md
+continuous-execution-local-deployment,26,PASS,round-26.md
+single-column-delete-final-acceptance,26,FAIL,round-26.md
+single-column-delete-unique-group-result,26,BLOCKED,round-26.md
+
+joint-investigation-final-acceptance,27,PASS,round-27.md
+continuous-execution-local-deployment,27,PASS,round-27.md
+single-column-delete-final-acceptance,27,FAIL,round-27.md
+single-column-delete-unique-group-result,27,BLOCKED,round-27.md
+
+full-task-contract-admission,28,PASS,round-28.md
+completion-rejection-diagnostics,28,PASS,round-28.md
+continuous-execution-local-deployment,28,PASS,round-28.md
+single-column-delete-final-acceptance,28,IN_PROGRESS,round-28.md
+single-column-delete-unique-group-result,28,IN_PROGRESS,round-28.md
