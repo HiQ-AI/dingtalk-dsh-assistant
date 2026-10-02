@@ -1,8 +1,8 @@
 # 看板、常驻会话与任务执行修复目标
 
-> 状态：ACTIVE
+> 状态：COMPLETED
 > Goal ID：board-loading-session-repair
-> 最近维护：2026-10-02T09:47:00+08:00
+> 最近维护：2026-10-02T10:05:21+08:00
 > 权威目标：goal.md
 
 ## 总目标
@@ -21,20 +21,20 @@
 
 | ID | 子目标 | 完成判据 | 状态 | 证据 |
 | --- | --- | --- | --- | --- |
-| SG1 | 群数据轻量查询与刷新去重 | native投影、历史全量等价、实际API/浏览器耗时 | 定向测试通过 | matrix.csv / round-2.md / round-3.md |
-| SG2 | 常驻会话空闲挂接与当前入口 | native投影、目录/权限/群名、租约与关闭 | 定向测试通过 | matrix.csv / round-2.md / round-3.md |
-| SG3 | 任务详情查询与刷新 | 同一真实任务前后耗时、投影正确 | 定向测试通过 | matrix.csv / round-2.md / round-3.md |
-| SG4 | 群通知事实与历史去重 | 同Task重评不重复、不同Task不误抑制、发送未知不重发 | 定向测试通过 | matrix.csv / round-2.md / round-3.md |
+| SG1 | 群数据轻量查询与刷新去重 | native投影、历史全量等价、实际API/浏览器耗时 | 完成 | matrix.csv / round-2.md / round-3.md |
+| SG2 | 常驻会话空闲挂接与当前入口 | native投影、目录/权限/群名、租约与关闭 | 完成 | matrix.csv / round-2.md / round-3.md |
+| SG3 | 任务详情查询与刷新 | 同一真实任务前后耗时、投影正确 | 完成 | matrix.csv / round-2.md / round-3.md |
+| SG4 | 群通知事实与历史去重 | 同Task重评不重复、不同Task不误抑制、发送未知不重发 | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG5 | 部署及四项运行验收 | runbook Check/备份/安装/Readback/Resume+浏览器 | 完成 | matrix.csv / round-2.md / round-3.md |
-| SG6 | Task与阶段分离、候选纠正及重复错误收敛 | 原生SQLite/原生会话/重启/完成清单70项PASS | 定向验证通过 | matrix.csv / round-2.md / round-3.md |
-| SG7 | 结构化等待/受阻投影和受管恢复 | 同Task恢复、业务与系统原因区分、通知摘要 | 定向验证通过 | matrix.csv / round-2.md / round-3.md |
-| SG8 | 数据库完整元数据与调查覆盖 | 原生只读查询、授权拒绝、分页及调查范围 | 定向验证通过 | matrix.csv / round-2.md / round-3.md |
-| SG9 | 本轮部署与唯一任务真实推进 | 精确包安装、维护排空、原任务推进到真实等待点 | 运行验证通过，渠道冷却待核对 | matrix.csv / round-4.md |
+| SG6 | Task与阶段分离、候选纠正及重复错误收敛 | 原生SQLite/原生会话/重启/完成清单70项PASS | 完成 | matrix.csv / round-2.md / round-3.md |
+| SG7 | 结构化等待/受阻投影和受管恢复 | 同Task恢复、业务与系统原因区分、通知摘要 | 完成 | matrix.csv / round-2.md / round-3.md |
+| SG8 | 数据库完整元数据与调查覆盖 | 原生只读查询、授权拒绝、分页及调查范围 | 完成 | matrix.csv / round-2.md / round-3.md |
+| SG9 | 本轮部署与唯一任务真实推进 | 精确包安装、维护排空、原任务推进到真实等待点 | 完成 | matrix.csv / round-4.md |
 ## 当前检查点
 
 - 当前子目标：SG9
-- 唯一下一步：记录交付与PR状态，冷却结束后独立回读DWS实时接入健康。
-- 未闭环项：round3真实反证已由v8及stage-3重新验证闭环；当前DWS实时订阅cooldown至10:04:25，等待独立健康回读。C盘仍满，运行及当前测试临时目录使用D盘。
+- 唯一下一步：本轮修复已完成；业务Task获得字段规格与本次生产批准后按既有事件继续。
+- 未闭环项：本轮修复无未闭环项。业务Task等待字段规格及后续精确生产批准；C盘仍满，运行及当前测试临时目录使用D盘。
 
 ## 进展
 
@@ -62,3 +62,4 @@
 ## 重要信息
 
 Agent工作区D:/baibu-agent，运行profile D:/dsh_home/profiles/web，API18998、Web3080。目标Task task-e7e25daf5c0aac2f8bcb5ef13daef45f，Owner owner-7e9271fcc177db7025850a7527e7ac655b7c6fd1。Editor后端为已登记dataset，先读授权知识地图定位，不需扩权。状态以matrix.csv为准，第三轮真实反证保留。
+最终检查点：v8精确包PID32460，原Task stage-3十五查询全部计入证据，代码六页1153文件，合法业务wait零失败；页面和群独立回读，旧等待说明撤回。10:05:21实时接入health=ok。PR152 OPEN，当前已推送f32a538，收尾文档另补提交。

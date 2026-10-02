@@ -17,3 +17,5 @@
 真实群完整时窗回读complete=true、failedCount=0：最新等待消息1条，旧等待说明撤回后0条，本轮“任务已开始处理”0条。使用同组织当前profile；没有手工伪造群来源或发送新开始消息。生产DDL、审批和备份执行属于后续精确授权，本轮未执行。
 
 独立环境边界：DWS实时订阅返回cooldown，最早北京时间10:04:25重试；实时接入health=degraded，历史读取/回填及发送回读可用。Task合法等待与订阅健康不是同一事实。当前不宣称实时渠道健康，待冷却后独立核对。
+
+冷却后独立回读（北京时间2026-10-02 10:05:21）：health=ok、inboundProcessing=true，两群listener=ready/backfill=ok/lastError=null，humanReplies=ready。原Task Owner仍idle/wait、failureCount=0、lastFailure=null，水位207已处理。实时渠道健康已恢复，不需清空订阅保护或绕过冷却。
