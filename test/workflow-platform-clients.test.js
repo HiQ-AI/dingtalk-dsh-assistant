@@ -8,6 +8,76 @@ const json = body => ({ ok: true, json: async () => body })
 const target = { repository: 'HiQ-AI/dataset', branch: 'feature/uat3-base',
   woodpecker: { baseUrl: 'https://woodpecker.hiqdat.dev', repositoryId: 4, cronName: 'dataset-uat3-poll' } }
 
+function approvalFixture({ status = 'APPROVED', comments, approvers, revisedSql = false, repeatToken = false } = {}) {
+  const project = 'projects/flbn', issueId = `${project}/issues/1`, planId = `${project}/plans/1`, sheetId = `${project}/sheets/1`
+  const target = { instance: 'instances/flbnpguaf', database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
+  const sql = 'ALTER TABLE public.t ADD COLUMN label character varying;'
+  const sheetSha256 = createHash('sha256').update(sql).digest('hex'), packageDigest = 'b'.repeat(64)
+  const operationKey = 'a'.repeat(64), scopeDigest = 'c'.repeat(64), title = `Assistant data change ${operationKey}`
+  const rows = comments ?? [{ name: `${issueId}/issueComments/review-1`, creator: 'users/reviewer@example.test',
+    createTime: '2026-10-02T01:00:00Z', approval: { status }, comment: '字段改为 text' }]
+  let writes = 0
+  const client = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev', bytebaseToken: 'fixture',
+    fetchImpl: async (url, options = {}) => {
+      if (options.method && options.method !== 'GET') writes++
+      const path = new URL(url).pathname
+      if (path.endsWith('/issueComments')) return json({ issueComments: rows, ...(repeatToken ? { nextPageToken: 'repeat' } : {}) })
+      if (path.endsWith('/issues/1')) return json({ name: issueId, plan: planId, status: 'OPEN', type: 'DATABASE_CHANGE',
+        title, description: JSON.stringify({ operationKey, packageDigest, applySqlSha256: sheetSha256, target }),
+        approvalStatus: status, approvers: approvers ?? [{ principal: 'users/reviewer@example.test', status }] })
+      if (path.endsWith('/plans/1')) return json({ name: planId, issue: issueId, title,
+        specs: [{ id: 'spec-1', changeDatabaseConfig: { targets: [target.database], sheet: sheetId } }] })
+      if (path.endsWith('/sheets/1')) return json({ name: sheetId, content: Buffer.from(revisedSql ? `${sql} -- changed` : sql).toString('base64') })
+      throw Error('unexpected request')
+    } }).bytebase
+  return { client, input: { project, issueId, planId, sheetId, sheetSha256, target, packageDigest, scopeDigest }, writes: () => writes }
+}
+
+test('Bytebase 真人审批独立回读当前 SQL 和审批人事件，不发送批准或执行', async () => {
+  const fixture = approvalFixture()
+  const view = await fixture.client.getIssueApproval(fixture.input)
+  assert.equal(view.decision, 'approved')
+  assert.equal(view.source, 'bytebase')
+  assert.equal(view.human, true)
+  assert.equal(view.decidedBy, 'users/reviewer@example.test')
+  assert.equal(view.sheetSha256, fixture.input.sheetSha256)
+  assert.equal(fixture.writes(), 0)
+})
+
+test('Bytebase pending 和 SKIPPED 区分待审与未配置，均无真人批准', async () => {
+  for (const [status, decision] of [['PENDING', 'pending'], ['CHECKING', 'pending'], ['SKIPPED', 'unconfigured']]) {
+    const fixture = approvalFixture({ status })
+    const view = await fixture.client.getIssueApproval(fixture.input)
+    assert.equal(view.decision, decision)
+    assert.equal(view.human, false)
+    assert.equal(fixture.writes(), 0)
+  }
+})
+
+test('Bytebase 驳回返回真实意见及审批事件，供修订后重新送审', async () => {
+  const fixture = approvalFixture({ status: 'REJECTED' })
+  const view = await fixture.client.getIssueApproval(fixture.input)
+  assert.equal(view.decision, 'rejected')
+  assert.equal(view.comment, '字段改为 text')
+  assert.match(view.requestId, /issueComments\/review-1$/)
+})
+
+test('Bytebase SQL 变化、缺少人审批事件或修订后的旧批准不能执行', async () => {
+  for (const options of [{ revisedSql: true }, { comments: [] }, { approvers: [] },
+    { comments: [{ name: 'projects/flbn/issues/1/issueComments/a', creator: 'users/reviewer@example.test',
+      createTime: '2026-10-02T01:00:00Z', approval: { status: 'APPROVED' } },
+    { name: 'projects/flbn/issues/1/issueComments/b', createTime: '2026-10-02T02:00:00Z', planSpecUpdate: {} }] }]) {
+    const fixture = approvalFixture(options)
+    await assert.rejects(fixture.client.getIssueApproval(fixture.input), /BYTEBASE_(SHEET|HUMAN_APPROVAL)_UNCONFIRMED/)
+    assert.equal(fixture.writes(), 0)
+  }
+})
+
+test('Bytebase 审批评论分页重复游标报错，不能截断后误认批准', async () => {
+  const fixture = approvalFixture({ repeatToken: true })
+  await assert.rejects(fixture.client.getIssueApproval(fixture.input), /BYTEBASE_APPROVAL_COMMENTS_INCOMPLETE/)
+})
+
 test('木啄只读全量分页并过滤私有 variables', async () => {
   const calls = []
   const clients = createPlatformClients({ woodpeckerToken: 'test', fetchImpl: async url => {

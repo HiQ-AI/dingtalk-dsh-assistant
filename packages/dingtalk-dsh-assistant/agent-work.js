@@ -319,13 +319,26 @@ export function createInvestigationWorkflowV7(options) {
 }
 
 /** v8 对本轮成功查询逐项核对引用或明确排除，不能只引用原消息省略所有调查证据。 */
-export function createInvestigationWorkflow(options) {
+export function createInvestigationWorkflowV8(options) {
   const prior = createInvestigationWorkflowV7(options)
   const rulesDigest = executionDigest({ previous: prior.ownerContract.rulesDigest, executedQueryAccounting: 'native-tool-results-v1' })
   return { ...prior, version: '8', ownerContract: { ...prior.ownerContract, version: '4', rulesDigest }, nodes: [
     { ...prior.nodes[0], version: '4', rulesDigest,
       prompt: `${prior.nodes[0].prompt}\n本轮每次成功查询返回的 evidenceRef 必须放入 evidenceRefs，或在 coverageExclusions 中明确排除该项及具体原因；只引用原消息不能证明数据库或代码调查。已排除查询不必扫完，但不得把其内容作为已核验事实提交。涉及项目或应用依赖时，先读取登记项目资料定位仓库职责，不根据 resourceId 名称猜测服务归属。缺失字段规格若可从授权资料或代码核验，应先实际查询；限制项明确实际已查范围、依据和仍未知的内容。` },
     { ...prior.nodes[1], version: '4', rulesDigest },
+  ] }
+}
+
+/** v9 只调查影响当前候选的事实；候选交审批确认，不将实现选择变成业务输入门槛。 */
+export function createInvestigationWorkflow(options) {
+  const prior = createInvestigationWorkflowV8(options)
+  const rulesDigest = executionDigest({ previous: prior.ownerContract.rulesDigest, candidateScope: 'next-authorized-step-v1' })
+  const prompt = prior.nodes[0].prompt
+    .replace('数据库用登记production只读资源核验完整列定义、约束/索引、直接目录依赖及估算规模；估算不是精确数量。', '数据库使用登记的production只读资源，只核对会影响当前候选的目标、现有结构及已知直接限制；有实际冲突时追加针对性核查，估算不当作精确数量。')
+    .replace('缺失字段规格若可从授权资料或代码核验，应先实际查询；限制项明确实际已查范围、依据和仍未知的内容。', '用户未指定的实现细节不是自动的业务阻塞；目标明确且没有已知冲突时提出明确候选，标记为recommendation，并在limitations中说明尚待审批，不声称用户已确认。只完成影响当前候选的必要核验，不默认扫描所有代码引用或穷尽字段用途、长度、默认值。能够给后续准备或审批阶段交付候选时用completed；目标不明或实质冲突、无法形成候选且确需用户选择时才用needs_input，提出一个具体问题。实际已查范围及未知必须如实说明。')
+  return { ...prior, version: '9', ownerContract: { ...prior.ownerContract, version: '5', rulesDigest }, nodes: [
+    { ...prior.nodes[0], version: '5', rulesDigest, prompt },
+    { ...prior.nodes[1], version: '5', rulesDigest },
   ] }
 }
 
@@ -340,7 +353,7 @@ function validAcceptanceItems(items) {
 export function createInvestigationStageContract({ queryScope, queryCatalog, readSources, readAcceptanceItems, readMessageResources = async () => [] }) {
   return { id: 'task-investigation', version: '1', materialPolicy: {
     roles: ['source', 'supplemental'], required: [], singleton: [], maxCount: 256,
-  }, async prepare({ taskId, requirement, origin, handoff, definitionVersion = '8' }) {
+  }, async prepare({ taskId, requirement, origin, handoff, definitionVersion = '9' }) {
     const readableMessageResources = await readMessageResources(requirement, origin)
     const scope = queryScope({ ...requirement.scope, actorId: origin.run.actorId, predecessorOutputRef: handoff?.outputRef ?? null,
       sourceKeys: [...new Set([...requirement.scope.sourceKeys, ...readableMessageResources.map(item => item.sourceKey)])],

@@ -115,7 +115,7 @@ const intent = value => {
 }
 
 /** 受信适配器齐备才注册完整流程。所有发送经过 Controller 的持久效果账和独立授权。 */
-export function createDataChangeTaskWorkflow({ provider, model, reasoningEffort, adapter }) {
+export function createLegacyDataChangeTaskWorkflow({ provider, model, reasoningEffort, adapter }) {
   if (['prepareRehearsal', 'readbackRehearsal', 'inspect', 'prepareIssue', 'prepareApproval', 'prepareExecute', 'readback'].some(name => typeof adapter?.[name] !== 'function')) throw executionError('DATA_CHANGE_EXTERNAL_ADAPTER_REQUIRED')
   const base = createDataChangePreparationWorkflow({ provider, model, reasoningEffort, adapter })
   const identity = (prepared, values) => assertDataChangeExecutionIdentity({ prepared, ...values })
@@ -273,20 +273,32 @@ export function createDataChangeTaskWorkflow({ provider, model, reasoningEffort,
   ] }
 }
 
+
+/** 仅识别单条、无默认值且可空的 PostgreSQL 加列；其余 SQL 保留演练。 */
+export function simpleNullableColumnDefinition(sql) {
+  const identifier = '(?:[A-Za-z_][A-Za-z0-9_]*|"[A-Za-z_][A-Za-z0-9_]*")'
+  const type = '(?:text|character\\s+varying|varchar|character|char|boolean|smallint|integer|bigint|numeric|decimal|real|double\\s+precision|date|timestamp|uuid|jsonb?)(?:\\s*\\(\\s*\\d+(?:\\s*,\\s*\\d+)?\\s*\\))?'
+  const match = typeof sql === 'string' && new RegExp(`^\\s*ALTER\\s+TABLE\\s+(${identifier})\\.(${identifier})\\s+ADD\\s+COLUMN\\s+(${identifier})\\s+(${type})(?:\\s+NULL)?\\s*;?\\s*$`, 'i').exec(sql)
+  if (!match) return null
+  const name = value => value.startsWith('"') ? value.slice(1, -1) : value.toLowerCase()
+  return { schema: name(match[1]), table: name(match[2]), column: name(match[3]), type: match[4].toLowerCase().replace(/\s+/g, ' ').trim() }
+}
+export const isSimpleNullableColumnSql = sql => simpleNullableColumnDefinition(sql) !== null
+
 /** 后续工单/执行连接器必须用此精确身份核验；此函数本身不批准、提交或执行任何动作。 */
 export function assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan, approval }) {
   const pkg = prepared?.package, rehearsal = prepared?.rehearsal
   const { validation, ...body } = pkg ?? {}
-  if (!pkg || !rehearsal || rehearsal.passed !== true || rehearsal.uat !== true
-    || !nonempty(rehearsal.receiptId) || !nonempty(validation?.receiptId)
+  if (!pkg || (!rehearsal && (approval?.source !== 'bytebase' || !isSimpleNullableColumnSql(pkg.applySql)))
+    || (rehearsal && (rehearsal.passed !== true || rehearsal.uat !== true || !nonempty(rehearsal.receiptId))) || !nonempty(validation?.receiptId)
     || validation?.packageDigest !== executionDigest(body)
-    || validation?.packageDigest !== rehearsal.packageDigest
+    || (rehearsal && validation?.packageDigest !== rehearsal.packageDigest)
     || !isSha(pkg.applySqlSha256) || typeof pkg.applySql !== 'string' || hash(pkg.applySql) !== pkg.applySqlSha256
     || sheet?.sha256 !== pkg.applySqlSha256 || sheet?.target?.instance !== pkg.target.instance
     || sheet?.target?.database !== pkg.target.database || sheet?.target?.environment !== pkg.target.environment
     || !nonempty(sheet?.id) || plan?.sheetId !== sheet.id || !nonempty(plan?.id)
     || issue?.planId !== plan.id || !nonempty(issue?.id) || issue?.taskId !== undefined
-    || approval?.decision !== 'approved' || approval?.source !== 'assistant' || approval?.human !== true
+    || approval?.decision !== 'approved' || !['assistant', 'bytebase'].includes(approval?.source) || approval?.human !== true
     || approval?.issueId !== issue?.id || !sameTarget(approval.target, pkg.target)
     || approval?.planId !== plan.id || approval?.sheetId !== sheet.id
     || approval?.sheetSha256 !== pkg.applySqlSha256 || approval?.packageDigest !== pkg.validation.packageDigest
@@ -295,4 +307,112 @@ export function assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan
   return { target: pkg.target, packageDigest: pkg.validation.packageDigest, applySqlSha256: pkg.applySqlSha256,
     issueId: issue.id, sheetId: sheet.id, planId: plan.id,
     approvalRequestId: approval.requestId, approvedBy: approval.decidedBy }
+}
+
+/** 原生审批沿用 Controller 的效果等待与对账；旧 v3 定义继续供持久任务恢复。 */
+export function createDataChangeTaskWorkflow(options) {
+  const workflow = createLegacyDataChangeTaskWorkflow(options)
+  const { adapter } = options
+  if (adapter.nativeApproval !== true) return workflow
+  workflow.version = '4'
+  const transformSchema = schema => {
+    if (!schema || typeof schema !== 'object') return schema
+    if (Array.isArray(schema)) return schema.map(transformSchema)
+    const copy = Object.fromEntries(Object.entries(schema).map(([key, value]) => [key, transformSchema(value)]))
+    if ((copy.properties?.request && copy.properties?.sources) || (copy.properties?.applySql && copy.properties?.validation)) copy.properties.previousIssueId = text
+    if (copy.properties?.decision && copy.properties?.source && copy.properties?.human) Object.assign(copy.properties, { comment: text, evidenceRef: text })
+    if (copy.required?.includes('rehearsal')) copy.required = copy.required.filter(key => key !== 'rehearsal')
+    return copy
+  }
+  for (const node of workflow.nodes) {
+    node.inputSchema = transformSchema(node.inputSchema)
+    node.outputSchema = transformSchema(node.outputSchema)
+  }
+  const node = id => workflow.nodes.find(item => item.id === id)
+  const validatePackage = node('validate-package')
+  validatePackage.version = '2'
+  validatePackage.execute = async ({ input, signal }) => {
+    signal?.throwIfAborted()
+    const proposal = input.proposal
+    if (Object.values(proposal).some(value => !nonempty(value))) throw executionError('DATA_CHANGE_PROPOSAL_INVALID')
+    const body = { target: input.requirement.target, baseline: input.requirement.baseline,
+      sourceDigest: executionDigest(input.requirement.sources.map(({ id, sha256 }) => ({ id, sha256 }))),
+      applySql: proposal.applySql, applySqlSha256: hash(proposal.applySql), rollbackSql: proposal.rollbackSql,
+      verificationSql: proposal.verificationSql, expectedChange: proposal.expectedChange,
+      ...(input.requirement.previousIssueId ? { previousIssueId: input.requirement.previousIssueId } : {}) }
+    const packageDigest = executionDigest(body)
+    const receipt = await adapter.validate({ ...body, constraints: input.requirement.constraints,
+      request: input.requirement.request, packageDigest, signal })
+    signal?.throwIfAborted()
+    if (receipt?.passed !== true || receipt.packageDigest !== packageDigest || !nonempty(receipt.receiptId)) throw executionError('DATA_CHANGE_VALIDATION_UNCONFIRMED')
+    return { ...body, validation: { adapterId: adapter.id, adapterVersion: adapter.version, receiptId: receipt.receiptId, packageDigest } }
+  }
+  const proposal = node('propose-sql')
+  proposal.version = '2'
+  proposal.prompt += ' 本次生成待真人审批的明确候选；需求未指定且没有冲突依据的实现细节可以作为建议提出，不能声称需求方已确认。简单新增可空无默认值列优先使用单条 ALTER TABLE schema.table ADD COLUMN column type;，不添加与需求无关的 DO 块或全库检查。简单加列的 verificationSql 必须使用固定列目录合同：SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema=\'准确schema\' AND table_name=\'准确table\' AND column_name=\'准确column\';。expectedChange 必须是 {\"rows\":[{\"column_name\":\"拟新增列名\",\"data_type\":\"真实PostgreSQL目录类型\",\"is_nullable\":\"YES\",\"column_default\":null,\"character_maximum_length\":null}]}；varchar 或 character varying 在目录中为 character varying，未限定长度填 null，限定长度填实际整数；text 在目录中为 text 且长度 null。按本次准确表列生成，不使用 pg_catalog 替代查询，也不把整个表的数据回查用于列结构验收。'
+  const prepare = node('prepare-rehearsal'), originalPrepare = prepare.execute
+  prepare.version = '2'
+  prepare.outputSchema.required = ['package']
+  prepare.execute = async context => adapter.requiresRehearsal(context.input)
+    ? originalPrepare(context) : { package: context.input }
+  const run = node('run-rehearsal'), originalRun = run.execute
+  run.version = '2'; run.inputSchema.required = ['package']; run.outputSchema.required = ['package']
+  run.execute = async context => context.input.request ? originalRun(context) : context.input
+  const readback = node('readback-rehearsal'), originalReadback = readback.execute
+  readback.version = '2'; readback.inputSchema.required = ['package']
+  readback.execute = async context => context.input.request ? originalReadback(context) : { package: context.input.package }
+  const gate = node('approval-gate'), originalGate = gate.execute
+  gate.version = '5'
+  gate.execute = async context => {
+    try { return await originalGate(context) }
+    catch (error) {
+      if (error.code !== 'DELIVERY_RECONCILIATION_REQUIRED') throw error
+      const { input, signal } = context
+      const approval = await adapter.inspect({ stage: 'approval-state', request: input.request,
+        prepared: input.view.prepared, signal })
+      if (!['pending', 'unconfigured'].includes(approval?.decision)) throw error
+      return { ...input, receipt: { status: 'unknown', result: { approval } } }
+    }
+  }
+  gate.admitOutput = ({ output }) => output.receipt.status === 'unknown'
+    ? { outcome: 'waiting', waitReason: { kind: 'recovery', reference: output.receipt.result.approval.decision === 'unconfigured'
+      ? 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED' : 'BYTEBASE_APPROVAL_PENDING' } }
+    : { outcome: 'succeeded' }
+  const approval = node('readback-approval')
+  approval.version = '3'
+  approval.outputSchema.properties.approval.properties.comment = text
+  approval.outputSchema.properties.approval.properties.evidenceRef = text
+  approval.execute = async context => {
+    const { input, signal } = context, view = input.view
+    signal?.throwIfAborted()
+    const decision = await adapter.inspect({ stage: 'approval', issue: view.issue, sheet: view.sheet,
+      plan: view.plan, prepared: view.prepared, request: input.request, receipt: input.receipt, signal })
+    if (decision.decision === 'rejected') return { ...view, approval: decision }
+    assertDataChangeExecutionIdentity({ prepared: view.prepared, issue: view.issue, sheet: view.sheet, plan: view.plan, approval: decision })
+    return { ...view, approval: decision }
+  }
+  // 拒绝是已读取的审批结果；阶段完成后交 Owner 按意见修订，绝不进入执行。
+  const executePrepare = node('prepare-execute'), originalExecutePrepare = executePrepare.execute
+  executePrepare.version = '3'
+  const rejectedSchema = { type: 'object', properties: { rejected: approvedViewSchema }, required: ['rejected'], additionalProperties: false }
+  rejectedSchema.properties.rejected = transformSchema(approvedViewSchema)
+  executePrepare.outputSchema = { oneOf: [executePrepare.outputSchema, rejectedSchema] }
+  executePrepare.execute = context => context.input.approval.decision === 'rejected'
+    ? { rejected: context.input } : originalExecutePrepare(context)
+  const execute = node('execute-task'), originalExecute = execute.execute
+  execute.version = '2'; execute.inputSchema = executePrepare.outputSchema
+  execute.outputSchema = { oneOf: [execute.outputSchema, rejectedSchema] }
+  execute.execute = context => context.input.rejected ? context.input : originalExecute(context)
+  const final = node('readback-production'), originalFinal = final.execute
+  final.version = '3'; final.inputSchema = execute.outputSchema
+  const revisionSchema = { type: 'object', properties: { outcome: { type: 'string', const: 'needs_revision' },
+    issueId: text, planId: text, sheetId: text, applySql: text, comment: text, evidenceRef: text },
+    required: ['outcome', 'issueId', 'planId', 'sheetId', 'applySql', 'comment', 'evidenceRef'], additionalProperties: false }
+  final.outputSchema = { oneOf: [final.outputSchema, revisionSchema] }
+  final.execute = context => context.input.rejected ? (() => {
+    const view = context.input.rejected
+    return { outcome: 'needs_revision', issueId: view.issue.id, planId: view.plan.id, sheetId: view.sheet.id,
+      applySql: view.prepared.package.applySql, comment: view.approval.comment, evidenceRef: view.approval.evidenceRef }
+  })() : originalFinal(context)
+  return workflow
 }

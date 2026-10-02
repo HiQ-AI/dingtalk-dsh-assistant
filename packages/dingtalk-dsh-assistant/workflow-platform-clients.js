@@ -529,12 +529,64 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
         if (!/^projects\/flbn\/plans\/[A-Za-z0-9_-]+\/rollout\/stages\/[A-Za-z0-9_-]+\/tasks\/[A-Za-z0-9_-]+$/.test(taskId))
           fail('BYTEBASE_TASK_UNCONFIRMED')
         task = { id: taskId, planId, status: tasks[0].status }
-      } else if (planRow.hasRollout !== false) fail('BYTEBASE_ROLLOUT_STATE_UNCONFIRMED')
+      } else if (planRow.hasRollout !== false && planRow.hasRollout !== undefined) fail('BYTEBASE_ROLLOUT_STATE_UNCONFIRMED')
       return { issue: { id: issueId, project, planId, ...(task ? { taskId: task.id } : {}),
         packageDigest: identity.packageDigest, operationKey: identity.operationKey },
       sheet: { id: sheetId, project, sha256: sqlSha256, target },
       plan: { id: planId, project, sheetId },
       task }
+    },
+    async getIssueApproval({ project, issueId, planId, sheetId, sheetSha256, target,
+      packageDigest, scopeDigest }) {
+      bytebaseTarget(project, target)
+      const bundle = await this.getIssueBundle({ project, issueId })
+      if (bundle.plan.id !== planId || bundle.sheet.id !== sheetId
+        || bundle.sheet.sha256 !== sheetSha256 || bundle.issue.packageDigest !== packageDigest
+        || executionDigest(bundle.sheet.target) !== executionDigest(target)
+        || !/^[a-f0-9]{64}$/.test(scopeDigest ?? '')) fail('BYTEBASE_APPROVAL_IDENTITY_CHANGED')
+      const issue = await bytebaseRequest(`/v1/${issueId}`)
+      if (issue.name !== issueId || issue.plan !== planId || issue.status !== 'OPEN')
+        fail('BYTEBASE_APPROVAL_ISSUE_NOT_OPEN')
+      const binding = { source: 'bytebase', human: false, issueId, planId, sheetId, target,
+        sheetSha256, packageDigest, scopeDigest,
+        requestId: issueId, evidenceRef: evidence('bytebase-approval', `${issueId}:${issue.updateTime ?? ''}`) }
+      if (['PENDING', 'CHECKING'].includes(issue.approvalStatus))
+        return { ...binding, decision: 'pending', comment: '等待 Bytebase 真人审批' }
+      if (issue.approvalStatus === 'SKIPPED')
+        return { ...binding, decision: 'unconfigured', comment: 'Bytebase 未要求真人审批（SKIPPED）；须为本次工单启用人工审批后才能执行' }
+      if (!['APPROVED', 'REJECTED'].includes(issue.approvalStatus)) fail('BYTEBASE_APPROVAL_STATUS_UNCONFIRMED')
+      const comments = [], seen = new Set()
+      let pageToken = ''
+      for (;;) {
+        const suffix = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''
+        const page = await bytebaseRequest(`/v1/${issueId}/issueComments?pageSize=1000${suffix}`)
+        if (!Array.isArray(page.issueComments)) fail('BYTEBASE_APPROVAL_COMMENTS_UNCONFIRMED')
+        comments.push(...page.issueComments)
+        if (!page.nextPageToken) break
+        if (typeof page.nextPageToken !== 'string' || seen.has(page.nextPageToken))
+          fail('BYTEBASE_APPROVAL_COMMENTS_INCOMPLETE')
+        seen.add(page.nextPageToken)
+        pageToken = page.nextPageToken
+      }
+      const ordered = comments.slice().sort((a, b) => Date.parse(a.createTime) - Date.parse(b.createTime))
+      const lastRevision = ordered.filter(row => row.planSpecUpdate || row.planUpdate).at(-1)
+      const decision = ordered.filter(row => row.approval).at(-1)
+      if (!decision || decision.approval.status !== issue.approvalStatus
+        || !/^users\/[^/\s]+$/.test(decision.creator ?? '')
+        || !decision.name?.startsWith(`${issueId}/issueComments/`)
+        || !Number.isFinite(Date.parse(decision.createTime))
+        || lastRevision && (!Number.isFinite(Date.parse(lastRevision.createTime))
+          || Date.parse(decision.createTime) <= Date.parse(lastRevision.createTime)))
+        fail('BYTEBASE_HUMAN_APPROVAL_UNCONFIRMED')
+      const approvers = issue.approvers
+      if (!Array.isArray(approvers) || !approvers.some(row => row.principal === decision.creator
+        && row.status === issue.approvalStatus)
+        || issue.approvalStatus === 'APPROVED' && (approvers.length === 0
+          || approvers.some(row => row.status !== 'APPROVED')))
+        fail('BYTEBASE_HUMAN_APPROVAL_UNCONFIRMED')
+      return { ...binding, decision: issue.approvalStatus.toLowerCase(), human: true,
+        decidedBy: decision.creator, requestId: decision.name,
+        comment: decision.comment ?? '', evidenceRef: evidence('bytebase-approval', decision.name) }
     },
     async findIssueByOperationKey({ project, operationKey }) {
       const title = bytebaseTitle(operationKey)
@@ -544,7 +596,7 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       return this.getIssueBundle({ project, issueId: rows[0].name })
     },
     async createIssueBundle({ project, target, operationKey, packageDigest,
-      applySqlSha256, applySql }) {
+      applySqlSha256, applySql, previousIssueId, proposalSummary }) {
       bytebaseTarget(project, target)
       const title = bytebaseTitle(operationKey)
       if (!/^[a-f0-9]{64}$/.test(packageDigest ?? '')
@@ -552,6 +604,13 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
         fail('BYTEBASE_ISSUE_INPUT_INVALID')
       const existing = await this.findIssueByOperationKey({ project, operationKey })
       if (existing) return existing
+      if (previousIssueId) {
+        const previous = await this.getIssueBundle({ project, issueId: previousIssueId })
+        const review = await bytebaseRequest(`/v1/${previousIssueId}`)
+        if (previous.task || review.approvalStatus !== 'REJECTED'
+          || executionDigest(previous.sheet.target) !== executionDigest(target))
+          fail('BYTEBASE_REVISION_SOURCE_UNCONFIRMED')
+      }
       if (bytebaseIssueAttempts.has(operationKey)) fail('BYTEBASE_CREATE_RESULT_UNKNOWN')
       bytebaseIssueAttempts.add(operationKey)
       // Sheet/Plan/Rollout/Issue 不是原子 API。任一步结果未知由外部效果账只读对账，绝不自动重发。
@@ -567,7 +626,8 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       const issueRow = await bytebaseRequest(`/v1/${project}/issues`, { method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, description: JSON.stringify({ operationKey, packageDigest,
-          applySqlSha256, target }), type: 'DATABASE_CHANGE', plan: planId }) })
+          applySqlSha256, target, ...(proposalSummary ? { proposalSummary } : {}),
+          ...(previousIssueId ? { previousIssueId } : {}) }), type: 'DATABASE_CHANGE', plan: planId }) })
       const issueId = bytebaseResource(project, issueRow?.name, 'issues')
       return this.getIssueBundle({ project, issueId })
     },
@@ -584,6 +644,12 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       const readback = await this.getIssueBundle({ project, issueId })
       if (!readback.task) fail('BYTEBASE_ROLLOUT_UNCONFIRMED')
       return readback
+    },
+    async findIssueByTaskPlan({ project, planId }) {
+      bytebaseResource(project, planId, 'plans')
+      const plan = await bytebaseRequest(`/v1/${planId}`)
+      if (plan.name !== planId) fail('BYTEBASE_PLAN_UNCONFIRMED')
+      return { issueId: bytebaseResource(project, plan.issue, 'issues') }
     },
     async getTaskExecution({ project, issueId, taskId }) {
       const bundle = await this.getIssueBundle({ project, issueId })

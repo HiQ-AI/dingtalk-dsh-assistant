@@ -320,3 +320,27 @@ test('Owner初始计划错误在同一原生turn内修正为initialize',async t=
  const result=await h.sessions.run({binding:{taskId:'new-task',sessionId:'new-owner',turnId:'turn-1',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{task:{planRevision:0},stages:[],goal:{request:'调查'}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>{calls++;if(value.planChange.kind!=='initialize')throw Object.assign(Error('TASK_OWNER_ADVANCE_CONFLICT'),{code:'TASK_OWNER_ADVANCE_CONFLICT'})}})
  assert.equal(result.status,'submitted');assert.equal(calls,2);assert.equal(result.decision.planChange.kind,'initialize');assert.match(JSON.stringify(h.requests[1]),/尚无计划/)
 })
+
+test('Owner读取调查的待补充建议后可安排待审候选阶段，不机械继承business-input', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-review-candidate-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const artifactRef = `sha256-${'c'.repeat(64)}.json`
+  const candidate = { action: 'advance', summary: '目标已确认，准备明确候选提交真人审批', evidenceRefs: [artifactRef],
+    planChange: { kind: 'replaceSuffix', affectedFrom: 0, stages: [{ workflowId: 'task-data-change', gate: 'none', sourceCondition: {
+      sourceKey: 'source-request', sourceVersion: 1, sourceQuote: '新增列并提交工单审批，通过后执行', objective: '新增列并提交工单审批，通过后执行',
+    } }] } }
+  const h = await host(root, null, artifactRef, candidate)
+  t.after(() => h.close())
+  let read = false, submitted = false
+  const result = await h.sessions.run({ binding: { taskId: 'task-column', sessionId: 'owner-column', turnId: 'review', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+    input: { goal: { request: '新增列并提交工单审批，通过后执行' }, stageArtifacts: [{ stageId: 'investigate', outputRef: artifactRef }],
+      workflowCatalog: [{ id: 'task-data-change' }] }, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+    readArtifact: async () => { read = true; return { outcome: 'needs_input', question: '是否确认全部字段规格？', limitations: ['目标明确，候选可供审批'] } },
+    onCandidate: async value => { assert.equal(read, true); assert.equal(value.action, 'advance'); submitted = true } })
+  assert.equal(result.status, 'submitted'); assert.equal(submitted, true)
+  assert.match(h.requests[0].system, /不机械继承业务等待/)
+  assert.match(h.requests[0].system, /读取本次工单真实审批意见/)
+  assert.match(h.requests[0].system, /修改后的SQL必须取得对应版本的新批准/)
+  assert.match(h.requests[0].system, /尚未完成的调查仍需修复或重评未完成阶段/)
+  assert.doesNotMatch(h.requests[0].system, /outcome=needs_input 时 wait 并询问/)
+})

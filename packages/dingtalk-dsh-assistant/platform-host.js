@@ -4,7 +4,8 @@ import { promisify } from 'node:util'
 import { execFile as execFileCallback } from 'node:child_process'
 import { createPlatformClients } from './workflow-platform-clients.js'
 import { createUatPostgresHost } from './workflow-postgres-uat-host.js'
-import { createProductionPostgresHost } from './workflow-postgres-production-host.js'
+import { createProductionPostgresHost, columnVerificationScope } from './workflow-postgres-production-host.js'
+import { executionDigest } from './execution-artifacts.js'
 
 const execFile = promisify(execFileCallback)
 
@@ -102,6 +103,25 @@ export async function createHostPlatformClients({ secretsDirectory, productionTa
       productionPostgresPlatform = createProductionPostgres({ entries, Client })
     } catch {
       throw new Error('platform_production_postgres_unavailable')
+    }
+  }
+  if (bytebase && productionPostgresPlatform) {
+    const verifyData = bytebase.queryVerification.bind(bytebase)
+    bytebase.queryVerification = async args => {
+      if (!columnVerificationScope(args.sql)) return verifyData(args)
+      const match = /^(projects\/flbn\/plans\/[A-Za-z0-9_-]+)\/rollout\/stages\/[A-Za-z0-9_-]+\/tasks\/[A-Za-z0-9_-]+\/taskRuns\/[A-Za-z0-9_-]+$/u.exec(args.taskRunId ?? '')
+      if (!match) throw new Error('BYTEBASE_TASK_RUN_UNCONFIRMED')
+      const taskId = args.taskRunId.slice(0, args.taskRunId.lastIndexOf('/taskRuns/'))
+      // 平台回读验执行，生产副本连接验列结构，分别证明两件事。
+      const plan = await bytebase.findIssueByTaskPlan({ project: args.project, planId: match[1] })
+      if (!plan?.issueId) throw new Error('BYTEBASE_VERIFICATION_TASK_CHANGED')
+      const bundle = await bytebase.getIssueBundle({ project: args.project, issueId: plan.issueId })
+      const execution = await bytebase.getTaskExecution({ project: args.project, issueId: plan.issueId, taskId })
+      if (bundle.plan.id !== match[1] || bundle.task?.id !== taskId
+        || executionDigest(bundle.sheet.target) !== executionDigest(args.target)
+        || execution.task?.status !== 'DONE' || execution.taskRun?.status !== 'DONE'
+        || execution.taskRun.id !== args.taskRunId) throw new Error('BYTEBASE_TASK_RUN_UNCONFIRMED')
+      return productionPostgresPlatform.queryVerification({ ...args, packageDigest: bundle.issue.packageDigest })
     }
   }
   const kubernetesFor = namespace => {

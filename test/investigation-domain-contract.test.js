@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createInvestigationWorkflow, createInvestigationWorkflowV7, createInvestigationWorkflowV6, createLegacyInvestigationWorkflow, validateInvestigationResult, validateAgentWorkResult, createInvestigationStageContract } from '../packages/dingtalk-dsh-assistant/agent-work.js'
+import { createInvestigationWorkflow, createInvestigationWorkflowV8, createInvestigationWorkflowV7, createInvestigationWorkflowV6, createLegacyInvestigationWorkflow, validateInvestigationResult, validateAgentWorkResult, createInvestigationStageContract } from '../packages/dingtalk-dsh-assistant/agent-work.js'
 import { defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { createGeneralCapabilityStepWorkflow, verifyTaskAcceptance } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
@@ -17,11 +17,16 @@ const result = () => ({ outcome: 'completed', summary: '已定位；修复待后
 const options = { provider: 'fixture', model: 'fixture', allowedTools: ['query'], capabilityIdentity: 'query-v1',
   verifyResult: async ({ result: value }) => validateAgentWorkResult(value, { sourceRefs: ['source-a'], verifyEvidence: async () => false }) }
 
-test('v5/v6/v7 冻结定义保留历史 digest，新运行 v8 核验全部成功查询且维持原预算', () => {
+test('v5/v6/v7/v8 冻结定义保留历史 digest，新运行 v9 交付候选且维持证据核验及原预算', () => {
   const old = defineExecutionWorkflow(createLegacyInvestigationWorkflow(options))
   assert.equal(old.digest, 'f996f51dcbc56f7b7799a95088e3ce894792006dba731ded669e27b43b5cb673')
   const current = defineExecutionWorkflow(createInvestigationWorkflow(options))
-  assert.equal(current.version, '8')
+  assert.equal(current.version, '9')
+  const v8 = defineExecutionWorkflow(createInvestigationWorkflowV8(options))
+  assert.equal(v8.version, '8'); assert.notEqual(v8.digest, current.digest)
+  assert.equal(v8.digest, '7baa1d25e627bb485e74ec45434cf57c5d0e451ab5b3c8c6b79f3323c4fee80e')
+  assert.match(v8.nodes[0].prompt, /缺失字段规格若可从授权资料或代码核验/)
+  assert.doesNotMatch(current.nodes[0].prompt, /缺失字段规格若可从授权资料或代码核验|核验完整列定义、约束/)
   const v7=defineExecutionWorkflow(createInvestigationWorkflowV7(options))
   assert.equal(v7.version,'7');assert.notEqual(v7.digest,current.digest)
   const frozen=defineExecutionWorkflow(createInvestigationWorkflowV6(options))
@@ -246,4 +251,27 @@ test('验收输入身份不能被产物同名字段覆盖，跨项引用不能�
   } }), true)
   assert.equal(await verifyTaskAcceptance({ ...context, check: async () => ({ status: 'satisfied', resultVerified: true,
     criteria: [{ criterion: '第一项', passed: true, evidenceIds: ['b'] }] }) }), false)
+})
+
+for (const target of ['public.profile.display_name', 'sales.order_notes.label']) test(`明确目标 ${target} 未指定字段细节时可交付待审候选，审批和执行仍未完成`, async () => {
+  const input = { acceptanceItems: [{ itemId: 'column-added', criterion: `新增 ${target}，审批后执行并核验` }], acceptanceCriteria: [`新增 ${target}`] }
+  const output = { outcome: 'completed', summary: '目标及现有列已核对，候选可提交审批', evidenceRefs: ['source-a'],
+    limitations: ['类型、可空和无默认值是候选建议，尚未审批或执行'], question: '',
+    findings: [{ kind: 'fact', statement: '精确目标已确认且待加列不存在', evidenceRefs: ['source-a'] },
+      { kind: 'recommendation', statement: `建议为 ${target} 新增可空字符列，无默认值，交真人审批`, evidenceRefs: [] }],
+    openItems: [{ description: '审批并执行本次候选', reason: '后续受管变更阶段负责', evidenceRefs: [] }],
+    criterionReviews: [{ itemId: 'column-added', status: 'insufficient_evidence', reason: '候选尚未审批和执行', evidenceRefs: [] }] }
+  const workflow = createInvestigationWorkflow(options)
+  const binding = { runId: 'run', taskId: 'task', generation: 1 }
+  assert.deepEqual(await workflow.nodes[0].admitOutput({ output, input, binding }), { outcome: 'succeeded' })
+  assert.deepEqual(await workflow.nodes[1].execute({ input: { requirement: input, result: output }, ...binding, signal: new AbortController().signal }), output)
+  assert.equal(await workflow.ownerContract.validateCompletion({ output, state: { run: { requirementRef: 'requirement' } }, artifacts: { read: async () => input } }), false)
+  assert.match(workflow.nodes[0].prompt, /能够给后续准备或审批阶段交付候选时用completed/)
+})
+
+test('目标不明和实质冲突仍可等待用户选择，不将未知冒充候选事实', async () => {
+  const workflow = createInvestigationWorkflow(options)
+  const output = { ...result(), outcome: 'needs_input', summary: '原始来源指向两个不同的目标数据库', question: '请确认本次变更的目标数据库。' }
+  assert.deepEqual(await workflow.nodes[0].admitOutput({ output, input: requirement, binding: { runId: 'run', taskId: 'task', generation: 1 } }),
+    { outcome: 'waiting', waitReason: { kind: 'input', reference: 'AGENT_WORK_NEEDS_INPUT' } })
 })

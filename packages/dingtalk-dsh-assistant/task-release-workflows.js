@@ -22,6 +22,15 @@ export function createExternalStageContracts({ workflowIds, external, readEngine
           ? [{ resourceRef: `uat-merge-task:${taskId}:${merged.runId}` }]
           : proof ? [{ resourceRef: `engineering-task:${taskId}:${engineered.runId}` }] : []
       }
+      if (id === 'task-data-change') {
+        const prior = plan.stages.slice(0, Math.max(0, stageIndex)).findLast(item => item.status === 'succeeded' && item.outputRef)
+        const source = prior ? await readArtifact(prior.outputRef) : origin.run?.body
+        const sourceRef = prior?.outputRef ?? origin.run?.sourceKey
+        if (!sourceRef || !source) throw executionError('DATA_CHANGE_SOURCE_REQUIRED')
+        args.changeRef = sourceRef
+        if (source?.outcome === 'needs_revision') args.previousIssueId = source.issueId
+        materials = [{ resourceRef: sourceRef, text: typeof source === 'string' ? source : JSON.stringify(source) }]
+      }
       return { input: await external.prepareRequirement({ workflowId: stage.workflowId,
         action: { taskId, arguments: { ...args, workflowId: id }, constraints: requirement.constraints }, materials }) }
     } }))
@@ -241,3 +250,11 @@ export const createLegacyReleaseTaskWorkflow = ({ kind, adapter }) =>
   createReleaseTaskWorkflow({ kind, adapter, legacy: true })
 
 export const releaseWorkflowKinds = Object.freeze(Object.keys(catalog))
+
+export const nativeDataChangeOwnerContract = Object.freeze({
+  ...externalWorkflowOwnerContract, version: '3',
+  async validateCompletion(context) {
+    return context.output?.outcome !== 'needs_revision'
+      && await externalWorkflowOwnerContract.validateCompletion(context)
+  },
+})

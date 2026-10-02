@@ -311,3 +311,9 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 Owner真实阻塞释放而未产生report时，通知仍读取真实Owner阻塞事实：Owner须blocked、无当前turn、最后turn为未接纳的released，Task控制仍active且无pending/ready/running阶段。通过现有owner:application_wait唯一出口使用固定人工介入正文；准备和领取均复核，不伪造Owner报告。暂态重试不告知，恢复前同阻塞只告知一次，实际成功后的新阻塞可开启新一次。
 
 PR预检暂态失败仅在Host适配器通过完整本地日志独立证明同一冻结操作从未发送时进入持久退避。原节点新lease恢复同effect，原生事务核对失败收据、冻结摘要、操作身份、权限、资源占用及安全屏障后重新取得发送许可。已有send-intent、结果未知或无完整证明时只对账，不重新发送；模型不能提交未发送证明。每次dispatch lease独立记录观察收据，避免重复失败结果被旧回执吞掉。
+
+### 原 Task 的明确需求修订与原生数据库审批
+
+本机已有 `POST /tasks/:id/context` 可选传 `requirement: {objective, acceptanceCriteria, stageTargets, stageAuthorizations}`，与 `context`、`requestId`、`inputVersion`、`runSequence` 一起使用。objective 必须包含在实际 context 中；阶段授权包含 workflowId、sourceQuote、objective、gate。服务核验当前操作者和目标白名单，将本次真实 Web 指令记录为新来源，保留原始来源及已冻结运行，不伪造群成员发言。原请求的比较版本和幂等约束仍生效。该入口不构成生产 SQL 批准。
+
+`task-data-change` v4 的原生审批等待保留 `waitReason.kind=recovery` 以复用现有对账恢复机制；reference 为 `BYTEBASE_APPROVAL_PENDING` 或 `BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED`。投影展示真实等待事项、责任方及恢复条件。驳回产物为 `outcome=needs_revision`，携带工单、SQL、真实意见和证据，后继同 Task 的候选绑定 previousIssueId，必须重新取得审批。新默认调查合同为 v9，v8 及以前保持原摘要恢复。

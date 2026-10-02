@@ -982,6 +982,13 @@ function query(value) {
     .map(row => webTaskEvent(row.id)).filter(event => event.status === 'pending')
   if (value?.kind === 'task.origin') return taskOrigin(value.taskId, value.latest === true)
   if (value?.kind === 'task.source') {
+    if (value.sourceKey?.startsWith('web-context:')) {
+      const eventId = value.sourceKey.slice('web-context:'.length)
+      const event = webTaskEvent(eventId) ?? queryMessages(db, { kind: 'message.web-task', eventId })
+      if (!event || event.request.action !== 'context' || !event.request.requirement || event.status !== 'accepted') return null
+      return { sourceKey: value.sourceKey, sourceVersion: 1, actorId: event.actorId, channel: 'web',
+        body: event.request.context, conversationId: event.input.scope.conversationId, status: 'active' }
+    }
     const row = db.prepare("SELECT payload FROM execution_events WHERE kind='task.web-rerun.accept' AND json_extract(payload,'$.source.sourceKey')=? ORDER BY seq LIMIT 1").get(value.sourceKey)
     return row ? JSON.parse(row.payload).source : queryMessages(db, { kind: 'message.source', sourceKey: value.sourceKey })
   }

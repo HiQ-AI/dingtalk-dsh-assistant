@@ -22,7 +22,42 @@ const proof = { schema: 'public', table: 't', relationKind: 'r', rowSecurity: fa
 const applySql = 'UPDATE public.t SET v = 2 WHERE id = 1;'
 const verificationSql = 'SELECT v FROM public.t WHERE id = 1'
 
-test('生产从库端口只提供三项只读方法，并对每次连接核验从库身份', async () => {
+test('简单加列只核对精确表列，真实从库回读完整列属性，拒绝已存在列和错误验收', async () => {
+  const queries = [], expectedRow = { column_name: 'label', data_type: 'character varying', is_nullable: 'YES',
+    column_default: null, character_maximum_length: null }
+  let columnExists = false, observed = expectedRow
+  class Client {
+    constructor(options) { this.options = options }
+    async connect() {}
+    async end() {}
+    async query(sql, values) {
+      queries.push({ sql, values })
+      if (sql.includes('pg_is_in_recovery()')) return { rows: [{ database_name: this.options.database,
+        transaction_read_only: 'on', in_recovery: true }] }
+      if (sql.includes('AS column_exists')) return { rows: [{ relation_kind: 'r', column_exists: columnExists, has_children: false }] }
+      if (sql.includes('FROM information_schema.columns')) return { rows: [observed] }
+      throw Error('UNEXPECTED_BROAD_QUERY')
+    }
+  }
+  const port = createProductionPostgresHost({ entries, Client })
+  const sql = 'ALTER TABLE public.t ADD COLUMN label character varying;'
+  const verificationSql = "SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 't' AND column_name = 'label'"
+  const args = { project: 'projects/flbn', target: target('hiq_editor'), baseline: { evidenceRef: 'baseline' },
+    applySql: sql, applySqlSha256: sha(sql), verificationSql, expectedChange: JSON.stringify({ rows: [expectedRow] }) }
+  assert.equal((await port.checkPreconditions(args)).passed, true)
+  assert.deepEqual(queries.at(-1).values, ['public', 't', 'label'])
+  assert.equal(queries.some(row => row.sql === uatCatalogBaselineSql()), false)
+  columnExists = true
+  assert.equal((await port.checkPreconditions(args)).passed, false)
+  const verify = { project: args.project, target: args.target, sql: verificationSql,
+    expectedChange: args.expectedChange, packageDigest: 'a'.repeat(64), taskRunId: 'task-run-1' }
+  assert.equal((await port.queryVerification(verify)).passed, true)
+  observed = { ...expectedRow, is_nullable: 'NO' }
+  await assert.rejects(port.queryVerification(verify), /POSTGRES_COLUMN_VERIFICATION_UNCONFIRMED/)
+  await assert.rejects(port.queryVerification({ ...verify, sql: verificationSql + '; DROP TABLE public.t' }), /POSTGRES_COLUMN_VERIFICATION_INVALID/)
+})
+
+test('生产从库端口只提供目录及验收只读方法，并对每次连接核验从库身份', async () => {
   const opened = [], statements = []
   class Client {
     constructor(options) { opened.push(options); this.options = options }
@@ -39,7 +74,7 @@ test('生产从库端口只提供三项只读方法，并对每次连接核验�
     async end() {}
   }
   const port = createProductionPostgresHost({ entries, Client })
-  assert.deepEqual(Object.keys(port), ['getDatabase', 'readBaseline', 'checkPreconditions'])
+  assert.deepEqual(Object.keys(port), ['getDatabase', 'readBaseline', 'checkPreconditions', 'queryVerification'])
   assert.deepEqual(await port.getDatabase({ project: 'projects/flbn', target: target('hiq_editor') }),
     { project: 'projects/flbn', ...target('hiq_editor') })
   const baseline = await port.readBaseline({ project: 'projects/flbn', target: target('hiq_editor') })

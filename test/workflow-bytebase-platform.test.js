@@ -222,3 +222,47 @@ test('未列入配置的目标和审批漂移均阻止外部执行', async () =>
   await assert.rejects(f.externalAdapter.execute(executionRequest), { code: 'BYTEBASE_APPROVAL_UNCONFIRMED' })
   assert.ok(!f.calls.includes('run-task'))
 })
+
+test('原生审批区分等待、SKIPPED 与真人决定，不调用 Assistant 审批', async () => {
+  let decision = 'pending'
+  const f = fixture({ api: { async getIssueApproval(args) { return { ...args, source: 'bytebase',
+    decision, human: ['approved','rejected'].includes(decision), decidedBy: 'users/reviewer',
+    requestId: 'projects/app/issues/i/issueComments/review-1', comment: '改名后重审', evidenceRef: 'approval-evidence' } } },
+    approvalApi: { async getApproval() { throw Error('unexpected Assistant approval') } } })
+  const view = { prepared, issue: { id: f.issue.id, planId: f.plan.id },
+    sheet: { id: f.sheet.id, sha256: f.sheet.sha256, target }, plan: { id: f.plan.id, sheetId: f.sheet.id } }
+  const intent = await f.workflowAdapter.prepareApproval({ view, runId: 'native', generation: 1, requirementDigest: sha('req') })
+  const request = { workflowKind: 'data-change', stage: 'approval-gate', runId: 'native', generation: 1,
+    requirementDigest: sha('req'), packageDigest: pkg.validation.packageDigest,
+    applySqlSha256: pkg.applySqlSha256, target, intent }
+  assert.equal((await f.externalAdapter.execute(request)).reason, 'BYTEBASE_APPROVAL_PENDING')
+  decision = 'unconfigured'
+  assert.equal((await f.externalAdapter.reconcile(request)).reason, 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED')
+  decision = 'rejected'
+  const rejected = await f.externalAdapter.reconcile(request)
+  assert.equal(rejected.status, 'succeeded')
+  assert.equal(rejected.result.approval.decision, 'rejected')
+  decision = 'approved'
+  assert.equal((await f.externalAdapter.reconcile(request)).result.approval.human, true)
+  assert.equal(f.calls.includes('run-task'), false)
+})
+
+test('简单加列仅做生产只读前置核对，其他 SQL 继续演练', async () => {
+  const f = fixture({ config: { ...config, targets: [{ project: 'projects/app', target }] },
+    api: { async getIssueApproval() {} }, uatApi: { getDatabase: undefined, readBaseline: undefined,
+      checkPreconditions: undefined, validateSql: undefined, rehearseInUat: undefined, getUatRehearsalByOperationKey: undefined } })
+  for (const sql of ['ALTER TABLE public.t ADD COLUMN name character varying;',
+    'ALTER TABLE public.other_table ADD COLUMN display_name text;']) {
+    const body = { ...packageBody, applySql: sql, applySqlSha256: sha(sql) }
+    const result = await f.workflowAdapter.validate({ ...body, packageDigest: executionDigest(body) })
+    assert.equal(result.passed, true)
+    assert.equal(f.workflowAdapter.requiresRehearsal(body), false)
+  }
+  for (const sql of ['ALTER TABLE public.t ADD COLUMN name text NOT NULL;',
+    "ALTER TABLE public.t ADD COLUMN name text DEFAULT '';", 'UPDATE public.t SET v=2;',
+    'ALTER TABLE public.t ADD COLUMN name text; DROP TABLE public.t;']) {
+    assert.equal(f.workflowAdapter.requiresRehearsal({ applySql: sql }), true)
+  }
+  assert.equal(f.calls.includes('review'), false)
+  assert.equal(f.calls.includes('rehearse-uat'), false)
+})

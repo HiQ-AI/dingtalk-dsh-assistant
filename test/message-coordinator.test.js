@@ -490,3 +490,17 @@ test('暂态探测递增退避，无次数上限，新来源无需等待旧退�
  await assert.rejects(f.receive('network-new','新增资料'),{code:'ECONNRESET'})
  assert.equal(calls,8)
 })
+
+test('群协调传递原始简单加列目标，候选细节不升级为业务硬条件', async t => {
+  const f = await fixture(t, true)
+  const body = '生产 sales 数据库的order_notes表新增label列，提交Bytebase审批，通过后执行'
+  await f.receive('simple-column', body)
+  const instruction = f.inputs[0].instructions
+  assert.match(instruction, /objective只表达来源中用户要求的交付、范围和明确条件/)
+  assert.match(instruction, /系统建议的代码扫描、字段用途澄清、演练、备份等不得扩写/)
+  assert.match(instruction, /未指定的实现细节可提出明确候选交真人审批/)
+  const state = await f.workflow.state('simple-column')
+  assert.equal(state.units[0].goalText, body)
+  assert.equal(state.requests.length, 0)
+  assert.equal(state.commands.length, 1)
+})

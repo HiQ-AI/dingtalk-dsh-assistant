@@ -59,7 +59,7 @@ for (const control of ['cancelled', 'active', 'paused']) test(`Host恢复已退�
   assert.deepEqual(await service.execution.controller.taskPlan('task'), before)
   const saved = (await service.execution.store.query({ kind: 'workflow.list' })).find(item => item.digest === definition.digest)
   assert.equal(saved.definitionVersion, '4'); assert.deepEqual(saved.config, model)
-  assert.equal(service.execution.controller.workflowDefinition(historical.id).version, '8')
+  assert.equal(service.execution.controller.workflowDefinition(historical.id).version, '9')
   assert.throws(() => service.execution.controller.workflowDefinition(historical.id, definition.digest), { code: 'WORKFLOW_VERSION_UNAVAILABLE' })
 })
 import { createTaskArtifactWriteAdapter, createGeneralArtifactWriteCapability } from '../packages/dingtalk-dsh-assistant/task-artifact-write.js'
@@ -69,7 +69,7 @@ import { messageSchemas, taskWorkflowCatalog } from '../packages/dingtalk-dsh-as
 import { createWorkflowNotifications, formatGroupReply, notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 import { queryConversationTaskProgress } from '../packages/dingtalk-dsh-assistant/task-progress-query.js'
 import { groupTaskExecutions } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
-import { createInvestigationWorkflowV6, createInvestigationWorkflowV7 } from '../packages/dingtalk-dsh-assistant/agent-work.js'
+import { createInvestigationWorkflowV6, createInvestigationWorkflowV7, createInvestigationWorkflowV8 } from '../packages/dingtalk-dsh-assistant/agent-work.js'
 
 const schema = { type: 'object', additionalProperties: true }
 const splitOne = text => ({ kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] })
@@ -95,7 +95,7 @@ test('查询资源变化重启使用冻结能力身份恢复原Task，不重算�
   assert.deepEqual((await service.execution.artifacts.read(goal.ref)).scope.databaseIds,[])
 })
 
-for (const version of ['6', '7']) test('调查合同升级保留v' + version + '冻结摘要和历史计划，新调查使用v8覆盖验收', async t => {
+for (const version of ['6', '7', '8']) test('调查合同升级保留v' + version + '冻结摘要和历史计划，新调查使用v9候选决策', async t => {
   const root = await mkdtemp(join(tmpdir(), 'investigation-contract-upgrade-'))
   const config = { groupIds: ['g'], ownerActorId: 'owner', dbPath: join(root, 'control.db'), artifactDirectory: join(root, 'artifacts'), instanceId: 'contract-upgrade' }
   const initial = await openExecutionStore({ dbPath: config.dbPath, instanceId: config.instanceId, initialize: true }); await initial.close()
@@ -104,12 +104,12 @@ for (const version of ['6', '7']) test('调查合同升级保留v' + version + '
     legacy: { getAgentConfig: () => model }, taskOwnerSessions: { async close() {} } })
   let service = await open(), oldController, oldStore
   t.after(async () => { await oldController?.close(); await oldStore?.close(); await service?.close(); await rm(root, { recursive: true, force: true }) })
-  const saved = (await service.execution.store.query({ kind: 'workflow.list' })).find(item => item.workflowId === 'task-investigation' && item.definitionVersion === '8')
+  const saved = (await service.execution.store.query({ kind: 'workflow.list' })).find(item => item.workflowId === 'task-investigation' && item.definitionVersion === '9')
   await service.close()
   const store = await openExecutionStore({ dbPath: config.dbPath, instanceId: config.instanceId })
   oldStore = store
   const artifacts = await openExecutionArtifacts({ directory: config.artifactDirectory })
-  const prior = (version === '6' ? createInvestigationWorkflowV6 : createInvestigationWorkflowV7)({ ...saved.config, verifyResult: async () => true })
+  const prior = (version === '6' ? createInvestigationWorkflowV6 : version === '7' ? createInvestigationWorkflowV7 : createInvestigationWorkflowV8)({ ...saved.config, verifyResult: async () => true })
   const definition = defineExecutionWorkflow(prior)
   const controller = createExecutionController({ store, artifacts, readTools: saved.config.allowedTools, workflows: [prior] })
   oldController = controller
@@ -122,7 +122,7 @@ for (const version of ['6', '7']) test('调查合同升级保留v' + version + '
   await controller.close(); await store.close(); service = await open()
   assert.deepEqual(await service.execution.controller.taskPlan('old-task'), plan)
   assert.equal(service.execution.controller.workflowDefinition(prior.id, definition.digest).version, version)
-  assert.equal(service.execution.controller.workflowDefinition(prior.id).version, '8')
+  assert.equal(service.execution.controller.workflowDefinition(prior.id).version, '9')
 })
 test('维护HTTP仅受信本机身份可改，严格参数、幂等与过期许可均校验', async t => {
   const { service } = await fixture(t,'owner',undefined,{config:{webActorId:'owner'}})
@@ -1886,6 +1886,52 @@ test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入�
  await execution.controller.whenIdle(original.runId);state=await execution.controller.state(original.runId);assert.equal(state.run.status,'cancelled');assert.equal(legacyCalls,0)
 })
 
+test('已有Task经本机上下文入口修订目标和阶段授权，保留原来源及冻结成果', async t => {
+  let release, started
+  const gate = new Promise(resolve => { release = resolve }), began = new Promise(resolve => { started = resolve })
+  t.after(() => release())
+  const external = { releaseAdapters: { 'uat-deployment': { id: 'fixture', version: '1', rulesDigest: 'a'.repeat(64),
+    inspect: async () => { throw Error('UNEXPECTED_EXTERNAL') }, prepareOperation: async () => { throw Error('UNEXPECTED_EXTERNAL') } } },
+  availableTargets: [{ workflowId: 'task-uat-deployment', targetId: 'uat-test' }],
+  operationAdapter: { execute: async () => { throw Error('UNEXPECTED_EXTERNAL') }, reconcile: async () => ({ status: 'unknown' }) },
+  authorizeExternal: async () => false, prepareRequirement: async () => { throw Error('UNEXPECTED_EXTERNAL') } }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, {
+    config: { webActorId: 'owner' }, external,
+    execute: async ({ input }) => { started(); await gate; return { summary: input.request } } })
+  try {
+  const received = await service.ingest(message); await service.messages.process(received.runId); await began
+  const task = (await service.tasks())[0]
+  const original = await execution.controller.taskPlan(task.taskId)
+  const originalInput = await execution.artifacts.read(original.task.requirementRef)
+  const revision = { objective: '按批准方案部署至 UAT', acceptanceCriteria: ['UAT 版本独立回读'],
+    stageTargets: { 'task-uat-deployment': 'uat-test' }, stageAuthorizations: [{
+      workflowId: 'task-uat-deployment', sourceQuote: '按批准方案部署至 UAT', objective: '按批准方案部署至 UAT', gate: 'none' }] }
+  const runtime = { isWorkflowTask: () => true, submitWorkflowTask: request => service.submitWebTask(request, { channel: 'web', actorId: 'owner' }) }
+  const server = createServer((req, res) => handleRequest(req, res, runtime))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)))
+  const post = body => fetch(`http://127.0.0.1:${server.address().port}/tasks/${task.taskId}/context`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  const input = { requestId: 'explicit-revision', inputVersion: original.task.requirementRevision + 1,
+    runSequence: 1, context: '按批准方案部署至 UAT。由本机执行人明确修订，保留已有成果。', requirement: revision }
+  const unauthorized = await post({ ...input, requirement: { ...revision, stageTargets: { 'task-uat-deployment': 'unknown' } } })
+  assert.equal(unauthorized.status, 400)
+  assert.equal((await execution.controller.taskPlan(task.taskId)).task.requirementRevision, 1)
+  const accepted = await post(input); assert.equal(accepted.status, 202, await accepted.text())
+  assert.equal((await post(input)).status, 202)
+  const revisedPlan = await execution.controller.taskPlan(task.taskId)
+  const goal = await execution.artifacts.read(revisedPlan.task.requirementRef)
+  assert.equal(goal.objective, revision.objective)
+  assert.deepEqual(goal.acceptanceCriteria, revision.acceptanceCriteria)
+  assert.deepEqual(goal.sourceInstructions.slice(0, -1), originalInput.sourceInstructions)
+  const source = await execution.store.query({ kind: 'task.source', sourceKey: goal.authorization.sourceKey })
+  assert.equal(source.body, input.context); assert.equal(source.actorId, 'owner'); assert.equal(source.channel, 'web')
+  assert.equal((await execution.artifacts.read((await execution.controller.state(original.stages[0].runId)).run.requirementRef)).request, originalInput.request)
+  assert.equal((await execution.store.query({ kind: 'run.list' })).length, 1)
+  assert.equal((await post({ ...input, context: '其他指令' })).status, 409)
+  release(); await execution.controller.whenIdle(original.stages[0].runId)
+  } finally { release() }
+})
+
 test('Controller未排空错误投影等待原因，不能显示正常执行',async t=>{
  const {service,execution,message}=await fixture(t,'owner',undefined,{execute:async()=>{throw Object.assign(new Error('EXECUTOR_DRAIN_EVIDENCE_REQUIRED'),{code:'EXECUTOR_DRAIN_EVIDENCE_REQUIRED',executionDrained:false})}})
  const first=await service.ingest(message);await service.messages.process(first.runId)
@@ -1990,6 +2036,9 @@ test('方案阶段完成后等待确认，确认沿用业务Task并只启动下�
     const decision = { action: !input.stages.length ? 'advance' : complete ? 'complete'
       : input.stages.some(stage => stage.status === 'ready') ? 'advance' : 'wait',
       summary: complete ? '两段工作已核验' : '等待方案确认或流程完成',
+      ...(!complete && input.stages.length && !input.stages.some(stage => stage.status === 'ready')
+        ? { condition: { kind: 'approval', missing: '后续阶段方案确认', responsibleParty: '交办人',
+          resumeWhen: '确认后续阶段后继续', evidenceRefs: input.stages.flatMap(stage => stage.evidenceRefs ?? []) } } : {}),
       evidenceRefs: input.stages.flatMap(stage => stage.evidenceRefs ?? []),
       ...(!input.stages.length ? { planChange: { kind: 'initialize', stages: [
         { workflowId: 'task-investigation', gate: 'none' }, { workflowId: 'task-investigation', gate: 'confirmation' },
@@ -2008,7 +2057,7 @@ test('方案阶段完成后等待确认，确认沿用业务Task并只启动下�
   await execution.controller.whenIdle(accepted.commands[0].result.runId)
   assert.deepEqual((await service.recover()).failures, [])
   await service.flushNotifications()
-  assert.equal(sent.filter(item => item.startsWith('任务等待确认')).length, 1)
+  assert.equal(sent.filter(item => item.startsWith('任务等待补充或确认') && item.includes('后续阶段方案确认')).length, 1)
   let plan = await execution.controller.taskPlan(taskId)
   assert.equal(plan.task.status, 'waiting_confirmation')
   assert.equal(plan.stages[0].status, 'succeeded')

@@ -10,8 +10,8 @@ UAT 部署可独立发起，显式给出白名单目标和目标分支当前提�
 
 - release.targets 每项含唯一 id、kind、仓库、环境、服务、runbook、目标分支、Woodpecker 仓库与 Cron、Kubernetes Deployment、Registry 镜像与 HTTPS 入口。目标 SHA 由请求显式给出，Host 再查目标分支头；生产目标还需已核实的 Tag→Woodpecker 触发链。生产 Tag 是**每次任务**明确给出的 `action.arguments.releaseTag`（格式 `vYYYYMMDD-N`），与 commitSha 一起冻结在 Run 的 target、审批范围和效果身份中；不得写死在 `release.targets`，不得由模型猜序号。同一生产目标可按不同 Tag 多次发布，每次均重新检查 Tag 冲突、流水线与真人审批。UAT 部署预检与生产合并阶段只确认已经合入且 merge SHA 等于目标分支头的唯一 PR，当前固定需求合同不能自动合并未合入 PR。
 - 当前生产目标白名单只允许 `HiQ-AI/dataset` 的 `dataset` 与 `HiQ-AI/dataset-web` 的 `dataset-web`，均以已核实的 `main` 分支和 `hiqlcd-app-prod` Deployment 为准；其他服务不加入 `release.targets`。准入仍取决于生产触发链、可信客户端和审批入口全部通过，不因出现在白名单中就自动可发起。
-- bytebase.targets 每项含唯一 id、Bytebase 项目、精确生产目标及对应的精确 UAT 数据库。UAT 的 SQL 审查与事务演练由本地 PostgreSQL 受信连接完成，不调用 Bytebase；生产结构基线和同表结构证明由本地连接天翼云只读副本取得，Bytebase 负责生产工单、执行和回读。双方对脚本涉及表运行同一固定 pg_catalog 结构查询，规范化指纹必须一致；整库快照用于各自冻结，不要求无关表全库一致。UAT 与生产的行数据不要求相同，也不把 UAT 演练当作生产结果。SQL 正文来自当前消息已授权的精确资源，生产基线由 Host 受信回读并冻结，无需消息提供证明文档。缺少 UAT 目标或同表结构证明时阻断。生产写入必须经过 Bytebase，不能改用数据库直连凭据。
-- 四类外部效果都经 execution-delivery.js 的 external 效果账。每个效果请求冻结运行、代次、目标和内容身份；发送回执不能充当独立回读。未知结果仅恢复对账，不自动重发。生产发布在合并身份回读后进入真人审批节点；Tag 授权再次查询同 Run、代次与目标的审批效果及审批账，必须已由 Web 真人批准且未撤销，并逐项核对 Tag、提交、范围与回执摘要，才可创建精确 Tag。生产数据变更先在 Bytebase 创建并回读 Sheet、Plan、Issue，**此时不创建 Rollout/Task**；Assistant 任务页真人审批绑定 Run、代次、Issue、Plan、Sheet、目标库、SQL SHA256 与变更包摘要。批准且未撤销后才创建 Rollout/Task 并执行，因为 Bytebase 自动发布策略可能在创建 Rollout 时立即运行 Task。Bytebase 工单的 `approvalStatus=SKIPPED` 不构成人工批准。UAT 演练和建工单不触发重复的真人审批。
+- bytebase.targets 每项登记唯一 id、Bytebase 项目和精确生产目标。新数据变更 v4 的单条新增可空、无默认值列先由生产只读连接核对准确表列，生成候选 DDL 并提交 Bytebase；不要求 UAT 目标、全库一致或额外业务用途调查。复杂 SQL 仍要求配置 UAT 目标并完成既有演练。生产写入只经过 Bytebase，新增列验收通过生产只读副本固定列目录查询完成。
+- 外部写操作沿用持久效果账和独立回读。数据变更先创建并回读 Sheet、Plan、Issue，不创建 Rollout/Task；v4 读取 Bytebase 原生审批事件、真实审批人及意见，绑定准确目标、SQL 和变更包。待审继续等待，驳回保留意见并在同 Task 修改候选、关联原工单重新送审；SQL 改动使旧批准失效。SKIPPED 明确显示“未启用真人审批”，不能执行。真人批准后才创建 Rollout/Task，执行前再次回读批准和目标，执行后分别核对 TaskRun 与真实数据库列属性。既有 v3 冻结流程保持原定义恢复。生产发布的 Web 真人批准与 Tag 来源链保持既有合同。
 - D:/baibu-agent/.secrets 中的凭据只由本机受信客户端读取；Host 配置和模型输入不包含凭据值，凭据也不能写入仓库、工件或日志。不得把宽泛的 Bytebase MCP call_api 当成受信执行端口。
 
 ## 本地客户端装配
@@ -27,7 +27,7 @@ UAT 部署可独立发起，显式给出白名单目标和目标分支当前提�
 
 Host 在启动时只读取当前 Poller Secret、GitHub CLI 登录及 Docker buildx 可用性，失败则拒绝装配；不会把凭据写入 profile。目标白名单仍由 `workflow.platforms` 单独配置，缺证明和目标时目录保持不可发起。部署前先核实当前 Poller Secret 名称与 UAT K3s Server；若变更，更新客户端配置和定向验证后再安装，不修改凭据文件来适配旧代码。
 
-数据变更接入时，同一 Host 配置另需 `uatPostgres.receiptDbPath`（本机持久 SQLite 文件的绝对路径）、`uatPostgres.targets` 和 `productionPostgres.targets` 三项 `{project, target}`；Resident 的 `workflow.platforms.bytebase` 另登记三个 `{id, project, target, uatTarget}`。生产 `target` 是 Bytebase 资源名，只读连接精确映射 `.secrets/db-credentials.json` 中的 `tianyi_editor_slave`、`tianyi_bg_slave`、`tianyi_admin_slave`，须确认 `pg_is_in_recovery()=true` 和会话只读。`uatTarget`/Host `target` 是 `{instance: postgresql/192.168.8.8:30770, database: 同名库, environment: uat}`。三处清单必须逐项一致，Host 不从配置读取用户名或密码。安装前用只读客户端核对三库 `current_database()`、会话只读、实时 catalog 完整行数和生产副本身份；不得用过期 Bytebase `/schema` 缓存快照替代。UAT 回执文件所在目录应与工作流控制账一同备份，未知预留不能自动清除后重演。
+复杂数据变更接入时，同一 Host 配置另需 `uatPostgres.receiptDbPath`（本机持久 SQLite 文件的绝对路径）、`uatPostgres.targets` 和 `productionPostgres.targets` 三项 `{project, target}`；Resident 的 `workflow.platforms.bytebase` 另登记三个 `{id, project, target, uatTarget}`。生产 `target` 是 Bytebase 资源名，只读连接精确映射 `.secrets/db-credentials.json` 中的 `tianyi_editor_slave`、`tianyi_bg_slave`、`tianyi_admin_slave`，须确认 `pg_is_in_recovery()=true` 和会话只读。`uatTarget`/Host `target` 是 `{instance: postgresql/192.168.8.8:30770, database: 同名库, environment: uat}`。三处清单必须逐项一致，Host 不从配置读取用户名或密码。安装前用只读客户端核对三库 `current_database()`、会话只读、实时 catalog 完整行数和生产副本身份；不得用过期 Bytebase `/schema` 缓存快照替代。UAT 回执文件所在目录应与工作流控制账一同备份，未知预留不能自动清除后重演。
 当前已核实的 UAT 部署目标如下；本机配置以这些精确资源为白名单，每次仍需独立预检：
 
 目标 ID 分别为 `dataset-web-uat2-deployment` 与 `dataset-uat3-deployment`，`kind` 均为 `uat-deployment`。发起时指定目标 ID 和目标分支当前 `commitSha`；工程流程自动后继时可由受信工程 Run 推导目标和提交。部署结果 `uat-deployed` 仅代表精确版本运行成功。
@@ -46,7 +46,7 @@ Host 在启动时只读取当前 Poller Secret、GitHub CLI 登录及 Docker bui
 | dataset | `HiQ-AI/dataset` / `main` | `1` | `hiqlcd-app-prod/dataset` | `registry.cn-sh1.ctyun.cn/hiq-ai/dataset` | `https://editor.hiqlcd.com/api/dataset/ready` |
 | dataset-web | `HiQ-AI/dataset-web` / `main` | `2` | `hiqlcd-app-prod/dataset-web` | `registry.cn-sh1.ctyun.cn/hiq-ai/dataset-web` | `https://editor.hiqlcd.com/` |
 
-Bytebase `projects/flbn` 下的三个已确认生产数据库分别是 `instances/flbnpguaf/databases/hiq_editor`、`instances/flbnpguaf/databases/hiq_background_db`、`instances/flbnpguaf/databases/hiq_admin`，环境均为 `environments/prod`。同名 UAT PostgreSQL 数据库通过 `192.168.8.8:30770` 本地连接；Host 从 `.secrets/db-credentials.json` 精确读取 `hiq_editor_uat` 连接，仅复用其主机、端口与凭据并显式指定三库各自数据库名。UAT receipt SQLite 放在 Host 持久目录。当前 SQL 审查仅支持单表整数列 UPDATE 与同表 SELECT 回查；有触发器、规则、RLS、外键或 CHECK 等复杂对象时拒绝演练，不将其泛化为任意 SQL 支持。
+Bytebase `projects/flbn` 下的三个已确认生产数据库分别是 `instances/flbnpguaf/databases/hiq_editor`、`instances/flbnpguaf/databases/hiq_background_db`、`instances/flbnpguaf/databases/hiq_admin`，环境均为 `environments/prod`。同名 UAT PostgreSQL 数据库通过 `192.168.8.8:30770` 本地连接；Host 从 `.secrets/db-credentials.json` 精确读取 `hiq_editor_uat` 连接，仅复用其主机、端口与凭据并显式指定三库各自数据库名。UAT receipt SQLite 放在 Host 持久目录。复杂 SQL 的既有演练审查支持单表整数列 UPDATE 与同表 SELECT 回查；新增可空无默认值列走上述 v4 简单路径；有触发器、规则、RLS、外键或 CHECK 等复杂对象时拒绝演练，不将其泛化为任意 SQL 支持。
 
 以上仓库 ID、Cron 分支和命名空间来自当前 Poller/Kubernetes 只读回读，业务回归见 `../acceptance/topic-intent-task-composition/round-8.md`。运行时仍须检查分支头、目标 SHA、同 SHA 构建与独立制品/Pod 证据。
 ## 当前本地接入状态与验证

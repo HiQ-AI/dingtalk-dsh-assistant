@@ -198,7 +198,14 @@ export async function handleRequest(request, response, store, { testApiEnabled =
         requirementRevision: z.number().int().positive(), controlRevision: z.number().int().positive(),
         planRevision: z.number().int().positive(), runSequence: z.number().int().nonnegative(),
         stageId: requiredText.max(128), outputRef: requiredText.max(4096), confirmationText: requiredText.max(16000) })
-        : z.strictObject({ ...fields, ...(action === 'cancel' ? { reason: requiredText.max(16000) } : { context: requiredText.max(16000) }) })).parse(await readJson(request))
+        : z.strictObject({ ...fields, ...(action === 'cancel' ? { reason: requiredText.max(16000) } : {
+          context: requiredText.max(16000), requirement: z.strictObject({
+            objective: requiredText.max(12000), acceptanceCriteria: acceptanceCriteriaSchema,
+            stageTargets: z.record(z.string(), requiredText),
+            stageAuthorizations: z.array(z.strictObject({ workflowId: requiredText, sourceQuote: requiredText,
+              objective: requiredText, gate: z.enum(['none', 'confirmation']) })),
+          }).optional(),
+        }) })).parse(await readJson(request))
       const result = await store.submitWorkflowTask({ ...body, action, taskId: decodeURIComponent(workflowTaskAction[1]) })
       return send(response, 202, result)
     } catch(error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|PENDING|TERMINAL|STALE|NOT_WAITING|TASK_ARCHIVE_|RUN_BUDGET_CONTINUATION_/u.test(error.message) ? 409 : 400, { error: error.message }) }

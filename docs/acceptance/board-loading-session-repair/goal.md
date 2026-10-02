@@ -1,6 +1,6 @@
 # 看板、常驻会话与任务执行修复目标
 
-> 状态：COMPLETED
+> 状态：ACTIVE
 > Goal ID：board-loading-session-repair
 > 最近维护：2026-10-02T10:05:21+08:00
 > 权威目标：goal.md
@@ -30,11 +30,13 @@
 | SG7 | 结构化等待/受阻投影和受管恢复 | 同Task恢复、业务与系统原因区分、通知摘要 | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG8 | 数据库完整元数据与调查覆盖 | 原生只读查询、授权拒绝、分页及调查范围 | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG9 | 本轮部署与唯一任务真实推进 | 精确包安装、维护排空、原任务推进到真实等待点 | 完成 | matrix.csv / round-4.md |
+| SG10 | 简单数据库变更送审与驳回修订 | 候选送Bytebase真人审批，拒绝修订、批准执行及版本绑定定向验证 | 完成 | docs/spec/simple-database-change-flow.md |
+| SG11 | 部署及原Task真实送审 | 精确部署、原Task工单和SQL独立回读、群通知纠正 | 进行中 | round-5.md |
 ## 当前检查点
 
-- 当前子目标：SG9
-- 唯一下一步：本轮修复已完成；业务Task获得字段规格与本次生产批准后按既有事件继续。
-- 未闭环项：本轮修复无未闭环项。业务Task等待字段规格及后续精确生产批准；C盘仍满，运行及当前测试临时目录使用D盘。
+- 当前子目标：SG11
+- 唯一下一步：完成精确部署与原Task修订接续，回读真实工单审批状态。
+- 未闭环项：简单DDL闭环、真实工单送审及部署验证；生产执行依赖本次真实真人批准。原字段规格等待结论已被用户纠正。
 
 ## 进展
 
@@ -63,3 +65,7 @@
 
 Agent工作区D:/baibu-agent，运行profile D:/dsh_home/profiles/web，API18998、Web3080。目标Task task-e7e25daf5c0aac2f8bcb5ef13daef45f，Owner owner-7e9271fcc177db7025850a7527e7ac655b7c6fd1。Editor后端为已登记dataset，先读授权知识地图定位，不需扩权。状态以matrix.csv为准，第三轮真实反证保留。
 最终检查点：v8精确包PID32460，原Task stage-3十五查询全部计入证据，代码六页1153文件，合法业务wait零失败；页面和群独立回读，旧等待说明撤回。10:05:21实时接入health=ok。PR152 OPEN，当前已推送f32a538，收尾文档另补提交。
+
+2026-10-02新要求：用户批准simple-database-change-flow方案。恢复为ACTIVE；保留原Task及既有证据，新增SG10/SG11。原目标和验收不得继续将完整字段用途/代码调查作为送审前置。
+
+当前检查点：简单数据库变更 v4、调查 v9 和原 Task 明确需求修订入口已实现。核心定向 65 项、平台数据变更 27 项、Host 36 项、任务服务完整 213 项通过；生产只读加列预检通过。待补部署、原 Task 实际送审和群通知纠正的独立证据。

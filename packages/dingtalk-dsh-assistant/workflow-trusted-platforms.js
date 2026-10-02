@@ -193,7 +193,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
   }
   let boundStore = null
   async function readDataApproval({ runId, generation, requirementDigest, resourceKey,
-    scopeDigest, issueId, planId, sheetId, target, sheetSha256, packageDigest, requestId }) {
+    scopeDigest, issueId, planId, sheetId, target, sheetSha256, packageDigest, requestId, legacy = false }) {
     const expectedScope = executionDigest({ runId, generation, issueId, planId, sheetId,
       target, sheetSha256, packageDigest })
     if (!boundStore || scopeDigest !== expectedScope) throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
@@ -211,12 +211,21 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       && effect.definition.payload.intent?.sheetSha256 === sheetSha256
       && effect.definition.payload.intent?.packageDigest === packageDigest
       && executionDigest(effect.definition.payload.target) === executionDigest(target))
+    const nativeApproval = !legacy && typeof clients?.bytebase?.getIssueApproval === 'function'
     if (gates.length !== 1 || gates[0].state !== 'succeeded'
-      || !gates[0].requestId || (requestId && gates[0].requestId !== requestId)
+      || (!nativeApproval && (!gates[0].requestId || (requestId && gates[0].requestId !== requestId)))
       || gates[0].result?.status !== 'succeeded'
       || gates[0].result?.result?.scopeDigest !== scopeDigest
       || gates[0].result?.result?.operationKey !== gates[0].definition.payload.intent.operationKey)
       throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
+    if (nativeApproval) {
+      const decision = await clients.bytebase.getIssueApproval({ project: [...databaseTargets.values()].find(item => executionDigest(item.target) === executionDigest(target))?.project,
+        issueId, planId, sheetId, target, sheetSha256, packageDigest, scopeDigest })
+      if (decision?.decision !== 'approved' || decision.source !== 'bytebase' || decision.human !== true
+        || !decision.decidedBy || (requestId && decision.requestId !== requestId)
+        || gates[0].result.result.approval?.requestId !== decision.requestId) throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
+      return decision
+    }
     const approval = await boundStore.query({ kind: 'approval.get', requestId: gates[0].requestId })
     if (approval.effectId !== gates[0].effectId || approval.decision !== 'approved'
       || approval.revoked || approval.decisionSource !== 'web' || !approval.decidedBy)
@@ -230,6 +239,14 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       productionApi: clients?.productionPostgres,
       uatApi: clients?.uatPostgres, approvalApi: { getApproval: readDataApproval } })
     : null
+  if (bytebase?.workflowAdapter.nativeApproval && config.bytebase.targets.every(entry => entry.uatTarget)) {
+    const legacyApi = Object.fromEntries(Object.entries(clients.bytebase).filter(([name]) => name !== 'getIssueApproval'))
+    const legacyPlatform = createBytebaseDataChangePlatform({ config: config.bytebase, api: legacyApi,
+      productionApi: clients.productionPostgres, uatApi: clients.uatPostgres,
+      approvalApi: { getApproval: args => readDataApproval({ ...args, legacy: true }) } })
+    bytebase.workflowAdapter.legacyAdapter = legacyPlatform.workflowAdapter
+    bytebase.legacyExternalAdapter = legacyPlatform.externalAdapter
+  }
   if (!release && !bytebase && !uatMerge) return null
   const databaseTargets = new Map((config.bytebase?.targets ?? []).map(target => [target.id, target]))
   if ([...releaseTargets.keys(), ...databaseTargets.keys()].some(id => !id || typeof id !== 'string')
@@ -369,17 +386,18 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
         || !snapshot.evidenceRef) throw executionError('EXTERNAL_BASELINE_UNCONFIRMED')
       return { request, constraints, target: selected.target,
         sources: [{ id: changeRef, sha256: digestText(source.text), content: source.text }],
-        baseline: { snapshotId: snapshot.snapshotId, sha256: snapshot.sha256 } }
+        baseline: { snapshotId: snapshot.snapshotId, sha256: snapshot.sha256 },
+        ...(action.arguments.previousIssueId ? { previousIssueId: action.arguments.previousIssueId } : {}) }
     }
     throw executionError('EXTERNAL_WORKFLOW_NOT_CONFIGURED')
   }
   const operationAdapter = {
     execute: prepared => prepared.workflowKind === 'data-change'
-      ? bytebase?.externalAdapter.execute(prepared)
+      ? (bytebase?.legacyExternalAdapter && prepared.intent?.approvalSource !== 'bytebase' ? bytebase.legacyExternalAdapter : bytebase?.externalAdapter).execute(prepared)
       : prepared.workflowKind === 'uat-pr-merge'
         ? uatMerge?.operationAdapter.execute(prepared) : release?.operationAdapter.execute(prepared),
     reconcile: prepared => prepared.workflowKind === 'data-change'
-      ? bytebase?.externalAdapter.reconcile(prepared)
+      ? (bytebase?.legacyExternalAdapter && prepared.intent?.approvalSource !== 'bytebase' ? bytebase.legacyExternalAdapter : bytebase?.externalAdapter).reconcile(prepared)
       : prepared.workflowKind === 'uat-pr-merge'
         ? uatMerge?.operationAdapter.reconcile(prepared) : release?.operationAdapter.reconcile(prepared),
   }
@@ -427,6 +445,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     if (prepared.workflowKind === 'data-change') {
       if (!bytebase || ![...databaseTargets.values()].some(item => executionDigest(item.target) === executionDigest(prepared.target)))
         throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
+      if (prepared.stage === 'approval-gate' && prepared.intent?.approvalSource === 'bytebase') return { principalId: owner, authorizationRef: `bytebase-approval-read:${executionDigest([binding.runId, binding.nodeRunId, prepared])}` }
       if (prepared.stage === 'approval-gate') return { principalId: owner, approval: {
         requestId: `external:${executionDigest([binding.runId, binding.nodeRunId, prepared])}`,
         approverIds: [...new Set(productionApprovers)],
@@ -438,7 +457,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
         planId: prepared.intent?.planId, sheetId: prepared.intent?.sheetId,
         target: prepared.target,
         sheetSha256: prepared.applySqlSha256, packageDigest: prepared.packageDigest,
-        requestId: prepared.approvalRequestId,
+        requestId: prepared.approvalRequestId, legacy: prepared.intent?.approvalSource !== 'bytebase',
       })
       return { principalId: owner, authorizationRef: `bytebase:${executionDigest([binding.runId, binding.nodeRunId, prepared])}` }
     } else if (!release || !release.configuredKinds.includes(prepared.workflowKind)) {

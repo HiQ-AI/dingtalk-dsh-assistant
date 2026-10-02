@@ -8,7 +8,8 @@ import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
-import { createDataChangeTaskWorkflow } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
+import { createExternalStageContracts, nativeDataChangeOwnerContract } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
+import { createDataChangeTaskWorkflow, simpleNullableColumnDefinition } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
 
 const sha = value => createHash('sha256').update(value).digest('hex')
 const sql = 'BEGIN; UPDATE t SET v=2 WHERE id=1 AND v=1; COMMIT;'
@@ -19,15 +20,28 @@ const proposal = { applySql: sql, rollbackSql: 'BEGIN; UPDATE t SET v=1 WHERE id
   verificationSql: 'SELECT v FROM t WHERE id=1;', expectedChange: '仅 id=1 的 v 从 1 变成 2' }
 
 async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
-  driftPreflight = false, driftIssue = false, prematureTask = false } = {}) {
+  driftPreflight = false, driftIssue = false, prematureTask = false, native = false, simpleSql = 'ALTER TABLE public.t ADD COLUMN name character varying;' } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-data-external-'))
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'data-external', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
-  const sends = [], reconciles = []
+  const sends = [], reconciles = [], issuePreparations = []
+  const fixtureSql = native ? simpleSql : sql
+  const column = native ? simpleNullableColumnDefinition(fixtureSql) : null
+  const nativeProposal = column ? {
+    verificationSql: `SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema='${column.schema}' AND table_name='${column.table}' AND column_name='${column.column}';`,
+    expectedChange: JSON.stringify({ rows: [{ column_name: column.column,
+      data_type: /^(?:varchar|character varying)/.test(column.type) ? 'character varying' : column.type, is_nullable: 'YES', column_default: null,
+      character_maximum_length: column.type.includes('(') ? Number(column.type.match(/\d+/)[0]) : null }] }),
+  } : {}
+  let approvalDecision = 'pending'
+  const nativeReceipt = prepared => ({ status: approvalDecision === 'pending' ? 'unknown' : 'succeeded',
+    ...(approvalDecision === 'pending' ? { reason: 'BYTEBASE_APPROVAL_PENDING' } : {}),
+    result: { scopeDigest: prepared.intent.scopeDigest, operationKey: prepared.intent.operationKey } })
   let rehearsalObserved = false, createdPackageDigest = null
-  const sheet = { id: 'sheet-1', sha256: sha(sql), target }, plan = { id: 'plan-1', sheetId: 'sheet-1' }
+  const sheet = { id: 'sheet-1', sha256: sha(fixtureSql), target }, plan = { id: 'plan-1', sheetId: 'sheet-1' }
   const task = { id: 'task-1', planId: 'plan-1', status: 'NOT_STARTED' }, issue = { id: 'issue-1', planId: 'plan-1' }
   const adapter = {
+    nativeApproval: native, requiresRehearsal: () => !native,
     id: 'synthetic-bytebase', version: '1', rulesDigest: sha('synthetic-bytebase-v1'),
     async validate(args) { return { passed: true, packageDigest: args.packageDigest, receiptId: 'validate-1' } },
     async rehearse(args) { return { passed: true, uat: true, packageDigest: args.package.validation.packageDigest,
@@ -37,7 +51,7 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
     async readbackRehearsal(args) { assert.equal(args.receipt.result.receiptId, 'uat-rehearsal-1')
       return { passed: true, uat: true, packageDigest: args.package.validation.packageDigest,
         receiptId: 'uat-rehearsal-1', observedChange: 'one row only' } },
-    async prepareIssue(args) { createdPackageDigest = args.prepared.package.validation.packageDigest; return { sheetSha256: sha(sql), packageDigest: createdPackageDigest } },
+    async prepareIssue(args) { issuePreparations.push(args); createdPackageDigest = args.prepared.package.validation.packageDigest; return { sheetSha256: sha(fixtureSql), packageDigest: createdPackageDigest } },
     async prepareApproval(args) { return { issueId: args.view.issue.id,
       planId: args.view.plan.id, sheetId: args.view.sheet.id,
       scopeDigest: sha('scope'), operationKey: sha('approval-operation') } },
@@ -45,7 +59,9 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
       approvalRequestId: args.identity.approvalRequestId,
       packageDigest: args.identity.packageDigest } },
     async inspect(args) {
-      if (args.stage === 'approval') return { decision: 'approved', source: 'assistant', human: true,
+      if (args.stage === 'approval-state') return { decision: approvalDecision }
+      if (args.stage === 'approval') return { decision: native ? approvalDecision : 'approved', source: native ? 'bytebase' : 'assistant', human: true,
+        ...(native ? { comment: '字段名改为 display_name', evidenceRef: 'bytebase-comment-1' } : {}),
         issueId: issue.id, planId: plan.id, sheetId: sheet.id, target,
         sheetSha256: sheet.sha256,
         packageDigest: createdPackageDigest, scopeDigest: sha('scope'),
@@ -71,6 +87,7 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
         return { status: 'succeeded', result: { receiptId: 'uat-rehearsal-1' } }
       }
       if (prepared.stage === 'create-issue') return { status: 'succeeded', result: { issueId: issue.id } }
+      if (prepared.stage === 'approval-gate' && native) return nativeReceipt(prepared)
       if (prepared.stage === 'approval-gate') return { status: 'succeeded',
         result: { scopeDigest: prepared.intent.scopeDigest,
           operationKey: prepared.intent.operationKey } }
@@ -80,6 +97,7 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
     },
     async reconcile(prepared) {
       reconciles.push(prepared.stage)
+      if (prepared.stage === 'approval-gate' && native) return nativeReceipt(prepared)
       if (prepared.stage === 'rehearse-uat') return rehearsalObserved
         ? { status: 'succeeded', result: { receiptId: 'uat-rehearsal-1' } }
         : { status: 'unknown', reason: 'uat_run_not_observed' }
@@ -91,6 +109,7 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
     externalAdapter, authorizeExternal: async ({ prepared }) => {
       if (prepared.stage === 'rehearse-uat') return { principalId: 'owner', authorizationRef: 'uat-rehearsal-specific' }
       if (prepared.stage === 'create-issue') return { principalId: 'owner', authorizationRef: 'issue-submission-specific' }
+      if (prepared.stage === 'approval-gate' && native) return { principalId: 'owner', authorizationRef: 'native-bytebase-read' }
       if (prepared.stage === 'approval-gate') return { principalId: 'owner',
         approval: { requestId: 'approval-gate', approverIds: ['owner'] } }
       assert.equal(prepared.taskId, undefined)
@@ -98,13 +117,14 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
       return { principalId: 'owner', authorizationRef: 'production-task-specific' }
     },
   })
-  const sessions = { async run({ onSessionBound, onResult }) { await onSessionBound(); onResult(proposal) }, async cancel() {}, async close() {} }
+  const sessions = { async run({ onSessionBound, onResult }) { await onSessionBound(); onResult({ ...proposal, ...nativeProposal, applySql: fixtureSql }) }, async cancel() {}, async close() {} }
+  t.after(async () => { await store.close() })
   const workflow = createDataChangeTaskWorkflow({ provider: 'test', model: 'synthetic', adapter })
   assert.equal(defineExecutionWorkflow(workflow).nodes.length, 15)
   const controller = createExecutionController({ store, artifacts, sessions, delivery, workflows: [workflow] })
   t.after(async () => { await controller.close(); await store.close() })
-  return { store, artifacts, controller, delivery, workflow, sends, reconciles,
-    observeRehearsal() { rehearsalObserved = true } }
+  return { store, artifacts, controller, delivery, workflow, sends, reconciles, issuePreparations,
+    observeRehearsal() { rehearsalObserved = true }, setApproval(value) { approvalDecision = value } }
 }
 
 test('UAT 演练未知回执进入效果账等待，对账成功后同一 Run 继续且不重发', async t => {
@@ -188,4 +208,66 @@ test('审批后执行前 Sheet 漂移阻止生产发送', async t => {
   const state = await f.controller.whenIdle('run')
   assert.equal(state.nodes[12].waitReason?.reference, 'DATA_CHANGE_PREFLIGHT_CHANGED')
   assert.deepEqual(f.sends, ['rehearse-uat', 'create-issue', 'approval-gate'])
+})
+
+for (const decision of ['approved', 'rejected']) test(`原生 Bytebase 简单加列：等待恢复后${decision}，无 UAT 或重复建单`, async t => {
+  const f = await fixture(t, { native: true })
+  await f.controller.createRun({ commandId: 'create-native', runId: 'run', taskId: 'task', workflowId: f.workflow.id, input: input() })
+  let state = await f.controller.whenIdle('run')
+  assert.equal(state.run.status, 'waiting', JSON.stringify(state.nodes.map(n => [n.nodeId,n.waitReason])))
+  assert.equal(state.nodes[10].waitReason.kind, 'recovery')
+  assert.equal(state.nodes[10].waitReason.reference, 'BYTEBASE_APPROVAL_PENDING')
+  assert.deepEqual(f.sends, ['create-issue', 'approval-gate'])
+  assert.equal((await f.store.query({ kind: 'approval.list' })).length, 0)
+  const effect = (await f.store.query({ kind: 'effect.list', runId: 'run' })).find(e => e.definition.payload.stage === 'approval-gate')
+  assert.equal((await f.delivery.reconcile(effect.effectId)).state, 'unknown')
+  f.setApproval(decision)
+  assert.equal((await f.delivery.reconcile(effect.effectId)).state, 'succeeded')
+  await f.controller.recover({ commandId: `native-${decision}`, runId: 'run' })
+  state = await f.controller.whenIdle('run')
+  assert.equal(state.run.status, 'succeeded', JSON.stringify(state.nodes.map(n => [n.nodeId,n.waitReason])))
+  const output = await f.artifacts.read(state.nodes.at(-1).outputRef)
+  if (decision === 'rejected') {
+    assert.equal(output.outcome, 'needs_revision')
+    assert.equal(output.comment, '字段名改为 display_name')
+    assert.deepEqual(f.sends, ['create-issue', 'approval-gate'])
+  } else {
+    assert.equal(output.taskRunId, 'task-run-1')
+    assert.deepEqual(f.sends, ['create-issue', 'approval-gate', 'execute-task'])
+  }
+})
+
+test('两轮驳回的后继阶段消费具体意见和旧工单身份，不重复旧 SQL 或完成 Task', async t => {
+  const source = new Map(), submissions = []
+  const [contract] = createExternalStageContracts({ workflowIds: ['task-data-change'],
+    readArtifact: async ref => source.get(ref), external: { async prepareRequirement({ action, materials }) {
+      submissions.push({ action, materials })
+      return { ...input(), previousIssueId: action.arguments.previousIssueId,
+        sources: materials.map(material => ({ id: material.resourceRef, content: material.text, sha256: sha(material.text) })) }
+    } } })
+  const plan = { stages: [] }, origin = { command: { args: { arguments: {} } }, run: { sourceKey: 'original', body: '给表增加名称列' } }
+  for (const [round, comment, nextSql] of [[1,'名称列改为 display_name','ALTER TABLE public.t ADD COLUMN display_name text;'],
+    [2,'名称长度限定 80','ALTER TABLE public.t ADD COLUMN display_name varchar(80);']]) {
+    const rejected = { outcome: 'needs_revision', issueId: `projects/app/issues/${round}`, planId: `plan-${round}`,
+      sheetId: `sheet-${round}`, applySql: round === 1 ? 'ALTER TABLE public.t ADD COLUMN name text;' : 'ALTER TABLE public.t ADD COLUMN display_name text;',
+      comment, evidenceRef: `approval-${round}` }
+    assert.equal(await nativeDataChangeOwnerContract.validateCompletion({ output: rejected }), false)
+    const ref = `rejected-output-${round}`
+    source.set(ref, rejected); plan.stages.push({ stageId: `revision-${round}`, status: 'succeeded', outputRef: ref })
+    const prepared = await contract.prepare({ taskId: 'same-task', stage: { workflowId: 'task-data-change' }, plan,
+      stageIndex: plan.stages.length, requirement: { request: `按审批意见修改：${comment}`, constraints: [], stageTargets: { 'task-data-change': 'editor' } }, origin })
+    assert.equal(prepared.input.previousIssueId, rejected.issueId)
+    assert.equal(submissions.at(-1).action.taskId, 'same-task')
+    assert.equal(JSON.parse(submissions.at(-1).materials[0].text).comment, comment)
+    const f = await fixture(t, { native: true, simpleSql: nextSql })
+    await f.controller.createRun({ commandId: `revision-${round}`, runId: `run-${round}`, taskId: 'same-task', workflowId: f.workflow.id, input: prepared.input })
+    const state = await f.controller.whenIdle(`run-${round}`)
+    assert.equal(state.nodes[10].waitReason.reference, 'BYTEBASE_APPROVAL_PENDING')
+    assert.equal(f.issuePreparations[0].prepared.package.previousIssueId, rejected.issueId)
+    assert.equal(f.issuePreparations[0].prepared.package.applySql, nextSql)
+    assert.ok(f.issuePreparations[0].prepared.package.verificationSql.includes('FROM information_schema.columns'))
+    assert.equal(JSON.parse(f.issuePreparations[0].prepared.package.expectedChange).rows[0].column_name, 'display_name')
+    assert.notEqual(f.issuePreparations[0].prepared.package.applySql, rejected.applySql)
+    assert.deepEqual(f.sends, ['create-issue', 'approval-gate'])
+  }
 })

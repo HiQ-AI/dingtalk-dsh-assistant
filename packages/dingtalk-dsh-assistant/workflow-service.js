@@ -23,14 +23,14 @@ import { isPassiveTaskProgress } from './message-ledger.js'
 import { taskWorkflowCatalog, messageAnswerArguments, candidateCards, referencedResourceIds } from './message-context.js'
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText, groupStatusText, groupActionText, taskDecisionConditionText } from './workflow-notifications.js'
 import { createEngineeringStageContract, createEngineeringRegistry, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
-import { createDataChangeTaskWorkflow } from './workflow-data-change.js'
-import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract } from './task-release-workflows.js'
+import { createDataChangeTaskWorkflow, createLegacyDataChangeTaskWorkflow } from './workflow-data-change.js'
+import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, nativeDataChangeOwnerContract } from './task-release-workflows.js'
 import { createUatPrMergeTaskWorkflow, createUatPrMergeTaskWorkflowV2, createLegacyUatPrMergeTaskWorkflow, createMainPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
 import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
 import { describeVerificationChecks } from './execution-check-job.js'
 import { createMessageAgentController } from './message-agent.js'
-import { createInvestigationStageContract, createLegacyInvestigationWorkflow, createInvestigationWorkflow, createInvestigationWorkflowV6, createInvestigationWorkflowV7, createLegacyInvestigationCompletionPolicy, validateAgentWorkResult } from './agent-work.js'
+import { createInvestigationStageContract, createLegacyInvestigationWorkflow, createInvestigationWorkflow, createInvestigationWorkflowV6, createInvestigationWorkflowV7, createInvestigationWorkflowV8, createLegacyInvestigationCompletionPolicy, validateAgentWorkResult } from './agent-work.js'
 import { createAgentQueryTools, verifyAgentEvidence, readExecutedAgentQueryRefs } from './agent-query-tools.js'
 import { createAgentResourceReadCapability } from './agent-query-resources.js'
 import { createAgentDatabaseReadCapability, createRegisteredPostgresConnector } from './agent-query-database.js'
@@ -442,9 +442,9 @@ function createExternalRegistry(external, selected) {
   const workflows = [], records = new Map(), byId = new Map()
   const add = (workflow, adapter, modelConfig = null) => {
     if (catalogById.get(workflow.id)?.mode !== 'external' || byId.has(workflow.id)) throw executionError('EXTERNAL_WORKFLOW_CATALOG_MISMATCH')
-    workflow = { ...workflow, ownerContract: externalWorkflowOwnerContract }
+    workflow = { ...workflow, ownerContract: workflow.id === 'task-data-change' && workflow.version === '4' ? nativeDataChangeOwnerContract : externalWorkflowOwnerContract }
     const definition = defineExecutionWorkflow(workflow)
-    const config = { ownerContractVersion: externalWorkflowOwnerContract.version, kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
+    const config = { ownerContractVersion: workflow.ownerContract.version, kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
       rulesDigest: adapter.rulesDigest, ...(modelConfig ? { modelConfig } : {}) }
     workflows.push(workflow); records.set(workflow.id, { workflowId: workflow.id, definitionVersion: workflow.version, digest: definition.digest, config })
     byId.set(workflow.id, { workflow, adapter })
@@ -617,6 +617,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   }
   const investigationWorkflow = selected => createInvestigationWorkflow({ ...selected, allowedTools: selected.allowedTools ?? queryToolNames,
     capabilityIdentity: selected.capabilityIdentity ?? queryCapabilityIdentity, verifyResult: args => verifyInvestigationResult(args, true, true) })
+  const investigationWorkflowV8 = selected => createInvestigationWorkflowV8({ ...selected, allowedTools: selected.allowedTools ?? queryToolNames,
+    capabilityIdentity: selected.capabilityIdentity ?? queryCapabilityIdentity, verifyResult: args => verifyInvestigationResult(args, true, true) })
   const investigationWorkflowV7 = selected => createInvestigationWorkflowV7({ ...selected, allowedTools: selected.allowedTools ?? queryToolNames,
     capabilityIdentity: selected.capabilityIdentity ?? queryCapabilityIdentity, verifyResult: args => verifyInvestigationResult(args, true) })
   const investigationWorkflowV6 = selected => createInvestigationWorkflowV6({ ...selected, allowedTools: selected.allowedTools ?? queryToolNames,
@@ -740,13 +742,13 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         beforeSequenceId = page.at(-1).sequenceId
       }
       assertRetiredWorkflowsDrained({ records: prior, activeDefinitions, pendingStages,
-        currentDefinitions: [...workflows, investigationWorkflowV7(selected), investigationWorkflowV6(selected), legacyInvestigationWorkflow(selected), ...legacyStepWorkflows, ...(legacyFileWorkflow ? [legacyFileWorkflow] : [])] })
+        currentDefinitions: [...workflows, investigationWorkflowV8(selected), investigationWorkflowV7(selected), investigationWorkflowV6(selected), legacyInvestigationWorkflow(selected), ...legacyStepWorkflows, ...(legacyFileWorkflow ? [legacyFileWorkflow] : [])] })
       const engineeringWorkflows = await engineering.restore(store, artifacts)
       const historicalWorkflows = []
       for (const record of prior.filter(record => record.config?.kind !== 'engineering'
         && record.config?.kind !== 'external'
         && (activeDefinitions.has(`${record.workflowId}:${record.digest}`) || requiredDefinitions.has(`${record.workflowId}:${record.digest}`)))) {
-        const candidates = [investigationWorkflow(record.config), investigationWorkflowV7(record.config), investigationWorkflowV6(record.config), legacyInvestigationWorkflow(record.config), stepWorkflow, fileWorkflow, legacyFileWorkflow,
+        const candidates = [investigationWorkflow(record.config), investigationWorkflowV8(record.config), investigationWorkflowV7(record.config), investigationWorkflowV6(record.config), legacyInvestigationWorkflow(record.config), stepWorkflow, fileWorkflow, legacyFileWorkflow,
           ...legacyStepWorkflows].filter(Boolean)
           .filter(item => item.id === record.workflowId && item.version === record.definitionVersion)
         if (!candidates.length) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
@@ -766,17 +768,18 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       for (const record of prior.filter(item => item.config?.kind === 'external'
         && (activeDefinitions.has(`${item.workflowId}:${item.digest}`) || requiredDefinitions.has(`${item.workflowId}:${item.digest}`)))) {
         const route = selectedExternal.byId.get(record.workflowId), saved = record.config
-        const adapter = [route?.adapter, route?.adapter?.legacyAdapter].find(item => item && saved.adapterId === item.id
+        const adapter = (record.workflowId === 'task-data-change' && record.definitionVersion === '3' && route?.adapter?.legacyAdapter ? [route.adapter.legacyAdapter] : [route?.adapter, route?.adapter?.legacyAdapter]).find(item => item && saved.adapterId === item.id
           && saved.adapterVersion === item.version && saved.rulesDigest === item.rulesDigest)
         if (!adapter || saved.registryVersion !== '1') throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
         let previous = record.workflowId === 'task-data-change'
-          ? createDataChangeTaskWorkflow({ ...saved.modelConfig, adapter })
+          ? (record.definitionVersion === '3' ? createLegacyDataChangeTaskWorkflow : createDataChangeTaskWorkflow)({ ...saved.modelConfig, adapter })
           : record.workflowId === 'task-uat-pr-merge'
             ? (record.definitionVersion === '1' ? createLegacyUatPrMergeTaskWorkflow : record.definitionVersion === '2' ? createUatPrMergeTaskWorkflowV2 : createUatPrMergeTaskWorkflow)({ adapter })
           : record.workflowId === 'task-main-pr-merge' ? createMainPrMergeTaskWorkflow({ adapter })
           : (record.definitionVersion === '1' ? createLegacyReleaseTaskWorkflow : createReleaseTaskWorkflow)({ kind: record.workflowId.slice(5), adapter })
         if (saved.ownerContractVersion === '1') previous = { ...previous, ownerContract: legacyExternalWorkflowOwnerContract }
         else if (saved.ownerContractVersion === '2') previous = { ...previous, ownerContract: externalWorkflowOwnerContract }
+        else if (saved.ownerContractVersion === '3' && record.workflowId === 'task-data-change') previous = { ...previous, ownerContract: nativeDataChangeOwnerContract }
         else if (saved.ownerContractVersion !== undefined) throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
         if (previous.version !== record.definitionVersion || ![defineExecutionWorkflow(previous).digest, ...defineExecutionWorkflow(previous).legacyDigests].includes(record.digest))
           throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
@@ -1503,6 +1506,36 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     return { status: 'accepted', taskId, rerunOfTaskId: request.taskId, requestId: request.requestId,
       runId: plan.stages[0]?.runId ?? null, reportChannel: 'web', planningError }
   }
+  function reviseWebRequirement(previous, request, identity, eventId) {
+    const revision = request.requirement
+    if (!revision) return null
+    if (request.action !== 'context' || !acceptanceCriteriaSchema.safeParse(revision.acceptanceCriteria).success
+      || !revision.objective?.trim() || !request.context.includes(revision.objective)
+      || !Array.isArray(revision.stageAuthorizations) || revision.stageAuthorizations.length === 0
+      || !revision.stageTargets || Object.keys(revision).some(key => !['objective','acceptanceCriteria','stageTargets','stageAuthorizations'].includes(key)))
+      throw executionError('TASK_WEB_REQUIREMENT_INVALID')
+    const sourceKey = `web-context:${eventId}`, sourceVersion = 1
+    for (const [workflowId, targetId] of Object.entries(revision.stageTargets)) {
+      if (!selectedExternal.byId.has(workflowId) || !external?.availableTargets?.some(item =>
+        item.workflowId === workflowId && item.targetId === targetId)) throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
+    }
+    const stageAuthorizations = revision.stageAuthorizations.map(item => {
+      if (!selectedExternal.byId.has(item.workflowId) || !revision.stageTargets[item.workflowId]
+        || !['none', 'confirmation'].includes(item.gate) || !item.sourceQuote?.trim()
+        || !item.objective?.trim() || !request.context.includes(item.sourceQuote) || !item.sourceQuote.includes(item.objective))
+        throw executionError('TASK_STAGE_AUTHORIZATION_SOURCE_INVALID')
+      return { ...item, sourceKey, sourceVersion,
+        ...(item.gate === 'confirmation' ? { requiredActorId: identity.actorId } : {}) }
+    })
+    return { ...previous, request: revision.objective, objective: revision.objective,
+      acceptanceCriteria: revision.acceptanceCriteria, constraints: [request.context],
+      explicitStages: [], stageTargets: revision.stageTargets, stageAuthorizations,
+      sourceInstructions: [...(previous.sourceInstructions ?? []), { sourceKey, sourceVersion,
+        actorId: identity.actorId, text: request.context, attachments: [] }],
+      scope: { ...previous.scope, sourceKeys: [...new Set([...previous.scope.sourceKeys, sourceKey])],
+        sourceVersions: { ...previous.scope.sourceVersions, [sourceKey]: sourceVersion } },
+      authorization: { channel: 'web', actorId: identity.actorId, requestId: request.requestId, sourceKey, sourceVersion } }
+  }
   async function submitWebTask(request, identity) {
     if(identity?.channel!=='web'||!config.webActorId||identity.actorId!==config.webActorId)throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')
     const origin=await store.query({kind:'task.origin',taskId:request.taskId})
@@ -1527,7 +1560,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         return executeWebEvent(prior)
       }
       const plan = await controller.taskPlan(request.taskId), previous = await artifacts.read(plan.task.requirementRef)
-      const input = request.action === 'context' ? { ...previous,
+      const input = request.action === 'context' ? reviseWebRequirement(previous, request, identity, eventId) ?? { ...previous,
         request: `${previous.request}\n\n补充要求：\n${requireText(request.context, 'WORKFLOW_CONTEXT_REQUIRED')}`,
         objective: `${previous.request}\n\n补充要求：\n${request.context}`,
         constraints: [...new Set([...previous.constraints, request.context])],
@@ -1547,7 +1580,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const plan=await controller.taskPlan(request.taskId)
     if (!plan?.task.requirementRef) throw executionError('TASK_REQUIREMENT_MISSING')
     const previous=await artifacts.read(plan.task.requirementRef)
-    const input=request.action==='context'?{...previous,
+    const input=request.action==='context'?reviseWebRequirement(previous,request,identity,eventId)??{...previous,
       request:`${previous.request}\n\n补充要求：\n${requireText(request.context,'WORKFLOW_CONTEXT_REQUIRED')}`,
       constraints:[...new Set([...(previous.constraints ?? []), request.context])],
       authorization:{ ...previous.authorization, actorId: identity.actorId, channel: 'web', requestId: request.requestId }} : null
@@ -2663,8 +2696,20 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const ownerWaiting = ['wait', 'block'].includes(owner?.decision?.action) && owner.applicationStatus === 'applied'
         && plan?.task.planRequirementRevision === plan?.task.requirementRevision
         && owner.requirementRevision === plan?.task.requirementRevision && owner.eventWatermark === owner.processedWatermark
-      const waitingCondition = ownerWaiting ? owner.decision.condition ?? null : null
+      let waitingCondition = ownerWaiting ? owner.decision.condition ?? null : null
       const state = run ? await controller.state(run.runId) : null
+      const approvalNode = state?.nodes.find(node => node.status === 'waiting'
+        && ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'].includes(node.waitReason?.reference))
+      if (approvalNode) {
+        const approvalOutput = approvalNode.outputRef ? await artifacts.read(approvalNode.outputRef) : null
+        const issueId = approvalOutput?.view?.issue?.id ?? approvalOutput?.view?.issue?.issueId ?? approvalOutput?.view?.issue?.name ?? '当前工单'
+        const unconfigured = approvalNode.waitReason.reference === 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'
+        waitingCondition = { kind: unconfigured ? 'capability' : 'approval',
+          missing: unconfigured ? `Bytebase 工单 ${issueId} 未启用真人审批（SKIPPED）` : `Bytebase 工单 ${issueId} 的真人审批结果`,
+          responsibleParty: unconfigured ? 'Bytebase 管理员' : 'Bytebase 审批人',
+          resumeWhen: unconfigured ? '在 Bytebase 配置并发起本工单的真人审批后继续' : '批准后执行；驳回后按意见修改并重新送审',
+          evidenceRefs: approvalNode.outputRef ? [approvalNode.outputRef] : [] }
+      }
       const states = new Map(run ? [[run.runId, state]] : [])
       const firstRun = plan?.stages[0]?.runId
         ? taskRuns.find(item => item.runId === plan.stages[0].runId) ?? await store.query({ kind: 'run', runId: plan.stages[0].runId }).then(item => item.run)
