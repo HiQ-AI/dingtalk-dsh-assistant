@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { parseArgs } from 'node:util'
 import { writeFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
-import { createDwsAdapter } from '../../../../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { createDwsAdapter, normalizeApprovalNoticeText } from '../../../../packages/dingtalk-dsh-assistant/dws-adapter.js'
 import { createNodeDwsRunner } from '../../../../packages/dingtalk-dsh-assistant/dws-runner.js'
 const { values: args } = parseArgs({ options: Object.fromEntries(['request-id','task-id','db','profile','output','cwd'].map(key => [key, { type: 'string' }])) })
 for (const key of ['request-id','task-id','db','profile','output','cwd']) assert(args[key], `${key} required`)
@@ -22,10 +22,11 @@ try {
 } finally { db.close() }
 const adapter = createDwsAdapter({ enabled: true, profile: args.profile, runner: createNodeDwsRunner({ cwd: args.cwd }) })
 const message = await adapter.readMessage(notice.delivery.conversationId, notice.delivery.messageId)
-const rendered = text => text.replace(/\r?\n/gu, ' ')
-assert.equal(rendered(message.text), rendered(notice.text))
+const rendered = normalizeApprovalNoticeText
+// 已送达消息可原位更新展示；原生冻结通知仍保留最初发送内容供审计。
+assert.equal(rendered(message.text), rendered(request.text))
 const messages = await adapter.readConversation(notice.delivery.conversationId, { start: new Date(Date.parse(notice.delivery.sentAt ?? notice.createdAt) - 30000).toISOString(), end: new Date().toISOString() })
-const occurrences = messages.filter(row => typeof row.text === 'string' && rendered(row.text) === rendered(notice.text))
+const occurrences = messages.filter(row => typeof row.text === 'string' && rendered(row.text) === rendered(request.text))
 assert.equal(occurrences.length, 1)
 const health = await read('/health'), maintenance = await read('/runtime/maintenance'), detail = await read(`/state/tasks/${args['task-id']}/detail`)
 assert.equal(health.status, 'ok'); assert.equal(health.inboundProcessing, true); assert.equal(maintenance.active, false)

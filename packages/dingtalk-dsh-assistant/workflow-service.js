@@ -1053,9 +1053,28 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const target = uatBuild ? (await artifacts.read(state.run.requirementRef)).target : null
       const uatAction = uatBuild ? `${prepared.operation === 'rebuild' ? '重新构建' : '构建提测'} UAT 目标 ${target.runbookId}（${target.repository} / ${target.service}），提交 ${prepared.expected.commitSha}` : null
       const notification = await store.query({ kind: 'approval.notice', requestId: approval.requestId })
+      const objective = goal.objective ?? origin.command.args.arguments?.objective ?? (uatBuild ? 'UAT 提测' : productionRelease ? '生产发布' : '数据变更')
+      const details = dataChange ? [
+        `**目标数据库：** ${prepared.target.database}`,
+        `**Bytebase 工单：** ${prepared.intent.issueId}`,
+        '**执行 SQL**', prepared.intent.applySql ?? `SQL 摘要：${prepared.intent.sheetSha256}`,
+      ] : uatBuild ? [
+        `**操作：** ${prepared.operation === 'rebuild' ? '重新构建' : '构建提测'}`,
+        `**环境：** ${target.environment}`,
+        `**仓库 / 服务：** ${target.repository} / ${target.service}`,
+        `**提交：** ${prepared.expected.commitSha}`,
+      ] : [
+        `**发布目标：** ${prepared.resourceKey}`,
+        `**提交：** ${prepared.expected.commitSha}`,
+        `**标签：** ${prepared.expected.tag}`,
+      ]
       return { kind: 'workflow-approval', requestId: approval.requestId, taskId: state.run.taskId, groupId: origin.run.conversationId,
         approverIds: approval.approverIds, notification,
-        objective: goal.objective ?? origin.command.args.arguments?.objective ?? (uatBuild ? 'UAT 提测' : productionRelease ? '生产发布' : '数据变更'),
+        objective,
+        text: [`**待审批：${dataChange ? '数据库变更' : uatBuild ? 'UAT 提测' : '生产发布'}**`,
+          `**事项：** ${objective}`, ...details,
+          '**回复方式：** 请引用本消息回复“批准”，或“拒绝：原因”。',
+          `审批编号：${approval.requestId.slice(-12)}`].join('\n\n'),
         requestedAction: uatBuild ? `审批 ${uatAction}` : productionRelease
           ? `审批生产发布 ${prepared.resourceKey}，提交 ${prepared.expected.commitSha}，标签 ${prepared.expected.tag}`
           : `审批数据变更工单 ${prepared.intent.issueId}，目标 ${prepared.target.database}，SQL 摘要 ${prepared.intent.sheetSha256}`,
@@ -1071,10 +1090,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         decision: approval.decision, decidedAt: approval.updatedAt, decisionSource: approval.decisionSource, reply: approval.comment ?? '',
         taskState: state.run.status }
     }))
-    return rows.filter(Boolean).map(request => ({ ...request, text: [
-      '插件人工审批', request.objective, request.requestedAction, ...request.evidence,
-      '请引用本消息回复“批准”或“拒绝：原因”。', `审批请求 ID：${request.requestId}`
-    ].join('\n') }))
+    return rows.filter(Boolean)
   }
   async function currentTask(taskId, selector) {
     const runs = await store.query({ kind: 'run.list', taskId, limit: 200 })

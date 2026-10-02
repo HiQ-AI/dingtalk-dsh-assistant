@@ -267,4 +267,6 @@ PowerShell Phase依次check、offline、reconcile、install、start、readback�
 
 插件私聊审批使用 `workflow-approval:<冻结通知摘要>` 作为82字符幂等键，发送前校验钉钉128字符上限。网络异常或缺回执保持 unknown；只有同一请求/摘要绑定的精确平台 UUID 长度拒绝、1001错误码及真实trace可登记明确未发送。现有 `POST /authorizations/:requestId/reissue` 对原生通知恢复要求本机同源、配置Web身份、维护已排空及 `noticeDigest/proof`；原请求和SQL保持，负回执不给生产执行许可。恢复后下一次发送使用新命令身份，重复恢复或重启不重新授予旧发送许可。
 
-钉钉消息回读会将文本软换行显示为空格，审批确认只归一 CRLF/LF 到单空格；其他空格、SQL及标点必须保持。已有 openTaskId 只查发送状态并读取原消息，显示差异不得触发重新发送。
+钉钉消息回读会将文本软换行显示为空格，审批确认只归一段落回读产生的 Markdown 硬换行和 CRLF/LF 软换行显示差异；其他空格、SQL及标点必须保持。已有 openTaskId 只查发送状态并读取原消息，显示差异不得触发重新发送。
+
+审批私聊使用 Markdown 标题、空行和明确字段，SQL完整保留为独立段落；避免堆放重复目标、resourceKey和长摘要。短审批编号用于消息定位，未知发送仍须完整正文及权威收件人匹配，不能仅凭编号认领。已送达消息可原位编辑展示，审批仍绑定原请求、冻结执行内容和同一引用消息ID，不新建审批或补发。

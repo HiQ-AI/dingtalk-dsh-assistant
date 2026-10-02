@@ -37,9 +37,9 @@ function comparableMessageText(value) {
   return String(value ?? '').replace(/[\p{P}\p{S}\s]/gu, '')
 }
 
-// DWS显示Markdown软换行时会替换为单空格；保留其他空格、标点与SQL字符。
+// DWS把段落边界回读为Markdown硬换行、软换行显示为单空格；保留其他空格和SQL字符。
 export function normalizeApprovalNoticeText(value) {
-  return typeof value === 'string' ? value.replace(/\r?\n/gu, ' ') : value
+  return typeof value === 'string' ? value.replace(/ {2}\r?\n/gu, '\n\n').replace(/\r?\n/gu, ' ') : value
 }
 
 export function matchesOutbound(message, outbound) {
@@ -252,7 +252,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     },
     async findWorkflowApprovalNotice({ requestId, recipientUserId, text, conversationId }) {
       requireEnabled()
-      const result = await runner.run(this.compileMessageSearch(requestId))
+      const result = await runner.run(this.compileMessageSearch(requestId.slice(-12)))
       if (result.exitCode !== 0) throw commandError('dws_workflow_approval_search_failed', result)
       const value = parseJson(result.stdout, 'workflow-approval-search')
       if (!Array.isArray(value.messages) || value.complete !== true || value.hasMore === true || (value.failedCount ?? 0) !== 0) throw new Error('dws_workflow_approval_search_partial')

@@ -5271,7 +5271,16 @@ for (const [firstDecision, workflowKind] of [['approved', 'uat-deployment'], ['r
   assert.equal((await execution.controller.state(runId)).run.requirementRef, frozenRun.run.requirementRef)
   assert.deepEqual(await execution.store.query({ kind: 'effect.get', effectId: frozenEffect.effectId }), frozenEffect)
   if (workflowKind !== 'data-change') { assert.match(visible[0].requestedAction, /HiQ-AI\/dataset/); assert.ok(visible[0].evidence.includes(commitSha)) }
-  else assert.match(visible[0].text, /ALTER TABLE public\.process_id_temp ADD COLUMN name character varying;/)
+  else {
+    assert.match(visible[0].text, /\*\*执行 SQL\*\*\n\nALTER TABLE public\.process_id_temp ADD COLUMN name character varying;/)
+    assert.match(visible[0].text, /\*\*目标数据库：\*\* production-editor/)
+    assert.ok(!visible[0].text.includes('c'.repeat(64)))
+    assert.ok(!visible[0].text.includes('d'.repeat(64)))
+  }
+  assert.match(visible[0].text, /^\*\*待审批：/)
+  assert.ok(visible[0].text.includes(`**事项：** ${currentObjective}`))
+  assert.ok(visible[0].text.endsWith(`审批编号：${requestId.slice(-12)}`))
+  assert.ok(!visible[0].text.includes(requestId))
   assert.equal(visible[0].status, 'pending-send'); assert.equal(sends, 0)
   await assert.rejects(service.decideApproval({ requestId, decision: 'approved', eventId: 'bad-web' }, { channel: 'web', actorId: 'outsider' }), /WORKFLOW_WEB_ACTOR_FORBIDDEN/)
   await assert.rejects(service.decideApproval({ requestId, decision: 'approved', eventId: 'bad-im' }, { channel: 'im', actorId: 'outsider', conversationId: 'web:owner' }), /WORKFLOW_APPROVAL_FORBIDDEN|WORKFLOW_APPROVAL_PRIVATE_REPLY_REQUIRED/)

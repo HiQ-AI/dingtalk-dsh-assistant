@@ -129,7 +129,7 @@ test('本人私聊发送等待DWS异步投递完成后再记录消息ID', async 
 })
 
 test('原生私聊审批先取得openTaskId，确认只读回查真实ID及完整冻结正文',async()=>{
- const calls=[],text='批准这项操作\nSQL: SELECT  process_id FROM public.process_id_temp;\r\n审批请求 ID：approval-1'
+ const calls=[],text='**待审批**\n\n批准这项操作\nSQL: SELECT  process_id FROM public.process_id_temp;\r\n审批请求 ID：approval-1'
  let pending=true,observed=text
  const runner={async run(args){calls.push(args);if(args.includes('+messages-send'))return{exitCode:0,stdout:JSON.stringify({sendReceipt:{openTaskId:'operation'}})};
   if(args.includes('+messages-query-send-status'))return{exitCode:0,stdout:JSON.stringify({result:{sendStatus:pending?'PROCESSING':'SUCCESS'},messageRef:{openConversationId:'private',openMessageId:'notice'}})};
@@ -139,6 +139,7 @@ test('原生私聊审批先取得openTaskId，确认只读回查真实ID及完�
  assert.equal(calls.length,1)
  assert.equal(await adapter.confirmSelfDelivery({openTaskId:'operation',recipientUserId:'recipient',text}),undefined)
  pending=false;assert.deepEqual(await adapter.confirmSelfDelivery({openTaskId:'operation',recipientUserId:'recipient',text}),{openTaskId:'operation',conversationId:'private',messageId:'notice'})
+ observed=text.replace(/\n\n/gu,'  \n');assert.deepEqual(await adapter.confirmSelfDelivery({openTaskId:'operation',recipientUserId:'recipient',text}),{openTaskId:'operation',conversationId:'private',messageId:'notice'})
  observed=text.replace(/\r?\n/gu,' ');assert.deepEqual(await adapter.confirmSelfDelivery({openTaskId:'operation',recipientUserId:'recipient',text}),{openTaskId:'operation',conversationId:'private',messageId:'notice'})
  for(const changed of [observed.replace('SELECT  ','SELECT '),observed.replace('process_id FROM','process_id2 FROM'),observed.replace(';','')]) {
   observed=changed;await assert.rejects(adapter.confirmSelfDelivery({openTaskId:'operation',recipientUserId:'recipient',text}),/content_mismatch/)
@@ -148,9 +149,9 @@ test('原生私聊审批先取得openTaskId，确认只读回查真实ID及完�
 })
 
 test('未知私聊审批只认完整正文及权威收件人，模糊/他人/缺身份/截断结果不能认领',async()=>{
- const text='审批请求 ID：approval-1\nSQL: SELECT  process_id FROM public.process_id_temp;\r\n完整范围',request={requestId:'approval-1',recipientUserId:'recipient',text}
+ const text='审批编号：123456789abc\nSQL: SELECT  process_id FROM public.process_id_temp;\r\n完整范围',request={requestId:'external:full-request-123456789abc',recipientUserId:'recipient',text}
  let messages=[],partial=false
- const runner={async run(args){if(args.includes('+search-msg'))return{exitCode:0,stdout:JSON.stringify({complete:!partial,hasMore:partial,messages})};return{exitCode:0,stdout:JSON.stringify({complete:true,failedCount:0,failures:[],foundCount:1,notFoundMessageIds:[],messages})}}}
+ const runner={async run(args){if(args.includes('+search-msg')){assert.equal(args[args.indexOf('--query')+1],'123456789abc');return{exitCode:0,stdout:JSON.stringify({complete:!partial,hasMore:partial,messages})}};return{exitCode:0,stdout:JSON.stringify({complete:true,failedCount:0,failures:[],foundCount:1,notFoundMessageIds:[],messages})}}}
  const adapter=createDwsAdapter({enabled:true,runner})
  for(const message of [{text:text+'多余字',recipientUserId:'recipient'},{text,recipientUserId:'other'},{text}]) {
   messages=[{conversationId:'private',messageId:'notice',...message}];assert.equal(await adapter.findWorkflowApprovalNotice(request),undefined)
