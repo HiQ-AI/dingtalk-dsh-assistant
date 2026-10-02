@@ -1,8 +1,8 @@
 # 看板、常驻会话与任务执行修复目标
 
-> 状态：ACTIVE
+> 状态：COMPLETE
 > Goal ID：board-loading-session-repair
-> 最近维护：2026-10-02T18:39:42.3094153+08:00
+> 最近维护：2026-10-02T19:19:19.1054103+08:00
 > 权威目标：goal.md
 
 ## 总目标
@@ -23,22 +23,22 @@
 | --- | --- | --- | --- | --- |
 | SG1 | 群数据轻量查询与刷新去重 | native投影、历史全量等价、实际API/浏览器耗时 | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG2 | 常驻会话空闲挂接与当前入口 | native投影、目录/权限/群名、租约与关闭 | 完成 | matrix.csv / round-2.md / round-3.md |
-| SG3 | 任务详情查询与刷新 | 同一真实任务前后耗时、投影正确 | 复核中 | matrix.csv / round-2.md / round-3.md |
+| SG3 | 任务详情查询与刷新 | 同一真实任务前后耗时、投影正确 | 完成 | matrix.csv / round-12.md |
 | SG4 | 群通知事实与历史去重 | 同Task重评不重复、不同Task不误抑制、发送未知不重发 | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG5 | 部署及四项运行验收 | runbook Check/备份/安装/Readback/Resume+浏览器 | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG6 | Task与阶段分离、候选纠正及重复错误收敛 | 原生SQLite/原生会话/重启/完成清单70项PASS | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG7 | 结构化等待/受阻投影和受管恢复 | 同Task恢复、业务与系统原因区分、通知摘要 | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG8 | 数据库完整元数据与调查覆盖 | 原生只读查询、授权拒绝、分页及调查范围 | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG9 | 本轮部署与唯一任务真实推进 | 精确包安装、维护排空、原任务推进到真实等待点 | 完成 | matrix.csv / round-4.md |
-| SG10 | 简单数据库变更送审与驳回修订 | 候选送Bytebase真人审批，拒绝修订、批准执行及版本绑定定向验证 | 完成 | docs/spec/simple-database-change-flow.md |
-| SG11 | 部署及原Task真实送审 | 精确部署、原Task工单和SQL独立回读、群通知纠正 | 完成 | round-10.md |
+| SG10 | 简单数据库变更送审与驳回修订 | 候选送插件真人审批，拒绝修订、批准执行及版本绑定定向验证 | 完成 | docs/spec/simple-database-change-flow.md |
+| SG11 | 部署及原Task真实插件送审 | 精确部署、原Task工单和SQL独立回读、群通知纠正 | 完成 | round-11.md |
 | SG12 | 纠正插件审批入口与执行责任 | Bytebase建单后进入插件人工审批，驳回修订、批准执行、原Task接续及简短通知 | 完成 | round-11.md |
 
 ## 当前检查点
 
 - 当前子目标：SG3
-- 唯一下一步：定位原Task最新第六Run详情5.5–6.2秒的当前瓶颈；插件审批与群通知已完成接续，审批等待期间零生产执行。
-- 未闭环项：当前任务详情性能复核；业务批准和执行等待插件真人审批，不将业务待审作为程序错误。
+- 唯一下一步：工程修复交付完成；原业务Task等待本次精确SQL的插件真人审批，批准后由执行会话执行并独立回读，驳回按意见修订重审。
+- 未闭环项：业务批准与DDL执行尚未发生；当前浏览器安全校验不可用，本轮性能为正式API实测，不冒充页面点击验收。
 
 ## 进展
 
@@ -101,3 +101,4 @@ Agent工作区D:/baibu-agent，运行profile D:/dsh_home/profiles/web，API18998
 本轮继续：群通知不再自动拼接完整条件；审批页真实SQL及目标展示已补。UI现有comment此前被丢弃，现沿approval.decided同事务保存并批量投影；69项低层/审批/通知/存储测试通过，真实平台全链4项证明驳回意见进入needs_revision且零生产发送。只读回查原857仍NOT_STARTED、生产name为空、profile摘要保持。冻结v5交接由现Controller领域接续阶段实现，服务入口和受信平台按文件分工验证；待稳定后才打包部署。浏览器安全权限校验暂不可用，本轮不绕过或声称页面验收。
 
 部署前置反证：普通Check因旧v5 pure审批unknown计为effects1拒绝，nodes/owners/messages均0，尚未安装。旧Host不认识resume目标，正式context拒绝，Task r2/Owner46独立保持。受控切换新增参数化领域对账与PowerShell部署，复用现有dispose/owner锁/备份/native观察/seal/安装/启动回读；不直接SQLite写或放开全局unknown。代码联合121项与HTTP服务12项全PASS，原Issue857保持未执行。
+最终第十二轮：原生事件索引schema8正式迁移部署完成，包SHA138afab8f0beeac9e68cc13c152495c57a0443700048f45d33fec5ab0115e610/PID43592，100文件一致、维护解除/派发恢复/历史完整。看板2447/2350/1848→481/455/406毫秒，详情4274/4785/2781→172/121/145毫秒，返回字节数相同。原Task r3/p4和三项成功前缀完全保持，同一插件待审请求pending；群短句七天完整查询仅1条，工单905未启动、TaskRuns空、生产只读name为空。工程修复COMPLETE，真实生产执行仍等待插件真人批准。

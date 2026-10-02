@@ -541,6 +541,18 @@ Owner 原生提交工具按当前 currentExecution 开放阶段修复动作；�
 
 启动尚未ready、localhost尚无listener只表示未就绪，不能据此重复安装或另启第二个写者。检查原启动进程及stderr，等待其真实ready或明确失败；独占锁冲突仍立即失败。ready之后命令/查询回执的10秒COMMIT_ACK_UNKNOWN保护不变：禁止派生新效果，按原命令身份重开回读。维护状态在成功启动和独立回读前保持封存。
 
+## 事件查询索引 schema7 → schema8 升级
+
+schema8 增加唯一指定的非唯一、非部分索引 `execution_events_kind_seq(kind,seq)`；不改变事件、审批、任务或效果数据。新运行时只接纳 schema8 和准确索引，启动不自动迁移。
+
+先执行 `node scripts/migrate-execution-events-index.mjs --check <绝对库路径>`，只读核对双版本、索引和全部表摘要，包含自增序列。正式部署沿 `deploy-owner-repair.ps1` 增加 `-MigrateExecutionEventsIndex`，先同参数 `-Check`；该模式与 Bootstrap、RepairStoppedLaunch、MessageImpact 和任务文件迁移互斥。部署自检实际执行零写迁移检查，不创建证据目录。
+
+正式执行复用原生维护排空、封存许可、精确旧PID停机、禁用计划任务自启和持续 owner 独占锁。完整备份及独立回读成功后，锁进程执行7→8事务；全表摘要仅忽略 `execution_meta.schema_version`，任何业务数据改变均回滚。已有同名索引的 schema7 拒绝，schema8 幂等复核且错误结构拒绝，不使用 `IF NOT EXISTS` 掩盖错误。
+
+迁移证明绑定工具摘要与原完整备份清单摘要，Launch 前再核对结构、双版本及迁移瞬间全表摘要。`-Readback`、`-Resume` 必须沿用索引迁移开关，验证回执摘要、工具及备份绑定，仅只读核对当前结构；正常恢复后新增事件不与迁移瞬间摘要比较。原任务、旧节点和终态 Run 的历史校验保持原规则；恢复派发及计划任务自启仍沿原部署流程。失败保留封存、原备份和回执，恢复旧包必须同时恢复原 schema7 一致备份。
+
+独立脚本 `--execute <绝对库路径> <已停止PID>` 仅用于已有原生封存停机许可的运维路径，仍校验PID退出、获取owner独占锁及排空；不会创建备份，正式本地部署使用上述完整备份入口。
+
 ## 持续执行 v6 → v7 离线升级
 
 本次删除 execution_runs.max_claims 及 claim_count 上限约束，schema 升至7。运行时只接受当前 schema，不自动升级。

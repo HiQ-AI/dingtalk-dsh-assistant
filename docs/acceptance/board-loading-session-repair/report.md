@@ -1,21 +1,28 @@
-# 第十轮历史报告（审批渠道结论已撤回）
+# 看板、常驻会话与插件审批修复报告
 
-当前权威状态见 goal.md、matrix.csv 与 round-11.md。第十一轮已纠正为插件人工审批，原工单已接续待审；下面保留第十轮原始记录，不作为当前审批责任或性能验收。
+工程修复已完成并部署，最新验收以matrix.csv第十二轮和round-12.md为准。此前将Bytebase原生审批规则当作插件人工审批的结论已撤回；第十轮原始失败与纠正过程保留在分轮记录。
 
-修复范围已完成并部署；原生产变更任务已实际提交Bytebase，当前真实阻塞是原生真人审批规则未启用。旧“缺少字段用途/完整代码才能送审”的结论已撤销。最新状态以matrix.csv第十轮为准，历史失败保留。
+## 当前结果
 
-## 最终运行与独立回读
+原Task保留身份、当前需求r3/计划r4及三项成功前缀。工单#857已准确绑定本次SQL进入插件人工审批，同一请求pending/waiting-reply，责任方插件审批人。批准后执行并独立回读；驳回按真实意见修订重审。SKIPPED不要求管理员配置Bytebase审批，也不允许跳过插件真人批准。当前生产变更尚未执行。
 
-第七正式包 `zzusp-dingtalk-dsh-assistant-1.0.0-simple-data-change-round7-20261002.tgz` SHA256 `9e3f0c216566e3c893aaa247da07bdb939ceca06565cf3de8f01a884a19b175a`；源码/安装100文件一致，PID45200。按部署runbook执行Check零写、备份、安装、Readback、Resume；安装阶段readback尚未恢复收信，最终Resume及延迟健康独立确认维护解除、health=ok、inboundProcessing=true。私有证据：docs/tmp/simple-data-change-deployment-round7-20261002/installed.json、launch.json，以及docs/tmp/simple-database-change-20261002/deploy-round7-resume.log。
+群内错误审批配置说明和旧长说明已撤回，七天完整查询仅保留“Bytebase 工单 #857 已新建，等待人工审批。”1条；当前Task的开始通知此前独立确认仅1条，本轮没有补发。任务标题长度、常驻会话Agent目录/完全权限/群名及初轮浏览器验证见round-2/round-3；本次保持既有绑定与历史。
 
-原 Task `task-e7e25daf5c0aac2f8bcb5ef13daef45f` 需求r2/计划r3，保留三项成功调查；数据变更Run `run-e6fefb6532c0038c1af50ea32abd730ae7661f9c712a5d4de2fb61aebd52775f` 使用v5。审批节点waiting，代码BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED；Owner idle、last_failure=null，原Task active。详情明确缺失、Bytebase管理员责任及启用规则后重新送审的恢复条件。原工单只读身份错误已解除，未重建工单。
+## 性能根因与正式结果
 
-独立Bytebase回读：Issue857、Plan878、生产hiq_editor、Task905；SQL为 `ALTER TABLE public.process_id_temp ADD COLUMN name character varying;`，Sheet SQL摘要 `38a91faf622d0ad246ccb0a2c03b4c37f6746aa3254c9db0dcf5f0a8d4f56b2e`。Issue DONE且审批SKIPPED，Task NOT_STARTED，TaskRun原始响应{}；DONE不代表执行。原生生产发布策略rolloutPolicy={}，automatic默认false。独立生产副本pg_is_in_recovery=true、transaction_read_only=on，目标name列查询rows=[]。未批准或执行生产DDL。
+缺失事件kind/seq索引导致后台和详情在同一原生worker反复扫描约459MB事件表。复制库等响应、等查询数对照和查询计划证实访问路径；正式schema7→8新增索引，严格校验结构，不缓存删除状态、不截断详情、不启动时隐式升级。
 
-群“广场与编辑器迭代”：错误身份等待消息msgbWKUUNwuFIPWLiEChf383Q==撤回后精确七天查询count=0；正确配置等待消息msg/VQoW8QGD5Rb+GRHzye8Aw==，2026-10-02 12:49:51，独立查询complete=true/count=1/failedCount=0。说明包含缺少原生人工审批规则、管理员责任和本次精确SQL重新送审条件。当前Task的引用源精确查询开始通知count=1，原消息msgWV8D6UBkeEsqZkmupsKGBw==保留；没有额外发送开始通知。证据group-native-wait-final.json、group-start-final.json。
+| 正式API | 修复前范围 | 修复后范围 | 内容核验 |
+| --- | --- | --- | --- |
+| 看板groups | 1848–2447ms | 406–481ms | 3378847字节一致 |
+| 原Task详情 | 2781–4785ms | 121–172ms | 17010字节、成功前缀一致 |
 
-最终接口抽查groups 2414ms、详情2748ms，投影为capability等待。此次抽查是API耗时；真实浏览器及目录/完全权限/群名验收引用round-2.md，不冒充本轮新浏览器验证。
+## 部署与验证
 
-实跑：`node --test test/workflow-platform-clients.test.js test/workflow-data-change-external.test.js` 35/35；`node --test --test-name-pattern='Bytebase 已建工单身份只读恢复|Bytebase 原生审批 Service 自动对账|交付只读恢复屏障' test/workflow-service.test.js` 16/16。未累加与旧轮重复的测试数。当前最新用例均PASS，旧轮真实FAIL保留。修复范围已完成；原生产业务任务仍等待管理员启用审批并重新送审，不能把SKIPPED工单直接执行，也不能承诺配置变更后旧工单自动变成PENDING。
+正式包SHA256 138afab8f0beeac9e68cc13c152495c57a0443700048f45d33fec5ab0115e610，源码/安装100文件一致，fresh PID43592。零写Check、封存排空、完整备份独立回读、独占锁迁移、全业务行摘要保持、安装和Resume均通过；维护解除、派发恢复、历史verified、health=ok/inboundProcessing=true，自启恢复Ready。正式库双版本8、EXPLAIN命中索引，原审批请求和SQL保持。
 
-此前看板、详情、常驻会话及通知的浏览器验收见round-2.md：群接口约28秒降至1.5–2.2秒，真实看板约3秒、详情约4.5秒；Agent目录、完全权限及对应群名已实际打开核验。
+最终store38/38、迁移8/8、部署专项15/15、schema8服务20/20与通知49/49通过；审批修复阶段平台/效果等联合121、消息账及对账93、Owner会话15与恢复14通过，不累加重叠数。完整备份独立证明与既有节点/终态Run历史保持是部署依据，不只依靠测试或命令回执。
+
+## 边界
+
+生产只读副本name列仍为空；Bytebase Task905 NOT_STARTED、TaskRuns空，未真人批准或执行DDL。当前浏览器权限检查不可用，因此本轮性能为正式API测量，未冒充最新页面点击验收。既有发布冻结hash断言和旧PowerShell全夹具失败均经原HEAD独立反证，同本次改动无关，详见round-11/round-12；未宣称全量测试全绿。私有工单、群消息及部署工件只放docs/tmp，未提交凭据。

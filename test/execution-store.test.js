@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
+import { migrateExecutionEventsIndex } from '../scripts/migrate-execution-events-index.mjs'
 
 const moduleUrl = new URL('../packages/dingtalk-dsh-assistant/execution-store.js', import.meta.url).href
 const ownerControllerUrl = new URL('../packages/dingtalk-dsh-assistant/task-owner-controller.js', import.meta.url).href
@@ -289,9 +290,52 @@ test('磁盘配置读回、显式初始化、正常开启及身份/schema严格�
   assert.equal((await f.query()).nodes[0].generation, 1)
   await f.store.close()
   const raw = new DatabaseSync(f.dbPath)
-  raw.exec('PRAGMA user_version=8')
+  raw.exec('PRAGMA user_version=9')
   raw.close()
   await rejects(f.open(), 'STORE_SCHEMA_MISMATCH')
+})
+
+for (const variant of ['missing', 'reversed', 'partial', 'unique', 'expression']) test(`schema8事件索引结构严格检查：${variant}`, async t => {
+  const f = await fixture(t, null)
+  assert.equal(f.store.info.schemaVersion, 8)
+  await f.store.close()
+  const raw = new DatabaseSync(f.dbPath)
+  raw.exec('DROP INDEX execution_events_kind_seq')
+  if (variant === 'reversed') raw.exec('CREATE INDEX execution_events_kind_seq ON execution_events(seq,kind)')
+  if (variant === 'partial') raw.exec('CREATE INDEX execution_events_kind_seq ON execution_events(kind,seq) WHERE seq>0')
+  if (variant === 'unique') raw.exec('CREATE UNIQUE INDEX execution_events_kind_seq ON execution_events(kind,seq)')
+  if (variant === 'expression') raw.exec('CREATE INDEX execution_events_kind_seq ON execution_events(kind,seq+0)')
+  raw.close()
+  await rejects(f.open(), 'STORE_SCHEMA_MISMATCH')
+  const readback = new DatabaseSync(f.dbPath, { readOnly: true })
+  assert.equal(readback.prepare('PRAGMA user_version').get().user_version, 8)
+  const indexes = readback.prepare("PRAGMA index_list('execution_events')").all()
+  assert.equal(indexes.length, variant === 'missing' ? 0 : 1, '启动拒绝后不能偷偷修复索引')
+  readback.close()
+})
+
+test('schema8按事件kind索引查询且原生历史排序保持完整', async t => {
+  const f = await fixture(t, null)
+  await f.store.close()
+  const raw = new DatabaseSync(f.dbPath)
+  const insert = raw.prepare('INSERT INTO execution_events(kind,payload,created_at) VALUES(?,?,?)')
+  for (let position = 0; position < 3; position++) {
+    insert.run('task.archive', JSON.stringify({ taskId: `archived-${position}`, archivedAt: `2026-10-02T00:00:0${position}.000Z`, actorId: 'owner' }), '2026-10-02T00:00:00.000Z')
+    insert.run('test.other-event', JSON.stringify({ position }), '2026-10-02T00:00:00.000Z')
+  }
+  const plans = [
+    "EXPLAIN QUERY PLAN SELECT payload FROM execution_events WHERE kind='task.archive' ORDER BY seq",
+    "EXPLAIN QUERY PLAN SELECT payload FROM execution_events WHERE kind='task.archive' ORDER BY seq DESC",
+  ].flatMap(sql => raw.prepare(sql).all())
+  assert.ok(plans.every(row => row.detail.includes('USING INDEX execution_events_kind_seq') && row.detail.includes('kind=?')))
+  const before = raw.prepare("SELECT seq,payload FROM execution_events WHERE kind='task.archive' ORDER BY seq").all()
+  raw.close()
+  await f.open()
+  assert.deepEqual((await f.store.query({ kind: 'task.archives' })).map(row => row.taskId), ['archived-0', 'archived-1', 'archived-2'])
+  const readback = new DatabaseSync(f.dbPath, { readOnly: true })
+  assert.deepEqual(readback.prepare("SELECT seq,payload FROM execution_events WHERE kind='task.archive' ORDER BY seq").all(), before)
+  assert.deepEqual(readback.prepare("SELECT seq,payload FROM execution_events WHERE kind='task.archive' ORDER BY seq DESC").all(), [...before].reverse())
+  readback.close()
 })
 test('话题事实 v4→v5 离线迁移先零写检查并备份，逐条回读身份',async t=>{
   const f=await fixture(t)
@@ -742,7 +786,7 @@ test('v6到v7移除领取截止，检查零写并完整保留来源和执行数�
   const current=db.prepare("SELECT sql FROM sqlite_master WHERE name='execution_runs'").get().sql
   const cols=db.prepare('PRAGMA table_info(execution_runs)').all().map(x=>'"'+x.name+'"').join(',')
   const prior=current.replace('CREATE TABLE execution_runs','CREATE TABLE prior_runs').replace('claim_count INTEGER','max_claims INTEGER NOT NULL DEFAULT 3 CHECK(max_claims>0),claim_count INTEGER').replace('CHECK(claim_count>=0)','CHECK(claim_count>=0 AND claim_count<=max_claims)')
-  db.exec('PRAGMA foreign_keys=OFF;BEGIN IMMEDIATE');db.exec(prior)
+  db.exec('PRAGMA foreign_keys=OFF;BEGIN IMMEDIATE;DROP INDEX execution_events_kind_seq');db.exec(prior)
   db.exec(`INSERT INTO prior_runs(${cols}) SELECT ${cols} FROM execution_runs;DROP TABLE execution_runs;ALTER TABLE prior_runs RENAME TO execution_runs;CREATE UNIQUE INDEX execution_one_active_task ON execution_runs(task_id) WHERE status NOT IN ('succeeded','failed','cancelled');PRAGMA user_version=6;UPDATE execution_meta SET schema_version=6;COMMIT;PRAGMA foreign_keys=ON`)
   const check=migrateContinuousExecution(db,{mode:'check'});assert.equal(check.writes,0)
   assert.equal(db.prepare('PRAGMA user_version').get().user_version,6)
@@ -752,5 +796,11 @@ test('v6到v7移除领取截止，检查零写并完整保留来源和执行数�
   assert.equal(db.prepare('SELECT claim_count FROM execution_runs').get().claim_count,500)
   assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[])
   db.close()
+  await rejects(f.open(), 'STORE_SCHEMA_MISMATCH')
+  const indexMigration = new DatabaseSync(f.dbPath)
+  const indexCheck = migrateExecutionEventsIndex(indexMigration, { mode: 'check' })
+  assert.equal(indexCheck.writes, 0)
+  assert.equal(migrateExecutionEventsIndex(indexMigration, { mode: 'execute' }).verified, true)
+  indexMigration.close()
   await f.open();assert.equal((await f.query()).run.claimCount,500)
 })

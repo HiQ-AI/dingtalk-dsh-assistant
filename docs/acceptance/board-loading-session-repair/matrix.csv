@@ -56,3 +56,11 @@ web-context-multiple-runs,11,PASS,round-11.md
 approval-handoff-pending-plan,11,PASS,round-11.md
 service-approval-adapter-composition,11,PASS,round-11.md
 task-detail-latest-run-performance,11,FAIL,round-11.md
+execution-event-index-contract,12,PASS,round-12.md
+execution-event-index-migration,12,PASS,round-12.md
+execution-event-index-deployment-bindings,12,PASS,round-12.md
+local-deployment-readback,12,PASS,round-12.md
+task-detail-latest-run-performance,12,PASS,round-12.md
+board-latest-run-performance,12,PASS,round-12.md
+plugin-approval-live-wait,12,PASS,round-12.md
+incorrect-native-approval-notice-recall,12,PASS,round-12.md

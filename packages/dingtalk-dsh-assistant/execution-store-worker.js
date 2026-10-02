@@ -15,7 +15,7 @@ import { transientRecoveryReasons, recoveryRetryDelayMs } from './execution-reco
 import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { executionDigest, parseArtifactReference } from './execution-artifacts.js'
 
-const SCHEMA_VERSION = 7
+const SCHEMA_VERSION = 8
 const APPLICATION_ID = 0x44534845
 let db, owner, healthy = true
 const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
@@ -144,6 +144,7 @@ function install() {
     CREATE TABLE execution_receipts(command_id TEXT PRIMARY KEY,payload_digest TEXT NOT NULL,result TEXT NOT NULL CHECK(json_valid(result)),created_at TEXT NOT NULL) STRICT;
     CREATE TABLE execution_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,command_id TEXT,kind TEXT NOT NULL,
       payload TEXT NOT NULL CHECK(json_valid(payload)),created_at TEXT NOT NULL) STRICT;
+    CREATE INDEX execution_events_kind_seq ON execution_events(kind,seq);
   `)
   db.prepare('INSERT INTO execution_meta(singleton,instance_id,schema_version) VALUES(1,?,?)').run(workerData.instanceId, SCHEMA_VERSION)
   installEffectsSchema(db)
@@ -167,6 +168,12 @@ function validate(connection) {
     'SELECT command_id,payload_digest,result,created_at FROM execution_receipts LIMIT 0',
     'SELECT seq,command_id,kind,payload,created_at FROM execution_events LIMIT 0',
   ]) connection.prepare(sql).all()
+  const eventIndex = connection.prepare("PRAGMA index_list('execution_events')").all()
+    .find(index => index.name === 'execution_events_kind_seq')
+  const eventColumns = connection.prepare("PRAGMA index_info('execution_events_kind_seq')").all()
+  if (!eventIndex || eventIndex.unique !== 0 || eventIndex.partial !== 0 || eventIndex.origin !== 'c'
+    || eventColumns.length !== 2 || eventColumns[0].name !== 'kind' || eventColumns[1].name !== 'seq')
+    fail('STORE_SCHEMA_MISMATCH')
   const bad = connection.prepare(`SELECT node_run_id FROM execution_nodes WHERE
     (status IN ('ready','running') AND (input_ref IS NULL OR input_digest IS NULL))
     OR (session_bound=1 AND session_id IS NULL)
