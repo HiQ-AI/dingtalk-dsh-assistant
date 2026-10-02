@@ -26,6 +26,12 @@ export function workflowResultText(output) {
   if (output?.deliveryStatus === 'pr_verified' && typeof output.url === 'string') return `代码已验证并提交 PR${output.number ? ` #${output.number}` : ''}：${output.url}。当前状态：${({ OPEN: '待合并', MERGED: '已合并', CLOSED: '已关闭' })[output.state] ?? '已核验'}。`
   return null
 }
+export function taskDecisionConditionText(condition) {
+  if (!condition || !['business-input', 'approval', 'capability', 'permission', 'execution'].includes(condition.kind)
+    || ['missing', 'responsibleParty', 'resumeWhen'].some(key => typeof condition[key] !== 'string' || !condition[key].trim())) return null
+  const clean = value => value.replace(/\s+/gu, ' ').trim()
+  return `缺少：${clean(condition.missing)}；需由${clean(condition.responsibleParty)}处理；继续条件：${clean(condition.resumeWhen)}。`
+}
 export function sameDeliveredText(observed, expected, quoted = false) {
   const normalize = text => typeof text === 'string' ? text.replace(/\s+/gu, ' ').trim() : null
   const actual = normalize(observed), wanted = normalize(expected)
@@ -352,14 +358,18 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
           }
           for (const report of reports.filter(item => item.applicationStatus === 'applied'
             && (['complete', 'block'].includes(item.reportType)
+              || item.reportType === 'wait' && taskDecisionConditionText(item.facts.condition)
               || item.triggerTypes.includes('workflow.succeeded') && item.facts.evidenceRefs.length
               || item.triggerTypes.includes('workflow.confirmation.required')))) {
             const text = report.reportType === 'complete' ? `任务已完成：${report.facts.summary}`
+              : ['block', 'wait'].includes(report.reportType) && taskDecisionConditionText(report.facts.condition)
+                ? `${report.reportType === 'block' ? '处理暂时受阻' : '任务等待补充或确认'}：${taskDecisionConditionText(report.facts.condition)}`
               : report.reportType === 'block' ? `处理暂时受阻，需要人工介入。${Array.from(String(report.facts.summary ?? '').replace(/\s+/gu, ' ').trim()).slice(0, 160).join('')}`
                 : report.triggerTypes.includes('workflow.confirmation.required') ? `任务等待确认：${report.facts.summary}`
                   : `任务进展：${report.facts.summary}`
             await attempt(run.runId, report.reportId, () => prepare(run, action, `owner:${report.reportId}`, text, report.reportType === 'complete' ? 'result'
-              : report.reportType === 'block' || report.triggerTypes.includes('workflow.confirmation.required') ? 'required_action' : 'progress'))
+              : ['block', 'wait'].includes(report.reportType) && taskDecisionConditionText(report.facts.condition)
+                || report.reportType === 'block' || report.triggerTypes.includes('workflow.confirmation.required') ? 'required_action' : 'progress'))
           }
         }
         if (!['create', 'research', 'answer', 'reopen'].includes(action.kind) || !action.result?.runId) return

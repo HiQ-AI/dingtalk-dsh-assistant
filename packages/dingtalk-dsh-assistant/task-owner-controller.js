@@ -199,7 +199,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           },
           onSessionBound: () => command(`owner-bound:${turnId}`, 'task.owner.sessionBound', {
             taskId, turnId, leaseEpoch: claim.leaseEpoch, sessionId: claim.sessionId }),
-          onCandidate: decision => {
+          onCandidate: async decision => {
             if (unreadPages.size) throw error('TASK_OWNER_EVENTS_UNREAD')
             if (decision.action === 'repairCurrentStage') {
               const expected = input.currentExecution?.repairBinding
@@ -208,6 +208,9 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
                 || Object.entries(expected).some(([key, value]) => decision.repair?.[key] !== value))
                 throw error('TASK_OWNER_REPAIR_BINDING_INVALID')
             }
+            const proposed = decision.planChange?.stages ?? decision.appendStages
+            if (proposed && !await authorizeStages({ taskId, stages: proposed, signal })) throw error('TASK_OWNER_STAGE_NOT_AUTHORIZED')
+            if (decision.action === 'complete' && !await authorizeCompletion({ taskId, decision, signal })) throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
             return command(`owner-candidate:${turnId}`, 'task.owner.candidate', {
               taskId, turnId, leaseEpoch: claim.leaseEpoch, decision })
           },
@@ -217,8 +220,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         const proposedStages = result.decision.planChange?.stages ?? result.decision.appendStages
         if (proposedStages && !await authorizeStages({ taskId, stages: proposedStages, signal }))
           throw error('TASK_OWNER_STAGE_NOT_AUTHORIZED')
-        if (result.decision.action === 'complete' && !await authorizeCompletion({ taskId, decision: result.decision, signal }))
-          throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
+        // 领域完成验收已在候选提交前实跑；最终清单及事务版本校验防止旧候选接纳。
         signal.throwIfAborted()
         let deliveryManifestRef
         if (result.decision.action === 'complete' && readDeliveryManifest) {

@@ -35,11 +35,21 @@ function validatePlanChange(chosen, currentTask) {
       fail('TASK_OWNER_ADVANCE_CONFLICT')
 }
 const decision = value => {
-  exact(value, ['action', 'summary', 'evidenceRefs', 'appendStages', 'planChange', 'assessments', 'repair'], ['action', 'summary', 'evidenceRefs'])
+  exact(value, ['action', 'summary', 'evidenceRefs', 'appendStages', 'planChange', 'assessments', 'repair', 'condition'], ['action', 'summary', 'evidenceRefs'])
   if (!['advance', 'wait', 'complete', 'block', 'repairCurrentStage'].includes(value.action)
     || typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 4000
     || !Array.isArray(value.evidenceRefs) || value.evidenceRefs.length > 128) fail('TASK_OWNER_DECISION_INVALID')
   value.evidenceRefs.forEach(ref)
+  if (['wait', 'block'].includes(value.action)) {
+    const c = value.condition
+    if (!c) fail('TASK_OWNER_CONDITION_REQUIRED')
+    exact(c, ['kind', 'missing', 'responsibleParty', 'resumeWhen', 'evidenceRefs'])
+    if (!['business-input', 'approval', 'capability', 'permission', 'execution'].includes(c.kind)
+      || ['missing', 'responsibleParty', 'resumeWhen'].some(key => typeof c[key] !== 'string' || !c[key].trim() || c[key].length > 2000)
+      || !Array.isArray(c.evidenceRefs) || c.evidenceRefs.length > 128) fail('TASK_OWNER_CONDITION_INVALID')
+    c.evidenceRefs.forEach(ref)
+    if (c.evidenceRefs.some(item => !value.evidenceRefs.includes(item))) fail('TASK_OWNER_CONDITION_INVALID')
+  } else if (value.condition !== undefined) fail('TASK_OWNER_CONDITION_INVALID')
   if (value.action === 'repairCurrentStage') {
     if (value.planChange || value.appendStages || value.assessments) fail('TASK_OWNER_DECISION_INVALID')
     exact(value.repair, ['stageId', 'runId', 'generation', 'runRevision', 'requirementRevision'])
@@ -101,6 +111,42 @@ const task = (db, taskId) => {
     JOIN task_controls c ON c.task_id=t.task_id WHERE t.task_id=?`).get(id(taskId))
   if (!row) fail('TASK_OWNER_TASK_NOT_FOUND')
   return row
+}
+// 候选与接纳共用同一状态合同；接纳仍在版本核验后的事务内重查。
+function validateDecisionState(db, o, chosen) {
+  const currentTask = task(db, o.task_id)
+  const activeStage = db.prepare(`SELECT status FROM task_plan_stages WHERE task_id=? AND plan_revision=?
+    AND status<>'succeeded' AND status<>'invalidated' ORDER BY position LIMIT 1`)
+    .get(o.task_id, currentTask.plan_revision)
+  if (currentTask.control_state !== 'active') fail('TASK_OWNER_CONTROL_BLOCKED')
+  validatePlanChange(chosen, currentTask)
+  if (chosen.action === 'complete') {
+    if (currentTask.plan_status !== 'succeeded' || chosen.appendStages !== undefined
+      || currentTask.plan_requirement_revision !== currentTask.requirement_revision) fail('TASK_OWNER_COMPLETION_UNPROVEN')
+    const stages = db.prepare('SELECT workflow_id,status,output_ref,evidence_refs FROM task_plan_stages WHERE task_id=? AND plan_revision=?')
+    .all(o.task_id, currentTask.plan_revision)
+    if (!stages.length || stages.some(stage => stage.status !== 'succeeded' || !stage.output_ref
+      || !Array.isArray(JSON.parse(stage.evidence_refs)) || !JSON.parse(stage.evidence_refs).length))
+      fail('TASK_OWNER_COMPLETION_UNPROVEN')
+    const items = db.prepare('SELECT item_id FROM task_acceptance_items WHERE task_id=? AND active=1 ORDER BY rowid')
+      .all(o.task_id).map(row => row.item_id)
+    const assessments = chosen.assessments ?? []
+    const knownEvidence = new Set(stages.flatMap(stage => [stage.output_ref, ...JSON.parse(stage.evidence_refs)]))
+    if (stages.every(stage => stage.workflow_id === 'task-general-intake')
+      || !items.length || assessments.length !== items.length
+      || new Set(assessments.map(item => item.itemId)).size !== items.length
+      || assessments.some(item => !items.includes(item.itemId)
+        || item.evidenceRefs.some(evidence => !knownEvidence.has(evidence)))
+      || chosen.evidenceRefs.some(evidence => !knownEvidence.has(evidence)))
+    fail('TASK_OWNER_COMPLETION_UNPROVEN')
+  } else if (chosen.action === 'advance' && (currentTask.plan_status === 'succeeded'
+    || !['ready', 'running'].includes(activeStage?.status))) {
+    const continuation = currentTask.plan_status === 'pending' && chosen.planChange?.kind === 'initialize'
+      || chosen.planChange?.kind === 'replaceSuffix'
+      || currentTask.plan_status === 'succeeded' && chosen.appendStages?.length
+    if (!continuation) fail('TASK_OWNER_ADVANCE_CONFLICT')
+  }
+  // wait/block属于整体任务的条件，不改变任何已成功或运行中的阶段。
 }
 const owner = (db, taskId) => {
   const row = db.prepare('SELECT * FROM task_owners WHERE task_id=?').get(id(taskId))
@@ -372,10 +418,10 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
   }
   if (command.kind === 'task.owner.candidate') {
     exact(a, ['taskId', 'turnId', 'leaseEpoch', 'decision'])
-    const { turn: t } = turn(db, a)
+    const { owner: o, turn: t } = turn(db, a)
     if (t.status !== 'running') fail('TASK_OWNER_CANDIDATE_CONFLICT')
     const chosen = decision(a.decision)
-    validatePlanChange(chosen, task(db, t.task_id))
+    validateDecisionState(db, o, chosen)
     db.prepare("UPDATE task_owner_turns SET candidate_json=?,status='candidate',updated_at=? WHERE turn_id=?")
       .run(json(chosen), now, t.turn_id)
     return { status: 'received', turnId: t.turn_id }
@@ -396,52 +442,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       try { parseArtifactReference(a.deliveryManifestRef) }
       catch { fail('TASK_OWNER_DELIVERY_MANIFEST_INVALID') }
     }
-    const currentTask = task(db, o.task_id)
-    const activeStage = db.prepare(`SELECT status FROM task_plan_stages WHERE task_id=? AND plan_revision=?
-      AND status<>'succeeded' AND status<>'invalidated' ORDER BY position LIMIT 1`)
-      .get(o.task_id, currentTask.plan_revision)
-    if (currentTask.control_state !== 'active') fail('TASK_OWNER_CONTROL_BLOCKED')
-    validatePlanChange(chosen, currentTask)
-    if (chosen.action === 'complete') {
-      if (currentTask.plan_status !== 'succeeded' || chosen.appendStages !== undefined
-        || currentTask.plan_requirement_revision !== currentTask.requirement_revision) fail('TASK_OWNER_COMPLETION_UNPROVEN')
-      const stages = db.prepare('SELECT workflow_id,status,output_ref,evidence_refs FROM task_plan_stages WHERE task_id=? AND plan_revision=?')
-        .all(o.task_id, currentTask.plan_revision)
-      if (!stages.length || stages.some(stage => stage.status !== 'succeeded' || !stage.output_ref
-        || !Array.isArray(JSON.parse(stage.evidence_refs)) || !JSON.parse(stage.evidence_refs).length))
-        fail('TASK_OWNER_COMPLETION_UNPROVEN')
-      const items = db.prepare('SELECT item_id FROM task_acceptance_items WHERE task_id=? AND active=1 ORDER BY rowid')
-        .all(o.task_id).map(row => row.item_id)
-      const assessments = chosen.assessments ?? []
-      const knownEvidence = new Set(stages.flatMap(stage => [stage.output_ref, ...JSON.parse(stage.evidence_refs)]))
-      if (stages.every(stage => stage.workflow_id === 'task-general-intake')
-        || !items.length || assessments.length !== items.length
-        || new Set(assessments.map(item => item.itemId)).size !== items.length
-        || assessments.some(item => !items.includes(item.itemId)
-          || item.evidenceRefs.some(evidence => !knownEvidence.has(evidence)))
-        || chosen.evidenceRefs.some(evidence => !knownEvidence.has(evidence)))
-        fail('TASK_OWNER_COMPLETION_UNPROVEN')
-    } else if (chosen.action === 'advance' && (currentTask.plan_status === 'succeeded'
-      || !['ready', 'running'].includes(activeStage?.status))) {
-      const generalStep = chosen.appendStages?.length === 1
-        && chosen.appendStages[0].workflowId === 'task-general-capability'
-        && chosen.appendStages[0].capabilityStep
-      const fileDeliveryStep = chosen.appendStages?.length === 1
-        && chosen.appendStages[0].workflowId === 'task-group-file-delivery'
-        && !chosen.appendStages[0].capabilityStep
-      const continuation = currentTask.plan_status === 'pending' && chosen.planChange?.kind === 'initialize'
-        || chosen.planChange?.kind === 'replaceSuffix'
-        || currentTask.plan_status === 'succeeded' && chosen.appendStages?.length
-        && (generalStep || fileDeliveryStep || db.prepare(`SELECT 1 FROM task_events WHERE task_id=? AND seq>? AND seq<=?
-          AND event_type='intent.received' LIMIT 1`).get(o.task_id, o.processed_watermark, t.event_watermark))
-      if (!continuation) fail('TASK_OWNER_ADVANCE_CONFLICT')
-    } else if (chosen.action === 'wait' && currentTask.plan_status !== 'pending'
-      && !['ready', 'running', 'waiting_confirmation'].includes(activeStage?.status)) {
-      fail('TASK_OWNER_WAIT_CONFLICT')
-    } else if (chosen.action === 'block' && currentTask.plan_status !== 'pending'
-      && !['ready', 'running', 'waiting_confirmation', 'blocked'].includes(activeStage?.status)) {
-      fail('TASK_OWNER_BLOCK_CONFLICT')
-    }
+    validateDecisionState(db, o, chosen)
     db.prepare("UPDATE task_owner_turns SET decision_json=candidate_json,status='accepted',application_status='pending',updated_at=? WHERE turn_id=?")
       .run(now, t.turn_id)
     db.prepare('UPDATE task_events SET handled_at=?,turn_id=? WHERE task_id=? AND seq<=? AND handled_at IS NULL')
@@ -449,7 +450,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     db.prepare("UPDATE task_owners SET status='idle',processed_watermark=?,current_turn_id=NULL,failure_count=0,last_failure=NULL,revision=revision+1,updated_at=? WHERE task_id=?")
       .run(t.event_watermark, now, o.task_id)
     db.prepare('INSERT INTO task_reports(report_id,task_id,turn_id,report_type,facts_json,created_at) VALUES(?,?,?,?,?,?)')
-      .run(`owner:${t.turn_id}`, o.task_id, t.turn_id, chosen.action, json({ summary: chosen.summary, evidenceRefs: chosen.evidenceRefs }), now)
+      .run(`owner:${t.turn_id}`, o.task_id, t.turn_id, chosen.action, json({ summary: chosen.summary, evidenceRefs: chosen.evidenceRefs, ...(chosen.condition ? { condition: chosen.condition } : {}) }), now)
     return { status: 'accepted', taskId: o.task_id, turnId: t.turn_id, decision: chosen,
       ...(a.deliveryManifestRef ? { deliveryManifestRef: a.deliveryManifestRef,
         requirementRevision: t.requirement_revision, planRevision: t.plan_revision } : {}),

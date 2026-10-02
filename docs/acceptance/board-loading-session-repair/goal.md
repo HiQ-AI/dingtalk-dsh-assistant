@@ -1,18 +1,47 @@
-# 看板与常驻会话修复目标
+# 看板、常驻会话与任务执行修复目标
 
-用户四项：看板加载慢、看不到Agent目录/完全权限/群名生效、任务详情慢、开始通知重复且没有检查群记录。
+> 状态：ACTIVE
+> Goal ID：board-loading-session-repair
+> 最近维护：2026-10-02T09:47:00+08:00
+> 权威目标：goal.md
 
-## Sub goal matrix
+## 总目标
 
-| 子目标 | 负责 | 状态 | 验证 |
-|---|---|---|---|
-| 群数据轻量查询与刷新去重 | root | 定向测试通过 | native投影、历史全量等价、实际API/浏览器耗时 |
-| 常驻会话空闲挂接与当前入口 | root | 定向测试通过 | native投影、目录/权限/群名、租约与关闭 |
-| 任务详情查询与刷新 | task_detail_performance | 定向测试通过 | 同一真实任务前后耗时、投影正确 |
-| 群通知事实与历史去重 | notification_duplicate | 定向测试通过 | 同Task重评不重复、不同Task不误抑制、发送未知不重发 |
-| 部署及四项运行验收 | root | 完成 | runbook Check/备份/安装/Readback/Resume+浏览器 |
+修复看板与任务详情加载、常驻会话目录权限及群名、重复开始通知；按用户批准方案修正 Task 决策与调查机制，恢复唯一原 Task 并推进到确实需要业务确认或批准的节点。
 
-## 重要证据与决策
+## 完成条件
+
+接口、原生会话、通知及状态合同定向测试通过；正式包、进程、维护恢复独立回读；原 Task 保留身份与成功证据，实际调查资料、代码和生产只读元数据，最后展示真实恢复条件；相关群消息独立回读。
+
+## 范围与约束
+
+保持主检出及已有未提交文件；开发在既有 worktree 和 PR152。沿原生事务、事件和租约，不增加第二调度器或持久 schema。生产 DDL 需针对本次精确批准，本轮不执行。私有证据放 docs/tmp，不提交凭据及业务工件。
+
+## sub goal matrix
+
+| ID | 子目标 | 完成判据 | 状态 | 证据 |
+| --- | --- | --- | --- | --- |
+| SG1 | 群数据轻量查询与刷新去重 | native投影、历史全量等价、实际API/浏览器耗时 | 定向测试通过 | matrix.csv / round-2.md / round-3.md |
+| SG2 | 常驻会话空闲挂接与当前入口 | native投影、目录/权限/群名、租约与关闭 | 定向测试通过 | matrix.csv / round-2.md / round-3.md |
+| SG3 | 任务详情查询与刷新 | 同一真实任务前后耗时、投影正确 | 定向测试通过 | matrix.csv / round-2.md / round-3.md |
+| SG4 | 群通知事实与历史去重 | 同Task重评不重复、不同Task不误抑制、发送未知不重发 | 定向测试通过 | matrix.csv / round-2.md / round-3.md |
+| SG5 | 部署及四项运行验收 | runbook Check/备份/安装/Readback/Resume+浏览器 | 完成 | matrix.csv / round-2.md / round-3.md |
+| SG6 | Task与阶段分离、候选纠正及重复错误收敛 | 原生SQLite/原生会话/重启/完成清单70项PASS | 定向验证通过 | matrix.csv / round-2.md / round-3.md |
+| SG7 | 结构化等待/受阻投影和受管恢复 | 同Task恢复、业务与系统原因区分、通知摘要 | 定向验证通过 | matrix.csv / round-2.md / round-3.md |
+| SG8 | 数据库完整元数据与调查覆盖 | 原生只读查询、授权拒绝、分页及调查范围 | 定向验证通过 | matrix.csv / round-2.md / round-3.md |
+| SG9 | 本轮部署与唯一任务真实推进 | 精确包安装、维护排空、原任务推进到真实等待点 | 运行验证通过，渠道冷却待核对 | matrix.csv / round-4.md |
+## 当前检查点
+
+- 当前子目标：SG9
+- 唯一下一步：记录交付与PR状态，冷却结束后独立回读DWS实时接入健康。
+- 未闭环项：round3真实反证已由v8及stage-3重新验证闭环；当前DWS实时订阅cooldown至10:04:25，等待独立健康回读。C盘仍满，运行及当前测试临时目录使用D盘。
+
+## 进展
+
+
+2026-10-02新一轮：用户批准系统修正方案。当前PR152 OPEN，保持同worktree。直接原因为成功计划后block被拒绝，release一次将Owner置blocked；调查工具columns只返回三属性，代码分页nextOffset=400未读取。阶段、业务目标与Owner运行状态分层，沿用现有事务/事件/租约，不建第二调度器。结构化条件放现有decision；业务等待必须有恢复条件，内部拒绝在候选提交前反馈；完成仍逐项验收。当前生产DDL不在本轮授权内。下一检查点：合同与实现定向验证。
+
+核心里程碑：共用validateDecisionState在candidate/accept执行，wait/block condition强制；成功计划后append不需要无关新消息，授权仍由Controller核验。原生会话第一次反馈、相同错误第二次停止，原错误明确保留；70项实跑通过。reassess从计划succeeded判断改为Owner已应用complete判断，允许成功调查的未完成Task重评，排空/来源/未知效果约束不变。当前资料地图明确dataset就是Editor后端，不需扩授权，后续调查应先读取地图再搜索。下一步：新调查v7与历史v5/v6摘要恢复及实际只读smoke，再正式部署。
 
 /state/groups 28068ms/3367054bytes，逐Run完整message.run导致大节点解析及worker往返，前端每5秒重叠。保持全历史，不用截断兜底。native session/list 当前新协调会话header cwd正确但大继承离线投影为空；保留空闲只读挂接，不修改宿主核心或旧历史。
 
@@ -21,3 +50,15 @@
 2026-10-02：联合原生会话/协调器/前端/通知回归101项通过；补充详情切换旧响应测试后前端24项通过。详情定向6项、收信箱相关16项及轻量大节点投影1项通过。UI strict audit错误0、警告0。部署Check零写通过，Assistant100文件校验通过；进入排空、备份与精确包安装。
 
 第二轮：首轮群接口仍有通知补发逐条查询，按同页通知ID批量读取，原生2项及服务16项回归通过。群API1512–2248ms，详情2083–2712ms；真实看板2956ms、任务卡片详情4519ms。实际打开当前群会话，标题完整、完全权限可见、目录原生回读正确。重复第二条开始消息已撤回、完整群范围count=0，原始开始精确回读保留。最终PID40044、维护解除、精确包回读通过；四子目标运行验收均完成，matrix第二轮全PASS。
+
+本轮核心70、服务38、通知41、查询调查30实跑通过。C盘满造成一次环境失败，D盘TEMP复跑通过；未清理其他文件。精确包fe523fe06e35b6712adbae1cf9dc3700659b2ddf7073c56b34875732ad7df29e已正式安装，PID25792；Readback及Resume通过。原Task受管重评event204，Owner同session lease6 running，下一检查点为新调查实际证据与结构化业务等待。
+
+真实反证：stage-2已成功但只引用原dws消息，漏掉全部实际数据库证据和必要资料/代码，运行验收FAIL（matrix round3）。通知条件及系统阻塞清除已验证，不等于调查完整。补齐Host原生成功查询集合验收，新v8保留已部署v7历史摘要，再二轮部署/重评。
+
+## 重大决策
+
+阶段成功、Task 完成和 Owner 执行状态分开；wait/block 必须结构化条件。候选与接受共用校验，重复无效决定收敛为执行异常。新调查v8从原生成功工具回执重建查询证据，明确引用或排除；保留v5/v6/v7冻结合同。受管重评复用原 Task，不改写旧成功成果。
+
+## 重要信息
+
+Agent工作区D:/baibu-agent，运行profile D:/dsh_home/profiles/web，API18998、Web3080。目标Task task-e7e25daf5c0aac2f8bcb5ef13daef45f，Owner owner-7e9271fcc177db7025850a7527e7ac655b7c6fd1。Editor后端为已登记dataset，先读授权知识地图定位，不需扩权。状态以matrix.csv为准，第三轮真实反证保留。

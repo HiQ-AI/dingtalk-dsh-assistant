@@ -126,7 +126,8 @@ for (const revised of [false, true]) test(`无计划Owner阻塞报告：${revise
   await send('task.owner.claim', { taskId: 'task', turnId: 'turn', expectedLeaseEpoch: 0 })
   await send('task.owner.sessionBound', { taskId: 'task', turnId: 'turn', leaseEpoch: 1, sessionId: 'owner' })
   await send('task.owner.candidate', { taskId: 'task', turnId: 'turn', leaseEpoch: 1,
-    decision: { action: 'block', summary: '缺少读取生产状态的能力，尚未开始。', evidenceRefs: [] } })
+    decision: { action: 'block', summary: '缺少读取生产状态的能力，尚未开始。', evidenceRefs: [],
+      condition: { kind: 'capability', missing: '生产状态读取能力', responsibleParty: '能力维护方', resumeWhen: '读取能力恢复后继续', evidenceRefs: [] } } })
   await send('task.owner.accept', { taskId: 'task', turnId: 'turn', leaseEpoch: 1 })
   await send('task.owner.applied', { taskId: 'task', turnId: 'turn', leaseEpoch: 1 })
   await f.flush()
@@ -170,6 +171,29 @@ test('replyPolicy none不丢Task承接及Owner阻塞事实，重新扫描幂等'
   const blocked = [...notices.values()].find(n => n.payload.phase.startsWith('owner:'))
   assert.ok(blocked.payload.text.startsWith('处理暂时受阻，需要人工介入。'))
   assert.equal(blocked.payload.text.includes('等待负责人审批'), true)
+})
+
+for (const reportType of ['wait', 'block']) test(`Owner ${reportType}结构化条件说明缺失责任和恢复条件，同一报告不重复`, async () => {
+  const run = { runId: 'm', sourceKey: 's', sourceVersion: 1, revision: 0, conversationId: 'g', actorId: 'a', context: { sourceMessageId: 'in' } }
+  const action = { commandId: 'c', status: 'applied', kind: 'create', args: { replyPolicy: 'none' }, result: { taskId: 'task' } }
+  const condition = { kind: 'approval', missing: '本次生产变更审批', responsibleParty: '生产审批人', resumeWhen: '本次审批通过并核验后继续', evidenceRefs: [] }
+  const notices = new Map()
+  const store = { async query(q) {
+    if (q.kind === 'message.notification.diagnostics' || q.kind === 'message.acceptances') return []
+    if (q.kind === 'message.list') return [run]
+    if (q.kind === 'message.run') return { run, requests: [], commands: [action] }
+    if (q.kind === 'message.notification') return notices.get(q.notificationId)
+    if (q.kind === 'message.task.latest' || q.kind === 'task.deleted' || q.kind === 'message.owner.released-wait') return null
+    if (q.kind === 'task.owner.reports') return [{ reportId: 'report', reportType, applicationStatus: 'applied', triggerTypes: [], facts: { summary: '等待审批', condition } }]
+    throw new Error(q.kind)
+  }, async command({ kind, args }) {
+    assert.equal(kind, 'message.notification.prepare'); notices.set(args.notificationId, { ...args, id: args.notificationId }); return {}
+  } }
+  await createWorkflowNotifications({ store }).flush(); await createWorkflowNotifications({ store }).flush()
+  const report = [...notices.values()].filter(n => n.payload.phase.startsWith('owner:'))
+  assert.equal(report.length, 1)
+  assert.match(report[0].payload.text, /本次生产变更审批/)
+  assert.match(report[0].payload.text, /生产审批人/); assert.match(report[0].payload.text, /审批通过并核验后继续/)
 })
 
 test('同一事项的多条补充不逐条回复，实际开始仍有一次通知', async () => {
@@ -267,7 +291,7 @@ test('旧Owner报告跨command已送达，稳定eventKey复用且其他prepared�
   await send('task.accept',{taskId:'task',requirementRef:`sha256-${'a'.repeat(64)}.json`,requirementRevision:1,sessionId:'owner',criteria:['交付结果'],sourceKey:'source',eventKey:'created'})
   await send('task.owner.claim',{taskId:'task',turnId:'turn',expectedLeaseEpoch:0})
   await send('task.owner.sessionBound',{taskId:'task',turnId:'turn',leaseEpoch:1,sessionId:'owner'})
-  await send('task.owner.candidate',{taskId:'task',turnId:'turn',leaseEpoch:1,decision:{action:'block',summary:'等待审批',evidenceRefs:[]}})
+  await send('task.owner.candidate',{taskId:'task',turnId:'turn',leaseEpoch:1,decision:{action:'block',summary:'等待审批',evidenceRefs:[],condition:{kind:'approval',missing:'审批',responsibleParty:'审批人',resumeWhen:'审批通过后继续',evidenceRefs:[]}}})
   await send('task.owner.accept',{taskId:'task',turnId:'turn',leaseEpoch:1})
   await send('task.owner.applied',{taskId:'task',turnId:'turn',leaseEpoch:1})
   const [report]=await f.store.query({kind:'task.owner.reports',taskId:'task'})

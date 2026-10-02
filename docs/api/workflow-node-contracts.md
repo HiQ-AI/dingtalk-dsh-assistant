@@ -296,7 +296,9 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 `POST /tasks/:taskId/reassess-readonly` 仅本机 Web 身份且有任务访问权可调用。参数仅为 `recoveryKey/reason/expectedOwnerRevision/expectedLeaseEpoch/expectedRequirementRevision/expectedControlRevision`。禁止传入材料、权限、替代 requirement 或来源正文。Host 按当前 requirement 验证材料可读范围与旧 scope 缺口，记录固定 `system.recovery` 事件；这不证明远端查询成功。
 
-仅 active 控制态、idle/blocked Owner 无在途决定、存在已失败/等待的只读调查、所有节点排空且无 pending input、外部阶段或 effect 可接受。事务 CAS 与来源摘要复查；同key同参数回读，异参冲突。保留 Task/session、requirement 和失败产物；Owner 接收新事实后正常决定计划与执行，不把系统恢复等同于新业务要求、测试确认或审批。
+仅 active 控制态、idle/blocked Owner 无在途决定、存在已失败/等待/成功的只读调查、所有节点排空且无 pending input、外部阶段或 effect 可接受。计划阶段全部成功不代表整个任务完成；当前要求和计划已有已应用的 Owner complete 决定时拒绝重评。事务 CAS 与来源摘要复查；同key同参数回读，异参冲突。保留 Task/session、requirement 和已有产物；Owner 接收新事实后正常决定计划与执行，不把系统恢复等同于新业务要求、测试确认或审批。恢复工件保存 previousDecision 的 action/condition/applicationStatus/lastFailure，以区分业务条件及系统诊断。
+
+新 Owner wait/block 必须提交 condition，字段为 kind（business-input/approval/capability/permission/execution）、missing、responsibleParty、resumeWhen、evidenceRefs。condition证据必须包含于决定的evidenceRefs；其他动作不接受condition。候选与最终接纳共用状态校验，最终事务仍复核版本、权限和完成证据。成功阶段后可等待整体目标条件或追加后续计划；已成功和运行中的阶段不因条件登记而改写。业务条件用于说明所需行动，满足条件仍须通过受信事件及正常授权检查，不构成自动生产执行批准。相同候选因同一合同再次被拒绝时保留诊断并停止为内部异常。
 
 `reassess-readonly` 可在同一事务中原生discard已知无效果的非法 `repairCurrentStage` 动作：仅当前租约的 application blocked 且 Owner 最后错误严格等于 `WORKFLOW_REPAIR_NOT_ADMITTED`。仍要求完整CAS、只读失败排空、无effects和其他在途动作。其他错误或pending动作拒绝；返回 `discardedTurnId`，原decision、应用失败次数、报告仍保留为discarded，再记录system.recovery。不修改requirement。
 

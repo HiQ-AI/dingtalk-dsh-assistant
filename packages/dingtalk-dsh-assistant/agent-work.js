@@ -56,8 +56,9 @@ export function classifyAgentWorkOutputError(error) {
     .includes(error?.code) ? 'correctable' : 'fatal'
 }
 
-export async function validateAgentWorkResult(result, { sourceRefs = [], verifyEvidence } = {}) {
-  const errors = validateJsonSchemaValue(agentWorkResultSchema, result)
+export async function validateAgentWorkResult(result, { sourceRefs = [], verifyEvidence, readEvidence, requireCompleteCoverage = false,
+  requireExecutedQueryAccounting = false, executedQueryRefs = [] } = {}) {
+  const errors = validateJsonSchemaValue({ ...agentWorkResultSchema, properties: { ...agentWorkResultSchema.properties, coverageExclusions: coverageExclusionSchema } }, result)
   if (errors.length || !result.summary.trim() || result.summary.length > 24000
     || result.evidenceRefs.length > 64 || result.limitations.length > 32
     || result.question.length > 4000
@@ -68,11 +69,64 @@ export async function validateAgentWorkResult(result, { sourceRefs = [], verifyE
     || (result.outcome === 'blocked' && !result.limitations.length)) throw executionError('AGENT_WORK_RESULT_INVALID')
   const known = new Set(sourceRefs)
   const queried = result.evidenceRefs.filter(ref => !known.has(ref))
-  if (queried.length) {
+  const exclusions = result.coverageExclusions ?? []
+  const allQueries = [...new Set([...queried, ...(requireExecutedQueryAccounting ? executedQueryRefs : [])])]
+  if (exclusions.length > 32 || new Set(exclusions.map(item => item.evidenceRef)).size !== exclusions.length
+    || exclusions.some(item => !allQueries.includes(item.evidenceRef) && !result.evidenceRefs.includes(item.evidenceRef) || !item.reason.trim() || item.reason.length > 4000)) throw executionError('AGENT_WORK_RESULT_INVALID')
+  if (allQueries.length) {
     if (typeof verifyEvidence !== 'function') throw executionError('AGENT_WORK_EVIDENCE_UNAVAILABLE')
-    if (await verifyEvidence(queried) !== true) throw executionError('AGENT_WORK_EVIDENCE_INVALID')
+    if (await verifyEvidence(allQueries) !== true) throw executionError('AGENT_WORK_EVIDENCE_INVALID')
+  }
+  if (requireExecutedQueryAccounting && result.outcome === 'completed'
+    && executedQueryRefs.some(ref => !result.evidenceRefs.includes(ref) && !exclusions.some(item => item.evidenceRef === ref))) throw executionError('AGENT_WORK_COVERAGE_INCOMPLETE')
+  if (requireCompleteCoverage && result.outcome === 'completed' && allQueries.length) {
+    if (typeof readEvidence !== 'function') throw executionError('AGENT_WORK_EVIDENCE_UNAVAILABLE')
+    await verifyInvestigationQueryCoverage({ refs: allQueries, exclusions, readEvidence })
   }
   return structuredClone(result)
+}
+
+/** 只核对本次结论引用的可信查询；试探但未引用的搜索不承担完整覆盖义务。 */
+export async function verifyInvestigationQueryCoverage({ refs, exclusions = [], readEvidence }) {
+  const evidence = await Promise.all(refs.map(async ref => ({ ref, value: await readEvidence(ref) })))
+  const excluded = new Set(exclusions.map(item => item.evidenceRef)), groups = new Map()
+  const incomplete = () => { throw executionError('AGENT_WORK_COVERAGE_INCOMPLETE') }
+  for (const { ref, value } of evidence) {
+    if (value.kind !== 'agent-query-evidence') throw executionError('QUERY_EVIDENCE_INVALID')
+    const coverage = value.result?.coverage
+    if (!coverage) {
+      if (!excluded.has(ref) && (value.result?.nextOffset != null || value.result?.truncatedFile)) incomplete()
+      continue
+    }
+    const key = executionDigest([value.scopeDigest, value.capabilityIdentity, coverage.queryDigest])
+    const group = groups.get(key) ?? { pages: [], excluded: false }
+    group.pages.push({ ref, value, coverage }); group.excluded ||= excluded.has(ref); groups.set(key, group)
+  }
+  function complete(group) {
+    let cursor = 0
+    const pages = group.pages.map(item => item.coverage).sort((a, b) => a.offset - b.offset)
+    for (const page of pages) {
+      if (!Number.isSafeInteger(page.offset) || !Number.isSafeInteger(page.endOffset) || page.endOffset < page.offset) return false
+      if (page.offset > cursor) return false
+      cursor = Math.max(cursor, page.endOffset)
+      if (page.nextOffset === null && page.endOffset === cursor) return true
+      if (page.nextOffset !== page.endOffset || page.endOffset === page.offset) return false
+    }
+    return false
+  }
+  for (const group of groups.values()) {
+    if (group.excluded) continue
+    if (!complete(group)) incomplete()
+    for (const { value, coverage } of group.pages) {
+      if (!coverage.truncatedFile) continue
+      const reads = [...groups.values()].find(other => !other.excluded && other.pages.some(item =>
+        item.value.scopeDigest === value.scopeDigest && item.value.capabilityIdentity === value.capabilityIdentity && item.value.result.resourceId === value.result.resourceId
+        && item.coverage.operation === 'read' && item.coverage.path === coverage.truncatedFile
+        && item.coverage.fileDigest === coverage.truncatedDigest))
+      if (!reads || !complete(reads)) incomplete()
+    }
+  }
+  return true
 }
 
 /** 一个调查交付阶段：会话内部自主查询，Host 接纳有来源的产物。 */
@@ -153,6 +207,8 @@ export const investigationResultSchema = { ...agentWorkResultSchema, properties:
   findings: { type: 'array', items: findingSchema }, openItems: { type: 'array', items: openItemSchema },
   criterionReviews: { type: 'array', items: criterionReviewSchema },
 }, required: [...agentWorkResultSchema.required, 'findings', 'openItems', 'criterionReviews'] }
+const coverageExclusionSchema = { type: 'array', items: { type: 'object', properties: { evidenceRef: text, reason: text }, required: ['evidenceRef', 'reason'], additionalProperties: false } }
+export const investigationCoverageResultSchema = { ...investigationResultSchema, properties: { ...investigationResultSchema.properties, coverageExclusions: coverageExclusionSchema } }
 
 // 先复用现有来源/权限核验，再核验领域结构；非空文字不等于业务语义已被证明。
 export async function validateInvestigationResult(result, { requirement, verifyResult, ...binding } = {}) {
@@ -161,7 +217,7 @@ export async function validateInvestigationResult(result, { requirement, verifyR
   if (typeof verifyResult === 'function') await verifyResult({ ...binding, result: base, requirement })
   await validateAgentWorkResult(base, { sourceRefs: base.evidenceRefs ?? [] })
   const invalid = () => { throw executionError('AGENT_WORK_RESULT_INVALID') }
-  if (validateJsonSchemaValue(investigationResultSchema, result).length
+  if (validateJsonSchemaValue(investigationCoverageResultSchema, result).length
     || findings.length > 64 || openItems.length > 32 || criterionReviews.length > 32) invalid()
   const bounded = value => typeof value === 'string' && value.trim() && value.length <= 4000
   const refsValid = refs => refs.length <= 64 && new Set(refs).size === refs.length
@@ -181,7 +237,7 @@ export async function validateInvestigationResult(result, { requirement, verifyR
 }
 
 /** v5 保留历史摘要；新增领域交接只用于 v6 新运行。 */
-export function createInvestigationWorkflow(options) {
+export function createInvestigationWorkflowV6(options) {
   const legacy = createLegacyInvestigationWorkflow(options)
   const inputSchema = structuredClone(legacy.nodes[0].inputSchema)
   inputSchema.properties.acceptanceItems = { type: 'array', items: { type: 'object', additionalProperties: false,
@@ -248,6 +304,31 @@ export function createInvestigationWorkflow(options) {
   ] }
 }
 
+/** 新调查规则单独升版；v5/v6 的已保存定义及历史证据保持原合同。 */
+export function createInvestigationWorkflowV7(options) {
+  const prior = createInvestigationWorkflowV6(options)
+  const rulesDigest = executionDigest({ previous: prior.ownerContract.rulesDigest, queryCoverage: 'referenced-query-pages-v1' })
+  const coveragePrompt = '缺少工具操作、缺权限、环境不可用须分别说明，不将工具未实现误称数据库权限不足。必要搜索、列表及文件读取须沿nextOffset完成分页；truncatedFile需以同版本完整read补读。无关试探查询不要求扫完；若引用未完整读取的查询证据，填写可选coverageExclusions（evidenceRef及具体排除理由），在limitations说明排除范围，不能把排除范围写成已查完整。数据库用登记production只读资源核验完整列定义、约束/索引、直接目录依赖及估算规模；估算不是精确数量。'
+  return { ...prior, version: '7', ownerContract: { ...prior.ownerContract, version: '3', rulesDigest }, nodes: [
+    { ...prior.nodes[0], version: '3', rulesDigest, outputSchema: investigationCoverageResultSchema,
+      classifyOutputError: error => error?.code === 'AGENT_WORK_COVERAGE_INCOMPLETE' ? 'correctable' : classifyAgentWorkOutputError(error),
+      prompt: `${prior.nodes[0].prompt}\n${coveragePrompt}` },
+    { ...prior.nodes[1], version: '3', rulesDigest, outputSchema: investigationCoverageResultSchema,
+      inputSchema: { ...prior.nodes[1].inputSchema, properties: { ...prior.nodes[1].inputSchema.properties, result: investigationCoverageResultSchema } } },
+  ] }
+}
+
+/** v8 对本轮成功查询逐项核对引用或明确排除，不能只引用原消息省略所有调查证据。 */
+export function createInvestigationWorkflow(options) {
+  const prior = createInvestigationWorkflowV7(options)
+  const rulesDigest = executionDigest({ previous: prior.ownerContract.rulesDigest, executedQueryAccounting: 'native-tool-results-v1' })
+  return { ...prior, version: '8', ownerContract: { ...prior.ownerContract, version: '4', rulesDigest }, nodes: [
+    { ...prior.nodes[0], version: '4', rulesDigest,
+      prompt: `${prior.nodes[0].prompt}\n本轮每次成功查询返回的 evidenceRef 必须放入 evidenceRefs，或在 coverageExclusions 中明确排除该项及具体原因；只引用原消息不能证明数据库或代码调查。已排除查询不必扫完，但不得把其内容作为已核验事实提交。涉及项目或应用依赖时，先读取登记项目资料定位仓库职责，不根据 resourceId 名称猜测服务归属。缺失字段规格若可从授权资料或代码核验，应先实际查询；限制项明确实际已查范围、依据和仍未知的内容。` },
+    { ...prior.nodes[1], version: '4', rulesDigest },
+  ] }
+}
+
 /** 领域输入只消费 Host 核验的前序引用，原始材料保持独立。 */
 function validAcceptanceItems(items) {
   return Array.isArray(items) && items.length > 0 && items.length <= 32
@@ -259,7 +340,7 @@ function validAcceptanceItems(items) {
 export function createInvestigationStageContract({ queryScope, queryCatalog, readSources, readAcceptanceItems, readMessageResources = async () => [] }) {
   return { id: 'task-investigation', version: '1', materialPolicy: {
     roles: ['source', 'supplemental'], required: [], singleton: [], maxCount: 256,
-  }, async prepare({ taskId, requirement, origin, handoff, definitionVersion = '6' }) {
+  }, async prepare({ taskId, requirement, origin, handoff, definitionVersion = '8' }) {
     const readableMessageResources = await readMessageResources(requirement, origin)
     const scope = queryScope({ ...requirement.scope, actorId: origin.run.actorId, predecessorOutputRef: handoff?.outputRef ?? null,
       sourceKeys: [...new Set([...requirement.scope.sourceKeys, ...readableMessageResources.map(item => item.sourceKey)])],

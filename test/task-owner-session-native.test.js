@@ -20,6 +20,29 @@ const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-lo
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
 
+test('状态候选提前反馈可在同轮纠正，相同错误再次提交明确停止', async t => {
+  for (const repeat of [false, true]) {
+    const root = await mkdtemp(join(tmpdir(), 'owner-decision-correction-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const invalid = { action: 'wait', summary: '等待业务规格', evidenceRefs: [] }
+    const valid = { ...invalid, condition: { kind: 'business-input', missing: '字段规格', responsibleParty: '需求方', resumeWhen: '确认字段规格', evidenceRefs: [] } }
+    const h = await host(root, null, null, step => step === 1 || repeat ? invalid : valid)
+    t.after(() => h.close())
+    let attempts = 0
+    const result = await h.sessions.run({ binding: { taskId: 'task-condition', sessionId: 'owner-condition', turnId: 'review', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+      input: { task: { status: 'succeeded' }, stages: [], goal: { request: '核验字段定义' } },
+      provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+      onCandidate: async value => { attempts++; if (!value.condition) throw Object.assign(Error('missing condition'), { code: 'TASK_OWNER_CONDITION_REQUIRED' }) } })
+    assert.equal(attempts, 2)
+    assert.equal(h.requests.length, 2)
+    assert.equal(result.status, repeat ? 'no_submission' : 'submitted')
+    if (repeat) assert.equal(result.reason, 'TASK_OWNER_REPEATED_INVALID_DECISION')
+    else assert.deepEqual(result.decision.condition, valid.condition)
+    const stored = await h.ctx.sessionPersistence.inspect('owner-condition')
+    assert.match(JSON.stringify(stored.events), /候选未落账/u)
+  }
+})
+
 async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner'), artifactPages = 1) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)

@@ -524,6 +524,8 @@ PR交付在预检网络故障时由原Controller按持久退避继续原节点�
 
 `directQueries.databases` 中已登记的生产只读副本资源可增加 `metadataSchemas: [public]`，用于结构调查；仅添加精确 schema 名称。`tables` 的数据读取范围保持不变。先用 `scripts/configure-agent-query-resources.mjs --check` 核验提案，再按本 runbook 完成维护备份、安装包核验与配置应用，不能直接编辑在线 profile 绕过部署。运行后核验查询实际连接只读副本及 `transactionReadOnly=true`，再检查未登记表 `select` 仍拒绝。当前待应用提案只修改生产 Editor 只读连接的 public 元数据授权。
 
+结构能力升级验证依次读取 `columns`、`constraints`、`indexes`、`dependencies`、`table_stats`，逐项保存原生 verify 结果、只读事务及生产副本证明；不以元数据权限授予业务 SELECT。`table_stats.estimated_rows` 是目录估算，`dependencies` 仅直接系统目录依赖，仍需对应登记代码检索才能判断应用引用。所有查询的分页覆盖证明包含 queryDigest、offset、endOffset、nextOffset；新调查 v8 completed 从原生成功查询回执重建集合，逐项要求引用或明确排除，并核对证据的连续覆盖及同版本截断文件补读。范围排除须精确引用查询证据并给具体理由，权限和任务归属校验仍先执行；旧 v5/v6/v7 Run 沿冻结合同恢复，不回写旧成果。
+
 备份完整性验证识别控制账中reason=explicit-user-terminal-history-cleanup的明确终止历史清理事件，并要求该Task已不在business_tasks/execution_runs中。仅这些任务工件的文件缺失被记录为purgedArtifactRefs；数据库、历史引用及审计事件仍完整备份。普通task.delete的retained包含artifact-files，不属于已清理文件；无清理证明、当前任务文件缺失、已有文件损坏或链接均继续拒绝。检查、备份验证及失败启动复核采用同一规则，不修改在线控制账。
 
 历史回执的节点输入、历史消息候选快照也会保留已清理任务的引用。只在控制账的execution_receipts/message_items中，按上述Task清理记录排除对应对象的闭包根；节点回执仅含Run时，用原生plannedStageRunId及historyRemoved阶段启动回执确认归属。旧直派流程按已保留dispatch命令的原生executionDigest，同时核对Task的32位和Run的40位摘要，不用名称前缀猜测。完整控制账和已有文件仍逐字节备份，未知归属的缺失工件仍阻止部署。
@@ -533,3 +535,11 @@ PR交付在预检网络故障时由原Controller按持久退避继续原节点�
 ### 看板加载与常驻显示
 
 群看板仅查询消息业务状态投影，模型节点完整输入输出留在按需详情中；历史消息仍完整按游标读取。自动与手动刷新共用同一进行中请求。群常驻会话空闲时保留原生挂接，模型步进拒绝、工具清空；运行前排空展示句柄再按原租约和工具恢复，运行结束保持标题/权限投影可读，关闭插件释放全部句柄。原生大继承会话离线时不返回投影，不能只检查持久文件即宣称页面生效；部署回读须实际session/list和打开会话核对。
+
+### Task 等待条件与只读重评
+
+阶段成功只证明该阶段已交付，不能作为整体 Task 完成依据。整体完成须有当前版本 Owner 已应用的 complete 与逐项验收。新 wait/block 决定必须记录 condition：kind（business-input、approval、capability、permission 或 execution）、missing、responsibleParty、resumeWhen 和 evidenceRefs。看板和群通知说明具体缺失、责任方及恢复条件；内部决策或程序错误保留 lastFailure 诊断，公开显示程序异常及维护恢复要求，不冒充交办人缺资料。已有历史决定不改写。
+
+修复读取能力后沿既有 `POST /tasks/<taskId>/reassess-readonly` 接口恢复原 Task。先独立读取当前 Owner 与计划，提交 recoveryKey、reason、expectedOwnerRevision、expectedLeaseEpoch、expectedRequirementRevision、expectedControlRevision；本机身份必须匹配 webActorId。重评检查源消息身份和版本、当前需求与控制版本、执行排空及外部效果，不接受未知效果、正在执行、已取消或已应用 complete 的 Task。只有成功调查的计划但整体目标仍待定义或审批时可以重评；不直接写 SQL、伪造批准或重跑冻结旧 Run。相同 recoveryKey 与请求精确幂等，参数变化拒绝。
+
+重评审计保留 previousDecision（action、condition、applicationStatus、lastFailure）、当前源授权和材料读取依据。独立回读 system.recovery、新 Owner 水位及原成功阶段 outputRef，确认 Task/session 身份和旧证据保持；由新决定安排使用当前能力的调查。补充定义、审批或能力事实通过既有受管事件推进，不能只循环扫描。原生重评接纳不代表调查完成，也不授权生产 DDL。

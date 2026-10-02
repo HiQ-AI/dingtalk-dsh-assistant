@@ -86,42 +86,44 @@ export function createAgentResourceReadCapability({ resources }) {
   try{const before=await handle.stat();if(!before.isFile()||before.size>1024*1024)fail('QUERY_CAPACITY');const data=await handle.readFile();const after=await lstat(target);if(before.ino!==after.ino||before.dev!==after.dev||before.mtimeMs!==after.mtimeMs||data.length>1024*1024)fail('QUERY_SOURCE_CHANGED');return new TextDecoder('utf-8',{fatal:true}).decode(data)}finally{await handle.close()}
  }
  const redact=text=>text.replace(/((?:password|passwd|token|secret|api[_-]?key|authorization)\s*[=:]\s*)[^\r\n]+/gi,'$1[REDACTED]')
- return {id:'query_project_resource',effectClass:'read',identity:'agent-resource-read-v1:'+executionDigest(resources),description:'读取Host授权的项目资料、固定提交代码、登记日志/配置；list以路径序号分页；search的offset/nextOffset是文件序号，truncatedFile需read补读；read最多16000字符，返回可信来源与版本。',parameters:agentResourceReadParameters,authorize,
+ return {id:'query_project_resource',effectClass:'read',identity:'agent-resource-read-v2:'+executionDigest(resources),description:'读取Host授权的项目资料、固定提交代码、登记日志/配置；list以路径序号分页；search的offset/nextOffset是文件序号，truncatedFile需read补读；read最多16000字符，返回可信来源、版本及coverage分页证明。',parameters:agentResourceReadParameters,authorize,
   available: scope => resources.some(resource => scope?.resourceIds?.includes(resource.id)),
   async execute({input,scope,signal}){
    if(!await authorize({input,scope}))fail('QUERY_SCOPE_DENIED')
    const resource=registry.get(input.resourceId),offset=input.offset??0,limit=input.limit??(input.operation==='read'?12000:50)
    if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>(input.operation==='read'?16000:200))fail('QUERY_LIMIT_INVALID')
-   let value,sources=[]
+   let value,sources=[],coverage
    if(input.operation==='read'){
     if(!input.path)fail('QUERY_ARGUMENT_INVALID')
     const content=await read(resource,input.path,signal),digest=executionDigest(content)
     const visible=redact(content)
     value={path:input.path,content:visible.slice(offset,offset+limit),offset,nextOffset:offset+limit<visible.length?offset+limit:null,digest}
+    coverage={kind:'resource',operation:'read',queryDigest:executionDigest([resource.id,input.path,digest]),offset,endOffset:Math.min(offset+limit,visible.length),nextOffset:value.nextOffset,path:input.path,fileDigest:digest}
     sources=[`${resource.id}:${resource.commit??digest}:${input.path}`]
    }else{
     const paths=await files(resource,signal)
-    if(input.operation==='list'){const selected=paths.filter(p=>!input.path||p.startsWith(input.path));value={paths:selected.slice(offset,offset+limit),nextOffset:offset+limit<selected.length?offset+limit:null};sources=[`${resource.id}:${resource.commit??executionDigest(selected)}:paths`]}
+    if(input.operation==='list'){const selected=paths.filter(p=>!input.path||p.startsWith(input.path));value={paths:selected.slice(offset,offset+limit),nextOffset:offset+limit<selected.length?offset+limit:null};sources=[`${resource.id}:${resource.commit??executionDigest(selected)}:paths`];coverage={kind:'resource',operation:'list',queryDigest:executionDigest([resource.id,resource.commit??executionDigest(selected),input.path??null]),offset,endOffset:Math.min(offset+limit,selected.length),nextOffset:value.nextOffset}}
     else{
      if(typeof input.query!=='string'||!input.query||input.query.length>200)fail('QUERY_ARGUMENT_INVALID')
-     const selected=paths.filter(p=>!input.path||p.startsWith(input.path)),matches=[];let bytes=0,index=offset,scanned=0,truncatedFile=null
+     const selected=paths.filter(p=>!input.path||p.startsWith(input.path)),matches=[];let bytes=0,index=offset,scanned=0,truncatedFile=null,truncatedDigest=null
      const reader=resource.kind==='repository'?repositoryReader(resource,signal):null
      try{for(;index<selected.length;index++){
       signal?.throwIfAborted();const path=selected[index],content=reader?await reader.read(path):await read(resource,path,signal);bytes+=Buffer.byteLength(content);scanned++
       const lines=content.split('\n'),digest=executionDigest(content)
       for(let i=0;i<lines.length;i++)if(lines[i].includes(input.query)){
-       if(matches.length===limit){truncatedFile=path;break}
+       if(matches.length===limit){truncatedFile=path;truncatedDigest=digest;break}
        matches.push({path,line:i+1,text:redact(lines[i]).slice(0,500),digest})
       }
       if(matches.length>=limit||bytes>=4*1024*1024||scanned>=200){index++;break}
      }
      }finally{await reader?.close()}
      value={matches,nextOffset:index<selected.length?index:null,scannedFiles:scanned,truncatedFile}
+     coverage={kind:'resource',operation:'search',queryDigest:executionDigest([resource.id,resource.commit??executionDigest(selected),input.path??null,input.query]),offset,endOffset:index,nextOffset:value.nextOffset,truncatedFile,truncatedDigest}
      sources=matches.map(m=>`${resource.id}:${resource.commit??m.digest}:${m.path}:${m.line}`);if(!sources.length)sources=[`${resource.id}:${resource.commit??executionDigest(selected.slice(offset,index))}:searched-paths`]
 
     }
    }
-   const output={resourceId:resource.id,version:resource.commit??'observed-file-digest',...value,sources};produced.add(output);return output
+   const output={resourceId:resource.id,version:resource.commit??'observed-file-digest',...value,coverage,sources};produced.add(output);return output
   },
   async verify({input,scope,output}){return {passed:await authorize({input,scope})&&produced.has(output),outputDigest:executionDigest(output),sourceRefs:output.sources}}
  }

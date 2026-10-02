@@ -46,6 +46,7 @@ async function fixture(t, { mutateFinal, action = 'complete' } = {}) {
       assert.equal(snapshot.acceptance[0].status, 'pending')
       const outputRef = input.stages[0].outputRef
       const decision = { action, summary: '处理当前任务', evidenceRefs: outputRef ? [outputRef] : [],
+        ...(['wait', 'block'].includes(action) ? { condition: { kind: 'business-input', missing: '确认结论', responsibleParty: '需求方', resumeWhen: '确认结论后继续', evidenceRefs: outputRef ? [outputRef] : [] } } : {}),
         ...(action === 'complete' ? { assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: [outputRef] })) } : {}) }
       await onCandidate(decision)
       return { status: 'submitted', decision }

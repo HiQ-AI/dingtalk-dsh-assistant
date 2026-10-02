@@ -9,3 +9,13 @@ resident-visibility,2,PASS,round-2.md
 task-detail-load,2,PASS,round-2.md
 notification-duplicate,2,PASS,round-2.md
 formal-deployment,2,PASS,round-2.md
+task-decision-contract,3,PASS,round-3.md
+investigation-coverage,3,PASS,round-3.md
+readonly-database-metadata,3,PASS,round-3.md
+task-investigation-runtime,3,FAIL,round-3.md
+task-decision-contract,4,PASS,round-4.md
+investigation-coverage,4,PASS,round-4.md
+readonly-database-metadata,4,PASS,round-4.md
+task-investigation-runtime,4,PASS,round-4.md
+formal-deployment,4,PASS,round-4.md
+notification-duplicate,4,PASS,round-4.md

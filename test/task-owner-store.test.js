@@ -6,6 +6,49 @@ import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand
   queryTaskOwner, recoverTaskOwners } from '../packages/dingtalk-dsh-assistant/task-owner-store.js'
 
 const at = '2026-09-25T00:00:00.000Z'
+const businessCondition = { kind: 'business-input', missing: '字段的业务规格', responsibleParty: '需求方', resumeWhen: '确认字段规格', evidenceRefs: [] }
+test('成功阶段后的业务等待与能力受阻保留成功证据，新事件唤醒原会话', () => {
+  for (const action of ['wait', 'block']) {
+    const f = fixture()
+    try {
+      f.db.prepare("UPDATE business_tasks SET status='succeeded' WHERE task_id='task-1'").run()
+      f.db.prepare("UPDATE task_plan_stages SET status='succeeded',output_ref='proof/output.json',evidence_refs='[\"proof/result.json\"]' WHERE task_id='task-1'").run()
+      f.send('task.owner.event', { taskId: 'task-1', eventKey: 'finished', eventType: 'workflow.succeeded' })
+      f.send('task.owner.claim', { taskId: 'task-1', turnId: 'review', expectedLeaseEpoch: 0 })
+      f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: 'review', leaseEpoch: 1, sessionId: 'session-1' })
+      assert.throws(() => f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'review', leaseEpoch: 1,
+        decision: { action, summary: '等待具体条件', evidenceRefs: [] } }), { code: 'TASK_OWNER_CONDITION_REQUIRED' })
+      assert.equal(f.read('task.owner').candidate, null)
+      f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'review', leaseEpoch: 1,
+        decision: { action, summary: '等待字段规格', evidenceRefs: [], condition: businessCondition } })
+      f.send('task.owner.accept', { taskId: 'task-1', turnId: 'review', leaseEpoch: 1 })
+      f.send('task.owner.applied', { taskId: 'task-1', turnId: 'review', leaseEpoch: 1 })
+      assert.deepEqual(f.read('task.owner').decision.condition, businessCondition)
+      const facts = JSON.parse(f.db.prepare('SELECT facts_json FROM task_reports WHERE task_id=?').get('task-1').facts_json)
+      assert.deepEqual(facts.condition, businessCondition)
+      assert.equal(f.db.prepare('SELECT output_ref FROM task_plan_stages WHERE task_id=?').get('task-1').output_ref, 'proof/output.json')
+      f.send('task.owner.event', { taskId: 'task-1', eventKey: 'answer', eventType: 'intent.received' })
+      assert.equal(f.read('task.owner').status, 'pending')
+      assert.equal(f.read('task.owner').sessionId, 'session-1')
+    } finally { f.db.close() }
+  }
+})
+
+test('候选通过后证据变化仍由最终接纳拒绝，不标整体完成', () => {
+  const f = fixture()
+  try {
+    f.db.prepare("UPDATE business_tasks SET status='succeeded' WHERE task_id='task-1'").run()
+    f.db.prepare("UPDATE task_plan_stages SET status='succeeded',output_ref='proof/output.json',evidence_refs='[\"proof/result.json\"]' WHERE task_id='task-1'").run()
+    f.send('task.owner.event', { taskId: 'task-1', eventKey: 'finish', eventType: 'workflow.succeeded' })
+    f.send('task.owner.claim', { taskId: 'task-1', turnId: 'review', expectedLeaseEpoch: 0 })
+    f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: 'review', leaseEpoch: 1, sessionId: 'session-1' })
+    f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'review', leaseEpoch: 1,
+      decision: { action: 'complete', summary: '完成', evidenceRefs: ['proof/result.json'], assessments: [{ itemId: 'acceptance-1', status: 'satisfied', evidenceRefs: ['proof/result.json'] }] } })
+    f.db.prepare("UPDATE task_plan_stages SET evidence_refs='[]' WHERE task_id='task-1'").run()
+    assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'review', leaseEpoch: 1 }), { code: 'TASK_OWNER_COMPLETION_UNPROVEN' })
+    assert.equal(f.read('task.owner').decision, null)
+  } finally { f.db.close() }
+})
 test('迁移后的空要求 Task 可绑定原目标且不改写计划版本', () => {
   const db = new DatabaseSync(':memory:')
   try {
@@ -55,7 +98,7 @@ test('同一任务连续事件复用稳定会话，eventKey 重放不会多次�
     assert.equal(claim.sessionId, 'session-1')
     f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1, sessionId: 'session-1' })
     f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
-      decision: { action: 'wait', summary: '等待用户提供信息', evidenceRefs: [] } })
+      decision: { action: 'wait', condition: { kind: 'business-input', missing: '待确认业务定义', responsibleParty: '需求方', resumeWhen: '提供业务定义', evidenceRefs: [] }, summary: '等待用户提供信息', evidenceRefs: [] } })
     assert.equal(f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 }).status, 'accepted')
     assert.equal(f.read('task.owner').processedWatermark, first.eventSeq)
     assert.equal(f.read('task.owner').sessionId, 'session-1')
@@ -75,7 +118,7 @@ test('非完成候选不得提交正式清单引用', () => {
     f.send('task.owner.claim', { taskId: 'task-1', turnId: 'turn-1', expectedLeaseEpoch: 0 })
     f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1, sessionId: 'session-1' })
     f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
-      decision: { action: 'wait', summary: '等待执行', evidenceRefs: [] } })
+      decision: { action: 'wait', condition: { kind: 'business-input', missing: '待确认业务定义', responsibleParty: '需求方', resumeWhen: '提供业务定义', evidenceRefs: [] }, summary: '等待执行', evidenceRefs: [] } })
     assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
       deliveryManifestRef: `sha256-${'a'.repeat(64)}.json` }), { code: 'TASK_OWNER_DELIVERY_MANIFEST_INVALID' })
   } finally { f.db.close() }
@@ -96,10 +139,10 @@ test('新事件和版本变化使旧候选失效，旧租约不能提交', () =>
     f.send('task.owner.release', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 })
     f.send('task.owner.claim', { taskId: 'task-1', turnId: 'turn-2', expectedLeaseEpoch: 1 })
     assert.throws(() => f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
-      decision: { action: 'wait', summary: '旧决定', evidenceRefs: [] } }), { code: 'TASK_OWNER_LEASE_STALE' })
+      decision: { action: 'wait', condition: { kind: 'business-input', missing: '待确认业务定义', responsibleParty: '需求方', resumeWhen: '提供业务定义', evidenceRefs: [] }, summary: '旧决定', evidenceRefs: [] } }), { code: 'TASK_OWNER_LEASE_STALE' })
     f.db.prepare('UPDATE task_controls SET control_revision=control_revision+1 WHERE task_id=?').run('task-1')
     f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-2', leaseEpoch: 2,
-      decision: { action: 'wait', summary: '待处理', evidenceRefs: [] } })
+      decision: { action: 'wait', condition: { kind: 'business-input', missing: '待确认业务定义', responsibleParty: '需求方', resumeWhen: '提供业务定义', evidenceRefs: [] }, summary: '待处理', evidenceRefs: [] } })
     assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-2', leaseEpoch: 2 }),
       { code: 'TASK_OWNER_CANDIDATE_STALE' })
   } finally { f.db.close() }
@@ -111,7 +154,7 @@ test('重启恢复使运行中候选失效并重新排队，不丢事件', () =>
     f.send('task.owner.event', { taskId: 'task-1', eventKey: 'e1', eventType: 'task.created' })
     f.send('task.owner.claim', { taskId: 'task-1', turnId: 'turn-1', expectedLeaseEpoch: 0 })
     f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
-      decision: { action: 'wait', summary: '候选已落盘', evidenceRefs: [] } })
+      decision: { action: 'wait', condition: { kind: 'business-input', missing: '待确认业务定义', responsibleParty: '需求方', resumeWhen: '提供业务定义', evidenceRefs: [] }, summary: '候选已落盘', evidenceRefs: [] } })
     assert.deepEqual(recoverTaskOwners(f.db), { recovered: 1 })
     assert.equal(f.read('task.owner').status, 'pending')
     assert.equal(f.read('task.owner').processedWatermark, 0)
@@ -156,15 +199,15 @@ test('complete 仅接纳当前计划全部阶段具有产物与证据的成功�
     f.send('task.owner.event', { taskId: 'task-1', eventKey: 'e1', eventType: 'task.created' })
     f.send('task.owner.claim', { taskId: 'task-1', turnId: 'turn-1', expectedLeaseEpoch: 0 })
     f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1, sessionId: 'session-1' })
-    f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
+    assert.throws(() => f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
       decision: { action: 'complete', summary: '任务完成', evidenceRefs: ['proof/result.json'],
-        assessments: [{ itemId: 'acceptance-1', status: 'satisfied', evidenceRefs: ['proof/result.json'] }] } })
-    assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 }),
+        assessments: [{ itemId: 'acceptance-1', status: 'satisfied', evidenceRefs: ['proof/result.json'] }] } }),
       { code: 'TASK_OWNER_COMPLETION_UNPROVEN' })
     f.db.prepare("UPDATE business_tasks SET status='succeeded' WHERE task_id='task-1'").run()
-    assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 }),
-      { code: 'TASK_OWNER_COMPLETION_UNPROVEN' })
+    assert.throws(() => f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
+      decision: { action: 'complete', summary: '任务完成', evidenceRefs: ['proof/result.json'], assessments: [{ itemId: 'acceptance-1', status: 'satisfied', evidenceRefs: ['proof/result.json'] }] } }), { code: 'TASK_OWNER_COMPLETION_UNPROVEN' })
     f.db.prepare("UPDATE task_plan_stages SET status='succeeded',output_ref='proof/output.json',evidence_refs='[\"proof/result.json\"]' WHERE task_id='task-1'").run()
+    f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1, decision: { action: 'complete', summary: '任务完成', evidenceRefs: ['proof/result.json'], assessments: [{ itemId: 'acceptance-1', status: 'satisfied', evidenceRefs: ['proof/result.json'] }] } })
     assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
       deliveryManifestRef: 'tasks/task-1/not-a-digest.json' }), { code: 'TASK_OWNER_DELIVERY_MANIFEST_INVALID' })
     const deliveryManifestRef = `tasks/task-1/sha256-${'a'.repeat(64)}.json`
@@ -184,10 +227,9 @@ test('目标验收项必须逐项绑定真实阶段证据，新增目标使旧�
     f.send('task.owner.event', { taskId: 'task-1', eventKey: 'e1', eventType: 'workflow.succeeded' })
     f.send('task.owner.claim', { taskId: 'task-1', turnId: 'turn-1', expectedLeaseEpoch: 0 })
     f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1, sessionId: 'session-1' })
-    f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
+    assert.throws(() => f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
       decision: { action: 'complete', summary: '全部完成', evidenceRefs: ['proof/result.json'],
-        assessments: [{ itemId: 'acceptance-1', status: 'satisfied', evidenceRefs: ['proof/result.json'] }] } })
-    assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 }),
+        assessments: [{ itemId: 'acceptance-1', status: 'satisfied', evidenceRefs: ['proof/result.json'] }] } }),
       { code: 'TASK_OWNER_COMPLETION_UNPROVEN' })
   } finally { f.db.close() }
 })
@@ -286,24 +328,20 @@ test('已完成排查收到同任务新意图后可追加开发，重启保留�
   } finally { f.db.close() }
 })
 
-test('已完成计划缺少追加阶段或新意图时拒绝再次 advance', () => {
-  for (const [eventType, appendStages] of [
-    ['intent.received', undefined], ['workflow.succeeded', [{ workflowId: 'task-engineering', gate: 'none' }]],
-  ]) {
-    const f = fixture()
-    try {
-      f.db.prepare("UPDATE business_tasks SET status='succeeded' WHERE task_id='task-1'").run()
-      f.send('task.owner.event', { taskId: 'task-1', eventKey: 'event-1', eventType })
-      f.send('task.owner.claim', { taskId: 'task-1', turnId: 'turn-1', expectedLeaseEpoch: 0 })
-      f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1, sessionId: 'session-1' })
-      f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
-        decision: { action: 'advance', summary: '继续处理', evidenceRefs: [], ...(appendStages ? { appendStages } : {}) } })
-      assert.throws(() => f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 }),
-        { code: 'TASK_OWNER_ADVANCE_CONFLICT' })
-    } finally { f.db.close() }
-  }
+test('已完成计划无后续阶段时在候选提交前拒绝，合法追加不依赖新消息', () => {
+  const f = fixture()
+  try {
+    f.db.prepare("UPDATE business_tasks SET status='succeeded' WHERE task_id='task-1'").run()
+    f.send('task.owner.event', { taskId: 'task-1', eventKey: 'event-1', eventType: 'workflow.succeeded' })
+    f.send('task.owner.claim', { taskId: 'task-1', turnId: 'turn-1', expectedLeaseEpoch: 0 })
+    f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1, sessionId: 'session-1' })
+    assert.throws(() => f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
+      decision: { action: 'advance', summary: '继续处理', evidenceRefs: [] } }), { code: 'TASK_OWNER_ADVANCE_CONFLICT' })
+    f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1,
+      decision: { action: 'advance', summary: '继续调查', evidenceRefs: [], planChange: { kind: 'append', stages: [{ workflowId: 'task-investigation', gate: 'none' }] } } })
+    assert.equal(f.send('task.owner.accept', { taskId: 'task-1', turnId: 'turn-1', leaseEpoch: 1 }).status, 'accepted')
+  } finally { f.db.close() }
 })
-
 
 test('取消或暂停不再调度 Owner，恢复后保留未读事件', () => {
   for (const state of ['cancelled', 'cancelling', 'paused', 'pausing']) {

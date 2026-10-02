@@ -739,9 +739,9 @@ function command(value) {
         ||task.requirement_revision!==a.expectedRequirementRevision||task.control_revision!==a.expectedControlRevision)fail('TASK_OWNER_REASSESS_STALE')
       ref(a.payloadRef,'payloadRef');digest(a.requestDigest,'requestDigest')
       const invalidRepair=owner.last_failure==='WORKFLOW_REPAIR_NOT_ADMITTED' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='repairCurrentStage'").get(a.taskId,owner.lease_epoch) : null
-      if(task.state!=='active'||task.status==='succeeded'||!['idle','blocked'].includes(owner.status)||owner.current_turn_id
+      if(task.state!=='active'||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND requirement_revision=? AND plan_revision=? AND status='accepted' AND application_status='applied' AND json_extract(decision_json,'$.action')='complete' LIMIT 1").get(a.taskId,task.requirement_revision,task.plan_revision)||!['idle','blocked'].includes(owner.status)||owner.current_turn_id
         ||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,invalidRepair?.turn_id??'')
-        ||!db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND workflow_id='task-investigation' AND status IN ('failed','waiting')").get(a.taskId)
+        ||!db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND workflow_id='task-investigation' AND status IN ('failed','waiting','succeeded')").get(a.taskId)
         ||db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND (workflow_id<>'task-investigation' OR status NOT IN ('failed','waiting','succeeded'))").get(a.taskId)
         ||db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
         ||db.prepare("SELECT 1 FROM execution_inputs i JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND i.status='pending'").get(a.taskId)

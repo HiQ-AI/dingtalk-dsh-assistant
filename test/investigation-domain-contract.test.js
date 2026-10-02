@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createInvestigationWorkflow, createLegacyInvestigationWorkflow, validateInvestigationResult, validateAgentWorkResult, createInvestigationStageContract } from '../packages/dingtalk-dsh-assistant/agent-work.js'
+import { createInvestigationWorkflow, createInvestigationWorkflowV7, createInvestigationWorkflowV6, createLegacyInvestigationWorkflow, validateInvestigationResult, validateAgentWorkResult, createInvestigationStageContract } from '../packages/dingtalk-dsh-assistant/agent-work.js'
 import { defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { createGeneralCapabilityStepWorkflow, verifyTaskAcceptance } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
@@ -17,11 +17,19 @@ const result = () => ({ outcome: 'completed', summary: '已定位；修复待后
 const options = { provider: 'fixture', model: 'fixture', allowedTools: ['query'], capabilityIdentity: 'query-v1',
   verifyResult: async ({ result: value }) => validateAgentWorkResult(value, { sourceRefs: ['source-a'], verifyEvidence: async () => false }) }
 
-test('v5 冻结定义保留历史 digest，新运行 v6 维持原预算', () => {
+test('v5/v6/v7 冻结定义保留历史 digest，新运行 v8 核验全部成功查询且维持原预算', () => {
   const old = defineExecutionWorkflow(createLegacyInvestigationWorkflow(options))
-  assert.equal(old.digest, '62b750dda434456907624168d6acb58aa974d223582dd8ceb2c6d53a2faaf81a')
+  assert.equal(old.digest, 'f996f51dcbc56f7b7799a95088e3ce894792006dba731ded669e27b43b5cb673')
   const current = defineExecutionWorkflow(createInvestigationWorkflow(options))
-  assert.equal(current.version, '6')
+  assert.equal(current.version, '8')
+  const v7=defineExecutionWorkflow(createInvestigationWorkflowV7(options))
+  assert.equal(v7.version,'7');assert.notEqual(v7.digest,current.digest)
+  const frozen=defineExecutionWorkflow(createInvestigationWorkflowV6(options))
+  assert.equal(frozen.version,'6')
+  assert.equal(frozen.digest,'74aa6a8220bc45b46db463fbf10d006ab8dd4ef51fd7806ed3a1d763c5b63cee')
+  assert.notEqual(current.digest,frozen.digest)
+  assert.equal(current.nodes[0].classifyOutputError({code:'AGENT_WORK_COVERAGE_INCOMPLETE'}),'correctable')
+  assert.equal(frozen.nodes[0].classifyOutputError({code:'AGENT_WORK_COVERAGE_INCOMPLETE'}),'fatal')
   assert.notEqual(current.digest, old.digest)
   assert.equal(current.nodes[0].maxSteps, old.nodes[0].maxSteps)
   assert.equal(current.nodes[0].timeoutMs, old.nodes[0].timeoutMs)

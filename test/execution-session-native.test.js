@@ -17,6 +17,10 @@ import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-js
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createExecutionSessions } from '../packages/dingtalk-dsh-assistant/execution-session.js'
+import { createAgentQueryTools, verifyAgentEvidence, readExecutedAgentQueryRefs } from '../packages/dingtalk-dsh-assistant/agent-query-tools.js'
+import { createAgentResourceReadCapability } from '../packages/dingtalk-dsh-assistant/agent-query-resources.js'
+import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { validateAgentWorkResult, agentWorkResultSchema, createInvestigationWorkflow } from '../packages/dingtalk-dsh-assistant/agent-work.js'
 
 const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
@@ -97,6 +101,27 @@ async function processPhase(root, phase) {
 if (process.argv[2] === '--execution-session-child') {
   await processPhase(process.argv[3], process.argv[4])
 } else {
+  test('原生成功查询不能只引用原消息省略调查证据，当前会话纠正且JSONL可重建查询集合', async t => {
+    const root=await temp(),artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true})
+    const capability=createAgentResourceReadCapability({resources:[{id:'source',kind:'files',root,paths:['fixture.txt']}]})
+    const scope={resourceIds:['source']},[tool]=createAgentQueryTools({capabilities:[capability],resolveScope:async()=>scope,artifacts})
+    let queryRef,checks=0,accepted=0
+    const query={...tool,execute:async args=>{const value=await tool.execute(args);queryRef=value.evidenceRef;return value}}
+    const base={outcome:'completed',summary:'已读取文件事实',evidenceRefs:['dws-source'],limitations:[],question:''}
+    const h=await host({root,tools:[query],script:n=>n===1?{name:tool.name,args:{resourceId:'source',operation:'read',path:'fixture.txt'}}
+      :{name:'execution_node_submit',args:{output:n===2?base:{...base,evidenceRefs:['dws-source',queryRef]}}}})
+    t.after(()=>h.close())
+    const d=definition({allowedTools:[tool.name],outputSchema:agentWorkResultSchema})
+    const classifier=createInvestigationWorkflow({provider:'fixture',model:'fixture',allowedTools:[tool.name],capabilityIdentity:capability.identity,verifyResult:async()=>{}}).nodes[0].classifyOutputError
+    const run=await drive(h,{definition:d,classifyOutputError:classifier,validateOutput:async value=>{
+      checks++;const refs=readExecutedAgentQueryRefs(h.ctx.sessions.get(binding().sessionId).snapshotEvents(),[tool.name]);assert.deepEqual(refs,[queryRef])
+      await validateAgentWorkResult(value,{sourceRefs:['dws-source'],requireCompleteCoverage:true,requireExecutedQueryAccounting:true,executedQueryRefs:refs,
+        readEvidence:ref=>artifacts.read(ref),verifyEvidence:async values=>{await verifyAgentEvidence({refs:values,binding:binding(),scope,artifacts});return true}})
+    },onResult:()=>{accepted++}})
+    assert.equal(run.status,'submitted');assert.equal(checks,2);assert.equal(accepted,1);assert.equal(h.requests.length,3)
+    assert.deepEqual(readExecutedAgentQueryRefs((await h.ctx.sessionPersistence.inspect(binding().sessionId)).events,[tool.name]),[queryRef])
+    assert.deepEqual(readExecutedAgentQueryRefs((await h.ctx.sessionPersistence.inspect(binding().sessionId)).events,['unrelated-tool']),[])
+  })
   test('原生工具缺失路径为结构化结果，不停止queued读取；模型list纠正后能提交', async t => {
     const calls=[],inspect=args=>({name:'engineering_repo_inspect',args})
     const h=await host({script:[[inspect({operation:'read',path:'src/components/Panel.vue'}),inspect({operation:'read',path:'src/other.vue'})],

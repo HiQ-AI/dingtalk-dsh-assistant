@@ -7,7 +7,7 @@
 ## 已实现能力
 
 - `query_project_resource`：登记的文件根与路径、或指定 Git 提交。list、search、read；没有终端/任意命令；目录不跟随链接、拒绝 .git/.secrets/.env/私钥路径。read 上限16000字符，search每页最多200文件/4MiB，nextOffset 为文件序号；truncatedFile 表示需继续 read 该文件。仅常见凭据字段做遮盖，Host 仍必须登记可读范围，不能以遮盖代替敏感数据授权；最终对外回复遵循业务数据红线，不直接转发源码或日志。
-- `query_readonly_database`：登记逻辑连接、schema/table/columns；结构化 tables、columns、select 与参数化条件，不接受 SQL/表达式/连接串。默认每次检查真实角色、目标 schema CREATE/表写权限与数据库侧只读事务。显式 `environment: uat` 加 `identityPolicy: host-enforced-readonly` 时，可由 Host 使用用户指定的现有 UAT 账号，仍逐次验证只读事务；其他环境不得启用该模式。两种模式都限定8秒语句超时、最多100行/24KiB，最终 rollback。连接配置仅Host从本机 secrets 读取。
+- `query_readonly_database`：登记逻辑连接、schema/table/columns；结构化 tables、columns、constraints、indexes、dependencies、table_stats、select 与参数化条件，不接受 SQL/表达式/连接串。默认每次检查真实角色、目标 schema CREATE/表写权限与数据库侧只读事务。显式 `environment: uat` 加 `identityPolicy: host-enforced-readonly` 时，可由 Host 使用用户指定的现有 UAT 账号，仍逐次验证只读事务；其他环境不得启用该模式。两种模式都限定8秒语句超时、最多100行/24KiB，最终 rollback。连接配置仅Host从本机 secrets 读取。columns 返回类型长度、默认值、可空、identity/generated；元数据操作只访问已登记 metadataSchemas，select 仍受表/列白名单约束。dependencies 是目录直接依赖，table_stats 是估算规模，不能当作完整业务依赖或精确行数。生产查询逐次核验副本身份。
 - `query_runtime_status`：Host 固定GET URL及标量字段白名单，不接受模型URL、禁止重定向，5秒/64KiB限制。日志/配置文本由明确登记的 file 资源读取；不要登记含凭据的完整 profile。
 
 ## 配置与授权
@@ -25,3 +25,7 @@
 返回运行镜像tag/imageID digest、Pod就绪/重启、部署generation与resourceVersion；查询末尾重查Deployment，变化则拒绝。配置仅投影容器端口和cpu/memory/ephemeral-storage requests/limits；不输出env、Secret、ConfigMap或完整YAML。日志每容器固定最近10分钟/最多200行/32KiB，输出时间、WARN/ERROR等级、异常类、Java代码位置与计数，绝不返回原始正文/请求参数。最多8 Pod、每Pod4容器。当前无经过核验的业务消息模板，`messageTemplatesSupported=false`，不能据此声称支持完整日志根因排查。空窗口或无错误匹配不证明服务无错误。
 
 部署版以真实Pod imageID为准，未映射Git证据时不猜提交SHA；K8s Ready不等于业务验收。`skipTlsVerify`沿用已有客户端的显式配置，新增环境优先配置可信CA；此选项不由模型选择。登记、配置写入和真实查询必须分别核对，不以存在资源提案代替已接入。
+
+## 调查覆盖合同
+
+新建 investigation v8 从原生 tool/call 与 tool/result 重建本轮已成功查询集合，完成交付须逐项引用或显式排除；不能只引用原群消息绕过实际查询核验。引用同一查询从 offset=0 到 nextOffset=null 的连续证据；search 的截断文件须引用相同文件摘要的完整 read。无关查询可在 coverageExclusions 中明确引用并说明排除理由。Host 在结果验证时检查覆盖，缺页反馈为 AGENT_WORK_COVERAGE_INCOMPLETE，不能只凭结论自称调查完整。旧 v5/v6/v7 使用原冻结定义恢复，不套用新合同。
