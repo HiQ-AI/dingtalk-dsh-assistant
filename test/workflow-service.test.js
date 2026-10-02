@@ -1870,6 +1870,7 @@ test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入�
  const server=createServer((req,res)=>handleRequest(req,res,runtime));await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)))
  const post=(action,body,origin)=>fetch(`http://127.0.0.1:${server.address().port}/tasks/${original.taskId}/${action}`,{method:'POST',headers:{'content-type':'application/json',...(origin?{origin}:{})},body:JSON.stringify(body)})
  const task=(await service.tasks())[0],input={requestId:'web-context-1',inputVersion:task.inputVersion,runSequence:1,context:'追加检查中文格式',topicRefs:[]}
+ const acceptanceBefore=await execution.store.query({kind:'task.owner.acceptance',taskId:task.taskId})
  assert.equal((await post('context',input,'https://evil.example')).status,403)
  assert.equal((await post('context',{...input,actorId:'owner'})).status,400)
  await assert.rejects(service.submitWebTask({...input,action:'context',taskId:task.taskId},{channel:'web',actorId:'attacker'}),/FORBIDDEN/)
@@ -1878,6 +1879,7 @@ test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入�
  assert.equal((await post('context',{...input,context:'冲突内容'})).status,409)
  let state=await execution.controller.state(original.runId);assert.equal(state.pendingInputCount,0);assert.equal(state.run.pauseRequested,true)
  const revisedPlan=await execution.controller.taskPlan(task.taskId)
+ assert.deepEqual(await execution.store.query({kind:'task.owner.acceptance',taskId:task.taskId}),acceptanceBefore)
  assert.equal(revisedPlan.task.requirementRevision,2)
  assert.match((await execution.artifacts.read(revisedPlan.task.requirementRef)).request,/追加检查中文格式/u)
  assert.equal((await execution.artifacts.read(state.run.requirementRef)).request,'整理本条材料')
@@ -1914,6 +1916,7 @@ test('已有Task成功调查但Owner等待时经本机上下文修订目标和�
   const task = (await service.tasks())[0]
   const original = await execution.controller.taskPlan(task.taskId)
   const originalInput = await execution.artifacts.read(original.task.requirementRef)
+  const originalAcceptance = await execution.store.query({ kind: 'task.owner.acceptance', taskId: task.taskId })
   release(); await execution.controller.whenIdle(original.stages[0].runId); await service.recover()
   const completedStage = await execution.controller.taskPlan(task.taskId)
   assert.equal(completedStage.stages[0].status, 'succeeded')
@@ -1939,6 +1942,16 @@ test('已有Task成功调查但Owner等待时经本机上下文修订目标和�
   const goal = await execution.artifacts.read(revisedPlan.task.requirementRef)
   assert.equal(goal.objective, revision.objective)
   assert.deepEqual(goal.acceptanceCriteria, revision.acceptanceCriteria)
+  const revisedAcceptance = await execution.store.query({ kind: 'task.owner.acceptance', taskId: task.taskId })
+  assert.deepEqual(revisedAcceptance.map(item => item.criterion), revision.acceptanceCriteria)
+  assert.ok(revisedAcceptance.every(item => item.sourceKey === goal.authorization.sourceKey))
+  assert.ok(revisedAcceptance.every(item => !originalAcceptance.some(old => old.itemId === item.itemId)))
+  const readback = new DatabaseSync(join(execution.artifacts.root, '..', 'control.db'), { readOnly: true })
+  try {
+    const history = readback.prepare('SELECT item_id,criterion,active FROM task_acceptance_items WHERE task_id=? ORDER BY rowid').all(task.taskId)
+    assert.equal(history.length, originalAcceptance.length + revisedAcceptance.length)
+    for (const item of originalAcceptance) assert.deepEqual({ ...history.find(row => row.item_id === item.itemId) }, { item_id: item.itemId, criterion: item.criterion, active: 0 })
+  } finally { readback.close() }
   assert.deepEqual(goal.sourceInstructions.slice(0, -1), originalInput.sourceInstructions)
   const source = await execution.store.query({ kind: 'task.source', sourceKey: goal.authorization.sourceKey })
   assert.equal(source.body, input.context); assert.equal(source.actorId, 'owner'); assert.equal(source.channel, 'web')

@@ -12,6 +12,8 @@ import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, q
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
 import { transientRecoveryReasons, recoveryRetryDelayMs } from './execution-recovery-policy.js'
+import { acceptanceCriteriaSchema } from './task-input-contract.js'
+import { executionDigest, parseArtifactReference } from './execution-artifacts.js'
 
 const SCHEMA_VERSION = 7
 const APPLICATION_ID = 0x44534845
@@ -788,7 +790,32 @@ function command(value) {
         ['taskId', 'expectedRequirementRevision', 'requirementRef', 'eventKey'])
       const { taskId, expectedRequirementRevision, requirementRef, eventKey, payloadRef } = value.args
       if (db.prepare('SELECT 1 FROM task_events WHERE event_key=?').get(eventKey)) fail('TASK_OWNER_EVENT_CONFLICT')
+      // 只有真实待处理的人工结构化修订能替换验收；普通上下文追加保持原验收。
+      const webEventId = eventKey.startsWith('web:') ? eventKey.slice(4) : null
+      const webEvent = webEventId ? webTaskEvent(webEventId) ?? queryMessages(db, { kind: 'message.web-task', eventId: webEventId }) : null
+      const revision = webEvent?.request?.requirement
+      if (revision) {
+        const sourceKey = `web-context:${webEventId}`
+        if (webEvent.status !== 'pending' || webEvent.request.action !== 'context' || webEvent.request.taskId !== taskId
+          || webEvent.request.inputVersion !== expectedRequirementRevision + 1
+          || !acceptanceCriteriaSchema.safeParse(revision.acceptanceCriteria).success
+          || !webEvent.input || webEvent.input.request !== revision.objective || webEvent.input.objective !== revision.objective
+          || canonical(webEvent.input?.acceptanceCriteria) !== canonical(revision.acceptanceCriteria)
+          || webEvent.input?.authorization?.channel !== 'web' || webEvent.input.authorization.sourceKey !== sourceKey
+          || webEvent.input.authorization.actorId !== webEvent.actorId
+          || webEvent.input.authorization.requestId !== webEvent.request.requestId
+          || !webEvent.input.scope?.sourceKeys?.includes(sourceKey)
+          || parseArtifactReference(requirementRef).digest !== executionDigest(webEvent.input)) fail('TASK_WEB_REQUIREMENT_INVALID')
+      }
       const updated = reduceTaskPlanCommand(db, { kind: 'task.requirement.update', args: { taskId, expectedRequirementRevision, requirementRef } }, context(value.id, now))
+      if (revision) {
+        const sourceKey = `web-context:${webEventId}`
+        const itemPrefix = `acceptance-${expectedRequirementRevision + 1}-${executionDigest(sourceKey).slice(0, 24)}`
+        db.prepare('UPDATE task_acceptance_items SET active=0 WHERE task_id=? AND active=1').run(taskId)
+        for (const [index, criterion] of revision.acceptanceCriteria.entries())
+          db.prepare('INSERT INTO task_acceptance_items(task_id,item_id,criterion,source_key) VALUES(?,?,?,?)')
+            .run(taskId, `${itemPrefix}-${index + 1}`, criterion, sourceKey)
+      }
       const event = reduceTaskOwnerCommand(db, { kind: 'task.owner.event', args: { taskId, eventKey, eventType: 'intent.received', payloadRef: payloadRef ?? requirementRef } }, context(value.id, now))
       combined = { ...updated, eventSeq: event.eventSeq }
     }

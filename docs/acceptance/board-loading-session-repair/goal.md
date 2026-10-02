@@ -73,3 +73,5 @@ Agent工作区D:/baibu-agent，运行profile D:/dsh_home/profiles/web，API18998
 真实运行反证：原Task context修订被末调查Run终态校验拒绝（RUN_TERMINAL），原生审批等待代码未纳入服务自动对账路由。两个生命周期同因缺口正在定向修复；第一包部署健康不等于业务接续完成。
 
 生命周期修正验证：原Task调查Run成功但Owner等待可修订，真complete/取消拒绝定向5项通过；审批自动对账和旧恢复屏障13项、原生批准/驳回/两轮重审3项通过。准备第二包精确部署及原Task实际送审。
+
+第二包独立安装/Resume通过，PID19660健康。当前闭环点为明确requirement修订与Owner活动验收一致性（真实测试已红复现）；原Task仍revision1，不重复发送已拒绝事件，也不改写线上SQLite。

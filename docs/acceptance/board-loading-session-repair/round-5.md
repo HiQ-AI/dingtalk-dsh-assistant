@@ -11,3 +11,7 @@
 群消息：两条错误调查/业务规格等待说明已撤回。独立在默认近七天的原群精确搜索两个特有正文，均 complete=true、count=0、failedCount=0；消息详情保留历史正文，不将其误判为未撤回。未发送重复开始通知。
 
 部署维护解除已独立回读 ready=true、recoveryIssueCount=0。原 Task 修订入口发现 RUN_TERMINAL：消息来源入口错误地以末个调查 Run 成功等同 Task 业务完成。原生审批的新等待原因还缺自动恢复路由，两项正在修复，不能以完整服务旧测试全绿替代真实接续验收。
+
+修复反证后：业务终态与Owner等待context定向6项、Service原生审批自动对账及既有恢复/控制屏障13项、原生审批两轮修订3项通过。第二精确包SHA256 9f8cdc347312af1de66f16612329662cfa8b11f295906affab0cc1ffd1d3b0c5，100文件独立校验，PID19660，Resume ready=true。稍后health=ok、inboundProcessing=true。
+
+新增真实红复现：明确需求修订目标后，Owner active验收仍为旧要求。普通补充语义应保留验收，明确替换须原子更新活动验收；原Task仍revision1，尚未接纳新指令，不迁移历史或直接改线上SQLite。
