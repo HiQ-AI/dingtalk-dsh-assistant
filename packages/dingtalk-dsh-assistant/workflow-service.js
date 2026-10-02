@@ -24,7 +24,7 @@ import { taskWorkflowCatalog, messageAnswerArguments, candidateCards, referenced
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText, groupStatusText, groupActionText, taskDecisionConditionText } from './workflow-notifications.js'
 import { createEngineeringStageContract, createEngineeringRegistry, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
 import { createDataChangeTaskWorkflow, createDataChangeApprovalResumeWorkflow, createDataChangeTaskWorkflowV5, createDataChangeTaskWorkflowV4, createLegacyDataChangeTaskWorkflow } from './workflow-data-change.js'
-import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, nativeDataChangeOwnerContract } from './task-release-workflows.js'
+import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, nativeDataChangeOwnerContract, createNativeDataChangeCompletionPolicy } from './task-release-workflows.js'
 import { createUatPrMergeTaskWorkflow, createUatPrMergeTaskWorkflowV2, createLegacyUatPrMergeTaskWorkflow, createMainPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
 import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
@@ -442,7 +442,7 @@ function createExternalRegistry(external, selected) {
   const workflows = [], records = new Map(), byId = new Map()
   const add = (workflow, adapter, modelConfig = null) => {
     if (catalogById.get(workflow.id)?.mode !== 'external' || byId.has(workflow.id)) throw executionError('EXTERNAL_WORKFLOW_CATALOG_MISMATCH')
-    workflow = { ...workflow, ownerContract: workflow.id === 'task-data-change-approval-resume' || workflow.id === 'task-data-change' && ['4', '5', '6'].includes(workflow.version) ? nativeDataChangeOwnerContract : externalWorkflowOwnerContract }
+    workflow = { ...workflow, ownerContract: workflow.id === 'task-data-change-approval-resume' || workflow.id === 'task-data-change' && ['4', '5', '6'].includes(workflow.version) ? createNativeDataChangeCompletionPolicy(adapter) : externalWorkflowOwnerContract }
     const definition = defineExecutionWorkflow(workflow)
     const config = { ownerContractVersion: workflow.ownerContract.version, kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
       rulesDigest: adapter.rulesDigest, ...(modelConfig ? { modelConfig } : {}) }
@@ -629,9 +629,28 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   const stepCapabilities = capabilities.filter(item => item.effectClass === 'file.write')
   const acceptanceModel = modelConfig()
   const domainAcceptanceCheck = createDomainAcceptanceCheck({ llm: ctx.llm, modelConfig: acceptanceModel })
+  const ownerAcceptanceInputs = new WeakSet()
   const completionCheck = generalCompletionCheck ?? (async (input, context) => {
     const deterministic = await verifyDefaultGeneralCompletion(input)
-    return deterministic.status === 'satisfied' ? deterministic : domainAcceptanceCheck(input, context)
+    if (deterministic.status === 'satisfied') return deterministic
+    const acceptanceInput = ownerAcceptanceInputs.has(input) ? input : { ...input,
+      evidence: input.evidence.map(({ hostExecution, ...evidence }) => evidence) }
+    const assessment = await domainAcceptanceCheck(acceptanceInput, context)
+    // 调用故障是系统错误，不能折叠成业务证据不足并要求人工补证明。
+    if (assessment.reason && ownerAcceptanceInputs.has(input)) throw executionError(assessment.reason)
+    if (assessment.status !== 'satisfied' && ownerAcceptanceInputs.has(input)) {
+      const taskIds = [...new Set(input.evidence.map(item => item.hostExecution?.taskId).filter(Boolean))]
+      if (taskIds.length !== 1) throw executionError('DOMAIN_ACCEPTANCE_INPUT_INVALID')
+      const diagnostic = await artifacts.put({ kind: 'domain-acceptance-rejection', version: 1,
+        taskId: taskIds[0], assessment, request: input.request, acceptanceItems: input.acceptanceItems,
+        evidence: input.evidence, report: input.report }, { taskId: taskIds[0], reference: input.evidence[0].evidenceId })
+      const failed = assessment.criteria.filter(item => !item.passed)
+        .map(item => `${item.criterion}${item.reason ? `（${item.reason}）` : ''}`).join('；').slice(0, 1600)
+      throw Object.assign(executionError('TASK_OWNER_COMPLETION_UNVERIFIED',
+        `领域验收实际判定：${assessment.status}${failed ? `；未满足：${failed}` : ''}。原始验收结果与证据：${diagnostic.ref}`),
+      { diagnosticRef: diagnostic.ref })
+    }
+    return assessment
   })
   const completionIdentity = generalCompletionIdentity ?? executionDigest({ policy: 'domain-items-v1', model: acceptanceModel,
     native: createDomainAcceptanceCheck.toString(), deterministic: verifyDefaultGeneralCompletion.toString() })
@@ -784,6 +803,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         if (saved.ownerContractVersion === '1') previous = { ...previous, ownerContract: legacyExternalWorkflowOwnerContract }
         else if (saved.ownerContractVersion === '2') previous = { ...previous, ownerContract: externalWorkflowOwnerContract }
         else if (saved.ownerContractVersion === '3' && ['task-data-change', 'task-data-change-approval-resume'].includes(record.workflowId)) previous = { ...previous, ownerContract: nativeDataChangeOwnerContract }
+        else if (saved.ownerContractVersion === '4' && ['task-data-change', 'task-data-change-approval-resume'].includes(record.workflowId)) previous = { ...previous, ownerContract: createNativeDataChangeCompletionPolicy(adapter) }
         else if (saved.ownerContractVersion !== undefined) throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
         if (previous.version !== record.definitionVersion || ![defineExecutionWorkflow(previous).digest, ...defineExecutionWorkflow(previous).legacyDigests].includes(record.digest))
           throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
@@ -1376,9 +1396,17 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     withAcceptanceIdentity(externalWorkflowOwnerContract), fileWorkflow && withAcceptanceIdentity(fileWorkflow.ownerContract)]
     .filter(Boolean).map(policy => [policy.id, policy]))
   const ownerContracts = createTaskWorkflowContracts({ store, artifacts, controller, prepareRepairContext: engineering.prepareRepairContext,
-    completionPolicy: contract => contract.id === 'agent-investigation-result' && contract.version === '1'
-      ? withAcceptanceIdentity(createLegacyInvestigationCompletionPolicy(contract)) : completionPolicies.get(contract.id) ?? contract,
-    verifyAcceptance: context => verifyTaskAcceptance({ ...context, check: completionCheck }),
+    completionPolicy: (contract, context) => {
+      if (contract.id === 'external-result' && ['3', '4'].includes(contract.version)
+        && ['task-data-change', 'task-data-change-approval-resume'].includes(context?.state?.run?.workflowId))
+        return withAcceptanceIdentity(createNativeDataChangeCompletionPolicy(selectedExternal.byId.get(context.state.run.workflowId)?.adapter))
+      return contract.id === 'agent-investigation-result' && contract.version === '1'
+        ? withAcceptanceIdentity(createLegacyInvestigationCompletionPolicy(contract)) : completionPolicies.get(contract.id) ?? contract
+    },
+    verifyAcceptance: context => verifyTaskAcceptance({ ...context, check: (input, options) => {
+      ownerAcceptanceInputs.add(input)
+      return completionCheck(input, options)
+    } }),
     validateFiles: (files, scope) => managedFiles.validateManifest(files, scope), verifyFileDelivery: verifyRequiredFileDelivery })
   const { inspectCurrentExecution, repairCurrentStage, readStageArtifacts } = ownerContracts
   taskOwner = createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig,

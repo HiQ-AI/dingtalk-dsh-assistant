@@ -20,6 +20,61 @@ const prepared = { package: pkg, rehearsal: { adapterId: 'bytebase', adapterVers
   receiptId: 'uat-run-1', packageDigest: pkg.validation.packageDigest,
   uat: true, passed: true, observedChange: 'v=2' } }
 
+test('完成回查绑定冻结审批 SQL 与当前工单，仅使用只读端口且拒绝漂移及未完成事实', async () => {
+  let bundle, taskFailed = false, reads = 0
+  const f = fixture({ api: {
+    async getIssueBundle() { reads++; return bundle },
+    async getTaskExecution() { return { task: { ...bundle.task, status: taskFailed ? 'FAILED' : 'DONE' },
+      taskRun: { id: 'task-run-1', taskId: bundle.task.id, status: taskFailed ? 'FAILED' : 'DONE' } } },
+    async createIssueBundle() { assert.fail('完成回查不得创建工单') },
+    async activateRollout() { assert.fail('完成回查不得发布') },
+    async runTask() { assert.fail('完成回查不得执行 SQL') },
+  } })
+  f.issue.operationKey = sha('original-creation')
+  const requestId = 'approval-1'
+  const scopeDigest = executionDigest({ runId: 'run-1', generation: 1, issueId: f.issue.id,
+    planId: f.plan.id, sheetId: f.sheet.id, target, sheetSha256: pkg.applySqlSha256,
+    packageDigest: pkg.validation.packageDigest })
+  const operationKey = executionDigest({ stage: 'execute-task', packageDigest: pkg.validation.packageDigest,
+    issueId: f.issue.id, approvalRequestId: requestId })
+  const view = { prepared, issue: { id: f.issue.id, planId: f.plan.id }, sheet: f.sheet, plan: f.plan,
+    approval: { decision: 'approved', source: 'assistant', human: true, decidedBy: 'reviewer', requestId,
+      issueId: f.issue.id, planId: f.plan.id, sheetId: f.sheet.id, target,
+      sheetSha256: pkg.applySqlSha256, packageDigest: pkg.validation.packageDigest, scopeDigest } }
+  const request = { workflowKind: 'data-change', stage: 'execute-task', runId: 'run-1', generation: 1,
+    requirementDigest: sha('requirement'), packageDigest: pkg.validation.packageDigest,
+    applySqlSha256: pkg.applySqlSha256, target, approvalRequestId: requestId,
+    intent: { project: 'projects/app', target, packageDigest: pkg.validation.packageDigest,
+      applySqlSha256: pkg.applySqlSha256, issueId: f.issue.id, planId: f.plan.id, sheetId: f.sheet.id,
+      approvalRequestId: requestId, approvalScopeDigest: scopeDigest, applySql,
+      issueCreationOperationKey: f.issue.operationKey, executeOperationKey: operationKey, operationKey } }
+  const receipt = { status: 'succeeded', result: { taskId: f.task.id } }
+  const original = { issue: f.issue, sheet: f.sheet, plan: f.plan, task: { ...f.task, status: 'DONE' } }
+  bundle = structuredClone(original)
+  const digestBefore = f.workflowAdapter.rulesDigest
+  const result = await f.workflowAdapter.readCompletion({ request, receipt, view })
+  assert.equal(result.applySql, applySql)
+  assert.equal(result.task.status, 'DONE')
+  assert.equal(result.taskRun.status, 'DONE')
+  assert.equal(result.production.passed, true)
+  assert.equal(f.workflowAdapter.rulesDigest, digestBefore)
+  assert.equal(reads, 1)
+  assert.deepEqual(f.calls, ['verify'])
+  for (const change of [b => { b.sheet.sha256 = sha('different SQL') },
+    b => { b.sheet.target.database = 'instances/prod/databases/other' },
+    b => { b.issue.id = 'projects/app/issues/other' }, b => { b.plan.id = 'projects/app/plans/other' },
+    b => { b.sheet.id = 'projects/app/sheets/other' }, b => { b.sheet.project = 'projects/other' },
+    b => { b.issue.operationKey = sha('other creation') }, b => { b.issue.packageDigest = sha('other package') },
+    b => { delete b.sheet.project }]) {
+    bundle = structuredClone(original); change(bundle)
+    await assert.rejects(f.workflowAdapter.readCompletion({ request, receipt, view }),
+      { code: 'BYTEBASE_COMPLETION_IDENTITY_UNCONFIRMED' })
+  }
+  bundle = structuredClone(original); taskFailed = true
+  await assert.rejects(f.workflowAdapter.readCompletion({ request, receipt, view }), { code: 'BYTEBASE_TASK_RUN_FAILED' })
+  assert.deepEqual(f.calls, ['verify'])
+})
+
 function fixture(options = {}) {
   const calls = []
   let rehearsalResult = null

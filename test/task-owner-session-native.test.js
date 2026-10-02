@@ -15,10 +15,81 @@ import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-js
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createTaskOwnerSessions } from '../packages/dingtalk-dsh-assistant/task-owner-session.js'
+import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
+import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
+import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
+import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 
 const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
+
+test('真实原生AgentLoop返回克隆complete仍接纳原已验回执', async t => {
+  for (const mode of ['clone', 'diagnostic', 'foreign-diagnostic']) await t.test(mode, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-native-completion-'))
+  const store = await openExecutionStore({ dbPath: join(root, 'control.sqlite'), instanceId: 'native-completion', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const requirement = { request: '交付核验结论', acceptanceCriteria: ['结论已核验'], constraints: [], scope: {} }
+  const workflow = { id: 'proof-report', version: '1', ownerContract: { id: 'proof-result', version: '1', validateCompletion: () => true },
+    nodes: [{ id: 'report', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: { type: 'object' }, outputSchema: { type: 'object' },
+      mapInput: ({ requirement }) => requirement, execute: async () => ({ summary: '结论已核验' }) }] }
+  const controller = createExecutionController({ store, artifacts, workflows: [workflow] })
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'native-task', stages: [{ stageId: 'report', workflowId: workflow.id, input: requirement }] })
+  let plan = await controller.advanceTaskPlan('native-task')
+  await controller.whenIdle(plan.stages[0].runId)
+  plan = await controller.advanceTaskPlan('native-task')
+  const ref = plan.stages[0].outputRef
+  const candidate = { action: 'complete', summary: '结论已核验', evidenceRefs: [ref],
+    assessments: [{ itemId: 'acceptance-1', status: 'satisfied', evidenceRefs: [ref] }] }
+  const diagnostic = await artifacts.put({ kind: 'domain-acceptance-rejection', taskId: mode === 'foreign-diagnostic' ? 'other' : 'native-task',
+    assessment: { status: 'unverified', criteria: [{ criterion: '结论已核验', passed: false, reason: '核验原执行记录' }] },
+    evidence: [{ evidenceId: ref, hostExecution: { taskId: 'native-task', runId: plan.stages[0].runId } }] })
+  const h = await host(root, null, mode === 'clone' ? null : step => step === 2 ? diagnostic.ref : null, candidate, undefined, 2)
+  const helpers = createTaskWorkflowContracts({ store, artifacts, controller })
+  let submittedDecision, returnedDecision
+  const sessionRunner = { async run(options) {
+    const result = await h.sessions.run({ ...options, onCandidate: async decision => {
+      submittedDecision = decision
+      return options.onCandidate(decision)
+    } })
+    returnedDecision = result.decision
+    return result
+  }, close: () => h.sessions.close() }
+  let checks = 0
+  const owner = createTaskOwnerController({ ctx: {}, store, artifacts, controller, sessionRunner,
+    modelConfig: () => ({ provider: 'owner-fixture', model: 'scripted' }), advanceTask: async () => {}, authorizeStages: async () => false,
+    authorizeCompletion: async ({ taskId, decision }) => {
+      if (++checks === 1 && mode !== 'clone') throw Object.assign(new Error('实际验收未核验，读取原始诊断'),
+        { code: 'TASK_OWNER_COMPLETION_UNVERIFIED', diagnosticRef: diagnostic.ref })
+      return helpers.authorizeCompletion({ taskId, decision, requirement, plan: await controller.taskPlan(taskId) })
+    },
+    readDeliveryManifest: helpers.readDeliveryManifest })
+  t.after(async () => { await owner.close(); await h.close(); await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
+  const initial = await owner.ensure({ taskId: 'native-task', sourceKey: 'source', criteria: requirement.acceptanceCriteria, origin: {} })
+  await store.command({ id: 'bind', kind: 'task.requirement.bind-legacy', args: { taskId: 'native-task', expectedRequirementRevision: 1,
+    requirementRef: (await artifacts.put(requirement)).ref, sessionId: initial.sessionId,
+    criteria: requirement.acceptanceCriteria, sourceKey: 'source', eventKey: 'bind' } })
+  if (mode === 'foreign-diagnostic') {
+    await assert.rejects(owner.drive('native-task'), /TASK_OWNER_NO_DECISION/)
+    const persisted = await h.ctx.sessionPersistence.inspect(initial.sessionId)
+    assert.match(JSON.stringify(persisted.events), /TASK_OWNER_ARTIFACT_SCOPE_MISMATCH/u)
+    assert.equal(await store.query({ kind: 'task.owner.delivery-manifest', taskId: 'native-task' }), null)
+    return
+  }
+  await owner.drive('native-task')
+  assert.notEqual(submittedDecision, returnedDecision)
+  assert.deepEqual(submittedDecision, returnedDecision)
+  const saved = await store.query({ kind: 'task.owner.delivery-manifest', taskId: 'native-task' })
+  assert.equal((await artifacts.read(saved.ref)).businessValidation.status, 'accepted')
+  assert.equal((await store.query({ kind: 'task.owner', taskId: 'native-task' })).decision.action, 'complete')
+  assert.ok(h.requests.length > 0)
+  if (mode === 'diagnostic') {
+    assert.match(JSON.stringify(h.requests[2]), /核验原执行记录/u)
+    assert.ok(!candidate.evidenceRefs.includes(diagnostic.ref))
+  }
+  })
+})
 
 test('状态候选提前反馈可在同轮纠正，相同错误再次提交明确停止', async t => {
   for (const repeat of [false, true]) {
@@ -56,11 +127,12 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
   class Scripted extends LlmAdapter {
     async *stream(options) {
       requests.push(options)
+      const selectedArtifact = typeof artifactRef === 'function' ? artifactRef(requests.length) : artifactRef
       const id = `call-${requests.length}`, name = pageRef && requests.length === 1
-        ? 'task_owner_read_events' : artifactRef && requests.length <= artifactPages
+        ? 'task_owner_read_events' : selectedArtifact && requests.length <= artifactPages
           ? 'task_owner_read_artifact' : 'task_owner_submit'
       const args = JSON.stringify(name === 'task_owner_read_events' ? { pageRef }
-        : name === 'task_owner_read_artifact' ? { artifactRef, offset: (requests.length - 1) * 16000 } : { decision: typeof candidate === 'function' ? candidate(requests.length) : candidate })
+        : name === 'task_owner_read_artifact' ? { artifactRef: selectedArtifact, offset: typeof artifactRef === 'function' ? 0 : (requests.length - 1) * 16000 } : { decision: typeof candidate === 'function' ? candidate(requests.length) : candidate })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } }
@@ -73,6 +145,24 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
   return { ctx, sessions, requests, setLease(value) { currentLease = value },
     async close() { await sessions.close(); await ctx.fiber.dispose() } }
 }
+
+test('原生Owner同轮收到受信验收实际判定及持久工件引用', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-assessment-feedback-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const h = await host(root, null, null, step => ({ action: 'advance', summary: step === 1 ? '尝试完成验收' : '依据实际拒绝修正', evidenceRefs: [] }))
+  t.after(() => h.close())
+  const ref = `sha256-${'f'.repeat(64)}.json`, message = `领域验收实际判定：unverified；未满足：生产回查。原始验收结果与证据：${ref}`
+  let attempts = 0
+  const result = await h.sessions.run({ binding: { taskId: 'task', sessionId: 'assessment-owner',
+    turnId: 'assessment-turn', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false }, input: {},
+    provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+    onCandidate: async () => { if (++attempts === 1) throw Object.assign(new Error(message), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' }) } })
+  assert.equal(result.status, 'submitted')
+  assert.match(JSON.stringify(h.requests[1]), /领域验收实际判定：unverified/u)
+  assert.ok(JSON.stringify(h.requests[1]).includes(ref))
+  const saved = await h.ctx.sessionPersistence.inspect('assessment-owner')
+  assert.ok(JSON.stringify(saved.events).includes(message))
+})
 
 test('同一个业务 Task 的原生 Owner 会话跨唤醒复用并持久记录候选', async t => {
   const root = await mkdtemp(join(tmpdir(), 'task-owner-native-'))
@@ -147,6 +237,28 @@ test('Owner 仅能读取当前 Task 已成功阶段的产物正文', async t => 
   assert.deepEqual(read, Array(6).fill(artifactRef))
   assert.ok(JSON.stringify(h.requests).includes('最后条件'))
   assert.ok(h.requests.every(request => request.tools.some(tool => tool.name === 'task_owner_read_artifact')))
+})
+
+test('原生会话桥允许读取受信nodeArtifacts正文，拒绝未登记引用', async t => {
+  for (const allowed of [true, false]) {
+    const root = await mkdtemp(join(tmpdir(), 'owner-node-proof-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const nodeRef = `sha256-${'d'.repeat(64)}.json`
+    const h = await host(root, null, nodeRef); t.after(() => h.close())
+    let reads = 0
+    const result = await h.sessions.run({ binding: { taskId: 'task', sessionId: 'proof-owner',
+      turnId: 'proof-turn', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+      input: { taskId: 'task', stageArtifacts: [{ outputRef: `sha256-${'e'.repeat(64)}.json`,
+        evidenceRefs: [], completionEvidenceRefs: [], domainEvidence: { taskRunId: '901' },
+        nodeArtifacts: allowed ? [{ nodeId: 'execute-task', artifactRef: nodeRef }] : [] }] },
+      provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+      readArtifact: async ref => { assert.equal(ref, nodeRef); reads++; return { taskRunId: '901' } },
+      onCandidate: async () => {} })
+    assert.equal(reads, allowed ? 1 : 0)
+    assert.equal(result.status, 'submitted')
+    assert.match(JSON.stringify(h.requests), /taskRunId/u)
+    if (!allowed) assert.match(JSON.stringify(h.requests), /TASK_OWNER_ARTIFACT_NOT_ALLOWED/u)
+  }
 })
 
 test('已绑定的负责人会话缺失时拒绝另建会话', async t => {

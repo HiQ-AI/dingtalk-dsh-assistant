@@ -59,6 +59,18 @@ export function notificationSilence(run, phase) {
 
 const manualInterventionText = '处理遇到系统问题，无法继续推进，需要人工介入。'
 function systemWaitText() { return manualInterventionText }
+function internalReadonlyRecovery(events, report) {
+  const triggers = report ? events.filter(event => event.turnId === report.turnId) : events
+  if (!triggers.length) return false
+  const watermark = Math.max(...triggers.map(event => event.eventSeq))
+  let internal = false
+  for (const event of events) {
+    if (event.eventSeq > watermark) break
+    if (event.eventType === 'system.recovery' && event.eventKey.startsWith('readonly-reassess:')) internal = true
+    else if (['intent.received', 'control.changed', 'approval.channel.changed'].includes(event.eventType)) internal = false
+  }
+  return internal
+}
 function canStillProgress(state) {
   return state.commands.some(c => ['running','pending'].includes(c.status) || ['status','result'].includes(c.kind) && c.status === 'unknown' && c.error === 'INVALID_ARGUMENT' && !c.readonlyRetryCount)
     || state.nodes?.some(n => n.status === 'running') || state.requests.some(r => r.status === 'pending' && r.kind === 'needs_context' && !r.blocked)
@@ -340,7 +352,19 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         else if (!hasAcceptance && lifecycle && ['create', 'reopen'].includes(action.kind)) await prepare(run, action, 'receipt', '已接收任务，正在核对执行条件；实际开始和处理结果会继续告知。')
         if (lifecycle) {
           const plan = await controller?.taskPlan(action.result.taskId)
+          const ownerEvents = []
+          if (plan) {
+            let afterSequenceId = 0
+            do {
+              const page = await store.query({ kind: 'task.owner.events', taskId: action.result.taskId, afterSequenceId, limit: 200 })
+              ownerEvents.push(...page)
+              if (page.length < 200) break
+              afterSequenceId = page.at(-1).eventSeq
+            } while (true)
+          }
+          const internalRecovery = internalReadonlyRecovery(ownerEvents)
           for (const stage of plan?.stages.filter(item => item.status === 'running') ?? []) {
+            if (internalRecovery) continue
             if (!stage.runId || plan.task.controlState !== 'active') continue
             const execution = await controller.state(stage.runId)
             if (execution.run.status !== 'running' || execution.run.pauseRequested || execution.run.stopRequested
@@ -348,10 +372,11 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
             await attempt(run.runId, `started:${stage.runId}`, () => prepare(run, action,
               `owner:started:${stage.runId}`, '任务已开始处理。', 'progress'))
           }
-          if (await store.query({ kind: 'message.owner.released-wait', taskId: action.result.taskId }))
+          if (!internalRecovery && await store.query({ kind: 'message.owner.released-wait', taskId: action.result.taskId }))
             await prepare(run, action, 'owner:application_wait:released', manualInterventionText, 'required_action')
           const reports = await store.query({ kind: 'task.owner.reports', taskId: action.result.taskId })
           for (const report of reports.filter(item => item.applicationStatus === 'blocked').slice(-1)) {
+            if (internalReadonlyRecovery(ownerEvents, report)) continue
             await attempt(run.runId, `application_wait:${report.reportId}`, () => prepare(run, action,
               `owner:application_wait:${report.reportId}`,
               manualInterventionText, 'required_action'))
@@ -361,6 +386,10 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
               || item.reportType === 'wait' && taskDecisionConditionText(item.facts.condition)
               || item.triggerTypes.includes('workflow.succeeded') && item.facts.evidenceRefs.length
               || item.triggerTypes.includes('workflow.confirmation.required')))) {
+            if (report.reportType !== 'complete' && internalReadonlyRecovery(ownerEvents, report)
+              && !(['block', 'wait'].includes(report.reportType) && ['business-input', 'approval', 'permission'].includes(report.facts.condition?.kind)
+                && taskDecisionConditionText(report.facts.condition))
+              && !report.triggerTypes.includes('workflow.confirmation.required')) continue
             let text = report.reportType === 'complete' ? `任务已完成：${report.facts.summary}`
               : ['block', 'wait'].includes(report.reportType) && taskDecisionConditionText(report.facts.condition)
                 ? `${report.reportType === 'block' ? '处理暂时受阻：' : ''}${Array.from(String(report.facts.summary).replace(/\s+/gu, ' ').trim()).slice(0, 160).join('')}`

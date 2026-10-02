@@ -10,7 +10,7 @@ import { createExecutionController } from '../packages/dingtalk-dsh-assistant/ex
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
 
-async function fixture(t, { mutateFinal, action = 'complete' } = {}) {
+async function fixture(t, { mutateFinal, action = 'complete', domainProof = false, mutateDecision, staleBinding = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'owner-manifest-')), dbPath = join(directory, 'control.sqlite')
   const store = await openExecutionStore({ dbPath, instanceId: 'manifest', initialize: true })
   let owner, controller
@@ -21,6 +21,12 @@ async function fixture(t, { mutateFinal, action = 'complete' } = {}) {
     nodes: [{ id: 'report', version: '1', executor: 'code', allowedEffects: ['pure'],
       inputSchema: { type: 'object' }, outputSchema: { type: 'object' },
       mapInput: ({ requirement }) => requirement, execute: async () => ({ summary: '结果已核验' }) }] }
+  if (domainProof) {
+    workflow.nodes.unshift({ ...workflow.nodes[0], id: 'proof', execute: async () => ({ taskRunId: '901' }) })
+    workflow.ownerContract.readArtifacts = ({ stage, state }) => ({ completionEvidenceRefs: [stage.outputRef],
+      nodeArtifacts: [{ nodeId: 'proof', artifactRef: state.nodes[0].outputRef }],
+      domainEvidence: { taskRunId: '901' } })
+  }
   controller = createExecutionController({ store, artifacts, workflows: [workflow] })
   const helpers = createTaskWorkflowContracts({ controller, store, artifacts })
   const requirement = { request: '交付报告', acceptanceCriteria: ['交付报告'], scope: {} }
@@ -38,6 +44,7 @@ async function fixture(t, { mutateFinal, action = 'complete' } = {}) {
       const value = await helpers.readDeliveryManifest(args)
       return args.decision && mutateFinal ? mutateFinal(value) : value
     },
+    readStageArtifacts: helpers.readStageArtifacts,
     sessionRunner: { async run({ input, readArtifact, onSessionBound, onCandidate }) {
       await onSessionBound()
       snapshotRef = input.deliveryManifest.ref
@@ -45,11 +52,27 @@ async function fixture(t, { mutateFinal, action = 'complete' } = {}) {
       assert.equal(snapshot.complete, false)
       assert.equal(snapshot.acceptance[0].status, 'pending')
       const outputRef = input.stages[0].outputRef
+      if (domainProof) {
+        const proof = input.stageArtifacts[0]
+        assert.deepEqual(proof.domainEvidence, { taskRunId: '901' })
+        assert.deepEqual(proof.completionEvidenceRefs, [outputRef])
+        const nodeRef = proof.nodeArtifacts[0].artifactRef
+        assert.notEqual(nodeRef, outputRef)
+        assert.deepEqual(await readArtifact(nodeRef), { taskRunId: '901' })
+        await assert.rejects(readArtifact('foreign-task-ref'), /TASK_OWNER_ARTIFACT_NOT_ALLOWED/)
+        assert.equal(await helpers.authorizeCompletion({ taskId: 'task', requirement, plan: await controller.taskPlan('task'),
+          decision: { action: 'complete', summary: '已核验', evidenceRefs: [nodeRef],
+            assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: [nodeRef] })) } }), false)
+      }
       const decision = { action, summary: '处理当前任务', evidenceRefs: outputRef ? [outputRef] : [],
         ...(['wait', 'block'].includes(action) ? { condition: { kind: 'business-input', missing: '确认结论', responsibleParty: '需求方', resumeWhen: '确认结论后继续', evidenceRefs: outputRef ? [outputRef] : [] } } : {}),
         ...(action === 'complete' ? { assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: [outputRef] })) } : {}) }
       await onCandidate(decision)
-      return { status: 'submitted', decision }
+      if (staleBinding) await store.command({ id: 'invalidate-owner', kind: 'task.owner.event', args: {
+        taskId: 'task', eventKey: 'changed-after-candidate', eventType: 'task.context', payload: { context: '重新核对' } } })
+      const returned = structuredClone(decision)
+      if (mutateDecision) mutateDecision(returned)
+      return { status: 'submitted', decision: returned }
     }, async close() {} },
   })
   const initial = await owner.ensure({ taskId: 'task', sourceKey: 'source', criteria: requirement.acceptanceCriteria, origin: {} })
@@ -58,6 +81,28 @@ async function fixture(t, { mutateFinal, action = 'complete' } = {}) {
     criteria: requirement.acceptanceCriteria, sourceKey: 'source', eventKey: 'bind' } })
   return { owner, store, artifacts, dbPath, snapshotRef: () => snapshotRef }
 }
+
+test('已验完整候选跨会话克隆保留回执，摘要和引用篡改以及陈旧水位仍拒绝', async t => {
+  for (const [name, options] of [
+    ['clone', {}], ['summary', { mutateDecision: decision => { decision.summary = '另一结论' } }],
+    ['scope', { mutateDecision: decision => { decision.evidenceRefs = ['foreign'] } }], ['stale', { staleBinding: true }],
+  ]) await t.test(name, async t => {
+    const f = await fixture(t, options)
+    if (name === 'clone') {
+      await f.owner.drive('task')
+      assert.ok((await f.store.query({ kind: 'task.owner.delivery-manifest', taskId: 'task' }))?.ref)
+    } else {
+      await assert.rejects(f.owner.drive('task'))
+      assert.equal(await f.store.query({ kind: 'task.owner.delivery-manifest', taskId: 'task' }), null)
+    }
+  })
+})
+
+test('Owner controller交接领域正文并允许读取节点，跨任务及节点直接完成仍拒绝', async t => {
+  const f = await fixture(t, { domainProof: true })
+  await f.owner.drive('task')
+  assert.equal((await f.store.query({ kind: 'task.owner.delivery-manifest', taskId: 'task' })).taskId, 'task')
+})
 
 test('Owner允许读取清单快照，最终完成清单独立持久化且重启后可查询', async t => {
   const f = await fixture(t)

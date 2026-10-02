@@ -91,11 +91,52 @@ test('第三个纯代码流程只通过合同扩展读产物和验收，旧计�
   assert.equal(state.run.workflowDigest, original.digest)
   assert.equal((await f.helpers.readStageArtifacts({ taskId: 'task', stage, state, plan: completed.plan })).nodeArtifacts[0].nodeId, 'count')
   assert.equal(await f.helpers.authorizeCompletion(completed), true)
-  assert.equal(reads, 1); assert.equal(checks, 1)
+  assert.equal(reads, 2); assert.equal(checks, 1)
   assert.equal(f.controller.workflowDefinition(workflow.id, original.digest).ownerContract.version, '1')
   assert.equal(Object.isFrozen(f.controller.workflowDefinition(workflow.id, original.digest).ownerContract), true)
   await assert.rejects(f.helpers.readStageArtifacts({ taskId: 'other', stage, state, plan: completed.plan }), /WORKFLOW_OWNER_STAGE_MISMATCH/)
   await assert.rejects(f.helpers.readStageArtifacts({ taskId: 'task', stage: { ...stage, outputRef: 'foreign' }, state, plan: completed.plan }), /WORKFLOW_OWNER_STAGE_MISMATCH/)
+})
+
+test('冻结合同的只读完成策略把原始节点正文同时交给Owner及语义验收，不扩大完成引用', async t => {
+  const frozen = { id: 'external-result', version: '3', validateCompletion: () => true }
+  const workflow = synthetic(frozen)
+  workflow.nodes.push({ ...workflow.nodes[0], id: 'summary', mapInput: ({ previousOutput }) => previousOutput,
+    execute: async () => ({ summary: '已完成', hostExecution: { domainEvidence: { total: 999 } } }) })
+  const originalDigest = defineExecutionWorkflow(workflow).digest
+  const f = await fixture(t, workflow, { items: ['a', 'b'] }), completed = await f.finish()
+  const stage = completed.plan.stages[0], state = await f.controller.state(stage.runId)
+  const nodeRef = state.nodes[0].outputRef
+  let invalid = false, observed
+  const policy = { ...frozen, version: '4',
+    async readArtifacts({ stage, state, artifacts, store }) {
+      assert.equal(store.command, undefined); assert.equal(artifacts.put, undefined)
+      const ref = invalid ? 'foreign-node' : state.nodes[0].outputRef
+      return { completionEvidenceRefs: [stage.outputRef], nodeArtifacts: [{ nodeId: 'count', artifactRef: ref }],
+        domainEvidence: { nodeRef: ref, body: await artifacts.read(state.nodes[0].outputRef) } }
+    },
+    async validateCompletion({ verifyAcceptance }) { return verifyAcceptance() },
+  }
+  const helpers = createTaskWorkflowContracts({ controller: f.controller, store: f.store, artifacts: f.artifacts,
+    completionPolicy(contract, context) {
+      assert.equal(context.stage.runId, stage.runId)
+      return contract.version === '3' ? policy : contract
+    },
+    verifyAcceptance(context) { observed = context.stages[0].output.hostExecution.domainEvidence; return true },
+  })
+  const extension = await helpers.readStageArtifacts({ taskId: 'task', stage, plan: completed.plan })
+  assert.deepEqual(extension.completionEvidenceRefs, [stage.outputRef])
+  assert.equal(extension.nodeArtifacts[0].artifactRef, nodeRef)
+  assert.equal(await helpers.authorizeCompletion(completed), true)
+  assert.deepEqual(observed, extension.domainEvidence)
+  assert.equal(observed.body.total, 2)
+  assert.equal(f.controller.workflowDefinition(workflow.id, originalDigest).ownerContract.version, '3')
+  assert.equal(stage.workflowDigest, originalDigest)
+  assert.equal(await helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision,
+    evidenceRefs: [nodeRef], assessments: [{ ...completed.decision.assessments[0], evidenceRefs: [nodeRef] }] } }), false)
+  invalid = true
+  await assert.rejects(helpers.readStageArtifacts({ taskId: 'task', stage, plan: completed.plan }), /TASK_OWNER_ARTIFACT_SCOPE_MISMATCH/)
+  await assert.rejects(helpers.authorizeCompletion(completed), /TASK_OWNER_ARTIFACT_SCOPE_MISMATCH/)
 })
 
 test('未绑定合同的旧定义保留产出读取，但完成和修复不得套用当前合同', async t => {

@@ -900,10 +900,13 @@ test('没有 Owner 的已成功问答计划显示完成，结果中的未知不�
   }
 })
 
-for (const [scenario, validWrite, expectedComplete, native = false] of [
+for (const [scenario, validWrite, expectedComplete, native = false, expectedFailure = 'TASK_OWNER_COMPLETION_UNVERIFIED'] of [
   ['无关备忘录不能证明生产修复', false, false], ['同项有效保存完成', true, true],
   ['引用调查不足产物不能完成保存项', true, false], ['业务检查返回错项不能完成', true, false],
   ['默认原生领域检查拒绝备忘录冒充生产修复', false, false, true], ['默认原生领域检查接纳有效保存并持久化凭证', true, true, true],
+  ['原生领域模型非正常结束保留系统原因', false, false, true, 'DOMAIN_ACCEPTANCE_MODEL_INCOMPLETE'],
+  ['原生领域模型配置故障保留系统原因', false, false, true, 'DOMAIN_ACCEPTANCE_CONFIGURATION_MISSING'],
+  ['原生领域合法未核验保留实际判定工件', false, false, true],
 ]) test(`混合调查与写入通过真实服务Owner门禁：${scenario}`, async t => {
   const temporary = join(process.cwd(), 'docs', 'tmp')
   await mkdir(temporary, { recursive: true })
@@ -911,7 +914,7 @@ for (const [scenario, validWrite, expectedComplete, native = false] of [
   const criterion = validWrite ? '调查记录已保存为 Markdown 文档' : '生产故障已修复并验证不再复现'
   const objective = validWrite ? '调查故障并保存 Markdown 文档' : '修复生产故障并保存 Markdown 文档'
   const content = '# 调查备忘录\n\n故障仍存在，尚未实施生产修复。\n'
-  const semanticChecks = [], failures = []
+  const semanticChecks = [], failures = [], rejectedErrors = []
   const sessions = { async run({ input, onSessionBound, onResult }) {
     await onSessionBound()
     const refs = input.materials.map(item => item.id)
@@ -939,7 +942,8 @@ for (const [scenario, validWrite, expectedComplete, native = false] of [
           capabilityId: 'write-task-markdown', input: { content }, expectedEvidence: '独立回读 Markdown 文档' } },
       ] } : {}),
       ...(complete ? { assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs })) } : {}) }
-    await onCandidate(decision)
+    try { await onCandidate(decision) }
+    catch (error) { rejectedErrors.push(error); throw error }
     return { status: 'submitted', decision }
   }, async close() {} }
   const assess = async input => {
@@ -959,8 +963,15 @@ for (const [scenario, validWrite, expectedComplete, native = false] of [
     assert.match(request.system, /不能证明生产修复/)
     const input = JSON.parse(request.messages[0].content[0].text)
     assert.equal(input.request, objective)
-    yield { type: 'text-delta', text: JSON.stringify(await assess(input)) }
-    yield { type: 'finish', reason: { kind: 'stop' } }
+    if (expectedFailure === 'DOMAIN_ACCEPTANCE_CONFIGURATION_MISSING') {
+      semanticChecks.push(input)
+      throw Object.assign(new Error('验收模型配置缺失'), { code: 'DOMAIN_ACCEPTANCE_CONFIGURATION_MISSING' })
+    }
+    const result = await assess(input)
+    if (scenario === '原生领域合法未核验保留实际判定工件') result.criteria[0].reason = '当前证据尚未证明生产修复'
+    if (scenario === '原生领域合法未核验保留实际判定工件') result.status = 'unverified'
+    yield { type: 'text-delta', text: JSON.stringify(result) }
+    yield { type: 'finish', reason: { kind: expectedFailure === 'DOMAIN_ACCEPTANCE_MODEL_INCOMPLETE' ? 'length' : 'stop' } }
   } }
   const { service, execution, message } = await fixture(t, 'owner', undefined, {
     root, executionSessions: sessions, taskOwnerSessions: ownerSessions, config: { taskOutputDirectory: join(root, 'files') },
@@ -982,7 +993,7 @@ for (const [scenario, validWrite, expectedComplete, native = false] of [
     for (const stage of plan.stages) if (stage.runId) await execution.controller.whenIdle(stage.runId)
     failures.push(...(await service.recover()).failures)
     const owner = await execution.store.query({ kind: 'task.owner', taskId })
-    if (owner.decision?.action === 'complete' || failures.some(item => item.code === 'TASK_OWNER_COMPLETION_UNVERIFIED')) break
+    if (owner.decision?.action === 'complete' || failures.some(item => item.code === expectedFailure)) break
   }
   const plan = await execution.controller.taskPlan(taskId)
   assert.equal(plan.stages.length, 2, JSON.stringify({ plan, failures, owner: await execution.store.query({ kind: 'task.owner', taskId }) }))
@@ -1005,7 +1016,41 @@ for (const [scenario, validWrite, expectedComplete, native = false] of [
     assert.equal(manifest.businessValidation.items.length, 1)
     assert.equal(manifest.businessValidation.items[0].itemId, 'acceptance-1')
   } else {
-    assert.ok(failures.some(item => item.code === 'TASK_OWNER_COMPLETION_UNVERIFIED'), JSON.stringify(failures))
+    assert.ok(failures.some(item => item.code === expectedFailure), JSON.stringify(failures))
+    if (expectedFailure.startsWith('DOMAIN_ACCEPTANCE_')) {
+      assert.equal(owner.lastFailure, expectedFailure)
+      assert.notEqual(owner.decision?.condition?.kind, 'business-input')
+      assert.ok(!failures.some(item => item.code === 'TASK_OWNER_COMPLETION_UNVERIFIED'))
+    }
+    if (native && expectedFailure === 'TASK_OWNER_COMPLETION_UNVERIFIED') {
+      const rejection = rejectedErrors.find(error => error.message.includes('原始验收结果与证据：'))
+      assert.ok(rejection, rejectedErrors.map(error => error.message).join('\n'))
+      const diagnosticRef = rejection.message.split('原始验收结果与证据：')[1]
+      const diagnostic = await execution.artifacts.read(diagnosticRef)
+      assert.equal(diagnostic.kind, 'domain-acceptance-rejection')
+      assert.equal(diagnostic.taskId, taskId)
+      assert.equal(diagnostic.assessment.status, scenario === '原生领域合法未核验保留实际判定工件' ? 'unverified' : 'unsatisfied')
+      assert.equal(diagnostic.assessment.criteria[0].criterion, criterion)
+      if (scenario === '原生领域合法未核验保留实际判定工件') {
+        assert.equal(diagnostic.assessment.criteria[0].reason, '当前证据尚未证明生产修复')
+        assert.match(rejection.message, /当前证据尚未证明生产修复/u)
+      }
+      assert.equal(diagnostic.evidence[0].hostExecution.runId, plan.stages[1].runId)
+      assert.equal(diagnostic.evidence[0].evidenceId, plan.stages[1].outputRef)
+      assert.ok(diagnostic.evidence[0].hostExecution.nodes.length)
+      const stage = plan.stages[1]
+      const contract = execution.controller.workflowDefinition(stage.workflowId, stage.workflowDigest).ownerContract
+      const items = await execution.store.query({ kind: 'task.owner.acceptance', taskId })
+      const directOutput = { ...output, hostExecution: { taskId: 'forged-task' } }
+      assert.equal(await contract.validateCompletion({ output: directOutput, stage,
+        requirement: { request: objective, acceptanceCriteria: [criterion], constraints: [], scope: {} },
+        decision: { summary: '核对已保存文档', evidenceRefs: [stage.outputRef] },
+        stages: [{ stage, output: directOutput, contractId: contract.id }],
+        acceptanceItems: items.map(item => ({ itemId: item.itemId, criterion: item.criterion, evidenceRefs: [stage.outputRef] })) }), false,
+      '普通能力合同调用保留合法拒绝，不依据伪造hostExecution写Owner诊断或抛新增错误')
+      assert.equal(semanticChecks.at(-1).evidence[0].hostExecution, undefined,
+        '非Owner路径在送入领域模型前移除外部伪造的hostExecution')
+    }
     assert.equal(manifestRecord, null)
   }
 })
@@ -5370,4 +5415,82 @@ for (const [firstDecision, workflowKind] of [['approved', 'uat-deployment'], ['r
     assert.deepEqual(await hidden.listApprovalRequests(), [])
     await assert.rejects(hidden.decideApproval({ requestId, decision: 'approved', eventId: 'hidden' }, { channel: 'web', actorId: 'other' }), /WORKFLOW_APPROVAL_FORBIDDEN/)
   } finally { await hidden.close() }
+})
+
+for (const scenario of ['success','resume-success','copied-prefix','handoff-success','handoff-wrong-issue','handoff-missing-event','handoff-unknown','handoff-unsealed','unknown-effect','failed-effect','missing-observation','corrupt-observation','revoked','unapproved','actor-scope','stage-scope','active-node','pending-input','cancelled','wrong-workflow','stale-cas','stale-source']) test(`外部成功后的受管只读重评保留效果与审批：${scenario}`, async t => {
+  const { service, execution, message, root } = await fixture(t, 'owner', undefined, { config: { webActorId: 'owner' }, execute: async () => ({ outcome: 'blocked', summary: '需原始证明', evidenceRefs: [], limitations: ['缺少读取能力'] }) })
+  const received = await service.ingest(message), source = await service.messages.process(received.runId)
+  const taskId = source.commands[0].result.taskId, runId = source.commands[0].result.runId
+  await execution.controller.whenIdle(runId); await service.recover()
+  const plan = await execution.controller.taskPlan(taskId), owner = await execution.store.query({ kind: 'task.owner', taskId })
+  const requirement = await execution.artifacts.read(plan.task.requirementRef), instruction = requirement.sourceInstructions[0]
+  const sourceCondition = JSON.stringify({ sourceKey: instruction.sourceKey, sourceVersion: instruction.sourceVersion, sourceQuote: instruction.text, objective: '已授权变更' })
+  const now = '2026-10-02T00:00:00Z', hash = 'a'.repeat(64), externalId = 'finished-external'
+  const observation = JSON.stringify({ effectId: 'finished-effect', status: 'succeeded', evidenceRef: 'proof/observed.json', result: { status: 'succeeded' } })
+  const db = new DatabaseSync(join(root, 'control.db'))
+  try {
+    db.prepare("UPDATE task_plan_stages SET status='succeeded',output_ref='proof/investigation.json' WHERE task_id=?").run(taskId)
+    db.prepare("UPDATE execution_runs SET status='succeeded' WHERE run_id=?").run(runId)
+    db.prepare("UPDATE execution_nodes SET status='succeeded',drained=1 WHERE run_id=?").run(runId)
+    const workflow = scenario === 'resume-success' || scenario.startsWith('handoff-') ? 'task-data-change-approval-resume' : 'task-data-change'
+    db.prepare("INSERT INTO execution_runs(run_id,task_id,workflow_id,workflow_digest,requirement_ref,status,created_at,updated_at) VALUES(?,?,?,?,?,'succeeded',?,?)").run(externalId, taskId, workflow, hash, plan.task.requirementRef, now, now)
+    db.prepare("INSERT INTO execution_nodes(node_run_id,run_id,node_id,node_version,executor,position,generation,input_ref,input_digest,status,drained) VALUES('finished-node',?,'execute','1','operation',0,1,'proof/input.json',?,'succeeded',1)").run(externalId, hash)
+    db.prepare("INSERT INTO task_plan_stages(task_id,plan_revision,stage_id,position,workflow_id,workflow_digest,requirement_ref,gate,status,attempt,run_id,output_ref,source_condition) VALUES(?,?,'finished-stage',1,?,?,?,'none','succeeded',1,?,'proof/external.json',?)").run(taskId, plan.task.planRevision, workflow, hash, plan.task.requirementRef, externalId, sourceCondition)
+    db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,request_id,state,result_json,created_at,updated_at) VALUES('finished-effect','operation',?,'finished-node','execute',1,?,?,'{}','[]','finished-approval','succeeded',?,?,?)").run(externalId, hash, hash, observation, now, now)
+    db.prepare("INSERT INTO execution_approvals(request_id,effect_id,approver_ids_json,decision,decided_by,decision_source,created_at,updated_at) VALUES('finished-approval','finished-effect','[\"owner\"]','approved','owner','web',?,?)").run(now, now)
+    db.prepare("INSERT INTO execution_effect_observations VALUES('finished-receipt','finished-effect',?,?,?)").run(executionDigest(JSON.parse(observation)), observation, now)
+    if (scenario.startsWith('handoff-')) {
+      const intent = { issueId: 'projects/p/issues/857', planId: 'projects/p/plans/1', sheetId: 'projects/p/sheets/1', applySqlSha256: hash, packageDigest: hash, target: { database: 'db' } }
+      db.prepare("UPDATE execution_effects SET definition_json=? WHERE effect_id='finished-effect'").run(JSON.stringify({ payload: { stage: 'execute-task', intent } }))
+      db.prepare("UPDATE execution_effects SET node_id='execute-task' WHERE effect_id='finished-effect'").run()
+      db.prepare("UPDATE execution_nodes SET node_id='execute-task' WHERE node_run_id='finished-node'").run()
+      db.prepare("INSERT INTO execution_nodes(node_run_id,run_id,node_id,node_version,executor,position,generation,input_ref,input_digest,status,drained,output_ref) VALUES('frozen-old',?,'freeze-existing-issue','1','code',1,1,'proof/input.json',?,'succeeded',1,'proof/frozen.json')").run(externalId, hash)
+      db.prepare("INSERT INTO execution_runs(run_id,task_id,workflow_id,workflow_digest,requirement_ref,status,stop_requested,created_at,updated_at) VALUES('old-handoff',?,'task-data-change',?,?,'cancelled',1,?,?)").run(taskId, hash, plan.task.requirementRef, now, now)
+      const proof = { kind: 'data-change-approval-handoff', taskId, originalRunId: 'old-handoff', originalGeneration: 1, originalRequirementRef: plan.task.requirementRef, effectId: 'old-gate', nodeRunId: 'old-gate-node', inputDigest: hash, effectDigest: executionDigest({}),
+        view: { issue: { id: intent.issueId }, plan: { id: intent.planId }, sheet: { id: intent.sheetId }, prepared: { package: { applySqlSha256: hash, validation: { packageDigest: hash }, target: intent.target } } } }
+      for (const [effectId,nodeId,nodeRunId,status,result] of [['old-gate','approval-gate','old-gate-node','failed',{ reason: 'APPROVAL_CHANNEL_SUPERSEDED', result: proof }],['old-created','create-issue','old-created-node','succeeded',{ result: { issueId: intent.issueId } }]]) {
+        db.prepare("INSERT INTO execution_nodes(node_run_id,run_id,node_id,node_version,executor,position,generation,input_ref,input_digest,status,drained) VALUES(?,'old-handoff',?,'1','operation',?,1,'proof/old.json',?,?,1)").run(nodeRunId, nodeId, nodeId === 'approval-gate' ? 0 : 1, hash, status === 'failed' ? 'cancelled' : 'succeeded')
+        const record = JSON.stringify({ effectId, status, evidenceRef: 'proof/handoff.json', result })
+        db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,result_json,created_at,updated_at) VALUES(?,'operation','old-handoff',?,?,1,?,?,'{}','[]','source',?,?,?,?)").run(effectId, nodeRunId, nodeId, hash, hash, status, record, now, now)
+        db.prepare('INSERT INTO execution_effect_observations VALUES(?,?,?,?,?)').run(effectId+'-receipt',effectId,executionDigest(JSON.parse(record)),record,now)
+      }
+      db.prepare("INSERT INTO task_events(task_id,event_key,event_type,payload_ref,created_at,handled_at) VALUES(?,'original-handoff','approval.channel.changed','proof/handoff-event.json',?,?)").run(taskId, now, now)
+      db.prepare("INSERT INTO execution_receipts VALUES('original-handoff:stop',?,?,?)").run(hash,JSON.stringify({run:{runId:'old-handoff',taskId,requirementRef:plan.task.requirementRef,generation:1,stopRequested:true,recoveryReason:JSON.stringify({kind:'approval-channel-handoff'})}}),now)
+      if (scenario === 'handoff-wrong-issue') db.prepare("UPDATE execution_effects SET definition_json=json_set(definition_json,'$.payload.intent.issueId','another') WHERE effect_id='finished-effect'").run()
+      if (scenario === 'handoff-missing-event') db.prepare("DELETE FROM task_events WHERE event_key='original-handoff'").run()
+      if (scenario === 'handoff-unknown') db.prepare("UPDATE execution_effects SET state='unknown' WHERE effect_id='old-created'").run()
+      if (scenario === 'handoff-unsealed') db.prepare("UPDATE execution_runs SET stop_requested=0 WHERE run_id='old-handoff'").run()
+    }
+    const mutations = {
+      'unknown-effect': "UPDATE execution_effects SET state='unknown'", 'failed-effect': "UPDATE execution_effects SET state='failed'",
+      'missing-observation': 'DELETE FROM execution_effect_observations', revoked: 'UPDATE execution_approvals SET revoked=1',
+      'corrupt-observation': "UPDATE execution_effect_observations SET payload_digest='" + 'b'.repeat(64) + "'",
+      unapproved: "UPDATE execution_approvals SET decision='pending'", 'actor-scope': "UPDATE execution_approvals SET decided_by='other'",
+      'stage-scope': "UPDATE task_plan_stages SET source_condition='{}' WHERE stage_id='finished-stage'",
+      'active-node': "UPDATE execution_nodes SET drained=0 WHERE node_run_id='finished-node'",
+      cancelled: "UPDATE task_controls SET state='cancelled' WHERE task_id='" + taskId + "'",
+      'wrong-workflow': "UPDATE execution_runs SET workflow_id='task-release' WHERE run_id='finished-external'",
+    }
+    if (mutations[scenario]) db.exec(mutations[scenario])
+    if (scenario === 'copied-prefix') {
+      db.prepare('INSERT INTO task_plan_stages SELECT task_id,plan_revision+1,stage_id,position,workflow_id,workflow_digest,unavailable_reason,requirement_ref,predecessor_output_ref,gate,status,attempt,run_id,output_ref,evidence_refs,confirmed_output_ref,source_condition FROM task_plan_stages WHERE task_id=? AND plan_revision=?').run(taskId, plan.task.planRevision)
+      db.prepare('UPDATE business_tasks SET plan_revision=plan_revision+1 WHERE task_id=?').run(taskId)
+    }
+    if (scenario === 'pending-input') db.prepare("INSERT INTO execution_inputs(run_id,input_id,source_key,requirement_ref,status,accepted_at) VALUES(?,'pending','pending',?,'pending',?)").run(externalId, plan.task.requirementRef, now)
+    const snapshot = () => JSON.stringify({ stages: db.prepare('SELECT * FROM task_plan_stages WHERE task_id=?').all(taskId), effects: db.prepare('SELECT * FROM execution_effects').all(), approvals: db.prepare('SELECT * FROM execution_approvals').all() })
+    const before = snapshot()
+    const args = { taskId, eventKey: 'post-external-readonly', payloadRef: plan.task.requirementRef, expectedOwnerRevision: owner.revision, expectedLeaseEpoch: owner.leaseEpoch,
+      expectedRequirementRevision: plan.task.requirementRevision, expectedControlRevision: plan.task.controlRevision, requestDigest: hash,
+      sources: requirement.sourceInstructions.map(instruction => ({ sourceKey: instruction.sourceKey, sourceVersion: instruction.sourceVersion, actorId: instruction.actorId, bodyDigest: executionDigest(instruction.text) })) }
+    if (scenario === 'stale-cas') args.expectedOwnerRevision++
+    if (scenario === 'stale-source') args.sources[0].bodyDigest = 'f'.repeat(64)
+    const send = () => execution.store.command({ id: 'post-external-readonly', kind: 'task.owner.reassess', args })
+    if (['success', 'resume-success', 'copied-prefix', 'handoff-success'].includes(scenario)) {
+      const receipt = await send()
+      assert.equal(receipt.result.status, 'pending')
+      assert.equal(db.prepare('SELECT event_type FROM task_events WHERE task_id=? AND seq=?').get(taskId, receipt.result.eventSeq).event_type, 'system.recovery')
+      assert.equal((await execution.store.query({ kind: 'task.owner', taskId })).sessionId, owner.sessionId)
+    } else await assert.rejects(send(), /REASSESS_FORBIDDEN|REASSESS_STALE|SOURCE_STALE/u)
+    assert.equal(snapshot(), before)
+  } finally { db.close() }
 })

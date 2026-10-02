@@ -264,6 +264,7 @@ test('同一事项的多条补充不逐条回复，实际开始仍有一次通�
     if(q.kind==='message.run')return {run,requests:[],commands}
     if(q.kind==='message.notification')return q.eventKey?[...notices.values()].find(n=>n.eventKey===q.eventKey):notices.get(q.notificationId)
     if(['message.task.latest','task.deleted','message.owner.released-wait'].includes(q.kind))return null
+    if(q.kind==='task.owner.events')return []
     throw Error(q.kind)
   },async command({args}){notices.set(args.notificationId,{...args,id:args.notificationId});return {}}}
   const controller={taskPlan:async()=>({task:{controlState:'active'},stages:[{status:'running',runId:'run'}]}),state:async()=>({run:{status:'running'},nodes:[{status:'running',startedAt:'2026-10-01T00:00:00Z'}]})}
@@ -284,7 +285,8 @@ test('只有节点真实开始才发开始进度，重复扫描沿用同一通�
    if(q.kind==='message.run')return{run,requests:[],commands:[action]}
    if(q.kind==='message.notification')return q.eventKey?[...notices.values()].find(n=>n.eventKey===q.eventKey):notices.get(q.notificationId)
    if(['message.task.latest','task.deleted','message.owner.released-wait'].includes(q.kind))return null
-   throw Error(q.kind)
+   if(q.kind==='task.owner.events')return []
+    throw Error(q.kind)
   },async command({args}){notices.set(args.notificationId,{...args,id:args.notificationId});return{}}}
   const controller={taskPlan:async()=>({task:{controlState:mode==='paused'?'paused':'active'},stages:[{status:mode==='planned'?'planned':'running',runId:'run'}]}),state:async()=>({run:{status:'running'},nodes:[{status:'running',startedAt:mode==='created'?null:'2026-10-01T00:00:00Z'}]})}
   for(let n=0;n<2;n++)await createWorkflowNotifications({store,controller}).flush()
@@ -309,6 +311,7 @@ for (const mode of ['delivered', 'unknown', 'prepared', 'other-task', 'new-sourc
     if(q.kind==='message.notification')return q.eventKey?[...notices.values()].find(n=>n.eventKey===q.eventKey):notices.get(q.notificationId)
     if(q.kind==='message.notifications')return [...notices.values()].filter(n=>q.states.includes(n.status)&&(!q.taskId||n.payload.fact.taskId===q.taskId))
     if(['message.task.latest','task.deleted','message.owner.released-wait'].includes(q.kind))return null
+    if(q.kind==='task.owner.events')return []
     throw Error(q.kind)
   },async command({kind,args}){
     if(kind==='message.notification.readback'){assert.equal(args.notificationId,'old');old.status='delivered';return {}}
@@ -622,4 +625,35 @@ for(const recoverBeforeClaim of [false,true])test(`Owner真实实现阻塞首次
  await f.flush(adapter);await f.flush(adapter)
  assert.equal(sends,sentBefore+1)
  assert.equal((await f.notices()).filter(n=>n.payload.phase==='owner:application_wait:released'&&n.status==='delivered').length,2)
+})
+
+
+for(const scenario of ['internal-progress','ordinary-progress','internal-started','internal-block','complete','user-action','new-intent'])test(`内部只读重评通知由原生事件归属判断：${scenario}`,async()=>{
+ const run={runId:'silent-message',sourceKey:'source',sourceVersion:1,revision:0,conversationId:'g',actorId:'a',context:{sourceMessageId:'in'}}
+ const action={commandId:'silent-command',status:'applied',kind:'revise',args:{replyPolicy:'none'},result:{taskId:'task'}}
+ const events=Array.from({length:200},(_,i)=>({eventSeq:i+1,eventKey:i===199?'readonly-reassess:verified':'historical:'+i,eventType:i===199?'system.recovery':'workflow.succeeded',turnId:'historical'}))
+ if(scenario==='ordinary-progress')events[199].eventKey='ordinary-recovery'
+ if(scenario==='new-intent')events.push({eventSeq:201,eventKey:'new-source',eventType:'intent.received',turnId:'new'})
+ events.push({eventSeq:202,eventKey:'stage-finished',eventType:'workflow.succeeded',turnId:'reported-turn'})
+ const reportType=scenario==='complete'?'complete':scenario==='internal-block'?'block':scenario==='user-action'?'wait':'advance'
+ const condition={kind:scenario==='internal-block'?'capability':'business-input',missing:'待确认字段规格',responsibleParty:'需求方',resumeWhen:'确认后继续',evidenceRefs:['proof']}
+ const report={reportId:'reported',turnId:'reported-turn',reportType,applicationStatus:'applied',triggerTypes:['workflow.succeeded'],facts:{summary:'已核对工单，正在验收',evidenceRefs:['proof'],...(['block','wait'].includes(reportType)?{condition}:{})}}
+ const notices=new Map(),pages=[]
+ const store={async query(q){
+  if(['message.notification.diagnostics','message.acceptances'].includes(q.kind))return []
+  if(q.kind==='message.list')return [run]
+  if(q.kind==='message.run')return{run,requests:[],commands:[action]}
+  if(q.kind==='task.owner.events'){pages.push(q.afterSequenceId);return events.filter(e=>e.eventSeq>q.afterSequenceId).slice(0,q.limit)}
+  if(q.kind==='task.owner.reports')return scenario==='internal-started'?[]:[report]
+  if(q.kind==='message.notification')return notices.get(q.notificationId)
+  if(q.kind==='message.notifications')return [...notices.values()]
+  if(['message.task.latest','task.deleted','message.owner.released-wait'].includes(q.kind))return null
+  throw Error(q.kind)
+ },async command({kind,args}){assert.equal(kind,'message.notification.prepare');notices.set(args.notificationId,{...args,id:args.notificationId});return{}}}
+ const controller={taskPlan:async()=>({task:{controlState:'active'},stages:scenario==='internal-started'?[{status:'running',runId:'investigation'}]:[]}),state:async()=>({run:{status:'running'},nodes:[{status:'running',startedAt:'2026-10-02T00:00:00Z'}]})}
+ for(let n=0;n<2;n++)await createWorkflowNotifications({store,controller}).flush()
+ const visible=[...notices.values()].filter(n=>n.payload.phase.startsWith('owner:'))
+ assert.equal(visible.length,['ordinary-progress','complete','user-action','new-intent'].includes(scenario)?1:0)
+ assert.ok(pages.includes(200))
+ if(scenario==='complete')assert.match(visible[0].payload.text,/^任务已完成/u)
 })

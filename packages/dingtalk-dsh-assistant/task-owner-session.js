@@ -173,7 +173,8 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
             const correctable = ['TASK_OWNER_DECISION_INVALID', 'TASK_OWNER_CONDITION_REQUIRED', 'TASK_OWNER_CONDITION_INVALID',
               'TASK_OWNER_ADVANCE_CONFLICT', 'TASK_OWNER_WAIT_CONFLICT', 'TASK_OWNER_BLOCK_CONFLICT', 'TASK_OWNER_COMPLETION_UNPROVEN', 'TASK_OWNER_STAGE_NOT_AUTHORIZED', 'TASK_OWNER_COMPLETION_UNVERIFIED']
             if (correctable.includes(error.code)) {
-              return rejectCandidate(entry, args.decision, error.code, error.code + '：候选未落账。核对当前task/stages及验收证据；wait/block必须给出具体condition，阶段全部成功仍可等待整体目标的必要条件。尚无计划时用initialize，已有成功计划可append后续阶段；advance须有合法后续计划，complete须满足全部验收；请修正，不得重复相同拒绝决定。')
+              if (error.ownerDiagnosticRef) entry.readableArtifacts.add(error.ownerDiagnosticRef)
+              return rejectCandidate(entry, args.decision, error.code, (error.message && error.message !== error.code ? error.message + '\n' : '') + error.code + '：候选未落账。核对当前task/stages及验收证据；wait/block必须给出具体condition，阶段全部成功仍可等待整体目标的必要条件。尚无计划时用initialize，已有成功计划可append后续阶段；advance须有合法后续计划，complete须满足全部验收；请修正，不得重复相同拒绝决定。')
             }
             if (error.code === 'TASK_OWNER_REPAIR_BINDING_INVALID') {
               entry.attempted = false
@@ -238,7 +239,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
       writeCapabilities: new Set((input.capabilities ?? []).filter(item => item.effectClass === 'file.write').map(item => item.id)),
       unreadPages: new Set((input.eventPages ?? []).map(page => page.ref)),
       readableArtifacts: new Set([...(input.stageArtifacts ?? []).flatMap(stage =>
-        [stage.outputRef, ...(stage.evidenceRefs ?? [])]), ...(input.events ?? []).map(event => event.payloadRef),
+        [stage.outputRef, ...(stage.evidenceRefs ?? []), ...(stage.nodeArtifacts ?? []).map(node => node.artifactRef)]), ...(input.events ?? []).map(event => event.payloadRef),
         ...(input.goal?.materials ?? []).map(material => material.artifactRef), input.deliveryManifest?.ref].filter(Boolean)),
       rejectedCandidates: new Set(), abort: new AbortController(), drained: Promise.withResolvers() }
     entries.set(binding.taskId, entry)

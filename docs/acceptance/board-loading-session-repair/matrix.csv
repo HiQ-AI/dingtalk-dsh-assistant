@@ -70,3 +70,12 @@ private-approval-native-lifecycle-and-replies,14,PASS,round-14.md
 local-deployment-without-history-backup,14,PASS,round-14.md
 private-approval-readable-message,15,PASS,round-15.md
 private-approval-without-sql,16,PASS,round-16.md
+data-change-completion-live,17,FAIL,round-17.md
+data-change-completion-proof-negative-cases,17,PASS,round-17.md
+native-completion-copy-and-tamper,18,PASS,round-18.md
+internal-readonly-recovery-notification,17,PASS,round-17.md
+data-change-completion-live,18,FAIL,round-18.md
+data-change-completion-live,19,PASS,round-19.md
+data-change-conditional-diagnostic-read,19,PASS,round-19.md
+data-change-recovery-no-new-write,19,PASS,round-19.md
+internal-recovery-group-quiet-and-complete,19,PASS,round-19.md

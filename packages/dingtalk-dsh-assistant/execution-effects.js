@@ -441,6 +441,24 @@ export function queryEffects(db, query) {
   if (query.kind === 'effect.get') return effectDto(effectRow(db, args.effectId))
   if (query.kind === 'effect.list') return db.prepare('SELECT * FROM execution_effects WHERE run_id=? ORDER BY created_at,effect_id').all(text(args.runId, 'runId')).map(effectDto)
   if (query.kind === 'approval.get') return approvalDto(approvalRow(db, args.requestId))
+  if (query.kind === 'approval.execution-proof') {
+    const approval = approvalRow(db, args.requestId), gate = effectRow(db, approval.effect_id)
+    const execute = effectRow(db, args.executeEffectId), payload = JSON.parse(execute.definition_json).payload
+    if (approval.decision !== 'approved' || approval.revoked || !approval.decided_by
+      || !JSON.parse(approval.approver_ids_json).includes(approval.decided_by)
+      || gate.state !== 'succeeded' || execute.state !== 'succeeded' || gate.run_id !== execute.run_id
+      || gate.generation !== execute.generation || payload?.stage !== 'execute-task'
+      || payload.approvalRequestId !== approval.request_id) fail('approval_execution_not_proven')
+    const decided = db.prepare("SELECT seq,payload FROM execution_events WHERE kind='approval.decided' AND json_extract(payload,'$.requestId')=? ORDER BY seq LIMIT 1").get(approval.request_id)
+    const started = db.prepare("SELECT seq FROM execution_events WHERE kind='effect.started' AND json_extract(payload,'$.effectId')=? ORDER BY seq LIMIT 1").get(execute.effect_id)
+    const observed = db.prepare("SELECT seq FROM execution_events WHERE kind='effect.observed' AND json_extract(payload,'$.effectId')=? AND json_extract(payload,'$.state')='succeeded' ORDER BY seq LIMIT 1").get(execute.effect_id)
+    const decision = decided && JSON.parse(decided.payload)
+    if (!decided || !started || !observed || decided.seq >= started.seq || started.seq >= observed.seq
+      || decision.decision !== 'approved' || decision.effectId !== gate.effect_id
+      || decision.actorId !== approval.decided_by || decision.source !== approval.decision_source) fail('approval_execution_not_proven')
+    return { approval: approvalDto(approval), gateEffectId: gate.effect_id, executeEffectId: execute.effect_id,
+      approvedSequence: decided.seq, executionStartedSequence: started.seq, executionSucceededSequence: observed.seq }
+  }
   if (query.kind === 'approval.notice') return approvalNotice(db, args.requestId)
   if (query.kind === 'approval.list') {
     const limit = args.limit ?? 200

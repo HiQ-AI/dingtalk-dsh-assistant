@@ -750,15 +750,78 @@ function command(value) {
       const invalidRepair=owner.last_failure==='WORKFLOW_REPAIR_NOT_ADMITTED' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='repairCurrentStage'").get(a.taskId,owner.lease_epoch) : null
       const rejectedSourcePlan=owner.last_failure==='TASK_STAGE_SOURCE_CONDITION_INVALID' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='advance'").get(a.taskId,owner.lease_epoch) : null
       const rejectedAction=invalidRepair??rejectedSourcePlan
+      const externalRuns=db.prepare("SELECT * FROM execution_runs WHERE task_id=? AND workflow_id<>'task-investigation'").all(a.taskId)
+      const handedOffRuns=new Set()
+      for(const run of externalRuns.filter(run=>run.workflow_id==='task-data-change'&&run.status==='cancelled'&&run.stop_requested)){
+        const historical=db.prepare('SELECT * FROM execution_effects WHERE run_id=?').all(run.run_id)
+        const gate=historical.find(effect=>effect.node_id==='approval-gate'),created=historical.find(effect=>effect.node_id==='create-issue')
+        const closed=gate?.result_json&&JSON.parse(gate.result_json),proof=closed?.result?.result,view=proof?.view,pack=view?.prepared?.package
+        const handoffEvent=db.prepare("SELECT event_key FROM task_events WHERE task_id=? AND event_type='approval.channel.changed' AND payload_ref IS NOT NULL").all(a.taskId).find(event=>{
+          const receipt=db.prepare('SELECT result FROM execution_receipts WHERE command_id=?').get(`${event.event_key}:stop`)
+          const stopped=receipt&&JSON.parse(receipt.result).run
+          return stopped?.runId===run.run_id&&stopped.taskId===a.taskId&&stopped.requirementRef===run.requirement_ref&&stopped.generation===run.generation
+            &&stopped.stopRequested&&JSON.parse(stopped.recoveryReason??'null')?.kind==='approval-channel-handoff'
+        })
+        if(historical.length!==2||!gate||!created||created.state!=='succeeded'||gate.state!=='failed'
+          ||closed.result?.reason!=='APPROVAL_CHANNEL_SUPERSEDED'||closed.status!=='failed'||closed.effectId!==gate.effect_id||proof?.kind!=='data-change-approval-handoff'
+          ||proof.taskId!==a.taskId||proof.originalRunId!==run.run_id||proof.originalGeneration!==run.generation||proof.originalRequirementRef!==run.requirement_ref
+          ||proof.effectId!==gate.effect_id||proof.nodeRunId!==gate.node_run_id||proof.inputDigest!==gate.input_digest||proof.effectDigest!==executionDigest(JSON.parse(gate.definition_json))
+          ||!pack||!handoffEvent
+          ||db.prepare('SELECT 1 FROM execution_nodes WHERE run_id=? AND drained=0').get(run.run_id))continue
+        if(!historical.every(effect=>effect.result_json&&db.prepare('SELECT 1 FROM execution_effect_observations WHERE effect_id=? AND payload_json=? AND payload_digest=?').get(effect.effect_id,effect.result_json,executionDigest(JSON.parse(effect.result_json)))))continue
+        const createdResult=JSON.parse(created.result_json)
+        if(createdResult.effectId!==created.effect_id||createdResult.status!=='succeeded'||createdResult.result?.result?.issueId!==view.issue?.id)continue
+        const resume=externalRuns.find(next=>next.workflow_id==='task-data-change-approval-resume'&&next.status==='succeeded'
+          &&db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND run_id=? AND status='succeeded'").get(a.taskId,task.plan_revision,next.run_id)
+          &&db.prepare("SELECT 1 FROM execution_nodes WHERE run_id=? AND node_id='freeze-existing-issue' AND current=1 AND status='succeeded' AND drained=1 AND output_ref IS NOT NULL").get(next.run_id)
+          &&db.prepare("SELECT definition_json FROM execution_effects WHERE run_id=? AND node_id='execute-task' AND state='succeeded'").all(next.run_id).some(effect=>{
+            const intent=JSON.parse(effect.definition_json).payload?.intent
+            return intent&&intent.issueId===view.issue?.id&&intent.planId===view.plan?.id&&intent.sheetId===view.sheet?.id
+              &&intent.applySqlSha256===pack.applySqlSha256&&intent.packageDigest===pack.validation?.packageDigest&&canonical(intent.target)===canonical(pack.target)
+          }))
+        if(resume)handedOffRuns.add(run.run_id)
+      }
+      const completedExternal=externalRuns.length>0 && (()=>{
+        const stages=db.prepare("SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND status<>'invalidated'").all(a.taskId,task.plan_revision)
+        if(!stages.length||stages.some(stage=>stage.status!=='succeeded'||!stage.output_ref||!stage.run_id))return false
+        for(const run of externalRuns){
+          if(handedOffRuns.has(run.run_id))continue
+          const stage=stages.find(stage=>stage.run_id===run.run_id)
+          if(!['task-data-change','task-data-change-approval-resume'].includes(run.workflow_id)||run.status!=='succeeded'
+            ||!stage||stage.workflow_id!==run.workflow_id||stage.workflow_digest!==run.workflow_digest||stage.requirement_ref!==run.requirement_ref
+            ||db.prepare("SELECT 1 FROM execution_nodes WHERE run_id=? AND current=1 AND (status<>'succeeded' OR drained=0)").get(run.run_id))return false
+          const condition=stage.source_condition&&JSON.parse(stage.source_condition)
+          const source=condition&&a.sources?.find(source=>source.sourceKey===condition.sourceKey&&source.sourceVersion===condition.sourceVersion)
+          const current=source&&readCurrentTaskSource(db,source.sourceKey,{taskId:a.taskId})
+          if(!current||!condition.sourceQuote||!current.body.includes(condition.sourceQuote)||condition.requiredActorId&&condition.requiredActorId!==current.actorId)return false
+        }
+        const effects=db.prepare('SELECT e.* FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').all(a.taskId)
+        if(!effects.length)return false
+        for(const effect of effects){
+          if(handedOffRuns.has(effect.run_id))continue
+          const node=db.prepare('SELECT * FROM execution_nodes WHERE node_run_id=?').get(effect.node_run_id)
+          const result=effect.result_json&&JSON.parse(effect.result_json)
+          if(effect.state!=='succeeded'||!node||node.run_id!==effect.run_id||node.node_id!==effect.node_id||!node.current
+            ||node.generation!==effect.generation||node.input_digest!==effect.input_digest||node.status!=='succeeded'||!node.drained
+            ||result?.effectId!==effect.effect_id||result.status!=='succeeded'||!result.evidenceRef
+            ||!db.prepare('SELECT 1 FROM execution_effect_observations WHERE effect_id=? AND payload_json=? AND payload_digest=?').get(effect.effect_id,effect.result_json,executionDigest(result)))return false
+          if(effect.request_id){
+            const approval=db.prepare('SELECT * FROM execution_approvals WHERE request_id=? AND effect_id=?').get(effect.request_id,effect.effect_id)
+            if(!approval||approval.decision!=='approved'||approval.revoked||!JSON.parse(approval.approver_ids_json).includes(approval.decided_by))return false
+          }
+        }
+        return true
+      })()
       if(task.state!=='active'||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND requirement_revision=? AND plan_revision=? AND status='accepted' AND application_status='applied' AND json_extract(decision_json,'$.action')='complete' LIMIT 1").get(a.taskId,task.requirement_revision,task.plan_revision)||!['idle','blocked'].includes(owner.status)||owner.current_turn_id
         ||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,rejectedAction?.turn_id??'')
         ||rejectedSourcePlan&&db.prepare('SELECT 1 FROM execution_receipts WHERE command_id=?').get(`owner-plan:${rejectedSourcePlan.turn_id}`)
         ||!db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND workflow_id='task-investigation' AND status IN ('failed','waiting','succeeded')").get(a.taskId)
-        ||db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND (workflow_id<>'task-investigation' OR status NOT IN ('failed','waiting','succeeded'))").get(a.taskId)
+        ||db.prepare('SELECT * FROM execution_runs WHERE task_id=?').all(a.taskId).some(run=>!handedOffRuns.has(run.run_id)
+          &&(!['failed','waiting','succeeded'].includes(run.status)||run.workflow_id!=='task-investigation'&&!completedExternal))
         ||db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
         ||db.prepare("SELECT 1 FROM execution_inputs i JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND i.status='pending'").get(a.taskId)
-        ||db.prepare('SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').get(a.taskId)
-        ||db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND workflow_id<>'task-investigation' AND status<>'invalidated'").get(a.taskId))fail('TASK_OWNER_REASSESS_FORBIDDEN')
+        ||!completedExternal&&db.prepare('SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').get(a.taskId)
+        ||!completedExternal&&db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND workflow_id<>'task-investigation' AND status<>'invalidated'").get(a.taskId))fail('TASK_OWNER_REASSESS_FORBIDDEN')
       if(!Array.isArray(a.sources)||!a.sources.length)fail('TASK_AUTHORIZATION_SOURCE_STALE')
       for(const source of a.sources){
         object(source,['sourceKey','sourceVersion','actorId','bodyDigest'])

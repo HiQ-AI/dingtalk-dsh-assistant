@@ -2,6 +2,8 @@
 
 ## 普通本地部署不备份历史副本
 
+数据库变更验收证据交接修复无 schema 迁移，沿本页普通部署。切换后先只读核对原成功 Run 的节点工件、插件批准与执行事件序号、工单原始 SQL、Task/TaskRun DONE 及生产列定义；再按当前 Owner/需求/控制版本调用原 Task 的 `reassess-readonly`。成功外部阶段仅在节点排空、效果成功、批准有效且当前来源未变时允许重评。旧定义不改写，不新建工单、不再次执行 DDL；独立回读业务验收、任务完成和群消息后才算恢复完成。
+
 当前无 schema 或历史文件迁移的本地部署直接使用 `deploy-owner-repair.ps1`，默认不复制控制数据库、任务目录、工件、Domain 或 profile 历史副本，也不遍历历史树计算备份容量。没有新增备份开关。仅保存此次精确包/profile 摘要、维护封存许可、控制历史只读快照和 `deployment-control.json`；这些是部署控制证据，不是业务数据恢复副本。
 
 本次 round14 沿现有参数：`-Package <D:/dsh_home/packages/唯一Assistant包>`、`-ExpectedPackageSha256 <包摘要>`、`-ExpectedProfileSha256 <当前profile摘要>`、`-DirectQueriesProposal <保持当前查询配置的既有提案>`、`-TaskDirectory <真实Agent任务根>`、`-EvidenceDirectory <当前worktree/docs/tmp/新目录>`；先加 `-Check`。通过后同参数去掉 `-Check` 执行，可用 `-HoldMaintenance` 保持维护待独立核验，再使用同参数 `-Readback` / `-Resume`。本轮不传任何迁移、Bootstrap、RepairStoppedLaunch 或 Observer 参数。

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { isSimpleNullableColumnSql, simpleNullableColumnDefinition } from './workflow-data-change.js'
+import { assertDataChangeExecutionIdentity, isSimpleNullableColumnSql, simpleNullableColumnDefinition } from './workflow-data-change.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
 
 const sha = value => createHash('sha256').update(value, 'utf8').digest('hex')
@@ -327,6 +327,36 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
       return { task: result.task, taskRun: result.taskRun,
         production: { passed: true, target: request.target, packageDigest: request.packageDigest,
           readbackId: verification.readbackId, observedChange: verification.observedChange } }
+    },
+    async readCompletion({ request, receipt, view, signal }) {
+      signal?.throwIfAborted()
+      const entry = checkRequest(request)
+      const identity = assertDataChangeExecutionIdentity(view)
+      required(request.stage === 'execute-task' && receipt?.status === 'succeeded'
+        && request.packageDigest === identity.packageDigest && request.applySqlSha256 === identity.applySqlSha256
+        && same(request.target, identity.target) && request.intent.issueId === identity.issueId
+        && request.intent.planId === identity.planId && request.intent.sheetId === identity.sheetId
+        && request.approvalRequestId === identity.approvalRequestId
+        && request.intent.approvalRequestId === identity.approvalRequestId
+        && request.intent.approvalScopeDigest === view.approval.scopeDigest
+        && view.approval.scopeDigest === approvalScope(request)
+        && request.intent.applySql === view.prepared.package.applySql,
+      'BYTEBASE_COMPLETION_IDENTITY_UNCONFIRMED')
+      const bundle = await api.getIssueBundle({ project: entry.project, issueId: identity.issueId, signal })
+      required(bundle?.issue?.id === identity.issueId && bundle.issue.project === entry.project
+        && bundle.issue.planId === identity.planId && bundle.issue.packageDigest === identity.packageDigest
+        && bundle.issue.operationKey === request.intent.issueCreationOperationKey
+        && bundle.sheet?.id === identity.sheetId && bundle.sheet.project === entry.project
+        && bundle.sheet.sha256 === identity.applySqlSha256 && same(bundle.sheet.target, identity.target)
+        && bundle.plan?.id === identity.planId && bundle.plan.project === entry.project
+        && bundle.plan.sheetId === identity.sheetId && bundle.task?.id === receipt.result?.taskId
+        && bundle.task.planId === identity.planId,
+      'BYTEBASE_COMPLETION_IDENTITY_UNCONFIRMED')
+      const result = await adapter.readback({ stage: 'execute-task', request, receipt, ...view, signal })
+      signal?.throwIfAborted()
+      required(result.task.id === bundle.task.id, 'BYTEBASE_COMPLETION_IDENTITY_UNCONFIRMED')
+      return { issue: bundle.issue, sheet: bundle.sheet, plan: bundle.plan,
+        applySql: view.prepared.package.applySql, ...result }
     },
     async inspect({ stage, issue, sheet, plan, prepared, request, receipt, signal }) {
       const pkg = prepared.package, entry = entryFor(pkg.target)

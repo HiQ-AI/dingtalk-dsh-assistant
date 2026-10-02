@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createTaskOwnerSessions } from './task-owner-session.js'
+import { executionDigest } from './execution-artifacts.js'
 
 const error = code => Object.assign(new Error(code), { code })
 const key = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex')
@@ -27,6 +28,7 @@ export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, 
         ...(extension?.nodeArtifacts ?? []).map(node => node.artifactRef)].some(ref => !known.has(ref)))
         throw error('TASK_OWNER_ARTIFACT_SCOPE_MISMATCH')
       if (extension?.nodeArtifacts) entry.nodeArtifacts = extension.nodeArtifacts
+      if (extension?.domainEvidence !== undefined) entry.domainEvidence = structuredClone(extension.domainEvidence)
       entry.evidenceRefs = [...new Set([...entry.evidenceRefs, ...(extension?.evidenceRefs ?? [])])]
       if (extension?.completionEvidenceRefs) entry.completionEvidenceRefs = extension.completionEvidenceRefs
     }
@@ -181,9 +183,10 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         const input = await snapshot(taskId, claim, signal)
         const unreadPages = new Set((input.eventPages ?? []).map(page => page.ref))
         const readableArtifacts = new Set(input.stageArtifacts.flatMap(stage =>
-          [stage.outputRef, ...stage.evidenceRefs].filter(Boolean)))
+          [stage.outputRef, ...stage.evidenceRefs, ...(stage.nodeArtifacts ?? []).map(node => node.artifactRef)].filter(Boolean)))
         if (input.deliveryManifest) readableArtifacts.add(input.deliveryManifest.ref)
         for (const ref of [...input.events.map(event => event.payloadRef), ...(input.goal?.materials ?? []).map(material => material.artifactRef)].filter(Boolean)) readableArtifacts.add(ref)
+        let acceptedCompletion
         const result = await sessions.run({ binding, input, ...modelConfig(), signal,
           readPage: async pageRef => {
             if (!unreadPages.has(pageRef)) throw error('TASK_OWNER_PAGE_NOT_ALLOWED')
@@ -210,9 +213,29 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
             }
             const proposed = decision.planChange?.stages ?? decision.appendStages
             if (proposed && !await authorizeStages({ taskId, stages: proposed, signal })) throw error('TASK_OWNER_STAGE_NOT_AUTHORIZED')
-            if (decision.action === 'complete' && !await authorizeCompletion({ taskId, decision, signal })) throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
-            return command(`owner-candidate:${turnId}`, 'task.owner.candidate', {
+            if (decision.action === 'complete') {
+              try {
+                if (!await authorizeCompletion({ taskId, decision, signal })) throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
+              } catch (cause) {
+                delete cause.ownerDiagnosticRef
+                if (cause.code === 'TASK_OWNER_COMPLETION_UNVERIFIED' && cause.diagnosticRef) {
+                  const diagnostic = await artifacts.read(cause.diagnosticRef)
+                  if (diagnostic.kind !== 'domain-acceptance-rejection' || diagnostic.taskId !== taskId
+                    || !Array.isArray(diagnostic.evidence) || !diagnostic.evidence.length
+                    || diagnostic.evidence.some(item => item.hostExecution?.taskId !== taskId
+                      || !input.stages.some(stage => stage.runId === item.hostExecution.runId && stage.outputRef === item.evidenceId)))
+                    throw error('TASK_OWNER_ARTIFACT_SCOPE_MISMATCH')
+                  readableArtifacts.add(cause.diagnosticRef)
+                  cause.ownerDiagnosticRef = cause.diagnosticRef
+                }
+                throw cause
+              }
+            }
+            const digest = decision.action === 'complete' ? executionDigest(decision) : null
+            const candidate = await command(`owner-candidate:${turnId}`, 'task.owner.candidate', {
               taskId, turnId, leaseEpoch: claim.leaseEpoch, decision })
+            if (digest) acceptedCompletion = { decision, digest }
+            return candidate
           },
         })
         signal.throwIfAborted()
@@ -224,9 +247,12 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         signal.throwIfAborted()
         let deliveryManifestRef
         if (result.decision.action === 'complete' && readDeliveryManifest) {
+          if (!acceptedCompletion || executionDigest(result.decision) !== acceptedCompletion.digest
+            || executionDigest(acceptedCompletion.decision) !== acceptedCompletion.digest)
+            throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
           const plan = await controller.taskPlan(taskId)
           const requirement = await artifacts.read(plan.task.requirementRef)
-          const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision: result.decision, signal })
+          const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision: acceptedCompletion.decision, signal })
           signal.throwIfAborted()
           if (manifest?.kind !== 'task-delivery-manifest' || manifest.version !== 1 || manifest.complete !== true
               || manifest.businessValidation?.status !== 'accepted'

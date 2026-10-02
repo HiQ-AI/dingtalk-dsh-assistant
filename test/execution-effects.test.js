@@ -523,3 +523,41 @@ for(const scenario of ['unknown','sent','permission','foreign'])test(`PR不允�
  assert.throws(()=>f.command('effect.rearmUnsent',{effectId:'pr',leaseEpoch:2,observationRef:scenario==='foreign'?'different':'synthetic-observation:1',proofRef:'sha256/proof',proof:{operationKey:payload.operationKey,preparedDigest:payload.digest,mutationAttempted:false,reason:'PR_PREFLIGHT_NOT_SENT'}}),code('effect_unsent_recovery_not_proven'))
  assert.equal(f.get('pr').state,scenario==='unknown'?'unknown':'failed');f.db.close()
 })
+
+for (const scenario of ['approved-order','late-approval','wrong-actor','revoked','cross-run','unknown-effect','failed-effect','wrong-request','wrong-generation','unauthorized-actor']) test(`原生批准与执行成功序列必须同一绑定：${scenario}`, t => {
+  const f = fixture(); t.after(() => f.db.close())
+  f.command('effect.prepare', prepared('proof-gate', request('proof-approval')))
+  f.command('approval.decide', decide('proof-approval'))
+  f.command('effect.begin', beginArgs('proof-gate'))
+  f.command('effect.observe', receipt('proof-gate'))
+  f.command('effect.prepare', prepared('proof-execute', { definition: { adapterId: 'synthetic', adapterVersion: '1', principalId: 'owner', target: 'synthetic-target', payload: { stage: 'execute-task', approvalRequestId: 'proof-approval' } } }))
+  f.command('effect.begin', beginArgs('proof-execute'))
+  f.command('effect.observe', receipt('proof-execute'))
+  const decision = f.db.prepare("SELECT seq,payload FROM execution_events WHERE kind='approval.decided'").get()
+  if (scenario === 'late-approval') {
+    f.db.prepare('DELETE FROM execution_events WHERE seq=?').run(decision.seq)
+    f.db.prepare("INSERT INTO execution_events(kind,payload) VALUES('approval.decided',?)").run(decision.payload)
+  }
+  if (scenario === 'wrong-actor') f.db.prepare("UPDATE execution_events SET payload=json_set(payload,'$.actorId','other') WHERE kind='approval.decided'").run()
+  if (scenario === 'unauthorized-actor') {
+    f.db.prepare("UPDATE execution_events SET payload=json_set(payload,'$.actorId','other') WHERE kind='approval.decided'").run()
+    f.db.prepare("UPDATE execution_approvals SET decided_by='other'").run()
+  }
+  if (scenario === 'revoked') f.command('approval.revoke', decide('proof-approval'))
+  if (scenario === 'cross-run') {
+    f.db.prepare("INSERT INTO execution_runs VALUES('another-run',1,0)").run()
+    f.db.prepare("UPDATE execution_effects SET run_id='another-run' WHERE effect_id='proof-execute'").run()
+  }
+  if (scenario === 'unknown-effect') f.db.prepare("UPDATE execution_effects SET state='unknown' WHERE effect_id='proof-execute'").run()
+  if (scenario === 'failed-effect') f.db.prepare("UPDATE execution_effects SET state='failed' WHERE effect_id='proof-execute'").run()
+  if (scenario === 'wrong-request') f.db.prepare("UPDATE execution_effects SET definition_json=json_set(definition_json,'$.payload.approvalRequestId','another-approval') WHERE effect_id='proof-execute'").run()
+  if (scenario === 'wrong-generation') f.db.prepare("UPDATE execution_effects SET generation=2 WHERE effect_id='proof-execute'").run()
+  const read = () => queryEffects(f.db, { kind: 'approval.execution-proof', requestId: 'proof-approval', executeEffectId: 'proof-execute' })
+  if (scenario === 'approved-order') {
+    const proof = read()
+    assert.equal(proof.gateEffectId, 'proof-gate'); assert.equal(proof.executeEffectId, 'proof-execute')
+    assert.equal(proof.approval.decidedBy, 'owner')
+    assert.ok(proof.approvedSequence < proof.executionStartedSequence)
+    assert.ok(proof.executionStartedSequence < proof.executionSucceededSequence)
+  } else assert.throws(read, code('approval_execution_not_proven'))
+})

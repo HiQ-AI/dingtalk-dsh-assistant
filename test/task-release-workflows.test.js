@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,9 +9,89 @@ import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execu
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
-import { createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
+import { createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, readDataChangeCompletionEvidence, createNativeDataChangeCompletionPolicy } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 
 const commitSha = 'a'.repeat(40)
+
+function completionEvidenceFixture() {
+  const target = { instance: 'production', database: 'editor', environment: 'production' }
+  const applySql = 'ALTER TABLE public.process_id_temp ADD COLUMN name text;'
+  const applySqlSha256 = createHash('sha256').update(applySql).digest('hex')
+  const body = { target, applySql, applySqlSha256 }, packageDigest = executionDigest(body)
+  const identity = { runId: 'run', generation: 1, issueId: '857', planId: 'plan', sheetId: 'sheet',
+    target, sheetSha256: applySqlSha256, packageDigest }
+  const scopeDigest = executionDigest(identity)
+  const view = { prepared: { package: { ...body, validation: { receiptId: 'validation', packageDigest } } },
+    issue: { id: '857', planId: 'plan' }, plan: { id: 'plan', sheetId: 'sheet' }, sheet: { id: 'sheet', sha256: applySqlSha256, target },
+    approval: { decision: 'approved', human: true, source: 'assistant', issueId: '857', planId: 'plan', sheetId: 'sheet',
+      target, sheetSha256: applySqlSha256, packageDigest, scopeDigest, requestId: 'approval', decidedBy: 'approver' } }
+  const request = { runId: 'run', generation: 1, workflowKind: 'data-change', stage: 'execute-task',
+    target, packageDigest, applySqlSha256, approvalRequestId: 'approval', intent: { approvalScopeDigest: scopeDigest, applySql } }
+  const receipt = { status: 'succeeded', result: { taskId: '905' } }
+  const final = { issueId: '857', planId: 'plan', sheetId: 'sheet', taskId: '905', taskRunId: '901', packageDigest, applySqlSha256 }
+  const outputs = { 'readback-approval': view, 'prepare-execute': { view, request }, 'execute-task': { view, request, receipt }, 'readback-production': final }
+  const nodes = Object.keys(outputs).map(nodeId => ({ nodeId, nodeRunId: `${nodeId}-run`, outputRef: nodeId,
+    generation: 1, status: 'succeeded', executor: 'code', drained: true, inputDigest: `${nodeId}-input` }))
+  const effects = [{ effectId: 'execute-effect', nodeId: 'execute-task', nodeRunId: 'execute-task-run', generation: 1,
+    inputDigest: 'execute-task-input', state: 'succeeded', definition: { payload: request },
+    result: { effectId: 'execute-effect', status: 'succeeded', evidenceRef: 'execution-receipt', result: receipt } },
+    { effectId: 'gate-effect', nodeId: 'approval-gate', definition: { payload: { intent: { scopeDigest, issueId: '857' } } } }]
+  const approvalProof = { gateEffectId: 'gate-effect', approval: { decidedBy: 'approver' } }
+  const observed = { task: { id: '905', status: 'DONE' }, taskRun: { id: '901', status: 'DONE' },
+    production: { passed: true, packageDigest }, applySql }
+  let readbacks = 0
+  const context = { taskId: 'task', stage: { runId: 'run', outputRef: 'readback-production' },
+    state: { run: { taskId: 'task', runId: 'run', generation: 1, status: 'succeeded' }, nodes },
+    artifacts: { async read(ref) { assert.ok(Object.hasOwn(outputs, ref)); return outputs[ref] } },
+    store: { async query(query) { return query.kind === 'effect.list' ? effects : approvalProof } } }
+  const adapter = { async readCompletion(input) { readbacks++; assert.equal(input.request, request); return observed } }
+  return { context, adapter, outputs, effects, approvalProof, observed, get readbacks() { return readbacks } }
+}
+
+test('数据变更完成证明读取原节点、原生批准和执行效果，完成引用仅保留最终产物', async () => {
+  const f = completionEvidenceFixture(), proof = await readDataChangeCompletionEvidence(f.context, f.adapter)
+  assert.deepEqual(proof.completionEvidenceRefs, ['readback-production'])
+  assert.deepEqual(proof.nodeArtifacts.map(item => item.nodeId), Object.keys(f.outputs))
+  assert.equal(proof.domainEvidence.approval, f.approvalProof)
+  assert.equal(proof.domainEvidence.taskRun.id, '901')
+  const policy = createNativeDataChangeCompletionPolicy(f.adapter)
+  assert.equal(policy.version, '4')
+  let semantic = 0
+  assert.equal(await policy.validateCompletion({ ...f.context, output: f.outputs['readback-production'],
+    acceptanceItems: [{ criterion: '已添加列' }], verifyAcceptance: async () => { semantic++; return true } }), true)
+  assert.equal(semantic, 1); assert.equal(f.readbacks, 2)
+})
+
+test('完成证明拒绝节点、身份、执行效果、批准范围及线上回查漂移', async () => {
+  for (const [name, mutate, code] of [
+    ['缺节点', f => f.context.state.nodes.pop(), 'NODE_INVALID'],
+    ['重复节点', f => f.context.state.nodes.push({ ...f.context.state.nodes[0] }), 'NODE_INVALID'],
+    ['旧代次', f => f.context.state.nodes[0].generation = 0, 'NODE_INVALID'],
+    ['未排空', f => f.context.state.nodes[0].drained = false, 'NODE_INVALID'],
+    ['跨任务', f => f.context.state.run.taskId = 'other', 'IDENTITY_INVALID'],
+    ['执行包漂移', f => f.outputs['execute-task'].request.packageDigest = 'other', 'IDENTITY_INVALID'],
+    ['效果缺失', f => f.effects.shift(), 'EFFECT_INVALID'],
+    ['效果未知', f => f.effects[0].result = { status: 'unknown' }, 'EFFECT_INVALID'],
+    ['效果输入漂移', f => f.effects[0].inputDigest = 'other', 'EFFECT_INVALID'],
+    ['审批身份漂移', f => f.approvalProof.approval.decidedBy = 'other', 'APPROVAL_INVALID'],
+    ['审批scope漂移', f => f.effects[1].definition.payload.intent.scopeDigest = 'other', 'APPROVAL_INVALID'],
+    ['TaskRun未完成', f => f.observed.taskRun.status = 'RUNNING', 'READBACK_INVALID'],
+    ['生产核验失败', f => f.observed.production.passed = false, 'READBACK_INVALID'],
+    ['线上SQL漂移', f => f.observed.applySql = 'different SQL', 'READBACK_INVALID'],
+  ]) {
+    const f = completionEvidenceFixture(); mutate(f)
+    await assert.rejects(readDataChangeCompletionEvidence(f.context, f.adapter), new RegExp(`DATA_CHANGE_COMPLETION_${code}`), name)
+  }
+})
+
+test('驳回待修订仅交接意见，不读取线上且不能完成业务', async () => {
+  const f = completionEvidenceFixture()
+  f.outputs['readback-production'] = { outcome: 'needs_revision', comment: '修改字段规格' }
+  assert.equal((await readDataChangeCompletionEvidence(f.context, f.adapter)).domainEvidence.comment, '修改字段规格')
+  assert.equal(await createNativeDataChangeCompletionPolicy(f.adapter).validateCompletion({ ...f.context,
+    output: f.outputs['readback-production'] }), false)
+  assert.equal(f.readbacks, 0)
+})
 test('生产与重建旧定义摘要仍可恢复，新定义使用稳定换行摘要', () => {
   const frozenRules = '0e5ce6311e8a9d3d67e67fa22cd9422fad4b8951cd53cb93b91ddcf99ffc05c8'
   const expected = { 'production-release': '3ed7ab9e46b14c27e1d770b9c1302785f523a5b20abb7b6bb9fc5902860ca38b',
