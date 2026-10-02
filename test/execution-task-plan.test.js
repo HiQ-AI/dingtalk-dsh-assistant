@@ -168,13 +168,10 @@ test('新要求使旧成功计划的完成候选失效，必须重新确认计�
   await store.command({ id: 'bound-fence-owner', kind: 'task.owner.sessionBound', args: {
     taskId: 'fence-task', turnId: 'turn-fence-owner', leaseEpoch: claim.leaseEpoch, sessionId: 'owner-fence',
   } })
-  await store.command({ id: 'candidate-fence-owner', kind: 'task.owner.candidate', args: {
+  await assert.rejects(store.command({ id: 'candidate-fence-owner', kind: 'task.owner.candidate', args: {
     taskId: 'fence-task', turnId: 'turn-fence-owner', leaseEpoch: claim.leaseEpoch,
     decision: { action: 'complete', summary: '错误地宣称完成', evidenceRefs: [plan.stages[0].outputRef],
       assessments: [{ itemId: 'acceptance-1', status: 'satisfied', evidenceRefs: [plan.stages[0].outputRef] }] },
-  } })
-  await assert.rejects(store.command({ id: 'accept-stale-complete', kind: 'task.owner.accept', args: {
-    taskId: 'fence-task', turnId: 'turn-fence-owner', leaseEpoch: claim.leaseEpoch,
   } }), { code: 'TASK_OWNER_COMPLETION_UNPROVEN' })
 })
 
@@ -424,7 +421,9 @@ test('排查、方案、真人确认、开发、UAT 四阶段沿用同一业务 
       const decision = complete
         ? { action: 'complete', summary: '全部阶段有产物', evidenceRefs,
           assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs })) }
-        : { action: 'wait', summary: '等待当前阶段或真人确认', evidenceRefs: [] }
+        : { action: 'wait', summary: '等待当前阶段或真人确认', evidenceRefs: [], condition: {
+          kind: 'execution', missing: '当前阶段或真人确认尚未完成', responsibleParty: '阶段执行方或确认人',
+          resumeWhen: '阶段完成或取得真人确认', evidenceRefs: [] } }
       await onCandidate(decision)
       return { status: 'submitted', decision }
     }, async close() {} } })

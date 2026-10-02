@@ -7,7 +7,7 @@ import { maintenanceStatus, assertMaintenanceDispatch, reduceMaintenanceCommand 
 import { installEffectsSchema, validateEffectsSchema, reduceEffectCommand, recoverEffects,
   queryEffects, assertRunEffectsDrained, assertNodeEffectsSettled } from './execution-effects.js'
 
-import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced, registerMessageAcceptance, isBusinessTaskTerminal } from './message-ledger.js'
+import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced, registerMessageAcceptance, isBusinessTaskTerminal, readCurrentTaskSource } from './message-ledger.js'
 import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, queryTaskPlan, bindRunToTaskStage } from './execution-task-plan.js'
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
@@ -752,8 +752,7 @@ function command(value) {
       if(!Array.isArray(a.sources)||!a.sources.length)fail('TASK_AUTHORIZATION_SOURCE_STALE')
       for(const source of a.sources){
         object(source,['sourceKey','sourceVersion','actorId','bodyDigest'])
-        const row=db.prepare('SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=r.source_version WHERE r.source_key=?').get(source.sourceKey)
-        const current=row&&JSON.parse(row.body)
+        const current=readCurrentTaskSource(db,source.sourceKey,{taskId:a.taskId})
         if(!current||current.status==='superseded'||current.sourceVersion!==source.sourceVersion||current.actorId!==source.actorId
           ||createHash('sha256').update(canonical(current.body)).digest('hex')!==source.bodyDigest)fail('TASK_AUTHORIZATION_SOURCE_STALE')
       }
@@ -768,8 +767,7 @@ function command(value) {
       if (!Array.isArray(a.sources) || !a.sources.length) fail('TASK_AUTHORIZATION_SOURCE_STALE')
       for (const source of a.sources) {
         object(source, ['sourceKey','sourceVersion','actorId','bodyDigest'])
-        const row = db.prepare('SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=r.source_version WHERE r.source_key=?').get(source.sourceKey)
-        const current = row && JSON.parse(row.body)
+        const current = readCurrentTaskSource(db, source.sourceKey, { taskId: a.taskId })
         if (!current || current.status === 'superseded' || current.sourceVersion !== source.sourceVersion || current.actorId !== source.actorId
           || createHash('sha256').update(canonical(current.body)).digest('hex') !== source.bodyDigest) fail('TASK_AUTHORIZATION_SOURCE_STALE')
       }
@@ -1009,15 +1007,7 @@ function query(value) {
     .map(row => webTaskEvent(row.id)).filter(event => event.status === 'pending')
   if (value?.kind === 'task.origin') return taskOrigin(value.taskId, value.latest === true)
   if (value?.kind === 'task.source') {
-    if (value.sourceKey?.startsWith('web-context:')) {
-      const eventId = value.sourceKey.slice('web-context:'.length)
-      const event = webTaskEvent(eventId) ?? queryMessages(db, { kind: 'message.web-task', eventId })
-      if (!event || event.request.action !== 'context' || !event.request.requirement || event.status !== 'accepted') return null
-      return { sourceKey: value.sourceKey, sourceVersion: 1, actorId: event.actorId, channel: 'web',
-        body: event.request.context, conversationId: event.input.scope.conversationId, status: 'active' }
-    }
-    const row = db.prepare("SELECT payload FROM execution_events WHERE kind='task.web-rerun.accept' AND json_extract(payload,'$.source.sourceKey')=? ORDER BY seq LIMIT 1").get(value.sourceKey)
-    return row ? JSON.parse(row.payload).source : queryMessages(db, { kind: 'message.source', sourceKey: value.sourceKey })
+    return readCurrentTaskSource(db, value.sourceKey)
   }
   if (value?.kind === 'task.executionTiming') {
     object(value, ['kind', 'taskId']); text(value.taskId, 'taskId')

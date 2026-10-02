@@ -1895,7 +1895,12 @@ test('已有Task成功调查但Owner等待时经本机上下文修订目标和�
   t.after(() => release())
   const external = { releaseAdapters: { 'uat-deployment': { id: 'fixture', version: '1', rulesDigest: 'a'.repeat(64),
     inspect: async () => { throw Error('UNEXPECTED_EXTERNAL') }, prepareOperation: async () => { throw Error('UNEXPECTED_EXTERNAL') } } },
-  availableTargets: [{ workflowId: 'task-uat-deployment', targetId: 'uat-test' }],
+  dataChangeAdapter: { id: 'context-source-test', version: '1', rulesDigest: 'a'.repeat(64),
+    validate: async () => { throw Error('UNEXPECTED_EXTERNAL') }, prepareRehearsal: async () => { throw Error('UNEXPECTED_EXTERNAL') },
+    readbackRehearsal: async () => { throw Error('UNEXPECTED_EXTERNAL') }, inspect: async () => { throw Error('UNEXPECTED_EXTERNAL') },
+    prepareIssue: async () => { throw Error('UNEXPECTED_EXTERNAL') }, prepareApproval: async () => { throw Error('UNEXPECTED_EXTERNAL') },
+    prepareExecute: async () => { throw Error('UNEXPECTED_EXTERNAL') }, readback: async () => { throw Error('UNEXPECTED_EXTERNAL') } },
+  availableTargets: [{ workflowId: 'task-uat-deployment', targetId: 'uat-test' }, { workflowId: 'task-data-change', targetId: 'production-db' }],
   operationAdapter: { execute: async () => { throw Error('UNEXPECTED_EXTERNAL') }, reconcile: async () => ({ status: 'unknown' }) },
   authorizeExternal: async () => false, prepareRequirement: async () => { throw Error('UNEXPECTED_EXTERNAL') } }
   const { service, execution, message } = await fixture(t, 'owner', undefined, {
@@ -1924,8 +1929,9 @@ test('已有Task成功调查但Owner等待时经本机上下文修订目标和�
   const preservedOutput = completedStage.stages[0].outputRef
   assert.ok(preservedOutput)
   const revision = { objective: '按批准方案部署至 UAT', acceptanceCriteria: ['UAT 版本独立回读'],
-    stageTargets: { 'task-uat-deployment': 'uat-test' }, stageAuthorizations: [{
-      workflowId: 'task-uat-deployment', sourceQuote: '按批准方案部署至 UAT', objective: '按批准方案部署至 UAT', gate: 'none' }] }
+    stageTargets: { 'task-uat-deployment': 'uat-test', 'task-data-change': 'production-db' }, stageAuthorizations: [{
+      workflowId: 'task-uat-deployment', sourceQuote: '按批准方案部署至 UAT', objective: '按批准方案部署至 UAT', gate: 'none' },
+      { workflowId: 'task-data-change', sourceQuote: '按批准方案部署至 UAT', objective: '按批准方案部署至 UAT', gate: 'none' }] }
   const runtime = { isWorkflowTask: () => true, submitWorkflowTask: request => service.submitWebTask(request, { channel: 'web', actorId: 'owner' }) }
   const server = createServer((req, res) => handleRequest(req, res, runtime))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)))
@@ -1960,6 +1966,31 @@ test('已有Task成功调查但Owner等待时经本机上下文修订目标和�
   assert.equal(revisedPlan.stages[0].outputRef, preservedOutput)
   assert.equal(revisedPlan.stages[0].status, 'succeeded')
   assert.equal((await post({ ...input, context: '其他指令' })).status, 409)
+  await service.recover()
+  const ownerBeforeReassess = await execution.store.query({ kind: 'task.owner', taskId: task.taskId })
+  const reassessInput = { taskId: task.taskId, recoveryKey: 'accepted-web-context', reason: '按真实人工修订重新评估下一阶段',
+    expectedOwnerRevision: ownerBeforeReassess.revision, expectedLeaseEpoch: ownerBeforeReassess.leaseEpoch,
+    expectedRequirementRevision: revisedPlan.task.requirementRevision, expectedControlRevision: revisedPlan.task.controlRevision }
+  const reassessed = await service.reassessReadonly(reassessInput, { channel: 'web', actorId: 'owner' })
+  assert.equal(reassessed.accepted, true)
+  assert.deepEqual(await service.reassessReadonly(reassessInput, { channel: 'web', actorId: 'owner' }), reassessed)
+  assert.equal((await execution.store.query({ kind: 'task.owner', taskId: task.taskId })).sessionId, ownerBeforeReassess.sessionId)
+  const condition = { sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, sourceQuote: revision.objective, objective: revision.objective }
+  const stages = [{ stageId: revisedPlan.stages[0].stageId, workflowId: revisedPlan.stages[0].workflowId },
+    { stageId: 'submit-ddl', workflowId: 'task-data-change', gate: 'none', sourceCondition: condition }]
+  for (const patch of [{ sourceVersion: 2 }, { requiredActorId: 'other' }, { sourceQuote: '不存在的授权原文', objective: '不存在的授权原文' }])
+    await assert.rejects(execution.controller.reviseTaskPlan({ commandId: `invalid-web-source-${Object.keys(patch)[0]}`, taskId: task.taskId,
+      expectedPlanRevision: revisedPlan.task.planRevision, requirementRevision: revisedPlan.task.requirementRevision, affectedFrom: 1,
+      stages: [stages[0], { ...stages[1], sourceCondition: { ...condition, ...patch } }] }), /TASK_STAGE_SOURCE_CONDITION_INVALID/)
+  await assert.rejects(execution.controller.createTaskPlan({ commandId: 'cross-task-web-source', taskId: 'unrelated-context-task',
+    stages: [{ ...stages[1], stageId: 'foreign-source', input: {} }] }), /TASK_STAGE_SOURCE_CONDITION_INVALID/)
+  await execution.controller.reviseTaskPlan({ commandId: 'accepted-web-context-stage', taskId: task.taskId,
+    expectedPlanRevision: revisedPlan.task.planRevision, requirementRevision: revisedPlan.task.requirementRevision, affectedFrom: 1, stages })
+  const advancedPlan = await execution.controller.taskPlan(task.taskId)
+  assert.equal(advancedPlan.stages[0].outputRef, preservedOutput)
+  assert.equal(advancedPlan.stages[1].workflowId, 'task-data-change')
+  assert.deepEqual(advancedPlan.stages[1].sourceCondition, condition)
+  assert.equal(advancedPlan.stages[1].status, 'ready')
   release(); await execution.controller.whenIdle(original.stages[0].runId)
   } finally { release() }
 })

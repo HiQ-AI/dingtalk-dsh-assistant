@@ -4,6 +4,29 @@ import { sameDwsFileProjection } from './coordination-resources.js'
 import { maintenanceStatus } from './execution-maintenance.js'
 import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic, invalidateMessageSourceTopics, unbindMessageUnit, wholeTopicFactRevision } from './message-topics.js'
 
+// Host 查询与阶段来源校验共用当前真实来源；Web 人工修订只在持久接纳后授予该 Task。
+export function readCurrentTaskSource(db, sourceKey, { taskId } = {}) {
+  if (sourceKey?.startsWith('web-context:')) {
+    const eventId = sourceKey.slice('web-context:'.length)
+    const row = db.prepare("SELECT payload FROM execution_events WHERE kind IN ('task.web-input.prepare','task.web-input.finish') AND json_extract(payload,'$.event.id')=? ORDER BY seq DESC LIMIT 1").get(eventId)
+    const event = row ? JSON.parse(row.payload).event : queryMessages(db, { kind: 'message.web-task', eventId })
+    if (!event || event.status !== 'accepted' || event.request.action !== 'context' || !event.request.requirement
+      || taskId && event.request.taskId !== taskId
+      || event.input?.authorization?.channel !== 'web' || event.input.authorization.sourceKey !== sourceKey
+      || event.input.authorization.sourceVersion !== 1 || event.input.authorization.actorId !== event.actorId
+      || !event.input.scope?.sourceKeys?.includes(sourceKey) || event.input.scope.sourceVersions?.[sourceKey] !== 1) return null
+    return { sourceKey, sourceVersion: 1, actorId: event.actorId, channel: 'web',
+      body: event.request.context, conversationId: event.input.scope.conversationId, status: 'active' }
+  }
+  const row = db.prepare("SELECT payload FROM execution_events WHERE kind='task.web-rerun.accept' AND json_extract(payload,'$.source.sourceKey')=? ORDER BY seq LIMIT 1").get(sourceKey)
+  if (row) {
+    const accepted = JSON.parse(row.payload), source = accepted.source
+    if (taskId && accepted.taskId !== taskId || source.sourceVersion !== 1 || source.channel !== 'web') return null
+    return source
+  }
+  return queryMessages(db, { kind: 'message.source', sourceKey })
+}
+
 // 阶段结束不代表业务结束；仅取消控制或当前需求/水位已应用的 Owner 完成决定封闭上下文修订。
 export function isBusinessTaskTerminal(db, taskId) {
   const task = db.prepare('SELECT t.*,c.state AS control_state,c.control_revision FROM business_tasks t JOIN task_controls c USING(task_id) WHERE task_id=?').get(taskId)

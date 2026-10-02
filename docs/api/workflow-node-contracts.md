@@ -320,3 +320,4 @@ PR预检暂态失败仅在Host适配器通过完整本地日志独立证明同�
 
 已有调查 Run 或全部调查阶段成功不封闭原 Task 的需求修订。取消控制或当前需求与事件水位已应用的 Owner complete 才拒绝 context；无 Owner 的历史 Task 仍按业务终态判断。原生审批的两个等待代码复用外部效果只读对账路由，未批准不恢复执行，批准/驳回后原 Run 接续，禁止重新发送未知写入。
 明确 requirement 修订的验收清单与目标在同一事务更新；从真实 pending Web 事件读取并核对完整输入摘要、操作者、来源和比较版本，旧验收保留 inactive。普通 context 追加仍保留原验收。
+任务阶段来源验证、Host task.source 查询及只读重评/授权投影修复共享当前真实来源解析。Web 修订仅在实际持久 accepted 后生效，绑定 Task、actor、sourceVersion=1 与实际 context；跨 Task、篡改版本/引用/操作者拒绝。DWS 仍要求当前消息版本，旧成功成果不改写。
