@@ -631,3 +631,25 @@ test('任务短名称合同拒绝超过30字，读模型回退截断不修改完
  const source=await readFile(new URL('../packages/dingtalk-dsh-assistant/workflow-service.js',import.meta.url),'utf8');
  assert.match(source,/title: taskTitle\(requirement\?\.title/);
 });
+
+test('自动与手动刷新共用一个请求，失败后可重新读取',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8');
+ const fragment=source.slice(source.indexOf('      const pendingRefresh = '),source.indexOf('      const manualRefresh = '));
+ let calls=0,resolve,reject;const updates=[],errors=[];const operation=()=>{calls++;return new Promise((yes,no)=>{resolve=yes;reject=no})};
+ const refresh=runInNewContext(`(()=>{${fragment};return refresh})()`,{useRef:value=>({current:value}),useCallback:fn=>fn,load:operation,setData:v=>updates.push(v),setUpdatedAt:()=>{},setError:e=>errors.push(e),Date,Error});
+ const first=refresh();assert.equal(refresh(),first);assert.equal(calls,1);resolve({groups:[]});await first;assert.equal(updates.length,1);
+ const failed=refresh();reject(new Error('读取失败'));await failed;assert.equal(errors.at(-1),'读取失败');
+ const recovered=refresh();resolve({groups:[1]});await recovered;assert.equal(calls,3);assert.equal(updates.length,2);
+});
+
+test('详情慢查询跨刷新复用，切换任务不接受旧响应',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8');
+ const start=source.indexOf('      const pendingDetail = '),end=source.lastIndexOf('      useEffect(() => {',source.indexOf('        const target = detailFocusTarget.current',start));
+ const effects=[],requests=[],details=[],pending={current:null};
+ const environment={useRef:()=>pending,useEffect:fn=>effects.push(fn),selectedWorkflowTaskId:'one',workflowDetailRetry:0,updatedAt:0,get:path=>new Promise(resolve=>requests.push({path,resolve})),setWorkflowTaskDetail:v=>details.push(v),setWorkflowDetailError:()=>{},setStepReadingNotice:()=>{},detailFocusTarget:{current:null},adjacentCurrentStep:()=>null,document:{querySelectorAll:()=>[],activeElement:null},window:{innerHeight:900},encodeURIComponent};
+ const effect=()=>{runInNewContext(`(()=>{${source.slice(start,end)}})()`,environment);return effects.pop()()};
+ const first=effect();first();const refresh=effect();assert.equal(requests.length,1);refresh();
+ environment.selectedWorkflowTaskId='two';effect();assert.equal(requests.length,2);
+ requests[0].resolve({taskId:'one'});requests[1].resolve({taskId:'two'});await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(details.map(v=>v.taskId),['two']);
+});

@@ -453,6 +453,8 @@ IB 话题来源身份使用无损引用：`sourceIndexes` 按原顺序指向 sha
 
 通知滞留排障：prepared 没有 claim 不等于模型恢复阻塞。检查该 run 的 `notificationDiagnostics` 及既有 recovery 诊断，核对同一 Owner 报告的稳定 eventKey 是否已有通知；不得重发旧已送达报告或删除旧通知。当前扫描隔离单条事实失败，保留可回读诊断，其他待发通知和 unknown 回查仍继续；同一错误不按定时器重复写账。
 
+开始通知重复排障：通过 `message.notifications` 的 `taskId` 范围查询，核对群、`sourceMessageId`、`fact.sourceVersion` 及 `owner:started:` 通知事实；使用原 ACK 消息 ID 的 DWS 回查确认正文及引用。是否需要开始通知以 Task 和来源为准，新计划或重试沿用原开始事实；原发送未知只回查，旧的已送达通知不因重评重新发送。尚未发送即失效的旧通知不阻止后续真实开始；通知自身仍保留原 Run 事实及发送身份。不要按群聊中相同正文拦截其他 Task。
+
 ### 消息首次领取与恢复时钟
 
 每次模型节点领取独立保存 lease deadline，实际模型调用仍受单次超时限制，落账另保留 commitReserveMs。维护、并发槽及失败后的重试排队均不消耗下一次调用窗口；恢复不按包含排队时间的十分钟墙钟年龄拒绝。真实失败按 nodeId/leaseEpoch 去重计入最多两次恢复，重复扫描不扣次数，maxClaims 继续限制总调用。历史领取前超时由正常 recover 清除同原因事项阻挡，复用成功节点，不重处理来源；其他阻挡和未知效果不被解除。旧执行起点仍从最早模型 startedAt 推导供审计使用。
@@ -527,3 +529,7 @@ PR交付在预检网络故障时由原Controller按持久退避继续原节点�
 历史回执的节点输入、历史消息候选快照也会保留已清理任务的引用。只在控制账的execution_receipts/message_items中，按上述Task清理记录排除对应对象的闭包根；节点回执仅含Run时，用原生plannedStageRunId及historyRemoved阶段启动回执确认归属。旧直派流程按已保留dispatch命令的原生executionDigest，同时核对Task的32位和Run的40位摘要，不用名称前缀猜测。完整控制账和已有文件仍逐字节备份，未知归属的缺失工件仍阻止部署。
 
 已应用查询配置及Observer但启动失败的launch恢复，ExpectedProfileSha256使用launch记录的profileSha256（当前已应用摘要）；原sourceProfileSha256独立匹配原备份profile。原Observer不得更换，恢复预检核对原tgz摘要、源码及已安装内容。不再次应用配置提案，仍核对原提案摘要、封存许可、原备份、当前控制账及精确新Assistant包。
+
+### 看板加载与常驻显示
+
+群看板仅查询消息业务状态投影，模型节点完整输入输出留在按需详情中；历史消息仍完整按游标读取。自动与手动刷新共用同一进行中请求。群常驻会话空闲时保留原生挂接，模型步进拒绝、工具清空；运行前排空展示句柄再按原租约和工具恢复，运行结束保持标题/权限投影可读，关闭插件释放全部句柄。原生大继承会话离线时不返回投影，不能只检查持久文件即宣称页面生效；部署回读须实际session/list和打开会话核对。

@@ -1475,7 +1475,14 @@ export function queryMessages(db,a) {
   if(a.kind==='message.notification'){if(Boolean(a.notificationId)===Boolean(a.eventKey))fail('MESSAGE_NOTIFICATION_QUERY_INVALID');const row=a.eventKey?db.prepare("SELECT body FROM message_items WHERE kind='notification' AND json_extract(body,'$.eventKey')=? LIMIT 1").get(str(a.eventKey)):db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification:'+str(a.notificationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationOperation'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-operation:'+str(a.operationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationReplacement'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-replacement:'+str(a.replacementId));return row?JSON.parse(row.body):null}
-  if(a.kind==='message.notificationReplacements')return db.prepare("SELECT body FROM message_items WHERE kind='notification-replacement' AND json_extract(body,'$.restoresNotificationId')=? ORDER BY rowid").all(str(a.notificationId)).map(row=>JSON.parse(row.body))
+  if(a.kind==='message.notificationReplacements') {
+    if(a.notificationIds !== undefined) {
+      if(!Array.isArray(a.notificationIds) || a.notificationIds.length>200)fail('MESSAGE_NOTIFICATION_REPLACEMENTS_INVALID')
+      const ids=a.notificationIds.map(str)
+      return db.prepare("SELECT body FROM message_items WHERE kind='notification-replacement' AND json_extract(body,'$.restoresNotificationId') IN (SELECT value FROM json_each(?)) ORDER BY rowid").all(JSON.stringify(ids)).map(row=>JSON.parse(row.body))
+    }
+    return db.prepare("SELECT body FROM message_items WHERE kind='notification-replacement' AND json_extract(body,'$.restoresNotificationId')=? ORDER BY rowid").all(str(a.notificationId)).map(row=>JSON.parse(row.body))
+  }
   if(a.kind==='message.web-task'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('web-task:'+str(a.eventId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.web-tasks.pending')return db.prepare("SELECT body FROM message_items WHERE kind='web-task' AND json_extract(body,'$.status')='pending' ORDER BY rowid LIMIT 100").all().map(row=>JSON.parse(row.body))
   const topic=queryMessageTopics(db,a)
@@ -1537,17 +1544,25 @@ export function queryMessages(db,a) {
   if(a.kind==='message.notifications') {
     const limit=a.limit??100,after=a.afterSequenceId??0,states=a.states??['prepared','sending','acknowledged','unknown']
     if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(after)||after<0||!Array.isArray(states)||!states.length||states.some(s=>!['prepared','sending','acknowledged','unknown','delivered','superseded'].includes(s)))fail('MESSAGE_INVALID_LIMIT')
-    const scoped = (a.runId ? ' AND run_id=?' : '') + (a.sourceKey ? ' AND run_id IN (SELECT run_id FROM message_runs WHERE source_key=?)' : '')
+    const scoped = (a.runId ? ' AND run_id=?' : '') + (a.sourceKey ? ' AND run_id IN (SELECT run_id FROM message_runs WHERE source_key=?)' : '') + (a.taskId ? " AND json_extract(body,'$.payload.fact.taskId')=?" : '')
     return db.prepare(`SELECT rowid AS seq,body FROM message_items WHERE kind='notification' AND rowid>? AND json_extract(body,'$.status') IN (SELECT value FROM json_each(?))${scoped} ORDER BY rowid LIMIT ?`)
-      .all(after,json(states),...(a.runId?[str(a.runId)]:[]),...(a.sourceKey?[str(a.sourceKey)]:[]),limit).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
+      .all(after,json(states),...(a.runId?[str(a.runId)]:[]),...(a.sourceKey?[str(a.sourceKey)]:[]),...(a.taskId?[str(a.taskId)]:[]),limit).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
   }
   if(a.kind==='message.group') {const row=db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(str(a.conversationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.task-candidates') {const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER;if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT');return db.prepare("SELECT i.rowid AS seq,r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') AND json_type(i.body,'$.args.taskId')='text' AND length(json_extract(i.body,'$.args.taskId'))>0 AND json_extract(r.body,'$.conversationId')=? AND NOT EXISTS (SELECT 1 FROM execution_events e WHERE e.kind='task.delete' AND json_extract(e.payload,'$.taskId')=json_extract(i.body,'$.args.taskId')) AND i.rowid<? ORDER BY i.rowid DESC LIMIT ?").all(str(a.conversationId),before,limit).map(x=>({run:JSON.parse(x.run),command:JSON.parse(x.command),sequenceId:x.seq}))}
-  if(a.kind==='message.list') {
+  if(a.kind==='message.list'||a.kind==='message.mailbox') {
     const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER
     if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT')
     const sql=a.conversationId?"SELECT rowid AS seq,body FROM message_runs WHERE json_extract(body, '$.status')!='alias' AND json_extract(body, '$.conversationId')=? AND rowid<? ORDER BY rowid DESC LIMIT ?":"SELECT rowid AS seq,body FROM message_runs WHERE json_extract(body, '$.status')!='alias' AND rowid<? ORDER BY rowid DESC LIMIT ?"
-    return db.prepare(sql).all(...(a.conversationId?[a.conversationId,before,limit]:[before,limit])).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
+    return db.prepare(sql).all(...(a.conversationId?[a.conversationId,before,limit]:[before,limit])).map(x=>{
+      const source={...JSON.parse(x.body),sequenceId:x.seq}
+      if(a.kind==='message.list')return source
+      // 看板只读取业务状态；模型节点、执行输入和输出留在按需详情中。
+      const units=db.prepare("SELECT json_extract(body,'$.unitId') AS unitId,json_extract(body,'$.id') AS id,json_extract(body,'$.goalText') AS goalText,json_extract(body,'$.blockedReason') AS blockedReason FROM message_items WHERE run_id=? AND kind='unit' AND json_type(body,'$.blockedReason')='text' ORDER BY rowid").all(source.runId)
+      const requests=db.prepare("SELECT body FROM message_items WHERE run_id=? AND kind='request' AND json_extract(body,'$.status')='pending' ORDER BY rowid").all(source.runId).map(row=>JSON.parse(row.body))
+      const commands=db.prepare("SELECT json_extract(body,'$.kind') AS kind,json_extract(body,'$.status') AS status,json_extract(body,'$.result') AS result FROM message_items WHERE run_id=? AND kind='command' AND json_extract(body,'$.kind')='answer' AND json_extract(body,'$.status')='applied' AND json_extract(body,'$.result.status')='blocked' ORDER BY rowid").all(source.runId).map(row=>({...row,result:JSON.parse(row.result)}))
+      return {run:source,units,requests,commands,sequenceId:x.seq}
+    })
   }
   if(a.kind==='message.task') {const row=db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=? AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') ORDER BY i.rowid LIMIT 1").get(str(a.taskId));return row?{run:JSON.parse(row.run),command:JSON.parse(row.command)}:null}
   if(a.kind==='message.task.latest') {const row=db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=? AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen','revise','pause','resume','cancel','confirm') AND json_extract(i.body,'$.status')='applied' ORDER BY i.rowid DESC LIMIT 1").get(str(a.taskId));return row?{run:JSON.parse(row.run),command:JSON.parse(row.command)}:null}

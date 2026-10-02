@@ -31,6 +31,7 @@ function retainCoordinatorSources(session) {
 export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir, getGroupName }) {
   if (typeof isCurrent !== 'function') throw fail('GROUP_COORDINATOR_CURRENT_CHECK_REQUIRED')
   const entries = new Map()
+  const idleSessions = new Map()
   let closed = false
   const checkedWorkspaces = new Map()
   async function workspace(binding) {
@@ -61,8 +62,14 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
       try {
         if (entry.handle) {
           await entry.handle.agent.whenIdle()
-          try { await ctx.sessions.flush(entry.handle.agent.session) }
-          finally { await entry.handle.dispose() }
+          try {
+            await ctx.sessions.flush(entry.handle.agent.session)
+            if (!closed && !entry.cancelled) {
+              entry.handle.agent.ctx.tools.restrict({ allow: [] })
+              entry.handle.agent.ctx.on('agent/pre-step', () => ({ kind: 'reject' }))
+              idleSessions.set(entry.binding.sessionId, entry.handle)
+            }
+          } finally { if (idleSessions.get(entry.binding.sessionId) !== entry.handle) await entry.handle.dispose() }
         }
       } catch (cause) {
         entry.drainError = Object.assign(fail('GROUP_COORDINATOR_DRAIN_FAILED'), { cause, coordinatorDrained: false })
@@ -88,6 +95,8 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     const cwd = await workspace(binding)
     const configuration = JSON.stringify([cwd, getGroupName?.(binding.conversationId) ?? null])
     if (checkedWorkspaces.get(binding.sessionId) === configuration) return null
+    const idle = idleSessions.get(binding.sessionId)
+    if (idle) { await idle.dispose(); idleSessions.delete(binding.sessionId) }
     if (entries.has(binding.conversationId) || ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId))
       throw fail('GROUP_COORDINATOR_SESSION_ALREADY_LIVE')
     const stored = await inspect(binding.sessionId)
@@ -95,6 +104,8 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     history(stored.events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
     const relocating = stored.meta.cwd !== cwd
     const sessionId = relocating ? `coordinator-${createHash('sha256').update(JSON.stringify([binding.sessionId, cwd])).digest('hex').slice(0, 40)}` : binding.sessionId
+    const existingIdle = idleSessions.get(sessionId)
+    if (existingIdle) { await existingIdle.dispose(); idleSessions.delete(sessionId) }
     const child = relocating ? await inspect(sessionId) : stored
     if (child) {
       if (child.meta.cwd !== cwd || relocating && child.meta.parentSession !== binding.sessionId) throw fail('GROUP_COORDINATOR_SESSION_IDENTITY_MISMATCH')
@@ -115,7 +126,8 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
       retainCoordinatorSources(handle.agent.session)
       await handle.agent.whenIdle()
       await ctx.sessions.flush(handle.agent.session)
-    } finally { await handle.dispose() }
+    } catch (error) { await handle.dispose(); throw error }
+    idleSessions.set(sessionId, handle)
     checkedWorkspaces.set(sessionId, configuration)
     return relocating ? { sessionId, previousSessionId: binding.sessionId, expectedLeaseEpoch: binding.leaseEpoch } : null
   }
@@ -194,6 +206,8 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     }
     try {
       if (!await current(entry)) return { status: 'stale' }
+      const idle = idleSessions.get(binding.sessionId)
+      if (idle) { await idle.dispose(); idleSessions.delete(binding.sessionId) }
       if (ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) throw Object.assign(fail('GROUP_COORDINATOR_SESSION_ALREADY_LIVE'), { coordinatorDrained: false })
       const stored = await inspect(binding.sessionId)
       if (binding.sessionBound && !stored) throw fail('GROUP_COORDINATOR_SESSION_MISSING')
@@ -231,5 +245,10 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     await entry.drained.promise
     if (entry.drainError) throw entry.drainError
   }
-  return { prepare, run, cancel, async close() { closed = true; await Promise.all([...entries.keys()].map(cancel)) } }
+  return { prepare, run, cancel, async close() {
+    closed = true
+    await Promise.all([...entries.keys()].map(cancel))
+    await Promise.all([...idleSessions.values()].map(handle => handle.dispose()))
+    idleSessions.clear()
+  } }
 }

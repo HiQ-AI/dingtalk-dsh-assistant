@@ -559,9 +559,13 @@ window.__ModuleLoader__.load({
       const [authorizationPage, setAuthorizationPage] = useState(1)
       const [authorizationFilter, setAuthorizationFilter] = useState('all')
       const [selectedAuthorizationId, setSelectedAuthorizationId] = useState('')
-      const refresh = useCallback(async () => {
-        try { setData(await load()); setUpdatedAt(new Date()); setError(undefined) }
-        catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+      const pendingRefresh = useRef(null)
+      const refresh = useCallback(() => {
+        if (pendingRefresh.current) return pendingRefresh.current
+        pendingRefresh.current = load().then(value => { setData(value); setUpdatedAt(new Date()); setError(undefined) },
+          cause => { setError(cause instanceof Error ? cause.message : String(cause)) })
+          .finally(() => { pendingRefresh.current = null })
+        return pendingRefresh.current
       }, [])
       const manualRefresh = useCallback(async () => {
         if (refreshState === 'refreshing') return
@@ -570,11 +574,18 @@ window.__ModuleLoader__.load({
         setRefreshState('done')
         window.setTimeout(() => setRefreshState('idle'), 1200)
       }, [refresh, refreshState])
+      const pendingDetail = useRef(null)
       useEffect(() => {
         if (!selectedWorkflowTaskId) { setWorkflowTaskDetail(undefined); setWorkflowDetailError(''); return }
         let active = true
         setWorkflowDetailError('')
-        get(`/state/tasks/${encodeURIComponent(selectedWorkflowTaskId)}/detail`).then(value => {
+        if (pendingDetail.current?.taskId !== selectedWorkflowTaskId || pendingDetail.current?.retry !== workflowDetailRetry) {
+          const request = { taskId: selectedWorkflowTaskId, retry: workflowDetailRetry }
+          request.promise = get(`/state/tasks/${encodeURIComponent(selectedWorkflowTaskId)}/detail`)
+            .finally(() => { if (pendingDetail.current === request) pendingDetail.current = null })
+          pendingDetail.current = request
+        }
+        pendingDetail.current.promise.then(value => {
           if (!active) return
           const previous = [...document.querySelectorAll('[aria-label="任务执行详情"] li.observer-task-step')]
           const focused = document.activeElement?.closest?.('li.observer-task-step')
@@ -862,6 +873,8 @@ window.__ModuleLoader__.load({
         dataViewTabs,
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' } },
           (data?.groups || []).length ? React.createElement(SelectMenu, { label: '选择群聊', value: selectedGroup?.groupId || '', options: (data?.groups || []).map((group) => ({ id: group.groupId, label: group.name || group.groupId })), onChange: (value) => { setSelectedGroupId(value); setMessagePage(1); setOutboxPage(1); setSelectedMessageRunId('') }, fitContent: true }) : null,
+          selectedGroup?.coordinator?.sessionId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: navigatingSessionId === selectedGroup.coordinator.sessionId,
+            onClick: () => navigate(selectedGroup.coordinator.sessionId) }, navigatingSessionId === selectedGroup.coordinator.sessionId ? '正在打开…' : '打开群常驻会话') : null,
           groupTableView === 'messages'
             ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'waiting_routing_barrier', label: '核对相关输入' }, { id: 'intent_judging', label: '意图判断中' }, { id: 'intent_rejudging', label: '意图重新判断' }, { id: 'waiting_clarification', label: '等待用户补充' }, { id: 'waiting_context', label: '正在读取材料' }, { id: 'waiting_system', label: '材料读取受阻' }, { id: 'execution_blocked', label: '执行受阻' }, { id: 'routing_blocked', label: '关联受阻' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
             : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读' }, { id: 'confirmed', label: '已发送' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回待处理' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))

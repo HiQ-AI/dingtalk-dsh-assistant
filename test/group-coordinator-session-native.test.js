@@ -185,6 +185,10 @@ test('旧职责目录派生到Agent根，完整继承日志，恢复群名和完
   assert.deepEqual(await h.sessions.prepare(binding), relocated)
   const child = await h.ctx.sessionPersistence.inspect(relocated.sessionId)
   assert.equal(child.meta.cwd, root)
+  assert.ok(h.ctx.sessions.get(relocated.sessionId), '空闲协调会话仍挂接，宿主可读标题与权限投影')
+  const visible = h.ctx.sessionProjections.cachedSnapshot(h.ctx.sessions.get(relocated.sessionId))
+  assert.equal(visible.values.title, name)
+  assert.equal(visible.values.permissions.currentValue, 'danger-full-access')
   assert.equal(child.meta.parentSession, 'old-group')
   assert.equal(child.inheritedEventCount, parent.events.length)
   assert.deepEqual(child.events.slice(0, parent.events.length), parent.events)
@@ -228,3 +232,13 @@ test('每轮完整输入保留，下一轮原生surface只保留历史来源而�
   assert.ok(saved.events.some(e => e.type === 'user/message' && e.surfaceOp === 'append' && JSON.stringify(e.data).includes('fullHostSnapshot')))
   assert.equal(saved.events.filter(e => e.data?.source?.groupCoordinatorHistory).length, 1)
 })
+
+test('常驻空闲挂接保留原生投影、拒绝任意模型步进，关闭释放全部句柄',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'group-idle-visible-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const h=await host(root,{getGroupName:()=> '业务群'});t.after(()=>h.close());
+ await h.sessions.run({binding:{conversationId:'g',sessionId:'visible-group',turnId:'t',leaseEpoch:1,sessionBound:false},input:{},provider:'group-fixture',model:'scripted',decisionSchema,onSessionBound:async()=>{},onCandidate:async()=>{}});
+ const live=h.ctx.sessions.get('visible-group');assert.ok(live);assert.equal(h.ctx.sessionProjections.cachedSnapshot(live).values.title,'业务群');
+ const calls=h.requests.length;const {createUserMessage}=await import('@deepseek-ai/dsh-llm');
+ const agent=h.ctx.agents.get('visible-group');agent.steer(createUserMessage({source:{kind:'user'},content:[{type:'text',text:'用户误触发送'}]}));await agent.whenIdle();assert.equal(h.requests.length,calls);
+ await h.sessions.close();assert.equal(h.ctx.agents.get('visible-group'),undefined);assert.equal(h.ctx.sessions.get('visible-group'),undefined);
+});

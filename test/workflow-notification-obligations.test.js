@@ -178,6 +178,7 @@ test('同一事项的多条补充不逐条回复，实际开始仍有一次通�
   const notices=new Map()
   const store={async query(q){
     if(['message.notification.diagnostics','message.acceptances','task.owner.reports'].includes(q.kind))return []
+    if(q.kind==='message.notifications')return [...notices.values()]
     if(q.kind==='message.list')return [run]
     if(q.kind==='message.run')return {run,requests:[],commands}
     if(q.kind==='message.notification')return q.eventKey?[...notices.values()].find(n=>n.eventKey===q.eventKey):notices.get(q.notificationId)
@@ -197,6 +198,7 @@ test('只有节点真实开始才发开始进度，重复扫描沿用同一通�
   const notices=new Map()
   const store={async query(q){
    if(q.kind==='message.notification.diagnostics'||q.kind==='message.acceptances'||q.kind==='task.owner.reports')return[]
+   if(q.kind==='message.notifications')return [...notices.values()]
    if(q.kind==='message.list')return[run]
    if(q.kind==='message.run')return{run,requests:[],commands:[action]}
    if(q.kind==='message.notification')return q.eventKey?[...notices.values()].find(n=>n.eventKey===q.eventKey):notices.get(q.notificationId)
@@ -211,6 +213,35 @@ test('只有节点真实开始才发开始进度，重复扫描沿用同一通�
  }
 })
 
+for (const mode of ['delivered', 'unknown', 'prepared', 'other-task', 'new-source', 'new-version', 'superseded']) test(`重评开始事实按Task和源消息核对历史：${mode}`, async () => {
+  const run={runId:'message',sourceKey:'source',sourceVersion:1,revision:0,conversationId:'g',actorId:'a',context:{sourceMessageId:'in'}}
+  const action={commandId:'create',status:'applied',kind:'revise',args:{replyPolicy:'none'},result:{taskId:'task'}}
+  const status=['delivered','unknown','prepared','superseded'].includes(mode)?mode:'delivered'
+  const old={id:'old',runId:'message',eventKey:'task.owner.report:started:old-run',status,leaseEpoch:1,sequenceId:1,
+    ack:{messageId:'real-message'},payload:{phase:'owner:started:old-run',text:'任务已开始处理。',conversationId:'g',
+      sourceMessageId:mode==='new-source'?'different':'in',fact:{taskId:mode==='other-task'?'different':'task',sourceVersion:mode==='new-version'?2:1}}}
+  const notices=new Map([['old',old]]); const histories=[]
+  const store={async query(q){
+    if(['message.notification.diagnostics','message.acceptances','task.owner.reports'].includes(q.kind))return []
+    if(q.kind==='message.list')return [run]
+    if(q.kind==='message.run')return {run,requests:[],commands:[action]}
+    if(q.kind==='message.notification')return q.eventKey?[...notices.values()].find(n=>n.eventKey===q.eventKey):notices.get(q.notificationId)
+    if(q.kind==='message.notifications')return [...notices.values()].filter(n=>q.states.includes(n.status)&&(!q.taskId||n.payload.fact.taskId===q.taskId))
+    if(['message.task.latest','task.deleted','message.owner.released-wait'].includes(q.kind))return null
+    throw Error(q.kind)
+  },async command({kind,args}){
+    if(kind==='message.notification.readback'){assert.equal(args.notificationId,'old');old.status='delivered';return {}}
+    assert.equal(kind,'message.notification.prepare');notices.set(args.notificationId,{...args,id:args.notificationId,status:'prepared'});return {}
+  }}
+  const controller={taskPlan:async()=>({task:{controlState:'active'},stages:[{status:'running',runId:'new-attempt'}]}),state:async()=>({run:{status:'running'},nodes:[{status:'running',startedAt:'2026-10-02T00:00:00Z'}]})}
+  const adapter={canDisclose:async()=>false,readback:async notice=>{histories.push(notice.ack.messageId);return {messageId:notice.ack.messageId,conversationId:'g'}}}
+  const notifier=createWorkflowNotifications({store,controller,adapter})
+  await notifier.flush();await notifier.flush()
+  const same=['delivered','unknown','prepared'].includes(mode)
+  assert.equal(notices.size,same?1:2)
+  assert.deepEqual(histories,['delivered','unknown'].includes(mode)?['real-message']:[])
+})
+
 for (const started of [false, true]) test(`开始通知领取核对真实执行状态：${started}`, async t => {
   const f = await fixture(t)
   const send = (kind, args) => f.store.command({ id: randomUUID(), kind, args })
@@ -223,6 +254,8 @@ for (const started of [false, true]) test(`开始通知领取核对真实执行�
   await send('run.create', { runId: 'business', taskId: 'task', workflowId: 'w', workflowDigest: 'a'.repeat(64), requirementRef: 'sha256/in', stageBinding: { planRevision: 1, stageId: 'stage-1', attempt: 1, expectedControlRevision: 1 }, nodes: [{ nodeId: 'n', nodeVersion: '1', executor: 'code', inputRef: 'sha256/in', inputDigest: 'a'.repeat(64) }] })
   if (started) await send('node.claim', { runId: 'business', nodeId: 'n', expectedGeneration: 1, expectedLeaseEpoch: 0 })
   await f.call('notification.prepare', { runId: 'm', commandId: 'start-command', notificationId: 'start', eventKey: 'task.owner.report:started:business', payload: { phase: 'owner:started:business', text: '任务已开始处理。', fact: { taskId: 'task', sourceVersion: 1, runRevision: 0 } }, disclosure: { conversationId: 'g', authorizationRef: 'source' } })
+  assert.deepEqual((await f.store.query({kind:'message.notifications',taskId:'task',states:['prepared']})).map(n=>n.id),['start'])
+  assert.deepEqual(await f.store.query({kind:'message.notifications',taskId:'other-task',states:['prepared']}),[])
   const claim = await f.call('notification.claim', { notificationId: 'start' })
   assert.equal(claim.dispatchEligible, started)
   assert.equal(claim.result.notification.status, started ? 'sending' : 'superseded')

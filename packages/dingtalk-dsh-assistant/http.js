@@ -68,6 +68,8 @@ function workflowTopicSummary(topic) {
 function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
   if (!group) return null
   const { topics: _topics, routeHistory: _routeHistory, taskReservations: _taskReservations, ...summary } = group
+  const coordinator = workflowMailboxes?.coordinators?.[group.groupId]
+  if (coordinator) summary.coordinator = coordinator
   const topics = runtime.listTopics(group.groupId)
   summary.messages = (summary.messages ?? []).map((message) => ({
     ...message,

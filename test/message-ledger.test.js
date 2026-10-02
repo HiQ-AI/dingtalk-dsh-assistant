@@ -533,6 +533,9 @@ test('撤回与改写补发凭独立证据入账，重复对账幂等且不抹�
  const saved=await f.store.query({kind:'message.notificationReplacement',replacementId:'replacement-1'})
  assert.equal(saved.restoresNotificationId,'n');assert.equal(saved.body,replacement.body)
  assert.equal((await f.store.query({kind:'message.notificationReplacements',notificationId:'n'})).length,1)
+ assert.deepEqual(await f.store.query({kind:'message.notificationReplacements',notificationIds:['n','unrelated']}),[saved])
+ assert.deepEqual(await f.store.query({kind:'message.notificationReplacements',notificationIds:['unrelated']}),[])
+ await assert.rejects(f.store.query({kind:'message.notificationReplacements',notificationIds:Array(201).fill('n')}),/MESSAGE_NOTIFICATION_REPLACEMENTS_INVALID/)
  assert.equal((await f.store.query({kind:'message.notification',notificationId:'n'})).recallStatus,'recalled')
  assert.equal((await f.store.query({kind:'message.command',commandId:'c'})).status,'applied')
 })
@@ -1156,3 +1159,19 @@ test('精确清理轮换受影响群会话，保留其他来源群及Task水位�
  await bad(f.call('coordinator.commit',{...bindings.g,decisions:[]}),'MESSAGE_COORDINATOR_STALE')
  await f.call('coordinator.release',{...next,drained:true})
 })
+
+test('看板消息分页只投影业务等待状态，完整节点大输入不进入轻量结果',async t=>{
+ const f=await fixture(t);await f.call('receive',receive('mailbox-heavy'));await f.call('split',{runId:'mailbox-heavy',units:[{unitId:'heavy-unit',goalText:'调查目标'}]});
+ await f.editSnapshot(db=>{
+  db.prepare("UPDATE message_items SET body=json_set(body,'$.blockedReason',?) WHERE run_id=? AND kind='unit'").run('材料受阻','mailbox-heavy');
+  db.prepare('INSERT INTO message_items VALUES(?,?,?,?)').run('node:large','mailbox-heavy','node',JSON.stringify({id:'large',input:{text:'大节点'.repeat(300000)}}));
+ });
+ const full=await f.store.query({kind:'message.run',runId:'mailbox-heavy'});assert.ok(JSON.stringify(full).length>900000);
+ const page=await f.store.query({kind:'message.mailbox',conversationId:'g',limit:1});
+ assert.equal(page[0].run.runId,'mailbox-heavy');assert.equal(page[0].units[0].blockedReason,'材料受阻');assert.equal(page[0].units[0].goalText,'调查目标');
+ assert.ok(!('nodes' in page[0]));assert.ok(JSON.stringify(page).length<10000);
+ await f.call('receive',receive('mailbox-next'));
+ const first=await f.store.query({kind:'message.mailbox',conversationId:'g',limit:1});const second=await f.store.query({kind:'message.mailbox',conversationId:'g',limit:1,beforeSequenceId:first[0].sequenceId});
+ assert.deepEqual([first[0].run.runId,second[0].run.runId],['mailbox-next','mailbox-heavy']);
+ await assert.rejects(f.store.query({kind:'message.mailbox',conversationId:'g',limit:201}),/MESSAGE_INVALID_LIMIT/);
+});

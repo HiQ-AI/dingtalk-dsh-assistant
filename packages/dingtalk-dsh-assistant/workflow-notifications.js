@@ -125,6 +125,7 @@ export async function executeNotificationOperation({ store, adapter, operationId
 /** 通知独立于任务执行。ACK不代表送达，未知发送只回查，不再次发送。 */
 export function createWorkflowNotifications({ store, artifacts, controller, adapter, groupResponsibility = () => '' }) {
   let flight, beforeSequenceId, preparedCursor = 0, readbackCursor = 0
+  const verifiedStarts = new Set()
   const command = (kind, args, id) => store.command({ id, kind, args })
   async function prepare(run, action, phase, text, communicationPhase = phase) {
     if (run.channel === 'web' || run.externalMessaging === false) return
@@ -133,6 +134,31 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
     const answerReceipt = phase === 'receipt' && action.kind === 'answer'
     if (answerReceipt && action.result?.status === 'blocked' && action.result?.reason === 'execution_tool_failed') text = '本次查询因系统读取问题未完成，执行已停止，需要修复后继续。'
     const attemptVersion = answerReceipt && action.readonlyRetryHistory?.length ? action.result?.inputVersion : undefined
+    const starting = phase.startsWith('owner:started:')
+    if (starting) {
+      let afterSequenceId = 0
+      do {
+        const page = await store.query({ kind: 'message.notifications', taskId: action.result.taskId,
+          states: ['prepared', 'sending', 'acknowledged', 'unknown', 'delivered'], afterSequenceId, limit: 200 })
+        const prior = page.find(n => n.payload?.phase?.startsWith('owner:started:')
+          && n.payload.fact?.taskId === action.result.taskId && n.payload.conversationId === run.conversationId
+          && n.payload.sourceMessageId === run.context?.sourceMessageId && n.payload.fact.sourceVersion === run.sourceVersion)
+        if (prior) {
+          // 复用精确消息回查核对群历史；未知发送仍只回查，不因重评生成新的“开始”。
+          if (adapter?.readback && !verifiedStarts.has(prior.id) && ['acknowledged', 'unknown', 'delivered'].includes(prior.status)) {
+            const evidence = await adapter.readback(prior)
+            if (evidence) {
+              if (prior.status !== 'delivered') await command('message.notification.readback',
+                { notificationId: prior.id, leaseEpoch: prior.leaseEpoch, evidence }, `delivered:${prior.id}:${prior.leaseEpoch}`)
+              verifiedStarts.add(prior.id)
+            }
+          }
+          return
+        }
+        if (page.length < 200) break
+        afterSequenceId = page.at(-1).sequenceId
+      } while (true)
+    }
     let recoveredAt = 0, recoveredTime = ''
     if (phase.startsWith('owner:application_wait:')) {
       let afterSequenceId = 0

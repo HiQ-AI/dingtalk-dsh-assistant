@@ -2594,7 +2594,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       && item.definition?.payload?.workflowKind === 'local-acceptance' && item.result?.result?.localAcceptance)
     return effect?.result?.evidenceRef ?? null
   }
-  async function currentPlanNodes(taskId, plan) {
+  async function currentPlanNodes(taskId, plan, states = new Map()) {
     const result = []
     const requirementCurrent = plan.task.planRequirementRevision === plan.task.requirementRevision
     for (const stage of plan.stages) {
@@ -2602,7 +2602,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         ?? (stage.workflowId.startsWith('task-engineering') ? '开发与验证' : stage.stageId)
       const context = { stageId: stage.stageId, stageTitle }
       if (stage.runId) {
-        const state = await controller.state(stage.runId)
+        if (!states.has(stage.runId)) states.set(stage.runId, controller.state(stage.runId))
+        const state = await states.get(stage.runId)
         if (state.run?.taskId !== taskId) throw executionError('TASK_PLAN_RUN_INVALID')
         for (const node of state.nodes) {
           const current = requirementCurrent && stage.status !== 'invalidated' && state.pendingInputCount === 0
@@ -2623,12 +2624,13 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     }
     return result
   }
-  async function tasks({ taskId: selectedTaskId, readableOnly = false, completePlan = false } = {}) {
+  async function tasks({ taskId: selectedTaskId, readableOnly = false, completePlan = false, origins = new Map() } = {}) {
     const archives = new Map((await store.query({ kind: 'task.archives' })).map(item => [item.taskId, item.archivedAt]))
     const catalog = await store.query({ kind: 'task.catalog', ...(selectedTaskId ? { taskId: selectedTaskId } : {}) })
     const topicBindings = new Map()
     const project = async ({ taskId, runs: taskRuns }) => {
-      const origin = await store.query({ kind: 'task.origin', taskId })
+      if (!origins.has(taskId)) origins.set(taskId, store.query({ kind: 'task.origin', taskId }))
+      const origin = await origins.get(taskId)
       if (readableOnly && !readableTaskOrigin(origin)) return null
       const groupId = origin?.run.conversationId
       if (origin?.command.unitId && !topicBindings.has(groupId))
@@ -2645,6 +2647,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         && plan?.task.planRequirementRevision === plan?.task.requirementRevision
         && owner.eventWatermark === owner.processedWatermark
       const state = run ? await controller.state(run.runId) : null
+      const states = new Map(run ? [[run.runId, state]] : [])
       const firstRun = plan?.stages[0]?.runId
         ? taskRuns.find(item => item.runId === plan.stages[0].runId) ?? await store.query({ kind: 'run', runId: plan.stages[0].runId }).then(item => item.run)
         : taskRuns.at(-1)
@@ -2682,7 +2685,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         taskRunId: run?.runId ?? null,
         ...(origin?.channel === 'web' ? { sourceChannel: 'web', reportChannel: 'web', rerunOfTaskId: origin.rerunOfTaskId } : {}),
         stageTasks: state?.nodes.map(node => node.nodeId) ?? [], topicRefs, checkpoints: [],
-        executionNodes: completePlan && plan ? await currentPlanNodes(taskId, plan)
+        executionNodes: completePlan && plan ? await currentPlanNodes(taskId, plan, states)
           : await Promise.all((state?.nodes ?? []).map(async node => ({ ...node,
             ...(completePlan ? { stepKey: `${taskId}:${state.run.workflowId}:${node.nodeId}` } : {}),
             ...(completePlan && state.pendingInputCount ? { status: 'blocked',
@@ -2706,13 +2709,17 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       projected.push(...await Promise.all(catalog.slice(offset, offset + 8).map(project)))
     return projected.filter(Boolean)
   }
-  async function readableTaskFamily(taskId) {
-    if (!readableTaskOrigin(await store.query({ kind: 'task.origin', taskId }))) return null
+  async function readableTaskFamily(taskId, origins = new Map()) {
+    const origin = id => {
+      if (!origins.has(id)) origins.set(id, store.query({ kind: 'task.origin', taskId: id }))
+      return origins.get(id)
+    }
+    if (!readableTaskOrigin(await origin(taskId))) return null
     const family = await store.query({ kind: 'task.family', taskId })
     if (!family) return null
     const taskIds = []
     for (const id of family.taskIds)
-      if (readableTaskOrigin(await store.query({ kind: 'task.origin', taskId: id }))) taskIds.push(id)
+      if (readableTaskOrigin(await origin(id))) taskIds.push(id)
     return { rootTaskId: taskIds[0], latestTaskId: taskIds.at(-1), taskIds }
   }
   async function boardTasks() {
@@ -2721,11 +2728,13 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   }
   async function taskDetail(taskId) {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const family = await readableTaskFamily(taskId)
+      // 只在本次一致性检查内复用读取；重试和最终授权复核仍查询当前持久状态。
+      const origins = new Map()
+      const family = await readableTaskFamily(taskId, origins)
       if (!family) return null
       const currentTaskId = family.latestTaskId
       const before = await store.query({ kind: 'task.viewRevision', taskId: currentTaskId })
-      const task = (await tasks({ taskId: currentTaskId, readableOnly: true, completePlan: true }))[0]
+      const task = (await tasks({ taskId: currentTaskId, readableOnly: true, completePlan: true, origins }))[0]
       if (!task) return null
       const deliveryManifest = task.taskOwner
         ? await store.query({ kind: 'task.owner.delivery-manifest', taskId: currentTaskId }) : null
@@ -2903,8 +2912,10 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   const messageStages = [{ id: 'receive', label: '接收消息' }, { id: 'context', label: '准备上下文' },
     { id: 'coordinator', label: '群会话协调' }, { id: 'material', label: '按需读取材料' }, { id: 'dispatch', label: '派发任务' }]
   async function mailboxes() {
-    const messages = [], outbox = []
+    const messages = [], outbox = [], coordinators = {}
     for (const groupId of groups) {
+      const binding = await store.query({ kind: 'message.coordinator', conversationId: groupId })
+      if (binding.coordinator?.sessionId) coordinators[groupId] = { sessionId: binding.coordinator.sessionId, status: binding.coordinator.status }
       const outboundIds = new Set(await store.query({ kind: 'message.outboundIds', conversationId: groupId }))
       const topicBindings = await store.query({ kind: 'message.topic.bindings', conversationId: groupId })
       const topicRefsBySource = new Map()
@@ -2912,11 +2923,11 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const senderNames = new Map((legacyGroup(groupId)?.messages ?? []).filter(item => item.senderOpenDingTalkId && item.senderName).map(item => [item.senderOpenDingTalkId, item.senderName]))
       let beforeSequenceId
       for (;;) {
-        const page = await store.query({ kind: 'message.list', conversationId: groupId, limit: 200, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
-        for (const run of page) {
+        const page = await store.query({ kind: 'message.mailbox', conversationId: groupId, limit: 200, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
+        for (const state of page) {
+          const run = state.run
           if (run.status === 'superseded' || outboundIds.has(run.context?.sourceMessageId) || run.reason === 'message_reprocessed') continue
           const topicRefs = topicRefsBySource.get(run.sourceKey) ?? []
-          const state = await store.query({ kind: 'message.run', runId: run.runId })
           const pendingRequests = state.requests.filter(item => item.status === 'pending')
           const pendingRequest = pendingRequests.find(item => item.blocked) ?? pendingRequests[0]
           const waitingStatus = pendingRequest?.blocked ? 'waiting_system' : pendingRequest?.kind === 'needs_clarification' ? 'waiting_clarification' : pendingRequest?.kind === 'needs_context' ? 'waiting_context' : null
@@ -2957,6 +2968,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     let afterSequenceId = 0
     for (;;) {
       const page = await store.query({ kind: 'message.notifications', states, afterSequenceId, limit: 200 })
+      const replacements = await store.query({ kind: 'message.notificationReplacements', notificationIds: page.map(notice => notice.id) })
       for (const notice of page) {
         const groupId = notice.payload?.conversationId
         if (!groups.has(groupId)) continue
@@ -2967,7 +2979,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           createdAt: notice.createdAt, deliveredAt: notice.deliveredAt, deliveryAttemptedAt: notice.startedAt,
           deliveryAttemptCount: notice.leaseEpoch, ...(notice.status === 'unknown' ? { deliveryPendingReason: 'send_unknown' } : {}),
           ...(notice.status === 'acknowledged' ? { deliveryPendingReason: 'message_not_observed' } : {}) })
-        for (const replacement of await store.query({ kind: 'message.notificationReplacements', notificationId: notice.id }))
+        for (const replacement of replacements.filter(item => item.restoresNotificationId === notice.id))
           outbox.push({ groupId, outboundId: `replacement:${replacement.id}`, text: replacement.body,
             sourceMessageId: replacement.sourceMessageId, deliveredMessageId: replacement.messageId,
             replacesNotificationId: notice.id, status: 'sent', createdAt: replacement.recordedAt, deliveredAt: replacement.recordedAt })
@@ -2978,7 +2990,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     for (const message of messages) message.notifications = outbox.filter(notice => notice.runId === message.runId)
       .map(notice => ({ notificationId: notice.outboundId, phase: notice.phase, status: notice.notificationStatus,
         acknowledged: ['acknowledged', 'delivered'].includes(notice.notificationStatus), delivered: notice.notificationStatus === 'delivered' }))
-    return { messages, outbox }
+    return { messages, outbox, coordinators }
   }
   async function topics(groupId) {
     const selected=groupId ? [groupId] : [...groups]

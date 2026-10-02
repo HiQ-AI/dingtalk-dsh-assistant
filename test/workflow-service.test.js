@@ -3566,6 +3566,33 @@ test('当前完整详情只取最新节点代次，需求更新后旧结果及�
   assert.equal(await service.taskNodeOutput(taskId, runId, newNode.nodeRunId, { outputRef: newNode.outputRef }), null)
 })
 
+test('详情在同次快照复用来源和当前阶段，不缓存跨请求授权与版本', async t => {
+  const queries = []
+  const { service, execution, startCodeTask } = await fixture(t, 'owner', undefined, {
+    config: { webActorId: 'owner' }, execute: async () => ({ summary: '成功' }),
+    storeQuery: async (request, query) => {
+      if (request.kind !== 'task.origin' || /at origin |at project /.test(new Error().stack)) queries.push(request)
+      return query(request)
+    },
+  })
+  const { taskId, runId } = await startCodeTask()
+  await execution.controller.whenIdle(runId)
+  await execution.controller.advanceTaskPlan(taskId)
+  const state = execution.controller.state
+  let stateReads = 0
+  execution.controller.state = async id => { if (id === runId) stateReads++; return state(id) }
+  queries.length = 0
+  const detail = await service.taskDetail(taskId)
+  assert.equal(detail.executionNodes.length, 1)
+  assert.equal(queries.filter(item => item.kind === 'task.origin' && item.taskId === taskId).length, 2,
+    '每次只读取一次来源，交付前仍独立复核授权')
+  assert.equal(stateReads, 1)
+  assert.equal(queries.filter(item => item.kind === 'task.viewRevision').length, 2)
+  queries.length = 0
+  assert.equal((await service.taskDetail(taskId)).detailRevision, detail.detailRevision)
+  assert.equal(queries.filter(item => item.kind === 'task.origin' && item.taskId === taskId).length, 2)
+})
+
 test('当前完整详情拒绝持续变化的版本，不交付混合计划快照', async t => {
   let changing = false, reads = 0
   const { service, execution, startCodeTask } = await fixture(t, 'owner', undefined, {

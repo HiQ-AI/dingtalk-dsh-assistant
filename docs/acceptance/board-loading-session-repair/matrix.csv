@@ -1,0 +1,11 @@
+case,round,status,evidence
+group-api-load,1,FAIL,round-1.md
+resident-visibility,1,IN_PROGRESS,round-1.md
+task-detail-load,1,FAIL,round-1.md
+notification-duplicate,1,PASS,round-1.md
+formal-deployment,1,PASS,round-1.md
+group-api-load,2,PASS,round-2.md
+resident-visibility,2,PASS,round-2.md
+task-detail-load,2,PASS,round-2.md
+notification-duplicate,2,PASS,round-2.md
+formal-deployment,2,PASS,round-2.md
