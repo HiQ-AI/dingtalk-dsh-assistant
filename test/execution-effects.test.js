@@ -561,3 +561,37 @@ for (const scenario of ['approved-order','late-approval','wrong-actor','revoked'
     assert.ok(proof.executionStartedSequence < proof.executionSucceededSequence)
   } else assert.throws(read, code('approval_execution_not_proven'))
 })
+
+for (const scenario of ['delivered','recalled','late','missing','wrong-actor','wrong-digest','wrong-message']) test(`原生执行证明保留批准前实际呈现而不编造材料：${scenario}`, t => {
+  const f = fixture(); t.after(() => f.db.close())
+  f.command('effect.prepare', prepared('proof-gate', request('proof-approval')))
+  let notice
+  if (scenario !== 'missing') {
+    notice = f.command('approval.notice.prepare', { ...noticeArgs, requestId: 'proof-approval', effectId: 'proof-gate', text: '永久删除该列全部数据' }).result.notice
+    f.command('approval.notice.send', { requestId: 'proof-approval', noticeDigest: notice.digest })
+    if (scenario !== 'late') f.command('approval.notice.delivered', { requestId: 'proof-approval', noticeDigest: notice.digest,
+      conversationId: 'private', messageId: 'delivered-message' })
+  }
+  f.command('approval.decide', decide('proof-approval'))
+  if (scenario === 'late') f.command('approval.notice.delivered', { requestId: 'proof-approval', noticeDigest: notice.digest,
+    conversationId: 'private', messageId: 'delivered-message' })
+  if (scenario === 'recalled') f.command('approval.notice.recalled', { requestId: 'proof-approval', noticeDigest: notice.digest,
+    conversationId: 'private', messageId: 'delivered-message' })
+  f.command('effect.begin', beginArgs('proof-gate')); f.command('effect.observe', receipt('proof-gate'))
+  f.command('effect.prepare', prepared('proof-execute', { definition: { adapterId: 'synthetic', adapterVersion: '1', principalId: 'owner', target: 'synthetic-target', payload: { stage: 'execute-task', approvalRequestId: 'proof-approval' } } }))
+  f.command('effect.begin', beginArgs('proof-execute')); f.command('effect.observe', receipt('proof-execute'))
+  if (scenario === 'wrong-actor') f.db.exec("UPDATE execution_events SET payload=json_set(payload,'$.approverActorId','other') WHERE kind='approval.notice.delivered'")
+  if (scenario === 'wrong-digest') f.db.exec("UPDATE execution_events SET payload=json_set(payload,'$.text','捏造告知') WHERE kind='approval.notice.delivered'")
+  if (scenario === 'wrong-message') f.db.exec("UPDATE execution_events SET payload=json_remove(payload,'$.delivery.messageId') WHERE kind='approval.notice.delivered'")
+  const read = () => queryEffects(f.db, { kind: 'approval.execution-proof', requestId: 'proof-approval', executeEffectId: 'proof-execute' })
+  if (scenario.startsWith('wrong-')) assert.throws(read, /approval_presentation_not_proven|approval_notice_identity_conflict/)
+  else {
+    const proof = read()
+    if (['missing','late'].includes(scenario)) assert.equal(proof.presentation, undefined)
+    else {
+      assert.equal(proof.presentation.text, '永久删除该列全部数据')
+      assert.equal(proof.presentation.delivery.messageId, 'delivered-message')
+      assert.ok(proof.presentation.deliveredSequence < proof.approvedSequence)
+    }
+  }
+})

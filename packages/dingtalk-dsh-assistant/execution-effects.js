@@ -456,7 +456,22 @@ export function queryEffects(db, query) {
     if (!decided || !started || !observed || decided.seq >= started.seq || started.seq >= observed.seq
       || decision.decision !== 'approved' || decision.effectId !== gate.effect_id
       || decision.actorId !== approval.decided_by || decision.source !== approval.decision_source) fail('approval_execution_not_proven')
+    const presented = db.prepare("SELECT seq,payload FROM execution_events WHERE kind='approval.notice.delivered' AND json_extract(payload,'$.requestId')=? AND seq<? ORDER BY seq LIMIT 1").get(approval.request_id, decided.seq)
+    let presentation
+    if (presented) {
+      const notice = JSON.parse(presented.payload), current = approvalNotice(db, approval.request_id)
+      const frozen = Object.fromEntries(['requestId','effectId','recipientUserId','approverActorId','text'].map(key => [key, notice[key]]))
+      const prepared = db.prepare("SELECT seq,payload FROM execution_events WHERE kind='approval.notice.prepare' AND json_extract(payload,'$.requestId')=? ORDER BY seq LIMIT 1").get(approval.request_id)
+      if (!prepared || prepared.seq >= presented.seq || notice.digest !== digest(frozen)
+        || current?.digest !== notice.digest || JSON.parse(prepared.payload).digest !== notice.digest
+        || notice.effectId !== gate.effect_id || notice.approverActorId !== approval.decided_by
+        || !notice.recipientUserId || !notice.text || !notice.delivery?.conversationId || !notice.delivery?.messageId)
+        fail('approval_presentation_not_proven')
+      presentation = { ...frozen, digest: notice.digest, delivery: notice.delivery,
+        preparedSequence: prepared.seq, deliveredSequence: presented.seq }
+    }
     return { approval: approvalDto(approval), gateEffectId: gate.effect_id, executeEffectId: execute.effect_id,
+      ...(presentation ? { presentation } : {}),
       approvedSequence: decided.seq, executionStartedSequence: started.seq, executionSucceededSequence: observed.seq }
   }
   if (query.kind === 'approval.notice') return approvalNotice(db, args.requestId)

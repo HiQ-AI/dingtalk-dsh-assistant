@@ -109,6 +109,11 @@ single-column-delete-unique-group-result,24,BLOCKED,round-24.md
 
 frozen-v4-and-scoped-v5,25,PASS,round-25.md
 no-backup-stopped-package-repair,25,PASS,round-25.md
-continuous-execution-local-deployment,25,IN_PROGRESS,round-25.md
-single-column-delete-final-acceptance,25,IN_PROGRESS,round-25.md
-single-column-delete-unique-group-result,25,IN_PROGRESS,round-25.md
+continuous-execution-local-deployment,25,PASS,round-25.md
+single-column-delete-final-acceptance,25,FAIL,round-25.md
+single-column-delete-unique-group-result,25,BLOCKED,round-25.md
+
+raw-approval-and-production-proof,26,IN_PROGRESS,round-26.md
+continuous-execution-local-deployment,26,IN_PROGRESS,round-26.md
+single-column-delete-final-acceptance,26,IN_PROGRESS,round-26.md
+single-column-delete-unique-group-result,26,IN_PROGRESS,round-26.md

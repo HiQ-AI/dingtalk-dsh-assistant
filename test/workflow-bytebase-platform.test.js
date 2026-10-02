@@ -57,6 +57,7 @@ test('完成回查绑定冻结审批 SQL 与当前工单，仅使用只读端口
   assert.equal(result.task.status, 'DONE')
   assert.equal(result.taskRun.status, 'DONE')
   assert.equal(result.production.passed, true)
+  assert.deepEqual(result.production.verification.observation.rows, [{ relation_kind: 'r', column_exists: false, columns: [] }])
   assert.equal(f.workflowAdapter.rulesDigest, digestBefore)
   assert.equal(reads, 1)
   assert.deepEqual(f.calls, ['verify'])
@@ -121,7 +122,7 @@ function fixture(options = {}) {
     async getTaskExecution() { calls.push('read-task'); return { task: { ...task, status: 'DONE' },
       taskRun: { id: 'task-run-1', taskId: task.id, status: 'DONE' } } },
     async queryVerification(args) { calls.push('verify'); return { passed: true, target: args.target,
-      packageDigest: pkg.validation.packageDigest, readbackId: 'readback-1', observedChange: 'v=2' } },
+      packageDigest: pkg.validation.packageDigest, readbackId: 'readback-1', observedChange: 'v=2', observation: { rows: [{ relation_kind: 'r', column_exists: false, columns: [] }] } } },
     async findIssueByOperationKey() { calls.push('find-issue'); return options.issueVisible
       ? { issue, sheet, plan, task: null } : null },
   }

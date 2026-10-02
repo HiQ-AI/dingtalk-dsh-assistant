@@ -198,7 +198,7 @@ export function createProductionPostgresHost({ entries, Client }) {
         if (result.rows.length !== 1 || result.rows[0].relation_kind !== 'r' || result.rows[0].column_exists !== false
           || executionDigest(result.rows[0].columns) !== executionDigest(expected.rows))
           throw new Error('POSTGRES_COLUMN_VERIFICATION_UNCONFIRMED')
-        return { passed: true, target, packageDigest, observedChange: JSON.stringify(result.rows[0].columns),
+        return { passed: true, target, packageDigest, observation: { scope, rows: result.rows }, observedChange: JSON.stringify(result.rows[0].columns),
           readbackId: `postgres-production-column:${executionDigest({ taskRunId, target, scope, rows: result.rows[0].columns })}` }
       }
       // 参数绑定只查询本次列；SQL正文经过固定结构识别后不直接执行。
@@ -208,7 +208,7 @@ export function createProductionPostgresHost({ entries, Client }) {
       signal?.throwIfAborted()
       if (executionDigest(result.rows) !== executionDigest(expected.rows))
         throw new Error('POSTGRES_COLUMN_VERIFICATION_UNCONFIRMED')
-      return { passed: true, target, packageDigest, observedChange: JSON.stringify(result.rows),
+      return { passed: true, target, packageDigest, observation: { scope, rows: result.rows }, observedChange: JSON.stringify(result.rows),
         readbackId: `postgres-production-column:${executionDigest({ taskRunId, target, rows: result.rows })}` }
     } finally { await client.end() }
   }

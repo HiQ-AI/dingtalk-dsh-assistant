@@ -327,7 +327,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
       'BYTEBASE_PRODUCTION_VERIFICATION_UNCONFIRMED')
       return { task: result.task, taskRun: result.taskRun,
         production: { passed: true, target: request.target, packageDigest: request.packageDigest,
-          readbackId: verification.readbackId, observedChange: verification.observedChange } }
+          readbackId: verification.readbackId, observedChange: verification.observedChange, verification } }
     },
     async readCompletion({ request, receipt, view, signal }) {
       signal?.throwIfAborted()
