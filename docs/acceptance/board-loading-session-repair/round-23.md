@@ -16,3 +16,15 @@
 ## 尚未完成
 
 新包部署、原Task真实Web系统恢复修订、新删除工单/插件审批与执行/最终回查仍在进行，测试通过不代表生产变更完成。
+
+正式部署完成：r23包SHA256=b7fbd3a96e32ab638c8af6a83d203675011ee1074d236d4d9ad96788011928ab，PID29716，Assistant1.0.0，目录task-data-change@7。Check/Launch/独立Readback/Resume均通过；health=ok，maintenance.active=false，Windows自启Ready。
+
+按既有Web context入口记录当前操作者的系统修正说明（非孙鹏新群消息），原Task requirementRevision升5，保留旧成功阶段与原始群来源，新精确SQL仍需真人审批。独立详情显示Owner124/running正在重评，不能据此宣称已建工单。
+
+真实业务推进：同Task r5/plan6，stage-6已由失败调查替换为task-data-change@7，新run完成候选、生产目录预检、新工单及独立工单回读。工单projects/flbn/issues/858 / plan879，准确SQL为ALTER TABLE public.process_id_temp DROP COLUMN name;，预期目录rows为空。approval-gate等待PLUGIN_APPROVAL_PENDING，execute-task未启动。
+
+私聊审批：插件delivered事件37673；DWS按精确消息ID独立回读complete=true/foundCount=1/failedCount=0，正文含不可恢复数据损失、无SQL正文。当前decision=pending，未代批。
+
+渠道纠正：DWS回读发现第2代旧调查曾误发一条索要只读权限的群消息；按用户此前允许修复后调整/撤回的指令精准撤回。独立有界群历史complete=true/failures=[]，该消息已不存在，01:37至本次回读窗口消息数0。不能把撤回说成原本没有误发；新原文及删除流程已避免该前提。
+
+本次完整SQL测试尚待真人批准/拒绝，执行/生产回查/最终验收/唯一完成群回复尚未发生；heartbeat继续只读跟踪。

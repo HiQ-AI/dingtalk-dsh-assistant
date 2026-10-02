@@ -92,3 +92,6 @@ single-column-delete-native-approval,23,PASS,round-23.md
 single-column-delete-production-readback,23,PASS,round-23.md
 user-source-request-and-prior-gates,23,PASS,round-23.md
 data-change-v6-frozen-recovery,23,PASS,round-23.md
+single-column-delete-deployment,23,PASS,round-23.md
+single-column-delete-issue-and-private-approval,23,PASS,round-23.md
+stale-permission-group-recall,23,PASS,round-23.md
