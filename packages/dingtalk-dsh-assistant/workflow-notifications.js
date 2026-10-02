@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
 
-export const groupReplyInstructions = '发给群成员的回复、summary 和 question 使用直白的业务语言：说明做了什么、结果、实际限制、下一步和需要确认的问题。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
+export const groupReplyInstructions = '发给群成员的回复、summary 和 question 使用直白的业务语言：说明做了什么、结果、实际限制、下一步和需要确认的问题。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；审批等待用一句简短进展说明，例如“Bytebase 工单已新建，等待人工审批。”；详细责任人与恢复条件填结构化 condition，不逐项拼进群正文。用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
 
 // 只识别明确的插件运行标签与机制，避免把业务代码、普通编号当成内部数据。
 export function assertGroupReply(text, internalIds = []) {
@@ -361,12 +361,24 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
               || item.reportType === 'wait' && taskDecisionConditionText(item.facts.condition)
               || item.triggerTypes.includes('workflow.succeeded') && item.facts.evidenceRefs.length
               || item.triggerTypes.includes('workflow.confirmation.required')))) {
-            const text = report.reportType === 'complete' ? `任务已完成：${report.facts.summary}`
+            let text = report.reportType === 'complete' ? `任务已完成：${report.facts.summary}`
               : ['block', 'wait'].includes(report.reportType) && taskDecisionConditionText(report.facts.condition)
-                ? `${report.reportType === 'block' ? '处理暂时受阻' : '任务等待补充或确认'}：${taskDecisionConditionText(report.facts.condition)}`
-              : report.reportType === 'block' ? `处理暂时受阻，需要人工介入。${Array.from(String(report.facts.summary ?? '').replace(/\s+/gu, ' ').trim()).slice(0, 160).join('')}`
+                ? `${report.reportType === 'block' ? '处理暂时受阻：' : ''}${Array.from(String(report.facts.summary).replace(/\s+/gu, ' ').trim()).slice(0, 160).join('')}`
+              : report.reportType === 'block' ? `处理暂时受阻：${Array.from(String(report.facts.summary ?? '').replace(/\s+/gu, ' ').trim()).slice(0, 160).join('')}`
                 : report.triggerTypes.includes('workflow.confirmation.required') ? `任务等待确认：${report.facts.summary}`
                   : `任务进展：${report.facts.summary}`
+            const approvalStage = report.reportType === 'wait' && report.facts.condition?.kind === 'approval'
+              ? plan?.stages.find(stage => stage.status === 'running'
+                && ['task-data-change', 'task-data-change-approval-resume'].includes(stage.workflowId)) : null
+            if (approvalStage?.runId) {
+              const effects = await store.query({ kind: 'effect.list', runId: approvalStage.runId })
+              const effect = effects.find(item => item.state === 'prepared' && item.requestId
+                && item.definition.action === 'external' && item.definition.payload?.workflowKind === 'data-change'
+                && item.definition.payload.stage === 'approval-gate' && item.definition.payload.intent?.approvalSource === 'assistant')
+              const issue = effect?.definition.payload.intent.issueId?.match(/^projects\/[^/]+\/issues\/([1-9]\d*)$/u)
+              if (issue && (await store.query({ kind: 'approval.get', requestId: effect.requestId })).decision === 'pending')
+                text = `Bytebase 工单 #${issue[1]} 已新建，等待人工审批。`
+            }
             await attempt(run.runId, report.reportId, () => prepare(run, action, `owner:${report.reportId}`, text, report.reportType === 'complete' ? 'result'
               : ['block', 'wait'].includes(report.reportType) && taskDecisionConditionText(report.facts.condition)
                 || report.reportType === 'block' || report.triggerTypes.includes('workflow.confirmation.required') ? 'required_action' : 'progress'))

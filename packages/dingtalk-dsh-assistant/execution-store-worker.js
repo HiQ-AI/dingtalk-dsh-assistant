@@ -1072,6 +1072,23 @@ function query(value) {
   const messageResult = queryMessages(db, value)
   if (messageResult !== undefined) return messageResult
   const result = queryEffects(db, value)
+  if (result !== null && ['approval.get', 'approval.list'].includes(value?.kind)) {
+    const approvals = Array.isArray(result) ? result : [result]
+    const comments = new Map()
+    const byRequest = new Map(approvals.map(item => [item.requestId, item]))
+    for (const row of db.prepare("SELECT payload FROM execution_events WHERE kind='approval.decided' AND json_extract(payload,'$.requestId') IN (SELECT value FROM json_each(?)) ORDER BY seq")
+      .all(JSON.stringify(approvals.map(item => item.requestId)))) {
+      const event = JSON.parse(row.payload)
+      const approval = byRequest.get(event.requestId)
+      if (!comments.has(event.requestId) && approval.effectId === event.effectId
+        && approval.decision === event.decision && approval.decidedBy === event.actorId
+        && approval.decisionSource === event.source && typeof event.comment === 'string' && event.comment.trim())
+        comments.set(event.requestId, event.comment)
+    }
+    const withComment = item => comments.has(item.requestId) ? { ...item, comment: comments.get(item.requestId) } : item
+    return Array.isArray(result) ? approvals.map(withComment) : withComment(result)
+  }
+
   if (result === null || result === undefined) fail('UNKNOWN_QUERY')
   return result
 }

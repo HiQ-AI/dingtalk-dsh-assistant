@@ -224,6 +224,7 @@ export async function apply(ctx, config = {}) {
     runtime.retryWorkflowInvestigation = args => workflow.retryInvestigation(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.repairWorkflowStageAuthorizations = args => workflow.repairStageAuthorizations(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.reassessWorkflowReadonly = args => workflow.reassessReadonly(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.handoffWorkflowDataChangeApproval = args => workflow.handoffDataChangeApproval(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowOwner = args => workflow.retryOwner(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.deleteWorkflowTask = args => workflow.deleteCancelledTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowReadonlyAnswer = args => workflow.retryReadonlyAnswer(args, { channel: 'web', actorId: workflowConfig.webActorId })
@@ -236,7 +237,7 @@ export async function apply(ctx, config = {}) {
     runtime.decideAuthorization = async args => {
       if (!await workflow.isApprovalRequest(args.requestId)) return legacyDecideAuthorization(args)
       if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
-      return workflow.decideApproval({ requestId: args.requestId, decision: args.decision,
+      return workflow.decideApproval({ requestId: args.requestId, decision: args.decision, comment: args.comment,
         eventId: `web:${args.requestId}:${args.decision}` }, { channel: 'web', actorId: workflowConfig.webActorId })
     }
     const legacyListAuthorizations = runtime.listAuthorizationRequests

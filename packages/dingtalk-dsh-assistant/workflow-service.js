@@ -23,7 +23,7 @@ import { isPassiveTaskProgress } from './message-ledger.js'
 import { taskWorkflowCatalog, messageAnswerArguments, candidateCards, referencedResourceIds } from './message-context.js'
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText, groupStatusText, groupActionText, taskDecisionConditionText } from './workflow-notifications.js'
 import { createEngineeringStageContract, createEngineeringRegistry, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
-import { createDataChangeTaskWorkflow, createDataChangeTaskWorkflowV4, createLegacyDataChangeTaskWorkflow } from './workflow-data-change.js'
+import { createDataChangeTaskWorkflow, createDataChangeApprovalResumeWorkflow, createDataChangeTaskWorkflowV5, createDataChangeTaskWorkflowV4, createLegacyDataChangeTaskWorkflow } from './workflow-data-change.js'
 import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, nativeDataChangeOwnerContract } from './task-release-workflows.js'
 import { createUatPrMergeTaskWorkflow, createUatPrMergeTaskWorkflowV2, createLegacyUatPrMergeTaskWorkflow, createMainPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
@@ -442,7 +442,7 @@ function createExternalRegistry(external, selected) {
   const workflows = [], records = new Map(), byId = new Map()
   const add = (workflow, adapter, modelConfig = null) => {
     if (catalogById.get(workflow.id)?.mode !== 'external' || byId.has(workflow.id)) throw executionError('EXTERNAL_WORKFLOW_CATALOG_MISMATCH')
-    workflow = { ...workflow, ownerContract: workflow.id === 'task-data-change' && ['4', '5'].includes(workflow.version) ? nativeDataChangeOwnerContract : externalWorkflowOwnerContract }
+    workflow = { ...workflow, ownerContract: workflow.id === 'task-data-change-approval-resume' || workflow.id === 'task-data-change' && ['4', '5', '6'].includes(workflow.version) ? nativeDataChangeOwnerContract : externalWorkflowOwnerContract }
     const definition = defineExecutionWorkflow(workflow)
     const config = { ownerContractVersion: workflow.ownerContract.version, kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
       rulesDigest: adapter.rulesDigest, ...(modelConfig ? { modelConfig } : {}) }
@@ -450,6 +450,7 @@ function createExternalRegistry(external, selected) {
     byId.set(workflow.id, { workflow, adapter })
   }
   if (external.dataChangeAdapter) add(createDataChangeTaskWorkflow({ ...selected, adapter: external.dataChangeAdapter }), external.dataChangeAdapter, selected)
+  if (external.dataChangeAdapter?.pluginApproval) add(createDataChangeApprovalResumeWorkflow({ ...selected, adapter: external.dataChangeAdapter }), external.dataChangeAdapter, selected)
   if (external.uatMergeAdapter) add(createUatPrMergeTaskWorkflow({ adapter: external.uatMergeAdapter }), external.uatMergeAdapter)
   if (external.mainMergeAdapter) add(createMainPrMergeTaskWorkflow({ adapter: external.mainMergeAdapter }), external.mainMergeAdapter)
   for (const kind of releaseWorkflowKinds) if (external.releaseAdapters?.[kind]) {
@@ -687,6 +688,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       externalAdapter: {
         execute: prepared => prepared.workflowKind === 'local-acceptance' ? engineering.deliveryOptions.externalAdapter.execute(prepared) : external?.operationAdapter?.execute(prepared),
         reconcile: prepared => prepared.workflowKind === 'local-acceptance' ? engineering.deliveryOptions.externalAdapter.reconcile(prepared) : external?.operationAdapter?.reconcile(prepared),
+        closeReadonlyApproval: prepared => external?.operationAdapter?.closeReadonlyApproval(prepared),
       },
       authorizeExternal: request => request.prepared.workflowKind === 'local-acceptance'
         ? engineering.deliveryOptions.authorizeExternal(request) : external?.authorizeExternal?.(request),
@@ -768,18 +770,20 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       for (const record of prior.filter(item => item.config?.kind === 'external'
         && (activeDefinitions.has(`${item.workflowId}:${item.digest}`) || requiredDefinitions.has(`${item.workflowId}:${item.digest}`)))) {
         const route = selectedExternal.byId.get(record.workflowId), saved = record.config
-        const adapter = (record.workflowId === 'task-data-change' && record.definitionVersion === '3' && route?.adapter?.legacyAdapter ? [route.adapter.legacyAdapter] : [route?.adapter, route?.adapter?.legacyAdapter]).find(item => item && saved.adapterId === item.id
+        const adapter = (record.workflowId === 'task-data-change' && record.definitionVersion === '3' && route?.adapter?.legacyAdapter ? [route.adapter.legacyAdapter] : [route?.adapter, route?.adapter?.nativeAdapter, route?.adapter?.legacyAdapter]).find(item => item && saved.adapterId === item.id
           && saved.adapterVersion === item.version && saved.rulesDigest === item.rulesDigest)
         if (!adapter || saved.registryVersion !== '1') throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
-        let previous = record.workflowId === 'task-data-change'
-          ? (record.definitionVersion === '3' ? createLegacyDataChangeTaskWorkflow : record.definitionVersion === '4' ? createDataChangeTaskWorkflowV4 : createDataChangeTaskWorkflow)({ ...saved.modelConfig, adapter })
+        let previous = record.workflowId === 'task-data-change-approval-resume'
+          ? createDataChangeApprovalResumeWorkflow({ ...saved.modelConfig, adapter })
+          : record.workflowId === 'task-data-change'
+          ? (record.definitionVersion === '3' ? createLegacyDataChangeTaskWorkflow : record.definitionVersion === '4' ? createDataChangeTaskWorkflowV4 : record.definitionVersion === '5' ? createDataChangeTaskWorkflowV5 : createDataChangeTaskWorkflow)({ ...saved.modelConfig, adapter })
           : record.workflowId === 'task-uat-pr-merge'
             ? (record.definitionVersion === '1' ? createLegacyUatPrMergeTaskWorkflow : record.definitionVersion === '2' ? createUatPrMergeTaskWorkflowV2 : createUatPrMergeTaskWorkflow)({ adapter })
           : record.workflowId === 'task-main-pr-merge' ? createMainPrMergeTaskWorkflow({ adapter })
           : (record.definitionVersion === '1' ? createLegacyReleaseTaskWorkflow : createReleaseTaskWorkflow)({ kind: record.workflowId.slice(5), adapter })
         if (saved.ownerContractVersion === '1') previous = { ...previous, ownerContract: legacyExternalWorkflowOwnerContract }
         else if (saved.ownerContractVersion === '2') previous = { ...previous, ownerContract: externalWorkflowOwnerContract }
-        else if (saved.ownerContractVersion === '3' && record.workflowId === 'task-data-change') previous = { ...previous, ownerContract: nativeDataChangeOwnerContract }
+        else if (saved.ownerContractVersion === '3' && ['task-data-change', 'task-data-change-approval-resume'].includes(record.workflowId)) previous = { ...previous, ownerContract: nativeDataChangeOwnerContract }
         else if (saved.ownerContractVersion !== undefined) throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
         if (previous.version !== record.definitionVersion || ![defineExecutionWorkflow(previous).digest, ...defineExecutionWorkflow(previous).legacyDigests].includes(record.digest))
           throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
@@ -1000,21 +1004,23 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const state = await controller.state(effect.runId)
       const origin = await store.query({ kind: 'task.origin', taskId: state.run.taskId })
       if (!readableTaskOrigin(origin)) return null
+      const plan = await controller.taskPlan(state.run.taskId)
+      const goal = await artifacts.read(plan.task.requirementRef)
       const target = uatBuild ? (await artifacts.read(state.run.requirementRef)).target : null
       const uatAction = uatBuild ? `${prepared.operation === 'rebuild' ? '重新构建' : '构建提测'} UAT 目标 ${target.runbookId}（${target.repository} / ${target.service}），提交 ${prepared.expected.commitSha}` : null
       return { requestId: approval.requestId, taskId: state.run.taskId, groupId: origin.run.conversationId,
-        objective: origin.command.args.arguments?.objective ?? (uatBuild ? 'UAT 提测' : productionRelease ? '生产发布' : '数据变更'),
+        objective: goal.objective ?? origin.command.args.arguments?.objective ?? (uatBuild ? 'UAT 提测' : productionRelease ? '生产发布' : '数据变更'),
         requestedAction: uatBuild ? `审批 ${uatAction}` : productionRelease
           ? `审批生产发布 ${prepared.resourceKey}，提交 ${prepared.expected.commitSha}，标签 ${prepared.expected.tag}`
-          : `审批数据变更工单 ${prepared.intent.issueId}，任务 ${prepared.intent.taskId}，SQL 摘要 ${prepared.intent.sheetSha256}`,
-        waitingReason: uatBuild ? '等待批准本次 UAT 构建提测' : productionRelease ? '等待真人批准后创建生产 Tag' : '等待真人批准 Bytebase 工单对应的生产数据变更',
+          : `审批数据变更工单 ${prepared.intent.issueId}，目标 ${prepared.target.database}，SQL 摘要 ${prepared.intent.sheetSha256}`,
+        waitingReason: uatBuild ? '等待批准本次 UAT 构建提测' : productionRelease ? '等待真人批准后创建生产 Tag' : '等待插件人工审批通过后执行 Bytebase 工单',
         risk: uatBuild ? 'UAT 流水线可能更新对应环境服务并发送配置的提测通知' : productionRelease ? '生产发布会更新运行服务' : '生产数据库将执行工单中的 SQL',
         evidence: uatBuild ? [prepared.resourceKey, target.environment, target.runbookId, target.repository, target.service, prepared.expected.commitSha] : productionRelease
           ? [prepared.resourceKey, prepared.expected.commitSha, prepared.expected.tag]
-          : [prepared.resourceKey, prepared.intent.issueId, prepared.intent.taskId,
+          : [prepared.resourceKey, prepared.intent.issueId, prepared.target.database, prepared.intent.applySql ?? prepared.intent.sheetSha256,
             prepared.intent.sheetSha256, prepared.intent.packageDigest], attemptedActions: [],
         createdAt: approval.createdAt, status: approval.decision === 'pending' ? 'waiting-reply' : 'answered',
-        decision: approval.decision, decidedAt: approval.updatedAt, decisionSource: approval.decisionSource,
+        decision: approval.decision, decidedAt: approval.updatedAt, decisionSource: approval.decisionSource, reply: approval.comment ?? '',
         taskState: state.run.status }
     }))
     return rows.filter(Boolean)
@@ -2413,6 +2419,90 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         planRevision: input.planRevision, reasonRef: audit.ref } })
     return { accepted: true, taskId, runId: input.runId }
   }
+  async function handoffDataChangeApproval(input, identity) {
+    if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+    const taskId = requireText(input.taskId, 'WORKFLOW_TASK_REQUIRED'), runId = requireText(input.runId, 'WORKFLOW_RUN_REQUIRED')
+    const recoveryKey = requireText(input.recoveryKey, 'WORKFLOW_RECOVERY_KEY_REQUIRED')
+    requireText(input.reason, 'WORKFLOW_RECOVERY_REASON_REQUIRED')
+    if (typeof input.dryRun !== 'boolean') throw executionError('APPROVAL_HANDOFF_ARGUMENT_INVALID')
+    const origin = await store.query({ kind: 'task.origin', taskId })
+    if (!origin) throw executionError('WORKFLOW_TASK_NOT_FOUND')
+    await taskAccess(taskId, identity.actorId, origin.run.conversationId)
+    const eventKey = `approval-handoff:${executionDigest([taskId, recoveryKey])}`, requestDigest = executionDigest({ ...input, dryRun: false })
+    const stopReason = JSON.stringify({ kind: 'approval-channel-handoff', requestDigest, reason: input.reason })
+    const receipt = await store.query({ kind: 'receipt', commandId: `owner-event:${eventKey}` })
+    if (receipt) {
+      let cursor = 0, previous
+      do {
+        const events = await store.query({ kind: 'task.owner.events', taskId, afterSequenceId: cursor, limit: 200 })
+        previous = events.find(event => event.eventKey === eventKey)
+        if (previous || !events.length) break
+        cursor = events.at(-1).eventSeq
+      } while (true)
+      if (!previous?.payloadRef || (await artifacts.read(previous.payloadRef)).requestDigest !== requestDigest) throw executionError('APPROVAL_HANDOFF_CONFLICT')
+      await controller.advanceTaskPlan(taskId)
+      return { accepted: true, replayed: true, taskId, runId, eventSeq: receipt.result.eventSeq }
+    }
+    const inspect = async () => {
+      if ((await store.query({ kind: 'runtime.maintenance' })).active) throw executionError('APPROVAL_HANDOFF_MAINTENANCE')
+      const plan = await controller.taskPlan(taskId), owner = await store.query({ kind: 'task.owner', taskId }), state = await controller.state(runId)
+      const stopped = await store.query({ kind: 'receipt', commandId: `${eventKey}:stop` })
+      const resumingStop = stopped?.result.run?.taskId === taskId && stopped.result.run.runId === runId
+        && stopped.result.run.recoveryReason === stopReason && state.run?.stopRequested
+        && ['cancelling', 'cancelled'].includes(state.run.status)
+      if (!plan || !owner || plan.task.controlState !== 'active'
+        || plan.task.requirementRevision !== input.expectedRequirementRevision || plan.task.controlRevision !== input.expectedControlRevision
+        || plan.task.planRevision !== input.expectedPlanRevision || owner.revision !== input.expectedOwnerRevision
+        || owner.leaseEpoch !== input.expectedLeaseEpoch || state.run?.taskId !== taskId
+        || state.run.generation !== input.generation || !resumingStop && state.run.revision !== input.expectedRunRevision) throw executionError('APPROVAL_HANDOFF_STALE')
+      const index = plan.stages.findIndex(stage => stage.runId === runId)
+      if (index < 0 || plan.stages[index].workflowId !== 'task-data-change'
+        || plan.stages.slice(0, index).some(stage => stage.status !== 'succeeded')
+        || plan.stages.slice(index + 1).some(stage => stage.status !== 'invalidated')
+        || !(state.run.status === 'waiting' || resumingStop) || state.pendingInputCount || state.nodes.some(node => !node.drained)
+        || owner.status === 'running') throw executionError('APPROVAL_HANDOFF_UNSAFE')
+      const requirement = await artifacts.read(plan.task.requirementRef), sourceKey = requirement.authorization?.sourceKey
+      if (owner.applicationStatus === 'pending') {
+        const change = owner.decision?.planChange
+        if (owner.decision?.action !== 'advance' || change?.kind !== 'replaceSuffix' || change.affectedFrom !== index
+          || change.stages?.length !== 1 || change.stages[0].workflowId !== 'task-data-change-approval-resume'
+          || change.stages[0].sourceCondition?.sourceKey !== sourceKey) throw executionError('APPROVAL_HANDOFF_UNSAFE')
+      }
+      const source = sourceKey && await store.query({ kind: 'task.source', sourceKey })
+      const eventId = sourceKey?.startsWith('web-context:') ? sourceKey.slice('web-context:'.length) : null
+      const event = eventId && await store.query({ kind: origin.channel === 'web' ? 'task.web-input' : 'message.web-task', eventId })
+      const authorization = requirement.stageAuthorizations?.find(item => item.workflowId === 'task-data-change-approval-resume'
+        && item.sourceKey === sourceKey && item.sourceVersion === 1 && item.gate === 'none')
+      const authorized = requirement.authorization?.channel === 'web' && requirement.authorization.actorId === identity.actorId
+        && event?.status === 'accepted' && event.request.taskId === taskId && event.request.action === 'context'
+        && source?.actorId === identity.actorId && source.sourceVersion === 1
+        && source.status !== 'superseded' && /插件[\s\S]*审批/u.test(source.body)
+        && authorization && source.body.includes(authorization.sourceQuote) && authorization.sourceQuote.includes(authorization.objective)
+        && requirement.stageTargets?.['task-data-change-approval-resume']
+      return { plan, state, sourceKey, authorized: Boolean(authorized) }
+    }
+    const current = await inspect()
+    if (!external?.verifyDataChangeApprovalHandoff || !execution.delivery?.closeReadonlyApproval) throw executionError('APPROVAL_HANDOFF_NOT_AVAILABLE')
+    const proof = await external.verifyDataChangeApprovalHandoff({ taskId, runId })
+    if (proof.taskId !== taskId || proof.originalRunId !== runId || proof.originalGeneration !== input.generation) throw executionError('APPROVAL_HANDOFF_STALE')
+    if (input.dryRun) return { checked: true, authorized: current.authorized, taskId, runId, effectId: proof.effectId,
+      requirementRevision: current.plan.task.requirementRevision, resumeWorkflowId: 'task-data-change-approval-resume' }
+    if (!current.authorized) throw executionError('APPROVAL_HANDOFF_AUTHORIZATION_REQUIRED')
+    await execution.delivery.closeReadonlyApproval(proof.effectId, { beforeObserve: async () => {
+      if (!(await inspect()).authorized) throw executionError('APPROVAL_HANDOFF_AUTHORIZATION_REQUIRED')
+    } })
+    await controller.stop({ commandId: `${eventKey}:stop`, runId, reason: stopReason })
+    if ((await controller.whenIdle(runId)).run.status !== 'cancelled') throw executionError('APPROVAL_HANDOFF_STOP_UNSETTLED')
+    const latest = await controller.taskPlan(taskId)
+    if (latest.task.requirementRef !== current.plan.task.requirementRef || latest.task.controlRevision !== input.expectedControlRevision
+      || latest.task.controlState !== 'active') throw executionError('APPROVAL_HANDOFF_STALE')
+    const result = await taskOwner.event({ taskId, eventKey, eventType: 'approval.channel.changed', payload: { ...proof,
+      resumeWorkflowId: 'task-data-change-approval-resume', nextAction: '保留成功前段，仅将旧数据变更阶段替换为已有工单接续，进入插件真人审批；不得重新建单。',
+      requirementRef: latest.task.requirementRef, requirementRevision: latest.task.requirementRevision,
+      sourceKey: current.sourceKey, requestDigest, recoveryKey, reason: input.reason, actorId: identity.actorId } })
+    await controller.advanceTaskPlan(taskId)
+    return { accepted: true, taskId, runId, eventSeq: result.result.eventSeq, resumeWorkflowId: 'task-data-change-approval-resume' }
+  }
   async function repairStageAuthorizations(input, identity) {
     if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
     const taskId = requireText(input.taskId, 'WORKFLOW_TASK_REQUIRED')
@@ -2699,7 +2789,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       let waitingCondition = ownerWaiting ? owner.decision.condition ?? null : null
       const state = run ? await controller.state(run.runId) : null
       const approvalNode = state?.nodes.find(node => node.status === 'waiting'
-        && ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'].includes(node.waitReason?.reference))
+        && ['PLUGIN_APPROVAL_PENDING', 'BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'].includes(node.waitReason?.reference))
       if (approvalNode) {
         const approvalOutput = approvalNode.outputRef ? await artifacts.read(approvalNode.outputRef) : null
         const approvalEffect = (await store.query({ kind: 'effect.list', runId: run.runId }))
@@ -2710,7 +2800,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           : approvalNode.waitReason.reference === 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'
         waitingCondition = { kind: unconfigured ? 'capability' : 'approval',
           missing: unconfigured ? `Bytebase 工单 ${issueId} 未启用真人审批（SKIPPED）` : `Bytebase 工单 ${issueId} 的真人审批结果`,
-          responsibleParty: unconfigured ? 'Bytebase 管理员' : 'Bytebase 审批人',
+          responsibleParty: approvalNode.waitReason.reference === 'PLUGIN_APPROVAL_PENDING' ? '插件审批人' : unconfigured ? 'Bytebase 管理员' : 'Bytebase 审批人',
           resumeWhen: unconfigured ? 'Bytebase 管理员启用原生人工审批规则，并重新送审本次精确 SQL；SKIPPED 工单不能直接执行' : '批准后执行；驳回后按意见修改并重新送审',
           evidenceRefs: approvalNode.outputRef ? [approvalNode.outputRef] : [] }
       }
@@ -2912,6 +3002,17 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
             // 先用冻结的只读节点重新证明既有工单身份；成功后只恢复该节点，不重发建单。
             await readback.execute({ input: structuredClone(input.data), signal: new AbortController().signal })
             if (!await eligible(await store.query({ kind: 'run', runId: run.runId }))) continue
+          } else if (node.waitReason?.reference === 'PLUGIN_APPROVAL_PENDING') {
+            const effects = await store.query({ kind: 'effect.list', runId: run.runId })
+            const gates = effects.filter(effect => effect.nodeRunId === node.nodeRunId
+              && effect.generation === state.run.generation && effect.inputDigest === node.inputDigest
+              && effect.definition.payload?.stage === 'approval-gate'
+              && effect.definition.payload.intent?.approvalSource === 'assistant')
+            if (gates.length !== 1 || !gates[0].requestId) continue
+            const approval = await store.query({ kind: 'approval.get', requestId: gates[0].requestId })
+            if (approval.effectId !== gates[0].effectId || approval.revoked
+              || !['approved', 'rejected'].includes(approval.decision)
+              || !['web', 'dingtalk'].includes(approval.decisionSource) || !approval.decidedBy) continue
           } else if (['DELIVERY_RECONCILIATION_REQUIRED', 'BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'].includes(node.waitReason?.reference)) {
             const eligible = async current => {
               const plan = await store.query({ kind: 'task.plan', taskId: run.taskId })
@@ -3274,7 +3375,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     })), nextCursor: runs.length > limit ? selected.at(-1).sequenceId : null, total: null }
   }
   return {
-    ingest, resumeRequest, reassessReadonly, repairStageAuthorizations, retryInvestigation, retryOwner, retryReadonlyAnswer, retryMaterialRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, submitWebTask, mailboxes, topics, topicContext,
+    ingest, resumeRequest, handoffDataChangeApproval, reassessReadonly, repairStageAuthorizations, retryInvestigation, retryOwner, retryReadonlyAnswer, retryMaterialRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, submitWebTask, mailboxes, topics, topicContext,
     maintenance: () => store.query({ kind: 'runtime.maintenance' }),
     completedObservations: taskId => store.query({ kind: 'task.owner.completed-observations', taskId }),
     async reconcileCompletedObservations(request, identity) {

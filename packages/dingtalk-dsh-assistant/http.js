@@ -222,6 +222,19 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 202, await store.retryWorkflowInvestigation({ ...body, taskId: decodeURIComponent(investigationRetry[1]) }))
     } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
+  const approvalHandoff = /^\/tasks\/([^/]+)\/handoff-data-change-approval$/u.exec(url.pathname)
+  if (request.method === 'POST' && approvalHandoff) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.handoffWorkflowDataChangeApproval) return send(response, 404, { error: 'workflow_disabled' })
+    try {
+      const body = z.strictObject({ runId: requiredText, recoveryKey: requiredText.max(200), reason: requiredText.max(16000), dryRun: z.boolean(),
+        expectedOwnerRevision: z.number().int().positive(), expectedLeaseEpoch: z.number().int().nonnegative(),
+        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
+        expectedPlanRevision: z.number().int().positive(), expectedRunRevision: z.number().int().nonnegative(), generation: z.number().int().positive() }).parse(await readJson(request))
+      return send(response, body.dryRun ? 200 : 202, await store.handoffWorkflowDataChangeApproval({ ...body, taskId: decodeURIComponent(approvalHandoff[1]) }))
+    } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT|UNSAFE|MAINTENANCE/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
   const readonlyReassessment = /^\/tasks\/([^/]+)\/reassess-readonly$/u.exec(url.pathname)
   if (request.method === 'POST' && readonlyReassessment) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)

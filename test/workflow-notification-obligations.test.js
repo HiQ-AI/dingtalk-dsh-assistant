@@ -15,8 +15,65 @@ async function fixture(t, body = '请处理') {
   await call('receive', { runId: 'm', sourceKey: 'source', sourceVersion: 1, conversationId: 'g', actorId: 'a', body,
     context: { sourceMessageId: 'in', replyObligation: { required: true, sourceKey: 'source', sourceVersion: 1 } } })
   return { store, call, notices: () => store.query({ kind: 'message.notifications', states: ['prepared', 'sending', 'acknowledged', 'unknown', 'delivered', 'superseded'] }),
-    flush: adapter => createWorkflowNotifications({ store, controller: { taskPlan: taskId => store.query({ kind: 'task.plan', taskId }) }, artifacts: {}, adapter }).flush() }
+    flush: adapter => createWorkflowNotifications({ store, controller: {
+      taskPlan: taskId => store.query({ kind: 'task.plan', taskId }), state: runId => store.query({ kind: 'run', runId }) }, artifacts: {}, adapter }).flush() }
 }
+
+for (const scenario of [
+  { name: '普通数据变更待审', workflowId: 'task-data-change', short: true },
+  { name: '已有工单接续待审', workflowId: 'task-data-change-approval-resume', short: true },
+  { name: '审批已批准', decision: 'approved' },
+  { name: '审批已驳回', decision: 'rejected' },
+  { name: 'Bytebase原生审批', approvalSource: 'bytebase' },
+  { name: '其它任务阶段', workflowId: 'task-uat-deployment' },
+  { name: '其它外部效果领域', workflowKind: 'production-release' },
+  { name: '非真实工单资源名', issueId: '857' },
+]) test(`待审通知消费原生SQLite事实而非长Owner文案：${scenario.name}`, async t => {
+  const f = await fixture(t)
+  const send = (kind, args) => f.store.command({ id: randomUUID(), kind, args })
+  await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '添加name列' }] })
+  await f.call('accept', { runId: 'm', unitId: 'u', commands: [{ commandId: 'c', kind: 'create', args: { taskId: 'task', replyPolicy: 'none' } }] })
+  const claim = (await f.call('command.claim', { commandId: 'c' })).result.command
+  await send('task.accept', { taskId: 'task', requirementRef: `sha256-${'a'.repeat(64)}.json`,
+    requirementRevision: 1, sessionId: 'owner', criteria: ['添加name列'], sourceKey: 'source', eventKey: 'created' })
+  await f.call('command.complete', { commandId: 'c', leaseEpoch: claim.leaseEpoch, result: { taskId: 'task' } })
+  const workflowId = scenario.workflowId ?? 'task-data-change'
+  await send('task.plan.initialize', { taskId: 'task', expectedPlanRevision: 0, expectedRequirementRevision: 1,
+    expectedControlRevision: 1, stages: [{ stageId: 'stage-1', workflowId, workflowDigest: 'a'.repeat(64),
+      unavailableReason: null, requirementRef: 'sha256/in', gate: 'none' }] })
+  await send('run.create', { runId: 'business', taskId: 'task', workflowId, workflowDigest: 'a'.repeat(64),
+    requirementRef: 'sha256/in', stageBinding: { planRevision: 1, stageId: 'stage-1', attempt: 1, expectedControlRevision: 1 },
+    nodes: [{ nodeId: 'approval-gate', nodeVersion: '1', executor: 'code', inputRef: 'sha256/in', inputDigest: 'a'.repeat(64) }] })
+  const binding = (await send('node.claim', { runId: 'business', nodeId: 'approval-gate', expectedGeneration: 1, expectedLeaseEpoch: 0 })).result.binding
+  await send('effect.prepare', { effectId: 'gate-effect', kind: 'operation', runId: 'business', nodeId: 'approval-gate',
+    generation: binding.generation, leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest,
+    definition: { adapterId: 'external-operation', adapterVersion: '1', principalId: 'owner', action: 'external',
+      payload: { workflowKind: scenario.workflowKind ?? 'data-change', stage: 'approval-gate',
+        intent: { approvalSource: scenario.approvalSource ?? 'assistant', issueId: scenario.issueId ?? 'projects/app/issues/857' } } },
+    resourceKeys: ['external:database:app'], approval: { requestId: 'approval-857', approverIds: ['owner'] } })
+  if (scenario.decision) await send('approval.decide', { requestId: 'approval-857', actorId: 'owner', source: 'web', decision: scenario.decision })
+  await send('node.drained', { runId: 'business', nodeId: 'approval-gate', generation: binding.generation,
+    leaseEpoch: binding.leaseEpoch, evidenceRef: 'native-drain-proof' })
+  await send('node.commit', { runId: 'business', nodeId: 'approval-gate', generation: binding.generation,
+    leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest, outcome: 'waiting', evidenceRefs: [],
+    waitReason: { kind: 'approval', reference: 'approval-857' } })
+  const summary = 'Owner生成的长进展，已核对精确表基线及SQL并保留已有工单，仍说明多项内部判断。'.repeat(8)
+  await send('task.owner.claim', { taskId: 'task', turnId: 'turn', expectedLeaseEpoch: 0 })
+  await send('task.owner.sessionBound', { taskId: 'task', turnId: 'turn', leaseEpoch: 1, sessionId: 'owner' })
+  await send('task.owner.candidate', { taskId: 'task', turnId: 'turn', leaseEpoch: 1, decision: { action: 'wait', summary,
+    evidenceRefs: [], condition: { kind: 'approval', missing: '本次DDL批准', responsibleParty: '审批人',
+      resumeWhen: '批准后执行，驳回后修改重审', evidenceRefs: [] } } })
+  await send('task.owner.accept', { taskId: 'task', turnId: 'turn', leaseEpoch: 1 })
+  await send('task.owner.applied', { taskId: 'task', turnId: 'turn', leaseEpoch: 1 })
+  await f.flush(); await f.flush()
+  const notices = (await f.notices()).filter(item => item.payload.phase.startsWith('owner:'))
+  assert.equal(notices.length, 1)
+  if (scenario.short) assert.equal(notices[0].payload.text, 'Bytebase 工单 #857 已新建，等待人工审批。')
+  else { assert.notEqual(notices[0].payload.text, 'Bytebase 工单 #857 已新建，等待人工审批。')
+    assert.match(notices[0].payload.text, /^Owner生成的长进展/) }
+  assert.equal((await f.store.query({ kind: 'task.owner.reports', taskId: 'task' }))[0].facts.summary, summary)
+  assert.equal((await f.store.query({ kind: 'approval.get', requestId: 'approval-857' })).decision, scenario.decision ?? 'pending')
+})
 
 test('需要排查的容量失败有真实状态通知，重启扫描不重复', async t => {
   const f = await fixture(t)
@@ -169,11 +226,11 @@ test('replyPolicy none不丢Task承接及Owner阻塞事实，重新扫描幂等'
   assert.equal(reports, 2); assert.equal(notices.size, 2)
   assert.ok([...notices.values()].some(n => n.payload.text.includes('尚未开始')))
   const blocked = [...notices.values()].find(n => n.payload.phase.startsWith('owner:'))
-  assert.ok(blocked.payload.text.startsWith('处理暂时受阻，需要人工介入。'))
+  assert.ok(blocked.payload.text.startsWith('处理暂时受阻：'))
   assert.equal(blocked.payload.text.includes('等待负责人审批'), true)
 })
 
-for (const reportType of ['wait', 'block']) test(`Owner ${reportType}结构化条件说明缺失责任和恢复条件，同一报告不重复`, async () => {
+for (const reportType of ['wait', 'block']) test(`Owner ${reportType}群通知只呈现简短进展，结构化条件保留在事实且同一报告不重复`, async () => {
   const run = { runId: 'm', sourceKey: 's', sourceVersion: 1, revision: 0, conversationId: 'g', actorId: 'a', context: { sourceMessageId: 'in' } }
   const action = { commandId: 'c', status: 'applied', kind: 'create', args: { replyPolicy: 'none' }, result: { taskId: 'task' } }
   const condition = { kind: 'approval', missing: '本次生产变更审批', responsibleParty: '生产审批人', resumeWhen: '本次审批通过并核验后继续', evidenceRefs: [] }
@@ -184,7 +241,7 @@ for (const reportType of ['wait', 'block']) test(`Owner ${reportType}结构化�
     if (q.kind === 'message.run') return { run, requests: [], commands: [action] }
     if (q.kind === 'message.notification') return notices.get(q.notificationId)
     if (q.kind === 'message.task.latest' || q.kind === 'task.deleted' || q.kind === 'message.owner.released-wait') return null
-    if (q.kind === 'task.owner.reports') return [{ reportId: 'report', reportType, applicationStatus: 'applied', triggerTypes: [], facts: { summary: '等待审批', condition } }]
+    if (q.kind === 'task.owner.reports') return [{ reportId: 'report', reportType, applicationStatus: 'applied', triggerTypes: [], facts: { summary: reportType === 'wait' ? 'Bytebase 工单已新建，等待人工审批。' : '生产数据库只读连接权限缺失，已核对连接配置。', condition } }]
     throw new Error(q.kind)
   }, async command({ kind, args }) {
     assert.equal(kind, 'message.notification.prepare'); notices.set(args.notificationId, { ...args, id: args.notificationId }); return {}
@@ -192,8 +249,8 @@ for (const reportType of ['wait', 'block']) test(`Owner ${reportType}结构化�
   await createWorkflowNotifications({ store }).flush(); await createWorkflowNotifications({ store }).flush()
   const report = [...notices.values()].filter(n => n.payload.phase.startsWith('owner:'))
   assert.equal(report.length, 1)
-  assert.match(report[0].payload.text, /本次生产变更审批/)
-  assert.match(report[0].payload.text, /生产审批人/); assert.match(report[0].payload.text, /审批通过并核验后继续/)
+  assert.equal(report[0].payload.text, reportType === 'wait' ? 'Bytebase 工单已新建，等待人工审批。' : '处理暂时受阻：生产数据库只读连接权限缺失，已核对连接配置。')
+  assert.equal(report[0].payload.text.includes('继续条件'), false)
 })
 
 test('同一事项的多条补充不逐条回复，实际开始仍有一次通知', async () => {

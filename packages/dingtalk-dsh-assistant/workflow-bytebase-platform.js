@@ -24,17 +24,19 @@ const required = (condition, code) => { if (!condition) throw executionError(cod
  * getIssueBundle, runTask, getTaskExecution, queryVerification,
  * findIssueByOperationKey、getIssueApproval。所有方法必须返回 Bytebase 的独立读回结果。
  */
-export function createBytebaseDataChangePlatform({ config, api, productionApi, uatApi, approvalApi }) {
-  const nativeApproval = typeof api?.getIssueApproval === 'function'
+export function createBytebaseDataChangePlatform({ config, api, productionApi, uatApi, approvalApi, approvalSource = 'bytebase' }) {
+  const nativeApproval = approvalSource === 'bytebase' && typeof api?.getIssueApproval === 'function'
+  const pluginApproval = approvalSource === 'assistant'
+  const modern = nativeApproval || pluginApproval
   const targets = config?.targets
   const names = ['getDatabase', 'createIssueBundle', 'activateRollout',
     'getIssueBundle', 'runTask', 'getTaskExecution', 'queryVerification',
     'findIssueByOperationKey']
-  required(nonempty(config?.adapterId) && nonempty(config?.adapterVersion)
+  required(['bytebase', 'assistant'].includes(approvalSource) && nonempty(config?.adapterId) && nonempty(config?.adapterVersion)
     && Array.isArray(targets) && targets.length > 0 && names.every(name => typeof api?.[name] === 'function')
     && ['getDatabase', 'readBaseline', 'checkPreconditions'].every(name =>
       typeof productionApi?.[name] === 'function')
-    && (nativeApproval && targets.every(entry => !entry.uatTarget) || ['getDatabase', 'readBaseline', 'checkPreconditions', 'validateSql', 'rehearseInUat',
+    && (modern && targets.every(entry => !entry.uatTarget) || ['getDatabase', 'readBaseline', 'checkPreconditions', 'validateSql', 'rehearseInUat',
       'getUatRehearsalByOperationKey'].every(name => typeof uatApi?.[name] === 'function'))
     && (nativeApproval || typeof approvalApi?.getApproval === 'function'),
   'BYTEBASE_PLATFORM_NOT_CONFIGURED')
@@ -42,7 +44,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
   for (const entry of targets) {
     const { project, target, uatTarget } = entry
     required(/^projects\/[A-Za-z0-9._-]+$/.test(project ?? '') && canonicalTarget(target)
-      && target?.environment === 'production' && (nativeApproval && !uatTarget || canonicalUatTarget(uatTarget)
+      && target?.environment === 'production' && (modern && !uatTarget || canonicalUatTarget(uatTarget)
       && uatTarget.instance !== target.instance
       && uatTarget.database !== target.database), 'BYTEBASE_TARGET_CONFIG_INVALID')
     const key = executionDigest(target)
@@ -50,6 +52,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
     seen.add(key)
   }
   const rulesDigest = executionDigest({ adapterId: config.adapterId, adapterVersion: config.adapterVersion,
+    ...(pluginApproval ? { approvalSource: 'assistant' } : {}),
     targets: targets.map(({ project, target, uatTarget }) => ({ project, target, ...(uatTarget ? { uatTarget } : {}) })) })
   const entryFor = target => {
     const entry = targets.find(item => exactTarget(item.target, target))
@@ -76,7 +79,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
   }
   const assertUnstartedTask = async (bundle, project) => {
     if (!bundle.task) return
-    required(nativeApproval && bundle.task.planId === bundle.plan.id && bundle.task.status === 'NOT_STARTED',
+    required(modern && bundle.task.planId === bundle.plan.id && bundle.task.status === 'NOT_STARTED',
       'BYTEBASE_PREAPPROVAL_EXECUTION_DETECTED')
     const execution = await api.getTaskExecution({ project, issueId: bundle.issue.id, taskId: bundle.task.id })
     required(execution?.task?.id === bundle.task.id && execution.task.planId === bundle.plan.id
@@ -160,7 +163,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
       && (request.stage !== 'execute-task' || (nonempty(request.intent.issueId)
         && nonempty(request.intent.planId) && nonempty(request.intent.sheetId)
         && /^[a-f0-9]{64}$/.test(request.intent.approvalScopeDigest ?? '')
-        && (!nativeApproval || (/^[a-f0-9]{64}$/.test(request.intent.issueCreationOperationKey ?? '')
+        && (!modern || (/^[a-f0-9]{64}$/.test(request.intent.issueCreationOperationKey ?? '')
           && request.intent.executeOperationKey === request.intent.operationKey))))
       && request.intent.operationKey === (request.stage === 'rehearse-uat'
         ? rehearsalKey({ project: entry.project, target: request.target,
@@ -181,7 +184,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
     return { status: 'succeeded', result: { scopeDigest: request.intent.scopeDigest, operationKey: request.intent.operationKey, approval } }
   }
   const adapter = {
-    nativeApproval, requiresRehearsal: pkg => !nativeApproval || !isSimpleNullableColumnSql(pkg.applySql),
+    nativeApproval, pluginApproval, requiresRehearsal: pkg => !modern || !isSimpleNullableColumnSql(pkg.applySql),
     id: config.adapterId, version: config.adapterVersion, rulesDigest,
     async readBaselineForCandidate({ target, applySql, signal }) {
       const entry = entryFor(target), column = simpleNullableColumnDefinition(applySql)
@@ -211,7 +214,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
         && (!baseline.scope || same(actualBaseline.scope, baseline.scope)), 'BYTEBASE_BASELINE_UNCONFIRMED')
       const preconditions = await checkPreconditions({ project: entry.project, target, baseline: actualBaseline,
         pkg: { applySql, applySqlSha256, expectedChange, verificationSql }, signal })
-      if (nativeApproval && isSimpleNullableColumnSql(applySql)) return { passed: true, packageDigest, receiptId: preconditions.checkId }
+      if (modern && isSimpleNullableColumnSql(applySql)) return { passed: true, packageDigest, receiptId: preconditions.checkId }
       required(entry.uatTarget, 'BYTEBASE_UAT_TARGET_REQUIRED_FOR_COMPLEX_SQL')
       const result = await uatApi.validateSql({ project: entry.project, target: entry.uatTarget,
         sql: applySql, sqlSha256: applySqlSha256, verificationSql, signal })
@@ -263,14 +266,14 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
     },
     async prepareIssue({ prepared, runId, generation, requirementDigest }) {
       const pkg = prepared.package, entry = entryFor(pkg.target)
-      required((nativeApproval && isSimpleNullableColumnSql(pkg.applySql) && !prepared.rehearsal) || (prepared.rehearsal?.passed === true && prepared.rehearsal?.uat === true
+      required((modern && isSimpleNullableColumnSql(pkg.applySql) && !prepared.rehearsal) || (prepared.rehearsal?.passed === true && prepared.rehearsal?.uat === true
         && prepared.rehearsal.packageDigest === pkg.validation.packageDigest), 'BYTEBASE_REHEARSAL_REQUIRED')
       const request = { runId, generation, requirementDigest, packageDigest: pkg.validation.packageDigest,
         target: pkg.target }
-      return { project: entry.project, target: pkg.target, ...(nativeApproval ? { approvalSource: 'bytebase' } : {}), operationKey: issueKey(request),
+      return { project: entry.project, target: pkg.target, ...(modern ? { approvalSource: nativeApproval ? 'bytebase' : 'assistant' } : {}), operationKey: issueKey(request),
         packageDigest: pkg.validation.packageDigest, applySqlSha256: pkg.applySqlSha256,
         applySql: pkg.applySql, expectedChange: pkg.expectedChange,
-        ...(nativeApproval ? { proposalSummary: `待真人审批的候选 SQL：${pkg.applySql}` } : {}),
+        ...(modern ? { proposalSummary: `待真人审批的候选 SQL：${pkg.applySql}` } : {}),
         ...(pkg.previousIssueId ? { previousIssueId: pkg.previousIssueId } : {}) }
     },
     async prepareApproval({ view, runId, generation, requirementDigest }) {
@@ -282,7 +285,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
       const request = { runId, generation, requirementDigest, target: pkg.target,
         packageDigest: pkg.validation.packageDigest, applySqlSha256: pkg.applySqlSha256,
         intent: { issueId: issue.id, planId: plan.id, sheetId: sheet.id } }
-      return { project: entry.project, target: pkg.target, ...(nativeApproval ? { approvalSource: 'bytebase' } : {}),
+      return { project: entry.project, target: pkg.target, ...(pluginApproval ? { applySql: pkg.applySql } : {}), ...(modern ? { approvalSource: nativeApproval ? 'bytebase' : 'assistant' } : {}),
         issueId: issue.id, planId: plan.id, sheetId: sheet.id,
         sheetSha256: sheet.sha256, packageDigest: pkg.validation.packageDigest,
         applySqlSha256: pkg.applySqlSha256, scopeDigest: approvalScope(request),
@@ -327,9 +330,9 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
     },
     async inspect({ stage, issue, sheet, plan, prepared, request, receipt, signal }) {
       const pkg = prepared.package, entry = entryFor(pkg.target)
-      if (nativeApproval && stage === 'approval-state') {
+      if (modern && stage === 'approval-state') {
         checkRequest(request)
-        return getApproval({ ...request.intent, target: request.target, sheetSha256: request.applySqlSha256, signal })
+        return getApproval({ ...request, ...request.intent, target: request.target, sheetSha256: request.applySqlSha256, signal })
       }
       if (stage === 'approval') {
         checkRequest(request)
@@ -342,7 +345,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
           resourceKey: request.resourceKey, scopeDigest: request.intent.scopeDigest,
           issueId: issue.id, planId: plan.id, sheetId: sheet.id, target: pkg.target,
           sheetSha256: sheet.sha256, packageDigest: pkg.validation.packageDigest, signal })
-        if (nativeApproval && approval?.decision === 'rejected') return approval
+        if (modern && approval?.decision === 'rejected') return approval
         assertApproval(approval, { issueId: issue.id, planId: plan.id, sheetId: sheet.id,
           target: pkg.target,
           sheetSha256: sheet.sha256, packageDigest: pkg.validation.packageDigest,
@@ -380,7 +383,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
         && /^[a-f0-9]{64}$/.test(bundle.issue.operationKey ?? ''), 'BYTEBASE_PREFLIGHT_CHANGED')
       const executeOperationKey = executeKey({ packageDigest: identity.packageDigest,
         intent: { issueId: issue.id }, approvalRequestId: identity.approvalRequestId })
-      return { project: entry.project, target: identity.target, ...(nativeApproval ? { approvalSource: 'bytebase' } : {}), issueId: issue.id,
+      return { project: entry.project, target: identity.target, ...(modern ? { approvalSource: nativeApproval ? 'bytebase' : 'assistant' } : {}), issueId: issue.id,
         planId: identity.planId, sheetId: identity.sheetId,
         approvalRequestId: identity.approvalRequestId,
         approvalScopeDigest: approval.scopeDigest,
@@ -444,7 +447,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
         && bundle?.sheet?.id === request.intent.sheetId
         && bundle.sheet.sha256 === request.applySqlSha256
         && bundle?.issue?.packageDigest === request.packageDigest
-        && (!nativeApproval || bundle.issue.operationKey === request.intent.issueCreationOperationKey), 'BYTEBASE_PREFLIGHT_CHANGED')
+        && (!modern || bundle.issue.operationKey === request.intent.issueCreationOperationKey), 'BYTEBASE_PREFLIGHT_CHANGED')
       const approval = await getApproval({ runId: request.runId,
         generation: request.generation, requirementDigest: request.requirementDigest,
         resourceKey: request.resourceKey, scopeDigest: request.intent.approvalScopeDigest,
@@ -508,7 +511,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
       required(bundle?.issue?.id === request.intent.issueId && bundle.issue.packageDigest === request.packageDigest
         && bundle.plan?.id === request.intent.planId && bundle.sheet?.id === request.intent.sheetId
         && bundle.sheet.sha256 === request.applySqlSha256 && exactTarget(bundle.sheet.target, request.target)
-        && (!nativeApproval || bundle.issue.operationKey === request.intent.issueCreationOperationKey),
+        && (!modern || bundle.issue.operationKey === request.intent.issueCreationOperationKey),
       'BYTEBASE_EXECUTION_READBACK_IDENTITY_CHANGED')
       if (!bundle?.task?.id || bundle.task.planId !== request.intent.planId)
         return { status: 'unknown', reason: 'run_not_observed' }
@@ -519,5 +522,36 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
       return { status: 'succeeded', result: { taskId: bundle.task.id } }
     },
   }
-  return { workflowAdapter: adapter, externalAdapter }
+  async function verifyApprovalHandoff({ request, view }) {
+    const entry = checkRequest(request), pkg = view?.prepared?.package
+    const { validation, ...body } = pkg ?? {}
+    required(nativeApproval && request.stage === 'approval-gate' && request.intent.approvalSource === 'bytebase'
+      && validation?.packageDigest === executionDigest(body)
+      && request.packageDigest === validation.packageDigest
+      && pkg.applySqlSha256 === request.applySqlSha256 && sha(pkg.applySql) === request.applySqlSha256
+      && exactTarget(pkg.target, request.target)
+      && view.issue.id === request.intent.issueId && view.plan.id === request.intent.planId
+      && view.sheet.id === request.intent.sheetId, 'BYTEBASE_APPROVAL_HANDOFF_IDENTITY_INVALID')
+    const bundle = await api.getIssueBundle({ project: entry.project, issueId: view.issue.id })
+    required(nonempty(bundle?.task?.id), 'BYTEBASE_APPROVAL_HANDOFF_TASK_UNCONFIRMED')
+    const current = await issueBundle(bundle, { project: entry.project, target: request.target,
+      sqlSha256: request.applySqlSha256, packageDigest: request.packageDigest, operationKey: issueKey(request) })
+    required(same(current, { issue: view.issue, sheet: view.sheet, plan: view.plan }), 'BYTEBASE_APPROVAL_HANDOFF_IDENTITY_INVALID')
+    const approval = await api.getIssueApproval({ project: entry.project, ...request.intent,
+      target: request.target, sheetSha256: request.applySqlSha256 })
+    required(approval?.decision === 'unconfigured' && approval.source === 'bytebase'
+      && approval.issueId === view.issue.id && approval.planId === view.plan.id && approval.sheetId === view.sheet.id
+      && approval.packageDigest === request.packageDigest && approval.sheetSha256 === request.applySqlSha256
+      && approval.scopeDigest === request.intent.scopeDigest && exactTarget(approval.target, request.target),
+    'BYTEBASE_APPROVAL_HANDOFF_NOT_SKIPPED')
+    const baseline = await productionApi.readBaseline({ project: entry.project, target: pkg.target,
+      scope: pkg.baseline.scope ?? 'current' })
+    assertBaseline(baseline, entry.project, pkg.target)
+    required(!pkg.baseline.scope || same(baseline.scope, pkg.baseline.scope)
+      && baseline.snapshotId === pkg.baseline.snapshotId && baseline.sha256 === pkg.baseline.sha256,
+    'BYTEBASE_PRODUCTION_SCHEMA_CHANGED')
+    await checkPreconditions({ project: entry.project, target: pkg.target, baseline, pkg })
+    return structuredClone(view)
+  }
+  return { workflowAdapter: adapter, externalAdapter, verifyApprovalHandoff }
 }

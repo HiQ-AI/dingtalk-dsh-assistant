@@ -1,7 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { createTrustedWorkflowPlatforms } from '../packages/dingtalk-dsh-assistant/workflow-trusted-platforms.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { createDataChangeApprovalResumeWorkflow } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
+import { defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 
 const target = { instance: 'instances/prod', database: 'instances/prod/databases/app', environment: 'production' }
 const config = { bytebase: { adapterId: 'bytebase', adapterVersion: '1', targets: [{
@@ -32,7 +35,10 @@ test('数据变更输入只接受白名单目标和精确 SQL 来源，基线由
   const action = { arguments: { objective: '修正一条记录', targetId: 'app-prod',
     changeRef: 'sql-1' }, constraints: ['仅此数据库'] }
   const materials = [{ resourceRef: 'sql-1', text: 'UPDATE app SET x = 1 WHERE id = 1;' }]
-  const requirement = await platform.prepareRequirement({ workflowId: 'task-data-change', action, materials })
+  const current = await platform.prepareRequirement({ workflowId: 'task-data-change', action, materials })
+  assert.equal(current.baseline, undefined)
+  assert.equal(platform.dataChangeAdapter.pluginApproval, true)
+  const requirement = await platform.prepareRequirement({ workflowId: 'task-data-change', definitionVersion: '3', action, materials })
   assert.deepEqual(requirement.target, target)
   assert.equal(requirement.sources[0].id, 'sql-1')
   assert.deepEqual(requirement.baseline, { snapshotId: 'snapshot-1', sha256: 'a'.repeat(64) })
@@ -46,7 +52,7 @@ test('数据变更输入只接受白名单目标和精确 SQL 来源，基线由
     snapshotId: 'snapshot-1', sha256: 'a'.repeat(64), evidenceRef: 'wrong-project' }) }
   const guarded = createTrustedWorkflowPlatforms({ config,
     clients: { bytebase: api, productionPostgres: badApi, uatPostgres }, ownerActorId: 'owner' })
-  await assert.rejects(guarded.prepareRequirement({ workflowId: 'task-data-change', action, materials }),
+  await assert.rejects(guarded.prepareRequirement({ workflowId: 'task-data-change', definitionVersion: '3', action, materials }),
     { code: 'EXTERNAL_BASELINE_UNCONFIRMED' })
 })
 
@@ -83,6 +89,114 @@ test('数据变更工单在 Assistant 任务页审批，生产执行前重验精
     prepared: execute }), { code: 'BYTEBASE_APPROVAL_PROOF_REQUIRED' })
   await assert.rejects(platform.authorizeExternal({ binding: { runId: 'run-2', nodeRunId: 'node-1', generation: 1 }, prepared }),
     { code: 'EXTERNAL_AUTHORIZATION_IDENTITY_INVALID' })
+})
+
+for (const decision of ['pending', 'rejected']) test(`直接生产授权拒绝插件 ${decision} 决定`, async () => {
+  const platform = createTrustedWorkflowPlatforms({ config,
+    clients: { bytebase: api, productionPostgres, uatPostgres }, ownerActorId: 'owner' })
+  const scope = { runId: 'run-1', generation: 1, issueId: 'issue-1', planId: 'plan-1', sheetId: 'sheet-1',
+    target, sheetSha256: 'a'.repeat(64), packageDigest: 'b'.repeat(64) }
+  const scopeDigest = executionDigest(scope)
+  const gate = { workflowKind: 'data-change', ...scope, stage: 'approval-gate', requirementDigest: 'c'.repeat(64),
+    resourceKey: 'database:app', applySqlSha256: scope.sheetSha256,
+    intent: { ...scope, scopeDigest, operationKey: 'operation-1', approvalSource: 'assistant' } }
+  gate.intent = { ...gate.intent, project: 'projects/app', target, applySqlSha256: scope.sheetSha256,
+    operationKey: executionDigest({ stage: 'approval-gate', runId: scope.runId, generation: 1,
+      requirementDigest: gate.requirementDigest, scopeDigest }) }
+  const effect = { effectId: 'effect-1', generation: 1, state: 'unknown', requestId: 'request-1',
+    definition: { action: 'external', payload: gate } }
+  platform.bindStore({ query: async query => query.kind === 'effect.list' ? [effect]
+    : { effectId: effect.effectId, requestId: effect.requestId, decision, decisionSource: 'web',
+      decidedBy: 'owner', revoked: false, comment: '请改成 varchar' } })
+  await assert.rejects(platform.authorizeExternal({ binding: { runId: scope.runId, generation: 1 },
+    prepared: { ...gate, stage: 'execute-task', approvalRequestId: effect.requestId,
+      intent: { ...gate.intent, approvalScopeDigest: scopeDigest } } }), { code: 'BYTEBASE_APPROVAL_PROOF_REQUIRED' })
+  if (decision === 'rejected') assert.equal((await platform.dataChangeAdapter.inspect({ stage: 'approval-state',
+    prepared: { package: { target } }, request: gate })).comment, '请改成 varchar')
+})
+
+test('受信接续仅消费旧Run冻结工单，SKIPPED及未执行证明不产生任何写操作', async () => {
+  const hash = text => createHash('sha256').update(text).digest('hex'), calls = []
+  const sql = 'ALTER TABLE public.t ADD COLUMN name character varying;'
+  const scope = { schema: 'public', table: 't' }
+  const baseline = { snapshotId: 'snapshot-1', sha256: 'a'.repeat(64), scope }
+  const body = { target, baseline, sourceDigest: hash('source'), applySql: sql, applySqlSha256: hash(sql),
+    rollbackSql: 'ALTER TABLE public.t DROP COLUMN name;', verificationSql: 'SELECT 1;', expectedChange: '{}' }
+  const prepared = { package: { ...body, validation: { adapterId: 'bytebase', adapterVersion: '1',
+    receiptId: 'validated-1', packageDigest: executionDigest(body) } } }
+  const view = { prepared, issue: { id: 'issue-857', planId: 'plan-878' },
+    sheet: { id: 'sheet-1', sha256: hash(sql), target }, plan: { id: 'plan-878', sheetId: 'sheet-1' } }
+  const task = { id: 'task-905', planId: view.plan.id, status: 'NOT_STARTED' }
+  const creationKey = executionDigest({ stage: 'create-issue', runId: 'old-run', generation: 1,
+    requirementDigest: hash('old-requirement'), packageDigest: executionDigest(body), target })
+  let taskRun = null, decision = 'unconfigured'
+  const bundle = { issue: { ...view.issue, project: 'projects/app', operationKey: creationKey,
+    packageDigest: executionDigest(body) }, sheet: { ...view.sheet, project: 'projects/app' },
+    plan: { ...view.plan, project: 'projects/app' }, task }
+  const bytebase = { ...api,
+    getIssueBundle: async () => { calls.push('read-issue'); return bundle },
+    getTaskExecution: async () => { calls.push('read-task'); return { task, taskRun } },
+    getIssueApproval: async args => { calls.push('read-native-approval'); return { ...args, decision, source: 'bytebase' } },
+    createIssueBundle: async () => { throw new Error('must not create') },
+    runTask: async () => { throw new Error('must not execute') } }
+  const production = { ...productionPostgres,
+    readBaseline: async args => { calls.push('read-exact-baseline'); assert.deepEqual(args.scope, scope)
+      return { ...baseline, target, project: 'projects/app', evidenceRef: 'baseline-read',
+        schemaVersion: 'catalog-1', schemaDigest: hash('catalog') } },
+    checkPreconditions: async args => { calls.push('read-preconditions'); return { passed: true,
+      target, sqlSha256: args.applySqlSha256, checkId: 'check-1', baselineEvidenceRef: args.baseline.evidenceRef,
+      schemaProofDigest: hash('catalog') } } }
+  const platform = createTrustedWorkflowPlatforms({ config, clients: { bytebase, productionPostgres: production, uatPostgres }, ownerActorId: 'owner' })
+  assert.ok(platform.availableTargets.some(item => item.workflowId === 'task-data-change-approval-resume' && item.targetId === 'app-prod'))
+  const request = { action: 'external', workflowKind: 'data-change', stage: 'approval-gate', runId: 'old-run',
+    generation: 1, requirementDigest: hash('old-requirement'), resourceKey: 'external:database:app',
+    packageDigest: executionDigest(body), applySqlSha256: hash(sql), target }
+  request.intent = await platform.dataChangeAdapter.nativeAdapter.prepareApproval({ view,
+    runId: request.runId, generation: 1, requirementDigest: request.requirementDigest })
+  const envelope = { data: { view, request } }, inputDigest = executionDigest(envelope)
+  const node = { nodeId: 'approval-gate', nodeRunId: 'node-1', generation: 1, leaseEpoch: 2,
+    inputRef: 'input-ref', inputDigest, drained: true }
+  const run = { runId: 'old-run', taskId: 'task-1', workflowId: 'task-data-change', workflowDigest: 'old-definition',
+    generation: 1, requirementRef: 'old-req', status: 'waiting' }
+  const effect = { effectId: 'effect-1', runId: run.runId, nodeRunId: node.nodeRunId, generation: 1,
+    inputDigest, state: 'unknown', definition: { action: 'external', payload: request } }
+  let handoff
+  const source = { sourceKey: 'current-source', sourceVersion: 1, actorId: 'owner', text: '改用插件人工审批，继续已有工单' }
+  const requirement = { sourceInstructions: [source], authorization: { actorId: 'owner' } }
+  platform.bindExecution({ controller: { state: async () => ({ run, nodes: [node] }), workflowDefinition: () => ({ version: '5' }),
+    taskPlan: async () => ({ task: { requirementRef: 'current-req', requirementRevision: 3 } }) },
+    artifacts: { read: async ref => ref === 'event-ref' ? handoff : ref === 'current-req' ? requirement : envelope },
+    store: { query: async query => query.kind === 'effect.get' ? effect
+      : query.kind === 'task.owner.events' ? [{ eventSeq: 1, eventType: 'approval.channel.changed', payloadRef: 'event-ref' }]
+      : query.kind === 'task.source' ? { ...source, body: source.text, status: 'active' } : [effect] } })
+  const proof = await platform.verifyDataChangeApprovalHandoff({ taskId: 'task-1', runId: 'old-run' })
+  assert.deepEqual(proof.view, view)
+  assert.deepEqual(calls, ['read-issue', 'read-task', 'read-native-approval', 'read-exact-baseline', 'read-preconditions'])
+  const resume = createDataChangeApprovalResumeWorkflow({ adapter: platform.dataChangeAdapter, provider: 'test', model: 'test' })
+  assert.equal(resume.id, 'task-data-change-approval-resume')
+  assert.equal(resume.nodes[0].id, 'freeze-existing-issue')
+  assert.equal(resume.nodes[1].id, 'prepare-approval')
+  assert.equal(defineExecutionWorkflow(resume).id, resume.id)
+  assert.deepEqual(resume.nodes[0].mapInput({ requirement: view }), view)
+  assert.ok(!resume.nodes.some(item => ['propose-sql', 'create-issue', 'validate-package'].includes(item.id)))
+  handoff = { ...proof, requirementRef: 'current-req', requirementRevision: 3, sourceKey: source.sourceKey }
+  effect.state = 'failed'; effect.result = { result: { reason: 'APPROVAL_CHANNEL_SUPERSEDED' } }; run.status = 'cancelled'
+  const resumeInput = await platform.prepareRequirement({ workflowId: resume.id,
+    action: { taskId: run.taskId, arguments: { objective: '继续审批', targetId: 'app-prod', issueId: 'model-fake-issue' } } })
+  assert.deepEqual(resumeInput, view)
+  assert.deepEqual(await resume.nodes[0].execute({ taskId: run.taskId, input: resumeInput }), view)
+  await assert.rejects(resume.nodes[0].execute({ taskId: run.taskId, input: { ...view,
+    issue: { ...view.issue, id: 'model-fake-issue' } } }), { code: 'DATA_CHANGE_APPROVAL_HANDOFF_IDENTITY_INVALID' })
+  handoff.requirementRevision = 2
+  await assert.rejects(platform.prepareRequirement({ workflowId: resume.id,
+    action: { taskId: run.taskId, arguments: { objective: '继续审批', targetId: 'app-prod' } } }), { code: 'DATA_CHANGE_APPROVAL_HANDOFF_STALE' })
+  handoff.requirementRevision = 3
+  taskRun = { id: 'run-1' }
+  await assert.rejects(platform.verifyDataChangeApprovalHandoff({ taskId: 'task-1', runId: 'old-run' }), { code: 'BYTEBASE_PREAPPROVAL_EXECUTION_DETECTED' })
+  taskRun = null; decision = 'pending'
+  await assert.rejects(platform.verifyDataChangeApprovalHandoff({ taskId: 'task-1', runId: 'old-run' }), { code: 'BYTEBASE_APPROVAL_HANDOFF_NOT_SKIPPED' })
+  effect.definition.payload = { ...request, packageDigest: hash('different') }
+  await assert.rejects(platform.verifyDataChangeApprovalHandoff({ taskId: 'task-1', runId: 'old-run' }), { code: 'DATA_CHANGE_APPROVAL_HANDOFF_IDENTITY_INVALID' })
 })
 
 test('生产发布仅审批节点等待真人，Tag 必须带审批回读身份', async () => {

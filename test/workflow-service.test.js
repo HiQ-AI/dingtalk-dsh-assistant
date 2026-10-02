@@ -19,6 +19,7 @@ import { readOnlyWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistan
 import { externalWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
+import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
 import { createTaskMarkdownFileAdapter } from '../packages/dingtalk-dsh-assistant/task-markdown-file.js'
 import { createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
 import { createTaskArtifactFiles } from '../packages/dingtalk-dsh-assistant/task-artifact-files.js'
@@ -474,7 +475,9 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
     return { status: 'submitted' }
   }, async cancel() {}, async close() {} }
   const controller = createExecutionController({ store, artifacts, sessions: options.executionSessions ?? investigationSessions, readTools: ['read-topic-sources', 'read-predecessor-artifact', 'organize-topic-sources', 'read-task-message-resource', ...(options.readTools ?? [])], ...(delivery ? { delivery } : options.external ? { delivery: { execute: async () => { throw new Error('EXTERNAL_EFFECT_NOT_EXPECTED') } } } : {}), workflows: [] })
-  const execution = { store: options.storeQuery ? { ...store, query: request => options.storeQuery(request, store.query) } : store,
+  const execution = { store: options.storeQuery || options.storeCommand ? { ...store,
+    ...(options.storeQuery ? { query: request => options.storeQuery(request, store.query) } : {}),
+    ...(options.storeCommand ? { command: request => options.storeCommand(request, store.command) } : {}) } : store,
     artifacts, controller, ...(delivery ? { delivery } : {}) }
   const legacy = { getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小助手', '用户'], ...(options.taskFiles ? { workspaceDir: root } : {}) }), getGroup: id => ({ groupId: id, responsibility: '处理本人交办事项', messages: [] }), ...options.legacy }
   const judge = async ({ stage, input }) => {
@@ -573,14 +576,25 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
         inputSchema: schema, outputSchema: schema, mapInput: ({ requirement }) => requirement,
         execute: options.execute }, ...(options.extraNodes ?? [])] })
     const taskId = 'fixture-code-task'
-    const requirement = await artifacts.put({ request: 'fixture', acceptanceCriteria: ['fixture'], constraints: [], scope: { conversationId: 'g' }, authorization: {}, reportChannel: 'web', externalMessaging: false })
+    if (options.codePrefixCount) controller.registerWorkflow({ id: 'fixture-prefix', version: '1', nodes: [{ id: 'prefix-result', version: '1', executor: 'code',
+      allowedEffects: ['pure'], inputSchema: schema, outputSchema: schema, mapInput: ({ requirement }) => requirement, execute: async ({ input }) => input }] })
+    const requirement = await artifacts.put({ request: 'fixture', acceptanceCriteria: ['fixture'], constraints: [], scope: { conversationId: 'g', sourceKeys: ['web-rerun:fixture-code'], sourceVersions: { 'web-rerun:fixture-code': 1 } }, authorization: {}, reportChannel: 'web', externalMessaging: false })
     await store.command({ id: 'fixture-code-origin', kind: 'task.web-rerun.accept', args: { taskId,
       rerunOfTaskId: original.taskId, actorId: 'owner', request: { expectedRunId: original.runId, objective: 'fixture' },
       requirementRef: requirement.ref, criteria: ['fixture'], sourceKey: 'web-rerun:fixture-code' } })
     await controller.initializeTaskPlan({ commandId: 'fixture-code-plan', taskId, expectedPlanRevision: 0, expectedRequirementRevision: 1,
-      stages: [{ stageId: 'fixture', workflowId, input: { request: 'fixture', materials: [] } }] })
-    const plan = await controller.advanceTaskPlan(taskId)
-    return { taskId, runId: plan.stages[0].runId }
+      stages: [...Array.from({ length: options.codePrefixCount ?? 0 }, (_, index) => ({ stageId: `prefix-${index}`, workflowId: 'fixture-prefix' })),
+        { stageId: 'fixture', workflowId }].map((stage, index) => ({ ...stage, ...(index === 0 ? { input: { request: 'fixture', materials: [] } } : {}) })) })
+    let plan = await controller.advanceTaskPlan(taskId)
+    for (let index = 0; index < (options.codePrefixCount ?? 0); index++) {
+      await controller.whenIdle(plan.stages[index].runId)
+      plan = await controller.advanceTaskPlan(taskId)
+      await controller.bindTaskStageInput({ commandId: `fixture-bind-${index}`, taskId, planRevision: plan.task.planRevision,
+        expectedControlRevision: plan.task.controlRevision, stageId: plan.stages[index + 1].stageId,
+        predecessorOutputRef: plan.stages[index].outputRef, input: { request: 'fixture', materials: [] } })
+      plan = await controller.advanceTaskPlan(taskId)
+    }
+    return { taskId, runId: plan.stages.at(-1).runId }
   }
   return { service, execution, message, startCodeTask, root }
 }
@@ -1859,7 +1873,7 @@ test('运行中原消息修订更新 Task 要求并保持旧 Run 输入冻结', 
   assert.ok(plan.task.planRequirementRevision<plan.task.requirementRevision)
 })
 
-test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入不执行，暂停不恢复',async t=>{
+for(const runCount of [1,2]) test(`新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入不执行，暂停不恢复：${runCount}个Run`,async t=>{
  let started,release;const began=new Promise(r=>started=r),gate=new Promise(r=>release=r);t.after(()=>release())
  const {service,execution,message}=await fixture(t,'owner',undefined,{config:{webActorId:'owner'},execute:async()=>{started();await gate;return {summary:'done'}}})
  const received=await service.ingest(message);await service.messages.process(received.runId);await began
@@ -1869,7 +1883,19 @@ test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入�
  const runtime={isWorkflowTask:service.isTask,submitWorkflowTask:r=>service.submitWebTask(r,{channel:'web',actorId:'owner'}),cancelTask:()=>{legacyCalls++;throw new Error('legacy')},appendTaskContext:()=>{legacyCalls++;throw new Error('legacy')}}
  const server=createServer((req,res)=>handleRequest(req,res,runtime));await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)))
  const post=(action,body,origin)=>fetch(`http://127.0.0.1:${server.address().port}/tasks/${original.taskId}/${action}`,{method:'POST',headers:{'content-type':'application/json',...(origin?{origin}:{})},body:JSON.stringify(body)})
- const task=(await service.tasks())[0],input={requestId:'web-context-1',inputVersion:task.inputVersion,runSequence:1,context:'追加检查中文格式',topicRefs:[]}
+ if(runCount===2){
+  await execution.controller.stop({commandId:'context-history-stop',runId:original.runId,reason:'保留旧运行历史'})
+  await execution.controller.whenIdle(original.runId)
+  await execution.controller.advanceTaskPlan(original.taskId)
+  execution.controller.registerWorkflow({id:'context-history',version:'1',nodes:[{id:'done',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:{type:'object'},outputSchema:{type:'object'},mapInput:({requirement})=>requirement,execute:async()=>({})}]})
+  const previous=await execution.controller.taskPlan(original.taskId)
+  await execution.controller.reviseTaskPlan({commandId:'context-history',taskId:original.taskId,expectedPlanRevision:previous.task.planRevision,requirementRevision:previous.task.requirementRevision,affectedFrom:0,stages:[{stageId:'history',workflowId:'context-history',input:{}}]})
+  const history=await execution.controller.advanceTaskPlan(original.taskId)
+  await execution.controller.whenIdle(history.stages[0].runId)
+ }
+ const task=(await service.tasks())[0],input={requestId:'web-context-1',inputVersion:task.inputVersion,runSequence:task.runSequence,context:'追加检查中文格式',topicRefs:[]}
+ assert.equal(task.runSequence,runCount)
+ if(runCount===2)assert.equal((await post('context',{...input,requestId:'stale-context',runSequence:1})).status,409)
  const acceptanceBefore=await execution.store.query({kind:'task.owner.acceptance',taskId:task.taskId})
  assert.equal((await post('context',input,'https://evil.example')).status,403)
  assert.equal((await post('context',{...input,actorId:'owner'})).status,400)
@@ -1877,14 +1903,15 @@ test('新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入�
  await assert.rejects(service.submitWebTask({action:'reissue-repository',taskId:task.taskId,repositoryId:'backend',requestId:'unauthorized'},{channel:'web',actorId:'attacker'}),/FORBIDDEN/)
  const firstContext=await post('context',input);assert.equal(firstContext.status,202,await firstContext.text());assert.equal((await post('context',input)).status,202)
  assert.equal((await post('context',{...input,context:'冲突内容'})).status,409)
- let state=await execution.controller.state(original.runId);assert.equal(state.pendingInputCount,0);assert.equal(state.run.pauseRequested,true)
+ let state=await execution.controller.state(original.runId);assert.equal(state.pendingInputCount,0)
+ if(runCount===1)assert.equal(state.run.pauseRequested,true);else assert.equal(state.run.status,'cancelled')
  const revisedPlan=await execution.controller.taskPlan(task.taskId)
  assert.deepEqual(await execution.store.query({kind:'task.owner.acceptance',taskId:task.taskId}),acceptanceBefore)
  assert.equal(revisedPlan.task.requirementRevision,2)
  assert.match((await execution.artifacts.read(revisedPlan.task.requirementRef)).request,/追加检查中文格式/u)
  assert.equal((await execution.artifacts.read(state.run.requirementRef)).request,'整理本条材料')
  assert.equal((await post('reopen',input)).status,409);assert.equal((await post('archive',{})).status,409)
- const cancel={requestId:'web-cancel-1',inputVersion:(await service.tasks())[0].inputVersion,runSequence:1,reason:'停止'}
+ const cancel={requestId:'web-cancel-1',inputVersion:(await service.tasks())[0].inputVersion,runSequence:task.runSequence,reason:'停止'}
  assert.equal((await post('cancel',cancel)).status,202);assert.equal((await post('cancel',cancel)).status,202)
  await execution.controller.whenIdle(original.runId);state=await execution.controller.state(original.runId);assert.equal(state.run.status,'cancelled');assert.equal(legacyCalls,0)
 })
@@ -3224,6 +3251,164 @@ for (const reason of ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_
     assert.equal(reads, 3); assert.equal(sends, 1)
   })
 
+test('生产Service组合真实转发只读审批收口，unknown效果原生观察为failed', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'service-approval-composition-'))
+  let service, sends = 0, closes = 0
+  t.after(async () => { await service?.close(); await rm(root, { recursive: true, force: true }) })
+  const initialized = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'composition-test', initialize: true })
+  await initialized.close()
+  await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const external = { authorizeExternal: async () => ({ principalId: 'owner', authorizationRef: 'readonly-approval' }),
+    prepareRequirement: async () => { throw Error('UNEXPECTED_PREPARE') }, operationAdapter: {
+      execute: async () => { sends++; return { status: 'unknown' } }, reconcile: async () => ({ status: 'unknown' }),
+      closeReadonlyApproval: async prepared => {
+        closes++; assert.equal(prepared.workflowKind, 'data-change'); assert.equal(prepared.stage, 'approval-gate')
+        return { status: 'failed', reason: 'APPROVAL_CHANNEL_SUPERSEDED' }
+      } } }
+  service = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', webActorId: 'owner',
+    dbPath: join(root, 'control.db'), artifactDirectory: join(root, 'artifacts'), instanceId: 'composition-test' },
+    legacy: { getAgentConfig: () => ({ provider: 'test', model: 'test', workspaceDir: root }) }, external,
+    coordinatorSessions: { async close() {} }, taskOwnerSessions: { async close() {} }, messageAgentSessions: { async close() {} } })
+  const { controller, store, delivery } = service.execution
+  controller.registerWorkflow({ id: 'composition-approval-gate', version: '1', nodes: [{ id: 'approval-gate', version: '1', executor: 'code',
+    allowedEffects: ['external.operation'], inputSchema: schema, outputSchema: schema, mapInput: ({ requirement }) => requirement,
+    execute: ({ runId, generation, requirementDigest, perform }) => perform({ action: 'external', prepared: {
+      action: 'external', workflowKind: 'data-change', stage: 'approval-gate', intent: { approvalSource: 'bytebase' },
+      resourceKey: 'external:composition:approval', runId, generation, requirementDigest } }) }] })
+  await controller.createTaskPlan({ commandId: 'composition-plan', taskId: 'composition-task', stages: [{ stageId: 'gate', workflowId: 'composition-approval-gate', input: {} }] })
+  const plan = await controller.advanceTaskPlan('composition-task'), runId = plan.stages[0].runId
+  assert.equal((await controller.whenIdle(runId)).run.status, 'waiting')
+  const [effect] = await store.query({ kind: 'effect.list', runId })
+  assert.equal(effect.state, 'unknown'); assert.equal(sends, 1)
+  let barriers = 0
+  await delivery.closeReadonlyApproval(effect.effectId, { beforeObserve: async () => { barriers++ } })
+  const closed = await store.query({ kind: 'effect.get', effectId: effect.effectId })
+  assert.equal(closes, 1); assert.equal(barriers, 1); assert.equal(sends, 1)
+  assert.equal(closed.state, 'failed'); assert.equal(closed.result.result.reason, 'APPROVAL_CHANNEL_SUPERSEDED')
+})
+
+for (const pendingMode of ['resume', 'other']) test(`审批交接先真实上下文纠正，旧 unknown 不增加 pendingInput；dryRun零写、原生终止同Task并持久幂等：${pendingMode}`, async t => {
+  let executionRef, sends = 0, closes = 0, verifies = 0, crash = false
+  const adapter = { id: 'handoff-fixture', version: '1', pluginApproval: true, rulesDigest: 'a'.repeat(64) }
+  for (const name of ['validate','prepareRehearsal','readbackRehearsal','inspect','prepareIssue','prepareApproval','prepareExecute','readback','readBaselineForCandidate','validateExistingIssue']) adapter[name] = async () => { throw Error('UNEXPECTED_ADAPTER_CALL') }
+  const external = { dataChangeAdapter: adapter, authorizeExternal: async () => false, prepareRequirement: async () => { throw Error('UNEXPECTED_PREPARE') }, operationAdapter: { execute: async () => { throw Error('UNEXPECTED_SEND') }, reconcile: async () => ({ status: 'unknown' }) }, availableTargets: ['task-data-change', 'task-data-change-approval-resume'].map(workflowId => ({ workflowId, targetId: 'production-db' })),
+    verifyDataChangeApprovalHandoff: async ({ taskId, runId }) => {
+      verifies++
+      const state = await executionRef.controller.state(runId), [effect] = await executionRef.store.query({ kind: 'effect.list', runId })
+      return { kind: 'data-change-approval-handoff', taskId, originalRunId: runId, originalGeneration: state.run.generation,
+        originalRequirementRef: state.run.requirementRef, effectId: effect.effectId, effectDigest: effect.definitionDigest,
+        nodeRunId: state.nodes[0].nodeRunId, inputDigest: state.nodes[0].inputDigest, leaseEpoch: state.nodes[0].leaseEpoch,
+        view: { prepared: { sql: 'ALTER TABLE fixture ADD COLUMN name text' }, issue: { issueId: '857' }, sheet: {}, plan: {} } }
+    } }
+  const { service, execution, startCodeTask } = await fixture(t, 'owner', undefined, {
+    config: { webActorId: 'owner' }, external, codePrefixCount: 3, nodeId: 'approval-gate', allowedEffects: ['external.operation'],
+    storeCommand: async (request, command) => {
+      if (crash && request.kind === 'task.owner.event' && request.args.eventType === 'approval.channel.changed') {
+        crash = false; throw Error('SIMULATED_AFTER_STOP_CRASH')
+      }
+      return command(request)
+    },
+    deliveryOptions: { authorize: async () => false, authorizeExternal: async () => ({ principalId: 'owner', authorizationRef: 'fixture' }), externalAdapter: {
+      execute: async () => { sends++; return { status: 'unknown' } }, reconcile: async () => ({ status: 'unknown' }),
+      closeReadonlyApproval: async () => { closes++; return { status: 'failed', reason: 'APPROVAL_CHANNEL_SUPERSEDED' } } } },
+    execute: async ({ runId, generation, requirementDigest, perform }) => perform({ action: 'external', prepared: {
+      action: 'external', workflowKind: 'data-change', stage: 'approval-gate', intent: { approvalSource: 'bytebase' },
+      resourceKey: 'external:fixture:approval', runId, generation, requirementDigest } }) })
+  executionRef = execution
+  const task = await startCodeTask(), before = await execution.controller.whenIdle(task.runId)
+  // Service 生命周期使用真实 Controller/效果账；冻结 v5 的定义证明由受信适配器独立测试覆盖。
+  const taskPlan = execution.controller.taskPlan.bind(execution.controller)
+  execution.controller.taskPlan = async taskId => {
+    const plan = await taskPlan(taskId)
+    if (taskId === task.taskId) return { ...plan, stages: plan.stages.map(stage => stage.stageId === 'fixture' ? { ...stage, workflowId: 'task-data-change' } : stage) }
+    return plan
+  }
+  assert.equal(before.run.status, 'waiting'); assert.equal((await execution.store.query({ kind: 'effect.list', runId: task.runId }))[0].state, 'unknown')
+  const context = '添加 name 列，通过插件人工审批后执行；驳回按意见修改继续送审。'
+  const revision = { objective: context, acceptanceCriteria: ['插件人工审批后执行并核验'],
+    stageTargets: { 'task-data-change': 'production-db', 'task-data-change-approval-resume': 'production-db' },
+    stageAuthorizations: ['task-data-change', 'task-data-change-approval-resume'].map(workflowId => ({ workflowId, objective: context, sourceQuote: context, gate: 'none' })) }
+  const runtime = { isWorkflowTask: async taskId => taskId === task.taskId,
+    submitWorkflowTask: request => service.submitWebTask(request, { channel: 'web', actorId: 'owner' }),
+    handoffWorkflowDataChangeApproval: request => service.handoffDataChangeApproval(request, { channel: 'web', actorId: 'owner' }) }
+  const server = createServer((request, response) => handleRequest(request, response, runtime))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)))
+  const post = (action, body, origin) => fetch(`http://127.0.0.1:${server.address().port}/tasks/${task.taskId}/${action}`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(body) })
+  const contextResult = await post('context', { requestId: 'handoff-context', inputVersion: 2, runSequence: 4, context, requirement: revision })
+  assert.equal(contextResult.status, 202, await contextResult.text())
+  const afterContext = await execution.controller.state(task.runId), plan = await execution.controller.taskPlan(task.taskId)
+  const priorOwner = await execution.store.query({ kind: 'task.owner', taskId: task.taskId })
+  const claim = await execution.store.command({ id: 'handoff-pending-claim', kind: 'task.owner.claim', args: { taskId: task.taskId, turnId: 'handoff-pending', expectedLeaseEpoch: priorOwner.leaseEpoch } })
+  const leaseEpoch = claim.result.leaseEpoch
+  await execution.store.command({ id: 'handoff-pending-bound', kind: 'task.owner.sessionBound', args: { taskId: task.taskId, turnId: 'handoff-pending', leaseEpoch, sessionId: priorOwner.sessionId } })
+  const goal = await execution.artifacts.read(plan.task.requirementRef)
+  await execution.store.command({ id: 'handoff-pending-candidate', kind: 'task.owner.candidate', args: { taskId: task.taskId, turnId: 'handoff-pending', leaseEpoch, decision: {
+    action: 'advance', summary: '保留成功调查和已有工单，替换审批阶段', evidenceRefs: [], planChange: { kind: 'replaceSuffix', affectedFrom: 3,
+      stages: [{ workflowId: pendingMode === 'resume' ? 'task-data-change-approval-resume' : 'task-data-change', gate: 'none', sourceCondition: { sourceKey: goal.authorization.sourceKey, sourceVersion: 1, sourceQuote: context, objective: context } }] } } } })
+  await execution.store.command({ id: 'handoff-pending-accept', kind: 'task.owner.accept', args: { taskId: task.taskId, turnId: 'handoff-pending', leaseEpoch } })
+  const owner = await execution.store.query({ kind: 'task.owner', taskId: task.taskId })
+  assert.equal(owner.applicationStatus, 'pending'); assert.equal(owner.decision.action, 'advance')
+  const prefix = plan.stages.slice(0, 3)
+  assert.ok(prefix.every(stage => stage.status === 'succeeded' && stage.outputRef))
+  assert.equal(afterContext.pendingInputCount, 0); assert.equal(afterContext.run.requirementRef, before.run.requirementRef)
+  assert.equal(plan.task.requirementRevision, 2); assert.deepEqual((await execution.store.query({ kind: 'task.owner.acceptance', taskId: task.taskId })).map(item => item.criterion), revision.acceptanceCriteria)
+  const input = { taskId: task.taskId, runId: task.runId, recoveryKey: 'approval-channel', reason: context, dryRun: true,
+    expectedRequirementRevision: 2, expectedControlRevision: plan.task.controlRevision, expectedPlanRevision: plan.task.planRevision,
+    expectedOwnerRevision: owner.revision, expectedLeaseEpoch: owner.leaseEpoch, expectedRunRevision: afterContext.run.revision, generation: afterContext.run.generation }
+  const { taskId: unusedTaskId, ...httpInput } = input
+  const eventsBeforeCheck = await execution.store.query({ kind: 'task.owner.events', taskId: task.taskId })
+  assert.equal((await post('handoff-data-change-approval', { ...httpInput, actorId: 'other' })).status, 400)
+  assert.equal((await post('handoff-data-change-approval', httpInput, 'https://untrusted.invalid')).status, 403)
+  const checked = await post('handoff-data-change-approval', httpInput)
+  const check = await checked.json()
+  if (pendingMode === 'other') {
+    assert.equal(checked.status, 409, JSON.stringify(check)); assert.match(check.error, /UNSAFE/)
+    assert.equal(closes, 0); assert.equal(sends, 1)
+    assert.equal((await execution.controller.state(task.runId)).run.status, 'waiting')
+    return
+  }
+  assert.equal(checked.status, 200, JSON.stringify(check))
+  assert.equal(check.authorized, true); assert.equal(closes, 0); assert.equal(sends, 1)
+  assert.deepEqual(await execution.store.query({ kind: 'task.owner.events', taskId: task.taskId }), eventsBeforeCheck)
+  assert.equal((await execution.controller.state(task.runId)).run.revision, afterContext.run.revision)
+  await assert.rejects(service.handoffDataChangeApproval({ ...input, expectedRequirementRevision: 1, dryRun: false }, { channel: 'web', actorId: 'owner' }), /STALE/)
+  await assert.rejects(service.handoffDataChangeApproval(input, { channel: 'web', actorId: 'other' }), /FORBIDDEN/)
+  const maintenance = await execution.store.query({ kind: 'runtime.maintenance' })
+  await execution.store.command({ id: 'handoff-maintenance-enter', kind: 'runtime.maintenance.change', args: {
+    maintenanceId: 'handoff', actorId: 'owner', active: true, expectedRevision: maintenance.revision, reason: 'fixture' } })
+  assert.equal((await post('handoff-data-change-approval', httpInput)).status, 409)
+  await execution.store.command({ id: 'handoff-maintenance-leave', kind: 'runtime.maintenance.change', args: {
+    maintenanceId: 'handoff', actorId: 'owner', active: false, expectedRevision: maintenance.revision + 1, reason: 'fixture' } })
+  const stop = execution.controller.stop.bind(execution.controller)
+  execution.controller.stop = async () => { throw Error('SIMULATED_AFTER_CLOSE_CRASH') }
+  await assert.rejects(service.handoffDataChangeApproval({ ...input, dryRun: false }, { channel: 'web', actorId: 'owner' }), /SIMULATED_AFTER_CLOSE_CRASH/)
+  execution.controller.stop = stop
+  assert.equal((await execution.controller.state(task.runId)).run.status, 'waiting')
+  crash = true
+  await assert.rejects(service.handoffDataChangeApproval({ ...input, dryRun: false }, { channel: 'web', actorId: 'owner' }), /SIMULATED_AFTER_STOP_CRASH/)
+  assert.equal((await execution.controller.state(task.runId)).run.status, 'cancelled')
+  assert.equal((await execution.store.query({ kind: 'effect.list', runId: task.runId }))[0].state, 'failed')
+  const applied = await service.handoffDataChangeApproval({ ...input, dryRun: false }, { channel: 'web', actorId: 'owner' })
+  assert.equal(applied.accepted, true); assert.equal((await execution.controller.state(task.runId)).run.status, 'cancelled')
+  const stoppedPlan = await execution.controller.taskPlan(task.taskId)
+  assert.equal(stoppedPlan.stages[3].status, 'blocked'); assert.deepEqual(stoppedPlan.stages.slice(0, 3), prefix)
+  assert.equal(closes, 3); assert.equal(sends, 1)
+  const events = await execution.store.query({ kind: 'task.owner.events', taskId: task.taskId }), handoff = events.find(event => event.eventType === 'approval.channel.changed')
+  const payload = await execution.artifacts.read(handoff.payloadRef)
+  const changedOwner = await execution.store.query({ kind: 'task.owner', taskId: task.taskId })
+  assert.ok(changedOwner.eventWatermark > owner.eventWatermark)
+  const ownerController = createTaskOwnerController({ ctx: {}, store: execution.store, artifacts: execution.artifacts, controller: execution.controller,
+    modelConfig: () => ({ provider: 'test', model: 'test' }), advanceTask: async () => { throw Error('STALE_PLAN_MUST_NOT_ADVANCE') },
+    authorizeStages: async () => { throw Error('STALE_PLAN_MUST_NOT_AUTHORIZE') }, sessionRunner: { async close() {} } })
+  try { assert.deepEqual(await ownerController.applyPending(), []) } finally { await ownerController.close() }
+  assert.equal((await execution.store.query({ kind: 'task.owner', taskId: task.taskId })).applicationStatus, 'discarded')
+  assert.equal(await execution.store.query({ kind: 'receipt', commandId: 'owner-plan:handoff-pending' }), null)
+  assert.equal(payload.requirementRef, plan.task.requirementRef); assert.equal(payload.originalRunId, task.runId); assert.equal(payload.view.issue.issueId, '857')
+  assert.equal((await service.handoffDataChangeApproval({ ...input, dryRun: false }, { channel: 'web', actorId: 'owner' })).replayed, true)
+  assert.equal(closes, 3); assert.equal(verifies, 4)
+})
+
 for (const gate of ['repaired', 'protocol-repaired', 'unrepaired', 'maintenance', 'pause', 'input', 'maintenance-during-read']) test(`Bytebase 已建工单身份只读恢复 ${gate}`, async t => {
   let repaired = false, reads = 0, executionRef
   const enter = () => executionRef.store.command({ id: 'identity-maintenance', kind: 'runtime.maintenance.change', args: {
@@ -3321,9 +3506,18 @@ for (const [firstDecision, workflowKind] of [['approved', 'uat-deployment'], ['r
     stages: [{ stageId: 'uat', workflowId: 'approval-fixture', input: { request: '验证UAT3提测', target } }] })
   const started = await execution.controller.advanceTaskPlan(taskId), runId = started.stages[0].runId
   await execution.controller.whenIdle(runId)
+  const frozenRun = await execution.controller.state(runId)
+  const [frozenEffect] = await execution.store.query({ kind: 'effect.list', runId })
+  const currentObjective = '按当前明确要求验证 UAT3 提测结果'
+  const revisedGoal = await execution.artifacts.put({ request: currentObjective, objective: currentObjective, target, acceptanceCriteria: ['验证提测结果'] }, { taskId })
+  await execution.store.command({ id: 'approval-current-goal', kind: 'task.requirement.update', args: {
+    taskId, expectedRequirementRevision: 1, requirementRef: revisedGoal.ref, eventKey: 'approval-current-goal' } })
   const visible = await service.listApprovalRequests()
   assert.equal(visible.length, 1); assert.equal(visible[0].requestId, requestId)
-  assert.equal(visible[0].objective, '验证UAT3提测'); assert.match(visible[0].requestedAction, /UAT 目标 dataset-uat3-deployment/)
+  assert.equal(visible[0].objective, currentObjective); assert.match(visible[0].requestedAction, /UAT 目标 dataset-uat3-deployment/)
+  assert.equal((await execution.controller.taskPlan(taskId)).task.requirementRevision, 2)
+  assert.equal((await execution.controller.state(runId)).run.requirementRef, frozenRun.run.requirementRef)
+  assert.deepEqual(await execution.store.query({ kind: 'effect.get', effectId: frozenEffect.effectId }), frozenEffect)
   assert.match(visible[0].requestedAction, /HiQ-AI\/dataset/); assert.ok(visible[0].evidence.includes(commitSha))
   assert.equal(visible[0].status, 'waiting-reply'); assert.equal(sends, 0)
   await assert.rejects(service.decideApproval({ requestId, decision: 'approved', eventId: 'bad-web' }, { channel: 'web', actorId: 'outsider' }), /WORKFLOW_WEB_ACTOR_FORBIDDEN/)

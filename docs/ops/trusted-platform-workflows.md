@@ -10,11 +10,11 @@ UAT 部署可独立发起，显式给出白名单目标和目标分支当前提�
 
 - release.targets 每项含唯一 id、kind、仓库、环境、服务、runbook、目标分支、Woodpecker 仓库与 Cron、Kubernetes Deployment、Registry 镜像与 HTTPS 入口。目标 SHA 由请求显式给出，Host 再查目标分支头；生产目标还需已核实的 Tag→Woodpecker 触发链。生产 Tag 是**每次任务**明确给出的 `action.arguments.releaseTag`（格式 `vYYYYMMDD-N`），与 commitSha 一起冻结在 Run 的 target、审批范围和效果身份中；不得写死在 `release.targets`，不得由模型猜序号。同一生产目标可按不同 Tag 多次发布，每次均重新检查 Tag 冲突、流水线与真人审批。UAT 部署预检与生产合并阶段只确认已经合入且 merge SHA 等于目标分支头的唯一 PR，当前固定需求合同不能自动合并未合入 PR。
 - 当前生产目标白名单只允许 `HiQ-AI/dataset` 的 `dataset` 与 `HiQ-AI/dataset-web` 的 `dataset-web`，均以已核实的 `main` 分支和 `hiqlcd-app-prod` Deployment 为准；其他服务不加入 `release.targets`。准入仍取决于生产触发链、可信客户端和审批入口全部通过，不因出现在白名单中就自动可发起。
-- bytebase.targets 每项登记唯一 id、Bytebase 项目和精确生产目标。新数据变更 v4 的单条新增可空、无默认值列先由生产只读连接核对准确表列，生成候选 DDL 并提交 Bytebase；不要求 UAT 目标、全库一致或额外业务用途调查。复杂 SQL 仍要求配置 UAT 目标并完成既有演练。生产写入只经过 Bytebase，新增列验收通过生产只读副本固定列目录查询完成。
-- 外部写操作沿用持久效果账和独立回读。数据变更先创建并回读 Sheet、Plan、Issue；Bytebase 3.18 可自动创建未执行 Rollout/Task 并将 Issue 标为 DONE，该状态不能证明 SQL 执行。适配器只接纳独立回读为 NOT_STARTED 且没有 TaskRun 的既有 Task。新工单在任何 Sheet/Plan/Issue 写入前只读核对准确生产环境的原生 rollout_policy 为手动策略；AUTO、无权限或缺少完整策略返回均拒绝发送。审批读取原生事件、真实审批人及意见，绑定准确目标、SQL 和变更包。待审继续等待，驳回保留意见并在同 Task 修改候选、关联原工单重新送审；SQL 改动使旧批准失效。SKIPPED 明确显示“未启用真人审批”，不能执行；不能用自动生成的 DONE 替代真人批准。批准后复用既有 Rollout/Task，执行前再次回读批准和目标，执行后分别核对 TaskRun 与真实数据库列属性。既有冻结流程保持原定义恢复。生产发布的 Web 真人批准与 Tag 来源链保持既有合同。
+- bytebase.targets 每项登记唯一 id、Bytebase 项目和精确生产目标。新数据变更 v6 的单条新增可空、无默认值列先由生产只读连接核对准确表列，生成候选 DDL 并提交 Bytebase；不要求 UAT 目标、全库一致或额外业务用途调查。复杂 SQL 仍要求配置 UAT 目标并完成既有演练。生产写入只经过 Bytebase，新增列验收通过生产只读副本固定列目录查询完成。
+- 外部写操作沿用持久效果账和独立回读。数据变更先创建并回读 Sheet、Plan、Issue；Bytebase 3.18 可自动创建未执行 Rollout/Task 并将 Issue 标为 DONE，该状态不能证明 SQL 执行。适配器只接纳独立回读为 NOT_STARTED 且没有 TaskRun 的既有 Task。新工单在任何 Sheet/Plan/Issue 写入前只读核对准确生产环境的原生 rollout_policy 为手动策略；AUTO、无权限或缺少完整策略返回均拒绝发送。人工审批使用插件审批账与认证身份，绑定准确目标、SQL、工单、当前运行和变更包。待审继续等待，驳回保留意见并在同 Task 修改候选、关联原工单重新送审；SQL 改动使旧批准失效。Bytebase 原生审批的 SKIPPED、APPROVED 不作为插件审批结果，不能用自动生成的 DONE 替代插件真人批准。批准后复用既有 Rollout/Task，执行前再次回读批准和目标，执行后分别核对 TaskRun 与真实数据库列属性。既有冻结流程保持原定义恢复。生产发布的 Web 真人批准与 Tag 来源链保持既有合同。
 - D:/baibu-agent/.secrets 中的凭据只由本机受信客户端读取；Host 配置和模型输入不包含凭据值，凭据也不能写入仓库、工件或日志。不得把宽泛的 Bytebase MCP call_api 当成受信执行端口。
 
-简单加列的新定义为 v5。候选形成前不读取生产全库基线；受信适配器解析单条 DDL 的 schema/table，生产只读 Host 用参数化目录查询和独立行数核验获取该表基线。scope、摘要和快照身份冻结进变更包，准备、校验、批准后执行均核对同一准确表范围。模型提供的范围或基线不作为可信输入。复杂 SQL 保留原全库基线与 UAT 合同；持久化 v3/v4 定义按原合同恢复。
+简单加列的新定义为 v6。候选形成前不读取生产全库基线；受信适配器解析单条 DDL 的 schema/table，生产只读 Host 用参数化目录查询和独立行数核验获取该表基线。scope、摘要和快照身份冻结进变更包，准备、校验、批准后执行均核对同一准确表范围。模型提供的范围或基线不作为可信输入。复杂 SQL 保留原全库基线与 UAT 合同；持久化 v3/v4/v5 定义按原合同恢复。
 
 ## 本地客户端装配
 
@@ -246,6 +246,18 @@ Owner 快照复用同一成功工程 Run 的交付证明，将构建检查、验
 
 流水线整体 failure/error/killed 不代表构建步骤失败。重建预检可接受本次失败流水线的同提交制品已运行：Host 必须独立确认唯一 `buildkit-build-and-push` 步骤 success/exit0、该步骤日志中唯一且一致的export/push digest、Registry manifest，以及目标Deployment全部Ready副本的实际imageID。若该构建未成功，仍可用失败前成功流水线的旧制品证明；混合新旧副本、无来源digest、更新流水线和不完整Pod清单继续阻断。`readBuildEvidence` 默认仍要求整体成功；仅重建证明显式传入精确 `expectedPipelineStatus` 才允许检查失败流水线中的成功构建。
 
-### 数据变更原生审批的持续接续
+### 数据变更插件审批的持续接续
 
-待审和未启用人工审批通过现有效果账只读轮询对账；收到真人批准或驳回后恢复原 Run，不需要手工重建 Task 或重复发工单。完成调查但 Owner 未完成的 Task 可经本机 context 修订下一步；成功调查成果保留，取消或已业务完成任务不能用此入口续办。
+当前数据变更 v6 在 Bytebase 创建工单后进入插件审批，待审批不是执行受阻。插件对准确目标、SQL、工单和当前运行绑定批准；收到插件真人批准后恢复原 Run 执行，驳回后修订送审。Bytebase 平台的 APPROVED、SKIPPED 均不能替代插件批准。历史 v4/v5 冻结运行继续保留原定义，不能直接改成新审批或重发建单。完成调查但 Owner 未完成的 Task 可经本机 context 修订下一步；成功调查成果保留，取消或已业务完成任务不能用此入口续办。
+
+群通知使用一句简短进展或具体受阻原因，完整 condition 保留在任务详情，不自动拼接责任人和继续条件。审批页展示工单、准确生产目标、SQL 原文及摘要，批准仍由已配置的插件审批人作出。
+
+审批意见沿现有 approval.decided 审计事件与首终态决定同事务保存，重启后从原生批量投影读取；重复或晚到决定不能覆盖首个意见。数据变更驳回仅关闭尚未发送的插件审批门禁，原有未知写入仍先对账。
+
+### 旧原生审批观察阻止精确包切换
+
+若正式维护预检仅有旧v5原生approval-gate未知观察，仍不能忽略effects或强行停止Resident。使用scripts/recover-data-change-approval.ps1和scripts/reconcile-data-change-approval.mjs参数化交接；manifest位于私人docs/tmp，绑定当前包/profile/实例/Task/Run/effect/节点及版本，不复制凭据。--check为零写，返回绑定摘要；取得摘要后冻结manifest并用ExpectedManifestSha256约束每阶段。
+
+PowerShell Phase依次check、offline、reconcile、install、start、readback、resume-dispatch。offline先维护禁派发，见证完整dispose，取得owner锁，停止精确PID并完整备份包括任务工件；对账阶段释放外部锁后由原生Store自身独占，独立验证备份和无监听，只关闭唯一纯审批读取，不stop业务Run、修改Owner或批准DDL。效果failed且busy清零后原生seal，才安装精确包并恢复原profile。恢复自启和派发前独立回读新进程、包文件、完整profile、历史及HTTP。
+
+对账--readback用于中断续查，不重复未知操作。其它未知写效果、已执行TaskRun、SQL/目标/包/节点漂移、备份缺失或维护不符全部拒绝。正常新运行仍走普通部署runbook，不能把本领域范围扩成全局unknown豁免。安装后正式context纠正当前需求，再handoff同Task已有工单进入插件审批；旧闭合failed观察被幂等接受。

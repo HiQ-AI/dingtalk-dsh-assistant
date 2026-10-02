@@ -18,7 +18,9 @@ export function createWorkflowApprovalService({ store, controller, authorizeTask
     return { approval, effect, run: state.run }
   }
 
-  async function decide({ requestId, decision, eventId }, identity) {
+  async function decide({ requestId, decision, eventId, comment = '' }, identity) {
+    if (typeof comment !== 'string' || comment.length > 2000) throw executionError('WORKFLOW_APPROVAL_COMMENT_INVALID')
+    comment = comment.trim()
     if (!['approved', 'rejected'].includes(decision)) throw executionError('WORKFLOW_APPROVAL_DECISION_INVALID')
     if (!['web', 'im'].includes(identity?.channel)) throw executionError('WORKFLOW_APPROVAL_CHANNEL_INVALID')
     const actorId = requireText(identity.actorId, 'WORKFLOW_APPROVAL_ACTOR_REQUIRED')
@@ -27,12 +29,12 @@ export function createWorkflowApprovalService({ store, controller, authorizeTask
       conversationId: identity.conversationId, channel: identity.channel })) throw executionError('WORKFLOW_APPROVAL_FORBIDDEN')
     if (!item.approval.approverIds.includes(actorId)) throw executionError('WORKFLOW_APPROVAL_FORBIDDEN')
     const source = identity.channel === 'web' ? 'web' : 'dingtalk'
-    const commandId = `approval:${executionDigest([requestId, decision, actorId, source, requireText(eventId, 'WORKFLOW_APPROVAL_EVENT_REQUIRED')])}`
-    const receipt = await store.command({ id: commandId, kind: 'approval.decide', args: { requestId, actorId, source, decision } })
-    const approval = receipt.result.approval
-    if (approval.decision === 'approved' && receipt.result.applied) await controller.recover({ commandId: `approval-recover:${requestId}`, runId: item.run.runId })
+    const commandId = `approval:${executionDigest([requestId, decision, actorId, source, requireText(eventId, 'WORKFLOW_APPROVAL_EVENT_REQUIRED'), comment])}`
+    const receipt = await store.command({ id: commandId, kind: 'approval.decide', args: { requestId, actorId, source, decision, comment } })
+    const approval = await store.query({ kind: 'approval.get', requestId })
+    if (receipt.result.applied && (approval.decision === 'approved' || item.effect.definition.payload?.intent?.approvalSource === 'assistant' && item.effect.definition.payload?.workflowKind === 'data-change')) await controller.recover({ commandId: `approval-recover:${requestId}`, runId: item.run.runId })
     return { requestId, taskId: item.run.taskId, runId: item.run.runId, decision: approval.decision,
-      decidedBy: approval.decidedBy, decisionSource: approval.decisionSource, applied: receipt.result.applied }
+      decidedBy: approval.decidedBy, decisionSource: approval.decisionSource, ...(approval.comment ? { comment: approval.comment } : {}), applied: receipt.result.applied }
   }
 
   return { get, decide }

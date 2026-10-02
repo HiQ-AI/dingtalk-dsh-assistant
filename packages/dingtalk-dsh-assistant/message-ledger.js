@@ -698,7 +698,8 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(!origin)fail('MESSAGE_TASK_NOT_FOUND')
     const task=db.prepare('SELECT * FROM execution_runs WHERE run_id=? AND task_id=?').get(a.executionRunId,a.request.taskId)
     const businessTask=db.prepare('SELECT requirement_revision,requirement_ref FROM business_tasks WHERE task_id=?').get(a.request.taskId)
-    if(!task||!businessTask?.requirement_ref||a.request.runSequence!==1
+    const runCount=db.prepare('SELECT count(*) AS count FROM execution_runs WHERE task_id=?').get(a.request.taskId).count
+    if(!task||!businessTask?.requirement_ref||a.request.runSequence!==runCount
       ||a.request.inputVersion!==businessTask.requirement_revision+1)fail('REVISION_CONFLICT')
     if(!['cancel','context'].includes(a.request.action))fail('MESSAGE_WEB_ACTION_UNSUPPORTED')
     if(a.request.action==='context'&&isBusinessTaskTerminal(db,a.request.taskId))fail('RUN_TERMINAL')

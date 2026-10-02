@@ -33,6 +33,31 @@ test('效果网关同操作并发/重投只执行一次，授权不逐步骤重�
   await assert.rejects(f.gateway.execute({ ...f.request, prepared: { ...f.request.prepared, candidateDigest: 'e'.repeat(64) } }), { code: 'DELIVERY_IDENTITY_CONFLICT' })
 })
 
+test('仅原生只读待审效果可受信失败收口，CAS阻止落账且重放不重复派发', async t => {
+  const f = await fixture(t)
+  let dispatched = 0, verified = 0
+  const gateway = createExecutionDelivery({ store: f.store, artifacts: f.artifacts,
+    authorize: async () => ({ principalId: 'owner', authorizationRef: 'authorized' }),
+    authorizeExternal: async () => ({ principalId: 'owner', authorizationRef: 'readonly' }),
+    externalAdapter: { execute: async () => { dispatched++; return { status: 'unknown', reason: 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED' } },
+      closeReadonlyApproval: async () => { verified++; return { status: 'failed', reason: 'APPROVAL_CHANNEL_SUPERSEDED', result: { readonly: true } } } } })
+  const prepared = { action: 'external', workflowKind: 'data-change', stage: 'approval-gate', runId: 'run',
+    generation: 1, requirementDigest: 'a'.repeat(64), resourceKey: 'external:bytebase:app', intent: { approvalSource: 'bytebase' } }
+  const effect = await gateway.execute({ binding: f.request.binding, action: 'external', prepared })
+  await assert.rejects(gateway.closeReadonlyApproval(effect.effectId, { beforeObserve: async () => { throw new Error('CAS changed') } }), /CAS changed/)
+  assert.equal((await f.store.query({ kind: 'effect.get', effectId: effect.effectId })).state, 'unknown')
+  const closed = await gateway.closeReadonlyApproval(effect.effectId, { beforeObserve: async () => {} })
+  assert.equal(closed.state, 'failed')
+  assert.equal(closed.result.result.reason, 'APPROVAL_CHANNEL_SUPERSEDED')
+  const persisted = await f.artifacts.read(closed.result.evidenceRef)
+  assert.equal(persisted.reason, 'APPROVAL_CHANNEL_SUPERSEDED')
+  await gateway.closeReadonlyApproval(effect.effectId, { beforeObserve: async () => {} })
+  assert.equal(dispatched, 1); assert.equal(verified, 3)
+  const write = await f.gateway.execute(f.request)
+  await assert.rejects(gateway.closeReadonlyApproval(write.effectId, { beforeObserve: async () => {} }),
+    { code: 'DATA_CHANGE_APPROVAL_HANDOFF_EFFECT_UNCONFIRMED' })
+})
+
 test('缺少授权和generation不符不调用写适配器', async t => {
   const f = await fixture(t, { authorize: async () => null })
   await assert.rejects(f.gateway.execute(f.request), { code: 'DELIVERY_NOT_AUTHORIZED' })

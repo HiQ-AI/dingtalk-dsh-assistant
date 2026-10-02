@@ -1,8 +1,8 @@
 # 看板、常驻会话与任务执行修复目标
 
-> 状态：COMPLETE
+> 状态：ACTIVE
 > Goal ID：board-loading-session-repair
-> 最近维护：2026-10-02T12:55:48+08:00
+> 最近维护：2026-10-02T18:39:42.3094153+08:00
 > 权威目标：goal.md
 
 ## 总目标
@@ -11,11 +11,11 @@
 
 ## 完成条件
 
-接口、原生会话、通知及状态合同定向测试通过；正式包、进程、维护恢复独立回读；原 Task 保留身份与成功证据，简单加列经必要只读预检后实际提交 Bytebase 候选工单，最后展示真实审批或配置恢复条件；相关群消息独立回读。
+接口、原生会话、通知及状态合同定向测试通过；正式包、进程、维护恢复独立回读；原 Task 保留身份与成功证据，简单加列经必要只读预检后实际提交 Bytebase 候选工单，最后进入真实插件审批待审状态；相关群消息独立回读。
 
 ## 范围与约束
 
-保持主检出及已有未提交文件；开发在既有 worktree 和 PR152。沿原生事务、事件和租约，不增加第二调度器或持久 schema。生产 DDL 仅在本次精确 SQL 的 Bytebase 真人批准后执行。私有证据放 docs/tmp，不提交凭据及业务工件。
+保持主检出及已有未提交文件；开发在既有 worktree 和 PR152。沿原生事务、事件和租约，不增加第二调度器或持久 schema。生产 DDL 仅在本次精确 SQL 的插件真人批准后执行。私有证据放 docs/tmp，不提交凭据及业务工件。
 
 ## sub goal matrix
 
@@ -23,7 +23,7 @@
 | --- | --- | --- | --- | --- |
 | SG1 | 群数据轻量查询与刷新去重 | native投影、历史全量等价、实际API/浏览器耗时 | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG2 | 常驻会话空闲挂接与当前入口 | native投影、目录/权限/群名、租约与关闭 | 完成 | matrix.csv / round-2.md / round-3.md |
-| SG3 | 任务详情查询与刷新 | 同一真实任务前后耗时、投影正确 | 完成 | matrix.csv / round-2.md / round-3.md |
+| SG3 | 任务详情查询与刷新 | 同一真实任务前后耗时、投影正确 | 复核中 | matrix.csv / round-2.md / round-3.md |
 | SG4 | 群通知事实与历史去重 | 同Task重评不重复、不同Task不误抑制、发送未知不重发 | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG5 | 部署及四项运行验收 | runbook Check/备份/安装/Readback/Resume+浏览器 | 完成 | matrix.csv / round-2.md / round-3.md |
 | SG6 | Task与阶段分离、候选纠正及重复错误收敛 | 原生SQLite/原生会话/重启/完成清单70项PASS | 完成 | matrix.csv / round-2.md / round-3.md |
@@ -32,11 +32,13 @@
 | SG9 | 本轮部署与唯一任务真实推进 | 精确包安装、维护排空、原任务推进到真实等待点 | 完成 | matrix.csv / round-4.md |
 | SG10 | 简单数据库变更送审与驳回修订 | 候选送Bytebase真人审批，拒绝修订、批准执行及版本绑定定向验证 | 完成 | docs/spec/simple-database-change-flow.md |
 | SG11 | 部署及原Task真实送审 | 精确部署、原Task工单和SQL独立回读、群通知纠正 | 完成 | round-10.md |
+| SG12 | 纠正插件审批入口与执行责任 | Bytebase建单后进入插件人工审批，驳回修订、批准执行、原Task接续及简短通知 | 完成 | round-11.md |
+
 ## 当前检查点
 
-- 当前子目标：SG11
-- 唯一下一步：修复范围已完成；外部业务任务等待 Bytebase 管理员启用原生真人审批规则，针对本次精确 SQL 重新送审。
-- 未闭环项：修复范围无；原业务 Task 仍 active / capability wait，生产批准、执行和最终业务验收尚未发生。
+- 当前子目标：SG3
+- 唯一下一步：定位原Task最新第六Run详情5.5–6.2秒的当前瓶颈；插件审批与群通知已完成接续，审批等待期间零生产执行。
+- 未闭环项：当前任务详情性能复核；业务批准和执行等待插件真人审批，不将业务待审作为程序错误。
 
 ## 进展
 
@@ -91,3 +93,11 @@ Agent工作区D:/baibu-agent，运行profile D:/dsh_home/profiles/web，API18998
 第九轮包18856恢复仍被合法空ProtoJSON {}误拒绝（非未知执行）；原工单不重建、TaskRun仍空、生产未执行。第十轮严格解码合法空对象并按冻结只读节点成功证明准入恢复；35项原生协议及全链通过，等待精确第七包运行验收。
 
 第十轮最终闭环：第七正式包 SHA256 9e3f0c216566e3c893aaa247da07bdb939ceca06565cf3de8f01a884a19b175a，100文件独立核验，PID45200，维护解除、health=ok/inboundProcessing=true。原 Task r2/r3 保留三项成功调查；Issue857/Plan878/Task905 独立回读，审批SKIPPED、任务NOT_STARTED、TaskRun空、生产只读name列空。原只读身份节点成功恢复，当前approval-gate等待BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED，Owner idle且last_failure=null。错误群说明已撤回，新说明精确回读1条，当前Task开始通知1条。35项协议及完整原生流程、16项服务恢复和控制屏障通过。修复目标COMPLETE，业务审批仍等待管理员处理；证据见round-10.md。
+
+用户明确纠正：人工审批指插件审批流程，不是Bytebase平台原生审批。此前审批配置异常处理方向已撤回，未部署。SKIPPED不能作为插件流程阻塞；原Issue857未执行，需继续绑定本次SQL进入插件审批。执行会话仍负责处理实际推进问题。
+
+插件审批修正进展：新数据变更v6明确使用assistant审批来源，Bytebase接口存在不再决定审批来源。真实StageContract/Host/client路径证明SKIPPED仍创建插件待审请求，批准后执行并独立列回读；驳回关闭未发送门禁并输出needs_revision，零生产发送。38项定向测试通过（workflow-data-change-external、execution-effects、workflow-approval）。历史v4/v5保留冻结恢复。当前运行未部署本修正，原工单857仍在旧v5原生审批等待；安全接续、服务投影验证、正式包部署、群说明修正尚未完成，SG12保持ACTIVE。
+
+本轮继续：群通知不再自动拼接完整条件；审批页真实SQL及目标展示已补。UI现有comment此前被丢弃，现沿approval.decided同事务保存并批量投影；69项低层/审批/通知/存储测试通过，真实平台全链4项证明驳回意见进入needs_revision且零生产发送。只读回查原857仍NOT_STARTED、生产name为空、profile摘要保持。冻结v5交接由现Controller领域接续阶段实现，服务入口和受信平台按文件分工验证；待稳定后才打包部署。浏览器安全权限校验暂不可用，本轮不绕过或声称页面验收。
+
+部署前置反证：普通Check因旧v5 pure审批unknown计为effects1拒绝，nodes/owners/messages均0，尚未安装。旧Host不认识resume目标，正式context拒绝，Task r2/Owner46独立保持。受控切换新增参数化领域对账与PowerShell部署，复用现有dispose/owner锁/备份/native观察/seal/安装/启动回读；不直接SQLite写或放开全局unknown。代码联合121项与HTTP服务12项全PASS，原Issue857保持未执行。

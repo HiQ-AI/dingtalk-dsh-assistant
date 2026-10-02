@@ -304,7 +304,7 @@ test('两轮驳回的后继阶段消费具体意见和旧工单身份，不重�
   }
 })
 
-for (const [automatic, precreated] of [[false, false], [true, false], [false, true]]) test(`真实 StageContract、生产 Host 和 Bytebase client 全路径送审、批准执行、列回读 auto=${automatic} precreated=${precreated}`, async t => {
+for (const [automatic, precreated, decision = 'approved'] of [[false, false], [true, false], [false, true], [false, true, 'rejected']]) test(`真实 StageContract、生产 Host 和 Bytebase client 全路径插件审批 decision=${decision} auto=${automatic} precreated=${precreated}`, async t => {
   const project = 'projects/flbn', exactTarget = { instance: 'instances/flbnpguaf',
     database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
   const applySql = 'ALTER TABLE public.process_id_temp ADD COLUMN name character varying;'
@@ -388,7 +388,7 @@ for (const [automatic, precreated] of [[false, false], [true, false], [false, tr
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
   external.bindStore(store)
   const workflow = createDataChangeTaskWorkflow({ provider: 'fixture', model: 'fixture', adapter: external.dataChangeAdapter })
-  assert.equal(workflow.version, '5')
+  assert.equal(workflow.version, '6')
   const delivery = createExecutionDelivery({ store, artifacts, authorize: async () => false,
     externalAdapter: external.operationAdapter, authorizeExternal: external.authorizeExternal })
   const controller = createExecutionController({ store, artifacts, delivery, workflows: [workflow], sessions: {
@@ -401,23 +401,34 @@ for (const [automatic, precreated] of [[false, false], [true, false], [false, tr
   await controller.createRun({ commandId: 'real-contract-create', runId: 'real-contract-run', taskId: 'same-production-task',
     workflowId: workflow.id, input: prepared.input })
   const state = await controller.whenIdle('real-contract-run')
-  assert.equal(state.nodes[10].waitReason?.reference, precreated ? 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED' : 'BYTEBASE_APPROVAL_PENDING', JSON.stringify(state.nodes.map(node => [node.nodeId,node.waitReason])))
+  assert.equal(state.nodes[10].waitReason?.reference, 'PLUGIN_APPROVAL_PENDING', JSON.stringify(state.nodes.map(node => [node.nodeId,node.waitReason])))
   assert.deepEqual(writes, [`/v1/${project}/sheets`, `/v1/${project}/plans`, `/v1/${project}/issues`])
   assert.equal(Buffer.from(sheet.content, 'base64').toString('utf8'), applySql)
   assert.deepEqual(plan.specs[0].changeDatabaseConfig.targets, [exactTarget.database])
   assert.equal(issue.approvalStatus, precreated ? 'SKIPPED' : 'PENDING')
-  assert.equal((await store.query({ kind: 'approval.list' })).length, 0)
+  const pluginApprovals = await store.query({ kind: 'approval.list' })
+  assert.equal(pluginApprovals.length, 1)
+  assert.equal(pluginApprovals[0].decision, 'pending')
   assert.equal(queries.filter(item => item.sql.includes('AS column_exists')).length, 1)
   assert.equal(queries.some(item => /^\s*(ALTER|UPDATE|DELETE|INSERT)\b/i.test(item.sql)), false)
   const saved = await artifacts.read(state.nodes[2].outputRef)
   assert.deepEqual(saved.baseline.scope, { schema: 'public', table: 'process_id_temp' })
   assert.deepEqual(JSON.parse(saved.expectedChange), { rows: [expectedRow] })
-  approved = true
+  assert.equal(ran, false)
+  await store.command({ id: 'plugin-approved', kind: 'approval.decide', args: { requestId: pluginApprovals[0].requestId, actorId: 'owner', source: 'web', decision, comment: '保留 character varying 类型，说明回滚方案后重新送审' } })
   const gate = (await store.query({ kind: 'effect.list', runId: 'real-contract-run' })).find(effect => effect.definition.payload.stage === 'approval-gate')
-  assert.equal((await delivery.reconcile(gate.effectId)).state, 'succeeded')
+  assert.equal((await delivery.reconcile(gate.effectId)).state, decision === 'rejected' ? 'failed' : 'prepared')
   await controller.recover({ commandId: 'real-contract-approved', runId: 'real-contract-run' })
   const completed = await controller.whenIdle('real-contract-run')
   assert.equal(completed.run.status, 'succeeded', JSON.stringify(completed.nodes.map(node => [node.nodeId,node.waitReason])))
+  if (decision === 'rejected') {
+    const rejected = await artifacts.read(completed.nodes.at(-1).outputRef)
+    assert.equal(rejected.outcome, 'needs_revision')
+    assert.equal(rejected.comment, '保留 character varying 类型，说明回滚方案后重新送审')
+    assert.equal(ran, false)
+    assert.equal(writes.some(path => path.endsWith('/rollout') || path.endsWith('/tasks:batchRun')), false)
+    return
+  }
   assert.equal(writes.filter(path => path.endsWith('/rollout')).length, precreated ? 0 : 1)
   assert.equal(writes.filter(path => path.endsWith('/tasks:batchRun')).length, automatic ? 0 : 1)
   const result = await artifacts.read(completed.nodes.at(-1).outputRef)

@@ -264,6 +264,7 @@ function observe(db, args, context) {
 function approval(db, args, context, revoke) {
   const row = approvalRow(db, args.requestId)
   const actorId = text(args.actorId, 'actorId')
+  if (args.comment !== undefined && (typeof args.comment !== 'string' || args.comment.length > 2000)) fail('effect_invalid_argument', 'comment')
   if (!JSON.parse(row.approver_ids_json).includes(actorId)) fail('approval_actor_forbidden')
   if (!['web', 'dingtalk'].includes(args.source)) fail('effect_invalid_argument', 'source')
   if (revoke) {
@@ -277,7 +278,25 @@ function approval(db, args, context, revoke) {
     db.prepare('UPDATE execution_approvals SET decision=?, decided_by=?, decision_source=?, updated_at=? WHERE request_id=?')
       .run(args.decision, actorId, args.source, context.now, row.request_id)
   }
-  context.emitEvent(revoke ? 'approval.revoked' : 'approval.decided', { requestId: row.request_id, effectId: row.effect_id, actorId, source: args.source })
+  if (!revoke && args.decision === 'rejected') {
+    const effect = effectRow(db, row.effect_id)
+    const payload = JSON.parse(effect.definition_json).payload
+    if (effect.state === 'prepared' && payload?.workflowKind === 'data-change'
+      && payload.stage === 'approval-gate' && payload.intent?.approvalSource === 'assistant') {
+      // 真人驳回关闭尚未发送的审批门禁，不处理任何在途外部写入。
+      const observation = { effectId: effect.effect_id, status: 'failed',
+        evidenceRef: `plugin-approval:${row.request_id}`, result: { reason: 'approval_rejected', mutationAttempted: false } }
+      db.prepare('INSERT INTO execution_effect_observations VALUES(?,?,?,?,?)')
+        .run(`approval-rejected:${row.request_id}`, effect.effect_id, digest(observation), encode(observation), context.now)
+      db.prepare("UPDATE execution_effects SET state='failed', result_json=?, updated_at=? WHERE effect_id=?")
+        .run(encode(observation), context.now, effect.effect_id)
+      db.prepare('DELETE FROM execution_resource_holds WHERE effect_id=?').run(effect.effect_id)
+      context.emitEvent('effect.observed', { effectId: effect.effect_id, runId: effect.run_id,
+        state: 'failed', receiptId: `approval-rejected:${row.request_id}` })
+    }
+  }
+  context.emitEvent(revoke ? 'approval.revoked' : 'approval.decided', { requestId: row.request_id, effectId: row.effect_id, actorId, source: args.source,
+    ...(!revoke ? { decision: args.decision, comment: (args.comment ?? '').trim() } : {}) })
   return changed({ approval: approvalDto(approvalRow(db, row.request_id)), applied: true })
 }
 

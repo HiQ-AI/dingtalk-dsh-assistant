@@ -289,7 +289,7 @@ export const isSimpleNullableColumnSql = sql => simpleNullableColumnDefinition(s
 export function assertDataChangeExecutionIdentity({ prepared, issue, sheet, plan, approval }) {
   const pkg = prepared?.package, rehearsal = prepared?.rehearsal
   const { validation, ...body } = pkg ?? {}
-  if (!pkg || (!rehearsal && (approval?.source !== 'bytebase' || !isSimpleNullableColumnSql(pkg.applySql)))
+  if (!pkg || (!rehearsal && (!['assistant', 'bytebase'].includes(approval?.source) || !isSimpleNullableColumnSql(pkg.applySql)))
     || (rehearsal && (rehearsal.passed !== true || rehearsal.uat !== true || !nonempty(rehearsal.receiptId))) || !nonempty(validation?.receiptId)
     || validation?.packageDigest !== executionDigest(body)
     || (rehearsal && validation?.packageDigest !== rehearsal.packageDigest)
@@ -418,7 +418,7 @@ export function createDataChangeTaskWorkflowV4(options) {
 }
 
 /** 候选形成后由受信 Host 获取基线；简单加列只冻结准确表的目录。 */
-export function createDataChangeTaskWorkflow(options) {
+export function createDataChangeTaskWorkflowV5(options) {
   const workflow = createDataChangeTaskWorkflowV4(options)
   if (options.adapter.nativeApproval !== true) return workflow
   if (typeof options.adapter.readBaselineForCandidate !== 'function') throw executionError('DATA_CHANGE_BASELINE_ADAPTER_REQUIRED')
@@ -459,4 +459,49 @@ export function createDataChangeTaskWorkflow(options) {
       requirement: { ...context.input.requirement, baseline } } })
   }
   return workflow
+}
+
+/** 当前交办使用插件人工审批；历史Bytebase审批定义保持冻结。 */
+export function createDataChangeTaskWorkflow(options) {
+  if (options.adapter.pluginApproval !== true) return createDataChangeTaskWorkflowV5(options)
+  const workflow = createDataChangeTaskWorkflowV5({ ...options, adapter: { ...options.adapter, nativeApproval: true } })
+  workflow.version = '6'
+  const gate = workflow.nodes.find(node => node.id === 'approval-gate')
+  const originalGate = gate.execute
+  gate.version = '6'
+  gate.execute = async context => {
+    try {
+      const result = await originalGate(context)
+      if (result.receipt?.status !== 'failed' || result.receipt.result?.reason !== 'approval_rejected') return result
+      throw executionError('effect_approval_required')
+    }
+    catch (error) {
+      if (!['effect_approval_required', 'DELIVERY_RECONCILIATION_REQUIRED'].includes(error.code)) throw error
+      const { input, signal } = context
+      const approval = await options.adapter.inspect({ stage: 'approval-state', request: input.request,
+        prepared: input.view.prepared, signal })
+      if (!['pending', 'rejected'].includes(approval.decision)) throw error
+      return { ...input, receipt: approval.decision === 'pending' ? { status: 'unknown', result: { approval } }
+        : { status: 'succeeded', result: { scopeDigest: input.request.intent.scopeDigest,
+          operationKey: input.request.intent.operationKey, approval } } }
+    }
+  }
+  gate.admitOutput = ({ output }) => output.receipt.status === 'unknown'
+    ? { outcome: 'waiting', waitReason: { kind: 'recovery', reference: 'PLUGIN_APPROVAL_PENDING' } }
+    : { outcome: 'succeeded' }
+  return workflow
+}
+
+/** 仅从受管旧 Run 接续已有工单；Controller 没有中间节点起跑能力。 */
+export function createDataChangeApprovalResumeWorkflow(options) {
+  if (options.adapter.pluginApproval !== true || typeof options.adapter.validateExistingIssue !== 'function')
+    throw executionError('DATA_CHANGE_APPROVAL_RESUME_ADAPTER_REQUIRED')
+  const workflow = createDataChangeTaskWorkflow(options)
+  const nodes = workflow.nodes.slice(workflow.nodes.findIndex(node => node.id === 'prepare-approval'))
+  const schema = nodes[0].inputSchema
+  return { ...workflow, id: 'task-data-change-approval-resume', version: '1', nodes: [
+    { id: 'freeze-existing-issue', version: '1', executor: 'code', drainPolicy: 'external-process',
+      allowedEffects: ['read'], rulesDigest: options.adapter.rulesDigest, inputSchema: schema, outputSchema: schema,
+      mapInput: ({ requirement }) => requirement,
+      execute: ({ input, taskId }) => options.adapter.validateExistingIssue({ taskId, view: input }) }, ...nodes] }
 }

@@ -323,3 +323,14 @@ PR预检暂态失败仅在Host适配器通过完整本地日志独立证明同�
 任务阶段来源验证、Host task.source 查询及只读重评/授权投影修复共享当前真实来源解析。Web 修订仅在实际持久 accepted 后生效，绑定 Task、actor、sourceVersion=1 与实际 context；跨 Task、篡改版本/引用/操作者拒绝。DWS 仍要求当前消息版本，旧成功成果不改写。
 
 来源校验修复后的 advance 拒绝决定可由同一 reassess-readonly 审计恢复：必须为当前租约和需求版本、错误严格为 TASK_STAGE_SOURCE_CONDITION_INVALID，真实来源重新校验通过，仅已排空成功调查，无外部效果及计划应用回执。旧决定 discarded 并保留报告和失败历史；返回 discardedTurnId，需求、成功阶段与 outputRef 不变。其他拒绝原因不自动重发。
+## 数据变更审批渠道交接
+
+`POST /tasks/:taskId/handoff-data-change-approval` 仅本机同源Web身份，并沿现有任务访问授权。body严格接受runId、recoveryKey、reason、dryRun及expectedOwnerRevision、expectedLeaseEpoch、expectedRequirementRevision、expectedControlRevision、expectedPlanRevision、expectedRunRevision、generation。Run revision可从0开始；其余范围遵循原生领域版本。dryRun返回checked/authorized且零写，apply返回accepted及resumeWorkflowId。
+
+先用现有context修订需求与活动验收，当前同Task最新真实来源明确授权插件审批并登记task-data-change-approval-resume目标和来源条件；context只修订业务Task，不向未知效果的冻结Run插入pendingInput。交接只允许旧v5原生纯审批gate、成功前缀、排空及无其它未知效果；受信Host再次证明准确SQL/目标/工单仍未执行。apply通过原生观察关闭旧审批读取、原生stop取消旧Run，并投递approval.channel.changed事件让Owner只替换后段。事件附固定resumeWorkflowId和动作说明，不重新建单。
+
+同recoveryKey绑定完整请求摘要，重复幂等；原生stop收据允许同请求在停止后继续，任意其它版本漂移仍拒绝。维护、租约、需求/控制/计划/运行漂移、来源错误、跨Task、已有执行及未排空均拒绝。完整条件留详情，群只给简短待审进展。
+
+Owner已接受但尚未落地的决定，仅当它准确替换当前后缀为一个已有工单接续阶段，且来源绑定当前需求时允许交接。取消旧Run后先持久化渠道变更事件，让旧待落地决定因水位变化失效，再推进计划；事件后中断的同请求重试补推进计划。其它待落地决定和正在运行的Owner仍拒绝。
+
+审批列表的目标使用当前业务需求，SQL、数据库及工单仍来自冻结审批效果；需求文字修订不改写已提交包。群中数据变更待审通知只在当前阶段有准确工单绑定、prepared效果及pending插件审批时生成“Bytebase 工单 #编号 已新建，等待人工审批。”；完整SQL和恢复条件留详情，其它等待仍展示实际简要原因。

@@ -44,3 +44,15 @@ incorrect-wait-notice-recall,10,PASS,round-10.md
 notification-duplicate,10,PASS,round-10.md
 local-deployment-readback,10,PASS,round-10.md
 board-detail-final-readback,10,PASS,round-10.md
+plugin-approval-source-bound,11,PASS,round-11.md
+plugin-approval-rejection,11,PASS,round-11.md
+approval-comments-restart-first-decision,11,PASS,round-11.md
+concise-owner-wait-notification,11,PASS,round-11.md
+same-task-existing-ticket-handoff,11,PASS,round-11.md
+plugin-approval-live-wait,11,PASS,round-11.md
+local-deployment-readback,11,PASS,round-11.md
+incorrect-native-approval-notice-recall,11,PASS,round-11.md
+web-context-multiple-runs,11,PASS,round-11.md
+approval-handoff-pending-plan,11,PASS,round-11.md
+service-approval-adapter-composition,11,PASS,round-11.md
+task-detail-latest-run-performance,11,FAIL,round-11.md

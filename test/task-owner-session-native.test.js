@@ -339,7 +339,7 @@ test('Owner读取调查的待补充建议后可安排待审候选阶段，不机
     onCandidate: async value => { assert.equal(read, true); assert.equal(value.action, 'advance'); submitted = true } })
   assert.equal(result.status, 'submitted'); assert.equal(submitted, true)
   assert.match(h.requests[0].system, /不机械继承业务等待/)
-  assert.match(h.requests[0].system, /读取本次工单真实审批意见/)
+  assert.match(h.requests[0].system, /读取本次审批的真实意见/)
   assert.match(h.requests[0].system, /修改后的SQL必须取得对应版本的新批准/)
   assert.match(h.requests[0].system, /尚未完成的调查仍需修复或重评未完成阶段/)
   assert.doesNotMatch(h.requests[0].system, /outcome=needs_input 时 wait 并询问/)
