@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
+import { taskNotificationAllowed } from './workflow-notifications.js'
 import { sameDwsFileProjection } from './coordination-resources.js'
 import { maintenanceStatus } from './execution-maintenance.js'
 import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic, invalidateMessageSourceTopics, unbindMessageUnit, wholeTopicFactRevision } from './message-topics.js'
@@ -834,6 +835,16 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       return {result:{replacement}}
     }
     if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);if(source.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision||n.payload?.phase==='system_wait'&&(!q.blocked||rows(db,source.runId,'request').some(item=>item.status==='pending'&&item.kind==='needs_context'&&!item.blocked)||rows(db,source.runId,'command').some(item=>['pending','running'].includes(item.status))||rows(db,source.runId,'node').some(item=>item.status==='running'))){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}
+      const phase=n.payload?.phase
+      const action=n.commandId?get(db,'command',n.commandId):null
+      const row=phase?.startsWith('owner:')?db.prepare(`SELECT r.*,t.application_status FROM task_reports r
+        JOIN task_owner_turns t ON t.turn_id=r.turn_id WHERE r.report_id=?`).get(phase.slice(6)):null
+      const report=row?{reportType:row.report_type,applicationStatus:row.application_status,facts:JSON.parse(row.facts_json),
+        triggerTypes:db.prepare('SELECT DISTINCT event_type FROM task_events WHERE turn_id=?').all(row.turn_id).map(e=>e.event_type)}:null
+      if(!taskNotificationAllowed({phase,action,report})){
+        n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n)
+        return {result:{notification:n},dispatchEligible:false}
+      }
       const taskId=n.payload?.fact?.taskId??(n.commandId?get(db,'command',n.commandId).result?.taskId:n.acceptanceId?get(db,'acceptance',n.acceptanceId).taskId:null)
       if(notificationTaskDeleted(db,taskId)){n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}
       const version=n.payload?.fact

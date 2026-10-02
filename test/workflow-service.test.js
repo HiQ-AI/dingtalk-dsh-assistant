@@ -1140,7 +1140,7 @@ test('最终报告领取前新增目标使旧完成通知失效，已完成流�
   assert.equal((await execution.store.query({ kind: 'run.list', taskId })).length, 1)
 })
 
-test('同一任务承接与最终报告并存时只按精确通知身份纠正最终报告', async t => {
+test('任务静默承接后仅交付最终报告，仍可按精确身份纠正', async t => {
   let serial = 0
   const recalls = []
   const notifications = { canDisclose: async () => true,
@@ -1158,7 +1158,8 @@ test('同一任务承接与最终报告并存时只按精确通知身份纠正�
   const delivered = await execution.store.query({ kind: 'message.notifications', states: ['delivered'] })
   const receipt = delivered.find(item => item.payload.phase === 'accepted')
   const final = delivered.find(item => item.payload.text.startsWith('任务已完成'))
-  assert.ok(receipt && final && receipt.id !== final.id)
+  assert.equal(receipt, undefined)
+  assert.ok(final)
   const auth = await service.ingest({ ...message, messageId: 'correct-final-only',
     text: `撤回通知 ${final.id}` })
   const authSource = (await execution.store.query({ kind: 'message.run', runId: auth.runId })).run.sourceKey
@@ -1168,7 +1169,6 @@ test('同一任务承接与最终报告并存时只按精确通知身份纠正�
     expectedFactDigest: prepared.snapshot.expectedFactDigest, authorizationRef: authSource })).status, 'completed')
   const outbox = (await service.mailboxes()).outbox
   assert.equal(outbox.find(item => item.outboundId === final.id).recallStatus, 'recalled')
-  assert.equal(outbox.find(item => item.outboundId === receipt.id).recallStatus, undefined)
   assert.deepEqual(recalls, [final.ack.messageId])
 })
 
@@ -1469,6 +1469,7 @@ test('通知ACK丢失只回查不重发；当前披露不允许时零发送', as
   await service.messages.process(accepted.runId)
   const state = await service.state(accepted.runId)
   await execution.controller.whenIdle(state.commands[0].result.runId)
+  assert.deepEqual((await service.recover()).failures, [])
   await service.flushNotifications()
   assert.equal(sends, 0)
   allowed = true
@@ -1727,7 +1728,9 @@ test('受管撤回逐条核验负责人原消息，回读后补发保留原通�
   }
   const { service, execution, message } = await fixture(t, 'owner', notifications, { config: { webActorId: 'owner' } })
   const received = await service.ingest(message)
-  await service.messages.process(received.runId)
+  const state = await service.messages.process(received.runId)
+  await execution.controller.whenIdle(state.commands[0].result.runId)
+  assert.deepEqual((await service.recover()).failures, [])
   await service.flushNotifications()
   const notice = (await execution.store.query({ kind: 'message.notifications', states: ['delivered'] }))[0]
   const originalSource = (await execution.store.query({ kind: 'message.run', runId: received.runId })).run.sourceKey
@@ -2236,7 +2239,7 @@ test('方案阶段完成后等待确认，确认沿用业务Task并只启动下�
   await execution.controller.whenIdle(accepted.commands[0].result.runId)
   assert.deepEqual((await service.recover()).failures, [])
   await service.flushNotifications()
-  assert.equal(sent.filter(item => item.startsWith('任务等待补充或确认') && item.includes('后续阶段方案确认')).length, 1)
+  assert.equal(sent.filter(item => item.startsWith('需要你确认：') && item.includes('方案确认')).length, 1)
   let plan = await execution.controller.taskPlan(taskId)
   assert.equal(plan.task.status, 'waiting_confirmation')
   assert.equal(plan.stages[0].status, 'succeeded')

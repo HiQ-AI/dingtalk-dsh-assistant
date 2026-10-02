@@ -79,3 +79,7 @@ data-change-completion-live,19,PASS,round-19.md
 data-change-conditional-diagnostic-read,19,PASS,round-19.md
 data-change-recovery-no-new-write,19,PASS,round-19.md
 internal-recovery-group-quiet-and-complete,19,PASS,round-19.md
+task-global-notification-silence,20,PASS,round-20.md
+notification-upgrade-queue-and-unknown,20,PASS,round-20.md
+notification-completion-and-private-approval,20,PASS,round-20.md
+task-notification-silence-deployment,20,FAIL,round-20.md

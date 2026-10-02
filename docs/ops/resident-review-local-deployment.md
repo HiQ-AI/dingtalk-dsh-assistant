@@ -465,7 +465,7 @@ IB 话题来源身份使用无损引用：`sourceIndexes` 按原顺序指向 sha
 
 通知滞留排障：prepared 没有 claim 不等于模型恢复阻塞。检查该 run 的 `notificationDiagnostics` 及既有 recovery 诊断，核对同一 Owner 报告的稳定 eventKey 是否已有通知；不得重发旧已送达报告或删除旧通知。当前扫描隔离单条事实失败，保留可回读诊断，其他待发通知和 unknown 回查仍继续；同一错误不按定时器重复写账。
 
-开始通知重复排障：通过 `message.notifications` 的 `taskId` 范围查询，核对群、`sourceMessageId`、`fact.sourceVersion` 及 `owner:started:` 通知事实；使用原 ACK 消息 ID 的 DWS 回查确认正文及引用。是否需要开始通知以 Task 和来源为准，新计划或重试沿用原开始事实；原发送未知只回查，旧的已送达通知不因重评重新发送。尚未发送即失效的旧通知不阻止后续真实开始；通知自身仍保留原 Run 事实及发送身份。不要按群聊中相同正文拦截其他 Task。
+任务通知统一静默：升级前 prepared 的承接、开始、阶段进展、内部受阻和待审提示在原生 claim 中 superseded；已 ACK/unknown 仍只回读。所有工作流共用结构化事实策略，不依赖正文关键词或 readonly-reassess 事件。完成、明确业务信息/授权确认及主动查询保留，插件私聊审批独立运行。按普通无备份部署安装 Assistant，无 schema 迁移；部署后核对无新增群进展，审批及任务最终结果单独验收。
 
 ### 消息首次领取与恢复时钟
 
@@ -550,7 +550,7 @@ PR交付在预检网络故障时由原Controller按持久退避继续原节点�
 
 ### Task 等待条件与只读重评
 
-阶段成功只证明该阶段已交付，不能作为整体 Task 完成依据。整体完成须有当前版本 Owner 已应用的 complete 与逐项验收。新 wait/block 决定必须记录 condition：kind（business-input、approval、capability、permission 或 execution）、missing、responsibleParty、resumeWhen 和 evidenceRefs。看板和群通知说明具体缺失、责任方及恢复条件；内部决策或程序错误保留 lastFailure 诊断，公开显示程序异常及维护恢复要求，不冒充交办人缺资料。已有历史决定不改写。
+阶段成功只证明该阶段已交付，不能作为整体 Task 完成依据。整体完成须有当前版本 Owner 已应用的 complete 与逐项验收。新 wait/block 决定必须记录 condition：kind（business-input、approval、capability、permission 或 execution）、missing、responsibleParty、resumeWhen 和 evidenceRefs。看板保留具体缺失、责任方及恢复条件；内部决策或程序错误保留 lastFailure 诊断，不向群发送中间受阻消息，也不冒充交办人缺资料。已有历史决定不改写。
 
 修复读取能力后沿既有 `POST /tasks/<taskId>/reassess-readonly` 接口恢复原 Task。先独立读取当前 Owner 与计划，提交 recoveryKey、reason、expectedOwnerRevision、expectedLeaseEpoch、expectedRequirementRevision、expectedControlRevision；本机身份必须匹配 webActorId。重评检查源消息身份和版本、当前需求与控制版本、执行排空及外部效果，不接受未知效果、正在执行、已取消或已应用 complete 的 Task。只有成功调查的计划但整体目标仍待定义或审批时可以重评；不直接写 SQL、伪造批准或重跑冻结旧 Run。相同 recoveryKey 与请求精确幂等，参数变化拒绝。
 
