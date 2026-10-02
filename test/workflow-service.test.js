@@ -59,7 +59,7 @@ for (const control of ['cancelled', 'active', 'paused']) test(`Host恢复已退�
   assert.deepEqual(await service.execution.controller.taskPlan('task'), before)
   const saved = (await service.execution.store.query({ kind: 'workflow.list' })).find(item => item.digest === definition.digest)
   assert.equal(saved.definitionVersion, '4'); assert.deepEqual(saved.config, model)
-  assert.equal(service.execution.controller.workflowDefinition(historical.id).version, '6')
+  assert.equal(service.execution.controller.workflowDefinition(historical.id).version, '8')
   assert.throws(() => service.execution.controller.workflowDefinition(historical.id, definition.digest), { code: 'WORKFLOW_VERSION_UNAVAILABLE' })
 })
 import { createTaskArtifactWriteAdapter, createGeneralArtifactWriteCapability } from '../packages/dingtalk-dsh-assistant/task-artifact-write.js'
