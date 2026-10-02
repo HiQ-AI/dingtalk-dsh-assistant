@@ -5272,7 +5272,9 @@ for (const [firstDecision, workflowKind] of [['approved', 'uat-deployment'], ['r
   assert.deepEqual(await execution.store.query({ kind: 'effect.get', effectId: frozenEffect.effectId }), frozenEffect)
   if (workflowKind !== 'data-change') { assert.match(visible[0].requestedAction, /HiQ-AI\/dataset/); assert.ok(visible[0].evidence.includes(commitSha)) }
   else {
-    assert.match(visible[0].text, /\*\*执行 SQL\*\*\n\nALTER TABLE public\.process_id_temp ADD COLUMN name character varying;/)
+    assert.ok(!visible[0].text.includes('执行 SQL'))
+    assert.ok(!visible[0].text.includes(frozenEffect.definition.payload.intent.applySql))
+    assert.ok(visible[0].evidence.includes(frozenEffect.definition.payload.intent.applySql))
     assert.match(visible[0].text, /\*\*目标数据库：\*\* production-editor/)
     assert.ok(!visible[0].text.includes('c'.repeat(64)))
     assert.ok(!visible[0].text.includes('d'.repeat(64)))

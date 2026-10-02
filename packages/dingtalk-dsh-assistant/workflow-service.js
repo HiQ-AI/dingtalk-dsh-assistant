@@ -1057,7 +1057,6 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const details = dataChange ? [
         `**目标数据库：** ${prepared.target.database}`,
         `**Bytebase 工单：** ${prepared.intent.issueId}`,
-        '**执行 SQL**', prepared.intent.applySql ?? `SQL 摘要：${prepared.intent.sheetSha256}`,
       ] : uatBuild ? [
         `**操作：** ${prepared.operation === 'rebuild' ? '重新构建' : '构建提测'}`,
         `**环境：** ${target.environment}`,

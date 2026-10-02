@@ -69,3 +69,4 @@ private-approval-real-delivery,14,PASS,round-14.md
 private-approval-native-lifecycle-and-replies,14,PASS,round-14.md
 local-deployment-without-history-backup,14,PASS,round-14.md
 private-approval-readable-message,15,PASS,round-15.md
+private-approval-without-sql,16,PASS,round-16.md
