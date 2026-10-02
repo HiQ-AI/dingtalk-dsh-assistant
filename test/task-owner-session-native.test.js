@@ -91,13 +91,13 @@ test('真实原生AgentLoop返回克隆complete仍接纳原已验回执', async 
   })
 })
 
-test('状态候选提前反馈可在同轮纠正，相同错误再次提交明确停止', async t => {
+test('状态候选同轮纠正，改写说明不能绕过相同动作检测；只结束当前思考轮', async t => {
   for (const repeat of [false, true]) {
     const root = await mkdtemp(join(tmpdir(), 'owner-decision-correction-'))
     t.after(() => rm(root, { recursive: true, force: true }))
     const invalid = { action: 'wait', summary: '等待业务规格', evidenceRefs: [] }
     const valid = { ...invalid, condition: { kind: 'business-input', missing: '字段规格', responsibleParty: '需求方', resumeWhen: '确认字段规格', evidenceRefs: [] } }
-    const h = await host(root, null, null, step => step === 1 || repeat ? invalid : valid)
+    const h = await host(root, null, null, step => step === 1 ? invalid : repeat ? { ...invalid, summary: '换一种说法仍等待业务规格' } : valid)
     t.after(() => h.close())
     let attempts = 0
     const result = await h.sessions.run({ binding: { taskId: 'task-condition', sessionId: 'owner-condition', turnId: 'review', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
@@ -112,6 +112,19 @@ test('状态候选提前反馈可在同轮纠正，相同错误再次提交明�
     const stored = await h.ctx.sessionPersistence.inspect('owner-condition')
     assert.match(JSON.stringify(stored.events), /候选未落账/u)
   }
+})
+
+test('相同等待动作只改写condition说明仍触发重新诊断', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-condition-wording-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const h = await host(root, null, null, step => ({ action: 'wait', summary: `等待说明${step}`, evidenceRefs: [],
+    condition: { kind: 'execution', missing: `内部问题${step}`, responsibleParty: `执行负责人${step}`, resumeWhen: `恢复后${step}`, evidenceRefs: [] } }))
+  t.after(() => h.close())
+  const result = await h.sessions.run({ binding: { taskId: 'task-condition', sessionId: 'owner-condition', turnId: 'turn', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+    input: { goal: { request: '继续处理' } }, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+    onCandidate: async () => { throw Object.assign(Error('TASK_OWNER_RECOVERY_AVAILABLE'), { code: 'TASK_OWNER_RECOVERY_AVAILABLE' }) } })
+  assert.equal(result.reason, 'TASK_OWNER_REPEATED_INVALID_DECISION')
+  assert.equal(h.requests.length, 2)
 })
 
 async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner'), artifactPages = 1) {
@@ -415,7 +428,7 @@ test('Owner原生修复仅接受当前绑定，错误动作可在同轮纠正',a
  for(const mode of ['absent','stale','valid']){
   const root=await mkdtemp(join(tmpdir(),'owner-repair-binding-'));t.after(()=>rm(root,{recursive:true,force:true}))
   const repair={stageId:'stage-1',runId:'run-1',generation:1,runRevision:0,requirementRevision:2}
-  const h=await host(root,null,null,step=>step===1?{action:'repairCurrentStage',repair:{...repair,runRevision:mode==='stale'?1:0},summary:'重查',evidenceRefs:[]}:decision)
+  const h=await host(root,null,null,step=>step===1?{action:'repairCurrentStage',repair:{...repair,runRevision:mode==='stale'?1:0},summary:'执行会话读取失败，核对 inputDigest 后按原始证据修正引用',evidenceRefs:[]}:decision)
   t.after(()=>h.close());const submitted=[]
   const result=await h.sessions.run({binding:{taskId:'task-repair',sessionId:'owner-repair',turnId:'turn-1',leaseEpoch:1,ownerEpoch:1,sessionBound:false},
    input:{goal:{request:'调查'},currentExecution:mode==='absent'?null:{repairable:true,repairBinding:repair}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>submitted.push(value)})

@@ -144,6 +144,8 @@ task-actions 仅接受 Host 固定注册的适配器，每个适配器实现参�
 
 所有领域检查通过后，Host 生成 `businessValidation:{status:'accepted',policy:'domain-items-v1',items}`，记录验收项、证据及 validator 的阶段/Run/冻结定义/合同版本和实际验收 `policyDigest`。实际准入规则摘要与生产 Run 的 `workflowDigest` 分开保留。回执绑定本次 decision 和结构清单摘要，候选或清单变化后不能沿用；未经过本次检查时状态为 `unverified`。Owner 完成接纳要求已接受回执，并随最终清单持久化；模型不能自行填写回执取得许可。
 
+数据变更当前完成策略为 external-result v5：各阶段只接收验收项显式引用的本阶段证据；浏览历史时返回批准、执行及当时回查的原始证明（timeScope=at-execution），承担当前验收项时另作实时回查（timeScope=current-acceptance）。旧v4策略源码及执行定义保持冻结，Host完成准入采用当前v5；不能通过修改旧函数或旧rulesDigest使已落盘任务失去定义。新v5同样必须经专用原生证明校验，不得退回通用领域合同。
+
 新通用阶段使用 Workflow v6 / Owner 合同 v2，外部操作使用 Owner 合同 v2，文件投递使用 Workflow/Owner 合同 v2。每个效果仍独立核实，同领域只检查其分派的验收项，不要求整理材料阶段验证整个工程目标，也不因计划含其他领域而跳过。旧工厂保留原定义和摘要以恢复已冻结 Run；Host 仅在完成准入时采用当前修正规则，不改写历史执行/产物、不重跑副作用。结构清单、领域业务接纳和实际渠道投递是三份独立证据，PR、HTTP 成功或非空文字本身不是业务验收结论。
 
 持久 `execution-failure` 工件增加 `recovery:{category,responsibleParty,nextAction}`。类别包括输出可修正、业务校验、任务受阻、缺输入、缺环境、外部结果未知、暂态执行和实现错误；未知错误归实现维护。Schema 错误仅在输出校验边界归为结果修正，输入映射错误不能据此让模型重试。分类只指明责任和下一步，自动重领仍受既有错误白名单、预算、退避、控制状态及效果账限制；外部结果未知先对账。旧诊断缺少 recovery 字段仍可读取，不补造历史分类。
@@ -294,11 +296,19 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 ### 只读 Owner 再评估
 
+#### Owner 驱动的节点续行
+
+Host 的 `Controller.inspectNodeRecovery(runId)` 返回 `mode=resume-agent`、当前节点身份、原始失败、诊断引用及准入结果；`reason=strategy-change-required` 表示同一节点/输入/问题已有受管续行，不能原样重放。该能力由既有 `repairCurrentStage` 决定驱动，不增加 Web 接口或模型写控制账工具。
+
+`Controller.resumeNode` 接受 commandId/runId/expectedRevision/nodeRunId/generation/leaseEpoch/inputDigest/contextRef。上下文来自已读诊断，绑定 task/run/node/generation、诊断时 requirementRevision/planRevision/controlRevision、修复方向及证据；Controller 读冻结定义和工件，Store 同事务核对版本、来源、维护、排空、输入围栏和效果。仅当前可纠正的 pure/read Agent 节点准入；原node/session/generation/输入及成功前缀保留，下一领取递增lease。`node.resume` 保存旧诊断与上下文；接管到更高lease仍可读取该上下文，直到输入或节点替代。审批、code外部动作、未知效果及真实权限拒绝不经此入口。
+
+Owner 有受信恢复能力时不得仅wait/block而消耗事件；原始诊断未实际读过则以可纠正反馈返回。重复无效决定仅结束当前思考轮，并沿持久退避在原会话继续，未处理事件保留；动作指纹忽略summary及condition解释措辞。真正的审批等待继续由原审批事件唤醒。
+
 `POST /tasks/:taskId/reassess-readonly` 仅本机 Web 身份且有任务访问权可调用。参数仅为 `recoveryKey/reason/expectedOwnerRevision/expectedLeaseEpoch/expectedRequirementRevision/expectedControlRevision`。禁止传入材料、权限、替代 requirement 或来源正文。Host 按当前 requirement 验证材料可读范围与旧 scope 缺口，记录固定 `system.recovery` 事件；这不证明远端查询成功。
 
 仅 active 控制态、idle/blocked Owner 无在途决定、存在已失败/等待/成功的只读调查、所有节点排空且无 pending input、外部阶段或 effect 可接受。计划阶段全部成功不代表整个任务完成；当前要求和计划已有已应用的 Owner complete 决定时拒绝重评。事务 CAS 与来源摘要复查；同key同参数回读，异参冲突。保留 Task/session、requirement 和已有产物；Owner 接收新事实后正常决定计划与执行，不把系统恢复等同于新业务要求、测试确认或审批。恢复工件保存 previousDecision 的 action/condition/applicationStatus/lastFailure，以区分业务条件及系统诊断。
 
-新 Owner wait/block 必须提交 condition，字段为 kind（business-input/approval/capability/permission/execution）、missing、responsibleParty、resumeWhen、evidenceRefs。condition证据必须包含于决定的evidenceRefs；其他动作不接受condition。候选与最终接纳共用状态校验，最终事务仍复核版本、权限和完成证据。成功阶段后可等待整体目标条件或追加后续计划；已成功和运行中的阶段不因条件登记而改写。业务条件用于说明所需行动，满足条件仍须通过受信事件及正常授权检查，不构成自动生产执行批准。相同候选因同一合同再次被拒绝时保留诊断并停止为内部异常。
+新 Owner wait/block 必须提交 condition，字段为 kind（business-input/approval/capability/permission/execution）、missing、responsibleParty、resumeWhen、evidenceRefs。condition证据必须包含于决定的evidenceRefs；其他动作不接受condition。候选与最终接纳共用状态校验，最终事务仍复核版本、权限和完成证据。成功阶段后可等待整体目标条件或追加后续计划；已成功和运行中的阶段不因条件登记而改写。业务条件用于说明所需行动，满足条件仍须通过受信事件及正常授权检查，不构成自动生产执行批准。相同候选因同一合同再次被拒绝时保留诊断并结束当前思考轮；按持久退避继续纠正，不把内部异常视为业务任务终止。
 
 `reassess-readonly` 可在同一事务中原生discard已知无效果的非法 `repairCurrentStage` 动作：仅当前租约的 application blocked 且 Owner 最后错误严格等于 `WORKFLOW_REPAIR_NOT_ADMITTED`。仍要求完整CAS、只读失败排空、无effects和其他在途动作。其他错误或pending动作拒绝；返回 `discardedTurnId`，原decision、应用失败次数、报告仍保留为discarded，再记录system.recovery。不修改requirement。
 

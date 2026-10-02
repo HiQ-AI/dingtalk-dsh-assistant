@@ -252,6 +252,21 @@ test('负责人连续纠正不设次数上限，新输入立即解除退避', ()
   } finally { f.db.close() }
 })
 
+test('重复无效候选保持负责人待恢复并持久退避，不永久blocked或消耗未处理事件', () => {
+  const f = fixture()
+  try {
+    f.send('task.owner.event', { taskId: 'task-1', eventKey: 'created', eventType: 'task.created' })
+    f.send('task.owner.claim', { taskId: 'task-1', turnId: 'invalid', expectedLeaseEpoch: 0 })
+    const before = f.read('task.owner')
+    f.send('task.owner.release', { taskId: 'task-1', turnId: 'invalid', leaseEpoch: 1, reason: 'TASK_OWNER_REPEATED_INVALID_DECISION' })
+    const after = f.read('task.owner')
+    assert.equal(after.status, 'pending')
+    assert.equal(after.processedWatermark, before.processedWatermark)
+    assert.ok(after.eventWatermark > after.processedWatermark)
+    assert.ok(Date.parse(after.retryAt) > Date.parse(at))
+  } finally { f.db.close() }
+})
+
 test('接纳后应用前收到新意图会丢弃旧决定并保留新事件', () => {
   const f = fixture()
   try {

@@ -21,19 +21,27 @@ const synthetic = (ownerContract, version = '1') => ({ id: 'task-inventory-count
     mapInput: ({ requirement }) => requirement, execute: async ({ input }) => ({ total: input.items.length }) },
 ] })
 
-async function fixture(t, workflow, input, sessions) {
+async function fixture(t, workflow, input, sessions, inputs = [input]) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-workflow-contract-'))
   const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'contract', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
   let controller = createExecutionController({ store, artifacts, sessions, workflows: [workflow] })
   t.after(async () => { await controller.close(); await store.close() })
-  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: [{ stageId: 'first', workflowId: workflow.id, input }] })
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: inputs.map((input, index) => ({ stageId: index ? `next-${index}` : 'first', workflowId: workflow.id, ...(index ? {} : { input }) })) })
   await store.command({ id: 'owner', kind: 'task.owner.init', args: { taskId: 'task', sessionId: 'owner-session', sourceKey: 'source', criteria: requirement.acceptanceCriteria } })
   let helpers = createTaskWorkflowContracts({ controller, store, artifacts })
   async function finish() {
-    const started = await controller.advanceTaskPlan('task')
-    await controller.whenIdle(started.stages[0].runId)
-    const plan = await controller.advanceTaskPlan('task')
+    let plan
+    for (let index = 0; index < inputs.length; index++) {
+      if (index) {
+        plan = await controller.advanceTaskPlan('task')
+        await controller.bindTaskStageInput({ commandId: `bind-${index}`, taskId: 'task', planRevision: plan.task.planRevision,
+          stageId: `next-${index}`, predecessorOutputRef: plan.stages[index - 1].outputRef, input: inputs[index] })
+      }
+      plan = await controller.advanceTaskPlan('task')
+      await controller.whenIdle(plan.stages[index].runId)
+    }
+    plan = await controller.advanceTaskPlan('task')
     const [item] = await store.query({ kind: 'task.owner.acceptance', taskId: 'task' })
     const decision = { action: 'complete', summary: '已按范围完成', evidenceRefs: [plan.stages[0].outputRef],
       assessments: [{ itemId: item.itemId, status: 'satisfied', evidenceRefs: [plan.stages[0].outputRef] }] }
@@ -147,13 +155,47 @@ test('未绑定合同的旧定义保留产出读取，但完成和修复不得�
   const waitingPlan = { ...completed.plan, stages: [{ ...stage, status: 'running' }] }
   const inspect = createTaskWorkflowContracts({ store: f.store, artifacts: f.artifacts,
     controller: { ...f.controller, taskPlan: async () => waitingPlan } })
-  assert.equal(await inspect.inspectCurrentExecution('task'), null)
-  await assert.rejects(inspect.repairCurrentStage({ taskId: 'task', decision: {}, commandId: 'legacy-repair' }), /WORKFLOW_OWNER_CONTRACT_UNAVAILABLE/)
+  assert.equal((await inspect.inspectCurrentExecution('task')).repairable, false)
+  await assert.rejects(inspect.repairCurrentStage({ taskId: 'task', decision: {}, commandId: 'legacy-repair' }), /WORKFLOW_REPAIR_NOT_ADMITTED/)
   // 已终态旧定义未加载也可读取，不能回退为当前版本。
   const unloaded = createTaskWorkflowContracts({ store: f.store, artifacts: f.artifacts,
     controller: { ...f.controller, workflowDefinition() { throw Object.assign(Error('missing'), { code: 'WORKFLOW_VERSION_UNAVAILABLE' }) } } })
   assert.deepEqual(await unloaded.readStageArtifacts({ taskId: 'task', stage, plan: completed.plan }), {})
   await assert.rejects(unloaded.authorizeCompletion(completed), /WORKFLOW_OWNER_CONTRACT_UNAVAILABLE/)
+})
+
+test('同领域连续状态变更按当前验收逐阶段分派，历史证明仍核验且不得冒充最新状态', async t => {
+  const calls = [], workflow = synthetic({ id: 'state-change', version: '1', validateCompletion: () => true })
+  const f = await fixture(t, workflow, { items: ['added'] }, undefined, [{ items: ['added'] }, { items: [] }])
+  const completed = await f.finish(), [add, drop] = completed.plan.stages
+  const decision = { ...completed.decision, evidenceRefs: [drop.outputRef], assessments: completed.decision.assessments.map(item => ({ ...item, evidenceRefs: [drop.outputRef] })) }
+  let corruptHistory = false
+  const policy = { id: 'state-change', version: '2', async readArtifacts(context) {
+    const output = await context.artifacts.read(context.stage.outputRef)
+    if (corruptHistory && context.stage.stageId === add.stageId) throw Error('HISTORICAL_EFFECT_INVALID')
+    const current = (context.acceptanceItems ?? []).length > 0
+    calls.push({ stageId: context.stage.stageId, current })
+    if (current && output.total !== 0) throw Error('CURRENT_STATE_UNCONFIRMED')
+    return { completionEvidenceRefs: [context.stage.outputRef], domainEvidence: { total: output.total, current } }
+  }, async validateCompletion(context) {
+    await this.readArtifacts(context)
+    return !context.acceptanceItems.length || await context.verifyAcceptance()
+  } }
+  const helpers = createTaskWorkflowContracts({ controller: f.controller, artifacts: f.artifacts, store: f.store,
+    completionPolicy: () => policy, verifyAcceptance: async context => {
+      assert.deepEqual(context.stages.map(item => item.stage.stageId), [drop.stageId])
+      assert.equal(context.stages[0].output.hostExecution.domainEvidence.current, true)
+      return true
+    } })
+  await helpers.readStageArtifacts({ taskId: 'task', stage: add, plan: completed.plan })
+  assert.deepEqual(calls.pop(), { stageId: add.stageId, current: false })
+  assert.equal(await helpers.authorizeCompletion({ ...completed, decision }), true)
+  assert.ok(calls.some(item => item.stageId === add.stageId && !item.current))
+  assert.ok(!calls.some(item => item.stageId === add.stageId && item.current))
+  assert.equal(await helpers.authorizeCompletion({ ...completed, decision: { ...decision, assessments: [] } }), false)
+  await assert.rejects(helpers.authorizeCompletion(completed), /CURRENT_STATE_UNCONFIRMED/)
+  corruptHistory = true
+  await assert.rejects(helpers.authorizeCompletion({ ...completed, decision }), /HISTORICAL_EFFECT_INVALID/)
 })
 
 test('保留写效果流程冻结验收身份，不再导出旧只读执行工厂', async () => {
@@ -213,6 +255,37 @@ test('公共修复屏障不依赖领域合同自律，不确定效果、暂停�
   }
   assert.equal(prepared, 0); assert.equal(changed, 0)
   await assert.rejects(helpers(plan, { ...state, nodes: [] }, []).inspectCurrentExecution('task'), /WORKFLOW_OWNER_ARTIFACT_SCOPE_MISMATCH/)
+})
+
+test('失败阶段使用Host节点续行资格，绑定诊断和策略且不重建阶段输入', async () => {
+  const stage = { stageId: 'first', runId: 'run', workflowId: 'task-inventory-count', workflowDigest: 'a'.repeat(64), status: 'blocked' }
+  const plan = { task: { taskId: 'task', controlState: 'active', requirementRevision: 3, planRequirementRevision: 3, planRevision: 2, controlRevision: 1 }, stages: [stage] }
+  const state = { run: { taskId: 'task', runId: 'run', workflowId: stage.workflowId, workflowDigest: stage.workflowDigest,
+    status: 'failed', generation: 2, revision: 7 }, nodes: [{ nodeId: 'read', nodeRunId: 'node', status: 'failed', drained: true, evidenceRefs: ['failure'] }] }
+  const recovery = { repairable: true, mode: 'resume-agent', reason: 'QUERY_PARAMETER_INVALID', nodeId: 'read', nodeRunId: 'node', leaseEpoch: 4,
+    inputDigest: 'b'.repeat(64), generation: 2, runRevision: 7, evidenceRefs: ['failure'], problemKey: 'c'.repeat(64) }
+  let resumed, persisted, reads = 0
+  const helpers = createTaskWorkflowContracts({ store: { query: async () => null },
+    artifacts: { read: async ref => { assert.equal(ref, 'failure'); reads++; return { code: recovery.reason } },
+      put: async (value, scope) => { assert.deepEqual(scope, { taskId: 'task' }); persisted = value; return { ref: 'recovery-context' } } },
+    controller: { taskPlan: async () => plan, state: async () => state, workflowDefinition: () => ({}), inspectNodeRecovery: async () => recovery,
+      resumeNode: async value => { resumed = value; return { resumed: true } }, changeInput: async () => { throw Error('INPUT_CHANGE_NOT_ALLOWED') } } })
+  const observed = await helpers.inspectCurrentExecution('task')
+  assert.equal(observed.repairable, true); assert.equal(observed.stageId, 'first')
+  const decision = { action: 'repairCurrentStage', summary: '修正查询字段拼写，继续读取当前表', repair: observed.repairBinding, evidenceRefs: ['failure'] }
+  await assert.rejects(helpers.repairCurrentStage({ taskId: 'task', commandId: 'bad-ref', decision: { ...decision, evidenceRefs: ['foreign'] } }), /WORKFLOW_REPAIR_NOT_ADMITTED/)
+  await assert.rejects(helpers.repairCurrentStage({ taskId: 'task', commandId: 'stale', decision: { ...decision, repair: { ...decision.repair, runRevision: 6 } } }), /WORKFLOW_REPAIR_NOT_ADMITTED/)
+  assert.deepEqual(await helpers.repairCurrentStage({ taskId: 'task', commandId: 'resume', decision }), { resumed: true })
+  assert.equal(reads, 1)
+  assert.deepEqual(persisted, { kind: 'execution-recovery-context', taskId: 'task', runId: 'run', nodeRunId: 'node', generation: 2,
+    problemKey: recovery.problemKey, requirementRevision: 3, planRevision: 2, controlRevision: 1,
+    diagnosis: decision.summary, strategy: decision.summary, evidenceRefs: ['failure'] })
+  assert.deepEqual(resumed, { commandId: 'resume', runId: 'run', expectedRevision: 7, nodeRunId: 'node', generation: 2,
+    leaseEpoch: 4, inputDigest: recovery.inputDigest, contextRef: 'recovery-context' })
+  plan.task.planRequirementRevision = 2
+  assert.equal((await helpers.inspectCurrentExecution('task')).repairable, false)
+  recovery.evidenceRefs = ['foreign']
+  await assert.rejects(helpers.inspectCurrentExecution('task'), /WORKFLOW_OWNER_ARTIFACT_SCOPE_MISMATCH/)
 })
 
 test('通用能力合同仍按同一产物摘要与完整验收条件检查目标', async () => {

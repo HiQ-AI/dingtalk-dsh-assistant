@@ -159,6 +159,22 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
     return { taskId, stage, state, plan, contract: definition?.ownerContract,
       store: readableStore, artifacts: readableArtifacts }
   }
+  async function inspectCurrentStage(context) {
+    const domain = await inspectRepair(context)
+    if (domain?.repairable) return domain
+    const recovery = await controller.inspectNodeRecovery?.(context.stage.runId)
+    if (!recovery) return domain
+    const { stage, state, plan } = context
+    const known = new Set(state.nodes.flatMap(node => [node.outputRef, ...(node.evidenceRefs ?? [])].filter(Boolean)))
+    if (!Array.isArray(recovery.evidenceRefs) || recovery.evidenceRefs.some(ref => !known.has(ref)))
+      throw executionError('WORKFLOW_OWNER_ARTIFACT_SCOPE_MISMATCH')
+    return { ...recovery, stageId: stage.stageId, runId: stage.runId,
+      repairable: recovery.repairable === true && plan.task.controlState === 'active'
+        && plan.task.planRequirementRevision === plan.task.requirementRevision
+        && recovery.generation === state.run.generation && recovery.runRevision === state.run.revision,
+      repairBinding: { stageId: stage.stageId, runId: stage.runId, generation: state.run.generation,
+        runRevision: state.run.revision, requirementRevision: plan.task.requirementRevision } }
+  }
   async function readPolicyArtifacts(context) {
     const policy = completionPolicy(context.contract, context)
     if (!policy?.readArtifacts) return {}
@@ -285,7 +301,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
         requiredContract(context)
         const final = context.state.nodes.at(-1)
         if (context.state.run.status !== 'succeeded' || final?.status !== 'succeeded' || final.outputRef !== stage.outputRef) return false
-        contexts.push({ ...context, extension: await readPolicyArtifacts(context), output: await artifacts.read(stage.outputRef),
+        contexts.push({ ...context, output: await artifacts.read(stage.outputRef),
           ...(context.state.run.requirementRef ? { input: await artifacts.read(context.state.run.requirementRef) } : {}) })
       }
       const known = new Set(plan.stages.flatMap(stage => [stage.outputRef, ...(stage.evidenceRefs ?? [])]))
@@ -299,6 +315,14 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
       if (!manifest.complete) return false
       const planning = await store.query({ kind: 'task.owner.planning', taskId })
       if (!planning || planning.truncated) return false
+      for (const context of contexts) {
+        const refs = new Set([context.stage.outputRef, ...(context.stage.evidenceRefs ?? [])])
+        context.acceptanceItems = items.flatMap(item => {
+          const evidenceRefs = decision.assessments.find(value => value.itemId === item.itemId).evidenceRefs.filter(ref => refs.has(ref))
+          return evidenceRefs.length ? [{ itemId: item.itemId, criterion: item.criterion, evidenceRefs }] : []
+        })
+        context.extension = await readPolicyArtifacts(context)
+      }
       const semanticStages = contexts.map(({ stage, state, output, input, contract, extension }) => ({ stage, input, contractId: contract.id,
         output: { ...output, hostExecution: { taskId, stageId: stage.stageId, runId: stage.runId,
           workflowId: stage.workflowId, workflowDigest: stage.workflowDigest, position: stage.position,
@@ -340,7 +364,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
           const policy = completionPolicy(context.contract, context)
           const general = policy?.id === 'general-capability-result' && policy.version === '2'
           if (!policy || await policy.validateCompletion({ ...context, requirement: domainRequirement,
-            decision: domainDecision, stages: domainStages, acceptanceItems: general ? [] : acceptanceItems,
+            decision: domainDecision, stages: domainStages, acceptanceItems: general ? [] : context.acceptanceItems,
             verifyAcceptance: verifyDomain, signal }) !== true) return false
           // 已冻结的通用合同内置领域验收；保留其效果检查，在此用显式绑定证据完成语义验收。
           if (general && acceptanceItems.length && (!verifyDomain || await verifyDomain() !== true)) return false
@@ -360,23 +384,36 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
     },
     async inspectCurrentExecution(taskId, suppliedPlan) {
       const plan = suppliedPlan ?? await controller.taskPlan(taskId)
-      const stage = plan?.stages.find(item => item.status === 'running')
+      const stage = plan?.stages.find(item => ['running', 'blocked'].includes(item.status))
       if (!stage?.runId) return null
       const context = await contextFor(taskId, stage, plan)
-      return inspectRepair(context)
+      return inspectCurrentStage(context)
     },
     async repairCurrentStage({ taskId, decision, commandId }) {
       const replay = await store.query({ kind: 'receipt', commandId })
       if (replay) return replay
       const plan = await controller.taskPlan(taskId)
-      const stage = plan?.stages.find(item => item.status === 'running')
+      const stage = plan?.stages.find(item => ['running', 'blocked'].includes(item.status))
       if (!stage?.runId) throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
-      const context = await contextFor(taskId, stage, plan), contract = requiredContract(context)
-      if (!contract.inspectRepair || !contract.prepareRepair) throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
-      const observed = await inspectRepair(context)
+      const context = await contextFor(taskId, stage, plan)
+      const observed = await inspectCurrentStage(context)
+      if (!observed && !context.contract) throw executionError('WORKFLOW_OWNER_CONTRACT_UNAVAILABLE')
       if (!observed?.repairable || executionDigest(observed.repairBinding) !== executionDigest(decision.repair)
         || !decision.evidenceRefs?.length || !decision.evidenceRefs.every(ref => observed.evidenceRefs.includes(ref)))
         throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
+      if (observed.mode === 'resume-agent') {
+        if (typeof decision.summary !== 'string' || !decision.summary.trim()) throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
+        for (const ref of decision.evidenceRefs) await artifacts.read(ref)
+        const saved = await artifacts.put({ kind: 'execution-recovery-context', taskId, runId: stage.runId,
+          nodeRunId: observed.nodeRunId, generation: observed.generation, problemKey: observed.problemKey,
+          requirementRevision: plan.task.requirementRevision, planRevision: plan.task.planRevision, controlRevision: plan.task.controlRevision,
+          diagnosis: decision.summary, strategy: decision.summary, evidenceRefs: decision.evidenceRefs }, { taskId })
+        return controller.resumeNode({ commandId, runId: stage.runId, expectedRevision: observed.runRevision,
+          nodeRunId: observed.nodeRunId, generation: observed.generation, leaseEpoch: observed.leaseEpoch,
+          inputDigest: observed.inputDigest, contextRef: saved.ref })
+      }
+      const contract = requiredContract(context)
+      if (!contract.inspectRepair || !contract.prepareRepair) throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
       const requirement = await artifacts.read(plan.task.requirementRef)
       const prepared = await contract.prepareRepair({ ...context, requirement, observed, prepareRepairContext })
       const material = await artifacts.read(prepared.contextRef)

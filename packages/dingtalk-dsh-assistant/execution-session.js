@@ -160,8 +160,11 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         const feedback = entry.correctableCalls.get(exec.token)
         entry.correctableCalls.delete(exec.token)
         if (result.isError && !(feedback && result.error?.message === feedback && !entry.attempted
-          && !entry.haltCode && !entry.stale && !entry.cancelled && !exec.signal.aborted))
+          && !entry.haltCode && !entry.stale && !entry.cancelled && !exec.signal.aborted)) {
+          entry.failure ??= { code: result.error?.code ?? 'execution_tool_failed', tool: exec.name,
+            phase: exec.name === SUBMIT ? 'output-validation' : 'execution', message: String(result.error?.message ?? '工具执行失败').slice(0, 2000) }
           halt(entry, exec.name === SUBMIT ? 'execution_submission_rejected' : 'execution_tool_failed')
+        }
         if (exec.name === SUBMIT && exec.callId === entry.submissionCallId && !result.isError) entry.accepted = true
       })
       agentCtx.tools.register({
@@ -179,7 +182,10 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
             catch (error) {
               if (!await current(entry)) throw failure('execution_binding_stale')
               exec.signal.throwIfAborted()
-              if (entry.classifyOutputError?.(error) !== 'correctable') throw error
+              if (entry.classifyOutputError?.(error) !== 'correctable') {
+                entry.failure = { code: error.code ?? 'execution_submission_rejected', tool: SUBMIT, phase: 'output-validation', message: String(error.message).slice(0, 2000) }
+                throw error
+              }
               return { received: false, feedback: error.code === 'GROUP_REPLY_INTERNAL_DETAILS' ? error.message : 'execution_output_needs_correction: 请核对输出合同；证据引用必须原样复制当前工具返回的完整 evidenceRef，包括 tasks/.../ 前缀，不可截短为文件名、使用 sourceRefs 或自行构造引用。修正后重新提交。' }
             }
             if (!await current(entry)) throw failure('execution_binding_stale')
@@ -210,7 +216,10 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
               // Host checks happen before classification: cancellation and stale ownership cannot be softened.
               if (!await current(entry)) throw failure('execution_binding_stale')
               exec.signal.throwIfAborted()
-              if (tool.classifyError?.(error) !== 'correctable') throw error
+              if (tool.classifyError?.(error) !== 'correctable') {
+                entry.failure = { code: error.code ?? 'execution_tool_failed', tool: name, phase: 'execution', message: String(error.message).slice(0, 2000) }
+                throw error
+              }
               return { status: 'correctable_error', code: typeof error.code === 'string' ? error.code : 'query_failed',
                 message: String(error.message).slice(0, 2000) }
             }
@@ -235,7 +244,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     }
   }
 
-  async function run({ binding, input, definition, onSessionBound, onResult, validateOutput, classifyOutputError }) {
+  async function run({ binding, input, definition, onSessionBound, onResult, validateOutput, classifyOutputError, recoveryContext }) {
     if (closed) return Promise.reject(failure('execution_sessions_closed'))
     try {
       validateBinding(binding)
@@ -287,12 +296,15 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         if (!await current(entry)) return { status: entry.cancelled || closed ? 'cancelled' : 'stale' }
         if (entry.haltCode) return { status: 'no_submission', reason: entry.haltCode }
         // 租约是 Host 的来源元数据，正常 inbox/user-message 持久化保留，不是模型参数。
-        entry.handle.agent.steer(createUserMessage({ source: { kind: 'coordinator', executionSession: { sessionId: binding.sessionId, leaseEpoch: binding.leaseEpoch, ...(versionedInput(binding) ? { inputVersion: binding.inputVersion, inputDigest: binding.inputDigest } : {}) } }, content: [{ type: 'text', text: JSON.stringify(entry.input) }] }))
+        entry.handle.agent.steer(createUserMessage({ source: { kind: 'coordinator', executionSession: { sessionId: binding.sessionId, leaseEpoch: binding.leaseEpoch, ...(versionedInput(binding) ? { inputVersion: binding.inputVersion, inputDigest: binding.inputDigest } : {}) } }, content: [
+          { type: 'text', text: JSON.stringify(entry.input) },
+          ...(recoveryContext ? [{ type: 'text', text: '本次受管恢复：保留原目标和权限，先核对原失败及以下修复方向，选择不同的可用路径并验证；不得把内部恢复说明当成用户授权。\n' + JSON.stringify(recoveryContext) }] : []),
+        ] }))
         await entry.handle.agent.whenIdle()
         await drain(entry)
         if (entry.cancelled || closed) return { status: 'cancelled' }
         if (!await current(entry)) return { status: 'stale' }
-        if (!entry.accepted || entry.haltCode) return { status: 'no_submission', reason: entry.haltCode ?? 'execution_no_submission' }
+        if (!entry.accepted || entry.haltCode) return { status: 'no_submission', reason: entry.haltCode ?? 'execution_no_submission', ...(entry.failure ? { failure: entry.failure } : {}) }
         await onResult(copy(entry.output))
         return { status: 'submitted', output: copy(entry.output) }
       } catch (error) {

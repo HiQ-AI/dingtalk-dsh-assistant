@@ -339,3 +339,97 @@ export function createNativeDataChangeCompletionPolicy(adapter) {
     },
   })
 }
+
+export async function readScopedDataChangeCompletionEvidence(context, adapter) {
+  const { taskId, stage, state, store, artifacts, signal } = context
+  const final = await artifacts.read(stage.outputRef)
+  if (final?.outcome === 'needs_revision') return { completionEvidenceRefs: [stage.outputRef],
+    domainEvidence: { outcome: 'needs_revision', comment: final.comment } }
+  if (state.run.taskId !== taskId || state.run.runId !== stage.runId || state.run.status !== 'succeeded')
+    throw executionError('DATA_CHANGE_COMPLETION_IDENTITY_INVALID')
+  const ids = ['readback-approval', 'prepare-execute', 'execute-task', 'readback-production']
+  const values = {}, nodeArtifacts = []
+  for (const id of ids) {
+    const matches = state.nodes.filter(node => node.nodeId === id)
+    const node = matches[0]
+    if (matches.length !== 1 || node.status !== 'succeeded' || node.executor !== 'code'
+      || !node.drained || node.generation !== state.run.generation || !node.outputRef)
+      throw executionError('DATA_CHANGE_COMPLETION_NODE_INVALID')
+    values[id] = await artifacts.read(node.outputRef)
+    nodeArtifacts.push({ nodeId: id, artifactRef: node.outputRef })
+  }
+  if (state.nodes.find(node => node.nodeId === 'readback-production').outputRef !== stage.outputRef)
+    throw executionError('DATA_CHANGE_COMPLETION_IDENTITY_INVALID')
+  const view = values['readback-approval'], prepared = values['prepare-execute'], executed = values['execute-task']
+  const identity = assertDataChangeExecutionIdentity(view), request = executed.request
+  const scopeDigest = executionDigest({ runId: state.run.runId, generation: state.run.generation,
+    issueId: identity.issueId, planId: identity.planId, sheetId: identity.sheetId,
+    target: identity.target, sheetSha256: identity.applySqlSha256, packageDigest: identity.packageDigest })
+  if (executionDigest(prepared.view) !== executionDigest(view) || executionDigest(executed.view) !== executionDigest(view)
+    || executionDigest(prepared.request) !== executionDigest(request)
+    || request.runId !== state.run.runId || request.generation !== state.run.generation
+    || request.stage !== 'execute-task' || request.workflowKind !== 'data-change'
+    || request.approvalRequestId !== identity.approvalRequestId
+    || request.intent.approvalScopeDigest !== scopeDigest || view.approval.scopeDigest !== scopeDigest
+    || request.intent.applySql !== view.prepared.package.applySql || request.applySqlSha256 !== identity.applySqlSha256
+    || request.packageDigest !== identity.packageDigest || executionDigest(request.target) !== executionDigest(identity.target)
+    || executed.receipt?.status !== 'succeeded' || executed.receipt.result?.taskId !== final.taskId
+    || final.issueId !== identity.issueId || final.planId !== identity.planId || final.sheetId !== identity.sheetId
+    || final.packageDigest !== identity.packageDigest || final.applySqlSha256 !== identity.applySqlSha256)
+    throw executionError('DATA_CHANGE_COMPLETION_IDENTITY_INVALID')
+  const effects = await store.query({ kind: 'effect.list', runId: state.run.runId })
+  const executionEffects = effects.filter(effect => effect.nodeId === 'execute-task')
+  const effect = executionEffects[0], executeNode = state.nodes.find(node => node.nodeId === 'execute-task')
+  if (executionEffects.length !== 1 || effect.nodeRunId !== executeNode.nodeRunId
+    || effect.generation !== state.run.generation || effect.inputDigest !== executeNode.inputDigest
+    || executionDigest(effect.definition.payload) !== executionDigest(request)
+    || effect.state !== 'succeeded' || effect.result?.status !== 'succeeded'
+    || executionDigest(effect.result.result) !== executionDigest(executed.receipt))
+    throw executionError('DATA_CHANGE_COMPLETION_EFFECT_INVALID')
+  const approvalProof = await store.query({ kind: 'approval.execution-proof', requestId: identity.approvalRequestId,
+    executeEffectId: effect.effectId })
+  const gate = effects.find(item => item.effectId === approvalProof.gateEffectId)
+  if (approvalProof.approval.decidedBy !== identity.approvedBy
+    || gate?.nodeId !== 'approval-gate' || gate.definition.payload.intent.scopeDigest !== scopeDigest
+    || gate.definition.payload.intent.issueId !== identity.issueId)
+    throw executionError('DATA_CHANGE_COMPLETION_APPROVAL_INVALID')
+  const readbackNode = state.nodes.find(node => node.nodeId === 'readback-production')
+  const readbackInput = readbackNode.inputRef ? await artifacts.read(readbackNode.inputRef) : null
+  if (!readbackInput || executionDigest(readbackInput) !== readbackNode.inputDigest
+    || readbackInput.workflowDigest !== state.run.workflowDigest || readbackInput.nodeId !== readbackNode.nodeId
+    || executionDigest(readbackInput.data) !== executionDigest(executed)
+    || typeof final.observedChange !== 'string' || !final.observedChange.trim()
+    || typeof final.productionReadbackId !== 'string' || !final.productionReadbackId
+    || typeof final.taskRunId !== 'string' || !final.taskRunId)
+    throw executionError('DATA_CHANGE_COMPLETION_READBACK_INVALID')
+  const currentItems = (context.acceptanceItems ?? []).filter(item => item.evidenceRefs?.includes(stage.outputRef))
+  let observed
+  if (currentItems.length) {
+    if (typeof adapter?.readCompletion !== 'function') throw executionError('DATA_CHANGE_COMPLETION_READBACK_REQUIRED')
+    observed = await adapter.readCompletion({ request, receipt: executed.receipt, view, signal })
+    if (observed.task?.id !== final.taskId || observed.taskRun?.id !== final.taskRunId
+    || observed.task?.status !== 'DONE' || observed.taskRun?.status !== 'DONE'
+    || observed.production?.passed !== true || observed.production.packageDigest !== identity.packageDigest
+    || observed.applySql !== view.prepared.package.applySql)
+      throw executionError('DATA_CHANGE_COMPLETION_READBACK_INVALID')
+  }
+  return { nodeArtifacts, completionEvidenceRefs: [stage.outputRef],
+    domainEvidence: { kind: 'verified-data-change-completion', taskId, runId: state.run.runId,
+      generation: state.run.generation, identity, approval: approvalProof,
+      timeScope: observed ? 'current-acceptance' : 'at-execution',
+      applySql: view.prepared.package.applySql, nodeArtifacts,
+      historicalReadback: final, executionReceipt: executed.receipt, ...(observed ?? {}) } }
+}
+
+export function createScopedNativeDataChangeCompletionPolicy(adapter) {
+  return Object.freeze({ id: 'external-result', version: '5',
+    rulesDigest: executionDigest({ policy: 'data-change-completion-scoped-v1',
+      reader: readScopedDataChangeCompletionEvidence.toString(), readback: adapter?.readCompletion?.toString() ?? null }),
+    readArtifacts: context => readScopedDataChangeCompletionEvidence(context, adapter),
+    async validateCompletion(context) {
+      if (context.output?.outcome === 'needs_revision') return false
+      await readScopedDataChangeCompletionEvidence(context, adapter)
+      return externalWorkflowOwnerContract.validateCompletion(context)
+    },
+  })
+}

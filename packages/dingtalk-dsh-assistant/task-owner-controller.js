@@ -84,7 +84,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       eventKey: `task-recovered-${key(taskId).slice(0, 40)}`, eventType: 'task.created' })
     const currentExecution = await inspectCurrentExecution?.(taskId, plan)
     for (const stage of plan.stages) {
-      const state = stage.status === 'running' && stage.runId ? await controller.state(stage.runId) : null
+      const state = ['running', 'blocked'].includes(stage.status) && stage.runId ? await controller.state(stage.runId) : null
       const problemNodes = (state?.nodes ?? []).filter(node => ['waiting', 'failed'].includes(node.status))
       if (!['succeeded', 'blocked', 'waiting_confirmation'].includes(stage.status) && !problemNodes.length) continue
       const eventType = stage.status === 'waiting_confirmation' ? 'workflow.confirmation.required'
@@ -95,9 +95,9 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         ...(problemNodes.length ? { diagnostics: problemNodes.map(node => ({ nodeId: node.nodeId,
           nodeRunId: node.nodeRunId, generation: node.generation, leaseEpoch: node.leaseEpoch,
           status: node.status, drained: node.drained, waitReason: node.waitReason, evidenceRefs: node.evidenceRefs })) } : {}),
-        ...(stage.status === 'running' && currentExecution?.stageId === stage.stageId ? { currentExecution } : {}) }
-      // 终态阶段沿用既有身份；只有运行中诊断需要按执行代际和失败内容再次唤醒。
-      const eventIdentity = stage.status === 'running' ? payload : [taskId, plan.task.planRevision, stage.stageId, stage.status]
+        ...(currentExecution?.stageId === stage.stageId ? { currentExecution } : {}) }
+      // 失败诊断或恢复资格发生变化才唤醒；完成阶段沿用稳定身份，轮询不制造新事件。
+      const eventIdentity = ['running', 'blocked'].includes(stage.status) ? payload : [taskId, plan.task.planRevision, stage.stageId, stage.status]
       await event({ taskId, eventKey: `stage-${key(eventIdentity).slice(0, 40)}`,
         eventType, payload })
     }
@@ -184,6 +184,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         const unreadPages = new Set((input.eventPages ?? []).map(page => page.ref))
         const readableArtifacts = new Set(input.stageArtifacts.flatMap(stage =>
           [stage.outputRef, ...stage.evidenceRefs, ...(stage.nodeArtifacts ?? []).map(node => node.artifactRef)].filter(Boolean)))
+        const readArtifacts = new Map()
         if (input.deliveryManifest) readableArtifacts.add(input.deliveryManifest.ref)
         for (const ref of [...input.events.map(event => event.payloadRef), ...(input.goal?.materials ?? []).map(material => material.artifactRef)].filter(Boolean)) readableArtifacts.add(ref)
         let acceptedCompletion
@@ -197,6 +198,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           readArtifact: async artifactRef => {
             if (!readableArtifacts.has(artifactRef)) throw error('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
             const value = await artifacts.read(artifactRef)
+            readArtifacts.set(artifactRef, value)
             return value?.encoding === 'base64' && typeof value.data === 'string'
               ? { ...value, text: Buffer.from(value.data, 'base64').toString('utf8') } : value
           },
@@ -204,12 +206,23 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
             taskId, turnId, leaseEpoch: claim.leaseEpoch, sessionId: claim.sessionId }),
           onCandidate: async decision => {
             if (unreadPages.size) throw error('TASK_OWNER_EVENTS_UNREAD')
+            if (input.currentExecution?.repairable === true && ['wait', 'block'].includes(decision.action))
+              throw error('TASK_OWNER_RECOVERY_AVAILABLE')
             if (decision.action === 'repairCurrentStage') {
               const expected = input.currentExecution?.repairBinding
               if (input.currentExecution?.repairable !== true || !expected
                 || Object.keys(decision.repair ?? {}).length !== Object.keys(expected).length
                 || Object.entries(expected).some(([key, value]) => decision.repair?.[key] !== value))
                 throw error('TASK_OWNER_REPAIR_BINDING_INVALID')
+              if (!decision.evidenceRefs?.length || !decision.evidenceRefs.every(ref =>
+                input.currentExecution.evidenceRefs.includes(ref) && readArtifacts.has(ref)))
+                throw error('TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD')
+              if (input.currentExecution.mode === 'resume-agent' && !decision.evidenceRefs.some(ref => {
+                const diagnostic = readArtifacts.get(ref), current = input.currentExecution
+                return diagnostic?.kind === 'execution-failure' && diagnostic.runId === current.runId
+                  && diagnostic.nodeRunId === current.nodeRunId && diagnostic.generation === current.generation
+                  && diagnostic.leaseEpoch === current.leaseEpoch && diagnostic.inputDigest === current.inputDigest
+              })) throw error('TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD')
             }
             const proposed = decision.planChange?.stages ?? decision.appendStages
             if (proposed && !await authorizeStages({ taskId, stages: proposed, signal })) throw error('TASK_OWNER_STAGE_NOT_AUTHORIZED')

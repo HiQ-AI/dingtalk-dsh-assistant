@@ -24,7 +24,7 @@ import { taskWorkflowCatalog, messageAnswerArguments, candidateCards, referenced
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText, groupStatusText, groupActionText, taskDecisionConditionText } from './workflow-notifications.js'
 import { createEngineeringStageContract, createEngineeringRegistry, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
 import { createDataChangeTaskWorkflow, createDataChangeApprovalResumeWorkflow, createDataChangeTaskWorkflowV6, createDataChangeTaskWorkflowV5, createDataChangeTaskWorkflowV4, createLegacyDataChangeTaskWorkflow, simpleDroppedColumnDefinition, columnDeletionImpact } from './workflow-data-change.js'
-import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, nativeDataChangeOwnerContract, createNativeDataChangeCompletionPolicy } from './task-release-workflows.js'
+import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, nativeDataChangeOwnerContract, createNativeDataChangeCompletionPolicy, createScopedNativeDataChangeCompletionPolicy } from './task-release-workflows.js'
 import { createUatPrMergeTaskWorkflow, createUatPrMergeTaskWorkflowV2, createLegacyUatPrMergeTaskWorkflow, createMainPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
 import { queryConversationTaskProgress, singleTaskProgressResult, taskProgressQueryDefinition } from './task-progress-query.js'
@@ -445,7 +445,7 @@ function createExternalRegistry(external, selected) {
   const workflows = [], records = new Map(), byId = new Map()
   const add = (workflow, adapter, modelConfig = null) => {
     if (catalogById.get(workflow.id)?.mode !== 'external' || byId.has(workflow.id)) throw executionError('EXTERNAL_WORKFLOW_CATALOG_MISMATCH')
-    workflow = { ...workflow, ownerContract: workflow.id === 'task-data-change-approval-resume' || workflow.id === 'task-data-change' && ['4', '5', '6', '7'].includes(workflow.version) ? createNativeDataChangeCompletionPolicy(adapter) : externalWorkflowOwnerContract }
+    workflow = { ...workflow, ownerContract: workflow.id === 'task-data-change-approval-resume' || workflow.id === 'task-data-change' && ['4', '5', '6', '7'].includes(workflow.version) ? createScopedNativeDataChangeCompletionPolicy(adapter) : externalWorkflowOwnerContract }
     const definition = defineExecutionWorkflow(workflow)
     const config = { ownerContractVersion: workflow.ownerContract.version, kind: 'external', registryVersion: '1', adapterId: adapter.id, adapterVersion: adapter.version,
       rulesDigest: adapter.rulesDigest, ...(modelConfig ? { modelConfig } : {}) }
@@ -807,6 +807,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         else if (saved.ownerContractVersion === '2') previous = { ...previous, ownerContract: externalWorkflowOwnerContract }
         else if (saved.ownerContractVersion === '3' && ['task-data-change', 'task-data-change-approval-resume'].includes(record.workflowId)) previous = { ...previous, ownerContract: nativeDataChangeOwnerContract }
         else if (saved.ownerContractVersion === '4' && ['task-data-change', 'task-data-change-approval-resume'].includes(record.workflowId)) previous = { ...previous, ownerContract: createNativeDataChangeCompletionPolicy(adapter) }
+        else if (saved.ownerContractVersion === '5' && ['task-data-change', 'task-data-change-approval-resume'].includes(record.workflowId)) previous = { ...previous, ownerContract: createScopedNativeDataChangeCompletionPolicy(adapter) }
         else if (saved.ownerContractVersion !== undefined) throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
         if (previous.version !== record.definitionVersion || ![defineExecutionWorkflow(previous).digest, ...defineExecutionWorkflow(previous).legacyDigests].includes(record.digest))
           throw executionError('EXTERNAL_WORKFLOW_DEFINITION_DRIFT')
@@ -1402,9 +1403,9 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     .filter(Boolean).map(policy => [policy.id, policy]))
   const ownerContracts = createTaskWorkflowContracts({ store, artifacts, controller, prepareRepairContext: engineering.prepareRepairContext,
     completionPolicy: (contract, context) => {
-      if (contract.id === 'external-result' && ['3', '4'].includes(contract.version)
+      if (contract.id === 'external-result' && ['3', '4', '5'].includes(contract.version)
         && ['task-data-change', 'task-data-change-approval-resume'].includes(context?.state?.run?.workflowId))
-        return withAcceptanceIdentity(createNativeDataChangeCompletionPolicy(selectedExternal.byId.get(context.state.run.workflowId)?.adapter))
+        return withAcceptanceIdentity(createScopedNativeDataChangeCompletionPolicy(selectedExternal.byId.get(context.state.run.workflowId)?.adapter))
       return contract.id === 'agent-investigation-result' && contract.version === '1'
         ? withAcceptanceIdentity(createLegacyInvestigationCompletionPolicy(contract)) : completionPolicies.get(contract.id) ?? contract
     },

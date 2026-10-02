@@ -5588,3 +5588,27 @@ for (const scenario of ['success','resume-success','copied-prefix','handoff-succ
     assert.equal(snapshot(), before)
   } finally { db.close() }
 })
+
+
+test('新v5数据变更仍经过实际Host原生证明选择，缺原节点不能退回通用领域合同', async t => {
+  const { service, execution } = await fixture(t, 'owner', undefined, {
+    taskOwnerSessions: { async run() { throw new Error('未核验原始证明不得进入Owner模型') }, async close() {} },
+  })
+  execution.controller.registerWorkflow({ id: 'task-data-change', version: 'fixture',
+    ownerContract: { id: 'external-result', version: '5', async validateCompletion() { return true } },
+    nodes: [{ id: 'fake-final', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: schema,
+      outputSchema: schema, mapInput: ({ requirement }) => requirement, execute: async () => ({ summary: '仅普通正文' }) }] })
+  const goal = await execution.artifacts.put({ request: '精确生产回查', acceptanceCriteria: ['精确生产回查'], sourceInstructions: [] })
+  await execution.store.command({ id: 'v5-accept', kind: 'task.accept', args: { taskId: 'v5-task', requirementRef: goal.ref,
+    requirementRevision: 1, sessionId: 'v5-owner', sourceKey: 'v5-source', criteria: ['精确生产回查'], eventKey: 'created' } })
+  await execution.controller.initializeTaskPlan({ commandId: 'v5-plan', taskId: 'v5-task', expectedPlanRevision: 0,
+    expectedRequirementRevision: 1, expectedControlRevision: 1, stages: [{ stageId: 'v5-stage', workflowId: 'task-data-change', input: {} }] })
+  await execution.controller.advanceTaskPlan('v5-task')
+  const plan = await execution.controller.taskPlan('v5-task')
+  await execution.controller.whenIdle(plan.stages[0].runId)
+  await execution.controller.advanceTaskPlan('v5-task')
+  const recovered = await service.recover()
+  assert.ok(recovered.failures.some(item => item.code === 'DATA_CHANGE_COMPLETION_NODE_INVALID'
+    || item.error?.code === 'DATA_CHANGE_COMPLETION_NODE_INVALID'), JSON.stringify(recovered))
+  assert.equal((await execution.store.query({ kind: 'task.owner', taskId: 'v5-task' })).lastFailure, 'DATA_CHANGE_COMPLETION_NODE_INVALID')
+})

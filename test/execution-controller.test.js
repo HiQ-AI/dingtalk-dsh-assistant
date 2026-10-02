@@ -206,6 +206,175 @@ async function setup(t, definition = workflow()) {
   return { directory, dbPath, instanceId, store, artifacts, controller }
 }
 
+async function agentRecoveryFixture(t, response = ({ input, recoveryContext }) => recoveryContext ? input + 1 : 'invalid-output') {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-agent-recovery-')), dbPath = join(directory, 'control.db'), instanceId = 'agent-recovery'
+  let store = await openExecutionStore({ dbPath, instanceId, initialize: true }), controller
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true }), calls = []
+  const definition = { id: 'agent-analysis', version: '1', nodes: [
+    { id: 'prepare', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: number, outputSchema: number,
+      mapInput: ({ requirement }) => requirement, execute: async ({ input }) => input + 1 },
+    { id: 'analyze', version: '1', executor: 'agent', allowedEffects: ['read'], provider: 'fixture', model: 'fixture', prompt: '分析输入', allowedTools: [],
+      inputSchema: number, outputSchema: number, mapInput: ({ previousOutput }) => previousOutput },
+    { id: 'finalize', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: number, outputSchema: number,
+      mapInput: ({ previousOutput }) => previousOutput, execute: async ({ input }) => input * 2 },
+  ] }
+  const sessions = { async run(args) {
+    calls.push(args);await args.onSessionBound()
+    const value = await response(args)
+    if (value?.status === 'no_submission') return value
+    await args.onResult(value);return { status: 'submitted' }
+  }, async cancel() {}, async assertDrained() {}, async close() {} }
+  let beforeCommand
+  const makeController = () => createExecutionController({ store: {
+    query: value => store.query(value),
+    command: async value => { if (beforeCommand) await beforeCommand(value, store);return store.command(value) },
+  }, artifacts, workflows: [definition], sessions })
+  controller = makeController()
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: [{ stageId: 'stage-1', workflowId: definition.id, input: 1 }] })
+  const plan = await controller.advanceTaskPlan('task'), runId = plan.stages[0].runId
+  await controller.whenIdle(runId);await controller.advanceTaskPlan('task')
+  const resumeArgs = async (commandId = 'resume') => {
+    const recovery = await controller.inspectNodeRecovery(runId)
+    const plan = await controller.taskPlan('task')
+    const saved = await artifacts.put({ kind: 'execution-recovery-context', taskId: 'task', runId,
+      requirementRevision: plan.task.requirementRevision, planRevision: plan.task.planRevision, controlRevision: plan.task.controlRevision,
+      nodeRunId: recovery.nodeRunId, generation: recovery.generation, diagnosis: '上次输出类型不符合合同',
+      strategy: '保留既有事实，按数字合同重新提交', evidenceRefs: recovery.evidenceRefs, problemKey: recovery.problemKey })
+    return { commandId, runId, expectedRevision: recovery.runRevision, nodeRunId: recovery.nodeRunId,
+      generation: recovery.generation, leaseEpoch: recovery.leaseEpoch, inputDigest: recovery.inputDigest, contextRef: saved.ref }
+  }
+  t.after(async () => { await controller.close();await store.close() })
+  return { get store() { return store }, get controller() { return controller }, artifacts, calls, runId, resumeArgs,
+    beforeCommand(callback) { beforeCommand = callback },
+    async reopen() { await controller.close();await store.close();store = await openExecutionStore({ dbPath, instanceId });controller = makeController() } }
+}
+
+test('通用 agent 失败续行保持成功前缀、节点会话与代际，并向原执行器传入受信修复上下文', async t => {
+  const f = await agentRecoveryFixture(t), before = await f.controller.state(f.runId)
+  assert.equal(before.run.status, 'failed')
+  assert.equal((await f.controller.taskPlan('task')).stages[0].status, 'blocked')
+  const recovery = await f.controller.inspectNodeRecovery(f.runId)
+  assert.equal(recovery.repairable, true);assert.equal(recovery.mode, 'resume-agent')
+  const args = await f.resumeArgs(), receipt = await f.controller.resumeNode(args)
+  const after = await f.controller.whenIdle(f.runId)
+  assert.equal(after.run.status, 'succeeded');assert.equal(after.run.generation, before.run.generation)
+  assert.deepEqual(after.nodes[0], before.nodes[0])
+  assert.equal(after.nodes[1].nodeRunId, before.nodes[1].nodeRunId)
+  assert.equal(after.nodes[1].sessionId, before.nodes[1].sessionId)
+  assert.equal(after.nodes[1].leaseEpoch, before.nodes[1].leaseEpoch + 1)
+  assert.equal(f.calls[1].recoveryContext.strategy, '保留既有事实，按数字合同重新提交')
+  assert.deepEqual(receipt.result.evidenceRefs, recovery.evidenceRefs)
+  assert.equal(await f.artifacts.read(after.nodes[2].outputRef), 6)
+  await f.controller.resumeNode(args);await f.controller.whenIdle(f.runId)
+  assert.equal(f.calls.length, 2)
+  await assert.rejects(f.controller.resumeNode({ ...args, expectedRevision: args.expectedRevision + 1 }), { code: 'NODE_RECOVERY_CONFLICT' })
+})
+
+test('同一失败问题跨新租约和控制器重启不再次机械恢复，原失败证据仍保留', async t => {
+  const f = await agentRecoveryFixture(t, () => 'invalid-output')
+  const first = await f.controller.inspectNodeRecovery(f.runId)
+  await f.controller.resumeNode(await f.resumeArgs());await f.controller.whenIdle(f.runId)
+  await f.reopen()
+  const next = await f.controller.inspectNodeRecovery(f.runId)
+  assert.equal(next.problemKey, first.problemKey);assert.equal(next.reason, 'strategy-change-required');assert.equal(next.repairable, false)
+  assert.equal(next.leaseEpoch, first.leaseEpoch + 1)
+  await assert.rejects(f.controller.resumeNode(await f.resumeArgs('repeat')), { code: 'NODE_RECOVERY_NOT_ADMITTED' })
+  for (const ref of first.evidenceRefs) assert.equal((await f.artifacts.read(ref)).kind, 'execution-failure')
+  assert.equal(f.calls.length, 2)
+})
+
+test('通用续行保留真实原始工具错误，但身份及未知工具故障不取得恢复资格', async t => {
+  for (const code of ['QUERY_SCOPE_DENIED', 'QUERY_SCOPE_CHANGED', 'QUERY_BINDING_INVALID', 'EACCES', 'ENOENT', 'UNREGISTERED_TOOL_FAILURE']) await t.test(code, async child => {
+    const f = await agentRecoveryFixture(child, () => ({ status: 'no_submission', reason: 'execution_tool_failed',
+      failure: { code, phase: 'tool-execution', tool: 'query-fixture', message: '真实失败说明' } }))
+    const state = await f.controller.state(f.runId), node = state.nodes[1]
+    assert.equal(node.waitReason.reference, code)
+    const evidence = await f.artifacts.read(node.evidenceRefs.at(-1))
+    assert.equal(evidence.code, code);assert.equal(evidence.tool, 'query-fixture');assert.equal(evidence.message, '真实失败说明')
+    assert.equal(evidence.sessionReason, 'execution_tool_failed')
+    assert.equal((await f.controller.inspectNodeRecovery(f.runId)).repairable, false)
+  })
+})
+
+test('通用续行原子拒绝旧版本、错误上下文及维护围栏，不改变失败节点', async t => {
+  const f = await agentRecoveryFixture(t), args = await f.resumeArgs(), state = await f.controller.state(f.runId)
+  await assert.rejects(f.controller.resumeNode({ ...args, expectedRevision: args.expectedRevision + 1 }), { code: 'NODE_RECOVERY_NOT_ADMITTED' })
+  const bad = await f.artifacts.put({ kind: 'execution-recovery-context', taskId: 'other', runId: f.runId, nodeRunId: args.nodeRunId,
+    generation: args.generation, diagnosis: '诊断', strategy: '修正', evidenceRefs: state.nodes[1].evidenceRefs })
+  await assert.rejects(f.controller.resumeNode({ ...args, contextRef: bad.ref }), { code: 'NODE_RECOVERY_CONTEXT_INVALID' })
+  const forged = { runId: f.runId, expectedRevision: state.run.revision, nodeRunId: args.nodeRunId, generation: args.generation,
+    leaseEpoch: args.leaseEpoch + 1, inputDigest: args.inputDigest, contextRef: args.contextRef, problemKey: (await f.controller.inspectNodeRecovery(f.runId)).problemKey,
+    workflowDigest: state.run.workflowDigest, sources: [], expectedRequirementRevision: 1, expectedPlanRevision: 1, expectedControlRevision: 1 }
+  await assert.rejects(f.store.command({ id: 'forged', kind: 'node.resume', args: forged }), { code: 'NODE_RECOVERY_NOT_ADMITTED' })
+  assert.deepEqual((await f.controller.state(f.runId)).nodes, state.nodes)
+  await f.store.command({ id: 'maintenance', kind: 'runtime.maintenance.change', args: { active: true, expectedRevision: 0,
+    maintenanceId: 'maintenance', actorId: 'owner', reason: '测试维护围栏' } })
+  assert.equal((await f.controller.inspectNodeRecovery(f.runId)).repairable, false)
+  await assert.rejects(f.store.command({ id: 'maintenance-resume', kind: 'node.resume', args: { ...forged, leaseEpoch: args.leaseEpoch } }), { code: 'NODE_RECOVERY_NOT_ADMITTED' })
+  assert.equal(f.calls.length, 1)
+})
+
+test('恢复上下文在领取后尚未交付执行器即重启时沿用，恢复不跨输入且不重放前缀', async t => {
+  const f = await agentRecoveryFixture(t), args = await f.resumeArgs(), before = await f.controller.state(f.runId)
+  const recovery = await f.controller.inspectNodeRecovery(f.runId), plan = await f.controller.taskPlan('task')
+  const { commandId, ...binding } = args
+  await f.store.command({ id: 'resume-before-crash', kind: 'node.resume', args: {
+    ...binding,
+    problemKey: recovery.problemKey, workflowDigest: before.run.workflowDigest, sources: [],
+    expectedRequirementRevision: plan.task.requirementRevision, expectedPlanRevision: plan.task.planRevision,
+    expectedControlRevision: plan.task.controlRevision,
+  } })
+  await f.store.command({ id: 'claim-before-crash', kind: 'node.claim', args: {
+    runId: f.runId, nodeId: 'analyze', expectedGeneration: args.generation, expectedLeaseEpoch: args.leaseEpoch,
+  } })
+  await f.reopen()
+  await f.controller.recover({ commandId: 'recover-after-crash', runId: f.runId })
+  const after = await f.controller.whenIdle(f.runId)
+  assert.equal(after.run.status, 'succeeded')
+  assert.equal(after.nodes[1].leaseEpoch, args.leaseEpoch + 2)
+  assert.deepEqual(after.nodes[0], before.nodes[0])
+  assert.equal(f.calls.length, 2)
+  assert.equal(f.calls[1].recoveryContext.strategy, '保留既有事实，按数字合同重新提交')
+  assert.equal(await f.store.query({ kind: 'node.recovery-context', nodeRunId: args.nodeRunId,
+    inputDigest: 'a'.repeat(64), leaseEpoch: args.leaseEpoch + 2 }), null)
+})
+
+test('通用续行事务拒绝过时Task版本、暂停与待输入，且关闭后不重放已完成命令', async t => {
+  const f = await agentRecoveryFixture(t), args = await f.resumeArgs(), recovery = await f.controller.inspectNodeRecovery(f.runId)
+  const state = await f.controller.state(f.runId), plan = await f.controller.taskPlan('task')
+  const { commandId, ...binding } = args
+  const raw = { ...binding, problemKey: recovery.problemKey, workflowDigest: state.run.workflowDigest, sources: [],
+    expectedRequirementRevision: plan.task.requirementRevision, expectedPlanRevision: plan.task.planRevision,
+    expectedControlRevision: plan.task.controlRevision }
+  for (const field of ['expectedRequirementRevision', 'expectedPlanRevision', 'expectedControlRevision'])
+    await assert.rejects(f.store.command({ id: `stale-${field}`, kind: 'node.resume', args: { ...raw, [field]: raw[field] + 1 } }), { code: 'NODE_RECOVERY_NOT_ADMITTED' })
+  await f.store.command({ id: 'pause-task', kind: 'task.control.pause', args: { taskId: 'task', expectedControlRevision: plan.task.controlRevision } })
+  assert.equal((await f.controller.inspectNodeRecovery(f.runId)).repairable, false)
+  await assert.rejects(f.store.command({ id: 'paused-resume', kind: 'node.resume', args: raw }), { code: 'NODE_RECOVERY_NOT_ADMITTED' })
+  const g = await agentRecoveryFixture(t, () => ({ status: 'no_submission', reason: 'execution_no_submission' }))
+  const pending = await g.artifacts.put(2)
+  await g.store.command({ id: 'pending-input', kind: 'input.accept', args: { runId: g.runId, inputId: 'new-input', sourceKey: 'web:change', requirementRef: pending.ref } })
+  assert.equal((await g.controller.inspectNodeRecovery(g.runId)).repairable, false)
+  const h = await agentRecoveryFixture(t), accepted = await h.resumeArgs()
+  await h.controller.resumeNode(accepted);await h.controller.whenIdle(h.runId);await h.controller.close()
+  await assert.rejects(h.controller.resumeNode(accepted), { code: 'CONTROLLER_CLOSED' })
+})
+
+test('恢复决定生成后的控制版本变化及检查到提交之间的并发变化都拒绝续行', async t => {
+  for (const race of [false, true]) await t.test(race ? '提交前并发修改' : '旧恢复上下文', async child => {
+    const f = await agentRecoveryFixture(child), args = await f.resumeArgs()
+    const change = async store => {
+      await store.command({ id: 'pause-race', kind: 'task.control.pause', args: { taskId: 'task', expectedControlRevision: 1 } })
+      await store.command({ id: 'resume-race', kind: 'task.control.resume', args: { taskId: 'task', expectedControlRevision: 2 } })
+    }
+    if (race) f.beforeCommand(async (value, store) => { if (value.kind === 'node.resume') await change(store) })
+    else await change(f.store)
+    await assert.rejects(f.controller.resumeNode(args), { code: race ? 'NODE_RECOVERY_NOT_ADMITTED' : 'NODE_RECOVERY_CONTEXT_STALE' })
+    assert.equal((await f.controller.state(f.runId)).nodes[1].leaseEpoch, args.leaseEpoch)
+    assert.equal(f.calls.length, 1)
+  })
+})
+
 test('正式Controller：schema映射→事务下游→最终输出，不读取聊天历史', async t => {
   const { controller, artifacts, store } = await setup(t)
   await controller.createRun({ commandId: 'create-1', taskId: 'task-1', runId: 'run-1', workflowId: 'synthetic', input: 2 })
@@ -383,7 +552,8 @@ test('失败结果在Owner唤醒前重启仍可读取，重复观察不重复事
         })
       }
       await assert.rejects(readArtifact('sha256-' + 'f'.repeat(64) + '.json'), { code: 'TASK_OWNER_ARTIFACT_NOT_ALLOWED' })
-      const decision = { action: 'wait', summary: '已读失败原因，等待所需能力', evidenceRefs: [] }
+      const decision = { action: 'wait', summary: '已读失败原因，等待所需能力', evidenceRefs: [],
+        condition: { kind: 'capability', missing: '测试能力尚不可用', responsibleParty: '维护人员', resumeWhen: '能力恢复后继续', evidenceRefs: [] } }
       await onCandidate(decision)
       return { status: 'submitted', decision }
     }, async close() {} } })

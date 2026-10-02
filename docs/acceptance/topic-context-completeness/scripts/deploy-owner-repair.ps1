@@ -314,6 +314,9 @@ function Assert-DeploymentControlRecord($launchRecord) {
     (Get-FileHash -LiteralPath $launchRecord.deploymentControlPath).Hash-ne $launchRecord.deploymentControlSha256){throw '无历史备份部署的控制证据摘要漂移'}
  $record=Get-Content -LiteralPath $launchRecord.deploymentControlPath -Raw|ConvertFrom-Json
  if($record.backupCreated-ne $false -or $record.backup -or $record.sourceProfileSha256-ne $launchRecord.sourceProfileSha256 -or $record.packageSha256-ne $launchRecord.packageSha256){throw '无历史备份部署的包或profile身份漂移'}
+ foreach($entry in $record.originalEvidenceHashes.PSObject.Properties){
+  if((Get-FileHash -LiteralPath $entry.Name).Hash-ne $entry.Value){throw '精确包修复的原部署证据摘要漂移'}
+ }
 }
 function Read-Deployment($launchRecord) {
  [void](Assert-DeploymentControlRecord $launchRecord)
@@ -357,6 +360,10 @@ function Read-Deployment($launchRecord) {
  $history=Run-Node @($checker,'verify',"$EvidenceDirectory/control-before.json")|ConvertFrom-Json
  $packageReadback=Run-Node @($checker,'package',$Package,$source,$installed)|ConvertFrom-Json
  $observerReadback=if($ObserverPackage){Run-Node @($checker,'package',$ObserverPackage,$observerSource,$observerInstalled)|ConvertFrom-Json}else{$null}
+ if($launchRecord.retainedObserverPackage){
+  if((Get-FileHash -LiteralPath $launchRecord.retainedObserverPackage).Hash-ne $launchRecord.retainedObserverPackageSha256){throw '原Observer包摘要漂移'}
+  $observerReadback=Run-Node @($checker,'package',$launchRecord.retainedObserverPackage,$observerSource,$observerInstalled)|ConvertFrom-Json
+ }
  $webProof=Run-Node @($checker,'web',"$EvidenceDirectory/start.stdout.log")|ConvertFrom-Json
  $maintenance=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -NoProxy -TimeoutSec 20
  if($maintenance.maintenanceId-ne $launchRecord.maintenanceId){throw '启动后维护许可漂移'}
@@ -407,8 +414,14 @@ function Read-StoppedRepairRecord([string]$Path,$sealed,$backupRecord) {
   maintenanceId=$sealed.state.maintenanceId;directQueriesProposal='';inputPaths=@();inputHashes=@{};launcherPid=$null}
 }
 function Assert-StoppedRepairPermit($record,$sealed,$before,$backupRecord,$current) {
- if($record.messageImpactMigrationSha256 -or $record.executionEventsIndexMigrationSha256 -or $record.mode-ne 'maintenance' -or $record.enrollmentAutostartRestore -or
-     $record.sourceProfileSha256-ne (Get-FileHash -LiteralPath "$($record.backup)/profile/cordis.patch.yml").Hash -or $record.profileSha256-ne $ExpectedProfileSha256 -or
+ if($record.backupCreated-eq $false){
+  Assert-DeploymentControlRecord $record
+  if($backupRecord.backupCreated-ne $false -or $record.backup -or $backupRecord.backup -or
+     $backupRecord.sourceProfileSha256-ne $record.sourceProfileSha256 -or $backupRecord.oldPid-le 0 -or
+     $record.taskMigrationPlan -or $record.taskMigrationJournalSha256 -or $record.taskMigrationBackupManifest -or $record.taskMigrationBackupSha256 -or
+     $backupRecord.taskMigrationBackupManifest -or $backupRecord.taskMigrationBackupSha256){throw '无备份修复仅允许普通部署的精确包替换'}
+ }elseif($record.enrollmentAutostartRestore -or $record.sourceProfileSha256-ne (Get-FileHash -LiteralPath "$($record.backup)/profile/cordis.patch.yml").Hash){throw '原备份部署记录不允许本次离线修复'}
+ if($record.messageImpactMigrationSha256 -or $record.executionEventsIndexMigrationSha256 -or $record.mode-ne 'maintenance' -or $record.profileSha256-ne $ExpectedProfileSha256 -or
     $backupRecord.backup-ne $record.backup -or $backupRecord.packageSha256-ne $record.packageSha256 -or
     ($record.checkpoint-ne 'sealed-before-launch' -and $record.packageSha256-eq $ExpectedPackageSha256) -or ([string]$record.directQueriesProposal).Replace('\','/')-ne ([string]$DirectQueriesProposal).Replace('\','/')){throw '原部署记录不允许本次离线修复'}
  foreach($state in @($sealed.state,$before.maintenance,$current)){
@@ -445,27 +458,45 @@ if($RepairStoppedLaunch){
  $origin=Split-Path -Parent $RepairStoppedLaunch
  $sealed=Get-Content -LiteralPath "$origin/maintenance-sealed.json" -Raw|ConvertFrom-Json
  $before=Get-Content -LiteralPath "$origin/control-before.json" -Raw|ConvertFrom-Json
- if(Test-Path -LiteralPath "$origin/deployment-control.json" -PathType Leaf){throw '本次普通部署未备份历史副本，不能使用历史数据回滚入口；保留封存现场并按精确包修复'}
- $backupRecord=Get-Content -LiteralPath "$origin/backup.json" -Raw|ConvertFrom-Json
+ $noBackupRepair=Test-Path -LiteralPath "$origin/deployment-control.json" -PathType Leaf
+ if($noBackupRepair -and (Split-Path -Leaf $RepairStoppedLaunch)-ne 'launch.json'){throw '无备份修复要求原launch检查点'}
+ $controlPath=if($noBackupRepair){"$origin/deployment-control.json"}else{"$origin/backup.json"}
+ $backupRecord=Get-Content -LiteralPath $controlPath -Raw|ConvertFrom-Json
  $record=Read-StoppedRepairRecord $RepairStoppedLaunch $sealed $backupRecord
- if($record.backupCreated-eq $false){throw '本次普通部署未备份历史副本，不能使用历史数据回滚入口；保留封存现场并按精确包修复'}
+ if($noBackupRepair-ne ($record.backupCreated-eq $false)){throw '原部署控制证据类型不匹配'}
+ if($noBackupRepair -and [IO.Path]::GetFullPath($record.deploymentControlPath)-ne [IO.Path]::GetFullPath($controlPath)){throw '原部署控制证据路径不匹配'}
+ $retainedObserverPackage=if($record.retainedObserverPackage){$record.retainedObserverPackage}else{$record.observerPackage}
+ $retainedObserverPackageSha256=if($record.retainedObserverPackage){$record.retainedObserverPackageSha256}else{$record.observerPackageSha256}
  $evidenceHashes=@{}
- foreach($path in @($RepairStoppedLaunch,"$origin/maintenance-sealed.json","$origin/control-before.json","$origin/backup.json","$($record.backup)/manifest.json")+$deploymentInputs){$evidenceHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
+ $originalEvidence=@($RepairStoppedLaunch,"$origin/maintenance-sealed.json","$origin/control-before.json",$controlPath)
+ if(-not $noBackupRepair){$originalEvidence+="$($record.backup)/manifest.json"}
+ if($record.enrollmentAutostartRestore){
+  $autostart=Get-Content -LiteralPath "$origin/enrollment-autostart.json" -Raw|ConvertFrom-Json
+  if($autostart.taskName-ne $enrollmentTaskName -or $autostart.restore-ne $true){throw '原自启恢复证据不匹配'}
+  $originalEvidence+="$origin/enrollment-autostart.json"
+ }
+ foreach($path in $originalEvidence+@($record.inputPaths)+$deploymentInputs){$evidenceHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
+ foreach($path in $record.inputPaths){if($evidenceHashes[$path]-ne $record.inputHashes.$path){throw '原部署输入摘要漂移'}}
  if($record.inputPaths-contains $Package){throw '修复包必须使用新的唯一路径'}
  if($DirectQueriesProposal -and (Get-FileHash -LiteralPath $DirectQueriesProposal).Hash-ne $record.inputHashes.($record.directQueriesProposal)){throw '原查询配置提案已变化'}
  function Test-StoppedRepair {
   Assert-InputHashes
   Assert-LocalPackageSources $profile $Package $observerSourceReplacement
   foreach($path in $evidenceHashes.Keys){if((Get-FileHash -LiteralPath $path).Hash-ne $evidenceHashes[$path]){throw '修复输入或原证据已变化'}}
+  if($noBackupRepair -and $record.enrollmentAutostartRestore){
+   $scheduled=@(Get-ScheduledTask -TaskName $enrollmentTaskName -ErrorAction Stop)
+   if($scheduled.Count-ne 1 -or [string]$scheduled[0].State-ne 'Disabled'){throw '离线修复要求原自启任务仍禁用'}
+  }
   Assert-StoppedRepairProcesses $record $backupRecord
   $current=Run-Node @($checker,'maintenance')|ConvertFrom-Json
   Assert-StoppedRepairPermit $record $sealed $before $backupRecord $current
   $history=Run-Node @($checker,'verify',"$origin/control-before.json")|ConvertFrom-Json
-  $backupProof=Run-Node @($checker,'backup-reverify',$record.backup,$TaskDirectory)|ConvertFrom-Json
+  $backupProof=$null
+  if(-not $noBackupRepair){$backupProof=Run-Node @($checker,'backup-reverify',$record.backup,$TaskDirectory)|ConvertFrom-Json}
   $packageProof=Run-Node @($checker,'package',$Package,$source)|ConvertFrom-Json
-  if($record.observerPackage -and $record.checkpoint-ne 'sealed-before-launch'){
-   if((Get-FileHash -LiteralPath $record.observerPackage).Hash-ne $record.observerPackageSha256){throw '原Observer包摘要漂移'}
-   $null=Run-Node @($checker,'package',$record.observerPackage,$observerSource,$observerInstalled)
+  if($retainedObserverPackage -and $record.checkpoint-ne 'sealed-before-launch'){
+   if((Get-FileHash -LiteralPath $retainedObserverPackage).Hash-ne $retainedObserverPackageSha256){throw '原Observer包摘要漂移'}
+   $null=Run-Node @($checker,'package',$retainedObserverPackage,$observerSource,$observerInstalled)
   }
   $observerProof=$null
   if($ObserverPackage){
@@ -484,7 +515,9 @@ if($RepairStoppedLaunch){
   $proof=Test-StoppedRepair
   New-Item -ItemType Directory -Path $EvidenceDirectory|Out-Null
   $proof|ConvertTo-Json -Depth 10|Set-Content "$EvidenceDirectory/repair-preflight.json"
-  Copy-Item -LiteralPath "$origin/control-before.json","$origin/maintenance-sealed.json","$origin/backup.json" -Destination $EvidenceDirectory
+  Copy-Item -LiteralPath "$origin/control-before.json","$origin/maintenance-sealed.json" -Destination $EvidenceDirectory
+  if($record.enrollmentAutostartRestore){Copy-Item -LiteralPath "$origin/enrollment-autostart.json" -Destination $EvidenceDirectory}
+  if(-not $noBackupRepair){Copy-Item -LiteralPath $controlPath -Destination $EvidenceDirectory}
   $env:DSH_HOME='D:/dsh_home';$env:TEMP=$tempDirectory;$env:TMP=$tempDirectory
   if($lockProcess.HasExited){throw '安装前独占锁已丢失'}
   $repairPackages=@("@zzusp/dingtalk-dsh-assistant@file:$Package")+@(if($ObserverPackage){"@zzusp/dingtalk-dsh-observer@file:$ObserverPackage"})
@@ -504,7 +537,12 @@ if($RepairStoppedLaunch){
  $env:PATH=(Split-Path -Parent $node)+';'+$env:PATH
  $launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
  $inputHashes=@{};foreach($path in $deploymentInputs){$inputHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
- $launchRecord=@{repairOfLaunch=$RepairStoppedLaunch;repairOfLaunchSha256=$evidenceHashes[$RepairStoppedLaunch];observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode='maintenance';launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=$ExpectedPackageSha256;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=$ExpectedProfileSha256;backup=$record.backup;maintenanceId=$record.maintenanceId;enrollmentAutostartRestore=$false}
+ $launchRecord=@{repairOfLaunch=$RepairStoppedLaunch;repairOfLaunchSha256=$evidenceHashes[$RepairStoppedLaunch];retainedObserverPackage=$retainedObserverPackage;retainedObserverPackageSha256=$retainedObserverPackageSha256;observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode='maintenance';launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=$ExpectedPackageSha256;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=$ExpectedProfileSha256;backup=$record.backup;maintenanceId=$record.maintenanceId;enrollmentAutostartRestore=[bool]$record.enrollmentAutostartRestore}
+ if($noBackupRepair){
+  $newControlPath="$EvidenceDirectory/deployment-control.json"
+  @{backupCreated=$false;backup='';oldPid=$backupRecord.oldPid;sourceProfileSha256=$ExpectedProfileSha256;packageSha256=$ExpectedPackageSha256;inputHashes=$inputHashes;repairOfControl=$controlPath;repairOfControlSha256=$evidenceHashes[$controlPath];originalEvidenceHashes=$evidenceHashes}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath $newControlPath
+  $launchRecord.backupCreated=$false;$launchRecord.deploymentControlPath=$newControlPath;$launchRecord.deploymentControlSha256=(Get-FileHash -LiteralPath $newControlPath).Hash
+ }
  $launchRecord|ConvertTo-Json|Set-Content "$EvidenceDirectory/launch.json"
  $result=Read-Deployment $launchRecord
  $result|ConvertTo-Json -Depth 10|Set-Content "$EvidenceDirectory/readback.json"

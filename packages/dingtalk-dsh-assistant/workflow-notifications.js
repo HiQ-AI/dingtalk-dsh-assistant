@@ -65,6 +65,7 @@ export function taskNotificationAllowed({ phase = '', action, report } = {}) {
     && ['create', 'reopen', 'research', 'revise'].includes(action.kind)) return false
   if (!phase.startsWith('owner:')) return true
   if (report?.applicationStatus !== 'applied') return false
+  if (report.reportType === 'repairCurrentStage') return false
   if (report.reportType === 'complete' || report.triggerTypes?.includes('workflow.confirmation.required')) return true
   if (['wait', 'block'].includes(report.reportType)) return ['business-input', 'permission'].includes(report.facts?.condition?.kind)
     && Boolean(taskDecisionConditionText(report.facts.condition))

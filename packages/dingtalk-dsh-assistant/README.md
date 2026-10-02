@@ -182,6 +182,8 @@ Task Owner 可以有持续会话，但每个 Agent 节点按 NodeRun/租约绑�
 
 Agent 只能声明 `pure/read`。结果通过 `execution_node_submit` 提交，由适配器提供，不放入 `allowedTools`。普通最终聊天文本不能推进节点；提交之后仍需 Host 核对租约、版本、schema、工件及后继输入。
 
+当前动作的失败诊断同时交给持久 Owner。`inspectCurrentExecution` 覆盖 running/blocked；领域修复优先，其他可纠正 Agent 节点由 `inspectNodeRecovery` 提供 `mode=resume-agent` 和当前绑定。Owner 读取诊断后通过既有 `repairCurrentStage` 交回修复方向，`resumeNode` 在同一节点和原生会话续行，不创建新 Task/代际，不修改用户输入。续行只准入纯读取 Agent、已排空且前后节点关系正确、输入/需求/来源版本当前、该节点无外部效果且全 Run 无未决效果；持久 `node.resume` 记录原失败及恢复上下文。相同输入/失败问题再次出现返回 `strategy-change-required`，不再自动重放。code 操作、审批等待、外部 unknown、权限/身份损坏不经此通路。重复无效 Owner 候选按既有持久退避恢复，不能据此宣布任务永久失败。
+
 ### 可运行的最小例子
 
 以下是一个纯 code 的材料整理流程，仅用于演示定义接口，不是普通问答或新增调查领域的推荐产品结构。它保留来源 ID 并做独立产物检查，不调用模型或外部服务。工厂可放入包内的新流程模块；完成附录 B 接入前，它不会自动出现在业务目录。

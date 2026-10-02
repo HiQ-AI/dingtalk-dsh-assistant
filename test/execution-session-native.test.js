@@ -101,6 +101,26 @@ async function processPhase(root, phase) {
 if (process.argv[2] === '--execution-session-child') {
   await processPhase(process.argv[3], process.argv[4])
 } else {
+  test('受管恢复携带诊断回到原生同会话，原输入和历史保持', async t => {
+    const root = await temp()
+    const first = await host({ root, script: [{ text: '本轮未能得到结论' }] })
+    assert.equal((await drive(first)).reason, 'execution_no_submission')
+    const prior = await first.ctx.sessionPersistence.inspect(binding().sessionId)
+    await first.close()
+    const next = await host({ root, script: [submit('recovered')] })
+    t.after(() => next.close())
+    const recoveryContext = { kind: 'execution-recovery-context', taskId: 'task', runId: 'run', nodeRunId: 'node',
+      strategy: '原路径没有结果，按已登记目录读取目标材料后重新判断', evidenceRefs: ['proof/diagnosis.json'] }
+    const result = await drive(next, { binding: binding({ leaseEpoch: 2, sessionBound: true }), recoveryContext })
+    assert.equal(result.status, 'submitted')
+    const saved = await next.ctx.sessionPersistence.inspect(binding().sessionId)
+    assert.deepEqual(saved.events.slice(0, prior.events.length), prior.events)
+    assert.equal(saved.events.filter(event => event.type === 'dingtalk/execution-session').length, 1)
+    const latest = saved.events.findLast(event => event.type === 'user/message' && event.data.source?.executionSession)
+    assert.deepEqual(JSON.parse(latest.data.content[0].text), { requirement: 'read and submit' })
+    assert.match(latest.data.content[1].text, /原路径没有结果/u)
+    assert.match(JSON.stringify(next.requests[0]), /本轮未能得到结论/u)
+  })
   test('原生成功查询漏引用或截短任务证据时同会话纠正，JSONL仍可重建查询集合', async t => {
     const root=await temp(),artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true,taskWorkspaceRoot:root,getTaskDirectories:async taskId=>({logicalTaskId:taskId})})
     const capability=createAgentResourceReadCapability({resources:[{id:'source',kind:'files',root,paths:['fixture.txt']}]})
@@ -147,7 +167,9 @@ if (process.argv[2] === '--execution-session-child') {
       const h=await host({script:[[{name:'engineering_repo_inspect',args:{operation:'read',path:'src/x'}},{name:'engineering_repo_inspect',args:{operation:'read',path:'src/y'}}],submit('must not submit')],repositoryInspect:async()=>{calls++;throw Object.assign(Error(code),{code})}})
       t.after(()=>h.close())
       const result=await drive(h,{definition:definition({allowedTools:['engineering_repo_inspect']})})
-      assert.deepEqual(result,{status:'no_submission',reason:'execution_tool_failed'});assert.equal(calls,1);assert.equal(h.requests.length,1)
+      assert.equal(result.status,'no_submission');assert.equal(result.reason,'execution_tool_failed')
+      assert.equal(result.failure.tool,'engineering_repo_inspect');assert.match(result.failure.message,new RegExp(code))
+      assert.equal(calls,1);assert.equal(h.requests.length,1)
     }
   })
   test('原生读取超限提示后可在同会话缩小分页并提交', async t => {
@@ -222,7 +244,7 @@ if (process.argv[2] === '--execution-session-child') {
       const h = await host({ script }); t.after(() => h.close())
       let callbacks = 0
       const result = await drive(h, { onResult: async () => { callbacks++ } })
-      assert.deepEqual(result, { status: 'no_submission', reason: expected })
+      assert.equal(result.status, 'no_submission'); assert.equal(result.reason, expected)
       await delay(60)
       assert.equal(callbacks, 0); assert.equal(h.requests.length, 1)
     }
@@ -267,7 +289,9 @@ if (process.argv[2] === '--execution-session-child') {
     const h = await host({ script: [{ name: 'execution_node_submit', args: { output: { answer: 42 } } }, submit('forbidden')] })
     t.after(() => h.close())
     h.ctx.on('tools/post-execute', async () => ({ kind: 'block', feedback: [{ type: 'text', text: 'authorization revoked' }] }))
-    assert.deepEqual(await drive(h), { status: 'no_submission', reason: 'execution_submission_rejected' })
+    const rejected = await drive(h)
+    assert.equal(rejected.status, 'no_submission'); assert.equal(rejected.reason, 'execution_submission_rejected')
+    assert.equal(rejected.failure.tool, 'execution_node_submit')
     assert.equal(h.requests.length, 1)
     const accepted = await host({ script: [[submit('first'), submit('second')]] })
     t.after(() => accepted.close())
@@ -485,7 +509,7 @@ test('受信工具安全失败中止queued调用', async t => {
   const h = await host({ tools: [{ name: 'query', description: 'query', parameters: { type: 'object' }, execute() { calls++; throw Object.assign(Error('denied'), { code: 'DENIED' }) }, classifyError: () => 'fatal' }],
     script: [[{ name: 'query' }, { name: 'query' }], submit('forbidden')] })
   t.after(() => h.close())
-  assert.deepEqual(await drive(h, { binding: messageBinding(), definition: definition({ allowedTools: ['query'] }) }), { status: 'no_submission', reason: 'execution_tool_failed' })
+  assert.deepEqual(await drive(h, { binding: messageBinding(), definition: definition({ allowedTools: ['query'] }) }), { status: 'no_submission', reason: 'execution_tool_failed', failure: { code: 'DENIED', tool: 'query', phase: 'execution', message: 'denied' } })
   assert.equal(calls, 1); assert.equal(h.requests.length, 1)
 })
 

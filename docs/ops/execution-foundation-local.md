@@ -1,5 +1,13 @@
 # 执行底座与消息工作流本地运维
 
+## 持续任务执行的运行核验
+
+持续执行改造不新增控制库 schema，沿 [普通本地部署](resident-review-local-deployment.md) 的 Check、维护排空、精确包安装、Readback、Resume；不备份历史副本。核验包 SHA256/版本、新进程和健康，再读取实际 Owner、节点和效果状态。
+
+恢复属于同一 Task 的责任闭环：可纠正 Agent 节点的 `node.resume` 事件须保留原 nodeRunId/sessionId/generation、输入摘要、旧诊断及恢复上下文；下次领取仅递增租约。成功前缀不得重跑。相同问题再次出现时应显示 `strategy-change-required` 并由 Owner 调整路径；不能手工改 SQLite 或把原外部操作换身份重发。审批 pending、未知效果、暂停、待接纳新输入及来源变化均不得通过通用续行绕过。内部恢复不应出现群进度通知，最终完成仍需独立业务验收。
+
+定义摘要继续规范换行；已落盘、曾包含maxSteps/timeoutMs的旧摘要通过既有legacyDigests恢复身份，不重新引入已移除的执行上限。部署回归须同时覆盖当前摘要和历史摘要的查找。
+
 第 1—8 节记录独立执行底座的装配与边界，第 9 节为当前 resident 消息工作流的正式切换步骤。独立入口与 resident 集成入口不能同时对同一控制库持有写者。以下 M1/M2 描述仅适用于独立装配，不代表第 9 节集成入口仍缺少消息、通知或工程适配器。
 
 M1 对应的独立执行入口 `@zzusp/dingtalk-dsh-assistant/execution`。它**不默认加载**，不读取或迁移 resident 的 Task 账；现有群消息、Web 看板和 resident 流程继续使用原入口。当前仅准入受信定义的 `pure/read` 顺序节点，用于隔离环境中的合成任务与受控读取。

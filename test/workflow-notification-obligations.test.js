@@ -5,7 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
-import { createWorkflowNotifications, notificationSilence, sameDeliveredText } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
+import { createWorkflowNotifications, notificationSilence, sameDeliveredText, taskNotificationAllowed } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
+
+test('内部修复方向即使继承确认事件也不投递到群', () => {
+  assert.equal(taskNotificationAllowed({ phase: 'owner:repair:1', report: {
+    applicationStatus: 'applied', reportType: 'repairCurrentStage', triggerTypes: ['workflow.confirmation.required'],
+  } }), false)
+})
 
 async function fixture(t, body = '请处理') {
   const dir = await mkdtemp(join(tmpdir(), 'notice-obligation-'))

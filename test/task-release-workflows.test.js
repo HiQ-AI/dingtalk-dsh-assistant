@@ -9,15 +9,36 @@ import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execu
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
-import { createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, readDataChangeCompletionEvidence, createNativeDataChangeCompletionPolicy } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
+import { createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, readScopedDataChangeCompletionEvidence, createScopedNativeDataChangeCompletionPolicy, createNativeDataChangeCompletionPolicy, readDataChangeCompletionEvidence } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
+
+import { createDataChangeTaskWorkflowV6 } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
 
 const commitSha = 'a'.repeat(40)
 
-function completionEvidenceFixture() {
+// 常量取自部署前正式包 column-delete-20261003-r23（b7fbd3a9…），不得随新策略更新。
+test('冻结v4完成策略保留部署前函数正文及原v6工作流定义摘要，新作用域使用v5', () => {
+  const sha = value => createHash('sha256').update(value).digest('hex')
+  assert.equal(sha(readDataChangeCompletionEvidence.toString()), '0561d6cea70cc25ed978fea5710adc436e7df183911313902084e075603718f3')
+  assert.equal(sha(createNativeDataChangeCompletionPolicy.toString()), 'f53d112d9cb548324b7547f83a7f7b53a07698873733bc8b03a92a98020b9581')
+  const adapter = { id: 'frozen-test', version: '1', rulesDigest: 'a'.repeat(64), pluginApproval: true,
+    nativeApproval: true, validate() {}, async readCompletion(){return {}} }
+  for (const key of ['prepareRehearsal', 'readbackRehearsal', 'inspect', 'prepareIssue', 'prepareApproval',
+    'prepareExecute', 'readback', 'readBaselineForCandidate']) adapter[key] = () => {}
+  const ownerContract = createNativeDataChangeCompletionPolicy(adapter)
+  assert.equal(ownerContract.version, '4')
+  const workflow = createDataChangeTaskWorkflowV6({ provider: 'fixture', model: 'fixture', adapter })
+  assert.equal(defineExecutionWorkflow({ ...workflow, ownerContract }).digest, '2de981104d4965b6ff44f0b3390bd21b85e8167a813bb2944dad887cda0f0f74')
+  const scoped = createScopedNativeDataChangeCompletionPolicy(adapter)
+  assert.equal(scoped.version, '5')
+  assert.notEqual(scoped.rulesDigest, ownerContract.rulesDigest)
+})
+
+function completionEvidenceFixture({ expectedChange, observedChange } = {}) {
   const target = { instance: 'production', database: 'editor', environment: 'production' }
   const applySql = 'ALTER TABLE public.process_id_temp ADD COLUMN name text;'
   const applySqlSha256 = createHash('sha256').update(applySql).digest('hex')
-  const body = { target, applySql, applySqlSha256 }, packageDigest = executionDigest(body)
+  const rows = [{ column_name: 'name', data_type: 'text', is_nullable: 'YES', column_default: null, character_maximum_length: null }]
+  const body = { target, applySql, applySqlSha256, expectedChange: expectedChange ?? JSON.stringify({ rows }) }, packageDigest = executionDigest(body)
   const identity = { runId: 'run', generation: 1, issueId: '857', planId: 'plan', sheetId: 'sheet',
     target, sheetSha256: applySqlSha256, packageDigest }
   const scopeDigest = executionDigest(identity)
@@ -28,10 +49,14 @@ function completionEvidenceFixture() {
   const request = { runId: 'run', generation: 1, workflowKind: 'data-change', stage: 'execute-task',
     target, packageDigest, applySqlSha256, approvalRequestId: 'approval', intent: { approvalScopeDigest: scopeDigest, applySql } }
   const receipt = { status: 'succeeded', result: { taskId: '905' } }
-  const final = { issueId: '857', planId: 'plan', sheetId: 'sheet', taskId: '905', taskRunId: '901', packageDigest, applySqlSha256 }
+  const final = { issueId: '857', planId: 'plan', sheetId: 'sheet', taskId: '905', taskRunId: '901', packageDigest, applySqlSha256,
+    productionReadbackId: 'original-readback', observedChange: observedChange ?? JSON.stringify(rows) }
   const outputs = { 'readback-approval': view, 'prepare-execute': { view, request }, 'execute-task': { view, request, receipt }, 'readback-production': final }
   const nodes = Object.keys(outputs).map(nodeId => ({ nodeId, nodeRunId: `${nodeId}-run`, outputRef: nodeId,
     generation: 1, status: 'succeeded', executor: 'code', drained: true, inputDigest: `${nodeId}-input` }))
+  const readbackInput = { workflowDigest: 'workflow-digest', nodeId: 'readback-production', data: structuredClone(outputs['execute-task']) }
+  const readbackNode = nodes.find(node => node.nodeId === 'readback-production')
+  Object.assign(readbackNode, { inputRef: 'readback-input', inputDigest: executionDigest(readbackInput) })
   const effects = [{ effectId: 'execute-effect', nodeId: 'execute-task', nodeRunId: 'execute-task-run', generation: 1,
     inputDigest: 'execute-task-input', state: 'succeeded', definition: { payload: request },
     result: { effectId: 'execute-effect', status: 'succeeded', evidenceRef: 'execution-receipt', result: receipt } },
@@ -41,24 +66,25 @@ function completionEvidenceFixture() {
     production: { passed: true, packageDigest }, applySql }
   let readbacks = 0
   const context = { taskId: 'task', stage: { runId: 'run', outputRef: 'readback-production' },
-    state: { run: { taskId: 'task', runId: 'run', generation: 1, status: 'succeeded' }, nodes },
-    artifacts: { async read(ref) { assert.ok(Object.hasOwn(outputs, ref)); return outputs[ref] } },
+    acceptanceItems: [{ itemId: 'current', criterion: '当前列存在', evidenceRefs: ['readback-production'] }],
+    state: { run: { taskId: 'task', runId: 'run', generation: 1, status: 'succeeded', workflowDigest: 'workflow-digest' }, nodes },
+    artifacts: { async read(ref) { if (ref === 'readback-input') return readbackInput; assert.ok(Object.hasOwn(outputs, ref)); return outputs[ref] } },
     store: { async query(query) { return query.kind === 'effect.list' ? effects : approvalProof } } }
   const adapter = { async readCompletion(input) { readbacks++; assert.equal(input.request, request); return observed } }
   return { context, adapter, outputs, effects, approvalProof, observed, get readbacks() { return readbacks } }
 }
 
 test('数据变更完成证明读取原节点、原生批准和执行效果，完成引用仅保留最终产物', async () => {
-  const f = completionEvidenceFixture(), proof = await readDataChangeCompletionEvidence(f.context, f.adapter)
+  const f = completionEvidenceFixture(), proof = await readScopedDataChangeCompletionEvidence(f.context, f.adapter)
   assert.deepEqual(proof.completionEvidenceRefs, ['readback-production'])
   assert.deepEqual(proof.nodeArtifacts.map(item => item.nodeId), Object.keys(f.outputs))
   assert.equal(proof.domainEvidence.approval, f.approvalProof)
   assert.equal(proof.domainEvidence.taskRun.id, '901')
-  const policy = createNativeDataChangeCompletionPolicy(f.adapter)
-  assert.equal(policy.version, '4')
+  const policy = createScopedNativeDataChangeCompletionPolicy(f.adapter)
+  assert.equal(policy.version, '5')
   let semantic = 0
   assert.equal(await policy.validateCompletion({ ...f.context, output: f.outputs['readback-production'],
-    acceptanceItems: [{ criterion: '已添加列' }], verifyAcceptance: async () => { semantic++; return true } }), true)
+    acceptanceItems: f.context.acceptanceItems, verifyAcceptance: async () => { semantic++; return true } }), true)
   assert.equal(semantic, 1); assert.equal(f.readbacks, 2)
 })
 
@@ -80,17 +106,42 @@ test('完成证明拒绝节点、身份、执行效果、批准范围及线上�
     ['线上SQL漂移', f => f.observed.applySql = 'different SQL', 'READBACK_INVALID'],
   ]) {
     const f = completionEvidenceFixture(); mutate(f)
-    await assert.rejects(readDataChangeCompletionEvidence(f.context, f.adapter), new RegExp(`DATA_CHANGE_COMPLETION_${code}`), name)
+    await assert.rejects(readScopedDataChangeCompletionEvidence(f.context, f.adapter), new RegExp(`DATA_CHANGE_COMPLETION_${code}`), name)
   }
 })
 
 test('驳回待修订仅交接意见，不读取线上且不能完成业务', async () => {
   const f = completionEvidenceFixture()
   f.outputs['readback-production'] = { outcome: 'needs_revision', comment: '修改字段规格' }
-  assert.equal((await readDataChangeCompletionEvidence(f.context, f.adapter)).domainEvidence.comment, '修改字段规格')
-  assert.equal(await createNativeDataChangeCompletionPolicy(f.adapter).validateCompletion({ ...f.context,
+  assert.equal((await readScopedDataChangeCompletionEvidence(f.context, f.adapter)).domainEvidence.comment, '修改字段规格')
+  assert.equal(await createScopedNativeDataChangeCompletionPolicy(f.adapter).validateCompletion({ ...f.context,
     output: f.outputs['readback-production'] }), false)
   assert.equal(f.readbacks, 0)
+})
+
+test('历史加列成果不再要求当前仍存在；当前验收及历史批准执行证明继续独立核验', async () => {
+  const f = completionEvidenceFixture()
+  f.adapter.readCompletion = async () => { throw new Error('当前已删除原列') }
+  const historical = { ...f.context, acceptanceItems: [] }
+  const proof = await readScopedDataChangeCompletionEvidence(historical, f.adapter)
+  assert.equal(proof.domainEvidence.timeScope, 'at-execution')
+  assert.equal(proof.domainEvidence.historicalReadback.observedChange, f.outputs['readback-production'].observedChange)
+  assert.equal(await createScopedNativeDataChangeCompletionPolicy(f.adapter).validateCompletion({ ...historical,
+    output: f.outputs['readback-production'], verifyAcceptance: async () => { throw new Error('历史无当前验收项') } }), true)
+  await assert.rejects(readScopedDataChangeCompletionEvidence(f.context, f.adapter), /当前已删除原列/)
+  f.effects[0].result.status = 'unknown'
+  await assert.rejects(readScopedDataChangeCompletionEvidence(historical, f.adapter), /DATA_CHANGE_COMPLETION_EFFECT_INVALID/)
+  const corrupted = completionEvidenceFixture()
+  corrupted.outputs['readback-production'].productionReadbackId = ''
+  await assert.rejects(readScopedDataChangeCompletionEvidence({ ...corrupted.context, acceptanceItems: [] }, corrupted.adapter), /DATA_CHANGE_COMPLETION_READBACK_INVALID/)
+})
+test('历史受信适配器的非JSON回查正文保留，不收窄为固定列查询协议', async () => {
+  const f = completionEvidenceFixture({ expectedChange: '业务记录更新为已归档', observedChange: '已确认记录更新为已归档' })
+  const proof = await readScopedDataChangeCompletionEvidence({ ...f.context, acceptanceItems: [] }, f.adapter)
+  assert.equal(proof.domainEvidence.historicalReadback.observedChange, '已确认记录更新为已归档')
+  assert.equal(f.readbacks, 0)
+  f.context.state.nodes.find(node => node.nodeId === 'readback-production').inputDigest = 'forged'
+  await assert.rejects(readScopedDataChangeCompletionEvidence({ ...f.context, acceptanceItems: [] }, f.adapter), /READBACK_INVALID/)
 })
 test('生产与重建旧定义摘要仍可恢复，新定义使用稳定换行摘要', () => {
   const frozenRules = '0e5ce6311e8a9d3d67e67fa22cd9422fad4b8951cd53cb93b91ddcf99ffc05c8'
@@ -102,7 +153,7 @@ test('生产与重建旧定义摘要仍可恢复，新定义使用稳定换行�
     const adapter = { id: `trusted-release-${kind}`, version: '1', rulesDigest: frozenRules,
       inspect() {}, prepareOperation() {} }
     const definition = defineExecutionWorkflow(createLegacyReleaseTaskWorkflow({ kind, adapter }))
-    assert.equal(definition.digest, stable[kind])
+    assert.ok([definition.digest, ...definition.legacyDigests].includes(stable[kind]))
     assert.ok([definition.digest, ...definition.legacyDigests].includes(digest))
   }
   const adapter = { id: 'trusted-release-production-release', version: '1', rulesDigest: frozenRules,

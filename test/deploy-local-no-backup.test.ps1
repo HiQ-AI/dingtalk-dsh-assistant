@@ -39,3 +39,83 @@ foreach($needle in @('$snapshot|Set-Content -LiteralPath "$EvidenceDirectory/con
  if(-not $text.Contains($needle)){throw "普通部署缺失原生门禁$needle"}
 }
 Write-Output 'PASS 5/5: 控制快照、owner锁、停机检查、Launch绑定、Readback门禁保留'
+
+# 使用真实文件、摘要与原生 JSON，调用实际离线修复函数；不运行安装、启动或维护写接口。
+foreach($name in @('Copy-Item','Get-ChildItem','Get-FileHash','Get-Content')){Remove-Item -LiteralPath "Function:$name" -ErrorAction SilentlyContinue}
+foreach($name in @('Assert-StoppedRepairPermit','Assert-StoppedRepairProcesses','Test-StoppedRepair','Assert-InputHashes','Restore-EnrollmentAutostart')){
+ $fn=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name-eq $name},$true)
+ Invoke-Expression $fn.Extent.Text
+}
+$fixture=Join-Path $PSScriptRoot ('../docs/tmp/no-backup-repair-'+[guid]::NewGuid())
+$profile=Join-Path $fixture 'profile';$origin=Join-Path $fixture 'origin';$EvidenceDirectory=Join-Path $fixture 'repair'
+foreach($folder in @($profile,$origin,$EvidenceDirectory)){[IO.Directory]::CreateDirectory($folder)|Out-Null}
+[IO.File]::WriteAllText("$profile/cordis.patch.yml",'unchanged profile')
+$Package=Join-Path $fixture 'repair.tgz';[IO.File]::WriteAllText($Package,'new package')
+$retainedObserverPackage=Join-Path $fixture 'observer.tgz';[IO.File]::WriteAllText($retainedObserverPackage,'same observer')
+$retainedObserverPackageSha256=(Get-FileHash -LiteralPath $retainedObserverPackage).Hash
+$ExpectedProfileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash
+$ExpectedPackageSha256=(Get-FileHash -LiteralPath $Package).Hash
+$ObserverPackage='';$ExpectedObserverPackageSha256='';$DirectQueriesProposal='';$TaskDirectory='tasks';$checker='checker';$source='source';$observerSource='observer-source';$observerInstalled='observer-installed'
+$controlPath=Join-Path $origin 'deployment-control.json'
+$backupRecord=[pscustomobject]@{backupCreated=$false;backup='';oldPid=123;sourceProfileSha256=$ExpectedProfileSha256;packageSha256='old-package'}
+$backupRecord|ConvertTo-Json|Set-Content -LiteralPath $controlPath
+$record=[pscustomobject]@{backupCreated=$false;backup='';mode='maintenance';deploymentControlPath=$controlPath;deploymentControlSha256=(Get-FileHash -LiteralPath $controlPath).Hash;profileSha256=$ExpectedProfileSha256;sourceProfileSha256=$ExpectedProfileSha256;packageSha256='old-package';maintenanceId='sealed';enrollmentAutostartRestore=$true;launcherPid=456}
+$state=[pscustomobject]@{active=$true;phase='stopping';drained=$true;maintenanceId='sealed';revision=42;sealedIncarnation='123:identity';stopPermitted=$true;busy=[pscustomobject]@{nodes=0;owners=0;effects=0;messages=0}}
+$sealed=@{state=$state};$before=@{maintenance=$state}
+Assert-StoppedRepairPermit $record $sealed $before $backupRecord $state
+$cases=0
+foreach($change in @(@{backup='forbidden'},@{mode='bootstrap'},@{taskMigrationPlan='migration'},@{taskMigrationBackupManifest='migration'},@{messageImpactMigrationSha256='migration'},@{executionEventsIndexMigrationSha256='migration'},@{profileSha256='drift'},@{deploymentControlSha256='drift'},@{packageSha256=$ExpectedPackageSha256})){
+ $changed=$record|ConvertTo-Json|ConvertFrom-Json -AsHashtable
+ foreach($key in $change.Keys){$changed[$key]=$change[$key]}
+ $rejected=$false;try{Assert-StoppedRepairPermit $changed $sealed $before $backupRecord $state}catch{$rejected=$true}
+ if(-not $rejected){throw "无备份修复必须拒绝 $($change.Keys)"};$cases++
+}
+foreach($change in @(@{active=$false},@{revision=43},@{phase='draining'},@{maintenanceId='other'},@{sealedIncarnation='124:identity'},@{drained=$false},@{busy=[pscustomobject]@{nodes=1}})){
+ $changed=$state.PSObject.Copy();foreach($key in $change.Keys){$changed.$key=$change[$key]}
+ $rejected=$false;try{Assert-StoppedRepairPermit $record $sealed $before $backupRecord $changed}catch{$rejected=$true}
+ if(-not $rejected){throw '已恢复或变化的封存许可必须拒绝'};$cases++
+}
+Write-Output "PASS $($cases+1)/$($cases+1): 无备份自启恢复许可通过；迁移/包/profile/control/维护许可漂移拒绝"
+$noBackupRepair=$true;$deploymentInputs=@($Package);$evidenceHashes=@{$controlPath=(Get-FileHash -LiteralPath $controlPath).Hash}
+$script:commands=@();$script:live=@();$script:ports=@()
+$enrollmentTaskName='fixture';$script:taskState='Disabled'
+function Get-ScheduledTask { @{State=$script:taskState} }
+function Listeners { $script:ports }
+function Get-CimInstance { $script:live }
+function Assert-LocalPackageSources {}
+function Run-Node([string[]]$Arguments){
+ $script:commands+=,$Arguments
+ switch($Arguments[1]){'maintenance' {$state|ConvertTo-Json -Depth 10} 'verify' {'{"verified":true}'} 'package' {'{"verified":true}'} default {throw '不得访问备份或执行维护写入'}}
+}
+$proof=Test-StoppedRepair
+if(-not $proof.history.verified -or $proof.backup -or @($script:commands|Where-Object {$_[1]-eq 'package' -and $_[2]-eq $retainedObserverPackage}).Count-ne 1){throw '须回查历史及原Observer，不能访问备份'}
+$script:taskState='Ready';$rejected=$false
+try{Test-StoppedRepair}catch{$rejected=$_.Exception.Message-eq '离线修复要求原自启任务仍禁用'}
+if(-not $rejected){throw '自启重新启用时不得进入离线安装'}
+$script:taskState='Disabled'
+foreach($liveCase in @(@{ports=@(3080);live=@()},@{ports=@();live=@([pscustomobject]@{ProcessId=123})},@{ports=@();live=@([pscustomobject]@{ProcessId=456})})){
+ $script:ports=$liveCase.ports;$script:live=$liveCase.live;$rejected=$false
+ try{Test-StoppedRepair}catch{$rejected=$true};if(-not $rejected){throw '监听或原进程存活必须拒绝'}
+}
+$script:ports=@();$script:live=@()
+Add-Content -LiteralPath $retainedObserverPackage 'drift'
+$rejected=$false;try{Test-StoppedRepair}catch{$rejected=$true};if(-not $rejected){throw '原Observer漂移必须拒绝'}
+Write-Output 'PASS 6/6: 实际预检回查历史/原Observer且不访问备份；自启/端口/旧PID/launcher/Observer漂移拒绝'
+$RepairStoppedLaunch=Join-Path $origin 'launch.json';$record|ConvertTo-Json|Set-Content -LiteralPath $RepairStoppedLaunch
+$evidenceHashes[$RepairStoppedLaunch]=(Get-FileHash -LiteralPath $RepairStoppedLaunch).Hash
+$inputHashes=@{$Package=$ExpectedPackageSha256};$launch=@{Id=789;StartTime=Get-Date}
+$launchAssignment=$ast.Find({param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text-eq '$launchRecord' -and $node.Extent.Text.Contains('repairOfLaunch=')},$true)
+Invoke-Expression $launchAssignment.Extent.Text
+$controlBranch=$ast.Find({param($node) $node -is [System.Management.Automation.Language.IfStatementAst] -and $node.Clauses[0].Item1.Extent.Text-eq '$noBackupRepair' -and $node.Extent.Text.Contains('$newControlPath=')},$true)
+Invoke-Expression $controlBranch.Extent.Text
+Assert-DeploymentControlRecord $launchRecord
+if($launchRecord.backupCreated-ne $false -or -not $launchRecord.enrollmentAutostartRestore -or $launchRecord.retainedObserverPackage-ne $retainedObserverPackage -or $launchRecord.observerPackage){throw '新launch必须保留无备份/自启/原Observer且不安装Observer'}
+$enrollmentTaskName='fixture';$script:taskState='Disabled';$script:enabled=0
+function Get-ScheduledTask { @{State=$script:taskState} }
+function Enable-ScheduledTask { $script:enabled++;$script:taskState='Ready' }
+Restore-EnrollmentAutostart $launchRecord
+Restore-EnrollmentAutostart $launchRecord
+if($script:enabled-ne 1){throw '精确包修复必须幂等恢复原自启'}
+Add-Content -LiteralPath $RepairStoppedLaunch ' '
+$rejected=$false;try{Assert-DeploymentControlRecord $launchRecord}catch{$rejected=$true};if(-not $rejected){throw '修复readback须拒绝原证据漂移'}
+Write-Output 'PASS 3/3: 实际launch/control生成保留原身份与自启；恢复幂等；原证据漂移在readback拒绝'
