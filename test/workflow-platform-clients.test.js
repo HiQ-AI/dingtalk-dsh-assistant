@@ -344,6 +344,29 @@ test('送审前读取原生环境执行策略，AUTO、拒读及畸形策略均�
   }
 })
 
+test('TaskRuns 原生空ProtoJSON仅完整空对象表示未执行，未知及畸形返回不能证明空列表', async () => {
+  const project = 'projects/flbn', issueId = `${project}/issues/857`, planId = `${project}/plans/878`
+  const taskId = `${planId}/rollout/stages/prod/tasks/905`
+  for (const [body, valid] of [[{}, true], [{ taskRuns: [] }, true], [null, false], [[], false],
+    [{ taskRuns: null }, false], [{ error: 'denied' }, false], [{ nextPageToken: 'next' }, false],
+    [{ taskRuns: {} }, false]]) {
+    let reads = 0, writes = 0
+    const client = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev', bytebaseToken: 'fixture',
+      fetchImpl: async (url, options = {}) => {
+        if (options.method && options.method !== 'GET') writes++
+        assert.equal(new URL(url).pathname, `/v1/${taskId}/taskRuns`)
+        reads++
+        return json(body)
+      } }).bytebase
+    client.getIssueBundle = async () => ({ task: { id: taskId, planId, status: 'NOT_STARTED' } })
+    const result = client.getTaskExecution({ project, issueId, taskId })
+    if (valid) assert.equal((await result).taskRun, null)
+    else await assert.rejects(result, /BYTEBASE_TASK_RUN_LIST_UNCONFIRMED/)
+    assert.equal(reads, 1)
+    assert.equal(writes, 0)
+  }
+})
+
 test('Bytebase Rollout 提交结果未知时禁止重发，留给只读对账', async () => {
   const project = 'projects/flbn', issueId = `${project}/issues/1`, planId = `${project}/plans/1`
   const target = { instance: 'instances/flbnpguaf',

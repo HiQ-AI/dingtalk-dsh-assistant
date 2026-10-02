@@ -3224,7 +3224,7 @@ for (const reason of ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_
     assert.equal(reads, 3); assert.equal(sends, 1)
   })
 
-for (const gate of ['repaired', 'unrepaired', 'maintenance', 'pause', 'input', 'maintenance-during-read']) test(`Bytebase 已建工单身份只读恢复 ${gate}`, async t => {
+for (const gate of ['repaired', 'protocol-repaired', 'unrepaired', 'maintenance', 'pause', 'input', 'maintenance-during-read']) test(`Bytebase 已建工单身份只读恢复 ${gate}`, async t => {
   let repaired = false, reads = 0, executionRef
   const enter = () => executionRef.store.command({ id: 'identity-maintenance', kind: 'runtime.maintenance.change', args: {
     maintenanceId: 'identity', actorId: 'owner', active: true, expectedRevision: 0, reason: 'test' } })
@@ -3234,7 +3234,10 @@ for (const gate of ['repaired', 'unrepaired', 'maintenance', 'pause', 'input', '
       reads++
       assert.equal(input.request, 'fixture')
       assert.equal(input.workflowDigest, undefined)
-      if (!repaired) throw Object.assign(Error('BYTEBASE_ISSUE_IDENTITY_UNCONFIRMED'), { code: 'BYTEBASE_ISSUE_IDENTITY_UNCONFIRMED' })
+      if (!repaired) {
+        const code = gate === 'protocol-repaired' ? 'BYTEBASE_TASK_RUN_LIST_UNCONFIRMED' : 'BYTEBASE_ISSUE_IDENTITY_UNCONFIRMED'
+        throw Object.assign(Error(code), { code })
+      }
       if (gate === 'maintenance-during-read') await enter()
       return input
     },
@@ -3255,7 +3258,7 @@ for (const gate of ['repaired', 'unrepaired', 'maintenance', 'pause', 'input', '
   assert.equal(after.run.generation, before.run.generation)
   assert.equal(after.nodes[0].nodeRunId, before.nodes[0].nodeRunId)
   assert.equal((await execution.store.query({ kind: 'effect.list', runId: task.runId })).length, 0)
-  if (gate === 'repaired') { assert.equal(after.run.status, 'succeeded'); assert.equal(reads, 3) }
+  if (['repaired', 'protocol-repaired'].includes(gate)) { assert.equal(after.run.status, 'succeeded'); assert.equal(reads, 3) }
   else { assert.notEqual(after.run.status, 'succeeded'); assert.equal(reads, ['unrepaired', 'maintenance-during-read'].includes(gate) ? 2 : 1) }
 })
 

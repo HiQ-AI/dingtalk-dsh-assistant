@@ -360,7 +360,8 @@ for (const [automatic, precreated] of [[false, false], [true, false], [false, tr
       const taskId = `${project}/plans/900/rollout/stages/prod/tasks/1`
       if (path.endsWith('/rollout')) return response({ name: `${plan.name}/rollout`, stages: [{ environment: 'environments/prod',
         tasks: [{ name: taskId, specId: plan.specs[0].id, target: exactTarget.database, databaseUpdate: { sheet: sheet.name }, status: ran ? 'DONE' : 'NOT_STARTED' }] }] })
-      if (path.endsWith('/taskRuns')) return response({ taskRuns: ran ? [{ name: `${taskId}/taskRuns/1`, status: 'DONE' }] : [] })
+      if (path.endsWith('/taskRuns')) return response(ran ? { taskRuns: [{ name: `${taskId}/taskRuns/1`, status: 'DONE' }] }
+        : precreated ? {} : { taskRuns: [] })
       if (path === `/v1/${project}/plans/900`) return response(plan)
       if (path === `/v1/${project}/sheets/900`) return response(sheet)
       throw Error(`UNEXPECTED_BYTEBASE_READ:${path}`)

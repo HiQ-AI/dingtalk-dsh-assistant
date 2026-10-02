@@ -7,3 +7,5 @@
 服务沿既有recover入口，先用冻结readback-issue只读节点核验既有工单，再恢复原节点；核对输入封套摘要、workflow/node身份、代际/租约、排空、任务控制、维护和未知效果，拒绝变化期间恢复。15项服务恢复与屏障及59项平台回归待最终统计回读。当前尚未部署第六包，原Task仍等待身份校验修复。
 
 最终代码六平台模块59/59、服务恢复/审批/维护控制屏障15/15通过；此前277项含过程中导入旧源码，仅作为过程验证，不算本轮最终统计。真实生产发布策略已独立回读name=environments/prod/policies/rollout_policy、rolloutPolicy={}，按proto3为manual。
+
+第六包100文件SHA256 9547eac3b5d085bb5bec99f990104359cacc4721d9f7441c38a36ded6c4c7021正式安装，PID18856与Resume通过，延迟health=ok/inboundProcessing=true。真实只读恢复仍失败：TaskRun空响应实际为{}，客户端强制taskRuns数组，错误BYTEBASE_TASK_RUN_LIST_UNCONFIRMED在恢复证明阶段拒绝。原工单857、Task905和候选保持，仍未执行。此协议反证保留；源码测试的显式空数组不能代替真实空ProtoJSON响应。

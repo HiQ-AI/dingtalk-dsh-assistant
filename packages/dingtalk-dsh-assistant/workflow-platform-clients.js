@@ -463,6 +463,8 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
     for (let page = 0; page < 100; page++) {
       const suffix = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''
       const body = await bytebaseRequest(`/v1/${taskId}/taskRuns?pageSize=1000${suffix}`)
+      // ProtoJSON 默认省略空 repeated 字段；只有完整空对象能证明原生空列表。
+      if (body && Object.getPrototypeOf(body) === Object.prototype && Object.keys(body).length === 0) return rows
       if (!Array.isArray(body?.taskRuns)) fail('BYTEBASE_TASK_RUN_LIST_UNCONFIRMED')
       rows.push(...body.taskRuns)
       if (!body.nextPageToken) return rows

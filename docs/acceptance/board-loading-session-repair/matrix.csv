@@ -32,3 +32,6 @@ simple-table-baseline-contract,8,PASS,round-8.md
 safe-rejected-source-plan-recovery,8,PASS,round-8.md
 same-task-live-submission,8,PASS,round-8.md
 native-precreated-task-readback,8,FAIL,round-8.md
+native-precreated-task-contract,9,PASS,round-9.md
+native-readback-recovery-controls,9,PASS,round-9.md
+native-proto-empty-taskruns,9,FAIL,round-9.md

@@ -2892,7 +2892,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           if (waiting.length !== 1) continue
           if (node.waitReason?.reference === 'AGENT_WORK_NEEDS_INPUT') { await ensureInvestigationMessageRequest(run.runId); continue }
           if (run.workflowId === 'task-data-change' && node.nodeId === 'readback-issue'
-            && ['BYTEBASE_ISSUE_IDENTITY_UNCONFIRMED', 'DATA_CHANGE_ISSUE_READBACK_UNCONFIRMED'].includes(node.waitReason?.reference)) {
+            && node.waitReason?.kind === 'recovery') {
             const definition = controller.workflowDefinition(run.workflowId, run.workflowDigest)
             const readback = definition.nodes.find(item => item.id === node.nodeId)
             const eligible = async current => !(await store.query({ kind: 'runtime.maintenance' })).active
