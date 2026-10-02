@@ -85,3 +85,5 @@ Agent工作区D:/baibu-agent，运行profile D:/dsh_home/profiles/web，API18998
 第四包PID26212与100文件a7db1a263a0088cfa5f92848fbcf759dcf9549b1be68437b717a6cc91752b794独立回读/Resume通过。原Task恢复反证：拒绝旧accepted/blocked的未落账计划决定使readonly重评被TASK_OWNER_REASSESS_FORBIDDEN挡住；正在补已核验来源、零effects、仅调查与无计划receipt的审计恢复边界，需求r2保持。
 
 第八轮：已核验来源的零效果拒绝计划审计恢复回归通过；创建/执行身份与真实审批收据跨层修正45项通过，等待审批投影4项通过。审查发现简单加列全库基线仍为隐含前置，正在按明确候选目标表收敛；部署尚未开始，原Task r2保持，实际工单未提交。
+
+第八轮真实工单857已创建、SQL和目标独立一致；未执行，真实Task905 NOT_STARTED、TaskRuns空、生产只读name列空。但原生自动创建未执行Task/DONE被旧假设拒绝，运行验收FAIL。第九轮修正原生语义，原857只读恢复且不重建；新增送审前manual发布策略保护及冻结只读节点恢复。管理员启用审批规则后须重新送审，不承诺旧SKIPPED自动获得模板。

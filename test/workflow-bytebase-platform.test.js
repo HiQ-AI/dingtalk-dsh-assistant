@@ -270,6 +270,26 @@ test('原生审批区分等待、SKIPPED 与真人决定，不调用 Assistant �
   assert.equal(f.calls.includes('run-task'), false)
 })
 
+test('原生工单已有未执行Task仅独立回读接纳，任何TaskRun或已执行状态拒绝', async () => {
+  for (const mode of ['unstarted', 'pending-run', 'done']) {
+    let reads = 0
+    const f = fixture({ api: { async getIssueApproval() {},
+      async getIssueBundle() { return { issue: f.issue, sheet: f.sheet, plan: f.plan,
+        task: { ...f.task, status: mode === 'done' ? 'DONE' : 'NOT_STARTED' } } },
+      async getTaskExecution() { reads++; return { task: { ...f.task, status: mode === 'done' ? 'DONE' : 'NOT_STARTED' },
+        taskRun: mode === 'pending-run' ? { id: 'run', taskId: f.task.id, status: 'PENDING' } : null } } } })
+    const identity = { runId: 'run', generation: 1, requirementDigest: sha('requirement') }
+    const intent = await f.workflowAdapter.prepareIssue({ prepared, ...identity })
+    f.issue.operationKey = intent.operationKey
+    const request = { ...identity, action: 'external', workflowKind: 'data-change', stage: 'create-issue',
+      target, packageDigest: pkg.validation.packageDigest, applySqlSha256: pkg.applySqlSha256, intent }
+    const read = f.workflowAdapter.readback({ stage: 'create-issue', request, receipt: { status: 'succeeded', result: { issueId: f.issue.id } } })
+    if (mode === 'unstarted') { const view = await read; assert.equal(view.issue.id, f.issue.id); assert.equal(view.task, undefined); assert.equal(reads, 1) }
+    else await assert.rejects(read, { code: 'BYTEBASE_PREAPPROVAL_EXECUTION_DETECTED' })
+    assert.ok(!f.calls.includes('run-task'))
+  }
+})
+
 test('简单加列仅做生产只读前置核对，其他 SQL 继续演练', async () => {
   const f = fixture({ config: { ...config, targets: [{ project: 'projects/app', target }] },
     api: { async getIssueApproval() {} }, uatApi: { getDatabase: undefined, readBaseline: undefined,

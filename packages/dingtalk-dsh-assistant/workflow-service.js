@@ -2711,7 +2711,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         waitingCondition = { kind: unconfigured ? 'capability' : 'approval',
           missing: unconfigured ? `Bytebase 工单 ${issueId} 未启用真人审批（SKIPPED）` : `Bytebase 工单 ${issueId} 的真人审批结果`,
           responsibleParty: unconfigured ? 'Bytebase 管理员' : 'Bytebase 审批人',
-          resumeWhen: unconfigured ? '在 Bytebase 配置并发起本工单的真人审批后继续' : '批准后执行；驳回后按意见修改并重新送审',
+          resumeWhen: unconfigured ? 'Bytebase 管理员启用原生人工审批规则，并重新送审本次精确 SQL；SKIPPED 工单不能直接执行' : '批准后执行；驳回后按意见修改并重新送审',
           evidenceRefs: approvalNode.outputRef ? [approvalNode.outputRef] : [] }
       }
       const states = new Map(run ? [[run.runId, state]] : [])
@@ -2891,7 +2891,28 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           const waiting = state.nodes?.filter(node => node.status === 'waiting') ?? [], node = waiting[0]
           if (waiting.length !== 1) continue
           if (node.waitReason?.reference === 'AGENT_WORK_NEEDS_INPUT') { await ensureInvestigationMessageRequest(run.runId); continue }
-          if (['DELIVERY_RECONCILIATION_REQUIRED', 'BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'].includes(node.waitReason?.reference)) {
+          if (run.workflowId === 'task-data-change' && node.nodeId === 'readback-issue'
+            && ['BYTEBASE_ISSUE_IDENTITY_UNCONFIRMED', 'DATA_CHANGE_ISSUE_READBACK_UNCONFIRMED'].includes(node.waitReason?.reference)) {
+            const definition = controller.workflowDefinition(run.workflowId, run.workflowDigest)
+            const readback = definition.nodes.find(item => item.id === node.nodeId)
+            const eligible = async current => !(await store.query({ kind: 'runtime.maintenance' })).active
+              && current.run.status === 'waiting' && current.run.generation === state.run.generation
+              && current.run.revision === state.run.revision && !current.run.pauseRequested && !current.run.stopRequested
+              && !current.pendingInputCount && current.nodes.every(item => item.drained)
+              && current.nodes.filter(item => item.status === 'waiting').length === 1
+              && current.nodes.some(item => item.nodeRunId === node.nodeRunId && item.status === 'waiting'
+                && item.leaseEpoch === node.leaseEpoch && item.inputDigest === node.inputDigest
+                && item.waitReason?.reference === node.waitReason?.reference)
+              && !(await store.query({ kind: 'effect.list', runId: run.runId })).some(effect => !['succeeded', 'failed'].includes(effect.state))
+              && (await store.query({ kind: 'task.plan', taskId: run.taskId }))?.task.controlState === 'active'
+            if (!['4', '5'].includes(definition.version) || readback.executor !== 'code'
+              || readback.allowedEffects.length !== 1 || readback.allowedEffects[0] !== 'read' || !await eligible(state)) continue
+            const input = await artifacts.read(node.inputRef)
+            if (executionDigest(input) !== node.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== node.nodeId) continue
+            // 先用冻结的只读节点重新证明既有工单身份；成功后只恢复该节点，不重发建单。
+            await readback.execute({ input: structuredClone(input.data), signal: new AbortController().signal })
+            if (!await eligible(await store.query({ kind: 'run', runId: run.runId }))) continue
+          } else if (['DELIVERY_RECONCILIATION_REQUIRED', 'BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED'].includes(node.waitReason?.reference)) {
             const eligible = async current => {
               const plan = await store.query({ kind: 'task.plan', taskId: run.taskId })
               return !(await store.query({ kind: 'runtime.maintenance' })).active

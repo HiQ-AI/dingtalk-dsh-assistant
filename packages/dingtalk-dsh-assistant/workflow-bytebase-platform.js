@@ -74,14 +74,24 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
       && /^[a-f0-9]{64}$/.test(result.schemaProofDigest ?? ''), 'BYTEBASE_PRECONDITIONS_UNCONFIRMED')
     return result
   }
-  const issueBundle = (bundle, { project, target, sqlSha256, packageDigest, operationKey }) => {
-    const { issue, sheet, plan, task } = bundle ?? {}
+  const assertUnstartedTask = async (bundle, project) => {
+    if (!bundle.task) return
+    required(nativeApproval && bundle.task.planId === bundle.plan.id && bundle.task.status === 'NOT_STARTED',
+      'BYTEBASE_PREAPPROVAL_EXECUTION_DETECTED')
+    const execution = await api.getTaskExecution({ project, issueId: bundle.issue.id, taskId: bundle.task.id })
+    required(execution?.task?.id === bundle.task.id && execution.task.planId === bundle.plan.id
+      && execution.task.status === 'NOT_STARTED' && execution.taskRun === null,
+    'BYTEBASE_PREAPPROVAL_EXECUTION_DETECTED')
+  }
+  const issueBundle = async (bundle, { project, target, sqlSha256, packageDigest, operationKey }) => {
+      const { issue, sheet, plan } = bundle ?? {}
     required(nonempty(issue?.id) && nonempty(sheet?.id) && nonempty(plan?.id)
       && issue.project === project && issue.planId === plan.id
       && issue.operationKey === operationKey && issue.packageDigest === packageDigest
       && sheet.project === project && sheet.sha256 === sqlSha256 && exactTarget(sheet.target, target)
-      && plan.project === project && plan.sheetId === sheet.id && !task,
+      && plan.project === project && plan.sheetId === sheet.id,
     'BYTEBASE_ISSUE_IDENTITY_UNCONFIRMED')
+    await assertUnstartedTask(bundle, project)
     return { issue: { id: issue.id, planId: plan.id },
       sheet: { id: sheet.id, sha256: sheet.sha256, target: sheet.target },
       plan: { id: plan.id, sheetId: sheet.id } }
@@ -343,8 +353,8 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
       const bundle = await api.getIssueBundle({ project: entry.project, issueId: issue.id, signal })
       required(bundle?.issue?.id === issue.id && bundle?.issue?.packageDigest === pkg.validation.packageDigest
         && bundle?.sheet?.sha256 === sheet.sha256 && exactTarget(bundle.sheet.target, pkg.target)
-        && bundle?.plan?.id === plan.id && bundle?.plan?.sheetId === sheet.id
-        && !bundle.task, 'BYTEBASE_PREFLIGHT_CHANGED')
+        && bundle?.plan?.id === plan.id && bundle?.plan?.sheetId === sheet.id, 'BYTEBASE_PREFLIGHT_CHANGED')
+      await assertUnstartedTask(bundle, entry.project)
       return { sheet, plan }
     },
     async prepareExecute({ identity, issue, approval, prepared, signal }) {
@@ -424,7 +434,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
         required(sha(request.intent.applySql) === request.applySqlSha256,
           'BYTEBASE_SQL_IDENTITY_CHANGED')
         const result = await api.createIssueBundle({ ...request.intent, signal: undefined })
-        const view = issueBundle(result, { project: entry.project, target: request.target,
+        const view = await issueBundle(result, { project: entry.project, target: request.target,
           sqlSha256: request.applySqlSha256, packageDigest: request.packageDigest,
           operationKey: request.intent.operationKey })
         return { status: 'succeeded', result: { issueId: view.issue.id } }
@@ -488,7 +498,7 @@ export function createBytebaseDataChangePlatform({ config, api, productionApi, u
         const found = await api.findIssueByOperationKey({ project: entry.project,
           operationKey: request.intent.operationKey })
         if (!found) return { status: 'unknown', reason: 'issue_not_observed' }
-        const view = issueBundle(found, { project: entry.project, target: request.target,
+        const view = await issueBundle(found, { project: entry.project, target: request.target,
           sqlSha256: request.applySqlSha256, packageDigest: request.packageDigest,
           operationKey: request.intent.operationKey })
         return { status: 'succeeded', result: { issueId: view.issue.id } }

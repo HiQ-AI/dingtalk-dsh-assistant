@@ -567,8 +567,8 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
     await controller.whenIdle(original.runId)
     await controller.advanceTaskPlan(original.taskId)
     await service.recoverExecutionTasks()
-    const workflowId = 'fixture-code-operation'
-    controller.registerWorkflow({ id: workflowId, version: '1', nodes: [
+    const workflowId = options.codeWorkflowId ?? 'fixture-code-operation'
+    controller.registerWorkflow({ id: workflowId, version: options.codeWorkflowVersion ?? '1', nodes: [
       { id: options.nodeId ?? 'analyze', version: '1', executor: 'code', allowedEffects: options.allowedEffects ?? ['pure'],
         inputSchema: schema, outputSchema: schema, mapInput: ({ requirement }) => requirement,
         execute: options.execute }, ...(options.extraNodes ?? [])] })
@@ -3208,6 +3208,7 @@ for (const reason of ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_
     assert.deepEqual(await service.recoverExecutionTasks(), [])
     assert.equal((await service.tasks())[0].waitingCondition.kind, "capability")
     assert.match((await service.tasks())[0].waitingReason, /Bytebase 管理员/u)
+    assert.match((await service.tasks())[0].waitingCondition.resumeWhen, /重新送审/u)
     assert.equal(production, 0); assert.equal(sends, 1)
     observed = true
     assert.deepEqual(await service.recoverExecutionTasks(), [])
@@ -3222,6 +3223,41 @@ for (const reason of ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_
     await service.recoverExecutionTasks(); await execution.controller.whenIdle(task.runId)
     assert.equal(reads, 3); assert.equal(sends, 1)
   })
+
+for (const gate of ['repaired', 'unrepaired', 'maintenance', 'pause', 'input', 'maintenance-during-read']) test(`Bytebase 已建工单身份只读恢复 ${gate}`, async t => {
+  let repaired = false, reads = 0, executionRef
+  const enter = () => executionRef.store.command({ id: 'identity-maintenance', kind: 'runtime.maintenance.change', args: {
+    maintenanceId: 'identity', actorId: 'owner', active: true, expectedRevision: 0, reason: 'test' } })
+  const { service, execution, startCodeTask } = await fixture(t, 'owner', undefined, {
+    codeWorkflowId: 'task-data-change', codeWorkflowVersion: '5', nodeId: 'readback-issue', allowedEffects: ['read'],
+    execute: async ({ input }) => {
+      reads++
+      assert.equal(input.request, 'fixture')
+      assert.equal(input.workflowDigest, undefined)
+      if (!repaired) throw Object.assign(Error('BYTEBASE_ISSUE_IDENTITY_UNCONFIRMED'), { code: 'BYTEBASE_ISSUE_IDENTITY_UNCONFIRMED' })
+      if (gate === 'maintenance-during-read') await enter()
+      return input
+    },
+  })
+  executionRef = execution
+  const task = await startCodeTask(), before = await execution.controller.whenIdle(task.runId)
+  assert.equal(before.run.status, 'waiting')
+  repaired = gate !== 'unrepaired'
+  if (gate === 'maintenance') await enter()
+  if (gate === 'pause') await execution.store.command({ id: 'identity-pause', kind: 'run.pause', args: { runId: task.runId, reason: 'test' } })
+  if (gate === 'input') {
+    const replacement = await execution.artifacts.put({ request: 'changed' })
+    await execution.store.command({ id: 'identity-input', kind: 'input.accept', args: {
+      runId: task.runId, inputId: 'identity', sourceKey: 'web:identity', requirementRef: replacement.ref } })
+  }
+  await service.recoverExecutionTasks()
+  const after = await execution.controller.whenIdle(task.runId)
+  assert.equal(after.run.generation, before.run.generation)
+  assert.equal(after.nodes[0].nodeRunId, before.nodes[0].nodeRunId)
+  assert.equal((await execution.store.query({ kind: 'effect.list', runId: task.runId })).length, 0)
+  if (gate === 'repaired') { assert.equal(after.run.status, 'succeeded'); assert.equal(reads, 3) }
+  else { assert.notEqual(after.run.status, 'succeeded'); assert.equal(reads, ['unrepaired', 'maintenance-during-read'].includes(gate) ? 2 : 1) }
+})
 
 for (const gate of ['maintenance', 'pause', 'stop', 'input', 'maintenance-during-read']) test(`交付只读恢复屏障 ${gate}`, async t => {
   let sends = 0, reads = 0, executionRef

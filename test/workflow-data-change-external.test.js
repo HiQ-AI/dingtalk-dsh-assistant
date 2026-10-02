@@ -304,7 +304,7 @@ test('两轮驳回的后继阶段消费具体意见和旧工单身份，不重�
   }
 })
 
-for (const automatic of [false, true]) test(`真实 StageContract、生产 Host 和 Bytebase client 全路径送审、批准执行、列回读 auto=${automatic}`, async t => {
+for (const [automatic, precreated] of [[false, false], [true, false], [false, true]]) test(`真实 StageContract、生产 Host 和 Bytebase client 全路径送审、批准执行、列回读 auto=${automatic} precreated=${precreated}`, async t => {
   const project = 'projects/flbn', exactTarget = { instance: 'instances/flbnpguaf',
     database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
   const applySql = 'ALTER TABLE public.process_id_temp ADD COLUMN name character varying;'
@@ -343,15 +343,17 @@ for (const automatic of [false, true]) test(`真实 StageContract、生产 Host 
         writes.push(path)
         if (path.endsWith('/sheets')) { sheet = { ...body, name: `${project}/sheets/900` }; return response(sheet) }
         if (path.endsWith('/plans')) { plan = { ...body, name: `${project}/plans/900`, hasRollout: false }; return response(plan) }
-        if (path.endsWith('/issues')) { issue = { ...body, name: `${project}/issues/900`, status: 'OPEN', approvalStatus: 'PENDING' }; plan.issue = issue.name; return response(issue) }
+        if (path.endsWith('/issues')) { issue = { ...body, name: `${project}/issues/900`, status: precreated ? 'DONE' : 'OPEN', approvalStatus: precreated ? 'SKIPPED' : 'PENDING' }; plan.issue = issue.name; if (precreated) plan.hasRollout = true; return response(issue) }
         if (path.endsWith('/rollout')) { plan.hasRollout = true; if (automatic) ran = true; return response({ name: `${plan.name}/rollout` }) }
         if (path.endsWith('/tasks:batchRun')) { ran = true; return response({}) }
         throw Error(`UNEXPECTED_BYTEBASE_WRITE:${path}`)
       }
       if (path === `/v1/${exactTarget.database}`) return response({ name: exactTarget.database, project,
         instanceResource: { name: exactTarget.instance }, effectiveEnvironment: 'environments/prod' })
+      if (path === '/v1/environments/prod/policies/rollout_policy') return response({ name: 'environments/prod/policies/rollout_policy',
+        type: 'ROLLOUT_POLICY', resourceType: 'ENVIRONMENT', rolloutPolicy: { automatic: false } })
       if (path === `/v1/${project}/issues`) return response({ issues: issue ? [issue] : [] })
-      if (path === `/v1/${project}/issues/900`) return response({ ...issue, approvalStatus: approved ? 'APPROVED' : 'PENDING',
+      if (path === `/v1/${project}/issues/900`) return response({ ...issue, approvalStatus: approved ? 'APPROVED' : issue.approvalStatus,
         approvers: approved ? [{ principal: 'users/reviewer', status: 'APPROVED' }] : [] })
       if (path.endsWith('/issueComments')) return response({ issueComments: [{ name: `${issue.name}/issueComments/approval-1`,
         creator: 'users/reviewer', createTime: '2026-10-02T01:00:00Z', approval: { status: 'APPROVED' }, comment: '同意新增 name' }] })
@@ -398,11 +400,11 @@ for (const automatic of [false, true]) test(`真实 StageContract、生产 Host 
   await controller.createRun({ commandId: 'real-contract-create', runId: 'real-contract-run', taskId: 'same-production-task',
     workflowId: workflow.id, input: prepared.input })
   const state = await controller.whenIdle('real-contract-run')
-  assert.equal(state.nodes[10].waitReason?.reference, 'BYTEBASE_APPROVAL_PENDING', JSON.stringify(state.nodes.map(node => [node.nodeId,node.waitReason])))
+  assert.equal(state.nodes[10].waitReason?.reference, precreated ? 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED' : 'BYTEBASE_APPROVAL_PENDING', JSON.stringify(state.nodes.map(node => [node.nodeId,node.waitReason])))
   assert.deepEqual(writes, [`/v1/${project}/sheets`, `/v1/${project}/plans`, `/v1/${project}/issues`])
   assert.equal(Buffer.from(sheet.content, 'base64').toString('utf8'), applySql)
   assert.deepEqual(plan.specs[0].changeDatabaseConfig.targets, [exactTarget.database])
-  assert.equal(issue.approvalStatus, 'PENDING')
+  assert.equal(issue.approvalStatus, precreated ? 'SKIPPED' : 'PENDING')
   assert.equal((await store.query({ kind: 'approval.list' })).length, 0)
   assert.equal(queries.filter(item => item.sql.includes('AS column_exists')).length, 1)
   assert.equal(queries.some(item => /^\s*(ALTER|UPDATE|DELETE|INSERT)\b/i.test(item.sql)), false)
@@ -415,7 +417,7 @@ for (const automatic of [false, true]) test(`真实 StageContract、生产 Host 
   await controller.recover({ commandId: 'real-contract-approved', runId: 'real-contract-run' })
   const completed = await controller.whenIdle('real-contract-run')
   assert.equal(completed.run.status, 'succeeded', JSON.stringify(completed.nodes.map(node => [node.nodeId,node.waitReason])))
-  assert.equal(writes.filter(path => path.endsWith('/rollout')).length, 1)
+  assert.equal(writes.filter(path => path.endsWith('/rollout')).length, precreated ? 0 : 1)
   assert.equal(writes.filter(path => path.endsWith('/tasks:batchRun')).length, automatic ? 0 : 1)
   const result = await artifacts.read(completed.nodes.at(-1).outputRef)
   assert.equal(result.taskRunId, `${plan.name}/rollout/stages/prod/tasks/1/taskRuns/1`)

@@ -545,15 +545,15 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
         || executionDigest(bundle.sheet.target) !== executionDigest(target)
         || !/^[a-f0-9]{64}$/.test(scopeDigest ?? '')) fail('BYTEBASE_APPROVAL_IDENTITY_CHANGED')
       const issue = await bytebaseRequest(`/v1/${issueId}`)
-      if (issue.name !== issueId || issue.plan !== planId || issue.status !== 'OPEN')
-        fail('BYTEBASE_APPROVAL_ISSUE_NOT_OPEN')
+      if (issue.name !== issueId || issue.plan !== planId || !['OPEN', 'DONE'].includes(issue.status))
+        fail('BYTEBASE_APPROVAL_ISSUE_NOT_ACTIVE')
       const binding = { source: 'bytebase', human: false, issueId, planId, sheetId, target,
         sheetSha256, packageDigest, scopeDigest,
         requestId: issueId, evidenceRef: evidence('bytebase-approval', `${issueId}:${issue.updateTime ?? ''}`) }
       if (['PENDING', 'CHECKING'].includes(issue.approvalStatus))
         return { ...binding, decision: 'pending', comment: '等待 Bytebase 真人审批' }
       if (issue.approvalStatus === 'SKIPPED')
-        return { ...binding, decision: 'unconfigured', comment: 'Bytebase 未要求真人审批（SKIPPED）；须为本次工单启用人工审批后才能执行' }
+        return { ...binding, decision: 'unconfigured', comment: 'Bytebase 未要求真人审批（SKIPPED）；须由管理员启用原生人工审批规则并重新送审本次精确 SQL，SKIPPED 工单不能直接执行' }
       if (!['APPROVED', 'REJECTED'].includes(issue.approvalStatus)) fail('BYTEBASE_APPROVAL_STATUS_UNCONFIRMED')
       const comments = [], seen = new Set()
       let pageToken = ''
@@ -595,6 +595,20 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       if (!rows.length) return null
       return this.getIssueBundle({ project, issueId: rows[0].name })
     },
+    async getRolloutPolicy({ project, target }) {
+      await this.getDatabase({ project, target })
+      if (target.environment !== 'production') fail('BYTEBASE_ROLLOUT_ENVIRONMENT_UNCONFIRMED')
+      const name = 'environments/prod/policies/rollout_policy'
+      let policy
+      try { policy = await bytebaseRequest(`/v1/${name}`) }
+      catch { fail('BYTEBASE_ROLLOUT_POLICY_UNCONFIRMED') }
+      if (policy?.name !== name || policy.type !== 'ROLLOUT_POLICY' || policy.resourceType !== 'ENVIRONMENT'
+        || !policy.rolloutPolicy || typeof policy.rolloutPolicy !== 'object'
+        || ![undefined, true, false].includes(policy.rolloutPolicy.automatic)) fail('BYTEBASE_ROLLOUT_POLICY_UNCONFIRMED')
+      // Proto3 boolean 缺省为 false；这是服务器原生默认手动策略，不是请求失败兜底。
+      return { name, automatic: policy.rolloutPolicy.automatic === true,
+        evidenceRef: evidence('bytebase-rollout-policy', `${name}:${executionDigest(policy)}`) }
+    },
     async createIssueBundle({ project, target, operationKey, packageDigest,
       applySqlSha256, applySql, previousIssueId, proposalSummary }) {
       bytebaseTarget(project, target)
@@ -612,6 +626,8 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
           fail('BYTEBASE_REVISION_SOURCE_UNCONFIRMED')
       }
       if (bytebaseIssueAttempts.has(operationKey)) fail('BYTEBASE_CREATE_RESULT_UNKNOWN')
+      const policy = await this.getRolloutPolicy({ project, target })
+      if (policy.automatic) fail('BYTEBASE_AUTOMATIC_ROLLOUT_NOT_ALLOWED_FOR_REVIEW')
       bytebaseIssueAttempts.add(operationKey)
       // Sheet/Plan/Rollout/Issue 不是原子 API。任一步结果未知由外部效果账只读对账，绝不自动重发。
       const sheetRow = await bytebaseRequest(`/v1/${project}/sheets`, { method: 'POST',

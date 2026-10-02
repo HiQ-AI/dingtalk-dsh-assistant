@@ -9,7 +9,7 @@ const json = body => ({ ok: true, json: async () => body })
 const target = { repository: 'HiQ-AI/dataset', branch: 'feature/uat3-base',
   woodpecker: { baseUrl: 'https://woodpecker.hiqdat.dev', repositoryId: 4, cronName: 'dataset-uat3-poll' } }
 
-function approvalFixture({ status = 'APPROVED', comments, approvers, revisedSql = false, repeatToken = false } = {}) {
+function approvalFixture({ status = 'APPROVED', issueStatus = 'OPEN', comments, approvers, revisedSql = false, repeatToken = false } = {}) {
   const project = 'projects/flbn', issueId = `${project}/issues/1`, planId = `${project}/plans/1`, sheetId = `${project}/sheets/1`
   const target = { instance: 'instances/flbnpguaf', database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
   const sql = 'ALTER TABLE public.t ADD COLUMN label character varying;'
@@ -23,7 +23,7 @@ function approvalFixture({ status = 'APPROVED', comments, approvers, revisedSql 
       if (options.method && options.method !== 'GET') writes++
       const path = new URL(url).pathname
       if (path.endsWith('/issueComments')) return json({ issueComments: rows, ...(repeatToken ? { nextPageToken: 'repeat' } : {}) })
-      if (path.endsWith('/issues/1')) return json({ name: issueId, plan: planId, status: 'OPEN', type: 'DATABASE_CHANGE',
+      if (path.endsWith('/issues/1')) return json({ name: issueId, plan: planId, status: issueStatus, type: 'DATABASE_CHANGE',
         title, description: JSON.stringify({ operationKey, packageDigest, applySqlSha256: sheetSha256, target }),
         approvalStatus: status, approvers: approvers ?? [{ principal: 'users/reviewer@example.test', status }] })
       if (path.endsWith('/plans/1')) return json({ name: planId, issue: issueId, title,
@@ -53,6 +53,10 @@ test('Bytebase pending 和 SKIPPED 区分待审与未配置，均无真人批准
     assert.equal(view.human, false)
     assert.equal(fixture.writes(), 0)
   }
+  const done = approvalFixture({ status: 'SKIPPED', issueStatus: 'DONE' })
+  assert.equal((await done.client.getIssueApproval(done.input)).decision, 'unconfigured')
+  const canceled = approvalFixture({ status: 'APPROVED', issueStatus: 'CANCELED' })
+  await assert.rejects(canceled.client.getIssueApproval(canceled.input), /BYTEBASE_APPROVAL_ISSUE_NOT_ACTIVE/)
 })
 
 test('Bytebase 驳回返回真实意见及审批事件，供修订后重新送审', async () => {
@@ -228,6 +232,10 @@ test('Bytebase 工单以 operationKey 唯一对账，执行前检查任务且独
     const path = new URL(url).pathname
     const method = options.method ?? 'GET'
     if (method === 'POST') writes.push(path)
+    if (path === `/v1/${target.database}`) return json({ name: target.database, project,
+      instanceResource: { name: target.instance }, effectiveEnvironment: 'environments/prod' })
+    if (path === '/v1/environments/prod/policies/rollout_policy') return json({ name: 'environments/prod/policies/rollout_policy',
+      type: 'ROLLOUT_POLICY', resourceType: 'ENVIRONMENT', rolloutPolicy: { automatic: false } })
     if (path.endsWith('/issues') && method === 'GET') return json({ issues: created
       ? [{ name: issueId, title }] : [] })
     if (path.endsWith('/sheets') && method === 'POST') return json({ name: sheetId })
@@ -294,6 +302,11 @@ test('Bytebase 工单首步结果未知时拒绝再次发送写请求', async ()
   const client = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev',
     bytebaseToken: 'fixture-token', fetchImpl: async (url, options = {}) => {
       if (options.method === 'POST') { writes++; throw new Error('uncertain') }
+      const path = new URL(url).pathname
+      if (path === `/v1/${target.database}`) return json({ name: target.database, project,
+        instanceResource: { name: target.instance }, effectiveEnvironment: 'environments/prod' })
+      if (path === '/v1/environments/prod/policies/rollout_policy') return json({ name: 'environments/prod/policies/rollout_policy',
+        type: 'ROLLOUT_POLICY', resourceType: 'ENVIRONMENT', rolloutPolicy: { automatic: false } })
       return json({ issues: [] })
     } }).bytebase
   const applySql = 'UPDATE public.t SET v = 2 WHERE id = 1'
@@ -302,6 +315,33 @@ test('Bytebase 工单首步结果未知时拒绝再次发送写请求', async ()
   await assert.rejects(client.createIssueBundle(request), /PLATFORM_REQUEST_FAILED/)
   await assert.rejects(client.createIssueBundle(request), /BYTEBASE_CREATE_RESULT_UNKNOWN/)
   assert.equal(writes, 1)
+})
+
+test('送审前读取原生环境执行策略，AUTO、拒读及畸形策略均零Sheet/Plan/Issue写入', async () => {
+  const project = 'projects/flbn', target = { instance: 'instances/flbnpguaf',
+    database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
+  for (const mode of ['auto', 'denied', 'malformed']) {
+    let writes = 0
+    const client = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev', bytebaseToken: 'fixture',
+      fetchImpl: async (url, options = {}) => {
+        if (options.method === 'POST') { writes++; throw Error('UNEXPECTED_WRITE') }
+        const path = new URL(url).pathname
+        if (path.endsWith('/issues')) return json({ issues: [] })
+        if (path === `/v1/${target.database}`) return json({ name: target.database, project,
+          instanceResource: { name: target.instance }, effectiveEnvironment: 'environments/prod' })
+        if (path.endsWith('/policies/rollout_policy')) {
+          if (mode === 'denied') return { ok: false, status: 403 }
+          return json({ name: 'environments/prod/policies/rollout_policy', type: 'ROLLOUT_POLICY',
+            resourceType: 'ENVIRONMENT', ...(mode === 'malformed' ? {} : { rolloutPolicy: { automatic: true } }) })
+        }
+        throw Error('UNEXPECTED_READ')
+      } }).bytebase
+    const applySql = 'ALTER TABLE public.t ADD COLUMN name text;'
+    await assert.rejects(client.createIssueBundle({ project, target, operationKey: 'a'.repeat(64), packageDigest: 'b'.repeat(64),
+      applySql, applySqlSha256: createHash('sha256').update(applySql).digest('hex') }),
+    mode === 'auto' ? /BYTEBASE_AUTOMATIC_ROLLOUT_NOT_ALLOWED_FOR_REVIEW/ : /BYTEBASE_ROLLOUT_POLICY_UNCONFIRMED/)
+    assert.equal(writes, 0)
+  }
 })
 
 test('Bytebase Rollout 提交结果未知时禁止重发，留给只读对账', async () => {
